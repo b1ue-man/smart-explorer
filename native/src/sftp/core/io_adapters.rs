@@ -131,11 +131,31 @@ impl Read for SftpReader {
     }
 }
 
+/// What a writer's `flush` (its commit) does after the last acknowledgement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Commit {
+    /// `fsync@openssh.com` when the server offers it, then CLOSE.
+    Durable,
+    /// CLOSE only: an engine copy stage whose source stays (plan W1
+    /// `open_write_copy_stage_unsynced`); sync, mounts and replacements keep
+    /// `Durable`.
+    Unsynced,
+}
+
+impl Commit {
+    /// Whether the commit sends `fsync@openssh.com` to a server that
+    /// `offered` it.
+    pub(super) fn syncs(self, offered: bool) -> bool {
+        self == Commit::Durable && offered
+    }
+}
+
 pub(super) struct SftpWriter {
     pub(super) rt: Arc<Runtime>,
     pub(super) connection: Arc<SftpConnection>,
     pub(super) generation: Arc<SftpGeneration>,
     pub(super) file: Option<russh_sftp::client::fs::File>,
+    pub(super) commit: Commit,
 }
 
 impl Write for SftpWriter {
@@ -161,8 +181,13 @@ impl Write for SftpWriter {
         // Backend writers treat flush as the terminal commit boundary. Await
         // both outstanding WRITE acknowledgements/fsync and SSH_FXP_CLOSE so a
         // close failure cannot be hidden by Drop before staged promotion.
+        // `File::flush` drains the acknowledgements and sends fsync when the
+        // server offers it; `shutdown` drains them as well, then closes.
+        let commit = self.commit;
         let result = rt.block_on(async {
-            file.flush().await?;
+            if commit == Commit::Durable {
+                file.flush().await?;
+            }
             file.shutdown().await
         });
         if let Err(error) = &result {

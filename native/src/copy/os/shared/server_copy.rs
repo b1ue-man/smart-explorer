@@ -20,13 +20,18 @@ use super::staging::{open_source, unchanged};
 /// source that did not change meanwhile, otherwise it is removed again and
 /// the copy fails. Nothing is forced to disk: the source stays (a copy, spec
 /// decision 1), and the caller publishes the stage.
-pub(crate) fn copy_to_new_file(source: &Path, stage: &Path, expected: u64) -> io::Result<u64> {
+pub(crate) fn copy_to_new_file(
+    source: &Path,
+    stage: &Path,
+    expected: u64,
+    cancel: &AtomicBool,
+) -> io::Result<u64> {
     let (reader, before) = open_source(source).map_err(|failure| failure.into_error())?;
-    // One kernel call without progress or cancellation points of its own;
-    // the transfer engine checks both around it.
-    let never = AtomicBool::new(false);
+    // The kernel copies; `cancel` stops it between its chunks (CopyFile2's
+    // cancel flag, the handle loop elsewhere). Progress is counted by the
+    // engine once the copy returns.
     let mut quiet = |_: u64| {};
-    let (bytes, file) = match platform::copy_by_path(source, stage, &never, &mut quiet) {
+    let (bytes, file) = match platform::copy_by_path(source, stage, cancel, &mut quiet) {
         Some(Ok(Some(copied))) => copied,
         Some(Ok(None)) => {
             return Err(io::Error::new(
@@ -35,7 +40,7 @@ pub(crate) fn copy_to_new_file(source: &Path, stage: &Path, expected: u64) -> io
             ))
         }
         Some(Err(error)) => return Err(error),
-        None => copy_by_handles(&reader, stage, &never, &mut quiet)?,
+        None => copy_by_handles(&reader, stage, cancel, &mut quiet)?,
     };
     let complete = bytes == expected
         && file

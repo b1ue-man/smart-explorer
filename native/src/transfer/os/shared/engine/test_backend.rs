@@ -304,7 +304,13 @@ impl Backend for Fake {
         }
         Ok(())
     }
-    fn server_copy_to_stage(&self, src: &str, stage: &str, _size: u64) -> VfsResult<Option<u64>> {
+    fn server_copy_to_stage(
+        &self,
+        src: &str,
+        stage: &str,
+        _size: u64,
+        _cancel: &AtomicBool,
+    ) -> VfsResult<Option<u64>> {
         if !self.server_copy {
             return Ok(None);
         }

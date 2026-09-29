@@ -11,7 +11,7 @@
 //! end too, the file ends where the short answer stopped and no extra round
 //! trip is spent. When data follows instead (a device, a growing file), the
 //! missing range is read first, so no byte is ever skipped.
-use super::pipeline::Pipeline;
+use crate::transfer::read_pipeline::Pipeline;
 use std::collections::VecDeque;
 use std::io::{self, Read};
 use std::time::Instant;

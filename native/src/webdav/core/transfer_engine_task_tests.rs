@@ -405,12 +405,24 @@ fn transfer_engine_task_webdav_copy_into_the_stage_stays_on_the_server() {
     });
     let backend = http.backend();
     assert_eq!(
-        backend.server_copy_to_stage("/src", "/stage", 5).unwrap(),
+        backend
+            .server_copy_to_stage(
+                "/src",
+                "/stage",
+                5,
+                &std::sync::atomic::AtomicBool::new(false)
+            )
+            .unwrap(),
         Some(5)
     );
     assert_eq!(
         backend
-            .server_copy_to_stage("/other", "/stage2", 5)
+            .server_copy_to_stage(
+                "/other",
+                "/stage2",
+                5,
+                &std::sync::atomic::AtomicBool::new(false)
+            )
             .unwrap(),
         None
     );

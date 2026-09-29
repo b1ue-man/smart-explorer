@@ -276,7 +276,12 @@ fn transfer_engine_task_drive_copies_inside_drive_on_the_server() {
     let stage = "Ziel/Quelle.bin.se-copy-01";
     assert_eq!(
         backend
-            .server_copy_to_stage("Quelle.bin", stage, 6)
+            .server_copy_to_stage(
+                "Quelle.bin",
+                stage,
+                6,
+                &std::sync::atomic::AtomicBool::new(false)
+            )
             .unwrap(),
         Some(6)
     );
@@ -307,7 +312,12 @@ fn transfer_engine_task_drive_copies_inside_drive_on_the_server() {
     // Google documents keep streaming as an export.
     assert_eq!(
         backend
-            .server_copy_to_stage("Notiz", "Ziel/Notiz.se-copy-02", 0)
+            .server_copy_to_stage(
+                "Notiz",
+                "Ziel/Notiz.se-copy-02",
+                0,
+                &std::sync::atomic::AtomicBool::new(false)
+            )
             .unwrap(),
         None
     );

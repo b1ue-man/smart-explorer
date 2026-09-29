@@ -15,7 +15,8 @@
 //! rename can only refuse an existing target. Here a reparse point is a link
 //! that recursive delete and sync never enter, a link is deleted and renamed
 //! itself (never its target), and replacing is one server-side rename with
-//! `ReplaceIfExists`.
+//! `ReplaceIfExists`. Copies inside one share run on the server (COPYCHUNK,
+//! server_copy.rs).
 
 #[path = "core/backend.rs"]
 mod backend;
@@ -27,6 +28,8 @@ mod listing;
 mod reader;
 #[path = "core/replace.rs"]
 mod replace;
+#[path = "core/server_copy.rs"]
+mod server_copy;
 #[path = "core/session.rs"]
 mod session;
 #[path = "core/io.rs"]
@@ -36,6 +39,9 @@ mod url;
 #[path = "core/wire.rs"]
 mod wire;
 
+#[cfg(test)]
+#[path = "core/server_copy_task_tests.rs"]
+mod server_copy_task_tests;
 #[cfg(test)]
 #[path = "core/tests.rs"]
 mod tests;

@@ -3,14 +3,16 @@
 //! kept on the wire as deep as the pipeline allows. `flush` is the commit
 //! boundary, as for every backend writer: all acknowledgements, then
 //! `fsync@openssh.com` when the server offers it (as `File::flush` did on the
-//! main session), then CLOSE. A writer dropped without `flush` still sends
-//! what it was given and closes the handle, like the main-session writer.
+//! main session) unless the writer is an unsynced copy stage, then CLOSE. A
+//! writer dropped without `flush` still sends what it was given and closes
+//! the handle, like the main-session writer.
 use super::backend::SftpBackend;
 use super::channel_pool::{note_failure, open_failed, ChannelLease, PoolChannel};
 use super::connection::SftpConnection;
+use super::io_adapters::Commit;
 use super::io_err;
-use super::pipeline::Pipeline;
 use super::session::SSH_WINDOW;
+use crate::transfer::read_pipeline::Pipeline;
 use russh_sftp::client::error::Error as SftpError;
 use russh_sftp::protocol::{FileAttributes, OpenFlags, Status};
 use std::collections::VecDeque;
@@ -50,6 +52,7 @@ pub(super) struct PoolWriter {
     /// Exact length of a sized copy stage (plan W1).
     expected: Option<u64>,
     accepted: u64,
+    commit: Commit,
     state: WriteState,
 }
 
@@ -133,20 +136,21 @@ impl PoolWriter {
         })
     }
 
-    /// Sends the rest, waits for every acknowledgement, optionally syncs and
-    /// closes the handle.
-    fn complete(&mut self, sync: bool, check: bool) -> io::Result<()> {
+    /// Sends the rest, waits for every acknowledgement and closes the
+    /// handle; at a commit (`flush`) the length is checked first and the file
+    /// synced as `commit` says.
+    fn complete(&mut self, commit: Option<Commit>) -> io::Result<()> {
         self.submit()?;
         while !self.inflight.is_empty() {
             self.await_oldest()?;
         }
-        if check {
+        if let Some(commit) = commit {
             check_length(self.expected, self.accepted)?;
-        }
-        if sync && self.channel.fsync {
-            let session = self.channel.session.clone();
-            let handle = self.handle.clone();
-            self.sftp_step(async move { session.fsync(handle).await })?;
+            if commit.syncs(self.channel.fsync) {
+                let session = self.channel.session.clone();
+                let handle = self.handle.clone();
+                self.sftp_step(async move { session.fsync(handle).await })?;
+            }
         }
         let session = self.channel.session.clone();
         let handle = self.handle.clone();
@@ -211,7 +215,7 @@ impl Write for PoolWriter {
             WriteState::Failed => return Err(Self::failed_error()),
             WriteState::Open => {}
         }
-        match self.complete(true, true) {
+        match self.complete(Some(self.commit)) {
             Ok(()) => {
                 self.state = WriteState::Committed;
                 Ok(())
@@ -223,7 +227,7 @@ impl Write for PoolWriter {
 
 impl Drop for PoolWriter {
     fn drop(&mut self) {
-        if self.state == WriteState::Open && self.complete(false, false).is_ok() {
+        if self.state == WriteState::Open && self.complete(None).is_ok() {
             return;
         }
         self.abandon();
@@ -269,14 +273,16 @@ impl<W: Write> Write for SizedWriter<W> {
 }
 
 impl SftpBackend {
-    /// A pipelined upload to `path` opened with `flags`; `None` when no pool
-    /// channel is available (the main session serves then). OPEN creates or
-    /// truncates, so it is never repeated.
+    /// A pipelined upload to `path` opened with `flags`, committed as
+    /// `commit` says; `None` when no pool channel is available (the main
+    /// session serves then). OPEN creates or truncates, so it is never
+    /// repeated.
     pub(super) fn open_pool_writer(
         &self,
         path: &str,
         flags: OpenFlags,
         expected: Option<u64>,
+        commit: Commit,
     ) -> io::Result<Option<PoolWriter>> {
         let Some(lease) = self.pool.lease(self)? else {
             return Ok(None);
@@ -310,6 +316,7 @@ impl SftpBackend {
             pipeline: Pipeline::new(chunk as u64, cap),
             expected,
             accepted: 0,
+            commit,
             state: WriteState::Open,
         }))
     }

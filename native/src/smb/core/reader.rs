@@ -10,7 +10,7 @@
 //! the file shrank since, so the stream ends there instead of skipping bytes.
 use super::errors;
 use super::session::Generation;
-use crate::sftp::Pipeline;
+use crate::transfer::read_pipeline::Pipeline;
 use smb2::FileReader;
 use std::collections::VecDeque;
 use std::io::{self, Read};

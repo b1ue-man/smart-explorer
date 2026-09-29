@@ -298,7 +298,13 @@ impl Backend for PeerBackend {
         self.promote_without_replace(staged, destination, true)
     }
 
-    fn server_copy_to_stage(&self, src: &str, stage: &str, size: u64) -> VfsResult<Option<u64>> {
+    fn server_copy_to_stage(
+        &self,
+        src: &str,
+        stage: &str,
+        size: u64,
+        _cancel: &std::sync::atomic::AtomicBool,
+    ) -> VfsResult<Option<u64>> {
         self.copy_to_stage(src, stage, size)
     }
 

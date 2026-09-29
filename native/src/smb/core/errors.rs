@@ -66,7 +66,7 @@ fn label(kind: io::ErrorKind) -> &'static str {
 /// The server reports overload as a status: out of resources (which smb2's
 /// `is_retryable` treats as passing) or, for a Windows server at its
 /// connection limit, REQUEST_NOT_ACCEPTED.
-fn overloaded(error: &Error) -> bool {
+pub(super) fn overloaded(error: &Error) -> bool {
     matches!(
         error.status(),
         Some(

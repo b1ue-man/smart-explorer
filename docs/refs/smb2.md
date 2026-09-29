@@ -210,6 +210,68 @@ impl FileWriter {
 
 - Alle Schreibpfade flushen vor dem Schließen (Datensicherheit).
 
+## Serverseitige Kopie (COPYCHUNK) und Abschluss ohne FLUSH (geprüft 2026-09-29, Block D)
+
+Quelle: `client/copy.rs`, `client/stream.rs`, `client/write_pipe.rs`, `client/tree.rs`,
+`error.rs` von smb2 0.26.0.
+
+```rust
+impl Tree {
+    pub async fn request_resume_key(&self, conn: &mut Connection, source: FileId)
+        -> Result<ResumeKey>;                        // FSCTL_SRV_REQUEST_RESUME_KEY (copy.rs:214)
+    pub async fn copy_chunks(&self, conn: &mut Connection, dest: FileId,
+        source_key: &ResumeKey, chunks: &[CopyChunk]) -> Result<CopyChunkOutcome>; // :267
+    pub async fn server_side_copy_range(&self, conn: &mut Connection, dest: FileId,
+        source_key: &ResumeKey, source_offset: u64, dest_offset: u64, length: u64)
+        -> Result<u64>;                              // :347, length 0 → Ok(0) ohne Request
+    pub async fn server_side_copy_file(...) -> Result<u64>; // öffnet Ziel mit FileOverwriteIf
+}
+```
+
+- `server_side_copy_range` bündelt Chunks nach `ServerSideCopyLimits::CONSERVATIVE`
+  (16 Chunks × 1 MiB, 16 MiB je Request, copy.rs:168); antwortet der Server mit
+  `STATUS_INVALID_PARAMETER` samt 12-Byte-`SRV_COPYCHUNK_RESPONSE` (:299), übernimmt es die
+  angebotenen Grenzen und wiederholt die Position. Ein Erfolg mit 0 Bytes ist ein Fehler
+  (`InvalidData`), sonst läuft es bis `copied == length`.
+- Das Ziel-Handle braucht Lese- **und** Schreibrecht (`FSCTL_SRV_COPYCHUNK`, MS-SMB2
+  3.3.5.15.6); smb2s eigene Read-Write-Öffnungen sind `open_file_readwrite` (`FileOpenIf`,
+  tree.rs:2450) und `open_readwrite_overwrite` (`FileOverwriteIf`, `pub(crate)`, :2462) — keine
+  exklusive. Die Kopierstufe baut deshalb ihren CREATE selbst (`FileCreate`, READ_DATA |
+  WRITE_DATA | READ/WRITE_ATTRIBUTES | SYNCHRONIZE, `FILE_NON_DIRECTORY_FILE`).
+- COPYCHUNK liest nicht über das Quellende hinaus; es gibt kein Gegenstück zum „ein Byte mehr
+  lesen“ des Stream-Pfads. Smart Explorer prüft daher die Länge beim Öffnen (`end_of_file` der
+  CREATE-Antwort) und danach per QUERY_INFO(FileStandardInformation, Klasse 5, 24 Bytes,
+  EndOfFile = Bytes 8..16 LE — wie tree.rs es selbst liest).
+- Kein COPYCHUNK: `NOT_SUPPORTED`, `INVALID_DEVICE_REQUEST`, `NOT_IMPLEMENTED` →
+  `ErrorKind::Unsupported` (error.rs:635), für Resume-Key wie für COPYCHUNK. Smart Explorer
+  entfernt dann die Stufe, streamt und merkt sich das für das Backend. Jede andere
+  Status-Antwort auf Resume-Key/COPYCHUNK (z. B. `ACCESS_DENIED`, `INVALID_PARAMETER` ohne
+  Grenzen, `InvalidData` „ohne kleinere Grenzen“) entfernt die Stufe ebenfalls und streamt, ohne
+  es sich zu merken: Kopien innerhalb einer Freigabe liefen vorher als Stream und dürfen an einem
+  eigenwilligen Server nicht scheitern. Fehler bleiben nur `DISK_FULL` (Streamen scheiterte erst
+  nach allen Bytes erneut), Überlast (`INSUFFICIENT_RESOURCES`, `INSUFF_SERVER_RESOURCES`,
+  `REQUEST_NOT_ACCEPTED` → Stau, die Übertragung weicht aus, Plan K13) und Transportfehler.
+- `copy_paths` (Grundlage von `server_side_copy_file*`) sendet nach der Kopie FLUSH (copy.rs:526).
+  Die Kopierstufe der Engine lässt ihn weg (Engine-Kopien behalten ihre Quelle, Plan W1).
+
+**Schreibt der Stufenschreiber FLUSH?** Ja: `FileWriter::finish` = `send_pending` → `pipe.drain`
+→ `flush_handle` (FLUSH, stream.rs:1256) → `close_handle`. `FileWriter::abort` (stream.rs:1329)
+verwirft Ungesendetes, wartet mit `pipe.abandon` (write_pipe.rs:173) alle ausstehenden
+WRITE-Antworten ab — SUCCESS-Antworten zählen ihr `count` zu `confirmed`, Fehlerstatus werden
+ignoriert, ein Transportfehler beendet das Warten —, sendet **kein** FLUSH, schließt best effort
+und liefert immer `Ok(confirmed)`. Der Abschluss ohne FLUSH (`open_write_copy_stage_unsynced`,
+`smb/core/io.rs` `Commit::Unsynced`) ist deshalb: alle Bytes per `write_chunk` auf die Leitung,
+dann `abort()`, und nur `confirmed == akzeptierte Bytes` gilt als geschrieben (sonst wird die
+Teildatei entfernt). Strenger als `finish`: `land` (write_pipe.rs:298) vergleicht `count` nicht mit
+der WRITE-Länge, ein kurzer WRITE fiele dort nicht auf.
+
+Tests: `Connection::from_transport` und `transport::MockTransport` sind öffentlich, die
+Test-Hooks `set_test_params`/`set_credits` aber `#[cfg(test)] pub(crate)` (connection.rs:5322,
+5333) — ohne sie wartet jeder Request auf Credits, die erst ein NEGOTIATE bringt. `Tree` ist
+`#[non_exhaustive]` (tree.rs:272) und lässt sich außerhalb von smb2 nicht bauen. Die
+COPYCHUNK-Kodierung testet smb2 selbst (copy.rs-Tests); Smart Explorer testet seine CREATE-/
+QUERY_INFO-Requests und den Ablauf gegen eine geskriptete Freigabe (`CopyOps`).
+
 ## Rename — hart codiertes `ReplaceIfExists=false` + atomischer Replace-Rename selbst bauen
 
 ```rust

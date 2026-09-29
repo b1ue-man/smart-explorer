@@ -142,8 +142,14 @@ impl Backend for UncBackend {
 
     /// Copies inside the share on the server (SMB offload); the lease held by
     /// `self` stays for the whole call.
-    fn server_copy_to_stage(&self, src: &str, stage: &str, size: u64) -> VfsResult<Option<u64>> {
-        self.local.server_copy_to_stage(src, stage, size)
+    fn server_copy_to_stage(
+        &self,
+        src: &str,
+        stage: &str,
+        size: u64,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> VfsResult<Option<u64>> {
+        self.local.server_copy_to_stage(src, stage, size, cancel)
     }
 
     fn open_read_at(

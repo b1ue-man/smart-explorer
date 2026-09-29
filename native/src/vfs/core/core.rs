@@ -110,9 +110,16 @@ pub trait Backend: Send + Sync {
     }
 
     /// Server-side copy of `src` (length `size`) into the new private stage
-    /// `stage`, published later via `promote_copy_stage`. `Ok(None)` = stream.
-    fn server_copy_to_stage(&self, src: &str, stage: &str, size: u64) -> VfsResult<Option<u64>> {
-        let _ = (src, stage, size);
+    /// `stage`, published later via `promote_copy_stage`. `Ok(None)` = stream;
+    /// `cancel` ends a long copy early (the caller discards the stage).
+    fn server_copy_to_stage(
+        &self,
+        src: &str,
+        stage: &str,
+        size: u64,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> VfsResult<Option<u64>> {
+        let _ = (src, stage, size, cancel);
         Ok(None)
     }
 

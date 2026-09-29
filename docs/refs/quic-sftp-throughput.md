@@ -356,6 +356,51 @@ Sources: `openssh-portable` master (`sftp-server.c`, `sftp-common.h`, `channels.
   number of outstanding requests for one file", default 64; `--sftp-idle-timeout` default 1m0s
   empties the connection pool when nothing was returned to it for that long.
 
+### B.10 OpenSSH `copy-data` — server-side copy between two handles (checked 2026-09-29)
+
+Sources: `openssh-portable` master `PROTOCOL` §4.10 and `sftp-server.c`
+(`process_extended_copy_data`, `process_extended`, `request_permitted`, the handler table and
+`process_init`); release notes `openssh.org/txt/release-9.0` and the 10.4 notes.
+
+- **Availability.** Added in OpenSSH 9.0 (2022-04-08: "sftp-server(8): support the "copy-data"
+  extension to allow server-side copying of files/data"; `sftp` got `cp` in the same release).
+  `process_init` advertises it unconditionally as `compose_extension(msg, "copy-data", "1")`.
+- **Request** (`SSH_FXP_EXTENDED`, request name `copy-data`), fields after the name:
+  `string read-from-handle, uint64 read-from-offset, uint64 read-data-length,
+  string write-to-handle, uint64 write-to-offset`. russh-sftp's `RawSftpSession::extended(name,
+  data)` appends `data` unchanged after the name (`Extended.data` uses `data_serialize`, a raw
+  byte sequence without length prefix), so the client builds exactly these bytes (big-endian,
+  string = uint32 length + bytes). The reply is only `SSH_FXP_STATUS`: it carries **no byte
+  count**, so the copied length has to be read afterwards (FSTAT of the write handle).
+- **Semantics** (`process_extended_copy_data`): both handles must be open file handles of the
+  same `sftp-server` process (handles are per process, i.e. per SFTP channel), else FAILURE; the
+  same handle, the same path or the same `st_dev`/`st_ino` is refused with FAILURE (PROTOCOL
+  says INVALID_PARAMETER for identical handles; 10.4 added the inode check). It seeks the read
+  handle to read-from-offset and the write handle to write-to-offset (not with `O_APPEND`), then
+  copies synchronously through a 64 KiB buffer; `read-data-length` 0 means "until EOF". The
+  remaining length shrinks *before* each read, so a fixed length that meets the end of the source
+  answers `SSH2_FX_EOF` — unless the end falls inside the last 64 KiB step, where the final
+  `if (read_len == 0) status = SSH2_FX_OK` turns it into OK. Until-EOF answers OK. No `fsync`.
+  The server process answers nothing else on that channel while it copies.
+- **Refusals.** An unknown extended request gets `SSH2_FX_OP_UNSUPPORTED` ("MUST"). A known one
+  that `request_permitted` refuses — read-only mode (`copy-data` is a writing request) or the
+  `-P`/`-p` deny/allow lists — gets `SSH2_FX_PERMISSION_DENIED`. File permissions themselves were
+  already checked by the two OPENs.
+
+Use in Smart Explorer (`sftp/core/copy_data.rs`, plan W1 `server_copy_to_stage`): only on a pool
+channel whose VERSION offered `copy-data` "1"; source OPEN(READ) and stage OPEN(WRITE|CREATE|
+EXCLUDE) on that channel, then ranges — 16 MiB first, afterwards the previous range's rate × 10 s
+(a sixth of the channel's 60 s answer deadline, at least one 64 KiB server step) — up to
+`size + 1`, so a grown source shows up as one extra byte like in the stream path; EOF ends the
+ranges; FSTAT gives the copied length; CLOSE without fsync. Any other status answer to a range
+closes both handles, removes the stage and streams — copies inside one server streamed before, so
+a server's copy must not turn them into failures, and the stream path reports a real file problem
+on the right side; OP_UNSUPPORTED and PERMISSION_DENIED are also remembered for the connection
+(the request policy is per server). A source that does not open streams too. Errors for the
+engine stay: a request without an answer (timeout, lost channel), a stage that cannot be created
+(a taken name is `AlreadyExists`, detected by LSTAT because protocol 3 answers EEXIST with plain
+FAILURE, so the engine tries another name) and a failing FSTAT, CLOSE or cleanup.
+
 ---
 
 ## Unresolved questions
