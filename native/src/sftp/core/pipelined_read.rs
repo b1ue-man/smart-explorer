@@ -11,10 +11,21 @@
 //! end too, the file ends where the short answer stopped and no extra round
 //! trip is spent. When data follows instead (a device, a growing file), the
 //! missing range is read first, so no byte is ever skipped.
+//!
+//! A server that answers every READ with less than asked (its own READ limit
+//! is below ours) proves it the same way: data follows the short answer.
+//! Later READs then ask for what it delivered, as OpenSSH's own client
+//! shrinks its request size, so they come back whole and the pipeline can
+//! grow; otherwise every READ left a gap and a download moved one answer per
+//! round trip.
 use crate::transfer::read_pipeline::Pipeline;
 use std::collections::VecDeque;
 use std::io::{self, Read};
 use std::time::Instant;
+
+/// Smallest READ asked for after the server answered short (OpenSSH's
+/// `MIN_READ_SIZE`).
+const MIN_READ: u32 = 512;
 
 /// The answer to one READ.
 pub(super) enum Reply {
@@ -55,6 +66,8 @@ pub(super) struct PipelinedRead<S: ReadSource> {
     consumed: usize,
     /// Range a short answer left open, still to be settled.
     gap: Option<(u64, u32)>,
+    /// Bytes of the short answer that opened `gap`.
+    short_answer: Option<u32>,
     delivered: u64,
     done: bool,
     /// A failed stream keeps failing instead of looking like a short file.
@@ -72,6 +85,7 @@ impl<S: ReadSource> PipelinedRead<S> {
             buffer: Vec::new(),
             consumed: 0,
             gap: None,
+            short_answer: None,
             delivered: 0,
             done: false,
             failure: None,
@@ -164,7 +178,11 @@ impl<S: ReadSource> PipelinedRead<S> {
         if beyond_is_end {
             return true;
         }
-        // Data (or an error) lies beyond: the range is real, read it first.
+        // Data (or an error) lies beyond: the range is real, read it first,
+        // and ask later READs for no more than the server delivered.
+        if let Some(delivered) = self.short_answer.take() {
+            self.chunk = delivered.max(MIN_READ).min(self.chunk);
+        }
         self.queue.push_front(next);
         self.push_front_read(offset, len);
         false
@@ -219,6 +237,7 @@ impl<S: ReadSource> PipelinedRead<S> {
             if got < asked {
                 // `got < asked <= u32::MAX`, so the rest fits in u32.
                 self.gap = Some((request.offset.saturating_add(got), request.len - got as u32));
+                self.short_answer = Some(got as u32);
             }
             self.buffer = data;
             self.consumed = 0;
