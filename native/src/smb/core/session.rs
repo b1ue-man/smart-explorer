@@ -18,6 +18,19 @@ use tokio::runtime::Runtime;
 
 /// Whole TCP connect budget, name resolution included.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+/// At least two workers: smb2's receiver task (all signing/decryption of the
+/// connection) must keep running beside the request tasks.
+const MIN_RUNTIME_WORKERS: usize = 2;
+
+/// One worker per core, as tokio's own default: a transfer keeps several
+/// READ tasks per file and smb2's write-behind busy, and none of them may
+/// starve the receiver task.
+pub(super) fn runtime_workers() -> usize {
+    std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(MIN_RUNTIME_WORKERS)
+        .max(MIN_RUNTIME_WORKERS)
+}
 
 /// Connection settings. `user` may be `DOMAIN\user`; `root` is the start
 /// path `/<share>/<path>` whose share is connected (and so verified) first.
@@ -76,7 +89,7 @@ impl SmbSession {
     pub(super) fn connect(config: SmbConfig, share: &str) -> io::Result<Arc<Self>> {
         let rt = Arc::new(
             tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(2)
+                .worker_threads(runtime_workers())
                 .thread_name("smb")
                 .enable_all()
                 .build()?,

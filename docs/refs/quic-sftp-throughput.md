@@ -284,6 +284,78 @@ connection-wide "one SFTP channel at a time" lock. This is why `posix_rename.rs`
 alongside the long-lived main `SftpSession` channel. A third, dedicated channel purely for pipelined
 reads can coexist with both, reusing `backend.rs`'s retry-once-on-dead-generation pattern (:99-129).
 
+### B.7 russh 0.61.2 — client window, packet size, channel buffer (added 2026-09-28, Block D)
+
+`client::Config` (client/mod.rs:2023-2048), defaults (:2050-2068): `window_size: 2097152` (2 MiB),
+`maximum_packet_size: 32768`, `channel_buffer_size: 100`, `keepalive_interval: None`,
+`keepalive_max: 3`, `nodelay: false`. All three are per `Config`, i.e. per SSH session, and apply to
+**every** channel opened on it (SFTP subsystem channels and exec channels alike):
+
+- **Announced at open.** `channel_open_generic` (client/session.rs:10-45) sends
+  `config.window_size` as the initial window and `config.maximum_packet_size` as the largest packet
+  the server may send on the channel.
+- **Refilled on receipt, not on consumption.** On every `CHANNEL_DATA` (client/encrypted.rs:453-472)
+  the session loop calls `adjust_window_size(channel, data, target = config.window_size)`
+  (:458; session.rs:285-317): the remaining window is reduced by the packet and, once it drops below
+  `target / 2` (session.rs:301), a `WINDOW_ADJUST` tops it up to `target`. This happens before the
+  data is handed to the channel, so the SSH window limits throughput to `window_size / RTT` per
+  channel but never bounds memory.
+- **Per-channel buffer is the only backpressure.** Each session channel gets a bounded
+  `mpsc::channel(channel_buffer_size)` (client/mod.rs:676). The session loop forwards data with
+  `chan.send(ChannelMsg::Data{..}).await` (encrypted.rs:470): when one channel's buffer is full the
+  **whole session loop waits** — every other channel of the connection stalls (head-of-line). A
+  buffer of `window_size / maximum_packet_size` messages holds one full window of full-size packets.
+- **Packet size.** `connect_stream` logs an error if `maximum_packet_size > 65535`
+  (client/mod.rs:1005-1010); OpenSSH itself uses 32 KiB session packets (below).
+- **Refused channel.** `wait_channel_confirmation` (client/mod.rs:571-599) turns
+  `SSH_MSG_CHANNEL_OPEN_FAILURE` into `Err(russh::Error::ChannelOpenFailure(reason))` (:594-596);
+  `russh::ChannelOpenFailure` = `AdministrativelyProhibited=1 | ConnectFailed=2 |
+  UnknownChannelType=3 | ResourceShortage=4 | Unknown=0` (lib_inner.rs:405-422, re-exported at the
+  crate root via `include!("lib_inner.rs")`).
+- `request_subsystem(want_reply, name)` only sends the request (channels/mod.rs:249-259); a refusal
+  shows up later as a failing SFTP `init()`.
+
+### B.8 russh-sftp 2.3.0 — raw session details for a pipelined reader/writer
+
+- **Per-request timeout.** `RawSftpSession::send`/`request` (rawsession.rs:187-223) awaits each reply under
+  `runtime::timeout(timeout_secs)` (client/runtime.rs, `tokio::time::timeout`, `Error::Timeout`),
+  measured from the moment the request is queued; default 10 s, `set_timeout(&self, secs)`. A deep
+  queue of READs therefore needs a bounded depth or a longer timeout.
+- **`write_nowait` is `pub(crate)`** (rawsession.rs:379-397): outside the crate a pipelined writer
+  spawns `write(handle, offset, data)` futures itself.
+- **High-level `File`** (client/fs/file.rs): `poll_write` keeps at most `max_concurrent_writes`
+  (default 8) WRITEs in flight and sends `min(caller buffer, write_len)` bytes per WRITE
+  (file.rs:261-294) — with `io::copy`'s 8 KiB buffer that is 64 KiB in flight. `poll_flush` drains
+  the acks and then sends `fsync@openssh.com` when advertised (file.rs:296-325); `poll_shutdown`
+  drains and sends CLOSE (file.rs:327-356); `Drop` sends CLOSE without waiting (file.rs:135-143).
+  `File::new` and `Features` are `pub(crate)`, so a raw channel cannot reuse `File`.
+- **Handle limit.** `open`/`opendir` fail locally with `Error::Limited("handle limit reached")`
+  once `limits.open_handles` handles are open (rawsession.rs:247-258), only after `set_limits`.
+- **Extensions.** `extensions::{LIMITS = "limits@openssh.com", FSYNC = "fsync@openssh.com"}`
+  (extensions.rs:3-6); `RawSftpSession::fsync(handle)` sends the extension (rawsession.rs:710-721).
+- **Drop.** `impl Drop for RawSftpSession` calls `close_session()` (rawsession.rs:745-749), which
+  sends an empty frame that makes the writer task shut the channel stream down (client/mod.rs:114-117).
+
+### B.9 OpenSSH server facts that bound SFTP pipelining (checked 2026-09-28)
+
+Sources: `openssh-portable` master (`sftp-server.c`, `sftp-common.h`, `channels.h`,
+`serverloop.c`) and `sshd_config(5)` on man.openbsd.org.
+
+- `SFTP_MAX_MSG_LENGTH = 256*1024`; `SFTP_MAX_READ_LENGTH = SFTP_MAX_MSG_LENGTH - 1024` (261,120
+  bytes); `process_read` clamps longer READs to it. `limits@openssh.com` reports max-packet 262,144,
+  max-read 261,120, max-write 261,120 and max-open-handles `RLIMIT_NOFILE - 5` (0 if unknown).
+- The VERSION reply advertises `posix-rename@openssh.com`, `fsync@openssh.com`, `limits@openssh.com`,
+  `copy-data` (server-side copy between two open handles; read length 0 = until EOF) and others.
+- `MaxSessions`: "maximum number of open shell, login or subsystem (e.g. sftp) sessions permitted
+  per network connection … The default is 10." Above it, `server_input_channel_open` answers with
+  reason `SSH2_OPEN_CONNECT_FAILED` and the text "open failed" — not `AdministrativelyProhibited`, so
+  every `ChannelOpenFailure` of a session channel has to count as a refusal.
+- Session channels use `CHAN_SES_PACKET_DEFAULT = 32 KiB` and `CHAN_SES_WINDOW_DEFAULT = 64 × 32 KiB`
+  (2 MiB): an upload on one channel moves at most 2 MiB per round trip; more channels, more windows.
+- Comparable client (rclone, rclone.org/sftp, checked 2026-09-28): `--sftp-concurrency` "maximum
+  number of outstanding requests for one file", default 64; `--sftp-idle-timeout` default 1m0s
+  empties the connection pool when nothing was returned to it for that long.
+
 ---
 
 ## Unresolved questions
@@ -291,9 +363,9 @@ reads can coexist with both, reusing `backend.rs`'s retry-once-on-dead-generatio
 - Whether `noq`/iroh exposes the *current* connection's peer-advertised transport parameters at
   runtime (to auto-tune `send_window` to what the remote actually granted) — not investigated; would
   need `endpoint/connection.rs`'s stats API, outside this task's read scope (`keepalive.rs` only).
-- Whether russh's own SSH-level channel flow-control window (RFC 4254 §5.2 — independent of both
-  QUIC and of SFTP request pipelining) also needs enlarging for the SFTP fix's full benefit to show —
-  not checked; only russh-sftp internals plus the two named russh functions were read.
+- ~~Whether russh's own SSH-level channel flow-control window needs enlarging~~ — resolved in B.7:
+  the client window (`Config::window_size`, 2 MiB default) caps each channel at `window / RTT` for
+  downloads; it is refilled on receipt and never bounds memory.
 - No numeric throughput model beyond noq-proto's "100 Mbps / 100 ms" rationale and the qualitative
   `bidi_streams * stream_receive_window` memory rule exists; concrete target numbers for a given
   higher-bandwidth/higher-latency link are an implementer sizing decision, not a crate default.

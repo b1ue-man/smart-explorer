@@ -3,21 +3,26 @@
 //! One `RustlsFtpStream` type carries both plain FTP (`ftp://`) and explicit
 //! FTPS (`ftps://` — AUTH TLS after connect). TLS is rustls backed by **ring**
 //! (no native-tls / schannel FFI on GNU; see docs/GOTCHAS.md) with bundled
-//! webpki-roots. The single control connection is serialized behind a `Mutex`
-//! (`parallelism() == 1`).
+//! webpki-roots. Browsing and metadata run on one control connection
+//! (`parallelism() == 1`); every concurrent transfer borrows a control
+//! connection of its own from the pool (pool.rs), whose size the server's
+//! connection limit bounds.
 //!
 //! Listings are parsed by suppaftp's `list::File` (posix / dos / mlsx). RETR
-//! streams directly from the data connection. Uploads spool to disk and issue a
-//! streaming STOR only at the caller's explicit `flush` commit boundary.
+//! streams directly from the data connection (after REST to resume). Uploads
+//! spool to disk and issue a streaming STOR only at the caller's explicit
+//! `flush` commit boundary; a copy stage of known length streams its STOR.
 
 use crate::vfs::{Backend, Scheme, VfsMeta, VfsResult};
 use std::io::{self, Read, Write};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::connection::{connect_stream, parse_ftp_url};
-use super::io_adapters::FtpConnection;
+use super::connection::{connect_stream, parse_ftp_url, refusal_code};
+use super::io_adapters::{FtpConnection, FtpReconnect};
+use super::pool::{FtpPool, Leased};
 use super::writer::FtpWriter;
+use suppaftp::FtpError;
 
 #[cfg(test)]
 use super::connection::FtpUrl;
@@ -95,7 +100,7 @@ fn parse_list_line(line: &str) -> VfsResult<VfsMeta> {
 // ── backend ──────────────────────────────────────────────────────────────────
 
 pub struct FtpBackend {
-    conn: Arc<FtpConnection>,
+    pool: Arc<FtpPool>,
     root: String,
     /// `ftp(s)://user@host:port/root` for UI display (connect-UI step).
     #[allow(dead_code)]
@@ -116,12 +121,51 @@ pub fn backend_from_url(url: &str) -> io::Result<FtpBackend> {
         u.root
     );
     let reconnect_config = u.clone();
-    let reconnect = Arc::new(move || connect_stream(&reconnect_config));
+    let reconnect: FtpReconnect = Arc::new(move || connect_stream(&reconnect_config));
+    let primary = FtpConnection::new(ftp, reconnect.clone())?;
     Ok(FtpBackend {
-        conn: FtpConnection::new(ftp, reconnect)?,
+        pool: FtpPool::new(primary, reconnect),
         root: u.root,
         url,
     })
+}
+
+/// A pooled connection that had to log in again and was turned away: the
+/// server's connection limit, so the transfer backs off (plan K13).
+fn transfer_err(error: io::Error) -> io::Error {
+    match refusal_code(&error) {
+        Some(_) => crate::vfs::congestion_error(error.to_string(), None),
+        None => error,
+    }
+}
+
+impl FtpBackend {
+    /// One MKD. An existing real folder is fine unless `exclusive`: the
+    /// server's MKD refuses an existing name atomically, the entry is only
+    /// looked at afterwards to tell `AlreadyExists` from other refusals.
+    fn make_dir(&self, path: &str, exclusive: bool) -> VfsResult<()> {
+        let made = self
+            .pool
+            .primary()
+            .with_stream_mutation(|stream| match stream.mkdir(path) {
+                Ok(()) => Ok(Ok(())),
+                // The server answered, so the connection is in step.
+                Err(error @ FtpError::UnexpectedResponse(_)) => Ok(Err(io_err(error))),
+                Err(error) => Err(io_err(error)),
+            })?;
+        let Err(refusal) = made else {
+            return Ok(());
+        };
+        match self.stat(path) {
+            Ok(meta) if meta.is_dir && !meta.is_symlink && !exclusive => Ok(()),
+            Ok(_) => Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("{path} existiert bereits"),
+            )),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Err(refusal),
+            Err(error) => Err(error),
+        }
+    }
 }
 
 impl Backend for FtpBackend {
@@ -142,8 +186,12 @@ impl Backend for FtpBackend {
     }
 
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
+        // Browsing is what follows a burst of transfers: close their idle
+        // connections here instead of keeping them alive with NOOPs.
+        self.pool.retire_idle();
         let lines = self
-            .conn
+            .pool
+            .primary()
             .with_stream_read(|stream| stream.list(Some(path)).map_err(io_err))?;
         lines
             .into_iter()
@@ -170,19 +218,40 @@ impl Backend for FtpBackend {
             })
     }
 
+    /// RETR on a pool connection of its own, so browsing and other
+    /// transfers go on meanwhile.
     fn open_read(&self, path: &str) -> VfsResult<Box<dyn Read + Send>> {
-        Ok(Box::new(self.conn.open_reader(path)?))
+        let lease = self.pool.lease()?;
+        let reader = lease.connection().open_reader(path).map_err(transfer_err)?;
+        Ok(Box::new(Leased::new(reader, lease)))
+    }
+
+    /// REST + RETR; `None` when the server has no REST.
+    fn open_read_at(
+        &self,
+        path: &str,
+        id: Option<&str>,
+        offset: u64,
+    ) -> VfsResult<Option<Box<dyn Read + Send>>> {
+        let _ = id;
+        let lease = self.pool.lease()?;
+        let reader = lease
+            .connection()
+            .open_reader_at(path, offset)
+            .map_err(transfer_err)?;
+        Ok(reader.map(|reader| Box::new(Leased::new(reader, lease)) as Box<dyn Read + Send>))
     }
 
     fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
         Ok(Box::new(FtpWriter::new(
-            self.conn.clone(),
+            self.pool.primary().clone(),
             path.to_string(),
         )?))
     }
 
     fn rename(&self, src: &str, dst: &str) -> VfsResult<()> {
-        self.conn
+        self.pool
+            .primary()
             .with_stream_mutation(|stream| stream.rename(src, dst).map_err(io_err))
     }
 
@@ -190,6 +259,23 @@ impl Backend for FtpBackend {
     fn open_write_copy_stage(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
         super::staging::require_absent(self, path)?;
         self.open_write(path)
+    }
+
+    /// With the length known, STOR streams on a pool connection instead of
+    /// spooling the whole file to a local temp file first; a writer that did
+    /// not get exactly `size` bytes fails `flush`.
+    fn open_write_copy_stage_sized(
+        &self,
+        path: &str,
+        size: u64,
+    ) -> VfsResult<Box<dyn Write + Send>> {
+        super::staging::require_absent(self, path)?;
+        let lease = self.pool.lease()?;
+        let writer = lease
+            .connection()
+            .open_store(path, size)
+            .map_err(transfer_err)?;
+        Ok(Box::new(Leased::new(writer, lease)))
     }
 
     // `rename_no_replace` stays unsupported (trait contract); only publishing a
@@ -206,19 +292,21 @@ impl Backend for FtpBackend {
     }
 
     fn remove_file(&self, path: &str) -> VfsResult<()> {
-        self.conn
+        self.pool
+            .primary()
             .with_stream_mutation(|stream| stream.rm(path).map_err(io_err))
     }
 
     fn remove_dir(&self, path: &str) -> VfsResult<()> {
-        self.conn
+        self.pool
+            .primary()
             .with_stream_mutation(|stream| stream.rmdir(path).map_err(io_err))
     }
 
     fn mkdir_all(&self, path: &str) -> VfsResult<()> {
         let absolute = path.starts_with('/');
         let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-        self.conn.with_stream_mutation(|stream| {
+        self.pool.primary().with_stream_mutation(|stream| {
             let original = stream.pwd().map_err(io_err)?;
             let mut cur = String::new();
             for part in parts {
@@ -243,256 +331,46 @@ impl Backend for FtpBackend {
         })
     }
 
+    fn create_dir(&self, path: &str) -> VfsResult<()> {
+        self.make_dir(path, false)
+    }
+
+    fn create_dir_new(&self, path: &str) -> VfsResult<()> {
+        self.make_dir(path, true)
+    }
+
     fn parallelism(&self) -> usize {
-        1 // single control connection
+        1 // one browsing control connection
+    }
+
+    /// Every transfer holds a control connection; the pool learns how many
+    /// the server accepts and keeps one for browsing (plan K24).
+    fn transfer_ceiling(&self, path: &str) -> Option<usize> {
+        let _ = path;
+        self.pool
+            .transfer_capacity()
+            .map(|capacity| capacity.max(1))
+    }
+
+    fn flow_key(&self, path: &str) -> String {
+        let _ = path;
+        format!(
+            "{}#{:p}",
+            self.namespace_identity(),
+            Arc::as_ptr(&self.pool)
+        )
+    }
+
+    /// A download and an upload on the same server need two transfer
+    /// connections at once; until the server has refused one, the pool can
+    /// still grow.
+    fn concurrent_read_write(&self) -> bool {
+        self.pool
+            .transfer_capacity()
+            .is_none_or(|capacity| capacity >= 2)
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::{BufRead, BufReader};
-    use std::net::{Shutdown, TcpListener, TcpStream};
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::mpsc;
-    use std::thread;
-
-    fn reply(stream: &mut TcpStream, line: &str) {
-        stream.write_all(line.as_bytes()).unwrap();
-        stream.write_all(b"\r\n").unwrap();
-        stream.flush().unwrap();
-    }
-
-    fn serve_control_connection(
-        mut stream: TcpStream,
-        generation: usize,
-        kept_alive: &mpsc::Sender<()>,
-    ) {
-        reply(&mut stream, "220 test ready");
-        let reader_stream = stream.try_clone().unwrap();
-        let mut reader = BufReader::new(reader_stream);
-        loop {
-            let mut line = String::new();
-            if reader.read_line(&mut line).unwrap_or(0) == 0 {
-                return;
-            }
-            let command = line.trim_end_matches(['\r', '\n']);
-            match command.split_whitespace().next().unwrap_or_default() {
-                "USER" => reply(&mut stream, "331 password required"),
-                "PASS" => reply(&mut stream, "230 logged in"),
-                "TYPE" => reply(&mut stream, "200 binary"),
-                "NOOP" if generation == 0 => {
-                    let _ = stream.shutdown(Shutdown::Both);
-                    return;
-                }
-                "NOOP" => {
-                    reply(&mut stream, "200 alive");
-                    let _ = kept_alive.send(());
-                }
-                "PWD" => reply(&mut stream, "257 \"/\" is current directory"),
-                "QUIT" => {
-                    reply(&mut stream, "221 bye");
-                    return;
-                }
-                _ => reply(&mut stream, "500 unsupported"),
-            }
-        }
-    }
-
-    fn serve_suspect_connection(mut stream: TcpStream, generation: usize, mutations: &AtomicUsize) {
-        reply(&mut stream, "220 test ready");
-        let mut reader = BufReader::new(stream.try_clone().unwrap());
-        loop {
-            let mut line = String::new();
-            if reader.read_line(&mut line).unwrap_or(0) == 0 {
-                return;
-            }
-            match line
-                .trim_end_matches(['\r', '\n'])
-                .split_whitespace()
-                .next()
-                .unwrap_or_default()
-            {
-                "USER" => reply(&mut stream, "331 password required"),
-                "PASS" => reply(&mut stream, "230 logged in"),
-                "TYPE" => reply(&mut stream, "200 binary"),
-                "DELE" if generation == 0 => {
-                    mutations.fetch_add(1, Ordering::SeqCst);
-                    let _ = stream.shutdown(Shutdown::Both);
-                    return;
-                }
-                "PWD" => reply(&mut stream, "257 \"/\" is current directory"),
-                _ => reply(&mut stream, "500 unsupported"),
-            }
-        }
-    }
-
-    #[test]
-    fn url_plain_with_creds() {
-        let u = parse_ftp_url("ftp://bob:pw@host:2121/pub/data").unwrap();
-        assert!(!u.secure);
-        assert_eq!(u.user, "bob");
-        assert_eq!(u.password, "pw");
-        assert_eq!(u.host, "host");
-        assert_eq!(u.port, 2121);
-        assert_eq!(u.root, "/pub/data");
-    }
-
-    #[test]
-    fn url_decodes_encoded_userinfo_exactly() {
-        let u = parse_ftp_url("ftp://domain%40alice:p%3Aa%20ss%25%40word@host:21/").unwrap();
-        assert_eq!(u.user, "domain@alice");
-        assert_eq!(u.password, "p:a ss%@word");
-        assert!(parse_ftp_url("ftp://user:%GG@host/").is_err());
-        assert!(parse_ftp_url("ftp://user:%A@host/").is_err());
-    }
-
-    #[test]
-    fn url_ftps_default_port() {
-        let u = parse_ftp_url("ftps://alice@example.com/").unwrap();
-        assert!(u.secure);
-        assert_eq!(u.user, "alice");
-        assert_eq!(u.port, 21);
-        assert_eq!(u.root, "/");
-    }
-
-    #[test]
-    fn url_anonymous() {
-        let u = parse_ftp_url("ftp://ftp.example.com/pub").unwrap();
-        assert_eq!(u.user, "anonymous");
-        assert!(!u.password.is_empty());
-        assert_eq!(u.host, "ftp.example.com");
-        assert_eq!(u.port, 21);
-        assert_eq!(u.root, "/pub");
-    }
-
-    #[test]
-    fn url_errors() {
-        assert!(parse_ftp_url("sftp://u@host").is_err());
-        assert!(parse_ftp_url("ftp://u@host:bad/").is_err());
-    }
-
-    #[test]
-    fn path_helpers() {
-        assert_eq!(basename("/a/b/c.txt"), "c.txt");
-        assert_eq!(parent_dir("/a/b/c.txt"), "/a/b");
-        assert_eq!(parent_dir("/a"), "/");
-        assert_eq!(parent_dir("/"), "/");
-    }
-
-    #[test]
-    fn list_rows_are_fail_closed() {
-        let entry = parse_list_line("-rw-rw-r-- 1 0 1 8192 Nov 5 2018 report.txt").unwrap();
-        assert_eq!(entry.name, "report.txt");
-        assert_eq!(entry.size, 8192);
-
-        assert_eq!(
-            parse_list_line("this server row is not parseable")
-                .unwrap_err()
-                .kind(),
-            io::ErrorKind::InvalidData
-        );
-        assert!(parse_list_line("-rw-rw-r-- 1 0 1 1 Nov 5 2018 ..").is_err());
-        assert!(parse_list_line("-rw-rw-r-- 1 0 1 1 Nov 5 2018 ..\\escape").is_err());
-    }
-
-    #[test]
-    fn idle_ftp_control_channel_is_pinged_and_reconnected() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        let accepts = Arc::new(AtomicUsize::new(0));
-        let server_accepts = accepts.clone();
-        let (kept_alive_tx, kept_alive_rx) = mpsc::channel();
-        let server = thread::spawn(move || {
-            for generation in 0..2 {
-                let (stream, _) = listener.accept().unwrap();
-                server_accepts.fetch_add(1, Ordering::SeqCst);
-                serve_control_connection(stream, generation, &kept_alive_tx);
-            }
-        });
-        let config = FtpUrl {
-            secure: false,
-            user: "test".to_string(),
-            password: "secret".to_string(),
-            host: address.ip().to_string(),
-            port: address.port(),
-            root: "/".to_string(),
-        };
-        let stream = connect_stream(&config).unwrap();
-        assert_eq!(
-            stream.get_ref().read_timeout().unwrap(),
-            Some(Duration::from_secs(60))
-        );
-        assert_eq!(
-            stream.get_ref().write_timeout().unwrap(),
-            Some(Duration::from_secs(60))
-        );
-        let reconnect_config = config.clone();
-        let reconnect: super::super::io_adapters::FtpReconnect =
-            Arc::new(move || connect_stream(&reconnect_config));
-        let connection = FtpConnection::new_with_timing(
-            stream,
-            reconnect,
-            Duration::from_millis(20),
-            Duration::from_millis(200),
-        )
-        .unwrap();
-
-        kept_alive_rx
-            .recv_timeout(Duration::from_secs(3))
-            .expect("replacement connection must receive NOOP");
-        assert_eq!(accepts.load(Ordering::SeqCst), 2);
-        let pwd = connection
-            .with_stream_read(|stream| stream.pwd().map_err(io_err))
-            .unwrap();
-        assert_eq!(pwd, "/");
-
-        drop(connection);
-        server.join().unwrap();
-    }
-
-    #[test]
-    fn ambiguous_mutation_marks_channel_suspect_and_next_read_reconnects() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        let mutations = Arc::new(AtomicUsize::new(0));
-        let server_mutations = mutations.clone();
-        let server = thread::spawn(move || {
-            for generation in 0..2 {
-                let (stream, _) = listener.accept().unwrap();
-                serve_suspect_connection(stream, generation, &server_mutations);
-            }
-        });
-        let config = FtpUrl {
-            secure: false,
-            user: "test".to_string(),
-            password: "secret".to_string(),
-            host: address.ip().to_string(),
-            port: address.port(),
-            root: "/".to_string(),
-        };
-        let stream = connect_stream(&config).unwrap();
-        let reconnect_config = config.clone();
-        let reconnect: super::super::io_adapters::FtpReconnect =
-            Arc::new(move || connect_stream(&reconnect_config));
-        let connection = FtpConnection::new_with_timing(
-            stream,
-            reconnect,
-            Duration::from_secs(60),
-            Duration::from_millis(200),
-        )
-        .unwrap();
-
-        assert!(connection
-            .with_stream_mutation(|stream| stream.rm("/committed").map_err(io_err))
-            .is_err());
-        let pwd = connection
-            .with_stream_read(|stream| stream.pwd().map_err(io_err))
-            .unwrap();
-        assert_eq!(pwd, "/");
-        assert_eq!(mutations.load(Ordering::SeqCst), 1);
-
-        drop(connection);
-        server.join().unwrap();
-    }
-}
+#[path = "ftp_tests.rs"]
+mod tests;

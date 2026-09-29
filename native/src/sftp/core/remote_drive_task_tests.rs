@@ -1,6 +1,6 @@
 use super::{
-    backend::{append_bounded, CapturedExec},
     errors::io_err,
+    exec::{append_bounded, CapturedExec},
     session::interleave_addresses,
 };
 use russh_sftp::client::error::Error as SftpError;

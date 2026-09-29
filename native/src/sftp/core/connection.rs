@@ -15,6 +15,9 @@ use tokio::runtime::Runtime;
 
 const SFTP_CONNECT_DEADLINE: Duration = Duration::from_secs(30);
 const SFTP_METADATA_DEADLINE: Duration = Duration::from_secs(20);
+/// At least two workers: one keeps russh's session task (all encryption of
+/// the connection) running while the other serves the SFTP channel tasks.
+const MIN_RUNTIME_WORKERS: usize = 2;
 
 pub(super) type SftpMetadataFuture<'a, T> =
     Pin<Box<dyn Future<Output = Result<T, SftpError>> + 'a>>;
@@ -48,7 +51,7 @@ impl SftpConnection {
     pub(super) fn connect(config: SftpConfig) -> io::Result<Arc<Self>> {
         let runtime = Arc::new(
             tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(2)
+                .worker_threads(runtime_workers())
                 .enable_all()
                 .build()?,
         );
@@ -162,6 +165,16 @@ impl SftpConnection {
     }
 }
 
+/// One worker per core, as tokio's own default: a transfer keeps several SFTP
+/// channels busy (each with a reader and a writer task plus one task per
+/// request in flight), and none of them may starve the session task.
+fn runtime_workers() -> usize {
+    std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(MIN_RUNTIME_WORKERS)
+        .max(MIN_RUNTIME_WORKERS)
+}
+
 fn connect_transport(runtime: &Runtime, config: &SftpConfig) -> io::Result<SftpTransport> {
     let (session, sftp) = block_on_connect(runtime, SFTP_CONNECT_DEADLINE, connect_async(config))?;
     Ok(SftpTransport {
@@ -236,13 +249,13 @@ where
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct FailureDisposition {
-    retire: bool,
-    retry_safe: bool,
+pub(super) struct FailureDisposition {
+    pub(super) retire: bool,
+    pub(super) retry_safe: bool,
 }
 
 impl FailureDisposition {
-    const fn dead() -> Self {
+    pub(super) const fn dead() -> Self {
         Self {
             retire: true,
             retry_safe: true,
@@ -264,7 +277,7 @@ impl FailureDisposition {
     }
 }
 
-fn classify_sftp_error(error: &SftpError) -> FailureDisposition {
+pub(super) fn classify_sftp_error(error: &SftpError) -> FailureDisposition {
     match error {
         SftpError::IO(_) => FailureDisposition::dead(),
         SftpError::UnexpectedBehavior(message) if transport_message(message) => {
@@ -292,7 +305,7 @@ fn ssh_error_proves_dead(error: &russh::Error) -> bool {
     ) || matches!(error, russh::Error::IO(error) if classify_io_error(error).retry_safe)
 }
 
-fn classify_io_error(error: &io::Error) -> FailureDisposition {
+pub(super) fn classify_io_error(error: &io::Error) -> FailureDisposition {
     if matches!(
         error.kind(),
         io::ErrorKind::BrokenPipe

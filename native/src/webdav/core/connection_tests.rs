@@ -71,6 +71,12 @@ fn backend_for_timeout(base: String, timeout: Duration) -> WebdavBackend {
             .redirects(0)
             .max_idle_connections(0)
             .build(),
+        write_agent: ureq::AgentBuilder::new()
+            .timeout_connect(Duration::from_secs(3))
+            .timeout_read(Duration::from_secs(3))
+            .timeout_write(Duration::from_secs(3))
+            .redirects(0)
+            .build(),
         url: base.clone(),
         identity: format!("webdav:{base}"),
     }

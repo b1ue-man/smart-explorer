@@ -63,8 +63,29 @@ fn label(kind: io::ErrorKind) -> &'static str {
     }
 }
 
-/// An operation error on `path`.
+/// The server reports overload as a status: out of resources (which smb2's
+/// `is_retryable` treats as passing) or, for a Windows server at its
+/// connection limit, REQUEST_NOT_ACCEPTED.
+fn overloaded(error: &Error) -> bool {
+    matches!(
+        error.status(),
+        Some(
+            NtStatus::INSUFFICIENT_RESOURCES
+                | NtStatus::INSUFF_SERVER_RESOURCES
+                | NtStatus::REQUEST_NOT_ACCEPTED
+        )
+    )
+}
+
+/// An operation error on `path`. Overload is congestion, so a transfer
+/// backs off instead of failing (plan K13).
 pub(super) fn map(error: Error, action: &str, path: &str) -> io::Error {
+    if overloaded(&error) {
+        return crate::vfs::congestion_error(
+            format!("SMB-Server ist ausgelastet: {path} ({action}, {error})"),
+            None,
+        );
+    }
     let kind = kind_of(&error);
     io::Error::new(kind, format!("{}: {path} ({action}, {error})", label(kind)))
 }
