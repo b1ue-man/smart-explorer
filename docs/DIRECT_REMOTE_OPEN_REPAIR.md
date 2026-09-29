@@ -83,6 +83,8 @@ before/after a successful attempt additionally rejects observable source drift.
 
 The manifest-failure path also collected uploads and launched them despite a
 failed safety check. M2 retains those edits for retry and suppresses that launch.
+M4 also keeps a failed remote stat from bypassing an already known conflict
+baseline during save-back; the local edit remains dirty and retryable instead.
 
 ## Stage two: final milestone plan
 

@@ -18,6 +18,8 @@ mod copy_commit;
 mod download_file;
 #[path = "os/shared/downloads.rs"]
 mod downloads;
+#[path = "os/shared/edit_download.rs"]
+mod edit_download;
 #[path = "os/shared/engine/mod.rs"]
 pub(crate) mod engine;
 #[path = "core/engine_names.rs"]
@@ -108,6 +110,7 @@ pub use lane::{
     TransferRequest,
 };
 pub use local_stage::download_to_id;
+pub(crate) use edit_download::download_for_edit;
 pub use memory::{memory_budget, reserve_memory, try_reserve_memory, MemoryReservation};
 pub(crate) use platform::{replace_file_atomic, upload_is_link_like};
 pub use remote_copy::copy_remote_paths_progress;
