@@ -5,23 +5,22 @@
 //! the shaping:
 //!
 //! - `SE_TASK_NETEM_RTT_MS`, `SE_TASK_NETEM_RATE_MBIT`: the shaped link.
-//! - `SE_TASK_SFTP`: `host:port:user:password:root` of an SFTP server.
-//! - `SE_TASK_FTP_URL`: `ftp://user:password@host:port/root`.
+//! - the servers as described in `transfer_task/support.rs`.
 //!
 //! Each case measures the time from submitting a job to the first finished
 //! file and the goodput of the whole job, prints them and checks bounds
 //! derived from the link: the first file within a few round trips, many small
 //! files far faster than one at a time (which costs at least four round trips
 //! per file: open, write, close, publish), one large file close to the rate.
-use smart_explorer::transfer::{
-    launch_transfer, Endpoint, JobItems, Layout, TransferJob, TransferMsg, TransferRequest,
-};
-use smart_explorer::types::{Conflict, CopyMode};
-use smart_explorer::vfs::{Backend, BackendHandle};
+#[path = "transfer_task/support.rs"]
+mod support;
+
+use smart_explorer::transfer::Endpoint;
+use smart_explorer::vfs::BackendHandle;
 use std::io::Write;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::path::PathBuf;
+use std::time::Duration;
+use support::{env, ftp, job, remote_folder, run, sftp, slash, unique, Measured};
 
 /// Small files per case: enough that the adaptive concurrency leaves slow
 /// start (a few seconds) and the steady rate dominates the result.
@@ -44,10 +43,6 @@ struct Link {
     bytes_per_second: f64,
 }
 
-fn env(name: &str) -> String {
-    std::env::var(name).unwrap_or_else(|_| panic!("{name} must be set by the task suite"))
-}
-
 fn link() -> Link {
     let rtt_ms: u64 = env("SE_TASK_NETEM_RTT_MS")
         .parse()
@@ -61,45 +56,7 @@ fn link() -> Link {
     }
 }
 
-fn unique(name: &str) -> String {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_nanos())
-        .unwrap_or(0);
-    format!("{name}-{nanos}")
-}
-
-fn sftp() -> (BackendHandle, String) {
-    let spec = env("SE_TASK_SFTP");
-    let parts: Vec<&str> = spec.splitn(5, ':').collect();
-    assert_eq!(
-        parts.len(),
-        5,
-        "SE_TASK_SFTP is host:port:user:password:root"
-    );
-    let config = smart_explorer::sftp::SftpConfig {
-        host: parts[0].to_string(),
-        port: parts[1].parse().expect("SFTP port"),
-        user: parts[2].to_string(),
-        auth: smart_explorer::sftp::SftpAuth::Password(parts[3].to_string()),
-        root: parts[4].to_string(),
-    };
-    let backend = smart_explorer::sftp::SftpBackend::connect(config).expect("SFTP connects");
-    (Arc::new(backend), parts[4].to_string())
-}
-
-fn ftp() -> (BackendHandle, String) {
-    let url = env("SE_TASK_FTP_URL");
-    let backend = smart_explorer::ftp::backend_from_url(&url).expect("FTP connects");
-    let root = url
-        .splitn(4, '/')
-        .nth(3)
-        .map(|root| format!("/{root}"))
-        .unwrap_or_else(|| "/".to_string());
-    (Arc::new(backend), root)
-}
-
-fn local_tree(name: &str, folders: usize, files: usize, bytes: usize) -> PathBuf {
+fn local_files(name: &str, folders: usize, files: usize, bytes: usize) -> PathBuf {
     let root = std::env::temp_dir().join(unique(name));
     let content = vec![0x5a_u8; bytes];
     for index in 0..files {
@@ -110,82 +67,6 @@ fn local_tree(name: &str, folders: usize, files: usize, bytes: usize) -> PathBuf
         file.write_all(&content).expect("write file");
     }
     root
-}
-
-fn slash(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
-}
-
-fn job(
-    source: Endpoint,
-    target: Endpoint,
-    paths: Vec<String>,
-    target_dir: String,
-    label: &str,
-) -> TransferJob {
-    TransferJob {
-        source,
-        target,
-        target_dir,
-        items: JobItems::Roots { paths, base: None },
-        layout: Layout::Tree,
-        filter: None,
-        conflict: Conflict::Rename,
-        mode: CopyMode::Copy,
-        source_label: label.to_string(),
-        target_label: label.to_string(),
-        resume: None,
-    }
-}
-
-struct Measured {
-    first_file: Duration,
-    total: Duration,
-    files: u64,
-    bytes: u64,
-}
-
-fn run(job: TransferJob, limit: Duration) -> Measured {
-    let started = Instant::now();
-    let mut active =
-        launch_transfer(TransferRequest::Job(Box::new(job))).expect("the transfer starts");
-    let mut first_file = None;
-    loop {
-        let left = limit.saturating_sub(started.elapsed());
-        match active.rx.recv_timeout(left) {
-            Ok(TransferMsg::Progress(progress)) => {
-                if first_file.is_none() && progress.files_done > 0 {
-                    first_file = Some(started.elapsed());
-                }
-            }
-            Ok(TransferMsg::Done {
-                progress,
-                errors,
-                canceled,
-                ..
-            }) => {
-                let total = started.elapsed();
-                if let Some(worker) = active.worker.take() {
-                    let _ = worker.join();
-                }
-                assert!(!canceled, "the transfer was canceled");
-                assert!(
-                    errors.is_empty(),
-                    "the transfer reported errors: {errors:?}"
-                );
-                return Measured {
-                    first_file: first_file.unwrap_or(total),
-                    total,
-                    files: progress.files_done,
-                    bytes: progress.bytes_done,
-                };
-            }
-            Err(_) => {
-                active.request_cancel();
-                panic!("the transfer did not finish within {limit:?}");
-            }
-        }
-    }
 }
 
 fn report(case: &str, measured: &Measured) {
@@ -241,17 +122,9 @@ fn assert_large_file(case: &str, link: &Link, measured: &Measured) {
     );
 }
 
-fn remote_folder(backend: &dyn Backend, root: &str, name: &str) -> String {
-    let folder = format!("{}/{}", root.trim_end_matches('/'), unique(name));
-    backend
-        .mkdir_all(&folder)
-        .expect("create remote case folder");
-    folder
-}
-
 fn upload_small_files(case: &str, backend: BackendHandle, root: &str) {
     let link = link();
-    let source = local_tree(case, SMALL_FOLDERS, SMALL_FILES, SMALL_FILE_BYTES);
+    let source = local_files(case, SMALL_FOLDERS, SMALL_FILES, SMALL_FILE_BYTES);
     let target_dir = remote_folder(&*backend, root, case);
     let measured = run(
         job(
@@ -271,7 +144,7 @@ fn upload_small_files(case: &str, backend: BackendHandle, root: &str) {
 
 fn upload_large_file(case: &str, backend: BackendHandle, root: &str) {
     let link = link();
-    let source = local_tree(case, 1, 1, LARGE_FILE_BYTES);
+    let source = local_files(case, 1, 1, LARGE_FILE_BYTES);
     let target_dir = remote_folder(&*backend, root, case);
     let measured = run(
         job(
