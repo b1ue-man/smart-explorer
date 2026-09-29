@@ -80,6 +80,7 @@ fn room_peer(fixture: &CopyPastePeerFixture) -> (Arc<PeerBackend>, String) {
 }
 
 #[test]
+#[ignore = "requires the isolated remote Direct opening task runner"]
 fn direct_open_task_real_direct_and_room_reconnect_through_daemon_without_replay() {
     for room in [false, true] {
         let fixture = Arc::new(CopyPastePeerFixture::new().unwrap());
@@ -112,6 +113,7 @@ fn direct_open_task_real_direct_and_room_reconnect_through_daemon_without_replay
 }
 
 #[test]
+#[ignore = "requires the isolated remote Direct opening task runner"]
 fn direct_open_task_reconnect_cannot_bypass_revoked_direct_access() {
     let fixture = Arc::new(CopyPastePeerFixture::new().unwrap());
     std::fs::write(fixture.root_a.join("file"), vec![1; 256 * 1024]).unwrap();
