@@ -30,7 +30,6 @@ pub(super) trait RemoteContent: Send + Sync {
         cancel: &AtomicBool,
         on_found: &(dyn Fn(u64) + Sync),
     ) -> SelectionListing;
-    fn open_entry(&self, entry: &ListedEntry) -> io::Result<Box<dyn Read + Send>>;
     /// Reads from byte `offset` on (a broken read continues where it broke).
     fn open_entry_at(&self, entry: &ListedEntry, offset: u64) -> io::Result<Box<dyn Read + Send>>;
     fn connection_flow(&self) -> Arc<Flow>;
