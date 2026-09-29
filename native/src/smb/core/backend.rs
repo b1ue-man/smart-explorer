@@ -114,8 +114,8 @@ impl SmbBackend {
         };
         let mut ops = TreeOps {
             conn: generation.connection(),
-            tree: &*tree,
-            generation: &*generation,
+            tree: &tree,
+            generation: &generation,
         };
         let copied = self.session.block_on(server_copy::copy_to_stage(
             &mut ops,
