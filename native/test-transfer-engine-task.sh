@@ -346,10 +346,6 @@ affected_modules=(
 # The daemon's Windows analysis bridge needs the Windows remote suite's own
 # switch and isolated profile (native/test-windows-remote-task.ps1).
 skip_arguments=(--skip windows_analysis_task_tests)
-if [[ "$platform" == windows ]]; then
-    # Fails on Windows since before this batch (docs/TODO.md, H1).
-    skip_arguments+=(--skip vfs::tests::copy_file_default_impl_streams)
-fi
 modules_log="$suite_tmp/modules.log"
 echo "transfer engine task suite: tests of the affected modules"
 if ! (
@@ -481,6 +477,11 @@ e2e_built=true
 if [[ "$e2e_built" != true ]]; then
     stage_failed "Share Room end to end: se or se-share-server did not build"
 else
+    # Its working folder (daemon logs, transfer outputs) lands next to the
+    # suite's logs, which the workflow uploads on failure.
+    e2e_tmp="$suite_tmp/share-e2e"
+    mkdir -p "$e2e_tmp"
+    TMPDIR="$e2e_tmp" \
     SMART_EXPLORER_SE_BINARY="$CARGO_TARGET_DIR/debug/se" \
     SMART_EXPLORER_SHARE_SERVER_BINARY="$repo_root/share-server/target/debug/se-share-server" \
         bash "$repo_root/native/test-share-room-e2e.sh" 2>&1 | tee "$e2e_log" || true

@@ -113,13 +113,20 @@ pub struct Measured {
     pub bytes: u64,
 }
 
+/// How long a timed-out job may take to wind down after its cancel: it holds
+/// transfer memory and connections the next case needs.
+const WIND_DOWN: Duration = Duration::from_secs(120);
+
 /// Runs `job` through the transfer lane's launcher (as the app does) and
-/// waits at most `limit`; any issue, cancel or timeout fails the test.
+/// waits at most `limit`; any issue, cancel or timeout fails the test. A job
+/// that times out is canceled and wound down first, so it cannot slow the
+/// next case, and the failure names how far it got.
 pub fn run(job: TransferJob, limit: Duration) -> Measured {
     let started = Instant::now();
     let mut active =
         launch_transfer(TransferRequest::Job(Box::new(job))).expect("the transfer starts");
     let mut first_file = None;
+    let mut last = String::from("no progress yet");
     loop {
         let left = limit.saturating_sub(started.elapsed());
         match active.rx.recv_timeout(left) {
@@ -127,6 +134,17 @@ pub fn run(job: TransferJob, limit: Duration) -> Measured {
                 if first_file.is_none() && progress.files_done > 0 {
                     first_file = Some(started.elapsed());
                 }
+                last = format!(
+                    "{}/{} files, {}/{} bytes, {} in parallel, errors {}, note {:?}, active {:?}",
+                    progress.files_done,
+                    progress.files_total,
+                    progress.bytes_done,
+                    progress.bytes_total,
+                    progress.parallel,
+                    progress.errors,
+                    progress.note,
+                    progress.active
+                );
             }
             Ok(TransferMsg::Done {
                 progress,
@@ -152,7 +170,27 @@ pub fn run(job: TransferJob, limit: Duration) -> Measured {
             }
             Err(_) => {
                 active.request_cancel();
-                panic!("the transfer did not finish within {limit:?}");
+                let deadline = Instant::now() + WIND_DOWN;
+                let mut wound_down = false;
+                while let Some(left) = deadline.checked_duration_since(Instant::now()) {
+                    match active.rx.recv_timeout(left) {
+                        Ok(TransferMsg::Done { .. }) => {
+                            wound_down = true;
+                            break;
+                        }
+                        Ok(_) => {}
+                        Err(_) => break,
+                    }
+                }
+                if wound_down {
+                    if let Some(worker) = active.worker.take() {
+                        let _ = worker.join();
+                    }
+                }
+                panic!(
+                    "the transfer did not finish within {limit:?} (last progress: {last}; \
+                     wound down after the cancel: {wound_down})"
+                );
             }
         }
     }
