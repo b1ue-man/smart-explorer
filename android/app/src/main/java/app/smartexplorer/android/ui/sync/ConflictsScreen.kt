@@ -140,8 +140,8 @@ private fun ConflictList(session: ConflictSession, onMerge: (SyncConflict) -> Un
                     busy = session.busy[item.key] == true,
                     // A dry run replaces the conflict context, so its entries wait until it ends.
                     enabled = !session.bulk && !session.finishing && !session.checking,
-                    onKeepA = { session.resolve(item, "a") },
-                    onKeepB = { session.resolve(item, "b") },
+                    onKeepA = { id -> session.resolve(item, "a", id) },
+                    onKeepB = { id -> session.resolve(item, "b", id) },
                     onSkip = { session.skip(item) },
                     onMerge = { onMerge(item) },
                 )
@@ -155,8 +155,8 @@ private fun ConflictCard(
     item: SyncConflict,
     busy: Boolean,
     enabled: Boolean,
-    onKeepA: () -> Unit,
-    onKeepB: () -> Unit,
+    onKeepA: (String?) -> Unit,
+    onKeepB: (String?) -> Unit,
     onSkip: () -> Unit,
     onMerge: () -> Unit,
 ) {
@@ -165,12 +165,16 @@ private fun ConflictCard(
             Text(item.path, style = MaterialTheme.typography.titleSmall, maxLines = 3, overflow = TextOverflow.Ellipsis)
             Text("A: ${sideText(item.a)}", style = MaterialTheme.typography.bodyMedium)
             Text("B: ${sideText(item.b)}", style = MaterialTheme.typography.bodyMedium)
+            if ((item.a?.variants?.size ?: 0) > 1 || (item.b?.variants?.size ?: 0) > 1) {
+                Text("Die gewählte Version bleibt auf beiden Seiten. Andere Versionen werden gesichert und doppelte Dateien entfernt.",
+                    style = MaterialTheme.typography.bodySmall)
+            }
             if (busy) LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 4.dp))
         }
         val actionsEnabled = enabled && !busy
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp)) {
-            TextButton(onClick = onKeepA, enabled = actionsEnabled) { Text("A behalten") }
-            TextButton(onClick = onKeepB, enabled = actionsEnabled) { Text("B behalten") }
+            ConflictVariantChoice("A", item.a, actionsEnabled, onKeepA)
+            ConflictVariantChoice("B", item.b, actionsEnabled, onKeepB)
             TextButton(onClick = onSkip, enabled = actionsEnabled) { Text("Überspringen") }
             if (item.text) TextButton(onClick = onMerge, enabled = actionsEnabled) { Text("Zusammenführen") }
         }
@@ -179,7 +183,12 @@ private fun ConflictCard(
 
 /** "3,2 MB · 12.09.2026 14:03", or "gelöscht" when the side is missing. */
 private fun sideText(side: ConflictSide?): String =
-    if (side == null || !side.exists) "gelöscht" else "${Format.size(side.size)} · ${Format.dateTime(side.mtimeMs)}"
+    when {
+        side == null || !side.exists -> "gelöscht"
+        side.needsVariantChoice -> "${side.variants.size} Dateien mit verschiedenen Inhalten"
+        side.variants.size > 1 -> "${side.variants.size} gleiche Kopien · ${Format.size(side.size)}"
+        else -> "${Format.size(side.size)} · ${Format.dateTime(side.mtimeMs)}"
+    }
 
 /** Progress of the dry run with [Abbrechen]. */
 @Composable

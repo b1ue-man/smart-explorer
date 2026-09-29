@@ -21,6 +21,9 @@ fn state(backend: &dyn Backend, path: &str) -> Result<(u64, i64), ApiError> {
 }
 
 fn load_draft(pair: &PairContext, conflict: &Conflict, cid: &str) -> Result<MergeDraft, ApiError> {
+    if conflict.duplicates.is_some() {
+        return Err(invalid("Bitte zuerst eine konkrete Dateiversion auswählen; mehrere gleichnamige Dateien können nicht zeilenweise zusammengeführt werden."));
+    }
     let path_a = ep_join(&pair.root_a, &conflict.rel);
     let path_b = ep_join(&pair.root_b, &conflict.rel);
     let state_a = state(&*pair.a, &path_a)?;

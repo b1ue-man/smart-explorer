@@ -84,6 +84,9 @@ impl App {
                         });
                     });
                 }
+                if p.duplicate_removals > 0 {
+                    ui.label(format!("{} doppelte Dateien werden beim Sync nach Sicherung entfernt; die gemeinsame Version bleibt erhalten.", p.duplicate_removals));
+                }
                 if p.actions.is_empty() && p.conflicts.is_empty() {
                     ui.add_space(6.0);
                     ui.colored_label(

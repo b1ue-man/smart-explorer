@@ -4,6 +4,10 @@ use super::*;
 impl App {
     /// Begin a line-merge for one conflict: read both versions off-thread, diff.
     pub(in crate::app) fn start_merge(&mut self, rel: String) {
+        if self.bisync_conflicts.iter().any(|c| c.rel == rel && c.duplicates.is_some()) {
+            self.error_msg = Some("Bitte zuerst eine Dateiversion auswählen; mehrere gleichnamige Dateien können nicht zeilenweise zusammengeführt werden.".into());
+            return;
+        }
         if self.conflict_resolution.is_some() || self.conflict_bulk.is_some() {
             self.error_msg =
                 Some("Eine laufende Konfliktauflösung muss zuerst beendet werden.".into());

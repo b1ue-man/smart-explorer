@@ -112,6 +112,16 @@ data class ConflictSide(
     val exists: Boolean = false,
     val size: Long = 0,
     val mtimeMs: Long = 0,
+    val needsVariantChoice: Boolean = false,
+    val variants: List<ConflictVariant> = emptyList(),
+)
+
+@Serializable
+data class ConflictVariant(
+    val id: String? = null,
+    val size: Long = 0,
+    val mtimeMs: Long = 0,
+    val checksum: String = "",
 )
 
 /** One open conflict; [cid] is passed back to the core unchanged (its JSON type is the core's). */
@@ -254,11 +264,12 @@ object SyncApi {
     suspend fun checkConflicts(id: String): String = taskOf("sync.checkConflicts", buildJsonObject { put("id", id) })
 
     /** [choice] is `"a"` or `"b"`. */
-    suspend fun resolve(id: String, cid: JsonPrimitive, choice: String): String =
+    suspend fun resolve(id: String, cid: JsonPrimitive, choice: String, variantId: String? = null): String =
         taskOf("sync.resolve", buildJsonObject {
             put("id", id)
             put("cid", cid)
             put("choice", choice)
+            variantId?.let { put("variantId", it) }
         })
 
     suspend fun skip(id: String, cid: JsonPrimitive) {
