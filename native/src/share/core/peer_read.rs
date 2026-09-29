@@ -3,8 +3,9 @@ use std::sync::Arc;
 
 use iroh::endpoint::{RecvStream, VarInt};
 
-use super::backend::{recv_tagged, ShareIrohNode};
+use super::backend::ShareIrohNode;
 use super::core::eio;
+use super::framing::recv_data_frame;
 use super::io_deadline;
 
 const PEER_ABORT_CODE: VarInt = VarInt::from_u32(1);
@@ -56,7 +57,7 @@ impl Read for PeerReader {
         while self.pos >= self.buf.len() {
             let frame = self.node.block_on(io_deadline::run(
                 "peer read data",
-                recv_tagged(&mut self.recv),
+                recv_data_frame(&mut self.recv),
             ));
             let (tag, payload) = match frame {
                 Ok(frame) => frame,

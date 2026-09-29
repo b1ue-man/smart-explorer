@@ -11,6 +11,12 @@ pub(super) const TAG_DATA: u8 = 1;
 const MAX_FRAME: usize = 16 * 1024 * 1024;
 pub(super) const MAX_HANDSHAKE_CTRL_FRAME: usize = 64 * 1024;
 pub(super) const MAX_REQUEST_CTRL_FRAME: usize = 256 * 1024;
+/// A data frame carries at most one chunk (every host and client splits file
+/// bytes by `fs::CHUNK`) plus its tag byte. Transfer streams read with this
+/// limit, so a peer cannot make them buffer more than the memory their
+/// admission reserved; closing control frames of those streams are far
+/// smaller.
+pub(super) const MAX_DATA_FRAME: usize = super::fs::CHUNK + 1;
 
 pub(super) async fn reply(send: &mut SendStream, resp: FsResponse) -> io::Result<()> {
     send_ctrl(send, &Ctrl::FsResp { resp }).await
@@ -70,8 +76,9 @@ pub(super) async fn send_tagged(send: &mut SendStream, tag: u8, payload: &[u8]) 
     send.flush().await.map_err(eio)
 }
 
-pub(super) async fn recv_tagged(recv: &mut RecvStream) -> io::Result<(u8, Vec<u8>)> {
-    recv_tagged_limited(recv, MAX_FRAME).await
+/// One frame of a transfer stream: a data chunk or its closing control frame.
+pub(super) async fn recv_data_frame(recv: &mut RecvStream) -> io::Result<(u8, Vec<u8>)> {
+    recv_tagged_limited(recv, MAX_DATA_FRAME).await
 }
 
 pub(super) async fn recv_tagged_limited(
@@ -82,9 +89,15 @@ pub(super) async fn recv_tagged_limited(
     recv.read_exact(&mut len4).await.map_err(read_exact_error)?;
     let n = u32::from_be_bytes(len4) as usize;
     validate_frame_len(n, max_frame)?;
-    let mut buf = vec![0u8; n];
-    recv.read_exact(&mut buf).await.map_err(read_exact_error)?;
-    Ok((buf[0], buf[1..].to_vec()))
+    // The tag is read on its own, so the payload is received into its final
+    // buffer without a second copy.
+    let mut tag = [0u8; 1];
+    recv.read_exact(&mut tag).await.map_err(read_exact_error)?;
+    let mut payload = vec![0u8; n - 1];
+    recv.read_exact(&mut payload)
+        .await
+        .map_err(read_exact_error)?;
+    Ok((tag[0], payload))
 }
 
 fn validate_frame_len(len: usize, requested_max: usize) -> io::Result<()> {
@@ -122,5 +135,19 @@ mod tests {
         );
         assert!(validate_frame_len(0, MAX_REQUEST_CTRL_FRAME).is_err());
         assert!(validate_frame_len(MAX_FRAME + 1, usize::MAX).is_err());
+    }
+
+    #[test]
+    fn transfer_engine_task_data_frames_hold_one_chunk() {
+        assert_eq!(MAX_DATA_FRAME, super::super::fs::CHUNK + 1);
+        assert!(validate_frame_len(MAX_DATA_FRAME, MAX_DATA_FRAME).is_ok());
+        assert!(validate_frame_len(MAX_DATA_FRAME + 1, MAX_DATA_FRAME).is_err());
+        // A write's closing frame (WriteDone with a lease) fits easily.
+        let commit = serde_json::to_vec(&Ctrl::Fs {
+            req: super::super::wire::FsRequest::WriteDone,
+            lease: Some("L".repeat(256)),
+        })
+        .unwrap();
+        assert!(commit.len() < MAX_DATA_FRAME);
     }
 }

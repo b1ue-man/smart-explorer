@@ -1,13 +1,21 @@
 //! Outcomes of PutBatch commits by client nonce (K18e): a client whose reply
 //! was lost after its commit asks once more and learns exactly which entries
 //! were published under which name, so nothing is ever retried blindly.
-use std::collections::HashMap;
+//!
+//! Bounded on every axis a client could inflate: records per principal and
+//! in total (beyond them a new batch is answered `Busy`), and bytes, which
+//! count every record's key and bookkeeping, not only its outcome text.
+//! Records leave in expiry order from two ordered indexes, never through a
+//! scan of the whole table under its lock.
+use std::collections::{BTreeMap, HashMap};
 use std::io;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
 use crate::share::session::PeerPrincipal;
 use crate::share::wire::{FsBatchOutcome, FsBatchStatus};
+
+use super::admission::{busy, HOST_TRANSFER_SLOTS, PRINCIPAL_TRANSFER_SLOTS};
 
 /// A client asks right after reconnecting, within one operation deadline
 /// (60 s); five times that covers a slow route change with margin.
@@ -18,9 +26,21 @@ const FINISHED_RETENTION: Duration = Duration::from_secs(5 * 60);
 /// minutes at the slowest rate a transfer survives.
 const PENDING_RETENTION: Duration = Duration::from_secs(70 * 60);
 
-/// Stored outcome text of all records: 64 of the largest batch headers
-/// (256 KiB), more than the 60 batches one connection can have in flight.
+/// Records one principal may hold: its admitted batches in flight (60) plus
+/// as many finished ones awaiting a status query after a lost connection.
+const MAX_RECORDS_PER_PRINCIPAL: usize = 2 * PRINCIPAL_TRANSFER_SLOTS;
+
+/// Records of all principals: every transfer the host admits at once (256)
+/// plus as many finished ones awaiting their clients.
+const MAX_RECORDS: usize = 2 * HOST_TRANSFER_SLOTS;
+
+/// Bytes of all records: 64 of the largest batch headers (256 KiB), more
+/// than the batches one connection can have in flight.
 const MAX_STORED_BYTES: usize = 64 * 256 * 1024;
+
+/// Bookkeeping of one record besides its strings: its map and index entries,
+/// the record itself and its share of the per-principal count.
+const RECORD_OVERHEAD: usize = 256;
 
 /// Memory of one stored outcome besides its text: the string header (24
 /// bytes) plus the variant and error kind.
@@ -37,98 +57,199 @@ impl BatchKey {
     pub(super) fn new(principal: PeerPrincipal, nonce: String) -> Self {
         Self { principal, nonce }
     }
+
+    fn text_len(&self) -> usize {
+        self.principal.text_len() + self.nonce.len()
+    }
 }
+
+/// Position in an expiry index: when the record expires, and a sequence
+/// number that keeps records of the same instant apart.
+type Slot = (Instant, u64);
 
 struct Record {
     status: FsBatchStatus,
     bytes: usize,
-    updated: Instant,
+    slot: Slot,
 }
 
-fn table() -> io::Result<MutexGuard<'static, HashMap<BatchKey, Record>>> {
-    static TABLE: OnceLock<Mutex<HashMap<BatchKey, Record>>> = OnceLock::new();
+#[derive(Default)]
+struct Table {
+    records: HashMap<BatchKey, Record>,
+    /// Batches still receiving or publishing, by expiry.
+    pending: BTreeMap<Slot, BatchKey>,
+    /// Committed or aborted batches, by expiry; also the eviction order.
+    finished: BTreeMap<Slot, BatchKey>,
+    per_principal: HashMap<PeerPrincipal, usize>,
+    bytes: usize,
+    sequence: u64,
+}
+
+fn table() -> MutexGuard<'static, Table> {
+    static TABLE: OnceLock<Mutex<Table>> = OnceLock::new();
     TABLE
-        .get_or_init(|| Mutex::new(HashMap::new()))
+        .get_or_init(|| Mutex::new(Table::default()))
         .lock()
-        .map_err(|_| crate::share::core::eio("Paketstatus ist gesperrt"))
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// Registers a batch as it is accepted; a reused nonce is refused.
+/// Registers a batch as it is accepted; a reused nonce is refused, a full
+/// table answers `Busy`.
 pub(super) fn begin(key: &BatchKey) -> io::Result<()> {
-    let mut records = table()?;
-    let now = Instant::now();
-    prune(&mut records, now);
-    if records.contains_key(key) {
-        return Err(io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            "Paket-Kennung wurde bereits verwendet",
-        ));
-    }
-    records.insert(
-        key.clone(),
-        Record {
-            status: FsBatchStatus::Pending,
-            bytes: 0,
-            updated: now,
-        },
-    );
-    Ok(())
+    table().begin(key, Instant::now())
 }
 
 /// Records how the batch ended (committed or aborted before its commit).
 pub(super) fn finish(key: &BatchKey, status: FsBatchStatus) {
-    let Ok(mut records) = table() else {
-        return;
-    };
-    let now = Instant::now();
-    if let Some(record) = records.get_mut(key) {
-        record.bytes = stored_bytes(&status);
-        record.status = status;
-        record.updated = now;
-    }
-    prune(&mut records, now);
+    table().finish(key, status, Instant::now());
 }
 
 /// The client confirmed it holds the outcomes; nothing needs to remain.
 pub(super) fn delivered(key: &BatchKey) {
-    if let Ok(mut records) = table() {
-        records.remove(key);
-    }
+    table().delivered(key);
 }
 
 /// The state of `principal`'s batch `nonce`; `None` when unknown here.
 pub(super) fn query(principal: &PeerPrincipal, nonce: &str) -> Option<FsBatchStatus> {
     let key = BatchKey::new(principal.clone(), nonce.to_string());
-    let records = table().ok()?;
-    records.get(&key).map(|record| record.status.clone())
+    table().query(&key, Instant::now())
 }
 
-fn prune(records: &mut HashMap<BatchKey, Record>, now: Instant) {
-    records.retain(|_, record| {
-        let retention = match record.status {
-            FsBatchStatus::Pending => PENDING_RETENTION,
-            FsBatchStatus::Aborted | FsBatchStatus::Done { .. } => FINISHED_RETENTION,
-        };
-        now.saturating_duration_since(record.updated) < retention
-    });
-    let mut total: usize = records.values().map(|record| record.bytes).sum();
-    while total > MAX_STORED_BYTES {
-        // Oldest finished record first; pending ones store no outcome text.
-        let oldest = records
-            .iter()
-            .filter(|(_, record)| record.bytes > 0)
-            .min_by_key(|(_, record)| record.updated)
-            .map(|(key, _)| key.clone());
-        let Some(oldest) = oldest else {
-            break;
-        };
-        if let Some(removed) = records.remove(&oldest) {
-            total = total.saturating_sub(removed.bytes);
+impl Table {
+    fn begin(&mut self, key: &BatchKey, now: Instant) -> io::Result<()> {
+        self.expire(now);
+        if self.records.contains_key(key) {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "Paket-Kennung wurde bereits verwendet",
+            ));
         }
+        let owned = self.per_principal.get(&key.principal).copied();
+        if owned.is_some_and(|owned| owned >= MAX_RECORDS_PER_PRINCIPAL) {
+            return Err(busy("zu viele offene Pakete dieses Geräts"));
+        }
+        let bytes = record_bytes(key, &FsBatchStatus::Pending);
+        self.make_room(1, bytes);
+        if self.records.len() >= MAX_RECORDS || self.bytes + bytes > MAX_STORED_BYTES {
+            return Err(busy("zu viele offene Pakete"));
+        }
+        let slot = self.next_slot(now, PENDING_RETENTION);
+        self.pending.insert(slot, key.clone());
+        let record = Record {
+            status: FsBatchStatus::Pending,
+            bytes,
+            slot,
+        };
+        self.records.insert(key.clone(), record);
+        *self.per_principal.entry(key.principal.clone()).or_insert(0) += 1;
+        self.bytes += bytes;
+        Ok(())
+    }
+
+    fn finish(&mut self, key: &BatchKey, status: FsBatchStatus, now: Instant) {
+        let slot = self.next_slot(now, FINISHED_RETENTION);
+        let bytes = record_bytes(key, &status);
+        let Some(record) = self.records.get_mut(key) else {
+            return;
+        };
+        let index = if matches!(record.status, FsBatchStatus::Pending) {
+            &mut self.pending
+        } else {
+            &mut self.finished
+        };
+        index.remove(&record.slot);
+        self.bytes = self
+            .bytes
+            .saturating_sub(record.bytes)
+            .saturating_add(bytes);
+        record.status = status;
+        record.bytes = bytes;
+        record.slot = slot;
+        self.finished.insert(slot, key.clone());
+        self.expire(now);
+        self.make_room(0, 0);
+    }
+
+    fn delivered(&mut self, key: &BatchKey) {
+        let Some(record) = self.records.remove(key) else {
+            return;
+        };
+        let index = if matches!(record.status, FsBatchStatus::Pending) {
+            &mut self.pending
+        } else {
+            &mut self.finished
+        };
+        index.remove(&record.slot);
+        self.forget(key, &record);
+    }
+
+    fn query(&mut self, key: &BatchKey, now: Instant) -> Option<FsBatchStatus> {
+        self.expire(now);
+        self.records.get(key).map(|record| record.status.clone())
+    }
+
+    /// Removes the expired records from the front of both indexes.
+    fn expire(&mut self, now: Instant) {
+        for pending in [true, false] {
+            loop {
+                let index = if pending {
+                    &mut self.pending
+                } else {
+                    &mut self.finished
+                };
+                let expired = index
+                    .first_key_value()
+                    .is_some_and(|(slot, _)| slot.0 <= now);
+                if !expired {
+                    break;
+                }
+                let Some((_, key)) = index.pop_first() else {
+                    break;
+                };
+                if let Some(record) = self.records.remove(&key) {
+                    self.forget(&key, &record);
+                }
+            }
+        }
+    }
+
+    /// Evicts the oldest finished records until `records` more records and
+    /// `bytes` more bytes fit; batches in progress are never evicted.
+    fn make_room(&mut self, records: usize, bytes: usize) {
+        while self.records.len() + records > MAX_RECORDS || self.bytes + bytes > MAX_STORED_BYTES {
+            let Some((_, key)) = self.finished.pop_first() else {
+                break;
+            };
+            if let Some(record) = self.records.remove(&key) {
+                self.forget(&key, &record);
+            }
+        }
+    }
+
+    /// Counts of a record that left the map (its index entry is gone too).
+    fn forget(&mut self, key: &BatchKey, record: &Record) {
+        self.bytes = self.bytes.saturating_sub(record.bytes);
+        if let Some(owned) = self.per_principal.get_mut(&key.principal) {
+            *owned = owned.saturating_sub(1);
+            if *owned == 0 {
+                self.per_principal.remove(&key.principal);
+            }
+        }
+    }
+
+    fn next_slot(&mut self, now: Instant, retention: Duration) -> Slot {
+        self.sequence = self.sequence.wrapping_add(1);
+        (now.checked_add(retention).unwrap_or(now), self.sequence)
     }
 }
 
-fn stored_bytes(status: &FsBatchStatus) -> usize {
+/// Memory one record holds: bookkeeping, its key twice (record map and
+/// expiry index) and the outcome text.
+fn record_bytes(key: &BatchKey, status: &FsBatchStatus) -> usize {
+    RECORD_OVERHEAD + 2 * key.text_len() + outcome_bytes(status)
+}
+
+fn outcome_bytes(status: &FsBatchStatus) -> usize {
     let FsBatchStatus::Done { outcomes } = status else {
         return 0;
     };
@@ -145,93 +266,5 @@ fn stored_bytes(status: &FsBatchStatus) -> usize {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn principal(device: &str) -> PeerPrincipal {
-        PeerPrincipal::new("direct", "relation", device, "public-key", "node")
-    }
-
-    fn nonce() -> String {
-        crate::share::core::random_hex_token::<16>().unwrap()
-    }
-
-    #[test]
-    fn transfer_engine_task_batch_status_follows_one_commit() {
-        let owner = principal("owner");
-        let nonce = nonce();
-        let key = BatchKey::new(owner.clone(), nonce.clone());
-        assert_eq!(query(&owner, &nonce), None);
-        begin(&key).unwrap();
-        assert_eq!(
-            begin(&key).unwrap_err().kind(),
-            io::ErrorKind::AlreadyExists,
-            "a nonce is used once"
-        );
-        assert_eq!(query(&owner, &nonce), Some(FsBatchStatus::Pending));
-        assert_eq!(query(&principal("other"), &nonce), None);
-
-        let done = FsBatchStatus::Done {
-            outcomes: vec![FsBatchOutcome::Published {
-                path: "/A/datei (2).txt".into(),
-            }],
-        };
-        finish(&key, done.clone());
-        assert_eq!(query(&owner, &nonce), Some(done));
-        delivered(&key);
-        assert_eq!(query(&owner, &nonce), None);
-
-        let aborted = BatchKey::new(owner.clone(), self::nonce());
-        begin(&aborted).unwrap();
-        finish(&aborted, FsBatchStatus::Aborted);
-        assert_eq!(query(&owner, &aborted.nonce), Some(FsBatchStatus::Aborted));
-    }
-
-    #[test]
-    fn transfer_engine_task_batch_status_prunes_by_age_and_size() {
-        let now = Instant::now();
-        let Some(old) = now.checked_sub(FINISHED_RETENTION + Duration::from_secs(1)) else {
-            return; // The monotonic clock started too recently to age a record.
-        };
-        let mut records = HashMap::new();
-        let record = |status: FsBatchStatus, updated| Record {
-            bytes: stored_bytes(&status),
-            status,
-            updated,
-        };
-        let done = |length: usize| FsBatchStatus::Done {
-            outcomes: vec![FsBatchOutcome::Published {
-                path: "p".repeat(length),
-            }],
-        };
-        records.insert(
-            BatchKey::new(principal("a"), nonce()),
-            record(done(10), old),
-        );
-        records.insert(
-            BatchKey::new(principal("b"), nonce()),
-            record(FsBatchStatus::Pending, old),
-        );
-        prune(&mut records, now);
-        assert_eq!(
-            records.len(),
-            1,
-            "an old finished record expires, a pending one stays"
-        );
-
-        let half = MAX_STORED_BYTES / 2;
-        let older = BatchKey::new(principal("c"), nonce());
-        let newer = BatchKey::new(principal("d"), nonce());
-        let before = now.checked_sub(Duration::from_secs(1)).unwrap_or(now);
-        records.insert(older.clone(), record(done(half), before));
-        records.insert(newer.clone(), record(done(half), now));
-        prune(&mut records, now);
-        assert!(
-            !records.contains_key(&older),
-            "the oldest outcome text goes first"
-        );
-        assert!(records.contains_key(&newer));
-        let total: usize = records.values().map(|record| record.bytes).sum();
-        assert!(total <= MAX_STORED_BYTES);
-    }
-}
+#[path = "batch_status_tests.rs"]
+mod tests;

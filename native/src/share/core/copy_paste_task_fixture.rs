@@ -69,6 +69,25 @@ impl CopyPastePeerFixture {
         self.nodes[1].0.pose_as_legacy_transfer_host();
     }
 
+    /// The host gives up a stalled transfer after `stall` instead of the
+    /// operation deadline.
+    pub(super) fn shorten_host_stall(&self, stall: Duration) {
+        self.nodes[1].0.shorten_transfer_stall_for_test(stall);
+    }
+
+    /// The client as the host's admission knows it.
+    pub(super) fn client_principal(&self) -> io::Result<super::session::PeerPrincipal> {
+        let endpoint = self.peer.current_endpoint()?;
+        let identity = &self.peer.identity;
+        Ok(super::session::PeerPrincipal::new(
+            "direct",
+            endpoint.presence.relation_id,
+            identity.device_id.clone(),
+            identity.public_key.clone(),
+            identity.node_id.clone(),
+        ))
+    }
+
     fn loopback(labels: [&str; 2]) -> io::Result<Self> {
         let options = super::transport_options::load(NO_RELAY);
         if options.relay_only || !options.relay_urls.is_empty() {
@@ -200,6 +219,8 @@ impl CopyPastePeerFixture {
     }
 }
 
+#[path = "transfer_engine_task_limit_tests.rs"]
+mod transfer_engine_task_limit_tests;
 #[path = "transfer_engine_task_path_tests.rs"]
 mod transfer_engine_task_path_tests;
 #[path = "transfer_engine_task_support.rs"]

@@ -338,3 +338,27 @@ fn transfer_engine_task_batch_status_summary_counts_outcomes() {
     );
     assert_eq!(FsBatchStatus::Aborted.summary(), "Paket abgebrochen");
 }
+
+#[test]
+fn transfer_engine_task_only_upload_stages_are_discardable() {
+    // The engine's `stage_name` and `vfs::unique_staging_path(…, "upload")`
+    // both produce `<file>.se-upload-{:016x}`.
+    let generated = format!("file.txt.se-upload-{:016x}", u64::MAX / 3);
+    assert!(discardable_stage(&generated));
+    assert!(discardable_stage("a.se-upload-0000000000000000"));
+    for name in [
+        "report.pdf",
+        "report.pdf.se-peer-0123456789abcdef",
+        "report.pdf.se-batch-0123456789abcdef-3",
+        "report.pdf.se-copy-0123456789abcdef",
+        "report.pdf.se-upload-0123456789ABCDEF",
+        "report.pdf.se-upload-0123456789abcde",
+        "report.pdf.se-upload-0123456789abcdef0",
+        "report.pdf.se-upload-0123456789abcdeg",
+        "report.pdf.se-upload-",
+        ".se-upload-0123456789abcdef",
+        "x.se-upload-0123456789abcdef.txt",
+    ] {
+        assert!(!discardable_stage(name), "{name}");
+    }
+}

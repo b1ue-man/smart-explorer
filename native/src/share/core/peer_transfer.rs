@@ -14,8 +14,8 @@ use crate::share::keepalive::TRANSFER_STREAMS_PER_CONNECTION;
 use crate::share::node_sessions::OpenedPeerStream;
 use crate::share::peer_request::{CONTROL_ATTEMPT_TIMEOUT, IDEMPOTENT_CONTROL_BUDGET};
 use crate::share::wire::{
-    plan_batches, BatchPart, Ctrl, FsRequest, FsResponse, FsTransferCapabilities, BATCH_MAX_BYTES,
-    BATCH_MAX_FILES,
+    discardable_stage, plan_batches, BatchPart, Ctrl, FsRequest, FsResponse,
+    FsTransferCapabilities, BATCH_MAX_BYTES, BATCH_MAX_FILES,
 };
 use crate::vfs::{Backend, BatchLimits, VfsResult};
 
@@ -25,6 +25,10 @@ use super::PeerBackend;
 /// clients and queue the rest while the client's 60 s deadline runs; more in
 /// flight would only wait there.
 const LEGACY_HOST_ADMISSION: u32 = 32;
+
+/// Transfers of a host's admission kept for the foreground beside a busy
+/// flow: as many as the streams kept for browsing (four, research §2).
+const FOREGROUND_TRANSFERS: u32 = crate::share::keepalive::CONTROL_STREAM_RESERVE;
 
 /// After a failed probe the old path is used this long before asking again:
 /// two keepalive periods (5 s), in which a broken connection is noticed, so
@@ -138,16 +142,21 @@ impl PeerBackend {
         })
     }
 
-    /// Transfers worth running at once on this connection: the host's
-    /// admission, never more than the streams left beside browsing.
+    /// Transfers the adaptive flow may run at once on this connection: the
+    /// host's admission, never more than the streams left beside browsing.
+    /// A transfer v1 host refuses anything beyond its admission (`Busy`),
+    /// so the flow leaves `FOREGROUND_TRANSFERS` of it to opening files,
+    /// previews and mount reads; older hosts queue those instead.
     pub(super) fn transfer_slots(&self) -> usize {
         let caps = self.transfer_caps();
         let admission = if caps.v1 && caps.admission > 0 {
             caps.admission
+                .min(TRANSFER_STREAMS_PER_CONNECTION)
+                .saturating_sub(FOREGROUND_TRANSFERS)
         } else {
-            LEGACY_HOST_ADMISSION
+            LEGACY_HOST_ADMISSION.min(TRANSFER_STREAMS_PER_CONNECTION)
         };
-        admission.min(TRANSFER_STREAMS_PER_CONNECTION) as usize
+        admission.max(1) as usize
     }
 
     /// Every path of one peer travels over one QUIC connection and so
@@ -157,7 +166,14 @@ impl PeerBackend {
         format!("share:{session}")
     }
 
+    /// Remembers a file this backend created exclusively when its name is an
+    /// upload stage (engine stages also arrive through the background
+    /// service's plain `open_write_new`); only those may be discarded.
     pub(super) fn track_stage(&self, stage: &str) {
+        let name = stage.rsplit('/').next().unwrap_or(stage);
+        if !discardable_stage(name) {
+            return;
+        }
         if let Ok(mut stages) = self.transfer.stages.lock() {
             if stages.len() < MAX_TRACKED_STAGES {
                 stages.insert(stage.to_string());
@@ -165,7 +181,8 @@ impl PeerBackend {
         }
     }
 
-    fn release_stage(&self, stage: &str) {
+    /// The stage was published, renamed or removed: no longer ours to drop.
+    pub(super) fn release_stage(&self, stage: &str) {
         if let Ok(mut stages) = self.transfer.stages.lock() {
             stages.remove(stage);
         }

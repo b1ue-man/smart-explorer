@@ -43,13 +43,38 @@ struct StreamContext {
 }
 
 impl StreamContext {
-    /// Admits one transfer. A client that declared transfer v1 gets `Busy`
-    /// at once when the host is full; older clients keep waiting as before.
-    async fn admit(&self) -> io::Result<admission::TransferSlot> {
-        let fail_fast =
-            self.session.requested(TRANSFER_V1_CAPABILITY) && !self.node.legacy_transfer_host();
-        admission::admit(fail_fast).await
+    /// Admits one transfer of this stream. A client that declared transfer
+    /// v1 gets `Busy` at once when the host or its own share is full; older
+    /// clients wait as before, but only while they still wait themselves
+    /// (their stream stays open) and never beyond `admission::LEGACY_WAIT`.
+    async fn admit(&self, send: &SendStream) -> io::Result<admission::TransferSlot> {
+        let principal = self.session.principal();
+        if self.session.requested(TRANSFER_V1_CAPABILITY) && !self.node.legacy_transfer_host() {
+            return admission::admit_now(&principal);
+        }
+        let stopped = send.stopped();
+        let gone = async move {
+            let _ = stopped.await;
+        };
+        admission::wait_while_present(
+            admission::admit_waiting(&principal),
+            gone,
+            admission::LEGACY_WAIT,
+        )
+        .await
     }
+
+    /// Longest one chunk of a transfer may stall before the host gives up
+    /// and frees the transfer's slot.
+    fn stall(&self) -> Duration {
+        self.node.transfer_stall()
+    }
+}
+
+/// Transfers `principal` runs on this host right now.
+#[cfg(test)]
+pub(super) fn transfers_in_use(principal: &super::session::PeerPrincipal) -> usize {
+    admission::principal_in_use(principal)
 }
 
 pub(super) async fn handle_connection(

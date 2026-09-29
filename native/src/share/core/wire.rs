@@ -10,9 +10,9 @@ use super::types::{ExecRequest, ExecResult, PeerPresence};
 mod batch_wire;
 
 pub(crate) use self::batch_wire::{
-    plan_batches, validate_get, validate_put, BatchPart, FsBatchGet, FsBatchOutcome, FsBatchPut,
-    FsBatchStatus, FsTransferCapabilities, BATCH_MAX_BYTES, BATCH_MAX_FILES, NONCE_HEX_LEN,
-    TRANSFER_V1_CAPABILITY,
+    discardable_stage, plan_batches, validate_get, validate_put, BatchPart, FsBatchGet,
+    FsBatchOutcome, FsBatchPut, FsBatchStatus, FsTransferCapabilities, BATCH_MAX_BYTES,
+    BATCH_MAX_FILES, NONCE_HEX_LEN, TRANSFER_V1_CAPABILITY,
 };
 
 pub(crate) const TRACKED_DIRECT_CAPABILITY: &str = "tracked_direct_v1";

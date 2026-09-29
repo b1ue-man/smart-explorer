@@ -54,6 +54,16 @@ impl PeerPrincipal {
             node_id: node_id.into(),
         }
     }
+
+    /// Bytes of the identifying text (memory accounting of per-principal
+    /// host state).
+    pub(super) fn text_len(&self) -> usize {
+        self.relation_kind.len()
+            + self.relation_id.len()
+            + self.device_id.len()
+            + self.public_key.len()
+            + self.node_id.len()
+    }
 }
 
 pub(super) fn authenticate_incoming_session(

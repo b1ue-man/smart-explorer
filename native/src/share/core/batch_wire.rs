@@ -141,6 +141,32 @@ impl FsBatchStatus {
     }
 }
 
+/// Marker of the transfer engine's private upload stages: the engine names
+/// them `<file>.se-upload-<16 hex>` (`stage_name`), and its commit helper
+/// gets the same shape from `vfs::unique_staging_path(…, "upload")`.
+const UPLOAD_STAGE_MARKER: &str = ".se-upload-";
+
+/// Hex digits of a stage suffix (`{:016x}` of 64 random bits).
+const STAGE_SUFFIX_HEX_LEN: usize = 16;
+
+/// Whether a client may have the host discard the file `name` (K17): only
+/// the engine's upload stages. The host's own batch (`.se-batch-`) and
+/// replace (`.se-peer-`) stages, other purposes and every user file are
+/// refused.
+pub(crate) fn discardable_stage(name: &str) -> bool {
+    let Some(position) = name.rfind(UPLOAD_STAGE_MARKER) else {
+        return false;
+    };
+    let suffix = name.get(position + UPLOAD_STAGE_MARKER.len()..);
+    position > 0
+        && suffix.is_some_and(|suffix| {
+            suffix.len() == STAGE_SUFFIX_HEX_LEN
+                && suffix
+                    .bytes()
+                    .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        })
+}
+
 /// A client nonce is lowercase hex; it becomes part of stage file names.
 pub(crate) fn valid_nonce(nonce: &str) -> bool {
     (NONCE_HEX_LEN..=MAX_NONCE_HEX_LEN).contains(&nonce.len())
