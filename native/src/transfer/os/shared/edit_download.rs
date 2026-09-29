@@ -93,9 +93,7 @@ fn download_once(
     };
     // A duplicate-named Drive item may have different metadata from path stat.
     // Do not validate its bytes or conflict baseline against a different ID.
-    let metadata = metadata.filter(|meta| {
-        peer || id.is_none() || meta.id.as_deref() == id
-    });
+    let metadata = metadata.filter(|meta| id.is_none() || meta.id.as_deref() == id);
     let expected = metadata.as_ref().map(|meta| meta.size).unwrap_or(0);
     ensure_local_space(dest, expected).map_err(DownloadFailure::Local)?;
     let read_size = metadata
@@ -112,7 +110,7 @@ fn download_once(
     let result = copy_checked(&mut *reader, &mut output, read_size).and_then(|()| {
         output.flush().and_then(|()| output.sync_all())
             .map_err(|error| DownloadFailure::Local(error.to_string()))?;
-        if peer {
+        if peer && metadata.is_some() {
             let current = backend.stat(path).map_err(DownloadFailure::Remote)?;
             if !metadata.as_ref().is_some_and(|before| same_revision(before, &current)) {
                 return Err(DownloadFailure::Local(

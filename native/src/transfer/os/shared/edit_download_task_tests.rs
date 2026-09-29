@@ -146,6 +146,8 @@ fn direct_open_task_empty_exported_and_id_selected_files_keep_their_contract() {
             ..Default::default() }, None, 7),
         (Source { scheme: Scheme::GDrive, metadata_size: 10,
             ..Default::default() }, Some("different-selected-item"), 0),
+        (Source { metadata_size: 10, ..Default::default() },
+            Some("different-selected-item"), 0),
     ] {
         let temporary = tempfile::tempdir().unwrap();
         let destination = temporary.path().join("file");
