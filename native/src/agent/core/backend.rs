@@ -403,10 +403,10 @@ impl Backend for AgentBackend {
         if self.features().stage {
             self.agent_discard_stage(stage)
         } else {
-            Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "stage cleanup unsupported",
-            ))
+            // An older agent: the connection underneath removes the stage
+            // where it can (SFTP), as it made the server copy above; a
+            // proxied peer answers `Unsupported`.
+            self.inner.discard_copy_stage(stage)
         }
     }
 
