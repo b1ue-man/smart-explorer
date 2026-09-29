@@ -3,19 +3,30 @@
 //! parents first) under a metadata permit, everyone else waits without any
 //! permit until it is ready. New top-level folders at remote targets are
 //! created exclusively and get a numbered name when theirs was taken; local
-//! folders are merged and never followed through links.
+//! folders are merged and never followed through links. A peer that is too
+//! busy is waited for while folders of this register still get created
+//! (K13), and such a refusal is never kept as the folder's lasting failure;
+//! an exclusive creation whose answer was lost is looked at before it is
+//! tried again, so no empty folder stays behind while the files land in
+//! "Name (2)".
 use super::super::engine_names::{first_component, join_rel, parent_rel, NamePlanner};
-use super::super::engine_policy::{is_transient, retry_delay};
+use super::super::engine_policy::{
+    connection_failure, is_back_pressure, is_transient, overload_keeps_waiting, retry_delay,
+    surely_not_done, RETRY_AFTER_MAX,
+};
 use super::super::flow::{classify_error, Flow};
 use super::super::flow_control::OpOutcome;
 use super::super::walk_listers::native;
 use super::view::Side;
 use std::collections::HashMap;
 use std::io;
-use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+#[path = "folders_local.rs"]
+mod local;
+pub(crate) use local::{ensure_plain_dir, local_target_root};
 
 const WAIT_SLICE: Duration = Duration::from_millis(100);
 
@@ -25,6 +36,13 @@ const WAIT_SLICE: Duration = Duration::from_millis(100);
 pub(crate) struct FolderError {
     pub kind: io::ErrorKind,
     pub message: String,
+    /// This call saw the failure itself and it speaks about the connection:
+    /// it counts once for the job's breaker; later askers of the failed
+    /// folder get it without.
+    pub connection: bool,
+    /// The peer kept refusing as too busy (back-pressure, not a problem of
+    /// the folder): a later asker tries again.
+    pub congestion: bool,
 }
 
 impl FolderError {
@@ -32,22 +50,53 @@ impl FolderError {
         Self {
             kind: io::ErrorKind::Interrupted,
             message: super::super::cancel::CANCELED_ERROR.to_string(),
+            connection: false,
+            congestion: false,
         }
     }
 
     fn of(path: &str, error: &io::Error) -> Self {
+        let overload = classify_error(error) == OpOutcome::Overload;
         Self {
             kind: error.kind(),
             message: format!("Zielordner „{path}“ anlegen: {error}"),
+            connection: connection_failure(error.kind(), overload),
+            congestion: is_back_pressure(error.kind(), overload),
         }
     }
+
+    /// The failure as a later asker of the folder gets it.
+    fn repeated(&self) -> Self {
+        Self {
+            connection: false,
+            ..self.clone()
+        }
+    }
+}
+
+/// What an exclusive creation whose answer was lost left behind.
+enum Settled {
+    /// Nothing: it did not happen.
+    Missing,
+    /// An empty folder: most likely the lost creation itself.
+    Empty,
+    /// Something else took the name.
+    Taken,
 }
 
 #[derive(Clone)]
 enum Slot {
     Creating,
-    Ready { created: bool },
+    Ready {
+        created: bool,
+    },
     Failed(FolderError),
+    /// Refused as too busy: askers until `until` get the failure, later ones
+    /// create again.
+    Refused {
+        error: FolderError,
+        until: Instant,
+    },
 }
 
 /// The folders below one target folder.
@@ -64,6 +113,9 @@ pub(crate) struct FolderRegister<'a> {
     aliases: Mutex<HashMap<String, String>>,
     slots: Mutex<HashMap<String, Slot>>,
     changed: Condvar,
+    /// The last folder this register created: progress that lets a refused
+    /// creation keep waiting.
+    last_created: Mutex<Option<Instant>>,
 }
 
 impl<'a> FolderRegister<'a> {
@@ -79,6 +131,7 @@ impl<'a> FolderRegister<'a> {
             aliases: Mutex::new(HashMap::new()),
             slots: Mutex::new(HashMap::new()),
             changed: Condvar::new(),
+            last_created: Mutex::new(None),
         }
     }
 
@@ -118,6 +171,11 @@ impl<'a> FolderRegister<'a> {
         }
     }
 
+    /// The target folder everything lands below.
+    pub(crate) fn root(&self) -> &str {
+        &self.root
+    }
+
     /// Target path of `rel` (top-level renumbering applied).
     pub(crate) fn path_of(&self, rel: &str) -> String {
         join_rel(&self.root, &self.actual_rel(rel))
@@ -143,7 +201,10 @@ impl<'a> FolderRegister<'a> {
             loop {
                 match slots.get(rel) {
                     Some(Slot::Ready { created }) => return Ok(*created),
-                    Some(Slot::Failed(error)) => return Err(error.clone()),
+                    Some(Slot::Failed(error)) => return Err(error.repeated()),
+                    Some(Slot::Refused { error, until }) if Instant::now() < *until => {
+                        return Err(error.repeated())
+                    }
                     Some(Slot::Creating) => {
                         if cancel.load(Ordering::Acquire) {
                             return Err(FolderError::canceled());
@@ -153,7 +214,7 @@ impl<'a> FolderRegister<'a> {
                             Err(poisoned) => poisoned.into_inner().0,
                         };
                     }
-                    None => {
+                    Some(Slot::Refused { .. }) | None => {
                         slots.insert(rel.to_string(), Slot::Creating);
                         break;
                     }
@@ -169,6 +230,15 @@ impl<'a> FolderRegister<'a> {
                 }
                 Err(error) if error.kind == io::ErrorKind::Interrupted => {
                     slots.remove(rel);
+                }
+                // The askers waiting now get the refusal; after the longest
+                // wait a peer may ask for, the next asker creates again.
+                Err(error) if error.congestion => {
+                    let refused = Slot::Refused {
+                        error: error.clone(),
+                        until: Instant::now() + RETRY_AFTER_MAX,
+                    };
+                    slots.insert(rel.to_string(), refused);
                 }
                 Err(error) => {
                     slots.insert(rel.to_string(), Slot::Failed(error.clone()));
@@ -189,7 +259,7 @@ impl<'a> FolderRegister<'a> {
             return self.create_exclusive(rel, &wanted, cancel);
         }
         let path = self.path_of(rel);
-        let created = self.attempt(&path, cancel, |path| match self.target {
+        let created = self.attempt(&path, cancel, false, |path| match self.target {
             Side::Remote(backend) => backend.create_dir(path).map(|()| parent_created),
             Side::Local => ensure_plain_dir(&native(path)),
         })?;
@@ -205,7 +275,7 @@ impl<'a> FolderRegister<'a> {
         let mut name = planned.to_string();
         loop {
             let path = join_rel(&self.root, &name);
-            let result = self.attempt(&path, cancel, |path| match self.target {
+            let result = self.attempt(&path, cancel, true, |path| match self.target {
                 Side::Remote(backend) => backend.create_dir_new(path).map(|()| true),
                 Side::Local => ensure_plain_dir(&native(path)),
             });
@@ -220,6 +290,8 @@ impl<'a> FolderRegister<'a> {
                         .ok_or_else(|| FolderError {
                             kind: io::ErrorKind::AlreadyExists,
                             message: format!("Kein freier Name für „{wanted}“ gefunden"),
+                            connection: false,
+                            congestion: false,
                         })?;
                 }
                 Err(error) => return Err(error),
@@ -227,48 +299,104 @@ impl<'a> FolderRegister<'a> {
         }
     }
 
-    /// One creation under a metadata permit, retried once after a pause
-    /// (without the permit) when the failure was transient.
+    /// One creation under a metadata permit. A peer that is too busy is
+    /// waited for (the permit goes back as overload, the pause follows the
+    /// peer's own delay) until the patience ran out without any folder of
+    /// this register created; another transient failure is retried once
+    /// after a pause. An `exclusive` creation is never simply repeated after
+    /// a failure that may have created the folder with only the answer lost.
     fn attempt(
         &self,
         path: &str,
         cancel: &AtomicBool,
+        exclusive: bool,
         operation: impl Fn(&str) -> io::Result<bool>,
     ) -> Result<bool, FolderError> {
         let mut retried = false;
+        let mut refused_since: Option<Instant> = None;
         loop {
-            let permit = self
-                .flow
-                .acquire_meta(cancel)
-                .ok_or_else(FolderError::canceled)?;
-            let result = operation(path);
-            permit.finish(match &result {
-                Ok(_) => OpOutcome::Done,
-                Err(error) => classify_error(error),
-            });
-            match result {
-                Ok(created) => return Ok(created),
-                Err(error)
-                    if !retried
-                        && error.kind() != io::ErrorKind::AlreadyExists
-                        && is_transient(
-                            error.kind(),
-                            classify_error(&error) == OpOutcome::Overload,
-                        ) =>
-                {
-                    retried = true;
-                    let delay = retry_delay(
-                        crate::vfs::congestion_of(&error)
-                            .and_then(|congestion| congestion.retry_after),
-                        super::jitter(),
-                    );
-                    if !super::sleep_unless(cancel, delay) {
-                        return Err(FolderError::canceled());
+            let error = match self.metadata_op(cancel, || operation(path))? {
+                Ok(created) => {
+                    *lock(&self.last_created) = Some(Instant::now());
+                    return Ok(created);
+                }
+                Err(error) => error,
+            };
+            let kind = error.kind();
+            let overload = classify_error(&error) == OpOutcome::Overload;
+            let back_pressure = is_back_pressure(kind, overload);
+            let wait = if back_pressure {
+                let since = *refused_since.get_or_insert_with(Instant::now);
+                let progress = *lock(&self.last_created);
+                overload_keeps_waiting(progress.map_or(since, |last| since.max(last)).elapsed())
+            } else {
+                !retried && kind != io::ErrorKind::AlreadyExists && is_transient(kind, overload)
+            };
+            if !wait {
+                return Err(FolderError::of(path, &error));
+            }
+            retried |= !back_pressure;
+            let delay = retry_delay(
+                crate::vfs::congestion_of(&error).and_then(|congestion| congestion.retry_after),
+                super::jitter(),
+            );
+            if !super::sleep_unless(cancel, delay) {
+                return Err(FolderError::canceled());
+            }
+            if exclusive && !surely_not_done(kind, overload) {
+                match self.settle(path, cancel)? {
+                    Settled::Missing => {}
+                    // Adopted, but not trusted to hold nothing foreign: its
+                    // files still go through stages and create-only names.
+                    Settled::Empty => return Ok(false),
+                    Settled::Taken => {
+                        return Err(FolderError {
+                            kind: io::ErrorKind::AlreadyExists,
+                            ..FolderError::of(path, &error)
+                        })
                     }
                 }
-                Err(error) => return Err(FolderError::of(path, &error)),
             }
         }
+    }
+
+    /// Looks at `path` after an exclusive creation whose answer was lost.
+    fn settle(&self, path: &str, cancel: &AtomicBool) -> Result<Settled, FolderError> {
+        let Side::Remote(backend) = self.target else {
+            // Local creation merges plain folders; repeating it is safe.
+            return Ok(Settled::Missing);
+        };
+        let meta = match self.metadata_op(cancel, || backend.stat(path))? {
+            Ok(meta) => meta,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Settled::Missing),
+            Err(error) => return Err(FolderError::of(path, &error)),
+        };
+        if !meta.is_dir || meta.is_symlink {
+            return Ok(Settled::Taken);
+        }
+        match self.metadata_op(cancel, || backend.list_dir(path))? {
+            Ok(entries) if entries.is_empty() => Ok(Settled::Empty),
+            Ok(_) => Ok(Settled::Taken),
+            Err(error) => Err(FolderError::of(path, &error)),
+        }
+    }
+
+    /// One metadata operation under a permit of the target's flow.
+    fn metadata_op<T>(
+        &self,
+        cancel: &AtomicBool,
+        operation: impl FnOnce() -> io::Result<T>,
+    ) -> Result<io::Result<T>, FolderError> {
+        let permit = self
+            .flow
+            .acquire_meta(cancel)
+            .ok_or_else(FolderError::canceled)?;
+        let result = operation();
+        permit.finish(match &result {
+            Ok(_) => OpOutcome::Done,
+            Err(error) => classify_error(error),
+        });
+        Ok(result)
     }
 }
 
@@ -278,70 +406,6 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// Creates one local folder or accepts an existing plain one; links,
-/// junctions and files in its place are refused. True when created now.
-pub(crate) fn ensure_plain_dir(path: &Path) -> io::Result<bool> {
-    match crate::local_access::symlink_metadata(path) {
-        Ok(metadata) => validate_plain_dir(path, &metadata).map(|()| false),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => match std::fs::create_dir(path) {
-            Ok(()) => Ok(true),
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                validate_plain_dir(path, &crate::local_access::symlink_metadata(path)?)
-                    .map(|()| false)
-            }
-            Err(error) => Err(error),
-        },
-        Err(error) => Err(error),
-    }
-}
-
-fn validate_plain_dir(path: &Path, metadata: &std::fs::Metadata) -> io::Result<()> {
-    if crate::local_access::metadata_is_link_like(path, metadata) {
-        // Not a permission problem of the whole target: only what would go
-        // through this link is refused.
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!(
-                "Zielordner ist ein Link oder Reparse-Punkt: {}",
-                path.display()
-            ),
-        ));
-    }
-    if !metadata.is_dir() {
-        return Err(io::Error::new(
-            io::ErrorKind::NotADirectory,
-            format!("Ziel ist kein Ordner: {}", path.display()),
-        ));
-    }
-    Ok(())
-}
-
-/// The local target folder and every ancestor: plain folders (created when
-/// missing), never a link that could redirect the copy elsewhere.
-pub(crate) fn prepare_local_root(root: &str) -> io::Result<()> {
-    let path = native(root);
-    let absolute = if path.is_absolute() {
-        path
-    } else {
-        std::env::current_dir()?.join(path)
-    };
-    let mut current = PathBuf::new();
-    for component in absolute.components() {
-        match component {
-            Component::Prefix(prefix) => current.push(prefix.as_os_str()),
-            Component::RootDir => current.push(std::path::MAIN_SEPARATOR_STR),
-            Component::CurDir => {}
-            Component::ParentDir => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "Zielordner enthält „..“",
-                ))
-            }
-            Component::Normal(name) => {
-                current.push(name);
-                ensure_plain_dir(&current)?;
-            }
-        }
-    }
-    Ok(())
-}
+#[cfg(test)]
+#[path = "folders_tests.rs"]
+mod tests;

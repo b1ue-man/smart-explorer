@@ -74,6 +74,18 @@ impl OpError {
 
 pub(crate) type OpResult = Result<Outcome, OpError>;
 
+/// `error` under `prefix` for one more file; a congestion stays one, so the
+/// file still waits for the peer instead of failing (K13).
+pub(crate) fn relabeled(error: &io::Error, prefix: &str) -> io::Error {
+    match crate::vfs::congestion_of(error) {
+        Some(congestion) => crate::vfs::congestion_error(
+            format!("{prefix}: {}", congestion.message),
+            congestion.retry_after,
+        ),
+        None => io::Error::new(error.kind(), format!("{prefix}: {error}")),
+    }
+}
+
 /// Counts streamed bytes for the flow controller and the progress.
 pub(crate) struct Meter<'m> {
     permits: &'m PermitPair,

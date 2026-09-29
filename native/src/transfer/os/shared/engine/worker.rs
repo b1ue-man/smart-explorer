@@ -1,12 +1,14 @@
 //! Workers: take the next folder or file, wait for its parent folder without
 //! any permit, reserve its buffers, then take the permits and run it (K2).
-//! A transient failure is retried once while nothing was published; a
+//! A transient failure is retried once while nothing was published; a peer
+//! that is too busy is waited for while the job still moves (K13); a
 //! refused local read asks the access gate outside every permit; a target
 //! that takes nothing more, or a run of connection failures, ends the job.
 use super::super::access::AccessAnswer;
 use super::super::engine_names::parent_rel;
 use super::super::engine_policy::{
-    connection_failure, ends_job_at_target, is_transient, retry_delay,
+    connection_failure, ends_job_at_target, is_back_pressure, is_transient, overload_keeps_waiting,
+    retry_delay,
 };
 use super::super::flow::classify_error;
 use super::super::flow_control::OpOutcome;
@@ -16,16 +18,19 @@ use super::ops::{self, At, Carry, Meter, OpError, Outcome, COPY_BUFFER};
 use super::queue::{FileWork, Work, WorkerSlot};
 use super::Engine;
 use std::io;
+use std::time::{Duration, Instant};
 
 pub(super) fn run(engine: &Engine<'_>, _slot: WorkerSlot<'_>) {
     let mut buffer = vec![0u8; COPY_BUFFER];
     while let Some(work) = engine.queue.pop(engine.stop_flag(), super::WORKER_LINGER) {
         match work {
-            Work::Dir { rel } => {
-                if let Err(error) = engine.folders.ensure(&rel, engine.stop_flag()) {
-                    folder_failed(engine, &engine.folders.path_of(&rel), error);
-                }
-            }
+            Work::Dir { rel, source } => match engine.folders.ensure(&rel, engine.stop_flag()) {
+                // A move removes an emptied source folder only once its
+                // counterpart exists at the target.
+                Ok(_) if engine.is_move() => super::lock(&engine.moved_dirs).push((source, rel)),
+                Ok(_) => {}
+                Err(error) => folder_failed(engine, &engine.folders.path_of(&rel), error),
+            },
             Work::File(file) => match super::batch::members(engine, &file) {
                 Some(members) => super::batch::run(engine, file, members, &mut buffer),
                 None => run_file(engine, file, &mut buffer),
@@ -34,16 +39,20 @@ pub(super) fn run(engine: &Engine<'_>, _slot: WorkerSlot<'_>) {
     }
 }
 
-/// A folder that could not be created: a target that takes nothing more ends
-/// the job, anything else is this folder's (and its files') problem.
+/// A folder that could not be created, reported at `path`: a target that
+/// takes nothing more ends the job, anything else is this folder's (and its
+/// files') problem; a connection failure counts once for the breaker.
 pub(super) fn folder_failed(engine: &Engine<'_>, path: &str, error: FolderError) {
     if error.kind == io::ErrorKind::Interrupted || engine.stopped() {
         return;
     }
     if ends_job_at_target(error.kind) {
         engine.fatal(error.message);
-    } else {
-        engine.issue(path, &error.message);
+        return;
+    }
+    engine.issue(path, &error.message);
+    if error.connection {
+        breaker(engine, &error.message);
     }
 }
 
@@ -56,13 +65,7 @@ pub(super) fn parent_ready(engine: &Engine<'_>, file: &FileWork) -> Option<bool>
     match engine.folders.ensure(parent, engine.stop_flag()) {
         Ok(created) => Some(created),
         Err(error) => {
-            if error.kind != io::ErrorKind::Interrupted && !engine.stopped() {
-                if ends_job_at_target(error.kind) {
-                    engine.fatal(error.message);
-                } else {
-                    engine.issue(&file.source, &error.message);
-                }
-            }
+            folder_failed(engine, &file.source, error);
             None
         }
     }
@@ -100,10 +103,15 @@ pub(super) fn run_file(engine: &Engine<'_>, mut file: FileWork, buffer: &mut [u8
             Err(failure) => failure,
         };
         engine.stats.unmoved(moved);
-        match decide(engine, &file, &failure, asked_access) {
+        match decide(engine, &mut file, &failure, asked_access) {
             Decision::Stop => return,
             Decision::Retry(delay) => {
                 file.retried = true;
+                if !super::sleep_unless(engine.stop_flag(), delay) {
+                    return;
+                }
+            }
+            Decision::Wait(delay) => {
                 if !super::sleep_unless(engine.stop_flag(), delay) {
                     return;
                 }
@@ -136,7 +144,10 @@ pub(super) fn finished(engine: &Engine<'_>, outcome: Outcome) {
 
 pub(super) enum Decision {
     Stop,
-    Retry(std::time::Duration),
+    /// The one retry of a transient failure, after this pause.
+    Retry(Duration),
+    /// The peer is too busy: again after this pause, without using the retry.
+    Wait(Duration),
     Access,
     Fatal(String),
     Report,
@@ -144,7 +155,7 @@ pub(super) enum Decision {
 
 pub(super) fn decide(
     engine: &Engine<'_>,
-    file: &FileWork,
+    file: &mut FileWork,
     failure: &OpError,
     asked_access: bool,
 ) -> Decision {
@@ -161,18 +172,41 @@ pub(super) fn decide(
     }
     let overload = classify_error(&failure.error) == OpOutcome::Overload;
     let before_publication = matches!(failure.at, At::Source | At::Target);
+    if before_publication && is_back_pressure(kind, overload) {
+        return match overload_wait(engine, file, &failure.error) {
+            Some(delay) => Decision::Wait(delay),
+            None => Decision::Report,
+        };
+    }
     if before_publication && !file.retried && is_transient(kind, overload) {
-        let retry_after =
-            crate::vfs::congestion_of(&failure.error).and_then(|congestion| congestion.retry_after);
-        return Decision::Retry(retry_delay(retry_after, super::jitter()));
+        return Decision::Retry(retry_delay(None, super::jitter()));
     }
     if failure.at == At::Target && ends_job_at_target(kind) {
-        return Decision::Fatal(format!(
-            "Das Ziel nimmt keine Dateien mehr an – Übertragung beendet: {}",
-            failure.error
-        ));
+        return Decision::Fatal(target_refuses(&failure.error));
     }
     Decision::Report
+}
+
+/// Back-pressure is no failure of the file (K13): it waits for the peer's
+/// own delay, without any permit, as long as the job still moves; `None`
+/// once the patience ran out without progress.
+pub(super) fn overload_wait(
+    engine: &Engine<'_>,
+    file: &mut FileWork,
+    error: &io::Error,
+) -> Option<Duration> {
+    let since = *file.overloaded_since.get_or_insert_with(Instant::now);
+    if !overload_keeps_waiting(engine.stats.quiet_since(since)) {
+        return None;
+    }
+    let retry_after =
+        crate::vfs::congestion_of(error).and_then(|congestion| congestion.retry_after);
+    Some(retry_delay(retry_after, super::jitter()))
+}
+
+/// Why a job ends at a target that takes nothing more.
+pub(super) fn target_refuses(error: &io::Error) -> String {
+    format!("Das Ziel nimmt keine Dateien mehr an – Übertragung beendet: {error}")
 }
 
 /// Asks once per job for read access to protected local folders, outside of
@@ -204,6 +238,15 @@ fn ask_access(engine: &Engine<'_>, file: &FileWork, failure: &OpError) -> bool {
 /// Reports a file that was not transferred; a long run of connection
 /// failures ends the job instead of collecting thousands of them.
 pub(super) fn failed(engine: &Engine<'_>, path: &str, failure: &OpError) {
+    report(engine, path, failure);
+    if is_connection_failure(failure) {
+        breaker(engine, &failure.error);
+    }
+}
+
+/// Reports a file without feeding the breaker (the rest of a packet whose
+/// one connection failure counted already).
+pub(super) fn report(engine: &Engine<'_>, path: &str, failure: &OpError) {
     let message = match failure.at {
         At::Unknown => format!(
             "Ergebnis unbekannt – die Datei kann am Ziel angelegt worden sein und wird nicht erneut übertragen: {}",
@@ -212,12 +255,19 @@ pub(super) fn failed(engine: &Engine<'_>, path: &str, failure: &OpError) {
         _ => failure.error.to_string(),
     };
     engine.issue(path, &message);
-    let kind = failure.error.kind();
+}
+
+/// Whether `failure` speaks about the connection rather than the one file.
+pub(super) fn is_connection_failure(failure: &OpError) -> bool {
     let overload = classify_error(&failure.error) == OpOutcome::Overload;
-    if connection_failure(kind, overload) && engine.connection_failed() {
+    connection_failure(failure.error.kind(), overload)
+}
+
+/// Counts one connection failure; a run of them ends the job.
+pub(super) fn breaker(engine: &Engine<'_>, detail: &dyn std::fmt::Display) {
+    if engine.connection_failed() {
         engine.fatal(format!(
-            "Übertragung beendet: viele Fehler in Folge ohne einen Erfolg – die Verbindung scheint unterbrochen ({})",
-            failure.error
+            "Übertragung beendet: viele Fehler in Folge ohne einen Erfolg – die Verbindung scheint unterbrochen ({detail})"
         ));
     }
 }

@@ -32,9 +32,29 @@ pub(crate) struct FileWork {
     pub md5: Option<String>,
     /// The one retry of a transient failure was used.
     pub retried: bool,
+    /// Goes alone, never in a packet again (a packet ended before it).
+    pub alone: bool,
+    /// Since when the peer has refused this file as too busy (K13): it
+    /// waits while the job still moves.
+    pub overloaded_since: Option<Instant>,
 }
 
 impl FileWork {
+    /// A file as discovery finds it.
+    pub(crate) fn new(source: String, rel: String, size: u64, mtime_ms: i64) -> Self {
+        Self {
+            source,
+            rel,
+            size,
+            mtime_ms,
+            id: None,
+            md5: None,
+            retried: false,
+            alone: false,
+            overloaded_since: None,
+        }
+    }
+
     fn bytes(&self) -> usize {
         self.source.len()
             + self.rel.len()
@@ -46,9 +66,11 @@ impl FileWork {
 
 #[derive(Clone, Debug)]
 pub(crate) enum Work {
-    /// A folder of an unfiltered tree (kept even when empty).
+    /// A folder of an unfiltered tree (kept even when empty) and its path
+    /// on the source side (a move removes it once it is empty).
     Dir {
         rel: String,
+        source: String,
     },
     File(FileWork),
 }
@@ -56,7 +78,7 @@ pub(crate) enum Work {
 impl Work {
     fn bytes(&self) -> usize {
         match self {
-            Work::Dir { rel } => rel.len() + ENTRY_OVERHEAD,
+            Work::Dir { rel, source } => rel.len() + source.len() + ENTRY_OVERHEAD,
             Work::File(file) => file.bytes(),
         }
     }
@@ -181,7 +203,8 @@ impl WorkQueue {
         while index < state.items.len().min(BATCH_SCAN) && taken.len() < max_files {
             let fits = matches!(
                 &state.items[index],
-                Work::File(file) if !file.retried && file.size <= small && file.size <= budget
+                Work::File(file)
+                    if !file.retried && !file.alone && file.size <= small && file.size <= budget
             );
             if !fits {
                 index += 1;

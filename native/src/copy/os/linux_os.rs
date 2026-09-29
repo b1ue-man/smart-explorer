@@ -6,10 +6,11 @@ use std::path::Path;
 
 pub(super) type FileIdentity = (u64, u64);
 
-pub(super) fn same_file(left: &Path, right: &Path) -> io::Result<bool> {
-    let left = std::fs::File::open(left)?;
-    let right = std::fs::File::open(right)?;
-    Ok(file_identity(&left)? == file_identity(&right)?)
+/// Which file `path` names, from its metadata: no read access needed (an
+/// unreadable destination can still be compared and replaced).
+pub(super) fn path_identity(path: &Path) -> io::Result<FileIdentity> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    Ok((metadata.dev(), metadata.ino()))
 }
 
 pub(super) fn file_identity(file: &File) -> io::Result<FileIdentity> {

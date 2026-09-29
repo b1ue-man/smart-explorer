@@ -106,12 +106,9 @@ pub(super) fn on_event(engine: &Engine<'_>, event: WalkEvent) -> bool {
         return false;
     }
     match event {
-        WalkEvent::Dir { path, rel } => {
-            if engine.is_move() {
-                super::lock(&engine.moved_dirs).push(path);
-            }
-            engine.queue.push(Work::Dir { rel }, engine.stop_flag())
-        }
+        WalkEvent::Dir { path, rel } => engine
+            .queue
+            .push(Work::Dir { rel, source: path }, engine.stop_flag()),
         WalkEvent::File {
             path,
             rel,
@@ -122,18 +119,10 @@ pub(super) fn on_event(engine: &Engine<'_>, event: WalkEvent) -> bool {
         } => {
             let rel = export_name(engine, &path, rel);
             engine.stats.found(size);
-            engine.queue.push(
-                Work::File(FileWork {
-                    source: path,
-                    rel,
-                    size,
-                    mtime_ms,
-                    id,
-                    md5,
-                    retried: false,
-                }),
-                engine.stop_flag(),
-            )
+            let mut file = FileWork::new(path, rel, size, mtime_ms);
+            file.id = id;
+            file.md5 = md5;
+            engine.queue.push(Work::File(file), engine.stop_flag())
         }
         WalkEvent::Omitted { .. } => {
             engine.stats.omitted();

@@ -1,5 +1,5 @@
 //! Unix (Linux, Android) filesystem facts for transfers.
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Uploads never follow links: a symlink source is refused, not resolved.
 pub(crate) fn upload_is_link_like(metadata: &std::fs::Metadata) -> bool {
@@ -13,6 +13,11 @@ pub(crate) fn backslash_is_name_char() -> bool {
 
 pub(crate) fn replace_file_atomic(src: &Path, dest: &Path) -> std::io::Result<()> {
     std::fs::rename(src, dest)
+}
+
+/// The folder `path` resolves to, links on the way followed.
+pub(crate) fn canonical_folder(path: &Path) -> std::io::Result<PathBuf> {
+    std::fs::canonicalize(path)
 }
 
 /// No free-space probe here; the download preflight is then skipped.

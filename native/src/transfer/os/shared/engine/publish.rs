@@ -5,7 +5,8 @@
 //! create-only, under "Name (n)" when the name is taken. Stages that failed
 //! are removed where the provider can prove they are ours, else reported (K17).
 use super::super::engine_names::{base_name, next_numbered, parent_rel};
-use super::ops::{At, OpError, Outcome};
+use super::super::engine_policy::ends_job_at_target;
+use super::ops::{relabeled, At, OpError, Outcome};
 use super::queue::FileWork;
 use super::Engine;
 use crate::vfs::Backend;
@@ -85,6 +86,10 @@ pub(crate) fn open_stage(
         match opened {
             Ok(writer) => return Ok((stage, writer)),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => last = Some(error),
+            // A refusal stays one: the file waits for the peer (K13).
+            Err(error) if crate::vfs::congestion_of(&error).is_some() => {
+                return Err(OpError::target(error))
+            }
             Err(error) => {
                 return Err(OpError::target(io::Error::new(
                     error.kind(),
@@ -134,10 +139,13 @@ pub(crate) fn complete(
                 return Err(error);
             }
             writer.flush().map_err(|error| {
-                OpError::at(
-                    At::Unknown,
-                    io::Error::new(error.kind(), format!("„{path}“ abschließen: {error}")),
-                )
+                // A full, read-only or refusing target, or one that is too
+                // busy, took nothing (the job ends, or the file waits);
+                // anything else may have created the file.
+                let refused =
+                    ends_job_at_target(error.kind()) || crate::vfs::congestion_of(&error).is_some();
+                let at = if refused { At::Target } else { At::Unknown };
+                OpError::at(at, relabeled(&error, &format!("„{path}“ abschließen")))
             })?;
             Ok(Outcome::Done)
         }
@@ -204,6 +212,12 @@ pub(crate) fn publish(
             Err(error) if error.kind() == io::ErrorKind::Unsupported => {
                 discard(engine, target, stage);
                 return Err(OpError::at(At::Publish, error));
+            }
+            // Refused outright (full, read-only, not ours to write): nothing
+            // was published, and the job ends.
+            Err(error) if ends_job_at_target(error.kind()) => {
+                discard(engine, target, stage);
+                return Err(OpError::target(error));
             }
             Err(error) => {
                 return Err(OpError::at(

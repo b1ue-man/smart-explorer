@@ -1,6 +1,8 @@
 //! Test doubles for the engine: a "remote" backend over a local folder with
 //! controllable faults, capabilities and counters, and helpers that run a job
 //! to its terminal message.
+pub(super) use super::test_faults::Faults;
+use super::test_faults::{rewrite_same_length, RefusedFresh};
 pub(super) use super::test_run::{collect, job, run, Finished};
 use crate::vfs::{
     Backend, BackendHandle, BatchGet, BatchLimits, BatchPut, BatchPutOutcome, BatchSink,
@@ -154,7 +156,7 @@ impl Write for FakeWriter {
 
 /// A remote connection over a local folder.
 pub(super) struct Fake {
-    inner: LocalBackend,
+    pub(super) inner: LocalBackend,
     pub identity: String,
     pub key: String,
     pub ceiling: Option<usize>,
@@ -172,6 +174,7 @@ pub(super) struct Fake {
     pub read_delay: Duration,
     pub extra: Option<Vec<u8>>,
     pub counters: Arc<Counters>,
+    pub faults: Faults,
 }
 
 impl Fake {
@@ -194,6 +197,7 @@ impl Fake {
             read_delay: Duration::ZERO,
             extra: None,
             counters: Arc::new(Counters::default()),
+            faults: Faults::default(),
         }
     }
 
@@ -281,12 +285,25 @@ impl Backend for Fake {
     }
     fn open_write_new(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
         self.counters.stages.fetch_add(1, Ordering::SeqCst);
+        if let Some(refused) = self.faults.refuse_stage() {
+            return Err(refused);
+        }
         let inner = self.inner.open_write_new(path)?;
         Ok(Box::new(FakeWriter {
             inner,
             fault: self.write_fault,
             _guard: Guard::new(&self.counters, false),
         }))
+    }
+    fn open_write_fresh(
+        &self,
+        _path: &str,
+        _size: u64,
+    ) -> VfsResult<Option<Box<dyn Write + Send>>> {
+        Ok(self
+            .faults
+            .fresh_refused
+            .map(|kind| Box::new(RefusedFresh(kind)) as Box<dyn Write + Send>))
     }
     fn promote_copy_stage(&self, stage: &str, destination: &str) -> VfsResult<()> {
         self.counters.promotes.fetch_add(1, Ordering::SeqCst);
@@ -318,6 +335,15 @@ impl Backend for Fake {
         if let Some(kind) = self.server_copy_error {
             return Err(io::Error::new(kind, "fixture: server copy refused"));
         }
+        if let Some(path) = self
+            .faults
+            .rewrite_before_copy
+            .lock()
+            .expect("fault")
+            .take()
+        {
+            rewrite_same_length(&path)?;
+        }
         let mut reader = self.inner.open_read(src)?;
         let mut writer = self.inner.open_write_new(stage)?;
         let copied = io::copy(&mut reader, &mut writer)?;
@@ -340,10 +366,23 @@ impl Backend for Fake {
         self.inner.mkdir_all(path)
     }
     fn create_dir(&self, path: &str) -> VfsResult<()> {
+        if let Some(refused) = self.faults.refuse_dir() {
+            return Err(refused);
+        }
         self.inner.create_dir(path)
     }
     fn create_dir_new(&self, path: &str) -> VfsResult<()> {
-        self.inner.create_dir_new(path)
+        if let Some(refused) = self.faults.refuse_dir() {
+            return Err(refused);
+        }
+        self.inner.create_dir_new(path)?;
+        if self.faults.dir_answer_lost.swap(false, Ordering::SeqCst) {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "fixture: created, answer lost",
+            ));
+        }
+        Ok(())
     }
     fn discard_copy_stage(&self, stage: &str) -> VfsResult<()> {
         self.inner.discard_copy_stage(stage)
@@ -368,54 +407,9 @@ impl Backend for Fake {
         entries: &[BatchPut],
         data: &mut dyn Read,
     ) -> VfsResult<Vec<BatchPutOutcome>> {
-        self.counters.put_batches.fetch_add(1, Ordering::SeqCst);
-        let mut outcomes = Vec::new();
-        for (index, entry) in entries.iter().enumerate() {
-            if self.batch_ambiguous && index == 1 {
-                return Err(io::Error::new(
-                    io::ErrorKind::ConnectionReset,
-                    "fixture: packet answer lost",
-                ));
-            }
-            self.counters
-                .batched
-                .lock()
-                .expect("fixture lock")
-                .push(entry.path.clone());
-            let mut bytes = vec![0u8; entry.size as usize];
-            data.read_exact(&mut bytes)?;
-            let stage = format!("{}.fixture-stage", entry.path);
-            let mut writer = self.inner.open_write_new(&stage)?;
-            writer.write_all(&bytes)?;
-            writer.flush()?;
-            drop(writer);
-            let published = entry.path.clone();
-            match self.inner.promote_staged_no_replace(&stage, &published) {
-                Ok(()) => outcomes.push(BatchPutOutcome::Published(published)),
-                Err(error) => {
-                    let _ = self.inner.remove_file(&stage);
-                    outcomes.push(BatchPutOutcome::Failed(error));
-                }
-            }
-        }
-        Ok(outcomes)
+        self.fake_put_batch(entries, data)
     }
     fn get_batch(&self, items: &[BatchGet], sink: &mut dyn BatchSink) -> VfsResult<()> {
-        self.counters.get_batches.fetch_add(1, Ordering::SeqCst);
-        for (index, item) in items.iter().enumerate() {
-            let bytes = match std::fs::read(&item.path) {
-                Ok(bytes) => bytes,
-                Err(error) => {
-                    sink.failed(index, error)?;
-                    continue;
-                }
-            };
-            sink.begin(index, bytes.len() as u64)?;
-            for chunk in bytes.chunks(7) {
-                sink.data(index, chunk)?;
-            }
-            sink.end(index, Ok(()))?;
-        }
-        Ok(())
+        self.fake_get_batch(items, sink)
     }
 }

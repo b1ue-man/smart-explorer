@@ -72,14 +72,17 @@ fn transfer_engine_task_batch_upload_ambiguous_failure_is_never_retried() {
         .iter()
         .filter(|issue| issue.message.contains("Ergebnis unbekannt"))
         .count();
-    assert!(unknown >= 2, "{:?}", finished.issues);
+    let mut batched = fake.counters.batched.lock().expect("batched").clone();
+    let sent = batched.len();
+    // Only what went out before the answer was lost has an unknown result;
+    // the members never sent go alone (the fixture fails at the second).
+    assert!(unknown >= 1, "{:?}", finished.issues);
+    assert_eq!(unknown, sent, "{:?}", finished.issues);
     assert_eq!(
         finished.progress.files_done + unknown as u64,
         6,
         "every file is either done alone or of unknown result"
     );
-    let mut batched = fake.counters.batched.lock().expect("batched").clone();
-    let sent = batched.len();
     batched.sort();
     batched.dedup();
     assert_eq!(batched.len(), sent, "no packet member was sent twice");

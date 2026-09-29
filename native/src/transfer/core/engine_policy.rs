@@ -1,8 +1,9 @@
 //! Pure decisions of the transfer engine: which failures deserve the one
-//! retry of a file, which end a whole job, when a run of failures means the
-//! connection is gone, how long to back off, how packets of small files are
-//! sized, and the recent transfer rate. The engine supplies clocks and
-//! randomness, so everything here is deterministic.
+//! retry of a file, how long a peer that is too busy is waited for, which
+//! failures end a whole job, when a run of failures means the connection is
+//! gone, how long to back off, how packets of small files are sized, and the
+//! recent transfer rate. The engine supplies clocks and randomness, so
+//! everything here is deterministic.
 use std::collections::VecDeque;
 use std::io::ErrorKind;
 use std::time::Duration;
@@ -15,6 +16,15 @@ pub(crate) const RETRY_BASE: Duration = Duration::from_secs(1);
 /// A peer's own "retry after" is honored up to this long; beyond a minute the
 /// user is better served by an error that "transfer missing files" repeats.
 pub(crate) const RETRY_AFTER_MAX: Duration = Duration::from_secs(60);
+/// A peer that answers "too busy" is waited for while the transfer still
+/// moves; this long without any progress, the refused file or folder is
+/// reported instead. Five of the longest waits a peer may ask for, which
+/// also spans the longest short throttling window of the common services
+/// (SharePoint/OneDrive count a user's requests per 5 minutes, Google Drive
+/// per minute; checked 2026-09-29). Hourly volume limits and daily quotas
+/// are not waited out: "transfer missing files" repeats those files later.
+/// Transfers, folder creation and sync share this bound.
+pub(crate) const OVERLOAD_PATIENCE: Duration = Duration::from_secs(5 * RETRY_AFTER_MAX.as_secs());
 /// One lost connection fails every running operation at once and each of
 /// those files is retried once, so twice the number of running operations in
 /// a row without any success means the retries failed as well. The floor
@@ -48,6 +58,26 @@ pub(crate) fn is_transient(kind: ErrorKind, overload: bool) -> bool {
                 | ErrorKind::UnexpectedEof
                 | ErrorKind::NotConnected
         )
+}
+
+/// The peer refused the request to slow the client down (congestion, "too
+/// many concurrent …", would block): back-pressure, not a failure of the
+/// file. A timeout is not, it may just as well be a dead link.
+pub(crate) fn is_back_pressure(kind: ErrorKind, overload: bool) -> bool {
+    overload && kind != ErrorKind::TimedOut
+}
+
+/// Whether an operation the peer keeps refusing may wait again after
+/// `quiet` without any progress.
+pub(crate) fn overload_keeps_waiting(quiet: Duration) -> bool {
+    quiet < OVERLOAD_PATIENCE
+}
+
+/// The failed request certainly took no effect: the peer refused it or it
+/// was never sent. Other transient failures may have been carried out with
+/// only the answer lost.
+pub(crate) fn surely_not_done(kind: ErrorKind, overload: bool) -> bool {
+    is_back_pressure(kind, overload) || kind == ErrorKind::NotConnected
 }
 
 /// The target cannot take any more files: full, over quota, read-only or not
@@ -201,6 +231,32 @@ mod tests {
         assert!(!ends_job_at_target(ErrorKind::TimedOut));
         assert!(connection_failure(ErrorKind::NetworkUnreachable, false));
         assert!(!connection_failure(ErrorKind::InvalidData, false));
+    }
+
+    #[test]
+    fn transfer_engine_task_policy_back_pressure_waits_within_patience() {
+        assert!(is_back_pressure(ErrorKind::Other, true), "congestion");
+        assert!(
+            !is_back_pressure(ErrorKind::TimedOut, true),
+            "a timeout may be a dead link"
+        );
+        assert!(!is_back_pressure(ErrorKind::ConnectionReset, false));
+        assert!(overload_keeps_waiting(
+            OVERLOAD_PATIENCE - Duration::from_secs(1)
+        ));
+        assert!(!overload_keeps_waiting(OVERLOAD_PATIENCE));
+        assert_eq!(
+            OVERLOAD_PATIENCE,
+            Duration::from_secs(300),
+            "shared with sync"
+        );
+        assert!(surely_not_done(ErrorKind::Other, true), "refused");
+        assert!(surely_not_done(ErrorKind::NotConnected, false), "not sent");
+        assert!(
+            !surely_not_done(ErrorKind::TimedOut, true),
+            "the answer may be lost"
+        );
+        assert!(!surely_not_done(ErrorKind::ConnectionReset, false));
     }
 
     #[test]

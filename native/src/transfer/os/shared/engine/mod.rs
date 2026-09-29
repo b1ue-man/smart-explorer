@@ -9,6 +9,8 @@
 mod batch;
 #[path = "batch_get.rs"]
 mod batch_get;
+#[path = "batch_put.rs"]
+mod batch_put;
 #[path = "discovery.rs"]
 mod discovery;
 #[path = "download.rs"]
@@ -116,12 +118,12 @@ pub(crate) fn run_view(
 type Prepared<'a> = (FolderRegister<'a>, roots::RootPlan);
 
 fn prepare<'a>(view: &JobView<'a>, cancel: &AtomicBool) -> Result<Prepared<'a>, String> {
-    let target_flow = side_flow(view.target, view.target_dir);
-    if view.target.is_local() {
-        folders::prepare_local_root(view.target_dir)
-            .map_err(|error| format!("Zielordner „{}“: {error}", view.target_dir))?;
-    }
-    let mut folders = FolderRegister::new(view.target, view.target_dir, target_flow.clone());
+    let root = match view.target {
+        Side::Local => folders::local_target_root(view.source.is_local(), view.target_dir)?,
+        Side::Remote(_) => view.target_dir.to_string(),
+    };
+    let target_flow = side_flow(view.target, &root);
+    let mut folders = FolderRegister::new(view.target, &root, target_flow.clone());
     if let Some(planner) = roots::remote_planner(view, &target_flow, cancel)? {
         folders = folders.with_planner(planner);
     }
@@ -189,8 +191,9 @@ pub(crate) struct Engine<'a> {
     sizer: Mutex<BatchSizer>,
     /// "Transfer missing files": existing destinations are kept (K8).
     resume: bool,
-    /// Source folders of a per-file move, removed at the end when empty.
-    moved_dirs: Mutex<Vec<String>>,
+    /// Source folders of a per-file move whose target folder exists (source
+    /// path, target rel); removed at the end when empty.
+    moved_dirs: Mutex<Vec<(String, String)>>,
     report: &'a (dyn Fn(TransferMsg) + Sync),
 }
 
@@ -206,7 +209,7 @@ impl<'a> Engine<'a> {
         let job_id = NEXT_JOB.fetch_add(1, Ordering::AcqRel);
         let first = first_source(view.items);
         let source_flow = side_flow(view.source, first);
-        let target_flow = side_flow(view.target, view.target_dir);
+        let target_flow = side_flow(view.target, folders.root());
         let op_flows = match (view.source, view.target) {
             (Side::Local, Side::Local) | (Side::Remote(_), Side::Remote(_)) => {
                 (source_flow.clone(), Some(target_flow))
@@ -278,7 +281,7 @@ impl<'a> Engine<'a> {
             first
         };
         if first {
-            self.issues.push("", &message);
+            self.issues.push_first("", &message);
         }
         self.halt();
     }
@@ -428,6 +431,9 @@ fn gate_root(items: &JobItems) -> String {
 #[path = "test_backend.rs"]
 mod test_backend;
 #[cfg(test)]
+#[path = "test_faults.rs"]
+mod test_faults;
+#[cfg(test)]
 #[path = "test_run.rs"]
 mod test_run;
 #[cfg(test)]
@@ -442,3 +448,9 @@ mod tests_local;
 #[cfg(test)]
 #[path = "tests_remote.rs"]
 mod tests_remote;
+#[cfg(test)]
+#[path = "tests_review.rs"]
+mod tests_review;
+#[cfg(test)]
+#[path = "tests_review_packets.rs"]
+mod tests_review_packets;

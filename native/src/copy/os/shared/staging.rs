@@ -27,7 +27,8 @@ pub(crate) enum LocalFailure {
     Source(io::Error),
     /// Creating or writing the stage (nothing was published).
     Target(io::Error),
-    /// Publishing or finishing a published copy.
+    /// Publishing (including examining the one entry it would replace) or
+    /// finishing a published copy: this file's failure, never the target's.
     Publish(io::Error),
 }
 
