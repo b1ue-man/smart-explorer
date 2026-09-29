@@ -250,7 +250,7 @@ fn variant_choice(
                 for (index, variant) in group.variants(side.keep_a()).iter().enumerate() {
                     let label = format!("Version {} · {} B · {} · Inhalt {}", index + 1,
                         variant.content_size, fmt_ms(variant.signature.mtime_ms),
-                        &variant.content_md5[..8]);
+                        variant.content_md5.chars().take(8).collect::<String>());
                     if ui.button(label).on_hover_text(format!("Datei-ID: {}\nPrüfsumme: {}",
                         variant.id.as_deref().unwrap_or("Pfad"), variant.content_md5)).clicked() {
                         selected = Some(variant.id.clone());

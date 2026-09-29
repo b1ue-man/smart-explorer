@@ -42,6 +42,7 @@ pub(super) fn resolve(
     versions: &Path, cancel: &AtomicBool, bandwidth_bps: u64, mut progress: impl FnMut(ResolvePhase),
 ) -> io::Result<(Option<Sig>, Option<Sig>)> {
     check_cancel(cancel)?;
+    crate::vfs::validate_sync_roots(endpoints.a, endpoints.root_a, endpoints.b, endpoints.root_b)?;
     let group = conflict.duplicates.as_ref().ok_or_else(changed)?;
     let selected = choose(group, keep_a, id)?;
     let flows = super::sync_flows::PairFlows::new(endpoints.a, endpoints.root_a, endpoints.b, endpoints.root_b);
@@ -55,9 +56,10 @@ pub(super) fn resolve(
     a.verify(cancel)?;
     b.verify(cancel)?;
     progress(ResolvePhase::BackingUp);
-    for side in [&a, &b] {
+    for (label, side) in [("A", &a), ("B", &b)] {
         for variant in &side.files {
-            super::duplicate_backup::save(side.backend, &side.path, &conflict.rel, versions, variant, cancel, &throttle)?;
+            super::duplicate_backup::save(side.backend, &side.path, &conflict.rel, versions, variant, cancel, &throttle)
+                .map_err(|e| context(e, &format!("Sicherung von Seite {label} fehlgeschlagen; die Dateivarianten wurden nicht verändert")))?;
         }
     }
     a.verify(cancel)?;
@@ -68,14 +70,17 @@ pub(super) fn resolve(
         destination.keep = destination.files.iter().find(|v| selected.same_content(v)).cloned();
         if destination.keep.is_none() {
             progress(ResolvePhase::Copying);
-            publish(source, destination, selected, cancel, &throttle)?;
+            publish(source, destination, selected, cancel, &throttle)
+                .map_err(|e| context(e, "Übernahme der gewählten Version nicht bestätigt; bitte erneut vergleichen"))?;
         }
     }
     progress(ResolvePhase::Deleting);
     // Every removal verifies both groups, including the survivor, immediately
     // beforehand. A partial failure remains retryable, with all bytes backed up.
-    remove_extras(&mut a, &b, cancel)?;
-    remove_extras(&mut b, &a, cancel)?;
+    remove_extras(&mut a, &b, cancel)
+        .map_err(|e| context(e, "Bereinigung auf Seite A unvollständig; Sicherungen bleiben erhalten, bitte erneut vergleichen"))?;
+    remove_extras(&mut b, &a, cancel)
+        .map_err(|e| context(e, "Bereinigung auf Seite B unvollständig; Sicherungen bleiben erhalten, bitte erneut vergleichen"))?;
     progress(ResolvePhase::ReadingSignatures);
     // After the last commit, finish verification even if Stop was just pressed.
     let finish = AtomicBool::new(false);
@@ -89,6 +94,10 @@ pub(super) fn resolve(
         _ => {}
     }
     Ok((a.files.first().map(|v| v.signature), b.files.first().map(|v| v.signature)))
+}
+
+fn context(error: io::Error, operation: &str) -> io::Error {
+    io::Error::new(error.kind(), format!("{operation}: {error}"))
 }
 
 fn publish(source: &Side<'_>, destination: &mut Side<'_>, selected: &FileVariant,
