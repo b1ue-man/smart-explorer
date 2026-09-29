@@ -15,6 +15,17 @@ use tokio::time::Instant;
 const SSH_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 const SSH_KEEPALIVE_MAX_MISSED: usize = 3;
 const TCP_ATTEMPT_DELAY: Duration = Duration::from_millis(250);
+/// Receive window of every channel (SFTP and agent exec alike). One channel
+/// moves at most one window per round trip; 16 MiB carries 1 Gbit/s up to a
+/// 134 ms round trip. russh refills it on receipt, so it never bounds memory
+/// (docs/refs/quic-sftp-throughput.md B.7).
+pub(super) const SSH_WINDOW: u32 = 16 * 1024 * 1024;
+/// OpenSSH's own session packet size (`CHAN_SES_PACKET_DEFAULT`, 32 KiB) and
+/// russh's default; russh warns above 65535.
+const SSH_MAX_PACKET: u32 = 32 * 1024;
+/// Messages a channel buffers before the session loop waits for its reader
+/// (and with it every other channel): one full window of full-size packets.
+const SSH_CHANNEL_BUFFER: usize = (SSH_WINDOW / SSH_MAX_PACKET) as usize;
 
 pub(super) struct Client {
     host: String,
@@ -215,10 +226,13 @@ fn spawn_connect(attempts: &mut JoinSet<io::Result<TcpStream>>, address: SocketA
     attempts.spawn(async move { TcpStream::connect(address).await });
 }
 
-fn client_config() -> client::Config {
+pub(super) fn client_config() -> client::Config {
     client::Config {
         keepalive_interval: Some(SSH_KEEPALIVE_INTERVAL),
         keepalive_max: SSH_KEEPALIVE_MAX_MISSED,
+        window_size: SSH_WINDOW,
+        maximum_packet_size: SSH_MAX_PACKET,
+        channel_buffer_size: SSH_CHANNEL_BUFFER,
         ..client::Config::default()
     }
 }

@@ -23,6 +23,8 @@ mod backend;
 mod errors;
 #[path = "core/listing.rs"]
 mod listing;
+#[path = "core/reader.rs"]
+mod reader;
 #[path = "core/replace.rs"]
 mod replace;
 #[path = "core/session.rs"]
@@ -37,6 +39,9 @@ mod wire;
 #[cfg(test)]
 #[path = "core/tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "core/transfer_engine_task_tests.rs"]
+mod transfer_engine_task_tests;
 
 pub use backend::SmbBackend;
 pub use errors::names_missing_share;

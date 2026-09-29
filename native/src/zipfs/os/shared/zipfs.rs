@@ -4,13 +4,14 @@
 //! Plus `extract_all` for the "Entpacken" action. Pure-Rust deflate (flate2 /
 //! miniz_oxide), so no C deps for the windows-gnu build.
 //!
-//! The archive is parsed once on open into a directory map; file bytes are read
-//! (decompressed) on demand by re-opening the archive. Mutations are
-//! unsupported (read-only) — extract to edit.
+//! The archive is parsed once on open into a directory map and a central
+//! directory every reader clones; file bytes stream out decompressed on
+//! demand (entry.rs). Mutations are unsupported (read-only) — extract to edit.
 
+use super::entry::{self, Archive, ArchiveFile};
 use crate::vfs::{Backend, Scheme, VfsMeta, VfsResult};
 use std::collections::HashMap;
-use std::io::{self, Cursor, Read, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 fn archive_key(path: &str) -> Option<String> {
@@ -50,8 +51,9 @@ fn dt_ms(dt: zip::DateTime) -> i64 {
 }
 
 pub struct ZipBackend {
-    /// Local path of the `.zip` (re-opened per `open_read`).
-    zip_path: String,
+    /// The parsed central directory; each reader clones it with its own file
+    /// handle (the backend itself holds none open).
+    archive: Archive,
     /// Forward-slash display root (the archive path).
     display: String,
     /// Zip-internal dir path (no leading/trailing slash; "" = root) → children.
@@ -119,8 +121,9 @@ fn register(
 
 impl ZipBackend {
     pub fn open(zip_path: &str) -> io::Result<ZipBackend> {
-        let f = std::fs::File::open(native(zip_path))?;
-        let mut ar = zip::ZipArchive::new(f).map_err(zip_err)?;
+        let file = std::fs::File::open(native(zip_path))?;
+        let mut ar =
+            zip::ZipArchive::new(ArchiveFile::opened(native(zip_path), file)).map_err(zip_err)?;
         let mut dirs: HashMap<String, Vec<VfsMeta>> = HashMap::new();
         dirs.entry(String::new()).or_default(); // root always exists
         for i in 0..ar.len() {
@@ -146,7 +149,8 @@ impl ZipBackend {
             });
         }
         Ok(ZipBackend {
-            zip_path: zip_path.to_string(),
+            // The clone carries no open handle; the parse's own one closes.
+            archive: ar.clone(),
             display: zip_path.to_string(),
             dirs,
         })
@@ -194,18 +198,18 @@ impl Backend for ZipBackend {
 
     fn open_read(&self, path: &str) -> VfsResult<Box<dyn Read + Send>> {
         let name = Self::key(path)?;
-        if self.stat(path)?.is_dir {
+        let meta = self.stat(path)?;
+        if meta.is_dir {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "Ordner kann nicht als Datei geoeffnet werden",
             ));
         }
-        let f = std::fs::File::open(native(&self.zip_path))?;
-        let mut ar = zip::ZipArchive::new(f).map_err(zip_err)?;
-        let mut zf = ar.by_name(&name).map_err(zip_err)?;
-        let mut buf = Vec::with_capacity(zf.size() as usize);
-        zf.read_to_end(&mut buf)?;
-        Ok(Box::new(Cursor::new(buf)))
+        let index = self
+            .archive
+            .index_for_name(&name)
+            .ok_or_else(|| zip_err(zip::result::ZipError::FileNotFound))?;
+        entry::open(&self.archive, index, meta.size)
     }
 
     // Read-only archive: all mutations are unsupported.
@@ -229,6 +233,15 @@ impl Backend for ZipBackend {
     }
     fn parallelism(&self) -> usize {
         1 // single archive file; no benefit to parallel listing
+    }
+
+    /// Decompressing is CPU work, one core per entry: more readers at once
+    /// than cores add threads and buffers, no throughput.
+    fn transfer_ceiling(&self, path: &str) -> Option<usize> {
+        let _ = path;
+        std::thread::available_parallelism()
+            .ok()
+            .map(std::num::NonZeroUsize::get)
     }
 }
 

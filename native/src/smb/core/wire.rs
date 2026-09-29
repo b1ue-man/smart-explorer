@@ -291,6 +291,35 @@ pub(super) async fn create_set_close(
     Ok(())
 }
 
+/// A new folder: CREATE (FileCreate, FILE_DIRECTORY_FILE, as smb2's
+/// `Tree::create_directory`) + CLOSE in one round trip instead of two. An
+/// existing name of any type fails the CREATE (OBJECT_NAME_COLLISION).
+pub(super) async fn create_directory(
+    conn: &Connection,
+    tree: &Tree,
+    rel: &str,
+) -> smb2::Result<()> {
+    let mut create = open_request(
+        tree,
+        rel,
+        FileAccessMask::FILE_READ_ATTRIBUTES | FileAccessMask::SYNCHRONIZE,
+        FILE_DIRECTORY_FILE,
+    );
+    create.create_disposition = CreateDisposition::FileCreate;
+    create.file_attributes = listing::FILE_ATTRIBUTE_DIRECTORY;
+    let close = related_close();
+    let ops = [
+        CompoundOp::new(Command::Create, &create, Some(tree.tree_id)),
+        CompoundOp::new(Command::Close, &close, Some(tree.tree_id)),
+    ];
+    let frames = frames(conn.execute_compound(&ops).await?, ops.len())?;
+    let response = created(&frames[0])?;
+    if frames[1].header.status != NtStatus::SUCCESS {
+        close_quietly(conn, tree, response.file_id).await;
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum DeleteKind {
     File,

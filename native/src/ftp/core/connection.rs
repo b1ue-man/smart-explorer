@@ -5,7 +5,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use suppaftp::types::FileType;
-use suppaftp::{FtpError, RustlsConnector, RustlsFtpStream};
+use suppaftp::{FtpError, RustlsConnector, RustlsFtpStream, Status};
 
 use super::resolver::resolve_host;
 
@@ -17,6 +17,48 @@ fn ftp_err(error: FtpError) -> io::Error {
     match error {
         FtpError::ConnectionError(error) => error,
         error => io_err(error),
+    }
+}
+
+/// The server turned the connection away: 421 at the greeting or 421/530 at
+/// USER/PASS (vsftpd `max_per_ip`, ProFTPD `MaxClientsPerHost/User`,
+/// docs/refs/ftp-pool.md). Once this configuration has logged in, it means
+/// "no more connections"; before that a 530 is a wrong login.
+#[derive(Debug)]
+pub(super) struct Refusal {
+    code: u32,
+    message: String,
+}
+
+impl std::fmt::Display for Refusal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for Refusal {}
+
+/// The reply code of a refused greeting or login, if `error` is one.
+pub(super) fn refusal_code(error: &io::Error) -> Option<u32> {
+    error
+        .get_ref()?
+        .downcast_ref::<Refusal>()
+        .map(|refusal| refusal.code)
+}
+
+/// Like `ftp_err`, keeping a 421/530 reply recognizable as a refusal (same
+/// kind and text as before).
+fn refusal_err(error: FtpError) -> io::Error {
+    match &error {
+        FtpError::UnexpectedResponse(response)
+            if matches!(response.status, Status::NotAvailable | Status::NotLoggedIn) =>
+        {
+            io::Error::other(Refusal {
+                code: response.status.code(),
+                message: error.to_string(),
+            })
+        }
+        _ => ftp_err(error),
     }
 }
 
@@ -285,7 +327,7 @@ fn connect_stream_with_timing(
     set_setup_timeouts(&stream, &deadline, "server greeting")?;
     let watchdog = SetupWatchdog::arm(&stream, &deadline)?;
     let mut ftp = RustlsFtpStream::connect_with_stream(stream)
-        .map_err(ftp_err)
+        .map_err(refusal_err)
         .map_err(|error| deadline.map_error("server greeting", error))?;
     ftp = ftp.passive_stream_builder(move |address| {
         connect_data_stream(address, timing.data_connect, timing.io)
@@ -300,7 +342,7 @@ fn connect_stream_with_timing(
     }
     set_setup_timeouts(ftp.get_ref(), &deadline, "login")?;
     ftp.login(&config.user, &config.password)
-        .map_err(ftp_err)
+        .map_err(refusal_err)
         .map_err(|error| deadline.map_error("login", error))?;
     set_setup_timeouts(ftp.get_ref(), &deadline, "binary mode")?;
     ftp.transfer_type(FileType::Binary)

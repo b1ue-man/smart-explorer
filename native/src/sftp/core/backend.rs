@@ -1,26 +1,23 @@
+use super::channel_pool::{note_failure, ChannelPool};
 use super::config::SftpConfig;
 use super::connection::{SftpConnection, SftpGeneration};
-use super::io_adapters::{BlockingRead, BlockingWrite, SftpReader, SftpWriter};
+use super::io_adapters::{seek_start, SftpReader, SftpWriter};
 use super::io_err;
 use super::metadata::{basename, to_vfs};
+use super::pool_writer::SizedWriter;
 use crate::vfs::{Backend, Scheme, VfsMeta, VfsResult};
-use russh::client;
 use russh_sftp::client::error::Error as SftpError;
 use russh_sftp::protocol::OpenFlags;
 use std::io::{self, Read, Write};
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::runtime::Runtime;
-
-const SSH_CHANNEL_OPEN_DEADLINE: Duration = Duration::from_secs(10);
-const SSH_EXEC_REQUEST_DEADLINE: Duration = Duration::from_secs(10);
-const SSH_EXEC_CAPTURE_DEADLINE: Duration = Duration::from_secs(30);
-const SSH_EXEC_OUTPUT_LIMIT: usize = 64 * 1024;
 
 #[derive(Clone)]
 pub struct SftpBackend {
-    rt: Arc<Runtime>,
-    connection: Arc<SftpConnection>,
+    pub(super) rt: Arc<Runtime>,
+    pub(super) connection: Arc<SftpConnection>,
+    /// Extra SFTP channels for file transfers (channel_pool.rs).
+    pub(super) pool: Arc<ChannelPool>,
     root: String,
     /// Read by `url()` (UI display), consumed in the connect-UI step.
     #[allow(dead_code)]
@@ -36,6 +33,7 @@ impl SftpBackend {
         Ok(SftpBackend {
             rt,
             connection,
+            pool: Arc::new(ChannelPool::default()),
             root,
             url,
         })
@@ -45,115 +43,6 @@ impl SftpBackend {
     #[allow(dead_code)]
     pub fn url(&self) -> String {
         self.url.clone()
-    }
-
-    /// Run a one-shot remote command and capture its stdout — used by the SSH
-    /// remote-agent deploy (`uname -sm`, `$HOME`, the agent `--version` probe,
-    /// `mv`/`chmod`, `sha256sum`, cleanup). Opens a fresh exec channel on the
-    /// already-authenticated session. See `docs/SSH_AGENT_PLAN.md`.
-    pub fn exec_capture(&self, cmd: &str) -> io::Result<String> {
-        let (generation, mut ch) = self.open_session_channel()?;
-        self.request_exec(&generation, &ch, true, cmd)?;
-        let capture = self.rt.block_on(async {
-            tokio::time::timeout(SSH_EXEC_CAPTURE_DEADLINE, capture_exec(&mut ch)).await
-        });
-        let capture = match capture {
-            Ok(result) => result?,
-            Err(_) => {
-                let error = deadline_error("SSH remote command completion");
-                self.connection.note_io_error(&generation, &error);
-                return Err(error);
-            }
-        };
-        if generation.session().is_closed() {
-            self.connection.mark_stale(&generation);
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "SSH transport closed while waiting for command output",
-            ));
-        }
-        capture.finish()
-    }
-
-    /// Exec `cmd` and return blocking read/write halves over its stdio, for the
-    /// agent's framed request/response protocol (the agent runs `--serve`).
-    pub fn open_exec_streams(
-        &self,
-        cmd: &str,
-    ) -> io::Result<(Box<dyn Read + Send>, Box<dyn Write + Send>)> {
-        let (generation, ch) = self.open_session_channel()?;
-        self.request_exec(&generation, &ch, false, cmd)?;
-        let stream = ch.into_stream();
-        let (rd, wr) = tokio::io::split(stream);
-        let r: Box<dyn Read + Send> = Box::new(BlockingRead {
-            rt: self.rt.clone(),
-            inner: Some(rd),
-        });
-        let w: Box<dyn Write + Send> = Box::new(BlockingWrite {
-            rt: self.rt.clone(),
-            inner: Some(wr),
-        });
-        Ok((r, w))
-    }
-
-    fn open_session_channel(
-        &self,
-    ) -> io::Result<(Arc<SftpGeneration>, russh::Channel<client::Msg>)> {
-        let mut generation = self.connection.current()?;
-        for attempt in 0..2 {
-            let opened = self.rt.block_on(async {
-                tokio::time::timeout(
-                    SSH_CHANNEL_OPEN_DEADLINE,
-                    generation.session().channel_open_session(),
-                )
-                .await
-            });
-            match opened {
-                Ok(Ok(channel)) => return Ok((generation, channel)),
-                Ok(Err(error)) => {
-                    let dead = self.connection.note_ssh_error(&generation, &error);
-                    if attempt == 0 && dead {
-                        generation = self.connection.current()?;
-                        continue;
-                    }
-                    return Err(io_err(error));
-                }
-                Err(_) => {
-                    let error = deadline_error("SSH session channel open");
-                    self.connection.note_io_error(&generation, &error);
-                    return Err(error);
-                }
-            }
-        }
-        unreachable!("bounded SSH channel-open attempts")
-    }
-
-    fn request_exec(
-        &self,
-        generation: &Arc<SftpGeneration>,
-        channel: &russh::Channel<client::Msg>,
-        want_reply: bool,
-        cmd: &str,
-    ) -> io::Result<()> {
-        let requested = self.rt.block_on(async {
-            tokio::time::timeout(
-                SSH_EXEC_REQUEST_DEADLINE,
-                channel.exec(want_reply, cmd.as_bytes().to_vec()),
-            )
-            .await
-        });
-        match requested {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(error)) => {
-                self.connection.note_ssh_error(generation, &error);
-                Err(io_err(error))
-            }
-            Err(_) => {
-                let error = deadline_error("SSH exec request");
-                self.connection.note_io_error(generation, &error);
-                Err(error)
-            }
-        }
     }
 
     fn safe_sftp_on<T>(
@@ -174,11 +63,30 @@ impl SftpBackend {
                 }
             }
         }
-        unreachable!("bounded SFTP read attempts")
+        Err(io::Error::new(
+            io::ErrorKind::ConnectionAborted,
+            "SFTP-Verbindung ließ sich auch nach dem Neuverbinden nicht nutzen",
+        ))
     }
 
-    /// Atomic replace through `posix-rename@openssh.com` (see posix_rename.rs).
+    /// Atomic replace through `posix-rename@openssh.com` (see posix_rename.rs):
+    /// on a pool channel when there is one (no extra channel, so even a full
+    /// pool leaves the server's session limit untouched), else on a
+    /// short-lived channel of its own.
     fn posix_rename(&self, from: &str, to: &str) -> io::Result<()> {
+        if let Some(lease) = self.pool.lease(self)? {
+            let channel = lease.channel().clone();
+            if channel.posix_rename {
+                let request = super::posix_rename::rename_request(&channel.session, from, to);
+                return match self.rt.block_on(request) {
+                    Ok(answer) => answer,
+                    Err(error) => {
+                        note_failure(&self.connection, &channel, &error);
+                        Err(io_err(error))
+                    }
+                };
+            }
+        }
         let (generation, channel) = self.open_session_channel()?;
         let renamed = self
             .rt
@@ -199,6 +107,76 @@ impl SftpBackend {
             io_err(error)
         })
     }
+
+    /// The main-session reader: used when no pool channel is available.
+    fn open_main_reader(&self, path: &str, start: u64) -> io::Result<SftpReader> {
+        let (generation, mut file) = self.safe_sftp_on(|generation| {
+            self.rt.block_on(generation.sftp().open(path.to_string()))
+        })?;
+        self.rt.block_on(seek_start(&mut file, start))?;
+        Ok(SftpReader {
+            rt: self.rt.clone(),
+            connection: self.connection.clone(),
+            generation,
+            path: path.to_string(),
+            file,
+            start,
+            delivered: 0,
+            retried: false,
+        })
+    }
+
+    fn open_main_writer(&self, path: &str, flags: OpenFlags) -> io::Result<SftpWriter> {
+        let generation = self.connection.current()?;
+        let file = self
+            .rt
+            .block_on(generation.sftp().open_with_flags(path.to_string(), flags))
+            .map_err(|error| {
+                self.connection.note_sftp_error(&generation, &error);
+                io_err(error)
+            })?;
+        Ok(SftpWriter {
+            rt: self.rt.clone(),
+            connection: self.connection.clone(),
+            generation,
+            file: Some(file),
+        })
+    }
+
+    /// A writer on a pool channel, or on the main session without one.
+    fn writer(
+        &self,
+        path: &str,
+        flags: OpenFlags,
+        expected: Option<u64>,
+    ) -> VfsResult<Box<dyn Write + Send>> {
+        if let Some(writer) = self.open_pool_writer(path, flags, expected)? {
+            return Ok(Box::new(writer));
+        }
+        let writer = self.open_main_writer(path, flags)?;
+        let writer: Box<dyn Write + Send> = match expected {
+            Some(size) => Box::new(SizedWriter::new(writer, size)),
+            None => Box::new(writer),
+        };
+        Ok(writer)
+    }
+
+    fn reader(&self, path: &str, start: u64) -> VfsResult<Box<dyn Read + Send>> {
+        if let Some(reader) = self.open_pool_reader(path, start)? {
+            return Ok(Box::new(reader));
+        }
+        Ok(Box::new(self.open_main_reader(path, start)?))
+    }
+}
+
+/// `sftp().create(path)`: create or truncate.
+fn create_flags() -> OpenFlags {
+    OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::WRITE
+}
+
+/// Exclusive create: the protocol's own O_EXCL.
+fn create_new_flags() -> OpenFlags {
+    OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::EXCLUDE
 }
 
 impl Backend for SftpBackend {
@@ -221,6 +199,9 @@ impl Backend for SftpBackend {
     }
 
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
+        // Browsing is what follows a burst of transfers: close its idle
+        // channels here instead of at the next transfer.
+        self.pool.retire_idle();
         let dir = self
             .connection
             .safe_metadata(|generation| Box::pin(generation.sftp().read_dir(path.to_string())))?;
@@ -245,54 +226,39 @@ impl Backend for SftpBackend {
             .safe_metadata(|generation| Box::pin(generation.sftp().try_exists(path.to_string())))
     }
 
+    /// Pipelined on a pool channel: many READs in flight instead of one per
+    /// round trip (docs/refs/quic-sftp-throughput.md B).
     fn open_read(&self, path: &str) -> VfsResult<Box<dyn Read + Send>> {
-        let (generation, file) = self.safe_sftp_on(|generation| {
-            self.rt.block_on(generation.sftp().open(path.to_string()))
-        })?;
-        Ok(Box::new(SftpReader {
-            rt: self.rt.clone(),
-            connection: self.connection.clone(),
-            generation,
-            path: path.to_string(),
-            file,
-            delivered: 0,
-            retried: false,
-        }))
+        self.reader(path, 0)
+    }
+
+    /// Every READ names its offset, so a resumed download starts anywhere.
+    fn open_read_at(
+        &self,
+        path: &str,
+        id: Option<&str>,
+        offset: u64,
+    ) -> VfsResult<Option<Box<dyn Read + Send>>> {
+        let _ = id;
+        self.reader(path, offset).map(Some)
     }
 
     fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
-        let generation = self.connection.current()?;
-        let file = self
-            .rt
-            .block_on(generation.sftp().create(path.to_string()))
-            .map_err(|error| {
-                self.connection.note_sftp_error(&generation, &error);
-                io_err(error)
-            })?;
-        Ok(Box::new(SftpWriter {
-            rt: self.rt.clone(),
-            connection: self.connection.clone(),
-            generation,
-            file: Some(file),
-        }))
+        self.writer(path, create_flags(), None)
     }
 
     fn open_write_new(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
-        let generation = self.connection.current()?;
-        let flags = OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::EXCLUDE;
-        let file = self
-            .rt
-            .block_on(generation.sftp().open_with_flags(path.to_string(), flags))
-            .map_err(|error| {
-                self.connection.note_sftp_error(&generation, &error);
-                io_err(error)
-            })?;
-        Ok(Box::new(SftpWriter {
-            rt: self.rt.clone(),
-            connection: self.connection.clone(),
-            generation,
-            file: Some(file),
-        }))
+        self.writer(path, create_new_flags(), None)
+    }
+
+    /// The exclusive stage streams anyway; the known length is enforced at
+    /// `flush`, so a source that changed size never publishes.
+    fn open_write_copy_stage_sized(
+        &self,
+        path: &str,
+        size: u64,
+    ) -> VfsResult<Box<dyn Write + Send>> {
+        self.writer(path, create_new_flags(), Some(size))
     }
 
     fn rename(&self, src: &str, dst: &str) -> VfsResult<()> {
@@ -369,10 +335,46 @@ impl Backend for SftpBackend {
             })
     }
 
+    /// One MKDIR; an existing real folder (not a link) is success.
+    fn create_dir(&self, path: &str) -> VfsResult<()> {
+        self.create_one_dir(path, false)
+    }
+
+    /// One MKDIR that must create the name: the server's `mkdir(2)` refuses
+    /// an existing one atomically; the entry is only inspected afterwards to
+    /// tell `AlreadyExists` from other refusals.
+    fn create_dir_new(&self, path: &str) -> VfsResult<()> {
+        self.create_one_dir(path, true)
+    }
+
+    /// Stages are created with an exclusive OPEN, so the name is this
+    /// client's until it is published.
+    fn discard_copy_stage(&self, stage: &str) -> VfsResult<()> {
+        self.discard_stage(stage)
+    }
+
     fn parallelism(&self) -> usize {
         // Conservative: one SFTP session, sequential remote walk. Safe default
         // until a real-server concurrency spike (plan §"open questions").
         1
+    }
+
+    /// All transfers of one SSH connection share one controller, also the
+    /// clones of this backend.
+    fn flow_key(&self, path: &str) -> String {
+        let _ = path;
+        format!(
+            "{}#{:p}",
+            self.namespace_identity(),
+            Arc::as_ptr(&self.connection)
+        )
+    }
+
+    /// Readers and writers each hold their own handle and requests carry ids,
+    /// so a download and an upload on the same server run side by side
+    /// (without a spool through the local disk).
+    fn concurrent_read_write(&self) -> bool {
+        true
     }
 
     fn staged_write_capabilities(&self, _root: &str) -> crate::vfs::StagedWriteCapabilities {
@@ -382,108 +384,4 @@ impl Backend for SftpBackend {
             namespace_replace: false,
         }
     }
-}
-
-#[derive(Default)]
-pub(super) struct CapturedExec {
-    pub(super) stdout: Vec<u8>,
-    pub(super) stderr: Vec<u8>,
-    pub(super) stdout_truncated: bool,
-    pub(super) stderr_truncated: bool,
-    pub(super) exit_status: Option<u32>,
-    pub(super) exit_signal: Option<String>,
-}
-
-impl CapturedExec {
-    pub(super) fn finish(self) -> io::Result<String> {
-        if let Some(signal) = self.exit_signal.as_deref() {
-            return Err(io::Error::other(format!(
-                "SSH remote command terminated by signal {signal}{}",
-                self.stderr_context()
-            )));
-        }
-        let status = self.exit_status.ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "SSH remote command closed without an exit status{}",
-                    self.stderr_context()
-                ),
-            )
-        })?;
-        if status != 0 {
-            return Err(io::Error::other(format!(
-                "SSH remote command exited with status {status}{}",
-                self.stderr_context()
-            )));
-        }
-        if self.stdout_truncated {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "SSH remote command stdout exceeded its 64 KiB limit",
-            ));
-        }
-        Ok(String::from_utf8_lossy(&self.stdout).trim().to_string())
-    }
-
-    fn stderr_context(&self) -> String {
-        let stderr = String::from_utf8_lossy(&self.stderr);
-        let stderr = stderr.trim();
-        if stderr.is_empty() {
-            String::new()
-        } else if self.stderr_truncated {
-            format!(": {stderr} [truncated at 64 KiB]")
-        } else {
-            format!(": {stderr}")
-        }
-    }
-}
-
-async fn capture_exec(channel: &mut russh::Channel<client::Msg>) -> io::Result<CapturedExec> {
-    let mut capture = CapturedExec::default();
-    loop {
-        match channel.wait().await {
-            Some(russh::ChannelMsg::Data { data }) => {
-                capture.stdout_truncated |=
-                    append_bounded(&mut capture.stdout, &data, SSH_EXEC_OUTPUT_LIMIT);
-            }
-            Some(russh::ChannelMsg::ExtendedData { data, .. }) => {
-                capture.stderr_truncated |=
-                    append_bounded(&mut capture.stderr, &data, SSH_EXEC_OUTPUT_LIMIT);
-            }
-            Some(russh::ChannelMsg::ExitStatus { exit_status }) => {
-                capture.exit_status = Some(exit_status);
-            }
-            Some(russh::ChannelMsg::ExitSignal {
-                signal_name,
-                error_message,
-                ..
-            }) => {
-                let error_message: String = error_message.chars().take(1024).collect();
-                capture.exit_signal = Some(if error_message.trim().is_empty() {
-                    format!("{signal_name:?}")
-                } else {
-                    format!("{signal_name:?} ({error_message})")
-                });
-            }
-            Some(russh::ChannelMsg::Failure) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "SSH server rejected the remote exec request",
-                ));
-            }
-            Some(russh::ChannelMsg::Close) | None => return Ok(capture),
-            _ => {}
-        }
-    }
-}
-
-pub(super) fn append_bounded(target: &mut Vec<u8>, source: &[u8], limit: usize) -> bool {
-    let remaining = limit.saturating_sub(target.len());
-    target.extend_from_slice(&source[..source.len().min(remaining)]);
-    source.len() > remaining
-}
-
-fn deadline_error(stage: &str) -> io::Error {
-    io::Error::new(io::ErrorKind::TimedOut, format!("{stage} timed out"))
 }

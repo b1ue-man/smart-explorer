@@ -1,3 +1,4 @@
+use super::status::overload_or_full;
 use std::fs::File;
 use std::io::{self, Seek, SeekFrom, Write};
 use std::sync::Arc;
@@ -11,6 +12,9 @@ fn io_err<E: std::fmt::Display>(error: E) -> io::Error {
 }
 
 fn request_err(error: ureq::Error, create_new: bool) -> io::Error {
+    if let Some(mapped) = overload_or_full(&error) {
+        return mapped;
+    }
     let kind = if create_new && matches!(&error, ureq::Error::Status(412, _)) {
         io::ErrorKind::AlreadyExists
     } else {
@@ -24,16 +28,21 @@ trait WebdavUpload: Send + Sync {
 }
 
 struct UreqUpload {
-    agent: ureq::Agent,
+    /// Pooled: a PUT with a body is never replayed by ureq.
+    pooled: ureq::Agent,
+    /// Unpooled: an empty PUT would be replayed after a lost answer.
+    unpooled: ureq::Agent,
     create_new: bool,
 }
 
 impl WebdavUpload for UreqUpload {
     fn upload(&self, url: &str, auth: &str, length: u64, source: &mut File) -> io::Result<()> {
-        let request = self
-            .agent
-            .put(url)
-            .set("Content-Length", &length.to_string());
+        let agent = if length == 0 {
+            &self.unpooled
+        } else {
+            &self.pooled
+        };
+        let request = agent.put(url).set("Content-Length", &length.to_string());
         // RFC 9110 section 13.1.2: the server must reject an occupied
         // resource without applying this PUT. A prior probe cannot do this.
         let request = if self.create_new {
@@ -87,26 +96,37 @@ enum UploadState {
 }
 
 impl WebdavWriter {
-    pub(super) fn new(agent: ureq::Agent, url: String, auth: String) -> io::Result<Self> {
-        Self::with_mode(agent, url, auth, false)
-    }
-
-    pub(super) fn new_exclusive(
-        agent: ureq::Agent,
+    pub(super) fn new(
+        pooled: ureq::Agent,
+        unpooled: ureq::Agent,
         url: String,
         auth: String,
     ) -> io::Result<Self> {
-        Self::with_mode(agent, url, auth, true)
+        Self::with_mode(pooled, unpooled, url, auth, false)
+    }
+
+    pub(super) fn new_exclusive(
+        pooled: ureq::Agent,
+        unpooled: ureq::Agent,
+        url: String,
+        auth: String,
+    ) -> io::Result<Self> {
+        Self::with_mode(pooled, unpooled, url, auth, true)
     }
 
     fn with_mode(
-        agent: ureq::Agent,
+        pooled: ureq::Agent,
+        unpooled: ureq::Agent,
         url: String,
         auth: String,
         create_new: bool,
     ) -> io::Result<Self> {
         Ok(Self {
-            uploader: Arc::new(UreqUpload { agent, create_new }),
+            uploader: Arc::new(UreqUpload {
+                pooled,
+                unpooled,
+                create_new,
+            }),
             url,
             auth,
             spool: tempfile::tempfile()?,

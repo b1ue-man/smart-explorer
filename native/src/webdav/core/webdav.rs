@@ -17,16 +17,25 @@ use std::time::Duration;
 use super::multistatus::{
     basename, encode_path, parse_http_date_ms, parse_multistatus, validate_propfind_response,
 };
+use super::status::overload_or_full;
 use super::writer::WebdavWriter;
+
+#[path = "transfer_ops.rs"]
+mod transfer_ops;
 
 fn io_err<E: std::fmt::Display>(e: E) -> io::Error {
     io::Error::other(e.to_string())
 }
 
 fn request_err(error: ureq::Error) -> io::Error {
+    if let Some(mapped) = overload_or_full(&error) {
+        return mapped;
+    }
     let kind = match &error {
         ureq::Error::Status(404, _) => io::ErrorKind::NotFound,
         ureq::Error::Status(412, _) => io::ErrorKind::AlreadyExists,
+        // Only a ranged GET gets it: the file is shorter than the resume point.
+        ureq::Error::Status(416, _) => io::ErrorKind::InvalidData,
         _ => io::ErrorKind::Other,
     };
     io::Error::new(kind, error.to_string())
@@ -34,6 +43,12 @@ fn request_err(error: ureq::Error) -> io::Error {
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const IO_INACTIVITY_TIMEOUT: Duration = Duration::from_secs(60);
+/// Idle connections kept per host by each pooled agent: ureq's overall
+/// default (`max_idle_connections`, 100) instead of its per-host default of
+/// one, so parallel transfers find their connection again instead of paying
+/// TCP and TLS setup per request. The pool never keeps more connections than
+/// were in use at once.
+const IDLE_CONNECTIONS_PER_HOST: usize = 100;
 
 pub struct WebdavConfig {
     pub https: bool,
@@ -50,9 +65,13 @@ pub struct WebdavBackend {
     auth: String, // "Basic ..." (empty = none)
     /// Pooled agent for idempotent reads; ureq replaces stale pooled sockets.
     agent: ureq::Agent,
-    /// Unpooled agent for mutations so ureq cannot replay a DELETE from a stale
-    /// recycled connection after an ambiguous response loss.
+    /// Unpooled agent for DELETE and an empty PUT, which ureq would replay on
+    /// a fresh connection after an ambiguous response loss on a recycled one.
     mutation_agent: ureq::Agent,
+    /// Pooled agent for the mutations ureq never replays: PUT with a body and
+    /// MOVE, MKCOL, COPY (not in its idempotent list; gdrive-ureq-throughput.md
+    /// §8). Saves TCP and TLS setup per upload, folder and rename.
+    write_agent: ureq::Agent,
     /// Display label, consumed by the connect-UI step.
     #[allow(dead_code)]
     url: String,
@@ -75,6 +94,7 @@ impl WebdavBackend {
             .timeout_connect(CONNECT_TIMEOUT)
             .timeout_read(IO_INACTIVITY_TIMEOUT)
             .timeout_write(IO_INACTIVITY_TIMEOUT)
+            .max_idle_connections_per_host(IDLE_CONNECTIONS_PER_HOST)
             .build();
         let mutation_agent = ureq::AgentBuilder::new()
             .timeout_connect(CONNECT_TIMEOUT)
@@ -82,6 +102,13 @@ impl WebdavBackend {
             .timeout_write(IO_INACTIVITY_TIMEOUT)
             .redirects(0)
             .max_idle_connections(0)
+            .build();
+        let write_agent = ureq::AgentBuilder::new()
+            .timeout_connect(CONNECT_TIMEOUT)
+            .timeout_read(IO_INACTIVITY_TIMEOUT)
+            .timeout_write(IO_INACTIVITY_TIMEOUT)
+            .redirects(0)
+            .max_idle_connections_per_host(IDLE_CONNECTIONS_PER_HOST)
             .build();
         let root = if cfg.root.trim().is_empty() {
             "/".to_string()
@@ -96,6 +123,7 @@ impl WebdavBackend {
             auth,
             agent,
             mutation_agent,
+            write_agent,
             identity,
         };
         // Validate credentials / reachability up front.
@@ -146,9 +174,19 @@ impl WebdavBackend {
     }
 
     fn get(&self, path: &str) -> io::Result<ureq::Response> {
+        self.get_from(path, 0)
+    }
+
+    /// GET from byte `offset` (a `Range` request when it is not 0).
+    fn get_from(&self, path: &str, offset: u64) -> io::Result<ureq::Response> {
         for attempt in 0..2 {
-            let request = self.auth_req(self.agent.get(&self.url_for(path)));
-            match request.call() {
+            let request = self.agent.get(&self.url_for(path));
+            let request = if offset == 0 {
+                request
+            } else {
+                request.set("Range", &format!("bytes={offset}-"))
+            };
+            match self.auth_req(request).call() {
                 Ok(response) => return Ok(response),
                 Err(ureq::Error::Transport(_)) if attempt == 0 => continue,
                 Err(error) => return Err(request_err(error)),
@@ -239,8 +277,20 @@ impl Backend for WebdavBackend {
         Ok(Box::new(resp.into_reader()))
     }
 
+    /// A ranged GET resumes; `None` when the server sends the whole file.
+    fn open_read_at(
+        &self,
+        path: &str,
+        id: Option<&str>,
+        offset: u64,
+    ) -> VfsResult<Option<Box<dyn Read + Send>>> {
+        let _ = id;
+        self.read_from(path, offset)
+    }
+
     fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
         Ok(Box::new(WebdavWriter::new(
+            self.write_agent.clone(),
             self.mutation_agent.clone(),
             self.url_for(path),
             self.auth.clone(),
@@ -249,17 +299,35 @@ impl Backend for WebdavBackend {
 
     fn open_write_new(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
         Ok(Box::new(WebdavWriter::new_exclusive(
+            self.write_agent.clone(),
             self.mutation_agent.clone(),
             self.url_for(path),
             self.auth.clone(),
         )?))
     }
 
+    /// With the length known, the PUT streams while it is written instead of
+    /// spooling to a temp file first (stream_put.rs).
+    fn open_write_copy_stage_sized(
+        &self,
+        path: &str,
+        size: u64,
+    ) -> VfsResult<Box<dyn Write + Send>> {
+        self.stage_writer(path, size)
+    }
+
+    /// COPY with `Overwrite: F` into the stage: the bytes never leave the
+    /// server. `None` when the server has no COPY (the engine streams).
+    fn server_copy_to_stage(&self, src: &str, stage: &str, size: u64) -> VfsResult<Option<u64>> {
+        let _ = size;
+        self.copy_to_stage(src, stage)
+    }
+
     fn copy_file(&self, src: &str, dst: &str) -> VfsResult<u64> {
         let staged = crate::vfs::unique_staging_path(self, dst, "copy")?;
         let result = (|| {
             self.mutation(
-                self.mutation_agent
+                self.write_agent
                     .request("COPY", &self.url_for(src))
                     .set("Destination", &self.url_for(&staged))
                     .set("Overwrite", "F"),
@@ -277,7 +345,7 @@ impl Backend for WebdavBackend {
 
     fn rename(&self, src: &str, dst: &str) -> VfsResult<()> {
         self.mutation(
-            self.mutation_agent
+            self.write_agent
                 .request("MOVE", &self.url_for(src))
                 .set("Destination", &self.url_for(dst))
                 .set("Overwrite", "T"),
@@ -288,7 +356,7 @@ impl Backend for WebdavBackend {
 
     fn rename_no_replace(&self, src: &str, dst: &str) -> VfsResult<()> {
         self.mutation(
-            self.mutation_agent
+            self.write_agent
                 .request("MOVE", &self.url_for(src))
                 .set("Destination", &self.url_for(dst))
                 .set("Overwrite", "F"),
@@ -333,7 +401,7 @@ impl Backend for WebdavBackend {
             }
             cur.push_str(part);
             match self
-                .auth_req(self.mutation_agent.request("MKCOL", &self.url_for(&cur)))
+                .auth_req(self.write_agent.request("MKCOL", &self.url_for(&cur)))
                 .call()
             {
                 Ok(response)
@@ -357,6 +425,22 @@ impl Backend for WebdavBackend {
             }
         }
         Ok(())
+    }
+
+    /// One MKCOL; an existing collection is fine.
+    fn create_dir(&self, path: &str) -> VfsResult<()> {
+        self.create_collection(path, false)
+    }
+
+    /// One MKCOL on a free name: 405 means taken (RFC 4918 §9.3.1).
+    fn create_dir_new(&self, path: &str) -> VfsResult<()> {
+        self.create_collection(path, true)
+    }
+
+    /// Stages are created with `If-None-Match: *` or `COPY Overwrite: F`,
+    /// so the name is this client's until it is published.
+    fn discard_copy_stage(&self, stage: &str) -> VfsResult<()> {
+        self.discard_stage(stage)
     }
 
     fn parallelism(&self) -> usize {

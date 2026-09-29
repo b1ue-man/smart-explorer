@@ -1,4 +1,4 @@
-use std::io::{self, Read};
+use std::io;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
 use std::time::{Duration, Instant};
 
@@ -8,9 +8,10 @@ fn io_err<E: std::fmt::Display>(error: E) -> io::Error {
     io::Error::other(error.to_string())
 }
 
-/// Owns the single FTP control connection. A streaming RETR checks the
+/// Owns one FTP control connection. A streaming RETR or STOR checks the
 /// connection out until its data stream is finalized or aborted; other calls
-/// wait rather than issuing commands into an active transfer's response.
+/// wait rather than issuing commands into an active transfer's response. The
+/// backend keeps one for browsing and more for transfers (pool.rs).
 pub(super) struct FtpConnection {
     state: Mutex<ControlState>,
     available: Condvar,
@@ -166,18 +167,28 @@ impl FtpConnection {
         result
     }
 
-    pub(super) fn open_reader(self: &Arc<Self>, path: &str) -> io::Result<FtpReader> {
+    /// Starts a data transfer with `start` and checks the control stream out
+    /// for it; `return_stream` hands it back when the transfer ends, and every
+    /// other call on this connection waits until then. With `replay` a failed
+    /// start is repeated once on a new connection (reads only; STOR is never
+    /// repeated). A `start` that declines without failing (a refused REST)
+    /// still gets the stream checked out; the caller hands it back.
+    pub(super) fn checkout<T>(
+        &self,
+        replay: bool,
+        mut start: impl FnMut(&mut RustlsFtpStream) -> io::Result<T>,
+    ) -> io::Result<(RustlsFtpStream, T)> {
         let mut state = self.wait_for_stream()?;
         self.ensure_healthy(&mut state)?;
-        let data = match state
-            .stream
-            .as_mut()
-            .ok_or_else(|| io_err("FTP-Verbindung ist nicht verfügbar"))?
-            .retr_as_stream(path)
-            .map_err(io_err)
-        {
-            Ok(data) => data,
-            Err(first_error) => {
+        let first = start(
+            state
+                .stream
+                .as_mut()
+                .ok_or_else(|| io_err("FTP-Verbindung ist nicht verfügbar"))?,
+        );
+        let started = match first {
+            Ok(started) => started,
+            Err(first_error) if replay => {
                 state.health = ControlHealth::Suspect;
                 self.reconnect_locked(&mut state).map_err(|reconnect_error| {
                     io::Error::new(
@@ -187,37 +198,41 @@ impl FtpConnection {
                         ),
                     )
                 })?;
-                match state
-                    .stream
-                    .as_mut()
-                    .ok_or_else(|| io_err("FTP-Verbindung ist nicht verfügbar"))?
-                    .retr_as_stream(path)
-                    .map_err(io_err)
-                {
-                    Ok(data) => data,
-                    Err(error) => {
-                        state.health = ControlHealth::Suspect;
-                        state.last_activity = Instant::now();
-                        drop(state);
-                        self.keepalive.wake.notify_all();
-                        return Err(error);
-                    }
+                match start(
+                    state
+                        .stream
+                        .as_mut()
+                        .ok_or_else(|| io_err("FTP-Verbindung ist nicht verfügbar"))?,
+                ) {
+                    Ok(started) => started,
+                    Err(error) => return Err(self.release_failed(state, error)),
                 }
             }
+            Err(error) => return Err(self.release_failed(state, error)),
         };
         let control = state
             .stream
             .take()
             .ok_or_else(|| io_err("FTP-Verbindung ist nicht verfügbar"))?;
         drop(state);
-        Ok(FtpReader {
-            owner: self.clone(),
-            control: Some(control),
-            data: Some(Box::new(data)),
-        })
+        Ok((control, started))
     }
 
-    fn return_stream(&self, stream: RustlsFtpStream, healthy: bool) {
+    /// A failed transfer start: the connection may be out of step with the
+    /// server, so the next call reconnects first.
+    fn release_failed(
+        &self,
+        mut state: MutexGuard<'_, ControlState>,
+        error: io::Error,
+    ) -> io::Error {
+        state.health = ControlHealth::Suspect;
+        state.last_activity = Instant::now();
+        drop(state);
+        self.keepalive.wake.notify_all();
+        error
+    }
+
+    pub(super) fn return_stream(&self, stream: RustlsFtpStream, healthy: bool) {
         let mut state = match self.state.lock() {
             Ok(state) => state,
             Err(poisoned) => poisoned.into_inner(),
@@ -336,54 +351,6 @@ impl Drop for FtpConnection {
         if let Ok(mut stopped) = self.keepalive.stopped.lock() {
             *stopped = true;
             self.keepalive.wake.notify_all();
-        }
-    }
-}
-
-pub(super) struct FtpReader {
-    owner: Arc<FtpConnection>,
-    control: Option<RustlsFtpStream>,
-    data: Option<Box<dyn Read + Send>>,
-}
-
-impl FtpReader {
-    fn close(&mut self, completed: bool) -> io::Result<()> {
-        let Some(mut control) = self.control.take() else {
-            return Ok(());
-        };
-        let result = match self.data.take() {
-            Some(data) if completed => control.finalize_retr_stream(data).map_err(io_err),
-            Some(data) => control.abort(data).map_err(io_err),
-            None => Err(io_err("FTP-Datenstrom fehlt")),
-        };
-        self.owner.return_stream(control, result.is_ok());
-        result
-    }
-}
-
-impl Read for FtpReader {
-    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        if buffer.is_empty() {
-            return Ok(0);
-        }
-        let Some(data) = self.data.as_mut() else {
-            return Ok(0);
-        };
-        match data.read(buffer) {
-            Ok(0) => self.close(true).map(|()| 0),
-            Ok(read) => Ok(read),
-            Err(error) => {
-                let _ = self.close(false);
-                Err(error)
-            }
-        }
-    }
-}
-
-impl Drop for FtpReader {
-    fn drop(&mut self) {
-        if self.data.is_some() {
-            let _ = self.close(false);
         }
     }
 }

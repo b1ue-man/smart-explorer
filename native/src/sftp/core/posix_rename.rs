@@ -2,20 +2,23 @@
 //! existing file; OpenSSH and compatible servers offer
 //! `posix-rename@openssh.com`, which is one `rename(2)` on the server. The
 //! main session (`SftpSession`) does not expose protocol extensions, so the
-//! request runs on a short-lived second SFTP subsystem channel of the same SSH
+//! request runs on a transfer channel of the pool (raw sessions) or, without
+//! one, on a short-lived second SFTP subsystem channel of the same SSH
 //! connection. Servers without the extension keep the explicit refusal.
 use std::io;
 use std::time::Duration;
 
 use russh::client::Msg;
 use russh::Channel;
+use russh_sftp::client::error::Error as SftpError;
 use russh_sftp::client::RawSftpSession;
 use russh_sftp::extensions::HardlinkExtension;
 use russh_sftp::protocol::{Packet, StatusCode};
 
 use super::io_err;
 
-const POSIX_RENAME: &str = "posix-rename@openssh.com";
+/// The extension's name in the VERSION reply.
+pub(super) const POSIX_RENAME: &str = "posix-rename@openssh.com";
 const SUBSYSTEM_DEADLINE: Duration = Duration::from_secs(10);
 /// Per-request limit of the raw session (init, rename).
 const REQUEST_TIMEOUT_SECS: u64 = 20;
@@ -44,18 +47,32 @@ async fn rename_on(session: &RawSftpSession, from: &str, to: &str) -> io::Result
              vorhandene Dateien lassen sich hier nur mit Remote-Agent ersetzen",
         ));
     }
+    rename_request(session, from, to).await.map_err(io_err)?
+}
+
+/// The rename on a session whose server offers the extension. The outer
+/// error is the request's own failure (for classifying the channel), the
+/// inner result the server's answer.
+pub(super) async fn rename_request(
+    session: &RawSftpSession,
+    from: &str,
+    to: &str,
+) -> Result<io::Result<()>, SftpError> {
     // posix-rename carries the same payload as hardlink@openssh.com: two strings.
-    let payload: Vec<u8> = HardlinkExtension {
+    let payload: Vec<u8> = match (HardlinkExtension {
         oldpath: from.to_string(),
         newpath: to.to_string(),
-    }
+    })
     .try_into()
-    .map_err(|error| io::Error::other(format!("posix-rename payload: {error}")))?;
-    match session
-        .extended(POSIX_RENAME, payload)
-        .await
-        .map_err(io_err)?
     {
+        Ok(payload) => payload,
+        Err(error) => {
+            return Ok(Err(io::Error::other(format!(
+                "posix-rename payload: {error}"
+            ))))
+        }
+    };
+    Ok(match session.extended(POSIX_RENAME, payload).await? {
         Packet::Status(status) if status.status_code == StatusCode::Ok => Ok(()),
         Packet::Status(status) => Err(io::Error::other(format!(
             "posix-rename {from} → {to}: {}: {}",
@@ -64,5 +81,5 @@ async fn rename_on(session: &RawSftpSession, from: &str, to: &str) -> io::Result
         _ => Err(io::Error::other(
             "posix-rename: unerwartete Antwort des SFTP-Servers",
         )),
-    }
+    })
 }

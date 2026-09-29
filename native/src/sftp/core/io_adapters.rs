@@ -1,8 +1,8 @@
 use super::connection::{SftpConnection, SftpGeneration};
 use super::io_err;
-use std::io::{self, Read, Write};
+use std::io::{self, Read, SeekFrom, Write};
 use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::runtime::Runtime;
 
 /// `std::io::Read` over a tokio async read half, driven by the backend's runtime
@@ -79,8 +79,22 @@ pub(super) struct SftpReader {
     pub(super) generation: Arc<SftpGeneration>,
     pub(super) path: String,
     pub(super) file: russh_sftp::client::fs::File,
+    /// Offset the reader started at (a resumed download).
+    pub(super) start: u64,
     pub(super) delivered: u64,
     pub(super) retried: bool,
+}
+
+/// Positions a freshly opened main-session file at `start` (no request: an
+/// absolute seek only moves the file's own offset).
+pub(super) async fn seek_start(
+    file: &mut russh_sftp::client::fs::File,
+    start: u64,
+) -> io::Result<()> {
+    if start > 0 {
+        file.seek(SeekFrom::Start(start)).await?;
+    }
+    Ok(())
 }
 
 impl Read for SftpReader {
@@ -101,7 +115,8 @@ impl Read for SftpReader {
                     let generation = self.connection.current()?;
                     let opened = self.rt.block_on(generation.sftp().open(self.path.clone()));
                     match opened {
-                        Ok(file) => {
+                        Ok(mut file) => {
+                            self.rt.block_on(seek_start(&mut file, self.start))?;
                             self.generation = generation;
                             self.file = file;
                         }
