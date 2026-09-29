@@ -94,9 +94,11 @@ fn direct_open_task_real_direct_and_room_reconnect_through_daemon_without_replay
         let source = Arc::new(InterruptingPeer { fixture: fixture.clone(), peer: peer.clone(),
             opens: AtomicUsize::new(0), revoke: false });
         let bridge = crate::daemon::DirectOpenTaskBridge::new(source.clone()).unwrap();
+        let cached = crate::vfs::CachingBackend::new(bridge.backend.clone());
+        cached.list_dir("/A").unwrap();
         let dest = tempfile::tempdir().unwrap();
         let path = dest.path().join("photo Ü #.jpg");
-        crate::transfer::download_for_edit(&*bridge.backend, "/A/photo Ü #.jpg", None, &path).unwrap();
+        crate::transfer::download_for_edit(&cached, "/A/photo Ü #.jpg", None, &path).unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), contents);
         assert_eq!(source.opens.load(Ordering::SeqCst), 2);
         assert_eq!(std::fs::read_dir(dest.path()).unwrap().count(), 1);

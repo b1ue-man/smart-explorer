@@ -41,9 +41,9 @@ impl Read for BrokenReader {
 impl Backend for Source {
     fn scheme(&self) -> Scheme { self.scheme }
     fn root_display(&self) -> String { "/".into() }
-    fn list_dir(&self, _: &str) -> io::Result<Vec<VfsMeta>> { Ok(Vec::new()) }
+    fn list_dir(&self, _: &str) -> io::Result<Vec<VfsMeta>> { Ok(vec![self.stat("/file")?]) }
     fn stat(&self, _: &str) -> io::Result<VfsMeta> {
-        Ok(VfsMeta { size: self.metadata_size,
+        Ok(VfsMeta { name: "file".into(), size: self.metadata_size,
             mtime_ms: if self.drift && self.opens.load(Ordering::SeqCst) > 0 { 8 } else { 7 },
             id: Some("path-item".into()), ..Default::default() })
     }
@@ -130,9 +130,12 @@ fn direct_open_task_changed_truncated_and_grown_source_never_publish() {
         Source { bytes: vec![b'B'; 1025], ..Default::default() },
         Source { metadata_size: 0, ..Default::default() },
     ] {
+        let source = Arc::new(source);
+        let cached = crate::vfs::CachingBackend::new(source.clone());
+        cached.list_dir("/").unwrap();
         let temporary = tempfile::tempdir().unwrap();
         let destination = temporary.path().join("file");
-        assert!(download_for_edit(&source, "/file", None, &destination).is_err());
+        assert!(download_for_edit(&cached, "/file", None, &destination).is_err());
         assert_eq!(source.opens.load(Ordering::SeqCst), 1);
         assert_no_parts(temporary.path(), false);
     }

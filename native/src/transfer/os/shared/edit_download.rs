@@ -84,6 +84,11 @@ fn download_once(
     dest: &Path,
 ) -> Result<(String, i64), DownloadFailure> {
     let peer = backend.scheme() == Scheme::Peer;
+    if peer {
+        // Desktop Share is wrapped in the browsing metadata cache. A cached
+        // listing is not evidence of the revision delivered by this attempt.
+        backend.invalidate_cache();
+    }
     let metadata = match backend.stat(path) {
         Ok(meta) if !meta.is_dir => Some(meta),
         Ok(_) => None,
@@ -111,6 +116,7 @@ fn download_once(
         output.flush().and_then(|()| output.sync_all())
             .map_err(|error| DownloadFailure::Local(error.to_string()))?;
         if peer && metadata.is_some() {
+            backend.invalidate_cache();
             let current = backend.stat(path).map_err(DownloadFailure::Remote)?;
             if !metadata.as_ref().is_some_and(|before| same_revision(before, &current)) {
                 return Err(DownloadFailure::Local(
