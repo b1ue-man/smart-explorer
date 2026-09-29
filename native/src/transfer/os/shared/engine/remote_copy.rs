@@ -5,7 +5,7 @@
 use super::ops::{At, Meter, OpError, OpResult, Outcome, COPY_BUFFER, STREAM_DEPTH};
 use super::publish::{self, Destination};
 use super::queue::FileWork;
-use super::source::RemoteCheck;
+use super::source::{unchanged_since_listing, RemoteCheck};
 use super::Engine;
 use crate::vfs::Backend;
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -86,6 +86,12 @@ fn server_copy(
                 if engine.stopped() {
                     publish::discard(engine, pair.target, &stage);
                     return Err(OpError::canceled());
+                }
+                // The server copied whatever the source was by then: it is
+                // published only while that is still the listed file (K21).
+                if let Err(changed) = unchanged_since_listing(pair.source, file) {
+                    publish::discard(engine, pair.target, &stage);
+                    return Err(changed);
                 }
                 return publish::publish(engine, pair.target, file, &stage, path).map(Some);
             }

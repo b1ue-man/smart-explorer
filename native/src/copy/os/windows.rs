@@ -38,10 +38,19 @@ extern "system" {
     ) -> i32;
 }
 
-pub(super) fn same_file(left: &Path, right: &Path) -> io::Result<bool> {
-    let left = crate::local_access::open_read(left)?;
-    let right = crate::local_access::open_read(right)?;
-    Ok(file_identity(&left)? == file_identity(&right)?)
+/// Which file `path` names, through a handle that may only read attributes
+/// (an unreadable destination can still be compared and replaced); a
+/// reparse point is identified itself, never its target.
+pub(super) fn path_identity(path: &Path) -> io::Result<FileIdentity> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
+    };
+    let file = std::fs::OpenOptions::new()
+        .access_mode(FILE_READ_ATTRIBUTES)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(crate::local_access::normalize_scan_root(path))?;
+    file_identity(&file)
 }
 
 pub(super) fn file_identity(file: &File) -> io::Result<FileIdentity> {

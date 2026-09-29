@@ -70,10 +70,7 @@ pub(super) fn move_whole_roots(engine: &Engine<'_>, plan: &mut RootPlan) {
             return true;
         }
         let source = native(&root.path);
-        let plain_dir = crate::local_access::symlink_metadata(&source).is_ok_and(|metadata| {
-            metadata.is_dir() && !crate::local_access::metadata_is_link_like(&source, &metadata)
-        });
-        if !plain_dir {
+        if !plain_dir(&source) {
             return true;
         }
         if let Some(parent) = parent_rel(&root.rel) {
@@ -92,14 +89,17 @@ pub(super) fn move_whole_roots(engine: &Engine<'_>, plan: &mut RootPlan) {
     });
 }
 
-/// Removes the source folders a per-file move emptied.
+/// Removes the source folders a per-file move emptied, only where the
+/// folder exists at the target (a folder the target refused, or one a stop
+/// left out, stays at the source even when empty).
 pub(super) fn prune_moved_dirs(engine: &Engine<'_>, plan: &RootPlan) {
     if !engine.is_move() {
         return;
     }
     let dirs: Vec<PathBuf> = std::mem::take(&mut *super::lock(&engine.moved_dirs))
-        .iter()
-        .map(|dir| native(dir))
+        .into_iter()
+        .filter(|(_, rel)| plain_dir(&native(&engine.folders.path_of(rel))))
+        .map(|(source, _)| native(&source))
         .collect();
     if dirs.is_empty() {
         return;
@@ -112,4 +112,11 @@ pub(super) fn prune_moved_dirs(engine: &Engine<'_>, plan: &RootPlan) {
     for (path, detail) in crate::copy::prune_empty_dirs(&roots, &dirs) {
         engine.issue(&path, &detail);
     }
+}
+
+/// A folder that is no link, junction or other reparse point.
+fn plain_dir(path: &std::path::Path) -> bool {
+    crate::local_access::symlink_metadata(path).is_ok_and(|metadata| {
+        metadata.is_dir() && !crate::local_access::metadata_is_link_like(path, &metadata)
+    })
 }

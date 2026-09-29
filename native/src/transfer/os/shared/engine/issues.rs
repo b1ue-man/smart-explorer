@@ -54,6 +54,16 @@ impl IssueLog {
 
     /// Records one issue; `path` is empty for problems of the whole job.
     pub(crate) fn push(&self, path: &str, message: &str) {
+        self.record(path, message, false);
+    }
+
+    /// Records why the whole job ended: shown first in the terminal message,
+    /// however many issues came before it.
+    pub(crate) fn push_first(&self, path: &str, message: &str) {
+        self.record(path, message, true);
+    }
+
+    fn record(&self, path: &str, message: &str, first: bool) {
         let message = bounded(message);
         self.total.fetch_add(1, Ordering::AcqRel);
         {
@@ -61,11 +71,15 @@ impl IssueLog {
                 .shown
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if shown.len() < SHOWN_ISSUES {
-                shown.push(TransferIssue {
-                    path: path.to_string(),
-                    message: message.clone(),
-                });
+            let issue = TransferIssue {
+                path: path.to_string(),
+                message: message.clone(),
+            };
+            if first {
+                shown.insert(0, issue);
+                shown.truncate(SHOWN_ISSUES);
+            } else if shown.len() < SHOWN_ISSUES {
+                shown.push(issue);
             }
         }
         self.write(path, &message);
@@ -208,6 +222,27 @@ mod tests {
         assert_eq!(
             bounded(&"x".repeat(10_000)).len(),
             MAX_MESSAGE_BYTES + '…'.len_utf8()
+        );
+    }
+
+    #[test]
+    fn transfer_engine_task_issue_log_shows_the_end_of_a_job_first() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let log = IssueLog::new(8, dir.path().to_path_buf());
+        for index in 0..(SHOWN_ISSUES + 20) {
+            log.push(&format!("/src/f{index}"), "kaputt");
+        }
+        log.push_first("", "Übertragung beendet: das Ziel ist voll");
+        let (shown, display) = log.shown();
+        assert_eq!(shown.len(), SHOWN_ISSUES);
+        assert_eq!(display[0], "Übertragung beendet: das Ziel ist voll");
+        assert_eq!(display[1], "/src/f0: kaputt");
+        assert_eq!(log.total(), SHOWN_ISSUES as u64 + 21);
+        let text = std::fs::read_to_string(log.log_path().expect("log")).expect("log readable");
+        assert_eq!(
+            text.lines().count(),
+            SHOWN_ISSUES + 21,
+            "the log keeps every line"
         );
     }
 }

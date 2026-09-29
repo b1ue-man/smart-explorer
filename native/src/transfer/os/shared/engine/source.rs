@@ -1,8 +1,9 @@
 //! Change detection on the source side. A local source is observed when it
 //! is opened and again after the copy (size, times, and that the path still
-//! names the opened file). A remote source must deliver exactly the listed
-//! length; Drive's listed MD5 is checked while streaming, other providers get
-//! one stat after reading, before anything is published (K21).
+//! names the opened file); in a packet before the chunk that completes it. A
+//! remote source must deliver exactly the listed length; Drive's listed MD5
+//! is checked while streaming, other providers (and server-side copies) get
+//! one stat before anything is published (K21).
 use super::super::engine_policy::listed_time_differs;
 use super::super::walk_listers::native;
 use super::ops::OpError;
@@ -109,9 +110,40 @@ impl LocalSource {
         self.verify()
     }
 
-    /// Hands the open file to a streaming reader (batches).
-    pub(crate) fn file_mut(&mut self) -> &mut File {
-        &mut self.file
+    /// Next bytes of a packet entry after `sent`, never beyond the opened
+    /// length. The chunk that completes the entry comes only when the file
+    /// ends there and did not change, so a packet never publishes a file
+    /// that changed while it was read.
+    pub(crate) fn read_entry(&mut self, buffer: &mut [u8], sent: u64) -> Result<usize, OpError> {
+        let remaining = self.before.length.saturating_sub(sent);
+        let wanted = remaining.min(buffer.len() as u64) as usize;
+        let read = loop {
+            match self.file.read(&mut buffer[..wanted]) {
+                Ok(read) => break read,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(OpError::source(error)),
+            }
+        };
+        if read == 0 && wanted > 0 {
+            return Err(changed(&self.display));
+        }
+        if read as u64 == remaining {
+            self.check_end()?;
+        }
+        Ok(read)
+    }
+
+    /// The opened length was read: no byte follows, nothing changed.
+    fn check_end(&mut self) -> Result<(), OpError> {
+        let mut probe = [0u8; 1];
+        loop {
+            match self.file.read(&mut probe) {
+                Ok(0) => return self.verify(),
+                Ok(_) => return Err(grown(&self.display)),
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(OpError::source(error)),
+            }
+        }
     }
 }
 
@@ -217,24 +249,33 @@ impl RemoteCheck {
                 Err(changed(&file.source))
             };
         }
-        let now = backend
-            .stat(&file.source)
-            .map_err(|error| match error.kind() {
-                io::ErrorKind::NotFound => changed(&file.source),
-                _ => OpError::source(error),
-            })?;
-        let same_id = match (&now.id, &file.id) {
-            (Some(now), Some(listed)) => now == listed,
-            _ => true,
-        };
-        if now.is_dir
-            || now.is_symlink
-            || now.size != file.size
-            || listed_time_differs(file.mtime_ms, now.mtime_ms)
-            || !same_id
-        {
-            return Err(changed(&file.source));
-        }
-        Ok(())
+        unchanged_since_listing(backend, file)
     }
+}
+
+/// One stat of a remote source: still the file the listing showed (size,
+/// time at the listing's grain, backend id).
+pub(crate) fn unchanged_since_listing(
+    backend: &dyn Backend,
+    file: &FileWork,
+) -> Result<(), OpError> {
+    let now = backend
+        .stat(&file.source)
+        .map_err(|error| match error.kind() {
+            io::ErrorKind::NotFound => changed(&file.source),
+            _ => OpError::source(error),
+        })?;
+    let same_id = match (&now.id, &file.id) {
+        (Some(now), Some(listed)) => now == listed,
+        _ => true,
+    };
+    if now.is_dir
+        || now.is_symlink
+        || now.size != file.size
+        || listed_time_differs(file.mtime_ms, now.mtime_ms)
+        || !same_id
+    {
+        return Err(changed(&file.source));
+    }
+    Ok(())
 }

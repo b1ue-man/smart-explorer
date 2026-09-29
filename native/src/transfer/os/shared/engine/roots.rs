@@ -189,15 +189,13 @@ fn plan_pairs(
                 planned
             }
         };
-        let work = FileWork {
-            source: pair.source.clone(),
-            rel: with_first(&pair.rel, &planned),
-            size: pair.size.unwrap_or(0),
-            mtime_ms: pair.mtime_ms,
-            id: pair.id.clone(),
-            md5: None,
-            retried: false,
-        };
+        let mut work = FileWork::new(
+            pair.source.clone(),
+            with_first(&pair.rel, &planned),
+            pair.size.unwrap_or(0),
+            pair.mtime_ms,
+        );
+        work.id = pair.id.clone();
         plan.pairs.push((work, pair.size.is_some()));
     }
     Ok(plan)

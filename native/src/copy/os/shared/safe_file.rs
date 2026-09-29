@@ -58,9 +58,7 @@ pub(crate) fn transfer_local(
         )));
     }
     let requested = request.target.to_path_buf();
-    let Some(mut target) =
-        select_initial_target(src, &requested, request.conflict).map_err(LocalFailure::Target)?
-    else {
+    let Some(mut target) = select_initial_target(src, &requested, request.conflict)? else {
         return Ok(LocalOutcome::Skipped);
     };
     if request.cancel.load(Ordering::Acquire) {
@@ -263,41 +261,54 @@ fn restore_failure(
 }
 
 /// "Keep both" starts at the requested name and only probes on a conflict;
-/// "skip" and "overwrite" look at the destination first.
+/// "skip" and "overwrite" look at the destination first. A problem with the
+/// one existing destination file is this file's failure, never the whole
+/// target's; a source that cannot be read is the source's (a protected one
+/// asks for read access).
 fn select_initial_target(
     src: &Path,
     target: &Path,
     conflict: Conflict,
-) -> io::Result<Option<PathBuf>> {
+) -> Result<Option<PathBuf>, LocalFailure> {
     if conflict == Conflict::Rename {
         return Ok(Some(target.to_path_buf()));
     }
-    let Some(metadata) = metadata_if_exists(target)? else {
+    let Some(metadata) = metadata_if_exists(target).map_err(LocalFailure::Target)? else {
         return Ok(Some(target.to_path_buf()));
     };
     if conflict == Conflict::Skip {
         return Ok(None);
     }
     if metadata.is_dir() {
-        return Err(io::Error::new(
+        return Err(LocalFailure::Target(io::Error::new(
             io::ErrorKind::AlreadyExists,
             format!("destination is a directory: {}", target.display()),
-        ));
+        )));
     }
     if platform::metadata_is_link_like(&metadata) {
-        return Err(io::Error::new(
+        return Err(LocalFailure::Target(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!(
                 "destination is a link or reparse point: {}",
                 target.display()
             ),
-        ));
+        )));
     }
-    if platform::same_file(src, target)? {
-        return Err(io::Error::new(
+    let source = platform::path_identity(src).map_err(LocalFailure::Source)?;
+    let existing = platform::path_identity(target).map_err(|error| {
+        LocalFailure::Publish(io::Error::new(
+            error.kind(),
+            format!(
+                "{}: vorhandene Zieldatei nicht prüfbar: {error}",
+                target.display()
+            ),
+        ))
+    })?;
+    if source == existing {
+        return Err(LocalFailure::Target(io::Error::new(
             io::ErrorKind::InvalidInput,
             "source and destination are the same file",
-        ));
+        )));
     }
     Ok(Some(target.to_path_buf()))
 }
