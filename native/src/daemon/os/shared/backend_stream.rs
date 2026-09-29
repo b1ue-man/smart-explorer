@@ -108,20 +108,16 @@ pub(super) fn handle_write_backend(
         }
     };
     drop(writer);
-    if let Err(error) = transfer {
-        // A nested writer may have committed before its final acknowledgement
-        // was lost. Path-based cleanup could delete a replacement entry.
-        return Err(error);
-    }
+    // A nested writer may have committed before its final acknowledgement
+    // was lost. Path-based cleanup could delete a replacement entry.
+    transfer?;
     let promotion = if replace_after_upload {
         crate::vfs::promote_staged_replace(&**backend, &staged, path)
     } else {
         Ok(())
     };
-    if let Err(error) = promotion {
-        // Promotion responses are ambiguous across reconnects. Preserve the
-        // staging name as recovery evidence instead of deleting by spelling.
-        return Err(error);
-    }
+    // Promotion responses are ambiguous across reconnects. Preserve the
+    // staging name as recovery evidence instead of deleting by spelling.
+    promotion?;
     emit(sink, id, &Frame::Ok)
 }

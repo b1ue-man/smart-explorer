@@ -53,6 +53,11 @@ pub struct VfsChangeBatch {
 
 pub type VfsResult<T> = io::Result<T>;
 
+/// The default answer of an optional backend capability.
+pub(crate) fn unsupported<T>(what: &str) -> VfsResult<T> {
+    Err(io::Error::new(io::ErrorKind::Unsupported, what.to_string()))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeleteDisposition {
     Recycle,

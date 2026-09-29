@@ -14,6 +14,7 @@ pub(super) const CONTROL_STREAM_RESERVE: u32 = 4;
 /// Transfers one connection runs at once: its streams minus the reserve.
 pub(super) const TRANSFER_STREAMS_PER_CONNECTION: u32 =
     IROH_MAX_CONCURRENT_BIDI_STREAMS - CONTROL_STREAM_RESERVE;
+const _: () = assert!(TRANSFER_STREAMS_PER_CONNECTION > 0 && CONTROL_STREAM_RESERVE > 0);
 /// Bytes one stream may have in flight (research §3.1, ref A.4): 1 Gbit/s at
 /// a 100 ms round trip is 12.5 MB, so 16 MiB lets one file fill such a link;
 /// noq's default (1.25 MB, sized for 100 Mbit/s at 100 ms) caps it there.
@@ -198,6 +199,5 @@ mod tests {
         );
         assert_eq!(transport_windows(2048 * MIB).connection, 64 * MIB as u32);
         assert_eq!(TRANSFER_STREAMS_PER_CONNECTION, 60);
-        assert!(TRANSFER_STREAMS_PER_CONNECTION < IROH_MAX_CONCURRENT_BIDI_STREAMS);
     }
 }

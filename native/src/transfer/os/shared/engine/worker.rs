@@ -86,7 +86,6 @@ pub(super) fn run_file(engine: &Engine<'_>, mut file: FileWork, buffer: &mut [u8
         let meter = Meter::new(&permits, &engine.stats);
         let result = ops::transfer(engine, &file, parent_created, &mut carry, &meter, buffer);
         let moved = meter.moved();
-        drop(meter);
         permits.finish(match &result {
             Ok(_) => OpOutcome::Done,
             Err(failure) => classify_error(&failure.error),

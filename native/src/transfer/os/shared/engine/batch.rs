@@ -136,7 +136,6 @@ fn upload(engine: &Engine<'_>, target: &dyn Backend, files: Vec<FileWork>, buffe
         target.put_batch(&entries, &mut data)
     };
     let moved = meter.moved();
-    drop(meter);
     permits.finish(match &result {
         Ok(_) => OpOutcome::Done,
         Err(error) => classify_error(error),

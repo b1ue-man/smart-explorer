@@ -76,7 +76,7 @@ impl Prefetcher {
     fn update(&self, change: impl FnOnce(&mut Window) -> BTreeMap<usize, FetchHandle>) {
         let dropped = {
             let mut window = self.lock();
-            change(&mut *window)
+            change(&mut window)
         };
         drop(dropped);
         self.changed.notify_all();

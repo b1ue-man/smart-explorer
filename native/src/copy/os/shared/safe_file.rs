@@ -351,7 +351,7 @@ fn metadata_if_exists(path: &Path) -> io::Result<Option<std::fs::Metadata>> {
 #[cfg(test)]
 #[derive(Debug)]
 pub(super) enum TransferResult {
-    Completed(u64),
+    Completed,
     Skipped,
     Canceled,
 }
@@ -374,7 +374,7 @@ pub(super) fn transfer_file(
         cancel,
     };
     match transfer_local(&request, &mut |_| {}) {
-        Ok(LocalOutcome::Completed { bytes, .. }) => Ok(TransferResult::Completed(bytes)),
+        Ok(LocalOutcome::Completed { .. }) => Ok(TransferResult::Completed),
         Ok(LocalOutcome::Skipped) => Ok(TransferResult::Skipped),
         Ok(LocalOutcome::Canceled) => Ok(TransferResult::Canceled),
         Err(failure) => Err(failure.into_error()),

@@ -74,7 +74,6 @@ pub(super) fn download(
         (result, sink.outcomes)
     };
     let moved = meter.moved();
-    drop(meter);
     permits.finish(match &result {
         Ok(()) => super::super::flow_control::OpOutcome::Done,
         Err(error) => super::super::flow::classify_error(error),
