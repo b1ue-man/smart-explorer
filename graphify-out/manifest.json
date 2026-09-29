@@ -5,9 +5,9 @@
     "semantic_hash": "293044671d9f4349cb81b9b695916087"
   },
   "agent/core/backend.rs": {
-    "mtime": 1790647080.4222171,
-    "ast_hash": "cdee0e4d0bba4697e192b12da6173352",
-    "semantic_hash": "cdee0e4d0bba4697e192b12da6173352"
+    "mtime": 1790653289.4691117,
+    "ast_hash": "7d3bb1f1648129b4a67dbf2830439385",
+    "semantic_hash": "7d3bb1f1648129b4a67dbf2830439385"
   },
   "agent/core/batch_get.rs": {
     "mtime": 1790641141.4265037,
@@ -95,9 +95,9 @@
     "semantic_hash": "7980efd019d8509bba922fe6623a3708"
   },
   "agent/core/transfer_engine_task_service_tests.rs": {
-    "mtime": 1790645583.0344925,
-    "ast_hash": "3b1b9b304f7ccea02d2d4231a20d64da",
-    "semantic_hash": "3b1b9b304f7ccea02d2d4231a20d64da"
+    "mtime": 1790653289.4691117,
+    "ast_hash": "a0c221ff6d83b04451ab9f64592eca4d",
+    "semantic_hash": "a0c221ff6d83b04451ab9f64592eca4d"
   },
   "agent/core/transfer_engine_task_tests.rs": {
     "mtime": 1790647246.7313,
@@ -1530,9 +1530,9 @@
     "semantic_hash": "338539dba7798c76ee99dc9d349d6c6f"
   },
   "bisync/os/shared/incremental.rs": {
-    "mtime": 1790158577.4453125,
-    "ast_hash": "f1df87b42eac7740bc3e92c75db27cbc",
-    "semantic_hash": "f1df87b42eac7740bc3e92c75db27cbc"
+    "mtime": 1790656250.513832,
+    "ast_hash": "d18ddf332bd1f0f468d97061225e4553",
+    "semantic_hash": "d18ddf332bd1f0f468d97061225e4553"
   },
   "bisync/os/shared/incremental_changes.rs": {
     "mtime": 1790158788.5594146,
@@ -1620,9 +1620,9 @@
     "semantic_hash": "63ae4da46c1bc881a3229eab765a2866"
   },
   "bisync/os/shared/state_store.rs": {
-    "mtime": 1783645510.608433,
-    "ast_hash": "aeb8b79187746106f31806341e0ff19a",
-    "semantic_hash": "aeb8b79187746106f31806341e0ff19a"
+    "mtime": 1790656246.2967794,
+    "ast_hash": "fa905a0410ea7a3721d5e7d226892fae",
+    "semantic_hash": "fa905a0410ea7a3721d5e7d226892fae"
   },
   "bisync/os/shared/state_types.rs": {
     "mtime": 1783643597.5127542,
@@ -1630,9 +1630,9 @@
     "semantic_hash": "ded57079d4a6292cbd1587e2d41a7881"
   },
   "bisync/os/shared/state_validation.rs": {
-    "mtime": 1783645518.6126442,
-    "ast_hash": "04ff5e0cc9ee03cafd6b9066f0e39671",
-    "semantic_hash": "04ff5e0cc9ee03cafd6b9066f0e39671"
+    "mtime": 1790656246.2967794,
+    "ast_hash": "7d7dcf417911e64fd14c1bb222f64d73",
+    "semantic_hash": "7d7dcf417911e64fd14c1bb222f64d73"
   },
   "bisync/os/shared/sync_flows.rs": {
     "mtime": 1790648663.5179446,
@@ -1705,9 +1705,9 @@
     "semantic_hash": "c270d64b0e95deae9a829f90ee72dbff"
   },
   "bisync/os/shared/tests/state_store.rs": {
-    "mtime": 1783645161.9961426,
-    "ast_hash": "b4a058608e21624b4ebecc2457e2fc1b",
-    "semantic_hash": "b4a058608e21624b4ebecc2457e2fc1b"
+    "mtime": 1790656264.0610015,
+    "ast_hash": "3b0ee63ab11b11bd79c1b7eded47e6e7",
+    "semantic_hash": "3b0ee63ab11b11bd79c1b7eded47e6e7"
   },
   "bisync/os/windows/link_fixture.rs": {
     "mtime": 1790159157.2347825,
@@ -2780,9 +2780,9 @@
     "semantic_hash": "4ba06a8f1269d134b65d2ae69cb8bbc5"
   },
   "ftp/core/ftp.rs": {
-    "mtime": 1790641767.5502558,
-    "ast_hash": "3256db72cdbef1c0448da0d5274dbb52",
-    "semantic_hash": "3256db72cdbef1c0448da0d5274dbb52"
+    "mtime": 1790656726.2475953,
+    "ast_hash": "f4a68674b9ea8416da4e1facecd60c9d",
+    "semantic_hash": "f4a68674b9ea8416da4e1facecd60c9d"
   },
   "ftp/core/ftp_tests.rs": {
     "mtime": 1790640528.1280043,
@@ -2805,9 +2805,9 @@
     "semantic_hash": "b5c8c1442e869fd15bda2851d80033a3"
   },
   "ftp/core/staging.rs": {
-    "mtime": 1790415296.3145523,
-    "ast_hash": "038a8d4db71e232184548c9dbc972512",
-    "semantic_hash": "038a8d4db71e232184548c9dbc972512"
+    "mtime": 1790656729.8636372,
+    "ast_hash": "2712d75493eac714222e3782647ae412",
+    "semantic_hash": "2712d75493eac714222e3782647ae412"
   },
   "ftp/core/streams.rs": {
     "mtime": 1790641900.849911,
@@ -3430,9 +3430,9 @@
     "semantic_hash": "2698c5ca53d823eca1433b30c6822442"
   },
   "mobile/os/shared/transfer_tests.rs": {
-    "mtime": 1790640127.2662199,
-    "ast_hash": "c550fb5f799cb4d5ef00c2136603330c",
-    "semantic_hash": "c550fb5f799cb4d5ef00c2136603330c"
+    "mtime": 1790652537.3284278,
+    "ast_hash": "dce7e3434e68ed7fae0027b7d6d94cb9",
+    "semantic_hash": "dce7e3434e68ed7fae0027b7d6d94cb9"
   },
   "mobile/os/shared/trash.rs": {
     "mtime": 1790358470.0323265,
@@ -4295,9 +4295,9 @@
     "semantic_hash": "38927a04fca05c97eaf986f326957f50"
   },
   "sftp/core/pipelined_read.rs": {
-    "mtime": 1790643349.757897,
-    "ast_hash": "521422728041f2b062f22afdd6f2b735",
-    "semantic_hash": "521422728041f2b062f22afdd6f2b735"
+    "mtime": 1790659252.2306552,
+    "ast_hash": "2c2cebff77d9ef1d1c4504224e37433a",
+    "semantic_hash": "2c2cebff77d9ef1d1c4504224e37433a"
   },
   "sftp/core/pool_reader.rs": {
     "mtime": 1790643356.4959834,
@@ -4335,9 +4335,9 @@
     "semantic_hash": "8e60305eb55baa49f623dfcd51054b47"
   },
   "sftp/core/transfer_engine_task_tests.rs": {
-    "mtime": 1790643356.546984,
-    "ast_hash": "25dd9ac35cf7f1c086445e988b2c7ea8",
-    "semantic_hash": "25dd9ac35cf7f1c086445e988b2c7ea8"
+    "mtime": 1790653643.116625,
+    "ast_hash": "d2af955068c9ebc4dc6880be12a3a795",
+    "semantic_hash": "d2af955068c9ebc4dc6880be12a3a795"
   },
   "sftp/core/transfer_ops.rs": {
     "mtime": 1790639748.8964715,
@@ -5925,9 +5925,9 @@
     "semantic_hash": "405523efd82b538ff66e41d53c1e431a"
   },
   "transfer/os/shared/engine/queue.rs": {
-    "mtime": 1790648751.6680295,
-    "ast_hash": "b58f255e5d1922fc4a062384756644da",
-    "semantic_hash": "b58f255e5d1922fc4a062384756644da"
+    "mtime": 1790656410.728836,
+    "ast_hash": "d7238241757532a713ec46a6d8a7d088",
+    "semantic_hash": "d7238241757532a713ec46a6d8a7d088"
   },
   "transfer/os/shared/engine/remote_copy.rs": {
     "mtime": 1790648983.5188925,
@@ -6340,9 +6340,9 @@
     "semantic_hash": "70e388db17666786a4e24dd804002131"
   },
   "vfs/core/tests.rs": {
-    "mtime": 1790417125.2975042,
-    "ast_hash": "974ab238dca0fc2dfe0364e1513a07c8",
-    "semantic_hash": "974ab238dca0fc2dfe0364e1513a07c8"
+    "mtime": 1790656264.0620015,
+    "ast_hash": "65cd67bf0e2856ea7256887ed2bc017b",
+    "semantic_hash": "65cd67bf0e2856ea7256887ed2bc017b"
   },
   "vfs/core/vault_cache_task_tests.rs": {
     "mtime": 1788858959.156987,
