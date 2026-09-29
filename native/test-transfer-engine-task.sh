@@ -5,9 +5,13 @@
 #
 #   --check   narrow compile check while the batch is being built: the batch
 #             gates only (rustfmt of every changed file, clippy for the host and
-#             the Windows target over all targets, diagnostics on changed lines
-#             fail). No tests run.
-#   (none)    the complete suite: batch gates plus every milestone test.
+#             the Windows target over all targets; diagnostics on changed lines
+#             are reported). No tests run.
+#   (none)    the complete suite: gating batch gates, every milestone test
+#             (`transfer_engine_task_`), the copy/paste safety tests, the tests
+#             of every module the batch touched and, on Linux, transfers
+#             against SFTP/FTP containers (plain and over a shaped link) and
+#             the Share Room end-to-end run with real binaries.
 set -Eeuo pipefail
 
 usage() {
@@ -27,10 +31,6 @@ for argument in "$@"; do
         *) usage; exit 2 ;;
     esac
 done
-if [[ "$suite_mode" != check ]]; then
-    echo "the milestone suite is not defined yet; use --check" >&2
-    exit 2
-fi
 
 case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*|Windows_NT) platform=windows ;;
@@ -197,5 +197,208 @@ for clippy_target in "${clippy_targets[@]}"; do
     echo "transfer engine task suite: clippy ($clippy_target) is clean on the lines this batch changed"
 done
 
+if [[ "$suite_mode" == check ]]; then
+    suite_succeeded=true
+    echo "transfer engine task suite: batch gates passed (check)"
+    exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Milestone tests: every `transfer_engine_task_` test of the library. The
+# compiled list is the truth of what runs; the source is compared against it
+# so a test module that silently stopped compiling (a lost `mod` line, a
+# wrong cfg) fails the suite instead of shrinking it.
+milestone_log="$suite_tmp/milestones.log"
+echo "transfer engine task suite: milestone tests ($platform)"
+(
+    cd "$repo_root/native"
+    run_task cargo test --locked --lib transfer_engine_task_ -- --test-threads=1
+) 2>&1 | tee "$milestone_log"
+passed_line="$(grep -E '^test result: ok\. [0-9]+ passed; 0 failed' "$milestone_log" | head -n 1 || true)"
+if [[ -z "$passed_line" ]]; then
+    echo "milestone tests did not pass" >&2
+    exit 1
+fi
+mapfile -t source_tests < <(
+    grep -rhoE 'fn transfer_engine_task_[A-Za-z0-9_]+' "$repo_root/native/src" |
+        sed 's/^fn //' | sort -u
+)
+mapfile -t compiled_tests < <(
+    { grep -oE '^test [^ ]+ \.\.\. (ok|ignored)' "$milestone_log" || true; } |
+        awk '{print $2}' | sed 's/.*:://' | sort -u
+)
+mapfile -t missing_tests < <(comm -23 <(printf '%s\n' "${source_tests[@]}") \
+    <(printf '%s\n' "${compiled_tests[@]}"))
+unexpected=()
+for name in "${missing_tests[@]}"; do
+    [[ -z "$name" ]] && continue
+    defined_in="$(grep -rlE "fn ${name}\b" "$repo_root/native/src" | head -n 1)"
+    case "$platform:$defined_in" in
+        # Windows-only modules and Windows adapters do not exist on Linux.
+        linux:*/virtual_clipboard/*|linux:*/dragout/*|linux:*/os/windows*|linux:*/windows/*) ;;
+        # Unix adapters do not exist on Windows.
+        windows:*/os/linux_os*|windows:*/os/unix*|windows:*/linux_os/*|windows:*/mobile/*) ;;
+        *) unexpected+=("$name ($defined_in)") ;;
+    esac
+done
+if [[ "${#unexpected[@]}" -ne 0 ]]; then
+    printf 'not compiled on %s: %s\n' "$platform" "${unexpected[@]}" >&2
+    echo "milestone tests defined in the source did not run" >&2
+    exit 1
+fi
+echo "transfer engine task suite: ${#compiled_tests[@]} milestone tests passed ($passed_line)"
+
+# ---------------------------------------------------------------------------
+# The copy/paste safety tests (foreign data survives, no unsafe fallback,
+# changed sources stay unpublished, acknowledged commits count) through the
+# engine; they are ignored by default and need their fixture switch.
+copy_paste_log="$suite_tmp/copy-paste.log"
+echo "transfer engine task suite: copy/paste safety tests"
+(
+    cd "$repo_root/native"
+    SMART_EXPLORER_COPY_PASTE_TASK=1 run_task cargo test --locked --lib copy_paste_task_transfer_ \
+        -- --ignored --test-threads=1
+) 2>&1 | tee "$copy_paste_log"
+grep -Eq '^test result: ok\. 9 passed; 0 failed' "$copy_paste_log" || {
+    echo "the nine copy/paste safety tests did not all pass" >&2
+    exit 1
+}
+
+# ---------------------------------------------------------------------------
+# Directly affected integrations: every test of every module this batch
+# changed, so behavior the batch did not mean to change (sync, mounts,
+# remote paths, stored locations, the folder picker, CLI transfers) is
+# checked as it is. One thread: several of these tests set process-wide
+# state (the app trash volumes, environment switches).
+affected_modules=(
+    transfer:: copy:: vfs:: net:: sync:: bisync:: syncjobs:: connect:: gdrive:: ftp:: webdav::
+    sftp:: smb:: zipfs:: agent:: agent_proto:: daemon:: share:: app:: cli:: mobile::
+    virtual_clipboard:: dragout::
+)
+skip_arguments=()
+if [[ "$platform" == windows ]]; then
+    # Fails on Windows since before this batch (docs/TODO.md, H1).
+    skip_arguments+=(--skip vfs::tests::copy_file_default_impl_streams)
+fi
+modules_log="$suite_tmp/modules.log"
+echo "transfer engine task suite: tests of the affected modules"
+(
+    cd "$repo_root/native"
+    run_task cargo test --locked --lib -- --test-threads=1 "${skip_arguments[@]}" \
+        "${affected_modules[@]}"
+) 2>&1 | tee "$modules_log"
+grep -Eq '^test result: ok\. [0-9]+ passed; 0 failed' "$modules_log" || {
+    echo "tests of the affected modules failed" >&2
+    exit 1
+}
+
+if [[ "$platform" != linux ]]; then
+    suite_succeeded=true
+    echo "task-level suite passed on $platform"
+    exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Real servers: SFTP (OpenSSH) and FTP (vsftpd) containers on loopback.
+for command_name in docker jq timeout cmp head sudo tc comm; do
+    command -v "$command_name" >/dev/null 2>&1 || {
+        echo "$command_name is required for the server checks" >&2
+        exit 1
+    }
+done
+sftp_port=2222
+sftp_user=setester
+sftp_pass=se-task-sftp-pass
+ftp_user=seftp
+ftp_pass=se-task-ftp-pass
+netem_active=false
+stop_servers() {
+    if [[ "$netem_active" == true ]]; then
+        sudo -n tc qdisc del dev lo root 2>/dev/null || true
+        netem_active=false
+    fi
+    docker rm -f se-engine-sftp se-engine-ftp >/dev/null 2>&1 || true
+}
+trap 'stop_servers; cleanup' EXIT
+stop_servers
+docker run -d --name se-engine-sftp -p "$sftp_port:22" atmoz/sftp:latest \
+    "$sftp_user:$sftp_pass:::upload" >/dev/null
+docker run -d --name se-engine-ftp -p 21:21 -p 21000-21010:21000-21010 \
+    -e USERS="$ftp_user|$ftp_pass" delfer/alpine-ftp-server:latest \
+    vsftpd /etc/vsftpd/vsftpd.conf -obackground=NO -opasv_min_port=21000 \
+    -opasv_max_port=21010 -opasv_address=127.0.0.1 >/dev/null
+wait_banner() {
+    local name=$1 port=$2 prefix=$3 deadline=$((SECONDS + 180)) banner=""
+    while ((SECONDS < deadline)); do
+        banner="$(timeout 5 bash -c "exec 3<>/dev/tcp/127.0.0.1/$port && head -c 8 <&3" 2>/dev/null || true)"
+        if [[ "$banner" == "$prefix"* ]]; then
+            echo "test server $name ready on port $port"
+            return 0
+        fi
+        sleep 1
+    done
+    echo "test server $name did not answer on port $port" >&2
+    docker logs "se-engine-$name" >&2 || true
+    return 1
+}
+wait_banner sftp "$sftp_port" "SSH-"
+wait_banner ftp 21 "220"
+export SE_TASK_SFTP="127.0.0.1:$sftp_port:$sftp_user:$sftp_pass:/upload"
+export SE_TASK_FTP_URL="ftp://$ftp_user:$ftp_pass@127.0.0.1:21/ftp/$ftp_user"
+(
+    cd "$repo_root/native"
+    run_task cargo test --locked --test transfer_containers --test transfer_throughput --no-run
+)
+containers_log="$suite_tmp/containers.log"
+echo "transfer engine task suite: whole trees against the servers"
+(
+    cd "$repo_root/native"
+    run_task cargo test --locked --test transfer_containers -- --ignored --test-threads=1
+) 2>&1 | tee "$containers_log"
+grep -Eq '^test result: ok\. 6 passed; 0 failed' "$containers_log" || {
+    echo "transfers against the servers failed" >&2
+    exit 1
+}
+
+# Shaped loopback: 25 ms each way (50 ms round trip) at 100 Mbit/s, a common
+# remote link, so concurrency and pipelining have to earn the throughput.
+throughput_log="$suite_tmp/throughput.log"
+echo "transfer engine task suite: throughput over a shaped link (50 ms, 100 Mbit/s)"
+sudo -n tc qdisc add dev lo root netem delay 25ms rate 100mbit
+netem_active=true
+(
+    cd "$repo_root/native"
+    SE_TASK_NETEM_RTT_MS=50 SE_TASK_NETEM_RATE_MBIT=100 run_task cargo test --locked \
+        --test transfer_throughput -- --ignored --test-threads=1 --nocapture
+) 2>&1 | tee "$throughput_log"
+sudo -n tc qdisc del dev lo root
+netem_active=false
+grep -E '^throughput ' "$throughput_log" || true
+grep -Eq '^test result: ok\. 5 passed; 0 failed' "$throughput_log" || {
+    echo "throughput over the shaped link missed its bounds" >&2
+    exit 1
+}
+stop_servers
+
+# ---------------------------------------------------------------------------
+# Share end to end with the real CLI and Share server: a Room between two
+# headless clients, every file transaction and concurrent downloads in both
+# directions over the new transfer protocol and the service's credit flow.
+e2e_log="$suite_tmp/share-e2e.log"
+echo "transfer engine task suite: Share Room end to end"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_root/native/target}"
+(
+    cd "$repo_root/native"
+    run_task cargo build --locked --bin se
+)
+(
+    cd "$repo_root/share-server"
+    CARGO_TARGET_DIR="$repo_root/share-server/target" run_task cargo build --locked --bin se-share-server
+)
+SMART_EXPLORER_SE_BINARY="$CARGO_TARGET_DIR/debug/se" \
+SMART_EXPLORER_SHARE_SERVER_BINARY="$repo_root/share-server/target/debug/se-share-server" \
+    bash "$repo_root/native/test-share-room-e2e.sh" 2>&1 | tee "$e2e_log"
+grep -Fq 'Room lifecycle passed:' "$e2e_log"
+
 suite_succeeded=true
-echo "transfer engine task suite: batch gates passed ($suite_mode)"
+echo "task-level suite passed with milestones, safety tests, affected modules, servers, throughput and Share end to end"
