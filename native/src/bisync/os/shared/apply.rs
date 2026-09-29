@@ -1,31 +1,25 @@
+use crate::transfer::engine::folders::FolderRegister;
+use crate::transfer::Side;
 use crate::vfs::Backend;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use super::apply_delete::delete_guarded;
 use super::apply_guard::ExpectedFile;
+use super::apply_pool::run_actions;
 use super::apply_retry::{run_with_retry, AttemptError};
 use super::apply_transfer::{copy_conflict_sibling, copy_replace, verify_copy};
 use super::paths::join;
+use super::sync_flows::{PairFlows, PairSide};
 use super::types::{Action, BisyncOptions, BisyncStats, Direction, Throttle, Tree};
 
 pub(super) use super::apply_transfer::back_up;
-
-const MAX_REPORTED_ERRORS: usize = 100;
 
 #[derive(Default, Clone, Debug)]
 pub(super) struct ApplyReport {
     pub(super) stats: BisyncStats,
     pub(super) completed: Vec<Action>,
-}
-
-#[derive(Default)]
-struct ApplyMerge {
-    stats: BisyncStats,
-    errors: Vec<(String, String)>,
-    completed: Vec<Action>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -243,12 +237,14 @@ fn preservation_state(
 /// Apply the planned actions, with reversible backups. Returns stats; errors are
 /// counted (and the rel/message collected) rather than aborting.
 ///
-/// Transfers run **concurrently** up to `min(a, b).parallelism()` — the slower
-/// side caps it, so SFTP/FTP (which report 1) stay serial while local↔Drive
-/// runs many files at once. This is the headline fix for the "27k small files
-/// at 0.1 Mbit/s" case: those transfers are latency-bound, not bandwidth-bound.
-/// Destination folders are created lazily by the guarded transfer; backends'
-/// `mkdir_all` is concurrency-safe (Drive serializes folder creation).
+/// Transfers run **concurrently**, as many as the flows of both connections
+/// allow (`apply_pool`, `sync_flows`): latency-bound small files (the "27k
+/// small files at 0.1 Mbit/s" case) run many at once on every protocol, and a
+/// set `max_transfers` stays the upper bound (one remote connection on both
+/// sides keeps its protocol bound, see `sync_flows`). A folder that did not
+/// exist when the plan was made is created once through the side's folder
+/// register before the copies into it start; the guarded transfer still makes
+/// sure it exists.
 #[allow(clippy::too_many_arguments)]
 pub fn apply(
     actions: &[Action],
@@ -360,88 +356,42 @@ fn apply_inner(
         };
     }
 
-    let mut par = a
-        .parallelism()
-        .min(b.parallelism())
-        .max(1)
-        .min(actions.len().max(1));
-    if opts.max_transfers > 0 {
-        par = par.min(opts.max_transfers);
-    }
-
+    let flows = PairFlows::new(a, root_a, b, root_b);
+    let folders_a = FolderRegister::new(Side::Remote(a), root_a, flows.flow(PairSide::A).clone());
+    let folders_b = FolderRegister::new(Side::Remote(b), root_b, flows.flow(PairSide::B).clone());
     let throttle = Throttle::new(opts.bwlimit_bps);
-    let merged = Mutex::new(ApplyMerge::default());
-    let idx = AtomicUsize::new(0);
-
-    std::thread::scope(|scope| {
-        for _ in 0..par {
-            scope.spawn(|| {
-                let mut local = BisyncStats::default();
-                let mut local_errs: Vec<(String, String)> = Vec::new();
-                let mut local_done: Vec<Action> = Vec::new();
-                loop {
-                    if cancel.load(Ordering::Relaxed) {
-                        break;
-                    }
-                    let i = idx.fetch_add(1, Ordering::Relaxed);
-                    if i >= actions.len() {
-                        break;
-                    }
-                    let act = &actions[i];
-                    let res = run_with_retry(
-                        opts.retries,
-                        Duration::from_secs(opts.retry_delay_secs),
-                        cancel,
-                        || {
-                            run_one(
-                                act,
-                                a,
-                                root_a,
-                                b,
-                                root_b,
-                                opts,
-                                versions_dir,
-                                &throttle,
-                                cancel,
-                                planned,
-                            )
-                        },
-                    );
-                    match res {
-                        Ok(s) => {
-                            local.a_to_b += s.a_to_b;
-                            local.b_to_a += s.b_to_a;
-                            local.deleted += s.deleted;
-                            local.bytes += s.bytes;
-                            local_done.push(act.clone());
-                        }
-                        Err(error) => {
-                            local.errors += 1;
-                            if local_errs.len() < MAX_REPORTED_ERRORS {
-                                local_errs
-                                    .push((format!("{:?}", act), error.into_io().to_string()));
-                            }
-                        }
-                    }
-                }
-                let mut m = merged
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                m.stats.a_to_b += local.a_to_b;
-                m.stats.b_to_a += local.b_to_a;
-                m.stats.deleted += local.deleted;
-                m.stats.bytes += local.bytes;
-                m.stats.errors += local.errors;
-                let remaining = MAX_REPORTED_ERRORS.saturating_sub(m.errors.len());
-                m.errors.extend(local_errs.into_iter().take(remaining));
-                m.completed.extend(local_done);
-            });
+    let retry_delay = Duration::from_secs(opts.retry_delay_secs);
+    let admit = |act: &Action| {
+        prepare_folder(act, planned, &folders_a, &folders_b, cancel);
+        match act {
+            Action::DeleteA(_) => flows.single(PairSide::A, cancel),
+            Action::DeleteB(_) => flows.single(PairSide::B, cancel),
+            _ => flows.transfer(cancel),
         }
-    });
-
-    let merged = merged
-        .into_inner()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    };
+    let execute = |act: &Action| {
+        run_with_retry(opts.retries, retry_delay, cancel, || {
+            run_one(
+                act,
+                a,
+                root_a,
+                b,
+                root_b,
+                opts,
+                versions_dir,
+                &throttle,
+                cancel,
+                planned,
+            )
+        })
+    };
+    // The user's "max. transfers" stays the upper bound; one remote
+    // connection on both sides keeps its protocol bound (`sync_flows`).
+    let cap = match (opts.max_transfers, flows.shared_connection_cap(a, b)) {
+        (0, shared) => shared.unwrap_or(0),
+        (max, shared) => shared.map_or(max, |shared| shared.min(max)),
+    };
+    let merged = run_actions(actions, cap, cancel, &admit, &execute);
     let reported = merged.errors.len() as u64;
     errors.extend(merged.errors);
     if merged.stats.errors > reported {
@@ -457,4 +407,40 @@ fn apply_inner(
         stats: merged.stats,
         completed: merged.completed,
     }
+}
+
+/// A copy into a folder that did not exist when the plan was made creates
+/// that folder once through the destination side's register (parents first,
+/// under a metadata permit), so many concurrent copies into a new folder never
+/// race to create it on protocols that were serial before. A failure is left
+/// to the guarded copy, which creates the folder itself and reports it.
+fn prepare_folder(
+    act: &Action,
+    planned: Option<(&Tree, &Tree)>,
+    folders_a: &FolderRegister<'_>,
+    folders_b: &FolderRegister<'_>,
+    cancel: &AtomicBool,
+) {
+    let (rel, into_b) = match act {
+        Action::CopyAtoB(rel) | Action::KeepBothAtoB(rel) => (rel, true),
+        Action::CopyBtoA(rel) | Action::KeepBothBtoA(rel) => (rel, false),
+        _ => return,
+    };
+    let Some((folder, _)) = rel.rsplit_once('/') else {
+        return;
+    };
+    let known = planned.map(|(tree_a, tree_b)| if into_b { tree_b } else { tree_a });
+    if known.is_some_and(|tree| holds_folder(tree, folder)) {
+        return;
+    }
+    let register = if into_b { folders_b } else { folders_a };
+    let _ = register.ensure(folder, cancel);
+}
+
+/// Some planned file lies below `folder`: it existed at planning time.
+fn holds_folder(tree: &Tree, folder: &str) -> bool {
+    let prefix = format!("{folder}/");
+    tree.range(prefix.clone()..)
+        .next()
+        .is_some_and(|(rel, _)| rel.starts_with(&prefix))
 }

@@ -187,9 +187,11 @@ impl FlowControl {
             self.hold -= 1;
             return;
         }
-        if !saturated {
-            // Demand did not fill the limit: the window says nothing about
-            // more parallelism. An open upward probe is withdrawn.
+        if !saturated || rate <= 0.0 {
+            // Demand did not fill the limit, or operations ran all window
+            // long without finishing or reporting a byte (long server-side
+            // copies): the window says nothing about more parallelism, so the
+            // limit never grows on it. An open upward probe is withdrawn.
             if let Some(probe) = self.probe.take() {
                 if probe.upward {
                     self.limit = probe.from;

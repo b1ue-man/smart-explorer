@@ -1,17 +1,27 @@
+use crate::transfer::{flow_for, Flow};
 use crate::vfs::Backend;
+use std::collections::VecDeque;
 use std::io;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
-use super::paths::{join, rel_of};
-use super::snapshot_hash::hash_file;
+use super::snapshot_dir::{scan_listing, Listed, WalkContext};
 pub use super::snapshot_hash::HashMode;
 pub(super) use super::snapshot_hash::{hash_mode, md5_hex_to_u64, md5_to_u64};
-use super::types::{Baseline, Sig, Tree};
+use super::sync_flows::{finish_listing, next_job};
+use super::types::{Baseline, Tree};
 
-const MAX_WALK_NODES: u64 = 1_000_000;
-const MAX_WALK_TEXT_BYTES: u64 = 128 * 1024 * 1024;
+pub(super) const MAX_WALK_NODES: u64 = 1_000_000;
+pub(super) const MAX_WALK_TEXT_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_WALK_DEPTH: usize = 512;
+/// The coordinator looks at the flow at least this often (its limit moves
+/// while other jobs use the connection).
+const COORDINATOR_SLICE: Duration = Duration::from_millis(50);
+/// An idle listing thread waits this long for the folders a busy one is
+/// about to find: longer than one listing round trip on common links (the
+/// transfer engine's reasoning), short against the walk.
+const WORKER_LINGER: Duration = Duration::from_millis(250);
 
 /// What to skip while walking: hidden files, ignore globs (matched on the
 /// relative path), and size/age bounds (Group G). A bound of 0 means "no limit".
@@ -77,8 +87,9 @@ pub(super) fn prev_side(base: &Baseline, side_a: bool) -> Tree {
         .collect()
 }
 
-/// Backends that report `parallelism() == 1` (SFTP/FTP) stay effectively
-/// serial. Local uses all cores.
+/// Folders are listed concurrently: a remote side as many at once as its
+/// connection's flow allows (listings may use the flow's reserved slot), a
+/// local side on `parallelism()` threads (all cores) as before.
 ///
 /// `hash` chooses the content-hash strategy (see `HashMode`). `prev` is the
 /// previous run's tree for THIS side (from the saved baseline): when a file's
@@ -175,286 +186,44 @@ fn walk_files_impl(
         }
     }
 
-    let par = be.parallelism().max(1);
-    let out: Mutex<Tree> = Mutex::new(Tree::new());
-    let mut level = vec![root.to_string()];
-    let nodes = AtomicU64::new(1);
-    let text_bytes = AtomicU64::new(root.len() as u64);
-    let mut depth = 0usize;
+    let flow = (!be.is_local()).then(|| flow_for(be, root));
+    let context = WalkContext {
+        be,
+        root,
+        cancel,
+        filter,
+        hash,
+        prev,
+        allow_duplicate_files,
+        omissions,
+        nodes: AtomicU64::new(1),
+        text_bytes: AtomicU64::new(root.len() as u64),
+        reads: flow.clone().map(|flow| (flow, next_job())),
+    };
+    let walk = TreeWalk {
+        context: &context,
+        flow,
+        local_threads: be.parallelism().max(1),
+        state: Mutex::new(WalkState::default()),
+        changed: Condvar::new(),
+        out: Mutex::new(Tree::new()),
+    };
+    walk.lock().queue.push_back((root.to_string(), 0));
+    std::thread::scope(|scope| walk.coordinate(scope));
 
-    while !level.is_empty() {
-        if depth > MAX_WALK_DEPTH {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("sync tree exceeds {MAX_WALK_DEPTH} levels"),
-            ));
-        }
-        if cancel.load(Ordering::Relaxed) {
-            return Err(canceled());
-        }
-        let next: Mutex<Vec<String>> = Mutex::new(Vec::new());
-        let first_err: Mutex<Option<io::Error>> = Mutex::new(None);
-        let idx = AtomicUsize::new(0);
-        let workers = par.min(level.len()).max(1);
-
-        std::thread::scope(|scope| {
-            for _ in 0..workers {
-                scope.spawn(|| loop {
-                    if cancel.load(Ordering::Relaxed)
-                        || first_err
-                            .lock()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner())
-                            .is_some()
-                    {
-                        break;
-                    }
-                    let i = idx.fetch_add(1, Ordering::Relaxed);
-                    if i >= level.len() {
-                        break;
-                    }
-                    let dir = &level[i];
-                    match list_plain_directory(be, dir) {
-                        Ok(entries) => {
-                            let mut files: Vec<(String, Sig, String)> = Vec::new();
-                            let mut dirs: Vec<String> = Vec::new();
-                            let mut child_names: std::collections::HashMap<
-                                String,
-                                (bool, std::collections::HashSet<String>),
-                            > = std::collections::HashMap::new();
-                            for m in entries {
-                                if cancel.load(Ordering::Relaxed) {
-                                    break; // stop promptly mid-directory (esp. when hashing)
-                                }
-                                if let Err(error) = crate::vfs::validate_child_name(&m.name) {
-                                    let mut slot = first_err
-                                        .lock()
-                                        .unwrap_or_else(|poisoned| poisoned.into_inner());
-                                    if slot.is_none() {
-                                        *slot = Some(error);
-                                    }
-                                    return;
-                                }
-                                let id = m.id.clone();
-                                let duplicate_invalid = match child_names.get_mut(&m.name) {
-                                    None => {
-                                        let mut ids = std::collections::HashSet::new();
-                                        if let Some(id) = id.as_ref() {
-                                            ids.insert(id.clone());
-                                        }
-                                        child_names.insert(
-                                            m.name.clone(),
-                                            (m.is_dir || m.is_symlink, ids),
-                                        );
-                                        false
-                                    }
-                                    Some((prior_non_regular, ids)) => {
-                                        !allow_duplicate_files
-                                            || *prior_non_regular
-                                            || m.is_dir
-                                            || m.is_symlink
-                                            || id.as_ref().is_none_or(|id| !ids.insert(id.clone()))
-                                    }
-                                };
-                                if duplicate_invalid {
-                                    let mut slot = first_err
-                                        .lock()
-                                        .unwrap_or_else(|poisoned| poisoned.into_inner());
-                                    if slot.is_none() {
-                                        *slot = Some(io::Error::new(
-                                            io::ErrorKind::InvalidData,
-                                            format!(
-                                                "backend returned duplicate child name in {dir}: {:?}",
-                                                m.name
-                                            ),
-                                        ));
-                                    }
-                                    return;
-                                }
-                                let p = join(dir, &m.name);
-                                if nodes.fetch_add(1, Ordering::Relaxed) >= MAX_WALK_NODES
-                                    || text_bytes.fetch_add(p.len() as u64, Ordering::Relaxed)
-                                        > MAX_WALK_TEXT_BYTES.saturating_sub(p.len() as u64)
-                                {
-                                    let mut slot = first_err
-                                        .lock()
-                                        .unwrap_or_else(|poisoned| poisoned.into_inner());
-                                    if slot.is_none() {
-                                        *slot = Some(io::Error::new(
-                                            io::ErrorKind::InvalidData,
-                                            "sync tree exceeds its bounded collection budget",
-                                        ));
-                                    }
-                                    return;
-                                }
-                                let rel = rel_of(&p, root);
-                                let excluded = (!filter.include_hidden && m.hidden)
-                                    || filter.ignored(&rel, m.is_dir || m.is_symlink);
-                                // The app trash and other apps' private storage
-                                // (Android) are protected omissions like a link:
-                                // never synced, their counterparts kept.
-                                if m.is_symlink
-                                    || crate::apptrash::excluded_name(&m.name)
-                                    || crate::apptrash::hidden_app_folders_in(dir)
-                                {
-                                    if let Some(omissions) = omissions {
-                                        omissions.lock().unwrap_or_else(|e| e.into_inner())
-                                            .record(&rel, !excluded);
-                                        continue;
-                                    }
-                                    let mut slot = first_err.lock().unwrap_or_else(|e| e.into_inner());
-                                    if slot.is_none() {
-                                        *slot = Some(io::Error::new(io::ErrorKind::InvalidData,
-                                            format!("link-like sync source requires a protected snapshot: {p}")));
-                                    }
-                                    return;
-                                }
-                                if excluded {
-                                    continue;
-                                }
-                                if m.is_dir {
-                                    if !m.is_symlink {
-                                        dirs.push(p);
-                                    }
-                                } else if filter.size_age_ok(m.size, m.mtime_ms) {
-                                    // Content hash, cheapest source first:
-                                    //  1. the backend's FREE native MD5
-                                    //     (Drive md5Checksum / Nextcloud
-                                    //     oc:checksums) — no download;
-                                    //  2. the previous run's hash, reused when
-                                    //     size+mtime are unchanged — no re-read;
-                                    //  3. read the file to hash it (Full only —
-                                    //     a cheap local read, or an explicit
-                                    //     Checksum-mode remote download).
-                                    let h = match hash {
-                                        HashMode::None => 0,
-                                        HashMode::NativeOnly => m
-                                            .content_md5
-                                            .as_deref()
-                                            .map(md5_hex_to_u64)
-                                            .unwrap_or(0),
-                                        HashMode::Full => {
-                                            if let Some(hex) = m.content_md5.as_deref() {
-                                                md5_hex_to_u64(hex)
-                                            } else if let Some(ph) = prev
-                                                .and_then(|t| t.get(&rel))
-                                                .filter(|s| {
-                                                    s.size == m.size
-                                                        && s.mtime_ms == m.mtime_ms
-                                                        && s.hash != 0
-                                                })
-                                                .map(|s| s.hash)
-                                            {
-                                                ph
-                                            } else {
-                                                match hash_file(be, &p, cancel) {
-                                                    Ok(hash) => hash,
-                                                    Err(error) => {
-                                                        let mut slot = first_err.lock().unwrap_or_else(
-                                                            |poisoned| poisoned.into_inner(),
-                                                        );
-                                                        if slot.is_none() {
-                                                            *slot = Some(io::Error::new(
-                                                                error.kind(),
-                                                                format!("hash {p}: {error}"),
-                                                            ));
-                                                        }
-                                                        return;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        HashMode::FullFresh => {
-                                            let native = m
-                                                .content_md5
-                                                .as_deref()
-                                                .map(md5_hex_to_u64)
-                                                .unwrap_or(0);
-                                            if native != 0 {
-                                                native
-                                            } else {
-                                                match hash_file(be, &p, cancel) {
-                                                    Ok(hash) => hash,
-                                                    Err(error) => {
-                                                        let mut slot = first_err.lock().unwrap_or_else(
-                                                            |poisoned| poisoned.into_inner(),
-                                                        );
-                                                        if slot.is_none() {
-                                                            *slot = Some(io::Error::new(
-                                                                error.kind(),
-                                                                format!("fresh checksum {p}: {error}"),
-                                                            ));
-                                                        }
-                                                        return;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    };
-                                    files.push((
-                                        rel,
-                                        Sig {
-                                            size: m.size,
-                                            mtime_ms: m.mtime_ms,
-                                            hash: h,
-                                        },
-                                        id.unwrap_or_default(),
-                                    ));
-                                }
-                            }
-                            if !files.is_empty() {
-                                let mut o =
-                                    out.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-                                files.sort_by(|left, right| {
-                                    left.0
-                                        .cmp(&right.0)
-                                        .then_with(|| right.1.mtime_ms.cmp(&left.1.mtime_ms))
-                                        .then_with(|| left.2.cmp(&right.2))
-                                });
-                                let mut prior_rel: Option<String> = None;
-                                for (rel, sig, _) in files {
-                                    if prior_rel.as_deref() != Some(&rel) {
-                                        o.insert(rel.clone(), sig);
-                                        prior_rel = Some(rel);
-                                    }
-                                }
-                            }
-                            if !dirs.is_empty() {
-                                next.lock()
-                                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                                    .extend(dirs);
-                            }
-                        }
-                        Err(e) => {
-                            let mut slot = first_err
-                                .lock()
-                                .unwrap_or_else(|poisoned| poisoned.into_inner());
-                            if slot.is_none() {
-                                *slot = Some(e);
-                            }
-                            break;
-                        }
-                    }
-                });
-            }
-        });
-
-        // A worker can observe cancellation while it is part-way through a
-        // directory. Never turn that partial level into a successful snapshot:
-        // callers persist successful walks as the next deletion baseline.
-        if cancel.load(Ordering::Relaxed) {
-            return Err(canceled());
-        }
-
-        if let Some(e) = first_err
-            .into_inner()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-        {
-            return Err(e);
-        }
-        level = next
-            .into_inner()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        depth += 1;
+    // A worker can observe cancellation while it is part-way through a
+    // directory. Never turn that partial walk into a successful snapshot:
+    // callers persist successful walks as the next deletion baseline.
+    if cancel.load(Ordering::Relaxed) {
+        return Err(canceled());
+    }
+    let TreeWalk { state, out, .. } = walk;
+    if let Some(error) = state
+        .into_inner()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .error
+    {
+        return Err(error);
     }
     Ok(out
         .into_inner()
@@ -471,3 +240,227 @@ fn list_plain_directory(be: &dyn Backend, path: &str) -> io::Result<Vec<crate::v
     }
     be.list_dir(path)
 }
+
+#[derive(Default)]
+struct WalkState {
+    /// Folders to list, with their depth below the root.
+    queue: VecDeque<(String, usize)>,
+    running: usize,
+    busy: usize,
+    /// Threads holding a folder but still waiting for a listing permit.
+    waiting: usize,
+    /// The first failure; it ends the walk.
+    error: Option<io::Error>,
+    done: bool,
+}
+
+/// The folders of one walk, listed by a pool that grows while folders wait:
+/// up to the flow's limit plus its reserved listing slot on a remote side,
+/// up to `parallelism()` threads on a local one.
+struct TreeWalk<'a> {
+    context: &'a WalkContext<'a>,
+    flow: Option<Arc<Flow>>,
+    local_threads: usize,
+    state: Mutex<WalkState>,
+    changed: Condvar,
+    out: Mutex<Tree>,
+}
+
+impl TreeWalk<'_> {
+    fn lock(&self) -> MutexGuard<'_, WalkState> {
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn wait<'g>(
+        &self,
+        state: MutexGuard<'g, WalkState>,
+        limit: Duration,
+    ) -> MutexGuard<'g, WalkState> {
+        match self.changed.wait_timeout(state, limit) {
+            Ok((guard, _)) => guard,
+            Err(poisoned) => poisoned.into_inner().0,
+        }
+    }
+
+    fn canceled(&self) -> bool {
+        self.context.cancel.load(Ordering::Relaxed)
+    }
+
+    fn fail(&self, error: io::Error) {
+        let mut state = self.lock();
+        if state.error.is_none() {
+            state.error = Some(error);
+        }
+        drop(state);
+        self.changed.notify_all();
+    }
+
+    fn coordinate<'s>(&'s self, scope: &'s std::thread::Scope<'s, '_>) {
+        loop {
+            let mut state = self.lock();
+            let over = self.canceled()
+                || state.error.is_some()
+                || (state.queue.is_empty() && state.busy == 0);
+            if over && !state.done {
+                state.done = true;
+                self.changed.notify_all();
+            }
+            if state.done {
+                if state.running == 0 {
+                    break;
+                }
+            } else if self.may_grow(&state) {
+                state.running += 1;
+                drop(state);
+                if !self.spawn(scope) {
+                    // Out of threads: look again after a pause, not in a
+                    // busy loop.
+                    drop(self.wait(self.lock(), COORDINATOR_SLICE));
+                }
+                continue;
+            }
+            drop(self.wait(state, COORDINATOR_SLICE));
+        }
+    }
+
+    fn may_grow(&self, state: &WalkState) -> bool {
+        let cap = match &self.flow {
+            Some(flow) => flow.snapshot().limit.saturating_add(1),
+            None => self.local_threads,
+        };
+        state.queue.len() > state.running.saturating_sub(state.busy)
+            && state.waiting == 0
+            && state.running < cap
+    }
+
+    /// Starts one listing thread; false when the system refused it.
+    fn spawn<'s>(&'s self, scope: &'s std::thread::Scope<'s, '_>) -> bool {
+        let spawned = std::thread::Builder::new()
+            .name("sync-walk".to_string())
+            .spawn_scoped(scope, move || self.worker());
+        let Err(error) = spawned else {
+            return true;
+        };
+        let alone = {
+            let mut state = self.lock();
+            state.running -= 1;
+            state.running == 0
+        };
+        // Without any listing thread the walk cannot complete; a partial walk
+        // must fail, never pass as a snapshot.
+        if alone {
+            self.fail(io::Error::new(
+                error.kind(),
+                format!("sync walk worker start failed: {error}"),
+            ));
+        } else {
+            self.changed.notify_all();
+        }
+        false
+    }
+
+    fn worker(&self) {
+        let mut idle_since: Option<Instant> = None;
+        loop {
+            let next = {
+                let mut state = self.lock();
+                loop {
+                    if state.done || state.error.is_some() || self.canceled() {
+                        break None;
+                    }
+                    if let Some(next) = state.queue.pop_front() {
+                        state.busy += 1;
+                        if self.flow.is_some() {
+                            // Counted until its listing permit is granted.
+                            state.waiting += 1;
+                        }
+                        break Some(next);
+                    }
+                    let waited = idle_since.get_or_insert_with(Instant::now).elapsed();
+                    if state.busy == 0 || waited >= WORKER_LINGER {
+                        break None;
+                    }
+                    state = self.wait(state, WORKER_LINGER - waited);
+                }
+            };
+            let Some((dir, depth)) = next else {
+                break;
+            };
+            idle_since = None;
+            match self.visit(&dir, depth) {
+                Ok(listed) => self.merge(listed, depth),
+                Err(error) => self.fail(error),
+            }
+            self.lock().busy -= 1;
+            self.changed.notify_all();
+        }
+        self.lock().running -= 1;
+        self.changed.notify_all();
+    }
+
+    /// Lists one folder (under a listing permit on a remote side) and checks
+    /// its entries.
+    fn visit(&self, dir: &str, depth: usize) -> io::Result<Listed> {
+        let permit = match &self.flow {
+            Some(flow) => {
+                let permit = flow.acquire_meta(self.context.cancel);
+                self.lock().waiting -= 1;
+                self.changed.notify_all();
+                Some(permit.ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::Interrupted,
+                        "synchronization tree walk canceled",
+                    )
+                })?)
+            }
+            None => None,
+        };
+        if depth > MAX_WALK_DEPTH {
+            if let Some(permit) = permit {
+                permit.abandon();
+            }
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("sync tree exceeds {MAX_WALK_DEPTH} levels"),
+            ));
+        }
+        let entries = list_plain_directory(self.context.be, dir);
+        finish_listing(permit, entries.as_ref().err());
+        scan_listing(self.context, dir, entries?)
+    }
+
+    fn merge(&self, listed: Listed, depth: usize) {
+        let Listed { mut files, dirs } = listed;
+        if !files.is_empty() {
+            files.sort_by(|left, right| {
+                left.0
+                    .cmp(&right.0)
+                    .then_with(|| right.1.mtime_ms.cmp(&left.1.mtime_ms))
+                    .then_with(|| left.2.cmp(&right.2))
+            });
+            let mut out = self
+                .out
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut prior_rel: Option<String> = None;
+            for (rel, sig, _) in files {
+                if prior_rel.as_deref() != Some(&rel) {
+                    out.insert(rel.clone(), sig);
+                    prior_rel = Some(rel);
+                }
+            }
+        }
+        if !dirs.is_empty() {
+            self.lock()
+                .queue
+                .extend(dirs.into_iter().map(|dir| (dir, depth + 1)));
+            self.changed.notify_all();
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "snapshot_walk_tests.rs"]
+mod walk_tests;
