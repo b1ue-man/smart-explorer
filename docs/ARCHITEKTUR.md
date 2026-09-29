@@ -1,6 +1,6 @@
 # Smart Explorer – Architektur
 
-Stand: 2026-09-26. Kurzüberblick als erster Einstieg; Details liefert der Code-Graph
+Stand: 2026-09-29. Kurzüberblick als erster Einstieg; Details liefert der Code-Graph
 (`graphify query "…"`, siehe AGENTS.md) und die Lesungen unter `docs/lesungen/`.
 
 ## Zweck
@@ -18,7 +18,9 @@ Speicheranalyse – als Desktop-App (Windows, Linux; Rust + egui) und als Androi
 | Dateisystem-/Remote-Zugriff | `native/src/vfs/` (`Backend`-Trait), Backends `sftp/`, `ftp/`, `webdav/`, `gdrive/`, `zipfs/`, Share über `daemon::open_share_backend` |
 | Orte/Endpunkt-Strings | `native/src/connect/core/location.rs` (`EndpointSpec`), `connect/os/shared/resolution.rs` (`resolve_endpoint`) |
 | Filter und Scan | `native/src/filter/`, `native/src/scanner/`, `native/src/rscan/`, Baumzeilen `filter/core/tree.rs` |
-| Kopieren/Übertragen | lokal `native/src/copy/`, remote `native/src/transfer/` (Lane, Upload/Download/Remote-Kopie) |
+| Kopieren/Übertragen | Engine `native/src/transfer/os/shared/engine/` (`run_job` für jede Endpunkt-Kombination: Walker `walk*.rs`, Worker, Ordner-Register, Pakete, Serverkopie, Fehlerprotokoll), Job-Vertrag `transfer/core/job.rs`, Flows `transfer/os/shared/flow.rs` + Regler `transfer/core/flow_control.rs`, Lane `lane.rs`; lokale Kernel-Kopie `native/src/copy/`; Verhalten und Grenzen je Protokoll `docs/TRANSFER_ENGINE.md` |
+| Explorer-Übergabe Remote (Windows) | virtuelle Dateien `native/src/virtual_clipboard/os/remote/` (STA-Thread, Liste bei erster Explorer-Anfrage, Vorausladen), Ziehen `native/src/dragout/os/remote.rs`, Auswahlquelle `transfer/os/shared/selection.rs` |
+| App-Übertragungen | Einfügen/Ablegen/Dialoge → Job `native/src/app/core/transfer_route.rs`, Fenster „⇅ Übertragungen“ `app/core/transfer_window.rs`/`transfer_center.rs`, Zwischenablage `app/core/transfer_clip.rs` |
 | Sync | Jobs `native/src/syncjobs/`, Zwei-Wege `native/src/bisync/`, Einweg-Spiegeln `native/src/sync/` |
 | Hintergrund-Daemon | `native/src/daemon/` (`run_daemon`, eingebettet `ensure_embedded_daemon`, Nachhol-Lauf `request_catch_up`), `native/src/autostart/` |
 | Share/P2P | `native/src/share/` (Iroh/QUIC, Profile, Discovery, Räume), Share-Server `share-server/` |
@@ -43,7 +45,11 @@ Speicheranalyse – als Desktop-App (Windows, Linux; Rust + egui) und als Androi
   Lange Vorgänge: Task-ID, Fortschritt über `pollEvents` (Ereignispumpe) → `Core.tasks`.
 - Hintergrund Android: WorkManager `SyncWorker` → `bg.catchUp` → eingebetteter Daemon-Supervisor →
   `job::run_one` → `bisync::run`; Dauerbetrieb hält den Prozess mit `BackgroundService` (specialUse).
-- Desktop: GUI ↔ Daemon-Prozess über Loopback-TCP-IPC (`daemon/os/shared/ipc*.rs`).
+- Desktop: GUI ↔ Daemon-Prozess über Loopback-TCP-IPC (`daemon/os/shared/ipc*.rs`); Share-/Agent-Anfragen
+  mit Kredit je Anfrage (`agent_proto/core/credit.rs`), damit eine langsame Übertragung kein Blättern blockiert.
+- Übertragung: App/Android → `TransferRequest::Job` → Lane → `engine::run_job` → Walker listet parallel unter
+  dem Flow der Quelle, Worker holen Erlaubnisse der regelnden Flows, schreiben in private Stufen und
+  veröffentlichen ohne Ersetzen; Fortschritt ~150 ms, Fehler als JSON-Zeilen in einer Protokolldatei.
 - Persistenz: App-Daten unter `support_dirs::app_data_dir()` (Android: `<filesDir>/smart_explorer`),
   Sync-Jobs `sync/jobs/*.conf`, Zugangsdaten `secrets-v1/` (Datei-Store), Share-Profile/Identität.
 
@@ -58,4 +64,5 @@ Android-APIs: `docs/refs/android-apis.md`, `docs/refs/android-platform.md`; CI: 
 - Android-Bibliothek: `cargo ndk -t arm64-v8a -t x86_64 --platform 30 -o android/app/src/main/jniLibs build -p smart_explorer_android`
   (im Verzeichnis `native/`), NDK aus `android/ndk-version`; Gradle braucht `-PrustlsVerifierMaven=<Pfad>`.
 - Release-APK: `android/build-release-apk.sh` (Job `android-release-apk` in `build.yml`), Signatur aus Repo-Secrets.
-- Neue Rust-Dateien < 500 Zeilen; Test-Präfix je Batch (Android: `android_task_`).
+- Neue Rust-Dateien < 500 Zeilen; Test-Präfix je Batch (Android: `android_task_`, Übertragungs-Engine:
+  `transfer_engine_task_`, Suite `native/test-transfer-engine-task.sh` über `transfer-engine-task.yml`).
