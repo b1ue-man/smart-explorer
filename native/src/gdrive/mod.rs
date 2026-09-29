@@ -85,6 +85,15 @@ mod task_drive;
 #[path = "core/task_http.rs"]
 mod task_http;
 #[cfg(test)]
+#[path = "core/sync_conflict_task_fixture.rs"]
+mod sync_conflict_task_fixture;
+#[cfg(test)]
+#[path = "core/sync_conflict_task_tests.rs"]
+mod sync_conflict_task_tests;
+#[cfg(test)]
+#[path = "core/sync_conflict_task_safety_tests.rs"]
+mod sync_conflict_task_safety_tests;
+#[cfg(test)]
 #[path = "core/transfer_engine_task_ops_tests.rs"]
 mod transfer_engine_task_ops_tests;
 #[cfg(test)]

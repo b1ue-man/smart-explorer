@@ -13,7 +13,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
 NATIVE = ROOT / "native"
-PREFIXES = ("direct_open_task_",)
+PREFIXES = ("direct_open_task_", "sync_conflict_task_")
 INTEGRATIONS = [
     "remote_drive_task_empty_complete_recovery_markers_are_cleanup_only",
     "remote_drive_task_invalid_or_declared_recovery_fails_closed",
@@ -29,6 +29,34 @@ INTEGRATIONS = [
     "lost_write_ack_stays_failed_on_every_flush_without_replay",
     "transfer_engine_task_agent_errors_recover_permanent_target_kinds",
     "transfer_engine_task_busy_replies_become_congestion",
+    "checked_resolution_copies_offered_winner_and_reports_phases",
+    "cancellation_before_resolution_never_mutates_either_side",
+    "cancellation_before_publish_leaves_destination_unchanged",
+    "signature_drift_is_rejected_without_overwriting_destination",
+    "choosing_deleted_side_backs_up_then_deletes_other_side",
+    "destination_drift_after_backup_blocks_promotion",
+    "source_link_swap_after_open_blocks_promotion",
+    "one_side_change_propagates_then_stable",
+    "nodelete_never_removes_dest_files",
+    "transfer_engine_task_bisync_read_pair_failure_stops_the_other_side",
+    "transfer_engine_task_bisync_read_pair_cancel_reaches_both_sides",
+]
+
+SYNC_REQUIRED = [
+    "sync_names_preserve_browsing_literals_and_folder_identity",
+    "unique_common_content_converges_without_alias_copies",
+    "a_replaces_exact_destination_then_removes_other_objects",
+    "b_requires_a_variant_and_preserves_the_selected_id",
+    "multiple_common_versions_and_remote_pairs_need_selection",
+    "delete_policy_guard_and_filters_protect_variants",
+    "failed_backups_preserve_files_and_baseline",
+    "changed_variant_and_early_cancel_never_authorize_cleanup",
+    "partial_commit_retries_from_fresh_observation",
+    "permissions_and_uncertain_trash_keep_exact_identity",
+    "ordinary_promotion_keeps_uniqueness_guard",
+    "filtered_counterparts_and_links_remain_protected",
+    "one_way_move_keeps_destination_after_duplicate_cleanup",
+    "mobile_exposes_variants_and_disables_ambiguous_merge",
 ]
 
 
@@ -167,8 +195,16 @@ def main():
         found = [name for name in selected if name.endswith("::direct_open_task_" + suffix)]
         if len(found) != 1:
             raise RuntimeError(f"Required Direct opening acceptance is absent or ambiguous: {suffix}")
+    for suffix in SYNC_REQUIRED:
+        if suffix == "mobile_exposes_variants_and_disables_ambiguous_merge" and sys.platform != "linux":
+            continue  # The mobile facade's host fixture is enabled on Unix.
+        found = [name for name in selected if name.endswith("::sync_conflict_task_" + suffix)]
+        if len(found) != 1:
+            raise RuntimeError(f"Required sync conflict acceptance is absent or ambiguous: {suffix}")
     integrations = INTEGRATIONS
     for suffix in integrations:
+        if suffix == "source_link_swap_after_open_blocks_promotion" and sys.platform != "linux":
+            continue  # Windows exercises the junction omission in the task fixture.
         found = [name for name in available if name.endswith("::" + suffix)]
         if len(found) != 1:
             raise RuntimeError(f"Required directly affected integration is absent or ambiguous: {suffix}")
@@ -187,11 +223,28 @@ def main():
     for name in selected:
         if f"test {name} ... ok" not in result:
             raise RuntimeError(f"Missing successful acceptance result: {name}")
+    if sys.platform == "linux":
+        # Compile only the changed Kotlin consumer and its focused JSON contract
+        # fixture. No APK, native Android build, or unrelated Android test suite.
+        metadata_log = logs / "android-cargo-metadata.json"
+        run(["cargo", "metadata", "--locked", "--format-version", "1", "--filter-platform",
+             "aarch64-linux-android"], metadata_log, 1800, env, logs / "android-metadata.stderr.log")
+        packages = json.loads(metadata_log.read_text(encoding="utf-8"))["packages"]
+        verifier = [Path(p["manifest_path"]).parent / "maven" for p in packages
+                    if p["name"] == "rustls-platform-verifier-android"]
+        if len(verifier) != 1 or not (verifier[0] / "rustls/rustls-platform-verifier").is_dir():
+            raise RuntimeError("Cannot discover the locked Android verifier Maven dependency.")
+        run(["sh", str(ROOT / "android/gradlew"), "-p", str(ROOT / "android"), "--no-daemon",
+             "--console=plain", "--stacktrace", f"-PrustlsVerifierMaven={verifier[0]}",
+             ":app:testDebugUnitTest", "--tests", "app.smartexplorer.android.api.SyncConflictVariantTest"],
+            logs / "android-conflict-contract.log", 3600, env)
+        reports = ROOT / "android/app/build/test-results/testDebugUnitTest"
+        shutil.copytree(reports, logs / "android-conflict-results", dirs_exist_ok=True)
     evidence = {"candidate": candidate, "binary_sha256": sha256(binary),
         "platform": sys.platform, "selected": selected, "result": "passed"}
     (logs / "acceptance.json").write_text(json.dumps(evidence, indent=2), encoding="utf-8")
     print(result)
-    print("Direct opening and reconnect acceptance passed; candidate", candidate, flush=True)
+    print("Direct opening, reconnect and sync conflict acceptance passed; candidate", candidate, flush=True)
 
 
 if __name__ == "__main__":
