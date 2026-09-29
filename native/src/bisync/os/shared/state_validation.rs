@@ -217,6 +217,18 @@ fn item_text_bytes(item: &ItemRecord) -> usize {
         .saturating_add(item.name.as_deref().map_or(0, str::len))
 }
 
+/// A stored value is of the wrong type or outside its domain (tampered or
+/// written by another version): the record is untrusted as a whole, as
+/// opposed to the database failing (I/O, locks), which stays an error.
+pub(super) fn is_untrusted_record(error: &rusqlite::Error) -> bool {
+    matches!(
+        error,
+        rusqlite::Error::FromSqlConversionFailure(..)
+            | rusqlite::Error::InvalidColumnType(..)
+            | rusqlite::Error::IntegralValueOutOfRange(..)
+    )
+}
+
 fn invalid(index: usize, data_type: Type, message: impl Into<String>) -> rusqlite::Error {
     rusqlite::Error::FromSqlConversionFailure(
         index,

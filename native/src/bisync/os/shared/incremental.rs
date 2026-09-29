@@ -15,7 +15,7 @@ use super::orchestration::Outcome;
 use super::persistence::{baseline_path, pair_id_for, save_baseline, versions_dir};
 use super::snapshot::WalkFilter;
 use super::state_store::{PairRecord, Side, SyncStateStore};
-use super::state_validation::baseline_from_items;
+use super::state_validation::{baseline_from_items, is_untrusted_record};
 use super::types::{Baseline, BisyncOptions, BisyncStats, Conflict, DeletePolicy, Direction};
 
 #[derive(Clone, Copy)]
@@ -343,12 +343,20 @@ pub(super) fn invalidate_incremental_state(
         return Ok(());
     }
     let pair = pair_id_for(endpoints.a, endpoints.root_a, endpoints.b, endpoints.root_b);
-    let store = open_store(store_path)?;
-    if let Some(mut record) = store.load_pair(&pair)? {
-        record.bootstrapped = false;
-        store.save_pair(&record)?;
+    let mut store = open_store(store_path)?;
+    match store.load_pair(&pair) {
+        Ok(Some(mut record)) => {
+            record.bootstrapped = false;
+            store.save_pair(&record)
+        }
+        Ok(None) => Ok(()),
+        // A record that no longer validates is exactly the state the full
+        // scan replaces: dropped, neither this scan nor a later incremental
+        // run can act on it. Refusing the scan instead would block the sync
+        // until someone repaired the database.
+        Err(error) if is_untrusted_record(&error) => store.forget_pair(&pair),
+        Err(error) => Err(error),
     }
-    Ok(())
 }
 
 fn merge_stats(left: &mut BisyncStats, right: BisyncStats) {
