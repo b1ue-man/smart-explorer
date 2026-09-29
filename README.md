@@ -91,7 +91,12 @@ einmalig eine eigene **Google OAuth Client-ID** (Anleitung:
 Einseitige Drive-Mirror-Jobs nutzen nach dem ersten Vollabgleich einen lokalen
 Sync-Index plus Google-Drive-Changes, damit normale Läufe nur geänderte Pfade
 prüfen; unsichere Zustände fallen automatisch auf den bisherigen Vollabgleich
-zurück. Drive erlaubt mehrere gleichnamige Einträge in einem Ordner: die
+zurück. Ab 0.5.166 läuft auch der erste Abgleich deutlich schneller: Drive-Aufrufe
+teilen gepoolte Verbindungen (kein TLS-Aufbau je Aufruf), der Pfad-Cache wird im
+Hintergrund geschrieben, Sperren gelten nur je Ordner/Name, Spiegeln kopiert
+parallel zum Scannen und Zwei-Wege-Sync liest beide Seiten gleichzeitig. Google
+begrenzt neue Dateien dauerhaft auf etwa drei pro Sekunde je Konto; die
+Übertragungsliste zeigt das als Hinweis. Drive erlaubt mehrere gleichnamige Einträge in einem Ordner: die
 neueste Kopie behält ihren Namen, jede weitere erscheint als
 `Name [drive-id abcd1234]` und bleibt so eindeutig öffnenbar, synchronisierbar
 und umbenennbar, statt den ganzen Ordner mit „duplicate child name" zu
@@ -395,20 +400,34 @@ Identitäts- oder Relation-Konflikte sowie zuvor ignorierte, abgelehnte,
 widerrufene oder gelöschte Beziehungen bleiben dabei fail-closed und werden
 nicht automatisch überschrieben.
 
-**Parallele Übertragungen (ab 0.5.159):** Uploads, Downloads und
-Remote→Remote-Kopien laufen als eigene Vorgänge gleichzeitig — bis zu sechs auf
-einmal, weitere warten in Reihenfolge und starten automatisch. Jede Übertragung
-hat ihren eigenen Fortschritt und lässt sich einzeln oder gesamt abbrechen. Über
-Direct- und Raum-Beziehungen nutzt jeder Vorgang eigene QUIC-Streams der
-gecachten Peer-Verbindung; mehrere Geräte werden parallel bedient, die Bandbreite
-teilt sich statt sich zu stauen. Der Share-Server-Endpunkt bleibt ein
-Signalisierungs-/Relay-Pfad. Räume prüft der eigenständige automatische Test
-`native/test-share-room-e2e.sh` gegen einen lokalen Share-Server: Raum
-erstellen, per Code beitreten, gegenseitige Mitgliedschaft, Raum-Exporte,
+**Übertragungen (ab 0.5.166):** Kopieren merkt sich nur die Auswahl; Einfügen,
+Ablegen, „Kopieren/Herunterladen nach…“ und Downloads starten sofort – auch bei
+großen Ordnern, weil Unterordner parallel zum Kopieren gesucht werden statt vorher
+alles zu scannen. Das gilt für jede Kombination aus lokalen Ordnern, SFTP, FTP/FTPS,
+WebDAV, SMB, Google Drive, ZIP, Direct-/Raum-Shares und dem SSH-Agent, auch
+zwischen zwei verschiedenen Remotes (direkt gestreamt, innerhalb eines Servers
+serverseitig kopiert, wo der Server das kann). Jede Verbindung regelt ihre
+Parallelität selbst nach der gemessenen Nutzleistung; es gibt keine feste Grenze
+gleichzeitiger Übertragungen, Übertragungen auf derselben Verbindung wechseln sich
+ab. Viele kleine Dateien gehen über Shares und den SSH-Agent als Pakete. Belegte
+Namen werden „Name (2)“, nichts wird ersetzt; ein Ordner lässt sich nicht in sich
+selbst kopieren. **⇅ Übertragungen** in der Statuszeile zeigt jede Übertragung mit
+Rate, Restzeit (sobald alles gefunden ist), laufenden Dateien, Hinweisen der
+Verbindung und der vollständigen Fehlerliste zum Kopieren samt Protokolldatei;
+nach Abbruch oder Fehlern überträgt **Fehlende übertragen** den Rest in dieselben
+Zielordner. Unter Windows lassen sich Remote-Dateien im Explorer einfügen und in
+den Explorer ziehen, ohne sie vorher herunterzuladen (virtuelle Dateien, die der
+Explorer bei Bedarf holt); **Für andere Programme bereitstellen** im
+Remote-Kontextmenü lädt eine Auswahl mit Fortschritt herunter und legt danach
+normale Dateien auf die Zwischenablage. Unter Linux funktioniert Kopieren/Einfügen
+innerhalb der App. Details, Grenzen je Protokoll und Nachweise:
+[`docs/TRANSFER_ENGINE.md`](docs/TRANSFER_ENGINE.md). Räume prüft der eigenständige
+automatische Test `native/test-share-room-e2e.sh` gegen einen lokalen Share-Server:
+Raum erstellen, per Code beitreten, gegenseitige Mitgliedschaft, Raum-Exporte,
 `ls`/`cat`/`stat`/`cp`/`cp -r`/`mkdir`/`mv`/`search`/`rm` über
-`share://room/<raum>/<gerät>/…`, drei gleichzeitige Downloads in beide
-Richtungen sowie der Verlust des Zugriffs nach `remove-room`. Sync-Jobs auf
-Raum-Ziele nutzen denselben Backend-Pfad.
+`share://room/<raum>/<gerät>/…`, drei gleichzeitige Downloads in beide Richtungen
+sowie der Verlust des Zugriffs nach `remove-room`. Sync-Jobs auf Raum-Ziele nutzen
+denselben Backend-Pfad.
 
 Die Speicheranalyse eines Direct- oder Raum-Ziels nutzt seit 0.5.165
 für lokale und UNC-Freigaben denselben Analyse-Worker auf der Gegenstelle wie
@@ -769,8 +788,9 @@ die private Share-Identität das Gerät nicht verlassen.
   (F4); Filter und Suche wie am Desktop inklusive rekursivem Scan mit Grenze
   und Abbruch (F5); Fuzzy-Ordnersuche (F6); Mehrfachauswahl, Kopieren,
   Ausschneiden, Einfügen, Kopieren/Verschieben nach…, Umbenennen, Neu, Löschen,
-  Eigenschaften, Favoriten (F7); bis zu sechs parallele Übertragungen mit
-  Warteschlange und Benachrichtigung, auch nach Verlassen der App (F8);
+  Eigenschaften, Favoriten (F7); parallele Übertragungen ohne feste Obergrenze
+  (die Verbindungen regeln sich selbst), sofort startend ohne Vorab-Scan, mit
+  Benachrichtigung, auch nach Verlassen der App (F8);
   Öffnen in passenden Apps, Teilen und Empfangen, auch für Remote-Orte, und
   „In Smart Explorer öffnen“ für Ordner, die eine andere App übergibt (F9);
   ZIP lesen und entpacken (F10); Papierkorb je Speichervolume mit

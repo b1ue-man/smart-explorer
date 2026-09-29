@@ -106,7 +106,7 @@ Today: 2026-06-17.
 - G8 Reserved/invalid-name & path-length guarding for cross-fs targets **[BUILD-opt]** (OneDrive restricted chars / 400-char path)
 
 ## Group H — Bandwidth & performance
-- H1 Parallel walk/transfer per backend **[HAVE]** (`parallelism()`)
+- H1 Parallel walk/transfer per backend **[HAVE]** (one-way mirror copies while it scans and two-way apply runs actions concurrently, both over the per-connection adaptive flows of the transfer engine since 0.5.166; `parallelism()` still bounds local walks and same-connection pairs — see `docs/TRANSFER_ENGINE.md`)
 - H2 **Bandwidth limit** KB/s (and separate up/down) **[BUILD]** (rclone `--bwlimit`; SyncBack; ownCloud)
 - H3 Auto-limit (% of available) **[NICE]** (ownCloud 25%)
 - H4 Time-scheduled bandwidth **[NICE]** (rclone `--bwlimit` timetable)
