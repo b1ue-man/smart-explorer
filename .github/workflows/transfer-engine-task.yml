@@ -82,6 +82,8 @@ jobs:
 
       - name: Install the Windows cross C toolchain and the server-check tools
         shell: bash
+        env:
+          SUITE_MODE: ${{ inputs.mode }}
         run: |
           set -Eeuo pipefail
           sudo apt-get update
@@ -89,6 +91,12 @@ jobs:
           x86_64-w64-mingw32-gcc --version | head -n 1
           jq --version
           docker --version
+          # The shaped-link throughput check needs the netem qdisc; Azure
+          # kernels ship it in the extra modules package.
+          if [[ "$SUITE_MODE" == suite ]] && ! sudo modprobe sch_netem 2>/dev/null; then
+            sudo apt-get install -y "linux-modules-extra-$(uname -r)"
+            sudo modprobe sch_netem
+          fi
 
       - uses: Swatinem/rust-cache@v2
         with:

@@ -65,7 +65,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-for command_name in awk cargo git grep mktemp rustfmt sed sort tee uname; do
+for command_name in awk cargo comm git grep mktemp rustfmt sed sort tee tr uname; do
     command -v "$command_name" >/dev/null 2>&1 || {
         echo "$command_name is required" >&2
         exit 1
@@ -140,7 +140,9 @@ for batch_file in "${batch_files[@]}"; do
 done
 batch_diagnostics() {
     local log=$1
-    { grep -E '^(src|tests)/[^:]+:[0-9]+:[0-9]+: (warning|error)' "$log" || true; } | sort -u | awk -F: -v ranges="$batch_ranges" '
+    # Cargo prints Windows paths with backslashes; the ranges use slashes.
+    { tr '\\' '/' < "$log" | grep -E '^(src|tests)/[^:]+:[0-9]+:[0-9]+: (warning|error)' || true; } |
+        sort -u | awk -F: -v ranges="$batch_ranges" '
         BEGIN {
             while ((getline line < ranges) > 0) {
                 split(line, range, " ")
@@ -229,10 +231,35 @@ mapfile -t compiled_tests < <(
 )
 mapfile -t missing_tests < <(comm -23 <(printf '%s\n' "${source_tests[@]}") \
     <(printf '%s\n' "${compiled_tests[@]}"))
+
+# The `cfg` attributes in the attribute block directly above `fn <name>`.
+test_cfgs() {
+    awk -v name="$2" '
+        { lines[NR] = $0 }
+        $0 ~ ("fn " name "[(<]") { found = NR; exit }
+        END {
+            for (i = found - 1; found && i > 0; i--) {
+                if (lines[i] !~ /^[[:space:]]*(#\[|\/\/)/) break
+                if (lines[i] ~ /#\[cfg\(/) printf "%s ", lines[i]
+            }
+        }' "$1"
+}
+
+# Whether those attributes leave the test out on this platform.
+cfg_excludes_platform() {
+    case "$platform" in
+        windows) grep -Eq 'cfg\((all\()?(unix|target_family = "unix"|target_os = "(linux|android)"|not\(windows\))' <<<"$1" ;;
+        linux) grep -Eq 'cfg\((all\()?(windows|target_family = "windows"|target_os = "windows"|not\(unix\))' <<<"$1" ;;
+    esac
+}
+
 unexpected=()
 for name in "${missing_tests[@]}"; do
     [[ -z "$name" ]] && continue
     defined_in="$(grep -rlE "fn ${name}\b" "$repo_root/native/src" | head -n 1)"
+    if cfg_excludes_platform "$(test_cfgs "$defined_in" "$name")"; then
+        continue
+    fi
     case "$platform:$defined_in" in
         # Windows-only modules and Windows adapters do not exist on Linux.
         linux:*/virtual_clipboard/*|linux:*/dragout/*|linux:*/os/windows*|linux:*/windows/*) ;;
