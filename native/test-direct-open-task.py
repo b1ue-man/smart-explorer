@@ -150,6 +150,7 @@ def main():
         "atomic_save_waits_for_stability_then_saves_back",
         "manifest_failure_suppresses_upload_and_preserves_edit",
         "save_conflict_and_failed_revision_check_preserve_remote",
+        "acknowledged_save_retains_revision_when_stat_is_unavailable",
         "transport_envelope_preserves_kind_and_context",
         "agent_decodes_transport_without_changing_legacy_or_busy",
         "quic_failure_keeps_underlying_disconnect_cause",

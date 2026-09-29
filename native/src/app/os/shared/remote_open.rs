@@ -25,6 +25,9 @@ fn save_remote_edit(
         backend.invalidate_cache();
     }
     let current = match backend.stat(remote) {
+        Ok(metadata) if metadata.mtime_ms == 0 && known != 0 => {
+            return SaveResult::Failed("Remote-Änderungsstand ist vorübergehend unbekannt".into());
+        }
         Ok(metadata) => metadata.mtime_ms,
         Err(error) if known != 0 => {
             return SaveResult::Failed(format!("Remote-Änderungen konnten nicht geprüft werden: {error}"));
@@ -36,7 +39,10 @@ fn save_remote_edit(
         return SaveResult::Conflict(current);
     }
     match upload_file(backend, temp, remote) {
-        Ok(()) => SaveResult::Ok(backend.stat(remote).map(|meta| meta.mtime_ms).unwrap_or(0)),
+        // Publication was acknowledged. An unavailable follow-up stat must
+        // neither replay that upload nor erase an established conflict guard.
+        Ok(()) => SaveResult::Ok(backend.stat(remote).ok()
+            .map(|meta| meta.mtime_ms).filter(|mtime| *mtime != 0).unwrap_or(known)),
         Err(error) => SaveResult::Failed(error),
     }
 }

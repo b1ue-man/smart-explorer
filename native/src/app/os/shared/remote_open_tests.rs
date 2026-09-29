@@ -1,4 +1,7 @@
 use super::*;
+use crate::vfs::{Backend, LocalBackend, Scheme, VfsMeta};
+use std::io::{self, Read, Write};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn app_with_pending(name: &str) -> (App, PathBuf) {
     let mut app = App::new_for_copy_task();
@@ -229,4 +232,63 @@ fn direct_open_task_save_conflict_and_failed_revision_check_preserve_remote() {
     assert!(!remote_file.exists(), "failed stat must not recreate a missing remote");
     assert_eq!(std::fs::read(&temp).unwrap(), b"local edit");
     finish(app);
+}
+
+struct StatUnavailableAfterPublish {
+    inner: LocalBackend,
+    publications: AtomicUsize,
+    unknown: bool,
+}
+
+impl Backend for StatUnavailableAfterPublish {
+    fn scheme(&self) -> Scheme { Scheme::Peer }
+    fn root_display(&self) -> String { self.inner.root_display() }
+    fn list_dir(&self, path: &str) -> io::Result<Vec<VfsMeta>> { self.inner.list_dir(path) }
+    fn stat(&self, path: &str) -> io::Result<VfsMeta> {
+        if self.publications.load(Ordering::SeqCst) == 0 {
+            return self.inner.stat(path);
+        }
+        if self.unknown {
+            let mut metadata = self.inner.stat(path)?;
+            metadata.mtime_ms = 0;
+            Ok(metadata)
+        } else {
+            Err(io::Error::new(io::ErrorKind::NotConnected, "connection lost after upload ACK"))
+        }
+    }
+    fn open_read(&self, path: &str) -> io::Result<Box<dyn Read + Send>> { self.inner.open_read(path) }
+    fn open_write(&self, path: &str) -> io::Result<Box<dyn Write + Send>> { self.inner.open_write(path) }
+    fn open_write_new(&self, path: &str) -> io::Result<Box<dyn Write + Send>> { self.inner.open_write_new(path) }
+    fn rename(&self, from: &str, to: &str) -> io::Result<()> { self.inner.rename(from, to) }
+    fn remove_file(&self, path: &str) -> io::Result<()> { self.inner.remove_file(path) }
+    fn remove_dir(&self, path: &str) -> io::Result<()> { self.inner.remove_dir(path) }
+    fn mkdir_all(&self, path: &str) -> io::Result<()> { self.inner.mkdir_all(path) }
+    fn promote_staged(&self, stage: &str, destination: &str) -> io::Result<()> {
+        self.inner.promote_staged(stage, destination)?;
+        self.publications.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+#[test]
+fn direct_open_task_acknowledged_save_retains_revision_when_stat_is_unavailable() {
+    for unknown in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let remote = directory.path().join("remote.txt");
+        let edit = directory.path().join("editor.txt");
+        std::fs::write(&remote, b"original").unwrap();
+        std::fs::write(&edit, b"saved once").unwrap();
+        let known = file_mtime_ms(&remote);
+        assert_ne!(known, 0);
+        let backend = StatUnavailableAfterPublish { inner: LocalBackend::new("/"),
+            publications: AtomicUsize::new(0), unknown };
+        assert!(matches!(save_remote_edit(&backend, &edit, &remote.to_string_lossy(), known),
+            SaveResult::Ok(revision) if revision == known));
+        assert_eq!(std::fs::read(&remote).unwrap(), b"saved once");
+        std::fs::write(&edit, b"must stay local until conflict check succeeds").unwrap();
+        assert!(matches!(save_remote_edit(&backend, &edit, &remote.to_string_lossy(), known),
+            SaveResult::Failed(_)));
+        assert_eq!(backend.publications.load(Ordering::SeqCst), 1);
+        assert_eq!(std::fs::read(&remote).unwrap(), b"saved once");
+    }
 }
