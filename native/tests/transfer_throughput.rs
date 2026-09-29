@@ -166,8 +166,10 @@ fn download_large_file(case: &str, backend: BackendHandle, root: &str) {
     let folder = remote_folder(&*backend, root, case);
     let remote_file = format!("{folder}/large.bin");
     {
+        // A plain write: the folder is new and unique, and FTP has no
+        // exclusive create.
         let mut writer = backend
-            .open_write_new(&remote_file)
+            .open_write(&remote_file)
             .expect("create remote fixture");
         let block = vec![0xa5_u8; 1024 * 1024];
         for _ in 0..LARGE_FILE_BYTES / block.len() {

@@ -35,8 +35,29 @@ server_pid=""
 
 trap 'echo "Share Room E2E failed at line $LINENO: $BASH_COMMAND" >&2' ERR
 
+# On a failure, what the processes looked like before they are stopped: thread
+# counts against the user's limit and the tail of each client's daemon log.
+failure_diagnostics() {
+  local client pid log
+  echo "threads: $(ps -eLf 2>/dev/null | wc -l) in total, ulimit -u $(ulimit -u)" >&2
+  for client in "$client_c" "$client_d"; do
+    while read -r pid; do
+      [[ -n "$pid" ]] || continue
+      echo "daemon $pid ($client): $(find "/proc/$pid/task" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l) threads" >&2
+    done < <(daemon_pids "$client")
+    while read -r log; do
+      [[ -n "$log" ]] || continue
+      echo "--- $log (last 40 lines)" >&2
+      tail -n 40 "$log" >&2 || true
+    done < <(find "$client" -name daemon.log 2>/dev/null)
+  done
+}
+
 cleanup() {
   local status=$?
+  if [[ $status -ne 0 ]]; then
+    failure_diagnostics || true
+  fi
   stop_daemon "$client_c" || true
   stop_daemon "$client_d" || true
   if [[ -n "$server_pid" ]]; then
@@ -319,12 +340,17 @@ parallel_2=$!
 run_client_background "$client_c" cp "$room_endpoint_d/RoomDocs/big-3.bin" "$root/big-3.bin" \
   </dev/null >"$root/parallel-3.out" 2>&1 &
 parallel_3=$!
-wait_child "$parallel_1" 180
-[[ $child_status -eq 0 ]] || { cat "$root/parallel-1.out" >&2; false; }
-wait_child "$parallel_2" 180
-[[ $child_status -eq 0 ]] || { cat "$root/parallel-2.out" >&2; false; }
-wait_child "$parallel_3" 180
-[[ $child_status -eq 0 ]] || { cat "$root/parallel-3.out" >&2; false; }
+parallel_failed=0
+for index in 1 2 3; do
+  pid_var="parallel_$index"
+  wait_child "${!pid_var}" 180
+  if [[ $child_status -ne 0 ]]; then
+    echo "parallel download $index failed with status $child_status:" >&2
+    cat "$root/parallel-$index.out" >&2
+    parallel_failed=1
+  fi
+done
+[[ $parallel_failed -eq 0 ]]
 cmp "$export_c/big-1.bin" "$root/big-1.bin"
 cmp "$export_c/big-2.bin" "$root/big-2.bin"
 cmp "$export_d/big-3.bin" "$root/big-3.bin"
