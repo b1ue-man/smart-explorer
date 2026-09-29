@@ -11,6 +11,10 @@ use super::local_stage::{cleanup_partial, create_download_part, ensure_local_spa
 const MAX_ATTEMPTS: usize = 3;
 const RECONNECT_WINDOW: Duration = Duration::from_secs(45);
 
+#[cfg(test)]
+#[path = "edit_download_task_tests.rs"]
+mod task_tests;
+
 enum DownloadFailure {
     Remote(io::Error),
     Local(String),

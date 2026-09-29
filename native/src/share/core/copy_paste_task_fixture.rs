@@ -227,6 +227,8 @@ mod transfer_engine_task_path_tests;
 mod transfer_engine_task_support;
 #[path = "transfer_engine_task_tests.rs"]
 mod transfer_engine_task_tests;
+#[path = "direct_open_task_tests.rs"]
+mod direct_open_task_tests;
 
 fn identity(name: &str) -> io::Result<ShareIdentity> {
     let secret = iroh::SecretKey::from_bytes(&random_bytes::<32>().map_err(io::Error::other)?);

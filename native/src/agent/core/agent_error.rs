@@ -71,6 +71,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn direct_open_task_agent_decodes_transport_without_changing_legacy_or_busy() {
+        let source = io::Error::new(io::ErrorKind::NotConnected, "connection lost: idle timeout");
+        let error = agent_error(crate::agent_proto::transport_error_message(&source));
+        assert_eq!(error.kind(), source.kind());
+        assert_eq!(error.to_string(), source.to_string());
+        assert_eq!(agent_error("SE_TRANSPORT_V1 future unknown".into()).kind(), io::ErrorKind::Other);
+        assert_eq!(agent_error("Permission denied (os error 13)".into()).kind(), io::ErrorKind::PermissionDenied);
+        assert!(crate::vfs::congestion_of(&agent_error(crate::agent_proto::busy_message(
+            Some(std::time::Duration::from_secs(1)), "busy"))).is_some());
+    }
+
+    #[test]
     fn recursive_filter_task_agent_errors_recover_not_found_and_exists_kinds() {
         for message in [
             "No such file or directory (os error 2)",

@@ -137,6 +137,11 @@ mod request_workers;
 #[cfg(test)]
 #[path = "os/shared/request_workers_task_tests.rs"]
 mod request_workers_task_tests;
+#[cfg(test)]
+#[path = "os/shared/direct_open_task_bridge.rs"]
+mod direct_open_task_bridge;
+#[cfg(test)]
+pub(crate) use direct_open_task_bridge::DirectOpenTaskBridge;
 #[path = "os/shared/rooted_backend.rs"]
 mod rooted_backend;
 #[path = "os/shared/rooted_backend_case.rs"]

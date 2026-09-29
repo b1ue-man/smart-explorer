@@ -32,3 +32,27 @@ pub(crate) fn parse_transport_error(message: &str) -> Option<io::Error> {
     };
     Some(io::Error::new(kind, text.to_string()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn direct_open_task_transport_envelope_preserves_kind_and_context() {
+        for kind in [io::ErrorKind::NotConnected, io::ErrorKind::ConnectionReset,
+            io::ErrorKind::ConnectionAborted, io::ErrorKind::ConnectionRefused,
+            io::ErrorKind::TimedOut, io::ErrorKind::BrokenPipe, io::ErrorKind::UnexpectedEof] {
+            let error = io::Error::new(kind, "connection lost: timed out\ncontext");
+            let decoded = parse_transport_error(&transport_error_message(&error)).unwrap();
+            assert_eq!(decoded.kind(), kind);
+            assert_eq!(decoded.to_string(), error.to_string());
+        }
+        for text in ["legacy failure", "SE_TRANSPORT_V1 unknown reason", "SE_TRANSPORT_V1 timed_out"] {
+            assert!(parse_transport_error(text).is_none());
+        }
+        for kind in [io::ErrorKind::PermissionDenied, io::ErrorKind::InvalidData,
+            io::ErrorKind::Interrupted, io::ErrorKind::Other] {
+            assert_eq!(transport_error_message(&io::Error::new(kind, "original")), "original");
+        }
+    }
+}

@@ -446,6 +446,16 @@ sind getrennte Phasen; eine gleiche Gesamtdauer über beliebige Netzverbindungen
 wird nicht behauptet. Abnahme und Veröffentlichung dieses Reparaturstands:
 [Windows-/Direct-Regressionsplan](docs/WINDOWS_REMOTE_REGRESSION.md).
 
+Beim Öffnen einer Remote-Datei wird die lokale Editor-Kopie erst nach einem
+vollständigen Download und einem geschriebenen Wiederherstellungsmanifest
+übergeben. Laufende Downloads lösen keine Meldung über eine fehlende Editor-Kopie
+aus; kurzzeitiges Ersetzen einer bereits geöffneten Datei beim Speichern behält
+deren Wiederherstellungseintrag. Bei Direct-/Raum-Lesefehlern versucht der aktuelle
+Quellstand den Download begrenzt erneut, über die bestehende authentifizierte
+Wiederverbindung und mit einer frischen temporären Datei. Ein dauerhaft offline
+oder von Android angehaltenes Gerät bleibt ein sichtbarer Fehler. Abnahme und
+Veröffentlichungsstand: [Direct-Dateiöffnen](docs/DIRECT_REMOTE_OPEN_REPAIR.md).
+
 **Lokale Windows-Speicheranalyse (ab 0.5.153):**
 Geschützte Ordner werden bei vorhandenen Sicherungsleserechten über einen
 begrenzten Windows-Backup-Lesezugriff ausgewertet — Administratorzugehörigkeit

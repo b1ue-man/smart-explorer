@@ -1,6 +1,6 @@
 # Direct remote opening and recovery
 
-Date: 2026-09-29. Task evidence and plan; implementation and remote acceptance
+Date: 2026-09-29. Implementation is committed; remote acceptance and publication
 are pending. Open work is tracked only in `TODO.md`.
 
 ## Goal and evidence
