@@ -85,5 +85,13 @@ Target. Die Auswahl umfasst die neuen Fälle und die unmittelbar betroffenen
 bestehenden Cache-, Dirty-Retry-, Delete-, Replace-, Pin- und Reserve-Verträge.
 Es gibt keinen lokalen Build/Test und keinen Dokany-/Installer-Build in der Suite.
 Remote-Ergebnis und Veröffentlichung sind noch nicht bestätigt.
+Der erste [Remote-Lauf](https://github.com/b1ue-man/smart-explorer/actions/runs/36699705886)
+auf `7a906b0` bestätigte Teilverlust/Retry, begrenzte große Reads, Windows-Dateisperren
+und die ausgewählten bestehenden Schreibverträge. Der neue Root-Grenzfall erwartete
+eine Ablehnung erst beim Lesen; der Agent lehnte bereits im Open-Handshake korrekt
+mit `InvalidInput` ab. Der Prüffall akzeptiert nun beide Fehlerzeitpunkte, verlangt
+weiterhin die korrekte Ablehnung und prüft die anschließende Nutzbarkeit der Verbindung.
+Die gleiche Suite wird mit diesem korrigierten Prüffall und der präzisierten
+Recovery-Meldung wiederholt; daraus folgt noch keine Release-Freigabe.
 Ein synthetischer Größenfall ersetzt keine Messung des ursprünglichen
 450-GB-Verzeichnisses und keine Zertifizierung sämtlicher Remote-Anbieter.
