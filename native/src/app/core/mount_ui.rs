@@ -1,7 +1,7 @@
 use super::mount_peer_roots::PeerMountDiscovery;
 use super::mount_runtime_ui::{install_controls, present_install_outcome};
 use super::mount_ui_draft::MountDraft;
-use super::mount_ui_helpers::{mount_status_alert, recovery_label, status_label, upsert_mount};
+use super::mount_ui_helpers::{has_mount_attention, mount_status_alert, recovery_label, status_label, upsert_mount};
 use super::prelude::*;
 use super::*;
 
@@ -15,6 +15,7 @@ pub(super) struct MountUiState {
     pub(super) peer_discovery_rx: Option<Receiver<Result<PeerMountDiscovery, String>>>,
     pub(super) busy: Option<String>,
     pub(super) next_poll: Instant,
+    received_initial_list: bool,
 }
 
 pub(super) enum MountUiResult {
@@ -33,6 +34,7 @@ impl Default for MountUiState {
             peer_discovery_rx: None,
             busy: None,
             next_poll: Instant::now(),
+            received_initial_list: false,
         }
     }
 }
@@ -101,7 +103,12 @@ impl App {
                         }
                     }
                     MountUiResult::List(mut mounts) => {
-                        let alert = mounts.iter().find_map(|mount| {
+                        let initial = !self.mount_ui.received_initial_list;
+                        self.mount_ui.received_initial_list = true;
+                        if initial && has_mount_attention(&mounts) {
+                            self.mount_ui.show_manager = true;
+                        }
+                        let alert = mounts.iter().filter(|_| !initial).find_map(|mount| {
                             let previous = self
                                 .mount_ui
                                 .mounts
