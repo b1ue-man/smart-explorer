@@ -134,11 +134,21 @@ impl MountEngine {
     }
 
     fn entry_meta(&self, state: &EntryState) -> io::Result<VfsMeta> {
-        let size = self
+        let size = match self
             .spool
-            .open_file(&state.spool_name, false)?
-            .metadata()?
-            .len();
+            .open_file(&state.spool_name, false)
+            .and_then(|file| file.metadata())
+        {
+            Ok(metadata) => metadata.len(),
+            Err(error) if error.kind() == io::ErrorKind::NotFound
+                && self.spool.is_missing_recovery(&state.spool_name) => {
+                // Keep the conflicted name visible without blocking its whole
+                // directory. This is only the last known size, never replacement
+                // content: data access still reports the absent recovery file.
+                match state.baseline { Baseline::Present { size, .. } => size, Baseline::Missing => 0 }
+            }
+            Err(error) => return Err(error),
+        };
         let mtime_ms = match &state.baseline {
             Baseline::Missing => 0,
             Baseline::Present { mtime_ms, .. } => *mtime_ms,

@@ -8,6 +8,9 @@ use std::sync::Mutex;
 
 const ALLOCATION_ATTEMPTS: usize = 128;
 
+#[path = "spool_recovery.rs"]
+mod recovery;
+
 pub(super) struct AllocatedSpool {
     pub name: String,
     pub file: File,
@@ -17,6 +20,8 @@ pub(super) struct WholeFileSpool {
     files: PathBuf,
     journal: Mutex<Journal>,
     referenced: Mutex<HashSet<String>>,
+    missing_recovery: HashSet<String>,
+    cleanup_ready: bool,
 }
 
 pub fn prepare_spool_root(path: &Path) -> io::Result<PathBuf> {
@@ -76,8 +81,9 @@ impl WholeFileSpool {
         ensure_directory(&root)?;
         let files = root.join("files");
         ensure_directory(&files)?;
-        let (journal, recovered) = Journal::open(&root.join("journal.jsonl"))?;
-        let spool = Self {
+        recovery::require_journal_for_existing_files(&root, &files)?;
+        let (journal, mut recovered) = Journal::open(&root.join("journal.jsonl"))?;
+        let mut spool = Self {
             files,
             journal: Mutex::new(journal),
             referenced: Mutex::new(
@@ -87,15 +93,26 @@ impl WholeFileSpool {
                     .map(|entry| entry.spool_name.clone())
                     .collect(),
             ),
+            missing_recovery: HashSet::new(),
+            cleanup_ready: false,
         };
-        for entry in recovered.entries.values() {
-            spool.validate_recovered_entry(entry)?;
+        let mut names = HashSet::new();
+        for entry in recovered.entries.values_mut() {
+            if !names.insert(entry.spool_name.clone()) {
+                return Err(io::Error::new(io::ErrorKind::InvalidData,
+                    "two recovery entries reference the same mount spool"));
+            }
+            if recovery::validate_entry(&spool, entry)? {
+                spool.missing_recovery.insert(entry.spool_name.clone());
+            }
         }
         let referenced = recovered
             .entries
             .values()
             .map(|entry| entry.spool_name.clone())
             .collect::<HashSet<_>>();
+        // A failed audit must never authorize cleanup from Drop.
+        spool.cleanup_ready = true;
         spool.remove_orphan_clean_files(&referenced)?;
         Ok((spool, recovered))
     }
@@ -124,14 +141,16 @@ impl WholeFileSpool {
     pub fn open_file(&self, name: &str, writable: bool) -> io::Result<File> {
         validate_spool_name(name)?;
         let path = self.files.join(name);
-        let metadata = fs::symlink_metadata(&path)?;
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|error| recovery::file_error(&path, error))?;
         if metadata.file_type().is_symlink() || !metadata.is_file() {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "mount spool entry is not a plain file",
             ));
         }
-        OpenOptions::new().read(true).write(writable).open(path)
+        OpenOptions::new().read(true).write(writable).open(&path)
+            .map_err(|error| recovery::file_error(&path, error))
     }
 
     pub fn remove_file(&self, name: &str) -> io::Result<()> {
@@ -144,7 +163,10 @@ impl WholeFileSpool {
                     "refusing to remove a non-file mount spool entry",
                 ))
             }
-            Ok(_) => fs::remove_file(path),
+            Ok(_) => match fs::remove_file(path) {
+                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+                result => result,
+            },
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(error),
         }
@@ -159,6 +181,10 @@ impl WholeFileSpool {
 
     pub fn is_recovery_referenced(&self, name: &str) -> io::Result<bool> {
         Ok(lock(&self.referenced)?.contains(name))
+    }
+
+    pub fn is_missing_recovery(&self, name: &str) -> bool {
+        self.missing_recovery.contains(name)
     }
 
     pub fn forget_entry(&self, remote_path: &str, spool_name: &str) -> io::Result<()> {
@@ -189,26 +215,13 @@ impl WholeFileSpool {
         lock(&self.journal)?.forget_namespace_conflict(path)
     }
 
-    fn validate_recovered_entry(&self, entry: &PersistedEntry) -> io::Result<()> {
-        if entry.remote_path.is_empty() || entry.remote_path.contains('\0') {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "mount journal contains an invalid remote path",
-            ));
-        }
-        let file = self.open_file(&entry.spool_name, false)?;
-        if !file.metadata()?.is_file() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "mount journal references a missing spool file",
-            ));
-        }
-        Ok(())
-    }
-
     fn remove_orphan_clean_files(&self, referenced: &HashSet<String>) -> io::Result<()> {
+        let mut first_error = None;
         for child in fs::read_dir(&self.files)? {
-            let child = child?;
+            let child = match child {
+                Ok(child) => child,
+                Err(error) => { first_error.get_or_insert(error); continue; }
+            };
             let name = child.file_name();
             let Some(name) = name.to_str() else {
                 continue;
@@ -216,16 +229,11 @@ impl WholeFileSpool {
             if !is_spool_name(name) || referenced.contains(name) {
                 continue;
             }
-            let metadata = fs::symlink_metadata(child.path())?;
-            if metadata.file_type().is_symlink() || !metadata.is_file() {
-                return Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "orphan mount spool object is not a plain file",
-                ));
+            if let Err(error) = self.remove_file(name) {
+                first_error.get_or_insert(error);
             }
-            fs::remove_file(child.path())?;
         }
-        Ok(())
+        first_error.map_or(Ok(()), Err)
     }
 }
 
@@ -246,6 +254,7 @@ pub(super) fn audit_recovery(
 
 impl Drop for WholeFileSpool {
     fn drop(&mut self) {
+        if !self.cleanup_ready { return; }
         if let Ok(referenced) = self.referenced.lock() {
             let _ = self.remove_orphan_clean_files(&referenced);
         }
