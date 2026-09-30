@@ -86,11 +86,25 @@ impl State {
     }
 
     fn evict_first(&mut self, spool: &WholeFileSpool) -> io::Result<bool> {
-        let Some((_, _, name)) = self.lru.first().cloned() else { return Ok(false); };
-        // No bookkeeping changes until physical disposal succeeds.
-        spool.remove_file(&name)?;
-        self.remove(&name);
-        Ok(true)
+        let mut first_error = None;
+        let removed = self.lru.iter().find_map(|(_, _, name)| {
+            match spool.remove_file(name) {
+                Ok(()) => Some(name.clone()),
+                Err(error) => { first_error.get_or_insert(error); None }
+            }
+        });
+        if let Some(name) = removed {
+            // Failed candidates retain their accounting and next-pass priority.
+            self.remove(&name);
+            return Ok(true);
+        }
+        first_error.map_or(Ok(false), Err)
+    }
+
+    fn over_budget(&self, limit: u64) -> bool {
+        (limit == 0 && !self.records.is_empty())
+            || self.records.len() > MAX_IDLE_RECORDS
+            || self.bytes > u128::from(limit)
     }
 }
 
@@ -156,16 +170,19 @@ impl CleanCache {
     pub fn trim(&self, spool: &WholeFileSpool, limit: u64) -> io::Result<()> {
         let mut state = lock(&self.state)?;
         state.expire();
-        while (limit == 0 && !state.records.is_empty())
-            || state.records.len() > MAX_IDLE_RECORDS
-            || state.bytes > u128::from(limit)
-            || state.lru.first().is_some_and(|(valid, _, _)| !valid)
-        {
-            if !state.evict_first(spool)? {
-                break;
+        if !state.over_budget(limit) && !state.lru.first().is_some_and(|(valid, _, _)| !valid) {
+            return Ok(());
+        }
+        let candidates = state.lru.iter().cloned().collect::<Vec<_>>();
+        let mut first_error = None;
+        for (valid, _, name) in candidates {
+            if valid && !state.over_budget(limit) { break; }
+            match spool.remove_file(&name) {
+                Ok(()) => { state.remove(&name); }
+                Err(error) => { first_error.get_or_insert(error); }
             }
         }
-        Ok(())
+        first_error.map_or(Ok(()), Err)
     }
 
     pub fn usage(&self) -> io::Result<(usize, u64)> {
