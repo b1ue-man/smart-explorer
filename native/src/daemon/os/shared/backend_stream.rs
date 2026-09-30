@@ -51,7 +51,10 @@ pub(super) fn handle_read_backend(
             return Ok(());
         }
         let want = remaining.min(buf.len() as u64) as usize;
-        let n = r.read(&mut buf[..want])?;
+        let n = match r.read(&mut buf[..want]) {
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            result => result?,
+        };
         if n == 0 {
             break;
         }

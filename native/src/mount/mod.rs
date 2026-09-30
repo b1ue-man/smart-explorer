@@ -107,6 +107,13 @@ mod optimization_policy_tests;
 #[path = "core/optimization_metadata_tests.rs"]
 mod optimization_metadata_tests;
 
+#[cfg(test)]
+#[path = "core/recovery_cache_task_tests.rs"]
+mod recovery_cache_task_tests;
+#[cfg(test)]
+#[path = "core/range_read_task_tests.rs"]
+pub(crate) mod range_read_task_tests;
+
 pub use engine::MountEngine;
 pub use cache_policy::{
     MountCachePolicy, MountRuntimePreference, DEFAULT_MOUNT_CACHE_MIB, MAX_MOUNT_CACHE_MIB,

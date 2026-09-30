@@ -374,6 +374,18 @@ Android Doze or a physical Wi-Fi transition. Evidence and limits are recorded in
 [the sync plan](DRIVE_SYNC_DUPLICATES_REPAIR.md). After this suite succeeds, use the
 same terminal complete-release path below, without a separate verification run.
 
+For the mount recovery and oversized read-cache repair, dispatch only
+`.github/workflows/mount-recovery-cache-task.yml` with the full pushed
+`candidate_sha`. Its one `native/test-mount-recovery-cache-task.ps1` entrypoint
+reuses a hash-bound Windows library fixture or incrementally builds that library.
+It covers partial recovery loss, restored payload retry, missing/corrupt journals,
+bounded reads of a synthetic 450-GiB file through the rooted daemon/TCP proxy,
+unseekable fallback, locked-cache reclamation, startup presentation and the
+directly affected write/delete/replace/pin/space contracts. It requires no Dokany
+driver installation and performs no release or workspace build. Job/entrypoint
+timeouts are 180/170 minutes. Scope and evidence:
+[mount recovery and cache repair](MOUNT_RECOVERY_CACHE_REPAIR.md).
+
 For remote automation, dispatch `.github/workflows/build.yml` exactly once from
 the `main` ref with `complete_release_source_sha` set to the full current
 `origin/main` object ID. Leave `verify_release_candidate` and `publish_release`

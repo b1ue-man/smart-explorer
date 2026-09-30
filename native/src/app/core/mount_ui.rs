@@ -1,7 +1,7 @@
 use super::mount_peer_roots::PeerMountDiscovery;
 use super::mount_runtime_ui::{install_controls, present_install_outcome};
 use super::mount_ui_draft::MountDraft;
-use super::mount_ui_helpers::{has_mount_attention, mount_status_alert, recovery_label, status_label, upsert_mount};
+use super::mount_ui_helpers::{has_mount_attention, mount_list_alert, mount_status_alert, recovery_label, status_label, upsert_mount};
 use super::prelude::*;
 use super::*;
 
@@ -108,15 +108,7 @@ impl App {
                         if initial && has_mount_attention(&mounts) {
                             self.mount_ui.show_manager = true;
                         }
-                        let alert = mounts.iter().filter(|_| !initial).find_map(|mount| {
-                            let previous = self
-                                .mount_ui
-                                .mounts
-                                .iter()
-                                .find(|known| known.config.id == mount.config.id)
-                                .map(|known| &known.status);
-                            mount_status_alert(previous, mount)
-                        });
+                        let alert = mount_list_alert(&self.mount_ui.mounts, &mounts, initial);
                         mounts.retain(|mount| {
                             !matches!(&mount.status, crate::mount::MountStatus::Unmounted)
                         });
