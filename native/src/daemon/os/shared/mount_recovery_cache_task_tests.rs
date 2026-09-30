@@ -49,11 +49,15 @@ fn mount_recovery_cache_task_range_crosses_rooted_tcp_proxy_without_ids_or_escap
         assert_eq!(bridge.backend.stat("/large").unwrap().size, raw.size);
     }
     for path in ["/../large", "/link"] {
-        // Agent reads are streamed: the authorization error arrives on read.
-        let mut reader = bridge.backend.open_read_at(path, Some("private-provider-id"), 1)
-            .unwrap().unwrap();
-        let error = reader.read(&mut [0; 1]).unwrap_err();
+        // The agent may reject in its open handshake or while receiving data.
+        // Both must preserve the original authorization error kind.
+        let error = match bridge.backend.open_read_at(path, Some("private-provider-id"), 1) {
+            Err(error) => error,
+            Ok(Some(mut reader)) => reader.read(&mut [0; 1]).unwrap_err(),
+            Ok(None) => panic!("the agent supports offsets and must reject this unauthorized path"),
+        };
         assert!(matches!(error.kind(), io::ErrorKind::InvalidInput | io::ErrorKind::PermissionDenied));
+        assert_eq!(bridge.backend.stat("/large").unwrap().size, raw.size);
     }
     assert_eq!(raw.full_reads.load(Ordering::SeqCst), 0);
     assert_eq!(raw.range_reads.load(Ordering::SeqCst), 2);
