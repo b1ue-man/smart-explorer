@@ -29,6 +29,10 @@ pub(super) fn validate_entry(spool: &WholeFileSpool, entry: &mut PersistedEntry)
             "mount journal contains an invalid remote path"));
     }
     validate_spool_name(&entry.spool_name)?;
+    if entry.condition == EntryCondition::Clean && entry.delete_token.is_none() {
+        return Err(io::Error::new(io::ErrorKind::InvalidData,
+            "clean journal entry lacks a pending delete transaction"));
+    }
     match spool.open_file(&entry.spool_name, false) {
         Ok(file) => { file.metadata()?; Ok(false) }
         Err(error) if error.kind() == io::ErrorKind::NotFound => {

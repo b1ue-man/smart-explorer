@@ -217,6 +217,14 @@ Inhaltsnachweis. Vor zusätzlichem Arbeitsbedarf und bei der Wartung wird nur
 entbehrlicher sauberer Cache freigegeben, um **512 MiB freien Platz** zu erhalten;
 fremde Programme können diese Momentaufnahme anschließend verändern.
 
+Auf **rein lesenden Mounts** werden Dateien oberhalb dieses Cache-Budgets
+(mindestens 1 MiB) bei unterstütztem Zugriff ab Dateiposition bedarfsgesteuert
+gelesen. Ein kleiner Lesezugriff lädt dann keine vollständige Großdatei auf die
+lokale Platte. Schreibbare Mounts behalten ihre vollständigen Arbeitskopien für
+sicheres Speichern und Recovery; ihr Platzbedarf kann das Aufbewahrungslimit
+weiterhin überschreiten. Eine gesperrte saubere Cache-Datei verhindert nicht die
+Bereinigung anderer Dateien.
+
 Die Metadaten-Tiefe bleibt 0 bis 4, standardmäßig 2; `0` schaltet nur das
 proaktive Vorladen ab. Bei aktivem Vorladen wird zunächst nur das Root-Snapshot
 geladen. Unabhängige Verzeichnisse folgen begrenzt parallel, Vorfahren vor
@@ -348,6 +356,15 @@ wird die begrenzte Ursache des Host-Prozesses angehängt, statt nur einen
 generischen Exit-Code zu zeigen. Ein nachweislich sauberer Eintrag kann im
 Laufwerksmanager entfernt werden; für erhaltenes Recovery-Material bleibt
 `Retry` der Wiederaufnahmeweg.
+
+Fehlt eine vom gültigen Journal referenzierte Cache-Datei, bleibt ihr Eintrag als
+Konflikt mit dem konkreten lokalen Pfad erhalten. Andere Dateien können weiter
+wiederhergestellt werden. Die fehlende Datei wird nicht durch Remote-Inhalt
+ersetzt; nach Wiederherstellung aus einer Sicherung kann ein erneutes Verbinden
+den ursprünglichen Eintrag wieder aufnehmen. Vorhandene Nutzdaten ohne lesbares
+Journal werden nicht automatisch gelöscht. Bereits bestehende Fehler erscheinen
+beim GUI-Start im Laufwerksmanager; neue Fehler und Retry-Ergebnisse bleiben
+sichtbar. Umfang und Nachweis: [Mount-Recovery-Reparatur](docs/MOUNT_RECOVERY_CACHE_REPAIR.md).
 
 **Teilen / P2P (ab 0.5.23):** Dateien an gekoppelte Geräte oder in **Räume**
 senden. Der aktuelle Iroh/QUIC-Transport ist **Ende-zu-Ende-verschlüsselt** und

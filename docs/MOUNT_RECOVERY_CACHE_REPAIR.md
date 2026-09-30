@@ -77,6 +77,13 @@ Sync-, Transfer-, Backup- und Provider-Implementierungen werden nicht umgebaut.
 
 ## Abnahme
 
-Implementierung, Remote-Prüfung und Veröffentlichung stehen für diesen Kandidaten
-noch aus. Ein synthetischer Größenfall ersetzt keine Messung des ursprünglichen
+Die Implementierung ist im Kandidaten enthalten. Die gemeinsame Remote-Abnahme
+läuft über `mount-recovery-cache-task.yml` und ausschließlich
+`native/test-mount-recovery-cache-task.ps1`. Sie verwendet einen passenden
+vorhandenen Windows-Library-Testbinärstand oder baut inkrementell nur dieses
+Target. Die Auswahl umfasst die neuen Fälle und die unmittelbar betroffenen
+bestehenden Cache-, Dirty-Retry-, Delete-, Replace-, Pin- und Reserve-Verträge.
+Es gibt keinen lokalen Build/Test und keinen Dokany-/Installer-Build in der Suite.
+Remote-Ergebnis und Veröffentlichung sind noch nicht bestätigt.
+Ein synthetischer Größenfall ersetzt keine Messung des ursprünglichen
 450-GB-Verzeichnisses und keine Zertifizierung sämtlicher Remote-Anbieter.

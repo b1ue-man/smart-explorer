@@ -56,6 +56,22 @@ pub(super) fn has_mount_attention(mounts: &[crate::mount::MountSnapshot]) -> boo
         | crate::mount::MountStatus::RuntimeUnavailable { .. }))
 }
 
+pub(super) fn mount_list_alert(
+    previous: &[crate::mount::MountSnapshot],
+    mounts: &[crate::mount::MountSnapshot],
+    initial: bool,
+) -> Option<String> {
+    if initial { return None; }
+    mounts.iter().find_map(|mount| {
+        let known = previous.iter().find(|known| known.config.id == mount.config.id);
+        mount_status_alert(known.map(|known| &known.status), mount)
+    })
+}
+
+#[cfg(test)]
+#[path = "mount_recovery_cache_task_tests.rs"]
+mod task_tests;
+
 pub(super) fn recovery_label(recovery: crate::mount::MountRecovery) -> &'static str {
     match recovery {
         crate::mount::MountRecovery::Clean => "Recovery: sauber",

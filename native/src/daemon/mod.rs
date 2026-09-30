@@ -112,6 +112,9 @@ mod mount_process_environment;
 mod mount_process_environment_task_tests;
 #[path = "os/shared/mount_proxy.rs"]
 mod mount_proxy;
+#[cfg(test)]
+#[path = "os/shared/mount_recovery_cache_task_tests.rs"]
+mod mount_recovery_cache_task_tests;
 #[path = "os/shared/mount_registry.rs"]
 mod mount_registry;
 #[path = "os/shared/mount_request_gate.rs"]
