@@ -32,6 +32,8 @@ mod delete_recovery;
 mod engine;
 #[path = "core/file_io.rs"]
 mod file_io;
+#[path = "core/range_read.rs"]
+mod range_read;
 #[path = "core/journal.rs"]
 mod journal;
 #[path = "core/metadata.rs"]

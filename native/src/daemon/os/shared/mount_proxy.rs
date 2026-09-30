@@ -74,6 +74,15 @@ impl Backend for MountProxy {
         }))
     }
 
+    fn open_read_at(&self, path: &str, _id: Option<&str>, offset: u64)
+        -> VfsResult<Option<Box<dyn Read + Send>>>
+    {
+        let permit = self.gate.enter()?;
+        Ok(decode(self.inner.open_read_at(path, None, offset))?.map(|inner| {
+            Box::new(DecodedReader { inner, _permit: permit }) as Box<dyn Read + Send>
+        }))
+    }
+
     fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
         let permit = self.gate.enter()?;
         let inner = decode(self.inner.open_write(path))?;

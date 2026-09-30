@@ -239,6 +239,17 @@ impl Backend for RootedBackend {
         Ok(Box::new(SanitizedReader { inner: reader }))
     }
 
+    fn open_read_at(&self, path: &str, _id: Option<&str>, offset: u64)
+        -> VfsResult<Option<Box<dyn Read + Send>>>
+    {
+        let _operation = self.operation.read()?;
+        // Resolve the exact authorized root and ignore caller-supplied provider
+        // IDs just like open_read. IDs must never bypass path authorization.
+        self.inner.open_read_at(&self.checked_existing(path)?, None, offset)
+            .map(|reader| reader.map(|inner| Box::new(SanitizedReader { inner }) as Box<dyn Read + Send>))
+            .map_err(sanitize_error)
+    }
+
     fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
         let _operation = self.operation.write()?;
         self.require_write()?;
