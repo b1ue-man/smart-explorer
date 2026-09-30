@@ -26,11 +26,11 @@ pub(super) fn mount_status_alert(
     let label = &mount.config.label;
     match &mount.status {
         crate::mount::MountStatus::Conflict { path, detail, .. } => Some(format!(
-            "Laufwerk \"{label}\": Der Remote-Status der Aenderung an {path} ist nicht abschliessend verifiziert; sie kann bereits gespeichert sein oder mit dem Remote-Stand kollidieren: {detail}. Die lokale Recovery-Kopie bleibt erhalten; Details stehen im Laufwerksmanager."
+            "Laufwerk \"{label}\": Die Wiederherstellung der Aenderung an {path} ist noch offen: {detail}. Vorhandene Recovery-Daten und das Journal bleiben erhalten; Details stehen im Laufwerksmanager."
         )),
         crate::mount::MountStatus::Failed { detail }
             if mount.recovery == crate::mount::MountRecovery::Required => Some(format!(
-            "Laufwerk \"{label}\" ist ausgefallen: {detail}. Nicht uebertragene Aenderungen bleiben im Recovery-Cache; Details stehen im Laufwerksmanager."
+            "Laufwerk \"{label}\" ist ausgefallen: {detail}. Vorhandene lokale Aenderungen und das Recovery-Journal bleiben erhalten; Details stehen im Laufwerksmanager."
         )),
         crate::mount::MountStatus::Failed { detail }
             if mount.recovery == crate::mount::MountRecovery::Unknown => Some(format!(
@@ -75,7 +75,7 @@ mod task_tests;
 pub(super) fn recovery_label(recovery: crate::mount::MountRecovery) -> &'static str {
     match recovery {
         crate::mount::MountRecovery::Clean => "Recovery: sauber",
-        crate::mount::MountRecovery::Required => "Recovery: lokale Aenderungen vorhanden",
+        crate::mount::MountRecovery::Required => "Recovery: Aenderungen oder Konflikte offen",
         crate::mount::MountRecovery::Unknown => "Recovery: noch nicht verifiziert",
     }
 }
