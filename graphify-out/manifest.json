@@ -720,9 +720,9 @@
     "semantic_hash": "bf01a9d845b63abaac3dafc0ea3545cd"
   },
   "app/core/mount_ui_helpers.rs": {
-    "mtime": 1790762073.4103858,
-    "ast_hash": "074ce8eef2e0b9993e416d93ad7b8e88",
-    "semantic_hash": "074ce8eef2e0b9993e416d93ad7b8e88"
+    "mtime": 1790763266.1765108,
+    "ast_hash": "ddb68387203cd12499e75895f4c311e7",
+    "semantic_hash": "ddb68387203cd12499e75895f4c311e7"
   },
   "app/core/navigation_path.rs": {
     "mtime": 1789464134.0378952,
@@ -2590,9 +2590,9 @@
     "semantic_hash": "abcf0c951785e5bd7890acf2af372d8c"
   },
   "daemon/os/shared/mount_recovery_cache_task_tests.rs": {
-    "mtime": 1790762049.8830874,
-    "ast_hash": "4693bf9b0ca3ad3c33e12bbeab527d2f",
-    "semantic_hash": "4693bf9b0ca3ad3c33e12bbeab527d2f"
+    "mtime": 1790764291.0485845,
+    "ast_hash": "576731ac3a2d9f55733138e926cafea5",
+    "semantic_hash": "576731ac3a2d9f55733138e926cafea5"
   },
   "daemon/os/shared/mount_registry.rs": {
     "mtime": 1784628951.1690938,
