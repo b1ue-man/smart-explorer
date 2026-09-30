@@ -9,6 +9,8 @@ fest; offene Arbeit wird ausschließlich in `docs/TODO.md` geführt.
 
 ## Befunde und erster Plan
 
+Die folgenden Befunde beziehen sich auf den Ausgangsstand 0.5.167.
+
 Die Fehlermeldung kommt aus `daemon/os/shared/mount_manager_start_cache.rs` vor
 der Remote-Auflösung. `mount/core/spool.rs` bricht beim ersten fehlenden, vom
 Journal referenzierten Spool ab. Der Dateiname fehlt im Fehler, der Status bleibt
@@ -77,21 +79,40 @@ Sync-, Transfer-, Backup- und Provider-Implementierungen werden nicht umgebaut.
 
 ## Abnahme
 
-Die Implementierung ist im Kandidaten enthalten. Die gemeinsame Remote-Abnahme
-läuft über `mount-recovery-cache-task.yml` und ausschließlich
-`native/test-mount-recovery-cache-task.ps1`. Sie verwendet einen passenden
+Die Implementierung ist in 0.5.168 veröffentlicht. Die gemeinsame Remote-Abnahme
+wurde über `mount-recovery-cache-task.yml` und ausschließlich
+`native/test-mount-recovery-cache-task.ps1` ausgeführt. Das Skript verwendet einen passenden
 vorhandenen Windows-Library-Testbinärstand oder baut inkrementell nur dieses
 Target. Die Auswahl umfasst die neuen Fälle und die unmittelbar betroffenen
 bestehenden Cache-, Dirty-Retry-, Delete-, Replace-, Pin- und Reserve-Verträge.
 Es gibt keinen lokalen Build/Test und keinen Dokany-/Installer-Build in der Suite.
-Remote-Ergebnis und Veröffentlichung sind noch nicht bestätigt.
 Der erste [Remote-Lauf](https://github.com/b1ue-man/smart-explorer/actions/runs/36699705886)
 auf `7a906b0` bestätigte Teilverlust/Retry, begrenzte große Reads, Windows-Dateisperren
 und die ausgewählten bestehenden Schreibverträge. Der neue Root-Grenzfall erwartete
 eine Ablehnung erst beim Lesen; der Agent lehnte bereits im Open-Handshake korrekt
 mit `InvalidInput` ab. Der Prüffall akzeptiert nun beide Fehlerzeitpunkte, verlangt
 weiterhin die korrekte Ablehnung und prüft die anschließende Nutzbarkeit der Verbindung.
-Die gleiche Suite wird mit diesem korrigierten Prüffall und der präzisierten
-Recovery-Meldung wiederholt; daraus folgt noch keine Release-Freigabe.
+Die [Wiederholung derselben Suite](https://github.com/b1ue-man/smart-explorer/actions/runs/36703225402)
+auf `c29a31e380af7812f1101af27c056b76d2942030` ist erfolgreich. Die ausgewählten
+Recovery-, Cache-, Root-/Proxy- und bestehenden Schreibverträge sind bestätigt;
+`approval.json` bindet das Ergebnis `PASS` an diesen Kandidaten und den
+Windows-Library-Binärhash
+`eff2b9dec3de5f96d4fd76ec2663b22c5859065762faed31f939b1104fdf50be`.
+Der [vollständige Remote-Release](https://github.com/b1ue-man/smart-explorer/actions/runs/36706389905)
+wurde für genau diesen Quellstand erfolgreich abgeschlossen. Sein einmaliger
+Versionsschritt und Artefakt-Commit sind
+`acd83da20319bae2bc0b2b37f92ba5b3167417df`; die vom Wrapper gestartete
+[Veröffentlichung](https://github.com/b1ue-man/smart-explorer/actions/runs/36717712106)
+ist erfolgreich und [v0.5.168](https://github.com/b1ue-man/smart-explorer/releases/tag/v0.5.168)
+ist als regulärer GitHub Release sichtbar.
+
+Am 2026-09-30 wurden Cargo-Version, Feed-Version, Tag und Installer gegeneinander
+abgeglichen. Alle veröffentlichten Assets stimmen nach Größe und SHA-256 mit
+dem Release-Commit überein, einschließlich der Desktop-Payloads, Android-APK,
+Share-Server, Kontextmenü-DLL und des Linux-Installationsskripts. Sämtliche
+Feed-Prüfsummendateien stimmen mit ihren Nutzdateien überein. Dieser Abgleich
+liest ausschließlich Dateien und Metadaten; Builds und Verhaltensprüfungen liefen
+ausschließlich auf den Remote-Runnern.
+
 Ein synthetischer Größenfall ersetzt keine Messung des ursprünglichen
 450-GB-Verzeichnisses und keine Zertifizierung sämtlicher Remote-Anbieter.
