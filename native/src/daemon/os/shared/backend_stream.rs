@@ -20,6 +20,7 @@ pub(super) fn handle_read_backend(
     len: u64,
     cancel: &AtomicBool,
 ) -> io::Result<()> {
+    if cancel.load(Ordering::Relaxed) { return Ok(()); }
     let mut r = match offset {
         0 => backend.open_read(path)?,
         _ => match backend.open_read_at(path, None, offset)? {
@@ -27,8 +28,18 @@ pub(super) fn handle_read_backend(
             None => {
                 // The backend cannot start mid-file: read and drop the prefix.
                 let mut reader = backend.open_read(path)?;
-                let mut skip = (&mut reader).take(offset);
-                io::copy(&mut skip, &mut io::sink())?;
+                let mut remaining = offset;
+                let mut discard = vec![0u8; CHUNK];
+                while remaining > 0 {
+                    if cancel.load(Ordering::Relaxed) { return Ok(()); }
+                    let want = remaining.min(discard.len() as u64) as usize;
+                    let read = match reader.read(&mut discard[..want]) {
+                        Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                        result => result?,
+                    };
+                    if read == 0 { break; }
+                    remaining -= read as u64;
+                }
                 reader
             }
         },

@@ -22,6 +22,14 @@ impl MountEngine {
                 "mount is read-only",
             ));
         }
+        if !options.writable && options.disposition == OpenDisposition::OpenExisting
+            && self.config.mode == MountMode::ReadOnly
+        {
+            let meta = self.stat(callback_path)?;
+            if self.uses_range_reads(meta.size) {
+                return self.open_metadata_file(callback_path, meta, false);
+            }
+        }
         let truncates = matches!(
             options.disposition,
             OpenDisposition::TruncateExisting | OpenDisposition::CreateAlways
@@ -67,12 +75,6 @@ impl MountEngine {
         )
     }
 
-    /// Returns the materialized entry for a handle, fetching the remote file
-    /// on first data access of a lazily opened handle.
-    fn ensure_materialized(&self, handle: HandleId) -> io::Result<EntryPin> {
-        self.materialize_opened(handle, self.handle(handle)?)
-    }
-
     fn materialize_opened(&self, handle: HandleId, opened: OpenHandle) -> io::Result<EntryPin> {
         let callback_path = match opened.kind {
             OpenHandleKind::Materialized(entry) => return Ok(entry),
@@ -100,7 +102,10 @@ impl MountEngine {
 
     pub fn read(&self, handle: HandleId, offset: u64, output: &mut [u8]) -> io::Result<usize> {
         let _reap = self.operation_reaper();
-        let entry = self.ensure_materialized(handle)?;
+        let opened = self.handle(handle)?;
+        if output.is_empty() { return Ok(0); }
+        if let Some(read) = self.read_range(&opened, offset, output)? { return Ok(read); }
+        let entry = self.materialize_opened(handle, opened)?;
         let state = lock(&entry.state)?;
         let mut file = self.spool.open_file(&state.spool_name, false)?;
         file.seek(SeekFrom::Start(offset))?;
