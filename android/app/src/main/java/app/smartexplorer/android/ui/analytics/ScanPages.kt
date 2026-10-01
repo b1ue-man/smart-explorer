@@ -92,9 +92,20 @@ internal fun ScanSetupPage(
     }
 }
 
-/** Running scan: place, files and bytes so far, the core's progress text and [Abbrechen]. */
+/**
+ * Running scan: place, files and bytes so far (a determinate bar once the core reports totals),
+ * the core's phase and current folder (`message`, one line each, shortened in the middle so the
+ * folder name stays visible) and [Abbrechen] ([cancelEnabled]: also before the task exists).
+ */
 @Composable
-internal fun ScanProgressPage(title: String, location: String?, taskId: String?, onCancel: () -> Unit, onClose: () -> Unit) {
+internal fun ScanProgressPage(
+    title: String,
+    location: String?,
+    taskId: String?,
+    onCancel: () -> Unit,
+    onClose: () -> Unit,
+    cancelEnabled: Boolean = taskId != null,
+) {
     val task = rememberTask(taskId)
     SubPageScaffold(title = title, onBack = onClose) { padding ->
         Column(
@@ -102,10 +113,17 @@ internal fun ScanProgressPage(title: String, location: String?, taskId: String?,
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             location?.let { Text(it, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis) }
-            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            val fraction = task?.let { Format.fraction(it.doneBytes, it.totalBytes) ?: Format.fraction(it.doneItems, it.totalItems) }
+            if (fraction != null) {
+                LinearProgressIndicator(progress = { fraction }, modifier = Modifier.fillMaxWidth())
+            } else {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
             Text(progressLine(task), style = MaterialTheme.typography.titleMedium)
-            task?.message?.takeIf { it.isNotBlank() }?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
-            OutlinedButton(onClick = onCancel, enabled = taskId != null) { Text("Abbrechen") }
+            task?.message?.lineSequence()?.filter { it.isNotBlank() }?.forEach { line ->
+                Text(line, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.MiddleEllipsis)
+            }
+            OutlinedButton(onClick = onCancel, enabled = cancelEnabled) { Text("Abbrechen") }
             Text(
                 "Der Scan läuft weiter, wenn diese Seite verlassen wird.",
                 style = MaterialTheme.typography.bodySmall,
@@ -117,5 +135,10 @@ internal fun ScanProgressPage(title: String, location: String?, taskId: String?,
 
 private fun progressLine(task: TaskInfo?): String = when {
     task == null || task.state == "queued" -> "Wird gestartet …"
-    else -> "${task.doneItems} Dateien · ${Format.size(task.doneBytes)}"
+    else -> buildString {
+        append(task.doneItems)
+        if (task.totalItems > 0) append(" von ").append(task.totalItems)
+        append(" Dateien · ").append(Format.size(task.doneBytes))
+        if (task.totalBytes > 0) append(" von ").append(Format.size(task.totalBytes))
+    }
 }

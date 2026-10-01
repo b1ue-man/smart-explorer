@@ -18,7 +18,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -35,6 +34,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import app.smartexplorer.android.R
 import app.smartexplorer.android.api.DuplicateGroup
 import app.smartexplorer.android.api.DuplicateItem
+import app.smartexplorer.android.api.ReclaimSummary
 import app.smartexplorer.android.ui.common.ConfirmDialog
 import app.smartexplorer.android.ui.common.EmptyState
 import app.smartexplorer.android.ui.common.ErrorCard
@@ -43,10 +43,21 @@ import app.smartexplorer.android.ui.common.LoadingBar
 import app.smartexplorer.android.ui.common.SeIcon
 import app.smartexplorer.android.ui.files.FilesLocation
 import app.smartexplorer.android.ui.more.SubPageScaffold
+import app.smartexplorer.android.ui.more.TextReportDialog
+
+/** A report dialog: title and text. */
+private class ReportText(val title: String, val text: String)
+
+/** One line of the group list: a group's header or one of its copies (lazy even for huge groups). */
+private sealed interface GroupLine {
+    class Header(val group: DuplicateGroup, val first: Boolean) : GroupLine
+    class Copy(val group: DuplicateGroup, val item: DuplicateItem) : GroupLine
+}
 
 /**
- * "Duplikate finden" (spec F20): place and minimum size → scan (progress, [Abbrechen]) → groups
- * (size, count) → [Kopien automatisch auswählen] (keeps the oldest) → [In den Papierkorb].
+ * "Duplikate finden" (spec F20, B5): place and minimum size → scan (phases, [Abbrechen]) → all
+ * groups (size, count) with the search totals, an early stop, unreadable paths and protected
+ * areas → [Kopien automatisch auswählen] (keeps the oldest) → [In den Papierkorb].
  */
 @Composable
 internal fun DuplicatesScreen(onBack: () -> Unit) {
@@ -61,7 +72,8 @@ internal fun DuplicatesScreen(onBack: () -> Unit) {
             startLabel = "Suchen",
             onStart = { vm.start() },
             onClose = onBack,
-            hint = "Findet Dateien mit gleichem Inhalt. Remote-Orte ohne Papierkorb werden nur angezeigt.",
+            hint = "Vergleicht alle Dateien ab der Mindestgröße und findet die mit gleichem Inhalt. " +
+                "Remote-Orte ohne Papierkorb werden nur angezeigt.",
             options = { MinSizeChips(vm.minSize, onSelect = { vm.minSize = it }) },
         )
         ScanPhase.Scanning -> ScanProgressPage(
@@ -90,6 +102,7 @@ private fun MinSizeChips(selected: Long, onSelect: (Long) -> Unit) {
 @Composable
 private fun DuplicatesResult(vm: DuplicatesViewModel, onBack: () -> Unit) {
     var confirm by remember { mutableStateOf(false) }
+    var report by remember { mutableStateOf<ReportText?>(null) }
     val groups = vm.groups
     SubPageScaffold(
         title = "Duplikate",
@@ -101,16 +114,9 @@ private fun DuplicatesResult(vm: DuplicatesViewModel, onBack: () -> Unit) {
         Column(Modifier.fillMaxSize().padding(padding)) {
             LoadingBar(vm.deleting)
             if (groups.isEmpty()) {
-                EmptyState(
-                    R.drawable.ic_duplicate,
-                    "Keine Duplikate gefunden",
-                    modifier = Modifier.weight(1f),
-                    message = vm.location,
-                    actionLabel = "Anderer Ort",
-                    onAction = { vm.backToSetup() },
-                )
+                NoGroups(vm, onReport = { report = it }, modifier = Modifier.weight(1f))
             } else {
-                GroupList(vm, groups, Modifier.weight(1f))
+                GroupList(vm, groups, onReport = { report = it }, modifier = Modifier.weight(1f))
                 if (!vm.trashUnsupported) {
                     HorizontalDivider()
                     Button(
@@ -135,12 +141,72 @@ private fun DuplicatesResult(vm: DuplicatesViewModel, onBack: () -> Unit) {
             onDismiss = { confirm = false },
         )
     }
+    report?.let { TextReportDialog(it.title, it.text, onDismiss = { report = null }) }
+}
+
+/** "1.234 Dateien durchsucht (12 GB) · 567 ab 1 MB verglichen"; `null` without totals. */
+private fun searchFacts(summary: ReclaimSummary?, minSize: Long): String? = summary?.let {
+    "${it.files} Dateien durchsucht (${Format.size(it.bytes)}) · ${it.candidates} ab ${Format.size(minSize)} verglichen"
+}
+
+/** Early stop, unreadable paths and protected areas of the search (B1/B5); nothing when complete. */
+@Composable
+private fun SearchNotices(summary: ReclaimSummary?, onReport: (ReportText) -> Unit) {
+    if (summary == null) return
+    summary.limit?.trim()?.takeIf { it.isNotEmpty() }?.let { limit ->
+        val reason = if (limit.endsWith('.')) limit else "$limit."
+        ErrorCard("$reason Weitere Ordner wurden nicht durchsucht – das Ergebnis ist unvollständig.", title = "Suche vorzeitig beendet")
+    }
+    if (summary.errorCount > 0) {
+        NoticeRow(
+            R.drawable.ic_warning,
+            "${summary.errorCount} Pfade nicht lesbar",
+            tint = MaterialTheme.colorScheme.error,
+            actionLabel = "Bericht",
+            onAction = { onReport(ReportText("Leseprobleme", summary.errorText)) },
+        )
+    }
+    if (summary.protectedCount > 0) {
+        NoticeRow(
+            R.drawable.ic_lock,
+            protectedLabel(summary.protectedCount),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            actionLabel = "Details",
+            onAction = { onReport(ReportText("Geschützte Bereiche", PROTECTED_EXPLANATION)) },
+        )
+    }
+}
+
+/** No groups: the search's notices, then why the list is empty. */
+@Composable
+private fun NoGroups(vm: DuplicatesViewModel, onReport: (ReportText) -> Unit, modifier: Modifier = Modifier) {
+    val summary = vm.summary
+    val locked = summary != null && summary.protectedCount > 0 && summary.files == 0L
+    Column(modifier.fillMaxSize()) {
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            SearchNotices(summary, onReport)
+        }
+        EmptyState(
+            if (locked) R.drawable.ic_lock else R.drawable.ic_duplicate,
+            if (locked) "Von Android geschützt" else "Keine Duplikate gefunden",
+            modifier = Modifier.weight(1f),
+            message = if (locked) PROTECTED_EXPLANATION else searchFacts(summary, vm.searchedMinSize) ?: vm.location,
+            actionLabel = "Anderer Ort",
+            onAction = { vm.backToSetup() },
+        )
+    }
 }
 
 @Composable
-private fun GroupList(vm: DuplicatesViewModel, groups: List<DuplicateGroup>, modifier: Modifier = Modifier) {
-    val copies = groups.sumOf { it.items.size - 1 }
-    val wasted = groups.sumOf { it.size * (it.items.size - 1) }
+private fun GroupList(
+    vm: DuplicatesViewModel,
+    groups: List<DuplicateGroup>,
+    onReport: (ReportText) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val copies = remember(groups) { groups.sumOf { it.items.size - 1 } }
+    val wasted = remember(groups) { groups.sumOf { it.size * (it.items.size - 1) } }
+    val lines = remember(groups) { linesOf(groups) }
     LazyColumn(modifier.fillMaxWidth()) {
         item(key = "summary") {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -148,6 +214,10 @@ private fun GroupList(vm: DuplicatesViewModel, groups: List<DuplicateGroup>, mod
                     "${groups.size} Gruppen · $copies Kopien · ${Format.size(wasted)} durch Kopien belegt",
                     style = MaterialTheme.typography.titleSmall,
                 )
+                searchFacts(vm.summary, vm.searchedMinSize)?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                SearchNotices(vm.summary, onReport)
                 if (vm.trashUnsupported) {
                     ErrorCard("Dieser Ort hat keinen Papierkorb – die Duplikate werden nur angezeigt.", title = "Nur Anzeige")
                 } else {
@@ -156,24 +226,41 @@ private fun GroupList(vm: DuplicatesViewModel, groups: List<DuplicateGroup>, mod
             }
         }
         // Positional keys: equal Google Drive names share one location (B2), so locations may repeat.
-        items(groups) { group ->
-            GroupCard(group, vm.selected, vm.ambiguous, enabled = !vm.trashUnsupported, onToggle = { vm.toggle(group, it) })
+        items(lines, contentType = { if (it is GroupLine.Header) "header" else "copy" }) { line ->
+            when (line) {
+                is GroupLine.Header -> GroupHeader(line.group, line.first)
+                is GroupLine.Copy -> {
+                    val location = line.item.location
+                    val shared = location in vm.ambiguous
+                    CopyRow(
+                        line.item,
+                        checked = location in vm.selected,
+                        enabled = !vm.trashUnsupported && !shared,
+                        shared = shared,
+                        onToggle = { vm.toggle(line.group, it) },
+                    )
+                }
+            }
         }
     }
 }
 
+private fun linesOf(groups: List<DuplicateGroup>): List<GroupLine> = buildList {
+    groups.forEachIndexed { index, group ->
+        add(GroupLine.Header(group, first = index == 0))
+        group.items.forEach { add(GroupLine.Copy(group, it)) }
+    }
+}
+
 @Composable
-private fun GroupCard(group: DuplicateGroup, selected: Set<String>, ambiguous: Set<String>, enabled: Boolean, onToggle: (String) -> Unit) {
-    OutlinedCard(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
+private fun GroupHeader(group: DuplicateGroup, first: Boolean) {
+    Column(Modifier.fillMaxWidth()) {
+        if (!first) HorizontalDivider(Modifier.padding(horizontal = 16.dp))
         Text(
             "${Format.size(group.size)} · ${group.items.size} Kopien",
             style = MaterialTheme.typography.titleSmall,
-            modifier = Modifier.padding(start = 16.dp, top = 12.dp, end = 16.dp),
+            modifier = Modifier.padding(start = 16.dp, top = 12.dp, end = 16.dp, bottom = 4.dp),
         )
-        group.items.forEach { item ->
-            val shared = item.location in ambiguous
-            CopyRow(item, item.location in selected, enabled && !shared, shared, onToggle)
-        }
     }
 }
 
@@ -183,11 +270,11 @@ private fun CopyRow(item: DuplicateItem, checked: Boolean, enabled: Boolean, sha
         Modifier
             .fillMaxWidth()
             .toggleable(value = checked, enabled = enabled, role = Role.Checkbox, onValueChange = { onToggle(item.location) })
-            .padding(horizontal = 8.dp, vertical = 4.dp),
+            .padding(horizontal = 16.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Checkbox(checked = checked, onCheckedChange = null, enabled = enabled)
-        Column(Modifier.weight(1f)) {
+        Column(Modifier.weight(1f).padding(start = 8.dp)) {
             Text(item.location, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text("Geändert ${Format.dateTime(item.mtimeMs)}", style = MaterialTheme.typography.bodySmall)
             if (shared) {
