@@ -68,6 +68,12 @@ base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+# SHA-256 of the Android duplicate search (analytics/.../reclaim/finder_compare.rs).
+# `sha2` 0.10 hashes in software on aarch64 without its `asm` feature; ring
+# selects the ARMv8 SHA-256 instructions (or SHA-NI) at run time. Already in
+# every target's tree through rustls/iroh with these default features, so it
+# adds no new native build step or cross-compile requirement.
+ring = "0.17"
 # Discoverable Share pairing: RFC 9807 OPAQUE authenticates the exact user PIN
 # without exposing it to signaling. Suite v1 fixes Argon2id v0x13 to
 # m=19456 KiB, t=2, p=1 and wipes its explicit work memory. Follow-up bundles

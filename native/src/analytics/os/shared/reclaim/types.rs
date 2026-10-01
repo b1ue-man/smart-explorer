@@ -32,6 +32,8 @@ pub struct ReclaimProgress {
     pub hashed: Arc<AtomicU64>,
     pub candidates: Arc<AtomicU64>,
     pub cancel: Arc<AtomicBool>,
+    /// Phase and current directory for status lines (`status_line`).
+    pub stage: super::stage::ReclaimStage,
 }
 
 #[allow(dead_code)]

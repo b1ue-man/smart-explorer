@@ -1,7 +1,11 @@
 //! `analyze.*` (storage analysis) and `reclaim.*` (duplicates): the desktop
 //! `analytics` scanners on a scan thread with the desktop stack size, live
-//! progress, and the finished result kept per task for drill-down.
+//! progress with phase and current folder, and the finished result kept per
+//! task for drill-down. Other apps' private folders (`Android/data`,
+//! `Android/obb`) are protected omissions, not read errors; Android's own
+//! totals fill in what no app may walk as approximate rows of the view.
 use std::collections::VecDeque;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
@@ -10,7 +14,10 @@ use serde_json::{json, Value};
 
 use super::args::{canceled, i64_arg, invalid, reject_app_internal, str_arg, string_list};
 use super::locations::{is_local, join_segments, location_for};
-use crate::analytics::{DuplicateGroup, ScanOutcome, ScanStatus, SizeNode};
+use crate::analytics::{
+    protected_count, protected_text, Approximations, DuplicateGroup, DuplicateReport,
+    DuplicateSummary, PlatformTotals, ScanOutcome, ScanStatus, VolumeRoot,
+};
 use crate::mobile::{ApiError, Runtime, TaskCtx};
 
 /// Results kept for drill-down (oldest finished one dropped first).
@@ -21,11 +28,13 @@ const PROGRESS_TICK: Duration = Duration::from_millis(250);
 enum Stored {
     Analysis {
         outcome: ScanOutcome,
+        approx: Approximations,
         base: String,
         root: String,
     },
     Duplicates {
         groups: Vec<DuplicateGroup>,
+        summary: DuplicateSummary,
         base: String,
     },
 }
@@ -147,18 +156,49 @@ fn resolve_remote(location: &str) -> Result<(crate::vfs::BackendHandle, String),
     Ok((crate::vfs::sync_backend(backend), root))
 }
 
+/// `analyze.start {location, platform?:{volumeUsedBytes?, otherAppsBytes?}}`:
+/// Android's totals for the volume of a local root (missing, `null` or
+/// negative values are unknown).
 pub(super) fn start_analysis(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
     let location = checked_location(args)?;
+    let place = if is_local(&location) {
+        volume_root(rt, &location)
+    } else {
+        VolumeRoot::default()
+    };
+    let total = |key: &str| args.get("platform")?.get(key)?.as_u64();
+    let totals = PlatformTotals {
+        volume_used_bytes: total("volumeUsedBytes"),
+        other_apps_bytes: total("otherAppsBytes"),
+    };
     let token = open_slot();
     let title = format!("Speicheranalyse: {location}");
     let task = rt.spawn_task("analyze", title, move |ctx| {
-        release_on_error(token, analysis_task(ctx, token, location))
+        release_on_error(token, analysis_task(ctx, token, location, (place, totals)))
     });
     bind_task(token, &task);
     Ok(json!({ "taskId": task }))
 }
 
-fn analysis_task(ctx: &TaskCtx, token: u64, location: String) -> Result<Value, ApiError> {
+/// Where a local root lies on its volume; Android reports other apps' data
+/// only for the primary one.
+fn volume_root(rt: &Runtime, location: &str) -> VolumeRoot {
+    let Some(place) = crate::apptrash::volume_place(Path::new(location)) else {
+        return VolumeRoot::default();
+    };
+    let primary = rt
+        .volumes()
+        .iter()
+        .any(|volume| volume.primary && Path::new(&volume.path) == place.volume.as_path());
+    VolumeRoot::from_segments(&place.below, primary)
+}
+
+fn analysis_task(
+    ctx: &TaskCtx,
+    token: u64,
+    location: String,
+    (place, totals): (VolumeRoot, PlatformTotals),
+) -> Result<Value, ApiError> {
     let progress = crate::analytics::Progress::default();
     let remote = if is_local(&location) {
         None
@@ -173,6 +213,7 @@ fn analysis_task(ctx: &TaskCtx, token: u64, location: String) -> Result<Value, A
     ctx.message("Analysiere…");
     let scan_progress = progress.clone();
     let local_root = location.clone();
+    let mut shown = String::new();
     let outcome = run_watched(
         ctx,
         &progress.cancel,
@@ -180,22 +221,25 @@ fn analysis_task(ctx: &TaskCtx, token: u64, location: String) -> Result<Value, A
             Some((backend, root)) => {
                 crate::analytics::scan_backend(&**backend, root, &scan_progress)
             }
-            None => crate::analytics::scan(std::path::Path::new(&local_root), &scan_progress),
+            None => crate::analytics::scan(Path::new(&local_root), &scan_progress),
         },
         || {
-            ctx.progress(
-                progress.bytes.load(Ordering::Relaxed),
-                0,
-                progress.files.load(Ordering::Relaxed),
-                0,
-            )
+            let snapshot = progress.snapshot();
+            ctx.progress(snapshot.bytes, 0, snapshot.files, 0);
+            show(
+                ctx,
+                &mut shown,
+                crate::analytics::walk_status(snapshot.dirs, &snapshot.current),
+            );
         },
     )?;
+    let protected = protected_count(&outcome.protected);
     let summary = json!({
         "files": progress.files.load(Ordering::Relaxed),
         "dirs": progress.dirs.load(Ordering::Relaxed),
         "bytes": progress.bytes.load(Ordering::Relaxed),
         "issues": outcome.issues.len() as u64 + outcome.suppressed_issues,
+        "protected": protected,
     });
     match outcome.status {
         ScanStatus::Canceled => return Err(canceled("Analyse abgebrochen")),
@@ -211,12 +255,23 @@ fn analysis_task(ctx: &TaskCtx, token: u64, location: String) -> Result<Value, A
             "{} Pfade nicht lesbar",
             outcome.issues.len() as u64 + outcome.suppressed_issues
         )),
-        ScanStatus::Complete => {}
+        ScanStatus::Complete if protected > 0 => {
+            ctx.message(&format!("{protected} geschützte Einträge ausgelassen"))
+        }
+        ScanStatus::Complete => ctx.message(""),
     }
+    let approx = outcome
+        .tree
+        .as_ref()
+        .map_or_else(Approximations::default, |tree| {
+            let complete = outcome.status == ScanStatus::Complete;
+            Approximations::compute(tree, &place, totals, complete)
+        });
     store(
         token,
         Stored::Analysis {
             outcome,
+            approx,
             base: location,
             root,
         },
@@ -224,51 +279,45 @@ fn analysis_task(ctx: &TaskCtx, token: u64, location: String) -> Result<Value, A
     Ok(summary)
 }
 
+/// Sets the task message when the status line changed (at most per tick).
+fn show(ctx: &TaskCtx, shown: &mut String, line: String) {
+    if *shown != line {
+        ctx.message(&line);
+        *shown = line;
+    }
+}
+
+/// `analyze.node {taskId, path}` → `{name, size, measured, isDir, kind,
+/// children:[{name, size, isDir, childCount, kind}], location}`; `size`
+/// includes the approximate rows below, `kind` is `dir|file|aggregate`, or
+/// `protected|rest` for the approximate rows.
 pub(super) fn node(args: &Value) -> Result<Value, ApiError> {
     let task = str_arg(args, "taskId")?;
     let segments = string_list(args, "path")?;
     with_stored(task, |stored| {
         let Stored::Analysis {
             outcome,
+            approx,
             base,
             root,
         } = stored
         else {
             return Err(invalid("Dieser Task ist keine Speicheranalyse."));
         };
-        let mut node: &SizeNode = outcome
+        let tree = outcome
             .tree
             .as_ref()
             .ok_or_else(|| ApiError::new("not_found", "Kein Analyseergebnis."))?;
-        for segment in &segments {
-            node = node
-                .children
-                .iter()
-                .find(|child| &*child.name == segment.as_str())
-                .ok_or_else(|| ApiError::new("not_found", "Eintrag nicht gefunden."))?;
-        }
-        let mut children: Vec<&SizeNode> = node.children.iter().collect();
-        children.sort_by(|left, right| right.size.cmp(&left.size).then(left.name.cmp(&right.name)));
-        let children: Vec<Value> = children
-            .into_iter()
-            .take(MAX_NODE_CHILDREN)
-            .map(|child| {
-                json!({
-                    "name": &*child.name,
-                    "size": child.size,
-                    "isDir": child.is_dir,
-                    "childCount": child.children.len(),
-                })
-            })
-            .collect();
-        Ok(json!({
-            "name": &*node.name,
-            "size": node.size,
-            "isDir": node.is_dir,
-            "children": children,
-            "location": location_for(base, &join_segments(root, &segments)),
-        }))
+        let view = crate::analytics::node_view(tree, &segments, approx, MAX_NODE_CHILDREN)
+            .ok_or_else(|| ApiError::new("not_found", "Eintrag nicht gefunden."))?;
+        let mut value = to_json(view)?;
+        value["location"] = json!(location_for(base, &join_segments(root, &segments)));
+        Ok(value)
     })
+}
+
+fn to_json(view: impl serde::Serialize) -> Result<Value, ApiError> {
+    serde_json::to_value(view).map_err(|error| ApiError::internal(error.to_string()))
 }
 
 pub(super) fn issues(args: &Value) -> Result<Value, ApiError> {
@@ -289,6 +338,8 @@ pub(super) fn issues(args: &Value) -> Result<Value, ApiError> {
         Ok(json!({
             "count": outcome.issues.len() as u64 + outcome.suppressed_issues,
             "text": lines.join("\n"),
+            "protectedCount": protected_count(&outcome.protected),
+            "protectedText": protected_text(&outcome.protected),
         }))
     })
 }
@@ -328,16 +379,17 @@ fn reclaim_task(
     ctx.message("Suche Duplikate…");
     let scan_progress = progress.clone();
     let root = location.clone();
+    let mut shown = String::new();
+    // Local: every file of at least `minSize` is a candidate, compared in
+    // parallel. Remote: provider/agent MD5 with the reclaim walk's caps.
     let report = run_watched(
         ctx,
         &progress.cancel,
         move || match remote {
-            Some((backend, root)) => {
-                crate::analytics::scan_reclaim_backend(backend, &root, &scan_progress, &opts)
-            }
-            None => {
-                crate::analytics::scan_reclaim(std::path::Path::new(&root), &scan_progress, &opts)
-            }
+            Some((backend, root)) => DuplicateReport::from_reclaim(
+                crate::analytics::scan_reclaim_backend(backend, &root, &scan_progress, &opts),
+            ),
+            None => crate::analytics::find_duplicates(Path::new(&root), &scan_progress, min_size),
         },
         || {
             ctx.progress(
@@ -345,7 +397,8 @@ fn reclaim_task(
                 0,
                 progress.files.load(Ordering::Relaxed),
                 0,
-            )
+            );
+            show(ctx, &mut shown, progress.status_line());
         },
     )?;
     if progress.cancel.load(Ordering::Relaxed) {
@@ -354,32 +407,42 @@ fn reclaim_task(
     if let Some(error) = &report.root_error {
         return Err(ApiError::new("not_found", error.clone()));
     }
-    for error in report.errors.iter().take(100) {
+    for error in report.summary.errors.iter().take(100) {
         ctx.error("", error);
     }
-    let summary = json!({
-        "groups": report.duplicate_groups.len(),
-        "reclaimable": report
-            .duplicate_groups
-            .iter()
-            .map(|group| group.reclaimable)
-            .sum::<u64>(),
-        "errors": report.errors.len() as u64 + report.suppressed_errors,
+    let result = json!({
+        "groups": report.groups.len(),
+        "reclaimable": report.groups.iter().map(|group| group.reclaimable).sum::<u64>(),
+        "errors": report.summary.error_count(),
+        "candidates": report.summary.candidates,
+        "protected": protected_count(&report.summary.protected),
     });
+    ctx.message("");
     store(
         token,
         Stored::Duplicates {
-            groups: report.duplicate_groups,
+            groups: report.groups,
+            summary: report.summary,
             base: location,
         },
     );
-    Ok(summary)
+    Ok(result)
+}
+
+/// `reclaim.summary {taskId}` → `{files, bytes, candidates, compared, groups,
+/// protectedCount, protectedText, errorCount, errorText, limit}`.
+pub(super) fn summary(args: &Value) -> Result<Value, ApiError> {
+    let task = str_arg(args, "taskId")?;
+    with_stored(task, |stored| match stored {
+        Stored::Duplicates { summary, .. } => to_json(summary.view()),
+        Stored::Analysis { .. } => Err(invalid("Dieser Task ist keine Duplikatsuche.")),
+    })
 }
 
 pub(super) fn groups(args: &Value) -> Result<Value, ApiError> {
     let task = str_arg(args, "taskId")?;
     with_stored(task, |stored| {
-        let Stored::Duplicates { groups, base } = stored else {
+        let Stored::Duplicates { groups, base, .. } = stored else {
             return Err(invalid("Dieser Task ist keine Duplikatsuche."));
         };
         let list: Vec<Value> = groups
@@ -411,6 +474,7 @@ pub(super) fn insert_analysis_for_test(task: &str, outcome: ScanOutcome, base: &
         token,
         Stored::Analysis {
             outcome,
+            approx: Approximations::default(),
             base: base.to_string(),
             root: root.to_string(),
         },

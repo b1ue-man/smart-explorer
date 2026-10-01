@@ -11,11 +11,12 @@
 //! prefix), so the tree stays compact: roughly `name + ~48 bytes` per node.
 
 use crate::analytics::os::{parallel_scan_allowed, read_directory, EntryKind, LocalEntry};
+use crate::analytics::Progress;
+use crate::apptrash::ProtectedAreas;
 use rayon::prelude::*;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
-use crate::analytics::Progress;
 
 #[path = "analytics_backend.rs"]
 mod backend;
@@ -50,6 +51,10 @@ pub const SCAN_THREAD_STACK_BYTES: usize = 64 * 1024 * 1024;
 /// unrepresentable names, exhausted retention limits and even a panic inside
 /// one directory are recorded and the traversal continues with exact sizes
 /// for everything that could be read.
+///
+/// Other apps' private areas on Android (`Android/data`, `Android/obb`) are
+/// walked as far as they are readable; what Android hides there is counted
+/// in `ScanOutcome::protected`, never as an issue.
 pub fn scan(root: &Path, p: &Progress) -> ScanOutcome {
     scan_with_guard(root, p, None)
 }
@@ -59,13 +64,24 @@ pub(crate) fn scan_with_guard(
     p: &Progress,
     guard: Option<&(dyn Fn(&Path) -> io::Result<()> + Sync)>,
 ) -> ScanOutcome {
+    scan_in(root, p, guard, None)
+}
+
+/// `protected` replaces the areas derived from the registered volumes.
+fn scan_in(
+    root: &Path,
+    p: &Progress,
+    guard: Option<&(dyn Fn(&Path) -> io::Result<()> + Sync)>,
+    protected: Option<ProtectedAreas>,
+) -> ScanOutcome {
     let name = root
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| root.to_string_lossy().into_owned());
     let root = crate::analytics::os::normalize_scan_root(root);
     let threads = local_scan_threads();
-    let diagnostics = Diagnostics::default();
+    let protected = protected.unwrap_or_else(|| ProtectedAreas::for_walk(&root));
+    let diagnostics = Diagnostics::with_protected(protected);
     let budget = AnalyticsBudget::default();
     let _ = budget.claim(&root, 0, name.len() as u64, &diagnostics);
     let pool = if threads > 1 && parallel_scan_allowed() {
@@ -94,11 +110,13 @@ pub(crate) fn scan_with_guard(
     diagnostics.finish(tree, p.cancel.load(Ordering::Relaxed))
 }
 
-fn local_scan_threads() -> usize {
+/// Worker threads of a local scan: `SMART_EXPLORER_ANALYTICS_THREADS`, else
+/// the platform default (Android: one per core up to 4; desktop: 2).
+pub(crate) fn local_scan_threads() -> usize {
     std::env::var("SMART_EXPLORER_ANALYTICS_THREADS")
         .ok()
         .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(2)
+        .unwrap_or_else(crate::analytics::os::default_scan_threads)
         .clamp(1, 4)
 }
 
@@ -154,12 +172,13 @@ fn scan_dir(
     // enumerator — must never take the rest of the scan down with it.
     let fallback_name = name.clone();
     let visit = std::panic::AssertUnwindSafe(|| {
-        traversal.progress.enter_directory(&crate::analytics::os::display_path(dir));
+        traversal
+            .progress
+            .enter_directory(&crate::analytics::os::display_path(dir));
+        traversal.diagnostics.entered(dir, is_root);
         if let Some(guard) = traversal.guard {
             if let Err(error) = guard(dir) {
-                traversal.diagnostics.record_io(
-                    crate::analytics::os::display_path(dir), &error, is_root,
-                );
+                traversal.diagnostics.dir_failed(dir, &error, is_root);
                 return empty_dir(name);
             }
         }
@@ -204,11 +223,7 @@ fn scan_entries(
                 let ent = match entry {
                     Ok(ent) => ent,
                     Err(error) => {
-                        diagnostics.record_io(
-                            crate::analytics::os::display_path(dir),
-                            &error,
-                            false,
-                        );
+                        diagnostics.entry_failed(dir, &error);
                         continue;
                     }
                 };
@@ -249,21 +264,23 @@ fn scan_entries(
                     own_bytes = own_bytes.saturating_add(ent.size);
                     files.push((nm, ent.size));
                     if own_files - reported_files >= 128 {
-                        p.files.fetch_add(own_files - reported_files, Ordering::Relaxed);
-                        p.bytes.fetch_add(own_bytes - reported_bytes, Ordering::Relaxed);
+                        p.files
+                            .fetch_add(own_files - reported_files, Ordering::Relaxed);
+                        p.bytes
+                            .fetch_add(own_bytes - reported_bytes, Ordering::Relaxed);
                         reported_files = own_files;
                         reported_bytes = own_bytes;
                     }
                 }
             }
         }
-        Err(error) => {
-            diagnostics.record_io(crate::analytics::os::display_path(dir), &error, is_root)
-        }
+        Err(error) => diagnostics.dir_failed(dir, &error, is_root),
     }
 
-    p.files.fetch_add(own_files - reported_files, Ordering::Relaxed);
-    p.bytes.fetch_add(own_bytes - reported_bytes, Ordering::Relaxed);
+    p.files
+        .fetch_add(own_files - reported_files, Ordering::Relaxed);
+    p.bytes
+        .fetch_add(own_bytes - reported_bytes, Ordering::Relaxed);
     p.dirs.fetch_add(subdirs.len() as u64, Ordering::Relaxed);
 
     // Retain the largest files individually; fold the rest of a huge
@@ -330,7 +347,7 @@ fn scan_entries(
     children.append(&mut file_nodes);
     if aggregated_entries > 0 {
         children.push(SizeNode {
-            name: format!("… {aggregated_entries} weitere Eintraege").into_boxed_str(),
+            name: crate::analytics::aggregate_name(aggregated_entries).into_boxed_str(),
             size: aggregated_bytes,
             is_dir: false,
             children: Vec::new(),
@@ -358,6 +375,9 @@ pub fn from_wire(w: crate::agent_proto::WireNode) -> SizeNode {
 
 #[cfg(test)]
 use backend::{build_from_listings, ChildMeta};
+#[cfg(test)]
+#[path = "analytics_protected_tests.rs"]
+mod protected_tests;
 #[cfg(test)]
 #[path = "analytics_tests.rs"]
 mod tests;

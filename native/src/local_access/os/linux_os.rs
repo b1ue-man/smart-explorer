@@ -5,6 +5,14 @@ pub(crate) fn parallel_scan_allowed() -> bool {
     true
 }
 
+/// Lists `path`. The kind comes from the directory entry (`d_type`, no extra
+/// call where the file system supplies it); one `lstat` per entry supplies
+/// sizes and times (on Android's shared storage it is answered from the
+/// attribute cache that readdirplus filled).
+///
+/// A failing entry is reported as `<entry path>: <error>` with the original
+/// kind. The storage analysis relies on that prefix to tell a hidden
+/// `Android/data` or `Android/obb` entry from a real read error.
 pub(crate) fn read_directory(
     path: &Path,
 ) -> io::Result<impl Iterator<Item = io::Result<LocalEntry>>> {
@@ -29,8 +37,10 @@ pub(crate) fn read_directory(
         } else {
             0
         };
+        let name = entry.file_name();
+        let hidden = name.as_encoded_bytes().first() == Some(&b'.');
         Ok(LocalEntry {
-            name: entry.file_name(),
+            name,
             kind,
             is_dir: ty.is_dir(),
             is_link_like: ty.is_symlink(),
@@ -38,7 +48,7 @@ pub(crate) fn read_directory(
             unreachable: false,
             mtime_ms: metadata.modified().map(system_time_ms).unwrap_or(0),
             btime_ms: metadata.created().map(system_time_ms).unwrap_or(0),
-            hidden: entry.file_name().to_string_lossy().starts_with('.'),
+            hidden,
             system: false,
         })
     }))
