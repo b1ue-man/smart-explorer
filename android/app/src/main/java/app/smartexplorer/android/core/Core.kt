@@ -4,6 +4,7 @@ import android.app.Application
 import android.os.SystemClock
 import android.util.Log
 import app.smartexplorer.android.system.Storage
+import app.smartexplorer.android.system.WakeKeeper
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 import kotlinx.coroutines.CoroutineScope
@@ -185,7 +186,12 @@ object Core {
             }
             val batch = CoreEvents.parse(json, raw)
             batch?.forEach { event ->
-                if (event is CoreEvent.Task) taskStore.upsert(event.task)
+                when (event) {
+                    is CoreEvent.Task -> taskStore.upsert(event.task)
+                    // Right here, before any dispatching: the CPU may be awake only for this moment.
+                    is CoreEvent.Wake -> WakeKeeper.hold(event.ms)
+                    else -> Unit
+                }
                 eventFlow.tryEmit(event)
             }
             // Back off when the core reports an error or returns early without events, so a

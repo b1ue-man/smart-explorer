@@ -25,6 +25,15 @@
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
+    <!-- Short partial wake locks for Share activity and keep-alive probes while the screen is off -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- Optional usage access: sizes of other apps' folders in the storage analysis
+         (StorageStatsManager); granted by the user in the settings, never requested at runtime. -->
+    <uses-permission
+        android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
+
     <!-- Self-update through the system installer -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
@@ -78,14 +87,15 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
-        <!-- Permanent background mode (user opt-in); boot-startable type -->
+        <!-- Background service: permanent background mode or "Share im Hintergrund erreichbar"
+             (both user opt-in); boot-startable type -->
         <service
             android:name=".service.BackgroundService"
             android:exported="false"
             android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Keeps user-configured folder synchronization jobs and the local device-sharing endpoint running while the user has enabled the permanent background mode" />
+                android:value="Keeps user-configured folder synchronization jobs running and the device-sharing endpoint reachable for the user's paired devices while the user has enabled the permanent background mode or background reachability of sharing" />
         </service>
 
         <!-- WorkManager's own service: the periodic sync worker promotes itself with dataSync -->
@@ -97,6 +107,11 @@
         <!-- "Stopp" in the notification of a command another device runs on this phone -->
         <receiver
             android:name=".service.ExecHostStopReceiver"
+            android:exported="false" />
+
+        <!-- Wake alarm of the background service (explicit PendingIntent only) -->
+        <receiver
+            android:name=".system.KeepAliveReceiver"
             android:exported="false" />
 
         <receiver

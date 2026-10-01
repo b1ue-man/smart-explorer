@@ -9,6 +9,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.longOrNull
 
 /** Decoding of the `pollEvents` envelope (api.md §3). */
 internal object CoreEvents {
@@ -42,6 +43,7 @@ internal object CoreEvents {
                 "openUrl" -> event.text("url")?.let { CoreEvent.OpenUrl(it) }
                 "error" -> CoreEvent.Error(event.text("action").orEmpty(), event.text("message").orEmpty())
                 "volumes" -> CoreEvent.Volumes
+                "wake" -> (event["ms"] as? JsonPrimitive)?.longOrNull?.takeIf { it > 0 }?.let { CoreEvent.Wake(it) }
                 else -> null
             }
         } catch (e: IllegalArgumentException) {

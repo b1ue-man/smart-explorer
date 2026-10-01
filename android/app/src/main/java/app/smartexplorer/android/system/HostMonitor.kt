@@ -5,56 +5,105 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.net.ConnectivityManager
+import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
 import android.os.BatteryManager
 import android.os.PowerManager
+import android.os.SystemClock
 import android.util.Log
 import androidx.core.content.ContextCompat
 import app.smartexplorer.android.api.HostStateArgs
+import app.smartexplorer.android.api.ShareApi
+import app.smartexplorer.android.api.ShareStatus
 import app.smartexplorer.android.api.SyncApi
 import app.smartexplorer.android.api.SyncApi.displayText
 import app.smartexplorer.android.core.Core
 import app.smartexplorer.android.core.CoreEvent
 import app.smartexplorer.android.core.CoreException
+import app.smartexplorer.android.prefs.AppPrefs
+import app.smartexplorer.android.service.BackgroundController
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.serialization.Serializable
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+
+/** What the background notification shows of the Share state; equal snapshots do not re-render. */
+data class ShareSnapshot(
+    val online: Boolean = false,
+    val connected: Boolean = false,
+    /** No Share server configured: reachable in the local network only. */
+    val lanOnly: Boolean = false,
+    val idleSupported: Boolean? = null,
+)
 
 /**
- * Reports the host state to the core (`sys.hostState`: power saving, metered network, Wi-Fi,
- * charging, UI in the foreground) so the daemon's auto-pause works on real values, and holds a
- * Wi-Fi multicast lock while Share is online (LAN presence/discovery needs multicast).
- * Started once per process by [app.smartexplorer.android.service.BackgroundController].
+ * Host side of the core: reports the host state (`sys.hostState`: power saving, metered network,
+ * Wi-Fi, charging, UI visible, scheduling deferred) so the daemon's auto-pause, the Share idle mode
+ * and the scheduling gate work on real values; follows `share.status` for the background service
+ * ([share], the persisted "Share eingerichtet" flag) and holds the Wi-Fi multicast lock only where
+ * mDNS is needed (spec A3). Forwards default-network changes to [KeepAliveNetwork].
+ * Started once per process by [BackgroundController].
  */
 object HostMonitor {
     private const val TAG = "SmartExplorerHost"
     private const val LOCK_TAG = "smart-explorer-share"
 
+    /**
+     * How long Share must stay off before "Share eingerichtet" is cleared and the background
+     * service stops: the poller reports every 60 s in the background, so the empty snapshot
+     * before its first poll or a worker restart never ends the service.
+     */
+    private const val SETTLE_MS = 120_000L
+
     private val started = AtomicBoolean(false)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val pushRequests = MutableStateFlow(0)
-    private val shareOnlineFlow = MutableStateFlow(false)
+    private val shareRefreshes = MutableStateFlow(0)
+    private val pushLock = Mutex()
+    private val shareFlow = MutableStateFlow(ShareSnapshot())
+    private val hostStateFlow = MutableStateFlow<HostStateArgs?>(null)
+    private val workerRuns = AtomicInteger(0)
     private val lockGuard = Any()
     private var multicastLock: WifiManager.MulticastLock? = null
 
     @Volatile
+    private var appContext: Context? = null
+
+    @Volatile
     private var foreground = false
 
-    /** `true` while the Share service runs (last `share.status`). */
-    val shareOnline: StateFlow<Boolean> = shareOnlineFlow.asStateFlow()
+    @Volatile
+    private var lastStatus: ShareStatus? = null
+
+    // Guarded by [pushLock].
+    private var lastPushed: HostStateArgs? = null
+
+    // Touched only by the single share-refresh collector.
+    private var offlineSince: Long? = null
+    private var settleCheck: Job? = null
+
+    /** Share state of the latest `share.status` (follows the core's `share` events). */
+    val share: StateFlow<ShareSnapshot> = shareFlow.asStateFlow()
+
+    /** Host state last sent to the core (`null` before the first); auto-pause follows it. */
+    val hostState: StateFlow<HostStateArgs?> = hostStateFlow.asStateFlow()
 
     fun start(context: Context) {
         if (!started.compareAndSet(false, true)) return
         val app = context.applicationContext
+        appContext = app
         val filter = IntentFilter().apply {
             addAction(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED)
             addAction(BatteryManager.ACTION_CHARGING)
@@ -64,21 +113,38 @@ object HostMonitor {
             override fun onReceive(context: Context, intent: Intent) = requestPush()
         }
         ContextCompat.registerReceiver(app, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+        KeepAliveNetwork.start()
         registerNetworkCallback(app)
-        scope.launch { pushRequests.collect { push(app) } }
-        scope.launch { Core.events.collect { if (it is CoreEvent.Share) refreshShare(app) } }
-        scope.launch { refreshShare(app) }
+        // Each StateFlow collector runs one request at a time and skips superseded ones.
+        scope.launch { pushRequests.collect { push(app, force = false) } }
+        // `deferScheduling` follows the mode; the first value also sends the first host state,
+        // which replaces the daemon's start default (scheduling deferred until then, K1).
+        scope.launch { AppPrefs.bgMode.collect { requestPush() } }
+        scope.launch { shareRefreshes.collect { refreshShare(app) } }
+        scope.launch { Core.events.collect { if (it is CoreEvent.Share) requestShareRefresh() } }
     }
 
     /** UI visibility (from `BackgroundController.onUiVisible`). */
     fun setForeground(visible: Boolean) {
         foreground = visible
         requestPush()
+        appContext?.let { updateMulticastLock(it) }
     }
 
-    /** Measures synchronously and sends `sys.hostState` (the catch-up worker calls this first). */
-    suspend fun pushNow(context: Context) {
-        push(context.applicationContext)
+    /**
+     * The periodic worker starts a run: while it lasts the daemon schedules on its own as well, so
+     * "Beim Start"-jobs (not part of `bg.catchUp`) run as they did in the worker's process before.
+     * Sends the measured host state at once; every call needs a matching [endWorkerRun].
+     */
+    suspend fun beginWorkerRun(context: Context) {
+        workerRuns.incrementAndGet()
+        push(context.applicationContext, force = true)
+    }
+
+    /** The worker run ended: scheduling is deferred again unless the UI is visible or "Dauerbetrieb" runs. */
+    suspend fun endWorkerRun(context: Context) {
+        workerRuns.updateAndGet { (it - 1).coerceAtLeast(0) }
+        push(context.applicationContext, force = true)
     }
 
     /** Current host state, measured synchronously. */
@@ -92,13 +158,19 @@ object HostMonitor {
             Log.w(TAG, "network state not readable", e)
             null
         }
+        val visible = foreground
         return HostStateArgs(
             powerSave = power?.isPowerSaveMode == true,
             // No network counts as unmetered: nothing is transferred then anyway.
             metered = caps != null && !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED),
             wifi = caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true,
             charging = battery?.isCharging == true,
-            foreground = foreground,
+            foreground = visible,
+            // Only "Dauerbetrieb" runs scheduled jobs in the background; otherwise a process the
+            // background service keeps alive leaves them to the periodic worker's run (spec A6).
+            deferScheduling = !visible &&
+                AppPrefs.bgMode.value != BackgroundController.MODE_PERSISTENT &&
+                workerRuns.get() == 0,
         )
     }
 
@@ -106,22 +178,42 @@ object HostMonitor {
         pushRequests.update { it + 1 }
     }
 
-    private suspend fun push(context: Context) {
-        try {
-            SyncApi.hostState(measure(context))
-        } catch (e: CoreException) {
-            Log.w(TAG, "sys.hostState failed: ${e.kind}: ${e.displayText()}")
+    private fun requestShareRefresh() {
+        shareRefreshes.update { it + 1 }
+    }
+
+    /** Sends the host state unless it equals the last one sent ([force]: always). */
+    private suspend fun push(context: Context, force: Boolean) {
+        pushLock.withLock {
+            val state = measure(context)
+            if (!force && state == lastPushed) return
+            try {
+                SyncApi.hostState(state)
+                lastPushed = state
+                hostStateFlow.value = state
+            } catch (e: CoreException) {
+                Log.w(TAG, "sys.hostState failed: ${e.kind}: ${e.displayText()}")
+            }
         }
     }
 
     private fun registerNetworkCallback(context: Context) {
         val connectivity = context.getSystemService(ConnectivityManager::class.java) ?: return
         val callback = object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) = requestPush()
+            override fun onAvailable(network: Network) {
+                KeepAliveNetwork.onAvailable(network)
+                requestPush()
+            }
 
-            override fun onLost(network: Network) = requestPush()
+            override fun onLost(network: Network) {
+                KeepAliveNetwork.onLost(network)
+                requestPush()
+            }
 
             override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) = requestPush()
+
+            override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) =
+                KeepAliveNetwork.onLinkProperties(network, linkProperties)
         }
         try {
             connectivity.registerDefaultNetworkCallback(callback)
@@ -132,32 +224,76 @@ object HostMonitor {
     }
 
     private suspend fun refreshShare(context: Context) {
-        val online = try {
-            Core.request<ShareRunning>("share.status").running
+        val status = try {
+            ShareApi.status()
         } catch (e: CoreException) {
             Log.w(TAG, "share.status failed: ${e.kind}: ${e.displayText()}")
             return
         }
-        shareOnlineFlow.value = online
-        updateMulticastLock(context, online)
+        lastStatus = status
+        shareFlow.value = ShareSnapshot(
+            online = status.running,
+            connected = status.connected,
+            lanOnly = status.server == null,
+            idleSupported = status.power.idleSupported,
+        )
+        updateMulticastLock(context)
+        rememberRunning(status.running)
     }
 
-    private fun updateMulticastLock(context: Context, online: Boolean) {
+    /** Persists "Share eingerichtet": at once when on, after [SETTLE_MS] of continuous "off". */
+    private fun rememberRunning(running: Boolean) {
+        if (running) {
+            offlineSince = null
+            settleCheck?.cancel()
+            settleCheck = null
+            if (!AppPrefs.shareRunning.value) AppPrefs.setShareRunning(true)
+            return
+        }
+        if (!AppPrefs.shareRunning.value) return
+        val now = SystemClock.elapsedRealtime()
+        val since = offlineSince ?: now.also { offlineSince = it }
+        val remaining = SETTLE_MS - (now - since)
+        if (remaining <= 0) {
+            offlineSince = null
+            AppPrefs.setShareRunning(false)
+            return
+        }
+        if (settleCheck?.isActive != true) {
+            settleCheck = scope.launch {
+                delay(remaining)
+                requestShareRefresh()
+            }
+        }
+    }
+
+    /**
+     * Multicast only where mDNS matters (spec A3): every multicast packet in the Wi-Fi wakes the
+     * phone while the lock is held. Held while the UI is visible, while a pairing offer or
+     * exchange runs, and without a Share server (LAN only: mDNS is the only way to be found).
+     */
+    private fun multicastWanted(status: ShareStatus?): Boolean {
+        if (status == null || !status.running) return false
+        if (foreground || status.server == null) return true
+        val offer = status.discovery.offer
+        val offering = offer != null && (offer.untilMs <= 0 || offer.untilMs > System.currentTimeMillis())
+        return offering || status.discovery.exchange?.state == "running"
+    }
+
+    private fun updateMulticastLock(context: Context) {
         synchronized(lockGuard) {
+            val wanted = multicastWanted(lastStatus)
             val lock = multicastLock ?: run {
+                if (!wanted) return
                 val wifi = context.getSystemService(WifiManager::class.java) ?: return
                 wifi.createMulticastLock(LOCK_TAG).apply { setReferenceCounted(false) }.also { multicastLock = it }
             }
             try {
-                if (online && !lock.isHeld) lock.acquire()
-                if (!online && lock.isHeld) lock.release()
+                if (wanted && !lock.isHeld) lock.acquire()
+                if (!wanted && lock.isHeld) lock.release()
             } catch (e: RuntimeException) {
                 Log.w(TAG, "multicast lock not changed", e)
             }
         }
     }
-
-    /** The part of `share.status` this monitor needs. */
-    @Serializable
-    private data class ShareRunning(val running: Boolean = false)
 }

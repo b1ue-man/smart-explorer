@@ -39,12 +39,14 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import app.smartexplorer.android.api.BgStatus
 import app.smartexplorer.android.api.CatchUpResult
+import app.smartexplorer.android.api.ShareStatus
 import app.smartexplorer.android.api.SyncApi
 import app.smartexplorer.android.api.SyncApi.displayText
 import app.smartexplorer.android.api.SyncApi.resultAs
 import app.smartexplorer.android.core.Core
 import app.smartexplorer.android.core.CoreException
 import app.smartexplorer.android.core.TaskInfo
+import app.smartexplorer.android.service.BackgroundService
 import app.smartexplorer.android.service.BackgroundText
 import app.smartexplorer.android.ui.common.Snackbars
 import kotlinx.coroutines.delay
@@ -78,6 +80,21 @@ internal fun BackgroundStatusBlock(mode: String, status: BgStatus?, nextRunMs: L
             if (!status.daemonRunning) HintText("Der Hintergrund-Worker startet noch.")
         }
         if (error != null) ErrorText("Status nicht verfügbar: $error")
+    }
+}
+
+/**
+ * Status of "Share im Hintergrund erreichbar" (spec A1, A7): whether the background service runs,
+ * the Share server's idle mode ("ohne Ruhemodus – Server aktualisieren") and that scheduled jobs
+ * stay periodic. [share] is the latest `share.status` (`null` = not loaded yet).
+ */
+@Composable
+internal fun ShareReachabilityStatus(mode: String, reachable: Boolean, share: ShareStatus?) {
+    val serviceRunning by BackgroundService.running.collectAsStateWithLifecycle()
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        BackgroundText.reachability(mode, reachable, serviceRunning, share).forEach { line ->
+            if (line.warning) ErrorText(line.text) else HintText(line.text)
+        }
     }
 }
 

@@ -2,6 +2,7 @@ package app.smartexplorer.android.system
 
 import android.Manifest
 import android.app.Activity
+import android.app.ActivityManager
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
@@ -57,6 +58,17 @@ object Permissions {
     /** Shows the system dialog that exempts the app from battery optimization. */
     fun requestIgnoreBatteryOptimizations(context: Context): Boolean =
         launch(context, Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, packageUri(context)))
+
+    /**
+     * Battery setting "Eingeschränkt" of the app: Android then starts neither the background
+     * service nor jobs or alarms unless the UI is in front (android-background-reachability.md §7).
+     */
+    fun isBackgroundRestricted(context: Context): Boolean =
+        context.getSystemService(ActivityManager::class.java)?.isBackgroundRestricted == true
+
+    /** App info page (battery usage, restricted settings). */
+    fun openAppDetails(context: Context): Boolean =
+        launch(context, Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, packageUri(context)))
 
     private fun packageUri(context: Context): Uri = Uri.parse("package:${context.packageName}")
 

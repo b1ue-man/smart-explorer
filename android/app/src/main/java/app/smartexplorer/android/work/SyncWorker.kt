@@ -31,16 +31,30 @@ import kotlinx.coroutines.withContext
  * Periodic catch-up (spec F17 "Periodisch"): reports the measured host state, starts
  * `bg.catchUp` and waits for the task to end. A run that takes longer than a moment asks for
  * the foreground (dataSync, best effort); when WorkManager stops the worker, only this run's
- * jobs are cancelled (`task.cancel`).
+ * jobs are cancelled (`task.cancel`). It also runs while the background service keeps the
+ * process alive for "Share im Hintergrund erreichbar": outside "Dauerbetrieb" the daemon defers
+ * its own scheduling then (`sys.hostState.deferScheduling`, spec A6) – except during this run,
+ * so "Beim Start"-jobs, which the catch-up does not cover, still run (K1).
  */
 class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
         val mode = AppPrefs.bgMode.value
         if (mode == BackgroundController.MODE_OFF) return Result.success()
-        // Persistent mode: the running service keeps the daemon awake; this work is its fallback.
+        // Persistent mode: the running service keeps the daemon scheduling; this work is its
+        // fallback. A service running for Share only (other modes) does not replace this run.
         if (mode == BackgroundController.MODE_PERSISTENT && BackgroundService.isRunning) return Result.success()
 
-        HostMonitor.pushNow(applicationContext)
+        try {
+            // Inside the try: a stop while the host state is sent still closes the gate below.
+            HostMonitor.beginWorkerRun(applicationContext)
+            return catchUp()
+        } finally {
+            // Also after a stop by WorkManager: the gate closes again.
+            withContext(NonCancellable) { HostMonitor.endWorkerRun(applicationContext) }
+        }
+    }
+
+    private suspend fun catchUp(): Result {
         val taskId = try {
             // Not cancellable: a stop during the (possibly seconds long) start must still get the
             // task id, so the catch below can end this run with `task.cancel`.

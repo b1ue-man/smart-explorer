@@ -34,6 +34,9 @@ object AppPrefs {
     private val autoUpdateCheckFlow = MutableStateFlow(true)
     private val lastUpdateCheckMsFlow = MutableStateFlow(0L)
     private val onboardingDoneFlow = MutableStateFlow(false)
+    private val shareReachableFlow = MutableStateFlow(true)
+    private val shareRunningFlow = MutableStateFlow(false)
+    private val bgStartRefusedMsFlow = MutableStateFlow(0L)
 
     /** `system|light|dark` */
     val theme: StateFlow<String> = themeFlow.asStateFlow()
@@ -52,6 +55,21 @@ object AppPrefs {
     val lastUpdateCheckMs: StateFlow<Long> = lastUpdateCheckMsFlow.asStateFlow()
     val onboardingDone: StateFlow<Boolean> = onboardingDoneFlow.asStateFlow()
 
+    /**
+     * "Share im Hintergrund erreichbar" (spec A1, default on): the background service also runs
+     * outside "Dauerbetrieb" while Share is set up ([shareRunning]).
+     */
+    val shareReachable: StateFlow<Boolean> = shareReachableFlow.asStateFlow()
+
+    /**
+     * Last settled `share.status.running` ("Share eingerichtet", spec A1). Persisted, so boot, the
+     * wake alarm and a process start decide about the background service before the core is up.
+     */
+    val shareRunning: StateFlow<Boolean> = shareRunningFlow.asStateFlow()
+
+    /** Wall-clock time Android last refused to start the background service from the background; 0 = never. */
+    val bgStartRefusedMs: StateFlow<Long> = bgStartRefusedMsFlow.asStateFlow()
+
     @Synchronized
     fun init(context: Context) {
         if (prefs != null) return
@@ -69,6 +87,9 @@ object AppPrefs {
         autoUpdateCheckFlow.value = p.getBoolean(KEY_AUTO_UPDATE_CHECK, autoUpdateCheckFlow.value)
         lastUpdateCheckMsFlow.value = p.getLong(KEY_LAST_UPDATE_CHECK_MS, lastUpdateCheckMsFlow.value)
         onboardingDoneFlow.value = p.getBoolean(KEY_ONBOARDING_DONE, onboardingDoneFlow.value)
+        shareReachableFlow.value = p.getBoolean(KEY_SHARE_REACHABLE, shareReachableFlow.value)
+        shareRunningFlow.value = p.getBoolean(KEY_SHARE_RUNNING, shareRunningFlow.value)
+        bgStartRefusedMsFlow.value = p.getLong(KEY_BG_START_REFUSED_MS, bgStartRefusedMsFlow.value)
         prefs = p
     }
 
@@ -114,6 +135,15 @@ object AppPrefs {
 
     fun setOnboardingDone(value: Boolean) = setBoolean(onboardingDoneFlow, KEY_ONBOARDING_DONE, value)
 
+    fun setShareReachable(value: Boolean) = setBoolean(shareReachableFlow, KEY_SHARE_REACHABLE, value)
+
+    fun setShareRunning(value: Boolean) = setBoolean(shareRunningFlow, KEY_SHARE_RUNNING, value)
+
+    fun setBgStartRefusedMs(value: Long) {
+        bgStartRefusedMsFlow.value = value
+        store { putLong(KEY_BG_START_REFUSED_MS, value) }
+    }
+
     private fun setBoolean(flow: MutableStateFlow<Boolean>, key: String, value: Boolean) {
         flow.value = value
         store { putBoolean(key, value) }
@@ -137,4 +167,7 @@ object AppPrefs {
     private const val KEY_AUTO_UPDATE_CHECK = "auto_update_check"
     private const val KEY_LAST_UPDATE_CHECK_MS = "last_update_check_ms"
     private const val KEY_ONBOARDING_DONE = "onboarding_done"
+    private const val KEY_SHARE_REACHABLE = "share_reachable"
+    private const val KEY_SHARE_RUNNING = "share_running"
+    private const val KEY_BG_START_REFUSED_MS = "bg_start_refused_ms"
 }

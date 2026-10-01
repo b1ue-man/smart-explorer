@@ -7,17 +7,19 @@ import app.smartexplorer.android.service.BackgroundController
 import app.smartexplorer.android.service.ExecHostNotifier
 import app.smartexplorer.android.service.TaskKeeper
 import app.smartexplorer.android.system.Notifications
+import app.smartexplorer.android.system.WakeKeeper
 
 /**
- * Process entry for the UI, services, workers and the boot receiver alike: settings, channels,
- * core start (non-blocking), task keeper, the notification for commands other devices run here and
- * the background mode.
+ * Process entry for the UI, services, workers, the boot receiver and the wake alarm alike:
+ * settings, channels, wake locks for the core's `wake` events, core start (non-blocking), task
+ * keeper, the notification for commands other devices run here and the background mode.
  */
 class SmartExplorerApp : Application() {
     override fun onCreate() {
         super.onCreate()
         AppPrefs.init(this)
         Notifications.ensureChannels(this)
+        WakeKeeper.init(this)
         Core.start(this)
         TaskKeeper.start(this)
         ExecHostNotifier.start(this)

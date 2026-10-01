@@ -7,7 +7,6 @@ import android.content.Context
 import android.content.Intent
 import androidx.core.app.NotificationCompat
 import app.smartexplorer.android.R
-import app.smartexplorer.android.api.BgStatus
 import app.smartexplorer.android.api.SyncApi
 import app.smartexplorer.android.core.TaskInfo
 import app.smartexplorer.android.system.Notifications
@@ -79,17 +78,11 @@ internal object ServiceNotifications {
             .setContentIntent(open(context, NavRequest.ShowTransfers, CODE_OPEN_TRANSFERS))
             .build()
 
-    /** "Smart Explorer im Hintergrund – n Jobs, Share online" with [Pausieren]/[Fortsetzen] (spec F17). */
-    fun background(context: Context, status: BgStatus?, enabledJobs: Int, shareOnline: Boolean): Notification {
-        val paused = status?.paused == true
-        val text = when {
-            status == null -> "Wird gestartet…"
-            else -> buildString {
-                append(if (paused) BackgroundText.paused(status) else if (enabledJobs == 1) "1 Job" else "$enabledJobs Jobs")
-                append(if (shareOnline) ", Share online" else ", Share offline")
-                status.activeJob?.let { append(" · läuft: $it") }
-            }
-        }
+    /**
+     * "Smart Explorer im Hintergrund – n Jobs, Share online" with [Pausieren]/[Fortsetzen] (spec F17);
+     * [text] from [BackgroundText.persistentText].
+     */
+    fun background(context: Context, text: String, paused: Boolean): Notification {
         val builder = NotificationCompat.Builder(context, Notifications.CHANNEL_BACKGROUND)
             .setSmallIcon(R.drawable.ic_sync)
             .setContentTitle("Smart Explorer im Hintergrund")
@@ -112,6 +105,21 @@ internal object ServiceNotifications {
         }
         return builder.build()
     }
+
+    /**
+     * "Share erreichbar" (spec A7): the background service runs for Share only (not
+     * "Dauerbetrieb"); [text] from [BackgroundText.reachableText]. Opens the background settings
+     * with the switch that ends it.
+     */
+    fun shareReachable(context: Context, text: String): Notification =
+        NotificationCompat.Builder(context, Notifications.CHANNEL_BACKGROUND)
+            .setSmallIcon(R.drawable.ic_share)
+            .setContentTitle("Share erreichbar")
+            .setContentText(text)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setContentIntent(open(context, NavRequest.ShowBackgroundSettings, CODE_OPEN_BACKGROUND))
+            .build()
 
     /** New incoming share request(s); opens the requests on the Share page. */
     fun shareRequest(context: Context, count: Int): Notification =
