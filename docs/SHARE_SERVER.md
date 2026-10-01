@@ -142,6 +142,73 @@ notification relationships are removed when either endpoint disappears, and
 the public key cache holds at most 4096 entries. These are availability controls
 only and do not weaken or replace peer authentication or end-to-end encryption.
 
+## Sleeping Clients (Idle Keepalive)
+
+A client that negotiates `idle_keepalive_v1` in `hello` (the Android app while
+it is not visible) can announce that it sleeps. The server then keeps its
+signaling connection alive without the client's 20-second heartbeat, so a phone
+in Doze stays reachable for Direct-Share requests while it wakes only once per
+keepalive interval. Older servers and clients never send these messages:
+
+```text
+Client -> Server  {"t":"set_idle","idle":true|false[,"keepalive_secs":N]}
+Client -> Server  {"t":"keepalive_ack"}
+Server -> Client  {"t":"idle_ack","idle":true|false,"keepalive_secs":K}
+Server -> Client  {"t":"keepalive"}
+```
+
+- **Interval K** comes from `SE_SHARE_IDLE_KEEPALIVE_SECS` (default 180).
+  Values outside 30-210 s are clamped with a startup notice; a non-numeric value
+  stops the server. 210 s is the ceiling because a signed presence lives 300 s,
+  desktops refresh theirs every 60 s, and a 30-second delivery margin remains.
+  `set_idle` may propose a shorter interval (`keepalive_secs`, at least 30 s);
+  the server uses the smaller value and reports it in `idle_ack`.
+- **Idle:** the server ticks every K seconds, independent of inbound traffic.
+  Each tick first delivers deferred presence refreshes, then `keepalive`. After
+  a keepalive the client must send something (normally `keepalive_ack`) within
+  60 s; otherwise the server closes the connection and removes its
+  registrations like on any disconnect.
+- **Not idle**, and every client without the capability: unchanged. A raw TCP
+  connection closes after 60 s without inbound data; a WebSocket connection has
+  no inbound deadline. A raw TCP line that arrives in pieces across the
+  server's internal wake-ups is kept, not discarded.
+- `set_idle` with `idle:false` first delivers everything deferred, then
+  `idle_ack`. `set_idle` without the negotiated capability is ignored.
+
+**Presence bundling.** Per idle connection the server remembers the route (Iroh
+node ID, relay URL, candidates) and expiry of the last presence it sent for each
+Direct lookup and each room member. A `direct_available` or `room_joined`
+refresh waits for the next tick only when this connection already received a
+presence for that key, the route is unchanged, and the copy it holds stays valid
+at least 30 s beyond that tick (expiry capped at send time + 300 s and judged on
+the wall clock). A newer refresh replaces a waiting one. Everything else is sent
+at once: first announcements, route changes, refreshes of a nearly expired copy,
+`direct_offline` and `room_left` (which also drop the waiting refresh for that
+key), access requests, decisions, receipts, discovery, and pairing. Waiting
+refreshes never retain more than the 2 MiB writer-queue budget; beyond it they
+are sent immediately. Unwatching a lookup or leaving a room forgets its keys, so
+a later watch or join starts with an immediate presence. With K = 180 s and a
+desktop refreshing every 60 s, an idle phone receives one refresh per keepalive
+and its copy never expires.
+
+Idle connections count against the same connection-worker, per-source, and
+registration limits as every other connection.
+
+**Relay pings.** The Iroh relay pings each connection 15 s (plus 1-5 s jitter)
+after the last received frame until the client has answered one ping, then
+every K seconds (plus 1-5 s jitter). Every ping must be answered within a fixed
+30 s. Desktop clients ping the relay themselves every 15 s, which restarts this
+timer, so nothing changes for them; a sleeping phone is woken by the relay at
+most once per K. A connection superseded by a newer connection of the same
+Endpoint ID returns to the 15-second check, so a stale connection releases its
+admission slot (four per Endpoint ID) quickly.
+
+**Proxies.** Every reverse proxy or load balancer on the path must keep an idle
+upgraded connection (signaling WebSocket and relay) open for at least K + 60 s
+(240 s by default); the nginx example below sets 300 s. If a proxy's idle
+timeout cannot be raised, lower K with `SE_SHARE_IDLE_KEEPALIVE_SECS` so that
+K + 60 s stays below it.
+
 ## HTTPS / 443 Deployment
 
 Run the server locally and terminate TLS in a reverse proxy:
@@ -175,6 +242,9 @@ location /se-share {
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
     proxy_set_header Host $host;
+    # Idle phones are pinged every K s (default 180): keep >= K + 60 s.
+    proxy_read_timeout 300s;
+    proxy_send_timeout 300s;
 }
 
 location / {
@@ -185,12 +255,16 @@ location / {
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
     proxy_set_header Host $host;
+    proxy_read_timeout 300s;
+    proxy_send_timeout 300s;
 }
 ```
 
 The Caddy snippet shows routing/TLS topology only; stock Caddy has no equivalent
 per-client connection limiter. Put a rate-limiting WAF/load balancer in front of
 it or use an audited limiter module before enabling the trusted-proxy exemption.
+Also check that no Caddy, load-balancer, or CDN idle timeout on the path is
+shorter than K + 60 s (see Sleeping Clients).
 
 This makes both signaling and the encrypted Iroh relay reachable through the
 same TLS hostname. Iroh still tries direct peer paths first. If the data relay is

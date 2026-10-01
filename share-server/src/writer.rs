@@ -2,12 +2,15 @@ use std::io::{self, Write};
 use std::net::{Shutdown, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use super::limits::{MAX_WRITER_QUEUED_BYTES, WRITER_QUEUE_CAPACITY};
 use super::line::MAX_JSON_LINE;
 use super::Out;
+
+#[path = "writer_idle.rs"]
+mod idle_link;
 
 pub(super) const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -16,6 +19,8 @@ pub(super) struct Writer {
     sender: SyncSender<QueuedMessage>,
     control: Arc<WriterControl>,
     budget: Arc<QueueBudget>,
+    /// Present once the client negotiated `idle_keepalive_v1`.
+    idle: Arc<OnceLock<idle_link::IdleLink>>,
 }
 
 struct WriterControl {
@@ -110,13 +115,26 @@ impl Writer {
     }
 
     pub(super) fn try_send(&self, message: &Out) -> bool {
+        let Some(json) = self.serialize(message) else {
+            return false;
+        };
+        match self.idle.get() {
+            Some(link) => link.send(message, json, &mut |json| self.enqueue_json(json)),
+            None => self.enqueue_json(json),
+        }
+    }
+
+    fn serialize(&self, message: &Out) -> Option<Vec<u8>> {
+        if self.control.is_closed() {
+            return None;
+        }
+        serialize_bounded(message).ok()
+    }
+
+    fn enqueue_json(&self, json: Vec<u8>) -> bool {
         if self.control.is_closed() {
             return false;
         }
-        let json = match serialize_bounded(message) {
-            Ok(json) => json,
-            Err(_) => return false,
-        };
         let Some(reservation) = self.budget.try_reserve(json.len()) else {
             return false;
         };
@@ -170,6 +188,7 @@ impl Writer {
                     queued: AtomicUsize::new(0),
                     max: MAX_WRITER_QUEUED_BYTES,
                 }),
+                idle: Arc::new(OnceLock::new()),
             },
             receiver,
         ))

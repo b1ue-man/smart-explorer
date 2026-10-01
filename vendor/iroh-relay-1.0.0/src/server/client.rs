@@ -23,13 +23,12 @@ use crate::{
     http::ProtocolVersion,
     protos::{
         relay::{
-            ClientToRelayMsg, Datagrams, PER_CLIENT_SEND_QUEUE_DEPTH, PING_INTERVAL,
-            RelayToClientMsg, Status,
+            ClientToRelayMsg, Datagrams, PER_CLIENT_SEND_QUEUE_DEPTH, RelayToClientMsg, Status,
         },
         streams::BytesStreamSink,
     },
     server::{
-        ConnectionId, OnDisconnectGuard,
+        ClientPingSchedule, ConnectionId, OnDisconnectGuard,
         clients::Clients,
         metrics::Metrics,
         queue_budget::{ClientPacketQueueBudget, PacketQueuePermit},
@@ -408,13 +407,15 @@ where
     }
 
     async fn run_inner(&mut self, done: CancellationToken) -> Result<(), RunError> {
+        let mut cadence = PingCadence::new(self.guard.ping_schedule());
         // Add some jitter to ping pong interactions, to avoid all pings being sent at the same time
-        let next_interval = || {
+        let next_interval = |cadence: &PingCadence| {
             let random_secs = rand::rng().random_range(1..=5);
-            Duration::from_secs(random_secs) + PING_INTERVAL
+            Duration::from_secs(random_secs) + cadence.base_interval()
         };
 
-        let mut ping_interval = tokio::time::interval(next_interval());
+        let mut period = next_interval(&cadence);
+        let mut ping_interval = tokio::time::interval(period);
         // ticks immediately
         ping_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
         ping_interval.tick().await;
@@ -430,11 +431,15 @@ where
                     break;
                 }
                 maybe_frame = self.stream.next() => {
+                    let answered = cadence.answers_ping(&maybe_frame);
                     self
                         .handle_frame(maybe_frame)
                         .await?;
+                    if answered {
+                        period = next_interval(&cadence);
+                    }
                     // reset the ping interval, we just received a message
-                    ping_interval.reset();
+                    ping_interval.reset_after(period);
                 }
                 // Second priority, sending regular packets
                 packet = self.packet_send_queue.recv() => {
@@ -446,6 +451,10 @@ where
                 // Last priority, sending other message
                 message = self.message_send_queue.recv() => {
                     let message = message.ok_or_else(|| e!(RunError::HandleDropped))?;
+                    if cadence.superseded_by(&message) {
+                        period = next_interval(&cadence);
+                        ping_interval.reset_after(period);
+                    }
                     trace!("send {message:?}");
                     self.write_frame(message)
                         .await
@@ -458,8 +467,13 @@ where
                 _ = ping_interval.tick() => {
                     trace!("keep alive ping");
                     // new interval
-                    ping_interval.reset_after(next_interval());
-                    let data = self.ping_tracker.new_ping();
+                    period = next_interval(&cadence);
+                    ping_interval.reset_after(period);
+                    let data = match cadence.pong_timeout() {
+                        Some(timeout) => self.ping_tracker.new_ping_with_timeout(timeout),
+                        None => self.ping_tracker.new_ping(),
+                    };
+                    cadence.sent(data);
                     self.write_frame(RelayToClientMsg::Ping(data))
                         .await
                         .map_err(|err| e!(RunError::WriteFrame, err))?;
@@ -568,6 +582,63 @@ where
             .send_packet(dst, data, self.guard.endpoint_id(), &self.metrics)?;
 
         Ok(())
+    }
+}
+
+/// Server ping cadence of one connection, see [`ClientPingSchedule`].
+#[derive(Debug)]
+struct PingCadence {
+    schedule: ClientPingSchedule,
+    /// The client answered a relay ping since it connected or was last superseded.
+    answered: bool,
+    /// Payload of the most recent ping.
+    outstanding: Option<[u8; 8]>,
+}
+
+impl PingCadence {
+    fn new(schedule: ClientPingSchedule) -> Self {
+        Self {
+            schedule,
+            answered: false,
+            outstanding: None,
+        }
+    }
+
+    fn base_interval(&self) -> Duration {
+        self.schedule.base_interval(self.answered)
+    }
+
+    fn pong_timeout(&self) -> Option<Duration> {
+        self.schedule.pong_timeout
+    }
+
+    fn sent(&mut self, data: [u8; 8]) {
+        self.outstanding = Some(data);
+    }
+
+    /// Returns `true` when `frame` answers the most recent ping and changed the cadence.
+    fn answers_ping(&mut self, frame: &Option<Result<ClientToRelayMsg, RelayRecvError>>) -> bool {
+        let Some(Ok(ClientToRelayMsg::Pong(data))) = frame else {
+            return false;
+        };
+        if self.outstanding != Some(*data) {
+            return false;
+        }
+        self.outstanding = None;
+        !std::mem::replace(&mut self.answered, true)
+    }
+
+    /// Returns `true` when `message` tells this connection that a newer connection of the same
+    /// endpoint took over; the next ping then follows the first interval again.
+    fn superseded_by(&mut self, message: &RelayToClientMsg) -> bool {
+        let superseded = match message {
+            RelayToClientMsg::Status(status) => *status == Status::SameEndpointIdConnected,
+            RelayToClientMsg::Health { problem } => {
+                *problem == Status::SameEndpointIdConnected.to_string()
+            }
+            _ => false,
+        };
+        superseded && std::mem::replace(&mut self.answered, false)
     }
 }
 
@@ -1000,5 +1071,41 @@ mod tests {
         assert_eq!(recv_frame, frame);
 
         Ok(())
+    }
+
+    #[test]
+    fn android_background_task_ping_cadence_follows_schedule() {
+        let schedule = ClientPingSchedule::new(
+            Duration::from_secs(15),
+            Duration::from_secs(180),
+            Some(Duration::from_secs(30)),
+        );
+        let mut cadence = PingCadence::new(schedule);
+        assert_eq!(cadence.base_interval(), Duration::from_secs(15));
+        assert_eq!(cadence.pong_timeout(), Some(Duration::from_secs(30)));
+
+        // Only the answer to the most recent ping switches to the long interval.
+        assert!(!cadence.answers_ping(&Some(Ok(ClientToRelayMsg::Pong([1; 8])))));
+        cadence.sent([2; 8]);
+        assert!(!cadence.answers_ping(&Some(Ok(ClientToRelayMsg::Pong([1; 8])))));
+        assert!(cadence.answers_ping(&Some(Ok(ClientToRelayMsg::Pong([2; 8])))));
+        assert_eq!(cadence.base_interval(), Duration::from_secs(180));
+        cadence.sent([3; 8]);
+        assert!(!cadence.answers_ping(&Some(Ok(ClientToRelayMsg::Pong([3; 8])))));
+        assert_eq!(cadence.base_interval(), Duration::from_secs(180));
+
+        // A superseded connection is checked again after the first interval.
+        assert!(!cadence.superseded_by(&RelayToClientMsg::Status(Status::Healthy)));
+        assert!(cadence.superseded_by(&RelayToClientMsg::Health {
+            problem: Status::SameEndpointIdConnected.to_string(),
+        }));
+        assert_eq!(cadence.base_interval(), Duration::from_secs(15));
+        assert!(!cadence.superseded_by(&RelayToClientMsg::Status(Status::SameEndpointIdConnected)));
+
+        // Without a schedule from access control the upstream cadence stays.
+        let upstream = ClientPingSchedule::default();
+        assert_eq!(upstream.base_interval(false), Duration::from_secs(15));
+        assert_eq!(upstream.base_interval(true), Duration::from_secs(15));
+        assert_eq!(upstream.pong_timeout, None);
     }
 }

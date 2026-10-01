@@ -8,8 +8,9 @@ use tungstenite::handshake::HandshakeError;
 use tungstenite::protocol::WebSocketConfig;
 use tungstenite::{accept_with_config, Error as WsError, Message, WebSocket};
 
+use super::idle::{self, SignalTiming};
 use super::limits::SourceKey;
-use super::line::{read_line_limited, read_line_limited_until, MAX_JSON_LINE};
+use super::line::{read_line_limited_until, MAX_JSON_LINE};
 use super::rate_limits::InboundRateLimiter;
 use super::registration_guard::RegistrationGuard;
 use super::state::{register_client, State};
@@ -17,6 +18,10 @@ use super::tracked_direct;
 use super::websocket_read_limit::WebSocketReadLimit;
 use super::writer::QueuedMessage;
 use super::{dispatch, send, In, Out, Writer};
+
+#[path = "transport_serve.rs"]
+mod serve;
+use serve::{serve_tcp, serve_websocket};
 
 const PRE_REGISTRATION_TIMEOUT: Duration = Duration::from_secs(10);
 const HANDSHAKE_POLL_INTERVAL: Duration = Duration::from_millis(5);
@@ -28,21 +33,27 @@ type SignalingWebSocket = WebSocket<WebSocketReadLimit<TcpStream>>;
 
 #[cfg(test)]
 pub(super) fn handle(stream: TcpStream, state: Arc<Mutex<State>>) -> io::Result<()> {
+    handle_with_timing(stream, state, &SignalTiming::default())
+}
+
+#[cfg(test)]
+pub(super) fn handle_with_timing(
+    stream: TcpStream,
+    state: Arc<Mutex<State>>,
+    timing: &SignalTiming,
+) -> io::Result<()> {
     let source = SourceKey::from_socket(stream.peer_addr()?);
-    handle_with_source(stream, state, source)
+    handle_with_source(stream, state, source, timing)
 }
 
 pub(super) fn handle_with_source(
     stream: TcpStream,
     state: Arc<Mutex<State>>,
     source: SourceKey,
+    timing: &SignalTiming,
 ) -> io::Result<()> {
-    handle_until(
-        stream,
-        state,
-        source,
-        Instant::now() + PRE_REGISTRATION_TIMEOUT,
-    )
+    let registration_deadline = Instant::now() + PRE_REGISTRATION_TIMEOUT;
+    handle_until(stream, state, source, registration_deadline, timing)
 }
 
 #[cfg(test)]
@@ -52,7 +63,8 @@ pub(super) fn handle_with_timeout(
     timeout: Duration,
 ) -> io::Result<()> {
     let source = SourceKey::from_socket(stream.peer_addr()?);
-    handle_until(stream, state, source, Instant::now() + timeout)
+    let timing = SignalTiming::default();
+    handle_until(stream, state, source, Instant::now() + timeout, &timing)
 }
 
 fn handle_until(
@@ -60,6 +72,7 @@ fn handle_until(
     state: Arc<Mutex<State>>,
     source: SourceKey,
     registration_deadline: Instant,
+    timing: &SignalTiming,
 ) -> io::Result<()> {
     let mut inbound_rate = InboundRateLimiter::new();
     set_remaining_read_timeout(&stream, registration_deadline)?;
@@ -71,6 +84,7 @@ fn handle_until(
             state,
             source,
             registration_deadline,
+            timing,
             &mut inbound_rate,
         );
     }
@@ -79,6 +93,7 @@ fn handle_until(
         state,
         source,
         registration_deadline,
+        timing,
         &mut inbound_rate,
     )
 }
@@ -88,6 +103,7 @@ fn handle_tcp(
     state: Arc<Mutex<State>>,
     source: SourceKey,
     registration_deadline: Instant,
+    timing: &SignalTiming,
     inbound_rate: &mut InboundRateLimiter,
 ) -> io::Result<()> {
     let mut reader = BufReader::new(stream);
@@ -101,9 +117,6 @@ fn handle_tcp(
         Err(_) => return Ok(()),
     };
     let writer = Writer::tcp(reader.get_ref().try_clone()?)?;
-    reader
-        .get_ref()
-        .set_read_timeout(Some(Duration::from_secs(60)))?;
     let In::Hello {
         protocol_version,
         device_id,
@@ -124,6 +137,9 @@ fn handle_tcp(
     }
 
     let capabilities = tracked_direct::negotiate_capabilities(capabilities);
+    if capabilities.contains(idle::CAPABILITY) {
+        writer.enable_idle(timing);
+    }
     let id = match register_client(
         &state,
         writer.clone(),
@@ -145,26 +161,7 @@ fn handle_tcp(
         },
     );
 
-    loop {
-        line.clear();
-        match read_line_limited(&mut reader, &mut line, MAX_JSON_LINE) {
-            Ok(0) => break,
-            Err(error)
-                if error.kind() == ErrorKind::WouldBlock || error.kind() == ErrorKind::TimedOut =>
-            {
-                break;
-            }
-            Err(_) => break,
-            Ok(_) => {}
-        }
-        require_inbound_budget(inbound_rate, line.len())?;
-        let message: In = match serde_json::from_str(line.trim()) {
-            Ok(message) => message,
-            Err(_) => continue,
-        };
-        dispatch(id, &writer, message, &state);
-    }
-    Ok(())
+    serve_tcp(&mut reader, id, &writer, &state, timing, inbound_rate)
 }
 
 fn handle_websocket(
@@ -172,6 +169,7 @@ fn handle_websocket(
     state: Arc<Mutex<State>>,
     source: SourceKey,
     registration_deadline: Instant,
+    timing: &SignalTiming,
     inbound_rate: &mut InboundRateLimiter,
 ) -> io::Result<()> {
     let (writer, outbound) = Writer::websocket(&stream)?;
@@ -192,6 +190,7 @@ fn handle_websocket(
         &outbound,
         registration_deadline,
         inbound_rate,
+        &mut false,
     ) {
         Ok(Some(message)) => message,
         Ok(None) => return Ok(()),
@@ -219,6 +218,9 @@ fn handle_websocket(
     }
 
     let capabilities = tracked_direct::negotiate_capabilities(capabilities);
+    if capabilities.contains(idle::CAPABILITY) {
+        writer.enable_idle(timing);
+    }
     let id = match register_client(
         &state,
         writer.clone(),
@@ -242,27 +244,15 @@ fn handle_websocket(
     );
 
     websocket.get_mut().set_nonblocking(false)?;
-    websocket
-        .get_mut()
-        .set_read_timeout(Some(Duration::from_millis(500)))?;
-    let result = loop {
-        if let Err(error) = flush_websocket_out(&mut websocket, &outbound) {
-            break Err(error);
-        }
-        match read_websocket_json_until(
-            &mut websocket,
-            &outbound,
-            Instant::now() + Duration::from_millis(500),
-            inbound_rate,
-        ) {
-            Ok(Some(message)) => dispatch(id, &writer, message, &state),
-            Ok(None) => break Ok(()),
-            Err(error)
-                if error.kind() == ErrorKind::WouldBlock || error.kind() == ErrorKind::TimedOut => {
-            }
-            Err(error) => break Err(error),
-        }
-    };
+    let result = serve_websocket(
+        &mut websocket,
+        &outbound,
+        &writer,
+        id,
+        &state,
+        timing,
+        inbound_rate,
+    );
     writer.close();
     result
 }
@@ -325,18 +315,23 @@ fn flush_websocket_out(
     Ok(())
 }
 
+/// Reads until one JSON message, close, or `deadline`. `received` reports any
+/// frame, including control and unparsable frames.
 fn read_websocket_json_until(
     websocket: &mut SignalingWebSocket,
     outbound: &Receiver<QueuedMessage>,
     deadline: Instant,
     inbound_rate: &mut InboundRateLimiter,
+    received: &mut bool,
 ) -> io::Result<Option<In>> {
     loop {
         if Instant::now() >= deadline {
             return Err(pre_registration_timeout());
         }
         flush_websocket_out(websocket, outbound)?;
-        match websocket.read() {
+        let frame = websocket.read();
+        *received |= frame.is_ok();
+        match frame {
             Ok(Message::Text(text)) => {
                 require_inbound_message_budget(inbound_rate)?;
                 if let Some(message) = parse_websocket_json(text.as_bytes())? {

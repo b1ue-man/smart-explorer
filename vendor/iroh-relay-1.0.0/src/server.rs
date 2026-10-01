@@ -26,6 +26,7 @@ use std::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
+    time::Duration,
 };
 
 use derive_more::Debug;
@@ -57,6 +58,7 @@ use self::http_server::{BytesBody, HyperError, HyperResult};
 use crate::{
     defaults::DEFAULT_KEY_CACHE_CAPACITY,
     http::{AUTH_TOKEN_URL_QUERY_PARAM, ProtocolVersion, RELAY_PROBE_PATH},
+    protos::relay::PING_INTERVAL,
     quic::server::{QuicServer, QuicSpawnError, ServerHandle as QuicServerHandle},
     tls::CaTlsConfig,
 };
@@ -306,6 +308,70 @@ pub trait AccessControl: std::fmt::Debug + Send + Sync + 'static {
     fn on_disconnect(&self, endpoint_id: EndpointId, connection_id: ConnectionId) {
         let _ = (endpoint_id, connection_id);
     }
+
+    /// Returns how the relay pings an admitted connection to verify that it is alive.
+    ///
+    /// Called once when the connection actor starts. The default keeps iroh's cadence, see
+    /// [`ClientPingSchedule::default`].
+    fn ping_schedule(&self, endpoint_id: EndpointId) -> ClientPingSchedule {
+        let _ = endpoint_id;
+        ClientPingSchedule::default()
+    }
+}
+
+/// Server-initiated keepalive pings for one relay connection.
+///
+/// Every received frame restarts the wait for the next ping. Each wait adds 1 to 5 seconds of
+/// random jitter so pings of many connections do not align. A connection superseded by a newer
+/// connection of the same endpoint returns to [`ClientPingSchedule::first_interval`], so a
+/// stale connection is detected and releases its admission slot early.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ClientPingSchedule {
+    /// Base wait before pinging a connection that has not yet answered a relay ping.
+    pub first_interval: Duration,
+    /// Base wait between pings once the connection answered one.
+    pub interval: Duration,
+    /// Fixed time a client gets to answer a ping before the connection is closed.
+    ///
+    /// `None` uses three times the last measured round-trip time, clamped to 0.5 to 5 seconds
+    /// (5 seconds before the first measurement).
+    pub pong_timeout: Option<Duration>,
+}
+
+impl Default for ClientPingSchedule {
+    /// Upstream iroh behavior: every 15 seconds with an RTT-based answer window.
+    fn default() -> Self {
+        Self {
+            first_interval: PING_INTERVAL,
+            interval: PING_INTERVAL,
+            pong_timeout: None,
+        }
+    }
+}
+
+impl ClientPingSchedule {
+    /// Creates a schedule; see the field documentation for the meaning of each value.
+    pub fn new(
+        first_interval: Duration,
+        interval: Duration,
+        pong_timeout: Option<Duration>,
+    ) -> Self {
+        Self {
+            first_interval,
+            interval,
+            pong_timeout,
+        }
+    }
+
+    /// Base wait before the next ping, before jitter.
+    pub(crate) fn base_interval(&self, answered: bool) -> Duration {
+        if answered {
+            self.interval
+        } else {
+            self.first_interval
+        }
+    }
 }
 
 /// A dyn-compatible version of [`AccessControl`] that returns boxed futures.
@@ -322,6 +388,12 @@ pub trait DynAccessControl: std::fmt::Debug + Send + Sync + 'static {
 
     /// See [`AccessControl::on_disconnect`].
     fn on_disconnect(&self, endpoint_id: EndpointId, connection_id: ConnectionId);
+
+    /// See [`AccessControl::ping_schedule`].
+    fn ping_schedule(&self, endpoint_id: EndpointId) -> ClientPingSchedule {
+        let _ = endpoint_id;
+        ClientPingSchedule::default()
+    }
 }
 
 impl<T: AccessControl> DynAccessControl for T {
@@ -334,6 +406,10 @@ impl<T: AccessControl> DynAccessControl for T {
 
     fn on_disconnect(&self, endpoint_id: EndpointId, connection_id: ConnectionId) {
         <Self as AccessControl>::on_disconnect(self, endpoint_id, connection_id)
+    }
+
+    fn ping_schedule(&self, endpoint_id: EndpointId) -> ClientPingSchedule {
+        <Self as AccessControl>::ping_schedule(self, endpoint_id)
     }
 }
 
@@ -427,6 +503,14 @@ impl OnDisconnectGuard {
     /// Returns the [`ConnectionId`] of the guarded connection.
     pub fn connection_id(&self) -> ConnectionId {
         self.connection_id
+    }
+
+    /// Ping schedule chosen by the access control that admitted this connection.
+    pub(crate) fn ping_schedule(&self) -> ClientPingSchedule {
+        self.access
+            .as_ref()
+            .map(|access| access.ping_schedule(self.endpoint_id))
+            .unwrap_or_default()
     }
 }
 
