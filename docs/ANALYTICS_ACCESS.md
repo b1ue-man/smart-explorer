@@ -300,3 +300,21 @@ the current directory) because `GetFullPathNameW` — and with it
 issue paths are shown without the prefix. Informational `notes` (aggregation)
 are reported separately from issues and never make a result partial. The panic
 logger is installed before the elevated-analysis branch.
+
+## Android: protected app folders and platform sizes (2026-10-01, AND5)
+
+Android 11+ locks other apps' `Android/data` and `Android/obb` for every app, even with all-files
+access; MediaProvider either hides them (tmpfs overlay with only the own package) or refuses
+`opendir`/`lstat`. The walkers therefore treat `<volume>/Android/data|obb` and everything below
+(canonical paths, aliases such as `/sdcard`, SD cards, case-insensitive) as protected areas
+(`apptrash::ProtectedAreas`, inert while no volumes are registered, so desktop scans are unchanged):
+a failure there is counted as a protected omission with one explanatory note, never as an issue,
+and never makes the result partial; a protected scan root gives a complete, empty result. The
+Share-hosted analysis carries the protected note as the first `notes` entry, so older desktops read
+an unchanged wire format. The Android view (`analyze.node`) adds two estimate rows that never enter
+the result tree: „Weitere App-Daten (laut Android, ≈)“ under `Android/data` from
+`ExternalStorageStats.getAppBytes()` (primary volume, usage access) minus what was measured there,
+and „≈ Nicht einzeln erfasst“ at a whole-volume root without other issues (used bytes per `StatFs`
+minus measured minus other apps). The Android duplicate search compares every file at or above the
+minimum size (64 MiB candidate path budget, reported when reached) with SHA-256 from `ring`, which
+uses the ARMv8 SHA-256 instructions; the desktop „Aufräumen“ keeps its 200-candidate cap (TODO DUP1).

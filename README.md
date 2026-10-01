@@ -868,8 +868,21 @@ Versions-Rollback; Google-Play-Veröffentlichung; Storage-Access-Framework-Bäum
 - Kalender-Jobs sind nur im Dauerbetrieb minutengenau; „Periodisch“ holt
   Termine im Abstand von mindestens 15 Minuten nach, Android kann Läufe
   verschieben.
-- Share: Andere Geräte erreichen das Telefon nur bei geöffneter App, während
-  einer Übertragung oder im Dauerbetrieb.
+- Share im Hintergrund (ab 0.5.169, Einstellung „Share im Hintergrund
+  erreichbar“, Standard an): Ist Share eingerichtet, hält ein Vordergrunddienst
+  („Share erreichbar“) das Telefon für gekoppelte Geräte erreichbar, auch nach
+  einem Neustart oder Update ohne die App zu öffnen; ein Wach-Alarm alle
+  10 Minuten startet ihn neu, falls Android ihn beendet hat (dafür die
+  Akku-Optimierung für Smart Explorer ausschalten). Bei verdeckter App ruht die
+  Verbindung akkuschonend: der Share-Server (ab 0.5.169, Fähigkeit
+  `idle_keepalive_v1`) hält sie mit einem Keepalive alle 3 Minuten wach und
+  bündelt Statusmeldungen, leere Peer-Verbindungen werden geschlossen, der
+  WLAN-Multicast bleibt aus (außer ohne Share-Server, dann ist mDNS der einzige
+  Weg). Ein älterer Share-Server funktioniert weiter, kostet aber mehr Akku und
+  verliert die Verbindung im Tiefschlaf häufiger; die Einstellungen zeigen das.
+  Nach der Erstinstallation oder „Beenden erzwingen“ muss die App einmal
+  geöffnet werden (Android-Regel). Ein am Desktop als Laufwerk eingebundenes
+  Telefon hält seine Verbindung wach.
 - Der Auslöser „Bei Geräte-/USB-Anschluss“ und die Live-Beobachtung für den
   Ordnerindex fehlen wie unter Linux; der Index wird bei Bedarf neu gebaut.
 - Android liefert keine System-Dateisymbole; die App zeigt Typsymbole und
@@ -884,12 +897,17 @@ Versions-Rollback; Google-Play-Veröffentlichung; Storage-Access-Framework-Bäum
 - Die privaten Bereiche anderer Apps (alles in `Android/data` und `Android/obb`)
   lassen sich seit Android 11 nicht öffnen (auch nicht mit „Alle Dateien“ oder
   über die Ordnerauswahl des Systems); Ordnerindex, Sync-Jobs und Spiegeln
-  lassen sie als geschützte Auslassung weg und melden das. Der einzige Weg ohne
+  lassen sie als geschützte Auslassung weg und melden das. Speicheranalyse und
+  Duplikatsuche zählen sie als „von Android geschützt“ statt als Lesefehler
+  (das Ergebnis bleibt vollständig); mit „Zugriff auf Nutzungsdaten“ zeigt die
+  Analyse ihre Gesamtgröße laut Android (≈) und an einer Volume-Wurzel den
+  nicht einzeln erfassten Rest (Apps, System). Der einzige Weg ohne
   Root wäre Shizuku (Zusatz-App, Kopplung per Wireless-Debugging nach jedem
   Neustart) und ist nicht eingebaut.
 - Befehle anderer Geräte laufen in der App-Sandbox mit den Rechten der App
   (`/system/bin/sh`, kein Root, kein Zugriff auf andere Apps) und nur, solange
-  der Share-Dienst läuft (App offen oder Dauerbetrieb). Sie können alles lesen,
+  der Share-Dienst läuft (App offen, Dauerbetrieb oder „Share im Hintergrund
+  erreichbar“). Sie können alles lesen,
   was die App lesen darf, auch ihre gespeicherten Zugangsdaten, die
   Share-Identität und Drive-Anmeldungen – deshalb nur Geräten erlauben, denen
   man wie sich selbst vertraut. Jeder Befehl läuft unter einem eigenen Zwischenprozess, der

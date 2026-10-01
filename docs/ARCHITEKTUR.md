@@ -1,6 +1,6 @@
 # Smart Explorer – Architektur
 
-Stand: 2026-09-29. Kurzüberblick als erster Einstieg; Details liefert der Code-Graph
+Stand: 2026-10-01. Kurzüberblick als erster Einstieg; Details liefert der Code-Graph
 (`graphify query "…"`, siehe AGENTS.md) und die Lesungen unter `docs/lesungen/`.
 
 ## Zweck
@@ -24,8 +24,9 @@ Speicheranalyse – als Desktop-App (Windows, Linux; Rust + egui) und als Androi
 | Sync | Jobs `native/src/syncjobs/`, Zwei-Wege `native/src/bisync/`, Einweg-Spiegeln `native/src/sync/` |
 | Hintergrund-Daemon | `native/src/daemon/` (`run_daemon`, eingebettet `ensure_embedded_daemon`, Nachhol-Lauf `request_catch_up`), `native/src/autostart/` |
 | Share/P2P | `native/src/share/` (Iroh/QUIC, Profile, Discovery, Räume), Share-Server `share-server/` |
+| Share-Energie/Ruhemodus | `share/core/power.rs` (prozessweit: `set_low_power`, `request_probe`, Wachhalte-Hook), Signal-Worker `signal_worker.rs` + `signal_{connected,session,idle,schedule,power,publish,readiness}.rs` (ereignisgesteuert, Wächter-Thread `share-signal-rd`), Leerlauf-Aufräumen `node_idle.rs`; Server `share-server/src/{idle,idle_outbox,signal_session,transport_serve,writer_idle}.rs` (Fähigkeit `idle_keepalive_v1`, Takt K, Bündelung), Relay-Ping-Plan im vendored `iroh-relay` (`AccessControl::ping_schedule`) |
 | Eigene Discovery-Angebote (suchbar machen) | Daemon-Buch `share/core/discovery_offer_book.rs` (aus Worker-Ereignissen, in `ShareWorkerSnapshot.discovery_offers`), IPC `daemon/os/shared/ipc_host_commands.rs` (`send_command` → `ShareCommandReply`), CLI `cli/share/discoverable.rs` |
-| Speicheranalyse/Duplikate | `native/src/analytics/` |
+| Speicheranalyse/Duplikate | `native/src/analytics/` (geschützte Bereiche `core/protected.rs` + `apptrash::ProtectedAreas`, Anzeige-Schätzzeilen `core/storage_view.rs`, Android-Duplikatsuche `os/shared/reclaim/finder*.rs`) |
 | Updates | Desktop `native/src/updater/`, Terminal `se update` `cli/update.rs` → `updater/os/shared/terminal.rs` (Feed-Prüfung, Installationsart, Ersatz an Ort und Stelle), Android `update.*` in `native/src/mobile/os/shared/domains/` |
 | Release | `native/publish-release-local.ps1` (einziger Einstieg), `docs/RELEASING.md` |
 
@@ -44,7 +45,9 @@ Speicheranalyse – als Desktop-App (Windows, Linux; Rust + egui) und als Androi
   `mobile::call` → Dispatcher → Kernmodul (z. B. `vfs::Backend::list_dir`) → JSON-Antwort.
   Lange Vorgänge: Task-ID, Fortschritt über `pollEvents` (Ereignispumpe) → `Core.tasks`.
 - Hintergrund Android: WorkManager `SyncWorker` → `bg.catchUp` → eingebetteter Daemon-Supervisor →
-  `job::run_one` → `bisync::run`; Dauerbetrieb hält den Prozess mit `BackgroundService` (specialUse).
+  `job::run_one` → `bisync::run`; Dauerbetrieb oder „Share im Hintergrund erreichbar“ hält den Prozess mit
+  `BackgroundService` (specialUse); `system/KeepAlive*.kt` (Wach-Alarm 10 min → `share.wake`, Netzwechsel),
+  `WakeKeeper` (Ereignis `wake` → Partial-Wakelock), `HostMonitor` → `sys.hostState` (Ruhemodus, `deferScheduling`).
 - Desktop: GUI ↔ Daemon-Prozess über Loopback-TCP-IPC (`daemon/os/shared/ipc*.rs`); Share-/Agent-Anfragen
   mit Kredit je Anfrage (`agent_proto/core/credit.rs`), damit eine langsame Übertragung kein Blättern blockiert.
 - Übertragung: App/Android → `TransferRequest::Job` → Lane → `engine::run_job` → Walker listet parallel unter
@@ -65,4 +68,6 @@ Android-APIs: `docs/refs/android-apis.md`, `docs/refs/android-platform.md`; CI: 
   (im Verzeichnis `native/`), NDK aus `android/ndk-version`; Gradle braucht `-PrustlsVerifierMaven=<Pfad>`.
 - Release-APK: `android/build-release-apk.sh` (Job `android-release-apk` in `build.yml`), Signatur aus Repo-Secrets.
 - Neue Rust-Dateien < 500 Zeilen; Test-Präfix je Batch (Android: `android_task_`, Übertragungs-Engine:
-  `transfer_engine_task_`, Suite `native/test-transfer-engine-task.sh` über `transfer-engine-task.yml`).
+  `transfer_engine_task_`, Suite `native/test-transfer-engine-task.sh` über `transfer-engine-task.yml`;
+  Android-Hintergrund/Analyse: `android_background_task_`, Suite `native/test-android-background-task.sh` über
+  `android-background-task.yml`, Gerätestufen in `android/test-android-task.sh`).

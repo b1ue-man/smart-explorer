@@ -104,12 +104,18 @@ Ereignisse (`pollEvents`):
 {"type":"openUrl","url":"https://…"} Kern möchte eine URL im Browser öffnen (OAuth)
 {"type":"error","action":"…","message":"…"}   Eintrag für das Fehlerprotokoll
 {"type":"volumes"}                   Speicherorte geändert
+{"type":"wake","ms":N}               Kern braucht die CPU N ms wach (Server-Keepalive, eingehende Anfrage
+                                     oder Streams im Ruhemodus) → Partial-Wakelock, längere Anforderung gewinnt
 ```
 
 ## 4 Methoden
 
 ### 4.1 System (`sys.*`)
-- `sys.hostState {powerSave:Boolean, metered:Boolean, wifi:Boolean, charging:Boolean, foreground:Boolean}` → `{}`
+- `sys.hostState {powerSave:Boolean, metered:Boolean, wifi:Boolean, charging:Boolean, foreground:Boolean,
+  deferScheduling:Boolean}` → `{}` (fehlende Felder = false). `foreground:false` schaltet Share in den
+  Ruhemodus (`share::power::set_low_power`); `deferScheduling:true` hält geplante Jobs (Start, Zeitplan,
+  Echtzeit, Anschluss) zurück, laufende Jobs und `bg.catchUp` bleiben unberührt (Modus „Periodisch“ bei
+  verdeckter App). Der eingebettete Daemon startet zurückgestellt, bis der erste `sys.hostState` kommt.
 - `sys.volumes {volumes:[{path,label,primary,removable}]}` → `{}`
 - `sys.errors {}` → `[{timeMs, action, message}]` · `sys.clearErrors {}` → `{}`
 - `sys.crashLog {}` → `{text}` (leer, wenn keins)
@@ -275,12 +281,24 @@ gestartet, nie wegen Sichtbarkeit gestoppt. „Aus“ wirkt über das Sync-Flag 
 Siehe §5.
 
 ### 4.9 Analyse (`analyze.*`, `reclaim.*`)
-- `analyze.start {location}` → `{taskId}` (Fortschritt: `doneItems` Dateien, `doneBytes`)
-- `analyze.node {taskId, path:[String]}` → `{name, size, isDir, children:[{name, size, isDir,
-  childCount:Int}], location:String?}` (Kinder nach Größe absteigend, höchstens 500)
-- `analyze.issues {taskId}` → `{count:Int, text}`
-- `reclaim.start {location, minSize:Long}` → `{taskId}`
-- `reclaim.groups {taskId}` → `[{size, items:[{location, mtimeMs}]}]`
+- `analyze.start {location, platform:{volumeUsedBytes:Long?, otherAppsBytes:Long?}?}` → `{taskId}`
+  (Fortschritt: `doneItems` Dateien, `doneBytes`, `message` = „N Ordner · aktueller Ordner“; `platform` nur
+  für lokale Pfade: belegter Platz des Volumes der Wurzel per `StatFs`, `otherAppsBytes` =
+  `ExternalStorageStats.getAppBytes()` des primären Volumes mit Nutzungszugriff; fehlend/negativ = unbekannt);
+  `result = {files, dirs, bytes, issues, protected}`. `<Volume>/Android/data|obb` und alles darunter sind
+  geschützt: keine Issues, Status vollständig, eine geschützte Wurzel ergibt ein leeres, vollständiges Ergebnis
+- `analyze.node {taskId, path:[String]}` → `{name, size, measured, isDir, kind, children:[{name, size, isDir,
+  childCount:Int, kind}], location:String?}` (Kinder nach Größe absteigend, höchstens 500; `kind` =
+  `dir|file|aggregate|protected|rest`; Schätzzeilen nur in dieser Sicht: „Weitere App-Daten (laut Android, ≈)“
+  `protected` unter `Android/data`, „≈ Nicht einzeln erfasst“ `rest` an einer ganzen Volume-Wurzel ohne
+  andere Fehler; `size` der Vorfahren enthält sie, `measured` ist der gemessene Wert)
+- `analyze.issues {taskId}` → `{count:Int, text, protectedCount:Long, protectedText}` (`count` ohne geschützte;
+  `protectedText` kann auch bei 0 gefüllt sein, wenn Android fremde App-Ordner nur ausblendet)
+- `reclaim.start {location, minSize:Long}` → `{taskId}` (lokal: jede Datei ≥ `minSize` ist Kandidat, Vergleich
+  parallel mit SHA-256; Fortschritt `message` = Phase); `result = {groups, reclaimable, errors, candidates, protected}`
+- `reclaim.groups {taskId}` → `[{size, items:[{location, mtimeMs}]}]` (lokal alle Gruppen)
+- `reclaim.summary {taskId}` → `{files, bytes, candidates, compared, groups, protectedCount, protectedText,
+  errorCount, errorText, limit:String?}` (`limit` = erreichte Walk- oder Kandidatengrenze, Text)
 - Löschen der gewählten Kopien über `fs.delete` (Papierkorb).
 
 ### 4.10 Update (`update.*`)
@@ -319,7 +337,12 @@ ShareStatus {running, connected, relayUrl:String?, lastError:String?, server:Str
 Request {requestId, contactId:String?, name, stateText, canAccept, canReject, canRetry, canDelete,
   message:String?, timeMs:Long}
 ```
-- `share.status {}` → `ShareStatus` (letzter Snapshot des Pollers; billig)
+- `share.status {}` → `ShareStatus` (letzter Snapshot des Pollers; billig); dazu
+  `power:{idleSupported:Boolean?, idleActive:Boolean, keepaliveSecs:Int?, lastServerContactMs:Long?}`
+  (Ruhemodus des Share-Servers, Fähigkeit `idle_keepalive_v1`; `idleSupported:null` = noch nicht verbunden)
+- `share.wake {networkChanged:Boolean}` → `{ok:Boolean, reconnected:Boolean}`: Verbindungsprobe (Wach-Alarm,
+  Netzwechsel); wartet bis zum Ende der Probe (≤ 12 s); bei `networkChanged` zusätzlich `network_change` am
+  Iroh-Endpunkt
 - `share.watch {active:Boolean}` → `{}` (Teilen-Seite sichtbar → schneller Takt)
 - `share.setServer {server}` → `{}` (Desktop-Validierung; leer = Share-Server entfernen, dann nur LAN)
 - `share.setOnline {online}` → `{}` (`auto_connect`)
