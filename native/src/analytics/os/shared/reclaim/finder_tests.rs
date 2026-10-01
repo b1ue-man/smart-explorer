@@ -225,7 +225,7 @@ fn android_background_task_remote_reports_name_their_caps() {
     assert_eq!((view.files, view.candidates, view.groups), (900, 300, 0));
     assert_eq!(view.error_count, 3);
     assert_eq!(view.error_text, "/x: denied\n… 2 weitere");
-    let limit = view.limit.expect("limits");
+    let limit = view.limit.clone().expect("limits");
     assert_eq!(limit.lines().count(), 3, "{limit}");
     assert!(limit.contains("200 größten von 300"), "{limit}");
     let json = serde_json::to_value(&view).expect("json");

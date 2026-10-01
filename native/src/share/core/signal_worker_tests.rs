@@ -168,12 +168,12 @@ impl Harness {
     fn unchanged_profiles(&self) -> ShareCmd {
         let state = self.auth.lock().expect("auth").clone();
         let mut profiles = ShareProfiles::default();
-        profiles.direct_contacts = state.direct_contacts;
-        profiles.direct_grants = state.direct_grants;
-        profiles.rooms = state.rooms;
-        profiles.default_direct_exports = state.default_direct_exports;
-        profiles.direct_requests = state.direct_requests;
-        profiles.direct_request_tombstones = state.direct_request_tombstones;
+        profiles.direct_contacts = state.direct_contacts.clone();
+        profiles.direct_grants = state.direct_grants.clone();
+        profiles.rooms = state.rooms.clone();
+        profiles.default_direct_exports = state.default_direct_exports.clone();
+        profiles.direct_requests = state.direct_requests.clone();
+        profiles.direct_request_tombstones = state.direct_request_tombstones.clone();
         ShareCmd::ConfigureProfiles {
             profiles: Box::new(profiles),
         }
