@@ -13,17 +13,17 @@ use super::handoff::{
     stop_requested_checked_for, wait_for_handoff_activation,
 };
 use super::ipc::{start_listener, ShareHost};
+use super::ipc_listener::IpcListener;
 use super::job_supervisor::{EnqueueStatus, JobSupervisor};
 use super::live;
 use super::schedule::{
     current_drives, drive_matches, local_root, new_generation, remote_change_token, tree_sig,
 };
 use super::state::{
-    cadence_secs, clear_heartbeat, log, now_secs, pause_reason, paused, write_heartbeat,
-    PauseReason,
+    clear_heartbeat, log, now_secs, pause_reason, scheduling_controls, write_heartbeat,
+    PauseReason, SchedulingControls, StartupPass,
 };
 
-const FALLBACK_TICK_SECS: u64 = 15;
 const HANDOFF_ACTIVATION_TIMEOUT: Duration = Duration::from_secs(2);
 const DAEMON_HANDOFF_TIMEOUT: Duration = Duration::from_secs(300);
 
@@ -84,11 +84,15 @@ pub(crate) fn run_daemon_with(handoff: Option<Handoff>) {
     log("daemon started");
     write_heartbeat();
     let share_host = ShareHost::new(generation);
-    if let Err(e) = start_listener(share_host.clone()) {
-        log(&format!("background worker IPC failed: {e}"));
-        clear_heartbeat();
-        return;
-    }
+    // Dropping the handle (any return, even a panic) ends the accept loop.
+    let listener = match start_listener(share_host.clone()) {
+        Ok(listener) => listener,
+        Err(e) => {
+            log(&format!("background worker IPC failed: {e}"));
+            clear_heartbeat();
+            return;
+        }
+    };
     // Publish the lightweight control plane before starting Iroh. A terminal
     // client can now observe the daemon immediately even when relay discovery
     // makes the initial Share load take several seconds.
@@ -101,15 +105,21 @@ pub(crate) fn run_daemon_with(handoff: Option<Handoff>) {
     share_host.mark_initialized();
     // In-process callers treat a published generation like a ready Ping.
     let _serving = live::serve(&share_host);
+    // The embedded worker beats once per tick; the desktop process keeps its
+    // 2 s beat for the GUI status line.
+    let embedded = live::is_embedded();
     let mut job_supervisor = JobSupervisor::new();
     let mut sync_enabled = crate::autostart::is_enabled();
 
     // A daemon may have been started only for a Share session. Scheduled sync
     // work is permitted exclusively after the user enabled background sync.
     let startup_controls = scheduling_controls();
-    if sync_enabled && startup_controls.permit_mutation {
-        enqueue_startup_jobs(&mut job_supervisor, share_host.generation());
-    }
+    let mut startup_deferred = sync_enabled
+        && start_or_defer_startup(
+            &mut job_supervisor,
+            share_host.generation(),
+            &startup_controls,
+        );
 
     // Per-job real-time state and the last-seen drive set.
     let mut rt_sig: HashMap<String, String> = HashMap::new();
@@ -119,7 +129,7 @@ pub(crate) fn run_daemon_with(handoff: Option<Handoff>) {
     loop {
         let controls = scheduling_controls();
         if stop_requested(share_host.generation()) {
-            stop_daemon(&mut job_supervisor, &share_host);
+            stop_daemon(&mut job_supervisor, &share_host, &listener);
             return;
         }
         let enabled_now = crate::autostart::is_enabled();
@@ -130,10 +140,10 @@ pub(crate) fn run_daemon_with(handoff: Option<Handoff>) {
             seen_drives = current_drives();
             if sync_enabled {
                 log("background sync enabled");
-                if controls.permit_mutation {
-                    enqueue_startup_jobs(&mut job_supervisor, share_host.generation());
-                }
+                startup_deferred =
+                    start_or_defer_startup(&mut job_supervisor, share_host.generation(), &controls);
             } else {
+                startup_deferred = false;
                 log("background sync disabled; canceling scheduled work");
                 for error in job_supervisor.cancel_and_join() {
                     log(&error);
@@ -149,13 +159,20 @@ pub(crate) fn run_daemon_with(handoff: Option<Handoff>) {
         }
         share_host.tick();
         if stop_requested(share_host.generation()) {
-            stop_daemon(&mut job_supervisor, &share_host);
+            stop_daemon(&mut job_supervisor, &share_host, &listener);
             return;
         }
         let now = now_secs();
         let configured_jobs = load_configured_jobs();
 
-        if sync_enabled && controls.permit_mutation {
+        // A host that defers scheduling (Android while its own periodic
+        // worker owns background runs) holds these enqueues only; running
+        // jobs and catch-up runs continue.
+        if controls.may_schedule(sync_enabled) {
+            // 0) A startup pass held back while the host deferred scheduling.
+            if std::mem::take(&mut startup_deferred) {
+                enqueue_startup_jobs(&mut job_supervisor, share_host.generation());
+            }
             // 1) Timer jobs (interval + calendar), gated by active-hours in due().
             for job in configured_jobs.iter().filter(|j| j.due(now)) {
                 enqueue_job(&mut job_supervisor, job, share_host.generation());
@@ -212,6 +229,7 @@ pub(crate) fn run_daemon_with(handoff: Option<Handoff>) {
             }
             if live_controls.tick_secs != tick
                 || live_controls.permit_mutation != controls.permit_mutation
+                || live_controls.defer_scheduling != controls.defer_scheduling
             {
                 break;
             }
@@ -224,7 +242,9 @@ pub(crate) fn run_daemon_with(handoff: Option<Handoff>) {
                 live_controls.permit_mutation,
             );
             share_host.tick();
-            write_heartbeat();
+            if !embedded {
+                write_heartbeat();
+            }
             slept += 2;
         }
     }
@@ -308,6 +328,23 @@ fn enqueue_connect_jobs(
     }
 }
 
+/// Run the startup pass now, or report it as deferred until the host stops
+/// deferring scheduling. A paused worker skips it as before.
+fn start_or_defer_startup(
+    supervisor: &mut JobSupervisor,
+    generation: &str,
+    controls: &SchedulingControls,
+) -> bool {
+    match controls.startup_pass() {
+        StartupPass::Run => {
+            enqueue_startup_jobs(supervisor, generation);
+            false
+        }
+        StartupPass::Defer => true,
+        StartupPass::Skip => false,
+    }
+}
+
 fn enqueue_startup_jobs(supervisor: &mut JobSupervisor, generation: &str) {
     // Load and gate before the boot pass is claimed: a pass that cannot run
     // stays due for a later worker start in the same boot.
@@ -361,41 +398,6 @@ fn blocked_message() -> String {
     }
 }
 
-struct SchedulingControls {
-    permit_mutation: bool,
-    tick_secs: u64,
-}
-
-fn scheduling_controls() -> SchedulingControls {
-    let tick_secs = match cadence_secs() {
-        Ok(value) => value,
-        Err(error) => {
-            log(&format!(
-                "scheduled sync blocked: cadence control could not be read: {error}"
-            ));
-            return SchedulingControls {
-                permit_mutation: false,
-                tick_secs: FALLBACK_TICK_SECS,
-            };
-        }
-    };
-    match paused() {
-        Ok(is_paused) => SchedulingControls {
-            permit_mutation: !is_paused,
-            tick_secs,
-        },
-        Err(error) => {
-            log(&format!(
-                "scheduled sync blocked: pause control could not be read: {error}"
-            ));
-            SchedulingControls {
-                permit_mutation: false,
-                tick_secs,
-            }
-        }
-    }
-}
-
 fn stop_requested(generation: &str) -> bool {
     match stop_requested_checked_for(generation) {
         Ok(requested) => requested,
@@ -433,8 +435,10 @@ fn enqueue_job(supervisor: &mut JobSupervisor, job: &SyncJob, generation: &str) 
     }
 }
 
-fn stop_daemon(supervisor: &mut JobSupervisor, share_host: &ShareHost) {
+fn stop_daemon(supervisor: &mut JobSupervisor, share_host: &ShareHost, listener: &IpcListener) {
     log("daemon stopping (stop requested or unreadable stop control)");
+    // No new IPC client is admitted while the worker winds down.
+    listener.shutdown();
     share_host.shutdown_lan();
     share_host.stop_mounts();
     for error in supervisor.cancel_and_join() {

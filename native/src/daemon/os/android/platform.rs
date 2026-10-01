@@ -3,7 +3,8 @@
 //! restore, link checks, the `flock` singleton) are the Linux ones; Android
 //! differs in where the singleton lock lives (app-private storage instead of
 //! the XDG runtime directory), which shell runs job hooks, and where the
-//! auto-pause conditions come from (the host's `HostState`).
+//! auto-pause conditions come from (the host's `HostState`). The IPC listener
+//! blocks in `poll` like on Linux, so an idle app process is not woken by it.
 
 use std::fs::DirBuilder;
 use std::io;
@@ -24,7 +25,7 @@ use super::platform as posix;
 pub use posix::DriveInfo;
 pub(crate) use posix::{
     atomic_replace, metadata_is_link_like, normalize_local_backend_path, restore_control_if_absent,
-    DaemonInstanceGuard,
+    wait_for_ipc_client, wake_ipc_listener, DaemonInstanceGuard,
 };
 
 const LOCK_DIRECTORY: &str = "daemon-lock";
@@ -95,12 +96,14 @@ mod tests {
         set_host_state(HostState {
             power_save: true,
             metered: false,
+            ..HostState::default()
         });
         assert!(battery_saver_on());
         assert!(!on_metered_network());
         set_host_state(HostState {
             power_save: false,
             metered: true,
+            ..HostState::default()
         });
         assert!(!battery_saver_on());
         assert!(on_metered_network());

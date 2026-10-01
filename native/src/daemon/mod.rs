@@ -8,8 +8,10 @@
 //!
 //! On Android the same loop runs as one thread of the app process instead
 //! (`ensure_embedded_daemon`): no environment handoff, background sync
-//! enabled by an app-private flag, and host-reported device conditions
-//! (`set_host_state`) for auto-pause.
+//! enabled by an app-private flag, host-reported device conditions
+//! (`set_host_state`) for auto-pause and for deferring scheduled jobs to the
+//! host's own worker, a heartbeat once per tick and a Share reload only when
+//! its inputs changed (or once a minute).
 //!
 //! Safety mirrors the interactive sync exactly (same `bisync::run`): only files
 //! that actually changed move, both-sides-changed stays a conflict (nothing is
@@ -135,14 +137,14 @@ mod platform;
 #[allow(dead_code, unused_imports)]
 #[path = "os/android/platform.rs"]
 mod android_platform;
+#[cfg(test)]
+#[path = "os/shared/direct_open_task_bridge.rs"]
+mod direct_open_task_bridge;
 #[path = "os/shared/request_workers.rs"]
 mod request_workers;
 #[cfg(test)]
 #[path = "os/shared/request_workers_task_tests.rs"]
 mod request_workers_task_tests;
-#[cfg(test)]
-#[path = "os/shared/direct_open_task_bridge.rs"]
-mod direct_open_task_bridge;
 #[cfg(test)]
 pub(crate) use direct_open_task_bridge::DirectOpenTaskBridge;
 #[path = "os/shared/rooted_backend.rs"]
@@ -182,7 +184,7 @@ pub use exec_state::{
     cancel_remote as cancel_exec, load as exec_jobs, ExecCancelTarget, ExecJobDirection,
     ExecJobsSnapshot,
 };
-pub use host_state::{host_state, set_host_state, HostState};
+pub use host_state::{defer_scheduling_until_reported, host_state, set_host_state, HostState};
 pub(crate) use ipc::mutate_exec_grant;
 pub use ipc::{
     drain_share_worker_events, ensure_worker_ready, exec_share, hand_off_running_worker,

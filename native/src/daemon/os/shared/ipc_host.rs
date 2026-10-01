@@ -78,6 +78,8 @@ pub(super) struct ShareHostState {
     pub(super) lan_status: crate::share::LanStatus,
     /// This device's own discovery offers, folded from worker events.
     pub(super) discovery_offers: crate::share::DiscoveryOfferBook,
+    /// When the embedded worker's periodic reload may be skipped.
+    reload_gate: service_lifecycle::ReloadGate,
 }
 
 impl ShareHostState {
@@ -103,6 +105,7 @@ impl ShareHostState {
             pending_lan_events: Vec::new(),
             lan_status: crate::share::LanStatus::default(),
             discovery_offers: crate::share::DiscoveryOfferBook::default(),
+            reload_gate: service_lifecycle::ReloadGate::default(),
         }
     }
 }
@@ -141,14 +144,34 @@ impl ShareHost {
         self.mounts.tick();
         self.lan_tick();
         self.drain_events();
-        let should_reload = self
-            .state
-            .lock()
-            .map(|state| state.last_reload.elapsed() >= Duration::from_secs(5))
-            .unwrap_or(false);
-        if should_reload {
+        if self.periodic_reload_due() {
             if let Err(error) = self.reload_now() {
                 log(&format!("share worker reload failed: {error}"));
+            }
+        }
+    }
+
+    /// Desktop: every 5 s. Embedded worker: only after its inputs changed,
+    /// while a state waits for another attempt, or once a minute.
+    fn periodic_reload_due(&self) -> bool {
+        use self::service_lifecycle::ReloadDecision;
+        let embedded = super::live::is_embedded();
+        let decision = match self.state.lock() {
+            Ok(state) => {
+                service_lifecycle::periodic_reload_decision(&state, embedded, Instant::now())
+            }
+            Err(_) => return false,
+        };
+        match decision {
+            ReloadDecision::Wait => false,
+            ReloadDecision::Reload => true,
+            ReloadDecision::IfInputsChanged => {
+                // Directory metadata only, read outside the state lock.
+                let current = service_lifecycle::input_fingerprint();
+                self.state
+                    .lock()
+                    .map(|mut state| state.reload_gate.inputs_changed(current, Instant::now()))
+                    .unwrap_or(false)
             }
         }
     }
@@ -218,6 +241,17 @@ impl ShareHost {
 
     pub(super) fn reload_now_locked(&self) -> Result<bool, String> {
         self.drain_events();
+        // Taken before any input is read: a write racing this reload changes
+        // the next fingerprint, so the periodic reload picks it up again.
+        let inputs = super::live::is_embedded().then(service_lifecycle::input_fingerprint);
+        let result = self.reload_inputs_locked();
+        if let Ok(mut state) = self.state.lock() {
+            state.reload_gate.reloaded(inputs, result.is_err());
+        }
+        result
+    }
+
+    fn reload_inputs_locked(&self) -> Result<bool, String> {
         let mut state = self
             .state
             .lock()
@@ -233,6 +267,7 @@ impl ShareHost {
             .is_some_and(crate::share::ShareService::reciprocal_repair_in_flight)
         {
             state.last_reload = Instant::now();
+            state.reload_gate.set_repair_deferred(true);
             // The service keeps its runtime state until the repair finishes,
             // but the persisted profile is the canonical view handed to the
             // GUI: a peer the user just removed must not resurface from a
@@ -249,6 +284,7 @@ impl ShareHost {
             return Ok(true);
         }
         state.last_reload = Instant::now();
+        state.reload_gate.set_repair_deferred(false);
         state.server = match load_share_server() {
             Ok(server) => server,
             Err(error) => {

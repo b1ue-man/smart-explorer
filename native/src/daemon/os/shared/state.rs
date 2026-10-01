@@ -5,6 +5,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// Default tick (seconds) between schedule evaluations. Kept short so real-time
 /// and on-connect jobs react within a few seconds; editable via `cadence.txt`.
 const DEFAULT_TICK_SECS: u64 = 15;
+/// Tick used while the cadence control cannot be read (scheduling blocked).
+const FALLBACK_TICK_SECS: u64 = 15;
 /// Cap the log so it can't grow without bound.
 const LOG_CAP_BYTES: u64 = 256 * 1024;
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -127,6 +129,79 @@ pub(crate) fn pause_reason() -> io::Result<Option<PauseReason>> {
 /// auto-pause condition is currently true.)
 pub(crate) fn paused() -> io::Result<bool> {
     Ok(pause_reason()?.is_some())
+}
+
+/// What the scheduling loop may do during one tick.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct SchedulingControls {
+    /// Jobs may run (no pause; every control was readable).
+    pub(super) permit_mutation: bool,
+    pub(super) tick_secs: u64,
+    /// The host holds scheduled enqueues (`HostState::defer_scheduling`).
+    /// Running jobs, queued jobs and catch-up runs are not affected.
+    pub(super) defer_scheduling: bool,
+}
+
+/// How the startup pass of a worker start (or of enabling sync) proceeds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum StartupPass {
+    Run,
+    /// Kept for the first tick the host no longer defers scheduling.
+    Defer,
+    /// Paused or blocked: skipped like before.
+    Skip,
+}
+
+impl SchedulingControls {
+    /// Scheduled work (startup, timer, real-time and on-connect jobs) may be
+    /// enqueued now.
+    pub(super) fn may_schedule(&self, sync_enabled: bool) -> bool {
+        sync_enabled && self.permit_mutation && !self.defer_scheduling
+    }
+
+    pub(super) fn startup_pass(&self) -> StartupPass {
+        if !self.permit_mutation {
+            StartupPass::Skip
+        } else if self.defer_scheduling {
+            StartupPass::Defer
+        } else {
+            StartupPass::Run
+        }
+    }
+}
+
+pub(super) fn scheduling_controls() -> SchedulingControls {
+    let defer_scheduling = super::host_state::host_state().defer_scheduling;
+    let tick_secs = match cadence_secs() {
+        Ok(value) => value,
+        Err(error) => {
+            log(&format!(
+                "scheduled sync blocked: cadence control could not be read: {error}"
+            ));
+            return SchedulingControls {
+                permit_mutation: false,
+                tick_secs: FALLBACK_TICK_SECS,
+                defer_scheduling,
+            };
+        }
+    };
+    match paused() {
+        Ok(is_paused) => SchedulingControls {
+            permit_mutation: !is_paused,
+            tick_secs,
+            defer_scheduling,
+        },
+        Err(error) => {
+            log(&format!(
+                "scheduled sync blocked: pause control could not be read: {error}"
+            ));
+            SchedulingControls {
+                permit_mutation: false,
+                tick_secs,
+                defer_scheduling,
+            }
+        }
+    }
 }
 
 pub(crate) fn write_heartbeat() {
@@ -285,6 +360,34 @@ mod tests {
             parse_autopause("1,maybe").unwrap_err().kind(),
             io::ErrorKind::InvalidData
         );
+    }
+
+    #[test]
+    fn android_background_task_defer_scheduling_gates_only_scheduled_enqueues() {
+        let open = SchedulingControls {
+            permit_mutation: true,
+            tick_secs: 15,
+            defer_scheduling: false,
+        };
+        let deferred = SchedulingControls {
+            defer_scheduling: true,
+            ..open
+        };
+        let paused = SchedulingControls {
+            permit_mutation: false,
+            ..deferred
+        };
+        assert!(open.may_schedule(true));
+        assert!(!open.may_schedule(false));
+        assert_eq!(open.startup_pass(), StartupPass::Run);
+        // Deferred: nothing scheduled is enqueued, the startup pass waits,
+        // and running jobs / catch-up keep their `permit_mutation` gate.
+        assert!(!deferred.may_schedule(true));
+        assert!(deferred.permit_mutation);
+        assert_eq!(deferred.startup_pass(), StartupPass::Defer);
+        // A pause still skips the pass and blocks running jobs as before.
+        assert!(!paused.may_schedule(true));
+        assert_eq!(paused.startup_pass(), StartupPass::Skip);
     }
 
     #[test]

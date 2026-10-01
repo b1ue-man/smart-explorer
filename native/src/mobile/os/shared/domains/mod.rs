@@ -29,6 +29,8 @@ mod share_exec;
 mod share_exec_tests;
 #[path = "share_peers.rs"]
 mod share_peers;
+#[path = "share_power.rs"]
+mod share_power;
 #[path = "share_requests.rs"]
 mod share_requests;
 #[path = "share_settings.rs"]
@@ -74,10 +76,18 @@ pub(crate) fn on_init(rt: &'static Runtime) {
     share_state::start_poller(rt);
 }
 
+/// Before the embedded worker starts: Share CPU-hold requests become `wake`
+/// events.
+pub(crate) fn install_activity_hook() {
+    share_power::install_activity_hook();
+}
+
 /// Host visibility (`sys.hostState.foreground`): the Share poller drains
-/// every 5 s in the foreground and every 60 s in the background.
+/// every 5 s in the foreground and every 60 s in the background, and a
+/// hidden app puts the Share client into its low-power mode.
 pub(crate) fn set_foreground(foreground: bool) {
     share_state::set_foreground(foreground);
+    share_power::apply_visibility(foreground);
 }
 
 fn sync_method(rt: &Runtime, method: &str, args: &Value) -> Option<Result<Value, ApiError>> {
@@ -134,6 +144,7 @@ fn connection_method(rt: &Runtime, method: &str, args: &Value) -> Option<Result<
 fn share_method(rt: &Runtime, method: &str, args: &Value) -> Option<Result<Value, ApiError>> {
     Some(match method {
         "share.status" => share_state::status(),
+        "share.wake" => share_power::wake(args),
         "share.watch" => share_settings::watch(args),
         "share.setServer" => share_settings::set_server(rt, args),
         "share.setOnline" => share_settings::set_online(args),
@@ -172,6 +183,7 @@ fn analysis_method(rt: &Runtime, method: &str, args: &Value) -> Option<Result<Va
         "analyze.issues" => analyze::issues(args),
         "reclaim.start" => analyze::start_reclaim(rt, args),
         "reclaim.groups" => analyze::groups(args),
+        "reclaim.summary" => analyze::summary(args),
         _ => return None,
     })
 }
