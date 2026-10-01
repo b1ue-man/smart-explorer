@@ -45,6 +45,18 @@ pub(crate) fn run_shell_command(cmd: &str) -> std::io::Result<std::process::Exit
     std::process::Command::new("cmd").args(["/C", cmd]).status()
 }
 
+/// The Windows IPC listener keeps its 100 ms poll; `timeout` is not used.
+pub(crate) fn wait_for_ipc_client(
+    _listener: &std::net::TcpListener,
+    _timeout: std::time::Duration,
+) -> std::io::Result<()> {
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    Ok(())
+}
+
+/// The 100 ms poll sees the stop flag by itself; no wake connection needed.
+pub(crate) fn wake_ipc_listener(_addr: std::net::SocketAddr) {}
+
 /// Convert a host-native local path into the forward-slash form required by
 /// the VFS boundary. Windows does not allow backslashes as filename characters,
 /// so this preserves path identity for drive, UNC, and relative local paths.

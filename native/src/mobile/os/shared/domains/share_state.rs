@@ -3,6 +3,7 @@
 //! would split the queue) every 300 ms while the Share page is watched or a
 //! pairing runs, every 5 s in the foreground and every 60 s in the
 //! background, keeps the last snapshot and sends `share` / `shareRequest`.
+//! Incoming Share activity polls at once and then each second for a moment.
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
@@ -12,6 +13,7 @@ use serde_json::{json, Value};
 
 use super::args::now_secs;
 use super::share_exec;
+use super::share_power;
 use super::share_status::{open_incoming, status_json, StatusInput, WorkerFacts};
 use crate::daemon::ShareWorkerSnapshot;
 use crate::mobile::{ApiError, Runtime};
@@ -26,6 +28,11 @@ use crate::share::{
 const WATCH_INTERVAL: Duration = Duration::from_millis(300);
 const FOREGROUND_INTERVAL: Duration = Duration::from_secs(5);
 const BACKGROUND_INTERVAL: Duration = Duration::from_secs(60);
+/// After incoming Share activity: poll each second for at most this long, so
+/// an event queued just after the activity signal is not left for the
+/// background interval.
+const ACTIVITY_INTERVAL: Duration = Duration::from_secs(1);
+const ACTIVITY_FOLLOW_UP: Duration = Duration::from_secs(3);
 const MAX_NOTICES: usize = 20;
 const SHARE_SERVER_FILE: &str = "share_server.txt";
 /// How long a committed profile change outranks worker snapshots that do not
@@ -182,7 +189,7 @@ impl ShareState {
         }
         self.ensure_profiles();
         let empty = ShareProfiles::default();
-        status_json(&StatusInput {
+        let mut status = status_json(&StatusInput {
             worker: self.worker.as_ref(),
             profiles: self.profiles.as_ref().unwrap_or(&empty),
             identity: self.identity.as_ref(),
@@ -194,7 +201,9 @@ impl ShareState {
             notices: &self.notices,
             now_secs: now_secs(),
             exec_provider,
-        })
+        });
+        status["power"] = share_power::current_power_json();
+        status
     }
 }
 
@@ -223,6 +232,8 @@ struct Cadence {
     pairing: bool,
     foreground: bool,
     wake: bool,
+    /// Follow-up polls after incoming Share activity end here.
+    activity_until: Option<Instant>,
 }
 
 static CADENCE: Mutex<Cadence> = Mutex::new(Cadence {
@@ -230,6 +241,7 @@ static CADENCE: Mutex<Cadence> = Mutex::new(Cadence {
     pairing: false,
     foreground: true,
     wake: false,
+    activity_until: None,
 });
 static WAKE: Condvar = Condvar::new();
 static POLLER_STARTED: AtomicBool = AtomicBool::new(false);
@@ -256,16 +268,32 @@ pub(super) fn set_foreground(foreground: bool) {
     WAKE.notify_all();
 }
 
+/// Incoming Share activity (the host holds the CPU for `hold`): poll now and
+/// follow up each second while the hold lasts, at most `ACTIVITY_FOLLOW_UP`.
+pub(super) fn wake_for_activity(hold: Duration) {
+    let until = Instant::now() + hold.min(ACTIVITY_FOLLOW_UP);
+    let mut cadence = cadence();
+    cadence.activity_until = Some(cadence.activity_until.map_or(until, |at| at.max(until)));
+    cadence.wake = true;
+    WAKE.notify_all();
+}
+
+fn poll_interval(cadence: &Cadence, now: Instant) -> Duration {
+    if cadence.watch || cadence.pairing {
+        WATCH_INTERVAL
+    } else if cadence.activity_until.is_some_and(|until| now < until) {
+        ACTIVITY_INTERVAL
+    } else if cadence.foreground {
+        FOREGROUND_INTERVAL
+    } else {
+        BACKGROUND_INTERVAL
+    }
+}
+
 fn wait_for_next_poll() {
     let mut guard = cadence();
     if !guard.wake {
-        let interval = if guard.watch || guard.pairing {
-            WATCH_INTERVAL
-        } else if guard.foreground {
-            FOREGROUND_INTERVAL
-        } else {
-            BACKGROUND_INTERVAL
-        };
+        let interval = poll_interval(&guard, Instant::now());
         guard = WAKE
             .wait_timeout(guard, interval)
             .map(|(guard, _)| guard)
@@ -334,7 +362,11 @@ fn poll_once(rt: &Runtime) {
             .unwrap_or_default();
         let fresh = open.iter().any(|id| !state.seen_requests.contains(id));
         state.seen_requests = open.iter().cloned().collect();
-        let status = state.status_value(exec_provider).to_string();
+        let mut status = state.status_value(exec_provider);
+        if !cadence().watch {
+            share_power::strip_volatile(&mut status);
+        }
+        let status = status.to_string();
         let changed = status != state.last_status || exec_activity != state.last_exec_activity;
         state.last_status = status;
         state.last_exec_activity = exec_activity;
@@ -429,4 +461,28 @@ pub(super) fn committed(profiles: ShareProfiles) {
 
 pub(super) fn set_cached_server(server: String) {
     with_state(|state| state.server = Some(server));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{poll_interval, Cadence, ACTIVITY_INTERVAL, BACKGROUND_INTERVAL, WATCH_INTERVAL};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn android_background_task_activity_follow_up_cadence() {
+        let now = Instant::now();
+        let mut cadence = Cadence {
+            watch: false,
+            pairing: false,
+            foreground: false,
+            wake: false,
+            activity_until: Some(now + Duration::from_secs(3)),
+        };
+        assert_eq!(poll_interval(&cadence, now), ACTIVITY_INTERVAL);
+        // After the follow-up window the background interval applies again.
+        let later = now + Duration::from_secs(4);
+        assert_eq!(poll_interval(&cadence, later), BACKGROUND_INTERVAL);
+        cadence.watch = true;
+        assert_eq!(poll_interval(&cadence, now), WATCH_INTERVAL);
+    }
 }

@@ -1,6 +1,7 @@
 //! `init` (api.md §1): host values, temp root, app trash volumes, browser
 //! opener, crash log, runtime, then background housekeeping and the nudge of
 //! the embedded daemon. Nothing here waits on the network or the daemon.
+//! Scheduled daemon jobs wait for the host's first `sys.hostState`.
 use super::config::HostSettings;
 use super::error::ApiError;
 use super::runtime::{lock, Runtime};
@@ -26,11 +27,15 @@ pub(crate) fn init(config: &str) -> Result<Value, ApiError> {
     }
     prepare_host(&settings)?;
     crate::install_panic_logger();
+    // A process started in the background must not enqueue scheduled jobs
+    // before the host said whether its own worker owns them.
+    crate::daemon::defer_scheduling_until_reported();
     let runtime = Runtime::install(Runtime::detached(settings));
     runtime.set_volumes(runtime.config().volumes.clone());
     crate::cloud::set_url_opener(Box::new(move |url: &str| {
         runtime.emit(json!({ "type": "openUrl", "url": url }));
     }));
+    super::domains::install_activity_hook();
     if runtime.config().start_daemon {
         nudge_daemon(runtime);
     }

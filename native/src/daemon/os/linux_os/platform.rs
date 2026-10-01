@@ -36,6 +36,34 @@ pub(crate) fn run_shell_command(cmd: &str) -> std::io::Result<std::process::Exit
     std::process::Command::new("sh").args(["-c", cmd]).status()
 }
 
+/// Block until the (nonblocking) IPC listener has a pending connection or
+/// `timeout` passed. A signal interruption returns early; the caller loops.
+pub(crate) fn wait_for_ipc_client(
+    listener: &std::net::TcpListener,
+    timeout: std::time::Duration,
+) -> io::Result<()> {
+    let mut descriptor = libc::pollfd {
+        fd: listener.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    let millis = libc::c_int::try_from(timeout.as_millis()).unwrap_or(libc::c_int::MAX);
+    let ready = unsafe { libc::poll(&mut descriptor, 1, millis) };
+    if ready < 0 {
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    }
+    Ok(())
+}
+
+/// Wake a listener blocked in `wait_for_ipc_client` with a loopback connect;
+/// the accept loop sees its stop flag before it would serve the connection.
+pub(crate) fn wake_ipc_listener(addr: std::net::SocketAddr) {
+    let _ = std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(500));
+}
+
 pub(crate) fn normalize_local_backend_path(path: &str) -> Cow<'_, str> {
     Cow::Borrowed(path)
 }
@@ -228,6 +256,28 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         directory
+    }
+
+    #[test]
+    fn android_background_task_ipc_wait_blocks_until_client_or_timeout() {
+        use std::time::{Duration, Instant};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let started = Instant::now();
+        super::wait_for_ipc_client(&listener, Duration::from_millis(150)).unwrap();
+        assert!(started.elapsed() >= Duration::from_millis(100));
+
+        let addr = listener.local_addr().unwrap();
+        let waker = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            super::wake_ipc_listener(addr);
+        });
+        let started = Instant::now();
+        super::wait_for_ipc_client(&listener, Duration::from_secs(5)).unwrap();
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(listener.accept().is_ok());
+        waker.join().unwrap();
     }
 
     #[test]

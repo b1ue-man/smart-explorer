@@ -49,15 +49,24 @@ fn task_clear(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
 }
 
 /// Energy saving and metered networks feed the daemon's automatic pause;
-/// visibility sets the Share poller's cadence. `wifi`/`charging` are only
-/// used by the host's own scheduling.
+/// `deferScheduling` holds the daemon's scheduled jobs (the host's own worker
+/// runs them); visibility sets the Share poller's cadence and the Share
+/// client's low-power mode. `wifi`/`charging` are only used by the host's own
+/// scheduling. Missing flags read as false.
 fn host_state(args: &Value) -> Result<Value, ApiError> {
-    crate::daemon::set_host_state(crate::daemon::HostState {
+    let (state, foreground) = parse_host_state(args);
+    crate::daemon::set_host_state(state);
+    super::domains::set_foreground(foreground);
+    Ok(json!({}))
+}
+
+fn parse_host_state(args: &Value) -> (crate::daemon::HostState, bool) {
+    let state = crate::daemon::HostState {
         power_save: bool_or(args, "powerSave", false),
         metered: bool_or(args, "metered", false),
-    });
-    super::domains::set_foreground(bool_or(args, "foreground", false));
-    Ok(json!({}))
+        defer_scheduling: bool_or(args, "deferScheduling", false),
+    };
+    (state, bool_or(args, "foreground", false))
 }
 
 fn volumes(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
@@ -109,5 +118,29 @@ fn task_cancel(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
         Ok(json!({}))
     } else {
         Err(ApiError::not_found(format!("Unbekannter Vorgang: {id}")))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_host_state;
+    use serde_json::json;
+
+    #[test]
+    fn android_background_task_host_state_reads_defer_scheduling() {
+        let (state, foreground) = parse_host_state(&json!({
+            "powerSave": true,
+            "metered": false,
+            "wifi": true,
+            "charging": false,
+            "foreground": false,
+            "deferScheduling": true,
+        }));
+        assert!(state.power_save && !state.metered && state.defer_scheduling);
+        assert!(!foreground);
+        // An older host without the flag keeps scheduling as before.
+        let (state, foreground) = parse_host_state(&json!({ "foreground": true }));
+        assert!(!state.defer_scheduling && !state.power_save);
+        assert!(foreground);
     }
 }
