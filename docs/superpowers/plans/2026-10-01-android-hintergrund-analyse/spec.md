@@ -108,3 +108,17 @@ Belege: `docs/lesungen/2026-10-01-android-share-host-idle-activity.md`,
 Desktop-Share (Signal, Relay, Sitzungen) unverändert; Daemon-Stopp/Übergabe auf Desktop; Sync-Modi Aus/
 Periodisch/Dauerbetrieb inkl. Boot-Start; Pairing/Anfragen/Exec; Analyse-Ergebnisse außerhalb geschützter
 Bereiche identisch; Duplikat-Hashes identisch (SHA-256); Share-gehostete Analyse für Desktop.
+
+## B6 Apps in der Speicheranalyse (Nachtrag des Nutzers, 2026-10-01)
+
+Andere Dateimanager zeigen in ihrer Speicheranalyse den Platz, den Apps belegen (Ordner in
+`Android/data` lassen sich auch dort nicht öffnen). Smart Explorer zeigt das ebenfalls, nur in der
+Analyse, nicht in der Dateiansicht:
+- An der Wurzel einer Analyse des primären Volumes (mit Nutzungszugriff) eine Zeile
+  „≈ Apps (laut Android)“ = Summe aller Apps; hinein: je App eine Zeile (App-Name, Größe = App + Daten),
+  absteigend. Tippen → Aufteilung App (APK/Code), Daten (inkl. `Android/data`), davon Cache, und
+  [App-Info öffnen] (Android-Einstellungen, z.B. Cache leeren).
+- Mit App-Liste entfällt „Weitere App-Daten (laut Android, ≈)“ unter `Android/data` (steckt in den Apps);
+  „≈ Nicht einzeln erfasst“ = belegt − gemessen − Apps (≥ 0), heißt dann „≈ System und Sonstiges“.
+- Quelle: `PackageManager` (alle Pakete, `QUERY_ALL_PACKAGES`) + `StorageStatsManager.queryStatsForPackage`
+  (Nutzungszugriff), einmal je Analyse im Hintergrund parallel zum Scan.

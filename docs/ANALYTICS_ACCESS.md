@@ -318,3 +318,11 @@ and „≈ Nicht einzeln erfasst“ at a whole-volume root without other issues 
 minus measured minus other apps). The Android duplicate search compares every file at or above the
 minimum size (64 MiB candidate path budget, reported when reached) with SHA-256 from `ring`, which
 uses the ARMv8 SHA-256 instructions; the desktop „Aufräumen“ keeps its 200-candidate cap (TODO DUP1).
+
+With usage access and a whole primary-volume root, the view also lists „≈ Apps (laut Android)“: one
+row per installed package (label, size = app + data from `StorageStatsManager.queryStatsForPackage`,
+split into app, data and cache, with a link to Android's App-Info), as Android's own storage
+settings do. The apps include their `Android/data` share, so „Weitere App-Daten“ is dropped then and
+the remainder becomes „≈ System und Sonstiges“ (used − measured − apps, with what the walk measured
+under `Android/data|obb` counted once). Like the other estimates, these rows exist only in the
+`analyze.node` view; the file view still cannot open other apps' folders.

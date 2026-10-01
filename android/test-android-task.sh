@@ -895,6 +895,8 @@ cmd_emulator_run() {
   adb install -r -t -g "$test_apk"
   adb_shell pm list instrumentation | grep -F "$test_runner" || die "instrumentation $test_runner not installed"
   adb_shell appops set --uid "$app_package" MANAGE_EXTERNAL_STORAGE allow
+  # Usage access: the storage analysis sizes other apps (Android/data, „Apps (laut Android)“).
+  adb_shell appops set "$app_package" GET_USAGE_STATS allow
   adb_shell pm grant "$app_package" android.permission.POST_NOTIFICATIONS
   adb_shell am force-stop "$app_package"
   cat >"$emulator_out/app_prefs.xml" <<'XML'

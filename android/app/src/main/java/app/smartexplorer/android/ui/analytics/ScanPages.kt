@@ -96,6 +96,7 @@ internal fun ScanSetupPage(
  * Running scan: place, files and bytes so far (a determinate bar once the core reports totals),
  * the core's phase and current folder (`message`, one line each, shortened in the middle so the
  * folder name stays visible) and [Abbrechen] ([cancelEnabled]: also before the task exists).
+ * [preparing] describes the work before the task exists (instead of "Wird gestartet …").
  */
 @Composable
 internal fun ScanProgressPage(
@@ -105,6 +106,7 @@ internal fun ScanProgressPage(
     onCancel: () -> Unit,
     onClose: () -> Unit,
     cancelEnabled: Boolean = taskId != null,
+    preparing: String? = null,
 ) {
     val task = rememberTask(taskId)
     SubPageScaffold(title = title, onBack = onClose) { padding ->
@@ -119,7 +121,7 @@ internal fun ScanProgressPage(
             } else {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             }
-            Text(progressLine(task), style = MaterialTheme.typography.titleMedium)
+            Text(preparing?.takeIf { task == null } ?: progressLine(task), style = MaterialTheme.typography.titleMedium)
             task?.message?.lineSequence()?.filter { it.isNotBlank() }?.forEach { line ->
                 Text(line, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.MiddleEllipsis)
             }

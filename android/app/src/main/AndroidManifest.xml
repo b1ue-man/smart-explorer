@@ -34,6 +34,13 @@
         android:name="android.permission.PACKAGE_USAGE_STATS"
         tools:ignore="ProtectedPermissions" />
 
+    <!-- Every installed app for "≈ Apps (laut Android)" in the storage analysis (normal permission;
+         package visibility would otherwise hide most apps and their storage). The app is not
+         distributed through Google Play. -->
+    <uses-permission
+        android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
+
     <!-- Self-update through the system installer -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 

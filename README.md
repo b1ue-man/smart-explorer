@@ -900,8 +900,9 @@ Versions-Rollback; Google-Play-Veröffentlichung; Storage-Access-Framework-Bäum
   lassen sie als geschützte Auslassung weg und melden das. Speicheranalyse und
   Duplikatsuche zählen sie als „von Android geschützt“ statt als Lesefehler
   (das Ergebnis bleibt vollständig); mit „Zugriff auf Nutzungsdaten“ zeigt die
-  Analyse ihre Gesamtgröße laut Android (≈) und an einer Volume-Wurzel den
-  nicht einzeln erfassten Rest (Apps, System). Der einzige Weg ohne
+  Analyse ihre Gesamtgröße laut Android (≈), an einer Volume-Wurzel den Platz
+  jeder App („≈ Apps (laut Android)“: App, Daten, Cache, Link zur App-Info) und
+  den Rest für System und Sonstiges. Der einzige Weg ohne
   Root wäre Shizuku (Zusatz-App, Kopplung per Wireless-Debugging nach jedem
   Neustart) und ist nicht eingebaut.
 - Befehle anderer Geräte laufen in der App-Sandbox mit den Rechten der App
