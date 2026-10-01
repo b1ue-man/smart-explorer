@@ -694,6 +694,139 @@ boot_check() {
   echo "boot: BackgroundService in the foreground with its notification; no dataSync service"
 }
 
+# Idle wake-ups of the core's long-lived threads (2026-10-01 background batch, M12): voluntary
+# context switches per thread over one minute while the app sits in the background with Share
+# online. The listener used to poll every 100 ms (about 600 per minute).
+thread_wakeups() {
+  local pid=$1 out=$2 task name before after line
+  declare -A first=()
+  for task in $(adb_shell "ls /proc/$pid/task" 2>/dev/null); do
+    name="$(adb_shell cat "/proc/$pid/task/$task/comm" 2>/dev/null || true)"
+    first[$task]="$name $(adb_shell "grep ^voluntary_ctxt_switches /proc/$pid/task/$task/status" 2>/dev/null | awk '{print $2}')"
+  done
+  sleep 60
+  : >"$out"
+  for task in "${!first[@]}"; do
+    name="${first[$task]% *}"
+    before="${first[$task]##* }"
+    after="$(adb_shell "grep ^voluntary_ctxt_switches /proc/$pid/task/$task/status" 2>/dev/null | awk '{print $2}')"
+    [[ "$before" =~ ^[0-9]+$ && "$after" =~ ^[0-9]+$ ]] || continue
+    printf '%s\t%s\t%s\n' "$name" "$task" "$((after - before))" >>"$out"
+  done
+  sort -t $'\t' -k3,3nr "$out" -o "$out"
+}
+
+wakeups_of() {
+  awk -F '\t' -v name="$2" '$1 == name { total += $3 } END { print total + 0 }' "$1"
+}
+
+# M11/M12: the phone in the background, Doze forced, the desktop CLI opens a session through the
+# relay; before that the idle wake-ups of the long-lived threads are measured.
+reach_check() {
+  local tool=$1 root=$2 phone pid ipc signal worker
+  step "background reachability: idle wake-ups, forced Doze, desktop session to the phone"
+  phone="$(adb_shell cat /sdcard/SmartExplorerTask/reach/phone 2>/dev/null || true)"
+  [[ -n "$phone" ]] || { fail_stage "BackgroundReachTaskTest wrote no phone device id"; return 1; }
+  adb_shell input keyevent KEYCODE_HOME || true
+  pid="$(adb_shell pidof "$app_package" || true)"
+  if [[ "$pid" =~ ^[0-9]+$ ]]; then
+    thread_wakeups "$pid" "$emulator_out/idle-wakeups.tsv"
+    sed 's/^/idle wake-ups per minute: /' "$emulator_out/idle-wakeups.tsv" | head -n 25
+    ipc="$(wakeups_of "$emulator_out/idle-wakeups.tsv" daemon-ipc)"
+    signal="$(wakeups_of "$emulator_out/idle-wakeups.tsv" share-signal)"
+    worker="$(wakeups_of "$emulator_out/idle-wakeups.tsv" background-work)"
+    echo "idle wake-ups per minute: daemon-ipc=$ipc share-signal=$signal background-worker=$worker"
+    ((ipc <= 60)) || fail_stage "IPC listener still polls ($ipc wake-ups per minute, limit 60)"
+    ((signal <= 400)) || fail_stage "Share signal worker wakes $signal times per minute (limit 400)"
+    ((worker <= 120)) || fail_stage "daemon loop wakes $worker times per minute (limit 120)"
+  else
+    fail_stage "app process not running before the reachability check"
+  fi
+  adb_shell dumpsys battery unplug || true
+  adb_shell dumpsys deviceidle force-idle | sed 's/^/deviceidle: /' || true
+  # Three keepalive intervals of the suite's Share server (30 s) with the phone idle.
+  sleep 95
+  if bash "$tool" reach "$root" "$phone" 120 >"$emulator_out/share-desktop-reach.log" 2>&1; then
+    cat "$emulator_out/share-desktop-reach.log"
+  else
+    cat "$emulator_out/share-desktop-reach.log" >&2
+    fail_stage "the desktop could not reach the phone in Doze with the app in the background"
+  fi
+  adb_shell dumpsys deviceidle unforce >/dev/null || true
+  adb_shell dumpsys battery reset >/dev/null || true
+}
+
+# M10: with "Share im Hintergrund erreichbar" in periodic mode, a reboot brings the service and the
+# Share host back without opening the app; a killed process comes back through the sticky restart
+# or the keep-alive alarm.
+reach_boot_check() {
+  local tool=$1 root=$2 phone services="" deadline pid restarted=""
+  step "background reachability after a reboot without opening the app"
+  phone="$(adb_shell cat /sdcard/SmartExplorerTask/reach/phone 2>/dev/null || true)"
+  adb reboot
+  sleep 5
+  wait_boot
+  adb root >/dev/null 2>&1 || true
+  sleep 3
+  wait_boot
+  deadline=$((SECONDS + 180))
+  while ((SECONDS < deadline)); do
+    services="$(adb_shell dumpsys activity services "$app_package" || true)"
+    grep -q 'service.BackgroundService' <<<"$services" && grep -q 'isForeground=true' <<<"$services" && break
+    sleep 2
+  done
+  printf '%s\n' "$services" >"$emulator_out/reach-boot-services.txt"
+  if ! { grep -q 'service.BackgroundService' <<<"$services" && grep -q 'isForeground=true' <<<"$services"; }; then
+    fail_stage "the reachability service did not start after the reboot (periodic mode, Share set up)"
+    return 1
+  fi
+  adb_shell dumpsys notification --noredact >"$emulator_out/reach-boot-notifications.txt" 2>&1 || true
+  grep -q 'Share erreichbar' "$emulator_out/reach-boot-notifications.txt" ||
+    fail_stage "no „Share erreichbar“ notification after the reboot"
+  adb_shell dumpsys alarm >"$emulator_out/reach-boot-alarms.txt" 2>&1 || true
+  grep -q 'KEEP_ALIVE' "$emulator_out/reach-boot-alarms.txt" || fail_stage "no keep-alive alarm after the reboot"
+  if [[ -n "$phone" ]] && bash "$tool" reach "$root" "$phone" 180 >"$emulator_out/share-desktop-reach-boot.log" 2>&1; then
+    cat "$emulator_out/share-desktop-reach-boot.log"
+  else
+    cat "$emulator_out/share-desktop-reach-boot.log" >&2 2>/dev/null || true
+    fail_stage "the desktop could not reach the phone after the reboot without opening the app"
+  fi
+
+  # A killed process: the battery-optimization exemption lets the sticky restart or the alarm
+  # start the foreground service from the background.
+  adb_shell dumpsys deviceidle whitelist "+$app_package" >/dev/null || true
+  pid="$(adb_shell pidof "$app_package" || true)"
+  if [[ "$pid" =~ ^[0-9]+$ ]]; then
+    adb_shell kill -9 "$pid" || true
+    deadline=$((SECONDS + 90))
+    while ((SECONDS < deadline)); do
+      services="$(adb_shell dumpsys activity services "$app_package" || true)"
+      if grep -q 'service.BackgroundService' <<<"$services" && grep -q 'isForeground=true' <<<"$services"; then
+        restarted=sticky
+        break
+      fi
+      sleep 3
+    done
+    if [[ -z "$restarted" ]]; then
+      adb_shell am broadcast -n "$app_package/.system.KeepAliveReceiver" -a "$app_package.action.KEEP_ALIVE" >/dev/null || true
+      deadline=$((SECONDS + 60))
+      while ((SECONDS < deadline)); do
+        services="$(adb_shell dumpsys activity services "$app_package" || true)"
+        if grep -q 'service.BackgroundService' <<<"$services" && grep -q 'isForeground=true' <<<"$services"; then
+          restarted=alarm
+          break
+        fi
+        sleep 3
+      done
+    fi
+    echo "killed process came back: ${restarted:-no}"
+    [[ -n "$restarted" ]] || fail_stage "the reachability service did not come back after the process was killed"
+  else
+    fail_stage "app process not running after the reboot"
+  fi
+  adb_shell dumpsys deviceidle whitelist "-$app_package" >/dev/null || true
+}
+
 collect_emulator() {
   local report="$emulator_out/app-report"
   mkdir -p "$report"
@@ -778,9 +911,9 @@ XML
   local server_args=() all_classes=() covered=() class
   mapfile -t server_args < <(servers_instrumentation_args)
   server_args+=(-e seFeedVersion "$next_version" -e seFeedSha256 "$feed_sha")
-  local main_classes=SystemTaskTest,LocalFilesTaskTest,ScanAnalyzeTaskTest,RemoteTaskTest,SyncTaskTest,BackgroundTaskTest,ServicesTaskTest,IntentsTaskTest,UpdateTaskTest,UiTaskTest
+  local main_classes=SystemTaskTest,LocalFilesTaskTest,ScanAnalyzeTaskTest,AnalysisProtectedTaskTest,RemoteTaskTest,SyncTaskTest,BackgroundTaskTest,ServicesTaskTest,IntentsTaskTest,UpdateTaskTest,UiTaskTest
   IFS=, read -r -a covered <<<"$main_classes"
-  covered+=(RenameProbeTaskTest ShareRoomTaskTest ShareExecTaskTest ShareCleanupTaskTest BootPrepTaskTest)
+  covered+=(RenameProbeTaskTest ShareRoomTaskTest ShareExecTaskTest BackgroundReachTaskTest ShareCleanupTaskTest BootPrepTaskTest)
   mapfile -t all_classes < <(python3 "$eval_py" classes --sources "$android_test_sources")
   for class in "${all_classes[@]}"; do
     [[ " ${covered[*]} " == *" ${class##*.} "* ]] || die "instrumented test class $class is not part of any run"
@@ -801,6 +934,10 @@ XML
       if bash "$share_tool" members "$share_root" 1 >"$emulator_out/share-desktop-members.log" 2>&1; then
         cat "$emulator_out/share-desktop-members.log"
         share_exec_host "$share_tool" "$share_root" "${server_args[@]}" "${share_args[@]}"
+        if run_instrumentation reach BackgroundReachTaskTest "${server_args[@]}" "${share_args[@]}"; then
+          reach_check "$share_tool" "$share_root" || true
+          reach_boot_check "$share_tool" "$share_root" || true
+        fi
       else
         cat "$emulator_out/share-desktop-members.log" >&2
         fail_stage "the desktop CLI does not see the phone as a Room member"

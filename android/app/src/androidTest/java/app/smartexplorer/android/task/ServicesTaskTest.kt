@@ -49,11 +49,19 @@ class ServicesTaskTest {
             assertTrue("Dienst nach der Home-Taste beendet", BackgroundService.isRunning)
             assertNotNull("Benachrichtigung nach der Home-Taste weg", activeNotification(Notifications.ID_BACKGROUND))
         } finally {
+            // With Share set up, "Share im Hintergrund erreichbar" keeps the same service running
+            // in periodic mode (BackgroundReachTaskTest); this test checks the plain mode switch.
+            AppPrefs.setShareReachable(false)
             AppPrefs.setBgMode(BackgroundController.MODE_PERIODIC)
             BackgroundController.apply(appContext)
             scenario.close()
         }
-        waitFor("Dauerbetrieb-Dienst beendet nach Wechsel auf Periodisch", 30_000) { !BackgroundService.isRunning }
+        try {
+            waitFor("Dauerbetrieb-Dienst beendet nach Wechsel auf Periodisch", 30_000) { !BackgroundService.isRunning }
+        } finally {
+            AppPrefs.setShareReachable(true)
+            BackgroundController.apply(appContext)
+        }
     }
 
     @Test
