@@ -18,22 +18,26 @@ pub(super) use super::direct_messages::{
 
 pub(super) const CAPABILITY: &str = "tracked_direct_v1";
 
+/// Server capabilities in the order `hello_ok` lists them.
+const SUPPORTED_CAPABILITIES: [&str; 3] = [
+    CAPABILITY,
+    super::discovery::CAPABILITY,
+    super::idle::CAPABILITY,
+];
+
 pub(super) fn negotiate_capabilities(offered: Vec<String>) -> HashSet<String> {
     offered
         .into_iter()
-        .filter(|capability| capability == CAPABILITY || capability == super::discovery::CAPABILITY)
+        .filter(|capability| SUPPORTED_CAPABILITIES.contains(&capability.as_str()))
         .collect()
 }
 
 pub(super) fn capability_list(negotiated: &HashSet<String>) -> Vec<String> {
-    let mut capabilities = Vec::with_capacity(2);
-    if negotiated.contains(CAPABILITY) {
-        capabilities.push(CAPABILITY.to_string());
-    }
-    if negotiated.contains(super::discovery::CAPABILITY) {
-        capabilities.push(super::discovery::CAPABILITY.to_string());
-    }
-    capabilities
+    SUPPORTED_CAPABILITIES
+        .iter()
+        .filter(|capability| negotiated.contains(**capability))
+        .map(|capability| capability.to_string())
+        .collect()
 }
 
 pub(super) fn route_request(
@@ -420,14 +424,13 @@ fn notify_available(
     watchers: HashSet<u64>,
     state: &Arc<Mutex<State>>,
 ) {
+    let message = Out::DirectAvailable {
+        lookup_id: lookup_id.to_string(),
+        presence: presence.clone(),
+    };
     for writer in writers_for(watchers, state) {
-        send(
-            &writer,
-            &Out::DirectAvailable {
-                lookup_id: lookup_id.to_string(),
-                presence: presence.clone(),
-            },
-        );
+        // Idle watchers may get a pure refresh with their next keepalive.
+        writer.offer(&message);
     }
 }
 

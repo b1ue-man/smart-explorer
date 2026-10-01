@@ -16,6 +16,12 @@ mod direct_messages;
 mod direct_validation;
 mod discovery;
 mod discovery_state;
+mod idle;
+mod idle_outbox;
+#[cfg(test)]
+mod idle_outbox_tests;
+#[cfg(test)]
+mod idle_transport_tests;
 mod limits;
 mod line;
 #[cfg(test)]
@@ -32,6 +38,7 @@ mod resource_limits_tests;
 mod share_remote_task_tests;
 #[cfg(test)]
 mod share_remote_wire_task_tests;
+mod signal_session;
 mod state;
 #[cfg(test)]
 mod state_transition_tests;
@@ -43,6 +50,7 @@ mod transport;
 mod transport_cleanup_tests;
 mod websocket_read_limit;
 mod writer;
+use idle::SignalTiming;
 use limits::{
     ConnectionLimiter, SourceClassifier, MAX_CONNECTIONS_PER_SOURCE, MAX_CONNECTION_WORKERS,
 };
@@ -68,7 +76,19 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let _relay_guard = match relay::start(&bind) {
+    let keepalive = match idle::keepalive_from_env() {
+        Ok((keepalive, notice)) => {
+            if let Some(notice) = notice {
+                eprintln!("se-share-server: {notice}");
+            }
+            keepalive
+        }
+        Err(error) => {
+            eprintln!("se-share-server: {error}");
+            std::process::exit(1);
+        }
+    };
+    let _relay_guard = match relay::start(&bind, keepalive) {
         Ok(guard) => guard,
         Err(error) => {
             eprintln!("se-share-server: {error}");
@@ -82,7 +102,11 @@ fn main() {
             std::process::exit(1);
         }
     };
-    eprintln!("se-share-server signaling on {bind} (raw TCP + WebSocket upgrade)");
+    eprintln!(
+        "se-share-server signaling on {bind} (raw TCP + WebSocket upgrade, idle keepalive {} s)",
+        keepalive.secs()
+    );
+    let timing = SignalTiming::new(keepalive);
     let state = Arc::new(Mutex::new(State::default()));
     let connections = ConnectionLimiter::new(MAX_CONNECTION_WORKERS, MAX_CONNECTIONS_PER_SOURCE);
     let mut accept_rate = AcceptRateLimiter::new();
@@ -107,11 +131,13 @@ fn main() {
             continue;
         }
         let state = state.clone();
+        let timing = timing.clone();
         let _ = std::thread::Builder::new()
             .name("share-server-connection".into())
             .spawn(move || {
+                // Idle connections keep this permit like any other connection.
                 let _permit = permit;
-                let _ = handle_with_source(stream, state, source);
+                let _ = handle_with_source(stream, state, source, &timing);
             });
     }
 }
@@ -163,9 +189,15 @@ fn dispatch(id: u64, writer: &Writer, msg: In, state: &Arc<Mutex<State>>) {
         In::SubmitDirectDecisionReceipt { receipt } => {
             tracked_direct::route_decision_receipt(id, writer, receipt, state)
         }
-        In::UnwatchDirect { lookup_id } => tracked_direct::unwatch(id, &lookup_id, state),
+        In::UnwatchDirect { lookup_id } => {
+            tracked_direct::unwatch(id, &lookup_id, state);
+            writer.forget_idle_direct(&lookup_id);
+        }
         In::JoinRoom { room_id, presence } => join_room(id, writer, &room_id, presence, state),
-        In::LeaveRoom { room_id } => leave_room(id, &room_id, state),
+        In::LeaveRoom { room_id } => {
+            leave_room(id, &room_id, state);
+            writer.forget_idle_room(&room_id);
+        }
         In::PublishDiscovery { offer } => discovery::publish(id, writer, offer, state),
         In::UnpublishDiscovery { offer_id } => discovery::unpublish(id, writer, &offer_id, state),
         In::ListDiscoveries => discovery::list(id, writer, state),
@@ -186,6 +218,12 @@ fn dispatch(id: u64, writer: &Writer, msg: In, state: &Arc<Mutex<State>>) {
             discovery::prune_expired(state);
             send(writer, &Out::Pong);
         }
-        In::Hello { .. } => {}
+        // Ignored unless `idle_keepalive_v1` was negotiated.
+        In::SetIdle {
+            idle,
+            keepalive_secs,
+        } => writer.set_idle(idle, keepalive_secs),
+        // Any inbound line already renewed the connection's liveness.
+        In::KeepaliveAck | In::Hello { .. } => {}
     }
 }

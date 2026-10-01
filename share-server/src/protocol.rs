@@ -180,6 +180,15 @@ pub(super) enum In {
         exchange_id: String,
     },
     Heartbeat,
+    /// `idle_keepalive_v1`: the client sleeps (or wakes) and may propose a
+    /// shorter keepalive interval.
+    SetIdle {
+        idle: bool,
+        #[serde(default)]
+        keepalive_secs: Option<u32>,
+    },
+    /// `idle_keepalive_v1`: answer to a server `keepalive`.
+    KeepaliveAck,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -277,6 +286,13 @@ pub(super) enum Out {
         msg: String,
     },
     Pong,
+    /// `idle_keepalive_v1`: confirms `set_idle` with the interval in effect.
+    IdleAck {
+        idle: bool,
+        keepalive_secs: u32,
+    },
+    /// `idle_keepalive_v1`: liveness probe to an idle client.
+    Keepalive,
 }
 
 #[cfg(test)]
@@ -320,6 +336,41 @@ mod tests {
         assert_eq!(protocol_version, 3);
         assert_eq!(device_id, "a");
         assert_eq!(listen_port, 0);
+    }
+
+    #[test]
+    fn android_background_task_idle_keepalive_wire_matches_contract() {
+        let idle: In =
+            serde_json::from_str(r#"{"t":"set_idle","idle":true,"keepalive_secs":90}"#).unwrap();
+        assert!(matches!(
+            idle,
+            In::SetIdle {
+                idle: true,
+                keepalive_secs: Some(90)
+            }
+        ));
+        let awake: In = serde_json::from_str(r#"{"t":"set_idle","idle":false}"#).unwrap();
+        assert!(matches!(
+            awake,
+            In::SetIdle {
+                idle: false,
+                keepalive_secs: None
+            }
+        ));
+        let ack: In = serde_json::from_str(r#"{"t":"keepalive_ack"}"#).unwrap();
+        assert!(matches!(ack, In::KeepaliveAck));
+        assert_eq!(
+            serde_json::to_string(&Out::IdleAck {
+                idle: true,
+                keepalive_secs: 180
+            })
+            .unwrap(),
+            r#"{"t":"idle_ack","idle":true,"keepalive_secs":180}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&Out::Keepalive).unwrap(),
+            r#"{"t":"keepalive"}"#
+        );
     }
 
     #[test]

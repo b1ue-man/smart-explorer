@@ -5,12 +5,16 @@ use std::{
     net::{AddrParseError, SocketAddr},
     num::NonZeroU32,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use iroh_base::EndpointId;
 use iroh_relay::server::{
-    Access, AccessControl, ClientRateLimit, ClientRequest, ConnectionId, RelayConfig,
+    Access, AccessControl, ClientPingSchedule, ClientRateLimit, ClientRequest, ConnectionId,
+    RelayConfig,
 };
+
+use super::idle::Keepalive;
 
 const RELAY_MAX_ACTIVE_CONNECTIONS: usize = 512;
 const RELAY_MAX_CONNECTIONS_PER_ENDPOINT: usize = 4;
@@ -24,6 +28,12 @@ const RELAY_KEY_CACHE_CAPACITY: usize = 4_096;
 const RELAY_RX_BYTES_PER_SECOND: u32 = 64 * 1024 * 1024;
 const RELAY_RX_BURST_BYTES: u32 = 8 * 1024 * 1024;
 const RELAY_CAPACITY_DENIAL: &str = "relay connection capacity reached";
+/// Base wait before the first server ping of a connection (iroh's cadence),
+/// so a dead new connection is still noticed quickly.
+const RELAY_FIRST_PING_INTERVAL: Duration = Duration::from_secs(15);
+/// Fixed answer window: a phone woken by the ping needs longer than iroh's
+/// RTT-based default of at most five seconds.
+const RELAY_PONG_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(super) struct RelayGuard {
     _runtime: tokio::runtime::Runtime,
@@ -69,7 +79,10 @@ impl std::error::Error for RelayStartError {
     }
 }
 
-pub(super) fn start(signal_bind: &str) -> Result<Option<RelayGuard>, RelayStartError> {
+pub(super) fn start(
+    signal_bind: &str,
+    keepalive: Keepalive,
+) -> Result<Option<RelayGuard>, RelayStartError> {
     if explicitly_disabled(std::env::var("SE_IROH_RELAY_DISABLE").ok().as_deref()) {
         eprintln!("iroh relay disabled via SE_IROH_RELAY_DISABLE");
         return Ok(None);
@@ -80,7 +93,7 @@ pub(super) fn start(signal_bind: &str) -> Result<Option<RelayGuard>, RelayStartE
     let address = bind
         .parse::<SocketAddr>()
         .map_err(|source| RelayStartError::InvalidBind { bind, source })?;
-    start_at(address).map(Some)
+    start_at(address, keepalive).map(Some)
 }
 
 fn explicitly_disabled(value: Option<&str>) -> bool {
@@ -89,7 +102,7 @@ fn explicitly_disabled(value: Option<&str>) -> bool {
         .unwrap_or(false)
 }
 
-fn start_at(address: SocketAddr) -> Result<RelayGuard, RelayStartError> {
+fn start_at(address: SocketAddr, keepalive: Keepalive) -> Result<RelayGuard, RelayStartError> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_name("se-iroh-relay")
@@ -98,7 +111,7 @@ fn start_at(address: SocketAddr) -> Result<RelayGuard, RelayStartError> {
     let server = runtime
         .block_on(async {
             let mut config = iroh_relay::server::ServerConfig::default();
-            config.relay = Some(relay_config(address));
+            config.relay = Some(relay_config(address, keepalive));
             iroh_relay::server::Server::spawn(config).await
         })
         .map_err(|error| RelayStartError::Server {
@@ -116,7 +129,19 @@ fn start_at(address: SocketAddr) -> Result<RelayGuard, RelayStartError> {
     })
 }
 
-fn relay_config(address: std::net::SocketAddr) -> RelayConfig {
+/// Server pings: the first after 15 s, then every K s (each plus 1-5 s
+/// jitter) once the client answered. Clients that ping on their own (desktop,
+/// every 15 s) keep resetting this timer and are not pinged at all; an idle
+/// phone is woken only once per keepalive interval.
+fn relay_ping_schedule(keepalive: Keepalive) -> ClientPingSchedule {
+    ClientPingSchedule::new(
+        RELAY_FIRST_PING_INTERVAL,
+        keepalive.duration(),
+        Some(RELAY_PONG_TIMEOUT),
+    )
+}
+
+fn relay_config(address: std::net::SocketAddr, keepalive: Keepalive) -> RelayConfig {
     let bytes_per_second = NonZeroU32::new(RELAY_RX_BYTES_PER_SECOND)
         .expect("RELAY_RX_BYTES_PER_SECOND is a non-zero constant");
     let max_burst_bytes =
@@ -137,6 +162,7 @@ fn relay_config(address: std::net::SocketAddr) -> RelayConfig {
     config.access = Arc::new(RelayAccess::new(
         RELAY_MAX_ACTIVE_CONNECTIONS,
         RELAY_MAX_CONNECTIONS_PER_ENDPOINT,
+        relay_ping_schedule(keepalive),
     ));
     config
 }
@@ -146,14 +172,16 @@ struct RelayAccess {
     counts: Mutex<AdmissionCounts<EndpointId, ConnectionId>>,
     max_total: usize,
     max_per_endpoint: usize,
+    ping_schedule: ClientPingSchedule,
 }
 
 impl RelayAccess {
-    fn new(max_total: usize, max_per_endpoint: usize) -> Self {
+    fn new(max_total: usize, max_per_endpoint: usize, ping_schedule: ClientPingSchedule) -> Self {
         Self {
             counts: Mutex::new(AdmissionCounts::default()),
             max_total,
             max_per_endpoint,
+            ping_schedule,
         }
     }
 
@@ -192,6 +220,10 @@ impl AccessControl for RelayAccess {
 
     fn on_disconnect(&self, _endpoint_id: EndpointId, connection_id: ConnectionId) {
         self.with_counts(|counts| counts.release(&connection_id));
+    }
+
+    fn ping_schedule(&self, _endpoint_id: EndpointId) -> ClientPingSchedule {
+        self.ping_schedule
     }
 }
 
@@ -282,7 +314,7 @@ mod tests {
     fn occupied_relay_bind_is_a_startup_error() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
-        let error = match start_at(address) {
+        let error = match start_at(address, Keepalive::default()) {
             Ok(_) => panic!("relay unexpectedly bound an occupied address"),
             Err(error) => error,
         };
@@ -292,7 +324,7 @@ mod tests {
 
     #[test]
     fn relay_config_applies_resource_limits() {
-        let config = relay_config("127.0.0.1:51821".parse().unwrap());
+        let config = relay_config("127.0.0.1:51821".parse().unwrap(), Keepalive::default());
         let rate_limit = config.limits.client_rx.unwrap();
         assert_eq!(rate_limit.bytes_per_second.get(), RELAY_RX_BYTES_PER_SECOND);
         assert_eq!(
@@ -321,6 +353,22 @@ mod tests {
             Some(RELAY_ACCEPT_BURST_PER_SOURCE)
         );
         assert_eq!(config.key_cache_capacity, Some(RELAY_KEY_CACHE_CAPACITY));
+    }
+
+    #[test]
+    fn android_background_task_relay_pings_at_keepalive_interval() {
+        let endpoint = iroh_base::SecretKey::from_bytes(&[7; 32]).public();
+        for (keepalive, expected) in [(Keepalive::default(), 180), (Keepalive::clamped(45), 45)] {
+            let config = relay_config("127.0.0.1:51821".parse().unwrap(), keepalive);
+            let schedule = config.access.ping_schedule(endpoint);
+            assert_eq!(schedule.first_interval, Duration::from_secs(15));
+            assert_eq!(schedule.interval, Duration::from_secs(expected));
+            assert_eq!(schedule.pong_timeout, Some(Duration::from_secs(30)));
+        }
+        // The vendored relay keeps iroh's cadence without an explicit schedule.
+        let upstream = ClientPingSchedule::default();
+        assert_eq!(upstream.interval, Duration::from_secs(15));
+        assert_eq!(upstream.pong_timeout, None);
     }
 
     #[test]

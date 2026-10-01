@@ -194,14 +194,13 @@ pub(super) fn join_room(
         }
     };
     send(writer, &roster);
+    let joined = Out::RoomJoined {
+        room_id: room_id.to_string(),
+        presence,
+    };
     for target in targets {
-        send(
-            &target,
-            &Out::RoomJoined {
-                room_id: room_id.to_string(),
-                presence: presence.clone(),
-            },
-        );
+        // Idle members may get a pure refresh with their next keepalive.
+        target.offer(&joined);
     }
 }
 
