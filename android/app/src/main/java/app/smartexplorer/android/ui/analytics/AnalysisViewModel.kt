@@ -1,5 +1,6 @@
 package app.smartexplorer.android.ui.analytics
 
+import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -8,18 +9,29 @@ import androidx.lifecycle.viewModelScope
 import app.smartexplorer.android.api.AnalyzeApi
 import app.smartexplorer.android.api.AnalyzeChild
 import app.smartexplorer.android.api.AnalyzeIssues
+import app.smartexplorer.android.api.AnalyzeKind
 import app.smartexplorer.android.api.AnalyzeNode
+import app.smartexplorer.android.api.AnalyzePlatform
 import app.smartexplorer.android.api.FilesApi
 import app.smartexplorer.android.core.CoreException
+import app.smartexplorer.android.system.StorageStatsAccess
 import app.smartexplorer.android.ui.common.Snackbars
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** Page of a scan-based tool: choose a place, scan with progress, result. */
 internal enum class ScanPhase { Setup, Scanning, Result }
 
 /**
- * Storage analysis (spec F19). Lives as long as the activity, so a running analysis and its
+ * Storage analysis (spec F19, B2/B3). Lives as long as the activity, so a running analysis and its
  * drill-down survive tab switches; the scan itself is a core task.
  */
 internal class AnalysisViewModel : ViewModel() {
@@ -41,8 +53,34 @@ internal class AnalysisViewModel : ViewModel() {
     var error by mutableStateOf<String?>(null)
         private set
 
+    /** Depth of [path] at which a folder Android locks was entered; `null` outside such folders. */
+    var protectedFrom by mutableStateOf<Int?>(null)
+        private set
+
+    /** The result's tree contains `Android/data` of the primary volume (usage access would size it). */
+    var appDataInTree by mutableStateOf(false)
+        private set
+
+    /** The result was made with the other apps' `Android/data` size (usage access was granted). */
+    var appDataIncluded by mutableStateOf(false)
+        private set
+
+    /** The usage access card was hidden for this session. */
+    var usageHintDismissed by mutableStateOf(false)
+        private set
+
+    /** Application context for the platform figures; set by [AnalysisScreen]. */
+    private val appContext = MutableStateFlow<Context?>(null)
     private var scanJob: Job? = null
     private var nodeJob: Job? = null
+
+    /** The shown folder is one Android locks (or lies below one). */
+    val insideProtected: Boolean
+        get() = protectedFrom != null
+
+    fun attach(context: Context) {
+        appContext.value = context.applicationContext
+    }
 
     /** "Mehr → Speicheranalyse": suggest [current] (the place shown in "Dateien") on the setup page. */
     fun preselect(current: String?) {
@@ -66,21 +104,29 @@ internal class AnalysisViewModel : ViewModel() {
         node = null
         issues = null
         path = emptyList()
+        protectedFrom = null
+        appDataInTree = false
+        appDataIncluded = false
         taskId = null
         scanJob = viewModelScope.launch {
             try {
-                val id = AnalyzeApi.start(target)
+                val figures = platformFigures(target)
+                appDataInTree = figures?.appDataInTree == true
+                appDataIncluded = figures?.otherAppsBytes != null
+                val platform = figures?.let { AnalyzePlatform(it.volumeUsedBytes, it.otherAppsBytes) }
+                val id = startTask { AnalyzeApi.start(target, platform) }
                 taskId = id
                 val task = FilesApi.awaitTask(id)
                 when (task.state) {
                     "done" -> {
-                        phase = ScanPhase.Result
-                        loadNode(emptyList())
+                        // Before the tree, so an empty locked root shows as such right away.
                         issues = try {
                             AnalyzeApi.issues(id)
                         } catch (e: CoreException) {
                             null
                         }
+                        phase = ScanPhase.Result
+                        loadNode(emptyList(), protectedFrom = null)
                     }
                     "canceled" -> {
                         phase = ScanPhase.Setup
@@ -98,35 +144,81 @@ internal class AnalysisViewModel : ViewModel() {
         }
     }
 
+    /** [Abbrechen]: cancels the core task; before it exists, the preparation itself. */
     fun cancel() {
-        taskId?.let { cancelTask(it) }
+        val id = taskId
+        if (id != null) {
+            cancelTask(id)
+            return
+        }
+        if (phase != ScanPhase.Scanning) return
+        scanJob?.cancel()
+        phase = ScanPhase.Setup
+        Snackbars.show("Analyse abgebrochen")
     }
 
-    /** Drill down into folder [child]. */
+    /** Drill down into folder [child]; estimates and aggregated rows have no folder. */
     fun open(child: AnalyzeChild) {
-        if (child.isDir) loadNode(path + child.name)
+        if (!child.opensFolder) return
+        val target = path + child.name
+        val lockedFrom = protectedFrom ?: target.size.takeIf { child.rowKind == AnalyzeKind.Protected }
+        loadNode(target, lockedFrom)
     }
 
     /** One level up; `false` at the analysed root. */
     fun up(): Boolean {
         if (path.isEmpty()) return false
-        loadNode(path.dropLast(1))
+        val target = path.dropLast(1)
+        loadNode(target, protectedFrom?.takeIf { target.size >= it })
         return true
     }
 
     /** [Anderer Ort]: back to the setup page, the result is dropped. */
     fun backToSetup() {
-        if (phase == ScanPhase.Scanning) cancel()
+        if (phase == ScanPhase.Scanning) taskId?.let { cancelTask(it) }
         scanJob?.cancel()
         nodeJob?.cancel()
         phase = ScanPhase.Setup
         node = null
         issues = null
         path = emptyList()
+        protectedFrom = null
         error = null
     }
 
-    private fun loadNode(target: List<String>) {
+    fun dismissUsageHint() {
+        usageHintDismissed = true
+    }
+
+    /**
+     * Platform figures for a local root (B2). Waits briefly for [attach]: a request from another
+     * screen starts before this page is composed (one frame later); without a context the analysis
+     * runs without figures rather than waiting longer.
+     */
+    private suspend fun platformFigures(target: String): StorageStatsAccess.Figures? {
+        if (!StorageStatsAccess.isLocalPath(target)) return null
+        val context = appContext.value
+            ?: withTimeoutOrNull(CONTEXT_WAIT_MS) { appContext.filterNotNull().first() }
+            ?: return null
+        return withContext(Dispatchers.IO) { StorageStatsAccess.figuresFor(context, target) }
+    }
+
+    /**
+     * Runs the core start call to completion even when [cancel] or a new start cancels this job
+     * meanwhile; the task it created is then canceled instead of running on unseen.
+     */
+    private suspend fun startTask(call: suspend () -> String): String {
+        var started: String? = null
+        try {
+            withContext(NonCancellable) { started = call() }
+        } catch (e: CancellationException) {
+            started?.let { cancelTask(it) }
+            throw e
+        }
+        return started ?: throw CoreException("internal", "Analyse ohne Task-Kennung gestartet")
+    }
+
+    private fun loadNode(target: List<String>, protectedFrom: Int?) {
         val id = taskId ?: return
         nodeJob?.cancel()
         val job = viewModelScope.launch {
@@ -134,6 +226,7 @@ internal class AnalysisViewModel : ViewModel() {
             try {
                 node = AnalyzeApi.node(id, target)
                 path = target
+                this@AnalysisViewModel.protectedFrom = protectedFrom
                 error = null
             } catch (e: CoreException) {
                 Snackbars.show("Ordner nicht geladen: ${e.message ?: e.kind}")
@@ -152,5 +245,10 @@ internal class AnalysisViewModel : ViewModel() {
                 Snackbars.show("Nicht abgebrochen: ${e.message ?: e.kind}")
             }
         }
+    }
+
+    private companion object {
+        /** Covers the first composition of the page after a request from another screen. */
+        const val CONTEXT_WAIT_MS = 2_000L
     }
 }

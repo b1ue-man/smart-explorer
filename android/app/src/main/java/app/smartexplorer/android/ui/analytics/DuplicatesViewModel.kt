@@ -8,14 +8,18 @@ import androidx.lifecycle.viewModelScope
 import app.smartexplorer.android.api.AnalyzeApi
 import app.smartexplorer.android.api.DuplicateGroup
 import app.smartexplorer.android.api.FilesApi
+import app.smartexplorer.android.api.ReclaimSummary
 import app.smartexplorer.android.core.CoreException
 import app.smartexplorer.android.ui.common.Snackbars
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
- * Duplicate search (spec F20): scan, groups of equal content, selection of copies (never the
- * last copy of a group) and moving them to the trash. Places without a trash only show the groups.
+ * Duplicate search (spec F20, B5): scan, all groups of equal content, the search totals (checked
+ * files, candidates, unreadable paths, protected areas, an early stop), selection of copies (never
+ * the last copy of a group) and moving them to the trash. Places without a trash only show the groups.
  */
 internal class DuplicatesViewModel : ViewModel() {
     var location by mutableStateOf<String?>(null)
@@ -27,6 +31,14 @@ internal class DuplicatesViewModel : ViewModel() {
     var groups by mutableStateOf<List<DuplicateGroup>>(emptyList())
         private set
     var selected by mutableStateOf<Set<String>>(emptySet())
+        private set
+
+    /** Totals of the last search; `null` when the core could not report them. */
+    var summary by mutableStateOf<ReclaimSummary?>(null)
+        private set
+
+    /** Minimum size the shown result was searched with. */
+    var searchedMinSize by mutableStateOf(DEFAULT_MIN_SIZE)
         private set
 
     /**
@@ -59,6 +71,7 @@ internal class DuplicatesViewModel : ViewModel() {
         groups = emptyList()
         selected = emptySet()
         ambiguous = emptySet()
+        summary = null
         trashUnsupported = false
         taskId = null
         val threshold = minSize
@@ -69,10 +82,17 @@ internal class DuplicatesViewModel : ViewModel() {
                 val task = FilesApi.awaitTask(id)
                 when (task.state) {
                     "done" -> {
-                        val found = AnalyzeApi.reclaimGroups(id).filter { it.items.size > 1 }.sortedByDescending { it.size * (it.items.size - 1) }
-                        ambiguous = found.flatMap { group -> group.items.map { it.location } }
-                            .groupingBy { it }.eachCount().filterValues { it > 1 }.keys
+                        val all = AnalyzeApi.reclaimGroups(id)
+                        summary = try {
+                            AnalyzeApi.reclaimSummary(id)
+                        } catch (e: CoreException) {
+                            null
+                        }
+                        // All groups now (no 200 cap): order and duplicate-location check off the main thread.
+                        val (found, shared) = withContext(Dispatchers.Default) { arrange(all) }
+                        ambiguous = shared
                         groups = found
+                        searchedMinSize = threshold
                         phase = ScanPhase.Result
                     }
                     "canceled" -> {
@@ -109,6 +129,7 @@ internal class DuplicatesViewModel : ViewModel() {
         groups = emptyList()
         selected = emptySet()
         ambiguous = emptySet()
+        summary = null
     }
 
     /** Selects or deselects one copy; the last unselected copy of a group stays. */
@@ -171,6 +192,17 @@ internal class DuplicatesViewModel : ViewModel() {
                 deleting = false
             }
         }
+    }
+
+    /**
+     * Groups with more than one copy, most space held by copies first, and the locations that name
+     * more than one listed copy ([ambiguous]).
+     */
+    private fun arrange(all: List<DuplicateGroup>): Pair<List<DuplicateGroup>, Set<String>> {
+        val found = all.filter { it.items.size > 1 }.sortedByDescending { it.size * (it.items.size - 1) }
+        val shared = found.flatMap { group -> group.items.map { it.location } }
+            .groupingBy { it }.eachCount().filterValues { it > 1 }.keys
+        return found to shared
     }
 
     companion object {

@@ -35,6 +35,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.smartexplorer.android.api.AnalyzeChild
+import app.smartexplorer.android.api.AnalyzeKind
 import app.smartexplorer.android.ui.common.Format
 
 /** Largest number of children drawn as own rectangles; the rest share one "Weitere" tile. */
@@ -49,6 +50,12 @@ internal enum class TileKind(val label: String, val color: Color) {
     Archive("Archive", Color(0xFFFFB74D)),
     Document("Dokumente", Color(0xFF4DB6AC)),
     Other("Sonstige", Color(0xFF90A4AE)),
+
+    /** Folders Android locks for every app (`Android/data|obb`). */
+    Protected("Geschützt", Color(0xFFA1887F)),
+
+    /** Display-only estimates from platform figures. */
+    Estimated("Laut Android", Color(0xFFCFD8DC)),
 }
 
 private val EXTENSIONS: Map<String, TileKind> = buildMap {
@@ -61,18 +68,20 @@ private val EXTENSIONS: Map<String, TileKind> = buildMap {
     }
 }
 
-internal fun tileKind(child: AnalyzeChild): TileKind {
-    if (child.isDir) return TileKind.Folder
-    val ext = child.name.substringAfterLast('.', "").lowercase()
-    return EXTENSIONS[ext] ?: TileKind.Other
+internal fun tileKind(child: AnalyzeChild): TileKind = when (child.rowKind) {
+    AnalyzeKind.Protected -> TileKind.Protected
+    AnalyzeKind.Rest -> TileKind.Estimated
+    AnalyzeKind.Dir -> TileKind.Folder
+    AnalyzeKind.Aggregate -> if (child.isDir) TileKind.Folder else TileKind.Other
+    AnalyzeKind.File -> EXTENSIONS[child.name.substringAfterLast('.', "").lowercase()] ?: TileKind.Other
 }
 
 /** A drawn tile; [child] is `null` for the aggregated rest. */
 private class Tile(val child: AnalyzeChild?, val label: String, val size: Long, val color: Color)
 
 /**
- * Treemap of [children] (squarified, drawn on a Canvas). Tapping a folder tile calls [onOpen].
- * Labels are drawn only where they fit.
+ * Treemap of [children] (squarified, drawn on a Canvas). Tapping a folder tile calls [onOpen]
+ * (estimates and aggregated rows have no folder). Labels are drawn only where they fit.
  */
 @Composable
 internal fun TreemapView(children: List<AnalyzeChild>, onOpen: (AnalyzeChild) -> Unit, modifier: Modifier = Modifier) {
@@ -90,7 +99,7 @@ internal fun TreemapView(children: List<AnalyzeChild>, onOpen: (AnalyzeChild) ->
                     // Same pure layout as the drawing below, so hits match the tiles.
                     Treemap.squarify(tiles.map { it.size }, size.width.toFloat(), size.height.toFloat())
                         .firstOrNull { it.contains(offset.x, offset.y) }
-                        ?.let { hit -> tiles[hit.index].child?.takeIf { it.isDir }?.let(currentOnOpen) }
+                        ?.let { hit -> tiles[hit.index].child?.takeIf { it.opensFolder }?.let(currentOnOpen) }
                 })
             },
     ) {
