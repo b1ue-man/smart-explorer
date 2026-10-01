@@ -1,7 +1,7 @@
+use std::cell::Cell;
 use std::collections::{hash_map::DefaultHasher, HashMap};
 use std::fmt;
 use std::hash::{Hash, Hasher};
-use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -10,6 +10,10 @@ use super::direct_reciprocal_transport::DirectReciprocalTransportResult;
 use super::identity::ShareIdentity;
 use super::node::ShareIrohNode;
 use super::types::{DirectAccessState, DirectContact, PeerEndpoint, ShareScope};
+// A bounded crossbeam channel behaves like `std::sync::mpsc::sync_channel`
+// (same `try_send`/`recv_timeout`) and lets the signal worker wait for
+// completions together with its other events.
+use crossbeam_channel::{bounded as sync_channel, Receiver, Sender as SyncSender};
 
 const MAX_REPAIRS: usize = 256;
 const COMPLETION_CAPACITY: usize = 64;
@@ -38,7 +42,6 @@ impl DirectRepairKey {
             remote_node_id,
         })
     }
-
 }
 
 impl fmt::Debug for DirectRepairKey {
@@ -194,15 +197,37 @@ pub(crate) enum DirectRepairScheduleError {
     Stopped,
 }
 
-pub(crate) struct DirectRepairCompletionReceiver(Receiver<()>);
+pub(crate) struct DirectRepairCompletionReceiver {
+    receiver: Receiver<()>,
+    closed: Cell<bool>,
+}
 
 impl DirectRepairCompletionReceiver {
+    fn new(receiver: Receiver<()>) -> Self {
+        Self {
+            receiver,
+            closed: Cell::new(false),
+        }
+    }
+
     pub(crate) fn drain(&self) -> bool {
         let mut completed = false;
-        while self.0.try_recv().is_ok() {
-            completed = true;
+        loop {
+            match self.receiver.try_recv() {
+                Ok(()) => completed = true,
+                Err(crossbeam_channel::TryRecvError::Empty) => break,
+                Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                    self.closed.set(true);
+                    break;
+                }
+            }
         }
         completed
+    }
+
+    /// The channel to wait on, until the repair worker has ended.
+    pub(crate) fn receiver(&self) -> Option<&Receiver<()>> {
+        (!self.closed.get()).then_some(&self.receiver)
     }
 }
 
@@ -249,7 +274,7 @@ impl DirectReciprocalCoordinator {
                 shared,
                 worker: Some(worker),
             },
-            DirectRepairCompletionReceiver(receiver),
+            DirectRepairCompletionReceiver::new(receiver),
         ))
     }
 
@@ -292,7 +317,9 @@ impl DirectReciprocalCoordinator {
     pub(crate) fn set_current_generation(&self, generation: u64) {
         if let Ok(mut state) = self.shared.state.lock() {
             state.generation = generation;
-            state.tasks.retain(|key, _| key.local_generation == generation);
+            state
+                .tasks
+                .retain(|key, _| key.local_generation == generation);
             self.shared.wake.notify_one();
         }
     }

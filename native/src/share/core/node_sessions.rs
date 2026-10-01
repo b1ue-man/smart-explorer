@@ -29,6 +29,9 @@ pub(super) struct OpenedPeerStream {
     pub(super) recv: RecvStream,
     pub(super) session_key: String,
     pub(super) generation: usize,
+    /// The connection the stream belongs to, to tell an idle close by the
+    /// host (request provably not started) from other failures.
+    pub(super) connection: Connection,
 }
 
 impl ShareIrohNode {
@@ -227,6 +230,7 @@ impl ShareIrohNode {
             recv,
             session_key: key.to_string(),
             generation: connection.stable_id(),
+            connection: connection.clone(),
         })
     }
 

@@ -1,16 +1,40 @@
+//! The worker without a server connection: waiting for a connection
+//! attempt or the reconnect backoff. Both wait for events (commands, the
+//! service's stop, power changes and probes, repair completions, the
+//! attempt's result) instead of polling, at most until the next discovery
+//! offer expires or 30 s pass.
+
 use std::io;
 use std::time::{Duration, Instant};
 
-use crossbeam_channel::Receiver;
+use crossbeam_channel::{Receiver, Select};
 
 use super::core::eio;
 use super::signal_commands::{run_offline_command, OfflineCommandRuntime};
 use super::signal_connector::NegotiatedSignal;
-use super::signal_worker::WorkerRuntime;
+use super::signal_worker::{drain_repair_completions, WorkerRuntime};
+use super::types::PendingShareCmd;
+
+/// Longest offline wait without any event.
+const OFFLINE_WAIT_CAP: Duration = Duration::from_secs(30);
 
 pub(super) enum ConnectionWait {
     Ready(io::Result<NegotiatedSignal>),
     Stopped,
+}
+
+pub(super) enum OfflineWait {
+    Stopped,
+    /// A probe asks to connect now.
+    Probe,
+    Elapsed,
+}
+
+enum OfflineEvent {
+    Connected(io::Result<NegotiatedSignal>),
+    Command(PendingShareCmd),
+    Stopped,
+    Other,
 }
 
 pub(super) fn wait_for_connection(
@@ -18,30 +42,19 @@ pub(super) fn wait_for_connection(
     runtime: &mut WorkerRuntime<'_>,
 ) -> ConnectionWait {
     loop {
-        super::signal_worker::drain_repair_completions(runtime);
-        runtime.discovery.maintain_offline(runtime.events);
-        if runtime.stopped_flag.load(std::sync::atomic::Ordering::Relaxed) {
+        // Probes wait for this attempt's result.
+        if offline_turn(runtime) {
             return ConnectionWait::Stopped;
         }
-        match connector.try_recv() {
-            Ok(result) => return ConnectionWait::Ready(result),
-            Err(crossbeam_channel::TryRecvError::Disconnected) => {
-                return ConnectionWait::Ready(Err(eio(
-                    "Share-Verbindungsversuch wurde unerwartet beendet",
-                )))
-            }
-            Err(crossbeam_channel::TryRecvError::Empty) => {}
-        }
-        match runtime.commands.recv_timeout(Duration::from_millis(25)) {
-            Ok(pending) => {
+        match wait_event(runtime, Some(connector), OFFLINE_WAIT_CAP) {
+            OfflineEvent::Connected(result) => return ConnectionWait::Ready(result),
+            OfflineEvent::Command(pending) => {
                 if acknowledge_offline(pending, runtime) {
                     return ConnectionWait::Stopped;
                 }
             }
-            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
-            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
-                return ConnectionWait::Stopped
-            }
+            OfflineEvent::Stopped => return ConnectionWait::Stopped,
+            OfflineEvent::Other => {}
         }
     }
 }
@@ -49,38 +62,85 @@ pub(super) fn wait_for_connection(
 pub(super) fn wait_offline_backoff(
     duration: Duration,
     runtime: &mut WorkerRuntime<'_>,
-) -> bool {
-    let deadline = Instant::now() + duration;
+) -> OfflineWait {
+    let deadline = runtime.power.now().mono + duration;
     loop {
-        super::signal_worker::drain_repair_completions(runtime);
-        runtime.discovery.maintain_offline(runtime.events);
-        if runtime.stopped_flag.load(std::sync::atomic::Ordering::Relaxed) {
-            return true;
+        if offline_turn(runtime) {
+            return OfflineWait::Stopped;
         }
-        let now = Instant::now();
+        if runtime.power.probe_pending() {
+            return OfflineWait::Probe;
+        }
+        let now = runtime.power.now().mono;
         if now >= deadline {
-            return false;
+            return OfflineWait::Elapsed;
         }
-        let remaining = deadline.saturating_duration_since(now);
-        match runtime
-            .commands
-            .recv_timeout(remaining.min(Duration::from_millis(50)))
-        {
-            Ok(pending) => {
+        match wait_event(runtime, None, deadline.saturating_duration_since(now)) {
+            OfflineEvent::Command(pending) => {
                 if acknowledge_offline(pending, runtime) {
-                    return true;
+                    return OfflineWait::Stopped;
                 }
             }
-            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
-            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => return true,
+            OfflineEvent::Stopped => return OfflineWait::Stopped,
+            OfflineEvent::Connected(_) | OfflineEvent::Other => {}
         }
     }
 }
 
-fn acknowledge_offline(
-    pending: super::types::PendingShareCmd,
-    runtime: &mut WorkerRuntime<'_>,
-) -> bool {
+/// Work of every offline wake; returns whether the worker stops.
+fn offline_turn(runtime: &mut WorkerRuntime<'_>) -> bool {
+    drain_repair_completions(runtime);
+    runtime.discovery.maintain_offline(runtime.events);
+    runtime.power.absorb(runtime.iroh);
+    runtime.stopped()
+}
+
+fn wait_event(
+    runtime: &WorkerRuntime<'_>,
+    connector: Option<&Receiver<io::Result<NegotiatedSignal>>>,
+    limit: Duration,
+) -> OfflineEvent {
+    let mut timeout = limit.min(OFFLINE_WAIT_CAP);
+    if let Some(due) = runtime.discovery.next_offline_due() {
+        timeout = timeout.min(due.saturating_duration_since(Instant::now()));
+    }
+    let timeout = runtime.power.hub().clock().real_wait(timeout);
+    let wake = runtime.iroh.signal_wake();
+    let completions = runtime.repair_completions.receiver();
+    let mut select = Select::new();
+    let commands_index = select.recv(runtime.commands);
+    let wake_index = select.recv(wake);
+    let connector_index = connector.map(|receiver| select.recv(receiver));
+    let completions_index = completions.map(|receiver| select.recv(receiver));
+    let Ok(operation) = select.select_timeout(timeout) else {
+        return OfflineEvent::Other;
+    };
+    let index = operation.index();
+    if index == commands_index {
+        return match operation.recv(runtime.commands) {
+            Ok(pending) => OfflineEvent::Command(pending),
+            Err(_) => OfflineEvent::Stopped,
+        };
+    }
+    if index == wake_index {
+        let _ = operation.recv(wake);
+        return OfflineEvent::Other;
+    }
+    if let (Some(receiver), Some(selected)) = (connector, connector_index) {
+        if index == selected {
+            return OfflineEvent::Connected(operation.recv(receiver).unwrap_or_else(|_| {
+                Err(eio("Share-Verbindungsversuch wurde unerwartet beendet"))
+            }));
+        }
+    }
+    if let (Some(receiver), Some(_)) = (completions, completions_index) {
+        // A disconnected channel is noticed by the next drain.
+        let _ = operation.recv(receiver);
+    }
+    OfflineEvent::Other
+}
+
+fn acknowledge_offline(pending: PendingShareCmd, runtime: &mut WorkerRuntime<'_>) -> bool {
     runtime.discovery.maintain_offline(runtime.events);
     if Instant::now() > pending.expires_at {
         let _ = pending.acknowledgement.send(Err(

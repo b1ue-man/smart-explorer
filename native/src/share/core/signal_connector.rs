@@ -2,12 +2,12 @@ use std::io;
 
 use crossbeam_channel::{bounded, Receiver};
 
-use super::identity::ShareIdentity;
 use super::discovery_signal_types::DISCOVERY_EXCHANGE_CAPABILITY;
+use super::identity::ShareIdentity;
 use super::signal_connection::{send_line, SignalConnection};
 use super::signal_handshake::{await_hello_ok, SignalCapabilities};
 use super::system::lan_ips;
-use super::wire::{ClientMsg, TRACKED_DIRECT_CAPABILITY};
+use super::wire::{ClientMsg, IDLE_KEEPALIVE_CAPABILITY, TRACKED_DIRECT_CAPABILITY};
 
 pub(super) struct NegotiatedSignal {
     pub(super) connection: SignalConnection,
@@ -45,6 +45,7 @@ fn connect_and_negotiate(server: &str, identity: &ShareIdentity) -> io::Result<N
             capabilities: vec![
                 TRACKED_DIRECT_CAPABILITY.to_string(),
                 DISCOVERY_EXCHANGE_CAPABILITY.to_string(),
+                IDLE_KEEPALIVE_CAPABILITY.to_string(),
             ],
         },
     )?;

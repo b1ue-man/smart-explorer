@@ -14,17 +14,39 @@ const SIGNAL_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const SIGNAL_DNS_TIMEOUT: Duration = Duration::from_secs(10);
 const SIGNAL_READ_POLL: Duration = Duration::from_millis(500);
 const SIGNAL_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
-pub(super) enum SignalConnection {
+/// Messages one drain hands over at most; the rest follows at once.
+const MAX_DRAINED_MESSAGES: usize = 256;
+
+pub(super) struct SignalConnection {
+    label: String,
+    transport: Transport,
+    /// Read timeout the socket keeps between this side's own reads: the
+    /// short poll until a readiness watcher (`signal_readiness`) waits on
+    /// the socket, then the watcher's long wait.
+    resting_read_timeout: Duration,
+}
+
+enum Transport {
     Tcp {
-        label: String,
         stream: TcpStream,
         reader: io::BufReader<TcpStream>,
         decoder: SignalLineReader,
     },
     WebSocket {
-        label: String,
         socket: Box<WebSocket<MaybeTlsStream<TcpStream>>>,
     },
+}
+
+/// Messages a drain read without waiting, and how the drain ended.
+#[derive(Debug, Default)]
+pub(super) struct Drained {
+    pub(super) messages: Vec<String>,
+    /// The server closed the connection.
+    pub(super) closed: bool,
+    /// More data is already buffered; drain again before waiting.
+    pub(super) more: bool,
+    /// The transport failed after `messages`.
+    pub(super) error: Option<io::Error>,
 }
 
 impl SignalConnection {
@@ -69,13 +91,20 @@ impl SignalConnection {
             authority.port_u16().unwrap_or(51820),
         )?)?;
         let _ = stream.set_nodelay(true);
+        Self::from_tcp(format!("tcp://{addr}"), stream)
+    }
+
+    fn from_tcp(label: String, stream: TcpStream) -> io::Result<Self> {
         set_tcp_timeouts(&stream, SIGNAL_READ_POLL, SIGNAL_WRITE_TIMEOUT);
         let reader = io::BufReader::new(stream.try_clone()?);
-        Ok(Self::Tcp {
-            label: format!("tcp://{addr}"),
-            stream,
-            reader,
-            decoder: SignalLineReader::default(),
+        Ok(Self {
+            label,
+            transport: Transport::Tcp {
+                stream,
+                reader,
+                decoder: SignalLineReader::default(),
+            },
+            resting_read_timeout: SIGNAL_READ_POLL,
         })
     }
 
@@ -100,47 +129,121 @@ impl SignalConnection {
         set_tcp_timeouts(&stream, SIGNAL_CONNECT_TIMEOUT, SIGNAL_CONNECT_TIMEOUT);
         let (mut socket, _) = client_tls(request, stream).map_err(eio)?;
         set_ws_timeouts(socket.get_mut(), SIGNAL_READ_POLL, SIGNAL_WRITE_TIMEOUT);
-        Ok(Self::WebSocket {
-            label: url.to_string(),
-            socket: Box::new(socket),
-        })
+        Ok(Self::from_websocket(url.to_string(), socket))
+    }
+
+    fn from_websocket(label: String, socket: WebSocket<MaybeTlsStream<TcpStream>>) -> Self {
+        Self {
+            label,
+            transport: Transport::WebSocket {
+                socket: Box::new(socket),
+            },
+            resting_read_timeout: SIGNAL_READ_POLL,
+        }
     }
 
     pub(super) fn label(&self) -> &str {
-        match self {
-            Self::Tcp { label, .. } | Self::WebSocket { label, .. } => label,
-        }
+        &self.label
     }
 
     #[cfg(test)]
     pub(super) fn from_test_tcp(stream: TcpStream) -> io::Result<Self> {
-        set_tcp_timeouts(&stream, SIGNAL_READ_POLL, SIGNAL_WRITE_TIMEOUT);
-        let reader = io::BufReader::new(stream.try_clone()?);
-        Ok(Self::Tcp {
-            label: "tcp://test".into(),
-            stream,
-            reader,
-            decoder: SignalLineReader::default(),
-        })
+        Self::from_tcp("tcp://test".into(), stream)
+    }
+
+    /// A client WebSocket over an already upgraded test socket.
+    #[cfg(test)]
+    pub(super) fn from_test_websocket(mut socket: WebSocket<MaybeTlsStream<TcpStream>>) -> Self {
+        set_ws_timeouts(socket.get_mut(), SIGNAL_READ_POLL, SIGNAL_WRITE_TIMEOUT);
+        Self::from_websocket("ws://test".into(), socket)
     }
 
     #[cfg(test)]
     pub(super) fn shutdown_test_transport(&mut self) -> io::Result<()> {
-        match self {
-            Self::Tcp { stream, .. } => stream.shutdown(std::net::Shutdown::Both),
-            Self::WebSocket { .. } => Err(eio("test shutdown requires raw TCP")),
+        match &self.transport {
+            Transport::Tcp { stream, .. } => stream.shutdown(std::net::Shutdown::Both),
+            Transport::WebSocket { .. } => Err(eio("test shutdown requires raw TCP")),
+        }
+    }
+
+    /// The TCP socket below the transport, if this transport exposes one.
+    fn raw_socket(&self) -> Option<&TcpStream> {
+        match &self.transport {
+            Transport::Tcp { stream, .. } => Some(stream),
+            Transport::WebSocket { socket } => match socket.get_ref() {
+                MaybeTlsStream::Plain(tcp) => Some(tcp),
+                MaybeTlsStream::Rustls(tls) => Some(&tls.sock),
+                #[allow(unreachable_patterns)]
+                _ => None,
+            },
+        }
+    }
+
+    /// A second handle of the socket for a readiness watcher.
+    pub(super) fn watch_handle(&self) -> io::Result<TcpStream> {
+        self.raw_socket()
+            .ok_or_else(|| eio("Signal-Transport bietet keinen Socket zum Warten"))?
+            .try_clone()
+    }
+
+    pub(super) fn resting_read_timeout(&self) -> Duration {
+        self.resting_read_timeout
+    }
+
+    /// Sets the read timeout the socket keeps between this side's own reads.
+    pub(super) fn rest_reads_for(&mut self, timeout: Duration) {
+        self.resting_read_timeout = timeout;
+        self.apply_read_timeout(timeout);
+    }
+
+    fn apply_read_timeout(&mut self, timeout: Duration) {
+        match &mut self.transport {
+            Transport::Tcp { stream, .. } => {
+                let _ = stream.set_read_timeout(Some(timeout));
+            }
+            Transport::WebSocket { socket } => {
+                set_ws_timeouts(socket.get_mut(), timeout, SIGNAL_WRITE_TIMEOUT);
+            }
+        }
+    }
+
+    fn set_nonblocking(&self, nonblocking: bool) -> io::Result<()> {
+        match &self.transport {
+            Transport::Tcp { stream, reader, .. } => {
+                stream.set_nonblocking(nonblocking)?;
+                reader.get_ref().set_nonblocking(nonblocking)
+            }
+            Transport::WebSocket { .. } => self
+                .raw_socket()
+                .ok_or_else(|| eio("Signal-Transport bietet keinen Socket"))?
+                .set_nonblocking(nonblocking),
         }
     }
 
     fn send<T: serde::Serialize>(&mut self, msg: &T) -> io::Result<()> {
-        match self {
-            Self::Tcp { stream, .. } => {
+        // A TLS write may read the socket; while a watcher waits with its
+        // long timeout, bound such reads like the handshake's poll.
+        let guard_reads = self.resting_read_timeout > SIGNAL_READ_POLL;
+        if guard_reads {
+            self.apply_read_timeout(SIGNAL_READ_POLL);
+        }
+        let result = self.write_message(msg);
+        if guard_reads {
+            let resting = self.resting_read_timeout;
+            self.apply_read_timeout(resting);
+        }
+        result
+    }
+
+    fn write_message<T: serde::Serialize>(&mut self, msg: &T) -> io::Result<()> {
+        match &mut self.transport {
+            Transport::Tcp { stream, .. } => {
                 let mut line = serde_json::to_string(msg).map_err(eio)?;
                 line.push('\n');
                 stream.write_all(line.as_bytes())?;
                 stream.flush()
             }
-            Self::WebSocket { socket, .. } => {
+            Transport::WebSocket { socket } => {
                 let text = serde_json::to_string(msg).map_err(eio)?;
                 socket.send(Message::Text(text)).map_err(ws_to_io)?;
                 socket.flush().map_err(ws_to_io)
@@ -149,17 +252,24 @@ impl SignalConnection {
     }
 
     pub(super) fn read_message(&mut self) -> io::Result<Option<String>> {
-        match self {
-            Self::Tcp { reader, decoder, .. } => decoder.read(reader, MAX_SIGNAL_LINE),
-            Self::WebSocket { socket, .. } => loop {
+        match &mut self.transport {
+            Transport::Tcp {
+                reader, decoder, ..
+            } => decoder.read(reader, MAX_SIGNAL_LINE),
+            Transport::WebSocket { socket } => loop {
                 match socket.read() {
                     Ok(Message::Text(text)) => return Ok(Some(text)),
                     Ok(Message::Binary(bytes)) => {
                         return String::from_utf8(bytes).map(Some).map_err(eio);
                     }
                     Ok(Message::Ping(payload)) => {
-                        socket.send(Message::Pong(payload)).map_err(ws_to_io)?;
-                        socket.flush().map_err(ws_to_io)?;
+                        match socket.send(Message::Pong(payload)) {
+                            Ok(()) => {}
+                            // Queued; the next read or write flushes it.
+                            Err(WsError::Io(error))
+                                if error.kind() == io::ErrorKind::WouldBlock => {}
+                            Err(error) => return Err(ws_to_io(error)),
+                        }
                     }
                     Ok(Message::Pong(_)) => {}
                     Ok(Message::Close(_)) => return Ok(None),
@@ -175,6 +285,40 @@ impl SignalConnection {
                 }
             },
         }
+    }
+
+    /// Reads every message that is available without waiting. A partial
+    /// line or frame stays buffered for the next drain.
+    pub(super) fn drain_messages(&mut self) -> io::Result<Drained> {
+        self.set_nonblocking(true)?;
+        let mut drained = Drained::default();
+        loop {
+            match self.read_message() {
+                Ok(Some(message)) => {
+                    drained.messages.push(message);
+                    if drained.messages.len() >= MAX_DRAINED_MESSAGES {
+                        drained.more = true;
+                        break;
+                    }
+                }
+                Ok(None) => {
+                    drained.closed = true;
+                    break;
+                }
+                Err(error)
+                    if error.kind() == io::ErrorKind::WouldBlock
+                        || error.kind() == io::ErrorKind::TimedOut =>
+                {
+                    break
+                }
+                Err(error) => {
+                    drained.error = Some(error);
+                    break;
+                }
+            }
+        }
+        self.set_nonblocking(false)?;
+        Ok(drained)
     }
 }
 

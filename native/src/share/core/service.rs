@@ -67,6 +67,7 @@ impl ShareService {
         };
         if is_stop {
             self.stopped.store(true, Ordering::Relaxed);
+            self.iroh.wake_signal_worker();
         }
         result
     }
@@ -426,6 +427,8 @@ impl Drop for ShareService {
         if self.owner {
             let _ = self.iroh.stop_sharing();
             self.stopped.store(true, Ordering::Relaxed);
+            // The worker waits for events; this is its stop signal.
+            self.iroh.wake_signal_worker();
             self.reciprocal.request_stop();
         }
     }
