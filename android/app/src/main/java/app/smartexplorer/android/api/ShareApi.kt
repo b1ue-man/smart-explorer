@@ -114,6 +114,25 @@ data class ShareDiscovery(
 @Serializable
 data class RemovedDevice(val deviceId: String, val name: String = "")
 
+/**
+ * `ShareStatus.power`: idle mode of the Share server connection (spec A3, A7). [idleSupported]
+ * `null` = not known yet (no server contact so far), `false` = the server lacks the idle mode.
+ */
+@Serializable
+data class SharePower(
+    val idleSupported: Boolean? = null,
+    val idleActive: Boolean = false,
+    val keepaliveSecs: Int? = null,
+    val lastServerContactMs: Long? = null,
+)
+
+/** Result of `share.wake`: the connection works after the probe ([ok]); it had to be rebuilt ([reconnected]). */
+@Serializable
+data class ShareWake(
+    val ok: Boolean = false,
+    val reconnected: Boolean = false,
+)
+
 /** `share.status`: the poller's latest snapshot. */
 @Serializable
 data class ShareStatus(
@@ -136,6 +155,7 @@ data class ShareStatus(
     val discovery: ShareDiscovery = ShareDiscovery(),
     val removedDevices: List<RemovedDevice> = emptyList(),
     val notices: List<String> = emptyList(),
+    val power: SharePower = SharePower(),
 )
 
 /** `share.createRoom` */
@@ -163,6 +183,13 @@ object ShareApi {
     suspend fun watch(active: Boolean) {
         Core.call("share.watch", buildJsonObject { put("active", active) })
     }
+
+    /**
+     * Probes the Share connection now (wake alarm, network change); [networkChanged] also lets the
+     * endpoint re-check its paths. Returns when the probe ended (the core waits at most 12 s).
+     */
+    suspend fun wake(networkChanged: Boolean): ShareWake =
+        Core.request<ShareWake>("share.wake", buildJsonObject { put("networkChanged", networkChanged) })
 
     /** Empty [server] removes the Share server (LAN only). */
     suspend fun setServer(server: String) {

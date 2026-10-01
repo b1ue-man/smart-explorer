@@ -4,6 +4,7 @@
 package app.smartexplorer.android.ui.settings
 
 import android.Manifest
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.horizontalScroll
@@ -33,6 +34,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.smartexplorer.android.api.BgStatus
+import app.smartexplorer.android.api.ShareApi
+import app.smartexplorer.android.api.ShareStatus
 import app.smartexplorer.android.api.SyncApi
 import app.smartexplorer.android.api.SyncApi.displayText
 import app.smartexplorer.android.core.CoreException
@@ -44,9 +47,11 @@ import app.smartexplorer.android.ui.common.ErrorCard
 import app.smartexplorer.android.ui.common.Snackbars
 import app.smartexplorer.android.ui.sync.BackgroundStatusBlock
 import app.smartexplorer.android.ui.sync.CatchUpBlock
+import app.smartexplorer.android.ui.sync.ErrorText
 import app.smartexplorer.android.ui.sync.HintText
 import app.smartexplorer.android.ui.sync.RepeatWhileStarted
 import app.smartexplorer.android.ui.sync.SectionTitle
+import app.smartexplorer.android.ui.sync.ShareReachabilityStatus
 import app.smartexplorer.android.ui.sync.SwitchRow
 import app.smartexplorer.android.ui.sync.WorkerLogDialog
 import java.time.Duration
@@ -62,21 +67,29 @@ private val MODES = listOf(
     BackgroundController.MODE_PERSISTENT,
 )
 private const val STATUS_INTERVAL_MS = 5_000L
+private const val TAG = "SmartExplorerBg"
 
 /**
  * Settings section "Hintergrund" (spec F17): mode, interval and conditions of the periodic run,
- * automatic pause, pause/resume, catch-up now, battery optimization, worker log and the Android
- * limits. Embedded by the settings page (K3) and the Sync page; it does not scroll by itself.
+ * "Share im Hintergrund erreichbar" (spec A1, A7), automatic pause, pause/resume, catch-up now,
+ * battery optimization, worker log and the Android limits. Embedded by the settings page (K3) and
+ * the Sync page; it does not scroll by itself.
  */
 @Composable
 fun BackgroundSettingsSection(modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val mode by AppPrefs.bgMode.collectAsStateWithLifecycle()
+    val reachable by AppPrefs.shareReachable.collectAsStateWithLifecycle()
     val nextRun by remember(context) { BackgroundController.nextRun(context) }.collectAsStateWithLifecycle(initialValue = null)
     var status by remember { mutableStateOf<BgStatus?>(null) }
     var statusError by remember { mutableStateOf<String?>(null) }
+    var share by remember { mutableStateOf<ShareStatus?>(null) }
     var showLog by rememberSaveable { mutableStateOf(false) }
+    // The background service runs in "Dauerbetrieb" and for Share: both need restarts.
+    val serviceSetting = mode == BackgroundController.MODE_PERSISTENT || reachable
+    // Anything that works without the UI: needs notifications and an unrestricted app.
+    val backgroundSetting = mode != BackgroundController.MODE_OFF || reachable
 
     val refresh: suspend () -> Unit = {
         try {
@@ -84,6 +97,12 @@ fun BackgroundSettingsSection(modifier: Modifier = Modifier) {
             statusError = null
         } catch (e: CoreException) {
             statusError = e.displayText()
+        }
+        try {
+            share = ShareApi.status()
+        } catch (e: CoreException) {
+            // Only the Share lines of this section stay at their last state.
+            Log.w(TAG, "share.status failed: ${e.kind}: ${e.displayText()}")
         }
     }
     RepeatWhileStarted(STATUS_INTERVAL_MS, refresh)
@@ -94,6 +113,7 @@ fun BackgroundSettingsSection(modifier: Modifier = Modifier) {
             } catch (e: CoreException) {
                 Snackbars.show("$failure: ${e.displayText()}")
             }
+            BackgroundController.onBackgroundStatusChanged()
             refresh()
         }
     }
@@ -111,7 +131,8 @@ fun BackgroundSettingsSection(modifier: Modifier = Modifier) {
 
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         BackgroundStatusBlock(mode, status, nextRun, statusError)
-        NotificationHint(mode)
+        NotificationHint(needed = backgroundSetting)
+        BackgroundRestrictionCard(needed = backgroundSetting)
 
         SectionTitle("Modus")
         SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
@@ -132,6 +153,21 @@ fun BackgroundSettingsSection(modifier: Modifier = Modifier) {
         HintText(modeHint(mode))
 
         if (mode == BackgroundController.MODE_PERIODIC) PeriodicConditions { BackgroundController.apply(context) }
+
+        SectionTitle("Share im Hintergrund")
+        SwitchRow(
+            "Share im Hintergrund erreichbar",
+            reachable,
+            // BackgroundController follows the setting and starts or ends the service.
+            { on -> AppPrefs.setShareReachable(on) },
+            hint = "Andere Geräte erreichen dieses Telefon auch bei geschlossener App. Eine stille " +
+                "Benachrichtigung hält die Verbindung; der Share-Server weckt das Telefon dafür nur alle paar Minuten.",
+        )
+        ShareReachabilityStatus(mode, reachable, share)
+        HintText(
+            "Nach der Installation oder nach „Beenden erzwingen“ startet Android die App erst wieder im " +
+                "Hintergrund, wenn sie einmal geöffnet wurde.",
+        )
 
         SectionTitle("Automatische Pause")
         val current = status
@@ -155,7 +191,7 @@ fun BackgroundSettingsSection(modifier: Modifier = Modifier) {
         CatchUpBlock(onChanged = { scope.launch { refresh() } })
 
         SectionTitle("System")
-        BatteryOptimizationRow(mode)
+        BatteryOptimizationRow(serviceSetting)
         OutlinedButton(onClick = { showLog = true }) { Text("Worker-Protokoll") }
 
         SectionTitle("Grenzen auf Android")
@@ -231,9 +267,9 @@ private fun secondsUntilTomorrow(): Long {
     return Duration.between(now, tomorrow).seconds.coerceAtLeast(60)
 }
 
-/** "Fehler: Benachrichtigungen verboten → Hinweis mit [Erlauben]" (spec F17). */
+/** "Fehler: Benachrichtigungen verboten → Hinweis mit [Erlauben]" (spec F17); [needed] = a background setting is on. */
 @Composable
-private fun NotificationHint(mode: String) {
+private fun NotificationHint(needed: Boolean) {
     val context = LocalContext.current
     var allowed by remember { mutableStateOf(Permissions.canPostNotifications(context)) }
     var asked by rememberSaveable { mutableStateOf(false) }
@@ -241,7 +277,7 @@ private fun NotificationHint(mode: String) {
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         allowed = Permissions.canPostNotifications(context)
     }
-    if (allowed || mode == BackgroundController.MODE_OFF) return
+    if (allowed || !needed) return
     ErrorCard(
         message = "Ohne Benachrichtigungen sind Hintergrundläufe, Fortschritt und Share-Anfragen nicht sichtbar.",
         title = "Benachrichtigungen aus",
@@ -257,9 +293,15 @@ private fun NotificationHint(mode: String) {
     )
 }
 
+/**
+ * Battery-optimization exception (spec A2): without it Android may refuse to restart the
+ * background service from the background (wake alarm, process restart); the last refusal is shown.
+ * [serviceSetting] = "Dauerbetrieb" or "Share im Hintergrund erreichbar" is on.
+ */
 @Composable
-private fun BatteryOptimizationRow(mode: String) {
+private fun BatteryOptimizationRow(serviceSetting: Boolean) {
     val context = LocalContext.current
+    val refusedMs by AppPrefs.bgStartRefusedMs.collectAsStateWithLifecycle()
     var exempt by remember { mutableStateOf(Permissions.isIgnoringBatteryOptimizations(context)) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { exempt = Permissions.isIgnoringBatteryOptimizations(context) }
     if (exempt) {
@@ -273,11 +315,36 @@ private fun BatteryOptimizationRow(mode: String) {
             }
         }) { Text("Akku-Optimierung ausschalten") }
         HintText(
-            if (mode == BackgroundController.MODE_PERSISTENT) {
-                "Empfohlen im Dauerbetrieb: Android darf den Dienst dann auch aus dem Hintergrund neu starten."
+            if (serviceSetting) {
+                "Empfohlen für Dauerbetrieb und „Share im Hintergrund“: nur dann darf Android den Dienst " +
+                    "nach einem Beenden auch aus dem Hintergrund neu starten."
             } else {
                 "Erlaubt Android, Hintergrundläufe seltener zu verschieben."
             },
         )
+        if (serviceSetting && refusedMs > 0) {
+            ErrorText("Zuletzt verweigerte Android den Neustart des Hintergrunddienstes: ${BackgroundText.moment(refusedMs)}.")
+        }
     }
+}
+
+/**
+ * Battery setting "Eingeschränkt": Android starts neither the background service nor background
+ * runs then (spec A2); shown while [needed] (a background setting is on) with [App-Infos].
+ */
+@Composable
+private fun BackgroundRestrictionCard(needed: Boolean) {
+    val context = LocalContext.current
+    var restricted by remember { mutableStateOf(Permissions.isBackgroundRestricted(context)) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { restricted = Permissions.isBackgroundRestricted(context) }
+    if (!restricted || !needed) return
+    ErrorCard(
+        message = "Mit der Akku-Einstellung „Eingeschränkt“ startet Android weder den Hintergrunddienst noch " +
+            "Hintergrundläufe. In den App-Infos unter „Akku“ eine andere Einstellung wählen.",
+        title = "Hintergrund eingeschränkt",
+        actionLabel = "App-Infos",
+        onAction = {
+            if (!Permissions.openAppDetails(context)) Snackbars.show("App-Infos nicht verfügbar – bitte in den Einstellungen öffnen.")
+        },
+    )
 }

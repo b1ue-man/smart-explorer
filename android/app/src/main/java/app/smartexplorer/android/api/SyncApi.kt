@@ -213,13 +213,18 @@ data class BgStatus(
     val activeJob: String? = null,
 )
 
-/** `sys.hostState` arguments. */
+/**
+ * `sys.hostState` arguments. [foreground] also switches the Share connection into its idle mode
+ * while the UI is not visible; [deferScheduling] keeps the daemon from starting its own scheduled
+ * jobs (start, interval, calendar, real-time, connect) – only `bg.catchUp` runs them then (spec A6).
+ */
 data class HostStateArgs(
     val powerSave: Boolean,
     val metered: Boolean,
     val wifi: Boolean,
     val charging: Boolean,
     val foreground: Boolean,
+    val deferScheduling: Boolean,
 )
 
 object SyncApi {
@@ -330,6 +335,7 @@ object SyncApi {
             put("wifi", state.wifi)
             put("charging", state.charging)
             put("foreground", state.foreground)
+            put("deferScheduling", state.deferScheduling)
         })
     }
 

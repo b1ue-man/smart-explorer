@@ -25,6 +25,12 @@ sealed interface CoreEvent {
 
     /** Storage volumes changed. */
     data object Volumes : CoreEvent
+
+    /**
+     * The core asks to keep the CPU awake for [ms] (incoming Share activity, keep-alive work in
+     * the background). The event pump takes the wake lock itself ([app.smartexplorer.android.system.WakeKeeper]).
+     */
+    data class Wake(val ms: Long) : CoreEvent
 }
 
 /** Start state of the core, see [Core.ready]. */
