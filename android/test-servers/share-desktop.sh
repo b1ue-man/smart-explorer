@@ -11,6 +11,9 @@
 #   share-desktop.sh members ROOT COUNT                 wait until the desktop sees COUNT members
 #   share-desktop.sh exec ROOT [INSTRUMENT_OUT]         desktop side of the exec-host check, while
 #                                                      ShareExecTaskTest runs on the phone (adb)
+#   share-desktop.sh reach ROOT PHONE_DEVICE SECONDS    the desktop lists the phone's Room exports
+#                                                      (phone in the background / Doze); retries
+#                                                      until SECONDS while routes settle
 #   share-desktop.sh down ROOT LOGDIR                   stop client daemon and server, keep logs
 #
 # Each call is its own bash process with errexit, so a failed step always fails the call.
@@ -135,7 +138,9 @@ share_desktop_up() {
   port=$((34000 + ($$ % 12000)))
   SHARE_SERVER="$ip:$port"
   SHARE_RELAY="http://$ip:$((port + 1))"
-  "$SE_SHARE_SERVER_BIN" "$SHARE_SERVER" >"$root/share-server.log" 2>&1 &
+  # The shortest idle keepalive the server accepts, so the device suite sees several server
+  # keepalives of the backgrounded phone within its time budget (default 180 s).
+  SE_SHARE_IDLE_KEEPALIVE_SECS=30 "$SE_SHARE_SERVER_BIN" "$SHARE_SERVER" >"$root/share-server.log" 2>&1 &
   SHARE_SERVER_PID=$!
   share_save_state
   sleep 1
@@ -281,6 +286,29 @@ share_exec_check() {
   }
 }
 
+# A Room member's file listing through the desktop CLI: proves an incoming session reaches the phone.
+share_reach_check() {
+  local phone=$1 seconds=$2 deadline=$((SECONDS + $2)) code=0 out=""
+  [[ "$phone" =~ ^[^/[:space:]]+$ ]] || {
+    echo "unexpected phone device id '$phone'" >&2
+    return 1
+  }
+  local target="share://room/$SHARE_ROOM_RELATION/$phone"
+  while ((SECONDS < deadline)); do
+    code=0
+    out="$(SHARE_CLIENT_TIMEOUT=60s share_client ls "$target" 2>"$SHARE_ROOT/reach.err")" || code=$?
+    [[ "$code" -eq 0 ]] && break
+    sleep 3
+  done
+  echo "reach $target: exit $code after $((seconds - (deadline - SECONDS)))s"
+  printf '%s\n' "$out" | head -n 20
+  [[ "$code" -eq 0 ]] || {
+    echo "the desktop could not open a session to the phone" >&2
+    cat "$SHARE_ROOT/reach.err" >&2
+    return 1
+  }
+}
+
 STATE_VARS=(SHARE_ROOT SHARE_CLIENT SHARE_SERVER_PID SHARE_SERVER SHARE_RELAY SHARE_ROOM_CODE SHARE_ROOM_RELATION
   SHARE_DESKTOP_DEVICE SHARE_DESKTOP_DIRECT_CODE SHARE_ROOM_FOLDER SHARE_ROOM_FILE SHARE_ROOM_FILE_SHA256 SE_BIN SE_SHARE_SERVER_BIN)
 
@@ -329,7 +357,7 @@ share_desktop_down() {
 
 case "${1:-}" in
   up)
-    [[ "$#" -eq 4 ]] || { sed -n '8,14p' "$0" >&2; exit 2; }
+    [[ "$#" -eq 4 ]] || { sed -n '8,17p' "$0" >&2; exit 2; }
     mkdir -p "$2"
     share_desktop_up "$2" "$3" "$4"
     ;;
@@ -349,13 +377,18 @@ case "${1:-}" in
     SHARE_EXEC_INSTRUMENT="${3:-}"
     share_exec_check
     ;;
+  reach)
+    [[ "$#" -eq 4 ]] || exit 2
+    share_load_state "$2"
+    share_reach_check "$3" "$4"
+    ;;
   down)
     [[ "$#" -eq 3 ]] || exit 2
     share_load_state "$2" || exit 0
     share_desktop_down "$3"
     ;;
   *)
-    sed -n '8,14p' "$0" >&2
+    sed -n '8,17p' "$0" >&2
     exit 2
     ;;
 esac
