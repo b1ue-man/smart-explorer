@@ -3,7 +3,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use iroh::endpoint::{Connection, RecvStream, SendStream};
+use iroh::endpoint::{Connection, RecvStream, SendStream, VarInt};
 
 use super::connection_events::ConnectionErrorKind;
 use super::core::eio;
@@ -15,7 +15,7 @@ use super::fs_access::FsAccess;
 use super::handshake_limits::ApplicationHandshakePermit;
 use super::io_deadline;
 use super::mount_lease::MountLeaseAuthorization;
-use super::node::ShareIrohNode;
+use super::node::{IncomingActivity, ShareIrohNode, IDLE_CLOSE_CODE, IDLE_CLOSE_REASON};
 use super::session::{authenticate_incoming_session, IncomingSession};
 use super::types::{ExecRequest, ShareAuthState, ShareEvent};
 use super::wire::{Ctrl, FsRequest, FsResponse, TRANSFER_V1_CAPABILITY};
@@ -40,6 +40,7 @@ struct StreamContext {
     node: Arc<ShareIrohNode>,
     exec_slots: Arc<AtomicUsize>,
     legacy_connection: usize,
+    activity: Arc<IncomingActivity>,
 }
 
 impl StreamContext {
@@ -82,7 +83,7 @@ pub(super) async fn handle_connection(
     conn: Connection,
     handshake_permit: ApplicationHandshakePermit,
 ) -> io::Result<()> {
-    let _incoming = node.track_incoming(&conn)?;
+    let (_incoming, activity) = node.track_incoming_fs(&conn)?;
     node.require_sharing_active()?;
     let remote_node = conn.remote_id().to_string();
     let handshake_deadline = tokio::time::Instant::now() + HANDSHAKE_TIMEOUT;
@@ -151,19 +152,36 @@ pub(super) async fn handle_connection(
         node.rt.clone(),
     );
     loop {
-        let (send, recv) = match conn.accept_bi().await {
+        // A waiting stream always wins over an idle close, so a close never
+        // races a request this loop has seen; one that arrives later was
+        // never started and the client may send it again (`IDLE`).
+        let accepted = tokio::select! {
+            biased;
+            accepted = conn.accept_bi() => accepted,
+            () = activity.close_requested() => {
+                if activity.idle_close_allowed() {
+                    conn.close(VarInt::from_u32(IDLE_CLOSE_CODE), IDLE_CLOSE_REASON);
+                    return Ok(());
+                }
+                continue;
+            }
+        };
+        let (send, recv) = match accepted {
             Ok(streams) => streams,
             Err(error) => return Err(eio(error)),
         };
+        let stream = node.incoming_stream_started(&activity);
         let context = StreamContext {
             session: session.clone(),
             auth: node.auth.clone(),
             node: node.clone(),
             exec_slots: exec_slots.clone(),
             legacy_connection,
+            activity: activity.clone(),
         };
         let node = node.clone();
         tokio::spawn(async move {
+            let _stream = stream;
             if let Err(error) = handle_peer_stream(send, recv, context).await {
                 node.emit_connection_error(ConnectionErrorKind::FsStream, error.to_string());
             }
@@ -227,6 +245,7 @@ async fn handle_peer_stream(
     };
     let principal = session.principal();
     let mount_leases = node.mount_leases.clone();
+    let activity = context.activity.clone();
     let req = match req {
         FsRequest::Capabilities {
             path,
@@ -251,6 +270,7 @@ async fn handle_peer_stream(
                 return reply_err(&mut send, eio("Peer-Mount-Lease fehlt bei Freigabe")).await;
             };
             let token = token.to_string();
+            let released = token.clone();
             let result = blocking_fs("Share release mount lease", move || {
                 let removed = mount_leases.release(&token, &principal)?;
                 let existed = removed.is_some();
@@ -259,7 +279,10 @@ async fn handle_peer_stream(
             })
             .await;
             return match result {
-                Ok(_) => reply(&mut send, FsResponse::Ok).await,
+                Ok(_) => {
+                    activity.lease_released(&released);
+                    reply(&mut send, FsResponse::Ok).await
+                }
                 Err(error) => reply_err(&mut send, error).await,
             };
         }
@@ -280,6 +303,7 @@ async fn handle_peer_stream(
                 node.filesystem_authorization_epoch(),
             ) {
                 Ok(lease) => {
+                    activity.lease_used(&token);
                     let authorization = admit_each.then(|| {
                         MountLeaseAuthorization::new(
                             token,

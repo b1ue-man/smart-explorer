@@ -155,14 +155,6 @@ mod exec_types;
 mod framing;
 #[path = "core/fs.rs"]
 mod fs;
-#[path = "core/fs_response.rs"]
-mod fs_response;
-#[path = "core/storage_analysis_server.rs"]
-mod storage_analysis_server;
-#[path = "core/peer_storage_analysis.rs"]
-mod peer_storage_analysis;
-#[path = "os/shared/storage_analysis_host.rs"]
-mod storage_analysis_host;
 #[path = "core/fs_access.rs"]
 mod fs_access;
 #[path = "core/fs_capabilities.rs"]
@@ -173,6 +165,8 @@ mod fs_copy;
 mod fs_error;
 #[path = "core/fs_paths.rs"]
 mod fs_paths;
+#[path = "core/fs_response.rs"]
+mod fs_response;
 #[path = "core/handshake_limits.rs"]
 mod handshake_limits;
 #[path = "core/identity.rs"]
@@ -243,6 +237,8 @@ mod peer_lease_release;
 mod peer_read;
 #[path = "core/peer_request.rs"]
 mod peer_request;
+#[path = "core/peer_storage_analysis.rs"]
+mod peer_storage_analysis;
 #[path = "core/peer_storage_snapshot.rs"]
 mod peer_storage_snapshot;
 #[path = "core/peer_telemetry.rs"]
@@ -262,6 +258,8 @@ mod platform_exec;
 mod platform_exec;
 #[path = "os/shared/poll_status.rs"]
 pub(crate) mod poll_status;
+#[path = "core/power.rs"]
+pub mod power;
 #[path = "os/shared/profile_edits.rs"]
 pub(crate) mod profile_edits;
 #[path = "os/shared/profile_operations.rs"]
@@ -281,10 +279,10 @@ pub(crate) mod removal;
 mod removed_direct_peers;
 #[path = "core/room_relation.rs"]
 mod room_relation;
-#[path = "core/server_capabilities.rs"]
-mod server_capabilities;
 #[path = "core/server.rs"]
 mod server;
+#[path = "core/server_capabilities.rs"]
+mod server_capabilities;
 #[path = "core/server_transfer.rs"]
 mod server_transfer;
 #[path = "core/service.rs"]
@@ -318,6 +316,10 @@ mod signal_presence;
 mod signal_subscriptions;
 #[path = "core/signal_worker.rs"]
 mod signal_worker;
+#[path = "os/shared/storage_analysis_host.rs"]
+mod storage_analysis_host;
+#[path = "core/storage_analysis_server.rs"]
+mod storage_analysis_server;
 #[path = "core/storage_snapshot.rs"]
 mod storage_snapshot;
 #[cfg(windows)]

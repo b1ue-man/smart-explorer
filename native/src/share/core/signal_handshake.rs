@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use super::core::eio;
 use super::discovery_signal_types::DISCOVERY_EXCHANGE_CAPABILITY;
 use super::signal_connection::SignalConnection;
-use super::wire::{SrvMsg, TRACKED_DIRECT_CAPABILITY};
+use super::wire::{SrvMsg, IDLE_KEEPALIVE_CAPABILITY, TRACKED_DIRECT_CAPABILITY};
 
 const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -12,6 +12,7 @@ const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 pub(super) struct SignalCapabilities {
     pub(super) tracked_direct: bool,
     pub(super) discovery_exchange: bool,
+    pub(super) idle_keepalive: bool,
 }
 
 pub(super) fn await_hello_ok(signal: &mut SignalConnection) -> io::Result<SignalCapabilities> {
@@ -43,6 +44,9 @@ pub(super) fn parse_hello_ok(line: &str) -> io::Result<SignalCapabilities> {
             discovery_exchange: capabilities
                 .iter()
                 .any(|capability| capability == DISCOVERY_EXCHANGE_CAPABILITY),
+            idle_keepalive: capabilities
+                .iter()
+                .any(|capability| capability == IDLE_KEEPALIVE_CAPABILITY),
         }),
         SrvMsg::Error { scope, msg } => Err(eio(format!("{scope}: {msg}"))),
         _ => Err(eio(
@@ -62,6 +66,7 @@ mod tests {
             SignalCapabilities {
                 tracked_direct: false,
                 discovery_exchange: false,
+                idle_keepalive: false,
             }
         );
     }
@@ -74,6 +79,7 @@ mod tests {
             SignalCapabilities {
                 tracked_direct: true,
                 discovery_exchange: false,
+                idle_keepalive: false,
             }
         );
     }
@@ -81,14 +87,29 @@ mod tests {
     #[test]
     fn discovery_capability_must_be_confirmed_by_server() {
         assert_eq!(
-            parse_hello_ok(
-                r#"{"t":"hello_ok","capabilities":["discovery_exchange_v1"]}"#
-            )
-            .unwrap(),
+            parse_hello_ok(r#"{"t":"hello_ok","capabilities":["discovery_exchange_v1"]}"#).unwrap(),
             SignalCapabilities {
                 tracked_direct: false,
                 discovery_exchange: true,
+                idle_keepalive: false,
             }
+        );
+    }
+
+    #[test]
+    fn android_background_task_idle_capability_must_be_confirmed_by_server() {
+        assert_eq!(
+            parse_hello_ok(r#"{"t":"hello_ok","capabilities":["idle_keepalive_v1"]}"#).unwrap(),
+            SignalCapabilities {
+                tracked_direct: false,
+                discovery_exchange: false,
+                idle_keepalive: true,
+            }
+        );
+        assert!(
+            !parse_hello_ok(r#"{"t":"hello_ok","capabilities":["idle_keepalive_v2"]}"#)
+                .unwrap()
+                .idle_keepalive
         );
     }
 

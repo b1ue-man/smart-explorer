@@ -1,17 +1,54 @@
 use std::io::{self, Read, Write};
 use std::time::{Duration, Instant};
 
+use iroh::endpoint::Connection;
+
 use crate::vfs::VfsResult;
 
 use super::backend::PeerBackend;
 use super::core::eio;
 use super::framing::{decode_resp, recv_resp_wire, send_ctrl, TAG_DATA};
 use super::io_deadline;
+use super::node::closed_idle;
 use super::node_sessions::OpenedPeerStream;
 use super::wire::{Ctrl, FsRequest, FsResponse};
 
 pub(super) const CONTROL_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(20);
 pub(super) const IDEMPOTENT_CONTROL_BUDGET: Duration = Duration::from_secs(40);
+
+/// The attempts of one request: the planned ones plus one more when the
+/// host closed the connection as idle. A host closes a connection as idle
+/// only from its accept loop and without an accepted stream, so such a
+/// request never started, even a mutation, and is sent again on a new
+/// connection.
+struct Attempts {
+    left: u32,
+    idle_retry: bool,
+}
+
+impl Attempts {
+    fn new(planned: u32) -> Self {
+        Self {
+            left: planned,
+            idle_retry: true,
+        }
+    }
+
+    fn next(&mut self) -> bool {
+        if self.left == 0 {
+            return false;
+        }
+        self.left -= 1;
+        true
+    }
+
+    fn failed_on(&mut self, connection: &Connection) {
+        if self.idle_retry && closed_idle(connection) {
+            self.idle_retry = false;
+            self.left += 1;
+        }
+    }
+}
 
 impl PeerBackend {
     pub(super) fn request(&self, req: FsRequest) -> io::Result<FsResponse> {
@@ -39,11 +76,11 @@ impl PeerBackend {
         deadline: Instant,
     ) -> io::Result<FsResponse> {
         let retryable = is_retryable_read(&req);
-        let max_attempts = if retryable { 2 } else { 1 };
+        let mut attempts = Attempts::new(if retryable { 2 } else { 1 });
         let operation = super::peer_fs_logging::request_label(&req);
         let started = Instant::now();
         let mut last_error = None;
-        for attempt in 0..max_attempts {
+        while attempts.next() {
             let endpoint = self.current_endpoint()?;
             let connect_deadline = control_attempt_deadline(deadline)?;
             let opened =
@@ -54,12 +91,10 @@ impl PeerBackend {
                     Ok(opened) => opened,
                     Err(error) => {
                         last_error = Some(error);
-                        if attempt + 1 < max_attempts {
-                            continue;
-                        }
-                        break;
+                        continue;
                     }
                 };
+            let connection = opened.connection.clone();
             let response_deadline = if retryable {
                 connect_deadline
             } else {
@@ -77,10 +112,8 @@ impl PeerBackend {
                     return Ok(response);
                 }
                 Err(error) => {
+                    attempts.failed_on(&connection);
                     last_error = Some(error);
-                    if attempt + 1 >= max_attempts {
-                        break;
-                    }
                 }
             }
         }
@@ -137,16 +170,34 @@ impl PeerBackend {
         let lease = self.mount_lease.current()?;
         let operation = super::peer_fs_logging::request_label(&req);
         let started = Instant::now();
-        let endpoint = self.current_endpoint()?;
-        let opened = self.node.open_stream_until(
-            &endpoint,
-            &self.identity,
-            Instant::now() + CONTROL_ATTEMPT_TIMEOUT,
-        )?;
-        let response =
-            decode_resp(self.request_once(opened, req, lease, Instant::now() + budget)?)?;
-        super::peer_telemetry::report_fs_success(&self.node.ev, operation, started, &response);
-        Ok(response)
+        let mut attempts = Attempts::new(1);
+        let mut last_error = None;
+        while attempts.next() {
+            let endpoint = self.current_endpoint()?;
+            let opened = self.node.open_stream_until(
+                &endpoint,
+                &self.identity,
+                Instant::now() + CONTROL_ATTEMPT_TIMEOUT,
+            )?;
+            let connection = opened.connection.clone();
+            match self.request_once(opened, req.clone(), lease.clone(), Instant::now() + budget) {
+                Ok(response) => {
+                    let response = decode_resp(response)?;
+                    super::peer_telemetry::report_fs_success(
+                        &self.node.ev,
+                        operation,
+                        started,
+                        &response,
+                    );
+                    return Ok(response);
+                }
+                Err(error) => {
+                    attempts.failed_on(&connection);
+                    last_error = Some(error);
+                }
+            }
+        }
+        Err(last_error.unwrap_or_else(|| eio("Peer-Anfrage ohne Ergebnis beendet")))
     }
 
     pub(super) fn open_reader(&self, path: &str) -> VfsResult<Box<dyn Read + Send>> {
@@ -167,7 +218,8 @@ impl PeerBackend {
         let deadline = Instant::now() + IDEMPOTENT_CONTROL_BUDGET;
         let lease = self.mount_lease.current()?;
         let mut last_error = None;
-        for attempt in 0..2 {
+        let mut attempts = Attempts::new(2);
+        while attempts.next() {
             let endpoint = self.current_endpoint()?;
             let attempt_deadline = control_attempt_deadline(deadline)?;
             let mut opened =
@@ -192,6 +244,7 @@ impl PeerBackend {
                     continue;
                 }
             };
+            let connection = opened.connection.clone();
             let result = self
                 .node
                 .block_on(io_deadline::run_for(operation, timeout, async {
@@ -231,10 +284,8 @@ impl PeerBackend {
                     let _ = self
                         .node
                         .invalidate_outgoing_session(&opened.session_key, opened.generation);
+                    attempts.failed_on(&connection);
                     last_error = Some(error);
-                    if attempt == 1 {
-                        break;
-                    }
                 }
             }
         }
@@ -247,64 +298,69 @@ impl PeerBackend {
         operation: &'static str,
     ) -> VfsResult<Box<dyn Write + Send>> {
         let lease = self.mount_lease.current()?;
-        let endpoint = self.current_endpoint()?;
-        let deadline = Instant::now() + io_deadline::PEER_OP_TIMEOUT;
-        let connect_deadline = control_attempt_deadline(deadline)?;
-        let mut opened =
-            self.node
-                .open_stream_until(&endpoint, &self.identity, connect_deadline)?;
-        let response_deadline = Instant::now() + io_deadline::PEER_OP_TIMEOUT;
-        let timeout = match io_deadline::remaining(response_deadline, operation) {
-            Ok(timeout) => timeout,
-            Err(error) => {
-                io_deadline::abort(&mut opened.send, &mut opened.recv);
-                let _ = self
-                    .node
-                    .invalidate_outgoing_session(&opened.session_key, opened.generation);
-                return Err(error);
-            }
-        };
-        let result = self
-            .node
-            .block_on(io_deadline::run_for(operation, timeout, async {
-                send_ctrl(
-                    &mut opened.send,
-                    &Ctrl::Fs {
-                        req: request,
-                        lease: lease.clone(),
-                    },
-                )
-                .await?;
-                recv_resp_wire(&mut opened.recv).await
-            }));
-        let response = match result {
-            Ok(response) => match decode_resp(response) {
-                Ok(response) => response,
-                Err(error) => return Err(error),
-            },
-            Err(error) => {
-                io_deadline::abort(&mut opened.send, &mut opened.recv);
-                let _ = self
-                    .node
-                    .invalidate_outgoing_session(&opened.session_key, opened.generation);
-                return Err(error);
-            }
-        };
-        if !matches!(response, FsResponse::Ready) {
-            io_deadline::abort(&mut opened.send, &mut opened.recv);
-            let _ = self
+        let mut attempts = Attempts::new(1);
+        let mut last_error = None;
+        while attempts.next() {
+            let endpoint = self.current_endpoint()?;
+            let deadline = Instant::now() + io_deadline::PEER_OP_TIMEOUT;
+            let connect_deadline = control_attempt_deadline(deadline)?;
+            let mut opened =
+                self.node
+                    .open_stream_until(&endpoint, &self.identity, connect_deadline)?;
+            let connection = opened.connection.clone();
+            let response_deadline = Instant::now() + io_deadline::PEER_OP_TIMEOUT;
+            let timeout = match io_deadline::remaining(response_deadline, operation) {
+                Ok(timeout) => timeout,
+                Err(error) => {
+                    io_deadline::abort(&mut opened.send, &mut opened.recv);
+                    let _ = self
+                        .node
+                        .invalidate_outgoing_session(&opened.session_key, opened.generation);
+                    return Err(error);
+                }
+            };
+            let result = self
                 .node
-                .invalidate_outgoing_session(&opened.session_key, opened.generation);
-            return Err(eio("unerwartete Antwort auf write"));
+                .block_on(io_deadline::run_for(operation, timeout, async {
+                    send_ctrl(
+                        &mut opened.send,
+                        &Ctrl::Fs {
+                            req: request.clone(),
+                            lease: lease.clone(),
+                        },
+                    )
+                    .await?;
+                    recv_resp_wire(&mut opened.recv).await
+                }));
+            let response = match result {
+                Ok(response) => decode_resp(response)?,
+                Err(error) => {
+                    io_deadline::abort(&mut opened.send, &mut opened.recv);
+                    let _ = self
+                        .node
+                        .invalidate_outgoing_session(&opened.session_key, opened.generation);
+                    attempts.failed_on(&connection);
+                    last_error = Some(error);
+                    continue;
+                }
+            };
+            if !matches!(response, FsResponse::Ready) {
+                io_deadline::abort(&mut opened.send, &mut opened.recv);
+                let _ = self
+                    .node
+                    .invalidate_outgoing_session(&opened.session_key, opened.generation);
+                return Err(eio("unerwartete Antwort auf write"));
+            }
+            return Ok(super::peer_writer::writer(
+                self.node.clone(),
+                opened.send,
+                opened.recv,
+                lease,
+                opened.session_key,
+                opened.generation,
+            ));
         }
-        Ok(super::peer_writer::writer(
-            self.node.clone(),
-            opened.send,
-            opened.recv,
-            lease,
-            opened.session_key,
-            opened.generation,
-        ))
+        Err(last_error.unwrap_or_else(|| eio("Peer-Schreibanforderung ohne Ergebnis beendet")))
     }
 }
 

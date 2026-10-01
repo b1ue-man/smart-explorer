@@ -16,6 +16,8 @@ pub(crate) use self::batch_wire::{
 };
 
 pub(crate) const TRACKED_DIRECT_CAPABILITY: &str = "tracked_direct_v1";
+/// Server keeps idle clients alive with its own keepalives (V1).
+pub(crate) const IDLE_KEEPALIVE_CAPABILITY: &str = "idle_keepalive_v1";
 pub(crate) const MOUNT_PATH_CAPABILITY_CONTRACT_VERSION: u8 = 1;
 
 fn is_false(value: &bool) -> bool {
@@ -67,6 +69,43 @@ pub(crate) enum ClientMsg {
         room_id: String,
     },
     Heartbeat,
+    /// Only after `idle_keepalive_v1` was negotiated. `keepalive_secs`
+    /// proposes a shorter server keepalive (proxies with short timeouts).
+    SetIdle {
+        idle: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        keepalive_secs: Option<u32>,
+    },
+    KeepaliveAck,
+}
+
+/// Idle-mode messages of a server that negotiated `idle_keepalive_v1`.
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(tag = "t", rename_all = "snake_case")]
+pub(crate) enum IdleServerMsg {
+    IdleAck {
+        idle: bool,
+        #[serde(default)]
+        keepalive_secs: Option<u32>,
+    },
+    Keepalive,
+}
+
+impl IdleServerMsg {
+    /// `Ok(None)` for every other server message.
+    pub(crate) fn parse(line: &str) -> Result<Option<Self>, String> {
+        let value: serde_json::Value =
+            serde_json::from_str(line).map_err(|error| error.to_string())?;
+        if !matches!(
+            value.get("t").and_then(serde_json::Value::as_str),
+            Some("idle_ack" | "keepalive")
+        ) {
+            return Ok(None);
+        }
+        serde_json::from_value(value)
+            .map(Some)
+            .map_err(|error| error.to_string())
+    }
 }
 
 #[derive(Deserialize, Clone, Debug)]

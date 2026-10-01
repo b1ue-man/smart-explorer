@@ -8,18 +8,13 @@ use super::discovery_signal_commands::{
 use super::discovery_signal_state::{
     DISCOVERY_LIST_REFRESH_INTERVAL, DISCOVERY_PUBLISH_ACK_TIMEOUT,
 };
-use super::discovery_signal_types::{
-    DiscoveryEvent, DiscoveryOfferStopReason,
-};
+use super::discovery_signal_types::{DiscoveryEvent, DiscoveryOfferStopReason};
 use super::discovery_signal_wire::DiscoveryClientMsg;
 use super::signal_connection::{send_line, SignalConnection};
 use super::types::ShareEvent;
 
 impl DiscoverySignalRuntime {
-    pub(super) fn maintain_offline(
-        &mut self,
-        events: &crossbeam_channel::Sender<ShareEvent>,
-    ) {
+    pub(super) fn maintain_offline(&mut self, events: &crossbeam_channel::Sender<ShareEvent>) {
         for offer in self.state.expire_offers(Instant::now()) {
             self.state.remember_closed_offer(offer.offer_id.clone());
             self.port.remove_offer(&offer.offer_id);
@@ -67,14 +62,26 @@ impl DiscoverySignalRuntime {
         signal: &mut SignalConnection,
         events: &crossbeam_channel::Sender<ShareEvent>,
     ) -> io::Result<()> {
+        self.maintain_with(signal, events, true)
+    }
+
+    /// Like `maintain`; without `list_refresh` (low power and no own
+    /// discovery activity) no new discovery list is requested, while an
+    /// outstanding one is still awaited.
+    pub(super) fn maintain_with(
+        &mut self,
+        signal: &mut SignalConnection,
+        events: &crossbeam_channel::Sender<ShareEvent>,
+        list_refresh: bool,
+    ) -> io::Result<()> {
         self.expire_exchanges(signal, events)?;
         self.expire_offers(signal, events)?;
         self.expire_publications(events);
         let now = Instant::now();
         if self.state.offers.values().any(|offer| {
-            offer
-                .last_publish_sent_at
-                .is_some_and(|sent| now.saturating_duration_since(sent) >= DISCOVERY_PUBLISH_ACK_TIMEOUT)
+            offer.last_publish_sent_at.is_some_and(|sent| {
+                now.saturating_duration_since(sent) >= DISCOVERY_PUBLISH_ACK_TIMEOUT
+            })
         }) {
             return Err(eio("Discovery-Publish-Bestaetigung blieb aus"));
         }
@@ -84,10 +91,67 @@ impl DiscoverySignalRuntime {
         if self.state.list_request_outstanding && now >= self.state.next_list_request_at {
             return Err(eio("Discovery-Listenbestaetigung blieb aus"));
         }
-        if !self.state.list_request_outstanding && now >= self.state.next_list_request_at {
+        if list_refresh
+            && !self.state.list_request_outstanding
+            && now >= self.state.next_list_request_at
+        {
             self.request_discovery_list(signal)?;
         }
         Ok(())
+    }
+
+    /// Own offers, exchanges or pairing starts that need the server.
+    pub(super) fn has_activity(&self) -> bool {
+        !self.state.offers.is_empty()
+            || !self.state.exchanges.is_empty()
+            || !self.state.pending_publisher_starts.is_empty()
+    }
+
+    /// Requests a fresh discovery list at the next maintenance.
+    pub(super) fn refresh_list_soon(&mut self) {
+        if !self.state.list_request_outstanding {
+            self.state.next_list_request_at = Instant::now();
+        }
+    }
+
+    /// Earliest time `maintain_with(list_refresh)` has work.
+    pub(super) fn next_due(&self, list_refresh: bool) -> Option<Instant> {
+        let state = &self.state;
+        let offers = state.offers.values().flat_map(|offer| {
+            [
+                Some(offer.deadline),
+                offer
+                    .last_publish_sent_at
+                    .is_none()
+                    .then_some(offer.next_publish_at),
+                offer
+                    .last_publish_sent_at
+                    .map(|sent| sent + DISCOVERY_PUBLISH_ACK_TIMEOUT),
+                offer.published_until,
+            ]
+        });
+        let exchanges = state
+            .exchanges
+            .values()
+            .map(|exchange| Some(exchange.deadline));
+        let starts = state
+            .pending_publisher_starts
+            .values()
+            .flatten()
+            .map(|start| Some(start.deadline));
+        let list =
+            (state.list_request_outstanding || list_refresh).then_some(state.next_list_request_at);
+        offers
+            .chain(exchanges)
+            .chain(starts)
+            .chain(std::iter::once(list))
+            .flatten()
+            .min()
+    }
+
+    /// Earliest offer expiry `maintain_offline` acts on.
+    pub(super) fn next_offline_due(&self) -> Option<Instant> {
+        self.state.offers.values().map(|offer| offer.deadline).min()
     }
 
     pub(super) fn disconnected(&mut self, events: &crossbeam_channel::Sender<ShareEvent>) {
@@ -147,7 +211,10 @@ impl DiscoverySignalRuntime {
             return Ok(true);
         };
         if let Err(error) = self.port.revalidate_offer(offer_id) {
-            if matches!(error, super::discovery_signal_port::DiscoveryPortError::TargetUnavailable(_)) {
+            if matches!(
+                error,
+                super::discovery_signal_port::DiscoveryPortError::TargetUnavailable(_)
+            ) {
                 self.stop_offer_connected(
                     signal,
                     offer_id,
@@ -322,5 +389,4 @@ impl DiscoverySignalRuntime {
             );
         }
     }
-
 }

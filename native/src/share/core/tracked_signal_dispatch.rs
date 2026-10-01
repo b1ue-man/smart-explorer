@@ -1,14 +1,15 @@
 use std::sync::{Arc, Mutex};
 
-use super::core::now_secs;
 use super::configuration_runtime::RuntimeConfiguration;
-use super::discovery_signal_commands::DiscoverySignalRuntime;
-use super::discovery_signal_dispatch::DiscoveryDispatchOutcome;
+use super::core::now_secs;
 use super::direct_ledger::{
     DirectEnvelopeKind, DirectRelayOutcome, DirectRequestDirection, DirectRequestEntry,
 };
 use super::direct_protocol::{DirectPeerIdentity, DirectRequestId, SignedDirectRequest};
 use super::direct_signal_event::DirectSignalEvent;
+use super::discovery_signal_commands::DiscoverySignalRuntime;
+use super::discovery_signal_dispatch::DiscoveryDispatchOutcome;
+use super::power::SIGNAL_ACTIVITY_HOLD_MS;
 use super::profiles::ShareProfiles;
 use super::signal_auth::handle_server_msg;
 use super::signal_connection::SignalConnection;
@@ -47,6 +48,7 @@ pub(super) enum SignalDispatchOutcome {
     Reconnect,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn dispatch_server_line(
     line: &str,
     tracked_direct: bool,
@@ -65,13 +67,32 @@ pub(super) fn dispatch_server_line(
         configuration,
         tracked_direct,
     ) {
-        DiscoveryDispatchOutcome::Handled => return SignalDispatchOutcome::Continue,
+        DiscoveryDispatchOutcome::Handled => {
+            // A pairing may continue in the background (low power only).
+            configuration
+                .iroh
+                .power()
+                .request_hold(SIGNAL_ACTIVITY_HOLD_MS);
+            return SignalDispatchOutcome::Continue;
+        }
         DiscoveryDispatchOutcome::Reconnect => return SignalDispatchOutcome::Reconnect,
         DiscoveryDispatchOutcome::NotDiscovery => {}
     }
     match parse_tracked_server_message(line) {
         Ok(Some(message)) if tracked_direct => {
+            let activity = matches!(
+                message,
+                TrackedDirectServerMsg::Request { .. } | TrackedDirectServerMsg::Decision { .. }
+            );
             handle_tracked_server_message(message, auth, events);
+            if activity {
+                // The host shows the request or decision without waiting
+                // for its next poll (A5).
+                configuration
+                    .iroh
+                    .power()
+                    .request_hold(SIGNAL_ACTIVITY_HOLD_MS);
+            }
             SignalDispatchOutcome::Continue
         }
         Ok(Some(_)) => {
@@ -84,6 +105,12 @@ pub(super) fn dispatch_server_line(
             if is_discovery_error(line) {
                 discovery.handle_server_discovery_error(events);
             }
+            if is_legacy_direct_activity(line) {
+                configuration
+                    .iroh
+                    .power()
+                    .request_hold(SIGNAL_ACTIVITY_HOLD_MS);
+            }
             if handle_server_msg(line, auth, events) {
                 SignalDispatchOutcome::Pong
             } else {
@@ -95,6 +122,17 @@ pub(super) fn dispatch_server_line(
             SignalDispatchOutcome::Continue
         }
     }
+}
+
+fn is_legacy_direct_activity(line: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(line)
+        .ok()
+        .is_some_and(|value| {
+            matches!(
+                value.get("t").and_then(serde_json::Value::as_str),
+                Some("direct_access_request" | "direct_access_accepted")
+            )
+        })
 }
 
 fn is_discovery_error(line: &str) -> bool {

@@ -18,9 +18,17 @@ use super::handshake_limits::PeerHandshakeLimiter;
 use super::identity::ShareIdentity;
 use super::io_deadline;
 use super::keepalive::iroh_transport_config;
+use super::power::PowerHub;
 use super::session::endpoint_addr;
 use super::types::{PeerEndpoint, ShareAuthState, ShareEvent};
 use super::wire::FsTransferCapabilities;
+
+#[path = "node_idle.rs"]
+mod idle;
+#[path = "node_wake.rs"]
+mod wake;
+
+pub(crate) use self::idle::{closed_idle, IncomingActivity, IDLE_CLOSE_CODE, IDLE_CLOSE_REASON};
 
 pub(super) const ALPN: &[u8] = b"smart-explorer/share-fs/3";
 const MAX_PENDING_APPLICATION_HANDSHAKES: usize = 64;
@@ -40,7 +48,7 @@ pub(crate) struct ShareIrohNode {
     pub(super) session_epoch: AtomicU64,
     pub(super) mount_leases: Arc<super::mount_lease::PeerMountLeases>,
     sharing_active: AtomicBool,
-    incoming_sessions: Mutex<HashMap<u64, Connection>>,
+    incoming_sessions: Mutex<HashMap<u64, idle::IncomingEntry>>,
     next_incoming_session: AtomicU64,
     connection_events: ConnectionEventReporter,
     exec_registry: Arc<ExecRegistry>,
@@ -49,6 +57,10 @@ pub(crate) struct ShareIrohNode {
     pub(super) runtime_transition_slot: Arc<Semaphore>,
     pub(super) peer_handshake_slots: PeerHandshakeLimiter,
     pub(super) routes: EndpointRoutes,
+    relay_configured: bool,
+    power: Arc<PowerHub>,
+    wake: wake::NodeWake,
+    idle: idle::NodeIdle,
     /// Tests pose this host as one before transfer v1.
     #[cfg(test)]
     legacy_transfer_host: AtomicBool,
@@ -83,6 +95,33 @@ impl ShareIrohNode {
         ev: crossbeam_channel::Sender<ShareEvent>,
         direct_repair_store: SharedDirectRepairStore,
     ) -> io::Result<Arc<Self>> {
+        let power = super::power::global().clone();
+        Self::start_with_power(server, identity, auth, ev, direct_repair_store, power)
+    }
+
+    /// A node whose idle decisions read `power` instead of the process hub.
+    #[cfg(test)]
+    pub(crate) fn start_with_power_for_test(
+        server: &str,
+        identity: &ShareIdentity,
+        auth: Arc<Mutex<ShareAuthState>>,
+        ev: crossbeam_channel::Sender<ShareEvent>,
+        power: Arc<PowerHub>,
+    ) -> io::Result<Arc<Self>> {
+        let store = super::direct_reciprocal_transport::shared_direct_repair_store(
+            super::direct_reciprocal_store::UnavailableDirectRepairStore,
+        );
+        Self::start_with_power(server, identity, auth, ev, store, power)
+    }
+
+    fn start_with_power(
+        server: &str,
+        identity: &ShareIdentity,
+        auth: Arc<Mutex<ShareAuthState>>,
+        ev: crossbeam_channel::Sender<ShareEvent>,
+        direct_repair_store: SharedDirectRepairStore,
+        power: Arc<PowerHub>,
+    ) -> io::Result<Arc<Self>> {
         let rt = Arc::new(
             tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
@@ -107,6 +146,8 @@ impl ShareIrohNode {
         }
         let endpoint = rt.block_on(async { builder.bind().await.map_err(eio) })?;
         let routes = EndpointRoutes::start(&rt, &endpoint, relay_configured);
+        let wake = wake::NodeWake::new();
+        wake.watch(&rt, &endpoint);
         let node = Arc::new(Self {
             rt,
             endpoint,
@@ -131,6 +172,10 @@ impl ShareIrohNode {
                 MAX_PENDING_APPLICATION_HANDSHAKES,
             ),
             routes,
+            relay_configured,
+            power,
+            wake,
+            idle: idle::NodeIdle::default(),
             #[cfg(test)]
             legacy_transfer_host: AtomicBool::new(false),
             #[cfg(test)]
@@ -176,8 +221,12 @@ impl ShareIrohNode {
             .map_err(|_| io::Error::new(io::ErrorKind::WouldBlock, "Direct repair is active"))
     }
 
+    /// Changes with every route or home-relay change the worker must
+    /// republish; the node's own watcher also wakes the worker for it.
     pub(super) fn route_revision(&self) -> u64 {
-        self.routes.revision()
+        self.routes
+            .revision()
+            .wrapping_add(self.wake.route_revision())
     }
 
     pub(super) fn block_on<F: std::future::Future>(&self, future: F) -> F::Output {
@@ -207,6 +256,25 @@ impl ShareIrohNode {
         self: &Arc<Self>,
         connection: &Connection,
     ) -> io::Result<IncomingConnectionGuard> {
+        self.track_incoming_entry(connection, None)
+    }
+
+    /// Tracks a filesystem connection whose streams and leases an idle
+    /// sweep may judge.
+    pub(super) fn track_incoming_fs(
+        self: &Arc<Self>,
+        connection: &Connection,
+    ) -> io::Result<(IncomingConnectionGuard, Arc<IncomingActivity>)> {
+        let activity = Arc::new(IncomingActivity::default());
+        let guard = self.track_incoming_entry(connection, Some(activity.clone()))?;
+        Ok((guard, activity))
+    }
+
+    fn track_incoming_entry(
+        self: &Arc<Self>,
+        connection: &Connection,
+        activity: Option<Arc<IncomingActivity>>,
+    ) -> io::Result<IncomingConnectionGuard> {
         let id = self
             .next_incoming_session
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
@@ -216,7 +284,13 @@ impl ShareIrohNode {
         self.incoming_sessions
             .lock()
             .map_err(|_| eio("Eingehende Share-Sessions sind gesperrt"))?
-            .insert(id, connection.clone());
+            .insert(
+                id,
+                idle::IncomingEntry {
+                    connection: connection.clone(),
+                    activity,
+                },
+            );
         Ok(IncomingConnectionGuard {
             node: Arc::downgrade(self),
             id,
@@ -241,7 +315,7 @@ impl ShareIrohNode {
                 .lock()
                 .map_err(|_| eio("Eingehende Share-Sessions sind gesperrt"))?
                 .drain()
-                .map(|(_, connection)| connection),
+                .map(|(_, entry)| entry.connection),
         );
         let count = connections.len();
         for connection in connections {
