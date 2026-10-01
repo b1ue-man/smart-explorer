@@ -6501,6 +6501,7 @@ dependencies = [
  "rayon",
  "regex",
  "rfd",
+ "ring",
  "roxmltree",
  "rusqlite",
  "russh",
