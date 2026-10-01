@@ -281,17 +281,34 @@ gestartet, nie wegen Sichtbarkeit gestoppt. „Aus“ wirkt über das Sync-Flag 
 Siehe §5.
 
 ### 4.9 Analyse (`analyze.*`, `reclaim.*`)
-- `analyze.start {location, platform:{volumeUsedBytes:Long?, otherAppsBytes:Long?}?}` → `{taskId}`
+- `analyze.start {location, platform:{volumeUsedBytes:Long?, otherAppsBytes:Long?, apps:[{package, label,
+  appBytes:Long, dataBytes:Long, cacheBytes:Long}]?}?}` → `{taskId}`
   (Fortschritt: `doneItems` Dateien, `doneBytes`, `message` = „N Ordner · aktueller Ordner“; `platform` nur
   für lokale Pfade: belegter Platz des Volumes der Wurzel per `StatFs`, `otherAppsBytes` =
-  `ExternalStorageStats.getAppBytes()` des primären Volumes mit Nutzungszugriff; fehlend/negativ = unbekannt);
-  `result = {files, dirs, bytes, issues, protected}`. `<Volume>/Android/data|obb` und alles darunter sind
-  geschützt: keine Issues, Status vollständig, eine geschützte Wurzel ergibt ein leeres, vollständiges Ergebnis
+  `ExternalStorageStats.getAppBytes()` des primären Volumes mit Nutzungszugriff; fehlend/negativ = unbekannt;
+  `apps` nur für die ganze Wurzel des primären Volumes mit Nutzungszugriff: je Paket
+  `StorageStatsManager.queryStatsForPackage` – `appBytes` = APK/Code inkl. eigenem `Android/obb`, `dataBytes`
+  = Daten inkl. eigenem `Android/data`, `cacheBytes` = Cache-Anteil der Daten; Einträge ohne `package` werden
+  übergangen, fehlende/negative Zahlen = 0, `cacheBytes` höchstens `dataBytes`, leeres `label` = Paketname,
+  doppelte Pakete zählen einmal, Apps ohne Bytes erscheinen nicht; der Kern prüft „ganzes primäres
+  Volume“ selbst und ignoriert `apps` sonst); `result = {files, dirs, bytes, issues, protected}`.
+  `<Volume>/Android/data|obb` und alles darunter sind geschützt: keine Issues, Status vollständig, eine
+  geschützte Wurzel ergibt ein leeres, vollständiges Ergebnis
 - `analyze.node {taskId, path:[String]}` → `{name, size, measured, isDir, kind, children:[{name, size, isDir,
   childCount:Int, kind}], location:String?}` (Kinder nach Größe absteigend, höchstens 500; `kind` =
-  `dir|file|aggregate|protected|rest`; Schätzzeilen nur in dieser Sicht: „Weitere App-Daten (laut Android, ≈)“
-  `protected` unter `Android/data`, „≈ Nicht einzeln erfasst“ `rest` an einer ganzen Volume-Wurzel ohne
-  andere Fehler; `size` der Vorfahren enthält sie, `measured` ist der gemessene Wert)
+  `dir|file|aggregate|protected|rest|apps|app`; Schätzzeilen nur in dieser Sicht: „Weitere App-Daten (laut
+  Android, ≈)“ `protected` unter `Android/data` (nur ohne App-Liste), „≈ Nicht einzeln erfasst“ `rest` an einer
+  ganzen Volume-Wurzel ohne andere Fehler; `size` der Vorfahren enthält sie, `measured` ist der gemessene Wert).
+  Mit App-Liste an der Wurzel: „≈ Apps (laut Android)“ `kind:"apps"`, `isDir:true`, `childCount` = Zahl der
+  Apps, `size` = Σ(`appBytes` + `dataBytes`); der Rest heißt dann „≈ System und Sonstiges“ =
+  max(0, belegt − (gemessen − doppelt) − Σ Apps), wobei „doppelt“ = gemessene Bytes unter `Android/data` und
+  `Android/obb` der Wurzel (höchstens Σ Apps), die auch in den App-Zahlen stecken; die Wurzel-`size` zählt sie
+  einmal (= belegt, solange ein Rest bleibt), die Zeilen „Android“ und „≈ Apps“ enthalten sie beide.
+  `path:["≈ Apps (laut Android)"]` (der Name dieser Zeile) → die App-Liste `{name, size, measured:0,
+  isDir:true, kind:"apps", children, location:null}`; Kinder `kind:"app"`, `name` = App-Name, `isDir:false`,
+  `size` = `appBytes` + `dataBytes`, dazu `package`, `appBytes`, `dataBytes`, `cacheBytes` (über 500 Apps:
+  die kleinsten in einer `aggregate`-Zeile); tiefere Pfade → `not_found`. Ein echter Ordner gleichen Namens an
+  der Wurzel wird dann von der App-Liste verdeckt
 - `analyze.issues {taskId}` → `{count:Int, text, protectedCount:Long, protectedText}` (`count` ohne geschützte;
   `protectedText` kann auch bei 0 gefüllt sein, wenn Android fremde App-Ordner nur ausblendet)
 - `reclaim.start {location, minSize:Long}` → `{taskId}` (lokal: jede Datei ≥ `minSize` ist Kandidat, Vergleich

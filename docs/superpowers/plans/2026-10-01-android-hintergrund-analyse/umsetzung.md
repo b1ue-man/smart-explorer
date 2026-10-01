@@ -172,4 +172,15 @@ Integration, `api.md`, Doku, Graph und die Suite macht der Hauptagent.
 | K | umgesetzt (`KeepAlive*`, `WakeKeeper`, Worker-Klammer für „Beim Start“-Jobs) |
 | U | umgesetzt (`StorageStatsAccess`, `AnalysisParts`) |
 | Integration | `reclaim.summary` geroutet, api.md §3/§4.1/§4.9/§5, README, TODO (AND5/AND6/DUP1), ARCHITEKTUR |
+| B6 | umgesetzt (`storage_view` Apps-Zeilen, `analyze_platform.rs`, `AppDetailDialog.kt`; App-Liste wird vor dem Scan ermittelt, nicht parallel) |
 | Suite | `native/test-android-background-task.sh`, `.github/workflows/android-background-task.yml`, Gerätestufen `reach_check`/`reach_boot_check` + `BackgroundReachTaskTest`, `AnalysisProtectedTaskTest`; Remote-Lauf offen |
+
+## Nachtrag B6 – Apps in der Analyse
+
+Vertrag: `analyze.start.platform.apps = [{package, label, appBytes, dataBytes, cacheBytes}]` (nur
+Volume-Wurzel des primären Volumes mit Nutzungszugriff). `analyze.node` an dieser Wurzel: Kind
+„≈ Apps (laut Android)“ `kind:"apps"`, Größe Σ(appBytes + dataBytes); Pfad hinein → Kinder `kind:"app"`
+mit `name` = Label, `package`, `size` = appBytes + dataBytes, `appBytes`, `dataBytes`, `cacheBytes`.
+Mit App-Liste kein „Weitere App-Daten“-Eintrag; Rest „≈ System und Sonstiges“ = max(0, belegt − gemessen −
+Σ Apps). Manifest `QUERY_ALL_PACKAGES`. Abnahme (M14): Gerät mit `appops … GET_USAGE_STATS allow` →
+Wurzel hat `kind:"apps"`, darin die eigene App mit Größe > 0.

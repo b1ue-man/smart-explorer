@@ -11,13 +11,11 @@ import app.smartexplorer.android.api.AnalyzeChild
 import app.smartexplorer.android.api.AnalyzeIssues
 import app.smartexplorer.android.api.AnalyzeKind
 import app.smartexplorer.android.api.AnalyzeNode
-import app.smartexplorer.android.api.AnalyzePlatform
 import app.smartexplorer.android.api.FilesApi
 import app.smartexplorer.android.core.CoreException
 import app.smartexplorer.android.system.StorageStatsAccess
 import app.smartexplorer.android.ui.common.Snackbars
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -31,8 +29,8 @@ import kotlinx.coroutines.withTimeoutOrNull
 internal enum class ScanPhase { Setup, Scanning, Result }
 
 /**
- * Storage analysis (spec F19, B2/B3). Lives as long as the activity, so a running analysis and its
- * drill-down survive tab switches; the scan itself is a core task.
+ * Storage analysis (spec F19, B2/B3/B6). Lives as long as the activity, so a running analysis and
+ * its drill-down survive tab switches; the scan itself is a core task.
  */
 internal class AnalysisViewModel : ViewModel() {
     var location by mutableStateOf<String?>(null)
@@ -61,8 +59,16 @@ internal class AnalysisViewModel : ViewModel() {
     var appDataInTree by mutableStateOf(false)
         private set
 
-    /** The result was made with the other apps' `Android/data` size (usage access was granted). */
+    /** The result was made with Android's sizes of other apps (usage access was granted). */
     var appDataIncluded by mutableStateOf(false)
+        private set
+
+    /** Android's figures being gathered before the core task starts (shown instead of "Wird gestartet"). */
+    var preparing by mutableStateOf<String?>(null)
+        private set
+
+    /** App of the app list whose breakdown is shown ([open] on an app row). */
+    var appDetail by mutableStateOf<AnalyzeChild?>(null)
         private set
 
     /** The usage access card was hidden for this session. */
@@ -107,14 +113,16 @@ internal class AnalysisViewModel : ViewModel() {
         protectedFrom = null
         appDataInTree = false
         appDataIncluded = false
+        appDetail = null
+        preparing = null
         taskId = null
         scanJob = viewModelScope.launch {
             try {
                 val figures = platformFigures(target)
+                preparing = null
                 appDataInTree = figures?.appDataInTree == true
-                appDataIncluded = figures?.otherAppsBytes != null
-                val platform = figures?.let { AnalyzePlatform(it.volumeUsedBytes, it.otherAppsBytes) }
-                val id = startTask { AnalyzeApi.start(target, platform) }
+                appDataIncluded = figures?.includesApps == true
+                val id = startTask { AnalyzeApi.start(target, figures?.platform) }
                 taskId = id
                 val task = FilesApi.awaitTask(id)
                 when (task.state) {
@@ -153,12 +161,20 @@ internal class AnalysisViewModel : ViewModel() {
         }
         if (phase != ScanPhase.Scanning) return
         scanJob?.cancel()
+        preparing = null
         phase = ScanPhase.Setup
         Snackbars.show("Analyse abgebrochen")
     }
 
-    /** Drill down into folder [child]; estimates and aggregated rows have no folder. */
+    /**
+     * Drill down into folder [child] (or the app list); an app row shows its breakdown; estimates and
+     * aggregated rows have nothing behind them.
+     */
     fun open(child: AnalyzeChild) {
+        if (child.rowKind == AnalyzeKind.App) {
+            appDetail = child
+            return
+        }
         if (!child.opensFolder) return
         val target = path + child.name
         val lockedFrom = protectedFrom ?: target.size.takeIf { child.rowKind == AnalyzeKind.Protected }
@@ -183,6 +199,8 @@ internal class AnalysisViewModel : ViewModel() {
         issues = null
         path = emptyList()
         protectedFrom = null
+        appDetail = null
+        preparing = null
         error = null
     }
 
@@ -190,17 +208,23 @@ internal class AnalysisViewModel : ViewModel() {
         usageHintDismissed = true
     }
 
+    fun closeAppDetail() {
+        appDetail = null
+    }
+
     /**
-     * Platform figures for a local root (B2). Waits briefly for [attach]: a request from another
-     * screen starts before this page is composed (one frame later); without a context the analysis
-     * runs without figures rather than waiting longer.
+     * Platform figures for a local root (B2, B6: with usage access also the installed apps of the
+     * whole internal storage). Waits briefly for [attach]: a request from another screen starts
+     * before this page is composed (one frame later); without a context the analysis runs without
+     * figures rather than waiting longer.
      */
     private suspend fun platformFigures(target: String): StorageStatsAccess.Figures? {
         if (!StorageStatsAccess.isLocalPath(target)) return null
         val context = appContext.value
             ?: withTimeoutOrNull(CONTEXT_WAIT_MS) { appContext.filterNotNull().first() }
             ?: return null
-        return withContext(Dispatchers.IO) { StorageStatsAccess.figuresFor(context, target) }
+        preparing = "Speicherwerte von Android werden ermittelt …"
+        return StorageStatsAccess.figuresFor(context, target)
     }
 
     /**
@@ -227,6 +251,7 @@ internal class AnalysisViewModel : ViewModel() {
                 node = AnalyzeApi.node(id, target)
                 path = target
                 this@AnalysisViewModel.protectedFrom = protectedFrom
+                appDetail = null
                 error = null
             } catch (e: CoreException) {
                 Snackbars.show("Ordner nicht geladen: ${e.message ?: e.kind}")

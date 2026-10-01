@@ -3,7 +3,8 @@
 //! progress with phase and current folder, and the finished result kept per
 //! task for drill-down. Other apps' private folders (`Android/data`,
 //! `Android/obb`) are protected omissions, not read errors; Android's own
-//! totals fill in what no app may walk as approximate rows of the view.
+//! figures (volume, other apps' data, the installed apps) fill in what no app
+//! may walk as approximate rows of the view.
 use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -16,9 +17,12 @@ use super::args::{canceled, i64_arg, invalid, reject_app_internal, str_arg, stri
 use super::locations::{is_local, join_segments, location_for};
 use crate::analytics::{
     protected_count, protected_text, Approximations, DuplicateGroup, DuplicateReport,
-    DuplicateSummary, PlatformTotals, ScanOutcome, ScanStatus, VolumeRoot,
+    DuplicateSummary, NodeKind, PlatformTotals, ScanOutcome, ScanStatus, VolumeRoot,
 };
 use crate::mobile::{ApiError, Runtime, TaskCtx};
+
+#[path = "analyze_platform.rs"]
+mod platform;
 
 /// Results kept for drill-down (oldest finished one dropped first).
 const MAX_RESULTS: usize = 4;
@@ -156,20 +160,16 @@ fn resolve_remote(location: &str) -> Result<(crate::vfs::BackendHandle, String),
     Ok((crate::vfs::sync_backend(backend), root))
 }
 
-/// `analyze.start {location, platform?:{volumeUsedBytes?, otherAppsBytes?}}`:
-/// Android's totals for the volume of a local root (missing, `null` or
-/// negative values are unknown).
+/// `analyze.start {location, platform?:{volumeUsedBytes?, otherAppsBytes?,
+/// apps?}}`: Android's figures for the volume of a local root
+/// (`analyze_platform.rs`); a remote root has none.
 pub(super) fn start_analysis(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
     let location = checked_location(args)?;
-    let place = if is_local(&location) {
-        volume_root(rt, &location)
+    let (place, totals) = if is_local(&location) {
+        let place = platform::volume_root(rt, &location);
+        (place, platform::platform_totals(args))
     } else {
-        VolumeRoot::default()
-    };
-    let total = |key: &str| args.get("platform")?.get(key)?.as_u64();
-    let totals = PlatformTotals {
-        volume_used_bytes: total("volumeUsedBytes"),
-        other_apps_bytes: total("otherAppsBytes"),
+        (VolumeRoot::default(), PlatformTotals::default())
     };
     let token = open_slot();
     let title = format!("Speicheranalyse: {location}");
@@ -178,19 +178,6 @@ pub(super) fn start_analysis(rt: &Runtime, args: &Value) -> Result<Value, ApiErr
     });
     bind_task(token, &task);
     Ok(json!({ "taskId": task }))
-}
-
-/// Where a local root lies on its volume; Android reports other apps' data
-/// only for the primary one.
-fn volume_root(rt: &Runtime, location: &str) -> VolumeRoot {
-    let Some(place) = crate::apptrash::volume_place(Path::new(location)) else {
-        return VolumeRoot::default();
-    };
-    let primary = rt
-        .volumes()
-        .iter()
-        .any(|volume| volume.primary && Path::new(&volume.path) == place.volume.as_path());
-    VolumeRoot::from_segments(&place.below, primary)
 }
 
 fn analysis_task(
@@ -290,7 +277,9 @@ fn show(ctx: &TaskCtx, shown: &mut String, line: String) {
 /// `analyze.node {taskId, path}` → `{name, size, measured, isDir, kind,
 /// children:[{name, size, isDir, childCount, kind}], location}`; `size`
 /// includes the approximate rows below, `kind` is `dir|file|aggregate`, or
-/// `protected|rest` for the approximate rows.
+/// `protected|rest|apps` for the approximate rows. The apps row's name leads
+/// to the app list (`location` null), whose rows (`kind: "app"`) add
+/// `package, appBytes, dataBytes, cacheBytes`.
 pub(super) fn node(args: &Value) -> Result<Value, ApiError> {
     let task = str_arg(args, "taskId")?;
     let segments = string_list(args, "path")?;
@@ -310,8 +299,14 @@ pub(super) fn node(args: &Value) -> Result<Value, ApiError> {
             .ok_or_else(|| ApiError::new("not_found", "Kein Analyseergebnis."))?;
         let view = crate::analytics::node_view(tree, &segments, approx, MAX_NODE_CHILDREN)
             .ok_or_else(|| ApiError::new("not_found", "Eintrag nicht gefunden."))?;
+        // The app list is Android's figures, no place in "Dateien".
+        let listed = view.kind == NodeKind::Apps;
         let mut value = to_json(view)?;
-        value["location"] = json!(location_for(base, &join_segments(root, &segments)));
+        value["location"] = if listed {
+            Value::Null
+        } else {
+            json!(location_for(base, &join_segments(root, &segments)))
+        };
         Ok(value)
     })
 }

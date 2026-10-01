@@ -71,10 +71,10 @@ internal fun rememberUsageAccess(): Boolean {
 }
 
 /**
- * Card "App-Ordner-Größen anzeigen" (spec B3) for a result that contains `Android/data` of the
- * internal storage: without usage access it leads to the setting (Android 15+: first "Eingeschränkte
+ * Card "App-Größen anzeigen" (spec B3/B6) for a result that contains `Android/data` of the internal
+ * storage: without usage access it leads to the setting (Android 15+: first "Eingeschränkte
  * Einstellungen zulassen" in App-Info); once granted for a result made without it, it offers
- * [Neu analysieren]. Renders nothing when the result already includes the figure.
+ * [Neu analysieren]. Renders nothing when the result already includes Android's figures.
  */
 @Composable
 internal fun UsageAccessCard(appDataIncluded: Boolean, onReanalyze: () -> Unit, onDismiss: () -> Unit, modifier: Modifier = Modifier) {
@@ -94,14 +94,15 @@ internal fun UsageAccessCard(appDataIncluded: Boolean, onReanalyze: () -> Unit, 
                 if (granted) {
                     Text("Zugriff auf Nutzungsdaten erteilt", style = MaterialTheme.typography.titleSmall)
                     Text(
-                        "Neu analysieren, um die Größe der App-Ordner anderer Apps zu sehen.",
+                        "Neu analysieren, um den Platz der Apps und ihrer Ordner laut Android zu sehen.",
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 } else {
-                    Text("App-Ordner-Größen anzeigen", style = MaterialTheme.typography.titleSmall)
+                    Text("App-Größen anzeigen", style = MaterialTheme.typography.titleSmall)
                     Text(
                         "Android sperrt die Ordner anderer Apps unter Android/data. Mit „Zugriff auf Nutzungsdaten“ " +
-                            "zeigt die Analyse ihre Gesamtgröße laut Android (nur interner Speicher).",
+                            "zeigt die Analyse laut Android, wie viel Platz jede App mit ihren Daten belegt " +
+                            "(nur interner Speicher).",
                         style = MaterialTheme.typography.bodyMedium,
                     )
                     if (StorageStatsAccess.restrictedSettingsPossible) {
@@ -139,12 +140,13 @@ internal fun UsageAccessCard(appDataIncluded: Boolean, onReanalyze: () -> Unit, 
 
 /**
  * One row of the folder list: size, share of [total] and a bar; real folders (also protected
- * ones) open on tap, estimates ("laut Android") and aggregated rows do not.
+ * ones) and the app list open on tap, an app shows its breakdown; estimates ("laut Android") and
+ * aggregated rows do nothing.
  */
 @Composable
 internal fun ChildRow(child: AnalyzeChild, total: Long, onOpen: () -> Unit) {
     val share = shareOf(child.size, total)
-    val opens = child.opensFolder
+    val opens = child.tappable
     ListItem(
         headlineContent = { Text(child.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         supportingContent = {
@@ -165,7 +167,7 @@ internal fun ChildRow(child: AnalyzeChild, total: Long, onOpen: () -> Unit) {
 
 private fun childDetails(child: AnalyzeChild, share: Float): String = buildString {
     val kind = child.rowKind
-    if (kind == AnalyzeKind.Rest) append("≈ ")
+    if (kind == AnalyzeKind.Rest || kind == AnalyzeKind.Apps || kind == AnalyzeKind.App) append("≈ ")
     append(Format.size(child.size)).append(" · ").append((share * 100).toInt()).append(" %")
     when (kind) {
         AnalyzeKind.Dir -> append(" · ").append(child.childCount).append(" Einträge")
@@ -174,6 +176,8 @@ private fun childDetails(child: AnalyzeChild, share: Float): String = buildStrin
             append(" · von Android geschützt")
         }
         AnalyzeKind.Rest -> append(" · Schätzung laut Android")
+        AnalyzeKind.Apps -> append(" · ").append(child.childCount).append(" Apps laut Android")
+        AnalyzeKind.App -> append(" · App ").append(Format.size(child.appBytes)).append(" · Daten ").append(Format.size(child.dataBytes))
         AnalyzeKind.File, AnalyzeKind.Aggregate -> Unit
     }
 }
@@ -183,6 +187,7 @@ private fun childIcon(child: AnalyzeChild): Int = when (child.rowKind) {
     AnalyzeKind.Dir -> R.drawable.ic_folder
     AnalyzeKind.Protected -> R.drawable.ic_lock
     AnalyzeKind.Rest -> R.drawable.ic_info
+    AnalyzeKind.Apps, AnalyzeKind.App -> R.drawable.ic_apk
     AnalyzeKind.Aggregate -> if (child.isDir) R.drawable.ic_folder else R.drawable.ic_file
     AnalyzeKind.File -> kindIcon(entryKind(tileKind(child)))
 }
@@ -195,5 +200,6 @@ private fun entryKind(kind: TileKind): String = when (kind) {
     TileKind.Audio -> "audio"
     TileKind.Archive -> "archive"
     TileKind.Document -> "document"
+    TileKind.Apps -> "apk"
     TileKind.Other, TileKind.Protected, TileKind.Estimated -> "other"
 }

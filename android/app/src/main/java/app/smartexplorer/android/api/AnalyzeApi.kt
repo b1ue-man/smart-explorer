@@ -2,9 +2,12 @@ package app.smartexplorer.android.api
 
 import app.smartexplorer.android.core.Core
 import app.smartexplorer.android.core.CoreException
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
@@ -23,6 +26,12 @@ enum class AnalyzeKind {
 
     /** Several entries the core shows as one row. */
     Aggregate,
+
+    /** "≈ Apps (laut Android)": all installed apps; opens the app list. */
+    Apps,
+
+    /** One installed app with Android's figures ([AnalyzeChild.packageName], bytes); opens its breakdown. */
+    App,
 }
 
 @Serializable
@@ -31,8 +40,16 @@ data class AnalyzeChild(
     val size: Long = 0,
     val isDir: Boolean = false,
     val childCount: Int = 0,
-    /** `dir|file|protected|rest|aggregate`; empty or unknown = derived from [isDir]. */
+    /** `dir|file|protected|rest|aggregate|apps|app`; empty or unknown = derived from [isDir]. */
     val kind: String = "",
+    /** Package of an app row (`kind: "app"`); its size is [appBytes] + [dataBytes]. */
+    @SerialName("package") val packageName: String? = null,
+    /** APK, code and the app's `Android/obb` (app rows). */
+    val appBytes: Long = 0,
+    /** Private data incl. the app's `Android/data` (app rows). */
+    val dataBytes: Long = 0,
+    /** Cache part of [dataBytes] (app rows). */
+    val cacheBytes: Long = 0,
 ) {
     val rowKind: AnalyzeKind
         get() = when (kind) {
@@ -41,24 +58,47 @@ data class AnalyzeChild(
             "protected" -> AnalyzeKind.Protected
             "rest" -> AnalyzeKind.Rest
             "aggregate" -> AnalyzeKind.Aggregate
+            "apps" -> AnalyzeKind.Apps
+            "app" -> AnalyzeKind.App
             else -> if (isDir) AnalyzeKind.Dir else AnalyzeKind.File
         }
 
-    /** A real folder of the result that `analyze.node` can open (estimates and aggregates cannot). */
+    /**
+     * A node `analyze.node` can open: a real folder of the result or the app list (estimates,
+     * aggregates and single apps cannot).
+     */
     val opensFolder: Boolean
-        get() = isDir && (rowKind == AnalyzeKind.Dir || rowKind == AnalyzeKind.Protected)
+        get() = isDir && (rowKind == AnalyzeKind.Dir || rowKind == AnalyzeKind.Protected || rowKind == AnalyzeKind.Apps)
+
+    /** The row reacts to a tap: it opens a folder/the app list, or an app's breakdown. */
+    val tappable: Boolean
+        get() = opensFolder || rowKind == AnalyzeKind.App
+
+    /** A row from Android's figures that is no entry of the folder (rest, other apps' data, the apps row). */
+    val isEstimate: Boolean
+        get() = rowKind == AnalyzeKind.Rest || rowKind == AnalyzeKind.Apps || (rowKind == AnalyzeKind.Protected && !isDir)
 }
 
-/** One analysed folder; [children] by size descending, at most 500 (plus display-only rows). */
+/**
+ * One analysed folder or the app list; [children] by size descending, at most 500 (plus
+ * display-only rows). [size] includes the estimates below (bytes in both a measured app folder and
+ * the apps row counted once), [measured] is what the walk found.
+ */
 @Serializable
 data class AnalyzeNode(
     val name: String = "",
     val size: Long = 0,
+    val measured: Long = 0,
     val isDir: Boolean = true,
+    /** `dir|file|apps`; `apps` = the list behind "≈ Apps (laut Android)". */
+    val kind: String = "",
     val children: List<AnalyzeChild> = emptyList(),
-    /** Place to open in "Dateien", `null` when the core has none. */
+    /** Place to open in "Dateien", `null` when the core has none (also for the app list). */
     val location: String? = null,
-)
+) {
+    val isAppList: Boolean
+        get() = kind == "apps"
+}
 
 /**
  * Read problems of an analysis; [count] excludes the areas Android locks for every app, which are
@@ -75,9 +115,19 @@ data class AnalyzeIssues(
 /**
  * Platform figures of the volume that holds the analysed root (`analyze.start.platform`):
  * [volumeUsedBytes] from `StatFs`, [otherAppsBytes] = `ExternalStorageStats.getAppBytes()` of the
+ * primary volume (only with usage access) and [apps], every installed app with bytes on the whole
  * primary volume (only with usage access). `null` = unknown.
  */
-data class AnalyzePlatform(val volumeUsedBytes: Long?, val otherAppsBytes: Long?)
+data class AnalyzePlatform(val volumeUsedBytes: Long?, val otherAppsBytes: Long?, val apps: List<AnalyzeApp>? = null)
+
+/** One installed app's storage (`StorageStatsManager.queryStatsForPackage`, `analyze.start.platform.apps`). */
+data class AnalyzeApp(
+    val packageName: String,
+    val label: String,
+    val appBytes: Long,
+    val dataBytes: Long,
+    val cacheBytes: Long,
+)
 
 @Serializable
 data class DuplicateItem(val location: String, val mtimeMs: Long = 0)
@@ -113,17 +163,33 @@ object AnalyzeApi {
         "analyze.start",
         buildJsonObject {
             put("location", location)
-            if (platform != null) {
-                put(
-                    "platform",
-                    buildJsonObject {
-                        platform.volumeUsedBytes?.let { put("volumeUsedBytes", it) }
-                        platform.otherAppsBytes?.let { put("otherAppsBytes", it) }
-                    },
-                )
-            }
+            if (platform != null) put("platform", platformJson(platform))
         },
     ).taskId
+
+    /** `analyze.start.platform` (api.md §4.9); unknown figures are left out. */
+    fun platformJson(platform: AnalyzePlatform): JsonObject = buildJsonObject {
+        platform.volumeUsedBytes?.let { put("volumeUsedBytes", it) }
+        platform.otherAppsBytes?.let { put("otherAppsBytes", it) }
+        platform.apps?.let { apps ->
+            put(
+                "apps",
+                buildJsonArray {
+                    apps.forEach { app ->
+                        add(
+                            buildJsonObject {
+                                put("package", app.packageName)
+                                put("label", app.label)
+                                put("appBytes", app.appBytes)
+                                put("dataBytes", app.dataBytes)
+                                put("cacheBytes", app.cacheBytes)
+                            },
+                        )
+                    }
+                },
+            )
+        }
+    }
 
     /** Folder at [path] (names below the analysed root; empty = the root). */
     suspend fun node(taskId: String, path: List<String>): AnalyzeNode = Core.request<AnalyzeNode>(

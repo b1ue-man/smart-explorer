@@ -51,6 +51,9 @@ internal enum class TileKind(val label: String, val color: Color) {
     Document("Dokumente", Color(0xFF4DB6AC)),
     Other("Sonstige", Color(0xFF90A4AE)),
 
+    /** Installed apps as Android reports them ("≈ Apps (laut Android)" and its rows). */
+    Apps("Apps", Color(0xFFDCE775)),
+
     /** Folders Android locks for every app (`Android/data|obb`). */
     Protected("Geschützt", Color(0xFFA1887F)),
 
@@ -71,6 +74,7 @@ private val EXTENSIONS: Map<String, TileKind> = buildMap {
 internal fun tileKind(child: AnalyzeChild): TileKind = when (child.rowKind) {
     AnalyzeKind.Protected -> TileKind.Protected
     AnalyzeKind.Rest -> TileKind.Estimated
+    AnalyzeKind.Apps, AnalyzeKind.App -> TileKind.Apps
     AnalyzeKind.Dir -> TileKind.Folder
     AnalyzeKind.Aggregate -> if (child.isDir) TileKind.Folder else TileKind.Other
     AnalyzeKind.File -> EXTENSIONS[child.name.substringAfterLast('.', "").lowercase()] ?: TileKind.Other
@@ -80,8 +84,9 @@ internal fun tileKind(child: AnalyzeChild): TileKind = when (child.rowKind) {
 private class Tile(val child: AnalyzeChild?, val label: String, val size: Long, val color: Color)
 
 /**
- * Treemap of [children] (squarified, drawn on a Canvas). Tapping a folder tile calls [onOpen]
- * (estimates and aggregated rows have no folder). Labels are drawn only where they fit.
+ * Treemap of [children] (squarified, drawn on a Canvas). Tapping a folder, the app list or an app
+ * calls [onOpen] (estimates and aggregated rows have nothing behind them). Labels are drawn only
+ * where they fit.
  */
 @Composable
 internal fun TreemapView(children: List<AnalyzeChild>, onOpen: (AnalyzeChild) -> Unit, modifier: Modifier = Modifier) {
@@ -99,7 +104,7 @@ internal fun TreemapView(children: List<AnalyzeChild>, onOpen: (AnalyzeChild) ->
                     // Same pure layout as the drawing below, so hits match the tiles.
                     Treemap.squarify(tiles.map { it.size }, size.width.toFloat(), size.height.toFloat())
                         .firstOrNull { it.contains(offset.x, offset.y) }
-                        ?.let { hit -> tiles[hit.index].child?.takeIf { it.opensFolder }?.let(currentOnOpen) }
+                        ?.let { hit -> tiles[hit.index].child?.takeIf { it.tappable }?.let(currentOnOpen) }
                 })
             },
     ) {

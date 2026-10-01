@@ -39,10 +39,12 @@ import app.smartexplorer.android.ui.more.TextReportDialog
 private enum class Report { Issues, Protected }
 
 /**
- * Storage analysis (spec F19, B1–B3): choose a place → scan with progress and [Abbrechen] →
+ * Storage analysis (spec F19, B1–B3, B6): choose a place → scan with progress and [Abbrechen] →
  * treemap and the largest entries with bars; tap a folder → into it; back → up; ⋮ "In Dateien
  * öffnen"; "n Pfade nicht lesbar [Bericht]"; areas Android locks are counted apart, sized by the
- * platform where possible, with the usage access card for the other apps' folders.
+ * platform where possible, with the usage access card for the other apps' folders. With usage
+ * access the internal storage's root lists "≈ Apps (laut Android)": tap → one row per app, tap an
+ * app → its breakdown with [App-Info öffnen].
  */
 @Composable
 internal fun AnalysisScreen(vm: AnalysisViewModel, onClose: () -> Unit) {
@@ -68,6 +70,7 @@ internal fun AnalysisScreen(vm: AnalysisViewModel, onClose: () -> Unit) {
             onCancel = { vm.cancel() },
             onClose = onClose,
             cancelEnabled = true,
+            preparing = vm.preparing,
         )
         ScanPhase.Result -> ResultPage(vm, onClose)
     }
@@ -115,6 +118,7 @@ private fun ResultPage(vm: AnalysisViewModel, onClose: () -> Unit) {
             }
         }
     }
+    vm.appDetail?.let { app -> AppDetailDialog(app, onDismiss = { vm.closeAppDetail() }) }
     val issues = vm.issues
     when {
         issues == null -> Unit
@@ -155,22 +159,26 @@ private fun EmptyFolder(node: AnalyzeNode, vm: AnalysisViewModel) {
 @Composable
 private fun NodeList(node: AnalyzeNode, vm: AnalysisViewModel, onReport: (Report) -> Unit) {
     val issues = vm.issues
-    // Display-only estimates may or may not be part of node.size; the larger sum is the whole.
-    val total = remember(node) { maxOf(node.size, node.children.sumOf { it.size }) }
-    val estimated = remember(node) { node.children.filter { it.rowKind == AnalyzeKind.Rest }.sumOf { it.size } }
-    val entries = remember(node) { node.children.count { it.rowKind != AnalyzeKind.Rest } }
+    // node.size holds the estimates below it, with app folders that are also inside "≈ Apps" once.
+    val total = remember(node) { if (node.size > 0) node.size else node.children.sumOf { it.size } }
+    val estimated = remember(node) { (node.size - node.measured).coerceAtLeast(0) }
+    val counted = remember(node) { (node.children.sumOf { it.size } - total).coerceAtLeast(0) }
+    val hasApps = remember(node) { node.children.any { it.rowKind == AnalyzeKind.Apps } }
+    val entries = remember(node) { node.children.count { !it.isEstimate } }
     LazyColumn(Modifier.fillMaxSize()) {
         item(key = "header") {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 val where = if (vm.path.isEmpty()) vm.location.orEmpty() else vm.path.joinToString(" › ")
                 Text(where, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text("${Format.size(total)} · $entries Einträge", style = MaterialTheme.typography.titleSmall)
-                if (estimated > 0) {
-                    Text(
-                        "davon ≈ ${Format.size(estimated)} laut Android (nicht als Dateien erfasst)",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                Text("${Format.size(total)} · $entries ${if (node.isAppList) "Apps" else "Einträge"}", style = MaterialTheme.typography.titleSmall)
+                when {
+                    node.isAppList -> Hint(APP_LIST_EXPLANATION)
+                    estimated > 0 -> Hint("davon ≈ ${Format.size(estimated)} laut Android (nicht als Dateien erfasst)")
+                }
+                // Rows add up to more than the whole by what both "Android" and "≈ Apps" hold; said
+                // once it moves the shown percentages (≥ 1 %).
+                if (hasApps && counted > 0 && counted * 100 >= total) {
+                    Hint("≈ ${Format.size(counted)} in App-Ordnern unter „Android“ sind auch in „≈ Apps“ enthalten (einmal gezählt)")
                 }
                 if (issues != null && issues.count > 0) {
                     NoticeRow(
@@ -205,4 +213,14 @@ private fun NodeList(node: AnalyzeNode, vm: AnalysisViewModel, onReport: (Report
         // Positional keys: a child named "header" or equal names (Google Drive) must not collide.
         items(node.children) { child -> ChildRow(child, total, onOpen = { vm.open(child) }) }
     }
+}
+
+/** What the app list shows and where the apps' own settings are. */
+private const val APP_LIST_EXPLANATION =
+    "Größen laut Android: App (APK/Code) plus Daten (inkl. Android/data) je App. Antippen zeigt die " +
+        "Aufteilung und öffnet die App-Info, z. B. zum Cache leeren."
+
+@Composable
+private fun Hint(text: String) {
+    Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }
