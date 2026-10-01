@@ -1,7 +1,9 @@
 # Direct remote opening and recovery
 
-Date: 2026-09-29. Implementation is committed; remote acceptance and publication
-are pending. Open work is tracked only in `TODO.md`.
+Updated: 2026-09-30. Shipped in
+[v0.5.167](https://github.com/b1ue-man/smart-explorer/releases/tag/v0.5.167)
+after successful combined remote acceptance and publication. Open work is
+tracked only in `TODO.md`.
 
 ## Goal and evidence
 
@@ -108,9 +110,16 @@ mount identity, mutation replay rule, or release procedure is changed. CI uses
 isolated profiles and no GUI launch. A physical Android network/Doze transition
 cannot be proven by loopback fixtures and must be reported as a validation limit.
 
-The active batch now also includes [Drive duplicate conflict repair](DRIVE_SYNC_DUPLICATES_REPAIR.md).
+The batch also includes [Drive duplicate conflict repair](DRIVE_SYNC_DUPLICATES_REPAIR.md).
 The earlier Direct candidate `ea553ef2952fa72df2278207a92b79b1c8cc345b`
 passed Windows/Linux in [run 36618661175](https://github.com/b1ue-man/smart-explorer/actions/runs/36618661175).
 That result predates the final save-back revision guard and added sync work.
-The same entrypoint now covers the complete candidate; its final acceptance and
-the one terminal publication remain pending.
+The same entrypoint accepted the complete source candidate
+`cb382a799e8991bb7f081a9c41ccf356f8340f36` on Windows and Linux in
+[run 36628526135](https://github.com/b1ue-man/smart-explorer/actions/runs/36628526135),
+including the Android conflict-model contract on Linux. The existing
+[complete release run](https://github.com/b1ue-man/smart-explorer/actions/runs/36678498470)
+and its [publication run](https://github.com/b1ue-man/smart-explorer/actions/runs/36685856420)
+succeeded for v0.5.167 at `484e4b757035b0776089d83e7391f64842863188`.
+The public Release, matching main/tag, Cargo/feed versions, installer and all
+desktop/Android payload hashes and sidecars were checked on 2026-09-30.
