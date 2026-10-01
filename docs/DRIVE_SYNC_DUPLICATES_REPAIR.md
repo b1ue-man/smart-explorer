@@ -1,12 +1,12 @@
 # Unique file identity during synchronization
 
-Date: 2026-09-29. Extension of the active Direct-opening repair batch.
-Source implementation is present; combined remote acceptance and publication
-are pending.
+Updated: 2026-09-30. Delivered with the Direct-opening repair batch in
+[v0.5.167](https://github.com/b1ue-man/smart-explorer/releases/tag/v0.5.167).
+Combined remote acceptance and publication succeeded; evidence is recorded below.
 
 ## Goal and evidence
 
-The complete active batch includes the Direct-opening/recovery work in
+The complete batch includes the Direct-opening/recovery work in
 [DIRECT_REMOTE_OPEN_REPAIR.md](DIRECT_REMOTE_OPEN_REPAIR.md) and the reported
 sync failure for `Notebook/.obsidian/appearance.json`. Synchronization must
 compare one logical file per relative path on each side. When same-name Drive
@@ -100,3 +100,16 @@ sources but does not package an APK or build native Android libraries. The
 workflow and entrypoint budgets are 250 and 245 minutes. Native assertions cover
 the mobile JSON fields, alongside the desktop/core transactions, and retain the
 directly affected ordinary conflict, cancellation, link and snapshot integrations.
+
+## Delivery evidence
+
+The combined Windows/Linux suite accepted source candidate
+`cb382a799e8991bb7f081a9c41ccf356f8340f36` in
+[run 36628526135](https://github.com/b1ue-man/smart-explorer/actions/runs/36628526135),
+including the Android conflict-model contract on Linux. The existing
+[complete release run](https://github.com/b1ue-man/smart-explorer/actions/runs/36678498470)
+and [publication run](https://github.com/b1ue-man/smart-explorer/actions/runs/36685856420)
+published v0.5.167 from `484e4b757035b0776089d83e7391f64842863188`.
+The visible Release, main/tag binding, matching Cargo/feed versions, installer,
+and all desktop/Android payload hashes and sidecars were verified on 2026-09-30.
+The real-device and real-account limits above remain unchanged.
