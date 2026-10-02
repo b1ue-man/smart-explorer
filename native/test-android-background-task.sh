@@ -67,7 +67,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-for command_name in awk cargo comm git grep mktemp rustfmt sed sort tee tr uname; do
+for command_name in awk cargo comm git grep mktemp rustfmt sed sort tee timeout tr uname; do
     command -v "$command_name" >/dev/null 2>&1 || {
         echo "$command_name is required" >&2
         exit 1
@@ -238,10 +238,21 @@ fi
 # wrong cfg) fails the suite instead of shrinking it.
 milestone_log="$suite_tmp/milestones.log"
 echo "android background task suite: milestone tests ($platform)"
+# A hanging test must not hold the job until its timeout: the stage gets its
+# own limit and the test that never finished is named.
+report_hung_test() {
+    local log=$1 started finished
+    started="$(grep -oE '^test [^ ]+ \.\.\. ' "$log" | awk '{print $2}' | tail -n 1 || true)"
+    finished="$(grep -E "^test ${started//./\\.} \.\.\. (ok|FAILED|ignored)" "$log" || true)"
+    if [[ -n "$started" && -z "$finished" ]]; then
+        echo "android background task suite: test did not finish: $started" >&2
+    fi
+}
 if ! (
     cd "$repo_root/native"
-    run_task cargo test --locked --lib android_background_task_ -- --test-threads=1
+    run_task timeout --kill-after=60s 2700 cargo test --locked --lib android_background_task_ -- --test-threads=1
 ) 2>&1 | tee "$milestone_log"; then
+    report_hung_test "$milestone_log"
     stage_failed "milestone tests"
 fi
 passed_line="$(grep -E '^test result: ok\. [0-9]+ passed; 0 failed' "$milestone_log" | head -n 1 || true)"
@@ -315,10 +326,11 @@ modules_log="$suite_tmp/modules.log"
 echo "android background task suite: tests of the affected modules"
 if ! (
     cd "$repo_root/native"
-    SMART_EXPLORER_COPY_PASTE_TASK=1 SMART_EXPLORER_GUI_TASK=1 run_task cargo test --locked --lib -- \
-        --test-threads=1 "${skip_arguments[@]}" "${affected_modules[@]}"
+    SMART_EXPLORER_COPY_PASTE_TASK=1 SMART_EXPLORER_GUI_TASK=1 run_task timeout --kill-after=60s 3600 \
+        cargo test --locked --lib -- --test-threads=1 "${skip_arguments[@]}" "${affected_modules[@]}"
 ) 2>&1 | tee "$modules_log" ||
     ! grep -Eq '^test result: ok\. [0-9]+ passed; 0 failed' "$modules_log"; then
+    report_hung_test "$modules_log"
     stage_failed "tests of the affected modules"
 fi
 
@@ -335,9 +347,11 @@ server_log="$suite_tmp/share-server.log"
 echo "android background task suite: Share server tests"
 if ! (
     cd "$repo_root/share-server"
-    CARGO_TARGET_DIR="$repo_root/share-server/target" run_task cargo test --locked -- --test-threads=1
+    CARGO_TARGET_DIR="$repo_root/share-server/target" run_task timeout --kill-after=60s 2400 \
+        cargo test --locked -- --test-threads=1
 ) 2>&1 | tee "$server_log" ||
     ! grep -Eq '^test result: ok\. [0-9]+ passed; 0 failed' "$server_log"; then
+    report_hung_test "$server_log"
     stage_failed "Share server tests"
 fi
 mapfile -t server_source_tests < <(

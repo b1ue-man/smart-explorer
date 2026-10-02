@@ -167,13 +167,15 @@ impl Harness {
     /// The runtime state as the background reload would send it again.
     fn unchanged_profiles(&self) -> ShareCmd {
         let state = self.auth.lock().expect("auth").clone();
-        let mut profiles = ShareProfiles::default();
-        profiles.direct_contacts = state.direct_contacts.clone();
-        profiles.direct_grants = state.direct_grants.clone();
-        profiles.rooms = state.rooms.clone();
-        profiles.default_direct_exports = state.default_direct_exports.clone();
-        profiles.direct_requests = state.direct_requests.clone();
-        profiles.direct_request_tombstones = state.direct_request_tombstones.clone();
+        let profiles = ShareProfiles {
+            direct_contacts: state.direct_contacts.clone(),
+            direct_grants: state.direct_grants.clone(),
+            rooms: state.rooms.clone(),
+            default_direct_exports: state.default_direct_exports.clone(),
+            direct_requests: state.direct_requests.clone(),
+            direct_request_tombstones: state.direct_request_tombstones.clone(),
+            ..ShareProfiles::default()
+        };
         ShareCmd::ConfigureProfiles {
             profiles: Box::new(profiles),
         }
@@ -335,9 +337,16 @@ fn android_background_task_old_server_keeps_heartbeats_in_low_power() {
         harness.clock.advance(Duration::from_secs(20));
         server.expect("heartbeat");
         server.send(r#"{"t":"pong"}"#);
-        // Asleep beyond the old server's read deadline: reconnect.
+        // Asleep beyond the old server's read deadline: the next wake-up
+        // (here the alarm probe; in the field also the server's close)
+        // reconnects.
         harness.clock.suspend(Duration::from_secs(91));
+        let ticket = harness.power.request_probe(false);
         assert!(!session.join().expect("session"));
+        assert_eq!(
+            ticket.wait_timeout(Duration::from_secs(5)),
+            ProbeOutcome::default()
+        );
     });
 }
 
@@ -359,14 +368,21 @@ fn android_background_task_offline_wait_reacts_to_events_at_once() {
         });
         let started = Instant::now();
         let acknowledged = harness.command(ShareCmd::Refresh);
-        assert!(matches!(
-            acknowledged.recv_timeout(Duration::from_secs(5)),
-            Ok(Ok(ShareCmdResult::Applied))
-        ));
+        let acknowledgement = acknowledged.recv_timeout(Duration::from_secs(5));
+        let applied = matches!(acknowledgement, Ok(Ok(ShareCmdResult::Applied)));
+        if !applied {
+            harness.stop();
+        }
+        assert!(applied, "offline command: {acknowledgement:?}");
         assert!(started.elapsed() < Duration::from_secs(5));
-        wait_until("worker subscription", || {
-            !harness.power.request_probe(false).is_answered()
-        });
+        // The acknowledged command proves the waiter is subscribed and
+        // waiting; exactly one probe ends its first wait.
+        let ticket = harness.power.request_probe(false);
+        let answered = ticket.wait_timeout(Duration::from_secs(5));
+        if answered != OK {
+            harness.stop();
+        }
+        assert_eq!(answered, OK, "the probe woke the wait");
         let started = Instant::now();
         harness.stop();
         assert_eq!(waiter.join().expect("waiter"), (true, true));

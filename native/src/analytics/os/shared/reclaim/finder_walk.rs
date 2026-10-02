@@ -227,7 +227,7 @@ impl<'a> Walk<'a> {
         let text = path.as_os_str().len() as u64;
         let kept = self
             .text
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
                 used.checked_add(text)
                     .filter(|next| *next <= self.limits.candidate_text_bytes)
             })
