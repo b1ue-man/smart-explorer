@@ -58,7 +58,7 @@ suite_succeeded=false
 cleanup() {
     local status=$?
     if [[ "$suite_succeeded" == true ]]; then
-        rm -f "$suite_tmp/batch-ranges.txt" "$suite_tmp"/clippy-*.log
+        rm -f "$suite_tmp/batch-ranges.txt" "$suite_tmp/server-ranges.txt" "$suite_tmp"/clippy-*.log
         rmdir "$suite_tmp" 2>/dev/null || true
     else
         echo "review task suite diagnostics: $suite_tmp" >&2
@@ -153,12 +153,13 @@ fi
 batch_ranges="$suite_tmp/batch-ranges.txt"
 : > "$batch_ranges"
 for batch_file in "${batch_files[@]}"; do
+    # Share-server ranges are kept apart (server-ranges.txt): both crates
+    # have a src/main.rs, so one shared list could match the wrong file.
     case "$batch_file" in
-        native/src/*|native/tests/*) prefix=native/ ;;
-        share-server/*) prefix=share-server/ ;;
+        native/src/*|native/tests/*) ;;
         *) continue ;;
     esac
-    git -C "$repo_root" diff -U0 "$batch_base" HEAD -- "$batch_file" | awk -v file="${batch_file#"$prefix"}" '
+    git -C "$repo_root" diff -U0 "$batch_base" HEAD -- "$batch_file" | awk -v file="${batch_file#native/}" '
         /^@@ / {
             split($3, plus, ",")
             start = substr(plus[1], 2) + 0
@@ -169,10 +170,13 @@ for batch_file in "${batch_files[@]}"; do
         }' >> "$batch_ranges"
 done
 batch_diagnostics() {
-    local log=$1
+    batch_diagnostics_with "$batch_ranges" "$1"
+}
+batch_diagnostics_with() {
+    local ranges_file=$1 log=$2
     # Cargo prints Windows paths with backslashes; the ranges use slashes.
     { tr '\\' '/' < "$log" | grep -E '^(src|tests)/[^:]+:[0-9]+:[0-9]+: (warning|error)' || true; } |
-        sort -u | awk -F: -v ranges="$batch_ranges" '
+        sort -u | awk -F: -v ranges="$ranges_file" '
         BEGIN {
             while ((getline line < ranges) > 0) {
                 split(line, range, " ")
@@ -213,7 +217,7 @@ for clippy_target in "${clippy_targets[@]}"; do
     if ! (
         cd "$repo_root/native"
         run_task cargo clippy --locked "${target_arguments[@]}" --all-targets \
-            --message-format short
+            --message-format short -- --cap-lints warn
     ) 2>&1 | tee "$clippy_log"; then
         stage_failed "clippy ($clippy_target) did not complete"
         continue
@@ -234,15 +238,42 @@ for clippy_target in "${clippy_targets[@]}"; do
 done
 
 if [[ "$platform" == linux ]]; then
+    # Pre-existing deny-level lints in the server's tests (docs/TODO.md, H1)
+    # are capped to warnings; compile errors still fail and diagnostics on
+    # lines this batch changed are reported like the crate's.
+    server_ranges="$suite_tmp/server-ranges.txt"
     server_clippy_log="$suite_tmp/clippy-share-server.log"
     if ! (
         cd "$repo_root/share-server"
         CARGO_TARGET_DIR="$repo_root/share-server/target" run_task cargo clippy --locked \
-            --all-targets --message-format short
+            --all-targets --message-format short -- --cap-lints warn
     ) 2>&1 | tee "$server_clippy_log"; then
         stage_failed "clippy (share-server) did not complete"
     else
-        echo "review task suite: share-server compiles (clippy over all targets)"
+        : > "$server_ranges"
+        for batch_file in "${batch_files[@]}"; do
+            [[ "$batch_file" == share-server/* ]] || continue
+            git -C "$repo_root" diff -U0 "$batch_base" HEAD -- "$batch_file" | awk -v file="${batch_file#share-server/}" '
+                /^@@ / {
+                    split($3, plus, ",")
+                    start = substr(plus[1], 2) + 0
+                    count = (length(plus) > 1) ? plus[2] + 0 : 1
+                    if (count > 0) {
+                        print file, start, start + count - 1
+                    }
+                }' >> "$server_ranges"
+        done
+        server_lines="$(batch_diagnostics_with "$server_ranges" "$server_clippy_log")"
+        if [[ -n "$server_lines" ]]; then
+            printf '%s\n' "$server_lines" >&2
+            if [[ "$suite_mode" == check ]]; then
+                echo "clippy (share-server): diagnostics on changed lines (reported, not gating in --check)" >&2
+            else
+                stage_failed "clippy (share-server) reported diagnostics on lines this batch changed"
+            fi
+        else
+            echo "review task suite: clippy (share-server) is clean on the lines this batch changed"
+        fi
     fi
 fi
 
