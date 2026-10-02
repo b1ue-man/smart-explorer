@@ -283,8 +283,8 @@ test_cfgs() {
 # Whether those attributes leave the test out on this platform.
 cfg_excludes_platform() {
     case "$platform" in
-        windows) grep -Eq 'cfg\((all\()?(unix|target_family = "unix"|target_os = "(linux|android)"|not\(windows\))' <<<"$1" ;;
-        linux) grep -Eq 'cfg\((all\()?(windows|target_family = "windows"|target_os = "windows"|not\(unix\))' <<<"$1" ;;
+        windows) grep -Eq 'cfg\(((all|any)\()?(unix|target_family = "unix"|target_os = "(linux|android)"|not\(windows\))' <<<"$1" ;;
+        linux) grep -Eq 'cfg\(((all|any)\()?(windows|target_family = "windows"|target_os = "windows"|not\(unix\))' <<<"$1" ;;
     esac
 }
 
@@ -300,6 +300,9 @@ for name in "${missing_tests[@]}"; do
         linux:*/virtual_clipboard/*|linux:*/dragout/*|linux:*/os/windows*|linux:*/windows/*) ;;
         # Unix adapters do not exist on Windows.
         windows:*/os/linux_os*|windows:*/os/unix*|windows:*/linux_os/*|windows:*/mobile/*) ;;
+        # The app trash and its protected areas exist for Android volumes; their tests are
+        # included only on Unix (apptrash/mod.rs).
+        windows:*/apptrash/*) ;;
         *) unexpected+=("$name ($defined_in)") ;;
     esac
 done
