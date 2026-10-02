@@ -11,7 +11,6 @@ use super::types::{
     DuplicateEvidence, HashAlgorithm, ReclaimProgress, ReclaimReport, ReclaimResultCounts,
 };
 use super::util::hex_lower;
-use crate::analytics::ProtectedOmission;
 use crate::apptrash::ProtectedAreas;
 
 fn write(path: &Path, content: &[u8]) {
@@ -124,8 +123,12 @@ fn android_background_task_duplicates_report_the_candidate_budget() {
     assert!(report.summary.compared <= 3);
 }
 
+// Android volumes only: the expected area strings use the POSIX path form.
+#[cfg(unix)]
 #[test]
 fn android_background_task_duplicates_treat_protected_areas_as_omissions() {
+    use crate::analytics::ProtectedOmission;
+
     let fixture = tempfile::tempdir().expect("fixture");
     let root = std::fs::canonicalize(fixture.path()).expect("canonical");
     write(&root.join("Android/data/own/a.bin"), b"same bytes");

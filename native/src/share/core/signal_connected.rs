@@ -42,7 +42,8 @@ enum End {
 
 enum Woken {
     Readable,
-    Command(PendingShareCmd),
+    // Boxed: a command is much larger than the other wake-ups.
+    Command(Box<PendingShareCmd>),
     Event,
     CommandsClosed,
     ReadinessLost,
@@ -206,7 +207,7 @@ impl Session {
             }
             match self.wait(runtime, self.next_wake(runtime, now, mode)) {
                 Woken::Readable => readable = true,
-                Woken::Command(pending) => command = Some(pending),
+                Woken::Command(pending) => command = Some(*pending),
                 Woken::Event => {}
                 Woken::CommandsClosed => return End::Stopped,
                 Woken::ReadinessLost => return End::ReadEnded,
@@ -387,7 +388,7 @@ impl Session {
         let index = operation.index();
         if index == commands_index {
             return match operation.recv(runtime.commands) {
-                Ok(pending) => Woken::Command(pending),
+                Ok(pending) => Woken::Command(Box::new(pending)),
                 Err(_) => Woken::CommandsClosed,
             };
         }

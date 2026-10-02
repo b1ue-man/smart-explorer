@@ -59,10 +59,13 @@ pub fn scan(root: &Path, p: &Progress) -> ScanOutcome {
     scan_with_guard(root, p, None)
 }
 
+/// A check every directory passes before it is listed (Share confinement).
+pub(crate) type ScanGuard<'a> = &'a (dyn Fn(&Path) -> io::Result<()> + Sync);
+
 pub(crate) fn scan_with_guard(
     root: &Path,
     p: &Progress,
-    guard: Option<&(dyn Fn(&Path) -> io::Result<()> + Sync)>,
+    guard: Option<ScanGuard<'_>>,
 ) -> ScanOutcome {
     scan_in(root, p, guard, None)
 }
@@ -71,7 +74,7 @@ pub(crate) fn scan_with_guard(
 fn scan_in(
     root: &Path,
     p: &Progress,
-    guard: Option<&(dyn Fn(&Path) -> io::Result<()> + Sync)>,
+    guard: Option<ScanGuard<'_>>,
     protected: Option<ProtectedAreas>,
 ) -> ScanOutcome {
     let name = root
@@ -125,7 +128,7 @@ struct Traversal<'a> {
     diagnostics: &'a Diagnostics,
     budget: &'a AnalyticsBudget,
     parallel: bool,
-    guard: Option<&'a (dyn Fn(&Path) -> io::Result<()> + Sync)>,
+    guard: Option<ScanGuard<'a>>,
 }
 
 fn empty_dir(name: Box<str>) -> SizeNode {

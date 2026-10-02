@@ -125,7 +125,7 @@ impl SharedBudget {
 
 fn add_within(counter: &AtomicU64, amount: u64, maximum: u64) -> bool {
     counter
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
             current.checked_add(amount).filter(|next| *next <= maximum)
         })
         .is_ok()
