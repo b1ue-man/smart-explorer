@@ -66,11 +66,11 @@ class ShareExecTaskTest {
             it.text("execId") == running.text("execId")
         }
         assertEquals("cancelled", cancelled.text("state"))
-        assertEquals("Prozesse des abgebrochenen Befehls leben weiter", emptyList<String>(), sleepers())
+        assertEquals("Prozesse des abgebrochenen Befehls leben weiter", emptyList<String>(), sleepers(301..303))
 
         // 3. Timed out on the phone (--timeout 5 from the desktop).
         val timedOut = awaitJob("Befehl mit Zeitlimit beendet", desktop, active = false) { it.text("state") == "timed_out" }
-        assertEquals("Prozesse nach dem Zeitlimit leben weiter", emptyList<String>(), sleepers())
+        assertEquals("Prozesse nach dem Zeitlimit leben weiter", emptyList<String>(), sleepers(304..306))
         seen += timedOut.text("execId")
         TaskReport.note("share.execJobs", timedOut.toString())
 
@@ -81,7 +81,7 @@ class ShareExecTaskTest {
         assertFalse(execTarget(desktop).bool("enabled"))
         val revoked = awaitJob("Befehl nach dem Entzug beendet", desktop, active = false) { it.text("execId") == last.text("execId") }
         assertTrue("Zustand nach Entzug: ${revoked.text("state")}", revoked.text("state") in setOf("revoked", "cancelled"))
-        assertEquals("Prozesse nach dem Entzug leben weiter", emptyList<String>(), sleepers())
+        assertEquals("Prozesse nach dem Entzug leben weiter", emptyList<String>(), sleepers(307..308))
         File(markers, "revoked").writeText("1\n")
 
         // 5. The desktop's next attempt was refused.
@@ -135,8 +135,12 @@ class ShareExecTaskTest {
         return job.text("id") to File(target, "nach-dem-hook.txt")
     }
 
-    /** `sleep 30x` processes of the host commands (share-desktop.sh) still visible in `/proc`. */
-    private fun sleepers(): List<String> =
+    /**
+     * `sleep 30x` processes of one host command (share-desktop.sh numbers each command's sleeps:
+     * 301–303 cancelled, 304–306 timed out, 307–308 revoked) still visible in `/proc`. Only the
+     * checked command counts: the desktop may already have started the next one.
+     */
+    private fun sleepers(seconds: IntRange): List<String> =
         File("/proc").listFiles().orEmpty().filter { it.name.all(Char::isDigit) }.mapNotNull { dir ->
             val argv = try {
                 File(dir, "cmdline").readText().split('\u0000')
@@ -144,7 +148,7 @@ class ShareExecTaskTest {
                 return@mapNotNull null
             }
             val program = argv.firstOrNull()?.substringAfterLast('/')
-            if (program == "sleep" && argv.getOrNull(1)?.matches(Regex("30[0-9]")) == true) {
+            if (program == "sleep" && argv.getOrNull(1)?.toIntOrNull()?.let { it in seconds } == true) {
                 "${dir.name}: ${argv.joinToString(" ")}"
             } else {
                 null
