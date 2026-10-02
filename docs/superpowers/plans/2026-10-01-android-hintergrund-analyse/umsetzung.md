@@ -173,7 +173,8 @@ Integration, `api.md`, Doku, Graph und die Suite macht der Hauptagent.
 | U | umgesetzt (`StorageStatsAccess`, `AnalysisParts`) |
 | Integration | `reclaim.summary` geroutet, api.md §3/§4.1/§4.9/§5, README, TODO (AND5/AND6/DUP1), ARCHITEKTUR |
 | B6 | umgesetzt (`storage_view` Apps-Zeilen, `analyze_platform.rs`, `AppDetailDialog.kt`; App-Liste wird vor dem Scan ermittelt, nicht parallel) |
-| Suite | `native/test-android-background-task.sh`, `.github/workflows/android-background-task.yml`, Gerätestufen `reach_check`/`reach_boot_check` + `BackgroundReachTaskTest`, `AnalysisProtectedTaskTest`; Remote-Lauf offen |
+| Suite | `native/test-android-background-task.sh`, `.github/workflows/android-background-task.yml`, Gerätestufen `reach_check`/`reach_boot_check` + `BackgroundReachTaskTest`, `AnalysisProtectedTaskTest`; Läufe 36940992431, 36955746267 (Befunde behoben), 36963157669 grün |
+| Release | v0.5.169: complete release 36965674753, Veröffentlichung 36973655500, 20 Assets und Feed-Hashes geprüft |
 
 ## Nachtrag B6 – Apps in der Analyse
 
