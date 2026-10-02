@@ -3,11 +3,20 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::time::Instant;
 
+use super::direct_relation::{apply_contact_runtime, DirectContactRuntime};
 use super::exec_policy::ExecGrant;
 use super::fs::ShareExportConfig;
 use super::identity::ShareIdentity;
 use super::profiles::ShareProfiles;
+use super::room_relation::{apply_room_runtime, RoomRuntime};
 use super::{direct_ledger::DirectRequestEntry, direct_signal_event::DirectSignalEvent};
+
+// The relation records live in their own modules (V5); their former paths stay.
+pub use super::direct_relation::{
+    DirectAccessState, DirectContact, DirectGrant, DirectGrantState, DirectRelationFlags,
+    DirectRequestPolicy,
+};
+pub use super::room_relation::{RoomMemberAdmission, RoomMemberFlags, RoomPolicy};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ShareScope {
@@ -67,49 +76,6 @@ impl ShareStatus {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub enum DirectAccessState {
-    Pending,
-    Accepted,
-    Ignored,
-    IdentityConflict,
-}
-
-impl DirectAccessState {
-    pub fn label(&self) -> &'static str {
-        match self {
-            DirectAccessState::Pending => "Warte auf Freigabe",
-            DirectAccessState::Accepted => "Freigegeben",
-            DirectAccessState::Ignored => "Ignoriert",
-            DirectAccessState::IdentityConflict => "Identitaetskonflikt",
-        }
-    }
-}
-
-pub(crate) fn default_direct_access_state() -> DirectAccessState {
-    DirectAccessState::Accepted
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub enum DirectGrantState {
-    Accepted,
-    Ignored,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct DirectGrant {
-    pub device_id: String,
-    pub device_name: String,
-    pub public_key: String,
-    pub fingerprint: String,
-    #[serde(default)]
-    pub node_id: String,
-    pub state: DirectGrantState,
-    pub updated_at: i64,
-    #[serde(default)]
-    pub exec: ExecGrant,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PeerPresence {
     pub kind: String,
     pub relation_id: String,
@@ -139,41 +105,6 @@ impl PeerPresence {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct DirectContact {
-    pub id: String,
-    pub display_name: String,
-    pub lookup_id: String,
-    pub expected_fingerprint: String,
-    #[serde(default)]
-    pub expected_node_id: String,
-    pub remote_device_id: Option<String>,
-    pub remote_public_key: Option<String>,
-    pub auto_connect: bool,
-    pub auto_open: bool,
-    pub last_seen: Option<i64>,
-    #[serde(default)]
-    pub status: ShareStatus,
-    #[serde(default)]
-    pub last_error: Option<String>,
-    #[serde(default)]
-    pub presence: Option<PeerPresence>,
-    #[serde(default = "default_direct_access_state")]
-    pub access_state: DirectAccessState,
-    #[serde(default)]
-    pub request_sent_at: Option<i64>,
-    #[serde(default)]
-    pub accepted_at: Option<i64>,
-    #[serde(default)]
-    pub accepted_public_key: Option<String>,
-    #[serde(default)]
-    pub lan_candidates: Vec<String>,
-    #[serde(default)]
-    pub lan_seen_at: Option<i64>,
-    #[serde(default)]
-    pub lan_uplink: Option<bool>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RoomMember {
     pub device_id: String,
     pub device_name: String,
@@ -187,12 +118,16 @@ pub struct RoomMember {
     pub last_seen: Option<i64>,
     #[serde(default)]
     pub status: ShareStatus,
+    /// Denies the member everywhere: blocked by the user, or pending
+    /// admission (`relation.admission == Pending` implies `blocked`).
     #[serde(default)]
     pub blocked: bool,
     #[serde(default)]
     pub exec: ExecGrant,
     #[serde(default)]
     pub presence: Option<PeerPresence>,
+    #[serde(default)]
+    pub relation: RoomMemberFlags,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -208,6 +143,8 @@ pub struct RoomProfile {
     pub members: Vec<RoomMember>,
     #[serde(default)]
     pub exports: ShareExportConfig,
+    #[serde(default = "RoomPolicy::legacy")]
+    pub policy: RoomPolicy,
 }
 
 #[derive(Clone, Debug)]
@@ -386,6 +323,34 @@ pub enum ShareCmd {
         accepted: bool,
     },
     Discovery(super::discovery_signal_types::DiscoveryCommand),
+    /// FA3: daemon-internal runtime data (presence, LAN routes, status, newly
+    /// seen room members). No configuration transition, no invalidation;
+    /// IPC clients may not send it.
+    UpdateRuntime {
+        runtime: Box<RelationRuntime>,
+    },
+}
+
+/// Payload of `ShareCmd::UpdateRuntime`: the runtime half of every contact
+/// and room. It never changes grants, pins, access states, exports, room
+/// policy or a known member's rights.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RelationRuntime {
+    pub contacts: Vec<DirectContactRuntime>,
+    pub rooms: Vec<RoomRuntime>,
+}
+
+impl RelationRuntime {
+    pub fn from_profiles(profiles: &ShareProfiles) -> Self {
+        Self {
+            contacts: profiles
+                .direct_contacts
+                .iter()
+                .map(DirectContactRuntime::of)
+                .collect(),
+            rooms: profiles.rooms.iter().map(RoomRuntime::of).collect(),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -489,6 +454,16 @@ impl std::fmt::Debug for ShareAuthState {
             .field("direct_online", &self.direct_online)
             .field("authorization_epoch", &self.authorization_epoch)
             .finish_non_exhaustive()
+    }
+}
+
+impl ShareAuthState {
+    /// Applies `ShareCmd::UpdateRuntime` (FA3). Returns whether anything
+    /// changed; the authorization epoch stays.
+    pub(crate) fn apply_runtime(&mut self, runtime: &RelationRuntime) -> bool {
+        let contacts = apply_contact_runtime(&mut self.direct_contacts, &runtime.contacts);
+        let rooms = apply_room_runtime(&mut self.rooms, &runtime.rooms);
+        contacts || rooms
     }
 }
 

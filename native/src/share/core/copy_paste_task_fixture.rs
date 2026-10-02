@@ -106,7 +106,7 @@ impl CopyPastePeerFixture {
         let mut host_state = auth_state(&host);
         host_state.default_direct_exports = ShareExportConfig {
             roots: vec![export(labels[0], &root_a)?, export(labels[1], &root_b)?],
-            include_connections: false,
+            ..Default::default()
         };
         host_state.direct_grants.push(DirectGrant {
             device_id: client.device_id.clone(),
@@ -117,6 +117,7 @@ impl CopyPastePeerFixture {
             state: DirectGrantState::Accepted,
             updated_at: now_secs(),
             exec: super::ExecGrant::default(),
+            write: true,
         });
         let host_auth = Arc::new(Mutex::new(host_state));
         let (host_events, _host_events_rx) = crossbeam_channel::bounded(64);
@@ -165,6 +166,7 @@ impl CopyPastePeerFixture {
             lan_candidates: Vec::new(),
             lan_seen_at: None,
             lan_uplink: None,
+            relation: Default::default(),
         });
         let client_auth = Arc::new(Mutex::new(client_state));
         let (client_events, _client_events_rx) = crossbeam_channel::bounded(64);
@@ -219,6 +221,8 @@ impl CopyPastePeerFixture {
     }
 }
 
+#[path = "direct_open_task_tests.rs"]
+mod direct_open_task_tests;
 #[path = "transfer_engine_task_limit_tests.rs"]
 mod transfer_engine_task_limit_tests;
 #[path = "transfer_engine_task_path_tests.rs"]
@@ -227,8 +231,6 @@ mod transfer_engine_task_path_tests;
 mod transfer_engine_task_support;
 #[path = "transfer_engine_task_tests.rs"]
 mod transfer_engine_task_tests;
-#[path = "direct_open_task_tests.rs"]
-mod direct_open_task_tests;
 
 fn identity(name: &str) -> io::Result<ShareIdentity> {
     let secret = iroh::SecretKey::from_bytes(&random_bytes::<32>().map_err(io::Error::other)?);
@@ -265,10 +267,8 @@ fn export(label: &str, path: &Path) -> io::Result<SharedRoot> {
     let path = path
         .to_str()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "fixture root is not Unicode"))?;
-    Ok(SharedRoot {
-        label: label.into(),
-        path: path.replace('\\', "/"),
-    })
+    Ok(SharedRoot::new(label, path.replace('\\', "/"))
+        .with_access(crate::share::ExportAccess::ReadWrite))
 }
 
 fn loopback_candidates(node: &ShareIrohNode) -> io::Result<Vec<String>> {

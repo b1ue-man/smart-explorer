@@ -49,6 +49,8 @@ mod direct_reciprocal_store;
 mod direct_reciprocal_transport;
 #[path = "core/direct_reciprocal_wire.rs"]
 mod direct_reciprocal_wire;
+#[path = "core/direct_relation.rs"]
+mod direct_relation;
 #[path = "os/shared/direct_repair_store_adapter.rs"]
 mod direct_repair_store_adapter;
 #[path = "core/direct_request_tombstone.rs"]
@@ -69,8 +71,12 @@ mod discovery_exchange;
 mod discovery_exchange_port_impl;
 #[path = "core/discovery_offer_book.rs"]
 mod discovery_offer_book;
+#[path = "core/discovery_offer_guard.rs"]
+mod discovery_offer_guard;
 #[path = "core/discovery_pake.rs"]
 mod discovery_pake;
+#[path = "core/discovery_pin.rs"]
+mod discovery_pin;
 #[path = "core/discovery_relation_store.rs"]
 mod discovery_relation_store;
 #[path = "os/shared/discovery_relation_store_adapter.rs"]
@@ -89,6 +95,8 @@ mod discovery_signal_exchange;
 mod discovery_signal_maintenance;
 #[path = "core/discovery_signal_offline.rs"]
 mod discovery_signal_offline;
+#[path = "core/discovery_signal_outcome.rs"]
+mod discovery_signal_outcome;
 #[path = "core/discovery_signal_persisted.rs"]
 mod discovery_signal_persisted;
 #[path = "core/discovery_signal_port.rs"]
@@ -151,6 +159,8 @@ mod exec_supervisor_protocol;
 mod exec_targets;
 #[path = "core/exec_types.rs"]
 mod exec_types;
+#[path = "core/export_config.rs"]
+mod export_config;
 #[path = "core/framing.rs"]
 mod framing;
 #[path = "core/fs.rs"]
@@ -169,6 +179,8 @@ mod fs_paths;
 mod fs_response;
 #[path = "core/handshake_limits.rs"]
 mod handshake_limits;
+#[path = "core/host_requests.rs"]
+mod host_requests;
 #[path = "core/identity.rs"]
 mod identity;
 #[cfg(not(windows))]
@@ -270,6 +282,8 @@ mod profile_persistence;
 mod profile_store;
 #[path = "core/profiles.rs"]
 mod profiles;
+#[path = "core/relation_rights.rs"]
+mod relation_rights;
 #[cfg(test)]
 #[path = "core/remote_drive_task_mount_lease_tests.rs"]
 mod remote_drive_task_mount_lease_tests;
@@ -281,6 +295,8 @@ mod removed_direct_peers;
 mod room_relation;
 #[path = "core/server.rs"]
 mod server;
+#[path = "core/signal_connection_config.rs"]
+pub(crate) mod server_address;
 #[path = "core/server_capabilities.rs"]
 mod server_capabilities;
 #[path = "core/server_transfer.rs"]
@@ -381,6 +397,10 @@ pub use self::direct_reciprocal_persistence::{
 pub use self::direct_request_tombstone::DirectRequestTombstone;
 pub use self::direct_signal_event::DirectSignalEvent;
 pub use self::discovery_offer_book::{DiscoveryOfferBook, OfferLookup, OwnDiscoveryOffer};
+pub use self::discovery_pin::{
+    discovery_pin_strength, suggest_discovery_pin, DiscoveryPinStrength,
+    DISCOVERY_MAX_FAILED_PAIRINGS, DISCOVERY_MAX_OFFER_SECS, DISCOVERY_MIN_PIN_CHARS,
+};
 pub use self::discovery_relation_store::DiscoveryRelationOutcome;
 pub(crate) use self::discovery_signal_state::MAX_DISCOVERY_ALIAS_BYTES;
 pub use self::discovery_signal_types::{
@@ -400,7 +420,7 @@ pub use self::exec_types::{
     ExecCommand, ExecId, ExecJobView, ExecLifecycleState, ExecProviderStatus, ExecStart,
     ExecTerminal, ExecTerminalKind,
 };
-pub use self::fs::{ShareExportConfig, SharedRoot};
+pub use self::export_config::{ExportAccess, ShareExportConfig, SharedConnection, SharedRoot};
 pub use self::identity::{DirectCodeRotation, IdentityRepair, IdentityRepairAction, ShareIdentity};
 pub(crate) use self::identity_store::with_matching_identity_generation;
 pub use self::lan_presence::{LanAnnouncement, LanEvent, LanPresence};
@@ -428,10 +448,12 @@ pub use self::removed_direct_peers::{
     ForgottenDirectPeer, PairingOrigin, RemovedDirectPeer, MAX_REMOVED_DIRECT_PEERS,
 };
 pub use self::service::ShareService;
+pub(crate) use self::transport_options::migrate_server_file;
 pub use self::types::{
-    DirectAccessState, DirectContact, DirectGrant, DirectGrantState, ExecGrantTarget, ExecRequest,
-    ExecResult, PeerOpenTarget, PeerPresence, RoomMember, RoomProfile, ShareCmd, ShareCmdResult,
-    ShareEvent, ShareStatus,
+    DirectAccessState, DirectContact, DirectGrant, DirectGrantState, DirectRelationFlags,
+    DirectRequestPolicy, ExecGrantTarget, ExecRequest, ExecResult, PeerOpenTarget, PeerPresence,
+    RelationRuntime, RoomMember, RoomMemberAdmission, RoomMemberFlags, RoomPolicy, RoomProfile,
+    ShareCmd, ShareCmdResult, ShareEvent, ShareStatus,
 };
 
 pub fn core_now_secs() -> i64 {

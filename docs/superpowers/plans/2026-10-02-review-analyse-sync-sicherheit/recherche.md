@@ -39,8 +39,7 @@ Stand: 2026-10-02. Je Thema: Entscheidung, Grund, verworfene Alternativen, Beleg
   in den Kern geleitet (Rust-Threads laufen sonst weiter). Allzugriff (`isExternalStorageManager`) wird
   vor jedem Lauf geprüft und über `sys.hostState` gemeldet.
 - Desktop: Systemwach-Anforderung während Sync-Läufen und eingehender Analyse-/Übertragungsströme
-  (Windows Power Request bzw. Thread-Ausführungsstatus, Linux `systemd-inhibit` als Kindprozess; Details
-  siehe E11).
+  (Windows Power Request, Linux logind-Sperre über `zbus`; Details siehe E11).
 
 ## E3 Änderungszeit übernehmen (FS2) – `docs/refs/sync-remote-metadata.md`
 
@@ -160,11 +159,13 @@ abgeschnittene Ströme nicht). Speicher je Strom ~0,34 MiB (Encoder) – unkriti
   (USB 7, SD 12, MMC 13) + `SetThreadErrorMode(SEM_FAILCRITICALERRORS)`. Linux: `poll(POLLPRI)` auf
   `/proc/self/mountinfo` (öffnen, lesen, dann warten), Unterschied bilden, Gerät über udev-DB
   (`ID_BUS=usb`, Label/UUID) statt `removable` klassifizieren.
-- **Wach halten:** Windows `PowerCreateRequest` + `PowerSetRequest(PowerRequestSystemRequired)` (über das
-  vorhandene `windows`-Crate-Feature `Win32_System_Power`), freigeben mit `PowerClearRequest`. Linux:
-  `systemd-inhibit --what=idle:sleep --mode=block … sleep infinity` als Kindprozess, beendet beim Freigeben
-  (gleiche logind-Prüfung wie D-Bus, keine neue Abhängigkeit; `zbus` verworfen: schwer, eigene Runtime);
-  fehlt das Programm (elogind: `elogind-inhibit`), wird es einmal protokolliert. Abgeschalteter Windows-
+- **Wach halten (nach Kritik B10):** Windows `PowerCreateRequest` + `PowerSetRequest`
+  (`PowerRequestSystemRequired`, zusätzlich `PowerRequestExecutionRequired` wo verfügbar), freigeben mit
+  `PowerClearRequest`, dazu `ProcessPowerThrottling` aus für die Dauer. Linux: logind
+  `Inhibit("idle:sleep", …, "block")` über das schon genutzte `zbus` (blockierende API, nicht aus einem
+  Tokio-Kontext) – die Sperre endet mit dem Prozess, auch nach einem Absturz; ohne Berechtigung Rückfall
+  auf `idle`; ohne logind/elogind einmal protokolliert. Verworfen: `systemd-inhibit` als Kindprozess
+  (bliebe nach einem Absturz des Dienstes stehen). Abgeschalteter Windows-
   Autostart: `…\Explorer\StartupApproved\Run` (`03` + FILETIME = aus) nur lesen und anzeigen.
 - **Unicode:** `icu_normalizer` 2.2 (liegt schon im Lock) mit `default-features = false,
   features = ["compiled_data"]`; NFC für Planungsschlüssel.

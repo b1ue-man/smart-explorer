@@ -71,6 +71,21 @@ pub(crate) enum FsResponse {
     Batch {
         status: FsBatchStatus,
     },
+    /// RV1 `Recycle`: `moved` false = the file no longer matched the
+    /// expectation and stayed where it is.
+    Recycle {
+        moved: bool,
+    },
+    /// RV1 `FinishStage` (`vfs::StageFinished`).
+    StageFinished {
+        mtime_applied: bool,
+        durable: bool,
+    },
+    /// RV1 `SyncFilesystem`: whether the finished stages below the path are
+    /// durable now.
+    Synced {
+        durable: bool,
+    },
     Err {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         kind: Option<FsErrorKind>,

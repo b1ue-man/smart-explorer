@@ -2,21 +2,19 @@ use crate::vfs::Backend;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use super::apply::apply_planned_with_results;
-use super::core::{plan, update_baseline};
+use super::completion::ApplySink;
 use super::incremental::{
     bootstrap_incremental_state, invalidate_incremental_state, mirror_source,
     try_incremental_mirror, SyncEndpoints,
 };
-use super::persistence::{
-    baseline_path, load_baseline, pair_id_for, prune_versions, save_baseline, versions_dir,
-};
-use super::snapshot::{hash_mode, prev_side, walk_snapshot, WalkFilter};
+use super::keys::KeyPolicy;
 use super::omissions::SyncOmissions;
-use super::snapshot_pair::read_pair;
-use super::types::{
-    Action, Baseline, BisyncOptions, BisyncStats, Conflict, DeletePolicy, Direction,
-};
+use super::orchestration_full::run_full;
+use super::pair_lock::pair_lock_id;
+use super::persistence::pair_id_for;
+use super::run_types::{RunBlock, RunSettings, RunStop, StateKey};
+use super::snapshot::WalkFilter;
+use super::types::{Baseline, BisyncOptions, BisyncStats, Conflict};
 
 // ── high-level orchestration (used by the UI on a worker thread) ─────────────
 
@@ -27,6 +25,96 @@ pub struct Outcome {
     pub errors: Vec<(String, String)>,
     pub baseline: Baseline,
     pub omissions: SyncOmissions,
+    /// The run stopped before its first change and waits for review (FS3);
+    /// neither an error nor a cancel.
+    pub blocked: Option<RunBlock>,
+    /// The run ended early; what it completed is recorded (FS5).
+    pub stopped: Option<RunStop>,
+    /// Entries that changed while the run worked on them: nothing was
+    /// committed for them and the next run handles them; not errors.
+    pub deferred: Vec<(String, String)>,
+    /// Another run, conflict resolution or restore of the pair held its
+    /// lock; nothing was done.
+    pub busy: bool,
+    /// The run was canceled.
+    pub canceled: bool,
+    /// The stored state this run used; conflict resolutions record into it.
+    pub state: Option<StateKey>,
+    /// This run's id, the folder of its versions.
+    pub run_id: Option<String>,
+}
+
+/// One run as the background service and the surfaces start it (V3).
+pub struct RunRequest<'a> {
+    pub a: &'a dyn Backend,
+    pub root_a: &'a str,
+    pub b: &'a dyn Backend,
+    pub root_b: &'a str,
+    pub opts: BisyncOptions,
+    pub filter: &'a WalkFilter<'a>,
+    pub cancel: &'a AtomicBool,
+    pub settings: RunSettings,
+    /// Also told about every finished action, apply-time omission, deferral
+    /// and early stop the moment it happens, from apply's worker threads
+    /// (e.g. the watcher, so the run's own writes trigger nothing, B22).
+    pub observer: Option<&'a dyn ApplySink>,
+}
+
+impl<'a> RunRequest<'a> {
+    /// A run without a saved job, as `run` starts it.
+    pub fn new(
+        a: &'a dyn Backend,
+        root_a: &'a str,
+        b: &'a dyn Backend,
+        root_b: &'a str,
+        opts: BisyncOptions,
+        filter: &'a WalkFilter<'a>,
+        cancel: &'a AtomicBool,
+    ) -> Self {
+        Self {
+            a,
+            root_a,
+            b,
+            root_b,
+            opts,
+            filter,
+            cancel,
+            settings: RunSettings::default(),
+            observer: None,
+        }
+    }
+}
+
+/// Runs one sync as `request` asks: its owner's state, scan depth, confirmed
+/// stops, lock wait and observer. Contract stage: the run of [`run`] on the
+/// pair-wide state.
+pub fn run_with(request: RunRequest<'_>) -> Outcome {
+    let RunRequest {
+        a,
+        root_a,
+        b,
+        root_b,
+        opts,
+        filter,
+        cancel,
+        settings: _,
+        observer: _,
+    } = request;
+    let mut out = run(a, root_a, b, root_b, opts, cancel, filter);
+    out.state = Some(StateKey::legacy(
+        &pair_id_for(a, root_a, b, root_b),
+        &pair_lock_id(a, root_a, b, root_b),
+    ));
+    out
+}
+
+/// The pair's planning keys: letter case is folded when either side ignores
+/// it; the job's ignore patterns follow the same rule (Y153).
+pub fn pair_key_policy(a: &dyn Backend, root_a: &str, b: &dyn Backend, root_b: &str) -> KeyPolicy {
+    KeyPolicy::for_pair(
+        a.case_sensitive_paths(root_a),
+        b.case_sensitive_paths(root_b),
+    )
 }
 
 /// One full bisync run: load baseline → walk both → plan → apply → save the
@@ -41,11 +129,22 @@ pub fn run(
     cancel: &AtomicBool,
     filter: &WalkFilter,
 ) -> Outcome {
-    if let Err(error) = crate::vfs::validate_sync_roots(a, root_a, b, root_b) {
-        return Outcome { errors: vec![("Sync-Pfade".into(), error.to_string())], ..Default::default() };
-    }
-    let endpoints = SyncEndpoints::new(a, root_a, b, root_b);
-    run_inner(endpoints, opts, cancel, filter, None)
+    let mut out = if let Err(error) = crate::vfs::validate_sync_roots(a, root_a, b, root_b) {
+        Outcome {
+            errors: vec![("Sync-Pfade".into(), error.to_string())],
+            ..Default::default()
+        }
+    } else {
+        run_inner(
+            SyncEndpoints::new(a, root_a, b, root_b),
+            opts,
+            cancel,
+            filter,
+            None,
+        )
+    };
+    out.canceled = cancel.load(Ordering::Acquire);
+    out
 }
 
 #[cfg(test)]
@@ -71,7 +170,10 @@ fn run_inner(
     }
     if let Err(error) = invalidate_incremental_state(endpoints, opts, store_path) {
         return Outcome {
-            errors: vec![("Sync-Index".into(), format!("Vollscan kann nicht sicher beginnen: {error}"))],
+            errors: vec![(
+                "Sync-Index".into(),
+                format!("Vollscan kann nicht sicher beginnen: {error}"),
+            )],
             ..Default::default()
         };
     }
@@ -94,323 +196,4 @@ fn run_inner(
         let _ = bootstrap_incremental_state(endpoints, opts, &out.baseline, pre_cursor, store_path);
     }
     out
-}
-
-fn run_full(
-    a: &dyn Backend,
-    root_a: &str,
-    b: &dyn Backend,
-    root_b: &str,
-    opts: BisyncOptions,
-    cancel: &AtomicBool,
-    filter: &WalkFilter,
-) -> Outcome {
-    let pair = pair_id_for(a, root_a, b, root_b);
-    let bpath = baseline_path(&pair);
-    let vdir = versions_dir(&pair);
-    let base = match load_baseline(&bpath) {
-        Ok(base) => base,
-        Err(error) => {
-            return Outcome {
-                errors: vec![(
-                    bpath.to_string_lossy().into_owned(),
-                    format!("Synchronisierungsstand kann nicht gelesen werden: {error}"),
-                )],
-                ..Default::default()
-            }
-        }
-    };
-    // Per-side hashing: each side uses a content hash when it's free (native) or
-    // cheap (a local read to match the other side's free native hash), so any
-    // compare mode skips files whose mtime differs but content matches — without
-    // ever downloading a hash-less remote. `prev_*` reuses last run's hashes.
-    let (mode_a, mode_b) = (hash_mode(a, b, opts.compare), hash_mode(b, a, opts.compare));
-    let (prev_a, prev_b) = (prev_side(&base, true), prev_side(&base, false));
-    let snapshot = match read_pair(SyncEndpoints::new(a, root_a, b, root_b), opts, cancel, filter, &base) {
-        Ok(snapshot) => snapshot,
-        Err(error) => return Outcome { errors: vec![error], baseline: base, ..Default::default() },
-    };
-    let (actions, conflicts, converged) = snapshot.plan(&base, opts);
-    let physical_a = snapshot.a.len() as u64 + snapshot.repairs.iter()
-        .filter_map(|c| c.duplicates.as_ref()).map(|d| d.a.len().saturating_sub(1) as u64).sum::<u64>()
-        + snapshot.conflicts.iter().filter_map(|c| c.duplicates.as_ref()).map(|d| d.a.len() as u64).sum::<u64>();
-    let physical_b = snapshot.b.len() as u64 + snapshot.repairs.iter()
-        .filter_map(|c| c.duplicates.as_ref()).map(|d| d.b.len().saturating_sub(1) as u64).sum::<u64>()
-        + snapshot.conflicts.iter().filter_map(|c| c.duplicates.as_ref()).map(|d| d.b.len() as u64).sum::<u64>();
-    let repairs = snapshot.repairs;
-    let duplicate_removals: u64 = repairs.iter().filter_map(|c| c.duplicates.as_ref())
-        .map(|d| d.redundant_count()).sum();
-    let (at, bt) = (snapshot.a, snapshot.b);
-    let mut omissions = snapshot.omissions;
-    if cancel.load(Ordering::Relaxed) {
-        return Outcome { baseline: base, omissions, ..Default::default() };
-    }
-
-    // Duplicate-name providers need an exact, read-only cleanup plan before
-    // the first mutation. Its ID-addressed entries participate in the same
-    // all-or-nothing deletion guard as explicit and move-source deletions.
-    let (dedupe_backend, mut dedupe_plan) = if !opts.dry_run && opts.delete == DeletePolicy::Mirror {
-        let planned = match opts.direction {
-            Direction::AtoB => b
-                .plan_dedupe_recursive(root_b, &|rel| at.contains_key(rel) || omissions.protects(rel))
-                .map(|plan| (Some(b), plan)),
-            Direction::BtoA => a
-                .plan_dedupe_recursive(root_a, &|rel| bt.contains_key(rel) || omissions.protects(rel))
-                .map(|plan| (Some(a), plan)),
-            Direction::Both => Ok((None, Vec::new())),
-        };
-        match planned {
-            Ok(result) => result,
-            Err(error) => {
-                return Outcome {
-                    errors: vec![(
-                        "Duplikatprüfung".into(),
-                        format!("Duplikate konnten nicht sicher vorgeprüft werden: {error}"),
-                    )],
-                    baseline: base,
-                    omissions,
-                    ..Default::default()
-                }
-            }
-        }
-    } else {
-        (None, Vec::new())
-    };
-    let dedupe_root = if opts.direction == Direction::AtoB { root_b } else { root_a };
-    dedupe_plan.retain(|entry| !omissions.protects(&super::paths::rel_of(&entry.path, dedupe_root)));
-
-    // Delete-safety guard: refuse to apply if the plan would remove more files
-    // than the configured limit (protects against a vanished/remounted side
-    // looking like a mass deletion). Aborts the whole run — nothing is touched.
-    let explicit_deletes = actions
-        .iter()
-        .filter(|action| {
-            matches!(
-                action,
-                Action::DeleteA(_)
-                    | Action::DeleteB(_)
-                    | Action::FinalizeMoveAtoB(_)
-                    | Action::FinalizeMoveBtoA(_)
-            )
-        })
-        .count() as u64;
-    let move_deletes = if opts.move_files && opts.direction != Direction::Both {
-        actions
-            .iter()
-            .filter(|action| matches!(action, Action::CopyAtoB(_) | Action::CopyBtoA(_)))
-            .count() as u64
-    } else {
-        0
-    };
-    let deletes = explicit_deletes
-        .saturating_add(move_deletes)
-        .saturating_add(duplicate_removals)
-        .saturating_add(dedupe_plan.len() as u64);
-    let total = physical_a.max(physical_b);
-    let pct_limit = if opts.max_delete_pct > 0 {
-        total * opts.max_delete_pct as u64 / 100
-    } else {
-        u64::MAX
-    };
-    let abs_limit = if opts.max_delete > 0 {
-        opts.max_delete
-    } else {
-        u64::MAX
-    };
-    if !opts.dry_run && deletes > 0 && (deletes > abs_limit || deletes > pct_limit) {
-        return Outcome {
-            errors: vec![(
-                "abgebrochen".into(),
-                format!(
-                    "Sicherheitsstopp: {} Löschungen überschreiten das Limit \
-                     (max {} Dateien / {}%). Nichts wurde geändert.",
-                    deletes, opts.max_delete, opts.max_delete_pct
-                ),
-            )],
-            baseline: base,
-            omissions,
-            ..Default::default()
-        };
-    }
-
-    let mut errors = Vec::new();
-    let mut deduped = if let Some(backend) = dedupe_backend {
-        match backend.apply_dedupe_plan(&dedupe_plan) {
-            Ok(count) => count as u64,
-            Err(error) => {
-                errors.push((
-                    "dedupe".into(),
-                    format!("Vorgeprüfte Duplikatbereinigung fehlgeschlagen: {error}"),
-                ));
-                return Outcome {
-                    errors,
-                    baseline: base,
-                    omissions,
-                    ..Default::default()
-                };
-            }
-        }
-    } else {
-        0
-    };
-    if !opts.dry_run {
-        for repair in &repairs {
-            let id = repair.duplicates.as_ref().and_then(|d| d.common_choice())
-                .and_then(|(a, _)| a.id.as_deref());
-            if let Err(error) = super::duplicate_apply::resolve(
-                SyncEndpoints::new(a, root_a, b, root_b), repair, true, id,
-                &vdir, cancel, opts.bwlimit_bps, |_| {},
-            ) {
-                errors.push((repair.rel.clone(), format!("Duplikatbereinigung: {error}")));
-                return Outcome { errors, baseline: base, omissions, conflicts, ..Default::default() };
-            }
-            deduped += repair.duplicates.as_ref().map_or(0, |d| d.redundant_count());
-        }
-    }
-    if cancel.load(Ordering::Relaxed) {
-        return Outcome {
-            stats: BisyncStats {
-                deleted: deduped,
-                ..Default::default()
-            },
-            errors,
-            baseline: base,
-            omissions,
-            ..Default::default()
-        };
-    }
-    let report = apply_planned_with_results(
-        &actions,
-        &at,
-        &bt,
-        a,
-        root_a,
-        b,
-        root_b,
-        opts,
-        &vdir,
-        &mut errors,
-        cancel,
-    );
-    let mut st = report.stats;
-    st.deleted = st.deleted.saturating_add(deduped);
-    // Stop pressed: `apply` broke out between files. Don't dedupe or re-walk (a
-    // cancelled walk returns a PARTIAL tree, which would corrupt the baseline) —
-    // return what completed, leaving the old baseline untouched so the next run
-    // re-detects cleanly.
-    if cancel.load(Ordering::Relaxed) {
-        return Outcome {
-            stats: st,
-            conflicts,
-            errors,
-            baseline: base,
-            omissions,
-        };
-    }
-    // A failed copy/source action can leave a retryable partial transition.
-    // Do not perform any additional destructive mirror cleanup in that state.
-    if !errors.is_empty() {
-        return Outcome {
-            stats: st,
-            conflicts,
-            errors,
-            baseline: base,
-            omissions,
-        };
-    }
-    // Re-walk to capture real post-write signatures (e.g. the destination's new
-    // mtime), so the baseline doesn't re-detect just-synced files. Skipped on a
-    // dry run, and — the common steady-state case — when nothing was actually
-    // transferred or deleted: then the on-disk state is unchanged, so the trees
-    // we already walked are still current. This avoids a second full metadata
-    // walk of a remote (hundreds of Drive round-trips) on every no-op sync.
-    let changed = st.a_to_b > 0 || st.b_to_a > 0 || st.deleted > 0;
-    let fold_case = !a.case_sensitive_paths(root_a) || !b.case_sensitive_paths(root_b);
-    let (mut at2, mut bt2) = if opts.dry_run || !changed {
-        (at, bt)
-    } else {
-        // Only re-walk a side the run could have modified. A one-way sync without
-        // move leaves its SOURCE side untouched, so re-walking it is pure wasted
-        // round-trips (decisive when the source is a remote like Drive).
-        let a_touched = opts.direction != Direction::AtoB || opts.move_files || !repairs.is_empty();
-        let b_touched = opts.direction != Direction::BtoA || opts.move_files || !repairs.is_empty();
-        let at2 = if a_touched {
-            match walk_snapshot(a, root_a, cancel, filter, mode_a, Some(&prev_a), false, fold_case)
-                .and_then(|s| super::duplicate_plan::check_post_scan(s, &conflicts)) {
-                Ok(snapshot) => { omissions.extend(snapshot.omissions); snapshot.tree },
-                Err(error) => {
-                    errors.push((
-                        root_a.into(),
-                        format!("Kontrollscan nach Änderungen fehlgeschlagen: {error}"),
-                    ));
-                    return Outcome {
-                        stats: st,
-                        conflicts,
-                        errors,
-                        baseline: base,
-                        omissions,
-                    };
-                }
-            }
-        } else {
-            at
-        };
-        let bt2 = if b_touched {
-            match walk_snapshot(b, root_b, cancel, filter, mode_b, Some(&prev_b), false, fold_case)
-                .and_then(|s| super::duplicate_plan::check_post_scan(s, &conflicts)) {
-                Ok(snapshot) => { omissions.extend(snapshot.omissions); snapshot.tree },
-                Err(error) => {
-                    errors.push((
-                        root_b.into(),
-                        format!("Kontrollscan nach Änderungen fehlgeschlagen: {error}"),
-                    ));
-                    return Outcome {
-                        stats: st,
-                        conflicts,
-                        errors,
-                        baseline: base,
-                        omissions,
-                    };
-                }
-            }
-        } else {
-            bt
-        };
-        (at2, bt2)
-    };
-    omissions.exclude_tree(&mut at2);
-    omissions.exclude_tree(&mut bt2);
-    let planning_base = omissions.planning_baseline(&base);
-    let mut nb = update_baseline(&planning_base, &at2, &bt2, &report.completed, &converged, &conflicts);
-    omissions.preserve_baseline(&base, &mut nb);
-    if !opts.dry_run {
-        if let Err(error) = save_baseline(&bpath, &nb) {
-            errors.push((
-                bpath.to_string_lossy().into_owned(),
-                format!("Synchronisierungsstand konnte nicht gespeichert werden: {error}"),
-            ));
-            return Outcome {
-                stats: st,
-                conflicts,
-                errors,
-                baseline: base,
-                omissions,
-            };
-        }
-        if let Err(error) = prune_versions(&vdir, &opts.versioning) {
-            errors.push((
-                vdir.to_string_lossy().into_owned(),
-                format!(
-                    "Wiederherstellungsversionen konnten nicht sicher bereinigt werden: {error}"
-                ),
-            ));
-        }
-    }
-    Outcome {
-        stats: st,
-        conflicts,
-        errors,
-        baseline: nb,
-        omissions,
-    }
 }

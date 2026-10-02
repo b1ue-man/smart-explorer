@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 #[path = "discovery_exchange_port_helpers.rs"]
 mod exchange_port_helpers;
 #[path = "discovery_exchange_port_state.rs"]
@@ -40,6 +40,9 @@ pub(crate) struct DiscoveryExchangePortImpl {
     exchanges: HashMap<String, ExchangeState>,
     used_offer_ids: UsedIdTracker,
     used_exchange_ids: UsedIdTracker,
+    /// Connector exchanges whose user chose "Auch meine Freigaben für dieses
+    /// Gerät öffnen"; all others install the publisher one way (FC1/S21).
+    share_back: HashSet<String>,
 }
 
 impl DiscoveryExchangePortImpl {
@@ -54,6 +57,7 @@ impl DiscoveryExchangePortImpl {
             exchanges: HashMap::new(),
             used_offer_ids: UsedIdTracker::default(),
             used_exchange_ids: UsedIdTracker::default(),
+            share_back: HashSet::new(),
         }
     }
 
@@ -99,6 +103,7 @@ impl DiscoveryExchangePortImpl {
         state: ExchangeState,
         packet_kind: PairingPacketKind,
         payload: Vec<u8>,
+        connector_origin: PairingOrigin,
     ) -> Result<(Option<ExchangeState>, Option<DiscoveryPortAction>), DiscoveryPortError> {
         match state {
             ExchangeState::ConnectorAwaitingKe2(state) => {
@@ -137,7 +142,7 @@ impl DiscoveryExchangePortImpl {
                 let commit = match application {
                     PublisherApplicationBundle::Direct(peer) => self
                         .relation_store
-                        .persist_direct(&peer, PairingOrigin::UserPairing)
+                        .persist_direct(&peer, connector_origin)
                         .map_err(persistence_error)?,
                     PublisherApplicationBundle::Room(offer) => self
                         .relation_store
@@ -318,6 +323,7 @@ impl DiscoveryExchangePort for DiscoveryExchangePortImpl {
         exchange_id: &str,
         advertisement: &DiscoveryAdvertisement,
         pin: &[u8],
+        share_back: bool,
     ) -> Result<DiscoveryPortAction, DiscoveryPortError> {
         if !advertisement.is_compatible() {
             return Err(protocol_message(
@@ -345,6 +351,9 @@ impl DiscoveryExchangePort for DiscoveryExchangePortImpl {
             exchange_id.to_string(),
             ExchangeState::ConnectorAwaitingKe2(state),
         );
+        if share_back {
+            self.share_back.insert(exchange_id.to_string());
+        }
         Ok(DiscoveryPortAction::StartPairing {
             payload: ke1.into_bytes(),
         })
@@ -402,7 +411,12 @@ impl DiscoveryExchangePort for DiscoveryExchangePortImpl {
             .exchanges
             .remove(exchange_id)
             .ok_or_else(|| protocol_message("unknown or already consumed pairing exchange"))?;
-        let (next, action) = self.advance_exchange(state, kind, payload)?;
+        let connector_origin = if self.share_back.contains(exchange_id) {
+            PairingOrigin::UserPairing
+        } else {
+            PairingOrigin::UserPairingOneWay
+        };
+        let (next, action) = self.advance_exchange(state, kind, payload, connector_origin)?;
         if let Some(next) = next {
             self.exchanges.insert(exchange_id.to_string(), next);
         }
@@ -415,6 +429,7 @@ impl DiscoveryExchangePort for DiscoveryExchangePortImpl {
         reason: PairingCloseReason,
     ) -> Result<Option<DiscoveryPortAction>, DiscoveryPortError> {
         let state = self.exchanges.remove(exchange_id);
+        self.share_back.remove(exchange_id);
         if reason != PairingCloseReason::Completed {
             return Ok(None);
         }
@@ -435,5 +450,16 @@ impl DiscoveryExchangePort for DiscoveryExchangePortImpl {
 
     fn cancel_exchange(&mut self, exchange_id: &str) {
         self.exchanges.remove(exchange_id);
+        self.share_back.remove(exchange_id);
+    }
+
+    fn take_persisted_outcome(&mut self, exchange_id: &str) -> Option<DiscoveryRelationOutcome> {
+        let outcome = self
+            .exchanges
+            .get(exchange_id)?
+            .persisted_outcome()?
+            .clone();
+        self.cancel_exchange(exchange_id);
+        Some(outcome)
     }
 }

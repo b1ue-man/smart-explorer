@@ -254,13 +254,10 @@ fn snapshot_profiles() -> crate::share::ShareProfiles {
         }))
         .expect("room"),
     );
-    profiles
-        .default_direct_exports
-        .roots
-        .push(crate::share::SharedRoot {
-            label: "Intern".into(),
-            path: "/storage/emulated/0".into(),
-        });
+    profiles.default_direct_exports.roots.push(
+        crate::share::SharedRoot::new("Intern", "/storage/emulated/0")
+            .with_access(crate::share::ExportAccess::ReadWrite),
+    );
     profiles
 }
 

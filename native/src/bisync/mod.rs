@@ -30,38 +30,54 @@ mod apply_pool;
 mod apply_retry;
 #[path = "os/shared/apply_transfer.rs"]
 mod apply_transfer;
+#[path = "os/shared/checkpoint.rs"]
+mod checkpoint;
+#[path = "core/completion.rs"]
+mod completion;
 #[path = "core/plan.rs"]
 mod core;
-#[path = "core/duplicate_types.rs"]
-mod duplicate_types;
-#[path = "os/shared/duplicate_observation.rs"]
-mod duplicate_observation;
-#[path = "os/shared/duplicate_plan.rs"]
-mod duplicate_plan;
 #[path = "os/shared/duplicate_apply.rs"]
 mod duplicate_apply;
 #[path = "os/shared/duplicate_backup.rs"]
 mod duplicate_backup;
+#[path = "os/shared/duplicate_observation.rs"]
+mod duplicate_observation;
+#[path = "os/shared/duplicate_plan.rs"]
+mod duplicate_plan;
+#[path = "core/duplicate_types.rs"]
+mod duplicate_types;
 #[path = "os/shared/incremental.rs"]
 mod incremental;
 #[path = "os/shared/incremental_changes.rs"]
 mod incremental_changes;
 #[path = "os/shared/incremental_collect.rs"]
 mod incremental_collect;
+#[path = "core/keys.rs"]
+mod keys;
+#[path = "core/limits.rs"]
+mod limits;
 #[path = "os/shared/move_finalize.rs"]
 mod move_finalize;
 #[path = "core/omissions.rs"]
 mod omissions;
 #[path = "os/shared/orchestration.rs"]
 mod orchestration;
+#[path = "os/shared/orchestration_full.rs"]
+mod orchestration_full;
+#[path = "os/shared/pair_lock.rs"]
+mod pair_lock;
 #[path = "core/paths.rs"]
 mod paths;
 #[path = "os/shared/persistence.rs"]
 mod persistence;
 #[path = "os/shared/preview.rs"]
 mod preview;
+#[path = "os/shared/replica_state.rs"]
+mod replica_state;
 #[path = "os/shared/resolve.rs"]
 mod resolve_conflict;
+#[path = "core/run_types.rs"]
+mod run_types;
 #[path = "os/shared/snapshot.rs"]
 mod snapshot;
 #[path = "os/shared/snapshot_agent.rs"]
@@ -74,6 +90,8 @@ mod snapshot_duplicates;
 mod snapshot_hash;
 #[path = "os/shared/snapshot_pair.rs"]
 mod snapshot_pair;
+#[path = "core/snapshot_types.rs"]
+mod snapshot_types;
 #[path = "os/shared/snapshot_walk.rs"]
 mod snapshot_walk;
 #[path = "os/shared/state_store.rs"]
@@ -88,23 +106,43 @@ pub(crate) mod sync_flows;
 pub(crate) mod sync_overload;
 #[path = "core/types.rs"]
 mod types;
+#[path = "os/shared/versions.rs"]
+pub mod versions;
 
 pub use apply::apply;
+pub use completion::{ApplySink, CompletedAction, CompletedKind, DirAction};
 pub use core::{plan, update_baseline};
 pub use duplicate_types::{DuplicateConflict, FileVariant};
-pub use omissions::SyncOmissions;
-pub use orchestration::{run, Outcome};
+pub use keys::{KeyPolicy, Spellings};
+pub use limits::SyncLimits;
+pub use omissions::{OmissionKind, SyncOmissions};
+pub use orchestration::{pair_key_policy, run, run_with, Outcome, RunRequest};
+pub use pair_lock::{pair_lock_id, PairLock};
+pub use paths::{is_engine_name, REPLICA_MARKER_NAME, VERSIONS_DIR_NAME};
 pub use persistence::{
     baseline_path, load_baseline, pair_id, pair_id_for, prune_versions, save_baseline, versions_dir,
 };
-pub use preview::{preview, Preview};
-pub use resolve_conflict::{resolve, resolve_checked, resolve_variant_checked, ResolvePhase};
+pub use preview::{apply_preview_action, preview, Preview};
+pub use replica_state::{
+    baseline_file, forget_job_state, forget_pair_state, merge_baseline_entries,
+};
+pub use resolve_conflict::{
+    resolve, resolve_checked, resolve_recorded, resolve_variant_checked, ResolvePhase,
+};
+pub use run_types::{
+    BlockConfirmation, ReplicaRef, RunBlock, RunSettings, RunStop, ScanDepth, StateKey, StateOwner,
+};
 pub use snapshot::{empty_globset, walk_files, HashMode, WalkFilter};
+pub use snapshot_types::{DirSet, SideSnapshot};
 pub use types::{
     Action, Baseline, BisyncOptions, BisyncStats, CompareMode, Conflict, ConflictMode,
-    DeletePolicy, Direction, Sig, Throttle, Tree, Versioning, VersioningScheme,
+    DeletePolicy, Direction, PairSide, Sig, Throttle, Tree, Versioning, VersioningScheme,
+    VersionsLocation,
 };
 
+#[cfg(test)]
+#[path = "core/contract_tests.rs"]
+mod contract_tests;
 #[cfg(all(test, windows))]
 #[path = "os/windows/link_fixture.rs"]
 pub(crate) mod link_fixture;

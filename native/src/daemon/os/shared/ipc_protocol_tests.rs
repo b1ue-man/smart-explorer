@@ -44,14 +44,13 @@ fn share_snapshot_carries_the_profile_cas_revision() {
 fn maximum_profile_and_event_backlog_fit_one_ipc_response() {
     let mut snapshot = ShareWorkerSnapshot::default();
     for index in 0..210 {
-        snapshot
-            .profiles
-            .default_direct_exports
-            .roots
-            .push(crate::share::SharedRoot {
-                label: format!("root-{index}"),
-                path: format!("/{}", "x".repeat(4096)),
-            });
+        snapshot.profiles.default_direct_exports.roots.push(
+            crate::share::SharedRoot::new(
+                format!("root-{index}"),
+                format!("/{}", "x".repeat(4096)),
+            )
+            .with_access(crate::share::ExportAccess::ReadWrite),
+        );
     }
     snapshot.events = (0..512)
         .map(|index| {

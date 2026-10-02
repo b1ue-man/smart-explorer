@@ -148,6 +148,13 @@ pub fn is_enabled() -> bool {
         .unwrap_or(false)
 }
 
+/// The logon entry exists, but Windows was told to skip it (Task Manager or
+/// Settings "Autostart", `StartupApproved\Run`); the settings show it.
+/// Contract stage: not detected yet.
+pub fn disabled_by_system() -> bool {
+    false
+}
+
 /// Register the daemon to start at every logon.
 pub fn enable() -> std::io::Result<()> {
     write_run_entry(&daemon_exe()?)

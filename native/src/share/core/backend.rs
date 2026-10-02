@@ -462,6 +462,7 @@ impl From<FsMeta> for VfsMeta {
             name: metadata.name,
             is_dir: metadata.is_dir,
             is_symlink: metadata.is_symlink,
+            special: metadata.special,
             size: metadata.size,
             mtime_ms: metadata.mtime_ms,
             btime_ms: metadata.btime_ms,

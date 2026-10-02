@@ -5,7 +5,10 @@ use std::path::Path;
 pub(crate) type FileIdentity = (u32, u64);
 
 pub(crate) fn metadata_is_link_like(path: &Path, metadata: &std::fs::Metadata) -> bool {
-    use std::os::windows::{fs::{MetadataExt, OpenOptionsExt}, io::AsRawHandle};
+    use std::os::windows::{
+        fs::{MetadataExt, OpenOptionsExt},
+        io::AsRawHandle,
+    };
     use windows_sys::Win32::Storage::FileSystem::*;
 
     if metadata.is_symlink() {
@@ -25,12 +28,36 @@ pub(crate) fn metadata_is_link_like(path: &Path, metadata: &std::fs::Metadata) -
     let mut info: FILE_ATTRIBUTE_TAG_INFO = unsafe { std::mem::zeroed() };
     let read = unsafe {
         GetFileInformationByHandleEx(
-            file.as_raw_handle(), FileAttributeTagInfo,
+            file.as_raw_handle(),
+            FileAttributeTagInfo,
             (&mut info as *mut FILE_ATTRIBUTE_TAG_INFO).cast(),
             std::mem::size_of::<FILE_ATTRIBUTE_TAG_INFO>() as u32,
         )
     };
     read == 0 || info.ReparseTag == 0 || info.ReparseTag & 0x2000_0000 != 0
+}
+
+/// Special files of Windows listings are told apart by the app's local
+/// backend; this agent-side helper sees none.
+pub(crate) fn metadata_is_special(_metadata: &std::fs::Metadata) -> bool {
+    false
+}
+
+/// Opens `path` for reading only when it is a regular file.
+pub(crate) fn open_regular_file(path: &Path) -> io::Result<std::fs::File> {
+    let file = std::fs::File::open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("keine reguläre Datei: {}", path.display()),
+        ));
+    }
+    Ok(file)
+}
+
+/// No filesystem-wide flush on Windows (per-file flushes cover a stage).
+pub(crate) fn sync_filesystem(_path: &Path) -> io::Result<bool> {
+    Ok(false)
 }
 
 pub(crate) fn file_identity(file: &std::fs::File) -> io::Result<FileIdentity> {

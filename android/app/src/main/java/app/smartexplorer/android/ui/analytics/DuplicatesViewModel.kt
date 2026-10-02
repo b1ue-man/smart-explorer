@@ -65,6 +65,8 @@ internal class DuplicatesViewModel : ViewModel() {
     fun start() {
         val target = location ?: return
         if (phase == ScanPhase.Scanning) cancel()
+        // The page shows one result: the former one is freed at once.
+        taskId?.let { releaseResult(it) }
         scanJob?.cancel()
         phase = ScanPhase.Scanning
         error = null
@@ -124,6 +126,8 @@ internal class DuplicatesViewModel : ViewModel() {
 
     fun backToSetup() {
         if (phase == ScanPhase.Scanning) cancel()
+        taskId?.let { releaseResult(it) }
+        taskId = null
         scanJob?.cancel()
         phase = ScanPhase.Setup
         groups = emptyList()
@@ -192,6 +196,12 @@ internal class DuplicatesViewModel : ViewModel() {
                 deleting = false
             }
         }
+    }
+
+    /** The activity is gone for good: its result is unreachable, so the core frees it. */
+    override fun onCleared() {
+        taskId?.let { releaseResult(it) }
+        super.onCleared()
     }
 
     /**

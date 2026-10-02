@@ -10,6 +10,57 @@ pub(crate) fn metadata_is_link_like(_path: &Path, metadata: &std::fs::Metadata) 
     metadata.file_type().is_symlink()
 }
 
+/// FIFO, socket or device: no data stream to read.
+pub(crate) fn metadata_is_special(metadata: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::FileTypeExt;
+    let kind = metadata.file_type();
+    kind.is_fifo() || kind.is_socket() || kind.is_block_device() || kind.is_char_device()
+}
+
+/// Opens `path` for reading only when it is a regular file (links are
+/// followed as before): the open never waits on a FIFO and a device or
+/// socket is refused before any byte is read.
+pub(crate) fn open_regular_file(path: &Path) -> io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::os::unix::io::AsRawFd;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY)
+        .open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("keine reguläre Datei: {}", path.display()),
+        ));
+    }
+    // Back to ordinary blocking reads for the regular file.
+    let fd = file.as_raw_fd();
+    // SAFETY: `fd` belongs to `file`, which stays open across both calls.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(file)
+}
+
+/// Flushes the filesystem that holds `path` (`syncfs`); `false` where the
+/// call is not available.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub(crate) fn sync_filesystem(path: &Path) -> io::Result<bool> {
+    use std::os::unix::io::AsRawFd;
+    let directory = std::fs::File::open(path)?;
+    // SAFETY: the descriptor stays open for the duration of the call.
+    if unsafe { libc::syncfs(directory.as_raw_fd()) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(true)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+pub(crate) fn sync_filesystem(_path: &Path) -> io::Result<bool> {
+    Ok(false)
+}
+
 pub(crate) fn file_identity(file: &std::fs::File) -> io::Result<FileIdentity> {
     let metadata = file.metadata()?;
     Ok((metadata.dev(), metadata.ino()))

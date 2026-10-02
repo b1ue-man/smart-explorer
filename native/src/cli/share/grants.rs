@@ -438,6 +438,7 @@ fn grant_state_code(state: &crate::share::DirectGrantState) -> &'static str {
     match state {
         crate::share::DirectGrantState::Accepted => "accepted",
         crate::share::DirectGrantState::Ignored => "ignored",
+        crate::share::DirectGrantState::Reconfirm => "reconfirm",
     }
 }
 

@@ -1,4 +1,11 @@
-use crate::bisync::{CompareMode, ConflictMode, DeletePolicy, Direction, VersioningScheme};
+use crate::bisync::{
+    CompareMode, ConflictMode, DeletePolicy, Direction, VersioningScheme, VersionsLocation,
+};
+
+/// Version of the saved job settings. A job file without `config_version`
+/// is 0 (saved before RV1) and is migrated when the jobs are loaded; after
+/// that a stored 0 (e.g. `max_delete_pct`) is the user's choice (B09).
+pub const CURRENT_CONFIG_VERSION: u32 = 1;
 
 /// What makes a job run. Timer-based kinds (`Interval`, `Calendar`) are evaluated
 /// by `due()`; the event kinds are driven by the daemon (`OnStartup` once at
@@ -88,6 +95,18 @@ pub struct SyncJob {
     pub cal_monthday: u8,
     /// RealTime: settle/idle delay in seconds after the last change before running.
     pub rt_debounce_secs: u64,
+    /// RealTime: longest wait after the first change while changes keep
+    /// coming (0 = automatic, see `effective_rt_max_latency_secs`).
+    pub rt_max_latency_secs: u64,
+    /// RealTime: seconds between polls of sides without change events
+    /// (network drives, remote sides); 0 = never poll.
+    pub rt_poll_secs: u64,
+    /// Seconds between control runs that walk the watched source(s)
+    /// completely; 0 = none.
+    pub verify_interval_secs: u64,
+    /// Seconds between complete verifications of pure target sides (the
+    /// incremental mirror otherwise checks them at changed paths); 0 = none.
+    pub verify_target_secs: u64,
     /// OnConnect: volume label / serial / drive-letter wildcard ("" = any removable).
     pub connect_match: String,
     /// Active-hours window (minutes after midnight). from==to means always allowed.
@@ -113,6 +132,15 @@ pub struct SyncJob {
     pub max_delete: u64,
     /// ...or more than this percent of a side's files (0 = no limit).
     pub max_delete_pct: u8,
+    /// The percentage stop applies from this many deletions on.
+    pub max_delete_min: u64,
+    /// Where versions of replaced and deleted files go.
+    pub versions_location: VersionsLocation,
+    /// Descend into other file systems mounted inside a root (Linux): off
+    /// for new jobs, on for jobs saved before RV1.
+    pub cross_mounts: bool,
+    /// Version of these settings (`CURRENT_CONFIG_VERSION`; 0 = before RV1).
+    pub config_version: u32,
 
     // Group G: filters (0 = off)
     pub filter_min_size_kb: u64,
@@ -132,6 +160,9 @@ pub struct SyncJob {
     /// Commands run before / after the job (background daemon runs).
     pub run_before: String,
     pub run_after: String,
+    /// Command run after a canceled or failed run (cleanup), like
+    /// `run_after`; empty = none.
+    pub run_cleanup: String,
 }
 
 fn gen_id() -> String {
@@ -144,7 +175,9 @@ fn gen_id() -> String {
 
 impl SyncJob {
     /// New job with safe defaults (two-way, strict conflicts, 30-day retention,
-    /// manual, hidden included).
+    /// manual, hidden included, mass-delete stop at 25 files and 50 %, other
+    /// mounted file systems left out). Every surface takes its defaults from
+    /// here.
     pub fn new(name: String, source: String, target: String) -> Self {
         SyncJob {
             id: gen_id(),
@@ -164,6 +197,10 @@ impl SyncJob {
             cal_weekdays: 0,
             cal_monthday: 0,
             rt_debounce_secs: 10,
+            rt_max_latency_secs: 0,
+            rt_poll_secs: 300,
+            verify_interval_secs: 3_600,
+            verify_target_secs: 86_400,
             connect_match: String::new(),
             active_from_min: 0,
             active_to_min: 0,
@@ -176,7 +213,11 @@ impl SyncJob {
             retain_count: 0,
             use_recycle_bin: false,
             max_delete: 0,
-            max_delete_pct: 0,
+            max_delete_pct: 50,
+            max_delete_min: 25,
+            versions_location: VersionsLocation::Auto,
+            cross_mounts: false,
+            config_version: CURRENT_CONFIG_VERSION,
             filter_min_size_kb: 0,
             filter_max_size_kb: 0,
             filter_max_age_days: 0,
@@ -189,6 +230,17 @@ impl SyncJob {
             retry_delay_secs: 2,
             run_before: String::new(),
             run_after: String::new(),
+            run_cleanup: String::new(),
+        }
+    }
+
+    /// RealTime: the longest wait after the first change, `rt_max_latency_secs`
+    /// or automatically max(5 × `rt_debounce_secs`, 300 s).
+    pub fn effective_rt_max_latency_secs(&self) -> u64 {
+        if self.rt_max_latency_secs > 0 {
+            self.rt_max_latency_secs
+        } else {
+            self.rt_debounce_secs.saturating_mul(5).max(300)
         }
     }
 
@@ -256,6 +308,10 @@ impl SyncJob {
             use_recycle: self.use_recycle_bin,
             max_delete: self.max_delete,
             max_delete_pct: self.max_delete_pct,
+            max_delete_min: self.max_delete_min,
+            cross_mounts: self.cross_mounts,
+            versions: self.versions_location,
+            verify_target_secs: self.verify_target_secs,
             bwlimit_bps: self
                 .bwlimit_kbps
                 .checked_mul(1024)

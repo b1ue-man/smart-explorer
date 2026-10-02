@@ -5,8 +5,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use super::apply_delete::{delete_guarded_with_progress_and_guard, DeleteGuardedPhase};
 use super::apply_guard::{capture, revalidate, ExpectedFile};
 use super::apply_transfer::{copy_replace, copy_replace_with_progress, CopyReplacePhase};
+use super::pair_lock::PairLock;
 use super::paths::join;
 use super::persistence::versions_dir;
+use super::replica_state::merge_baseline_entries;
+use super::run_types::StateKey;
 use super::types::{Conflict, Sig, Throttle};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -82,14 +85,57 @@ pub fn resolve_checked(
     cancel: &AtomicBool,
     progress: impl FnMut(ResolvePhase),
 ) -> io::Result<(Option<Sig>, Option<Sig>)> {
-    resolve_variant_checked(a, root_a, b, root_b, conflict, keep_a, None, pair, cancel, progress)
+    resolve_variant_checked(
+        a, root_a, b, root_b, conflict, keep_a, None, pair, cancel, progress,
+    )
+}
+
+/// Resolves one conflict under the pair's lock and records the result in the
+/// stored state the conflict came from (V3, Y45): no run works on the pair
+/// meanwhile and nothing a run recorded before is overwritten.
+/// `ErrorKind::WouldBlock` while a run of the pair is in progress.
+#[allow(clippy::too_many_arguments)]
+pub fn resolve_recorded(
+    a: &dyn Backend,
+    root_a: &str,
+    b: &dyn Backend,
+    root_b: &str,
+    conflict: &Conflict,
+    keep_a: bool,
+    variant_id: Option<&str>,
+    state: &StateKey,
+    cancel: &AtomicBool,
+    progress: impl FnMut(ResolvePhase),
+) -> io::Result<(Option<Sig>, Option<Sig>)> {
+    let lock = PairLock::acquire(&state.lock_id)?;
+    let signatures = resolve_variant_checked(
+        a,
+        root_a,
+        b,
+        root_b,
+        conflict,
+        keep_a,
+        variant_id,
+        &state.pair_id,
+        cancel,
+        progress,
+    )?;
+    merge_baseline_entries(&lock, state, &[(conflict.rel.clone(), signatures)])?;
+    Ok(signatures)
 }
 
 #[allow(clippy::too_many_arguments)]
 pub fn resolve_variant_checked(
-    a: &dyn Backend, root_a: &str, b: &dyn Backend, root_b: &str,
-    conflict: &Conflict, keep_a: bool, variant_id: Option<&str>, pair: &str,
-    cancel: &AtomicBool, mut progress: impl FnMut(ResolvePhase),
+    a: &dyn Backend,
+    root_a: &str,
+    b: &dyn Backend,
+    root_b: &str,
+    conflict: &Conflict,
+    keep_a: bool,
+    variant_id: Option<&str>,
+    pair: &str,
+    cancel: &AtomicBool,
+    mut progress: impl FnMut(ResolvePhase),
 ) -> io::Result<(Option<Sig>, Option<Sig>)> {
     if cancel.load(Ordering::Acquire) {
         return Err(interrupted());
@@ -98,12 +144,21 @@ pub fn resolve_variant_checked(
 
     if conflict.duplicates.is_some() {
         return super::duplicate_apply::resolve(
-            super::incremental::SyncEndpoints::new(a, root_a, b, root_b), conflict,
-            keep_a, variant_id, &versions_dir(pair), cancel, 0, progress,
+            super::incremental::SyncEndpoints::new(a, root_a, b, root_b),
+            conflict,
+            keep_a,
+            variant_id,
+            &versions_dir(pair),
+            cancel,
+            0,
+            progress,
         );
     }
     if variant_id.is_some() {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Dieser Konflikt hat keine auswählbare Datei-ID"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Dieser Konflikt hat keine auswählbare Datei-ID",
+        ));
     }
 
     let versions = versions_dir(pair);

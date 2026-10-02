@@ -1,6 +1,11 @@
 //! Discovery (PIN pairing) client state: own offers, advertised entries,
 //! pending commands and key exchanges, without any UI.
 
+#[path = "discovery_pairing_ui.rs"]
+mod pairing_ui;
+
+pub use pairing_ui::{revocable, unconfirmed_label, DiscoveryPinDraft};
+
 /// Status after the Share worker that held an offer stopped or was replaced.
 pub const WORKER_STOPPED_STATUS: &str =
     "Sichtbarkeit beendet: Share-Worker wurde gestoppt oder neu gestartet";
@@ -123,6 +128,8 @@ pub enum DiscoveryUiAction {
         display_alias: String,
         pin: crate::share::DiscoveryPin,
         duration_secs: u64,
+        /// "Unsichere PIN erlauben" for a short or trivial PIN.
+        allow_weak_pin: bool,
     },
     Stop {
         offer_id: String,
@@ -131,8 +138,15 @@ pub enum DiscoveryUiAction {
     Connect {
         discovery_id: String,
         pin: crate::share::DiscoveryPin,
+        /// "Auch meine Freigaben für dieses Gerät öffnen" (default off).
+        share_back: bool,
     },
     Cancel {
+        exchange_id: String,
+    },
+    /// "Widerrufen" of an unconfirmed pairing; the caller removes the
+    /// relation (`take_unconfirmed`), the dispatcher only forgets it.
+    Revoke {
         exchange_id: String,
     },
 }
@@ -155,6 +169,12 @@ pub struct DiscoveryUiState {
     pub initial_refresh_requested: bool,
     pub status: Option<String>,
     pub dispatcher: super::discovery_events::DiscoveryCommandDispatcher,
+    /// "Unsichere PIN erlauben" for the next offer (FC2).
+    pub allow_weak_pin: bool,
+    /// "Auch meine Freigaben für dieses Gerät öffnen" for the next connect.
+    pub share_back: bool,
+    /// Pairings installed without confirmation, by exchange id (S24).
+    pub unconfirmed: std::collections::HashMap<String, crate::share::DiscoveryRelationOutcome>,
 }
 
 impl Default for DiscoveryUiState {
@@ -179,6 +199,9 @@ impl Default for DiscoveryUiState {
             initial_refresh_requested: false,
             status,
             dispatcher,
+            allow_weak_pin: false,
+            share_back: false,
+            unconfirmed: std::collections::HashMap::new(),
         }
     }
 }
@@ -449,39 +472,5 @@ impl DiscoveryUiState {
         self.entry_pins
             .retain(|id, _| entries.iter().any(|entry| &entry.discovery_id == id));
         super::discovery_retention::prune_orphaned_terminal_exchanges(self);
-    }
-}
-use zeroize::Zeroize;
-
-#[derive(Default)]
-pub struct DiscoveryPinDraft(String);
-
-impl std::fmt::Debug for DiscoveryPinDraft {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("DiscoveryPinDraft([REDACTED])")
-    }
-}
-
-impl Drop for DiscoveryPinDraft {
-    fn drop(&mut self) {
-        self.0.zeroize();
-    }
-}
-
-impl DiscoveryPinDraft {
-    pub fn text_mut(&mut self) -> &mut String {
-        &mut self.0
-    }
-
-    pub fn take(&mut self) -> String {
-        std::mem::take(&mut self.0)
-    }
-
-    pub fn byte_len(&self) -> usize {
-        self.0.len()
-    }
-
-    pub fn trivially_guessable(&self) -> bool {
-        self.0.is_empty() || self.0 == "0"
     }
 }

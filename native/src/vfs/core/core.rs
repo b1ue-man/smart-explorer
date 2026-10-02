@@ -1,7 +1,8 @@
-use std::io::{self, Read, Write};
+use std::io::{Read, Write};
 use std::sync::Arc;
 
 use super::capabilities::{MountPathCapabilities, RootConfinement, StagedWriteCapabilities};
+use super::extensions::BackendExtensions;
 
 pub use super::batch::{BatchGet, BatchLimits, BatchPut, BatchPutOutcome, BatchSink};
 pub use super::congestion::{congestion_error, congestion_of, Congestion};
@@ -33,6 +34,11 @@ pub trait Backend: Send + Sync {
     fn uncached_backend(&self) -> Option<BackendHandle> {
         None
     }
+    /// Optional extensions (tolerant listing, stage times, host-side search,
+    /// …); call them through the `vfs::` functions, which add the fallbacks.
+    fn extensions(&self) -> Option<&dyn BackendExtensions> {
+        None
+    }
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>>;
     /// Sync observes actual same-name files, without browsing-only aliases.
     fn list_dir_for_sync(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
@@ -48,11 +54,7 @@ pub trait Backend: Send + Sync {
     /// parsing failures as absence. Safety-critical overwrite and uniqueness
     /// decisions must use this fallible form.
     fn try_exists(&self, path: &str) -> VfsResult<bool> {
-        match self.stat(path) {
-            Ok(_) => Ok(true),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
-            Err(error) => Err(error),
-        }
+        super::trait_defaults::try_exists(self, path)
     }
 
     /// Best-effort existence hint retained for non-destructive UI paths.
@@ -194,7 +196,12 @@ pub trait Backend: Send + Sync {
         super::promotion::default_promote_staged(self, staged, destination)
     }
     /// Replace the captured object; duplicate-capable providers must bind by ID.
-    fn promote_staged_to_id(&self, staged: &str, destination: &str, id: Option<&str>) -> VfsResult<()> {
+    fn promote_staged_to_id(
+        &self,
+        staged: &str,
+        destination: &str,
+        id: Option<&str>,
+    ) -> VfsResult<()> {
         super::promotion::promote_to_id(self, staged, destination, id)
     }
 
@@ -217,13 +224,7 @@ pub trait Backend: Send + Sync {
     /// Create one new directory; `AlreadyExists` when the name is taken. The
     /// default probes first (not atomic); protocol backends override it.
     fn create_dir_new(&self, path: &str) -> VfsResult<()> {
-        if self.try_exists(path)? {
-            return Err(io::Error::new(
-                io::ErrorKind::AlreadyExists,
-                path.to_string(),
-            ));
-        }
-        self.create_dir(path)
+        super::trait_defaults::create_dir_new(self, path)
     }
 
     /// Remove a copy stage this client created and never published (abort);

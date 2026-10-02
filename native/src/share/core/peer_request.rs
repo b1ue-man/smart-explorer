@@ -401,6 +401,9 @@ fn response_matches(request: &FsRequest, response: &FsResponse) -> bool {
         | FsRequest::DiscardStage { .. }
         | FsRequest::ReleaseLease => matches!(response, FsResponse::Ok),
         FsRequest::PutBatchStatus { .. } => matches!(response, FsResponse::Batch { .. }),
+        FsRequest::Recycle(_) => matches!(response, FsResponse::Recycle { .. }),
+        FsRequest::FinishStage(_) => matches!(response, FsResponse::StageFinished { .. }),
+        FsRequest::SyncFilesystem(_) => matches!(response, FsResponse::Synced { .. }),
         FsRequest::Read { .. }
         | FsRequest::ReadAt { .. }
         | FsRequest::Write { .. }
@@ -408,7 +411,11 @@ fn response_matches(request: &FsRequest, response: &FsResponse) -> bool {
         | FsRequest::WriteDone
         | FsRequest::WalkTree { .. }
         | FsRequest::StorageSnapshot { .. }
-        | FsRequest::StorageAnalysis { .. }
+        | FsRequest::StorageAnalysis(_)
+        | FsRequest::DuplicateSearch(_)
+        | FsRequest::HashWalk(_)
+        | FsRequest::ListDirBatch(_)
+        | FsRequest::WatchExport(_)
         | FsRequest::PutBatch { .. }
         | FsRequest::GetBatch { .. } => false,
     }

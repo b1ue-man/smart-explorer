@@ -28,6 +28,7 @@ pub mod ftp;
 pub mod gdrive;
 #[cfg(not(target_os = "android"))]
 pub mod icons;
+pub mod keep_awake;
 pub mod linemerge;
 mod local_access;
 #[cfg(any(target_os = "android", all(unix, test)))]
@@ -55,6 +56,7 @@ pub mod updater;
 pub mod vfs;
 #[cfg(windows)]
 pub mod virtual_clipboard;
+pub mod watch;
 pub mod webdav;
 pub mod zipfs;
 

@@ -6,7 +6,8 @@ use std::time::{Duration, Instant};
 use clap::{Args, Subcommand};
 
 use super::discoverable_input::{
-    duration_secs, pin_source, read_pin, resolve_room, select_offers, trivial_pin, validate_name,
+    duration_secs, pin_source, read_pin, resolve_room, select_offers, validate_name,
+    weak_pin_check, PinSource,
 };
 use super::discoverable_output::{
     clean, local_time, offer_text, offer_value, stop_reason_text, target_text,
@@ -28,17 +29,20 @@ const INACTIVE_SHARE: &str = concat!(
 
 const DISCOVERABLE_HELP: &str = "\
 Publishes this device, or a room with --room, on the Share server under a name
-for a limited time (default 5 minutes). Another device finds the name in its
-discovery list and pairs by entering the same PIN; the Share server only relays
-the pairing and never learns the PIN. Without a subcommand this starts an offer:
+for a limited time (default 5, at most 30 minutes). Another device finds the
+name in its discovery list and pairs by entering the same PIN; the Share server
+only relays the pairing and never learns the PIN. The offer ends after the first
+pairing or after 5 failed attempts. Without a subcommand this starts an offer
+with a random six-digit PIN that is printed:
 
-  se share discoverable --minutes 5 --pin 1454
-  printf '%s\\n' 1454 | se share discoverable --pin-stdin
-  se share discoverable --room Team --name \"Team laptop\"   (asks for the PIN)
+  se share discoverable --minutes 5
+  printf '%s\\n' 481902 | se share discoverable --pin-stdin
+  se share discoverable --room Team --name \"Team laptop\" --pin-prompt
 
---pin is visible in the process list; --pin-stdin or the hidden prompt keep the
-PIN out of it. `list` shows the running offers with their end time; `stop` ends
-one (by id or unique id prefix) or all of them.";
+PINs shorter than 6 characters or easy to guess need --allow-weak-pin. --pin is
+visible in the process list; --pin-stdin or --pin-prompt keep the PIN out of it.
+`list` shows the running offers with their end time; `stop` ends one (by id or
+unique id prefix) or all of them.";
 
 #[derive(Args)]
 #[command(args_conflicts_with_subcommands = true, long_about = DISCOVERABLE_HELP)]
@@ -74,19 +78,33 @@ struct PublishArgs {
     #[arg(
         long,
         default_value_t = 5,
-        value_parser = clap::value_parser!(u64).range(1..),
-        help = "How many minutes the offer stays discoverable"
+        value_parser = clap::value_parser!(u64).range(1..=30),
+        help = "How many minutes the offer stays discoverable (at most 30)"
     )]
     minutes: u64,
     #[arg(
         long,
         value_name = "PIN",
-        conflicts_with = "pin_stdin",
+        conflicts_with_all = ["pin_stdin", "pin_prompt", "random_pin"],
         help = "PIN the other device has to enter (visible in the process list)"
     )]
     pin: Option<String>,
-    #[arg(long, help = "Read the PIN from stdin (one line)")]
+    #[arg(
+        long,
+        conflicts_with_all = ["pin_prompt", "random_pin"],
+        help = "Read the PIN from stdin (one line)"
+    )]
     pin_stdin: bool,
+    #[arg(
+        long,
+        conflicts_with = "random_pin",
+        help = "Type the PIN at a hidden prompt"
+    )]
+    pin_prompt: bool,
+    #[arg(long, help = "Use a random six-digit PIN and print it (the default)")]
+    random_pin: bool,
+    #[arg(long, help = "Allow a PIN shorter than 6 characters or easy to guess")]
+    allow_weak_pin: bool,
     #[arg(long, help = "Print machine-readable JSON")]
     json: bool,
 }
@@ -156,19 +174,21 @@ fn publish(args: PublishArgs) -> Result<(), String> {
         ));
     }
     let stdin_is_terminal = std::io::stdin().is_terminal();
-    let pin = read_pin(pin_source(args.pin, args.pin_stdin, stdin_is_terminal)?)?;
-    if trivial_pin(&pin) {
-        let _ = writeln!(
-            std::io::stderr(),
-            "se: warning: an empty PIN or \"0\" is trivial to guess"
-        );
+    let source = pin_source(args.pin, args.pin_stdin, args.pin_prompt, stdin_is_terminal)?;
+    let random = source == PinSource::Random;
+    let pin = read_pin(source)?;
+    if let Some(warning) = weak_pin_check(&pin, args.allow_weak_pin)? {
+        let _ = writeln!(std::io::stderr(), "se: warning: {warning}");
     }
+    // A random PIN has to be read out to the other device.
+    let shown_pin = random.then(|| pin.clone());
     let requested = target.clone();
     let command = ShareCmd::Discovery(DiscoveryCommand::Publish {
         target,
         display_alias,
         pin: DiscoveryPin::new(pin),
         duration_secs,
+        allow_weak_pin: args.allow_weak_pin,
     });
     let offer = match crate::daemon::share_command(command) {
         Ok(ShareCommandReply::DiscoveryOffer { offer }) => offer,
@@ -186,7 +206,13 @@ fn publish(args: PublishArgs) -> Result<(), String> {
     } else {
         (offer, false)
     };
-    print_offer(&offer, &profiles, connected, args.json)
+    print_offer(
+        &offer,
+        &profiles,
+        connected,
+        shown_pin.as_deref(),
+        args.json,
+    )
 }
 
 /// A publish can fail after the worker already holds the offer (the server
@@ -253,6 +279,7 @@ fn print_offer(
     offer: &OwnDiscoveryOffer,
     profiles: &ShareProfiles,
     connected: bool,
+    pin: Option<&str>,
     json: bool,
 ) -> Result<(), String> {
     let now = crate::share::core_now_secs();
@@ -261,6 +288,7 @@ fn print_offer(
         let value = serde_json::json!({
             "action": "discoverable",
             "offer": offer_value(offer, profiles, now),
+            "pin": pin,
             "note": note,
         });
         println!(
@@ -269,6 +297,9 @@ fn print_offer(
         );
     } else {
         println!("{}", offer_text(offer, profiles, now));
+        if let Some(pin) = pin {
+            println!("pin\t{pin}");
+        }
         if let Some(note) = note {
             println!("note\t{note}");
         }
@@ -400,7 +431,10 @@ mod tests {
     fn cli_task_discoverable_parses_one_line_publish_and_subcommands() {
         for accepted in [
             "share discoverable --minutes 5 --pin 1454",
+            "share discoverable --minutes 30 --pin 1454 --allow-weak-pin",
             "share discoverable --pin-stdin --json",
+            "share discoverable --pin-prompt",
+            "share discoverable --random-pin",
             "share discoverable",
             "share discoverable --room Team --name Laptop",
             "share discoverable list",
@@ -413,7 +447,10 @@ mod tests {
         }
         for rejected in [
             "share discoverable --minutes 0 --pin 1",
+            "share discoverable --minutes 31",
             "share discoverable --pin 1 --pin-stdin",
+            "share discoverable --pin 1 --random-pin",
+            "share discoverable --pin-stdin --pin-prompt",
             "share discoverable --pin 1 list",
             "share discoverable stop abc --all",
         ] {

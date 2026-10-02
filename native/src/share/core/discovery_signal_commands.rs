@@ -2,10 +2,11 @@ use std::io;
 use std::time::{Duration, Instant};
 
 use super::core::{eio, now_secs, random_token};
+use super::discovery_pin::{discovery_pin_strength, DISCOVERY_MAX_OFFER_SECS};
 use super::discovery_signal_port::DiscoveryExchangePort;
 use super::discovery_signal_state::{
-    ActiveDiscoveryOffer, DiscoverySignalState, MAX_ACTIVE_DISCOVERY_OFFERS,
-    DISCOVERY_PUBLISH_RETRY_DELAY, MAX_DISCOVERY_ALIAS_BYTES, MAX_DISCOVERY_SUITE_BYTES,
+    ActiveDiscoveryOffer, DiscoverySignalState, DISCOVERY_PUBLISH_RETRY_DELAY,
+    MAX_ACTIVE_DISCOVERY_OFFERS, MAX_DISCOVERY_ALIAS_BYTES, MAX_DISCOVERY_SUITE_BYTES,
 };
 use super::discovery_signal_types::{
     DiscoveryCommand, DiscoveryEvent, DiscoveryOfferHandle, DiscoveryOfferStopReason,
@@ -18,6 +19,13 @@ use super::types::{ShareCmdResult, ShareEvent};
 pub(super) struct DiscoverySignalRuntime {
     pub(super) state: DiscoverySignalState,
     pub(super) port: Box<dyn DiscoveryExchangePort>,
+}
+
+/// Duration and PIN opt-in of one publish command (FC2).
+#[derive(Clone, Copy)]
+struct OfferLimits {
+    duration_secs: u64,
+    allow_weak_pin: bool,
 }
 
 pub(super) struct DiscoveryCommandOutcome {
@@ -60,16 +68,24 @@ impl DiscoverySignalRuntime {
                 display_alias,
                 pin,
                 duration_secs,
+                allow_weak_pin,
             } => DiscoveryCommandOutcome::result(
-                self.prepare_offer(target, display_alias, &pin, duration_secs, events)
-                    .map(ShareCmdResult::DiscoveryOffer),
-            ),
-            DiscoveryCommand::StopPublishing { offer_id } => {
-                DiscoveryCommandOutcome::result(
-                    self.stop_offer(&offer_id, DiscoveryOfferStopReason::Requested, events)
-                        .map(|()| ShareCmdResult::Applied),
+                self.prepare_offer(
+                    target,
+                    display_alias,
+                    &pin,
+                    OfferLimits {
+                        duration_secs,
+                        allow_weak_pin,
+                    },
+                    events,
                 )
-            }
+                .map(ShareCmdResult::DiscoveryOffer),
+            ),
+            DiscoveryCommand::StopPublishing { offer_id } => DiscoveryCommandOutcome::result(
+                self.stop_offer(&offer_id, DiscoveryOfferStopReason::Requested, events)
+                    .map(|()| ShareCmdResult::Applied),
+            ),
             DiscoveryCommand::ListDiscoveries => {
                 self.replay_offers(events);
                 DiscoveryCommandOutcome::result(Err(eio(
@@ -103,23 +119,32 @@ impl DiscoverySignalRuntime {
                 display_alias,
                 pin,
                 duration_secs,
-            } => match self.prepare_offer(target, display_alias, &pin, duration_secs, events) {
-                Ok(handle) => {
-                    match self.publish_offer_now(&handle.offer_id, signal, events) {
-                        Ok(true) => DiscoveryCommandOutcome::result(Ok(
-                            ShareCmdResult::DiscoveryOffer(handle),
-                        )),
-                        Ok(false) => DiscoveryCommandOutcome::result(Err(eio(
-                            "Discovery-Ziel ist nicht mehr verfuegbar",
-                        ))),
-                        Err(error) => DiscoveryCommandOutcome::reconnect(Err(error)),
+                allow_weak_pin,
+            } => match self.prepare_offer(
+                target,
+                display_alias,
+                &pin,
+                OfferLimits {
+                    duration_secs,
+                    allow_weak_pin,
+                },
+                events,
+            ) {
+                Ok(handle) => match self.publish_offer_now(&handle.offer_id, signal, events) {
+                    Ok(true) => {
+                        DiscoveryCommandOutcome::result(Ok(ShareCmdResult::DiscoveryOffer(handle)))
                     }
-                }
+                    Ok(false) => DiscoveryCommandOutcome::result(Err(eio(
+                        "Discovery-Ziel ist nicht mehr verfuegbar",
+                    ))),
+                    Err(error) => DiscoveryCommandOutcome::reconnect(Err(error)),
+                },
                 Err(error) => DiscoveryCommandOutcome::result(Err(error)),
             },
             DiscoveryCommand::StopPublishing { offer_id } => {
                 let existed = self.state.offers.contains_key(&offer_id);
-                let result = self.stop_offer_connected(
+                let result = self
+                    .stop_offer_connected(
                         signal,
                         &offer_id,
                         DiscoveryOfferStopReason::Requested,
@@ -147,22 +172,24 @@ impl DiscoverySignalRuntime {
                     DiscoveryCommandOutcome::result(result)
                 }
             }
-            DiscoveryCommand::StartDiscoveryExchange { discovery_id, pin } => {
-                match self.start_connector(signal, discovery_id, &pin, events) {
-                    Ok(handle) => DiscoveryCommandOutcome::result(Ok(
-                        ShareCmdResult::DiscoveryExchange(handle),
-                    )),
-                    Err(error) => {
-                        let reconnect = error.should_reconnect();
-                        let result = Err(error.into_io());
-                        if reconnect {
-                            DiscoveryCommandOutcome::reconnect(result)
-                        } else {
-                            DiscoveryCommandOutcome::result(result)
-                        }
+            DiscoveryCommand::StartDiscoveryExchange {
+                discovery_id,
+                pin,
+                share_back,
+            } => match self.start_connector(signal, discovery_id, &pin, share_back, events) {
+                Ok(handle) => {
+                    DiscoveryCommandOutcome::result(Ok(ShareCmdResult::DiscoveryExchange(handle)))
+                }
+                Err(error) => {
+                    let reconnect = error.should_reconnect();
+                    let result = Err(error.into_io());
+                    if reconnect {
+                        DiscoveryCommandOutcome::reconnect(result)
+                    } else {
+                        DiscoveryCommandOutcome::result(result)
                     }
                 }
-            }
+            },
             DiscoveryCommand::CancelDiscoveryExchange { exchange_id } => {
                 match self.cancel_exchange(signal, &exchange_id, events) {
                     Ok(()) => DiscoveryCommandOutcome::result(Ok(ShareCmdResult::Applied)),
@@ -185,17 +212,31 @@ impl DiscoverySignalRuntime {
         target: DiscoveryPublishTarget,
         display_alias: String,
         pin: &super::discovery_signal_types::DiscoveryPin,
-        duration_secs: u64,
+        limits: OfferLimits,
         events: &crossbeam_channel::Sender<ShareEvent>,
     ) -> io::Result<DiscoveryOfferHandle> {
+        let duration_secs = limits.duration_secs;
         if duration_secs == 0 {
             return Err(eio("Discovery-Gesamtdauer muss groesser als null sein"));
+        }
+        if duration_secs > DISCOVERY_MAX_OFFER_SECS {
+            return Err(eio(format!(
+                "Ein Discovery-Angebot dauert hoechstens {} Minuten",
+                DISCOVERY_MAX_OFFER_SECS / 60
+            )));
         }
         if self.state.offers.len() >= MAX_ACTIVE_DISCOVERY_OFFERS {
             return Err(eio("lokales Limit aktiver Discovery-Offers erreicht"));
         }
         if pin.as_bytes().len() > DISCOVERY_PIN_MAX_BYTES {
-            return Err(eio("Discovery-PIN ueberschreitet das lokale Ressourcenlimit"));
+            return Err(eio(
+                "Discovery-PIN ueberschreitet das lokale Ressourcenlimit",
+            ));
+        }
+        if !limits.allow_weak_pin {
+            if let Some(problem) = discovery_pin_strength(pin.as_bytes()).problem() {
+                return Err(eio(problem));
+            }
         }
         if display_alias.is_empty()
             || display_alias.len() > MAX_DISCOVERY_ALIAS_BYTES
@@ -257,7 +298,7 @@ impl DiscoverySignalRuntime {
         Ok(DiscoveryOfferHandle { offer_id })
     }
 
-    fn stop_offer(
+    pub(super) fn stop_offer(
         &mut self,
         offer_id: &str,
         reason: DiscoveryOfferStopReason,
@@ -267,8 +308,7 @@ impl DiscoverySignalRuntime {
             .state
             .remove_offer(offer_id)
             .ok_or_else(|| eio("Discovery-Offer ist nicht aktiv"))?;
-        self.state
-            .remember_closed_offer(offer.offer_id.clone());
+        self.state.remember_closed_offer(offer.offer_id.clone());
         self.port.remove_offer(offer_id);
         send_discovery_event(
             events,
@@ -330,10 +370,7 @@ impl DiscoverySignalRuntime {
     }
 }
 
-pub(super) fn offer_state_event(
-    offer: &ActiveDiscoveryOffer,
-    published: bool,
-) -> DiscoveryEvent {
+pub(super) fn offer_state_event(offer: &ActiveDiscoveryOffer, published: bool) -> DiscoveryEvent {
     if published {
         DiscoveryEvent::OfferPublished {
             offer_id: offer.offer_id.clone(),

@@ -61,6 +61,7 @@ fn dir_meta(name: String) -> VfsMeta {
         name,
         is_dir: true,
         is_symlink: false,
+        special: false,
         size: 0,
         mtime_ms: 0,
         btime_ms: 0,
@@ -84,6 +85,7 @@ pub(super) fn parse_list_line(line: &str) -> VfsResult<VfsMeta> {
     Ok(VfsMeta {
         is_dir: file.is_directory(),
         is_symlink: file.is_symlink(),
+        special: false,
         size: file.size() as u64,
         mtime_ms: systime_ms(file.modified()),
         btime_ms: 0,

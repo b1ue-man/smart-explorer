@@ -57,7 +57,7 @@ pub(super) fn platform_totals(args: &Value) -> PlatformTotals {
 mod tests {
     use serde_json::json;
 
-    use super::super::{bind_task, node, open_slot, store, Stored};
+    use super::super::{bind_task, node, Pending, Stored};
     use super::platform_totals;
     use crate::analytics::{Approximations, ScanOutcome, SizeNode, VolumeRoot};
 
@@ -121,17 +121,14 @@ mod tests {
         let place = VolumeRoot::from_segments(&[], true);
         let approx = Approximations::compute(&tree, &place, platform_totals(&args), true);
         let task = "android-background-task-apps";
-        let token = open_slot();
-        bind_task(token, task);
-        store(
-            token,
-            Stored::Analysis {
-                outcome: ScanOutcome::complete(tree),
-                approx,
-                base: "/storage/emulated/0".to_string(),
-                root: "/storage/emulated/0".to_string(),
-            },
-        );
+        let pending = Pending::open();
+        bind_task(pending.token(), task);
+        pending.store(Stored::Analysis {
+            outcome: ScanOutcome::complete(tree),
+            approx,
+            base: "/storage/emulated/0".to_string(),
+            root: "/storage/emulated/0".to_string(),
+        });
 
         let root = node(&json!({ "taskId": task, "path": [] })).expect("root");
         assert_eq!(root["location"], "/storage/emulated/0");

@@ -25,16 +25,20 @@ pub(crate) fn handle_walk_hashed(
         }
         let metadata = std::fs::symlink_metadata(&dir)?;
         if super::local_platform::metadata_is_link_like(&dir, &metadata) {
-            return Err(io::Error::new(io::ErrorKind::Unsupported,
-                super::HASH_WALK_LINK_BOUNDARY));
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                super::HASH_WALK_LINK_BOUNDARY,
+            ));
         }
         for ent in std::fs::read_dir(&dir)? {
             let ent = ent?;
             let p = ent.path();
             let md = std::fs::symlink_metadata(&p)?;
             if super::local_platform::metadata_is_link_like(&p, &md) {
-                return Err(io::Error::new(io::ErrorKind::Unsupported,
-                    super::HASH_WALK_LINK_BOUNDARY));
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    super::HASH_WALK_LINK_BOUNDARY,
+                ));
             }
             let rel = p
                 .strip_prefix(base)
@@ -88,7 +92,7 @@ pub(crate) fn handle_walk_hashed(
 }
 
 fn md5_file(path: &Path) -> io::Result<String> {
-    let mut f = std::fs::File::open(path)?;
+    let mut f = super::local_platform::open_regular_file(path)?;
     let mut ctx = Md5::new();
     let mut buf = vec![0u8; CHUNK];
     loop {
@@ -101,7 +105,8 @@ fn md5_file(path: &Path) -> io::Result<String> {
     Ok(ctx.finish_hex())
 }
 
-struct Md5 {
+/// MD5 without dependencies (the standalone agent includes this module).
+pub(crate) struct Md5 {
     a: u32,
     b: u32,
     c: u32,
@@ -112,7 +117,7 @@ struct Md5 {
 }
 
 impl Md5 {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Md5 {
             a: 0x67452301,
             b: 0xefcdab89,
@@ -124,7 +129,7 @@ impl Md5 {
         }
     }
 
-    fn update(&mut self, mut data: &[u8]) {
+    pub(crate) fn update(&mut self, mut data: &[u8]) {
         self.len = self.len.wrapping_add(data.len() as u64);
         if self.buf_len > 0 {
             let need = 64 - self.buf_len;
@@ -150,7 +155,7 @@ impl Md5 {
         }
     }
 
-    fn finish_hex(mut self) -> String {
+    pub(crate) fn finish_hex(mut self) -> String {
         let bit_len = self.len.wrapping_mul(8);
         let mut pad = [0u8; 72];
         pad[0] = 0x80;

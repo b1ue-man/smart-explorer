@@ -1,38 +1,69 @@
-use crossbeam_channel::bounded;
-use std::sync::atomic::{AtomicBool, Ordering};
+//! Find-and-reclaim and duplicate search of a remote location. An agent
+//! that hashes next to the data (SSH) streams sizes and MD5 in one walk;
+//! every other backend is listed folder by folder, its provider hashes are
+//! used where it has them and the rest is compared by content, reading only
+//! files that share their size with another one.
+use std::path::Path;
+use std::sync::atomic::Ordering;
 
-use super::backend_duplicates::remote_duplicate_groups;
-use super::budget::{LimitExceeded, ReclaimBudget};
+use super::backend_agent::{hashes_server_side, scan_backend_via_agent};
+use super::backend_duplicates::{duplicate_groups, Candidate, Candidates};
+use super::budget::{describe_scan_limit, LimitExceeded, ReclaimBudget};
 use super::cleanup::remote_dir_cleanup_reason;
+use super::finder::{DuplicateReport, DuplicateSummary, MAX_CANDIDATE_TEXT_BYTES};
 use super::retention::{compare_item_path, compare_item_size, retain_best};
 use super::types::{
     DuplicateEvidence, ReclaimConfidence, ReclaimItem, ReclaimOptions, ReclaimProgress,
     ReclaimReport, ReclaimResultCounts,
 };
 use super::util::{join_path, now_ms, push_bounded_error, rel_join, stale_cutoff_ms};
+use crate::analytics::thousands;
 
-#[derive(Clone)]
-pub(super) struct RemoteCandidate {
-    pub(super) item: ReclaimItem,
-    pub(super) md5: String,
-    pub(super) evidence: DuplicateEvidence,
+/// What one walk collects.
+pub(super) struct Walk<'a> {
+    opts: &'a ReclaimOptions,
+    stale_cutoff_ms: i64,
+    /// Large, stale and empty entries and cleanup folders (find-and-reclaim);
+    /// a duplicate search only collects candidates.
+    reclaim_lists: bool,
 }
 
-#[derive(Default)]
-struct BackendAcc {
-    files: Vec<RemoteCandidate>,
+pub(super) struct BackendAcc {
+    candidates: Candidates,
     large: Vec<ReclaimItem>,
     stale: Vec<ReclaimItem>,
     empty_files: Vec<ReclaimItem>,
     empty_dirs: Vec<ReclaimItem>,
     cleanup: Vec<ReclaimItem>,
     result_counts: ReclaimResultCounts,
-    duplicate_candidates: u64,
     errors: Vec<String>,
     root_error: Option<String>,
     scan_limit: Option<String>,
     suppressed_errors: u64,
     bytes: u64,
+}
+
+impl BackendAcc {
+    pub(super) fn new() -> Self {
+        Self {
+            candidates: Candidates::new(MAX_CANDIDATE_TEXT_BYTES),
+            large: Vec::new(),
+            stale: Vec::new(),
+            empty_files: Vec::new(),
+            empty_dirs: Vec::new(),
+            cleanup: Vec::new(),
+            result_counts: ReclaimResultCounts::default(),
+            errors: Vec::new(),
+            root_error: None,
+            scan_limit: None,
+            suppressed_errors: 0,
+            bytes: 0,
+        }
+    }
+
+    fn error(&mut self, error: String) {
+        push_bounded_error(&mut self.errors, &mut self.suppressed_errors, error);
+    }
 }
 
 #[derive(Default)]
@@ -42,6 +73,8 @@ struct DirScan {
     complete: bool,
 }
 
+/// Find-and-reclaim of the desktop: candidates, large/stale/empty entries,
+/// cleanup folders and the `opts.max_items` largest duplicate groups.
 pub fn scan_reclaim_backend(
     backend: crate::vfs::BackendHandle,
     root: &str,
@@ -49,25 +82,24 @@ pub fn scan_reclaim_backend(
     opts: &ReclaimOptions,
 ) -> ReclaimReport {
     let norm = normalize_root(root);
-    let cutoff = stale_cutoff_ms(now_ms(), opts.stale_days);
-    let mut budget = ReclaimBudget::default();
-    let mut acc = if backend.supports_walk_hashed() {
-        match scan_backend_via_agent(&backend, &norm, progress, opts, cutoff, &mut budget) {
-            Some(acc) => acc,
-            None => scan_backend_listing(&backend, &norm, progress, opts, cutoff, &mut budget),
-        }
-    } else {
-        scan_backend_listing(&backend, &norm, progress, opts, cutoff, &mut budget)
+    let walk = Walk {
+        opts,
+        stale_cutoff_ms: stale_cutoff_ms(now_ms(), opts.stale_days),
+        reclaim_lists: true,
     };
-
+    let mut acc = walk_backend(&backend, &norm, progress, &walk);
     acc.large.sort_by(compare_item_size);
     acc.stale.sort_by(compare_item_size);
     acc.empty_files.sort_by(compare_item_path);
     acc.empty_dirs.sort_by(compare_item_path);
     acc.cleanup.sort_by(compare_item_size);
-    let duplicate_candidates_retained = acc.files.len() as u64;
-    let analysis = remote_duplicate_groups(acc.files, progress, opts.max_items);
-    acc.result_counts.duplicate_groups = analysis.total_groups;
+    let duplicate_candidates = acc.candidates.seen();
+    let duplicate_candidates_retained = acc.candidates.len();
+    let found = duplicate_groups(&*backend, acc.candidates.take(), progress, opts.max_items);
+    for error in found.errors {
+        acc.error(error);
+    }
+    acc.result_counts.duplicate_groups = found.total_groups;
 
     ReclaimReport {
         root: norm,
@@ -85,126 +117,90 @@ pub fn scan_reclaim_backend(
         empty_files: acc.empty_files,
         empty_dirs: acc.empty_dirs,
         cleanup: acc.cleanup,
-        duplicate_groups: analysis.groups,
-        duplicate_candidates: acc.duplicate_candidates,
+        duplicate_groups: found.groups,
+        duplicate_candidates,
         duplicate_candidates_retained,
         errors: acc.errors,
         suppressed_errors: acc.suppressed_errors,
     }
 }
 
-fn scan_backend_via_agent(
-    backend: &crate::vfs::BackendHandle,
+/// Duplicate search of a remote location (the Android app's `reclaim.start`):
+/// every file of at least `min_bytes` is a candidate and every group is
+/// returned, in the shape of the local search.
+pub fn find_backend_duplicates(
+    backend: crate::vfs::BackendHandle,
     root: &str,
     progress: &ReclaimProgress,
-    opts: &ReclaimOptions,
-    stale_cutoff_ms: i64,
-    budget: &mut ReclaimBudget,
-) -> Option<BackendAcc> {
-    let (tx, rx) = bounded::<crate::vfs::HashHit>(1024);
-    let walk_cancel = AtomicBool::new(false);
-    let worker_cancel = &walk_cancel;
-    let mut acc = BackendAcc::default();
-    let mut received = false;
-    let outcome = std::thread::scope(|scope| {
-        let worker = scope.spawn(move || backend.walk_hashed(root, true, tx, worker_cancel));
-        for hit in rx.iter() {
-            received = true;
-            if progress.cancel.load(Ordering::Relaxed) || budget.stopped() {
-                walk_cancel.store(true, Ordering::Relaxed);
-                continue;
-            }
-            let path = join_path(root, &hit.rel);
-            let name = hit
-                .rel
-                .rsplit('/')
-                .next()
-                .filter(|name| !name.is_empty())
-                .unwrap_or(hit.rel.as_str())
-                .to_string();
-            let depth = u32::try_from(
-                hit.rel
-                    .split('/')
-                    .filter(|component| !component.is_empty())
-                    .count(),
-            )
-            .unwrap_or(u32::MAX);
-            if let Err(limit) = budget.claim(path.len().saturating_add(name.len()), depth) {
-                record_limit(&mut acc, root, limit);
-                walk_cancel.store(true, Ordering::Relaxed);
-                continue;
-            }
-            if hit.is_dir {
-                progress.dirs.fetch_add(1, Ordering::Relaxed);
-                continue;
-            }
-            let item = ReclaimItem::new(path, name, hit.size, hit.mtime_ms, false);
-            record_backend_file(
-                item,
-                hit.md5,
-                DuplicateEvidence::AgentMd5,
-                opts,
-                stale_cutoff_ms,
-                progress,
-                true,
-                &mut acc,
-            );
-        }
-        worker.join()
-    });
-    match outcome {
-        Ok(Ok(true)) => Some(acc),
-        Ok(Ok(false))
-            if !received && !budget.stopped() && !progress.cancel.load(Ordering::Relaxed) =>
-        {
-            None
-        }
-        Ok(Ok(false)) if budget.stopped() || progress.cancel.load(Ordering::Relaxed) => Some(acc),
-        Ok(Ok(false)) => {
-            record_agent_walk_error(
-                &mut acc,
-                root,
-                "backend reported unsupported after streaming entries",
-            );
-            Some(acc)
-        }
-        Ok(Err(_)) if budget.stopped() || progress.cancel.load(Ordering::Relaxed) => Some(acc),
-        Ok(Err(error)) => {
-            record_agent_walk_error(&mut acc, root, &error.to_string());
-            Some(acc)
-        }
-        Err(_) => {
-            record_agent_walk_error(&mut acc, root, "server-side walk worker panicked");
-            Some(acc)
-        }
+    min_bytes: u64,
+) -> DuplicateReport {
+    let opts = ReclaimOptions {
+        duplicate_min_bytes: min_bytes.max(1),
+        ..ReclaimOptions::default()
+    };
+    let walk = Walk {
+        opts: &opts,
+        stale_cutoff_ms: i64::MIN,
+        reclaim_lists: false,
+    };
+    let mut acc = walk_backend(&backend, &normalize_root(root), progress, &walk);
+    let candidates = acc.candidates.seen();
+    let dropped = acc.candidates.dropped();
+    let found = duplicate_groups(&*backend, acc.candidates.take(), progress, usize::MAX);
+    for error in found.errors {
+        acc.error(error);
+    }
+    let mut limits = Vec::new();
+    if let Some(raw) = &acc.scan_limit {
+        limits.push(describe_scan_limit(raw));
+    }
+    if dropped > 0 {
+        limits.push(format!(
+            "Kandidatenspeicher ({} MiB) ausgeschöpft: die {} kleinsten Dateien nicht verglichen",
+            MAX_CANDIDATE_TEXT_BYTES / (1024 * 1024),
+            thousands(dropped)
+        ));
+    }
+    DuplicateReport {
+        summary: DuplicateSummary {
+            files: progress.files.load(Ordering::Relaxed),
+            bytes: acc.bytes,
+            candidates,
+            compared: found.compared,
+            groups: found.groups.len() as u64,
+            protected: Vec::new(),
+            errors: acc.errors,
+            suppressed_errors: acc.suppressed_errors,
+            limits,
+        },
+        groups: found.groups,
+        root_error: acc.root_error,
     }
 }
 
-fn record_agent_walk_error(acc: &mut BackendAcc, root: &str, message: &str) {
-    let error = format!("{root}: agent hash walk failed: {message}");
-    acc.root_error = Some(error.clone());
-    push_bounded_error(&mut acc.errors, &mut acc.suppressed_errors, error);
-}
-
-fn scan_backend_listing(
+fn walk_backend(
     backend: &crate::vfs::BackendHandle,
     root: &str,
     progress: &ReclaimProgress,
-    opts: &ReclaimOptions,
-    stale_cutoff_ms: i64,
-    budget: &mut ReclaimBudget,
+    walk: &Walk<'_>,
 ) -> BackendAcc {
-    let mut acc = BackendAcc::default();
+    if hashes_server_side(&**backend) {
+        let mut budget = ReclaimBudget::default();
+        if let Some(acc) = scan_backend_via_agent(backend, root, progress, walk, &mut budget) {
+            return acc;
+        }
+    }
+    let mut budget = ReclaimBudget::default();
+    let mut acc = BackendAcc::new();
     let _ = scan_backend_dir(
         backend,
         root,
         "",
         progress,
-        opts,
-        stale_cutoff_ms,
+        walk,
         false,
         0,
-        budget,
+        &mut budget,
         &mut acc,
     );
     acc
@@ -216,8 +212,7 @@ fn scan_backend_dir(
     dir: &str,
     rel_dir: &str,
     progress: &ReclaimProgress,
-    opts: &ReclaimOptions,
-    stale_cutoff_ms: i64,
+    walk: &Walk<'_>,
     inside_cleanup: bool,
     depth: u32,
     budget: &mut ReclaimBudget,
@@ -227,6 +222,7 @@ fn scan_backend_dir(
         return DirScan::default();
     }
     progress.dirs.fetch_add(1, Ordering::Relaxed);
+    progress.stage.enter_directory(Path::new(dir));
     let mut entries = match backend.list_dir(dir) {
         Ok(entries) => entries,
         Err(error) => {
@@ -234,7 +230,7 @@ fn scan_backend_dir(
             if rel_dir.is_empty() && acc.root_error.is_none() {
                 acc.root_error = Some(error.clone());
             }
-            push_bounded_error(&mut acc.errors, &mut acc.suppressed_errors, error);
+            acc.error(error);
             return DirScan::default();
         }
     };
@@ -271,7 +267,7 @@ fn scan_backend_dir(
             break;
         }
         result.children = result.children.saturating_add(1);
-        if entry.is_symlink || crate::apptrash::excluded_name(&entry.name) {
+        if entry.is_symlink || entry.special || crate::apptrash::excluded_name(&entry.name) {
             continue;
         }
         if entry.is_dir {
@@ -281,8 +277,7 @@ fn scan_backend_dir(
                 &path,
                 &rel,
                 progress,
-                opts,
-                stale_cutoff_ms,
+                walk,
                 skip_detail,
                 depth.saturating_add(1),
                 budget,
@@ -290,14 +285,14 @@ fn scan_backend_dir(
             );
             result.bytes = result.bytes.saturating_add(child.bytes);
             result.complete &= child.complete;
-            if !skip_detail && child.complete {
+            if walk.reclaim_lists && !skip_detail && child.complete {
                 record_backend_dir(
                     path,
                     entry.name,
                     child.bytes,
                     entry.mtime_ms,
                     child.children,
-                    opts.max_items,
+                    walk.opts.max_items,
                     acc,
                 );
             }
@@ -309,8 +304,7 @@ fn scan_backend_dir(
                 item,
                 entry.content_md5,
                 DuplicateEvidence::ProviderMd5,
-                opts,
-                stale_cutoff_ms,
+                walk,
                 progress,
                 !skip_detail,
                 acc,
@@ -323,13 +317,14 @@ fn scan_backend_dir(
     result
 }
 
-#[allow(clippy::too_many_arguments)]
-fn record_backend_file(
-    mut item: ReclaimItem,
+/// Counts one file; with `collect_detail` (not below a cleanup folder) it
+/// may become a reclaim item and, at the minimum size, a duplicate candidate
+/// with the backend's hash when there is a valid one.
+pub(super) fn record_backend_file(
+    item: ReclaimItem,
     md5: Option<String>,
     evidence: DuplicateEvidence,
-    opts: &ReclaimOptions,
-    stale_cutoff_ms: i64,
+    walk: &Walk<'_>,
     progress: &ReclaimProgress,
     collect_detail: bool,
     acc: &mut BackendAcc,
@@ -344,23 +339,39 @@ fn record_backend_file(
     if !collect_detail {
         return;
     }
-    if item.size >= opts.large_min_bytes {
+    if walk.reclaim_lists {
+        record_reclaim_lists(&item, walk, acc);
+    }
+    if item.size >= walk.opts.duplicate_min_bytes {
+        let hash = md5
+            .filter(|hash| hash.len() == 32 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()))
+            .map(|hash| (hash.to_ascii_lowercase(), evidence));
+        acc.candidates.offer(Candidate {
+            item: item.with_reason("Duplikat", ReclaimConfidence::HashMatch),
+            hash,
+        });
+    }
+}
+
+fn record_reclaim_lists(item: &ReclaimItem, walk: &Walk<'_>, acc: &mut BackendAcc) {
+    let limit = walk.opts.max_items;
+    if item.size >= walk.opts.large_min_bytes {
         acc.result_counts.large_files = acc.result_counts.large_files.saturating_add(1);
         retain_best(
             &mut acc.large,
             item.clone()
                 .with_reason("gross", ReclaimConfidence::RiskyReview),
-            opts.max_items,
+            limit,
             compare_item_size,
         );
     }
-    if item.mtime_ms > 0 && item.mtime_ms < stale_cutoff_ms {
+    if item.mtime_ms > 0 && item.mtime_ms < walk.stale_cutoff_ms {
         acc.result_counts.stale_files = acc.result_counts.stale_files.saturating_add(1);
         retain_best(
             &mut acc.stale,
             item.clone()
                 .with_reason("alt", ReclaimConfidence::RiskyReview),
-            opts.max_items,
+            limit,
             compare_item_size,
         );
     }
@@ -370,34 +381,9 @@ fn record_backend_file(
             &mut acc.empty_files,
             item.clone()
                 .with_reason("leer", ReclaimConfidence::ReviewSafe),
-            opts.max_items,
+            limit,
             compare_item_path,
         );
-    }
-    if item.size >= opts.duplicate_min_bytes {
-        if let Some(md5) =
-            md5.filter(|hash| hash.len() == 32 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()))
-        {
-            acc.duplicate_candidates = acc.duplicate_candidates.saturating_add(1);
-            item.reason = "Duplikat".to_string();
-            item.confidence = ReclaimConfidence::HashMatch;
-            retain_best(
-                &mut acc.files,
-                RemoteCandidate {
-                    item,
-                    md5: md5.to_ascii_lowercase(),
-                    evidence,
-                },
-                opts.max_items,
-                |left, right| {
-                    right
-                        .item
-                        .size
-                        .cmp(&left.item.size)
-                        .then_with(|| left.item.path.cmp(&right.item.path))
-                },
-            );
-        }
     }
 }
 
@@ -432,17 +418,13 @@ fn record_backend_dir(
     }
 }
 
-fn record_limit(acc: &mut BackendAcc, root: &str, limit: LimitExceeded) {
+pub(super) fn record_limit(acc: &mut BackendAcc, root: &str, limit: LimitExceeded) {
     if acc.scan_limit.is_some() {
         return;
     }
     let detail = limit.to_string();
     acc.scan_limit = Some(detail.clone());
-    push_bounded_error(
-        &mut acc.errors,
-        &mut acc.suppressed_errors,
-        format!("{root}: reclaim scan stopped at {detail}"),
-    );
+    acc.error(format!("{root}: reclaim scan stopped at {detail}"));
 }
 
 fn normalize_root(root: &str) -> String {

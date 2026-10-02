@@ -151,6 +151,7 @@ fn ci_remote_task_identity_conflict_is_rejected_without_replacing_the_grant() {
         state: DirectGrantState::Accepted,
         updated_at: 1,
         exec: Default::default(),
+        write: false,
     });
     let request = presence(&identity, 2, "nonce-a", 200);
     profiles
@@ -299,6 +300,7 @@ fn identity_rotation_disables_even_unlinked_direct_and_exec_grants() {
             enabled: true,
             ..Default::default()
         },
+        write: false,
     });
 
     assert_eq!(profiles.invalidate_all_direct_grants(100), 1);

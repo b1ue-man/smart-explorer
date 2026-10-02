@@ -326,6 +326,7 @@ mod tests {
             state: crate::share::DirectGrantState::Accepted,
             updated_at: 1,
             exec: Default::default(),
+            write: false,
         });
         profiles.rooms.push(crate::share::RoomProfile {
             id: "local-room-profile".into(),
@@ -347,8 +348,10 @@ mod tests {
                 blocked: false,
                 exec: Default::default(),
                 presence: None,
+                relation: Default::default(),
             }],
             exports: Default::default(),
+            policy: crate::share::RoomPolicy::new_room(),
         });
         let values = super::exec_grant_candidates_from_profiles(&profiles)
             .into_iter()

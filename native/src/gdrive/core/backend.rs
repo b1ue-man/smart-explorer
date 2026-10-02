@@ -97,7 +97,9 @@ impl Backend for GDriveBackend {
         self.stat_marker_aware(path)
     }
 
-    fn has_duplicate_file_names(&self) -> bool { true }
+    fn has_duplicate_file_names(&self) -> bool {
+        true
+    }
 
     fn list_dir_for_sync(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
         let mut entries = self.list_dir(path)?;
@@ -272,7 +274,12 @@ impl Backend for GDriveBackend {
     fn promote_staged(&self, staged: &str, destination: &str) -> VfsResult<()> {
         self.promote_staged_file(staged, destination)
     }
-    fn promote_staged_to_id(&self, staged: &str, destination: &str, id: Option<&str>) -> VfsResult<()> {
+    fn promote_staged_to_id(
+        &self,
+        staged: &str,
+        destination: &str,
+        id: Option<&str>,
+    ) -> VfsResult<()> {
         self.promote_staged_file_to_id(staged, destination, id)
     }
 
@@ -408,6 +415,7 @@ impl GDriveBackend {
                 name: "/".into(),
                 is_dir: true,
                 is_symlink: false,
+                special: false,
                 size: 0,
                 mtime_ms: 0,
                 btime_ms: 0,

@@ -4,32 +4,29 @@ use std::sync::{Arc, Mutex};
 
 use crate::creds::{Protocol, SavedConnection};
 use crate::vfs::{BackendHandle, LocalBackend, VfsMeta};
-use serde::{Deserialize, Serialize};
 
 use super::core::eio;
+use super::export_config::ExportAccess;
 use super::fs_paths::norm_root;
 pub(super) use super::fs_paths::{join_under, split_clean};
 use super::wire::FsMeta;
 
+/// The export types live in `export_config.rs` (V2); their former paths stay.
+pub use super::export_config::{ShareExportConfig, SharedRoot};
+
 const CONNECTIONS_MOUNT: &str = "Verbindungen";
 pub(crate) const CHUNK: usize = 256 * 1024;
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SharedRoot {
-    pub label: String,
-    pub path: String,
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ShareExportConfig {
-    pub roots: Vec<SharedRoot>,
-    pub include_connections: bool,
-}
-
 #[derive(Clone)]
 enum MountTarget {
-    Local(String),
-    Connection(SavedConnection),
+    Local {
+        path: String,
+        access: ExportAccess,
+    },
+    Connection {
+        connection: SavedConnection,
+        access: ExportAccess,
+    },
 }
 
 #[derive(Clone)]
@@ -43,6 +40,9 @@ pub(crate) struct ResolvedTarget {
     pub(crate) backend: BackendHandle,
     pub(crate) path: String,
     pub(crate) mount_key: String,
+    /// Access peers have to the export (or exported connection) that holds
+    /// `path`; writes need `ReadWrite` (FC1, enforced by the dispatcher).
+    pub(crate) access: ExportAccess,
     _net: Option<crate::net::NetConnection>,
 }
 
@@ -57,16 +57,17 @@ pub(crate) fn list_dir(
             .into_iter()
             .map(|m| dir_meta(m.name))
             .collect();
-        if cfg.include_connections && !connection_mounts().is_empty() {
+        if !connection_mounts(&cfg).is_empty() {
             out.push(dir_meta(CONNECTIONS_MOUNT.to_string()));
         }
         return Ok(out);
     }
     if parts.len() == 1 && parts[0] == CONNECTIONS_MOUNT {
-        if !snapshot(exports).include_connections {
+        let cfg = snapshot(exports);
+        if !cfg.shares_connections() {
             return Err(eio("Eigene Verbindungen sind nicht freigegeben"));
         }
-        return Ok(connection_mounts()
+        return Ok(connection_mounts(&cfg)
             .into_iter()
             .map(|m| dir_meta(m.name))
             .collect());
@@ -85,20 +86,19 @@ pub(crate) fn stat(path: &str, exports: &Arc<Mutex<ShareExportConfig>>) -> io::R
         return Ok(dir_meta("/".to_string()));
     }
     if parts.len() == 1 {
-        if parts[0] == CONNECTIONS_MOUNT && snapshot(exports).include_connections {
+        let cfg = snapshot(exports);
+        if parts[0] == CONNECTIONS_MOUNT && cfg.shares_connections() {
             return Ok(dir_meta(CONNECTIONS_MOUNT.to_string()));
         }
-        if local_mounts(&snapshot(exports))
-            .into_iter()
-            .any(|m| m.name == parts[0])
-        {
+        if local_mounts(&cfg).into_iter().any(|m| m.name == parts[0]) {
             return Ok(dir_meta(parts[0].clone()));
         }
     }
     if parts.len() == 2
         && parts[0] == CONNECTIONS_MOUNT
-        && snapshot(exports).include_connections
-        && connection_mounts().into_iter().any(|m| m.name == parts[1])
+        && connection_mounts(&snapshot(exports))
+            .into_iter()
+            .any(|m| m.name == parts[1])
     {
         return Ok(dir_meta(parts[1].clone()));
     }
@@ -151,26 +151,27 @@ pub(crate) fn resolve(
     let (head, rest) = parts
         .split_first()
         .ok_or_else(|| eio("Wurzel ist kein Datei-Ziel"))?;
+    let cfg = snapshot(exports);
     if head == CONNECTIONS_MOUNT {
-        if !snapshot(exports).include_connections {
+        if !cfg.shares_connections() {
             return Err(eio("Eigene Verbindungen sind nicht freigegeben"));
         }
         let (conn_name, conn_rest) = rest.split_first().ok_or_else(|| eio("Verbindung fehlt"))?;
-        let mount = connection_mounts()
+        let mount = connection_mounts(&cfg)
             .into_iter()
             .find(|m| m.name == *conn_name)
             .ok_or_else(|| eio("Unbekannte Verbindung"))?;
-        let MountTarget::Connection(c) = mount.target else {
+        let MountTarget::Connection { connection, access } = mount.target else {
             return Err(eio("Ungueltiges Verbindungsziel"));
         };
-        return resolve_connection(&c, conn_rest);
+        return resolve_connection(&connection, conn_rest, access);
     }
 
-    let mount = local_mounts(&snapshot(exports))
+    let mount = local_mounts(&cfg)
         .into_iter()
         .find(|m| m.name == *head)
         .ok_or_else(|| eio("Unbekannte Freigabe"))?;
-    let MountTarget::Local(root) = mount.target else {
+    let MountTarget::Local { path: root, access } = mount.target else {
         return Err(eio("Ungueltiges Freigabeziel"));
     };
     let target = secure_local_target(&root, rest)?;
@@ -178,11 +179,16 @@ pub(crate) fn resolve(
         backend: Arc::new(LocalBackend::new(&root)),
         path: target,
         mount_key: format!("local:{head}"),
+        access,
         _net: None,
     })
 }
 
-fn resolve_connection(c: &SavedConnection, rest: &[String]) -> io::Result<ResolvedTarget> {
+fn resolve_connection(
+    c: &SavedConnection,
+    rest: &[String],
+    access: ExportAccess,
+) -> io::Result<ResolvedTarget> {
     if c.protocol == Protocol::Share {
         let secret = crate::creds::get_secret_checked(&c.account()).map_err(eio)?;
         let nc = crate::net::NetConnection::connect(
@@ -196,6 +202,7 @@ fn resolve_connection(c: &SavedConnection, rest: &[String]) -> io::Result<Resolv
             backend: Arc::new(LocalBackend::new(&root)),
             path,
             mount_key: c.account(),
+            access,
             _net: Some(nc),
         });
     }
@@ -206,6 +213,7 @@ fn resolve_connection(c: &SavedConnection, rest: &[String]) -> io::Result<Resolv
         backend,
         path: root,
         mount_key: c.account(),
+        access,
         _net: None,
     })
 }
@@ -259,19 +267,30 @@ fn local_mounts(cfg: &ShareExportConfig) -> Vec<Mount> {
             }
             Some(Mount {
                 name: unique_name(&mut used, &r.label),
-                target: MountTarget::Local(path.replace('\\', "/")),
+                target: MountTarget::Local {
+                    path: path.replace('\\', "/"),
+                    access: r.access,
+                },
             })
         })
         .collect()
 }
 
-fn connection_mounts() -> Vec<Mount> {
+/// The exported saved connections; none without loading credentials when
+/// the configuration exports no connection.
+fn connection_mounts(cfg: &ShareExportConfig) -> Vec<Mount> {
+    if !cfg.shares_connections() {
+        return Vec::new();
+    }
     let mut used = Vec::new();
     crate::creds::load_connections()
         .into_iter()
-        .map(|c| Mount {
-            name: unique_name(&mut used, &c.display()),
-            target: MountTarget::Connection(c),
+        .filter_map(|connection| {
+            let access = cfg.connection_access(&connection.account())?;
+            Some(Mount {
+                name: unique_name(&mut used, &connection.display()),
+                target: MountTarget::Connection { connection, access },
+            })
         })
         .collect()
 }
@@ -312,7 +331,10 @@ pub(super) fn secure_local_target(root: &str, rest: &[String]) -> io::Result<Str
     let root_norm = norm_root(root);
     let root_os = to_os_path(&root_norm);
     let root_canon = std::fs::canonicalize(&root_os).map_err(|error| {
-        io::Error::new(error.kind(), format!("Freigabe-Wurzel kann nicht gelesen werden: {error}"))
+        io::Error::new(
+            error.kind(),
+            format!("Freigabe-Wurzel kann nicht gelesen werden: {error}"),
+        )
     })?;
     let target_os = rest
         .iter()
@@ -374,6 +396,7 @@ fn dir_meta(name: String) -> FsMeta {
         hidden: false,
         system: false,
         id: None,
+        special: false,
     }
 }
 
@@ -389,6 +412,7 @@ impl From<VfsMeta> for FsMeta {
             hidden: m.hidden,
             system: m.system,
             id: m.id,
+            special: m.special,
         }
     }
 }

@@ -44,6 +44,10 @@ pub(super) fn stop_reason_text(reason: DiscoveryOfferStopReason) -> &'static str
             "the Share server rejected it or the connection failed"
         }
         DiscoveryOfferStopReason::WorkerStopped => "the Share worker stopped or restarted",
+        DiscoveryOfferStopReason::Paired => "a device paired with it (offers are single-use)",
+        DiscoveryOfferStopReason::TooManyFailedAttempts => {
+            "too many pairing attempts failed; someone may be guessing the PIN"
+        }
     }
 }
 
@@ -133,6 +137,7 @@ mod tests {
             status: Default::default(),
             members: Vec::new(),
             exports: Default::default(),
+            policy: crate::share::RoomPolicy::new_room(),
         });
         let direct = OwnDiscoveryOffer {
             offer_id: "o1".into(),

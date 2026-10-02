@@ -41,6 +41,25 @@ pub struct CatchUpStatus {
     pub admitted: usize,
     /// Selected jobs the supervisor refused, with the reason.
     pub skipped: Vec<CatchUpSkip>,
+    /// Jobs of this run whose attempt failed.
+    pub failed: usize,
+    /// At least one failure is transient (side unreachable, command, file
+    /// errors): the host should retry its window (WorkManager
+    /// `Result.retry()`). Login, configuration and access failures and
+    /// blocks do not ask for a retry.
+    pub retry_suggested: bool,
+}
+
+/// The last finished catch-up run that ran at least one job, with its
+/// outcome (kept across restarts).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CatchUpRecord {
+    pub finished_ms: i64,
+    /// Jobs that ran (admitted and finished, not skipped).
+    pub ran: usize,
+    pub succeeded: usize,
+    pub failed: usize,
+    pub message: String,
 }
 
 /// Whether scheduled work may run right now; `Closed` ends open runs at once.
@@ -168,6 +187,9 @@ impl Run {
             message: self.message.clone(),
             admitted: self.admitted.len(),
             skipped: self.skipped.clone(),
+            // Contract stage: attempts are not yet classified per run.
+            failed: 0,
+            retry_suggested: false,
         }
     }
 }

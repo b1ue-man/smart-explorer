@@ -17,6 +17,11 @@ pub fn is_enabled() -> bool {
     flag_path().exists()
 }
 
+/// Nothing outside the app switches the flag off.
+pub fn disabled_by_system() -> bool {
+    false
+}
+
 pub fn enable() -> io::Result<()> {
     std::fs::write(flag_path(), b"1")
 }

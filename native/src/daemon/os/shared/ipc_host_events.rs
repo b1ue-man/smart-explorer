@@ -479,6 +479,7 @@ fn upsert_room_member(room: &mut crate::share::RoomProfile, presence: crate::sha
             blocked: false,
             exec: crate::share::ExecGrant::default(),
             presence: Some(presence),
+            relation: crate::share::RoomMemberFlags::default(),
         });
     }
 }

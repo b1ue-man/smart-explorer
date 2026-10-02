@@ -14,8 +14,10 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 /**
@@ -23,7 +25,8 @@ import kotlinx.coroutines.launch
  * (dataSync). Android allows that start only while the UI is visible or just being left, so it
  * starts the service (a) while the UI is visible and user tasks (every kind except `catchup`)
  * run, and (b) when the UI is left while tasks run or the daemon runs a job (`bg.status.activeJob`).
- * The service stops itself once nothing runs any more.
+ * The service stops itself once nothing runs any more. Tasks against another device
+ * ([keepCpuAwake]) also keep the CPU awake while they run (the service holds the wake lock).
  */
 object TaskKeeper {
     private const val TAG = "SmartExplorerTasks"
@@ -35,6 +38,8 @@ object TaskKeeper {
     @Volatile
     internal var uiVisible = false
         private set
+
+    private val cpuTasks = CpuTasks()
 
     fun start(app: Application) {
         if (!started.compareAndSet(false, true)) return
@@ -68,6 +73,16 @@ object TaskKeeper {
 
     /** User tasks that need the process; catch-up runs belong to the worker. */
     internal fun keepsAlive(tasks: List<TaskInfo>): Boolean = tasks.any { it.isActive && it.kind != SyncApi.KIND_CATCH_UP }
+
+    /**
+     * [taskId] works against another device (remote analysis or duplicate search): until it ends,
+     * the task service holds a partial wake lock, so a screen turned off does not suspend the phone
+     * in the middle of it (spec FA1).
+     */
+    fun keepCpuAwake(taskId: String) = cpuTasks.keep(taskId)
+
+    /** Whether a running task needs the CPU ([keepCpuAwake]). */
+    internal fun needsCpu(tasks: List<TaskInfo>): Boolean = cpuTasks.needed(tasks)
 
     /** [Abbrechen] in the task notification: every running user task. */
     internal fun cancelUserTasks() {
@@ -103,4 +118,28 @@ object TaskKeeper {
             Log.w(TAG, "task service not started", e)
         }
     }
+}
+
+/**
+ * Ids of tasks that work against another device and keep the CPU awake while they run. Ids of
+ * ended tasks are forgotten; an id the task list does not know yet stays, since its first event may
+ * still be on the way.
+ */
+internal class CpuTasks {
+    private val ids = MutableStateFlow<Set<String>>(emptySet())
+
+    fun keep(taskId: String) {
+        ids.update { it + taskId }
+    }
+
+    fun needed(tasks: List<TaskInfo>): Boolean {
+        val kept = ids.value
+        if (kept.isEmpty()) return false
+        val ended = tasks.filter { it.id in kept && !it.isActive }.map { it.id }.toSet()
+        if (ended.isNotEmpty()) ids.update { it - ended }
+        return tasks.any { it.isActive && it.id in kept }
+    }
+
+    /** Ids still kept (tests). */
+    fun kept(): Set<String> = ids.value
 }

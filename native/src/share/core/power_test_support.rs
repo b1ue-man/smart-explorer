@@ -83,15 +83,15 @@ impl LoopbackPeers {
         let host = identity("background host")?;
         let mut host_state = auth_state(&host);
         host_state.default_direct_exports = ShareExportConfig {
-            roots: vec![SharedRoot {
-                label: "A".into(),
-                path: root
-                    .path()
+            roots: vec![SharedRoot::new(
+                "A",
+                root.path()
                     .to_str()
                     .ok_or_else(|| io::Error::other("temporary root is not Unicode"))?
                     .replace('\\', "/"),
-            }],
-            include_connections: false,
+            )
+            .with_access(crate::share::ExportAccess::ReadWrite)],
+            ..Default::default()
         };
         host_state.direct_grants.push(DirectGrant {
             device_id: client.device_id.clone(),
@@ -102,6 +102,7 @@ impl LoopbackPeers {
             state: DirectGrantState::Accepted,
             updated_at: now_secs(),
             exec: crate::share::ExecGrant::default(),
+            write: true,
         });
         let (host_events, host_events_rx) = crossbeam_channel::bounded(256);
         let host_node = ShareIrohNode::start_with_power_for_test(
@@ -148,6 +149,7 @@ impl LoopbackPeers {
             lan_candidates: Vec::new(),
             lan_seen_at: None,
             lan_uplink: None,
+            relation: Default::default(),
         });
         let (client_events, client_events_rx) = crossbeam_channel::bounded(256);
         let client_node = ShareIrohNode::start(

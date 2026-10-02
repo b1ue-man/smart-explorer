@@ -1,14 +1,23 @@
-use super::persistence::{
-    app_data_dir, atomic_write, job_file, jobs_dir, load_job_file, san, write_job,
-};
+//! Last-run results of the sync jobs. Since RV1 they live in the job state
+//! (`JobState::last_result`, contract V4); the `results.tsv` of older
+//! versions is only read to seed jobs that have no state yet.
+//! `record_result` and `mark_run` stay for runners that still report the old
+//! way: the result becomes a classified attempt in the job state, the run
+//! time keeps updating the configuration's `last_run` for older displays.
+
+use super::job_state::{AttemptOutcome, AttemptReport, FailureKind, JobError, RunCause, Runner};
+use super::job_state_store::{record_attempt, stored_results};
+use super::persistence::{app_data_dir, job_file, jobs_dir, load_job_file, write_job};
 use super::schedule::now_secs;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::io;
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-/// Per-job last-run result (runtime state, shown in the UI).
-#[derive(Clone, Debug, Default)]
+/// Per-job last-run result (runtime state, shown in the UI). Also stored as
+/// `JobState::last_result`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct JobResult {
     pub when: i64,
     pub a_to_b: u64,
@@ -24,9 +33,10 @@ fn results_path() -> PathBuf {
     app_data_dir().join("results.tsv")
 }
 
-pub fn load_results() -> BTreeMap<String, JobResult> {
+/// The readable rows of a legacy `results.tsv` (malformed rows are skipped).
+fn legacy_results_from(path: &Path) -> BTreeMap<String, JobResult> {
     let mut out = BTreeMap::new();
-    if let Ok(txt) = std::fs::read_to_string(results_path()) {
+    if let Ok(txt) = std::fs::read_to_string(path) {
         for (index, line) in txt.lines().enumerate() {
             if let Ok((id, result)) = parse_result_line(line, index) {
                 out.insert(id, result);
@@ -36,45 +46,47 @@ pub fn load_results() -> BTreeMap<String, JobResult> {
     out
 }
 
-/// Record (upsert) a job's latest run result.
-pub fn record_result(id: &str, r: &JobResult) -> std::io::Result<()> {
-    record_result_to(&results_path(), id, r)
+/// The legacy row of one job, used to seed its missing state.
+pub(super) fn legacy_result(id: &str) -> Option<JobResult> {
+    legacy_results_from(&results_path()).remove(id)
 }
 
-fn record_result_to(path: &Path, id: &str, r: &JobResult) -> io::Result<()> {
-    let mut all = load_results_for_update(path)?;
-    all.insert(id.to_string(), r.clone());
-    let body: String = all
-        .iter()
-        .map(|(id, r)| {
-            format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-                san(id),
-                r.when,
-                r.a_to_b,
-                r.b_to_a,
-                r.deleted,
-                r.conflicts,
-                r.errors,
-                san(&r.note)
-            )
+/// The last result of every job (job states first, legacy rows otherwise).
+pub fn load_results() -> BTreeMap<String, JobResult> {
+    stored_results(legacy_results_from(&results_path()))
+}
+
+/// Records a finished run reported the old way as an attempt in the job
+/// state, classified from its note and error count. New code reports with
+/// `classify_run` and `record_attempt`.
+pub fn record_result(id: &str, r: &JobResult) -> io::Result<()> {
+    record_attempt(id, &legacy_attempt(r)).map(|_| ())
+}
+
+fn legacy_attempt(r: &JobResult) -> AttemptReport {
+    let outcome = if r.note.starts_with("abgebrochen") {
+        AttemptOutcome::Cancelled
+    } else if r.errors > 0 || r.note.starts_with("Fehler") || r.note.contains("fehlgeschlagen") {
+        let kind = if r.note.contains("Befehl") {
+            FailureKind::Hook
+        } else {
+            FailureKind::Run
+        };
+        AttemptOutcome::Failed(JobError {
+            kind,
+            message: r.note.clone(),
         })
-        .collect::<Vec<_>>()
-        .join("\n");
-    atomic_write(path, body.as_bytes())
-}
-
-fn load_results_for_update(path: &Path) -> io::Result<BTreeMap<String, JobResult>> {
-    let body = match std::fs::read_to_string(path) {
-        Ok(body) => body,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
-        Err(error) => return Err(error),
+    } else {
+        AttemptOutcome::Success
     };
-    body.lines()
-        .enumerate()
-        .filter(|(_, line)| !line.trim().is_empty())
-        .map(|(index, line)| parse_result_line(line, index))
-        .collect()
+    AttemptReport {
+        runner: Runner::Other,
+        cause: RunCause::Manual,
+        started: r.when,
+        finished: r.when,
+        outcome,
+        result: Some(r.clone()),
+    }
 }
 
 fn parse_result_line(line: &str, index: usize) -> io::Result<(String, JobResult)> {
@@ -111,7 +123,8 @@ fn invalid_result(index: usize, detail: &str) -> io::Error {
     )
 }
 
-/// Mark a job as just-run (updates last_run and rewrites only its file).
+/// Mark a job as just-run (updates the configuration's `last_run`, which only
+/// older displays read; schedules count from `JobState::last_success`).
 pub fn mark_run(id: &str) -> std::io::Result<()> {
     let dir = jobs_dir();
     let path = job_file(&dir, id);
@@ -125,24 +138,45 @@ mod tests {
     use super::*;
 
     #[test]
-    fn record_rejects_malformed_history_without_erasing_it() {
+    fn review_task_legacy_results_skip_malformed_rows() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("results.tsv");
-        let original = "old\t1700000000\t1\t2\t3\t4\t5\tok\nbroken";
-        std::fs::write(&path, original).unwrap();
+        std::fs::write(&path, "old\t1700000000\t1\t2\t3\t4\t5\tok\nbroken").unwrap();
 
-        let error = record_result_to(
-            &path,
-            "new",
-            &JobResult {
-                when: 1_800_000_000,
-                note: "ok".into(),
+        let rows = legacy_results_from(&path);
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows["old"].when, 1_700_000_000);
+        assert_eq!(rows["old"].errors, 5);
+    }
+
+    #[test]
+    fn review_task_legacy_reports_are_classified() {
+        let report = |note: &str, errors: u64| {
+            legacy_attempt(&JobResult {
+                when: 10,
+                errors,
+                note: note.into(),
                 ..Default::default()
-            },
-        )
-        .unwrap_err();
-
-        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-        assert_eq!(std::fs::read_to_string(path).unwrap(), original);
+            })
+            .outcome
+        };
+        assert_eq!(report("ok", 0), AttemptOutcome::Success);
+        assert_eq!(report("Konflikte", 0), AttemptOutcome::Success);
+        assert_eq!(report("abgebrochen", 0), AttemptOutcome::Cancelled);
+        assert!(matches!(
+            report("Fehler", 3),
+            AttemptOutcome::Failed(JobError {
+                kind: FailureKind::Run,
+                ..
+            })
+        ));
+        assert!(matches!(
+            report("Befehl davor fehlgeschlagen", 1),
+            AttemptOutcome::Failed(JobError {
+                kind: FailureKind::Hook,
+                ..
+            })
+        ));
     }
 }

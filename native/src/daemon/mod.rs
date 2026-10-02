@@ -46,6 +46,8 @@ mod exec_ipc;
 mod exec_state;
 #[path = "os/shared/handoff.rs"]
 mod handoff;
+#[path = "os/shared/hooks.rs"]
+mod hooks;
 #[path = "os/shared/host_state.rs"]
 mod host_state;
 #[path = "os/shared/ipc.rs"]
@@ -140,6 +142,8 @@ mod android_platform;
 #[cfg(test)]
 #[path = "os/shared/direct_open_task_bridge.rs"]
 mod direct_open_task_bridge;
+#[path = "os/shared/problem_notify.rs"]
+mod problem_notify;
 #[path = "os/shared/request_workers.rs"]
 mod request_workers;
 #[cfg(test)]
@@ -175,7 +179,7 @@ mod schedule;
 #[path = "os/shared/state.rs"]
 mod state;
 
-pub use catch_up::{CatchUpSkip, CatchUpStatus};
+pub use catch_up::{CatchUpRecord, CatchUpSkip, CatchUpStatus};
 pub use embedded::ensure_embedded_daemon;
 pub use exec_ipc::{
     connect as connect_exec, ExecIpcEvent, ExecIpcFailure, ExecIpcInput, ExecIpcSession,
@@ -184,7 +188,11 @@ pub use exec_state::{
     cancel_remote as cancel_exec, load as exec_jobs, ExecCancelTarget, ExecJobDirection,
     ExecJobsSnapshot,
 };
-pub use host_state::{defer_scheduling_until_reported, host_state, set_host_state, HostState};
+pub use hooks::{run_job_hook, HookPhase};
+pub use host_state::{
+    defer_scheduling_until_reported, host_state, set_host_state, set_storage_access,
+    storage_access, HostState,
+};
 pub(crate) use ipc::mutate_exec_grant;
 pub use ipc::{
     drain_share_worker_events, ensure_worker_ready, exec_share, hand_off_running_worker,
@@ -193,8 +201,8 @@ pub use ipc::{
     ShareWorkerSnapshot, WorkerHandoff,
 };
 pub use live::{
-    active_job, cancel_catch_up, catch_up_status, drain_share_events_in_process, last_catch_up_ms,
-    request_catch_up,
+    active_job, cancel_catch_up, catch_up_status, drain_share_events_in_process, last_catch_up,
+    last_catch_up_ms, request_catch_up,
 };
 pub use mount_client::{
     connect_mount_host, list_mounts, retry_mount, start_mount, stop_mount, MountHostConfig,
@@ -203,12 +211,13 @@ pub use mount_client::{
 pub use mount_probe_client::probe_share_mount_capabilities;
 #[allow(unused_imports)]
 pub use platform::DriveInfo;
-pub use schedule::run_daemon;
+pub use problem_notify::set_problem_notifier;
+pub use schedule::{next_scheduled_run, run_daemon};
 #[allow(unused_imports)]
 pub use state::{
-    autopause_flags, cadence_secs, is_running, last_heartbeat_age, pause_for_secs,
-    pause_indefinite, pause_remaining, pause_until, read_log_tail, request_stop, resume,
-    set_autopause_flags, set_cadence_secs,
+    autopause_flags, autopause_support, cadence_secs, is_running, last_heartbeat_age,
+    pause_for_secs, pause_indefinite, pause_remaining, pause_until, read_log_tail, request_stop,
+    resume, set_autopause_flags, set_cadence_secs, AutopauseSupport,
 };
 
 #[cfg(test)]

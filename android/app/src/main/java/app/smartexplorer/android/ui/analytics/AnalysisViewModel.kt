@@ -1,6 +1,7 @@
 package app.smartexplorer.android.ui.analytics
 
 import android.content.Context
+import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -13,6 +14,7 @@ import app.smartexplorer.android.api.AnalyzeKind
 import app.smartexplorer.android.api.AnalyzeNode
 import app.smartexplorer.android.api.FilesApi
 import app.smartexplorer.android.core.CoreException
+import app.smartexplorer.android.service.TaskKeeper
 import app.smartexplorer.android.system.StorageStatsAccess
 import app.smartexplorer.android.ui.common.Snackbars
 import kotlinx.coroutines.CancellationException
@@ -101,10 +103,13 @@ internal class AnalysisViewModel : ViewModel() {
 
     fun start() {
         val target = location ?: return
-        val previous = taskId.takeIf { phase == ScanPhase.Scanning }
+        val previous = taskId
+        val running = previous.takeIf { phase == ScanPhase.Scanning }
         scanJob?.cancel()
         nodeJob?.cancel()
-        previous?.let { cancelTask(it) }
+        running?.let { cancelTask(it) }
+        // The page shows one result: the former one is freed at once (a remote tree may be large).
+        previous?.let { releaseResult(it) }
         phase = ScanPhase.Scanning
         error = null
         node = null
@@ -189,9 +194,11 @@ internal class AnalysisViewModel : ViewModel() {
         return true
     }
 
-    /** [Anderer Ort]: back to the setup page, the result is dropped. */
+    /** [Anderer Ort]: back to the setup page, the result is dropped (and freed in the core). */
     fun backToSetup() {
         if (phase == ScanPhase.Scanning) taskId?.let { cancelTask(it) }
+        taskId?.let { releaseResult(it) }
+        taskId = null
         scanJob?.cancel()
         nodeJob?.cancel()
         phase = ScanPhase.Setup
@@ -272,8 +279,28 @@ internal class AnalysisViewModel : ViewModel() {
         }
     }
 
+    /** The activity is gone for good: its result is unreachable, so the core frees it. */
+    override fun onCleared() {
+        taskId?.let { releaseResult(it) }
+        super.onCleared()
+    }
+
     private companion object {
         /** Covers the first composition of the page after a request from another screen. */
         const val CONTEXT_WAIT_MS = 2_000L
+    }
+}
+
+/**
+ * Frees a kept analysis or duplicate result in the core; outlives the view model (also called from
+ * `onCleared`), and a failure only leaves the result until memory runs short.
+ */
+internal fun releaseResult(id: String) {
+    TaskKeeper.scope.launch {
+        try {
+            AnalyzeApi.release(id)
+        } catch (e: CoreException) {
+            Log.w("SmartExplorerAnalysis", "analyze.release $id failed: ${e.kind}")
+        }
     }
 }

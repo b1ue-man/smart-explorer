@@ -360,6 +360,7 @@ mod tests {
             state: crate::share::DirectGrantState::Accepted,
             updated_at: 50,
             exec: Default::default(),
+            write: false,
         }
     }
 }

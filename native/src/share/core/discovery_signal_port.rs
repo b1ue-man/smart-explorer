@@ -33,13 +33,10 @@ pub(crate) fn direct_peer_from_identity(
         public_key: identity.public_key.clone(),
         fingerprint: identity.fingerprint.clone(),
     };
-    let material = DirectRelationMaterial::new(
-        identity.direct_lookup_id.clone(),
-        identity.direct_secret(),
-    )
-    .map_err(|error| error.to_string())?;
-    DirectReciprocalPeer::authenticated(peer_identity, material)
-        .map_err(|error| error.to_string())
+    let material =
+        DirectRelationMaterial::new(identity.direct_lookup_id.clone(), identity.direct_secret())
+            .map_err(|error| error.to_string())?;
+    DirectReciprocalPeer::authenticated(peer_identity, material).map_err(|error| error.to_string())
 }
 
 /// Public metadata prepared by the cryptographic exchange implementation. The
@@ -82,9 +79,7 @@ pub(crate) enum DiscoveryPortAction {
     StartPairing { payload: Vec<u8> },
     SendPacket(DiscoveryPortPacket),
     PersistedAndSend(PersistedDiscoveryPacket),
-    ExchangeReady {
-        outcome: DiscoveryRelationOutcome,
-    },
+    ExchangeReady { outcome: DiscoveryRelationOutcome },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -140,11 +135,14 @@ pub(crate) trait DiscoveryExchangePort: Send {
     /// Revalidates the live publication target immediately before renewal.
     fn revalidate_offer(&mut self, offer_id: &str) -> Result<(), DiscoveryPortError>;
 
+    /// `share_back`: a Direct pairing also opens this device's exports;
+    /// otherwise the connector installs the publisher one way (FC1/S21).
     fn start_connector(
         &mut self,
         exchange_id: &str,
         advertisement: &DiscoveryAdvertisement,
         pin: &[u8],
+        share_back: bool,
     ) -> Result<DiscoveryPortAction, DiscoveryPortError>;
 
     fn start_publisher(
@@ -171,4 +169,11 @@ pub(crate) trait DiscoveryExchangePort: Send {
     ) -> Result<Option<DiscoveryPortAction>, DiscoveryPortError>;
 
     fn cancel_exchange(&mut self, exchange_id: &str);
+
+    /// The relation this exchange already installed (or the Room material it
+    /// handed out) while confirmation is still missing; taken once, before
+    /// the exchange is cancelled or finished without completion (S24).
+    fn take_persisted_outcome(&mut self, _exchange_id: &str) -> Option<DiscoveryRelationOutcome> {
+        None
+    }
 }

@@ -8,7 +8,7 @@ pub(super) fn request_label(request: &FsRequest) -> &'static str {
         FsRequest::Stat { .. } => "stat",
         FsRequest::WalkTree { .. } => "walk_tree",
         FsRequest::StorageSnapshot { .. } => "storage_snapshot",
-        FsRequest::StorageAnalysis { .. } => "storage_analysis",
+        FsRequest::StorageAnalysis(_) => "storage_analysis",
         FsRequest::Read { .. } => "read",
         FsRequest::Write { .. } => "write",
         FsRequest::WriteNew { .. } => "write_new",
@@ -27,6 +27,13 @@ pub(super) fn request_label(request: &FsRequest) -> &'static str {
         FsRequest::CreateDir { .. } => "create_dir",
         FsRequest::PromoteNoReplace { .. } => "promote_no_replace",
         FsRequest::DiscardStage { .. } => "discard_stage",
+        FsRequest::DuplicateSearch(_) => "duplicate_search",
+        FsRequest::HashWalk(_) => "hash_walk",
+        FsRequest::ListDirBatch(_) => "list_dir_batch",
+        FsRequest::Recycle(_) => "recycle",
+        FsRequest::FinishStage(_) => "finish_stage",
+        FsRequest::SyncFilesystem(_) => "sync_filesystem",
+        FsRequest::WatchExport(_) => "watch_export",
     }
 }
 
@@ -42,7 +49,8 @@ pub(super) fn response_summary(response: &FsResponse) -> String {
         } => format!(
             concat!(
                 "capabilities contract={} root_confined={} lease={} ",
-                "storage_snapshot_v1={} create={} replace={} namespace_replace={}"
+                "storage_snapshot_v1={} create={} replace={} namespace_replace={} ",
+                "access={:?} features={}"
             ),
             contract_version,
             root_confined,
@@ -51,6 +59,8 @@ pub(super) fn response_summary(response: &FsResponse) -> String {
             capabilities.create,
             capabilities.replace,
             capabilities.namespace_replace,
+            capabilities.access,
+            capabilities.features.names().join(","),
         ),
         FsResponse::Entries { entries } => format!("{} Eintraege", entries.len()),
         FsResponse::Meta { meta } => format!("meta size={} dir={}", meta.size, meta.is_dir),
@@ -106,6 +116,12 @@ pub(super) fn response_summary(response: &FsResponse) -> String {
         FsResponse::Ready => "bereit".into(),
         FsResponse::Ok => "ok".into(),
         FsResponse::Batch { status } => status.summary(),
+        FsResponse::Recycle { moved } => format!("papierkorb moved={moved}"),
+        FsResponse::StageFinished {
+            mtime_applied,
+            durable,
+        } => format!("stufe fertig mtime={mtime_applied} durable={durable}"),
+        FsResponse::Synced { durable } => format!("gesichert durable={durable}"),
         FsResponse::Err { msg, .. } => format!("fehler={msg}"),
     }
 }

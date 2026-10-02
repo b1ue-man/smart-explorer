@@ -7,27 +7,33 @@ use zeroize::Zeroize;
 use crate::share::{OwnDiscoveryOffer, RoomProfile};
 
 const PIN_PROMPT: &str = "PIN (input hidden): ";
-const MISSING_PIN: &str =
-    "no PIN given: pass --pin PIN, pipe it with --pin-stdin, or run in a terminal to type it";
+const PROMPT_WITHOUT_TERMINAL: &str =
+    "--pin-prompt needs a terminal; pipe the PIN with --pin-stdin or pass --pin PIN";
 
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum PinSource {
     Argument(String),
     Stdin,
     Prompt,
+    /// Default: six random digits, printed so they can be read out (FC2).
+    Random,
 }
 
 pub(super) fn pin_source(
     pin: Option<String>,
     pin_stdin: bool,
+    pin_prompt: bool,
     stdin_is_terminal: bool,
 ) -> Result<PinSource, String> {
-    match (pin, pin_stdin) {
-        (Some(_), true) => Err("--pin and --pin-stdin exclude each other".to_string()),
-        (Some(pin), false) => Ok(PinSource::Argument(pin)),
-        (None, true) => Ok(PinSource::Stdin),
-        (None, false) if stdin_is_terminal => Ok(PinSource::Prompt),
-        (None, false) => Err(MISSING_PIN.to_string()),
+    match (pin, pin_stdin, pin_prompt) {
+        (Some(_), true, _) | (Some(_), _, true) | (None, true, true) => {
+            Err("--pin, --pin-stdin and --pin-prompt exclude each other".to_string())
+        }
+        (Some(pin), false, false) => Ok(PinSource::Argument(pin)),
+        (None, true, false) => Ok(PinSource::Stdin),
+        (None, false, true) if stdin_is_terminal => Ok(PinSource::Prompt),
+        (None, false, true) => Err(PROMPT_WITHOUT_TERMINAL.to_string()),
+        (None, false, false) => Ok(PinSource::Random),
     }
 }
 
@@ -39,6 +45,7 @@ pub(super) fn read_pin(source: PinSource) -> Result<String, String> {
         PinSource::Stdin => read_pin_line(std::io::stdin().lock())?,
         PinSource::Prompt => crate::cli::os::read_hidden_line(PIN_PROMPT)
             .map_err(|error| format!("{error}; pass the PIN with --pin-stdin instead"))?,
+        PinSource::Random => crate::share::suggest_discovery_pin()?,
     };
     if pin.len() > crate::share::DISCOVERY_PIN_MAX_BYTES {
         let (length, limit) = (pin.len(), crate::share::DISCOVERY_PIN_MAX_BYTES);
@@ -72,9 +79,21 @@ pub(super) fn read_pin_line(reader: impl BufRead) -> Result<String, String> {
     Ok(line)
 }
 
-/// Same notice as the desktop UI: allowed, but anyone can guess it.
-pub(super) fn trivial_pin(pin: &str) -> bool {
-    pin.is_empty() || pin == "0"
+/// FC2: a short or trivial PIN needs `--allow-weak-pin`; with it the
+/// command only warns (returned text).
+pub(super) fn weak_pin_check(pin: &str, allow_weak_pin: bool) -> Result<Option<String>, String> {
+    let Some(problem) = crate::share::discovery_pin_strength(pin.as_bytes()).problem() else {
+        return Ok(None);
+    };
+    if allow_weak_pin {
+        Ok(Some(format!(
+            "weak PIN allowed with --allow-weak-pin: {problem}"
+        )))
+    } else {
+        Err(format!(
+            "{problem} (pass --allow-weak-pin to use it anyway, or omit --pin for a random PIN)"
+        ))
+    }
 }
 
 pub(super) fn validate_name(name: &str) -> Result<String, String> {
@@ -206,8 +225,8 @@ fn offer_ids(offers: &[OwnDiscoveryOffer]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        duration_secs, pin_source, read_pin_line, resolve_room, select_offers, trivial_pin,
-        validate_name, PinSource,
+        duration_secs, pin_source, read_pin_line, resolve_room, select_offers, validate_name,
+        weak_pin_check, PinSource,
     };
     use crate::share::{DiscoveryPublishTarget, OwnDiscoveryOffer, RoomProfile};
 
@@ -238,6 +257,7 @@ mod tests {
             status: Default::default(),
             members: Vec::new(),
             exports: Default::default(),
+            policy: crate::share::RoomPolicy::new_room(),
         }
     }
 
@@ -254,23 +274,33 @@ mod tests {
     #[test]
     fn cli_task_discoverable_pin_source_rules() {
         assert_eq!(
-            pin_source(Some("1454".into()), false, false),
+            pin_source(Some("1454".into()), false, false, false),
             Ok(PinSource::Argument("1454".into()))
         );
         // An empty PIN is a value, not a missing one.
         assert_eq!(
-            pin_source(Some(String::new()), false, true),
+            pin_source(Some(String::new()), false, false, true),
             Ok(PinSource::Argument(String::new()))
         );
-        assert_eq!(pin_source(None, true, true), Ok(PinSource::Stdin));
-        assert_eq!(pin_source(None, false, true), Ok(PinSource::Prompt));
-        assert!(pin_source(None, false, false)
+        assert_eq!(pin_source(None, true, false, true), Ok(PinSource::Stdin));
+        assert_eq!(pin_source(None, false, true, true), Ok(PinSource::Prompt));
+        assert!(pin_source(None, false, true, false)
             .unwrap_err()
             .contains("--pin-stdin"));
-        assert!(pin_source(Some("1".into()), true, true).is_err());
-        assert!(trivial_pin(""));
-        assert!(trivial_pin("0"));
-        assert!(!trivial_pin("1454"));
+        assert!(pin_source(Some("1".into()), true, false, true).is_err());
+        assert!(pin_source(None, true, true, true).is_err());
+    }
+
+    #[test]
+    fn review_task_cli_pin_defaults_to_random_and_weak_pins_need_the_flag() {
+        assert_eq!(pin_source(None, false, false, true), Ok(PinSource::Random));
+        assert_eq!(pin_source(None, false, false, false), Ok(PinSource::Random));
+        assert!(weak_pin_check("", false).is_err());
+        assert!(weak_pin_check("1454", false)
+            .unwrap_err()
+            .contains("--allow-weak-pin"));
+        assert!(weak_pin_check("1454", true).unwrap().is_some());
+        assert_eq!(weak_pin_check("481902", false), Ok(None));
     }
 
     #[test]
