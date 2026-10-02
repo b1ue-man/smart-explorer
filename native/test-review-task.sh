@@ -111,8 +111,12 @@ mapfile -t batch_files < <(
         'share-server/src/*.rs'
 )
 if [[ "${#batch_files[@]}" -eq 0 ]]; then
-    echo "no batch source files found relative to $batch_base" >&2
-    exit 1
+    if [[ "$suite_mode" != check ]]; then
+        echo "no batch source files found relative to $batch_base" >&2
+        exit 1
+    fi
+    # A check of the unchanged base only proves that every target compiles.
+    echo "review task suite: no batch source files yet; compile check only"
 fi
 # In the complete suite a failing stage is recorded and the next one still
 # runs, so one remote run reports every problem; the suite fails at its end.
