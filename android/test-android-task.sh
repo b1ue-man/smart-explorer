@@ -727,7 +727,21 @@ reach_check() {
   step "background reachability: idle wake-ups, forced Doze, desktop session to the phone"
   phone="$(adb_shell cat /sdcard/SmartExplorerTask/reach/phone 2>/dev/null || true)"
   [[ -n "$phone" ]] || { fail_stage "BackgroundReachTaskTest wrote no phone device id"; return 1; }
+  # The end of an instrumentation force-stops the app (alarms included). A user opens the app
+  # once and leaves it with Home: the reachability service runs, the app is in the background.
+  adb_shell am start -W -n "$app_package/.MainActivity" >/dev/null || true
+  sleep 8
   adb_shell input keyevent KEYCODE_HOME || true
+  local deadline=$((SECONDS + 60)) services=""
+  while ((SECONDS < deadline)); do
+    services="$(adb_shell dumpsys activity services "$app_package" || true)"
+    grep -q 'service.BackgroundService' <<<"$services" && grep -q 'isForeground=true' <<<"$services" && break
+    sleep 2
+  done
+  printf '%s\n' "$services" >"$emulator_out/reach-services.txt"
+  grep -q 'isForeground=true' <<<"$services" || fail_stage "the reachability service did not run after Home"
+  # Settle into the background (low power, idle keepalive) before measuring.
+  sleep 20
   pid="$(adb_shell pidof "$app_package" || true)"
   if [[ "$pid" =~ ^[0-9]+$ ]]; then
     thread_wakeups "$pid" "$emulator_out/idle-wakeups.tsv"
@@ -780,9 +794,16 @@ reach_boot_check() {
     fail_stage "the reachability service did not start after the reboot (periodic mode, Share set up)"
     return 1
   fi
-  adb_shell dumpsys notification --noredact >"$emulator_out/reach-boot-notifications.txt" 2>&1 || true
-  grep -q 'Share erreichbar' "$emulator_out/reach-boot-notifications.txt" ||
-    fail_stage "no „Share erreichbar“ notification after the reboot"
+  # Android may defer a foreground service's notification by up to 10 s; its title is checked
+  # inside the app by BackgroundReachTaskTest.
+  deadline=$((SECONDS + 30))
+  while ((SECONDS < deadline)); do
+    adb_shell dumpsys notification --noredact >"$emulator_out/reach-boot-notifications.txt" 2>&1 || true
+    grep -Eq "pkg=$app_package .*id=1002" "$emulator_out/reach-boot-notifications.txt" && break
+    sleep 2
+  done
+  grep -Eq "pkg=$app_package .*id=1002" "$emulator_out/reach-boot-notifications.txt" ||
+    fail_stage "no background notification (id 1002) after the reboot in periodic mode"
   adb_shell dumpsys alarm >"$emulator_out/reach-boot-alarms.txt" 2>&1 || true
   grep -q 'KEEP_ALIVE' "$emulator_out/reach-boot-alarms.txt" || fail_stage "no keep-alive alarm after the reboot"
   if [[ -n "$phone" ]] && bash "$tool" reach "$root" "$phone" 180 >"$emulator_out/share-desktop-reach-boot.log" 2>&1; then

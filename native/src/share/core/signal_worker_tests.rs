@@ -339,14 +339,26 @@ fn android_background_task_old_server_keeps_heartbeats_in_low_power() {
         server.send(r#"{"t":"pong"}"#);
         // Asleep beyond the old server's read deadline: the next wake-up
         // (here the alarm probe; in the field also the server's close)
-        // reconnects.
-        harness.clock.suspend(Duration::from_secs(91));
-        let ticket = harness.power.request_probe(false);
+        // reconnects. A pong the worker reads only after the jump counts as
+        // fresh contact, so the test sleeps again until the probe sees the
+        // silence; the ended session answers the probe with the default.
+        let mut ended = false;
+        for _ in 0..3 {
+            harness.clock.suspend(Duration::from_secs(91));
+            let outcome = harness
+                .power
+                .request_probe(false)
+                .wait_timeout(Duration::from_secs(5));
+            if outcome == ProbeOutcome::default() {
+                ended = true;
+                break;
+            }
+        }
+        if !ended {
+            harness.stop();
+        }
+        assert!(ended, "the probe after a long sleep did not reconnect");
         assert!(!session.join().expect("session"));
-        assert_eq!(
-            ticket.wait_timeout(Duration::from_secs(5)),
-            ProbeOutcome::default()
-        );
     });
 }
 
