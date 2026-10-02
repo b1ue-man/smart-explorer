@@ -98,6 +98,7 @@ fn outgoing_projection_separates_relay_forwarding_from_peer_receipt() {
         lan_candidates: Vec::new(),
         lan_seen_at: None,
         lan_uplink: None,
+        relation: Default::default(),
     });
     let (_, outgoing) = request_views(&profiles, 201);
     assert_eq!(outgoing[0].decision, DirectDecisionState::Accepted);
@@ -213,6 +214,7 @@ fn authorized_card_never_links_same_device_id_with_a_different_key() {
         state: DirectGrantState::Accepted,
         updated_at: 130,
         exec: Default::default(),
+        write: false,
     });
 
     let cards = authorized_device_views(&profiles);
@@ -300,6 +302,7 @@ fn active_old_grant_is_named_as_the_resolution_for_a_new_identity() {
         state: DirectGrantState::Accepted,
         updated_at: 100,
         exec: Default::default(),
+        write: false,
     });
 
     let (incoming, _) = request_views(&profiles, 101);

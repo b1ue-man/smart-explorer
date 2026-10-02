@@ -80,10 +80,9 @@ fn add_export(args: ExportAddArgs) -> Result<(), String> {
         if config.roots.iter().any(|root| root.path == path) {
             return Err(format!("export already exists: {path}"));
         }
-        config.roots.push(crate::share::SharedRoot {
-            label: label.clone(),
-            path: path.clone(),
-        });
+        config
+            .roots
+            .push(crate::share::SharedRoot::new(label.clone(), path.clone()));
         Ok(())
     })?;
     println!("Added export {path}{}", super::refresh_note());

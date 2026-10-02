@@ -102,6 +102,7 @@ pub(super) fn meta(name: String, attributes: &Attributes) -> VfsMeta {
     VfsMeta {
         is_dir,
         is_symlink: attributes.is_link(),
+        special: false,
         size: if is_dir { 0 } else { attributes.size },
         mtime_ms: filetime_ms(attributes.last_write),
         btime_ms: filetime_ms(attributes.creation),

@@ -1,10 +1,11 @@
 use super::{
+    export_config::ExportAccess,
     framing::{reply, reply_err},
     fs::ShareExportConfig,
     mount_lease::PeerMountLeases,
     session::PeerPrincipal,
     wire::{
-        FsResponse, FsTransferCapabilities, FsWriteCapabilities,
+        FsHostFeatures, FsResponse, FsTransferCapabilities, FsWriteCapabilities,
         MOUNT_PATH_CAPABILITY_CONTRACT_VERSION,
     },
 };
@@ -70,6 +71,7 @@ fn resolve_capabilities(query: CapabilityQuery) -> io::Result<FsResponse> {
                 capabilities.root_confinement.is_enforced(),
                 Some(grant.token),
                 transfer,
+                None,
             ));
         }
     }
@@ -81,8 +83,10 @@ fn resolve_capabilities(query: CapabilityQuery) -> io::Result<FsResponse> {
             false,
             None,
             transfer,
+            None,
         ));
     };
+    let access = Some(resolved.target.access);
     if !acquire_lease {
         let root_confined = resolved.lease_root_confined();
         return Ok(describe(
@@ -90,6 +94,7 @@ fn resolve_capabilities(query: CapabilityQuery) -> io::Result<FsResponse> {
             root_confined,
             None,
             transfer,
+            access,
         ));
     }
     let grant = mount_leases.acquire(
@@ -106,17 +111,23 @@ fn resolve_capabilities(query: CapabilityQuery) -> io::Result<FsResponse> {
         capabilities.root_confinement.is_enforced(),
         Some(grant.token),
         transfer,
+        access,
     ))
 }
 
+/// `access`: of the export holding the path, where it was resolved here
+/// (an existing lease's retry and the synthetic containers report none).
 fn describe(
     staged_write: StagedWriteCapabilities,
     root_confined: bool,
     lease: Option<String>,
     transfer: FsTransferCapabilities,
+    access: Option<ExportAccess>,
 ) -> FsResponse {
     let mut capabilities = FsWriteCapabilities::from(staged_write);
     capabilities.transfer = transfer;
+    capabilities.features = FsHostFeatures::host();
+    capabilities.access = access;
     FsResponse::Capabilities {
         capabilities,
         contract_version: MOUNT_PATH_CAPABILITY_CONTRACT_VERSION,

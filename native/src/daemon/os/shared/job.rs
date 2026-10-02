@@ -97,7 +97,10 @@ pub(crate) fn run_one(job: &SyncJob, cancel: &AtomicBool) {
         "ok"
     };
     if let Some(summary) = out.omissions.summary() {
-        log(&format!("sync '{}' completed with omissions: {summary}", job.name));
+        log(&format!(
+            "sync '{}' completed with omissions: {summary}",
+            job.name
+        ));
         for path in out.omissions.reported_paths().take(100) {
             log(&format!("sync '{}' omitted link: {path}", job.name));
         }
@@ -164,7 +167,7 @@ fn canceled(job: &SyncJob, cancel: &AtomicBool) -> bool {
 }
 
 /// Run a user-specified shell command and require a successful exit status.
-fn run_cmd(cmd: &str) -> Result<(), String> {
+pub(super) fn run_cmd(cmd: &str) -> Result<(), String> {
     match platform::run_shell_command(cmd) {
         Ok(status) if status.success() => {
             log(&format!("ran command ({status}): {cmd}"));

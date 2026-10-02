@@ -28,14 +28,24 @@ mod congestion;
 mod copy_transfer;
 #[path = "core/core.rs"]
 mod core;
-#[path = "core/delete.rs"]
-mod delete;
 #[path = "core/dedupe.rs"]
 mod dedupe;
+#[path = "core/delete.rs"]
+mod delete;
 #[path = "core/dispatch.rs"]
 mod dispatch;
+#[path = "core/error_classes.rs"]
+mod error_classes;
+#[path = "core/extension_calls.rs"]
+mod extension_calls;
+#[path = "core/extension_types.rs"]
+mod extension_types;
+#[path = "core/extensions.rs"]
+mod extensions;
 #[path = "os/shared/local.rs"]
 mod local;
+#[path = "os/shared/local_extensions.rs"]
+mod local_extensions;
 #[cfg(windows)]
 #[path = "os/windows/local_platform.rs"]
 mod local_platform;
@@ -50,12 +60,36 @@ mod promotion;
 pub mod remote_util;
 #[path = "core/scheme.rs"]
 mod scheme;
+#[path = "core/staging_names.rs"]
+mod staging_names;
 #[path = "os/shared/sync_roots.rs"]
 mod sync_roots;
 pub(crate) use sync_roots::{sync_backend, validate_sync_roots};
+#[path = "core/trait_defaults.rs"]
+mod trait_defaults;
 #[cfg(windows)]
 #[path = "os/windows/verbatim.rs"]
 mod verbatim;
+#[path = "core/volume.rs"]
+mod volume;
+
+pub use self::error_classes::{is_target_refusal, omission_reason};
+pub use self::extension_calls::{
+    change_signal, change_signal_mode, find_duplicates, finish_stage, hash_walk, list_dir_tolerant,
+    mtime_precision, open_read_regular, open_write_copy_stage_timed, recycle,
+    supports_duplicate_search, supports_hash_walk, supports_recycle, sync_filesystem,
+    target_limits, unix_mode, volume_identity,
+};
+pub use self::extension_types::{
+    ChangeNotice, ChangeSignalMode, ChangeSubscription, HashWalkEntry, HashWalkItem,
+    HashWalkRequest, MtimePrecision, NameIssue, NameLimit, OmissionReason, RecycleExpectation,
+    RecycleOutcome, StageDurability, StageFinish, StageFinished, TargetLimits, VfsListing,
+    VfsOmission,
+};
+pub use self::extensions::BackendExtensions;
+pub use self::local_extensions::{local_mount_boundary, local_volume_identity};
+pub use self::staging_names::is_staging_name;
+pub use self::volume::{MountKind, VolumeIdentity};
 
 pub use self::cache::CachingBackend;
 pub use self::capabilities::{MountPathCapabilities, RootConfinement, StagedWriteCapabilities};

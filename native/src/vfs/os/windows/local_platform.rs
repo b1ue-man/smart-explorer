@@ -115,6 +115,34 @@ fn long_path(path: &Path) -> Option<PathBuf> {
     }
 }
 
+/// Windows offers no unprivileged filesystem-wide flush (a volume handle for
+/// `FlushFileBuffers` needs administrator rights): stages are flushed one by
+/// one instead.
+pub(crate) fn syncfs(_path: &Path) -> std::io::Result<bool> {
+    Ok(false)
+}
+
+/// Windows files carry ACLs inherited from their folder, not Unix modes.
+pub(crate) fn unix_mode(_metadata: &std::fs::Metadata) -> Option<u32> {
+    None
+}
+
+pub(crate) fn set_unix_mode(_file: &std::fs::File, _mode: u32) -> std::io::Result<()> {
+    Ok(())
+}
+
+/// Volume identity of `path` (volume serial number + location inside the
+/// volume). `Ok(None)` = not determinable, treated as "unknown", never as
+/// "another volume".
+pub(crate) fn volume_identity(_path: &Path) -> std::io::Result<Option<super::VolumeIdentity>> {
+    Ok(None)
+}
+
+/// Volumes mounted in folders are junctions, which walks treat as links.
+pub(crate) fn mount_boundary(_path: &Path) -> std::io::Result<Option<super::MountKind>> {
+    Ok(None)
+}
+
 pub(crate) fn remove_file_like(path: &Path) -> std::io::Result<()> {
     const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x10;
     let metadata = std::fs::symlink_metadata(path)?;

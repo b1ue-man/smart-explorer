@@ -126,6 +126,7 @@ impl ShareProfiles {
                 state,
                 updated_at: decision.decided_at,
                 exec,
+                write: false,
             });
         }
         self.recompute_identity_conflicts_for_device(&device_id);

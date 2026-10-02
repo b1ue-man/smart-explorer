@@ -139,6 +139,7 @@ impl ShareProfiles {
                 state,
                 updated_at: now,
                 exec: ExecGrant::default(),
+                write: false,
             });
         }
         Ok(())

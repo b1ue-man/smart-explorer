@@ -138,14 +138,29 @@ pub fn dispatch_discovery_ui_action(
             display_alias,
             pin,
             duration_secs,
+            allow_weak_pin,
         } => {
             if duration_secs == 0 {
                 state.command_error("Die Sichtbarkeitsdauer muss positiv sein".into());
                 return;
             }
+            if duration_secs > crate::share::DISCOVERY_MAX_OFFER_SECS {
+                state.command_error(format!(
+                    "Die Sichtbarkeit dauert höchstens {} Minuten",
+                    crate::share::DISCOVERY_MAX_OFFER_SECS / 60
+                ));
+                return;
+            }
             if pin.as_bytes().len() > crate::share::DISCOVERY_PIN_MAX_BYTES {
                 state.command_error(pin_limit_error(pin.as_bytes().len()));
                 return;
+            }
+            if !allow_weak_pin {
+                let strength = crate::share::discovery_pin_strength(pin.as_bytes());
+                if let Some(problem) = strength.problem() {
+                    state.command_error(problem.into());
+                    return;
+                }
             }
             if !state.begin_publish(&target) {
                 return;
@@ -165,6 +180,7 @@ pub fn dispatch_discovery_ui_action(
                     display_alias,
                     pin,
                     duration_secs,
+                    allow_weak_pin,
                 }),
             )
         }
@@ -189,7 +205,11 @@ pub fn dispatch_discovery_ui_action(
                 crate::share::ShareCmd::Discovery(crate::share::DiscoveryCommand::ListDiscoveries),
             )
         }
-        DiscoveryUiAction::Connect { discovery_id, pin } => {
+        DiscoveryUiAction::Connect {
+            discovery_id,
+            pin,
+            share_back,
+        } => {
             if pin.as_bytes().len() > crate::share::DISCOVERY_PIN_MAX_BYTES {
                 state.command_error(pin_limit_error(pin.as_bytes().len()));
                 return;
@@ -201,9 +221,17 @@ pub fn dispatch_discovery_ui_action(
             (
                 DiscoveryCommandContext::Connect(discovery_id.clone()),
                 crate::share::ShareCmd::Discovery(
-                    crate::share::DiscoveryCommand::StartDiscoveryExchange { discovery_id, pin },
+                    crate::share::DiscoveryCommand::StartDiscoveryExchange {
+                        discovery_id,
+                        pin,
+                        share_back,
+                    },
                 ),
             )
+        }
+        DiscoveryUiAction::Revoke { exchange_id } => {
+            state.take_unconfirmed(&exchange_id);
+            return;
         }
         DiscoveryUiAction::Cancel { exchange_id } => {
             if !state.cancel_started(&exchange_id) {
@@ -283,6 +311,13 @@ pub fn apply_share_discovery_event(
                     "Sichtbarkeit beendet: Ziel ist nicht mehr verfuegbar"
                 }
                 crate::share::DiscoveryOfferStopReason::WorkerStopped => WORKER_STOPPED_STATUS,
+                crate::share::DiscoveryOfferStopReason::Paired => {
+                    "Sichtbarkeit beendet: ein Gerät wurde gekoppelt (Angebote gelten einmal)"
+                }
+                crate::share::DiscoveryOfferStopReason::TooManyFailedAttempts => {
+                    "⚠ Sichtbarkeit beendet: zu viele fehlgeschlagene Kopplungsversuche – \
+                     jemand hat womöglich versucht, die PIN zu erraten"
+                }
             };
             state.stopped(&offer_id);
             state.status = Some(status.to_string());
@@ -315,6 +350,11 @@ pub fn apply_share_discovery_event(
             discovery_id,
             error,
         } => state.exchange_failed(exchange_id, discovery_id, error),
+        crate::share::DiscoveryEvent::ExchangeUnconfirmed {
+            exchange_id,
+            discovery_id,
+            outcome,
+        } => state.exchange_unconfirmed(exchange_id, discovery_id, outcome),
     }
 }
 

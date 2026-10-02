@@ -4,6 +4,8 @@ import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.IBinder
+import android.os.PowerManager
+import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.ServiceCompat
 import app.smartexplorer.android.api.SyncApi
@@ -24,6 +26,8 @@ import kotlinx.coroutines.launch
  * UI is not visible (spec F8). Started only by [TaskKeeper]; checks every 5 s and stops itself
  * when neither user tasks nor a daemon job run. The notification shows the progress with
  * [Abbrechen]; on Android 15+ `onTimeout` cancels all tasks and stops (spec F8, "vom System beendet").
+ * While a task against another device runs ([TaskKeeper.keepCpuAwake]) it holds a partial wake
+ * lock: a foreground service alone does not keep the CPU running with the screen off.
  */
 class TaskForegroundService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -34,6 +38,10 @@ class TaskForegroundService : Service() {
     @Volatile
     private var activeJob: String? = null
 
+    /** Held while a task against another device runs; main thread only. */
+    private var cpuLock: PowerManager.WakeLock? = null
+    private var cpuAcquiredAt = 0L
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -43,6 +51,7 @@ class TaskForegroundService : Service() {
             // StateFlow collection is conflated by itself (`StateFlow.conflate()` is a deprecation error).
             Core.tasks.collect { tasks ->
                 if (foreground) render(tasks)
+                holdCpu(tasks)
                 delay(RENDER_INTERVAL_MS)
             }
         }
@@ -68,6 +77,7 @@ class TaskForegroundService : Service() {
     override fun onTimeout(startId: Int, fgsType: Int) {
         Log.w(TAG, "foreground time limit reached, cancelling all tasks")
         TaskKeeper.cancelAllAfterTimeout()
+        releaseCpu()
         leaveForeground()
         Notifications.notify(this, Notifications.ID_TRANSFERS, ServiceNotifications.stoppedBySystem(this))
         stopSelf()
@@ -75,6 +85,7 @@ class TaskForegroundService : Service() {
 
     override fun onDestroy() {
         scope.cancel()
+        releaseCpu()
         foreground = false
         super.onDestroy()
     }
@@ -109,7 +120,9 @@ class TaskForegroundService : Service() {
                 Log.w(TAG, "bg.status failed: ${e.kind}: ${e.message}")
                 null
             }
+            holdCpu(Core.tasks.value)
             if (!TaskKeeper.keepsAlive(Core.tasks.value) && activeJob == null) {
+                releaseCpu()
                 leaveForeground()
                 watcher = null
                 // Keeps running when a newer start arrived meanwhile; that start promotes again.
@@ -125,11 +138,55 @@ class TaskForegroundService : Service() {
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
     }
 
+    /**
+     * Holds the CPU while a task against another device runs and lets it go as soon as none does.
+     * The lock is taken with a timeout ([CPU_HOLD_MS]) and renewed well before it ends, so a stuck
+     * service can never keep the device awake for long.
+     */
+    private fun holdCpu(tasks: List<TaskInfo>) {
+        if (!foreground || !TaskKeeper.needsCpu(tasks)) {
+            releaseCpu()
+            return
+        }
+        val lock = cpuLock ?: newCpuLock()?.also { cpuLock = it } ?: return
+        val now = SystemClock.elapsedRealtime()
+        if (lock.isHeld && now - cpuAcquiredAt < CPU_RENEW_MS) return
+        try {
+            // Not reference-counted: acquiring again replaces the pending timeout.
+            lock.acquire(CPU_HOLD_MS)
+            cpuAcquiredAt = now
+        } catch (e: RuntimeException) {
+            Log.w(TAG, "task wake lock not taken", e)
+        }
+    }
+
+    private fun releaseCpu() {
+        val lock = cpuLock ?: return
+        try {
+            if (lock.isHeld) lock.release()
+        } catch (e: RuntimeException) {
+            Log.w(TAG, "task wake lock not released", e)
+        }
+    }
+
+    private fun newCpuLock(): PowerManager.WakeLock? = getSystemService(PowerManager::class.java)
+        ?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, CPU_LOCK_TAG)
+        ?.apply { setReferenceCounted(false) }
+
     companion object {
         /** Notification action [Abbrechen]: cancels every running user task. */
         const val ACTION_CANCEL = "app.smartexplorer.android.action.CANCEL_TASKS"
         private const val TAG = "SmartExplorerTasks"
         private const val CHECK_INTERVAL_MS = 5_000L
         private const val RENDER_INTERVAL_MS = 1_000L
+
+        /** "app:purpose", as `dumpsys power` and batterystats show it. */
+        private const val CPU_LOCK_TAG = "SmartExplorer:remote-task"
+
+        /** Upper bound of one hold (the documented example); renewed while the task runs. */
+        private const val CPU_HOLD_MS = 10 * 60_000L
+
+        /** Renewal long before the hold ends; the watch checks every [CHECK_INTERVAL_MS]. */
+        private const val CPU_RENEW_MS = 60_000L
     }
 }

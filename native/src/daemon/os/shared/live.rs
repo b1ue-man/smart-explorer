@@ -6,7 +6,7 @@
 
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use super::catch_up::{CatchUpBook, CatchUpGate, CatchUpStatus, ServiceReport};
+use super::catch_up::{CatchUpBook, CatchUpGate, CatchUpRecord, CatchUpStatus, ServiceReport};
 use super::ipc::{ShareHost, ShareWorkerSnapshot};
 use super::ipc_host::stop_service_locked;
 use super::job_supervisor::JobSupervisor;
@@ -69,6 +69,12 @@ pub fn active_job() -> Option<String> {
 pub fn last_catch_up_ms() -> Option<i64> {
     let path = crate::support_dirs::sync_data_dir().join(LAST_CATCH_UP_FILE);
     read_optional(&path).ok()??.trim().parse().ok()
+}
+
+/// The last finished catch-up run that ran at least one job, with its outcome
+/// (`None` = none recorded). Contract stage: outcomes are not recorded yet.
+pub fn last_catch_up() -> Option<CatchUpRecord> {
+    None
 }
 
 /// Drain Share events at the embedded worker's host without IPC. `None` when

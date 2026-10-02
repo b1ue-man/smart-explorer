@@ -45,6 +45,11 @@ pub(crate) fn on_metered_network() -> bool {
     super::host_state::host_state().metered
 }
 
+/// (battery saver, metered network): both are reported by the host.
+pub(crate) fn autopause_conditions_supported() -> (bool, bool) {
+    (true, true)
+}
+
 /// Job hooks run inside the app sandbox with the system shell.
 pub(crate) fn run_shell_command(cmd: &str) -> io::Result<std::process::ExitStatus> {
     std::process::Command::new(SHELL).args(["-c", cmd]).status()

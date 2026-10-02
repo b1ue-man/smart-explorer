@@ -5,9 +5,13 @@ use super::relative_path::ValidatedRelativePath;
 use super::types::{Frame, SearchSpec, WireMeta, CHUNK};
 
 pub(super) const MAX_FRAME: usize = 64 * 1024 * 1024;
-// Empty-name WireMeta: u32 name length, two flags, u64 size, i64 mtime,
-// and one optional-md5 flag. Variable string bytes can only increase this.
+// Empty-name WireMeta: u32 name length, directory flag, entry flags, u64
+// size, i64 mtime, and one optional-md5 flag. Variable string bytes can only
+// increase this.
 pub(super) const MIN_WIRE_META_BYTES: usize = 23;
+/// Entry flags of a `WireMeta` (the byte after the directory flag).
+pub(super) const META_LINK: u8 = 1;
+pub(super) const META_SPECIAL: u8 = 2;
 
 #[path = "frame_encode.rs"]
 mod frame_encode;
@@ -117,10 +121,17 @@ fn bad(msg: &str) -> io::Error {
 }
 
 fn get_meta(r: &mut Reader) -> io::Result<WireMeta> {
+    let name = r.string()?;
+    let is_dir = r.bool()?;
+    let flags = r.u8()?;
+    if flags & !(META_LINK | META_SPECIAL) != 0 {
+        return Err(bad("unknown directory entry flags"));
+    }
     Ok(WireMeta {
-        name: r.string()?,
-        is_dir: r.bool()?,
-        is_symlink: r.bool()?,
+        name,
+        is_dir,
+        is_symlink: flags & META_LINK != 0,
+        special: flags & META_SPECIAL != 0,
         size: r.u64()?,
         mtime_ms: r.i64()?,
         content_md5: r.opt_str()?,
@@ -240,7 +251,10 @@ impl Frame {
             33 => Frame::WriteNew(r.string()?),
             t => match frame_encode::frame_ext::decode(t, &mut r)? {
                 Some(frame) => frame,
-                None => return Err(bad(&format!("unknown frame tag {t}"))),
+                None => match frame_encode::frame_ops::decode(t, &mut r)? {
+                    Some(frame) => frame,
+                    None => return Err(bad(&format!("unknown frame tag {t}"))),
+                },
             },
         };
         if !r.is_finished() {

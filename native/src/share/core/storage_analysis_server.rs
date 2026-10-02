@@ -1,12 +1,21 @@
-use crate::analytics::{analysis_transfer::{self, AnalysisMessage}, Progress, ScanPhase};
+use crate::analytics::{
+    analysis_transfer::{self, AnalysisMessage},
+    Progress, ScanPhase,
+};
 use iroh::endpoint::SendStream;
 use std::io;
-use std::sync::{Arc, OnceLock};
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, Semaphore};
 
-use super::{framing, fs_access::FsAccess, io_deadline, wire::FsResponse};
+use super::{
+    framing,
+    fs_access::FsAccess,
+    io_deadline,
+    session::PeerPrincipal,
+    wire::{FsResponse, FsStorageAnalysis},
+};
 
 const HEARTBEAT: Duration = Duration::from_millis(250);
 
@@ -17,7 +26,9 @@ enum Update {
 
 struct CancelOnDrop(Progress);
 impl Drop for CancelOnDrop {
-    fn drop(&mut self) { self.0.cancel.store(true, Ordering::Relaxed); }
+    fn drop(&mut self) {
+        self.0.cancel.store(true, Ordering::Relaxed);
+    }
 }
 
 fn slots() -> Arc<Semaphore> {
@@ -25,7 +36,18 @@ fn slots() -> Arc<Semaphore> {
     SLOTS.get_or_init(|| Arc::new(Semaphore::new(2))).clone()
 }
 
-pub(super) async fn serve(mut send: SendStream, root: String, access: FsAccess) -> io::Result<()> {
+/// `StorageAnalysis` on the host's own worker. `principal` keys the fair
+/// per-device admission and the retained result of `request.request_id`.
+pub(super) async fn serve(
+    mut send: SendStream,
+    request: FsStorageAnalysis,
+    access: FsAccess,
+    principal: PeerPrincipal,
+) -> io::Result<()> {
+    // V2 contract: the RV1 parameters are accepted; until their host side is
+    // implemented the analysis runs exactly as before.
+    let FsStorageAnalysis { path: root, .. } = request;
+    let _ = principal;
     let progress = Progress::default();
     let _cancellation = CancelOnDrop(progress.clone());
     progress.set_phase(ScanPhase::Queued, &root);
@@ -55,8 +77,15 @@ pub(super) async fn serve(mut send: SendStream, root: String, access: FsAccess) 
             let _permit = permit;
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 run_worker(root, access, local, &updates)
-            })).unwrap_or_else(|_| Err(io::Error::other("Lokaler Analyse-Worker ist unerwartet beendet")));
-            if let Err(error) = result { let _ = updates.blocking_send(Err(error)); }
+            }))
+            .unwrap_or_else(|_| {
+                Err(io::Error::other(
+                    "Lokaler Analyse-Worker ist unerwartet beendet",
+                ))
+            });
+            if let Err(error) = result {
+                let _ = updates.blocking_send(Err(error));
+            }
         })?;
     let mut transferring = false;
     let mut done = false;
@@ -84,27 +113,54 @@ pub(super) async fn serve(mut send: SendStream, root: String, access: FsAccess) 
             }
         }
     }
-    worker.join().map_err(|_| io::Error::other("Analyse-Worker konnte nicht beendet werden"))?;
-    if !done { return Err(io::Error::other("Analyse ohne Abschlussmeldung beendet")); }
+    worker
+        .join()
+        .map_err(|_| io::Error::other("Analyse-Worker konnte nicht beendet werden"))?;
+    if !done {
+        return Err(io::Error::other("Analyse ohne Abschlussmeldung beendet"));
+    }
     Ok(())
 }
 
-fn run_worker(root: String, access: FsAccess, progress: Progress, updates: &mpsc::Sender<io::Result<Update>>) -> io::Result<()> {
+fn run_worker(
+    root: String,
+    access: FsAccess,
+    progress: Progress,
+    updates: &mpsc::Sender<io::Result<Update>>,
+) -> io::Result<()> {
     progress.check_cancel()?;
     let started = Instant::now();
     let mut outcome = super::storage_analysis_host::scan(&root, &access, &progress);
     let scan_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
     progress.check_cancel()?;
     progress.set_phase(ScanPhase::Assembling, &root);
-    analysis_transfer::send_outcome(&mut outcome, &progress, Some(scan_ms),
-        |message| updates.blocking_send(Ok(Update::Control(message))).map_err(|_| canceled()),
-        |bytes| updates.blocking_send(Ok(Update::Data(bytes))).map_err(|_| canceled()),
+    analysis_transfer::send_outcome(
+        &mut outcome,
+        &progress,
+        Some(scan_ms),
+        |message| {
+            updates
+                .blocking_send(Ok(Update::Control(message)))
+                .map_err(|_| canceled())
+        },
+        |bytes| {
+            updates
+                .blocking_send(Ok(Update::Data(bytes)))
+                .map_err(|_| canceled())
+        },
     )
-
 }
 
 async fn heartbeat(send: &mut SendStream, progress: &Progress) -> io::Result<()> {
-    send_response(send, FsResponse::Analysis { message: AnalysisMessage::Progress { state: progress.snapshot() } }).await
+    send_response(
+        send,
+        FsResponse::Analysis {
+            message: AnalysisMessage::Progress {
+                state: progress.snapshot(),
+            },
+        },
+    )
+    .await
 }
 
 async fn send_response(send: &mut SendStream, response: FsResponse) -> io::Result<()> {
@@ -112,7 +168,10 @@ async fn send_response(send: &mut SendStream, response: FsResponse) -> io::Resul
 }
 
 fn canceled() -> io::Error {
-    io::Error::new(io::ErrorKind::Interrupted, "Analyse-Verbindung wurde beendet")
+    io::Error::new(
+        io::ErrorKind::Interrupted,
+        "Analyse-Verbindung wurde beendet",
+    )
 }
 
 #[cfg(test)]

@@ -1,9 +1,9 @@
-use crate::app::theme;
 use super::prelude::*;
 use super::*;
 use crate::app::reclaim_results_ui::{
     result_count_label, select_items, selected_bytes, ui_empty, ui_item, ui_items, ui_section,
 };
+use crate::app::theme;
 
 impl App {
     pub(in crate::app) fn ui_reclaim(&mut self, ctx: &egui::Context) {
@@ -277,7 +277,7 @@ impl App {
                                                 "{} {} · {}",
                                                 group.hash.algorithm.label(),
                                                 hash_short,
-                                                group.evidence.label()
+                                                evidence_label(group.evidence, r.is_remote)
                                             ))
                                             .monospace(),
                                         );
@@ -409,5 +409,14 @@ impl App {
             self.cancel_analytics_scan();
             self.show_analytics = false;
         }
+    }
+}
+
+/// How a group's equality was established; a remote place's content is read
+/// and hashed here, which "lokal" would misname.
+fn evidence_label(evidence: crate::analytics::DuplicateEvidence, remote: bool) -> &'static str {
+    match evidence {
+        crate::analytics::DuplicateEvidence::LocalSha256 if remote => "Inhalt gelesen + SHA-256",
+        other => other.label(),
     }
 }

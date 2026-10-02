@@ -29,12 +29,9 @@ pub(crate) fn next_job() -> u64 {
     NEXT_SYNC_JOB.fetch_add(1, Ordering::Relaxed)
 }
 
-/// One side of a sync pair: `A` is the source of a one-way mirror.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PairSide {
-    A,
-    B,
-}
+// One side of a sync pair: `A` is the source of a one-way mirror (the
+// engine-wide type, re-exported for the flow users).
+pub(crate) use super::types::PairSide;
 
 /// The flows of both sides of one sync run.
 pub(crate) struct PairFlows {

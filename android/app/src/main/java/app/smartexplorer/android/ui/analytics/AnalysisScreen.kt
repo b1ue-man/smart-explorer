@@ -36,12 +36,16 @@ import app.smartexplorer.android.ui.more.SubPageScaffold
 import app.smartexplorer.android.ui.more.TextReportDialog
 
 /** Which report dialog the result page shows. */
-private enum class Report { Issues, Protected }
+private enum class Report { Issues, Protected, Notes }
+
+/** Notes shown in the header before "Alle Hinweise" collects the rest. */
+private const val INLINE_NOTES = 2
 
 /**
  * Storage analysis (spec F19, B1–B3, B6): choose a place → scan with progress and [Abbrechen] →
  * treemap and the largest entries with bars; tap a folder → into it; back → up; ⋮ "In Dateien
- * öffnen"; "n Pfade nicht lesbar [Bericht]"; areas Android locks are counted apart, sized by the
+ * öffnen"; "n Pfade nicht lesbar [Bericht]"; the analysis' notes (for a remote place the other
+ * device's, e.g. areas it protects); areas Android locks are counted apart, sized by the
  * platform where possible, with the usage access card for the other apps' folders. With usage
  * access the internal storage's root lists "≈ Apps (laut Android)": tap → one row per app, tap an
  * app → its breakdown with [App-Info öffnen].
@@ -113,7 +117,7 @@ private fun ResultPage(vm: AnalysisViewModel, onClose: () -> Unit) {
             LoadingBar(vm.loadingNode)
             when {
                 node == null -> Unit
-                node.children.isEmpty() -> EmptyFolder(node, vm)
+                node.children.isEmpty() -> EmptyFolder(node, vm, onReport = { report = it })
                 else -> NodeList(node, vm, onReport = { report = it })
             }
         }
@@ -128,6 +132,28 @@ private fun ResultPage(vm: AnalysisViewModel, onClose: () -> Unit) {
             issues.protectedText.ifBlank { PROTECTED_EXPLANATION },
             onDismiss = { report = null },
         )
+        report == Report.Notes -> TextReportDialog("Hinweise", issues.notes.joinToString("\n\n"), onDismiss = { report = null })
+    }
+}
+
+/**
+ * The analysis' notes at the analysed root (shown even without read problems): the first ones as
+ * they are, the rest behind "Alle Hinweise".
+ */
+@Composable
+private fun NotesRows(vm: AnalysisViewModel, onReport: (Report) -> Unit) {
+    val notes = vm.issues?.notes.orEmpty()
+    if (notes.isEmpty() || vm.path.isNotEmpty()) return
+    val tint = MaterialTheme.colorScheme.onSurfaceVariant
+    notes.take(INLINE_NOTES).forEach { note -> NoticeRow(R.drawable.ic_info, note, tint = tint) }
+    if (notes.size > INLINE_NOTES) {
+        NoticeRow(
+            R.drawable.ic_info,
+            "${notes.size - INLINE_NOTES} weitere Hinweise",
+            tint = tint,
+            actionLabel = "Alle Hinweise",
+            onAction = { onReport(Report.Notes) },
+        )
     }
 }
 
@@ -137,13 +163,17 @@ private fun showsUsageCard(vm: AnalysisViewModel): Boolean =
 
 /** An empty folder; a locked one (or a locked analysed root) says why it is empty. */
 @Composable
-private fun EmptyFolder(node: AnalyzeNode, vm: AnalysisViewModel) {
+private fun EmptyFolder(node: AnalyzeNode, vm: AnalysisViewModel, onReport: (Report) -> Unit) {
     val lockedRoot = vm.path.isEmpty() && (vm.issues?.protectedCount ?: 0L) > 0L
     if (!vm.insideProtected && !lockedRoot) {
-        EmptyState(R.drawable.ic_folder, "Dieser Ordner ist leer", message = Format.size(node.size))
+        Column(Modifier.fillMaxSize()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) { NotesRows(vm, onReport) }
+            EmptyState(R.drawable.ic_folder, "Dieser Ordner ist leer", modifier = Modifier.weight(1f), message = Format.size(node.size))
+        }
         return
     }
     Column(Modifier.fillMaxSize()) {
+        Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) { NotesRows(vm, onReport) }
         if (showsUsageCard(vm)) {
             UsageAccessCard(
                 appDataIncluded = vm.appDataIncluded,
@@ -200,6 +230,7 @@ private fun NodeList(node: AnalyzeNode, vm: AnalysisViewModel, onReport: (Report
                         onAction = { onReport(Report.Protected) },
                     )
                 }
+                NotesRows(vm, onReport)
                 if (showsUsageCard(vm)) {
                     UsageAccessCard(
                         appDataIncluded = vm.appDataIncluded,

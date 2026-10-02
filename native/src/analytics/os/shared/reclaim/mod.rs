@@ -3,6 +3,8 @@
 //! decide what to move to the recycle bin.
 
 mod backend;
+mod backend_agent;
+mod backend_compare;
 mod backend_duplicates;
 #[cfg(test)]
 mod backend_tests;
@@ -21,6 +23,7 @@ mod types;
 mod util;
 mod verify;
 
+pub use backend::find_backend_duplicates;
 pub use backend::scan_reclaim_backend;
 pub use finder::{find_duplicates, DuplicateReport, DuplicateSummary, DuplicateSummaryView};
 pub use local::scan_reclaim;

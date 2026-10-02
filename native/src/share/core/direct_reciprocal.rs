@@ -3,7 +3,9 @@ use std::fmt;
 use super::direct_protocol::{validate_direct_lookup_id, DirectPeerIdentity, DirectProtocolError};
 use super::profiles::{DirectCode, ShareProfiles};
 use super::removed_direct_peers::PairingOrigin;
-use super::types::{DirectAccessState, DirectContact, DirectGrant, DirectGrantState};
+use super::types::{
+    DirectAccessState, DirectContact, DirectGrant, DirectGrantState, DirectRelationFlags,
+};
 
 /// The Direct-code material which is durable for one reciprocal relationship.
 /// It deliberately travels with the authenticated identity, rather than as a
@@ -216,19 +218,19 @@ impl ShareProfiles {
         // A removed device stays out until the user pairs it again; the
         // background repair never overrides that decision.
         if self.removed_direct_peer(identity).is_some() {
-            match origin {
-                PairingOrigin::AutomaticRepair => {
-                    return Err(DirectReciprocalError::PolicyDenied(
-                        DirectReciprocalPolicyDenied::PeerRemoved {
-                            device_id: identity.device_id.clone(),
-                        },
-                    ));
-                }
-                PairingOrigin::UserPairing => {
-                    self.readmit_removed_direct_peer(&identity.device_id);
-                }
+            if !origin.is_user() {
+                return Err(DirectReciprocalError::PolicyDenied(
+                    DirectReciprocalPolicyDenied::PeerRemoved {
+                        device_id: identity.device_id.clone(),
+                    },
+                ));
             }
+            self.readmit_removed_direct_peer(&identity.device_id);
         }
+        // FC1: only a pairing that opens this device's exports creates a
+        // grant; a suspended grant („neu bestätigen“) needs a deliberate
+        // pairing that opens them.
+        let opens_exports = origin != PairingOrigin::UserPairingOneWay;
         let contact_index = self.reciprocal_contact_index(peer)?;
         let contact_id = match contact_index {
             Some(index) => self.direct_contacts[index].id.clone(),
@@ -332,6 +334,10 @@ impl ShareProfiles {
                 lan_candidates: Vec::new(),
                 lan_seen_at: None,
                 lan_uplink: None,
+                relation: DirectRelationFlags {
+                    share_back: origin == PairingOrigin::UserPairing,
+                    ..DirectRelationFlags::default()
+                },
             });
             changed = true;
         }
@@ -343,12 +349,19 @@ impl ShareProfiles {
                 grant.updated_at = now;
                 changed = true;
             }
-            if grant.state != DirectGrantState::Accepted {
+            let reactivates = match grant.state {
+                DirectGrantState::Accepted | DirectGrantState::Ignored => false,
+                DirectGrantState::Reconfirm => origin == PairingOrigin::UserPairing,
+            };
+            if reactivates {
                 grant.state = DirectGrantState::Accepted;
+                if grant.exec.enabled {
+                    grant.exec.disable_without_decision(now);
+                }
                 grant.updated_at = now;
                 changed = true;
             }
-        } else {
+        } else if opens_exports {
             self.direct_grants.push(DirectGrant {
                 device_id: identity.device_id.clone(),
                 device_name: identity.device_name.clone(),
@@ -358,6 +371,7 @@ impl ShareProfiles {
                 state: DirectGrantState::Accepted,
                 updated_at: now,
                 exec: Default::default(),
+                write: false,
             });
             changed = true;
         }

@@ -176,7 +176,9 @@ pub(super) fn delete_guard_trips(
     }
     let total = target_items.values().filter(|i| !i.deleted).count() as u64;
     (opts.max_delete > 0 && deletes > opts.max_delete)
-        || (opts.max_delete_pct > 0 && deletes > total * opts.max_delete_pct as u64 / 100)
+        || (opts.max_delete_pct > 0
+            && deletes >= opts.max_delete_min
+            && deletes > total * opts.max_delete_pct as u64 / 100)
 }
 
 pub(super) fn source_item_after(side: Side, ch: &ResolvedChange) -> ItemRecord {

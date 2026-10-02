@@ -219,8 +219,7 @@ fn ensure_authenticated_request_decision(
         return Ok(());
     }
     let identity_conflict = profiles.tracked_identity_conflict(&request.request_id);
-    let policy_denied =
-        profiles.direct_auto_accept_denied(&request.lookup_id, &request.requester);
+    let policy_denied = profiles.direct_auto_accept_denied(&request.lookup_id, &request.requester);
     let decision = match profiles.grant_for(&request.requester.device_id) {
         _ if identity_conflict || policy_denied => DirectDecisionKind::Rejected,
         Some(grant)
@@ -228,8 +227,13 @@ fn ensure_authenticated_request_decision(
                 && grant.node_id == request.requester.node_id
                 && grant.fingerprint == request.requester.fingerprint =>
         {
+            // A suspended grant („neu bestätigen“) is confirmed again by a
+            // request of the same identity authenticated with the current
+            // code; a user denial stays.
             match grant.state {
-                DirectGrantState::Accepted => DirectDecisionKind::Accepted,
+                DirectGrantState::Accepted | DirectGrantState::Reconfirm => {
+                    DirectDecisionKind::Accepted
+                }
                 DirectGrantState::Ignored => DirectDecisionKind::Rejected,
             }
         }

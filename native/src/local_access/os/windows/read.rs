@@ -1,5 +1,6 @@
 use super::{broker, normalize_scan_root, privilege::BackupRead};
 use crate::local_access::protocol::{self, ReadKind};
+use crate::local_access::{FinalLink, NotRegular};
 use std::os::windows::io::AsRawHandle;
 use std::{
     fs::{File, Metadata, OpenOptions},
@@ -64,6 +65,35 @@ pub(crate) fn open_read(path: &Path) -> io::Result<File> {
             io::ErrorKind::InvalidInput,
             "Lesequelle ist keine direkte reguläre Datei",
         ));
+    }
+    Ok(file)
+}
+
+/// With `FinalLink::Refuse` the entry itself is classified first (one
+/// reparse-tag read), so a link is refused instead of followed; the opened
+/// handle must then be a regular file. Data reparse points (cloud
+/// placeholders, WOF, dedup) are regular files and open as usual.
+pub(crate) fn open_regular(path: &Path, final_link: FinalLink) -> io::Result<File> {
+    if final_link == FinalLink::Refuse {
+        let metadata = symlink_metadata(path)?;
+        let class = super::directory::metadata_class(path, &metadata);
+        if class.link_like {
+            return Err(NotRegular::Link.error());
+        }
+        if metadata.is_dir() {
+            return Err(NotRegular::Directory.error());
+        }
+        if class.special {
+            return Err(NotRegular::Special.error());
+        }
+    }
+    let file = open_read(path)?;
+    let metadata = file.metadata()?;
+    if metadata.is_dir() {
+        return Err(NotRegular::Directory.error());
+    }
+    if !metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_DEVICE != 0 {
+        return Err(NotRegular::Special.error());
     }
     Ok(file)
 }

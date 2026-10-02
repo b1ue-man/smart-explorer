@@ -6,6 +6,7 @@ pub(super) fn wire_to_vfs(m: WireMeta) -> VfsMeta {
         name: m.name,
         is_dir: m.is_dir,
         is_symlink: m.is_symlink,
+        special: false,
         size: m.size,
         mtime_ms: m.mtime_ms,
         btime_ms: 0,

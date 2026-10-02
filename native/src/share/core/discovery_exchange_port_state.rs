@@ -1,8 +1,10 @@
 use super::super::discovery_exchange::{
-    ConnectorAwaitingPublisherBundle, ConnectorAwaitingPublisherCommit,
-    ConnectorPairingComplete, PublisherAwaitingConnectorCommit, PublisherPairingComplete,
+    ConnectorAwaitingPublisherBundle, ConnectorAwaitingPublisherCommit, ConnectorPairingComplete,
+    PublisherAwaitingConnectorCommit, PublisherPairingComplete,
 };
-use super::super::discovery_pake::{ConnectorAwaitingKe2, PublisherAwaitingKe3Bundle, PublisherOffer};
+use super::super::discovery_pake::{
+    ConnectorAwaitingKe2, PublisherAwaitingKe3Bundle, PublisherOffer,
+};
 use super::super::discovery_relation_store::DiscoveryRelationOutcome;
 use super::super::discovery_signal_port::DiscoveryPortError;
 use super::super::discovery_signal_types::DiscoveryPublishTarget;
@@ -40,7 +42,11 @@ impl UsedIdTracker {
     }
 
     fn prune(&mut self, now: Instant) {
-        while self.order.front().is_some_and(|(expires_at, _)| *expires_at <= now) {
+        while self
+            .order
+            .front()
+            .is_some_and(|(expires_at, _)| *expires_at <= now)
+        {
             let Some((expires_at, id)) = self.order.pop_front() else {
                 break;
             };
@@ -82,6 +88,19 @@ pub(super) enum ExchangeState {
 }
 
 impl ExchangeState {
+    /// The outcome already persisted or handed out at this stage.
+    pub(super) fn persisted_outcome(&self) -> Option<&DiscoveryRelationOutcome> {
+        match self {
+            Self::ConnectorAwaitingPublisherCommit { completion, .. }
+            | Self::ConnectorComplete { completion, .. }
+            | Self::PublisherAwaitingConnectorCommit { completion, .. }
+            | Self::PublisherComplete { completion, .. } => Some(completion),
+            Self::ConnectorAwaitingKe2(_)
+            | Self::ConnectorAwaitingPublisherBundle(_)
+            | Self::PublisherAwaitingKe3 { .. } => None,
+        }
+    }
+
     pub(super) fn is_publisher_offer(&self, offer_id: &str) -> bool {
         match self {
             Self::PublisherAwaitingKe3 { state, .. } => {

@@ -1,19 +1,19 @@
 use std::io;
 
-use super::core::{b64, b64_decode, eio, random_token};
 use super::configuration_runtime::RuntimeConfiguration;
+use super::core::{b64, b64_decode, eio, random_token};
 use super::discovery_signal_commands::{send_discovery_event, DiscoverySignalRuntime};
 use super::discovery_signal_port::{DiscoveryPortAction, DiscoveryPortError};
 use super::discovery_signal_state::{
-    ActiveDiscoveryExchange, MAX_ACTIVE_DISCOVERY_EXCHANGES,
-    MAX_PAIRING_PAYLOAD_TEXT_BYTES, MAX_PUBLISHER_EXCHANGES_PER_OFFER,
+    ActiveDiscoveryExchange, MAX_ACTIVE_DISCOVERY_EXCHANGES, MAX_PAIRING_PAYLOAD_TEXT_BYTES,
+    MAX_PUBLISHER_EXCHANGES_PER_OFFER,
 };
 use super::discovery_signal_types::{
     DiscoveryEvent, DiscoveryExchangeHandle, DiscoveryPin, PairingPacketKind,
     DISCOVERY_PIN_MAX_BYTES,
 };
-use super::discovery_signal_wire::DiscoveryClientMsg;
 use super::discovery_signal_validation::validate_discovery_identifier;
+use super::discovery_signal_wire::DiscoveryClientMsg;
 use super::signal_connection::{send_line, SignalConnection};
 use super::types::ShareEvent;
 
@@ -40,6 +40,7 @@ impl DiscoverySignalRuntime {
         signal: &mut SignalConnection,
         discovery_id: String,
         pin: &DiscoveryPin,
+        share_back: bool,
         events: &crossbeam_channel::Sender<ShareEvent>,
     ) -> Result<DiscoveryExchangeHandle, DiscoveryExchangeCommandError> {
         if self
@@ -72,8 +73,8 @@ impl DiscoverySignalRuntime {
                 "Discovery-Angebot verwendet eine inkompatible Crypto-Suite",
             )));
         }
-        let exchange_id = random_token(18)
-            .map_err(|error| DiscoveryExchangeCommandError::Local(eio(error)))?;
+        let exchange_id =
+            random_token(18).map_err(|error| DiscoveryExchangeCommandError::Local(eio(error)))?;
         if self.state.exchanges.contains_key(&exchange_id)
             || self.state.pending_exchange_id_exists(&exchange_id)
         {
@@ -83,7 +84,7 @@ impl DiscoverySignalRuntime {
         }
         let action = self
             .port
-            .start_connector(&exchange_id, &advertisement, pin.as_bytes())
+            .start_connector(&exchange_id, &advertisement, pin.as_bytes(), share_back)
             .map_err(|_| {
                 DiscoveryExchangeCommandError::Local(eio(
                     "Discovery-Crypto-Start ist fehlgeschlagen",
@@ -108,10 +109,7 @@ impl DiscoverySignalRuntime {
             self.port.cancel_exchange(&exchange_id);
             return Err(DiscoveryExchangeCommandError::Local(eio(error)));
         }
-        self.state.exchanges.insert(
-            exchange_id.clone(),
-            exchange,
-        );
+        self.state.exchanges.insert(exchange_id.clone(), exchange);
         let message = DiscoveryClientMsg::StartPairing {
             discovery_id,
             exchange_id: exchange_id.clone(),
@@ -157,33 +155,28 @@ impl DiscoverySignalRuntime {
             .state
             .exchanges
             .values()
-            .filter(|exchange| {
-                exchange.publisher_offer_id.as_deref() == Some(offer_id.as_str())
-            })
+            .filter(|exchange| exchange.publisher_offer_id.as_deref() == Some(offer_id.as_str()))
             .count()
             >= MAX_PUBLISHER_EXCHANGES_PER_OFFER
         {
             return Err(PublisherStartError::protocol(&exchange_id));
         }
-        let allowed = self
-            .state
-            .offers
-            .get_mut(&offer_id)
-            .map_or(false, |offer| {
-                offer.allow_pairing_start(std::time::Instant::now())
-            });
+        // Single use (FC2): after a proven PIN no exchange starts any more.
+        if self.state.offer_guards.is_paired(&offer_id) {
+            return Err(PublisherStartError::protocol(&exchange_id));
+        }
+        let allowed = self.state.offers.get_mut(&offer_id).map_or(false, |offer| {
+            offer.allow_pairing_start(std::time::Instant::now())
+        });
         if !allowed {
             return Err(PublisherStartError::protocol(&exchange_id));
         }
         let request_payload_text_len = canonical_payload_text_len(payload.len());
-        let action = self.port.start_publisher(
-            &exchange_id,
-            &discovery_id,
-            &offer_id,
-            payload,
-        ).map_err(|error| PublisherStartError::local(&exchange_id, error))?;
-        let DiscoveryPortAction::SendPacket(packet) = action
-        else {
+        let action = self
+            .port
+            .start_publisher(&exchange_id, &discovery_id, &offer_id, payload)
+            .map_err(|error| PublisherStartError::local(&exchange_id, error))?;
+        let DiscoveryPortAction::SendPacket(packet) = action else {
             self.port.cancel_exchange(&exchange_id);
             return Err(PublisherStartError::protocol(&exchange_id));
         };
@@ -198,9 +191,7 @@ impl DiscoverySignalRuntime {
             offer_id,
             deadline,
         );
-        if exchange
-            .record_payload(request_payload_text_len)
-            .is_err()
+        if exchange.record_payload(request_payload_text_len).is_err()
             || exchange
                 .record_payload(canonical_payload_text_len(response.len()))
                 .is_err()
@@ -264,9 +255,7 @@ impl DiscoverySignalRuntime {
             .state
             .exchanges
             .get_mut(&exchange_id)
-            .ok_or_else(|| {
-                "Discovery-Austausch verschwand waehrend der Verarbeitung".to_string()
-            })
+            .ok_or_else(|| "Discovery-Austausch verschwand waehrend der Verarbeitung".to_string())
             .and_then(|exchange| {
                 exchange.accept_packet(kind)?;
                 exchange.record_payload(canonical_payload_text_len(decoded.len()))
@@ -296,9 +285,7 @@ impl DiscoverySignalRuntime {
                     .state
                     .exchanges
                     .get_mut(&exchange_id)
-                    .ok_or_else(|| {
-                        "Discovery-Austausch verschwand vor dem Senden".to_string()
-                    })
+                    .ok_or_else(|| "Discovery-Austausch verschwand vor dem Senden".to_string())
                     .and_then(|exchange| {
                         exchange.accept_port_packet(kind)?;
                         exchange.record_payload(canonical_payload_text_len(payload.len()))
@@ -309,6 +296,7 @@ impl DiscoverySignalRuntime {
                 }
                 send_pairing_packet(signal, &exchange_id, kind, &payload)
                     .map_err(|error| error.to_string())?;
+                self.publisher_proved(&exchange_id, signal, events)?;
             }
             Some(DiscoveryPortAction::PersistedAndSend(persisted)) => {
                 self.apply_persisted_and_send(
@@ -319,8 +307,10 @@ impl DiscoverySignalRuntime {
                     configuration,
                     tracked_direct,
                 )?;
+                self.publisher_proved(&exchange_id, signal, events)?;
             }
-            None => self.state
+            None => self
+                .state
                 .exchanges
                 .get_mut(&exchange_id)
                 .ok_or("Discovery-Austausch verschwand vor Abschluss")?
@@ -336,7 +326,6 @@ impl DiscoverySignalRuntime {
         }
         Ok(())
     }
-
 }
 
 pub(super) struct PublisherStartError {
@@ -355,7 +344,11 @@ impl PublisherStartError {
     }
 
     fn protocol(exchange_id: &str) -> Self {
-        Self { exchange_id: exchange_id.to_string(), transport: false, target_unavailable: false }
+        Self {
+            exchange_id: exchange_id.to_string(),
+            transport: false,
+            target_unavailable: false,
+        }
     }
 
     fn transport(exchange_id: &str) -> Self {

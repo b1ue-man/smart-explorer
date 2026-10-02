@@ -89,6 +89,16 @@ pub(super) fn remote_change_token(job: &SyncJob) -> Option<String> {
     backend.current_change_cursor(&root).ok().flatten()
 }
 
+/// When the next saved job becomes due by the clock (interval, calendar,
+/// retry after a failure, verification run, end of a settle delay), as Unix
+/// seconds, at the earliest `now` (already due); `None` = nothing is
+/// clock-driven. The Android host sets its wake alarm to it. Contract stage:
+/// not computed yet.
+pub fn next_scheduled_run(now: i64) -> Option<i64> {
+    let _ = now;
+    None
+}
+
 /// Set of currently-present removable-drive descriptors ("LETTER|LABEL|SERIAL").
 pub(super) fn current_drives() -> HashSet<String> {
     platform::removable_drives()

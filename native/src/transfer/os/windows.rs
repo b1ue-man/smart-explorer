@@ -64,6 +64,19 @@ pub(crate) fn available_memory() -> Option<u64> {
     (ok != 0).then_some(status.ullAvailPhys)
 }
 
+/// Total physical memory. Stable from run to run, unlike the available memory,
+/// so limits derived from it do not change with the momentary load (sync tree
+/// limits, RV1).
+pub(crate) fn physical_memory() -> Option<u64> {
+    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+    // SAFETY: MEMORYSTATUSEX is plain data; dwLength must name its size.
+    let mut status: MEMORYSTATUSEX = unsafe { std::mem::zeroed() };
+    status.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
+    // SAFETY: `status` is a valid, writable MEMORYSTATUSEX with dwLength set.
+    let ok = unsafe { GlobalMemoryStatusEx(&mut status) };
+    (ok != 0).then_some(status.ullTotalPhys)
+}
+
 /// The folder `path` resolves to, links and junctions on the way followed,
 /// in its plain form (`C:\…`, `\\server\share\…`) where that names the same
 /// folder; otherwise in the verbatim form `canonicalize` returns.

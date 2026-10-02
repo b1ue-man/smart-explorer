@@ -101,6 +101,22 @@ pub fn set_autopause_flags(battery: bool, metered: bool) -> io::Result<()> {
     )
 }
 
+/// Which automatic-pause conditions this platform can observe; settings
+/// offer only these toggles.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AutopauseSupport {
+    pub battery_saver: bool,
+    pub metered: bool,
+}
+
+pub fn autopause_support() -> AutopauseSupport {
+    let (battery_saver, metered) = platform::autopause_conditions_supported();
+    AutopauseSupport {
+        battery_saver,
+        metered,
+    }
+}
+
 /// Why background syncs currently hold off.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PauseReason {

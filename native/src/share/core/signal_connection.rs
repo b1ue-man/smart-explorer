@@ -2,13 +2,14 @@ use std::io::{self, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream};
 use std::time::Duration;
 
-use tungstenite::{
-    client::IntoClientRequest, client_tls, stream::MaybeTlsStream, Error as WsError, Message,
-    WebSocket,
-};
+use tungstenite::{stream::MaybeTlsStream, Error as WsError, Message, WebSocket};
 
 use super::core::eio;
 use super::line::{SignalLineReader, MAX_SIGNAL_LINE};
+use super::server_address::{SignalEndpoint, SignalScheme, SignalServerConfig};
+
+#[path = "signal_connection_tls.rs"]
+pub(super) mod tls;
 
 const SIGNAL_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const SIGNAL_DNS_TIMEOUT: Duration = Duration::from_secs(10);
@@ -16,10 +17,17 @@ const SIGNAL_READ_POLL: Duration = Duration::from_millis(500);
 const SIGNAL_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 /// Messages one drain hands over at most; the rest follows at once.
 const MAX_DRAINED_MESSAGES: usize = 256;
+/// Bytes one drain buffers at most before it hands them over (S56).
+const MAX_DRAINED_BYTES: usize = 4 * 1024 * 1024;
 
 pub(super) struct SignalConnection {
     label: String,
     transport: Transport,
+    /// TLS protects the connection (`wss`); otherwise it is plaintext.
+    encrypted: bool,
+    /// The server confirmed this device's key login (`key_login_v1`);
+    /// relation access proofs are sent from then on.
+    key_login: bool,
     /// Read timeout the socket keeps between this side's own reads: the
     /// short poll until a readiness watcher (`signal_readiness`) waits on
     /// the socket, then the watcher's long wait.
@@ -50,16 +58,19 @@ pub(super) struct Drained {
 }
 
 impl SignalConnection {
+    /// Connects to the first reachable endpoint of a stored server address.
+    /// With a TLS endpoint configured, plaintext endpoints are never tried.
     pub(super) fn connect(config: &str) -> io::Result<Self> {
-        let endpoints = signal_endpoints(config);
+        let config = SignalServerConfig::parse_stored(config).map_err(eio)?;
+        let endpoints = config.active_endpoints();
         if endpoints.is_empty() {
             return Err(eio("Share-Server-Adresse fehlt"));
         }
         let mut errors = Vec::new();
         for endpoint in endpoints {
-            match Self::connect_one(&endpoint) {
+            match Self::connect_one(endpoint) {
                 Ok(connection) => return Ok(connection),
-                Err(error) => errors.push(format!("{endpoint}: {error}")),
+                Err(error) => errors.push(format!("{}: {error}", endpoint.label())),
             }
         }
         Err(eio(format!(
@@ -68,30 +79,21 @@ impl SignalConnection {
         )))
     }
 
-    fn connect_one(endpoint: &str) -> io::Result<Self> {
-        let normalized = normalize_signal_endpoint(endpoint);
-        if normalized.starts_with("ws://") || normalized.starts_with("wss://") {
-            return Self::connect_ws(&normalized);
-        }
-        if let Some(raw) = normalized.strip_prefix("tcp://") {
-            return Self::connect_tcp(&normalize_tcp_addr(raw));
-        }
-        if normalized.contains("://") {
-            return Err(eio("unbekanntes Share-Server-Schema"));
-        }
-        Self::connect_tcp(&normalize_tcp_addr(&normalized))
-    }
-
-    fn connect_tcp(addr: &str) -> io::Result<Self> {
-        let authority: tungstenite::http::uri::Authority = addr
-            .parse()
-            .map_err(|error| eio(format!("ungueltige Share-Server-Adresse: {error}")))?;
-        let stream = connect_resolved(resolve_host(
-            authority.host(),
-            authority.port_u16().unwrap_or(51820),
-        )?)?;
+    fn connect_one(endpoint: &SignalEndpoint) -> io::Result<Self> {
+        let stream = connect_resolved(resolve_host(endpoint.host(), endpoint.port())?)?;
         let _ = stream.set_nodelay(true);
-        Self::from_tcp(format!("tcp://{addr}"), stream)
+        if endpoint.scheme() == SignalScheme::Tcp {
+            return Self::from_tcp(endpoint.label(), stream);
+        }
+        // These socket deadlines also bound the TLS and WebSocket handshakes.
+        set_tcp_timeouts(&stream, SIGNAL_CONNECT_TIMEOUT, SIGNAL_CONNECT_TIMEOUT);
+        let mut socket = tls::handshake(endpoint, stream)?;
+        set_ws_timeouts(socket.get_mut(), SIGNAL_READ_POLL, SIGNAL_WRITE_TIMEOUT);
+        Ok(Self::from_websocket(
+            endpoint.label(),
+            socket,
+            endpoint.is_encrypted(),
+        ))
     }
 
     fn from_tcp(label: String, stream: TcpStream) -> io::Result<Self> {
@@ -104,46 +106,43 @@ impl SignalConnection {
                 reader,
                 decoder: SignalLineReader::default(),
             },
+            encrypted: false,
+            key_login: false,
             resting_read_timeout: SIGNAL_READ_POLL,
         })
     }
 
-    fn connect_ws(url: &str) -> io::Result<Self> {
-        let request = url.into_client_request().map_err(ws_to_io)?;
-        let uri = request.uri();
-        let host = uri
-            .host()
-            .ok_or_else(|| eio("Share-WebSocket-Host fehlt"))?;
-        let host = host
-            .strip_prefix('[')
-            .and_then(|value| value.strip_suffix(']'))
-            .unwrap_or(host);
-        let port = uri.port_u16().unwrap_or(match uri.scheme_str() {
-            Some("ws") => 80,
-            Some("wss") => 443,
-            _ => return Err(eio("unbekanntes Share-WebSocket-Schema")),
-        });
-        let stream = connect_resolved(resolve_host(host, port)?)?;
-        let _ = stream.set_nodelay(true);
-        // These socket deadlines also bound the TLS and WebSocket handshakes.
-        set_tcp_timeouts(&stream, SIGNAL_CONNECT_TIMEOUT, SIGNAL_CONNECT_TIMEOUT);
-        let (mut socket, _) = client_tls(request, stream).map_err(eio)?;
-        set_ws_timeouts(socket.get_mut(), SIGNAL_READ_POLL, SIGNAL_WRITE_TIMEOUT);
-        Ok(Self::from_websocket(url.to_string(), socket))
-    }
-
-    fn from_websocket(label: String, socket: WebSocket<MaybeTlsStream<TcpStream>>) -> Self {
+    fn from_websocket(
+        label: String,
+        socket: WebSocket<MaybeTlsStream<TcpStream>>,
+        encrypted: bool,
+    ) -> Self {
         Self {
             label,
             transport: Transport::WebSocket {
                 socket: Box::new(socket),
             },
+            encrypted,
+            key_login: false,
             resting_read_timeout: SIGNAL_READ_POLL,
         }
     }
 
     pub(super) fn label(&self) -> &str {
         &self.label
+    }
+
+    pub(super) fn encrypted(&self) -> bool {
+        self.encrypted
+    }
+
+    pub(super) fn key_login(&self) -> bool {
+        self.key_login
+    }
+
+    /// The server confirmed the key login of this connection.
+    pub(super) fn confirm_key_login(&mut self) {
+        self.key_login = true;
     }
 
     #[cfg(test)]
@@ -155,7 +154,7 @@ impl SignalConnection {
     #[cfg(test)]
     pub(super) fn from_test_websocket(mut socket: WebSocket<MaybeTlsStream<TcpStream>>) -> Self {
         set_ws_timeouts(socket.get_mut(), SIGNAL_READ_POLL, SIGNAL_WRITE_TIMEOUT);
-        Self::from_websocket("ws://test".into(), socket)
+        Self::from_websocket("ws://test".into(), socket, false)
     }
 
     #[cfg(test)]
@@ -292,11 +291,15 @@ impl SignalConnection {
     pub(super) fn drain_messages(&mut self) -> io::Result<Drained> {
         self.set_nonblocking(true)?;
         let mut drained = Drained::default();
+        let mut drained_bytes = 0usize;
         loop {
             match self.read_message() {
                 Ok(Some(message)) => {
+                    drained_bytes = drained_bytes.saturating_add(message.len());
                     drained.messages.push(message);
-                    if drained.messages.len() >= MAX_DRAINED_MESSAGES {
+                    if drained.messages.len() >= MAX_DRAINED_MESSAGES
+                        || drained_bytes >= MAX_DRAINED_BYTES
+                    {
                         drained.more = true;
                         break;
                     }
@@ -327,35 +330,6 @@ pub(super) fn send_line<T: serde::Serialize>(
     msg: &T,
 ) -> io::Result<()> {
     stream.send(msg)
-}
-
-pub(super) fn signal_endpoints(config: &str) -> Vec<String> {
-    config
-        .split([',', ';'])
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-        .collect()
-}
-
-pub(super) fn normalize_signal_endpoint(endpoint: &str) -> String {
-    let trimmed = endpoint.trim();
-    if let Some(rest) = trimmed.strip_prefix("https://") {
-        format!("wss://{rest}")
-    } else if let Some(rest) = trimmed.strip_prefix("http://") {
-        format!("ws://{rest}")
-    } else {
-        trimmed.to_string()
-    }
-}
-
-pub(super) fn normalize_tcp_addr(addr: &str) -> String {
-    let addr = addr.trim().trim_end_matches('/');
-    if addr.is_empty() || addr.starts_with('[') || addr.rsplit_once(':').is_some() {
-        addr.to_string()
-    } else {
-        format!("{addr}:51820")
-    }
 }
 
 fn connect_resolved(addresses: impl IntoIterator<Item = SocketAddr>) -> io::Result<TcpStream> {

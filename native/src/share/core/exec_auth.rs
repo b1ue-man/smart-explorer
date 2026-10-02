@@ -257,6 +257,7 @@ mod tests {
                 state: DirectGrantState::Accepted,
                 updated_at: 1,
                 exec: ExecGrant::default(),
+                write: false,
             }],
             rooms: Vec::new(),
             direct_requests: Vec::new(),

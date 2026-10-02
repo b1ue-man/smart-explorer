@@ -163,6 +163,7 @@ mod tests {
             lan_candidates: Vec::new(),
             lan_seen_at: None,
             lan_uplink: None,
+            relation: Default::default(),
         }
     }
 
@@ -176,6 +177,7 @@ mod tests {
             status: ShareStatus::Waiting,
             members: Vec::new(),
             exports: ShareExportConfig::default(),
+            policy: crate::share::RoomPolicy::new_room(),
         }
     }
 }

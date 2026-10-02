@@ -17,6 +17,7 @@ impl ShareHost {
                 | crate::share::ShareCmd::DisableExec { .. }
                 | crate::share::ShareCmd::ApplyExecGrant { .. }
                 | crate::share::ShareCmd::ConfigureProfiles { .. }
+                | crate::share::ShareCmd::UpdateRuntime { .. }
         ) {
             return Err("Dieser Share-Befehl erfordert eine dauerhafte Daemon-Mutation".into());
         }

@@ -10,18 +10,36 @@ impl App {
                 .small()
                 .color(theme::muted(ui)),
         );
+        self.migrate_stored_share_server(ui);
+        let allow_id = egui::Id::new("share_server_allow_plaintext");
+        let mut allow_plaintext = ui
+            .data_mut(|data| data.get_temp::<bool>(allow_id))
+            .unwrap_or_else(|| stored_plaintext(&self.share_server));
         ui.label("Share-Server");
         ui.add(
             egui::TextEdit::singleline(&mut self.share_server_draft)
-                .hint_text("Rendezvous-Server  host:port / wss://host/pfad")
+                .hint_text("wss://server[:port]/pfad oder server[:port] (verschlüsselt)")
                 .desired_width(f32::INFINITY),
         )
         .on_hover_text(
             "Adresse deines eigenen Routing-Servers (se-share-server). Er vermittelt \
              nur die Verbindung — die Dateien gehen direkt zwischen den Geräten, \
-             Ende-zu-Ende-verschlüsselt. Mehrere Fallbacks mit Komma trennen; \
-             https:// wird als wss:// benutzt.",
+             Ende-zu-Ende-verschlüsselt. Ohne Schema wird TLS (wss://) benutzt; einen \
+             selbst signierten Server mit #sha256=<Fingerabdruck> anheften. Mehrere \
+             Adressen mit Komma trennen.",
         );
+        if ui
+            .checkbox(&mut allow_plaintext, "Unverschlüsselt erlauben (unsicher)")
+            .on_hover_text(
+                "Nur für Server ohne TLS (tcp://, ws://). Server-Betreiber und jeder im \
+                 Netz sehen dann Gerätenamen, Adressen und Beziehungs-IDs und können \
+                 Meldungen fälschen; Dateien bleiben Ende-zu-Ende-verschlüsselt.",
+            )
+            .changed()
+        {
+            ui.data_mut(|data| data.insert_temp(allow_id, allow_plaintext));
+        }
+        server_security_line(ui, &self.share_server_draft, allow_plaintext);
         ui.label("Gerätename");
         ui.add(
             egui::TextEdit::singleline(&mut self.share_device_draft)
@@ -29,13 +47,20 @@ impl App {
                 .desired_width(f32::INFINITY),
         );
         if ui.button("Verbindungseinstellungen speichern").clicked() {
+            let server = match canonical_server_input(&self.share_server_draft, allow_plaintext) {
+                Ok(server) => server,
+                Err(error) => {
+                    self.error_msg = Some(format!("Share-Server-Adresse: {error}"));
+                    return;
+                }
+            };
             if let Some(identity) = self.share_identity.as_mut() {
                 if let Err(error) = identity.set_device_name(self.share_device_draft.clone()) {
                     self.error_msg = Some(format!("Gerätename speichern: {error}"));
                     return;
                 }
             }
-            let server = self.share_server_draft.trim().to_string();
+            self.share_server_draft = server.clone();
             match std::fs::write(share_server_path(), &server) {
                 Ok(()) => {
                     self.share_server = server;
@@ -69,7 +94,31 @@ impl App {
                 }
             }
         }
+    }
 
+    /// Rewrites a stored legacy address once per session (B21): a value
+    /// without scheme becomes `tcp://host:port` with its plaintext permission.
+    fn migrate_stored_share_server(&mut self, ui: &egui::Ui) {
+        let tried = egui::Id::new("share_server_migration_tried");
+        if ui
+            .data_mut(|data| data.get_temp::<bool>(tried))
+            .unwrap_or(false)
+        {
+            return;
+        }
+        ui.data_mut(|data| data.insert_temp(tried, true));
+        match crate::share::migrate_server_file(&share_server_path()) {
+            Ok(Some(canonical)) => {
+                if self.share_server_draft.trim() == self.share_server.trim() {
+                    self.share_server_draft = canonical.clone();
+                }
+                self.share_server = canonical;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                self.error_msg = Some(format!("Share-Server-Adresse umschreiben: {error}"));
+            }
+        }
     }
 
     pub(super) fn ui_settings_integration(&mut self, ui: &mut egui::Ui) {
@@ -114,6 +163,51 @@ impl App {
                 theme::muted(ui),
                 "Hinweis: Der Eintrag liegt unter „Weitere Optionen anzeigen“ (Win11).",
             );
+        }
+    }
+}
+
+/// The address to store; empty input removes the server (LAN only).
+fn canonical_server_input(draft: &str, allow_plaintext: bool) -> Result<String, String> {
+    if draft.trim().is_empty() {
+        return Ok(String::new());
+    }
+    crate::share::server_address::SignalServerConfig::parse_input(draft, allow_plaintext)
+        .map(|config| config.canonical())
+}
+
+/// A stored plaintext entry carries the user's earlier permission.
+fn stored_plaintext(stored: &str) -> bool {
+    crate::share::server_address::SignalServerConfig::parse_stored(stored).is_ok_and(|config| {
+        config
+            .endpoints()
+            .iter()
+            .any(|endpoint| !endpoint.is_encrypted())
+    })
+}
+
+/// Transport security of the entered address, or why it cannot be saved.
+fn server_security_line(ui: &mut egui::Ui, draft: &str, allow_plaintext: bool) {
+    use crate::share::server_address::{ServerSecurity, SignalServerConfig};
+    if draft.trim().is_empty() {
+        ui.small("Kein Share-Server: Direktgeräte nur über das lokale Netz.");
+        return;
+    }
+    match SignalServerConfig::parse_input(draft, allow_plaintext) {
+        Ok(config) if config.security() == ServerSecurity::Plaintext => {
+            ui.colored_label(
+                theme::warning(ui),
+                format!(
+                    "{} – Server und Netz sehen Gerätenamen und Adressen",
+                    config.summary()
+                ),
+            );
+        }
+        Ok(config) => {
+            ui.colored_label(theme::success(ui), config.summary());
+        }
+        Err(error) => {
+            ui.colored_label(theme::danger(ui), error);
         }
     }
 }

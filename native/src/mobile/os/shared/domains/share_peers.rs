@@ -198,10 +198,9 @@ pub(super) fn add_export(rt: &Runtime, args: &Value) -> Result<Value, ApiError> 
         if config.roots.iter().any(|root| root.path == path) {
             return Err("Dieser Ordner ist bereits freigegeben.".to_string());
         }
-        config.roots.push(SharedRoot {
-            label: label.clone(),
-            path: path.clone(),
-        });
+        config
+            .roots
+            .push(SharedRoot::new(label.clone(), path.clone()));
         Ok(())
     })
     .map_err(|error| ApiError::new("invalid", error))?;

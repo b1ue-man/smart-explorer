@@ -6,11 +6,12 @@
 use std::sync::Mutex;
 
 /// Areas kept per walk; a walk meets at most two per storage volume.
-const MAX_PROTECTED_AREAS: usize = 16;
+pub(super) const MAX_PROTECTED_AREAS: usize = 16;
 
 /// One protected area a walk passed through and how many of its entries it
 /// could not read there (0 when Android hid the other apps' folders entirely).
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Travels in a peer's analysis report since RV1.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ProtectedOmission {
     pub area: String,
     pub entries: u64,

@@ -431,6 +431,7 @@ fn grant_for(identity: &DirectPeerIdentity, state: DirectGrantState) -> DirectGr
         state,
         updated_at: 1,
         exec: Default::default(),
+        write: false,
     }
 }
 

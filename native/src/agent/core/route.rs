@@ -50,6 +50,9 @@ fn ends_request(frame: &Frame) -> bool {
             | Frame::Tree(_)
             | Frame::HelloOk { .. }
             | Frame::Copied(_)
+            | Frame::Answer(_)
+            | Frame::StageDone { .. }
+            | Frame::Limits(_)
     )
 }
 

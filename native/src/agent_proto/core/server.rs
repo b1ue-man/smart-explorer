@@ -306,6 +306,31 @@ fn dispatch(context: &RequestContext, id: u64, req: Frame) -> io::Result<()> {
             create_dir_one(&path, exclusive).map(|()| Frame::Ok),
         ),
         Frame::DiscardStage(path) => reply(sink, id, discard_stage(&path).map(|()| Frame::Ok)),
+        Frame::ListTolerant(path) => super::ext_ops::handle_list_tolerant(sink, id, &path, cancel),
+        Frame::WalkHashed2 {
+            root,
+            algorithm,
+            min_bytes,
+        } => super::ext_ops::handle_walk_hashed2(sink, id, &root, algorithm, min_bytes, cancel),
+        Frame::FinishStage {
+            stage,
+            mtime_ms,
+            mode,
+            durability,
+        } => reply(
+            sink,
+            id,
+            super::ext_ops::finish_stage(&stage, mtime_ms, mode, durability),
+        ),
+        Frame::Query { kind, path } => reply(sink, id, super::ext_ops::answer(kind, &path)),
+        Frame::FindDuplicates { .. }
+        | Frame::Recycle { .. }
+        | Frame::TargetLimits(_)
+        | Frame::Watch { .. } => emit(
+            sink,
+            id,
+            &Frame::Err(super::UNSUPPORTED_EXTENSION.to_string()),
+        ),
         other => emit(
             sink,
             id,

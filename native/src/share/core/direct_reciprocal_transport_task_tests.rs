@@ -16,18 +16,13 @@ use crate::share::direct_reciprocal_session::{
     DirectSessionAuthorization,
 };
 use crate::share::direct_reciprocal_store::{
-    DirectRepairPersistRequest, DirectRepairStore, DirectRepairStoreError,
-    DirectRepairStoreReceipt,
+    DirectRepairPersistRequest, DirectRepairStore, DirectRepairStoreError, DirectRepairStoreReceipt,
 };
-use crate::share::direct_reciprocal_wire::{
-    DirectRepairPersisted, DIRECT_RECIPROCAL_CAPABILITY,
-};
+use crate::share::direct_reciprocal_wire::{DirectRepairPersisted, DIRECT_RECIPROCAL_CAPABILITY};
 use crate::share::fs::ShareExportConfig;
 use crate::share::identity::ShareIdentity;
 use crate::share::session::{authenticate_incoming_session, session_payload};
-use crate::share::types::{
-    DirectGrant, DirectGrantState, ShareAuthState, ShareEvent,
-};
+use crate::share::types::{DirectGrant, DirectGrantState, ShareAuthState, ShareEvent};
 use crate::share::wire::PeerHello;
 
 #[test]
@@ -57,15 +52,17 @@ fn share_remote_task_reciprocal_incoming_auth_is_reread_after_transition_permit(
         drop(held_transition);
 
         let result = admission.await.unwrap();
-        assert!(result.is_err(), "revoked authorization was cached before the permit");
+        assert!(
+            result.is_err(),
+            "revoked authorization was cached before the permit"
+        );
         assert_eq!(incoming_slots.available_permits(), 1);
         assert_eq!(transition_slots.available_permits(), 1);
     });
 }
 
 #[test]
-fn share_remote_task_reciprocal_timeout_holds_transition_and_incoming_slots_until_store_finishes()
-{
+fn share_remote_task_reciprocal_timeout_holds_transition_and_incoming_slots_until_store_finishes() {
     let runtime = runtime();
     runtime.block_on(async {
         let state = receiver_awaiting_store();
@@ -90,9 +87,11 @@ fn share_remote_task_reciprocal_timeout_holds_transition_and_incoming_slots_unti
             .expect("blocking store was not entered");
         assert_eq!(transition_slots.available_permits(), 0);
         assert_eq!(incoming_slots.available_permits(), 0);
-        assert!(tokio::time::timeout(Duration::from_millis(25), &mut pending)
-            .await
-            .is_err());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(25), &mut pending)
+                .await
+                .is_err()
+        );
         pending.abort();
         assert_eq!(transition_slots.available_permits(), 0);
         assert_eq!(incoming_slots.available_permits(), 0);
@@ -124,9 +123,10 @@ fn share_remote_task_reciprocal_full_event_channel_does_not_block_tokio_worker()
     let (events, receiver) = crossbeam_channel::bounded(1);
     events.send(ShareEvent::Status("occupied".into())).unwrap();
     runtime.block_on(async {
-        let completed = tokio::time::timeout(Duration::from_millis(250), tokio::spawn(async move {
-            publish_runtime_profiles_committed(&events)
-        }))
+        let completed = tokio::time::timeout(
+            Duration::from_millis(250),
+            tokio::spawn(async move { publish_runtime_profiles_committed(&events) }),
+        )
         .await
         .expect("a full ShareEvent channel blocked the Tokio worker")
         .expect("event worker panicked");
@@ -196,14 +196,9 @@ fn receiver_awaiting_store(
     let remote = DirectPeerIdentity::from_secret("remote", "Remote", &remote_key);
     let local_material = DirectRelationMaterial::new("local-lookup", vec![61; 32]).unwrap();
     let remote_material = DirectRelationMaterial::new("remote-lookup", vec![62; 32]).unwrap();
-    let outgoing = authenticated_session(
-        &remote,
-        DirectSessionAuthorization::OutgoingAcceptedContact,
-    );
-    let incoming = authenticated_session(
-        &local,
-        DirectSessionAuthorization::IncomingAcceptedGrant,
-    );
+    let outgoing =
+        authenticated_session(&remote, DirectSessionAuthorization::OutgoingAcceptedContact);
+    let incoming = authenticated_session(&local, DirectSessionAuthorization::IncomingAcceptedGrant);
     let (_, hello) = DirectRepairInitiator::begin(
         local.clone(),
         &local_material,
@@ -211,15 +206,10 @@ fn receiver_awaiting_store(
         Some(remote_material.clone()),
     )
     .unwrap();
-    DirectRepairReceiver::new(
-        remote,
-        remote_material,
-        incoming,
-        Some(local_material),
-    )
-    .unwrap()
-    .accept_hello(hello)
-    .unwrap()
+    DirectRepairReceiver::new(remote, remote_material, incoming, Some(local_material))
+        .unwrap()
+        .accept_hello(hello)
+        .unwrap()
 }
 
 fn authenticated_session(
@@ -263,6 +253,7 @@ fn direct_grant(identity: &DirectPeerIdentity) -> DirectGrant {
         state: DirectGrantState::Accepted,
         updated_at: 1,
         exec: Default::default(),
+        write: false,
     }
 }
 

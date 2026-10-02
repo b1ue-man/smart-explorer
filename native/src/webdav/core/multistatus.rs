@@ -218,6 +218,7 @@ pub(super) fn parse_multistatus(xml: &str, request_path: &str) -> VfsResult<Vec<
         out.push(VfsMeta {
             is_dir,
             is_symlink: false,
+            special: false,
             size: if is_dir { 0 } else { size },
             mtime_ms,
             btime_ms: 0,

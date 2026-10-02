@@ -18,13 +18,16 @@ fn ms_since_unix(t: std::time::SystemTime) -> i64 {
 
 fn meta_to_vfs(name: String, path: &Path, meta: &std::fs::Metadata) -> VfsMeta {
     let (hidden, system) = local_platform::local_attrs(meta);
-    let is_symlink = crate::local_access::metadata_is_link_like(path, meta);
+    let class = crate::local_access::metadata_class(path, meta);
+    let is_symlink = class.link_like;
     let is_dir = meta.is_dir() && !is_symlink;
+    let special = class.special && !is_dir;
     VfsMeta {
         name,
         is_dir,
         is_symlink,
-        size: if is_dir { 0 } else { meta.len() },
+        special,
+        size: if is_dir || special { 0 } else { meta.len() },
         mtime_ms: meta.modified().map(ms_since_unix).unwrap_or(0),
         btime_ms: meta.created().map(ms_since_unix).unwrap_or(0),
         hidden,
@@ -72,6 +75,9 @@ impl Backend for LocalBackend {
     fn namespace_identity(&self) -> String {
         "local".into()
     }
+    fn extensions(&self) -> Option<&dyn super::BackendExtensions> {
+        Some(self)
+    }
 
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
         let dir = local_platform::to_os(path);
@@ -85,11 +91,15 @@ impl Backend for LocalBackend {
                     ));
                 }
                 let name = unicode_name(&entry.name)?;
+                let special = entry.kind == crate::local_access::EntryKind::Other
+                    && !entry.is_dir
+                    && !entry.is_link_like;
                 Ok(VfsMeta {
                     name,
                     is_dir: entry.is_dir && !entry.is_link_like,
                     is_symlink: entry.is_link_like,
-                    size: entry.size,
+                    special,
+                    size: if special { 0 } else { entry.size },
                     mtime_ms: entry.mtime_ms,
                     btime_ms: entry.btime_ms,
                     hidden: entry.hidden,

@@ -6,6 +6,8 @@ mod analytics_access;
 mod analytics_accessibility;
 #[path = "core/analytics_core.rs"]
 mod analytics_core;
+#[path = "core/analytics_mounts.rs"]
+mod analytics_mounts;
 #[path = "core/analytics_paint.rs"]
 mod analytics_paint;
 #[path = "core/analytics_ui.rs"]

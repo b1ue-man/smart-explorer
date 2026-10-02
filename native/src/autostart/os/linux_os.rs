@@ -65,6 +65,13 @@ pub fn is_enabled() -> bool {
     desktop_file_path().exists()
 }
 
+/// The login entry exists, but the desktop environment was told to skip it
+/// (`Hidden=true`, `X-GNOME-Autostart-enabled=false`); the settings show it.
+/// Contract stage: not detected yet.
+pub fn disabled_by_system() -> bool {
+    false
+}
+
 pub fn enable() -> io::Result<()> {
     let exe = daemon_exe()?;
     write_entry(&desktop_file_path(), &exe)

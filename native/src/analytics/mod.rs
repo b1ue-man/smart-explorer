@@ -21,6 +21,11 @@ mod analysis_report;
 #[path = "core/analysis_transfer.rs"]
 pub(crate) mod analysis_transfer;
 pub(crate) use analysis_report::AnalysisReport;
+#[path = "core/host_figures.rs"]
+mod host_figures;
+pub use host_figures::{
+    remember_platform_totals, remembered_platform_totals, PlatformApp, PlatformFigures, VolumeUsage,
+};
 
 #[path = "core/protected.rs"]
 mod protected;

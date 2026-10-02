@@ -100,8 +100,8 @@ pub(super) async fn serve(stream: FsStream, req: FsRequest) -> io::Result<()> {
         FsRequest::StorageSnapshot { path } => {
             crate::share::storage_snapshot::serve_snapshot(send, path, access).await
         }
-        FsRequest::StorageAnalysis { path } => {
-            crate::share::storage_analysis_server::serve(send, path, access).await
+        FsRequest::StorageAnalysis(request) => {
+            crate::share::storage_analysis_server::serve(send, request, access, principal).await
         }
         FsRequest::Read { path } => {
             let source = ReadSource {
@@ -297,6 +297,55 @@ pub(super) async fn serve(stream: FsStream, req: FsRequest) -> io::Result<()> {
             let authority = BatchAuthority::new(access, authorization, &context);
             super::batch_get::serve(send, items, authority, slot, context.stall()).await
         }
+        FsRequest::DuplicateSearch(request) => {
+            crate::share::host_requests::serve_duplicate_search(send, request, access, principal)
+                .await
+        }
+        FsRequest::HashWalk(request) => {
+            crate::share::host_requests::serve_hash_walk(send, request, access, principal).await
+        }
+        FsRequest::ListDirBatch(request) => {
+            crate::share::host_requests::serve_list_batch(send, request, access, principal).await
+        }
+        FsRequest::WatchExport(request) => {
+            crate::share::host_requests::serve_watch(send, request, access, principal).await
+        }
+        FsRequest::Recycle(request) => {
+            let path = request.path.clone();
+            answer(
+                &mut send,
+                path,
+                access,
+                authorization,
+                "Share recycle",
+                move |target| crate::share::host_requests::serve_recycle(target, request),
+            )
+            .await
+        }
+        FsRequest::FinishStage(request) => {
+            let path = request.staged.clone();
+            answer(
+                &mut send,
+                path,
+                access,
+                authorization,
+                "Share finish stage",
+                move |target| crate::share::host_requests::serve_finish_stage(target, request),
+            )
+            .await
+        }
+        FsRequest::SyncFilesystem(request) => {
+            let path = request.path.clone();
+            answer(
+                &mut send,
+                path,
+                access,
+                authorization,
+                "Share sync filesystem",
+                move |target| crate::share::host_requests::serve_sync_filesystem(target, request),
+            )
+            .await
+        }
     }
 }
 
@@ -362,6 +411,30 @@ where
     })
     .await;
     reply_unit(send, result).await
+}
+
+/// Like `simple`, for an operation that builds its own reply.
+async fn answer<F>(
+    send: &mut SendStream,
+    path: String,
+    access: FsAccess,
+    authorization: Option<MountLeaseAuthorization>,
+    label: &'static str,
+    operation: F,
+) -> io::Result<()>
+where
+    F: FnOnce(ResolvedTarget) -> io::Result<FsResponse> + Send + 'static,
+{
+    let result = control(label, move || {
+        run_authorized(authorization.as_ref(), || {
+            access.resolve(&path).and_then(operation)
+        })
+    })
+    .await;
+    match result {
+        Ok(response) => reply(send, response).await,
+        Err(error) => reply_err(send, error).await,
+    }
 }
 
 async fn reply_unit(send: &mut SendStream, result: io::Result<()>) -> io::Result<()> {

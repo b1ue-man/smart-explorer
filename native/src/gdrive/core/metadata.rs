@@ -46,6 +46,7 @@ impl GDriveBackend {
             name: name.to_string(),
             is_dir,
             is_symlink: false,
+            special: false,
             size: f["size"].as_str().and_then(|s| s.parse().ok()).unwrap_or(0),
             mtime_ms: f["modifiedTime"]
                 .as_str()

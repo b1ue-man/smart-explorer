@@ -23,6 +23,11 @@ pub(super) fn kind_of(error: &io::Error) -> Option<FsErrorKind> {
         io::ErrorKind::PermissionDenied => Some(FsErrorKind::PermissionDenied),
         io::ErrorKind::AlreadyExists => Some(FsErrorKind::AlreadyExists),
         io::ErrorKind::Unsupported => Some(FsErrorKind::Unsupported),
+        io::ErrorKind::StorageFull => Some(FsErrorKind::StorageFull),
+        io::ErrorKind::QuotaExceeded => Some(FsErrorKind::QuotaExceeded),
+        io::ErrorKind::ReadOnlyFilesystem => Some(FsErrorKind::ReadOnly),
+        io::ErrorKind::FileTooLarge => Some(FsErrorKind::FileTooLarge),
+        io::ErrorKind::InvalidFilename => Some(FsErrorKind::InvalidName),
         _ => None,
     }
 }
@@ -43,6 +48,11 @@ pub(super) fn into_io(kind: Option<FsErrorKind>, message: String) -> io::Error {
         Some(FsErrorKind::AlreadyExists) => io::Error::new(io::ErrorKind::AlreadyExists, message),
         Some(FsErrorKind::Unsupported) => io::Error::new(io::ErrorKind::Unsupported, message),
         Some(FsErrorKind::Busy) => crate::vfs::congestion_error(message, None),
+        Some(FsErrorKind::StorageFull) => io::Error::new(io::ErrorKind::StorageFull, message),
+        Some(FsErrorKind::QuotaExceeded) => io::Error::new(io::ErrorKind::QuotaExceeded, message),
+        Some(FsErrorKind::ReadOnly) => io::Error::new(io::ErrorKind::ReadOnlyFilesystem, message),
+        Some(FsErrorKind::FileTooLarge) => io::Error::new(io::ErrorKind::FileTooLarge, message),
+        Some(FsErrorKind::InvalidName) => io::Error::new(io::ErrorKind::InvalidFilename, message),
         Some(FsErrorKind::Unknown) | None => io::Error::other(message),
     }
 }
@@ -107,6 +117,34 @@ mod tests {
         assert!(!matches!(legacy, LegacyKind::NotFound));
         let plain = io::Error::new(io::ErrorKind::TimedOut, "langsam");
         assert_eq!(kind_of(&plain), None);
+    }
+
+    #[test]
+    fn review_task_target_refusals_keep_their_kind_across_the_wire() {
+        for (kind, wire) in [
+            (io::ErrorKind::StorageFull, "storage_full"),
+            (io::ErrorKind::QuotaExceeded, "quota_exceeded"),
+            (io::ErrorKind::ReadOnlyFilesystem, "read_only"),
+            (io::ErrorKind::FileTooLarge, "file_too_large"),
+            (io::ErrorKind::InvalidFilename, "invalid_name"),
+        ] {
+            let FsResponse::Err { kind: sent, msg } = response(&io::Error::new(kind, "Ziel"))
+            else {
+                panic!("error response expected");
+            };
+            let encoded = serde_json::to_string(&FsResponse::Err {
+                kind: sent,
+                msg: msg.clone(),
+            })
+            .unwrap();
+            assert!(
+                encoded.contains(&format!("\"kind\":\"{wire}\"")),
+                "{encoded}"
+            );
+            let received = into_io(sent, msg);
+            assert_eq!(received.kind(), kind);
+            assert_eq!(received.to_string(), "Ziel");
+        }
     }
 
     #[test]

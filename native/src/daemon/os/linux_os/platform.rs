@@ -32,6 +32,12 @@ pub(crate) fn on_metered_network() -> bool {
     false
 }
 
+/// (battery saver, metered network): neither condition has a Linux source
+/// yet, so the settings do not offer them.
+pub(crate) fn autopause_conditions_supported() -> (bool, bool) {
+    (false, false)
+}
+
 pub(crate) fn run_shell_command(cmd: &str) -> std::io::Result<std::process::ExitStatus> {
     std::process::Command::new("sh").args(["-c", cmd]).status()
 }

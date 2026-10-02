@@ -57,7 +57,8 @@ impl DiscoveryOfferBook {
             | DiscoveryEvent::ExchangeStarted { .. }
             | DiscoveryEvent::ExchangeCompleted { .. }
             | DiscoveryEvent::ExchangeCancelled { .. }
-            | DiscoveryEvent::ExchangeFailed { .. } => {}
+            | DiscoveryEvent::ExchangeFailed { .. }
+            | DiscoveryEvent::ExchangeUnconfirmed { .. } => {}
         }
     }
 

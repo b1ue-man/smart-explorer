@@ -478,6 +478,7 @@ fn set_exact_grant(
         state,
         updated_at: now,
         exec: ExecGrant::default(),
+        write: false,
     });
     Ok(())
 }

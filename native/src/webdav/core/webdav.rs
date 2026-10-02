@@ -257,6 +257,7 @@ impl Backend for WebdavBackend {
         Ok(VfsMeta {
             is_dir,
             is_symlink: false,
+            special: false,
             size: if is_dir { 0 } else { size },
             mtime_ms,
             btime_ms: 0,

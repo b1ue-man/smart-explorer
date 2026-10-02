@@ -164,6 +164,7 @@ mod tests {
             lan_candidates: Vec::new(),
             lan_seen_at: None,
             lan_uplink: None,
+            relation: Default::default(),
         }
     }
 }

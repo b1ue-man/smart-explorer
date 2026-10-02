@@ -146,7 +146,7 @@ impl App {
                 for d in self.drives.clone() {
                     let label = d.trim_end_matches(['\\', '/']).to_string();
                     if !cfg.roots.iter().any(|r| r.path == d) {
-                        cfg.roots.push(crate::share::SharedRoot { label, path: d });
+                        cfg.roots.push(crate::share::SharedRoot::new(label, d));
                         changed = true;
                     }
                 }
@@ -162,10 +162,10 @@ impl App {
             if ui.button("Hinzufuegen").clicked() {
                 let path = self.share_export_path_draft.trim().replace('\\', "/");
                 if !path.is_empty() && !cfg.roots.iter().any(|r| r.path == path) {
-                    cfg.roots.push(crate::share::SharedRoot {
-                        label: self.share_export_label_draft.trim().to_string(),
+                    cfg.roots.push(crate::share::SharedRoot::new(
+                        self.share_export_label_draft.trim(),
                         path,
-                    });
+                    ));
                     changed = true;
                 }
             }

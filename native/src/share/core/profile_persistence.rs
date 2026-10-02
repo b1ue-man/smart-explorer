@@ -63,10 +63,10 @@ impl ShareProfiles {
         // Existing empty exports are an explicit deny-all configuration.
         if missing && profiles.default_direct_exports.roots.is_empty() {
             if let Some(home) = default_home {
-                profiles.default_direct_exports.roots.push(SharedRoot {
-                    label: "Home".to_string(),
-                    path: home,
-                });
+                profiles
+                    .default_direct_exports
+                    .roots
+                    .push(SharedRoot::new("Home", home));
             }
         }
         Ok(profiles)
@@ -150,6 +150,7 @@ impl ShareProfiles {
             lan_candidates: Vec::new(),
             lan_seen_at: None,
             lan_uplink: None,
+            relation: Default::default(),
         });
         if let Err(error) = candidate.save_with(storage) {
             return Err(cleanup_new_secret(error, storage, &account));
@@ -229,6 +230,7 @@ impl ShareProfiles {
             status: ShareStatus::Waiting,
             members: Vec::new(),
             exports: self.default_direct_exports.clone(),
+            policy: super::room_relation::RoomPolicy::new_room(),
         });
         if let Err(error) = candidate.save_with(storage) {
             return Err(cleanup_new_secret(error, storage, &account));
@@ -466,6 +468,7 @@ mod tests {
             state: DirectGrantState::Accepted,
             updated_at: 1,
             exec,
+            write: false,
         }
     }
 
@@ -490,8 +493,10 @@ mod tests {
                 blocked: false,
                 exec,
                 presence: None,
+                relation: Default::default(),
             }],
             exports: ShareExportConfig::default(),
+            policy: crate::share::RoomPolicy::new_room(),
         }
     }
 }

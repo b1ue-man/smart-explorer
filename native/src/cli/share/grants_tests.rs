@@ -24,6 +24,7 @@ fn tracked_history_links_to_a_grant_only_for_the_exact_peer_identity() {
         state: DirectGrantState::Accepted,
         updated_at: 200,
         exec: Default::default(),
+        write: false,
     };
     let selector_a = request_a.record.request.request_id.to_string();
     let selector_b = request_b.record.request.request_id.to_string();

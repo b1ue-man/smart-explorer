@@ -172,13 +172,23 @@ impl App {
         // A bare drive letter ("C:") must become a root ("C:\") or read_dir
         // would target the drive's *current directory* instead of its root.
         let worker_source = source.clone();
+        // A drive that mounts a remote place is analysed by that place.
+        let route = match &source {
+            StorageScanSource::Local { root } => {
+                super::analytics_mounts::MountRoute::of(&self.mount_ui.mounts, root)
+            }
+            StorageScanSource::Remote { .. } => None,
+        };
         // Deep trees recurse on this thread when the parallel pool is not
         // allowed; reserve the same stack the pool workers get.
         let spawn = std::thread::Builder::new()
             .name("storage-analytics".into())
             .stack_size(crate::analytics::SCAN_THREAD_STACK_BYTES)
             .spawn(move || {
-                let outcome = scan_storage_source(worker_source, &p2);
+                let outcome = match route {
+                    Some(route) => route.scan(worker_source.root(), &p2),
+                    None => scan_storage_source(worker_source, &p2),
+                };
                 let _ = tx.send(outcome);
             });
         self.analytics_source = Some(source.clone());
@@ -228,8 +238,12 @@ impl App {
         match message {
             Some(Ok(outcome)) => {
                 self.update_analytics_access(outcome.permission_denied);
-                self.analytics_totals = self.analytics_scan.as_ref()
-                    .map(|scan| (scan.progress.snapshot(), scan.started.elapsed().as_secs_f32()));
+                self.analytics_totals = self.analytics_scan.as_ref().map(|scan| {
+                    (
+                        scan.progress.snapshot(),
+                        scan.started.elapsed().as_secs_f32(),
+                    )
+                });
                 self.analytics_scan = None;
                 self.analytics_state = outcome.status.into();
                 if outcome.tree.is_some()
@@ -250,8 +264,12 @@ impl App {
                 self.log_analytics_outcome();
             }
             Some(Err(crossbeam_channel::TryRecvError::Disconnected)) => {
-                self.analytics_totals = self.analytics_scan.as_ref()
-                    .map(|scan| (scan.progress.snapshot(), scan.started.elapsed().as_secs_f32()));
+                self.analytics_totals = self.analytics_scan.as_ref().map(|scan| {
+                    (
+                        scan.progress.snapshot(),
+                        scan.started.elapsed().as_secs_f32(),
+                    )
+                });
                 self.analytics_scan = None;
                 self.analytics_state = StorageRunState::Failed;
                 let detail = "Scan-Thread wurde ohne Ergebnis beendet".to_string();
@@ -269,7 +287,9 @@ impl App {
         if let Some(scan) = &self.analytics_scan {
             // Keep the receiver and live evidence until the worker actually
             // answers. Requesting cancellation is not a terminal result.
-            scan.progress.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            scan.progress
+                .cancel
+                .store(true, std::sync::atomic::Ordering::Relaxed);
         }
     }
 

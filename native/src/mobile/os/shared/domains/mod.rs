@@ -147,6 +147,10 @@ fn share_method(rt: &Runtime, method: &str, args: &Value) -> Option<Result<Value
         "share.wake" => share_power::wake(args),
         "share.watch" => share_settings::watch(args),
         "share.setServer" => share_settings::set_server(rt, args),
+        "share.serverInfo" => share_settings::server_info(),
+        "share.suggestPin" => share_settings::suggest_pin(),
+        "share.unconfirmedPairings" => share_settings::unconfirmed_pairings(),
+        "share.resolvePairing" => share_settings::resolve_pairing(rt, args),
         "share.setOnline" => share_settings::set_online(args),
         "share.setName" => share_settings::set_name(rt, args),
         "share.discoverable" => share_settings::discoverable(args),
@@ -184,6 +188,7 @@ fn analysis_method(rt: &Runtime, method: &str, args: &Value) -> Option<Result<Va
         "reclaim.start" => analyze::start_reclaim(rt, args),
         "reclaim.groups" => analyze::groups(args),
         "reclaim.summary" => analyze::summary(args),
+        "analyze.release" | "reclaim.release" => analyze::release(args),
         _ => return None,
     })
 }

@@ -74,8 +74,10 @@ fn exact_room_member_policy_is_independent() {
             blocked: false,
             exec: ExecGrant::default(),
             presence: None,
+            relation: Default::default(),
         }],
         exports: Default::default(),
+        policy: crate::share::RoomPolicy::new_room(),
     });
     let target = ExecGrantTarget::RoomMember {
         room_id: "room-relation".into(),
@@ -135,6 +137,7 @@ fn direct_state() -> (Arc<Mutex<ShareAuthState>>, ExecGrantTarget) {
         state: DirectGrantState::Accepted,
         updated_at: 1,
         exec: ExecGrant::default(),
+        write: false,
     });
     drop(state);
     (auth, target)

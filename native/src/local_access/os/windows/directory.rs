@@ -28,6 +28,10 @@ use windows_sys::Win32::{
 const BUFFER_WORDS: usize = 8192;
 const MAX_BUFFER_WORDS: usize = 8192 * 16;
 const NAME_SURROGATE: u32 = 0x2000_0000;
+// Special-file reparse tags (no name-surrogate bit, no data stream to read):
+// AF_UNIX sockets and the FIFO/character/block nodes WSL stores on NTFS.
+// Values as in windows-sys 0.59 `IO_REPARSE_TAG_AF_UNIX` / `IO_REPARSE_TAG_LX_*`.
+const SPECIAL_TAGS: [u32; 4] = [0x8000_0023, 0x8000_0024, 0x8000_0025, 0x8000_0026];
 
 #[cfg(test)]
 #[path = "sync_link_task_tests.rs"]
@@ -353,8 +357,7 @@ fn reparse_tag(path: &Path) -> u32 {
 }
 
 fn link_like(attributes: u32, tag: u32) -> bool {
-    attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
-        && (tag == 0 || tag & NAME_SURROGATE != 0)
+    attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 && (tag == 0 || tag & NAME_SURROGATE != 0)
 }
 
 /// Data reparse points (for example cloud placeholders) are ordinary entries.
@@ -367,12 +370,33 @@ pub(crate) fn metadata_is_link_like(path: &Path, metadata: &std::fs::Metadata) -
         || (attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0 && link_like(attrs, reparse_tag(path)))
 }
 
+/// Link boundary and special class with at most one reparse-tag read.
+pub(crate) fn metadata_class(
+    path: &Path,
+    metadata: &std::fs::Metadata,
+) -> crate::local_access::MetadataClass {
+    use std::os::windows::fs::MetadataExt;
+    let attrs = metadata.file_attributes();
+    let tag = if attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        reparse_tag(path)
+    } else {
+        0
+    };
+    let boundary = metadata.is_symlink()
+        || (attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0 && link_like(attrs, tag));
+    crate::local_access::MetadataClass {
+        link_like: boundary,
+        special: !boundary && kind(attrs, tag) == EntryKind::Other,
+    }
+}
+
 fn kind(attributes: u32, tag: u32) -> EntryKind {
-    if attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 && tag & NAME_SURROGATE != 0 {
+    let reparse = attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0;
+    if reparse && tag & NAME_SURROGATE != 0 {
         EntryKind::Link
     } else if attributes & FILE_ATTRIBUTE_DIRECTORY != 0 {
         EntryKind::Directory
-    } else if attributes & FILE_ATTRIBUTE_DEVICE != 0 {
+    } else if attributes & FILE_ATTRIBUTE_DEVICE != 0 || (reparse && SPECIAL_TAGS.contains(&tag)) {
         EntryKind::Other
     } else {
         EntryKind::File

@@ -41,6 +41,11 @@ pub(crate) fn on_metered_network() -> bool {
     power::on_metered_network()
 }
 
+/// (battery saver, metered network): both are read from the system.
+pub(crate) fn autopause_conditions_supported() -> (bool, bool) {
+    (true, true)
+}
+
 pub(crate) fn run_shell_command(cmd: &str) -> std::io::Result<std::process::ExitStatus> {
     std::process::Command::new("cmd").args(["/C", cmd]).status()
 }

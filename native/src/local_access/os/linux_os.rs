@@ -1,4 +1,4 @@
-use super::{system_time_ms, EntryKind, LocalEntry};
+use super::{system_time_ms, EntryKind, FinalLink, LocalEntry, NotRegular};
 use std::{io, path::Path};
 
 pub(crate) fn parallel_scan_allowed() -> bool {
@@ -80,10 +80,74 @@ pub(crate) fn run_helper_if_requested(args: &[std::ffi::OsString]) -> Option<Res
 pub(crate) fn open_read(path: &Path) -> io::Result<std::fs::File> {
     std::fs::File::open(path)
 }
+
+/// Checks the type before opening (opening a device can have side effects),
+/// opens without blocking (`O_NONBLOCK`; `O_NOFOLLOW` when links are
+/// refused), re-checks the opened file and clears `O_NONBLOCK` again.
+pub(crate) fn open_regular(path: &Path, final_link: FinalLink) -> io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::os::unix::io::AsRawFd;
+    let refuse_links = final_link == FinalLink::Refuse;
+    let before = if refuse_links {
+        std::fs::symlink_metadata(path)?
+    } else {
+        std::fs::metadata(path)?
+    };
+    regular_or_refusal(before.file_type())?;
+    let mut flags = libc::O_NONBLOCK | libc::O_NOCTTY;
+    if refuse_links {
+        flags |= libc::O_NOFOLLOW;
+    }
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(flags)
+        .open(path)
+        .map_err(|error| match error.raw_os_error() {
+            Some(libc::ELOOP) if refuse_links => NotRegular::Link.error(),
+            Some(libc::ENXIO) => NotRegular::Special.error(),
+            _ => error,
+        })?;
+    regular_or_refusal(file.metadata()?.file_type())?;
+    let descriptor = file.as_raw_fd();
+    // SAFETY: `descriptor` belongs to `file`, which stays open for both calls.
+    let status = unsafe { libc::fcntl(descriptor, libc::F_GETFL) };
+    if status < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let blocking = status & !libc::O_NONBLOCK;
+    // SAFETY: as above; only the status flags of this descriptor change.
+    if blocking != status && unsafe { libc::fcntl(descriptor, libc::F_SETFL, blocking) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(file)
+}
+
+fn regular_or_refusal(kind: std::fs::FileType) -> io::Result<()> {
+    if kind.is_file() {
+        Ok(())
+    } else if kind.is_symlink() {
+        Err(NotRegular::Link.error())
+    } else if kind.is_dir() {
+        Err(NotRegular::Directory.error())
+    } else {
+        Err(NotRegular::Special.error())
+    }
+}
+
 pub(crate) fn symlink_metadata(path: &Path) -> io::Result<std::fs::Metadata> {
     std::fs::symlink_metadata(path)
 }
 
 pub(crate) fn metadata_is_link_like(_path: &Path, metadata: &std::fs::Metadata) -> bool {
     metadata.is_symlink()
+}
+
+/// Everything that is neither file, folder nor symlink (FIFO, socket, block or
+/// character device) is special; it has no data stream to copy.
+pub(crate) fn metadata_class(_path: &Path, metadata: &std::fs::Metadata) -> super::MetadataClass {
+    let kind = metadata.file_type();
+    super::MetadataClass {
+        link_like: kind.is_symlink(),
+        special: !(kind.is_file() || kind.is_dir() || kind.is_symlink()),
+    }
 }

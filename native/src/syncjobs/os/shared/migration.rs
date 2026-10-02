@@ -1,5 +1,5 @@
 use super::persistence::{atomic_write, load_dir, read_regular_utf8, san_id, write_job};
-use super::persistence_codec::{parse_legacy, serialize_kv};
+use super::persistence_codec::{parse_legacy, serialize_kv_core};
 use super::types::SyncJob;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -20,6 +20,20 @@ pub(super) fn load_or_migrate(directory: &Path, legacy: &Path) -> io::Result<Vec
         (false, false) => load_dir(directory),
         (true, false) => recover_archived_import(directory, &marker),
         (_, true) => import_legacy(directory, legacy, &marker, marker_exists),
+    }
+}
+
+/// Finishes a pending one-time import of the old `jobs.tsv`; nothing to do
+/// without one. The tolerant loader lists a failure instead of failing.
+pub(super) fn complete_pending_import(directory: &Path, legacy: &Path) -> io::Result<()> {
+    let marker = directory.join(MARKER_NAME);
+    let marker_exists = exists_checked(&marker)?;
+    let legacy_exists = exists_checked(legacy)?;
+
+    match (marker_exists, legacy_exists) {
+        (false, false) => Ok(()),
+        (true, false) => recover_archived_import(directory, &marker).map(|_| ()),
+        (_, true) => import_legacy(directory, legacy, &marker, marker_exists).map(|_| ()),
     }
 }
 
@@ -168,8 +182,10 @@ fn jobs_by_id(jobs: Vec<SyncJob>) -> io::Result<BTreeMap<String, SyncJob>> {
     Ok(by_id)
 }
 
+/// Hash over the settings every version wrote, so a pending import from an
+/// older version still verifies after keys were added.
 fn canonical_hash(job: &SyncJob) -> String {
-    format!("{:x}", Sha256::digest(serialize_kv(job).as_bytes()))
+    format!("{:x}", Sha256::digest(serialize_kv_core(job).as_bytes()))
 }
 
 fn serialize_marker(expected: &BTreeMap<String, String>) -> String {

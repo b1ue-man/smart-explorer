@@ -41,11 +41,28 @@ impl RemovedDirectPeer {
 }
 
 /// Whether a reciprocal installation was requested by the user or by the
-/// automatic background repair.
+/// automatic background repair, and whether this device opens its own Direct
+/// exports to the peer (FC1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PairingOrigin {
+    /// Deliberate pairing that also opens this device's exports to the peer:
+    /// the publisher of a PIN offer, or a connector that chose „Auch meine
+    /// Freigaben für dieses Gerät öffnen“.
     UserPairing,
+    /// Deliberate pairing that does not open this device's exports (FC1
+    /// default of the connecting side): no grant is created or reactivated;
+    /// an accepted grant stays as it is.
+    UserPairingOneWay,
+    /// Background repair: never readmits a removed peer and never reactivates
+    /// an ignored or suspended („neu bestätigen“) grant.
     AutomaticRepair,
+}
+
+impl PairingOrigin {
+    /// A deliberate act of the user (readmits a removed peer).
+    pub fn is_user(self) -> bool {
+        matches!(self, Self::UserPairing | Self::UserPairingOneWay)
+    }
 }
 
 /// Everything one removal transaction deleted, for reporting.
@@ -232,6 +249,7 @@ mod tests {
             lan_candidates: Vec::new(),
             lan_seen_at: None,
             lan_uplink: None,
+            relation: Default::default(),
         }
     }
 
@@ -245,6 +263,7 @@ mod tests {
             state: DirectGrantState::Accepted,
             updated_at: 1,
             exec: Default::default(),
+            write: false,
         }
     }
 
