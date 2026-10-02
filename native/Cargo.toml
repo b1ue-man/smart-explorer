@@ -115,6 +115,13 @@ if-addrs = "0.13"
 # ZIP archive browse + extract (zipfs.rs): pure-Rust deflate via flate2/miniz_oxide
 # (already in the tree through russh), so no new C deps for the windows-gnu build.
 zip = { version = "2", default-features = false, features = ["deflate"] }
+# RV1 (all already in the lock through other crates): streaming WebDAV
+# multistatus parsing, TCP keepalive on FTP sockets, NFC planning keys for
+# sync pairs, deflate for remote analysis trees.
+quick-xml = "0.39"
+socket2 = "0.6"
+icu_normalizer = { version = "2.2", default-features = false, features = ["compiled_data"] }
+flate2 = "1"
 
 # rfd is per-target so the crate also builds on a non-Windows host (CI / local
 # `cargo test`): Windows uses the Win32 common-controls dialog; elsewhere the
@@ -137,6 +144,14 @@ windows-sys = { version = "0.59", features = [
     "Win32_Security_WinTrust",
     "Win32_Storage_FileSystem",
     "Win32_System_Com",
+    # RV1: volume arrival (CM_Register_Notification), bus type
+    # (IOCTL_STORAGE_QUERY_PROPERTY), power requests while syncing or serving
+    # peers, SetThreadErrorMode for silent volume probes.
+    "Win32_Devices_DeviceAndDriverInstallation",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Ioctl",
+    "Win32_System_Power",
+    "Win32_System_WindowsProgramming",
     # `se share discoverable` reads a typed PIN with console echo switched off.
     "Win32_System_Console",
     "Win32_System_Diagnostics_ToolHelp",
