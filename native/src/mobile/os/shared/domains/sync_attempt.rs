@@ -98,10 +98,10 @@ impl Drop for Lease {
 }
 
 pub(super) fn api_outcome(error: &ApiError) -> AttemptOutcome {
-    if matches!(error.kind.as_str(), "canceled" | "busy") {
+    if matches!(error.kind, "canceled" | "busy") {
         return AttemptOutcome::Cancelled;
     }
-    let kind = match error.kind.as_str() {
+    let kind = match error.kind {
         "invalid" => FailureKind::Config,
         "permission" | "access" => FailureKind::Access,
         "internal" => FailureKind::Internal,

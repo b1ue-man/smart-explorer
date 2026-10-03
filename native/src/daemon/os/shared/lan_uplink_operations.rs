@@ -235,7 +235,7 @@ impl UplinkRuntime {
         }
     }
 
-    pub(super) fn shutdown(&mut self) {
+    pub(in crate::daemon) fn shutdown(&mut self) {
         if self.pending.as_ref().is_some_and(|pending| {
             matches!(
                 &pending.kind,
