@@ -105,7 +105,10 @@ pub(super) fn delete_extras_scoped(
     for entry in &candidates {
         let validation = (|| -> io::Result<()> {
             if cancel.load(Ordering::Acquire) {
-                return Err(io::Error::new(io::ErrorKind::Interrupted, "mirror canceled"));
+                return Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "mirror canceled",
+                ));
             }
             current(destination, entry)?;
             if sync_delete_walk::missing(source, source_root, &entry.rel, keys, cancel)? {

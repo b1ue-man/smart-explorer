@@ -22,10 +22,7 @@ pub(super) fn validate_before_probe(
     })
 }
 
-pub(super) fn persist(
-    service: &ShareService,
-    probe: &PendingLegacyProbe,
-) -> Result<(), String> {
+pub(super) fn persist(service: &ShareService, probe: &PendingLegacyProbe) -> Result<(), String> {
     ShareIdentity::with_current_locked(probe.identity.device_name.clone(), |current| {
         with_matching_identity_generation(&probe.identity, current, |_| {
             // Same opportunistic permit as reciprocal persistence. It is
@@ -39,9 +36,8 @@ pub(super) fn persist(
             let mut state = service.auth.lock().map_err(|_| "Share-State gesperrt")?;
             check_running(service)?;
             probe.check_auth(&state)?;
-            let committed = ShareProfiles::mutate_persisted(
-                service.profile_home.clone(),
-                |profiles| {
+            let committed =
+                ShareProfiles::mutate_persisted(service.profile_home.clone(), |profiles| {
                     check_running(service)?;
                     probe.check_auth(&state)?;
                     probe.check_profiles(profiles)?;
@@ -53,14 +49,12 @@ pub(super) fn persist(
                         .ok_or_else(|| "Direktgeraet wurde entfernt".to_string())?;
                     contact.access_state = DirectAccessState::Accepted;
                     contact.accepted_at = Some(now);
-                    contact.accepted_public_key =
-                        Some(probe.endpoint.presence.public_key.clone());
+                    contact.accepted_public_key = Some(probe.endpoint.presence.public_key.clone());
                     contact.status = ShareStatus::Available;
                     contact.last_seen = Some(now);
                     contact.last_error = None;
                     Ok(())
-                },
-            )?;
+                })?;
             let canonical = committed
                 .direct_contacts
                 .iter()
@@ -83,7 +77,11 @@ pub(super) fn persist(
             drop(transition);
             // The existing daemon consumer reloads the canonical profile and
             // applies ConfigureProfiles with the normal restriction boundary.
-            match service.iroh.ev.try_send(ShareEvent::RuntimeProfilesCommitted) {
+            match service
+                .iroh
+                .ev
+                .try_send(ShareEvent::RuntimeProfilesCommitted)
+            {
                 Ok(()) | Err(crossbeam_channel::TrySendError::Full(_)) => {}
                 Err(crossbeam_channel::TrySendError::Disconnected(_)) => {
                     return Err("Share-Ereignisempfaenger ist geschlossen".into());

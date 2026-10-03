@@ -348,7 +348,10 @@ mod unix {
                 precision.same_instant(stored, wanted),
                 "{stored} vs {wanted}"
             );
-            assert_eq!(sync_filesystem(&backend, &directory).unwrap(), batched_flush);
+            assert_eq!(
+                sync_filesystem(&backend, &directory).unwrap(),
+                batched_flush
+            );
             std::fs::remove_file(&stage).unwrap();
         }
     }

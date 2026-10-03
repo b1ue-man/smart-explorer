@@ -246,10 +246,6 @@ pub(crate) mod lan_uplink_evidence;
 pub(crate) mod lan_uplink_policy;
 #[path = "os/shared/legacy_direct_actions.rs"]
 mod legacy_direct_actions;
-#[path = "core/legacy_probe.rs"]
-mod legacy_probe;
-#[path = "os/shared/legacy_probe_persist.rs"]
-mod legacy_probe_persist;
 #[path = "core/legacy_direct_request.rs"]
 mod legacy_direct_request;
 #[path = "core/legacy_direct_request_decision.rs"]
@@ -263,6 +259,10 @@ mod legacy_direct_request_reconciliation;
 mod legacy_direct_request_tests;
 #[path = "core/legacy_direct_request_validation.rs"]
 mod legacy_direct_request_validation;
+#[path = "core/legacy_probe.rs"]
+mod legacy_probe;
+#[path = "os/shared/legacy_probe_persist.rs"]
+mod legacy_probe_persist;
 #[path = "os/shared/lifecycle_view.rs"]
 pub(crate) mod lifecycle_view;
 #[path = "core/line.rs"]

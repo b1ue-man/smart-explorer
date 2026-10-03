@@ -295,7 +295,11 @@ fn gui_design_task_drive_rename_and_copy_promotion_preserve_original_titles() {
         ),
         step("GET", FILES, Reply::Json(json!({"files": []}))),
         step("PATCH", ITEM, Reply::Json(json!({"id": "item-id"}))),
-        step("GET", ITEM, Reply::Json(object("I/O neu", "item-id", false))),
+        step(
+            "GET",
+            ITEM,
+            Reply::Json(object("I/O neu", "item-id", false)),
+        ),
         step(
             "GET",
             FILES,
@@ -322,7 +326,11 @@ fn gui_design_task_drive_rename_and_copy_promotion_preserve_original_titles() {
         step("GET", FILES, Reply::Json(json!({"files": [stage]}))),
         step("GET", FILES, Reply::Json(json!({"files": []}))),
         step("PATCH", ITEM, Reply::Json(json!({"id": "item-id"}))),
-        step("GET", ITEM, Reply::Json(object("I/O.txt", "item-id", false))),
+        step(
+            "GET",
+            ITEM,
+            Reply::Json(object("I/O.txt", "item-id", false)),
+        ),
         step(
             "GET",
             FILES,
