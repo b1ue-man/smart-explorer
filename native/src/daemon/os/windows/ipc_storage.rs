@@ -1,4 +1,4 @@
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::{self, Read, Write};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -30,21 +30,21 @@ pub(super) fn clear_ipc_generation() {
 }
 
 pub(super) fn write_ipc_addr(addr: SocketAddr) -> io::Result<()> {
-    std::fs::write(ipc_addr_path()?, addr.to_string())
+    crate::support_dirs::write_private_atomic(&ipc_addr_path()?, addr.to_string().as_bytes())
 }
 
 pub(super) fn write_ipc_generation(generation: &str) -> io::Result<()> {
-    std::fs::write(ipc_generation_path()?, generation)
+    crate::support_dirs::write_private_atomic(&ipc_generation_path()?, generation.as_bytes())
 }
 
 pub(super) fn read_ipc_addr() -> Option<SocketAddr> {
-    std::fs::read_to_string(ipc_addr_path().ok()?)
+    crate::support_dirs::read_private_text(&ipc_addr_path().ok()?, 1024)
         .ok()
         .and_then(|text| text.trim().parse().ok())
 }
 
 pub(super) fn read_ipc_generation() -> Option<String> {
-    let generation = std::fs::read_to_string(ipc_generation_path().ok()?).ok()?;
+    let generation = crate::support_dirs::read_private_text(&ipc_generation_path().ok()?, 1024).ok()?;
     let generation = generation.trim();
     (generation.len() == 32 && generation.bytes().all(|byte| byte.is_ascii_hexdigit()))
         .then(|| generation.to_string())
@@ -110,12 +110,13 @@ fn sync_data_directory() -> io::Result<PathBuf> {
     let app = crate::support_dirs::app_data_dir();
     validate_directory(&app)?;
     let sync = app.join("sync");
-    std::fs::create_dir_all(&sync)?;
+    crate::support_dirs::ensure_private_dir(&sync)?;
     validate_directory(&sync)?;
     Ok(sync)
 }
 
 fn validate_directory(path: &Path) -> io::Result<()> {
+    crate::support_dirs::ensure_private_dir(path)?;
     let metadata = std::fs::symlink_metadata(path)?;
     if metadata_is_link_like(&metadata) || !metadata.is_dir() {
         return Err(io::Error::new(
@@ -127,7 +128,7 @@ fn validate_directory(path: &Path) -> io::Result<()> {
 }
 
 fn create_token(path: &Path) -> io::Result<String> {
-    let mut file = match OpenOptions::new().write(true).create_new(true).open(path) {
+    let mut file = match crate::support_dirs::create_private_file(path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
             return read_token_path(path);
@@ -138,6 +139,7 @@ fn create_token(path: &Path) -> io::Result<String> {
         let token = generate_token()?;
         file.write_all(token.as_bytes())?;
         file.sync_all()?;
+        drop(file);
         read_token_path(path)
     })();
     if result.is_err() {
@@ -185,12 +187,7 @@ fn open_token_without_following_links(path: &Path) -> io::Result<File> {
 }
 
 fn open_file_without_following_links(path: &Path) -> io::Result<File> {
-    use std::os::windows::fs::OpenOptionsExt;
-    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-    OpenOptions::new()
-        .read(true)
-        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
-        .open(path)
+    crate::support_dirs::open_private_file(path)
 }
 
 fn validate_token_handle(file: &File) -> io::Result<()> {
@@ -198,6 +195,7 @@ fn validate_token_handle(file: &File) -> io::Result<()> {
 }
 
 fn validate_private_file_handle(file: &File, label: &str) -> io::Result<()> {
+    crate::support_dirs::secure_private_file(file)?;
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Storage::FileSystem::{
         GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,

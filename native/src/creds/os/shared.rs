@@ -9,8 +9,8 @@
 //!    saved-connection list survives restarts.
 #![allow(dead_code)] // staged: consumed by the connect-UI step.
 
-use std::fs::{File, OpenOptions};
-use std::io::{Read, Write};
+use std::fs::File;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
@@ -103,7 +103,7 @@ fn load_connections_for_update(path: &Path) -> std::io::Result<Vec<SavedConnecti
 }
 
 fn read_connections_file(path: &Path) -> std::io::Result<String> {
-    let mut file = File::open(path)?;
+    let mut file = crate::support_dirs::open_private_file(path)?;
     let metadata = file.metadata()?;
     if !metadata.file_type().is_file() {
         return Err(std::io::Error::new(
@@ -150,15 +150,8 @@ fn save_connections_to(path: &Path, conns: &[SavedConnection]) -> std::io::Resul
         ));
     }
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    std::fs::create_dir_all(parent)?;
-    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
-    temporary.write_all(body.as_bytes())?;
-    temporary.flush()?;
-    temporary.as_file().sync_all()?;
-    temporary
-        .persist(path)
-        .map(|_| ())
-        .map_err(|error| error.error)
+    crate::support_dirs::ensure_private_dir(parent)?;
+    crate::support_dirs::write_private_atomic(path, body.as_bytes())
 }
 
 fn store_write_guard() -> std::io::Result<StoreWriteGuard> {
@@ -167,7 +160,7 @@ fn store_write_guard() -> std::io::Result<StoreWriteGuard> {
         Err(poisoned) => poisoned.into_inner(),
     };
     let directory = app_data_dir();
-    std::fs::create_dir_all(&directory)?;
+    crate::support_dirs::ensure_private_dir(&directory)?;
     let path = directory.join(STORE_LOCK_FILE);
     if let Ok(metadata) = std::fs::symlink_metadata(&path) {
         if !metadata.file_type().is_file() {
@@ -177,12 +170,7 @@ fn store_write_guard() -> std::io::Result<StoreWriteGuard> {
             ));
         }
     }
-    let file_guard = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(path)?;
+    let file_guard = crate::support_dirs::open_private_lock(&path)?;
     file_guard.lock()?;
     Ok(StoreWriteGuard {
         _process_guard: process_guard,
@@ -314,15 +302,8 @@ mod tests {
 
     #[test]
     fn file_save_load_roundtrip() {
-        let mut p = std::env::temp_dir();
-        p.push(format!(
-            "creds_test_{}_{}.txt",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let directory = tempfile::tempdir().unwrap();
+        let p = directory.path().join("connections.txt");
         let a = sample_pw();
         let mut b = sample_pw();
         b.host = "other".into();
@@ -349,15 +330,8 @@ mod tests {
 
     #[test]
     fn update_rejects_malformed_metadata_instead_of_overwriting_it() {
-        let mut p = std::env::temp_dir();
-        p.push(format!(
-            "creds_invalid_test_{}_{}.txt",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let directory = tempfile::tempdir().unwrap();
+        let p = directory.path().join("connections.txt");
         std::fs::write(&p, "not-a-valid-connection").unwrap();
         let error = load_connections_for_update(&p).unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
@@ -370,15 +344,8 @@ mod tests {
 
     #[test]
     fn touch_rejects_malformed_metadata_without_erasing_it() {
-        let mut p = std::env::temp_dir();
-        p.push(format!(
-            "creds_touch_invalid_test_{}_{}.txt",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let directory = tempfile::tempdir().unwrap();
+        let p = directory.path().join("connections.txt");
         let original = format!("{}\nnot-a-valid-connection", serialize(&sample_pw()));
         std::fs::write(&p, &original).unwrap();
 

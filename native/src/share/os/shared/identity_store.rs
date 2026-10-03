@@ -217,7 +217,7 @@ pub(super) fn load_identity() -> io::Result<Option<String>> {
     let capacity = usize::try_from(metadata.len())
         .map_err(|_| invalid("Share identity size does not fit this platform"))?;
     let mut bytes = Vec::with_capacity(capacity);
-    std::fs::File::open(path)?
+    crate::support_dirs::open_private_file(&path)?
         .take(MAX_IDENTITY_BYTES + 1)
         .read_to_end(&mut bytes)?;
     if bytes.len() as u64 > MAX_IDENTITY_BYTES {
@@ -234,7 +234,7 @@ pub(super) fn save_identity(contents: &str) -> io::Result<()> {
     }
     let path = identity_path();
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    std::fs::create_dir_all(parent)?;
+    crate::support_dirs::ensure_private_dir(parent)?;
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -245,11 +245,7 @@ pub(super) fn save_identity(contents: &str) -> io::Result<()> {
             "se-identity-{}-{nonce:x}-{attempt:x}.tmp",
             std::process::id()
         ));
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&candidate)
-        {
+        match crate::support_dirs::create_private_file(&candidate) {
             Ok(mut file) => {
                 let result = file
                     .write_all(contents.as_bytes())
@@ -301,11 +297,21 @@ pub(super) fn delete_secret(account: &str) -> Result<(), String> {
 }
 
 fn identity_transaction_guard() -> io::Result<IdentityTransactionGuard> {
-    let process_guard = match IDENTITY_TRANSACTION_LOCK.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let process_guard = loop {
+        match IDENTITY_TRANSACTION_LOCK.try_lock() {
+            Ok(guard) => break guard,
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => break poisoned.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                if remaining.is_zero() {
+                    return Err(io::Error::new(io::ErrorKind::TimedOut, "Share identity transaction is busy; retry"));
+                }
+                std::thread::sleep(remaining.min(std::time::Duration::from_millis(25)));
+            }
+        }
     };
-    let system_guard = super::identity_lock::acquire(&crate::support_dirs::app_data_dir())?;
+    let system_guard = super::identity_lock::acquire_until(&crate::support_dirs::app_data_dir(), deadline)?;
     Ok(IdentityTransactionGuard {
         _process_guard: process_guard,
         _system_guard: system_guard,

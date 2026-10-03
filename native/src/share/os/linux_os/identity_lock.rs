@@ -4,11 +4,13 @@ use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 const LOCK_DIRECTORY: &str = "identity-lock-v1";
 const LOCK_FILE: &str = "transaction.lock";
 const DIRECTORY_MODE: u32 = 0o700;
 const FILE_MODE: u32 = 0o600;
+const LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(super) struct IdentityLock {
     _directory: File,
@@ -16,12 +18,16 @@ pub(super) struct IdentityLock {
 }
 
 pub(super) fn acquire(app_data_dir: &Path) -> io::Result<IdentityLock> {
-    std::fs::create_dir_all(app_data_dir)?;
+    acquire_until(app_data_dir, Instant::now() + LOCK_TIMEOUT)
+}
+
+pub(super) fn acquire_until(app_data_dir: &Path, deadline: Instant) -> io::Result<IdentityLock> {
+    crate::support_dirs::ensure_private_dir(app_data_dir)?;
     let directory = open_lock_directory(app_data_dir)?;
     validate_directory(&directory)?;
     let file = open_lock_file(&directory)?;
     validate_lock_file(&file)?;
-    flock_exclusive(&file)?;
+    flock_until(&file, deadline)?;
     validate_directory(&directory)?;
     validate_lock_file(&file)?;
     Ok(IdentityLock {
@@ -101,15 +107,20 @@ fn validate_lock_file(file: &File) -> io::Result<()> {
     Ok(())
 }
 
-fn flock_exclusive(file: &File) -> io::Result<()> {
+fn flock_until(file: &File, deadline: Instant) -> io::Result<()> {
     loop {
-        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } == 0 {
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
             return Ok(());
         }
         let error = io::Error::last_os_error();
-        if error.kind() != io::ErrorKind::Interrupted {
+        if !matches!(error.kind(), io::ErrorKind::Interrupted | io::ErrorKind::WouldBlock) {
             return Err(error);
         }
+        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+            return Err(io::Error::new(io::ErrorKind::TimedOut,
+                "Share identity is busy; retry after the other operation finishes"));
+        };
+        std::thread::sleep(remaining.min(Duration::from_millis(25)));
     }
 }
 
@@ -205,5 +216,18 @@ mod tests {
         drop(first);
         assert!(acquired_rx.recv_timeout(Duration::from_secs(2)).unwrap());
         contender.join().unwrap();
+    }
+
+    #[test]
+    fn review_task_identity_lock_timeout_is_retryable() {
+        let root = tempfile::tempdir().unwrap();
+        let app = root.path().join("app");
+        let held = acquire(&app).unwrap();
+        let directory = open_lock_directory(&app).unwrap();
+        let file = open_lock_file(&directory).unwrap();
+        assert_eq!(flock_until(&file, Instant::now() + Duration::from_millis(50))
+            .unwrap_err().kind(), io::ErrorKind::TimedOut);
+        drop(held);
+        flock_until(&file, Instant::now() + Duration::from_secs(1)).unwrap();
     }
 }

@@ -21,23 +21,14 @@ impl UplinkState {
         if !metadata.file_type().is_file() || metadata.len() > MAX_BYTES {
             return Err("Uplink-Status-Datei ist ungueltig".into());
         }
-        let text = std::fs::read_to_string(&path)
+        let text = crate::support_dirs::read_private_text(&path, MAX_BYTES)
             .map_err(|error| format!("Uplink-Status lesen: {error}"))?;
         Self::parse(&text)
     }
 
     pub fn save(&self) -> Result<(), String> {
         let path = path();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|error| format!("Uplink-Status speichern: {error}"))?;
-        }
-        let temporary = path.with_extension("json.tmp");
-        std::fs::write(&temporary, self.encode()?)
-            .map_err(|error| format!("Uplink-Status speichern: {error}"))?;
-        std::fs::rename(&temporary, &path).map_err(|error| {
-            let _ = std::fs::remove_file(&temporary);
-            format!("Uplink-Status speichern: {error}")
-        })
+        crate::support_dirs::write_private_atomic(&path, self.encode()?.as_bytes())
+            .map_err(|error| format!("Uplink-Status speichern: {error}"))
     }
 }

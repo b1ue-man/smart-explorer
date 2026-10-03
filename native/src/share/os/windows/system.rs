@@ -1,11 +1,9 @@
 use std::io;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 pub(crate) use super::shared_system::lan_ips;
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const FIREWALL_RULE: &str = "Smart Explorer Share Peer Listener";
-static ELEVATED_FIREWALL_ATTEMPTED: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn ensure_firewall_rule() -> io::Result<String> {
     let exe = std::env::current_exe()?;
@@ -39,7 +37,8 @@ pub(crate) fn ensure_firewall_rule_for(exe: &std::path::Path) -> io::Result<Stri
             "action=allow",
             &format!("program={exe}"),
             "enable=yes",
-            "profile=any",
+            "profile=private,domain",
+            "protocol=UDP",
         ])
         .creation_flags(CREATE_NO_WINDOW)
         .output()?;
@@ -47,57 +46,20 @@ pub(crate) fn ensure_firewall_rule_for(exe: &std::path::Path) -> io::Result<Stri
         Ok(format!("Firewall-Regel aktiv: {FIREWALL_RULE}"))
     } else {
         let msg = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        if !ELEVATED_FIREWALL_ATTEMPTED.swap(true, Ordering::Relaxed) {
-            request_firewall_rule_elevated(&exe)?;
-            Ok(format!(
-                "Firewall-Freigabe angefragt: Windows-UAC bestaetigen ({FIREWALL_RULE})"
-            ))
-        } else {
-            Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                if msg.is_empty() {
-                    "Firewall-Regel konnte nicht gesetzt werden".to_string()
-                } else {
-                    msg
-                },
-            ))
-        }
+        Err(io::Error::new(io::ErrorKind::PermissionDenied, if msg.is_empty() {
+            "UDP-Firewall-Regel fuer private/Domaenen-Netze braucht eine ausdrueckliche Administratorfreigabe".to_string()
+        } else { msg }))
     }
 }
 
-fn request_firewall_rule_elevated(exe: &str) -> io::Result<()> {
-    use std::os::windows::process::CommandExt;
-
+pub(crate) fn request_firewall_rule_elevated(exe: &str) -> io::Result<()> {
+    let engine = crate::net::system_powershell()?;
+    let netsh = engine.parent().and_then(|path| path.parent())
+        .and_then(|path| path.parent()).ok_or_else(|| io::Error::other("System directory unavailable"))?.join("netsh.exe");
+    let netsh = netsh.to_string_lossy().replace('\'', "''");
     let escaped_exe = exe.replace('\'', "''");
-    let escaped_rule = FIREWALL_RULE.replace('\'', "''");
-    let script = format!(
-        "netsh advfirewall firewall delete rule name='{escaped_rule}'; \
-         netsh advfirewall firewall add rule name='{escaped_rule}' dir=in action=allow program='{escaped_exe}' enable=yes profile=any"
-    );
-    let arg_list = format!("-NoProfile -ExecutionPolicy Bypass -Command \"{script}\"");
-    let status = std::process::Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            "Start-Process",
-            "powershell",
-            "-Verb",
-            "RunAs",
-            "-WindowStyle",
-            "Hidden",
-            "-ArgumentList",
-            &arg_list,
-        ])
-        .creation_flags(CREATE_NO_WINDOW)
-        .status()?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "Firewall-UAC-Anfrage konnte nicht gestartet werden",
-        ))
-    }
+    let script = format!("$ErrorActionPreference='Stop'; & '{netsh}' advfirewall firewall delete rule name='{FIREWALL_RULE}'; \
+        & '{netsh}' advfirewall firewall add rule name='{FIREWALL_RULE}' dir=in action=allow program='{escaped_exe}' enable=yes protocol=UDP profile=private,domain; \
+        if ($LASTEXITCODE -ne 0) {{ throw 'Firewall rule repair failed' }}");
+    crate::net::run_elevated_system_powershell(&script)
 }

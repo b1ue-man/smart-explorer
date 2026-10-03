@@ -45,6 +45,10 @@ pub(super) fn ui(app: &mut App, ui: &mut egui::Ui, view: &crate::share::UplinkVi
     if let Some(error) = &view.last_error {
         ui.colored_label(theme::danger(ui), error);
     }
+    if view.repair_required || (view.enabled && !view.setup_done) || (!view.enabled && view.setup_done) {
+        let label = if view.enabled { "Einrichtung reparieren" } else { "Installation entfernen / erneut versuchen" };
+        if ui.button(label).clicked() { app.retry_lan_uplink_maintenance(); }
+    }
     if view.state == crate::share::UplinkSharingState::Sharing
         && ui.button("Jetzt beenden").clicked()
     {
@@ -61,6 +65,12 @@ impl App {
             settings.uplink_sharing_enabled = enabled;
             if enabled {
                 settings.uplink_stop_requested_at = None;
+                settings.uplink_cleanup_pending = false;
+                if !settings.uplink_setup_done {
+                    settings.uplink_repair_requested_at = Some(crate::share::core_now_secs());
+                }
+            } else {
+                settings.uplink_cleanup_pending = true;
             }
         }) {
             Ok(settings) => {
@@ -75,6 +85,22 @@ impl App {
                 self.share_next_poll_at = Instant::now();
             }
             Err(error) => self.error_msg = Some(format!("LAN-Einstellung speichern: {error}")),
+        }
+    }
+
+    fn retry_lan_uplink_maintenance(&mut self) {
+        match crate::share::LanSettings::update(|settings| {
+            let now = crate::share::core_now_secs();
+            settings.uplink_repair_requested_at = Some(settings.uplink_repair_requested_at
+                .map_or(now, |previous| now.max(previous.saturating_add(1))));
+            if !settings.uplink_sharing_enabled { settings.uplink_cleanup_pending = true; }
+        }) {
+            Ok(_) => {
+                self.share_lan_notice = Some("Reparatur/Entfernung angefordert: Freigabe bestaetigen".into());
+                let _ = self.configure_share_service();
+                self.share_next_poll_at = Instant::now();
+            }
+            Err(error) => self.error_msg = Some(format!("Uplink-Reparatur anfordern: {error}")),
         }
     }
 

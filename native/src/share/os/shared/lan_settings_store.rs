@@ -26,24 +26,15 @@ impl LanSettings {
         if metadata.len() > MAX_BYTES {
             return Err("LAN-Einstellungen sind unplausibel gross".into());
         }
-        let text = std::fs::read_to_string(&path)
+        let text = crate::support_dirs::read_private_text(&path, MAX_BYTES)
             .map_err(|error| format!("LAN-Einstellungen lesen: {error}"))?;
         Self::parse(&text)
     }
 
     pub fn save(&self) -> Result<(), String> {
         let path = path();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|error| format!("LAN-Einstellungen speichern: {error}"))?;
-        }
-        let temporary = path.with_extension("json.tmp");
-        std::fs::write(&temporary, self.encode()?)
-            .map_err(|error| format!("LAN-Einstellungen speichern: {error}"))?;
-        std::fs::rename(&temporary, &path).map_err(|error| {
-            let _ = std::fs::remove_file(&temporary);
-            format!("LAN-Einstellungen speichern: {error}")
-        })
+        crate::support_dirs::write_private_atomic(&path, self.encode()?.as_bytes())
+            .map_err(|error| format!("LAN-Einstellungen speichern: {error}"))
     }
 
     /// Load, apply `edit`, save; returns the committed settings.

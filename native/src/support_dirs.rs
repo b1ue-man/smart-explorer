@@ -1,6 +1,82 @@
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
+pub(crate) fn ensure_private_dir(path: &std::path::Path) -> std::io::Result<()> {
+    crate::creds::private_storage::ensure_directory(path)
+}
+
+pub(crate) fn create_private_file(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    if let Some(parent) = path.parent() { ensure_private_dir(parent)?; }
+    crate::creds::private_storage::create_file(path)
+}
+
+pub(crate) fn open_private_file(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    if let Some(parent) = path.parent() { ensure_private_dir(parent)?; }
+    crate::creds::private_storage::open_file(path, false)
+}
+
+pub(crate) fn open_private_lock(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    match create_private_file(path) {
+        Ok(file) => {
+            drop(file);
+            crate::creds::private_storage::open_file(path, true)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            crate::creds::private_storage::open_file(path, true)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+pub(crate) fn secure_private_file(file: &std::fs::File) -> std::io::Result<()> {
+    crate::creds::private_storage::secure(file, false)
+}
+
+pub(crate) fn read_private_text(path: &std::path::Path, max_bytes: u64) -> std::io::Result<String> {
+    use std::io::Read;
+    let file = open_private_file(path)?;
+    if file.metadata()?.len() > max_bytes {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData,
+            "private application file exceeds its byte limit"));
+    }
+    let mut bytes = Vec::new();
+    file.take(max_bytes.saturating_add(1)).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData,
+            "private application file exceeds its byte limit"));
+    }
+    String::from_utf8(bytes).map_err(|_| std::io::Error::new(
+        std::io::ErrorKind::InvalidData, "private application file is not UTF-8"))
+}
+
+/// Atomic, private, durable application metadata. An existing unsafe target
+/// is rejected before staging; failed promotion preserves its contents.
+pub(crate) fn write_private_atomic(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let parent = path.parent().ok_or_else(|| std::io::Error::new(
+        std::io::ErrorKind::InvalidInput, "private file needs a parent"))?;
+    ensure_private_dir(parent)?;
+    match open_private_file(path) {
+        Ok(_) => {},
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+        Err(error) => return Err(error),
+    }
+    let mut nonce = [0u8; 16];
+    getrandom::getrandom(&mut nonce).map_err(|error| std::io::Error::other(error.to_string()))?;
+    let nonce: String = nonce.iter().map(|byte| format!("{byte:02x}")).collect();
+    let stage = parent.join(format!(".se-private-{nonce}.tmp"));
+    let result = (|| {
+        let mut file = create_private_file(&stage)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        drop(file);
+        crate::vfs::replace_local_file(&stage, path)?;
+        crate::creds::private_storage::sync_directory(parent)
+    })();
+    if result.is_err() { let _ = std::fs::remove_file(&stage); }
+    result
+}
+
 /// Directories and device facts an embedding host (the Android app) hands in,
 /// because its process has no usable environment for them. The desktop builds
 /// never set them and keep deriving everything from the environment.
@@ -33,12 +109,22 @@ pub fn host() -> Option<&'static HostConfig> {
     HOST.get()
 }
 
+/// An actual host/OS home fact; migration must never invent a temporary home.
+pub(crate) fn home_dir() -> Option<PathBuf> {
+    if let Some(host) = host() { return Some(host.home_dir.clone()); }
+    #[cfg(windows)]
+    let home = std::env::var_os("USERPROFILE");
+    #[cfg(not(windows))]
+    let home = std::env::var_os("HOME");
+    home.filter(|path| !path.is_empty()).map(PathBuf::from)
+}
+
 /// Root for temporary files: `<cache_dir>/tmp` (created on demand) once the
 /// host values are set, otherwise the process temp directory.
 pub fn temp_dir() -> PathBuf {
     let dir = temp_dir_for(host());
     if host().is_some() {
-        let _ = std::fs::create_dir_all(&dir);
+        let _ = ensure_private_dir(&dir);
     }
     dir
 }
@@ -88,7 +174,7 @@ fn platform_data_home() -> PathBuf {
 
 pub(crate) fn app_data_dir() -> PathBuf {
     let dir = data_home().join("smart_explorer");
-    let _ = std::fs::create_dir_all(&dir);
+    let _ = ensure_private_dir(&dir);
     dir
 }
 
@@ -98,7 +184,7 @@ pub(crate) fn app_data_file(name: &str) -> PathBuf {
 
 pub(crate) fn sync_data_dir() -> PathBuf {
     let dir = app_data_dir().join("sync");
-    let _ = std::fs::create_dir_all(&dir);
+    let _ = ensure_private_dir(&dir);
     dir
 }
 

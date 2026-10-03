@@ -29,6 +29,11 @@ mod uplink_adapter;
 #[cfg(windows)]
 #[path = "os/windows/uplink_helper.rs"]
 mod uplink_helper;
+#[cfg(windows)]
+#[path = "os/windows/uplink_install.rs"]
+mod uplink_install;
+#[cfg(windows)]
+pub(crate) use uplink_install::{elevated as run_elevated_system_powershell, system_powershell};
 #[cfg(target_os = "linux")]
 #[path = "os/linux_os/uplink_polkit.rs"]
 mod uplink_polkit;
@@ -82,7 +87,13 @@ pub fn run_uplink_helper_if_requested(
     {
         uplink_adapter::run_helper_if_requested(arguments)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        if arguments.len() == 1 && arguments[0] == std::ffi::OsStr::new("--lan-uplink-cleanup") {
+            Some(uplink_adapter().cleanup_installation().map(|_| ()).map_err(std::io::Error::other))
+        } else { None }
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         let _ = arguments;
         None

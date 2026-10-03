@@ -26,19 +26,11 @@ impl DirectRequestPolicy {
     /// daemon then decides as with `Ask` (never more access than chosen).
     pub fn load() -> Result<Self, String> {
         let path = path();
-        let metadata = match std::fs::symlink_metadata(&path) {
-            Ok(metadata) => metadata,
+        let text = match crate::support_dirs::read_private_text(&path, MAX_BYTES) {
+            Ok(text) => text,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Self::default()),
             Err(error) => return Err(format!("Direkt-Richtlinie lesen: {error}")),
         };
-        if !metadata.file_type().is_file() {
-            return Err("Direkt-Richtlinie ist keine regulaere Datei".into());
-        }
-        if metadata.len() > MAX_BYTES {
-            return Err("Direkt-Richtlinie ist unplausibel gross".into());
-        }
-        let text = std::fs::read_to_string(&path)
-            .map_err(|error| format!("Direkt-Richtlinie lesen: {error}"))?;
         let file: PolicyFile = serde_json::from_str(&text)
             .map_err(|error| format!("Direkt-Richtlinie ist beschaedigt: {error}"))?;
         Ok(file.requests)
@@ -51,18 +43,9 @@ impl DirectRequestPolicy {
 
     pub fn save(self) -> Result<(), String> {
         let path = path();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|error| format!("Direkt-Richtlinie speichern: {error}"))?;
-        }
         let text = serde_json::to_string_pretty(&PolicyFile { requests: self })
             .map_err(|error| format!("Direkt-Richtlinie kodieren: {error}"))?;
-        let temporary = path.with_extension("json.tmp");
-        std::fs::write(&temporary, text)
-            .map_err(|error| format!("Direkt-Richtlinie speichern: {error}"))?;
-        std::fs::rename(&temporary, &path).map_err(|error| {
-            let _ = std::fs::remove_file(&temporary);
-            format!("Direkt-Richtlinie speichern: {error}")
-        })
+        crate::support_dirs::write_private_atomic(&path, text.as_bytes())
+            .map_err(|error| format!("Direkt-Richtlinie speichern: {error}"))
     }
 }
