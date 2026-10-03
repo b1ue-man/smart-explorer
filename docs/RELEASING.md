@@ -629,8 +629,12 @@ are reused, and Linux CLI/server plus emulator APKs have source/SHA-256-bound
 handoffs. The Linux stage owns its temporary FAT32, exFAT and FUSE/SFTP mounts;
 when its kernel lacks exFAT, the installed exFAT FUSE driver mounts the same
 real formatted loop image. The OS adapter derives its storage limits from the
-source block device and keeps FUSE's conservative per-file flush contract.
-the device stage owns its pinned TLS host and actual merge process restart.
+source block device, reports the FUSE exFAT driver's whole-second timestamp
+API and keeps FUSE's conservative per-file flush contract. The existing
+watch-limit case runs inside that same entrypoint in its own process with a
+briefly lowered real UID watch limit; cleanup restores the discovered original
+value and all other watch cases retain the normal limit. The device stage owns
+its pinned TLS host and actual merge process restart.
 Failed runs retain diagnostics and a candidate-bound formatter patch when needed.
 Apply fixes, commit/push, and rerun this same suite; no local build/test or extra
 verification pipeline belongs to this batch. Once its results pass, the complete

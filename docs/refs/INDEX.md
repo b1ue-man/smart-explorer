@@ -38,3 +38,7 @@ Lokal gesicherte API-/Lib-Syntax (Abrufdatum im Kopf jeder Datei).
 
 - [egui/eframe 0.29.1 Close-Lifecycle](egui-close-lifecycle.md) – Y156: CancelClose im Frame, terminales Worker-Drain vor Close/Update; geprüft 2026-10-03.
 | [rv1-remote-suite.md](rv1-remote-suite.md) | Cargo/libtest, Python subprocess, bestehende Android-/OS-Runnerverträge | 2026-10-03 | Schmaler inkrementeller Testhost, kurze Windows-Filter, Prozessbesitz und tatsächliche Runnerfakten für die eine RV1-Abnahme |
+
+- [Private Datei-Zugriffscapabilities](private-file-access.md): Linux/Android O_PATH-Vorfahren und lesbarer privater Leaf; Windows-Journal RW/Seek statt append-only; tatsächliche Rust-/Win32-Aufrufrechte, geprüft 2026-10-03.
+
+- [Windows Held-Rename-Hops](windows-held-rename.md): relativer validierter Childname am gehaltenen Zielordner, expliziter UTF-16-NUL, NoReplace und bestätigte volle FileID nach Capture/Restore; Primärverträge geprüft 2026-10-03.
