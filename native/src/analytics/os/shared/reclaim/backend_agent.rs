@@ -65,8 +65,14 @@ pub(super) fn scan_backend_hash_walk(
     };
     let mut acc = BackendAcc::new();
     let outcome = std::thread::scope(|scope| {
-        let worker = scope
-            .spawn(move || crate::vfs::hash_walk(&**backend, root, request, tx, worker_cancel));
+        let worker = scope.spawn(move || {
+            // An extension may drop its entry sender while it still hashes.
+            // Only the completed backend call ends the consumer's cancel pump.
+            let stream_lifetime = tx.clone();
+            let outcome = crate::vfs::hash_walk(&**backend, root, request, tx, worker_cancel);
+            drop(stream_lifetime);
+            outcome
+        });
         loop {
             let item = match rx.recv_timeout(CANCEL_POLL) {
                 Ok(item) => Some(item),

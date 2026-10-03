@@ -25,6 +25,7 @@ struct MockBackend {
     /// The walk sends nothing and waits for its cancel (one large file
     /// being hashed); `walk_canceled` records that the cancel arrived.
     walk_blocks: bool,
+    walk_started: Option<crossbeam_channel::Sender<()>>,
     walk_canceled: AtomicBool,
     /// The storing host's own duplicate search.
     host_search: Option<DuplicateReport>,
@@ -173,6 +174,10 @@ impl BackendExtensions for MockBackend {
         cancel: &AtomicBool,
     ) -> VfsResult<bool> {
         if self.walk_blocks {
+            drop(tx); // No entries; the backend call remains active.
+            if let Some(started) = &self.walk_started {
+                let _ = started.send(());
+            }
             let deadline = Instant::now() + Duration::from_secs(10);
             while Instant::now() < deadline {
                 if cancel.load(Ordering::Relaxed) {
@@ -397,23 +402,26 @@ fn review_task_withdrawn_host_search_keeps_the_sparse_fallback() {
 
 #[test]
 fn review_task_agent_walk_cancel_arrives_without_entries() {
+    let (walk_started_tx, walk_started_rx) = crossbeam_channel::bounded(1);
     let be = Arc::new(MockBackend {
         walk_blocks: true,
+        walk_started: Some(walk_started_tx),
         ..MockBackend::default()
     });
     let progress = ReclaimProgress::default();
     let cancel = progress.cancel.clone();
     let started = Instant::now();
     let canceler = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(100));
+        walk_started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
         cancel.store(true, Ordering::Relaxed);
     });
-    let report = scan_reclaim_backend(be.clone(), "/", &progress, &duplicates_from_one_byte());
+    let report = find_backend_duplicates(be.clone(), "/", &progress, 1);
     canceler.join().unwrap();
     assert!(be.walk_canceled.load(Ordering::Relaxed));
     assert!(started.elapsed() < Duration::from_secs(5));
     assert!(report.root_error.is_none());
     assert_eq!(be.lists.load(Ordering::Relaxed), 0);
+    assert_eq!(be.open_reads.load(Ordering::Relaxed), 0);
 }
 
 #[test]
