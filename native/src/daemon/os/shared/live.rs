@@ -6,7 +6,7 @@
 
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use super::catch_up::{CatchUpBook, CatchUpGate, CatchUpStatus, ServiceReport};
+use super::catch_up::{CatchUpBook, CatchUpGate, CatchUpRecord, CatchUpStatus, ServiceReport};
 use super::ipc::{ShareHost, ShareWorkerSnapshot};
 use super::ipc_host::stop_service_locked;
 use super::job_supervisor::JobSupervisor;
@@ -68,7 +68,14 @@ pub fn active_job() -> Option<String> {
 /// unreadable).
 pub fn last_catch_up_ms() -> Option<i64> {
     let path = crate::support_dirs::sync_data_dir().join(LAST_CATCH_UP_FILE);
-    read_optional(&path).ok()??.trim().parse().ok()
+    last_catch_up().map(|record| record.finished_ms).or_else(|| read_optional(&path).ok()??.trim().parse().ok())
+}
+
+/// The last finished catch-up run that ran at least one job, with its outcome
+/// (`None` = none recorded). Empty or wholly cancelled runs do not replace it.
+pub fn last_catch_up() -> Option<CatchUpRecord> {
+    let path = crate::support_dirs::sync_data_dir().join("catchup.last.json");
+    serde_json::from_str(&read_optional(&path).ok()??).ok()
 }
 
 /// Drain Share events at the embedded worker's host without IPC. `None` when
@@ -143,7 +150,7 @@ pub(super) fn service_catch_up(supervisor: &mut JobSupervisor, gate: impl FnOnce
     let completed = supervisor.take_completed();
     let (open, requested) = {
         let mut live = lock();
-        live.catch_up.observe_completed(&completed);
+        live.catch_up.observe_completed(&completed, supervisor);
         live.active_job = supervisor.active_job_name().map(str::to_string);
         (
             live.catch_up.has_open_runs(),
@@ -155,7 +162,7 @@ pub(super) fn service_catch_up(supervisor: &mut JobSupervisor, gate: impl FnOnce
     }
     let gate = gate();
     let jobs = (requested && matches!(gate, CatchUpGate::Open))
-        .then(|| crate::syncjobs::load().map_err(|error| error.to_string()));
+        .then(|| crate::syncjobs::load_report().map(|report| report.jobs).map_err(|error| error.to_string()));
     let report = {
         let mut live = lock();
         let report = live
@@ -179,11 +186,11 @@ fn record_finished(report: &ServiceReport) {
     for (id, message) in &report.finished {
         log(&format!("catch-up run {id} finished: {message}"));
     }
-    let path = crate::support_dirs::sync_data_dir().join(LAST_CATCH_UP_FILE);
-    let now_ms = now_secs().saturating_mul(1000);
-    if let Err(error) = write_control(&path, &now_ms.to_string()) {
-        log(&format!(
-            "catch-up finish time could not be stored: {error}"
-        ));
+    let Some(record) = report.records.last() else { return; };
+    let directory = crate::support_dirs::sync_data_dir();
+    match serde_json::to_string(record).and_then(|text| write_control(&directory.join("catchup.last.json"), &text)
+        .map_err(serde_json::Error::io)) {
+        Ok(()) => { let _ = write_control(&directory.join(LAST_CATCH_UP_FILE), &record.finished_ms.to_string()); }
+        Err(error) => log(&format!("catch-up result could not be stored: {error}")),
     }
 }

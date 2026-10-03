@@ -2,7 +2,8 @@
 //! metered network and whether scheduled jobs wait for the host's own worker
 //! run). The Android platform adapter reads the first two for auto-pause and
 //! the scheduling loop reads the third; desktop hosts never set any of them,
-//! so they stay false there.
+//! so they stay false there. The host also reports whether the app may use
+//! all of shared storage (`set_storage_access`).
 
 use std::sync::atomic::{AtomicU8, Ordering};
 
@@ -10,8 +11,14 @@ const POWER_SAVE: u8 = 0b001;
 const METERED: u8 = 0b010;
 const DEFER_SCHEDULING: u8 = 0b100;
 
+const ACCESS_UNREPORTED: u8 = 0;
+const ACCESS_GRANTED: u8 = 1;
+const ACCESS_MISSING: u8 = 2;
+
 /// One word so a reader never observes half of an update.
 static HOST_STATE: AtomicU8 = AtomicU8::new(0);
+/// Shared-storage access as last reported by the host.
+static STORAGE_ACCESS: AtomicU8 = AtomicU8::new(ACCESS_UNREPORTED);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct HostState {
@@ -37,6 +44,29 @@ pub fn defer_scheduling_until_reported() {
 /// The last host-reported conditions (all false until a host reports).
 pub fn host_state() -> HostState {
     decode(HOST_STATE.load(Ordering::Acquire))
+}
+
+/// Android: whether the app may read and write all of shared storage
+/// ("Zugriff auf alle Dateien"). Without it, jobs with a local shared-storage
+/// side do not run (the filtered view would turn other apps' files into
+/// deletions) and fail with "Dateizugriff fehlt".
+pub fn set_storage_access(granted: bool) {
+    let value = if granted {
+        ACCESS_GRANTED
+    } else {
+        ACCESS_MISSING
+    };
+    STORAGE_ACCESS.store(value, Ordering::Release);
+}
+
+/// The last reported shared-storage access; `None` until the host reports
+/// (desktop hosts never do: local paths are accessed as the user).
+pub fn storage_access() -> Option<bool> {
+    match STORAGE_ACCESS.load(Ordering::Acquire) {
+        ACCESS_GRANTED => Some(true),
+        ACCESS_MISSING => Some(false),
+        _ => None,
+    }
 }
 
 fn mark_deferred(word: &AtomicU8) {

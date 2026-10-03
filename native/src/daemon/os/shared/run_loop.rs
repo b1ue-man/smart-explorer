@@ -2,7 +2,7 @@
 //! the desktop `--sync-daemon` process (`run_daemon` reads a pending handoff
 //! from its environment) and the embedded worker thread (no handoff).
 
-use crate::syncjobs::{SyncJob, Trigger};
+use crate::syncjobs::{SyncJob, RunCause, PendingKind};
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
@@ -16,12 +16,10 @@ use super::ipc::{start_listener, ShareHost};
 use super::ipc_listener::IpcListener;
 use super::job_supervisor::{EnqueueStatus, JobSupervisor};
 use super::live;
-use super::schedule::{
-    current_drives, drive_matches, local_root, new_generation, remote_change_token, tree_sig,
-};
+use super::schedule::new_generation;
 use super::state::{
     clear_heartbeat, log, now_secs, pause_reason, scheduling_controls, write_heartbeat,
-    PauseReason, SchedulingControls, StartupPass,
+    PauseReason,
 };
 
 const HANDOFF_ACTIVATION_TIMEOUT: Duration = Duration::from_secs(2);
@@ -111,20 +109,10 @@ pub(crate) fn run_daemon_with(handoff: Option<Handoff>) {
     let mut job_supervisor = JobSupervisor::new();
     let mut sync_enabled = crate::autostart::is_enabled();
 
-    // A daemon may have been started only for a Share session. Scheduled sync
-    // work is permitted exclusively after the user enabled background sync.
-    let startup_controls = scheduling_controls();
-    let mut startup_deferred = sync_enabled
-        && start_or_defer_startup(
-            &mut job_supervisor,
-            share_host.generation(),
-            &startup_controls,
-        );
-
-    // Per-job real-time state and the last-seen drive set.
-    let mut rt_sig: HashMap<String, String> = HashMap::new();
-    let mut rt_dirty_since: HashMap<String, i64> = HashMap::new();
-    let mut seen_drives = current_drives();
+    let mut realtime = super::realtime::Realtime::new();
+    let mut connections = super::connect_triggers::Connections::new();
+    let mut broken = HashMap::new();
+    let mut timer_since = None;
 
     loop {
         let controls = scheduling_controls();
@@ -135,15 +123,11 @@ pub(crate) fn run_daemon_with(handoff: Option<Handoff>) {
         let enabled_now = crate::autostart::is_enabled();
         if enabled_now != sync_enabled {
             sync_enabled = enabled_now;
-            rt_sig.clear();
-            rt_dirty_since.clear();
-            seen_drives = current_drives();
+            connections = super::connect_triggers::Connections::new();
             if sync_enabled {
                 log("background sync enabled");
-                startup_deferred =
-                    start_or_defer_startup(&mut job_supervisor, share_host.generation(), &controls);
+
             } else {
-                startup_deferred = false;
                 log("background sync disabled; canceling scheduled work");
                 for error in job_supervisor.cancel_and_join() {
                     log(&error);
@@ -163,46 +147,45 @@ pub(crate) fn run_daemon_with(handoff: Option<Handoff>) {
             return;
         }
         let now = now_secs();
-        let configured_jobs = load_configured_jobs();
+        let configured_jobs = load_configured_jobs(&mut broken);
+        let stale: HashSet<String> = job_supervisor.active_ids().into_iter()
+            .filter(|id| !configured_jobs.iter().any(|job| job.id == *id && job.enabled))
+            .map(str::to_string).collect();
+        job_supervisor.cancel_jobs(&stale);
+        realtime.refresh(&configured_jobs, sync_enabled);
+        if sync_enabled {
+            boot_marker::register_startup(&configured_jobs);
+            connections.poll(&configured_jobs, now);
+        }
+        let events = realtime.ready(&configured_jobs);
 
         // A host that defers scheduling (Android while its own periodic
         // worker owns background runs) holds these enqueues only; running
         // jobs and catch-up runs continue.
         if controls.may_schedule(sync_enabled) {
-            // 0) A startup pass held back while the host deferred scheduling.
-            if std::mem::take(&mut startup_deferred) {
-                enqueue_startup_jobs(&mut job_supervisor, share_host.generation());
-            }
-            // 1) Timer jobs (interval + calendar), gated by active-hours in due().
-            for job in configured_jobs.iter().filter(|j| j.due(now)) {
-                enqueue_job(&mut job_supervisor, job, share_host.generation());
-                if stop_requested(share_host.generation()) {
-                    break;
+            let states = crate::syncjobs::load_job_states(&configured_jobs);
+            for job in &configured_jobs {
+                let Some(state) = states.get(&job.id).filter(|state| state.load_error.is_none()) else { continue; };
+                let mut cause = super::due::due_now(job, state, now, timer_since);
+                if cause.is_none() && state.blocked.is_none() && state.consecutive_failures == 0
+                    && job.enabled && job.active_now(now) { cause = events.get(&job.id).copied(); }
+                if cause.is_none() && state.blocked.is_none() && state.consecutive_failures == 0
+                    && job.enabled && job.active_now(now) && job.trigger == crate::syncjobs::Trigger::RealTime
+                    && job.verify_interval_secs > 0 && state.last_verify.map_or(true, |at|
+                        now.saturating_sub(at) >= i64::try_from(job.verify_interval_secs).unwrap_or(i64::MAX)) {
+                    super::job_triggers::persist(&job.id, PendingKind::Verify, now, None);
+                    cause = Some(RunCause::Verify);
                 }
+                if let Some(cause) = cause { enqueue_job(&mut job_supervisor, job, cause, share_host.generation()); }
             }
-            // 2) Real-time jobs: watch local endpoints, run after the change settles.
-            enqueue_realtime_jobs(
-                &mut job_supervisor,
-                &configured_jobs,
-                now,
-                share_host.generation(),
-                &mut rt_sig,
-                &mut rt_dirty_since,
-            );
-            // 3) On-connect jobs: run when a matching removable drive appears.
-            enqueue_connect_jobs(
-                &mut job_supervisor,
-                &configured_jobs,
-                now,
-                share_host.generation(),
-                &mut seen_drives,
-            );
+            timer_since = Some(now);
         }
         service_catch_up(&mut job_supervisor, sync_enabled, controls.permit_mutation);
 
+        super::problem_notify::notify(&configured_jobs, now);
         write_heartbeat();
         // Sleep one tick in 2 s slices so a stop request is honoured promptly.
-        let tick = controls.tick_secs;
+        let tick = if sync_enabled { controls.tick_secs.min(2) } else { controls.tick_secs };
         let mut slept = 0;
         while slept < tick {
             if stop_requested(share_host.generation()) {
@@ -250,132 +233,6 @@ pub(crate) fn run_daemon_with(handoff: Option<Handoff>) {
     }
 }
 
-fn enqueue_realtime_jobs(
-    supervisor: &mut JobSupervisor,
-    configured_jobs: &[SyncJob],
-    now: i64,
-    generation: &str,
-    rt_sig: &mut HashMap<String, String>,
-    rt_dirty_since: &mut HashMap<String, i64>,
-) {
-    for job in configured_jobs
-        .iter()
-        .filter(|j| j.enabled && j.trigger == Trigger::RealTime && j.active_now(now))
-    {
-        let roots: Vec<std::path::PathBuf> = [&job.source, &job.target]
-            .iter()
-            .filter_map(|e| local_root(e))
-            .collect();
-        let remote_token = remote_change_token(job);
-        if roots.is_empty() && remote_token.is_none() {
-            continue; // nothing watchable
-        }
-        let sig = roots.iter().fold((0u64, 0i64, 0u64), |a, r| {
-            let s = tree_sig(r);
-            (a.0 + s.0, a.1.max(s.1), a.2 + s.2)
-        });
-        let sig = format!(
-            "{}:{}:{}:{}",
-            sig.0,
-            sig.1,
-            sig.2,
-            remote_token.as_deref().unwrap_or("")
-        );
-        match rt_sig.get(&job.id) {
-            Some(prev) if prev == &sig => {
-                // Unchanged since last tick - run if a pending change has settled.
-                if let Some(&since) = rt_dirty_since.get(&job.id) {
-                    if now - since >= job.rt_debounce_secs as i64 {
-                        enqueue_job(supervisor, job, generation);
-                        rt_dirty_since.remove(&job.id);
-                    }
-                }
-            }
-            Some(_) => {
-                // Changed this tick - (re)start the settle timer.
-                rt_dirty_since.insert(job.id.clone(), now);
-                rt_sig.insert(job.id.clone(), sig);
-            }
-            None => {
-                // First sighting - record baseline, don't run.
-                rt_sig.insert(job.id.clone(), sig);
-            }
-        }
-    }
-}
-
-fn enqueue_connect_jobs(
-    supervisor: &mut JobSupervisor,
-    configured_jobs: &[SyncJob],
-    now: i64,
-    generation: &str,
-    seen_drives: &mut HashSet<String>,
-) {
-    let drives = current_drives();
-    if drives != *seen_drives {
-        for d in drives.difference(seen_drives) {
-            for job in configured_jobs
-                .iter()
-                .filter(|j| j.enabled && j.trigger == Trigger::OnConnect && j.active_now(now))
-            {
-                if drive_matches(&job.connect_match, d) {
-                    log(&format!("device connected → '{}'", job.name));
-                    enqueue_job(supervisor, job, generation);
-                }
-            }
-        }
-        *seen_drives = drives;
-    }
-}
-
-/// Run the startup pass now, or report it as deferred until the host stops
-/// deferring scheduling. A paused worker skips it as before.
-fn start_or_defer_startup(
-    supervisor: &mut JobSupervisor,
-    generation: &str,
-    controls: &SchedulingControls,
-) -> bool {
-    match controls.startup_pass() {
-        StartupPass::Run => {
-            enqueue_startup_jobs(supervisor, generation);
-            false
-        }
-        StartupPass::Defer => true,
-        StartupPass::Skip => false,
-    }
-}
-
-fn enqueue_startup_jobs(supervisor: &mut JobSupervisor, generation: &str) {
-    // Load and gate before the boot pass is claimed: a pass that cannot run
-    // stays due for a later worker start in the same boot.
-    let jobs = match crate::syncjobs::load() {
-        Ok(jobs) => jobs,
-        Err(error) => {
-            log(&format!(
-                "startup jobs not run: saved jobs could not be loaded: {error}"
-            ));
-            return;
-        }
-    };
-    if stop_requested(generation) || !crate::autostart::is_enabled() {
-        return;
-    }
-    // The embedded worker restarts with its app process; its startup pass
-    // follows device boots instead.
-    if live::is_embedded() && !boot_marker::claim_startup_pass() {
-        return;
-    }
-    for job in jobs
-        .into_iter()
-        .filter(|job| job.enabled && job.trigger == Trigger::OnStartup)
-    {
-        if stop_requested(generation) || !crate::autostart::is_enabled() {
-            break;
-        }
-        enqueue_job(supervisor, &job, generation);
-    }
-}
-
 fn service_catch_up(supervisor: &mut JobSupervisor, sync_enabled: bool, permit_mutation: bool) {
     live::service_catch_up(supervisor, || {
         if !sync_enabled {
@@ -410,23 +267,53 @@ fn stop_requested(generation: &str) -> bool {
     }
 }
 
-fn load_configured_jobs() -> Vec<SyncJob> {
-    match crate::syncjobs::load() {
-        Ok(jobs) => jobs,
-        Err(error) => {
-            log(&format!(
-                "scheduled sync blocked: saved jobs could not be loaded: {error}"
-            ));
-            Vec::new()
+fn load_configured_jobs(broken: &mut HashMap<String, String>) -> Vec<SyncJob> {
+    match crate::syncjobs::load_report() {
+        Ok(report) => {
+            let mut invalid_notices = Vec::new();
+            for invalid in report.broken {
+                let mut notice_job = SyncJob::new(invalid.id.clone(), String::new(), String::new());
+                notice_job.id = invalid.id.clone();
+                invalid_notices.push(notice_job);
+                if broken.get(&invalid.id) == Some(&invalid.error) { continue; }
+                log(&format!("job '{}' cannot be loaded: {}", invalid.id, invalid.error));
+                let mut job = SyncJob::new(invalid.id.clone(), String::new(), String::new()); job.id = invalid.id.clone();
+                super::job::persist(&job, now_secs(), RunCause::Other,
+                    crate::syncjobs::AttemptOutcome::Failed(crate::syncjobs::JobError {
+                        kind: crate::syncjobs::FailureKind::Config, message: invalid.error.clone(),
+                    }), crate::syncjobs::JobResult { when: now_secs(), errors: 1, note: invalid.error.clone(), ..Default::default() });
+                broken.insert(invalid.id, invalid.error);
+            }
+            super::problem_notify::notify(&invalid_notices, now_secs());
+            for job in &report.jobs {
+                if crate::syncjobs::load_job_state(&job.id).ok().is_some_and(|state| state.load_error.is_some()) {
+                    // Store/quarantine once, retaining an explicit safety stop
+                    // rather than inferring that the old state had no block.
+                    if let Err(error) = crate::syncjobs::update_job_state(&job.id, |_| {}) {
+                        log(&format!("job state '{}' cannot recover safely: {error}", job.id));
+                    }
+                }
+                if let Some(previous) = broken.remove(&job.id) {
+                    let _ = crate::syncjobs::update_job_state(&job.id, |state| {
+                        if state.last_error.as_ref().is_some_and(|error| error.kind == crate::syncjobs::FailureKind::Config
+                            && error.message == previous) { state.last_error = None; state.consecutive_failures = 0; state.retry_at = None; }
+                    });
+                }
+            }
+            report.jobs
         }
+        Err(error) => { log(&format!("scheduled sync blocked: jobs cannot be loaded: {error}")); Vec::new() }
     }
 }
 
-fn enqueue_job(supervisor: &mut JobSupervisor, job: &SyncJob, generation: &str) {
+fn enqueue_job(supervisor: &mut JobSupervisor, job: &SyncJob, cause: RunCause, generation: &str) {
     if stop_requested(generation) {
         return;
     }
-    match supervisor.enqueue(job) {
+    if matches!(cause, RunCause::Interval | RunCause::Calendar) {
+        super::job_triggers::persist(&job.id, PendingKind::Other, now_secs(), None);
+    }
+    match supervisor.enqueue_cause(job, cause) {
         Ok(EnqueueStatus::Started | EnqueueStatus::Queued) => {
             log(&format!("job queued '{}'", job.name));
         }

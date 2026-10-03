@@ -2,7 +2,7 @@
 //! than once per worker start: the app process (and with it the worker) may
 //! start many times between boots. The host supplies a boot marker (Android:
 //! the boot count); the marker of the last startup pass is stored beside the
-//! jobs. The desktop worker process never consults it.
+//! jobs. Desktop workers use the current logon identity.
 
 use super::state::{log, read_optional, write_control};
 
@@ -17,27 +17,39 @@ pub(super) fn startup_pass_due(current: Option<&str>, stored: Option<&str>) -> b
     }
 }
 
-/// Decide the startup pass for this boot and record it when due. A marker that
-/// cannot be read or stored is logged; the pass then runs (running a sync job
-/// once more is safe, silently skipping a boot is not).
-pub(super) fn claim_startup_pass() -> bool {
-    let current = crate::support_dirs::host().map(|host| host.boot_marker.trim());
-    let Some(current) = current.filter(|marker| !marker.is_empty()) else {
-        return true;
+/// Store startup triggers before claiming this boot/logon. An unreadable or
+/// unwritable marker is logged and retried on a later scheduler pass.
+pub(super) fn register_startup(jobs: &[crate::syncjobs::SyncJob]) {
+    let current = super::platform::session_marker();
+    let Some(current) = current.filter(|marker| !marker.trim().is_empty()) else {
+        // A missing host boot marker is not a new logon on every scheduler
+        // tick. The worker records this process-local fallback once.
+        static REGISTERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if REGISTERED.load(std::sync::atomic::Ordering::Acquire) { return; }
+        let mut stored = true;
+        for job in jobs.iter().filter(|job| job.enabled && job.trigger == crate::syncjobs::Trigger::OnStartup) {
+            stored &= super::job_triggers::persist(&job.id, crate::syncjobs::PendingKind::Startup, super::state::now_secs(), None);
+        }
+        if stored { REGISTERED.store(true, std::sync::atomic::Ordering::Release); }
+        return;
     };
     let path = crate::support_dirs::sync_data_dir().join(STORED_MARKER_FILE);
-    let stored = read_optional(&path).unwrap_or_else(|error| {
-        log(&format!("startup boot marker unreadable: {error}"));
-        None
-    });
-    if !startup_pass_due(Some(current), stored.as_deref()) {
-        log("startup jobs already ran for this device boot");
-        return false;
+    let stored = match read_optional(&path) { Ok(stored) => stored,
+        Err(error) => { log(&format!("startup marker unreadable: {error}")); return; } };
+    if !startup_pass_due(Some(&current), stored.as_deref()) { return; }
+    // Durable triggers precede the marker. Pause/defer cannot lose a logon;
+    // an unsuccessful write leaves this pass due.
+    for job in jobs.iter().filter(|job| job.enabled && job.trigger == crate::syncjobs::Trigger::OnStartup) {
+        let now = super::state::now_secs();
+        if let Err(error) = crate::syncjobs::update_job_state(&job.id, |state| {
+            if state.pending_trigger.is_none() {
+                state.pending_trigger = Some(crate::syncjobs::PendingTrigger {
+                    kind: crate::syncjobs::PendingKind::Startup, since: now, volume: None,
+                });
+            }
+        }) { log(&format!("startup trigger could not be stored: {error}")); return; }
     }
-    if let Err(error) = write_control(&path, current) {
-        log(&format!("startup boot marker could not be stored: {error}"));
-    }
-    true
+    if let Err(error) = write_control(&path, &current) { log(&format!("startup marker could not be stored: {error}")); }
 }
 
 #[cfg(test)]
