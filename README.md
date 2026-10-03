@@ -634,6 +634,12 @@ Seiten Internet, teilt niemand. Ohne ICS beziehungsweise NetworkManager plus
 dnsmasq meldet die App „Internet-Teilen nicht verfuegbar: <Grund>", die
 LAN-Erkennung arbeitet trotzdem. CLI: `se share lan [status|presence on|off|
 uplink enable|disable|stop|status]`.
+Vor einer manuellen Deinstallation unter Linux im Benutzerkonto der Installation
+`se share lan uplink disable` und anschließend `se --lan-uplink-cleanup` ausführen,
+solange `se` noch vorhanden ist. Die Bereinigung beendet eine gespeicherte
+Internetfreigabe und entfernt die von Smart Explorer installierte polkit-Regel;
+eine nötige Freigabe fragt polkit selbst ab. Die Befehle ohne `sudo` ausführen,
+damit die gespeicherte Sitzung des richtigen Benutzerkontos verwendet wird.
 Headless Share laesst sich ueber `se share configure`, `identity`, `status`,
 `request`, `grants`, `export`, `room`, `discoverable`, `lan` und `worker`
 vollstaendig verwalten;

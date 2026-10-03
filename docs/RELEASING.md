@@ -649,6 +649,14 @@ no such file exists (an existing desktop source stays untouched), so
 `se update` finds its feed; older terminal-only installations set one with
 `se update --source <feed>`.
 
+Before manually removing a Linux installation, run `se share lan uplink disable`
+and then `se --lan-uplink-cleanup` as the original installation user while the
+binary is still present. The cleanup stops its recorded Internet-sharing session
+and removes the Smart Explorer polkit rule; polkit handles any required
+authorization. Run these commands without `sudo` so they load that user's
+persisted session. `install-linux.sh` installs the app and provides no separate
+Linux uninstaller.
+
 If release assets are unavailable it normally falls back to a one-job local
 Cargo build. The complete release wrapper pins
 `SMART_EXPLORER_RELEASE_TAG=vX.Y.Z` and sets
