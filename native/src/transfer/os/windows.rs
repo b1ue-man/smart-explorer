@@ -1,11 +1,10 @@
 //! Windows filesystem facts for transfers.
 use std::path::{Path, PathBuf};
 
-/// Any reparse point (symlink, junction, cloud placeholder link) counts as a
-/// link: uploads refuse it instead of following it.
+/// Redirecting links are walk boundaries. Data reparse points (cloud,
+/// WOF and dedup) retain their ordinary-file transfer behavior.
 pub(crate) fn upload_is_link_like(metadata: &std::fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-    metadata.file_attributes() & 0x400 != 0
+    crate::local_access::metadata_is_link_like(metadata)
 }
 
 /// `\` separates path components on Windows; it is never part of a name.
@@ -14,23 +13,7 @@ pub(crate) fn backslash_is_name_char() -> bool {
 }
 
 pub(crate) fn replace_file_atomic(src: &Path, dest: &Path) -> std::io::Result<()> {
-    use windows_sys::Win32::Storage::FileSystem::{
-        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
-    };
-    let src_w = path_to_wide(src);
-    let dest_w = path_to_wide(dest);
-    let ok = unsafe {
-        MoveFileExW(
-            src_w.as_ptr(),
-            dest_w.as_ptr(),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-        )
-    };
-    if ok == 0 {
-        Err(std::io::Error::last_os_error())
-    } else {
-        Ok(())
-    }
+    crate::vfs::replace_local_file(src, dest)
 }
 
 pub(crate) fn available_space_for_path(path: &Path) -> Option<u64> {
@@ -62,6 +45,19 @@ pub(crate) fn available_memory() -> Option<u64> {
     // SAFETY: `status` is a valid, writable MEMORYSTATUSEX with dwLength set.
     let ok = unsafe { GlobalMemoryStatusEx(&mut status) };
     (ok != 0).then_some(status.ullAvailPhys)
+}
+
+/// Total physical memory. Stable from run to run, unlike the available memory,
+/// so limits derived from it do not change with the momentary load (sync tree
+/// limits, RV1).
+pub(crate) fn physical_memory() -> Option<u64> {
+    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+    // SAFETY: MEMORYSTATUSEX is plain data; dwLength must name its size.
+    let mut status: MEMORYSTATUSEX = unsafe { std::mem::zeroed() };
+    status.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
+    // SAFETY: `status` is a valid, writable MEMORYSTATUSEX with dwLength set.
+    let ok = unsafe { GlobalMemoryStatusEx(&mut status) };
+    (ok != 0).then_some(status.ullTotalPhys)
 }
 
 /// The folder `path` resolves to, links and junctions on the way followed,

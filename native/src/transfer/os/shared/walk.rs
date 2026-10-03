@@ -162,6 +162,7 @@ fn filter_entry(path: &str, listed: &Listed, filter: &RemoteFilterCtx) -> FileEn
         name: listed.name.clone(),
         is_dir: listed.is_dir,
         is_symlink: listed.is_link,
+        special: false,
         size: listed.size,
         mtime_ms: listed.mtime_ms,
         btime_ms: listed.btime_ms,
