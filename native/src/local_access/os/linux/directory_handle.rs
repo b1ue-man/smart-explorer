@@ -17,10 +17,10 @@ mod quarantine;
 pub(crate) use quarantine::QuarantinedChild;
 #[path = "create.rs"]
 mod create;
-#[path = "remove.rs"]
-mod remove;
 #[path = "private_ancestors.rs"]
 mod private_ancestors;
+#[path = "remove.rs"]
+mod remove;
 
 #[derive(Clone)]
 pub(crate) struct DirectoryHandle {
@@ -42,7 +42,10 @@ impl DirectoryHandle {
     /// clone of this handle alive throughout registration and event delivery;
     /// the descriptor spelling is never a freely reusable child path.
     pub(crate) fn watch_path(&self) -> Option<PathBuf> {
-        Some(PathBuf::from(format!("/proc/self/fd/{}/.", self.file.as_raw_fd())))
+        Some(PathBuf::from(format!(
+            "/proc/self/fd/{}/.",
+            self.file.as_raw_fd()
+        )))
     }
 
     /// The selected root (and its ancestors) may contain links. Thereafter
@@ -69,7 +72,9 @@ impl DirectoryHandle {
             .open_at(name, libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW)
             .map_err(|error| {
                 if matches!(error.raw_os_error(), Some(libc::ELOOP | libc::ENOTDIR))
-                    && self.metadata_at(name).is_ok_and(|metadata| metadata.is_symlink())
+                    && self
+                        .metadata_at(name)
+                        .is_ok_and(|metadata| metadata.is_symlink())
                 {
                     NotRegular::Link.error()
                 } else {
@@ -115,7 +120,8 @@ impl DirectoryHandle {
     }
 
     fn metadata_at(&self, name: &OsStr) -> io::Result<std::fs::Metadata> {
-        self.open_at(name, libc::O_PATH | libc::O_NOFOLLOW)?.metadata()
+        self.open_at(name, libc::O_PATH | libc::O_NOFOLLOW)?
+            .metadata()
     }
 
     fn open_at(&self, name: &OsStr, flags: i32) -> io::Result<File> {
@@ -243,7 +249,11 @@ fn local_entry(name: OsString, metadata: &std::fs::Metadata) -> LocalEntry {
         kind,
         is_dir: kind == EntryKind::Directory,
         is_link_like: kind == EntryKind::Link,
-        size: if kind == EntryKind::File { metadata.len() } else { 0 },
+        size: if kind == EntryKind::File {
+            metadata.len()
+        } else {
+            0
+        },
         mtime_ms: metadata
             .modified()
             .map(crate::local_access::system_time_ms)

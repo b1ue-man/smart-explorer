@@ -8,9 +8,7 @@ use crate::local_access::DirectoryHandle;
 
 use super::{
     export_config::ExportAccess,
-    fs_host_destructive,
-    fs_local_paths,
-    fs_path_adapter,
+    fs_host_destructive, fs_local_paths, fs_path_adapter,
     fs_policy::{normalized, private_path, system_write, within},
 };
 
@@ -72,9 +70,11 @@ impl TargetPolicy {
                 return Err(denied());
             }
             if let Some(effective) = effective(path) {
-                if self.physical_root.as_ref().is_some_and(|root| {
-                    !fs_path_adapter::policy_contains(root, &effective)
-                }) {
+                if self
+                    .physical_root
+                    .as_ref()
+                    .is_some_and(|root| !fs_path_adapter::policy_contains(root, &effective))
+                {
                     return Err(denied());
                 }
                 if self.app_private(&effective.to_string_lossy())
@@ -99,7 +99,11 @@ impl TargetPolicy {
                 .map(|path| path.to_string_lossy().into_owned())
                 .unwrap_or_else(|| path.to_owned());
             let candidate = normalized(&effective);
-            if self.private_roots.iter().any(|root| within(root, &candidate)) {
+            if self
+                .private_roots
+                .iter()
+                .any(|root| within(root, &candidate))
+            {
                 return Err(denied());
             }
             if Path::new(path).is_dir() {
@@ -164,5 +168,8 @@ pub(super) fn ensure_handle_allowed(handle: &DirectoryHandle) -> io::Result<()> 
 }
 
 pub(super) fn denied() -> io::Error {
-    io::Error::new(io::ErrorKind::PermissionDenied, "Pfad ist nicht freigegeben")
+    io::Error::new(
+        io::ErrorKind::PermissionDenied,
+        "Pfad ist nicht freigegeben",
+    )
 }

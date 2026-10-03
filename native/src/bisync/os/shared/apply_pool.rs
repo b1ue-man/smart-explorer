@@ -78,8 +78,12 @@ pub(super) fn run_actions<'p>(
 }
 
 pub(super) fn run_actions_stoppable<'p>(
-    actions: &'p [Action], max_transfers: usize, cancel: &'p AtomicBool,
-    stop: &'p (dyn Fn() -> bool + Sync), admit: &'p Admit<'p>, execute: &'p Execute<'p>,
+    actions: &'p [Action],
+    max_transfers: usize,
+    cancel: &'p AtomicBool,
+    stop: &'p (dyn Fn() -> bool + Sync),
+    admit: &'p Admit<'p>,
+    execute: &'p Execute<'p>,
 ) -> PoolReport {
     let pool = Pool {
         actions,
@@ -261,7 +265,9 @@ impl Pool<'_> {
             let permits = (self.admit)(action);
             self.stop_waiting(enlisted);
             let permits = permits?;
-            if self.canceled() { return None; }
+            if self.canceled() {
+                return None;
+            }
             let result = (self.execute)(action);
             let delay = match &result {
                 Ok(stats) => {

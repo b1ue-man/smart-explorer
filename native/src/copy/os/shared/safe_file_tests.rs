@@ -146,9 +146,12 @@ fn review_task_copy_stage_is_private_before_receiving_content() {
     use std::os::unix::fs::PermissionsExt;
 
     let fixture = tempfile::tempdir().unwrap();
-    let (path, writer) = super::super::staging::create_temp_sibling(&fixture.path().join("target"))
-        .unwrap();
-    assert_eq!(writer.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+    let (path, writer) =
+        super::super::staging::create_temp_sibling(&fixture.path().join("target")).unwrap();
+    assert_eq!(
+        writer.metadata().unwrap().permissions().mode() & 0o777,
+        0o600
+    );
     assert_eq!(writer.metadata().unwrap().len(), 0);
     drop(writer);
     std::fs::remove_file(path).unwrap();
@@ -173,10 +176,14 @@ fn review_task_staged_copy_overwrite_keeps_private_destination_permissions() {
         Conflict::Overwrite,
         CopyMode::Copy,
         &AtomicBool::new(false),
-    ).unwrap();
+    )
+    .unwrap();
     assert!(matches!(result, TransferResult::Completed));
     assert_eq!(std::fs::read(&target).unwrap(), b"new");
-    assert_eq!(std::fs::metadata(&target).unwrap().permissions().mode() & 0o7777, 0o640);
+    assert_eq!(
+        std::fs::metadata(&target).unwrap().permissions().mode() & 0o7777,
+        0o640
+    );
 }
 
 #[cfg(unix)]

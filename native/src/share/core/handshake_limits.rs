@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::io;
 use std::sync::{Arc, Mutex};
 
-use tokio::sync::OwnedSemaphorePermit;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Notify;
+use tokio::sync::OwnedSemaphorePermit;
 
 #[derive(Clone)]
 pub(super) struct HandshakeAdmission {
@@ -13,24 +13,39 @@ pub(super) struct HandshakeAdmission {
 }
 impl HandshakeAdmission {
     pub(super) fn new(capacity: usize) -> Self {
-        Self { known: super::fair_admission::Pool::new(capacity),
-            unknown: super::fair_admission::Pool::new((capacity / 8).max(1)) }
+        Self {
+            known: super::fair_admission::Pool::new(capacity),
+            unknown: super::fair_admission::Pool::new((capacity / 8).max(1)),
+        }
     }
-    pub(super) fn enqueue(&self, peer: String, known: bool) -> io::Result<super::fair_admission::Ticket<String>> {
-        if peer.is_empty() || peer.len() > 128 { return Err(limit_reached()); }
+    pub(super) fn enqueue(
+        &self,
+        peer: String,
+        known: bool,
+    ) -> io::Result<super::fair_admission::Ticket<String>> {
+        if peer.is_empty() || peer.len() > 128 {
+            return Err(limit_reached());
+        }
         let pool = if known { &self.known } else { &self.unknown };
         pool.enqueue(peer)
     }
 }
 
 #[derive(Default)]
-struct Completion { done: AtomicBool, changed: Notify }
+struct Completion {
+    done: AtomicBool,
+    changed: Notify,
+}
 pub(super) struct HandshakeCompletion(Arc<Completion>);
 impl HandshakeCompletion {
     pub(super) async fn wait(self) {
         loop {
-            let changed = self.0.changed.notified(); tokio::pin!(changed); changed.as_mut().enable();
-            if self.0.done.load(Ordering::Acquire) { return; }
+            let changed = self.0.changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            if self.0.done.load(Ordering::Acquire) {
+                return;
+            }
             changed.await;
         }
     }
@@ -52,10 +67,19 @@ impl ApplicationHandshakePermit {
             completion: Arc::new(Completion::default()),
         }
     }
-    pub(super) fn admitted(permit: super::fair_admission::Permit<String>) -> (Self, HandshakeCompletion) {
+    pub(super) fn admitted(
+        permit: super::fair_admission::Permit<String>,
+    ) -> (Self, HandshakeCompletion) {
         let completion = Arc::new(Completion::default());
-        (Self { _global: None, _peer: None, _fair: Some(permit), completion: completion.clone() },
-            HandshakeCompletion(completion))
+        (
+            Self {
+                _global: None,
+                _peer: None,
+                _fair: Some(permit),
+                completion: completion.clone(),
+            },
+            HandshakeCompletion(completion),
+        )
     }
 }
 impl Drop for ApplicationHandshakePermit {

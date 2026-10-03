@@ -75,7 +75,9 @@ pub(crate) struct FsDuplicateGroup {
     pub(crate) more: bool,
 }
 
-fn is_false(value: &bool) -> bool { !*value }
+fn is_false(value: &bool) -> bool {
+    !*value
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct FsDuplicateFile {
@@ -225,21 +227,41 @@ impl FsDuplicateSummary {
     pub(crate) fn fit_wire(&mut self) -> std::io::Result<()> {
         let bounded = |text: &mut String, max| {
             let mut start = text.len().saturating_sub(max);
-            while !text.is_char_boundary(start) { start += 1; }
-            if start > 0 { *text = format!("…{}", &text[start..]); }
+            while !text.is_char_boundary(start) {
+                start += 1;
+            }
+            if start > 0 {
+                *text = format!("…{}", &text[start..]);
+            }
         };
-        for text in self.errors.iter_mut().chain(&mut self.limits) { bounded(text, 4093); }
-        if let Some(text) = &mut self.root_error { bounded(text, 4093); }
+        for text in self.errors.iter_mut().chain(&mut self.limits) {
+            bounded(text, 4093);
+        }
+        if let Some(text) = &mut self.root_error {
+            bounded(text, 4093);
+        }
         loop {
-            if serde_json::to_vec(self).map_err(std::io::Error::other)?.len() <= GROUP_PORTION_BYTES { return Ok(()); }
-            if self.errors.pop().is_some() { self.suppressed_errors = self.suppressed_errors.saturating_add(1); continue; }
+            if serde_json::to_vec(self)
+                .map_err(std::io::Error::other)?
+                .len()
+                <= GROUP_PORTION_BYTES
+            {
+                return Ok(());
+            }
+            if self.errors.pop().is_some() {
+                self.suppressed_errors = self.suppressed_errors.saturating_add(1);
+                continue;
+            }
             let longest = self.limits.iter_mut().max_by_key(|text| text.len());
             if let Some(text) = longest.filter(|text| text.len() > 128) {
                 let max = text.len() / 2;
                 bounded(text, max);
                 continue;
             }
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData,"Geschützte Duplikat-Metadaten überschreiten das Drahtformat"));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Geschützte Duplikat-Metadaten überschreiten das Drahtformat",
+            ));
         }
     }
 

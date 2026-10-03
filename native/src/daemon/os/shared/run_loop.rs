@@ -2,7 +2,7 @@
 //! the desktop `--sync-daemon` process (`run_daemon` reads a pending handoff
 //! from its environment) and the embedded worker thread (no handoff).
 
-use crate::syncjobs::{SyncJob, RunCause, PendingKind};
+use crate::syncjobs::{PendingKind, RunCause, SyncJob};
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
@@ -18,8 +18,7 @@ use super::job_supervisor::{EnqueueStatus, JobSupervisor};
 use super::live;
 use super::schedule::new_generation;
 use super::state::{
-    clear_heartbeat, log, now_secs, pause_reason, scheduling_controls, write_heartbeat,
-    PauseReason,
+    clear_heartbeat, log, now_secs, pause_reason, scheduling_controls, write_heartbeat, PauseReason,
 };
 
 const HANDOFF_ACTIVATION_TIMEOUT: Duration = Duration::from_secs(2);
@@ -126,7 +125,6 @@ pub(crate) fn run_daemon_with(handoff: Option<Handoff>) {
             connections = super::connect_triggers::Connections::new();
             if sync_enabled {
                 log("background sync enabled");
-
             } else {
                 log("background sync disabled; canceling scheduled work");
                 for error in job_supervisor.cancel_and_join() {
@@ -148,9 +146,16 @@ pub(crate) fn run_daemon_with(handoff: Option<Handoff>) {
         }
         let now = now_secs();
         let configured_jobs = load_configured_jobs(&mut broken);
-        let stale: HashSet<String> = job_supervisor.active_ids().into_iter()
-            .filter(|id| !configured_jobs.iter().any(|job| job.id == *id && job.enabled))
-            .map(str::to_string).collect();
+        let stale: HashSet<String> = job_supervisor
+            .active_ids()
+            .into_iter()
+            .filter(|id| {
+                !configured_jobs
+                    .iter()
+                    .any(|job| job.id == *id && job.enabled)
+            })
+            .map(str::to_string)
+            .collect();
         job_supervisor.cancel_jobs(&stale);
         realtime.refresh(&configured_jobs, sync_enabled);
         if sync_enabled {
@@ -165,18 +170,39 @@ pub(crate) fn run_daemon_with(handoff: Option<Handoff>) {
         if controls.may_schedule(sync_enabled) {
             let states = crate::syncjobs::load_job_states(&configured_jobs);
             for job in &configured_jobs {
-                let Some(state) = states.get(&job.id).filter(|state| state.load_error.is_none()) else { continue; };
+                let Some(state) = states
+                    .get(&job.id)
+                    .filter(|state| state.load_error.is_none())
+                else {
+                    continue;
+                };
                 let mut cause = super::due::due_now(job, state, now, timer_since);
-                if cause.is_none() && state.blocked.is_none() && state.consecutive_failures == 0
-                    && job.enabled && job.active_now(now) { cause = events.get(&job.id).copied(); }
-                if cause.is_none() && state.blocked.is_none() && state.consecutive_failures == 0
-                    && job.enabled && job.active_now(now) && job.trigger == crate::syncjobs::Trigger::RealTime
-                    && job.verify_interval_secs > 0 && state.last_verify.map_or(true, |at|
-                        now.saturating_sub(at) >= i64::try_from(job.verify_interval_secs).unwrap_or(i64::MAX)) {
+                if cause.is_none()
+                    && state.blocked.is_none()
+                    && state.consecutive_failures == 0
+                    && job.enabled
+                    && job.active_now(now)
+                {
+                    cause = events.get(&job.id).copied();
+                }
+                if cause.is_none()
+                    && state.blocked.is_none()
+                    && state.consecutive_failures == 0
+                    && job.enabled
+                    && job.active_now(now)
+                    && job.trigger == crate::syncjobs::Trigger::RealTime
+                    && job.verify_interval_secs > 0
+                    && state.last_verify.map_or(true, |at| {
+                        now.saturating_sub(at)
+                            >= i64::try_from(job.verify_interval_secs).unwrap_or(i64::MAX)
+                    })
+                {
                     super::job_triggers::persist(&job.id, PendingKind::Verify, now, None);
                     cause = Some(RunCause::Verify);
                 }
-                if let Some(cause) = cause { enqueue_job(&mut job_supervisor, job, cause, share_host.generation()); }
+                if let Some(cause) = cause {
+                    enqueue_job(&mut job_supervisor, job, cause, share_host.generation());
+                }
             }
             timer_since = Some(now);
         }
@@ -185,7 +211,11 @@ pub(crate) fn run_daemon_with(handoff: Option<Handoff>) {
         super::problem_notify::notify(&configured_jobs, now);
         write_heartbeat();
         // Sleep one tick in 2 s slices so a stop request is honoured promptly.
-        let tick = if sync_enabled { controls.tick_secs.min(2) } else { controls.tick_secs };
+        let tick = if sync_enabled {
+            controls.tick_secs.min(2)
+        } else {
+            controls.tick_secs
+        };
         let mut slept = 0;
         while slept < tick {
             if stop_requested(share_host.generation()) {
@@ -275,34 +305,68 @@ fn load_configured_jobs(broken: &mut HashMap<String, String>) -> Vec<SyncJob> {
                 let mut notice_job = SyncJob::new(invalid.id.clone(), String::new(), String::new());
                 notice_job.id = invalid.id.clone();
                 invalid_notices.push(notice_job);
-                if broken.get(&invalid.id) == Some(&invalid.error) { continue; }
-                log(&format!("job '{}' cannot be loaded: {}", invalid.id, invalid.error));
-                let mut job = SyncJob::new(invalid.id.clone(), String::new(), String::new()); job.id = invalid.id.clone();
-                super::job::persist(&job, now_secs(), RunCause::Other,
+                if broken.get(&invalid.id) == Some(&invalid.error) {
+                    continue;
+                }
+                log(&format!(
+                    "job '{}' cannot be loaded: {}",
+                    invalid.id, invalid.error
+                ));
+                let mut job = SyncJob::new(invalid.id.clone(), String::new(), String::new());
+                job.id = invalid.id.clone();
+                super::job::persist(
+                    &job,
+                    now_secs(),
+                    RunCause::Other,
                     crate::syncjobs::AttemptOutcome::Failed(crate::syncjobs::JobError {
-                        kind: crate::syncjobs::FailureKind::Config, message: invalid.error.clone(),
-                    }), crate::syncjobs::JobResult { when: now_secs(), errors: 1, note: invalid.error.clone(), ..Default::default() });
+                        kind: crate::syncjobs::FailureKind::Config,
+                        message: invalid.error.clone(),
+                    }),
+                    crate::syncjobs::JobResult {
+                        when: now_secs(),
+                        errors: 1,
+                        note: invalid.error.clone(),
+                        ..Default::default()
+                    },
+                );
                 broken.insert(invalid.id, invalid.error);
             }
             super::problem_notify::notify(&invalid_notices, now_secs());
             for job in &report.jobs {
-                if crate::syncjobs::load_job_state(&job.id).ok().is_some_and(|state| state.load_error.is_some()) {
+                if crate::syncjobs::load_job_state(&job.id)
+                    .ok()
+                    .is_some_and(|state| state.load_error.is_some())
+                {
                     // Store/quarantine once, retaining an explicit safety stop
                     // rather than inferring that the old state had no block.
                     if let Err(error) = crate::syncjobs::update_job_state(&job.id, |_| {}) {
-                        log(&format!("job state '{}' cannot recover safely: {error}", job.id));
+                        log(&format!(
+                            "job state '{}' cannot recover safely: {error}",
+                            job.id
+                        ));
                     }
                 }
                 if let Some(previous) = broken.remove(&job.id) {
                     let _ = crate::syncjobs::update_job_state(&job.id, |state| {
-                        if state.last_error.as_ref().is_some_and(|error| error.kind == crate::syncjobs::FailureKind::Config
-                            && error.message == previous) { state.last_error = None; state.consecutive_failures = 0; state.retry_at = None; }
+                        if state.last_error.as_ref().is_some_and(|error| {
+                            error.kind == crate::syncjobs::FailureKind::Config
+                                && error.message == previous
+                        }) {
+                            state.last_error = None;
+                            state.consecutive_failures = 0;
+                            state.retry_at = None;
+                        }
                     });
                 }
             }
             report.jobs
         }
-        Err(error) => { log(&format!("scheduled sync blocked: jobs cannot be loaded: {error}")); Vec::new() }
+        Err(error) => {
+            log(&format!(
+                "scheduled sync blocked: jobs cannot be loaded: {error}"
+            ));
+            Vec::new()
+        }
     }
 }
 

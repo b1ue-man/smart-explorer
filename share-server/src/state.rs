@@ -86,9 +86,13 @@ pub(super) struct State {
 impl State {
     /// Called while the state lock serializes owner changes and their disk order.
     pub(super) fn persist_bindings(&mut self) -> std::io::Result<()> {
-        let Some(path) = &self.binding_path else { return Ok(()); };
+        let Some(path) = &self.binding_path else {
+            return Ok(());
+        };
         let mut candidate = self.bindings.clone();
-        if candidate.take_dirty().is_none() { return Ok(()); }
+        if candidate.take_dirty().is_none() {
+            return Ok(());
+        }
         candidate.save(path)?;
         self.bindings = candidate;
         Ok(())
@@ -119,7 +123,9 @@ impl RegistrationError {
             Self::IdExhausted => "server client id space exhausted",
             Self::DeviceBound => "device id is bound to another device key",
             Self::KeyFull => "too many connections for this device key",
-            Self::BindingStateUnavailable => "cannot persist device key binding; check server state file",
+            Self::BindingStateUnavailable => {
+                "cannot persist device key binding; check server state file"
+            }
             Self::KeyLoginRequired => "this server requires key login; update Smart Explorer",
         }
     }
@@ -212,10 +218,16 @@ fn try_register_locked(
                 .bindings
                 .bind_device(device_id, &key.to_string(), unix_seconds());
             if bound == BindOutcome::Conflict {
-                return (Registration::Failed(RegistrationError::DeviceBound), Vec::new());
+                return (
+                    Registration::Failed(RegistrationError::DeviceBound),
+                    Vec::new(),
+                );
             }
             if bound == BindOutcome::Full || state.persist_bindings().is_err() {
-                return (Registration::Failed(RegistrationError::BindingStateUnavailable), Vec::new());
+                return (
+                    Registration::Failed(RegistrationError::BindingStateUnavailable),
+                    Vec::new(),
+                );
             }
             let impostors: Vec<(u64, Writer)> = state
                 .clients
@@ -245,7 +257,10 @@ fn try_register_locked(
                 );
             }
             if state.bindings.device_key(device_id).is_some() {
-                return (Registration::Failed(RegistrationError::DeviceBound), Vec::new());
+                return (
+                    Registration::Failed(RegistrationError::DeviceBound),
+                    Vec::new(),
+                );
             }
         }
     }
@@ -257,20 +272,36 @@ fn try_register_locked(
             .filter(|client| client.source == source)
             .count()
             >= limits.max_clients_per_source;
-    let network_full = source.network().is_some_and(|network| state.clients.values()
-        .filter(|client| client.source.network() == Some(network)).count() >= limits.max_clients_per_network);
+    let network_full = source.network().is_some_and(|network| {
+        state
+            .clients
+            .values()
+            .filter(|client| client.source.network() == Some(network))
+            .count()
+            >= limits.max_clients_per_network
+    });
     if full || source_full || network_full {
-        let victim = identity
-            .proven()
-            .and_then(|_| eviction_candidate(state, (!full).then_some(source), network_full && !source_full));
+        let victim = identity.proven().and_then(|_| {
+            eviction_candidate(
+                state,
+                (!full).then_some(source),
+                network_full && !source_full,
+            )
+        });
         return match victim {
             Some(victim) => (Registration::Retry, vec![victim]),
             None if full => (Registration::Failed(RegistrationError::Full), Vec::new()),
-            None => (Registration::Failed(RegistrationError::SourceFull), Vec::new()),
+            None => (
+                Registration::Failed(RegistrationError::SourceFull),
+                Vec::new(),
+            ),
         };
     }
     let Some(id) = state.next_id.checked_add(1) else {
-        return (Registration::Failed(RegistrationError::IdExhausted), Vec::new());
+        return (
+            Registration::Failed(RegistrationError::IdExhausted),
+            Vec::new(),
+        );
     };
     state.next_id = id;
     state.clients.insert(
@@ -294,14 +325,24 @@ fn try_register_locked(
 
 /// An older client without key login, of `source` when given: one without
 /// subscriptions first, then the oldest.
-fn eviction_candidate(state: &State, source: Option<SourceKey>, network: bool) -> Option<(u64, Writer)> {
+fn eviction_candidate(
+    state: &State,
+    source: Option<SourceKey>,
+    network: bool,
+) -> Option<(u64, Writer)> {
     state
         .clients
         .iter()
         .filter(|(_, client)| client.identity.proven().is_none())
-        .filter(|(_, client)| source.is_none_or(|source| {
-            if network { client.source.network() == source.network() } else { client.source == source }
-        }))
+        .filter(|(_, client)| {
+            source.is_none_or(|source| {
+                if network {
+                    client.source.network() == source.network()
+                } else {
+                    client.source == source
+                }
+            })
+        })
         .min_by_key(|(id, client)| {
             let subscribed = !client.direct_lookup_ids.is_empty()
                 || !client.watched_lookup_ids.is_empty()

@@ -26,7 +26,9 @@ impl WindowsIcsAdapter {
     fn probe_now(setup_done: bool) -> Facility {
         let task_ready = match uplink_helper::task_registered() {
             Ok(ready) => ready,
-            Err(error) => return Facility::RepairRequired(format!("Uplink-Aufgabe nicht sicher: {error}")),
+            Err(error) => {
+                return Facility::RepairRequired(format!("Uplink-Aufgabe nicht sicher: {error}"))
+            }
         };
         match ics::sharing_installed() {
             Ok(true) => {}
@@ -56,9 +58,13 @@ impl WindowsIcsAdapter {
                 "einmalige Einrichtung (Windows-UAC) noch nicht durchgefuehrt".into(),
             );
         }
-        if task_ready { Facility::Available } else { Facility::RepairRequired(
+        if task_ready {
+            Facility::Available
+        } else {
+            Facility::RepairRequired(
                 "Aufgabe 'Smart Explorer LAN-Uplink' fehlt; Einrichtung erneut ausfuehren".into(),
-            ) }
+            )
+        }
     }
 }
 

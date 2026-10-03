@@ -1,10 +1,10 @@
 //! Retention of legacy app-data versions; kept for the stable public API.
+use super::types::{Versioning, VersioningScheme};
+use crate::vfs::Backend;
 use std::collections::BTreeSet;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
-use crate::vfs::Backend;
-use super::types::{Versioning, VersioningScheme};
 
 /// Prune timestamped recovery snapshots without following link-like entries.
 /// Every filesystem error is returned so recovery loss is never silent.
@@ -130,7 +130,8 @@ fn gfs_bucket(timestamp: u64, now: u64) -> Option<String> {
 }
 
 fn unicode_path(path: &Path) -> io::Result<&str> {
-    path.to_str().ok_or_else(|| invalid("bisync persistence path is not Unicode"))
+    path.to_str()
+        .ok_or_else(|| invalid("bisync persistence path is not Unicode"))
 }
 fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())

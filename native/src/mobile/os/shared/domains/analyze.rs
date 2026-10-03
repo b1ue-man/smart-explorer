@@ -26,10 +26,10 @@ use crate::mobile::{ApiError, Runtime, TaskCtx};
 mod phases;
 #[path = "analyze_platform.rs"]
 mod platform;
-#[path = "analyze_results.rs"]
-mod results;
 #[path = "analyze_recycle.rs"]
 mod recycle;
+#[path = "analyze_results.rs"]
+mod results;
 
 use results::{bind_task, with_stored, Pending, Stored};
 
@@ -197,9 +197,14 @@ fn analysis_task(
         ScanStatus::Complete => ctx.message(""),
     }
     let (place, totals) = if is_remote {
-        outcome.platform.as_ref().map(|figures| (figures.place(), figures.totals()))
+        outcome
+            .platform
+            .as_ref()
+            .map(|figures| (figures.place(), figures.totals()))
             .unwrap_or_default()
-    } else { (place, totals) };
+    } else {
+        (place, totals)
+    };
     let approx = outcome
         .tree
         .as_ref()
@@ -408,13 +413,18 @@ pub(super) fn summary(args: &Value) -> Result<Value, ApiError> {
     value["remote"] = json!(remote);
     // Never hold the result-store lock during a connection/capability query.
     let can_recycle = if remote {
-        resolve_remote(&base).and_then(|(backend, root)|
+        resolve_remote(&base).and_then(|(backend, root)| {
             crate::vfs::supports_recycle(&*backend, &root)
-                .map_err(|error| ApiError::internal(error.to_string())))
-    } else { Ok(true) };
+                .map_err(|error| ApiError::internal(error.to_string()))
+        })
+    } else {
+        Ok(true)
+    };
     // A disconnected host must not hide the already completed report.
     value["canRecycle"] = json!(can_recycle.as_ref().copied().unwrap_or(false));
-    if let Err(error) = can_recycle { value["recycleNote"] = json!(error.to_string()); }
+    if let Err(error) = can_recycle {
+        value["recycleNote"] = json!(error.to_string());
+    }
     Ok(value)
 }
 

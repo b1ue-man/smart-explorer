@@ -212,7 +212,9 @@ impl SmbBackend {
 }
 
 impl Backend for SmbBackend {
-    fn extensions(&self) -> Option<&dyn crate::vfs::BackendExtensions> { Some(self) }
+    fn extensions(&self) -> Option<&dyn crate::vfs::BackendExtensions> {
+        Some(self)
+    }
     fn scheme(&self) -> Scheme {
         Scheme::Smb
     }

@@ -6,11 +6,11 @@ use crate::vfs::{BackendHandle, LocalBackend, VfsMeta};
 
 use super::core::eio;
 use super::export_config::ExportAccess;
-use super::fs_paths::norm_root;
 pub(super) use super::fs_local_paths as local_paths;
-pub(super) use local_paths::secure_local_target;
+use super::fs_paths::norm_root;
 pub(super) use super::fs_paths::{join_under, split_clean};
 use super::wire::FsMeta;
+pub(super) use local_paths::secure_local_target;
 
 /// The export types live in `export_config.rs` (V2); their former paths stay.
 pub use super::export_config::{ShareExportConfig, SharedRoot};
@@ -54,7 +54,10 @@ pub(crate) fn list_dir(
     exports: &Arc<Mutex<ShareExportConfig>>,
 ) -> io::Result<Vec<FsMeta>> {
     if super::fs_policy::private_path(path) {
-        return Err(io::Error::new(io::ErrorKind::PermissionDenied, "Pfad ist nicht freigegeben"));
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Pfad ist nicht freigegeben",
+        ));
     }
     let parts = split_clean(path)?;
     if parts.is_empty() {
@@ -88,7 +91,10 @@ pub(crate) fn list_dir(
 
 pub(crate) fn stat(path: &str, exports: &Arc<Mutex<ShareExportConfig>>) -> io::Result<FsMeta> {
     if super::fs_policy::private_path(path) {
-        return Err(io::Error::new(io::ErrorKind::PermissionDenied, "Pfad ist nicht freigegeben"));
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Pfad ist nicht freigegeben",
+        ));
     }
     let parts = split_clean(path)?;
     if parts.is_empty() {
@@ -157,7 +163,10 @@ pub(crate) fn resolve(
     exports: &Arc<Mutex<ShareExportConfig>>,
 ) -> io::Result<ResolvedTarget> {
     if super::fs_policy::private_path(path) {
-        return Err(io::Error::new(io::ErrorKind::PermissionDenied, "Pfad ist nicht freigegeben"));
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Pfad ist nicht freigegeben",
+        ));
     }
     let parts = split_clean(path)?;
     let (head, rest) = parts
@@ -183,19 +192,27 @@ pub(crate) fn resolve(
         .into_iter()
         .find(|m| m.name == *head)
         .ok_or_else(|| eio("Unbekannte Freigabe"))?;
-    let MountTarget::Local { path: root, access, allow_system_writes } = mount.target else {
+    let MountTarget::Local {
+        path: root,
+        access,
+        allow_system_writes,
+    } = mount.target
+    else {
         return Err(eio("Ungueltiges Freigabeziel"));
     };
     let root = secure_local_target(&root, &[])?;
     let target = secure_local_target(&root, rest)?;
-    guard_target(ResolvedTarget {
-        backend: Arc::new(LocalBackend::new(&root)),
-        path: target,
-        mount_key: format!("local:{head}"),
-        access,
-        allow_system_writes,
-        _net: None,
-    }, None)
+    guard_target(
+        ResolvedTarget {
+            backend: Arc::new(LocalBackend::new(&root)),
+            path: target,
+            mount_key: format!("local:{head}"),
+            access,
+            allow_system_writes,
+            _net: None,
+        },
+        None,
+    )
 }
 
 fn resolve_connection(
@@ -213,54 +230,82 @@ fn resolve_connection(
         let configured = c.root.replace('\\', "/");
         let root = secure_local_target(&configured, &[])?;
         let path = secure_local_target(&root, rest)?;
-        return guard_target(ResolvedTarget {
-            backend: Arc::new(LocalBackend::new(&root)),
-            path,
-            mount_key: c.account(),
-            access,
-            allow_system_writes: false,
-            _net: Some(nc),
-        }, None);
+        return guard_target(
+            ResolvedTarget {
+                backend: Arc::new(LocalBackend::new(&root)),
+                path,
+                mount_key: c.account(),
+                access,
+                allow_system_writes: false,
+                _net: Some(nc),
+            },
+            None,
+        );
     }
 
     let target = join_under(&norm_root(&c.root), rest);
     let (backend, root) = crate::connect::open_saved_at(c, &target).map_err(eio)?;
-    guard_target(ResolvedTarget {
-        backend,
-        path: root,
-        mount_key: c.account(),
-        access,
-        allow_system_writes: false,
-        _net: None,
-    }, None)
+    guard_target(
+        ResolvedTarget {
+            backend,
+            path: root,
+            mount_key: c.account(),
+            access,
+            allow_system_writes: false,
+            _net: None,
+        },
+        None,
+    )
 }
 
 pub(crate) fn remove_dir_recursive(be: &dyn crate::vfs::Backend, path: &str) -> io::Result<()> {
     super::fs_delete::remove_tree(be, path)
 }
 
-pub(super) fn guard_target(mut target: ResolvedTarget,
-    authority: Option<Arc<super::fs_access::AccessAuthority>>) -> io::Result<ResolvedTarget> {
-    let policy = super::fs_host_policy::TargetPolicy::new(target.access,
-        target.allow_system_writes, target.backend.is_local()).with_root(&target.backend.root_display());
+pub(super) fn guard_target(
+    mut target: ResolvedTarget,
+    authority: Option<Arc<super::fs_access::AccessAuthority>>,
+) -> io::Result<ResolvedTarget> {
+    let policy = super::fs_host_policy::TargetPolicy::new(
+        target.access,
+        target.allow_system_writes,
+        target.backend.is_local(),
+    )
+    .with_root(&target.backend.root_display());
     policy.read(&target.path)?;
-    target.backend = Arc::new(super::fs_guard_backend::GuardedBackend::new(target.backend, policy, authority));
+    target.backend = Arc::new(super::fs_guard_backend::GuardedBackend::new(
+        target.backend,
+        policy,
+        authority,
+    ));
     Ok(target)
 }
 
 pub(super) fn require_target_write(target: &ResolvedTarget) -> io::Result<()> {
-    super::fs_host_policy::TargetPolicy::new(target.access, target.allow_system_writes,
-        target.backend.is_local()).with_root(&target.backend.root_display()).write(&target.path)
+    super::fs_host_policy::TargetPolicy::new(
+        target.access,
+        target.allow_system_writes,
+        target.backend.is_local(),
+    )
+    .with_root(&target.backend.root_display())
+    .write(&target.path)
 }
 
 pub(super) fn require_target_destructive(target: &ResolvedTarget) -> io::Result<()> {
-    super::fs_host_policy::TargetPolicy::new(target.access, target.allow_system_writes,
-        target.backend.is_local()).with_root(&target.backend.root_display()).destructive(&target.path)
+    super::fs_host_policy::TargetPolicy::new(
+        target.access,
+        target.allow_system_writes,
+        target.backend.is_local(),
+    )
+    .with_root(&target.backend.root_display())
+    .destructive(&target.path)
 }
 
 /// Foreign analysis traversals call this immediately after opening a root or
 /// child. The decision uses the held physical object, including UNC/bind aliases.
-pub(in crate::share) fn ensure_local_share_handle_allowed(handle: &crate::local_access::DirectoryHandle) -> io::Result<()> {
+pub(in crate::share) fn ensure_local_share_handle_allowed(
+    handle: &crate::local_access::DirectoryHandle,
+) -> io::Result<()> {
     super::fs_host_policy::ensure_handle_allowed(handle)
 }
 

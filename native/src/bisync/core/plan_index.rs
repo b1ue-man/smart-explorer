@@ -141,10 +141,7 @@ pub(super) fn destination_spelling(
 }
 
 /// Folders of one side by planning key (that side's spelling).
-pub(super) fn dirs_by_key(
-    dirs: &BTreeSet<String>,
-    keys: KeyPolicy,
-) -> BTreeMap<String, String> {
+pub(super) fn dirs_by_key(dirs: &BTreeSet<String>, keys: KeyPolicy) -> BTreeMap<String, String> {
     dirs.iter()
         .map(|dir| (keys.key(dir).into_owned(), dir.clone()))
         .collect()

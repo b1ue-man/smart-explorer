@@ -9,7 +9,10 @@ use crate::app::delete_worker::DeleteReporter;
 use crate::vfs::RecycleOutcome;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-fn remote_trash_plan(report: &ReclaimReport, selected: &HashSet<String>) -> crate::analytics::RecyclePlan {
+fn remote_trash_plan(
+    report: &ReclaimReport,
+    selected: &HashSet<String>,
+) -> crate::analytics::RecyclePlan {
     crate::analytics::recycle_plan(&report.duplicate_groups, selected)
 }
 
@@ -106,7 +109,9 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analytics::{ContentHash, DuplicateEvidence, DuplicateGroup, HashAlgorithm, ReclaimItem};
+    use crate::analytics::{
+        ContentHash, DuplicateEvidence, DuplicateGroup, HashAlgorithm, ReclaimItem,
+    };
 
     fn group(paths: &[&str]) -> DuplicateGroup {
         DuplicateGroup {
@@ -140,9 +145,7 @@ mod tests {
         targets.sort_unstable();
         assert_eq!(targets, ["/b", "/d"]);
         assert_eq!((plan.kept, plan.skipped, plan.bytes), (1, 1, 20));
-        assert!(plan
-            .targets
-            .iter()
-            .all(|(_, expected)| expected.size == 10 && expected.sha256.as_deref() == Some("ab".repeat(32).as_str())));
+        assert!(plan.targets.iter().all(|(_, expected)| expected.size == 10
+            && expected.sha256.as_deref() == Some("ab".repeat(32).as_str())));
     }
 }

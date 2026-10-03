@@ -113,9 +113,15 @@ fn review_task_editor_carries_the_rv1_settings() {
 
 #[test]
 fn review_task_delete_guard_migrates_once_and_preserves_explicit_later_zero() {
-    let mut old = parse_kv_checked("id=migrate\nname=X\nsource=sftp://host/a\ntarget=webdav://host/b\nmax_delete_pct=0\n").unwrap();
+    let mut old = parse_kv_checked(
+        "id=migrate\nname=X\nsource=sftp://host/a\ntarget=webdav://host/b\nmax_delete_pct=0\n",
+    )
+    .unwrap();
     crate::syncjobs::baseline_migration::upgrade_defaults(&mut old);
-    assert_eq!((old.max_delete_pct, old.max_delete_min, old.config_version), (50, 25, CURRENT_CONFIG_VERSION));
+    assert_eq!(
+        (old.max_delete_pct, old.max_delete_min, old.config_version),
+        (50, 25, CURRENT_CONFIG_VERSION)
+    );
     assert!(old.cross_mounts, "legacy mount behavior is preserved");
     assert_eq!(old.source, "sftp://host/a");
     assert_eq!(old.target, "webdav://host/b");
@@ -123,7 +129,8 @@ fn review_task_delete_guard_migrates_once_and_preserves_explicit_later_zero() {
     old.max_delete_min = 0;
     crate::syncjobs::baseline_migration::upgrade_defaults(&mut old);
     assert_eq!((old.max_delete_pct, old.max_delete_min), (0, 0));
-    let mut explicit = parse_kv_checked("id=explicit\nsource=s\ntarget=t\nmax_delete_pct=20\n").unwrap();
+    let mut explicit =
+        parse_kv_checked("id=explicit\nsource=s\ntarget=t\nmax_delete_pct=20\n").unwrap();
     crate::syncjobs::baseline_migration::upgrade_defaults(&mut explicit);
     assert_eq!((explicit.max_delete_pct, explicit.max_delete_min), (20, 0));
 }
@@ -136,18 +143,45 @@ fn review_task_pending_original_import_keeps_its_exact_configuration_bytes() {
     let configs = root.join("jobs");
     let pending = root.join("eligibility");
     std::fs::create_dir_all(&configs).unwrap();
-    let mut job = parse_kv_checked("id=migrate\nname=X\nsource=sftp://host/a\ntarget=webdav://host/b\nmax_delete_pct=0\n").unwrap();
+    let mut job = parse_kv_checked(
+        "id=migrate\nname=X\nsource=sftp://host/a\ntarget=webdav://host/b\nmax_delete_pct=0\n",
+    )
+    .unwrap();
     let original = serialize_kv(&job);
     std::fs::write(configs.join("migrate.conf"), &original).unwrap();
-    crate::syncjobs::baseline_migration::migrate_at(std::slice::from_mut(&mut job), &configs, &pending, false).unwrap();
-    assert_eq!(std::fs::read_to_string(configs.join("migrate.conf")).unwrap(), original);
+    crate::syncjobs::baseline_migration::migrate_at(
+        std::slice::from_mut(&mut job),
+        &configs,
+        &pending,
+        false,
+    )
+    .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(configs.join("migrate.conf")).unwrap(),
+        original
+    );
     assert_eq!((job.max_delete_pct, job.max_delete_min), (50, 25));
-    let proof: (String, String) = serde_json::from_slice(&std::fs::read(pending.join("migrate.pending")).unwrap()).unwrap();
+    let proof: (String, String) =
+        serde_json::from_slice(&std::fs::read(pending.join("migrate.pending")).unwrap()).unwrap();
     assert_eq!(proof, ("sftp://host/a".into(), "webdav://host/b".into()));
     // Once the original importer finished, the versioned defaults persist.
     let mut raw = parse_kv_checked(&original).unwrap();
-    crate::syncjobs::baseline_migration::migrate_at(std::slice::from_mut(&mut raw), &configs, &pending, true).unwrap();
-    let back = parse_kv_checked(&std::fs::read_to_string(configs.join("migrate.conf")).unwrap()).unwrap();
-    assert_eq!((back.config_version, back.max_delete_pct, back.max_delete_min), (CURRENT_CONFIG_VERSION, 50, 25));
+    crate::syncjobs::baseline_migration::migrate_at(
+        std::slice::from_mut(&mut raw),
+        &configs,
+        &pending,
+        true,
+    )
+    .unwrap();
+    let back =
+        parse_kv_checked(&std::fs::read_to_string(configs.join("migrate.conf")).unwrap()).unwrap();
+    assert_eq!(
+        (
+            back.config_version,
+            back.max_delete_pct,
+            back.max_delete_min
+        ),
+        (CURRENT_CONFIG_VERSION, 50, 25)
+    );
     std::fs::remove_dir_all(root).unwrap();
 }

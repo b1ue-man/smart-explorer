@@ -81,17 +81,17 @@ pub use batch_limits::{
     ITEM_PATH_MAX, ITEM_TEXT_MAX,
 };
 pub use codec::{read_frame, read_frame_with_tree_budget, write_frame};
-pub use node_codec::{TreeDecodeBudget, TREE_BUDGET_ERROR};
 pub use credit::{
     busy_message, charged, credit_cost, parse_busy, window_target, RecvWindow, SendCredit,
     StreamCount, CREDIT_CONNECTION_BUDGET, CREDIT_INITIAL, CREDIT_REQUEST_LIMIT, CREDIT_WINDOW_MAX,
 };
+pub(crate) use extension_parts::{append_duplicate_part, emit_duplicate_parts, emit_listing_parts};
 pub use features::{
     server_version, server_version_with, service_slots, ServerFeatures, LABEL_BATCH, LABEL_CREDIT,
     LABEL_STAGE,
 };
 pub use fs::{is_pseudo_dir, list_local, stat_local, walk_local, WalkCounter};
-pub(crate) use extension_parts::{append_duplicate_part, emit_duplicate_parts, emit_listing_parts};
+pub use node_codec::{TreeDecodeBudget, TREE_BUDGET_ERROR};
 pub use ops_types::{digest, omission, query, UNSUPPORTED_EXTENSION};
 pub(crate) use promotion::validate_destination_root;
 pub(crate) use put_tree::{BufferedTree, BufferedTreeReceiver, TreeManifestValidator};

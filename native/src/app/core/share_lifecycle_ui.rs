@@ -1,8 +1,8 @@
-use crate::app::theme;
 use super::share_lifecycle_view::{
     authorized_device_views, request_views, AuthorizedDeviceView, RequestView,
 };
 use super::*;
+use crate::app::theme;
 
 #[path = "share_lifecycle_actions_ui.rs"]
 mod actions;
@@ -92,7 +92,9 @@ pub(super) fn ui_lifecycle(app: &mut App, ui: &mut egui::Ui) {
         ui.label("Keine Geraete haben eine gespeicherte Autorisierung.");
     } else {
         for device in &authorized {
-            let can_allow_again = app.share_profiles.grant_for(&device.device_id)
+            let can_allow_again = app
+                .share_profiles
+                .grant_for(&device.device_id)
                 .is_some_and(|grant| grant.state != crate::share::DirectGrantState::Accepted);
             authorized_card(ui, device, can_allow_again, &mut action);
         }

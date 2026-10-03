@@ -5,8 +5,8 @@ use std::time::Duration;
 use tokio::sync::Semaphore;
 
 use super::{
-    admit_incoming_direct_repair, persist_receiver, RepairPersistGate,
-    publish_runtime_profiles_committed, shared_direct_repair_store,
+    admit_incoming_direct_repair, persist_receiver, publish_runtime_profiles_committed,
+    shared_direct_repair_store, RepairPersistGate,
 };
 use crate::share::core::{hmac_proof, public_fingerprint};
 use crate::share::direct_protocol::DirectPeerIdentity;
@@ -37,13 +37,24 @@ fn review_task_reciprocal_auth_is_reread_only_at_durable_write() {
         // not acquire that permit. Only the upcoming store is serialized.
         let (_, incoming_slot) = tokio::time::timeout(
             Duration::from_millis(250),
-            admit_incoming_direct_repair(deadline, session.clone(), auth.clone(), incoming_slots.clone()),
-        ).await.expect("admission blocked behind configuration").unwrap();
+            admit_incoming_direct_repair(
+                deadline,
+                session.clone(),
+                auth.clone(),
+                incoming_slots.clone(),
+            ),
+        )
+        .await
+        .expect("admission blocked behind configuration")
+        .unwrap();
         assert_eq!(incoming_slots.available_permits(), 0);
         let written = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let gate = RepairPersistGate {
-            transition_slot: transition_slots.clone(), session, auth: auth.clone(),
-            incoming_slot, deadline,
+            transition_slot: transition_slots.clone(),
+            session,
+            auth: auth.clone(),
+            incoming_slot,
+            deadline,
         };
         let pending = tokio::spawn(persist_receiver(
             receiver_awaiting_store(),
@@ -52,9 +63,10 @@ fn review_task_reciprocal_auth_is_reread_only_at_durable_write() {
         ));
         auth.lock().unwrap().direct_grants[0].state = DirectGrantState::Ignored;
         drop(held_transition);
-        assert!(matches!(pending.await.unwrap(), Err(
-            crate::share::direct_reciprocal_session::DirectRepairSessionError::PolicyDenied
-        )));
+        assert!(matches!(
+            pending.await.unwrap(),
+            Err(crate::share::direct_reciprocal_session::DirectRepairSessionError::PolicyDenied)
+        ));
         assert!(!written.load(std::sync::atomic::Ordering::SeqCst));
         assert_eq!(incoming_slots.available_permits(), 1);
         assert_eq!(transition_slots.available_permits(), 1);
@@ -78,7 +90,9 @@ fn review_task_reciprocal_timeout_holds_permits_until_store_finishes() {
         let incoming_slots = Arc::new(Semaphore::new(1));
         let (session, auth) = incoming_session_fixture();
         let gate = RepairPersistGate {
-            transition_slot: transition_slots.clone(), session, auth,
+            transition_slot: transition_slots.clone(),
+            session,
+            auth,
             incoming_slot: incoming_slots.clone().try_acquire_owned().unwrap(),
             deadline: tokio::time::Instant::now() + Duration::from_secs(2),
         };
@@ -200,7 +214,8 @@ fn receiver_awaiting_store(
     let remote_material = DirectRelationMaterial::new("remote-lookup", vec![62; 32]).unwrap();
     let outgoing =
         authenticated_session(&local, DirectSessionAuthorization::OutgoingAcceptedContact);
-    let incoming = authenticated_session(&remote, DirectSessionAuthorization::IncomingAcceptedGrant);
+    let incoming =
+        authenticated_session(&remote, DirectSessionAuthorization::IncomingAcceptedGrant);
     let (_, hello) = DirectRepairInitiator::begin(
         remote,
         &remote_material,

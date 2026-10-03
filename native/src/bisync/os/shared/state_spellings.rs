@@ -26,27 +26,44 @@ impl StateSpellings {
             PairSide::A => (&mut self.files_a, &mut self.dirs_a),
             PairSide::B => (&mut self.files_b, &mut self.dirs_b),
         };
-        let present_files: std::collections::BTreeSet<_> = snapshot.tree.keys().chain(snapshot.filtered.keys())
-            .map(|rel| keys.key(rel).into_owned()).collect();
+        let present_files: std::collections::BTreeSet<_> = snapshot
+            .tree
+            .keys()
+            .chain(snapshot.filtered.keys())
+            .map(|rel| keys.key(rel).into_owned())
+            .collect();
         files.retain(|key, rel| present_files.contains(key) || snapshot.omissions.protects(rel));
         for rel in snapshot.tree.keys().chain(snapshot.filtered.keys()) {
             files.insert(keys.key(rel).into_owned(), rel.clone());
         }
-        let present: std::collections::BTreeSet<_> = snapshot.dirs.iter()
-            .map(|rel| keys.key(rel).into_owned()).collect();
+        let present: std::collections::BTreeSet<_> = snapshot
+            .dirs
+            .iter()
+            .map(|rel| keys.key(rel).into_owned())
+            .collect();
         dirs.retain(|key, rel| present.contains(key) || snapshot.omissions.protects(rel));
-        for rel in &snapshot.dirs { dirs.insert(keys.key(rel).into_owned(), rel.clone()); }
+        for rel in &snapshot.dirs {
+            dirs.insert(keys.key(rel).into_owned(), rel.clone());
+        }
     }
 
     fn files(&self, side: PairSide) -> &BTreeMap<String, String> {
-        match side { PairSide::A => &self.files_a, PairSide::B => &self.files_b }
+        match side {
+            PairSide::A => &self.files_a,
+            PairSide::B => &self.files_b,
+        }
     }
     fn dirs(&self, side: PairSide) -> &BTreeMap<String, String> {
-        match side { PairSide::A => &self.dirs_a, PairSide::B => &self.dirs_b }
+        match side {
+            PairSide::A => &self.dirs_a,
+            PairSide::B => &self.dirs_b,
+        }
     }
 
     pub fn rel(&self, rel: &str, side: PairSide, keys: KeyPolicy) -> String {
-        self.files(side).get(keys.key(rel).as_ref()).cloned()
+        self.files(side)
+            .get(keys.key(rel).as_ref())
+            .cloned()
             .unwrap_or_else(|| destination_spelling(rel, self.dirs(side), keys))
     }
 
@@ -60,8 +77,17 @@ impl StateSpellings {
         spellings
     }
 
-    pub fn applied(&mut self, actions: &[Action], spellings: &Spellings, baseline: &Baseline, keys: KeyPolicy) {
-        let by_key: BTreeMap<_, _> = baseline.iter().map(|(rel, entry)| (keys.key(rel).into_owned(), *entry)).collect();
+    pub fn applied(
+        &mut self,
+        actions: &[Action],
+        spellings: &Spellings,
+        baseline: &Baseline,
+        keys: KeyPolicy,
+    ) {
+        let by_key: BTreeMap<_, _> = baseline
+            .iter()
+            .map(|(rel, entry)| (keys.key(rel).into_owned(), *entry))
+            .collect();
         for rel in actions.iter().map(super::core::action_rel) {
             let key = keys.key(rel).into_owned();
             // Only the authoritative checkpoint's existing signatures enter
@@ -70,10 +96,16 @@ impl StateSpellings {
             if let Some((a, b)) = entry {
                 for (side, sig) in [(PairSide::A, a), (PairSide::B, b)] {
                     if sig.is_some() {
-                        let map = match side { PairSide::A => &mut self.files_a, PairSide::B => &mut self.files_b };
+                        let map = match side {
+                            PairSide::A => &mut self.files_a,
+                            PairSide::B => &mut self.files_b,
+                        };
                         map.insert(key.clone(), spellings.side_rel(rel, side).to_string());
                     } else {
-                        let map = match side { PairSide::A => &mut self.files_a, PairSide::B => &mut self.files_b };
+                        let map = match side {
+                            PairSide::A => &mut self.files_a,
+                            PairSide::B => &mut self.files_b,
+                        };
                         map.remove(&key);
                     }
                 }
@@ -89,8 +121,12 @@ impl StateSpellings {
     pub fn cache_baseline(&self, baseline: &Baseline, keys: KeyPolicy) -> Baseline {
         let mut rows = Baseline::new();
         for (rel, (a, b)) in baseline {
-            if a.is_some() { rows.entry(self.rel(rel, PairSide::A, keys)).or_default().0 = *a; }
-            if b.is_some() { rows.entry(self.rel(rel, PairSide::B, keys)).or_default().1 = *b; }
+            if a.is_some() {
+                rows.entry(self.rel(rel, PairSide::A, keys)).or_default().0 = *a;
+            }
+            if b.is_some() {
+                rows.entry(self.rel(rel, PairSide::B, keys)).or_default().1 = *b;
+            }
         }
         rows
     }
@@ -99,25 +135,40 @@ impl StateSpellings {
 pub(super) fn load(key: &StateKey, keys: KeyPolicy) -> io::Result<StateSpellings> {
     let path = super::replica_state::baseline_file(key)?.with_extension("spellings.json");
     let limits = super::SyncLimits::for_memory(crate::transfer::physical_memory());
-    let value: StateSpellings = super::state_metadata::read_json(&path, limits.state_file_bytes().saturating_mul(4))?.unwrap_or_default();
+    let value: StateSpellings =
+        super::state_metadata::read_json(&path, limits.state_file_bytes().saturating_mul(4))?
+            .unwrap_or_default();
     let mut entries = 0u64;
     let mut text = 0u64;
     for map in [&value.files_a, &value.files_b, &value.dirs_a, &value.dirs_b] {
         for (key, rel) in map {
             crate::agent_proto::ValidatedRelativePath::parse(rel)?;
             if keys.key(rel).as_ref() != key {
-                return Err(io::Error::new(io::ErrorKind::InvalidData, "stored spelling does not match its planning key"));
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "stored spelling does not match its planning key",
+                ));
             }
             entries = entries.saturating_add(1);
-            text = text.saturating_add(key.len() as u64).saturating_add(rel.len() as u64);
+            text = text
+                .saturating_add(key.len() as u64)
+                .saturating_add(rel.len() as u64);
         }
     }
-    if entries > limits.state_entries.saturating_mul(2) || text > limits.state_text_bytes.saturating_mul(4) {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "side spellings exceed their budget"));
+    if entries > limits.state_entries.saturating_mul(2)
+        || text > limits.state_text_bytes.saturating_mul(4)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "side spellings exceed their budget",
+        ));
     }
     Ok(value)
 }
 
 pub(super) fn save(key: &StateKey, value: &StateSpellings) -> io::Result<()> {
-    super::state_metadata::write_json(&super::replica_state::baseline_file(key)?.with_extension("spellings.json"), value)
+    super::state_metadata::write_json(
+        &super::replica_state::baseline_file(key)?.with_extension("spellings.json"),
+        value,
+    )
 }

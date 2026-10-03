@@ -1,5 +1,4 @@
 //! One negotiated mutation; reply loss never triggers replay or stage cleanup.
-use std::{io, time::Instant};
 use crate::share::{
     backend::PeerBackend,
     framing::decode_resp,
@@ -8,6 +7,7 @@ use crate::share::{
     io_deadline, peer_request, peer_stream, peer_telemetry,
     wire::{FsRequest, FsResponse},
 };
+use std::{io, time::Instant};
 
 pub(super) fn client(
     backend: &PeerBackend,
@@ -54,7 +54,9 @@ fn negotiated(
             Ok(true)
         }
         FsResponse::ReversibleReplaced { replaced: false } => Ok(false),
-        _ => Err(peer_stream::invalid("Unerwartete reversible Ersetzungsantwort")),
+        _ => Err(peer_stream::invalid(
+            "Unerwartete reversible Ersetzungsantwort",
+        )),
     }
 }
 

@@ -1,31 +1,59 @@
-use crate::app::theme;
 use super::prelude::*;
 use super::*;
 use crate::app::analytics_accessibility::treemap_accessible_list;
+use crate::app::theme;
 
-fn host_figures_ui(ui: &mut egui::Ui, tree: &crate::analytics::SizeNode,
-    focus: &[String], figures: &crate::analytics::PlatformFigures, complete: bool) {
+fn host_figures_ui(
+    ui: &mut egui::Ui,
+    tree: &crate::analytics::SizeNode,
+    focus: &[String],
+    figures: &crate::analytics::PlatformFigures,
+    complete: bool,
+) {
     use crate::analytics::{node_view, Approximations, NodeKind};
     let approx = Approximations::compute(tree, &figures.place(), figures.totals(), complete);
-    let Some(view) = node_view(tree, focus, &approx, 0) else { return; };
+    let Some(view) = node_view(tree, focus, &approx, 0) else {
+        return;
+    };
     for row in view.children {
         if row.kind == NodeKind::Apps {
-            ui.collapsing(format!("{}: {} · Angaben der Gegenstelle", row.name, format_bytes(row.size)), |ui| {
-                if let Some(apps) = node_view(tree, &[row.name], &approx, 256) {
-                    egui::ScrollArea::vertical().max_height(160.0).show(ui, |ui| {
-                        for app in apps.children {
-                            let response = ui.label(format!("{}: {}", app.name, format_bytes(app.size)));
-                            if let Some(usage) = app.app {
-                                response.on_hover_text(format!("{}\nApp: {} · Daten: {} · davon Cache: {}",
-                                    usage.package, format_bytes(usage.app_bytes), format_bytes(usage.data_bytes),
-                                    format_bytes(usage.cache_bytes)));
-                            }
-                        }
-                    });
-                }
-            });
+            ui.collapsing(
+                format!(
+                    "{}: {} · Angaben der Gegenstelle",
+                    row.name,
+                    format_bytes(row.size)
+                ),
+                |ui| {
+                    if let Some(apps) = node_view(tree, &[row.name], &approx, 256) {
+                        egui::ScrollArea::vertical()
+                            .max_height(160.0)
+                            .show(ui, |ui| {
+                                for app in apps.children {
+                                    let response = ui.label(format!(
+                                        "{}: {}",
+                                        app.name,
+                                        format_bytes(app.size)
+                                    ));
+                                    if let Some(usage) = app.app {
+                                        response.on_hover_text(format!(
+                                            "{}\nApp: {} · Daten: {} · davon Cache: {}",
+                                            usage.package,
+                                            format_bytes(usage.app_bytes),
+                                            format_bytes(usage.data_bytes),
+                                            format_bytes(usage.cache_bytes)
+                                        ));
+                                    }
+                                }
+                            });
+                    }
+                },
+            );
         } else if matches!(row.kind, NodeKind::Protected | NodeKind::Rest) {
-            ui.label(format!("{}: {} · Angaben der Gegenstelle", row.name, format_bytes(row.size)));
+            ui.label(format!(
+                "{}: {} · Angaben der Gegenstelle",
+                row.name,
+                format_bytes(row.size)
+            ));
         }
     }
 }
@@ -60,11 +88,15 @@ impl App {
             .unwrap_or_else(|| "—".to_string());
         // Current remote (for the "scan this remote folder" button) + the source
         // the current tree came from (for ⟳ to re-walk the same place).
-        let remote_scan = self
-            .remote
-            .as_ref()
-            .map(|rs| StorageScanSource::remote_at(rs.backend.clone(), self.root_path.clone(),
-                rs.label.clone(), rs.endpoint_prefix.clone(), rs.account.clone()));
+        let remote_scan = self.remote.as_ref().map(|rs| {
+            StorageScanSource::remote_at(
+                rs.backend.clone(),
+                self.root_path.clone(),
+                rs.label.clone(),
+                rs.endpoint_prefix.clone(),
+                rs.account.clone(),
+            )
+        });
         let focus_segs = self.analytics_focus.clone();
         let focus_path = self.analytics_focus_path();
         let focus_size = self.analytics_focus_node().map(|n| n.size).unwrap_or(0);

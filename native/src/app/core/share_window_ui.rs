@@ -18,11 +18,20 @@ impl App {
                 self.ui_share_top(ui);
                 ui.separator();
                 ui.horizontal_wrapped(|ui| {
-                    for (i, label) in ["Geräte", "Räume", "Freigaben", "Diagnose", "Netzwerk", "Papierkorb"]
-                        .iter()
-                        .enumerate()
+                    for (i, label) in [
+                        "Geräte",
+                        "Räume",
+                        "Freigaben",
+                        "Diagnose",
+                        "Netzwerk",
+                        "Papierkorb",
+                    ]
+                    .iter()
+                    .enumerate()
                     {
-                        if i == 5 && !crate::host_trash::available() { continue; }
+                        if i == 5 && !crate::host_trash::available() {
+                            continue;
+                        }
                         if ui.selectable_label(self.share_tab == i, *label).clicked() {
                             self.share_tab = i;
                         }
@@ -52,8 +61,14 @@ impl App {
             ui.menu_button("Verbindung", |ui| {
                 ui.label("Share-Server");
                 share_value_field(ui, &self.share_server);
-                if ui.button("Verbinden").clicked() { let _ = self.ensure_share(); ui.close_menu(); }
-                if ui.button("Trennen").clicked() { let _ = self.share_cmd(crate::share::ShareCmd::Stop); ui.close_menu(); }
+                if ui.button("Verbinden").clicked() {
+                    let _ = self.ensure_share();
+                    ui.close_menu();
+                }
+                if ui.button("Trennen").clicked() {
+                    let _ = self.share_cmd(crate::share::ShareCmd::Stop);
+                    ui.close_menu();
+                }
                 if ui.button("Server & Gerätename einstellen…").clicked() {
                     self.open_settings(settings_ui::SettingsPage::Connections);
                     ui.close_menu();

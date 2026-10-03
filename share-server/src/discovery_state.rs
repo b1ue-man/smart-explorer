@@ -62,7 +62,9 @@ fn pairing_principal(state: &State, id: u64) -> Option<PairingPrincipal> {
     let client = state.clients.get(&id)?;
     Some(match client.identity.proven() {
         Some(key) => PairingPrincipal::Key(*key),
-        None if !client.source.has_internal_source_limit() => PairingPrincipal::ProxiedConnection(id),
+        None if !client.source.has_internal_source_limit() => {
+            PairingPrincipal::ProxiedConnection(id)
+        }
         None => PairingPrincipal::Source(client.source),
     })
 }
@@ -118,9 +120,11 @@ pub(super) fn prepare_exchange_locked(
         return Err("client pairing exchange limit reached");
     }
     let principal = pairing_principal(state, connector_id).ok_or("pairing connector is offline")?;
-    if state.discovery_exchanges.values().any(|exchange| {
-        exchange.discovery_id == discovery_id && exchange.principal == principal
-    }) {
+    if state
+        .discovery_exchanges
+        .values()
+        .any(|exchange| exchange.discovery_id == discovery_id && exchange.principal == principal)
+    {
         return Err("connector already pairing with this offer");
     }
     let Some(offer) = state.discovery_offers.get(discovery_id) else {
@@ -161,8 +165,14 @@ pub(super) fn prepare_exchange_locked(
     {
         offer.recent_starts.pop_front();
     }
-    if offer.recent_starts.iter().filter(|(who, _)| *who == principal).count() >= MAX_STARTS_PER_CONNECTOR_WINDOW
-        || offer.recent_starts.len() >= MAX_RETAINED_STARTS {
+    if offer
+        .recent_starts
+        .iter()
+        .filter(|(who, _)| *who == principal)
+        .count()
+        >= MAX_STARTS_PER_CONNECTOR_WINDOW
+        || offer.recent_starts.len() >= MAX_RETAINED_STARTS
+    {
         return Err("discovery offer pairing attempt rate exceeded");
     }
     offer.recent_starts.push_back((principal.clone(), now));

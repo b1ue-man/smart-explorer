@@ -90,28 +90,56 @@ where
 
 /// Short interactive work and long deletion/flush work never share a queue.
 #[derive(Clone, Copy)]
-pub(super) enum Class { Control, Background }
+pub(super) enum Class {
+    Control,
+    Background,
+}
 fn fair_slots(class: Class) -> Arc<super::fair_admission::Pool<super::session::PeerDeviceKey>> {
-    static CONTROL: OnceLock<Arc<super::fair_admission::Pool<super::session::PeerDeviceKey>>> = OnceLock::new();
-    static LONG: OnceLock<Arc<super::fair_admission::Pool<super::session::PeerDeviceKey>>> = OnceLock::new();
+    static CONTROL: OnceLock<Arc<super::fair_admission::Pool<super::session::PeerDeviceKey>>> =
+        OnceLock::new();
+    static LONG: OnceLock<Arc<super::fair_admission::Pool<super::session::PeerDeviceKey>>> =
+        OnceLock::new();
     match class {
-        Class::Control => CONTROL.get_or_init(|| super::fair_admission::Pool::new(MAX_BLOCKING_OPERATIONS)).clone(),
-        Class::Background => LONG.get_or_init(|| super::fair_admission::Pool::new(
-            std::thread::available_parallelism().map_or(1, |cores| cores.get()).clamp(1, 8))).clone(),
+        Class::Control => CONTROL
+            .get_or_init(|| super::fair_admission::Pool::new(MAX_BLOCKING_OPERATIONS))
+            .clone(),
+        Class::Background => LONG
+            .get_or_init(|| {
+                super::fair_admission::Pool::new(
+                    std::thread::available_parallelism()
+                        .map_or(1, |cores| cores.get())
+                        .clamp(1, 8),
+                )
+            })
+            .clone(),
     }
 }
 
-pub(super) async fn run_for<T, F>(principal: super::session::PeerPrincipal, class: Class,
-    operation: &'static str, work: F) -> io::Result<T>
-where T: Send + 'static, F: FnOnce() -> io::Result<T> + Send + 'static {
+pub(super) async fn run_for<T, F>(
+    principal: super::session::PeerPrincipal,
+    class: Class,
+    operation: &'static str,
+    work: F,
+) -> io::Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> io::Result<T> + Send + 'static,
+{
     let ticket = fair_slots(class).enqueue(principal.device_identity())?;
     let permit = ticket.acquire().await?;
     run_holding(operation, permit, work).await
 }
 
-pub(super) async fn spawn_for<T, F>(principal: super::session::PeerPrincipal, class: Class,
-    operation: &'static str, work: F) -> io::Result<BlockingTask<T>>
-where T: Send + 'static, F: FnOnce() -> io::Result<T> + Send + 'static {
+pub(super) async fn spawn_for<T, F>(
+    principal: super::session::PeerPrincipal,
+    class: Class,
+    operation: &'static str,
+    work: F,
+) -> io::Result<BlockingTask<T>>
+where
+    T: Send + 'static,
+    F: FnOnce() -> io::Result<T> + Send + 'static,
+{
     let ticket = fair_slots(class).enqueue(principal.device_identity())?;
     let permit = ticket.acquire().await?;
     Ok(spawn_holding(operation, permit, work))

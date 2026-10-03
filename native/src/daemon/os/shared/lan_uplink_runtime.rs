@@ -125,21 +125,30 @@ impl UplinkRuntime {
         let explicit_repair = input.settings.uplink_repair_requested_at.is_some()
             && input.settings.uplink_repair_requested_at != self.repair_attempt;
         if self.pending.is_none() && self.reconciled {
-            if !input.settings.uplink_sharing_enabled && input.settings.uplink_cleanup_pending
-                && (!self.cleanup_attempted || explicit_repair) {
+            if !input.settings.uplink_sharing_enabled
+                && input.settings.uplink_cleanup_pending
+                && (!self.cleanup_attempted || explicit_repair)
+            {
                 self.cleanup_attempted = true;
                 self.repair_attempt = input.settings.uplink_repair_requested_at;
                 self.spawn_cleanup();
-            } else if input.settings.uplink_sharing_enabled && (explicit_repair
-                || (!input.settings.uplink_setup_done && !self.setup_attempted
-                    && !matches!(&self.facility, Facility::RepairRequired(_)))) {
+            } else if input.settings.uplink_sharing_enabled
+                && (explicit_repair
+                    || (!input.settings.uplink_setup_done
+                        && !self.setup_attempted
+                        && !matches!(&self.facility, Facility::RepairRequired(_))))
+            {
                 self.setup_attempted = true;
                 self.repair_attempt = input.settings.uplink_repair_requested_at;
                 self.spawn_setup();
             }
         }
-        if !input.settings.uplink_cleanup_pending { self.cleanup_attempted = false; }
-        if !input.settings.uplink_sharing_enabled { self.setup_attempted = false; }
+        if !input.settings.uplink_cleanup_pending {
+            self.cleanup_attempted = false;
+        }
+        if !input.settings.uplink_sharing_enabled {
+            self.setup_attempted = false;
+        }
         let internet = self.internet_ifaces(input.facts);
         let shared = self.shared_ifaces();
         let links = crate::net::classify_links(
@@ -149,7 +158,8 @@ impl UplinkRuntime {
             &shared,
         );
         let stop_requested = input.settings.uplink_stop_requested_at.is_some();
-        let decision = if self.pending.is_some() || !self.reconciled || input.now < self.retry_after {
+        let decision = if self.pending.is_some() || !self.reconciled || input.now < self.retry_after
+        {
             Decision::Keep
         } else if self.stop_due {
             Decision::Stop("Start/Stop wird sicher abgeglichen".into())
@@ -218,7 +228,9 @@ impl UplinkRuntime {
         };
         let facility = match &self.facility {
             Facility::Available => LanFacility::Available,
-            Facility::Unavailable(reason) | Facility::RepairRequired(reason) => LanFacility::Unavailable(reason.clone()),
+            Facility::Unavailable(reason) | Facility::RepairRequired(reason) => {
+                LanFacility::Unavailable(reason.clone())
+            }
         };
         let mut reason = self.reason.clone();
         if let Some(message) = &self.setup_message {
@@ -229,7 +241,9 @@ impl UplinkRuntime {
         UplinkView {
             enabled: settings.uplink_sharing_enabled,
             setup_done: settings.uplink_setup_done,
-            repair_required: matches!(&self.facility, Facility::RepairRequired(_)) || self.state.last_error.is_some() || settings.uplink_cleanup_pending,
+            repair_required: matches!(&self.facility, Facility::RepairRequired(_))
+                || self.state.last_error.is_some()
+                || settings.uplink_cleanup_pending,
             facility,
             state,
             reason,

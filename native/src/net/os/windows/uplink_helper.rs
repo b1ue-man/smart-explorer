@@ -53,9 +53,13 @@ fn response_path() -> PathBuf {
     directory().join("response.json")
 }
 
-pub(crate) fn task_registered() -> io::Result<bool> { super::uplink_install::ready() }
+pub(crate) fn task_registered() -> io::Result<bool> {
+    super::uplink_install::ready()
+}
 
-pub(crate) fn setup_once() -> io::Result<String> { super::uplink_install::install() }
+pub(crate) fn setup_once() -> io::Result<String> {
+    super::uplink_install::install()
+}
 
 /// Hand one operation to the elevated task and wait for its answer.
 pub(crate) fn run_via_task(
@@ -72,9 +76,19 @@ pub(crate) fn run_via_task(
         ));
     }
     crate::support_dirs::ensure_private_dir(&directory())?;
-    if !task_registered()? { return Err(io::Error::other("Uplink-Einrichtung fehlt; Reparatur erforderlich")); }
-    let operation_lock = crate::support_dirs::open_private_lock(&directory().join("operation.lock"))?;
-    operation_lock.try_lock().map_err(|_| io::Error::new(io::ErrorKind::WouldBlock, "Uplink-Vorgang laeuft bereits; erneut versuchen"))?;
+    if !task_registered()? {
+        return Err(io::Error::other(
+            "Uplink-Einrichtung fehlt; Reparatur erforderlich",
+        ));
+    }
+    let operation_lock =
+        crate::support_dirs::open_private_lock(&directory().join("operation.lock"))?;
+    operation_lock.try_lock().map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "Uplink-Vorgang laeuft bereits; erneut versuchen",
+        )
+    })?;
     let mut random = [0u8; 16];
     getrandom::getrandom(&mut random).map_err(|error| io::Error::other(error.to_string()))?;
     let nonce: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
@@ -86,7 +100,10 @@ pub(crate) fn run_via_task(
         nonce: nonce.clone(),
     };
     let _ = std::fs::remove_file(response_path());
-    crate::support_dirs::write_private_atomic(&request_path(), &serde_json::to_vec(&request).map_err(io::Error::other)?)?;
+    crate::support_dirs::write_private_atomic(
+        &request_path(),
+        &serde_json::to_vec(&request).map_err(io::Error::other)?,
+    )?;
     let output = super::uplink_install::powershell(&format!(
         "Start-ScheduledTask -TaskName '{}' -TaskPath '\\'",
         super::uplink_install::task_name()?.replace('\'', "''")
@@ -136,7 +153,10 @@ pub(crate) fn run_helper() -> io::Result<()> {
         },
     };
     let _ = std::fs::remove_file(request_path());
-    crate::support_dirs::write_private_atomic(&response_path(), &serde_json::to_vec(&response).map_err(io::Error::other)?)?;
+    crate::support_dirs::write_private_atomic(
+        &response_path(),
+        &serde_json::to_vec(&response).map_err(io::Error::other)?,
+    )?;
     result.map(|_| ())
 }
 
@@ -178,9 +198,13 @@ fn validate_and_apply(request: &HelperRequest) -> io::Result<String> {
                     "Der private Adapter ist kein Link ohne Router; Freigabe verweigert",
                 ));
             }
-            let private_index = links.iter().find(|(iface, _)| iface.adapter_id.eq_ignore_ascii_case(&request.private_guid))
-                .map(|(iface, _)| iface.index).ok_or_else(|| io::Error::other("Privater Adapter fehlt"))?;
-            crate::share::lan_uplink_evidence::authorize(private_index, &facts).map_err(io::Error::other)?;
+            let private_index = links
+                .iter()
+                .find(|(iface, _)| iface.adapter_id.eq_ignore_ascii_case(&request.private_guid))
+                .map(|(iface, _)| iface.index)
+                .ok_or_else(|| io::Error::other("Privater Adapter fehlt"))?;
+            crate::share::lan_uplink_evidence::authorize(private_index, &facts)
+                .map_err(io::Error::other)?;
             let public_ok = links.iter().any(|(iface, class)| {
                 iface.adapter_id.eq_ignore_ascii_case(&request.public_guid)
                     && matches!(class, LinkClass::Uplink | LinkClass::Routed)

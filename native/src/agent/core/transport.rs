@@ -244,8 +244,9 @@ fn establish((r, w): AgentStreams, handshake_deadline: Duration) -> io::Result<(
         .spawn(move || {
             let mut r = r;
             loop {
-                let read = agent_proto::read_frame_with_tree_budget(&mut r,
-                    |id| Some(incoming_tree_budget(&pending_r, id)));
+                let read = agent_proto::read_frame_with_tree_budget(&mut r, |id| {
+                    Some(incoming_tree_budget(&pending_r, id))
+                });
                 if !route_frame(&pending_r, &activity_r, &control_r, read) {
                     break;
                 }

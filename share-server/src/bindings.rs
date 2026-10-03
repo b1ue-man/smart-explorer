@@ -55,15 +55,26 @@ pub(super) enum BindOutcome {
 
 impl Bindings {
     pub(super) fn device_key(&self, device_id: &str) -> Option<&str> {
-        self.devices.get(device_id).map(|binding| binding.key.as_str())
+        self.devices
+            .get(device_id)
+            .map(|binding| binding.key.as_str())
     }
 
     pub(super) fn bind_device(&mut self, device_id: &str, key: &str, now: i64) -> BindOutcome {
-        bind(&mut self.devices, &mut self.dirty, device_id, key, None, now)
+        bind(
+            &mut self.devices,
+            &mut self.dirty,
+            device_id,
+            key,
+            None,
+            now,
+        )
     }
 
     pub(super) fn lookup_key(&self, lookup_id: &str) -> Option<&str> {
-        self.lookups.get(lookup_id).map(|binding| binding.key.as_str())
+        self.lookups
+            .get(lookup_id)
+            .map(|binding| binding.key.as_str())
     }
 
     /// The access hash the owner left for a lookup.
@@ -82,7 +93,14 @@ impl Bindings {
         access: Option<String>,
         now: i64,
     ) -> BindOutcome {
-        bind(&mut self.lookups, &mut self.dirty, lookup_id, key, access, now)
+        bind(
+            &mut self.lookups,
+            &mut self.dirty,
+            lookup_id,
+            key,
+            access,
+            now,
+        )
     }
 
     /// A copy to save when something changed since the last call.
@@ -103,13 +121,18 @@ impl Bindings {
             Err(error) => return Err(format!("cannot read {}: {error}", path.display())),
         };
         let mut text = String::new();
-        file.take(MAX_STATE_BYTES + 1).read_to_string(&mut text)
+        file.take(MAX_STATE_BYTES + 1)
+            .read_to_string(&mut text)
             .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
-        if text.len() as u64 > MAX_STATE_BYTES { return Err("binding state file is too large".into()); }
+        if text.len() as u64 > MAX_STATE_BYTES {
+            return Err("binding state file is too large".into());
+        }
         let mut bindings: Self = serde_json::from_str(&text)
             .map_err(|error| format!("cannot parse {}: {error}", path.display()))?;
         if bindings.version > STATE_VERSION
-            || bindings.devices.len() > MAX_BINDINGS || bindings.lookups.len() > MAX_BINDINGS {
+            || bindings.devices.len() > MAX_BINDINGS
+            || bindings.lookups.len() > MAX_BINDINGS
+        {
             return Err("unsupported version or oversized binding state".into());
         }
         // Ownership never expires: ageing or pressure must not enable a takeover.
@@ -121,7 +144,8 @@ impl Bindings {
     /// Writes the file atomically (temporary file, then rename).
     pub(super) fn save(&self, path: &Path) -> io::Result<()> {
         let text = serde_json::to_vec(self).map_err(io::Error::other)?;
-        let nonce = super::login::nonce().ok_or_else(|| io::Error::other("cannot create binding state nonce"))?;
+        let nonce = super::login::nonce()
+            .ok_or_else(|| io::Error::other("cannot create binding state nonce"))?;
         let temporary = path.with_extension(format!("{}.tmp", super::login::hex(&nonce)));
         let result = (|| {
             let mut options = std::fs::OpenOptions::new();
@@ -138,13 +162,17 @@ impl Bindings {
             std::fs::rename(&temporary, path)?;
             #[cfg(unix)]
             {
-                let parent = path.parent().filter(|parent| !parent.as_os_str().is_empty())
+                let parent = path
+                    .parent()
+                    .filter(|parent| !parent.as_os_str().is_empty())
                     .unwrap_or_else(|| Path::new("."));
                 std::fs::File::open(parent)?.sync_all()?;
             }
             Ok(())
         })();
-        if result.is_err() { let _ = std::fs::remove_file(&temporary); }
+        if result.is_err() {
+            let _ = std::fs::remove_file(&temporary);
+        }
         result
     }
 }
@@ -168,7 +196,9 @@ fn bind(
         binding.seen = now;
         return BindOutcome::Confirmed;
     }
-    if map.len() >= MAX_BINDINGS { return BindOutcome::Full; }
+    if map.len() >= MAX_BINDINGS {
+        return BindOutcome::Full;
+    }
     map.insert(
         id.to_string(),
         Binding {
@@ -225,6 +255,9 @@ mod tests {
         let stale = Bindings::load(&path, 100 + 401 * 24 * 60 * 60).expect("load");
         assert_eq!(stale.device_key("device"), Some("key"));
         let _ = std::fs::remove_file(&path);
-        assert!(Bindings::load(&path, 0).expect("missing file").device_key("device").is_none());
+        assert!(Bindings::load(&path, 0)
+            .expect("missing file")
+            .device_key("device")
+            .is_none());
     }
 }

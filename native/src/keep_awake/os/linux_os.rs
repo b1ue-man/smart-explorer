@@ -100,7 +100,12 @@ impl Backend {
     }
 }
 
-fn inhibit(connection: &Connection, what: &str, mode: &str, reason: Reason) -> zbus::Result<OwnedFd> {
+fn inhibit(
+    connection: &Connection,
+    what: &str,
+    mode: &str,
+    reason: Reason,
+) -> zbus::Result<OwnedFd> {
     let reply = connection.call_method(
         Some(LOGIN1),
         LOGIN1_PATH,

@@ -216,13 +216,7 @@ pub(super) fn start_pairing(
         Ok(publisher) => publisher,
         Err(message) => {
             let (classification, retryable) = classify_start_rejection(message);
-            send_rejection(
-                origin,
-                context,
-                classification,
-                retryable,
-                message,
-            );
+            send_rejection(origin, context, classification, retryable, message);
             return;
         }
     };
@@ -295,13 +289,7 @@ pub(super) fn pairing_packet(
         }
         PacketRoute::Reject { message, close } => {
             let (classification, retryable) = classify_packet_rejection(message);
-            send_rejection(
-                origin,
-                context,
-                classification,
-                retryable,
-                message,
-            );
+            send_rejection(origin, context, classification, retryable, message);
             if close {
                 finish_exchange(state, exchange_id, PairingCloseReason::ProtocolError);
             }

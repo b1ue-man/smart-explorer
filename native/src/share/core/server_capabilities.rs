@@ -80,7 +80,9 @@ fn resolve_capabilities(query: CapabilityQuery) -> io::Result<FsResponse> {
             authorization_epoch,
         )? {
             let mut capabilities = grant.lease.capabilities();
-            if !may_write { capabilities.staged_write = StagedWriteCapabilities::default(); }
+            if !may_write {
+                capabilities.staged_write = StagedWriteCapabilities::default();
+            }
             let target = grant.lease.resolve(&path)?;
             let limits = crate::vfs::target_limits(&*target.backend, &target.path);
             return Ok(describe(
@@ -88,7 +90,11 @@ fn resolve_capabilities(query: CapabilityQuery) -> io::Result<FsResponse> {
                 capabilities.root_confinement.is_enforced(),
                 Some(grant.token),
                 transfer,
-                Some(if may_write { target.access } else { ExportAccess::ReadOnly }),
+                Some(if may_write {
+                    target.access
+                } else {
+                    ExportAccess::ReadOnly
+                }),
                 limits,
             ));
         }
@@ -106,8 +112,14 @@ fn resolve_capabilities(query: CapabilityQuery) -> io::Result<FsResponse> {
         ));
     };
     let mut resolved = resolved;
-    if !may_write { resolved.capabilities.staged_write = StagedWriteCapabilities::default(); }
-    let access = Some(if may_write { resolved.target.access } else { ExportAccess::ReadOnly });
+    if !may_write {
+        resolved.capabilities.staged_write = StagedWriteCapabilities::default();
+    }
+    let access = Some(if may_write {
+        resolved.target.access
+    } else {
+        ExportAccess::ReadOnly
+    });
     let limits = crate::vfs::target_limits(&*resolved.target.backend, &resolved.target.path);
     if !acquire_lease {
         let root_confined = resolved.lease_root_confined();

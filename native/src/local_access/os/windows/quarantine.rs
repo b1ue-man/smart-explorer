@@ -12,9 +12,9 @@ use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 
 use windows_sys::Win32::Storage::FileSystem::{
-    FileIdInfo, FileRenameInfo, GetFileInformationByHandleEx, SetFileInformationByHandle,
-    DELETE, FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_INFO, FILE_READ_ATTRIBUTES,
-    FILE_RENAME_INFO, FILE_SHARE_READ,
+    FileIdInfo, FileRenameInfo, GetFileInformationByHandleEx, SetFileInformationByHandle, DELETE,
+    FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_INFO, FILE_READ_ATTRIBUTES, FILE_RENAME_INFO,
+    FILE_SHARE_READ,
 };
 
 use super::{validate_name, DirectoryHandle};
@@ -37,24 +37,38 @@ pub(crate) struct QuarantinedChild {
 pub(crate) struct QuarantineSlot(OsString);
 
 impl QuarantineSlot {
-    pub(crate) fn name(&self) -> &OsStr { &self.0 }
+    pub(crate) fn name(&self) -> &OsStr {
+        &self.0
+    }
 }
 
 impl DirectoryHandle {
     pub(crate) fn checked_quarantine_slot(name: &OsStr) -> io::Result<QuarantineSlot> {
         validate_name(name)?;
-        let valid = name.to_str().and_then(|name| name.strip_prefix(".held.se-recycle-"))
-            .is_some_and(|nonce| nonce.len() == 16
-                && nonce.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)));
+        let valid = name
+            .to_str()
+            .and_then(|name| name.strip_prefix(".held.se-recycle-"))
+            .is_some_and(|nonce| {
+                nonce.len() == 16
+                    && nonce
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            });
         if !valid {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid chosen quarantine slot"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid chosen quarantine slot",
+            ));
         }
         Ok(QuarantineSlot(name.to_os_string()))
     }
 
     /// The caller durably records this slot before the first rename.
     pub(crate) fn quarantine_regular_child_in(
-        &self, name: &OsStr, expected: &File, slot: &QuarantineSlot,
+        &self,
+        name: &OsStr,
+        expected: &File,
+        slot: &QuarantineSlot,
     ) -> io::Result<QuarantinedChild> {
         validate_name(name)?;
         super::super::regular::validate_file(expected, true)?;
@@ -66,11 +80,20 @@ impl DirectoryHandle {
             .open(self.0.path.join(name))?;
         super::super::regular::validate_file(&guard, true)?;
         if identity(&guard)? != identity(expected)? {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "expected recycle child changed"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "expected recycle child changed",
+            ));
         }
         rename_no_replace(&guard, &self.0.path.join(slot.name()))?;
-        Ok(QuarantinedChild { parent: self.clone(), original: name.to_os_string(),
-            name: slot.0.clone(), guard, file, active: true })
+        Ok(QuarantinedChild {
+            parent: self.clone(),
+            original: name.to_os_string(),
+            name: slot.0.clone(),
+            guard,
+            file,
+            active: true,
+        })
     }
 
     pub(crate) fn quarantine_regular_child(
@@ -88,7 +111,10 @@ impl DirectoryHandle {
             .open(self.0.path.join(name))?;
         super::super::regular::validate_file(&guard, true)?;
         if identity(&guard)? != identity(expected)? {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "expected recycle child changed"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "expected recycle child changed",
+            ));
         }
         // The source ACL stays on the file; no additional read permission is
         // granted. This handle excludes write/delete sharing throughout.
@@ -110,7 +136,10 @@ impl DirectoryHandle {
                 Err(error) => return Err(error),
             }
         }
-        Err(io::Error::new(io::ErrorKind::AlreadyExists, "quarantine names kept colliding"))
+        Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "quarantine names kept colliding",
+        ))
     }
 }
 
@@ -135,7 +164,10 @@ impl QuarantinedChild {
     pub(crate) fn move_to(&mut self, target: &DirectoryHandle, name: &OsStr) -> io::Result<()> {
         validate_name(name)?;
         if !self.active {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "quarantine is no longer active"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "quarantine is no longer active",
+            ));
         }
         rename_no_replace(&self.guard, &target.0.path.join(name))?;
         self.active = false;
@@ -192,7 +224,8 @@ fn rename_no_replace(file: &File, target: &Path) -> io::Result<()> {
             std::ptr::addr_of_mut!((*info).FileName).cast::<u16>(),
             name.len(),
         );
-        if SetFileInformationByHandle(file.as_raw_handle(), FileRenameInfo, info.cast(), bytes) == 0 {
+        if SetFileInformationByHandle(file.as_raw_handle(), FileRenameInfo, info.cast(), bytes) == 0
+        {
             return Err(io::Error::last_os_error());
         }
     }

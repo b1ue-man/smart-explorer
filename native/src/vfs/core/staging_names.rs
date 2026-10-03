@@ -32,8 +32,12 @@ pub(crate) fn fit_stage_name(lead: &str, name: &str, tail: &str) -> String {
 /// reports such an entry as the app's own file instead of syncing it, so a
 /// stage left by a crash never becomes a user file.
 pub fn is_staging_name(name: &str) -> bool {
-    is_unique_stage(name) || is_dotted_stage(name) || is_part_stage(name)
-        || is_agent_spool(name) || is_private_stage(name) || is_replacement_stage(name)
+    is_unique_stage(name)
+        || is_dotted_stage(name)
+        || is_part_stage(name)
+        || is_agent_spool(name)
+        || is_private_stage(name)
+        || is_replacement_stage(name)
 }
 
 /// Recovery siblings are independent of the user's filename length.

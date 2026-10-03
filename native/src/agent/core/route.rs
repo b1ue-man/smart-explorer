@@ -38,9 +38,16 @@ pub(super) struct Route {
     pub(super) tree_budget: Option<crate::agent_proto::TreeDecodeBudget>,
 }
 
-pub(super) fn incoming_tree_budget(pending: &PendingMap, id: u64) -> crate::agent_proto::TreeDecodeBudget {
-    lock_pending(pending).get(&id).and_then(|route| route.tree_budget)
-        .unwrap_or_else(|| crate::agent_proto::TreeDecodeBudget::new(u64::MAX, crate::transfer::memory_budget()))
+pub(super) fn incoming_tree_budget(
+    pending: &PendingMap,
+    id: u64,
+) -> crate::agent_proto::TreeDecodeBudget {
+    lock_pending(pending)
+        .get(&id)
+        .and_then(|route| route.tree_budget)
+        .unwrap_or_else(|| {
+            crate::agent_proto::TreeDecodeBudget::new(u64::MAX, crate::transfer::memory_budget())
+        })
 }
 
 /// Replies after which the server sends nothing more for a request.
@@ -80,7 +87,14 @@ impl RequestRx {
     /// A route of the former kind: bounded in frames.
     pub(super) fn legacy() -> (Route, Self) {
         let (tx, rx) = bounded(TRANSFER_FRAME_BACKLOG);
-        (Route { tx, credit: None, tree_budget: None }, Self { rx, credit: None })
+        (
+            Route {
+                tx,
+                credit: None,
+                tree_budget: None,
+            },
+            Self { rx, credit: None },
+        )
     }
 
     /// A credit route: unbounded in frames, bounded by the granted credit.

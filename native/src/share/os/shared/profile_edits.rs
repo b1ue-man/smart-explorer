@@ -17,13 +17,19 @@ pub fn merge_user_edits(
     Ok(())
 }
 
-fn apply_user_edits(latest: &mut ShareProfiles, before: &ShareProfiles,
-    edited: &ShareProfiles) -> Result<(), String> {
+fn apply_user_edits(
+    latest: &mut ShareProfiles,
+    before: &ShareProfiles,
+    edited: &ShareProfiles,
+) -> Result<(), String> {
     if edited.auto_connect != before.auto_connect {
         latest.auto_connect = edited.auto_connect;
     }
-    export_edits::merge(&mut latest.default_direct_exports, &before.default_direct_exports,
-        &edited.default_direct_exports)?;
+    export_edits::merge(
+        &mut latest.default_direct_exports,
+        &before.default_direct_exports,
+        &edited.default_direct_exports,
+    )?;
 
     for edited_contact in &edited.direct_contacts {
         let Some(before_contact) = before
@@ -33,22 +39,37 @@ fn apply_user_edits(latest: &mut ShareProfiles, before: &ShareProfiles,
         else {
             continue;
         };
-        let trust_was_reset = before_contact.presence.is_some() && edited_contact.presence.is_none()
-            && edited_contact.remote_device_id.is_none() && edited_contact.remote_public_key.is_none();
-        if trust_was_reset || before_contact.relation.share_back != edited_contact.relation.share_back {
-            let current = latest.direct_contacts.iter().find(|contact| contact.id == edited_contact.id)
+        let trust_was_reset = before_contact.presence.is_some()
+            && edited_contact.presence.is_none()
+            && edited_contact.remote_device_id.is_none()
+            && edited_contact.remote_public_key.is_none();
+        if trust_was_reset
+            || before_contact.relation.share_back != edited_contact.relation.share_back
+        {
+            let current = latest
+                .direct_contacts
+                .iter()
+                .find(|contact| contact.id == edited_contact.id)
                 .ok_or_else(|| "Direktkontakt wurde entfernt; bitte neu laden".to_string())?;
             if current.lookup_id != before_contact.lookup_id
                 || current.expected_fingerprint != before_contact.expected_fingerprint
                 || current.expected_node_id != before_contact.expected_node_id
-                || before_contact.remote_device_id.is_some() && current.remote_device_id != before_contact.remote_device_id
-                || before_contact.remote_public_key.is_some() && current.remote_public_key != before_contact.remote_public_key {
-                return Err("Identitaet des Direktkontakts wurde geaendert; bitte neu laden".into());
+                || before_contact.remote_device_id.is_some()
+                    && current.remote_device_id != before_contact.remote_device_id
+                || before_contact.remote_public_key.is_some()
+                    && current.remote_public_key != before_contact.remote_public_key
+            {
+                return Err(
+                    "Identitaet des Direktkontakts wurde geaendert; bitte neu laden".into(),
+                );
             }
         }
         if before_contact.relation.share_back != edited_contact.relation.share_back {
-            latest.set_contact_share_back(&edited_contact.id, edited_contact.relation.share_back,
-                crate::share::core_now_secs())?;
+            latest.set_contact_share_back(
+                &edited_contact.id,
+                edited_contact.relation.share_back,
+                crate::share::core_now_secs(),
+            )?;
         }
         if trust_was_reset {
             if let Some(peer) = ShareProfiles::contact_remote_identity(before_contact) {
@@ -62,7 +83,9 @@ fn apply_user_edits(latest: &mut ShareProfiles, before: &ShareProfiles,
         else {
             if edited_contact.display_name != before_contact.display_name
                 || edited_contact.auto_connect != before_contact.auto_connect
-                || edited_contact.auto_open != before_contact.auto_open || trust_was_reset {
+                || edited_contact.auto_open != before_contact.auto_open
+                || trust_was_reset
+            {
                 return Err("Direktkontakt wurde entfernt; bitte neu laden".into());
             }
             continue;
@@ -71,17 +94,27 @@ fn apply_user_edits(latest: &mut ShareProfiles, before: &ShareProfiles,
     }
 
     for edited_grant in &edited.direct_grants {
-        let Some(before_grant) = before.direct_grants.iter().find(|grant|
-            grant.device_id == edited_grant.device_id && grant.public_key == edited_grant.public_key
-                && grant.node_id == edited_grant.node_id && grant.fingerprint == edited_grant.fingerprint)
-        else { continue; };
+        let Some(before_grant) = before.direct_grants.iter().find(|grant| {
+            grant.device_id == edited_grant.device_id
+                && grant.public_key == edited_grant.public_key
+                && grant.node_id == edited_grant.node_id
+                && grant.fingerprint == edited_grant.fingerprint
+        }) else {
+            continue;
+        };
         if before_grant.write != edited_grant.write {
             let expected = crate::share::DirectPeerIdentity {
-                device_id: before_grant.device_id.clone(), device_name: before_grant.device_name.clone(),
-                public_key: before_grant.public_key.clone(), node_id: before_grant.node_id.clone(),
+                device_id: before_grant.device_id.clone(),
+                device_name: before_grant.device_name.clone(),
+                public_key: before_grant.public_key.clone(),
+                node_id: before_grant.node_id.clone(),
                 fingerprint: before_grant.fingerprint.clone(),
             };
-            latest.set_direct_peer_write(&expected, edited_grant.write, crate::share::core_now_secs())?;
+            latest.set_direct_peer_write(
+                &expected,
+                edited_grant.write,
+                crate::share::core_now_secs(),
+            )?;
         }
     }
 
@@ -94,8 +127,11 @@ fn apply_user_edits(latest: &mut ShareProfiles, before: &ShareProfiles,
             .iter_mut()
             .find(|room| room.id == edited_room.id)
         else {
-            if edited_room.name != before_room.name || edited_room.auto_join != before_room.auto_join
-                || edited_room.exports != before_room.exports || edited_room.policy != before_room.policy {
+            if edited_room.name != before_room.name
+                || edited_room.auto_join != before_room.auto_join
+                || edited_room.exports != before_room.exports
+                || edited_room.policy != before_room.policy
+            {
                 return Err("Raum wurde entfernt; bitte neu laden".into());
             }
             continue;
@@ -128,8 +164,14 @@ fn merge_contact(latest: &mut DirectContact, before: &DirectContact, edited: &Di
     }
 }
 
-fn merge_room(latest: &mut RoomProfile, before: &RoomProfile, edited: &RoomProfile) -> Result<(), String> {
-    if latest.room_id != before.room_id { return Err("Raumidentitaet wurde geaendert; bitte neu laden".into()); }
+fn merge_room(
+    latest: &mut RoomProfile,
+    before: &RoomProfile,
+    edited: &RoomProfile,
+) -> Result<(), String> {
+    if latest.room_id != before.room_id {
+        return Err("Raumidentitaet wurde geaendert; bitte neu laden".into());
+    }
     if edited.name != before.name {
         latest.name = edited.name.clone();
     }
@@ -161,8 +203,10 @@ fn merge_room(latest: &mut RoomProfile, before: &RoomProfile, edited: &RoomProfi
             }
             continue;
         };
-        if latest_member.public_key != before_member.public_key || latest_member.node_id != before_member.node_id
-            || latest_member.fingerprint != before_member.fingerprint {
+        if latest_member.public_key != before_member.public_key
+            || latest_member.node_id != before_member.node_id
+            || latest_member.fingerprint != before_member.fingerprint
+        {
             if edited_member.blocked != before_member.blocked {
                 return Err("Raummitglied wurde ersetzt; bitte neu laden".into());
             }
@@ -170,14 +214,27 @@ fn merge_room(latest: &mut RoomProfile, before: &RoomProfile, edited: &RoomProfi
         }
         if edited_member.blocked != before_member.blocked {
             if edited_member.blocked {
-                latest.set_member_blocked(&edited_member.device_id, true, crate::share::core_now_secs());
+                latest.set_member_blocked(
+                    &edited_member.device_id,
+                    true,
+                    crate::share::core_now_secs(),
+                );
             } else if !latest.admit_member(&edited_member.device_id) {
-                latest.set_member_blocked(&edited_member.device_id, false, crate::share::core_now_secs());
+                latest.set_member_blocked(
+                    &edited_member.device_id,
+                    false,
+                    crate::share::core_now_secs(),
+                );
             }
         }
         if before_member.presence.is_some() && edited_member.presence.is_none() {
-            let Some(latest_member) = latest.members.iter_mut().find(|member| member.device_id == edited_member.device_id)
-                else { continue; };
+            let Some(latest_member) = latest
+                .members
+                .iter_mut()
+                .find(|member| member.device_id == edited_member.device_id)
+            else {
+                continue;
+            };
             latest_member.presence = None;
             latest_member.status = ShareStatus::Waiting;
         }
@@ -217,40 +274,80 @@ mod tests {
     fn review_task_fc1_gui_rebase_keeps_concurrent_exports_and_all_denials() {
         use crate::share::{ExportAccess, SharedRoot};
         let mut before = ShareProfiles::default();
-        before.default_direct_exports.roots.push(SharedRoot::new("A", "/a"));
-        before.default_direct_exports.set_connection_access("sftp://u@a:22/docs", Some(ExportAccess::ReadOnly)).unwrap();
+        before
+            .default_direct_exports
+            .roots
+            .push(SharedRoot::new("A", "/a"));
+        before
+            .default_direct_exports
+            .set_connection_access("sftp://u@a:22/docs", Some(ExportAccess::ReadOnly))
+            .unwrap();
         let mut edited = before.clone();
         edited.auto_connect = false;
         edited.default_direct_exports.roots[0].access = ExportAccess::ReadWrite;
-        edited.default_direct_exports.set_connection_access("sftp://u@a:22/docs", None).unwrap();
+        edited
+            .default_direct_exports
+            .set_connection_access("sftp://u@a:22/docs", None)
+            .unwrap();
         let mut latest = before.clone();
         latest.default_direct_exports.roots[0].allow_system_writes = true;
-        latest.default_direct_exports.roots.push(SharedRoot::new("B", "/b"));
-        latest.default_direct_exports.set_connection_access("sftp://u@b:22/docs", Some(ExportAccess::ReadWrite)).unwrap();
+        latest
+            .default_direct_exports
+            .roots
+            .push(SharedRoot::new("B", "/b"));
+        latest
+            .default_direct_exports
+            .set_connection_access("sftp://u@b:22/docs", Some(ExportAccess::ReadWrite))
+            .unwrap();
         for index in 0..70 {
-            latest.record_removed_direct_peer(&crate::share::DirectPeerIdentity {
-                device_id: format!("d{index}"), device_name: String::new(), public_key: format!("k{index}"),
-                node_id: format!("n{index}"), fingerprint: format!("f{index}"),
-            }, index);
+            latest.record_removed_direct_peer(
+                &crate::share::DirectPeerIdentity {
+                    device_id: format!("d{index}"),
+                    device_name: String::new(),
+                    public_key: format!("k{index}"),
+                    node_id: format!("n{index}"),
+                    fingerprint: format!("f{index}"),
+                },
+                index,
+            );
         }
         merge_user_edits(&mut latest, &before, &edited).unwrap();
         assert!(!latest.auto_connect);
         assert_eq!(latest.removed_direct_peers.len(), 70);
         assert_eq!(latest.default_direct_exports.roots.len(), 2);
-        assert_eq!(latest.default_direct_exports.roots[0].access, ExportAccess::ReadWrite);
+        assert_eq!(
+            latest.default_direct_exports.roots[0].access,
+            ExportAccess::ReadWrite
+        );
         assert!(latest.default_direct_exports.roots[0].allow_system_writes);
         assert_eq!(latest.default_direct_exports.roots[1].path, "/b");
-        assert_eq!(latest.default_direct_exports.connection_access("sftp://u@a:22/docs"), None);
-        assert_eq!(latest.default_direct_exports.connection_access("sftp://u@b:22/docs"), Some(ExportAccess::ReadWrite));
+        assert_eq!(
+            latest
+                .default_direct_exports
+                .connection_access("sftp://u@a:22/docs"),
+            None
+        );
+        assert_eq!(
+            latest
+                .default_direct_exports
+                .connection_access("sftp://u@b:22/docs"),
+            Some(ExportAccess::ReadWrite)
+        );
     }
 
     #[test]
     fn review_task_fc1_gui_write_to_a_replaced_key_rolls_back_every_edit() {
         let mut before = ShareProfiles::default();
         before.direct_grants.push(crate::share::DirectGrant {
-            device_id: "d".into(), device_name: "Peer".into(), public_key: "old-key".into(),
-            node_id: "node".into(), fingerprint: "old-fp".into(),
-            state: crate::share::DirectGrantState::Accepted, updated_at: 1, exec: Default::default(), write: false,
+            device_id: "d".into(),
+            device_name: "Peer".into(),
+            public_key: "old-key".into(),
+            node_id: "node".into(),
+            fingerprint: "old-fp".into(),
+            state: crate::share::DirectGrantState::Accepted,
+            updated_at: 1,
+            exec: Default::default(),
+            write: false,
         });
         let mut edited = before.clone();
         edited.auto_connect = false;

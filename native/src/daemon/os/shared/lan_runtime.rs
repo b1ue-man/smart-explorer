@@ -6,8 +6,10 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use crate::net::{InterfaceFacts, LinkClass};
+use crate::share::lan_link_facts::{
+    self, AuthenticatedLanFact, LanLinkHostFacts, LanPeerPin, OwnUplink,
+};
 use crate::share::lan_uplink_policy::PeerOnLink;
-use crate::share::lan_link_facts::{self, AuthenticatedLanFact, LanLinkHostFacts, LanPeerPin, OwnUplink};
 use crate::share::{
     lan_presence_match, DirectContact, DirectGrant, LanEvent, LanFacility, LanPeerView,
     LanPresence, LanSettings, LanSighting, LanStatus, LinkView, ShareEvent, UplinkView,
@@ -98,8 +100,12 @@ impl LanRuntime {
 
     /// Interfaces confirmed by current pinned status channels.
     pub(super) fn peer_ifaces(&self, now: i64) -> Vec<u32> {
-        let mut out: Vec<_> = self.link_facts.iter().filter(|fact| fact.fresh(now))
-            .map(|fact| fact.interface.index).collect();
+        let mut out: Vec<_> = self
+            .link_facts
+            .iter()
+            .filter(|fact| fact.fresh(now))
+            .map(|fact| fact.interface.index)
+            .collect();
         out.sort_unstable();
         out.dedup();
         out
@@ -107,21 +113,47 @@ impl LanRuntime {
 
     /// Only current channel answers, without mDNS subnet estimates.
     pub(super) fn paired_sightings(&self, now: i64) -> Vec<(String, bool, Vec<u32>)> {
-        self.link_facts.iter().filter(|fact| fact.fresh(now) && fact.can_share_on(&self.facts, &self.shared_ifaces)).map(|fact|
-            (lan_presence_match::hashed_lan_id(&fact.pin.node_id), fact.peer_uplink, vec![fact.interface.index])).collect()
+        self.link_facts
+            .iter()
+            .filter(|fact| fact.fresh(now) && fact.can_share_on(&self.facts, &self.shared_ifaces))
+            .map(|fact| {
+                (
+                    lan_presence_match::hashed_lan_id(&fact.pin.node_id),
+                    fact.peer_uplink,
+                    vec![fact.interface.index],
+                )
+            })
+            .collect()
     }
 
     /// Parent hands this RAM-only snapshot to ShareService after the tick.
     pub(super) fn link_host_facts(&self) -> LanLinkHostFacts {
-        let known = self.settings_error.is_none() && self.facts_error.is_none()
-            && self.last_facts_at.is_some_and(|at| at.elapsed() <= FACTS_INTERVAL + Duration::from_secs(1));
-        let interfaces = if known { self.facts.clone() } else { Vec::new() };
+        let known = self.settings_error.is_none()
+            && self.facts_error.is_none()
+            && self
+                .last_facts_at
+                .is_some_and(|at| at.elapsed() <= FACTS_INTERVAL + Duration::from_secs(1));
+        let interfaces = if known {
+            self.facts.clone()
+        } else {
+            Vec::new()
+        };
         let own_uplink = if known && !interfaces.is_empty() {
-            OwnUplink::from_interfaces(&interfaces, self.uplink.internet_verdict_snapshot(),
-                &self.peer_ifaces(crate::share::core_now_secs()), &self.shared_ifaces)
-        } else { OwnUplink::Unknown };
-        LanLinkHostFacts { enabled: self.settings.presence_enabled && self.settings_error.is_none(),
-            interfaces, shared_ifaces: self.shared_ifaces.clone(), own_uplink }
+            OwnUplink::from_interfaces(
+                &interfaces,
+                self.uplink.internet_verdict_snapshot(),
+                &self.peer_ifaces(crate::share::core_now_secs()),
+                &self.shared_ifaces,
+            )
+        } else {
+            OwnUplink::Unknown
+        };
+        LanLinkHostFacts {
+            enabled: self.settings.presence_enabled && self.settings_error.is_none(),
+            interfaces,
+            shared_ifaces: self.shared_ifaces.clone(),
+            own_uplink,
+        }
     }
 
     pub(super) fn classified_links(&self) -> Vec<(InterfaceFacts, LinkClass)> {
@@ -140,14 +172,26 @@ impl LanRuntime {
     pub(super) fn tick(&mut self, input: LanTickInput<'_>) -> Vec<ShareEvent> {
         self.refresh_settings();
         self.refresh_facts();
-        self.link_facts = if self.settings.presence_enabled && self.settings_error.is_none()
-            && self.facts_error.is_none() {
-            input.paired_links.iter().take(lan_link_facts::MAX_LINK_PEERS)
+        self.link_facts = if self.settings.presence_enabled
+            && self.settings_error.is_none()
+            && self.facts_error.is_none()
+        {
+            input
+                .paired_links
+                .iter()
+                .take(lan_link_facts::MAX_LINK_PEERS)
                 .filter(|fact| fact.current(input.now, input.contacts, input.grants, &self.facts))
-                .cloned().collect()
-        } else { Vec::new() };
-        self.link_facts.sort_by(|left, right| left.pin.node_id.cmp(&right.pin.node_id)
-            .then(left.connection_id.cmp(&right.connection_id)));
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        };
+        self.link_facts.sort_by(|left, right| {
+            left.pin
+                .node_id
+                .cmp(&right.pin.node_id)
+                .then(left.connection_id.cmp(&right.connection_id))
+        });
         let mut events = Vec::new();
         if !self.settings.presence_enabled {
             if self.presence.take().is_some() {
@@ -164,7 +208,10 @@ impl LanRuntime {
             }
             let _ = self.authenticator.refresh(&[], None);
         } else {
-            if let Err(error) = self.authenticator.refresh(input.contacts, input.own_node_id) {
+            if let Err(error) = self
+                .authenticator
+                .refresh(input.contacts, input.own_node_id)
+            {
                 self.presence_error = Some(error);
             }
             self.ensure_started();
@@ -173,7 +220,11 @@ impl LanRuntime {
             self.expire_sightings(input.now);
             events.extend(self.reconcile(input.contacts, input.now));
         }
-        let revision = if self.settings.uplink_sharing_enabled { self.link_facts.clone() } else { Vec::new() };
+        let revision = if self.settings.uplink_sharing_enabled {
+            self.link_facts.clone()
+        } else {
+            Vec::new()
+        };
         if self.evidence_revision.as_ref() != Some(&revision) {
             match crate::share::lan_uplink_evidence::publish(&revision) {
                 Ok(()) => self.evidence_revision = Some(revision),
@@ -183,13 +234,25 @@ impl LanRuntime {
                 }
             }
         }
-        let revoked = self.uplink_pins.iter().any(|pin| !lan_link_facts::pin_current(pin, input.contacts, input.grants));
-        let authority_lost = revoked && self.shared_ifaces.iter().any(|index|
-            !self.link_facts.iter().any(|fact| fact.interface.index == *index));
+        let revoked = self
+            .uplink_pins
+            .iter()
+            .any(|pin| !lan_link_facts::pin_current(pin, input.contacts, input.grants));
+        let authority_lost = revoked
+            && self.shared_ifaces.iter().any(|index| {
+                !self
+                    .link_facts
+                    .iter()
+                    .any(|fact| fact.interface.index == *index)
+            });
         self.tick_uplink(input.own_node_id, input.now, authority_lost);
-        if self.shared_ifaces.is_empty() { self.uplink_pins.clear(); }
+        if self.shared_ifaces.is_empty() {
+            self.uplink_pins.clear();
+        }
         for fact in &self.link_facts {
-            if self.uplink_pins.len() < lan_link_facts::MAX_LINK_PEERS && !self.uplink_pins.contains(&fact.pin) {
+            if self.uplink_pins.len() < lan_link_facts::MAX_LINK_PEERS
+                && !self.uplink_pins.contains(&fact.pin)
+            {
                 self.uplink_pins.push(fact.pin.clone());
             }
         }

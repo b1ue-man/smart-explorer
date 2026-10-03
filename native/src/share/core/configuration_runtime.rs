@@ -2,14 +2,12 @@ use std::collections::HashSet;
 use std::io;
 use std::sync::{Arc, Mutex};
 
-use super::relation_rights::authorization_restrictions;
 use super::core::{eio, now_secs};
-use super::direct_reciprocal_coordinator::{
-    DirectReciprocalCoordinator, DirectRepairCandidate,
-};
+use super::direct_reciprocal_coordinator::{DirectReciprocalCoordinator, DirectRepairCandidate};
 use super::fs::ShareExportConfig;
 use super::node::ShareIrohNode;
 use super::profiles::ShareProfiles;
+use super::relation_rights::authorization_restrictions;
 use super::types::{
     DirectAccessState, DirectContact, DirectGrant, PeerEndpoint, RoomProfile, ShareAuthState,
     ShareScope,
@@ -40,13 +38,7 @@ impl RuntimeConfiguration<'_> {
         rooms: Vec<RoomProfile>,
         default_direct_exports: ShareExportConfig,
     ) -> io::Result<()> {
-        self.apply(
-            direct,
-            direct_grants,
-            rooms,
-            default_direct_exports,
-            None,
-        )
+        self.apply(direct, direct_grants, rooms, default_direct_exports, None)
     }
 
     fn apply(
@@ -77,19 +69,27 @@ impl RuntimeConfiguration<'_> {
             super::authorization_policy::preserve_signature_facts(&state, &mut candidate);
             let restrictions = authorization_restrictions(&state, &candidate);
             if !restrictions.is_empty() {
-                candidate.authorization_epoch = state.authorization_epoch.checked_add(1)
+                candidate.authorization_epoch = state
+                    .authorization_epoch
+                    .checked_add(1)
                     .ok_or_else(|| eio("Share authorization epoch exhausted"))?;
             }
             super::exec_grant_runtime::apply_configuration_transition(
-                &state, &candidate, candidate.authorization_epoch, self.iroh.exec_registry(),
+                &state,
+                &candidate,
+                candidate.authorization_epoch,
+                self.iroh.exec_registry(),
             )?;
             // The deny barrier precedes publication: a worker cannot take
             // a new scope generation while still holding an old export table.
-            self.iroh.invalidate_restrictions_at(&restrictions, candidate.authorization_epoch)?;
+            self.iroh
+                .invalidate_restrictions_at(&restrictions, candidate.authorization_epoch)?;
             *state = candidate;
             (restrictions, state.clone())
         };
-        if !restrictions.is_empty() { self.direct_requests_sent.clear(); }
+        if !restrictions.is_empty() {
+            self.direct_requests_sent.clear();
+        }
         drop(transition);
         if let Some(reciprocal) = self.iroh.direct_repair_coordinator() {
             reciprocal.set_current_generation(snapshot.authorization_epoch);

@@ -188,7 +188,9 @@ impl PeerBackend {
 }
 
 impl Backend for PeerBackend {
-    fn extensions(&self) -> Option<&dyn crate::vfs::BackendExtensions> { Some(self) }
+    fn extensions(&self) -> Option<&dyn crate::vfs::BackendExtensions> {
+        Some(self)
+    }
     fn scheme(&self) -> Scheme {
         Scheme::Peer
     }
@@ -206,7 +208,9 @@ impl Backend for PeerBackend {
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
         let listing = super::peer_list_batch::list(self, path)?;
         if !listing.omitted.is_empty() {
-            return Err(io::Error::other("Verzeichnis enthält nicht auflistbare Einträge; tolerantes Listen erforderlich"));
+            return Err(io::Error::other(
+                "Verzeichnis enthält nicht auflistbare Einträge; tolerantes Listen erforderlich",
+            ));
         }
         Ok(listing.entries)
     }

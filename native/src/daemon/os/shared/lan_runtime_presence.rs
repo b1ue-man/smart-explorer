@@ -6,10 +6,18 @@ impl LanRuntime {
         let Some(presence) = &self.presence else {
             return;
         };
-        let addresses = self.facts.iter().filter(|facts| facts.up && !facts.loopback)
-            .flat_map(|facts| facts.addrs.iter().copied()).collect();
+        let addresses = self
+            .facts
+            .iter()
+            .filter(|facts| facts.up && !facts.loopback)
+            .flat_map(|facts| facts.addrs.iter().copied())
+            .collect();
         let Some((announcement, proof)) = self.authenticator.announcement(
-            input.ports, input.uplink_advisory, addresses, input.now) else {
+            input.ports,
+            input.uplink_advisory,
+            addresses,
+            input.now,
+        ) else {
             presence.withdraw();
             return;
         };
@@ -32,27 +40,42 @@ impl LanRuntime {
                     if own.as_deref() == Some(sighting.id.as_str()) {
                         continue;
                     }
-                    if sighting.id.len() != 16 { continue; }
+                    if sighting.id.len() != 16 {
+                        continue;
+                    }
                     if self.sightings.contains_key(&sighting.id) || self.sightings.len() < 1024 {
                         self.sightings.insert(sighting.id.clone(), sighting);
                     }
                 }
                 LanEvent::SeenAuthenticated { sighting, proof } => {
                     if own.as_deref() == Some(sighting.id.as_str())
-                        || self.authenticator.authenticate(&sighting, &proof, crate::share::core_now_secs()).is_none() {
+                        || self
+                            .authenticator
+                            .authenticate(&sighting, &proof, crate::share::core_now_secs())
+                            .is_none()
+                    {
                         continue;
                     }
                     if self.sightings.len() >= 1024 && !self.sightings.contains_key(&sighting.id) {
                         // A verified contact can reclaim an unverified hint.
-                        let victim = self.sightings.keys().find(|id| !self.proofs.contains_key(*id)).cloned();
-                        if let Some(victim) = victim { self.sightings.remove(&victim); }
-                        else { continue; }
+                        let victim = self
+                            .sightings
+                            .keys()
+                            .find(|id| !self.proofs.contains_key(*id))
+                            .cloned();
+                        if let Some(victim) = victim {
+                            self.sightings.remove(&victim);
+                        } else {
+                            continue;
+                        }
                     }
                     self.proofs.insert(sighting.id.clone(), proof);
                     self.sightings.insert(sighting.id.clone(), sighting);
                 }
                 LanEvent::Lost(id) => {
-                    if self.proofs.contains_key(&id) { continue; }
+                    if self.proofs.contains_key(&id) {
+                        continue;
+                    }
                     self.sightings.remove(&id);
                     self.proofs.remove(&id);
                 }
@@ -64,7 +87,8 @@ impl LanRuntime {
     pub(super) fn expire_sightings(&mut self, now: i64) {
         self.sightings
             .retain(|_, sighting| sighting.seen_at.saturating_add(LAN_PRESENCE_TTL_SECS) >= now);
-        self.proofs.retain(|id, proof| self.sightings.contains_key(id) && proof.expires_at >= now);
+        self.proofs
+            .retain(|id, proof| self.sightings.contains_key(id) && proof.expires_at >= now);
     }
 
     /// Compare the current sightings with what was reported last time and
@@ -79,23 +103,50 @@ impl LanRuntime {
         let mut seen_now: HashMap<String, (Vec<String>, bool)> = HashMap::new();
         let mut seen_hashes = Vec::new();
         let mut authenticated_contacts = Vec::new();
-        let legacy_contacts: HashMap<_, _> = contacts.iter()
-            .filter(|contact| contact.access_state == crate::share::DirectAccessState::Accepted
-                && contact.remote_device_id.is_some())
-            .filter_map(|contact| Some((lan_presence_match::contact_lan_id(contact)?, contact.id.clone())))
+        let legacy_contacts: HashMap<_, _> = contacts
+            .iter()
+            .filter(|contact| {
+                contact.access_state == crate::share::DirectAccessState::Accepted
+                    && contact.remote_device_id.is_some()
+            })
+            .filter_map(|contact| {
+                Some((
+                    lan_presence_match::contact_lan_id(contact)?,
+                    contact.id.clone(),
+                ))
+            })
             .collect();
         let mut unknown = 0usize;
         for sighting in self.sightings.values() {
-            let authenticated = self.proofs.get(&sighting.id)
+            let authenticated = self
+                .proofs
+                .get(&sighting.id)
                 .and_then(|proof| self.authenticator.authenticate(sighting, proof, now));
-            let matched = authenticated.as_ref().map(|id| (id.clone(),
-                lan_presence_match::candidates_for(sighting, &scopes)))
-                .or_else(|| (sighting.id.len() == 16).then(||
-                    legacy_contacts.get(&sighting.id).map(|id| (id.clone(),
-                        lan_presence_match::candidates_for(sighting, &scopes)))).flatten());
+            let matched = authenticated
+                .as_ref()
+                .map(|id| {
+                    (
+                        id.clone(),
+                        lan_presence_match::candidates_for(sighting, &scopes),
+                    )
+                })
+                .or_else(|| {
+                    (sighting.id.len() == 16)
+                        .then(|| {
+                            legacy_contacts.get(&sighting.id).map(|id| {
+                                (
+                                    id.clone(),
+                                    lan_presence_match::candidates_for(sighting, &scopes),
+                                )
+                            })
+                        })
+                        .flatten()
+                });
             match matched {
                 Some((contact_id, candidates)) => {
-                    let entry = seen_now.entry(contact_id.clone()).or_insert_with(|| (Vec::new(), false));
+                    let entry = seen_now
+                        .entry(contact_id.clone())
+                        .or_insert_with(|| (Vec::new(), false));
                     entry.0.extend(candidates);
                     entry.0.sort();
                     entry.0.dedup();
@@ -149,5 +200,4 @@ impl LanRuntime {
         self.reported = seen_now;
         events
     }
-
 }

@@ -41,8 +41,16 @@ pub fn classify_run(out: &Outcome, canceled: bool, finished: i64) -> (AttemptOut
             since: finished,
             confirmed: false,
         })
-    } else if let Some(error) = out.errors.iter().find(|(_, message)| matches!(classify_failure(message), FailureKind::Auth | FailureKind::Access)) {
-        AttemptOutcome::Failed(JobError { kind: classify_failure(&error.1), message: format!("{}: {}", error.0, error.1) })
+    } else if let Some(error) = out.errors.iter().find(|(_, message)| {
+        matches!(
+            classify_failure(message),
+            FailureKind::Auth | FailureKind::Access
+        )
+    }) {
+        AttemptOutcome::Failed(JobError {
+            kind: classify_failure(&error.1),
+            message: format!("{}: {}", error.0, error.1),
+        })
     } else if let Some(stop) = out.stopped {
         AttemptOutcome::Failed(JobError {
             kind: stop_kind(stop),
@@ -239,11 +247,45 @@ mod tests {
 /// Authentication and permissions never cause automatic account probes.
 pub fn classify_failure(message: &str) -> FailureKind {
     let lower = message.to_lowercase();
-    if ["auth", "anmeld", "passwort", "password", "credential", "unauthorized", "401",
-        "invalid_grant", "schlüssel", "key rejected", "login", "not logged in", "530 ", "host key",
-        "certificate", "zertifikat"].iter().any(|part| lower.contains(part)) { FailureKind::Auth }
-    else if ["permission", "zugriff", "access denied", "403"].iter().any(|part| lower.contains(part)) { FailureKind::Access }
-    else if ["ungültig", "invalid", "nicht unterstützt", "unsupported", "keine gespeicherte"].iter()
-        .any(|part| lower.contains(part)) { FailureKind::Config }
-    else { FailureKind::Unreachable }
+    if [
+        "auth",
+        "anmeld",
+        "passwort",
+        "password",
+        "credential",
+        "unauthorized",
+        "401",
+        "invalid_grant",
+        "schlüssel",
+        "key rejected",
+        "login",
+        "not logged in",
+        "530 ",
+        "host key",
+        "certificate",
+        "zertifikat",
+    ]
+    .iter()
+    .any(|part| lower.contains(part))
+    {
+        FailureKind::Auth
+    } else if ["permission", "zugriff", "access denied", "403"]
+        .iter()
+        .any(|part| lower.contains(part))
+    {
+        FailureKind::Access
+    } else if [
+        "ungültig",
+        "invalid",
+        "nicht unterstützt",
+        "unsupported",
+        "keine gespeicherte",
+    ]
+    .iter()
+    .any(|part| lower.contains(part))
+    {
+        FailureKind::Config
+    } else {
+        FailureKind::Unreachable
+    }
 }

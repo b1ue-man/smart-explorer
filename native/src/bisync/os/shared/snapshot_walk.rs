@@ -40,7 +40,9 @@ pub(super) fn walk_tree(
         changed: Condvar::new(),
         out: Mutex::new(Tree::new()),
     };
-    walk.lock().queue.push_back((context.root.to_string(), String::new(), 0));
+    walk.lock()
+        .queue
+        .push_back((context.root.to_string(), String::new(), 0));
     std::thread::scope(|scope| walk.coordinate(scope));
 
     // A worker can observe cancellation while it is part-way through a
@@ -75,16 +77,23 @@ fn list_plain_directory(ctx: &WalkContext<'_>, path: &str) -> io::Result<crate::
     if metadata.is_symlink || !metadata.is_dir || metadata.special {
         return Err(super::apply_boundary::protected(if metadata.is_symlink {
             super::OmissionKind::Link
-        } else { super::OmissionKind::Special }));
+        } else {
+            super::OmissionKind::Special
+        }));
     }
     if path != ctx.root {
-        if let Some(kind) = super::snapshot_policy::protected(be, ctx.root, path, &metadata, ctx.opts.cross_mounts)? {
+        if let Some(kind) =
+            super::snapshot_policy::protected(be, ctx.root, path, &metadata, ctx.opts.cross_mounts)?
+        {
             return Err(super::apply_boundary::protected(kind));
         }
     }
     if be.has_duplicate_file_names() && ctx.duplicates.is_some() {
-        be.list_dir_for_sync(path).map(crate::vfs::VfsListing::complete)
-    } else { crate::vfs::list_dir_tolerant(be, path) }
+        be.list_dir_for_sync(path)
+            .map(crate::vfs::VfsListing::complete)
+    } else {
+        crate::vfs::list_dir_tolerant(be, path)
+    }
 }
 
 #[derive(Default)]
@@ -301,13 +310,18 @@ impl TreeWalk<'_> {
         let listing = match entries {
             Ok(listing) => listing,
             Err(error) if dir != self.context.root => {
-                if let Some(reason) = super::apply_boundary::omitted(&error).or_else(|| match error.kind() {
-                    io::ErrorKind::PermissionDenied => Some(super::OmissionKind::Unreadable),
-                    io::ErrorKind::NotFound => Some(super::OmissionKind::Vanished), _ => None,
-                }) {
-                    super::snapshot_dir::record_omission(self.context,
-                        dir_rel, reason, true);
-                    return Ok(Listed { files: Vec::new(), dirs: Vec::new() });
+                if let Some(reason) =
+                    super::apply_boundary::omitted(&error).or_else(|| match error.kind() {
+                        io::ErrorKind::PermissionDenied => Some(super::OmissionKind::Unreadable),
+                        io::ErrorKind::NotFound => Some(super::OmissionKind::Vanished),
+                        _ => None,
+                    })
+                {
+                    super::snapshot_dir::record_omission(self.context, dir_rel, reason, true);
+                    return Ok(Listed {
+                        files: Vec::new(),
+                        dirs: Vec::new(),
+                    });
                 }
                 return Err(error);
             }
@@ -320,7 +334,12 @@ impl TreeWalk<'_> {
                 Err(_) => dir_rel.to_string(),
             };
             let filtered = self.context.filter.ignored(&rel, true);
-            super::snapshot_dir::record_omission(self.context, &rel, omission.reason.into(), !filtered);
+            super::snapshot_dir::record_omission(
+                self.context,
+                &rel,
+                omission.reason.into(),
+                !filtered,
+            );
         }
         scan_listing(self.context, dir, dir_rel, listing.entries)
     }

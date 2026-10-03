@@ -82,11 +82,16 @@ impl App {
         root: String,
         label: String,
     ) {
-        let current = self.remote.as_ref().filter(|remote| Arc::ptr_eq(&remote.backend, &backend));
+        let current = self
+            .remote
+            .as_ref()
+            .filter(|remote| Arc::ptr_eq(&remote.backend, &backend));
         let label = current.map_or(label, |remote| remote.label.clone());
         let prefix = current.and_then(|remote| remote.endpoint_prefix.clone());
         let account = current.and_then(|remote| remote.account.clone());
-        self.start_reclaim_source(StorageScanSource::remote_at(backend, root, label, prefix, account));
+        self.start_reclaim_source(StorageScanSource::remote_at(
+            backend, root, label, prefix, account,
+        ));
     }
 
     pub(in crate::app) fn poll_reclaim_scan(&mut self) {

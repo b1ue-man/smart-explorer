@@ -187,9 +187,9 @@ mod review_task_tests {
     #[cfg(unix)]
     #[test]
     fn review_task_local_single_special_entry_is_reported_not_transferred() {
+        use super::{Lister, LocalLister};
         use std::ffi::CString;
         use std::os::unix::ffi::OsStrExt;
-        use super::{Lister, LocalLister};
 
         let fixture = tempfile::tempdir().unwrap();
         let fifo = fixture.path().join("pipe");

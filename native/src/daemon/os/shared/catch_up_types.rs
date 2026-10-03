@@ -39,4 +39,3 @@ pub struct CatchUpRecord {
     pub failed: usize,
     pub message: String,
 }
-

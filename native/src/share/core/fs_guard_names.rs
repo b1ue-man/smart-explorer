@@ -1,13 +1,18 @@
 //! Compare literal provider components without changing their stored spelling.
-use std::io;
 use crate::vfs::Scheme;
+use std::io;
 
 pub(super) fn check(scheme: Scheme, path: &str) -> io::Result<()> {
-    if scheme == Scheme::GDrive && path.split('/').any(|component| {
-        let decoded = decode_once(component);
-        std::str::from_utf8(&decoded).is_ok_and(super::super::fs_policy::private_name)
-    }) {
-        return Err(io::Error::new(io::ErrorKind::PermissionDenied, "Pfad ist nicht freigegeben"));
+    if scheme == Scheme::GDrive
+        && path.split('/').any(|component| {
+            let decoded = decode_once(component);
+            std::str::from_utf8(&decoded).is_ok_and(super::super::fs_policy::private_name)
+        })
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Pfad ist nicht freigegeben",
+        ));
     }
     Ok(())
 }
@@ -17,8 +22,10 @@ fn decode_once(component: &str) -> Vec<u8> {
     let mut decoded = Vec::with_capacity(bytes.len());
     let mut index = 0;
     while index < bytes.len() {
-        let value = bytes.get(index + 1).and_then(|high| hex(*high)).zip(
-            bytes.get(index + 2).and_then(|low| hex(*low)));
+        let value = bytes
+            .get(index + 1)
+            .and_then(|high| hex(*high))
+            .zip(bytes.get(index + 2).and_then(|low| hex(*low)));
         if bytes[index] == b'%' {
             if let Some((high, low)) = value {
                 decoded.push(high * 16 + low);

@@ -51,11 +51,19 @@ pub(super) fn child_names(root: &str, path: &str) -> Option<Vec<String>> {
     let root: Vec<_> = root.trim_end_matches('/').split('/').collect();
     let path: Vec<_> = path.trim_end_matches('/').split('/').collect();
     if path.len() < root.len()
-        || root.iter().zip(&path).any(|(a, b)| a.to_lowercase() != b.to_lowercase())
+        || root
+            .iter()
+            .zip(&path)
+            .any(|(a, b)| a.to_lowercase() != b.to_lowercase())
     {
         return None;
     }
-    Some(path[root.len()..].iter().map(|name| (*name).to_owned()).collect())
+    Some(
+        path[root.len()..]
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect(),
+    )
 }
 
 pub(super) struct Startup {

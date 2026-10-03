@@ -38,7 +38,10 @@ pub(super) fn export_summary(cfg: &crate::share::ShareExportConfig) -> String {
     if cfg.include_connections {
         parts.push("alte Verbindungsfreigabe; Migration ausstehend".into());
     } else if cfg.shares_connections() {
-        parts.push(format!("{} gespeicherte Verbindungen", cfg.shared_connections.len()));
+        parts.push(format!(
+            "{} gespeicherte Verbindungen",
+            cfg.shared_connections.len()
+        ));
     }
     parts.join(", ")
 }

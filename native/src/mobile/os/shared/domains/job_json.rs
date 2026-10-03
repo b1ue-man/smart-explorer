@@ -5,7 +5,9 @@ use std::collections::BTreeMap;
 
 use serde_json::{json, Map, Value};
 
-use crate::bisync::{CompareMode, ConflictMode, DeletePolicy, Direction, VersioningScheme, VersionsLocation};
+use crate::bisync::{
+    CompareMode, ConflictMode, DeletePolicy, Direction, VersioningScheme, VersionsLocation,
+};
 use crate::syncjobs::editor::{min_to_hm, JobEditor};
 use crate::syncjobs::{JobResult, SyncJob, Trigger};
 
@@ -167,7 +169,13 @@ pub(super) fn apply_draft(editor: &mut JobEditor, draft: &Map<String, Value>) ->
     number("maxDelete", &mut editor.max_delete);
     number("maxDeletePct", &mut editor.max_delete_pct);
     number("maxDeleteMin", &mut editor.max_delete_min);
-    enum_field(draft, "versionsLocation", &mut errors, &mut editor.versions_location, VersionsLocation::parse);
+    enum_field(
+        draft,
+        "versionsLocation",
+        &mut errors,
+        &mut editor.versions_location,
+        VersionsLocation::parse,
+    );
 
     enum_field(
         draft,

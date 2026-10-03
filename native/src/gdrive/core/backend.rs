@@ -98,8 +98,10 @@ impl Backend for GDriveBackend {
     fn list_dir_for_sync(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
         let listing = self.sync_listing(path)?;
         if !listing.omitted.is_empty() {
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData,
-                "Drive sync listing has protected omissions; use the tolerant listing"));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Drive sync listing has protected omissions; use the tolerant listing",
+            ));
         }
         Ok(listing.entries)
     }
@@ -355,7 +357,10 @@ impl GDriveBackend {
         use sha2::{Digest, Sha256};
         let tokens = self.tokens_guard()?;
         let digest = Sha256::digest(tokens.refresh_token.as_bytes());
-        let account = digest[..12].iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+        let account = digest[..12]
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
         Ok(format!("gdrive:path-v2:{account}:{}", self.root))
     }
 

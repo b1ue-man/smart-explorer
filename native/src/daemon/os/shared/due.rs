@@ -67,7 +67,11 @@ pub(super) fn due_now(
         return None;
     }
     if state.consecutive_failures > 0 {
-        if state.last_error.as_ref().is_some_and(|error| error.kind.needs_user()) {
+        if state
+            .last_error
+            .as_ref()
+            .is_some_and(|error| error.kind.needs_user())
+        {
             return None;
         }
         let retry = match state.retry_at {
@@ -82,8 +86,12 @@ pub(super) fn due_now(
             PendingKind::Connect => return Some(RunCause::Connect),
             PendingKind::Confirmed => return Some(RunCause::Confirmed),
             PendingKind::Verify => return Some(RunCause::Verify),
-            PendingKind::Other if job.trigger == Trigger::Calendar => return Some(RunCause::Calendar),
-            PendingKind::Other if job.trigger == Trigger::Interval => return Some(RunCause::Interval),
+            PendingKind::Other if job.trigger == Trigger::Calendar => {
+                return Some(RunCause::Calendar)
+            }
+            PendingKind::Other if job.trigger == Trigger::Interval => {
+                return Some(RunCause::Interval)
+            }
             PendingKind::Change | PendingKind::Other => {}
         }
     }
@@ -111,7 +119,11 @@ pub(super) fn next_due(job: &SyncJob, state: &JobState, now: i64) -> Option<i64>
         return None;
     }
     if state.consecutive_failures > 0 {
-        if state.last_error.as_ref().is_some_and(|error| error.kind.needs_user()) {
+        if state
+            .last_error
+            .as_ref()
+            .is_some_and(|error| error.kind.needs_user())
+        {
             return None;
         }
         return state.retry_at.map(|at| at.max(now));
@@ -121,16 +133,19 @@ pub(super) fn next_due(job: &SyncJob, state: &JobState, now: i64) -> Option<i64>
             let delay = i64::try_from(job.rt_debounce_secs).unwrap_or(i64::MAX);
             return Some(trigger.since.saturating_add(delay).max(now));
         }
-        if trigger.kind != PendingKind::Other || matches!(job.trigger, Trigger::Calendar | Trigger::Interval) { return Some(now); }
+        if trigger.kind != PendingKind::Other
+            || matches!(job.trigger, Trigger::Calendar | Trigger::Interval)
+        {
+            return Some(now);
+        }
     }
     let timer = job.next_due_at(anchor(job, state, now), now);
-    let verify = (job.trigger == Trigger::RealTime && job.verify_interval_secs > 0)
-        .then(|| {
-            let interval = i64::try_from(job.verify_interval_secs).unwrap_or(i64::MAX);
-            state
-                .last_verify
-                .map_or(now, |at| at.saturating_add(interval).max(now))
-        });
+    let verify = (job.trigger == Trigger::RealTime && job.verify_interval_secs > 0).then(|| {
+        let interval = i64::try_from(job.verify_interval_secs).unwrap_or(i64::MAX);
+        state
+            .last_verify
+            .map_or(now, |at| at.saturating_add(interval).max(now))
+    });
     match (timer, verify) {
         (Some(timer), Some(verify)) => Some(timer.min(verify)),
         (timer, verify) => timer.or(verify),
@@ -205,7 +220,10 @@ mod tests {
         assert_eq!(due_now(&job, &auth, NOW, None), None);
         assert_eq!(next_due(&job, &auth, NOW), None);
         // Manual jobs are never retried automatically.
-        assert_eq!(due_now(&self::job(Trigger::Manual), &transient, NOW + 300, None), None);
+        assert_eq!(
+            due_now(&self::job(Trigger::Manual), &transient, NOW + 300, None),
+            None
+        );
     }
 
     #[test]

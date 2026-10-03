@@ -18,7 +18,10 @@ pub(crate) fn metadata_is_special(metadata: &std::fs::Metadata) -> bool {
 }
 
 pub(crate) fn metadata_class(path: &Path, metadata: &std::fs::Metadata) -> (bool, bool) {
-    (metadata_is_link_like(path, metadata), metadata_is_special(metadata))
+    (
+        metadata_is_link_like(path, metadata),
+        metadata_is_special(metadata),
+    )
 }
 
 /// The checked descriptor, not a second path lookup, is used by hash walks
@@ -31,7 +34,10 @@ pub(crate) fn open_regular_no_follow(path: &Path, write: bool) -> io::Result<std
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY)
         .open(path)?;
     if !file.metadata()?.is_file() {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "keine reguläre Datei"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "keine reguläre Datei",
+        ));
     }
     Ok(file)
 }
@@ -136,7 +142,10 @@ pub(crate) fn rename_no_replace(source: &Path, destination: &Path) -> io::Result
         return Ok(());
     }
     let error = io::Error::last_os_error();
-    if !matches!(error.raw_os_error(), Some(libc::ENOSYS | libc::EINVAL | libc::EOPNOTSUPP)) {
+    if !matches!(
+        error.raw_os_error(),
+        Some(libc::ENOSYS | libc::EINVAL | libc::EOPNOTSUPP)
+    ) {
         return Err(error);
     }
     // No check-then-rename: on filesystems without rename2 a hard link also
@@ -157,7 +166,10 @@ fn hard_link_no_replace(source: &Path, destination: &Path) -> io::Result<()> {
     let remaining = open_regular_no_follow(source, false)?;
     if file_identity(&published)? != expected || file_identity(&remaining)? != expected {
         // Keep both names for recovery; never unlink a substituted source.
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "Stage während Veröffentlichung geändert"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Stage während Veröffentlichung geändert",
+        ));
     }
     std::fs::remove_file(source)
 }
@@ -193,8 +205,18 @@ mod tests {
         std::fs::rename(&file, dir.path().join("opened")).unwrap();
         std::fs::write(&file, b"replacement").unwrap();
         set_file_mode(&handle, 0o400).unwrap();
-        assert_eq!(std::fs::metadata(dir.path().join("opened")).unwrap().permissions().mode() & 0o777, 0o400);
-        assert_ne!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o400);
+        assert_eq!(
+            std::fs::metadata(dir.path().join("opened"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o400
+        );
+        assert_ne!(
+            std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+            0o400
+        );
     }
 
     #[test]
@@ -204,7 +226,10 @@ mod tests {
         let target = dir.path().join("target");
         std::fs::write(&stage, b"candidate").unwrap();
         std::fs::write(&target, b"existing").unwrap();
-        assert_eq!(hard_link_no_replace(&stage, &target).unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            hard_link_no_replace(&stage, &target).unwrap_err().kind(),
+            io::ErrorKind::AlreadyExists
+        );
         assert_eq!(std::fs::read(&stage).unwrap(), b"candidate");
         assert_eq!(std::fs::read(&target).unwrap(), b"existing");
         std::fs::remove_file(&target).unwrap();

@@ -24,8 +24,6 @@ mod backend;
 mod errors;
 #[path = "core/extensions.rs"]
 mod extensions;
-#[path = "core/stage_finish.rs"]
-mod stage_finish;
 #[path = "core/listing.rs"]
 mod listing;
 #[path = "core/reader.rs"]
@@ -36,6 +34,8 @@ mod replace;
 mod server_copy;
 #[path = "core/session.rs"]
 mod session;
+#[path = "core/stage_finish.rs"]
+mod stage_finish;
 #[path = "core/io.rs"]
 mod streams;
 #[path = "core/url.rs"]

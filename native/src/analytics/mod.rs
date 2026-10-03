@@ -1,9 +1,9 @@
+#[path = "os/shared/reclaim/backend_recycle.rs"]
+mod backend_recycle;
 #[path = "core/progress.rs"]
 mod progress;
 #[path = "os/shared/reclaim/mod.rs"]
 mod reclaim;
-#[path = "os/shared/reclaim/backend_recycle.rs"]
-mod backend_recycle;
 pub(crate) use backend_recycle::{recycle_plan, RecyclePlan};
 #[path = "os/shared/analytics.rs"]
 mod scanner;
@@ -12,22 +12,24 @@ pub use progress::{Progress, ScanPhase, ScanSnapshot};
 mod remote;
 #[path = "core/tree_transfer.rs"]
 pub(crate) mod tree_transfer;
-pub use remote::scan_remote;
 pub(crate) use remote::finish_legacy_tree;
+pub use remote::scan_remote;
 
 pub use reclaim::*;
-pub use scanner::*;
-pub(crate) use scanner::{local_scan_threads, scan_with, scan_with_guard, ScanBudget};
 pub(crate) use scanner::scan_confined;
 pub(crate) use scanner::scan_confined_with;
+pub use scanner::*;
+pub(crate) use scanner::{local_scan_threads, scan_with, scan_with_guard, ScanBudget};
 mod os;
-pub(crate) use os::{host_permission_note, recycle as recycle_local, volume_usage as host_volume_usage};
 pub(crate) use os::host_recycle_available;
+pub(crate) use os::{
+    host_permission_note, recycle as recycle_local, volume_usage as host_volume_usage,
+};
 
-#[path = "core/analysis_report.rs"]
-mod analysis_report;
 #[path = "core/analysis_budget.rs"]
 mod analysis_budget;
+#[path = "core/analysis_report.rs"]
+mod analysis_report;
 pub(crate) use analysis_budget::fit_tree;
 #[path = "core/analysis_transfer.rs"]
 pub(crate) mod analysis_transfer;

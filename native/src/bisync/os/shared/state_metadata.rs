@@ -48,9 +48,15 @@ pub(super) fn load_dirs(key: &StateKey) -> io::Result<Option<DirSet>> {
     let dirs: Option<DirSet> = read_json(&path, limits.state_file_bytes())?;
     if let Some(dirs) = &dirs {
         if dirs.len() as u64 > limits.state_entries
-            || dirs.iter().fold(0u64, |bytes, rel| bytes.saturating_add(rel.len() as u64)) > limits.state_text_bytes
+            || dirs
+                .iter()
+                .fold(0u64, |bytes, rel| bytes.saturating_add(rel.len() as u64))
+                > limits.state_text_bytes
         {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "folder history exceeds its budget"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "folder history exceeds its budget",
+            ));
         }
         for dir in dirs {
             crate::agent_proto::ValidatedRelativePath::parse(dir)?;
@@ -67,24 +73,37 @@ pub(super) fn index_dirty_path(key: &StateKey) -> io::Result<PathBuf> {
     Ok(baseline_file(key)?.with_extension("index-dirty"))
 }
 
-pub(super) fn read_json<T: serde::de::DeserializeOwned>(path: &Path, limit: u64) -> io::Result<Option<T>> {
+pub(super) fn read_json<T: serde::de::DeserializeOwned>(
+    path: &Path,
+    limit: u64,
+) -> io::Result<Option<T>> {
     let backend = crate::vfs::LocalBackend::new("/");
-    let path = path.to_str().ok_or_else(|| io::Error::other("state path is not Unicode"))?;
+    let path = path
+        .to_str()
+        .ok_or_else(|| io::Error::other("state path is not Unicode"))?;
     let metadata = match crate::vfs::Backend::stat(&backend, path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),
     };
     if metadata.is_dir || metadata.is_symlink || metadata.special || metadata.size > limit {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "sync sidecar exceeds its budget"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "sync sidecar exceeds its budget",
+        ));
     }
     let file = crate::vfs::open_read_regular(&backend, path, None)?;
     let mut bytes = Vec::new();
     file.take(limit.saturating_add(1)).read_to_end(&mut bytes)?;
     if bytes.len() as u64 > limit {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "sync sidecar exceeds its budget"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "sync sidecar exceeds its budget",
+        ));
     }
-    serde_json::from_slice(&bytes).map(Some).map_err(io::Error::other)
+    serde_json::from_slice(&bytes)
+        .map(Some)
+        .map_err(io::Error::other)
 }
 
 pub(super) fn write_json(path: &Path, value: &impl Serialize) -> io::Result<()> {
@@ -92,13 +111,20 @@ pub(super) fn write_json(path: &Path, value: &impl Serialize) -> io::Result<()> 
 }
 
 pub(super) fn write_bytes(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let parent = path.parent().ok_or_else(|| io::Error::other("state has no parent"))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::other("state has no parent"))?;
     std::fs::create_dir_all(parent)?;
     let backend = crate::vfs::LocalBackend::new("/");
-    let target = path.to_str().ok_or_else(|| io::Error::other("state path is not Unicode"))?;
+    let target = path
+        .to_str()
+        .ok_or_else(|| io::Error::other("state path is not Unicode"))?;
     let stage = crate::vfs::unique_staging_path(&backend, target, "sync-state")?;
     let result = (|| {
-        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&stage)?;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&stage)?;
         file.write_all(bytes)?;
         file.sync_all()?;
         drop(file);
@@ -112,6 +138,8 @@ pub(super) fn write_bytes(path: &Path, bytes: &[u8]) -> io::Result<()> {
 }
 
 pub(super) fn now_ms() -> i64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
-        .map(|time| i64::try_from(time.as_millis()).unwrap_or(i64::MAX)).unwrap_or(0)
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|time| i64::try_from(time.as_millis()).unwrap_or(i64::MAX))
+        .unwrap_or(0)
 }

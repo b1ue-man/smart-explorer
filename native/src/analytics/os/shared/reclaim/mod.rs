@@ -31,4 +31,7 @@ pub use stage::{ReclaimPhase, ReclaimStage};
 pub use types::*;
 pub use verify::{prepare_reclaim_trash_plan, ReclaimTrashPlan};
 
-pub(crate) use finder::{find_duplicates_in_roots, find_duplicates_in_roots_with_open, candidate_text_budget, FinderLimits, FinderRoot};
+pub(crate) use finder::{
+    candidate_text_budget, find_duplicates_in_roots, find_duplicates_in_roots_with_open,
+    FinderLimits, FinderRoot,
+};

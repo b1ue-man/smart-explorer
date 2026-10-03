@@ -31,14 +31,10 @@ mod copy_writer;
 mod core;
 #[path = "core/duplicates.rs"]
 mod duplicates;
-#[path = "core/file_list.rs"]
-mod file_list;
 #[path = "core/extensions.rs"]
 mod extensions;
-#[path = "core/sync_listing.rs"]
-mod sync_listing;
-#[path = "core/stage_time.rs"]
-mod stage_time;
+#[path = "core/file_list.rs"]
+mod file_list;
 #[path = "core/folder_create_journal.rs"]
 mod folder_create_journal;
 #[path = "core/http.rs"]
@@ -69,8 +65,12 @@ mod resumable;
 mod resumable_session;
 #[path = "core/sized_writer.rs"]
 mod sized_writer;
+#[path = "core/stage_time.rs"]
+mod stage_time;
 #[path = "core/state.rs"]
 mod state;
+#[path = "core/sync_listing.rs"]
+mod sync_listing;
 #[path = "core/transfer.rs"]
 mod transfer;
 #[path = "core/transfer_ops.rs"]
@@ -85,29 +85,29 @@ mod mutation_reconcile_tests;
 #[path = "core/read_retry_tests.rs"]
 mod read_retry_tests;
 #[cfg(test)]
+#[path = "core/remote_provider_task_tests.rs"]
+mod remote_provider_task_tests;
+#[cfg(test)]
+#[path = "core/sync_conflict_task_fixture.rs"]
+mod sync_conflict_task_fixture;
+#[cfg(test)]
+#[path = "core/sync_conflict_task_safety_tests.rs"]
+mod sync_conflict_task_safety_tests;
+#[cfg(test)]
+#[path = "core/sync_conflict_task_tests.rs"]
+mod sync_conflict_task_tests;
+#[cfg(test)]
 #[path = "core/task_drive.rs"]
 mod task_drive;
 #[cfg(test)]
 #[path = "core/task_http.rs"]
 mod task_http;
 #[cfg(test)]
-#[path = "core/sync_conflict_task_fixture.rs"]
-mod sync_conflict_task_fixture;
-#[cfg(test)]
-#[path = "core/sync_conflict_task_tests.rs"]
-mod sync_conflict_task_tests;
-#[cfg(test)]
-#[path = "core/sync_conflict_task_safety_tests.rs"]
-mod sync_conflict_task_safety_tests;
-#[cfg(test)]
 #[path = "core/transfer_engine_task_ops_tests.rs"]
 mod transfer_engine_task_ops_tests;
 #[cfg(test)]
 #[path = "core/transfer_engine_task_tests.rs"]
 mod transfer_engine_task_tests;
-#[cfg(test)]
-#[path = "core/remote_provider_task_tests.rs"]
-mod remote_provider_task_tests;
 
 pub use state::GDriveBackend;
 

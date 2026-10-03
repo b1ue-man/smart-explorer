@@ -11,8 +11,12 @@ use sha2::{Digest, Sha256};
 use super::checkpoint::ApplyScope;
 use super::checkpoint_run::CheckpointSink;
 use super::guards::{deletion_block, empty_side_block, unconfirmed, DeleteCounts};
-use super::incremental_changes::{apply_trees, action_plan_for, collect_ids, target_touched_drifted_spelled};
-use super::incremental_collect::{changes_from_backend, changes_from_source_walk_scoped, ChangeCollection};
+use super::incremental_changes::{
+    action_plan_for, apply_trees, collect_ids, target_touched_drifted_spelled,
+};
+use super::incremental_collect::{
+    changes_from_backend, changes_from_source_walk_scoped, ChangeCollection,
+};
 use super::orchestration::{failure, Outcome, RunState};
 use super::replica_state::index_id;
 use super::state_metadata::{index_dirty_path, save_history, write_bytes, PairHistory};
@@ -68,119 +72,262 @@ pub(super) fn mirror_source<'a>(
 
 pub(super) fn try_incremental_run(state: &RunState<'_>) -> Option<Outcome> {
     match super::orchestration_plan::pending_paths(state.lock, state.key, state.endpoints) {
-        Ok(pending) if pending.is_empty() => {},
+        Ok(pending) if pending.is_empty() => {}
         Ok(_) => return None,
         Err(error) => return Some(failure("Merge-Wiederanlauf", error)),
     }
     let endpoints = state.endpoints;
     let opts = state.opts;
-    if opts.dry_run || state.history.is_none() || index_dirty_path(state.key).ok()?.try_exists().ok()?
-    { return None; }
-    if state.cancel.load(Ordering::Acquire) { return Some(Outcome::default()); }
+    if opts.dry_run
+        || state.history.is_none()
+        || index_dirty_path(state.key).ok()?.try_exists().ok()?
+    {
+        return None;
+    }
+    if state.cancel.load(Ordering::Acquire) {
+        return Some(Outcome::default());
+    }
     let (source, source_root, source_side) = mirror_source(endpoints, opts)?;
     let (target, target_root) = if source_side == Side::A {
         (endpoints.b, endpoints.root_b)
-    } else { (endpoints.a, endpoints.root_a) };
-    let source_pair = if source_side == Side::A { PairSide::A } else { PairSide::B };
+    } else {
+        (endpoints.a, endpoints.root_a)
+    };
+    let source_pair = if source_side == Side::A {
+        PairSide::A
+    } else {
+        PairSide::B
+    };
     let target_pair = source_pair.other();
     let keys = super::orchestration_plan::keys(endpoints);
     let pair = index_id(state.key).ok()?;
     let mut store = open_store(state.store_path).ok()?;
     let rec = store.load_pair(&pair).ok().flatten()?;
-    if !record_matches(&rec, endpoints, source_side) || rec.mode != mode(state)
+    if !record_matches(&rec, endpoints, source_side)
+        || rec.mode != mode(state)
         || !root_id_matches(endpoints.a, endpoints.root_a, rec.root_a_id.as_deref())
         || !root_id_matches(endpoints.b, endpoints.root_b, rec.root_b_id.as_deref())
-    { return None; }
+    {
+        return None;
+    }
     let (items_a, items_b) = store.load_pair_items(&pair).ok()?;
-    if cache_by_key(&items_a, &items_b, keys)? != baseline_by_key(state.baseline, keys) { return None; }
-    let (source_items, target_items) = if source_side == Side::A { (&items_a, &items_b) } else { (&items_b, &items_a) };
-    let collection = if source.supports_changes() && state.settings.depth == super::ScanDepth::Incremental {
-        changes_from_backend(&store, &rec, source, source_root, source_side, source_items, state.filter, state.cancel)
+    if cache_by_key(&items_a, &items_b, keys)? != baseline_by_key(state.baseline, keys) {
+        return None;
+    }
+    let (source_items, target_items) = if source_side == Side::A {
+        (&items_a, &items_b)
     } else {
-        changes_from_source_walk_scoped(source, source_root, target, opts, state.filter,
-            source_items, state.cancel, state.dirs, keys)
+        (&items_b, &items_a)
     };
+    let collection =
+        if source.supports_changes() && state.settings.depth == super::ScanDepth::Incremental {
+            changes_from_backend(
+                &store,
+                &rec,
+                source,
+                source_root,
+                source_side,
+                source_items,
+                state.filter,
+                state.cancel,
+            )
+        } else {
+            changes_from_source_walk_scoped(
+                source,
+                source_root,
+                target,
+                opts,
+                state.filter,
+                source_items,
+                state.cancel,
+                state.dirs,
+                keys,
+            )
+        };
     let (changes, cursor) = match collection {
-        ChangeCollection::Ready { changes, new_cursor } => (changes, new_cursor),
+        ChangeCollection::Ready {
+            changes,
+            new_cursor,
+        } => (changes, new_cursor),
         ChangeCollection::Rebuild => return None,
-        ChangeCollection::Canceled => return Some(Outcome { baseline: state.baseline.clone(), ..Outcome::default() }),
+        ChangeCollection::Canceled => {
+            return Some(Outcome {
+                baseline: state.baseline.clone(),
+                ..Outcome::default()
+            })
+        }
     };
     // A filter transition must become a protected omission in the pair
     // planner. Advancing only a feed cursor would leave an old managed row
     // able to authorize a later deletion (e.g. a now-hidden Windows file).
-    if changes.iter().any(|change| !change.managed) { return None; }
+    if changes.iter().any(|change| !change.managed) {
+        return None;
+    }
     // Case/NFC alias transitions and rename cycles that collapse onto the
     // same receiving object require the complete pair planner, never a later
     // deletion of a path a copy just published.
     let mut aliases = BTreeSet::new();
     for change in &changes {
-        if !aliases.insert(keys.key(&change.rel).into_owned()) { return None; }
-        if change.old_rel.as_deref().is_some_and(|old| keys.key(old) == keys.key(&change.rel) && old != change.rel) {
+        if !aliases.insert(keys.key(&change.rel).into_owned()) {
+            return None;
+        }
+        if change
+            .old_rel
+            .as_deref()
+            .is_some_and(|old| keys.key(old) == keys.key(&change.rel) && old != change.rel)
+        {
             return None;
         }
     }
     let mut names = super::state_spellings::load(state.key, keys).ok()?;
     let planned = action_plan_for(source_side, &changes);
-    let upsert_keys: BTreeSet<_> = planned.upserts.iter().map(super::core::action_rel)
-        .map(|rel| keys.key(rel).into_owned()).collect();
-    if planned.deletes.iter().map(super::core::action_rel)
-        .any(|rel| upsert_keys.contains(keys.key(rel).as_ref())) { return None; }
-    let actions: Vec<_> = planned.upserts.iter().chain(&planned.deletes).cloned().collect();
+    let upsert_keys: BTreeSet<_> = planned
+        .upserts
+        .iter()
+        .map(super::core::action_rel)
+        .map(|rel| keys.key(rel).into_owned())
+        .collect();
+    if planned
+        .deletes
+        .iter()
+        .map(super::core::action_rel)
+        .any(|rel| upsert_keys.contains(keys.key(rel).as_ref()))
+    {
+        return None;
+    }
+    let actions: Vec<_> = planned
+        .upserts
+        .iter()
+        .chain(&planned.deletes)
+        .cloned()
+        .collect();
     let spellings = names.for_actions(&actions, source_pair, keys);
-    if target_touched_drifted_spelled(target, target_root, target_items, &changes, opts, &spellings, target_pair) {
+    if target_touched_drifted_spelled(
+        target,
+        target_root,
+        target_items,
+        &changes,
+        opts,
+        &spellings,
+        target_pair,
+    ) {
         return None;
     }
     let (planned_a, planned_b) = apply_trees(source_side, source_items, target_items, &changes)?;
-    let source_empty = if source_side == Side::A { planned_a.is_empty() } else { planned_b.is_empty() };
+    let source_empty = if source_side == Side::A {
+        planned_a.is_empty()
+    } else {
+        planned_b.is_empty()
+    };
     let source_empty = source_empty && state.dirs.is_none_or(|dirs| dirs.is_empty());
-    if let Some(block) = unconfirmed(empty_side_block(source_pair, source_empty, state.baseline), &state.settings.confirmed) {
-        return Some(Outcome { blocked: Some(block), baseline: state.baseline.clone(), ..Outcome::default() });
+    if let Some(block) = unconfirmed(
+        empty_side_block(source_pair, source_empty, state.baseline),
+        &state.settings.confirmed,
+    ) {
+        return Some(Outcome {
+            blocked: Some(block),
+            baseline: state.baseline.clone(),
+            ..Outcome::default()
+        });
     }
-    let files_a = items_a.values().filter(|item| !item.deleted && !item.is_dir).count() as u64;
-    let files_b = items_b.values().filter(|item| !item.deleted && !item.is_dir).count() as u64;
+    let files_a = items_a
+        .values()
+        .filter(|item| !item.deleted && !item.is_dir)
+        .count() as u64;
+    let files_b = items_b
+        .values()
+        .filter(|item| !item.deleted && !item.is_dir)
+        .count() as u64;
     let deletes = DeleteCounts::of(&actions);
-    if let Some(block) = unconfirmed(deletion_block(deletes, files_a, files_b, &opts), &state.settings.confirmed) {
-        return Some(Outcome { blocked: Some(block), baseline: state.baseline.clone(), ..Outcome::default() });
+    if let Some(block) = unconfirmed(
+        deletion_block(deletes, files_a, files_b, &opts),
+        &state.settings.confirmed,
+    ) {
+        return Some(Outcome {
+            blocked: Some(block),
+            baseline: state.baseline.clone(),
+            ..Outcome::default()
+        });
     }
     // There is only one deleting side in an incremental mirror, but its
     // percentage stop remains independent of a confirmed absolute limit.
     let mut percentage = opts;
     percentage.max_delete = 0;
-    if let Some(block) = unconfirmed(deletion_block(deletes, files_a, files_b, &percentage), &state.settings.confirmed) {
-        return Some(Outcome { blocked: Some(block), baseline: state.baseline.clone(), ..Outcome::default() });
+    if let Some(block) = unconfirmed(
+        deletion_block(deletes, files_a, files_b, &percentage),
+        &state.settings.confirmed,
+    ) {
+        return Some(Outcome {
+            blocked: Some(block),
+            baseline: state.baseline.clone(),
+            ..Outcome::default()
+        });
     }
     if actions.is_empty() {
         if let Some(cursor) = cursor.as_deref() {
-            if store.update_cursor(&pair, Some(cursor)).is_err() { return None; }
+            if store.update_cursor(&pair, Some(cursor)).is_err() {
+                return None;
+            }
         }
-        return Some(Outcome { baseline: state.baseline.clone(), ..Outcome::default() });
+        return Some(Outcome {
+            baseline: state.baseline.clone(),
+            ..Outcome::default()
+        });
     }
-    if let Err(error) = retire_index(state) { return Some(failure("Sync-Zwischenstand", error)); }
+    if let Err(error) = retire_index(state) {
+        return Some(failure("Sync-Zwischenstand", error));
+    }
     let sink = match CheckpointSink::new(endpoints, state.lock, state.key, keys, state.observer) {
         Ok(sink) => sink,
         Err(error) => return Some(failure("Zwischenstand", error)),
     };
-    let scope = ApplyScope { sink: &sink, versions: state.versions, spellings: &spellings };
+    let scope = ApplyScope {
+        sink: &sink,
+        versions: state.versions,
+        spellings: &spellings,
+    };
     let mut errors = Vec::new();
     let mut stats = sink.during(|| {
-        let copied = super::apply::apply_planned_reporting(&planned.upserts, &[], &planned_a,
-            &planned_b, endpoints, opts, &scope, &mut errors, state.cancel);
+        let copied = super::apply::apply_planned_reporting(
+            &planned.upserts,
+            &[],
+            &planned_a,
+            &planned_b,
+            endpoints,
+            opts,
+            &scope,
+            &mut errors,
+            state.cancel,
+        );
         let mut stats = copied.stats;
         // Retired paths are removed only after every upsert has been committed;
         // a failed/deferred copy cannot authorize deleting the user's old path.
-        if !state.cancel.load(Ordering::Acquire) && errors.is_empty() && stats.errors == 0
+        if !state.cancel.load(Ordering::Acquire)
+            && errors.is_empty()
+            && stats.errors == 0
             && sink.can_delete()
             && !super::ApplySink::should_stop(&sink)
         {
-            let deleted = super::apply::apply_planned_reporting(&planned.deletes, &[], &planned_a,
-                &planned_b, endpoints, opts, &scope, &mut errors, state.cancel);
+            let deleted = super::apply::apply_planned_reporting(
+                &planned.deletes,
+                &[],
+                &planned_a,
+                &planned_b,
+                endpoints,
+                opts,
+                &scope,
+                &mut errors,
+                state.cancel,
+            );
             merge_stats(&mut stats, deleted.stats);
         }
         stats
     });
     let checkpoint = sink.finish();
     let mut omissions = super::SyncOmissions::new(keys.fold_case);
-    for (rel, kind) in checkpoint.omitted { omissions.record_kind(&rel, kind, kind.reported_by_default()); }
+    for (rel, kind) in checkpoint.omitted {
+        omissions.record_kind(&rel, kind, kind.reported_by_default());
+    }
     if let Some(error) = checkpoint.error {
         errors.push(("Zwischenstand".into(), error));
         stats.errors = stats.errors.saturating_add(1);
@@ -190,18 +337,33 @@ pub(super) fn try_incremental_run(state: &RunState<'_>) -> Option<Outcome> {
         errors.push(("Pfad-Schreibweisen".into(), error.to_string()));
         stats.errors = stats.errors.saturating_add(1);
     }
-    let history = PairHistory { replica_a: state.key.replica_a.clone(), replica_b: state.key.replica_b.clone(),
-        entries_a: super::guards::recorded_entries(&checkpoint.baseline, PairSide::A).saturating_add(checkpoint.dirs.len() as u64),
-        entries_b: super::guards::recorded_entries(&checkpoint.baseline, PairSide::B).saturating_add(checkpoint.dirs.len() as u64),
-        full_ms: state.history.map_or(0, |history| history.full_ms) };
+    let history = PairHistory {
+        replica_a: state.key.replica_a.clone(),
+        replica_b: state.key.replica_b.clone(),
+        entries_a: super::guards::recorded_entries(&checkpoint.baseline, PairSide::A)
+            .saturating_add(checkpoint.dirs.len() as u64),
+        entries_b: super::guards::recorded_entries(&checkpoint.baseline, PairSide::B)
+            .saturating_add(checkpoint.dirs.len() as u64),
+        full_ms: state.history.map_or(0, |history| history.full_ms),
+    };
     if let Err(error) = save_history(state.key, &history) {
         errors.push(("Replika-Zustand".into(), error.to_string()));
         stats.errors = stats.errors.saturating_add(1);
     }
-    let out = Outcome { stats, errors, baseline: checkpoint.baseline, omissions,
-        deferred: checkpoint.deferred, stopped: checkpoint.stopped, ..Outcome::default() };
-    if out.stats.errors == 0 && out.omissions.is_empty() && out.deferred.is_empty()
-        && out.stopped.is_none() && !state.cancel.load(Ordering::Acquire)
+    let out = Outcome {
+        stats,
+        errors,
+        baseline: checkpoint.baseline,
+        omissions,
+        deferred: checkpoint.deferred,
+        stopped: checkpoint.stopped,
+        ..Outcome::default()
+    };
+    if out.stats.errors == 0
+        && out.omissions.is_empty()
+        && out.deferred.is_empty()
+        && out.stopped.is_none()
+        && !state.cancel.load(Ordering::Acquire)
     {
         let cursor = cursor.or(rec.source_cursor);
         let _ = bootstrap_run(state, &out.baseline, cursor);
@@ -212,7 +374,9 @@ pub(super) fn try_incremental_run(state: &RunState<'_>) -> Option<Outcome> {
 /// A durable dirty marker disqualifies the old cache even if SQLite itself is
 /// corrupt, read-only or busy. A full scan can then work without the database.
 pub(super) fn retire_index(state: &RunState<'_>) -> io::Result<()> {
-    if state.opts.dry_run || mirror_source(state.endpoints, state.opts).is_none() { return Ok(()); }
+    if state.opts.dry_run || mirror_source(state.endpoints, state.opts).is_none() {
+        return Ok(());
+    }
     write_bytes(&index_dirty_path(state.key)?, b"full planner required\n")?;
     if let (Ok(pair), Ok(mut store)) = (index_id(state.key), open_store(state.store_path)) {
         let _ = store.forget_pair(&pair);
@@ -220,20 +384,36 @@ pub(super) fn retire_index(state: &RunState<'_>) -> io::Result<()> {
     Ok(())
 }
 
-pub(super) fn bootstrap_run(state: &RunState<'_>, baseline: &Baseline, cursor: Option<String>) -> rusqlite::Result<()> {
+pub(super) fn bootstrap_run(
+    state: &RunState<'_>,
+    baseline: &Baseline,
+    cursor: Option<String>,
+) -> rusqlite::Result<()> {
     if !super::orchestration_plan::pending_paths(state.lock, state.key, state.endpoints)
-        .map_err(|_| rusqlite::Error::InvalidQuery)?.is_empty() {
+        .map_err(|_| rusqlite::Error::InvalidQuery)?
+        .is_empty()
+    {
         return Err(rusqlite::Error::InvalidQuery);
     }
-    let Some((_, _, source_side)) = mirror_source(state.endpoints, state.opts) else { return Ok(()); };
+    let Some((_, _, source_side)) = mirror_source(state.endpoints, state.opts) else {
+        return Ok(());
+    };
     let keys = super::orchestration_plan::keys(state.endpoints);
-    let names = super::state_spellings::load(state.key, keys).map_err(|_| rusqlite::Error::InvalidQuery)?;
+    let names =
+        super::state_spellings::load(state.key, keys).map_err(|_| rusqlite::Error::InvalidQuery)?;
     let rows = names.cache_baseline(baseline, keys);
     let pair = index_id(state.key).map_err(|_| rusqlite::Error::InvalidQuery)?;
     let record = pair_record(state.endpoints, pair, mode(state), source_side, cursor);
-    super::engine_change_feed::bootstrap(&mut open_store(state.store_path)?, &record,
-        state.endpoints, &rows, state.opts, state.filter, state.cancel)
-        .map_err(|_| rusqlite::Error::InvalidQuery)?;
+    super::engine_change_feed::bootstrap(
+        &mut open_store(state.store_path)?,
+        &record,
+        state.endpoints,
+        &rows,
+        state.opts,
+        state.filter,
+        state.cancel,
+    )
+    .map_err(|_| rusqlite::Error::InvalidQuery)?;
     std::fs::remove_file(index_dirty_path(state.key).map_err(|_| rusqlite::Error::InvalidQuery)?)
         .map_err(|_| rusqlite::Error::InvalidQuery)?;
     Ok(())
@@ -241,10 +421,15 @@ pub(super) fn bootstrap_run(state: &RunState<'_>, baseline: &Baseline, cursor: O
 
 // These cache-only entry points remain for existing integrations and fixtures.
 pub(super) fn bootstrap_incremental_state(
-    endpoints: SyncEndpoints<'_>, opts: BisyncOptions, baseline: &Baseline,
-    cursor: Option<String>, path: Option<&Path>,
+    endpoints: SyncEndpoints<'_>,
+    opts: BisyncOptions,
+    baseline: &Baseline,
+    cursor: Option<String>,
+    path: Option<&Path>,
 ) -> rusqlite::Result<()> {
-    let Some((_, _, side)) = mirror_source(endpoints, opts) else { return Ok(()); };
+    let Some((_, _, side)) = mirror_source(endpoints, opts) else {
+        return Ok(());
+    };
     let pair = super::pair_id_for(endpoints.a, endpoints.root_a, endpoints.b, endpoints.root_b);
     let record = pair_record(endpoints, pair, "mirror".into(), side, cursor);
     let ids_a = collect_ids(endpoints.a, endpoints.root_a, baseline, Side::A);
@@ -252,9 +437,14 @@ pub(super) fn bootstrap_incremental_state(
     open_store(path)?.bootstrap(&record, baseline, &ids_a, &ids_b)
 }
 
-pub(super) fn invalidate_incremental_state(endpoints: SyncEndpoints<'_>, opts: BisyncOptions, path: Option<&Path>)
-    -> rusqlite::Result<()> {
-    if opts.dry_run || mirror_source(endpoints, opts).is_none() { return Ok(()); }
+pub(super) fn invalidate_incremental_state(
+    endpoints: SyncEndpoints<'_>,
+    opts: BisyncOptions,
+    path: Option<&Path>,
+) -> rusqlite::Result<()> {
+    if opts.dry_run || mirror_source(endpoints, opts).is_none() {
+        return Ok(());
+    }
     let pair = super::pair_id_for(endpoints.a, endpoints.root_a, endpoints.b, endpoints.root_b);
     open_store(path)?.forget_pair(&pair)
 }
@@ -263,37 +453,78 @@ fn open_store(path: Option<&Path>) -> rusqlite::Result<SyncStateStore> {
     path.map_or_else(SyncStateStore::open_default, SyncStateStore::open_at)
 }
 fn record_matches(record: &PairRecord, endpoints: SyncEndpoints<'_>, source_side: Side) -> bool {
-    record.root_a == endpoints.root_a && record.root_b == endpoints.root_b
-        && record.source_side == source_side && record.bootstrapped && record.target_managed
+    record.root_a == endpoints.root_a
+        && record.root_b == endpoints.root_b
+        && record.source_side == source_side
+        && record.bootstrapped
+        && record.target_managed
 }
 fn root_id_matches(backend: &dyn Backend, root: &str, saved: Option<&str>) -> bool {
     saved.is_none_or(|id| backend.change_root_id(root).ok().flatten().as_deref() == Some(id))
 }
-fn pair_record(endpoints: SyncEndpoints<'_>, pair: String, mode: String, source_side: Side, cursor: Option<String>) -> PairRecord {
-    PairRecord { pair, root_a: endpoints.root_a.into(), root_b: endpoints.root_b.into(), mode, source_side,
-        source_cursor: cursor, root_a_id: endpoints.a.change_root_id(endpoints.root_a).ok().flatten(),
-        root_b_id: endpoints.b.change_root_id(endpoints.root_b).ok().flatten(), bootstrapped: true, target_managed: true }
+fn pair_record(
+    endpoints: SyncEndpoints<'_>,
+    pair: String,
+    mode: String,
+    source_side: Side,
+    cursor: Option<String>,
+) -> PairRecord {
+    PairRecord {
+        pair,
+        root_a: endpoints.root_a.into(),
+        root_b: endpoints.root_b.into(),
+        mode,
+        source_side,
+        source_cursor: cursor,
+        root_a_id: endpoints.a.change_root_id(endpoints.root_a).ok().flatten(),
+        root_b_id: endpoints.b.change_root_id(endpoints.root_b).ok().flatten(),
+        bootstrapped: true,
+        target_managed: true,
+    }
 }
 fn mode(state: &RunState<'_>) -> String {
     // Debug is an opaque cache fingerprint, never a persisted endpoint or a
     // protocol contract. A dependency update may invalidate it safely.
-    let text = format!("{:?}:{}:{}:{:?}:{}:{}:{}:{}:{}", state.opts.compare, state.opts.modify_window_ms,
-        state.opts.cross_mounts, state.filter.ignore, state.filter.include_hidden,
-        state.filter.min_size, state.filter.max_size, state.filter.after_mtime_ms, state.filter.before_mtime_ms);
+    let text = format!(
+        "{:?}:{}:{}:{:?}:{}:{}:{}:{}:{}",
+        state.opts.compare,
+        state.opts.modify_window_ms,
+        state.opts.cross_mounts,
+        state.filter.ignore,
+        state.filter.include_hidden,
+        state.filter.min_size,
+        state.filter.max_size,
+        state.filter.after_mtime_ms,
+        state.filter.before_mtime_ms
+    );
     format!("mirror-rv2-ancestry:{:x}", Sha256::digest(text.as_bytes()))
 }
 fn baseline_by_key(base: &Baseline, keys: super::KeyPolicy) -> Baseline {
-    base.iter().map(|(rel, entry)| (keys.key(rel).into_owned(), *entry)).collect()
+    base.iter()
+        .map(|(rel, entry)| (keys.key(rel).into_owned(), *entry))
+        .collect()
 }
-fn cache_by_key(a: &BTreeMap<String, ItemRecord>, b: &BTreeMap<String, ItemRecord>, keys: super::KeyPolicy) -> Option<Baseline> {
+fn cache_by_key(
+    a: &BTreeMap<String, ItemRecord>,
+    b: &BTreeMap<String, ItemRecord>,
+    keys: super::KeyPolicy,
+) -> Option<Baseline> {
     let mut base = Baseline::new();
     for (side, items) in [(PairSide::A, a), (PairSide::B, b)] {
         let mut seen = BTreeSet::new();
-        for (rel, item) in items.iter().filter(|(_, item)| !item.deleted && !item.is_dir) {
+        for (rel, item) in items
+            .iter()
+            .filter(|(_, item)| !item.deleted && !item.is_dir)
+        {
             let key = keys.key(rel).into_owned();
-            if !seen.insert(key.clone()) { return None; }
+            if !seen.insert(key.clone()) {
+                return None;
+            }
             let entry = base.entry(key).or_default();
-            match side { PairSide::A => entry.0 = item.sig, PairSide::B => entry.1 = item.sig }
+            match side {
+                PairSide::A => entry.0 = item.sig,
+                PairSide::B => entry.1 = item.sig,
+            }
         }
     }
     Some(base)

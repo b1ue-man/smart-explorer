@@ -1,6 +1,10 @@
 //! Remove one entry from the held parent, never via an old root spelling.
-use std::{ffi::{CString, OsStr}, io, os::unix::{ffi::OsStrExt, fs::MetadataExt, io::AsRawFd}};
 use super::{validate_name, DirectoryHandle};
+use std::{
+    ffi::{CString, OsStr},
+    io,
+    os::unix::{ffi::OsStrExt, fs::MetadataExt, io::AsRawFd},
+};
 
 impl DirectoryHandle {
     pub(crate) fn open_child_for_delete(&self, name: &OsStr) -> io::Result<Self> {
@@ -42,7 +46,10 @@ fn unlink(parent: &DirectoryHandle, name: &OsStr, flags: i32) -> io::Result<()> 
     }
 }
 fn changed() -> io::Error {
-    io::Error::new(io::ErrorKind::PermissionDenied, "opened delete entry changed")
+    io::Error::new(
+        io::ErrorKind::PermissionDenied,
+        "opened delete entry changed",
+    )
 }
 
 #[cfg(test)]
@@ -69,10 +76,14 @@ mod tests {
         let fixture = tempfile::tempdir().unwrap();
         std::fs::create_dir(fixture.path().join("outside")).unwrap();
         std::fs::write(fixture.path().join("outside/kept"), b"kept").unwrap();
-        std::os::unix::fs::symlink(fixture.path().join("outside"), fixture.path().join("link")).unwrap();
+        std::os::unix::fs::symlink(fixture.path().join("outside"), fixture.path().join("link"))
+            .unwrap();
         let parent = DirectoryHandle::open_root(fixture.path()).unwrap();
         assert!(parent.open_child_for_delete(OsStr::new("link")).is_err());
         parent.remove_child(OsStr::new("link")).unwrap();
-        assert_eq!(std::fs::read(fixture.path().join("outside/kept")).unwrap(), b"kept");
+        assert_eq!(
+            std::fs::read(fixture.path().join("outside/kept")).unwrap(),
+            b"kept"
+        );
     }
 }

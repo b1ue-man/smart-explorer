@@ -81,7 +81,10 @@ impl GDriveBackend {
     }
 
     pub(super) fn exact_named_object(
-        &self, parent_id: &str, plain: &str, id: &str,
+        &self,
+        parent_id: &str,
+        plain: &str,
+        id: &str,
     ) -> VfsResult<DriveObject> {
         let url = self.api_url(&format!(
             "files/{}?fields=id,name,mimeType,size,md5Checksum,modifiedTime,parents,trashed",
@@ -89,7 +92,9 @@ impl GDriveBackend {
         ));
         let json = self.get_json(&url)?;
         let object = parse_object(&json, parent_id, plain)?;
-        if object.id != id { return Err(invalid("Drive returned a different selected object ID")); }
+        if object.id != id {
+            return Err(invalid("Drive returned a different selected object ID"));
+        }
         Ok(object)
     }
 
@@ -137,9 +142,12 @@ impl GDriveBackend {
                         }
                     });
                 if let Err(response_error) = response_state {
-                    if let Err(verify_error) =
-                        self.verify_renamed_id(id, destination_parent_id, destination_name, mtime_ms)
-                    {
+                    if let Err(verify_error) = self.verify_renamed_id(
+                        id,
+                        destination_parent_id,
+                        destination_name,
+                        mtime_ms,
+                    ) {
                         return Err(ambiguous_rename(id, &response_error, &verify_error));
                     }
                 }
@@ -180,8 +188,12 @@ impl GDriveBackend {
             && json["parents"].as_array().is_some_and(|parents| {
                 parents.len() == 1 && parents[0].as_str() == Some(destination_parent_id)
             });
-        let time_matches = mtime_ms.is_none_or(|expected|
-            json["modifiedTime"].as_str().and_then(super::core::parse_rfc3339_ms) == Some(expected));
+        let time_matches = mtime_ms.is_none_or(|expected| {
+            json["modifiedTime"]
+                .as_str()
+                .and_then(super::core::parse_rfc3339_ms)
+                == Some(expected)
+        });
         if expected && time_matches {
             Ok(())
         } else {
@@ -234,7 +246,9 @@ fn parse_object(
         mime_type,
         size,
         md5,
-        mtime_ms: json["modifiedTime"].as_str().and_then(super::core::parse_rfc3339_ms),
+        mtime_ms: json["modifiedTime"]
+            .as_str()
+            .and_then(super::core::parse_rfc3339_ms),
     })
 }
 

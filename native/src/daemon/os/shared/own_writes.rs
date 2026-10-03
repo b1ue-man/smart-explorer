@@ -1,8 +1,8 @@
 //! Written states, scoped to a job and side. Event consumers compare the
 //! current state on their own thread before suppressing a write notification.
 use std::collections::BTreeMap;
-use std::sync::{Mutex, PoisonError};
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::{Mutex, PoisonError};
 
 use crate::bisync::{ApplySink, CompletedAction, CompletedKind, PairSide, Sig};
 use crate::vfs::BackendHandle;
@@ -46,21 +46,34 @@ impl Observer {
             PairSide::A => (&self.a, &self.root_a, &self.source),
             PairSide::B => (&self.b, &self.root_b, &self.target),
         };
-        let path = if root.ends_with('/') { format!("{root}{rel}") }
-            else { format!("{root}/{rel}") };
+        let path = if root.ends_with('/') {
+            format!("{root}{rel}")
+        } else {
+            format!("{root}/{rel}")
+        };
         let mut writes = WRITES.lock().unwrap_or_else(PoisonError::into_inner);
         writes.insert(
             (self.job_id.clone(), side, rel.to_string()),
-            Entry { backend: backend.clone(), path, endpoint: endpoint.clone(), generation: self.generation, succeeded: false, state },
+            Entry {
+                backend: backend.clone(),
+                path,
+                endpoint: endpoint.clone(),
+                generation: self.generation,
+                succeeded: false,
+                state,
+            },
         );
         // Evicted entries simply retain their conservative follow-up run.
-        while writes.len() > MAX_WRITTEN_PATHS { writes.pop_first(); }
+        while writes.len() > MAX_WRITTEN_PATHS {
+            writes.pop_first();
+        }
     }
 }
 
 impl ApplySink for Observer {
     fn completed(&self, action: CompletedAction) {
-        self.progress.store(super::state::now_secs(), Ordering::Release);
+        self.progress
+            .store(super::state::now_secs(), Ordering::Release);
         match action.kind {
             CompletedKind::Copied { from } | CompletedKind::Moved { from } => {
                 if let Some(sig) = action.dst_sig {
@@ -80,47 +93,107 @@ impl ApplySink for Observer {
     }
 
     fn deferred(&self, _rel: &str, _reason: &str) {
-        self.progress.store(super::state::now_secs(), Ordering::Release);
-        super::job_triggers::persist(&self.job_id, crate::syncjobs::PendingKind::Verify, super::state::now_secs(), None);
+        self.progress
+            .store(super::state::now_secs(), Ordering::Release);
+        super::job_triggers::persist(
+            &self.job_id,
+            crate::syncjobs::PendingKind::Verify,
+            super::state::now_secs(),
+            None,
+        );
     }
 }
 
 pub(super) fn forget(id: &str) {
-    WRITES.lock().unwrap_or_else(PoisonError::into_inner)
+    WRITES
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
         .retain(|(job, _, _), _| job != id);
 }
 
 pub(super) fn succeeded(id: &str, generation: i64) {
-    for ((job, _, _), entry) in WRITES.lock().unwrap_or_else(PoisonError::into_inner).iter_mut() {
-        if job == id && entry.generation == generation { entry.succeeded = true; }
+    for ((job, _, _), entry) in WRITES
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .iter_mut()
+    {
+        if job == id && entry.generation == generation {
+            entry.succeeded = true;
+        }
     }
 }
 
-pub(super) fn candidate(id: &str, side: PairSide, rel: &str, endpoint: &str, generation: Option<i64>) -> bool {
-    WRITES.lock().unwrap_or_else(PoisonError::into_inner).get(&(id.to_string(), side, rel.to_string()))
-        .is_some_and(|entry| entry.endpoint == endpoint && generation == Some(entry.generation)
-            && match &entry.state { Written::Missing => true, Written::File(sig) => sig.hash != 0, Written::Directory => false })
+pub(super) fn candidate(
+    id: &str,
+    side: PairSide,
+    rel: &str,
+    endpoint: &str,
+    generation: Option<i64>,
+) -> bool {
+    WRITES
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(&(id.to_string(), side, rel.to_string()))
+        .is_some_and(|entry| {
+            entry.endpoint == endpoint
+                && generation == Some(entry.generation)
+                && match &entry.state {
+                    Written::Missing => true,
+                    Written::File(sig) => sig.hash != 0,
+                    Written::Directory => false,
+                }
+        })
 }
 
 /// A failed stat is never interpreted as missing (or as an own write).
-pub(super) fn matches(id: &str, side: PairSide, rel: &str, endpoint: &str,
-    generation: Option<i64>, cancel: &AtomicBool) -> bool {
+pub(super) fn matches(
+    id: &str,
+    side: PairSide,
+    rel: &str,
+    endpoint: &str,
+    generation: Option<i64>,
+    cancel: &AtomicBool,
+) -> bool {
     let key = (id.to_string(), side, rel.to_string());
-    let entry = WRITES.lock().unwrap_or_else(PoisonError::into_inner).get(&key).cloned();
-    let Some(entry) = entry else { return false; };
-    if !entry.succeeded || entry.endpoint != endpoint || generation != Some(entry.generation) { return false; }
+    let entry = WRITES
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(&key)
+        .cloned();
+    let Some(entry) = entry else {
+        return false;
+    };
+    if !entry.succeeded || entry.endpoint != endpoint || generation != Some(entry.generation) {
+        return false;
+    }
     let equal = match (entry.state, entry.backend.stat(&entry.path)) {
         (Written::Missing, Err(error)) => error.kind() == std::io::ErrorKind::NotFound,
         (Written::Directory, _) => false,
-        (Written::File(sig), Ok(meta)) => !meta.is_dir && !meta.is_symlink && !meta.special
-            && sig.hash != 0 && meta.size == sig.size && meta.mtime_ms == sig.mtime_ms
-            && crate::bisync::current_content_signature(&*entry.backend, &entry.path, cancel).ok() == Some(sig.hash)
-            && entry.backend.stat(&entry.path).is_ok_and(|after| after.size == sig.size && after.mtime_ms == sig.mtime_ms
-                && !after.is_dir && !after.is_symlink && !after.special),
+        (Written::File(sig), Ok(meta)) => {
+            !meta.is_dir
+                && !meta.is_symlink
+                && !meta.special
+                && sig.hash != 0
+                && meta.size == sig.size
+                && meta.mtime_ms == sig.mtime_ms
+                && crate::bisync::current_content_signature(&*entry.backend, &entry.path, cancel)
+                    .ok()
+                    == Some(sig.hash)
+                && entry.backend.stat(&entry.path).is_ok_and(|after| {
+                    after.size == sig.size
+                        && after.mtime_ms == sig.mtime_ms
+                        && !after.is_dir
+                        && !after.is_symlink
+                        && !after.special
+                })
+        }
         _ => false,
     };
     if !equal {
-        WRITES.lock().unwrap_or_else(PoisonError::into_inner).remove(&key);
+        WRITES
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&key);
     }
     equal
 }

@@ -55,42 +55,80 @@ pub(super) struct CheckpointSink<'a> {
 
 impl<'a> CheckpointSink<'a> {
     pub fn new(
-        endpoints: SyncEndpoints<'a>, lock: &'a PairLock, key: &'a StateKey,
-        keys: KeyPolicy, observer: Option<&'a dyn ApplySink>,
+        endpoints: SyncEndpoints<'a>,
+        lock: &'a PairLock,
+        key: &'a StateKey,
+        keys: KeyPolicy,
+        observer: Option<&'a dyn ApplySink>,
     ) -> io::Result<Self> {
         let (journal, records, dirs) = Journal::load(key, keys)?;
         let mut journal = journal;
         // Check storage before the first mutation, including an otherwise
         // empty plan with no convergence records.
-        journal.append(&Frame { fold_case: keys.fold_case, ..Frame::default() })?;
+        journal.append(&Frame {
+            fold_case: keys.fold_case,
+            ..Frame::default()
+        })?;
         let dirs = dirs.unwrap_or_default();
         let dirs_bytes = super::checkpoint_journal::dir_bytes(&dirs);
-        Ok(Self { endpoints, lock, key, keys, observer, observed: None, state: Mutex::new(State {
-            records, dirs, dirs_bytes, journal, pending: Vec::new(),
-            omitted: Vec::new(), deferred: Vec::new(), stopped: None,
-            error: None, last: Instant::now(), counts: None, presence: Default::default(),
-        }) })
+        Ok(Self {
+            endpoints,
+            lock,
+            key,
+            keys,
+            observer,
+            observed: None,
+            state: Mutex::new(State {
+                records,
+                dirs,
+                dirs_bytes,
+                journal,
+                pending: Vec::new(),
+                omitted: Vec::new(),
+                deferred: Vec::new(),
+                stopped: None,
+                error: None,
+                last: Instant::now(),
+                counts: None,
+                presence: Default::default(),
+            }),
+        })
     }
 
-    pub fn with_observations(mut self, observed: [&'a SideSnapshot; 2], spellings: &'a Spellings, counts: [u64; 2]) -> Self {
+    pub fn with_observations(
+        mut self,
+        observed: [&'a SideSnapshot; 2],
+        spellings: &'a Spellings,
+        counts: [u64; 2],
+    ) -> Self {
         self.observed = Some((observed, spellings));
         self.lock().counts = Some(counts);
         self
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     /// Already observed convergence and stale spellings, without file I/O.
     pub fn planned(&self, mut frame: Frame) -> io::Result<()> {
         frame.fold_case = self.keys.fold_case;
-        for rel in &mut frame.dirs_add { *rel = self.keys.key(rel).into_owned(); }
-        for rel in &mut frame.dirs_remove { *rel = self.keys.key(rel).into_owned(); }
+        for rel in &mut frame.dirs_add {
+            *rel = self.keys.key(rel).into_owned();
+        }
+        for rel in &mut frame.dirs_remove {
+            *rel = self.keys.key(rel).into_owned();
+        }
         let mut state = self.lock();
         if !frame.is_empty() {
-            let bytes = frame.ensure_fits(&state.records, &state.dirs, state.dirs_bytes,
-                super::SyncLimits::for_memory(crate::transfer::physical_memory()))?;
+            let bytes = frame.ensure_fits(
+                &state.records,
+                &state.dirs,
+                state.dirs_bytes,
+                super::SyncLimits::for_memory(crate::transfer::physical_memory()),
+            )?;
             state.journal.append(&frame)?;
             let State { records, dirs, .. } = &mut *state;
             frame.apply(records, dirs)?;
@@ -104,21 +142,29 @@ impl<'a> CheckpointSink<'a> {
     pub fn during<T>(&self, work: impl FnOnce() -> T) -> T {
         std::thread::scope(|scope| {
             let (end, wait) = mpsc::channel::<()>();
-            let timer = std::thread::Builder::new().name("sync-checkpoint".into())
+            let timer = std::thread::Builder::new()
+                .name("sync-checkpoint".into())
                 .spawn_scoped(scope, move || {
-                    while matches!(wait.recv_timeout(CHECKPOINT_INTERVAL), Err(mpsc::RecvTimeoutError::Timeout)) {
+                    while matches!(
+                        wait.recv_timeout(CHECKPOINT_INTERVAL),
+                        Err(mpsc::RecvTimeoutError::Timeout)
+                    ) {
                         let mut state = self.lock();
                         self.flush(&mut state);
                     }
                 });
             if let Err(error) = &timer {
-                self.lock().error.get_or_insert_with(|| format!("Zwischenstand kann nicht gestartet werden: {error}"));
+                self.lock().error.get_or_insert_with(|| {
+                    format!("Zwischenstand kann nicht gestartet werden: {error}")
+                });
             }
             let result = work();
             let _ = end.send(());
             if let Ok(timer) = timer {
                 if timer.join().is_err() {
-                    self.lock().error.get_or_insert_with(|| "Zwischenstand unerwartet beendet".into());
+                    self.lock()
+                        .error
+                        .get_or_insert_with(|| "Zwischenstand unerwartet beendet".into());
                 }
             }
             result
@@ -130,17 +176,29 @@ impl<'a> CheckpointSink<'a> {
             let mut state = self.lock();
             self.flush(&mut state);
             if state.pending.is_empty() {
-                let State { journal, records, dirs, error, .. } = &mut *state;
+                let State {
+                    journal,
+                    records,
+                    dirs,
+                    error,
+                    ..
+                } = &mut *state;
                 if let Err(failed) = journal.compact(self.key, records, dirs) {
                     error.get_or_insert_with(|| failed.to_string());
                 }
             }
         }
-        let state = self.state.into_inner().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let state = self
+            .state
+            .into_inner()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         CheckpointResult {
-            baseline: state.records.baseline, dirs: state.dirs,
-            omitted: state.omitted, deferred: state.deferred,
-            stopped: state.stopped, error: state.error,
+            baseline: state.records.baseline,
+            dirs: state.dirs,
+            omitted: state.omitted,
+            deferred: state.deferred,
+            stopped: state.stopped,
+            error: state.error,
             counts: state.counts,
         }
     }
@@ -150,42 +208,67 @@ impl<'a> CheckpointSink<'a> {
     pub fn can_delete(&self) -> bool {
         let mut state = self.lock();
         self.flush(&mut state);
-        state.error.is_none() && state.stopped.is_none()
-            && state.pending.is_empty() && state.omitted.is_empty() && state.deferred.is_empty()
+        state.error.is_none()
+            && state.stopped.is_none()
+            && state.pending.is_empty()
+            && state.omitted.is_empty()
+            && state.deferred.is_empty()
     }
 
     pub fn completed_deletion(&self, rel: &str, side: PairSide) -> bool {
-        self.lock().presence.get(&(side, self.keys.key(rel).into_owned(), false)) == Some(&false)
+        self.lock()
+            .presence
+            .get(&(side, self.keys.key(rel).into_owned(), false))
+            == Some(&false)
     }
 
     pub fn protected_paths(&self) -> super::SyncOmissions {
         let state = self.lock();
         let mut protected = super::SyncOmissions::new(self.keys.fold_case);
-        for (rel, kind) in &state.omitted { protected.record_kind(rel, *kind, kind.reported_by_default()); }
-        for (rel, _) in &state.deferred { protected.record_kind(rel, OmissionKind::Unreadable, false); }
+        for (rel, kind) in &state.omitted {
+            protected.record_kind(rel, *kind, kind.reported_by_default());
+        }
+        for (rel, _) in &state.deferred {
+            protected.record_kind(rel, OmissionKind::Unreadable, false);
+        }
         protected
     }
 
     fn flush(&self, state: &mut State) {
-        if state.pending.is_empty() { return; }
+        if state.pending.is_empty() {
+            return;
+        }
         if self.lock.id() != self.key.lock_id.to_ascii_lowercase() {
-            state.error.get_or_insert_with(|| "Zwischenstand hält die falsche Paarsperre".into());
+            state
+                .error
+                .get_or_insert_with(|| "Zwischenstand hält die falsche Paarsperre".into());
             return;
         }
         let mut flush_a = false;
         let mut flush_b = false;
         for result in state.pending.iter().filter(|action| !action.durable) {
             for side in durability_sides(result.kind) {
-                match side { PairSide::A => flush_a = true, PairSide::B => flush_b = true }
+                match side {
+                    PairSide::A => flush_a = true,
+                    PairSide::B => flush_b = true,
+                }
             }
         }
         let durable_a = self.flush_side(PairSide::A, flush_a, state);
         let durable_b = self.flush_side(PairSide::B, flush_b, state);
-        let mut frame = Frame { fold_case: self.keys.fold_case, ..Frame::default() };
+        let mut frame = Frame {
+            fold_case: self.keys.fold_case,
+            ..Frame::default()
+        };
         let mut waiting = Vec::new();
         for action in std::mem::take(&mut state.pending) {
-            if !action.durable && !durability_sides(action.kind).into_iter()
-                .all(|side| match side { PairSide::A => durable_a, PairSide::B => durable_b })
+            if !action.durable
+                && !durability_sides(action.kind)
+                    .into_iter()
+                    .all(|side| match side {
+                        PairSide::A => durable_a,
+                        PairSide::B => durable_b,
+                    })
             {
                 waiting.push(action);
                 continue;
@@ -202,27 +285,48 @@ impl<'a> CheckpointSink<'a> {
             }
         }
         if !frame.is_empty() {
-            let result = frame.ensure_fits(&state.records, &state.dirs, state.dirs_bytes,
-                super::SyncLimits::for_memory(crate::transfer::physical_memory())).and_then(|bytes| {
-                state.journal.append(&frame)?;
-                frame.apply(&mut state.records, &mut state.dirs)?;
-                state.dirs_bytes = bytes;
-                Ok(())
-            });
+            let result = frame
+                .ensure_fits(
+                    &state.records,
+                    &state.dirs,
+                    state.dirs_bytes,
+                    super::SyncLimits::for_memory(crate::transfer::physical_memory()),
+                )
+                .and_then(|bytes| {
+                    state.journal.append(&frame)?;
+                    frame.apply(&mut state.records, &mut state.dirs)?;
+                    state.dirs_bytes = bytes;
+                    Ok(())
+                });
             if let Err(error) = result {
                 state.error.get_or_insert_with(|| error.to_string());
                 // Keep authoritative deltas for another final flush attempt.
                 for (rel, entry) in frame.records {
-                    waiting.push(CompletedAction { rel, kind: CompletedKind::Copied { from: PairSide::A },
-                        src_sig: entry.0, dst_sig: entry.1, durable: true });
+                    waiting.push(CompletedAction {
+                        rel,
+                        kind: CompletedKind::Copied { from: PairSide::A },
+                        src_sig: entry.0,
+                        dst_sig: entry.1,
+                        durable: true,
+                    });
                 }
                 for rel in frame.dirs_add {
-                    waiting.push(CompletedAction { rel, kind: CompletedKind::DirCreated { side: PairSide::A },
-                        src_sig: None, dst_sig: None, durable: true });
+                    waiting.push(CompletedAction {
+                        rel,
+                        kind: CompletedKind::DirCreated { side: PairSide::A },
+                        src_sig: None,
+                        dst_sig: None,
+                        durable: true,
+                    });
                 }
                 for rel in frame.dirs_remove {
-                    waiting.push(CompletedAction { rel, kind: CompletedKind::DirRemoved { side: PairSide::A },
-                        src_sig: None, dst_sig: None, durable: true });
+                    waiting.push(CompletedAction {
+                        rel,
+                        kind: CompletedKind::DirRemoved { side: PairSide::A },
+                        src_sig: None,
+                        dst_sig: None,
+                        durable: true,
+                    });
                 }
             }
         }
@@ -231,7 +335,9 @@ impl<'a> CheckpointSink<'a> {
     }
 
     fn flush_side(&self, side: PairSide, needed: bool, state: &mut State) -> bool {
-        if !needed { return true; }
+        if !needed {
+            return true;
+        }
         let (backend, root) = match side {
             PairSide::A => (self.endpoints.a, self.endpoints.root_a),
             PairSide::B => (self.endpoints.b, self.endpoints.root_b),
@@ -239,18 +345,30 @@ impl<'a> CheckpointSink<'a> {
         match crate::vfs::sync_filesystem(backend, root) {
             Ok(true) => true,
             Ok(false) => {
-                state.error.get_or_insert_with(|| format!("Dateien auf {} noch nicht dauerhaft bestätigt", side.label()));
+                state.error.get_or_insert_with(|| {
+                    format!(
+                        "Dateien auf {} noch nicht dauerhaft bestätigt",
+                        side.label()
+                    )
+                });
                 false
             }
-            Err(error) => { state.error.get_or_insert_with(|| error.to_string()); false }
+            Err(error) => {
+                state.error.get_or_insert_with(|| error.to_string());
+                false
+            }
         }
     }
 
     fn count_completed(&self, state: &mut State, action: &CompletedAction) {
-        let Some((observed, spellings)) = self.observed else { return; };
+        let Some((observed, spellings)) = self.observed else {
+            return;
+        };
         let transitions = match action.kind {
             CompletedKind::Copied { from } => vec![(from.other(), false, true)],
-            CompletedKind::Moved { from } => vec![(from, false, false), (from.other(), false, true)],
+            CompletedKind::Moved { from } => {
+                vec![(from, false, false), (from.other(), false, true)]
+            }
             CompletedKind::Deleted { side } => vec![(side, false, false)],
             CompletedKind::DirCreated { side } => vec![(side, true, true)],
             CompletedKind::DirRemoved { side } => vec![(side, true, false)],
@@ -264,12 +382,20 @@ impl<'a> CheckpointSink<'a> {
             } else {
                 // A planner action's rel may be the other side's spelling.
                 let literal = spellings.side_rel(&action.rel, side);
-                observed[index].tree.contains_key(literal) || observed[index].filtered.contains_key(literal)
+                observed[index].tree.contains_key(literal)
+                    || observed[index].filtered.contains_key(literal)
             };
-            let was_present = state.presence.insert((side, key, directory), present).unwrap_or(initial);
+            let was_present = state
+                .presence
+                .insert((side, key, directory), present)
+                .unwrap_or(initial);
             if let Some(counts) = &mut state.counts {
-                if present && !was_present { counts[index] = counts[index].saturating_add(1); }
-                if !present && was_present { counts[index] = counts[index].saturating_sub(1); }
+                if present && !was_present {
+                    counts[index] = counts[index].saturating_add(1);
+                }
+                if !present && was_present {
+                    counts[index] = counts[index].saturating_sub(1);
+                }
             }
         }
     }
@@ -280,11 +406,14 @@ impl ApplySink for CheckpointSink<'_> {
         let mut state = self.lock();
         self.count_completed(&mut state, &action);
         state.pending.push(action.clone());
-        if state.pending.len() >= CHECKPOINT_ACTIONS || state.last.elapsed() >= CHECKPOINT_INTERVAL {
+        if state.pending.len() >= CHECKPOINT_ACTIONS || state.last.elapsed() >= CHECKPOINT_INTERVAL
+        {
             self.flush(&mut state);
         }
         drop(state);
-        if let Some(observer) = self.observer { observer.completed(action); }
+        if let Some(observer) = self.observer {
+            observer.completed(action);
+        }
     }
 
     fn should_stop(&self) -> bool {
@@ -296,17 +425,25 @@ impl ApplySink for CheckpointSink<'_> {
 
     fn omitted(&self, rel: &str, kind: OmissionKind) {
         self.lock().omitted.push((rel.to_string(), kind));
-        if let Some(observer) = self.observer { observer.omitted(rel, kind); }
+        if let Some(observer) = self.observer {
+            observer.omitted(rel, kind);
+        }
     }
 
     fn deferred(&self, rel: &str, reason: &str) {
-        self.lock().deferred.push((rel.to_string(), reason.to_string()));
-        if let Some(observer) = self.observer { observer.deferred(rel, reason); }
+        self.lock()
+            .deferred
+            .push((rel.to_string(), reason.to_string()));
+        if let Some(observer) = self.observer {
+            observer.deferred(rel, reason);
+        }
     }
 
     fn stopped(&self, stop: RunStop) {
         self.lock().stopped.get_or_insert(stop);
-        if let Some(observer) = self.observer { observer.stopped(stop); }
+        if let Some(observer) = self.observer {
+            observer.stopped(stop);
+        }
     }
 }
 
@@ -314,7 +451,8 @@ fn durability_sides(kind: CompletedKind) -> Vec<PairSide> {
     match kind {
         CompletedKind::Copied { from } => vec![from.other()],
         CompletedKind::Moved { from } => vec![from, from.other()],
-        CompletedKind::Deleted { side } | CompletedKind::DirCreated { side }
+        CompletedKind::Deleted { side }
+        | CompletedKind::DirCreated { side }
         | CompletedKind::DirRemoved { side } => vec![side],
     }
 }

@@ -15,20 +15,12 @@ use std::sync::{Arc, Mutex};
 mod access;
 mod bindings;
 mod config;
-mod direct_presence;
-mod hello_session;
-mod login;
-mod rooms;
-mod server_tls;
-#[cfg(test)]
-mod signal_security_state_tests;
-#[cfg(test)]
-mod signal_security_transport_tests;
-mod signal_stream;
 mod direct_messages;
+mod direct_presence;
 mod direct_validation;
 mod discovery;
 mod discovery_state;
+mod hello_session;
 mod idle;
 mod idle_outbox;
 #[cfg(test)]
@@ -37,6 +29,7 @@ mod idle_outbox_tests;
 mod idle_transport_tests;
 mod limits;
 mod line;
+mod login;
 #[cfg(test)]
 mod main_tests;
 #[cfg(test)]
@@ -48,11 +41,18 @@ mod relay;
 mod relay_access;
 #[cfg(test)]
 mod resource_limits_tests;
+mod rooms;
+mod server_tls;
 #[cfg(test)]
 mod share_remote_task_tests;
 #[cfg(test)]
 mod share_remote_wire_task_tests;
+#[cfg(test)]
+mod signal_security_state_tests;
+#[cfg(test)]
+mod signal_security_transport_tests;
 mod signal_session;
+mod signal_stream;
 mod state;
 #[cfg(test)]
 mod state_transition_tests;
@@ -66,9 +66,7 @@ mod websocket_read_limit;
 mod websocket_socket;
 mod writer;
 use idle::SignalTiming;
-use limits::{
-    ConnectionLimiter, SourceClassifier,
-};
+use limits::{ConnectionLimiter, SourceClassifier};
 use protocol::{In, Out, PeerPresence};
 use rate_limits::AcceptRateLimiter;
 use state::{leave_room, State};
@@ -82,24 +80,38 @@ fn send(writer: &Writer, message: &Out) -> bool {
 fn main() {
     let options = match config::Options::from_env_and_args() {
         Ok(Some(options)) => options,
-        Ok(None) => { println!("{}", config::HELP); return; }
+        Ok(None) => {
+            println!("{}", config::HELP);
+            return;
+        }
         Err(error) => fatal(&error),
     };
     let bind = options.bind.to_string();
-    let relay_address = relay::bind_address(&bind).unwrap_or_else(|error| fatal(&error.to_string()));
-    options.check_security(relay_address).unwrap_or_else(|error| fatal(&error));
+    let relay_address =
+        relay::bind_address(&bind).unwrap_or_else(|error| fatal(&error.to_string()));
+    options
+        .check_security(relay_address)
+        .unwrap_or_else(|error| fatal(&error));
     let tls = match (&options.cert, &options.key) {
-        (Some(cert), Some(key)) => Some(server_tls::load(cert, key).unwrap_or_else(|error| fatal(&error))),
+        (Some(cert), Some(key)) => {
+            Some(server_tls::load(cert, key).unwrap_or_else(|error| fatal(&error)))
+        }
         _ => None,
     };
     let mut initial_state = State::default();
     initial_state.policy = state::ServerPolicy {
-        limits: options.limits, require_key_login: options.require_key_login,
+        limits: options.limits,
+        require_key_login: options.require_key_login,
     };
     if let Some(path) = &options.state_file {
         initial_state.bindings = bindings::Bindings::load(path, discovery_state::unix_seconds())
             .unwrap_or_else(|error| fatal(&error));
-        initial_state.bindings.save(path).unwrap_or_else(|error| fatal(&format!("cannot write server state {}: {error}", path.display())));
+        initial_state.bindings.save(path).unwrap_or_else(|error| {
+            fatal(&format!(
+                "cannot write server state {}: {error}",
+                path.display()
+            ))
+        });
         initial_state.binding_path = Some(path.clone());
     } else {
         eprintln!("se-share-server: device/lookup key bindings are memory-only; use --state-file for restart protection");
@@ -125,12 +137,18 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let _relay_guard = match relay::start(relay_address, relay::RelayOptions {
-        keepalive, tls: tls.as_ref().map(|config| config.as_ref().clone()),
-        plaintext_fallback: options.allow_plaintext || relay_address.is_some_and(|addr| addr.ip().is_loopback()),
-        trusted_proxy: relay_address.is_some_and(|addr| source_classifier.is_trusted_ip(addr.ip())),
-        admissions: relay_admissions,
-    }) {
+    let _relay_guard = match relay::start(
+        relay_address,
+        relay::RelayOptions {
+            keepalive,
+            tls: tls.as_ref().map(|config| config.as_ref().clone()),
+            plaintext_fallback: options.allow_plaintext
+                || relay_address.is_some_and(|addr| addr.ip().is_loopback()),
+            trusted_proxy: relay_address
+                .is_some_and(|addr| source_classifier.is_trusted_ip(addr.ip())),
+            admissions: relay_admissions,
+        },
+    ) {
         Ok(guard) => guard,
         Err(error) => {
             eprintln!("se-share-server: {error}");
@@ -146,7 +164,12 @@ fn main() {
     };
     eprintln!(
         "se-share-server signaling on {bind} ({}, idle keepalive {} s)",
-        if tls.is_some() { "TLS WebSocket" } else { "explicit plaintext TCP/WebSocket" }, keepalive.secs()
+        if tls.is_some() {
+            "TLS WebSocket"
+        } else {
+            "explicit plaintext TCP/WebSocket"
+        },
+        keepalive.secs()
     );
     let timing = SignalTiming::new(keepalive);
     let connections = ConnectionLimiter::from_limits(&options.limits);
@@ -202,9 +225,15 @@ fn trusted_proxy_sources_from_env() -> Result<SourceClassifier, String> {
 
 fn dispatch(id: u64, writer: &Writer, msg: In, state: &Arc<Mutex<State>>) {
     match msg {
-        In::PublishDirect { presence, access_hash } => direct_presence::publish(id, writer, presence, access_hash, state),
+        In::PublishDirect {
+            presence,
+            access_hash,
+        } => direct_presence::publish(id, writer, presence, access_hash, state),
         In::UnpublishDirect { lookup_id } => tracked_direct::unpublish(id, &lookup_id, state),
-        In::WatchDirect { lookup_id, access_proof } => direct_presence::watch(id, writer, &lookup_id, access_proof, state),
+        In::WatchDirect {
+            lookup_id,
+            access_proof,
+        } => direct_presence::watch(id, writer, &lookup_id, access_proof, state),
         In::RequestDirect {
             lookup_id,
             presence,
@@ -212,7 +241,7 @@ fn dispatch(id: u64, writer: &Writer, msg: In, state: &Arc<Mutex<State>>) {
             if direct_presence::require_origin(state, id, writer, &presence) {
                 tracked_direct::request_legacy(writer, &lookup_id, presence, state);
             }
-        },
+        }
         In::DirectAccessAccepted {
             lookup_id,
             requester_device_id,
@@ -221,19 +250,22 @@ fn dispatch(id: u64, writer: &Writer, msg: In, state: &Arc<Mutex<State>>) {
             msg,
         } => {
             if !direct_presence::require_owner(state, id, writer, &lookup_id)
-                || presence.as_ref().is_some_and(|presence| !direct_presence::require_origin(state, id, writer, presence)) {
+                || presence.as_ref().is_some_and(|presence| {
+                    !direct_presence::require_origin(state, id, writer, presence)
+                })
+            {
                 return;
             }
             tracked_direct::decision_legacy(
-            writer,
-            &lookup_id,
-            &requester_device_id,
-            accepted,
-            presence,
-            msg,
-            state,
-        );
-        },
+                writer,
+                &lookup_id,
+                &requester_device_id,
+                accepted,
+                presence,
+                msg,
+                state,
+            );
+        }
         In::SubmitDirectRequest {
             request,
             legacy_presence,
@@ -251,7 +283,11 @@ fn dispatch(id: u64, writer: &Writer, msg: In, state: &Arc<Mutex<State>>) {
             tracked_direct::unwatch(id, &lookup_id, state);
             writer.forget_idle_direct(&lookup_id);
         }
-        In::JoinRoom { room_id, presence, access_proof } => rooms::join_with_access(id, writer, &room_id, presence, access_proof, state),
+        In::JoinRoom {
+            room_id,
+            presence,
+            access_proof,
+        } => rooms::join_with_access(id, writer, &room_id, presence, access_proof, state),
         In::LeaveRoom { room_id } => {
             leave_room(id, &room_id, state);
             writer.forget_idle_room(&room_id);

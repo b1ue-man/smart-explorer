@@ -233,8 +233,7 @@ impl Backend for LocalBackend {
         let result = (|| {
             let mut reader = self.open_regular(src)?;
             let permissions = reader.metadata()?.permissions();
-            let mut writer =
-                local_platform::create_new_private(&local_platform::to_os(&staged))?;
+            let mut writer = local_platform::create_new_private(&local_platform::to_os(&staged))?;
             let copied = std::io::copy(&mut reader, &mut writer)?;
             writer.flush()?;
             match local_platform::unix_mode(&reader.metadata()?) {

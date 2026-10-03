@@ -73,7 +73,11 @@ impl Backend {
             }
         }
         if unavailable.is_none() {
-            unavailable = self.requests.iter().flatten().find_map(|request| request.note.clone());
+            unavailable = self
+                .requests
+                .iter()
+                .flatten()
+                .find_map(|request| request.note.clone());
         }
         Applied {
             engaged: self.requests.iter().any(Option::is_some),
@@ -126,7 +130,10 @@ fn create_request(reason: Reason) -> Result<Request, String> {
     }
     let mut kinds = Vec::new();
     let mut missing = Vec::new();
-    for (kind, label) in [(PowerRequestSystemRequired, "SystemRequired"), (PowerRequestExecutionRequired, "ExecutionRequired")] {
+    for (kind, label) in [
+        (PowerRequestSystemRequired, "SystemRequired"),
+        (PowerRequestExecutionRequired, "ExecutionRequired"),
+    ] {
         // SAFETY: `handle` is a live power request object.
         if unsafe { PowerSetRequest(handle, kind) } != 0 {
             kinds.push(kind);
@@ -144,7 +151,12 @@ fn create_request(reason: Reason) -> Result<Request, String> {
         handle,
         kinds,
         _reason: text,
-        note: (!missing.is_empty()).then(|| format!("Wachhalten nur teilweise verfügbar ({})", missing.join("; "))),
+        note: (!missing.is_empty()).then(|| {
+            format!(
+                "Wachhalten nur teilweise verfügbar ({})",
+                missing.join("; ")
+            )
+        }),
     })
 }
 

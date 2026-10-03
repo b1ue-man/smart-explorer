@@ -52,10 +52,19 @@ pub fn scan_remote(backend: &dyn Backend, root: &str, progress: &Progress) -> Sc
     }
 }
 
-pub(crate) fn finish_legacy_tree(tree: WireNode, progress: &Progress,
-    before_files: u64, before_bytes: u64) -> ScanOutcome {
-    progress.files.store(before_files.saturating_add(file_count(&tree)), Ordering::Relaxed);
-    progress.bytes.store(before_bytes.saturating_add(tree.size), Ordering::Relaxed);
+pub(crate) fn finish_legacy_tree(
+    tree: WireNode,
+    progress: &Progress,
+    before_files: u64,
+    before_bytes: u64,
+) -> ScanOutcome {
+    progress.files.store(
+        before_files.saturating_add(file_count(&tree)),
+        Ordering::Relaxed,
+    );
+    progress
+        .bytes
+        .store(before_bytes.saturating_add(tree.size), Ordering::Relaxed);
     ScanOutcome::complete(super::from_wire(tree))
 }
 

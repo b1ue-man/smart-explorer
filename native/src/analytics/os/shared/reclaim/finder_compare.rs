@@ -124,19 +124,32 @@ pub(super) fn compare_candidates(
 
 impl Compare<'_> {
     fn open(&self, candidate: &Candidate) -> io::Result<std::fs::File> {
-        let (root, handle) = self.roots.get(candidate.root_index)
+        let (root, handle) = self
+            .roots
+            .get(candidate.root_index)
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Kandidatenwurzel fehlt"))?;
-        let rel = candidate.path.strip_prefix(root).map_err(io::Error::other)?;
+        let rel = candidate
+            .path
+            .strip_prefix(root)
+            .map_err(io::Error::other)?;
         let mut directory = handle.clone();
         let mut parts = rel.components().peekable();
         while let Some(part) = parts.next() {
             let std::path::Component::Normal(name) = part else {
-                return Err(io::Error::new(io::ErrorKind::PermissionDenied, "Kandidat außerhalb der Wurzel"));
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "Kandidat außerhalb der Wurzel",
+                ));
             };
-            if parts.peek().is_none() { return directory.open_regular_child(name); }
+            if parts.peek().is_none() {
+                return directory.open_regular_child(name);
+            }
             directory = directory.open_child(name)?;
         }
-        Err(io::Error::new(io::ErrorKind::InvalidInput, "Kandidat ist eine Wurzel"))
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Kandidat ist eine Wurzel",
+        ))
     }
 
     /// Runs `work` for every candidate, on the search's pool when it has one,
@@ -280,7 +293,9 @@ fn fingerprint(
     }
     let mut file = file?;
     let before = file.metadata()?;
-    if before.len() != size { return Err(changed()); }
+    if before.len() != size {
+        return Err(changed());
+    }
     let sample = sample.max(1).min(size).min(buffer.len() as u64) as usize;
     let mut context = Context::new(&SHA256);
     context.update(&size.to_be_bytes());
@@ -311,7 +326,9 @@ fn content_hash(
 ) -> io::Result<Option<Digest>> {
     let mut file = file?;
     let before = file.metadata()?;
-    if before.len() != size { return Err(changed()); }
+    if before.len() != size {
+        return Err(changed());
+    }
     let mut context = Context::new(&SHA256);
     let mut read = 0u64;
     loop {
@@ -342,10 +359,15 @@ fn content_hash(
 }
 
 fn changed() -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, "Datei hat sich während der Suche geändert")
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        "Datei hat sich während der Suche geändert",
+    )
 }
 fn unchanged(file: &std::fs::File, before: &std::fs::Metadata, size: u64) -> io::Result<()> {
     let after = file.metadata()?;
-    if after.len() != size || before.modified().ok() != after.modified().ok() { return Err(changed()); }
+    if after.len() != size || before.modified().ok() != after.modified().ok() {
+        return Err(changed());
+    }
     Ok(())
 }

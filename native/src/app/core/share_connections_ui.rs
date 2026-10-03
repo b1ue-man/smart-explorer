@@ -1,8 +1,11 @@
 use super::*;
 
 impl App {
-    pub(super) fn ui_share_connections(&mut self, ui: &mut egui::Ui,
-        config: &mut crate::share::ShareExportConfig) -> bool {
+    pub(super) fn ui_share_connections(
+        &mut self,
+        ui: &mut egui::Ui,
+        config: &mut crate::share::ShareExportConfig,
+    ) -> bool {
         ui.label("Gespeicherte Verbindungen einzeln freigeben");
         ui.label("Peers nutzen dabei deine gespeicherten Zugangsdaten. Gib nur die gewuenschten Verbindungen frei.");
         let (saved, readable) = match crate::creds::load_connections_checked() {
@@ -21,10 +24,22 @@ impl App {
             ui.horizontal_wrapped(|ui| {
                 let selection = ui.checkbox(&mut selected, connection.display()).changed();
                 share_value_field(ui, &account);
-                let rights = ui.add_enabled_ui(selected, |ui| {
-                    ui.selectable_value(&mut access, crate::share::ExportAccess::ReadOnly, "Nur lesen").changed()
-                        | ui.selectable_value(&mut access, crate::share::ExportAccess::ReadWrite, "Lesen und schreiben").changed()
-                }).inner;
+                let rights = ui
+                    .add_enabled_ui(selected, |ui| {
+                        ui.selectable_value(
+                            &mut access,
+                            crate::share::ExportAccess::ReadOnly,
+                            "Nur lesen",
+                        )
+                        .changed()
+                            | ui.selectable_value(
+                                &mut access,
+                                crate::share::ExportAccess::ReadWrite,
+                                "Lesen und schreiben",
+                            )
+                            .changed()
+                    })
+                    .inner;
                 if selection || rights {
                     match config.set_connection_access(&account, selected.then_some(access)) {
                         Ok(did_change) => changed |= did_change,
@@ -34,7 +49,12 @@ impl App {
             });
         }
         for connection in config.shared_connections.clone() {
-            if saved.iter().any(|saved| saved.account() == connection.account) { continue; }
+            if saved
+                .iter()
+                .any(|saved| saved.account() == connection.account)
+            {
+                continue;
+            }
             ui.horizontal_wrapped(|ui| {
                 ui.label("Gespeicherte Verbindung derzeit nicht verfuegbar:");
                 share_value_field(ui, &connection.account);
@@ -46,7 +66,9 @@ impl App {
                 }
             });
         }
-        if saved.is_empty() && readable { ui.label("Keine gespeicherten Verbindungen."); }
+        if saved.is_empty() && readable {
+            ui.label("Keine gespeicherten Verbindungen.");
+        }
         changed
     }
 }

@@ -107,7 +107,9 @@ pub fn scan_reclaim_backend(
     let mut duplicate_candidates_retained = acc.candidates.len();
     let host_result = if host_search && !progress.cancel.load(Ordering::Relaxed) {
         host_report(&backend, &norm, progress, opts.duplicate_min_bytes)
-    } else { None };
+    } else {
+        None
+    };
     let found = if let Some(report) = host_result {
         duplicate_candidates = report.summary.candidates;
         duplicate_candidates_retained = report.summary.candidates;
@@ -167,7 +169,9 @@ pub fn find_backend_duplicates(
     let min_bytes = min_bytes.max(1);
     let norm = normalize_root(root);
     if host_searches(&backend, &norm) {
-        if let Some(report) = host_report(&backend, &norm, progress, min_bytes) { return report; }
+        if let Some(report) = host_report(&backend, &norm, progress, min_bytes) {
+            return report;
+        }
     }
     let opts = ReclaimOptions {
         duplicate_min_bytes: min_bytes,
@@ -276,7 +280,11 @@ fn scan_backend_dir(
     };
     let complete = listing.omitted.is_empty();
     for omitted in listing.omitted {
-        acc.error(format!("{}: {}", join_path(dir, &omitted.rel), omitted.detail));
+        acc.error(format!(
+            "{}: {}",
+            join_path(dir, &omitted.rel),
+            omitted.detail
+        ));
     }
     let mut entries = listing.entries;
     entries.sort_by(|left, right| {

@@ -183,9 +183,14 @@ fn try_update_in(
             // Kept once for inspection; the newest unreadable copy wins.
             std::fs::rename(&path, corrupt_path(dir, id))?;
             JobState {
-                blocked: Some(Blocked { kind: BlockKind::Other,
-                    detail: format!("Job-Zustand unlesbar ({message}); Einstellungen und letzten Lauf prüfen."),
-                    since: now_secs(), confirmed: false }),
+                blocked: Some(Blocked {
+                    kind: BlockKind::Other,
+                    detail: format!(
+                        "Job-Zustand unlesbar ({message}); Einstellungen und letzten Lauf prüfen."
+                    ),
+                    since: now_secs(),
+                    confirmed: false,
+                }),
                 load_error: Some(message),
                 ..seed()
             }

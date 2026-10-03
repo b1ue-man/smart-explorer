@@ -141,12 +141,25 @@ pub(crate) fn watch_confined(
     sink: WatchSink,
 ) -> io::Result<WatchHandle> {
     if !literal_root.is_absolute() {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "watch root must be absolute"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "watch root must be absolute",
+        ));
     }
     if anchor.watch_path().is_none() {
-        return Err(io::Error::new(io::ErrorKind::Unsupported, "directory pin has no safe watch capability"));
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "directory pin has no safe watch capability",
+        ));
     }
-    register(literal_root, literal_root.to_path_buf(), Some(anchor.clone()), options, filter, sink)
+    register(
+        literal_root,
+        literal_root.to_path_buf(),
+        Some(anchor.clone()),
+        options,
+        filter,
+        sink,
+    )
 }
 
 fn register(

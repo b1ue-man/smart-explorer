@@ -3,7 +3,7 @@ pub(super) fn print_connections(json: bool) -> Result<(), String> {
     let profiles = crate::share::ShareProfiles::load_checked(
         crate::support_dirs::home_dir().map(|home| home.to_string_lossy().replace('\\', "/")),
     )
-        .map_err(|error| format!("share profiles: {error}"))?;
+    .map_err(|error| format!("share profiles: {error}"))?;
     if json {
         let rows: Vec<_> = connections
             .iter()

@@ -21,16 +21,22 @@ impl TreeDecodeBudget {
     pub fn new(nodes: u64, memory_bytes: u64) -> Self {
         let reserve = 4 * (2 * std::mem::size_of::<WireNode>() as u64 + 17);
         Self {
-            nodes: nodes.clamp(1, MAX_TREE_NODES).min((memory_bytes / reserve).max(1)),
+            nodes: nodes
+                .clamp(1, MAX_TREE_NODES)
+                .min((memory_bytes / reserve).max(1)),
             text_bytes: (memory_bytes / 4).min(MAX_TREE_TEXT_BYTES),
             frame_bytes: (memory_bytes / 2).min(super::codec::MAX_FRAME as u64) as usize,
         }
     }
 
-    pub(crate) fn frame_bytes(self) -> usize { self.frame_bytes }
+    pub(crate) fn frame_bytes(self) -> usize {
+        self.frame_bytes
+    }
 }
 
-fn budget_error() -> io::Error { invalid(TREE_BUDGET_ERROR) }
+fn budget_error() -> io::Error {
+    invalid(TREE_BUDGET_ERROR)
+}
 
 struct PendingNode {
     name: String,
@@ -55,7 +61,10 @@ pub(super) fn decode_node(reader: &mut Reader<'_>) -> io::Result<WireNode> {
     decode_node_with_budget(reader, None)
 }
 
-pub(super) fn decode_node_with_budget(reader: &mut Reader<'_>, budget: Option<TreeDecodeBudget>) -> io::Result<WireNode> {
+pub(super) fn decode_node_with_budget(
+    reader: &mut Reader<'_>,
+    budget: Option<TreeDecodeBudget>,
+) -> io::Result<WireNode> {
     let mut nodes = 0u64;
     let mut text_bytes = 0u64;
     let root = read_pending(reader, 0, &mut nodes, &mut text_bytes, budget)?;
@@ -111,7 +120,9 @@ fn read_pending(
     budget: Option<TreeDecodeBudget>,
 ) -> io::Result<PendingNode> {
     if let Some(limit) = budget {
-        if depth > MAX_TREE_DEPTH || *nodes >= limit.nodes { return Err(budget_error()); }
+        if depth > MAX_TREE_DEPTH || *nodes >= limit.nodes {
+            return Err(budget_error());
+        }
     }
     let name = match budget {
         Some(limit) => reader.tree_string(limit.text_bytes.saturating_sub(*text_bytes) as usize)?,
@@ -127,7 +138,9 @@ fn read_pending(
     if budget.is_some_and(|limit| remaining as u64 > limit.nodes.saturating_sub(*nodes)) {
         return Err(budget_error());
     }
-    if !is_dir && remaining > 0 { return Err(invalid("wire file has children")); }
+    if !is_dir && remaining > 0 {
+        return Err(invalid("wire file has children"));
+    }
     Ok(PendingNode {
         name,
         size,

@@ -200,7 +200,6 @@ impl Tree {
             }
         }
     }
-
 }
 
 fn kind_of(mask: u32) -> Option<EventKind> {

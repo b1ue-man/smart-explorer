@@ -10,11 +10,11 @@ use tungstenite::{accept_with_config, Error as WsError, Message, WebSocket};
 
 use super::hello_session::HelloSession;
 use super::idle::{self, SignalTiming};
-use super::signal_stream::SignalStream;
 use super::limits::SourceKey;
 use super::line::{read_line_limited_until, MAX_JSON_LINE};
 use super::rate_limits::InboundRateLimiter;
 use super::registration_guard::RegistrationGuard;
+use super::signal_stream::SignalStream;
 use super::state::{register_client_with_identity, State};
 use super::tracked_direct;
 use super::websocket_read_limit::WebSocketReadLimit;
@@ -55,7 +55,15 @@ pub(super) fn handle_with_source(
     timing: &SignalTiming,
 ) -> io::Result<()> {
     let registration_deadline = Instant::now() + PRE_REGISTRATION_TIMEOUT;
-    handle_until(stream, state, source, registration_deadline, timing, None, true)
+    handle_until(
+        stream,
+        state,
+        source,
+        registration_deadline,
+        timing,
+        None,
+        true,
+    )
 }
 
 #[cfg(test)]
@@ -66,15 +74,34 @@ pub(super) fn handle_with_timeout(
 ) -> io::Result<()> {
     let source = SourceKey::from_socket(stream.peer_addr()?);
     let timing = SignalTiming::default();
-    handle_until(stream, state, source, Instant::now() + timeout, &timing, None, true)
+    handle_until(
+        stream,
+        state,
+        source,
+        Instant::now() + timeout,
+        &timing,
+        None,
+        true,
+    )
 }
 
 pub(super) fn handle_with_security(
-    stream: TcpStream, state: Arc<Mutex<State>>, source: SourceKey, timing: &SignalTiming,
-    tls: Option<Arc<rustls::ServerConfig>>, allow_plaintext: bool,
+    stream: TcpStream,
+    state: Arc<Mutex<State>>,
+    source: SourceKey,
+    timing: &SignalTiming,
+    tls: Option<Arc<rustls::ServerConfig>>,
+    allow_plaintext: bool,
 ) -> io::Result<()> {
-    handle_until(stream, state, source, Instant::now() + PRE_REGISTRATION_TIMEOUT,
-        timing, tls, allow_plaintext)
+    handle_until(
+        stream,
+        state,
+        source,
+        Instant::now() + PRE_REGISTRATION_TIMEOUT,
+        timing,
+        tls,
+        allow_plaintext,
+    )
 }
 
 fn handle_until(
@@ -90,14 +117,26 @@ fn handle_until(
     set_remaining_read_timeout(&stream, registration_deadline)?;
     let mut probe = [0u8; 3];
     let length = stream.peek(&mut probe)?;
-    if length == 0 { return Ok(()); }
+    if length == 0 {
+        return Ok(());
+    }
     if probe[0] == 0x16 {
-        let config = tls.ok_or_else(|| io::Error::new(ErrorKind::PermissionDenied, "TLS is not configured"))?;
-        return handle_websocket(SignalStream::tls(stream, config)?, state, source,
-            registration_deadline, timing, &mut inbound_rate);
+        let config = tls
+            .ok_or_else(|| io::Error::new(ErrorKind::PermissionDenied, "TLS is not configured"))?;
+        return handle_websocket(
+            SignalStream::tls(stream, config)?,
+            state,
+            source,
+            registration_deadline,
+            timing,
+            &mut inbound_rate,
+        );
     }
     if !allow_plaintext {
-        return Err(io::Error::new(ErrorKind::PermissionDenied, "plaintext signaling is disabled"));
+        return Err(io::Error::new(
+            ErrorKind::PermissionDenied,
+            "plaintext signaling is disabled",
+        ));
     }
     if probe[0] == b'G' {
         return handle_websocket(
@@ -140,11 +179,16 @@ fn handle_tcp(
     let writer = Writer::tcp(reader.get_ref().try_clone()?)?;
     let mut hello = match HelloSession::begin(hello) {
         Ok(hello) => hello,
-        Err(error) => { send_server_error(&writer, &error.to_string()); return Ok(()); }
+        Err(error) => {
+            send_server_error(&writer, &error.to_string());
+            return Ok(());
+        }
     };
     if let Some(challenge) = hello.challenge() {
         send(&writer, &challenge);
-        if read_line_limited_until(&mut reader, &mut line, MAX_JSON_LINE, registration_deadline)? == 0 {
+        if read_line_limited_until(&mut reader, &mut line, MAX_JSON_LINE, registration_deadline)?
+            == 0
+        {
             return Ok(());
         }
         require_inbound_budget(inbound_rate, line.len())?;
@@ -154,7 +198,9 @@ fn handle_tcp(
             return Ok(());
         }
     }
-    let Some(id) = finish_registration(hello, &writer, source, &state, timing)? else { return Ok(()); };
+    let Some(id) = finish_registration(hello, &writer, source, &state, timing)? else {
+        return Ok(());
+    };
     let _registration = RegistrationGuard::new(id, &state);
 
     serve_tcp(&mut reader, id, &writer, &state, timing, inbound_rate)
@@ -204,8 +250,16 @@ fn handle_websocket(
     };
     if let Some(challenge) = hello.challenge() {
         send(&writer, &challenge);
-        let Some(auth) = read_websocket_json_until(&mut websocket, &outbound,
-            registration_deadline, inbound_rate, &mut false)? else { return Ok(()); };
+        let Some(auth) = read_websocket_json_until(
+            &mut websocket,
+            &outbound,
+            registration_deadline,
+            inbound_rate,
+            &mut false,
+        )?
+        else {
+            return Ok(());
+        };
         if hello.answer(auth).is_err() {
             send_server_error(&writer, crate::login::LOGIN_FAILED);
             flush_websocket_out(&mut websocket, &outbound)?;
@@ -233,16 +287,35 @@ fn handle_websocket(
 }
 
 fn finish_registration(
-    hello: HelloSession, writer: &Writer, source: SourceKey,
-    state: &Arc<Mutex<State>>, timing: &SignalTiming,
+    hello: HelloSession,
+    writer: &Writer,
+    source: SourceKey,
+    state: &Arc<Mutex<State>>,
+    timing: &SignalTiming,
 ) -> io::Result<Option<u64>> {
-    if hello.capabilities.contains(idle::CAPABILITY) { writer.enable_idle(timing); }
-    let id = match register_client_with_identity(state, writer.clone(), source,
-        hello.device_id, hello.capabilities.clone(), hello.identity) {
+    if hello.capabilities.contains(idle::CAPABILITY) {
+        writer.enable_idle(timing);
+    }
+    let id = match register_client_with_identity(
+        state,
+        writer.clone(),
+        source,
+        hello.device_id,
+        hello.capabilities.clone(),
+        hello.identity,
+    ) {
         Ok(id) => id,
-        Err(error) => { send_server_error(writer, error.message()); return Ok(None); }
+        Err(error) => {
+            send_server_error(writer, error.message());
+            return Ok(None);
+        }
     };
-    send(writer, &Out::HelloOk { capabilities: tracked_direct::capability_list(&hello.capabilities) });
+    send(
+        writer,
+        &Out::HelloOk {
+            capabilities: tracked_direct::capability_list(&hello.capabilities),
+        },
+    );
     Ok(Some(id))
 }
 

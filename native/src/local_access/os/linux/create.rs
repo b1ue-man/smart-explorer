@@ -62,9 +62,7 @@ fn child_name(name: &OsStr) -> io::Result<CString> {
 
 fn verify_private(metadata: &std::fs::Metadata) -> io::Result<()> {
     // SAFETY: plain getter of the process's effective uid.
-    if metadata.uid() != unsafe { libc::geteuid() }
-        || metadata.permissions().mode() & 0o077 != 0
-    {
+    if metadata.uid() != unsafe { libc::geteuid() } || metadata.permissions().mode() & 0o077 != 0 {
         Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "created entry is not owner-private",

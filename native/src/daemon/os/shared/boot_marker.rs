@@ -24,32 +24,62 @@ pub(super) fn register_startup(jobs: &[crate::syncjobs::SyncJob]) {
     let Some(current) = current.filter(|marker| !marker.trim().is_empty()) else {
         // A missing host boot marker is not a new logon on every scheduler
         // tick. The worker records this process-local fallback once.
-        static REGISTERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-        if REGISTERED.load(std::sync::atomic::Ordering::Acquire) { return; }
-        let mut stored = true;
-        for job in jobs.iter().filter(|job| job.enabled && job.trigger == crate::syncjobs::Trigger::OnStartup) {
-            stored &= super::job_triggers::persist(&job.id, crate::syncjobs::PendingKind::Startup, super::state::now_secs(), None);
+        static REGISTERED: std::sync::atomic::AtomicBool =
+            std::sync::atomic::AtomicBool::new(false);
+        if REGISTERED.load(std::sync::atomic::Ordering::Acquire) {
+            return;
         }
-        if stored { REGISTERED.store(true, std::sync::atomic::Ordering::Release); }
+        let mut stored = true;
+        for job in jobs
+            .iter()
+            .filter(|job| job.enabled && job.trigger == crate::syncjobs::Trigger::OnStartup)
+        {
+            stored &= super::job_triggers::persist(
+                &job.id,
+                crate::syncjobs::PendingKind::Startup,
+                super::state::now_secs(),
+                None,
+            );
+        }
+        if stored {
+            REGISTERED.store(true, std::sync::atomic::Ordering::Release);
+        }
         return;
     };
     let path = crate::support_dirs::sync_data_dir().join(STORED_MARKER_FILE);
-    let stored = match read_optional(&path) { Ok(stored) => stored,
-        Err(error) => { log(&format!("startup marker unreadable: {error}")); return; } };
-    if !startup_pass_due(Some(&current), stored.as_deref()) { return; }
+    let stored = match read_optional(&path) {
+        Ok(stored) => stored,
+        Err(error) => {
+            log(&format!("startup marker unreadable: {error}"));
+            return;
+        }
+    };
+    if !startup_pass_due(Some(&current), stored.as_deref()) {
+        return;
+    }
     // Durable triggers precede the marker. Pause/defer cannot lose a logon;
     // an unsuccessful write leaves this pass due.
-    for job in jobs.iter().filter(|job| job.enabled && job.trigger == crate::syncjobs::Trigger::OnStartup) {
+    for job in jobs
+        .iter()
+        .filter(|job| job.enabled && job.trigger == crate::syncjobs::Trigger::OnStartup)
+    {
         let now = super::state::now_secs();
         if let Err(error) = crate::syncjobs::update_job_state(&job.id, |state| {
             if state.pending_trigger.is_none() {
                 state.pending_trigger = Some(crate::syncjobs::PendingTrigger {
-                    kind: crate::syncjobs::PendingKind::Startup, since: now, volume: None,
+                    kind: crate::syncjobs::PendingKind::Startup,
+                    since: now,
+                    volume: None,
                 });
             }
-        }) { log(&format!("startup trigger could not be stored: {error}")); return; }
+        }) {
+            log(&format!("startup trigger could not be stored: {error}"));
+            return;
+        }
     }
-    if let Err(error) = write_control(&path, &current) { log(&format!("startup marker could not be stored: {error}")); }
+    if let Err(error) = write_control(&path, &current) {
+        log(&format!("startup marker could not be stored: {error}"));
+    }
 }
 
 #[cfg(test)]

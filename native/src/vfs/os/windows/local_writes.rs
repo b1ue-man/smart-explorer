@@ -60,8 +60,8 @@ pub(crate) fn create_new_private(path: &Path) -> io::Result<std::fs::File> {
 pub(crate) fn open_stage(path: &Path) -> io::Result<std::fs::File> {
     use std::os::windows::fs::OpenOptionsExt;
     use windows_sys::Win32::Storage::FileSystem::{
-        FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES, FILE_SHARE_READ,
-        FILE_SHARE_WRITE, FILE_WRITE_ATTRIBUTES,
+        FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        FILE_WRITE_ATTRIBUTES,
     };
     let path = crate::local_access::normalize_scan_root(path);
     let guard = std::fs::OpenOptions::new()

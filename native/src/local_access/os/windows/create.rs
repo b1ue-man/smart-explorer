@@ -3,8 +3,8 @@
 use std::ffi::OsStr;
 use std::fs::File;
 use std::io;
-use std::sync::Arc;
 use std::os::windows::fs::OpenOptionsExt;
+use std::sync::Arc;
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
     FILE_SHARE_READ, READ_CONTROL, WRITE_DAC,

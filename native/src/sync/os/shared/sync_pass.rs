@@ -10,13 +10,13 @@
 //! This file coordinates the workers; what a task does to the shared state
 //! lives in `sync_tasks`, the listing of one folder in `sync_scan`.
 use super::imp::{record_error, SyncMsg, SyncProgress, SyncStats, WalkBudget};
-use super::sync_scan::{scan_directory, DirTask, FileTask, Target};
 pub(super) use super::sync_pass_compat::copy_pass;
 pub(super) use super::sync_pass_start::copy_pass_scoped;
+use super::sync_scan::{scan_directory, DirTask, FileTask, Target};
 use crate::bisync::sync_flows::{PairFlows, PairSide};
 use crate::bisync::sync_overload::Progress;
-use crate::bisync::{KeyPolicy, SyncOmissions};
 use crate::bisync::versions::RunVersions;
+use crate::bisync::{KeyPolicy, SyncOmissions};
 use crate::transfer::engine::folders::FolderRegister;
 use crate::vfs::Backend;
 use crossbeam_channel::Sender;
@@ -142,7 +142,6 @@ pub(super) struct Pass<'a> {
     pub(super) streaming: AtomicU64,
 }
 
-
 impl Pass<'_> {
     pub(super) fn lock(&self) -> MutexGuard<'_, State> {
         self.state
@@ -175,7 +174,12 @@ impl Pass<'_> {
         state.finished || state.scan_stopped
     }
 
-    pub(super) fn coordinate<'s>(&'s self, scope: &'s Scope<'s, '_>, tx: &Sender<SyncMsg>, start: Instant) {
+    pub(super) fn coordinate<'s>(
+        &'s self,
+        scope: &'s Scope<'s, '_>,
+        tx: &Sender<SyncMsg>,
+        start: Instant,
+    ) {
         let mut last_progress = Instant::now();
         let mut last_sent: Option<ProgressKey> = None;
         loop {

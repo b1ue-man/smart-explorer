@@ -335,10 +335,13 @@ impl App {
         if choose {
             if let Some(p) = self.picker.take() {
                 let value = Self::picker_value(&p);
-                let picked_account = p.is_remote.then(||
-                    crate::connect::saved_location(&self.saved_connections, &value)
-                        .map(|(connection, _)| connection.account())
-                ).flatten();
+                let picked_account = p
+                    .is_remote
+                    .then(|| {
+                        crate::connect::saved_location(&self.saved_connections, &value)
+                            .map(|(connection, _)| connection.account())
+                    })
+                    .flatten();
                 let native = value.replace('/', std::path::MAIN_SEPARATOR_STR);
                 match p.purpose {
                     PickerPurpose::SyncSource => {
@@ -361,7 +364,8 @@ impl App {
                                     be,
                                     p.cwd.clone(),
                                     p.conn_label.clone(),
-                                    (!p.endpoint_prefix.is_empty()).then(|| p.endpoint_prefix.clone()),
+                                    (!p.endpoint_prefix.is_empty())
+                                        .then(|| p.endpoint_prefix.clone()),
                                     picked_account.clone(),
                                 ));
                             }
@@ -376,7 +380,8 @@ impl App {
                                     be,
                                     p.cwd.clone(),
                                     p.conn_label.clone(),
-                                    (!p.endpoint_prefix.is_empty()).then(|| p.endpoint_prefix.clone()),
+                                    (!p.endpoint_prefix.is_empty())
+                                        .then(|| p.endpoint_prefix.clone()),
                                     picked_account.clone(),
                                 ));
                             }

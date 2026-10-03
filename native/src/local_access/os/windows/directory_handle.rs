@@ -8,11 +8,11 @@ use std::{
     sync::Arc,
 };
 
-use windows_sys::Win32::Storage::FileSystem::{
-    FILE_FLAG_BACKUP_SEMANTICS, FILE_READ_ATTRIBUTES,
-    FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-};
 use std::os::windows::fs::OpenOptionsExt;
+use windows_sys::Win32::Storage::FileSystem::{
+    FILE_FLAG_BACKUP_SEMANTICS, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
+    FILE_SHARE_WRITE,
+};
 
 use crate::local_access::protocol::ReadKind;
 use crate::local_access::{LocalEntry, NotRegular};
@@ -25,10 +25,10 @@ mod create;
 pub(crate) use create::secure_private_handle;
 #[path = "directory_identity.rs"]
 mod identity;
-#[path = "remove.rs"]
-mod remove;
 #[path = "private_ancestors.rs"]
 mod private_ancestors;
+#[path = "remove.rs"]
+mod remove;
 
 struct PinnedDirectory {
     file: File,
@@ -94,7 +94,9 @@ impl DirectoryHandle {
         let file = super::read::open_direct(&resolved, ReadKind::Directory, FILE_SHARE_READ)?;
         validate_directory(&file)?;
         if !identity::same_object(&selected, &file)? {
-            return Err(io::Error::other("chosen scan root changed while being pinned"));
+            return Err(io::Error::other(
+                "chosen scan root changed while being pinned",
+            ));
         }
         Ok(Self(Arc::new(PinnedDirectory {
             file,
@@ -118,11 +120,12 @@ impl DirectoryHandle {
                     Err(_) => Err(error),
                 };
                 match backed {
-                    Err(error) if error.kind() == io::ErrorKind::PermissionDenied
-                        && super::privilege::parallel_scan_allowed() =>
+                    Err(error)
+                        if error.kind() == io::ErrorKind::PermissionDenied
+                            && super::privilege::parallel_scan_allowed() =>
                     {
-                        let pins = super::broker::pin_granted(&logical, true)
-                            .unwrap_or(Err(error))?;
+                        let pins =
+                            super::broker::pin_granted(&logical, true).unwrap_or(Err(error))?;
                         Self::from_root_pins(pins, logical.clone())?
                     }
                     result => result?,
@@ -142,8 +145,10 @@ impl DirectoryHandle {
         let consented_path = self.0.consented_path.as_ref().map(|path| path.join(name));
         let file = match self.open_kind(&path, consented_path.as_deref(), ReadKind::PinChild) {
             Ok(file) => file,
-            Err(error) if error.kind() == io::ErrorKind::PermissionDenied
-                && consented_path.is_some() && super::privilege::parallel_scan_allowed() =>
+            Err(error)
+                if error.kind() == io::ErrorKind::PermissionDenied
+                    && consented_path.is_some()
+                    && super::privilege::parallel_scan_allowed() =>
             {
                 let logical = consented_path.as_deref().ok_or(error)?;
                 let pins = super::broker::pin_granted(logical, false)
@@ -170,11 +175,15 @@ impl DirectoryHandle {
     /// redirect of the path that fallback needs.
     pub(crate) fn read_directory(&self) -> io::Result<DirectoryEntries> {
         let file = self.open_kind(
-            &self.0.path, self.0.consented_path.as_deref(), ReadKind::Directory,
+            &self.0.path,
+            self.0.consented_path.as_deref(),
+            ReadKind::Directory,
         )?;
         Ok(DirectoryEntries {
             inner: super::directory::read_directory_handle(
-                &self.0.path, file, self.0.consented_path.is_some(),
+                &self.0.path,
+                file,
+                self.0.consented_path.is_some(),
             )?,
             _guard: self.clone(),
         })
@@ -231,12 +240,18 @@ impl DirectoryHandle {
         for file in &pins.files {
             validate_directory(file)?;
         }
-        let file = pins.files.pop().ok_or_else(|| io::Error::other("Fehlender Ordner-Pin"))?;
+        let file = pins
+            .files
+            .pop()
+            .ok_or_else(|| io::Error::other("Fehlender Ordner-Pin"))?;
         if parent.is_some() && !pins.files.is_empty() {
             return Err(io::Error::other("Ungültige Child-Pins"));
         }
         Ok(Self(Arc::new(PinnedDirectory {
-            file, path: pins.path, _parent: parent, _ancestors: pins.files,
+            file,
+            path: pins.path,
+            _parent: parent,
+            _ancestors: pins.files,
             consented_path: Some(logical),
         })))
     }
@@ -245,10 +260,15 @@ impl DirectoryHandle {
         pins: super::broker::DirectoryPins,
         logical: PathBuf,
     ) -> io::Result<Self> {
-        let expected = pins.path.components()
-            .filter(|component| !matches!(component, Component::Prefix(_))).count();
+        let expected = pins
+            .path
+            .components()
+            .filter(|component| !matches!(component, Component::Prefix(_)))
+            .count();
         if pins.files.len() != expected {
-            return Err(io::Error::other("Lesehelfer lieferte unvollständige Root-Pins"));
+            return Err(io::Error::other(
+                "Lesehelfer lieferte unvollständige Root-Pins",
+            ));
         }
         Self::from_pins(pins, None, logical)
     }
@@ -266,7 +286,9 @@ impl DirectoryHandle {
         let mut current = &*self.0;
         loop {
             lineage.push(current);
-            let Some(parent) = &current._parent else { break };
+            let Some(parent) = &current._parent else {
+                break;
+            };
             current = parent;
         }
         let mut files = Vec::new();

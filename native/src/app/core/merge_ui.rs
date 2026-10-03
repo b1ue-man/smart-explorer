@@ -1,12 +1,16 @@
 use super::prelude::*;
+use super::sync_merge_types::{line_display, MergeDecision};
 use super::*;
-use super::sync_merge_types::{MergeDecision, line_display};
 
 impl App {
     pub(in crate::app) fn ui_merge(&mut self, ctx: &egui::Context) {
-        let Some(mut m) = self.merge.take() else { return; };
+        let Some(mut m) = self.merge.take() else {
+            return;
+        };
         let busy = self.merge_load_rx.is_some() || self.merge_apply_rx.is_some();
-        let mut open = true; let mut decision = None; let mut retry = false;
+        let mut open = true;
+        let mut decision = None;
+        let mut retry = false;
         egui::Window::new(format!("Zeilenvergleich: {}", m.rel)).open(&mut open)
             .collapsible(false).resizable(true).default_size([900.0, 600.0])
             .max_size(theme::window_content_limit(ctx)).constrain_to(ctx.screen_rect().shrink(16.0))
@@ -71,9 +75,12 @@ impl App {
                     decision = Some(MergeDecision::KeepBoth { keep_a:true });
                 }
             });
-        if retry || decision.is_some() { self.submit_merge(m, decision); }
-        else if open || busy {
-            if !open { self.cancel_merge(); }
+        if retry || decision.is_some() {
+            self.submit_merge(m, decision);
+        } else if open || busy {
+            if !open {
+                self.cancel_merge();
+            }
             self.merge = Some(m);
         }
     }

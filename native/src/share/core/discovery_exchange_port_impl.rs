@@ -270,12 +270,11 @@ impl DiscoveryExchangePortImpl {
                     )),
                 ))
             }
-            ExchangeState::ConnectorComplete { .. } | ExchangeState::PublisherComplete { .. }
-            | ExchangeState::Unconfirmed { .. } => {
-                Err(protocol_message(
-                    "pairing packet received after cryptographic completion",
-                ))
-            }
+            ExchangeState::ConnectorComplete { .. }
+            | ExchangeState::PublisherComplete { .. }
+            | ExchangeState::Unconfirmed { .. } => Err(protocol_message(
+                "pairing packet received after cryptographic completion",
+            )),
         }
     }
 }
@@ -424,7 +423,9 @@ impl DiscoveryExchangePort for DiscoveryExchangePortImpl {
         let (next, action) = match self.advance_exchange(state, kind, payload, connector_origin) {
             Ok(next) => next,
             Err(error) => {
-                if let Some(failed) = failed { self.exchanges.insert(exchange_id.into(), failed); }
+                if let Some(failed) = failed {
+                    self.exchanges.insert(exchange_id.into(), failed);
+                }
                 return Err(error);
             }
         };
@@ -451,9 +452,11 @@ impl DiscoveryExchangePort for DiscoveryExchangePortImpl {
         let outcome = match state {
             ExchangeState::ConnectorComplete { completion, .. }
             | ExchangeState::PublisherComplete { completion, .. } => completion.clone(),
-            _ => return Err(protocol_message(
-                "server completed exchange before local cryptographic completion",
-            )),
+            _ => {
+                return Err(protocol_message(
+                    "server completed exchange before local cryptographic completion",
+                ))
+            }
         };
         self.cancel_exchange(exchange_id);
         Ok(Some(DiscoveryPortAction::ExchangeReady { outcome }))

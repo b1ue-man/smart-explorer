@@ -212,10 +212,16 @@ pub fn load_report() -> io::Result<JobLoadReport> {
         // While the original import is unresolved, changing its core fields
         // would invalidate its manifest hash. The running job gets the safe
         // defaults and eligibility proof; its old file stays byte-identical.
-        match super::baseline_migration::migrate_for_report(std::slice::from_mut(&mut job), import.is_ok()) {
+        match super::baseline_migration::migrate_for_report(
+            std::slice::from_mut(&mut job),
+            import.is_ok(),
+        ) {
             Ok(()) => jobs.push(job),
-            Err(error) => report.broken.push(BrokenJob { path: job_file(&directory, &job.id),
-                id: job.id, error: format!("Löschschutz-Migration: {error}") }),
+            Err(error) => report.broken.push(BrokenJob {
+                path: job_file(&directory, &job.id),
+                id: job.id,
+                error: format!("Löschschutz-Migration: {error}"),
+            }),
         }
     }
     report.jobs = jobs;

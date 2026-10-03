@@ -1,6 +1,4 @@
 //! Reversible publication through one live export/mount authority.
-use std::io;
-use iroh::endpoint::SendStream;
 use crate::share::{
     blocking::{self, Class},
     framing::{reply, reply_err},
@@ -11,6 +9,8 @@ use crate::share::{
     session::PeerPrincipal,
     wire::FsResponse,
 };
+use iroh::endpoint::SendStream;
+use std::io;
 
 /// Compare virtual names only; never decode or rewrite provider locators.
 pub(in crate::share) fn validate(request: &FsReversibleReplace) -> io::Result<()> {

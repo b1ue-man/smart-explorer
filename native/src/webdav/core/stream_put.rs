@@ -94,13 +94,25 @@ impl Drop for PipeReader {
     }
 }
 
-fn put(agent: &ureq::Agent, url: &str, auth: &str, size: u64, mtime_ms: Option<i64>, body: PipeReader) -> io::Result<()> {
+fn put(
+    agent: &ureq::Agent,
+    url: &str,
+    auth: &str,
+    size: u64,
+    mtime_ms: Option<i64>,
+    body: PipeReader,
+) -> io::Result<()> {
     let request = agent
         .put(url)
         .set("Content-Length", &size.to_string())
         .set("If-None-Match", "*");
-    let request = match mtime_ms.map(|ms| ms.div_euclid(1_000)).filter(|seconds| *seconds > 86_400) {
-        Some(seconds) => request.set("X-OC-Mtime", &seconds.to_string()).set("X-Hash", "md5"),
+    let request = match mtime_ms
+        .map(|ms| ms.div_euclid(1_000))
+        .filter(|seconds| *seconds > 86_400)
+    {
+        Some(seconds) => request
+            .set("X-OC-Mtime", &seconds.to_string())
+            .set("X-Hash", "md5"),
         None => request,
     };
     let request = if auth.is_empty() {
@@ -155,7 +167,11 @@ impl StreamPut {
     }
 
     pub(super) fn start_timed(
-        agent: ureq::Agent, url: String, auth: String, size: u64, mtime_ms: Option<i64>,
+        agent: ureq::Agent,
+        url: String,
+        auth: String,
+        size: u64,
+        mtime_ms: Option<i64>,
     ) -> io::Result<Self> {
         let pipe = Arc::new(Pipe::default());
         let body = PipeReader {

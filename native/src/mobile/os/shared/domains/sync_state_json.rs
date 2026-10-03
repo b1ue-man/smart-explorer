@@ -3,7 +3,11 @@ use crate::syncjobs::{JobState, ProblemKind};
 use serde_json::{json, Value};
 
 pub(super) fn attach(mut job: Value, state: &JobState, now: i64) -> Value {
-    job["lastResult"] = state.last_result.as_ref().map(super::job_json::result_json).unwrap_or(Value::Null);
+    job["lastResult"] = state
+        .last_result
+        .as_ref()
+        .map(super::job_json::result_json)
+        .unwrap_or(Value::Null);
     job["state"] = json!({
         "lastAttemptMs": state.last_attempt.map(ms), "lastSuccessMs": state.last_success.map(ms),
         "lastRunner": state.last_runner, "lastCause": state.last_cause,
@@ -27,19 +31,31 @@ pub(super) fn attach(mut job: Value, state: &JobState, now: i64) -> Value {
     });
     job
 }
-fn ms(secs: i64) -> i64 { secs.saturating_mul(1000) }
+fn ms(secs: i64) -> i64 {
+    secs.saturating_mul(1000)
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
     fn android_sync_state_keeps_attempt_success_and_live_runner_distinct() {
-        let state = JobState { last_attempt: Some(200), last_success: Some(100),
-            last_error: Some(crate::syncjobs::JobError { kind: crate::syncjobs::FailureKind::Access,
-                message: "Dateizugriff fehlt".into() }),
-            running: Some(crate::syncjobs::RunMark { runner: crate::syncjobs::Runner::Android,
-                cause: crate::syncjobs::RunCause::Manual, started: 190, alive: 200, stalled_since: None }),
-            ..JobState::default() };
+        let state = JobState {
+            last_attempt: Some(200),
+            last_success: Some(100),
+            last_error: Some(crate::syncjobs::JobError {
+                kind: crate::syncjobs::FailureKind::Access,
+                message: "Dateizugriff fehlt".into(),
+            }),
+            running: Some(crate::syncjobs::RunMark {
+                runner: crate::syncjobs::Runner::Android,
+                cause: crate::syncjobs::RunCause::Manual,
+                started: 190,
+                alive: 200,
+                stalled_since: None,
+            }),
+            ..JobState::default()
+        };
         let row = attach(json!({"id":"job"}), &state, 200);
         assert_eq!(row["state"]["lastAttemptMs"], 200000);
         assert_eq!(row["state"]["lastSuccessMs"], 100000);

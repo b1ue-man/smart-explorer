@@ -22,22 +22,25 @@ pub(super) fn acquire_until(app_data_dir: &Path, deadline: Instant) -> io::Resul
     let path = directory.join(LOCK_FILE);
     loop {
         if Instant::now() >= deadline {
-            return Err(io::Error::new(io::ErrorKind::TimedOut,
-                "Share identity is busy; retry after the other operation finishes"));
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "Share identity is busy; retry after the other operation finishes",
+            ));
         }
         match open_exclusive(&path) {
-            Ok(file) => {
-                match file.try_lock() {
-                    Ok(()) => return Ok(IdentityLock { _file: file }),
-                    Err(std::fs::TryLockError::WouldBlock) => {},
-                    Err(std::fs::TryLockError::Error(error)) => return Err(error),
-                }
-            }
-            Err(error) if error.raw_os_error() == Some(ERROR_SHARING_VIOLATION as i32) => {
-            }
+            Ok(file) => match file.try_lock() {
+                Ok(()) => return Ok(IdentityLock { _file: file }),
+                Err(std::fs::TryLockError::WouldBlock) => {}
+                Err(std::fs::TryLockError::Error(error)) => return Err(error),
+            },
+            Err(error) if error.raw_os_error() == Some(ERROR_SHARING_VIOLATION as i32) => {}
             Err(error) => return Err(error),
         }
-        std::thread::sleep(deadline.saturating_duration_since(Instant::now()).min(Duration::from_millis(25)));
+        std::thread::sleep(
+            deadline
+                .saturating_duration_since(Instant::now())
+                .min(Duration::from_millis(25)),
+        );
     }
 }
 

@@ -20,15 +20,20 @@ const LOG_LINES: usize = 20_000;
 static CATCH_UPS: Mutex<BTreeSet<u64>> = Mutex::new(BTreeSet::new());
 pub(super) fn install_hooks() {
     crate::daemon::set_problem_notifier(|notice| {
-        if let Ok(rt) = Runtime::get() { rt.emit(json!({ "type": "syncProblem",
-            "jobId": notice.job_id, "title": notice.title, "text": notice.text })); }
+        if let Ok(rt) = Runtime::get() {
+            rt.emit(json!({ "type": "syncProblem",
+            "jobId": notice.job_id, "title": notice.title, "text": notice.text }));
+        }
     });
 }
 struct CatchUpGuard(u64);
 impl Drop for CatchUpGuard {
     fn drop(&mut self) {
         crate::daemon::cancel_catch_up(self.0);
-        CATCH_UPS.lock().unwrap_or_else(PoisonError::into_inner).remove(&self.0);
+        CATCH_UPS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.0);
     }
 }
 
@@ -62,10 +67,12 @@ pub(super) fn status() -> Result<Value, ApiError> {
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .is_empty();
-    let last = crate::daemon::last_catch_up().map(|last| json!({
-        "finishedMs": last.finished_ms, "ran": last.ran, "succeeded": last.succeeded,
-        "failed": last.failed, "message": last.message,
-    }));
+    let last = crate::daemon::last_catch_up().map(|last| {
+        json!({
+            "finishedMs": last.finished_ms, "ran": last.ran, "succeeded": last.succeeded,
+            "failed": last.failed, "message": last.message,
+        })
+    });
     Ok(json!({
         "syncEnabled": crate::autostart::is_enabled(),
         "daemonRunning": crate::daemon::is_running(),

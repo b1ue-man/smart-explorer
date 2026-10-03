@@ -175,7 +175,8 @@ pub(super) fn serve(request: Startup) -> Result<(), String> {
                 .map_err(|error| error.to_string())?;
             continue;
         }
-        let result = root.read(&operation)
+        let result = root
+            .read(&operation)
             .and_then(|file| duplicate_file(&file, parent.as_raw_handle()));
         let reply = match result {
             Ok(handle) => ReadReply {

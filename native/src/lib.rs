@@ -26,10 +26,10 @@ pub mod folder_index;
 pub mod format;
 pub mod ftp;
 pub mod gdrive;
+pub(crate) mod host_trash;
 #[cfg(not(target_os = "android"))]
 pub mod icons;
 pub mod keep_awake;
-pub(crate) mod host_trash;
 pub mod linemerge;
 mod local_access;
 #[cfg(any(target_os = "android", all(unix, test)))]

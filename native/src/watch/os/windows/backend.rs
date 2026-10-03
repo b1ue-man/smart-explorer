@@ -19,9 +19,9 @@ use windows_sys::Win32::Foundation::{
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OVERLAPPED, FILE_LIST_DIRECTORY,
-    FILE_NOTIFY_CHANGE_CREATION, FILE_NOTIFY_CHANGE_DIR_NAME, FILE_NOTIFY_CHANGE_FILE_NAME,
-    FILE_NOTIFY_CHANGE_LAST_WRITE, FILE_NOTIFY_CHANGE_SIZE, FILE_NOTIFY_CHANGE_ATTRIBUTES, FILE_NOTIFY_CHANGE_SECURITY, FILE_SHARE_DELETE, FILE_SHARE_READ,
-    FILE_SHARE_WRITE, OPEN_EXISTING,
+    FILE_NOTIFY_CHANGE_ATTRIBUTES, FILE_NOTIFY_CHANGE_CREATION, FILE_NOTIFY_CHANGE_DIR_NAME,
+    FILE_NOTIFY_CHANGE_FILE_NAME, FILE_NOTIFY_CHANGE_LAST_WRITE, FILE_NOTIFY_CHANGE_SECURITY,
+    FILE_NOTIFY_CHANGE_SIZE, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
 };
 use windows_sys::Win32::System::Threading::INFINITE;
 use windows_sys::Win32::System::IO::{
@@ -73,9 +73,13 @@ impl Backend {
         }
         let (commands, receiver) = crossbeam_channel::unbounded();
         let port = port as usize;
-        if let Err(error) = std::thread::Builder::new().name("watch-rdcw".into())
-            .spawn(move || run(port, receiver)) {
-            unsafe { windows_sys::Win32::Foundation::CloseHandle(port as HANDLE); }
+        if let Err(error) = std::thread::Builder::new()
+            .name("watch-rdcw".into())
+            .spawn(move || run(port, receiver))
+        {
+            unsafe {
+                windows_sys::Win32::Foundation::CloseHandle(port as HANDLE);
+            }
             return Err(error);
         }
         Ok(Self { port, commands })
@@ -226,7 +230,11 @@ impl State {
         if let Some(key) = root.slot.take() {
             self.close_slot(key);
         }
-        if self.roots.get(&id).is_some_and(|root| root.spec.anchor.is_some()) {
+        if self
+            .roots
+            .get(&id)
+            .is_some_and(|root| root.spec.anchor.is_some())
+        {
             // Read pins are not overlapped capabilities. Never reopen a
             // confined display path, even if another caller bypasses setup.
             return self.fail(id, UnavailableReason::Unsupported);
@@ -281,7 +289,12 @@ impl State {
             .flatten();
         if !network && device.is_none() {
             cell.close();
-            return self.fail(id, UnavailableReason::Failed("Geräteentfernung kann nicht sicher überwacht werden".into()));
+            return self.fail(
+                id,
+                UnavailableReason::Failed(
+                    "Geräteentfernung kann nicht sicher überwacht werden".into(),
+                ),
+            );
         }
         let mut slot = Slot {
             id,
@@ -312,7 +325,14 @@ impl State {
         }
         // NAS/redirector notification support varies. Keep the verification
         // poll even when ReadDirectoryChangesW accepted the network handle.
-        emit(id, vec![WatchEvent::Ready(if network { Coverage::LocalOnly } else { Coverage::Complete })]);
+        emit(
+            id,
+            vec![WatchEvent::Ready(if network {
+                Coverage::LocalOnly
+            } else {
+                Coverage::Complete
+            })],
+        );
     }
 
     fn fail(&mut self, id: WatchId, reason: UnavailableReason) {

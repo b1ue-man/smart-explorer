@@ -1,6 +1,4 @@
 //! Existing authorized control operations and response helpers.
-use std::io;
-use iroh::endpoint::SendStream;
 use crate::share::{
     framing::{reply, reply_err},
     fs::ResolvedTarget,
@@ -9,6 +7,8 @@ use crate::share::{
     session::PeerPrincipal,
     wire::FsResponse,
 };
+use iroh::endpoint::SendStream;
+use std::io;
 
 pub(super) async fn simple<F>(
     send: &mut SendStream,
@@ -63,13 +63,22 @@ pub(super) async fn reply_unit(send: &mut SendStream, result: io::Result<()>) ->
     }
 }
 
-pub(super) async fn control<T, F>(principal: &PeerPrincipal, label: &'static str, operation: F) -> io::Result<T>
+pub(super) async fn control<T, F>(
+    principal: &PeerPrincipal,
+    label: &'static str,
+    operation: F,
+) -> io::Result<T>
 where
     T: Send + 'static,
     F: FnOnce() -> io::Result<T> + Send + 'static,
 {
-    let class = if matches!(label, "Share remove directory" | "Share recycle" | "Share sync filesystem") {
+    let class = if matches!(
+        label,
+        "Share remove directory" | "Share recycle" | "Share sync filesystem"
+    ) {
         crate::share::blocking::Class::Background
-    } else { crate::share::blocking::Class::Control };
+    } else {
+        crate::share::blocking::Class::Control
+    };
     crate::share::blocking::run_for(principal.clone(), class, label, operation).await
 }

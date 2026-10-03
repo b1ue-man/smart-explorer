@@ -10,9 +10,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use iroh_base::EndpointId;
-use iroh_relay::server::{
-    Access, AccessControl, ClientPingSchedule, ClientRequest, ConnectionId,
-};
+use iroh_relay::server::{Access, AccessControl, ClientPingSchedule, ClientRequest, ConnectionId};
 
 const RELAY_CAPACITY_DENIAL: &str = "relay connection capacity reached";
 const RELAY_SIGNALING_DENIAL: &str = "not registered at this server's signaling";
@@ -44,12 +42,21 @@ impl RelayAdmissions {
         let mut endpoints = self.lock();
         if endpoints.len() >= MAX_GRACE_ENTRIES && !endpoints.contains_key(&endpoint) {
             let now = Instant::now();
-            endpoints.retain(|_, entry| entry.active > 0 || entry.left
-                .is_some_and(|left| now.saturating_duration_since(left) < SIGNED_OUT_GRACE));
+            endpoints.retain(|_, entry| {
+                entry.active > 0
+                    || entry
+                        .left
+                        .is_some_and(|left| now.saturating_duration_since(left) < SIGNED_OUT_GRACE)
+            });
             if endpoints.len() >= MAX_GRACE_ENTRIES {
-                let oldest = endpoints.iter().filter(|(_, entry)| entry.active == 0)
-                    .min_by_key(|(_, entry)| entry.left).map(|(endpoint, _)| *endpoint);
-                if let Some(oldest) = oldest { endpoints.remove(&oldest); }
+                let oldest = endpoints
+                    .iter()
+                    .filter(|(_, entry)| entry.active == 0)
+                    .min_by_key(|(_, entry)| entry.left)
+                    .map(|(endpoint, _)| *endpoint);
+                if let Some(oldest) = oldest {
+                    endpoints.remove(&oldest);
+                }
             }
         }
         let admission = endpoints.entry(endpoint).or_insert(Admission {

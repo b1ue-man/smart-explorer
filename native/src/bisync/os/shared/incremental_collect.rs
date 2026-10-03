@@ -21,9 +21,11 @@ pub(super) struct CollectionLimits {
 impl CollectionLimits {
     fn standard() -> Self {
         let limits = super::SyncLimits::for_memory(crate::transfer::physical_memory());
-        Self { max_nodes: usize::try_from(limits.walk_entries).unwrap_or(usize::MAX),
+        Self {
+            max_nodes: usize::try_from(limits.walk_entries).unwrap_or(usize::MAX),
             max_text_bytes: usize::try_from(limits.walk_text_bytes).unwrap_or(usize::MAX),
-            max_depth: MAX_CHANGE_DEPTH }
+            max_depth: MAX_CHANGE_DEPTH,
+        }
     }
 
     #[cfg(test)]
@@ -144,10 +146,11 @@ pub(super) fn changes_from_backend_with_limits(
     }
     let mut changes = Vec::new();
     let mut changed_paths = BTreeSet::new();
-    let feed = match super::engine_change_feed::FeedIndex::new(rec, side, source_items, &batch.changes) {
-        Ok(feed) => feed,
-        Err(_) => return ChangeCollection::Rebuild,
-    };
+    let feed =
+        match super::engine_change_feed::FeedIndex::new(rec, side, source_items, &batch.changes) {
+            Ok(feed) => feed,
+            Err(_) => return ChangeCollection::Rebuild,
+        };
     for raw in &batch.changes {
         if cancel.load(Ordering::Relaxed) {
             return ChangeCollection::Canceled;
@@ -170,7 +173,9 @@ pub(super) fn changes_from_backend_with_limits(
             ChangeKind::Upsert => {
                 let metadata = match supplied_meta {
                     Some(metadata) => metadata,
-                    None => match crate::vfs::sync_path(source, root, &change.rel).and_then(|path| source.stat(&path)) {
+                    None => match crate::vfs::sync_path(source, root, &change.rel)
+                        .and_then(|path| source.stat(&path))
+                    {
                         Ok(metadata) => metadata,
                         Err(_) if cancel.load(Ordering::Relaxed) => {
                             return ChangeCollection::Canceled
@@ -180,12 +185,20 @@ pub(super) fn changes_from_backend_with_limits(
                 };
                 if source.has_duplicate_file_names() {
                     let path = match crate::vfs::sync_path(source, root, &change.rel) {
-                        Ok(path) => path, Err(_) => return ChangeCollection::Rebuild,
+                        Ok(path) => path,
+                        Err(_) => return ChangeCollection::Rebuild,
                     };
-                    let entries = match super::duplicate_observation::metadata_named(source, &path, &metadata.name) {
-                        Ok(entries) => entries, Err(_) => return ChangeCollection::Rebuild,
+                    let entries = match super::duplicate_observation::metadata_named(
+                        source,
+                        &path,
+                        &metadata.name,
+                    ) {
+                        Ok(entries) => entries,
+                        Err(_) => return ChangeCollection::Rebuild,
                     };
-                    if entries.len() != 1 || entries[0].id != change.id { return ChangeCollection::Rebuild; }
+                    if entries.len() != 1 || entries[0].id != change.id {
+                        return ChangeCollection::Rebuild;
+                    }
                 }
                 let Some(sig) = sig_from_meta(&metadata) else {
                     return ChangeCollection::Rebuild;
@@ -222,15 +235,30 @@ pub(super) fn changes_from_source_walk(
     source_items: &BTreeMap<String, ItemRecord>,
     cancel: &AtomicBool,
 ) -> ChangeCollection {
-    changes_from_source_walk_scoped(source, root, target, opts, filter, source_items, cancel,
-        None, super::KeyPolicy::default())
+    changes_from_source_walk_scoped(
+        source,
+        root,
+        target,
+        opts,
+        filter,
+        source_items,
+        cancel,
+        None,
+        super::KeyPolicy::default(),
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn changes_from_source_walk_scoped(
-    source: &dyn Backend, root: &str, target: &dyn Backend, opts: BisyncOptions,
-    filter: &WalkFilter, source_items: &BTreeMap<String, ItemRecord>, cancel: &AtomicBool,
-    dirs: Option<&super::DirSet>, keys: super::KeyPolicy,
+    source: &dyn Backend,
+    root: &str,
+    target: &dyn Backend,
+    opts: BisyncOptions,
+    filter: &WalkFilter,
+    source_items: &BTreeMap<String, ItemRecord>,
+    cancel: &AtomicBool,
+    dirs: Option<&super::DirSet>,
+    keys: super::KeyPolicy,
 ) -> ChangeCollection {
     let prev_tree: Tree = source_items
         .iter()
@@ -242,8 +270,17 @@ pub(super) fn changes_from_source_walk_scoped(
         })
         .collect();
     let mode = hash_mode(source, target, opts.compare);
-    let snapshot = match walk_snapshot_with_options(source, root, cancel, filter, mode,
-        Some(&prev_tree), false, keys.fold_case, opts) {
+    let snapshot = match walk_snapshot_with_options(
+        source,
+        root,
+        cancel,
+        filter,
+        mode,
+        Some(&prev_tree),
+        false,
+        keys.fold_case,
+        opts,
+    ) {
         Ok(snapshot) => snapshot,
         Err(error) if error.kind() == io::ErrorKind::Interrupted => {
             return ChangeCollection::Canceled
@@ -254,9 +291,19 @@ pub(super) fn changes_from_source_walk_scoped(
     if !snapshot.omissions.is_empty() || !snapshot.filtered.is_empty() {
         return ChangeCollection::Rebuild;
     }
-    let current_dirs: BTreeSet<String> = snapshot.dirs.iter().map(|rel| keys.key(rel).into_owned()).collect();
-    let previous_dirs: BTreeSet<String> = dirs.into_iter().flatten().map(|rel| keys.key(rel).into_owned()).collect();
-    if current_dirs != previous_dirs { return ChangeCollection::Rebuild; }
+    let current_dirs: BTreeSet<String> = snapshot
+        .dirs
+        .iter()
+        .map(|rel| keys.key(rel).into_owned())
+        .collect();
+    let previous_dirs: BTreeSet<String> = dirs
+        .into_iter()
+        .flatten()
+        .map(|rel| keys.key(rel).into_owned())
+        .collect();
+    if current_dirs != previous_dirs {
+        return ChangeCollection::Rebuild;
+    }
     let current = snapshot.tree;
     let precision = crate::vfs::mtime_precision(source, root);
     let mut budget = CollectionBudget::new(CollectionLimits::standard());
@@ -280,18 +327,22 @@ pub(super) fn changes_from_source_walk_scoped(
         let managed = match now {
             Some(_) => true,
             None if !item_in_scope(rel, source_items.get(rel), filter) => false,
-            None => match crate::vfs::sync_path(source, root, rel).and_then(|path| source.stat(&path)) {
-                Err(error) if error.kind() == io::ErrorKind::NotFound => true,
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => {
-                    return ChangeCollection::Canceled
+            None => {
+                match crate::vfs::sync_path(source, root, rel).and_then(|path| source.stat(&path)) {
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => true,
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => {
+                        return ChangeCollection::Canceled
+                    }
+                    Err(_) => return ChangeCollection::Rebuild,
+                    Ok(metadata) if !metadata_in_scope(rel, &metadata, filter) => false,
+                    Ok(_) => return ChangeCollection::Rebuild,
                 }
-                Err(_) => return ChangeCollection::Rebuild,
-                Ok(metadata) if !metadata_in_scope(rel, &metadata, filter) => false,
-                Ok(_) => return ChangeCollection::Rebuild,
-            },
+            }
         };
         let id = match &kind {
-            ChangeKind::Upsert => match crate::vfs::sync_path(source, root, rel).and_then(|path| source.item_id(&path)) {
+            ChangeKind::Upsert => match crate::vfs::sync_path(source, root, rel)
+                .and_then(|path| source.item_id(&path))
+            {
                 Ok(id) => id,
                 Err(_) if cancel.load(Ordering::Relaxed) => return ChangeCollection::Canceled,
                 Err(_) => return ChangeCollection::Rebuild,
@@ -363,7 +414,8 @@ fn item_in_scope(rel: &str, item: Option<&ItemRecord>, filter: &WalkFilter) -> b
 }
 
 fn path_in_scope(rel: &str, hidden: bool, filter: &WalkFilter) -> bool {
-    !rel.split('/').any(|name| super::is_engine_name(name) || crate::vfs::is_staging_name(name))
+    !rel.split('/')
+        .any(|name| super::is_engine_name(name) || crate::vfs::is_staging_name(name))
         && !filter.ignore.is_match(rel)
         && (filter.include_hidden
             || (!hidden

@@ -30,8 +30,12 @@ pub(crate) fn md5_hex_to_u64(hex: &str) -> u64 {
 pub(crate) fn hash_file(backend: &dyn Backend, path: &str, cancel: &AtomicBool) -> io::Result<u64> {
     use std::io::Read;
 
-    let captured = super::apply_guard::capture(backend, path,
-        super::apply_guard::ExpectedFile::Unknown, "checksum file")?;
+    let captured = super::apply_guard::capture(
+        backend,
+        path,
+        super::apply_guard::ExpectedFile::Unknown,
+        "checksum file",
+    )?;
     let metadata = captured.regular("checksum file")?;
     let mut reader = crate::vfs::open_read_regular(backend, path, metadata.id.as_deref())?;
     let mut context = md5::Context::new();
@@ -46,11 +50,16 @@ pub(crate) fn hash_file(backend: &dyn Backend, path: &str, cancel: &AtomicBool) 
         }
         match reader.read(&mut buffer) {
             Ok(0) => break,
-            Ok(read) => { length = length.saturating_add(read as u64); context.consume(&buffer[..read]); },
+            Ok(read) => {
+                length = length.saturating_add(read as u64);
+                context.consume(&buffer[..read]);
+            }
             Err(error) => return Err(error),
         }
     }
-    if length != metadata.size { return Err(super::apply_guard::drift("checksum stream length changed")); }
+    if length != metadata.size {
+        return Err(super::apply_guard::drift("checksum stream length changed"));
+    }
     super::apply_guard::revalidate(backend, path, &captured, "checksum file")?;
     Ok(md5_to_u64(&context.compute().0))
 }

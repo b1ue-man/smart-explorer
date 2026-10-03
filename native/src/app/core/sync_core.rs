@@ -3,9 +3,16 @@ use super::*;
 
 impl App {
     /// One-way mirror using the selected folder's live backend and root.
-    pub(in crate::app) fn start_mirror(&mut self, dst: crate::vfs::BackendHandle, destination: String) {
-        if self.root_path.is_empty() || self.sync_running || self.bisync_running
-            || self.job_connect_rx.is_some() {
+    pub(in crate::app) fn start_mirror(
+        &mut self,
+        dst: crate::vfs::BackendHandle,
+        destination: String,
+    ) {
+        if self.root_path.is_empty()
+            || self.sync_running
+            || self.bisync_running
+            || self.job_connect_rx.is_some()
+        {
             return;
         }
         let (src, root) = self.pane_backend(self.active_tab);
@@ -22,7 +29,9 @@ impl App {
             },
             tx,
         );
-        if let Some(worker) = h.take_worker() { self.track_desktop_sync_worker(worker, h.cancel.clone()); }
+        if let Some(worker) = h.take_worker() {
+            self.track_desktop_sync_worker(worker, h.cancel.clone());
+        }
         self.sync_cancel = Some(h.cancel);
         self.sync_rx = Some(rx);
         self.sync_running = true;
@@ -62,7 +71,11 @@ impl App {
                 self.sync_progress = None;
                 self.sync_cancel = None;
                 self.sync_wake = None;
-                let omitted = r.omissions.summary().map(|s| format!("; {s}")).unwrap_or_default();
+                let omitted = r
+                    .omissions
+                    .summary()
+                    .map(|s| format!("; {s}"))
+                    .unwrap_or_default();
                 if r.stats.errors > 0 {
                     let example = r
                         .errors
@@ -75,12 +88,18 @@ impl App {
                     ));
                 } else if canceled {
                     self.notice = Some((
-                        format!("Spiegelung abgebrochen: {} bereits kopiert{omitted}", r.stats.copied),
+                        format!(
+                            "Spiegelung abgebrochen: {} bereits kopiert{omitted}",
+                            r.stats.copied
+                        ),
                         std::time::Instant::now(),
                     ));
                 } else if let Some(omitted) = r.omissions.summary() {
                     self.notice = Some((
-                        format!("⚠ Spiegelung mit Auslassungen: {} kopiert; {omitted}", r.stats.copied),
+                        format!(
+                            "⚠ Spiegelung mit Auslassungen: {} kopiert; {omitted}",
+                            r.stats.copied
+                        ),
                         std::time::Instant::now(),
                     ));
                 } else {
@@ -99,7 +118,11 @@ impl App {
     }
 
     /// Two-way sync the current location with safe, reversible defaults.
-    pub(in crate::app) fn start_bisync(&mut self, b: crate::vfs::BackendHandle, destination: String) {
+    pub(in crate::app) fn start_bisync(
+        &mut self,
+        b: crate::vfs::BackendHandle,
+        destination: String,
+    ) {
         if self.root_path.is_empty() {
             return;
         }
@@ -200,8 +223,8 @@ impl App {
                     after_mtime_ms: bounds.2,
                     before_mtime_ms: bounds.3,
                 };
-                let request = crate::bisync::RunRequest::new(
-                    &*a, &root_a, &*b, &root_b, opts, &f, &cancel_t);
+                let request =
+                    crate::bisync::RunRequest::new(&*a, &root_a, &*b, &root_b, opts, &f, &cancel_t);
                 let _ = tx.send(crate::bisync::run_with(request));
             });
         match spawn {
@@ -236,7 +259,11 @@ impl App {
         tab_idx: usize,
     ) -> (crate::vfs::BackendHandle, String) {
         let (root, remote, net) = if tab_idx == self.active_tab {
-            (&self.root_path, self.remote.as_ref(), self.net_conn.as_ref())
+            (
+                &self.root_path,
+                self.remote.as_ref(),
+                self.net_conn.as_ref(),
+            )
         } else {
             let tab = &self.tabs[tab_idx];
             (&tab.root_path, tab.remote.as_ref(), tab.net_conn.as_ref())

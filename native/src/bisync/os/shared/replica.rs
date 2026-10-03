@@ -21,7 +21,11 @@ struct Marker {
 }
 
 #[derive(Clone, Copy)]
-enum MarkerRead { Present, Missing, Unavailable }
+enum MarkerRead {
+    Present,
+    Missing,
+    Unavailable,
+}
 
 pub(super) struct Replicas {
     pub key: StateKey,
@@ -56,7 +60,10 @@ pub(super) fn identify(
         let missing = RunBlock::ReplicaMissing { side };
         if matches!(status, MarkerRead::Missing)
             && matches!(previous, Some(ReplicaRef::Marker(_)))
-            && !settings.confirmed.iter().any(|confirmation| confirmation.covers(&missing))
+            && !settings
+                .confirmed
+                .iter()
+                .any(|confirmation| confirmation.covers(&missing))
         {
             blocked.get_or_insert(missing);
         }
@@ -69,7 +76,10 @@ pub(super) fn identify(
         let mut created = false;
         if blocked.is_none() && matches!(status, MarkerRead::Missing) && write_markers {
             match create_marker(backend, root, &key.pair_id) {
-                Ok(replica) => { identity = replica; created = true; }
+                Ok(replica) => {
+                    identity = replica;
+                    created = true;
+                }
                 // Read-only sources and providers without atomic create keep
                 // their stable volume identity (or Unknown). No user capability
                 // is narrowed by the inability to store our own marker.
@@ -85,27 +95,44 @@ pub(super) fn identify(
             }
         }
         if previous.is_some_and(|previous| *previous != identity) {
-            upgrade_only &= created && previous.is_some_and(|previous| {
-                previous == &before || *previous == ReplicaRef::Unknown
-            });
+            upgrade_only &= created
+                && previous.is_some_and(|previous| {
+                    previous == &before || *previous == ReplicaRef::Unknown
+                });
         }
         match side {
             PairSide::A => key.replica_a = identity,
             PairSide::B => key.replica_b = identity,
         }
     }
-    let changed = history.as_ref().is_some_and(|history| !history.matches(&key));
-    let upgraded_from = history.as_ref().filter(|_| changed && upgrade_only).map(|history| StateKey {
-        replica_a: history.replica_a.clone(), replica_b: history.replica_b.clone(), ..key.clone()
-    });
-    Ok(Replicas { key, history, blocked, changed, upgraded_from })
+    let changed = history
+        .as_ref()
+        .is_some_and(|history| !history.matches(&key));
+    let upgraded_from = history
+        .as_ref()
+        .filter(|_| changed && upgrade_only)
+        .map(|history| StateKey {
+            replica_a: history.replica_a.clone(),
+            replica_b: history.replica_b.clone(),
+            ..key.clone()
+        });
+    Ok(Replicas {
+        key,
+        history,
+        blocked,
+        changed,
+        upgraded_from,
+    })
 }
 
 fn observe(backend: &dyn Backend, root: &str) -> io::Result<(ReplicaRef, MarkerRead)> {
     let path = crate::vfs::sync_child_path(backend, root, REPLICA_MARKER_NAME)?;
     let status = match backend.stat(&path) {
         Ok(meta) if meta.is_dir || meta.is_symlink || meta.special || meta.size > MARKER_BYTES => {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "Sync-Markierung ist keine gültige Datei"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Sync-Markierung ist keine gültige Datei",
+            ));
         }
         Ok(_) => {
             let mut bytes = Vec::new();
@@ -113,15 +140,30 @@ fn observe(backend: &dyn Backend, root: &str) -> io::Result<(ReplicaRef, MarkerR
                 .and_then(|reader| reader.take(MARKER_BYTES + 1).read_to_end(&mut bytes))
             {
                 Ok(_) if bytes.len() as u64 <= MARKER_BYTES => {
-                    let marker: Marker = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+                    let marker: Marker =
+                        serde_json::from_slice(&bytes).map_err(io::Error::other)?;
                     if marker.replica_id.len() != 32
-                        || !marker.replica_id.bytes().all(|byte| byte.is_ascii_hexdigit())
+                        || !marker
+                            .replica_id
+                            .bytes()
+                            .all(|byte| byte.is_ascii_hexdigit())
                     {
-                        return Err(io::Error::new(io::ErrorKind::InvalidData, "Ungültige Replika-ID"));
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "Ungültige Replika-ID",
+                        ));
                     }
-                    return Ok((ReplicaRef::Marker(marker.replica_id.to_ascii_lowercase()), MarkerRead::Present));
+                    return Ok((
+                        ReplicaRef::Marker(marker.replica_id.to_ascii_lowercase()),
+                        MarkerRead::Present,
+                    ));
                 }
-                Ok(_) => return Err(io::Error::new(io::ErrorKind::InvalidData, "Sync-Markierung ist zu groß")),
+                Ok(_) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "Sync-Markierung ist zu groß",
+                    ))
+                }
                 Err(error) if marker_unavailable(&error) => MarkerRead::Unavailable,
                 Err(error) => return Err(error),
             }
@@ -131,7 +173,9 @@ fn observe(backend: &dyn Backend, root: &str) -> io::Result<(ReplicaRef, MarkerR
         Err(error) => return Err(error),
     };
     let volume = match crate::vfs::volume_identity(backend, root) {
-        Ok(volume) => volume.map(|volume| ReplicaRef::Volume(volume.key())).unwrap_or(ReplicaRef::Unknown),
+        Ok(volume) => volume
+            .map(|volume| ReplicaRef::Volume(volume.key()))
+            .unwrap_or(ReplicaRef::Unknown),
         Err(error) if marker_unavailable(&error) => ReplicaRef::Unknown,
         Err(error) => return Err(error),
     };
@@ -142,12 +186,19 @@ fn create_marker(backend: &dyn Backend, root: &str, pair: &str) -> io::Result<Re
     // Never create an unavailable/unmounted root merely to write a marker.
     let root_meta = backend.stat(root)?;
     if !root_meta.is_dir || root_meta.is_symlink {
-        return Err(io::Error::new(io::ErrorKind::Unsupported, "Sync-Markierung kann nicht auf diesem Wurzeltyp gespeichert werden"));
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Sync-Markierung kann nicht auf diesem Wurzeltyp gespeichert werden",
+        ));
     }
     let mut random = [0u8; 16];
     getrandom::getrandom(&mut random).map_err(|error| io::Error::other(error.to_string()))?;
     let replica_id: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
-    let marker = Marker { replica_id: replica_id.clone(), created_ms: now_ms(), pair_hint: pair.to_string() };
+    let marker = Marker {
+        replica_id: replica_id.clone(),
+        created_ms: now_ms(),
+        pair_hint: pair.to_string(),
+    };
     let path = crate::vfs::sync_child_path(backend, root, REPLICA_MARKER_NAME)?;
     let stage = crate::vfs::unique_staging_path(backend, &path, "sync-replica")?;
     let result = (|| {
@@ -156,9 +207,14 @@ fn create_marker(backend: &dyn Backend, root: &str, pair: &str) -> io::Result<Re
         writer.write_all(&bytes)?;
         writer.flush()?;
         drop(writer);
-        crate::vfs::finish_stage(backend, &stage, StageFinish {
-            durability: StageDurability::Now, ..StageFinish::default()
-        })?;
+        crate::vfs::finish_stage(
+            backend,
+            &stage,
+            StageFinish {
+                durability: StageDurability::Now,
+                ..StageFinish::default()
+            },
+        )?;
         crate::vfs::promote_staged_create(backend, &stage, &path)?;
         crate::vfs::sync_filesystem(backend, root)?;
         Ok(ReplicaRef::Marker(replica_id))
@@ -167,12 +223,18 @@ fn create_marker(backend: &dyn Backend, root: &str, pair: &str) -> io::Result<Re
         let _ = backend.discard_copy_stage(&stage);
     }
     match result {
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => observe(backend, root).map(|(id, _)| id),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            observe(backend, root).map(|(id, _)| id)
+        }
         result => result,
     }
 }
 
 fn marker_unavailable(error: &io::Error) -> bool {
-    matches!(error.kind(), io::ErrorKind::PermissionDenied | io::ErrorKind::ReadOnlyFilesystem
-        | io::ErrorKind::Unsupported)
+    matches!(
+        error.kind(),
+        io::ErrorKind::PermissionDenied
+            | io::ErrorKind::ReadOnlyFilesystem
+            | io::ErrorKind::Unsupported
+    )
 }

@@ -88,7 +88,10 @@ fn review_task_restrictions_ignore_runtime_and_extensions_but_revoke_exact_key()
     let mut after = before.clone();
     after.direct_grants[0].updated_at = 9;
     after.direct_grants[0].device_name = "Renamed".into();
-    after.default_direct_exports.roots.push(SharedRoot::new("Docs", "sftp://u@nas:22/docs"));
+    after
+        .default_direct_exports
+        .roots
+        .push(SharedRoot::new("Docs", "sftp://u@nas:22/docs"));
     assert!(authorization_restrictions(&before, &after).is_empty());
     after.direct_grants[0].write = false;
     let restrictions = authorization_restrictions(&before, &after);
@@ -104,8 +107,10 @@ fn review_task_restrictions_ignore_runtime_and_extensions_but_revoke_exact_key()
 fn review_task_export_reduction_preserves_backend_identity_and_scopes_room() {
     let mut before = state();
     let mut first = room("r1");
-    first.exports.roots.push(SharedRoot::new("Docs", "sftp://u@one:22/docs")
-        .with_access(ExportAccess::ReadWrite));
+    first
+        .exports
+        .roots
+        .push(SharedRoot::new("Docs", "sftp://u@one:22/docs").with_access(ExportAccess::ReadWrite));
     before.rooms.push(first);
     before.rooms.push(room("r2"));
     let mut after = before.clone();
@@ -114,7 +119,10 @@ fn review_task_export_reduction_preserves_backend_identity_and_scopes_room() {
     assert!(restrictions.affects("room", "r1", "any-key", "any-node"));
     assert!(!restrictions.affects("room", "r2", "any-key", "any-node"));
     assert!(!restrictions.affects("direct", "r1", "any-key", "any-node"));
-    assert_eq!(restrictions.items()[0].reason, RestrictionReason::ExportsNarrowed);
+    assert_eq!(
+        restrictions.items()[0].reason,
+        RestrictionReason::ExportsNarrowed
+    );
 }
 
 #[test]
@@ -144,24 +152,36 @@ fn review_task_room_block_rejects_key_alias_and_new_members_wait_without_exec() 
 fn review_task_one_way_pairing_and_repair_never_create_share_back_grant() {
     let mut profiles = ShareProfiles::default();
     let peer = DirectReciprocalPeer::authenticated(
-        peer(4, "a"), DirectRelationMaterial::new("remote-lookup", vec![8; 32]).unwrap(),
-    ).unwrap();
-    profiles.apply_reciprocal_direct_peer(&peer, "c", 1, PairingOrigin::UserPairingOneWay).unwrap();
+        peer(4, "a"),
+        DirectRelationMaterial::new("remote-lookup", vec![8; 32]).unwrap(),
+    )
+    .unwrap();
+    profiles
+        .apply_reciprocal_direct_peer(&peer, "c", 1, PairingOrigin::UserPairingOneWay)
+        .unwrap();
     assert!(!profiles.direct_contacts[0].relation.share_back);
     assert!(profiles.direct_grants.is_empty());
-    profiles.apply_reciprocal_direct_peer(&peer, "unused", 2, PairingOrigin::AutomaticRepair).unwrap();
+    profiles
+        .apply_reciprocal_direct_peer(&peer, "unused", 2, PairingOrigin::AutomaticRepair)
+        .unwrap();
     assert!(profiles.direct_grants.is_empty());
     profiles.set_contact_share_back("c", true, 3).unwrap();
     assert_eq!(profiles.direct_grants.len(), 1);
     assert!(!profiles.direct_grants[0].write);
     profiles.direct_grants[0].state = DirectGrantState::Reconfirm;
-    profiles.apply_reciprocal_direct_peer(&peer, "unused", 4, PairingOrigin::AutomaticRepair).unwrap();
+    profiles
+        .apply_reciprocal_direct_peer(&peer, "unused", 4, PairingOrigin::AutomaticRepair)
+        .unwrap();
     assert_eq!(profiles.direct_grants[0].state, DirectGrantState::Reconfirm);
-    profiles.apply_reciprocal_direct_peer(&peer, "unused", 5, PairingOrigin::UserPairing).unwrap();
+    profiles
+        .apply_reciprocal_direct_peer(&peer, "unused", 5, PairingOrigin::UserPairing)
+        .unwrap();
     assert_eq!(profiles.direct_grants[0].state, DirectGrantState::Accepted);
     assert!(!profiles.direct_grants[0].exec.enabled);
     assert!(profiles.direct_contacts[0].relation.share_back);
-    profiles.apply_reciprocal_direct_peer(&peer, "unused", 6, PairingOrigin::UserPairingOneWay).unwrap();
+    profiles
+        .apply_reciprocal_direct_peer(&peer, "unused", 6, PairingOrigin::UserPairingOneWay)
+        .unwrap();
     assert!(!profiles.direct_contacts[0].relation.share_back);
     assert_eq!(profiles.direct_grants[0].state, DirectGrantState::Accepted);
 }
@@ -172,7 +192,10 @@ fn review_task_withdrawal_denies_device_alias_until_deliberate_readmission() {
     let alias = peer(4, "alias");
     let mut profiles = ShareProfiles::default();
     profiles.direct_grants = vec![grant(&a), grant(&alias), grant(&peer(5, "b"))];
-    profiles.direct_grants[1].exec.set_runtime_enabled(true, 1).unwrap();
+    profiles.direct_grants[1]
+        .exec
+        .set_runtime_enabled(true, 1)
+        .unwrap();
     profiles.withdraw_direct_key(&a, 2);
     assert_eq!(profiles.direct_grants[0].state, DirectGrantState::Ignored);
     assert_eq!(profiles.direct_grants[1].state, DirectGrantState::Ignored);

@@ -7,7 +7,9 @@ use std::time::Duration;
 
 use super::incremental::SyncEndpoints;
 use super::omissions::SyncOmissions;
-use super::snapshot::{hash_mode, prev_side, walk_snapshot_with_options, HashMode, Snapshot, WalkFilter};
+use super::snapshot::{
+    hash_mode, prev_side, walk_snapshot_with_options, HashMode, Snapshot, WalkFilter,
+};
 use super::snapshot_types::SideSnapshot;
 use super::types::{Action, Baseline, BisyncOptions, Conflict, DeletePolicy, Direction, Tree};
 use crate::vfs::Backend;
@@ -29,11 +31,17 @@ pub(super) struct PairSnapshot {
 }
 
 impl PairSnapshot {
-    pub(super) fn plan(&self, base: &Baseline, opts: BisyncOptions)
-        -> (Vec<Action>, Vec<Conflict>, Vec<String>) {
+    pub(super) fn plan(
+        &self,
+        base: &Baseline,
+        opts: BisyncOptions,
+    ) -> (Vec<Action>, Vec<Conflict>, Vec<String>) {
         let mut base = self.omissions.planning_baseline(base);
-        for conflict in &self.conflicts { base.remove(&conflict.rel); }
-        let (actions, mut conflicts, converged) = super::core::plan(&self.a.tree, &self.b.tree, &base, opts);
+        for conflict in &self.conflicts {
+            base.remove(&conflict.rel);
+        }
+        let (actions, mut conflicts, converged) =
+            super::core::plan(&self.a.tree, &self.b.tree, &base, opts);
         conflicts.extend(self.conflicts.iter().cloned());
         (actions, conflicts, converged)
     }
@@ -145,11 +153,34 @@ pub(super) fn read_pair(
     omissions.exclude_tree(&mut a);
     omissions.exclude_tree(&mut b);
     let (repairs, conflicts) = super::duplicate_plan::prepare(
-        endpoints, at.duplicates, bt.duplicates, &mut a, &mut b, &mut omissions, opts, cancel,
+        endpoints,
+        at.duplicates,
+        bt.duplicates,
+        &mut a,
+        &mut b,
+        &mut omissions,
+        opts,
+        cancel,
     )?;
-    let a = SideSnapshot { tree: a, filtered: at.filtered, dirs: at.dirs, omissions: omissions.clone() };
-    let b = SideSnapshot { tree: b, filtered: bt.filtered, dirs: bt.dirs, omissions: omissions.clone() };
-    Ok(PairSnapshot { a, b, omissions, repairs, conflicts })
+    let a = SideSnapshot {
+        tree: a,
+        filtered: at.filtered,
+        dirs: at.dirs,
+        omissions: omissions.clone(),
+    };
+    let b = SideSnapshot {
+        tree: b,
+        filtered: bt.filtered,
+        dirs: bt.dirs,
+        omissions: omissions.clone(),
+    };
+    Ok(PairSnapshot {
+        a,
+        b,
+        omissions,
+        repairs,
+        conflicts,
+    })
 }
 
 fn still_running<T>(side: &io::Result<ScopedJoinHandle<'_, T>>) -> bool {

@@ -256,10 +256,10 @@ mod due;
 mod job_triggers;
 #[path = "os/shared/own_writes.rs"]
 mod own_writes;
-#[path = "os/shared/remote_watch.rs"]
-mod remote_watch;
 #[path = "os/shared/realtime.rs"]
 mod realtime;
+#[path = "os/shared/remote_watch.rs"]
+mod remote_watch;
 
 #[path = "os/shared/connect_triggers.rs"]
 mod connect_triggers;

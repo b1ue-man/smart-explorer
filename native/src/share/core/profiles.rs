@@ -7,8 +7,8 @@ use super::direct_request_tombstone::DirectRequestTombstone;
 use super::exec_policy::{reset_all_for_legacy_migration, ExecGrant};
 use super::fs::ShareExportConfig;
 use super::legacy_direct_request::{LegacyDirectRequestEntry, LegacyDirectRequestTombstone};
-use super::removed_direct_peers::RemovedDirectPeer;
 use super::profile_migration::AutoHomeMigration;
+use super::removed_direct_peers::RemovedDirectPeer;
 use super::room_relation::RoomRelationMaterial;
 use super::types::{DirectContact, DirectGrant, DirectGrantState, PeerPresence, RoomProfile};
 
@@ -149,11 +149,16 @@ impl ShareProfiles {
             });
         }
         if withdrawn {
-            self.withdraw_direct_key(&super::direct_protocol::DirectPeerIdentity {
-                device_id: presence.device_id.clone(), device_name: presence.device_name.clone(),
-                public_key: presence.public_key.clone(), fingerprint: presence.fingerprint.clone(),
-                node_id: presence.node_id.clone(),
-            }, now);
+            self.withdraw_direct_key(
+                &super::direct_protocol::DirectPeerIdentity {
+                    device_id: presence.device_id.clone(),
+                    device_name: presence.device_name.clone(),
+                    public_key: presence.public_key.clone(),
+                    fingerprint: presence.fingerprint.clone(),
+                    node_id: presence.node_id.clone(),
+                },
+                now,
+            );
         }
         Ok(())
     }

@@ -1,7 +1,7 @@
 //! Android host volume figures and its reversible app trash.
-use std::{ffi::CString, io, path::Path};
-use std::os::unix::ffi::OsStrExt;
 use crate::analytics::VolumeUsage;
+use std::os::unix::ffi::OsStrExt;
+use std::{ffi::CString, io, path::Path};
 
 pub(crate) fn volume_usage(path: &Path) -> io::Result<VolumeUsage> {
     let path = CString::new(path.as_os_str().as_bytes())
@@ -18,12 +18,23 @@ pub(crate) fn volume_usage(path: &Path) -> io::Result<VolumeUsage> {
     })
 }
 
-pub(crate) fn recycle(root:&Path,path:&Path,expected:&crate::vfs::RecycleExpectation)->io::Result<crate::vfs::RecycleOutcome> {
-    super::checked_recycle::recycle(root,path,expected,publish_trash)
+pub(crate) fn recycle(
+    root: &Path,
+    path: &Path,
+    expected: &crate::vfs::RecycleExpectation,
+) -> io::Result<crate::vfs::RecycleOutcome> {
+    super::checked_recycle::recycle(root, path, expected, publish_trash)
 }
-pub(crate) fn host_recycle_available() -> bool { true }
-fn publish_trash(captured:&mut crate::local_access::QuarantinedChild,original:&Path)->io::Result<()> {
-    crate::apptrash::publish_captured(captured,original).map(|_|())
+pub(crate) fn host_recycle_available() -> bool {
+    true
+}
+fn publish_trash(
+    captured: &mut crate::local_access::QuarantinedChild,
+    original: &Path,
+) -> io::Result<()> {
+    crate::apptrash::publish_captured(captured, original).map(|_| ())
 }
 
-pub(crate) fn host_permission_note(_: u64) -> Option<String> { None }
+pub(crate) fn host_permission_note(_: u64) -> Option<String> {
+    None
+}

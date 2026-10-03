@@ -364,7 +364,10 @@ fn worker_version_is_current(version: &str) -> bool {
     version == env!("CARGO_PKG_VERSION")
 }
 
-pub(super) fn share_backend_identity(label: String, target: crate::share::PeerOpenTarget) -> crate::vfs::BackendHandle {
+pub(super) fn share_backend_identity(
+    label: String,
+    target: crate::share::PeerOpenTarget,
+) -> crate::vfs::BackendHandle {
     Arc::new(UnavailableBackend { label, target })
 }
 
@@ -382,8 +385,11 @@ impl UnavailableBackend {
 }
 
 impl crate::vfs::Backend for UnavailableBackend {
-    fn scan_storage(&self, root: &str, progress: &crate::analytics::Progress)
-        -> io::Result<Option<crate::analytics::ScanOutcome>> {
+    fn scan_storage(
+        &self,
+        root: &str,
+        progress: &crate::analytics::Progress,
+    ) -> io::Result<Option<crate::analytics::ScanOutcome>> {
         super::ipc_analysis::scan(self.target.clone(), root, progress).map(Some)
     }
 

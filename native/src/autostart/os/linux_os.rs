@@ -68,19 +68,27 @@ pub fn is_enabled() -> bool {
 /// The login entry exists, but the desktop environment was told to skip it
 /// (`Hidden=true`, `X-GNOME-Autostart-enabled=false`); the settings show it.
 pub fn disabled_by_system() -> bool {
-    std::fs::read_to_string(desktop_file_path()).map(|body| system_disabled(&body)).unwrap_or(false)
+    std::fs::read_to_string(desktop_file_path())
+        .map(|body| system_disabled(&body))
+        .unwrap_or(false)
 }
 fn system_disabled(body: &str) -> bool {
     let mut desktop = true; // tolerate historical entries without a header
-    let mut hidden = false; let mut gnome = false;
+    let mut hidden = false;
+    let mut gnome = false;
     for line in body.lines().map(str::trim) {
-        if line.starts_with('[') { desktop = line == "[Desktop Entry]"; continue; }
-        if !desktop || line.starts_with('#') { continue; }
+        if line.starts_with('[') {
+            desktop = line == "[Desktop Entry]";
+            continue;
+        }
+        if !desktop || line.starts_with('#') {
+            continue;
+        }
         if let Some((key, value)) = line.split_once('=') {
             match key.trim() {
                 "Hidden" => hidden = value.trim().eq_ignore_ascii_case("true"),
                 "X-GNOME-Autostart-enabled" => gnome = value.trim().eq_ignore_ascii_case("false"),
-                _ => {},
+                _ => {}
             }
         }
     }
@@ -104,7 +112,11 @@ fn write_entry(path: &Path, exe: &Path) -> io::Result<()> {
 }
 
 fn refresh_enabled_entry(path: &Path, exe: &Path) -> io::Result<()> {
-    if path.exists() && !std::fs::read_to_string(path).map(|body| system_disabled(&body)).unwrap_or(true) {
+    if path.exists()
+        && !std::fs::read_to_string(path)
+            .map(|body| system_disabled(&body))
+            .unwrap_or(true)
+    {
         write_entry(path, exe)?;
     }
     Ok(())

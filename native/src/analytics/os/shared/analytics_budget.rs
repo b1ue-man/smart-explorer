@@ -37,11 +37,7 @@ pub(super) struct AnalyticsBudget {
 
 impl Default for AnalyticsBudget {
     fn default() -> Self {
-        Self::with_limits(
-            retention_nodes(),
-            retention_text(),
-            MAX_ANALYTICS_DEPTH,
-        )
+        Self::with_limits(retention_nodes(), retention_text(), MAX_ANALYTICS_DEPTH)
     }
 }
 

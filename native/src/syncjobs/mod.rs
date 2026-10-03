@@ -10,6 +10,8 @@
 //! over time without breaking old files or older builds. The previous single
 //! positional `jobs.tsv` is auto-imported once on first load.
 
+#[path = "os/shared/baseline_migration.rs"]
+mod baseline_migration;
 #[path = "os/shared/editor.rs"]
 pub mod editor;
 #[path = "os/shared/job_state.rs"]
@@ -28,8 +30,6 @@ mod job_state_policy;
 mod job_state_store;
 #[path = "os/shared/migration.rs"]
 mod migration;
-#[path = "os/shared/baseline_migration.rs"]
-mod baseline_migration;
 pub(crate) use baseline_migration::legacy_baseline_pending;
 #[path = "os/shared/recorded_options.rs"]
 mod recorded_options;

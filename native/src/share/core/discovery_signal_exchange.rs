@@ -55,7 +55,9 @@ impl DiscoverySignalRuntime {
             )));
         }
         if pin.as_bytes().is_empty() {
-            return Err(DiscoveryExchangeCommandError::Local(eio("Eine leere PIN ist nicht erlaubt")));
+            return Err(DiscoveryExchangeCommandError::Local(eio(
+                "Eine leere PIN ist nicht erlaubt",
+            )));
         }
         if pin.as_bytes().len() > DISCOVERY_PIN_MAX_BYTES {
             return Err(DiscoveryExchangeCommandError::Local(eio(
@@ -166,7 +168,8 @@ impl DiscoverySignalRuntime {
         }
         // Single use (FC2): after a proven PIN no exchange starts any more.
         if self.state.offer_guards.is_paired(&offer_id)
-            || self.state.offer_guards.exhausted(&offer_id) {
+            || self.state.offer_guards.exhausted(&offer_id)
+        {
             return Err(PublisherStartError::protocol(&exchange_id));
         }
         let allowed = self.state.offers.get_mut(&offer_id).map_or(false, |offer| {

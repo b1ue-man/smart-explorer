@@ -5,10 +5,12 @@ use std::io::{Read, Write};
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
-use crate::vfs::{self as vfs, BackendExtensions, ChangeNotice, ChangeSignalMode,
-    ChangeSubscription, HashWalkItem, HashWalkRequest, RecycleExpectation, RecycleOutcome,
-    StageFinish, StageFinished, TargetLimits, VfsListing, VfsResult, VolumeIdentity};
 use super::ipc_client::UnavailableBackend;
+use crate::vfs::{
+    self as vfs, BackendExtensions, ChangeNotice, ChangeSignalMode, ChangeSubscription,
+    HashWalkItem, HashWalkRequest, RecycleExpectation, RecycleOutcome, StageFinish, StageFinished,
+    TargetLimits, VfsListing, VfsResult, VolumeIdentity,
+};
 
 impl BackendExtensions for UnavailableBackend {
     fn previous_state_identities(&self) -> VfsResult<Vec<String>> {
@@ -19,7 +21,12 @@ impl BackendExtensions for UnavailableBackend {
         vfs::sync_child_path(&*self.live_backend()?, parent, literal_name)
     }
 
-    fn replace_staged_reversible(&self, staged: &str, destination: &str, retained: &str) -> VfsResult<bool> {
+    fn replace_staged_reversible(
+        &self,
+        staged: &str,
+        destination: &str,
+        retained: &str,
+    ) -> VfsResult<bool> {
         vfs::replace_staged_reversible(&*self.live_backend()?, staged, destination, retained)
     }
 
@@ -31,8 +38,12 @@ impl BackendExtensions for UnavailableBackend {
         vfs::open_read_regular(&*self.live_backend()?, path, id)
     }
 
-    fn open_write_copy_stage_timed(&self, path: &str, size: u64, mtime_ms: i64)
-        -> VfsResult<Box<dyn Write + Send>> {
+    fn open_write_copy_stage_timed(
+        &self,
+        path: &str,
+        size: u64,
+        mtime_ms: i64,
+    ) -> VfsResult<Box<dyn Write + Send>> {
         vfs::open_write_copy_stage_timed(&*self.live_backend()?, path, size, mtime_ms)
     }
 
@@ -45,7 +56,9 @@ impl BackendExtensions for UnavailableBackend {
     }
 
     fn target_limits(&self, root: &str) -> TargetLimits {
-        self.live_backend().map(|backend| vfs::target_limits(&*backend, root)).unwrap_or_default()
+        self.live_backend()
+            .map(|backend| vfs::target_limits(&*backend, root))
+            .unwrap_or_default()
     }
 
     fn unix_mode(&self, _path: &str) -> VfsResult<Option<u32>> {
@@ -62,9 +75,12 @@ impl BackendExtensions for UnavailableBackend {
         vfs::supports_duplicate_search(&*self.live_backend()?, root)
     }
 
-    fn find_duplicates(&self, root: &str, min_bytes: u64,
-        progress: &crate::analytics::ReclaimProgress)
-        -> VfsResult<Option<crate::analytics::DuplicateReport>> {
+    fn find_duplicates(
+        &self,
+        root: &str,
+        min_bytes: u64,
+        progress: &crate::analytics::ReclaimProgress,
+    ) -> VfsResult<Option<crate::analytics::DuplicateReport>> {
         vfs::find_duplicates(&*self.live_backend()?, root, min_bytes, progress)
     }
 
@@ -72,8 +88,13 @@ impl BackendExtensions for UnavailableBackend {
         vfs::supports_hash_walk(&*self.live_backend()?, root)
     }
 
-    fn hash_walk(&self, root: &str, request: HashWalkRequest,
-        tx: crossbeam_channel::Sender<HashWalkItem>, cancel: &AtomicBool) -> VfsResult<bool> {
+    fn hash_walk(
+        &self,
+        root: &str,
+        request: HashWalkRequest,
+        tx: crossbeam_channel::Sender<HashWalkItem>,
+        cancel: &AtomicBool,
+    ) -> VfsResult<bool> {
         vfs::hash_walk(&*self.live_backend()?, root, request, tx, cancel)
     }
 
@@ -89,8 +110,12 @@ impl BackendExtensions for UnavailableBackend {
         vfs::change_signal_mode(&*self.live_backend()?, root)
     }
 
-    fn change_signal(&self, root: &str, poll_interval: Duration,
-        tx: crossbeam_channel::Sender<ChangeNotice>) -> VfsResult<Option<ChangeSubscription>> {
+    fn change_signal(
+        &self,
+        root: &str,
+        poll_interval: Duration,
+        tx: crossbeam_channel::Sender<ChangeNotice>,
+    ) -> VfsResult<Option<ChangeSubscription>> {
         vfs::change_signal(&*self.live_backend()?, root, poll_interval, tx)
     }
 }

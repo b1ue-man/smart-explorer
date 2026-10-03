@@ -29,12 +29,10 @@ mod connection;
 mod copy_data;
 #[path = "core/errors.rs"]
 mod errors;
-#[path = "core/extensions.rs"]
-mod extensions;
-#[path = "core/reversible_replace.rs"]
-mod reversible_replace;
 #[path = "core/exec.rs"]
 mod exec;
+#[path = "core/extensions.rs"]
+mod extensions;
 #[path = "core/io_adapters.rs"]
 mod io_adapters;
 #[path = "os/shared/known_hosts.rs"]
@@ -49,6 +47,8 @@ mod pool_reader;
 mod pool_writer;
 #[path = "core/posix_rename.rs"]
 mod posix_rename;
+#[path = "core/reversible_replace.rs"]
+mod reversible_replace;
 #[path = "core/session.rs"]
 mod session;
 #[path = "core/transfer_ops.rs"]

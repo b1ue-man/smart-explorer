@@ -76,7 +76,11 @@ pub struct RunVersions {
 impl RunVersions {
     pub fn begin(context: VersionsContext) -> Self {
         let app_data = versions_dir(&context.pair_id);
-        Self { context, app_data, lock_id: std::sync::Mutex::new(String::new()) }
+        Self {
+            context,
+            app_data,
+            lock_id: std::sync::Mutex::new(String::new()),
+        }
     }
 
     pub fn context(&self) -> &VersionsContext {
@@ -102,16 +106,26 @@ impl RunVersions {
     pub(crate) fn bind_lock(&self, id: &str) -> io::Result<()> {
         let mut current = self.lock_id.lock().unwrap_or_else(|e| e.into_inner());
         if !current.is_empty() && *current != id {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "versions belong to another pair lock"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "versions belong to another pair lock",
+            ));
         }
         *current = id.to_string();
         Ok(())
     }
     pub(super) fn lock_id(&self) -> String {
-        self.lock_id.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.lock_id
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
     pub(super) fn with_app_data(context: VersionsContext, app_data: PathBuf) -> Self {
-        Self { context, app_data, lock_id: std::sync::Mutex::new(String::new()) }
+        Self {
+            context,
+            app_data,
+            lock_id: std::sync::Mutex::new(String::new()),
+        }
     }
 }
 

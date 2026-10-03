@@ -32,8 +32,15 @@ pub fn previous_state_identities<B: Backend + ?Sized>(backend: &B) -> VfsResult<
         Some(extension) => extension.previous_state_identities()?,
         None => Vec::new(),
     };
-    if identities.len() > 8 || identities.iter().any(|identity| identity.is_empty() || identity.len() > 4096) {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid previous backend identities"));
+    if identities.len() > 8
+        || identities
+            .iter()
+            .any(|identity| identity.is_empty() || identity.len() > 4096)
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "invalid previous backend identities",
+        ));
     }
     Ok(identities)
 }
@@ -75,12 +82,17 @@ pub fn replace_staged_reversible<B: Backend + ?Sized>(
     retained: &str,
 ) -> VfsResult<bool> {
     let (parent, name) = retained.rsplit_once('/').unwrap_or(("", retained));
-    let destination_parent = destination.rsplit_once('/').map_or("", |(parent, _)| parent);
+    let destination_parent = destination
+        .rsplit_once('/')
+        .map_or("", |(parent, _)| parent);
     let valid_nonce = name.strip_prefix(".se-replace-").is_some_and(|nonce| {
         nonce.len() == 16
-            && nonce.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            && nonce
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     });
-    if parent != destination_parent || !valid_nonce || retained == staged || retained == destination {
+    if parent != destination_parent || !valid_nonce || retained == staged || retained == destination
+    {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "replacement recovery path must be a unique generated sibling",

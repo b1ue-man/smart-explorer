@@ -45,7 +45,8 @@ impl App {
                     if let Some(ready) = self.update_ready.clone() {
                         self.apply_ready_update(ctx, ready);
                     } else {
-                        self.error_msg = Some("Das Update ist nicht mehr bereit. Bitte erneut prüfen.".into());
+                        self.error_msg =
+                            Some("Das Update ist nicht mehr bereit. Bitte erneut prüfen.".into());
                     }
                 }
             }
@@ -53,7 +54,10 @@ impl App {
         }
 
         let waiting = self.sync_exit_gate.started.is_some();
-        let overdue = self.sync_exit_gate.started.is_some_and(|started| started.elapsed() >= SYNC_EXIT_WAIT);
+        let overdue = self
+            .sync_exit_gate
+            .started
+            .is_some_and(|started| started.elapsed() >= SYNC_EXIT_WAIT);
         let mut cancel = false;
         let mut keep_open = false;
         let mut wait_again = false;

@@ -11,14 +11,15 @@
 
 use crate::vfs::{Backend, Scheme, VfsMeta, VfsResult};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use std::io::{self, Read, Write};
-use std::time::Duration;
-use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
 use std::collections::HashMap;
-
-use super::multistatus::{
-    encode_path, parse_multistatus,
+use std::io::{self, Read, Write};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
 };
+use std::time::Duration;
+
+use super::multistatus::{encode_path, parse_multistatus};
 use super::status::overload_or_full;
 use super::writer::WebdavWriter;
 
@@ -64,7 +65,7 @@ pub struct WebdavConfig {
 
 #[derive(Clone)]
 pub struct WebdavBackend {
-    base: String, // scheme://host:port
+    base: String,            // scheme://host:port
     pub(super) root: String, // forward-slash path
     pub(super) auth: String, // "Basic ..." (empty = none)
     /// Pooled agent for idempotent reads; ureq replaces stale pooled sockets.
@@ -88,8 +89,11 @@ impl WebdavBackend {
     pub fn connect(cfg: WebdavConfig) -> io::Result<WebdavBackend> {
         let scheme = if cfg.https { "https" } else { "http" };
         let host = cfg.host.trim();
-        let host = if host.contains(':') && !host.starts_with('[') { format!("[{host}]") }
-            else { host.to_string() };
+        let host = if host.contains(':') && !host.starts_with('[') {
+            format!("[{host}]")
+        } else {
+            host.to_string()
+        };
         let base = format!("{scheme}://{host}:{}", cfg.port);
         let auth = if cfg.user.is_empty() {
             String::new()
@@ -159,7 +163,11 @@ impl WebdavBackend {
         }
     }
 
-    pub(super) fn propfind(&self, path: &str, depth: &str) -> io::Result<super::listing_body::Body> {
+    pub(super) fn propfind(
+        &self,
+        path: &str,
+        depth: &str,
+    ) -> io::Result<super::listing_body::Body> {
         // Also request ownCloud/Nextcloud's checksums (free content hashes) so a
         // checksum-mode sync can compare without downloading. Plain WebDAV servers
         // ignore the oc:* prop.
@@ -174,9 +182,19 @@ impl WebdavBackend {
             match req.send_string(body) {
                 Ok(response) => match super::listing_body::read(response) {
                     Ok(body) => return Ok(body),
-                    Err(error) if attempt == 0 && matches!(error.kind(), io::ErrorKind::UnexpectedEof
-                        | io::ErrorKind::ConnectionReset | io::ErrorKind::ConnectionAborted
-                        | io::ErrorKind::BrokenPipe | io::ErrorKind::TimedOut) => continue,
+                    Err(error)
+                        if attempt == 0
+                            && matches!(
+                                error.kind(),
+                                io::ErrorKind::UnexpectedEof
+                                    | io::ErrorKind::ConnectionReset
+                                    | io::ErrorKind::ConnectionAborted
+                                    | io::ErrorKind::BrokenPipe
+                                    | io::ErrorKind::TimedOut
+                            ) =>
+                    {
+                        continue
+                    }
                     Err(error) => return Err(error),
                 },
                 Err(ureq::Error::Transport(_)) if attempt == 0 => continue,
@@ -208,7 +226,11 @@ impl WebdavBackend {
         Err(io::Error::other("WebDAV GET retry exhausted"))
     }
 
-    pub(super) fn mutation(&self, request: ureq::Request, operation: &str) -> io::Result<ureq::Response> {
+    pub(super) fn mutation(
+        &self,
+        request: ureq::Request,
+        operation: &str,
+    ) -> io::Result<ureq::Response> {
         let response = self.auth_req(request).call().map_err(request_err)?;
         let status = response.status();
         if !(200..300).contains(&status) || status == 207 {
@@ -221,7 +243,9 @@ impl WebdavBackend {
 }
 
 impl Backend for WebdavBackend {
-    fn extensions(&self) -> Option<&dyn crate::vfs::BackendExtensions> { Some(self) }
+    fn extensions(&self) -> Option<&dyn crate::vfs::BackendExtensions> {
+        Some(self)
+    }
     fn scheme(&self) -> Scheme {
         Scheme::Webdav
     }
@@ -241,14 +265,18 @@ impl Backend for WebdavBackend {
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
         let xml = self.propfind(path, "1")?;
         let entries = parse_multistatus(&xml, path)?;
-        if entries.iter().any(|entry| entry.content_md5.is_some()) { self.hashes_observed.store(true, Ordering::Relaxed); }
+        if entries.iter().any(|entry| entry.content_md5.is_some()) {
+            self.hashes_observed.store(true, Ordering::Relaxed);
+        }
         Ok(entries)
     }
 
     fn stat(&self, path: &str) -> VfsResult<VfsMeta> {
         let xml = self.propfind(path, "0")?;
         let (meta, _) = super::metadata::parse(&xml, path)?;
-        if meta.content_md5.is_some() { self.hashes_observed.store(true, Ordering::Relaxed); }
+        if meta.content_md5.is_some() {
+            self.hashes_observed.store(true, Ordering::Relaxed);
+        }
         Ok(meta)
     }
 
@@ -356,7 +384,9 @@ impl Backend for WebdavBackend {
             self.mutation_agent.request("DELETE", &self.url_for(path)),
             "DELETE",
         )?;
-        if let Ok(mut times) = self.stage_times.lock() { times.remove(path); }
+        if let Ok(mut times) = self.stage_times.lock() {
+            times.remove(path);
+        }
         Ok(())
     }
 

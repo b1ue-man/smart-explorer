@@ -143,7 +143,11 @@ impl ShareIrohNode {
         };
         let mut builder = Endpoint::builder(presets::Minimal)
             .secret_key(identity.iroh_secret.clone())
-            .alpns(vec![ALPN.to_vec(), EXEC_ALPN.to_vec(), super::lan_link_wire::LAN_LINK_ALPN.to_vec()])
+            .alpns(vec![
+                ALPN.to_vec(),
+                EXEC_ALPN.to_vec(),
+                super::lan_link_wire::LAN_LINK_ALPN.to_vec(),
+            ])
             .relay_mode(relay_mode)
             .transport_config(iroh_transport_config());
         if let Some(config) = transport_options.ca_tls_config() {
@@ -338,12 +342,20 @@ impl ShareIrohNode {
         }
         let local_addr = self.routes.current(&self.endpoint);
         let addr = endpoint_addr(&endpoint.presence, &local_addr, &self.transport_options)?;
-        let generation = self.policy.snapshot(super::session::PeerPrincipal::from_endpoint(endpoint))?;
+        let generation = self
+            .policy
+            .snapshot(super::session::PeerPrincipal::from_endpoint(endpoint))?;
         let connection = self.block_on(io_deadline::run("peer exec connection", async {
-            self.endpoint.connect(addr, EXEC_ALPN).await.map_err(io_deadline::disconnected)
+            self.endpoint
+                .connect(addr, EXEC_ALPN)
+                .await
+                .map_err(io_deadline::disconnected)
         }))?;
         if let Err(error) = self.policy.bind(&connection, generation) {
-            connection.close(VarInt::from_u32(0x5345), b"authorization changed during handshake");
+            connection.close(
+                VarInt::from_u32(0x5345),
+                b"authorization changed during handshake",
+            );
             return Err(error);
         }
         Ok(connection)
@@ -425,7 +437,9 @@ impl Drop for IncomingConnectionGuard {
     fn drop(&mut self) {
         if let Some(node) = self.node.upgrade() {
             if let Ok(mut sessions) = node.incoming_sessions.lock() {
-                if let Some(entry) = sessions.remove(&self.id) { node.policy.unbind(entry.connection.stable_id()); }
+                if let Some(entry) = sessions.remove(&self.id) {
+                    node.policy.unbind(entry.connection.stable_id());
+                }
             };
         }
     }

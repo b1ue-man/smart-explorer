@@ -111,16 +111,25 @@ pub fn resolve_recorded(
     let endpoints = super::incremental::SyncEndpoints::new(a, root_a, b, root_b);
     super::single_recorded::validate_state(endpoints, state)?;
     let keys = super::orchestration_plan::keys(endpoints);
-    if super::merge_resume::pending_merge_relatives(&lock, state)?.iter()
-        .any(|rel| keys.key(rel) == keys.key(&conflict.rel)) {
-        return Err(io::Error::new(io::ErrorKind::WouldBlock,
-            "Dieser Pfad hat eine unbeendete Merge-Auflösung; denselben Merge erneut bestätigen"));
+    if super::merge_resume::pending_merge_relatives(&lock, state)?
+        .iter()
+        .any(|rel| keys.key(rel) == keys.key(&conflict.rel))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "Dieser Pfad hat eine unbeendete Merge-Auflösung; denselben Merge erneut bestätigen",
+        ));
     }
     if conflict.duplicates.is_none() {
         if variant_id.is_some() {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "Dieser Konflikt hat keine auswählbare Datei-ID"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Dieser Konflikt hat keine auswählbare Datei-ID",
+            ));
         }
-        return resolve_single_recorded(endpoints, &lock, conflict, keep_a, state, cancel, progress);
+        return resolve_single_recorded(
+            endpoints, &lock, conflict, keep_a, state, cancel, progress,
+        );
     }
     let signatures = resolve_variant_checked(
         a,
@@ -134,17 +143,28 @@ pub fn resolve_recorded(
         cancel,
         progress,
     )?;
-    super::replica_state::merge_with_keys(&lock, state, &[(conflict.rel.clone(), signatures)],
-        super::orchestration_plan::keys(endpoints))?;
+    super::replica_state::merge_with_keys(
+        &lock,
+        state,
+        &[(conflict.rel.clone(), signatures)],
+        super::orchestration_plan::keys(endpoints),
+    )?;
     Ok(signatures)
 }
 
 #[allow(clippy::too_many_arguments)]
 fn resolve_single_recorded(
-    endpoints: super::incremental::SyncEndpoints<'_>, lock: &PairLock, conflict: &Conflict,
-    keep_a: bool, state: &StateKey, cancel: &AtomicBool, mut progress: impl FnMut(ResolvePhase),
+    endpoints: super::incremental::SyncEndpoints<'_>,
+    lock: &PairLock,
+    conflict: &Conflict,
+    keep_a: bool,
+    state: &StateKey,
+    cancel: &AtomicBool,
+    mut progress: impl FnMut(ResolvePhase),
 ) -> io::Result<(Option<Sig>, Option<Sig>)> {
-    if cancel.load(Ordering::Acquire) { return Err(interrupted()); }
+    if cancel.load(Ordering::Acquire) {
+        return Err(interrupted());
+    }
     progress(ResolvePhase::Preparing);
     let keys = super::orchestration_plan::keys(endpoints);
     let names = super::state_spellings::load(state, keys)?;
@@ -158,18 +178,41 @@ fn resolve_single_recorded(
         (true, None, Some(_)) => Action::DeleteB(conflict.rel.clone()),
         (false, Some(_), None) => Action::DeleteA(conflict.rel.clone()),
         (_, None, None) => {
-            capture(endpoints.a, &join(endpoints.root_a, spellings.side_rel(&conflict.rel, PairSide::A)),
-                ExpectedFile::Missing, "conflict side A")?;
-            capture(endpoints.b, &join(endpoints.root_b, spellings.side_rel(&conflict.rel, PairSide::B)),
-                ExpectedFile::Missing, "conflict side B")?;
-            super::replica_state::merge_with_keys(lock, state, &[(conflict.rel.clone(), (None, None))], keys)?;
+            capture(
+                endpoints.a,
+                &join(
+                    endpoints.root_a,
+                    spellings.side_rel(&conflict.rel, PairSide::A),
+                ),
+                ExpectedFile::Missing,
+                "conflict side A",
+            )?;
+            capture(
+                endpoints.b,
+                &join(
+                    endpoints.root_b,
+                    spellings.side_rel(&conflict.rel, PairSide::B),
+                ),
+                ExpectedFile::Missing,
+                "conflict side B",
+            )?;
+            super::replica_state::merge_with_keys(
+                lock,
+                state,
+                &[(conflict.rel.clone(), (None, None))],
+                keys,
+            )?;
             return Ok((None, None));
         }
     };
     progress(ResolvePhase::BackingUp);
-    progress(if matches!(action, Action::DeleteA(_) | Action::DeleteB(_)) {
-        ResolvePhase::Deleting
-    } else { ResolvePhase::Copying });
+    progress(
+        if matches!(action, Action::DeleteA(_) | Action::DeleteB(_)) {
+            ResolvePhase::Deleting
+        } else {
+            ResolvePhase::Copying
+        },
+    );
     let mut opts = match &state.owner {
         super::StateOwner::Job(id) => crate::syncjobs::recorded_options(id)?,
         super::StateOwner::AdHoc => BisyncOptions::default(),
@@ -179,8 +222,16 @@ fn resolve_single_recorded(
     opts.direction = super::Direction::Both;
     opts.move_files = false;
     opts.reversible = true;
-    let (_, entry) = super::single_recorded::apply_one(endpoints, lock, state, &action,
-        (conflict.a, conflict.b), &spellings, opts, cancel)?;
+    let (_, entry) = super::single_recorded::apply_one(
+        endpoints,
+        lock,
+        state,
+        &action,
+        (conflict.a, conflict.b),
+        &spellings,
+        opts,
+        cancel,
+    )?;
     progress(ResolvePhase::ReadingSignatures);
     Ok(entry)
 }
@@ -311,10 +362,12 @@ fn destination_expected_is_present(expected: ExpectedFile) -> bool {
 
 fn sig_of(backend: &dyn Backend, path: &str) -> io::Result<Option<Sig>> {
     match backend.stat(path) {
-        Ok(metadata) if metadata.is_dir || metadata.is_symlink || metadata.special => Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("resolved conflict is not a regular file: {path}"),
-        )),
+        Ok(metadata) if metadata.is_dir || metadata.is_symlink || metadata.special => {
+            Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("resolved conflict is not a regular file: {path}"),
+            ))
+        }
         Ok(metadata) => Ok(Some(Sig {
             size: metadata.size,
             mtime_ms: metadata.mtime_ms,

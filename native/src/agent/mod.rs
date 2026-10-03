@@ -9,10 +9,10 @@
 
 #[path = "core/agent_error.rs"]
 mod agent_error;
-#[path = "core/backend.rs"]
-mod backend;
 #[path = "core/analysis.rs"]
 mod analysis;
+#[path = "core/backend.rs"]
+mod backend;
 #[path = "core/batch_get.rs"]
 mod batch_get;
 #[path = "core/batch_put.rs"]

@@ -22,21 +22,34 @@ pub struct LanProof {
 }
 
 pub(crate) fn rotating_id(node: &str, secret: &[u8], epoch: i64) -> Option<String> {
-    if secret.len() != 32 || node.is_empty() || epoch < 0 { return None; }
+    if secret.len() != 32 || node.is_empty() || epoch < 0 {
+        return None;
+    }
     let mut mac = Hmac::<Sha256>::new_from_slice(secret).ok()?;
     mac.update(b"smart-explorer/lan-private-id/v2\0");
     mac.update(&(node.len() as u64).to_be_bytes());
     mac.update(node.as_bytes());
     mac.update(&epoch.to_be_bytes());
     let digest = mac.finalize().into_bytes();
-    Some(digest[..16].iter().map(|byte| format!("{byte:02x}")).collect())
+    Some(
+        digest[..16]
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect(),
+    )
 }
 
 pub(crate) fn make_proof(
-    sighting: &LanSighting, epoch: i64, expires_at: i64, signing_key: &iroh::SecretKey,
+    sighting: &LanSighting,
+    epoch: i64,
+    expires_at: i64,
+    signing_key: &iroh::SecretKey,
 ) -> LanProof {
     let mut proof = LanProof {
-        epoch, expires_at, addresses: sighting.addrs.clone(), signature: String::new(),
+        epoch,
+        expires_at,
+        addresses: sighting.addrs.clone(),
+        signature: String::new(),
     };
     proof.addresses.sort();
     proof.addresses.dedup();
@@ -46,16 +59,28 @@ pub(crate) fn make_proof(
 }
 
 pub(crate) fn verify_sighting(
-    sighting: &LanSighting, proof: &LanProof, pinned_node: &str, secret: &[u8], now: i64,
+    sighting: &LanSighting,
+    proof: &LanProof,
+    pinned_node: &str,
+    secret: &[u8],
+    now: i64,
 ) -> bool {
     let epoch = now.div_euclid(ID_EPOCH_SECS);
-    if proof.epoch < epoch.saturating_sub(1) || proof.epoch > epoch.saturating_add(1)
+    if proof.epoch < epoch.saturating_sub(1)
+        || proof.epoch > epoch.saturating_add(1)
         || proof.expires_at < now
         || proof.expires_at > now.saturating_add(PROOF_LIFETIME_SECS + 30)
-        || proof.addresses.is_empty() || proof.addresses.len() > MAX_ADDRESSES
-        || proof.addresses.iter().any(|ip| ip.is_loopback() || ip.is_unspecified() || ip.is_multicast())
+        || proof.addresses.is_empty()
+        || proof.addresses.len() > MAX_ADDRESSES
+        || proof
+            .addresses
+            .iter()
+            .any(|ip| ip.is_loopback() || ip.is_unspecified() || ip.is_multicast())
         || sighting.addrs.is_empty()
-        || sighting.addrs.iter().any(|ip| !proof.addresses.contains(ip))
+        || sighting
+            .addrs
+            .iter()
+            .any(|ip| !proof.addresses.contains(ip))
         || rotating_id(pinned_node, secret, proof.epoch).as_deref() != Some(sighting.id.as_str())
     {
         return false;
@@ -75,8 +100,14 @@ fn payload(sighting: &LanSighting, proof: &LanProof) -> Vec<u8> {
     bytes.extend_from_slice(&(proof.addresses.len() as u64).to_be_bytes());
     for address in &proof.addresses {
         match address {
-            IpAddr::V4(ip) => { bytes.push(4); bytes.extend_from_slice(&ip.octets()); },
-            IpAddr::V6(ip) => { bytes.push(6); bytes.extend_from_slice(&ip.octets()); },
+            IpAddr::V4(ip) => {
+                bytes.push(4);
+                bytes.extend_from_slice(&ip.octets());
+            }
+            IpAddr::V6(ip) => {
+                bytes.push(6);
+                bytes.extend_from_slice(&ip.octets());
+            }
         }
     }
     bytes
@@ -96,7 +127,10 @@ mod tests {
         let mut sighting = LanSighting {
             id: rotating_id(&node, &secret, epoch).unwrap(),
             addrs: vec!["192.168.4.2".parse().unwrap()],
-            p4: 51820, p6: 0, uplink: false, seen_at: now,
+            p4: 51820,
+            p6: 0,
+            uplink: false,
+            seen_at: now,
         };
         assert_ne!(sighting.id, rotating_id(&node, &secret, epoch + 1).unwrap());
         assert_ne!(sighting.id, rotating_id(&node, &[8; 32], epoch).unwrap());
@@ -108,6 +142,12 @@ mod tests {
         sighting.addrs = vec!["192.168.5.2".parse().unwrap()];
         assert!(!verify_sighting(&sighting, &proof, &node, &secret, now));
         sighting.addrs = proof.addresses.clone();
-        assert!(!verify_sighting(&sighting, &proof, &node, &secret, now + PROOF_LIFETIME_SECS + 1));
+        assert!(!verify_sighting(
+            &sighting,
+            &proof,
+            &node,
+            &secret,
+            now + PROOF_LIFETIME_SECS + 1
+        ));
     }
 }

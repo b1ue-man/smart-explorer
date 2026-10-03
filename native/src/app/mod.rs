@@ -222,8 +222,6 @@ mod shell_commands;
 mod shell_toolbar;
 #[path = "core/shutdown.rs"]
 mod shutdown;
-#[path = "os/shared/sync_exit_gate.rs"]
-mod sync_exit_gate;
 #[path = "core/sidebar.rs"]
 mod sidebar;
 #[path = "core/sidebar_locations.rs"]
@@ -236,33 +234,35 @@ mod status_errors;
 mod support_paths;
 #[path = "core/sync_core.rs"]
 mod sync_core;
-#[path = "core/sync_run_state.rs"]
-mod sync_run_state;
-#[path = "os/shared/sync_manual_run.rs"]
-mod sync_manual_run;
-#[path = "core/sync_merge_types.rs"]
-mod sync_merge_types;
-#[path = "os/shared/sync_merge_task.rs"]
-mod sync_merge_task;
-#[path = "core/sync_preview_types.rs"]
-mod sync_preview_types;
+#[path = "os/shared/sync_exit_gate.rs"]
+mod sync_exit_gate;
 #[path = "core/sync_job_state_ui.rs"]
 mod sync_job_state_ui;
-#[path = "core/sync_versions_ui.rs"]
-mod sync_versions_ui;
-#[path = "os/shared/sync_versions_task.rs"]
-mod sync_versions_task;
 #[path = "os/shared/sync_jobs.rs"]
 mod sync_jobs;
 #[cfg(test)]
 #[path = "os/shared/sync_links_task_tests.rs"]
 mod sync_links_task_tests;
+#[path = "os/shared/sync_manual_run.rs"]
+mod sync_manual_run;
+#[path = "os/shared/sync_merge_task.rs"]
+mod sync_merge_task;
+#[path = "core/sync_merge_types.rs"]
+mod sync_merge_types;
 #[cfg(test)]
 #[path = "os/shared/sync_paths_task_fixture.rs"]
 mod sync_paths_task_fixture;
 #[cfg(test)]
 #[path = "os/shared/sync_paths_task_tests.rs"]
 mod sync_paths_task_tests;
+#[path = "core/sync_preview_types.rs"]
+mod sync_preview_types;
+#[path = "core/sync_run_state.rs"]
+mod sync_run_state;
+#[path = "os/shared/sync_versions_task.rs"]
+mod sync_versions_task;
+#[path = "core/sync_versions_ui.rs"]
+mod sync_versions_ui;
 #[path = "core/table.rs"]
 mod table;
 #[path = "core/table_accessibility.rs"]

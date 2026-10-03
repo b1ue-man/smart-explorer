@@ -4,12 +4,21 @@ use super::{aggregate_name, Progress, SizeNode};
 /// Keep exact subtree sizes while fitting the receiver's node budget. The
 /// scanner's shared budget bounds the initial tree; this pass accounts for
 /// aggregate nodes and container roots, which also consume receiver memory.
-pub(crate) fn fit_tree(node: &mut SizeNode, limit: u64, progress: &Progress) -> std::io::Result<u64> {
+pub(crate) fn fit_tree(
+    node: &mut SizeNode,
+    limit: u64,
+    progress: &Progress,
+) -> std::io::Result<u64> {
     progress.check_cancel()?;
     if limit == 0 || (limit == 1 && !node.children.is_empty()) {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Knotenbudget kann Wurzel und Aggregat nicht halten"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Knotenbudget kann Wurzel und Aggregat nicht halten",
+        ));
     }
-    if node.children.is_empty() { return Ok(1); }
+    if node.children.is_empty() {
+        return Ok(1);
+    }
     let children = std::mem::take(&mut node.children);
     let total = children.len();
     let mut used = 1u64;
@@ -46,16 +55,28 @@ mod tests {
     #[test]
     fn review_task_receiver_budget_includes_aggregate_nodes() -> std::io::Result<()> {
         let mut root = SizeNode {
-            name: "/".into(), size: 100, is_dir: true,
-            children: (0..100).map(|index| SizeNode {
-                name: format!("file-{index}").into_boxed_str(), size: 1,
-                is_dir: false, children: Vec::new(),
-            }).collect(),
+            name: "/".into(),
+            size: 100,
+            is_dir: true,
+            children: (0..100)
+                .map(|index| SizeNode {
+                    name: format!("file-{index}").into_boxed_str(),
+                    size: 1,
+                    is_dir: false,
+                    children: Vec::new(),
+                })
+                .collect(),
         };
         let progress = Progress::default();
         assert_eq!(fit_tree(&mut root, 4, &progress)?, 4);
-        assert_eq!(root.children.iter().map(|child| child.size).sum::<u64>(), 100);
-        assert_eq!(super::super::tree_transfer::shape(Some(&root), &progress)?.nodes, 4);
+        assert_eq!(
+            root.children.iter().map(|child| child.size).sum::<u64>(),
+            100
+        );
+        assert_eq!(
+            super::super::tree_transfer::shape(Some(&root), &progress)?.nodes,
+            4
+        );
         Ok(())
     }
 }

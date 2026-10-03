@@ -23,7 +23,7 @@ const MAX_OPEN_RUNS: usize = 32;
 
 #[path = "catch_up_types.rs"]
 mod types;
-pub use types::{CatchUpSkip, CatchUpStatus, CatchUpRecord};
+pub use types::{CatchUpRecord, CatchUpSkip, CatchUpStatus};
 /// Whether scheduled work may run right now; `Closed` ends open runs at once.
 pub(super) enum CatchUpGate {
     Open,
@@ -36,9 +36,15 @@ pub(super) trait CatchUpQueue {
     fn cancel_jobs(&mut self, ids: &HashSet<String>);
     fn take_completed(&mut self) -> Vec<String>;
     fn active_job_id(&self) -> Option<&str>;
-    fn completion(&mut self, _id: &str) -> (AttemptOutcome, bool) { (AttemptOutcome::Success, true) }
-    fn active_ids(&self) -> Vec<&str> { self.active_job_id().into_iter().collect() }
-    fn eligible(&self, job: &SyncJob, now: i64) -> bool { catch_up_due(job, now) }
+    fn completion(&mut self, _id: &str) -> (AttemptOutcome, bool) {
+        (AttemptOutcome::Success, true)
+    }
+    fn active_ids(&self) -> Vec<&str> {
+        self.active_job_id().into_iter().collect()
+    }
+    fn eligible(&self, job: &SyncJob, now: i64) -> bool {
+        catch_up_due(job, now)
+    }
 }
 
 impl CatchUpQueue for JobSupervisor {
@@ -60,32 +66,56 @@ impl CatchUpQueue for JobSupervisor {
     fn active_job_id(&self) -> Option<&str> {
         JobSupervisor::active_job_id(self)
     }
-    fn completion(&mut self, id: &str) -> (AttemptOutcome, bool) { JobSupervisor::completion(self, id) }
-    fn active_ids(&self) -> Vec<&str> { JobSupervisor::active_ids(self) }
+    fn completion(&mut self, id: &str) -> (AttemptOutcome, bool) {
+        JobSupervisor::completion(self, id)
+    }
+    fn active_ids(&self) -> Vec<&str> {
+        JobSupervisor::active_ids(self)
+    }
     fn eligible(&self, job: &SyncJob, now: i64) -> bool {
-        let Ok(state) = crate::syncjobs::load_job_state(&job.id) else { return false; };
+        let Ok(state) = crate::syncjobs::load_job_state(&job.id) else {
+            return false;
+        };
         catch_up_cause(job, &state, now).is_some()
     }
-
 }
 
 fn catch_up_cause(job: &SyncJob, state: &JobState, now: i64) -> Option<RunCause> {
-    if !job.enabled || !job.active_now(now) || state.load_error.is_some()
-        || state.running_now(now).is_some_and(|mark| mark.runner != crate::syncjobs::Runner::Daemon) { return None; }
+    if !job.enabled
+        || !job.active_now(now)
+        || state.load_error.is_some()
+        || state
+            .running_now(now)
+            .is_some_and(|mark| mark.runner != crate::syncjobs::Runner::Daemon)
+    {
+        return None;
+    }
     // A host-deferred worker also handles its durable startup/volume triggers
     // in this window. They must keep their actual cause, especially volume
     // identity, confirmation and failure backoff.
     if let Some(cause) = super::due::due_now(job, state, now, None) {
-        return Some(if matches!(cause, RunCause::Interval | RunCause::Calendar | RunCause::Change | RunCause::Poll) {
-            RunCause::CatchUp
-        } else { cause });
+        return Some(
+            if matches!(
+                cause,
+                RunCause::Interval | RunCause::Calendar | RunCause::Change | RunCause::Poll
+            ) {
+                RunCause::CatchUp
+            } else {
+                cause
+            },
+        );
     }
-    if state.blocked.is_some() || state.consecutive_failures > 0 { return None; }
+    if state.blocked.is_some() || state.consecutive_failures > 0 {
+        return None;
+    }
     match job.trigger {
         Trigger::RealTime => Some(RunCause::CatchUp),
         Trigger::Interval | Trigger::Calendar => {
-            let mut missed = job.clone(); missed.catch_up = true;
-            missed.due_at(super::due::anchor(job, state, now), now, None).then_some(RunCause::CatchUp)
+            let mut missed = job.clone();
+            missed.catch_up = true;
+            missed
+                .due_at(super::due::anchor(job, state, now), now, None)
+                .then_some(RunCause::CatchUp)
         }
         _ => None,
     }
@@ -178,10 +208,21 @@ impl Run {
         report.finished.push((self.id, message.clone()));
         let ran = self.admitted.iter().filter(|job| job.ran).count();
         if ran > 0 && self.cancel == Cancel::None && self.admitted.iter().all(|job| job.done) {
-            report.records.push(CatchUpRecord { finished_ms: super::state::now_secs().saturating_mul(1000), ran,
-                succeeded: self.admitted.iter().filter(|job| job.ran && matches!(job.outcome, Some(AttemptOutcome::Success))).count(),
-                failed: self.admitted.iter().filter(|job| matches!(job.outcome, Some(AttemptOutcome::Failed(_)))).count(),
-                message: message.clone() });
+            report.records.push(CatchUpRecord {
+                finished_ms: super::state::now_secs().saturating_mul(1000),
+                ran,
+                succeeded: self
+                    .admitted
+                    .iter()
+                    .filter(|job| job.ran && matches!(job.outcome, Some(AttemptOutcome::Success)))
+                    .count(),
+                failed: self
+                    .admitted
+                    .iter()
+                    .filter(|job| matches!(job.outcome, Some(AttemptOutcome::Failed(_))))
+                    .count(),
+                message: message.clone(),
+            });
         }
         self.message = Some(message);
     }
@@ -194,9 +235,15 @@ impl Run {
             message: self.message.clone(),
             admitted: self.admitted.len(),
             skipped: self.skipped.clone(),
-            failed: self.admitted.iter().filter(|job| matches!(job.outcome, Some(AttemptOutcome::Failed(_)))).count(),
-            retry_suggested: self.admitted.iter().any(|job| matches!(job.outcome.as_ref(),
-                Some(AttemptOutcome::Failed(error)) if !error.kind.needs_user())) ,
+            failed: self
+                .admitted
+                .iter()
+                .filter(|job| matches!(job.outcome, Some(AttemptOutcome::Failed(_))))
+                .count(),
+            retry_suggested: self.admitted.iter().any(|job| {
+                matches!(job.outcome.as_ref(),
+                Some(AttemptOutcome::Failed(error)) if !error.kind.needs_user())
+            }),
         }
     }
 }
@@ -399,7 +446,9 @@ fn start_run(
                 id: job.id.clone(),
                 name,
                 done: false,
-                owned, outcome: None, ran: false,
+                owned,
+                outcome: None,
+                ran: false,
             }),
             Err(reason) => run.skipped.push(CatchUpSkip {
                 job_id: job.id.clone(),
@@ -421,16 +470,21 @@ fn update_progress(run: &mut Run, active: &[String], report: &mut ServiceReport)
         .find(|job| !job.done && active.contains(&job.id));
     run.running_job = running.map(|job| job.name.clone());
     let undone = run.admitted.iter().filter(|job| !job.done).count();
-    run.queued = undone - run.admitted.iter().filter(|job| !job.done && active.contains(&job.id)).count();
+    run.queued = undone
+        - run
+            .admitted
+            .iter()
+            .filter(|job| !job.done && active.contains(&job.id))
+            .count();
     if undone == 0 {
-        let message = run
-            .message
-            .clone()
-            .unwrap_or_else(|| {
-                let ran = run.admitted.iter().filter(|job| job.ran).count();
-                if ran == 0 && !run.admitted.is_empty() { "Kein Sync-Lauf abgeschlossen".into() }
-                else { summary(ran, run.skipped.len()) }
-            });
+        let message = run.message.clone().unwrap_or_else(|| {
+            let ran = run.admitted.iter().filter(|job| job.ran).count();
+            if ran == 0 && !run.admitted.is_empty() {
+                "Kein Sync-Lauf abgeschlossen".into()
+            } else {
+                summary(ran, run.skipped.len())
+            }
+        });
         run.finish(message, report);
     }
 }

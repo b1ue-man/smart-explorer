@@ -54,13 +54,15 @@ impl ShareIrohNode {
         }
         let deadline = Instant::now() + io_deadline::PEER_OP_TIMEOUT;
         let key = session_key(endpoint);
-        let generation = match self.policy.snapshot(super::session::PeerPrincipal::from_endpoint(endpoint)) {
+        let generation = match self
+            .policy
+            .snapshot(super::session::PeerPrincipal::from_endpoint(endpoint))
+        {
             Ok(generation) => generation,
             Err(_) => return DirectReciprocalTransportResult::Transient,
         };
         let connection =
-            match self.session_connection_until(&key, endpoint, identity, &generation, deadline)
-            {
+            match self.session_connection_until(&key, endpoint, identity, &generation, deadline) {
                 Ok(connection) => connection,
                 Err(error) => return classify_repair_setup_io(&error),
             };
@@ -118,10 +120,7 @@ impl ShareIrohNode {
             tokio::time::timeout(
                 timeout,
                 super::direct_reciprocal_transport::run_outgoing(
-                    connection,
-                    authorized,
-                    store,
-                    gate,
+                    connection, authorized, store, gate,
                 ),
             )
             .await
@@ -151,7 +150,9 @@ impl ShareIrohNode {
     ) -> io::Result<OpenedPeerStream> {
         self.require_sharing_active()?;
         let key = session_key(endpoint);
-        let generation = self.policy.snapshot(super::session::PeerPrincipal::from_endpoint(endpoint))?;
+        let generation = self
+            .policy
+            .snapshot(super::session::PeerPrincipal::from_endpoint(endpoint))?;
         let connection =
             self.session_connection_until(&key, endpoint, identity, &generation, deadline)?;
         match self.open_on_connection(&key, &connection, deadline, "peer stream open") {
@@ -160,13 +161,8 @@ impl ShareIrohNode {
                 // No operation payload was sent yet. Replacing the failed
                 // physical connection here cannot replay a mutation.
                 self.invalidate_outgoing_session(&key, connection.stable_id())?;
-                let replacement = self.session_connection_until(
-                    &key,
-                    endpoint,
-                    identity,
-                    &generation,
-                    deadline,
-                )?;
+                let replacement =
+                    self.session_connection_until(&key, endpoint, identity, &generation, deadline)?;
                 self.open_on_connection(&key, &replacement, deadline, "peer stream reopen")
             }
         }
@@ -306,7 +302,10 @@ impl ShareIrohNode {
             .lock()
             .map_err(|_| eio("Ausgehende Share-Sessions sind gesperrt"))?;
         if let Err(error) = self.policy.bind(&connection, generation) {
-            connection.close(VarInt::from_u32(0x5345), b"authorization changed during handshake");
+            connection.close(
+                VarInt::from_u32(0x5345),
+                b"authorization changed during handshake",
+            );
             return Err(error);
         }
         sessions.insert(key, connection);

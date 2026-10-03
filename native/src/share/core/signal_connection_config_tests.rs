@@ -118,8 +118,10 @@ fn review_task_certificate_pin_is_parsed_and_kept() {
     assert!(SignalServerConfig::parse_input("wss://h#sha256=abcd", false).is_err());
     assert!(SignalServerConfig::parse_input("wss://h#insecure", false).is_err());
     assert!(SignalServerConfig::parse_input(
-        &format!("wss://h#sha256={PIN_HEX}&sha256={PIN_HEX}"), false
-    ).is_err());
+        &format!("wss://h#sha256={PIN_HEX}&sha256={PIN_HEX}"),
+        false
+    )
+    .is_err());
 }
 
 #[test]

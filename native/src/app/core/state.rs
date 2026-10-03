@@ -372,7 +372,8 @@ pub struct App {
     /// Result channel for a single-file "sync this one" from the compare view.
     /// The action is returned with the outcome so it is removed from the
     /// preview only after the apply actually succeeded.
-    pub(in crate::app) apply_one_rx: Option<Receiver<super::sync_preview_types::PreviewApplyResult>>,
+    pub(in crate::app) apply_one_rx:
+        Option<Receiver<super::sync_preview_types::PreviewApplyResult>>,
     /// Cancel flags so a running mirror / two-way sync can be stopped.
     pub(in crate::app) sync_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     pub(in crate::app) bisync_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,

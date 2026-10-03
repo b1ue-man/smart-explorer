@@ -71,17 +71,24 @@ impl AnalysisReport {
             issue.path = super::progress::shorten_tail(&issue.path, 4096);
             issue.detail = super::progress::shorten_tail(&issue.detail, 4096);
         }
-        for note in &mut self.notes { *note = super::progress::shorten_tail(note, 4096); }
+        for note in &mut self.notes {
+            *note = super::progress::shorten_tail(note, 4096);
+        }
         loop {
             if serde_json::to_vec(self).map_err(io::Error::other)?.len() <= 512 * 1024 {
                 return Ok(());
             }
             if self.issues.pop().is_some() {
                 self.suppressed_issues = self.suppressed_issues.saturating_add(1);
-                if self.status == ScanStatus::Complete { self.status = ScanStatus::Partial; }
+                if self.status == ScanStatus::Complete {
+                    self.status = ScanStatus::Partial;
+                }
             } else if self.notes.pop().is_some() {
             } else {
-                return Err(io::Error::new(io::ErrorKind::InvalidData, "Geschützte Analyse-Metadaten passen nicht in das vereinbarte Format"));
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Geschützte Analyse-Metadaten passen nicht in das vereinbarte Format",
+                ));
             }
         }
     }
@@ -115,7 +122,8 @@ impl AnalysisReport {
             || self.issues.len() > 64
             || self.notes.len() > 16
             || diagnostic_bytes > 512 * 1024
-            || self.protected.len() > MAX_FIGURE_TEXT_BYTES / std::mem::size_of::<ProtectedOmission>()
+            || self.protected.len()
+                > MAX_FIGURE_TEXT_BYTES / std::mem::size_of::<ProtectedOmission>()
             || protected_bytes > MAX_FIGURE_TEXT_BYTES
             || platform_apps.len() > MAX_PLATFORM_APPS
             || platform_bytes > MAX_FIGURE_TEXT_BYTES

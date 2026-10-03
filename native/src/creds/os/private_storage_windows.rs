@@ -15,22 +15,38 @@ pub(crate) fn ensure_directory(path: &Path) -> io::Result<()> {
         Ok(metadata) => {
             use std::os::windows::fs::MetadataExt;
             if !metadata.is_dir() || metadata.file_attributes() & 0x400 != 0 {
-                return Err(io::Error::new(io::ErrorKind::PermissionDenied,
-                    "private directory must not be a reparse point"));
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "private directory must not be a reparse point",
+                ));
             }
             crate::local_access::DirectoryHandle::open_root(path)?.secure_private()
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            let parent = path.parent().filter(|parent| !parent.as_os_str().is_empty())
-                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput,
-                    "private directory needs a parent"))?;
-            if !parent.exists() { ensure_directory(parent)?; }
-            let name = path.file_name().ok_or_else(|| io::Error::new(
-                io::ErrorKind::InvalidInput, "private directory needs a name"))?;
+            let parent = path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "private directory needs a parent",
+                    )
+                })?;
+            if !parent.exists() {
+                ensure_directory(parent)?;
+            }
+            let name = path.file_name().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "private directory needs a name",
+                )
+            })?;
             let root = crate::local_access::DirectoryHandle::open_root(parent)?;
             match root.create_private_child(name) {
                 Ok(_) => Ok(()),
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => ensure_directory(path),
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                    ensure_directory(path)
+                }
                 Err(error) => Err(error),
             }
         }
@@ -39,10 +55,12 @@ pub(crate) fn ensure_directory(path: &Path) -> io::Result<()> {
 }
 
 pub(crate) fn create_file(path: &Path) -> io::Result<File> {
-    let parent = path.parent().ok_or_else(|| io::Error::new(
-        io::ErrorKind::InvalidInput, "private file needs a parent"))?;
-    let name = path.file_name().ok_or_else(|| io::Error::new(
-        io::ErrorKind::InvalidInput, "private file needs a name"))?;
+    let parent = path.parent().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidInput, "private file needs a parent")
+    })?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "private file needs a name"))?;
     ensure_directory(parent)?;
     let root = crate::local_access::DirectoryHandle::open_root(parent)?;
     root.secure_private()?;
@@ -50,12 +68,22 @@ pub(crate) fn create_file(path: &Path) -> io::Result<File> {
 }
 
 pub(crate) fn open_file(path: &Path, writable: bool) -> io::Result<File> {
-    let parent = path.parent().ok_or_else(|| io::Error::other("private file needs a parent"))?;
-    let name = path.file_name().ok_or_else(|| io::Error::other("private file needs a name"))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::other("private file needs a parent"))?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| io::Error::other("private file needs a name"))?;
     let root = crate::local_access::DirectoryHandle::open_root(parent)?;
     root.secure_private()?;
-    let physical = root.watch_path().ok_or_else(|| io::Error::other("private parent has no pinned path"))?.join(name);
-    let access = GENERIC_READ | FILE_READ_ATTRIBUTES | READ_CONTROL | WRITE_DAC
+    let physical = root
+        .watch_path()
+        .ok_or_else(|| io::Error::other("private parent has no pinned path"))?
+        .join(name);
+    let access = GENERIC_READ
+        | FILE_READ_ATTRIBUTES
+        | READ_CONTROL
+        | WRITE_DAC
         | if writable { GENERIC_WRITE } else { 0 };
     let file = OpenOptions::new()
         .access_mode(access)

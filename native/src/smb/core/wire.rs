@@ -199,11 +199,17 @@ pub(super) fn ends_listing(status: NtStatus, first_query: bool) -> bool {
 /// the entries keep their own reparse attribute.
 pub(super) async fn list(conn: &Connection, tree: &Tree, rel: &str) -> smb2::Result<Vec<VfsMeta>> {
     let listing = list_tolerant(conn, tree, rel).await?;
-    if !listing.omitted.is_empty() { return Err(Error::invalid_data("SMB listing has protected omissions")) }
+    if !listing.omitted.is_empty() {
+        return Err(Error::invalid_data("SMB listing has protected omissions"));
+    }
     Ok(listing.entries)
 }
 
-pub(super) async fn list_tolerant(conn: &Connection, tree: &Tree, rel: &str) -> smb2::Result<VfsListing> {
+pub(super) async fn list_tolerant(
+    conn: &Connection,
+    tree: &Tree,
+    rel: &str,
+) -> smb2::Result<VfsListing> {
     let open = open_request(
         tree,
         rel,
@@ -258,11 +264,18 @@ async fn query_all(conn: &Connection, tree: &Tree, file_id: FileId) -> smb2::Res
         if response.output_buffer.is_empty() {
             return Ok(entries);
         }
-        let page = listing::parse_directory_info_tolerant(&response.output_buffer).map_err(Error::invalid_data)?;
-        for name in page.entries.iter().map(|entry| &entry.name)
-            .chain(page.omitted.iter().map(|omission| &omission.rel)) {
+        let page = listing::parse_directory_info_tolerant(&response.output_buffer)
+            .map_err(Error::invalid_data)?;
+        for name in page
+            .entries
+            .iter()
+            .map(|entry| &entry.name)
+            .chain(page.omitted.iter().map(|omission| &omission.rel))
+        {
             if !names.insert(name.clone()) {
-                return Err(Error::invalid_data("SMB listing repeated or lossily collided on a child name"));
+                return Err(Error::invalid_data(
+                    "SMB listing repeated or lossily collided on a child name",
+                ));
             }
         }
         entries.entries.extend(page.entries);

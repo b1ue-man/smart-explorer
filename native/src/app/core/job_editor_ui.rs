@@ -1,6 +1,6 @@
-use crate::app::theme;
 use super::prelude::*;
 use super::*;
+use crate::app::theme;
 
 impl App {
     /// Add/edit dialog for a single sync setup (the "rich" setup menu: source,

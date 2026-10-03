@@ -113,12 +113,17 @@ fn flock_until(file: &File, deadline: Instant) -> io::Result<()> {
             return Ok(());
         }
         let error = io::Error::last_os_error();
-        if !matches!(error.kind(), io::ErrorKind::Interrupted | io::ErrorKind::WouldBlock) {
+        if !matches!(
+            error.kind(),
+            io::ErrorKind::Interrupted | io::ErrorKind::WouldBlock
+        ) {
             return Err(error);
         }
         let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
-            return Err(io::Error::new(io::ErrorKind::TimedOut,
-                "Share identity is busy; retry after the other operation finishes"));
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "Share identity is busy; retry after the other operation finishes",
+            ));
         };
         std::thread::sleep(remaining.min(Duration::from_millis(25)));
     }
@@ -225,8 +230,12 @@ mod tests {
         let held = acquire(&app).unwrap();
         let directory = open_lock_directory(&app).unwrap();
         let file = open_lock_file(&directory).unwrap();
-        assert_eq!(flock_until(&file, Instant::now() + Duration::from_millis(50))
-            .unwrap_err().kind(), io::ErrorKind::TimedOut);
+        assert_eq!(
+            flock_until(&file, Instant::now() + Duration::from_millis(50))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::TimedOut
+        );
         drop(held);
         flock_until(&file, Instant::now() + Duration::from_secs(1)).unwrap();
     }

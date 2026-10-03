@@ -14,10 +14,10 @@ const ACCEPT_BURST_PER_SOURCE: f64 = 32.0;
 const INBOUND_MESSAGES_PER_SECOND: f64 = 128.0;
 // Two full publish waves can follow immediately: initial state and usable
 // relay routes. A legacy wave may also request each watched Direct relation.
-const INBOUND_MESSAGE_BURST: f64 = (2 * (1
-    + super::limits::MAX_PUBLISHED_DIRECTS_PER_CLIENT
-    + 2 * super::limits::MAX_WATCHES_PER_CLIENT
-    + super::limits::MAX_ROOMS_PER_CLIENT)) as f64;
+const INBOUND_MESSAGE_BURST: f64 = (2
+    * (1 + super::limits::MAX_PUBLISHED_DIRECTS_PER_CLIENT
+        + 2 * super::limits::MAX_WATCHES_PER_CLIENT
+        + super::limits::MAX_ROOMS_PER_CLIENT)) as f64;
 const INBOUND_BYTES_PER_SECOND: f64 = (2 * 1024 * 1024) as f64;
 const INBOUND_BYTE_BURST: f64 = INBOUND_MESSAGE_BURST * (16 * 1024) as f64;
 

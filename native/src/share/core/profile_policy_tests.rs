@@ -1,15 +1,30 @@
-use crate::share::{DirectGrant, DirectGrantState, DirectPeerIdentity, ExportAccess,
-    ShareExportConfig, ShareProfiles};
+use crate::share::{
+    DirectGrant, DirectGrantState, DirectPeerIdentity, ExportAccess, ShareExportConfig,
+    ShareProfiles,
+};
 
 fn peer() -> DirectPeerIdentity {
-    DirectPeerIdentity { device_id: "d1".into(), device_name: "Peer".into(),
-        public_key: "key1".into(), node_id: "node1".into(), fingerprint: "fp1".into() }
+    DirectPeerIdentity {
+        device_id: "d1".into(),
+        device_name: "Peer".into(),
+        public_key: "key1".into(),
+        node_id: "node1".into(),
+        fingerprint: "fp1".into(),
+    }
 }
 fn grant() -> DirectGrant {
     let peer = peer();
-    DirectGrant { device_id: peer.device_id, device_name: peer.device_name, public_key: peer.public_key,
-        node_id: peer.node_id, fingerprint: peer.fingerprint, state: DirectGrantState::Accepted,
-        updated_at: 1, exec: Default::default(), write: false }
+    DirectGrant {
+        device_id: peer.device_id,
+        device_name: peer.device_name,
+        public_key: peer.public_key,
+        node_id: peer.node_id,
+        fingerprint: peer.fingerprint,
+        state: DirectGrantState::Accepted,
+        updated_at: 1,
+        exec: Default::default(),
+        write: false,
+    }
 }
 
 #[test]
@@ -34,12 +49,23 @@ fn review_task_fc1_write_edits_do_not_readmit_withdrawn_or_replaced_keys() {
 #[test]
 fn review_task_fc1_same_relative_path_on_two_saved_remotes_is_separate() {
     let mut config = ShareExportConfig::default();
-    config.set_connection_access("sftp://u@a:22/docs", Some(ExportAccess::ReadOnly)).unwrap();
-    config.set_connection_access("sftp://u@b:22/docs", Some(ExportAccess::ReadWrite)).unwrap();
-    config.set_connection_access("sftp://u@a:22/docs", None).unwrap();
+    config
+        .set_connection_access("sftp://u@a:22/docs", Some(ExportAccess::ReadOnly))
+        .unwrap();
+    config
+        .set_connection_access("sftp://u@b:22/docs", Some(ExportAccess::ReadWrite))
+        .unwrap();
+    config
+        .set_connection_access("sftp://u@a:22/docs", None)
+        .unwrap();
     assert_eq!(config.connection_access("sftp://u@a:22/docs"), None);
-    assert_eq!(config.connection_access("sftp://u@b:22/docs"), Some(ExportAccess::ReadWrite));
-    assert!(config.set_root_access("/missing", ExportAccess::ReadWrite, None).is_err());
+    assert_eq!(
+        config.connection_access("sftp://u@b:22/docs"),
+        Some(ExportAccess::ReadWrite)
+    );
+    assert!(config
+        .set_root_access("/missing", ExportAccess::ReadWrite, None)
+        .is_err());
     assert!(config.roots.is_empty());
 }
 
@@ -50,15 +76,27 @@ fn review_task_fc1_room_policy_does_not_admit_pending_or_blocked_members() {
         "device_id":"d", "device_name":"Peer", "fingerprint":"fp", "public_key":"key",
         "node_id":"node", "candidates":[], "last_seen":null, "blocked":true,
         "relation":{"admission":"Pending"}
-    })).unwrap();
+    }))
+    .unwrap();
     profiles.rooms.push(crate::share::RoomProfile {
-        id: "p".into(), room_id: "r".into(), name: "Room".into(), auto_join: true, last_seen: None,
-        status: Default::default(), members: vec![member], exports: Default::default(),
+        id: "p".into(),
+        room_id: "r".into(),
+        name: "Room".into(),
+        auto_join: true,
+        last_seen: None,
+        status: Default::default(),
+        members: vec![member],
+        exports: Default::default(),
         policy: crate::share::RoomPolicy::new_room(),
     });
-    profiles.set_room_policy("p", Some(true), Some(false)).unwrap();
+    profiles
+        .set_room_policy("p", Some(true), Some(false))
+        .unwrap();
     assert!(profiles.rooms[0].members[0].blocked);
-    assert_eq!(profiles.rooms[0].members[0].relation.admission, crate::share::RoomMemberAdmission::Pending);
+    assert_eq!(
+        profiles.rooms[0].members[0].relation.admission,
+        crate::share::RoomMemberAdmission::Pending
+    );
     assert!(!profiles.rooms[0].members[0].exec.enabled);
     assert!(profiles.rooms[0].exports.roots.is_empty());
 }

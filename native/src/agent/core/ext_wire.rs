@@ -26,8 +26,14 @@ mod change_tests {
 
     #[test]
     fn review_task_agent_watch_distinguishes_partial_coverage() {
-        for notice in [ChangeNotice::Ready { generation: Some(7) },
-            ChangeNotice::ReadyPartial { generation: Some(7) }] {
+        for notice in [
+            ChangeNotice::Ready {
+                generation: Some(7),
+            },
+            ChangeNotice::ReadyPartial {
+                generation: Some(7),
+            },
+        ] {
             let wire = change_to_wire(notice.clone());
             let encoded = Frame::Change(wire).encode(31).unwrap();
             let (_, Frame::Change(decoded)) = Frame::decode(&encoded).unwrap() else {
@@ -194,7 +200,9 @@ pub(crate) fn change_from_wire(change: WireChange) -> ChangeNotice {
             paths: change.paths,
         },
         2 => ChangeNotice::Overflow,
-        4 => ChangeNotice::ReadyPartial { generation: change.generation },
+        4 => ChangeNotice::ReadyPartial {
+            generation: change.generation,
+        },
         _ => ChangeNotice::Ended(change.text),
     }
 }

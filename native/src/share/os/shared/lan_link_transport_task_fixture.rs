@@ -1,9 +1,9 @@
 //! In-memory nodes and current runner facts; never enables privileged uplink.
-use super::wait_until;
-use super::super::*;
 use super::super::super::fs::ShareExportConfig;
 use super::super::super::identity::ShareIdentity;
 use super::super::super::types::{DirectAccessState, DirectContact, DirectGrant, DirectGrantState};
+use super::super::*;
+use super::wait_until;
 use crate::net::InterfaceFacts;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use tokio::task::JoinHandle;
@@ -20,22 +20,36 @@ impl RunnerLan {
             .expect("remote suite must discover SE_REVIEW_LAN_IP")
             .parse()
             .expect("private IPv4");
-        assert!(ip.is_private() || ip.is_link_local(), "no loopback/public fallback");
+        assert!(
+            ip.is_private() || ip.is_link_local(),
+            "no loopback/public fallback"
+        );
         let index: u32 = std::env::var("SE_REVIEW_LAN_IFINDEX")
             .expect("runner interface index")
             .parse()
             .expect("numeric interface index");
         let name = std::env::var("SE_REVIEW_LAN_IFNAME").expect("runner interface name");
         let facts = crate::net::gather_interface_facts().expect("current OS interface facts");
-        let matching: Vec<_> = facts.iter()
+        let matching: Vec<_> = facts
+            .iter()
             .filter(|iface| iface.addrs.contains(&IpAddr::V4(ip)))
             .collect();
-        assert_eq!(matching.len(), 1, "runner IP must identify exactly one real interface");
+        assert_eq!(
+            matching.len(),
+            1,
+            "runner IP must identify exactly one real interface"
+        );
         let interface = matching[0].clone();
-        assert!(index > 0 && interface.up && !interface.loopback && !interface.adapter_id.is_empty());
+        assert!(
+            index > 0 && interface.up && !interface.loopback && !interface.adapter_id.is_empty()
+        );
         assert_eq!(interface.index, index);
         assert_eq!(interface.name, name);
-        Self { ip: IpAddr::V4(ip), facts, interface }
+        Self {
+            ip: IpAddr::V4(ip),
+            facts,
+            interface,
+        }
     }
 
     pub(super) fn host(&self, own_uplink: OwnUplink) -> LanLinkHostFacts {
@@ -132,11 +146,18 @@ pub(super) fn assert_status_only(
     connection: &Connection,
     baseline: (usize, usize, usize),
 ) {
-    assert!(!node.policy.is_bound(connection).unwrap(), "paired link must never acquire FS authority");
+    assert!(
+        !node.policy.is_bound(connection).unwrap(),
+        "paired link must never acquire FS authority"
+    );
     assert!(node.sessions.lock().unwrap().is_empty());
     assert!(node.exec_registry().active_views().is_empty());
     assert!(node.exec_registry().redacted_history().is_empty());
-    assert_eq!(permits(node), baseline, "status must not borrow application/repair/transition slots");
+    assert_eq!(
+        permits(node),
+        baseline,
+        "status must not borrow application/repair/transition slots"
+    );
 }
 
 pub(super) struct Fixture {
@@ -162,7 +183,8 @@ impl Fixture {
             &b_identity,
             Arc::new(Mutex::new(auth_b)),
             tx_b,
-        ).expect("server node");
+        )
+        .expect("server node");
         let (tx_a, _rx_a) = crossbeam_channel::unbounded();
         let a = match ShareIrohNode::start(
             "relay-disabled://s09-transport",
@@ -177,14 +199,24 @@ impl Fixture {
             }
         };
         let baseline = [permits(&a), permits(&b)];
-        let fixture = Self { lan, a, b, baseline, rounds: None };
+        let fixture = Self {
+            lan,
+            a,
+            b,
+            baseline,
+            rounds: None,
+        };
         fixture.refresh_host();
         fixture
     }
 
     fn refresh_host(&self) {
-        self.a.update_lan_link_host(self.lan.host(OwnUplink::Present)).unwrap();
-        self.b.update_lan_link_host(self.lan.host(OwnUplink::Absent)).unwrap();
+        self.a
+            .update_lan_link_host(self.lan.host(OwnUplink::Present))
+            .unwrap();
+        self.b
+            .update_lan_link_host(self.lan.host(OwnUplink::Absent))
+            .unwrap();
     }
 
     pub(super) fn expected_pin(&self) -> LanPeerPin {
@@ -199,13 +231,25 @@ impl Fixture {
         let connection = tokio::time::timeout(
             ROUND_DEADLINE,
             self.a.endpoint.connect(target, LAN_LINK_ALPN),
-        ).await.expect("bounded private TLS dial").expect("private TLS connection");
+        )
+        .await
+        .expect("bounded private TLS dial")
+        .expect("private TLS connection");
         assert_eq!(connection.remote_id(), self.b.endpoint.id());
         assert_eq!(connection.alpn(), LAN_LINK_ALPN);
-        wait_until("actual selected private path", || selected_ip_path(&connection).is_some()).await;
+        wait_until("actual selected private path", || {
+            selected_ip_path(&connection).is_some()
+        })
+        .await;
         let path = selected_ip_path(&connection).unwrap();
-        assert_eq!(path.local, self.lan.ip, "cannot accept a loopback/local-IP guess");
-        assert_eq!(path.remote, remote, "cannot accept a relay or another candidate");
+        assert_eq!(
+            path.local, self.lan.ip,
+            "cannot accept a loopback/local-IP guess"
+        );
+        assert_eq!(
+            path.remote, remote,
+            "cannot accept a relay or another candidate"
+        );
         self.refresh_host();
         connection
     }
@@ -213,8 +257,15 @@ impl Fixture {
     pub(super) fn start_rounds(&mut self, connection: &Connection, expected: LanPeerPin) {
         assert!(self.rounds.is_none());
         let transport = self.a.lan_links.clone();
-        let registered = transport.state.lock().unwrap().channels.contains_key(&connection.stable_id());
-        if !registered { transport.register(connection).unwrap(); }
+        let registered = transport
+            .state
+            .lock()
+            .unwrap()
+            .channels
+            .contains_key(&connection.stable_id());
+        if !registered {
+            transport.register(connection).unwrap();
+        }
         let node = self.a.clone();
         let connection = connection.clone();
         self.rounds = Some(self.a.rt.spawn(super::super::super::lan_link_exchange::run(
@@ -228,11 +279,16 @@ impl Fixture {
     pub(super) async fn wait_status(&self) -> (AuthenticatedLanFact, AuthenticatedLanFact) {
         let mut status = None;
         wait_until("mutually confirmed status", || {
-            let Some(a) = self.a.lan_link_snapshot().into_iter().next() else { return false; };
-            let Some(b) = self.b.lan_link_snapshot().into_iter().next() else { return false; };
+            let Some(a) = self.a.lan_link_snapshot().into_iter().next() else {
+                return false;
+            };
+            let Some(b) = self.b.lan_link_snapshot().into_iter().next() else {
+                return false;
+            };
             status = Some((a, b));
             true
-        }).await;
+        })
+        .await;
         status.unwrap()
     }
 
@@ -251,17 +307,30 @@ impl Fixture {
     }
 
     pub(super) fn server_connection(&self) -> Connection {
-        self.b.lan_links.state.lock().unwrap().channels.values().next()
-            .expect("accepted TLS channel").connection.clone()
+        self.b
+            .lan_links
+            .state
+            .lock()
+            .unwrap()
+            .channels
+            .values()
+            .next()
+            .expect("accepted TLS channel")
+            .connection
+            .clone()
     }
 
     fn shutdown(&mut self) {
-        if let Some(rounds) = self.rounds.take() { rounds.abort(); }
+        if let Some(rounds) = self.rounds.take() {
+            rounds.abort();
+        }
         let _ = self.a.stop_sharing();
         let _ = self.b.stop_sharing();
     }
 }
 
 impl Drop for Fixture {
-    fn drop(&mut self) { self.shutdown(); }
+    fn drop(&mut self) {
+        self.shutdown();
+    }
 }

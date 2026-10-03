@@ -52,18 +52,27 @@ pub(super) fn add_direct(rt: &Runtime, args: &Value) -> Result<Value, ApiError> 
     let name = opt_str(args, "name").unwrap_or("").trim().to_string();
     let share_back = match args.get("shareBack") {
         None => false,
-        Some(value) => value.as_bool().ok_or_else(|| invalid("shareBack muss bool sein."))?,
+        Some(value) => value
+            .as_bool()
+            .ok_or_else(|| invalid("shareBack muss bool sein."))?,
     };
     let (profiles, contact_id) =
         ShareProfiles::add_direct_from_code_persisted(default_home(), &code, &name)
             .map_err(|error| ApiError::new("invalid", error))?;
-    let mut persisted_share_back = profiles.direct_contacts.iter().find(|contact| contact.id == contact_id)
+    let mut persisted_share_back = profiles
+        .direct_contacts
+        .iter()
+        .find(|contact| contact.id == contact_id)
         .is_some_and(|contact| contact.relation.share_back);
     committed(profiles);
     if share_back {
         match crate::share::set_direct_share_back(default_home(), &contact_id, true) {
             Ok(change) => {
-                persisted_share_back = change.profiles.direct_contacts.iter().find(|contact| contact.id == contact_id)
+                persisted_share_back = change
+                    .profiles
+                    .direct_contacts
+                    .iter()
+                    .find(|contact| contact.id == contact_id)
                     .is_some_and(|contact| contact.relation.share_back);
                 committed(change.profiles);
             }

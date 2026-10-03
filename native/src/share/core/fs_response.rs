@@ -48,9 +48,13 @@ pub(crate) enum FsResponse {
         meta: FsMeta,
     },
     /// `literal_children_v1`: still in the same virtual parent/root/lease.
-    ChildPath { path: String },
+    ChildPath {
+        path: String,
+    },
     /// `true` confirms publication with the original kept at `retained`.
-    ReversibleReplaced { replaced: bool },
+    ReversibleReplaced {
+        replaced: bool,
+    },
     WalkBatch {
         nodes: Vec<FsWalkNode>,
         files: u64,

@@ -166,17 +166,24 @@ pub(crate) fn secure_private_handle(file: &std::fs::File, is_directory: bool) ->
         || (is_directory && !metadata.is_dir())
         || (!is_directory && (!metadata.is_file() || metadata.nlink() != 1))
     {
-        return Err(io::Error::new(io::ErrorKind::PermissionDenied, "object is not privately owned"));
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "object is not privately owned",
+        ));
     }
     let mode = if is_directory { 0o700 } else { 0o600 };
     if metadata.mode() & 0o7777 != mode {
         file.set_permissions(std::fs::Permissions::from_mode(mode))?;
     }
     let metadata = file.metadata()?;
-    if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o7777 != mode
+    if metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.mode() & 0o7777 != mode
         || (!is_directory && metadata.nlink() != 1)
     {
-        return Err(io::Error::new(io::ErrorKind::PermissionDenied, "provider did not retain private mode"));
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "provider did not retain private mode",
+        ));
     }
     Ok(())
 }

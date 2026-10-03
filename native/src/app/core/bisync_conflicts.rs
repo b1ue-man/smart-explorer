@@ -65,7 +65,9 @@ pub(in crate::app) struct ConflictResolutionTask {
 
 impl ConflictResolutionTask {
     pub(in crate::app) fn worker_active(&self) -> bool {
-        self.worker.as_ref().is_some_and(|worker| !worker.is_finished())
+        self.worker
+            .as_ref()
+            .is_some_and(|worker| !worker.is_finished())
     }
 
     fn request_cancel(&self) {
@@ -103,7 +105,11 @@ impl App {
     }
 
     pub(in crate::app) fn start_conflict_variant_resolution(
-        &mut self, index: usize, side: ConflictSide, from_bulk: bool, variant_id: Option<String>,
+        &mut self,
+        index: usize,
+        side: ConflictSide,
+        from_bulk: bool,
+        variant_id: Option<String>,
     ) -> bool {
         if self.conflict_resolution.is_some() {
             self.error_msg = Some("Es läuft bereits eine Konfliktauflösung.".into());
@@ -120,8 +126,12 @@ impl App {
             self.error_msg = Some("Der ausgewählte Konflikt ist nicht mehr vorhanden.".into());
             return false;
         };
-        if variant_id.is_none() && conflict.duplicates.as_ref()
-            .is_some_and(|d| d.needs_variant_choice(side.keep_a())) {
+        if variant_id.is_none()
+            && conflict
+                .duplicates
+                .as_ref()
+                .is_some_and(|d| d.needs_variant_choice(side.keep_a()))
+        {
             self.error_msg = Some(format!("„{}“ enthält auf dieser Seite verschiedene Versionen. Bitte eine Version einzeln auswählen.", conflict.rel));
             return false;
         }
@@ -130,7 +140,9 @@ impl App {
             return false;
         };
         let Some(key) = context.state.clone() else {
-            self.error_msg = Some("Konfliktlösung: gespeicherter Sync-Zustand fehlt; bitte neu vergleichen.".into());
+            self.error_msg = Some(
+                "Konfliktlösung: gespeicherter Sync-Zustand fehlt; bitte neu vergleichen.".into(),
+            );
             return false;
         };
         let (a, root_a, b, root_b) = (

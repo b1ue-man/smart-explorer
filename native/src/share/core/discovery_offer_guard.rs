@@ -34,7 +34,9 @@ impl OfferGuards {
     }
 
     pub(super) fn exhausted(&self, offer_id: &str) -> bool {
-        self.offers.get(offer_id).is_some_and(|guard| guard.failed >= DISCOVERY_MAX_FAILED_PAIRINGS)
+        self.offers
+            .get(offer_id)
+            .is_some_and(|guard| guard.failed >= DISCOVERY_MAX_FAILED_PAIRINGS)
     }
 
     /// The pairing finished (confirmed or not): the offer ends.

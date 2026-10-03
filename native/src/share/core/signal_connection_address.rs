@@ -1,8 +1,10 @@
 //! Parsing of one signaling endpoint, including its authority and TLS pin.
 
-use std::net::Ipv6Addr;
-use super::{Reading, SignalEndpoint, SignalScheme, DEFAULT_SIGNAL_PORT, PIN_OPTION, PLAINTEXT_DENIED};
+use super::{
+    Reading, SignalEndpoint, SignalScheme, DEFAULT_SIGNAL_PORT, PIN_OPTION, PLAINTEXT_DENIED,
+};
 use crate::share::core::hex_decode;
+use std::net::Ipv6Addr;
 
 pub(super) fn parse_endpoint(token: &str, reading: Reading) -> Result<SignalEndpoint, String> {
     if token.chars().any(char::is_whitespace) || token.contains('@') {
@@ -147,4 +149,3 @@ fn parse_port(port: &str) -> Result<u16, String> {
         .filter(|port| *port != 0)
         .ok_or_else(|| format!("Ungültiger Share-Server-Port: {port}"))
 }
-

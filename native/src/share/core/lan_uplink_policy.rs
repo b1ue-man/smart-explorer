@@ -357,10 +357,22 @@ mod tests {
         untrusted.authenticated = false;
         let peers = vec![untrusted];
         let mut policy = UplinkPolicy::default();
-        assert!(matches!(policy.evaluate(&input(&links, &peers, true), 100), Decision::Idle(_)));
-        assert!(matches!(policy.evaluate(&input(&links, &peers, true), 200), Decision::Idle(_)));
+        assert!(matches!(
+            policy.evaluate(&input(&links, &peers, true), 100),
+            Decision::Idle(_)
+        ));
+        assert!(matches!(
+            policy.evaluate(&input(&links, &peers, true), 200),
+            Decision::Idle(_)
+        ));
         policy.resume(2, 3);
-        assert_eq!(policy.evaluate(&input(&links, &peers, true), 200), Decision::Keep);
-        assert!(matches!(policy.evaluate(&input(&links, &peers, true), 200 + STOP_GRACE_SECS), Decision::Stop(_)));
+        assert_eq!(
+            policy.evaluate(&input(&links, &peers, true), 200),
+            Decision::Keep
+        );
+        assert!(matches!(
+            policy.evaluate(&input(&links, &peers, true), 200 + STOP_GRACE_SECS),
+            Decision::Stop(_)
+        ));
     }
 }

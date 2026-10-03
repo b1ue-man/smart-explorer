@@ -16,10 +16,20 @@ impl RecordBook {
     pub fn new(baseline: Baseline, keys: KeyPolicy) -> Self {
         let mut names: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         for rel in baseline.keys() {
-            names.entry(keys.key(rel).into_owned()).or_default().insert(rel.clone());
+            names
+                .entry(keys.key(rel).into_owned())
+                .or_default()
+                .insert(rel.clone());
         }
-        let text_bytes = baseline.keys().fold(0u64, |bytes, rel| bytes.saturating_add(rel.len() as u64));
-        Self { baseline, names, keys, text_bytes }
+        let text_bytes = baseline
+            .keys()
+            .fold(0u64, |bytes, rel| bytes.saturating_add(rel.len() as u64));
+        Self {
+            baseline,
+            names,
+            keys,
+            text_bytes,
+        }
     }
 
     pub fn set_keys(&mut self, keys: KeyPolicy) {
@@ -59,7 +69,11 @@ impl RecordBook {
         }
     }
 
-    pub fn projected(&self, entries: &[super::plan_types::Record], forget: &[String]) -> (u64, u64) {
+    pub fn projected(
+        &self,
+        entries: &[super::plan_types::Record],
+        forget: &[String],
+    ) -> (u64, u64) {
         let mut count = self.baseline.len() as u64;
         let mut text = self.text_bytes;
         let mut removed = BTreeSet::<&str>::new();

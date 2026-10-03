@@ -26,7 +26,9 @@ static NEXT_STORAGE_RUN: AtomicU64 = AtomicU64::new(1);
 
 /// Registration lives with the actual worker, including a worker whose
 /// blocking I/O has not returned after the supervisor stopped waiting.
-pub(crate) struct StorageRunGuard { id: Option<u64> }
+pub(crate) struct StorageRunGuard {
+    id: Option<u64>,
+}
 
 impl StorageRunGuard {
     pub(crate) fn access_missing(&self) -> bool {
@@ -37,16 +39,27 @@ impl StorageRunGuard {
 impl Drop for StorageRunGuard {
     fn drop(&mut self) {
         if let Some(id) = self.id {
-            STORAGE_RUNS.lock().unwrap_or_else(PoisonError::into_inner).remove(&id);
+            STORAGE_RUNS
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .remove(&id);
         }
     }
 }
 
 /// The central locator/platform boundary selects shared-storage runs. No
 /// endpoint is opened here; remote and app-private runs need no registration.
-pub(crate) fn register_storage_run(source: &str, target: &str, cancel: &Arc<AtomicBool>) -> StorageRunGuard {
-    if !needs_shared_access(super::platform::requires_storage_access(source),
-        super::platform::requires_storage_access(target)) { return StorageRunGuard { id: None }; }
+pub(crate) fn register_storage_run(
+    source: &str,
+    target: &str,
+    cancel: &Arc<AtomicBool>,
+) -> StorageRunGuard {
+    if !needs_shared_access(
+        super::platform::requires_storage_access(source),
+        super::platform::requires_storage_access(target),
+    ) {
+        return StorageRunGuard { id: None };
+    }
     let id = NEXT_STORAGE_RUN.fetch_add(1, Ordering::Relaxed);
     let mut runs = STORAGE_RUNS.lock().unwrap_or_else(PoisonError::into_inner);
     register_storage_marker(&mut runs, id, cancel, &STORAGE_ACCESS);
@@ -54,20 +67,31 @@ pub(crate) fn register_storage_run(source: &str, target: &str, cancel: &Arc<Atom
 }
 
 /// Caller holds the registry mutex used for both registration and revoke.
-fn register_storage_marker(runs: &mut BTreeMap<u64, Weak<AtomicBool>>, id: u64,
-    cancel: &Arc<AtomicBool>, access: &AtomicU8) {
+fn register_storage_marker(
+    runs: &mut BTreeMap<u64, Weak<AtomicBool>>,
+    id: u64,
+    cancel: &Arc<AtomicBool>,
+    access: &AtomicU8,
+) {
     runs.retain(|_, weak| weak.strong_count() > 0);
     runs.insert(id, Arc::downgrade(cancel));
     // Same mutex as revocation: a registration can neither miss a revoke
     // nor open a root using the earlier granted report.
-    if access.load(Ordering::Acquire) != ACCESS_GRANTED { cancel.store(true, Ordering::Release); }
+    if access.load(Ordering::Acquire) != ACCESS_GRANTED {
+        cancel.store(true, Ordering::Release);
+    }
 }
 
-fn needs_shared_access(source: bool, target: bool) -> bool { source || target }
+fn needs_shared_access(source: bool, target: bool) -> bool {
+    source || target
+}
 
 fn cancel_storage_runs(runs: &mut BTreeMap<u64, Weak<AtomicBool>>) {
     runs.retain(|_, weak| match weak.upgrade() {
-        Some(cancel) => { cancel.store(true, Ordering::Release); true }
+        Some(cancel) => {
+            cancel.store(true, Ordering::Release);
+            true
+        }
         None => false,
     });
 }
@@ -110,7 +134,9 @@ pub fn set_storage_access(granted: bool) {
         ACCESS_MISSING
     };
     STORAGE_ACCESS.store(value, Ordering::Release);
-    if !granted { cancel_storage_runs(&mut runs); }
+    if !granted {
+        cancel_storage_runs(&mut runs);
+    }
 }
 
 /// The last reported shared-storage access; `None` until the host reports
@@ -154,7 +180,7 @@ mod tests {
     fn android_shared_storage_revoke_selection_and_weak_lifetime() {
         use super::{cancel_storage_runs, needs_shared_access};
         use std::collections::BTreeMap;
-        use std::sync::{Arc, atomic::AtomicBool};
+        use std::sync::{atomic::AtomicBool, Arc};
         assert!(!needs_shared_access(false, false)); // remote/remote or private
         assert!(needs_shared_access(true, false));
         assert!(needs_shared_access(false, true));
@@ -171,7 +197,7 @@ mod tests {
     fn android_shared_storage_registration_covers_both_revoke_orderings() {
         use super::{cancel_storage_runs, register_storage_marker, ACCESS_GRANTED, ACCESS_MISSING};
         use std::collections::BTreeMap;
-        use std::sync::{Arc, Mutex, atomic::AtomicBool};
+        use std::sync::{atomic::AtomicBool, Arc, Mutex};
         for revoke_first in [false, true] {
             let access = AtomicU8::new(ACCESS_GRANTED);
             let registry = Mutex::new(BTreeMap::new());

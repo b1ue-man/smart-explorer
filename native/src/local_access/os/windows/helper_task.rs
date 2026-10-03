@@ -127,15 +127,22 @@ fn search_recursive_access_task_authenticated_helper_reuses_read_handles_in_pare
     assert_eq!(child_pins.files.len(), 1);
     // Use the very constructor used by open_root_consented's broker fallback.
     // This ensures the fixture exercises the RPC branch on elevated runners.
-    let pinned = super::DirectoryHandle::from_root_pins(
-        root_pins, super::normalize_scan_root(&root),
-    ).unwrap();
+    let pinned =
+        super::DirectoryHandle::from_root_pins(root_pins, super::normalize_scan_root(&root))
+            .unwrap();
     drop(super::DirectoryHandle::open_root_consented(&root).unwrap());
-    let names: Vec<_> = pinned.read_directory().unwrap()
-        .map(|entry| entry.unwrap().name).collect();
+    let names: Vec<_> = pinned
+        .read_directory()
+        .unwrap()
+        .map(|entry| entry.unwrap().name)
+        .collect();
     assert!(names.iter().any(|name| name == "asset.blend"));
-    let child_pin = pinned.open_child(std::ffi::OsStr::new("protected-child")).unwrap();
-    let mut child_file = child_pin.open_regular_child(std::ffi::OsStr::new("inside.txt")).unwrap();
+    let child_pin = pinned
+        .open_child(std::ffi::OsStr::new("protected-child"))
+        .unwrap();
+    let mut child_file = child_pin
+        .open_regular_child(std::ffi::OsStr::new("inside.txt"))
+        .unwrap();
     let mut payload = String::new();
     child_file.read_to_string(&mut payload).unwrap();
     assert_eq!(payload, "protected child payload");

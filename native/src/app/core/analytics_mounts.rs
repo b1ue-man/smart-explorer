@@ -3,22 +3,33 @@
 //! the mount: a Share device analyses its own disk with its local worker,
 //! exactly as "📡 Remote-Ordner" does. The analysis stays the drive path for
 //! everything shown and opened; only the walk goes to the remote.
-use crate::mount::{MountSnapshot, MountSource, MountStatus, PeerMountTarget};
 use super::prelude::format_bytes;
+use crate::mount::{MountSnapshot, MountSource, MountStatus, PeerMountTarget};
 
 /// Keep host facts when the visible source remains a mounted drive path.
 pub(in crate::app) fn host_notes(outcome: &mut crate::analytics::ScanOutcome) {
     if let Some(volume) = outcome.volume.filter(|volume| volume.total_bytes > 0) {
-        outcome.notes.push(format!("Speichervolumen der Gegenstelle: {} von {} belegt; {} frei.",
-            format_bytes(volume.used_bytes()), format_bytes(volume.total_bytes), format_bytes(volume.free_bytes)));
+        outcome.notes.push(format!(
+            "Speichervolumen der Gegenstelle: {} von {} belegt; {} frei.",
+            format_bytes(volume.used_bytes()),
+            format_bytes(volume.total_bytes),
+            format_bytes(volume.free_bytes)
+        ));
     }
     if let Some((figures, tree)) = outcome.platform.as_ref().zip(outcome.tree.as_ref()) {
-        let approx = crate::analytics::Approximations::compute(tree, &figures.place(), figures.totals(),
-            outcome.status == crate::analytics::ScanStatus::Complete);
+        let approx = crate::analytics::Approximations::compute(
+            tree,
+            &figures.place(),
+            figures.totals(),
+            outcome.status == crate::analytics::ScanStatus::Complete,
+        );
         if let Some(view) = crate::analytics::node_view(tree, &[], &approx, 0) {
             for row in view.children {
-                outcome.notes.push(format!("{}: {} (Angaben der Gegenstelle).", row.name,
-                    format_bytes(row.size)));
+                outcome.notes.push(format!(
+                    "{}: {} (Angaben der Gegenstelle).",
+                    row.name,
+                    format_bytes(row.size)
+                ));
             }
         }
     }

@@ -45,7 +45,9 @@ impl IntoIoError for russh_sftp::client::error::Error {
                 StatusCode::NoSuchFile => io::ErrorKind::NotFound,
                 StatusCode::PermissionDenied => io::ErrorKind::PermissionDenied,
                 StatusCode::OpUnsupported => io::ErrorKind::Unsupported,
-                StatusCode::NoConnection | StatusCode::ConnectionLost => io::ErrorKind::ConnectionAborted,
+                StatusCode::NoConnection | StatusCode::ConnectionLost => {
+                    io::ErrorKind::ConnectionAborted
+                }
                 StatusCode::BadMessage => io::ErrorKind::InvalidInput,
                 _ => io::ErrorKind::Other,
             },

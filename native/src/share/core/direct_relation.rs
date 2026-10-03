@@ -274,11 +274,16 @@ impl ShareProfiles {
     /// (B04) and earlier removal records of this key are lifted, because this
     /// is the user's own decision. Returns whether anything changed.
     pub fn allow_direct_grant_again(&mut self, device_id: &str, now: i64) -> Result<bool, String> {
-        let grant = self.direct_grants.iter().find(|grant| grant.device_id == device_id)
+        let grant = self
+            .direct_grants
+            .iter()
+            .find(|grant| grant.device_id == device_id)
             .ok_or_else(|| format!("Keine Direkt-Freigabe fuer Geraet {device_id}"))?;
         let identity = super::direct_protocol::DirectPeerIdentity {
-            device_id: grant.device_id.clone(), device_name: grant.device_name.clone(),
-            node_id: grant.node_id.clone(), public_key: grant.public_key.clone(),
+            device_id: grant.device_id.clone(),
+            device_name: grant.device_name.clone(),
+            node_id: grant.node_id.clone(),
+            public_key: grant.public_key.clone(),
             fingerprint: grant.fingerprint.clone(),
         };
         let matches = |grant: &DirectGrant| {
@@ -286,8 +291,10 @@ impl ShareProfiles {
                 || !identity.node_id.is_empty() && grant.node_id == identity.node_id
         };
         if self.removed_direct_peer(&identity).is_none()
-            && !self.direct_grants.iter().any(|grant| matches(grant)
-                && grant.state != DirectGrantState::Accepted)
+            && !self
+                .direct_grants
+                .iter()
+                .any(|grant| matches(grant) && grant.state != DirectGrantState::Accepted)
         {
             return Ok(false);
         }

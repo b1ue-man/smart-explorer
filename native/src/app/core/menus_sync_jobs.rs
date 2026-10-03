@@ -1,6 +1,6 @@
-use crate::app::theme;
 use super::prelude::*;
 use super::*;
+use crate::app::theme;
 
 impl App {
     /// Saved-setups manager: list jobs with run / edit / delete / enable, plus
@@ -173,11 +173,18 @@ impl App {
                 });
             });
         if let Some(review) = super::sync_job_state_ui::confirmation(ctx, confirmation) {
-            self.start_saved_desktop_run(&review.id, Some(super::sync_run_state::JobConfirmation {
-                kind:review.kind, source:review.source, target:review.target,
-            }));
+            self.start_saved_desktop_run(
+                &review.id,
+                Some(super::sync_run_state::JobConfirmation {
+                    kind: review.kind,
+                    source: review.source,
+                    target: review.target,
+                }),
+            );
         }
-        if let Some(id) = versions_id { self.open_sync_versions(&id); }
+        if let Some(id) = versions_id {
+            self.open_sync_versions(&id);
+        }
         self.ui_sync_versions(ctx);
         self.show_sync_jobs = open || self.sync_versions.is_some();
         if new_blank {
@@ -189,15 +196,20 @@ impl App {
             }
         }
         if let Some(id) = toggle_id {
-            let changed = (|| -> Result<(),String> {
-                let mut job = crate::syncjobs::load().map_err(|e| e.to_string())?.into_iter()
-                    .find(|job| job.id == id).ok_or_else(|| "Setup wurde inzwischen entfernt.".to_string())?;
+            let changed = (|| -> Result<(), String> {
+                let mut job = crate::syncjobs::load()
+                    .map_err(|e| e.to_string())?
+                    .into_iter()
+                    .find(|job| job.id == id)
+                    .ok_or_else(|| "Setup wurde inzwischen entfernt.".to_string())?;
                 job.enabled = !job.enabled;
                 crate::syncjobs::upsert(&job).map_err(|e| e.to_string())
             })();
             match changed {
                 Ok(()) => self.reload_sync_jobs("Sync-Setups neu laden"),
-                Err(error) => self.error_msg = Some(format!("Setup konnte nicht geändert werden: {error}")),
+                Err(error) => {
+                    self.error_msg = Some(format!("Setup konnte nicht geändert werden: {error}"))
+                }
             }
         }
         if let Some(id) = del_id {
