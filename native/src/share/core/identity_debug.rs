@@ -2,6 +2,20 @@
 use std::fmt;
 
 use super::identity::{DirectCodeRotation, ShareIdentity};
+use super::types::PeerEndpoint;
+
+impl fmt::Debug for PeerEndpoint {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PeerEndpoint")
+            .field("label", &self.label)
+            .field("scope", &self.scope)
+            .field("presence", &self.presence)
+            .field("relation_secret", &"[redacted]")
+            .field("expected_node_id", &self.expected_node_id)
+            .finish()
+    }
+}
 
 impl fmt::Debug for ShareIdentity {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
