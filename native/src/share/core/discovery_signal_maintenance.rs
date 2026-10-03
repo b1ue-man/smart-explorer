@@ -5,6 +5,7 @@ use super::core::eio;
 use super::discovery_signal_commands::{
     offer_state_event, send_discovery_event, DiscoverySignalRuntime,
 };
+use super::discovery_signal_outcome::ExchangeEnd;
 use super::discovery_signal_state::{
     DISCOVERY_LIST_REFRESH_INTERVAL, DISCOVERY_PUBLISH_ACK_TIMEOUT,
 };
@@ -15,6 +16,7 @@ use super::types::ShareEvent;
 
 impl DiscoverySignalRuntime {
     pub(super) fn maintain_offline(&mut self, events: &crossbeam_channel::Sender<ShareEvent>) {
+        self.stop_due_offers_offline(events);
         for offer in self.state.expire_offers(Instant::now()) {
             self.state.remember_closed_offer(offer.offer_id.clone());
             self.port.remove_offer(&offer.offer_id);
@@ -75,6 +77,7 @@ impl DiscoverySignalRuntime {
         list_refresh: bool,
     ) -> io::Result<()> {
         self.expire_exchanges(signal, events)?;
+        self.stop_due_offers(signal, events)?;
         self.expire_offers(signal, events)?;
         self.expire_publications(events);
         let now = Instant::now();
@@ -141,17 +144,24 @@ impl DiscoverySignalRuntime {
             .map(|start| Some(start.deadline));
         let list =
             (state.list_request_outstanding || list_refresh).then_some(state.next_list_request_at);
+        let stops = state.offer_guards.has_due_stops().then(Instant::now);
         offers
             .chain(exchanges)
             .chain(starts)
-            .chain(std::iter::once(list))
+            .chain([list, stops])
             .flatten()
             .min()
     }
 
-    /// Earliest offer expiry `maintain_offline` acts on.
+    /// Earliest offer expiry or queued offer end `maintain_offline` acts on.
     pub(super) fn next_offline_due(&self) -> Option<Instant> {
-        self.state.offers.values().map(|offer| offer.deadline).min()
+        let stops = self.state.offer_guards.has_due_stops().then(Instant::now);
+        self.state
+            .offers
+            .values()
+            .map(|offer| offer.deadline)
+            .chain(stops)
+            .min()
     }
 
     pub(super) fn disconnected(&mut self, events: &crossbeam_channel::Sender<ShareEvent>) {
@@ -167,15 +177,16 @@ impl DiscoverySignalRuntime {
             send_discovery_event(events, event);
         }
         for exchange in exchanges {
-            self.port.cancel_exchange(&exchange.exchange_id);
-            send_discovery_event(
+            let exchange_id = exchange.exchange_id.clone();
+            self.report_exchange_end(
+                &exchange_id,
+                Some(exchange),
+                None,
+                ExchangeEnd::Failed("Discovery-Signaling wurde getrennt".into()),
+                false,
                 events,
-                DiscoveryEvent::ExchangeFailed {
-                    exchange_id: Some(exchange.exchange_id),
-                    discovery_id: Some(exchange.discovery_id),
-                    error: "Discovery-Signaling wurde getrennt".into(),
-                },
             );
+            self.port.cancel_exchange(&exchange_id);
         }
         for start in pending {
             send_discovery_event(
@@ -302,25 +313,25 @@ impl DiscoverySignalRuntime {
         let mut first_error = None;
         let exchanges = self.state.expire_exchanges(now);
         for exchange in exchanges {
-            self.state
-                .remember_closed_exchange(exchange.exchange_id.clone());
-            self.port.cancel_exchange(&exchange.exchange_id);
+            let exchange_id = exchange.exchange_id.clone();
+            self.state.remember_closed_exchange(exchange_id.clone());
             if let Err(error) = send_line(
                 signal,
                 &DiscoveryClientMsg::CancelPairing {
-                    exchange_id: exchange.exchange_id.clone(),
+                    exchange_id: exchange_id.clone(),
                 },
             ) {
                 first_error.get_or_insert(error);
             }
-            send_discovery_event(
+            self.report_exchange_end(
+                &exchange_id,
+                Some(exchange),
+                None,
+                ExchangeEnd::Failed("Discovery-Austausch hat sein Zeitlimit erreicht".into()),
+                true,
                 events,
-                DiscoveryEvent::ExchangeFailed {
-                    exchange_id: Some(exchange.exchange_id),
-                    discovery_id: Some(exchange.discovery_id),
-                    error: "Discovery-Austausch hat sein Zeitlimit erreicht".into(),
-                },
             );
+            self.port.cancel_exchange(&exchange_id);
         }
         for pending in self.state.expire_pending_publisher_starts(now) {
             self.state
@@ -357,17 +368,17 @@ impl DiscoverySignalRuntime {
             .map(|(_, exchange)| exchange)
             .collect();
         for exchange in exchanges {
-            self.state
-                .remember_closed_exchange(exchange.exchange_id.clone());
-            self.port.cancel_exchange(&exchange.exchange_id);
-            send_discovery_event(
+            let exchange_id = exchange.exchange_id.clone();
+            self.state.remember_closed_exchange(exchange_id.clone());
+            self.report_exchange_end(
+                &exchange_id,
+                Some(exchange),
+                None,
+                ExchangeEnd::Failed(error.into()),
+                false,
                 events,
-                DiscoveryEvent::ExchangeFailed {
-                    exchange_id: Some(exchange.exchange_id),
-                    discovery_id: Some(exchange.discovery_id),
-                    error: error.into(),
-                },
             );
+            self.port.cancel_exchange(&exchange_id);
         }
     }
 

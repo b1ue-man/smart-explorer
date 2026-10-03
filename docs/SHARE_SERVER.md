@@ -9,16 +9,29 @@ keys, file names, file contents, or export configuration.
 
 ## Transports
 
-- `host:51820` or `tcp://host:51820`: raw newline-delimited TCP signaling.
-- `ws://host/path`: WebSocket signaling without TLS.
-- `wss://host/path`: WebSocket signaling through TLS, intended for port 443.
+- New input `host[:port]` means TLS WebSocket (`wss://host:51820` when the port
+  is omitted). Explicit `wss://host/path` uses port 443 when omitted.
 - `https://host/path` in the app is treated as `wss://host/path`.
+- `tcp://host:51820` uses newline-delimited TCP; `ws://host/path` and
+  `http://host/path` use plaintext WebSocket. New input needs the explicit
+  **Unverschlüsselt erlauben** setting or CLI `--allow-plaintext` flag.
+- Existing stored addresses without a scheme retain their old TCP meaning and
+  are rewritten as `tcp://host:port`; their status shows **⚠ unverschlüsselt**.
+  A TLS failure never falls back to a plaintext endpoint. Old stored mixed
+  lists retain their entries but try only TLS entries while any are present;
+  new input cannot mix TLS and plaintext.
+- Append `#sha256=<64 hex digits>` to pin a self-signed TLS certificate or its
+  SubjectPublicKeyInfo. Colon-separated certificate fingerprints are accepted.
+  TLS still verifies that the server holds the matching private key.
 
-For raw TCP signaling on port `N`, the Iroh relay listens on `N + 1` by default
+For native signaling on port `N`, the Iroh relay listens on `N + 1` by default
 (`51821` for `51820`). Set `SE_IROH_RELAY_BIND` to choose another relay bind or
 `SE_IROH_RELAY_DISABLE=1` to disable it. Clients can override the derived relay
-URL with `SE_SHARE_RELAY_URL`. Both listeners must be reachable if encrypted
-relay fallback is required.
+URL with `SE_SHARE_RELAY_URL`. A WebSocket address with a path derives the
+relay's origin for a reverse proxy; without a path it tries the adjacent port
+and origin. TLS addresses derive HTTPS relays, including the server's pin;
+HTTP relay overrides and peer-advertised HTTP relays need the same plaintext
+permission. Both listeners must be reachable when relay fallback is needed.
 
 Relay startup is fail-closed by default. An invalid relay bind, runtime setup
 failure, or occupied relay port makes `se-share-server` exit nonzero instead of
@@ -28,14 +41,63 @@ permitted only when `SE_IROH_RELAY_DISABLE=1` (or `true`) is set explicitly.
 Multiple app endpoints can be separated with commas or semicolons:
 
 ```text
-wss://share.example.com/se-share, share.example.com:51820
+wss://share.example.com/se-share, wss://backup.example.com/se-share
 ```
+
+The client status reports **verschlüsselt** or **⚠ unverschlüsselt**. Its Hello
+keeps legacy fields but sends no local-address list, device name or fingerprint.
+Presence announcements continue to carry the routing material peers need.
+
+## Native TLS and Key Login
+
+The server can terminate TLS for both signaling and the adjacent Iroh relay:
+
+```text
+se-share-server 0.0.0.0:51820 --tls-cert fullchain.pem --tls-key privkey.pem --state-file share-bindings.json
+```
+
+Equivalent environment variables are `SE_SHARE_BIND`, `SE_SHARE_TLS_CERT`,
+`SE_SHARE_TLS_KEY` and `SE_SHARE_STATE_FILE`. Both TLS files are required;
+invalid or mismatched files stop startup. Keep the private key readable only by
+the server account. On new handshakes both listeners share a resolver that
+reloads a changed, validated pair. An incomplete or invalid replacement keeps
+the previous pair; existing connections continue to work.
+
+A public listener without TLS requires `--allow-plaintext` or
+`SE_SHARE_ALLOW_PLAINTEXT=1`; otherwise startup explains the required options
+and fails. Loopback listeners also permit plaintext for a TLS reverse proxy.
+With TLS configured, public plaintext connections remain disabled unless
+explicitly allowed. TLS failures never trigger a plaintext retry.
+
+New clients negotiate `key_login_v1`. Before registration the server sends a
+fresh 16-byte nonce; the client signs a domain-separated digest of the nonce,
+device ID and public key with its Iroh key. The same ten-second registration
+deadline covers TLS, WebSocket upgrade, Hello and challenge response. Device
+IDs and Direct lookups bind to the first proven key; only that key may replace
+their records or send the owner's decisions. Room membership must carry the
+registered device ID and proven node/key. Disconnect and unpublish remove live
+presence without forgetting ownership.
+
+New Direct watchers present an HMAC-derived relation proof against the owner's
+stored hash. New Room members see only the partition with the same proof.
+These proofs reveal neither the relation secret nor a way to derive it. Older
+clients can use unbound entries and participate in mixed rooms, but cannot
+take over proven bindings. Compatibility mode allows legacy watchers without
+proofs and legacy room members across partitions. Use `--require-key-login`
+or `SE_SHARE_REQUIRE_KEY_LOGIN=1` when every client must prove its key and
+relation access.
+
+`--state-file` keeps key bindings across restarts with atomic replacement and
+restrictive creation permissions on Unix. Full binding tables refuse new owners
+instead of expiring or evicting existing ones. Save failures refuse the new
+registration/publication. Without a state file ownership is memory-only and
+startup warns that restart protection is unavailable.
 
 ## Temporary Discoverability and Background Pairing
 
 The current Share UI can publish the owner's Direct identity or one existing
-Room as a temporary discovery offer. Five minutes is the UI default, while any
-positive duration can be selected. The terminal does the same with
+Room as a temporary discovery offer. Five minutes is the UI default and 30
+minutes is the maximum. The terminal does the same with
 `se share discoverable` (`list` and `stop` for running offers); the daemon keeps
 this device's own offers in its worker snapshot, so every client sees them
 regardless of who reads the shared event stream, and it allows one running
@@ -45,10 +107,15 @@ deadline, so reconnects and renewals cannot silently extend the user's chosen
 visibility window.
 
 PIN input is consumed as its exact UTF-8 byte sequence. It is not trimmed,
-normalized, parsed as a number, or stored durably. There is no minimum length:
-empty input and the exact value `0` are valid, although the UI warns that they
-are trivial to guess. The 1,024-byte upper bound is a resource ceiling, not a
-password-strength rule.
+normalized, parsed as a number, or stored durably. The suggested PIN contains
+six random digits. PINs shorter than six characters or easy to guess require
+**Unsichere PIN erlauben** (`--allow-weak-pin` in the CLI); an empty PIN is always
+rejected. The 1,024-byte upper bound remains a resource ceiling. CLI publishing
+without a PIN option generates and prints a random PIN; `--pin-stdin` or
+`--pin-prompt` accepts chosen PINs without putting them in the process list.
+An offer ends after its first successful pairing or after five unsuccessful
+answered exchanges, with a visible warning. Once a connector proves the PIN,
+other concurrent starts are cancelled and no new one is admitted for the offer.
 
 Discovery lists Direct devices and Rooms separately. Their display aliases are
 untrusted labels; the cryptographic exchange binds the offer kind and the
@@ -57,31 +124,51 @@ OPAQUE-based password-authenticated exchange in the background. The rendezvous
 server routes bounded pairing packets and can observe public offer metadata and
 timing, but it never receives the PIN, relation secret, private key, or decoded
 application bundle. Wrong PINs, altered packets, replayed identifiers, expired
-offers, and target changes fail without installing a relation.
+offers, and target changes are rejected. An error after a relation was already
+persisted is reported as **gekoppelt – Bestätigung fehlt**, with its installed
+contact or room available to keep or revoke; it is not reported as if nothing
+had been installed. Failed removal preserves that notice. Already handed-out
+Room credentials cannot be recalled: the notice explains that the room must be
+recreated if those credentials must stop working.
 
 For Direct offers, both peers exchange their authenticated identity and current
 relation material and persist the reciprocal contact/grant before either side
-sends the commit packet that claims persistence. A successful exchange is
-therefore ready from both directions. For a Room offer, the joining peer
+sends the commit packet that claims persistence. The connecting device opens
+its own exports only with the explicit **Auch meine Freigaben für dieses Gerät
+öffnen** choice (`shareBack` in the API). For a Room offer, the joining peer
 persists the publisher's current Room material; the publisher already owns that
 Room and does not create a synthetic Direct relation. Neither flow requires a
 second click or approval on the publishing side. Cancel and expiry terminate
 only the affected offer or exchange.
 
+The server allows four concurrent exchanges per offer, with at most one from
+each proven connector key (or source address for a legacy connector). Twelve
+starts per minute are counted per connector and offer, so one connector cannot
+consume another connector's attempt budget. Offers remain subject to the
+server's global and per-client capacity limits. Legacy clients behind an
+explicitly trusted proxy count by connection, since the proxy already enforces
+original-client limits and its shared backend address is not an identity.
+
 ## Signaling Resource Limits
 
-The public signaling listener uses fixed resource ceilings so unauthenticated
+The public signaling listener uses bounded resources so unauthenticated
 internet traffic cannot create unbounded threads, queues, or retained routing
 state. It admits at most 256 connection workers globally and 16 per source,
 then at most 128 registered clients globally and eight per source. IPv4 sources
 are counted by address and IPv6 sources by `/64`, preventing cheap address
-rotation inside one normal IPv6 allocation. New sockets are additionally token
+rotation inside one `/64`; an additional `/56` cap limits multiple such sources
+in one IPv6 allocation. A proven key has four simultaneous registrations by
+default. Under registration pressure proven clients displace unproven legacy
+registrations, preferring those without subscriptions. New sockets are additionally token
 bucket limited to 128/s with a 256 global burst and 16/s with a 32 per-source
 burst before a worker is spawned. The HTTP/WebSocket upgrade and the first valid
-`Hello` must both finish inside one absolute ten-second deadline; invalid and
+`Hello`, including its key challenge, must finish inside one absolute
+ten-second deadline; invalid and
 control-frame traffic cannot extend it. Registered connections accept at most
-128 messages/s and 2 MiB/s with the same-size burst before the offender is
-closed. For WebSockets, the byte limit is charged on raw wire reads before
+128 messages/s and 2 MiB/s. The initial burst permits two full publication
+waves (1,282 messages and about 20 MiB), including immediate relay-ready route
+updates and legacy access requests; sustained excess closes the connection.
+For WebSockets, the byte limit is charged after TLS but before
 frame parsing, including upgrade bytes, frame headers, masks, control frames,
 and fragmented or empty continuation frames.
 
@@ -106,6 +193,23 @@ keys are removed on unwatch/disconnect. These limits affect only rendezvous
 availability: the server still does not derive authorization from signaling
 state or retain a durable direct-access inbox.
 
+Startup limits are positive integer environment values:
+
+| Variable | Default |
+| --- | ---: |
+| `SE_SHARE_MAX_CONNECTIONS` | 256 |
+| `SE_SHARE_MAX_CONNECTIONS_PER_SOURCE` | 16 |
+| `SE_SHARE_MAX_CONNECTIONS_PER_NETWORK` | four times the source limit (64) |
+| `SE_SHARE_MAX_CLIENTS` | 128 |
+| `SE_SHARE_MAX_CLIENTS_PER_SOURCE` | 8 |
+| `SE_SHARE_MAX_CLIENTS_PER_NETWORK` | four times the source limit (32) |
+| `SE_SHARE_MAX_CLIENTS_PER_KEY` | 4 |
+
+Network limits apply to IPv6 `/56` groups. WebSocket output wakes its owner
+thread immediately through the I/O reactor instead of waiting for a polling
+interval. Client frames and messages share the 256 KiB ceiling; one client
+drain hands over at most 256 messages or roughly 4 MiB before processing them.
+
 A TLS/WebSocket reverse proxy otherwise collapses every signaling connection
 into the proxy's backend address. Set `SE_SHARE_TRUSTED_PROXY_IPS` to exact,
 comma- or semicolon-separated proxy IPs (for example `127.0.0.1,::1`) to keep
@@ -128,12 +232,17 @@ handler is spawned: 256/s with a global burst of 512, and 32/s with a burst of
 4096 entries. TLS, HTTP upgrade, WebSocket upgrade, ClientAuth, authorization,
 and actor registration share one absolute 30-second establishment deadline.
 After Iroh's challenge/proof handshake, a second admission gate allows at most
-four connections per authenticated Endpoint ID.
+four connections per authenticated Endpoint ID and 512 authenticated relay
+connections in total. The relay also requires that the Endpoint ID has
+registered at this server's signaling. Legacy Hello public keys remain usable
+because the Iroh handshake separately proves possession. A ten-minute bounded
+grace list allows reconnecting signaling clients to keep their relay path.
 
 A reverse proxy is one socket source from the relay's perspective, so its
-backend connection budget must fit inside the 64-connection source ceiling and
-the proxy must enforce a smaller per-original-client WebSocket connection
-limit. Each relay connection is limited to 64 MiB/s of received ciphertext with
+backend listener can delegate its source limits when that bind IP is explicitly
+listed in `SE_SHARE_TRUSTED_PROXY_IPS`; the 512-connection global cap remains.
+The proxy must enforce the per-original-client connection and request limits.
+Each relay connection is limited to 64 MiB/s of received ciphertext with
 an 8 MiB burst. Each destination's outgoing packet queue is capped at 512
 packets and 1 MiB of retained payload, with a shared 64 MiB payload ceiling for
 all destination queues; byte reservations remain held through the bounded write
@@ -168,9 +277,8 @@ Server -> Client  {"t":"keepalive"}
   a keepalive the client must send something (normally `keepalive_ack`) within
   60 s; otherwise the server closes the connection and removes its
   registrations like on any disconnect.
-- **Not idle**, and every client without the capability: unchanged. A raw TCP
-  connection closes after 60 s without inbound data; a WebSocket connection has
-  no inbound deadline. A raw TCP line that arrives in pieces across the
+- **Not idle**, and every client without the capability: TCP and WebSocket
+  connections close after 60 s without inbound data. A raw TCP line that arrives in pieces across the
   server's internal wake-ups is kept, not discarded.
 - `set_idle` with `idle:false` first delivers everything deferred, then
   `idle_ack`. `set_idle` without the negotiated capability is ignored.
@@ -211,10 +319,11 @@ K + 60 s stays below it.
 
 ## HTTPS / 443 Deployment
 
-Run the server locally and terminate TLS in a reverse proxy:
+Alternatively, bind both backend listeners to loopback and terminate TLS in a
+reverse proxy:
 
 ```text
-SE_SHARE_TRUSTED_PROXY_IPS=127.0.0.1 se-share-server 127.0.0.1:51820
+SE_SHARE_TRUSTED_PROXY_IPS=127.0.0.1 se-share-server 127.0.0.1:51820 --state-file share-bindings.json
 ```
 
 Caddy example:

@@ -546,12 +546,14 @@ fn classify_start_rejection(message: &str) -> (DiscoveryRejectionClass, bool) {
         "pairing exchange id is already active" => (DiscoveryRejectionClass::Conflict, false),
         "server pairing exchange limit reached"
         | "client pairing exchange limit reached"
-        | "discovery offer pairing limit reached" => (DiscoveryRejectionClass::Capacity, true),
+        | "discovery offer pairing limit reached"
+        | "connector already pairing with this offer" => (DiscoveryRejectionClass::Capacity, true),
         "discovery offer pairing attempt rate exceeded" => {
             (DiscoveryRejectionClass::RateLimited, true)
         }
         "cannot pair with own discovery offer" => (DiscoveryRejectionClass::Forbidden, false),
         "discovery offer is unavailable"
+        | "pairing connector is offline"
         | "discovery publisher is offline"
         | "discovery publisher capability is unavailable"
         | "discovery offer disappeared before rate limiting" => {

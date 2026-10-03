@@ -8,6 +8,13 @@ pub(super) const MAX_CONNECTION_WORKERS: usize = 256;
 pub(super) const MAX_CONNECTIONS_PER_SOURCE: usize = 16;
 pub(super) const MAX_REGISTERED_CLIENTS: usize = 128;
 pub(super) const MAX_REGISTERED_CLIENTS_PER_SOURCE: usize = 8;
+/// Registrations of one proven device key (app window, background worker,
+/// command line, a reconnect that overlaps the old connection).
+pub(super) const MAX_REGISTERED_CLIENTS_PER_KEY: usize = 4;
+/// An IPv6 end site usually holds a /56 or /48, so one host can rotate
+/// through many /64 sources; their sum per /56 is capped at this multiple of
+/// the per-source caps (S47).
+pub(super) const NETWORK_CAP_FACTOR: usize = 4;
 pub(super) const WRITER_QUEUE_CAPACITY: usize = 32;
 pub(super) const MAX_WRITER_QUEUED_BYTES: usize = 2 * 1024 * 1024;
 pub(super) const MAX_PUBLISHED_DIRECTS_PER_CLIENT: usize = 64;
@@ -56,7 +63,23 @@ impl SourceKey {
     pub(super) fn has_internal_source_limit(self) -> bool {
         !matches!(self, Self::ExternallyLimitedProxy)
     }
+
+    /// The IPv6 /56 around a /64 source; IPv4 and proxies have none.
+    pub(super) fn network(self) -> Option<NetworkKey> {
+        match self {
+            Self::Ipv6Prefix64(prefix) => {
+                let mut network = [0_u8; 7];
+                network.copy_from_slice(&prefix[..7]);
+                Some(NetworkKey(network))
+            }
+            Self::Ipv4(_) | Self::ExternallyLimitedProxy => None,
+        }
+    }
 }
+
+/// An IPv6 /56 that groups the /64 sources of one end site (S47).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(super) struct NetworkKey([u8; 7]);
 
 #[derive(Clone, Default)]
 pub(super) struct SourceClassifier {
@@ -79,6 +102,10 @@ impl SourceClassifier {
         Ok(Self {
             externally_limited_proxies,
         })
+    }
+
+    pub(super) fn is_trusted_ip(&self, address: IpAddr) -> bool {
+        self.externally_limited_proxies.contains(&canonical_ip(address))
     }
 
     pub(super) fn classify(&self, address: SocketAddr) -> SourceKey {
@@ -105,6 +132,7 @@ fn canonical_ip(address: IpAddr) -> IpAddr {
 struct ConnectionCounts {
     total: usize,
     by_source: HashMap<SourceKey, usize>,
+    by_network: HashMap<NetworkKey, usize>,
 }
 
 #[derive(Clone)]
@@ -112,6 +140,7 @@ pub(super) struct ConnectionLimiter {
     counts: Arc<Mutex<ConnectionCounts>>,
     max_total: usize,
     max_per_source: usize,
+    max_per_network: usize,
 }
 
 impl ConnectionLimiter {
@@ -120,7 +149,14 @@ impl ConnectionLimiter {
             counts: Arc::new(Mutex::new(ConnectionCounts::default())),
             max_total,
             max_per_source,
+            max_per_network: max_per_source.saturating_mul(NETWORK_CAP_FACTOR),
         }
+    }
+
+    pub(super) fn from_limits(limits: &ServerLimits) -> Self {
+        let mut limiter = Self::new(limits.max_connections, limits.max_connections_per_source);
+        limiter.max_per_network = limits.max_connections_per_network;
+        limiter
     }
 
     pub(super) fn try_acquire(&self, source: SourceKey) -> Option<ConnectionPermit> {
@@ -129,8 +165,13 @@ impl ConnectionLimiter {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let source_count = counts.by_source.get(&source).copied().unwrap_or_default();
+        let network = source.network();
+        let network_count = network
+            .and_then(|network| counts.by_network.get(&network).copied())
+            .unwrap_or_default();
         if counts.total >= self.max_total
             || (source.has_internal_source_limit() && source_count >= self.max_per_source)
+            || (network.is_some() && network_count >= self.max_per_network)
         {
             return None;
         }
@@ -138,6 +179,9 @@ impl ConnectionLimiter {
         let limited_source = source.has_internal_source_limit().then_some(source);
         if let Some(source) = limited_source {
             counts.by_source.insert(source, source_count + 1);
+        }
+        if let Some(network) = network {
+            counts.by_network.insert(network, network_count + 1);
         }
         Some(ConnectionPermit {
             counts: self.counts.clone(),
@@ -175,6 +219,42 @@ impl Drop for ConnectionPermit {
                 counts.by_source.remove(&source);
             }
         }
+        let Some(network) = source.network() else {
+            return;
+        };
+        if let Some(network_count) = counts.by_network.get_mut(&network) {
+            *network_count = network_count.saturating_sub(1);
+            if *network_count == 0 {
+                counts.by_network.remove(&network);
+            }
+        }
+    }
+}
+
+/// Connection and registration ceilings; `config.rs` reads overrides from the
+/// environment (FC4: limits are configurable and sized to the host).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct ServerLimits {
+    pub(super) max_connections: usize,
+    pub(super) max_connections_per_source: usize,
+    pub(super) max_connections_per_network: usize,
+    pub(super) max_clients: usize,
+    pub(super) max_clients_per_source: usize,
+    pub(super) max_clients_per_network: usize,
+    pub(super) max_clients_per_key: usize,
+}
+
+impl Default for ServerLimits {
+    fn default() -> Self {
+        Self {
+            max_connections: MAX_CONNECTION_WORKERS,
+            max_connections_per_source: MAX_CONNECTIONS_PER_SOURCE,
+            max_connections_per_network: MAX_CONNECTIONS_PER_SOURCE * NETWORK_CAP_FACTOR,
+            max_clients: MAX_REGISTERED_CLIENTS,
+            max_clients_per_source: MAX_REGISTERED_CLIENTS_PER_SOURCE,
+            max_clients_per_network: MAX_REGISTERED_CLIENTS_PER_SOURCE * NETWORK_CAP_FACTOR,
+            max_clients_per_key: MAX_REGISTERED_CLIENTS_PER_KEY,
+        }
     }
 }
 
@@ -182,6 +262,10 @@ impl Drop for ConnectionPermit {
 pub(super) enum RetainError {
     InvalidField(&'static str),
     Limit(&'static str),
+    /// The entry belongs to another proven device key (FC4).
+    Bound(&'static str),
+    /// A required relation access proof is missing or wrong (FC4).
+    Denied(&'static str),
 }
 
 impl RetainError {
@@ -189,6 +273,8 @@ impl RetainError {
         match self {
             Self::InvalidField(field) => format!("invalid or oversized {field}"),
             Self::Limit(resource) => format!("too many {resource}"),
+            Self::Bound(entry) => format!("{entry} is bound to another device key"),
+            Self::Denied(proof) => format!("{proof} is missing or does not match"),
         }
     }
 }
@@ -340,5 +426,50 @@ mod tests {
     #[test]
     fn invalid_proxy_ip_is_rejected() {
         assert!(SourceClassifier::parse_proxy_ips("127.0.0.1, nope").is_err());
+    }
+
+    #[test]
+    fn review_task_ipv6_sources_of_one_end_site_share_a_network_cap() {
+        let site = |index: u8| {
+            SourceKey::from_socket(SocketAddr::new(
+                IpAddr::V6(std::net::Ipv6Addr::new(
+                    0x2001,
+                    0xdb8,
+                    0x1,
+                    u16::from(index),
+                    0,
+                    0,
+                    0,
+                    1,
+                )),
+                1,
+            ))
+        };
+        assert_ne!(site(1), site(2), "distinct /64 sources");
+        assert_eq!(site(1).network(), site(2).network(), "one /56");
+        let next_site = SourceKey::from_socket("[2001:db8:1:100::1]:1".parse().unwrap());
+        assert_ne!(site(1).network(), next_site.network(), "the next /56");
+        assert_eq!(SourceKey::Ipv4([192, 0, 2, 1]).network(), None);
+
+        let limits = ServerLimits {
+            max_connections: 100,
+            max_connections_per_source: 2,
+            max_connections_per_network: 3,
+            ..ServerLimits::default()
+        };
+        let limiter = ConnectionLimiter::from_limits(&limits);
+        let first = limiter.try_acquire(site(1)).unwrap();
+        let second = limiter.try_acquire(site(2)).unwrap();
+        let third = limiter.try_acquire(site(3)).unwrap();
+        assert!(
+            limiter.try_acquire(site(4)).is_none(),
+            "a fourth /64 of the same /56 is refused"
+        );
+        assert!(limiter
+            .try_acquire(SourceKey::Ipv4([192, 0, 2, 1]))
+            .is_some());
+        drop(first);
+        assert!(limiter.try_acquire(site(4)).is_some());
+        drop((second, third));
     }
 }

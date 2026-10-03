@@ -12,6 +12,19 @@
 use std::net::{Shutdown, TcpListener};
 use std::sync::{Arc, Mutex};
 
+mod access;
+mod bindings;
+mod config;
+mod direct_presence;
+mod hello_session;
+mod login;
+mod rooms;
+mod server_tls;
+#[cfg(test)]
+mod signal_security_state_tests;
+#[cfg(test)]
+mod signal_security_transport_tests;
+mod signal_stream;
 mod direct_messages;
 mod direct_validation;
 mod discovery;
@@ -32,6 +45,7 @@ mod protocol;
 mod rate_limits;
 mod registration_guard;
 mod relay;
+mod relay_access;
 #[cfg(test)]
 mod resource_limits_tests;
 #[cfg(test)]
@@ -49,15 +63,16 @@ mod transport;
 #[cfg(test)]
 mod transport_cleanup_tests;
 mod websocket_read_limit;
+mod websocket_socket;
 mod writer;
 use idle::SignalTiming;
 use limits::{
-    ConnectionLimiter, SourceClassifier, MAX_CONNECTIONS_PER_SOURCE, MAX_CONNECTION_WORKERS,
+    ConnectionLimiter, SourceClassifier,
 };
 use protocol::{In, Out, PeerPresence};
 use rate_limits::AcceptRateLimiter;
-use state::{join_room, leave_room, State};
-use transport::handle_with_source;
+use state::{leave_room, State};
+use transport::handle_with_security;
 use writer::Writer;
 
 fn send(writer: &Writer, message: &Out) -> bool {
@@ -65,10 +80,32 @@ fn send(writer: &Writer, message: &Out) -> bool {
 }
 
 fn main() {
-    let bind = std::env::args()
-        .nth(1)
-        .or_else(|| std::env::var("SE_SHARE_BIND").ok())
-        .unwrap_or_else(|| "0.0.0.0:51820".to_string());
+    let options = match config::Options::from_env_and_args() {
+        Ok(Some(options)) => options,
+        Ok(None) => { println!("{}", config::HELP); return; }
+        Err(error) => fatal(&error),
+    };
+    let bind = options.bind.to_string();
+    let relay_address = relay::bind_address(&bind).unwrap_or_else(|error| fatal(&error.to_string()));
+    options.check_security(relay_address).unwrap_or_else(|error| fatal(&error));
+    let tls = match (&options.cert, &options.key) {
+        (Some(cert), Some(key)) => Some(server_tls::load(cert, key).unwrap_or_else(|error| fatal(&error))),
+        _ => None,
+    };
+    let mut initial_state = State::default();
+    initial_state.policy = state::ServerPolicy {
+        limits: options.limits, require_key_login: options.require_key_login,
+    };
+    if let Some(path) = &options.state_file {
+        initial_state.bindings = bindings::Bindings::load(path, discovery_state::unix_seconds())
+            .unwrap_or_else(|error| fatal(&error));
+        initial_state.bindings.save(path).unwrap_or_else(|error| fatal(&format!("cannot write server state {}: {error}", path.display())));
+        initial_state.binding_path = Some(path.clone());
+    } else {
+        eprintln!("se-share-server: device/lookup key bindings are memory-only; use --state-file for restart protection");
+    }
+    let relay_admissions = initial_state.relay_admissions.clone();
+    let state = Arc::new(Mutex::new(initial_state));
     let source_classifier = match trusted_proxy_sources_from_env() {
         Ok(classifier) => classifier,
         Err(error) => {
@@ -88,7 +125,12 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let _relay_guard = match relay::start(&bind, keepalive) {
+    let _relay_guard = match relay::start(relay_address, relay::RelayOptions {
+        keepalive, tls: tls.as_ref().map(|config| config.as_ref().clone()),
+        plaintext_fallback: options.allow_plaintext || relay_address.is_some_and(|addr| addr.ip().is_loopback()),
+        trusted_proxy: relay_address.is_some_and(|addr| source_classifier.is_trusted_ip(addr.ip())),
+        admissions: relay_admissions,
+    }) {
         Ok(guard) => guard,
         Err(error) => {
             eprintln!("se-share-server: {error}");
@@ -103,12 +145,12 @@ fn main() {
         }
     };
     eprintln!(
-        "se-share-server signaling on {bind} (raw TCP + WebSocket upgrade, idle keepalive {} s)",
-        keepalive.secs()
+        "se-share-server signaling on {bind} ({}, idle keepalive {} s)",
+        if tls.is_some() { "TLS WebSocket" } else { "explicit plaintext TCP/WebSocket" }, keepalive.secs()
     );
     let timing = SignalTiming::new(keepalive);
-    let state = Arc::new(Mutex::new(State::default()));
-    let connections = ConnectionLimiter::new(MAX_CONNECTION_WORKERS, MAX_CONNECTIONS_PER_SOURCE);
+    let connections = ConnectionLimiter::from_limits(&options.limits);
+    let allow_plaintext = options.allow_plaintext || options.bind.ip().is_loopback();
     let mut accept_rate = AcceptRateLimiter::new();
     for conn in listener.incoming() {
         let stream = match conn {
@@ -132,14 +174,20 @@ fn main() {
         }
         let state = state.clone();
         let timing = timing.clone();
+        let tls = tls.clone();
         let _ = std::thread::Builder::new()
             .name("share-server-connection".into())
             .spawn(move || {
                 // Idle connections keep this permit like any other connection.
                 let _permit = permit;
-                let _ = handle_with_source(stream, state, source, &timing);
+                let _ = handle_with_security(stream, state, source, &timing, tls, allow_plaintext);
             });
     }
+}
+
+fn fatal(error: &str) -> ! {
+    eprintln!("se-share-server: {error}");
+    std::process::exit(1);
 }
 
 fn trusted_proxy_sources_from_env() -> Result<SourceClassifier, String> {
@@ -154,20 +202,29 @@ fn trusted_proxy_sources_from_env() -> Result<SourceClassifier, String> {
 
 fn dispatch(id: u64, writer: &Writer, msg: In, state: &Arc<Mutex<State>>) {
     match msg {
-        In::PublishDirect { presence } => tracked_direct::publish(id, writer, presence, state),
+        In::PublishDirect { presence, access_hash } => direct_presence::publish(id, writer, presence, access_hash, state),
         In::UnpublishDirect { lookup_id } => tracked_direct::unpublish(id, &lookup_id, state),
-        In::WatchDirect { lookup_id } => tracked_direct::watch(id, writer, &lookup_id, state),
+        In::WatchDirect { lookup_id, access_proof } => direct_presence::watch(id, writer, &lookup_id, access_proof, state),
         In::RequestDirect {
             lookup_id,
             presence,
-        } => tracked_direct::request_legacy(writer, &lookup_id, presence, state),
+        } => {
+            if direct_presence::require_origin(state, id, writer, &presence) {
+                tracked_direct::request_legacy(writer, &lookup_id, presence, state);
+            }
+        },
         In::DirectAccessAccepted {
             lookup_id,
             requester_device_id,
             accepted,
             presence,
             msg,
-        } => tracked_direct::decision_legacy(
+        } => {
+            if !direct_presence::require_owner(state, id, writer, &lookup_id)
+                || presence.as_ref().is_some_and(|presence| !direct_presence::require_origin(state, id, writer, presence)) {
+                return;
+            }
+            tracked_direct::decision_legacy(
             writer,
             &lookup_id,
             &requester_device_id,
@@ -175,7 +232,8 @@ fn dispatch(id: u64, writer: &Writer, msg: In, state: &Arc<Mutex<State>>) {
             presence,
             msg,
             state,
-        ),
+        );
+        },
         In::SubmitDirectRequest {
             request,
             legacy_presence,
@@ -193,7 +251,7 @@ fn dispatch(id: u64, writer: &Writer, msg: In, state: &Arc<Mutex<State>>) {
             tracked_direct::unwatch(id, &lookup_id, state);
             writer.forget_idle_direct(&lookup_id);
         }
-        In::JoinRoom { room_id, presence } => join_room(id, writer, &room_id, presence, state),
+        In::JoinRoom { room_id, presence, access_proof } => rooms::join_with_access(id, writer, &room_id, presence, access_proof, state),
         In::LeaveRoom { room_id } => {
             leave_room(id, &room_id, state);
             writer.forget_idle_room(&room_id);
@@ -224,6 +282,6 @@ fn dispatch(id: u64, writer: &Writer, msg: In, state: &Arc<Mutex<State>>) {
             keepalive_secs,
         } => writer.set_idle(idle, keepalive_secs),
         // Any inbound line already renewed the connection's liveness.
-        In::KeepaliveAck | In::Hello { .. } => {}
+        In::KeepaliveAck | In::Hello { .. } | In::HelloAuth { .. } => {}
     }
 }

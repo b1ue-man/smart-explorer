@@ -51,12 +51,26 @@ pub(super) fn require_packet(
 }
 
 pub(super) fn validate_pin_length(pin: &[u8]) -> Result<(), DiscoveryPortError> {
-    if pin.len() > DISCOVERY_PIN_MAX_BYTES {
+    if pin.is_empty() {
+        Err(DiscoveryPortError::InvalidRequest("PIN must not be empty".to_string()))
+    } else if pin.len() > DISCOVERY_PIN_MAX_BYTES {
         Err(DiscoveryPortError::InvalidRequest(
             "PIN exceeds the supported byte limit".to_string(),
         ))
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod review_task_pin_tests {
+    use super::validate_pin_length;
+
+    #[test]
+    fn review_task_empty_pin_is_rejected_at_the_crypto_port_boundary() {
+        assert!(validate_pin_length(b"").is_err());
+        // Weak nonempty PINs are a separate, explicit caller choice.
+        assert!(validate_pin_length(b"1").is_ok());
     }
 }
 

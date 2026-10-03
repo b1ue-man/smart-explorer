@@ -145,6 +145,7 @@ fn client(writer: Writer, device_id: &str, direct_lookup_ids: HashSet<String>) -
         direct_lookup_ids,
         watched_lookup_ids: HashSet::new(),
         rooms: HashSet::new(),
+        identity: Default::default(),
     }
 }
 

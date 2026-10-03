@@ -1,6 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
+use super::discovery_offer_guard::OfferGuards;
 use super::discovery_signal_types::{
     DiscoveryAdvertisement, DiscoveryKind, DiscoveryPublishTarget, PairingPacketKind,
     DISCOVERY_MAX_SERVER_LEASE_SECS,
@@ -32,6 +33,7 @@ pub(super) struct DiscoverySignalState {
     closed_offer_ids: HashMap<String, Instant>,
     pub(super) list_request_outstanding: bool,
     pub(super) next_list_request_at: Instant,
+    pub(super) offer_guards: OfferGuards,
 }
 
 impl DiscoverySignalState {
@@ -45,6 +47,7 @@ impl DiscoverySignalState {
             closed_offer_ids: HashMap::new(),
             list_request_outstanding: false,
             next_list_request_at: Instant::now(),
+            offer_guards: OfferGuards::default(),
         }
     }
 
@@ -61,6 +64,7 @@ impl DiscoverySignalState {
     }
 
     pub(super) fn remove_offer(&mut self, offer_id: &str) -> Option<ActiveDiscoveryOffer> {
+        self.offer_guards.forget(offer_id);
         self.offers.remove(offer_id)
     }
 
@@ -72,7 +76,7 @@ impl DiscoverySignalState {
             .collect();
         expired
             .into_iter()
-            .filter_map(|offer_id| self.offers.remove(&offer_id))
+            .filter_map(|offer_id| self.remove_offer(&offer_id))
             .collect()
     }
 

@@ -3,16 +3,17 @@ use std::time::Instant;
 use super::configuration_runtime::RuntimeConfiguration;
 use super::discovery_signal_commands::{send_discovery_event, DiscoverySignalRuntime};
 use super::discovery_signal_exchange::strict_decode_payload;
+use super::discovery_signal_outcome::ExchangeEnd;
 use super::discovery_signal_port::DiscoveryPortAction;
 use super::discovery_signal_state::{
     PendingPublisherStart, DISCOVERY_EXCHANGE_TIMEOUT, DISCOVERY_LIST_REFRESH_INTERVAL,
     DISCOVERY_PUBLISH_RETRY_DELAY, MAX_ACTIVE_DISCOVERY_EXCHANGES,
 };
 use super::discovery_signal_types::{DiscoveryEvent, DiscoveryOfferStopReason, PairingCloseReason};
-use super::discovery_signal_wire::{is_discovery_server_tag, DiscoveryServerMsg};
 use super::discovery_signal_validation::{
     close_reason_message, validate_discovery_identifier, validate_list,
 };
+use super::discovery_signal_wire::{is_discovery_server_tag, DiscoveryServerMsg};
 use super::signal_connection::SignalConnection;
 use super::types::ShareEvent;
 
@@ -44,10 +45,7 @@ impl DiscoverySignalRuntime {
             return DiscoveryDispatchOutcome::NotDiscovery;
         }
         if !capability {
-            self.fail_protocol(
-                "Discovery-Nachricht ohne ausgehandelte Faehigkeit",
-                events,
-            );
+            self.fail_protocol("Discovery-Nachricht ohne ausgehandelte Faehigkeit", events);
             return DiscoveryDispatchOutcome::Reconnect;
         }
         let message: DiscoveryServerMsg = match serde_json::from_value(value) {
@@ -57,13 +55,8 @@ impl DiscoverySignalRuntime {
                 return DiscoveryDispatchOutcome::Reconnect;
             }
         };
-        match self.handle_discovery_message(
-            message,
-            signal,
-            events,
-            configuration,
-            tracked_direct,
-        ) {
+        match self.handle_discovery_message(message, signal, events, configuration, tracked_direct)
+        {
             Ok(()) => DiscoveryDispatchOutcome::Handled,
             Err(error) => {
                 let _ = events.send(ShareEvent::Error(error));
@@ -220,8 +213,7 @@ impl DiscoverySignalRuntime {
         let decoded = match strict_decode_payload(&payload) {
             Ok(decoded) => decoded,
             Err(_) => {
-                self.state
-                    .remember_closed_exchange(exchange_id.clone());
+                self.state.remember_closed_exchange(exchange_id.clone());
                 self.reject_exchange(signal, &exchange_id)?;
                 send_discovery_event(
                     events,
@@ -234,7 +226,11 @@ impl DiscoverySignalRuntime {
                 return Ok(());
             }
         };
-        if let Some(offer_id) = self.state.offer_for_discovery(&discovery_id).map(str::to_owned) {
+        if let Some(offer_id) = self
+            .state
+            .offer_for_discovery(&discovery_id)
+            .map(str::to_owned)
+        {
             if let Err(error) = self.start_publisher_exchange(
                 exchange_id,
                 discovery_id.clone(),
@@ -290,7 +286,8 @@ impl DiscoverySignalRuntime {
                 DiscoveryEvent::ExchangeFailed {
                     exchange_id: Some(exchange_id),
                     discovery_id: Some(discovery_id),
-                    error: "Discovery-Start passt zu keiner eindeutigen Publish-Bestaetigung".into(),
+                    error: "Discovery-Start passt zu keiner eindeutigen Publish-Bestaetigung"
+                        .into(),
                 },
             );
             return Ok(());
@@ -317,8 +314,7 @@ impl DiscoverySignalRuntime {
     ) -> Result<(), String> {
         validate_discovery_identifier(&exchange_id)?;
         if let Some(pending) = self.state.remove_pending_exchange(&exchange_id) {
-            self.state
-                .remember_closed_exchange(exchange_id.clone());
+            self.state.remember_closed_exchange(exchange_id.clone());
             let event = if reason == PairingCloseReason::Cancelled {
                 DiscoveryEvent::ExchangeCancelled {
                     exchange_id,
@@ -340,73 +336,56 @@ impl DiscoverySignalRuntime {
             }
             return Err("PairingFinished referenziert keinen lokalen Austausch".into());
         };
-        self.state
-            .remember_closed_exchange(exchange_id.clone());
-        if reason == PairingCloseReason::Completed {
-            if !exchange.awaits_finish() {
-                self.port.cancel_exchange(&exchange_id);
-                send_discovery_event(
-                    events,
-                    DiscoveryEvent::ExchangeFailed {
-                        exchange_id: Some(exchange_id.clone()),
-                        discovery_id: Some(exchange.discovery_id),
-                        error: "Discovery-Server meldete einen vorzeitigen Abschluss".into(),
-                    },
-                );
-                return Ok(());
-            }
+        self.state.remember_closed_exchange(exchange_id.clone());
+        if reason == PairingCloseReason::Completed && exchange.awaits_finish() {
             match self.port.finish_exchange(&exchange_id, reason) {
-                Ok(Some(DiscoveryPortAction::ExchangeReady { outcome })) => send_discovery_event(
-                    events,
-                    DiscoveryEvent::ExchangeCompleted {
-                        exchange_id,
-                        discovery_id: exchange.discovery_id,
-                        outcome,
-                    },
-                ),
-                _ => {
-                    self.port.cancel_exchange(&exchange_id);
+                Ok(Some(DiscoveryPortAction::ExchangeReady { outcome })) => {
+                    self.exchange_completed(&exchange);
                     send_discovery_event(
                         events,
-                        DiscoveryEvent::ExchangeFailed {
-                            exchange_id: Some(exchange_id),
-                            discovery_id: Some(exchange.discovery_id),
-                            error: "Discovery-Austausch konnte nicht sicher abgeschlossen werden"
-                                .into(),
+                        DiscoveryEvent::ExchangeCompleted {
+                            exchange_id,
+                            discovery_id: exchange.discovery_id,
+                            outcome,
                         },
                     );
                 }
+                _ => {
+                    let event = self.exchange_ended(&exchange_id, Some(&exchange), None,
+                        ExchangeEnd::Failed("Discovery-Austausch konnte nicht sicher abgeschlossen werden".into()), false);
+                    self.port.cancel_exchange(&exchange_id);
+                    send_discovery_event(events, event);
+                }
             }
-        } else {
-            let _ = self.port.finish_exchange(&exchange_id, reason);
-            self.port.cancel_exchange(&exchange_id);
-            if reason == PairingCloseReason::Cancelled {
-                send_discovery_event(
-                    events,
-                    DiscoveryEvent::ExchangeCancelled {
-                        exchange_id,
-                        discovery_id: Some(exchange.discovery_id),
-                    },
-                );
-            } else {
-                send_discovery_event(
-                    events,
-                    DiscoveryEvent::ExchangeFailed {
-                        exchange_id: Some(exchange_id),
-                        discovery_id: Some(exchange.discovery_id),
-                        error: close_reason_message(reason).into(),
-                    },
-                );
-            }
+            return Ok(());
         }
+        let (end, attempt) = match reason {
+            PairingCloseReason::Completed => (
+                ExchangeEnd::Failed("Discovery-Server meldete einen vorzeitigen Abschluss".into()),
+                false,
+            ),
+            PairingCloseReason::Cancelled => (ExchangeEnd::Cancelled, true),
+            PairingCloseReason::TimedOut
+            | PairingCloseReason::PeerDisconnected
+            | PairingCloseReason::ProtocolError => (
+                ExchangeEnd::Failed(close_reason_message(reason).into()),
+                true,
+            ),
+            PairingCloseReason::OfferExpired
+            | PairingCloseReason::OfferWithdrawn
+            | PairingCloseReason::TargetUnavailable => (
+                ExchangeEnd::Failed(close_reason_message(reason).into()),
+                false,
+            ),
+        };
+        let event = self.exchange_ended(&exchange_id, Some(&exchange), None, end, attempt);
+        let _ = self.port.finish_exchange(&exchange_id, reason);
+        self.port.cancel_exchange(&exchange_id);
+        send_discovery_event(events, event);
         Ok(())
     }
 
-    fn fail_protocol(
-        &mut self,
-        error: &str,
-        events: &crossbeam_channel::Sender<ShareEvent>,
-    ) {
+    fn fail_protocol(&mut self, error: &str, events: &crossbeam_channel::Sender<ShareEvent>) {
         self.abort_all_exchanges(error, events);
         self.abort_pending("Discovery-Protokoll wurde abgebrochen", events);
         self.state.advertisements.clear();

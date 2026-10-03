@@ -42,6 +42,7 @@ pub fn tls_config() -> TlsConfig {
     TlsConfig {
         cert: CertConfig::Manual { server_config },
         https_bind_addr: (Ipv4Addr::LOCALHOST, 0).into(),
+        plaintext_fallback: false,
     }
 }
 

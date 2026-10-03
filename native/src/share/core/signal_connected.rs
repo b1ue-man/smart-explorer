@@ -16,6 +16,7 @@ use crate::share::configuration_runtime::RuntimeConfiguration;
 use crate::share::core::now_secs;
 use crate::share::power::clock::Now;
 use crate::share::power::{ProbeOutcome, SignalPowerStatus};
+use crate::share::server_address::ServerSecurity;
 use crate::share::signal_connection::SignalConnection;
 use crate::share::signal_connector::NegotiatedSignal;
 use crate::share::signal_handshake::SignalCapabilities;
@@ -58,9 +59,18 @@ pub(super) fn run(
     let capabilities = negotiated.capabilities;
     let connection = &mut negotiated.connection;
     let _ = runtime.events.send(ShareEvent::ServerConnected);
+    let security = if connection.encrypted() {
+        ServerSecurity::Encrypted
+    } else {
+        ServerSecurity::Plaintext
+    };
     let _ = runtime.events.send(ShareEvent::Status(format!(
-        "Share-Server verbunden ({}, tracked_direct={}, discovery_exchange={})",
-        negotiated.transport, capabilities.tracked_direct, capabilities.discovery_exchange,
+        "Share-Server verbunden ({}, {}, Schluessel-Anmeldung={}, tracked_direct={}, discovery_exchange={})",
+        security.label(),
+        negotiated.transport,
+        capabilities.key_login,
+        capabilities.tracked_direct,
+        capabilities.discovery_exchange,
     )));
     if let Err(error) =
         runtime
@@ -86,6 +96,11 @@ pub(super) fn run(
             "Share-Presence konnte nicht sicher erzeugt werden: {error}"
         )));
         return setup_failed(runtime);
+    }
+    // The server's relay admits endpoints registered at its signaling (B20);
+    // a relay attempt made before this registration is retried now.
+    if runtime.iroh.home_relay_connected() == Some(false) {
+        runtime.iroh.notify_network_change();
     }
     if capabilities.tracked_direct
         && send_pending_tracked(

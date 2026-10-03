@@ -2,7 +2,7 @@
 
 use std::io::{self, ErrorKind, Read, Write};
 use std::net::TcpStream;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::rate_limits::InboundByteRateLimiter;
 
@@ -32,6 +32,20 @@ impl<S> WebSocketReadLimit<S> {
 impl WebSocketReadLimit<TcpStream> {
     pub(super) fn set_nonblocking(&self, nonblocking: bool) -> io::Result<()> {
         self.inner.set_nonblocking(nonblocking)
+    }
+
+    pub(super) fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+        self.inner.set_read_timeout(timeout)
+    }
+}
+
+impl WebSocketReadLimit<crate::signal_stream::SignalStream> {
+    pub(super) fn wait_readable(&self, deadline: Instant) -> io::Result<()> {
+        self.inner.wait_readable(deadline)
+    }
+
+    pub(super) fn set_write_deadline(&mut self, deadline: Option<Instant>) {
+        self.inner.set_write_deadline(deadline);
     }
 
     pub(super) fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {

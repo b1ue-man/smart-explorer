@@ -1,7 +1,6 @@
 //! Liveness timing on both transports with an injected clock (contract V1,
 //! critic findings K5/K15/K16): idle keepalive and reply window on TCP and
-//! WebSocket; clients that are not idle keep the established rules (raw TCP
-//! closes after 60 s of silence, WebSocket has no inbound deadline); partial
+//! WebSocket; clients that are not idle close after 60 s of silence; partial
 //! TCP lines survive read timeouts.
 
 use std::io::{self, BufRead, BufReader, ErrorKind, Write};
@@ -186,10 +185,10 @@ fn android_background_task_session_timing_follows_the_contract() {
     clock.advance(SECOND);
     assert_eq!(session.poll(&writer, clock.now()), Step::Close);
 
-    // Not idle on WebSocket: no inbound deadline, as before.
-    let mut session = SignalSession::new(clock.now(), None);
-    clock.advance(3600 * SECOND);
-    assert_eq!(session.poll(&writer, clock.now()), Step::Wait(None));
+    // WebSocket follows the same active liveness deadline.
+    let mut session = SignalSession::new(clock.now(), Some(ACTIVE_READ_WINDOW));
+    clock.advance(60 * SECOND);
+    assert_eq!(session.poll(&writer, clock.now()), Step::Close);
 
     // Idle: fixed K cadence regardless of inbound traffic, 60 s to answer.
     let start = clock.now();
@@ -319,20 +318,16 @@ fn android_background_task_tcp_legacy_client_keeps_window_and_partial_lines() {
     finish(server, &state);
 }
 
-/// Established behavior: a WebSocket client that is not idle is never closed
-/// for silence, whether it lacks the capability or woke up again.
+/// Silent active WebSockets release registration and connection resources,
+/// including after the client switches back from negotiated idle mode.
 #[test]
-fn android_background_task_websocket_without_idle_has_no_inbound_deadline() {
+fn review_task_active_websocket_has_an_inbound_deadline() {
     let clock = TestClock::new(START_UNIX);
     let (address, state, server) = spawn_server(clock.timing(Keepalive::default()));
     let mut websocket = ws_connect(address, &[]);
-    clock.advance(3600 * SECOND);
-    ws_assert_quiet(&mut websocket);
-    websocket
-        .send(Message::Text(r#"{"t":"heartbeat"}"#.into()))
-        .unwrap();
-    assert_eq!(ws_recv(&mut websocket)["t"], "pong");
-    ws_close(websocket, server, &state);
+    clock.advance(60 * SECOND);
+    ws_assert_closed(&mut websocket);
+    finish(server, &state);
 
     let clock = TestClock::new(START_UNIX);
     let (address, state, server) = spawn_server(clock.timing(Keepalive::default()));
@@ -342,13 +337,9 @@ fn android_background_task_websocket_without_idle_has_no_inbound_deadline() {
         websocket.send(Message::Text(message)).unwrap();
         assert_eq!(ws_recv(&mut websocket)["idle"], idle);
     }
-    clock.advance(3600 * SECOND);
-    ws_assert_quiet(&mut websocket);
-    websocket
-        .send(Message::Text(r#"{"t":"heartbeat"}"#.into()))
-        .unwrap();
-    assert_eq!(ws_recv(&mut websocket)["t"], "pong");
-    ws_close(websocket, server, &state);
+    clock.advance(60 * SECOND);
+    ws_assert_closed(&mut websocket);
+    finish(server, &state);
 }
 
 #[test]

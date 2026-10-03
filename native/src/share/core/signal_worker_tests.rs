@@ -136,9 +136,8 @@ impl Harness {
             let negotiated = NegotiatedSignal {
                 connection,
                 capabilities: SignalCapabilities {
-                    tracked_direct: false,
-                    discovery_exchange: false,
                     idle_keepalive,
+                    ..SignalCapabilities::default()
                 },
                 transport: "test".into(),
             };

@@ -1,12 +1,17 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use super::limits::{
-    validate_identifier, validate_presence, RetainError, SourceKey, MAX_REGISTERED_CLIENTS,
-    MAX_REGISTERED_CLIENTS_PER_SOURCE, MAX_ROOMS_PER_CLIENT, MAX_ROOM_MEMBERS,
-};
-use super::writer::outbound_fits;
+use iroh_base::PublicKey;
+
+use super::bindings::{BindOutcome, Bindings};
+use super::discovery_state::unix_seconds;
+use super::limits::{validate_identifier, ServerLimits, SourceKey};
+use super::relay_access::RelayAdmissions;
 use super::{send, Out, PeerPresence, Writer};
+
+#[cfg(test)]
+pub(super) use super::rooms::join_room;
+pub(super) use super::rooms::leave_room;
 
 #[derive(Clone)]
 pub(super) struct Client {
@@ -17,6 +22,44 @@ pub(super) struct Client {
     pub(super) direct_lookup_ids: HashSet<String>,
     pub(super) watched_lookup_ids: HashSet<String>,
     pub(super) rooms: HashSet<String>,
+    pub(super) identity: ClientIdentity,
+}
+
+/// What a client proved at its Hello (FC4).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) enum ClientIdentity {
+    /// No key login (an older app); may use unbound entries only.
+    #[default]
+    Legacy,
+    /// An older app with the key its Hello names (unproven; the relay
+    /// handshake proves it before the relay admits it).
+    LegacyClaimed(PublicKey),
+    /// Logged in with this key (`key_login_v1`).
+    Proven(PublicKey),
+}
+
+impl ClientIdentity {
+    pub(super) fn proven(&self) -> Option<&PublicKey> {
+        match self {
+            Self::Proven(key) => Some(key),
+            Self::Legacy | Self::LegacyClaimed(_) => None,
+        }
+    }
+
+    fn relay_key(&self) -> Option<PublicKey> {
+        match self {
+            Self::Proven(key) | Self::LegacyClaimed(key) => Some(*key),
+            Self::Legacy => None,
+        }
+    }
+}
+
+/// Server-wide settings the handlers read (FC4).
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct ServerPolicy {
+    pub(super) limits: ServerLimits,
+    /// Older clients without key login are refused (`--require-key-login`).
+    pub(super) require_key_login: bool,
 }
 
 #[derive(Default)]
@@ -30,6 +73,26 @@ pub(super) struct State {
     pub(super) discovery_offers: HashMap<String, super::discovery_state::DiscoveryOffer>,
     pub(super) discovery_offer_index: HashMap<(u64, String), String>,
     pub(super) discovery_exchanges: HashMap<String, super::discovery_state::DiscoveryExchange>,
+    pub(super) policy: ServerPolicy,
+    pub(super) bindings: Bindings,
+    pub(super) binding_path: Option<std::path::PathBuf>,
+    pub(super) relay_admissions: Arc<RelayAdmissions>,
+    /// Proof hash a proven watcher showed, by (client id, lookup id).
+    pub(super) watch_access: HashMap<(u64, String), [u8; 32]>,
+    /// Partition of a room member, by (room id, device id).
+    pub(super) room_access: HashMap<(String, String), [u8; 32]>,
+}
+
+impl State {
+    /// Called while the state lock serializes owner changes and their disk order.
+    pub(super) fn persist_bindings(&mut self) -> std::io::Result<()> {
+        let Some(path) = &self.binding_path else { return Ok(()); };
+        let mut candidate = self.bindings.clone();
+        if candidate.take_dirty().is_none() { return Ok(()); }
+        candidate.save(path)?;
+        self.bindings = candidate;
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,6 +101,13 @@ pub(super) enum RegistrationError {
     SourceFull,
     InvalidDeviceId,
     IdExhausted,
+    /// The device id belongs to another proven key.
+    DeviceBound,
+    /// The proven key already has its maximum of registrations.
+    KeyFull,
+    /// The server accepts only clients that log in with their key.
+    KeyLoginRequired,
+    BindingStateUnavailable,
 }
 
 impl RegistrationError {
@@ -47,8 +117,19 @@ impl RegistrationError {
             Self::SourceFull => "server source client limit reached",
             Self::InvalidDeviceId => "invalid or oversized device id",
             Self::IdExhausted => "server client id space exhausted",
+            Self::DeviceBound => "device id is bound to another device key",
+            Self::KeyFull => "too many connections for this device key",
+            Self::BindingStateUnavailable => "cannot persist device key binding; check server state file",
+            Self::KeyLoginRequired => "this server requires key login; update Smart Explorer",
         }
     }
+}
+
+enum Registration {
+    Done(u64),
+    /// Displaced clients go first; then the registration is tried again.
+    Retry,
+    Failed(RegistrationError),
 }
 
 pub(super) fn lock_state(state: &Arc<Mutex<State>>) -> MutexGuard<'_, State> {
@@ -57,6 +138,7 @@ pub(super) fn lock_state(state: &Arc<Mutex<State>>) -> MutexGuard<'_, State> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// Registration of a client without key login.
 pub(super) fn register_client(
     state: &Arc<Mutex<State>>,
     writer: Writer,
@@ -64,188 +146,187 @@ pub(super) fn register_client(
     device_id: String,
     capabilities: HashSet<String>,
 ) -> Result<u64, RegistrationError> {
+    register_client_with_identity(
+        state,
+        writer,
+        source,
+        device_id,
+        capabilities,
+        ClientIdentity::Legacy,
+    )
+}
+
+/// Registers a client. A proven key binds the device id (first key wins);
+/// older registrations that only named it are closed. When the server is
+/// full, a proven client displaces an older client without key login,
+/// preferring one without subscriptions (FC4).
+pub(super) fn register_client_with_identity(
+    state: &Arc<Mutex<State>>,
+    writer: Writer,
+    source: SourceKey,
+    device_id: String,
+    capabilities: HashSet<String>,
+    identity: ClientIdentity,
+) -> Result<u64, RegistrationError> {
     if validate_identifier("device id", &device_id).is_err() {
         return Err(RegistrationError::InvalidDeviceId);
     }
-    let mut state = lock_state(state);
-    if state.clients.len() >= MAX_REGISTERED_CLIENTS {
-        return Err(RegistrationError::Full);
+    // At most three evictions: an impostor, a global slot, then a source/network slot.
+    for _ in 0..4 {
+        let (registration, displaced) = {
+            let mut state = lock_state(state);
+            try_register_locked(
+                &mut state,
+                &writer,
+                source,
+                &device_id,
+                &capabilities,
+                &identity,
+            )
+        };
+        for (client_id, displaced_writer) in displaced {
+            displaced_writer.close();
+            cleanup(client_id, state);
+        }
+        match registration {
+            Registration::Done(id) => return Ok(id),
+            Registration::Failed(error) => return Err(error),
+            Registration::Retry => {}
+        }
     }
-    if source.has_internal_source_limit()
+    Err(RegistrationError::Full)
+}
+
+fn try_register_locked(
+    state: &mut State,
+    writer: &Writer,
+    source: SourceKey,
+    device_id: &str,
+    capabilities: &HashSet<String>,
+    identity: &ClientIdentity,
+) -> (Registration, Vec<(u64, Writer)>) {
+    let limits = state.policy.limits;
+    match identity.proven() {
+        Some(key) => {
+            let bound = state
+                .bindings
+                .bind_device(device_id, &key.to_string(), unix_seconds());
+            if bound == BindOutcome::Conflict {
+                return (Registration::Failed(RegistrationError::DeviceBound), Vec::new());
+            }
+            if bound == BindOutcome::Full || state.persist_bindings().is_err() {
+                return (Registration::Failed(RegistrationError::BindingStateUnavailable), Vec::new());
+            }
+            let impostors: Vec<(u64, Writer)> = state
+                .clients
+                .iter()
+                .filter(|(_, client)| {
+                    client.device_id == device_id && client.identity.proven().is_none()
+                })
+                .map(|(id, client)| (*id, client.writer.clone()))
+                .collect();
+            if !impostors.is_empty() {
+                return (Registration::Retry, impostors);
+            }
+            let same_key = state
+                .clients
+                .values()
+                .filter(|client| client.identity.proven() == Some(key))
+                .count();
+            if same_key >= limits.max_clients_per_key {
+                return (Registration::Failed(RegistrationError::KeyFull), Vec::new());
+            }
+        }
+        None => {
+            if state.policy.require_key_login {
+                return (
+                    Registration::Failed(RegistrationError::KeyLoginRequired),
+                    Vec::new(),
+                );
+            }
+            if state.bindings.device_key(device_id).is_some() {
+                return (Registration::Failed(RegistrationError::DeviceBound), Vec::new());
+            }
+        }
+    }
+    let full = state.clients.len() >= limits.max_clients;
+    let source_full = source.has_internal_source_limit()
         && state
             .clients
             .values()
             .filter(|client| client.source == source)
             .count()
-            >= MAX_REGISTERED_CLIENTS_PER_SOURCE
-    {
-        return Err(RegistrationError::SourceFull);
+            >= limits.max_clients_per_source;
+    let network_full = source.network().is_some_and(|network| state.clients.values()
+        .filter(|client| client.source.network() == Some(network)).count() >= limits.max_clients_per_network);
+    if full || source_full || network_full {
+        let victim = identity
+            .proven()
+            .and_then(|_| eviction_candidate(state, (!full).then_some(source), network_full && !source_full));
+        return match victim {
+            Some(victim) => (Registration::Retry, vec![victim]),
+            None if full => (Registration::Failed(RegistrationError::Full), Vec::new()),
+            None => (Registration::Failed(RegistrationError::SourceFull), Vec::new()),
+        };
     }
-    let id = state
-        .next_id
-        .checked_add(1)
-        .ok_or(RegistrationError::IdExhausted)?;
+    let Some(id) = state.next_id.checked_add(1) else {
+        return (Registration::Failed(RegistrationError::IdExhausted), Vec::new());
+    };
     state.next_id = id;
     state.clients.insert(
         id,
         Client {
-            writer,
+            writer: writer.clone(),
             source,
-            device_id,
-            capabilities,
+            device_id: device_id.to_string(),
+            capabilities: capabilities.clone(),
             direct_lookup_ids: HashSet::new(),
             watched_lookup_ids: HashSet::new(),
             rooms: HashSet::new(),
+            identity: identity.clone(),
         },
     );
-    Ok(id)
+    if let Some(key) = identity.relay_key() {
+        state.relay_admissions.signed_in(key);
+    }
+    (Registration::Done(id), Vec::new())
 }
 
-pub(super) fn join_room(
-    id: u64,
-    writer: &Writer,
-    room_id: &str,
-    presence: PeerPresence,
-    state: &Arc<Mutex<State>>,
-) {
-    if let Err(error) =
-        validate_identifier("room id", room_id).and_then(|_| validate_presence(&presence))
-    {
-        send_retain_error(writer, "room", error);
-        return;
-    }
-
-    let result = {
-        let mut state = lock_state(state);
-        let Some(client) = state.clients.get(&id) else {
-            return;
-        };
-        if client.device_id != presence.device_id {
-            Err(RetainError::InvalidField("presence device id"))
-        } else if !client.rooms.contains(room_id) && client.rooms.len() >= MAX_ROOMS_PER_CLIENT {
-            Err(RetainError::Limit("rooms"))
-        } else {
-            let members = state.rooms.get(room_id);
-            let existing = members.and_then(|members| members.get(&presence.device_id));
-            if existing.is_none()
-                && members.is_some_and(|members| members.len() >= MAX_ROOM_MEMBERS)
-            {
-                Err(RetainError::Limit("room members"))
-            } else {
-                let roster = members
-                    .into_iter()
-                    .flat_map(|members| members.iter())
-                    .filter(|(device_id, _)| *device_id != &presence.device_id)
-                    .map(|(_, (_, presence))| presence.clone())
-                    .collect::<Vec<_>>();
-                let roster = Out::RoomRoster {
-                    room_id: room_id.to_string(),
-                    members: roster,
-                };
-                if !outbound_fits(&roster) {
-                    Err(RetainError::Limit("room roster bytes"))
-                } else {
-                    let target_ids = members
-                        .into_iter()
-                        .flat_map(|members| members.iter())
-                        .filter(|(device_id, _)| *device_id != &presence.device_id)
-                        .map(|(_, (client_id, _))| *client_id)
-                        .collect::<Vec<_>>();
-                    let changed = existing
-                        .map(|(_, existing_presence)| existing_presence != &presence)
-                        .unwrap_or(true);
-                    let replaced_client = existing
-                        .map(|(client_id, _)| *client_id)
-                        .filter(|client_id| *client_id != id);
-                    if let Some(replaced_client) = replaced_client {
-                        if let Some(client) = state.clients.get_mut(&replaced_client) {
-                            client.rooms.remove(room_id);
-                        }
-                    }
-                    let members = state.rooms.entry(room_id.to_string()).or_default();
-                    members.insert(presence.device_id.clone(), (id, presence.clone()));
-                    if let Some(client) = state.clients.get_mut(&id) {
-                        client.rooms.insert(room_id.to_string());
-                    }
-                    let targets = if changed {
-                        target_ids
-                            .into_iter()
-                            .filter_map(|client_id| {
-                                state
-                                    .clients
-                                    .get(&client_id)
-                                    .map(|client| client.writer.clone())
-                            })
-                            .collect::<Vec<_>>()
-                    } else {
-                        Vec::new()
-                    };
-                    Ok((roster, targets))
-                }
-            }
-        }
-    };
-
-    let (roster, targets) = match result {
-        Ok(result) => result,
-        Err(error) => {
-            send_retain_error(writer, "room", error);
-            return;
-        }
-    };
-    send(writer, &roster);
-    let joined = Out::RoomJoined {
-        room_id: room_id.to_string(),
-        presence,
-    };
-    for target in targets {
-        // Idle members may get a pure refresh with their next keepalive.
-        target.offer(&joined);
-    }
+/// An older client without key login, of `source` when given: one without
+/// subscriptions first, then the oldest.
+fn eviction_candidate(state: &State, source: Option<SourceKey>, network: bool) -> Option<(u64, Writer)> {
+    state
+        .clients
+        .iter()
+        .filter(|(_, client)| client.identity.proven().is_none())
+        .filter(|(_, client)| source.is_none_or(|source| {
+            if network { client.source.network() == source.network() } else { client.source == source }
+        }))
+        .min_by_key(|(id, client)| {
+            let subscribed = !client.direct_lookup_ids.is_empty()
+                || !client.watched_lookup_ids.is_empty()
+                || !client.rooms.is_empty();
+            (subscribed, **id)
+        })
+        .map(|(id, client)| (*id, client.writer.clone()))
 }
 
-pub(super) fn leave_room(id: u64, room_id: &str, state: &Arc<Mutex<State>>) {
-    let notifications = {
-        let mut state = lock_state(state);
-        let mut target_ids = Vec::new();
-        let mut remove_room = false;
-        let mut departed_device = None;
-        if let Some(members) = state.rooms.get_mut(room_id) {
-            departed_device = members.iter().find_map(|(device_id, (client_id, _))| {
-                (*client_id == id).then(|| device_id.clone())
-            });
-            if let Some(device_id) = &departed_device {
-                members.remove(device_id);
-                target_ids.extend(members.values().map(|(client_id, _)| *client_id));
-                remove_room = members.is_empty();
-            }
-        }
-        if remove_room {
-            state.rooms.remove(room_id);
-        }
-        if let Some(client) = state.clients.get_mut(&id) {
-            client.rooms.remove(room_id);
-        }
-        if let Some(device_id) = departed_device {
-            target_ids
-                .into_iter()
-                .filter_map(|client_id| {
-                    state.clients.get(&client_id).map(|client| {
-                        (
-                            client.writer.clone(),
-                            Out::RoomLeft {
-                                room_id: room_id.to_string(),
-                                device_id: device_id.clone(),
-                            },
-                        )
-                    })
-                })
-                .collect::<Vec<_>>()
-        } else {
-            Vec::new()
-        }
+/// Whether a watcher may see a lookup's presence: older clients always (they
+/// cannot show proofs), proven ones with the owner's access hash.
+pub(super) fn watcher_admitted(state: &State, watcher_id: u64, lookup_id: &str) -> bool {
+    let Some(client) = state.clients.get(&watcher_id) else {
+        return false;
     };
-    send_all(notifications);
+    if client.identity.proven().is_none() {
+        return true;
+    }
+    match state.bindings.lookup_access(lookup_id) {
+        Some(hash) => state
+            .watch_access
+            .get(&(watcher_id, lookup_id.to_string()))
+            .is_some_and(|shown| *shown == hash),
+        None => true,
+    }
 }
 
 pub(super) fn cleanup(id: u64, state: &Arc<Mutex<State>>) {
@@ -254,6 +335,9 @@ pub(super) fn cleanup(id: u64, state: &Arc<Mutex<State>>) {
         let Some(client) = state.clients.remove(&id) else {
             return;
         };
+        if let Some(key) = client.identity.relay_key() {
+            state.relay_admissions.signed_out(key);
+        }
         let mut notifications = super::discovery::cleanup_client_locked(&mut state, id);
 
         for lookup_id in client.direct_lookup_ids {
@@ -261,6 +345,9 @@ pub(super) fn cleanup(id: u64, state: &Arc<Mutex<State>>) {
                 state.direct.remove(&lookup_id);
                 if let Some(watchers) = state.watchers.get(&lookup_id) {
                     for watcher_id in watchers {
+                        if !watcher_admitted(&state, *watcher_id, &lookup_id) {
+                            continue;
+                        }
                         if let Some(watcher) = state.clients.get(watcher_id) {
                             notifications.push((
                                 watcher.writer.clone(),
@@ -275,6 +362,7 @@ pub(super) fn cleanup(id: u64, state: &Arc<Mutex<State>>) {
         }
 
         for lookup_id in client.watched_lookup_ids {
+            state.watch_access.remove(&(id, lookup_id.clone()));
             let remove_lookup = if let Some(watchers) = state.watchers.get_mut(&lookup_id) {
                 watchers.remove(&id);
                 watchers.is_empty()
@@ -287,56 +375,14 @@ pub(super) fn cleanup(id: u64, state: &Arc<Mutex<State>>) {
         }
 
         for room_id in client.rooms {
-            let mut target_ids = Vec::new();
-            let mut departed_device = None;
-            let remove_room = if let Some(members) = state.rooms.get_mut(&room_id) {
-                departed_device = members.iter().find_map(|(device_id, (client_id, _))| {
-                    (*client_id == id).then(|| device_id.clone())
-                });
-                if let Some(device_id) = &departed_device {
-                    members.remove(device_id);
-                    target_ids.extend(members.values().map(|(client_id, _)| *client_id));
-                    members.is_empty()
-                } else {
-                    false
-                }
-            } else {
-                false
-            };
-            if remove_room {
-                state.rooms.remove(&room_id);
-            }
-            let Some(device_id) = departed_device else {
-                continue;
-            };
-            for target_id in target_ids {
-                if let Some(target) = state.clients.get(&target_id) {
-                    notifications.push((
-                        target.writer.clone(),
-                        Out::RoomLeft {
-                            room_id: room_id.clone(),
-                            device_id: device_id.clone(),
-                        },
-                    ));
-                }
-            }
+            notifications.extend(super::rooms::depart_locked(&mut state, id, &room_id));
         }
         notifications
     };
     send_all(notifications);
 }
 
-fn send_retain_error(writer: &Writer, scope: &str, error: RetainError) {
-    send(
-        writer,
-        &Out::Error {
-            scope: scope.to_string(),
-            msg: error.message(),
-        },
-    );
-}
-
-fn send_all(notifications: Vec<(Writer, Out)>) {
+pub(super) fn send_all(notifications: Vec<(Writer, Out)>) {
     for (writer, message) in notifications {
         send(&writer, &message);
     }

@@ -83,6 +83,7 @@ fn client(writer: Writer, device_id: &str, capable: bool) -> Client {
         direct_lookup_ids: HashSet::new(),
         watched_lookup_ids: HashSet::new(),
         rooms: HashSet::new(),
+        identity: Default::default(),
     }
 }
 

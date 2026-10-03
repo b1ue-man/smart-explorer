@@ -81,7 +81,10 @@ fn set_idle(peer: &Peer, state: &Arc<Mutex<State>>, idle: bool, keepalive_secs: 
 
 fn watch(peer: &Peer, state: &Arc<Mutex<State>>) {
     let lookup_id = LOOKUP.to_string();
-    dispatch(peer.id, &peer.writer, In::WatchDirect { lookup_id }, state);
+    dispatch(peer.id, &peer.writer, In::WatchDirect {
+        lookup_id,
+        access_proof: None,
+    }, state);
 }
 
 fn publish(peer: &Peer, state: &Arc<Mutex<State>>, clock: &TestClock, route: &str) {
@@ -147,7 +150,10 @@ fn android_background_task_route_change_first_presence_and_expiry_are_immediate(
     dispatch(
         phone.id,
         &phone.writer,
-        In::WatchDirect { lookup_id },
+        In::WatchDirect {
+        lookup_id,
+        access_proof: None,
+    },
         &state,
     );
     let mut short = presence("laptop", "lookup-laptop", &clock, "10.0.0.3:1");
@@ -298,7 +304,10 @@ fn android_background_task_keepalive_proposal_and_capability_gate() {
     dispatch(
         legacy.id,
         &legacy.writer,
-        In::WatchDirect { lookup_id },
+        In::WatchDirect {
+        lookup_id,
+        access_proof: None,
+    },
         &state,
     );
     set_idle(&legacy, &state, true, None);

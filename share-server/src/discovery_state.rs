@@ -24,13 +24,14 @@ const MAX_DISPLAY_ALIAS_BYTES: usize = 256;
 const MAX_SUITE_BYTES: usize = 96;
 const MAX_EXCHANGE_LIFETIME: Duration = Duration::from_secs(2 * 60);
 const ATTEMPT_WINDOW: Duration = Duration::from_secs(60);
-const MAX_STARTS_PER_OFFER_WINDOW: usize = 12;
+const MAX_STARTS_PER_CONNECTOR_WINDOW: usize = 12;
+const MAX_RETAINED_STARTS: usize = MAX_ACTIVE_EXCHANGES_GLOBAL * MAX_STARTS_PER_CONNECTOR_WINDOW;
 
 pub(super) struct DiscoveryOffer {
     pub(super) owner_id: u64,
     pub(super) advertisement: DiscoveryAdvertisement,
     pub(super) deadline: Instant,
-    pub(super) recent_starts: VecDeque<Instant>,
+    recent_starts: VecDeque<(PairingPrincipal, Instant)>,
 }
 
 impl DiscoveryOffer {
@@ -48,10 +49,29 @@ impl DiscoveryOffer {
     }
 }
 
+#[derive(Clone, PartialEq, Eq)]
+enum PairingPrincipal {
+    Key(iroh_base::PublicKey),
+    Source(super::limits::SourceKey),
+    /// A trusted proxy already limits original clients. Its backend address
+    /// must not collapse every legacy connector into one pairing principal.
+    ProxiedConnection(u64),
+}
+
+fn pairing_principal(state: &State, id: u64) -> Option<PairingPrincipal> {
+    let client = state.clients.get(&id)?;
+    Some(match client.identity.proven() {
+        Some(key) => PairingPrincipal::Key(*key),
+        None if !client.source.has_internal_source_limit() => PairingPrincipal::ProxiedConnection(id),
+        None => PairingPrincipal::Source(client.source),
+    })
+}
+
 pub(super) struct DiscoveryExchange {
     pub(super) discovery_id: String,
     pub(super) publisher_id: u64,
     pub(super) connector_id: u64,
+    principal: PairingPrincipal,
     deadline: Instant,
     next_step: PairingStep,
     packet_count: u16,
@@ -97,6 +117,12 @@ pub(super) fn prepare_exchange_locked(
     {
         return Err("client pairing exchange limit reached");
     }
+    let principal = pairing_principal(state, connector_id).ok_or("pairing connector is offline")?;
+    if state.discovery_exchanges.values().any(|exchange| {
+        exchange.discovery_id == discovery_id && exchange.principal == principal
+    }) {
+        return Err("connector already pairing with this offer");
+    }
     let Some(offer) = state.discovery_offers.get(discovery_id) else {
         return Err("discovery offer is unavailable");
     };
@@ -131,20 +157,22 @@ pub(super) fn prepare_exchange_locked(
     while offer
         .recent_starts
         .front()
-        .is_some_and(|started| now.saturating_duration_since(*started) >= ATTEMPT_WINDOW)
+        .is_some_and(|(_, started)| now.saturating_duration_since(*started) >= ATTEMPT_WINDOW)
     {
         offer.recent_starts.pop_front();
     }
-    if offer.recent_starts.len() >= MAX_STARTS_PER_OFFER_WINDOW {
+    if offer.recent_starts.iter().filter(|(who, _)| *who == principal).count() >= MAX_STARTS_PER_CONNECTOR_WINDOW
+        || offer.recent_starts.len() >= MAX_RETAINED_STARTS {
         return Err("discovery offer pairing attempt rate exceeded");
     }
-    offer.recent_starts.push_back(now);
+    offer.recent_starts.push_back((principal.clone(), now));
     state.discovery_exchanges.insert(
         exchange_id.to_string(),
         DiscoveryExchange {
             discovery_id: discovery_id.to_string(),
             publisher_id,
             connector_id,
+            principal,
             deadline: offer_deadline.min(now + MAX_EXCHANGE_LIFETIME),
             next_step: PairingStep::PublisherKe2,
             packet_count: 1,

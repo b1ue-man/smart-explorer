@@ -2,10 +2,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use super::direct_validation;
-use super::limits::{
-    validate_identifier, validate_presence, RetainError, MAX_PUBLISHED_DIRECTS_PER_CLIENT,
-    MAX_WATCHES_PER_CLIENT,
-};
+use super::limits::RetainError;
 use super::state::{lock_state, State};
 use super::{send, Out, PeerPresence, Writer};
 
@@ -19,10 +16,11 @@ pub(super) use super::direct_messages::{
 pub(super) const CAPABILITY: &str = "tracked_direct_v1";
 
 /// Server capabilities in the order `hello_ok` lists them.
-const SUPPORTED_CAPABILITIES: [&str; 3] = [
+const SUPPORTED_CAPABILITIES: [&str; 4] = [
     CAPABILITY,
     super::discovery::CAPABILITY,
     super::idle::CAPABILITY,
+    super::login::CAPABILITY,
 ];
 
 pub(super) fn negotiate_capabilities(offered: Vec<String>) -> HashSet<String> {
@@ -50,6 +48,7 @@ pub(super) fn route_request(
     if !require_capability(origin_id, origin, state) {
         return;
     }
+    if !super::direct_presence::require_identity(state, origin_id, origin, &request.requester) { return; }
     if let Err(error) = direct_validation::validate_request(&request) {
         send_retain_error(origin, error);
         return;
@@ -93,6 +92,8 @@ pub(super) fn route_request_receipt(
     if !require_capability(origin_id, origin, state) {
         return;
     }
+    if !super::direct_presence::require_identity(state, origin_id, origin, &receipt.target) { return; }
+    if !super::direct_presence::require_owner(state, origin_id, origin, &receipt.lookup_id) { return; }
     if let Err(error) = direct_validation::validate_request_receipt(&receipt) {
         send_retain_error(origin, error);
         return;
@@ -112,6 +113,8 @@ pub(super) fn route_decision(
     if !require_capability(origin_id, origin, state) {
         return;
     }
+    if !super::direct_presence::require_identity(state, origin_id, origin, &decision.target) { return; }
+    if !super::direct_presence::require_owner(state, origin_id, origin, &decision.lookup_id) { return; }
     if let Err(error) = direct_validation::validate_decision(&decision) {
         send_retain_error(origin, error);
         return;
@@ -131,6 +134,7 @@ pub(super) fn route_decision_receipt(
     if !require_capability(origin_id, origin, state) {
         return;
     }
+    if !super::direct_presence::require_identity(state, origin_id, origin, &receipt.requester) { return; }
     if let Err(error) = direct_validation::validate_decision_receipt(&receipt) {
         send_retain_error(origin, error);
         return;
@@ -203,121 +207,22 @@ pub(super) fn decision_legacy(
     }
 }
 
+#[cfg(test)]
 pub(super) fn publish(id: u64, origin: &Writer, presence: PeerPresence, state: &Arc<Mutex<State>>) {
-    if let Err(error) = validate_presence(&presence) {
-        send_retain_error(origin, error);
-        return;
-    }
-    let lookup_id = presence.relation_id.clone();
-    let retain_result = {
-        let mut state = lock_state(state);
-        let Some(client) = state.clients.get(&id) else {
-            return;
-        };
-        if client.device_id != presence.device_id {
-            Err(RetainError::InvalidField("presence device id"))
-        } else if !client.direct_lookup_ids.contains(&lookup_id)
-            && client.direct_lookup_ids.len() >= MAX_PUBLISHED_DIRECTS_PER_CLIENT
-        {
-            Err(RetainError::Limit("published directs"))
-        } else {
-            state
-                .direct
-                .insert(lookup_id.clone(), (id, presence.clone()));
-            if let Some(client) = state.clients.get_mut(&id) {
-                client.direct_lookup_ids.insert(lookup_id.clone());
-            }
-            Ok(state.watchers.get(&lookup_id).cloned().unwrap_or_default())
-        }
-    };
-    let watchers = match retain_result {
-        Ok(watchers) => watchers,
-        Err(error) => {
-            send_retain_error(origin, error);
-            return;
-        }
-    };
-    notify_available(&lookup_id, &presence, watchers, state);
+    super::direct_presence::publish(id, origin, presence, None, state);
 }
 
-pub(super) fn unpublish(id: u64, lookup_id: &str, state: &Arc<Mutex<State>>) {
-    let watchers = {
-        let mut state = lock_state(state);
-        let removed = state.direct.get(lookup_id).map(|(owner, _)| *owner) == Some(id);
-        if removed {
-            state.direct.remove(lookup_id);
-        }
-        if let Some(client) = state.clients.get_mut(&id) {
-            client.direct_lookup_ids.remove(lookup_id);
-        }
-        removed.then(|| state.watchers.get(lookup_id).cloned().unwrap_or_default())
-    };
-    if let Some(watchers) = watchers {
-        notify_offline(lookup_id, watchers, state);
-    }
+pub(super) fn unpublish(id: u64, lookup: &str, state: &Arc<Mutex<State>>) {
+    super::direct_presence::unpublish(id, lookup, state);
 }
 
-pub(super) fn watch(id: u64, origin: &Writer, lookup_id: &str, state: &Arc<Mutex<State>>) {
-    if let Err(error) = validate_identifier("lookup id", lookup_id) {
-        send_retain_error(origin, error);
-        return;
-    }
-    let retain_result = {
-        let mut state = lock_state(state);
-        let Some(client) = state.clients.get(&id) else {
-            return;
-        };
-        if !client.watched_lookup_ids.contains(lookup_id)
-            && client.watched_lookup_ids.len() >= MAX_WATCHES_PER_CLIENT
-        {
-            Err(RetainError::Limit("watches"))
-        } else {
-            state
-                .watchers
-                .entry(lookup_id.to_string())
-                .or_default()
-                .insert(id);
-            if let Some(client) = state.clients.get_mut(&id) {
-                client.watched_lookup_ids.insert(lookup_id.to_string());
-            }
-            Ok(state
-                .direct
-                .get(lookup_id)
-                .map(|(_, presence)| presence.clone()))
-        }
-    };
-    let current = match retain_result {
-        Ok(current) => current,
-        Err(error) => {
-            send_retain_error(origin, error);
-            return;
-        }
-    };
-    if let Some(presence) = current {
-        send(
-            origin,
-            &Out::DirectAvailable {
-                lookup_id: lookup_id.to_string(),
-                presence,
-            },
-        );
-    }
+#[cfg(test)]
+pub(super) fn watch(id: u64, origin: &Writer, lookup: &str, state: &Arc<Mutex<State>>) {
+    super::direct_presence::watch(id, origin, lookup, None, state);
 }
 
-pub(super) fn unwatch(id: u64, lookup_id: &str, state: &Arc<Mutex<State>>) {
-    let mut state = lock_state(state);
-    if let Some(client) = state.clients.get_mut(&id) {
-        client.watched_lookup_ids.remove(lookup_id);
-    }
-    let remove_lookup = if let Some(watchers) = state.watchers.get_mut(lookup_id) {
-        watchers.remove(&id);
-        watchers.is_empty()
-    } else {
-        false
-    };
-    if remove_lookup {
-        state.watchers.remove(lookup_id);
-    }
+pub(super) fn unwatch(id: u64, lookup: &str, state: &Arc<Mutex<State>>) {
+    super::direct_presence::unwatch(id, lookup, state);
 }
 
 fn require_capability(origin_id: u64, origin: &Writer, state: &Arc<Mutex<State>>) -> bool {
@@ -415,39 +320,5 @@ fn writers_by_device(device_id: &str, state: &Arc<Mutex<State>>) -> Vec<Writer> 
         .values()
         .filter(|client| client.device_id == device_id)
         .map(|client| client.writer.clone())
-        .collect()
-}
-
-fn notify_available(
-    lookup_id: &str,
-    presence: &PeerPresence,
-    watchers: HashSet<u64>,
-    state: &Arc<Mutex<State>>,
-) {
-    let message = Out::DirectAvailable {
-        lookup_id: lookup_id.to_string(),
-        presence: presence.clone(),
-    };
-    for writer in writers_for(watchers, state) {
-        // Idle watchers may get a pure refresh with their next keepalive.
-        writer.offer(&message);
-    }
-}
-
-fn notify_offline(lookup_id: &str, watchers: HashSet<u64>, state: &Arc<Mutex<State>>) {
-    for writer in writers_for(watchers, state) {
-        send(
-            &writer,
-            &Out::DirectOffline {
-                lookup_id: lookup_id.to_string(),
-            },
-        );
-    }
-}
-
-fn writers_for(ids: HashSet<u64>, state: &Arc<Mutex<State>>) -> Vec<Writer> {
-    let state = lock_state(state);
-    ids.into_iter()
-        .filter_map(|id| state.clients.get(&id).map(|client| client.writer.clone()))
         .collect()
 }
