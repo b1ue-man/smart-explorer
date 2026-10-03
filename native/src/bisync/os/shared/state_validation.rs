@@ -185,13 +185,8 @@ pub(super) fn validate_item(item: &ItemRecord) -> rusqlite::Result<()> {
             "directory stored in file sync state",
         ));
     }
-    if item.deleted && item.sig.is_some() {
-        return Err(invalid(
-            8,
-            Type::Integer,
-            "deleted sync item has a signature",
-        ));
-    }
+    // A deletion command may carry its last observed signature; the writer
+    // removes the row; the decoder clears stored tombstone signatures.
     if !item.deleted && item.sig.is_none() {
         return Err(invalid(
             8,

@@ -225,15 +225,19 @@ impl SyncStateStore {
         let mut rows = stmt.query(params![pair, side.as_str()])?;
         let mut out = BTreeMap::new();
         while let Some(row) = rows.next()? {
+            let sig = parse_sig(5, row.get(5)?, row.get(6)?, row.get(7)?)?;
+            let deleted = parse_bool(9, row.get(9)?)?;
             let item = ItemRecord {
                 side: parse_side(0, &row.get::<_, String>(0)?)?,
                 rel: row.get(1)?,
                 id: row.get(2)?,
                 parent_id: row.get(3)?,
                 name: row.get(4)?,
-                sig: parse_sig(5, row.get(5)?, row.get(6)?, row.get(7)?)?,
+                // Historic tombstones may retain the last observed signature.
+                // Validate its encoding above, but never expose it as active.
+                sig: if deleted { None } else { sig },
                 is_dir: parse_bool(8, row.get(8)?)?,
-                deleted: parse_bool(9, row.get(9)?)?,
+                deleted,
             };
             budget.record_item(&item)?;
             if item.side != side || out.insert(item.rel.clone(), item).is_some() {
