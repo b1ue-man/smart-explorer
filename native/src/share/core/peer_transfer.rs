@@ -184,7 +184,7 @@ impl PeerBackend {
     }
 
     /// The stage was published, renamed or removed: no longer ours to drop.
-    pub(super) fn release_stage(&self, stage: &str) {
+    pub(in crate::share) fn release_stage(&self, stage: &str) {
         if let Ok(mut stages) = self.transfer.stages.lock() {
             stages.remove(stage);
         }

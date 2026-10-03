@@ -109,10 +109,10 @@ impl IncomingActivity {
             .iter()
             .any(|token| !token.starts_with(crate::share::mount_lease::RELEASABLE_LEASE_PREFIX))
     }
-    pub(super) fn fair_yield_requested(&self) -> bool {
+    pub(in crate::share) fn fair_yield_requested(&self) -> bool {
         self.yielding.load(Ordering::Acquire)
     }
-    pub(super) fn fair_yield_ready(&self) -> bool {
+    pub(in crate::share) fn fair_yield_ready(&self) -> bool {
         self.open_streams.load(Ordering::Acquire) == 0
     }
     pub(super) fn request_fair_yield(&self) {
@@ -274,7 +274,7 @@ impl ShareIrohNode {
 
     /// An accepted stream prevents an idle-close race while its bounded
     /// frame is read. It has no CPU/power hold until authorization succeeds.
-    pub(super) fn incoming_stream_pending(
+    pub(in crate::share) fn incoming_stream_pending(
         &self,
         activity: &Arc<IncomingActivity>,
     ) -> impl Send + 'static {
