@@ -1,6 +1,7 @@
 use super::prelude::*;
 use super::sync_paths_task_fixture::{forward, remote, Location};
 use super::*;
+use crate::bisync::versions::{self, VersionReason, VersionSide, VersionStore};
 use crate::vfs::{Backend, CachingBackend, LocalBackend, Scheme};
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
@@ -20,11 +21,29 @@ fn synchronize(a: &Location, b: &Location) -> crate::bisync::Outcome {
 
 fn finish(app: &mut App) {
     let deadline = Instant::now() + Duration::from_secs(30);
-    while app.bisync_running || app.sync_running || app.job_connect_rx.is_some() {
-        assert!(Instant::now() < deadline, "sync worker deadline");
+    loop {
+        assert!(
+            Instant::now() < deadline,
+            "sync worker deadline: active={}; bisync={}; mirror={}; notice={:?}; error={:?}",
+            app.desktop_sync_active(),
+            app.bisync_running,
+            app.sync_running,
+            app.notice,
+            app.error_msg
+        );
         app.drain_job_connect();
         app.drain_bisync();
         app.drain_sync();
+        let workers = app.drain_desktop_sync_workers();
+        if workers == 0
+            && !app.bisync_running
+            && !app.sync_running
+            && app.job_connect_rx.is_none()
+            && app.bisync_rx.is_none()
+            && app.sync_rx.is_none()
+        {
+            break;
+        }
         std::thread::sleep(Duration::from_millis(5));
     }
     assert!(app.error_msg.is_none(), "{:?}", app.error_msg);
@@ -172,6 +191,22 @@ fn sync_paths_task_split_same_paths_on_different_remotes_and_uncached_metadata()
     app.sync_split_panes();
     assert!(app.bisync_running, "{:?}", app.error_msg);
     finish(&mut app);
+    let context = app.bisync_ctx.as_ref().expect("finished split sync context");
+    assert!(
+        context.state.is_some(),
+        "split sync returned no engine state"
+    );
+    assert!(Arc::ptr_eq(&context.a, &a.backend));
+    assert!(Arc::ptr_eq(&context.b, &b.backend));
+    assert_eq!(context.root_a, a.root);
+    assert_eq!(context.root_b, b.root);
+    assert!(
+        app.notice
+            .as_ref()
+            .is_some_and(|(text, _)| text.starts_with("Sync:")),
+        "split sync did not publish its terminal result: {:?}",
+        app.notice
+    );
     assert_eq!(
         std::fs::read(b.disk.join("fresh.txt")).unwrap_or_else(|error| {
             panic!(
@@ -249,6 +284,107 @@ fn sync_paths_task_real_share_cross_peer_sync_and_local_roundtrip() {
     assert_eq!(
         std::fs::read(first.root_a.join("second %20.txt")).unwrap(),
         b"second peer"
+    );
+    let pair = result
+        .state
+        .as_ref()
+        .expect("completed Share pair state")
+        .pair_id
+        .clone();
+    for backend in [&first.backend, &second.backend] {
+        assert_eq!(
+            backend.stat("/A/.se-versions").unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+    }
+    let cancel = AtomicBool::new(false);
+    let sides = [
+        VersionSide {
+            side: crate::bisync::PairSide::A,
+            backend: &*first.backend,
+            root: "/A",
+        },
+        VersionSide {
+            side: crate::bisync::PairSide::B,
+            backend: &*second.backend,
+            root: "/A",
+        },
+    ];
+    let auto = crate::bisync::BisyncOptions {
+        versions: crate::bisync::VersionsLocation::Auto,
+        ..Default::default()
+    };
+    let changed = b"changed first peer with private backup";
+    std::fs::write(first.root_a.join("first Ü.txt"), changed).unwrap();
+    let replaced = crate::bisync::run(
+        &*first.backend,
+        "/A",
+        &*second.backend,
+        "/A",
+        auto,
+        &cancel,
+        &filter,
+    );
+    assert!(replaced.errors.is_empty(), "{:?}", replaced.errors);
+    assert!(replaced.conflicts.is_empty());
+    assert_eq!(
+        std::fs::read(second.root_a.join("first Ü.txt")).unwrap(),
+        changed
+    );
+    let state = replaced.state.as_ref().expect("completed overwrite state");
+    assert_eq!(state.pair_id, pair);
+    let entries = versions::list_versions(&state.pair_id, &sides, &cancel).unwrap();
+    let original = entries
+        .iter()
+        .find(|entry| {
+            entry.side == Some(crate::bisync::PairSide::B)
+                && entry.rel == "first Ü.txt"
+                && entry.reason == Some(VersionReason::Replaced)
+        })
+        .expect("Share overwrite must keep the captured original");
+    assert_eq!(original.store, VersionStore::AppData);
+    assert_eq!(std::fs::read(&original.stored_path).unwrap(), b"first peer");
+    {
+        let lock = crate::bisync::PairLock::acquire(&state.lock_id).unwrap();
+        versions::restore_version(&lock, &state.pair_id, original, &sides[1], &cancel).unwrap();
+    }
+    assert_eq!(
+        std::fs::read(second.root_a.join("first Ü.txt")).unwrap(),
+        b"first peer"
+    );
+    assert_eq!(
+        std::fs::read(first.root_a.join("first Ü.txt")).unwrap(),
+        changed
+    );
+    let entries = versions::list_versions(&state.pair_id, &sides, &cancel).unwrap();
+    let retained = entries
+        .iter()
+        .find(|entry| {
+            entry.side == Some(crate::bisync::PairSide::B)
+                && entry.rel == "first Ü.txt"
+                && entry.reason == Some(VersionReason::Restored)
+        })
+        .expect("restore must preserve the file it replaces");
+    assert_eq!(retained.store, VersionStore::AppData);
+    assert_eq!(std::fs::read(&retained.stored_path).unwrap(), changed);
+    let restored = crate::bisync::run(
+        &*first.backend,
+        "/A",
+        &*second.backend,
+        "/A",
+        auto,
+        &cancel,
+        &filter,
+    );
+    assert!(restored.errors.is_empty(), "{:?}", restored.errors);
+    assert!(restored.conflicts.is_empty());
+    assert_eq!(
+        std::fs::read(first.root_a.join("first Ü.txt")).unwrap(),
+        b"first peer"
+    );
+    assert_eq!(
+        std::fs::read(second.root_a.join("first Ü.txt")).unwrap(),
+        b"first peer"
     );
     let local = Location::new(Scheme::Local);
     let result = crate::bisync::run(
