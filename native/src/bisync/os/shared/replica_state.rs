@@ -141,8 +141,55 @@ pub(super) fn owner_token(owner: &StateOwner) -> io::Result<String> {
     }
 }
 
+pub(super) fn owner_from_token(token: &str) -> io::Result<StateOwner> {
+    let owner = if token == "adhoc" { StateOwner::AdHoc } else {
+        StateOwner::Job(token.strip_prefix("job-").ok_or_else(|| io::Error::new(
+            io::ErrorKind::InvalidData, "invalid pending state owner"))?.to_string())
+    };
+    if owner_token(&owner)? != token {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid pending state owner"));
+    }
+    Ok(owner)
+}
+
+/// Only owners of these exact ordered endpoints and physical replicas are
+/// relevant to a pending merge. Their state entries are never imported.
+pub(super) fn pending_owner_keys(key: &StateKey) -> io::Result<Vec<StateKey>> {
+    let mut owners = std::collections::BTreeSet::from([owner_token(&key.owner)?, "adhoc".to_string()]);
+    let suffix = format!(".{}.merge-", replica_token(&key.replica_a, &key.replica_b));
+    let entries = match std::fs::read_dir(pair_dir(&key.pair_id)) {
+        Ok(entries) => Some(entries),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error),
+    };
+    let limits = super::SyncLimits::for_memory(crate::transfer::physical_memory());
+    let mut count = 0u64;
+    for entry in entries.into_iter().flatten() {
+        count = count.saturating_add(1);
+        if count > limits.state_entries { return Err(io::Error::other("pending owner collection exceeds its budget")); }
+        let name = entry?.file_name();
+        let Some(name) = name.to_str() else { continue; };
+        if name.ends_with(".json") {
+            if let Some((owner, _)) = name.split_once(&suffix) {
+                owner_from_token(owner)?;
+                owners.insert(owner.to_string());
+            }
+        }
+    }
+    let mut keys = owners.into_iter().map(|owner| Ok(StateKey {
+        owner: owner_from_token(&owner)?, ..key.clone()
+    })).collect::<io::Result<Vec<_>>>()?;
+    if !key.is_legacy() {
+        // The old pair-wide adhoc intent has no marker tokens. Its inputs
+        // remain protected without adopting its baseline into this replica.
+        keys.push(StateKey { owner: StateOwner::AdHoc, replica_a: ReplicaRef::Unknown,
+            replica_b: ReplicaRef::Unknown, ..key.clone() });
+    }
+    Ok(keys)
+}
+
 /// Short, stable token of both replica identities (part of the file name).
-fn replica_token(a: &ReplicaRef, b: &ReplicaRef) -> String {
+pub(super) fn replica_token(a: &ReplicaRef, b: &ReplicaRef) -> String {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     feed(&mut hash, b"smart-explorer/bisync-replicas/v1");
     feed(&mut hash, b"a");

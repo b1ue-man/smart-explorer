@@ -76,7 +76,7 @@ pub(super) fn execute(work: MergeWork<'_>, recovery: &mut Recovery, report: &mut
         }
     }
     for index in 0..2 {
-        let Some(stage) = stages[index].take() else { continue; };
+        let Some(mut stage) = stages[index].take() else { continue; };
         progress(ResolvePhase::Copying);
         let result = (|| {
             super::transfer_stream::check(cancel)?;
@@ -84,6 +84,11 @@ pub(super) fn execute(work: MergeWork<'_>, recovery: &mut Recovery, report: &mut
             let current = if backups[index].as_ref().is_some_and(|backup| backup.moved) {
                 CapturedFile { metadata: None }
             } else { (*states[index]).clone() };
+            if current.metadata.is_some() && !sides[index].backend.has_duplicate_file_names()
+                && !sides[index].backend.mount_path_capabilities(paths[index])?.staged_write.namespace_replace {
+                stage.bind(versions, &sides[index], rels[index], false)?;
+                if let Some(backup) = &backups[index] { stage.require_backup(backup.signature)?; }
+            }
             let outcome = stage.publish(paths[index], &current, true, cancel)?;
             super::apply_stage::require_durable(outcome.durable)?;
             if index == 0 { recovery.a = Some(outcome.destination); recovery.done_a = true;

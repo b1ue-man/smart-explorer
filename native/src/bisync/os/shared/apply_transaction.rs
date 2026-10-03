@@ -35,7 +35,7 @@ pub(super) fn copy(
     super::apply_boundary::guard(destination.backend, destination.root, rel, opts.cross_mounts).map_err(AttemptError::pre_commit)?;
     let destination_state = capture(destination.backend, destination_path, destination_expected, "copy destination")
         .map_err(AttemptError::pre_commit)?;
-    let staged = super::apply_stage::stage(source, source_path, &source_state, source_expected,
+    let mut staged = super::apply_stage::stage(source, source_path, &source_state, source_expected,
         destination.backend, destination_path, &destination_state, durability, throttle, cancel, bytes)
         .map_err(AttemptError::pre_commit)?;
     gate(cancel, sink).map_err(AttemptError::pre_commit)?;
@@ -65,6 +65,16 @@ pub(super) fn copy(
             CapturedFile { metadata: None }
         } else { destination_state };
         progress(super::apply_transfer::CopyReplacePhase::Copying);
+        if current.metadata.is_some() && !destination.backend.has_duplicate_file_names()
+            && !destination.backend.mount_path_capabilities(destination_path)?.staged_write.namespace_replace {
+            let versions = versions.ok_or_else(|| io::Error::new(io::ErrorKind::Unsupported,
+                "provider replacement requires recorded run versions"))?;
+            staged.bind(versions, destination, rel, sink.is_some())?;
+            if let Some(backup) = &preserved { staged.require_backup(backup.signature)?; }
+            else if let ExpectedFile::Present(signature) = destination_expected {
+                if signature.hash != 0 { staged.require_backup(signature)?; }
+            }
+        }
         staged.publish(destination_path, &current, opts.verify, cancel)
     })();
     match result {
@@ -151,4 +161,3 @@ pub(super) fn delete(
         }
     }
 }
-

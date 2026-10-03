@@ -8,12 +8,13 @@ use super::transfer_stream::{check, stream, Streamed};
 use super::types::{Sig, Throttle};
 
 pub(crate) struct Staged<'a> {
-    backend: &'a dyn Backend,
+    pub(super) backend: &'a dyn Backend,
     pub(crate) path: String,
     pub(crate) bytes: Streamed,
     pub(crate) source: Sig,
     pub(crate) durability: StageDurability,
-    published: bool,
+    pub(super) published: bool,
+    pub(super) replacement: Option<super::replacement_journal::Binding>,
 }
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct CopyOutcome {
@@ -47,7 +48,7 @@ pub(super) fn stage<'a>(
         && (!source.concurrent_read_write() || !destination.concurrent_read_write()));
     let mut staged = Staged { backend: destination, path, bytes: Streamed { bytes: 0, digest: [0; 16] },
         source: Sig { size: metadata.size, mtime_ms: metadata.mtime_ms, hash: 0 },
-        durability, published: false };
+        durability, published: false, replacement: None };
     let source_mode = crate::vfs::unix_mode(source, source_path)?;
     let destination_mode = if destination_state.metadata.is_some() {
         crate::vfs::unix_mode(destination, destination_path)?
@@ -117,7 +118,7 @@ pub(super) fn stage_bytes<'a>(destination: &'a dyn Backend, path: &str, current:
     let mut staged = Staged { backend: destination, path: stage,
         bytes: Streamed { bytes: bytes.len() as u64, digest: md5::compute(bytes).0 },
         source: Sig { size: bytes.len() as u64, mtime_ms, hash: super::snapshot_hash::md5_to_u64(&md5::compute(bytes).0) },
-        durability: StageDurability::Now, published: false };
+        durability: StageDurability::Now, published: false, replacement: None };
     let mode = if current.metadata.is_some() { crate::vfs::unix_mode(destination, path)? } else { Some(0o600) };
     let mut writer = crate::vfs::open_write_copy_stage_timed(destination, &staged.path, bytes.len() as u64, mtime_ms)?;
     for block in bytes.chunks(256 * 1024) { check(cancel)?; writer.write_all(block)?; }
@@ -133,50 +134,25 @@ pub(super) fn stage_bytes<'a>(destination: &'a dyn Backend, path: &str, current:
 }
 
 impl Staged<'_> {
+    pub(super) fn bind(&mut self, versions: &super::versions::RunVersions,
+        side: &super::versions::VersionSide<'_>, rel: &str, checkpoint_allowed: bool,
+    ) -> io::Result<()> {
+        if side.backend.state_identity() != self.backend.state_identity() {
+            return Err(drift("replacement binding belongs to another backend"));
+        }
+        self.replacement = Some(super::replacement_journal::Binding::new(versions, side, rel, checkpoint_allowed)?);
+        Ok(())
+    }
+
+    pub(super) fn require_backup(&mut self, signature: Sig) -> io::Result<()> {
+        let binding = self.replacement.as_mut().ok_or_else(|| drift("replacement backup has no binding"))?;
+        binding.backup_signature = Some(signature);
+        Ok(())
+    }
+
     pub(super) fn publish(mut self, destination: &str, current: &CapturedFile,
         verify: bool, cancel: &AtomicBool) -> io::Result<CopyOutcome> {
-        check(cancel)?;
-        revalidate(self.backend, destination, current, "copy destination")?;
-        // After an attempted publish, a lost ACK may hide a committed
-        // mutation. Retain the stage for intent recovery instead of
-        // letting Drop discard possible recovery evidence.
-        let result = if let Some(meta) = current.metadata.as_ref() {
-            if self.backend.has_duplicate_file_names() {
-                let id = meta.id.as_deref().ok_or_else(|| drift("ID-addressed destination has no stable ID"))?;
-                self.published = true;
-                self.backend.promote_staged_to_id(&self.path, destination, Some(id))
-            } else {
-                self.published = true;
-                crate::vfs::promote_staged_replace(self.backend, &self.path, destination)
-            }
-        } else {
-            self.published = true;
-            crate::vfs::promote_staged_create(self.backend, &self.path, destination)
-        };
-        result?;
-        let current = super::apply_guard::current_like(self.backend, destination, current, "published copy")?;
-        let metadata = current.regular("published copy")?;
-        if metadata.size != self.bytes.bytes { return Err(drift("published copy has the wrong size")); }
-        if metadata.content_md5.as_ref().is_some_and(|hash| !hash.eq_ignore_ascii_case(&self.bytes.hex())) {
-            return Err(drift("published copy has the wrong digest"));
-        }
-        if verify && metadata.content_md5.is_none() {
-            let mut reader = crate::vfs::open_read_regular(self.backend, destination, metadata.id.as_deref())?;
-            let finish = AtomicBool::new(false);
-            let checked = stream(&mut *reader, &mut io::sink(), &finish, None, self.bytes.hash(), |_| {})?;
-            if checked.bytes != self.bytes.bytes || checked.digest != self.bytes.digest {
-                return Err(drift("copy verification failed"));
-            }
-            revalidate(self.backend, destination, &current, "published copy")?;
-        }
-        // Deferred is allowed only after the caller proved a root flush
-        // exists; the checkpoint must actually perform it before recording.
-        let durable = if self.backend.is_local() && self.durability == StageDurability::Deferred {
-            false
-        } else { namespace(self.backend, destination)? };
-        Ok(CopyOutcome { bytes: self.bytes.bytes, digest: self.bytes.digest, source: self.source,
-            destination: Sig { size: metadata.size, mtime_ms: metadata.mtime_ms,
-                hash: self.bytes.hash() }, durable })
+        super::replacement_publish::publish(&mut self, destination, current, verify, cancel)
     }
 
     pub(super) fn publish_sibling(&mut self, candidate: &str, cancel: &AtomicBool) -> io::Result<CopyOutcome> {

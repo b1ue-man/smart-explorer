@@ -67,10 +67,14 @@ pub(super) fn mirror_source<'a>(
 }
 
 pub(super) fn try_incremental_run(state: &RunState<'_>) -> Option<Outcome> {
+    match super::orchestration_plan::pending_paths(state.lock, state.key, state.endpoints) {
+        Ok(pending) if pending.is_empty() => {},
+        Ok(_) => return None,
+        Err(error) => return Some(failure("Merge-Wiederanlauf", error)),
+    }
     let endpoints = state.endpoints;
     let opts = state.opts;
-    if opts.dry_run || endpoints.a.has_duplicate_file_names() || endpoints.b.has_duplicate_file_names()
-        || state.history.is_none() || index_dirty_path(state.key).ok()?.try_exists().ok()?
+    if opts.dry_run || state.history.is_none() || index_dirty_path(state.key).ok()?.try_exists().ok()?
     { return None; }
     if state.cancel.load(Ordering::Acquire) { return Some(Outcome::default()); }
     let (source, source_root, source_side) = mirror_source(endpoints, opts)?;
@@ -217,15 +221,19 @@ pub(super) fn retire_index(state: &RunState<'_>) -> io::Result<()> {
 }
 
 pub(super) fn bootstrap_run(state: &RunState<'_>, baseline: &Baseline, cursor: Option<String>) -> rusqlite::Result<()> {
+    if !super::orchestration_plan::pending_paths(state.lock, state.key, state.endpoints)
+        .map_err(|_| rusqlite::Error::InvalidQuery)?.is_empty() {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
     let Some((_, _, source_side)) = mirror_source(state.endpoints, state.opts) else { return Ok(()); };
     let keys = super::orchestration_plan::keys(state.endpoints);
     let names = super::state_spellings::load(state.key, keys).map_err(|_| rusqlite::Error::InvalidQuery)?;
     let rows = names.cache_baseline(baseline, keys);
     let pair = index_id(state.key).map_err(|_| rusqlite::Error::InvalidQuery)?;
     let record = pair_record(state.endpoints, pair, mode(state), source_side, cursor);
-    let ids_a = collect_ids(state.endpoints.a, state.endpoints.root_a, &rows, Side::A);
-    let ids_b = collect_ids(state.endpoints.b, state.endpoints.root_b, &rows, Side::B);
-    open_store(state.store_path)?.bootstrap(&record, &rows, &ids_a, &ids_b)?;
+    super::engine_change_feed::bootstrap(&mut open_store(state.store_path)?, &record,
+        state.endpoints, &rows, state.opts, state.filter, state.cancel)
+        .map_err(|_| rusqlite::Error::InvalidQuery)?;
     std::fs::remove_file(index_dirty_path(state.key).map_err(|_| rusqlite::Error::InvalidQuery)?)
         .map_err(|_| rusqlite::Error::InvalidQuery)?;
     Ok(())
@@ -272,7 +280,7 @@ fn mode(state: &RunState<'_>) -> String {
     let text = format!("{:?}:{}:{}:{:?}:{}:{}:{}:{}:{}", state.opts.compare, state.opts.modify_window_ms,
         state.opts.cross_mounts, state.filter.ignore, state.filter.include_hidden,
         state.filter.min_size, state.filter.max_size, state.filter.after_mtime_ms, state.filter.before_mtime_ms);
-    format!("mirror-rv1:{:x}", Sha256::digest(text.as_bytes()))
+    format!("mirror-rv2-ancestry:{:x}", Sha256::digest(text.as_bytes()))
 }
 fn baseline_by_key(base: &Baseline, keys: super::KeyPolicy) -> Baseline {
     base.iter().map(|(rel, entry)| (keys.key(rel).into_owned(), *entry)).collect()

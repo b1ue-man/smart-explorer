@@ -30,6 +30,9 @@ pub(super) fn run_full_locked(state: &RunState<'_>) -> Outcome {
     let empty_b = snapshot.b.is_empty();
     let observed_counts = [snapshot.a.entry_count(), snapshot.b.entry_count()];
     let keys = super::orchestration_plan::keys(endpoints);
+    if let Err(error) = super::orchestration_plan::protect_pending(state.lock, state.key, endpoints, keys, &mut snapshot) {
+        return Outcome { baseline: state.baseline.clone(), ..failure("Merge-Wiederanlauf", error) };
+    }
     let mut names = match super::state_spellings::load(state.key, keys) {
         Ok(names) => names,
         Err(_) => super::state_spellings::StateSpellings::default(),
@@ -155,7 +158,7 @@ pub(super) fn run_full_locked(state: &RunState<'_>) -> Outcome {
         if plan.omissions.protects(&repair.rel) { continue; }
         let id = repair.duplicates.as_ref().and_then(|group| group.common_choice()).and_then(|(a, _)| a.id.as_deref());
         match super::duplicate_apply::resolve_scoped(endpoints, repair, true, id,
-            opts, &scope, state.cancel, opts.bwlimit_bps, |_| {}) {
+            opts, &dedupe_scope, state.cancel, opts.bwlimit_bps, |_| {}) {
             Ok(entry) => {
                 deduped = deduped.saturating_add(repair.duplicates.as_ref().map_or(0, |group| group.redundant_count()));
                 if let Err(error) = sink.planned(Frame { records: vec![(repair.rel.clone(), entry)], ..Frame::default() }) {

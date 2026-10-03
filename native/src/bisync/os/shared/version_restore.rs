@@ -15,7 +15,10 @@ pub(super) fn restore(lock: &PairLock, pair: &str, entry: &VersionEntry,
     if !known.contains(entry) { return Err(super::version_manifest::invalid("version is no longer listed for this pair")); }
     let expected = if entry.reason.is_some() {
         let manifest = super::version_ops::find(pair, entry, side, cancel)?;
-        if manifest.lock != lock.id() || manifest.replica != super::version_save::replica(side.backend, side.root)? {
+        if !super::backend_identity_state::lock_matches(&manifest.pair, &manifest.lock, lock.id())?
+            || !super::backend_identity_state::replica_matches(&manifest.pair, &manifest.replica,
+                &super::version_save::replica(side.backend, side.root)?,
+                if side.side == super::PairSide::A { 0 } else { 1 })? {
             return Err(super::version_manifest::invalid("version belongs to another pair or replica"));
         }
         Some(manifest.data_sig)
@@ -37,7 +40,7 @@ pub(super) fn restore(lock: &PairLock, pair: &str, entry: &VersionEntry,
     let result = if entry.store == VersionStore::SyncRoot {
         transfer(side.backend, &entry.stored_path, expected, side, &destination, &current, preserved.as_ref(), &entry.rel, &versions, cancel)
     } else {
-        let root = super::persistence::versions_dir(pair);
+        let root = super::version_ops::app_root(pair, &entry.stored_path)?;
         let backend = LocalBackend::new(root.to_str().ok_or_else(|| super::version_manifest::invalid("version path is not Unicode"))?);
         transfer(&backend, &entry.stored_path, expected.map(|mut sig| { sig.size = entry.size; sig }), side,
             &destination, &current, preserved.as_ref(), &entry.rel, &versions, cancel)
@@ -58,6 +61,7 @@ fn transfer(source: &dyn Backend, source_path: &str, expected: Option<super::Sig
     preserved: Option<&super::version_save::Preserved>, rel: &str, versions: &RunVersions, cancel: &AtomicBool,
 ) -> io::Result<()> {
     let destination_expected = if preserved.is_some_and(|version| version.moved) { ExpectedFile::Missing }
+        else if let Some(version) = preserved { ExpectedFile::Present(version.signature) }
         else { current.metadata.as_ref().map_or(ExpectedFile::Missing, |meta| ExpectedFile::Present(
             super::Sig { size: meta.size, mtime_ms: meta.mtime_ms, hash: 0 })) };
     let outcome = super::apply_transaction::copy(source, source_path,

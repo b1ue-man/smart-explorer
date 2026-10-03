@@ -5,7 +5,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::vfs::{Backend, ChangeKind, VfsChange, VfsMeta};
 
 use super::compare::{same_entry, Against};
-use super::paths::join;
 use super::snapshot::{hash_mode, md5_hex_to_u64, walk_snapshot_with_options, WalkFilter};
 use super::state_store::{ItemRecord, PairRecord, Side, SyncStateStore};
 use super::types::{BisyncOptions, Sig, Tree};
@@ -112,7 +111,7 @@ pub(super) fn changes_from_backend(
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn changes_from_backend_with_limits(
-    store: &SyncStateStore,
+    _store: &SyncStateStore,
     rec: &PairRecord,
     source: &dyn Backend,
     root: &str,
@@ -145,16 +144,21 @@ pub(super) fn changes_from_backend_with_limits(
     }
     let mut changes = Vec::new();
     let mut changed_paths = BTreeSet::new();
-    for raw in batch.changes {
+    let feed = match super::engine_change_feed::FeedIndex::new(rec, side, source_items, &batch.changes) {
+        Ok(feed) => feed,
+        Err(_) => return ChangeCollection::Rebuild,
+    };
+    for raw in &batch.changes {
         if cancel.load(Ordering::Relaxed) {
             return ChangeCollection::Canceled;
         }
-        if !budget.record_node(raw_text_bytes(&raw)) {
+        if !budget.record_node(raw_text_bytes(raw)) {
             return ChangeCollection::Rebuild;
         }
-        let (mut change, supplied_meta) = match resolve_change(store, rec, side, raw) {
-            Ok(Some(change)) => change,
-            Ok(None) | Err(_) => return ChangeCollection::Rebuild,
+        let (mut change, supplied_meta) = match feed.resolve(raw) {
+            Ok(super::engine_change_feed::FeedResolution::Rooted(change, meta)) => (change, meta),
+            Ok(super::engine_change_feed::FeedResolution::Outside) => continue,
+            Err(_) => return ChangeCollection::Rebuild,
         };
         if !normalize_change_paths(&mut change, limits.max_depth)
             || !budget.record_text(change.rel.len() + change.old_rel.as_deref().map_or(0, str::len))
@@ -166,7 +170,7 @@ pub(super) fn changes_from_backend_with_limits(
             ChangeKind::Upsert => {
                 let metadata = match supplied_meta {
                     Some(metadata) => metadata,
-                    None => match source.stat(&join(root, &change.rel)) {
+                    None => match crate::vfs::sync_path(source, root, &change.rel).and_then(|path| source.stat(&path)) {
                         Ok(metadata) => metadata,
                         Err(_) if cancel.load(Ordering::Relaxed) => {
                             return ChangeCollection::Canceled
@@ -174,6 +178,15 @@ pub(super) fn changes_from_backend_with_limits(
                         Err(_) => return ChangeCollection::Rebuild,
                     },
                 };
+                if source.has_duplicate_file_names() {
+                    let path = match crate::vfs::sync_path(source, root, &change.rel) {
+                        Ok(path) => path, Err(_) => return ChangeCollection::Rebuild,
+                    };
+                    let entries = match super::duplicate_observation::metadata_named(source, &path, &metadata.name) {
+                        Ok(entries) => entries, Err(_) => return ChangeCollection::Rebuild,
+                    };
+                    if entries.len() != 1 || entries[0].id != change.id { return ChangeCollection::Rebuild; }
+                }
                 let Some(sig) = sig_from_meta(&metadata) else {
                     return ChangeCollection::Rebuild;
                 };
@@ -267,7 +280,7 @@ pub(super) fn changes_from_source_walk_scoped(
         let managed = match now {
             Some(_) => true,
             None if !item_in_scope(rel, source_items.get(rel), filter) => false,
-            None => match source.stat(&join(root, rel)) {
+            None => match crate::vfs::sync_path(source, root, rel).and_then(|path| source.stat(&path)) {
                 Err(error) if error.kind() == io::ErrorKind::NotFound => true,
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => {
                     return ChangeCollection::Canceled
@@ -278,7 +291,7 @@ pub(super) fn changes_from_source_walk_scoped(
             },
         };
         let id = match &kind {
-            ChangeKind::Upsert => match source.item_id(&join(root, rel)) {
+            ChangeKind::Upsert => match crate::vfs::sync_path(source, root, rel).and_then(|path| source.item_id(&path)) {
                 Ok(id) => id,
                 Err(_) if cancel.load(Ordering::Relaxed) => return ChangeCollection::Canceled,
                 Err(_) => return ChangeCollection::Rebuild,
@@ -307,78 +320,6 @@ pub(super) fn changes_from_source_walk_scoped(
         changes,
         new_cursor: None,
     }
-}
-
-fn resolve_change(
-    store: &SyncStateStore,
-    rec: &PairRecord,
-    side: Side,
-    raw: VfsChange,
-) -> rusqlite::Result<Option<(ResolvedChange, Option<VfsMeta>)>> {
-    let VfsChange {
-        kind,
-        rel,
-        id,
-        parent_id,
-        name,
-        meta,
-    } = raw;
-    let id_rel = match id.as_deref() {
-        Some(id) => store.rel_for_id(&rec.pair, side, id)?,
-        None => None,
-    };
-    let parent_rel = rel_from_parent(store, rec, side, parent_id.as_deref(), name.as_deref())?;
-    let parent_addressed = parent_id.is_some() && name.is_some();
-    let Some(rel) = rel
-        .or(parent_rel)
-        .or_else(|| (!parent_addressed).then(|| id_rel.clone()).flatten())
-    else {
-        return Ok(None);
-    };
-    let old_rel = id_rel.filter(|old| old != &rel);
-    Ok(Some((
-        ResolvedChange {
-            rel,
-            old_rel,
-            kind,
-            id,
-            parent_id,
-            name,
-            source_sig: meta.as_ref().and_then(sig_from_meta),
-            managed: false,
-            old_managed: false,
-        },
-        meta,
-    )))
-}
-
-fn rel_from_parent(
-    store: &SyncStateStore,
-    rec: &PairRecord,
-    side: Side,
-    parent_id: Option<&str>,
-    name: Option<&str>,
-) -> rusqlite::Result<Option<String>> {
-    let (Some(parent_id), Some(name)) = (parent_id, name) else {
-        return Ok(None);
-    };
-    let root_id = if side == Side::A {
-        rec.root_a_id.as_deref()
-    } else {
-        rec.root_b_id.as_deref()
-    };
-    let parent = if root_id == Some(parent_id) {
-        Some(String::new())
-    } else {
-        store.rel_for_id(&rec.pair, side, parent_id)?
-    };
-    Ok(parent.map(|parent| {
-        if parent.is_empty() {
-            name.to_owned()
-        } else {
-            format!("{parent}/{name}")
-        }
-    }))
 }
 
 fn normalize_change_paths(change: &mut ResolvedChange, max_depth: usize) -> bool {

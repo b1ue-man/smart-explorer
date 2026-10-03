@@ -7,7 +7,6 @@ use super::guards::{deletion_block, empty_side_block, unconfirmed, DeleteCounts}
 use super::incremental::SyncEndpoints;
 use super::keys::KeyPolicy;
 use super::omissions::{OmissionKind, SyncOmissions};
-use super::paths::join;
 use super::plan_pair::plan_pair;
 use super::plan_types::{PairPlan, PlanContext};
 use super::run_types::{RunBlock, RunSettings};
@@ -45,7 +44,8 @@ pub(super) fn prepare(
             let spelled = plan.spellings.side_rel(rel, side);
             let Some(signature) = snapshot.tree.get_mut(spelled) else { continue; };
             if signature.hash != 0 { continue; }
-            match hash_checked(backend, &join(root, spelled), *signature, cancel) {
+            match crate::vfs::sync_path(backend, root, spelled)
+                .and_then(|path| hash_checked(backend, &path, *signature, cancel)) {
                 Ok(hash) => signature.hash = hash,
                 Err(error) => {
                     let kind = crate::vfs::omission_reason(&error).map(OmissionKind::from)
@@ -132,6 +132,46 @@ pub(super) fn absorb_omissions(a: &mut SideSnapshot, b: &mut SideSnapshot, omiss
     omissions.exclude_tree(&mut a.tree);
     omissions.exclude_tree(&mut b.tree);
     a.omissions.extend(omissions);
+}
+
+/// Recovery inputs own both originals and any reserved KeepBoth sibling.
+/// The caller keeps this lock through observation, planning and publication.
+pub(super) fn protect_pending(
+    lock: &super::PairLock, key: &super::StateKey, endpoints: SyncEndpoints<'_>, keys: KeyPolicy,
+    snapshot: &mut super::snapshot_pair::PairSnapshot,
+) -> io::Result<()> {
+    let mut omissions = SyncOmissions::new(keys.fold_case);
+    for rel in pending_paths(lock, key, endpoints)? {
+        omissions.record_kind(&rel, OmissionKind::Unreadable, true);
+    }
+    snapshot.repairs.retain(|repair| !omissions.protects(&repair.rel));
+    snapshot.conflicts.retain(|conflict| !omissions.protects(&conflict.rel));
+    for side in [&mut snapshot.a, &mut snapshot.b] {
+        omissions.exclude_tree(&mut side.tree);
+        side.filtered.retain(|rel, _| !omissions.protects(rel));
+        side.dirs.retain(|rel| !omissions.protects(rel));
+        side.omissions.extend(omissions.clone());
+    }
+    snapshot.omissions.extend(omissions);
+    Ok(())
+}
+
+pub(super) fn pending_paths(lock: &super::PairLock, key: &super::StateKey,
+    endpoints: SyncEndpoints<'_>,
+) -> io::Result<Vec<String>> {
+    let mut paths = std::collections::BTreeSet::new();
+    let reversed_endpoints = SyncEndpoints::new(endpoints.b, endpoints.root_b, endpoints.a, endpoints.root_a);
+    let reversed_key = super::StateKey {
+        pair_id: super::pair_id_for(endpoints.b, endpoints.root_b, endpoints.a, endpoints.root_a),
+        replica_a: key.replica_b.clone(), replica_b: key.replica_a.clone(), ..key.clone()
+    };
+    for (key, endpoints) in [(key, endpoints), (&reversed_key, reversed_endpoints)] {
+        for owner_key in super::replica_state::pending_owner_keys(key)? {
+            paths.extend(super::pending_merge_relatives(lock, &owner_key)?);
+        }
+        paths.extend(super::replacement_recovery::relatives(lock, key, endpoints)?);
+    }
+    Ok(paths.into_iter().collect())
 }
 
 pub(super) fn planned_signatures(plan: &PairPlan, a: &SideSnapshot, b: &SideSnapshot) -> Baseline {
