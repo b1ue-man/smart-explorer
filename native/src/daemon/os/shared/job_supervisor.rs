@@ -237,6 +237,7 @@ impl JobSupervisor {
         let outcome = Arc::new(Mutex::new(None));
         let worker_outcome = outcome.clone();
         let task: JobTask = Box::new(move || {
+            let _storage = super::host_state::register_storage_run(&job.source, &job.target, &worker_cancel);
             let result = match runner {
                 Some(runner) => { runner(&job, &worker_cancel); AttemptOutcome::Success }
                 None => super::job::run_for(&job, &worker_cancel, cause, worker_progress, started),

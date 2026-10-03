@@ -76,6 +76,7 @@ class BackgroundService : Service() {
 
     override fun onDestroy() {
         runningFlow.value = false
+        HostMonitor.setServiceAvailable(false)
         scope.cancel()
         super.onDestroy()
     }
@@ -85,6 +86,7 @@ class BackgroundService : Service() {
         return try {
             ServiceCompat.startForeground(this, Notifications.ID_BACKGROUND, content.build(), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
             rendered = content.key
+            HostMonitor.setServiceAvailable(true)
             true
         } catch (e: IllegalStateException) {
             // ForegroundServiceStartNotAllowedException (API 31+) is an IllegalStateException.
@@ -147,6 +149,7 @@ class BackgroundService : Service() {
             try {
                 status = SyncApi.status()
                 enabledJobs = SyncApi.jobs().count { it.enabled }
+                BackgroundController.refreshSchedule(this)
             } catch (e: CoreException) {
                 Log.w(TAG, "background status failed: ${e.kind}: ${e.displayText()}")
             }
@@ -165,7 +168,10 @@ class BackgroundService : Service() {
         if (current.paused && pausedUntil != null) {
             return (pausedUntil - System.currentTimeMillis()).coerceAtLeast(0) + PAUSE_END_MARGIN_MS
         }
-        return if (current.activeJob != null) ACTIVE_JOB_RECHECK_MS else null
+        if (current.activeJob != null) return ACTIVE_JOB_RECHECK_MS
+        return current.nextScheduledRunMs?.let {
+            (it - System.currentTimeMillis()).coerceAtLeast(1_000) + PAUSE_END_MARGIN_MS
+        }
     }
 
     private fun render() {

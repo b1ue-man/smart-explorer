@@ -31,12 +31,19 @@ internal class JobDraft(private val original: SyncJob, val options: SyncOptions)
     var weekdays by mutableStateOf((original.calendar?.weekday ?: 0) and ALL_WEEKDAYS)
     var monthday by mutableStateOf((original.calendar?.monthday ?: 1).coerceIn(1, 31).toString())
     var rtDebounceSecs by mutableStateOf(original.rtDebounceSecs.toString())
+    var rtMaxLatencySecs by mutableStateOf(original.rtMaxLatencySecs.toString())
+    var rtPollSecs by mutableStateOf(original.rtPollSecs.toString())
+    var verifyIntervalSecs by mutableStateOf(original.verifyIntervalSecs.toString())
+    var verifyTargetSecs by mutableStateOf(original.verifyTargetSecs.toString())
 
     var conflict by mutableStateOf(original.conflict)
     var deletePolicy by mutableStateOf(original.deletePolicy)
     var compare by mutableStateOf(original.compare)
     var versioning by mutableStateOf(original.versioning)
     var retainDays by mutableStateOf(original.retainDays.toString())
+    var retainCount by mutableStateOf(original.retainCount.toString())
+    var versionsLocation by mutableStateOf(original.versionsLocation)
+    var crossMounts by mutableStateOf(original.crossMounts)
     var includeHidden by mutableStateOf(original.includeHidden)
     var ignore by mutableStateOf(original.ignore.joinToString("\n"))
     var activeFrom by mutableStateOf(windowText(original.activeFromMin, original.activeToMin, original.activeFromMin))
@@ -45,9 +52,11 @@ internal class JobDraft(private val original: SyncJob, val options: SyncOptions)
     var moveFiles by mutableStateOf(original.moveFiles)
     var maxDelete by mutableStateOf(original.maxDelete.toString())
     var maxDeletePct by mutableStateOf(original.maxDeletePct.toString())
+    var maxDeleteMin by mutableStateOf(original.maxDeleteMin.toString())
     var useRecycleBin by mutableStateOf(original.useRecycleBin)
     var runBefore by mutableStateOf(original.runBefore)
     var runAfter by mutableStateOf(original.runAfter)
+    var runCleanup by mutableStateOf(original.runCleanup)
 
     /** [build] of the unedited draft (after every field it reads): defaults and normalisation are no edits. */
     private val initial = build()
@@ -114,11 +123,18 @@ internal class JobDraft(private val original: SyncJob, val options: SyncOptions)
             intervalMin = interval,
             calendar = calendar,
             rtDebounceSecs = debounce,
+            rtMaxLatencySecs = longNumber(rtMaxLatencySecs, "rtMaxLatencySecs", problems) ?: original.rtMaxLatencySecs,
+            rtPollSecs = longNumber(rtPollSecs, "rtPollSecs", problems) ?: original.rtPollSecs,
+            verifyIntervalSecs = longNumber(verifyIntervalSecs, "verifyIntervalSecs", problems) ?: original.verifyIntervalSecs,
+            verifyTargetSecs = longNumber(verifyTargetSecs, "verifyTargetSecs", problems) ?: original.verifyTargetSecs,
             conflict = conflict,
             deletePolicy = deletePolicy,
             compare = compare,
             versioning = versioning,
             retainDays = number(retainDays, "retainDays", 0, MAX_RETAIN_DAYS, problems) ?: original.retainDays,
+            retainCount = longNumber(retainCount, "retainCount", problems) ?: original.retainCount,
+            versionsLocation = versionsLocation,
+            crossMounts = crossMounts,
             includeHidden = includeHidden,
             ignore = ignore.lines().map { it.trim() }.filter { it.isNotEmpty() },
             activeFromMin = from,
@@ -127,9 +143,11 @@ internal class JobDraft(private val original: SyncJob, val options: SyncOptions)
             moveFiles = moveFiles,
             maxDelete = number(maxDelete, "maxDelete", 0, Int.MAX_VALUE, problems) ?: original.maxDelete,
             maxDeletePct = number(maxDeletePct, "maxDeletePct", 0, 100, problems) ?: original.maxDeletePct,
+            maxDeleteMin = longNumber(maxDeleteMin, "maxDeleteMin", problems) ?: original.maxDeleteMin,
             useRecycleBin = useRecycleBin,
             runBefore = runBefore.trim(),
             runAfter = runAfter.trim(),
+            runCleanup = runCleanup.trim(),
         )
         if (source.isBlank()) problems["source"] = "Seite A wählen"
         if (target.isBlank()) problems["target"] = "Seite B wählen"
@@ -174,6 +192,15 @@ internal class JobDraft(private val original: SyncJob, val options: SyncOptions)
         return value
     }
 
+    private fun longNumber(text: String, field: String, problems: MutableMap<String, String>): Long? {
+        val value = text.trim().toLongOrNull()
+        if (value == null || value < 0) {
+            problems[field] = "Ganze Zahl ab 0 eingeben"
+            return null
+        }
+        return value
+    }
+
     companion object {
         private const val DEFAULT_CALENDAR_MINUTE = 9 * 60
         private const val ALL_WEEKDAYS = 0x7f
@@ -184,7 +211,8 @@ internal class JobDraft(private val original: SyncJob, val options: SyncOptions)
         /** Fields inside the "Erweitert" section (api.md names). */
         private val ADVANCED_FIELDS = listOf(
             "conflict", "deletePolicy", "compare", "versioning", "retainDays", "ignore", "activeFromMin",
-            "activeToMin", "maxDelete", "maxDeletePct", "runBefore", "runAfter",
+            "activeToMin", "maxDelete", "maxDeletePct", "maxDeleteMin", "runBefore", "runAfter", "runCleanup",
+            "rtMaxLatencySecs", "rtPollSecs", "verifyIntervalSecs", "verifyTargetSecs", "retainCount", "versionsLocation", "crossMounts",
         )
 
         /** Every field the editor shows an error under (api.md names). */

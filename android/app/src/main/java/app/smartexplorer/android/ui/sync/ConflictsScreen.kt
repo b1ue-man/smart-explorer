@@ -165,6 +165,10 @@ private fun ConflictCard(
             Text(item.path, style = MaterialTheme.typography.titleSmall, maxLines = 3, overflow = TextOverflow.Ellipsis)
             Text("A: ${sideText(item.a)}", style = MaterialTheme.typography.bodyMedium)
             Text("B: ${sideText(item.b)}", style = MaterialTheme.typography.bodyMedium)
+            if (item.pendingMerge) {
+                Text("Eine begonnene Zusammenführung ist gespeichert und wartet auf ihre Wiederholung.",
+                    style = MaterialTheme.typography.bodySmall)
+            }
             if ((item.a?.variants?.size ?: 0) > 1 || (item.b?.variants?.size ?: 0) > 1) {
                 Text("Die gewählte Version bleibt auf beiden Seiten. Andere Versionen werden gesichert und doppelte Dateien entfernt.",
                     style = MaterialTheme.typography.bodySmall)
@@ -173,10 +177,12 @@ private fun ConflictCard(
         }
         val actionsEnabled = enabled && !busy
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp)) {
-            ConflictVariantChoice("A", item.a, actionsEnabled, onKeepA)
-            ConflictVariantChoice("B", item.b, actionsEnabled, onKeepB)
+            ConflictVariantChoice("A", item.a, actionsEnabled && !item.pendingMerge, onKeepA)
+            ConflictVariantChoice("B", item.b, actionsEnabled && !item.pendingMerge, onKeepB)
             TextButton(onClick = onSkip, enabled = actionsEnabled) { Text("Überspringen") }
-            if (item.text) TextButton(onClick = onMerge, enabled = actionsEnabled) { Text("Zusammenführen") }
+            if (item.text) TextButton(onClick = onMerge, enabled = actionsEnabled) {
+                Text(if (item.pendingMerge) "Merge fortsetzen" else "Zusammenführen")
+            }
         }
     }
 }

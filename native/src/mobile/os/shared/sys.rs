@@ -5,6 +5,8 @@ use super::error::ApiError;
 use super::runtime::Runtime;
 use serde_json::{json, Value};
 use std::io::{Read, Seek, SeekFrom};
+#[path = "sys_platform.rs"]
+pub(super) mod platform;
 
 /// The crash log is returned up to this many trailing bytes.
 const MAX_CRASH_LOG_BYTES: u64 = 512 * 1024;
@@ -13,6 +15,8 @@ pub(crate) fn handle(rt: &Runtime, method: &str, args: &Value) -> Option<Result<
     Some(match method {
         "sys.hostState" => host_state(args),
         "sys.volumes" => volumes(rt, args),
+        "sys.platformTotals" => platform::remember(rt, args),
+        "sys.watchHints" => platform::hints(rt, args),
         "sys.errors" => Ok(Value::Array(rt.error_log())),
         "sys.clearErrors" => {
             rt.clear_error_log();
@@ -56,6 +60,9 @@ fn task_clear(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
 fn host_state(args: &Value) -> Result<Value, ApiError> {
     let (state, foreground) = parse_host_state(args);
     crate::daemon::set_host_state(state);
+    if let Some(granted) = args.get("storageAccess").and_then(Value::as_bool) {
+        crate::daemon::set_storage_access(granted);
+    }
     super::domains::set_foreground(foreground);
     Ok(json!({}))
 }

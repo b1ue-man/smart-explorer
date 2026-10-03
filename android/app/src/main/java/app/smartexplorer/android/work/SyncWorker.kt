@@ -14,10 +14,10 @@ import app.smartexplorer.android.core.Core
 import app.smartexplorer.android.core.CoreException
 import app.smartexplorer.android.prefs.AppPrefs
 import app.smartexplorer.android.service.BackgroundController
-import app.smartexplorer.android.service.BackgroundService
 import app.smartexplorer.android.service.ServiceNotifications
 import app.smartexplorer.android.system.HostMonitor
 import app.smartexplorer.android.system.Notifications
+import app.smartexplorer.android.system.WakeKeeper
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.coroutineScope
@@ -26,31 +26,36 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Periodic catch-up (spec F17 "Periodisch"): reports the measured host state, starts
  * `bg.catchUp` and waits for the task to end. A run that takes longer than a moment asks for
  * the foreground (dataSync, best effort); when WorkManager stops the worker, only this run's
  * jobs are cancelled (`task.cancel`). It also runs while the background service keeps the
- * process alive for "Share im Hintergrund erreichbar": outside "Dauerbetrieb" the daemon defers
- * its own scheduling then (`sys.hostState.deferScheduling`, spec A6) – except during this run,
- * so "Beim Start"-jobs, which the catch-up does not cover, still run (K1).
+ * process alive for "Share im Hintergrund erreichbar". During this bounded worker window the
+ * daemon defers independent new scheduling; catch-up owns and cancels only its admitted jobs.
  */
 class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
+    private var rearmContent = false
     override suspend fun doWork(): Result {
         val mode = AppPrefs.bgMode.value
         if (mode == BackgroundController.MODE_OFF) return Result.success()
-        // Persistent mode: the running service keeps the daemon scheduling; this work is its
-        // fallback. A service running for Share only (other modes) does not replace this run.
-        if (mode == BackgroundController.MODE_PERSISTENT && BackgroundService.isRunning) return Result.success()
-
         try {
             // Inside the try: a stop while the host state is sent still closes the gate below.
             HostMonitor.beginWorkerRun(applicationContext)
-            return catchUp()
+            var result: Result = Result.retry()
+            WakeKeeper.whileHeld(WINDOW_MS + 30_000) {
+                result = withTimeoutOrNull(WINDOW_MS) { catchUp() } ?: Result.retry()
+            }
+            if (rearmContent && inputData.getBoolean(BackgroundController.CONTENT_HINT, false)) {
+                BackgroundController.armContentWake(applicationContext, afterCurrent = true)
+            }
+            return result
         } finally {
             // Also after a stop by WorkManager: the gate closes again.
             withContext(NonCancellable) { HostMonitor.endWorkerRun(applicationContext) }
+            BackgroundController.refreshSchedule(applicationContext)
         }
     }
 
@@ -61,8 +66,9 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             withContext(NonCancellable) { SyncApi.catchUp() }
         } catch (e: CoreException) {
             Log.w(TAG, "bg.catchUp not started: ${e.kind}: ${e.displayText()}")
-            return Result.success()
+            return if (e.kind in setOf("invalid", "permission", "auth")) Result.success() else Result.retry()
         }
+        var ended = false
         return try {
             coroutineScope {
                 val promotion = launch {
@@ -70,24 +76,23 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
                     promote(taskId)
                 }
                 val end = SyncApi.awaitTask(taskId)
+                ended = true
                 promotion.cancel()
-                val skipped = end.resultAs<CatchUpResult>()?.skipped.orEmpty()
+                val result = end.resultAs<CatchUpResult>()
+                rearmContent = end.state == "done" && result != null && !result.retrySuggested
+                val skipped = result?.skipped.orEmpty()
                 Log.i(TAG, "catch-up ${end.state}: ${end.message.orEmpty()}; ${skipped.size} skipped")
-                Result.success()
+                if (end.state != "done" || result == null || result.retrySuggested) Result.retry() else Result.success()
             }
         } catch (e: CancellationException) {
-            // Stopped by WorkManager (constraints lost, work cancelled): end only this run's jobs.
-            withContext(NonCancellable) {
-                try {
-                    SyncApi.cancelTask(taskId)
-                } catch (c: CoreException) {
-                    Log.w(TAG, "task.cancel $taskId failed: ${c.kind}: ${c.displayText()}")
-                }
-            }
             throw e
         } catch (e: CoreException) {
             Log.w(TAG, "catch-up $taskId not followed: ${e.kind}: ${e.displayText()}")
-            Result.success()
+            Result.retry()
+        } finally {
+            if (!ended) withContext(NonCancellable) {
+                runCatching { SyncApi.cancelTask(taskId) }.onFailure { Log.w(TAG, "catch-up cancel failed", it) }
+            }
         }
     }
 
@@ -106,6 +111,9 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         } catch (e: IllegalStateException) {
             Log.w(TAG, "catch-up stays a background worker", e)
             return
+        } catch (e: SecurityException) {
+            Log.w(TAG, "catch-up foreground permission missing", e)
+            return
         }
         // Follow the running job in the notification until the run ends (this job is cancelled then).
         Core.tasks
@@ -117,5 +125,6 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
     private companion object {
         const val TAG = "SmartExplorerWorker"
         const val PROMOTE_AFTER_MS = 3_000L
+        const val WINDOW_MS = 8 * 60_000L
     }
 }

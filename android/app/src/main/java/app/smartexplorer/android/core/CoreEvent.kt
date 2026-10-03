@@ -13,6 +13,7 @@ sealed interface CoreEvent {
 
     /** Sync jobs or their results changed: reload `sync.jobs`. */
     data object Jobs : CoreEvent
+    data class SyncProblem(val jobId: String, val title: String, val text: String) : CoreEvent
 
     /** An opened remote copy was changed locally: reload `fs.edits`. */
     data object Edits : CoreEvent

@@ -34,31 +34,7 @@ pub(super) fn remember_totals(rt: &Runtime, location: &str, totals: &PlatformTot
 /// are unknown, entries without a package are skipped and missing or
 /// negative app figures count as 0.
 pub(super) fn platform_totals(args: &Value) -> PlatformTotals {
-    let platform = args.get("platform");
-    let total = |key: &str| platform?.get(key)?.as_u64();
-    let mut totals = PlatformTotals {
-        volume_used_bytes: total("volumeUsedBytes"),
-        other_apps_bytes: total("otherAppsBytes"),
-        apps: Vec::new(),
-    };
-    let apps = platform
-        .and_then(|platform| platform.get("apps"))
-        .and_then(Value::as_array);
-    for app in apps.into_iter().flatten() {
-        let text = |key: &str| app.get(key).and_then(Value::as_str).map(str::trim);
-        let Some(package) = text("package").filter(|package| !package.is_empty()) else {
-            continue;
-        };
-        let bytes = |key: &str| app.get(key).and_then(Value::as_u64).unwrap_or(0);
-        totals.add_app(
-            package.to_string(),
-            text("label").unwrap_or_default().to_string(),
-            bytes("appBytes"),
-            bytes("dataBytes"),
-            bytes("cacheBytes"),
-        );
-    }
-    totals
+    super::super::super::sys::platform::platform_totals(args)
 }
 
 #[cfg(test)]

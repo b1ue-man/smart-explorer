@@ -163,6 +163,7 @@ internal class ConflictSession(
 
     /** `null` on success, else the failure text. */
     private suspend fun resolveOne(item: SyncConflict, choice: String, variantId: String? = null): String? {
+        if (item.pendingMerge) return "Bitte den gespeicherten Merge-Auftrag unverändert wiederholen."
         val side = if (choice == "a") item.a else item.b
         if (variantId == null && side?.needsVariantChoice == true) {
             return "Auf Seite ${choice.uppercase()} liegen verschiedene Versionen. Bitte eine Version einzeln auswählen."

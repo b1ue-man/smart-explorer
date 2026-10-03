@@ -88,6 +88,8 @@ internal class JobActions(
     val onToggle: () -> Unit,
     val onConflicts: () -> Unit,
     val onDelete: () -> Unit,
+    val onCheck: () -> Unit,
+    val onVersions: () -> Unit,
 )
 
 /**
@@ -115,7 +117,7 @@ internal fun JobCard(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                IconButton(onClick = actions.onRun, enabled = !running && !daemonRuns) {
+                IconButton(onClick = actions.onRun, enabled = !running && !daemonRuns && job.state?.running == null && job.state?.blocked == null && job.brokenConfig == null) {
                     SeIcon(R.drawable.ic_play, contentDescription = "Jetzt ausführen")
                 }
                 JobMenu(job, actions)
@@ -125,8 +127,8 @@ internal fun JobCard(
             Box(Modifier.padding(end = 12.dp)) {
                 when {
                     running -> RunningLine(runTask?.message?.ifBlank { null } ?: "Synchronisiere…")
-                    daemonRuns -> RunningLine("Läuft im Hintergrund…")
-                    else -> LastResultLine(job.lastResult, actions.onConflicts)
+                    daemonRuns || job.state?.running != null -> RunningLine(if (job.state?.running?.stalledSinceMs != null) "Lauf wartet auf E/A…" else "Läuft im Hintergrund…")
+                    else -> JobStateLine(job, actions)
                 }
             }
         }
@@ -142,7 +144,39 @@ private fun JobMenu(job: SyncJob, actions: JobActions) {
             MenuEntry("Bearbeiten", { open = false }, actions.onEdit)
             MenuEntry(if (job.enabled) "Pausieren" else "Aktivieren", { open = false }, actions.onToggle)
             if (job.direction == SyncJob.DIRECTION_BOTH) MenuEntry("Konflikte", { open = false }, actions.onConflicts)
+            MenuEntry("Prüfen", { open = false }, actions.onCheck)
+            MenuEntry("Versionen", { open = false }, actions.onVersions)
             MenuEntry("Löschen", { open = false }, actions.onDelete)
+        }
+    }
+}
+
+@Composable
+private fun JobStateLine(job: SyncJob, actions: JobActions) {
+    val state = job.state
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        val problem = state?.blocked?.detail ?: state?.loadError ?: state?.lastError?.message ?: job.brokenConfig
+        if (!problem.isNullOrBlank()) {
+            Text(problem, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            if (job.brokenConfig == null) OutlinedButton(onClick = actions.onCheck) { Text("Prüfen") }
+        }
+        state?.lastAttemptMs?.let { HintText("Letzter Versuch: ${BackgroundText.moment(it)}") }
+        state?.lastSuccessMs?.let { HintText("Letzter Erfolg: ${BackgroundText.moment(it)}") }
+        state?.retryAtMs?.let { HintText("Erneuter Versuch: ${BackgroundText.moment(it)}") }
+        state?.pendingTrigger?.let { HintText("Folgelauf offen seit ${BackgroundText.moment(it.sinceMs)}") }
+        state?.watch?.let { watch ->
+            val text = when (watch.detection?.mode) {
+                "events" -> "Änderungshinweise und Kontrollläufe"
+                "events_and_poll" -> "Hinweise + Abfrage alle ${watch.detection?.pollSecs ?: 0} s"
+                "poll" -> "Abfrage alle ${watch.detection?.pollSecs ?: 0} s"
+                "starting" -> "Überwachung wird eingerichtet"
+                else -> "Änderungsabdeckung eingeschränkt"
+            }
+            HintText(text)
+            watch.note?.let { HintText(it) }
+        }
+        if (job.lastResult != null || state == null) {
+            LastResultLine(job.lastResult, actions.onConflicts, showSuccess = state == null)
         }
     }
 }
@@ -180,7 +214,7 @@ private fun RunningLine(text: String) {
 }
 
 @Composable
-private fun LastResultLine(result: SyncLastResult?, onConflicts: () -> Unit) {
+private fun LastResultLine(result: SyncLastResult?, onConflicts: () -> Unit, showSuccess: Boolean) {
     if (result == null || result.timeMs <= 0) {
         Text("Noch nicht gelaufen", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         return
@@ -199,7 +233,7 @@ private fun LastResultLine(result: SyncLastResult?, onConflicts: () -> Unit) {
                 color = MaterialTheme.colorScheme.error,
             )
             else -> Text(
-                "✓ $time · A→B ${result.aToB}, B→A ${result.bToA}, gelöscht ${result.deleted}",
+                "${if (showSuccess) "✓" else "Dateiergebnis"} $time · A→B ${result.aToB}, B→A ${result.bToA}, gelöscht ${result.deleted}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

@@ -3,6 +3,7 @@ package app.smartexplorer.android.system
 import android.Manifest
 import android.app.Activity
 import android.app.ActivityManager
+import android.app.AlarmManager
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
@@ -65,6 +66,12 @@ object Permissions {
      */
     fun isBackgroundRestricted(context: Context): Boolean =
         context.getSystemService(ActivityManager::class.java)?.isBackgroundRestricted == true
+
+    fun canScheduleExactAlarms(context: Context): Boolean = Build.VERSION.SDK_INT < 31 ||
+        context.getSystemService(AlarmManager::class.java)?.canScheduleExactAlarms() == true
+
+    fun openExactAlarmSettings(context: Context): Boolean = Build.VERSION.SDK_INT >= 31 &&
+        launch(context, Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, packageUri(context)))
 
     /** App info page (battery usage, restricted settings). */
     fun openAppDetails(context: Context): Boolean =

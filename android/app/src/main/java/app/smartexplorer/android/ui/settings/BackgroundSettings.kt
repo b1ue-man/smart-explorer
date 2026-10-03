@@ -191,13 +191,16 @@ fun BackgroundSettingsSection(modifier: Modifier = Modifier) {
         CatchUpBlock(onChanged = { scope.launch { refresh() } })
 
         SectionTitle("System")
+        SyncAccessRows(mode != BackgroundController.MODE_OFF)
         BatteryOptimizationRow(serviceSetting)
         OutlinedButton(onClick = { showLog = true }) { Text("Worker-Protokoll") }
 
         SectionTitle("Grenzen auf Android")
         HintText("Echtzeit-Jobs laufen im Dauerbetrieb oder bei geöffneter App; im Modus „Periodisch“ einmal je Lauf.")
-        HintText("Zeitplan-Jobs sind im Modus „Periodisch“ nicht minutengenau; Android verschiebt Läufe.")
-        HintText("Befehle vorher/nachher laufen nur bei Hintergrundläufen, mit /system/bin/sh in der App-Sandbox.")
+        HintText("Jobalarme richten sich nach dem nächsten echten Termin. Bedingungen, Doze, Kontingente und Herstellerregeln können den Start verzögern.")
+        HintText("Ein Workerfenster hält die CPU höchstens acht Minuten wach und bricht seine nativen Aufträge beim Stoppen ab. Android kann den Vordergrundstart verweigern; längere Vorgänge bleiben wiederholbar.")
+        HintText("Der Dienst und neue Planungsbedingungen sperren weitere automatische Starts. Bereits laufende unabhängige Jobs und manuelle Vorgänge haben ihren eigenen Abbruch.")
+        HintText("Befehle vorher/nachher und bei Abbruch laufen bei echten Jobläufen mit /system/bin/sh in der App-Sandbox.")
         HintText("Der Auslöser „Bei Anschluss“ (Laufwerk/USB) wird auf Android nicht unterstützt.")
     }
     if (showLog) WorkerLogDialog(onDismiss = { showLog = false })
@@ -206,8 +209,32 @@ fun BackgroundSettingsSection(modifier: Modifier = Modifier) {
 private fun modeHint(mode: String): String = when (mode) {
     BackgroundController.MODE_OFF -> "Keine geplanten Jobs; „Jetzt“ auf der Sync-Seite geht weiterhin."
     BackgroundController.MODE_PERSISTENT ->
-        "Eine dauerhafte Benachrichtigung hält Jobs und Share wach, auch nach einem Neustart. Braucht mehr Akku."
-    else -> "Android weckt die App regelmäßig unter den Bedingungen unten und holt fällige Jobs nach."
+        "Eine dauerhafte Benachrichtigung hält den Dienst für Jobs und Share erreichbar. Laufende Arbeit fordert begrenzte CPU-Holds an; Android setzt weiterhin Systemgrenzen."
+    else -> "Android weckt die App zum nächsten Jobtermin und regelmäßig als Rückfall unter den Bedingungen unten."
+}
+
+@Composable
+private fun SyncAccessRows(needed: Boolean) {
+    val context = LocalContext.current
+    var exact by remember { mutableStateOf(Permissions.canScheduleExactAlarms(context)) }
+    var storage by remember { mutableStateOf(Permissions.hasAllFilesAccess()) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        exact = Permissions.canScheduleExactAlarms(context)
+        storage = Permissions.hasAllFilesAccess()
+        BackgroundController.refreshSchedule(context)
+    }
+    if (!storage) ErrorCard(
+        title = "Dateizugriff fehlt",
+        message = "Jobs im gemeinsamen Speicher benötigen Zugriff auf alle Dateien. Bei Rechteentzug werden diese Läufe abgebrochen; Fernorte bleiben verfügbar.",
+        actionLabel = "Dateizugriff erlauben",
+        onAction = { if (!Permissions.openAllFilesAccessSettings(context)) Snackbars.show("Dateizugriff bitte in den App-Einstellungen erlauben.") },
+    )
+    if (needed && !exact) {
+        OutlinedButton(onClick = {
+            if (!Permissions.openExactAlarmSettings(context)) Snackbars.show("Alarmrecht bitte in den App-Einstellungen ändern.")
+        }) { Text("Genaue Jobalarme erlauben") }
+        HintText("Ohne dieses Recht nutzt Android ungefähre Alarme und WorkManager. Ein ungefährer Alarm startet keinen Vordergrunddienst.")
+    }
 }
 
 @Composable

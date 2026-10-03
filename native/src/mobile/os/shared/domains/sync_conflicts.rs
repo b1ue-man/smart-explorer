@@ -2,7 +2,7 @@
 //! of the last run or dry run, its open conflicts, and resolved entries whose
 //! baseline update is not saved yet. Saving merges the resolved entries into
 //! the stored baseline, so a newer background run's baseline is kept.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -10,13 +10,13 @@ use serde_json::{json, Value};
 
 use super::args::{canceled, invalid, str_arg};
 use super::sync_jobs::find_job;
-use super::sync_run::{open_pair, report_errors, run_bisync, running_task, spawn_for_job};
+use super::sync_run::{job_owned, open_pair_for, report_errors, run_bisync, spawn_for_snapshot};
 use crate::bisync::{Baseline, Conflict, ResolvePhase, Sig};
 use crate::linemerge::Row;
 use crate::mobile::{ApiError, Runtime};
 use crate::vfs::BackendHandle;
 
-/// Largest text side the line merge accepts (`remote_util::read_text`).
+/// Largest text side the line merge accepts through its regular-file reader.
 const MAX_MERGE_BYTES: u64 = 16 * 1024 * 1024;
 
 pub(super) struct PairContext {
@@ -36,6 +36,8 @@ pub(super) struct MergeDraft {
     pub state_b: (u64, i64),
     pub text_a: String,
     pub text_b: String,
+    pub retry: bool,
+    pub pending: Option<crate::bisync::PendingMerge>,
 }
 
 struct JobConflicts {
@@ -43,6 +45,8 @@ struct JobConflicts {
     items: Vec<(String, Conflict)>,
     resolved: Baseline,
     merge: Option<MergeDraft>,
+    state: Option<crate::bisync::StateKey>,
+    pending: BTreeSet<String>,
 }
 
 static CONFLICTS: Mutex<BTreeMap<String, JobConflicts>> = Mutex::new(BTreeMap::new());
@@ -57,20 +61,45 @@ fn with_state<T>(work: impl FnOnce(&mut BTreeMap<String, JobConflicts>) -> T) ->
 
 /// Replaces the job's context with the result of a run or dry run.
 pub(super) fn store_run(job_id: &str, pair: PairContext, conflicts: Vec<Conflict>) {
-    let items = conflicts
+    store_recorded_run(job_id, pair, conflicts, None);
+}
+
+pub(super) fn store_recorded_run(job_id: &str, pair: PairContext, conflicts: Vec<Conflict>, state: Option<crate::bisync::StateKey>) {
+    store_with_pending(job_id, pair, conflicts, state, Vec::new());
+}
+
+fn store_with_pending(job_id: &str, pair: PairContext, mut conflicts: Vec<Conflict>,
+    state: Option<crate::bisync::StateKey>, pending: Vec<Conflict>) -> usize {
+    let pending_names = pending.iter().map(|conflict| conflict.rel.clone()).collect();
+    if !pending.is_empty() {
+        let keys = crate::bisync::pair_key_policy(&*pair.a, &pair.root_a, &*pair.b, &pair.root_b);
+        let protected: BTreeSet<_> = pending.iter().map(|conflict| keys.key(&conflict.rel).into_owned()).collect();
+        conflicts.retain(|conflict| !protected.contains(keys.key(&conflict.rel).as_ref()));
+        conflicts.extend(pending);
+    }
+    let items: Vec<_> = conflicts
         .into_iter()
         .map(|conflict| {
             let cid = format!("c{}", NEXT_CID.fetch_add(1, Ordering::Relaxed));
             (cid, conflict)
         })
         .collect();
+    let count = items.len();
     let context = JobConflicts {
         pair: Arc::new(pair),
         items,
         resolved: Baseline::new(),
         merge: None,
+        state,
+        pending: pending_names,
     };
     with_state(|state| state.insert(job_id.to_string(), context));
+    count
+}
+
+pub(super) fn recorded_state(job_id: &str) -> Result<crate::bisync::StateKey, ApiError> {
+    with_state(|state| state.get(job_id).and_then(|context| context.state.clone()))
+        .ok_or_else(|| invalid("Bitte Konflikte neu prüfen; der aufgezeichnete Sync-Zustand fehlt."))
 }
 
 pub(super) fn forget(job_id: &str) {
@@ -143,7 +172,7 @@ pub(super) fn apply_resolution(
         if context.merge.as_ref().is_some_and(|draft| draft.cid == cid) {
             context.merge = None;
         }
-        context.resolved.insert(rel.to_string(), signatures);
+        if context.state.is_none() { context.resolved.insert(rel.to_string(), signatures); }
         Some(context.items.len())
     })
     .ok_or_else(not_loaded)?;
@@ -188,12 +217,16 @@ fn save_resolved(job_id: &str) -> Result<(), ApiError> {
 /// Before a run or dry run replaces the context: nothing may be in progress
 /// and resolved entries must be saved.
 pub(super) fn settle_before_run(job_id: &str) -> Result<(), ApiError> {
-    if running_task(job_id).is_some() {
+    if job_owned(job_id) {
         return Err(ApiError::new(
             "busy",
             "Für diesen Sync-Job läuft bereits ein Vorgang – bitte warten.",
         ));
     }
+    settle_reserved(job_id)
+}
+
+pub(super) fn settle_reserved(job_id: &str) -> Result<(), ApiError> {
     save_resolved(job_id).map_err(|error| ApiError::new("conflict", error.message))
 }
 
@@ -221,15 +254,17 @@ pub(super) fn conflicts(args: &Value) -> Result<Value, ApiError> {
                 .items
                 .iter()
                 .map(|(cid, conflict)| {
-                    let text = conflict.duplicates.is_none() && [conflict.a, conflict.b]
+                    let pending = context.pending.contains(&conflict.rel);
+                    let text = pending || (conflict.duplicates.is_none() && [conflict.a, conflict.b]
                         .iter()
-                        .all(|sig| sig.is_some_and(|sig| sig.size <= MAX_MERGE_BYTES));
+                        .all(|sig| sig.is_some_and(|sig| sig.size <= MAX_MERGE_BYTES)));
                     json!({
                         "cid": cid,
                         "path": conflict.rel,
                         "a": side(conflict.a, conflict.duplicates.as_ref(), true),
                         "b": side(conflict.b, conflict.duplicates.as_ref(), false),
                         "text": text,
+                        "pendingMerge": pending,
                     })
                 })
                 .collect();
@@ -243,11 +278,10 @@ pub(super) fn check(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
     super::args::reject_app_internal(&job.source)?;
     super::args::reject_app_internal(&job.target)?;
     settle_before_run(&job.id)?;
-    let job_id = job.id.clone();
     let title = format!("Konflikte prüfen: {}", job.name);
-    let task = spawn_for_job(rt, &job_id, title, move |ctx| {
+    let task = spawn_for_snapshot(rt, job.clone(), title, move |ctx| {
         ctx.message("Verbinde…");
-        let pair = open_pair(&job)?;
+        let pair = open_pair_for(ctx, &job)?;
         ctx.message("Probelauf…");
         let out = run_bisync(ctx, &job, &pair, true)?;
         if ctx.cancelled() {
@@ -259,8 +293,27 @@ pub(super) fn check(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
                 return Err(ApiError::new("internal", format!("{path}: {message}")));
             }
         }
-        let count = out.conflicts.len();
-        store_run(&job.id, pair, out.conflicts);
+        let first_error = out.errors.first().map(|(path, message)| format!("{path}: {message}"));
+        let block = out.blocked.as_ref().map(|block| crate::syncjobs::Blocked {
+            kind: crate::syncjobs::block_kind(block), detail: block.message(),
+            since: super::args::now_secs(), confirmed: false,
+        });
+        if out.busy { return Err(ApiError::new("busy", "Das Paar läuft bereits.")); }
+        let pending = if out.errors.is_empty() && !out.canceled {
+            match out.state.as_ref() {
+                Some(key) => super::sync_merge::recovery::conflicts(&pair, key, &ctx.cancel_flag())?,
+                None => Vec::new(),
+            }
+        } else { Vec::new() };
+        if out.errors.is_empty() && !out.canceled {
+            crate::syncjobs::update_job_state(&job.id, |state| { state.blocked = block; })
+                .map_err(|e| ApiError::new("internal", format!("Prüfergebnis speichern: {e}")))?;
+        }
+        let count = store_with_pending(&job.id, pair, out.conflicts, out.state, pending);
+        if let Some(error) = first_error {
+            ctx.set_failure_result(json!({ "conflicts": count, "errors": out.errors.len() }));
+            return Err(ApiError::new("internal", error));
+        }
         ctx.message(&format!("{count} Konflikte gefunden"));
         Ok(json!({ "conflicts": count, "errors": out.errors.len() }))
     })?;
@@ -286,14 +339,18 @@ pub(super) fn resolve(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
         other => return Err(invalid(format!("Unbekannte Wahl „{other}“."))),
     };
     let (pair, conflict) = lookup(&job_id, &cid)?;
+    let state = recorded_state(&job_id)?;
     let variant_id = args.get("variantId").filter(|v| !v.is_null())
         .map(|v| v.as_str().map(str::to_owned).ok_or_else(|| invalid("Ungültige Datei-ID")))
         .transpose()?;
     let title = format!("Konflikt lösen: {}", conflict.rel);
-    let owner = job_id.clone();
-    let task = spawn_for_job(rt, &owner, title, move |ctx| {
+    let job = find_job(&job_id)?;
+    let task = spawn_for_snapshot(rt, job, title, move |ctx| {
         let cancel = ctx.cancel_flag();
-        let signatures = crate::bisync::resolve_variant_checked(
+        if super::sync_merge::recovery::load(&pair, &state, &conflict.rel, &cancel)?.is_some() {
+            return Err(invalid("Hier ist eine Zusammenführung offen. Bitte den gespeicherten Auftrag unverändert wiederholen."));
+        }
+        let signatures = crate::bisync::resolve_recorded(
             &*pair.a,
             &pair.root_a,
             &*pair.b,
@@ -301,7 +358,7 @@ pub(super) fn resolve(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
             &conflict,
             keep_a,
             variant_id.as_deref(),
-            &pair.pair,
+            &state,
             &cancel,
             |phase| ctx.message(phase_label(phase)),
         )
