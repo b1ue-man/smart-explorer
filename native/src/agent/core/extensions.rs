@@ -148,6 +148,18 @@ impl AgentBackend {
 }
 
 impl BackendExtensions for AgentBackend {
+    fn previous_state_identities(&self) -> VfsResult<Vec<String>> {
+        crate::vfs::previous_state_identities(&*self.inner)
+    }
+
+    fn sync_child_path(&self, parent: &str, literal_name: &str) -> VfsResult<String> {
+        crate::vfs::sync_child_path(&*self.inner, parent, literal_name)
+    }
+
+    fn replace_staged_reversible(&self, staged: &str, destination: &str, retained: &str) -> VfsResult<bool> {
+        crate::vfs::replace_staged_reversible(&*self.inner, staged, destination, retained)
+    }
+
     fn list_dir_tolerant(&self, path: &str) -> VfsResult<VfsListing> {
         if !self.features().extensions {
             return self.list_dir(path).map(VfsListing::complete);
