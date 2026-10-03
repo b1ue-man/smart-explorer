@@ -4,25 +4,17 @@ Stand: 2026-10-03. Eigener Host-/Protokollblock statisch abgeschlossen; kein neu
 Die [Abnahme](../abnahme/H-ANALYSIS.md) enthält Befundzuordnung, Quellen- und Änderungsmanifest.
 Es gab keine lokale Ausführung und keine Änderungen außerhalb des zugewiesenen Scopes.
 
-## 1. Windows-FA6: sicherer, auffindbarer Papierkorbanschluss – offen, Hauptagent
+## 1. Windows-FA6: Quellenanschluss abgeschlossen
 
-`native/src/analytics/os/windows.rs::publish_trash` gibt ausdrücklich Unsupported zurück.
-`host_recycle_available()` ist auf Windows false; die zentrale
-`native/src/share/core/wire_capabilities.rs::FsHostFeatures::host`-Maske bietet
-`remote_trash_v1` dort deshalb nicht an. Der geprüfte Quarantäne-Einfang wird bei dieser
-Veröffentlichungsgrenze ohne Ersetzung zurückgestellt. Restore-Konflikte erhalten den Inhalt
-und melden `retained_location`.
+Der ursprüngliche Unsupported-Handoff ist durch H-TRASH-WINDOWS (`708b6f1`)
+überholt: `analytics/os/windows.rs::recycle` verwendet den bestätigten
+Quarantäne-Handle und `host_trash::recycle_selected`; `host_recycle_available`
+meldet die tatsächliche Host-Trash-Fähigkeit. Der sichtbare Smart-Explorer-
+Papierkorb besitzt NoReplace-Restore. Es gibt keinen Permanent-Fallback.
 
-Der Hauptagent schließt später den echten sicheren Wiederherstellungsanschluss: entweder eine native
-Operation über den bestätigten Guard mit erhaltenem Windows-Papierkorb oder ein im bestehenden
-Host-Store explizit auffindbarer Wiederherstellungsweg. Ein bloßer freier Pfad darf keine Shelloperation
-auslösen, ein unauffindbarer Desktop-Apptrash-Store darf nicht Recycled behaupten. Es gibt keinen
-Permanent-Fallback und keine globale Desktop-`apptrash::set_volumes`-Aktivierung.
-
-Abnahmesignal: erwartete Identität/Länge/SHA bleiben bis zur reversiblen Veröffentlichung gebunden,
-Restore ist auffindbar, Ersatzdateien werden weder verschoben noch überschrieben. Erst danach darf die
-OS-API true melden. Diese Grenze ist kein offener Implementierungsschritt des eigenen abgeschlossenen
-Host-/Protokollblocks; FA6 ist dadurch noch keine vollständige plattformübergreifende Abnahme.
+Die Identitäts-/Längen-/SHA-Bindung und Wiederherstellung ohne Überschreiben
+gehören weiterhin zur gemeinsamen Remote-Abnahme; der Quellenanschluss
+ist kein behaupteter erfolgreicher Lauf.
 
 ## 2. Watch-Abdeckung – sicherer begrenzter Anschluss abgeschlossen, OS-Ausbau offen
 
@@ -43,15 +35,16 @@ Abnahmesignal des jetzigen Vertrags: aktive partielle Hinweise erzeugen kein fal
 Reset/Transportende und Cancelled schließen den Strom sauber; Overflow/Ready werden bei Rückstau
 nachgeliefert. Vollständige Ereignisabdeckung wird bei alten Meldungen ohne complete-Feld nie angenommen.
 
-## 3. Android-Host-Figuren – konkrete Produzentenintegration offen, Hauptagent/Android-Owner
+## 3. Android-Host-Figuren – Produzentenintegration angeschlossen
 
 Die eigene Empfänger-/Hostseite benutzt
 `native/src/analytics/core/host_figures.rs::remember_platform_totals(volume, totals)`
 und bindet Figuren nur an die tatsächliche kanonische Host-Primärwurzel.
 `native/src/analytics/os/android.rs` ermittelt Host-Volumenwerte; der Share-Scan übernimmt keine
-Client-Zahlen. Der Android-Owner muss den vorhandenen Plattform-Produzenten beim erfolgreichen
-Aktualisieren eigener App-/Speichertotals mit dieser API verbinden. Fremde Android-Quelldateien
-wurden für diesen Anschluss nicht erkundet.
+Client-Zahlen. AND-SYNC (`7321668e`) hat den vorhandenen Plattform-Produzenten angeschlossen.
+`mobile/os/shared/domains/analyze_platform.rs::remember_totals` prüft die wirkliche
+Primärwurzel vor `remember_platform_totals`; andere Volumen erhalten diese Appzahlen
+nicht. Der ursprüngliche H-ANALYSIS-Worker hatte die Android-Fläche nicht verändert.
 
 Abnahmesignal: Share-Analyse des Android-Primärvolumens enthält aktuelle eigene Apps/geschützte
 Bereiche/nicht erfassten Speicher; eine andere SD-/Freigabewurzel erhält keine unpassenden

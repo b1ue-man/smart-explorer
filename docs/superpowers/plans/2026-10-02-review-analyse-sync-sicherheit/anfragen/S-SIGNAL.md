@@ -24,7 +24,7 @@ Die Versionen/Lock-Packages waren bereits vorhanden. Der Tokio-Reaktor benötigt
 explizit `net`, `sync`, `time` und `macros`; der Orchestrator meldete auch diese
 Features als eingetragen (Commit `bdef9ed`). Keine weitere Abhängigkeit angefragt.
 
-## A2 – Gepinnte Relay-Zertifikate: offen bei H-DISPATCH
+## A2 – Gepinnte Relay-Zertifikate: Quellenanschluss durch H-DISPATCH erledigt
 
 - Datei/Stelle: `native/src/share/core/node.rs`, Erzeugung des Iroh-Endpoints.
 - Fertige API: `NodeTransportOptions::ca_tls_config() -> Option<iroh::tls::CaTlsConfig>`
@@ -35,10 +35,10 @@ Features als eingetragen (Commit `bdef9ed`). Keine weitere Abhängigkeit angefra
 - Abnahmesignal: selbst signierter Share-Server samt HTTPS-Relay funktioniert mit
   passendem Pin; falscher Pin scheitert, ohne HTTP-Rückfall. Öffentlich gültige
   Peer-Relays bleiben erreichbar.
-- Stand laut Orchestrator: in `integration.md` bereits H-DISPATCH zugeordnet,
-  noch nicht als erledigt gemeldet. Die Datei wurde von mir weder gelesen noch geändert.
+- Stand 2026-10-03: H-DISPATCH `74af4e1a` bindet den Trust im tatsächlichen Endpoint-Builder;
+  gemeinsame Remote-Abnahme steht aus. Der ursprüngliche S-SIGNAL-Worker hat diese Datei nicht geändert.
 
-## A3 – Peer-Relay-URLs: offen bei H-DISPATCH
+## A3 – Peer-Relay-URLs: Quellenanschluss durch H-DISPATCH erledigt
 
 - Datei/Stelle: `native/src/share/core/session.rs`, Erzeugung der Endpoint-Adresse
   aus Peer-Präsenz.
@@ -49,7 +49,7 @@ Features als eingetragen (Commit `bdef9ed`). Keine weitere Abhängigkeit angefra
   Kandidaten bleiben erhalten.
 - Abnahmesignal: HTTP aus einer Peer-Präsenz wird bei TLS-Konfiguration verworfen;
   dieselbe URL funktioniert bei ausdrücklich erlaubtem, gespeichertem Klartext.
-- Stand laut Orchestrator: H-DISPATCH zugeordnet, noch nicht als erledigt gemeldet.
+- Stand 2026-10-03: H-DISPATCH `74af4e1a` prüft die tatsächlichen Peer-Relay-URLs. Gemeinsame Remote-Abnahme steht aus.
   Die Datei wurde von mir weder gelesen noch geändert.
 
 ## A4 – Daemon-Migration alter Server-Dateien: erledigt durch S-REVOKE
