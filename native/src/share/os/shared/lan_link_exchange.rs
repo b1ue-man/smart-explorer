@@ -5,6 +5,7 @@ use std::sync::Arc;
 use futures_util::StreamExt;
 use iroh::endpoint::{Connection, RecvStream, SendStream};
 use tokio::io::AsyncWriteExt;
+use tokio::time::{timeout_at, Instant};
 
 use super::core::{eio, random_bytes};
 use super::lan_link_facts::{self, LanPeerPin};
@@ -31,6 +32,8 @@ pub(super) async fn run(
     let monitor = async {
         while paths.next().await.is_some() {
             transport.path_changed(&connection);
+            // Keep the frame actor and its deadline polled during event bursts.
+            tokio::task::yield_now().await;
         }
         Err(io::Error::new(
             io::ErrorKind::NotConnected,
@@ -38,7 +41,11 @@ pub(super) async fn run(
         ))
     };
     tokio::time::timeout(SESSION_DEADLINE, async {
-        tokio::select! { result = work => result, result = monitor => result }
+        tokio::select! {
+            biased;
+            result = monitor => result,
+            result = work => result,
+        }
     })
     .await
     .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "LAN-Link-Sitzung abgelaufen"))?
@@ -62,13 +69,19 @@ async fn client(
     connection: &Connection,
     expected: LanPeerPin,
 ) -> io::Result<()> {
+    let mut deadline = Instant::now() + ROUND_DEADLINE;
     for _ in 0..24 {
-        node.require_sharing_active()?;
-        let path = checked_path(transport, connection)?;
-        let revision = transport.path_revision(connection)?;
-        let nonce = random_bytes::<32>().map_err(eio)?;
-        let own = lan_link_transport::local_identity(node)?;
-        let result = tokio::time::timeout(ROUND_DEADLINE, async {
+        let result = timeout_at(deadline, async {
+            node.require_sharing_active()?;
+            let (path, revision) = snapshot(deadline, || {
+                Ok((
+                    checked_path(transport, connection)?,
+                    transport.path_revision(connection)?,
+                ))
+            })
+            .await?;
+            let nonce = random_bytes::<32>().map_err(eio)?;
+            let own = snapshot(deadline, || lan_link_transport::local_identity(node)).await?;
             let (mut send, mut recv) = connection.open_bi().await.map_err(eio)?;
             send_frame(
                 &mut send,
@@ -90,11 +103,14 @@ async fn client(
                 }
                 _ => return Err(eio("LAN-Link erwartet Challenge-Antwort")),
             };
-            let pin = lan_link_transport::current_pin(node, connection, &identity)?;
+            let pin = snapshot(deadline, || {
+                lan_link_transport::current_pin(node, connection, &identity)
+            })
+            .await?;
             if pin != expected {
                 return Err(eio("LAN-Link-Kontaktpin wurde geaendert"));
             }
-            let own_uplink = transport.host()?.own_uplink;
+            let own_uplink = snapshot(deadline, || Ok(transport.host()?.own_uplink)).await?;
             send_frame(
                 &mut send,
                 &LinkFrame::Confirm {
@@ -104,12 +120,27 @@ async fn client(
             )
             .await?;
             send.finish().map_err(eio)?;
-            transport.confirm(node, connection, pin, path, revision, nonce, uplink)
+            snapshot(deadline, || {
+                transport.confirm(
+                    node,
+                    connection,
+                    pin.clone(),
+                    path.clone(),
+                    revision,
+                    nonce,
+                    uplink,
+                )
+            })
+            .await
         })
         .await
-        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "LAN-Link-Challenge abgelaufen"))?;
+        .map_err(|_| challenge_timeout())?;
+        if discarded_revision(&result) {
+            continue; // Fresh stream/nonces, same absolute deadline and attempt budget.
+        }
         result?;
         tokio::time::sleep(REFRESH_INTERVAL).await;
+        deadline = Instant::now() + ROUND_DEADLINE;
     }
     Ok(())
 }
@@ -119,20 +150,30 @@ async fn server(
     transport: &LanLinkTransport,
     connection: &Connection,
 ) -> io::Result<()> {
+    let mut deadline = Instant::now() + ROUND_DEADLINE;
     for _ in 0..24 {
         node.require_sharing_active()?;
-        let result = tokio::time::timeout(ROUND_DEADLINE, async {
+        let result = timeout_at(deadline, async {
+            check_deadline(deadline)?;
             let (mut send, mut recv) = connection.accept_bi().await.map_err(eio)?;
             let (echo, identity) = match recv_frame(&mut recv).await? {
                 LinkFrame::Challenge { nonce, identity } => (nonce, identity),
                 _ => return Err(eio("LAN-Link erwartet Challenge")),
             };
-            let pin = lan_link_transport::current_pin(node, connection, &identity)?;
-            let path = checked_path(transport, connection)?;
-            let revision = transport.path_revision(connection)?;
+            let pin = snapshot(deadline, || {
+                lan_link_transport::current_pin(node, connection, &identity)
+            })
+            .await?;
+            let (path, revision) = snapshot(deadline, || {
+                Ok((
+                    checked_path(transport, connection)?,
+                    transport.path_revision(connection)?,
+                ))
+            })
+            .await?;
             let nonce = random_bytes::<32>().map_err(eio)?;
-            let own = lan_link_transport::local_identity(node)?;
-            let uplink = transport.host()?.own_uplink;
+            let own = snapshot(deadline, || lan_link_transport::local_identity(node)).await?;
+            let uplink = snapshot(deadline, || Ok(transport.host()?.own_uplink)).await?;
             send_frame(
                 &mut send,
                 &LinkFrame::Answer {
@@ -151,13 +192,60 @@ async fn server(
                 }
                 _ => return Err(eio("LAN-Link erwartet Bestaetigung")),
             };
-            transport.confirm(node, connection, pin, path, revision, nonce, peer_uplink)
+            snapshot(deadline, || {
+                transport.confirm(
+                    node,
+                    connection,
+                    pin.clone(),
+                    path.clone(),
+                    revision,
+                    nonce,
+                    peer_uplink,
+                )
+            })
+            .await
         })
         .await
-        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "LAN-Link-Challenge abgelaufen"))?;
+        .map_err(|_| challenge_timeout())?;
+        if discarded_revision(&result) {
+            continue;
+        }
         result?;
+        deadline = Instant::now() + ROUND_DEADLINE;
     }
     Ok(())
+}
+
+fn discarded_revision(result: &io::Result<()>) -> bool {
+    result.as_ref().is_err_and(|error| {
+        error
+            .get_ref()
+            .is_some_and(|cause| cause.is::<lan_link_transport::PathRevisionChanged>())
+    })
+}
+
+fn challenge_timeout() -> io::Error {
+    io::Error::new(io::ErrorKind::TimedOut, "LAN-Link-Challenge abgelaufen")
+}
+
+fn check_deadline(deadline: Instant) -> io::Result<()> {
+    if Instant::now() >= deadline {
+        Err(challenge_timeout())
+    } else {
+        Ok(())
+    }
+}
+
+async fn snapshot<T>(deadline: Instant, mut read: impl FnMut() -> io::Result<T>) -> io::Result<T> {
+    loop {
+        check_deadline(deadline)?;
+        match read() {
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                tokio::task::yield_now().await;
+            }
+            result => return result,
+        }
+    }
 }
 
 async fn send_frame(send: &mut SendStream, frame: &LinkFrame) -> io::Result<()> {

@@ -37,6 +37,17 @@ pub(super) struct SelectedIpPath {
     pub(super) id: String,
 }
 
+#[derive(Debug)]
+pub(super) struct PathRevisionChanged;
+
+impl std::fmt::Display for PathRevisionChanged {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("LAN-Link-Pfad hat gewechselt")
+    }
+}
+
+impl std::error::Error for PathRevisionChanged {}
+
 pub(super) fn selected_ip_path(connection: &Connection) -> Option<SelectedIpPath> {
     if connection.close_reason().is_some() {
         return None;
@@ -234,15 +245,13 @@ impl LanLinkTransport {
             lan_link_facts::private_interface(path.local, path.remote, &host.interfaces)
                 .ok_or_else(|| eio("LAN-Link-Interface ist nicht eindeutig privat"))?;
         let mut state = self.state.try_lock().map_err(|_| busy())?;
-        if state
+        let channel = state
             .channels
             .get(&connection.stable_id())
-            .is_none_or(|channel| {
-                channel.revision != revision
-                    || channel.control_epoch != self.control_epoch.load(Ordering::Acquire)
-            })
-        {
-            return Err(eio("LAN-Link-Pfad hat gewechselt"));
+            .filter(|channel| channel.control_epoch == self.control_epoch.load(Ordering::Acquire))
+            .ok_or_else(|| eio("LAN-Link geschlossen"))?;
+        if channel.revision != revision {
+            return Err(io::Error::new(io::ErrorKind::Interrupted, PathRevisionChanged));
         }
         state.cache.remove(&connection.stable_id());
         if let Some(peer_uplink) = uplink.known() {
