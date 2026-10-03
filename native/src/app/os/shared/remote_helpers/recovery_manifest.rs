@@ -264,14 +264,25 @@ fn validate_edit_path(path: &Path, directory: bool, allow_missing: bool) -> io::
     match std::fs::symlink_metadata(path) {
         Ok(metadata)
             if !crate::app::upload_is_link_like(path, &metadata)
-                && if directory { metadata.is_dir() } else { metadata.is_file() } =>
+                && if directory {
+                    metadata.is_dir()
+                } else {
+                    metadata.is_file()
+                } =>
         {
             Ok(())
         }
         Ok(_) => Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
-            format!("editor temp path is not a safe {}: {}",
-                if directory { "directory" } else { "regular file" }, path.display()),
+            format!(
+                "editor temp path is not a safe {}: {}",
+                if directory {
+                    "directory"
+                } else {
+                    "regular file"
+                },
+                path.display()
+            ),
         )),
         Err(error) if allow_missing && error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error),

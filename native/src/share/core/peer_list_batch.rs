@@ -45,7 +45,8 @@ pub(super) fn list(backend: &PeerBackend, path: &str) -> io::Result<VfsListing> 
                             .saturating_mul(2)
                             .saturating_add(entry.id.as_ref().map_or(0, |id| id.capacity() as u64))
                             .saturating_add(
-                                (std::mem::size_of::<crate::vfs::VfsMeta>() as u64).saturating_mul(2),
+                                (std::mem::size_of::<crate::vfs::VfsMeta>() as u64)
+                                    .saturating_mul(2),
                             )
                             .saturating_add(
                                 (std::mem::size_of::<String>() as u64).saturating_mul(3),

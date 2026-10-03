@@ -9,9 +9,7 @@ use crate::vfs::Backend;
 use super::checkpoint::ApplyScope;
 use super::checkpoint_run::CheckpointSink;
 use super::guards::{deletion_block, empty_side_block, unconfirmed, DeleteCounts};
-use super::incremental_changes::{
-    action_plan_for, apply_trees, target_touched_drifted_spelled,
-};
+use super::incremental_changes::{action_plan_for, apply_trees, target_touched_drifted_spelled};
 use super::incremental_collect::{
     changes_from_backend, changes_from_source_walk_scoped, ChangeCollection,
 };

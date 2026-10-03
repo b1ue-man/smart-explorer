@@ -4,6 +4,7 @@ use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
+use super::{mirror_source, SyncEndpoints};
 use crate::bisync as engine;
 use engine::incremental_changes::collect_ids;
 use engine::orchestration::RunState;
@@ -11,7 +12,6 @@ use engine::replica_state::index_id;
 use engine::state_metadata::{index_dirty_path, write_bytes};
 use engine::state_store::{PairRecord, Side, SyncStateStore};
 use engine::types::{Baseline, BisyncOptions};
-use super::{mirror_source, SyncEndpoints};
 
 /// A durable dirty marker disqualifies the old cache even if SQLite itself is
 /// corrupt, read-only or busy. A full scan can then work without the database.
@@ -41,8 +41,8 @@ pub(in crate::bisync) fn bootstrap_run(
         return Ok(());
     };
     let keys = engine::orchestration_plan::keys(state.endpoints);
-    let names =
-        engine::state_spellings::load(state.key, keys).map_err(|_| rusqlite::Error::InvalidQuery)?;
+    let names = engine::state_spellings::load(state.key, keys)
+        .map_err(|_| rusqlite::Error::InvalidQuery)?;
     let rows = names.cache_baseline(baseline, keys);
     let pair = index_id(state.key).map_err(|_| rusqlite::Error::InvalidQuery)?;
     let record = pair_record(state.endpoints, pair, mode(state), source_side, cursor);

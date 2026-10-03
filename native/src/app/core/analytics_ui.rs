@@ -112,12 +112,26 @@ impl App {
                 .constrain(true)
                 .show(ctx, |ui| {
                     self.ui_analytics_controls(ui, &mut controls);
-                    analytics_access::issues_ui(ui, &self.analytics_issues,
-                        self.analytics_suppressed_issues, self.analytics_access.permission_denied,
-                        &self.analytics_notes);
-                    if let Some(StorageScanSource::Remote { host_platform: Some(figures), .. }) = &source {
+                    analytics_access::issues_ui(
+                        ui,
+                        &self.analytics_issues,
+                        self.analytics_suppressed_issues,
+                        self.analytics_access.permission_denied,
+                        &self.analytics_notes,
+                    );
+                    if let Some(StorageScanSource::Remote {
+                        host_platform: Some(figures),
+                        ..
+                    }) = &source
+                    {
                         if let Some(tree) = self.analytics_tree.as_ref() {
-                            host_figures_ui(ui, tree, &focus_segs, figures, self.analytics_state == StorageRunState::Complete);
+                            host_figures_ui(
+                                ui,
+                                tree,
+                                &focus_segs,
+                                figures,
+                                self.analytics_state == StorageRunState::Complete,
+                            );
                         }
                     }
                     request_access = analytics_access::access_ui(ui, &self.analytics_access);
@@ -138,8 +152,12 @@ impl App {
                         ui.allocate_exact_size(egui::vec2(tm_w, tm_h), egui::Sense::click());
 
                     // (Re)lay out only on resize or drill — painting reuses cells.
-                    let need = treemap_needs_layout(focus_node.is_some(),
-                        cached_cells.is_empty(), cached_rect, tm_rect);
+                    let need = treemap_needs_layout(
+                        focus_node.is_some(),
+                        cached_cells.is_empty(),
+                        cached_rect,
+                        tm_rect,
+                    );
                     let cells: &[TmCell] = if need {
                         let mut v = Vec::new();
                         if let Some(node) = focus_node {

@@ -14,8 +14,7 @@ impl LanLinkTransport {
             let Some(pin) = lan_link_facts::contact_pin(contact) else {
                 continue;
             };
-            let Some(presence) =
-                super::super::lan_presence_match::effective_presence(contact, now)
+            let Some(presence) = super::super::lan_presence_match::effective_presence(contact, now)
             else {
                 continue;
             };

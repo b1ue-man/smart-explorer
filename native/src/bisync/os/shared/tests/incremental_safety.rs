@@ -78,12 +78,27 @@ fn rename_swap_applies_and_persists_both_final_paths() {
     let key = before.state.unwrap();
     assert!(!key.is_legacy());
     let index = index_id(&key).unwrap();
-    let initial = SyncStateStore::open_at(&db).unwrap().load_side(&index, Side::A).unwrap();
+    let initial = SyncStateStore::open_at(&db)
+        .unwrap()
+        .load_side(&index, Side::A)
+        .unwrap();
     assert_eq!(initial["a.txt"].id.as_deref(), Some("id-a"));
     assert_eq!(initial["b.txt"].id.as_deref(), Some("id-b"));
-    std::fs::rename(format!("{source_root}/a.txt"), format!("{source_root}/swap.tmp")).unwrap();
-    std::fs::rename(format!("{source_root}/b.txt"), format!("{source_root}/a.txt")).unwrap();
-    std::fs::rename(format!("{source_root}/swap.tmp"), format!("{source_root}/b.txt")).unwrap();
+    std::fs::rename(
+        format!("{source_root}/a.txt"),
+        format!("{source_root}/swap.tmp"),
+    )
+    .unwrap();
+    std::fs::rename(
+        format!("{source_root}/b.txt"),
+        format!("{source_root}/a.txt"),
+    )
+    .unwrap();
+    std::fs::rename(
+        format!("{source_root}/swap.tmp"),
+        format!("{source_root}/b.txt"),
+    )
+    .unwrap();
     *source.batch.lock().unwrap() = crate::vfs::VfsChangeBatch {
         changes: vec![
             VfsChange {
@@ -109,9 +124,18 @@ fn rename_swap_applies_and_persists_both_final_paths() {
     let outcome = run_with_store_path(endpoints, opts, &cancel, &filter, &db);
     assert!(outcome.errors.is_empty(), "{:?}", outcome.errors);
     assert!(outcome.blocked.is_none() && outcome.stopped.is_none() && outcome.deferred.is_empty());
-    assert_eq!(std::fs::read(format!("{target_root}/a.txt")).unwrap(), b"from-b-longer");
-    assert_eq!(std::fs::read(format!("{target_root}/b.txt")).unwrap(), b"from-a");
-    let state = SyncStateStore::open_at(&db).unwrap().load_side(&index, Side::A).unwrap();
+    assert_eq!(
+        std::fs::read(format!("{target_root}/a.txt")).unwrap(),
+        b"from-b-longer"
+    );
+    assert_eq!(
+        std::fs::read(format!("{target_root}/b.txt")).unwrap(),
+        b"from-a"
+    );
+    let state = SyncStateStore::open_at(&db)
+        .unwrap()
+        .load_side(&index, Side::A)
+        .unwrap();
     assert_eq!(state["a.txt"].id.as_deref(), Some("id-b"));
     assert_eq!(state["b.txt"].id.as_deref(), Some("id-a"));
     let basis = super::super::baseline_file(&key).unwrap();

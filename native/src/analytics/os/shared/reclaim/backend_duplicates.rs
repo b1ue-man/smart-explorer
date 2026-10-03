@@ -212,9 +212,7 @@ pub(super) fn host_report(
             for (counter, value) in counters.into_iter().zip(before) {
                 counter.store(value, Ordering::Relaxed);
             }
-            progress
-                .stage
-                .begin(ReclaimPhase::Walking, 0, 0);
+            progress.stage.begin(ReclaimPhase::Walking, 0, 0);
             None
         }
         Ok(report) => report,
