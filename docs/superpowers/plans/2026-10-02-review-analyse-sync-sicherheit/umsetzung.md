@@ -939,15 +939,15 @@ Nicht aufgeführte Dateien ändert nur, wer sie per Anfrage zugeteilt bekommt.
 | T-JOBS | Quellen abgeschlossen (`7806d24`) | Persistierte Echtzeit-Arbeit, Scheduler, Watch, Guardian, Hooks und Ergebnisse umgesetzt; Desktop-/Android-Consumer folgen. |
 | S-SIGNAL | Umsetzung integriert (`af77ead`) | FC2–FC4/B20/B21 fertig; gepinnter Relay-Builder und Peer-URL-Filter bei H-DISPATCH. Gemeinsame Remote-Abnahme steht aus. |
 | S-REVOKE | Umsetzung integriert | `0d36bdd`: Beziehungen, gezielter Exec-Entzug, Persist-Gates/S66, retrybarer Widerruf/S24, Zeitversatz/S32; eigener Block nach statischem Self-Review beendet. V5-Durchsetzung und UI-Anschlüsse gehen an H-DISPATCH/S-POLICY/Android; gemeinsame Remote-Abnahme steht aus. |
-| V-REMOTE | in Umsetzung | Provider-Erweiterungen plus bestehende Y124/Y132/Y134/Y140/Y142-Anschlüsse; keine Umdeutung gespeicherter Locators. |
+| V-REMOTE | Quellen abgeschlossen (`9b5bd1cb`) | Provider-Erweiterungen, Literalnamen und echte Pollsignale; Engine-Verbrauch Y124/Y132/Y134/Y140/Y142 bleibt E-ENGINE. Keine Umdeutung gespeicherter Locators. |
 | E-APPLY | in Umsetzung | V3-Reporting/Snapshots, reversible Versionen und tatsächlich bestätigte Signaturen; E-PLAN `dd0dccf` integriert. |
-| H-DISPATCH | in Umsetzung | V2-Hostoperationen/V5-Reduktionsmenge und TLS-Relay-Anschlüsse aus den abgeschlossenen Verträgen werden verbunden; konkrete Grenzen in `integration.md`. |
+| H-DISPATCH | Quellen abgeschlossen (`74af4e1a`) | V2-Hostoperationen, gezielter Rechteentzug, faire Zulassung und private Pfade. H-REPLACE/OS-Policy-Grenze schließen konkrete letzte Anschlüsse; verbleibende allgemeine LocalBackend-Grenzen bleiben ehrlich dokumentiert. |
 | H-TRASH-WINDOWS | Quellen abgeschlossen (`708b6f1`), gemeinsame Remote-Abnahme offen | Windows-Fern-Papierkorb mit Record vor Capture, Handle-/Inhaltsbindung und sichtbarer Host-Wiederherstellung vollständig angeschlossen; kein neues Review. |
 | S-POLICY | Quellen abgeschlossen (`d3cced7`), gemeinsame Remote-Abnahme offen | FC1-Konfiguration, Migration und Bedienwege, mit fertiger V5-Widerrufshistorie. Native Android-Rechtefacaden ergänzt. |
-| S-LOCAL | Quellen abgeschlossen (`0a2a39e2`), S09-LINK-Anschluss in Umsetzung | FC7/B14/S60 private Erstellung/IPC/Helper/Privatsphäre; der eigene gepinnte LAN-Kanal bleibt bis seiner Integration offen. |
+| S-LOCAL | Quellen abgeschlossen (`0a2a39e2`), S09-LINK integriert (`2fbdfddd`) | FC7/B14/S60 private Erstellung/IPC/Helper/Privatsphäre; gepinnter aktueller privater TLS-LAN-Pfad statt Beacon-Autorität. Gemeinsame Remote-Abnahme steht aus. |
 | D-SYNCUI | in Umsetzung | Desktop-Consumer für JobState, Versionen, recorded Merge/KeepBoth und Hintergrundzustände; exakter Scope gespeichert. |
-| AND-SYNC | in Umsetzung | Android verbindet echte Zustände, Storageverlust-Cancel, Probleme, Alarm/Worker und Plattformzahlen. |
-| AND-SHARE-UI | in Umsetzung | Voll gepinnte Native-Rechtefacaden, explizite Dialoge und zentrale API-Dokumentation. |
+| AND-SYNC | Quellen abgeschlossen (`7321668e`) | Echte Jobzustände, Storageverlust-Cancel, Versionen, Probleme, Alarm/Worker, primäre Hostzahlen und ausdrücklicher Recorded-Merge-Retry. Regulärer Recovery-Pfadschutz bleibt E-ENGINE. |
+| AND-SHARE-UI | Quellen abgeschlossen (`a70cb532`) | Voll gepinnte Rechtefacaden, explizite wiederholbare Dialoge und zentrale API-Dokumentation. Gemeinsame Remote-Abnahme steht aus. |
 | SUITE | offen | |
 
 ## Konkreter FA6-Anschluss Windows
