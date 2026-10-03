@@ -248,7 +248,16 @@ fn engine_provider_recorded_lost_ack_preserves_old_baseline_until_retry() {
     assert!(
         !outcome.errors.is_empty() || outcome.stopped.is_some() || !outcome.deferred.is_empty()
     );
-    assert_eq!(target.promotions.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        target.promotions.load(Ordering::SeqCst),
+        1,
+        "first run: errors={:?}, blocked={:?}, stopped={:?}, deferred={:?}, state={:?}",
+        outcome.errors,
+        outcome.blocked,
+        outcome.stopped,
+        outcome.deferred,
+        outcome.state
+    );
     let (_, records, _) =
         engine::checkpoint_journal::Journal::load(&key, Default::default()).unwrap();
     assert_eq!(records.baseline, baseline);

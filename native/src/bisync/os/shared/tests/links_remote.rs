@@ -85,8 +85,7 @@ fn sync_links_task_agent_and_daemon_streams_fall_back_without_losing_protection(
     assert!(!outside.path().join("source.txt").exists());
     assert!(result.baseline.keys().all(|path| !path.starts_with("node_modules/")
         && !path.starts_with("target_link/")));
-    let pair = pair_id_for(&ea.backend, &ra, &eb.backend, &rb);
-    std::fs::remove_file(baseline_path(&pair)).unwrap();
+    std::fs::remove_file(baseline_file(result.state.as_ref().unwrap()).unwrap()).unwrap();
     link_fixture::remove_directory(&a.path().join("node_modules"));
     link_fixture::remove_directory(&b.path().join("target_link"));
 }
@@ -102,9 +101,22 @@ fn sync_links_task_regular_agent_tree_keeps_fast_hash_path_and_filters() {
     let endpoint = Endpoint::new(&root, false);
     let mut builder = globset::GlobSetBuilder::new();
     builder.add(globset::Glob::new("ignored").unwrap());
+    builder.add(globset::Glob::new(".hidden/**").unwrap());
     let globs = builder.build().unwrap();
+    assert!(
+        snapshot_agent::walk_hashed_via_agent(
+            &endpoint.backend,
+            &root,
+            &AtomicBool::new(false),
+            &WalkFilter::basic(false, &globs),
+            HashMode::FullFresh,
+        )
+        .unwrap()
+        .is_none(),
+        "hidden filtering requires the metadata fallback"
+    );
     let tree = snapshot_agent::walk_hashed_via_agent(&endpoint.backend, &root,
-        &AtomicBool::new(false), &WalkFilter::basic(false, &globs), HashMode::FullFresh)
+        &AtomicBool::new(false), &WalkFilter::basic(true, &globs), HashMode::FullFresh)
         .unwrap().expect("regular tree retains the agent fast path");
     assert_eq!(tree.keys().map(String::as_str).collect::<Vec<_>>(), ["node_modules/entry.txt"]);
     assert_ne!(tree["node_modules/entry.txt"].hash, 0);

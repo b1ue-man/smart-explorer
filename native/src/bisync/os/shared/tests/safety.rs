@@ -1,77 +1,14 @@
 use super::super::snapshot::{hash_mode, prev_side};
 use super::super::*;
 use super::{fwd, has_file_containing, tmp};
-use crate::vfs::{Backend, LocalBackend, Scheme, VfsMeta, VfsResult};
-use std::io::{self, Read, Write};
+use crate::vfs::{Backend, LocalBackend};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
-struct WriteFail<'a> {
-    inner: &'a LocalBackend,
-    needle: &'a str,
-}
-
-struct StatFail<'a> {
-    inner: &'a LocalBackend,
-    needle: &'a str,
-}
-
-struct DeleteProbe {
-    local: bool,
-    removes: Arc<AtomicUsize>,
-}
-
-impl Backend for DeleteProbe {
-    fn scheme(&self) -> Scheme {
-        Scheme::Local
-    }
-
-    fn root_display(&self) -> String {
-        "delete-probe".into()
-    }
-
-    fn list_dir(&self, _path: &str) -> VfsResult<Vec<VfsMeta>> {
-        Ok(Vec::new())
-    }
-
-    fn stat(&self, path: &str) -> VfsResult<VfsMeta> {
-        Ok(VfsMeta {
-            name: path.rsplit('/').next().unwrap_or(path).to_string(),
-            size: 1,
-            ..Default::default()
-        })
-    }
-
-    fn open_read(&self, _path: &str) -> VfsResult<Box<dyn Read + Send>> {
-        Err(io::Error::new(io::ErrorKind::NotFound, "missing"))
-    }
-
-    fn open_write(&self, _path: &str) -> VfsResult<Box<dyn Write + Send>> {
-        Err(io::Error::new(io::ErrorKind::PermissionDenied, "blocked"))
-    }
-
-    fn rename(&self, _src: &str, _dst: &str) -> VfsResult<()> {
-        Err(io::Error::new(io::ErrorKind::Unsupported, "rename"))
-    }
-
-    fn remove_file(&self, _path: &str) -> VfsResult<()> {
-        self.removes.fetch_add(1, Ordering::Relaxed);
-        Ok(())
-    }
-
-    fn remove_dir(&self, _path: &str) -> VfsResult<()> {
-        Err(io::Error::new(io::ErrorKind::Unsupported, "remove dir"))
-    }
-
-    fn mkdir_all(&self, _path: &str) -> VfsResult<()> {
-        Err(io::Error::new(io::ErrorKind::Unsupported, "mkdir"))
-    }
-
-    fn is_local(&self) -> bool {
-        self.local
-    }
-}
+#[path = "safety_backends.rs"]
+mod safety_backends;
+use safety_backends::{DeleteProbe, StatFail, WriteFail};
 
 fn apply_one_delete(
     backend: &dyn Backend,
@@ -81,10 +18,14 @@ fn apply_one_delete(
     let mut errors = Vec::new();
     let cancel = AtomicBool::new(false);
     let versions = tmp("delete_probe_versions");
+    // DeleteB needs an independently absent A peer throughout its CAS checks.
+    let source_dir = tempfile::tempdir().unwrap();
+    let source_root = fwd(source_dir.path());
+    let source = LocalBackend::new(&source_root);
     let stats = super::super::apply::apply(
         &[Action::DeleteB("target.txt".into())],
-        backend,
-        root,
+        &source,
+        &source_root,
         backend,
         root,
         BisyncOptions {
@@ -109,12 +50,13 @@ fn remote_absolute_path_never_uses_local_recycle_bin() {
     std::fs::write(&target, b"local data must survive").unwrap();
     let removes = Arc::new(AtomicUsize::new(0));
     let remote = DeleteProbe {
+        root: fwd(&local_collision),
         local: false,
         removes: removes.clone(),
     };
 
-    let (stats, errors) = apply_one_delete(&remote, &local_collision.to_string_lossy(), true);
-    assert!(errors.is_empty());
+    let (stats, errors) = apply_one_delete(&remote, &remote.root, true);
+    assert!(errors.is_empty(), "{errors:?}");
     assert_eq!(stats.deleted, 1);
     assert_eq!(removes.load(Ordering::Relaxed), 1);
     assert_eq!(std::fs::read(&target).unwrap(), b"local data must survive");
@@ -124,156 +66,21 @@ fn remote_absolute_path_never_uses_local_recycle_bin() {
 #[test]
 fn recycle_failure_does_not_fall_back_to_permanent_delete() {
     let missing_root = tmp("recycle_failure").join("missing");
+    std::fs::create_dir(&missing_root).unwrap();
     let removes = Arc::new(AtomicUsize::new(0));
     let local = DeleteProbe {
+        root: fwd(&missing_root),
         local: true,
         removes: removes.clone(),
     };
 
-    let (stats, errors) = apply_one_delete(&local, &missing_root.to_string_lossy(), true);
+    let (stats, errors) = apply_one_delete(&local, &local.root, true);
     assert_eq!(stats.deleted, 0);
     assert_eq!(stats.errors, 1);
     assert_eq!(errors.len(), 1);
     assert_eq!(removes.load(Ordering::Relaxed), 0);
     if let Some(parent) = missing_root.parent() {
         let _ = std::fs::remove_dir_all(parent);
-    }
-}
-
-impl Backend for WriteFail<'_> {
-    fn scheme(&self) -> Scheme {
-        self.inner.scheme()
-    }
-
-    fn root_display(&self) -> String {
-        self.inner.root_display()
-    }
-
-    fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
-        self.inner.list_dir(path)
-    }
-
-    fn stat(&self, path: &str) -> VfsResult<VfsMeta> {
-        self.inner.stat(path)
-    }
-
-    fn open_read(&self, path: &str) -> VfsResult<Box<dyn Read + Send>> {
-        self.inner.open_read(path)
-    }
-
-    fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
-        if path.contains(self.needle) {
-            Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "write blocked",
-            ))
-        } else {
-            self.inner.open_write(path)
-        }
-    }
-
-    fn rename(&self, src: &str, dst: &str) -> VfsResult<()> {
-        self.inner.rename(src, dst)
-    }
-
-    fn rename_no_replace(&self, src: &str, dst: &str) -> VfsResult<()> {
-        if dst.contains(self.needle) {
-            Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "no-replace commit blocked",
-            ))
-        } else {
-            self.inner.rename_no_replace(src, dst)
-        }
-    }
-
-    fn promote_staged(&self, staged: &str, destination: &str) -> VfsResult<()> {
-        self.inner.promote_staged(staged, destination)
-    }
-
-    fn rename_overwrites(&self) -> bool {
-        self.inner.rename_overwrites()
-    }
-
-    fn is_local(&self) -> bool {
-        self.inner.is_local()
-    }
-
-    fn remove_file(&self, path: &str) -> VfsResult<()> {
-        self.inner.remove_file(path)
-    }
-
-    fn remove_dir(&self, path: &str) -> VfsResult<()> {
-        self.inner.remove_dir(path)
-    }
-
-    fn mkdir_all(&self, path: &str) -> VfsResult<()> {
-        self.inner.mkdir_all(path)
-    }
-}
-
-impl Backend for StatFail<'_> {
-    fn scheme(&self) -> Scheme {
-        self.inner.scheme()
-    }
-
-    fn root_display(&self) -> String {
-        self.inner.root_display()
-    }
-
-    fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
-        self.inner.list_dir(path)
-    }
-
-    fn stat(&self, path: &str) -> VfsResult<VfsMeta> {
-        if path.contains(self.needle) {
-            Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "stat blocked",
-            ))
-        } else {
-            self.inner.stat(path)
-        }
-    }
-
-    fn open_read(&self, path: &str) -> VfsResult<Box<dyn Read + Send>> {
-        self.inner.open_read(path)
-    }
-
-    fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
-        self.inner.open_write(path)
-    }
-
-    fn rename(&self, src: &str, dst: &str) -> VfsResult<()> {
-        self.inner.rename(src, dst)
-    }
-
-    fn rename_no_replace(&self, src: &str, dst: &str) -> VfsResult<()> {
-        self.inner.rename_no_replace(src, dst)
-    }
-
-    fn promote_staged(&self, staged: &str, destination: &str) -> VfsResult<()> {
-        self.inner.promote_staged(staged, destination)
-    }
-
-    fn rename_overwrites(&self) -> bool {
-        self.inner.rename_overwrites()
-    }
-
-    fn is_local(&self) -> bool {
-        self.inner.is_local()
-    }
-
-    fn remove_file(&self, path: &str) -> VfsResult<()> {
-        self.inner.remove_file(path)
-    }
-
-    fn remove_dir(&self, path: &str) -> VfsResult<()> {
-        self.inner.remove_dir(path)
-    }
-
-    fn mkdir_all(&self, path: &str) -> VfsResult<()> {
-        self.inner.mkdir_all(path)
     }
 }
 
@@ -327,7 +134,7 @@ fn failed_apply_paths_stay_out_of_new_baseline_and_retry() {
     let (st, conflicts, nb, errs) =
         run_with_errors(&ba, &ra, &blocked_b, &rb, &Baseline::new(), opts, &v);
     assert!(conflicts.is_empty());
-    assert_eq!(st.a_to_b, 1);
+    assert_eq!(st.a_to_b, 1, "errors={errs:?}");
     assert_eq!(st.errors, 1);
     assert_eq!(errs.len(), 1);
     assert!(b.join("ok.txt").exists());
@@ -389,7 +196,12 @@ fn backup_failure_blocks_overwrite_and_delete() {
 
     assert_eq!(report.stats.a_to_b, 0);
     assert_eq!(report.stats.deleted, 0);
-    assert_eq!(report.stats.errors, 2);
+    assert_eq!(
+        report.stats.errors,
+        2,
+        "errors={errs:?}, completed={:?}",
+        report.completed
+    );
     assert!(report.completed.is_empty());
     assert_eq!(errs.len(), 2);
     assert_eq!(std::fs::read(b.join("overwrite.txt")).unwrap(), b"old");

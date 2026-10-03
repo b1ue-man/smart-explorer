@@ -81,7 +81,16 @@ fn engine_provider_pending_protects_owners_orientation_and_single_actions() {
     );
     let (actions, _, converged) = snapshot.plan(&baseline, BisyncOptions::default());
     assert!(actions.is_empty());
-    assert!(converged.iter().all(|rel| !pending.contains(rel)));
+    assert!(
+        converged.iter().all(|rel| !pending.contains(rel)),
+        "pending={pending:?}, converged={converged:?}, omissions={:?}, planning_base={:?}",
+        snapshot.omissions,
+        snapshot
+            .omissions
+            .planning_baseline(&baseline)
+            .keys()
+            .collect::<Vec<_>>()
+    );
     for rel in &pending {
         let result = super::single_recorded::apply_one(
             endpoints,

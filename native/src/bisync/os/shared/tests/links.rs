@@ -31,6 +31,9 @@ fn sync_links_task_nested_link_preserves_counterparts_baseline_and_incremental_r
     assert!(first.omissions.is_empty());
     assert_eq!(std::fs::read(b.path().join(&package)).unwrap(), b"original package");
     let saved = first.baseline[&package];
+    let state = first.state.as_ref().expect("the run records its owner and replica");
+    let baseline = baseline_file(state).unwrap();
+    let index_id = replica_state::index_id(state).unwrap();
 
     std::fs::remove_dir_all(&link).unwrap();
     link_fixture::directory(outside.path(), &link);
@@ -57,10 +60,9 @@ fn sync_links_task_nested_link_preserves_counterparts_baseline_and_incremental_r
     assert_eq!(std::fs::read(b.path().join("note.txt")).unwrap(), b"new independent note");
     assert!(!b.path().join("extra.txt").exists());
     assert!(partial.omissions.result_note("ok").starts_with("mit Auslassungen"));
-    let pair = pair_id_for(&ba, &ra, &bb, &rb);
     let index = state_store::SyncStateStore::open_at(&store).unwrap();
-    assert!(!index.load_pair(&pair).unwrap().unwrap().bootstrapped);
-    assert_eq!(load_baseline(&baseline_path(&pair)).unwrap()[&package], saved);
+    assert!(!index.load_pair(&index_id).unwrap().unwrap().bootstrapped);
+    assert_eq!(load_baseline(&baseline).unwrap()[&package], saved);
     drop(index);
 
     // Two-way mode also preserves the previously synchronized subtree.
@@ -78,9 +80,9 @@ fn sync_links_task_nested_link_preserves_counterparts_baseline_and_incremental_r
     assert_eq!(std::fs::read(b.path().join(&package)).unwrap(), b"recovered real directory");
     assert!(!b.path().join(LINK).join("target-only.txt").exists());
     assert!(state_store::SyncStateStore::open_at(&store).unwrap()
-        .load_pair(&pair).unwrap().unwrap().bootstrapped);
-    std::fs::remove_file(baseline_path(&pair)).unwrap();
-    let _ = std::fs::remove_dir_all(versions_dir(&pair));
+        .load_pair(&index_id).unwrap().unwrap().bootstrapped);
+    std::fs::remove_file(baseline).unwrap();
+    let _ = std::fs::remove_dir_all(versions_dir(&state.pair_id));
 }
 
 #[test]
@@ -110,8 +112,7 @@ fn sync_links_task_target_link_reverse_mirror_and_exclusions_are_protected() {
     assert_eq!(std::fs::read(a.path().join("normal.txt")).unwrap(), b"copy reverse");
     assert!(!outside.path().join("keep.txt").exists());
     assert_eq!(std::fs::read(b.path().join("node_modules/keep.txt")).unwrap(), b"keep");
-    let pair = pair_id_for(&ba, &ra, &bb, &rb);
-    std::fs::remove_file(baseline_path(&pair)).unwrap();
+    std::fs::remove_file(baseline_file(result.state.as_ref().unwrap()).unwrap()).unwrap();
     link_fixture::remove_directory(&a.path().join("node_modules"));
 }
 
@@ -162,8 +163,7 @@ fn sync_links_task_incremental_target_junction_returns_to_full_protected_scan() 
     assert_eq!(std::fs::read(outside.path().join("entry.txt")).unwrap(), b"old");
     assert_eq!(std::fs::read(b.path().join("independent.txt")).unwrap(), b"keep syncing");
     link_fixture::remove_directory(&b.path().join("folder"));
-    let pair = pair_id_for(&ba, &ra, &bb, &rb);
-    std::fs::remove_file(baseline_path(&pair)).unwrap();
+    std::fs::remove_file(baseline_file(first.state.as_ref().unwrap()).unwrap()).unwrap();
 }
 
 #[test]
