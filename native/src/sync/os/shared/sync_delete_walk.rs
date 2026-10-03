@@ -58,6 +58,7 @@ pub(super) fn walk(
                 continue;
             }
         };
+        gate(cancel)?;
         for omitted in &listing.omitted {
             let relative = if crate::vfs::validate_child_name(&omitted.rel).is_ok() {
                 child(&rel, &omitted.rel)
@@ -118,6 +119,7 @@ pub(super) fn walk(
             });
         }
     }
+    gate(cancel)?;
     Ok(entries)
 }
 
@@ -130,5 +132,9 @@ pub(super) fn missing(
     keys: KeyPolicy,
     cancel: &AtomicBool,
 ) -> io::Result<bool> {
-    crate::bisync::apply_boundary::normalized_missing(backend, root, rel, keys, false, cancel)
+    gate(cancel)?;
+    let missing =
+        crate::bisync::apply_boundary::normalized_missing(backend, root, rel, keys, false, cancel)?;
+    gate(cancel)?;
+    Ok(missing)
 }

@@ -86,14 +86,12 @@ pub(super) fn delete_extras_scoped(
     let mut candidates = match plan {
         Ok(candidates) => candidates,
         Err(error) => {
-            if error.kind() != io::ErrorKind::Interrupted {
-                record_error(
-                    stats,
-                    errors,
-                    destination_root,
-                    format!("mirror deletion preflight failed; nothing deleted: {error}"),
-                );
-            }
+            record_error(
+                stats,
+                errors,
+                destination_root,
+                format!("mirror deletion preflight failed; nothing deleted: {error}"),
+            );
             return;
         }
     };
@@ -103,14 +101,28 @@ pub(super) fn delete_extras_scoped(
             .cmp(&b.meta.is_dir)
             .then_with(|| b.rel.matches('/').count().cmp(&a.rel.matches('/').count()))
     });
-    // Validate every observed target before the first destructive step.
+    // Revalidate all targets and normalized source absences before any delete.
     for entry in &candidates {
-        if cancel.load(Ordering::Acquire) {
-            return;
-        }
-        match current(destination, entry) {
+        let validation = (|| -> io::Result<()> {
+            if cancel.load(Ordering::Acquire) {
+                return Err(io::Error::new(io::ErrorKind::Interrupted, "mirror canceled"));
+            }
+            current(destination, entry)?;
+            if sync_delete_walk::missing(source, source_root, &entry.rel, keys, cancel)? {
+                Ok(())
+            } else {
+                Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    "mirror source appeared; all targets retained",
+                ))
+            }
+        })();
+        match validation {
             Ok(()) => {}
             Err(error) => {
+                if let Some(kind) = crate::bisync::apply_boundary::omitted(&error) {
+                    omissions.record_kind(&entry.rel, kind, kind.reported_by_default());
+                }
                 record_error(
                     stats,
                     errors,
