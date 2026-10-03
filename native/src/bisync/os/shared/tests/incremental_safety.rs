@@ -1,179 +1,19 @@
-use super::super::incremental::{try_incremental_mirror, SyncEndpoints};
+use super::super::incremental::SyncEndpoints;
 use super::super::incremental_changes::{action_plan_for, apply_trees};
-use super::super::persistence::{baseline_path, pair_id_for, versions_dir};
+use super::super::orchestration::run_with_store_path;
+use super::super::persistence::versions_dir;
+use super::super::replica_state::index_id;
 use super::super::snapshot::{empty_globset, WalkFilter};
-use super::super::state_store::{ItemRecord, PairRecord, Side, SyncStateStore};
-use super::super::types::{Action, BisyncOptions, DeletePolicy, Direction, Sig};
+use super::super::state_store::{Side, SyncStateStore};
+use super::super::types::{Action, BisyncOptions, DeletePolicy, Direction};
 use super::*;
-use crate::vfs::{
-    Backend, ChangeKind, LocalBackend, Scheme, VfsChange, VfsChangeBatch, VfsMeta, VfsResult,
-};
+use crate::vfs::{Backend, ChangeKind, LocalBackend, VfsChange};
 use std::collections::BTreeMap;
-use std::io::{Read, Write};
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-struct FeedBackend {
-    inner: LocalBackend,
-    batch: Mutex<VfsChangeBatch>,
-    calls: AtomicUsize,
-}
-
-impl Backend for FeedBackend {
-    fn scheme(&self) -> Scheme {
-        self.inner.scheme()
-    }
-
-    fn root_display(&self) -> String {
-        self.inner.root_display()
-    }
-
-    fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
-        self.inner.list_dir(path)
-    }
-
-    fn stat(&self, path: &str) -> VfsResult<VfsMeta> {
-        self.inner.stat(path)
-    }
-
-    fn open_read(&self, path: &str) -> VfsResult<Box<dyn Read + Send>> {
-        self.inner.open_read(path)
-    }
-
-    fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
-        self.inner.open_write(path)
-    }
-
-    fn rename(&self, source: &str, destination: &str) -> VfsResult<()> {
-        self.inner.rename(source, destination)
-    }
-
-    fn rename_no_replace(&self, source: &str, destination: &str) -> VfsResult<()> {
-        self.inner.rename_no_replace(source, destination)
-    }
-
-    fn promote_staged(&self, staged: &str, destination: &str) -> VfsResult<()> {
-        self.inner.promote_staged(staged, destination)
-    }
-
-    fn rename_overwrites(&self) -> bool {
-        self.inner.rename_overwrites()
-    }
-
-    fn is_local(&self) -> bool {
-        true
-    }
-
-    fn supports_changes(&self) -> bool {
-        true
-    }
-
-    fn changes_since(&self, _root: &str, _cursor: &str) -> VfsResult<VfsChangeBatch> {
-        self.calls.fetch_add(1, Ordering::Relaxed);
-        Ok(self.batch.lock().unwrap().clone())
-    }
-
-    fn remove_file(&self, path: &str) -> VfsResult<()> {
-        self.inner.remove_file(path)
-    }
-
-    fn remove_dir(&self, path: &str) -> VfsResult<()> {
-        self.inner.remove_dir(path)
-    }
-
-    fn mkdir_all(&self, path: &str) -> VfsResult<()> {
-        self.inner.mkdir_all(path)
-    }
-}
-
-fn temp_path(tag: &str) -> PathBuf {
-    let mut path = std::env::temp_dir();
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    path.push(format!("bisync_{tag}_{}_{}", std::process::id(), nanos));
-    path
-}
-
-fn record() -> PairRecord {
-    PairRecord {
-        pair: "pair".into(),
-        root_a: "a".into(),
-        root_b: "b".into(),
-        mode: "mirror".into(),
-        source_side: Side::A,
-        source_cursor: Some("cursor-1".into()),
-        root_a_id: None,
-        root_b_id: None,
-        bootstrapped: true,
-        target_managed: true,
-    }
-}
-
-fn feed(root: &str, changes: Vec<VfsChange>) -> FeedBackend {
-    FeedBackend {
-        inner: LocalBackend::new(root),
-        batch: Mutex::new(VfsChangeBatch {
-            changes,
-            new_cursor: Some("cursor-2".into()),
-            reset: false,
-        }),
-        calls: AtomicUsize::new(0),
-    }
-}
-
-fn change(kind: ChangeKind, rel: &str) -> VfsChange {
-    VfsChange {
-        kind: kind.clone(),
-        rel: Some(rel.into()),
-        id: None,
-        parent_id: None,
-        name: rel.rsplit('/').next().map(str::to_owned),
-        meta: (kind == ChangeKind::Upsert).then(|| VfsMeta {
-            name: rel.rsplit('/').next().unwrap().into(),
-            size: 4,
-            mtime_ms: 10,
-            ..Default::default()
-        }),
-    }
-}
-
-fn active_item(rel: &str) -> ItemRecord {
-    ItemRecord {
-        side: Side::A,
-        rel: rel.into(),
-        id: None,
-        parent_id: None,
-        name: rel.rsplit('/').next().map(str::to_owned),
-        sig: Some(Sig {
-            size: 4,
-            mtime_ms: 10,
-            hash: 0,
-        }),
-        is_dir: false,
-        deleted: false,
-    }
-}
-
-fn resolved(rel: &str, old_rel: Option<&str>) -> ResolvedChange {
-    ResolvedChange {
-        rel: rel.into(),
-        old_rel: old_rel.map(str::to_owned),
-        kind: ChangeKind::Upsert,
-        id: None,
-        parent_id: None,
-        name: rel.rsplit('/').next().map(str::to_owned),
-        source_sig: Some(Sig {
-            size: 1,
-            mtime_ms: 1,
-            hash: 0,
-        }),
-        managed: true,
-        old_managed: old_rel.is_some(),
-    }
-}
+#[path = "incremental_safety_fixture.rs"]
+mod fixture;
+use fixture::{active_item, change, feed, record, resolved, temp_path};
 
 #[test]
 fn rename_swap_copies_both_final_paths_without_deleting_them() {
@@ -206,9 +46,9 @@ fn rename_swap_copies_both_final_paths_without_deleting_them() {
 
 #[test]
 fn rename_swap_applies_and_persists_both_final_paths() {
-    let root = temp_path("rename_swap");
-    let source_root = root.join("source");
-    let target_root = root.join("target");
+    let root = tempfile::tempdir().unwrap();
+    let source_root = root.path().join("source");
+    let target_root = root.path().join("target");
     std::fs::create_dir_all(&source_root).unwrap();
     std::fs::create_dir_all(&target_root).unwrap();
     std::fs::write(source_root.join("a.txt"), b"from-a").unwrap();
@@ -217,90 +57,10 @@ fn rename_swap_applies_and_persists_both_final_paths() {
     std::fs::write(target_root.join("b.txt"), b"from-b-longer").unwrap();
     let source_root = source_root.to_string_lossy().replace('\\', "/");
     let target_root = target_root.to_string_lossy().replace('\\', "/");
-    let initial_source = LocalBackend::new(&source_root);
+    let source = feed(&source_root, Vec::new());
     let target = LocalBackend::new(&target_root);
-    let source_a = sig_from_meta(
-        &initial_source
-            .stat(&format!("{source_root}/a.txt"))
-            .unwrap(),
-    )
-    .unwrap();
-    let source_b = sig_from_meta(
-        &initial_source
-            .stat(&format!("{source_root}/b.txt"))
-            .unwrap(),
-    )
-    .unwrap();
-    let target_a = sig_from_meta(&target.stat(&format!("{target_root}/a.txt")).unwrap()).unwrap();
-    let target_b = sig_from_meta(&target.stat(&format!("{target_root}/b.txt")).unwrap()).unwrap();
-
-    std::fs::rename(
-        format!("{source_root}/a.txt"),
-        format!("{source_root}/swap.tmp"),
-    )
-    .unwrap();
-    std::fs::rename(
-        format!("{source_root}/b.txt"),
-        format!("{source_root}/a.txt"),
-    )
-    .unwrap();
-    std::fs::rename(
-        format!("{source_root}/swap.tmp"),
-        format!("{source_root}/b.txt"),
-    )
-    .unwrap();
-    let final_source = LocalBackend::new(&source_root);
-    let source = feed(
-        &source_root,
-        vec![
-            VfsChange {
-                kind: ChangeKind::Upsert,
-                rel: Some("b.txt".into()),
-                id: Some("id-a".into()),
-                parent_id: None,
-                name: Some("b.txt".into()),
-                meta: Some(final_source.stat(&format!("{source_root}/b.txt")).unwrap()),
-            },
-            VfsChange {
-                kind: ChangeKind::Upsert,
-                rel: Some("a.txt".into()),
-                id: Some("id-b".into()),
-                parent_id: None,
-                name: Some("a.txt".into()),
-                meta: Some(final_source.stat(&format!("{source_root}/a.txt")).unwrap()),
-            },
-        ],
-    );
-    let pair_id = pair_id_for(&source, &source_root, &target, &target_root);
-    let db = root.join("state.sqlite");
-    let mut store = SyncStateStore::open_at(&db).unwrap();
-    store
-        .save_pair(&PairRecord {
-            pair: pair_id.clone(),
-            root_a: source_root.clone(),
-            root_b: target_root.clone(),
-            mode: "mirror".into(),
-            source_side: Side::A,
-            source_cursor: Some("cursor-1".into()),
-            root_a_id: None,
-            root_b_id: None,
-            bootstrapped: true,
-            target_managed: true,
-        })
-        .unwrap();
-    store
-        .save_items(
-            &pair_id,
-            &[
-                stored_item(Side::A, "a.txt", Some("id-a"), source_a),
-                stored_item(Side::A, "b.txt", Some("id-b"), source_b),
-                stored_item(Side::B, "a.txt", None, target_a),
-                stored_item(Side::B, "b.txt", None, target_b),
-            ],
-        )
-        .unwrap();
-    drop(store);
-
+    let endpoints = SyncEndpoints::new(&source, &source_root, &target, &target_root);
+    let db = root.path().join("state.sqlite");
     let cancel = AtomicBool::new(false);
     let include = empty_globset();
     let filter = WalkFilter::basic(true, &include);
@@ -310,46 +70,55 @@ fn rename_swap_applies_and_persists_both_final_paths() {
         reversible: false,
         ..Default::default()
     };
-    let outcome = try_incremental_mirror(
-        SyncEndpoints::new(&source, &source_root, &target, &target_root),
-        opts,
-        &cancel,
-        &filter,
-        Some(&db),
-    )
-    .unwrap();
+    // Create the authoritative owner/replica baseline, history and complete
+    // index through the actual recorded engine before producing the swap.
+    let before = run_with_store_path(endpoints, opts, &cancel, &filter, &db);
+    assert!(before.errors.is_empty(), "{:?}", before.errors);
+    assert!(before.blocked.is_none() && before.stopped.is_none() && before.deferred.is_empty());
+    let key = before.state.unwrap();
+    assert!(!key.is_legacy());
+    let index = index_id(&key).unwrap();
+    let initial = SyncStateStore::open_at(&db).unwrap().load_side(&index, Side::A).unwrap();
+    assert_eq!(initial["a.txt"].id.as_deref(), Some("id-a"));
+    assert_eq!(initial["b.txt"].id.as_deref(), Some("id-b"));
+    std::fs::rename(format!("{source_root}/a.txt"), format!("{source_root}/swap.tmp")).unwrap();
+    std::fs::rename(format!("{source_root}/b.txt"), format!("{source_root}/a.txt")).unwrap();
+    std::fs::rename(format!("{source_root}/swap.tmp"), format!("{source_root}/b.txt")).unwrap();
+    *source.batch.lock().unwrap() = crate::vfs::VfsChangeBatch {
+        changes: vec![
+            VfsChange {
+                kind: ChangeKind::Upsert,
+                rel: Some("b.txt".into()),
+                id: Some("id-a".into()),
+                parent_id: Some("feed-root".into()),
+                name: Some("b.txt".into()),
+                meta: Some(source.stat(&format!("{source_root}/b.txt")).unwrap()),
+            },
+            VfsChange {
+                kind: ChangeKind::Upsert,
+                rel: Some("a.txt".into()),
+                id: Some("id-b".into()),
+                parent_id: Some("feed-root".into()),
+                name: Some("a.txt".into()),
+                meta: Some(source.stat(&format!("{source_root}/a.txt")).unwrap()),
+            },
+        ],
+        new_cursor: Some("cursor-2".into()),
+        reset: false,
+    };
+    let outcome = run_with_store_path(endpoints, opts, &cancel, &filter, &db);
     assert!(outcome.errors.is_empty(), "{:?}", outcome.errors);
-    assert_eq!(
-        std::fs::read(format!("{target_root}/a.txt")).unwrap(),
-        b"from-b-longer"
-    );
-    assert_eq!(
-        std::fs::read(format!("{target_root}/b.txt")).unwrap(),
-        b"from-a"
-    );
-    let state = SyncStateStore::open_at(&db)
-        .unwrap()
-        .load_side(&pair_id, Side::A)
-        .unwrap();
+    assert!(outcome.blocked.is_none() && outcome.stopped.is_none() && outcome.deferred.is_empty());
+    assert_eq!(std::fs::read(format!("{target_root}/a.txt")).unwrap(), b"from-b-longer");
+    assert_eq!(std::fs::read(format!("{target_root}/b.txt")).unwrap(), b"from-a");
+    let state = SyncStateStore::open_at(&db).unwrap().load_side(&index, Side::A).unwrap();
     assert_eq!(state["a.txt"].id.as_deref(), Some("id-b"));
     assert_eq!(state["b.txt"].id.as_deref(), Some("id-a"));
-
-    let _ = std::fs::remove_file(baseline_path(&pair_id));
-    let _ = std::fs::remove_dir_all(versions_dir(&pair_id));
-    let _ = std::fs::remove_dir_all(root);
-}
-
-fn stored_item(side: Side, rel: &str, id: Option<&str>, sig: Sig) -> ItemRecord {
-    ItemRecord {
-        side,
-        rel: rel.into(),
-        id: id.map(str::to_owned),
-        parent_id: None,
-        name: rel.rsplit('/').next().map(str::to_owned),
-        sig: Some(sig),
-        is_dir: false,
-        deleted: false,
-    }
+    let basis = super::super::baseline_file(&key).unwrap();
+    let pair_dir = basis.parent().unwrap();
+    assert!(pair_dir.ends_with(&key.pair_id));
+    let _ = std::fs::remove_dir_all(pair_dir);
+    let _ = std::fs::remove_dir_all(versions_dir(&key.pair_id));
 }
 
 #[test]

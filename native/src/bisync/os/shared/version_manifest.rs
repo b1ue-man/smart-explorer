@@ -153,7 +153,7 @@ pub(super) fn read(backend: &dyn Backend, path: &str, cancel: &AtomicBool) -> io
     }
     super::apply_guard::revalidate(backend, path, &observed, "version record")?;
     let manifest: Manifest = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
-    super::paths::validate_child_name(&manifest.run)?;
+    crate::vfs::validate_child_name(&manifest.run)?;
     crate::agent_proto::ValidatedRelativePath::parse(&manifest.rel)?;
     let parent = parent_of(path).ok_or_else(|| invalid("version record has no parent"))?;
     if manifest.data != join(&parent, "data") || manifest.format != 1 {
@@ -168,7 +168,7 @@ pub(super) fn ensure_dirs(backend: &dyn Backend, root: &str, relative: &str) -> 
     }
     let mut path = root.to_string();
     for name in relative.split('/') {
-        super::paths::validate_child_name(name)?;
+        crate::vfs::validate_child_name(name)?;
         path = join(&path, name);
         match backend.stat(&path) {
             Ok(meta) if meta.is_dir && !meta.is_symlink && !meta.special => {}

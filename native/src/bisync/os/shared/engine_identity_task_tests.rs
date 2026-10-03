@@ -4,6 +4,7 @@ use std::sync::atomic::AtomicBool;
 
 use super::fixture::*;
 use crate::bisync as engine;
+use crate::vfs::Backend;
 use engine::apply_guard::{capture, ExpectedFile};
 use engine::checkpoint_journal::{Frame, Journal};
 use engine::incremental::SyncEndpoints;

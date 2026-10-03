@@ -2,26 +2,31 @@
 //! any untrusted cache, partial scan or ambiguous key selects the full planner.
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
-use std::path::Path;
 use std::sync::atomic::Ordering;
 
 use crate::vfs::Backend;
-use sha2::{Digest, Sha256};
 
 use super::checkpoint::ApplyScope;
 use super::checkpoint_run::CheckpointSink;
 use super::guards::{deletion_block, empty_side_block, unconfirmed, DeleteCounts};
 use super::incremental_changes::{
-    action_plan_for, apply_trees, collect_ids, target_touched_drifted_spelled,
+    action_plan_for, apply_trees, target_touched_drifted_spelled,
 };
 use super::incremental_collect::{
     changes_from_backend, changes_from_source_walk_scoped, ChangeCollection,
 };
 use super::orchestration::{failure, Outcome, RunState};
 use super::replica_state::index_id;
-use super::state_metadata::{index_dirty_path, save_history, write_bytes, PairHistory};
-use super::state_store::{ItemRecord, PairRecord, Side, SyncStateStore};
+use super::state_metadata::{index_dirty_path, save_history, PairHistory};
+use super::state_store::{ItemRecord, PairRecord, Side};
 use super::types::{Baseline, BisyncOptions, DeletePolicy, Direction, PairSide};
+
+#[path = "incremental_index_commit.rs"]
+mod index_commit;
+pub(super) use index_commit::{
+    bootstrap_incremental_state, bootstrap_run, invalidate_incremental_state, retire_index,
+};
+use index_commit::{mode, open_store};
 
 #[derive(Clone, Copy)]
 pub(super) struct SyncEndpoints<'a> {
@@ -371,87 +376,6 @@ pub(super) fn try_incremental_run(state: &RunState<'_>) -> Option<Outcome> {
     Some(out)
 }
 
-/// A durable dirty marker disqualifies the old cache even if SQLite itself is
-/// corrupt, read-only or busy. A full scan can then work without the database.
-pub(super) fn retire_index(state: &RunState<'_>) -> io::Result<()> {
-    if state.opts.dry_run || mirror_source(state.endpoints, state.opts).is_none() {
-        return Ok(());
-    }
-    write_bytes(&index_dirty_path(state.key)?, b"full planner required\n")?;
-    if let (Ok(pair), Ok(mut store)) = (index_id(state.key), open_store(state.store_path)) {
-        let _ = store.forget_pair(&pair);
-    }
-    Ok(())
-}
-
-pub(super) fn bootstrap_run(
-    state: &RunState<'_>,
-    baseline: &Baseline,
-    cursor: Option<String>,
-) -> rusqlite::Result<()> {
-    if !super::orchestration_plan::pending_paths(state.lock, state.key, state.endpoints)
-        .map_err(|_| rusqlite::Error::InvalidQuery)?
-        .is_empty()
-    {
-        return Err(rusqlite::Error::InvalidQuery);
-    }
-    let Some((_, _, source_side)) = mirror_source(state.endpoints, state.opts) else {
-        return Ok(());
-    };
-    let keys = super::orchestration_plan::keys(state.endpoints);
-    let names =
-        super::state_spellings::load(state.key, keys).map_err(|_| rusqlite::Error::InvalidQuery)?;
-    let rows = names.cache_baseline(baseline, keys);
-    let pair = index_id(state.key).map_err(|_| rusqlite::Error::InvalidQuery)?;
-    let record = pair_record(state.endpoints, pair, mode(state), source_side, cursor);
-    super::engine_change_feed::bootstrap(
-        &mut open_store(state.store_path)?,
-        &record,
-        state.endpoints,
-        &rows,
-        state.opts,
-        state.filter,
-        state.cancel,
-    )
-    .map_err(|_| rusqlite::Error::InvalidQuery)?;
-    std::fs::remove_file(index_dirty_path(state.key).map_err(|_| rusqlite::Error::InvalidQuery)?)
-        .map_err(|_| rusqlite::Error::InvalidQuery)?;
-    Ok(())
-}
-
-// These cache-only entry points remain for existing integrations and fixtures.
-pub(super) fn bootstrap_incremental_state(
-    endpoints: SyncEndpoints<'_>,
-    opts: BisyncOptions,
-    baseline: &Baseline,
-    cursor: Option<String>,
-    path: Option<&Path>,
-) -> rusqlite::Result<()> {
-    let Some((_, _, side)) = mirror_source(endpoints, opts) else {
-        return Ok(());
-    };
-    let pair = super::pair_id_for(endpoints.a, endpoints.root_a, endpoints.b, endpoints.root_b);
-    let record = pair_record(endpoints, pair, "mirror".into(), side, cursor);
-    let ids_a = collect_ids(endpoints.a, endpoints.root_a, baseline, Side::A);
-    let ids_b = collect_ids(endpoints.b, endpoints.root_b, baseline, Side::B);
-    open_store(path)?.bootstrap(&record, baseline, &ids_a, &ids_b)
-}
-
-pub(super) fn invalidate_incremental_state(
-    endpoints: SyncEndpoints<'_>,
-    opts: BisyncOptions,
-    path: Option<&Path>,
-) -> rusqlite::Result<()> {
-    if opts.dry_run || mirror_source(endpoints, opts).is_none() {
-        return Ok(());
-    }
-    let pair = super::pair_id_for(endpoints.a, endpoints.root_a, endpoints.b, endpoints.root_b);
-    open_store(path)?.forget_pair(&pair)
-}
-
-fn open_store(path: Option<&Path>) -> rusqlite::Result<SyncStateStore> {
-    path.map_or_else(SyncStateStore::open_default, SyncStateStore::open_at)
-}
 fn record_matches(record: &PairRecord, endpoints: SyncEndpoints<'_>, source_side: Side) -> bool {
     record.root_a == endpoints.root_a
         && record.root_b == endpoints.root_b
@@ -461,43 +385,6 @@ fn record_matches(record: &PairRecord, endpoints: SyncEndpoints<'_>, source_side
 }
 fn root_id_matches(backend: &dyn Backend, root: &str, saved: Option<&str>) -> bool {
     saved.is_none_or(|id| backend.change_root_id(root).ok().flatten().as_deref() == Some(id))
-}
-fn pair_record(
-    endpoints: SyncEndpoints<'_>,
-    pair: String,
-    mode: String,
-    source_side: Side,
-    cursor: Option<String>,
-) -> PairRecord {
-    PairRecord {
-        pair,
-        root_a: endpoints.root_a.into(),
-        root_b: endpoints.root_b.into(),
-        mode,
-        source_side,
-        source_cursor: cursor,
-        root_a_id: endpoints.a.change_root_id(endpoints.root_a).ok().flatten(),
-        root_b_id: endpoints.b.change_root_id(endpoints.root_b).ok().flatten(),
-        bootstrapped: true,
-        target_managed: true,
-    }
-}
-fn mode(state: &RunState<'_>) -> String {
-    // Debug is an opaque cache fingerprint, never a persisted endpoint or a
-    // protocol contract. A dependency update may invalidate it safely.
-    let text = format!(
-        "{:?}:{}:{}:{:?}:{}:{}:{}:{}:{}",
-        state.opts.compare,
-        state.opts.modify_window_ms,
-        state.opts.cross_mounts,
-        state.filter.ignore,
-        state.filter.include_hidden,
-        state.filter.min_size,
-        state.filter.max_size,
-        state.filter.after_mtime_ms,
-        state.filter.before_mtime_ms
-    );
-    format!("mirror-rv2-ancestry:{:x}", Sha256::digest(text.as_bytes()))
 }
 fn baseline_by_key(base: &Baseline, keys: super::KeyPolicy) -> Baseline {
     base.iter()
