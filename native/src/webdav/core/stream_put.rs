@@ -94,11 +94,15 @@ impl Drop for PipeReader {
     }
 }
 
-fn put(agent: &ureq::Agent, url: &str, auth: &str, size: u64, body: PipeReader) -> io::Result<()> {
+fn put(agent: &ureq::Agent, url: &str, auth: &str, size: u64, mtime_ms: Option<i64>, body: PipeReader) -> io::Result<()> {
     let request = agent
         .put(url)
         .set("Content-Length", &size.to_string())
         .set("If-None-Match", "*");
+    let request = match mtime_ms.map(|ms| ms.div_euclid(1_000)).filter(|seconds| *seconds > 86_400) {
+        Some(seconds) => request.set("X-OC-Mtime", &seconds.to_string()).set("X-Hash", "md5"),
+        None => request,
+    };
     let request = if auth.is_empty() {
         request
     } else {
@@ -110,6 +114,7 @@ fn put(agent: &ureq::Agent, url: &str, auth: &str, size: u64, body: PipeReader) 
         }
         let kind = match &error {
             ureq::Error::Status(412, _) => io::ErrorKind::AlreadyExists,
+            ureq::Error::Status(401 | 403, _) => io::ErrorKind::PermissionDenied,
             _ => io::ErrorKind::Other,
         };
         io::Error::new(kind, error.to_string())
@@ -146,6 +151,12 @@ impl StreamPut {
         auth: String,
         size: u64,
     ) -> io::Result<Self> {
+        Self::start_timed(agent, url, auth, size, None)
+    }
+
+    pub(super) fn start_timed(
+        agent: ureq::Agent, url: String, auth: String, size: u64, mtime_ms: Option<i64>,
+    ) -> io::Result<Self> {
         let pipe = Arc::new(Pipe::default());
         let body = PipeReader {
             pipe: pipe.clone(),
@@ -154,7 +165,7 @@ impl StreamPut {
         };
         let upload = std::thread::Builder::new()
             .name("webdav-put".to_string())
-            .spawn(move || put(&agent, &url, &auth, size, body))?;
+            .spawn(move || put(&agent, &url, &auth, size, mtime_ms, body))?;
         Ok(Self {
             pipe,
             upload: Some(upload),

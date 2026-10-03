@@ -1,4 +1,4 @@
-use crate::vfs::{validate_child_name, VfsMeta, VfsResult};
+use crate::vfs::{validate_child_name, OmissionReason, VfsListing, VfsMeta, VfsOmission, VfsResult};
 use roxmltree::Node;
 use std::collections::HashSet;
 use std::io;
@@ -21,15 +21,16 @@ fn status_code(status: Node<'_, '_>) -> Option<u16> {
 }
 
 fn dav_status_error(code: u16) -> io::Error {
-    let kind = if code == 404 {
-        io::ErrorKind::NotFound
-    } else {
-        io::ErrorKind::Other
+    let kind = match code {
+        404 => io::ErrorKind::NotFound,
+        401 | 403 => io::ErrorKind::PermissionDenied,
+        507 => io::ErrorKind::StorageFull,
+        _ => io::ErrorKind::Other,
     };
     io::Error::new(kind, format!("WebDAV resource status was HTTP {code}"))
 }
 
-fn successful_props<'a, 'input>(response: Node<'a, 'input>) -> VfsResult<Vec<Node<'a, 'input>>> {
+pub(super) fn successful_props<'a, 'input>(response: Node<'a, 'input>) -> VfsResult<Vec<Node<'a, 'input>>> {
     if let Some(status) = response.children().find(|node| named(*node, "status")) {
         let code = status_code(status)
             .ok_or_else(|| invalid_data("WebDAV response has a malformed status line"))?;
@@ -82,14 +83,14 @@ pub(super) fn encode_path(path: &str) -> String {
     out
 }
 
-fn decode_path(path: &str) -> VfsResult<String> {
+fn decode_path(path: &str) -> (String, bool) {
     let bytes = path.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(value) = u8::from_str_radix(&path[i + 1..i + 3], 16) {
-                out.push(value);
+            if let (Some(high), Some(low)) = (hex(bytes[i + 1]), hex(bytes[i + 2])) {
+                out.push(high * 16 + low);
                 i += 3;
                 continue;
             }
@@ -97,11 +98,31 @@ fn decode_path(path: &str) -> VfsResult<String> {
         out.push(bytes[i]);
         i += 1;
     }
-    String::from_utf8(out).map_err(|_| invalid_data("WebDAV href is not valid UTF-8"))
+    // Keep the lossy spelling only for an omission. A genuine Unicode U+FFFD
+    // title is representable and must remain available.
+    match String::from_utf8(out) {
+        Ok(path) => (path, false),
+        Err(error) => (String::from_utf8_lossy(error.as_bytes()).into_owned(), true),
+    }
+}
+
+fn hex(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
 }
 
 /// The path portion of an href that may be an absolute URL or absolute path.
-fn href_path(href: &str) -> VfsResult<String> {
+pub(super) fn href_path(href: &str) -> VfsResult<String> {
+    let (path, lossy) = href_path_checked(href);
+    if lossy { return Err(invalid_data("WebDAV href is not UTF-8")) }
+    Ok(path)
+}
+
+fn href_path_checked(href: &str) -> (String, bool) {
     let path = if let Some((_, authority_and_path)) = href.split_once("://") {
         authority_and_path
             .find('/')
@@ -132,7 +153,7 @@ pub(super) fn basename(path: &str) -> String {
         .to_string()
 }
 
-fn immediate_child_name(path: &str, request_path: &str) -> VfsResult<Option<String>> {
+pub(super) fn immediate_child_name(path: &str, request_path: &str) -> VfsResult<Option<String>> {
     let path = normalize_path(path);
     let request_path = normalize_path(request_path);
     if path == request_path {
@@ -146,7 +167,6 @@ fn immediate_child_name(path: &str, request_path: &str) -> VfsResult<Option<Stri
             "WebDAV Depth-1 response is not an immediate child: {path}"
         )));
     }
-    validate_child_name(name)?;
     Ok(Some(name.to_string()))
 }
 
@@ -154,6 +174,14 @@ fn immediate_child_name(path: &str, request_path: &str) -> VfsResult<Option<Stri
 /// listed directory's own response. Any malformed or partial resource response
 /// fails the whole listing so callers never mistake it for a complete snapshot.
 pub(super) fn parse_multistatus(xml: &str, request_path: &str) -> VfsResult<Vec<VfsMeta>> {
+    let listed = parse_multistatus_tolerant(xml, request_path)?;
+    if !listed.omitted.is_empty() {
+        return Err(invalid_data("WebDAV listing has protected omissions; use list_dir_tolerant"));
+    }
+    Ok(listed.entries)
+}
+
+pub(super) fn parse_multistatus_tolerant(xml: &str, request_path: &str) -> VfsResult<VfsListing> {
     let doc = roxmltree::Document::parse(xml)
         .map_err(|error| invalid_data(format!("invalid WebDAV XML: {error}")))?;
     if !named(doc.root_element(), "multistatus") {
@@ -163,7 +191,7 @@ pub(super) fn parse_multistatus(xml: &str, request_path: &str) -> VfsResult<Vec<
     let mut saw_response = false;
     let mut saw_self = false;
     let mut names = HashSet::new();
-    let mut out = Vec::new();
+    let mut out = VfsListing::default();
     for response in doc
         .root_element()
         .children()
@@ -176,9 +204,10 @@ pub(super) fn parse_multistatus(xml: &str, request_path: &str) -> VfsResult<Vec<
             .and_then(|node| node.text())
             .filter(|href| !href.is_empty())
             .ok_or_else(|| invalid_data("WebDAV response is missing href"))?;
-        let path = href_path(href)?;
-        let props = successful_props(response)?;
+        let (path, lossy) = href_path_checked(href);
         let Some(name) = immediate_child_name(&path, request_path)? else {
+            if lossy { return Err(invalid_data("WebDAV collection href is not UTF-8")) }
+            successful_props(response)?;
             saw_self = true;
             continue;
         };
@@ -187,6 +216,20 @@ pub(super) fn parse_multistatus(xml: &str, request_path: &str) -> VfsResult<Vec<
                 "WebDAV returned duplicate child name: {name:?}"
             )));
         }
+        if lossy || validate_child_name(&name).is_err() {
+            out.omitted.push(VfsOmission { rel: name, reason: OmissionReason::Unrepresentable,
+                detail: "WebDAV href is not a safely addressable Unicode child".into() });
+            continue;
+        }
+        let props = match successful_props(response) {
+            Ok(props) => props,
+            Err(error) => {
+                out.omitted.push(VfsOmission { rel: name,
+                    reason: if error.kind() == io::ErrorKind::NotFound { OmissionReason::Vanished }
+                        else { OmissionReason::Unreadable }, detail: error.to_string() });
+                continue;
+            }
+        };
 
         let is_dir = props
             .iter()
@@ -215,9 +258,10 @@ pub(super) fn parse_multistatus(xml: &str, request_path: &str) -> VfsResult<Vec<
                     .descendants()
                     .find_map(|node| node.text().and_then(extract_md5))
             });
-        out.push(VfsMeta {
+        out.entries.push(VfsMeta {
             is_dir,
             is_symlink: false,
+            special: false,
             size: if is_dir { 0 } else { size },
             mtime_ms,
             btime_ms: 0,
@@ -239,7 +283,7 @@ pub(super) fn parse_multistatus(xml: &str, request_path: &str) -> VfsResult<Vec<
     Ok(out)
 }
 
-fn extract_md5(text: &str) -> Option<String> {
+pub(super) fn extract_md5(text: &str) -> Option<String> {
     text.split_whitespace().find_map(|token| {
         let (kind, value) = token.split_once(':')?;
         (kind.eq_ignore_ascii_case("MD5")
@@ -258,6 +302,19 @@ pub(super) fn parse_http_date_ms(text: &str) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rv1_remote_provider_task_dav_literal_replacement_character_is_not_a_lossy_name() {
+        let xml = SAMPLE.replace("notes.txt", "%EF%BF%BD.txt");
+        let listing = parse_multistatus_tolerant(&xml, "/dav/files/me").unwrap();
+        assert!(listing.entries.iter().any(|entry| entry.name == "\u{fffd}.txt"));
+        assert!(listing.omitted.is_empty());
+        let xml = SAMPLE.replace("notes.txt", "%FF.txt");
+        let listing = parse_multistatus_tolerant(&xml, "/dav/files/me").unwrap();
+        assert_eq!(listing.omitted.len(), 1);
+        assert!(listing.entries.iter().any(|entry| entry.name == "sub dir"));
+        assert_eq!(href_path("/dav/%€").unwrap(), "/dav/%€");
+    }
 
     const SAMPLE: &str = r#"<?xml version="1.0"?>
 <d:multistatus xmlns:d="DAV:">

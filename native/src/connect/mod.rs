@@ -27,6 +27,8 @@ mod persistence;
 mod removal_scope;
 #[path = "os/shared/resolution.rs"]
 mod resolution;
+#[path = "os/shared/poll_signal.rs"]
+mod poll_signal;
 #[path = "core/types.rs"]
 mod types;
 
@@ -49,6 +51,7 @@ pub use location_prefs::{
 pub use persistence::build_saved;
 pub use removal_scope::{location_key, CleanupReport, MountScope, RemovedEndpointScope};
 pub use resolution::resolve_endpoint;
+pub(crate) use poll_signal::{poll_subscription, PollNotice};
 pub use types::{ConnectForm, ConnectResult, Connected, RemoteState};
 
 #[cfg(test)]

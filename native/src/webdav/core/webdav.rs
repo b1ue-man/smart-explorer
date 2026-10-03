@@ -13,9 +13,11 @@ use crate::vfs::{Backend, Scheme, VfsMeta, VfsResult};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use std::io::{self, Read, Write};
 use std::time::Duration;
+use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
+use std::collections::HashMap;
 
 use super::multistatus::{
-    basename, encode_path, parse_http_date_ms, parse_multistatus, validate_propfind_response,
+    encode_path, parse_multistatus,
 };
 use super::status::overload_or_full;
 use super::writer::WebdavWriter;
@@ -27,13 +29,14 @@ fn io_err<E: std::fmt::Display>(e: E) -> io::Error {
     io::Error::other(e.to_string())
 }
 
-fn request_err(error: ureq::Error) -> io::Error {
+pub(super) fn request_err(error: ureq::Error) -> io::Error {
     if let Some(mapped) = overload_or_full(&error) {
         return mapped;
     }
     let kind = match &error {
         ureq::Error::Status(404, _) => io::ErrorKind::NotFound,
         ureq::Error::Status(412, _) => io::ErrorKind::AlreadyExists,
+        ureq::Error::Status(401 | 403, _) => io::ErrorKind::PermissionDenied,
         // Only a ranged GET gets it: the file is shorter than the resume point.
         ureq::Error::Status(416, _) => io::ErrorKind::InvalidData,
         _ => io::ErrorKind::Other,
@@ -59,29 +62,35 @@ pub struct WebdavConfig {
     pub root: String,
 }
 
+#[derive(Clone)]
 pub struct WebdavBackend {
     base: String, // scheme://host:port
-    root: String, // forward-slash path
-    auth: String, // "Basic ..." (empty = none)
+    pub(super) root: String, // forward-slash path
+    pub(super) auth: String, // "Basic ..." (empty = none)
     /// Pooled agent for idempotent reads; ureq replaces stale pooled sockets.
     agent: ureq::Agent,
     /// Unpooled agent for DELETE and an empty PUT, which ureq would replay on
     /// a fresh connection after an ambiguous response loss on a recycled one.
-    mutation_agent: ureq::Agent,
+    pub(super) mutation_agent: ureq::Agent,
     /// Pooled agent for the mutations ureq never replays: PUT with a body and
     /// MOVE, MKCOL, COPY (not in its idempotent list; gdrive-ureq-throughput.md
     /// §8). Saves TCP and TLS setup per upload, folder and rename.
-    write_agent: ureq::Agent,
+    pub(super) write_agent: ureq::Agent,
     /// Display label, consumed by the connect-UI step.
     #[allow(dead_code)]
     url: String,
     identity: String,
+    pub(super) hashes_observed: Arc<AtomicBool>,
+    pub(super) stage_times: Arc<Mutex<HashMap<String, (i64, Option<String>)>>>,
 }
 
 impl WebdavBackend {
     pub fn connect(cfg: WebdavConfig) -> io::Result<WebdavBackend> {
         let scheme = if cfg.https { "https" } else { "http" };
-        let base = format!("{}://{}:{}", scheme, cfg.host.trim(), cfg.port);
+        let host = cfg.host.trim();
+        let host = if host.contains(':') && !host.starts_with('[') { format!("[{host}]") }
+            else { host.to_string() };
+        let base = format!("{scheme}://{host}:{}", cfg.port);
         let auth = if cfg.user.is_empty() {
             String::new()
         } else {
@@ -113,7 +122,7 @@ impl WebdavBackend {
         let root = if cfg.root.trim().is_empty() {
             "/".to_string()
         } else {
-            cfg.root.trim().to_string()
+            cfg.root.to_string()
         };
         let identity = format!("webdav:{base}:user={}:root={root}", cfg.user);
         let be = WebdavBackend {
@@ -125,6 +134,8 @@ impl WebdavBackend {
             mutation_agent,
             write_agent,
             identity,
+            hashes_observed: Arc::new(AtomicBool::new(false)),
+            stage_times: Arc::new(Mutex::new(HashMap::new())),
         };
         // Validate credentials / reachability up front.
         be.propfind(&root, "0")?;
@@ -136,11 +147,11 @@ impl WebdavBackend {
         self.url.clone()
     }
 
-    fn url_for(&self, path: &str) -> String {
+    pub(super) fn url_for(&self, path: &str) -> String {
         format!("{}{}", self.base, encode_path(path))
     }
 
-    fn auth_req(&self, req: ureq::Request) -> ureq::Request {
+    pub(super) fn auth_req(&self, req: ureq::Request) -> ureq::Request {
         if self.auth.is_empty() {
             req
         } else {
@@ -148,11 +159,11 @@ impl WebdavBackend {
         }
     }
 
-    fn propfind(&self, path: &str, depth: &str) -> io::Result<String> {
+    pub(super) fn propfind(&self, path: &str, depth: &str) -> io::Result<super::listing_body::Body> {
         // Also request ownCloud/Nextcloud's checksums (free content hashes) so a
         // checksum-mode sync can compare without downloading. Plain WebDAV servers
         // ignore the oc:* prop.
-        let body = r#"<?xml version="1.0" encoding="utf-8"?><propfind xmlns="DAV:" xmlns:oc="http://owncloud.org/ns"><prop><resourcetype/><getcontentlength/><getlastmodified/><oc:checksums/></prop></propfind>"#;
+        let body = r#"<?xml version="1.0" encoding="utf-8"?><propfind xmlns="DAV:" xmlns:oc="http://owncloud.org/ns"><prop><resourcetype/><getcontentlength/><getlastmodified/><getetag/><oc:checksums/></prop></propfind>"#;
         for attempt in 0..2 {
             let req = self
                 .agent
@@ -161,9 +172,11 @@ impl WebdavBackend {
                 .set("Content-Type", "application/xml");
             let req = self.auth_req(req);
             match req.send_string(body) {
-                Ok(response) => match response.into_string() {
+                Ok(response) => match super::listing_body::read(response) {
                     Ok(body) => return Ok(body),
-                    Err(_) if attempt == 0 => continue,
+                    Err(error) if attempt == 0 && matches!(error.kind(), io::ErrorKind::UnexpectedEof
+                        | io::ErrorKind::ConnectionReset | io::ErrorKind::ConnectionAborted
+                        | io::ErrorKind::BrokenPipe | io::ErrorKind::TimedOut) => continue,
                     Err(error) => return Err(error),
                 },
                 Err(ureq::Error::Transport(_)) if attempt == 0 => continue,
@@ -195,7 +208,7 @@ impl WebdavBackend {
         Err(io::Error::other("WebDAV GET retry exhausted"))
     }
 
-    fn mutation(&self, request: ureq::Request, operation: &str) -> io::Result<ureq::Response> {
+    pub(super) fn mutation(&self, request: ureq::Request, operation: &str) -> io::Result<ureq::Response> {
         let response = self.auth_req(request).call().map_err(request_err)?;
         let status = response.status();
         if !(200..300).contains(&status) || status == 207 {
@@ -208,6 +221,7 @@ impl WebdavBackend {
 }
 
 impl Backend for WebdavBackend {
+    fn extensions(&self) -> Option<&dyn crate::vfs::BackendExtensions> { Some(self) }
     fn scheme(&self) -> Scheme {
         Scheme::Webdav
     }
@@ -226,46 +240,16 @@ impl Backend for WebdavBackend {
 
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
         let xml = self.propfind(path, "1")?;
-        parse_multistatus(&xml, path)
+        let entries = parse_multistatus(&xml, path)?;
+        if entries.iter().any(|entry| entry.content_md5.is_some()) { self.hashes_observed.store(true, Ordering::Relaxed); }
+        Ok(entries)
     }
 
     fn stat(&self, path: &str) -> VfsResult<VfsMeta> {
         let xml = self.propfind(path, "0")?;
-        // Depth 0 returns the resource itself; parse without dropping self.
-        let doc = roxmltree::Document::parse(&xml).map_err(io_err)?;
-        let resp = doc
-            .descendants()
-            .find(|n| n.tag_name().name() == "response")
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "kein PROPFIND-Response"))?;
-        validate_propfind_response(resp)?;
-        let is_dir = resp
-            .descendants()
-            .any(|n| n.tag_name().name() == "collection");
-        let size = resp
-            .descendants()
-            .find(|n| n.tag_name().name() == "getcontentlength")
-            .and_then(|n| n.text())
-            .and_then(|t| t.trim().parse::<u64>().ok())
-            .unwrap_or(0);
-        let mtime_ms = resp
-            .descendants()
-            .find(|n| n.tag_name().name() == "getlastmodified")
-            .and_then(|n| n.text())
-            .and_then(parse_http_date_ms)
-            .unwrap_or(0);
-        let name = basename(path);
-        Ok(VfsMeta {
-            is_dir,
-            is_symlink: false,
-            size: if is_dir { 0 } else { size },
-            mtime_ms,
-            btime_ms: 0,
-            hidden: name.starts_with('.'),
-            system: false,
-            name,
-            id: None,
-            content_md5: None,
-        })
+        let (meta, _) = super::metadata::parse(&xml, path)?;
+        if meta.content_md5.is_some() { self.hashes_observed.store(true, Ordering::Relaxed); }
+        Ok(meta)
     }
 
     fn open_read(&self, path: &str) -> VfsResult<Box<dyn Read + Send>> {
@@ -350,25 +334,11 @@ impl Backend for WebdavBackend {
     }
 
     fn rename(&self, src: &str, dst: &str) -> VfsResult<()> {
-        self.mutation(
-            self.write_agent
-                .request("MOVE", &self.url_for(src))
-                .set("Destination", &self.url_for(dst))
-                .set("Overwrite", "T"),
-            "MOVE",
-        )?;
-        Ok(())
+        self.move_stage_time(src, dst, true)
     }
 
     fn rename_no_replace(&self, src: &str, dst: &str) -> VfsResult<()> {
-        self.mutation(
-            self.write_agent
-                .request("MOVE", &self.url_for(src))
-                .set("Destination", &self.url_for(dst))
-                .set("Overwrite", "F"),
-            "MOVE",
-        )?;
-        Ok(())
+        self.move_stage_time(src, dst, false)
     }
 
     /// Replaces an existing file with one `MOVE` and `Overwrite: T` (RFC 4918):
@@ -386,6 +356,7 @@ impl Backend for WebdavBackend {
             self.mutation_agent.request("DELETE", &self.url_for(path)),
             "DELETE",
         )?;
+        if let Ok(mut times) = self.stage_times.lock() { times.remove(path); }
         Ok(())
     }
 
@@ -394,43 +365,7 @@ impl Backend for WebdavBackend {
     }
 
     fn mkdir_all(&self, path: &str) -> VfsResult<()> {
-        let absolute = path.starts_with('/');
-        let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-        let mut cur = String::new();
-        for part in parts {
-            if cur.is_empty() {
-                if absolute {
-                    cur.push('/');
-                }
-            } else {
-                cur.push('/');
-            }
-            cur.push_str(part);
-            match self
-                .auth_req(self.write_agent.request("MKCOL", &self.url_for(&cur)))
-                .call()
-            {
-                Ok(response)
-                    if (200..300).contains(&response.status()) && response.status() != 207 => {}
-                Ok(response) => {
-                    return Err(io::Error::other(format!(
-                        "WebDAV MKCOL returned unexpected HTTP status {}",
-                        response.status()
-                    )));
-                }
-                Err(ureq::Error::Status(405, _)) => {
-                    let metadata = self.stat(&cur)?;
-                    if !metadata.is_dir {
-                        return Err(io::Error::new(
-                            io::ErrorKind::AlreadyExists,
-                            format!("WebDAV path exists but is not a directory: {cur}"),
-                        ));
-                    }
-                }
-                Err(error) => return Err(request_err(error)),
-            }
-        }
-        Ok(())
+        self.mkdir_below_root(path)
     }
 
     /// One MKCOL; an existing collection is fine.
@@ -472,7 +407,7 @@ impl Backend for WebdavBackend {
         // (parsed into `content_md5`) — a free content hash, no download. Servers
         // that don't send one leave `content_md5` None, so those files simply
         // fall back to the size+mtime compare (graceful per-file degradation).
-        true
+        self.hashes_observed.load(Ordering::Relaxed)
     }
 }
 

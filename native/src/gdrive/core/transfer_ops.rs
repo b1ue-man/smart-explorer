@@ -232,6 +232,7 @@ impl GDriveBackend {
             parent_id,
             title,
             declare_binary: false,
+            mtime_ms: None,
         };
         self.own_stage(&key, &object.id)?;
         let _path = self.upload_path_guard(&key)?;

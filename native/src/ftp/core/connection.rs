@@ -14,10 +14,7 @@ fn io_err<E: std::fmt::Display>(error: E) -> io::Error {
 }
 
 fn ftp_err(error: FtpError) -> io::Error {
-    match error {
-        FtpError::ConnectionError(error) => error,
-        error => io_err(error),
-    }
+    super::errors::map(error)
 }
 
 /// The server turned the connection away: 421 at the greeting or 421/530 at
@@ -107,7 +104,7 @@ fn hex_nibble(byte: u8) -> Option<u8> {
 }
 
 pub(super) fn parse_ftp_url(url: &str) -> io::Result<FtpUrl> {
-    let url = url.trim();
+    let url = url.trim_start();
     let (secure, rest) = if let Some(rest) = url.strip_prefix("ftps://") {
         (true, rest)
     } else if let Some(rest) = url.strip_prefix("ftp://") {
@@ -134,7 +131,14 @@ pub(super) fn parse_ftp_url(url: &str) -> io::Result<FtpUrl> {
         },
         None => ("anonymous".to_string(), "anonymous@example.com".to_string()),
     };
-    let (host, port) = match hostport.rfind(':') {
+    let (host, port) = if let Some(bracketed) = hostport.strip_prefix('[') {
+        let (host, tail) = bracketed.split_once(']').ok_or_else(|| io_err("ungültiger FTP-IPv6-Host"))?;
+        let port = if tail.is_empty() { 21 } else {
+            tail.strip_prefix(':').ok_or_else(|| io_err("ungültiger FTP-Port"))?
+                .parse::<u16>().map_err(|_| io_err("ungültiger FTP-Port"))?
+        };
+        (host.to_string(), port)
+    } else { match hostport.rfind(':') {
         Some(index) => {
             let port = hostport[index + 1..]
                 .parse::<u16>()
@@ -142,9 +146,14 @@ pub(super) fn parse_ftp_url(url: &str) -> io::Result<FtpUrl> {
             (hostport[..index].to_string(), port)
         }
         None => (hostport.to_string(), 21),
-    };
+    }};
     if host.is_empty() {
         return Err(io_err("FTP-Host fehlt"));
+    }
+    if [user.as_str(), password.as_str(), host.as_str(), root.as_str()]
+        .iter().any(|field| field.contains(['\r', '\n', '\0'])) {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput,
+            "FTP connection fields contain a control-command delimiter"));
     }
     Ok(FtpUrl {
         secure,
@@ -174,6 +183,13 @@ const FTP_CONNECT_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(3);
 const FTP_DATA_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const FTP_IO_TIMEOUT: Duration = Duration::from_secs(60);
 const FTP_MAX_CONNECT_ADDRESSES: usize = 8;
+
+fn keepalive(stream: &TcpStream) -> io::Result<()> {
+    let keepalive = socket2::TcpKeepalive::new()
+        .with_time(Duration::from_secs(60))
+        .with_interval(Duration::from_secs(20));
+    socket2::SockRef::from(stream).set_tcp_keepalive(&keepalive)
+}
 
 #[derive(Clone, Copy)]
 struct FtpTiming {
@@ -295,6 +311,7 @@ fn connect_data_stream(
 ) -> suppaftp::FtpResult<TcpStream> {
     let stream =
         TcpStream::connect_timeout(&address, connect_timeout).map_err(FtpError::ConnectionError)?;
+    keepalive(&stream).map_err(FtpError::ConnectionError)?;
     stream
         .set_read_timeout(Some(io_timeout))
         .and_then(|()| stream.set_write_timeout(Some(io_timeout)))
@@ -324,6 +341,7 @@ fn connect_stream_with_timing(
         timing.connect_attempt,
         |address, timeout| TcpStream::connect_timeout(&address, timeout),
     )?;
+    keepalive(&stream)?;
     set_setup_timeouts(&stream, &deadline, "server greeting")?;
     let watchdog = SetupWatchdog::arm(&stream, &deadline)?;
     let mut ftp = RustlsFtpStream::connect_with_stream(stream)

@@ -45,7 +45,7 @@ impl SftpBackend {
         self.url.clone()
     }
 
-    fn safe_sftp_on<T>(
+    pub(super) fn safe_sftp_on<T>(
         &self,
         operation: impl Fn(&SftpGeneration) -> Result<T, SftpError>,
     ) -> io::Result<(Arc<SftpGeneration>, T)> {
@@ -157,15 +157,16 @@ impl SftpBackend {
         expected: Option<u64>,
         commit: Commit,
     ) -> VfsResult<Box<dyn Write + Send>> {
-        if let Some(writer) = self.open_pool_writer(path, flags, expected, commit)? {
-            return Ok(Box::new(writer));
+        if let Some(writer) = self.open_pool_writer(path, flags, expected, commit)
+            .map_err(|error| self.target_error(path, error))? {
+            return Ok(self.target_writer(path, Box::new(writer)));
         }
-        let writer = self.open_main_writer(path, flags, commit)?;
+        let writer = self.open_main_writer(path, flags, commit).map_err(|error| self.target_error(path, error))?;
         let writer: Box<dyn Write + Send> = match expected {
             Some(size) => Box::new(SizedWriter::new(writer, size)),
             None => Box::new(writer),
         };
-        Ok(writer)
+        Ok(self.target_writer(path, writer))
     }
 
     fn reader(&self, path: &str, start: u64) -> VfsResult<Box<dyn Read + Send>> {
@@ -187,6 +188,10 @@ fn create_new_flags() -> OpenFlags {
 }
 
 impl Backend for SftpBackend {
+    fn extensions(&self) -> Option<&dyn crate::vfs::BackendExtensions> {
+        Some(self)
+    }
+
     fn scheme(&self) -> Scheme {
         Scheme::Sftp
     }
@@ -209,9 +214,11 @@ impl Backend for SftpBackend {
         // Browsing is what follows a burst of transfers: close its idle
         // channels here instead of at the next transfer.
         self.pool.retire_idle();
-        let dir = self
-            .connection
-            .safe_metadata(|generation| Box::pin(generation.sftp().read_dir(path.to_string())))?;
+        // russh-sftp bounds each READDIR request. An advancing large listing
+        // must not also fit the ordinary 20-s single-metadata budget.
+        let (_, dir) = self.safe_sftp_on(|generation| {
+            self.rt.block_on(generation.sftp().read_dir(path.to_string()))
+        })?;
         let mut out = Vec::new();
         for e in dir {
             let name = e.file_name();
@@ -330,7 +337,6 @@ impl Backend for SftpBackend {
     }
 
     fn mkdir_all(&self, path: &str) -> VfsResult<()> {
-        let generation = self.connection.current()?;
         let absolute = path.starts_with('/');
         let parts: Vec<String> = path
             .split('/')
@@ -347,21 +353,9 @@ impl Backend for SftpBackend {
                 cur.push('/');
             }
             cur.push_str(&part);
-            match self.rt.block_on(generation.sftp().create_dir(cur.clone())) {
-                Ok(()) | Err(SftpError::Status(_)) => {}
-                Err(error) => {
-                    self.connection.note_sftp_error(&generation, &error);
-                    return Err(io_err(error));
-                }
-            }
+            self.create_one_dir(&cur, false)?;
         }
-        self.rt
-            .block_on(generation.sftp().metadata(cur))
-            .map(|_| ())
-            .map_err(|error| {
-                self.connection.note_sftp_error(&generation, &error);
-                io_err(error)
-            })
+        Ok(())
     }
 
     /// One MKDIR; an existing real folder (not a link) is success.

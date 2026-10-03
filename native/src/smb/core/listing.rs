@@ -102,6 +102,7 @@ pub(super) fn meta(name: String, attributes: &Attributes) -> VfsMeta {
     VfsMeta {
         is_dir,
         is_symlink: attributes.is_link(),
+        special: false,
         size: if is_dir { 0 } else { attributes.size },
         mtime_ms: filetime_ms(attributes.last_write),
         btime_ms: filetime_ms(attributes.creation),
@@ -142,7 +143,13 @@ fn u64_at(entry: &[u8], at: usize) -> Result<u64, String> {
 /// arrive in smb2's wire mapping (reserved characters in the private-use
 /// area) and are decoded back to the characters they stand for.
 pub(super) fn parse_directory_info(data: &[u8]) -> Result<Vec<VfsMeta>, String> {
-    let mut entries = Vec::new();
+    let listing = parse_directory_info_tolerant(data)?;
+    if !listing.omitted.is_empty() { return Err("SMB listing has protected omissions; use list_dir_tolerant".into()) }
+    Ok(listing.entries)
+}
+
+pub(super) fn parse_directory_info_tolerant(data: &[u8]) -> Result<crate::vfs::VfsListing, String> {
+    let mut entries = crate::vfs::VfsListing::default();
     if data.is_empty() {
         return Ok(entries);
     }
@@ -164,8 +171,8 @@ pub(super) fn parse_directory_info(data: &[u8]) -> Result<Vec<VfsMeta>, String> 
             .iter()
             .map(|pair| u16::from_le_bytes(*pair))
             .collect();
-        let wire = String::from_utf16(&units)
-            .map_err(|_| "SMB-Verzeichniseintrag hat einen ungültigen UTF-16-Namen".to_string())?;
+        let invalid_utf16 = String::from_utf16(&units).is_err();
+        let wire = String::from_utf16_lossy(&units);
         let name = smb2::decode_name(&wire).into_owned();
         if !matches!(name.as_str(), "" | "." | "..") {
             let mut attributes = Attributes {
@@ -178,7 +185,11 @@ pub(super) fn parse_directory_info(data: &[u8]) -> Result<Vec<VfsMeta>, String> 
             if attributes.is_reparse_point() {
                 attributes.reparse_tag = Some(u32_at(entry, OFFSET_EA_SIZE_OR_TAG)?);
             }
-            entries.push(meta(name, &attributes));
+            if invalid_utf16 || crate::vfs::validate_child_name(&name).is_err() {
+                entries.omitted.push(crate::vfs::VfsOmission { rel: name,
+                    reason: crate::vfs::OmissionReason::Unrepresentable,
+                    detail: "SMB child is not an addressable Unicode path".into() });
+            } else { entries.entries.push(meta(name, &attributes)); }
         }
         if next == 0 {
             return Ok(entries);

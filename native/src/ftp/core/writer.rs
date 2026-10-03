@@ -14,8 +14,18 @@ pub(super) trait FtpUpload: Send + Sync {
 
 impl FtpUpload for FtpConnection {
     fn upload(&self, path: &str, source: &mut File) -> io::Result<()> {
+        super::errors::command_path(path)?;
         self.with_stream_mutation(|stream| {
-            stream.put_file(path, source).map(|_| ()).map_err(io_err)
+            let mut data = stream.put_with_stream(path).map_err(super::errors::map)?;
+            let copied = io::copy(source, &mut data);
+            // Always consume the terminal reply, even after a data-socket
+            // error: it may carry the decisive 452/552 target refusal.
+            let finished = stream.finalize_put_stream(data).map_err(super::errors::map);
+            match (copied, finished) {
+                (_, Err(error)) if crate::vfs::is_target_refusal(&error) => Err(error),
+                (Err(error), _) => Err(error),
+                (Ok(_), result) => result,
+            }
         })
     }
 }

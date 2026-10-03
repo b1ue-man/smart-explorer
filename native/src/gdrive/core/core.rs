@@ -1,5 +1,5 @@
 pub(super) fn norm(path: &str) -> String {
-    path.trim().trim_matches('/').to_string()
+    path.trim_matches('/').to_string()
 }
 
 pub(super) fn split_parent(key: &str) -> (String, &str) {

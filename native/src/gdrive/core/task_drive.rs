@@ -120,6 +120,10 @@ impl FakeDrive {
                 let Some(mut metadata) = self.object(id) else {
                     return Answer::status(404, json!({"error": {"message": "File not found"}}));
                 };
+                let requested: Value = serde_json::from_slice(&request.body).unwrap();
+                if let Some(time) = requested["modifiedTime"].as_str() {
+                    metadata["modifiedTime"] = json!(time);
+                }
                 metadata["_replace"] = json!(true);
                 let total = request.header("x-upload-content-length").unwrap().parse().unwrap();
                 let session = format!("s{}", self.next.fetch_add(1, Ordering::SeqCst));
@@ -186,6 +190,9 @@ impl FakeDrive {
                 if let Some(name) = change["name"].as_str() {
                     object["name"] = json!(name);
                 }
+                if let Some(time) = change["modifiedTime"].as_str() {
+                    object["modifiedTime"] = json!(time);
+                }
                 if let Some(parent) = request.query("addParents") {
                     object["parents"] = json!([parent]);
                 }
@@ -201,13 +208,16 @@ impl FakeDrive {
         if objects.contains_key(&id) {
             return Answer::status(409, json!({"error": {"message": "ID already exists"}}));
         }
-        let created = object(
+        let mut created = object(
             &id,
             metadata["name"].as_str().unwrap(),
             metadata["parents"][0].as_str().unwrap(),
             mime,
             content,
         );
+        if let Some(time) = metadata["modifiedTime"].as_str() {
+            created["modifiedTime"] = json!(time);
+        }
         objects.insert(id, created.clone());
         if let Some(content) = content {
             self.media.lock().unwrap().insert(metadata["id"].as_str().unwrap().to_string(), content.to_vec());
@@ -243,6 +253,9 @@ impl FakeDrive {
                 let id = metadata["id"].as_str().unwrap();
                 self.insert(id, metadata["name"].as_str().unwrap(), metadata["parents"][0].as_str().unwrap(),
                     metadata["mimeType"].as_str().unwrap(), &content);
+                if let Some(time) = metadata["modifiedTime"].as_str() {
+                    self.objects.lock().unwrap().get_mut(id).unwrap()["modifiedTime"] = json!(time);
+                }
                 return Answer::json(self.object(id).unwrap());
             }
             return self.create(&metadata, "application/octet-stream", Some(&content));
@@ -259,6 +272,7 @@ impl FakeDrive {
 fn object(id: &str, name: &str, parent: &str, mime: &str, content: Option<&[u8]>) -> Value {
     let mut object = json!({
         "id": id, "name": name, "parents": [parent], "mimeType": mime, "trashed": false,
+        "modifiedTime": "2026-10-02T12:34:56.789Z",
     });
     if let Some(content) = content {
         object["size"] = json!(content.len().to_string());

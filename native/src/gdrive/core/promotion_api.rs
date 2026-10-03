@@ -14,6 +14,7 @@ pub(super) struct DriveObject {
     pub(super) mime_type: String,
     pub(super) size: Option<u64>,
     pub(super) md5: Option<String>,
+    pub(super) mtime_ms: Option<i64>,
 }
 
 impl GDriveBackend {
@@ -30,7 +31,7 @@ impl GDriveBackend {
         let mut seen_tokens = HashSet::new();
         for _ in 0..MAX_QUERY_PAGES {
             let mut url = self.api_url(&format!(
-                "files?q={}&fields=nextPageToken,incompleteSearch,files(id,name,mimeType,size,md5Checksum,parents,trashed)&pageSize={QUERY_LIMIT}",
+                "files?q={}&fields=nextPageToken,incompleteSearch,files(id,name,mimeType,size,md5Checksum,modifiedTime,parents,trashed)&pageSize={QUERY_LIMIT}",
                 cloud_urlenc(&query)
             ));
             if let Some(token) = page_token.as_deref() {
@@ -83,7 +84,7 @@ impl GDriveBackend {
         &self, parent_id: &str, plain: &str, id: &str,
     ) -> VfsResult<DriveObject> {
         let url = self.api_url(&format!(
-            "files/{}?fields=id,name,mimeType,size,md5Checksum,parents,trashed",
+            "files/{}?fields=id,name,mimeType,size,md5Checksum,modifiedTime,parents,trashed",
             cloud_urlenc(id)
         ));
         let json = self.get_json(&url)?;
@@ -100,6 +101,7 @@ impl GDriveBackend {
         source_parent_id: &str,
         destination_parent_id: &str,
         destination_name: &str,
+        mtime_ms: Option<i64>,
     ) -> VfsResult<()> {
         let mut url = self.api_url(&format!("files/{}?fields=id", cloud_urlenc(id)));
         if source_parent_id != destination_parent_id {
@@ -110,7 +112,11 @@ impl GDriveBackend {
             ));
         }
         let bearer = format!("Bearer {}", self.bearer()?);
-        let payload = serde_json::json!({ "name": destination_name }).to_string();
+        let mut metadata = serde_json::json!({ "name": destination_name });
+        if let Some(time) = mtime_ms.and_then(super::stage_time::formatted) {
+            metadata["modifiedTime"] = serde_json::Value::from(time);
+        }
+        let payload = metadata.to_string();
         let response = mutation_once(drive_request(
             self.timed_request(self.http.api().request("PATCH", &url))
                 .set("Authorization", &bearer)
@@ -132,7 +138,7 @@ impl GDriveBackend {
                     });
                 if let Err(response_error) = response_state {
                     if let Err(verify_error) =
-                        self.verify_renamed_id(id, destination_parent_id, destination_name)
+                        self.verify_renamed_id(id, destination_parent_id, destination_name, mtime_ms)
                     {
                         return Err(ambiguous_rename(id, &response_error, &verify_error));
                     }
@@ -141,11 +147,14 @@ impl GDriveBackend {
             Err(MutationRequestError::Definite(error)) => return Err(error),
             Err(MutationRequestError::Ambiguous(send_error)) => {
                 if let Err(verify_error) =
-                    self.verify_renamed_id(id, destination_parent_id, destination_name)
+                    self.verify_renamed_id(id, destination_parent_id, destination_name, mtime_ms)
                 {
                     return Err(ambiguous_rename(id, &send_error, &verify_error));
                 }
             }
+        }
+        if mtime_ms.is_some() {
+            self.verify_renamed_id(id, destination_parent_id, destination_name, mtime_ms)?;
         }
         Ok(())
     }
@@ -155,9 +164,10 @@ impl GDriveBackend {
         id: &str,
         destination_parent_id: &str,
         destination_name: &str,
+        mtime_ms: Option<i64>,
     ) -> VfsResult<()> {
         let url = self.api_url(&format!(
-            "files/{}?fields=id,name,parents,mimeType,trashed",
+            "files/{}?fields=id,name,parents,mimeType,modifiedTime,trashed",
             cloud_urlenc(id)
         ));
         let json = self.get_json(&url)?;
@@ -170,7 +180,9 @@ impl GDriveBackend {
             && json["parents"].as_array().is_some_and(|parents| {
                 parents.len() == 1 && parents[0].as_str() == Some(destination_parent_id)
             });
-        if expected {
+        let time_matches = mtime_ms.is_none_or(|expected|
+            json["modifiedTime"].as_str().and_then(super::core::parse_rfc3339_ms) == Some(expected));
+        if expected && time_matches {
             Ok(())
         } else {
             Err(invalid(
@@ -222,6 +234,7 @@ fn parse_object(
         mime_type,
         size,
         md5,
+        mtime_ms: json["modifiedTime"].as_str().and_then(super::core::parse_rfc3339_ms),
     })
 }
 

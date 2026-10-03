@@ -33,6 +33,12 @@ mod core;
 mod duplicates;
 #[path = "core/file_list.rs"]
 mod file_list;
+#[path = "core/extensions.rs"]
+mod extensions;
+#[path = "core/sync_listing.rs"]
+mod sync_listing;
+#[path = "core/stage_time.rs"]
+mod stage_time;
 #[path = "core/folder_create_journal.rs"]
 mod folder_create_journal;
 #[path = "core/http.rs"]
@@ -99,6 +105,9 @@ mod transfer_engine_task_ops_tests;
 #[cfg(test)]
 #[path = "core/transfer_engine_task_tests.rs"]
 mod transfer_engine_task_tests;
+#[cfg(test)]
+#[path = "core/remote_provider_task_tests.rs"]
+mod remote_provider_task_tests;
 
 pub use state::GDriveBackend;
 

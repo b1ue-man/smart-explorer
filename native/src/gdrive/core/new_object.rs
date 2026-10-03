@@ -23,6 +23,7 @@ pub(super) struct NewObject {
     /// Copy stages declare a binary type (promotion requires one), like the
     /// spooled copy stage; new files leave the type to Drive like `open_write`.
     pub(super) declare_binary: bool,
+    pub(super) mtime_ms: Option<i64>,
 }
 
 impl NewObject {
@@ -34,6 +35,9 @@ impl NewObject {
         });
         if self.declare_binary {
             metadata["mimeType"] = serde_json::Value::from(MEDIA_TYPE);
+        }
+        if let Some(time) = self.mtime_ms.and_then(super::stage_time::formatted) {
+            metadata["modifiedTime"] = serde_json::Value::from(time);
         }
         metadata.to_string()
     }

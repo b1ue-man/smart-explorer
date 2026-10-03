@@ -8,6 +8,21 @@ use crate::vfs::{VfsMeta, VfsResult};
 use std::io;
 
 impl GDriveBackend {
+    /// A named object with incomplete metadata stays a protected omission.
+    /// Browsing retains its existing best-effort metadata representation.
+    pub(super) fn sync_metadata_problem(f: &serde_json::Value) -> Option<&'static str> {
+        let Some(mime) = f["mimeType"].as_str().filter(|mime| !mime.is_empty()) else {
+            return Some("Drive object type is unavailable");
+        };
+        if f["modifiedTime"].as_str().and_then(parse_rfc3339_ms).is_none() {
+            return Some("Drive modification time is unavailable or invalid");
+        }
+        if !mime.starts_with("application/vnd.google-apps.")
+            && f["size"].as_str().and_then(|size| size.parse::<u64>().ok()).is_none() {
+            return Some("Drive binary size is unavailable or invalid");
+        }
+        None
+    }
     /// The Drive mimeType for `path` (cached from list_dir, else a stat call).
     pub(super) fn mime_of(&self, path: &str) -> Option<String> {
         let key = norm(path);
@@ -38,6 +53,9 @@ impl GDriveBackend {
         fallback_name: Option<&str>,
     ) -> Option<VfsMeta> {
         let is_dir = f["mimeType"].as_str() == Some(FOLDER_MIME);
+        let mime = f["mimeType"].as_str().unwrap_or("");
+        let is_symlink = mime == "application/vnd.google-apps.shortcut";
+        let special = !is_dir && !is_symlink && mime.starts_with("application/vnd.google-apps.");
         let name = f["name"]
             .as_str()
             .or(fallback_name)
@@ -45,7 +63,8 @@ impl GDriveBackend {
         Some(VfsMeta {
             name: name.to_string(),
             is_dir,
-            is_symlink: false,
+            is_symlink,
+            special,
             size: f["size"].as_str().and_then(|s| s.parse().ok()).unwrap_or(0),
             mtime_ms: f["modifiedTime"]
                 .as_str()
@@ -58,7 +77,9 @@ impl GDriveBackend {
             hidden: false,
             system: false,
             id: f["id"].as_str().map(|s| s.to_string()),
-            content_md5: f["md5Checksum"].as_str().map(|s| s.to_string()),
+            content_md5: f["md5Checksum"].as_str().filter(|hash|
+                hash.len() == 32 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()))
+                .map(str::to_string),
         })
     }
 

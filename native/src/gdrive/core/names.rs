@@ -33,27 +33,27 @@ pub(super) fn encode(name: &str) -> String {
 
 pub(super) fn decode(segment: &str) -> io::Result<String> {
     crate::vfs::validate_child_name(segment)?;
+    // Recognize only the canonical encoding emitted by older versions. A
+    // noncanonical percent sequence is a literal title, not malformed URI
+    // input. New sync names always pass through sync_child_path/encode first.
+    Ok(decode_canonical(segment).unwrap_or_else(|| segment.to_string()))
+}
+
+fn decode_canonical(segment: &str) -> Option<String> {
     let mut bytes = Vec::with_capacity(segment.len());
     let input = segment.as_bytes();
     let mut offset = 0;
     while offset < input.len() {
         if input[offset] == b'%' {
-            let hex = input.get(offset + 1..offset + 3).ok_or_else(invalid)?;
-            let hex = std::str::from_utf8(hex).map_err(|_| invalid())?;
-            bytes.push(u8::from_str_radix(hex, 16).map_err(|_| invalid())?);
+            let hex = input.get(offset + 1..offset + 3)?;
+            let hex = std::str::from_utf8(hex).ok()?;
+            bytes.push(u8::from_str_radix(hex, 16).ok()?);
             offset += 3;
         } else {
             bytes.push(input[offset]);
             offset += 1;
         }
     }
-    let name = String::from_utf8(bytes).map_err(|_| invalid())?;
-    if encode(&name) != segment {
-        return Err(invalid());
-    }
-    Ok(name)
-}
-
-fn invalid() -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidInput, "Ungültiger Drive-Pfadname; den Namen aus der Ordnerliste verwenden")
+    let name = String::from_utf8(bytes).ok()?;
+    (encode(&name) == segment).then_some(name)
 }

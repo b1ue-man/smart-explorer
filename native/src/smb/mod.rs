@@ -22,6 +22,10 @@
 mod backend;
 #[path = "core/errors.rs"]
 mod errors;
+#[path = "core/extensions.rs"]
+mod extensions;
+#[path = "core/stage_finish.rs"]
+mod stage_finish;
 #[path = "core/listing.rs"]
 mod listing;
 #[path = "core/reader.rs"]

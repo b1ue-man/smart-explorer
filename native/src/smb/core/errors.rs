@@ -38,6 +38,8 @@ fn kind_of(error: &Error) -> io::ErrorKind {
         _ if error.status() == Some(NtStatus::DIRECTORY_NOT_EMPTY) => {
             io::ErrorKind::DirectoryNotEmpty
         }
+        _ if matches!(error.status(), Some(NtStatus(0xC000_0044 | 0xC000_0802))) => io::ErrorKind::QuotaExceeded,
+        _ if error.status() == Some(NtStatus(0xC000_00A2)) => io::ErrorKind::ReadOnlyFilesystem,
         _ => io_kind(error.kind()),
     }
 }
@@ -56,6 +58,8 @@ fn label(kind: io::ErrorKind) -> &'static str {
         K::InvalidData => "Ungültige Antwort des SMB-Servers",
         K::Unsupported => "Vom SMB-Server nicht unterstützt",
         K::StorageFull => "Kein Speicherplatz mehr auf dem SMB-Server",
+        K::QuotaExceeded => "Speicherquote auf dem SMB-Server überschritten",
+        K::ReadOnlyFilesystem => "SMB-Ziel ist schreibgeschützt",
         K::ResourceBusy => "Wird gerade von einem anderen Programm verwendet",
         K::DirectoryNotEmpty => "Ordner ist nicht leer",
         K::Interrupted => "Abgebrochen",

@@ -29,9 +29,7 @@ use super::connection::FtpUrl;
 #[cfg(test)]
 use std::time::Duration;
 
-fn io_err<E: std::fmt::Display>(e: E) -> io::Error {
-    io::Error::other(e.to_string())
-}
+fn io_err(error: FtpError) -> io::Error { super::errors::map(error) }
 
 fn systime_ms(t: SystemTime) -> i64 {
     match t.duration_since(UNIX_EPOCH) {
@@ -56,11 +54,12 @@ pub(super) fn parent_dir(path: &str) -> String {
     }
 }
 
-fn dir_meta(name: String) -> VfsMeta {
+pub(super) fn dir_meta(name: String) -> VfsMeta {
     VfsMeta {
         name,
         is_dir: true,
         is_symlink: false,
+        special: false,
         size: 0,
         mtime_ms: 0,
         btime_ms: 0,
@@ -72,6 +71,12 @@ fn dir_meta(name: String) -> VfsMeta {
 }
 
 pub(super) fn parse_list_line(line: &str) -> VfsResult<VfsMeta> {
+    let meta = parse_list_line_unchecked(line)?;
+    crate::vfs::validate_child_name(&meta.name)?;
+    Ok(meta)
+}
+
+pub(super) fn parse_list_line_unchecked(line: &str) -> VfsResult<VfsMeta> {
     let file = line.parse::<suppaftp::list::File>().map_err(|error| {
         let preview: String = line.chars().take(160).collect();
         io::Error::new(
@@ -80,10 +85,10 @@ pub(super) fn parse_list_line(line: &str) -> VfsResult<VfsMeta> {
         )
     })?;
     let name = file.name().to_string();
-    crate::vfs::validate_child_name(&name)?;
     Ok(VfsMeta {
         is_dir: file.is_directory(),
         is_symlink: file.is_symlink(),
+        special: line.as_bytes().first().is_some_and(|kind| matches!(kind, b'b' | b'c' | b'p' | b's')),
         size: file.size() as u64,
         mtime_ms: systime_ms(file.modified()),
         btime_ms: 0,
@@ -100,7 +105,7 @@ pub(super) fn parse_list_line(line: &str) -> VfsResult<VfsMeta> {
 // ── backend ──────────────────────────────────────────────────────────────────
 
 pub struct FtpBackend {
-    pool: Arc<FtpPool>,
+    pub(super) pool: Arc<FtpPool>,
     root: String,
     /// `ftp(s)://user@host:port/root` for UI display (connect-UI step).
     #[allow(dead_code)]
@@ -153,6 +158,7 @@ impl FtpBackend {
     /// server's MKD refuses an existing name atomically, the entry is only
     /// looked at afterwards to tell `AlreadyExists` from other refusals.
     fn make_dir(&self, path: &str, exclusive: bool) -> VfsResult<()> {
+        super::errors::command_path(path)?;
         let made = self
             .pool
             .primary()
@@ -178,6 +184,7 @@ impl FtpBackend {
 }
 
 impl Backend for FtpBackend {
+    fn extensions(&self) -> Option<&dyn crate::vfs::BackendExtensions> { Some(self) }
     fn scheme(&self) -> Scheme {
         Scheme::Ftp
     }
@@ -198,33 +205,25 @@ impl Backend for FtpBackend {
         // Browsing is what follows a burst of transfers: close their idle
         // connections here instead of keeping them alive with NOOPs.
         self.pool.retire_idle();
-        let lines = self
-            .pool
-            .primary()
-            .with_stream_read(|stream| stream.list(Some(path)).map_err(io_err))?;
-        lines
-            .into_iter()
-            .map(|line| parse_list_line(&line))
-            .collect()
+        let listing = super::metadata::list_browse(self.pool.primary(), path)?;
+        if !listing.omitted.is_empty() {
+            return Err(io::Error::new(io::ErrorKind::InvalidData,
+                "FTP listing has protected omissions; use list_dir_tolerant"));
+        }
+        Ok(listing.entries)
+    }
+
+    fn list_dir_for_sync(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
+        let listing = super::metadata::list(self.pool.primary(), path)?;
+        if !listing.omitted.is_empty() {
+            return Err(io::Error::new(io::ErrorKind::InvalidData,
+                "FTP sync listing has protected omissions; use list_dir_tolerant"));
+        }
+        Ok(listing.entries)
     }
 
     fn stat(&self, path: &str) -> VfsResult<VfsMeta> {
-        let base = basename(path);
-        if path == "/" || base.is_empty() {
-            return Ok(dir_meta(if base.is_empty() {
-                "/".to_string()
-            } else {
-                base
-            }));
-        }
-        // FTP has no stat: list the parent and find the entry.
-        let parent = parent_dir(path);
-        self.list_dir(&parent)?
-            .into_iter()
-            .find(|e| e.name == base)
-            .ok_or_else(|| {
-                io::Error::new(io::ErrorKind::NotFound, format!("{path} nicht gefunden"))
-            })
+        super::metadata::stat(self.pool.primary(), path)
     }
 
     /// RETR on a pool connection of its own, so browsing and other
@@ -259,6 +258,8 @@ impl Backend for FtpBackend {
     }
 
     fn rename(&self, src: &str, dst: &str) -> VfsResult<()> {
+        super::errors::command_path(src)?;
+        super::errors::command_path(dst)?;
         self.pool
             .primary()
             .with_stream_mutation(|stream| stream.rename(src, dst).map_err(io_err))
@@ -299,18 +300,21 @@ impl Backend for FtpBackend {
     }
 
     fn remove_file(&self, path: &str) -> VfsResult<()> {
+        super::errors::command_path(path)?;
         self.pool
             .primary()
             .with_stream_mutation(|stream| stream.rm(path).map_err(io_err))
     }
 
     fn remove_dir(&self, path: &str) -> VfsResult<()> {
+        super::errors::command_path(path)?;
         self.pool
             .primary()
             .with_stream_mutation(|stream| stream.rmdir(path).map_err(io_err))
     }
 
     fn mkdir_all(&self, path: &str) -> VfsResult<()> {
+        super::errors::command_path(path)?;
         let absolute = path.starts_with('/');
         let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
         self.pool.primary().with_stream_mutation(|stream| {

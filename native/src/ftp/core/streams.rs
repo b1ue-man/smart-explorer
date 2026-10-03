@@ -33,6 +33,7 @@ impl FtpConnection {
         path: &str,
         offset: u64,
     ) -> io::Result<Option<FtpReader>> {
+        super::errors::command_path(path)?;
         let rest = match (offset, usize::try_from(offset)) {
             (0, _) => None,
             (_, Ok(rest)) => Some(rest),
@@ -43,13 +44,13 @@ impl FtpConnection {
                 match stream.resume_transfer(rest) {
                     Ok(()) => {}
                     Err(error) if rest_unsupported(&error) => return Ok(None),
-                    Err(error) => return Err(io_err(error)),
+                    Err(error) => return Err(super::errors::map(error)),
                 }
             }
             stream
                 .retr_as_stream(path)
                 .map(|data| Some(Box::new(data) as Box<dyn Read + Send>))
-                .map_err(io_err)
+                .map_err(super::errors::map)
         })?;
         let Some(data) = data else {
             // REST was refused with an answer: the connection is in step.
@@ -70,11 +71,12 @@ impl FtpConnection {
         path: &str,
         size: u64,
     ) -> io::Result<FtpStoreWriter> {
+        super::errors::command_path(path)?;
         let (control, data) = self.checkout(false, |stream| {
             stream
                 .put_with_stream(path)
                 .map(|data| Box::new(data) as Box<dyn Write + Send>)
-                .map_err(io_err)
+                .map_err(super::errors::map)
         })?;
         Ok(FtpStoreWriter {
             owner: self.clone(),
@@ -99,8 +101,8 @@ impl FtpReader {
             return Ok(());
         };
         let result = match self.data.take() {
-            Some(data) if completed => control.finalize_retr_stream(data).map_err(io_err),
-            Some(data) => control.abort(data).map_err(io_err),
+            Some(data) if completed => control.finalize_retr_stream(data).map_err(super::errors::map),
+            Some(data) => control.abort(data).map_err(super::errors::map),
             None => Err(io_err("FTP-Datenstrom fehlt")),
         };
         self.owner.return_stream(control, result.is_ok());
@@ -164,7 +166,7 @@ impl FtpStoreWriter {
             return Err(io_err("FTP-Upload ist bereits beendet"));
         };
         let result = match self.data.take() {
-            Some(data) => control.finalize_put_stream(data).map_err(io_err),
+            Some(data) => control.finalize_put_stream(data).map_err(super::errors::map),
             None => Err(io_err("FTP-Datenstrom fehlt")),
         };
         self.owner.return_stream(control, result.is_ok());
@@ -173,7 +175,9 @@ impl FtpStoreWriter {
 
     fn fail(&mut self, error: io::Error) -> io::Error {
         self.state = StoreState::Failed;
-        let _ = self.finish();
+        if let Err(server) = self.finish() {
+            if crate::vfs::is_target_refusal(&server) { return server }
+        }
         error
     }
 }

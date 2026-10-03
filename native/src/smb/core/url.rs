@@ -21,7 +21,7 @@ pub(super) struct SmbUrl {
 }
 
 pub(super) fn parse_smb_url(url: &str) -> io::Result<SmbUrl> {
-    let url = url.trim();
+    let url = url.trim_start();
     let rest = url
         .get(..6)
         .filter(|scheme| scheme.eq_ignore_ascii_case("smb://"))

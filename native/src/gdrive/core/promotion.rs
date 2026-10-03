@@ -201,6 +201,7 @@ impl GDriveBackend {
             context.source_parent_id,
             context.destination_parent_id,
             context.destination_name,
+            staged_object.mtime_ms,
         ) {
             self.invalidate_move_cache(context);
             return Err(error);
@@ -225,6 +226,7 @@ impl GDriveBackend {
             context.destination_parent_id,
             context.source_parent_id,
             context.source_name,
+            staged_object.mtime_ms,
         ) {
             self.invalidate_move_cache(context);
             return Err(io::Error::new(
@@ -271,6 +273,7 @@ impl GDriveBackend {
             &mut content.spool,
             content.size,
             &content.md5,
+            staged_object.mtime_ms,
         )?;
 
         // Re-probe before deleting the stage. This catches an external rename

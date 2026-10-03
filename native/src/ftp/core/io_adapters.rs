@@ -13,6 +13,8 @@ fn io_err<E: std::fmt::Display>(error: E) -> io::Error {
 /// wait rather than issuing commands into an active transfer's response. The
 /// backend keeps one for browsing and more for transfers (pool.rs).
 pub(super) struct FtpConnection {
+    pub(super) features: Mutex<Option<super::metadata::Features>>,
+    pub(super) precision: Mutex<crate::vfs::MtimePrecision>,
     state: Mutex<ControlState>,
     available: Condvar,
     reconnect: FtpReconnect,
@@ -58,6 +60,8 @@ impl FtpConnection {
         io_timeout: Duration,
     ) -> io::Result<Arc<Self>> {
         let connection = Arc::new(Self {
+            features: Mutex::new(None),
+            precision: Mutex::new(crate::vfs::MtimePrecision::Unknown),
             state: Mutex::new(ControlState {
                 stream: Some(stream),
                 last_activity: Instant::now(),
@@ -93,6 +97,8 @@ impl FtpConnection {
         state.stream = Some(replacement);
         state.health = ControlHealth::Healthy;
         state.last_activity = Instant::now();
+        if let Ok(mut features) = self.features.lock() { *features = None; }
+        if let Ok(mut precision) = self.precision.lock() { *precision = crate::vfs::MtimePrecision::Unknown; }
         Ok(())
     }
 
