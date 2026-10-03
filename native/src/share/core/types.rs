@@ -147,7 +147,7 @@ pub struct RoomProfile {
     pub policy: RoomPolicy,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct PeerEndpoint {
     pub label: String,
     pub scope: ShareScope,

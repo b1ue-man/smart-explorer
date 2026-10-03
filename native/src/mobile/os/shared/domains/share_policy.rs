@@ -81,17 +81,64 @@ pub(super) fn set_connection(rt: &Runtime, args: &Value) -> Result<Value, ApiErr
     Ok(finish(rt, profiles, changed))
 }
 
-pub(super) fn set_contact_write(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
-    let peer = DirectPeerIdentity {
+fn peer(args: &Value) -> Result<DirectPeerIdentity, ApiError> {
+    Ok(DirectPeerIdentity {
         device_id: str_arg(args, "deviceId")?.into(),
         device_name: opt_str(args, "name").unwrap_or("").into(),
         public_key: str_arg(args, "publicKey")?.into(),
         node_id: args.get("nodeId").and_then(Value::as_str)
             .ok_or_else(|| invalid("nodeId muss als String mitgegeben werden (Legacy darf leer sein)."))?.into(),
         fingerprint: str_arg(args, "fingerprint")?.into(),
-    };
+    })
+}
+
+pub(super) fn set_contact_write(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
+    let peer = peer(args)?;
     let change = crate::share::set_direct_peer_write(default_home(), &peer, bool_arg(args, "write")?).map_err(error)?;
     Ok(finish(rt, change.profiles, change.changed))
+}
+
+pub(super) fn allow_grant_again(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
+    let peer = peer(args)?;
+    let mut changed = false;
+    let profiles = ShareProfiles::mutate_persisted(default_home(), |profiles| {
+        let mut matches = profiles.direct_grants.iter().filter(|grant| grant.device_id == peer.device_id);
+        let pinned = matches.next().is_some_and(|grant|
+            grant.public_key == peer.public_key && grant.node_id == peer.node_id && grant.fingerprint == peer.fingerprint);
+        if !pinned || matches.next().is_some() {
+            return Err("Geraeteidentitaet wurde geaendert; bitte neu laden".into());
+        }
+        changed = profiles.allow_direct_grant_again(&peer.device_id, crate::share::core_now_secs())?;
+        Ok(())
+    }).map_err(error)?;
+    Ok(finish(rt, profiles, changed))
+}
+
+pub(super) fn set_room_member(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
+    let profile_id = str_arg(args, "profileId")?;
+    let room_id = str_arg(args, "roomId")?;
+    let peer = peer(args)?;
+    let action = str_arg(args, "action")?;
+    if !matches!(action, "admit" | "block" | "allow") {
+        return Err(invalid("action muss admit, block oder allow sein."));
+    }
+    let mut changed = false;
+    let profiles = ShareProfiles::mutate_persisted(default_home(), |profiles| {
+        let room = profiles.rooms.iter_mut().find(|room| room.id == profile_id && room.room_id == room_id)
+            .ok_or_else(|| "Raumidentitaet wurde geaendert; bitte neu laden".to_string())?;
+        let mut matches = room.members.iter().filter(|member| member.device_id == peer.device_id);
+        let pinned = matches.next().is_some_and(|member|
+            member.public_key == peer.public_key && member.node_id == peer.node_id && member.fingerprint == peer.fingerprint);
+        if !pinned || matches.next().is_some() {
+            return Err("Mitgliedsidentitaet wurde geaendert; bitte neu laden".into());
+        }
+        changed = match action {
+            "admit" => room.admit_member(&peer.device_id),
+            _ => room.set_member_blocked(&peer.device_id, action == "block", crate::share::core_now_secs()),
+        };
+        Ok(())
+    }).map_err(error)?;
+    Ok(finish(rt, profiles, changed))
 }
 
 pub(super) fn set_share_back(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
@@ -122,4 +169,15 @@ pub(super) fn policy() -> Result<Value, ApiError> {
     let warning = result.as_ref().err().cloned();
     let requests = result.unwrap_or_default();
     Ok(json!({"requests": requests, "warning": warning}))
+}
+
+pub(super) fn set_policy(args: &Value) -> Result<Value, ApiError> {
+    let requests = match str_arg(args, "requests")? {
+        "Ask" => crate::share::DirectRequestPolicy::Ask,
+        "AutoAccept" => crate::share::DirectRequestPolicy::AutoAccept,
+        _ => return Err(invalid("requests muss Ask oder AutoAccept sein.")),
+    };
+    requests.save().map_err(error)?;
+    wake();
+    Ok(json!({"requests": requests, "persisted": true}))
 }

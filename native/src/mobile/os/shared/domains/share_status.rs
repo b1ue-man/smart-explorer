@@ -121,6 +121,9 @@ fn rooms_json(profiles: &ShareProfiles) -> Vec<Value> {
                     json!({
                         "deviceId": member.device_id,
                         "name": member.device_name,
+                        "publicKey": member.public_key,
+                        "nodeId": member.node_id,
+                        "fingerprint": member.fingerprint,
                         "status": member.status.label(),
                         "location": target.endpoint_prefix(),
                         "blocked": member.blocked,
