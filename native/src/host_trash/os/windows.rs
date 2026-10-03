@@ -346,6 +346,12 @@ pub(super) fn open_parent(record: &Record) -> io::Result<DirectoryHandle> {
     Ok(parent)
 }
 
+pub(super) fn verify_original(record: &Record) -> io::Result<()> {
+    let parent = open_parent(record)?;
+    let file = parent.open_regular_child(&original_name(record)?)?;
+    verify(&file, record)
+}
+
 pub(super) struct HeldFile {
     pub(super) parent: DirectoryHandle,
     pub(super) file: File,
@@ -419,6 +425,11 @@ pub(super) fn locate(record: &Record) -> io::Result<Location> {
 #[cfg(test)]
 pub(super) fn test_intent(root: &Path, file: &File, size: u64) -> io::Result<Record> {
     intent(root, file, size, digest(file, size)?)
+}
+
+#[cfg(test)]
+pub(super) fn test_path(file: &File) -> io::Result<PathBuf> {
+    final_path(file)
 }
 
 #[cfg(test)]

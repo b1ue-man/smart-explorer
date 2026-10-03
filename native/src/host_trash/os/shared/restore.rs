@@ -14,7 +14,10 @@ pub(crate) fn restore(id: &str) -> io::Result<RestoreOutcome> {
 pub(super) fn restore_in(_store: &Store, record: &Record) -> io::Result<RestoreOutcome> {
     let held = match platform::locate(record)? {
         Location::Held(held) => held,
-        Location::Original => return Ok(RestoreOutcome::AlreadyAtOriginal),
+        Location::Original => {
+            platform::verify_original(record)?;
+            return Ok(RestoreOutcome::AlreadyAtOriginal);
+        }
         Location::Missing => {
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,

@@ -9,7 +9,7 @@ use std::mem::{offset_of, size_of};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::AsRawHandle;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use windows_sys::Win32::Storage::FileSystem::{
     FileIdInfo, FileRenameInfo, GetFileInformationByHandleEx, SetFileInformationByHandle, DELETE,
@@ -85,7 +85,7 @@ impl DirectoryHandle {
                 "expected recycle child changed",
             ));
         }
-        rename_no_replace(&guard, &self.0.path.join(slot.name()))?;
+        rename_no_replace(&guard, self, slot.name())?;
         Ok(QuarantinedChild {
             parent: self.clone(),
             original: name.to_os_string(),
@@ -121,7 +121,7 @@ impl DirectoryHandle {
         for _attempt in 0..1000u32 {
             let suffix = RandomState::new().build_hasher().finish();
             let held = OsString::from(format!(".held.se-recycle-{suffix:016x}"));
-            match rename_no_replace(&guard, &self.0.path.join(&held)) {
+            match rename_no_replace(&guard, self, &held) {
                 Ok(()) => {
                     return Ok(QuarantinedChild {
                         parent: self.clone(),
@@ -155,7 +155,7 @@ impl QuarantinedChild {
 
     pub(crate) fn restore(&mut self) -> io::Result<()> {
         if self.active {
-            rename_no_replace(&self.guard, &self.parent.0.path.join(&self.original))?;
+            rename_no_replace(&self.guard, &self.parent, &self.original)?;
             self.active = false;
         }
         Ok(())
@@ -169,7 +169,7 @@ impl QuarantinedChild {
                 "quarantine is no longer active",
             ));
         }
-        rename_no_replace(&self.guard, &target.0.path.join(name))?;
+        rename_no_replace(&self.guard, target, name)?;
         self.active = false;
         Ok(())
     }
@@ -199,35 +199,58 @@ fn identity(file: &File) -> io::Result<(u64, [u8; 16])> {
     }
 }
 
-fn rename_no_replace(file: &File, target: &Path) -> io::Result<()> {
-    let name: Vec<u16> = target.as_os_str().encode_wide().collect();
-    let name_bytes = name
+fn rename_no_replace(file: &File, target: &DirectoryHandle, name: &OsStr) -> io::Result<()> {
+    validate_name(name)?;
+    let mut wide: Vec<u16> = name.encode_wide().collect();
+    let name_bytes = wide
         .len()
         .checked_mul(size_of::<u16>())
         .and_then(|length| u32::try_from(length).ok())
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "rename target too long"))?;
+    wide.push(0); // Explicit terminator; FileNameLength excludes it.
     let bytes = offset_of!(FILE_RENAME_INFO, FileName)
         .checked_add(name_bytes as usize)
+        .and_then(|length| length.checked_add(size_of::<u16>()))
         .and_then(|length| u32::try_from(length).ok())
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "rename record too long"))?;
     let mut buffer = vec![0u64; (bytes as usize).div_ceil(size_of::<u64>())];
     let info = buffer.as_mut_ptr().cast::<FILE_RENAME_INFO>();
     // SAFETY: u64 storage provides the structure's alignment on supported
-    // targets and includes the full trailing filename. Zero ReplaceIfExists
-    // and a null RootDirectory choose an absolute no-replace destination.
+    // targets and includes the filename plus its explicit terminator. Zero
+    // ReplaceIfExists preserves collisions; the live directory handle binds
+    // this single child name to the pinned destination object.
     unsafe {
         (*info).Anonymous.ReplaceIfExists = 0;
-        (*info).RootDirectory = std::ptr::null_mut();
+        (*info).RootDirectory = target.file().as_raw_handle();
         (*info).FileNameLength = name_bytes;
         std::ptr::copy_nonoverlapping(
-            name.as_ptr(),
+            wide.as_ptr(),
             std::ptr::addr_of_mut!((*info).FileName).cast::<u16>(),
-            name.len(),
+            wide.len(),
         );
         if SetFileInformationByHandle(file.as_raw_handle(), FileRenameInfo, info.cast(), bytes) == 0
         {
             return Err(io::Error::last_os_error());
         }
+    }
+    // Do not claim a completed hop from the API status alone. The target is
+    // reopened without following links, while the DELETE reservation remains
+    // live. On failure callers keep their durable predecessor/successor slots.
+    let expected = identity(file)?;
+    let reached = target.open_regular_child(name).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!(
+                "rename destination not confirmed at {}: {error}",
+                target.path().join(name).display()
+            ),
+        )
+    })?;
+    if identity(&reached)? != expected {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "rename destination has a different object identity",
+        ));
     }
     Ok(())
 }
