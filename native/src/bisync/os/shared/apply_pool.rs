@@ -58,6 +58,7 @@ struct Pool<'p> {
     groups: Vec<Vec<usize>>,
     max_transfers: usize,
     cancel: &'p AtomicBool,
+    stop: &'p (dyn Fn() -> bool + Sync),
     admit: &'p Admit<'p>,
     execute: &'p Execute<'p>,
     progress: Progress,
@@ -73,11 +74,19 @@ pub(super) fn run_actions<'p>(
     admit: &'p Admit<'p>,
     execute: &'p Execute<'p>,
 ) -> PoolReport {
+    run_actions_stoppable(actions, max_transfers, cancel, &|| false, admit, execute)
+}
+
+pub(super) fn run_actions_stoppable<'p>(
+    actions: &'p [Action], max_transfers: usize, cancel: &'p AtomicBool,
+    stop: &'p (dyn Fn() -> bool + Sync), admit: &'p Admit<'p>, execute: &'p Execute<'p>,
+) -> PoolReport {
     let pool = Pool {
         actions,
         groups: action_groups(actions),
         max_transfers,
         cancel,
+        stop,
         admit,
         execute,
         progress: Progress::default(),
@@ -99,7 +108,8 @@ pub(super) fn run_actions<'p>(
 /// sides against the plan, so a repeat after an unclear commit reports the
 /// drift instead of acting twice.
 fn repeatable(action: &Action, error: &AttemptError) -> bool {
-    error.before_commit() || !matches!(action, Action::KeepBothAtoB(_) | Action::KeepBothBtoA(_))
+    let _ = action;
+    error.before_commit()
 }
 
 impl Pool<'_> {
@@ -110,7 +120,7 @@ impl Pool<'_> {
     }
 
     fn canceled(&self) -> bool {
-        self.cancel.load(Ordering::Relaxed)
+        self.cancel.load(Ordering::Relaxed) || (self.stop)()
     }
 
     fn coordinate<'s>(&'s self, scope: &'s Scope<'s, '_>) {
@@ -251,6 +261,7 @@ impl Pool<'_> {
             let permits = (self.admit)(action);
             self.stop_waiting(enlisted);
             let permits = permits?;
+            if self.canceled() { return None; }
             let result = (self.execute)(action);
             let delay = match &result {
                 Ok(stats) => {
@@ -293,6 +304,7 @@ impl Pool<'_> {
                 report.stats.b_to_a += stats.b_to_a;
                 report.stats.deleted += stats.deleted;
                 report.stats.bytes += stats.bytes;
+                report.stats.errors += stats.errors;
                 report.completed.push(action.clone());
             }
             Err(error) => {

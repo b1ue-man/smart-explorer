@@ -110,6 +110,12 @@ pub fn resolve_recorded(
     let lock = PairLock::acquire(&state.lock_id)?;
     let endpoints = super::incremental::SyncEndpoints::new(a, root_a, b, root_b);
     super::single_recorded::validate_state(endpoints, state)?;
+    let keys = super::orchestration_plan::keys(endpoints);
+    if super::merge_resume::pending_merge_relatives(&lock, state)?.iter()
+        .any(|rel| keys.key(rel) == keys.key(&conflict.rel)) {
+        return Err(io::Error::new(io::ErrorKind::WouldBlock,
+            "Dieser Pfad hat eine unbeendete Merge-Auflösung; denselben Merge erneut bestätigen"));
+    }
     if conflict.duplicates.is_none() {
         if variant_id.is_some() {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "Dieser Konflikt hat keine auswählbare Datei-ID"));

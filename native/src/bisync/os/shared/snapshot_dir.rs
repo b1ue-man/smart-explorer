@@ -10,8 +10,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use super::omissions::SyncOmissions;
-use super::paths::{join, rel_of};
-use super::snapshot::{WalkFilter, MAX_WALK_NODES, MAX_WALK_TEXT_BYTES};
+use super::snapshot::WalkFilter;
+use super::omissions::OmissionKind;
+use super::snapshot_types::DirSet;
 use super::snapshot_hash::{hash_file, md5_hex_to_u64, md5_to_u64, HashMode};
 use super::sync_overload::{under_permits, Progress};
 use super::types::{Sig, Tree};
@@ -30,6 +31,10 @@ pub(super) struct WalkContext<'a> {
     pub(super) allow_duplicate_files: bool,
     pub(super) omissions: Option<&'a Mutex<SyncOmissions>>,
     pub(super) duplicates: Option<&'a Mutex<super::snapshot_duplicates::DuplicateGroups>>,
+    pub(super) filtered: Option<&'a Mutex<Tree>>,
+    pub(super) dirs: Option<&'a Mutex<DirSet>>,
+    pub(super) opts: super::BisyncOptions,
+    pub(super) limits: super::SyncLimits,
     pub(super) nodes: AtomicU64,
     pub(super) text_bytes: AtomicU64,
     /// A remote side reads file contents (checksums) under a permit of its
@@ -44,7 +49,7 @@ pub(super) struct Listed {
     /// (rel, signature, id) of every file that passed the filters.
     pub(super) files: Vec<(String, Sig, String)>,
     /// Subfolders to walk next.
-    pub(super) dirs: Vec<String>,
+    pub(super) dirs: Vec<(String, String)>,
 }
 
 /// Checks the entries of folder `dir`. Any error fails the whole walk, so a
@@ -53,9 +58,10 @@ pub(super) struct Listed {
 pub(super) fn scan_listing(
     ctx: &WalkContext<'_>,
     dir: &str,
+    dir_rel: &str,
     entries: Vec<VfsMeta>,
 ) -> io::Result<Listed> {
-    let entries = super::snapshot_duplicates::observe(ctx, dir, entries)?;
+    let entries = super::snapshot_duplicates::observe(ctx, dir, dir_rel, entries)?;
     let mut listed = Listed {
         files: Vec::new(),
         dirs: Vec::new(),
@@ -65,7 +71,15 @@ pub(super) fn scan_listing(
         if ctx.cancel.load(Ordering::Relaxed) {
             break; // stop promptly mid-directory (esp. when hashing)
         }
-        crate::vfs::validate_child_name(&m.name)?;
+        if let Err(error) = crate::vfs::validate_child_name(&m.name) {
+            if let Some(omissions) = ctx.omissions {
+                if dir_rel.is_empty() { return Err(error); }
+                omissions.lock().unwrap_or_else(|e| e.into_inner()).record_kind(
+                    dir_rel, OmissionKind::NotRepresentable, true);
+                continue;
+            }
+            return Err(error);
+        }
         let id = m.id.clone();
         let duplicate_invalid = match child_names.get_mut(&m.name) {
             None => {
@@ -73,14 +87,14 @@ pub(super) fn scan_listing(
                 if let Some(id) = id.as_ref() {
                     ids.insert(id.clone());
                 }
-                child_names.insert(m.name.clone(), (m.is_dir || m.is_symlink, ids));
+                child_names.insert(m.name.clone(), (m.is_dir || m.is_symlink || m.special, ids));
                 false
             }
             Some((prior_non_regular, ids)) => {
                 !ctx.allow_duplicate_files
                     || *prior_non_regular
                     || m.is_dir
-                    || m.is_symlink
+                    || m.is_symlink || m.special
                     || id.as_ref().is_none_or(|id| !ids.insert(id.clone()))
             }
         };
@@ -93,47 +107,51 @@ pub(super) fn scan_listing(
                 ),
             ));
         }
-        let p = join(dir, &m.name);
-        if ctx.nodes.fetch_add(1, Ordering::Relaxed) >= MAX_WALK_NODES
-            || ctx.text_bytes.fetch_add(p.len() as u64, Ordering::Relaxed)
-                > MAX_WALK_TEXT_BYTES.saturating_sub(p.len() as u64)
+        let rel = literal_child(dir_rel, &m.name);
+        let p = crate::vfs::sync_child_path(ctx.be, dir, &m.name)?;
+        if ctx.nodes.fetch_add(1, Ordering::Relaxed) >= ctx.limits.walk_entries
+            || ctx.text_bytes.fetch_add(rel.len() as u64, Ordering::Relaxed)
+                > ctx.limits.walk_text_bytes.saturating_sub(rel.len() as u64)
         {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "sync tree exceeds its bounded collection budget",
             ));
         }
-        let rel = rel_of(&p, ctx.root);
         let excluded = (!ctx.filter.include_hidden && m.hidden)
             || ctx.filter.ignored(&rel, m.is_dir || m.is_symlink);
-        // The app trash and other apps' private storage (Android) are
-        // protected omissions like a link: never synced, their counterparts
-        // kept.
-        if m.is_symlink
-            || crate::apptrash::excluded_name(&m.name)
-            || crate::apptrash::hidden_app_folders_in(dir)
-        {
-            if let Some(omissions) = ctx.omissions {
-                omissions
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .record(&rel, !excluded);
-                continue;
+        match super::snapshot_policy::protected(ctx.be, ctx.root, &p, &m, ctx.opts.cross_mounts) {
+            Ok(Some(kind)) => { record_omission(ctx, &rel, kind, !excluded && kind.reported_by_default()); continue; }
+            Err(error) => {
+                if let Some(reason) = crate::vfs::omission_reason(&error) {
+                    record_omission(ctx, &rel, reason.into(), !excluded); continue;
+                }
+                return Err(error);
             }
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("link-like sync source requires a protected snapshot: {p}"),
-            ));
+            Ok(None) => {}
         }
-        if excluded {
+        if excluded || (!m.is_dir && !ctx.filter.size_age_ok(m.size, m.mtime_ms)) {
+            if m.is_dir { record_omission(ctx, &rel, OmissionKind::Filtered, false); }
+            else if let Some(filtered) = ctx.filtered {
+                filtered.lock().unwrap_or_else(|e| e.into_inner()).insert(rel,
+                    Sig { size: m.size, mtime_ms: m.mtime_ms, hash: 0 });
+            }
             continue;
         }
         if m.is_dir {
-            if !m.is_symlink {
-                listed.dirs.push(p);
-            }
-        } else if ctx.filter.size_age_ok(m.size, m.mtime_ms) {
-            let hash = signature_hash(ctx, &m, &rel, &p)?;
+            if let Some(dirs) = ctx.dirs { dirs.lock().unwrap_or_else(|e| e.into_inner()).insert(rel.clone()); }
+            listed.dirs.push((p, rel));
+        } else {
+            let hash = match signature_hash(ctx, &m, &rel, &p) {
+                Ok(hash) => hash,
+                Err(error) => {
+                    if error.kind() == io::ErrorKind::Interrupted { return Err(error); }
+                    let kind = crate::vfs::omission_reason(&error).map(OmissionKind::from)
+                        .unwrap_or(OmissionKind::Unreadable);
+                    record_omission(ctx, &rel, kind, true);
+                    continue;
+                }
+            };
             listed.files.push((
                 rel,
                 Sig {
@@ -156,7 +174,7 @@ pub(super) fn scan_listing(
 ///  3. read the file to hash it (Full only — a cheap local read, or an
 ///     explicit Checksum-mode remote download).
 fn signature_hash(ctx: &WalkContext<'_>, m: &VfsMeta, rel: &str, p: &str) -> io::Result<u64> {
-    let native = m.content_md5.as_deref().map(md5_hex_to_u64);
+    let native = m.content_md5.as_deref().map(md5_hex_to_u64).filter(|hash| *hash != 0);
     match ctx.hash {
         HashMode::None => Ok(0),
         HashMode::NativeOnly => Ok(native.unwrap_or(0)),
@@ -171,12 +189,12 @@ fn signature_hash(ctx: &WalkContext<'_>, m: &VfsMeta, rel: &str, p: &str) -> io:
                 .map(|sig| sig.hash);
             match reused {
                 Some(hash) => Ok(hash),
-                None => content_hash(ctx, p)
+                None => content_hash(ctx, p, m)
                     .map_err(|error| io::Error::new(error.kind(), format!("hash {p}: {error}"))),
             }
         }
         HashMode::FullFresh => match native.unwrap_or(0) {
-            0 => content_hash(ctx, p).map_err(|error| {
+            0 => content_hash(ctx, p, m).map_err(|error| {
                 io::Error::new(error.kind(), format!("fresh checksum {p}: {error}"))
             }),
             hash => Ok(hash),
@@ -187,17 +205,20 @@ fn signature_hash(ctx: &WalkContext<'_>, m: &VfsMeta, rel: &str, p: &str) -> io:
 /// Reads one file to hash it: locally as before, on a remote side under a
 /// permit of its flow, reporting the streamed bytes to it and reading again
 /// after overload.
-fn content_hash(ctx: &WalkContext<'_>, path: &str) -> io::Result<u64> {
-    let Some((flow, job)) = &ctx.reads else {
-        return hash_file(ctx.be, path, ctx.cancel);
-    };
-    under_permits(
-        ctx.cancel,
-        &ctx.progress,
-        || flow.acquire_for(*job, ctx.cancel),
-        |permit| hash_streamed(ctx.be, path, ctx.cancel, &|bytes| permit.progress(bytes)),
-    )
-    .unwrap_or_else(|| Err(canceled()))
+fn content_hash(ctx: &WalkContext<'_>, path: &str, listed: &VfsMeta) -> io::Result<u64> {
+    let expected = Sig { size: listed.size, mtime_ms: listed.mtime_ms, hash: 0 };
+    let observed = super::apply_guard::capture(ctx.be, path,
+        super::apply_guard::ExpectedFile::Present(expected), "listed checksum file")?;
+    if observed.regular("listed checksum file")?.id != listed.id {
+        return Err(super::apply_guard::drift("listed checksum file identity changed"));
+    }
+    let result = if let Some((flow, job)) = &ctx.reads {
+        under_permits(ctx.cancel, &ctx.progress, || flow.acquire_for(*job, ctx.cancel),
+            |permit| hash_streamed(ctx.be, path, ctx.cancel, &|bytes| permit.progress(bytes)))
+            .unwrap_or_else(|| Err(canceled()))?
+    } else { hash_file(ctx.be, path, ctx.cancel)? };
+    super::apply_guard::revalidate(ctx.be, path, &observed, "listed checksum file")?;
+    Ok(result)
 }
 
 fn hash_streamed(
@@ -206,9 +227,12 @@ fn hash_streamed(
     cancel: &AtomicBool,
     progress: &dyn Fn(u64),
 ) -> io::Result<u64> {
-    let mut reader = backend.open_read(path)?;
+    let captured = super::apply_guard::capture(backend, path, super::apply_guard::ExpectedFile::Unknown, "checksum file")?;
+    let meta = captured.regular("checksum file")?;
+    let mut reader = crate::vfs::open_read_regular(backend, path, meta.id.as_deref())?;
     let mut context = md5::Context::new();
     let mut buffer = vec![0u8; HASH_BUFFER];
+    let mut length = 0u64;
     loop {
         if cancel.load(Ordering::Relaxed) {
             return Err(canceled());
@@ -217,12 +241,25 @@ fn hash_streamed(
         if read == 0 {
             break;
         }
+        length = length.saturating_add(read as u64);
         context.consume(&buffer[..read]);
         progress(read as u64);
     }
+    if length != meta.size { return Err(super::apply_guard::drift("checksum stream length changed")); }
+    super::apply_guard::revalidate(backend, path, &captured, "checksum file")?;
     Ok(md5_to_u64(&context.compute().0))
 }
 
 fn canceled() -> io::Error {
     io::Error::new(io::ErrorKind::Interrupted, "checksum walk canceled")
+}
+
+pub(super) fn record_omission(ctx: &WalkContext<'_>, rel: &str, kind: OmissionKind, reported: bool) {
+    if let Some(omissions) = ctx.omissions {
+        omissions.lock().unwrap_or_else(|e| e.into_inner()).record_kind(rel, kind, reported);
+    }
+}
+
+pub(super) fn literal_child(parent: &str, name: &str) -> String {
+    if parent.is_empty() { name.to_string() } else { format!("{parent}/{name}") }
 }

@@ -4,7 +4,7 @@
 //! (errors, omissions, budget, queues). Permits are always taken last and
 //! released before any wait on the queues or a backoff (plan rule K2).
 use super::imp::record_error;
-use super::sync_copy::{copy_stream, CopyError};
+use super::sync_copy::{copy_stream_scoped, CopyError};
 use super::sync_pass::{Pass, WAIT_SLICE};
 use super::sync_scan::{decide, Decision, DirTask, FileTask};
 use crate::bisync::sync_flows::PairSide;
@@ -60,6 +60,7 @@ impl Pass<'_> {
             let Some(permits) = permits else {
                 return;
             };
+            if self.canceled() { permits.finish(OpOutcome::Done); return; }
             let streamed = Cell::new(0u64);
             let on_block = |bytes: u64| {
                 permits.progress(bytes);
@@ -95,6 +96,12 @@ impl Pass<'_> {
         task: &FileTask,
         on_block: &dyn Fn(u64),
     ) -> Result<Finished, CopyError> {
+        if self.canceled() {
+            return Err(CopyError { error: io::Error::new(io::ErrorKind::Interrupted, "mirror stopped"), publishing: false });
+        }
+        crate::bisync::apply_boundary::guard(self.src, self.src_root, &task.rel, false)
+            .and_then(|()| crate::bisync::apply_boundary::guard(self.dst, self.dst_root, &task.target_rel, false))
+            .map_err(|error| CopyError { error, publishing: false })?;
         let confirmed: Option<VfsMeta>;
         let expected = if task.confirm {
             let found = match self.dst.stat(&task.destination) {
@@ -118,17 +125,9 @@ impl Pass<'_> {
         } else {
             task.expected.as_ref()
         };
-        copy_stream(
-            self.src,
-            &task.source,
-            &task.meta,
-            self.dst,
-            &task.destination,
-            expected,
-            self.guard_parent,
-            self.cancel,
-            on_block,
-        )
+        copy_stream_scoped(self.src, self.src_root, &task.source, &task.rel, &task.meta,
+            self.dst, self.dst_root, &task.destination, &task.target_rel, expected,
+            self.versions, self.cancel, on_block)
         .map(Finished::Copied)
     }
 
@@ -153,12 +152,17 @@ impl Pass<'_> {
                 task.destination.as_str(),
                 message,
             ),
-            Err(failure) => record_error(
-                &mut state.report.stats,
-                &mut state.report.errors,
-                task.source.as_str(),
-                failure.error.to_string(),
-            ),
+            Err(failure) => {
+                if let Some(kind) = crate::bisync::apply_boundary::omitted(&failure.error) {
+                    state.report.omissions.record_kind(&task.rel, kind, kind.reported_by_default());
+                } else if crate::bisync::apply_boundary::deferred(&failure.error) {
+                    state.report.omissions.record_kind(&task.rel, crate::bisync::OmissionKind::Unreadable, true);
+                } else if failure.error.kind() != io::ErrorKind::Interrupted || !self.cancel.load(Ordering::Acquire) {
+                    if terminal(&failure.error) { self.stopped.store(true, Ordering::Release); }
+                    record_error(&mut state.report.stats, &mut state.report.errors,
+                        task.destination.as_str(), failure.error.to_string());
+                }
+            },
         }
     }
 
@@ -193,6 +197,15 @@ impl Pass<'_> {
             path,
             message,
         );
+    }
+
+    pub(super) fn io_error(&self, path: impl Into<String>, error: io::Error) {
+        if terminal(&error) { self.stopped.store(true, Ordering::Release); self.changed.notify_all(); }
+        if error.kind() == io::ErrorKind::Interrupted && self.canceled() { return; }
+        self.error(path, error.to_string());
+    }
+    pub(super) fn omit_kind(&self, rel: &str, kind: crate::bisync::OmissionKind) {
+        self.lock().report.omissions.record_kind(rel, kind, kind.reported_by_default());
     }
 
     /// A protected omission (link, junction, app trash): reported, never
@@ -269,4 +282,11 @@ impl Pass<'_> {
         self.changed.notify_all();
         open
     }
+}
+
+fn terminal(error: &io::Error) -> bool {
+    crate::vfs::is_target_refusal(error) || matches!(error.kind(),
+        io::ErrorKind::ConnectionRefused | io::ErrorKind::ConnectionReset | io::ErrorKind::ConnectionAborted
+        | io::ErrorKind::NotConnected | io::ErrorKind::BrokenPipe | io::ErrorKind::HostUnreachable
+        | io::ErrorKind::NetworkUnreachable | io::ErrorKind::NetworkDown | io::ErrorKind::TimedOut)
 }

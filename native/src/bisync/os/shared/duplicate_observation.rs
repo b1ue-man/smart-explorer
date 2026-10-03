@@ -20,20 +20,24 @@ pub(super) fn changed() -> io::Error {
 }
 
 pub(super) fn metadata(backend: &dyn Backend, path: &str) -> io::Result<Vec<VfsMeta>> {
-    let parent = parent_of(path).unwrap_or_default();
     let name = path.rsplit('/').next().unwrap_or(path);
+    metadata_named(backend, path, name)
+}
+
+pub(super) fn metadata_named(backend: &dyn Backend, path: &str, literal_name: &str) -> io::Result<Vec<VfsMeta>> {
+    let parent = parent_of(path).unwrap_or_default();
     backend.invalidate_cache();
     match backend.stat(&parent) {
-        Ok(meta) if meta.is_dir && !meta.is_symlink => {}
+        Ok(meta) if meta.is_dir && !meta.is_symlink && !meta.special => {}
         Ok(_) => return Err(changed()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => return Err(error),
     }
     let mut ids = HashSet::new();
     let mut entries: Vec<_> = backend.list_dir_for_sync(&parent)?.into_iter()
-        .filter(|meta| meta.name == name).collect();
+        .filter(|meta| meta.name == literal_name).collect();
     for meta in &entries {
-        if meta.is_dir || meta.is_symlink
+        if meta.is_dir || meta.is_symlink || meta.special
             || (entries.len() > 1 && meta.id.as_deref().is_none_or(|id| id.is_empty()))
             || meta.id.as_ref().is_some_and(|id| !ids.insert(id)) {
             return Err(changed());
@@ -46,13 +50,20 @@ pub(super) fn metadata(backend: &dyn Backend, path: &str) -> io::Result<Vec<VfsM
 fn same_metadata(a: &VfsMeta, b: &VfsMeta) -> bool {
     a.id == b.id && a.size == b.size && a.mtime_ms == b.mtime_ms
         && a.content_md5 == b.content_md5 && a.is_dir == b.is_dir && a.is_symlink == b.is_symlink
+        && a.special == b.special
 }
 
 pub(super) fn observe(
     backend: &dyn Backend, path: &str, expected: Option<&[VfsMeta]>, cancel: &AtomicBool,
 ) -> io::Result<Vec<FileVariant>> {
+    observe_named(backend, path, path.rsplit('/').next().unwrap_or(path), expected, cancel)
+}
+
+pub(super) fn observe_named(
+    backend: &dyn Backend, path: &str, literal_name: &str, expected: Option<&[VfsMeta]>, cancel: &AtomicBool,
+) -> io::Result<Vec<FileVariant>> {
     check_cancel(cancel)?;
-    let entries = metadata(backend, path)?;
+    let entries = metadata_named(backend, path, literal_name)?;
     if let Some(expected) = expected {
         if entries.len() != expected.len()
             || entries.iter().any(|m| !expected.iter().any(|e| same_metadata(e, m))) {
@@ -74,7 +85,7 @@ pub(super) fn observe(
             content_md5,
         });
     }
-    let after = metadata(backend, path)?;
+    let after = metadata_named(backend, path, literal_name)?;
     if after.len() != entries.len() || entries.iter().zip(&after).any(|(a, b)| !same_metadata(a, b)) {
         return Err(changed());
     }
@@ -87,12 +98,17 @@ pub(super) fn verify(
     if observe(backend, path, None, cancel)? == expected { Ok(()) } else { Err(changed()) }
 }
 
+pub(super) fn verify_named(backend: &dyn Backend, path: &str, literal_name: &str,
+    expected: &[FileVariant], cancel: &AtomicBool) -> io::Result<()> {
+    if observe_named(backend, path, literal_name, None, cancel)? == expected { Ok(()) } else { Err(changed()) }
+}
+
 pub(super) fn read_content(
     backend: &dyn Backend, path: &str, id: Option<&str>, writer: &mut dyn Write,
     cancel: &AtomicBool,
     throttle: Option<&super::types::Throttle>,
 ) -> io::Result<(u64, String)> {
-    let mut reader = backend.open_read_id(path, id)?;
+    let mut reader = crate::vfs::open_read_regular(backend, path, id)?;
     let mut hash = md5::Context::new();
     let mut bytes = 0u64;
     let mut buffer = vec![0u8; 256 * 1024];

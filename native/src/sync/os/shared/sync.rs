@@ -9,8 +9,8 @@
 //!    (mirror mode). Off by default — the safe one-way is copy/update only.
 //!  * `dry_run` reports what would change without writing.
 //!
-//! Streaming copy goes through `open_read`/`open_write` + an explicit `flush`
-//! so remote writers (FTP/WebDAV buffer-then-PUT) surface upload errors.
+//! Transfers use exclusive stages, byte-bound signatures and durable version
+//! backups before replacements; the pair lock is shared with bisync.
 //!
 //! The copy pass lists and copies in parallel, as fast as the flows of both
 //! connections allow (`sync_pass`); each destination folder is listed once
@@ -21,7 +21,7 @@
 // the engine's stable API for a richer sync UI later.
 #![allow(dead_code)]
 
-use super::sync_pass::{copy_pass, Report};
+use super::sync_pass::{copy_pass_scoped, Report};
 use super::sync_scan::Target;
 use crate::bisync::SyncOmissions;
 use crate::vfs::{Backend, BackendHandle};
@@ -32,14 +32,18 @@ use std::sync::Arc;
 use std::time::Instant;
 
 const MAX_REPORTED_ERRORS: usize = 100;
-const MAX_WALK_NODES: u64 = 1_000_000;
-const MAX_WALK_TEXT_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_WALK_DEPTH: usize = 512;
 
-#[derive(Default)]
 pub(super) struct WalkBudget {
+    limits: crate::bisync::SyncLimits,
     nodes: u64,
     text_bytes: u64,
+}
+
+impl Default for WalkBudget {
+    fn default() -> Self {
+        Self { limits: crate::bisync::SyncLimits::for_memory(crate::transfer::physical_memory()), nodes: 0, text_bytes: 0 }
+    }
 }
 
 impl WalkBudget {
@@ -49,11 +53,11 @@ impl WalkBudget {
         }
         self.nodes = self.nodes.saturating_add(1);
         self.text_bytes = self.text_bytes.saturating_add(path.len() as u64);
-        if self.nodes > MAX_WALK_NODES {
-            return Err(format!("sync tree exceeds {MAX_WALK_NODES} entries"));
+        if self.nodes > self.limits.walk_entries {
+            return Err(format!("sync tree exceeds {} entries", self.limits.walk_entries));
         }
-        if self.text_bytes > MAX_WALK_TEXT_BYTES {
-            return Err("sync path data exceeds 128 MiB".to_string());
+        if self.text_bytes > self.limits.walk_text_bytes {
+            return Err(format!("sync relative-path data exceeds {} bytes", self.limits.walk_text_bytes));
         }
         Ok(())
     }
@@ -89,6 +93,15 @@ pub enum SyncMsg {
 
 pub struct SyncHandle {
     pub cancel: Arc<AtomicBool>,
+    worker: Option<std::thread::JoinHandle<()>>,
+}
+
+impl SyncHandle {
+    /// Transfer ownership for a caller's bounded completion wait. Dropping
+    /// an unclaimed handle keeps the existing detached-worker behavior.
+    pub fn take_worker(&mut self) -> Option<std::thread::JoinHandle<()>> {
+        self.worker.take()
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -159,24 +172,28 @@ pub fn start_sync(
     let cancel = Arc::new(AtomicBool::new(false));
     let c = cancel.clone();
     let spawn_errors = tx.clone();
-    if let Err(error) = std::thread::Builder::new()
+    let worker = match std::thread::Builder::new()
         .name("sync-driver".into())
         .spawn(move || run(src, src_root, dst, dst_root, opts, tx, c))
     {
-        let _ = spawn_errors.send(SyncMsg::Done(SyncResult {
-            stats: SyncStats {
-                errors: 1,
-                ..Default::default()
-            },
-            errors: vec![(
-                "sync-driver".into(),
-                format!("worker start failed: {error}"),
-            )],
-            elapsed_ms: 0,
-            omissions: SyncOmissions::default(),
-        }));
-    }
-    SyncHandle { cancel }
+        Ok(worker) => Some(worker),
+        Err(error) => {
+            let _ = spawn_errors.send(SyncMsg::Done(SyncResult {
+                stats: SyncStats {
+                    errors: 1,
+                    ..Default::default()
+                },
+                errors: vec![(
+                    "sync-driver".into(),
+                    format!("worker start failed: {error}"),
+                )],
+                elapsed_ms: 0,
+                omissions: SyncOmissions::default(),
+            }));
+            None
+        }
+    };
+    SyncHandle { cancel, worker }
 }
 
 fn run(
@@ -205,6 +222,16 @@ fn run(
         }));
         return;
     }
+
+    let run = match super::sync_run::MirrorRun::begin(&*src, &src_root, &*dst, &dst_root) {
+        Ok(run) => run,
+        Err(error) => {
+            record_error(&mut stats, &mut errors, "Sync-Sperre", error.to_string());
+            let _ = tx.send(SyncMsg::Done(SyncResult { stats, errors, omissions,
+                elapsed_ms: start.elapsed().as_millis() as u64 }));
+            return;
+        }
+    };
 
     if let Err(error) = require_plain_directory(&*src, &src_root, false) {
         record_error(
@@ -250,7 +277,7 @@ fn run(
         mut stats,
         mut errors,
         mut omissions,
-    } = copy_pass(
+    } = copy_pass_scoped(
         &*src,
         &src_root,
         &*dst,
@@ -265,6 +292,7 @@ fn run(
         },
         &tx,
         start,
+        &run.versions,
     );
 
     // ── delete pass (mirror): remove dst entries with no src counterpart ──
@@ -276,7 +304,7 @@ fn run(
             "mirror deletion skipped because the copy/source pass reported errors",
         );
     } else if opts.delete_extra && !cancel.load(Ordering::Relaxed) {
-        super::sync_delete::delete_extras(
+        super::sync_delete::delete_extras_scoped(
             &*src,
             &src_root,
             &*dst,
@@ -286,7 +314,12 @@ fn run(
             &mut stats,
             &mut errors,
             &mut omissions,
+            &run.versions,
         );
+    }
+
+    if let Err(error) = run.finish(&*dst, &dst_root, &cancel) {
+        record_error(&mut stats, &mut errors, &dst_root, format!("finish mirror versions: {error}"));
     }
 
     let _ = tx.send(SyncMsg::Done(SyncResult {
@@ -302,6 +335,9 @@ pub(super) fn require_plain_directory(
     path: &str,
     create: bool,
 ) -> io::Result<()> {
+    if crate::bisync::snapshot_policy::own_path(backend, path) {
+        return Err(crate::bisync::apply_boundary::protected(crate::bisync::OmissionKind::OwnFile));
+    }
     let metadata = match backend.stat(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound && create => {
@@ -310,7 +346,7 @@ pub(super) fn require_plain_directory(
         }
         Err(error) => return Err(error),
     };
-    if metadata.is_symlink || !metadata.is_dir {
+    if metadata.is_symlink || !metadata.is_dir || metadata.special {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("directory root is link-like or not a directory: {path}"),

@@ -113,19 +113,22 @@ pub(super) fn delete_guarded_with_progress_and_guard(
     } else {
         backend.remove_file_id(path, id)
     };
-    result.map_err(AttemptError::commit_attempted)
+    result.map_err(AttemptError::commit_attempted)?;
+    super::apply_stage::require_durable(super::apply_stage::namespace(backend, path)
+        .map_err(AttemptError::commit_attempted)?)
+        .map_err(AttemptError::commit_attempted)
 }
 
 /// Desktop: the operating system's recycle bin.
 #[cfg(not(target_os = "android"))]
-fn recycle_local(path: &str) -> io::Result<()> {
+pub(super) fn recycle_local(path: &str) -> io::Result<()> {
     trash::delete(path).map_err(|error| io::Error::other(format!("recycle failed: {error}")))
 }
 
 /// Android has no system recycle bin for arbitrary files: the app trash on the
 /// same volume. A failed move is an error, so nothing is deleted without it.
 #[cfg(target_os = "android")]
-fn recycle_local(path: &str) -> io::Result<()> {
+pub(super) fn recycle_local(path: &str) -> io::Result<()> {
     crate::apptrash::move_to_trash(Path::new(path))
         .map(|_| ())
         .map_err(|error| io::Error::new(error.kind(), format!("recycle failed: {error}")))
