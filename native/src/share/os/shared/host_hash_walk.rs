@@ -109,7 +109,10 @@ impl Walk<'_> {
             if crate::vfs::validate_child_name(&entry.name).is_err() { self.hole(&child,FsOmissionReason::Unrepresentable,"Name ist kein Share-Pfad")?; continue; }
             if entry.is_symlink { self.hole(&child,FsOmissionReason::Link,"Link-Grenze")?; continue; }
             if entry.special { self.hole(&child,FsOmissionReason::Special,"Kein regulärer Datenstrom")?; continue; }
-            let full = format!("{}/{}",path.trim_end_matches('/'),entry.name);
+            let full = match crate::vfs::sync_child_path(backend, path, &entry.name) {
+                Ok(full) => full,
+                Err(error) => { self.failed(&child, error)?; continue; }
+            };
             if entry.is_dir {
                 self.add(Ok(FsHashEntry { rel: child.clone(), is_dir:true,size:0,mtime_ms:entry.mtime_ms,digest:None }))?;
                 self.remote(backend,&full,&child,depth+1)?;
