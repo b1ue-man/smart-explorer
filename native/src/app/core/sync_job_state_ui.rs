@@ -1,6 +1,7 @@
 //! Shared cached JobState display for setup manager and landing tiles.
 use super::*;
 use crate::syncjobs::{BlockKind, ChangeDetection, JobState, Runner, SyncJob};
+use eframe::egui;
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},

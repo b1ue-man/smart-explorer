@@ -22,7 +22,7 @@ pub(crate) fn recycle(
             return Ok(RecycleOutcome::Changed);
         }
         let mut captured = directory.quarantine_regular_child(name, file)?;
-        let result = (|| {
+        let result: io::Result<RecycleOutcome> = (|| {
             if !matches(captured.file(), expected)? {
                 return Ok(RecycleOutcome::Changed);
             }
