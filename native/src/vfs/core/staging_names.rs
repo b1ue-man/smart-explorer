@@ -33,7 +33,13 @@ pub(crate) fn fit_stage_name(lead: &str, name: &str, tail: &str) -> String {
 /// stage left by a crash never becomes a user file.
 pub fn is_staging_name(name: &str) -> bool {
     is_unique_stage(name) || is_dotted_stage(name) || is_part_stage(name)
-        || is_agent_spool(name) || is_private_stage(name)
+        || is_agent_spool(name) || is_private_stage(name) || is_replacement_stage(name)
+}
+
+/// Recovery siblings are independent of the user's filename length.
+fn is_replacement_stage(name: &str) -> bool {
+    name.strip_prefix(".se-replace-")
+        .is_some_and(|nonce| nonce.len() == 16 && lower_hex(nonce))
 }
 
 /// Exclusive owner-private support-dir stages, never generic user `.tmp`.
