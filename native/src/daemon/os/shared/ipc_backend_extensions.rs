@@ -11,6 +11,14 @@ use crate::vfs::{self as vfs, BackendExtensions, ChangeNotice, ChangeSignalMode,
 use super::ipc_client::UnavailableBackend;
 
 impl BackendExtensions for UnavailableBackend {
+    fn sync_child_path(&self, parent: &str, literal_name: &str) -> VfsResult<String> {
+        vfs::sync_child_path(&*self.live_backend()?, parent, literal_name)
+    }
+
+    fn replace_staged_reversible(&self, staged: &str, destination: &str, retained: &str) -> VfsResult<bool> {
+        vfs::replace_staged_reversible(&*self.live_backend()?, staged, destination, retained)
+    }
+
     fn list_dir_tolerant(&self, path: &str) -> VfsResult<VfsListing> {
         vfs::list_dir_tolerant(&*self.live_backend()?, path)
     }
