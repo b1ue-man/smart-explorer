@@ -82,9 +82,13 @@
     "native/src/keep_awake/mod.rs",
     "native/src/lib.rs",
     "native/src/local_access/mod.rs",
+    "native/src/local_access/os/linux/create.rs",
     "native/src/local_access/os/linux/directory_handle.rs",
+    "native/src/local_access/os/linux/quarantine.rs",
+    "native/src/local_access/os/windows/create.rs",
     "native/src/local_access/os/windows/directory.rs",
     "native/src/local_access/os/windows/directory_handle.rs",
+    "native/src/local_access/os/windows/directory_identity.rs",
     "native/src/share/core/analysis_admission.rs",
     "native/src/share/core/analysis_resources.rs",
     "native/src/share/core/authorization_policy.rs",
@@ -219,6 +223,8 @@
     "native/src/daemon/os/shared/rooted_backend_io.rs",
     "native/src/daemon/os/shared/rooted_backend_paths.rs",
     "native/src/daemon/os/shared/rooted_backend_task_tests.rs",
+    "native/src/local_access/os/linux/directory_handle.rs",
+    "native/src/local_access/os/windows/directory_handle.rs",
     "native/src/share/core/authorization_policy.rs",
     "native/src/share/core/blocking.rs",
     "native/src/share/core/configuration_runtime.rs",
@@ -265,5 +271,12 @@
   "new_file_rule": "New cohesive feature files beside assigned files; record exact created paths in the block report. Never alter another block's orchestration/host/client/policy implementation.",
   "connected_surface_reason": "Authenticated request dispatch consumes the completed V2 host operations and V5 restrictions across Share core/os modules; reading their exact listed signatures is required to preserve authorization, fairness, cancellation and Legacy compatibility. No broad exploration outside this connected boundary.",
   "exec_integration_grant": "Only authenticated connection binding immediately after successful authorize_client_hello; preserve Exec registry, provider, heartbeat and job behavior.",
-  "capabilities_grant": "CapabilityQuery receives effective relation may_write and limits returned and lease write capabilities without narrowing provider/path resolution. Actual OS feature truth comes from FsHostFeatures::host owned H-ANALYSIS."
+  "capabilities_grant": "CapabilityQuery receives effective relation may_write and limits returned and lease write capabilities without narrowing provider/path resolution. Actual OS feature truth comes from FsHostFeatures::host owned H-ANALYSIS.",
+  "create_files": [
+    "native/src/local_access/os/linux/private_ancestors.rs",
+    "native/src/local_access/os/linux/remove.rs",
+    "native/src/local_access/os/windows/private_ancestors.rs",
+    "native/src/local_access/os/windows/remove.rs"
+  ],
+  "local_handle_integration_grant": "Only typed bounded child removal and physical private-root/ancestor identity API required by existing FC1/delete guard. Preserve DirectoryHandle read/Broker/consent/quarantine semantics. Add cohesive OS submodules; no other local_access/copy/vfs/creds changes. Connected boundary is required so authorization and actual mutation retain the same object. Windows quarantine.rs belongs exclusively H-TRASH-WINDOWS."
 }
