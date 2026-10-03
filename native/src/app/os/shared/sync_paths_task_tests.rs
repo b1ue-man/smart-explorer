@@ -102,6 +102,10 @@ fn sync_paths_task_split_same_paths_on_different_remotes_and_uncached_metadata()
     let (a, b) = (Location::new(Scheme::Peer), Location::new(Scheme::Peer));
     let cached: crate::vfs::BackendHandle = Arc::new(CachingBackend::new(a.backend.clone()));
     assert!(cached.list_dir(&a.root).unwrap().is_empty());
+    assert_ne!(a.backend.namespace_identity(), b.backend.namespace_identity());
+    assert_eq!(cached.state_identity(), a.backend.state_identity());
+    assert_eq!(cached.namespace_identity(), a.backend.namespace_identity());
+    assert!(Arc::ptr_eq(&crate::vfs::sync_backend(cached.clone()), &a.backend));
     std::fs::write(a.disk.join("fresh.txt"), b"fresh after browser listing").unwrap();
     app.root_path = a.root.clone();
     app.remote = Some(remote(cached, "share://direct/first"));
@@ -115,7 +119,10 @@ fn sync_paths_task_split_same_paths_on_different_remotes_and_uncached_metadata()
     app.sync_split_panes();
     assert!(app.bisync_running, "{:?}", app.error_msg);
     finish(&mut app);
-    assert_eq!(std::fs::read(b.disk.join("fresh.txt")).unwrap(), b"fresh after browser listing");
+    assert_eq!(std::fs::read(b.disk.join("fresh.txt")).unwrap_or_else(|error| {
+        panic!("split sync did not publish fresh.txt: {error}; notice={:?}; error={:?}",
+            app.notice, app.error_msg)
+    }), b"fresh after browser listing");
     assert!(crate::vfs::validate_sync_roots(&*a.backend, &a.root, &*a.backend, &a.root).is_err());
     assert!(crate::vfs::validate_sync_roots(&*a.backend, &a.root, &*a.backend, &format!("{}/sub", a.root)).is_err());
 }
@@ -131,7 +138,11 @@ fn sync_paths_task_saved_local_job_uses_worker_resolution_and_preserves_old_beha
     crate::syncjobs::upsert(&job).unwrap();
     app.sync_jobs.push(job);
     app.run_job(&id);
-    assert!(app.job_connect_rx.is_some());
+    assert!(app.bisync_running, "{:?}", app.error_msg);
+    assert!(app.desktop_run.is_some());
+    assert!(app.bisync_rx.is_some());
+    assert!(app.bisync_cancel.is_some());
+    assert_eq!(app.running_job.as_deref(), Some(id.as_str()));
     finish(&mut app);
     assert_eq!(std::fs::read(b.disk.join("local.txt")).unwrap(), b"local source");
     let root = forward(a.disk.parent().unwrap());
