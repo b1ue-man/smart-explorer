@@ -83,12 +83,55 @@ fn review_task_index_tombstones_remove_rows_and_owner_cleanup_stays_scoped() {
     }
     let mut item: ItemRecord =
         store.load_side("pair:job-first:r1", Side::A).unwrap()["file"].clone();
+    assert!(item.sig.is_some());
     item.deleted = true;
     store.save_items("pair:job-first:r1", &[item]).unwrap();
     assert!(store
         .load_side("pair:job-first:r1", Side::A)
         .unwrap()
         .is_empty());
+    let mut remaining = baseline("file");
+    remaining.get_mut("file").unwrap().0 = None;
+    assert_eq!(
+        store.load_baseline("pair:job-first:r1").unwrap(),
+        remaining
+    );
+
+    // Historic rows can keep a complete pre-delete signature. It remains
+    // validated, but neither the baseline nor ID lookup may adopt it.
+    store
+        .conn
+        .execute(
+            "INSERT INTO items(pair, side, rel, id, size, mtime_ms, hash,
+                               is_dir, deleted, updated_ms)
+             VALUES(?1, 'A', 'file', 'deleted-id', '5', 10, '9', 0, 1, 0)",
+            ["pair:job-first:r1"],
+        )
+        .unwrap();
+    let tombstones = store.load_side("pair:job-first:r1", Side::A).unwrap();
+    assert!(tombstones["file"].deleted);
+    assert_eq!(tombstones["file"].sig, None);
+    assert!(store
+        .rel_for_id("pair:job-first:r1", Side::A, "deleted-id")
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        store.load_baseline("pair:job-first:r1").unwrap(),
+        remaining
+    );
+
+    // Invalid encodings still invalidate the whole cache, even on a
+    // tombstone; no partial baseline is returned.
+    store
+        .conn
+        .execute(
+            "UPDATE items SET size = NULL
+             WHERE pair = ?1 AND side = 'A' AND rel = 'file'",
+            ["pair:job-first:r1"],
+        )
+        .unwrap();
+    assert!(store.load_side("pair:job-first:r1", Side::A).is_err());
+    assert!(store.load_baseline("pair:job-first:r1").is_err());
     store.forget_owner("job-first").unwrap();
     for id in ["pair:job-first:r1", "pair:job-first:r2"] {
         assert!(store.load_pair(id).unwrap().is_none());
