@@ -96,6 +96,7 @@ pub use access::{AccessAnswer, AccessGate};
 pub use downloads::{
     download_paths_progress, download_remote_clipboard_items, download_remote_paths_for_clipboard,
 };
+pub(crate) use edit_download::download_for_edit;
 pub(crate) use engine::{run_view, JobView, Side};
 pub(crate) use engine_names::parent_path;
 pub use external::{external_snapshots, register_external, ExternalSnapshot, ExternalTransfer};
@@ -110,9 +111,8 @@ pub use lane::{
     TransferRequest,
 };
 pub use local_stage::download_to_id;
-pub(crate) use edit_download::download_for_edit;
 pub use memory::{memory_budget, reserve_memory, try_reserve_memory, MemoryReservation};
-pub(crate) use platform::{replace_file_atomic, upload_is_link_like};
+pub(crate) use platform::{physical_memory, replace_file_atomic, upload_is_link_like};
 pub use remote_copy::copy_remote_paths_progress;
 pub use selection::{ListedEntry, SelectionListing, SelectionSource};
 pub use snapshot_download::download_clipboard_snapshot;

@@ -35,3 +35,13 @@ pub(crate) fn available_memory() -> Option<u64> {
     let kib: u64 = line.split_whitespace().nth(1)?.parse().ok()?;
     kib.checked_mul(1024)
 }
+
+/// Total physical memory (`MemTotal` on Linux and Android). Stable from run to
+/// run, unlike the available memory, so limits derived from it do not change
+/// with the momentary load (sync tree limits, RV1).
+pub(crate) fn physical_memory() -> Option<u64> {
+    let text = std::fs::read_to_string("/proc/meminfo").ok()?;
+    let line = text.lines().find(|line| line.starts_with("MemTotal:"))?;
+    let kib: u64 = line.split_whitespace().nth(1)?.parse().ok()?;
+    kib.checked_mul(1024)
+}
