@@ -13,6 +13,10 @@ use super::node::closed_idle;
 use super::node_sessions::OpenedPeerStream;
 use super::wire::{Ctrl, FsRequest, FsResponse};
 
+#[path = "peer_request_policy.rs"]
+mod policy;
+use policy::{is_retryable_read, response_matches};
+
 pub(super) const CONTROL_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(20);
 pub(super) const IDEMPOTENT_CONTROL_BUDGET: Duration = Duration::from_secs(40);
 
@@ -77,6 +81,7 @@ impl PeerBackend {
     ) -> io::Result<FsResponse> {
         let retryable = is_retryable_read(&req);
         let mut attempts = Attempts::new(if retryable { 2 } else { 1 });
+        attempts.idle_retry &= !matches!(&req, FsRequest::ReplaceStagedReversible(_));
         let operation = super::peer_fs_logging::request_label(&req);
         let started = Instant::now();
         let mut last_error = None;
@@ -120,7 +125,7 @@ impl PeerBackend {
         Err(last_error.unwrap_or_else(|| eio("Peer-Anfrage ohne Ergebnis beendet")))
     }
 
-    fn request_once(
+    pub(super) fn request_once(
         &self,
         mut opened: OpenedPeerStream,
         req: FsRequest,
@@ -171,6 +176,7 @@ impl PeerBackend {
         let operation = super::peer_fs_logging::request_label(&req);
         let started = Instant::now();
         let mut attempts = Attempts::new(1);
+        attempts.idle_retry &= !matches!(&req, FsRequest::ReplaceStagedReversible(_));
         let mut last_error = None;
         while attempts.next() {
             let endpoint = self.current_endpoint()?;
@@ -367,60 +373,6 @@ impl PeerBackend {
 fn control_attempt_deadline(overall: Instant) -> io::Result<Instant> {
     io_deadline::remaining(overall, "peer control operation")?;
     Ok(overall.min(Instant::now() + CONTROL_ATTEMPT_TIMEOUT))
-}
-
-fn is_retryable_read(request: &FsRequest) -> bool {
-    matches!(
-        request,
-        FsRequest::Capabilities { .. }
-            | FsRequest::ListDir { .. }
-            | FsRequest::Stat { .. }
-            | FsRequest::SyncChildPath { .. }
-            | FsRequest::PutBatchStatus { .. }
-    )
-}
-
-fn response_matches(request: &FsRequest, response: &FsResponse) -> bool {
-    if matches!(response, FsResponse::Err { .. }) {
-        return true;
-    }
-    match request {
-        FsRequest::Capabilities { .. } => matches!(response, FsResponse::Capabilities { .. }),
-        FsRequest::ListDir { .. } => matches!(response, FsResponse::Entries { .. }),
-        FsRequest::Stat { .. } => matches!(response, FsResponse::Meta { .. }),
-        FsRequest::SyncChildPath { .. } => matches!(response, FsResponse::ChildPath { .. }),
-        FsRequest::CopyFile { .. } => {
-            matches!(response, FsResponse::Data { .. } | FsResponse::Ok)
-        }
-        FsRequest::Rename { .. }
-        | FsRequest::RenameNoReplace { .. }
-        | FsRequest::PromoteStaged { .. }
-        | FsRequest::PromoteNoReplace { .. }
-        | FsRequest::RemoveFile { .. }
-        | FsRequest::RemoveDir { .. }
-        | FsRequest::MkdirAll { .. }
-        | FsRequest::CreateDir { .. }
-        | FsRequest::DiscardStage { .. }
-        | FsRequest::ReleaseLease => matches!(response, FsResponse::Ok),
-        FsRequest::PutBatchStatus { .. } => matches!(response, FsResponse::Batch { .. }),
-        FsRequest::Recycle(_) => matches!(response, FsResponse::Recycle { .. }),
-        FsRequest::FinishStage(_) => matches!(response, FsResponse::StageFinished { .. }),
-        FsRequest::SyncFilesystem(_) => matches!(response, FsResponse::Synced { .. }),
-        FsRequest::Read { .. }
-        | FsRequest::ReadAt { .. }
-        | FsRequest::Write { .. }
-        | FsRequest::WriteNew { .. }
-        | FsRequest::WriteDone
-        | FsRequest::WalkTree { .. }
-        | FsRequest::StorageSnapshot { .. }
-        | FsRequest::StorageAnalysis(_)
-        | FsRequest::DuplicateSearch(_)
-        | FsRequest::HashWalk(_)
-        | FsRequest::ListDirBatch(_)
-        | FsRequest::WatchExport(_)
-        | FsRequest::PutBatch { .. }
-        | FsRequest::GetBatch { .. } => false,
-    }
 }
 
 #[cfg(test)]

@@ -9,6 +9,8 @@ use super::wire::FsMeta;
 mod live;
 pub(in crate::share) use live::AccessAuthority;
 pub(in crate::share) use live::StreamGuard;
+#[path = "fs_reversible_replace.rs"]
+pub(super) mod reversible_replace;
 
 /// Filesystem routing selected after stream authorization. Stateless browsing
 /// resolves the current export table per request; a mounted stream resolves
