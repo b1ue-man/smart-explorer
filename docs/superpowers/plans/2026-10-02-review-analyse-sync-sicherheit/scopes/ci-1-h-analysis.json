@@ -1,0 +1,51 @@
+{
+  "owner": "h-analysis",
+  "read_files": [
+    "/tmp/rv1-ci-first/h-analysis.json",
+    "docs/refs/egui-close-lifecycle.md",
+    "docs/refs/local-fs-identity-durability.md",
+    "docs/refs/rv1-remote-suite.md",
+    "docs/refs/share-server-tls-auth.md",
+    "docs/superpowers/plans/2026-10-02-review-analyse-sync-sicherheit/ci-fixes.md",
+    "native/src/analytics/core/progress.rs",
+    "native/src/analytics/mod.rs",
+    "native/src/analytics/os/shared/analytics_backend.rs",
+    "native/src/analytics/os/shared/checked_recycle.rs",
+    "native/src/analytics/os/shared/reclaim/backend_duplicates.rs",
+    "native/src/analytics/os/shared/reclaim/mod.rs",
+    "native/src/analytics/os/shared/reclaim/progress.rs",
+    "native/src/analytics/os/shared/reclaim/types.rs",
+    "native/src/app/core/analytics_scan.rs",
+    "native/src/app/core/analytics_ui.rs",
+    "native/src/app/core/state.rs",
+    "native/src/app/core/storage_view_ui.rs",
+    "native/src/app/core/sync_job_state_ui.rs",
+    "native/src/app/mod.rs",
+    "native/src/app/os/shared/sync_exit_gate.rs",
+    "native/src/app/os/shared/sync_exit_gate_task_tests.rs",
+    "native/src/gdrive/core/chunk_stream.rs",
+    "native/src/local_access/mod.rs",
+    "native/src/local_access/os/shared/checked_recycle.rs",
+    "native/src/net/os/windows/uplink_install.rs",
+    "native/src/virtual_clipboard/os/remote/prefetch.rs",
+    "native/src/watch/os/windows/device.rs"
+  ],
+  "modify_files": [
+    "native/src/app/os/shared/sync_exit_gate_task_tests.rs",
+    "native/src/app/core/sync_job_state_ui.rs",
+    "native/src/analytics/os/shared/reclaim/backend_duplicates.rs",
+    "native/src/analytics/os/shared/analytics_backend.rs",
+    "native/src/analytics/os/shared/checked_recycle.rs",
+    "native/src/app/core/analytics_ui.rs",
+    "native/src/app/mod.rs"
+  ],
+  "create_files": [
+    "native/src/app/core/analytics_controls_ui.rs",
+    "docs/superpowers/plans/2026-10-02-review-analyse-sync-sicherheit/abnahme/CI-1-H-ANALYSIS.md"
+  ],
+  "read_rule": "Only existing listed paths plus own newly created files and this scope JSON; absent listed files do not grant alternative exploration.",
+  "forbidden": "All other edits/reads, broad review/exploration, new independent tests, weakening assertions or protection; builds/tests/formatters/servers/install/commits/pushes/CI/graph rebuild/release/child agents.",
+  "deliverable": "Fix only assigned concrete CI diagnostics and size violations while preserving behavior and assertions. Report files read/modified/created, decisions, acceptance symbols and unresolved out-of-scope requests, then stop.",
+  "acceptance": "Same Root-owned complete remote RV1 suite, unchanged public contracts and all selected assertions; only static self-review in worker.",
+  "connected_surface_reason": "Assigned callers, exact compiler-named definitions and their facade are one typed integration boundary; separating them would hide the required visibility/signature contract."
+}

@@ -13,6 +13,7 @@ use super::retention::compare_group;
 use super::types::{
     ContentHash, DuplicateEvidence, DuplicateGroup, HashAlgorithm, ReclaimItem, ReclaimProgress,
 };
+use crate::analytics::ReclaimPhase;
 use crate::vfs::Backend;
 
 /// One candidate and its backend hash, when the backend has one.
@@ -213,7 +214,7 @@ pub(super) fn host_report(
             }
             progress
                 .stage
-                .begin(super::types::ReclaimPhase::Walking, 0, 0);
+                .begin(ReclaimPhase::Walking, 0, 0);
             None
         }
         Ok(report) => report,

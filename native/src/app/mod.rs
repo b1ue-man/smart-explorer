@@ -4,6 +4,8 @@ mod agent_update_remote;
 mod analytics_access;
 #[path = "core/analytics_accessibility.rs"]
 mod analytics_accessibility;
+#[path = "core/analytics_controls_ui.rs"]
+mod analytics_controls_ui;
 #[path = "core/analytics_core.rs"]
 mod analytics_core;
 #[path = "core/analytics_mounts.rs"]

@@ -7,6 +7,7 @@
 //! counts stay exact. One unusable entry never costs its whole folder.
 use super::MAX_RETAINED_FILES_PER_DIRECTORY;
 use super::{AnalyticsBudget, Diagnostics, Progress, Retention, ScanOutcome, SizeNode};
+use crate::analytics::ScanPhase;
 use rayon::prelude::*;
 use std::collections::HashSet;
 use std::path::Path;
@@ -27,7 +28,7 @@ pub fn scan_backend(
         .unwrap_or(root)
         .to_string();
     let diagnostics = Diagnostics::default();
-    progress.set_phase(super::ScanPhase::Scanning, root);
+    progress.set_phase(ScanPhase::Scanning, root);
     let budget = AnalyticsBudget::for_progress(progress);
     let _ = budget.claim(Path::new(root), 0, name.len() as u64, &diagnostics);
     let threads = backend.parallelism().clamp(1, MAX_LISTERS);

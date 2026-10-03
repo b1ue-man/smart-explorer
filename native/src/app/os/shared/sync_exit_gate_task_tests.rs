@@ -3,6 +3,7 @@ use super::{App, ExitIntent, ReadyUpdate, SYNC_EXIT_WAIT};
 use crate::app::sync_preview_types::PreviewApplyResult;
 use crate::bisync::{Action, Preview};
 use crossbeam_channel::{bounded, Receiver, Sender};
+use eframe::egui;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
