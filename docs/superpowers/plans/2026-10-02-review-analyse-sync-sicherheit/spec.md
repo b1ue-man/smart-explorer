@@ -339,8 +339,9 @@ Sync-Fehlerserien stehen auf der Job-Zeile, nicht nur im Protokoll.
   Fernziele mit Server-Umbenennung; sonst bisheriger Ort.
 - Host-Analyse auf Android läuft im eingebetteten Daemon unter Energiegrenzen → Wakelock während
   Strömen, faire Zuteilung.
-- Desktop-Systemwach-Anforderung: Windows Power Request, Linux logind-Inhibitor (`systemd-inhibit`
-  als Kindprozess, ohne D-Bus-Abhängigkeit); ohne logind keine Inhibition, Hinweis im Protokoll.
+- Desktop-Systemwach-Anforderung: Windows Power Request (System + Execution) samt abgeschalteter
+  Stromdrosselung, Linux logind-Sperre über das vorhandene `zbus` (endet mit dem Prozess); ohne logind
+  keine Sperre, Hinweis im Protokoll.
 
 ## Nicht in RV1 (aufs Board)
 
