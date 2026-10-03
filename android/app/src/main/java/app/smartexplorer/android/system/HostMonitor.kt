@@ -121,10 +121,12 @@ object HostMonitor {
         registerNetworkCallback(app)
         MediaStoreSync.start(app)
         try {
-            app.getSystemService(AppOpsManager::class.java)?.startWatchingMode(
-                AppOpsManager.OPSTR_MANAGE_EXTERNAL_STORAGE, app.packageName,
-                AppOpsManager.OnOpChangedListener { _, _ -> requestPush() },
-            )
+            AppOpsManager.permissionToOp(android.Manifest.permission.MANAGE_EXTERNAL_STORAGE)?.let { operation ->
+                app.getSystemService(AppOpsManager::class.java)?.startWatchingMode(
+                    operation, app.packageName,
+                    AppOpsManager.OnOpChangedListener { _, _ -> requestPush() },
+                )
+            }
         } catch (e: RuntimeException) { Log.w(TAG, "Dateizugriffsänderungen werden periodisch geprüft", e) }
         // Each StateFlow collector runs one request at a time and skips superseded ones.
         scope.launch { pushRequests.collect { push(app, force = false) } }
