@@ -1,5 +1,3 @@
-use std::io::Write;
-
 use super::{load_pending, JournalEntry, MAX_JOURNAL_BYTES};
 
 pub(super) fn write_entry(entry: &JournalEntry) -> Result<(), String> {
@@ -11,24 +9,8 @@ pub(super) fn write_entry(entry: &JournalEntry) -> Result<(), String> {
     }
     let destination = crate::daemon::ipc_storage::exec_journal_path()
         .map_err(|error| format!("Exec-Grant journal path: {error}"))?;
-    let parent = destination
-        .parent()
-        .ok_or_else(|| "Exec-Grant journal has no parent directory".to_string())?;
-    let mut temporary = tempfile::NamedTempFile::new_in(parent)
-        .map_err(|error| format!("Exec-Grant journal temp: {error}"))?;
-    crate::daemon::ipc_storage::secure_exec_journal_temp(temporary.as_file())
-        .map_err(|error| format!("Exec-Grant journal temp security: {error}"))?;
-    temporary
-        .write_all(&encoded)
-        .and_then(|_| temporary.flush())
-        .and_then(|_| temporary.as_file().sync_all())
-        .map_err(|error| format!("Exec-Grant journal durable write: {error}"))?;
-    let (file, temporary_path) = temporary
-        .keep()
-        .map_err(|error| format!("Exec-Grant journal retain temp: {}", error.error))?;
-    drop(file);
-    crate::daemon::ipc_storage::commit_exec_journal_temp(&temporary_path, &destination)
-        .map_err(|error| format!("Exec-Grant journal commit: {error}"))?;
+    crate::support_dirs::write_private_atomic(&destination, &encoded)
+        .map_err(|error| format!("Exec-Grant journal durable private commit: {error}"))?;
     match load_pending()? {
         Some(stored) if stored == *entry => Ok(()),
         Some(_) => Err("Exec-Grant journal verification mismatch".into()),
