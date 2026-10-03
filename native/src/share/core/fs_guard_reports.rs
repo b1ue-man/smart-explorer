@@ -1,7 +1,7 @@
 //! Provider reports keep their fast path; private entries never leave Share.
 use std::{io, vec::IntoIter};
 use crate::analytics::{DuplicateReport, ScanOutcome, SizeNode};
-use super::super::fs_policy::TargetPolicy;
+use super::super::fs_host_policy::TargetPolicy;
 
 trait Node: Sized {
     fn name(&self) -> &str;

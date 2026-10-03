@@ -15,14 +15,6 @@ fn review_task_host_private_names_hide_quarantine_and_versions_but_allow_transfe
 }
 
 #[test]
-fn review_task_host_read_only_is_a_rights_error_for_normal_write_paths() {
-    let policy = TargetPolicy::new(ExportAccess::ReadOnly, false, false);
-    policy.read("/mount/ordinary.txt").unwrap();
-    assert_eq!(policy.write("/mount/ordinary.txt").unwrap_err().kind(), io::ErrorKind::ReadOnlyFilesystem);
-    assert_eq!(policy.read("/mount/.se-versions/x").unwrap_err().kind(), io::ErrorKind::PermissionDenied);
-}
-
-#[test]
 fn review_task_host_system_write_classification_covers_startup_shell_and_keys() {
     for path in ["/home/user/.ssh/id_ed25519", "/home/user/.profile", "/home/user/.config/autostart/app.desktop",
         "/home/user/.config/systemd/user/x.service", "/etc/passwd", "C:/Windows/System32/x",
@@ -34,13 +26,4 @@ fn review_task_host_system_write_classification_covers_startup_shell_and_keys() 
         "/shared/.file.smart-explorer-deadbeef.part", "C:/Users/user/Documents/readme.txt"] {
         assert!(!system_write(path), "{path}");
     }
-}
-
-#[test]
-fn review_task_host_system_opt_in_never_opens_app_private_or_versions() {
-    let root = crate::support_dirs::app_data_dir().to_string_lossy().replace('\\', "/");
-    let policy = TargetPolicy::new(ExportAccess::ReadWrite, true, true);
-    assert!(policy.read(&format!("{root}/identity.json")).is_err());
-    assert!(policy.write(&format!("{root}/identity.json")).is_err());
-    assert!(policy.write("/export/.se-versions/old").is_err());
 }

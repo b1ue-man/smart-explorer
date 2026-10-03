@@ -1,7 +1,11 @@
 //! Preserve provider operations behind the export and live session boundary.
 use std::{io::{self, Read, Write}, sync::Arc};
 use crate::vfs::{self, Backend, BackendHandle, BackendExtensions, Scheme, VfsMeta, VfsResult};
-use super::{fs_access::AccessAuthority, fs_policy::{private_name, TargetPolicy}};
+use super::{
+    fs_access::AccessAuthority,
+    fs_host_policy::TargetPolicy,
+    fs_policy::private_name,
+};
 
 #[path = "fs_guard_extensions.rs"]
 mod extensions;

@@ -29,7 +29,7 @@ pub(super) fn put_tree(destination: &GuardedBackend, src: &Path, root: &str) -> 
     let local = vfs::LocalBackend::new(&src.to_string_lossy().replace('\\', "/"));
     let physical = local.root_display();
     let source = GuardedBackend::new(std::sync::Arc::new(local),
-        super::super::fs_policy::TargetPolicy::new(super::super::export_config::ExportAccess::ReadOnly, false, true).with_root(&physical),
+        super::super::fs_host_policy::TargetPolicy::new(super::super::export_config::ExportAccess::ReadOnly, false, true).with_root(&physical),
         destination.authority.clone());
     copy_tree(&source, &physical, destination, root)
 }
