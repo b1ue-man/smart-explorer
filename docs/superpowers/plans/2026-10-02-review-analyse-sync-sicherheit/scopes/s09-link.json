@@ -22,6 +22,7 @@
     "native/src/net/core/link_facts.rs",
     "native/src/net/mod.rs",
     "native/src/share/core/core.rs",
+    "native/src/share/core/crypto.rs",
     "native/src/share/core/direct_protocol.rs",
     "native/src/share/core/direct_relation.rs",
     "native/src/share/core/endpoint_routes.rs",

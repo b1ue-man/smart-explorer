@@ -124,6 +124,7 @@
     "native/src/share/core/peer_batch_get.rs",
     "native/src/share/core/peer_batch_put.rs",
     "native/src/share/core/peer_endpoint_source.rs",
+    "native/src/share/core/peer_extensions.rs",
     "native/src/share/core/peer_fs_logging.rs",
     "native/src/share/core/peer_lease_release.rs",
     "native/src/share/core/peer_read.rs",
@@ -131,6 +132,7 @@
     "native/src/share/core/peer_storage_analysis.rs",
     "native/src/share/core/peer_storage_snapshot.rs",
     "native/src/share/core/peer_storage_snapshot_task_tests.rs",
+    "native/src/share/core/peer_stream.rs",
     "native/src/share/core/peer_telemetry.rs",
     "native/src/share/core/peer_transfer.rs",
     "native/src/share/core/peer_walk.rs",
@@ -233,6 +235,8 @@
     "native/src/share/core/fs_access.rs",
     "native/src/share/core/fs_copy.rs",
     "native/src/share/core/fs_paths.rs",
+    "native/src/share/core/fs_request.rs",
+    "native/src/share/core/fs_response.rs",
     "native/src/share/core/handshake_limits.rs",
     "native/src/share/core/io_deadline.rs",
     "native/src/share/core/keepalive.rs",
@@ -244,6 +248,10 @@
     "native/src/share/core/node_idle.rs",
     "native/src/share/core/node_sessions.rs",
     "native/src/share/core/node_wake.rs",
+    "native/src/share/core/peer_extensions.rs",
+    "native/src/share/core/peer_fs_logging.rs",
+    "native/src/share/core/peer_literal_paths.rs",
+    "native/src/share/core/peer_request.rs",
     "native/src/share/core/power.rs",
     "native/src/share/core/power_clock.rs",
     "native/src/share/core/power_hub.rs",
@@ -258,7 +266,8 @@
     "native/src/share/core/server_fs.rs",
     "native/src/share/core/server_transfer.rs",
     "native/src/share/core/session.rs",
-    "native/src/share/core/walk.rs"
+    "native/src/share/core/walk.rs",
+    "native/src/share/core/wire_capabilities.rs"
   ],
   "registrations_only": [
     "native/src/share/mod.rs",
@@ -276,7 +285,10 @@
     "native/src/local_access/os/linux/private_ancestors.rs",
     "native/src/local_access/os/linux/remove.rs",
     "native/src/local_access/os/windows/private_ancestors.rs",
-    "native/src/local_access/os/windows/remove.rs"
+    "native/src/local_access/os/windows/remove.rs",
+    "native/src/share/core/peer_literal_paths.rs"
   ],
-  "local_handle_integration_grant": "Only typed bounded child removal and physical private-root/ancestor identity API required by existing FC1/delete guard. Preserve DirectoryHandle read/Broker/consent/quarantine semantics. Add cohesive OS submodules; no other local_access/copy/vfs/creds changes. Connected boundary is required so authorization and actual mutation retain the same object. Windows quarantine.rs belongs exclusively H-TRASH-WINDOWS."
+  "local_handle_integration_grant": "Only typed bounded child removal and physical private-root/ancestor identity API required by existing FC1/delete guard. Preserve DirectoryHandle read/Broker/consent/quarantine semantics. Add cohesive OS submodules; no other local_access/copy/vfs/creds changes. Connected boundary is required so authorization and actual mutation retain the same object. Windows quarantine.rs belongs exclusively H-TRASH-WINDOWS.",
+  "literal_path_grant": "Only negotiated read-only SyncChildPath request+ChildPath response for existing Y124 provider consumer gap, host current FsAccess mapping/guards and PeerBackend sync_child_path implementation. Preserve stored locators, same lease/root, no widening of accepted split_clean syntax. Parent owns remaining common registration edits.",
+  "literal_exhaustive_grant": "Only required exhaustive match arms in peer_request response_matches/is_retryable_read and peer_fs_logging request_label for negotiated read-only SyncChildPath/ChildPath. No refactor of Peer I/O."
 }

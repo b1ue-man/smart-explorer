@@ -942,12 +942,12 @@ Nicht aufgeführte Dateien ändert nur, wer sie per Anfrage zugeteilt bekommt.
 | V-REMOTE | in Umsetzung | Provider-Erweiterungen plus bestehende Y124/Y132/Y134/Y140/Y142-Anschlüsse; keine Umdeutung gespeicherter Locators. |
 | E-APPLY | in Umsetzung | V3-Reporting/Snapshots, reversible Versionen und tatsächlich bestätigte Signaturen; E-PLAN `dd0dccf` integriert. |
 | H-DISPATCH | in Umsetzung | V2-Hostoperationen/V5-Reduktionsmenge und TLS-Relay-Anschlüsse aus den abgeschlossenen Verträgen werden verbunden; konkrete Grenzen in `integration.md`. |
-| H-TRASH-WINDOWS | geplant nach H-ANALYSIS/V-LOCAL | FA6-Rest: Windows-Fern-Papierkorb mit Record vor Capture, Handle-/Inhaltsbindung und sichtbarer Host-Wiederherstellung. Die jetzige Unsupported-Fähigkeit wird erst nach vollständigem Anschluss aktiviert; kein neues Review. |
-| S-POLICY | in Umsetzung | FC1-Konfiguration, Migration und Bedienwege, mit fertiger V5-Widerrufshistorie. |
-| S-LOCAL | in Umsetzung | FC7/B14/S60: private Erstellung, IPC-Zulassung, sichere Uplink-Grenze und LAN-Privatsphäre. |
-| D-SYNCUI | offen | |
+| H-TRASH-WINDOWS | Quellen abgeschlossen (`708b6f1`), gemeinsame Remote-Abnahme offen | Windows-Fern-Papierkorb mit Record vor Capture, Handle-/Inhaltsbindung und sichtbarer Host-Wiederherstellung vollständig angeschlossen; kein neues Review. |
+| S-POLICY | Quellen abgeschlossen (`d3cced7`), gemeinsame Remote-Abnahme offen | FC1-Konfiguration, Migration und Bedienwege, mit fertiger V5-Widerrufshistorie. Native Android-Rechtefacaden ergänzt. |
+| S-LOCAL | Quellen abgeschlossen (`0a2a39e2`), S09-LINK-Anschluss in Umsetzung | FC7/B14/S60 private Erstellung/IPC/Helper/Privatsphäre; der eigene gepinnte LAN-Kanal bleibt bis seiner Integration offen. |
+| D-SYNCUI | in Umsetzung | Desktop-Consumer für JobState, Versionen, recorded Merge/KeepBoth und Hintergrundzustände; exakter Scope gespeichert. |
 | AND-SYNC | in Umsetzung | Android verbindet echte Zustände, Storageverlust-Cancel, Probleme, Alarm/Worker und Plattformzahlen. |
-| AND-SHARE-UI | offen | |
+| AND-SHARE-UI | in Umsetzung | Voll gepinnte Native-Rechtefacaden, explizite Dialoge und zentrale API-Dokumentation. |
 | SUITE | offen | |
 
 ## Konkreter FA6-Anschluss Windows
