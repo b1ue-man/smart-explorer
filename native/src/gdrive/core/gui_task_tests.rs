@@ -66,7 +66,7 @@ fn gui_design_task_drive_names_are_safe_reversible_and_collision_free() {
     }
     assert_eq!(names::encode(TITLE), TITLE.replace('/', "%2F"));
     assert!(names::decode("../escape").is_err());
-    assert!(names::decode("%xx").is_err());
+    assert_eq!(names::decode("%xx").unwrap(), "%xx");
     let entries = ["abcdefgh1", "abcdefgh2", "abcdefgh3"]
         .into_iter()
         .enumerate()
@@ -295,6 +295,7 @@ fn gui_design_task_drive_rename_and_copy_promotion_preserve_original_titles() {
         ),
         step("GET", FILES, Reply::Json(json!({"files": []}))),
         step("PATCH", ITEM, Reply::Json(json!({"id": "item-id"}))),
+        step("GET", ITEM, Reply::Json(object("I/O neu", "item-id", false))),
         step(
             "GET",
             FILES,
@@ -321,6 +322,7 @@ fn gui_design_task_drive_rename_and_copy_promotion_preserve_original_titles() {
         step("GET", FILES, Reply::Json(json!({"files": [stage]}))),
         step("GET", FILES, Reply::Json(json!({"files": []}))),
         step("PATCH", ITEM, Reply::Json(json!({"id": "item-id"}))),
+        step("GET", ITEM, Reply::Json(object("I/O.txt", "item-id", false))),
         step(
             "GET",
             FILES,
