@@ -58,6 +58,43 @@ Am 2026-10-03 geprüft: [SSHFS-Upstream](https://github.com/libfuse/sshfs),
 FAT32-/exFAT-Mounts vor `losetup --detach` ab. Nicht-interaktives sudo wird zuerst
 geprüft. Die Entwicklungssuite verändert keine Produkt-Transportvorgabe.
 
+Der zweite Runnerlauf vom 2026-10-03 meldet fehlende exFAT-Kernelunterstützung.
+[exfat-fuse](https://github.com/relan/exfat/blob/master/fuse/mount.exfat-fuse.8)
+unterstützt `mount.exfat-fuse -o uid=N,gid=N,umask=077 DEVICE DIR`.
+Sein [Mountcode](https://github.com/relan/exfat/blob/master/fuse/main.c)
+setzt `blkdev`, `allow_other`, `default_permissions` und den tatsächlichen
+Gerätepfad als `fsname`; beliebige Subtypeoptionen werden nicht durchgereicht.
+Deshalb erkennt der OS-Adapter den realen `fuseblk`-Quellblocktyp über
+`MetadataExt::rdev`, `FileTypeExt::is_block_device` und udev `ID_FS_TYPE`
+(Syntax in [local-fs-identity-durability.md](local-fs-identity-durability.md)).
+Nur die Speicherlimits stammen vom unteren Typ; FUSE bleibt `PerFileOnly`.
+Der Einstieg hängt jeden tatsächlich erzeugten Mount vor seinem Loopgerät ab.
+
+## Öffentlicher Android-AppOps-Anschluss
+
+Am 2026-10-03 gegen [AppOpsManager](https://developer.android.com/reference/android/app/AppOpsManager#permissionToOp(java.lang.String))
+und [AOSP](https://android.googlesource.com/platform/frameworks/base/+/master/core/java/android/app/AppOpsManager.java)
+geprüft: `permissionToOp(String)` (API 23) liefert den Operationsnamen oder
+`null`. AOSP ordnet `MANAGE_EXTERNAL_STORAGE` diesem Namen zu, während seine
+direkte `OPSTR_MANAGE_EXTERNAL_STORAGE`-Konstante versteckte System-API ist.
+`startWatchingMode(String, String, OnOpChangedListener)` (API 19) beobachtet
+nur die eigene UID. Bei fehlender Zuordnung/Runtimefehler bleibt die bestehende
+periodische Rechteprüfung aktiv.
+
+## JSON-Capability-Prefix
+
+Am 2026-10-03 gegen den gepinnten
+[serde_json 1.0.150 Decoder](https://github.com/serde-rs/json/blob/v1.0.150/src/de.rs)
+und die lokale Registryquelle geprüft: `deserialize_map` ruft nach
+`Visitor::visit_map` immer `end_map` auf. Frühes `Ok` reicht deshalb bei einem
+noch folgenden Payloadfeld nicht. Ein vollständig gelesenes `Hint` wird separat
+erfasst und der Visitor gezielt abgebrochen; es gibt kein Matching eines
+Fehlertexts und kein Akzeptieren partiell gelesener Authfelder. Der Besitzer
+arbeitet nur auf `TcpStream::peek`; die Originalbytes und die abschließende
+Nachrichtenvalidierung verbleiben beim vorhandenen Clienthandler.
+
+## Cache und Formatierung des Runners
+
 Runner-APIs am 2026-10-03 gegen [setup-python](https://github.com/actions/setup-python),
 [cache restore](https://github.com/actions/cache/blob/main/restore/README.md) und
 [cache save](https://github.com/actions/cache/blob/main/save/README.md) abgeglichen.
