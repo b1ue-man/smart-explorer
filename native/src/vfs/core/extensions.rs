@@ -17,6 +17,12 @@ use super::{Backend, VfsResult, VolumeIdentity};
 /// guard access (export roots, mounts) must not hand out the extensions of
 /// the backend they wrap unchanged.
 pub trait BackendExtensions: Backend {
+    /// Older identities proven to belong to this same live connection.
+    /// Used only for a one-time import, never to equate different accounts.
+    fn previous_state_identities(&self) -> VfsResult<Vec<String>> {
+        Ok(Vec::new())
+    }
+
     /// Build a provider path for one literal sync name. Persisted locators
     /// and the parent keep their existing encoding; providers encode only
     /// the new literal component. Never decode or canonicalize the parent.

@@ -11,6 +11,10 @@ use crate::vfs::{self as vfs, BackendExtensions, ChangeNotice, ChangeSignalMode,
 use super::ipc_client::UnavailableBackend;
 
 impl BackendExtensions for UnavailableBackend {
+    fn previous_state_identities(&self) -> VfsResult<Vec<String>> {
+        vfs::previous_state_identities(&*self.live_backend()?)
+    }
+
     fn sync_child_path(&self, parent: &str, literal_name: &str) -> VfsResult<String> {
         vfs::sync_child_path(&*self.live_backend()?, parent, literal_name)
     }
