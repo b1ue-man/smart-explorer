@@ -92,6 +92,13 @@ impl UplinkRuntime {
             .unwrap_or_default()
     }
 
+    /// Only the fresh cached platform verdict; never probes on the caller's thread.
+    pub(super) fn internet_verdict_snapshot(&self) -> Option<&[u32]> {
+        self.internet_probed_at
+            .filter(|at| at.elapsed() <= INTERNET_PROBE_INTERVAL)
+            .and(self.internet_ifaces.as_deref())
+    }
+
     /// Let the platform refine DHCP knowledge before classification.
     pub(super) fn refine_facts(&mut self, facts: &mut [InterfaceFacts]) {
         self.adapter.refine_facts(facts);

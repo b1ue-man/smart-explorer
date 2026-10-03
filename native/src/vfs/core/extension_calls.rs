@@ -76,9 +76,8 @@ pub fn replace_staged_reversible<B: Backend + ?Sized>(
 ) -> VfsResult<bool> {
     let (parent, name) = retained.rsplit_once('/').unwrap_or(("", retained));
     let destination_parent = destination.rsplit_once('/').map_or("", |(parent, _)| parent);
-    let valid_nonce = name.rsplit_once(".se-replace-").is_some_and(|(base, nonce)| {
-        !base.is_empty()
-            && nonce.len() == 16
+    let valid_nonce = name.strip_prefix(".se-replace-").is_some_and(|nonce| {
+        nonce.len() == 16
             && nonce.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     });
     if parent != destination_parent || !valid_nonce || retained == staged || retained == destination {
