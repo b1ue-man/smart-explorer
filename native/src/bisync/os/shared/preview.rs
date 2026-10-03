@@ -34,12 +34,20 @@ pub fn preview(
     a: &dyn Backend, root_a: &str, b: &dyn Backend, root_b: &str,
     opts: BisyncOptions, cancel: &AtomicBool, filter: &WalkFilter,
 ) -> Preview {
+    preview_with(a, root_a, b, root_b, opts, cancel, filter, RunSettings::default())
+}
+
+/// Compare using the recorded owner and guard settings of the requesting job.
+#[allow(clippy::too_many_arguments)]
+pub fn preview_with(
+    a: &dyn Backend, root_a: &str, b: &dyn Backend, root_b: &str,
+    opts: BisyncOptions, cancel: &AtomicBool, filter: &WalkFilter, settings: RunSettings,
+) -> Preview {
     let endpoints = SyncEndpoints::new(a, root_a, b, root_b);
     let result = (|| -> io::Result<Preview> {
         crate::vfs::validate_sync_roots(a, root_a, b, root_b)?;
         let id = super::pair_lock_id(a, root_a, b, root_b);
         let _lock = super::PairLock::acquire_wait(&id, Default::default(), cancel)?;
-        let settings = RunSettings::default();
         let replicas = super::replica::identify(endpoints, &settings, false)?;
         let key = replicas.key;
         if let Some(blocked) = replicas.blocked {
