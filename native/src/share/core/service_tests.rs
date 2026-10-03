@@ -364,6 +364,7 @@ pub(super) fn test_service() -> ShareService {
         stopped: Arc::new(AtomicBool::new(false)),
         reciprocal,
         server: "127.0.0.1:0".into(),
+        profile_home: None,
         owner: true,
     }
 }

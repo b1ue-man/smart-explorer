@@ -30,6 +30,7 @@ pub struct ShareService {
     pub(super) stopped: Arc<AtomicBool>,
     pub(super) reciprocal: Arc<DirectReciprocalCoordinator>,
     pub(super) server: String,
+    pub(super) profile_home: Option<String>,
     pub(super) owner: bool,
 }
 
@@ -129,6 +130,7 @@ impl ShareService {
         target: &PeerOpenTarget,
     ) -> Result<(String, crate::vfs::BackendHandle, ShareStatus), String> {
         let endpoint = self.endpoint_for_target(target)?;
+        let legacy_confirmed = super::legacy_probe::confirm_pending(self, target, &endpoint)?;
         let label = endpoint.label.clone();
         let be = PeerBackend::new_live(
             endpoint,
@@ -137,7 +139,11 @@ impl ShareService {
             self.identity.clone(),
             self.iroh.clone(),
         );
-        be.probe_root().map_err(|e| e.to_string())?;
+        if legacy_confirmed {
+            be.current_endpoint().map_err(|error| error.to_string())?;
+        } else {
+            be.probe_root().map_err(|e| e.to_string())?;
+        }
         let status = be.transport_status();
         Ok((label, Arc::new(be), status))
     }
@@ -380,7 +386,7 @@ impl ShareService {
                         .map_err(|_| "Share-State gesperrt".to_string())?;
                     direct_peer_from_identity(&state.identity)
                 }),
-                Box::new(SystemRelationStore::new(default_home)),
+                Box::new(SystemRelationStore::new(default_home.clone())),
             );
             std::thread::Builder::new()
                 .name("share-signal".into())
@@ -411,6 +417,7 @@ impl ShareService {
             stopped,
             reciprocal,
             server,
+            profile_home: default_home,
             owner: true,
         })
     }
@@ -428,6 +435,7 @@ impl Clone for ShareService {
             stopped: self.stopped.clone(),
             reciprocal: self.reciprocal.clone(),
             server: self.server.clone(),
+            profile_home: self.profile_home.clone(),
             owner: false,
         }
     }
