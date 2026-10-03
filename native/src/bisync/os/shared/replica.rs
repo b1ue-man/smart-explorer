@@ -5,7 +5,7 @@ use std::io::{self, Read, Write};
 use serde::{Deserialize, Serialize};
 
 use super::incremental::SyncEndpoints;
-use super::paths::{join, REPLICA_MARKER_NAME};
+use super::paths::REPLICA_MARKER_NAME;
 use super::run_types::{ReplicaRef, RunBlock, RunSettings, StateKey};
 use super::state_metadata::{load_history, now_ms, PairHistory};
 use super::types::PairSide;
@@ -102,7 +102,7 @@ pub(super) fn identify(
 }
 
 fn observe(backend: &dyn Backend, root: &str) -> io::Result<(ReplicaRef, MarkerRead)> {
-    let path = join(root, REPLICA_MARKER_NAME);
+    let path = crate::vfs::sync_child_path(backend, root, REPLICA_MARKER_NAME)?;
     let status = match backend.stat(&path) {
         Ok(meta) if meta.is_dir || meta.is_symlink || meta.special || meta.size > MARKER_BYTES => {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "Sync-Markierung ist keine gültige Datei"));
@@ -148,7 +148,7 @@ fn create_marker(backend: &dyn Backend, root: &str, pair: &str) -> io::Result<Re
     getrandom::getrandom(&mut random).map_err(|error| io::Error::other(error.to_string()))?;
     let replica_id: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
     let marker = Marker { replica_id: replica_id.clone(), created_ms: now_ms(), pair_hint: pair.to_string() };
-    let path = join(root, REPLICA_MARKER_NAME);
+    let path = crate::vfs::sync_child_path(backend, root, REPLICA_MARKER_NAME)?;
     let stage = crate::vfs::unique_staging_path(backend, &path, "sync-replica")?;
     let result = (|| {
         let bytes = serde_json::to_vec(&marker).map_err(io::Error::other)?;

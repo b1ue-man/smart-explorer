@@ -154,7 +154,7 @@ pub(super) fn rollback(side: &VersionSide<'_>, original: &str, preserved: &Prese
     super::apply_stage::require_durable(super::apply_stage::namespace(side.backend, original)?)
 }
 pub(super) fn replica(backend: &dyn Backend, root: &str) -> io::Result<String> {
-    let marker = join(root, super::paths::REPLICA_MARKER_NAME);
+    let marker = crate::vfs::sync_child_path(backend, root, super::paths::REPLICA_MARKER_NAME)?;
     match backend.stat(&marker) {
         Ok(meta) if !meta.is_dir && !meta.is_symlink && !meta.special && meta.size <= 4096 => {
             use std::io::Read;

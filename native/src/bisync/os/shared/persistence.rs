@@ -33,7 +33,7 @@ pub fn pair_id_for(
     pair_id_parts([(&identity_a, root_a), (&identity_b, root_b)])
 }
 
-fn pair_id_parts(parts: [(&str, &str); 2]) -> String {
+pub(super) fn pair_id_parts(parts: [(&str, &str); 2]) -> String {
     let mut hash: u64 = 0xcbf29ce484222325;
     hash_bytes(&mut hash, b"smart-explorer/bisync-pair/v2");
     for (identity, root) in parts {

@@ -137,6 +137,13 @@ fn run_at(request: RunRequest<'_>, store_path: Option<&Path>) -> Outcome {
         Err(error) if error.kind() == std::io::ErrorKind::Interrupted => return finish(Outcome::default()),
         Err(error) => return finish(failure("Paarsperre", error)),
     };
+    let _identity_locks = match super::backend_identity_migration::migrate(&lock, endpoints, cancel) {
+        Ok(locks) => locks,
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+            return finish(Outcome { busy: true, ..Outcome::default() });
+        }
+        Err(error) => return finish(failure("Backend-Identität", error)),
+    };
     let replicas = match super::replica::identify(endpoints, &settings, !opts.dry_run) {
         Ok(replicas) => replicas,
         Err(error) => return finish(failure("Laufwerk-Erkennung", error)),
@@ -144,6 +151,11 @@ fn run_at(request: RunRequest<'_>, store_path: Option<&Path>) -> Outcome {
     let key = &replicas.key;
     if let Some(block) = replicas.blocked {
         return finish(Outcome { blocked: Some(block), state: Some(key.clone()), ..Outcome::default() });
+    }
+    if !opts.dry_run {
+        if let Err(error) = super::replacement_recovery::recover_locked(&lock, key, endpoints, opts.cross_mounts, cancel) {
+            return finish(Outcome { state: Some(key.clone()), ..failure("Replacement-Wiederanlauf", error) });
+        }
     }
     let path = match super::baseline_file(key) {
         Ok(path) => path,

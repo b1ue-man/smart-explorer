@@ -4,7 +4,6 @@ use crate::vfs::{Backend, ChangeKind, VfsMeta};
 
 use super::core::sig_eq;
 use super::incremental_collect::ResolvedChange;
-use super::paths::join;
 use super::snapshot::md5_hex_to_u64;
 use super::state_store::{ItemRecord, Side};
 use super::types::{Action, Baseline, BisyncOptions, Sig, Tree};
@@ -146,8 +145,8 @@ fn target_rel_drifted(
     // Inspect ancestors before the leaf: statting a child alone may follow a
     // junction and make a redirected target look like an unchanged plain file.
     for (end, _) in rel.match_indices('/') {
-        match target.stat(&join(root, &rel[..end])) {
-            Ok(metadata) if metadata.is_symlink || !metadata.is_dir => return true,
+        match crate::vfs::sync_path(target, root, &rel[..end]).and_then(|path| target.stat(&path)) {
+            Ok(metadata) if metadata.is_symlink || metadata.special || !metadata.is_dir => return true,
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
             Err(_) => return true,
@@ -156,12 +155,20 @@ fn target_rel_drifted(
     let expected = target_items
         .get(rel)
         .and_then(|i| (!i.deleted).then_some(i.sig).flatten());
-    let actual = match target.stat(&join(root, rel)) {
+    let actual = match crate::vfs::sync_path(target, root, rel).and_then(|path| target.stat(&path)) {
         Ok(metadata) if metadata.is_symlink || metadata.is_dir || metadata.special => return true,
         Ok(metadata) => sig_from_meta(&metadata),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(_) => return true,
     };
+    if target.has_duplicate_file_names() {
+        let entries = crate::vfs::sync_path(target, root, rel).and_then(|path|
+            super::duplicate_observation::metadata_named(target, &path, rel.rsplit('/').next().unwrap_or(rel)));
+        match entries {
+            Ok(entries) if entries.len() == usize::from(expected.is_some()) => {},
+            _ => return true,
+        }
+    }
     !sig_eq(actual, expected, &opts)
 }
 
@@ -200,7 +207,7 @@ pub(super) fn target_item_after(
     side: Side,
     ch: &ResolvedChange,
 ) -> std::io::Result<ItemRecord> {
-    let path = join(root, &ch.rel);
+    let path = crate::vfs::sync_path(target, root, &ch.rel)?;
     let meta = target.stat(&path)?;
     let sig = sig_from_meta(&meta).ok_or_else(|| {
         std::io::Error::new(
@@ -264,7 +271,7 @@ pub(super) fn collect_ids(
                 (
                     rel.clone(),
                     (
-                        be.item_id(&join(root, rel)).ok().flatten(),
+                        crate::vfs::sync_path(be, root, rel).and_then(|path| be.item_id(&path)).ok().flatten(),
                         parent_id_for(be, root, rel),
                     ),
                 )
@@ -276,6 +283,6 @@ pub(super) fn collect_ids(
 fn parent_id_for(be: &dyn Backend, root: &str, rel: &str) -> Option<String> {
     let parent_path = rel
         .rsplit_once('/')
-        .map_or_else(|| root.to_string(), |(p, _)| join(root, p));
+        .map_or_else(|| Ok(root.to_string()), |(p, _)| crate::vfs::sync_path(be, root, p)).ok()?;
     be.item_id(&parent_path).ok().flatten()
 }

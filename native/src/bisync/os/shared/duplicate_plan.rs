@@ -1,10 +1,9 @@
 use std::collections::BTreeSet;
 use std::sync::atomic::AtomicBool;
-use super::duplicate_observation::observe;
+use super::duplicate_observation::observe_named;
 use super::duplicate_types::DuplicateConflict;
 use super::incremental::SyncEndpoints;
 use super::omissions::{OmissionKind, SyncOmissions};
-use super::paths::join;
 use super::snapshot_duplicates::DuplicateGroups;
 use super::types::{BisyncOptions, Conflict, DeletePolicy, Tree};
 
@@ -28,14 +27,15 @@ pub(super) fn prepare(
     let mut conflicts = Vec::new();
     for rel in rels {
         if omissions.protects(&rel) { continue; }
+        let literal_name = rel.rsplit('/').next().unwrap_or(&rel);
         // A singleton filtered out on the other side must not be pulled back
         // into the repair by a fresh name lookup (hidden/size/age/ignore rules).
         let excluded = match (|| {
             Ok::<_, std::io::Error>(
                 (!groups_a.contains_key(&rel) && !a.contains_key(&rel)
-                    && !super::duplicate_observation::metadata(endpoints.a, &join(endpoints.root_a, &rel))?.is_empty())
+                    && !super::duplicate_observation::metadata_named(endpoints.a, &crate::vfs::sync_path(endpoints.a, endpoints.root_a, &rel)?, literal_name)?.is_empty())
                 || (!groups_b.contains_key(&rel) && !b.contains_key(&rel)
-                    && !super::duplicate_observation::metadata(endpoints.b, &join(endpoints.root_b, &rel))?.is_empty())
+                    && !super::duplicate_observation::metadata_named(endpoints.b, &crate::vfs::sync_path(endpoints.b, endpoints.root_b, &rel)?, literal_name)?.is_empty())
             )
         })() {
             Ok(excluded) => excluded,
@@ -54,9 +54,9 @@ pub(super) fn prepare(
         }
         let variants = match (|| {
             Ok::<_, std::io::Error>(DuplicateConflict {
-                a: observe(endpoints.a, &join(endpoints.root_a, &rel),
+                a: observe_named(endpoints.a, &crate::vfs::sync_path(endpoints.a, endpoints.root_a, &rel)?, literal_name,
                     groups_a.get(&rel).map(Vec::as_slice), cancel)?,
-                b: observe(endpoints.b, &join(endpoints.root_b, &rel),
+                b: observe_named(endpoints.b, &crate::vfs::sync_path(endpoints.b, endpoints.root_b, &rel)?, literal_name,
                     groups_b.get(&rel).map(Vec::as_slice), cancel)?,
             })
         })() {

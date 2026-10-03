@@ -50,8 +50,11 @@ impl Manifest {
             store, stored_path: self.data.clone(), job_id: self.job.clone() })
     }
     pub(super) fn belongs(&self, pair: &str, side: &VersionSide<'_>) -> bool {
-        self.format == 1 && self.pair == pair && self.backend == side.backend.state_identity()
-            && self.root == side.root && self.side == side.side.as_str()
+        if self.format != 1 || self.root != side.root || self.side != side.side.as_str() { return false; }
+        let backend = side.backend.state_identity();
+        (self.pair == pair && self.backend == backend)
+            || super::backend_identity_state::version_matches(pair, &self.pair, &self.backend,
+                &self.root, if side.side == PairSide::A { 0 } else { 1 }, &backend).unwrap_or(false)
     }
 }
 pub(super) fn write(backend: &dyn Backend, path: &str, manifest: &Manifest) -> io::Result<()> {

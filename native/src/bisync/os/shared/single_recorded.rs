@@ -39,6 +39,15 @@ pub(super) fn apply_one(
     if cancel.load(Ordering::Acquire) { return Err(interrupted()); }
     let rel = super::core::action_rel(action);
     crate::agent_proto::ValidatedRelativePath::parse(rel)?;
+    let keys = super::orchestration_plan::keys(endpoints);
+    let mut protected = super::SyncOmissions::new(keys.fold_case);
+    for pending in super::orchestration_plan::pending_paths(lock, key, endpoints)? {
+        protected.record_kind(&pending, super::OmissionKind::Unreadable, false);
+    }
+    if protected.protects(rel) {
+        return Err(io::Error::new(io::ErrorKind::WouldBlock,
+            "Für diesen Pfad ist ein geschützter Wiederanlauf offen; bitte den betreffenden Lauf fortsetzen"));
+    }
     let mut a = Tree::new();
     let mut b = Tree::new();
     for (side, signature, tree) in [(PairSide::A, expected.0, &mut a), (PairSide::B, expected.1, &mut b)] {
@@ -46,7 +55,6 @@ pub(super) fn apply_one(
         crate::agent_proto::ValidatedRelativePath::parse(path)?;
         if let Some(signature) = signature { tree.insert(path.to_string(), signature); }
     }
-    let keys = super::orchestration_plan::keys(endpoints);
     let mut names = super::state_spellings::load(key, keys)?;
     let history = load_history(key)?;
     let collected = CollectingSink::default();

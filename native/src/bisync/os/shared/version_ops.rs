@@ -13,12 +13,21 @@ use super::version_listing::{children, managed, legacy, Managed};
 use super::version_retention::{selected, keep_version};
 
 pub(super) fn list(pair: &str, sides: &[VersionSide<'_>], cancel: &AtomicBool) -> io::Result<Vec<VersionEntry>> {
-    super::version_listing::list(pair,sides,cancel)
+    let mut entries = Vec::new();
+    let mut paths = BTreeSet::new();
+    for member in super::backend_identity_state::family(pair)? {
+        for entry in super::version_listing::list(&member, sides, cancel)? {
+            if paths.insert((entry.side, entry.stored_path.clone())) { entries.push(entry); }
+        }
+    }
+    entries.sort_by_key(|entry| std::cmp::Reverse(entry.preserved_ms));
+    Ok(entries)
 }
 
 fn erase(backend: &dyn Backend, item: &Managed, lock: &PairLock, cancel: &AtomicBool) -> io::Result<()> {
     check(cancel)?;
-    if item.manifest.lock.is_empty() || item.manifest.lock != lock.id() {
+    if item.manifest.lock.is_empty() || !super::backend_identity_state::lock_matches(
+        &item.manifest.pair, &item.manifest.lock, lock.id())? {
         return Err(record::invalid("version belongs to another pair lock"));
     }
     // Observe both immutable records before deleting any bytes. A record
@@ -86,6 +95,13 @@ pub(super) fn remove(lock: &PairLock, pair: &str, sides: &[VersionSide<'_>], can
 }
 fn maintain(lock: &PairLock, pair: &str, sides: &[VersionSide<'_>], retention: Option<&Versioning>,
     cancel: &AtomicBool) -> io::Result<()> {
+    for member in super::backend_identity_state::family(pair)? {
+        maintain_member(lock, &member, sides, retention, cancel)?;
+    }
+    Ok(())
+}
+fn maintain_member(lock: &PairLock, pair: &str, sides: &[VersionSide<'_>], retention: Option<&Versioning>,
+    cancel: &AtomicBool) -> io::Result<()> {
     record::validate_pair(pair)?;
     for side in sides {
         let items: Vec<_> = managed(side.backend, &join(side.root, ".se-versions"), pair, VersionStore::SyncRoot, cancel)?
@@ -144,7 +160,7 @@ pub(super) fn find(pair: &str, entry: &VersionEntry, side: &VersionSide<'_>,
         record::read(side.backend, &join(&dir, "entry.json"), cancel)
             .or_else(|error| if error.kind() == io::ErrorKind::NotFound { record::read(side.backend, &join(&dir, "intent.json"), cancel) } else { Err(error) })?
     } else {
-        let root = super::persistence::versions_dir(pair);
+        let root = app_root(pair, &entry.stored_path)?;
         let root = root.to_str().ok_or_else(|| record::invalid("version path is not Unicode"))?;
         if !std::path::Path::new(&entry.stored_path).starts_with(root) { return Err(record::invalid("version is outside pair app data")); }
         let backend = LocalBackend::new(root);
@@ -154,4 +170,12 @@ pub(super) fn find(pair: &str, entry: &VersionEntry, side: &VersionSide<'_>,
         return Err(record::invalid("version identity has changed"));
     }
     Ok(manifest)
+}
+
+pub(super) fn app_root(pair: &str, stored_path: &str) -> io::Result<std::path::PathBuf> {
+    for member in super::backend_identity_state::family(pair)? {
+        let root = super::persistence::versions_dir(&member);
+        if std::path::Path::new(stored_path).starts_with(&root) { return Ok(root); }
+    }
+    Err(record::invalid("version is outside verified pair app data"))
 }

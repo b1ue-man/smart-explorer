@@ -48,6 +48,7 @@ pub fn preview_with(
         crate::vfs::validate_sync_roots(a, root_a, b, root_b)?;
         let id = super::pair_lock_id(a, root_a, b, root_b);
         let _lock = super::PairLock::acquire_wait(&id, Default::default(), cancel)?;
+        let _identity_locks = super::backend_identity_migration::migrate(&_lock, endpoints, cancel)?;
         let replicas = super::replica::identify(endpoints, &settings, false)?;
         let key = replicas.key;
         if let Some(blocked) = replicas.blocked {
@@ -64,6 +65,7 @@ pub fn preview_with(
         let mut snapshot = read_pair(endpoints, opts, cancel, filter, &base)
             .map_err(|(path, error)| io::Error::other(format!("{path}: {error}")))?;
         let empty = (snapshot.a.is_empty(), snapshot.b.is_empty());
+        super::orchestration_plan::protect_pending(&_lock, &key, endpoints, keys, &mut snapshot)?;
         let mut planning_base = base.clone();
         for conflict in &snapshot.conflicts {
             planning_base.remove(&conflict.rel);
