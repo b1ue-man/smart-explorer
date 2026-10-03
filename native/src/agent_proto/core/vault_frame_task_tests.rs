@@ -1,5 +1,9 @@
 //! M4 acceptance, selected only by the shared mount_vault_task entrypoint.
-use std::io::{self, Cursor, ErrorKind, Read, Write};
+use std::io::{self, Cursor, ErrorKind};
+
+#[path = "vault_frame_fixture.rs"]
+mod fixture;
+use fixture::{InterruptedReader, ProbeWriter};
 
 use super::super::types::{Frame, SearchSpec, WireMeta, WireNode, CHUNK};
 use super::{read_frame, write_frame, MAX_FRAME, MIN_WIRE_META_BYTES};
@@ -377,37 +381,6 @@ fn mount_vault_task_exact_64_mib_body_and_one_byte_over() {
     assert_eq!(reader.position(), 4);
 }
 
-#[derive(Default)]
-struct ProbeWriter {
-    bytes: Vec<u8>,
-    calls: usize,
-    flushes: usize,
-    chunk: Option<usize>,
-    interrupt_on: Option<usize>,
-    write_error: Option<ErrorKind>,
-    flush_error: Option<ErrorKind>,
-}
-
-impl Write for ProbeWriter {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.calls += 1;
-        if self.interrupt_on == Some(self.calls) {
-            return Err(ErrorKind::Interrupted.into());
-        }
-        if let Some(kind) = self.write_error {
-            return Err(kind.into());
-        }
-        let accepted = self.chunk.unwrap_or(bytes.len()).min(bytes.len());
-        self.bytes.extend_from_slice(&bytes[..accepted]);
-        Ok(accepted)
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.flushes += 1;
-        self.flush_error.map_or(Ok(()), |kind| Err(kind.into()))
-    }
-}
-
 #[test]
 fn mount_vault_task_framed_writer_short_interrupt_and_error_semantics() {
     let frame = Frame::Data(vec![0, 128, 255]);
@@ -452,25 +425,6 @@ fn mount_vault_task_framed_writer_short_interrupt_and_error_semantics() {
     );
     assert_eq!(flush.bytes, expected);
     assert_eq!((flush.calls, flush.flushes), (1, 1));
-}
-
-struct InterruptedReader<'a> {
-    bytes: &'a [u8],
-    calls: usize,
-}
-
-impl Read for InterruptedReader<'_> {
-    fn read(&mut self, destination: &mut [u8]) -> io::Result<usize> {
-        self.calls += 1;
-        // Before the header, midway through it, then inside the body.
-        if [1, 4, 8].contains(&self.calls) {
-            return Err(ErrorKind::Interrupted.into());
-        }
-        let length = self.bytes.len().min(destination.len()).min(1);
-        destination[..length].copy_from_slice(&self.bytes[..length]);
-        self.bytes = &self.bytes[length..];
-        Ok(length)
-    }
 }
 
 #[test]
