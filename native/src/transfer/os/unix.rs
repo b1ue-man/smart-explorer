@@ -2,7 +2,7 @@
 use std::path::{Path, PathBuf};
 
 /// Uploads never follow links: a symlink source is refused, not resolved.
-pub(crate) fn upload_is_link_like(metadata: &std::fs::Metadata) -> bool {
+pub(crate) fn upload_is_link_like(_path: &Path, metadata: &std::fs::Metadata) -> bool {
     metadata.file_type().is_symlink()
 }
 

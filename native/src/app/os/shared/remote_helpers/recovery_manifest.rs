@@ -58,7 +58,7 @@ pub(super) fn stale_temp_disposition(directory: &Path) -> StaleTempDisposition {
     let Ok(metadata) = std::fs::symlink_metadata(directory) else {
         return StaleTempDisposition::Ignore;
     };
-    if !metadata.is_dir() || crate::app::upload_is_link_like(&metadata) {
+    if !metadata.is_dir() || crate::app::upload_is_link_like(directory, &metadata) {
         return StaleTempDisposition::Ignore;
     }
     match read_session_pid(directory) {
@@ -84,7 +84,7 @@ fn preserve_marker_state(directory: &Path) -> PreserveMarkerState {
         }
         Err(_) => return PreserveMarkerState::Unsafe,
     };
-    if !metadata.is_file() || crate::app::upload_is_link_like(&metadata) {
+    if !metadata.is_file() || crate::app::upload_is_link_like(&path, &metadata) {
         return PreserveMarkerState::Unsafe;
     }
     if metadata.len() > MAX_RECOVERY_MANIFEST_BYTES {
@@ -169,7 +169,7 @@ fn session_has_payload(directory: &Path) -> bool {
         let Ok(metadata) = std::fs::symlink_metadata(&path) else {
             return true;
         };
-        if crate::app::upload_is_link_like(&metadata) {
+        if crate::app::upload_is_link_like(&path, &metadata) {
             return true;
         }
         if metadata.is_file() {
@@ -263,7 +263,7 @@ fn recovery_manifest_entry(edit: &RemoteEdit) -> io::Result<Option<RecoveryManif
 fn validate_edit_path(path: &Path, directory: bool, allow_missing: bool) -> io::Result<()> {
     match std::fs::symlink_metadata(path) {
         Ok(metadata)
-            if !crate::app::upload_is_link_like(&metadata)
+            if !crate::app::upload_is_link_like(path, &metadata)
                 && if directory { metadata.is_dir() } else { metadata.is_file() } =>
         {
             Ok(())
@@ -285,7 +285,9 @@ fn remove_current_manifest(directory: &Path) -> io::Result<()> {
     }
     let marker = directory.join(PRESERVE_MARKER);
     match std::fs::symlink_metadata(&marker) {
-        Ok(metadata) if metadata.is_file() && !crate::app::upload_is_link_like(&metadata) => {
+        Ok(metadata)
+            if metadata.is_file() && !crate::app::upload_is_link_like(&marker, &metadata) =>
+        {
             std::fs::remove_file(marker)
         }
         Ok(_) => Err(io::Error::new(
@@ -304,7 +306,7 @@ fn atomic_write_manifest(directory: &Path, contents: &[u8]) -> io::Result<()> {
     let marker = directory.join(PRESERVE_MARKER);
     match std::fs::symlink_metadata(&marker) {
         Ok(metadata) => {
-            if !metadata.is_file() || crate::app::upload_is_link_like(&metadata) {
+            if !metadata.is_file() || crate::app::upload_is_link_like(&marker, &metadata) {
                 return Err(io::Error::new(
                     io::ErrorKind::PermissionDenied,
                     "recovery manifest is not a safe regular file",
@@ -355,7 +357,9 @@ fn atomic_write_manifest(directory: &Path, contents: &[u8]) -> io::Result<()> {
 
 fn safe_session_directory_exists(directory: &Path) -> io::Result<bool> {
     match std::fs::symlink_metadata(directory) {
-        Ok(metadata) if metadata.is_dir() && !crate::app::upload_is_link_like(&metadata) => {
+        Ok(metadata)
+            if metadata.is_dir() && !crate::app::upload_is_link_like(directory, &metadata) =>
+        {
             Ok(true)
         }
         Ok(_) => Err(io::Error::new(
