@@ -375,6 +375,7 @@ fn is_retryable_read(request: &FsRequest) -> bool {
         FsRequest::Capabilities { .. }
             | FsRequest::ListDir { .. }
             | FsRequest::Stat { .. }
+            | FsRequest::SyncChildPath { .. }
             | FsRequest::PutBatchStatus { .. }
     )
 }
@@ -387,6 +388,7 @@ fn response_matches(request: &FsRequest, response: &FsResponse) -> bool {
         FsRequest::Capabilities { .. } => matches!(response, FsResponse::Capabilities { .. }),
         FsRequest::ListDir { .. } => matches!(response, FsResponse::Entries { .. }),
         FsRequest::Stat { .. } => matches!(response, FsResponse::Meta { .. }),
+        FsRequest::SyncChildPath { .. } => matches!(response, FsResponse::ChildPath { .. }),
         FsRequest::CopyFile { .. } => {
             matches!(response, FsResponse::Data { .. } | FsResponse::Ok)
         }

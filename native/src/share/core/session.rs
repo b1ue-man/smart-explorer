@@ -10,7 +10,7 @@ use super::direct_protocol::DirectPeerIdentity;
 use super::direct_reciprocal::DirectRelationMaterial;
 use super::direct_reciprocal_session::{AuthenticatedDirectSession, DirectSessionAuthorization};
 use super::direct_reciprocal_wire::DIRECT_RECIPROCAL_CAPABILITY;
-use super::fs::ShareExportConfig;
+use super::relation_rights::{RestrictionSet, SessionAuthorization};
 use super::profiles::{fingerprint_matches, ShareProfiles};
 use super::types::{DirectGrantState, PeerEndpoint, PeerPresence, ShareAuthState, ShareScope};
 use super::wire::PeerHello;
@@ -38,7 +38,19 @@ pub(super) struct PeerPrincipal {
     node_id: String,
 }
 
+/// An authenticated transport identity, shared across its Direct/Room aliases.
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub(super) struct PeerDeviceKey {
+    public_key: String,
+    node_id: String,
+}
+
 impl PeerPrincipal {
+    pub(super) fn from_exec(principal: &super::exec_types::ExecPrincipal) -> Self {
+        Self::new(&principal.relation_kind, &principal.relation_id, &principal.device_id,
+            &principal.public_key, &principal.node_id)
+    }
+
     pub(super) fn new(
         relation_kind: impl Into<String>,
         relation_id: impl Into<String>,
@@ -53,6 +65,23 @@ impl PeerPrincipal {
             public_key: public_key.into(),
             node_id: node_id.into(),
         }
+    }
+
+    pub(super) fn from_endpoint(endpoint: &PeerEndpoint) -> Self {
+        let (kind, relation_id) = relation_kind_id(endpoint);
+        Self::new(kind, relation_id, &endpoint.presence.device_id,
+            &endpoint.presence.public_key, &endpoint.presence.node_id)
+    }
+
+    pub(super) fn device_identity(&self) -> PeerDeviceKey {
+        PeerDeviceKey {
+            public_key: self.public_key.clone(),
+            node_id: self.node_id.clone(),
+        }
+    }
+
+    pub(super) fn affected_by(&self, restrictions: &RestrictionSet) -> bool {
+        restrictions.affects(&self.relation_kind, &self.relation_id, &self.public_key, &self.node_id)
     }
 
     /// Bytes of the identifying text (memory accounting of per-principal
@@ -106,7 +135,7 @@ impl IncomingSession {
     pub(super) fn authorize(
         &self,
         auth: &Arc<Mutex<ShareAuthState>>,
-    ) -> io::Result<ShareExportConfig> {
+    ) -> io::Result<SessionAuthorization> {
         let state = auth.lock().map_err(|_| eio("Share-Auth gesperrt"))?;
         self.authorize_state(&state)
     }
@@ -182,7 +211,7 @@ impl IncomingSession {
         })
     }
 
-    fn authorize_state(&self, state: &ShareAuthState) -> io::Result<ShareExportConfig> {
+    pub(super) fn authorize_state(&self, state: &ShareAuthState) -> io::Result<SessionAuthorization> {
         let hello = &self.hello;
         match hello.relation_kind.as_str() {
             "direct" if hello.relation_id == state.identity.direct_lookup_id => {
@@ -193,11 +222,7 @@ impl IncomingSession {
                     .direct_grants
                     .iter()
                     .find(|g| {
-                        g.device_id == hello.device_id
-                            && g.state == DirectGrantState::Accepted
-                            && g.public_key == hello.public_key
-                            && (g.node_id == hello.node_id
-                                || (g.node_id.is_empty() && g.public_key == hello.node_id))
+                        g.authorizes_session(&hello.device_id, &hello.public_key, &hello.node_id)
                     })
                     .ok_or_else(|| eio("Direktfreigabe nicht akzeptiert"))?;
                 if !fingerprint_matches(&grant.public_key, &grant.fingerprint) {
@@ -215,7 +240,7 @@ impl IncomingSession {
                 if !verify_hmac(&state.direct_secret, &payload, &hello.session_proof) {
                     return Err(eio("Session-Proof ungueltig"));
                 }
-                Ok(state.default_direct_exports.clone())
+                Ok(SessionAuthorization::direct(state.default_direct_exports.clone(), grant))
             }
             "room" => {
                 let room = state
@@ -226,7 +251,7 @@ impl IncomingSession {
                 let member = room
                     .members
                     .iter()
-                    .find(|m| m.device_id == hello.device_id && !m.blocked)
+                    .find(|m| m.authorizes_session(&hello.device_id, &hello.public_key, &hello.node_id))
                     .ok_or_else(|| eio("Geraet nicht im Raum"))?;
                 if member.node_id != hello.node_id || member.public_key != hello.public_key {
                     return Err(eio("Raumgeraet hat Identitaetskonflikt"));
@@ -249,7 +274,7 @@ impl IncomingSession {
                 if !verify_hmac(&secret, &payload, &hello.session_proof) {
                     return Err(eio("Session-Proof ungueltig"));
                 }
-                Ok(room.exports.clone())
+                Ok(SessionAuthorization::room(room))
             }
             _ => Err(eio("Unbekannte oder nicht autorisierte Relation")),
         }
@@ -259,6 +284,7 @@ impl IncomingSession {
 pub(super) fn endpoint_addr(
     presence: &PeerPresence,
     local_addr: &EndpointAddr,
+    options: &super::endpoint_routes::NodeTransportOptions,
 ) -> io::Result<EndpointAddr> {
     if !presence.is_current_at(now_secs()) {
         return Err(eio("Peer-Presence ist abgelaufen"));
@@ -272,15 +298,20 @@ pub(super) fn endpoint_addr(
         .filter_map(|candidate| crate::net::parse_candidate(candidate))
         .map(TransportAddr::Ip)
         .collect();
-    if let Some(relay) = parse_relay_url(&relay_url_from_endpoint(&presence.relay_url)) {
-        addrs.push(TransportAddr::Relay(relay));
+    let advertised_relay = relay_url_from_endpoint(&presence.relay_url);
+    if options.accepts_relay_url(&advertised_relay) {
+        if let Some(relay) = parse_relay_url(&advertised_relay) {
+            addrs.push(TransportAddr::Relay(relay));
+        }
     }
     // Both peers rendezvous on the configured Share relay, but an older
     // presence may contain an address alias which is only reachable from the
     // publishing host (for example, loopback versus the public name). Add only
     // our current relay aliases for the remote EndpointId; local IP addresses
     // never describe a route to the peer.
-    addrs.extend(local_addr.relay_urls().cloned().map(TransportAddr::Relay));
+    addrs.extend(local_addr.relay_urls()
+        .filter(|url| options.accepts_relay_url(url.as_str()))
+        .cloned().map(TransportAddr::Relay));
     Ok(EndpointAddr::from_parts(node, addrs))
 }
 

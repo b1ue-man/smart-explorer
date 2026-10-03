@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::io;
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::core::{eio, random_token};
 use super::fs::{self, ResolvedTarget, ShareExportConfig};
@@ -24,10 +25,16 @@ pub(super) struct PeerMountLease {
     lease_request_id: Option<String>,
     legacy_connection: usize,
     authorization_epoch: u64,
+    revoked: AtomicBool,
     backend_identity: String,
 }
 
 impl PeerMountLease {
+    pub(super) fn check_live(&self) -> io::Result<()> {
+        if self.revoked.load(Ordering::Acquire) { Err(permission_denied("Peer-Mount-Lease wurde entzogen")) }
+        else { Ok(()) }
+    }
+
     fn new(
         resolved: ResolvedMountCapabilities,
         exports: ShareExportConfig,
@@ -65,6 +72,7 @@ impl PeerMountLease {
             lease_request_id,
             legacy_connection,
             authorization_epoch,
+            revoked: AtomicBool::new(false),
             backend_identity,
         })
     }
@@ -80,7 +88,9 @@ impl PeerMountLease {
         legacy_connection: usize,
         authorization_epoch: u64,
     ) -> io::Result<()> {
-        if &self.principal != principal {
+        let _ = (current, authorization_epoch);
+        if self.revoked.load(Ordering::Acquire) { Err(permission_denied("Peer-Mount-Lease wurde entzogen")) }
+        else if &self.principal != principal {
             Err(permission_denied(
                 "Peer-Mount-Lease gehoert nicht zu dieser authentifizierten Identitaet",
             ))
@@ -88,17 +98,7 @@ impl PeerMountLease {
             Err(permission_denied(
                 "Legacy-Mount-Lease gehoert zu einer beendeten Verbindung",
             ))
-        } else if self.authorization_epoch != authorization_epoch {
-            Err(permission_denied(
-                "Freigabe-Autorisierung wurde seit dem Einbinden erneuert; Laufwerk muss neu verbunden werden",
-            ))
-        } else if &self.exports == current {
-            Ok(())
-        } else {
-            Err(permission_denied(
-                "Freigaben wurden seit dem Einbinden geaendert; Laufwerk muss neu verbunden werden",
-            ))
-        }
+        } else { Ok(()) }
     }
 
     fn same_binding(&self, other: &Self) -> bool {
@@ -117,6 +117,7 @@ impl PeerMountLease {
     }
 
     pub(super) fn resolve(&self, virtual_path: &str) -> io::Result<ResolvedTarget> {
+        self.check_live()?;
         let components = fs::split_clean(virtual_path)?;
         let relative = components
             .strip_prefix(self.virtual_components.as_slice())
@@ -135,7 +136,7 @@ impl PeerMountLease {
         } else {
             fs::join_under(&self.target.path, relative)
         };
-        Ok(target)
+        fs::guard_target(target, None)
     }
 }
 
@@ -176,8 +177,7 @@ impl PeerMountLeases {
             return Ok(None);
         };
         if lease.virtual_root != virtual_root
-            || &lease.exports != exports
-            || lease.authorization_epoch != authorization_epoch
+            || lease.revoked.load(Ordering::Acquire)
         {
             return Err(permission_denied(
                 "Mount-Anforderungs-ID wurde fuer eine andere Root- oder Policy-Bindung wiederverwendet",
@@ -214,9 +214,7 @@ impl PeerMountLeases {
             let tokens: Vec<String> = entries
                 .iter()
                 .filter(|(_, lease)| {
-                    lease.principal == candidate.principal
-                        && (lease.authorization_epoch != candidate.authorization_epoch
-                            || lease.exports != candidate.exports)
+                    lease.principal == candidate.principal && lease.revoked.load(Ordering::Acquire)
                 })
                 .map(|(token, _)| token.clone())
                 .collect();
@@ -341,13 +339,27 @@ impl PeerMountLeases {
             .collect())
     }
 
+    pub(super) fn invalidate(&self, restrictions: &super::relation_rights::RestrictionSet) -> io::Result<Vec<Arc<PeerMountLease>>> {
+        let removed = {
+            let mut entries = self.entries.lock().map_err(|_| eio("Peer-Mount-Leases gesperrt"))?;
+            let tokens: Vec<_> = entries.iter().filter(|(_, lease)| lease.principal.affected_by(restrictions))
+                .map(|(token, _)| token.clone()).collect();
+            tokens.into_iter().filter_map(|token| {
+                let lease = entries.remove(&token)?;
+                lease.revoked.store(true, Ordering::Release);
+                Some(lease)
+            }).collect::<Vec<_>>()
+        };
+        Ok(removed)
+    }
+
     pub(super) fn clear(&self) -> io::Result<()> {
         let removed: Vec<_> = self
             .entries
             .lock()
             .map_err(|_| eio("Peer-Mount-Lease-Tabelle ist gesperrt"))?
             .drain()
-            .map(|(_, lease)| lease)
+            .map(|(_, lease)| { lease.revoked.store(true, Ordering::Release); lease })
             .collect();
         drop(removed);
         Ok(())
@@ -397,7 +409,7 @@ impl MountLeaseAuthorization {
         let principal = self.session.principal();
         let authorization_epoch = self.node.filesystem_authorization_epoch();
         self.lease.authorize(
-            &current,
+            &current.exports,
             &principal,
             self.legacy_connection,
             authorization_epoch,

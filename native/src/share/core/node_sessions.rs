@@ -1,5 +1,4 @@
 use std::io;
-use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -55,9 +54,12 @@ impl ShareIrohNode {
         }
         let deadline = Instant::now() + io_deadline::PEER_OP_TIMEOUT;
         let key = session_key(endpoint);
-        let expected_epoch = self.session_epoch.load(Ordering::Acquire);
+        let generation = match self.policy.snapshot(super::session::PeerPrincipal::from_endpoint(endpoint)) {
+            Ok(generation) => generation,
+            Err(_) => return DirectReciprocalTransportResult::Transient,
+        };
         let connection =
-            match self.session_connection_until(&key, endpoint, identity, expected_epoch, deadline)
+            match self.session_connection_until(&key, endpoint, identity, &generation, deadline)
             {
                 Ok(connection) => connection,
                 Err(error) => return classify_repair_setup_io(&error),
@@ -149,9 +151,9 @@ impl ShareIrohNode {
     ) -> io::Result<OpenedPeerStream> {
         self.require_sharing_active()?;
         let key = session_key(endpoint);
-        let expected_epoch = self.session_epoch.load(Ordering::Acquire);
+        let generation = self.policy.snapshot(super::session::PeerPrincipal::from_endpoint(endpoint))?;
         let connection =
-            self.session_connection_until(&key, endpoint, identity, expected_epoch, deadline)?;
+            self.session_connection_until(&key, endpoint, identity, &generation, deadline)?;
         match self.open_on_connection(&key, &connection, deadline, "peer stream open") {
             Ok(stream) => Ok(stream),
             Err(_) => {
@@ -162,7 +164,7 @@ impl ShareIrohNode {
                     &key,
                     endpoint,
                     identity,
-                    expected_epoch,
+                    &generation,
                     deadline,
                 )?;
                 self.open_on_connection(&key, &replacement, deadline, "peer stream reopen")
@@ -239,9 +241,10 @@ impl ShareIrohNode {
         key: &str,
         endpoint: &PeerEndpoint,
         identity: &ShareIdentity,
-        expected_epoch: u64,
+        generation: &super::node_policy::Generation,
         deadline: Instant,
     ) -> io::Result<Connection> {
+        generation.check()?;
         if let Some(connection) = self.healthy_cached_session(key)? {
             return Ok(connection);
         }
@@ -265,16 +268,13 @@ impl ShareIrohNode {
             timeout,
             async { Ok(connect_gate.lock().await) },
         ))?;
+        generation.check()?;
         if let Some(connection) = self.healthy_cached_session(key)? {
             return Ok(connection);
         }
-        if self.session_epoch.load(Ordering::Acquire) != expected_epoch {
-            return Err(eio(
-                "Share-Autorisierung wurde vor dem Verbindungsaufbau geaendert",
-            ));
-        }
+        generation.check()?;
         let connection = self.connect_session_until(endpoint, identity, deadline)?;
-        self.cache_session(key.to_string(), connection.clone(), expected_epoch)?;
+        self.cache_session(key.to_string(), connection.clone(), generation.clone())?;
         Ok(connection)
     }
 
@@ -299,20 +299,15 @@ impl ShareIrohNode {
         &self,
         key: String,
         connection: Connection,
-        expected_epoch: u64,
+        generation: super::node_policy::Generation,
     ) -> io::Result<()> {
         let mut sessions = self
             .sessions
             .lock()
             .map_err(|_| eio("Ausgehende Share-Sessions sind gesperrt"))?;
-        if self.session_epoch.load(Ordering::Acquire) != expected_epoch {
-            connection.close(
-                VarInt::from_u32(0x5345),
-                b"authorization changed during session handshake",
-            );
-            return Err(eio(
-                "Share-Autorisierung wurde waehrend des Handshakes geaendert",
-            ));
+        if let Err(error) = self.policy.bind(&connection, generation) {
+            connection.close(VarInt::from_u32(0x5345), b"authorization changed during handshake");
+            return Err(error);
         }
         sessions.insert(key, connection);
         Ok(())
@@ -330,7 +325,7 @@ impl ShareIrohNode {
             }
         }
         let local_addr = self.routes.current(&self.endpoint);
-        let addr = endpoint_addr(&endpoint.presence, &local_addr)?;
+        let addr = endpoint_addr(&endpoint.presence, &local_addr, &self.transport_options)?;
         let (kind, relation_id) = relation_kind_id(endpoint);
         // Transfer v1: this client understands `Busy` replies, so a full host
         // answers at once instead of queueing its transfers.

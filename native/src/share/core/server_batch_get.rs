@@ -38,6 +38,7 @@ pub(super) async fn serve<G: Send + 'static>(
     stall: Duration,
 ) -> io::Result<()> {
     let (events_tx, mut events) = mpsc::channel(STREAM_BUFFER_CHUNKS);
+    let live = authority.stream_access();
     let worker = crate::share::blocking::spawn_holding("Share batch download", slot, move || {
         for item in &items {
             if !serve_item(item, &authority, &events_tx) {
@@ -46,7 +47,7 @@ pub(super) async fn serve<G: Send + 'static>(
         }
         Ok(())
     });
-    let sent = forward(&mut send, &mut events, stall).await;
+    let sent = forward(&mut send, &mut events, stall, &live).await;
     // A vanished client stops the worker at its next item or chunk.
     drop(events);
     worker.join().await?;
@@ -57,9 +58,12 @@ async fn forward(
     send: &mut SendStream,
     events: &mut mpsc::Receiver<Event>,
     stall: Duration,
+    live: &FsAccess,
 ) -> io::Result<()> {
+    live.check_read()?;
     io_deadline::run_for("Share batch data", stall, reply(send, FsResponse::Ready)).await?;
     while let Some(event) = events.recv().await {
+        live.check_read()?;
         // Every frame is bounded: a client that stops reading ends the batch.
         match event {
             Event::Begin(size) => {

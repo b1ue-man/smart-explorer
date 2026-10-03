@@ -25,6 +25,10 @@ mod create;
 pub(crate) use create::secure_private_handle;
 #[path = "directory_identity.rs"]
 mod identity;
+#[path = "remove.rs"]
+mod remove;
+#[path = "private_ancestors.rs"]
+mod private_ancestors;
 
 struct PinnedDirectory {
     file: File,

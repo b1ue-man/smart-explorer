@@ -163,6 +163,8 @@ pub(crate) enum FsRequest {
     Stat {
         path: String,
     },
+    /// `literal_children_v1`: provider-encoded child of this unchanged parent.
+    SyncChildPath { parent: String, literal_name: String },
     WalkTree {
         path: String,
     },
@@ -270,6 +272,7 @@ impl FsRequest {
             | Self::ListDir { .. }
             | Self::ListDirBatch(_)
             | Self::Stat { .. }
+            | Self::SyncChildPath { .. }
             | Self::WalkTree { .. }
             | Self::StorageSnapshot { .. }
             | Self::StorageAnalysis(_)

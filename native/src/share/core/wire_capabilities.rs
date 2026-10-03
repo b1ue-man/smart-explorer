@@ -41,11 +41,13 @@ pub(crate) struct FsHostFeatures {
     /// right.
     #[serde(default, skip_serializing_if = "is_false")]
     pub(crate) export_access_v1: bool,
+    /// `SyncChildPath`: build a child from a literal listing name.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) literal_children_v1: bool,
 }
 
 impl FsHostFeatures {
-    /// What this build serves as a host. `export_access_v1` follows once the
-    /// dispatcher enforces export access (H-DISPATCH).
+    /// Features actually connected to this build's authenticated dispatcher.
     pub(crate) fn host() -> Self {
         Self {
             duplicate_search_v1: true,
@@ -56,7 +58,8 @@ impl FsHostFeatures {
             analysis_deflate_v1: true,
             analysis_reattach_v1: true,
             watch_v1: true,
-            export_access_v1: false,
+            export_access_v1: true,
+            literal_children_v1: true,
         }
     }
 
@@ -76,6 +79,7 @@ impl FsHostFeatures {
             (self.analysis_reattach_v1, "analysis_reattach_v1"),
             (self.watch_v1, "watch_v1"),
             (self.export_access_v1, "export_access_v1"),
+            (self.literal_children_v1, "literal_children_v1"),
         ]
         .into_iter()
         .filter_map(|(offered, name)| offered.then_some(name))

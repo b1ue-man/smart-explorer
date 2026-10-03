@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::io;
 use std::sync::{Arc, Mutex};
 
-use super::authorization_policy::configuration_changed;
+use super::relation_rights::authorization_restrictions;
 use super::core::{eio, now_secs};
 use super::direct_reciprocal_coordinator::{
     DirectReciprocalCoordinator, DirectRepairCandidate,
@@ -61,19 +61,8 @@ impl RuntimeConfiguration<'_> {
         )>,
     ) -> io::Result<()> {
         let transition = self.iroh.begin_runtime_transition()?;
-        let (changed, snapshot) = {
+        let (restrictions, snapshot) = {
             let mut state = self.auth.lock().map_err(|_| eio("Share-State gesperrt"))?;
-            let policy_changed = requests.as_ref().is_some_and(|(entries, tombstones)| {
-                state.direct_requests.as_slice() != entries.as_slice()
-                    || state.direct_request_tombstones.as_slice() != tombstones.as_slice()
-            });
-            let changed = policy_changed || configuration_changed(
-                &state,
-                &direct,
-                &direct_grants,
-                &rooms,
-                &default_direct_exports,
-            );
             let mut candidate = state.clone();
             candidate.direct_contacts = direct;
             candidate.direct_grants = direct_grants;
@@ -83,34 +72,30 @@ impl RuntimeConfiguration<'_> {
                 candidate.direct_requests = direct_requests;
                 candidate.direct_request_tombstones = tombstones;
             }
-            if changed {
-                let next_epoch = state
-                    .authorization_epoch
-                    .checked_add(1)
+            // The live snapshot owns replay state and immediately learned
+            // signatures. A delayed persisted profile cannot erase either.
+            super::authorization_policy::preserve_signature_facts(&state, &mut candidate);
+            let restrictions = authorization_restrictions(&state, &candidate);
+            if !restrictions.is_empty() {
+                candidate.authorization_epoch = state.authorization_epoch.checked_add(1)
                     .ok_or_else(|| eio("Share authorization epoch exhausted"))?;
-                candidate.authorization_epoch = next_epoch;
-                super::exec_grant_runtime::apply_configuration_transition(
-                    &state,
-                    &candidate,
-                    next_epoch,
-                    self.iroh.exec_registry(),
-                )?;
             }
+            super::exec_grant_runtime::apply_configuration_transition(
+                &state, &candidate, candidate.authorization_epoch, self.iroh.exec_registry(),
+            )?;
+            // The deny barrier precedes publication: a worker cannot take
+            // a new scope generation while still holding an old export table.
+            self.iroh.invalidate_restrictions_at(&restrictions, candidate.authorization_epoch)?;
             *state = candidate;
-            (changed, state.clone())
+            (restrictions, state.clone())
         };
-        let invalidation = if changed {
-            self.direct_requests_sent.clear();
-            self.iroh.invalidate_sessions().map(|_| ())
-        } else {
-            Ok(())
-        };
+        if !restrictions.is_empty() { self.direct_requests_sent.clear(); }
         drop(transition);
         if let Some(reciprocal) = self.iroh.direct_repair_coordinator() {
             reciprocal.set_current_generation(snapshot.authorization_epoch);
             schedule_snapshot(&snapshot, &reciprocal);
         }
-        invalidation
+        Ok(())
     }
 }
 

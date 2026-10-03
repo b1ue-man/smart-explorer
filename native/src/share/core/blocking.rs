@@ -6,8 +6,9 @@ use tokio::task::JoinHandle;
 
 use super::core::eio;
 
-// Control pool: short metadata operations (listing, stat, renames, removals)
-// and the tree walks. Transfers no longer draw from it; they hold their own
+// Control pool: short metadata operations (listing, stat, ordinary renames).
+// Walks, recursive removal and flush use a separate bounded fair queue.
+// Transfers hold their own
 // admission slot (`spawn_holding`), so long reads and writes never delay
 // browsing. A Share mount keeps at most eight requests live (daemon request
 // workers), so 32 serve four busy mounts or browsers at once and leave most of
@@ -72,6 +73,7 @@ where
 {
     let handle = tokio::task::spawn_blocking(move || {
         let _slot = slot;
+        let _awake = crate::keep_awake::hold(crate::keep_awake::Reason::PeerService);
         work()
     });
     BlockingTask { operation, handle }
@@ -84,6 +86,35 @@ where
     F: FnOnce() -> io::Result<T> + Send + 'static,
 {
     spawn_holding(operation, slot, work).join().await
+}
+
+/// Short interactive work and long deletion/flush work never share a queue.
+#[derive(Clone, Copy)]
+pub(super) enum Class { Control, Background }
+fn fair_slots(class: Class) -> Arc<super::fair_admission::Pool<super::session::PeerDeviceKey>> {
+    static CONTROL: OnceLock<Arc<super::fair_admission::Pool<super::session::PeerDeviceKey>>> = OnceLock::new();
+    static LONG: OnceLock<Arc<super::fair_admission::Pool<super::session::PeerDeviceKey>>> = OnceLock::new();
+    match class {
+        Class::Control => CONTROL.get_or_init(|| super::fair_admission::Pool::new(MAX_BLOCKING_OPERATIONS)).clone(),
+        Class::Background => LONG.get_or_init(|| super::fair_admission::Pool::new(
+            std::thread::available_parallelism().map_or(1, |cores| cores.get()).clamp(1, 8))).clone(),
+    }
+}
+
+pub(super) async fn run_for<T, F>(principal: super::session::PeerPrincipal, class: Class,
+    operation: &'static str, work: F) -> io::Result<T>
+where T: Send + 'static, F: FnOnce() -> io::Result<T> + Send + 'static {
+    let ticket = fair_slots(class).enqueue(principal.device_identity())?;
+    let permit = ticket.acquire().await?;
+    run_holding(operation, permit, work).await
+}
+
+pub(super) async fn spawn_for<T, F>(principal: super::session::PeerPrincipal, class: Class,
+    operation: &'static str, work: F) -> io::Result<BlockingTask<T>>
+where T: Send + 'static, F: FnOnce() -> io::Result<T> + Send + 'static {
+    let ticket = fair_slots(class).enqueue(principal.device_identity())?;
+    let permit = ticket.acquire().await?;
+    Ok(spawn_holding(operation, permit, work))
 }
 
 #[cfg(test)]

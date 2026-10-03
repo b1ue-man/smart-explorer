@@ -17,6 +17,10 @@ mod quarantine;
 pub(crate) use quarantine::QuarantinedChild;
 #[path = "create.rs"]
 mod create;
+#[path = "remove.rs"]
+mod remove;
+#[path = "private_ancestors.rs"]
+mod private_ancestors;
 
 #[derive(Clone)]
 pub(crate) struct DirectoryHandle {
