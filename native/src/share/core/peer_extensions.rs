@@ -80,6 +80,10 @@ impl BackendExtensions for PeerBackend {
         }
     }
     fn target_limits(&self, root: &str) -> TargetLimits {
+        match self.legacy_capabilities() {
+            Ok(false) => {}
+            Ok(true) | Err(_) => return TargetLimits::default(),
+        }
         match self.request(FsRequest::Capabilities {
             path: root.into(),
             acquire_lease: false,

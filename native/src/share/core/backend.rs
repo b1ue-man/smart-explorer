@@ -18,8 +18,6 @@ use super::types::{
 };
 use super::wire::{Ctrl, FsMeta, FsRequest, FsResponse};
 
-const MOUNT_CAPABILITY_PROBE_TIMEOUT: Duration = Duration::from_secs(40);
-
 pub(super) use super::framing::{reply, send_ctrl};
 pub(crate) use super::node::ShareIrohNode;
 
@@ -141,49 +139,6 @@ impl PeerBackend {
             ),
         );
         Ok(response)
-    }
-
-    pub(crate) fn probe_mount_path_capabilities(
-        &self,
-        root: &str,
-    ) -> VfsResult<crate::vfs::MountPathCapabilities> {
-        self.probe_mount_path_capabilities_until(
-            root,
-            Instant::now() + MOUNT_CAPABILITY_PROBE_TIMEOUT,
-        )
-    }
-
-    pub(crate) fn probe_mount_path_capabilities_until(
-        &self,
-        root: &str,
-        deadline: Instant,
-    ) -> VfsResult<crate::vfs::MountPathCapabilities> {
-        self.query_mount_path_capabilities(root, false, deadline)
-    }
-
-    fn query_mount_path_capabilities(
-        &self,
-        root: &str,
-        acquire_lease: bool,
-        deadline: Instant,
-    ) -> VfsResult<crate::vfs::MountPathCapabilities> {
-        if acquire_lease {
-            // A failed replacement must never leave an older root token active
-            // for a caller that asked to mount a different path.
-            self.release_current_mount_lease();
-        }
-        let response = self.request_unleased_until(
-            FsRequest::Capabilities {
-                path: root.to_string(),
-                acquire_lease,
-                lease_request_id: acquire_lease
-                    .then(|| super::core::random_token(16).map_err(eio))
-                    .transpose()?,
-            },
-            deadline,
-        )?;
-        self.mount_lease
-            .accept_capabilities(response, acquire_lease)
     }
 }
 

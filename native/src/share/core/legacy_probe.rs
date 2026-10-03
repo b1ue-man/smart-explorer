@@ -42,7 +42,7 @@ pub(super) fn confirm_pending(
         probe.identity.clone(),
         service.iroh.clone(),
     );
-    backend.probe_root().map_err(|error| error.to_string())?;
+    backend.probe_legacy_root().map_err(|error| error.to_string())?;
     super::legacy_probe_persist::persist(service, &probe)?;
     Ok(true)
 }

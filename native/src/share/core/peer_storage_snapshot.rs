@@ -22,6 +22,9 @@ pub(super) fn walk_peer(
     root: &str,
     on_progress: &(dyn Fn(u64, u64) -> bool + Sync),
 ) -> io::Result<Option<crate::agent_proto::WireNode>> {
+    if backend.legacy_capabilities()? {
+        return super::peer_walk::walk_peer(backend, root, on_progress);
+    }
     let supported = match backend.request(FsRequest::Capabilities {
         path: root.to_string(),
         acquire_lease: false,

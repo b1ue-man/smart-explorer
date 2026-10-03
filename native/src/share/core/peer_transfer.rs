@@ -100,6 +100,9 @@ impl PeerBackend {
     /// Capabilities of `/` carry the host-wide transfer features without
     /// resolving any export.
     fn probe_transfer_caps(&self) -> io::Result<FsTransferCapabilities> {
+        if self.legacy_capabilities()? {
+            return Ok(FsTransferCapabilities::default());
+        }
         let request = FsRequest::Capabilities {
             path: "/".into(),
             acquire_lease: false,
