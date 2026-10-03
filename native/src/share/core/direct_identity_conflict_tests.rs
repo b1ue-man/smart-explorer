@@ -102,6 +102,7 @@ fn explicit_accept_replaces_only_an_inactive_different_key_pin() {
 #[test]
 fn ci_remote_task_tracked_reject_preserves_legacy_denial_without_a_false_live_conflict() {
     let identity = local_identity();
+    let policy = super::DirectRequestPolicy::Ask;
     let tracked = request(REQUEST_A, 1);
     let legacy = legacy_presence(&identity, 2, "legacy-b");
     let mut profiles = ShareProfiles::default();
@@ -109,7 +110,7 @@ fn ci_remote_task_tracked_reject_preserves_legacy_denial_without_a_false_live_co
         .record_incoming_direct_request("local-lookup", tracked.clone(), 110)
         .unwrap();
     profiles
-        .record_verified_legacy_direct_request("local-lookup", &legacy, 111)
+        .record_verified_legacy_direct_request("local-lookup", &legacy, 111, policy)
         .unwrap();
     let selector = profiles.legacy_direct_requests[0].selector.clone();
 
@@ -129,11 +130,12 @@ fn ci_remote_task_tracked_reject_preserves_legacy_denial_without_a_false_live_co
 #[test]
 fn ci_remote_task_legacy_revoke_resolves_conflict_before_tracked_accept() {
     let identity = local_identity();
+    let policy = super::DirectRequestPolicy::Ask;
     let legacy = legacy_presence(&identity, 1, "legacy-a");
     let tracked = request(REQUEST_A, 2);
     let mut profiles = ShareProfiles::default();
     profiles
-        .record_verified_legacy_direct_request("local-lookup", &legacy, 110)
+        .record_verified_legacy_direct_request("local-lookup", &legacy, 110, policy)
         .unwrap();
     let selector = profiles.legacy_direct_requests[0].selector.clone();
     profiles

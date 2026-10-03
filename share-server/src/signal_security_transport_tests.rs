@@ -188,11 +188,17 @@ fn review_task_plaintext_is_refused_before_registration() {
         )
     });
     let mut client = TcpStream::connect(address).unwrap();
-    writeln!(client, "{}", hello(&SecretKey::from_bytes(&[21; 32]))).unwrap();
+    let write_result = writeln!(client, "{}", hello(&SecretKey::from_bytes(&[21; 32])));
     assert_eq!(
         server.join().unwrap().unwrap_err().kind(),
         io::ErrorKind::PermissionDenied
     );
+    // The server can refuse the first bytes while writeln! still sends its
+    // remaining fragments. A reset is the actual transport refusal; it must
+    // still pass the server-policy and no-registration assertions.
+    if let Err(error) = write_result {
+        assert_eq!(error.kind(), io::ErrorKind::ConnectionReset);
+    }
     assert!(state.lock().unwrap().clients.is_empty());
 }
 
