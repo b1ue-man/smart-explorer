@@ -19,7 +19,7 @@ iroh-relay = { version = "1.0.0", default-features = false, features = ["server"
 rustls = { version = "0.23.41", default-features = false, features = ["ring", "std", "tls12"] }
 ring = "0.17"
 lru = "0.18"
-tokio = { version = "1", features = ["rt-multi-thread"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "time", "macros"] }
 
 [dev-dependencies]
 rcgen = "0.14"
