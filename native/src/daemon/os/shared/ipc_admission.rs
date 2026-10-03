@@ -100,9 +100,11 @@ impl Hint {
     }
 }
 
-struct HintVisitor;
+struct HintVisitor<'a> {
+    captured: &'a mut Option<Hint>,
+}
 
-impl<'de> Visitor<'de> for HintVisitor {
+impl<'de> Visitor<'de> for HintVisitor<'_> {
     type Value = Hint;
 
     fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -124,11 +126,23 @@ impl<'de> Visitor<'de> for HintVisitor {
                 }
             }
             if hint.complete() {
-                return Ok(hint);
+                // serde_json ends the whole map even after an early Ok.
+                // Capture only complete fields, then stop before the payload.
+                *self.captured = Some(hint);
+                return Err(serde::de::Error::custom("IPC capability prefix captured"));
             }
         }
         Err(serde::de::Error::custom("IPC capability is missing"))
     }
+}
+
+fn decode_hint(bytes: &[u8]) -> Result<Hint, serde_json::Error> {
+    let mut captured = None;
+    let mut decoder = serde_json::Deserializer::from_slice(bytes);
+    let result = decoder.deserialize_map(HintVisitor {
+        captured: &mut captured,
+    });
+    captured.map(Ok).unwrap_or(result)
 }
 
 fn inspect(stream: &TcpStream, authorize: impl FnOnce(&Hint) -> bool) -> io::Result<Option<bool>> {
@@ -139,8 +153,7 @@ fn inspect(stream: &TcpStream, authorize: impl FnOnce(&Hint) -> bool) -> io::Res
         Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(None),
         Err(error) => return Err(error),
     };
-    let mut decoder = serde_json::Deserializer::from_slice(&bytes[..count]);
-    match decoder.deserialize_map(HintVisitor) {
+    match decode_hint(&bytes[..count]) {
         Ok(hint) => Ok(Some(authorize(&hint))),
         Err(error) if error.is_eof() && count < PREFIX_BYTES => Ok(None),
         Err(_) => Ok(Some(false)),
@@ -229,11 +242,10 @@ mod tests {
 
     #[test]
     fn review_task_ipc_prelude_allows_large_authenticated_payload_after_small_prefix() {
-        let mut decoder = serde_json::Deserializer::from_slice(
-            b"{\"t\":\"share_command\",\"token\":\"valid\",\"cmd\":",
-        );
-        let hint = decoder.deserialize_map(HintVisitor).unwrap();
+        let hint = decode_hint(b"{\"t\":\"share_command\",\"token\":\"valid\",\"cmd\":").unwrap();
         assert_eq!(hint.token.as_deref(), Some("valid"));
+        assert!(decode_hint(b"{\"t\":\"share_command\",\"token\":\"val").is_err());
+        assert!(decode_hint(b"{\"t\":\"share_command\",\"token\":123}").is_err());
         assert!(constant_time_eq("same", "same"));
         assert!(!constant_time_eq("same", "else"));
     }
