@@ -49,25 +49,69 @@ fn state(store: &Store, id: &str) -> io::Result<EntryState> {
         .state)
 }
 
+fn hop<T>(f: &Fixture, stage: &str, result: io::Result<T>) -> io::Result<T> {
+    let original = platform::original_path(&f.record);
+    eprintln!(
+        "host-trash {stage}: id={} root={:?} root_id={:?} expected={:?} source_handle={:?}",
+        f.record.id,
+        f.root,
+        f.record.root_identity,
+        f.record.file_identity,
+        platform::test_path(&f.file)
+    );
+    for name in [
+        original.file_name(),
+        Some(OsStr::new(&f.record.held)),
+        Some(OsStr::new(&f.record.restore_held)),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let observed = f.parent.open_regular_child(name).map(|file| {
+            (
+                platform::test_path(&file),
+                platform::identity(&file),
+                file.metadata().map(|meta| meta.len()),
+            )
+        });
+        eprintln!("host-trash {stage}: slot={name:?} observed={observed:?}");
+    }
+    result.map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!("host-trash {stage}, record {}: {error:?}", f.record.id),
+        )
+    })
+}
+
 #[test]
 fn review_task_host_trash_intent_precedes_capture_and_survives_restart() -> io::Result<()> {
     let f = fixture()?;
     let store = store(&f)?;
-    store.persist(&f.record)?;
+    hop(&f, "intent-persisted", store.persist(&f.record))?;
     assert_eq!(state(&store, &f.record.id)?, EntryState::OriginalPresent);
     let slot = DirectoryHandle::checked_quarantine_slot(OsStr::new(&f.record.held))?;
-    let captured = f
-        .parent
-        .quarantine_regular_child_in(OsStr::new("copy"), &f.file, &slot)?;
+    let captured = hop(
+        &f,
+        "first-held-capture",
+        f.parent
+            .quarantine_regular_child_in(OsStr::new("copy"), &f.file, &slot),
+    )?;
     assert_eq!(captured.retained_location().file_name(), Some(slot.name()));
     drop(captured);
     drop(store);
-    let reopened = Store::at(&f.temp.path().join("records"))?;
+    let reopened = hop(
+        &f,
+        "intent-reopened",
+        Store::at(&f.temp.path().join("records")),
+    )?;
     assert_eq!(state(&reopened, &f.record.id)?, EntryState::Held);
+    hop(&f, "before-restart-restore", Ok(()))?;
     assert_eq!(
         restore::restore_in(&reopened, &reopened.load(&f.record.id)?)?,
         RestoreOutcome::Restored
     );
+    hop(&f, "after-restart-restore", Ok(()))?;
     assert_eq!(std::fs::read(f.root.join("copy"))?, b"same");
     Ok(())
 }
@@ -76,24 +120,38 @@ fn review_task_host_trash_intent_precedes_capture_and_survives_restart() -> io::
 fn review_task_host_trash_restore_restart_hop_has_durable_mapping() -> io::Result<()> {
     let f = fixture()?;
     let store = store(&f)?;
+    hop(&f, "before-capture", Ok(()))?;
     assert_eq!(
         platform::capture(&store, &f.record, &f.parent, &f.file)?,
         RecycleOutcome::Recycled
     );
-    let held = f.parent.open_regular_child(OsStr::new(&f.record.held))?;
+    let held = hop(
+        &f,
+        "first-held-open",
+        f.parent.open_regular_child(OsStr::new(&f.record.held)),
+    )?;
     let next = DirectoryHandle::checked_quarantine_slot(OsStr::new(&f.record.restore_held))?;
-    let captured =
+    let captured = hop(
+        &f,
+        "durable-second-slot-hop",
         f.parent
-            .quarantine_regular_child_in(OsStr::new(&f.record.held), &held, &next)?;
+            .quarantine_regular_child_in(OsStr::new(&f.record.held), &held, &next),
+    )?;
     drop(captured);
     drop(held);
     drop(store);
-    let reopened = Store::at(&f.temp.path().join("records"))?;
+    let reopened = hop(
+        &f,
+        "second-slot-intent-reopened",
+        Store::at(&f.temp.path().join("records")),
+    )?;
     assert_eq!(state(&reopened, &f.record.id)?, EntryState::RestorePending);
+    hop(&f, "before-second-slot-restore", Ok(()))?;
     assert_eq!(
         restore::restore_in(&reopened, &reopened.load(&f.record.id)?)?,
         RestoreOutcome::Restored
     );
+    hop(&f, "after-second-slot-restore", Ok(()))?;
     assert_eq!(std::fs::read(f.root.join("copy"))?, b"same");
     Ok(())
 }
@@ -102,16 +160,24 @@ fn review_task_host_trash_restore_restart_hop_has_durable_mapping() -> io::Resul
 fn review_task_host_trash_restore_preserves_collision_and_is_retryable() -> io::Result<()> {
     let f = fixture()?;
     let store = store(&f)?;
-    platform::capture(&store, &f.record, &f.parent, &f.file)?;
+    hop(
+        &f,
+        "collision-capture",
+        platform::capture(&store, &f.record, &f.parent, &f.file),
+    )?;
     std::fs::write(f.root.join("copy"), b"replacement")?;
+    hop(&f, "before-collision-restore", Ok(()))?;
     assert!(restore::restore_in(&store, &f.record).is_err());
+    hop(&f, "after-collision-restore", Ok(()))?;
     assert_eq!(std::fs::read(f.root.join("copy"))?, b"replacement");
     assert_eq!(state(&store, &f.record.id)?, EntryState::Held);
     std::fs::remove_file(f.root.join("copy"))?;
+    hop(&f, "before-collision-retry", Ok(()))?;
     assert_eq!(
         restore::restore_in(&store, &f.record)?,
         RestoreOutcome::Restored
     );
+    hop(&f, "after-collision-retry", Ok(()))?;
     assert_eq!(std::fs::read(f.root.join("copy"))?, b"same");
     Ok(())
 }
