@@ -213,5 +213,6 @@
   "ipc_read_grant": "Read ipc.rs::handle_client/require_token and ipc_protocol.rs::IpcRequest/token solely for S60 pre-auth admission; MountHost independently authorized messages must remain intact.",
   "lan_integration_grant": "lan_runtime.rs only authenticated recipient announcements, privacy and uplink gating. windows/system.rs only UDP/private-domain firewall rule boundary. identity_store.rs only safe private stage creation; preserve repair transaction. profile_store.rs remains read-only, S-POLICY binds shared private-storage API.",
   "uplink_runtime_grant": "Only setup/repair/cleanup decisions consuming UplinkAdapter, setup_once/setup_done/Stop and durable SharingRecord; preserve polling, events and existing connected-peer semantics.",
-  "identity_lock_grant": "identity_store.rs::identity_transaction_guard process mutex must share bounded admission deadline with OS lock, preserve poison recovery and transaction authority. Other identity changes remain private stage creation only."
+  "identity_lock_grant": "identity_store.rs::identity_transaction_guard process mutex must share bounded admission deadline with OS lock, preserve poison recovery and transaction authority. Other identity changes remain private stage creation only.",
+  "identity_private_read_grant": "Only replace File::open with support_dirs::open_private_file inside existing load_identity. Preserve size, UTF8 and repair transaction, other ownership unchanged."
 }

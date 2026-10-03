@@ -33,3 +33,5 @@ Lokal gesicherte API-/Lib-Syntax (Abrufdatum im Kopf jeder Datei).
 | [freedesktop-trash.md](freedesktop-trash.md) | Freedesktop Trash Specification 1.0 | 2026-10-03 | Sichere Papierkorb-Speicherung für den vorhandenen RV1-Recycle-Vertrag: exklusive trashinfo vor Umzug, eindeutige Namen, URL-escaped Ursprungspfad, Volume-/Home-Regeln und fehlgeschlagener Papierkorb ohne Permanent-Fallback |
 
 - [Windows checked recycle](windows-checked-recycle.md): FA6 handle capture, durable original-path intent and discoverable host restore; primary API checked 2026-10-03.
+
+- [Iroh authenticated LAN paths](iroh-authenticated-lan-paths.md): S09 pinned status channel and actual selected local interface; Iroh 1.0.0 APIs checked 2026-10-03.

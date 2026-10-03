@@ -66,6 +66,7 @@
     "graphify-out/.vocab.txt",
     "graphify-out/graph.json",
     "native/Cargo.toml",
+    "native/src/bisync/core/baseline_records.rs",
     "native/src/bisync/core/compare.rs",
     "native/src/bisync/core/completion.rs",
     "native/src/bisync/core/contract_tests.rs",
@@ -118,6 +119,7 @@
     "native/src/bisync/os/shared/replica_state_tests.rs",
     "native/src/bisync/os/shared/resolve.rs",
     "native/src/bisync/os/shared/resolve_tests.rs",
+    "native/src/bisync/os/shared/single_recorded.rs",
     "native/src/bisync/os/shared/snapshot.rs",
     "native/src/bisync/os/shared/snapshot_agent.rs",
     "native/src/bisync/os/shared/snapshot_dir.rs",
@@ -128,6 +130,7 @@
     "native/src/bisync/os/shared/snapshot_walk.rs",
     "native/src/bisync/os/shared/snapshot_walk_tests.rs",
     "native/src/bisync/os/shared/state_metadata.rs",
+    "native/src/bisync/os/shared/state_spellings.rs",
     "native/src/bisync/os/shared/state_store.rs",
     "native/src/bisync/os/shared/state_types.rs",
     "native/src/bisync/os/shared/state_validation.rs",
@@ -140,6 +143,8 @@
     "native/src/daemon/mod.rs",
     "native/src/keep_awake/mod.rs",
     "native/src/lib.rs",
+    "native/src/mobile/os/shared/domains/sync_conflicts.rs",
+    "native/src/mobile/os/shared/domains/sync_merge.rs",
     "native/src/share/core/export_config.rs",
     "native/src/share/core/fs_request.rs",
     "native/src/share/core/fs_response.rs",
@@ -193,7 +198,9 @@
     "native/src/bisync/os/shared/apply_transfer_tests.rs",
     "native/src/bisync/os/shared/duplicate_apply.rs",
     "native/src/bisync/os/shared/duplicate_backup.rs",
+    "native/src/bisync/os/shared/duplicate_observation.rs",
     "native/src/bisync/os/shared/move_finalize.rs",
+    "native/src/bisync/os/shared/resolve.rs",
     "native/src/bisync/os/shared/snapshot.rs",
     "native/src/bisync/os/shared/snapshot_agent.rs",
     "native/src/bisync/os/shared/snapshot_dir.rs",
@@ -226,5 +233,11 @@
     "native/src/daemon/mod.rs",
     "native/src/lib.rs"
   ],
-  "new_file_rule": "New cohesive feature files beside assigned files; record exact created paths in the block report. Never alter another block's orchestration/host/client/policy implementation."
+  "new_file_rule": "New cohesive feature files beside assigned files; record exact created paths in the block report. Never alter another block's orchestration/host/client/policy implementation.",
+  "create_files": [
+    "native/src/bisync/os/shared/merge_recorded.rs",
+    "native/src/bisync/os/shared/merge_recorded_task_tests.rs"
+  ],
+  "merge_integration_grant": "Only recorded line-merge/keep-both adapter required by existing Y152/Y153, using PairLock, actual original content checks, reversible backups, guarded stage publishing and truthful baseline on partial failure. Preserve existing resolve interfaces; native bisync/mod own registrations only.",
+  "duplicate_observation_grant": "Only existing duplicate observation integration: regular-only read, special omission, literal name passed explicitly so encoded provider locators do not rename logical keys. Preserve identity/content revalidation; no broader engine changes."
 }

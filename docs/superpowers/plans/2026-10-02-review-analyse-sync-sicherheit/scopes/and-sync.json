@@ -10,6 +10,7 @@
     "android/app/src/main/java/app/smartexplorer/android/service/BackgroundController.kt",
     "android/app/src/main/java/app/smartexplorer/android/service/BackgroundService.kt",
     "android/app/src/main/java/app/smartexplorer/android/service/BackgroundText.kt",
+    "android/app/src/main/java/app/smartexplorer/android/service/ServiceNotifications.kt",
     "android/app/src/main/java/app/smartexplorer/android/service/TaskForegroundService.kt",
     "android/app/src/main/java/app/smartexplorer/android/service/TaskKeeper.kt",
     "android/app/src/main/java/app/smartexplorer/android/system/BootReceiver.kt",
@@ -21,6 +22,7 @@
     "android/app/src/main/java/app/smartexplorer/android/system/Permissions.kt",
     "android/app/src/main/java/app/smartexplorer/android/system/StorageStatsAccess.kt",
     "android/app/src/main/java/app/smartexplorer/android/system/WakeKeeper.kt",
+    "android/app/src/main/java/app/smartexplorer/android/ui/AppNav.kt",
     "android/app/src/main/java/app/smartexplorer/android/ui/settings/BackgroundSettings.kt",
     "android/app/src/main/java/app/smartexplorer/android/ui/sync/BackgroundParts.kt",
     "android/app/src/main/java/app/smartexplorer/android/ui/sync/ConflictSession.kt",
@@ -137,10 +139,13 @@
     "native/src/daemon/mod.rs",
     "native/src/daemon/os/android/platform.rs",
     "native/src/daemon/os/linux_os/platform.rs",
+    "native/src/daemon/os/shared/catch_up.rs",
+    "native/src/daemon/os/shared/catch_up_types.rs",
     "native/src/daemon/os/shared/hooks.rs",
     "native/src/daemon/os/shared/host_state.rs",
     "native/src/daemon/os/shared/job.rs",
     "native/src/daemon/os/shared/job_supervisor.rs",
+    "native/src/daemon/os/shared/problem_notify.rs",
     "native/src/daemon/os/windows/platform.rs",
     "native/src/keep_awake/mod.rs",
     "native/src/lib.rs",
@@ -165,11 +170,14 @@
     "native/src/syncjobs/os/shared/job_state_policy.rs",
     "native/src/syncjobs/os/shared/job_state_store.rs",
     "native/src/syncjobs/os/shared/job_state_store_tests.rs",
-    "native/src/watch/mod.rs"
+    "native/src/watch/mod.rs",
+    "native/src/watch/os/shared/host_signal.rs"
   ],
   "modify_files": [
     "android/app/src/main/AndroidManifest.xml",
     "android/app/src/main/java/app/smartexplorer/android/api/SyncApi.kt",
+    "android/app/src/main/java/app/smartexplorer/android/core/CoreEvent.kt",
+    "android/app/src/main/java/app/smartexplorer/android/core/CoreEvents.kt",
     "android/app/src/main/java/app/smartexplorer/android/service/BackgroundController.kt",
     "android/app/src/main/java/app/smartexplorer/android/service/BackgroundService.kt",
     "android/app/src/main/java/app/smartexplorer/android/service/BackgroundText.kt",
@@ -201,6 +209,7 @@
     "docs/superpowers/plans/2026-10-02-review-analyse-sync-sicherheit/anfragen/AND-SYNC.md",
     "docs/superpowers/plans/2026-10-02-review-analyse-sync-sicherheit/api-delta/AND-SYNC.md",
     "native/src/daemon/os/shared/host_state.rs",
+    "native/src/daemon/os/shared/job.rs",
     "native/src/daemon/os/shared/job_supervisor.rs",
     "native/src/mobile/os/shared/domains/analyze_platform.rs",
     "native/src/mobile/os/shared/domains/background.rs",
@@ -219,5 +228,7 @@
   "new_file_rule": "New cohesive feature files beside assigned files only, with exact created paths in report. Other model/entrypoint edits require an explicit grant.",
   "integration_grant": "Android Host-Totals: read existing successful StorageStats/AnalyzeApi producer and analyze_platform; only sys.rs/HostMonitor own bridge to analytics::remember_platform_totals. Preserve client/remote separation. Ask parent before changing producer files.",
   "storage_cancel_grant": "Only targeted process-local Weak<AtomicBool> registration for active background jobs requiring platform::requires_storage_access endpoints; set_storage_access(false) cancels those immediately, not remote/remote or app-private jobs. Keep supervisor, states, retries and pending-generation semantics. No unrelated daemon changes.",
-  "parser_extraction_grant": "Only extract shared platform_totals JSON parser into own sys_platform module and delegate existing analyze_platform parser; retain AnalyzeApi semantics/budgets/tests and no client-remote totals mixing."
+  "parser_extraction_grant": "Only extract shared platform_totals JSON parser into own sys_platform module and delegate existing analyze_platform parser; retain AnalyzeApi semantics/budgets/tests and no client-remote totals mixing.",
+  "initial_access_grant": "Only move existing requires_storage_access denial ahead of initial cancel check; midrun cancellation remains cancellation with pending work preserved.",
+  "event_registration_grant": "Only additive SyncProblem(jobId,title,text) and syncProblem decoder; preserve other Core events and bounded payload errors."
 }
