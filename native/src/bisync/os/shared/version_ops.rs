@@ -3,7 +3,7 @@ use super::pair_lock::PairLock;
 use super::paths::{join, parent_of};
 use super::transfer_stream::check;
 use super::types::Versioning;
-use super::version_listing::{children, legacy, managed, Managed};
+use super::version_listing::{children, legacy, managed, managed_sync_root, Managed};
 use super::version_manifest::{self as record, Manifest};
 use super::version_retention::{keep_version, selected};
 use super::versions::{VersionEntry, VersionSide, VersionStore};
@@ -175,16 +175,10 @@ fn maintain_member(
 ) -> io::Result<()> {
     record::validate_pair(pair)?;
     for side in sides {
-        let items: Vec<_> = managed(
-            side.backend,
-            &join(side.root, ".se-versions"),
-            pair,
-            VersionStore::SyncRoot,
-            cancel,
-        )?
-        .into_iter()
-        .filter(|item| item.manifest.belongs(pair, side))
-        .collect();
+        let items: Vec<_> = managed_sync_root(side, pair, cancel)?
+            .into_iter()
+            .filter(|item| item.manifest.belongs(pair, side))
+            .collect();
         let delete = retention
             .map(|rule| selected(&items, rule))
             .unwrap_or_else(|| (0..items.len()).collect());
