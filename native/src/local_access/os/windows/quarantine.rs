@@ -31,7 +31,48 @@ pub(crate) struct QuarantinedChild {
     active: bool,
 }
 
+/// A persisted recovery intent may choose only our exact private slot form.
+/// Construct through DirectoryHandle::checked_quarantine_slot; raw paths are
+/// never accepted by the capture method.
+pub(crate) struct QuarantineSlot(OsString);
+
+impl QuarantineSlot {
+    pub(crate) fn name(&self) -> &OsStr { &self.0 }
+}
+
 impl DirectoryHandle {
+    pub(crate) fn checked_quarantine_slot(name: &OsStr) -> io::Result<QuarantineSlot> {
+        validate_name(name)?;
+        let valid = name.to_str().and_then(|name| name.strip_prefix(".held.se-recycle-"))
+            .is_some_and(|nonce| nonce.len() == 16
+                && nonce.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)));
+        if !valid {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid chosen quarantine slot"));
+        }
+        Ok(QuarantineSlot(name.to_os_string()))
+    }
+
+    /// The caller durably records this slot before the first rename.
+    pub(crate) fn quarantine_regular_child_in(
+        &self, name: &OsStr, expected: &File, slot: &QuarantineSlot,
+    ) -> io::Result<QuarantinedChild> {
+        validate_name(name)?;
+        super::super::regular::validate_file(expected, true)?;
+        let file = expected.try_clone()?;
+        let guard = std::fs::OpenOptions::new()
+            .access_mode(FILE_READ_ATTRIBUTES | DELETE)
+            .share_mode(FILE_SHARE_READ)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(self.0.path.join(name))?;
+        super::super::regular::validate_file(&guard, true)?;
+        if identity(&guard)? != identity(expected)? {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "expected recycle child changed"));
+        }
+        rename_no_replace(&guard, &self.0.path.join(slot.name()))?;
+        Ok(QuarantinedChild { parent: self.clone(), original: name.to_os_string(),
+            name: slot.0.clone(), guard, file, active: true })
+    }
+
     pub(crate) fn quarantine_regular_child(
         &self,
         name: &OsStr,
