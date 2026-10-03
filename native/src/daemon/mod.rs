@@ -24,6 +24,10 @@ mod backend_batch;
 mod backend_budget;
 #[path = "os/shared/backend_delete.rs"]
 mod backend_delete;
+#[path = "os/shared/backend_hash.rs"]
+mod backend_hash;
+#[path = "os/shared/backend_ops.rs"]
+mod backend_ops;
 #[path = "os/shared/backend_server.rs"]
 mod backend_server;
 #[path = "os/shared/backend_stream.rs"]
@@ -46,12 +50,17 @@ mod exec_ipc;
 mod exec_state;
 #[path = "os/shared/handoff.rs"]
 mod handoff;
+#[path = "os/shared/hooks.rs"]
+mod hooks;
 #[path = "os/shared/host_state.rs"]
 mod host_state;
+pub(crate) use host_state::{register_storage_run, StorageRunGuard};
 #[path = "os/shared/ipc.rs"]
 mod ipc;
 #[path = "os/shared/ipc_analysis.rs"]
 mod ipc_analysis;
+#[path = "os/shared/ipc_backend_extensions.rs"]
+mod ipc_backend_extensions;
 #[path = "os/shared/ipc_client.rs"]
 mod ipc_client;
 #[path = "os/shared/ipc_host.rs"]
@@ -140,6 +149,8 @@ mod android_platform;
 #[cfg(test)]
 #[path = "os/shared/direct_open_task_bridge.rs"]
 mod direct_open_task_bridge;
+#[path = "os/shared/problem_notify.rs"]
+mod problem_notify;
 #[path = "os/shared/request_workers.rs"]
 mod request_workers;
 #[cfg(test)]
@@ -175,7 +186,7 @@ mod schedule;
 #[path = "os/shared/state.rs"]
 mod state;
 
-pub use catch_up::{CatchUpSkip, CatchUpStatus};
+pub use catch_up::{CatchUpRecord, CatchUpSkip, CatchUpStatus};
 pub use embedded::ensure_embedded_daemon;
 pub use exec_ipc::{
     connect as connect_exec, ExecIpcEvent, ExecIpcFailure, ExecIpcInput, ExecIpcSession,
@@ -184,7 +195,11 @@ pub use exec_state::{
     cancel_remote as cancel_exec, load as exec_jobs, ExecCancelTarget, ExecJobDirection,
     ExecJobsSnapshot,
 };
-pub use host_state::{defer_scheduling_until_reported, host_state, set_host_state, HostState};
+pub use hooks::{run_job_hook, HookPhase};
+pub use host_state::{
+    defer_scheduling_until_reported, host_state, set_host_state, set_storage_access,
+    storage_access, HostState,
+};
 pub(crate) use ipc::mutate_exec_grant;
 pub use ipc::{
     drain_share_worker_events, ensure_worker_ready, exec_share, hand_off_running_worker,
@@ -193,8 +208,8 @@ pub use ipc::{
     ShareWorkerSnapshot, WorkerHandoff,
 };
 pub use live::{
-    active_job, cancel_catch_up, catch_up_status, drain_share_events_in_process, last_catch_up_ms,
-    request_catch_up,
+    active_job, cancel_catch_up, catch_up_status, drain_share_events_in_process, last_catch_up,
+    last_catch_up_ms, request_catch_up,
 };
 pub use mount_client::{
     connect_mount_host, list_mounts, retry_mount, start_mount, stop_mount, MountHostConfig,
@@ -203,12 +218,13 @@ pub use mount_client::{
 pub use mount_probe_client::probe_share_mount_capabilities;
 #[allow(unused_imports)]
 pub use platform::DriveInfo;
-pub use schedule::run_daemon;
+pub use problem_notify::set_problem_notifier;
+pub use schedule::{next_scheduled_run, run_daemon};
 #[allow(unused_imports)]
 pub use state::{
-    autopause_flags, cadence_secs, is_running, last_heartbeat_age, pause_for_secs,
-    pause_indefinite, pause_remaining, pause_until, read_log_tail, request_stop, resume,
-    set_autopause_flags, set_cadence_secs,
+    autopause_flags, autopause_support, cadence_secs, is_running, last_heartbeat_age,
+    pause_for_secs, pause_indefinite, pause_remaining, pause_until, read_log_tail, request_stop,
+    resume, set_autopause_flags, set_cadence_secs, AutopauseSupport,
 };
 
 #[cfg(test)]
@@ -233,3 +249,25 @@ pub(crate) fn windows_remote_task_rooted(
 #[cfg(test)]
 #[path = "os/shared/windows_remote_task_tests.rs"]
 mod windows_remote_task_tests;
+
+#[path = "os/shared/due.rs"]
+mod due;
+#[path = "os/shared/job_triggers.rs"]
+mod job_triggers;
+#[path = "os/shared/own_writes.rs"]
+mod own_writes;
+#[path = "os/shared/remote_watch.rs"]
+mod remote_watch;
+#[path = "os/shared/realtime.rs"]
+mod realtime;
+
+#[path = "os/shared/connect_triggers.rs"]
+mod connect_triggers;
+
+#[path = "os/shared/guardian.rs"]
+mod guardian;
+pub use guardian::run_guardian;
+
+#[path = "os/shared/log_store.rs"]
+mod log_store;
+pub(crate) use state::log as log_worker;

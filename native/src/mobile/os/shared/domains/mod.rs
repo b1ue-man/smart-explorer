@@ -29,6 +29,8 @@ mod share_exec;
 mod share_exec_tests;
 #[path = "share_peers.rs"]
 mod share_peers;
+#[path = "share_policy.rs"]
+mod share_policy;
 #[path = "share_power.rs"]
 mod share_power;
 #[path = "share_requests.rs"]
@@ -43,6 +45,10 @@ mod share_status;
 mod sync_conflicts;
 #[path = "sync_jobs.rs"]
 mod sync_jobs;
+#[path = "sync_state_json.rs"]
+mod sync_state_json;
+#[path = "sync_versions.rs"]
+mod sync_versions;
 #[path = "sync_merge.rs"]
 mod sync_merge;
 #[path = "sync_run.rs"]
@@ -79,6 +85,7 @@ pub(crate) fn on_init(rt: &'static Runtime) {
 /// Before the embedded worker starts: Share CPU-hold requests become `wake`
 /// events.
 pub(crate) fn install_activity_hook() {
+    background::install_hooks();
     share_power::install_activity_hook();
 }
 
@@ -99,6 +106,9 @@ fn sync_method(rt: &Runtime, method: &str, args: &Value) -> Option<Result<Value,
         "sync.delete" => sync_jobs::delete(rt, args),
         "sync.setEnabled" => sync_jobs::set_enabled(rt, args),
         "sync.run" => sync_run::run(rt, args),
+        "sync.confirmBlock" => sync_jobs::confirm_block(rt, args),
+        "sync.versions" => sync_versions::list(rt, args),
+        "sync.restoreVersion" => sync_versions::restore(rt, args),
         "sync.mirror" => sync_run::mirror(rt, args),
         "sync.conflicts" => sync_conflicts::conflicts(args),
         "sync.checkConflicts" => sync_conflicts::check(rt, args),
@@ -108,6 +118,7 @@ fn sync_method(rt: &Runtime, method: &str, args: &Value) -> Option<Result<Value,
         "sync.mergeRows" => sync_merge::rows(args),
         "sync.mergeApply" => sync_merge::apply(rt, args),
         "sync.mergeKeepBoth" => sync_merge::keep_both(rt, args),
+        "sync.mergeRetry" => sync_merge::retry(rt, args),
         _ => return None,
     })
 }
@@ -147,6 +158,10 @@ fn share_method(rt: &Runtime, method: &str, args: &Value) -> Option<Result<Value
         "share.wake" => share_power::wake(args),
         "share.watch" => share_settings::watch(args),
         "share.setServer" => share_settings::set_server(rt, args),
+        "share.serverInfo" => share_settings::server_info(),
+        "share.suggestPin" => share_settings::suggest_pin(),
+        "share.unconfirmedPairings" => share_settings::unconfirmed_pairings(),
+        "share.resolvePairing" => share_settings::resolve_pairing(rt, args),
         "share.setOnline" => share_settings::set_online(args),
         "share.setName" => share_settings::set_name(rt, args),
         "share.discoverable" => share_settings::discoverable(args),
@@ -164,6 +179,17 @@ fn share_method(rt: &Runtime, method: &str, args: &Value) -> Option<Result<Value
         "share.removeRoom" => share_peers::remove_room(rt, args),
         "share.addExport" => share_peers::add_export(rt, args),
         "share.removeExport" => share_peers::remove_export(rt, args),
+        "share.setExportAccess" => share_policy::set_export(rt, args),
+        "share.connections" => share_policy::connections(args),
+        "share.setConnectionExport" => share_policy::set_connection(rt, args),
+        "share.setContactWrite" => share_policy::set_contact_write(rt, args),
+        "share.allowGrantAgain" => share_policy::allow_grant_again(rt, args),
+        "share.withdrawGrant" => share_policy::withdraw_grant(rt, args),
+        "share.setRoomMember" => share_policy::set_room_member(rt, args),
+        "share.setShareBack" => share_policy::set_share_back(rt, args),
+        "share.setRoomPolicy" => share_policy::set_room_policy(rt, args),
+        "share.policy" => share_policy::policy(),
+        "share.setPolicy" => share_policy::set_policy(args),
         "share.requestAccess" => share_requests::request_access(rt, args),
         "share.decide" => share_requests::decide(rt, args),
         "share.retry" => share_requests::retry(rt, args),
@@ -184,6 +210,9 @@ fn analysis_method(rt: &Runtime, method: &str, args: &Value) -> Option<Result<Va
         "reclaim.start" => analyze::start_reclaim(rt, args),
         "reclaim.groups" => analyze::groups(args),
         "reclaim.summary" => analyze::summary(args),
+        "reclaim.recycle" => analyze::start_recycle(rt, args),
+        "reclaim.recycleResult" => analyze::recycle_result(args),
+        "analyze.release" | "reclaim.release" => analyze::release(args),
         _ => return None,
     })
 }

@@ -33,6 +33,8 @@ mod direct_lifecycle;
 mod direct_lifecycle_error;
 #[path = "core/direct_messages.rs"]
 mod direct_messages;
+#[path = "os/shared/direct_policy_store.rs"]
+mod direct_policy_store;
 #[path = "core/direct_protocol.rs"]
 mod direct_protocol;
 #[path = "core/direct_reciprocal.rs"]
@@ -49,6 +51,10 @@ mod direct_reciprocal_store;
 mod direct_reciprocal_transport;
 #[path = "core/direct_reciprocal_wire.rs"]
 mod direct_reciprocal_wire;
+#[path = "core/direct_relation.rs"]
+mod direct_relation;
+#[path = "os/shared/direct_relation_actions.rs"]
+mod direct_relation_actions;
 #[path = "os/shared/direct_repair_store_adapter.rs"]
 mod direct_repair_store_adapter;
 #[path = "core/direct_request_tombstone.rs"]
@@ -69,8 +75,12 @@ mod discovery_exchange;
 mod discovery_exchange_port_impl;
 #[path = "core/discovery_offer_book.rs"]
 mod discovery_offer_book;
+#[path = "core/discovery_offer_guard.rs"]
+mod discovery_offer_guard;
 #[path = "core/discovery_pake.rs"]
 mod discovery_pake;
+#[path = "core/discovery_pin.rs"]
+mod discovery_pin;
 #[path = "core/discovery_relation_store.rs"]
 mod discovery_relation_store;
 #[path = "os/shared/discovery_relation_store_adapter.rs"]
@@ -89,6 +99,8 @@ mod discovery_signal_exchange;
 mod discovery_signal_maintenance;
 #[path = "core/discovery_signal_offline.rs"]
 mod discovery_signal_offline;
+#[path = "core/discovery_signal_outcome.rs"]
+mod discovery_signal_outcome;
 #[path = "core/discovery_signal_persisted.rs"]
 mod discovery_signal_persisted;
 #[path = "core/discovery_signal_port.rs"]
@@ -151,6 +163,8 @@ mod exec_supervisor_protocol;
 mod exec_targets;
 #[path = "core/exec_types.rs"]
 mod exec_types;
+#[path = "core/export_config.rs"]
+mod export_config;
 #[path = "core/framing.rs"]
 mod framing;
 #[path = "core/fs.rs"]
@@ -169,6 +183,14 @@ mod fs_paths;
 mod fs_response;
 #[path = "core/handshake_limits.rs"]
 mod handshake_limits;
+#[path = "core/host_requests.rs"]
+mod host_requests;
+#[path = "core/analysis_admission.rs"]
+mod analysis_admission;
+#[path = "os/shared/analysis_spool.rs"]
+mod analysis_spool;
+#[path = "os/shared/analysis_tasks.rs"]
+mod analysis_tasks;
 #[path = "core/identity.rs"]
 mod identity;
 #[path = "core/identity_debug.rs"]
@@ -194,6 +216,30 @@ mod lan_presence;
 pub(crate) mod lan_presence_match;
 #[path = "core/lan_settings.rs"]
 mod lan_settings;
+#[path = "core/lan_privacy.rs"]
+pub(crate) mod lan_privacy;
+#[path = "os/shared/lan_presence_auth.rs"]
+pub(crate) mod lan_presence_auth;
+#[path = "os/shared/lan_uplink_evidence.rs"]
+pub(crate) mod lan_uplink_evidence;
+#[path = "core/lan_link_facts.rs"]
+pub(crate) mod lan_link_facts;
+#[path = "core/lan_link_wire.rs"]
+mod lan_link_wire;
+#[path = "os/shared/lan_link_transport.rs"]
+mod lan_link_transport;
+#[path = "os/shared/lan_link_exchange.rs"]
+mod lan_link_exchange;
+#[cfg(windows)]
+#[path = "os/windows/lan_permission.rs"]
+mod lan_permission;
+#[cfg(not(windows))]
+#[path = "os/shared/lan_permission_unavailable.rs"]
+mod lan_permission;
+pub use lan_permission::{lan_firewall_repair_available, request_lan_firewall_repair};
+#[path = "os/shared/lan_permission_job.rs"]
+mod lan_permission_job;
+pub use lan_permission_job::{start_lan_firewall_repair, poll_lan_firewall_repair};
 #[path = "os/shared/lan_settings_store.rs"]
 mod lan_settings_store;
 #[path = "core/lan_status.rs"]
@@ -204,6 +250,8 @@ pub(crate) mod lan_uplink_policy;
 mod legacy_direct_actions;
 #[path = "core/legacy_direct_request.rs"]
 mod legacy_direct_request;
+#[path = "core/legacy_direct_request_decision.rs"]
+mod legacy_direct_request_decision;
 #[path = "core/legacy_direct_request_mutations.rs"]
 mod legacy_direct_request_mutations;
 #[path = "core/legacy_direct_request_reconciliation.rs"]
@@ -268,10 +316,18 @@ pub(crate) mod profile_edits;
 mod profile_operations;
 #[path = "core/profile_persistence.rs"]
 mod profile_persistence;
+#[path = "core/profile_migration.rs"]
+mod profile_migration;
+#[path = "core/profile_policy.rs"]
+mod profile_policy;
+#[path = "os/shared/profile_policy_actions.rs"]
+mod profile_policy_actions;
 #[path = "os/shared/profile_store.rs"]
 mod profile_store;
 #[path = "core/profiles.rs"]
 mod profiles;
+#[path = "core/relation_rights.rs"]
+mod relation_rights;
 #[cfg(test)]
 #[path = "core/remote_drive_task_mount_lease_tests.rs"]
 mod remote_drive_task_mount_lease_tests;
@@ -283,6 +339,8 @@ mod removed_direct_peers;
 mod room_relation;
 #[path = "core/server.rs"]
 mod server;
+#[path = "core/signal_connection_config.rs"]
+pub(crate) mod server_address;
 #[path = "core/server_capabilities.rs"]
 mod server_capabilities;
 #[path = "core/server_transfer.rs"]
@@ -380,9 +438,16 @@ pub use self::direct_reciprocal_persistence::{
     persist_reciprocal_direct_peer, DirectReciprocalPersistenceError,
     DirectReciprocalPersistenceOutcome,
 };
+pub use self::direct_relation_actions::{
+    allow_direct_peer_again, set_direct_share_back, RelationChange,
+};
 pub use self::direct_request_tombstone::DirectRequestTombstone;
 pub use self::direct_signal_event::DirectSignalEvent;
 pub use self::discovery_offer_book::{DiscoveryOfferBook, OfferLookup, OwnDiscoveryOffer};
+pub use self::discovery_pin::{
+    discovery_pin_strength, suggest_discovery_pin, DiscoveryPinStrength,
+    DISCOVERY_MAX_FAILED_PAIRINGS, DISCOVERY_MAX_OFFER_SECS, DISCOVERY_MIN_PIN_CHARS,
+};
 pub use self::discovery_relation_store::DiscoveryRelationOutcome;
 pub(crate) use self::discovery_signal_state::MAX_DISCOVERY_ALIAS_BYTES;
 pub use self::discovery_signal_types::{
@@ -402,10 +467,11 @@ pub use self::exec_types::{
     ExecCommand, ExecId, ExecJobView, ExecLifecycleState, ExecProviderStatus, ExecStart,
     ExecTerminal, ExecTerminalKind,
 };
-pub use self::fs::{ShareExportConfig, SharedRoot};
+pub use self::export_config::{ExportAccess, ShareExportConfig, SharedConnection, SharedRoot};
 pub use self::identity::{DirectCodeRotation, IdentityRepair, IdentityRepairAction, ShareIdentity};
 pub(crate) use self::identity_store::with_matching_identity_generation;
 pub use self::lan_presence::{LanAnnouncement, LanEvent, LanPresence};
+pub use self::lan_privacy::LanProof;
 pub use self::lan_presence_match::{LanSighting, LAN_PRESENCE_TTL_SECS};
 pub use self::lan_settings::LanSettings;
 pub use self::lan_status::{
@@ -424,16 +490,21 @@ pub use self::legacy_direct_request::{
 #[cfg(target_os = "android")]
 pub(crate) use self::platform_exec::{exec_host_activity, set_exec_host_listener};
 pub use self::profile_persistence::ProfileChange;
+pub use self::profile_migration::AutoHomeMigration;
+pub use self::profile_policy_actions::set_direct_peer_write;
 pub(crate) use self::profiles::ProfileRevision;
 pub use self::profiles::ShareProfiles;
+pub(crate) use self::relation_rights::profiles_differ_beyond_runtime;
 pub use self::removed_direct_peers::{
     ForgottenDirectPeer, PairingOrigin, RemovedDirectPeer, MAX_REMOVED_DIRECT_PEERS,
 };
 pub use self::service::ShareService;
+pub(crate) use self::transport_options::migrate_server_file;
 pub use self::types::{
-    DirectAccessState, DirectContact, DirectGrant, DirectGrantState, ExecGrantTarget, ExecRequest,
-    ExecResult, PeerOpenTarget, PeerPresence, RoomMember, RoomProfile, ShareCmd, ShareCmdResult,
-    ShareEvent, ShareStatus,
+    DirectAccessState, DirectContact, DirectGrant, DirectGrantState, DirectRelationFlags,
+    DirectRequestPolicy, ExecGrantTarget, ExecRequest, ExecResult, MemberUpsert, PeerOpenTarget,
+    PeerPresence, PresenceApply, RelationRuntime, RoomMember, RoomMemberAdmission, RoomMemberFlags,
+    RoomPolicy, RoomProfile, ShareCmd, ShareCmdResult, ShareEvent, ShareStatus,
 };
 
 pub fn core_now_secs() -> i64 {
@@ -498,3 +569,74 @@ mod tracked_signal_tests;
 #[cfg(test)]
 #[path = "core/walk_tests.rs"]
 mod walk_tests;
+
+#[path = "os/shared/storage_roots.rs"]
+mod storage_roots;
+
+#[path = "os/shared/storage_duplicate_host.rs"]
+mod storage_duplicate_host;
+
+#[path = "core/peer_stream.rs"]
+mod peer_stream;
+
+#[path = "os/shared/host_stream.rs"]
+mod host_stream;
+#[path = "os/shared/host_list.rs"]
+mod host_list;
+
+#[path = "os/shared/host_duplicate_verify.rs"]
+mod host_duplicate_verify;
+
+#[path = "os/shared/host_hash_walk.rs"]
+mod host_hash_walk;
+
+#[path = "os/shared/host_mutations.rs"]
+mod host_mutations;
+
+#[path = "os/shared/host_watch.rs"]
+mod host_watch;
+
+#[path = "core/peer_extensions.rs"]
+mod peer_extensions;
+
+#[path = "core/peer_list_batch.rs"]
+mod peer_list_batch;
+
+#[path = "core/peer_duplicates.rs"]
+mod peer_duplicates;
+#[path = "core/peer_hash_walk.rs"]
+mod peer_hash_walk;
+
+#[path = "core/peer_watch.rs"]
+mod peer_watch;
+
+#[path = "core/analysis_resources.rs"]
+mod analysis_resources;
+
+#[path = "core/node_policy.rs"]
+mod node_policy;
+
+#[path = "core/fs_policy.rs"]
+mod fs_policy;
+#[path = "os/shared/fs_host_policy.rs"]
+mod fs_host_policy;
+#[path = "os/shared/fs_host_destructive.rs"]
+mod fs_host_destructive;
+#[path = "os/shared/fs_local_paths.rs"]
+mod fs_local_paths;
+#[cfg(windows)]
+#[path = "os/windows/fs_path_adapter.rs"]
+mod fs_path_adapter;
+#[cfg(not(windows))]
+#[path = "os/linux_os/fs_path_adapter.rs"]
+mod fs_path_adapter;
+#[cfg(test)]
+#[path = "os/shared/fs_host_policy_task_tests.rs"]
+mod fs_host_policy_task_tests;
+#[path = "core/fs_guard_backend.rs"]
+mod fs_guard_backend;
+#[path = "core/fs_delete.rs"]
+mod fs_delete;
+
+#[path = "core/fair_admission.rs"]
+mod fair_admission;

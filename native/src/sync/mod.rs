@@ -6,10 +6,20 @@ mod sync_copy;
 mod sync_delete;
 #[path = "os/shared/sync_pass.rs"]
 mod sync_pass;
+#[path = "os/shared/sync_pass_start.rs"]
+mod sync_pass_start;
+#[path = "os/shared/sync_compare.rs"]
+mod sync_compare;
+#[path = "os/shared/sync_pass_compat.rs"]
+mod sync_pass_compat;
 #[path = "os/shared/sync_scan.rs"]
 mod sync_scan;
 #[path = "os/shared/sync_tasks.rs"]
 mod sync_tasks;
+#[path = "os/shared/sync_run.rs"]
+mod sync_run;
+#[path = "os/shared/sync_delete_walk.rs"]
+mod sync_delete_walk;
 
 pub use imp::*;
 

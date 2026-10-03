@@ -6,7 +6,7 @@
 pub mod agent;
 pub mod agent_proto;
 pub mod analytics;
-#[cfg(any(target_os = "android", all(unix, test)))]
+#[cfg(unix)]
 pub(crate) mod android_fs;
 #[cfg(not(target_os = "android"))]
 pub mod app;
@@ -28,6 +28,8 @@ pub mod ftp;
 pub mod gdrive;
 #[cfg(not(target_os = "android"))]
 pub mod icons;
+pub mod keep_awake;
+pub(crate) mod host_trash;
 pub mod linemerge;
 mod local_access;
 #[cfg(any(target_os = "android", all(unix, test)))]
@@ -55,6 +57,7 @@ pub mod updater;
 pub mod vfs;
 #[cfg(windows)]
 pub mod virtual_clipboard;
+pub mod watch;
 pub mod webdav;
 pub mod zipfs;
 
@@ -71,6 +74,11 @@ pub fn run_gui() -> eframe::Result<()> {
     }
     if let Some(result) = share::run_exec_supervisor_if_requested(&raw_args) {
         result.unwrap_or_else(|error| panic!("remote-exec supervisor failed: {error}"));
+        return Ok(());
+    }
+
+    if raw_args.len() == 1 && raw_args[0] == std::ffi::OsStr::new("--sync-guardian") {
+        daemon::run_guardian();
         return Ok(());
     }
 
@@ -173,3 +181,5 @@ fn install_panic_logger_hook() {
         default_hook(info);
     }));
 }
+
+pub(crate) mod notify_desktop;
