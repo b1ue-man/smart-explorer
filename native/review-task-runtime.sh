@@ -7,10 +7,14 @@ chmod 700 "$runtime"
 loops=()
 mounts=()
 sftp_pid=""
+watch_limit_original=""
 cleanup() {
   local status=$? cleanup_failed=0 mounted device
   trap - EXIT TERM INT
   set +e
+  if [[ -n "$watch_limit_original" ]]; then
+    timeout 30 sudo -n sysctl -w "fs.inotify.max_user_watches=$watch_limit_original" || cleanup_failed=1
+  fi
   if mountpoint -q "$runtime/fuse"; then
     timeout 30 fusermount3 -u "$runtime/fuse" || cleanup_failed=1
   fi
@@ -30,7 +34,7 @@ trap cleanup EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
 sudo -n true
-for tool in losetup mkfs.fat mkfs.exfat mount mount.exfat-fuse umount sshfs fusermount3 socat udevadm; do
+for tool in losetup mkfs.fat mkfs.exfat mount mount.exfat-fuse umount sshfs fusermount3 socat udevadm sysctl; do
   command -v "$tool" >/dev/null || { echo "Missing runtime tool: $tool" >&2; exit 1; }
 done
 [[ -x /usr/lib/openssh/sftp-server ]] || { echo 'OpenSSH sftp-server missing' >&2; exit 1; }
@@ -78,4 +82,20 @@ timeout 45 sshfs -o "directport=$port" "127.0.0.1:$runtime/remote" "$runtime/fus
 mountpoint -q "$runtime/fuse"
 export SE_REVIEW_NOREPLACE_DIR="$runtime/fuse"
 printf 'fat=%s\nexfat=%s\nfuse=%s\nsftp_port=%s\n' "$SE_REVIEW_FAT_DIR" "$SE_REVIEW_EXFAT_DIR" "$SE_REVIEW_NOREPLACE_DIR" "$port" >"$runtime/values.txt"
-"$@"
+# The existing watch-limit case needs a different real kernel resource setting.
+# Partition its execution inside this one entrypoint; every selected case still
+# must produce its normal successful libtest line in the combined suite log.
+watch_limit_case=${SE_REVIEW_WATCH_LIMIT_CASE:?Missing discovered watch-limit case}
+if "$@" --skip "$watch_limit_case"; then normal_status=0; else normal_status=$?; fi
+watch_limit_original="$(sysctl -n fs.inotify.max_user_watches)"
+[[ "$watch_limit_original" =~ ^[0-9]+$ ]] || exit 2
+printf 'watch_limit_original=%s\n' "$watch_limit_original" >>"$runtime/values.txt"
+# The fixture creates 129 directories; 16 forces the real ENOSPC boundary.
+timeout 30 sudo -n sysctl -w fs.inotify.max_user_watches=16
+[[ "$(sysctl -n fs.inotify.max_user_watches)" == 16 ]] || exit 2
+if "$1" --include-ignored --test-threads=1 --exact "$watch_limit_case"; then
+  limit_status=0
+else
+  limit_status=$?
+fi
+((normal_status == 0 && limit_status == 0))
