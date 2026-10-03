@@ -17,12 +17,12 @@ fn optional_bool(args: &Value, name: &str) -> Result<Option<bool>, ApiError> {
 fn bool_arg(args: &Value, name: &str) -> Result<bool, ApiError> {
     optional_bool(args, name)?.ok_or_else(|| ApiError::new("invalid", format!("{name} fehlt.")))
 }
-fn access(args: &Value) -> Result<Option<ExportAccess>, ApiError> {
-    match args.get("access") {
+fn access(args: &Value, name: &str) -> Result<Option<ExportAccess>, ApiError> {
+    match args.get(name) {
         None => Ok(None),
         Some(Value::String(value)) if value == "read_only" => Ok(Some(ExportAccess::ReadOnly)),
         Some(Value::String(value)) if value == "read_write" => Ok(Some(ExportAccess::ReadWrite)),
-        _ => Err(invalid("access muss read_only oder read_write sein.")),
+        _ => Err(ApiError::new("invalid", format!("{name} muss read_only oder read_write sein."))),
     }
 }
 fn finish(rt: &Runtime, profiles: ShareProfiles, changed: bool) -> Value {
@@ -34,11 +34,17 @@ fn finish(rt: &Runtime, profiles: ShareProfiles, changed: bool) -> Value {
 pub(super) fn set_export(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
     let scope = str_arg(args, "scope")?;
     let path = str_arg(args, "path")?;
-    let access = access(args)?.ok_or_else(|| invalid("access fehlt."))?;
+    let access = access(args, "access")?.ok_or_else(|| invalid("access fehlt."))?;
+    let expected = access(args, "expectedAccess")?;
     let system = optional_bool(args, "allowSystemWrites")?;
     let mut changed = false;
     let profiles = ShareProfiles::mutate_persisted(default_home(), |profiles| {
-        changed = profiles.export_config_mut(scope)?.set_root_access(path, access, system)?;
+        let config = profiles.export_config_mut(scope)?;
+        if expected.is_some_and(|expected| config.roots.iter().find(|root| root.path == path)
+            .is_none_or(|root| root.access != expected)) {
+            return Err("Freigaberecht wurde geaendert; bitte neu laden".into());
+        }
+        changed = config.set_root_access(path, access, system)?;
         Ok(())
     }).map_err(error)?;
     Ok(finish(rt, profiles, changed))
@@ -64,7 +70,8 @@ pub(super) fn set_connection(rt: &Runtime, args: &Value) -> Result<Value, ApiErr
     let scope = str_arg(args, "scope")?;
     let account = str_arg(args, "account")?;
     let shared = bool_arg(args, "shared")?;
-    let requested = access(args)?;
+    let requested = access(args, "access")?;
+    let expected_shared = optional_bool(args, "expectedShared")?;
     if !shared && requested.is_some() {
         return Err(invalid("Beim Entfernen wird kein access angegeben."));
     }
@@ -74,6 +81,9 @@ pub(super) fn set_connection(rt: &Runtime, args: &Value) -> Result<Value, ApiErr
     let mut changed = false;
     let profiles = ShareProfiles::mutate_persisted(default_home(), |profiles| {
         let config = profiles.export_config_mut(scope)?;
+        if expected_shared.is_some_and(|expected| config.connection_access(account).is_some() != expected) {
+            return Err("Verbindungsfreigabe wurde geaendert; bitte neu laden".into());
+        }
         let access = if shared { requested.or(config.connection_access(account)).or(Some(ExportAccess::ReadOnly)) } else { None };
         changed = config.set_connection_access(account, access)?;
         Ok(())
