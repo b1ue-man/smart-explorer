@@ -110,29 +110,35 @@ where
         request: &DirectRepairPersistRequest<'_>,
     ) -> Result<DirectRepairStoreReceipt, DirectRepairStoreError> {
         let key = Self::replay_key(request);
-        if let Some(entry) = self.replay.get(&key).copied() {
+        let replay = self.replay.get(&key).copied();
+        if let Some(entry) = replay {
             if entry.digest != request.transcript_digest() {
                 return Err(DirectRepairStoreError::ReplayConflict);
             }
-            return Ok(request.receipt_after_durable_commit(entry.persisted));
         }
 
+        // A cached receipt proves the earlier commit, not today's policy.
+        // Re-read durable removal/block state even for an exact retransmit.
         let commit = self
             .relation_store
             .persist_direct(request.peer(), PairingOrigin::AutomaticRepair)
             .map_err(map_relation_store_error)?;
-        let persisted = if commit.changed() {
+        let persisted = if let Some(entry) = replay {
+            entry.persisted
+        } else if commit.changed() {
             DirectRepairPersisted::Changed
         } else {
             DirectRepairPersisted::AlreadyComplete
         };
-        self.remember(
-            key,
-            ReplayEntry {
-                digest: request.transcript_digest(),
-                persisted,
-            },
-        );
+        if replay.is_none() {
+            self.remember(
+                key,
+                ReplayEntry {
+                    digest: request.transcript_digest(),
+                    persisted,
+                },
+            );
+        }
         Ok(request.receipt_after_durable_commit(persisted))
     }
 }

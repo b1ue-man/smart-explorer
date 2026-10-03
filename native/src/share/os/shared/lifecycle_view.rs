@@ -145,6 +145,7 @@ pub fn authorized_device_views(profiles: &ShareProfiles) -> Vec<AuthorizedDevice
         let authorization = match grant.state {
             crate::share::DirectGrantState::Accepted => "active — Zugriff erlaubt",
             crate::share::DirectGrantState::Ignored => "inactive — Zugriff gesperrt",
+            crate::share::DirectGrantState::Reconfirm => "inactive — neu bestaetigen",
         }
         .to_string();
         let accepted_legacy_request = profiles
@@ -346,6 +347,7 @@ fn incoming_facts(
         .map(|grant| match grant.state {
             crate::share::DirectGrantState::Accepted => "active — Zugriff erlaubt",
             crate::share::DirectGrantState::Ignored => "inactive — Zugriff gesperrt",
+            crate::share::DirectGrantState::Reconfirm => "inactive — neu bestaetigen",
         })
         .unwrap_or("inactive — keine Freigabe");
     facts.push(LifecycleFact {

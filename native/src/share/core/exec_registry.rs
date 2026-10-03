@@ -10,6 +10,9 @@ use super::exec_types::{
 mod registry_view;
 use registry_view::{terminal_view, view};
 
+#[path = "exec_registry_authority.rs"]
+mod authority;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ExecCancelReason {
     User,
@@ -106,11 +109,17 @@ pub(crate) struct ExecRegistry {
 #[derive(Default)]
 struct RegistryState {
     authorization_epoch: u64,
-    policies: HashMap<PrincipalIdentity, (u64, bool)>,
+    policies: HashMap<PrincipalIdentity, PolicyAuthority>,
     active: HashMap<ExecId, ActiveJob>,
     history: VecDeque<ExecJobView>,
     terminal: HashMap<ExecId, TerminalEntry>,
     terminal_order: VecDeque<ExecId>,
+}
+
+struct PolicyAuthority {
+    revision: u64,
+    enabled: bool,
+    minimum_epoch: u64,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
@@ -151,44 +160,6 @@ impl ExecRegistry {
         }
     }
 
-    pub(crate) fn apply_authorization(
-        &self,
-        principal: &ExecPrincipal,
-        revision: u64,
-        epoch: u64,
-        enabled: bool,
-    ) -> Result<(), ExecRegistryError> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        if epoch < state.authorization_epoch {
-            return Err(ExecRegistryError::StaleAuthorization);
-        }
-        let epoch_advanced = epoch > state.authorization_epoch;
-        if epoch_advanced {
-            state.authorization_epoch = epoch;
-            cancel_matching(&mut state, |_| true, ExecCancelReason::Revoked);
-        }
-        let identity = PrincipalIdentity::from(principal);
-        if let Some((current_revision, current_enabled)) = state.policies.get(&identity) {
-            if revision < *current_revision
-                || (revision == *current_revision
-                    && enabled
-                    && !*current_enabled
-                    && !epoch_advanced)
-            {
-                return Err(ExecRegistryError::StaleAuthorization);
-            }
-        }
-        state.policies.insert(identity.clone(), (revision, enabled));
-        if !enabled {
-            cancel_matching(
-                &mut state,
-                |job| PrincipalIdentity::from(&job.lease.principal) == identity,
-                ExecCancelReason::Revoked,
-            );
-        }
-        Ok(())
-    }
-
     pub(crate) fn prepare(
         &self,
         principal: ExecPrincipal,
@@ -207,11 +178,12 @@ impl ExecRegistry {
         let Some(policy) = state.policies.get(&identity) else {
             return Err(ExecRegistryError::NotAuthorized);
         };
-        if !policy.1 {
+        if !policy.enabled {
             return Err(ExecRegistryError::NotAuthorized);
         }
-        if policy.0 != authorization.policy_revision
-            || state.authorization_epoch != authorization.authorization_epoch
+        if policy.revision != authorization.policy_revision
+            || authorization.authorization_epoch < policy.minimum_epoch
+            || authorization.authorization_epoch > state.authorization_epoch
         {
             return Err(ExecRegistryError::StaleAuthorization);
         }
@@ -278,9 +250,10 @@ impl ExecRegistry {
         let Some(policy) = state.policies.get(&identity) else {
             return stale_job(&mut state, lease);
         };
-        if !policy.1
-            || policy.0 != lease.policy_revision
-            || state.authorization_epoch != lease.authorization_epoch
+        if !policy.enabled
+            || policy.revision != lease.policy_revision
+            || lease.authorization_epoch < policy.minimum_epoch
+            || lease.authorization_epoch > state.authorization_epoch
         {
             return stale_job(&mut state, lease);
         }

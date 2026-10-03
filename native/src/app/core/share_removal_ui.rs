@@ -49,14 +49,20 @@ impl App {
     /// "Entfernen" on a Direct device: contact, secret, grant, requests and a
     /// durable denial of automatic re-pairing, then favourites, folder
     /// preferences, mounts and open tabs.
-    pub(in crate::app) fn remove_direct_peer_completely(&mut self, contact_id: &str) {
+    pub(in crate::app) fn remove_direct_peer_completely(&mut self, contact_id: &str) -> bool {
         match removal::remove_direct_peer(
             Some(Self::share_home()),
             &self.share_profiles,
             contact_id,
         ) {
-            Ok(removal) => self.apply_profile_removal(removal, true),
-            Err(error) => self.error_msg = Some(error),
+            Ok(removal) => {
+                self.apply_profile_removal(removal, true);
+                true
+            }
+            Err(error) => {
+                self.error_msg = Some(error);
+                false
+            }
         }
     }
 
@@ -78,14 +84,20 @@ impl App {
     }
 
     /// Room removal plus every derived store of that room.
-    pub(in crate::app) fn remove_room_completely(&mut self, room_profile_id: &str) {
+    pub(in crate::app) fn remove_room_completely(&mut self, room_profile_id: &str) -> bool {
         match removal::remove_room(
             Some(Self::share_home()),
             &self.share_profiles,
             room_profile_id,
         ) {
-            Ok(removal) => self.apply_profile_removal(removal, false),
-            Err(error) => self.error_msg = Some(error),
+            Ok(removal) => {
+                self.apply_profile_removal(removal, false);
+                true
+            }
+            Err(error) => {
+                self.error_msg = Some(error);
+                false
+            }
         }
     }
 

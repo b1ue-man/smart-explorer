@@ -97,7 +97,7 @@ impl App {
         if self.share_regenerate_direct_confirm {
             ui.colored_label(
                 theme::warning(ui),
-                "Neuer Code invalidiert alte Direktkontakte zu diesem Geraet.",
+                "Ein neuer Code pausiert bestehende Direkt-Freigaben bis zur erneuten Bestaetigung. Exec wird abgeschaltet.",
             );
             ui.horizontal_wrapped(|ui| {
                 if ui.button("Wirklich neu generieren").clicked() {
@@ -112,6 +112,15 @@ impl App {
     }
 
     fn ui_share_add_device(&mut self, ui: &mut egui::Ui) {
+        let choice_id = egui::Id::new("share_direct_code_share_back");
+        let mut share_back =
+            ui.data_mut(|data| data.get_temp::<bool>(choice_id).unwrap_or_default());
+        if ui
+            .checkbox(&mut share_back, "Auch meine Freigaben fuer dieses Geraet oeffnen")
+            .changed()
+        {
+            ui.data_mut(|data| data.insert_temp(choice_id, share_back));
+        }
         ui.label(
             RichText::new("Direkt-Code")
                 .small()
@@ -143,8 +152,20 @@ impl App {
                 ) {
                     Ok((profiles, id)) => {
                         self.share_profiles = profiles;
+                        match crate::share::set_direct_share_back(
+                            Some(dirs_home().to_string_lossy().replace('\\', "/")),
+                            &id,
+                            share_back,
+                        ) {
+                            Ok(change) => self.share_profiles = change.profiles,
+                            Err(error) => {
+                                self.error_msg = Some(error);
+                                return;
+                            }
+                        }
                         self.share_direct_code_input.clear();
                         self.share_direct_name_input.clear();
+                        ui.data_mut(|data| data.insert_temp(choice_id, false));
                         let _ = lifecycle_ui::queue_contact(self, &id);
                     }
                     Err(e) => self.error_msg = Some(e),
@@ -153,6 +174,7 @@ impl App {
             if ui.button("Leeren").clicked() {
                 self.share_direct_code_input.clear();
                 self.share_direct_name_input.clear();
+                ui.data_mut(|data| data.insert_temp(choice_id, false));
             }
         });
 
@@ -163,6 +185,7 @@ impl App {
         let mut open_target: Option<crate::share::PeerOpenTarget> = None;
         let mut request_direct: Option<String> = None;
         let mut pending_diag: Option<String> = None;
+        let mut share_back_change = None;
         let mut changed = false;
         let previous_profiles = self.share_profiles.clone();
         for c in &mut self.share_profiles.direct_contacts {
@@ -191,6 +214,13 @@ impl App {
                     request_direct = Some(c.id.clone());
                 }
                 ui.menu_button("Verwalten", |ui| {
+                let mut share_back = c.relation.share_back;
+                if ui
+                    .checkbox(&mut share_back, "Auch meine Freigaben fuer dieses Geraet oeffnen")
+                    .changed()
+                {
+                    share_back_change = Some((c.id.clone(), share_back));
+                }
                 if ui.checkbox(&mut c.auto_connect, "Automatisch verbinden").changed() {
                     changed = true;
                 }
@@ -238,6 +268,19 @@ impl App {
             self.share_tab = 3;
         }
         let persisted = !changed || self.commit_share_profiles(previous_profiles);
+        if let Some((contact_id, share_back)) = share_back_change.filter(|_| persisted) {
+            match crate::share::set_direct_share_back(
+                Some(dirs_home().to_string_lossy().replace('\\', "/")),
+                &contact_id,
+                share_back,
+            ) {
+                Ok(change) => {
+                    self.share_profiles = change.profiles;
+                    let _ = self.configure_share_service();
+                }
+                Err(error) => self.error_msg = Some(error),
+            }
+        }
         if let Some(id) = remove.filter(|_| persisted) {
             self.remove_direct_peer_completely(&id);
         }

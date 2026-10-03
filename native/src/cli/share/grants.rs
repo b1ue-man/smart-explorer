@@ -7,6 +7,8 @@ use super::lifecycle_output;
 mod grants_exec;
 #[path = "grants_removed.rs"]
 mod grants_removed;
+#[path = "grants_readmit.rs"]
+mod grants_readmit;
 
 #[derive(Args)]
 #[command(long_about = "Inspect and revoke direct authorization grants.\n\n\
@@ -25,6 +27,8 @@ enum GrantsCommand {
     List,
     #[command(about = "Revoke an authorization; auto-selects the only active grant")]
     Revoke(RevokeArgs),
+    #[command(about = "Deliberately reactivate a blocked or suspended grant; Exec stays disabled")]
+    Allow(grants_readmit::AllowArgs),
     #[command(
         about = "Delete an authorization entry (active or inactive) and every request of that device; the device is denied automatic re-pairing until paired again deliberately"
     )]
@@ -73,6 +77,7 @@ pub(super) fn run(args: GrantsArgs) -> Result<(), String> {
     match args.command {
         None | Some(GrantsCommand::List) => list(args.json),
         Some(GrantsCommand::Revoke(command)) => revoke(command, args.json),
+        Some(GrantsCommand::Allow(command)) => grants_readmit::run(command, args.json),
         Some(GrantsCommand::Delete(command)) => grants_removed::delete(command, args.json),
         Some(GrantsCommand::Removed(command)) => grants_removed::removed(command, args.json),
         Some(GrantsCommand::Exec(command)) => grants_exec::run(command, args.json),
@@ -315,14 +320,12 @@ fn revoke_legacy(
     let now = crate::share::core_now_secs();
     let committed =
         crate::share::ShareProfiles::mutate_persisted(Some(super::default_home()), |profiles| {
-            let current = profiles
+            profiles
                 .direct_grants
-                .iter_mut()
+                .iter()
                 .find(|current| current.device_id == device_id && current.public_key == public_key)
                 .ok_or_else(|| format!("legacy grant disappeared: {device_id}"))?;
-            current.state = crate::share::DirectGrantState::Ignored;
-            current.updated_at = now;
-            current.exec.disable_without_decision(now);
+            profiles.withdraw_direct_key(&peer, now);
             profiles.mark_legacy_revoked_for_peer(&peer, now);
             Ok(())
         })?;
@@ -438,6 +441,7 @@ fn grant_state_code(state: &crate::share::DirectGrantState) -> &'static str {
     match state {
         crate::share::DirectGrantState::Accepted => "accepted",
         crate::share::DirectGrantState::Ignored => "ignored",
+        crate::share::DirectGrantState::Reconfirm => "reconfirm",
     }
 }
 

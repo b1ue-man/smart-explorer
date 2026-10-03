@@ -23,6 +23,16 @@ pub(crate) fn merge_worker_updates(
             continue;
         };
         if runtime_contact_changed(previous, updated) {
+            // A late event must not overwrite a user's concurrently replaced
+            // pins or restore authorization after an explicit withdrawal.
+            if current.lookup_id != previous.lookup_id
+                || current.expected_fingerprint != previous.expected_fingerprint
+                || current.expected_node_id != previous.expected_node_id
+                || current.remote_device_id != previous.remote_device_id
+                || current.remote_public_key != previous.remote_public_key
+            {
+                continue;
+            }
             current.expected_node_id = updated.expected_node_id.clone();
             current.remote_device_id = updated.remote_device_id.clone();
             current.remote_public_key = updated.remote_public_key.clone();
@@ -30,10 +40,17 @@ pub(crate) fn merge_worker_updates(
             current.status = updated.status.clone();
             current.last_error = updated.last_error.clone();
             current.presence = updated.presence.clone();
-            current.access_state = updated.access_state.clone();
-            current.request_sent_at = updated.request_sent_at;
-            current.accepted_at = updated.accepted_at;
-            current.accepted_public_key = updated.accepted_public_key.clone();
+            if current.access_state == previous.access_state
+                && current.request_sent_at == previous.request_sent_at
+                && current.accepted_at == previous.accepted_at
+                && current.accepted_public_key == previous.accepted_public_key
+            {
+                current.access_state = updated.access_state.clone();
+                current.request_sent_at = updated.request_sent_at;
+                current.accepted_at = updated.accepted_at;
+                current.accepted_public_key = updated.accepted_public_key.clone();
+            }
+            current.relation.signed_presence |= updated.relation.signed_presence;
             current.lan_candidates = updated.lan_candidates.clone();
             current.lan_seen_at = updated.lan_seen_at;
             current.lan_uplink = updated.lan_uplink;
@@ -73,6 +90,7 @@ fn runtime_contact_changed(
         || previous.lan_candidates != updated.lan_candidates
         || previous.lan_seen_at != updated.lan_seen_at
         || previous.lan_uplink != updated.lan_uplink
+        || previous.relation.signed_presence != updated.relation.signed_presence
 }
 
 fn merge_members(
@@ -89,30 +107,52 @@ fn merge_members(
             if !current
                 .members
                 .iter()
-                .any(|member| member.device_id == updated_member.device_id)
+                .any(|member| {
+                    member.device_id == updated_member.device_id
+                        || member.public_key == updated_member.public_key
+                        || !member.node_id.is_empty() && member.node_id == updated_member.node_id
+                })
             {
-                current.members.push(updated_member.clone());
+                if let Some(presence) = &updated_member.presence {
+                    current.upsert_member_from_presence(
+                        presence.clone(),
+                        updated_member.last_seen.unwrap_or_default(),
+                    );
+                }
             }
             continue;
         }
         if previous_member == Some(updated_member) {
             continue;
         }
-        let exec_changed = previous_member.is_some_and(|member| member.exec != updated_member.exec);
         if let Some(current_member) = current
             .members
             .iter_mut()
             .find(|member| member.device_id == updated_member.device_id)
         {
-            let blocked = current_member.blocked;
-            let exec = if exec_changed {
-                updated_member.exec.clone()
-            } else {
-                current_member.exec.clone()
+            let Some(previous_member) = previous_member else {
+                continue;
             };
-            *current_member = updated_member.clone();
-            current_member.blocked = blocked;
-            current_member.exec = exec;
+            if current_member.public_key != previous_member.public_key
+                || current_member.node_id != previous_member.node_id
+                || current_member.fingerprint != previous_member.fingerprint
+            {
+                continue;
+            }
+            if updated_member.public_key != previous_member.public_key
+                || updated_member.fingerprint != previous_member.fingerprint
+                || !previous_member.node_id.is_empty() && updated_member.node_id != previous_member.node_id
+            {
+                continue;
+            }
+            current_member.node_id = updated_member.node_id.clone();
+            current_member.relation.signed_presence |= updated_member.relation.signed_presence;
+            current_member.device_name = updated_member.device_name.clone();
+            current_member.relay_url = updated_member.relay_url.clone();
+            current_member.candidates = updated_member.candidates.clone();
+            current_member.last_seen = updated_member.last_seen;
+            current_member.status = updated_member.status.clone();
+            current_member.presence = updated_member.presence.clone();
         }
     }
 }
@@ -142,6 +182,54 @@ mod tests {
         assert_eq!(latest.direct_contacts[0].last_seen, Some(77));
     }
 
+    #[test]
+    fn review_task_late_worker_cannot_restore_withdrawn_access_or_clear_signature() {
+        let mut before = ShareProfiles::default();
+        before.direct_contacts.push(contact());
+        let mut worker = before.clone();
+        worker.direct_contacts[0].access_state = DirectAccessState::Accepted;
+        worker.direct_contacts[0].accepted_at = Some(77);
+        worker.direct_contacts[0].relation.signed_presence = true;
+        let mut latest = before.clone();
+        latest.direct_contacts[0].access_state = DirectAccessState::Ignored;
+        merge_worker_updates(&mut latest, &before, &worker);
+        assert_eq!(latest.direct_contacts[0].access_state, DirectAccessState::Ignored);
+        assert_eq!(latest.direct_contacts[0].accepted_at, None);
+        assert!(latest.direct_contacts[0].relation.signed_presence);
+        let mut unsigned_worker = latest.clone();
+        unsigned_worker.direct_contacts[0].relation.signed_presence = false;
+        unsigned_worker.direct_contacts[0].last_seen = Some(80);
+        let previous = latest.clone();
+        merge_worker_updates(&mut latest, &previous, &unsigned_worker);
+        assert!(latest.direct_contacts[0].relation.signed_presence);
+    }
+
+    #[test]
+    fn review_task_new_worker_room_member_uses_current_confirmation_policy() {
+        let mut before = ShareProfiles::default();
+        before.rooms.push(crate::share::RoomProfile {
+            id: "profile".into(), name: "Room".into(), room_id: "room".into(),
+            auto_join: true, last_seen: None, status: ShareStatus::Waiting,
+            members: Vec::new(), exports: Default::default(),
+            policy: crate::share::RoomPolicy::new_room(),
+        });
+        let presence = crate::share::PeerPresence {
+            kind: "room".into(), relation_id: "room".into(), device_id: "peer".into(),
+            device_name: "Peer".into(), public_key: "key".into(), fingerprint: "fp".into(),
+            node_id: "key".into(), relay_url: String::new(), candidates: Vec::new(),
+            expires_at: 100, nonce: "verified.ps1.signature".into(), proof: String::new(),
+        };
+        let mut worker = before.clone();
+        worker.rooms[0].upsert_member_from_presence(presence, 2);
+        let mut latest = before.clone();
+        latest.rooms[0].policy.confirm_new_members = true;
+        merge_worker_updates(&mut latest, &before, &worker);
+        assert_eq!(latest.rooms[0].members.len(), 1);
+        assert!(latest.rooms[0].members[0].blocked);
+        assert!(!latest.rooms[0].members[0].is_admitted());
+        assert!(!latest.rooms[0].members[0].exec.enabled);
+    }
+
     fn contact() -> DirectContact {
         DirectContact {
             id: "contact-a".into(),
@@ -164,6 +252,7 @@ mod tests {
             lan_candidates: Vec::new(),
             lan_seen_at: None,
             lan_uplink: None,
+            relation: Default::default(),
         }
     }
 }

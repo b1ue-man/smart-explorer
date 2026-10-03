@@ -111,7 +111,7 @@ pub(super) fn dispatch_server_line(
                     .power()
                     .request_hold(SIGNAL_ACTIVITY_HOLD_MS);
             }
-            if handle_server_msg(line, auth, events) {
+            if handle_server_msg(line, auth, events, tracked_direct) {
                 SignalDispatchOutcome::Pong
             } else {
                 SignalDispatchOutcome::Continue

@@ -154,7 +154,7 @@ impl ShareProfiles {
             request_id: decision.request_id.clone(),
             decision: decision.decision,
             revision: decision.decision_revision,
-            at: decision.decided_at,
+            at: decision.decided_at.max(entry.record.request.created_at),
             message: decision.message.clone(),
         })?;
         if entry.direction == DirectRequestDirection::Outgoing {
@@ -162,7 +162,7 @@ impl ShareProfiles {
                 request_id: decision.request_id.clone(),
                 state: DirectDecisionDeliveryState::Received,
                 revision: decision.decision_revision,
-                at: observed_at,
+                at: observed_at.max(entry.record.decision.changed_at),
                 failure: None,
             })?;
         }

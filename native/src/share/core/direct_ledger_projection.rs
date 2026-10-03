@@ -91,7 +91,10 @@ impl ShareProfiles {
             if !identity_changed || may_replace_inactive {
                 if identity_changed {
                     grant.exec.reset_for_identity_change(decision.decided_at);
-                } else if decision.decision != DirectDecisionKind::Accepted {
+                    grant.write = false;
+                } else if decision.decision != DirectDecisionKind::Accepted
+                    || grant.state != DirectGrantState::Accepted
+                {
                     grant.exec.disable_for_base_decision(
                         decision.decided_at,
                         decision.request_id.clone(),
@@ -126,10 +129,12 @@ impl ShareProfiles {
                 state,
                 updated_at: decision.decided_at,
                 exec,
+                write: false,
             });
         }
         self.recompute_identity_conflicts_for_device(&device_id);
         if decision.decision != DirectDecisionKind::Accepted {
+            self.withdraw_direct_key(peer, decision.decided_at);
             self.mark_legacy_revoked_for_peer(peer, decision.decided_at);
         }
     }

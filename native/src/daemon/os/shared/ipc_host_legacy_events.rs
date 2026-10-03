@@ -10,6 +10,7 @@ pub(crate) struct LegacyPersistBatch {
 
 pub(crate) fn persist_all(events: Vec<(String, crate::share::PeerPresence)>) -> LegacyPersistBatch {
     let now = crate::share::core_now_secs();
+    let policy = crate::share::DirectRequestPolicy::current();
     let mut batch = LegacyPersistBatch {
         committed: None,
         retry: Vec::new(),
@@ -23,15 +24,17 @@ pub(crate) fn persist_all(events: Vec<(String, crate::share::PeerPresence)>) -> 
                     return Err("legacy presence belongs to a stale local identity".into());
                 }
                 let mut verified = crate::share::ShareProfiles::default();
-                verified.record_verified_legacy_direct_request(&lookup_id, &presence, now)?;
+                verified
+                    .record_verified_legacy_direct_request(&lookup_id, &presence, now, policy)?;
                 verified.validate_legacy_evidence(identity)?;
                 crate::share::ShareProfiles::mutate_persisted(
                     Some(super::default_home()),
                     |profiles| {
                         profiles.reconcile_legacy_identity(&identity.direct_lookup_id, now)?;
                         profiles.expire_legacy_direct_requests(now);
-                        profiles
-                            .record_verified_legacy_direct_request(&lookup_id, &presence, now)?;
+                        profiles.record_verified_legacy_direct_request(
+                            &lookup_id, &presence, now, policy,
+                        )?;
                         profiles.validate_legacy_evidence(identity)
                     },
                 )

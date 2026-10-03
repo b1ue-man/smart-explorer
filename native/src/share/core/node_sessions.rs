@@ -46,12 +46,6 @@ impl ShareIrohNode {
         if self.require_sharing_active().is_err() {
             return DirectReciprocalTransportResult::Transient;
         }
-        let transition = match self.runtime_transition_slot.clone().try_acquire_owned() {
-            Ok(transition) => transition,
-            Err(_) => return DirectReciprocalTransportResult::Transient,
-        };
-        let runtime_guard =
-            super::direct_reciprocal_transport::direct_repair_runtime_guard(transition, None);
         if let Err(result) = authorize_outgoing_repair_generation(&self.auth, expected_generation) {
             return result;
         }
@@ -109,6 +103,12 @@ impl ShareIrohNode {
             Err(_) => return DirectReciprocalTransportResult::Transient,
         };
         let store = self.direct_repair_store.clone();
+        let gate = super::direct_reciprocal_transport::OutgoingRepairPersistGate {
+            transition_slot: self.runtime_transition_slot.clone(),
+            auth: self.auth.clone(),
+            identity: identity.clone(),
+            endpoint: endpoint.clone(),
+        };
         // The coordinator is an ordinary OS thread. Construct the timer only
         // after entering the node runtime, otherwise Tokio panics before the
         // attempt can return and release the coordinator's running state.
@@ -119,7 +119,7 @@ impl ShareIrohNode {
                     connection,
                     authorized,
                     store,
-                    runtime_guard,
+                    gate,
                 ),
             )
             .await

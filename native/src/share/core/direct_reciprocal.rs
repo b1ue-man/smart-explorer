@@ -3,7 +3,9 @@ use std::fmt;
 use super::direct_protocol::{validate_direct_lookup_id, DirectPeerIdentity, DirectProtocolError};
 use super::profiles::{DirectCode, ShareProfiles};
 use super::removed_direct_peers::PairingOrigin;
-use super::types::{DirectAccessState, DirectContact, DirectGrant, DirectGrantState};
+use super::types::{
+    DirectAccessState, DirectContact, DirectGrant, DirectGrantState, DirectRelationFlags,
+};
 
 /// The Direct-code material which is durable for one reciprocal relationship.
 /// It deliberately travels with the authenticated identity, rather than as a
@@ -216,19 +218,18 @@ impl ShareProfiles {
         // A removed device stays out until the user pairs it again; the
         // background repair never overrides that decision.
         if self.removed_direct_peer(identity).is_some() {
-            match origin {
-                PairingOrigin::AutomaticRepair => {
-                    return Err(DirectReciprocalError::PolicyDenied(
-                        DirectReciprocalPolicyDenied::PeerRemoved {
-                            device_id: identity.device_id.clone(),
-                        },
-                    ));
-                }
-                PairingOrigin::UserPairing => {
-                    self.readmit_removed_direct_peer(&identity.device_id);
-                }
+            if !origin.is_user() {
+                return Err(DirectReciprocalError::PolicyDenied(
+                    DirectReciprocalPolicyDenied::PeerRemoved {
+                        device_id: identity.device_id.clone(),
+                    },
+                ));
             }
+            self.readmit_removed_direct_identity(identity);
         }
+        // FC1: only a pairing that opens this device's exports creates a
+        // grant; a suspended grant („neu bestätigen“) needs a deliberate
+        // pairing that opens them.
         let contact_index = self.reciprocal_contact_index(peer)?;
         let contact_id = match contact_index {
             Some(index) => self.direct_contacts[index].id.clone(),
@@ -261,6 +262,26 @@ impl ShareProfiles {
             }
         }
 
+        if origin == PairingOrigin::AutomaticRepair
+            && self.direct_auto_accept_denied(material.lookup_id(), identity)
+        {
+            return Err(DirectReciprocalError::PolicyDenied(
+                DirectReciprocalPolicyDenied::GrantIgnored {
+                    device_id: identity.device_id.clone(),
+                },
+            ));
+        }
+        let opens_exports = match origin {
+            PairingOrigin::UserPairing => true,
+            PairingOrigin::UserPairingOneWay => false,
+            PairingOrigin::AutomaticRepair => {
+                contact_index.is_some_and(|index| self.direct_contacts[index].relation.share_back)
+                    || grant_index.is_some_and(|index| {
+                        self.direct_grants[index].state == DirectGrantState::Accepted
+                    })
+            }
+        };
+
         if contact_index.is_some_and(|index| {
             self.direct_contacts[index].access_state == DirectAccessState::Ignored
         }) {
@@ -283,6 +304,13 @@ impl ShareProfiles {
         let mut changed = false;
         if let Some(index) = contact_index {
             let contact = &mut self.direct_contacts[index];
+            if origin.is_user() {
+                let share_back = origin == PairingOrigin::UserPairing;
+                if contact.relation.share_back != share_back {
+                    contact.relation.share_back = share_back;
+                    changed = true;
+                }
+            }
             if contact.expected_node_id.is_empty() {
                 contact.expected_node_id = identity.node_id.clone();
                 changed = true;
@@ -332,6 +360,10 @@ impl ShareProfiles {
                 lan_candidates: Vec::new(),
                 lan_seen_at: None,
                 lan_uplink: None,
+                relation: DirectRelationFlags {
+                    share_back: origin == PairingOrigin::UserPairing,
+                    ..DirectRelationFlags::default()
+                },
             });
             changed = true;
         }
@@ -343,12 +375,19 @@ impl ShareProfiles {
                 grant.updated_at = now;
                 changed = true;
             }
-            if grant.state != DirectGrantState::Accepted {
+            let reactivates = match grant.state {
+                DirectGrantState::Accepted | DirectGrantState::Ignored => false,
+                DirectGrantState::Reconfirm => origin == PairingOrigin::UserPairing,
+            };
+            if reactivates {
                 grant.state = DirectGrantState::Accepted;
+                if grant.exec.enabled {
+                    grant.exec.disable_without_decision(now);
+                }
                 grant.updated_at = now;
                 changed = true;
             }
-        } else {
+        } else if opens_exports {
             self.direct_grants.push(DirectGrant {
                 device_id: identity.device_id.clone(),
                 device_name: identity.device_name.clone(),
@@ -358,6 +397,7 @@ impl ShareProfiles {
                 state: DirectGrantState::Accepted,
                 updated_at: now,
                 exec: Default::default(),
+                write: false,
             });
             changed = true;
         }

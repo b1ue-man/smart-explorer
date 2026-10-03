@@ -168,6 +168,9 @@ impl DirectRequestEntry {
         received_at: i64,
     ) -> Result<Self, DirectLedgerError> {
         let request_id = request.request_id.clone();
+        // Verification allows bounded clock skew. Local observation cannot
+        // precede the authenticated request's creation (S32).
+        let received_at = received_at.max(request.created_at);
         let mut entry = Self {
             direction: DirectRequestDirection::Incoming,
             contact_id: None,
@@ -304,3 +307,7 @@ impl DirectRequestEntry {
         true
     }
 }
+
+#[cfg(test)]
+#[path = "direct_ledger_clock_task_tests.rs"]
+mod clock_task_tests;

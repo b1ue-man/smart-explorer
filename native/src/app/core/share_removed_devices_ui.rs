@@ -37,7 +37,7 @@ pub(super) fn ui(app: &mut App, ui: &mut egui::Ui) {
                     if ui
                         .button("Erneut zulassen")
                         .on_hover_text(
-                            "Hebt nur die Sperre auf. Das Geraet kann sich danach wieder automatisch koppeln, wenn es unseren Direkt-Code noch kennt.",
+                            "Hebt die Entfernungssperre auf. Eine neue Anfrage folgt der eingestellten Anfragepolitik; Freigaben und Exec werden dadurch nicht erteilt.",
                         )
                         .clicked()
                     {

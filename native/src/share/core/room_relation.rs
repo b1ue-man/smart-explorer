@@ -1,5 +1,13 @@
 use std::fmt;
 
+#[path = "room_relation_members.rs"]
+mod members;
+pub(crate) use members::apply_room_runtime;
+pub use members::{
+    MemberUpsert, RoomMemberAdmission, RoomMemberFlags, RoomPolicy, RoomRuntime,
+    MAX_PENDING_ROOM_MEMBERS,
+};
+
 pub const ROOM_RELATION_SECRET_BYTES: usize = 32;
 pub const MAX_ROOM_RELATION_ID_BYTES: usize = 128;
 pub const MAX_ROOM_DISPLAY_NAME_BYTES: usize = 256;
@@ -11,10 +19,7 @@ pub struct RoomRelationMaterial {
 }
 
 impl RoomRelationMaterial {
-    pub fn new(
-        room_id: impl Into<String>,
-        mut secret: Vec<u8>,
-    ) -> Result<Self, RoomRelationError> {
+    pub fn new(room_id: impl Into<String>, mut secret: Vec<u8>) -> Result<Self, RoomRelationError> {
         let room_id = room_id.into();
         if !valid_identifier(&room_id) {
             secret.fill(0);
@@ -184,9 +189,7 @@ impl fmt::Display for RoomRelationError {
 
 impl std::error::Error for RoomRelationError {}
 
-pub(crate) fn canonical_room_display_name(
-    value: &str,
-) -> Result<String, RoomRelationError> {
+pub(crate) fn canonical_room_display_name(value: &str) -> Result<String, RoomRelationError> {
     let trimmed = value.trim();
     let display_name = if trimmed.is_empty() { "Raum" } else { trimmed };
     if display_name.len() > MAX_ROOM_DISPLAY_NAME_BYTES

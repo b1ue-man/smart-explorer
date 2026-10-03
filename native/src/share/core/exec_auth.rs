@@ -93,7 +93,7 @@ fn authorize_client_hello_in(
                         && member.public_key == hello.public_key
                         && member.fingerprint == hello.fingerprint
                         && member.node_id == hello.node_id
-                        && !member.blocked
+                        && member.is_admitted()
                 })
                 .ok_or_else(denied)?;
             if !member.exec.enabled || !fingerprint_matches(&member.public_key, &member.fingerprint)
@@ -257,6 +257,7 @@ mod tests {
                 state: DirectGrantState::Accepted,
                 updated_at: 1,
                 exec: ExecGrant::default(),
+                write: false,
             }],
             rooms: Vec::new(),
             direct_requests: Vec::new(),
