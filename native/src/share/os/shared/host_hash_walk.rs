@@ -70,6 +70,10 @@ impl Walk<'_> {
             if entry.kind == EntryKind::Directory {
                 match directory.open_child(&entry.name) {
                     Ok(handle) => {
+                        if let Err(error) = crate::share::fs::ensure_local_share_handle_allowed(&handle) {
+                            self.failed(&child, error)?;
+                            continue;
+                        }
                         self.add(Ok(FsHashEntry { rel: child.clone(), is_dir: true, size: 0, mtime_ms: entry.mtime_ms, digest: None }))?;
                         self.local(&handle, &physical.join(&entry.name), &child, depth+1, excluded)?;
                     }
