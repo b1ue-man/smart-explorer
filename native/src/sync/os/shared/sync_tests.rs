@@ -251,29 +251,20 @@ impl Backend for HookBackend<'_> {
         self.inner.root_display()
     }
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
+        if let Some(suffix) = self.appearing_suffix {
+            if self.appearance_checks.fetch_add(1, Ordering::Relaxed) == 1 {
+                // The real absence guard consumes tolerant listings, not leaf stat.
+                let appeared = crate::vfs::sync_child_path(self.inner, path, suffix)?;
+                std::fs::write(appeared, b"appeared")?;
+            }
+        }
         let entries = self.inner.list_dir(path)?;
         if let Some(cancel) = self.cancel_on_list {
-            cancel.store(true, Ordering::Relaxed);
+            cancel.store(true, Ordering::Release);
         }
         Ok(entries)
     }
     fn stat(&self, path: &str) -> VfsResult<VfsMeta> {
-        if self
-            .appearing_suffix
-            .is_some_and(|suffix| path.ends_with(suffix))
-        {
-            if self.appearance_checks.fetch_add(1, Ordering::Relaxed) == 0 {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    "not present during first preflight",
-                ));
-            }
-            return Ok(VfsMeta {
-                name: path.rsplit('/').next().unwrap_or(path).into(),
-                size: 1,
-                ..Default::default()
-            });
-        }
         self.inner.stat(path)
     }
     fn open_read(&self, path: &str) -> VfsResult<Box<dyn Read + Send>> {
@@ -335,9 +326,15 @@ fn mirror_cancel_during_preflight_deletes_nothing() {
         &mut errors,
         &mut crate::bisync::SyncOmissions::default(),
     );
+    assert!(cancel.load(Ordering::Acquire));
     assert_eq!(stats.deleted, 0);
+    assert!(stats.errors >= 1);
     assert!(!errors.is_empty());
     assert!(destination_dir.join("orphan.txt").exists());
+    assert_eq!(
+        std::fs::read(destination_dir.join("orphan.txt")).unwrap(),
+        b"x"
+    );
     std::fs::remove_dir_all(source_dir).ok();
     std::fs::remove_dir_all(destination_dir).ok();
 }
@@ -370,9 +367,23 @@ fn source_appearing_after_preflight_blocks_all_deletes() {
         &mut errors,
         &mut crate::bisync::SyncOmissions::default(),
     );
+    assert!(source.appearance_checks.load(Ordering::Relaxed) >= 2);
     assert_eq!(stats.deleted, 0);
+    assert!(!errors.is_empty());
     assert!(destination_dir.join("appears.txt").exists());
     assert!(destination_dir.join("other.txt").exists());
+    assert_eq!(
+        std::fs::read(source_dir.join("appears.txt")).unwrap(),
+        b"appeared"
+    );
+    assert_eq!(
+        std::fs::read(destination_dir.join("appears.txt")).unwrap(),
+        b"x"
+    );
+    assert_eq!(
+        std::fs::read(destination_dir.join("other.txt")).unwrap(),
+        b"y"
+    );
     std::fs::remove_dir_all(source_dir).ok();
     std::fs::remove_dir_all(destination_dir).ok();
 }
