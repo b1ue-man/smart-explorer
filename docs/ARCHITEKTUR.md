@@ -62,6 +62,8 @@ Speicheranalyse – als Desktop-App (Windows, Linux; Rust + egui) und als Androi
   veröffentlichen ohne Ersetzen; Fortschritt ~150 ms, Fehler als JSON-Zeilen in einer Protokolldatei.
 - Persistenz: App-Daten unter `support_dirs::app_data_dir()` (Android: `<filesDir>/smart_explorer`),
   Sync-Jobs `sync/jobs/*.conf`, Zugangsdaten `secrets-v1/` (Datei-Store), Share-Profile/Identität.
+  Private Ancestorpfade bleiben auf Android nur durchsuchbar; der private Leaf wird lesbar geöffnet.
+  Windows-Journale nutzen RW plus expliziten Seek, damit bestätigte Tail-Kürzung ihre nötigen Handle-Rechte hat.
 - Sync: gespeicherter Endpunkt → gemeinsame VFS-/Literalpfad-Auflösung → `StateKey`/Pairlock →
   optionsbewusster Snapshot → `ApplyScope` mit Checkpoints, Versionen und vorab dauerhaftem
   ReplacementIntent → bestätigte Teilaktionen. Pending-Merge und unklare Veröffentlichung
@@ -69,6 +71,8 @@ Speicheranalyse – als Desktop-App (Windows, Linux; Rust + egui) und als Androi
 - Share: vollständig gepinnter Principal → aktuelle persistierte Export-/Kontakt-/Raumrechte →
   OS-Handle-/Pfadgrenze. Statuskanal und mDNS erteilen keine FS-/Exec- oder Uplink-Rechte;
   Rechteentzug invalidiert betroffene Sitzungen, ein Transportabbruch allein keine Analyse-Retention.
+  Aktuell zugelassene gepinnte Altpeers nutzen vorhandene ListDir-/Dateisystemabläufe mit konservativen
+  Fähigkeiten ohne Mount-Lease; moderne Status-/Entscheidungsgarantien werden dadurch nicht ersetzt.
 
 ## Externe Abhängigkeiten
 Rust-Crates und ihre Android-Tauglichkeit: `docs/refs/android-rust-deps.md`; JNI: `docs/refs/rust-jni-022.md`;
