@@ -393,6 +393,7 @@ impl RelationStore for InMemoryRelationStore {
             status: ShareStatus::Waiting,
             members: Vec::new(),
             exports: self.profiles.default_direct_exports.clone(),
+            policy: crate::share::RoomPolicy::new_room(),
         });
         self.room_material
             .insert(room_profile_id.clone(), material.clone());

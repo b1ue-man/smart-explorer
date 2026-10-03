@@ -69,7 +69,9 @@ fn share_remote_task_discovery_wire_fixture_roundtrips() {
 }
 
 #[test]
-fn share_remote_task_discovery_accepts_empty_and_zero_pin() {
+fn share_remote_task_pake_primitive_accepts_empty_and_zero_bytes() {
+    // OPAQUE accepts arbitrary bytes. Application publishing and the exchange
+    // port reject an empty PIN; a weak nonempty PIN needs explicit UI opt-in.
     complete_pairing(b"", "empty");
     complete_pairing(b"0", "zero");
 }

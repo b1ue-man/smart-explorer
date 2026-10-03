@@ -214,6 +214,9 @@ pub struct TlsConfig {
     pub(super) config: Arc<rustls::ServerConfig>,
     /// The kind
     pub(super) acceptor: TlsAcceptor,
+    /// Smart Explorer patch: serve a connection that does not start with a
+    /// TLS record as plain HTTP (older clients during a TLS migration).
+    pub(super) plaintext_fallback: bool,
 }
 
 impl TlsConfig {
@@ -260,7 +263,18 @@ impl TlsConfig {
         Self {
             config,
             acceptor: TlsAcceptor::Manual(acceptor),
+            plaintext_fallback: false,
         }
+    }
+}
+
+/// Smart Explorer patch: a TLS connection starts with a handshake record
+/// (content type 22). Errors count as TLS, so the handshake fails as before.
+async fn starts_with_tls_record(stream: &TcpStream) -> bool {
+    let mut first = [0u8; 1];
+    match stream.peek(&mut first).await {
+        Ok(1) => first[0] == 0x16,
+        _ => true,
     }
 }
 
@@ -1154,12 +1168,19 @@ impl RelayService {
 
         // This is the main connection future, driving the connection to completion.
         let serve_fut = async move {
+            // Smart Explorer patch: plaintext fallback on the TLS port.
+            let plaintext = match &tls_config {
+                Some(tls_config) if tls_config.plaintext_fallback => {
+                    !starts_with_tls_record(&stream).await
+                }
+                _ => false,
+            };
             match tls_config {
-                Some(tls_config) => {
+                Some(tls_config) if !plaintext => {
                     debug!("HTTPS: serve connection");
                     service.tls_serve_connection(stream, tls_config).await
                 }
-                None => {
+                _ => {
                     debug!("HTTP: serve connection");
                     let stream = MaybeTlsStream::Plain(stream);
                     service.serve_connection(stream).await
@@ -1210,7 +1231,9 @@ impl RelayServiceWithNotify {
         stream: TcpStream,
         tls_config: TlsConfig,
     ) -> Result<(), ServeConnectionError> {
-        let TlsConfig { acceptor, config } = tls_config;
+        let TlsConfig {
+            acceptor, config, ..
+        } = tls_config;
         let stream = match acceptor {
             TlsAcceptor::LetsEncrypt(a) => {
                 match a

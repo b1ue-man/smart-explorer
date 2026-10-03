@@ -8,12 +8,14 @@ use tungstenite::handshake::HandshakeError;
 use tungstenite::protocol::WebSocketConfig;
 use tungstenite::{accept_with_config, Error as WsError, Message, WebSocket};
 
+use super::hello_session::HelloSession;
 use super::idle::{self, SignalTiming};
+use super::signal_stream::SignalStream;
 use super::limits::SourceKey;
 use super::line::{read_line_limited_until, MAX_JSON_LINE};
 use super::rate_limits::InboundRateLimiter;
 use super::registration_guard::RegistrationGuard;
-use super::state::{register_client, State};
+use super::state::{register_client_with_identity, State};
 use super::tracked_direct;
 use super::websocket_read_limit::WebSocketReadLimit;
 use super::writer::QueuedMessage;
@@ -29,7 +31,7 @@ const WS_WRITE_BUFFER_SIZE: usize = 128 * 1024;
 const WS_FRAME_OVERHEAD: usize = 64;
 const MAX_WS_WRITE_BUFFER: usize = WS_WRITE_BUFFER_SIZE + MAX_JSON_LINE + WS_FRAME_OVERHEAD;
 
-type SignalingWebSocket = WebSocket<WebSocketReadLimit<TcpStream>>;
+type SignalingWebSocket = WebSocket<WebSocketReadLimit<SignalStream>>;
 
 #[cfg(test)]
 pub(super) fn handle(stream: TcpStream, state: Arc<Mutex<State>>) -> io::Result<()> {
@@ -53,7 +55,7 @@ pub(super) fn handle_with_source(
     timing: &SignalTiming,
 ) -> io::Result<()> {
     let registration_deadline = Instant::now() + PRE_REGISTRATION_TIMEOUT;
-    handle_until(stream, state, source, registration_deadline, timing)
+    handle_until(stream, state, source, registration_deadline, timing, None, true)
 }
 
 #[cfg(test)]
@@ -64,7 +66,15 @@ pub(super) fn handle_with_timeout(
 ) -> io::Result<()> {
     let source = SourceKey::from_socket(stream.peer_addr()?);
     let timing = SignalTiming::default();
-    handle_until(stream, state, source, Instant::now() + timeout, &timing)
+    handle_until(stream, state, source, Instant::now() + timeout, &timing, None, true)
+}
+
+pub(super) fn handle_with_security(
+    stream: TcpStream, state: Arc<Mutex<State>>, source: SourceKey, timing: &SignalTiming,
+    tls: Option<Arc<rustls::ServerConfig>>, allow_plaintext: bool,
+) -> io::Result<()> {
+    handle_until(stream, state, source, Instant::now() + PRE_REGISTRATION_TIMEOUT,
+        timing, tls, allow_plaintext)
 }
 
 fn handle_until(
@@ -73,14 +83,25 @@ fn handle_until(
     source: SourceKey,
     registration_deadline: Instant,
     timing: &SignalTiming,
+    tls: Option<Arc<rustls::ServerConfig>>,
+    allow_plaintext: bool,
 ) -> io::Result<()> {
     let mut inbound_rate = InboundRateLimiter::new();
     set_remaining_read_timeout(&stream, registration_deadline)?;
     let mut probe = [0u8; 3];
     let length = stream.peek(&mut probe)?;
-    if length >= 1 && probe[0] == b'G' {
+    if length == 0 { return Ok(()); }
+    if probe[0] == 0x16 {
+        let config = tls.ok_or_else(|| io::Error::new(ErrorKind::PermissionDenied, "TLS is not configured"))?;
+        return handle_websocket(SignalStream::tls(stream, config)?, state, source,
+            registration_deadline, timing, &mut inbound_rate);
+    }
+    if !allow_plaintext {
+        return Err(io::Error::new(ErrorKind::PermissionDenied, "plaintext signaling is disabled"));
+    }
+    if probe[0] == b'G' {
         return handle_websocket(
-            stream,
+            SignalStream::plain(stream)?,
             state,
             source,
             registration_deadline,
@@ -117,62 +138,39 @@ fn handle_tcp(
         Err(_) => return Ok(()),
     };
     let writer = Writer::tcp(reader.get_ref().try_clone()?)?;
-    let In::Hello {
-        protocol_version,
-        device_id,
-        device_name: _,
-        listen_port: _,
-        lan: _,
-        public_key: _,
-        fingerprint: _,
-        capabilities,
-    } = hello
-    else {
-        send_server_error(&writer, "first message must be hello");
-        return Ok(());
+    let mut hello = match HelloSession::begin(hello) {
+        Ok(hello) => hello,
+        Err(error) => { send_server_error(&writer, &error.to_string()); return Ok(()); }
     };
-    if protocol_version != 3 || device_id.trim().is_empty() {
-        send_server_error(&writer, "unsupported hello");
-        return Ok(());
-    }
-
-    let capabilities = tracked_direct::negotiate_capabilities(capabilities);
-    if capabilities.contains(idle::CAPABILITY) {
-        writer.enable_idle(timing);
-    }
-    let id = match register_client(
-        &state,
-        writer.clone(),
-        source,
-        device_id,
-        capabilities.clone(),
-    ) {
-        Ok(id) => id,
-        Err(error) => {
-            send_server_error(&writer, error.message());
+    if let Some(challenge) = hello.challenge() {
+        send(&writer, &challenge);
+        if read_line_limited_until(&mut reader, &mut line, MAX_JSON_LINE, registration_deadline)? == 0 {
             return Ok(());
         }
-    };
+        require_inbound_budget(inbound_rate, line.len())?;
+        let auth = serde_json::from_str(line.trim()).map_err(io_other)?;
+        if hello.answer(auth).is_err() {
+            send_server_error(&writer, crate::login::LOGIN_FAILED);
+            return Ok(());
+        }
+    }
+    let Some(id) = finish_registration(hello, &writer, source, &state, timing)? else { return Ok(()); };
     let _registration = RegistrationGuard::new(id, &state);
-    send(
-        &writer,
-        &Out::HelloOk {
-            capabilities: tracked_direct::capability_list(&capabilities),
-        },
-    );
 
     serve_tcp(&mut reader, id, &writer, &state, timing, inbound_rate)
 }
 
 fn handle_websocket(
-    stream: TcpStream,
+    mut stream: SignalStream,
     state: Arc<Mutex<State>>,
     source: SourceKey,
     registration_deadline: Instant,
     timing: &SignalTiming,
     inbound_rate: &mut InboundRateLimiter,
 ) -> io::Result<()> {
-    let (writer, outbound) = Writer::websocket(&stream)?;
+    stream.set_write_deadline(Some(registration_deadline));
+    let (writer, outbound) = Writer::websocket(stream.socket())?;
+    writer.set_wake(stream.notify());
     let config = WebSocketConfig {
         write_buffer_size: WS_WRITE_BUFFER_SIZE,
         max_write_buffer_size: MAX_WS_WRITE_BUFFER,
@@ -196,54 +194,31 @@ fn handle_websocket(
         Ok(None) => return Ok(()),
         Err(error) => return Err(error),
     };
-    let In::Hello {
-        protocol_version,
-        device_id,
-        device_name: _,
-        listen_port: _,
-        lan: _,
-        public_key: _,
-        fingerprint: _,
-        capabilities,
-    } = hello
-    else {
-        send_server_error(&writer, "first message must be hello");
-        flush_websocket_out(&mut websocket, &outbound)?;
-        return Ok(());
-    };
-    if protocol_version != 3 || device_id.trim().is_empty() {
-        send_server_error(&writer, "unsupported hello");
-        flush_websocket_out(&mut websocket, &outbound)?;
-        return Ok(());
-    }
-
-    let capabilities = tracked_direct::negotiate_capabilities(capabilities);
-    if capabilities.contains(idle::CAPABILITY) {
-        writer.enable_idle(timing);
-    }
-    let id = match register_client(
-        &state,
-        writer.clone(),
-        source,
-        device_id,
-        capabilities.clone(),
-    ) {
-        Ok(id) => id,
+    let mut hello = match HelloSession::begin(hello) {
+        Ok(hello) => hello,
         Err(error) => {
-            send_server_error(&writer, error.message());
+            send_server_error(&writer, &error.to_string());
             flush_websocket_out(&mut websocket, &outbound)?;
             return Ok(());
         }
     };
+    if let Some(challenge) = hello.challenge() {
+        send(&writer, &challenge);
+        let Some(auth) = read_websocket_json_until(&mut websocket, &outbound,
+            registration_deadline, inbound_rate, &mut false)? else { return Ok(()); };
+        if hello.answer(auth).is_err() {
+            send_server_error(&writer, crate::login::LOGIN_FAILED);
+            flush_websocket_out(&mut websocket, &outbound)?;
+            return Ok(());
+        }
+    }
+    let Some(id) = finish_registration(hello, &writer, source, &state, timing)? else {
+        flush_websocket_out(&mut websocket, &outbound)?;
+        return Ok(());
+    };
     let _registration = RegistrationGuard::new(id, &state);
-    send(
-        &writer,
-        &Out::HelloOk {
-            capabilities: tracked_direct::capability_list(&capabilities),
-        },
-    );
 
-    websocket.get_mut().set_nonblocking(false)?;
+    websocket.get_mut().set_write_deadline(None);
     let result = serve_websocket(
         &mut websocket,
         &outbound,
@@ -257,12 +232,25 @@ fn handle_websocket(
     result
 }
 
+fn finish_registration(
+    hello: HelloSession, writer: &Writer, source: SourceKey,
+    state: &Arc<Mutex<State>>, timing: &SignalTiming,
+) -> io::Result<Option<u64>> {
+    if hello.capabilities.contains(idle::CAPABILITY) { writer.enable_idle(timing); }
+    let id = match register_client_with_identity(state, writer.clone(), source,
+        hello.device_id, hello.capabilities.clone(), hello.identity) {
+        Ok(id) => id,
+        Err(error) => { send_server_error(writer, error.message()); return Ok(None); }
+    };
+    send(writer, &Out::HelloOk { capabilities: tracked_direct::capability_list(&hello.capabilities) });
+    Ok(Some(id))
+}
+
 fn accept_websocket_until(
-    stream: WebSocketReadLimit<TcpStream>,
+    stream: WebSocketReadLimit<SignalStream>,
     config: WebSocketConfig,
     deadline: Instant,
 ) -> io::Result<SignalingWebSocket> {
-    stream.set_nonblocking(true)?;
     let mut handshake = match accept_with_config(stream, Some(config)) {
         Ok(websocket) => return Ok(websocket),
         Err(HandshakeError::Interrupted(handshake)) => handshake,
@@ -362,7 +350,7 @@ fn read_websocket_json_until(
                 if Instant::now() >= deadline {
                     return Err(pre_registration_timeout());
                 }
-                std::thread::sleep(HANDSHAKE_POLL_INTERVAL);
+                websocket.get_ref().wait_readable(deadline)?;
             }
             Err(WsError::ConnectionClosed | WsError::AlreadyClosed) => return Ok(None),
             Err(error) => return Err(websocket_to_io(error)),

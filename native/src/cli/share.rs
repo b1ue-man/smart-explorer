@@ -44,6 +44,8 @@ pub(super) struct ShareArgs {
 enum Command {
     #[command(about = "Configure and start the headless Share worker")]
     Configure(ConfigureArgs),
+    #[command(about = "Show or change the Share server address and its transport security")]
+    Server(ServerArgs),
     #[command(about = "Show this device's Share identity and direct invite code")]
     Identity(identity_command::IdentityArgs),
     #[command(about = "Show worker, connectivity, request, and authorization status")]
@@ -66,12 +68,41 @@ enum Command {
     Lan(lan::LanArgs),
 }
 
+const SERVER_HELP: &str = "Server address: host[:port] or wss://host[:port]/path use TLS; \
+tcp:// and ws:// need --allow-plaintext; append #sha256=<fingerprint> to pin a self-signed server";
+
 #[derive(Args)]
 struct ConfigureArgs {
-    #[arg(long, help = "Signaling endpoint (host, tcp://, ws://, or wss://)")]
+    #[arg(long, help = SERVER_HELP)]
     server: String,
+    #[arg(
+        long,
+        help = "Allow an unencrypted server (tcp://, ws://): its operator and the network see device names and addresses"
+    )]
+    allow_plaintext: bool,
     #[arg(long, help = "Persist a device name with the Share identity")]
     device_name: Option<String>,
+}
+
+#[derive(Args)]
+struct ServerArgs {
+    #[command(subcommand)]
+    command: Option<ServerCommand>,
+}
+
+#[derive(Subcommand)]
+enum ServerCommand {
+    #[command(about = "Show the configured server and whether it is encrypted")]
+    Show,
+    #[command(about = "Store a new server address and refresh the worker")]
+    Set {
+        #[arg(help = SERVER_HELP)]
+        server: String,
+        #[arg(long, help = "Allow an unencrypted server (tcp://, ws://)")]
+        allow_plaintext: bool,
+    },
+    #[command(about = "Remove the server; paired devices stay reachable on the local network")]
+    Clear,
 }
 
 #[derive(Args)]
@@ -104,6 +135,7 @@ pub(super) fn run(args: ShareArgs) -> Result<i32, String> {
     match args.command {
         None => status::run(status::StatusArgs::default())?,
         Some(Command::Configure(args)) => configure(args)?,
+        Some(Command::Server(args)) => server(args.command.unwrap_or(ServerCommand::Show))?,
         Some(Command::Identity(args)) => identity_command::run(args)?,
         Some(Command::Status(args)) => status::run(args)?,
         Some(Command::Request(args)) => requests::run(args)?,
@@ -121,7 +153,8 @@ pub(super) fn run(args: ShareArgs) -> Result<i32, String> {
 }
 
 fn configure(args: ConfigureArgs) -> Result<(), String> {
-    let server = validate_server(&args.server)?;
+    let config = server_input(&args.server, args.allow_plaintext)?;
+    let server = config.canonical();
     let mut identity = identity_command::load_with_repair_hint()?;
     if let Some(name) = args.device_name {
         identity.set_device_name(name)?;
@@ -133,12 +166,69 @@ fn configure(args: ConfigureArgs) -> Result<(), String> {
             Ok(())
         })?;
     }
-    write_atomic(
-        &crate::support_dirs::app_data_file("share_server.txt"),
-        &server,
-    )?;
+    write_atomic(&server_file(), &server)?;
     refresh_required()?;
-    println!("Share worker configured for {server}");
+    println!(
+        "Share worker configured for {server} ({})",
+        config.security().label()
+    );
+    Ok(())
+}
+
+fn server_file() -> PathBuf {
+    crate::support_dirs::app_data_file("share_server.txt")
+}
+
+/// An entered address: TLS without scheme, plaintext only when allowed.
+fn server_input(
+    server: &str,
+    allow_plaintext: bool,
+) -> Result<crate::share::server_address::SignalServerConfig, String> {
+    let config =
+        crate::share::server_address::SignalServerConfig::parse_input(server, allow_plaintext)?;
+    if config.is_empty() {
+        return Err("share server must include at least one endpoint".to_string());
+    }
+    Ok(config)
+}
+
+fn server(command: ServerCommand) -> Result<(), String> {
+    match command {
+        ServerCommand::Show => {
+            let path = server_file();
+            if let Some(canonical) = crate::share::migrate_server_file(&path)
+                .map_err(|error| format!("rewrite {}: {error}", path.display()))?
+            {
+                println!("migrated\t{canonical}");
+            }
+            let stored = match std::fs::read_to_string(&path) {
+                Ok(stored) => stored,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+                Err(error) => return Err(format!("read {}: {error}", path.display())),
+            };
+            let config = crate::share::server_address::SignalServerConfig::parse_stored(&stored)?;
+            println!("server\t{}", config.canonical());
+            println!("security\t{}", config.security().wire());
+            println!("summary\t{}", config.summary());
+        }
+        ServerCommand::Set {
+            server,
+            allow_plaintext,
+        } => {
+            let config = server_input(&server, allow_plaintext)?;
+            write_atomic(&server_file(), &config.canonical())?;
+            println!(
+                "server\t{}\t{}{}",
+                config.canonical(),
+                config.security().label(),
+                refresh_note()
+            );
+        }
+        ServerCommand::Clear => {
+            write_atomic(&server_file(), "")?;
+            println!("server\tnone{}", refresh_note());
+        }
+    }
     Ok(())
 }
 
@@ -185,35 +275,21 @@ pub(super) fn checked_profiles() -> Result<crate::share::ShareProfiles, String> 
     Ok(profiles)
 }
 
+/// A stored address as the worker reads it (legacy values without scheme
+/// are plaintext TCP); returns it with its transport security.
 pub(super) fn validate_server(server: &str) -> Result<String, String> {
     let server = server.trim();
     if server.is_empty() {
         return Err("share server must not be empty".to_string());
     }
-    if server.len() > MAX_SERVER_BYTES || server.chars().any(char::is_control) {
+    if server.len() > MAX_SERVER_BYTES {
         return Err("share server contains invalid or excessive input".to_string());
     }
-    let mut found = false;
-    for endpoint in server.split([',', ';']).map(str::trim) {
-        if endpoint.is_empty() {
-            continue;
-        }
-        found = true;
-        if endpoint.chars().any(char::is_whitespace) || endpoint.contains('@') {
-            return Err(
-                "share server endpoint contains whitespace or user information".to_string(),
-            );
-        }
-        if let Some((scheme, _)) = endpoint.split_once("://") {
-            if !matches!(scheme, "tcp" | "ws" | "wss" | "http" | "https") {
-                return Err(format!("unsupported share server scheme: {scheme}"));
-            }
-        }
-    }
-    if !found {
+    let config = crate::share::server_address::SignalServerConfig::parse_stored(server)?;
+    if config.is_empty() {
         return Err("share server must include at least one endpoint".to_string());
     }
-    Ok(server.to_string())
+    Ok(format!("{} ({})", config.canonical(), config.summary()))
 }
 
 fn write_atomic(path: &Path, value: &str) -> Result<(), String> {
@@ -296,6 +372,56 @@ mod tests {
         assert!(Cli::try_parse_from(["se", "share", "request", "retry"]).is_ok());
         assert!(Cli::try_parse_from(["se", "share", "request", "delete", REQUEST_ID]).is_ok());
         assert!(Cli::try_parse_from(["se", "share", "request", "delete"]).is_ok());
+    }
+
+    #[test]
+    fn review_task_parses_server_address_commands() {
+        for accepted in [
+            vec!["se", "share", "server"],
+            vec!["se", "share", "server", "show"],
+            vec!["se", "share", "server", "set", "share.example"],
+            vec![
+                "se",
+                "share",
+                "server",
+                "set",
+                "tcp://h:1",
+                "--allow-plaintext",
+            ],
+            vec!["se", "share", "server", "clear"],
+            vec![
+                "se",
+                "share",
+                "configure",
+                "--server",
+                "tcp://h:1",
+                "--allow-plaintext",
+            ],
+        ] {
+            assert!(
+                Cli::try_parse_from(accepted.clone()).is_ok(),
+                "failed to parse {accepted:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn review_task_plaintext_server_needs_the_flag() {
+        assert!(super::server_input("tcp://h:1", false).is_err());
+        assert_eq!(
+            super::server_input("tcp://h:1", true).unwrap().canonical(),
+            "tcp://h:1"
+        );
+        assert_eq!(
+            super::server_input("share.example", false)
+                .unwrap()
+                .canonical(),
+            "wss://share.example:51820"
+        );
+        // Stored legacy values keep their meaning for `se doctor`.
+        assert!(super::validate_server("share.example:51820")
+            .unwrap()
+            .starts_with("tcp://share.example:51820"));
     }
 
     #[test]

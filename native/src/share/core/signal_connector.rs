@@ -5,8 +5,7 @@ use crossbeam_channel::{bounded, Receiver};
 use super::discovery_signal_types::DISCOVERY_EXCHANGE_CAPABILITY;
 use super::identity::ShareIdentity;
 use super::signal_connection::{send_line, SignalConnection};
-use super::signal_handshake::{await_hello_ok, SignalCapabilities};
-use super::system::lan_ips;
+use super::signal_handshake::{await_hello_ok, SignalCapabilities, KEY_LOGIN_CAPABILITY};
 use super::wire::{ClientMsg, IDLE_KEEPALIVE_CAPABILITY, TRACKED_DIRECT_CAPABILITY};
 
 pub(super) struct NegotiatedSignal {
@@ -37,19 +36,24 @@ fn connect_and_negotiate(server: &str, identity: &ShareIdentity) -> io::Result<N
         &ClientMsg::Hello {
             protocol_version: 3,
             device_id: identity.device_id.clone(),
-            device_name: identity.device_name.clone(),
+            device_name: String::new(),
             listen_port: 0,
-            lan: lan_ips(),
+            // Unused Hello metadata stays empty for wire compatibility (S13).
+            lan: Vec::new(),
             public_key: identity.public_key.clone(),
-            fingerprint: identity.fingerprint.clone(),
+            fingerprint: String::new(),
             capabilities: vec![
                 TRACKED_DIRECT_CAPABILITY.to_string(),
                 DISCOVERY_EXCHANGE_CAPABILITY.to_string(),
                 IDLE_KEEPALIVE_CAPABILITY.to_string(),
+                KEY_LOGIN_CAPABILITY.to_string(),
             ],
         },
     )?;
-    let capabilities = await_hello_ok(&mut connection)?;
+    let capabilities = await_hello_ok(&mut connection, identity)?;
+    if capabilities.key_login {
+        connection.confirm_key_login();
+    }
     Ok(NegotiatedSignal {
         connection,
         capabilities,

@@ -42,6 +42,9 @@ pub(super) use self::publish::{publish_all, send_direct_answer, send_direct_requ
 use self::worker_power::WorkerPower;
 
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
+/// A session that served this long resets the reconnect backoff; a server
+/// that drops every new session right away is not hammered (S53).
+const HEALTHY_SESSION: Duration = Duration::from_secs(60);
 /// Longest wait of a worker without server when nothing happens.
 const SERVERLESS_WAIT: Duration = Duration::from_secs(30);
 
@@ -154,9 +157,12 @@ fn connect_loop(server: &str, identity: &ShareIdentity, runtime: &mut WorkerRunt
         };
         match negotiated {
             Ok(negotiated) => {
-                backoff = Duration::from_secs(1);
+                let started = std::time::Instant::now();
                 if connected::run(negotiated, runtime, &mut tuning) {
                     return;
+                }
+                if started.elapsed() >= HEALTHY_SESSION {
+                    backoff = Duration::from_secs(1);
                 }
             }
             Err(error) => {

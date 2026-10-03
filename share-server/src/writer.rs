@@ -26,6 +26,7 @@ pub(super) struct Writer {
 struct WriterControl {
     closed: AtomicBool,
     shutdown: Option<TcpStream>,
+    wake: OnceLock<Arc<tokio::sync::Notify>>,
 }
 
 pub(super) struct QueuedMessage {
@@ -76,6 +77,7 @@ impl Drop for ByteReservation {
 impl WriterControl {
     fn close(&self) {
         if !self.closed.swap(true, Ordering::AcqRel) {
+            if let Some(wake) = self.wake.get() { wake.notify_one(); }
             if let Some(stream) = &self.shutdown {
                 let _ = stream.shutdown(Shutdown::Both);
             }
@@ -91,6 +93,10 @@ impl Writer {
     pub(super) fn websocket(stream: &TcpStream) -> io::Result<(Self, Receiver<QueuedMessage>)> {
         stream.set_write_timeout(Some(WRITE_TIMEOUT))?;
         Self::channel(WRITER_QUEUE_CAPACITY, Some(stream.try_clone()?))
+    }
+
+    pub(super) fn set_wake(&self, wake: Arc<tokio::sync::Notify>) {
+        let _ = self.control.wake.set(wake);
     }
 
     pub(super) fn tcp(mut stream: TcpStream) -> io::Result<Self> {
@@ -143,7 +149,10 @@ impl Writer {
             _reservation: reservation,
         };
         match self.sender.try_send(message) {
-            Ok(()) => true,
+            Ok(()) => {
+                if let Some(wake) = self.control.wake.get() { wake.notify_one(); }
+                true
+            },
             Err(TrySendError::Full(_)) => false,
             Err(TrySendError::Disconnected(_)) => {
                 self.control.close();
@@ -183,6 +192,7 @@ impl Writer {
                 control: Arc::new(WriterControl {
                     closed: AtomicBool::new(false),
                     shutdown,
+                    wake: OnceLock::new(),
                 }),
                 budget: Arc::new(QueueBudget {
                     queued: AtomicUsize::new(0),

@@ -300,11 +300,8 @@ fn routed_state(
         ]),
         ..State::default()
     };
-    if let Some(lookup) = lookup {
-        state
-            .direct
-            .insert(lookup.into(), (2, presence(target_device)));
-    }
+    // Receipts and decisions require the target's current publication too.
+    state.direct.insert(lookup.unwrap_or("lookup").into(), (2, presence(target_device)));
     (Arc::new(Mutex::new(state)), requester_rx, target_rx)
 }
 
@@ -321,6 +318,7 @@ fn client(writer: super::Writer, device_id: &str, capable: bool) -> Client {
         direct_lookup_ids: HashSet::new(),
         watched_lookup_ids: HashSet::new(),
         rooms: HashSet::new(),
+        identity: Default::default(),
     }
 }
 

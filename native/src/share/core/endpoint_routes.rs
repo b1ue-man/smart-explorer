@@ -8,6 +8,12 @@ use iroh::{Endpoint, EndpointAddr, RelayUrl, Watcher as _};
 pub(super) struct NodeTransportOptions {
     pub(super) relay_urls: Vec<RelayUrl>,
     pub(super) relay_only: bool,
+    /// Certificate pins of the signaling server; its relay uses the same
+    /// certificate (FC3).
+    pub(super) relay_pins: Vec<[u8; 32]>,
+    /// The user allowed a plaintext server: plain `http://` relays (also in
+    /// peers' presences) are acceptable. Otherwise only `https://`.
+    pub(super) plaintext_relays: bool,
 }
 
 impl NodeTransportOptions {
@@ -15,7 +21,35 @@ impl NodeTransportOptions {
         Self {
             relay_urls,
             relay_only,
+            relay_pins: Vec::new(),
+            plaintext_relays: false,
         }
+    }
+
+    pub(super) fn with_server_trust(
+        mut self,
+        relay_pins: Vec<[u8; 32]>,
+        plaintext_relays: bool,
+    ) -> Self {
+        self.relay_pins = relay_pins;
+        self.plaintext_relays = plaintext_relays;
+        self
+    }
+
+    /// TLS trust for the Iroh relays: the pinned server certificate plus
+    /// publicly valid ones; `None` keeps Iroh's default roots.
+    // Applied by the endpoint builder in `node.rs` (H-DISPATCH, see
+    // anfragen/S-SIGNAL.md A2).
+    #[allow(dead_code)]
+    pub(super) fn ca_tls_config(&self) -> Option<iroh::tls::CaTlsConfig> {
+        super::signal_connection::tls::relay_ca_tls_config(&self.relay_pins)
+    }
+
+    /// Whether a relay URL from a peer's presence may be dialed (S03).
+    // Used by `session::endpoint_addr` (H-DISPATCH, see anfragen/S-SIGNAL.md A3).
+    #[allow(dead_code)]
+    pub(super) fn accepts_relay_url(&self, url: &str) -> bool {
+        super::server_address::relay_url_acceptable(url, self.plaintext_relays)
     }
 }
 

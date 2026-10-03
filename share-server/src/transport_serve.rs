@@ -2,14 +2,14 @@
 //! liveness timing ([`SignalSession`]): blocking reads end at the next
 //! keepalive or read deadline, a raw TCP line split across such wake-ups is
 //! kept, and every inbound byte or frame counts as client activity. Clients
-//! that are not idle keep the established rule of their transport: 60 s of
-//! silence closes raw TCP, WebSocket has no inbound deadline.
+//! that are not idle close after 60 s of silence on both transports.
+//! WebSocket I/O waits on readiness and outbound notification, without polling.
 
 use std::io::{self, BufReader, ErrorKind};
 use std::net::TcpStream;
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use super::{
     flush_websocket_out, read_websocket_json_until, require_inbound_budget, SignalingWebSocket,
@@ -21,10 +21,6 @@ use crate::signal_session::{SignalSession, Step};
 use crate::state::State;
 use crate::writer::QueuedMessage;
 use crate::{dispatch, In, Writer};
-
-/// WebSocket writes happen on the reading thread, so it wakes at least this
-/// often to flush queued server messages.
-const WS_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
 pub(super) fn serve_tcp(
     reader: &mut BufReader<TcpStream>,
@@ -70,16 +66,14 @@ pub(super) fn serve_websocket(
     timing: &SignalTiming,
     inbound_rate: &mut InboundRateLimiter,
 ) -> io::Result<()> {
-    let mut session = SignalSession::new(timing.clock.now(), None);
+    let mut session = SignalSession::new(timing.clock.now(), Some(ACTIVE_READ_WINDOW));
     loop {
         let now = timing.clock.now();
         let Step::Wait(until) = session.poll(writer, now) else {
             return Ok(());
         };
         flush_websocket_out(websocket, outbound)?;
-        let wait = timing
-            .read_timeout(now, until)
-            .map_or(WS_POLL_INTERVAL, |wait| wait.min(WS_POLL_INTERVAL));
+        let wait = timing.read_timeout(now, until).unwrap_or(ACTIVE_READ_WINDOW);
         websocket.get_mut().set_read_timeout(Some(wait))?;
         let mut received = false;
         let read = read_websocket_json_until(

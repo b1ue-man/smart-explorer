@@ -1,9 +1,8 @@
 //! Liveness timing of one registered signaling connection, shared by the TCP
 //! and WebSocket loops.
 //!
-//! Not idle: each transport keeps its established rule. Raw TCP closes after
-//! [`ACTIVE_READ_WINDOW`] without inbound data; WebSocket has no inbound
-//! deadline. Idle (both transports): no inbound data is required between
+//! Not idle: both transports close after [`ACTIVE_READ_WINDOW`] without
+//! inbound data. Idle (both transports): no inbound data is required between
 //! keepalive ticks; after each `keepalive` the client must send something
 //! within [`IDLE_REPLY_WINDOW`].
 //!

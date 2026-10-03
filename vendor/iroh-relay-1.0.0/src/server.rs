@@ -568,6 +568,9 @@ pub struct TlsConfig {
     pub https_bind_addr: SocketAddr,
     /// Mode for getting a cert.
     pub cert: CertConfig,
+    /// Smart Explorer patch: also serve plain HTTP on the HTTPS port to connections that
+    /// do not start with a TLS record (older clients during a TLS migration). Off by default.
+    pub plaintext_fallback: bool,
 }
 
 impl TlsConfig {
@@ -576,6 +579,7 @@ impl TlsConfig {
         Self {
             https_bind_addr: https_bind_addr.into(),
             cert,
+            plaintext_fallback: false,
         }
     }
 }
@@ -881,6 +885,7 @@ impl Server {
                 )?;
                 let (http_addr, tls_config) = match relay_config.tls {
                     Some(tls_config) => {
+                        let plaintext_fallback = tls_config.plaintext_fallback;
                         let server_tls_config = match tls_config.cert {
                             CertConfig::LetsEncrypt {
                                 acme_config,
@@ -922,6 +927,7 @@ impl Server {
                                 http_server::TlsConfig {
                                     config: Arc::new(server_config),
                                     acceptor,
+                                    plaintext_fallback,
                                 }
                             }
                             CertConfig::Manual { server_config } => {
@@ -932,6 +938,7 @@ impl Server {
                                 http_server::TlsConfig {
                                     config: server_config,
                                     acceptor,
+                                    plaintext_fallback,
                                 }
                             }
                         };

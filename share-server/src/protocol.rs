@@ -115,14 +115,26 @@ pub(super) enum In {
         #[serde(default)]
         capabilities: Vec<String>,
     },
+    /// `key_login_v1`: the answer to `hello_challenge`, an Ed25519 signature
+    /// (hex) of the login digest with the key of the Hello (FC4).
+    HelloAuth {
+        signature: String,
+    },
     PublishDirect {
         presence: PeerPresence,
+        /// SHA-256 (hex) of the owner's relation access proof; watchers that
+        /// logged in with a key must show the proof.
+        #[serde(default)]
+        access_hash: Option<String>,
     },
     UnpublishDirect {
         lookup_id: String,
     },
     WatchDirect {
         lookup_id: String,
+        /// Relation access proof (hex) derived from the Direct code.
+        #[serde(default)]
+        access_proof: Option<String>,
     },
     RequestDirect {
         lookup_id: String,
@@ -155,6 +167,10 @@ pub(super) enum In {
     JoinRoom {
         room_id: String,
         presence: PeerPresence,
+        /// Relation access proof (hex) derived from the room secret; members
+        /// only see members with the same proof (or without one).
+        #[serde(default)]
+        access_proof: Option<String>,
     },
     LeaveRoom {
         room_id: String,
@@ -197,6 +213,10 @@ pub(super) enum Out {
     HelloOk {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         capabilities: Vec<String>,
+    },
+    /// `key_login_v1`: 16 random bytes (hex) the client signs.
+    HelloChallenge {
+        nonce: String,
     },
     DirectAvailable {
         lookup_id: String,
@@ -370,6 +390,34 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&Out::Keepalive).unwrap(),
             r#"{"t":"keepalive"}"#
+        );
+    }
+
+    #[test]
+    fn review_task_key_login_and_access_fields_are_optional_on_the_wire() {
+        let auth: In = serde_json::from_str(r#"{"t":"hello_auth","signature":"ab"}"#).unwrap();
+        assert!(matches!(auth, In::HelloAuth { signature } if signature == "ab"));
+        let legacy: In = serde_json::from_str(r#"{"t":"watch_direct","lookup_id":"l"}"#).unwrap();
+        assert!(matches!(
+            legacy,
+            In::WatchDirect {
+                access_proof: None,
+                ..
+            }
+        ));
+        let proven: In =
+            serde_json::from_str(r#"{"t":"watch_direct","lookup_id":"l","access_proof":"cd"}"#)
+                .unwrap();
+        assert!(matches!(
+            proven,
+            In::WatchDirect { access_proof: Some(proof), .. } if proof == "cd"
+        ));
+        assert_eq!(
+            serde_json::to_string(&Out::HelloChallenge {
+                nonce: "00ff".into()
+            })
+            .unwrap(),
+            r#"{"t":"hello_challenge","nonce":"00ff"}"#
         );
     }
 

@@ -1,20 +1,15 @@
 use std::{
-    collections::HashMap,
     fmt,
-    hash::Hash,
-    net::{AddrParseError, SocketAddr},
+    net::{AddrParseError, Ipv4Addr, SocketAddr},
     num::NonZeroU32,
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::Duration,
 };
 
-use iroh_base::EndpointId;
-use iroh_relay::server::{
-    Access, AccessControl, ClientPingSchedule, ClientRateLimit, ClientRequest, ConnectionId,
-    RelayConfig,
-};
+use iroh_relay::server::{CertConfig, ClientPingSchedule, ClientRateLimit, RelayConfig, TlsConfig};
 
 use super::idle::Keepalive;
+use super::relay_access::{RelayAccess, RelayAdmissions};
 
 const RELAY_MAX_ACTIVE_CONNECTIONS: usize = 512;
 const RELAY_MAX_CONNECTIONS_PER_ENDPOINT: usize = 4;
@@ -27,7 +22,6 @@ const RELAY_ACCEPT_BURST_PER_SOURCE: usize = 64;
 const RELAY_KEY_CACHE_CAPACITY: usize = 4_096;
 const RELAY_RX_BYTES_PER_SECOND: u32 = 64 * 1024 * 1024;
 const RELAY_RX_BURST_BYTES: u32 = 8 * 1024 * 1024;
-const RELAY_CAPACITY_DENIAL: &str = "relay connection capacity reached";
 /// Base wait before the first server ping of a connection (iroh's cadence),
 /// so a dead new connection is still noticed quickly.
 const RELAY_FIRST_PING_INTERVAL: Duration = Duration::from_secs(15);
@@ -38,6 +32,20 @@ const RELAY_PONG_TIMEOUT: Duration = Duration::from_secs(30);
 pub(super) struct RelayGuard {
     _runtime: tokio::runtime::Runtime,
     _server: iroh_relay::server::Server,
+}
+
+/// How the relay runs (FC4, B20).
+pub(super) struct RelayOptions {
+    pub(super) keepalive: Keepalive,
+    /// HTTPS with the signaling certificate; `None` serves plain HTTP.
+    pub(super) tls: Option<rustls::ServerConfig>,
+    /// With TLS: connections without a TLS record are served as plain HTTP
+    /// (older clients while plaintext is still allowed).
+    pub(super) plaintext_fallback: bool,
+    /// A reverse proxy collapses sources; the proxy limits per client.
+    pub(super) trusted_proxy: bool,
+    /// Endpoints registered at the signaling (the only ones admitted).
+    pub(super) admissions: Arc<RelayAdmissions>,
 }
 
 #[derive(Debug)]
@@ -79,21 +87,29 @@ impl std::error::Error for RelayStartError {
     }
 }
 
-pub(super) fn start(
-    signal_bind: &str,
-    keepalive: Keepalive,
-) -> Result<Option<RelayGuard>, RelayStartError> {
+/// The relay bind: `SE_IROH_RELAY_BIND`, else the signaling port plus one.
+/// `None` when `SE_IROH_RELAY_DISABLE` is set.
+pub(super) fn bind_address(signal_bind: &str) -> Result<Option<SocketAddr>, RelayStartError> {
     if explicitly_disabled(std::env::var("SE_IROH_RELAY_DISABLE").ok().as_deref()) {
-        eprintln!("iroh relay disabled via SE_IROH_RELAY_DISABLE");
         return Ok(None);
     }
     let bind = std::env::var("SE_IROH_RELAY_BIND")
         .ok()
         .unwrap_or_else(|| default_bind(signal_bind));
-    let address = bind
-        .parse::<SocketAddr>()
-        .map_err(|source| RelayStartError::InvalidBind { bind, source })?;
-    start_at(address, keepalive).map(Some)
+    bind.parse::<SocketAddr>()
+        .map(Some)
+        .map_err(|source| RelayStartError::InvalidBind { bind, source })
+}
+
+pub(super) fn start(
+    address: Option<SocketAddr>,
+    options: RelayOptions,
+) -> Result<Option<RelayGuard>, RelayStartError> {
+    let Some(address) = address else {
+        eprintln!("iroh relay disabled via SE_IROH_RELAY_DISABLE");
+        return Ok(None);
+    };
+    start_at(address, options).map(Some)
 }
 
 fn explicitly_disabled(value: Option<&str>) -> bool {
@@ -102,26 +118,28 @@ fn explicitly_disabled(value: Option<&str>) -> bool {
         .unwrap_or(false)
 }
 
-fn start_at(address: SocketAddr, keepalive: Keepalive) -> Result<RelayGuard, RelayStartError> {
+fn start_at(address: SocketAddr, options: RelayOptions) -> Result<RelayGuard, RelayStartError> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_name("se-iroh-relay")
         .build()
         .map_err(RelayStartError::Runtime)?;
+    let tls = options.tls.is_some();
     let server = runtime
         .block_on(async {
             let mut config = iroh_relay::server::ServerConfig::default();
-            config.relay = Some(relay_config(address, keepalive));
+            config.relay = Some(relay_config(address, options));
             iroh_relay::server::Server::spawn(config).await
         })
         .map_err(|error| RelayStartError::Server {
             address,
             details: error.to_string(),
         })?;
-    let relay_url = server
-        .http_addr()
-        .map(|address| format!("http://{address}"))
-        .unwrap_or_else(|| format!("http://{address}"));
+    let relay_url = match (tls, server.https_addr(), server.http_addr()) {
+        (true, Some(https), _) => format!("https://{https}"),
+        (_, _, Some(http)) => format!("http://{http}"),
+        _ => format!("http://{address}"),
+    };
     eprintln!("se-share-server iroh relay listening on {relay_url}");
     Ok(RelayGuard {
         _runtime: runtime,
@@ -141,7 +159,7 @@ fn relay_ping_schedule(keepalive: Keepalive) -> ClientPingSchedule {
     )
 }
 
-fn relay_config(address: std::net::SocketAddr, keepalive: Keepalive) -> RelayConfig {
+fn relay_config(address: SocketAddr, options: RelayOptions) -> RelayConfig {
     let bytes_per_second = NonZeroU32::new(RELAY_RX_BYTES_PER_SECOND)
         .expect("RELAY_RX_BYTES_PER_SECOND is a non-zero constant");
     let max_burst_bytes =
@@ -149,132 +167,39 @@ fn relay_config(address: std::net::SocketAddr, keepalive: Keepalive) -> RelayCon
     let mut rate_limit = ClientRateLimit::new(bytes_per_second);
     rate_limit.max_burst_bytes = Some(max_burst_bytes);
 
-    let mut config = RelayConfig::new(address);
+    // With TLS the relay serves HTTPS on `address`; the captive-portal probe
+    // listener the relay always adds then stays on loopback.
+    let mut config = match options.tls {
+        Some(server_config) => {
+            let mut config = RelayConfig::new(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)));
+            let mut tls = TlsConfig::new(address, CertConfig::Manual { server_config });
+            tls.plaintext_fallback = options.plaintext_fallback;
+            config.tls = Some(tls);
+            config
+        }
+        None => RelayConfig::new(address),
+    };
     config.limits.client_rx = Some(rate_limit);
     config.limits.max_concurrent_tcp_connections = Some(RELAY_MAX_TCP_CONNECTIONS);
-    config.limits.max_concurrent_tcp_connections_per_source =
-        Some(RELAY_MAX_TCP_CONNECTIONS_PER_SOURCE);
     config.limits.accept_conn_limit = Some(RELAY_ACCEPTS_PER_SECOND);
     config.limits.accept_conn_burst = Some(RELAY_ACCEPT_BURST);
-    config.limits.accept_conn_limit_per_source = Some(RELAY_ACCEPTS_PER_SECOND_PER_SOURCE);
-    config.limits.accept_conn_burst_per_source = Some(RELAY_ACCEPT_BURST_PER_SOURCE);
+    if options.trusted_proxy {
+        // Every connection comes from the proxy, which limits per client.
+        config.limits.max_concurrent_tcp_connections_per_source = Some(RELAY_MAX_TCP_CONNECTIONS);
+    } else {
+        config.limits.max_concurrent_tcp_connections_per_source =
+            Some(RELAY_MAX_TCP_CONNECTIONS_PER_SOURCE);
+        config.limits.accept_conn_limit_per_source = Some(RELAY_ACCEPTS_PER_SECOND_PER_SOURCE);
+        config.limits.accept_conn_burst_per_source = Some(RELAY_ACCEPT_BURST_PER_SOURCE);
+    }
     config.key_cache_capacity = Some(RELAY_KEY_CACHE_CAPACITY);
     config.access = Arc::new(RelayAccess::new(
+        options.admissions,
         RELAY_MAX_ACTIVE_CONNECTIONS,
         RELAY_MAX_CONNECTIONS_PER_ENDPOINT,
-        relay_ping_schedule(keepalive),
+        relay_ping_schedule(options.keepalive),
     ));
     config
-}
-
-#[derive(Debug)]
-struct RelayAccess {
-    counts: Mutex<AdmissionCounts<EndpointId, ConnectionId>>,
-    max_total: usize,
-    max_per_endpoint: usize,
-    ping_schedule: ClientPingSchedule,
-}
-
-impl RelayAccess {
-    fn new(max_total: usize, max_per_endpoint: usize, ping_schedule: ClientPingSchedule) -> Self {
-        Self {
-            counts: Mutex::new(AdmissionCounts::default()),
-            max_total,
-            max_per_endpoint,
-            ping_schedule,
-        }
-    }
-
-    fn with_counts<R>(
-        &self,
-        callback: impl FnOnce(&mut AdmissionCounts<EndpointId, ConnectionId>) -> R,
-    ) -> R {
-        let mut counts = match self.counts.lock() {
-            Ok(counts) => counts,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        callback(&mut counts)
-    }
-}
-
-impl AccessControl for RelayAccess {
-    async fn on_connect(&self, request: &ClientRequest) -> Access {
-        // Iroh authenticates this EndpointId during its challenge/proof handshake before
-        // invoking the access hook, so an outside client cannot choose another key's bucket.
-        let admitted = self.with_counts(|counts| {
-            counts.try_admit(
-                request.endpoint_id(),
-                request.connection_id(),
-                self.max_total,
-                self.max_per_endpoint,
-            )
-        });
-        if admitted {
-            Access::Allow
-        } else {
-            Access::Deny {
-                reason: Some(RELAY_CAPACITY_DENIAL.to_string()),
-            }
-        }
-    }
-
-    fn on_disconnect(&self, _endpoint_id: EndpointId, connection_id: ConnectionId) {
-        self.with_counts(|counts| counts.release(&connection_id));
-    }
-
-    fn ping_schedule(&self, _endpoint_id: EndpointId) -> ClientPingSchedule {
-        self.ping_schedule
-    }
-}
-
-#[derive(Debug)]
-struct AdmissionCounts<K, C> {
-    by_endpoint: HashMap<K, usize>,
-    admitted: HashMap<C, K>,
-}
-
-impl<K, C> Default for AdmissionCounts<K, C> {
-    fn default() -> Self {
-        Self {
-            by_endpoint: HashMap::new(),
-            admitted: HashMap::new(),
-        }
-    }
-}
-
-impl<K: Clone + Eq + Hash, C: Eq + Hash> AdmissionCounts<K, C> {
-    fn try_admit(
-        &mut self,
-        endpoint_id: K,
-        connection_id: C,
-        max_total: usize,
-        max_per_endpoint: usize,
-    ) -> bool {
-        let endpoint_count = self.by_endpoint.get(&endpoint_id).copied().unwrap_or(0);
-        if self.admitted.len() >= max_total
-            || endpoint_count >= max_per_endpoint
-            || self.admitted.contains_key(&connection_id)
-        {
-            return false;
-        }
-        self.by_endpoint
-            .insert(endpoint_id.clone(), endpoint_count + 1);
-        self.admitted.insert(connection_id, endpoint_id);
-        true
-    }
-
-    fn release(&mut self, connection_id: &C) {
-        let Some(endpoint_id) = self.admitted.remove(connection_id) else {
-            return;
-        };
-        let Some(endpoint_count) = self.by_endpoint.get_mut(&endpoint_id) else {
-            return;
-        };
-        *endpoint_count = endpoint_count.saturating_sub(1);
-        if *endpoint_count == 0 {
-            self.by_endpoint.remove(&endpoint_id);
-        }
-    }
 }
 
 pub(super) fn default_bind(signal_bind: &str) -> String {
@@ -293,6 +218,16 @@ pub(super) fn default_bind(signal_bind: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn options(keepalive: Keepalive) -> RelayOptions {
+        RelayOptions {
+            keepalive,
+            tls: None,
+            plaintext_fallback: false,
+            trusted_proxy: false,
+            admissions: Arc::new(RelayAdmissions::default()),
+        }
+    }
 
     #[test]
     fn relay_bind_defaults_to_next_port() {
@@ -314,7 +249,7 @@ mod tests {
     fn occupied_relay_bind_is_a_startup_error() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
-        let error = match start_at(address, Keepalive::default()) {
+        let error = match start_at(address, options(Keepalive::default())) {
             Ok(_) => panic!("relay unexpectedly bound an occupied address"),
             Err(error) => error,
         };
@@ -324,7 +259,10 @@ mod tests {
 
     #[test]
     fn relay_config_applies_resource_limits() {
-        let config = relay_config("127.0.0.1:51821".parse().unwrap(), Keepalive::default());
+        let config = relay_config(
+            "127.0.0.1:51821".parse().unwrap(),
+            options(Keepalive::default()),
+        );
         let rate_limit = config.limits.client_rx.unwrap();
         assert_eq!(rate_limit.bytes_per_second.get(), RELAY_RX_BYTES_PER_SECOND);
         assert_eq!(
@@ -353,13 +291,30 @@ mod tests {
             Some(RELAY_ACCEPT_BURST_PER_SOURCE)
         );
         assert_eq!(config.key_cache_capacity, Some(RELAY_KEY_CACHE_CAPACITY));
+        assert!(config.tls.is_none());
+    }
+
+    #[test]
+    fn review_task_trusted_proxy_lifts_only_the_per_source_relay_caps() {
+        let mut proxied = options(Keepalive::default());
+        proxied.trusted_proxy = true;
+        let config = relay_config("127.0.0.1:51821".parse().unwrap(), proxied);
+        assert_eq!(
+            config.limits.max_concurrent_tcp_connections_per_source,
+            Some(RELAY_MAX_TCP_CONNECTIONS)
+        );
+        assert_eq!(config.limits.accept_conn_limit_per_source, None);
+        assert_eq!(
+            config.limits.accept_conn_limit,
+            Some(RELAY_ACCEPTS_PER_SECOND)
+        );
     }
 
     #[test]
     fn android_background_task_relay_pings_at_keepalive_interval() {
         let endpoint = iroh_base::SecretKey::from_bytes(&[7; 32]).public();
         for (keepalive, expected) in [(Keepalive::default(), 180), (Keepalive::clamped(45), 45)] {
-            let config = relay_config("127.0.0.1:51821".parse().unwrap(), keepalive);
+            let config = relay_config("127.0.0.1:51821".parse().unwrap(), options(keepalive));
             let schedule = config.access.ping_schedule(endpoint);
             assert_eq!(schedule.first_interval, Duration::from_secs(15));
             assert_eq!(schedule.interval, Duration::from_secs(expected));
@@ -369,35 +324,5 @@ mod tests {
         let upstream = ClientPingSchedule::default();
         assert_eq!(upstream.interval, Duration::from_secs(15));
         assert_eq!(upstream.pong_timeout, None);
-    }
-
-    #[test]
-    fn relay_admission_enforces_per_endpoint_cap_and_reuses_capacity() {
-        let mut counts = AdmissionCounts::default();
-        assert!(counts.try_admit(7_u8, 10_u8, 8, 2));
-        assert!(counts.try_admit(7_u8, 11_u8, 8, 2));
-        assert!(!counts.try_admit(7_u8, 12_u8, 8, 2));
-
-        counts.release(&10);
-        assert!(counts.try_admit(7_u8, 12_u8, 8, 2));
-        counts.release(&10);
-        counts.release(&11);
-        counts.release(&12);
-
-        assert!(counts.admitted.is_empty());
-        assert!(!counts.by_endpoint.contains_key(&7));
-    }
-
-    #[test]
-    fn relay_admission_enforces_global_cap_and_reuses_capacity() {
-        let mut counts = AdmissionCounts::default();
-        assert!(counts.try_admit(1_u8, 10_u8, 3, 2));
-        assert!(counts.try_admit(1_u8, 11_u8, 3, 2));
-        assert!(counts.try_admit(2_u8, 12_u8, 3, 2));
-        assert!(!counts.try_admit(3_u8, 13_u8, 3, 2));
-
-        counts.release(&10);
-        assert!(counts.try_admit(3_u8, 13_u8, 3, 2));
-        assert_eq!(counts.admitted.len(), 3);
     }
 }

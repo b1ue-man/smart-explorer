@@ -90,8 +90,9 @@ impl std::fmt::Debug for DiscoveryPublishTarget {
     }
 }
 
-/// Exact UTF-8 PIN bytes with redacted diagnostics and drop-time wiping. Empty
-/// input and `"0"` are ordinary values; no normalization or minimum applies.
+/// Exact UTF-8 PIN bytes with redacted diagnostics and drop-time wiping. No
+/// normalization applies; short or trivial PINs need the explicit
+/// `allow_weak_pin` of the publishing command (`discovery_pin`).
 #[derive(PartialEq, Eq)]
 pub struct DiscoveryPin(Vec<u8>);
 
@@ -150,7 +151,8 @@ impl<'de> Deserialize<'de> for DiscoveryPin {
 }
 
 /// Public UI-to-worker port. PIN text is consumed byte-for-byte: the transport
-/// never trims, parses, normalizes, or applies a minimum-length rule.
+/// never trims, parses or normalizes it. Publishing checks the PIN strength
+/// unless `allow_weak_pin` is set, and the duration (at most 30 minutes).
 #[derive(Clone, Serialize, Deserialize)]
 pub enum DiscoveryCommand {
     Publish {
@@ -158,6 +160,9 @@ pub enum DiscoveryCommand {
         display_alias: String,
         pin: DiscoveryPin,
         duration_secs: u64,
+        /// The user chose "Unsichere PIN erlauben" for a short or trivial PIN.
+        #[serde(default)]
+        allow_weak_pin: bool,
     },
     StopPublishing {
         offer_id: String,
@@ -166,6 +171,10 @@ pub enum DiscoveryCommand {
     StartDiscoveryExchange {
         discovery_id: String,
         pin: DiscoveryPin,
+        /// The user chose "Auch meine Freigaben für dieses Gerät öffnen":
+        /// a Direct pairing then also opens this device's exports (FC1/S21).
+        #[serde(default)]
+        share_back: bool,
     },
     CancelDiscoveryExchange {
         exchange_id: String,
@@ -179,6 +188,7 @@ impl std::fmt::Debug for DiscoveryCommand {
                 target,
                 display_alias,
                 duration_secs,
+                allow_weak_pin,
                 ..
             } => formatter
                 .debug_struct("Publish")
@@ -186,16 +196,22 @@ impl std::fmt::Debug for DiscoveryCommand {
                 .field("display_alias", display_alias)
                 .field("pin", &"[REDACTED]")
                 .field("duration_secs", duration_secs)
+                .field("allow_weak_pin", allow_weak_pin)
                 .finish(),
             Self::StopPublishing { offer_id } => formatter
                 .debug_struct("StopPublishing")
                 .field("offer_id", offer_id)
                 .finish(),
             Self::ListDiscoveries => formatter.write_str("ListDiscoveries"),
-            Self::StartDiscoveryExchange { discovery_id, .. } => formatter
+            Self::StartDiscoveryExchange {
+                discovery_id,
+                share_back,
+                ..
+            } => formatter
                 .debug_struct("StartDiscoveryExchange")
                 .field("discovery_id", discovery_id)
                 .field("pin", &"[REDACTED]")
+                .field("share_back", share_back)
                 .finish(),
             Self::CancelDiscoveryExchange { exchange_id } => formatter
                 .debug_struct("CancelDiscoveryExchange")
@@ -215,6 +231,10 @@ pub enum DiscoveryOfferStopReason {
     TransportError,
     /// The daemon stopped or replaced the Share worker that held the offer.
     WorkerStopped,
+    /// A device paired with the offer; it is single-use (FC2).
+    Paired,
+    /// Too many attempts failed to prove the PIN; someone may be guessing.
+    TooManyFailedAttempts,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -255,6 +275,14 @@ pub enum DiscoveryEvent {
         exchange_id: Option<String>,
         discovery_id: Option<String>,
         error: String,
+    },
+    /// The relation was already installed (or the Room material handed out)
+    /// when the exchange ended without the other side's confirmation:
+    /// "gekoppelt – Bestätigung fehlt", with `outcome` for "Widerrufen" (S24).
+    ExchangeUnconfirmed {
+        exchange_id: String,
+        discovery_id: Option<String>,
+        outcome: super::discovery_relation_store::DiscoveryRelationOutcome,
     },
 }
 

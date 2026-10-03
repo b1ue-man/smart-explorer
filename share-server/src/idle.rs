@@ -5,8 +5,7 @@
 //! seconds it delivers deferred presence refreshes followed by `keepalive` and
 //! closes the connection when no inbound data arrives within
 //! [`IDLE_REPLY_WINDOW`]. Connections that are not idle keep their established
-//! rule: raw TCP closes after [`ACTIVE_READ_WINDOW`] of silence, WebSocket has no
-//! inbound deadline.
+//! rule: both transports close after [`ACTIVE_READ_WINDOW`] of silence.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
