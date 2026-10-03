@@ -228,10 +228,15 @@ def native_tests(binary, logs, env, server=False):
                 raise RuntimeError("Missing mandatory RV1 signal: " + marker)
     (logs / (label + "-selection.json")).write_text(json.dumps(selected, indent=2))
     args = [binary, "--include-ignored", "--test-threads=1", *filters]
+    run_env = env
     if os.name != "nt" and not server:
+        watch_limits = [name for name in selected if name.endswith("::review_task_watch_limit_falls_back_to_polling")]
+        if len(watch_limits) != 1:
+            raise RuntimeError("Missing or ambiguous real watch-limit acceptance.")
+        run_env = dict(env, SE_REVIEW_WATCH_LIMIT_CASE=watch_limits[0])
         args = ["bash", ROOT / "native/review-task-runtime.sh", *args]
     log = logs / (label + "-suite.log")
-    run(args, log, env, seconds=7200)
+    run(args, log, run_env, seconds=7200)
     result = log.read_text(errors="replace")
     for name in selected:
         if f"test {name} ... ok" not in result:

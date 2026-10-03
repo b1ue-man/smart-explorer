@@ -321,15 +321,20 @@ mod unix {
         ] {
             let directory = suite_directory(variable);
             let backend = LocalBackend::new(&directory);
-            let limits = target_limits(&backend, &directory);
-            assert_eq!(limits.mtime_precision, precision, "{variable}");
-            assert_eq!(limits.max_file_size, max_file_size, "{variable}");
-            assert!(limits.windows_names, "{variable}");
             let identity = local_volume_identity(&directory)
                 .unwrap()
                 .expect("the real image has a UUID");
             let batched_flush =
                 crate::vfs::fs_profile::mount_kind(&identity.fs_type) != MountKind::Fuse;
+            let precision = if variable == "SE_REVIEW_EXFAT_DIR" && !batched_flush {
+                MtimePrecision::Seconds
+            } else {
+                precision
+            };
+            let limits = target_limits(&backend, &directory);
+            assert_eq!(limits.mtime_precision, precision, "{variable}");
+            assert_eq!(limits.max_file_size, max_file_size, "{variable}");
+            assert!(limits.windows_names, "{variable}");
             let stage = format!("{directory}/review-task.txt.se-sync-0123456789abcdef");
             std::fs::write(&stage, b"x").unwrap();
             let wanted = 1_600_000_001_234;

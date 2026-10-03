@@ -106,3 +106,9 @@ stdout verwendet ([Upstream-README](https://github.com/rust-lang/rustfmt/blob/ma
 Der [ModResolver](https://github.com/rust-lang/rustfmt/blob/master/src/modules.rs)
 überspringt externe Kindmodule für stdin; deshalb kann jede geänderte Datei separat
 einen präzisen Patch liefern, einschließlich additiver Modulregistrierungen.
+
+## Dritter Lauf: wirkliche FUSE-Zeitauflösung und Watchlimit
+
+Geprüft am 2026-10-03 gegen [exfat-fuse 1.3.0 node.c](https://raw.githubusercontent.com/relan/exfat/v1.3.0/libexfat/node.c) und [exfat.h](https://raw.githubusercontent.com/relan/exfat/v1.3.0/libexfat/exfat.h): `exfat_utimes` übernimmt `tv[1].tv_sec` in `node->mtime`; das Feld ist `time_t`. Subsekunden werden nicht gespeichert. Folgerung: reale FUSE-exFAT-Blockvolumes melden Sekundenauflösung, ohne Kernel-exFAT von 10 ms herabzusetzen oder FUSE einen volumenweiten Flush zuzusichern.
+
+[inotify(7)](https://man7.org/linux/man-pages/man7/inotify.7.html) beschreibt `/proc/sys/fs/inotify/max_user_watches` als echtes Limit pro UID. Die vorhandene Fixture erzeugt 129 Verzeichnisse; das normale Runnerlimit kann deshalb keinen WatchLimit belegen. Die Suite entdeckt ihren vollständigen Namen im vorhandenen Listing und startet genau diesen Fall innerhalb derselben Runtime separat mit einem echten Limit von 16. `sysctl -n fs.inotify.max_user_watches` liest den ursprünglichen Wert; `sudo -n sysctl -w fs.inotify.max_user_watches=N` setzt und restauriert ihn. Alle anderen Fälle behalten das normale Limit, der eine gemeinsame Log enthält beide Ergebnisse, und EXIT/TERM/INT-Cleanup stellt das ursprüngliche Limit wieder her. Kein Fixturefall wird entfernt oder abgeschwächt.

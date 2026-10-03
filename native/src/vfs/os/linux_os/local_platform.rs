@@ -124,6 +124,11 @@ pub(crate) fn filesystem_profile(path: &Path) -> std::io::Result<super::fs_profi
         }
     } else if let Some(lower) = mount.and_then(volume_id::fuse_block_type) {
         profile.limits = super::fs_profile::linux_profile(&lower).limits;
+        // exfat-fuse stores time_t and drops tv_nsec in exfat_utimes.
+        // The on-disk 10 ms format does not describe this driver API.
+        if lower == "exfat" {
+            profile.limits.mtime_precision = super::MtimePrecision::Seconds;
+        }
     }
     Ok(profile)
 }
