@@ -1,10 +1,33 @@
 //! Verify and capture a regular child before the OS publishes a reversible trash record.
-use std::{fs::File,io::{self,Read},path::{Component,Path}};
+use std::{ffi::OsStr,fs::File,io::{self,Read},path::{Component,Path}};
 use sha2::{Digest,Sha256};
 use crate::{local_access::{DirectoryHandle,QuarantinedChild},vfs::{RecycleExpectation,RecycleOutcome}};
 
 pub(crate) fn recycle(root:&Path,path:&Path,expected:&RecycleExpectation,
     publish:impl FnOnce(&mut QuarantinedChild,&Path)->io::Result<()>) -> io::Result<RecycleOutcome> {
+    with_regular_child(root,path,|_,path,directory,name,file| {
+        if !matches(file,expected)? { return Ok(RecycleOutcome::Changed); }
+        let mut captured=directory.quarantine_regular_child(name,file)?;
+        let result=(|| {
+            if !matches(captured.file(),expected)? { return Ok(RecycleOutcome::Changed); }
+            publish(&mut captured,path)?;
+            Ok(RecycleOutcome::Recycled)
+    })();
+    if !matches!(result,Ok(RecycleOutcome::Recycled)) {
+        if let Err(restore)=captured.restore() {
+            let cause=result.err().map_or("Datei wurde verändert".into(),|error|error.to_string());
+            return Err(io::Error::new(restore.kind(),format!("{cause}; Wiederherstellen fehlgeschlagen: {restore}; Inhalt bleibt in {}",captured.retained_location().display())));
+        }
+    }
+    result
+    })
+}
+
+/// Select the ordinary confined object; callers may persist an intent before
+/// capture without reopening the final child or granting elevated reads.
+pub(super) fn with_regular_child<T>(root:&Path,path:&Path,
+    selected:impl FnOnce(&Path,&Path,&DirectoryHandle,&OsStr,&File)->io::Result<T>,
+) -> io::Result<T> {
     let root=std::fs::canonicalize(root)?;
     let path=crate::local_access::normalize_scan_root(path);
     let relative=path.strip_prefix(&root).map_err(|_|io::Error::new(io::ErrorKind::PermissionDenied,"Papierkorbpfad liegt außerhalb der autorisierten Wurzel"))?;
@@ -16,20 +39,7 @@ pub(crate) fn recycle(root:&Path,path:&Path,expected:&RecycleExpectation,
         directory=directory.open_child(name)?;
     };
     let file=directory.open_regular_child(name)?;
-    if !matches(&file,expected)? { return Ok(RecycleOutcome::Changed); }
-    let mut captured=directory.quarantine_regular_child(name,&file)?;
-    let result=(|| {
-        if !matches(captured.file(),expected)? { return Ok(RecycleOutcome::Changed); }
-        publish(&mut captured,&path)?;
-        Ok(RecycleOutcome::Recycled)
-    })();
-    if !matches!(result,Ok(RecycleOutcome::Recycled)) {
-        if let Err(restore)=captured.restore() {
-            let cause=result.err().map_or("Datei wurde verändert".into(),|error|error.to_string());
-            return Err(io::Error::new(restore.kind(),format!("{cause}; Wiederherstellen fehlgeschlagen: {restore}; Inhalt bleibt in {}",captured.retained_location().display())));
-        }
-    }
-    result
+    selected(&root,&path,&directory,name,&file)
 }
 fn matches(file:&File,expected:&RecycleExpectation)->io::Result<bool> {
     let before=file.metadata()?;

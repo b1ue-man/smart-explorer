@@ -18,10 +18,11 @@ impl App {
                 self.ui_share_top(ui);
                 ui.separator();
                 ui.horizontal_wrapped(|ui| {
-                    for (i, label) in ["Geräte", "Räume", "Freigaben", "Diagnose", "Netzwerk"]
+                    for (i, label) in ["Geräte", "Räume", "Freigaben", "Diagnose", "Netzwerk", "Papierkorb"]
                         .iter()
                         .enumerate()
                     {
+                        if i == 5 && !crate::host_trash::available() { continue; }
                         if ui.selectable_label(self.share_tab == i, *label).clicked() {
                             self.share_tab = i;
                         }
@@ -36,6 +37,7 @@ impl App {
                         1 => self.ui_share_rooms(ui),
                         2 => self.ui_share_exports(ui),
                         4 => lan_ui::ui(self, ui),
+                        5 => self.ui_share_host_trash(ui),
                         _ => self.ui_share_diagnostics(ui),
                     });
             });

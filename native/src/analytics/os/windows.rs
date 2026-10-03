@@ -1,4 +1,4 @@
-//! Windows host figures and its system recycle bin.
+//! Windows host figures and the visible Smart-Explorer host trash.
 use std::{io, path::Path};
 use std::os::windows::ffi::OsStrExt;
 use crate::analytics::VolumeUsage;
@@ -14,13 +14,10 @@ pub(crate) fn volume_usage(path: &Path) -> io::Result<VolumeUsage> {
 }
 
 pub(crate) fn recycle(root:&Path,path:&Path,expected:&crate::vfs::RecycleExpectation)->io::Result<crate::vfs::RecycleOutcome> {
-    super::checked_recycle::recycle(root,path,expected,publish_trash)
+    super::checked_recycle::with_regular_child(root,path,|root,_,parent,_,file|
+        crate::host_trash::recycle_selected(root,parent,file,expected))
 }
-pub(crate) fn host_recycle_available() -> bool { false }
-fn publish_trash(captured:&mut crate::local_access::QuarantinedChild,original:&Path)->io::Result<()> {
-    let _=(captured,original);
-    Err(io::Error::new(io::ErrorKind::Unsupported,"Sicherer nativer Papierkorb-Handoff ist auf diesem Host noch nicht verfügbar"))
-}
+pub(crate) fn host_recycle_available() -> bool { crate::host_trash::available() }
 
 pub(crate) fn host_permission_note(denied: u64) -> Option<String> {
     (denied > 0).then(|| "Einige Bereiche sind auf dem Host nicht lesbar. Eine lokale Analyse mit dort ausdrücklich erlaubten erhöhten Leserechten kann mehr erfassen; Fernanfragen erteilen diese Rechte nicht.".into())
