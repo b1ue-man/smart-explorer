@@ -4,7 +4,7 @@ use std::sync::Mutex;
 /// Size + mtime (+ optional content hash) signature of one file on one side.
 /// `hash` is 0 when this side wasn't hashed (see `HashMode`/`hash_mode`); when
 /// non-zero it's the MD5-derived content key and takes priority in compares.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Sig {
     pub size: u64,
     pub mtime_ms: i64,
@@ -16,6 +16,43 @@ pub type Tree = BTreeMap<String, Sig>;
 
 /// Last-sync state: rel -> (side A sig, side B sig). Absent = not present then.
 pub type Baseline = BTreeMap<String, (Option<Sig>, Option<Sig>)>;
+
+/// One side of a sync pair: `A` is the job's source ("Quelle"), `B` its
+/// target ("Ziel"); in a one-way mirror `A` is the side copied from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum PairSide {
+    A,
+    B,
+}
+
+impl PairSide {
+    pub fn other(self) -> PairSide {
+        match self {
+            PairSide::A => PairSide::B,
+            PairSide::B => PairSide::A,
+        }
+    }
+    /// Stable code for persistence and the Android bridge.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PairSide::A => "a",
+            PairSide::B => "b",
+        }
+    }
+    pub fn parse(s: &str) -> Option<PairSide> {
+        match s {
+            "a" => Some(PairSide::A),
+            "b" => Some(PairSide::B),
+            _ => None,
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            PairSide::A => "Quelle",
+            PairSide::B => "Ziel",
+        }
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Direction {
@@ -238,6 +275,40 @@ impl VersioningScheme {
     ];
 }
 
+/// Where a run keeps the versions of replaced and deleted files (FS5).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum VersionsLocation {
+    /// The hidden `.se-versions` folder at the sync root of the affected
+    /// side (moved there by rename, nothing downloaded); the app data where
+    /// a rename is impossible. The default of every job.
+    Auto,
+    /// Always the app data (`versions_<pair>`), as before RV1.
+    AppData,
+}
+
+impl VersionsLocation {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            VersionsLocation::Auto => "auto",
+            VersionsLocation::AppData => "appdata",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "auto" => Some(VersionsLocation::Auto),
+            "appdata" => Some(VersionsLocation::AppData),
+            _ => None,
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            VersionsLocation::Auto => "Am Sync-Ordner (.se-versions), sonst App-Daten",
+            VersionsLocation::AppData => "Immer in den App-Daten",
+        }
+    }
+    pub const ALL: [VersionsLocation; 2] = [VersionsLocation::Auto, VersionsLocation::AppData];
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct Versioning {
     pub scheme: VersioningScheme,
@@ -276,6 +347,18 @@ pub struct BisyncOptions {
     pub max_delete: u64,
     /// …or more than this percent of the side's files (0 = no limit).
     pub max_delete_pct: u8,
+    /// The percentage stop applies only from this many deletions on (so a
+    /// small folder can still be cleaned up); 0 = the percentage alone, as
+    /// before RV1. Jobs: 25 (`SyncJob::new`).
+    pub max_delete_min: u64,
+    /// Descend into other file systems mounted inside a root (Linux). When
+    /// off, such mounts are protected omissions (`OmissionKind::Mount`).
+    pub cross_mounts: bool,
+    /// Where versions of replaced/deleted files go.
+    pub versions: VersionsLocation,
+    /// A target side not listed completely for this many seconds is listed
+    /// completely in this run (daily verification, B19); 0 = never forced.
+    pub verify_target_secs: u64,
     // ── Groups H/I: bandwidth & reliability ───────────────────────────────
     /// Transfer rate cap in bytes/sec across all workers (0 = unlimited).
     pub bwlimit_bps: u64,
@@ -309,6 +392,10 @@ impl Default for BisyncOptions {
             use_recycle: false,
             max_delete: 0,
             max_delete_pct: 0,
+            max_delete_min: 0,
+            cross_mounts: true,
+            versions: VersionsLocation::AppData,
+            verify_target_secs: 0,
             bwlimit_bps: 0,
             max_transfers: 0,
             atomic: true,

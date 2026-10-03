@@ -5,8 +5,10 @@ use rusqlite::types::Type;
 use super::state_types::{ItemRecord, PairRecord, Side};
 use super::types::{Baseline, Sig};
 
-const MAX_STATE_NODES: usize = 1_000_000;
-const MAX_STATE_TEXT_BYTES: usize = 128 * 1024 * 1024;
+static LIMITS: std::sync::LazyLock<super::SyncLimits> = std::sync::LazyLock::new(||
+    super::SyncLimits::for_memory(crate::transfer::physical_memory()));
+fn entry_limit() -> usize { usize::try_from(LIMITS.walk_entries).unwrap_or(usize::MAX) }
+fn text_limit() -> usize { usize::try_from(LIMITS.walk_text_bytes).unwrap_or(usize::MAX) }
 const MAX_STATE_DEPTH: usize = 512;
 
 pub(super) struct StateBudget {
@@ -21,8 +23,8 @@ impl StateBudget {
         Self {
             nodes: 0,
             text_bytes: 0,
-            max_nodes: MAX_STATE_NODES,
-            max_text_bytes: MAX_STATE_TEXT_BYTES,
+            max_nodes: entry_limit(),
+            max_text_bytes: text_limit().saturating_mul(4),
         }
     }
 
@@ -30,8 +32,8 @@ impl StateBudget {
         Self {
             nodes: 0,
             text_bytes: 0,
-            max_nodes: MAX_STATE_NODES.saturating_mul(2),
-            max_text_bytes: MAX_STATE_TEXT_BYTES.saturating_mul(2),
+            max_nodes: entry_limit().saturating_mul(2),
+            max_text_bytes: text_limit().saturating_mul(8),
         }
     }
 
@@ -76,7 +78,7 @@ impl StateBudget {
 }
 
 pub(super) fn validate_pair_load_bytes(text_bytes: i64) -> rusqlite::Result<()> {
-    if usize::try_from(text_bytes).map_or(true, |bytes| bytes > MAX_STATE_TEXT_BYTES) {
+    if usize::try_from(text_bytes).map_or(true, |bytes| bytes > text_limit()) {
         return Err(invalid(0, Type::Text, "sync pair exceeds its text budget"));
     }
     Ok(())
@@ -92,14 +94,14 @@ pub(super) fn validate_pair(record: &PairRecord) -> rusqlite::Result<()> {
         .saturating_add(record.source_cursor.as_deref().map_or(0, str::len))
         .saturating_add(record.root_a_id.as_deref().map_or(0, str::len))
         .saturating_add(record.root_b_id.as_deref().map_or(0, str::len));
-    if record.pair.is_empty() || record.mode.is_empty() || text_bytes > MAX_STATE_TEXT_BYTES {
+    if record.pair.is_empty() || record.mode.is_empty() || text_bytes > text_limit() {
         return Err(invalid(0, Type::Text, "invalid or over-budget sync pair"));
     }
     Ok(())
 }
 
 pub(super) fn validate_cursor(cursor: Option<&str>) -> rusqlite::Result<()> {
-    if cursor.is_some_and(|cursor| cursor.len() > MAX_STATE_TEXT_BYTES) {
+    if cursor.is_some_and(|cursor| cursor.len() > text_limit()) {
         return Err(invalid(
             0,
             Type::Text,

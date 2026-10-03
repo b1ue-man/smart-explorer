@@ -22,13 +22,17 @@ pub struct JobEditor {
     pub enabled: bool,
     // ── Group D: scheduling / triggers ───────────────────────────────────────
     pub trigger: crate::syncjobs::Trigger,
-    pub cal_time: String,      // "HH:MM"
-    pub cal_weekdays: u8,      // bit0=Mon..bit6=Sun, 0 = every day
-    pub cal_monthday: String,  // "0" = use weekdays
-    pub rt_debounce: String,   // seconds
-    pub connect_match: String, // label/serial/letter wildcard
-    pub active_from: String,   // "HH:MM"
-    pub active_to: String,     // "HH:MM"
+    pub cal_time: String,        // "HH:MM"
+    pub cal_weekdays: u8,        // bit0=Mon..bit6=Sun, 0 = every day
+    pub cal_monthday: String,    // "0" = use weekdays
+    pub rt_debounce: String,     // seconds
+    pub rt_max_latency: String,  // seconds, "0" = automatic
+    pub rt_poll: String,         // seconds, "0" = never poll
+    pub verify_interval: String, // seconds, "0" = no control runs
+    pub verify_target: String,   // seconds, "0" = no full target check
+    pub connect_match: String,   // label/serial/letter wildcard
+    pub active_from: String,     // "HH:MM"
+    pub active_to: String,       // "HH:MM"
     pub catch_up: bool,
     // ── Group B/C: deletion / move / comparison ──────────────────────────────
     pub delete_policy: crate::bisync::DeletePolicy,
@@ -41,6 +45,9 @@ pub struct JobEditor {
     pub use_recycle_bin: bool,
     pub max_delete: String,
     pub max_delete_pct: String,
+    pub max_delete_min: String,
+    pub versions_location: crate::bisync::VersionsLocation,
+    pub cross_mounts: bool,
     // ── Group G: filters ─────────────────────────────────────────────────────
     pub filter_min_size_kb: String,
     pub filter_max_size_kb: String,
@@ -55,6 +62,7 @@ pub struct JobEditor {
     pub retry_delay_secs: String,
     pub run_before: String,
     pub run_after: String,
+    pub run_cleanup: String,
 }
 
 /// Minutes-after-midnight → "HH:MM".
@@ -84,49 +92,12 @@ pub fn hm_to_min(s: &str) -> Option<i32> {
 }
 
 impl JobEditor {
+    /// A new job's draft with the defaults of `SyncJob::new`.
     pub fn blank(source: String, target: String) -> Self {
+        let defaults = crate::syncjobs::SyncJob::new(String::new(), source, target);
         JobEditor {
             id: None,
-            name: String::new(),
-            source,
-            target,
-            direction: crate::bisync::Direction::Both,
-            conflict: crate::bisync::ConflictMode::FileLevel,
-            retain_days: "30".into(),
-            interval_min: "0".into(),
-            include_hidden: true,
-            ignore: String::new(),
-            enabled: true,
-            trigger: crate::syncjobs::Trigger::Manual,
-            cal_time: "09:00".into(),
-            cal_weekdays: 0,
-            cal_monthday: "0".into(),
-            rt_debounce: "10".into(),
-            connect_match: String::new(),
-            active_from: "00:00".into(),
-            active_to: "00:00".into(),
-            catch_up: true,
-            delete_policy: crate::bisync::DeletePolicy::Propagate,
-            move_files: false,
-            compare: crate::bisync::CompareMode::MtimeSize,
-            modify_window: "0".into(),
-            versioning_scheme: crate::bisync::VersioningScheme::Days,
-            retain_count: "0".into(),
-            use_recycle_bin: false,
-            max_delete: "0".into(),
-            max_delete_pct: "0".into(),
-            filter_min_size_kb: "0".into(),
-            filter_max_size_kb: "0".into(),
-            filter_max_age_days: "0".into(),
-            filter_min_age_days: "0".into(),
-            bwlimit_kbps: "0".into(),
-            max_transfers: "0".into(),
-            atomic_copy: true,
-            verify: false,
-            retries: "0".into(),
-            retry_delay_secs: "2".into(),
-            run_before: String::new(),
-            run_after: String::new(),
+            ..Self::from_job(&defaults)
         }
     }
 
@@ -148,6 +119,10 @@ impl JobEditor {
             cal_weekdays: j.cal_weekdays,
             cal_monthday: j.cal_monthday.to_string(),
             rt_debounce: j.rt_debounce_secs.to_string(),
+            rt_max_latency: j.rt_max_latency_secs.to_string(),
+            rt_poll: j.rt_poll_secs.to_string(),
+            verify_interval: j.verify_interval_secs.to_string(),
+            verify_target: j.verify_target_secs.to_string(),
             connect_match: j.connect_match.clone(),
             active_from: min_to_hm(j.active_from_min),
             active_to: min_to_hm(j.active_to_min),
@@ -161,6 +136,9 @@ impl JobEditor {
             use_recycle_bin: j.use_recycle_bin,
             max_delete: j.max_delete.to_string(),
             max_delete_pct: j.max_delete_pct.to_string(),
+            max_delete_min: j.max_delete_min.to_string(),
+            versions_location: j.versions_location,
+            cross_mounts: j.cross_mounts,
             filter_min_size_kb: j.filter_min_size_kb.to_string(),
             filter_max_size_kb: j.filter_max_size_kb.to_string(),
             filter_max_age_days: j.filter_max_age_days.to_string(),
@@ -173,6 +151,7 @@ impl JobEditor {
             retry_delay_secs: j.retry_delay_secs.to_string(),
             run_before: j.run_before.clone(),
             run_after: j.run_after.clone(),
+            run_cleanup: j.run_cleanup.clone(),
         }
     }
 }
@@ -207,6 +186,10 @@ impl JobEditor {
             return Err("Tag im Monat muss zwischen 0 und 31 liegen.".into());
         }
         let rt_debounce_secs = parse_number(&self.rt_debounce, "Verzögerung")?;
+        let rt_max_latency_secs = parse_number(&self.rt_max_latency, "Höchstwartezeit")?;
+        let rt_poll_secs = parse_number(&self.rt_poll, "Abfrageintervall")?;
+        let verify_interval_secs = parse_number(&self.verify_interval, "Kontroll-Lauf")?;
+        let verify_target_secs = parse_number(&self.verify_target, "Vollprüfung des Ziels")?;
         let active_from_min = hm_to_min(&self.active_from)
             .ok_or_else(|| "Beginn der aktiven Zeit ist keine gültige Uhrzeit.".to_string())?;
         let active_to_min = hm_to_min(&self.active_to)
@@ -218,6 +201,7 @@ impl JobEditor {
         if max_delete_pct > 100 {
             return Err("Der prozentuale Lösch-Schutz darf höchstens 100 sein.".into());
         }
+        let max_delete_min = parse_number(&self.max_delete_min, "Mindestzahl an Löschungen")?;
         let filter_min_size_kb = parse_number(&self.filter_min_size_kb, "Mindestgröße")?;
         let filter_max_size_kb = parse_number(&self.filter_max_size_kb, "Maximalgröße")?;
         if filter_max_size_kb > 0 && filter_min_size_kb > filter_max_size_kb {
@@ -271,6 +255,10 @@ impl JobEditor {
         job.cal_weekdays = self.cal_weekdays;
         job.cal_monthday = cal_monthday;
         job.rt_debounce_secs = rt_debounce_secs;
+        job.rt_max_latency_secs = rt_max_latency_secs;
+        job.rt_poll_secs = rt_poll_secs;
+        job.verify_interval_secs = verify_interval_secs;
+        job.verify_target_secs = verify_target_secs;
         job.connect_match = self.connect_match.trim().to_string();
         job.active_from_min = active_from_min;
         job.active_to_min = active_to_min;
@@ -284,6 +272,9 @@ impl JobEditor {
         job.use_recycle_bin = self.use_recycle_bin;
         job.max_delete = max_delete;
         job.max_delete_pct = max_delete_pct;
+        job.max_delete_min = max_delete_min;
+        job.versions_location = self.versions_location;
+        job.cross_mounts = self.cross_mounts;
         job.filter_min_size_kb = filter_min_size_kb;
         job.filter_max_size_kb = filter_max_size_kb;
         job.filter_max_age_days = filter_max_age_days;
@@ -296,6 +287,7 @@ impl JobEditor {
         job.retry_delay_secs = retry_delay_secs;
         job.run_before = self.run_before.trim().to_string();
         job.run_after = self.run_after.trim().to_string();
+        job.run_cleanup = self.run_cleanup.trim().to_string();
         job.validate()
             .map_err(|error| format!("Ungültiges Setup: {error}"))?;
         Ok(job)

@@ -29,6 +29,13 @@ impl SyncJob {
     pub fn checked_glob_set(&self) -> Result<globset::GlobSet, String> {
         compile_ignore_patterns(&self.ignore)
     }
+
+    /// The ignore patterns for one pair: they ignore letter case when either
+    /// side does (`bisync::pair_key_policy(..).fold_case`, Y153), so
+    /// `**/*.tmp` also leaves out `X.TMP` there.
+    pub fn checked_glob_set_for(&self, case_insensitive: bool) -> Result<globset::GlobSet, String> {
+        compile_patterns(&self.ignore, case_insensitive)
+    }
 }
 
 fn validate_identity(job: &SyncJob) -> Result<(), String> {
@@ -51,6 +58,7 @@ fn validate_identity(job: &SyncJob) -> Result<(), String> {
     validate_text("connect_match", &job.connect_match, MAX_ENDPOINT_LEN, true)?;
     validate_text("run_before", &job.run_before, MAX_ENDPOINT_LEN, true)?;
     validate_text("run_after", &job.run_after, MAX_ENDPOINT_LEN, true)?;
+    validate_text("run_cleanup", &job.run_cleanup, MAX_ENDPOINT_LEN, true)?;
 
     crate::connect::validate_sync_endpoints(&job.source, &job.target)
 }
@@ -90,6 +98,14 @@ fn validate_schedule(job: &SyncJob) -> Result<(), String> {
     checked_i64_seconds("interval_min", job.interval_min, 60)?;
     i64::try_from(job.rt_debounce_secs)
         .map_err(|_| "rt_debounce_secs is too large for scheduling".to_string())?;
+    for (field, seconds) in [
+        ("rt_max_latency_secs", job.rt_max_latency_secs),
+        ("rt_poll_secs", job.rt_poll_secs),
+        ("verify_interval_secs", job.verify_interval_secs),
+        ("verify_target_secs", job.verify_target_secs),
+    ] {
+        checked_i64_seconds(field, seconds, 1000)?;
+    }
     Ok(())
 }
 
@@ -154,6 +170,13 @@ fn checked_age_days(field: &str, days: u64) -> Result<(), String> {
 }
 
 fn compile_ignore_patterns(patterns: &[String]) -> Result<globset::GlobSet, String> {
+    compile_patterns(patterns, false)
+}
+
+fn compile_patterns(
+    patterns: &[String],
+    case_insensitive: bool,
+) -> Result<globset::GlobSet, String> {
     if patterns.len() > MAX_IGNORE_PATTERNS {
         return Err(format!(
             "ignore contains more than {MAX_IGNORE_PATTERNS} patterns"
@@ -171,12 +194,15 @@ fn compile_ignore_patterns(patterns: &[String]) -> Result<globset::GlobSet, Stri
                 index + 1
             ));
         }
-        let glob = globset::Glob::new(pattern).map_err(|error| {
-            format!(
-                "invalid ignore pattern {} ({pattern:?}): {error}",
-                index + 1
-            )
-        })?;
+        let glob = globset::GlobBuilder::new(pattern)
+            .case_insensitive(case_insensitive)
+            .build()
+            .map_err(|error| {
+                format!(
+                    "invalid ignore pattern {} ({pattern:?}): {error}",
+                    index + 1
+                )
+            })?;
         builder.add(glob);
     }
     builder

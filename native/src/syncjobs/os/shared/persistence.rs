@@ -61,13 +61,69 @@ pub(super) fn load_dir(dir: &Path) -> io::Result<Vec<SyncJob>> {
         }
         out.push(load_job_file(&path)?);
     }
-    out.sort_by(|a, b| {
+    sort_jobs(&mut out);
+    Ok(out)
+}
+
+fn sort_jobs(jobs: &mut [SyncJob]) {
+    jobs.sort_by(|a, b| {
         a.name
             .to_lowercase()
             .cmp(&b.name.to_lowercase())
             .then(a.id.cmp(&b.id))
     });
-    Ok(out)
+}
+
+/// Every job file loaded on its own (Y20): one broken file stops only itself.
+#[derive(Clone, Debug, Default)]
+pub struct JobLoadReport {
+    pub jobs: Vec<SyncJob>,
+    pub broken: Vec<BrokenJob>,
+}
+
+/// A job file (or the pending import of the old `jobs.tsv`) that could not
+/// be loaded.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BrokenJob {
+    /// The job id from the file name ("" for the import or an unreadable
+    /// directory entry).
+    pub id: String,
+    pub path: PathBuf,
+    pub error: String,
+}
+
+fn load_dir_report(dir: &Path) -> io::Result<JobLoadReport> {
+    let mut report = JobLoadReport::default();
+    for entry in std::fs::read_dir(dir)? {
+        let path = match entry {
+            Ok(entry) => entry.path(),
+            Err(error) => {
+                report.broken.push(BrokenJob {
+                    id: String::new(),
+                    path: dir.to_path_buf(),
+                    error: error.to_string(),
+                });
+                continue;
+            }
+        };
+        if path.extension().and_then(|ext| ext.to_str()) != Some("conf") {
+            continue;
+        }
+        match load_job_file(&path) {
+            Ok(job) => report.jobs.push(job),
+            Err(error) => report.broken.push(BrokenJob {
+                id: path
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                path,
+                error: error.to_string(),
+            }),
+        }
+    }
+    sort_jobs(&mut report.jobs);
+    Ok(report)
 }
 
 pub(super) fn load_job_file(path: &Path) -> io::Result<SyncJob> {
@@ -139,7 +195,38 @@ fn save_dir(dir: &Path, jobs: &[SyncJob]) -> io::Result<()> {
 
 pub fn load() -> io::Result<Vec<SyncJob>> {
     let directory = ensure_jobs_dir()?;
-    super::migration::load_or_migrate(&directory, &jobs_path())
+    let mut jobs = super::migration::load_or_migrate(&directory, &jobs_path())?;
+    super::baseline_migration::migrate(&mut jobs)?;
+    Ok(jobs)
+}
+
+/// Like [`load`], but every job file on its own: valid jobs are returned and
+/// broken files are listed instead of failing the whole list (Y20). A failed
+/// pending import of the old `jobs.tsv` is listed as well.
+pub fn load_report() -> io::Result<JobLoadReport> {
+    let directory = ensure_jobs_dir()?;
+    let import = super::migration::complete_pending_import(&directory, &jobs_path());
+    let mut report = load_dir_report(&directory)?;
+    let mut jobs = Vec::with_capacity(report.jobs.len());
+    for mut job in std::mem::take(&mut report.jobs) {
+        // While the original import is unresolved, changing its core fields
+        // would invalidate its manifest hash. The running job gets the safe
+        // defaults and eligibility proof; its old file stays byte-identical.
+        match super::baseline_migration::migrate_for_report(std::slice::from_mut(&mut job), import.is_ok()) {
+            Ok(()) => jobs.push(job),
+            Err(error) => report.broken.push(BrokenJob { path: job_file(&directory, &job.id),
+                id: job.id, error: format!("Löschschutz-Migration: {error}") }),
+        }
+    }
+    report.jobs = jobs;
+    if let Err(error) = import {
+        report.broken.push(BrokenJob {
+            id: String::new(),
+            path: jobs_path(),
+            error: error.to_string(),
+        });
+    }
+    Ok(report)
 }
 
 /// Add or replace a job (by id) - rewrites just that job's file.
@@ -148,6 +235,9 @@ pub fn upsert(job: &SyncJob) -> io::Result<()> {
     write_job(&directory, job)
 }
 
+/// Removes a job's configuration and its runtime state (one deletion path
+/// for every surface). Its synchronization state and versions are offered
+/// separately (`bisync::forget_job_state`, `bisync::versions::remove_versions`).
 pub fn remove(id: &str) -> io::Result<()> {
     if id != san_id(id) {
         return Err(io::Error::new(
@@ -156,10 +246,12 @@ pub fn remove(id: &str) -> io::Result<()> {
         ));
     }
     match std::fs::remove_file(job_file(&jobs_dir(), id)) {
-        Ok(_) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e),
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
     }
+    super::baseline_migration::remove_pending(id)?;
+    super::job_state_store::remove_job_state(id)
 }
 
 pub(super) fn atomic_write(path: &Path, contents: &[u8]) -> io::Result<()> {
@@ -377,6 +469,22 @@ mod tests {
         assert!(save_dir(&dir, &[invalid]).is_err());
         assert_eq!(load_dir(&dir).unwrap().len(), 1);
         assert_eq!(load_dir(&dir).unwrap()[0].id, old.id);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn review_task_tolerant_load_lists_broken_files_and_keeps_valid_jobs() {
+        let dir = temp_dir();
+        let valid = SyncJob::new("good".into(), "s".into(), "t".into());
+        write_job(&dir, &valid).unwrap();
+        std::fs::write(dir.join("broken.conf"), "id=broken\nmax_delete_pct=101\n").unwrap();
+        assert!(load_dir(&dir).is_err());
+        let report = load_dir_report(&dir).unwrap();
+        assert_eq!(report.jobs.len(), 1);
+        assert_eq!(report.jobs[0].id, valid.id);
+        assert_eq!(report.broken.len(), 1);
+        assert_eq!(report.broken[0].id, "broken");
+        assert!(!report.broken[0].error.is_empty());
         std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -3,7 +3,7 @@ use std::sync::atomic::AtomicBool;
 use super::duplicate_observation::observe;
 use super::duplicate_types::DuplicateConflict;
 use super::incremental::SyncEndpoints;
-use super::omissions::SyncOmissions;
+use super::omissions::{OmissionKind, SyncOmissions};
 use super::paths::join;
 use super::snapshot_duplicates::DuplicateGroups;
 use super::types::{BisyncOptions, Conflict, DeletePolicy, Tree};
@@ -30,28 +30,44 @@ pub(super) fn prepare(
         if omissions.protects(&rel) { continue; }
         // A singleton filtered out on the other side must not be pulled back
         // into the repair by a fresh name lookup (hidden/size/age/ignore rules).
-        let excluded = (|| {
+        let excluded = match (|| {
             Ok::<_, std::io::Error>(
                 (!groups_a.contains_key(&rel) && !a.contains_key(&rel)
                     && !super::duplicate_observation::metadata(endpoints.a, &join(endpoints.root_a, &rel))?.is_empty())
                 || (!groups_b.contains_key(&rel) && !b.contains_key(&rel)
                     && !super::duplicate_observation::metadata(endpoints.b, &join(endpoints.root_b, &rel))?.is_empty())
             )
-        })().map_err(|error| (rel.clone(), error.to_string()))?;
+        })() {
+            Ok(excluded) => excluded,
+            Err(error) => {
+                let kind = crate::vfs::omission_reason(&error).map(OmissionKind::from).unwrap_or(OmissionKind::Unreadable);
+                omissions.record_kind(&rel, kind, true);
+                a.remove(&rel); b.remove(&rel);
+                continue;
+            }
+        };
         if excluded {
             omissions.record(&rel, false);
             a.remove(&rel);
             b.remove(&rel);
             continue;
         }
-        let variants = (|| {
+        let variants = match (|| {
             Ok::<_, std::io::Error>(DuplicateConflict {
                 a: observe(endpoints.a, &join(endpoints.root_a, &rel),
                     groups_a.get(&rel).map(Vec::as_slice), cancel)?,
                 b: observe(endpoints.b, &join(endpoints.root_b, &rel),
                     groups_b.get(&rel).map(Vec::as_slice), cancel)?,
             })
-        })().map_err(|error| (rel.clone(), error.to_string()))?;
+        })() {
+            Ok(variants) => variants,
+            Err(error) => {
+                let kind = crate::vfs::omission_reason(&error).map(OmissionKind::from).unwrap_or(OmissionKind::Unreadable);
+                omissions.record_kind(&rel, kind, true);
+                a.remove(&rel); b.remove(&rel);
+                continue;
+            }
+        };
         let common = variants.common_choice().map(|(a, b)| (a.signature, b.signature));
         let automatic = common.filter(|_| opts.delete != DeletePolicy::NoDelete);
         let conflict = Conflict {
