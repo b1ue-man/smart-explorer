@@ -22,6 +22,9 @@ impl NetworkManagerAdapter {
     }
 
     fn probe_now() -> Facility {
+        if let Err(error) = uplink_polkit::rule_status() {
+            return Facility::RepairRequired(error.to_string());
+        }
         let connection = match nm_shared::connect() {
             Ok(connection) => connection,
             Err(error) => return Facility::Unavailable(error.to_string()),
@@ -63,19 +66,38 @@ impl UplinkAdapter for NetworkManagerAdapter {
 
     fn setup_once(&mut self) -> Result<String, String> {
         self.probed_at = None;
-        if uplink_polkit::rule_installed() {
+        let status = uplink_polkit::rule_status();
+        if matches!(&status, Ok(true)) {
             return Ok("polkit-Regel ist bereits installiert".into());
         }
         match uplink_polkit::install_rule() {
             Ok(message) => Ok(message),
-            Err(error) if !uplink_polkit::pkexec_available() => Ok(format!(
+            Err(error) if matches!(&status, Ok(false)) && !uplink_polkit::pkexec_available() => Ok(format!(
                 "{error}; NetworkManager wird ohne Regel angesprochen und fragt ggf. ueber den Desktop nach"
             )),
             Err(error) => Err(error.to_string()),
         }
     }
 
+    fn cleanup_installation(&mut self) -> Result<String, String> {
+        self.probed_at = None;
+        let mut state = crate::net::UplinkState::load()?;
+        if let Some(record) = &state.sharing {
+            let private = UplinkTarget { index: record.private_index, name: record.private_name.clone(), adapter_id: record.private_id.clone() };
+            let public = UplinkTarget { index: record.public_index, name: record.public_name.clone(), adapter_id: record.public_id.clone() };
+            self.disable(&private, &public)?;
+        }
+        let message = uplink_polkit::cleanup().map_err(|error| error.to_string())?;
+        state.sharing = None;
+        state.last_error = None;
+        state.save()?;
+        Ok(message)
+    }
+
     fn enable(&mut self, private: &UplinkTarget, _public: &UplinkTarget) -> Result<(), String> {
+        uplink_polkit::rule_status().map_err(|error| error.to_string())?;
+        let facts = crate::net::gather_interface_facts()?;
+        crate::share::lan_uplink_evidence::authorize(private.index, &facts)?;
         let connection = nm_shared::connect().map_err(|error| error.to_string())?;
         nm_shared::enable_shared(&connection, &private.adapter_id)
             .map_err(|error| error.to_string())

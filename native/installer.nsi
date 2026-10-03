@@ -140,11 +140,11 @@ Section "Smart Explorer (erforderlich)" SEC_MAIN
   SetOutPath "$INSTDIR"
 
   ; Best-effort Windows Defender Firewall rule for direct Share peer listeners.
-  ; The app binds a dynamic local TCP port, so the rule is program-based.
+  ; Iroh binds dynamic UDP ports; only private/domain network profiles apply.
   ; Managed machines may require admin/policy approval; the app also retries at
   ; Share startup and reports failure in diagnostics.
   nsExec::Exec 'netsh advfirewall firewall delete rule name="Smart Explorer Share Peer Listener"'
-  nsExec::Exec 'netsh advfirewall firewall add rule name="Smart Explorer Share Peer Listener" dir=in action=allow program="$INSTDIR\${EXE_NAME}" enable=yes profile=any'
+  nsExec::Exec 'netsh advfirewall firewall add rule name="Smart Explorer Share Peer Listener" dir=in action=allow program="$INSTDIR\${EXE_NAME}" enable=yes protocol=UDP profile=private,domain'
 
   ; Default update feed (Git/HTTPS) — keep an existing (possibly customized) one.
   ; update_source.txt ships the raw.githubusercontent feed URL, so a fresh
@@ -300,6 +300,12 @@ Section "Uninstall"
   Sleep 600
   ; Remove only the exact PATH component that this installer recorded as its
   ; own, leaving user-added and similarly named entries untouched.
+  ExecWait '"$INSTDIR\${CLI_EXE_NAME}" --lan-uplink-cleanup' $1
+  IntCmp $1 0 lan_uplink_removed lan_uplink_remove_failed lan_uplink_remove_failed
+  lan_uplink_remove_failed:
+    MessageBox MB_OK|MB_ICONSTOP "Die Uplink-Installation konnte nicht sicher entfernt werden. Die Deinstallation wurde beendet, bevor se.exe geloescht wurde.$\r$\nBitte erneut versuchen: $INSTDIR\${CLI_EXE_NAME} --lan-uplink-cleanup" /SD IDOK
+    Abort
+  lan_uplink_removed:
   ExecWait '"$INSTDIR\${CLI_EXE_NAME}" --uninstall-cli-path' $1
   IntCmp $1 0 cli_path_removed cli_path_remove_failed cli_path_remove_failed
   cli_path_remove_failed:

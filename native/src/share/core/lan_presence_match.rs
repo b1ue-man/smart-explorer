@@ -29,7 +29,7 @@ pub fn hashed_lan_id(node_id: &str) -> String {
         .collect()
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct LanSighting {
     pub id: String,
     pub addrs: Vec<IpAddr>,
@@ -235,6 +235,7 @@ mod tests {
             lan_candidates: Vec::new(),
             lan_seen_at: None,
             lan_uplink: None,
+            relation: Default::default(),
         }
     }
 

@@ -62,6 +62,8 @@ pub enum UplinkSharingState {
 pub struct UplinkView {
     pub enabled: bool,
     pub setup_done: bool,
+    #[serde(default)]
+    pub repair_required: bool,
     pub facility: LanFacility,
     pub state: UplinkSharingState,
     /// Why the policy is idle / what it is doing, for the user.

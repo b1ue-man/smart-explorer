@@ -5,23 +5,11 @@
 //! probing works unelevated.
 use std::io;
 
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const ICS_PUBLIC: u8 = 0;
 const ICS_PRIVATE: u8 = 1;
 
 fn run_powershell(script: &str) -> io::Result<String> {
-    use std::os::windows::process::CommandExt;
-    let output = std::process::Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            script,
-        ])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()?;
+    let output = super::uplink_install::powershell(script)?;
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if output.status.success() {
         Ok(stdout)

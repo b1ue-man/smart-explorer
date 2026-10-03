@@ -37,24 +37,24 @@ pub(super) fn clear_ipc_generation() {
 
 pub(super) fn write_ipc_addr(addr: SocketAddr) -> io::Result<()> {
     secure_sync_directory()?;
-    std::fs::write(ipc_addr_path(), addr.to_string())
+    crate::support_dirs::write_private_atomic(&ipc_addr_path(), addr.to_string().as_bytes())
 }
 
 pub(super) fn write_ipc_generation(generation: &str) -> io::Result<()> {
     secure_sync_directory()?;
-    std::fs::write(ipc_generation_path(), generation)
+    crate::support_dirs::write_private_atomic(&ipc_generation_path(), generation.as_bytes())
 }
 
 pub(super) fn read_ipc_addr() -> Option<SocketAddr> {
     secure_sync_directory().ok()?;
-    std::fs::read_to_string(ipc_addr_path())
+    crate::support_dirs::read_private_text(&ipc_addr_path(), 1024)
         .ok()
         .and_then(|text| text.trim().parse().ok())
 }
 
 pub(super) fn read_ipc_generation() -> Option<String> {
     secure_sync_directory().ok()?;
-    let generation = std::fs::read_to_string(ipc_generation_path()).ok()?;
+    let generation = crate::support_dirs::read_private_text(&ipc_generation_path(), 1024).ok()?;
     let generation = generation.trim();
     (generation.len() == 32 && generation.bytes().all(|byte| byte.is_ascii_hexdigit()))
         .then(|| generation.to_string())

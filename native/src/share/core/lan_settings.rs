@@ -11,6 +11,10 @@ pub struct LanSettings {
     pub uplink_sharing_enabled: bool,
     #[serde(default)]
     pub uplink_setup_done: bool,
+    #[serde(default)]
+    pub uplink_repair_requested_at: Option<i64>,
+    #[serde(default)]
+    pub uplink_cleanup_pending: bool,
     /// One-shot request from the GUI/CLI to stop an active sharing session;
     /// the daemon clears it after acting.
     #[serde(default)]
@@ -27,6 +31,8 @@ impl Default for LanSettings {
             presence_enabled: true,
             uplink_sharing_enabled: false,
             uplink_setup_done: false,
+            uplink_repair_requested_at: None,
+            uplink_cleanup_pending: false,
             uplink_stop_requested_at: None,
         }
     }

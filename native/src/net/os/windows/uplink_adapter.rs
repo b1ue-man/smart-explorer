@@ -24,6 +24,10 @@ impl WindowsIcsAdapter {
     }
 
     fn probe_now(setup_done: bool) -> Facility {
+        let task_ready = match uplink_helper::task_registered() {
+            Ok(ready) => ready,
+            Err(error) => return Facility::RepairRequired(format!("Uplink-Aufgabe nicht sicher: {error}")),
+        };
         match ics::sharing_installed() {
             Ok(true) => {}
             Ok(false) => {
@@ -38,7 +42,7 @@ impl WindowsIcsAdapter {
         }
         match ics::shared_access_startup() {
             Ok(mode) if mode.eq_ignore_ascii_case("Disabled") && setup_done => {
-                return Facility::Unavailable(
+                return Facility::RepairRequired(
                     "Dienst 'SharedAccess' ist deaktiviert; Einrichtung erneut ausfuehren".into(),
                 );
             }
@@ -52,15 +56,9 @@ impl WindowsIcsAdapter {
                 "einmalige Einrichtung (Windows-UAC) noch nicht durchgefuehrt".into(),
             );
         }
-        match uplink_helper::task_registered() {
-            Ok(true) => Facility::Available,
-            Ok(false) => Facility::Unavailable(
+        if task_ready { Facility::Available } else { Facility::RepairRequired(
                 "Aufgabe 'Smart Explorer LAN-Uplink' fehlt; Einrichtung erneut ausfuehren".into(),
-            ),
-            Err(error) => {
-                Facility::Unavailable(format!("Aufgabenplanung nicht abfragbar: {error}"))
-            }
-        }
+            ) }
     }
 }
 
@@ -81,6 +79,11 @@ impl UplinkAdapter for WindowsIcsAdapter {
         let message = uplink_helper::setup_once().map_err(|error| error.to_string())?;
         self.probed_at = None;
         Ok(message)
+    }
+
+    fn cleanup_installation(&mut self) -> Result<String, String> {
+        self.probed_at = None;
+        super::uplink_install::cleanup().map_err(|error| error.to_string())
     }
 
     fn enable(&mut self, private: &UplinkTarget, public: &UplinkTarget) -> Result<(), String> {
@@ -127,6 +130,8 @@ pub(crate) fn run_helper_if_requested(
 ) -> Option<std::io::Result<()>> {
     if arguments.len() == 1 && arguments[0] == std::ffi::OsStr::new(uplink_helper::HELPER_MODE) {
         Some(uplink_helper::run_helper())
+    } else if arguments.len() == 1 && arguments[0] == std::ffi::OsStr::new("--lan-uplink-cleanup") {
+        Some(super::uplink_install::cleanup().map(|_| ()))
     } else {
         None
     }

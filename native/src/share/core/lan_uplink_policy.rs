@@ -14,6 +14,9 @@ pub struct PeerOnLink {
     pub hashed_id: String,
     pub uplink: bool,
     pub ifaces: Vec<u32>,
+    /// True only after validating the fresh device signature and the
+    /// contact-bound rotating identifier; a legacy dial hint is false.
+    pub authenticated: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -93,7 +96,7 @@ impl UplinkPolicy {
             let peer_present = input
                 .peers
                 .iter()
-                .any(|peer| peer.ifaces.contains(&private_if));
+                .any(|peer| peer.authenticated && peer.ifaces.contains(&private_if));
             if peer_present {
                 self.peer_absent_since = None;
             } else if self.peer_absent_since.is_none() {
@@ -127,7 +130,7 @@ impl UplinkPolicy {
             let peers_here: Vec<&PeerOnLink> = input
                 .peers
                 .iter()
-                .filter(|peer| peer.ifaces.contains(private_if))
+                .filter(|peer| peer.authenticated && peer.ifaces.contains(private_if))
                 .collect();
             if peers_here.is_empty() {
                 continue;
@@ -222,6 +225,7 @@ mod tests {
             hashed_id: "bbbb".into(),
             uplink,
             ifaces: vec![iface],
+            authenticated: true,
         }
     }
 
@@ -345,5 +349,19 @@ mod tests {
             policy.evaluate(&input(&links, &peers, false), 70),
             Decision::Stop(_)
         ));
+    }
+
+    #[test]
+    fn review_task_legacy_lan_hint_cannot_start_or_keep_uplink_sharing() {
+        let links = vec![link(2, LinkClass::RouterLess), link(3, LinkClass::Uplink)];
+        let mut untrusted = peer(2, false);
+        untrusted.authenticated = false;
+        let peers = vec![untrusted];
+        let mut policy = UplinkPolicy::default();
+        assert!(matches!(policy.evaluate(&input(&links, &peers, true), 100), Decision::Idle(_)));
+        assert!(matches!(policy.evaluate(&input(&links, &peers, true), 200), Decision::Idle(_)));
+        policy.resume(2, 3);
+        assert_eq!(policy.evaluate(&input(&links, &peers, true), 200), Decision::Keep);
+        assert!(matches!(policy.evaluate(&input(&links, &peers, true), 200 + STOP_GRACE_SECS), Decision::Stop(_)));
     }
 }

@@ -48,6 +48,10 @@ impl UncBackend {
 }
 
 impl Backend for UncBackend {
+    fn extensions(&self) -> Option<&dyn crate::vfs::BackendExtensions> {
+        self.local.extensions()
+    }
+
     fn scheme(&self) -> Scheme {
         self.local.scheme()
     }

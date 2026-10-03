@@ -9,6 +9,7 @@ use super::link_facts::InterfaceFacts;
 pub enum Facility {
     Available,
     Unavailable(String),
+    RepairRequired(String),
 }
 
 impl Facility {
@@ -19,7 +20,7 @@ impl Facility {
     pub fn reason(&self) -> Option<&str> {
         match self {
             Facility::Available => None,
-            Facility::Unavailable(reason) => Some(reason),
+            Facility::Unavailable(reason) | Facility::RepairRequired(reason) => Some(reason),
         }
     }
 }
@@ -52,6 +53,11 @@ pub trait UplinkAdapter: Send {
     /// The one-time privileged preparation (UAC/polkit). Returns a message
     /// for the user on success.
     fn setup_once(&mut self) -> Result<String, String>;
+
+    /// Explicit opt-out / uninstall removes the owned privileged installation.
+    fn cleanup_installation(&mut self) -> Result<String, String> {
+        Ok("Keine privilegierte Installation vorhanden".into())
+    }
 
     fn enable(&mut self, private: &UplinkTarget, public: &UplinkTarget) -> Result<(), String>;
 

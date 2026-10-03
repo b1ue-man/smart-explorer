@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use crate::net::{InterfaceFacts, LinkClass};
 use crate::share::lan_uplink_policy::PeerOnLink;
 use crate::share::{
-    lan_presence_match, DirectContact, LanAnnouncement, LanEvent, LanFacility, LanPeerView,
+    lan_presence_match, DirectContact, LanEvent, LanFacility, LanPeerView,
     LanPresence, LanSettings, LanSighting, LanStatus, LinkView, ShareEvent, UplinkView,
     LAN_PRESENCE_TTL_SECS,
 };
@@ -17,6 +17,9 @@ use super::lan_uplink_runtime::{UplinkRuntime, UplinkTickInput};
 
 const FACTS_INTERVAL: Duration = Duration::from_secs(5);
 const START_RETRY: Duration = Duration::from_secs(60);
+
+#[path = "lan_runtime_presence.rs"]
+mod presence_operations;
 
 pub(super) struct LanTickInput<'a> {
     pub(super) contacts: &'a [DirectContact],
@@ -36,6 +39,10 @@ pub(super) struct LanRuntime {
     facts_error: Option<String>,
     last_facts_at: Option<Instant>,
     sightings: HashMap<String, LanSighting>,
+    proofs: HashMap<String, crate::share::LanProof>,
+    authenticator: crate::share::lan_presence_auth::LanAuthenticator,
+    authenticated_contacts: Vec<String>,
+    evidence_revision: Option<Vec<(String, String)>>,
     /// contact id → (candidates, uplink) currently reported as seen.
     reported: HashMap<String, (Vec<String>, bool)>,
     /// Hashed ids of the sightings that matched a paired contact.
@@ -59,6 +66,10 @@ impl LanRuntime {
             facts_error: None,
             last_facts_at: None,
             sightings: HashMap::new(),
+            proofs: HashMap::new(),
+            authenticator: crate::share::lan_presence_auth::LanAuthenticator::new(),
+            authenticated_contacts: Vec::new(),
+            evidence_revision: None,
             reported: HashMap::new(),
             reported_hashes: Vec::new(),
             unknown_devices: 0,
@@ -87,6 +98,7 @@ impl LanRuntime {
             if !self.reported_hashes.contains(&sighting.id) {
                 continue;
             }
+            if self.proofs.get(&sighting.id).is_none_or(|proof| proof.expires_at < now) { continue; }
             out.extend(lan_presence_match::peer_interfaces(sighting, &links));
         }
         out.sort_unstable();
@@ -101,6 +113,7 @@ impl LanRuntime {
             .values()
             .filter(|sighting| sighting.seen_at.saturating_add(LAN_PRESENCE_TTL_SECS) >= now)
             .filter(|sighting| self.reported_hashes.contains(&sighting.id))
+            .filter(|sighting| self.proofs.get(&sighting.id).is_some_and(|proof| proof.expires_at >= now))
             .map(|sighting| {
                 (
                     sighting.id.clone(),
@@ -131,6 +144,8 @@ impl LanRuntime {
         if !self.settings.presence_enabled {
             if self.presence.take().is_some() {
                 self.sightings.clear();
+                self.proofs.clear();
+                self.authenticated_contacts.clear();
                 for contact_id in self.reported.keys() {
                     events.push(ShareEvent::LanPeerLost {
                         contact_id: contact_id.clone(),
@@ -139,12 +154,30 @@ impl LanRuntime {
                 self.reported.clear();
                 self.reported_hashes.clear();
             }
+            let _ = self.authenticator.refresh(&[], None);
         } else {
+            if let Err(error) = self.authenticator.refresh(input.contacts, input.own_node_id) {
+                self.presence_error = Some(error);
+            }
             self.ensure_started();
             self.refresh_announcement(&input);
             self.drain_presence_events();
             self.expire_sightings(input.now);
             events.extend(self.reconcile(input.contacts, input.now));
+        }
+        let mut revision: Vec<_> = self.reported_hashes.iter().filter_map(|id|
+            self.proofs.get(id).map(|proof| (id.clone(), proof.signature.clone()))).collect();
+        revision.sort();
+        if self.evidence_revision.as_ref() != Some(&revision) {
+            match crate::share::lan_uplink_evidence::publish(self.reported_hashes.iter().filter_map(|id|
+                Some((self.sightings.get(id)?, self.proofs.get(id)?)))) {
+                Ok(()) => self.evidence_revision = Some(revision),
+                Err(error) => {
+                    self.presence_error = Some(error);
+                    self.reported_hashes.clear();
+                    self.authenticated_contacts.clear();
+                }
+            }
         }
         self.tick_uplink(input.own_node_id, input.now);
         events
@@ -160,12 +193,16 @@ impl LanRuntime {
                 hashed_id,
                 uplink,
                 ifaces,
+                // A signed beacon cannot prove the selected Iroh path. The
+                // S09 channel integration supplies the stronger fact later.
+                authenticated: false,
             })
             .collect();
         let own_hashed_id = own_node_id
             .map(lan_presence_match::hashed_lan_id)
             .unwrap_or_default();
-        let settings = self.settings.clone();
+        let mut settings = self.settings.clone();
+        if self.settings_error.is_some() { settings.uplink_sharing_enabled = false; }
         let facts = self.facts.clone();
         let view = self.uplink.tick(UplinkTickInput {
             settings: &settings,
@@ -227,116 +264,6 @@ impl LanRuntime {
         }
     }
 
-    fn refresh_announcement(&mut self, input: &LanTickInput<'_>) {
-        let Some(presence) = &self.presence else {
-            return;
-        };
-        let (Some(node_id), (p4, p6)) = (input.own_node_id, input.ports) else {
-            presence.withdraw();
-            return;
-        };
-        if p4.is_none() && p6.is_none() {
-            presence.withdraw();
-            return;
-        }
-        let announcement = LanAnnouncement {
-            hashed_id: lan_presence_match::hashed_lan_id(node_id),
-            p4: p4.unwrap_or(0),
-            p6: p6.unwrap_or(0),
-            uplink: input.uplink_advisory,
-        };
-        if let Err(error) = presence.announce(&announcement) {
-            self.presence_error = Some(error);
-        }
-    }
-
-    fn drain_presence_events(&mut self) {
-        let Some(presence) = &self.presence else {
-            return;
-        };
-        let own = presence
-            .announced()
-            .map(|announcement| announcement.hashed_id);
-        let drained: Vec<LanEvent> = presence.events().try_iter().collect();
-        for event in drained {
-            match event {
-                LanEvent::Seen(sighting) => {
-                    if own.as_deref() == Some(sighting.id.as_str()) {
-                        continue;
-                    }
-                    self.sightings.insert(sighting.id.clone(), sighting);
-                }
-                LanEvent::Lost(id) => {
-                    self.sightings.remove(&id);
-                }
-                LanEvent::Error(error) => self.presence_error = Some(error),
-            }
-        }
-    }
-
-    fn expire_sightings(&mut self, now: i64) {
-        self.sightings
-            .retain(|_, sighting| sighting.seen_at.saturating_add(LAN_PRESENCE_TTL_SECS) >= now);
-    }
-
-    /// Compare the current sightings with what was reported last time and
-    /// emit the difference as events.
-    fn reconcile(&mut self, contacts: &[DirectContact], now: i64) -> Vec<ShareEvent> {
-        let links = self.classified_links();
-        let scopes: Vec<u32> = links
-            .iter()
-            .filter(|(facts, class)| *class != LinkClass::Inactive && facts.index != 0)
-            .map(|(facts, _)| facts.index)
-            .collect();
-        let mut seen_now: HashMap<String, (Vec<String>, bool)> = HashMap::new();
-        let mut seen_hashes = Vec::new();
-        let mut unknown = 0usize;
-        for sighting in self.sightings.values() {
-            match lan_presence_match::match_sighting(contacts, sighting, &scopes) {
-                Some((contact_id, candidates)) => {
-                    seen_now.insert(contact_id, (candidates, sighting.uplink));
-                    seen_hashes.push(sighting.id.clone());
-                }
-                None => unknown += 1,
-            }
-        }
-        self.unknown_devices = unknown;
-        self.reported_hashes = seen_hashes;
-        let mut events = Vec::new();
-        for (contact_id, (candidates, uplink)) in &seen_now {
-            let unchanged =
-                self.reported
-                    .get(contact_id)
-                    .is_some_and(|(previous, previous_uplink)| {
-                        previous == candidates && previous_uplink == uplink
-                    });
-            let stale = contacts
-                .iter()
-                .find(|contact| &contact.id == contact_id)
-                .is_some_and(|contact| {
-                    contact
-                        .lan_seen_at
-                        .is_none_or(|seen| seen.saturating_add(LAN_PRESENCE_TTL_SECS / 2) < now)
-                });
-            if !unchanged || stale {
-                events.push(ShareEvent::LanPeerSeen {
-                    contact_id: contact_id.clone(),
-                    candidates: candidates.clone(),
-                    uplink: *uplink,
-                });
-            }
-        }
-        for contact_id in self.reported.keys() {
-            if !seen_now.contains_key(contact_id) {
-                events.push(ShareEvent::LanPeerLost {
-                    contact_id: contact_id.clone(),
-                });
-            }
-        }
-        self.reported = seen_now;
-        events
-    }
-
     pub(super) fn status(&self, contacts: &[DirectContact], now: i64) -> LanStatus {
         let presence = if let Some(error) = &self.settings_error {
             LanFacility::Unavailable(error.clone())
@@ -362,7 +289,8 @@ impl LanRuntime {
                 contact_id: contact.id.clone(),
                 display_name: contact.display_name.clone(),
                 candidates: contact.lan_candidates.clone(),
-                uplink: contact.lan_uplink,
+                uplink: self.authenticated_contacts.contains(&contact.id)
+                    .then_some(contact.lan_uplink).flatten(),
                 seen_at: contact.lan_seen_at.unwrap_or_default(),
             })
             .collect();

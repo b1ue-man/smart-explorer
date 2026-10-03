@@ -4,6 +4,12 @@ use crate::app::theme;
 use super::*;
 
 pub(super) fn ui(app: &mut App, ui: &mut egui::Ui) {
+    if let Some(outcome) = crate::share::poll_lan_firewall_repair() {
+        match outcome {
+            Ok(()) => app.share_lan_notice = Some("LAN-Firewall fuer private und Domaenen-Netze eingerichtet".into()),
+            Err(error) => app.error_msg = Some(format!("LAN-Firewall einrichten: {error}")),
+        }
+    }
     let status = app.share_lan_status.clone();
     ui.label(
         RichText::new("GEKOPPELTE GERAETE IM LOKALEN NETZ")
@@ -29,11 +35,18 @@ pub(super) fn ui(app: &mut App, ui: &mut egui::Ui) {
     if ui
         .checkbox(&mut presence_enabled, "Gekoppelte Geraete im lokalen Netz automatisch finden")
         .on_hover_text(
-            "Kuendigt die eigene Iroh-Adresse per mDNS an und findet gekoppelte Geraete ohne Share-Server, z. B. ueber ein direktes Kabel. Fremde Geraete bleiben ausgeschlossen.",
+            "Mit akzeptierten Kontakten erscheinen kurzlebige private Kennungen im lokalen Netz. Gekoppelte Geraete finden sich ohne Share-Server, z. B. ueber ein direktes Kabel.",
         )
         .changed()
     {
         app.set_lan_presence_enabled(presence_enabled);
+    }
+    if crate::share::lan_firewall_repair_available()
+        && ui.button("LAN-Firewall freigeben / reparieren").clicked() {
+        match crate::share::start_lan_firewall_repair() {
+            Ok(()) => app.share_lan_notice = Some("LAN-Firewall: Administratorfreigabe bestaetigen".into()),
+            Err(error) => app.error_msg = Some(format!("LAN-Firewall einrichten: {error}")),
+        }
     }
     if status.peers.is_empty() {
         ui.label("Kein gekoppeltes Geraet im lokalen Netz sichtbar.");
