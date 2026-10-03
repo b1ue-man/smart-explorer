@@ -57,9 +57,12 @@ pub(super) struct CapturedFile {
 
 impl CapturedFile {
     pub(super) fn regular(&self, label: &str) -> io::Result<&VfsMeta> {
-        self.metadata
+        let meta = self.metadata
             .as_ref()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("{label} disappeared")))
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("{label} disappeared")))?;
+        if meta.is_symlink { return Err(super::apply_boundary::protected(super::OmissionKind::Link)); }
+        if meta.special || meta.is_dir { return Err(super::apply_boundary::protected(super::OmissionKind::Special)); }
+        Ok(meta)
     }
 }
 
@@ -95,7 +98,19 @@ pub(super) fn revalidate(
     captured: &CapturedFile,
     label: &str,
 ) -> io::Result<()> {
-    let current = current_metadata(backend, path, label)?;
+    let current = if backend.has_duplicate_file_names() && captured.metadata.as_ref().is_some_and(|meta| meta.id.is_some()) {
+        let id = captured.metadata.as_ref().and_then(|meta| meta.id.as_deref());
+        let parent = super::paths::parent_of(path).ok_or_else(|| drift("ID file has no parent"))?;
+        let name = captured.metadata.as_ref().map(|meta| meta.name.as_str());
+        let directory = backend.stat(&parent)?;
+        if !directory.is_dir || directory.is_symlink || directory.special {
+            return Err(super::apply_boundary::protected(super::OmissionKind::Link));
+        }
+        backend.invalidate_cache();
+        backend.list_dir_for_sync(&parent)?.into_iter()
+            .find(|meta| meta.id.as_deref() == id && Some(meta.name.as_str()) == name)
+            .map(|meta| regular(meta, label)).transpose()?
+    } else { current_metadata(backend, path, label)? };
     let unchanged = match (captured.metadata.as_ref(), current.as_ref()) {
         (None, None) => true,
         (Some(before), Some(after)) => same_identity(before, after),
@@ -109,11 +124,11 @@ pub(super) fn revalidate(
 }
 
 fn regular(metadata: VfsMeta, label: &str) -> io::Result<VfsMeta> {
-    if metadata.is_dir || metadata.is_symlink {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("{label} is not a regular file"),
-        ));
+    if metadata.is_dir || metadata.is_symlink || metadata.special {
+        let _ = label;
+        return Err(super::apply_boundary::protected(if metadata.is_symlink {
+            super::OmissionKind::Link
+        } else { super::OmissionKind::Special }));
     }
     Ok(metadata)
 }
@@ -138,5 +153,33 @@ fn same_identity(before: &VfsMeta, after: &VfsMeta) -> bool {
 }
 
 pub(super) fn drift(message: &str) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, message.to_string())
+    io::Error::new(io::ErrorKind::InvalidData, Drift(message.to_string()))
+}
+
+#[derive(Debug)]
+struct Drift(String);
+impl std::fmt::Display for Drift {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        out.write_str(&self.0)
+    }
+}
+impl std::error::Error for Drift {}
+
+pub(super) fn is_drift(error: &io::Error) -> bool {
+    error.get_ref().is_some_and(|inner| inner.is::<Drift>())
+}
+
+pub(super) fn current_like(backend: &dyn Backend, path: &str, previous: &CapturedFile,
+    label: &str) -> io::Result<CapturedFile> {
+    if backend.has_duplicate_file_names() {
+        if let Some(meta) = &previous.metadata {
+            let parent = super::paths::parent_of(path).ok_or_else(|| drift("ID file has no parent"))?;
+            backend.invalidate_cache();
+            let metadata = backend.list_dir_for_sync(&parent)?.into_iter()
+                .find(|entry| entry.id == meta.id && entry.name == meta.name)
+                .map(|meta| regular(meta, label)).transpose()?;
+            return Ok(CapturedFile { metadata });
+        }
+    }
+    capture(backend, path, ExpectedFile::Unknown, label)
 }

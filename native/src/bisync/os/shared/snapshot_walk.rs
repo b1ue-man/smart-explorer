@@ -40,7 +40,7 @@ pub(super) fn walk_tree(
         changed: Condvar::new(),
         out: Mutex::new(Tree::new()),
     };
-    walk.lock().queue.push_back((context.root.to_string(), 0));
+    walk.lock().queue.push_back((context.root.to_string(), String::new(), 0));
     std::thread::scope(|scope| walk.coordinate(scope));
 
     // A worker can observe cancellation while it is part-way through a
@@ -69,22 +69,28 @@ fn canceled_error() -> io::Error {
     )
 }
 
-fn list_plain_directory(ctx: &WalkContext<'_>, path: &str) -> io::Result<Vec<crate::vfs::VfsMeta>> {
+fn list_plain_directory(ctx: &WalkContext<'_>, path: &str) -> io::Result<crate::vfs::VfsListing> {
     let be = ctx.be;
     let metadata = be.stat(path)?;
-    if metadata.is_symlink || !metadata.is_dir {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("sync directory changed into a link or non-directory: {path}"),
-        ));
+    if metadata.is_symlink || !metadata.is_dir || metadata.special {
+        return Err(super::apply_boundary::protected(if metadata.is_symlink {
+            super::OmissionKind::Link
+        } else { super::OmissionKind::Special }));
     }
-    if ctx.duplicates.is_some() { be.list_dir_for_sync(path) } else { be.list_dir(path) }
+    if path != ctx.root {
+        if let Some(kind) = super::snapshot_policy::protected(be, ctx.root, path, &metadata, ctx.opts.cross_mounts)? {
+            return Err(super::apply_boundary::protected(kind));
+        }
+    }
+    if be.has_duplicate_file_names() && ctx.duplicates.is_some() {
+        be.list_dir_for_sync(path).map(crate::vfs::VfsListing::complete)
+    } else { crate::vfs::list_dir_tolerant(be, path) }
 }
 
 #[derive(Default)]
 struct WalkState {
     /// Folders to list, with their depth below the root.
-    queue: VecDeque<(String, usize)>,
+    queue: VecDeque<(String, String, usize)>,
     running: usize,
     busy: usize,
     /// Threads holding a folder but still waiting for a listing permit.
@@ -234,13 +240,13 @@ impl TreeWalk<'_> {
                     state = self.wait(state, WORKER_LINGER - waited);
                 }
             };
-            let Some((dir, depth)) = next else {
+            let Some((dir, rel, depth)) = next else {
                 break;
             };
             enlisted.busy = true;
             enlisted.waiting = self.flow.is_some();
             idle_since = None;
-            match self.visit(&dir, depth, &mut enlisted) {
+            match self.visit(&dir, &rel, depth, &mut enlisted) {
                 Ok(listed) => self.merge(listed, depth),
                 Err(error) => self.fail(error),
             }
@@ -264,6 +270,7 @@ impl TreeWalk<'_> {
     fn visit(
         &self,
         dir: &str,
+        dir_rel: &str,
         depth: usize,
         enlisted: &mut Enlisted<'_, '_>,
     ) -> io::Result<Listed> {
@@ -291,7 +298,31 @@ impl TreeWalk<'_> {
             )
             .unwrap_or_else(|| Err(canceled_error())),
         };
-        scan_listing(self.context, dir, entries?)
+        let listing = match entries {
+            Ok(listing) => listing,
+            Err(error) if dir != self.context.root => {
+                if let Some(reason) = super::apply_boundary::omitted(&error).or_else(|| match error.kind() {
+                    io::ErrorKind::PermissionDenied => Some(super::OmissionKind::Unreadable),
+                    io::ErrorKind::NotFound => Some(super::OmissionKind::Vanished), _ => None,
+                }) {
+                    super::snapshot_dir::record_omission(self.context,
+                        dir_rel, reason, true);
+                    return Ok(Listed { files: Vec::new(), dirs: Vec::new() });
+                }
+                return Err(error);
+            }
+            Err(error) => return Err(error),
+        };
+        for omission in listing.omitted {
+            let rel = match crate::vfs::validate_child_name(&omission.rel) {
+                Ok(()) => super::snapshot_dir::literal_child(dir_rel, &omission.rel),
+                Err(error) if dir_rel.is_empty() => return Err(error),
+                Err(_) => dir_rel.to_string(),
+            };
+            let filtered = self.context.filter.ignored(&rel, true);
+            super::snapshot_dir::record_omission(self.context, &rel, omission.reason.into(), !filtered);
+        }
+        scan_listing(self.context, dir, dir_rel, listing.entries)
     }
 
     fn merge(&self, listed: Listed, depth: usize) {
@@ -318,7 +349,7 @@ impl TreeWalk<'_> {
         if !dirs.is_empty() {
             self.lock()
                 .queue
-                .extend(dirs.into_iter().map(|dir| (dir, depth + 1)));
+                .extend(dirs.into_iter().map(|(dir, rel)| (dir, rel, depth + 1)));
             self.changed.notify_all();
         }
     }

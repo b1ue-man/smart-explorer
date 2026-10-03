@@ -7,7 +7,8 @@ use std::time::Duration;
 
 use super::incremental::SyncEndpoints;
 use super::omissions::SyncOmissions;
-use super::snapshot::{hash_mode, prev_side, walk_snapshot, HashMode, Snapshot, WalkFilter};
+use super::snapshot::{hash_mode, prev_side, walk_snapshot_with_options, HashMode, Snapshot, WalkFilter};
+use super::snapshot_types::SideSnapshot;
 use super::types::{Action, Baseline, BisyncOptions, Conflict, DeletePolicy, Direction, Tree};
 use crate::vfs::Backend;
 
@@ -20,8 +21,8 @@ const SIDE_B: u8 = 2;
 const ENDED_UNEXPECTEDLY: &str = "Einlesen dieser Seite wurde unerwartet beendet";
 
 pub(super) struct PairSnapshot {
-    pub a: Tree,
-    pub b: Tree,
+    pub a: SideSnapshot,
+    pub b: SideSnapshot,
     pub omissions: SyncOmissions,
     pub repairs: Vec<Conflict>,
     pub conflicts: Vec<Conflict>,
@@ -32,7 +33,7 @@ impl PairSnapshot {
         -> (Vec<Action>, Vec<Conflict>, Vec<String>) {
         let mut base = self.omissions.planning_baseline(base);
         for conflict in &self.conflicts { base.remove(&conflict.rel); }
-        let (actions, mut conflicts, converged) = super::core::plan(&self.a, &self.b, &base, opts);
+        let (actions, mut conflicts, converged) = super::core::plan(&self.a.tree, &self.b.tree, &base, opts);
         conflicts.extend(self.conflicts.iter().cloned());
         (actions, conflicts, converged)
     }
@@ -87,7 +88,7 @@ pub(super) fn read_pair(
                  duplicates: bool|
      -> SideRead {
         let walked = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            walk_snapshot(
+            walk_snapshot_with_options(
                 backend,
                 root,
                 &stop,
@@ -96,6 +97,7 @@ pub(super) fn read_pair(
                 Some(prev),
                 duplicates,
                 fold_case,
+                opts,
             )
         }));
         let failure = match walked {
@@ -137,14 +139,16 @@ pub(super) fn read_pair(
         (_, Err(error)) => return Err((root_b.to_string(), error)),
         (Err(error), Ok(_)) => return Err((root_a.to_string(), error)),
     };
-    let mut omissions = at.omissions;
-    omissions.extend(bt.omissions);
+    let mut omissions = at.omissions.clone();
+    omissions.extend(bt.omissions.clone());
     let (mut a, mut b) = (at.tree, bt.tree);
     omissions.exclude_tree(&mut a);
     omissions.exclude_tree(&mut b);
     let (repairs, conflicts) = super::duplicate_plan::prepare(
         endpoints, at.duplicates, bt.duplicates, &mut a, &mut b, &mut omissions, opts, cancel,
     )?;
+    let a = SideSnapshot { tree: a, filtered: at.filtered, dirs: at.dirs, omissions: omissions.clone() };
+    let b = SideSnapshot { tree: b, filtered: bt.filtered, dirs: bt.dirs, omissions: omissions.clone() };
     Ok(PairSnapshot { a, b, omissions, repairs, conflicts })
 }
 

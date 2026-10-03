@@ -1,268 +1,132 @@
-use crate::bisync::SyncOmissions;
-use crate::vfs::{Backend, VfsMeta};
-use std::collections::{HashSet, VecDeque};
+//! Mirror removal is reversible and rechecks normalized source absence.
+use crate::bisync::{KeyPolicy, OmissionKind, SyncOmissions};
+use crate::bisync::versions::RunVersions;
+use crate::vfs::Backend;
+use std::collections::HashSet;
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
-
-use super::imp::{join, record_error, rel_of, require_plain_directory, SyncStats, WalkBudget};
-
-#[derive(Clone)]
-struct Candidate {
-    path: String,
-    source_path: String,
-    metadata: VfsMeta,
-}
+use super::imp::{record_error, SyncStats};
+use super::sync_delete_walk::{self, Entry};
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn delete_extras(
-    source: &dyn Backend,
-    source_root: &str,
-    destination: &dyn Backend,
-    destination_root: &str,
-    dry_run: bool,
-    cancel: &AtomicBool,
-    stats: &mut SyncStats,
-    errors: &mut Vec<(String, String)>,
+    source: &dyn Backend, source_root: &str, destination: &dyn Backend, destination_root: &str,
+    dry_run: bool, cancel: &AtomicBool, stats: &mut SyncStats, errors: &mut Vec<(String, String)>,
     omissions: &mut SyncOmissions,
 ) {
-    let mut files = Vec::new();
-    let mut directories = Vec::new();
-    if let Err(error) = collect_candidates(
-        source,
-        source_root,
-        destination,
-        destination_root,
-        cancel,
-        &mut files,
-        &mut directories,
-        omissions,
-    ) {
-        record_error(
-            stats,
-            errors,
-            destination_root,
-            format!("mirror deletion preflight failed; nothing deleted: {error}"),
-        );
-        return;
-    }
-    // A link discovered below an otherwise extra directory protects that
-    // ancestor from deletion, while independent extra siblings stay removable.
-    files.retain(|entry| !omissions.protects(&rel_of(&entry.path, destination_root)));
-    directories.retain(|entry| !omissions.protects(&rel_of(&entry.path, destination_root)));
-    if let Err(error) = revalidate_plan(source, destination, &files, &directories, cancel) {
-        record_error(
-            stats,
-            errors,
-            destination_root,
-            format!("mirror deletion revalidation failed; nothing deleted: {error}"),
-        );
-        return;
-    }
-    if dry_run {
-        stats.deleted = stats
-            .deleted
-            .saturating_add((files.len() + directories.len()) as u64);
-        return;
-    }
-
-    for candidate in &files {
-        if let Err(error) = delete_file(source, destination, candidate, cancel) {
-            record_error(stats, errors, &candidate.path, error.to_string());
-        } else {
-            stats.deleted = stats.deleted.saturating_add(1);
-        }
-    }
-    directories.sort_by_key(|candidate| std::cmp::Reverse(candidate.path.len()));
-    for candidate in &directories {
-        if let Err(error) = delete_directory(source, destination, candidate, cancel) {
-            record_error(stats, errors, &candidate.path, error.to_string());
-        } else {
-            stats.deleted = stats.deleted.saturating_add(1);
-        }
+    let run = match super::sync_run::MirrorRun::begin(source, source_root, destination, destination_root) {
+        Ok(run) => run, Err(error) => { record_error(stats, errors, destination_root, error.to_string()); return; }
+    };
+    delete_extras_scoped(source, source_root, destination, destination_root, dry_run, cancel,
+        stats, errors, omissions, &run.versions);
+    if let Err(error) = run.finish(destination, destination_root, cancel) {
+        record_error(stats, errors, destination_root, error.to_string());
     }
 }
 
 #[allow(clippy::too_many_arguments)]
-fn collect_candidates(
-    source: &dyn Backend,
-    source_root: &str,
-    destination: &dyn Backend,
-    destination_root: &str,
-    cancel: &AtomicBool,
-    files: &mut Vec<Candidate>,
-    directories: &mut Vec<Candidate>,
-    omissions: &mut SyncOmissions,
-) -> io::Result<()> {
-    require_plain_directory(source, source_root, false)?;
-    require_plain_directory(destination, destination_root, false)?;
-    let mut queue = VecDeque::from([(destination_root.to_string(), 0usize)]);
-    let mut budget = WalkBudget::default();
-    budget
-        .record(destination_root, 0)
-        .map_err(io::Error::other)?;
-    while let Some((directory, depth)) = queue.pop_front() {
-        check_cancel(cancel)?;
-        require_plain_directory(destination, &directory, false)?;
-        let entries = destination.list_dir(&directory)?;
-        let mut names = HashSet::new();
-        for metadata in entries {
-            check_cancel(cancel)?;
-            crate::vfs::validate_child_name(&metadata.name)?;
-            if !names.insert(metadata.name.clone()) {
-                return Err(invalid(format!(
-                    "destination returned a duplicate child name in {directory}: {:?}",
-                    metadata.name
-                )));
+pub(super) fn delete_extras_scoped(
+    source: &dyn Backend, source_root: &str, destination: &dyn Backend, destination_root: &str,
+    dry_run: bool, cancel: &AtomicBool, stats: &mut SyncStats, errors: &mut Vec<(String, String)>,
+    omissions: &mut SyncOmissions, versions: &RunVersions,
+) {
+    let keys = KeyPolicy::for_pair(source.case_sensitive_paths(source_root),
+        destination.case_sensitive_paths(destination_root));
+    let plan = (|| {
+        let source_entries = sync_delete_walk::walk(source, source_root, keys, omissions, cancel)?;
+        let present: HashSet<_> = source_entries.iter().map(|entry| keys.key(&entry.rel).into_owned()).collect();
+        let target_entries = sync_delete_walk::walk(destination, destination_root, keys, omissions, cancel)?;
+        if omissions.contains("") { return Err(io::Error::other("mirror root has a protected unreadable child")); }
+        Ok(target_entries.into_iter().filter(|entry| !present.contains(keys.key(&entry.rel).as_ref())
+            && !omissions.protects(&entry.rel)).collect::<Vec<_>>())
+    })();
+    let mut candidates = match plan {
+        Ok(candidates) => candidates,
+        Err(error) => {
+            if error.kind() != io::ErrorKind::Interrupted {
+                record_error(stats, errors, destination_root, format!("mirror deletion preflight failed; nothing deleted: {error}"));
             }
-            let path = join(&directory, &metadata.name);
-            budget.record(&path, depth + 1).map_err(io::Error::other)?;
-            let rel = rel_of(&path, destination_root);
-            // A destination app trash or other apps' private storage (Android)
-            // is never an extra to delete.
-            if metadata.is_symlink
-                || crate::apptrash::excluded_name(&metadata.name)
-                || crate::apptrash::hidden_app_folders_in(&directory)
-            {
-                omissions.record(&rel, true);
-                continue;
+            return;
+        }
+    };
+    candidates.sort_by(|a, b| a.meta.is_dir.cmp(&b.meta.is_dir)
+        .then_with(|| b.rel.matches('/').count().cmp(&a.rel.matches('/').count())));
+    // Validate every observed target before the first destructive step.
+    for entry in &candidates {
+        if cancel.load(Ordering::Acquire) { return; }
+        match current(destination, entry) {
+            Ok(()) => {}
+            Err(error) => {
+                record_error(stats, errors, &entry.path, format!("mirror deletion revalidation failed; nothing deleted: {error}"));
+                return;
             }
-            if omissions.contains(&rel) || (!metadata.is_dir && omissions.protects(&rel)) {
-                continue;
-            }
-            let source_path = join(source_root, &rel);
-            let absent = match source.stat(&source_path) {
-                Ok(source_meta) if source_meta.is_symlink => {
-                    omissions.record(&rel, true);
-                    continue;
-                }
-                Ok(_) => false,
-                Err(error) if error.kind() == io::ErrorKind::NotFound => true,
-                Err(error) => return Err(error),
+        }
+    }
+    if dry_run { stats.deleted = stats.deleted.saturating_add(candidates.len() as u64); return; }
+    for entry in candidates {
+        if cancel.load(Ordering::Acquire) { break; }
+        if omissions.protects(&entry.rel) { continue; }
+        let result = (|| {
+            crate::bisync::apply_boundary::guard(destination, destination_root, &entry.rel, false)?;
+            if entry.meta.is_dir { current_directory(destination, &entry)?; }
+            else { current(destination, &entry)?; }
+            let absent = || -> io::Result<()> {
+                if sync_delete_walk::missing(source, source_root, &entry.rel, keys, cancel)? { Ok(()) }
+                else { Err(io::Error::new(io::ErrorKind::AlreadyExists, "mirror source appeared; target retained")) }
             };
-            let candidate = Candidate {
-                path: path.clone(),
-                source_path,
-                metadata: metadata.clone(),
-            };
-            // Link-like directories are leaf entries and are never traversed.
-            if metadata.is_dir && !metadata.is_symlink {
-                queue.push_back((path, depth + 1));
-                if absent {
-                    directories.push(candidate);
+            absent()?;
+            if entry.meta.is_dir {
+                let listing = crate::vfs::list_dir_tolerant(destination, &entry.path)?;
+                if !listing.entries.is_empty() || !listing.omitted.is_empty() {
+                    return Err(io::Error::new(io::ErrorKind::DirectoryNotEmpty, "mirror directory has protected or new children"));
                 }
-            } else if absent {
-                files.push(candidate);
+                absent()?;
+                if cancel.load(Ordering::Acquire) { return Err(io::Error::new(io::ErrorKind::Interrupted, "mirror canceled")); }
+                destination.remove_dir(&entry.path)?;
+                if !crate::bisync::apply_stage::namespace(destination, &entry.path)? {
+                    return Err(io::Error::new(io::ErrorKind::Unsupported, "mirror directory removal was not namespace-durable"));
+                }
+                Ok(())
+            } else {
+                crate::bisync::apply_transaction::quick_delete(destination, destination_root, &entry.path,
+                    &entry.rel, super::sync_copy::signature(&entry.meta), versions, cancel, absent)
+            }
+        })();
+        match result {
+            Ok(()) => stats.deleted = stats.deleted.saturating_add(1),
+            Err(error) if error.kind() == io::ErrorKind::Interrupted && cancel.load(Ordering::Acquire) => break,
+            Err(error) if matches!(error.kind(), io::ErrorKind::AlreadyExists | io::ErrorKind::DirectoryNotEmpty)
+                || crate::bisync::apply_boundary::deferred(&error) => {
+                omissions.record_kind(&entry.rel, OmissionKind::Unreadable, true);
+            }
+            Err(error) => {
+                if let Some(kind) = crate::bisync::apply_boundary::omitted(&error) {
+                    omissions.record_kind(&entry.rel, kind, kind.reported_by_default());
+                } else {
+                    let terminal = crate::vfs::is_target_refusal(&error) || matches!(error.kind(),
+                        io::ErrorKind::ConnectionReset | io::ErrorKind::ConnectionAborted | io::ErrorKind::NotConnected
+                        | io::ErrorKind::BrokenPipe | io::ErrorKind::HostUnreachable | io::ErrorKind::NetworkUnreachable
+                        | io::ErrorKind::ConnectionRefused | io::ErrorKind::NetworkDown | io::ErrorKind::TimedOut);
+                    record_error(stats, errors, &entry.path, error.to_string());
+                    if terminal { break; }
+                }
             }
         }
     }
-    Ok(())
 }
-
-fn revalidate_plan(
-    source: &dyn Backend,
-    destination: &dyn Backend,
-    files: &[Candidate],
-    directories: &[Candidate],
-    cancel: &AtomicBool,
-) -> io::Result<()> {
-    for candidate in files.iter().chain(directories) {
-        check_cancel(cancel)?;
-        if !source_absent(source, &candidate.source_path)? {
-            return Err(invalid(format!(
-                "source appeared during mirror preflight: {}",
-                candidate.source_path
-            )));
-        }
-        let current = destination.stat(&candidate.path)?;
-        if !same_entry(&candidate.metadata, &current) {
-            return Err(invalid(format!(
-                "destination changed during mirror preflight: {}",
-                candidate.path
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn delete_file(
-    source: &dyn Backend,
-    destination: &dyn Backend,
-    candidate: &Candidate,
-    cancel: &AtomicBool,
-) -> io::Result<()> {
-    check_cancel(cancel)?;
-    ensure_still_extra(source, candidate)?;
-    let current = destination.stat(&candidate.path)?;
-    if !same_entry(&candidate.metadata, &current) || (current.is_dir && !current.is_symlink) {
-        return Err(invalid("extra file changed before deletion; retained"));
-    }
-    destination.remove_file_id(
-        &candidate.path,
-        candidate.metadata.id.as_deref().or(current.id.as_deref()),
-    )
-}
-
-fn delete_directory(
-    source: &dyn Backend,
-    destination: &dyn Backend,
-    candidate: &Candidate,
-    cancel: &AtomicBool,
-) -> io::Result<()> {
-    check_cancel(cancel)?;
-    ensure_still_extra(source, candidate)?;
-    let current = destination.stat(&candidate.path)?;
-    if current.is_symlink || !current.is_dir || !same_identity(&candidate.metadata, &current) {
-        return Err(invalid("extra directory changed before deletion; retained"));
-    }
-    destination.remove_dir(&candidate.path)
-}
-
-fn ensure_still_extra(source: &dyn Backend, candidate: &Candidate) -> io::Result<()> {
-    if source_absent(source, &candidate.source_path)? {
+fn current_directory(backend: &dyn Backend, entry: &Entry) -> io::Result<()> {
+    let actual = backend.stat(&entry.path)?;
+    // Removing our own children changes directory size/time. Its identity
+    // and the following empty tolerant listing are the deletion boundary.
+    if actual.is_dir && !actual.is_symlink && !actual.special && actual.id == entry.meta.id {
         Ok(())
-    } else {
-        Err(invalid(format!(
-            "source appeared before deletion; retained: {}",
-            candidate.source_path
-        )))
-    }
+    } else { Err(io::Error::new(io::ErrorKind::InvalidData, "mirror directory identity changed")) }
 }
-
-fn source_absent(source: &dyn Backend, path: &str) -> io::Result<bool> {
-    match source.stat(path) {
-        Ok(_) => Ok(false),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(true),
-        Err(error) => Err(error),
-    }
-}
-
-fn same_entry(expected: &VfsMeta, current: &VfsMeta) -> bool {
-    expected.is_dir == current.is_dir
-        && expected.is_symlink == current.is_symlink
-        && same_identity(expected, current)
-        && (expected.is_dir
-            || (expected.size == current.size && expected.mtime_ms == current.mtime_ms))
-}
-
-fn same_identity(expected: &VfsMeta, current: &VfsMeta) -> bool {
-    match (expected.id.as_deref(), current.id.as_deref()) {
-        (Some(left), Some(right)) => left == right,
-        (None, None) => true,
-        _ => false,
-    }
-}
-
-fn check_cancel(cancel: &AtomicBool) -> io::Result<()> {
-    if cancel.load(Ordering::Relaxed) {
-        Err(io::Error::new(
-            io::ErrorKind::Interrupted,
-            "mirror deletion canceled",
-        ))
-    } else {
+fn current(backend: &dyn Backend, entry: &Entry) -> io::Result<()> {
+    let actual = backend.stat(&entry.path)?;
+    if actual.is_dir == entry.meta.is_dir && !actual.is_symlink && !actual.special
+        && actual.size == entry.meta.size && actual.mtime_ms == entry.meta.mtime_ms
+        && actual.id == entry.meta.id && actual.content_md5 == entry.meta.content_md5 {
         Ok(())
-    }
-}
-
-fn invalid(message: impl Into<String>) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, message.into())
+    } else { Err(io::Error::new(io::ErrorKind::InvalidData, "mirror target changed since observation")) }
 }

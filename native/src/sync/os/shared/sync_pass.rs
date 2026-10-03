@@ -11,12 +11,14 @@
 //! lives in `sync_tasks`, the listing of one folder in `sync_scan`.
 use super::imp::{record_error, SyncMsg, SyncProgress, SyncStats, WalkBudget};
 use super::sync_scan::{scan_directory, DirTask, FileTask, Target};
+pub(super) use super::sync_pass_compat::copy_pass;
+pub(super) use super::sync_pass_start::copy_pass_scoped;
 use crate::bisync::sync_flows::{PairFlows, PairSide};
 use crate::bisync::sync_overload::Progress;
-use crate::bisync::SyncOmissions;
+use crate::bisync::{KeyPolicy, SyncOmissions};
+use crate::bisync::versions::RunVersions;
 use crate::transfer::engine::folders::FolderRegister;
-use crate::transfer::Side;
-use crate::vfs::{Backend, Scheme};
+use crate::vfs::Backend;
 use crossbeam_channel::Sender;
 use std::collections::VecDeque;
 use std::panic::AssertUnwindSafe;
@@ -119,12 +121,15 @@ pub(super) struct Pass<'a> {
     pub(super) dst: &'a dyn Backend,
     pub(super) dst_root: &'a str,
     pub(super) dry_run: bool,
+    pub(super) keys: KeyPolicy,
+    pub(super) versions: &'a RunVersions,
+    pub(super) stopped: AtomicBool,
     pub(super) cancel: &'a AtomicBool,
     pub(super) flows: PairFlows,
     pub(super) folders: FolderRegister<'a>,
     /// Copies at once when both sides are one remote connection
     /// (`PairFlows::shared_connection_cap`); unbounded otherwise.
-    copy_cap: usize,
+    pub(super) copy_cap: usize,
     /// When the pass last got an operation through (overload patience).
     pub(super) progress: Progress,
     /// A local destination: every copy re-checks its parent chain for links.
@@ -137,81 +142,6 @@ pub(super) struct Pass<'a> {
     pub(super) streaming: AtomicU64,
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(super) fn copy_pass(
-    src: &dyn Backend,
-    src_root: &str,
-    dst: &dyn Backend,
-    dst_root: &str,
-    dry_run: bool,
-    root: Target,
-    cancel: &AtomicBool,
-    report: Report,
-    tx: &Sender<SyncMsg>,
-    start: Instant,
-) -> Report {
-    let flows = PairFlows::new(src, src_root, dst, dst_root);
-    let folders = FolderRegister::new(Side::Remote(dst), dst_root, flows.flow(PairSide::B).clone());
-    let copy_cap = flows.shared_connection_cap(src, dst).unwrap_or(usize::MAX);
-    // Directory entries on NTFS and SMB shares can be stale for hard-linked
-    // files (only the name used for a change is updated), so the decision
-    // about a listed file is confirmed by a `stat` (in the scan for a local
-    // destination, in parallel by the copy workers for a remote one); FTP,
-    // WebDAV and Drive, where a `stat` costs a listing or a request of its
-    // own, rely on the listing alone.
-    let confirm_listing = !matches!(dst.scheme(), Scheme::Ftp | Scheme::Webdav | Scheme::GDrive);
-    let pass = Pass {
-        src,
-        src_root,
-        dst,
-        dst_root,
-        dry_run,
-        cancel,
-        flows,
-        folders,
-        copy_cap,
-        progress: Progress::default(),
-        guard_parent: dst.is_local(),
-        confirm_listing,
-        state: Mutex::new(State {
-            dirs: VecDeque::new(),
-            files: VecDeque::new(),
-            scanners: Crew::default(),
-            copiers: Crew::default(),
-            scan_stopped: false,
-            finished: false,
-            budget: WalkBudget::default(),
-            report,
-            current: String::new(),
-        }),
-        changed: Condvar::new(),
-        streaming: AtomicU64::new(0),
-    };
-    {
-        let mut guard = pass.lock();
-        let state = &mut *guard;
-        match state.budget.record(src_root, 0) {
-            Ok(()) => state.dirs.push_back(DirTask {
-                path: src_root.to_string(),
-                rel: String::new(),
-                depth: 0,
-                target: root,
-            }),
-            Err(error) => record_error(
-                &mut state.report.stats,
-                &mut state.report.errors,
-                src_root,
-                error,
-            ),
-        }
-    }
-    std::thread::scope(|scope| pass.coordinate(scope, tx, start));
-    let state = pass
-        .state
-        .into_inner()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    state.report
-}
 
 impl Pass<'_> {
     pub(super) fn lock(&self) -> MutexGuard<'_, State> {
@@ -233,7 +163,7 @@ impl Pass<'_> {
 
     /// The user canceled the run (failures seen now are its consequence).
     pub(super) fn canceled(&self) -> bool {
-        self.cancel.load(Ordering::Acquire)
+        self.cancel.load(Ordering::Acquire) || self.stopped.load(Ordering::Acquire)
     }
 
     /// Stop looking at further entries: canceled, finished or out of budget.
@@ -245,7 +175,7 @@ impl Pass<'_> {
         state.finished || state.scan_stopped
     }
 
-    fn coordinate<'s>(&'s self, scope: &'s Scope<'s, '_>, tx: &Sender<SyncMsg>, start: Instant) {
+    pub(super) fn coordinate<'s>(&'s self, scope: &'s Scope<'s, '_>, tx: &Sender<SyncMsg>, start: Instant) {
         let mut last_progress = Instant::now();
         let mut last_sent: Option<ProgressKey> = None;
         loop {
