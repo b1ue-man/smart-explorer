@@ -10,10 +10,11 @@ use super::types::{DirectGrant, DirectGrantState, PeerPresence};
 #[test]
 fn verified_receive_survives_reload_and_new_nonce_updates_same_selector() {
     let identity = identity();
+    let policy = crate::share::DirectRequestPolicy::Ask;
     let mut profiles = ShareProfiles::default();
     let first = presence(&identity, 2, "nonce-a", 200);
     assert!(profiles
-        .record_verified_legacy_direct_request(&identity.direct_lookup_id, &first, 100)
+        .record_verified_legacy_direct_request(&identity.direct_lookup_id, &first, 100, policy)
         .unwrap());
     let selector = profiles.legacy_direct_requests[0].selector.clone();
     let first_event = profiles.legacy_direct_requests[0].evidence.event_id.clone();
@@ -21,7 +22,7 @@ fn verified_receive_survives_reload_and_new_nonce_updates_same_selector() {
     let mut renamed = presence(&identity, 2, "nonce-b", 220);
     renamed.device_name = "Renamed".into();
     assert!(profiles
-        .record_verified_legacy_direct_request(&identity.direct_lookup_id, &renamed, 110)
+        .record_verified_legacy_direct_request(&identity.direct_lookup_id, &renamed, 110, policy)
         .unwrap());
     assert_eq!(profiles.legacy_direct_requests.len(), 1);
     assert_eq!(profiles.legacy_direct_requests[0].selector, selector);
@@ -45,13 +46,13 @@ fn verified_receive_survives_reload_and_new_nonce_updates_same_selector() {
 fn ci_remote_task_replay_requires_revoke_before_delete_and_retains_denial() {
     let identity = identity();
     let mut profiles = ShareProfiles::default();
-    profiles.direct_request_policy = crate::share::DirectRequestPolicy::AutoAccept;
+    let policy = crate::share::DirectRequestPolicy::AutoAccept;
     let first = presence(&identity, 2, "nonce-a", 200);
     profiles
-        .record_verified_legacy_direct_request(&identity.direct_lookup_id, &first, 100)
+        .record_verified_legacy_direct_request(&identity.direct_lookup_id, &first, 100, policy)
         .unwrap();
     assert!(!profiles
-        .record_verified_legacy_direct_request(&identity.direct_lookup_id, &first, 101)
+        .record_verified_legacy_direct_request(&identity.direct_lookup_id, &first, 101, policy)
         .unwrap());
     let selector = profiles.legacy_direct_requests[0].selector.clone();
     assert!(profiles
@@ -69,13 +70,13 @@ fn ci_remote_task_replay_requires_revoke_before_delete_and_retains_denial() {
 
     let reconnect = presence(&identity, 2, "nonce-b", 230);
     assert!(!profiles
-        .record_verified_legacy_direct_request(&identity.direct_lookup_id, &reconnect, 120)
+        .record_verified_legacy_direct_request(&identity.direct_lookup_id, &reconnect, 120, policy)
         .unwrap());
     assert!(profiles.legacy_direct_requests.is_empty());
 
     let later = presence(&identity, 2, "nonce-c", 320);
     assert!(profiles
-        .record_verified_legacy_direct_request(&identity.direct_lookup_id, &later, 201)
+        .record_verified_legacy_direct_request(&identity.direct_lookup_id, &later, 201, policy)
         .unwrap());
     assert_eq!(profiles.legacy_direct_requests.len(), 1);
     assert_eq!(
@@ -88,10 +89,10 @@ fn ci_remote_task_replay_requires_revoke_before_delete_and_retains_denial() {
 fn ci_remote_task_autoaccept_revoke_and_manual_answer_retry_remain_truthful() {
     let identity = identity();
     let mut profiles = ShareProfiles::default();
-    profiles.direct_request_policy = crate::share::DirectRequestPolicy::AutoAccept;
+    let policy = crate::share::DirectRequestPolicy::AutoAccept;
     let request = presence(&identity, 2, "nonce-a", 200);
     profiles
-        .record_verified_legacy_direct_request(&identity.direct_lookup_id, &request, 100)
+        .record_verified_legacy_direct_request(&identity.direct_lookup_id, &request, 100, policy)
         .unwrap();
     let selector = profiles.legacy_direct_requests[0].selector.clone();
     let entry = profiles.legacy_direct_request(&selector).unwrap();
@@ -142,6 +143,7 @@ fn ci_remote_task_autoaccept_revoke_and_manual_answer_retry_remain_truthful() {
 #[test]
 fn ci_remote_task_identity_conflict_is_rejected_without_replacing_the_grant() {
     let identity = identity();
+    let policy = crate::share::DirectRequestPolicy::Ask;
     let other = peer_key(3);
     let mut profiles = ShareProfiles::default();
     profiles.direct_grants.push(DirectGrant {
@@ -157,7 +159,7 @@ fn ci_remote_task_identity_conflict_is_rejected_without_replacing_the_grant() {
     });
     let request = presence(&identity, 2, "nonce-a", 200);
     profiles
-        .record_verified_legacy_direct_request(&identity.direct_lookup_id, &request, 100)
+        .record_verified_legacy_direct_request(&identity.direct_lookup_id, &request, 100, policy)
         .unwrap();
     let entry = profiles.legacy_direct_requests[0].clone();
     assert!(entry.identity_conflict);
@@ -174,7 +176,7 @@ fn ci_remote_task_first_verified_identity_wins_in_both_arrival_orders() {
     let identity = identity();
     for seeds in [[2, 3], [3, 2]] {
         let mut profiles = ShareProfiles::default();
-        profiles.direct_request_policy = crate::share::DirectRequestPolicy::AutoAccept;
+        let policy = crate::share::DirectRequestPolicy::AutoAccept;
         for (index, seed) in seeds.into_iter().enumerate() {
             let request = presence(
                 &identity,
@@ -187,6 +189,7 @@ fn ci_remote_task_first_verified_identity_wins_in_both_arrival_orders() {
                     &identity.direct_lookup_id,
                     &request,
                     100 + index as i64,
+                    policy,
                 )
                 .unwrap();
         }
@@ -211,10 +214,10 @@ fn ci_remote_task_first_verified_identity_wins_in_both_arrival_orders() {
 fn ci_remote_task_generic_grant_upsert_cannot_replace_an_autoaccepted_identity() {
     let identity = identity();
     let mut profiles = ShareProfiles::default();
-    profiles.direct_request_policy = crate::share::DirectRequestPolicy::AutoAccept;
+    let policy = crate::share::DirectRequestPolicy::AutoAccept;
     let request_a = presence(&identity, 2, "nonce-a", 300);
     profiles
-        .record_verified_legacy_direct_request(&identity.direct_lookup_id, &request_a, 100)
+        .record_verified_legacy_direct_request(&identity.direct_lookup_id, &request_a, 100, policy)
         .unwrap();
     let selector_a = profiles.legacy_direct_requests[0].selector.clone();
     assert_eq!(profiles.legacy_answers_due(110).len(), 1);
@@ -235,10 +238,10 @@ fn ci_remote_task_generic_grant_upsert_cannot_replace_an_autoaccepted_identity()
 fn ci_remote_task_load_reconciles_autoaccepted_history_when_its_grant_was_lost() {
     let identity = identity();
     let mut profiles = ShareProfiles::default();
-    profiles.direct_request_policy = crate::share::DirectRequestPolicy::AutoAccept;
+    let policy = crate::share::DirectRequestPolicy::AutoAccept;
     let request_a = presence(&identity, 2, "nonce-a", 300);
     profiles
-        .record_verified_legacy_direct_request(&identity.direct_lookup_id, &request_a, 100)
+        .record_verified_legacy_direct_request(&identity.direct_lookup_id, &request_a, 100, policy)
         .unwrap();
     let selector = profiles.legacy_direct_requests[0].selector.clone();
     profiles.direct_grants.clear();
@@ -262,6 +265,7 @@ fn ci_remote_task_load_reconciles_autoaccepted_history_when_its_grant_was_lost()
 #[test]
 fn far_future_presence_cannot_pin_inbox_or_tombstone_capacity() {
     let identity = identity();
+    let policy = crate::share::DirectRequestPolicy::Ask;
     let mut profiles = ShareProfiles::default();
     for index in 0..100 {
         let request = presence(
@@ -271,7 +275,12 @@ fn far_future_presence_cannot_pin_inbox_or_tombstone_capacity() {
             100 + super::legacy_direct_request::MAX_LEGACY_PRESENCE_FUTURE_SECS + 1,
         );
         assert!(profiles
-            .record_verified_legacy_direct_request(&identity.direct_lookup_id, &request, 100)
+            .record_verified_legacy_direct_request(
+                &identity.direct_lookup_id,
+                &request,
+                100,
+                policy,
+            )
             .unwrap_err()
             .contains("future window"));
     }
@@ -285,7 +294,7 @@ fn far_future_presence_cannot_pin_inbox_or_tombstone_capacity() {
         100 + super::legacy_direct_request::MAX_LEGACY_PRESENCE_FUTURE_SECS,
     );
     assert!(profiles
-        .record_verified_legacy_direct_request(&identity.direct_lookup_id, &valid, 100)
+        .record_verified_legacy_direct_request(&identity.direct_lookup_id, &valid, 100, policy)
         .unwrap());
 }
 
@@ -319,10 +328,11 @@ fn identity_rotation_disables_even_unlinked_direct_and_exec_grants() {
 #[test]
 fn corrupt_evidence_and_future_schema_fail_closed_while_v6_defaults_empty() {
     let identity = identity();
+    let policy = crate::share::DirectRequestPolicy::Ask;
     let mut profiles = ShareProfiles::default();
     let request = presence(&identity, 2, "nonce-a", 200);
     profiles
-        .record_verified_legacy_direct_request(&identity.direct_lookup_id, &request, 100)
+        .record_verified_legacy_direct_request(&identity.direct_lookup_id, &request, 100, policy)
         .unwrap();
     profiles.legacy_direct_requests[0].evidence.proof = "corrupt".into();
     assert!(profiles.validate_legacy_direct_requests().is_err());

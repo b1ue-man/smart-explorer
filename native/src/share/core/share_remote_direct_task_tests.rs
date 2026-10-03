@@ -188,10 +188,11 @@ fn share_remote_task_reciprocal_direct_denial_unsupported_and_identity_conflict_
 #[test]
 fn share_remote_task_legacy_direct_autoaccept_retry_tombstone_and_denial() {
     let local = local_identity();
+    let policy = super::DirectRequestPolicy::AutoAccept;
     let mut profiles = ShareProfiles::default();
     let first = legacy_presence(&local, 7, "nonce-a", 200);
     assert!(profiles
-        .record_verified_legacy_direct_request(&local.direct_lookup_id, &first, 100)
+        .record_verified_legacy_direct_request(&local.direct_lookup_id, &first, 100, policy)
         .unwrap());
     let selector = profiles.legacy_direct_requests[0].selector.clone();
     let entry = profiles.legacy_direct_request(&selector).unwrap();
@@ -202,7 +203,7 @@ fn share_remote_task_legacy_direct_autoaccept_retry_tombstone_and_denial() {
     );
     assert!(entry.authorization_active(&profiles));
     assert!(!profiles
-        .record_verified_legacy_direct_request(&local.direct_lookup_id, &first, 101)
+        .record_verified_legacy_direct_request(&local.direct_lookup_id, &first, 101, policy)
         .unwrap());
 
     let revision = profiles
@@ -237,11 +238,11 @@ fn share_remote_task_legacy_direct_autoaccept_retry_tombstone_and_denial() {
         .delete_legacy_direct_request(&selector, 111)
         .unwrap());
     assert!(!profiles
-        .record_verified_legacy_direct_request(&local.direct_lookup_id, &first, 112)
+        .record_verified_legacy_direct_request(&local.direct_lookup_id, &first, 112, policy)
         .unwrap());
     let later = legacy_presence(&local, 7, "nonce-b", 320);
     assert!(profiles
-        .record_verified_legacy_direct_request(&local.direct_lookup_id, &later, 201)
+        .record_verified_legacy_direct_request(&local.direct_lookup_id, &later, 201, policy)
         .unwrap());
     let entry = &profiles.legacy_direct_requests[0];
     assert_eq!(entry.decision, LegacyDirectDecisionState::Rejected);
@@ -258,7 +259,7 @@ fn share_remote_task_legacy_direct_autoaccept_retry_tombstone_and_denial() {
         .direct_grants
         .push(grant_for(&conflicting_identity, DirectGrantState::Accepted));
     assert!(conflict
-        .record_verified_legacy_direct_request(&local.direct_lookup_id, &first, 100)
+        .record_verified_legacy_direct_request(&local.direct_lookup_id, &first, 100, policy)
         .unwrap());
     assert!(conflict.legacy_direct_requests[0].identity_conflict);
     assert_eq!(
