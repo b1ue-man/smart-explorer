@@ -2,6 +2,10 @@
 mod diagnostics_ui;
 #[path = "share_exports_ui.rs"]
 mod exports_ui;
+#[path = "share_connections_ui.rs"]
+mod connections_ui;
+#[path = "share_policy_ui.rs"]
+mod policy_ui;
 #[path = "share_rooms_ui.rs"]
 mod rooms_ui;
 #[path = "share_direct_ui.rs"]
@@ -190,8 +194,7 @@ impl App {
         let edited = std::mem::replace(&mut self.share_profiles, previous.clone());
         let default_home = dirs_home().to_string_lossy().replace('\\', "/");
         match crate::share::ShareProfiles::mutate_persisted(Some(default_home), |latest| {
-            profile_edits::merge_user_edits(latest, &previous, &edited);
-            Ok(())
+            profile_edits::merge_user_edits(latest, &previous, &edited)
         }) {
             Ok(committed) => {
                 self.share_profiles = committed;

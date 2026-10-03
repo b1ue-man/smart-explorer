@@ -50,12 +50,31 @@ fn finish_removal(rt: &Runtime, removal: ProfileRemoval) -> Value {
 pub(super) fn add_direct(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
     let code = str_arg(args, "code")?.trim().to_string();
     let name = opt_str(args, "name").unwrap_or("").trim().to_string();
+    let share_back = match args.get("shareBack") {
+        None => false,
+        Some(value) => value.as_bool().ok_or_else(|| invalid("shareBack muss bool sein."))?,
+    };
     let (profiles, contact_id) =
         ShareProfiles::add_direct_from_code_persisted(default_home(), &code, &name)
             .map_err(|error| ApiError::new("invalid", error))?;
+    let mut persisted_share_back = profiles.direct_contacts.iter().find(|contact| contact.id == contact_id)
+        .is_some_and(|contact| contact.relation.share_back);
     committed(profiles);
+    if share_back {
+        match crate::share::set_direct_share_back(default_home(), &contact_id, true) {
+            Ok(change) => {
+                persisted_share_back = change.profiles.direct_contacts.iter().find(|contact| contact.id == contact_id)
+                    .is_some_and(|contact| contact.relation.share_back);
+                committed(change.profiles);
+            }
+            Err(error) => {
+                reconfigure(rt);
+                return Err(internal(format!("Kontakt {contact_id} gespeichert; Rueckfreigabe nicht gespeichert: {error}. Erneut hinzufuegen oder share.setShareBack wiederholen.")));
+            }
+        }
+    }
     reconfigure(rt);
-    Ok(json!({ "contactId": contact_id }))
+    Ok(json!({ "contactId": contact_id, "shareBack": persisted_share_back }))
 }
 
 pub(super) fn remove_device(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
@@ -130,8 +149,7 @@ pub(super) fn leave_room(rt: &Runtime, args: &Value) -> Result<Value, ApiError> 
     room.status = crate::share::ShareStatus::Offline;
     let room_id = room.room_id.clone();
     let profiles = ShareProfiles::mutate_persisted(default_home(), |latest| {
-        crate::share::profile_edits::merge_user_edits(latest, &previous, &edited);
-        Ok(())
+        crate::share::profile_edits::merge_user_edits(latest, &previous, &edited)
     })
     .map_err(|error| internal(format!("Share-Profile speichern: {error}")))?;
     committed(profiles);
@@ -198,10 +216,9 @@ pub(super) fn add_export(rt: &Runtime, args: &Value) -> Result<Value, ApiError> 
         if config.roots.iter().any(|root| root.path == path) {
             return Err("Dieser Ordner ist bereits freigegeben.".to_string());
         }
-        config.roots.push(SharedRoot {
-            label: label.clone(),
-            path: path.clone(),
-        });
+        config
+            .roots
+            .push(SharedRoot::new(label.clone(), path.clone()));
         Ok(())
     })
     .map_err(|error| ApiError::new("invalid", error))?;

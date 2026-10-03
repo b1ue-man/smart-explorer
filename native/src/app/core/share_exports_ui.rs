@@ -9,7 +9,7 @@ impl App {
                 .iter()
                 .find(|r| r.id == self.share_export_target_id)
                 .map(|r| r.exports.clone())
-                .unwrap_or_else(|| self.share_profiles.default_direct_exports.clone()),
+                .unwrap_or_default(),
             _ => self.share_profiles.default_direct_exports.clone(),
         }
     }
@@ -25,6 +25,9 @@ impl App {
                     .find(|r| r.id == self.share_export_target_id)
                 {
                     r.exports = cfg;
+                } else {
+                    self.error_msg = Some("Bitte einen vorhandenen Raum waehlen".into());
+                    return;
                 }
             }
             _ => self.share_profiles.default_direct_exports = cfg,
@@ -49,6 +52,10 @@ impl App {
                         );
                     }
                 });
+            if !self.share_profiles.rooms.iter().any(|room| room.id == self.share_export_target_id) {
+                ui.label("Bitte einen Raum waehlen, um dessen Freigaben zu bearbeiten.");
+                return;
+            }
         }
 
         let mut cfg = self.selected_export_config();
@@ -56,24 +63,10 @@ impl App {
         let mut move_up: Option<usize> = None;
         let mut move_down: Option<usize> = None;
         let mut changed = false;
-        if ui
-            .checkbox(
-                &mut cfg.include_connections,
-                "Eigene gespeicherte Verbindungen freigeben",
-            )
-            .changed()
-        {
-            changed = true;
-        }
-        ui.checkbox(
-            &mut self.share_block_symlink_escape,
-            "Symlinks ausserhalb der Freigabe blockieren",
-        );
-        ui.add_enabled(
-            false,
-            egui::Checkbox::new(&mut true, "Share-Server-Verbindungen ausschliessen"),
-        );
-        for (i, root) in cfg.roots.iter().enumerate() {
+        ui.label("Neue Freigaben erlauben Lesen. Schreiben braucht zusaetzlich das Schreibrecht des Geraets bzw. Raums.");
+        let root_count = cfg.roots.len();
+        let scope = if self.share_export_scope == 2 { self.share_export_target_id.as_str() } else { "direct" }.to_string();
+        for (i, root) in cfg.roots.iter_mut().enumerate() {
             ui.horizontal_wrapped(|ui| {
                 ui.add(egui::Label::new(format!("{} ->", root.label)).wrap());
                 share_value_field(ui, &root.path);
@@ -91,13 +84,29 @@ impl App {
                 if ui.button("Nach oben").clicked() && i > 0 {
                     move_up = Some(i);
                 }
-                if ui.button("Nach unten").clicked() && i + 1 < cfg.roots.len() {
+                if ui.button("Nach unten").clicked() && i + 1 < root_count {
                     move_down = Some(i);
                 }
                 if ui.button("Entfernen").clicked() {
                     remove = Some(i);
                 }
             });
+            ui.horizontal_wrapped(|ui| {
+                changed |= ui.selectable_value(&mut root.access, crate::share::ExportAccess::ReadOnly, "Nur lesen").changed();
+                changed |= ui.selectable_value(&mut root.access, crate::share::ExportAccess::ReadWrite, "Lesen und schreiben").changed();
+                changed |= ui.checkbox(&mut root.allow_system_writes,
+                    "Auch Autostart-, Login- und Schluesseldateien beschreibbar (unsicher)").changed();
+            });
+            if root.access == crate::share::ExportAccess::ReadOnly
+                && self.share_profiles.auto_home_was_migrated(&scope, &root.path) {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Die alte automatische Home-Freigabe wurde auf Lesen umgestellt.");
+                    if ui.button("Schreiben wieder erlauben").clicked() {
+                        root.access = crate::share::ExportAccess::ReadWrite;
+                        changed = true;
+                    }
+                });
+            }
         }
         if let Some(i) = move_up {
             cfg.roots.swap(i, i - 1);
@@ -146,26 +155,18 @@ impl App {
                 for d in self.drives.clone() {
                     let label = d.trim_end_matches(['\\', '/']).to_string();
                     if !cfg.roots.iter().any(|r| r.path == d) {
-                        cfg.roots.push(crate::share::SharedRoot { label, path: d });
+                        cfg.roots.push(crate::share::SharedRoot::new(label, d));
                         changed = true;
                     }
                 }
             }
-            if ui.button("Gespeicherte Verbindung hinzufuegen").clicked() {
-                cfg.include_connections = true;
-                changed = true;
-            }
-            if ui.button("Alle gespeicherten Verbindungen").clicked() {
-                cfg.include_connections = true;
-                changed = true;
-            }
             if ui.button("Hinzufuegen").clicked() {
                 let path = self.share_export_path_draft.trim().replace('\\', "/");
                 if !path.is_empty() && !cfg.roots.iter().any(|r| r.path == path) {
-                    cfg.roots.push(crate::share::SharedRoot {
-                        label: self.share_export_label_draft.trim().to_string(),
+                    cfg.roots.push(crate::share::SharedRoot::new(
+                        self.share_export_label_draft.trim(),
                         path,
-                    });
+                    ));
                     changed = true;
                 }
             }
@@ -174,8 +175,14 @@ impl App {
                 changed = true;
             }
         });
+        ui.separator();
+        changed |= self.ui_share_connections(ui, &mut cfg);
         if changed {
             self.set_selected_export_config(cfg);
+        }
+        if self.share_export_scope == 0 {
+            ui.separator();
+            self.ui_share_write_rights(ui);
         }
     }
 }

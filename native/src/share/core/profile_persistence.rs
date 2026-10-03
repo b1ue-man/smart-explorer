@@ -1,5 +1,4 @@
 use super::core::{b64, random_token};
-use super::fs::SharedRoot;
 use super::profiles::{
     direct_contact_secret_account, room_secret_account, DirectCode, ProfileRevision, RoomCode,
     ShareProfiles, LEGACY_SHARE_PROFILE_VERSION, OLDEST_SHARE_PROFILE_VERSION,
@@ -9,6 +8,27 @@ use super::profiles::{
 use super::types::{
     DirectAccessState, DirectContact, DirectGrantState, PeerPresence, RoomProfile, ShareStatus,
 };
+
+pub(super) const MAX_PROFILE_BYTES: u64 = 1024 * 1024;
+
+pub(super) fn encode_profiles(profiles: &ShareProfiles) -> Result<String, String> {
+    struct Buffer(Vec<u8>);
+    impl std::io::Write for Buffer {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if (self.0.len() as u64).saturating_add(bytes.len() as u64) > MAX_PROFILE_BYTES {
+                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData,
+                    "Share profiles exceed their byte budget; history was not discarded"));
+            }
+            self.0.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+    }
+    let mut buffer = Buffer(Vec::new());
+    serde_json::to_writer_pretty(&mut buffer, profiles)
+        .map_err(|error| format!("Share-Profile kodieren: {error}"))?;
+    String::from_utf8(buffer.0).map_err(|error| format!("Share-Profile kodieren: {error}"))
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ProfileChange {
@@ -24,17 +44,22 @@ impl ShareProfiles {
         let loaded = storage
             .load_profiles()
             .map_err(|error| format!("Share-Profile lesen: {error}"))?;
-        let missing = loaded.is_none();
-        let (mut profiles, revision) = match loaded {
+        let (mut profiles, revision, raw) = match loaded {
             Some(raw) => {
+                if raw.len() as u64 > MAX_PROFILE_BYTES {
+                    return Err("Share profiles exceed their byte budget".into());
+                }
                 let revision = ProfileRevision::from_contents(&raw);
                 let profiles = serde_json::from_str::<ShareProfiles>(&raw)
                     .map_err(|error| format!("Share-Profile sind beschaedigt: {error}"))?;
-                (profiles, revision)
+                let value = serde_json::from_str::<serde_json::Value>(&raw)
+                    .map_err(|error| format!("Share-Profile sind beschaedigt: {error}"))?;
+                (profiles, revision, Some(value))
             }
-            None => (ShareProfiles::default(), ProfileRevision::Missing),
+            None => (ShareProfiles::default(), ProfileRevision::Missing, None),
         };
         profiles.storage_revision = revision;
+        let old_version = profiles.schema_version;
         match profiles.schema_version {
             SHARE_PROFILE_VERSION => {}
             REMOVED_PEERS_PREVIOUS_VERSION
@@ -60,13 +85,18 @@ impl ShareProfiles {
         profiles
             .validate_legacy_direct_requests()
             .map_err(|error| format!("Share-Profile sind beschaedigt: {error}"))?;
-        // Existing empty exports are an explicit deny-all configuration.
-        if missing && profiles.default_direct_exports.roots.is_empty() {
-            if let Some(home) = default_home {
-                profiles.default_direct_exports.roots.push(SharedRoot {
-                    label: "Home".to_string(),
-                    path: home,
-                });
+        if let Some(raw) = raw {
+            let legacy_connections = profiles.default_direct_exports.include_connections
+                || profiles.rooms.iter().any(|room| room.exports.include_connections);
+            let accounts = if legacy_connections {
+                storage.saved_connection_accounts()?.ok_or_else(||
+                    "Gespeicherte Verbindungskonten fuer die Freigabenmigration nicht verfuegbar".to_string())?
+            } else { Vec::new() };
+            let migrated = profiles.migrate_export_policy(&raw, default_home.as_deref(), &accounts)?;
+            if migrated || old_version != profiles.schema_version {
+                // The old configuration remains intact if the write fails;
+                // no uncommitted migration is handed to the host runtime.
+                profiles.save_with(storage)?;
             }
         }
         Ok(profiles)
@@ -76,16 +106,23 @@ impl ShareProfiles {
         &mut self,
         storage: &mut impl ProfilePersistence,
     ) -> Result<(), String> {
-        self.reconcile_legacy_grants(super::core::now_secs());
-        self.recompute_all_identity_conflicts();
-        self.validate_legacy_direct_requests()
+        let mut candidate = self.clone();
+        candidate.reconcile_legacy_grants(super::core::now_secs());
+        candidate.recompute_all_identity_conflicts();
+        candidate.validate_direct_ledger()
             .map_err(|error| format!("Share-Profile sind beschaedigt: {error}"))?;
-        let contents = serde_json::to_string_pretty(self)
-            .map_err(|error| format!("Share-Profile kodieren: {error}"))?;
+        candidate.validate_legacy_direct_requests()
+            .map_err(|error| format!("Share-Profile sind beschaedigt: {error}"))?;
+        let contents = encode_profiles(&candidate)?;
+        let expected = match &self.storage_revision {
+            ProfileRevision::Untracked => ProfileRevision::Missing,
+            revision => revision.clone(),
+        };
         let revision = storage
-            .save_profiles(&contents, &self.storage_revision)
+            .save_profiles(&contents, &expected)
             .map_err(|error| format!("Share-Profile speichern: {error}"))?;
-        self.storage_revision = revision;
+        candidate.storage_revision = revision;
+        *self = candidate;
         Ok(())
     }
 
@@ -95,6 +132,7 @@ impl ShareProfiles {
         storage: &mut impl ProfilePersistence,
     ) -> Result<(), String> {
         candidate.schema_version = SHARE_PROFILE_VERSION;
+        candidate.storage_revision = self.storage_revision.clone();
         candidate.save_with(storage)?;
         *self = candidate;
         Ok(())
@@ -150,6 +188,7 @@ impl ShareProfiles {
             lan_candidates: Vec::new(),
             lan_seen_at: None,
             lan_uplink: None,
+            relation: Default::default(),
         });
         if let Err(error) = candidate.save_with(storage) {
             return Err(cleanup_new_secret(error, storage, &account));
@@ -228,7 +267,8 @@ impl ShareProfiles {
             last_seen: None,
             status: ShareStatus::Waiting,
             members: Vec::new(),
-            exports: self.default_direct_exports.clone(),
+            exports: super::export_config::ShareExportConfig::default(),
+            policy: super::room_relation::RoomPolicy::new_room(),
         });
         if let Err(error) = candidate.save_with(storage) {
             return Err(cleanup_new_secret(error, storage, &account));
@@ -272,6 +312,9 @@ fn cleanup_new_secret(
 }
 
 pub(super) trait ProfilePersistence {
+    /// `None` cannot silently turn the legacy all-connections flag into
+    /// an empty explicit set. The system adapter supplies the current list.
+    fn saved_connection_accounts(&mut self) -> Result<Option<Vec<String>>, String> { Ok(None) }
     fn load_profiles(&mut self) -> Result<Option<String>, String>;
     fn save_profiles(
         &mut self,
@@ -283,215 +326,5 @@ pub(super) trait ProfilePersistence {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::collections::HashMap;
-
-    use super::{ProfilePersistence, ProfileRevision, ShareProfiles, SHARE_PROFILE_VERSION};
-    use crate::share::{
-        DirectGrant, DirectGrantState, ExecGrant, RoomMember, RoomProfile, ShareExportConfig,
-        ShareStatus,
-    };
-
-    #[derive(Default)]
-    struct FakePersistence {
-        profiles: Option<String>,
-        secrets: HashMap<String, String>,
-        fail_profile_save: bool,
-        fail_secret_save: bool,
-    }
-
-    impl ProfilePersistence for FakePersistence {
-        fn load_profiles(&mut self) -> Result<Option<String>, String> {
-            Ok(self.profiles.clone())
-        }
-
-        fn save_profiles(
-            &mut self,
-            contents: &str,
-            expected: &ProfileRevision,
-        ) -> Result<ProfileRevision, String> {
-            if self.fail_profile_save {
-                Err("disk full".into())
-            } else {
-                let current = self
-                    .profiles
-                    .as_deref()
-                    .map(ProfileRevision::from_contents)
-                    .unwrap_or(ProfileRevision::Missing);
-                if !matches!(expected, ProfileRevision::Untracked) && expected != &current {
-                    return Err("Share profiles changed concurrently".into());
-                }
-                self.profiles = Some(contents.to_string());
-                Ok(ProfileRevision::from_contents(contents))
-            }
-        }
-
-        fn save_secret(&mut self, account: &str, secret: &str) -> Result<(), String> {
-            if self.fail_secret_save {
-                Err("secure store unavailable".into())
-            } else {
-                self.secrets.insert(account.to_string(), secret.to_string());
-                Ok(())
-            }
-        }
-
-        fn delete_secret(&mut self, account: &str) -> Result<(), String> {
-            self.secrets.remove(account);
-            Ok(())
-        }
-    }
-
-    #[test]
-    fn failed_direct_profile_write_rolls_back_contact_and_secret() {
-        let mut profiles = ShareProfiles::default();
-        let mut storage = FakePersistence {
-            fail_profile_save: true,
-            ..FakePersistence::default()
-        };
-        let code = format!("SE-D3-lookup-{}-{}-node", "11".repeat(32), "22".repeat(16));
-        assert!(profiles
-            .add_direct_from_code_with(&code, "Peer", &mut storage)
-            .is_err());
-        assert!(profiles.direct_contacts.is_empty());
-        assert!(storage.secrets.is_empty());
-    }
-
-    #[test]
-    fn failed_secret_write_never_adds_a_direct_contact() {
-        let mut profiles = ShareProfiles::default();
-        let mut storage = FakePersistence {
-            fail_secret_save: true,
-            ..FakePersistence::default()
-        };
-        let code = format!("SE-D3-lookup-{}-{}-node", "11".repeat(32), "22".repeat(16));
-        assert!(profiles
-            .add_direct_from_code_with(&code, "Peer", &mut storage)
-            .is_err());
-        assert!(profiles.direct_contacts.is_empty());
-        assert!(storage.profiles.is_none());
-    }
-
-    #[test]
-    fn persisted_empty_export_list_is_not_replaced_with_home() {
-        let mut storage = FakePersistence::default();
-        let mut profiles =
-            ShareProfiles::load_checked_with(Some("/home/alice".into()), &mut storage)
-                .expect("load first-run profiles");
-        assert_eq!(profiles.default_direct_exports.roots.len(), 1);
-        profiles.default_direct_exports.roots.clear();
-        profiles
-            .save_with(&mut storage)
-            .expect("persist empty list");
-
-        let reloaded = ShareProfiles::load_checked_with(Some("/home/alice".into()), &mut storage)
-            .expect("reload explicit empty list");
-        assert!(reloaded.default_direct_exports.roots.is_empty());
-    }
-
-    #[test]
-    fn stale_profile_revision_cannot_overwrite_a_newer_save() {
-        let mut storage = FakePersistence::default();
-        let mut first = ShareProfiles::load_checked_with(None, &mut storage).unwrap();
-        let mut stale = first.clone();
-        first.auto_connect = false;
-        first.save_with(&mut storage).unwrap();
-        stale.auto_connect = true;
-        let error = stale.save_with(&mut storage).unwrap_err();
-        assert!(error.contains("concurrently"));
-        let current = ShareProfiles::load_checked_with(None, &mut storage).unwrap();
-        assert!(!current.auto_connect);
-    }
-
-    #[test]
-    fn v3_and_v4_profiles_migrate_to_current_with_exec_default_denied() {
-        let mut legacy = ShareProfiles {
-            auto_connect: false,
-            ..ShareProfiles::default()
-        };
-        let enabled = ExecGrant {
-            enabled: true,
-            policy_revision: 9,
-            changed_at: 7,
-            ..ExecGrant::default()
-        };
-        legacy.direct_grants.push(direct_grant(enabled.clone()));
-        legacy.rooms.push(room_with_member(enabled));
-
-        for version in [3, 4] {
-            let mut value = serde_json::to_value(&legacy).unwrap();
-            value["schema_version"] = serde_json::json!(version);
-            value["default_direct_exports"]["allow_exec"] = serde_json::json!(true);
-            value["rooms"][0]["exports"]["allow_exec"] = serde_json::json!(true);
-            if version == 3 {
-                value.as_object_mut().unwrap().remove("direct_requests");
-            }
-            let mut storage = FakePersistence {
-                profiles: Some(serde_json::to_string_pretty(&value).unwrap()),
-                ..FakePersistence::default()
-            };
-
-            let mut migrated = ShareProfiles::load_checked_with(None, &mut storage).unwrap();
-            assert_eq!(migrated.schema_version, SHARE_PROFILE_VERSION);
-            assert!(!migrated.auto_connect);
-            assert!(!migrated.direct_grants[0].exec.enabled);
-            assert!(!migrated.rooms[0].members[0].exec.enabled);
-
-            migrated.save_with(&mut storage).unwrap();
-            let persisted = storage.profiles.as_deref().unwrap();
-            assert!(!persisted.contains("allow_exec"));
-        }
-    }
-
-    #[test]
-    fn profile_versions_older_than_v3_and_newer_than_v6_fail_closed() {
-        for version in [2, SHARE_PROFILE_VERSION + 1] {
-            let mut value = serde_json::to_value(ShareProfiles::default()).unwrap();
-            value["schema_version"] = serde_json::json!(version);
-            let mut storage = FakePersistence {
-                profiles: Some(serde_json::to_string(&value).unwrap()),
-                ..FakePersistence::default()
-            };
-            let error = ShareProfiles::load_checked_with(None, &mut storage).unwrap_err();
-            assert!(error.contains("Nicht unterstuetzte Share-Profilversion"));
-        }
-    }
-
-    fn direct_grant(exec: ExecGrant) -> DirectGrant {
-        DirectGrant {
-            device_id: "device-a".into(),
-            device_name: "Device A".into(),
-            public_key: "key-a".into(),
-            fingerprint: "fingerprint-a".into(),
-            node_id: "node-a".into(),
-            state: DirectGrantState::Accepted,
-            updated_at: 1,
-            exec,
-        }
-    }
-
-    fn room_with_member(exec: ExecGrant) -> RoomProfile {
-        RoomProfile {
-            id: "profile-a".into(),
-            name: "Room A".into(),
-            room_id: "room-a".into(),
-            auto_join: true,
-            last_seen: None,
-            status: ShareStatus::Waiting,
-            members: vec![RoomMember {
-                device_id: "device-b".into(),
-                device_name: "Device B".into(),
-                fingerprint: "fingerprint-b".into(),
-                public_key: "key-b".into(),
-                node_id: "node-b".into(),
-                relay_url: String::new(),
-                candidates: Vec::new(),
-                last_seen: None,
-                status: ShareStatus::Waiting,
-                blocked: false,
-                exec,
-                presence: None,
-            }],
-            exports: ShareExportConfig::default(),
-        }
-    }
-}
+#[path = "profile_persistence_tests.rs"]
+mod tests;

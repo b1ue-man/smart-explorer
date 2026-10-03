@@ -1,6 +1,11 @@
 use clap::{Args, Subcommand};
 use std::path::{Path, PathBuf};
 
+#[path = "exports_policy.rs"]
+mod exports_policy;
+#[path = "exports_connections.rs"]
+mod exports_connections;
+
 #[derive(Args)]
 pub(super) struct ExportArgs {
     #[command(subcommand)]
@@ -12,6 +17,10 @@ enum ExportCommand {
     List(ExportListArgs),
     Add(ExportAddArgs),
     Remove(ExportRemoveArgs),
+    Set(exports_policy::SetArgs),
+    Connections(exports_connections::ConnectionsArgs),
+    #[command(about = "Change write/admission rights of an existing room")]
+    Policy(exports_policy::RoomPolicyArgs),
 }
 
 #[derive(Args)]
@@ -51,21 +60,43 @@ pub(super) fn run(args: ExportArgs) -> Result<(), String> {
         ExportCommand::List(list) => list_exports(list),
         ExportCommand::Add(add) => add_export(add),
         ExportCommand::Remove(remove) => remove_export(remove),
+        ExportCommand::Set(args) => exports_policy::set(args),
+        ExportCommand::Connections(args) => exports_connections::run(args),
+        ExportCommand::Policy(args) => exports_policy::room_policy(args),
     }
 }
 
 fn list_exports(args: ExportListArgs) -> Result<(), String> {
     let profiles = super::checked_profiles()?;
     let config = export_config(&profiles, args.scope.room.as_deref())?;
+    let scope = exports_policy::scope_id(&profiles, args.scope.room.as_deref())?;
+    let migrated = profiles.auto_home_migrations.iter().filter(|notice| notice.scope == scope).collect::<Vec<_>>();
+    let room_policy = profiles.rooms.iter().find(|room| room.id == scope).map(|room| &room.policy);
+    let requests = crate::share::DirectRequestPolicy::load();
     if args.json {
+        let mut value = serde_json::to_value(config).map_err(|error| error.to_string())?;
+        value["auto_home_migrations"] = serde_json::to_value(&migrated).map_err(|error| error.to_string())?;
+        value["room_policy"] = serde_json::to_value(room_policy).map_err(|error| error.to_string())?;
+        value["request_policy"] = serde_json::to_value(requests.as_ref().copied().unwrap_or_default()).map_err(|error| error.to_string())?;
+        value["request_policy_error"] = serde_json::to_value(requests.as_ref().err()).map_err(|error| error.to_string())?;
         println!(
             "{}",
-            serde_json::to_string_pretty(config).map_err(|error| error.to_string())?
+            serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?
         );
     } else {
         println!("include_connections\t{}", config.include_connections);
+        println!("request_policy\t{:?}", requests.as_ref().copied().unwrap_or_default());
+        if let Err(error) = requests { println!("request_policy_error\t{error}"); }
         for root in &config.roots {
-            println!("export\t{}\t{}", root.label, root.path);
+            println!("export\t{}\t{}\taccess={}\tallow_system_writes={}", root.label, root.path,
+                exports_policy::access_name(root.access), root.allow_system_writes);
+        }
+        for connection in &config.shared_connections {
+            println!("shared_connection\t{}\taccess={}", connection.account, exports_policy::access_name(connection.access));
+        }
+        for notice in migrated { println!("auto_home_migrated\t{}\tlegacy Home restricted once; current access above; change with exports set --write", notice.path); }
+        if let Some(policy) = room_policy {
+            println!("room_policy\tmembers_may_write={}\tconfirm_new_members={}", policy.members_may_write, policy.confirm_new_members);
         }
     }
     Ok(())
@@ -80,10 +111,9 @@ fn add_export(args: ExportAddArgs) -> Result<(), String> {
         if config.roots.iter().any(|root| root.path == path) {
             return Err(format!("export already exists: {path}"));
         }
-        config.roots.push(crate::share::SharedRoot {
-            label: label.clone(),
-            path: path.clone(),
-        });
+        config
+            .roots
+            .push(crate::share::SharedRoot::new(label.clone(), path.clone()));
         Ok(())
     })?;
     println!("Added export {path}{}", super::refresh_note());

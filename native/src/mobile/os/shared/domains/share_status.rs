@@ -4,6 +4,9 @@ use std::collections::{BTreeMap, VecDeque};
 
 use serde_json::{json, Value};
 
+#[path = "share_policy_status.rs"]
+mod policy_status;
+
 use super::share_exec::{provider_json, targets_json};
 use crate::share::discovery_state::{
     DiscoveryExchangeState, DiscoveryPublishTarget, DiscoveryUiKind, DiscoveryUiState,
@@ -84,7 +87,7 @@ fn seen_on_lan(contact: &DirectContact, now_secs: i64) -> bool {
     })
 }
 
-fn device_json(contact: &DirectContact, now_secs: i64) -> Value {
+fn device_json(profiles: &ShareProfiles, contact: &DirectContact, now_secs: i64) -> Value {
     let lan = seen_on_lan(contact, now_secs);
     let target = PeerOpenTarget::Direct {
         contact_id: contact.id.clone(),
@@ -97,6 +100,8 @@ fn device_json(contact: &DirectContact, now_secs: i64) -> Value {
         "online": reachable(&contact.status) || lan,
         "location": target.endpoint_prefix(),
         "lan": lan,
+        "shareBack": contact.relation.share_back,
+        "write": policy_status::contact_write(profiles, contact),
     })
 }
 
@@ -119,6 +124,7 @@ fn rooms_json(profiles: &ShareProfiles) -> Vec<Value> {
                         "status": member.status.label(),
                         "location": target.endpoint_prefix(),
                         "blocked": member.blocked,
+                        "admission": member.relation.admission,
                     })
                 })
                 .collect();
@@ -130,6 +136,10 @@ fn rooms_json(profiles: &ShareProfiles) -> Vec<Value> {
                 "autoJoin": room.auto_join,
                 "location": Value::Null,
                 "members": members,
+                "policy": {
+                    "membersMayWrite": room.policy.members_may_write,
+                    "confirmNewMembers": room.policy.confirm_new_members,
+                },
             })
         })
         .collect()
@@ -172,7 +182,8 @@ fn exports_json(config: &ShareExportConfig) -> Vec<Value> {
     config
         .roots
         .iter()
-        .map(|root| json!({ "label": root.label, "path": root.path }))
+        .map(|root| json!({ "label": root.label, "path": root.path,
+            "access": root.access, "allowSystemWrites": root.allow_system_writes }))
         .collect()
 }
 
@@ -256,7 +267,7 @@ pub(super) fn status_json(input: &StatusInput<'_>) -> Value {
     let devices: Vec<Value> = profiles
         .direct_contacts
         .iter()
-        .map(|contact| device_json(contact, input.now_secs))
+        .map(|contact| device_json(profiles, contact, input.now_secs))
         .collect();
     let (incoming, outgoing) = request_views(profiles, input.now_secs);
     let incoming: Vec<Value> = incoming
@@ -306,6 +317,9 @@ pub(super) fn status_json(input: &StatusInput<'_>) -> Value {
             "direct": exports_json(&profiles.default_direct_exports),
             "rooms": room_exports,
         },
+        "connectionExports": policy_status::connections(profiles),
+        "writeGrants": policy_status::grants(profiles),
+        "autoHomeMigrations": profiles.auto_home_migrations,
         "discovery": discovery_json(input),
         "removedDevices": removed,
         "notices": notices,
