@@ -19,6 +19,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.smartexplorer.android.R
 import app.smartexplorer.android.api.ShareStatus
+import app.smartexplorer.android.api.ShareServerInfo
 import app.smartexplorer.android.ui.common.SeIcon
 import app.smartexplorer.android.ui.more.ToggleSetting
 
@@ -38,7 +39,7 @@ internal class DeviceCardActions(
  * the Direct code for "Direct-Code hinzufügen" on other devices.
  */
 @Composable
-internal fun ThisDeviceCard(status: ShareStatus, nowMs: Long, actions: DeviceCardActions, modifier: Modifier = Modifier) {
+internal fun ThisDeviceCard(status: ShareStatus, nowMs: Long, actions: DeviceCardActions, modifier: Modifier = Modifier, serverInfo: ShareServerInfo? = null) {
     val identity = status.identity
     Card(modifier.fillMaxWidth()) {
         Column(Modifier.padding(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -60,6 +61,18 @@ internal fun ThisDeviceCard(status: ShareStatus, nowMs: Long, actions: DeviceCar
                 style = MaterialTheme.typography.bodySmall,
                 modifier = inset,
             )
+            serverInfo?.takeIf { it.server == status.server.orEmpty() }?.let { info ->
+                Text(
+                    when (info.security) {
+                        "encrypted" -> "Verschlüsselt · ${info.summary}"
+                        "plaintext" -> "⚠ Unverschlüsselt · ${info.summary}"
+                        else -> "Nur LAN"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (info.security == "plaintext") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = inset,
+                )
+            }
             if (status.lanPresence.isNotBlank()) {
                 Text("LAN: ${status.lanPresence}", style = MaterialTheme.typography.bodySmall, modifier = inset)
             }

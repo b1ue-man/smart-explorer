@@ -14,12 +14,10 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
@@ -27,21 +25,12 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.smartexplorer.android.R
-import app.smartexplorer.android.api.ShareApi
-import app.smartexplorer.android.core.CoreException
 import app.smartexplorer.android.prefs.AppPrefs
 import app.smartexplorer.android.system.Permissions
 import app.smartexplorer.android.ui.common.Format
@@ -55,7 +44,6 @@ import app.smartexplorer.android.ui.more.SubPageScaffold
 import app.smartexplorer.android.ui.more.ToggleSetting
 import app.smartexplorer.android.update.UpdateChecker
 import app.smartexplorer.android.update.UpdateState
-import kotlinx.coroutines.launch
 
 /** Section to scroll to when the settings open (notification targets). */
 enum class SettingsFocus { Background, Updates }
@@ -148,76 +136,6 @@ private fun FileListSettings() {
     ToggleSetting("Ordner zuerst", dirsFirst, AppPrefs::setDirsFirst)
     ToggleSetting("Kompakte Zeilen", compact, AppPrefs::setCompact)
     ToggleSetting("Bildvorschau", thumbnails, AppPrefs::setThumbnails)
-}
-
-/** Share server address (spec F18 "Einstellungen → Share-Server"); empty = LAN only. */
-@Composable
-private fun ShareServerSettings() {
-    val scope = rememberCoroutineScope()
-    var server by rememberSaveable { mutableStateOf("") }
-    var loaded by rememberSaveable { mutableStateOf(false) }
-    var saving by remember { mutableStateOf(false) }
-    // Field and [Speichern] stay off until the real value is known: saving the empty field after a
-    // failed load would remove a working server.
-    var loadError by remember { mutableStateOf<String?>(null) }
-    var reloadKey by remember { mutableIntStateOf(0) }
-    LaunchedEffect(reloadKey) {
-        if (loaded) return@LaunchedEffect
-        try {
-            server = ShareApi.status().server.orEmpty()
-            loadError = null
-            loaded = true
-        } catch (e: CoreException) {
-            loadError = e.message ?: e.kind
-        }
-    }
-    SectionHeader("Share-Server")
-    OutlinedTextField(
-        value = server,
-        onValueChange = { server = it },
-        label = { Text("Adresse") },
-        placeholder = { Text("wss://server.example.org") },
-        singleLine = true,
-        enabled = loaded && !saving,
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-    )
-    HintLine("Leer lassen = kein Server; Geräte finden sich dann nur im selben WLAN.")
-    val error = loadError
-    if (error != null) {
-        Text(
-            "Share-Server nicht geladen: $error",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.error,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
-        )
-        OutlinedButton(
-            onClick = {
-                loadError = null
-                reloadKey++
-            },
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-        ) { Text("Erneut laden") }
-        return
-    }
-    OutlinedButton(
-        onClick = {
-            val value = server.trim()
-            scope.launch {
-                saving = true
-                try {
-                    ShareApi.setServer(value)
-                    Snackbars.show(if (value.isEmpty()) "Share-Server entfernt – nur LAN" else "Share-Server gespeichert")
-                } catch (e: CoreException) {
-                    Snackbars.show("Nicht gespeichert: ${e.message ?: e.kind}")
-                } finally {
-                    saving = false
-                }
-            }
-        },
-        enabled = loaded && !saving,
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-    ) { Text("Speichern") }
 }
 
 @Composable

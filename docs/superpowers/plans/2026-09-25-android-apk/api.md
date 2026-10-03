@@ -19,7 +19,7 @@ JNI-Klasse `app.smartexplorer.android.core.NativeBridge` (Kotlin `object`), Bibl
   `Dispatchers.IO`). Alles, was länger als ~2 s dauern kann oder Fortschritt hat, ist ein Task (§3).
 - Antwort von `init` und `call`: `{"ok": <Wert>}` oder `{"err": {"kind": "<Art>", "message": "<Text>"}}`.
   `kind` ∈ `not_found, permission, exists, invalid, unsupported, network, auth, conflict, busy,
-  canceled, not_initialized, internal`. `message` ist deutscher Anzeigetext (wie Desktop).
+  canceled, not_initialized, internal, weak_pin`. `message` ist deutscher Anzeigetext (wie Desktop).
 - Brücke: jede Funktion fängt Paniken und Fehler und liefert dann
   `{"err":{"kind":"internal","message":"…"}}`; sie wirft nie eine Java-Exception.
 - `pollEvents` liefert `{"ok": [Event, …]}` (leeres Array bei Timeout, höchstens 256 Ereignisse).
@@ -42,8 +42,9 @@ JNI-Klasse `app.smartexplorer.android.core.NativeBridge` (Kotlin `object`), Bibl
 „Beim Start“-Jobs); `updateFeedUrl` und `startDaemon=false` nur für Tests (Debug-Build liest
 `filesDir/test-overrides.json`; sonst eingebauter Feed aus `native/update_source.txt`).
 `homeDir` muss, wenn gesetzt, ein absoluter Pfad ohne NUL sein (sonst `invalid`); ohne `homeDir`
-und ohne Volumes ist Home und Direct-Standardfreigabe der leere Ordner `<filesDir>/home`, nie das
-private `filesDir` selbst.
+und ohne Volumes ist Home der leere Ordner `<filesDir>/home`, nie das private `filesDir` selbst.
+Neue Share-Profile und Räume haben keine Standardfreigabe. Home dient weiterhin als Arbeitsordner
+und als genaue Ortsidentität für die einmalige Migration alter automatischer Home-Freigaben (§5).
 Cache-Unterordner (auch in `file_paths.xml` deklariert): `open/` (Remote-Kopien zum Öffnen),
 `share/` (Kopien zum Teilen), `update/` (APK-Download), `tmp/` (Temp-Wurzel).
 Antwort: `{"ok":{"coreVersion":"0.5.163","dataDir":"…/files/smart_explorer"}}`.
@@ -59,6 +60,9 @@ Share-Poller.
 (`/storage/emulated/0/DCIM`), `sftp://user@host:22/pfad`, `ftp://…`, `ftps://…`, `webdav://…`,
 `gdrive:///pfad`, `share://…`; zusätzlich App-intern `zip://<lokaler zip-pfad>!/<innen>`,
 `trash://` (Papierkorb). Kotlin baut nie selbst Orte zusammen, außer über Felder aus Antworten.
+Backend, Verbindung und Präfix sind Teil der Identität: gleiche relative Pfade auf verschiedenen
+Konten sind unterschiedliche Orte. Remote-Scanner, Picker und Duplikat-Papierkorb erhalten den
+vollständigen Locator einschließlich Share-Direct-/Raumidentität; kein lokaler Ersatzpfad.
 Namen bleiben wörtlich: nur führende Leerzeichen eines Orts werden ignoriert, `…/Bericht ` und
 `…/Bericht` sind verschiedene Orte. In `zip://<archiv>!/<innen>` endet das Archiv am ersten `!/`
 (oder abschließenden `!`) nach einem Namen auf `.zip`, sodass Ordner mit `!` am Namensende gehen.
@@ -93,6 +97,12 @@ sync, mirror, analyze, reclaim, trash, oauth, share, exec, update`.
 - `task.cancel {id}` → `{}` · `task.cancelAll {kind?}` → `{}` · `task.clear {ids:[String]?}` → `{}`
   (entfernt Fertige; mit `ids` nur diese – „Leeren“ der Übertragungen lässt Scans und Analysen stehen)
 - `task.get {id}` → `Task`
+- `analyze.start`, `reclaim.start` und `reclaim.recycle` melden additiv `remote:Boolean` neben
+  `taskId`. Für `remote:true` hält Kotlin die CPU während dieses Tasks wach
+  (`TaskForegroundService`, `TaskKeeper.keepCpuAwake`, Partial-Wakelock `SmartExplorer:remote-task`;
+  zehn Minuten mit Erneuerung alle 60 Sekunden und Freigabe, sobald kein solcher Task mehr läuft).
+  Task-Ende und Ergebnisaufbewahrung sind getrennt: `analyze.release`/`reclaim.release` (§4.9)
+  geben aufbewahrte Daten frei, ohne laufende Tasks als erfolgreich auszugeben.
 
 Ereignisse (`pollEvents`):
 ```text
@@ -282,7 +292,7 @@ Siehe §5.
 
 ### 4.9 Analyse (`analyze.*`, `reclaim.*`)
 - `analyze.start {location, platform:{volumeUsedBytes:Long?, otherAppsBytes:Long?, apps:[{package, label,
-  appBytes:Long, dataBytes:Long, cacheBytes:Long}]?}?}` → `{taskId}`
+  appBytes:Long, dataBytes:Long, cacheBytes:Long}]?}?}` → `{taskId, remote:Boolean}`
   (Fortschritt: `doneItems` Dateien, `doneBytes`, `message` = „N Ordner · aktueller Ordner“; `platform` nur
   für lokale Pfade: belegter Platz des Volumes der Wurzel per `StatFs`, `otherAppsBytes` =
   `ExternalStorageStats.getAppBytes()` des primären Volumes mit Nutzungszugriff; fehlend/negativ = unbekannt;
@@ -291,11 +301,13 @@ Siehe §5.
   = Daten inkl. eigenem `Android/data`, `cacheBytes` = Cache-Anteil der Daten; Einträge ohne `package` werden
   übergangen, fehlende/negative Zahlen = 0, `cacheBytes` höchstens `dataBytes`, leeres `label` = Paketname,
   doppelte Pakete zählen einmal, Apps ohne Bytes erscheinen nicht; der Kern prüft „ganzes primäres
-  Volume“ selbst und ignoriert `apps` sonst); `result = {files, dirs, bytes, issues, protected}`.
+  Volume“ selbst und ignoriert `apps` sonst); `result = {files, dirs, bytes, issues, protected, notes}`.
   `<Volume>/Android/data|obb` und alles darunter sind geschützt: keine Issues, Status vollständig, eine
   geschützte Wurzel ergibt ein leeres, vollständiges Ergebnis
 - `analyze.node {taskId, path:[String]}` → `{name, size, measured, isDir, kind, children:[{name, size, isDir,
-  childCount:Int, kind}], location:String?}` (Kinder nach Größe absteigend, höchstens 500; `kind` =
+  childCount:Int, kind}], location:String?, remote:Boolean, volumeTotal:Long?, volumeFree:Long?}`
+  (`remote` Default false; Volumezahlen nur an der Wurzel und nur wenn bekannt;
+  Kinder nach Größe absteigend, höchstens 500; `kind` =
   `dir|file|aggregate|protected|rest|apps|app`; Schätzzeilen nur in dieser Sicht: „Weitere App-Daten (laut
   Android, ≈)“ `protected` unter `Android/data` (nur ohne App-Liste), „≈ Nicht einzeln erfasst“ `rest` an einer
   ganzen Volume-Wurzel ohne andere Fehler; `size` der Vorfahren enthält sie, `measured` ist der gemessene Wert).
@@ -309,14 +321,54 @@ Siehe §5.
   `size` = `appBytes` + `dataBytes`, dazu `package`, `appBytes`, `dataBytes`, `cacheBytes` (über 500 Apps:
   die kleinsten in einer `aggregate`-Zeile); tiefere Pfade → `not_found`. Ein echter Ordner gleichen Namens an
   der Wurzel wird dann von der App-Liste verdeckt
-- `analyze.issues {taskId}` → `{count:Int, text, protectedCount:Long, protectedText}` (`count` ohne geschützte;
+- `analyze.issues {taskId}` → `{count:Int, text, notes:[String], protectedCount:Long, protectedText}`
+  (`notes` Default leer; `text` enthält nur Leseprobleme, Hinweise stehen getrennt in `notes` und
+  erscheinen an der Wurzel auch ohne Leseprobleme; `count` ohne geschützte;
   `protectedText` kann auch bei 0 gefüllt sein, wenn Android fremde App-Ordner nur ausblendet)
-- `reclaim.start {location, minSize:Long}` → `{taskId}` (lokal: jede Datei ≥ `minSize` ist Kandidat, Vergleich
+- `analyze.release {taskId}` / `reclaim.release {taskId}` → `{released:Boolean}`: gespeichertes Ergebnis
+  sofort freigeben, auch ein erst später fertig werdendes. `false` = keines aufbewahrt. Danach sind
+  Analyse-Knoten/-Hinweise und Duplikatgruppen/-Summary `not_found`. Kotlin gibt das frühere Ergebnis
+  bei neuer Suche/Analyse, „Anderer Ort“ und `onCleared` frei. Der Kern entfernt bei Speicherdruck
+  die ältesten fertigen Ergebnisse zuerst; keine feste Vier-Plätze-Kappung.
+- `reclaim.start {location, minSize:Long}` → `{taskId, remote:Boolean}` (lokal: jede Datei ≥ `minSize` ist Kandidat, Vergleich
   parallel mit SHA-256; Fortschritt `message` = Phase); `result = {groups, reclaimable, errors, candidates, protected}`
-- `reclaim.groups {taskId}` → `[{size, items:[{location, mtimeMs}]}]` (lokal alle Gruppen)
+- `reclaim.groups {taskId}` → `[{size, items:[{location, mtimeMs}], contentVerified:Boolean}]`
+  (`contentVerified` Default false, vollständiger SHA-256 als Inhaltsevidenz; MD5-/Providergruppen
+  bleiben sichtbar, berechtigen jedoch nicht zum inhaltsgebundenen Fern-Papierkorb)
 - `reclaim.summary {taskId}` → `{files, bytes, candidates, compared, groups, protectedCount, protectedText,
-  errorCount, errorText, limit:String?}` (`limit` = erreichte Walk- oder Kandidatengrenze, Text)
-- Löschen der gewählten Kopien über `fs.delete` (Papierkorb).
+  errorCount, errorText, limit:String?, remote:Boolean, canRecycle:Boolean, recycleNote:String}`
+  (`remote`/`canRecycle` Default false, `recycleNote` Default leer; `limit` = erreichte Walk-/Kandidaten-
+  Grenze als unverändert sichtbarer Kerntext; `compared` wird angezeigt). Ohne bestätigtes
+  `canRecycle` gibt es keine Papierkorbaktion. Lokale aktuelle Antworten liefern weiterhin true;
+  bei verlorener Gegenstelle bleibt der Bericht abrufbar, Fähigkeit false samt Hinweis.
+- `reclaim.recycle {taskId, locations:[String]}` → `{taskId, remote:true}`: Eingabe-ID = gespeichertes
+  Duplikatergebnis, Ausgabe-ID = neue Aktion. Orte bleiben vollständig mit Backend-/Kontoidentität.
+  Der Kern reserviert das Ergebnis, verlangt eindeutige bestätigte Pfade und eine verbleibende Kopie
+  je Gruppe; jeder Host-Aufruf trägt erwartete Größe und SHA-256. Geänderter Inhalt wird nicht bewegt.
+  Task-`result = {moved:Int}`; `reclaim.recycleResult {taskId}` → `{moved:[String]}` (Default leer)
+  liefert auch bei Teilfehler/Abbruch exakt die erfolgreich verschobenen vollständigen Orte. Kotlin
+  entfernt ausschließlich diese, danach `reclaim.release` für die Aktion. Der Kern aktualisiert
+  auch die gespeicherten Gruppen, sodass eine wiederholte Auswahl die letzte Kopie nicht entfernt.
+  Lokales Löschen verwendet weiterhin den bestehenden `fs.delete`-Papierkorbpfad.
+
+Entfernte Analyse nutzt `analytics::scan_remote`: Share analysiert auf dem Host, SFTP/SSH-Agent
+serverseitig, sonst begrenzte Backendlisten. Der gepoolte Ort wird vor Analyse/Duplikatsuche auf eine
+lebende Verbindung aufgelöst. `message` zeigt Phase, Host-Ordner, Worker-Warten, Zusammenstellen,
+Ergebnisübertragung/Prüfung und gegebenenfalls „Letzte Meldung … vor N s“ (ab fünf Sekunden).
+`doneItems` zählt Dateien; `doneBytes` zählt erfasste Bytes, `totalBytes=0`. Nur während der
+Ergebnisübertragung zählen diese Felder übertragene/gesamte Ergebnisbytes; danach wieder erfasste Bytes.
+Der begrenzte alte Hostpfad ist ausdrücklich benannt. Ergebnisdetails bleiben durch das gemeinsam
+angebotene Knoten-/Speicherbudget begrenzt, Größen und Dateizähler behalten die Gesamtwerte.
+
+Hostzahlen (`ScanOutcome.volume/platform`) werden bei `remote:true` ausschließlich von der Gegenstelle
+übernommen. Fehlende `volumeTotal`/`volumeFree`, App- oder Plattformzahlen bleiben unbekannt; kein Ersatz
+aus der Platte oder Android-App-Statistik des Empfängers. Entfernte App-Zeilen öffnen keine lokalen
+Android-App-Einstellungen. App-/Rest-/geschützte Ansichtszeilen ändern weder Baum noch Dateizähler.
+Entfernte Duplikatsuche hat keine feste 200-Dateien-Kappung: Dateien ab `minSize` werden unter dem
+Walk-/Kandidatenbudget verglichen; ohne Host-/Provider-Hash werden nur gleich große Kandidaten gelesen
+(Anfang/Ende, erst bei Gleichstand vollständiger SHA-256). Teilberichte und Budgetgründe bleiben sichtbar.
+Der Windows-Host bezeichnet seinen bestätigten remote-fähigen Speicher als Smart-Explorer-Papierkorb;
+die Fähigkeit behauptet keinen nativen Windows-Systempapierkorb. Kein permanenter Löschfallback.
 
 ### 4.10 Update (`update.*`)
 - `update.check {}` → `{current, latest, available:Boolean, notes:String?}` (`current` =
@@ -331,22 +383,30 @@ im eingebetteten Daemon; die Fassade nutzt dieselben IPC-Client-Funktionen wie d
 `open_share_backend`, `exec_share`) und dieselben `ShareProfiles::*_persisted`-Funktionen; freie
 Profiländerungen laufen über `mutate_persisted` + `merge_user_edits` (egui-freie Logik aus
 `app/core/share_profile_edits.rs`, nach `share/os/shared/` verschoben). `default_home` = `homeDir`
-aus der Init-Konfiguration (primärer Speicher, Desktop-Parität „Home“ → Standardfreigabe für
-Direkt-Geräte), Gerätename ebenso. Die Laufzeit holt Worker-Ereignisse selbst **im Prozess** am
+aus der Init-Konfiguration (primärer Speicher und genauer Legacy-Home-Migrationsfakt), Gerätename
+ebenso. Neue Profile/Räume exportieren nichts automatisch. Die Laufzeit holt Worker-Ereignisse selbst **im Prozess** am
 eingebetteten `ShareHost` ab (kein TCP): alle 300 ms, solange die Teilen-Seite sichtbar ist oder ein
 Pairing läuft (`share.watch`), sonst alle 5 s bei sichtbarer App und alle 60 s im Hintergrund
 (`sys.hostState.foreground`); sie hält den letzten Snapshot und sendet `share`/`shareRequest`.
 ```text
 ShareStatus {running, connected, relayUrl:String?, lastError:String?, server:String?,
   lanPresence:String, identity:{deviceId, deviceName, fingerprint, directCode},
-  devices:[{contactId, name, status, statusText, online:Boolean, location, lan:Boolean}],
+  devices:[{contactId, name, status, statusText, online:Boolean, location, lan:Boolean,
+            shareBack:Boolean, write:Boolean?}],
   execProvider:{available:Boolean, provider, detail},
   execTargets:[{targetKey, relation:"direct|room", roomId:String?, roomName:String?, deviceId, name,
                 fingerprint, enabled:Boolean, baseAuthorized:Boolean, policyRevision:Long}],
   rooms:[{profileId, roomId, name, status, autoJoin, location:String?,
-          members:[{deviceId, name, status, location, blocked:Boolean}]}],
+          policy:{membersMayWrite:Boolean,confirmNewMembers:Boolean},
+          members:[{deviceId, name, publicKey, nodeId, fingerprint, status, location, blocked:Boolean,
+                    admission:"Admitted|Pending"}]}],
   incoming:[Request], outgoing:[Request],
-  exports:{direct:[{label, path}], rooms:{<profileId>:[{label, path}]}},
+  exports:{direct:[{label, path, access:"read_only|read_write", allowSystemWrites:Boolean}],
+           rooms:{<profileId>:[{label,path,access,allowSystemWrites}]}},
+  connectionExports:{direct:[{account,access}],rooms:{<profileId>:[{account,access}]}},
+  writeGrants:[{deviceId,name,publicKey,nodeId,fingerprint,state:"Accepted|Ignored|Reconfirm",
+                write:Boolean,active:Boolean,canSetWrite:Boolean}],
+  autoHomeMigrations:[{scope,path}],
   discovery:{offer:{offerId, target, alias, untilMs}?, advertisements:[{discoveryId, kind:"direct|room",
              alias, expiresMs, compatible:Boolean}], exchange:{exchangeId, state:"running|done|failed|canceled",
              message:String?}?},
@@ -361,14 +421,39 @@ Request {requestId, contactId:String?, name, stateText, canAccept, canReject, ca
   Netzwechsel); wartet bis zum Ende der Probe (≤ 12 s); bei `networkChanged` zusätzlich `network_change` am
   Iroh-Endpunkt
 - `share.watch {active:Boolean}` → `{}` (Teilen-Seite sichtbar → schneller Takt)
-- `share.setServer {server}` → `{}` (Desktop-Validierung; leer = Share-Server entfernen, dann nur LAN)
+- `share.serverInfo {}` → `{server,security:"encrypted|plaintext|none",summary,plaintext:Boolean,
+  ignoredPlaintext:Int,migrated:Boolean}`: kanonische gespeicherte Adresse mit Schema/optionalem
+  Zertifikatspin. Nackte alte Adressen werden atomar zu `tcp://` umgeschrieben, ihre Bedeutung bleibt.
+  `migrated` beschreibt nur den Aufruf, der tatsächlich umgeschrieben hat; Klartext bleibt sichtbar.
+- `share.setServer {server, allowPlaintext:Boolean=false}` → gleiche Form wie `serverInfo`. Leere Eingabe
+  entfernt den Server (nur LAN). Neue Adresse ohne Schema = TLS/WSS auf Port 51820. TCP/WS/HTTP braucht
+  ausdrückliches „Unverschlüsselt erlauben“. Neue Eingaben mischen TLS und Klartext nicht, HTTPS/HTTP
+  wird als WSS/WS gespeichert. Alte Klartexteinträge einer TLS-Liste werden ignoriert und gezählt;
+  kein TLS-Klartext-Fallback. Selbst signierte Zertifikate nur per `#sha256=`-Pin. Status und Einstellungen
+  zeigen verschlüsselt beziehungsweise „⚠ unverschlüsselt“; gespeicherte Bedeutung wird nicht repariert
+  oder verschlüsselt behauptet, bevor der Nutzer eine TLS-Adresse speichert.
 - `share.setOnline {online}` → `{}` (`auto_connect`)
 - `share.setName {name}` → `{}`
-- `share.discoverable {target:"direct"|<roomProfileId>, alias, pin, minutes}` → `{}` ·
+- `share.suggestPin {}` → `{pin}` (sechs zufällige, nicht triviale ASCII-Ziffern)
+- `share.discoverable {target:"direct"|<roomProfileId>, alias, pin, minutes, allowWeakPin:Boolean=false}` → `{}` ·
   `share.stopDiscoverable {offerId}` → `{}`
+  (1–30 Minuten; PIN kürzer als sechs Unicode-Zeichen, periodische Wiederholung, einfache Ziffernfolge
+  oder häufige PIN liefert ohne Opt-in `weak_pin`. Leere PIN bleibt auch mit Opt-in `invalid`.
+  Angebot endet nach erster erfolgreicher Kopplung oder fünf Fehlversuchen; native Regeln sind maßgeblich.)
 - `share.discover {}` → `{}` (Ergebnisse erscheinen in `discovery.advertisements`)
-- `share.connect {discoveryId, pin}` → `{}` · `share.cancelConnect {exchangeId}` → `{}`
-- `share.addDirect {code, name}` → `{contactId}` (Direct-Code wie am Desktop)
+- `share.connect {discoveryId, pin, shareBack:Boolean=false}` → `{}` · `share.cancelConnect {exchangeId}` → `{}`
+  (Nichtleere fremde PINbytes unverändert, auch alte kurze PIN; nur eine ausdrückliche Rückfreigabeauswahl
+  öffnet zusätzlich eigene Freigaben. Ein Raumbeitritt erzeugt keine eigenen Exports.)
+- `share.unconfirmedPairings {}` → `{pairings:[{exchangeId,kind:"direct|roomInstalled|roomShared",
+  contactId:String?,roomProfileId:String?,label,revocable:Boolean}]}`
+- `share.resolvePairing {exchangeId,revoke:Boolean}` → `{}` oder bei Entzug der vorhandene
+  Endpoint-Cleanupbericht. `revoke:false` schließt nur den Hinweis; true entfernt den installierten
+  Kontakt/Raum. Fehlgeschlagener Entzug erhält den Hinweis; `roomShared` ist nicht zurückholbar,
+  deshalb Hinweis und gegebenenfalls neuen Raum anlegen. Unbekannte ID = `not_found`.
+- `share.addDirect {code, name, shareBack:Boolean=false}` → `{contactId,shareBack:Boolean}`
+  (kanonischer gespeicherter Wert; Wiederholung erhält ältere ausdrückliche Rechte). Bei erfolgreicher
+  Kontaktanlage und fehlgeschlagener zusätzlicher Rückfreigabe nennt der Fehler den gespeicherten Kontakt
+  und den retrybaren Weg (Hinzufügen wiederholen oder `setShareBack`), statt Erfolg zu behaupten.
 - `share.removeDevice {contactId}` → `{removedFavorites:Int, orphanedJobs:[String]}`
 - `share.readmit {deviceId}` → `{}`
 - `share.createRoom {name}` → `{profileId, code}` · `share.joinRoom {code, name}` → `{profileId}` ·
@@ -377,7 +462,51 @@ Request {requestId, contactId:String?, name, stateText, canAccept, canReject, ca
 - `share.requestAccess {contactId, message:String?}` → `{}` · `share.decide {requestId, accept:Boolean}`
   → `{}` · `share.retry {requestId}` → `{}` · `share.deleteRequest {requestId}` → `{}`
 - `share.addExport {scope:"direct"|<profileId>, path, label:String?}` → `{}` ·
-  `share.removeExport {scope, path}` → `{}` (Pfad muss existierendes Verzeichnis sein)
+  `share.removeExport {scope, path}` → `{}` (neue Rootanlage muss ein vorhandenes lokales Verzeichnis sein
+  und ist RO; Entfernen nutzt den exakten gespeicherten Pfad)
+- `share.setExportAccess {scope,path,access:"read_only|read_write",allowSystemWrites:Boolean?,
+  expectedAccess:"read_only|read_write"?}` →
+  `{persisted:true,changed:Boolean}`: bestehendes Root ändern; ausgelassenes Systemwrite-Feld erhält
+  die bewusste Einstellung. Systemorte werden nur nach zusätzlicher ausdrücklicher Auswahl beschreibbar;
+  eigene App-Daten bleiben unzugänglich. `expectedAccess` prüft das aktuelle Root-Recht innerhalb
+  derselben Profil-CAS. Android gibt es bei einer reinen Systemwrite-Änderung mit, damit ein
+  zwischenzeitlicher Entzug von RW nicht durch das unveränderte alte Recht überschrieben wird.
+- `share.connections {scope}` → `{connections:[{account,label,shared:Boolean,access:String?}],
+  sharedConnections:[{account,access}],warning}` aus dem strikten Saved-Store. Fehler wird sichtbar,
+  keine still leere Liste als neue Freigabegrundlage. Konten sind literal gespeicherte IDs/Präfixe.
+- `share.setConnectionExport {scope,account,shared:Boolean,access:"read_only|read_write"?,
+  expectedShared:Boolean?}` →
+  `{persisted:true,changed:Boolean}`: neue Auswahl RO, fehlendes `access` erhält bestehende Rechte
+  auch bei CAS-Retry. `shared:false` entfernt nur dieses Konto, auch wenn nicht mehr gespeichert,
+  und darf kein access enthalten. `expectedShared` prüft die aktuelle Auswahl innerhalb derselben
+  Profil-CAS. Android sendet bei einer Rechteänderung an einem bereits freigegebenen Konto
+  `expectedShared:true`; ein zwischenzeitlicher Entzug führt zum Fehler mit Neuladehinweis statt
+  zur erneuten Freigabe. Gespeicherte Zugangsdaten werden nur für die bewusste Auswahl benutzt.
+- `share.setContactWrite {deviceId,publicKey,nodeId,fingerprint,write:Boolean,name?}` →
+  `{persisted:true,changed:Boolean}`: volle Pins aus `writeGrants`, `nodeId` auch bei Legacy leer mitgeben.
+  Schreiben nur bei aktueller aktiver Identität; kein neuer Grant, keine Aufhebung eines Entzugs als Reparatur.
+- `share.allowGrantAgain {deviceId,publicKey,nodeId,fingerprint,name?}` → `{persisted:true,changed:Boolean}`:
+  bestehende inaktive lokale Grantidentität bewusst wieder zulassen; volle Pins und eindeutige Geräte-ID
+  werden erneut geprüft. Kein Exec-Opt-in. `share.readmit` bleibt für gespeicherte entfernte Geräte erhalten.
+- `share.withdrawGrant {deviceId,publicKey,nodeId,fingerprint,name?}` → `{persisted:true,changed:true}`:
+  expliziter Entzug auch eines rein eingehenden Grants ohne `contactId`. Innerhalb derselben CAS werden
+  die eindeutigen vollständigen Pins erneut geprüft und der zentrale Schlüssel-/Knotenentzug samt
+  Alias-/Legacy-Historie und Exec-Entzug verwendet. Das Grant bleibt Ignored für bewusste Wiederzulassung;
+  kein freies Secretcleanup und kein stilles Löschen der Widerrufshistorie.
+- `share.setShareBack {contactId,shareBack:Boolean}` → `{persisted:true,changed:Boolean}`:
+  bewusst an kann erneut freigeben, aus entfernt keine frühere ausdrückliche Freigabe. Entzug ist separat.
+- `share.setRoomPolicy {profileId,roomId,membersMayWrite:Boolean?,confirmNewMembers:Boolean?}` →
+  `{persisted:true,changed:Boolean}`; mindestens ein Feld. Exakte Profil-/Raumidentität erforderlich;
+  Android sendet nur die geänderten Felder, damit die Bestätigungswahl kein unverändertes altes
+  Schreibrecht erneut setzt. Pending/Blocked werden dadurch nicht zugelassen und Exec wird nicht aktiviert.
+- `share.setRoomMember {profileId,roomId,deviceId,publicKey,nodeId,fingerprint,name?,
+  action:"admit|block|allow"}` → `{persisted:true,changed:Boolean}`: eindeutige volle Mitgliedspins
+  erneut im neuesten Profil prüfen; Pending bewusst zulassen, Identität sperren oder wieder zulassen.
+  Namensähnlichkeit genügt nicht. Wiederzulassen aktiviert keine Befehle.
+- `share.policy {}` → `{requests:"Ask|AutoAccept",warning:String?}` aus dem vorhandenen privaten
+  Gerätepräferenzstore; fehlende/kaputte Datei wirkt als Ask mit Hinweis.
+- `share.setPolicy {requests:"Ask|AutoAccept"}` → `{requests,persisted:true}`: ausdrücklicher Opt-in
+  für AutoAccept, keine neue Policydatei und keine Löschung der Withdraw-/Legacy-Historie.
 - `share.exec {location, command, shell:Boolean, timeoutSecs:Int}` → `{taskId}`;
   `result = {stdout, stderr, exitCode:Int?, timedOut, truncated}` (`daemon::exec_share`, Ausgabe ≤ 1 MiB;
   `shell:false` trennt an Leerraum, Anführungszeichen gruppieren, ein Backslash ist wörtlich außer vor
@@ -401,3 +530,34 @@ Request {requestId, contactId:String?, name, stateText, canAccept, canReject, ca
     unsortiert (die App sortiert)
   - `share.cancelExecJob {direction, execId, peerDeviceId}` → `{}` (nicht mehr aktiv → `not_found`)
 Nicht auf Android: LAN-Uplink, Anfragen im Altformat.
+
+FC1-Kompatibilität: Persistente Legacy-Roots ohne `access` behalten RW, alte Grants ohne `write` true,
+alte Raumpolicy ihr bisheriges Schreibrecht. Neue Roots/Konten sind RO, neue Grants/Räume ohne Schreiben,
+neue Kontakte ohne Share-back. Kotlin zeigt fehlende neue Rechtefelder als unbekannt statt ein Opt-in zu
+erfinden. Nur exakt identifizierte alte automatische Home-Roots werden einmalig RO; der dauerhafte
+`autoHomeMigrations`-Hinweis bietet „Schreiben wieder erlauben“. Dies ändert nur das Root-Recht und
+öffnet weder Kontakt-, Raum- noch Exec-Rechte. Alle bestehenden IDs/Locators bleiben erhalten.
+`devices.write:null` bedeutet keine eindeutig verknüpfte lokale Freigabe; `writeGrants.write` ist die
+gespeicherte Einstellung, `active` die aktuelle Grant-/Removed-Prüfung, `canSetWrite` erlaubt auch den
+Entzug eines alten inaktiven Schreibflags. Der Core speichert Migration vor Rückgabe, begrenzt reale
+Profilbytes/Encoding auf 1 MiB und behält beide Widerrufs-Ledger ohne 64er-Eviction.
+
+Die Policy-Schreibantwort bestätigt die persistierte Datei, nicht den synchronen Abschluss aller
+Transportsitzungen; Workerfehler bleiben im Log/Status. Android zeigt neue Rechte erst nach Erfolg und
+Status-Neuladung. Unveränderte Rechte werden nicht erneut gespeichert. Dialogeingaben bleiben bei Fehlern erhalten, Aktionsfehler besitzen einen expliziten
+Retry und werden durch erfolgreiche Statuspolls nicht gelöscht. Ein fehlgeschlagener Entzug oder eine
+fehlende Gegenbestätigung wird nicht als abgeschlossener Erfolg dargestellt. Registrierung/Transport-
+Status oder Offline-Flags löschen keine Withdraw-/Legacy-Historie. Neue Share-Server-Schlüsselanmeldung
+(`key_login_v1`) und gebundene Direct-/Raumnachweise sind interne Protokolldeltas, keine Kotlin-Methoden;
+Legacy-Server-Kompatibilität hat keinen automatischen Grant-/Exec-Opt-in zur Folge.
+Die private Dateifassade aus S-LOCAL stellt für vorhandene Gerätepräferenzen/Profile ownergebundene
+No-follow-/Hardlinkprüfungen, exklusive private Stufen, Datei-Sync und atomare Ersatzspeicherung bereit;
+I/O-Fehler werden weitergereicht. Dies ergänzt keine Kotlin-Route, keine pauschale Freigabe und keine
+neue LAN-Autorität. LAN-Uplink/S09-Linkauthentisierung bleiben andere Owner-Grenzen.
+
+Interne Fernanalyse-Deltas: IPC `AnalyzeShare.node_budget` ist optional mit Default `None`; Clients
+binden Empfang und ältere Listing-/Baumpfade vor Allokation an dasselbe Progress-Budget. Agentprotokoll
+11 ergänzt `WireMeta.special` (Flagbit 1 neben Linkbit 0) und Watch-Kind 4 (`ReadyPartial`); Kind 0 bleibt
+vollständige Bereitschaft. Share-Watch `complete:false` und Duplicate-Teil `more:false` sind additive
+Legacy-Defaults; unvollständige Watchabdeckung behält periodische Abfragen. Diese Drahtfelder ändern keine
+Kotlin-Ortsidentität und gemischte Agent-Binärversionen werden nicht stillschweigend dekodiert.

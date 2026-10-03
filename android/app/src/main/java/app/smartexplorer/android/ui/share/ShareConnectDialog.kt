@@ -55,10 +55,13 @@ internal fun ConnectDeviceDialog(vm: ShareViewModel, onDismiss: () -> Unit) {
     var cancelWanted by remember { mutableStateOf(false) }
     // Exchange visible before [Verbinden]; only a newer one belongs to this attempt.
     var previousExchange by remember { mutableStateOf<String?>(null) }
+    var attempted by remember { mutableStateOf(false) }
     var failure by remember { mutableStateOf<String?>(null) }
+    var shareBack by remember { mutableStateOf(false) }
+    var unconfirmedEnd by remember { mutableStateOf(false) }
+    var checkingResult by remember { mutableStateOf(false) }
     val discovery = vm.status?.discovery
     val attempt = discovery?.exchange?.takeIf { it.exchangeId != previousExchange }
-    val exchange = attempt?.takeIf { connecting }
 
     fun cancelExchange(exchangeId: String) = vm.act("Nicht abgebrochen") { ShareApi.cancelConnect(exchangeId) }
 
@@ -73,8 +76,24 @@ internal fun ConnectDeviceDialog(vm: ShareViewModel, onDismiss: () -> Unit) {
             delay(DISCOVER_INTERVAL_MS)
         }
     }
-    LaunchedEffect(exchange?.exchangeId, exchange?.state) {
-        val current = exchange ?: return@LaunchedEffect
+    LaunchedEffect(attempt?.exchangeId, attempt?.state, vm.unconfirmed, vm.pairingsKnown, connecting, checkingResult) {
+        val current = attempt ?: return@LaunchedEffect
+        if (!attempted) return@LaunchedEffect
+        if (vm.pairingsKnown && vm.unconfirmed.any { it.exchangeId == current.exchangeId }) {
+            connecting = false
+            checkingResult = false
+            unconfirmedEnd = true
+            failure = "Gekoppelt – Bestätigung fehlt. Nach dem Schließen unter Teilen bewusst behalten oder widerrufen."
+            return@LaunchedEffect
+        }
+        if (!connecting && !checkingResult) return@LaunchedEffect
+        if (current.state != "running" && !vm.pairingsKnown) {
+            checkingResult = true
+            connecting = false
+            failure = "Kopplungsergebnis noch nicht abgeglichen. Status erneut laden; eine bereits installierte Kopplung wird dabei nicht entfernt."
+            return@LaunchedEffect
+        }
+        checkingResult = false
         when (current.state) {
             "done" -> {
                 Snackbars.show(chosen?.alias?.takeIf { it.isNotBlank() }?.let { "Verbunden mit $it" } ?: "Verbunden")
@@ -90,10 +109,21 @@ internal fun ConnectDeviceDialog(vm: ShareViewModel, onDismiss: () -> Unit) {
             }
         }
     }
-    LaunchedEffect(cancelWanted, attempt?.exchangeId, attempt?.state) {
+    LaunchedEffect(cancelWanted, attempt?.exchangeId, attempt?.state, vm.pairingsKnown, vm.unconfirmed) {
         val current = attempt ?: return@LaunchedEffect
         if (!cancelWanted) return@LaunchedEffect
+        if (current.state != "running" && !vm.pairingsKnown) {
+            cancelWanted = false
+            checkingResult = true
+            failure = "Kopplungsergebnis noch nicht abgeglichen. Bitte den Status erneut laden."
+            return@LaunchedEffect
+        }
         cancelWanted = false
+        if (vm.unconfirmed.any { it.exchangeId == current.exchangeId }) {
+            unconfirmedEnd = true
+            failure = "Gekoppelt – Bestätigung fehlt. Unter Teilen bewusst behalten oder widerrufen."
+            return@LaunchedEffect
+        }
         when (current.state) {
             "running" -> {
                 cancelExchange(current.exchangeId)
@@ -136,20 +166,33 @@ internal fun ConnectDeviceDialog(vm: ShareViewModel, onDismiss: () -> Unit) {
                         Text("Breche ab …", style = MaterialTheme.typography.bodyMedium)
                         LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                     }
-                    target != null -> OutlinedTextField(
-                        value = pin,
-                        onValueChange = { pin = it },
-                        label = { Text("PIN des anderen Geräts") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
+                    target != null -> {
+                        OutlinedTextField(
+                            value = pin,
+                            onValueChange = { pin = it },
+                            label = { Text("PIN des anderen Geräts") },
+                            singleLine = true,
+                            enabled = !unconfirmedEnd && !checkingResult,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        if (target.kind == SHARE_DIRECT) {
+                            ShareChoice("Auch meine Freigaben für dieses Gerät öffnen", shareBack, !unconfirmedEnd && !checkingResult) { shareBack = it }
+                            Text("Ohne diese Wahl entsteht kein neuer Zugriff auf deine Freigaben. Vorhandene bewusste Rechte bleiben erhalten.")
+                        } else {
+                            Text("Raumbeitritt legt keine eigenen Freigaben an.")
+                        }
+                    }
                     else -> AdvertList(
                         discovery?.advertisements.orEmpty(),
                         onChoose = {
                             chosen = it
                             pin = ""
                             failure = null
+                            shareBack = false
+                            unconfirmedEnd = false
+                            attempted = false
+                            checkingResult = false
                         },
                     )
                 }
@@ -168,15 +211,20 @@ internal fun ConnectDeviceDialog(vm: ShareViewModel, onDismiss: () -> Unit) {
                     }
                 }) { Text("Abbrechen") }
                 cancelWanted -> Unit
+                unconfirmedEnd -> TextButton(onClick = onDismiss) { Text("Unter Teilen entscheiden") }
+                checkingResult -> TextButton(onClick = { vm.reload() }) { Text("Status erneut laden") }
                 target != null -> TextButton(
                     onClick = {
                         previousExchange = discovery?.exchange?.exchangeId
                         failure = null
                         cancelWanted = false
                         connecting = true
+                        attempted = true
+                        val selectedPin = pin
+                        val selectedShareBack = target.kind == SHARE_DIRECT && shareBack
                         scope.launch {
                             try {
-                                ShareApi.connect(target.discoveryId, pin)
+                                ShareApi.connect(target.discoveryId, selectedPin, selectedShareBack)
                             } catch (e: CoreException) {
                                 // No exchange was started, so there is nothing left to cancel.
                                 connecting = false
@@ -196,6 +244,10 @@ internal fun ConnectDeviceDialog(vm: ShareViewModel, onDismiss: () -> Unit) {
                 TextButton(onClick = {
                     chosen = null
                     failure = null
+                    shareBack = false
+                    unconfirmedEnd = false
+                    attempted = false
+                    checkingResult = false
                 }) { Text("Zurück") }
             }
         },

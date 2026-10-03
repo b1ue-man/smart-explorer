@@ -28,6 +28,8 @@ data class ShareDevice(
     val online: Boolean = false,
     val location: String = "",
     val lan: Boolean = false,
+    val shareBack: Boolean = false,
+    val write: Boolean? = null,
 )
 
 @Serializable
@@ -37,6 +39,10 @@ data class ShareMember(
     val status: String = "",
     val location: String = "",
     val blocked: Boolean = false,
+    val admission: String? = null,
+    val publicKey: String? = null,
+    val nodeId: String? = null,
+    val fingerprint: String? = null,
 )
 
 @Serializable
@@ -48,6 +54,7 @@ data class ShareRoom(
     val autoJoin: Boolean = false,
     val location: String? = null,
     val members: List<ShareMember> = emptyList(),
+    val policy: ShareRoomPolicy? = null,
 )
 
 /** api.md `Request` (named apart from `CoreEvent.ShareRequest`). */
@@ -67,7 +74,12 @@ data class ShareRequestInfo(
 
 /** A local folder this device offers. */
 @Serializable
-data class ShareExport(val label: String = "", val path: String)
+data class ShareExport(
+    val label: String = "",
+    val path: String,
+    val access: String? = null,
+    val allowSystemWrites: Boolean? = null,
+)
 
 /** Exports for Direct devices and per room (`rooms` keyed by room profile id). */
 @Serializable
@@ -156,6 +168,9 @@ data class ShareStatus(
     val removedDevices: List<RemovedDevice> = emptyList(),
     val notices: List<String> = emptyList(),
     val power: SharePower = SharePower(),
+    val connectionExports: ShareConnectionExports = ShareConnectionExports(),
+    val writeGrants: List<ShareWriteGrant>? = null,
+    val autoHomeMigrations: List<ShareHomeMigration> = emptyList(),
 )
 
 /** `share.createRoom` */
@@ -192,8 +207,10 @@ object ShareApi {
         Core.request<ShareWake>("share.wake", buildJsonObject { put("networkChanged", networkChanged) })
 
     /** Empty [server] removes the Share server (LAN only). */
-    suspend fun setServer(server: String) {
-        Core.call("share.setServer", buildJsonObject { put("server", server) })
+    suspend fun setServer(server: String) = setServer(server, allowPlaintext = false)
+
+    suspend fun setServer(server: String, allowPlaintext: Boolean) {
+        ShareSecurityApi.setServer(server, allowPlaintext)
     }
 
     suspend fun setOnline(online: Boolean) {
@@ -205,7 +222,10 @@ object ShareApi {
     }
 
     /** [target] `direct` or a room profile id. */
-    suspend fun discoverable(target: String, alias: String, pin: String, minutes: Int) {
+    suspend fun discoverable(target: String, alias: String, pin: String, minutes: Int) =
+        discoverable(target, alias, pin, minutes, allowWeakPin = false)
+
+    suspend fun discoverable(target: String, alias: String, pin: String, minutes: Int, allowWeakPin: Boolean) {
         Core.call(
             "share.discoverable",
             buildJsonObject {
@@ -213,6 +233,7 @@ object ShareApi {
                 put("alias", alias)
                 put("pin", pin)
                 put("minutes", minutes)
+                put("allowWeakPin", allowWeakPin)
             },
         )
     }
@@ -226,12 +247,15 @@ object ShareApi {
         Core.call("share.discover")
     }
 
-    suspend fun connect(discoveryId: String, pin: String) {
+    suspend fun connect(discoveryId: String, pin: String) = connect(discoveryId, pin, shareBack = false)
+
+    suspend fun connect(discoveryId: String, pin: String, shareBack: Boolean) {
         Core.call(
             "share.connect",
             buildJsonObject {
                 put("discoveryId", discoveryId)
                 put("pin", pin)
+                put("shareBack", shareBack)
             },
         )
     }
@@ -241,11 +265,14 @@ object ShareApi {
     }
 
     /** Adds a Direct device by its code; returns the contact id. */
-    suspend fun addDirect(code: String, name: String): String = Core.request<ContactRef>(
+    suspend fun addDirect(code: String, name: String): String = addDirect(code, name, shareBack = false)
+
+    suspend fun addDirect(code: String, name: String, shareBack: Boolean): String = Core.request<ContactRef>(
         "share.addDirect",
         buildJsonObject {
             put("code", code)
             put("name", name)
+            put("shareBack", shareBack)
         },
     ).contactId
 

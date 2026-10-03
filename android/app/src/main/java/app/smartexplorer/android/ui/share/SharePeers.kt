@@ -41,6 +41,9 @@ internal class PeerActions(
     val showRoomCode: (ShareRoom) -> Unit,
     val leaveRoom: (ShareRoom) -> Unit,
     val removeRoom: (ShareRoom) -> Unit,
+    val shareBack: (ShareDevice) -> Unit,
+    val roomPolicy: (ShareRoom) -> Unit,
+    val roomMember: (ShareRoom, ShareMember, String) -> Unit,
 )
 
 /** Section "Geräte": Direct devices; tap opens the device's files. */
@@ -61,10 +64,12 @@ private fun DeviceRow(device: ShareDevice, actions: PeerActions) {
     val status = buildString {
         append(device.statusText.ifBlank { statusLabel(device.status) })
         if (device.lan) append(" · LAN")
+        append(if (device.shareBack) " · Rückfreigabe an" else " · Keine neue Rückfreigabe")
+        device.write?.let { append(if (it) " · Schreibrecht" else " · Nur lesen") }
     }
     ListItem(
         headlineContent = { Text(name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-        supportingContent = { Text(status, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+        supportingContent = { Text(status, maxLines = 3, overflow = TextOverflow.Ellipsis) },
         leadingContent = {
             SeIcon(
                 R.drawable.ic_device,
@@ -79,6 +84,7 @@ private fun DeviceRow(device: ShareDevice, actions: PeerActions) {
                     "Datei senden" to { actions.sendFiles(target) },
                     "Befehl ausführen" to { actions.exec(target) },
                     "Zugriff anfragen" to { actions.requestAccess(device) },
+                    "Eigene Freigaben…" to { actions.shareBack(device) },
                     "Entfernen" to { actions.removeDevice(device) },
                 ),
             )
@@ -108,7 +114,10 @@ private fun RoomBlock(room: ShareRoom, actions: PeerActions) {
         headlineContent = { Text(name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         supportingContent = {
             val state = if (room.autoJoin) statusLabel(room.status) else "Verlassen"
-            Text("$state · $members ${if (members == 1) "Mitglied" else "Mitglieder"}")
+            val pending = room.members.count { it.admission == "Pending" }
+            val rights = room.policy?.let { if (it.membersMayWrite) "Mitglieder dürfen schreiben" else "Mitglieder nur lesend" } ?: "Rechte unbekannt"
+            Text("$state · $members ${if (members == 1) "Mitglied" else "Mitglieder"}" +
+                (if (pending > 0) " · $pending warten auf Zustimmung" else "") + "\n$rights")
         },
         leadingContent = { SeIcon(R.drawable.ic_room, contentDescription = null) },
         trailingContent = {
@@ -124,6 +133,7 @@ private fun RoomBlock(room: ShareRoom, actions: PeerActions) {
                 RowMenu(
                     buildList<Pair<String, () -> Unit>> {
                         add("Code anzeigen" to { actions.showRoomCode(room) })
+                        add("Rechte und Bestätigung…" to { actions.roomPolicy(room) })
                         if (room.autoJoin) add("Verlassen" to { actions.leaveRoom(room) })
                         add("Entfernen" to { actions.removeRoom(room) })
                     },
@@ -140,32 +150,34 @@ private fun RoomBlock(room: ShareRoom, actions: PeerActions) {
     )
     if (expanded) {
         Column(Modifier.padding(start = 24.dp)) {
-            room.members.forEach { member -> MemberRow(member, actions) }
+            room.members.forEach { member -> MemberRow(room, member, actions) }
         }
     }
 }
 
 @Composable
-private fun MemberRow(member: ShareMember, actions: PeerActions) {
+private fun MemberRow(room: ShareRoom, member: ShareMember, actions: PeerActions) {
     val name = member.name.ifBlank { "Gerät" }
     val target = PeerTarget(name, member.location)
-    val usable = member.location.isNotBlank() && !member.blocked
+    val pending = member.admission == "Pending"
+    val usable = member.location.isNotBlank() && !member.blocked && !pending
     ListItem(
         headlineContent = { Text(name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-        supportingContent = { Text(if (member.blocked) "Gesperrt" else statusLabel(member.status)) },
+        supportingContent = { Text(if (member.blocked) "Gesperrt" else if (pending) "Wartet auf deine Zustimmung" else statusLabel(member.status)) },
         leadingContent = { SeIcon(R.drawable.ic_device, contentDescription = null) },
-        trailingContent = if (usable) {
-            {
-                RowMenu(
-                    listOf(
-                        "Dateien öffnen" to { actions.open(member.location) },
-                        "Datei senden" to { actions.sendFiles(target) },
-                        "Befehl ausführen" to { actions.exec(target) },
-                    ),
-                )
-            }
-        } else {
-            null
+        trailingContent = {
+            RowMenu(buildList<Pair<String, () -> Unit>> {
+                if (usable) {
+                    add("Dateien öffnen" to { actions.open(member.location) })
+                    add("Datei senden" to { actions.sendFiles(target) })
+                    add("Befehl ausführen" to { actions.exec(target) })
+                }
+                when {
+                    member.blocked -> add("Wieder zulassen…" to { actions.roomMember(room, member, "allow") })
+                    pending -> add("Zulassen…" to { actions.roomMember(room, member, "admit") })
+                    else -> add("Sperren…" to { actions.roomMember(room, member, "block") })
+                }
+            })
         },
         modifier = Modifier.clickable(enabled = usable) { actions.open(member.location) },
     )
