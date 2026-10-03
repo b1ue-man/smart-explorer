@@ -18,6 +18,7 @@ pub(super) fn request_label(request: &FsRequest) -> &'static str {
         FsRequest::Rename { .. } => "rename",
         FsRequest::RenameNoReplace { .. } => "rename_no_replace",
         FsRequest::PromoteStaged { .. } => "promote_staged",
+        FsRequest::ReplaceStagedReversible(_) => "replace_staged_reversible",
         FsRequest::CopyFile { .. } => "copy_file",
         FsRequest::RemoveFile { .. } => "remove_file",
         FsRequest::RemoveDir { .. } => "remove_dir",
@@ -66,6 +67,7 @@ pub(super) fn response_summary(response: &FsResponse) -> String {
         FsResponse::Entries { entries } => format!("{} Eintraege", entries.len()),
         FsResponse::Meta { meta } => format!("meta size={} dir={}", meta.size, meta.is_dir),
         FsResponse::ChildPath { .. } => "kindpfad".into(),
+        FsResponse::ReversibleReplaced { replaced } => format!("reversible ersetzt={replaced}"),
         FsResponse::WalkBatch {
             nodes,
             files,

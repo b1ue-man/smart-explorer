@@ -197,6 +197,8 @@ pub(crate) enum FsRequest {
         staged: String,
         destination: String,
     },
+    /// `reversible_replace_v1`: retain the original at a journaled sibling.
+    ReplaceStagedReversible(FsReversibleReplace),
     CopyFile {
         src: String,
         dst: String,
@@ -291,6 +293,7 @@ impl FsRequest {
             | Self::Rename { .. }
             | Self::RenameNoReplace { .. }
             | Self::PromoteStaged { .. }
+            | Self::ReplaceStagedReversible(_)
             | Self::PromoteNoReplace { .. }
             | Self::CopyFile { .. }
             | Self::RemoveFile { .. }
@@ -328,4 +331,12 @@ impl FsRequest {
                 | Self::DiscardStage { .. }
         )
     }
+}
+
+/// The caller persists recovery intent before sending this mutation once.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct FsReversibleReplace {
+    pub(crate) staged: String,
+    pub(crate) destination: String,
+    pub(crate) retained: String,
 }

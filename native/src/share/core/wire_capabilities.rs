@@ -44,6 +44,9 @@ pub(crate) struct FsHostFeatures {
     /// `SyncChildPath`: build a child from a literal listing name.
     #[serde(default, skip_serializing_if = "is_false")]
     pub(crate) literal_children_v1: bool,
+    /// `ReplaceStagedReversible`: one non-replayed, journaled publication.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) reversible_replace_v1: bool,
 }
 
 impl FsHostFeatures {
@@ -60,6 +63,7 @@ impl FsHostFeatures {
             watch_v1: true,
             export_access_v1: true,
             literal_children_v1: true,
+            reversible_replace_v1: true,
         }
     }
 
@@ -80,6 +84,7 @@ impl FsHostFeatures {
             (self.watch_v1, "watch_v1"),
             (self.export_access_v1, "export_access_v1"),
             (self.literal_children_v1, "literal_children_v1"),
+            (self.reversible_replace_v1, "reversible_replace_v1"),
         ]
         .into_iter()
         .filter_map(|(offered, name)| offered.then_some(name))

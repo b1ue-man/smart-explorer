@@ -6,8 +6,13 @@ use crate::{analytics::{DuplicateReport, ReclaimProgress}, vfs::{Backend, Backen
 use super::{backend::PeerBackend, peer_stream, wire::{FsRecycle, FsRequest, FsResponse, FsStageDurability, FsStageFinish, FsSyncFilesystem}};
 #[path = "peer_literal_paths.rs"]
 pub(super) mod literal_paths;
+#[path = "peer_reversible_replace.rs"]
+pub(super) mod reversible_replace;
 
 impl BackendExtensions for PeerBackend {
+    fn replace_staged_reversible(&self, staged: &str, destination: &str, retained: &str) -> io::Result<bool> {
+        reversible_replace::client(self, staged, destination, retained)
+    }
     fn sync_child_path(&self, parent: &str, literal_name: &str) -> io::Result<String> {
         literal_paths::client(self, parent, literal_name)
     }
