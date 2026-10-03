@@ -40,3 +40,21 @@ zero-compute. Nach Abschluss werden alle Korrekturen zusammen committed/gepusht
 und ausschließlich `review-task.yml`/`native/test-review-task.sh` erneut ausgelöst.
 Die bestehenden inkrementellen Ausgaben bleiben erhalten. Der Release wartet
 weiter auf erfolgreiche Gesamtauswertung.
+
+## Quellenabschluss des Korrektursatzes
+
+Alle zugewiesenen Diagnosen haben eine konkrete Korrektur; die sieben Worker
+sind beendet. Berichte: `abnahme/CI-1-*.md`. Kohäsive Commits: `ab703cef`
+(A-CLIENT), `37504569` (Vault-Fixture), `7f140b84` (T-JOBS), `b04dda8b`
+(H-ANALYSIS), `63f680ec` (V-LOCAL/V-REMOTE), `f1a7d0e6` (S-REVOKE),
+`9d2b5a20` (S-SIGNAL) und `75b8d3dd` (E-ENGINE), zusätzlich die
+kandidatgeprüfte Remote-Formatierung `692fe162`.
+
+Die schon vorhandenen Rename-Swap-/Ignore-/Cancel-/Budget-Symbole werden im
+selben vollständigen Einstieg ausdrücklich ausgewählt. Sie bestätigen die
+heute angeschlossene recorded Run-/Index-ID-Grenze und ihre direkt betroffenen
+Auslassungs-/Abbruchverträge; es entstehen keine neuen Tests oder separaten
+Läufe. Root aktualisiert nach allen Quellen den vollständigen AST-Graph.
+Statisches Parsing und identische ausgelagerte Bodies ersetzen keine
+Typ-/Laufzeitabnahme. Der korrigierte Kandidat wartet auf genau denselben
+Remote-Einstieg und anschließend den einen terminalen Release.

@@ -24,7 +24,11 @@ EXTRA = ["walks_searches_and_hashes_report_listing_failures",
     "desktop_merge_rejects_lossy_and_mixed_text_without_changing_bytes",
     "desktop_job_state_failed_attempt_does_not_hide_prior_success",
     "desktop_job_state_block_takes_precedence_over_old_success_result",
-    "apply_one_removes_action_only_after_success"]
+    "apply_one_removes_action_only_after_success",
+    "rename_swap_copies_both_final_paths_without_deleting_them",
+    "rename_swap_applies_and_persists_both_final_paths",
+    "ignored_remove_feed_never_becomes_a_delete_action",
+    "canceled_and_over_budget_feeds_fail_closed"]
 LINUX = ["link_like_destination_root_never_reaches_external_victim",
     "link_like_destination_child_never_receives_copied_content",
     "android_shared_storage_revoke_selection_and_weak_lifetime",
