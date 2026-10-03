@@ -25,6 +25,7 @@ fn grant(device_id: &str, name: &str, state: DirectGrantState, enabled: bool) ->
             policy_revision: if enabled { 7 } else { 0 },
             ..ExecGrant::default()
         },
+        write: false,
     }
 }
 
@@ -42,6 +43,7 @@ fn member(device_id: &str, name: &str, blocked: bool) -> RoomMember {
         blocked,
         exec: ExecGrant::default(),
         presence: None,
+        relation: Default::default(),
     }
 }
 
@@ -68,6 +70,7 @@ fn profiles() -> ShareProfiles {
             member("0123456789abcdef", " ", true),
         ],
         exports: Default::default(),
+        policy: crate::share::RoomPolicy::new_room(),
     });
     profiles
 }

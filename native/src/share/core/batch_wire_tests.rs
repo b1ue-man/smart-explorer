@@ -181,6 +181,7 @@ fn transfer_engine_task_capabilities_stay_additive() {
         replace: true,
         namespace_replace: true,
         transfer: FsTransferCapabilities::host(),
+        ..Default::default()
     };
     let encoded = serde_json::to_string(&current).unwrap();
     #[derive(serde::Deserialize)]

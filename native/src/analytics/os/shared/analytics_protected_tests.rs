@@ -39,7 +39,7 @@ fn android_background_task_protected_denials_keep_the_result_complete() {
     let (_fixture, root) = volume();
     let areas = ProtectedAreas::for_walk_in(&root, std::slice::from_ref(&root));
     let progress = Progress::default();
-    let outcome = scan_in(&root, &progress, Some(&deny_foreign), Some(areas));
+    let outcome = scan_in(&root, &progress, Some(&deny_foreign), Some(areas), None);
     assert_eq!(outcome.status, ScanStatus::Complete, "{:?}", outcome.issues);
     assert!(outcome.issues.is_empty());
     assert_eq!(outcome.permission_denied, 0);
@@ -62,7 +62,7 @@ fn android_background_task_protected_root_is_complete_and_empty() {
     let volumes = [root.clone()];
     let gone = root.join("Android/data/gone");
     let areas = ProtectedAreas::for_walk_in(&gone, &volumes);
-    let outcome = scan_in(&gone, &Progress::default(), None, Some(areas));
+    let outcome = scan_in(&gone, &Progress::default(), None, Some(areas), None);
     assert_eq!(outcome.status, ScanStatus::Complete);
     assert!(outcome.issues.is_empty());
     assert_eq!(outcome.protected, [omission(&root.join("Android/data"), 1)]);
@@ -76,6 +76,7 @@ fn android_background_task_protected_root_is_complete_and_empty() {
         &Progress::default(),
         Some(&deny_foreign),
         Some(areas),
+        None,
     );
     assert_eq!(outcome.status, ScanStatus::Complete);
     assert_eq!(outcome.protected, [omission(&data, 1)]);
@@ -138,6 +139,7 @@ fn android_background_task_walks_without_volumes_keep_reporting_denials() {
         &Progress::default(),
         Some(&deny_foreign),
         Some(ProtectedAreas::default()),
+        None,
     );
     assert_eq!(outcome.status, ScanStatus::Partial);
     assert_eq!(outcome.permission_denied, 1);

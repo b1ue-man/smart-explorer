@@ -2,11 +2,12 @@ use super::*;
 
 fn export(root: &std::path::Path) -> FsAccess {
     FsAccess::dynamic(crate::share::fs::ShareExportConfig {
-        roots: vec![crate::share::fs::SharedRoot {
-            label: "A".into(),
-            path: root.to_string_lossy().replace('\\', "/"),
-        }],
-        include_connections: false,
+        roots: vec![crate::share::fs::SharedRoot::new(
+            "A",
+            root.to_string_lossy().replace('\\', "/"),
+        )
+        .with_access(crate::share::ExportAccess::ReadWrite)],
+        ..Default::default()
     })
 }
 

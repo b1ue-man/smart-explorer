@@ -2,14 +2,12 @@ use std::sync::{Arc, Mutex};
 
 use super::mutate_exec_grant;
 use crate::share::core::public_fingerprint;
-use crate::share::direct_reciprocal_coordinator::DirectReciprocalCoordinator;
 use crate::share::direct_protocol::DirectPeerIdentity;
+use crate::share::direct_reciprocal_coordinator::DirectReciprocalCoordinator;
 use crate::share::fs::ShareExportConfig;
 use crate::share::identity::ShareIdentity;
 use crate::share::node::ShareIrohNode;
-use crate::share::types::{
-    DirectGrant, DirectGrantState, ExecGrantTarget, ShareAuthState,
-};
+use crate::share::types::{DirectGrant, DirectGrantState, ExecGrantTarget, ShareAuthState};
 
 #[test]
 fn share_remote_task_reciprocal_exec_grant_epoch_resynchronizes_coordinator() {
@@ -32,7 +30,8 @@ fn share_remote_task_reciprocal_exec_grant_epoch_resynchronizes_coordinator() {
     let (events, _receiver) = crossbeam_channel::unbounded();
     let node = ShareIrohNode::start("", &local, auth.clone(), events).unwrap();
     let coordinator = Arc::new(DirectReciprocalCoordinator::detached_for_task_test(31));
-    node.install_direct_repair_coordinator(&coordinator).unwrap();
+    node.install_direct_repair_coordinator(&coordinator)
+        .unwrap();
 
     let mutation = mutate_exec_grant(
         &auth,
@@ -79,5 +78,6 @@ fn direct_grant(identity: &DirectPeerIdentity) -> DirectGrant {
         state: DirectGrantState::Accepted,
         updated_at: 1,
         exec: Default::default(),
+        write: false,
     }
 }

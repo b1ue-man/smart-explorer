@@ -21,11 +21,11 @@ impl LocalLeaseFixture {
         Ok(Self {
             _temporary: temporary,
             exports: ShareExportConfig {
-                roots: vec![SharedRoot {
-                    label: "Docs".into(),
-                    path: root.to_string_lossy().replace('\\', "/"),
-                }],
-                include_connections: false,
+                roots: vec![
+                    SharedRoot::new("Docs", root.to_string_lossy().replace('\\', "/"))
+                        .with_access(crate::share::ExportAccess::ReadWrite),
+                ],
+                ..Default::default()
             },
         })
     }
@@ -345,11 +345,11 @@ fn remote_drive_task_peer_reserves_the_connections_container_name() -> io::Resul
     let root = temporary.path().join("colliding-label");
     std::fs::create_dir(&root)?;
     let exports = Arc::new(Mutex::new(ShareExportConfig {
-        roots: vec![SharedRoot {
-            label: "Verbindungen".into(),
-            path: root.to_string_lossy().replace('\\', "/"),
-        }],
-        include_connections: false,
+        roots: vec![
+            SharedRoot::new("Verbindungen", root.to_string_lossy().replace('\\', "/"))
+                .with_access(crate::share::ExportAccess::ReadWrite),
+        ],
+        ..Default::default()
     }));
 
     let listing = super::fs::list_dir("/", &exports)?;

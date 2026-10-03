@@ -176,6 +176,7 @@ fn contact() -> DirectContact {
         lan_candidates: Vec::new(),
         lan_seen_at: None,
         lan_uplink: None,
+        relation: Default::default(),
     }
 }
 
@@ -189,6 +190,7 @@ fn room() -> RoomProfile {
         status: ShareStatus::Waiting,
         members: Vec::new(),
         exports: ShareExportConfig::default(),
+        policy: crate::share::RoomPolicy::new_room(),
     }
 }
 

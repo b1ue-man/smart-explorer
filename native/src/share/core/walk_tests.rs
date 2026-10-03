@@ -96,10 +96,10 @@ fn server_walker_uses_export_paths_and_skips_symlinks() {
     let _ = std::os::unix::fs::symlink(&outside, root.join("escape"));
 
     let exports = Arc::new(Mutex::new(ShareExportConfig {
-        roots: vec![SharedRoot {
-            label: "Gate".into(),
-            path: root.to_string_lossy().replace('\\', "/"),
-        }],
+        roots: vec![
+            SharedRoot::new("Gate", root.to_string_lossy().replace('\\', "/"))
+                .with_access(crate::share::ExportAccess::ReadWrite),
+        ],
         ..Default::default()
     }));
     let mut walker = ServerWalker::new("/Gate".into(), exports.clone()).unwrap();
