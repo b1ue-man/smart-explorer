@@ -178,7 +178,8 @@
     "native/src/vfs/os/shared/remote_util.rs",
     "native/src/watch/mod.rs",
     "native/src/watch/os/shared/host_signal.rs",
-    "native/src/bisync/os/shared/recorded_paths.rs"
+    "native/src/bisync/os/shared/recorded_paths.rs",
+    "native/src/bisync/os/shared/merge_inputs.rs"
   ],
   "modify_files": [
     "android/app/src/main/AndroidManifest.xml",

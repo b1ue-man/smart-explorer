@@ -60,10 +60,20 @@ Diese Ergänzungen schließen die vorhandenen Befunde; sie eröffnen keine neue 
 - Parent `787e893` bindet den tatsächlichen PrivateAncestor-Handle-Guard an storage_roots und Hash-Walk; `461fc73`/`a8b90ae`/`3116d16` forwarden Literal-/Recovery-/bewiesene Legacy-ID-Haken durch die vorhandenen Hüllen.
 - Parent `d546712` hält automatische Duplicate-Repairs im laufenden ApplyScope statt einer zweiten unabhängigen Default-Applytransaktion.
 - S-LOCAL-A2: `bin/se.rs` ruft den vorhandenen Uplink-Helper vor normaler CLI-Verarbeitung auf; Linux `net::run_uplink_helper_if_requested` erkennt exakt `--lan-uplink-cleanup`. Es existiert kein Linux-Uninstall-Script; `install-linux.sh` installiert ausschließlich. Canonical README/RELEASING dokumentieren diesen vorhandenen Disable-/Cleanup-Weg vor manueller Binärentfernung als ursprünglicher App-Benutzer (`7cb1f2ef`). Kein neuer Installer-Uninstall-Modus wird erfunden.
-- S-LOCAL-A4 ist durch `4f4d75b` private Atomic-Exec-Journal-Erzeugung erledigt. S09-LINK bleibt vor Abschluss des gepinnten realen Session-/Interface-Kanals offen; signierte Beacons allein erlauben keinen privilegierten Start.
+- S-LOCAL-A4 ist durch `4f4d75b` private Atomic-Exec-Journal-Erzeugung erledigt. S09-LINK ist als `2fbdfddd` mit gepinntem realem Session-/Interface-Kanal integriert; signierte Beacons allein erlauben keinen privilegierten Start. Die achtsekündige private Worker-Lease ist eine begrenzte Prozessgrenze, keine atomare Close-/OS-Mutationsgarantie.
 
 Diese Liste ist Quellenintegration, keine Behauptung einer Ausführungs-/Releaseabnahme. Alle erwarteten Ergebnisse gehen erst nach dem vollständigen Batch gemeinsam in die eine Remote-Task-Suite.
 
 - Parent `810b0df9`: Recovery-Sibling heißt exakt `.se-replace-<16lowerhex>` ohne User-Dateibasename und ist im Stagefilter eine geschützte eigene Datei. Der frische Uplink-Cache-Getter macht keinen OS-/Netzwerkaufruf im Tick; fehlende Fakten bleiben unbekannt.
 - Parent `a7014641`/`fc687a56`: `expectedAccess` und `expectedShared` werden im selben Share-Profil-CAS geprüft; eine veraltete Rechtebestätigung darf keinen zwischenzeitlichen Entzug überschreiben.
 - E-APPLY → Desktop/Android: `recorded_original_paths_for_key` liefert die unter StateKey autorisierten tatsächlichen Seitenschreibweisen über `vfs::sync_path`. Consumer erzeugen keine eigenen Vergleichsschlüssel-/Locator-Encoder. Teilmerge-Wiederanlauf verwendet weiter die ursprünglichen Bytes; der Persistenzanschluss nach Neustart gehört zum selben E-APPLY-Ergebnis.
+
+## Y140/Y142: Reversible-Hook über Share
+
+Der dokumentierte VFS-Vertrag ist in Providern und Guard vorhanden; PeerBackend muss ihn noch als ausgehandelte, nicht automatisch wiederholte Mutation bis zum Host transportieren. H-REPLACE ergänzt genau diesen Anschluss. Erwartung: alter Host liefert unverändert false vor Mutation; neuer Host prüft aktuelle Schreibrechte und dieselbe Root/Verbindung für Stage, Ziel und vorab journaled `.se-replace-<16lowerhex>`-Sibling. Erfolg behält das Original, Fehler/Antwortverlust erhält Recovery-Evidenz ohne Overwrite-Rückfall. Der eine abschließende Remote-Suite-Aufruf deckt diesen Anschluss mit ab.
+
+## H-DISPATCH: Architekturanschluss der neuen Pfadpolicy
+
+Die neue Pfadpolicy enthält noch Canonicalize-/Handle-Fakten im core-Modul. H-POLICY-BOUNDARY verschiebt ausschließlich diese vorhandene Host-Verantwortung und den direkt gekoppelten lokalen Pfadadapter hinter os/shared und ausgewählte OS-Adapter. Reine Namen-/Systempfad-Klassifikation bleibt in core; Zugriffswirkung und bestehende Handle-/Aliasgrenzen bleiben unverändert. Kein neues Review oder Ausbau der allgemeinen LocalBackend-Grenze. Bestehende passende Abnahmesignale bleiben in derselben finalen Suite.
+
+- Quellenabschlüsse: V-REMOTE `9b5bd1cb`, H-DISPATCH `74af4e1a`, AND-SHARE-UI `a70cb532`, S09-LINK `2fbdfddd`, AND-SYNC `7321668e`. Androids zentrale API enthält die tatsächlichen Recorded-Merge-/Recovery-/JobState-/Alarm-/Hostzahlen-Verträge. Remote-Suite und Release sind weiterhin nicht gestartet.
