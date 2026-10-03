@@ -1,5 +1,6 @@
-//! Pin the resolved root once, then keep every entered directory alive
-//! without write/delete sharing. No per-directory canonicalization is needed.
+//! Read pins keep the resolved root and every entered directory alive.
+//! Write sharing permits namespace operations; denied delete sharing keeps
+//! their pinned paths stable. No per-directory canonicalization is needed.
 use std::{
     ffi::OsStr,
     fs::File,
@@ -27,6 +28,8 @@ pub(crate) use create::secure_private_handle;
 mod identity;
 #[path = "private_ancestors.rs"]
 mod private_ancestors;
+#[path = "private_access.rs"]
+mod private_access;
 #[path = "remove.rs"]
 mod remove;
 
@@ -76,7 +79,7 @@ impl DirectoryHandle {
         // alias changed during canonicalization cannot substitute another root.
         let selected = std::fs::OpenOptions::new()
             .access_mode(FILE_READ_ATTRIBUTES)
-            .share_mode(FILE_SHARE_READ)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
             .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
             .open(&path)?;
         let resolved = std::fs::canonicalize(&path)?;
@@ -87,11 +90,19 @@ impl DirectoryHandle {
             if matches!(component, Component::Prefix(_)) || current == resolved {
                 continue;
             }
-            let file = super::read::open_direct(&current, ReadKind::Metadata, FILE_SHARE_READ)?;
+            let file = super::read::open_direct(
+                &current,
+                ReadKind::Metadata,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+            )?;
             validate_directory(&file)?;
             ancestors.push(file);
         }
-        let file = super::read::open_direct(&resolved, ReadKind::Directory, FILE_SHARE_READ)?;
+        let file = super::read::open_direct(
+            &resolved,
+            ReadKind::Directory,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+        )?;
         validate_directory(&file)?;
         if !identity::same_object(&selected, &file)? {
             return Err(io::Error::other(
@@ -206,7 +217,7 @@ impl DirectoryHandle {
 
     fn open_kind(&self, path: &Path, logical: Option<&Path>, kind: ReadKind) -> io::Result<File> {
         let sharing = if matches!(kind, ReadKind::PinChild | ReadKind::PinRoot) {
-            FILE_SHARE_READ
+            FILE_SHARE_READ | FILE_SHARE_WRITE
         } else {
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
         };

@@ -11,7 +11,7 @@ use std::path::Path;
 
 use windows_sys::Win32::{
     Foundation::{
-        CloseHandle, ERROR_INSUFFICIENT_BUFFER, ERROR_NO_TOKEN, GENERIC_WRITE, HANDLE,
+        CloseHandle, ERROR_INSUFFICIENT_BUFFER, ERROR_NO_TOKEN, GENERIC_READ, GENERIC_WRITE, HANDLE,
         INVALID_HANDLE_VALUE,
     },
     Security::{
@@ -28,7 +28,7 @@ use windows_sys::Win32::{
         CreateDirectoryW, CreateFileW, GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
         CREATE_NEW, FILE_ALL_ACCESS, FILE_ATTRIBUTE_DEVICE, FILE_ATTRIBUTE_NORMAL,
         FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-        FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_SHARE_READ, READ_CONTROL,
+        FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE, READ_CONTROL,
     },
     System::Threading::{GetCurrentProcess, GetCurrentThread, OpenProcessToken, OpenThreadToken},
 };
@@ -115,7 +115,7 @@ pub(super) fn create_directory(path: &Path) -> io::Result<File> {
     win(unsafe { CreateDirectoryW(name.as_ptr(), &attributes) })?;
     let file = std::fs::OpenOptions::new()
         .access_mode(FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY | READ_CONTROL)
-        .share_mode(FILE_SHARE_READ)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
         .open(path)?;
     validate_object(&file, true)?;
@@ -132,7 +132,7 @@ pub(super) fn create_file(path: &Path) -> io::Result<File> {
     let handle = unsafe {
         CreateFileW(
             name.as_ptr(),
-            GENERIC_WRITE | READ_CONTROL | FILE_READ_ATTRIBUTES,
+            GENERIC_READ | GENERIC_WRITE | READ_CONTROL | FILE_READ_ATTRIBUTES,
             FILE_SHARE_READ,
             &attributes,
             CREATE_NEW,
