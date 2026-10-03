@@ -21,6 +21,8 @@ import androidx.compose.ui.unit.dp
 import app.smartexplorer.android.R
 import app.smartexplorer.android.api.RemovedDevice
 import app.smartexplorer.android.api.SHARE_DIRECT
+import app.smartexplorer.android.api.SHARE_READ_ONLY
+import app.smartexplorer.android.api.ShareConnectionExport
 import app.smartexplorer.android.api.ShareExport
 import app.smartexplorer.android.api.ShareRequestInfo
 import app.smartexplorer.android.api.ShareStatus
@@ -71,12 +73,19 @@ private fun RequestCard(request: ShareRequestInfo, incoming: Boolean, actions: R
  * profile id).
  */
 @Composable
-internal fun ExportsSection(status: ShareStatus, onAdd: (scope: String) -> Unit, onRemove: (scope: String, export: ShareExport) -> Unit) {
+internal fun ExportsSection(
+    status: ShareStatus,
+    onAdd: (scope: String) -> Unit,
+    onRemove: (scope: String, export: ShareExport) -> Unit,
+    onAccess: (scope: String, export: ShareExport, restoreHome: Boolean) -> Unit,
+    onConnections: (scope: String) -> Unit,
+) {
     SectionHeader("Freigaben")
     HintLine("Ordner, die andere Geräte auf diesem Telefon sehen dürfen.")
-    ExportGroup("Für Direkt-Geräte", SHARE_DIRECT, status.exports.direct, onAdd, onRemove)
+    ExportGroup("Für Direkt-Geräte", SHARE_DIRECT, status.exports.direct, status.connectionExports.direct, status, onAdd, onRemove, onAccess, onConnections)
     status.rooms.forEach { room ->
-        ExportGroup("Raum „${room.name.ifBlank { "Raum" }}“", room.profileId, status.exports.rooms[room.profileId].orEmpty(), onAdd, onRemove)
+        ExportGroup("Raum „${room.name.ifBlank { "Raum" }}“", room.profileId, status.exports.rooms[room.profileId].orEmpty(),
+            status.connectionExports.rooms[room.profileId].orEmpty(), status, onAdd, onRemove, onAccess, onConnections)
     }
 }
 
@@ -85,20 +94,32 @@ private fun ExportGroup(
     title: String,
     scope: String,
     exports: List<ShareExport>,
+    connections: List<ShareConnectionExport>,
+    status: ShareStatus,
     onAdd: (String) -> Unit,
     onRemove: (String, ShareExport) -> Unit,
+    onAccess: (String, ShareExport, Boolean) -> Unit,
+    onConnections: (String) -> Unit,
 ) {
     Text(title, style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(start = 16.dp, top = 12.dp))
     if (exports.isEmpty()) HintLine("Keine Ordner freigegeben.")
     exports.forEach { export ->
         ListItem(
             headlineContent = { Text(export.label.ifBlank { export.path }, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-            supportingContent = { Text(export.path, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            supportingContent = { Text("${accessLabel(export.access)}\n${export.path}", maxLines = 3, overflow = TextOverflow.Ellipsis) },
             leadingContent = { SeIcon(R.drawable.ic_folder, contentDescription = null) },
-            trailingContent = { RowMenu(listOf("Entfernen" to { onRemove(scope, export) })) },
+            trailingContent = { RowMenu(listOf("Rechte…" to { onAccess(scope, export, false) }, "Entfernen" to { onRemove(scope, export) })) },
         )
+        if (status.autoHomeMigrations.any { it.scope == scope && it.path == export.path }) {
+            HintLine("Die frühere automatische Home-Freigabe wurde einmalig nur lesbar. Aktuell: ${accessLabel(export.access)}.")
+            if (export.access == SHARE_READ_ONLY) {
+                TextButton(onClick = { onAccess(scope, export, true) }, modifier = Modifier.padding(start = 4.dp)) { Text("Schreiben wieder erlauben…") }
+            }
+        }
     }
     TextButton(onClick = { onAdd(scope) }, modifier = Modifier.padding(start = 4.dp)) { Text("+ Ordner freigeben") }
+    connections.forEach { connection -> HintLine("${connection.account} · ${accessLabel(connection.access)}") }
+    TextButton(onClick = { onConnections(scope) }, modifier = Modifier.padding(start = 4.dp)) { Text("Gespeicherte Verbindungen einzeln…") }
 }
 
 /** Section "Entfernte Geräte" (only shown when there are any): [Wieder zulassen]. */

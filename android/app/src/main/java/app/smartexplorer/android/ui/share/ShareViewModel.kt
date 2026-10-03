@@ -15,6 +15,11 @@ import app.smartexplorer.android.api.FilesApi
 import app.smartexplorer.android.api.ShareApi
 import app.smartexplorer.android.api.ShareExecApi
 import app.smartexplorer.android.api.ShareStatus
+import app.smartexplorer.android.api.SharePolicyApi
+import app.smartexplorer.android.api.ShareRequestPolicy
+import app.smartexplorer.android.api.ShareSecurityApi
+import app.smartexplorer.android.api.ShareServerInfo
+import app.smartexplorer.android.api.UnconfirmedPairing
 import app.smartexplorer.android.core.CoreException
 import app.smartexplorer.android.ui.common.Snackbars
 import app.smartexplorer.android.ui.connections.RemovalReport
@@ -24,6 +29,8 @@ import kotlinx.coroutines.launch
 
 /** Invite code shown after creating a room or via ⋮ → Code anzeigen (`null` = none available). */
 internal data class RoomCodeView(val roomName: String, val code: String?)
+
+internal data class ShareActionFailure(val message: String, val retry: () -> Unit, val owner: Any? = null)
 
 /**
  * State of the "Teilen" tab: the poller's latest `share.status`, the fast poll while the page is
@@ -36,6 +43,19 @@ internal class ShareViewModel : ViewModel() {
         private set
     var loading by mutableStateOf(false)
         private set
+    var actionFailures by mutableStateOf<List<ShareActionFailure>>(emptyList())
+        private set
+    var securityError by mutableStateOf<String?>(null)
+        private set
+    var serverInfo by mutableStateOf<ShareServerInfo?>(null)
+        private set
+    var requestPolicy by mutableStateOf<ShareRequestPolicy?>(null)
+        private set
+    var unconfirmed by mutableStateOf<List<UnconfirmedPairing>>(emptyList())
+        private set
+    var pairingsKnown by mutableStateOf(false)
+        private set
+    private var metadataAt = 0L
 
     /** Commands in both directions (`share.execJobs`), loaded with the status while the worker runs. */
     var execJobs by mutableStateOf<ExecJobs?>(null)
@@ -80,19 +100,40 @@ internal class ShareViewModel : ViewModel() {
      * Runs a Share action; failures end in a snackbar "[failure]: <core text>", [success] is shown
      * after it worked.
      */
-    fun act(failure: String, success: String? = null, block: suspend () -> Unit) {
-        viewModelScope.launch {
-            running++
-            try {
-                block()
-                success?.let { Snackbars.show(it) }
-            } catch (e: CoreException) {
-                Snackbars.show("$failure: ${e.message ?: e.kind}")
-            } finally {
-                running--
-                reload()
+    fun act(failure: String, success: String? = null, owner: Any? = null, onResult: ((String?) -> Unit)? = null, block: suspend () -> Unit) {
+        var ownFailure: ShareActionFailure? = null
+        var attempting = false
+        fun attempt() {
+            if (attempting) return
+            attempting = true
+            viewModelScope.launch {
+                running++
+                try {
+                    block()
+                    actionFailures = actionFailures.filterNot { it === ownFailure || (owner != null && it.owner === owner) }
+                    success?.let { Snackbars.show(it) }
+                    onResult?.invoke(null)
+                } catch (e: CoreException) {
+                    val message = "$failure: ${e.message ?: e.kind}"
+                    val previous = ownFailure
+                    val recorded = ShareActionFailure(message, ::attempt, owner)
+                    ownFailure = recorded
+                    actionFailures = actionFailures.filterNot { it === previous || (owner != null && it.owner === owner) } + recorded
+                    onResult?.invoke(message)
+                    Snackbars.show(message)
+                } finally {
+                    running--
+                    attempting = false
+                    metadataAt = 0L
+                    reload()
+                }
             }
         }
+        attempt()
+    }
+
+    fun dismissActionFailure(failure: ShareActionFailure) {
+        actionFailures = actionFailures.filterNot { it === failure }
     }
 
     fun createRoom(name: String) = act("Raum nicht erstellt") {
@@ -116,16 +157,10 @@ internal class ShareViewModel : ViewModel() {
      * "Datei senden": copies [sources] into [targetDir] on the device (a transfer task, spec F8;
      * remote targets number taken names). [onShow] opens the transfers sheet from the snackbar.
      */
-    fun sendFiles(sources: List<String>, targetDir: String, onShow: () -> Unit) {
-        viewModelScope.launch {
-            try {
-                FilesApi.transfer(sources, targetDir, mode = "copy", conflict = "keepBoth")
-                val what = if (sources.size == 1) "1 Datei" else "${sources.size} Dateien"
-                Snackbars.show("Senden gestartet: $what", "Anzeigen", onShow)
-            } catch (e: CoreException) {
-                Snackbars.show("Nicht gesendet: ${e.message ?: e.kind}")
-            }
-        }
+    fun sendFiles(sources: List<String>, targetDir: String, onShow: () -> Unit) = act("Nicht gesendet") {
+        FilesApi.transfer(sources, targetDir, mode = "copy", conflict = "keepBoth")
+        val what = if (sources.size == 1) "1 Datei" else "${sources.size} Dateien"
+        Snackbars.show("Senden gestartet: $what", "Anzeigen", onShow)
     }
 
     /**
@@ -149,11 +184,7 @@ internal class ShareViewModel : ViewModel() {
                 return@launch
             }
             if (cancelNow()) {
-                try {
-                    FilesApi.cancelTask(id)
-                } catch (e: CoreException) {
-                    Snackbars.show("Nicht abgebrochen: ${e.message ?: e.kind}")
-                }
+                act("Nicht abgebrochen") { FilesApi.cancelTask(id) }
             }
             onStarted(id, null)
         }
@@ -171,7 +202,7 @@ internal class ShareViewModel : ViewModel() {
     /** [Stopp] of a command another device runs on this phone. */
     fun stopExec(job: ExecJob) = act("Befehl nicht gestoppt") { ShareExecApi.cancel(job) }
 
-    private fun report(name: String, result: EndpointRemoval) {
+    internal fun report(name: String, result: EndpointRemoval) {
         removal = RemovalReport(name, result)
     }
 
@@ -179,6 +210,7 @@ internal class ShareViewModel : ViewModel() {
         loading = true
         try {
             val current = ShareApi.status()
+            loadPolicyAndSecurity(current)
             status = current
             loadError = null
             execJobs = if (current.running) loadExecJobs() else null
@@ -186,6 +218,27 @@ internal class ShareViewModel : ViewModel() {
             loadError = e.message ?: e.kind
         } finally {
             loading = false
+        }
+    }
+
+    /** Notices remain until the core confirms resolution; a failed auxiliary load keeps them. */
+    private suspend fun loadPolicyAndSecurity(current: ShareStatus) {
+        var pairingLoaded = false
+        try {
+            unconfirmed = ShareSecurityApi.unconfirmedPairings()
+            pairingLoaded = true
+            pairingsKnown = true
+            val now = System.currentTimeMillis()
+            if (now - metadataAt >= 5_000L || serverInfo?.server.orEmpty() != current.server.orEmpty()) {
+                serverInfo = ShareSecurityApi.serverInfo()
+                requestPolicy = SharePolicyApi.policy()
+                metadataAt = now
+            }
+            securityError = null
+        } catch (e: CoreException) {
+            // If the pairing query succeeded, unrelated server/policy errors do not undo that fact.
+            pairingsKnown = pairingLoaded
+            securityError = "Share-Sicherheit nicht geladen: ${e.message ?: e.kind}"
         }
     }
 

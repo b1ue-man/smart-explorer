@@ -3,7 +3,14 @@ package app.smartexplorer.android.ui.share
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import app.smartexplorer.android.api.ShareApi
-import app.smartexplorer.android.ui.common.ConfirmDialog
+import app.smartexplorer.android.api.ShareDevice
+import app.smartexplorer.android.api.ShareExport
+import app.smartexplorer.android.api.ShareMember
+import app.smartexplorer.android.api.ShareRequestPolicy
+import app.smartexplorer.android.api.ShareRoom
+import app.smartexplorer.android.api.ShareWriteGrant
+import app.smartexplorer.android.api.RemovedDevice
+import app.smartexplorer.android.api.UnconfirmedPairing
 import app.smartexplorer.android.ui.connections.LocalFilePickerDialog
 import app.smartexplorer.android.ui.picker.LocationPickerDialog
 
@@ -39,11 +46,24 @@ internal sealed interface ShareDialog {
 
     /** [scope] `direct` or a room profile id. */
     data class AddExport(val scope: String) : ShareDialog
+
+    data class ConfirmExport(val scope: String, val path: String) : ShareDialog
+    data class ExportAccess(val scope: String, val export: ShareExport, val restoreHome: Boolean = false) : ShareDialog
+    data class Connections(val scope: String) : ShareDialog
+    data class ContactWrite(val grant: ShareWriteGrant) : ShareDialog
+    data class AllowGrant(val grant: ShareWriteGrant) : ShareDialog
+    data class WithdrawGrant(val grant: ShareWriteGrant) : ShareDialog
+    data class ShareBack(val device: ShareDevice) : ShareDialog
+    data class RoomPolicy(val room: ShareRoom) : ShareDialog
+    data class RoomMember(val room: ShareRoom, val member: ShareMember, val action: String) : ShareDialog
+    data class Readmit(val device: RemovedDevice) : ShareDialog
+    data class PairingDecision(val pairing: UnconfirmedPairing, val revoke: Boolean) : ShareDialog
+    data class RequestPolicy(val policy: ShareRequestPolicy) : ShareDialog
 }
 
 /**
- * Shows [dialog]. Every confirmation closes the dialog first and runs the action in the view
- * model, so it survives the dialog; [onReplace] moves to the next step of a two-step dialog.
+ * Mutations close only after success, keeping drafts retryable. Actions run in the ViewModel;
+ * [onReplace] moves to the next step of a picker without losing its selected locator.
  */
 @Composable
 internal fun ShareDialogHost(
@@ -53,6 +73,7 @@ internal fun ShareDialogHost(
     onReplace: (ShareDialog) -> Unit,
     onShowTransfers: () -> Unit,
 ) {
+    val action = rememberShareAction()
     when (dialog) {
         is ShareDialog.Rename -> TextInputDialog(
             title = "Gerätename",
@@ -60,10 +81,10 @@ internal fun ShareDialogHost(
             initial = dialog.current,
             confirmLabel = "Speichern",
             onConfirm = { name ->
-                onDismiss()
-                vm.act("Name nicht geändert") { ShareApi.setName(name) }
+                action.submit(vm, "Name nicht geändert", onDismiss) { ShareApi.setName(name) }
             },
             onDismiss = onDismiss,
+            action = action,
         )
         ShareDialog.Discoverable -> {
             val status = vm.status
@@ -73,11 +94,11 @@ internal fun ShareDialogHost(
             } else {
                 DiscoverableDialog(
                     status,
-                    onStart = { target, alias, pin, minutes ->
-                        onDismiss()
-                        vm.act("Nicht suchbar") { ShareApi.discoverable(target, alias, pin, minutes) }
+                    onStart = { target, alias, pin, minutes, allowWeakPin ->
+                        action.submit(vm, "Nicht suchbar", onDismiss) { ShareApi.discoverable(target, alias, pin, minutes, allowWeakPin) }
                     },
                     onDismiss = onDismiss,
+                    action = action,
                 )
             }
         }
@@ -88,32 +109,37 @@ internal fun ShareDialogHost(
             initial = "",
             confirmLabel = "Erstellen",
             onConfirm = { name ->
-                onDismiss()
-                vm.createRoom(name)
+                action.submit(vm, "Raum nicht erstellt", onDismiss) {
+                    val created = ShareApi.createRoom(name)
+                    vm.roomCode = RoomCodeView(name, created.code)
+                }
             },
             onDismiss = onDismiss,
+            hint = "Der Raum startet ohne eigene Freigaben und ohne Schreibrecht für Mitglieder.",
+            action = action,
         )
         ShareDialog.JoinRoom -> CodeDialog(
             title = "Raum beitreten",
             codeLabel = "Raum-Code",
             nameDefault = "Raum",
             confirmLabel = "Beitreten",
-            onConfirm = { code, name ->
-                onDismiss()
-                vm.act("Nicht beigetreten", "Raum beigetreten") { ShareApi.joinRoom(code, name) }
+            onConfirm = { code, name, _ ->
+                action.submit(vm, "Nicht beigetreten", onDismiss) { ShareApi.joinRoom(code, name) }
             },
             onDismiss = onDismiss,
+            action = action,
         )
         ShareDialog.AddDirect -> CodeDialog(
             title = "Direct-Code hinzufügen",
             codeLabel = "Direct-Code des anderen Geräts",
             nameDefault = "Gerät",
             confirmLabel = "Hinzufügen",
-            onConfirm = { code, name ->
-                onDismiss()
-                vm.act("Nicht hinzugefügt", "Gerät hinzugefügt") { ShareApi.addDirect(code, name) }
+            onConfirm = { code, name, shareBack ->
+                action.submit(vm, "Nicht hinzugefügt", onDismiss) { ShareApi.addDirect(code, name, shareBack) }
             },
             onDismiss = onDismiss,
+            showShareBack = true,
+            action = action,
         )
         is ShareDialog.RequestAccess -> TextInputDialog(
             title = "Zugriff anfragen",
@@ -123,45 +149,37 @@ internal fun ShareDialogHost(
             optional = true,
             hint = "„${dialog.name}“ bekommt eine Anfrage und kann sie annehmen oder ablehnen.",
             onConfirm = { message ->
-                onDismiss()
-                vm.act("Nicht angefragt", "Anfrage gesendet") { ShareApi.requestAccess(dialog.contactId, message.ifBlank { null }) }
+                action.submit(vm, "Nicht angefragt", onDismiss) { ShareApi.requestAccess(dialog.contactId, message.ifBlank { null }) }
             },
             onDismiss = onDismiss,
+            action = action,
         )
-        is ShareDialog.RemoveDevice -> ConfirmDialog(
+        is ShareDialog.RemoveDevice -> ShareConfirmAction(
             title = "Gerät entfernen?",
             message = "„${dialog.name}“ wird entfernt und kann sich erst nach „Wieder zulassen“ neu koppeln. " +
                 "Favoriten und Tabs des Geräts werden entfernt; Sync-Jobs werden nur gemeldet.",
-            confirmLabel = "Entfernen",
-            destructive = true,
-            onConfirm = {
-                onDismiss()
-                vm.removeDevice(dialog.contactId, dialog.name)
-            },
+            confirm = "Entfernen",
+            failure = "Gerät nicht entfernt",
+            vm = vm,
             onDismiss = onDismiss,
-        )
-        is ShareDialog.LeaveRoom -> ConfirmDialog(
+        ) { vm.report(dialog.name, ShareApi.removeDevice(dialog.contactId)) }
+        is ShareDialog.LeaveRoom -> ShareConfirmAction(
             title = "Raum verlassen?",
             message = "Dieses Telefon tritt „${dialog.name}“ nicht mehr automatisch bei. Der Raum bleibt gespeichert.",
-            confirmLabel = "Verlassen",
-            onConfirm = {
-                onDismiss()
-                vm.act("Nicht verlassen") { ShareApi.leaveRoom(dialog.profileId) }
-            },
+            confirm = "Verlassen",
+            failure = "Raum nicht verlassen",
+            vm = vm,
             onDismiss = onDismiss,
-        )
-        is ShareDialog.RemoveRoom -> ConfirmDialog(
+        ) { ShareApi.leaveRoom(dialog.profileId) }
+        is ShareDialog.RemoveRoom -> ShareConfirmAction(
             title = "Raum entfernen?",
             message = "„${dialog.name}“ und sein Code werden von diesem Telefon gelöscht. Favoriten und Tabs des Raums " +
                 "werden entfernt; Sync-Jobs werden nur gemeldet.",
-            confirmLabel = "Entfernen",
-            destructive = true,
-            onConfirm = {
-                onDismiss()
-                vm.removeRoom(dialog.profileId, dialog.name)
-            },
+            confirm = "Entfernen",
+            failure = "Raum nicht entfernt",
+            vm = vm,
             onDismiss = onDismiss,
-        )
+        ) { vm.report(dialog.name, ShareApi.removeRoom(dialog.profileId)) }
         is ShareDialog.Exec -> ExecDialog(dialog.target.name, dialog.target.location, onDismiss, vm = vm)
         is ShareDialog.SendPick -> LocalFilePickerDialog(
             title = "Dateien für ${dialog.target.name}",
@@ -182,12 +200,35 @@ internal fun ShareDialogHost(
         is ShareDialog.AddExport -> LocationPickerDialog(
             title = "Ordner freigeben",
             initialLocation = null,
-            confirmLabel = "Freigeben",
-            onPick = { path ->
-                onDismiss()
-                vm.act("Nicht freigegeben", "Ordner freigegeben") { ShareApi.addExport(dialog.scope, path, label = null) }
-            },
+            confirmLabel = "Ordner wählen",
+            onPick = { path -> onReplace(ShareDialog.ConfirmExport(dialog.scope, path)) },
             onDismiss = onDismiss,
         )
+        is ShareDialog.ConfirmExport -> ShareConfirmAction(
+            title = "Ordner nur lesend freigeben?",
+            message = "${dialog.path}\n\nDieser Ordner wird nur lesbar. Schreibrecht wählst du anschließend ausdrücklich unter Rechte.",
+            confirm = "Nur lesend freigeben",
+            failure = "Ordner nicht freigegeben",
+            vm = vm,
+            onDismiss = onDismiss,
+        ) { ShareApi.addExport(dialog.scope, dialog.path, label = null) }
+        is ShareDialog.ExportAccess -> ExportAccessDialog(dialog.scope, dialog.export, vm, onDismiss, dialog.restoreHome)
+        is ShareDialog.Connections -> ShareConnectionDialog(dialog.scope, vm, onDismiss)
+        is ShareDialog.ContactWrite -> ContactWriteDialog(dialog.grant, vm, onDismiss)
+        is ShareDialog.AllowGrant -> AllowGrantDialog(dialog.grant, vm, onDismiss)
+        is ShareDialog.WithdrawGrant -> WithdrawGrantDialog(dialog.grant, vm, onDismiss)
+        is ShareDialog.ShareBack -> ShareBackDialog(dialog.device, vm, onDismiss)
+        is ShareDialog.RoomPolicy -> RoomPolicyDialog(dialog.room, vm, onDismiss)
+        is ShareDialog.RoomMember -> RoomMemberDialog(dialog.room, dialog.member, dialog.action, vm, onDismiss)
+        is ShareDialog.PairingDecision -> PairingDecisionDialog(dialog.pairing, dialog.revoke, vm, onDismiss)
+        is ShareDialog.RequestPolicy -> RequestPolicyDialog(dialog.policy, vm, onDismiss)
+        is ShareDialog.Readmit -> ShareConfirmAction(
+            title = "${dialog.device.name.ifBlank { "Gerät" }} wieder zulassen?",
+            message = "Die gespeicherte Identität darf sich wieder koppeln. Befehle werden nicht aktiviert.\n${dialog.device.deviceId}",
+            confirm = "Wieder zulassen",
+            failure = "Gerät nicht wieder zugelassen",
+            vm = vm,
+            onDismiss = onDismiss,
+        ) { ShareApi.readmit(dialog.device.deviceId) }
     }
 }

@@ -16,6 +16,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -51,7 +52,7 @@ import kotlinx.coroutines.isActive
  * Blocks of the page in spec order (C: device card → devices → rooms → requests → exports), then
  * the commands other devices may run on this phone (G4).
  */
-private enum class ShareBlock { Problems, Device, Devices, Rooms, Buttons, Requests, Exports, ExecHost, Removed, DirectCode }
+private enum class ShareBlock { Problems, Device, Policy, Pairings, Devices, Rooms, Buttons, Requests, Rights, Exports, ExecHost, Removed, DirectCode }
 
 /**
  * Tab "Teilen" (spec F18). While visible the core polls the Share worker fast (`share.watch`);
@@ -132,13 +133,15 @@ fun ShareScreen() {
     }
 
     dialog?.let { current ->
-        ShareDialogHost(
-            dialog = current,
-            vm = vm,
-            onDismiss = { dialog = null },
-            onReplace = { dialog = it },
-            onShowTransfers = { showTransfers = true },
-        )
+        key(current) {
+            ShareDialogHost(
+                dialog = current,
+                vm = vm,
+                onDismiss = { dialog = null },
+                onReplace = { dialog = it },
+                onShowTransfers = { showTransfers = true },
+            )
+        }
     }
     vm.roomCode?.let { RoomCodeDialog(it, onDismiss = { vm.roomCode = null }) }
     vm.removal?.let { RemovalReportDialog(it, onDismiss = { vm.removal = null }) }
@@ -148,10 +151,13 @@ fun ShareScreen() {
 private fun blocksOf(status: ShareStatus): List<ShareBlock> = buildList {
     add(ShareBlock.Problems)
     add(ShareBlock.Device)
+    add(ShareBlock.Policy)
+    add(ShareBlock.Pairings)
     add(ShareBlock.Devices)
     add(ShareBlock.Rooms)
     add(ShareBlock.Buttons)
     if (status.incoming.isNotEmpty() || status.outgoing.isNotEmpty()) add(ShareBlock.Requests)
+    add(ShareBlock.Rights)
     add(ShareBlock.Exports)
     add(ShareBlock.ExecHost)
     if (status.removedDevices.isNotEmpty()) add(ShareBlock.Removed)
@@ -163,6 +169,16 @@ private fun ShareBlockContent(block: ShareBlock, vm: ShareViewModel, status: Sha
     val context = LocalContext.current
     when (block) {
         ShareBlock.Problems -> Column {
+            vm.actionFailures.forEach { failure ->
+                ErrorCard(
+                    failure.message,
+                    modifier = Modifier.padding(16.dp),
+                    title = "Aktion nicht abgeschlossen",
+                    actionLabel = "Erneut versuchen",
+                    onAction = { if (!vm.busy) failure.retry() },
+                )
+                TextButton(onClick = { vm.dismissActionFailure(failure) }) { Text("Diesen Fehlerhinweis schließen") }
+            }
             vm.loadError?.let { error ->
                 ErrorCard(
                     error,
@@ -172,6 +188,7 @@ private fun ShareBlockContent(block: ShareBlock, vm: ShareViewModel, status: Sha
                     onAction = { vm.reload() },
                 )
             }
+            vm.securityError?.let { error -> ErrorCard(error, modifier = Modifier.padding(16.dp), title = "Share-Sicherheit nicht geladen", actionLabel = "Erneut laden", onAction = { vm.reload() }) }
             status?.notices?.forEach { HintLine(it, Modifier.padding(top = 4.dp)) }
         }
         ShareBlock.Device -> if (status != null) {
@@ -187,8 +204,22 @@ private fun ShareBlockContent(block: ShareBlock, vm: ShareViewModel, status: Sha
                     copyDirectCode = { code -> TextActions.copy(context, "Direct-Code", code) },
                 ),
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                serverInfo = vm.serverInfo,
             )
         }
+        ShareBlock.Policy -> {
+            val policy = vm.requestPolicy
+            HintLine(when (policy?.requests) {
+                "AutoAccept" -> "Neue Zugriffsanfragen werden automatisch angenommen."
+                "Ask" -> "Neue Zugriffsanfragen warten auf deine Zustimmung."
+                else -> "Anfrageeinstellung noch nicht geladen."
+            })
+            policy?.warning?.let { HintLine(it) }
+            TextButton(onClick = { policy?.let { open(ShareDialog.RequestPolicy(it)) } }, enabled = policy != null) {
+                Text(if (policy?.requests == "AutoAccept") "Immer fragen…" else "Automatisches Annehmen erlauben…")
+            }
+        }
+        ShareBlock.Pairings -> UnconfirmedPairingsSection(vm.unconfirmed, open)
         ShareBlock.Devices -> DevicesSection(status?.devices.orEmpty(), peerActions(vm, open))
         ShareBlock.Rooms -> RoomsSection(status?.rooms.orEmpty(), peerActions(vm, open))
         // Wraps instead of scrolling sideways, so no button hides behind the screen edge.
@@ -218,8 +249,11 @@ private fun ShareBlockContent(block: ShareBlock, vm: ShareViewModel, status: Sha
                 status,
                 onAdd = { scope -> open(ShareDialog.AddExport(scope)) },
                 onRemove = { scope, export -> vm.act("Freigabe nicht entfernt") { ShareApi.removeExport(scope, export.path) } },
+                onAccess = { scope, export, restoreHome -> open(ShareDialog.ExportAccess(scope, export, restoreHome)) },
+                onConnections = { scope -> open(ShareDialog.Connections(scope)) },
             )
         }
+        ShareBlock.Rights -> ContactRightsSection(status?.writeGrants, open)
         ShareBlock.ExecHost -> if (status != null) {
             ExecHostSection(
                 status,
@@ -232,7 +266,7 @@ private fun ShareBlockContent(block: ShareBlock, vm: ShareViewModel, status: Sha
             )
         }
         ShareBlock.Removed -> RemovedDevicesSection(status?.removedDevices.orEmpty()) { device ->
-            vm.act("Nicht zugelassen", "Wieder zugelassen: ${device.name}") { ShareApi.readmit(device.deviceId) }
+            open(ShareDialog.Readmit(device))
         }
         ShareBlock.DirectCode -> TextButton(
             onClick = { open(ShareDialog.AddDirect) },
@@ -250,4 +284,7 @@ private fun peerActions(vm: ShareViewModel, open: (ShareDialog) -> Unit) = PeerA
     showRoomCode = { room -> vm.showRoomCode(room.profileId, room.name) },
     leaveRoom = { room -> open(ShareDialog.LeaveRoom(room.profileId, room.name)) },
     removeRoom = { room -> open(ShareDialog.RemoveRoom(room.profileId, room.name)) },
+    shareBack = { device -> open(ShareDialog.ShareBack(device)) },
+    roomPolicy = { room -> open(ShareDialog.RoomPolicy(room)) },
+    roomMember = { room, member, action -> open(ShareDialog.RoomMember(room, member, action)) },
 )
