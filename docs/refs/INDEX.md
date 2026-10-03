@@ -35,3 +35,5 @@ Lokal gesicherte API-/Lib-Syntax (Abrufdatum im Kopf jeder Datei).
 - [Windows checked recycle](windows-checked-recycle.md): FA6 handle capture, durable original-path intent and discoverable host restore; primary API checked 2026-10-03.
 
 - [Iroh authenticated LAN paths](iroh-authenticated-lan-paths.md): S09 pinned status channel and actual selected local interface; Iroh 1.0.0 APIs checked 2026-10-03.
+
+- [egui/eframe 0.29.1 Close-Lifecycle](egui-close-lifecycle.md) – Y156: CancelClose im Frame, terminales Worker-Drain vor Close/Update; geprüft 2026-10-03.

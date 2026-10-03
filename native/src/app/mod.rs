@@ -6,6 +6,8 @@ mod analytics_access;
 mod analytics_accessibility;
 #[path = "core/analytics_core.rs"]
 mod analytics_core;
+#[path = "core/analytics_mounts.rs"]
+mod analytics_mounts;
 #[path = "core/analytics_paint.rs"]
 mod analytics_paint;
 #[path = "core/analytics_ui.rs"]
@@ -183,6 +185,8 @@ mod preview_core;
 mod quickshare_ui;
 #[path = "core/reclaim_core.rs"]
 mod reclaim_core;
+#[path = "core/reclaim_remote_trash.rs"]
+mod reclaim_remote_trash;
 #[path = "core/reclaim_results_ui.rs"]
 mod reclaim_results_ui;
 #[path = "core/reclaim_ui.rs"]
@@ -218,6 +222,8 @@ mod shell_commands;
 mod shell_toolbar;
 #[path = "core/shutdown.rs"]
 mod shutdown;
+#[path = "os/shared/sync_exit_gate.rs"]
+mod sync_exit_gate;
 #[path = "core/sidebar.rs"]
 mod sidebar;
 #[path = "core/sidebar_locations.rs"]
@@ -230,6 +236,22 @@ mod status_errors;
 mod support_paths;
 #[path = "core/sync_core.rs"]
 mod sync_core;
+#[path = "core/sync_run_state.rs"]
+mod sync_run_state;
+#[path = "os/shared/sync_manual_run.rs"]
+mod sync_manual_run;
+#[path = "core/sync_merge_types.rs"]
+mod sync_merge_types;
+#[path = "os/shared/sync_merge_task.rs"]
+mod sync_merge_task;
+#[path = "core/sync_preview_types.rs"]
+mod sync_preview_types;
+#[path = "core/sync_job_state_ui.rs"]
+mod sync_job_state_ui;
+#[path = "core/sync_versions_ui.rs"]
+mod sync_versions_ui;
+#[path = "os/shared/sync_versions_task.rs"]
+mod sync_versions_task;
 #[path = "os/shared/sync_jobs.rs"]
 mod sync_jobs;
 #[cfg(test)]

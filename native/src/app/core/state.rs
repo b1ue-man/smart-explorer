@@ -4,8 +4,8 @@ use super::*;
 use crate::app::shared_platform_helpers::ClipboardVirtualFile;
 
 type FolderSearchRx = Receiver<(u64, Vec<(String, i32)>)>;
-type MergeLoadRx = Receiver<Result<(String, Vec<crate::linemerge::Row>), String>>;
-type MergeApplyRx = Receiver<Result<(String, crate::bisync::Sig, crate::bisync::Sig), String>>;
+type MergeLoadRx = Receiver<Result<MergeUi, String>>;
+type MergeApplyRx = Receiver<super::sync_merge_types::MergeApplyResult>;
 type JobConnectEndpoints = (
     (crate::vfs::BackendHandle, String),
     (crate::vfs::BackendHandle, String),
@@ -35,6 +35,7 @@ impl ReadyUpdate {
 }
 
 pub struct App {
+    pub(in crate::app) sync_exit_gate: super::sync_exit_gate::SyncExitGate,
     pub(in crate::app) root_path: String,
     pub(in crate::app) scan_running: bool,
     pub(in crate::app) entries: Vec<FileEntry>,
@@ -347,6 +348,9 @@ pub struct App {
     // ─── Two-way sync (bisync) + conflict resolution ─────────────────────
     pub(in crate::app) bisync_rx: Option<Receiver<crate::bisync::Outcome>>,
     pub(in crate::app) bisync_running: bool,
+    pub(in crate::app) desktop_run: Option<super::sync_run_state::DesktopRun>,
+    pub(in crate::app) sync_workers: Vec<super::sync_run_state::SyncWorker>,
+    pub(in crate::app) sync_wake: Option<crate::keep_awake::KeepAwake>,
     pub(in crate::app) bisync_ctx: Option<BisyncCtx>,
     pub(in crate::app) bisync_conflicts: Vec<crate::bisync::Conflict>,
     pub(in crate::app) show_bisync_conflicts: bool,
@@ -368,8 +372,7 @@ pub struct App {
     /// Result channel for a single-file "sync this one" from the compare view.
     /// The action is returned with the outcome so it is removed from the
     /// preview only after the apply actually succeeded.
-    pub(in crate::app) apply_one_rx:
-        Option<Receiver<(crate::bisync::Action, Result<String, String>)>>,
+    pub(in crate::app) apply_one_rx: Option<Receiver<super::sync_preview_types::PreviewApplyResult>>,
     /// Cancel flags so a running mirror / two-way sync can be stopped.
     pub(in crate::app) sync_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     pub(in crate::app) bisync_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
@@ -377,6 +380,7 @@ pub struct App {
     // ─── Saved sync setups (persistent jobs) ─────────────────────────────
     /// Loaded once at start, kept in sync with sync/jobs.tsv after edits/runs.
     pub(in crate::app) sync_jobs: Vec<crate::syncjobs::SyncJob>,
+    pub(in crate::app) sync_versions: Option<super::sync_versions_ui::SyncVersionsUi>,
     pub(in crate::app) show_sync_jobs: bool,
     /// Background-daemon log viewer open?
     pub(in crate::app) show_daemon_log: bool,

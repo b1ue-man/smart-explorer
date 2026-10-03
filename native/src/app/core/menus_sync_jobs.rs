@@ -47,13 +47,15 @@ impl App {
         let mut del_id: Option<String> = None;
         let mut toggle_id: Option<String> = None;
         let mut new_blank = false;
+        let mut versions_id = None;
+        let mut confirmation = None;
         let jobs = self.sync_jobs.clone();
         let orphaned: std::collections::HashSet<String> = jobs
             .iter()
             .filter(|job| self.sync_job_is_orphaned(job))
             .map(|job| job.id.clone())
             .collect();
-        let results = crate::syncjobs::load_results();
+        let states = super::sync_job_state_ui::states(ctx, &jobs);
         egui::Window::new("⚙ Sync-Setups")
             .open(&mut open)
             .collapsible(false)
@@ -94,7 +96,7 @@ impl App {
                                         .on_hover_text("Die Verbindung dieses Setups wurde entfernt. Das Setup bleibt erhalten, kann aber erst nach einer neuen Verbindung wieder laufen.");
                                 }
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    if ui.small_button("×").on_hover_text("Setup löschen").clicked() {
+                                    if ui.add_enabled(!self.desktop_job_busy(&j.id), egui::Button::new("×").small()).on_hover_text("Setup löschen").clicked() {
                                         del_id = Some(j.id.clone());
                                     }
                                     if ui.small_button("✎ Bearbeiten").clicked() {
@@ -104,7 +106,9 @@ impl App {
                                     if ui.small_button(enable_label).on_hover_text("Zeitplan aktivieren/deaktivieren").clicked() {
                                         toggle_id = Some(j.id.clone());
                                     }
+                                    if ui.small_button("Versionen").clicked() { versions_id = Some(j.id.clone()); }
                                     if !self.bisync_running
+                                        && states.get(&j.id).is_some_and(|state| state.blocked.is_none() && state.load_error.is_none() && state.running_now(now_secs_i64()).is_none())
                                         && ui.button("▶ Jetzt").on_hover_text("Diesen Sync jetzt ausführen").clicked()
                                     {
                                         run_id = Some(j.id.clone());
@@ -154,43 +158,28 @@ impl App {
                                     }
                                 }
                             };
-                            let last = if j.last_run == 0 {
-                                "nie".to_string()
-                            } else {
-                                fmt_ms(j.last_run * 1000)
-                            };
-                            ui.label(
-                                RichText::new(format!(
-                                    "{} · {} · {} · zuletzt: {}",
-                                    j.direction.label(),
-                                    j.conflict.label(),
-                                    sched,
-                                    last
-                                ))
-                                .small()
-                                .color(theme::muted(ui)),
-                            );
-                            // Live status from the last recorded run.
-                            if let Some(r) = results.get(&j.id) {
-                                let color = match r.note.as_str() {
-                                    "ok" => theme::success(ui),
-                                    "Konflikte" => theme::warning(ui),
-                                    _ => theme::danger(ui),
-                                };
-                                ui.label(
-                                    RichText::new(format!(
-                                        "● {} — {}→ {}← {}gelöscht · {}Konflikte · {}Fehler",
-                                        r.note, r.a_to_b, r.b_to_a, r.deleted, r.conflicts, r.errors
-                                    ))
-                                    .small()
-                                    .color(color),
-                                );
+                            ui.label(RichText::new(format!("{} · {} · {}", j.direction.label(), j.conflict.label(), sched)).small().color(theme::muted(ui)));
+                            let state = states.get(&j.id);
+                            super::sync_job_state_ui::render(ui, state);
+                            if let Some(block) = state.and_then(|state| state.blocked.as_ref()) {
+                                if ui.add_enabled(!self.bisync_running && block.kind != crate::syncjobs::BlockKind::Other,
+                                    egui::Button::new("Sicherheitsstopp prüfen…")).clicked() {
+                                    confirmation = Some(super::sync_job_state_ui::BlockReview { id:j.id.clone(), kind:block.kind.clone(), detail:block.detail.clone(), source:j.source.clone(), target:j.target.clone() });
+                                }
                             }
+
                         });
                     }
                 });
             });
-        self.show_sync_jobs = open;
+        if let Some(review) = super::sync_job_state_ui::confirmation(ctx, confirmation) {
+            self.start_saved_desktop_run(&review.id, Some(super::sync_run_state::JobConfirmation {
+                kind:review.kind, source:review.source, target:review.target,
+            }));
+        }
+        if let Some(id) = versions_id { self.open_sync_versions(&id); }
+        self.ui_sync_versions(ctx);
+        self.show_sync_jobs = open || self.sync_versions.is_some();
         if new_blank {
             self.job_editor = Some(JobEditor::blank(String::new(), String::new()));
         }
@@ -200,15 +189,15 @@ impl App {
             }
         }
         if let Some(id) = toggle_id {
-            if let Some(mut j) = self.sync_jobs.iter().find(|j| j.id == id).cloned() {
-                j.enabled = !j.enabled;
-                match crate::syncjobs::upsert(&j) {
-                    Ok(()) => self.reload_sync_jobs("Sync-Jobs neu laden"),
-                    Err(error) => {
-                        self.error_msg =
-                            Some(format!("Sync-Job konnte nicht geändert werden: {error}"));
-                    }
-                }
+            let changed = (|| -> Result<(),String> {
+                let mut job = crate::syncjobs::load().map_err(|e| e.to_string())?.into_iter()
+                    .find(|job| job.id == id).ok_or_else(|| "Setup wurde inzwischen entfernt.".to_string())?;
+                job.enabled = !job.enabled;
+                crate::syncjobs::upsert(&job).map_err(|e| e.to_string())
+            })();
+            match changed {
+                Ok(()) => self.reload_sync_jobs("Sync-Setups neu laden"),
+                Err(error) => self.error_msg = Some(format!("Setup konnte nicht geändert werden: {error}")),
             }
         }
         if let Some(id) = del_id {

@@ -12,6 +12,10 @@ impl eframe::App for App {
             return;
         }
         self.update_background(ctx);
+        if self.sync_exit_gate_frame(ctx) {
+            self.update_repaint(ctx);
+            return;
+        }
         self.update_keyboard(ctx);
         self.update_layout(ctx);
         // A copy made by a key or a menu in this frame leaves its marker text

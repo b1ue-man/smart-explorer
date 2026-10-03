@@ -367,6 +367,7 @@ impl App {
             connect_rx: None,
 
             sync_rx: None,
+            sync_exit_gate: super::sync_exit_gate::SyncExitGate::default(),
             sync_running: false,
             sync_progress: None,
 
@@ -376,6 +377,9 @@ impl App {
             bisync_rx: None,
             bisync_running: false,
             bisync_ctx: None,
+            desktop_run: None,
+            sync_workers: Vec::new(),
+            sync_wake: None,
             bisync_conflicts: Vec::new(),
             show_bisync_conflicts: false,
             conflict_bulk: None,
@@ -396,6 +400,7 @@ impl App {
             bisync_cancel: None,
 
             sync_jobs,
+            sync_versions: None,
             show_sync_jobs: false,
             show_daemon_log: false,
             job_editor: None,

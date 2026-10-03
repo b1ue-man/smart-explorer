@@ -26,11 +26,7 @@ pub(in crate::app) use temp::{
     temp_root, RemoteEdit, RemoteEditPhase, SaveResult,
 };
 
-/// Line-merge editor state: a side-by-side aligned diff of the two versions.
-pub(in crate::app) struct MergeUi {
-    pub(in crate::app) rel: String,
-    pub(in crate::app) rows: Vec<crate::linemerge::Row>,
-}
+pub(in crate::app) use super::sync_merge_types::MergeUi;
 
 #[cfg(test)]
 pub(in crate::app) fn remote_temp_path(dest: &str) -> String {

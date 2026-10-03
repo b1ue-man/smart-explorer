@@ -34,6 +34,8 @@ pub(in crate::app) struct BisyncCtx {
     pub(in crate::app) b: crate::vfs::BackendHandle,
     pub(in crate::app) root_b: String,
     pub(in crate::app) pair: String,
+    pub(in crate::app) state: Option<crate::bisync::StateKey>,
+    pub(in crate::app) job_id: Option<String>,
     pub(in crate::app) baseline: crate::bisync::Baseline,
 }
 

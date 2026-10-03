@@ -64,23 +64,17 @@ impl App {
                 self.show_daemon_log = true;
             }
         });
-        if bg && crate::daemon::is_running() {
-            let age = crate::daemon::last_heartbeat_age().unwrap_or(0);
-            ui.colored_label(
-                theme::accent(ui),
-                format!("● Dienst aktiv (vor {age}s)"),
-            );
-        } else if bg {
-            ui.colored_label(
-                theme::muted(ui),
-                "Dienst startet beim nächsten Anmelden.",
-            );
-        } else if crate::daemon::is_running() {
-            ui.colored_label(
-                theme::muted(ui),
-                "Hintergrund-Sync aus · Share-Sitzungsdienst aktiv.",
-            );
+        let bg = crate::autostart::is_enabled();
+        let running = crate::daemon::is_running();
+        match (running,crate::daemon::last_heartbeat_age()) {
+            (true,Some(age)) => { ui.colored_label(theme::accent(ui),format!("Dienst aktiv · letzte Meldung vor {age} s")); }
+            (true,None) => { ui.colored_label(theme::warning(ui),"Dienst meldet Aktivität; Zeitpunkt unbekannt"); }
+            (false,Some(age)) => { ui.colored_label(theme::warning(ui),format!("Keine aktuelle Dienstmeldung · letzte vor {age} s")); }
+            (false,None) => { ui.colored_label(theme::muted(ui),"Keine Dienstmeldung vorhanden"); }
         }
+        ui.label(if bg { "Autostart aktiv · Dienst wird beim Anmelden mit Wiederanlauf bei Absturz gestartet." }
+            else { "Autostart aus · ein aktiver Share-Sitzungsdienst kann weiterlaufen." });
+        ui.label(RichText::new("Die Dienstmeldung zeigt den Sync-Prozess. Für den Wächter gibt es keine eigene Aktivitätsmeldung.").small().color(theme::muted(ui)));
         // Check cadence (how often the daemon evaluates schedules / reacts).
         ui.horizontal(|ui| {
             ui.label("Prüfintervall").on_hover_text(
@@ -163,14 +157,15 @@ impl App {
         // Auto-pause conditions.
         match crate::daemon::autopause_flags() {
             Ok((mut battery, mut metered)) => {
+                let support = crate::daemon::autopause_support();
                 ui.horizontal(|ui| {
                     let battery_changed = ui
-                        .checkbox(&mut battery, "Im Energiesparmodus pausieren")
-                        .on_hover_text("Synchronisierung anhalten, solange der Windows-Energiesparmodus aktiv ist")
+                        .add_enabled(support.battery_saver, egui::Checkbox::new(&mut battery, "Im Energiesparmodus pausieren"))
+                        .on_hover_text(if support.battery_saver { "Hintergrundläufe bei aktivem Energiesparmodus anhalten" } else { "Auf dieser Plattform nicht unterstützt; gespeicherte Einstellung bleibt erhalten" })
                         .changed();
                     let metered_changed = ui
-                        .checkbox(&mut metered, "Bei getakteter Verbindung")
-                        .on_hover_text("Synchronisierung anhalten, solange eine getaktete Netzwerkverbindung erkannt wird (Windows)")
+                        .add_enabled(support.metered, egui::Checkbox::new(&mut metered, "Bei getakteter Verbindung"))
+                        .on_hover_text(if support.metered { "Hintergrundläufe bei erkannter getakteter Verbindung anhalten" } else { "Auf dieser Plattform nicht unterstützt; gespeicherte Einstellung bleibt erhalten" })
                         .changed();
                     if battery_changed || metered_changed {
                         self.report_daemon_control(
@@ -190,7 +185,7 @@ impl App {
         }
 
         ui.label(
-            RichText::new("Hintergrund-Auslöser: Echtzeit & USB-Anschluss brauchen lokale Pfade.")
+            RichText::new("Änderungserkennung je Setup: Ereignisse, Ereignisse mit Vergleich oder regelmäßiger Vergleich. Anschluss-Auslöser benötigen ein erkennbares Laufwerk.")
                 .small()
                 .color(theme::muted(ui)),
         );
