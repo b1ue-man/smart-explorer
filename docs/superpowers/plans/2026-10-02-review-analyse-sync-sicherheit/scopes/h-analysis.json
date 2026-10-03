@@ -11,6 +11,7 @@
     "docs/refs/android-storage-scan.md",
     "docs/refs/android-sync-triggers.md",
     "docs/refs/compose-material3.md",
+    "docs/refs/freedesktop-trash.md",
     "docs/refs/ftp-pool.md",
     "docs/refs/gdrive-ureq-throughput.md",
     "docs/refs/local-fs-identity-durability.md",
@@ -65,6 +66,7 @@
     "native/src/analytics/os/shared/analytics_budget.rs",
     "native/src/analytics/os/shared/analytics_outcome.rs",
     "native/src/analytics/os/shared/analytics_tests.rs",
+    "native/src/analytics/os/shared/reclaim/backend.rs",
     "native/src/analytics/os/shared/reclaim/budget.rs",
     "native/src/analytics/os/shared/reclaim/cleanup.rs",
     "native/src/analytics/os/shared/reclaim/duplicates.rs",
@@ -82,7 +84,10 @@
     "native/src/analytics/os/windows.rs",
     "native/src/app/os/shared/platform_helpers.rs",
     "native/src/app/os/windows/platform.rs",
+    "native/src/apptrash/core/record.rs",
     "native/src/apptrash/mod.rs",
+    "native/src/apptrash/os/shared/quarantine.rs",
+    "native/src/apptrash/os/shared/store.rs",
     "native/src/bisync/core/plan_types.rs",
     "native/src/bisync/core/run_types.rs",
     "native/src/bisync/core/types.rs",
@@ -147,8 +152,11 @@
     "native/src/vfs/core/extension_calls.rs",
     "native/src/vfs/core/extension_types.rs",
     "native/src/vfs/core/extensions.rs",
+    "native/src/vfs/core/staging_names.rs",
     "native/src/vfs/mod.rs",
+    "native/src/watch/core/types.rs",
     "native/src/watch/mod.rs",
+    "native/src/watch/os/shared/service.rs",
     "share-server/Cargo.toml"
   ],
   "modify_files": [
@@ -185,6 +193,8 @@
     "native/src/analytics/os/shared/reclaim/util.rs",
     "native/src/analytics/os/shared/reclaim/verify.rs",
     "native/src/analytics/os/windows.rs",
+    "native/src/apptrash/mod.rs",
+    "native/src/apptrash/os/shared/quarantine.rs",
     "native/src/share/core/backend.rs",
     "native/src/share/core/backend_tests.rs",
     "native/src/share/core/duplicate_wire.rs",
@@ -216,6 +226,7 @@
     "native/src/share/core/walk_assembly.rs",
     "native/src/share/core/watch_wire.rs",
     "native/src/share/core/wire.rs",
+    "native/src/share/core/wire_capabilities.rs",
     "native/src/share/os/shared/storage_analysis_host.rs"
   ],
   "registrations_only": [
@@ -231,5 +242,7 @@
   "new_file_rule": "New feature files only beside assigned feature files; record exact created paths in own abnahme report.",
   "create_feature_directories": [
     "native/src/analytics/core"
-  ]
+  ],
+  "apptrash_handoff_exception": "apptrash/mod.rs additive registration only; new os/shared/quarantine.rs owns safe captured-child handoff. No changes to existing move/list/restore/purge behavior or global volume activation. Connected read surface is necessary to preserve the existing Android record schema.",
+  "capability_grant": "Only FsHostFeatures::host remote_trash_v1 actual OS availability; no other authorization/capability handler changes. server_capabilities.rs belongs H-DISPATCH during final rights hookup."
 }

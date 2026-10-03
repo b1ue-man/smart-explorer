@@ -1,6 +1,6 @@
 use super::SizeNode;
 use crate::analytics::os::display_path;
-use crate::analytics::{ProtectedOmission, ProtectedTally};
+use crate::analytics::{PlatformFigures, ProtectedOmission, ProtectedTally, VolumeUsage};
 use crate::apptrash::ProtectedAreas;
 use std::io;
 use std::path::Path;
@@ -86,6 +86,11 @@ pub struct ScanOutcome {
     /// Other apps' private areas (Android) the walk met: what it could not
     /// read there is neither an issue nor a reason for a partial result.
     pub protected: Vec<ProtectedOmission>,
+    /// Capacity of the analysed volume as a remote host measured it (RV1);
+    /// local scans leave it to the caller.
+    pub volume: Option<VolumeUsage>,
+    /// Android's figures of an Android host for the analysed volume (RV1).
+    pub platform: Option<PlatformFigures>,
 }
 
 impl ScanOutcome {
@@ -99,6 +104,8 @@ impl ScanOutcome {
             notes: Vec::new(),
             aggregated_files: 0,
             protected: Vec::new(),
+            volume: None,
+            platform: None,
         }
     }
 
@@ -115,6 +122,8 @@ impl ScanOutcome {
             notes: Vec::new(),
             aggregated_files: 0,
             protected: Vec::new(),
+            volume: None,
+            platform: None,
         }
     }
 
@@ -128,6 +137,8 @@ impl ScanOutcome {
             notes: Vec::new(),
             aggregated_files: 0,
             protected: Vec::new(),
+            volume: None,
+            platform: None,
         }
     }
 
@@ -273,6 +284,8 @@ impl Diagnostics {
             notes: self.notes.into_inner().unwrap_or_else(|p| p.into_inner()),
             aggregated_files: self.aggregated_files.load(Ordering::Relaxed),
             protected: self.protected.finish(),
+            volume: None,
+            platform: None,
         }
     }
 }

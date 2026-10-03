@@ -30,9 +30,10 @@ type Digest = [u8; 32];
 pub(super) struct Compare<'a> {
     pub(super) pool: Option<&'a rayon::ThreadPool>,
     pub(super) progress: &'a ReclaimProgress,
-    pub(super) protected: &'a ProtectedAreas,
+    pub(super) protected: &'a [ProtectedAreas],
     pub(super) issues: &'a Issues,
     pub(super) sample_bytes: u64,
+    pub(super) roots: &'a [(std::path::PathBuf, crate::local_access::DirectoryHandle)],
 }
 
 /// All duplicate groups among `candidates` (largest reclaimable space first)
@@ -56,7 +57,7 @@ pub(super) fn compare_candidates(
         .begin(ReclaimPhase::Fingerprinting, compared, 0);
     let prints = compare.each(&same_size, |candidate, buffer| {
         let result = fingerprint(
-            &candidate.path,
+            compare.open(candidate),
             candidate.size,
             compare.sample_bytes,
             buffer,
@@ -89,7 +90,7 @@ pub(super) fn compare_candidates(
         .stage
         .begin(ReclaimPhase::Hashing, same_print.len() as u64, total_bytes);
     let hashes = compare.each(&same_print, |candidate, buffer| {
-        let result = content_hash(&candidate.path, candidate.size, buffer, progress);
+        let result = content_hash(compare.open(candidate), candidate.size, buffer, progress);
         progress.hashed.fetch_add(1, Ordering::Relaxed);
         compare.settle(&candidate.path, "Inhalt", result)
     });
@@ -122,6 +123,22 @@ pub(super) fn compare_candidates(
 }
 
 impl Compare<'_> {
+    fn open(&self, candidate: &Candidate) -> io::Result<std::fs::File> {
+        let (root, handle) = self.roots.get(candidate.root_index)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Kandidatenwurzel fehlt"))?;
+        let rel = candidate.path.strip_prefix(root).map_err(io::Error::other)?;
+        let mut directory = handle.clone();
+        let mut parts = rel.components().peekable();
+        while let Some(part) = parts.next() {
+            let std::path::Component::Normal(name) = part else {
+                return Err(io::Error::new(io::ErrorKind::PermissionDenied, "Kandidat außerhalb der Wurzel"));
+            };
+            if parts.peek().is_none() { return directory.open_regular_child(name); }
+            directory = directory.open_child(name)?;
+        }
+        Err(io::Error::new(io::ErrorKind::InvalidInput, "Kandidat ist eine Wurzel"))
+    }
+
     /// Runs `work` for every candidate, on the search's pool when it has one,
     /// with one read buffer per worker.
     fn each(
@@ -252,7 +269,7 @@ fn canceled(progress: &ReclaimProgress) -> bool {
 /// SHA-256 over the big-endian size, the first and the last `sample` bytes
 /// (the whole file when it is that small), as the desktop's fingerprint.
 fn fingerprint(
-    path: &Path,
+    file: io::Result<std::fs::File>,
     size: u64,
     sample: u64,
     buffer: &mut [u8],
@@ -261,7 +278,9 @@ fn fingerprint(
     if canceled(progress) {
         return Ok(None);
     }
-    let mut file = crate::local_access::open_read(path)?;
+    let mut file = file?;
+    let before = file.metadata()?;
+    if before.len() != size { return Err(changed()); }
     let sample = sample.max(1).min(size).min(buffer.len() as u64) as usize;
     let mut context = Context::new(&SHA256);
     context.update(&size.to_be_bytes());
@@ -278,18 +297,21 @@ fn fingerprint(
             context.update(buffer);
         }
     }
+    unchanged(&file, &before, size)?;
     Ok(Some(finish(context)))
 }
 
 /// SHA-256 over the whole content; a file whose length no longer matches the
 /// walk is reported as changed instead of being grouped.
 fn content_hash(
-    path: &Path,
+    file: io::Result<std::fs::File>,
     size: u64,
     buffer: &mut [u8],
     progress: &ReclaimProgress,
 ) -> io::Result<Option<Digest>> {
-    let mut file = crate::local_access::open_read(path)?;
+    let mut file = file?;
+    let before = file.metadata()?;
+    if before.len() != size { return Err(changed()); }
     let mut context = Context::new(&SHA256);
     let mut read = 0u64;
     loop {
@@ -315,5 +337,15 @@ fn content_hash(
             "Datei hat sich während der Suche geändert",
         ));
     }
+    unchanged(&file, &before, size)?;
     Ok(Some(finish(context)))
+}
+
+fn changed() -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, "Datei hat sich während der Suche geändert")
+}
+fn unchanged(file: &std::fs::File, before: &std::fs::Metadata, size: u64) -> io::Result<()> {
+    let after = file.metadata()?;
+    if after.len() != size || before.modified().ok() != after.modified().ok() { return Err(changed()); }
+    Ok(())
 }

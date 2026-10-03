@@ -336,3 +336,7 @@ fn volumes() -> Vec<PathBuf> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .clone()
 }
+
+#[path = "os/shared/quarantine.rs"]
+mod quarantine;
+pub(crate) use quarantine::publish_captured;

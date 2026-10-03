@@ -8,8 +8,9 @@ use super::outcome::Diagnostics;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-const MAX_ANALYTICS_NODES: u64 = 6_000_000;
-const MAX_ANALYTICS_TEXT_BYTES: u64 = 768 * 1024 * 1024;
+// At most one aggregate may be added for each retained directory; reserve
+// the other half of the wire's node space for those and container roots.
+const MAX_ANALYTICS_NODES: u64 = (crate::analytics::tree_transfer::MAX_NODES - 2) / 2;
 /// Deeper trees are still counted, but not descended into by recursion; the
 /// scan threads carry a stack sized for this depth.
 pub(super) const MAX_ANALYTICS_DEPTH: u32 = 2048;
@@ -37,8 +38,8 @@ pub(super) struct AnalyticsBudget {
 impl Default for AnalyticsBudget {
     fn default() -> Self {
         Self::with_limits(
-            MAX_ANALYTICS_NODES,
-            MAX_ANALYTICS_TEXT_BYTES,
+            retention_nodes(),
+            retention_text(),
             MAX_ANALYTICS_DEPTH,
         )
     }
@@ -54,6 +55,20 @@ impl AnalyticsBudget {
             max_text_bytes,
             max_depth,
         }
+    }
+
+    /// The default limits with at most `max_nodes` retained nodes (a receiver
+    /// that cannot hold the host default asked for fewer).
+    pub(super) fn with_node_limit(max_nodes: u64) -> Self {
+        Self::with_limits(
+            (max_nodes.saturating_sub(2) / 2).clamp(1, retention_nodes()),
+            retention_text(),
+            MAX_ANALYTICS_DEPTH,
+        )
+    }
+
+    pub(super) fn for_progress(progress: &crate::analytics::Progress) -> Self {
+        Self::with_node_limit(progress.node_budget())
     }
 
     /// Whether the retained-node budget has been exhausted at least once.
@@ -102,6 +117,20 @@ impl AnalyticsBudget {
         }
         Retention::Aggregate
     }
+}
+
+fn retention_nodes() -> u64 {
+    // Initial retained nodes plus vector growth and aggregate nodes. This
+    // is a memory bound; the final receiver limit includes every added node.
+    // A retained directory may add one aggregate. Decoder Vec capacity may
+    // double the node storage; reserve half the memory for those worst cases.
+    let reserve = 4 * (2 * std::mem::size_of::<super::SizeNode>() as u64 + 17);
+    (crate::transfer::memory_budget() as u64 / reserve).clamp(1, MAX_ANALYTICS_NODES)
+}
+
+fn retention_text() -> u64 {
+    (crate::transfer::memory_budget() as u64 / 4)
+        .min(crate::analytics::tree_transfer::MAX_BYTES / 2)
 }
 
 fn claim_counter(counter: &AtomicU64, amount: u64, maximum: u64) -> bool {

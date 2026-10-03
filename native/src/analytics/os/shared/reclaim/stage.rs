@@ -34,6 +34,7 @@ struct StageState {
     bytes_total: AtomicU64,
     bytes_done: AtomicU64,
     current: Mutex<PathBuf>,
+    visible_roots: Mutex<Vec<(String, String)>>,
 }
 
 /// Shared like the other progress counters. Walks that report no phases
@@ -68,13 +69,59 @@ impl ReclaimStage {
         self.0.phase.store(index as u8, Ordering::Relaxed);
     }
 
-    pub(super) fn add_bytes(&self, bytes: u64) {
+    pub(crate) fn add_bytes(&self, bytes: u64) {
         self.0.bytes_done.fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    /// Files and bytes the current phase works through and the bytes done
+    /// (a host reports them to the peer that asked for the search).
+    pub(crate) fn totals(&self) -> (u64, u64, u64) {
+        (
+            self.0.files_total.load(Ordering::Relaxed),
+            self.0.bytes_total.load(Ordering::Relaxed),
+            self.0.bytes_done.load(Ordering::Relaxed),
+        )
+    }
+
+    /// The state of a search another device runs: its phase, the totals of
+    /// that phase (`totals`) and the folder it reads.
+    pub(crate) fn mirror(&self, phase: ReclaimPhase, totals: (u64, u64, u64), current: &str) {
+        let (files, bytes, done) = totals;
+        self.0.files_total.store(files, Ordering::Relaxed);
+        self.0.bytes_total.store(bytes, Ordering::Relaxed);
+        self.0.bytes_done.store(done, Ordering::Relaxed);
+        let index = ReclaimPhase::ALL
+            .iter()
+            .position(|known| *known == phase)
+            .unwrap_or_default();
+        self.0.phase.store(index as u8, Ordering::Relaxed);
+        let mut shown = self.0.current.lock().unwrap_or_else(|p| p.into_inner());
+        *shown = PathBuf::from(current);
+    }
+
+    /// The folder being read, as the status line shows it.
+    pub(crate) fn current_text(&self) -> String {
+        self.current()
+    }
+
+    pub(crate) fn map_directories(&self, mut roots: Vec<(String, String)>) {
+        for (physical, _) in &mut roots { *physical = crate::analytics::progress::normalize_path(physical); }
+        roots.sort_by_key(|(physical, _)| std::cmp::Reverse(physical.len()));
+        *self.0.visible_roots.lock().unwrap_or_else(|p| p.into_inner()) = roots;
     }
 
     fn current(&self) -> String {
         let current = self.0.current.lock().unwrap_or_else(|p| p.into_inner());
-        super::util::to_fwd(&current)
+        let raw = super::util::to_fwd(&current);
+        let roots = self.0.visible_roots.lock().unwrap_or_else(|p| p.into_inner());
+        if roots.is_empty() { return raw; }
+        let normalized = crate::analytics::progress::normalize_path(&raw);
+        for (physical, visible) in roots.iter() {
+            if let Some(rest) = normalized.strip_prefix(physical.trim_end_matches('/')) {
+                if rest.is_empty() || rest.starts_with('/') { return format!("{}{rest}", visible.trim_end_matches('/')); }
+            }
+        }
+        String::new()
     }
 }
 

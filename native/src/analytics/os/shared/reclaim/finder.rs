@@ -16,16 +16,32 @@ use crate::apptrash::ProtectedAreas;
 
 use super::budget::describe_scan_limit;
 use super::finder_compare::{compare_candidates, Compare};
-use super::finder_walk::Walk;
+use super::finder_walk::{Harvest, Walk};
 use super::types::{DuplicateGroup, ReclaimProgress, ReclaimReport};
 use super::util::{push_bounded_error, to_fwd};
 
-/// Path text kept for candidates (one path per candidate file).
+/// Path text kept for candidates at least (one path per candidate file).
 pub(super) const MAX_CANDIDATE_TEXT_BYTES: u64 = 64 * 1024 * 1024;
+/// Path text kept for candidates at most: 1 GiB holds about ten million paths.
+const CANDIDATE_TEXT_CEILING: u64 = 1024 * 1024 * 1024;
+
+/// Candidate path text the device can hold: 1/64 of its memory (paths are the
+/// only data a search keeps per file), at least the former fixed budget.
+pub(crate) fn candidate_text_budget() -> u64 {
+    crate::transfer::physical_memory()
+        .map_or(MAX_CANDIDATE_TEXT_BYTES, |memory| memory / 64)
+        .clamp(MAX_CANDIDATE_TEXT_BYTES, CANDIDATE_TEXT_CEILING)
+}
 /// Bytes compared at each end of a same-size candidate, as on the desktop.
 pub(super) const SAMPLE_BYTES: u64 = 64 * 1024;
 
 pub(crate) type Guard<'a> = &'a (dyn Fn(&Path) -> io::Result<()> + Sync);
+
+/// One root of a search and the protected areas its walk may meet.
+pub(crate) struct FinderRoot {
+    pub(crate) path: std::path::PathBuf,
+    pub(crate) protected: ProtectedAreas,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct FinderLimits {
@@ -146,7 +162,7 @@ impl DuplicateReport {
 pub fn find_duplicates(root: &Path, progress: &ReclaimProgress, min_bytes: u64) -> DuplicateReport {
     let limits = FinderLimits {
         min_bytes,
-        candidate_text_bytes: MAX_CANDIDATE_TEXT_BYTES,
+        candidate_text_bytes: candidate_text_budget(),
         threads: crate::analytics::local_scan_threads(),
     };
     find_duplicates_in(
@@ -165,6 +181,33 @@ pub(crate) fn find_duplicates_in(
     protected: &ProtectedAreas,
     guard: Option<Guard<'_>>,
 ) -> DuplicateReport {
+    let roots = [FinderRoot {
+        path: root.to_path_buf(),
+        protected: protected.clone(),
+    }];
+    find_duplicates_in_roots(&roots, progress, limits, guard, &[])
+}
+
+/// One search over several roots (the exports of a host): the candidates of
+/// every root are compared with each other. Roots must not lie inside each
+/// other, or a file would be reported as its own duplicate; `excluded`
+/// folders are never entered (a host's own data).
+pub(crate) fn find_duplicates_in_roots(
+    roots: &[FinderRoot],
+    progress: &ReclaimProgress,
+    limits: FinderLimits,
+    guard: Option<Guard<'_>>,
+    excluded: &[std::path::PathBuf],
+) -> DuplicateReport {
+    find_duplicates_in_roots_with_open(roots, progress, limits, guard, excluded,
+        &crate::local_access::DirectoryHandle::open_root_consented)
+}
+
+pub(crate) fn find_duplicates_in_roots_with_open(
+    roots: &[FinderRoot], progress: &ReclaimProgress, limits: FinderLimits,
+    guard: Option<Guard<'_>>, excluded: &[std::path::PathBuf],
+    open: &dyn Fn(&Path) -> io::Result<crate::local_access::DirectoryHandle>,
+) -> DuplicateReport {
     let limits = FinderLimits {
         min_bytes: limits.min_bytes.max(1),
         ..limits
@@ -180,26 +223,49 @@ pub(crate) fn find_duplicates_in(
         None
     };
     // A failed pool build stays serial instead of using Rayon's global pool.
-    let walk = Walk::new(
-        root,
-        progress,
-        limits,
-        protected,
-        guard,
-        &issues,
-        pool.is_some(),
-    );
-    match &pool {
-        Some(pool) => pool.install(|| walk.run()),
-        None => walk.run(),
+    let harvest = Harvest::default();
+    let mut handles = Vec::new();
+    for root in roots {
+        if progress.cancel.load(Ordering::Relaxed) {
+            break;
+        }
+        let handle = match open(&root.path) {
+            Ok(handle) => handle,
+            Err(error) => {
+                issues.failed(std::slice::from_ref(&root.protected), &root.path, true,
+                    || format!("{}: {error}", to_fwd(&root.path)));
+                continue;
+            }
+        };
+        let root_index = handles.len();
+        handles.push((root.path.clone(), handle));
+        let walk = Walk {
+            root_index,
+            handle: &handles[root_index].1,
+            root: &root.path,
+            progress,
+            limits,
+            protected: &root.protected,
+            guard,
+            issues: &issues,
+            parallel: pool.is_some(),
+            excluded,
+            harvest: &harvest,
+        };
+        match &pool {
+            Some(pool) => pool.install(|| walk.run()),
+            None => walk.run(),
+        }
     }
-    let walked = walk.finish();
+    let walked = harvest.finish();
+    let areas: Vec<ProtectedAreas> = roots.iter().map(|root| root.protected.clone()).collect();
     let compare = Compare {
         pool: pool.as_ref(),
         progress,
-        protected,
+        protected: &areas,
         issues: &issues,
         sample_bytes: SAMPLE_BYTES,
+        roots: &handles,
     };
     let (groups, compared) = if progress.cancel.load(Ordering::Relaxed) {
         (Vec::new(), 0)
@@ -248,12 +314,12 @@ impl Issues {
     /// bounded error (`text` is only built then).
     pub(super) fn failed(
         &self,
-        areas: &ProtectedAreas,
+        areas: &[ProtectedAreas],
         at: &Path,
         is_root: bool,
         text: impl FnOnce() -> String,
     ) {
-        if let Some(area) = areas.area_of(at) {
+        if let Some(area) = areas.iter().find_map(|areas| areas.area_of(at)) {
             self.protected.omit(&to_fwd(area));
             return;
         }

@@ -9,7 +9,11 @@ fn windows_remote_task_local_scan_keeps_partial_results_and_live_counts() {
     std::fs::write(root.path().join("readable"), b"1234567").unwrap();
     let progress = Progress::default();
     let guard = |path: &std::path::Path| {
-        if path.ends_with("denied") { Err(io::ErrorKind::PermissionDenied.into()) } else { Ok(()) }
+        if path.ends_with("denied") {
+            Err(io::ErrorKind::PermissionDenied.into())
+        } else {
+            Ok(())
+        }
     };
     let outcome = scan_with_guard(root.path(), &progress, Some(&guard));
     assert_eq!(outcome.status, ScanStatus::Partial);
@@ -20,13 +24,30 @@ fn windows_remote_task_local_scan_keeps_partial_results_and_live_counts() {
     let progress = Progress::default();
     let diagnostics = Diagnostics::default();
     let budget = AnalyticsBudget::default();
-    let traversal = Traversal { progress: &progress, diagnostics: &diagnostics, budget: &budget, parallel: false, guard: None };
+    let traversal = Traversal {
+        progress: &progress,
+        diagnostics: &diagnostics,
+        budget: &budget,
+        parallel: false,
+        guard: None,
+    };
     let entries = (0..1024).map(|index| {
         if index == 512 {
-            assert!(progress.files.load(Ordering::Relaxed) > 0, "wide directory stayed at zero until EOF");
-            assert_eq!(progress.files.load(Ordering::Relaxed), progress.bytes.load(Ordering::Relaxed));
+            assert!(
+                progress.files.load(Ordering::Relaxed) > 0,
+                "wide directory stayed at zero until EOF"
+            );
+            assert_eq!(
+                progress.files.load(Ordering::Relaxed),
+                progress.bytes.load(Ordering::Relaxed)
+            );
         }
-        Ok(LocalEntry { name: format!("{index}").into(), kind: EntryKind::File, size: 1, ..Default::default() })
+        Ok(LocalEntry {
+            name: format!("{index}").into(),
+            kind: EntryKind::File,
+            size: 1,
+            ..Default::default()
+        })
     });
     let tree = scan_entries(&traversal, root.path(), "root".into(), Ok(entries), 0, true);
     assert_eq!(tree.size, 1024);
@@ -272,48 +293,6 @@ fn analytics_access_task_backend_child_error_is_partial_and_root_error_is_failed
         assert_eq!(failed.issues[0].path, "/");
         assert_eq!(failed.permission_denied, 1);
     }
-}
-
-#[test]
-fn parallel_tree_assembly() {
-    let mut listings: std::collections::HashMap<String, Vec<ChildMeta>> =
-        std::collections::HashMap::new();
-    listings.insert(
-        "/r".into(),
-        vec![
-            ChildMeta {
-                name: "sub".into(),
-                is_dir: true,
-                size: 0,
-            },
-            ChildMeta {
-                name: "a.txt".into(),
-                is_dir: false,
-                size: 100,
-            },
-        ],
-    );
-    listings.insert(
-        "/r/sub".into(),
-        vec![
-            ChildMeta {
-                name: "b.bin".into(),
-                is_dir: false,
-                size: 250,
-            },
-            ChildMeta {
-                name: "c.bin".into(),
-                is_dir: false,
-                size: 150,
-            },
-        ],
-    );
-    let node = build_from_listings("/r", "r".into(), &listings);
-    assert_eq!(node.size, 500);
-    assert!(node.children[0].is_dir);
-    let sub = node.children.iter().find(|c| &*c.name == "sub").unwrap();
-    assert_eq!(sub.size, 400);
-    assert_eq!(sub.children.len(), 2);
 }
 
 struct FailingBackend {

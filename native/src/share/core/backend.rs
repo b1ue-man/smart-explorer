@@ -188,6 +188,7 @@ impl PeerBackend {
 }
 
 impl Backend for PeerBackend {
+    fn extensions(&self) -> Option<&dyn crate::vfs::BackendExtensions> { Some(self) }
     fn scheme(&self) -> Scheme {
         Scheme::Peer
     }
@@ -203,12 +204,11 @@ impl Backend for PeerBackend {
     }
 
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
-        match self.request(FsRequest::ListDir {
-            path: path.to_string(),
-        })? {
-            FsResponse::Entries { entries } => Ok(entries.into_iter().map(Into::into).collect()),
-            _ => Err(eio("unerwartete Antwort auf list_dir")),
+        let listing = super::peer_list_batch::list(self, path)?;
+        if !listing.omitted.is_empty() {
+            return Err(io::Error::other("Verzeichnis enthält nicht auflistbare Einträge; tolerantes Listen erforderlich"));
         }
+        Ok(listing.entries)
     }
 
     fn stat(&self, path: &str) -> VfsResult<VfsMeta> {
@@ -462,6 +462,7 @@ impl From<FsMeta> for VfsMeta {
             name: metadata.name,
             is_dir: metadata.is_dir,
             is_symlink: metadata.is_symlink,
+            special: metadata.special,
             size: metadata.size,
             mtime_ms: metadata.mtime_ms,
             btime_ms: metadata.btime_ms,

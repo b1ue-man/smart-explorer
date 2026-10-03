@@ -7,6 +7,9 @@ use crate::analytics::SizeNode;
 use serde::Serialize;
 use std::cmp::Ordering;
 
+#[path = "storage_retention.rs"]
+mod retention;
+
 pub const OTHER_APP_DATA_NAME: &str = "Weitere App-Daten (laut Android, ≈)";
 pub const UNCAPTURED_NAME: &str = "≈ Nicht einzeln erfasst";
 /// Row of all installed apps at a whole primary volume root; it opens the
