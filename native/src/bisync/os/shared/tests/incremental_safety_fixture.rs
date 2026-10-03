@@ -94,7 +94,10 @@ impl Backend for FeedBackend {
         }
         let prefix = format!("{}/", self.root.trim_end_matches('/'));
         let rel = path.strip_prefix(&prefix).ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::InvalidInput, "fixture ID escaped its root")
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "fixture ID escaped its root",
+            )
         })?;
         if let Some(id) = self
             .batch

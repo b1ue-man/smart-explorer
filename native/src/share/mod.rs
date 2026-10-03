@@ -224,6 +224,8 @@ mod lan_permission;
 #[cfg(not(windows))]
 #[path = "os/shared/lan_permission_unavailable.rs"]
 mod lan_permission;
+#[path = "os/shared/lan_permission_job.rs"]
+mod lan_permission_job;
 #[path = "os/shared/lan_presence.rs"]
 mod lan_presence;
 #[path = "os/shared/lan_presence_auth.rs"]
@@ -234,14 +236,12 @@ pub(crate) mod lan_presence_match;
 pub(crate) mod lan_privacy;
 #[path = "core/lan_settings.rs"]
 mod lan_settings;
-#[path = "os/shared/lan_uplink_evidence.rs"]
-pub(crate) mod lan_uplink_evidence;
-#[path = "os/shared/lan_permission_job.rs"]
-mod lan_permission_job;
 #[path = "os/shared/lan_settings_store.rs"]
 mod lan_settings_store;
 #[path = "core/lan_status.rs"]
 mod lan_status;
+#[path = "os/shared/lan_uplink_evidence.rs"]
+pub(crate) mod lan_uplink_evidence;
 #[path = "core/lan_uplink_policy.rs"]
 pub(crate) mod lan_uplink_policy;
 #[path = "os/shared/legacy_direct_actions.rs"]
@@ -415,38 +415,10 @@ mod fs_request {
 // Preserve facade items and test registrations in the Share namespace.
 include!("api_exports.rs");
 
-#[path = "os/shared/storage_roots.rs"]
-mod storage_roots;
-#[path = "os/shared/storage_duplicate_host.rs"]
-mod storage_duplicate_host;
-#[path = "core/peer_stream.rs"]
-mod peer_stream;
-#[path = "os/shared/host_list.rs"]
-mod host_list;
-#[path = "os/shared/host_stream.rs"]
-mod host_stream;
-#[path = "os/shared/host_duplicate_verify.rs"]
-mod host_duplicate_verify;
-#[path = "os/shared/host_hash_walk.rs"]
-mod host_hash_walk;
-#[path = "os/shared/host_mutations.rs"]
-mod host_mutations;
-#[path = "os/shared/host_watch.rs"]
-mod host_watch;
-#[path = "core/peer_extensions.rs"]
-mod peer_extensions;
-#[path = "core/peer_list_batch.rs"]
-mod peer_list_batch;
-#[path = "core/peer_duplicates.rs"]
-mod peer_duplicates;
-#[path = "core/peer_hash_walk.rs"]
-mod peer_hash_walk;
-#[path = "core/peer_watch.rs"]
-mod peer_watch;
 #[path = "core/analysis_resources.rs"]
 mod analysis_resources;
-#[path = "core/node_policy.rs"]
-mod node_policy;
+#[path = "core/fair_admission.rs"]
+mod fair_admission;
 #[path = "core/fs_delete.rs"]
 mod fs_delete;
 #[path = "core/fs_guard_backend.rs"]
@@ -468,5 +440,33 @@ mod fs_path_adapter;
 mod fs_path_adapter;
 #[path = "core/fs_policy.rs"]
 mod fs_policy;
-#[path = "core/fair_admission.rs"]
-mod fair_admission;
+#[path = "os/shared/host_duplicate_verify.rs"]
+mod host_duplicate_verify;
+#[path = "os/shared/host_hash_walk.rs"]
+mod host_hash_walk;
+#[path = "os/shared/host_list.rs"]
+mod host_list;
+#[path = "os/shared/host_mutations.rs"]
+mod host_mutations;
+#[path = "os/shared/host_stream.rs"]
+mod host_stream;
+#[path = "os/shared/host_watch.rs"]
+mod host_watch;
+#[path = "core/node_policy.rs"]
+mod node_policy;
+#[path = "core/peer_duplicates.rs"]
+mod peer_duplicates;
+#[path = "core/peer_extensions.rs"]
+mod peer_extensions;
+#[path = "core/peer_hash_walk.rs"]
+mod peer_hash_walk;
+#[path = "core/peer_list_batch.rs"]
+mod peer_list_batch;
+#[path = "core/peer_stream.rs"]
+mod peer_stream;
+#[path = "core/peer_watch.rs"]
+mod peer_watch;
+#[path = "os/shared/storage_duplicate_host.rs"]
+mod storage_duplicate_host;
+#[path = "os/shared/storage_roots.rs"]
+mod storage_roots;

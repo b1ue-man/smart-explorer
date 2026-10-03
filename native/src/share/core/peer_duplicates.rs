@@ -101,7 +101,8 @@ fn receive(
                                         .saturating_mul(2),
                                 )
                                 .saturating_add(
-                                    (std::mem::size_of::<super::fs_response::FsDuplicateFile>() as u64)
+                                    (std::mem::size_of::<super::fs_response::FsDuplicateFile>()
+                                        as u64)
                                         .saturating_mul(2),
                                 )
                                 .saturating_add(128),
@@ -160,8 +161,9 @@ fn receive(
                     .chain(&summary.limits)
                     .chain(summary.root_error.iter())
                     .map(|text| {
-                        (text.capacity() as u64)
-                            .saturating_add((std::mem::size_of::<String>() as u64).saturating_mul(2))
+                        (text.capacity() as u64).saturating_add(
+                            (std::mem::size_of::<String>() as u64).saturating_mul(2),
+                        )
                     })
                     .fold(0u64, u64::saturating_add);
                 let protected = summary

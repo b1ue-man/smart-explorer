@@ -70,25 +70,20 @@ impl App {
         let focus_node = self.analytics_focus_node();
         ui.horizontal(|ui| {
             ui.selectable_value(&mut controls.panel, AnalyticsPanel::Treemap, "Treemap");
-            ui.selectable_value(&mut controls.panel, AnalyticsPanel::Reclaim, "Find & Reclaim");
+            ui.selectable_value(
+                &mut controls.panel,
+                AnalyticsPanel::Reclaim,
+                "Find & Reclaim",
+            );
         });
         ui.separator();
         // ── Row 1: scan targets ──
         ui.horizontal_wrapped(|ui| {
-            ui.label(
-                RichText::new("Scannen:")
-                    .small()
-                    .color(theme::muted(ui)),
-            );
+            ui.label(RichText::new("Scannen:").small().color(theme::muted(ui)));
             for (root, free, total) in drives {
                 let used = total.saturating_sub(*free);
                 let label = if *total > 0 {
-                    format!(
-                        "{} ({}/{})",
-                        root,
-                        format_bytes(used),
-                        format_bytes(*total)
-                    )
+                    format!("{} ({}/{})", root, format_bytes(used), format_bytes(*total))
                 } else {
                     root.clone()
                 };
@@ -124,8 +119,7 @@ impl App {
 
         // ── Row 2: breadcrumb ──
         ui.horizontal_wrapped(|ui| {
-            if !focus_segs.is_empty()
-                && ui.button("↑").on_hover_text("Eine Ebene höher").clicked()
+            if !focus_segs.is_empty() && ui.button("↑").on_hover_text("Eine Ebene höher").clicked()
             {
                 controls.go_up = true;
             }
@@ -170,31 +164,56 @@ impl App {
                 ui.spinner();
                 let dirs = if state.directories_unreported {
                     "nicht gemeldet".to_string()
-                } else { state.dirs.to_string() };
+                } else {
+                    state.dirs.to_string()
+                };
                 ui.label(format!(
                     "{} · {} Dateien · {} Ordner · {} · {:.1} s",
-                    state.phase.label(), state.files, dirs, format_bytes(state.bytes), secs,
+                    state.phase.label(),
+                    state.files,
+                    dirs,
+                    format_bytes(state.bytes),
+                    secs,
                 ));
                 if *cancel_pending {
                     ui.label("Abbruch angefordert · wartet auf Worker-Ende");
-                } else if ui.button("Abbrechen").clicked() { controls.cancel = true; }
+                } else if ui.button("Abbrechen").clicked() {
+                    controls.cancel = true;
+                }
             });
-            ui.label(if state.current.is_empty() { root } else { &state.current });
+            ui.label(if state.current.is_empty() {
+                root
+            } else {
+                &state.current
+            });
             if state.transfer_total > 0 {
-                ui.add(egui::ProgressBar::new(state.transferred as f32 / state.transfer_total as f32)
-                    .text(format!("Ergebnis: {} von {} empfangen",
-                        format_bytes(state.transferred), format_bytes(state.transfer_total))));
+                ui.add(
+                    egui::ProgressBar::new(state.transferred as f32 / state.transfer_total as f32)
+                        .text(format!(
+                            "Ergebnis: {} von {} empfangen",
+                            format_bytes(state.transferred),
+                            format_bytes(state.transfer_total)
+                        )),
+                );
             }
             if state.unchanged_ms >= 2000 {
-                ui.colored_label(theme::warning(ui), format!(
-                    "Seit {:.1} s keine neue Arbeit bestätigt; letzter Zustand: {}",
-                    state.unchanged_ms as f64 / 1000.0, state.phase.label(),
-                ));
+                ui.colored_label(
+                    theme::warning(ui),
+                    format!(
+                        "Seit {:.1} s keine neue Arbeit bestätigt; letzter Zustand: {}",
+                        state.unchanged_ms as f64 / 1000.0,
+                        state.phase.label(),
+                    ),
+                );
             }
             if let Some(age) = remote_age {
-                ui.label(format!("Letzte Fortschrittsmeldung vor {:.1} s", age.as_secs_f64()));
+                ui.label(format!(
+                    "Letzte Fortschrittsmeldung vor {:.1} s",
+                    age.as_secs_f64()
+                ));
             }
-            ui.ctx().request_repaint_after(std::time::Duration::from_millis(150));
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(150));
         } else {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(format_bytes(focus_size)).strong());
@@ -202,15 +221,25 @@ impl App {
                     if let Some((totals, seconds)) = &self.analytics_totals {
                         let dirs = if totals.directories_unreported {
                             "nicht gemeldet".into()
-                        } else { totals.dirs.to_string() };
-                        ui.label(format!("· {} erfasste Dateien · {} Ordner · {:.1} s",
-                            totals.files, dirs, seconds));
-                        if !matches!(run_state, StorageRunState::Complete | StorageRunState::Partial) {
+                        } else {
+                            totals.dirs.to_string()
+                        };
+                        ui.label(format!(
+                            "· {} erfasste Dateien · {} Ordner · {:.1} s",
+                            totals.files, dirs, seconds
+                        ));
+                        if !matches!(
+                            run_state,
+                            StorageRunState::Complete | StorageRunState::Partial
+                        ) {
                             ui.label(format!("· zuletzt {} erfasst", format_bytes(totals.bytes)));
                         }
                     }
                 } else {
-                    ui.label(format!("· {} Datei-Einträge · {} Ordner-Einträge dargestellt", n_files, n_dirs));
+                    ui.label(format!(
+                        "· {} Datei-Einträge · {} Ordner-Einträge dargestellt",
+                        n_files, n_dirs
+                    ));
                 }
                 ui.label(
                     RichText::new("· Klick = reinzoomen")
@@ -243,10 +272,7 @@ impl App {
                     .as_ref()
                     .map(|issue| format!("{}: {}", issue.path, issue.detail))
                     .unwrap_or_else(|| "Unbekannter Scan-Fehler".to_string());
-                ui.colored_label(
-                    theme::danger(ui),
-                    format!("Scan fehlgeschlagen: {detail}"),
-                );
+                ui.colored_label(theme::danger(ui), format!("Scan fehlgeschlagen: {detail}"));
             }
             StorageRunState::Running | StorageRunState::Complete => {}
         }

@@ -124,7 +124,10 @@ fn ci_remote_task_tracked_reject_preserves_legacy_denial_without_a_false_live_co
     assert_eq!(legacy_entry.decision.code(), "rejected");
     assert_eq!(profiles.direct_grants.len(), 1);
     assert_eq!(profiles.direct_grants[0].state, DirectGrantState::Ignored);
-    assert_eq!(profiles.direct_grants[0].public_key, tracked.requester.public_key);
+    assert_eq!(
+        profiles.direct_grants[0].public_key,
+        tracked.requester.public_key
+    );
 }
 
 #[test]
