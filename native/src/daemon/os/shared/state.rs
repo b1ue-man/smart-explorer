@@ -7,8 +7,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 const DEFAULT_TICK_SECS: u64 = 15;
 /// Tick used while the cadence control cannot be read (scheduling blocked).
 const FALLBACK_TICK_SECS: u64 = 15;
-/// Cap the log so it can't grow without bound.
-const LOG_CAP_BYTES: u64 = 256 * 1024;
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) fn now_secs() -> i64 {
@@ -99,6 +97,22 @@ pub fn set_autopause_flags(battery: bool, metered: bool) -> io::Result<()> {
         &autopause_path(),
         &format!("{},{}", battery as u8, metered as u8),
     )
+}
+
+/// Which automatic-pause conditions this platform can observe; settings
+/// offer only these toggles.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AutopauseSupport {
+    pub battery_saver: bool,
+    pub metered: bool,
+}
+
+pub fn autopause_support() -> AutopauseSupport {
+    let (battery_saver, metered) = platform::autopause_conditions_supported();
+    AutopauseSupport {
+        battery_saver,
+        metered,
+    }
 }
 
 /// Why background syncs currently hold off.
@@ -244,19 +258,7 @@ pub fn request_stop() -> io::Result<()> {
     write_control(&stop_path(), "stop")
 }
 
-pub(crate) fn log(msg: &str) {
-    if std::fs::metadata(log_path()).map(|m| m.len()).unwrap_or(0) > LOG_CAP_BYTES {
-        let _ = std::fs::write(log_path(), "");
-    }
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_path())
-    {
-        let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
-        let _ = writeln!(f, "{} {}", ts, msg);
-    }
-}
+pub(crate) fn log(msg: &str) { super::log_store::log(msg); }
 
 pub(super) fn read_optional(path: &std::path::Path) -> io::Result<Option<String>> {
     match std::fs::read_to_string(path) {

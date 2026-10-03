@@ -1,3 +1,20 @@
+#[path = "shell.rs"]
+mod shell;
+pub(crate) use shell::{shell_command, spawn_shell};
+
+pub(crate) fn open_log(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    let file = std::fs::OpenOptions::new().create(true).append(true)
+        .custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT).open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "log must be a regular file"));
+    }
+    Ok(file)
+}
+
+pub(crate) fn requires_storage_access(_endpoint: &str) -> bool { false }
+
 use std::borrow::Cow;
 
 #[cfg(debug_assertions)]
@@ -30,7 +47,7 @@ impl Drop for DaemonInstanceGuard {
 }
 
 pub(crate) fn removable_drives() -> Vec<DriveInfo> {
-    drives::removable()
+    drive_snapshot().unwrap_or_default()
 }
 
 pub(crate) fn battery_saver_on() -> bool {
@@ -39,6 +56,11 @@ pub(crate) fn battery_saver_on() -> bool {
 
 pub(crate) fn on_metered_network() -> bool {
     power::on_metered_network()
+}
+
+/// (battery saver, metered network): both are read from the system.
+pub(crate) fn autopause_conditions_supported() -> (bool, bool) {
+    (true, true)
 }
 
 pub(crate) fn run_shell_command(cmd: &str) -> std::io::Result<std::process::ExitStatus> {
@@ -250,62 +272,11 @@ mod tests {
     }
 }
 
-mod drives {
-    use super::DriveInfo;
-    use std::os::windows::ffi::OsStrExt;
-
-    fn wide(s: &str) -> Vec<u16> {
-        std::ffi::OsStr::new(s)
-            .encode_wide()
-            .chain(Some(0))
-            .collect()
-    }
-
-    pub fn removable() -> Vec<DriveInfo> {
-        use windows::Win32::Storage::FileSystem::{GetDriveTypeW, GetVolumeInformationW};
-        // GetDriveTypeW returns a plain u32; DRIVE_REMOVABLE == 2.
-        const DRIVE_REMOVABLE: u32 = 2;
-        let mut out = Vec::new();
-        let mask = unsafe { windows::Win32::Storage::FileSystem::GetLogicalDrives() };
-        for i in 0..26u32 {
-            if mask & (1 << i) == 0 {
-                continue;
-            }
-            let letter = (b'A' + i as u8) as char;
-            let root = format!("{}:\\", letter);
-            let rootw = wide(&root);
-            let dtype = unsafe { GetDriveTypeW(windows::core::PCWSTR(rootw.as_ptr())) };
-            if dtype != DRIVE_REMOVABLE {
-                continue;
-            }
-            let mut name = [0u16; 261];
-            let mut serial: u32 = 0;
-            let label = unsafe {
-                if GetVolumeInformationW(
-                    windows::core::PCWSTR(rootw.as_ptr()),
-                    Some(&mut name),
-                    Some(&mut serial),
-                    None,
-                    None,
-                    None,
-                )
-                .is_ok()
-                {
-                    let len = name.iter().position(|&c| c == 0).unwrap_or(0);
-                    String::from_utf16_lossy(&name[..len])
-                } else {
-                    String::new()
-                }
-            };
-            out.push(DriveInfo {
-                letter: format!("{}:", letter),
-                label,
-                serial: format!("{:08X}", serial),
-            });
-        }
-        out
-    }
-}
+#[path = "drives.rs"]
+mod drives;
+#[path = "volume_monitor.rs"]
+mod volume_monitor;
+pub(crate) fn drive_snapshot() -> Option<Vec<DriveInfo>> { volume_monitor::snapshot() }
 
 mod power {
     pub fn battery_saver_on() -> bool {
@@ -333,4 +304,17 @@ mod power {
         })()
         .unwrap_or(false)
     }
+}
+
+pub(crate) fn watch_case_fold() -> bool { true }
+
+#[path = "session.rs"]
+mod session;
+pub(crate) use session::session_marker;
+pub(crate) fn daemon_command(executable: &std::path::Path) -> std::process::Command {
+    use std::os::windows::process::CommandExt;
+    let mut command = std::process::Command::new(executable);
+    command.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null())
+        .creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
+    command
 }

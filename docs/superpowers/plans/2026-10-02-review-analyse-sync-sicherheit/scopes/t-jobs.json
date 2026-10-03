@@ -58,6 +58,7 @@
     "native/src/bisync/os/shared/apply.rs",
     "native/src/bisync/os/shared/orchestration.rs",
     "native/src/bisync/os/shared/snapshot.rs",
+    "native/src/bisync/os/shared/snapshot_hash.rs",
     "native/src/connect/core/location.rs",
     "native/src/connect/os/shared/resolution.rs",
     "native/src/daemon/core/tests.rs",
@@ -87,6 +88,11 @@
     "native/src/keep_awake/os/shared/holds.rs",
     "native/src/keep_awake/os/windows.rs",
     "native/src/lib.rs",
+    "native/src/local_access/mod.rs",
+    "native/src/local_access/os/linux/directory_handle.rs",
+    "native/src/local_access/os/windows/directory.rs",
+    "native/src/local_access/os/windows/directory_handle.rs",
+    "native/src/local_access/os/windows/directory_identity.rs",
     "native/src/mobile/core/error.rs",
     "native/src/mobile/os/shared/domains/mod.rs",
     "native/src/mobile/os/shared/runtime.rs",
@@ -97,6 +103,7 @@
     "native/src/share/core/types.rs",
     "native/src/share/core/wire_capabilities.rs",
     "native/src/share/mod.rs",
+    "native/src/share/os/shared/host_watch.rs",
     "native/src/support_dirs.rs",
     "native/src/syncjobs/core/schedule.rs",
     "native/src/syncjobs/core/types.rs",
@@ -107,6 +114,7 @@
     "native/src/syncjobs/os/shared/job_state_policy.rs",
     "native/src/syncjobs/os/shared/job_state_store.rs",
     "native/src/syncjobs/os/shared/job_state_store_tests.rs",
+    "native/src/syncjobs/os/shared/persistence.rs",
     "native/src/syncjobs/os/shared/results.rs",
     "native/src/syncjobs/os/windows/job_state_lock.rs",
     "native/src/vfs/core/core.rs",
@@ -201,5 +209,6 @@
     "native/src/syncjobs/os/linux_os",
     "native/src/syncjobs/os/windows",
     "native/src/syncjobs/os/android"
-  ]
+  ],
+  "handle_watch_integration_grant": "Read listed DirectoryHandle definitions and share/os/shared/host_watch.rs only to connect a stable handle watch; modifications stay in already assigned watch files. Host caller remains H-ANALYSIS."
 }

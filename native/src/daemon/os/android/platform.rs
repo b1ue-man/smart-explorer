@@ -24,7 +24,7 @@ use super::platform as posix;
 
 pub use posix::DriveInfo;
 pub(crate) use posix::{
-    atomic_replace, metadata_is_link_like, normalize_local_backend_path, restore_control_if_absent,
+    spawn_shell, open_log, atomic_replace, metadata_is_link_like, normalize_local_backend_path, restore_control_if_absent,
     wait_for_ipc_client, wake_ipc_listener, DaemonInstanceGuard,
 };
 
@@ -45,9 +45,30 @@ pub(crate) fn on_metered_network() -> bool {
     super::host_state::host_state().metered
 }
 
+/// (battery saver, metered network): both are reported by the host.
+pub(crate) fn autopause_conditions_supported() -> (bool, bool) {
+    (true, true)
+}
+
 /// Job hooks run inside the app sandbox with the system shell.
 pub(crate) fn run_shell_command(cmd: &str) -> io::Result<std::process::ExitStatus> {
     std::process::Command::new(SHELL).args(["-c", cmd]).status()
+}
+
+pub(crate) fn shell_command(script: &str) -> std::process::Command {
+    let mut command = std::process::Command::new(SHELL);
+    command.args(["-c", script]);
+    command
+}
+
+pub(crate) fn requires_storage_access(endpoint: &str) -> bool {
+    let Ok(Some(path)) = crate::connect::local_endpoint_path(endpoint) else { return false; };
+    let path = Path::new(&path);
+    if path.components().any(|part| part == std::path::Component::ParentDir) { return true; }
+    let private = crate::support_dirs::host().is_some_and(|host| {
+        path.starts_with(&host.data_home) || path.starts_with(&host.cache_dir)
+    });
+    !private
 }
 
 pub(crate) fn acquire_daemon_instance_guard(
@@ -127,3 +148,12 @@ mod tests {
         assert!(private_directory(&file).is_err());
     }
 }
+
+pub(crate) fn watch_case_fold() -> bool { false }
+
+pub(crate) fn session_marker() -> Option<String> {
+    crate::support_dirs::host().map(|host| host.boot_marker.clone()).filter(|marker| !marker.trim().is_empty())
+}
+pub(crate) fn daemon_command(executable: &Path) -> std::process::Command { posix::daemon_command(executable) }
+
+pub(crate) fn drive_snapshot() -> Option<Vec<DriveInfo>> { Some(Vec::new()) }

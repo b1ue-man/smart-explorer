@@ -16,6 +16,10 @@ fn main() {
     if is_internal_invocation(&arguments, "--share-exec-platform-self-test") {
         exit_internal_portable(smart_explorer::share::run_exec_platform_self_test());
     }
+    if is_internal_invocation(&arguments, "--sync-guardian") {
+        smart_explorer::daemon::run_guardian();
+        return;
+    }
     if is_internal_invocation(&arguments, "--sync-daemon") {
         smart_explorer::daemon::run_daemon();
         return;
