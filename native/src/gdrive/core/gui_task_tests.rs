@@ -1,6 +1,7 @@
 use super::{
     duplicates,
-    gui_task_http::{step, Fixture, Reply, Request},
+    gui_task_fixture::{assert_query, object},
+    gui_task_http::{step, Fixture, Reply},
     names,
 };
 use crate::vfs::{Backend, VfsMeta};
@@ -12,29 +13,6 @@ const FILES: &str = "/drive/v3/files";
 const ITEM: &str = "/drive/v3/files/item-id";
 const GENERATE: &str = "/drive/v3/files/generateIds";
 const UPLOAD: &str = "/upload/drive/v3/files";
-
-fn object(name: &str, id: &str, folder: bool) -> Value {
-    json!({"id": id, "name": name, "parents": ["root"], "trashed": false,
-        "mimeType": if folder { super::api::FOLDER_MIME } else { "application/octet-stream" },
-        "size": "3", "md5Checksum": "900150983cd24fb0d6963f7d28e17f72",
-        "modifiedTime": "2026-09-15T11:41:38Z"})
-}
-
-fn assert_query(request: &Request, parent: &str, name: &str) {
-    let quote = |value: &str| value.replace('\\', "\\\\").replace('\'', "\\'");
-    let query = format!(
-        "'{}' in parents and name = '{}' and trashed = false",
-        quote(parent),
-        quote(name)
-    );
-    assert!(
-        request
-            .target
-            .contains(&format!("q={}", super::core::cloud_urlenc(&query))),
-        "{:?}",
-        request
-    );
-}
 
 #[test]
 fn gui_design_task_drive_names_are_safe_reversible_and_collision_free() {
