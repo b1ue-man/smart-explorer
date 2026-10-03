@@ -1,9 +1,11 @@
 //! In-memory nodes and current runner facts; never enables privileged uplink.
 use super::super::super::fs::ShareExportConfig;
 use super::super::super::identity::ShareIdentity;
-use super::super::super::types::{DirectAccessState, DirectContact, DirectGrant, DirectGrantState};
+use super::super::super::types::{
+    DirectAccessState, DirectContact, DirectGrant, DirectGrantState, ShareEvent,
+};
 use super::super::*;
-use super::wait_until;
+use super::{wait_until, OBSERVE};
 use crate::net::InterfaceFacts;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use tokio::task::JoinHandle;
@@ -166,6 +168,7 @@ pub(super) struct Fixture {
     pub(super) b: Arc<ShareIrohNode>,
     pub(super) baseline: [(usize, usize, usize); 2],
     pub(super) rounds: Option<JoinHandle<io::Result<()>>>,
+    events: [crossbeam_channel::Receiver<ShareEvent>; 2],
 }
 
 impl Fixture {
@@ -177,7 +180,7 @@ impl Fixture {
         auth_a.direct_contacts.push(accepted_contact(&b_identity));
         let mut auth_b = fixture_auth(b_identity.clone());
         auth_b.direct_grants.push(accepted_grant(&a_identity));
-        let (tx_b, _rx_b) = crossbeam_channel::unbounded();
+        let (tx_b, rx_b) = crossbeam_channel::unbounded();
         let b = ShareIrohNode::start(
             "relay-disabled://s09-transport",
             &b_identity,
@@ -185,7 +188,7 @@ impl Fixture {
             tx_b,
         )
         .expect("server node");
-        let (tx_a, _rx_a) = crossbeam_channel::unbounded();
+        let (tx_a, rx_a) = crossbeam_channel::unbounded();
         let a = match ShareIrohNode::start(
             "relay-disabled://s09-transport",
             &a_identity,
@@ -205,6 +208,7 @@ impl Fixture {
             b,
             baseline,
             rounds: None,
+            events: [rx_a, rx_b],
         };
         fixture.refresh_host();
         fixture
@@ -276,20 +280,94 @@ impl Fixture {
         )));
     }
 
-    pub(super) async fn wait_status(&self) -> (AuthenticatedLanFact, AuthenticatedLanFact) {
-        let mut status = None;
-        wait_until("mutually confirmed status", || {
-            let Some(a) = self.a.lan_link_snapshot().into_iter().next() else {
-                return false;
-            };
-            let Some(b) = self.b.lan_link_snapshot().into_iter().next() else {
-                return false;
-            };
-            status = Some((a, b));
-            true
+    pub(super) async fn wait_status(&mut self) -> (AuthenticatedLanFact, AuthenticatedLanFact) {
+        let observed = tokio::time::timeout(OBSERVE, async {
+            loop {
+                for (label, events) in ["client", "server"].into_iter().zip(&self.events) {
+                    for event in events.try_iter().take(16) {
+                        if let ShareEvent::Error(error) = event {
+                            if error.starts_with("LAN-Link diagnostic:") {
+                                return Err(format!("{label} actor: {error}"));
+                            }
+                        }
+                    }
+                }
+                if self.rounds.as_ref().is_some_and(JoinHandle::is_finished) {
+                    let result = self.rounds.take().unwrap().await;
+                    return Err(format!("client round ended before observation: {result:?}"));
+                }
+                let a = self.a.lan_link_snapshot().into_iter().next();
+                let b = self.b.lan_link_snapshot().into_iter().next();
+                if let (Some(a), Some(b)) = (a, b) {
+                    return Ok((a, b));
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
         })
         .await;
-        status.unwrap()
+        match observed {
+            Ok(Ok(status)) => status,
+            Ok(Err(error)) => panic!(
+                "mutually confirmed status failed: {error}; {}",
+                self.context()
+            ),
+            Err(_) => panic!(
+                "bounded observation failed: mutually confirmed status; {}",
+                self.context()
+            ),
+        }
+    }
+
+    fn context(&self) -> String {
+        let mut nodes = Vec::new();
+        for (label, node) in [("client", &self.a), ("server", &self.b)] {
+            let pins = match node.auth.try_lock() {
+                Ok(auth) => format!(
+                    "epoch={}, contact_nodes={:?}, grant_nodes={:?}",
+                    auth.authorization_epoch,
+                    auth.direct_contacts
+                        .iter()
+                        .filter_map(lan_link_facts::contact_pin)
+                        .map(|pin| pin.node_id)
+                        .collect::<Vec<_>>(),
+                    auth.direct_grants
+                        .iter()
+                        .filter_map(lan_link_facts::grant_pin)
+                        .map(|pin| pin.node_id)
+                        .collect::<Vec<_>>(),
+                ),
+                Err(error) => format!("authorization lock: {error}"),
+            };
+            let state = match node.lan_links.state.try_lock() {
+                Ok(state) => {
+                    let channels: Vec<_> = state
+                        .channels
+                        .iter()
+                        .map(|(id, channel)| {
+                            let path = selected_ip_path(&channel.connection)
+                                .map(|path| (path.local, path.remote, path.id));
+                            (
+                                *id,
+                                channel.revision,
+                                channel.control_epoch,
+                                path,
+                                channel.connection.close_reason(),
+                            )
+                        })
+                        .collect();
+                    let host = state.host.as_ref().map(|(facts, at)| {
+                        (at.elapsed(), facts.own_uplink, facts.interfaces.len())
+                    });
+                    format!(
+                        "host={host:?}, cache={}, channels={channels:?}",
+                        state.cache.len()
+                    )
+                }
+                Err(error) => format!("transport lock: {error}"),
+            };
+            nodes.push(format!("{label}: {pins}, {state}"));
+        }
+        format!("runner={:?}; {}", self.lan.interface, nodes.join("; "))
     }
 
     pub(super) async fn freeze_rounds(&mut self) {
