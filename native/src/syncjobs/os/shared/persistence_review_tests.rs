@@ -130,7 +130,7 @@ fn review_task_delete_guard_migrates_once_and_preserves_explicit_later_zero() {
     crate::syncjobs::baseline_migration::upgrade_defaults(&mut old);
     assert_eq!((old.max_delete_pct, old.max_delete_min), (0, 0));
     let mut explicit =
-        parse_kv_checked("id=explicit\nsource=s\ntarget=t\nmax_delete_pct=20\n").unwrap();
+        parse_kv_checked("id=explicit\nname=X\nsource=s\ntarget=t\nmax_delete_pct=20\n").unwrap();
     crate::syncjobs::baseline_migration::upgrade_defaults(&mut explicit);
     assert_eq!((explicit.max_delete_pct, explicit.max_delete_min), (20, 0));
 }
