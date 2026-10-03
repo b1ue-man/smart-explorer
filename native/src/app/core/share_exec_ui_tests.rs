@@ -26,6 +26,7 @@ fn contact() -> DirectContact {
         lan_candidates: Vec::new(),
         lan_seen_at: None,
         lan_uplink: None,
+        relation: Default::default(),
     }
 }
 
@@ -45,6 +46,7 @@ fn grant() -> DirectGrant {
             source_request_id: None,
             source_decision_revision: None,
         },
+        write: false,
     }
 }
 
@@ -69,8 +71,10 @@ fn room() -> RoomProfile {
             blocked: false,
             exec: ExecGrant::default(),
             presence: None,
+            relation: Default::default(),
         }],
         exports: Default::default(),
+        policy: crate::share::RoomPolicy::new_room(),
     }
 }
 

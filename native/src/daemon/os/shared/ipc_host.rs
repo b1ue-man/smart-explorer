@@ -29,7 +29,7 @@ pub(super) mod stop;
 pub(super) mod ui_events;
 
 pub(super) use service_lifecycle::{
-    configure_service, reload_committed_profiles, stop_service_locked,
+    configure_service, reload_committed_profiles, stop_service_locked, update_runtime,
 };
 
 #[cfg(test)]
@@ -80,6 +80,8 @@ pub(super) struct ShareHostState {
     pub(super) discovery_offers: crate::share::DiscoveryOfferBook,
     /// When the embedded worker's periodic reload may be skipped.
     reload_gate: service_lifecycle::ReloadGate,
+    /// A configuration a repair kept back; delivered on the next tick (S66).
+    pub(super) configure_deferred: bool,
 }
 
 impl ShareHostState {
@@ -106,6 +108,7 @@ impl ShareHostState {
             lan_status: crate::share::LanStatus::default(),
             discovery_offers: crate::share::DiscoveryOfferBook::default(),
             reload_gate: service_lifecycle::ReloadGate::default(),
+            configure_deferred: false,
         }
     }
 }
@@ -260,28 +263,6 @@ impl ShareHost {
             return Err(
                 "Share-Status wartet nach einem Speicherfehler auf einen erneuten Commit".into(),
             );
-        }
-        if state
-            .service
-            .as_ref()
-            .is_some_and(crate::share::ShareService::reciprocal_repair_in_flight)
-        {
-            state.last_reload = Instant::now();
-            state.reload_gate.set_repair_deferred(true);
-            // The service keeps its runtime state until the repair finishes,
-            // but the persisted profile is the canonical view handed to the
-            // GUI: a peer the user just removed must not resurface from a
-            // stale in-memory snapshot. Exec-grant recovery owns the profile
-            // while a journal entry is pending, so leave it alone then.
-            if matches!(exec_grant_journal::load_pending(), Ok(None)) {
-                if let Ok(profiles) =
-                    crate::share::ShareProfiles::load_checked(Some(default_home()))
-                {
-                    state.profiles = profiles;
-                    state.profiles_error = None;
-                }
-            }
-            return Ok(true);
         }
         state.last_reload = Instant::now();
         state.reload_gate.set_repair_deferred(false);
@@ -439,6 +420,9 @@ fn load_share_server() -> Result<String, String> {
     }
     if metadata.len() > MAX_SHARE_SERVER_BYTES {
         return Err("Share server configuration exceeds its 16 KiB limit".into());
+    }
+    if let Some(canonical) = crate::share::migrate_server_file(&path)? {
+        return Ok(canonical);
     }
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
     std::fs::File::open(path)

@@ -13,6 +13,13 @@ use super::tracked_signal_sender::{send_pending_tracked, AttemptCounters};
 use super::types::{ShareAuthState, ShareCmd, ShareCmdResult, ShareEvent};
 use super::wire::ClientMsg;
 
+#[path = "signal_commands_local.rs"]
+mod local;
+use local::{
+    apply_persisted_exec_grant, apply_relation_runtime, mutate_exec_grant, set_direct_online,
+    sync_direct_requests,
+};
+
 pub(super) struct ConnectedCommandRuntime<'a> {
     pub(super) signal: &'a mut SignalConnection,
     pub(super) auth: &'a Arc<Mutex<ShareAuthState>>,
@@ -238,6 +245,10 @@ pub(super) fn run_connected_command(
             policy,
         )),
         ShareCmd::Stop => CommandOutcome::stop(runtime.iroh.stop_sharing()),
+        ShareCmd::UpdateRuntime { runtime: update } => CommandOutcome::connected(
+            apply_relation_runtime(runtime.auth, runtime.iroh, &update),
+            false,
+        ),
         ShareCmd::LeaveRoom { room_id } => CommandOutcome::connected(
             send_line(runtime.signal, &ClientMsg::LeaveRoom { room_id }),
             false,
@@ -290,7 +301,9 @@ pub(super) fn run_offline_command(
 ) -> CommandOutcome {
     match command {
         ShareCmd::Discovery(command) => {
-            let outcome = runtime.discovery.run_offline_command(command, runtime.events);
+            let outcome = runtime
+                .discovery
+                .run_offline_command(command, runtime.events);
             CommandOutcome {
                 result: outcome.result,
                 should_stop: false,
@@ -354,6 +367,9 @@ pub(super) fn run_offline_command(
             policy,
         )),
         ShareCmd::Stop => CommandOutcome::stop(runtime.iroh.stop_sharing()),
+        ShareCmd::UpdateRuntime { runtime: update } => {
+            CommandOutcome::local(apply_relation_runtime(runtime.auth, runtime.iroh, &update))
+        }
         ShareCmd::LeaveRoom { .. }
         | ShareCmd::RequestDirect { .. }
         | ShareCmd::AnswerLegacyDirectRequest { .. } => CommandOutcome::local(Err(eio(
@@ -382,99 +398,6 @@ pub(super) fn send_subscription_teardown(
         send_line(signal, &ClientMsg::LeaveRoom { room_id })?;
     }
     Ok(())
-}
-
-fn mutate_exec_grant(
-    auth: &Arc<Mutex<ShareAuthState>>,
-    iroh: &ShareIrohNode,
-    target: super::types::ExecGrantTarget,
-    enabled: bool,
-) -> io::Result<super::exec_grant_runtime::ExecGrantMutation> {
-    let mutation = super::exec_grant_runtime::mutate(
-        auth,
-        iroh.exec_registry(),
-        target,
-        enabled,
-        super::core::now_secs(),
-    )?;
-    super::configuration_runtime::schedule_current(auth, iroh)?;
-    // Exec authorization is checked on every fresh Exec connection, and the
-    // registry has already installed the deny barrier/cancellation above.
-    // Keep existing connections alive long enough to deliver their signed-off
-    // Revoked terminal status; closing QUIC here would erase that lifecycle
-    // distinction and surface only an ambiguous disconnect to the requester.
-    Ok(mutation)
-}
-
-fn apply_persisted_exec_grant(
-    auth: &Arc<Mutex<ShareAuthState>>,
-    iroh: &ShareIrohNode,
-    target: super::types::ExecGrantTarget,
-    principal: super::exec_types::ExecPrincipal,
-    policy: super::exec_policy::ExecGrant,
-) -> io::Result<super::exec_grant_runtime::ExecGrantMutation> {
-    let mutation = super::exec_grant_runtime::apply_exact(
-        auth,
-        iroh.exec_registry(),
-        target,
-        principal,
-        policy,
-    )?;
-    super::configuration_runtime::schedule_current(auth, iroh)?;
-    Ok(mutation)
-}
-
-fn sync_direct_requests(
-    auth: &Arc<Mutex<ShareAuthState>>,
-    direct_requests: Vec<super::direct_ledger::DirectRequestEntry>,
-    direct_request_tombstones: Vec<super::direct_request_tombstone::DirectRequestTombstone>,
-) -> io::Result<()> {
-    auth.lock()
-        .map_err(|_| eio("Share-State gesperrt"))
-        .map(|mut state| {
-            state.direct_requests = direct_requests;
-            state.direct_request_tombstones = direct_request_tombstones;
-        })
-}
-
-fn set_direct_online(
-    auth: &Arc<Mutex<ShareAuthState>>,
-    iroh: &ShareIrohNode,
-    online: bool,
-) -> io::Result<String> {
-    let transition = iroh.begin_runtime_transition()?;
-    let (lookup_id, changed) = {
-        let mut state = auth.lock().map_err(|_| eio("Share-State gesperrt"))?;
-        let changed = state.direct_online != online;
-        if changed {
-            let next_epoch = state
-                .authorization_epoch
-                .checked_add(1)
-                .ok_or_else(|| eio("Share authorization epoch exhausted"))?;
-            let mut candidate = state.clone();
-            candidate.direct_online = online;
-            candidate.authorization_epoch = next_epoch;
-            super::exec_grant_runtime::apply_configuration_transition(
-                &state,
-                &candidate,
-                next_epoch,
-                iroh.exec_registry(),
-            )?;
-            *state = candidate;
-        }
-        (state.identity.direct_lookup_id.clone(), changed)
-    };
-    let invalidation = if changed {
-        iroh.invalidate_sessions().map(|_| ())
-    } else {
-        Ok(())
-    };
-    drop(transition);
-    if changed {
-        super::configuration_runtime::schedule_current(auth, iroh)?;
-    }
-    invalidation?;
-    Ok(lookup_id)
 }
 
 #[cfg(test)]

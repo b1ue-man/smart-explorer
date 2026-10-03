@@ -364,6 +364,7 @@ fn unrelated_incoming_grant() -> DirectGrant {
             policy_revision: 1,
             ..crate::share::ExecGrant::default()
         },
+        write: false,
     }
 }
 
@@ -399,6 +400,7 @@ fn contact() -> DirectContact {
         lan_candidates: Vec::new(),
         lan_seen_at: None,
         lan_uplink: None,
+        relation: Default::default(),
     }
 }
 

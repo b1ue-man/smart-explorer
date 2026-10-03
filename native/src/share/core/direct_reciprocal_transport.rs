@@ -7,8 +7,8 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use zeroize::Zeroizing;
 
 use super::direct_reciprocal_session::{
-    DirectRepairInitiator, DirectRepairInitiatorAwaitingStore,
-    DirectRepairReceiver, DirectRepairReceiverAwaitingStore, DirectRepairSessionError,
+    DirectRepairInitiator, DirectRepairInitiatorAwaitingStore, DirectRepairReceiver,
+    DirectRepairReceiverAwaitingStore, DirectRepairSessionError,
 };
 use super::direct_reciprocal_store::{DirectRepairStore, DirectRepairStoreError};
 use super::direct_reciprocal_wire::{
@@ -29,6 +29,10 @@ pub(crate) fn shared_direct_repair_store(
     Arc::new(Mutex::new(Box::new(store)))
 }
 
+#[path = "direct_reciprocal_outgoing_gate.rs"]
+mod outgoing_gate;
+pub(super) use outgoing_gate::OutgoingRepairPersistGate;
+
 /// Keeps admission and configuration exclusion live inside an uncancellable
 /// `spawn_blocking` persistence call even if its async exchange times out.
 pub(super) struct DirectRepairRuntimeGuard {
@@ -37,6 +41,18 @@ pub(super) struct DirectRepairRuntimeGuard {
 }
 
 pub(super) type SharedDirectRepairRuntimeGuard = Arc<DirectRepairRuntimeGuard>;
+
+/// What an incoming repair needs to write its relation. The runtime-transition
+/// permit is taken only for that write and the authorization is read again
+/// under it, so a revocation or any configuration change never waits for a
+/// peer-paced exchange and always wins over the repair (S66).
+pub(super) struct RepairPersistGate {
+    pub(super) transition_slot: Arc<Semaphore>,
+    pub(super) session: Arc<IncomingSession>,
+    pub(super) auth: Arc<Mutex<ShareAuthState>>,
+    pub(super) incoming_slot: OwnedSemaphorePermit,
+    pub(super) deadline: tokio::time::Instant,
+}
 
 pub(super) fn direct_repair_runtime_guard(
     transition: OwnedSemaphorePermit,
@@ -64,7 +80,7 @@ pub(super) async fn run_outgoing(
     connection: Connection,
     authorized: AuthorizedDirectRepair,
     store: SharedDirectRepairStore,
-    runtime_guard: SharedDirectRepairRuntimeGuard,
+    gate: OutgoingRepairPersistGate,
 ) -> DirectReciprocalTransportResult {
     let (state, hello) = match DirectRepairInitiator::begin(
         authorized.local_identity,
@@ -79,10 +95,7 @@ pub(super) async fn run_outgoing(
         Ok(streams) => streams,
         Err(_) => return DirectReciprocalTransportResult::Transient,
     };
-    if send_ctrl(&mut send, &Ctrl::DirectReciprocal)
-        .await
-        .is_err()
-    {
+    if send_ctrl(&mut send, &Ctrl::DirectReciprocal).await.is_err() {
         return classify_early_stream_failure(&connection);
     }
     if send_message(&mut send, DirectRepairMessage::Hello(hello))
@@ -104,7 +117,7 @@ pub(super) async fn run_outgoing(
         Ok(state) => state,
         Err(error) => return classify_session_error(error),
     };
-    let (state, commit) = match persist_initiator(state, store, runtime_guard.clone()).await {
+    let (state, commit) = match persist_initiator(state, store, gate).await {
         Ok(value) => value,
         Err(error) => return classify_session_error(error),
     };
@@ -143,7 +156,7 @@ pub(super) async fn serve_incoming(
     mut recv: RecvStream,
     authorized: AuthorizedDirectRepair,
     store: SharedDirectRepairStore,
-    runtime_guard: SharedDirectRepairRuntimeGuard,
+    gate: RepairPersistGate,
 ) -> io::Result<DirectReciprocalTransportResult> {
     let receiver = DirectRepairReceiver::new(
         authorized.local_identity,
@@ -160,7 +173,7 @@ pub(super) async fn serve_incoming(
         Err(RepairReadError::Stream) => return Err(stream_io_error()),
     };
     let state = receiver.accept_hello(hello).map_err(session_io_error)?;
-    let (state, offer) = persist_receiver(state, store, runtime_guard.clone())
+    let (state, offer) = persist_receiver(state, store, gate)
         .await
         .map_err(session_io_error)?;
     send_message(&mut send, DirectRepairMessage::Offer(offer))
@@ -179,13 +192,15 @@ pub(super) async fn serve_incoming(
         .map_err(|_| stream_io_error())?;
     finish_send(&mut send)?;
     wait_for_ack(&mut send).await?;
-    Ok(if complete.receiver_persisted == DirectRepairPersisted::AlreadyComplete
-        && complete.initiator_persisted == DirectRepairPersisted::AlreadyComplete
-    {
-        DirectReciprocalTransportResult::AlreadyComplete
-    } else {
-        DirectReciprocalTransportResult::Complete
-    })
+    Ok(
+        if complete.receiver_persisted == DirectRepairPersisted::AlreadyComplete
+            && complete.initiator_persisted == DirectRepairPersisted::AlreadyComplete
+        {
+            DirectReciprocalTransportResult::AlreadyComplete
+        } else {
+            DirectReciprocalTransportResult::Complete
+        },
+    )
 }
 
 pub(super) async fn serve_incoming_bounded(
@@ -199,18 +214,19 @@ pub(super) async fn serve_incoming_bounded(
     events: crossbeam_channel::Sender<super::types::ShareEvent>,
 ) -> io::Result<()> {
     let deadline = tokio::time::Instant::now() + super::io_deadline::PEER_OP_TIMEOUT;
-    let (authorized, runtime_guard) = admit_incoming_direct_repair(
-        deadline,
+    let (authorized, incoming_slot) =
+        admit_incoming_direct_repair(deadline, session.clone(), auth.clone(), slots).await?;
+    let gate = RepairPersistGate {
+        transition_slot,
         session,
         auth,
-        slots,
-        transition_slot,
-    )
-    .await?;
+        incoming_slot,
+        deadline,
+    };
     super::io_deadline::run_until(
         deadline,
         "reciprocal Direct exchange timed out",
-        serve_incoming(send, recv, authorized, store, runtime_guard),
+        serve_incoming(send, recv, authorized, store, gate),
     )
     .await?;
     publish_runtime_profiles_committed(&events)
@@ -221,33 +237,17 @@ async fn admit_incoming_direct_repair(
     session: Arc<IncomingSession>,
     auth: Arc<Mutex<ShareAuthState>>,
     slots: Arc<Semaphore>,
-    transition_slot: Arc<Semaphore>,
-) -> io::Result<(AuthorizedDirectRepair, SharedDirectRepairRuntimeGuard)> {
-    let slot = super::io_deadline::run_until(
-        deadline,
-        "reciprocal Direct exchange timed out",
-        async {
+) -> io::Result<(AuthorizedDirectRepair, OwnedSemaphorePermit)> {
+    let slot =
+        super::io_deadline::run_until(deadline, "reciprocal Direct exchange timed out", async {
             slots
                 .acquire_owned()
                 .await
                 .map_err(|_| io::Error::other("reciprocal Direct limiter closed"))
-        },
-    )
-    .await?;
-    let transition = super::io_deadline::run_until(
-        deadline,
-        "reciprocal Direct exchange timed out",
-        async {
-            transition_slot
-                .acquire_owned()
-                .await
-                .map_err(|_| io::Error::other("runtime transition limiter closed"))
-        },
-    )
-    .await?;
+        })
+        .await?;
     let authorized = session.authorize_direct_repair(&auth)?;
-    let runtime_guard = direct_repair_runtime_guard(transition, Some(slot));
-    Ok((authorized, runtime_guard))
+    Ok((authorized, slot))
 }
 
 fn publish_runtime_profiles_committed(
@@ -264,7 +264,7 @@ fn publish_runtime_profiles_committed(
 async fn persist_initiator(
     state: DirectRepairInitiatorAwaitingStore,
     store: SharedDirectRepairStore,
-    runtime_guard: SharedDirectRepairRuntimeGuard,
+    gate: OutgoingRepairPersistGate,
 ) -> Result<
     (
         super::direct_reciprocal_session::DirectRepairInitiatorAwaitingComplete,
@@ -272,11 +272,12 @@ async fn persist_initiator(
     ),
     DirectRepairSessionError,
 > {
+    let runtime_guard = gate.acquire().await?;
     tokio::task::spawn_blocking(move || {
         let _runtime_guard = runtime_guard;
-        let mut store = store.lock().map_err(|_| {
-            DirectRepairSessionError::Store(DirectRepairStoreError::Unavailable)
-        })?;
+        let mut store = store
+            .lock()
+            .map_err(|_| DirectRepairSessionError::Store(DirectRepairStoreError::Unavailable))?;
         state.persist_with(store.as_mut())
     })
     .await
@@ -286,7 +287,7 @@ async fn persist_initiator(
 async fn persist_receiver(
     state: DirectRepairReceiverAwaitingStore,
     store: SharedDirectRepairStore,
-    runtime_guard: SharedDirectRepairRuntimeGuard,
+    gate: RepairPersistGate,
 ) -> Result<
     (
         super::direct_reciprocal_session::DirectRepairReceiverAwaitingCommit,
@@ -294,21 +295,39 @@ async fn persist_receiver(
     ),
     DirectRepairSessionError,
 > {
+    let RepairPersistGate {
+        transition_slot,
+        session,
+        auth,
+        incoming_slot,
+        deadline,
+    } = gate;
+    let transition = super::io_deadline::run_until(deadline, "reciprocal Direct store", async {
+        transition_slot
+            .acquire_owned()
+            .await
+            .map_err(|_| io::Error::other("runtime transition limiter closed"))
+    })
+    .await
+    .map_err(|_| DirectRepairSessionError::Store(DirectRepairStoreError::Unavailable))?;
+    // The grant must still authorize this peer now; a removal or block that
+    // landed during the exchange ends the repair before anything is written.
+    session
+        .authorize_direct_repair(&auth)
+        .map_err(|_| DirectRepairSessionError::PolicyDenied)?;
+    let runtime_guard = direct_repair_runtime_guard(transition, Some(incoming_slot));
     tokio::task::spawn_blocking(move || {
         let _runtime_guard = runtime_guard;
-        let mut store = store.lock().map_err(|_| {
-            DirectRepairSessionError::Store(DirectRepairStoreError::Unavailable)
-        })?;
+        let mut store = store
+            .lock()
+            .map_err(|_| DirectRepairSessionError::Store(DirectRepairStoreError::Unavailable))?;
         state.persist_with(store.as_mut())
     })
     .await
     .map_err(|_| DirectRepairSessionError::Store(DirectRepairStoreError::Unavailable))?
 }
 
-async fn send_message(
-    send: &mut SendStream,
-    message: DirectRepairMessage,
-) -> Result<(), ()> {
+async fn send_message(send: &mut SendStream, message: DirectRepairMessage) -> Result<(), ()> {
     let frame = encode_direct_repair_frame(&message).map_err(|_| ())?;
     send.write_all(frame.as_bytes()).await.map_err(|_| ())?;
     send.flush().await.map_err(|_| ())
@@ -341,8 +360,7 @@ async fn recv_message(recv: &mut RecvStream) -> Result<DirectRepairMessage, Repa
     if frame[4] == TAG_CTRL {
         return Err(RepairReadError::LegacyControl);
     }
-    decode_direct_repair_frame(std::mem::take(&mut *frame))
-        .map_err(|_| RepairReadError::Protocol)
+    decode_direct_repair_frame(std::mem::take(&mut *frame)).map_err(|_| RepairReadError::Protocol)
 }
 
 fn finish_send(send: &mut SendStream) -> io::Result<()> {

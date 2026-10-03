@@ -189,27 +189,31 @@ impl LegacyDirectRequestEntry {
 }
 
 impl ShareProfiles {
-    /// Returns whether durable, exact-identity policy forbids automatic
-    /// acceptance. Authentication proves secret possession; it does not erase
-    /// an ignored contact or a user's retained rejection/revocation history.
+    pub(crate) fn direct_key_denied(&self, peer: &DirectPeerIdentity) -> bool {
+        self.removed_direct_peer(peer).is_some()
+            || self.direct_grants.iter().any(|grant| {
+                grant.state == DirectGrantState::Ignored
+                    && (grant.device_id == peer.device_id
+                        || !grant.public_key.is_empty() && grant.public_key == peer.public_key
+                        || !grant.node_id.is_empty() && grant.node_id == peer.node_id)
+            })
+    }
+
+    /// Returns whether durable policy forbids automatic acceptance.
+    /// Authentication proves secret possession; it does not erase an ignored
+    /// contact or a user's retained rejection/revocation history. A blocked
+    /// grant denies its key, not only its self-chosen device id (S19).
     pub(crate) fn direct_auto_accept_denied(
         &self,
         lookup_id: &str,
         peer: &DirectPeerIdentity,
     ) -> bool {
-        let ignored_grant = self.direct_grants.iter().any(|grant| {
-            grant.state == DirectGrantState::Ignored
-                && grant.device_id == peer.device_id
-                && grant.public_key == peer.public_key
-                && grant.fingerprint == peer.fingerprint
-                && grant.node_id == peer.node_id
-        });
+        let ignored_grant = self.direct_key_denied(peer);
         let ignored_contact = self.direct_contacts.iter().any(|contact| {
             contact.access_state == DirectAccessState::Ignored
-                && contact.remote_device_id.as_deref() == Some(peer.device_id.as_str())
-                && contact.remote_public_key.as_deref() == Some(peer.public_key.as_str())
-                && contact.expected_fingerprint == peer.fingerprint
-                && (contact.expected_node_id.is_empty() || contact.expected_node_id == peer.node_id)
+                && (contact.remote_device_id.as_deref() == Some(peer.device_id.as_str())
+                    || contact.remote_public_key.as_deref() == Some(peer.public_key.as_str())
+                    || !contact.expected_node_id.is_empty() && contact.expected_node_id == peer.node_id)
         });
         let tracked_tombstone = self.direct_request_tombstones.iter().any(|tombstone| {
             tombstone.direction == DirectRequestDirection::Incoming

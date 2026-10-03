@@ -1,14 +1,15 @@
-use super::direct_protocol::DirectPeerIdentity;
-use super::exec_policy::ExecGrant;
 use super::legacy_direct_request::{
     evidence_from_presence, legacy_selector, peer_from_presence, LegacyDirectAnswer,
     LegacyDirectDecisionDelivery, LegacyDirectDecisionSource, LegacyDirectDecisionState,
     LegacyDirectDeliveryState, LegacyDirectRequestEntry, LegacyDirectRequestTombstone,
     MAX_LEGACY_DIRECT_REQUESTS, MAX_LEGACY_DIRECT_TOMBSTONES,
 };
+use super::legacy_direct_request_decision::{
+    apply_authenticated_decision, authenticated_decision, queued_delivery, set_exact_grant, Refusal,
+};
 use super::legacy_direct_request_validation::{exact_grant, validate_presence};
 use super::profiles::ShareProfiles;
-use super::types::{DirectGrant, DirectGrantState, PeerPresence};
+use super::types::{DirectRequestPolicy, PeerPresence};
 
 const MAX_ATTEMPT_ERROR_BYTES: usize = 2048;
 
@@ -19,11 +20,14 @@ impl ShareProfiles {
             .find(|entry| entry.selector == selector)
     }
 
+    /// Records an authenticated legacy request; `policy` decides whether a
+    /// device without a grant is accepted automatically or waits (FC5).
     pub(crate) fn record_verified_legacy_direct_request(
         &mut self,
         lookup_id: &str,
         presence: &PeerPresence,
         now: i64,
+        policy: DirectRequestPolicy,
     ) -> Result<bool, String> {
         validate_presence(lookup_id, presence, Some(now))?;
         let peer = peer_from_presence(presence);
@@ -49,7 +53,11 @@ impl ShareProfiles {
             .map(|grant| grant.state.clone());
         let identity_conflict = device_grant.is_some_and(|grant| !exact_grant(grant, &peer))
             || self.identity_conflicts(&peer, &selector);
-        let policy_denied = self.direct_auto_accept_denied(lookup_id, &peer);
+        let refusal = Refusal {
+            identity_conflict,
+            policy_denied: self.direct_auto_accept_denied(lookup_id, &peer),
+            key_denied: self.direct_key_denied(&peer),
+        };
         if let Some(index) = self
             .legacy_direct_requests
             .iter()
@@ -70,9 +78,10 @@ impl ShareProfiles {
                 snapshot.decision,
                 snapshot.decision_source,
                 existing_grant,
-                identity_conflict || policy_denied,
+                refusal,
+                policy,
             );
-            if automatic.install_grant {
+            if automatic.is_some_and(|automatic| automatic.install_grant) {
                 set_exact_grant(self, &peer, true, now)?;
             }
             let entry = &mut self.legacy_direct_requests[index];
@@ -84,7 +93,9 @@ impl ShareProfiles {
             self.recompute_identity_conflicts_for_device(&peer.device_id);
             return Ok(true);
         }
-        if self.legacy_direct_requests.len() >= MAX_LEGACY_DIRECT_REQUESTS {
+        if self.legacy_direct_requests.len() >= MAX_LEGACY_DIRECT_REQUESTS
+            && !self.evict_unanswered_legacy_request()
+        {
             return Err(format!(
                 "legacy request inbox is full (maximum {MAX_LEGACY_DIRECT_REQUESTS})"
             ));
@@ -93,11 +104,26 @@ impl ShareProfiles {
             LegacyDirectDecisionState::Pending,
             None,
             existing_grant,
-            identity_conflict || policy_denied,
+            refusal,
+            policy,
         );
-        if automatic.install_grant {
+        if automatic.is_some_and(|automatic| automatic.install_grant) {
             set_exact_grant(self, &peer, true, now)?;
         }
+        let (decision, decision_source, decision_revision, decision_delivery) = match automatic {
+            Some(automatic) => (
+                automatic.decision,
+                Some(automatic.source),
+                1,
+                queued_delivery(1),
+            ),
+            None => (
+                LegacyDirectDecisionState::Pending,
+                None,
+                0,
+                LegacyDirectDecisionDelivery::default(),
+            ),
+        };
         self.legacy_direct_requests.push(LegacyDirectRequestEntry {
             selector,
             lookup_id: lookup_id.to_string(),
@@ -105,11 +131,11 @@ impl ShareProfiles {
             evidence,
             first_received_at: now,
             last_received_at: now,
-            decision: automatic.decision,
-            decision_source: Some(automatic.source),
+            decision,
+            decision_source,
             decision_changed_at: now,
-            decision_revision: 1,
-            decision_delivery: queued_delivery(1),
+            decision_revision,
+            decision_delivery,
             identity_conflict,
         });
         self.recompute_identity_conflicts_for_device(&presence.device_id);
@@ -346,140 +372,6 @@ impl ShareProfiles {
         }
         changed
     }
-}
-
-#[derive(Clone, Copy)]
-struct AuthenticatedDecision {
-    decision: LegacyDirectDecisionState,
-    source: LegacyDirectDecisionSource,
-    install_grant: bool,
-}
-
-fn authenticated_decision(
-    previous: LegacyDirectDecisionState,
-    previous_source: Option<LegacyDirectDecisionSource>,
-    grant: Option<DirectGrantState>,
-    identity_conflict: bool,
-) -> AuthenticatedDecision {
-    if identity_conflict {
-        return AuthenticatedDecision {
-            decision: LegacyDirectDecisionState::Rejected,
-            source: previous_source
-                .unwrap_or(LegacyDirectDecisionSource::AuthenticatedSecretPossession),
-            install_grant: false,
-        };
-    }
-    match grant {
-        Some(DirectGrantState::Accepted) => AuthenticatedDecision {
-            decision: LegacyDirectDecisionState::Accepted,
-            source: LegacyDirectDecisionSource::ExistingGrant,
-            install_grant: false,
-        },
-        Some(DirectGrantState::Ignored) => AuthenticatedDecision {
-            decision: LegacyDirectDecisionState::Rejected,
-            source: LegacyDirectDecisionSource::ExistingGrant,
-            install_grant: false,
-        },
-        None if matches!(
-            previous,
-            LegacyDirectDecisionState::Rejected | LegacyDirectDecisionState::Revoked
-        ) =>
-        {
-            AuthenticatedDecision {
-                decision: LegacyDirectDecisionState::Rejected,
-                source: previous_source
-                    .unwrap_or(LegacyDirectDecisionSource::AuthenticatedSecretPossession),
-                install_grant: false,
-            }
-        }
-        None => AuthenticatedDecision {
-            decision: LegacyDirectDecisionState::Accepted,
-            source: LegacyDirectDecisionSource::AuthenticatedSecretPossession,
-            install_grant: true,
-        },
-    }
-}
-
-fn apply_authenticated_decision(
-    entry: &mut LegacyDirectRequestEntry,
-    automatic: AuthenticatedDecision,
-    now: i64,
-) {
-    if entry.decision == LegacyDirectDecisionState::Revoked
-        && entry.decision_source == Some(LegacyDirectDecisionSource::User)
-    {
-        return;
-    }
-    if entry.decision != automatic.decision {
-        entry.decision = automatic.decision;
-        entry.decision_source = Some(automatic.source);
-        entry.decision_changed_at = now;
-        entry.decision_revision = entry.decision_revision.saturating_add(1).max(1);
-    } else {
-        entry.decision_source.get_or_insert(automatic.source);
-        entry.decision_revision = entry.decision_revision.max(1);
-    }
-    entry.decision_delivery = queued_delivery(entry.decision_revision);
-}
-
-fn queued_delivery(revision: u64) -> LegacyDirectDecisionDelivery {
-    LegacyDirectDecisionDelivery {
-        state: LegacyDirectDeliveryState::Queued,
-        decision_revision: revision,
-        ..Default::default()
-    }
-}
-
-fn set_exact_grant(
-    profiles: &mut ShareProfiles,
-    peer: &DirectPeerIdentity,
-    accepted: bool,
-    now: i64,
-) -> Result<(), String> {
-    let state = if accepted {
-        DirectGrantState::Accepted
-    } else {
-        DirectGrantState::Ignored
-    };
-    if let Some(grant) = profiles
-        .direct_grants
-        .iter_mut()
-        .find(|grant| grant.device_id == peer.device_id)
-    {
-        if !exact_grant(grant, peer) {
-            if !accepted {
-                return Ok(());
-            }
-            if grant.state == DirectGrantState::Accepted {
-                return Err(format!(
-                    "legacy peer identity conflicts with the active grant for device {}",
-                    peer.device_id
-                ));
-            }
-            grant.exec.reset_for_identity_change(now);
-            grant.public_key = peer.public_key.clone();
-            grant.fingerprint = peer.fingerprint.clone();
-            grant.node_id = peer.node_id.clone();
-        }
-        if state != DirectGrantState::Accepted {
-            grant.exec.disable_without_decision(now);
-        }
-        grant.device_name = peer.device_name.clone();
-        grant.state = state;
-        grant.updated_at = now;
-        return Ok(());
-    }
-    profiles.direct_grants.push(DirectGrant {
-        device_id: peer.device_id.clone(),
-        device_name: peer.device_name.clone(),
-        public_key: peer.public_key.clone(),
-        fingerprint: peer.fingerprint.clone(),
-        node_id: peer.node_id.clone(),
-        state,
-        updated_at: now,
-        exec: ExecGrant::default(),
-    });
-    Ok(())
 }
 
 fn truncate(mut value: String, max: usize) -> String {

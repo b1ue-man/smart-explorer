@@ -9,13 +9,18 @@
 //! blocks exactly those *automatic* paths. Any deliberate pairing by the user
 //! (PIN discovery, adding a Direct code, accepting an incoming request) clears
 //! the record again.
+//!
+//! A record denies the *key*, not only the self-chosen device id (S19): a
+//! removed device that comes back under a new device id, or another install
+//! that reuses its key, stays out.
 use serde::{Deserialize, Serialize};
 
 use super::direct_protocol::DirectPeerIdentity;
 use super::profiles::ShareProfiles;
-use super::types::DirectContact;
+use super::types::{DirectContact, DirectGrant};
 
-/// Records are small, but a bounded ledger keeps the profile file bounded.
+/// Former ledger capacity, retained for API compatibility. Denials now outlive
+/// this historical threshold; forgetting one would re-authorize a removed key.
 pub const MAX_REMOVED_DIRECT_PEERS: usize = 64;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -33,19 +38,44 @@ pub struct RemovedDirectPeer {
 }
 
 impl RemovedDirectPeer {
-    /// The device id is the stable installation identity; a rotated key still
-    /// belongs to the device the user removed.
+    /// Same device id, key, node or fingerprint. The device id is self-chosen,
+    /// so the key pins count on their own; a rotated key still belongs to the
+    /// device the user removed. Empty values never match.
     pub fn matches(&self, peer: &DirectPeerIdentity) -> bool {
-        self.device_id == peer.device_id
+        same(&self.device_id, &peer.device_id)
+            || same(&self.public_key, &peer.public_key)
+            || same(&self.node_id, &peer.node_id)
+            || same(&self.fingerprint, &peer.fingerprint)
     }
 }
 
+fn same(left: &str, right: &str) -> bool {
+    !left.is_empty() && left == right
+}
+
 /// Whether a reciprocal installation was requested by the user or by the
-/// automatic background repair.
+/// automatic background repair, and whether this device opens its own Direct
+/// exports to the peer (FC1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PairingOrigin {
+    /// Deliberate pairing that also opens this device's exports to the peer:
+    /// the publisher of a PIN offer, or a connector that chose „Auch meine
+    /// Freigaben für dieses Gerät öffnen“.
     UserPairing,
+    /// Deliberate pairing that does not open this device's exports (FC1
+    /// default of the connecting side): no grant is created or reactivated;
+    /// an accepted grant stays as it is.
+    UserPairingOneWay,
+    /// Background repair: never readmits a removed peer and never reactivates
+    /// an ignored or suspended („neu bestätigen“) grant.
     AutomaticRepair,
+}
+
+impl PairingOrigin {
+    /// A deliberate act of the user (readmits a removed peer).
+    pub fn is_user(self) -> bool {
+        matches!(self, Self::UserPairing | Self::UserPairingOneWay)
+    }
 }
 
 /// Everything one removal transaction deleted, for reporting.
@@ -73,11 +103,16 @@ impl ShareProfiles {
             .find(|record| record.device_id == device_id)
     }
 
-    /// Replace any record for the same device and keep the ledger bounded by
-    /// dropping the oldest records first.
+    /// Refresh the same identity, preserving every prior key/node alias.
+    /// Explicit revocations never expire merely because more peers are removed.
     pub fn record_removed_direct_peer(&mut self, peer: &DirectPeerIdentity, now: i64) {
         self.removed_direct_peers
-            .retain(|record| record.device_id != peer.device_id);
+            .retain(|record| {
+                record.device_id != peer.device_id
+                    || record.public_key != peer.public_key
+                    || record.node_id != peer.node_id
+                    || record.fingerprint != peer.fingerprint
+            });
         self.removed_direct_peers.push(RemovedDirectPeer {
             device_id: peer.device_id.clone(),
             device_name: peer.device_name.clone(),
@@ -86,11 +121,6 @@ impl ShareProfiles {
             node_id: peer.node_id.clone(),
             removed_at: now,
         });
-        if self.removed_direct_peers.len() > MAX_REMOVED_DIRECT_PEERS {
-            self.removed_direct_peers
-                .sort_by_key(|record| std::cmp::Reverse(record.removed_at));
-            self.removed_direct_peers.truncate(MAX_REMOVED_DIRECT_PEERS);
-        }
     }
 
     /// Forget the denial so the device may pair automatically again.
@@ -98,6 +128,15 @@ impl ShareProfiles {
         let before = self.removed_direct_peers.len();
         self.removed_direct_peers
             .retain(|record| record.device_id != device_id);
+        before != self.removed_direct_peers.len()
+    }
+
+    /// Lift every denial of this identity (device, key or node): a deliberate
+    /// pairing readmits the peer as a whole.
+    pub fn readmit_removed_direct_identity(&mut self, peer: &DirectPeerIdentity) -> bool {
+        let before = self.removed_direct_peers.len();
+        self.removed_direct_peers
+            .retain(|record| !record.matches(peer));
         before != self.removed_direct_peers.len()
     }
 
@@ -125,6 +164,11 @@ impl ShareProfiles {
     /// The in-memory half of "remove this Direct peer completely". Returns
     /// `None` when no such contact exists (already forgotten). Idempotent, so a
     /// persisted compare-and-swap may replay it.
+    ///
+    /// The peer's grant may predate the contact's device id (it added our code
+    /// first, S29), so grants are matched by the contact's key pins as well and
+    /// every matched identity is denied. A contact that never learned a device
+    /// and owns no grant leaves nothing to re-install, so it records no denial.
     pub fn forget_direct_peer(
         &mut self,
         contact_id: &str,
@@ -135,31 +179,49 @@ impl ShareProfiles {
             .iter()
             .position(|contact| contact.id == contact_id)?;
         let contact = self.direct_contacts.remove(index);
-        let identity = Self::contact_remote_identity(&contact);
+        let pinned = Self::contact_remote_identity(&contact);
+        let (removed_grants, kept): (Vec<DirectGrant>, Vec<DirectGrant>) =
+            std::mem::take(&mut self.direct_grants)
+                .into_iter()
+                .partition(|grant| contact_owns_grant(&contact, pinned.as_ref(), grant));
+        self.direct_grants = kept;
+        let mut identities: Vec<DirectPeerIdentity> = pinned.into_iter().collect();
+        for grant in &removed_grants {
+            let identity = grant_identity(grant);
+            if !identities
+                .iter()
+                .any(|known| {
+                    known.device_id == identity.device_id
+                        && known.public_key == identity.public_key
+                        && known.node_id == identity.node_id
+                })
+            {
+                identities.push(identity);
+            }
+        }
         let mut outcome = ForgottenDirectPeer {
             contact_id: contact.id.clone(),
             display_name: contact.display_name.clone(),
-            identity: identity.clone(),
+            identity: identities.first().cloned(),
+            grants_removed: removed_grants.len(),
             ..ForgottenDirectPeer::default()
         };
-        let device_id = identity
-            .as_ref()
+        let first_device = identities
+            .first()
             .map(|identity| identity.device_id.as_str());
-        if let Some(device_id) = device_id {
-            let before = self.direct_grants.len();
-            self.direct_grants
-                .retain(|grant| grant.device_id != device_id);
-            outcome.grants_removed = before - self.direct_grants.len();
-        }
         let (requests_removed, tombstones_skipped) =
-            self.delete_direct_requests_for_forgotten_peer(contact_id, device_id, now);
+            self.delete_direct_requests_for_forgotten_peer(contact_id, first_device, now);
         outcome.requests_removed = requests_removed;
         outcome.tombstones_skipped = tombstones_skipped;
-        if let Some(device_id) = device_id {
-            outcome.legacy_requests_removed =
-                self.delete_legacy_direct_requests_for_device(device_id, now);
+        for identity in identities.iter().skip(1) {
+            let (removed, skipped) =
+                self.delete_direct_requests_for_forgotten_peer("", Some(&identity.device_id), now);
+            outcome.requests_removed += removed;
+            outcome.tombstones_skipped += skipped;
         }
-        if let Some(identity) = &identity {
+        for identity in &identities {
+            outcome.legacy_requests_removed +=
+                self.delete_legacy_direct_requests_for_device(&identity.device_id, now);
             self.record_removed_direct_peer(identity, now);
             self.recompute_identity_conflicts_for_device(&identity.device_id);
         }
@@ -187,11 +249,42 @@ impl ShareProfiles {
             public_key: grant.public_key.clone(),
             fingerprint: grant.fingerprint.clone(),
         };
+        self.withdraw_direct_key(&identity, now);
         let _ = self.delete_direct_requests_for_forgotten_peer("", Some(device_id), now);
         let _ = self.delete_legacy_direct_requests_for_device(device_id, now);
         self.record_removed_direct_peer(&identity, now);
         self.recompute_identity_conflicts_for_device(device_id);
         true
+    }
+}
+
+/// A grant belongs to the removed contact when it carries the contact's
+/// device, its accepted key, or the key pins of its Direct code.
+fn contact_owns_grant(
+    contact: &DirectContact,
+    pinned: Option<&DirectPeerIdentity>,
+    grant: &DirectGrant,
+) -> bool {
+    let known_keys = [
+        contact.remote_public_key.as_deref(),
+        contact.accepted_public_key.as_deref(),
+    ];
+    pinned.is_some_and(|identity| identity.device_id == grant.device_id)
+        || known_keys
+            .into_iter()
+            .flatten()
+            .any(|key| same(key, &grant.public_key))
+        || same(&contact.expected_node_id, &grant.node_id)
+        || same(&contact.expected_fingerprint, &grant.fingerprint)
+}
+
+fn grant_identity(grant: &DirectGrant) -> DirectPeerIdentity {
+    DirectPeerIdentity {
+        device_id: grant.device_id.clone(),
+        device_name: grant.device_name.clone(),
+        node_id: grant.node_id.clone(),
+        public_key: grant.public_key.clone(),
+        fingerprint: grant.fingerprint.clone(),
     }
 }
 
@@ -232,6 +325,7 @@ mod tests {
             lan_candidates: Vec::new(),
             lan_seen_at: None,
             lan_uplink: None,
+            relation: Default::default(),
         }
     }
 
@@ -245,6 +339,7 @@ mod tests {
             state: DirectGrantState::Accepted,
             updated_at: 1,
             exec: Default::default(),
+            write: false,
         }
     }
 
@@ -264,16 +359,16 @@ mod tests {
     }
 
     #[test]
-    fn lan_cleanup_task_ledger_is_bounded_and_keeps_newest_records() {
+    fn review_task_removed_denials_survive_historical_capacity() {
         let mut profiles = ShareProfiles::default();
         for index in 0..(MAX_REMOVED_DIRECT_PEERS + 5) {
             profiles.record_removed_direct_peer(&identity(&format!("d{index}")), index as i64);
         }
         assert_eq!(
             profiles.removed_direct_peers.len(),
-            MAX_REMOVED_DIRECT_PEERS
+            MAX_REMOVED_DIRECT_PEERS + 5
         );
-        assert!(profiles.removed_direct_peer_for_device("d0").is_none());
+        assert!(profiles.removed_direct_peer_for_device("d0").is_some());
         assert!(profiles
             .removed_direct_peer_for_device(&format!("d{}", MAX_REMOVED_DIRECT_PEERS + 4))
             .is_some());

@@ -30,9 +30,7 @@ impl ShareProfiles {
                 .iter_mut()
                 .find(|grant| exact_grant(grant, &entry.peer))
             {
-                grant.state = DirectGrantState::Ignored;
-                grant.updated_at = now;
-                grant.exec.disable_without_decision(now);
+                suspend_for_reconfirm(grant, now);
             }
         }
         // A selector and its proof are bound to the old lookup ID and secret.
@@ -101,13 +99,15 @@ impl ShareProfiles {
         Ok(changed)
     }
 
+    /// After a Direct-code rotation or identity repair every active grant waits
+    /// for re-confirmation („neu bestätigen“, S23) instead of becoming a user
+    /// denial; a request with the current code, a deliberate pairing or the
+    /// user reactivates it. Exec ends for every grant (B04).
     pub(crate) fn invalidate_all_direct_grants(&mut self, now: i64) -> usize {
         let mut changed = 0;
         for grant in &mut self.direct_grants {
             if grant.state == DirectGrantState::Accepted || grant.exec.enabled {
-                grant.state = DirectGrantState::Ignored;
-                grant.updated_at = now;
-                grant.exec.disable_without_decision(now);
+                suspend_for_reconfirm(grant, now);
                 changed += 1;
             }
         }
@@ -122,9 +122,8 @@ impl ShareProfiles {
     ) -> usize {
         let mut changed = 0;
         for entry in &mut self.legacy_direct_requests {
-            if entry.peer.device_id == peer.device_id
-                && entry.peer.public_key == peer.public_key
-                && entry.peer.node_id == peer.node_id
+            if (!peer.public_key.is_empty() && entry.peer.public_key == peer.public_key
+                || !peer.node_id.is_empty() && entry.peer.node_id == peer.node_id)
                 && entry.decision == LegacyDirectDecisionState::Accepted
             {
                 mark_revoked(entry, LegacyDirectDecisionSource::User, now);
@@ -224,15 +223,16 @@ impl ShareProfiles {
         {
             // Keep the mismatch visible on the rejected request that records it;
             // rejection removes a live claim, not the conflict evidence itself.
-            entry.identity_conflict = pins.iter().any(|(public_key, node_id, fingerprint)| {
-                *public_key != entry.peer.public_key
-                    || *node_id != entry.peer.node_id
-                    || *fingerprint != entry.peer.fingerprint
-            }) || grant.is_some_and(|(public_key, node_id, fingerprint)| {
-                public_key != entry.peer.public_key
-                    || node_id != entry.peer.node_id
-                    || fingerprint != entry.peer.fingerprint
-            });
+            entry.identity_conflict =
+                pins.iter().any(|(public_key, node_id, fingerprint)| {
+                    *public_key != entry.peer.public_key
+                        || *node_id != entry.peer.node_id
+                        || *fingerprint != entry.peer.fingerprint
+                }) || grant.is_some_and(|(public_key, node_id, fingerprint)| {
+                    public_key != entry.peer.public_key
+                        || node_id != entry.peer.node_id
+                        || fingerprint != entry.peer.fingerprint
+                });
         }
     }
 
@@ -290,4 +290,14 @@ fn mark_revoked(
         decision_revision: entry.decision_revision,
         ..Default::default()
     };
+}
+
+/// „neu bestätigen“: an active grant pauses until it is confirmed again; a
+/// user denial stays a denial. Exec ends either way.
+fn suspend_for_reconfirm(grant: &mut super::types::DirectGrant, now: i64) {
+    if grant.state == DirectGrantState::Accepted {
+        grant.state = DirectGrantState::Reconfirm;
+    }
+    grant.updated_at = now;
+    grant.exec.disable_without_decision(now);
 }

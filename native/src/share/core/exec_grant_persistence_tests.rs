@@ -71,6 +71,7 @@ fn direct_fixture() -> (ShareIdentity, ShareProfiles, ExecGrantTarget) {
         state: DirectGrantState::Accepted,
         updated_at: 1,
         exec: ExecGrant::default(),
+        write: false,
     });
     (local, profiles, target)
 }

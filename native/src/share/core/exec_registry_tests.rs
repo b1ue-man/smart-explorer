@@ -347,3 +347,38 @@ fn failed_platform_prepare_or_launch_releases_the_slot_without_running() {
         .unwrap();
     assert!(registry.active_views().is_empty());
 }
+
+#[test]
+fn review_task_restriction_keeps_other_principal_launch_and_blocks_old_token() {
+    use crate::share::relation_rights::{
+        PrincipalKey, RelationScope, RestrictionReason, RestrictionSet, RightsRestriction,
+    };
+    let registry = ExecRegistry::new(limits(4, 2, 4, 4));
+    let alice = principal("Alice", "node-a");
+    let mut bob = principal("Bob", "node-b");
+    bob.public_key = "public-b".into();
+    registry.apply_authorization(&alice, 1, 1, true).unwrap();
+    registry.apply_authorization(&bob, 1, 1, true).unwrap();
+    let first = reserve(&registry, alice.clone(), &start("40", "a"), auth(1, 1, "a"));
+    let other = reserve(&registry, bob.clone(), &start("41", "b"), auth(1, 1, "b"));
+    let mut restrictions = RestrictionSet::default();
+    restrictions.push(RightsRestriction {
+        relation: RelationScope::Direct,
+        principal: Some(PrincipalKey { public_key: alice.public_key.clone(), node_id: alice.node_id.clone() }),
+        reason: RestrictionReason::WriteRevoked,
+    });
+    registry.restrict_authorization(2, &restrictions).unwrap();
+    registry.apply_authorization(&alice, 1, 2, true).unwrap();
+    registry.apply_authorization(&bob, 1, 2, true).unwrap();
+    assert_eq!(first.cancellation.reason(), Some(ExecCancelReason::Revoked));
+    assert!(other.cancellation.reason().is_none());
+    registry.commit_start(&other.lease, || Ok(())).unwrap();
+    assert_error(registry.commit_start(&first.lease, || Ok(())), ExecRegistryError::StaleAuthorization);
+    assert_error(
+        registry.prepare(alice.clone(), auth(1, 1, "old"), &start("42", "old"), 12),
+        ExecRegistryError::StaleAuthorization,
+    );
+    // The separate Exec grant remains enabled: a new session may start.
+    reserve(&registry, alice, &start("43", "new"), auth(1, 2, "new"));
+    assert_error(registry.apply_authorization(&bob, 1, 1, true), ExecRegistryError::StaleAuthorization);
+}

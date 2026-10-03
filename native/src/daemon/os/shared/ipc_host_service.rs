@@ -94,10 +94,6 @@ fn needs_attempt(state: &ShareHostState) -> bool {
     gate.failed
         || gate.repair_deferred
         || (gate.service_wanted && state.service.is_none())
-        || state
-            .service
-            .as_ref()
-            .is_some_and(crate::share::ShareService::reciprocal_repair_in_flight)
         || state.pending_profiles_base.is_some()
         || state.identity_error.is_some()
         || state.profiles_error.is_some()
@@ -180,13 +176,6 @@ pub(super) fn configure_or_restart_locked(state: &mut ShareHostState) -> Result<
         state.signal_error = None;
         return Ok(());
     }
-    if state
-        .service
-        .as_ref()
-        .is_some_and(crate::share::ShareService::reciprocal_repair_in_flight)
-    {
-        return Ok(());
-    }
     let needs_restart = state
         .service
         .as_ref()
@@ -215,14 +204,18 @@ pub(super) fn configure_or_restart_locked(state: &mut ShareHostState) -> Result<
         ) {
             Ok(service) => {
                 log("share worker started");
-                configure_service(&service, &state.profiles)?;
+                if !configure_service(&service, &state.profiles)? {
+                    state.configure_deferred = true;
+                }
                 state.running_server = state.server.clone();
                 state.service = Some(service);
             }
             Err(error) => return Err(format!("Share-Worker Start: {error}")),
         }
     } else if let Some(service) = &state.service {
-        configure_service(service, &state.profiles)?;
+        if !configure_service(service, &state.profiles)? {
+            state.configure_deferred = true;
+        }
     }
     Ok(())
 }
@@ -248,16 +241,28 @@ pub(in crate::daemon) fn stop_service_locked(state: &mut ShareHostState) -> Resu
     Ok(())
 }
 
+/// Hands a new configuration to the worker even during peer-controlled
+/// repair I/O. The node serializes only the short durable store step (S66).
 pub(in crate::daemon) fn configure_service(
     service: &crate::share::ShareService,
     profiles: &crate::share::ShareProfiles,
-) -> Result<(), String> {
-    if service.reciprocal_repair_in_flight() {
-        return Ok(());
-    }
+) -> Result<bool, String> {
     service
         .cmd(crate::share::ShareCmd::ConfigureProfiles {
             profiles: Box::new(profiles.clone()),
+        })
+        .map(|_| true)
+}
+
+/// FA3: presence, routes, status and newly seen room members reach the worker
+/// without a configuration transition, so they never close a connection.
+pub(in crate::daemon) fn update_runtime(
+    service: &crate::share::ShareService,
+    profiles: &crate::share::ShareProfiles,
+) -> Result<(), String> {
+    service
+        .cmd(crate::share::ShareCmd::UpdateRuntime {
+            runtime: Box::new(crate::share::RelationRuntime::from_profiles(profiles)),
         })
         .map(|_| ())
 }

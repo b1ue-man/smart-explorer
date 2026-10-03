@@ -101,7 +101,7 @@ pub fn readmit_removed_device(
         ShareProfiles::readmit_removed_direct_peer_persisted(default_home, device_id)
             .map_err(|error| format!("Sperre nicht aufgehoben: {error}"))?;
     let headline = if change.changed {
-        format!("{device_id} darf sich wieder automatisch koppeln")
+        format!("Entfernungssperre fuer {device_id} aufgehoben; neue Anfragen folgen der Anfragepolitik")
     } else {
         format!("{device_id} war nicht gesperrt")
     };

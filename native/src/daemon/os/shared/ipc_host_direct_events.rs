@@ -1,8 +1,8 @@
 use crate::share::{
     DirectDecisionKind, DirectGrantState, DirectLedgerError, DirectPeerIdentity,
-    DirectProtocolError, DirectRequestDirection, DirectSignalEvent, ShareIdentity, ShareProfiles,
-    SignedDirectDecision, SignedDirectDecisionReceipt, SignedDirectRequestReceipt,
-    MAX_TRACKED_DIRECT_ENVELOPE_LIFETIME_SECS,
+    DirectProtocolError, DirectRequestDirection, DirectRequestPolicy, DirectSignalEvent,
+    ShareIdentity, ShareProfiles, SignedDirectDecision, SignedDirectDecisionReceipt,
+    SignedDirectRequestReceipt, MAX_TRACKED_DIRECT_ENVELOPE_LIFETIME_SECS,
 };
 use std::{cell::RefCell, fmt};
 
@@ -11,10 +11,11 @@ pub(super) fn persist_group(
     events: &[DirectSignalEvent],
 ) -> Result<ShareProfiles, GroupPersistError> {
     let apply_error = RefCell::new(None);
+    let policy = DirectRequestPolicy::current();
     let result = ShareProfiles::mutate_persisted(Some(super::default_home()), |profiles| {
         apply_error.take();
         for event in events {
-            if let Err(error) = apply(profiles, identity, event) {
+            if let Err(error) = apply(profiles, identity, event, policy) {
                 let message = error.to_string();
                 apply_error.replace(Some(error));
                 return Err(message);
@@ -62,6 +63,7 @@ fn apply(
     profiles: &mut ShareProfiles,
     identity: &ShareIdentity,
     event: &DirectSignalEvent,
+    policy: DirectRequestPolicy,
 ) -> Result<(), ApplyError> {
     match event {
         DirectSignalEvent::RequestReceived {
@@ -78,7 +80,13 @@ fn apply(
                 return Ok(());
             }
             ensure_request_receipt(profiles, identity, request, *received_at)?;
-            ensure_authenticated_request_decision(profiles, identity, request, *received_at)?;
+            ensure_authenticated_request_decision(
+                profiles,
+                identity,
+                request,
+                *received_at,
+                policy,
+            )?;
         }
         DirectSignalEvent::RequestReceiptReceived {
             receipt,
@@ -210,6 +218,7 @@ fn ensure_authenticated_request_decision(
     identity: &ShareIdentity,
     request: &crate::share::SignedDirectRequest,
     now: i64,
+    policy: DirectRequestPolicy,
 ) -> Result<(), ApplyError> {
     if profiles
         .direct_request(&request.request_id)
@@ -218,23 +227,9 @@ fn ensure_authenticated_request_decision(
     {
         return Ok(());
     }
-    let identity_conflict = profiles.tracked_identity_conflict(&request.request_id);
-    let policy_denied =
-        profiles.direct_auto_accept_denied(&request.lookup_id, &request.requester);
-    let decision = match profiles.grant_for(&request.requester.device_id) {
-        _ if identity_conflict || policy_denied => DirectDecisionKind::Rejected,
-        Some(grant)
-            if grant.public_key == request.requester.public_key
-                && grant.node_id == request.requester.node_id
-                && grant.fingerprint == request.requester.fingerprint =>
-        {
-            match grant.state {
-                DirectGrantState::Accepted => DirectDecisionKind::Accepted,
-                DirectGrantState::Ignored => DirectDecisionKind::Rejected,
-            }
-        }
-        Some(_) => DirectDecisionKind::Rejected,
-        None => DirectDecisionKind::Accepted,
+    let Some(decision) = automatic_decision(profiles, request, policy) else {
+        // FC5: a device without a grant waits in the inbox for the user.
+        return Ok(());
     };
     let signed = SignedDirectDecision::sign(
         request,
@@ -249,6 +244,45 @@ fn ensure_authenticated_request_decision(
     )?;
     profiles.record_direct_decision(signed, now)?;
     Ok(())
+}
+
+/// The decision this device takes without asking. The current grant of the
+/// exact identity wins over older history; a suspended grant („neu
+/// bestätigen“) is confirmed again by a request authenticated with the
+/// current code. A device without a grant is accepted automatically only with
+/// `AutoAccept` (FC5) and never when the user removed or blocked its key.
+fn automatic_decision(
+    profiles: &ShareProfiles,
+    request: &crate::share::SignedDirectRequest,
+    policy: DirectRequestPolicy,
+) -> Option<DirectDecisionKind> {
+    if profiles.tracked_identity_conflict(&request.request_id) {
+        return Some(DirectDecisionKind::Rejected);
+    }
+    let requester = &request.requester;
+    if profiles.direct_key_denied(requester) {
+        return Some(DirectDecisionKind::Rejected);
+    }
+    match profiles.grant_for(&requester.device_id) {
+        Some(grant)
+            if grant.public_key == requester.public_key
+                && grant.node_id == requester.node_id
+                && grant.fingerprint == requester.fingerprint =>
+        {
+            Some(match grant.state {
+                DirectGrantState::Accepted | DirectGrantState::Reconfirm => {
+                    DirectDecisionKind::Accepted
+                }
+                DirectGrantState::Ignored => DirectDecisionKind::Rejected,
+            })
+        }
+        Some(_) => Some(DirectDecisionKind::Rejected),
+        None if profiles.direct_auto_accept_denied(&request.lookup_id, requester) => {
+            Some(DirectDecisionKind::Rejected)
+        }
+        None if policy == DirectRequestPolicy::AutoAccept => Some(DirectDecisionKind::Accepted),
+        None => None,
+    }
 }
 
 fn outgoing_request_and_secret(

@@ -4,6 +4,9 @@ use super::share_lifecycle_view::{
 };
 use super::*;
 
+#[path = "share_lifecycle_actions_ui.rs"]
+mod actions;
+
 enum LifecycleAction {
     Decide {
         request_id: crate::share::DirectRequestId,
@@ -29,6 +32,9 @@ enum LifecycleAction {
     /// Delete the authorization (and the contact behind it, when one exists)
     /// completely; the device is denied automatic re-pairing.
     RemoveDevice {
+        device_id: String,
+    },
+    AllowAgain {
         device_id: String,
     },
     SelectExports,
@@ -86,7 +92,9 @@ pub(super) fn ui_lifecycle(app: &mut App, ui: &mut egui::Ui) {
         ui.label("Keine Geraete haben eine gespeicherte Autorisierung.");
     } else {
         for device in &authorized {
-            authorized_card(ui, device, &mut action);
+            let can_allow_again = app.share_profiles.grant_for(&device.device_id)
+                .is_some_and(|grant| grant.state != crate::share::DirectGrantState::Accepted);
+            authorized_card(ui, device, can_allow_again, &mut action);
         }
     }
 
@@ -97,7 +105,7 @@ pub(super) fn ui_lifecycle(app: &mut App, ui: &mut egui::Ui) {
     super::legacy_lifecycle_ui::ui(app, ui);
 
     if let Some(action) = action {
-        perform_action(app, action);
+        actions::perform_action(app, action);
     }
 }
 
@@ -257,6 +265,7 @@ fn request_card(
 fn authorized_card(
     ui: &mut egui::Ui,
     device: &AuthorizedDeviceView,
+    can_allow_again: bool,
     action: &mut Option<LifecycleAction>,
 ) {
     egui::Frame::group(ui.style()).show(ui, |ui| {
@@ -301,6 +310,11 @@ fn authorized_card(
                 });
             }
         }
+        if can_allow_again && ui.button("Wieder erlauben / Bestaetigen").clicked() {
+            *action = Some(LifecycleAction::AllowAgain {
+                device_id: device.device_id.clone(),
+            });
+        }
         let remove_label = if device.authorization.starts_with("active") {
             "Geraet entfernen"
         } else {
@@ -319,141 +333,6 @@ fn authorized_card(
         }
     });
     ui.add_space(4.0);
-}
-
-fn perform_action(app: &mut App, action: LifecycleAction) {
-    match action {
-        LifecycleAction::Decide {
-            request_id,
-            fingerprint,
-            decision,
-        } => decide(app, request_id, fingerprint, decision),
-        LifecycleAction::Retry { request_id } => retry(app, request_id),
-        LifecycleAction::DeleteHistory { request_id } => delete_history(app, request_id),
-        LifecycleAction::Revoke {
-            request_id,
-            fingerprint,
-        } => decide(
-            app,
-            request_id,
-            fingerprint,
-            crate::share::DirectDecisionKind::Revoked,
-        ),
-        LifecycleAction::RevokeLegacy { selector } => {
-            match crate::share::revoke_legacy_direct_request(Some(default_home()), &selector) {
-                Ok(_) => {
-                    let _ = refresh_after_action(
-                        app,
-                        format!("Legacy-Freigabe fuer {selector} lokal widerrufen"),
-                    );
-                }
-                Err(error) => app.error_msg = Some(format!("Legacy-Freigabe: {error}")),
-            }
-        }
-        LifecycleAction::RevokeUnlinkedLegacyGrant { device_id } => {
-            let now = crate::share::core_now_secs();
-            let result =
-                crate::share::ShareProfiles::mutate_persisted(Some(default_home()), |profiles| {
-                    let grant = profiles
-                        .direct_grants
-                        .iter_mut()
-                        .find(|grant| grant.device_id == device_id)
-                        .ok_or_else(|| format!("Legacy-Freigabe nicht gefunden: {device_id}"))?;
-                    grant.state = crate::share::DirectGrantState::Ignored;
-                    grant.updated_at = now;
-                    grant.exec.disable_without_decision(now);
-                    Ok(())
-                });
-            match result {
-                Ok(_) => {
-                    let _ = refresh_after_action(
-                        app,
-                        format!("Unverknuepfte Legacy-Freigabe fuer {device_id} gesperrt"),
-                    );
-                }
-                Err(error) => app.error_msg = Some(format!("Legacy-Freigabe: {error}")),
-            }
-        }
-        LifecycleAction::RemoveDevice { device_id } => {
-            let contact_id = app
-                .share_profiles
-                .direct_contacts
-                .iter()
-                .find(|contact| contact.remote_device_id.as_deref() == Some(device_id.as_str()))
-                .map(|contact| contact.id.clone());
-            match contact_id {
-                Some(contact_id) => app.remove_direct_peer_completely(&contact_id),
-                None => app.delete_direct_grant_entry(&device_id),
-            }
-        }
-        LifecycleAction::SelectExports => {
-            app.share_export_scope = 0;
-            app.share_export_target_id.clear();
-            app.share_tab = 2;
-        }
-    }
-}
-
-fn decide(
-    app: &mut App,
-    request_id: crate::share::DirectRequestId,
-    fingerprint: String,
-    decision: crate::share::DirectDecisionKind,
-) {
-    let Some(identity) = app.share_identity.clone() else {
-        app.error_msg = Some("Share-Identitaet nicht verfuegbar".into());
-        return;
-    };
-    match crate::share::decide_direct_request(
-        Some(default_home()),
-        &identity,
-        &request_id,
-        &fingerprint,
-        decision,
-        None,
-    ) {
-        Ok(_) => {
-            let label = match decision {
-                crate::share::DirectDecisionKind::Accepted => "accepted",
-                crate::share::DirectDecisionKind::Rejected => "rejected",
-                crate::share::DirectDecisionKind::Revoked => "revoked",
-            };
-            let _ = refresh_after_action(
-                app,
-                format!(
-                    "Anfrage {request_id}: Entscheidung {label} gespeichert; Peer-Empfang offen"
-                ),
-            );
-        }
-        Err(error) => {
-            app.error_msg = Some(format!("Direkt-Entscheidung nicht gespeichert: {error}"));
-        }
-    }
-}
-
-fn retry(app: &mut App, request_id: crate::share::DirectRequestId) {
-    match crate::share::retry_direct_request_now(Some(default_home()), &request_id) {
-        Ok(_) => {
-            let _ = refresh_after_action(
-                app,
-                format!("Anfrage {request_id}: gleiche ID erneut queued; Peer-Empfang offen"),
-            );
-        }
-        Err(error) => {
-            app.error_msg = Some(format!("Direkt-Anfrage nicht erneut vorgemerkt: {error}"));
-        }
-    }
-}
-
-fn delete_history(app: &mut App, request_id: crate::share::DirectRequestId) {
-    match crate::share::delete_direct_request_history(Some(default_home()), &request_id) {
-        Ok(()) => {
-            let _ = refresh_after_action(app, format!("Anfrage {request_id} geloescht"));
-        }
-        Err(error) => {
-            app.error_msg = Some(format!("Anfrage nicht geloescht: {error}"));
-        }
-    }
 }
 
 fn refresh_after_action(app: &mut App, notice: String) -> bool {

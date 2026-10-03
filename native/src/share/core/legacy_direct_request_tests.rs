@@ -45,6 +45,7 @@ fn verified_receive_survives_reload_and_new_nonce_updates_same_selector() {
 fn ci_remote_task_replay_requires_revoke_before_delete_and_retains_denial() {
     let identity = identity();
     let mut profiles = ShareProfiles::default();
+    profiles.direct_request_policy = crate::share::DirectRequestPolicy::AutoAccept;
     let first = presence(&identity, 2, "nonce-a", 200);
     profiles
         .record_verified_legacy_direct_request(&identity.direct_lookup_id, &first, 100)
@@ -87,6 +88,7 @@ fn ci_remote_task_replay_requires_revoke_before_delete_and_retains_denial() {
 fn ci_remote_task_autoaccept_revoke_and_manual_answer_retry_remain_truthful() {
     let identity = identity();
     let mut profiles = ShareProfiles::default();
+    profiles.direct_request_policy = crate::share::DirectRequestPolicy::AutoAccept;
     let request = presence(&identity, 2, "nonce-a", 200);
     profiles
         .record_verified_legacy_direct_request(&identity.direct_lookup_id, &request, 100)
@@ -151,6 +153,7 @@ fn ci_remote_task_identity_conflict_is_rejected_without_replacing_the_grant() {
         state: DirectGrantState::Accepted,
         updated_at: 1,
         exec: Default::default(),
+        write: false,
     });
     let request = presence(&identity, 2, "nonce-a", 200);
     profiles
@@ -171,6 +174,7 @@ fn ci_remote_task_first_verified_identity_wins_in_both_arrival_orders() {
     let identity = identity();
     for seeds in [[2, 3], [3, 2]] {
         let mut profiles = ShareProfiles::default();
+        profiles.direct_request_policy = crate::share::DirectRequestPolicy::AutoAccept;
         for (index, seed) in seeds.into_iter().enumerate() {
             let request = presence(
                 &identity,
@@ -207,6 +211,7 @@ fn ci_remote_task_first_verified_identity_wins_in_both_arrival_orders() {
 fn ci_remote_task_generic_grant_upsert_cannot_replace_an_autoaccepted_identity() {
     let identity = identity();
     let mut profiles = ShareProfiles::default();
+    profiles.direct_request_policy = crate::share::DirectRequestPolicy::AutoAccept;
     let request_a = presence(&identity, 2, "nonce-a", 300);
     profiles
         .record_verified_legacy_direct_request(&identity.direct_lookup_id, &request_a, 100)
@@ -230,6 +235,7 @@ fn ci_remote_task_generic_grant_upsert_cannot_replace_an_autoaccepted_identity()
 fn ci_remote_task_load_reconciles_autoaccepted_history_when_its_grant_was_lost() {
     let identity = identity();
     let mut profiles = ShareProfiles::default();
+    profiles.direct_request_policy = crate::share::DirectRequestPolicy::AutoAccept;
     let request_a = presence(&identity, 2, "nonce-a", 300);
     profiles
         .record_verified_legacy_direct_request(&identity.direct_lookup_id, &request_a, 100)
@@ -299,10 +305,11 @@ fn identity_rotation_disables_even_unlinked_direct_and_exec_grants() {
             enabled: true,
             ..Default::default()
         },
+        write: false,
     });
 
     assert_eq!(profiles.invalidate_all_direct_grants(100), 1);
-    assert_eq!(profiles.direct_grants[0].state, DirectGrantState::Ignored);
+    assert_eq!(profiles.direct_grants[0].state, DirectGrantState::Reconfirm);
     assert!(!profiles.direct_grants[0].exec.enabled);
     assert_eq!(profiles.direct_grants[0].exec.policy_revision, 1);
     assert_eq!(profiles.invalidate_all_direct_grants(101), 0);

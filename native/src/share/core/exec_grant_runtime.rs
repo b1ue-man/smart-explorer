@@ -128,6 +128,12 @@ pub(super) fn apply_configuration_transition(
     next_epoch: u64,
     registry: &ExecRegistry,
 ) -> io::Result<()> {
+    registry
+        .restrict_authorization(
+            next_epoch,
+            &super::relation_rights::authorization_restrictions(current, candidate),
+        )
+        .map_err(eio)?;
     let old = effective_policies(current)
         .into_iter()
         .map(|policy| (principal_key(&policy.principal), policy))
@@ -224,7 +230,7 @@ fn resolve_exact_policy<'a>(
                         && &member.node_id == node_id
                 })
                 .ok_or_else(|| denied("room member not found"))?;
-            if (require_active && member.blocked)
+            if (require_active && !member.is_admitted())
                 || member.public_key != member.node_id
                 || !fingerprint_matches(&member.public_key, &member.fingerprint)
             {
@@ -267,8 +273,10 @@ fn effective_policies(state: &ShareAuthState) -> Vec<EffectivePolicy> {
                 node_id: grant.node_id.clone(),
             },
             revision: grant.exec.policy_revision,
-            enabled: state.direct_online
-                && grant.state == DirectGrantState::Accepted
+            // Going offline is a session restriction, not an Exec policy
+            // decision. Its epoch barrier cancels old work; returning online
+            // must not look like re-enabling a revoked policy revision.
+            enabled: grant.state == DirectGrantState::Accepted
                 && grant.exec.enabled,
         });
     }
@@ -296,7 +304,7 @@ fn append_room_policies(room: &RoomProfile, policies: &mut Vec<EffectivePolicy>)
                 node_id: member.node_id.clone(),
             },
             revision: member.exec.policy_revision,
-            enabled: room.auto_join && !member.blocked && member.exec.enabled,
+            enabled: member.is_admitted() && member.exec.enabled,
         });
     }
 }
