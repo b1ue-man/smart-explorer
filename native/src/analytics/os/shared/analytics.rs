@@ -28,6 +28,11 @@ pub use backend::scan_backend;
 pub(super) use budget::MAX_RETAINED_FILES_PER_DIRECTORY;
 use budget::{AnalyticsBudget, Retention};
 use outcome::Diagnostics;
+#[path = "analytics_walk.rs"]
+mod walk;
+#[cfg(test)]
+use walk::scan_entries;
+use walk::scan_entries_with;
 pub use outcome::{ScanIssue, ScanOutcome, ScanStatus};
 
 /// One node of the size tree. `name` is this node's own segment, never the full
@@ -67,7 +72,32 @@ pub(crate) fn scan_with_guard(
     p: &Progress,
     guard: Option<ScanGuard<'_>>,
 ) -> ScanOutcome {
-    scan_in(root, p, guard, None)
+    scan_in(root, p, guard, None, None)
+}
+
+/// How many tree nodes scans may retain together: the scans of all exports a
+/// host merges into one result share one (a peer's `/`), and a receiver may
+/// ask for fewer nodes than the host default (its memory).
+pub(crate) struct ScanBudget(AnalyticsBudget);
+
+impl ScanBudget {
+    /// The host default, or at most `nodes` retained nodes.
+    pub(crate) fn with_node_limit(nodes: Option<u64>) -> Self {
+        Self(match nodes {
+            Some(nodes) => AnalyticsBudget::with_node_limit(nodes),
+            None => AnalyticsBudget::default(),
+        })
+    }
+}
+
+/// `scan_with_guard` drawing on a budget shared with other scans.
+pub(crate) fn scan_with(
+    root: &Path,
+    p: &Progress,
+    guard: Option<ScanGuard<'_>>,
+    budget: &ScanBudget,
+) -> ScanOutcome {
+    scan_in(root, p, guard, None, Some(&budget.0))
 }
 
 /// `protected` replaces the areas derived from the registered volumes.
@@ -76,6 +106,24 @@ fn scan_in(
     p: &Progress,
     guard: Option<ScanGuard<'_>>,
     protected: Option<ProtectedAreas>,
+    shared: Option<&AnalyticsBudget>,
+) -> ScanOutcome {
+    scan_in_with(root, p, guard, protected, shared, false, &[], None)
+}
+
+pub(crate) fn scan_confined(root: &Path, p: &Progress, budget: &ScanBudget, excluded: &[PathBuf]) -> ScanOutcome {
+    scan_in_with(root, p, None, None, Some(&budget.0), true, excluded, None)
+}
+
+pub(crate) fn scan_confined_with(root: &Path, p: &Progress, budget: &ScanBudget,
+    excluded: &[PathBuf], handle: crate::local_access::DirectoryHandle,
+) -> ScanOutcome {
+    scan_in_with(root, p, None, None, Some(&budget.0), true, excluded, Some(handle))
+}
+
+fn scan_in_with(root: &Path, p: &Progress, guard: Option<ScanGuard<'_>>,
+    protected: Option<ProtectedAreas>, shared: Option<&AnalyticsBudget>, confined: bool,
+    excluded: &[PathBuf], provided: Option<crate::local_access::DirectoryHandle>,
 ) -> ScanOutcome {
     let name = root
         .file_name()
@@ -85,7 +133,14 @@ fn scan_in(
     let threads = local_scan_threads();
     let protected = protected.unwrap_or_else(|| ProtectedAreas::for_walk(&root));
     let diagnostics = Diagnostics::with_protected(protected);
-    let budget = AnalyticsBudget::default();
+    let own;
+    let budget = match shared {
+        Some(shared) => shared,
+        None => {
+            own = AnalyticsBudget::for_progress(p);
+            &own
+        }
+    };
     let _ = budget.claim(&root, 0, name.len() as u64, &diagnostics);
     let pool = if threads > 1 && parallel_scan_allowed() {
         rayon::ThreadPoolBuilder::new()
@@ -99,13 +154,18 @@ fn scan_in(
     let traversal = Traversal {
         progress: p,
         diagnostics: &diagnostics,
-        budget: &budget,
+        budget,
         // This also makes a failed pool creation genuinely serial: recursive
         // work must not silently escape into Rayon's global pool.
         parallel: pool.is_some(),
         guard,
     };
-    let visit = || scan_dir(&traversal, &root, name.into_boxed_str(), 0, true);
+    let handle = confined.then(|| provided.map(Ok).unwrap_or_else(|| crate::local_access::DirectoryHandle::open_root(&root)));
+    let visit = || match &handle {
+        Some(Err(error)) => { diagnostics.dir_failed(&root, error, true); empty_dir(name.into_boxed_str()) }
+        Some(Ok(handle)) => scan_dir_with(&traversal, &root, name.into_boxed_str(), 0, true, Some(handle), excluded),
+        None => scan_dir_with(&traversal, &root, name.into_boxed_str(), 0, true, None, excluded),
+    };
     let tree = match pool {
         Some(pool) => pool.install(visit),
         None => visit(),
@@ -150,12 +210,14 @@ fn panic_text(payload: Box<dyn std::any::Any + Send>) -> String {
     }
 }
 
-fn scan_dir(
+fn scan_dir_with(
     traversal: &Traversal<'_>,
     dir: &Path,
     name: Box<str>,
     depth: u32,
     is_root: bool,
+    handle: Option<&crate::local_access::DirectoryHandle>,
+    excluded: &[PathBuf],
 ) -> SizeNode {
     if traversal.progress.cancel.load(Ordering::Relaxed) {
         return empty_dir(name);
@@ -185,7 +247,10 @@ fn scan_dir(
                 return empty_dir(name);
             }
         }
-        scan_entries(traversal, dir, name, read_directory(dir), depth, is_root)
+        match handle {
+            Some(handle) => scan_entries_with(traversal, dir, name, handle.read_directory(), depth, is_root, Some(handle), excluded),
+            None => scan_entries_with(traversal, dir, name, read_directory(dir), depth, is_root, None, excluded),
+        }
     });
     match std::panic::catch_unwind(visit) {
         Ok(node) => node,
@@ -197,170 +262,6 @@ fn scan_dir(
             );
             empty_dir(fallback_name)
         }
-    }
-}
-
-fn scan_entries(
-    traversal: &Traversal<'_>,
-    dir: &Path,
-    name: Box<str>,
-    entries: io::Result<impl Iterator<Item = io::Result<LocalEntry>>>,
-    depth: u32,
-    is_root: bool,
-) -> SizeNode {
-    let p = traversal.progress;
-    let diagnostics = traversal.diagnostics;
-    let budget = traversal.budget;
-    let mut subdirs: Vec<(PathBuf, Box<str>, Retention)> = Vec::new();
-    let mut files: Vec<(Box<str>, u64)> = Vec::new();
-    let mut own_files = 0u64;
-    let mut own_bytes = 0u64;
-    let mut aggregated_bytes = 0u64;
-    let mut aggregated_entries = 0u64;
-    let mut reported_files = 0u64;
-    let mut reported_bytes = 0u64;
-
-    match entries {
-        Ok(rd) => {
-            for entry in rd {
-                let ent = match entry {
-                    Ok(ent) => ent,
-                    Err(error) => {
-                        diagnostics.entry_failed(dir, &error);
-                        continue;
-                    }
-                };
-                if p.cancel.load(Ordering::Relaxed) {
-                    break;
-                }
-                if ent.is_link_like || matches!(ent.kind, EntryKind::Link | EntryKind::Other) {
-                    continue;
-                }
-                let nm: Box<str> = ent.name.to_string_lossy().into_owned().into_boxed_str();
-                // The app trash (Android) is left out like in every other walk.
-                if crate::apptrash::excluded_name(&nm) {
-                    continue;
-                }
-                if ent.kind == EntryKind::Directory {
-                    if ent.unreachable {
-                        diagnostics.record(
-                            format!(
-                                "{}{}{}",
-                                crate::analytics::os::display_path(dir),
-                                std::path::MAIN_SEPARATOR,
-                                nm
-                            ),
-                            "Ordnername ist nicht als Pfad darstellbar; Inhalt nicht erfasst",
-                            false,
-                        );
-                        continue;
-                    }
-                    let path = dir.join(&ent.name);
-                    if crate::agent_proto::is_pseudo_dir(&path.to_string_lossy()) {
-                        continue; // /proc, /sys, … report bogus huge sizes
-                    }
-                    let retention =
-                        budget.claim(&path, depth.saturating_add(1), nm.len() as u64, diagnostics);
-                    subdirs.push((path, nm, retention));
-                } else if ent.kind == EntryKind::File {
-                    own_files += 1;
-                    own_bytes = own_bytes.saturating_add(ent.size);
-                    files.push((nm, ent.size));
-                    if own_files - reported_files >= 128 {
-                        p.files
-                            .fetch_add(own_files - reported_files, Ordering::Relaxed);
-                        p.bytes
-                            .fetch_add(own_bytes - reported_bytes, Ordering::Relaxed);
-                        reported_files = own_files;
-                        reported_bytes = own_bytes;
-                    }
-                }
-            }
-        }
-        Err(error) => diagnostics.dir_failed(dir, &error, is_root),
-    }
-
-    p.files
-        .fetch_add(own_files - reported_files, Ordering::Relaxed);
-    p.bytes
-        .fetch_add(own_bytes - reported_bytes, Ordering::Relaxed);
-    p.dirs.fetch_add(subdirs.len() as u64, Ordering::Relaxed);
-
-    // Retain the largest files individually; fold the rest of a huge
-    // directory into one aggregate node so totals stay exact.
-    if files.len() > MAX_RETAINED_FILES_PER_DIRECTORY {
-        files.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
-    }
-    let mut file_nodes: Vec<SizeNode> =
-        Vec::with_capacity(files.len().min(MAX_RETAINED_FILES_PER_DIRECTORY));
-    for (index, (file_name, size)) in files.into_iter().enumerate() {
-        let retained = index < MAX_RETAINED_FILES_PER_DIRECTORY
-            && budget.claim(
-                &dir.join(&*file_name),
-                depth.saturating_add(1),
-                file_name.len() as u64,
-                diagnostics,
-            ) == Retention::Keep;
-        if retained {
-            file_nodes.push(SizeNode {
-                name: file_name,
-                size,
-                is_dir: false,
-                children: Vec::new(),
-            });
-        } else {
-            aggregated_bytes = aggregated_bytes.saturating_add(size);
-            aggregated_entries += 1;
-        }
-    }
-    if aggregated_entries > 0 {
-        diagnostics.count_aggregated_files(aggregated_entries);
-    }
-
-    // Recurse in parallel. A serial fallback for tiny lists avoids rayon
-    // overhead on leaf-heavy trees.
-    let visit = |(path, name, retention): (PathBuf, Box<str>, Retention)| {
-        (
-            scan_dir(traversal, &path, name, depth.saturating_add(1), false),
-            retention,
-        )
-    };
-    let visited: Vec<(SizeNode, Retention)> = if p.cancel.load(Ordering::Relaxed) {
-        Vec::new()
-    } else if traversal.parallel && subdirs.len() > 1 {
-        subdirs.into_par_iter().map(visit).collect()
-    } else {
-        subdirs.into_iter().map(visit).collect()
-    };
-
-    let mut size = own_bytes;
-    let mut dir_nodes = Vec::with_capacity(visited.len());
-    for (node, retention) in visited {
-        size = size.saturating_add(node.size);
-        match retention {
-            Retention::Keep => dir_nodes.push(node),
-            Retention::Aggregate => {
-                aggregated_bytes = aggregated_bytes.saturating_add(node.size);
-                aggregated_entries += 1;
-            }
-        }
-    }
-    let mut children = Vec::with_capacity(dir_nodes.len() + file_nodes.len() + 1);
-    children.append(&mut dir_nodes);
-    children.append(&mut file_nodes);
-    if aggregated_entries > 0 {
-        children.push(SizeNode {
-            name: crate::analytics::aggregate_name(aggregated_entries).into_boxed_str(),
-            size: aggregated_bytes,
-            is_dir: false,
-            children: Vec::new(),
-        });
-    }
-    SizeNode {
-        name,
-        size,
-        is_dir: true,
-        children,
     }
 }
 
@@ -376,8 +277,6 @@ pub fn from_wire(w: crate::agent_proto::WireNode) -> SizeNode {
     }
 }
 
-#[cfg(test)]
-use backend::{build_from_listings, ChildMeta};
 #[cfg(test)]
 #[path = "analytics_protected_tests.rs"]
 mod protected_tests;

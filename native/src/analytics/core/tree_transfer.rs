@@ -4,8 +4,8 @@ use super::{Progress, SizeNode};
 use serde::{Deserialize, Serialize};
 use std::io;
 
-const MAX_NODES: u64 = 12_000_002;
-const MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+pub(crate) const MAX_NODES: u64 = 12_000_002;
+pub(crate) const MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_DEPTH: usize = 2052;
 const MAX_NAME: usize = 32 * 1024;
 const RECORD_FIXED: usize = 17;
@@ -89,19 +89,34 @@ pub(crate) struct TreeDecoder {
     pending: Vec<Pending>,
     root: Option<SizeNode>,
     observed: TreeShape,
+    buffered: Vec<u8>,
+    limit: Option<TreeShape>,
 }
 
 impl TreeDecoder {
-    pub(crate) fn push(&mut self, mut bytes: &[u8], progress: &Progress) -> io::Result<()> {
+    pub(crate) fn set_shape(&mut self, shape: TreeShape) { self.limit = Some(shape); }
+    pub(crate) fn push(&mut self, bytes: &[u8], progress: &Progress) -> io::Result<()> {
         if bytes.is_empty() || bytes.len() > CHUNK {
             return Err(invalid("Ungültiger Analyse-Datenblock"));
         }
-        while !bytes.is_empty() {
+        self.buffered.extend_from_slice(bytes);
+        let mut consumed = 0;
+        loop {
+            let bytes = &self.buffered[consumed..];
+            if bytes.len() < 4 { break; }
+            let length = u32::from_le_bytes(bytes[..4].try_into().map_err(|_| invalid("Ungültiger Name"))?) as usize;
+            if length > MAX_NAME { return Err(invalid("Ungültiger Name")); }
+            let record = RECORD_FIXED + length;
+            if bytes.len() < record { break; }
+            let mut bytes = &bytes[..record];
             progress.check_cancel()?;
             let length = u32::from_le_bytes(take::<4>(&mut bytes)?) as usize;
             if length > MAX_NAME || bytes.len() < length { return Err(invalid("Ungültiger Name")); }
             let name = std::str::from_utf8(&bytes[..length]).map_err(|_| invalid("Ungültiges UTF-8"))?;
             self.observed.record(name, self.pending.len())?;
+            if self.limit.is_some_and(|limit| self.observed.nodes > limit.nodes || self.observed.bytes > limit.bytes) {
+                return Err(invalid("Analyse überschreitet die angekündigte Baumgröße"));
+            }
             let name = name.to_string().into_boxed_str();
             bytes = &bytes[length..];
             let is_dir = match take::<1>(&mut bytes)?[0] {
@@ -109,13 +124,16 @@ impl TreeDecoder {
             };
             let size = u64::from_le_bytes(take::<8>(&mut bytes)?);
             let remaining = u32::from_le_bytes(take::<4>(&mut bytes)?);
-            if (!is_dir && remaining != 0) || u64::from(remaining) > MAX_NODES || self.root.is_some() {
+            if (!is_dir && remaining != 0) || u64::from(remaining) > MAX_NODES || self.root.is_some()
+                || self.limit.is_some_and(|limit| u64::from(remaining) > limit.nodes.saturating_sub(self.observed.nodes)) {
                 return Err(invalid("Ungültige Analyse-Baumstruktur"));
             }
-            let node = SizeNode { name, size, is_dir, children: Vec::with_capacity((remaining as usize).min(1024)) };
+            let node = SizeNode { name, size, is_dir, children: Vec::new() };
             self.pending.push(Pending { node, remaining });
             self.complete_nodes()?;
+            consumed += record;
         }
+        self.buffered.drain(..consumed);
         Ok(())
     }
 
@@ -139,7 +157,7 @@ impl TreeDecoder {
 
     pub(crate) fn finish(self, expected: TreeShape) -> io::Result<Option<SizeNode>> {
         expected.validate()?;
-        if !self.pending.is_empty() || self.observed != expected
+        if !self.buffered.is_empty() || !self.pending.is_empty() || self.observed != expected
             || self.root.is_some() != (expected.nodes > 0)
         {
             return Err(invalid("Unvollständiges Analyse-Ergebnis"));

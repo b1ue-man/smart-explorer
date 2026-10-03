@@ -38,11 +38,11 @@ fn remote_drive_task_iroh_mount_reconnects_without_losing_lease() {
         identity: b.clone(),
         direct_secret: secret.clone(),
         default_direct_exports: ShareExportConfig {
-            roots: vec![SharedRoot {
-                label: "Gate".into(),
-                path: root.to_string_lossy().replace('\\', "/"),
-            }],
-            include_connections: false,
+            roots: vec![
+                SharedRoot::new("Gate", root.to_string_lossy().replace('\\', "/"))
+                    .with_access(crate::share::ExportAccess::ReadWrite),
+            ],
+            ..Default::default()
         },
         direct_contacts: Vec::new(),
         direct_grants: vec![crate::share::types::DirectGrant {
@@ -54,6 +54,7 @@ fn remote_drive_task_iroh_mount_reconnects_without_losing_lease() {
             state: DirectGrantState::Accepted,
             updated_at: 1,
             exec: crate::share::ExecGrant::default(),
+            write: true,
         }],
         rooms: Vec::new(),
         direct_requests: Vec::new(),
@@ -131,6 +132,7 @@ fn remote_drive_task_iroh_mount_reconnects_without_losing_lease() {
         lan_candidates: Vec::new(),
         lan_seen_at: None,
         lan_uplink: None,
+        relation: Default::default(),
     }];
     let mut stale_initial = endpoint.clone();
     stale_initial.presence.expires_at = crate::share::core_now_secs() - 1;

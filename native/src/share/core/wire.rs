@@ -4,16 +4,27 @@ use super::direct_protocol::{
     DirectRequestId, SignedDirectDecision, SignedDirectDecisionReceipt, SignedDirectRequest,
     SignedDirectRequestReceipt,
 };
+use super::export_config::ExportAccess;
 use super::types::{ExecRequest, ExecResult, PeerPresence};
 
 #[path = "batch_wire.rs"]
 mod batch_wire;
+#[path = "fs_request.rs"]
+mod fs_request;
+#[path = "wire_capabilities.rs"]
+mod wire_capabilities;
 
 pub(crate) use self::batch_wire::{
     discardable_stage, plan_batches, validate_get, validate_put, BatchPart, FsBatchGet,
     FsBatchOutcome, FsBatchPut, FsBatchStatus, FsTransferCapabilities, BATCH_MAX_BYTES,
     BATCH_MAX_FILES, NONCE_HEX_LEN, TRANSFER_V1_CAPABILITY,
 };
+pub(crate) use self::fs_request::{
+    FsDuplicateSearch, FsHashWalk, FsListBatch, FsRecycle, FsRequest, FsStageFinish,
+    FsStorageAnalysis, FsSyncFilesystem, FsWatch,
+};
+pub(crate) use self::fs_request::{FsHashAlgo, FsStageDurability};
+pub(crate) use self::wire_capabilities::{FsHostFeatures, FsTargetLimits};
 
 pub(crate) const TRACKED_DIRECT_CAPABILITY: &str = "tracked_direct_v1";
 /// Server keeps idle clients alive with its own keepalives (V1).
@@ -236,6 +247,10 @@ pub(crate) struct FsMeta {
     pub(crate) hidden: bool,
     pub(crate) system: bool,
     pub(crate) id: Option<String>,
+    /// Additive (RV1): neither file, folder nor link (FIFO, socket, device);
+    /// never opened. Older hosts omit it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) special: bool,
 }
 
 /// One compact node in the bounded, post-order tree-walk stream. IDs are
@@ -259,6 +274,17 @@ pub(crate) struct FsWriteCapabilities {
     /// Hosts before transfer v1 omit it; their clients ignore it.
     #[serde(default, skip_serializing_if = "FsTransferCapabilities::is_absent")]
     pub(crate) transfer: FsTransferCapabilities,
+    /// Additive (RV1): the host's further features, the same for every path.
+    #[serde(default, skip_serializing_if = "FsHostFeatures::is_absent")]
+    pub(crate) features: FsHostFeatures,
+    /// Additive (RV1): access of the export that holds the path; absent for
+    /// `/`, `/Verbindungen` and from older hosts. Enforced only by hosts
+    /// with `export_access_v1`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) access: Option<ExportAccess>,
+    /// Additive (RV1): limits of the storage that holds the path.
+    #[serde(default, skip_serializing_if = "FsTargetLimits::is_unknown")]
+    pub(crate) limits: FsTargetLimits,
 }
 
 impl From<crate::vfs::StagedWriteCapabilities> for FsWriteCapabilities {
@@ -268,6 +294,9 @@ impl From<crate::vfs::StagedWriteCapabilities> for FsWriteCapabilities {
             replace: value.replace,
             namespace_replace: value.namespace_replace,
             transfer: FsTransferCapabilities::default(),
+            features: FsHostFeatures::default(),
+            access: None,
+            limits: FsTargetLimits::default(),
         }
     }
 }
@@ -295,159 +324,19 @@ pub(crate) enum FsErrorKind {
     /// The host is full or its backend reported a rate limit: congestion,
     /// not failure. Older peers read it as `Unknown`.
     Busy,
+    /// RV1: the host's storage is full; every further write fails the same
+    /// way. Older peers read the new kinds as `Unknown`.
+    StorageFull,
+    /// RV1: the host's user is over its storage quota.
+    QuotaExceeded,
+    /// RV1: the export, its storage or the peer's right is read-only.
+    ReadOnly,
+    /// RV1: the file is larger than the host's file system takes.
+    FileTooLarge,
+    /// RV1: the host's file system cannot take this name.
+    InvalidName,
     #[serde(other)]
     Unknown,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(tag = "op", rename_all = "snake_case")]
-pub(crate) enum FsRequest {
-    Capabilities {
-        path: String,
-        /// Mount hosts request a principal-bound root lease. Browsing and UI
-        /// probes leave this false so a capability inspection cannot consume
-        /// the server's bounded lease table.
-        #[serde(default, skip_serializing_if = "is_false")]
-        acquire_lease: bool,
-        /// Stable for this mount acquisition and all of its safe retries.
-        /// Distinct mounted backends use distinct IDs so release ownership is
-        /// never inferred from an otherwise identical root binding.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        lease_request_id: Option<String>,
-    },
-    ReleaseLease,
-    ListDir {
-        path: String,
-    },
-    Stat {
-        path: String,
-    },
-    WalkTree {
-        path: String,
-    },
-    StorageSnapshot {
-        path: String,
-    },
-    StorageAnalysis {
-        path: String,
-    },
-    Read {
-        path: String,
-    },
-    Write {
-        path: String,
-    },
-    WriteNew {
-        path: String,
-    },
-    WriteDone,
-    MkdirAll {
-        path: String,
-    },
-    Rename {
-        src: String,
-        dst: String,
-    },
-    RenameNoReplace {
-        src: String,
-        dst: String,
-    },
-    PromoteStaged {
-        staged: String,
-        destination: String,
-    },
-    CopyFile {
-        src: String,
-        dst: String,
-    },
-    RemoveFile {
-        path: String,
-    },
-    RemoveDir {
-        path: String,
-    },
-    /// Transfer v1: many small new files in one stream. Each entry lands in a
-    /// private stage named with `nonce`; nothing is published before the
-    /// client's WriteDone, and nothing is ever replaced.
-    PutBatch {
-        nonce: String,
-        entries: Vec<FsBatchPut>,
-    },
-    /// Transfer v1: the state of this principal's PutBatch `nonce` after its
-    /// reply was lost.
-    PutBatchStatus {
-        nonce: String,
-    },
-    /// Transfer v1: many small files in one stream, in request order.
-    GetBatch {
-        items: Vec<FsBatchGet>,
-    },
-    /// Transfer v1: read from `offset` (resume) or by provider ID.
-    ReadAt {
-        path: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<String>,
-        offset: u64,
-    },
-    /// Transfer v1: one directory level; `exclusive` fails on a taken name.
-    CreateDir {
-        path: String,
-        #[serde(default, skip_serializing_if = "is_false")]
-        exclusive: bool,
-    },
-    /// Transfer v1: publish a stage only if `destination` is absent; the
-    /// host validates the stage itself. `copy` selects the copy-stage commit.
-    PromoteNoReplace {
-        staged: String,
-        destination: String,
-        #[serde(default, skip_serializing_if = "is_false")]
-        copy: bool,
-    },
-    /// Transfer v1: remove a copy stage the client created and never published.
-    DiscardStage {
-        path: String,
-    },
-}
-
-impl FsRequest {
-    pub(super) fn mutates_filesystem(&self) -> bool {
-        matches!(
-            self,
-            Self::Write { .. }
-                | Self::WriteNew { .. }
-                | Self::MkdirAll { .. }
-                | Self::CreateDir { .. }
-                | Self::Rename { .. }
-                | Self::RenameNoReplace { .. }
-                | Self::PromoteStaged { .. }
-                | Self::PromoteNoReplace { .. }
-                | Self::CopyFile { .. }
-                | Self::RemoveFile { .. }
-                | Self::RemoveDir { .. }
-                | Self::DiscardStage { .. }
-                | Self::PutBatch { .. }
-        )
-    }
-
-    /// Batches admit every entry again, exactly like one single request.
-    pub(super) fn is_batch(&self) -> bool {
-        matches!(self, Self::PutBatch { .. } | Self::GetBatch { .. })
-    }
-
-    /// Requests a host before transfer v1 cannot parse; clients send them
-    /// only after that host's Capabilities advertised v1.
-    pub(super) fn is_transfer_v1(&self) -> bool {
-        matches!(
-            self,
-            Self::PutBatch { .. }
-                | Self::PutBatchStatus { .. }
-                | Self::GetBatch { .. }
-                | Self::ReadAt { .. }
-                | Self::CreateDir { .. }
-                | Self::PromoteNoReplace { .. }
-                | Self::DiscardStage { .. }
-        )
-    }
 }
 
 pub(crate) use super::fs_response::FsResponse;

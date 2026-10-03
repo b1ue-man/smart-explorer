@@ -112,12 +112,11 @@ fn current_presence(
             // Use the same fresh routing evidence as the initial open. A live
             // handle must not keep dialing its original, now expired LAN
             // announcement when the signaling server is unavailable.
-            let presence = super::lan_presence_match::effective_presence(
-                contact,
-                super::core::now_secs(),
-            ).ok_or_else(|| {
-                io::Error::new(io::ErrorKind::NotConnected, "Direktgeraet ist offline")
-            })?;
+            let presence =
+                super::lan_presence_match::effective_presence(contact, super::core::now_secs())
+                    .ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::NotConnected, "Direktgeraet ist offline")
+                    })?;
             if (!contact.expected_fingerprint.is_empty()
                 && contact.expected_fingerprint != presence.fingerprint)
                 || (!contact.expected_node_id.is_empty()
@@ -258,18 +257,38 @@ mod tests {
         contact.lan_candidates = vec!["127.0.0.1:2000".into()];
         contact.lan_seen_at = Some(now);
         let auth = Arc::new(Mutex::new(state(contact)));
-        let source = PeerEndpointSource::live(initial.clone(),
-            PeerOpenTarget::Direct { contact_id: "contact".into() }, auth.clone());
-        assert_eq!(source.current().unwrap().presence.candidates, ["127.0.0.1:2000"]);
+        let source = PeerEndpointSource::live(
+            initial.clone(),
+            PeerOpenTarget::Direct {
+                contact_id: "contact".into(),
+            },
+            auth.clone(),
+        );
+        assert_eq!(
+            source.current().unwrap().presence.candidates,
+            ["127.0.0.1:2000"]
+        );
         auth.lock().unwrap().direct_contacts[0].lan_candidates = vec!["127.0.0.1:3000".into()];
-        assert_eq!(source.current().unwrap().presence.candidates, ["127.0.0.1:3000"]);
+        assert_eq!(
+            source.current().unwrap().presence.candidates,
+            ["127.0.0.1:3000"]
+        );
         auth.lock().unwrap().direct_contacts[0].presence = None;
-        assert_eq!(source.current().unwrap().presence.candidates, ["127.0.0.1:3000"]);
+        assert_eq!(
+            source.current().unwrap().presence.candidates,
+            ["127.0.0.1:3000"]
+        );
         auth.lock().unwrap().direct_contacts[0].expected_node_id = "replacement".into();
-        assert_eq!(source.current().unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(
+            source.current().unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
         auth.lock().unwrap().direct_contacts[0].expected_node_id = "node".into();
         auth.lock().unwrap().direct_contacts[0].access_state = DirectAccessState::Ignored;
-        assert_eq!(source.current().unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(
+            source.current().unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
     }
 
     fn endpoint(candidate: &str, expires_at: i64) -> PeerEndpoint {
@@ -319,6 +338,7 @@ mod tests {
             lan_candidates: Vec::new(),
             lan_seen_at: None,
             lan_uplink: None,
+            relation: Default::default(),
         }
     }
 

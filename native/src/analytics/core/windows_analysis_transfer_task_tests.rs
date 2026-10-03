@@ -2,6 +2,7 @@ use super::*;
 use crate::analytics::{ScanIssue, ScanStatus, SizeNode};
 use std::{cell::RefCell, sync::atomic::Ordering};
 
+#[derive(Clone)]
 enum Item { Control(AnalysisMessage), Data(Vec<u8>) }
 
 fn encoded(mut outcome: ScanOutcome, files: u64, dirs: u64) -> Vec<Item> {
@@ -115,6 +116,45 @@ fn windows_remote_task_analysis_progress_retains_stalls_and_actual_counters() {
     assert_eq!(progress.snapshot().transferred, 64);
     progress.set_phase(ScanPhase::Scanning, "/A/next");
     assert_eq!(progress.snapshot().transfer_total, 0);
+    progress.set_phase(ScanPhase::Legacy, "/A");
+    assert!(progress.snapshot().directories_unreported);
+    progress.set_phase(ScanPhase::Scanning, "/A/next");
+    assert!(!progress.snapshot().directories_unreported);
+    progress.set_node_budget(8);
+    let scoped = progress.scoped("/real".into(),"/A".into()).remote_segment();
+    scoped.set_node_budget(4);
+    assert_eq!(progress.node_budget(),4);
     progress.cancel.store(true, Ordering::Relaxed);
     assert_eq!(progress.check_cancel().unwrap_err().kind(), io::ErrorKind::Interrupted);
+}
+
+#[test]
+fn review_task_analysis_deflate_reframing_and_receiver_budget() -> io::Result<()> {
+    let tree = SizeNode { name:"root".into(),size:2048,is_dir:true,
+        children:(0..2048).map(|i|SizeNode { name:format!("{i}-{}","n".repeat(64)).into(),
+            size:1,is_dir:false,children:Vec::new() }).collect() };
+    let progress = Progress::default(); progress.files.store(2048,Ordering::Relaxed);
+    progress.bytes.store(999_999,Ordering::Relaxed);
+    let items = RefCell::new(Vec::new());
+    send_outcome_with(&mut ScanOutcome::complete(tree),&progress,SendOptions { deflate:true,host_scan_ms:Some(4) },
+        |message| { items.borrow_mut().push(Item::Control(message)); Ok(()) },
+        |bytes| { items.borrow_mut().push(Item::Data(bytes)); Ok(()) })?;
+    let items = items.into_inner();
+    let Item::Control(ready) = &items[0] else { panic!("Ready expected") };
+    assert_eq!(AnalysisReceiver::with_node_budget(2).control(ready.clone(),&Progress::default()).err().unwrap().kind(),io::ErrorKind::InvalidData);
+    let received = Progress::default();
+    received.receive(ScanSnapshot { bytes:999_999,..Default::default() })?;
+    let mut receiver = AnalysisReceiver::with_node_budget(2049); let mut outcome = None;
+    for item in items.clone() {
+        match item {
+            Item::Control(message) => if let Some(result) = receiver.control(message,&received)? { outcome=Some(result); },
+            Item::Data(bytes) => for fragment in bytes.chunks(7) { receiver.data(fragment,&received)?; },
+        }
+    }
+    let tree = outcome.unwrap().tree.unwrap();
+    assert_eq!((tree.size,tree.children.len(),received.snapshot().bytes),(2048,2048,2048));
+    let mut truncated = items;
+    if let Some(Item::Data(bytes)) = truncated.iter_mut().rev().find(|item|matches!(item,Item::Data(_))) { bytes.pop(); }
+    assert_eq!(decode(truncated).err().unwrap().kind(),io::ErrorKind::InvalidData);
+    Ok(())
 }

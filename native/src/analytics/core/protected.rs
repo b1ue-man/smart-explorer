@@ -5,12 +5,10 @@
 //! complete when nothing else failed.
 use std::sync::Mutex;
 
-/// Areas kept per walk; a walk meets at most two per storage volume.
-const MAX_PROTECTED_AREAS: usize = 16;
-
 /// One protected area a walk passed through and how many of its entries it
 /// could not read there (0 when Android hid the other apps' folders entirely).
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Travels in a peer's analysis report since RV1.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ProtectedOmission {
     pub area: String,
     pub entries: u64,
@@ -36,7 +34,7 @@ impl ProtectedTally {
         let mut areas = self.areas.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(known) = areas.iter_mut().find(|known| known.area == area) {
             known.entries = known.entries.saturating_add(entries);
-        } else if areas.len() < MAX_PROTECTED_AREAS {
+        } else {
             areas.push(ProtectedOmission {
                 area: area.to_string(),
                 entries,
@@ -74,8 +72,7 @@ pub fn protected_text(omissions: &[ProtectedOmission]) -> String {
     lines.join("\n")
 }
 
-/// One line for the informational notes of a Share-hosted analysis, whose
-/// wire format has no own field for protected omissions.
+/// Compatibility note for peers that predate structured protected omissions.
 pub fn protected_note(omissions: &[ProtectedOmission]) -> Option<String> {
     if omissions.is_empty() {
         return None;

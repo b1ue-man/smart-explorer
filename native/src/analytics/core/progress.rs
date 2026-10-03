@@ -44,6 +44,28 @@ pub struct ScanSnapshot {
     pub host_scan_ms: Option<u64>,
     pub source_age_ms: u64,
     pub directories_unreported: bool,
+    /// Place in a host's analysis queue while `Queued` (1 = next); 0 = not
+    /// known or not waiting. Older hosts omit it.
+    #[serde(default)]
+    pub queue_position: u32,
+}
+
+/// Longest `current` a snapshot carries over the wire; a deeper path keeps
+/// its end (the folder being read) behind an ellipsis.
+pub(crate) const MAX_CURRENT_BYTES: usize = 4 * 1024;
+
+/// `text` with at most `max` bytes: the end, behind `…`, cut at a character
+/// boundary.
+pub(crate) fn shorten_tail(text: &str, max: usize) -> String {
+    if text.len() <= max {
+        return text.to_owned();
+    }
+    let keep = max.saturating_sub('…'.len_utf8());
+    let mut start = text.len() - keep;
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    format!("…{}", &text[start..])
 }
 
 struct State {
@@ -68,6 +90,7 @@ pub struct Progress {
     pub dirs: Arc<AtomicU64>,
     pub bytes: Arc<AtomicU64>,
     pub cancel: Arc<AtomicBool>,
+    node_limit: Arc<AtomicU64>,
     state: Arc<Mutex<State>>,
     scope: Option<Arc<(String, String)>>,
     offset: (u64, u64, u64),
@@ -76,40 +99,73 @@ pub struct Progress {
 }
 
 impl Progress {
+    /// Receiver's retained-node budget, shared by all scoped remote segments.
+    pub fn node_budget(&self) -> u64 {
+        let explicit = self.node_limit.load(Ordering::Relaxed);
+        if explicit != 0 {
+            return explicit;
+        }
+        // Names, nodes and the vectors retaining their children. The report
+        // also checks the actual encoded size before allocating the tree.
+        (crate::transfer::memory_budget() as u64 / 128).clamp(2, super::tree_transfer::MAX_NODES)
+    }
+
+    pub fn set_node_budget(&self, nodes: u64) {
+        self.node_limit.store(nodes.clamp(2, super::tree_transfer::MAX_NODES), Ordering::Relaxed);
+    }
+
     /// Counters and cancellation are shared; only path presentation is scoped.
     pub(crate) fn scoped(&self, physical: String, visible: String) -> Self {
-        Self { scope: Some(Arc::new((physical, visible))), ..self.clone() }
+        Self {
+            scope: Some(Arc::new((physical, visible))),
+            ..self.clone()
+        }
     }
 
     pub(crate) fn remote_segment(&self) -> Self {
         let current = self.snapshot();
-        Self { offset: (current.files, current.dirs, current.bytes), ..self.clone() }
+        Self {
+            offset: (current.files, current.dirs, current.bytes),
+            ..self.clone()
+        }
     }
 
+    /// A path of the scoped walk as the peer sees it. Walk paths are physical
+    /// paths, so the physical root is stripped first: a visible export name
+    /// that equals the first physical component (`/home` for `/home/alice`)
+    /// must not pass a physical path through unchanged.
     pub(crate) fn visible_path(&self, path: &str) -> String {
-        let Some(scope) = &self.scope else { return path.to_owned() };
-        let normalized = path.replace('\\', "/");
-        if normalized == scope.1 || normalized.starts_with(&format!("{}/", scope.1.trim_end_matches('/'))) {
+        let Some(scope) = &self.scope else {
+            return path.to_owned();
+        };
+        let normalized = normalize_path(path);
+        let visible = scope.1.trim_end_matches('/');
+        let normalized_base = normalize_path(&scope.0);
+        let base = normalized_base.trim_end_matches('/');
+        if let Some(rest) = normalized.strip_prefix(base) {
+            if rest.is_empty() || rest.starts_with('/') {
+                return format!("{visible}{rest}");
+            }
+        }
+        if normalized == scope.1 || normalized.starts_with(&format!("{visible}/")) {
             return normalized;
         }
-        let base = scope.0.trim_end_matches('/');
-        match normalized.strip_prefix(base) {
-            Some(rest) if rest.is_empty() || rest.starts_with('/') => {
-                format!("{}{}", scope.1.trim_end_matches('/'), rest)
-            }
-            _ => scope.1.clone(),
-        }
+        scope.1.clone()
     }
 
     pub fn set_phase(&self, phase: ScanPhase, current: impl Into<String>) {
-        let current = self.visible_path(&current.into());
+        let current = shorten_tail(&self.visible_path(&current.into()), MAX_CURRENT_BYTES);
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         if state.snapshot.phase != phase || state.snapshot.current != current {
             state.changed = Instant::now();
             state.snapshot.unchanged_ms = 0;
         }
         state.snapshot.phase = phase;
-        if phase == ScanPhase::Legacy { state.snapshot.directories_unreported = true; }
+        if phase == ScanPhase::Legacy {
+            state.snapshot.directories_unreported = true;
+        } else if phase == ScanPhase::Scanning {
+            state.snapshot.directories_unreported = false;
+        }
         state.snapshot.current = current;
         if !matches!(phase, ScanPhase::Transferring | ScanPhase::Verifying) {
             state.snapshot.transferred = 0;
@@ -128,35 +184,71 @@ impl Progress {
             self.dirs.load(Ordering::Relaxed),
             self.bytes.load(Ordering::Relaxed),
         );
-        if counts != (state.snapshot.files, state.snapshot.dirs, state.snapshot.bytes) {
-            (state.snapshot.files, state.snapshot.dirs, state.snapshot.bytes) = counts;
+        if counts
+            != (
+                state.snapshot.files,
+                state.snapshot.dirs,
+                state.snapshot.bytes,
+            )
+        {
+            (
+                state.snapshot.files,
+                state.snapshot.dirs,
+                state.snapshot.bytes,
+            ) = counts;
             state.changed = Instant::now();
             state.snapshot.unchanged_ms = 0;
         }
         let mut snapshot = state.snapshot.clone();
-        snapshot.unchanged_ms = snapshot.unchanged_ms.saturating_add(
-            state.changed.elapsed().as_millis().min(u64::MAX as u128) as u64,
-        );
+        snapshot.unchanged_ms = snapshot
+            .unchanged_ms
+            .saturating_add(state.changed.elapsed().as_millis().min(u64::MAX as u128) as u64);
         if let Some(received) = state.remote_received {
-            snapshot.source_age_ms = snapshot.source_age_ms.saturating_add(received.elapsed().as_millis() as u64);
+            snapshot.source_age_ms = snapshot
+                .source_age_ms
+                .saturating_add(received.elapsed().as_millis() as u64);
         }
         snapshot
     }
 
     /// Called only for actual received peer evidence, never by cancellation polls.
-    pub(crate) fn receive(&self, mut snapshot: ScanSnapshot) -> io::Result<()> {
+    pub(crate) fn receive(&self, snapshot: ScanSnapshot) -> io::Result<()> {
+        self.receive_snapshot(snapshot, false)
+    }
+
+    /// The verified result's counters replace live estimates that may include
+    /// a child whose scan later failed. Transfer shape/hash stay authoritative.
+    pub(crate) fn receive_result(&self, snapshot: ScanSnapshot) -> io::Result<()> {
+        self.receive_snapshot(snapshot, true)
+    }
+
+    fn receive_snapshot(&self, mut snapshot: ScanSnapshot, final_result: bool) -> io::Result<()> {
         #[cfg(test)]
         self.reports.fetch_add(1, Ordering::Relaxed);
-        snapshot.files = snapshot.files.checked_add(self.offset.0).ok_or_else(counter_overflow)?;
-        snapshot.dirs = snapshot.dirs.checked_add(self.offset.1).ok_or_else(counter_overflow)?;
-        snapshot.bytes = snapshot.bytes.checked_add(self.offset.2).ok_or_else(counter_overflow)?;
-        snapshot.current = self.visible_path(&snapshot.current);
+        snapshot.files = snapshot
+            .files
+            .checked_add(self.offset.0)
+            .ok_or_else(counter_overflow)?;
+        snapshot.dirs = snapshot
+            .dirs
+            .checked_add(self.offset.1)
+            .ok_or_else(counter_overflow)?;
+        snapshot.bytes = snapshot
+            .bytes
+            .checked_add(self.offset.2)
+            .ok_or_else(counter_overflow)?;
+        // A host may walk deeper than one frame should carry: keep the end.
+        snapshot.current = shorten_tail(&self.visible_path(&snapshot.current), MAX_CURRENT_BYTES);
         let previous = self.snapshot();
-        if snapshot.files < previous.files || snapshot.dirs < previous.dirs
-            || snapshot.bytes < previous.bytes || snapshot.current.len() > 32 * 1024
+        if (!final_result && (snapshot.files < previous.files
+            || snapshot.dirs < previous.dirs
+            || snapshot.bytes < previous.bytes))
             || snapshot.transferred > snapshot.transfer_total
         {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "Ungültiger Analyse-Fortschritt"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Ungültiger Analyse-Fortschritt",
+            ));
         }
         self.files.store(snapshot.files, Ordering::Relaxed);
         self.dirs.store(snapshot.dirs, Ordering::Relaxed);
@@ -168,9 +260,29 @@ impl Progress {
         Ok(())
     }
 
+    /// Before a peer's request is sent again after a lost connection: the
+    /// host may start over, so its counters may begin at zero again.
+    pub(crate) fn restart_remote(&self) {
+        self.files.store(self.offset.0, Ordering::Relaxed);
+        self.dirs.store(self.offset.1, Ordering::Relaxed);
+        self.bytes.store(self.offset.2, Ordering::Relaxed);
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        (
+            state.snapshot.files,
+            state.snapshot.dirs,
+            state.snapshot.bytes,
+        ) = self.offset;
+        state.snapshot.transferred = 0;
+        state.snapshot.transfer_total = 0;
+        state.changed = Instant::now();
+    }
+
     pub fn remote_report_age(&self) -> Option<Duration> {
         let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
-        state.remote_received.map(|at| at.elapsed().saturating_add(Duration::from_millis(state.snapshot.source_age_ms)))
+        state.remote_received.map(|at| {
+            at.elapsed()
+                .saturating_add(Duration::from_millis(state.snapshot.source_age_ms))
+        })
     }
 
     pub(crate) fn transfer(&self, received: u64, total: u64) {
@@ -186,14 +298,30 @@ impl Progress {
     }
 
     #[cfg(test)]
-    pub(crate) fn report_count(&self) -> u64 { self.reports.load(Ordering::Relaxed) }
+    pub(crate) fn report_count(&self) -> u64 {
+        self.reports.load(Ordering::Relaxed)
+    }
 
     pub fn check_cancel(&self) -> io::Result<()> {
         if self.cancel.load(Ordering::Relaxed) {
-            Err(io::Error::new(io::ErrorKind::Interrupted, "Speicheranalyse abgebrochen"))
+            Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "Speicheranalyse abgebrochen",
+            ))
         } else {
             Ok(())
         }
+    }
+}
+
+pub(crate) fn normalize_path(path: &str) -> String {
+    let normalized = path.replace('\\', "/");
+    if let Some(unc) = normalized.strip_prefix("//?/UNC/") {
+        format!("//{unc}")
+    } else if let Some(rest) = normalized.strip_prefix("//?/") {
+        rest.to_owned()
+    } else {
+        normalized
     }
 }
 

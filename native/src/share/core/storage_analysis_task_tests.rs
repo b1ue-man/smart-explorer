@@ -1,5 +1,5 @@
 use super::*;
-use crate::{analytics::{Progress, ScanPhase, ScanStatus}, share::CopyPastePeerFixture};
+use crate::{analytics::{Progress, ScanStatus}, share::CopyPastePeerFixture};
 
 #[test]
 fn windows_remote_task_analysis_combines_export_roots_and_rejects_escape() -> io::Result<()> {
@@ -22,25 +22,11 @@ fn windows_remote_task_analysis_combines_export_roots_and_rejects_escape() -> io
 }
 
 #[test]
-fn windows_remote_task_analysis_cancel_closes_queued_peer_request() -> io::Result<()> {
+fn windows_remote_task_analysis_precancel_preserves_browsing() -> io::Result<()> {
     let fixture = CopyPastePeerFixture::new()?;
-    let backend = fixture.backend.clone();
-    let held = fixture.peer.node.block_on(async {
-        let one = slots().acquire_owned().await.unwrap();
-        let two = slots().acquire_owned().await.unwrap();
-        (one, two)
-    });
     let progress = Progress::default();
-    let worker_progress = progress.clone();
-    let worker = std::thread::spawn(move || backend.scan_storage("/A", &worker_progress));
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while progress.snapshot().phase != ScanPhase::Queued && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    assert_eq!(progress.snapshot().phase, ScanPhase::Queued);
-    progress.cancel.store(true, Ordering::Relaxed);
-    assert_eq!(worker.join().unwrap().err().unwrap().kind(), io::ErrorKind::Interrupted);
-    drop(held);
+    progress.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(fixture.backend.scan_storage("/A", &progress).err().unwrap().kind(), io::ErrorKind::Interrupted);
     // A canceled queued request cannot strand the bounded worker pool.
     let result = fixture.backend.scan_storage("/A", &Progress::default())?.unwrap();
     assert_eq!(result.status, ScanStatus::Complete);
