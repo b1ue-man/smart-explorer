@@ -12,6 +12,7 @@
 
     <!-- Boot restart of the permanent background mode and periodic work -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
 
     <!-- All-files access: the core works on real file paths of every mounted volume -->
     <uses-permission
@@ -120,6 +121,7 @@
         <receiver
             android:name=".system.KeepAliveReceiver"
             android:exported="false" />
+        <receiver android:name=".system.SyncScheduleReceiver" android:exported="false" />
 
         <receiver
             android:name=".system.BootReceiver"
@@ -127,6 +129,7 @@
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED" />
             </intent-filter>
         </receiver>
 

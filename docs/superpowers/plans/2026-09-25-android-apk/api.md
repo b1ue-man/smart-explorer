@@ -111,6 +111,7 @@ Ereignisse (`pollEvents`):
 {"type":"shareRequest","count":N}    neue eingehende Anfrage(n) → Badge/Benachrichtigung
 {"type":"edits"}                     geöffnete Remote-Kopie wurde lokal geändert → fs.edits
 {"type":"jobs"}                      Sync-Jobs/Ergebnisse geändert → sync.jobs neu laden
+{"type":"syncProblem","jobId":"…","title":"…","text":"…"}   gedrosseltes Jobproblem → eigener Notificationkanal
 {"type":"openUrl","url":"https://…"} Kern möchte eine URL im Browser öffnen (OAuth)
 {"type":"error","action":"…","message":"…"}   Eintrag für das Fehlerprotokoll
 {"type":"volumes"}                   Speicherorte geändert
@@ -130,6 +131,12 @@ Ereignisse (`pollEvents`):
 - `sys.errors {}` → `[{timeMs, action, message}]` · `sys.clearErrors {}` → `{}`
 - `sys.crashLog {}` → `{text}` (leer, wenn keins)
 - `sys.info {}` → `{coreVersion, dataDir, cacheDir}`
+- `sys.platformTotals {volume,platform}` → `{remembered:true}`; ausschließlich das tatsächlich primäre,
+  gemeldete lokale Volume. `platform` benutzt dasselbe Schema wie `analyze.start`; fehlende Zahlen
+  bleiben unbekannt, erfolgreiche eigene Hostzahlen werden unabhängig von einer Analyse gespeichert.
+- `sys.watchHints {volumes:[{path,cursor,changed}]}` → `{accepted,complete:false}`; höchstens 128 bekannte
+  absolute Volume-Orte und Cursor bis 2048 Bytes. MediaStore bleibt ein unvollständiger Hinweis;
+  Poll und Vollkontrolle bleiben notwendig.
 
 ### 4.2 Orte (`loc.*`)
 - `loc.roots {}` → `{storage:[Root], favorites:[Root], recent:[Root], connections:[Root],
@@ -244,38 +251,61 @@ Aufzählungswerte (`direction`, `conflict`, `deletePolicy`, `compare`, `versioni
 - `sync.validate {job}` → `{errors:{<feld>:<text>}}` (Desktop-Validierung)
 - `sync.save {job}` → `Job` (leere `id` = neu) · `sync.delete {id}` → `{}`
 - `sync.setEnabled {id, enabled}` → `Job`
-- `sync.run {id}` → `{taskId}` (`bisync::run` meldet keinen Fortschritt → Task ohne Prozent, Text
-  „Synchronisiere…“; `result = {summary, aToB:Int, bToA:Int, deleted:Int, conflicts:Int, errors:Int,
-  omitted:String?}`; schreibt `last_run`/Ergebnis wie der Desktop; keine Vorher/Nachher-Befehle –
-  die laufen wie am Desktop nur im Hintergrundlauf)
-- `sync.mirror {source, target}` → `{taskId}` (`crate::sync::start_sync` über
-  `crate::vfs::sync_backend(…)`-Hüllen wie am Desktop, `delete_extra=false`: einseitig kopieren,
-  im Ziel wird nichts gelöscht; Fortschritt; `result = {copied, skipped, errors, omitted:String?}`;
-  nichts wird gespeichert)
-Konflikte werden am Desktop nicht dauerhaft gespeichert, sie leben im Ergebnis des letzten Laufs.
-Die Fassade hält je Job den Kontext des letzten Laufs (Backends, Wurzeln, Pair-ID, Baseline,
-Konfliktliste) im Speicher; fehlt er (App neu gestartet, Hintergrundlauf), ermittelt
-`sync.checkConflicts` die Konflikte per Probelauf (`dry_run`).
-- `sync.conflicts {id}` → `{available:Boolean, items:[{cid, path, a:{exists,size,mtimeMs}?,
-  b:{exists,size,mtimeMs}?, text:Boolean}]}` (`available=false` → erst `sync.checkConflicts`)
-- `sync.checkConflicts {id}` → `{taskId}` (Probelauf, füllt den Kontext)
-- `sync.resolve {id, cid, choice:"a|b"}` → `{taskId}` (`resolve_checked`, Baseline wird gespeichert,
-  sobald keine Konflikte mehr offen sind oder `sync.finishConflicts` gerufen wird)
-- `sync.skip {id, cid}` → `{}` (nur für diese Sitzung, wie Desktop; war es der letzte offene Konflikt,
-  wird die Baseline gespeichert – ein Speicherfehler kommt als `internal`, der Konflikt bleibt
-  übersprungen)
-- `sync.finishConflicts {id}` → `{}` (speichert eine geänderte Baseline; Fehler → erneut versuchen)
-- `sync.mergeRows {id, cid}` → `{rows:[{a:String?, b:String?, equal:Boolean, takeA:Boolean,
-  takeB:Boolean}]}` (Textdateien ≤ 16 MiB je Seite, `linemerge::rows`)
-- `sync.mergeApply {id, cid, rows:[{takeA, takeB}…]}` → `{taskId}` (schreibt das Ergebnis auf beide Seiten)
-- `sync.mergeKeepBoth {id, cid}` → `{taskId}` (A unter Originalname, B als „(Konflikt …)“ auf beiden Seiten)
+- `sync.run {id}` → `{taskId}`; aktueller gespeicherter Job, jobeigener StateKey,
+  `RunSettings::for_job`, gemeinsame Paarsperre und Hook-/Cancellation-Verträge.
+  JobState unterscheidet echten Versuch, Erfolg, Sperre, Abbruch und Fehler; Prüfungen erzeugen
+  keinen erfundenen Lauf-Erfolg. Ergebnis enthält `summary`, Zähler und reale Auslassungen.
+- `sync.confirmBlock {id,kind}` → `{}`; bestätigt genau den angezeigten aktuellen Block einmal
+  für den nächsten echten Lauf. Eine geänderte Sperre fordert erneute Prüfung.
+- `sync.versions {id}` → `{taskId}`; Ergebnis `{items:[{token,path,side,runId,preservedMs,size,reason,store}]}`.
+  Token ist opaque und an Job sowie unveränderte Endpunkte gebunden.
+- `sync.restoreVersion {id,token,side?}` → `{taskId}`; `side` ist bei Legacy-Versionen ohne Seite
+  erforderlich. Frische Verbindung, Paarsperre und erneuter Manifestabgleich vor sicherem Restore.
+- `sync.mirror {source,target}` → `{taskId}`; einseitiges Kopieren ohne Löschen im Ziel,
+  gemeinsame sichere Copy-/Versionsgrenze und Fortschritt; kein gespeicherter Job.
+
+Der Konfliktkontext lebt je Job im Speicher. Nach einem Neustart ermittelt `sync.checkConflicts`
+den Kontext per vollständigem Probelauf und ergänzt offene durable Merge-Aufträge aus dem
+validierten StateKey. Originale stammen aus persistierten Seitenschreibweisen auf den ursprünglichen
+Backends; Originaltexte sind je Seite auf 16 MiB begrenzt.
+
+- `sync.conflicts {id}` → `{available:Boolean,items:[{cid,path,a:{exists,size,mtimeMs}?,
+  b:{exists,size,mtimeMs}?,text:Boolean}]}`; ohne Kontext zuerst `sync.checkConflicts`.
+- `sync.checkConflicts {id}` → `{taskId}`; reiner Check mit tatsächlichem Block und Recovery-Aufträgen.
+- `sync.resolve {id,cid,choice:"a|b"}` → `{taskId}`; aufgezeichnete Auflösung unter PairLock,
+  tatsächlicher Ergebnis-Checkpoint im jobeigenen Zustand. Offene Merge-Aufträge sperren A/B.
+- `sync.skip {id,cid}` → `{}`; überspringt nur diesen Sitzungseintrag.
+- `sync.finishConflicts {id}` → `{}`; erhält den bereits aufgezeichneten Zustand, Speicherfehler bleiben retrybar.
+- `sync.mergeRows {id,cid}` → `{rows:[{a:String?,b:String?,equal:Boolean,takeA:Boolean,takeB:Boolean}],
+  pending:null|{kind:"write|keep_both",keepA:Boolean?,confirmedA:Boolean,confirmedB:Boolean,
+  preview:String?,previewTruncated:Boolean}}`. Bei Pending sind keine Teil-Mergebytes neue Originale;
+  die Vorschau ist auf 8192 Unicodezeichen begrenzt und dient ausschließlich der Anzeige.
+- `sync.mergeApply {id,cid,rows:[{takeA,takeB}…]}` → `{taskId}`; bytegebundener Recorded-Merge,
+  Originale und Wahl werden vor der ersten Mutation privat gespeichert. TextShape erhält Zeilenenden.
+- `sync.mergeKeepBoth {id,cid}` → `{taskId}`; aufgezeichnete KeepBoth-Wahl mit demselben exklusiven
+  Konflikt-Sibling auf beiden Seiten und erhaltener Wiederaufnahme.
+- `sync.mergeRetry {id,cid}` → `{taskId}`; ausdrücklich unveränderten gespeicherten Auftrag mit
+  Originalbytes/-Signaturen und ursprünglicher Write-/KeepBoth-Wahl wiederholen.
+
+Merge-Ergebnis und Teilfehler enthalten `confirmedA`, `confirmedB`, `partial`, `baselineRecorded`,
+`reload`, `retry`, `preserved:[{path,confirmedA,confirmedB}]`, bei vollständiger Auflösung `remaining`.
+Beide Bestätigungen und passender Basis-Eintrag sind nötig; Fehler erhalten Auftrag/Draft.
+
+RV1 ergänzt Job-JSON um `state` (`lastAttemptMs`, `lastSuccessMs`, `lastRunner`, `lastCause`,
+`consecutiveFailures`, `lastError`, `retryAtMs`, `blocked`, `problem`, `running`, `loadError`, `watch`,
+`pendingTrigger`, `lastVerifyMs`, `verifyCursor`), `brokenConfig` für defekte Jobdateien sowie die
+Editoroptionen `rtMaxLatencySecs`, `rtPollSecs`, `verifyIntervalSecs`, `verifyTargetSecs`, `maxDeleteMin`,
+`retainCount`, `versionsLocation`, `crossMounts`, `runCleanup`. `sync.options` ergänzt `versionsLocations`.
+`lastResult` kommt aus JobState; `running` bezeichnet ausschließlich einen lebenden Runmark.
+
 Hintergrund: genau ein eingebetteter Desktop-Daemon je App-Prozess (Thread), beim ersten Bedarf
 gestartet, nie wegen Sichtbarkeit gestoppt. „Aus“ wirkt über das Sync-Flag (Android-Adapter von
 `autostart::is_enabled`) und `share.setOnline`.
 - `bg.ensureDaemon {}` → `{running:Boolean}` (idempotent; wartet bis zu 10 s auf Bereitschaft)
 - `bg.status {}` → `{syncEnabled, daemonRunning, heartbeatAgeSecs:Long?, paused, pausedUntilMs:Long?,
   autopauseBattery, autopauseMetered, cadenceSecs:Int, catchUpRunning:Boolean, lastCatchUpMs:Long?,
-  activeJob:String?}`
+  activeJob:String?, nextScheduledRunMs:Long?, storageAccess:Boolean?,
+  lastCatchUpResult:{finishedMs,ran,succeeded,failed,message}?}`
 - `bg.setSyncEnabled {enabled}` → `{}`
 - `bg.pause {seconds:Long}` (−1 = unbegrenzt) → `{}` · `bg.resume {}` → `{}`
 - `bg.setAutopause {battery, metered}` → `{}`
@@ -286,6 +316,9 @@ gestartet, nie wegen Sichtbarkeit gestoppt. „Aus“ wirkt über das Sync-Flag 
   reguläre Plan schon hält, wird abgewartet und mitgezählt, bleibt aber dessen Job; kürzlich versuchte
   und nicht startbare stehen mit Grund in `result.skipped`; `task.cancel` bricht nur die eigenen Jobs
   dieses Laufs ab; pausiert/Sync aus → Task endet sofort mit `message`)
+  Additives Taskresultat: `failed`, `retrySuggested`, `message`; WorkManager übernimmt die echte
+  Retry-Auskunft und cancelt den eigenen nativen Auftrag bei Stop/Timeout. Ein leeres oder
+  unterbrochenes Fenster erfindet keinen erfolgreichen Hintergrundlauf.
 
 ### 4.8 Share (`share.*`)
 Siehe §5.
@@ -561,3 +594,7 @@ binden Empfang und ältere Listing-/Baumpfade vor Allokation an dasselbe Progres
 vollständige Bereitschaft. Share-Watch `complete:false` und Duplicate-Teil `more:false` sind additive
 Legacy-Defaults; unvollständige Watchabdeckung behält periodische Abfragen. Diese Drahtfelder ändern keine
 Kotlin-Ortsidentität und gemischte Agent-Binärversionen werden nicht stillschweigend dekodiert.
+
+RV1-Sync-Verträge am 2026-10-03 mit aktuellen mobilen Dispatch-/Consumerquellen abgeglichen.
+[Detailvertrag und Entscheidungen](../2026-10-02-review-analyse-sync-sicherheit/api-delta/AND-SYNC.md);
+Ausführungsabnahme erfolgt durch die eine finale Remote-Task-Suite dieses Batches.

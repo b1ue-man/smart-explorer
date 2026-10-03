@@ -39,6 +39,7 @@ internal object CoreEvents {
                 "share" -> CoreEvent.Share
                 "shareRequest" -> CoreEvent.ShareRequest((event["count"] as? JsonPrimitive)?.intOrNull ?: 1)
                 "jobs" -> CoreEvent.Jobs
+                "syncProblem" -> event.text("jobId")?.let { CoreEvent.SyncProblem(it, event.text("title").orEmpty(), event.text("text").orEmpty()) }
                 "edits" -> CoreEvent.Edits
                 "openUrl" -> event.text("url")?.let { CoreEvent.OpenUrl(it) }
                 "error" -> CoreEvent.Error(event.text("action").orEmpty(), event.text("message").orEmpty())

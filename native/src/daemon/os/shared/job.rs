@@ -53,6 +53,11 @@ pub(super) fn run_for(job: &SyncJob, cancel: &AtomicBool, cause: RunCause, progr
 
 fn attempt(job: &SyncJob, state: &crate::syncjobs::JobState, cancel: &AtomicBool,
     cause: RunCause, progress: Arc<AtomicI64>) -> (AttemptOutcome, JobResult) {
+    if (super::platform::requires_storage_access(&job.source)
+        || super::platform::requires_storage_access(&job.target))
+        && super::host_state::storage_access() != Some(true) {
+        return failed(FailureKind::Access, "Dateizugriff fehlt: Zugriff auf alle Dateien erlauben.".into());
+    }
     if cancel.load(Ordering::Acquire) { return cancelled(); }
     let volume = state.pending_trigger.as_ref().filter(|pending|
         pending.kind == crate::syncjobs::PendingKind::Connect).and_then(|pending| pending.volume.as_deref())
@@ -68,11 +73,6 @@ fn attempt(job: &SyncJob, state: &crate::syncjobs::JobState, cancel: &AtomicBool
         Ok(prepared) => prepared,
         Err(error) => return failed(FailureKind::Config, error),
     };
-    if (super::platform::requires_storage_access(&job.source)
-        || super::platform::requires_storage_access(&job.target))
-        && super::host_state::storage_access() != Some(true) {
-        return failed(FailureKind::Access, "Dateizugriff fehlt: Zugriff auf alle Dateien erlauben.".into());
-    }
     if let Err(error) = run_job_hook(job, HookPhase::Before, None, cancel) {
         let result = if cancel.load(Ordering::Acquire) { cancelled() }
             else { failed(FailureKind::Hook, error) };

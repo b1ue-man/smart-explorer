@@ -38,13 +38,12 @@ internal object BackgroundText {
         if (status.paused) return "$label · ${paused(status)}"
         if (!status.syncEnabled) return "$label · Sync ausgeschaltet"
         status.activeJob?.let { return "$label · läuft: $it" }
-        if (mode == BackgroundController.MODE_PERSISTENT) {
-            return if (status.daemonRunning) "$label · aktiv" else "$label · startet…"
-        }
+        val next = status.nextScheduledRunMs ?: nextRunMs
         return when {
-            nextRunMs == null -> "$label · wartet auf Bedingungen"
-            nextRunMs <= now -> "$label · fällig, wartet auf Bedingungen"
-            else -> "$label · nächster Lauf ~${moment(nextRunMs, now)}"
+            next != null && next <= now -> "$label · fällig, wartet auf Bedingungen"
+            next != null -> "$label · nächster Termin ~${moment(next, now)}"
+            mode == BackgroundController.MODE_PERSISTENT && status.daemonRunning -> "$label · aktiv"
+            else -> "$label · wartet auf Bedingungen"
         }
     }
 
@@ -55,6 +54,7 @@ internal object BackgroundText {
             append(if (status.paused) paused(status) else if (enabledJobs == 1) "1 Job" else "$enabledJobs Jobs")
             append(if (shareOnline) ", Share online" else ", Share offline")
             status.activeJob?.let { append(" · läuft: $it") }
+                ?: status.nextScheduledRunMs?.let { append(" · nächster Termin ${moment(it)}") }
         }
     }
 
@@ -92,7 +92,7 @@ internal object BackgroundText {
         }
         lines += serverLine(share, now)
         if (mode == BackgroundController.MODE_PERIODIC) {
-            lines += StatusLine("Geplante Jobs laufen trotzdem nur beim periodischen Lauf.")
+            lines += StatusLine("Geplante Jobs verwenden Jobalarme und WorkManager; Android kann den Start verschieben.")
         }
         return lines
     }

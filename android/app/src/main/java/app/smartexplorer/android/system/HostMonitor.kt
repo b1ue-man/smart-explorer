@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.app.AppOpsManager
 import android.net.ConnectivityManager
 import android.net.LinkProperties
 import android.net.Network
@@ -83,6 +84,7 @@ object HostMonitor {
 
     @Volatile
     private var foreground = false
+    @Volatile private var serviceAvailable = false
 
     @Volatile
     private var lastStatus: ShareStatus? = null
@@ -108,6 +110,8 @@ object HostMonitor {
             addAction(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED)
             addAction(BatteryManager.ACTION_CHARGING)
             addAction(BatteryManager.ACTION_DISCHARGING)
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_SCREEN_OFF)
         }
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) = requestPush()
@@ -115,13 +119,33 @@ object HostMonitor {
         ContextCompat.registerReceiver(app, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
         KeepAliveNetwork.start()
         registerNetworkCallback(app)
+        MediaStoreSync.start(app)
+        try {
+            app.getSystemService(AppOpsManager::class.java)?.startWatchingMode(
+                AppOpsManager.OPSTR_MANAGE_EXTERNAL_STORAGE, app.packageName,
+                AppOpsManager.OnOpChangedListener { _, _ -> requestPush() },
+            )
+        } catch (e: RuntimeException) { Log.w(TAG, "Dateizugriffsänderungen werden periodisch geprüft", e) }
         // Each StateFlow collector runs one request at a time and skips superseded ones.
         scope.launch { pushRequests.collect { push(app, force = false) } }
         // `deferScheduling` follows the mode; the first value also sends the first host state,
         // which replaces the daemon's start default (scheduling deferred until then, K1).
         scope.launch { AppPrefs.bgMode.collect { requestPush() } }
         scope.launch { shareRefreshes.collect { refreshShare(app) } }
-        scope.launch { Core.events.collect { if (it is CoreEvent.Share) requestShareRefresh() } }
+        scope.launch { Core.events.collect { event -> when (event) {
+            is CoreEvent.Share -> requestShareRefresh()
+            is CoreEvent.Jobs -> BackgroundController.refreshSchedule(app)
+            is CoreEvent.Volumes -> { MediaStoreSync.probe(app, signal = true); AndroidHostFigures.refresh(app, force = true) }
+            is CoreEvent.SyncProblem -> Notifications.syncProblem(app, event)
+            else -> Unit
+        } } }
+        scope.launch { while (true) { delay(5_000); push(app, force = false) } }
+        scope.launch { while (true) {
+            MediaStoreSync.probe(app)
+            BackgroundController.refreshSchedule(app)
+            AndroidHostFigures.refresh(app)
+            delay(60_000)
+        } }
     }
 
     /** UI visibility (from `BackgroundController.onUiVisible`). */
@@ -129,16 +153,24 @@ object HostMonitor {
         foreground = visible
         requestPush()
         appContext?.let { updateMulticastLock(it) }
+        if (visible) appContext?.let { app -> scope.launch {
+            MediaStoreSync.probe(app)
+            AndroidHostFigures.refresh(app, force = true)
+            BackgroundController.refreshSchedule(app)
+        } }
     }
 
+    fun setServiceAvailable(available: Boolean) { serviceAvailable = available; requestPush() }
+
     /**
-     * The periodic worker starts a run: while it lasts the daemon schedules on its own as well, so
-     * "Beim Start"-jobs (not part of `bg.catchUp`) run as they did in the worker's process before.
+     * The worker owns its admitted catch-up jobs. During its bounded window,
+     * independent new daemon scheduling is deferred.
      * Sends the measured host state at once; every call needs a matching [endWorkerRun].
      */
     suspend fun beginWorkerRun(context: Context) {
         workerRuns.incrementAndGet()
         push(context.applicationContext, force = true)
+        MediaStoreSync.probe(context.applicationContext)
     }
 
     /** The worker run ended: scheduling is deferred again unless the UI is visible or "Dauerbetrieb" runs. */
@@ -168,9 +200,9 @@ object HostMonitor {
             foreground = visible,
             // Only "Dauerbetrieb" runs scheduled jobs in the background; otherwise a process the
             // background service keeps alive leaves them to the periodic worker's run (spec A6).
-            deferScheduling = !visible &&
-                AppPrefs.bgMode.value != BackgroundController.MODE_PERSISTENT &&
-                workerRuns.get() == 0,
+            deferScheduling = workerRuns.get() > 0 || (!visible &&
+                (AppPrefs.bgMode.value != BackgroundController.MODE_PERSISTENT || !serviceAvailable)),
+            storageAccess = Permissions.hasAllFilesAccess(),
         )
     }
 
@@ -191,6 +223,7 @@ object HostMonitor {
                 SyncApi.hostState(state)
                 lastPushed = state
                 hostStateFlow.value = state
+                BackgroundController.refreshSchedule(context)
             } catch (e: CoreException) {
                 Log.w(TAG, "sys.hostState failed: ${e.kind}: ${e.displayText()}")
             }
@@ -239,6 +272,7 @@ object HostMonitor {
         )
         updateMulticastLock(context)
         rememberRunning(status.running)
+        if (status.running) AndroidHostFigures.refresh(context)
     }
 
     /** Persists "Share eingerichtet": at once when on, after [SETTLE_MS] of continuous "off". */

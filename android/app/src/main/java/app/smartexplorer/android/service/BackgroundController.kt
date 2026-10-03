@@ -6,6 +6,10 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.workDataOf
+import android.provider.MediaStore
 import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkInfo
@@ -16,6 +20,8 @@ import app.smartexplorer.android.core.CoreException
 import app.smartexplorer.android.prefs.AppPrefs
 import app.smartexplorer.android.system.HostMonitor
 import app.smartexplorer.android.system.KeepAliveAlarm
+import app.smartexplorer.android.system.SyncScheduleAlarm
+import app.smartexplorer.android.system.Permissions
 import app.smartexplorer.android.work.SyncWorker
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -58,6 +64,11 @@ object BackgroundController {
     private val syncFlagLock = Mutex()
     private val watching = AtomicBoolean(false)
     private val statusChanges = MutableStateFlow(0L)
+    private val scheduleLock = Mutex()
+    private val nextJobRun = MutableStateFlow<Long?>(null)
+    private const val SCHEDULE_WORK = "sync-scheduled-window"
+    private const val CONTENT_WORK = "sync-media-hints"
+    const val CONTENT_HINT = "content-hint"
 
     /** Ticks when the UI changed the daemon's pause or auto-pause ([BackgroundService] reloads). */
     internal val statusChanged: StateFlow<Long> = statusChanges.asStateFlow()
@@ -104,12 +115,14 @@ object BackgroundController {
         val app = context.applicationContext
         val mode = AppPrefs.bgMode.value
         scheduleWork(app, mode)
+        armContentWake(app, replace = true)
         scope.launch {
             // One call at a time, each with the mode current at that moment: the last one to run
             // always sends the newest setting, however overlapping calls are ordered.
             syncFlagLock.withLock {
                 try {
                     SyncApi.setSyncEnabled(AppPrefs.bgMode.value != MODE_OFF)
+                    refreshSchedule(app)
                 } catch (e: CoreException) {
                     Log.w(TAG, "bg.setSyncEnabled failed: ${e.kind}: ${e.displayText()}")
                 }
@@ -125,6 +138,8 @@ object BackgroundController {
     internal fun onBoot(context: Context) {
         val app = context.applicationContext
         scheduleWork(app, AppPrefs.bgMode.value)
+        armContentWake(app)
+        refreshSchedule(app)
         reconcileService(app)
     }
 
@@ -139,18 +154,23 @@ object BackgroundController {
             return false
         }
         KeepAliveAlarm.schedule(app)
-        startBackgroundService(app)
+        // An inexact alarm gives no FGS-start exemption. A battery-exempt
+        // app has its own exemption; otherwise the worker remains available.
+        if (Permissions.isIgnoringBatteryOptimizations(app)) startBackgroundService(app)
+        enqueueCatchUp(app)
         return true
     }
 
     /** Every start command of [BackgroundService]: keeps the wake alarm planned. */
     internal fun onServiceStarted(context: Context) {
         KeepAliveAlarm.schedule(context.applicationContext)
+        refreshSchedule(context.applicationContext)
     }
 
     /** The UI paused, resumed or changed the auto-pause: the "Dauerbetrieb" notification follows. */
     fun onBackgroundStatusChanged() {
         statusChanges.update { it + 1 }
+        scope.launch { appContextForSchedule?.let { refreshSchedule(it) } }
     }
 
     /**
@@ -162,30 +182,83 @@ object BackgroundController {
     }
 
     /** Next planned run of the periodic work, `null` when none is enqueued. */
-    fun nextRun(context: Context): Flow<Long?> =
+    fun nextRun(context: Context): Flow<Long?> = combine(
         WorkManager.getInstance(context.applicationContext)
             .getWorkInfosForUniqueWorkFlow(WORK_NAME)
             .map { infos ->
                 infos.firstOrNull { it.state == WorkInfo.State.ENQUEUED }
                     ?.nextScheduleTimeMillis
                     ?.takeIf { it > 0 && it != Long.MAX_VALUE }
+            }, nextJobRun,
+    ) { periodic, job -> listOfNotNull(periodic, job).minOrNull() }
+
+    @Volatile private var appContextForSchedule: Context? = null
+
+    fun refreshSchedule(context: Context) {
+        val app = context.applicationContext
+        appContextForSchedule = app
+        scope.launch { scheduleLock.withLock {
+            if (AppPrefs.bgMode.value == MODE_OFF) {
+                nextJobRun.value = null; SyncScheduleAlarm.schedule(app, null); return@withLock
             }
+            try {
+                val status = SyncApi.status()
+                val host = HostMonitor.measure(app)
+                val paused = status.paused && status.pausedUntilMs == null ||
+                    status.autopauseBattery && host.powerSave || status.autopauseMetered && host.metered
+                val due = if (paused) null else status.nextScheduledRunMs?.let { maxOf(it, status.pausedUntilMs ?: 0) }
+                nextJobRun.value = due
+                SyncScheduleAlarm.schedule(app, due)
+            } catch (e: CoreException) { Log.w(TAG, "Echte Jobzeit nicht verfügbar; periodischer Fallback bleibt", e) }
+        } }
+    }
+
+    fun enqueueCatchUp(context: Context) {
+        if (AppPrefs.bgMode.value == MODE_OFF) return
+        val request = OneTimeWorkRequestBuilder<SyncWorker>().setConstraints(constraints().build()).build()
+        WorkManager.getInstance(context.applicationContext).enqueueUniqueWork(SCHEDULE_WORK, ExistingWorkPolicy.KEEP, request)
+    }
+
+    internal fun onScheduleAlarm(context: Context, exact: Boolean) {
+        if (AppPrefs.bgMode.value == MODE_OFF) return
+        if (exact && serviceWanted()) startBackgroundService(context)
+        enqueueCatchUp(context)
+        refreshSchedule(context)
+    }
+
+    fun armContentWake(context: Context, afterCurrent: Boolean = false, replace: Boolean = false) {
+        val work = WorkManager.getInstance(context.applicationContext)
+        if (AppPrefs.bgMode.value == MODE_OFF) { work.cancelUniqueWork(CONTENT_WORK); return }
+        val request = OneTimeWorkRequestBuilder<SyncWorker>()
+            .setInputData(workDataOf(CONTENT_HINT to true))
+            .setConstraints(constraints().addContentUriTrigger(MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL), true)
+                .setTriggerContentUpdateDelay(10, TimeUnit.SECONDS).setTriggerContentMaxDelay(60, TimeUnit.SECONDS).build())
+            .build()
+        work.enqueueUniqueWork(CONTENT_WORK, when {
+            afterCurrent -> ExistingWorkPolicy.APPEND_OR_REPLACE
+            replace -> ExistingWorkPolicy.REPLACE
+            else -> ExistingWorkPolicy.KEEP
+        }, request)
+    }
+
+    private fun constraints(): Constraints.Builder = Constraints.Builder()
+        .setRequiredNetworkType(if (AppPrefs.bgWifiOnly.value) NetworkType.UNMETERED else NetworkType.NOT_REQUIRED)
+        .setRequiresCharging(AppPrefs.bgChargingOnly.value)
+        .setRequiresBatteryNotLow(AppPrefs.bgBatteryNotLow.value)
 
     /**
-     * Periodic catch-up work in "periodic" and "persistent" mode; in "persistent" mode it is only
-     * the fallback for a service the system ended ([SyncWorker] skips while the service runs).
+     * Periodic fallback in both enabled modes, alongside actual deadline and
+     * content windows. Native admission joins existing runs without duplicating them.
      */
     private fun scheduleWork(context: Context, mode: String) {
         val workManager = WorkManager.getInstance(context)
         if (mode == MODE_OFF) {
             workManager.cancelUniqueWork(WORK_NAME)
+            workManager.cancelUniqueWork(SCHEDULE_WORK)
+            SyncScheduleAlarm.schedule(context, null)
             return
         }
-        val constraints = Constraints.Builder()
-            .setRequiredNetworkType(if (AppPrefs.bgWifiOnly.value) NetworkType.UNMETERED else NetworkType.NOT_REQUIRED)
-            .setRequiresCharging(AppPrefs.bgChargingOnly.value)
-            .setRequiresBatteryNotLow(AppPrefs.bgBatteryNotLow.value)
-            .build()
+        val constraints = constraints().build()
         val request = PeriodicWorkRequestBuilder<SyncWorker>(AppPrefs.bgIntervalMin.value.toLong(), TimeUnit.MINUTES)
             .setConstraints(constraints)
             .build()

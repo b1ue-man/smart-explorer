@@ -3,6 +3,7 @@ package app.smartexplorer.android.api
 import app.smartexplorer.android.core.Core
 import app.smartexplorer.android.core.CoreException
 import app.smartexplorer.android.core.TaskInfo
+import app.smartexplorer.android.service.TaskKeeper
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.withTimeoutOrNull
@@ -63,11 +64,16 @@ data class SyncJob(
     val intervalMin: Int = 60,
     val calendar: SyncCalendar? = null,
     val rtDebounceSecs: Int = 0,
+    val rtMaxLatencySecs: Long = 0,
+    val rtPollSecs: Long = 60,
+    val verifyIntervalSecs: Long = 3600,
+    val verifyTargetSecs: Long = 86400,
     val includeHidden: Boolean = false,
     val ignore: List<String> = emptyList(),
     val enabled: Boolean = true,
     val runBefore: String = "",
     val runAfter: String = "",
+    val runCleanup: String = "",
     val lastRun: Long = 0,
     val activeFromMin: Int = 0,
     val activeToMin: Int = 0,
@@ -75,10 +81,16 @@ data class SyncJob(
     val moveFiles: Boolean = false,
     val maxDelete: Int = 0,
     val maxDeletePct: Int = 0,
+    val maxDeleteMin: Long = 0,
+    val retainCount: Long = 0,
+    val versionsLocation: String = "auto",
+    val crossMounts: Boolean = false,
     val useRecycleBin: Boolean = false,
     val lastResult: SyncLastResult? = null,
     val schedule: String = "",
     val runningTask: String? = null,
+    val state: SyncState? = null,
+    val brokenConfig: String? = null,
 ) {
     companion object {
         const val DIRECTION_BOTH = "both"
@@ -102,6 +114,7 @@ data class SyncOptions(
     val deletePolicies: List<SyncChoice> = emptyList(),
     val compares: List<SyncChoice> = emptyList(),
     val versionings: List<SyncChoice> = emptyList(),
+    val versionsLocations: List<SyncChoice> = emptyList(),
     val triggers: List<SyncChoice> = emptyList(),
     val calendarKinds: List<SyncChoice> = emptyList(),
     val defaults: SyncJob = SyncJob(),
@@ -132,6 +145,7 @@ data class SyncConflict(
     val a: ConflictSide? = null,
     val b: ConflictSide? = null,
     val text: Boolean = false,
+    val pendingMerge: Boolean = false,
 ) {
     /** Stable key for lists (the JSON form of [cid]). */
     val key: String get() = cid.toString()
@@ -169,6 +183,7 @@ data class SyncRunResult(
     val conflicts: Int = 0,
     val errors: Int = 0,
     val omitted: String? = null,
+    val blocked: Boolean = false,
 )
 
 /** `result` of a `sync.mirror` task. */
@@ -193,6 +208,9 @@ data class CatchUpSkip(
 data class CatchUpResult(
     val admitted: Int = 0,
     val skipped: List<CatchUpSkip> = emptyList(),
+    val failed: Int = 0,
+    val retrySuggested: Boolean = false,
+    val message: String? = null,
 )
 
 /** `bg.status`. */
@@ -211,6 +229,9 @@ data class BgStatus(
     val lastCatchUpMs: Long? = null,
     /** Display name of the job the daemon runs right now. */
     val activeJob: String? = null,
+    val nextScheduledRunMs: Long? = null,
+    val lastCatchUpResult: LastCatchUpResult? = null,
+    val storageAccess: Boolean? = null,
 )
 
 /**
@@ -225,6 +246,7 @@ data class HostStateArgs(
     val charging: Boolean,
     val foreground: Boolean,
     val deferScheduling: Boolean,
+    val storageAccess: Boolean = false,
 )
 
 object SyncApi {
@@ -254,6 +276,18 @@ object SyncApi {
 
     /** Starts the job now; returns the task id. */
     suspend fun run(id: String): String = taskOf("sync.run", buildJsonObject { put("id", id) })
+
+    suspend fun confirmBlock(id: String, block: SyncBlock) {
+        Core.call("sync.confirmBlock", buildJsonObject { put("id", id); put("kind", block.kind) })
+    }
+
+    suspend fun versions(id: String): String = taskOf("sync.versions", buildJsonObject { put("id", id) })
+
+    suspend fun restoreVersion(id: String, version: SyncVersion, side: String? = null): String =
+        taskOf("sync.restoreVersion", buildJsonObject {
+            put("id", id); put("token", version.token)
+            side?.let { put("side", it) }
+        })
 
     /** One-way copy of new and changed files; nothing is deleted in [target]. */
     suspend fun mirror(source: String, target: String): String =
@@ -287,7 +321,10 @@ object SyncApi {
     }
 
     suspend fun mergeRows(id: String, cid: JsonPrimitive): List<MergeRow> =
-        Core.request<MergeRows>("sync.mergeRows", conflictArgs(id, cid)).rows
+        mergeRowsData(id, cid).rows
+
+    suspend fun mergeRowsData(id: String, cid: JsonPrimitive): SyncMergeRows =
+        Core.request<SyncMergeRows>("sync.mergeRows", conflictArgs(id, cid))
 
     suspend fun mergeApply(id: String, cid: JsonPrimitive, rows: List<MergeChoice>): String =
         taskOf("sync.mergeApply", buildJsonObject {
@@ -297,6 +334,8 @@ object SyncApi {
         })
 
     suspend fun mergeKeepBoth(id: String, cid: JsonPrimitive): String = taskOf("sync.mergeKeepBoth", conflictArgs(id, cid))
+
+    suspend fun mergeRetry(id: String, cid: JsonPrimitive): String = taskOf("sync.mergeRetry", conflictArgs(id, cid))
 
     /** Starts the embedded daemon if needed; waits up to 10 s in the core. */
     suspend fun ensureDaemon(): Boolean = Core.request<Running>("bg.ensureDaemon").running
@@ -336,6 +375,7 @@ object SyncApi {
             put("charging", state.charging)
             put("foreground", state.foreground)
             put("deferScheduling", state.deferScheduling)
+            put("storageAccess", state.storageAccess)
         })
     }
 
@@ -364,7 +404,11 @@ object SyncApi {
         }
     }
 
-    private suspend fun taskOf(method: String, args: JsonObject): String = Core.request<TaskRef>(method, args).taskId
+    private suspend fun taskOf(method: String, args: JsonObject): String {
+        val id = Core.request<TaskRef>(method, args).taskId
+        if (method.startsWith("sync.")) TaskKeeper.keepCpuAwake(id)
+        return id
+    }
 
     private fun jobArgs(job: SyncJob): JsonObject = buildJsonObject { put("job", Core.json.encodeToJsonElement(job)) }
 
@@ -407,9 +451,6 @@ object SyncApi {
 
     @Serializable
     private data class LogText(val text: String = "")
-
-    @Serializable
-    private data class MergeRows(val rows: List<MergeRow> = emptyList())
 
     @Serializable
     private data class Validation(val errors: Map<String, String> = emptyMap())

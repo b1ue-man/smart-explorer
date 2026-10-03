@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use serde_json::{json, Map, Value};
 
-use crate::bisync::{CompareMode, ConflictMode, DeletePolicy, Direction, VersioningScheme};
+use crate::bisync::{CompareMode, ConflictMode, DeletePolicy, Direction, VersioningScheme, VersionsLocation};
 use crate::syncjobs::editor::{min_to_hm, JobEditor};
 use crate::syncjobs::{JobResult, SyncJob, Trigger};
 
@@ -41,11 +41,16 @@ pub(super) fn job_json(
             "monthday": job.cal_monthday,
         },
         "rtDebounceSecs": job.rt_debounce_secs,
+        "rtMaxLatencySecs": job.rt_max_latency_secs,
+        "rtPollSecs": job.rt_poll_secs,
+        "verifyIntervalSecs": job.verify_interval_secs,
+        "verifyTargetSecs": job.verify_target_secs,
         "includeHidden": job.include_hidden,
         "ignore": job.ignore,
         "enabled": job.enabled,
         "runBefore": job.run_before,
         "runAfter": job.run_after,
+        "runCleanup": job.run_cleanup,
         "lastRun": job.last_run,
         "activeFromMin": job.active_from_min,
         "activeToMin": job.active_to_min,
@@ -53,6 +58,10 @@ pub(super) fn job_json(
         "moveFiles": job.move_files,
         "maxDelete": job.max_delete,
         "maxDeletePct": job.max_delete_pct,
+        "maxDeleteMin": job.max_delete_min,
+        "retainCount": job.retain_count,
+        "versionsLocation": job.versions_location.as_str(),
+        "crossMounts": job.cross_mounts,
         "useRecycleBin": job.use_recycle_bin,
         "lastResult": result.map(result_json),
         "schedule": schedule_text(job),
@@ -60,7 +69,7 @@ pub(super) fn job_json(
     })
 }
 
-fn result_json(result: &JobResult) -> Value {
+pub(super) fn result_json(result: &JobResult) -> Value {
     json!({
         "timeMs": result.when.saturating_mul(1000),
         "aToB": result.a_to_b,
@@ -128,6 +137,7 @@ pub(super) fn apply_draft(editor: &mut JobEditor, draft: &Map<String, Value>) ->
     text("target", &mut editor.target);
     text("runBefore", &mut editor.run_before);
     text("runAfter", &mut editor.run_after);
+    text("runCleanup", &mut editor.run_cleanup);
 
     let flag = |key: &str, slot: &mut bool| {
         if let Some(value) = draft.get(key).and_then(Value::as_bool) {
@@ -139,6 +149,7 @@ pub(super) fn apply_draft(editor: &mut JobEditor, draft: &Map<String, Value>) ->
     flag("catchUp", &mut editor.catch_up);
     flag("moveFiles", &mut editor.move_files);
     flag("useRecycleBin", &mut editor.use_recycle_bin);
+    flag("crossMounts", &mut editor.cross_mounts);
 
     let number = |key: &str, slot: &mut String| match draft.get(key) {
         Some(Value::Number(value)) => *slot = value.to_string(),
@@ -148,8 +159,15 @@ pub(super) fn apply_draft(editor: &mut JobEditor, draft: &Map<String, Value>) ->
     number("retainDays", &mut editor.retain_days);
     number("intervalMin", &mut editor.interval_min);
     number("rtDebounceSecs", &mut editor.rt_debounce);
+    number("rtMaxLatencySecs", &mut editor.rt_max_latency);
+    number("rtPollSecs", &mut editor.rt_poll);
+    number("verifyIntervalSecs", &mut editor.verify_interval);
+    number("verifyTargetSecs", &mut editor.verify_target);
+    number("retainCount", &mut editor.retain_count);
     number("maxDelete", &mut editor.max_delete);
     number("maxDeletePct", &mut editor.max_delete_pct);
+    number("maxDeleteMin", &mut editor.max_delete_min);
+    enum_field(draft, "versionsLocation", &mut errors, &mut editor.versions_location, VersionsLocation::parse);
 
     enum_field(
         draft,
@@ -298,7 +316,7 @@ fn apply_calendar(editor: &mut JobEditor, calendar: &Map<String, Value>, errors:
 /// Assigns the editor's single German error to the field it concerns.
 pub(super) fn field_for_message(message: &str) -> &'static str {
     // Order matters: the active-time messages also contain "Uhrzeit".
-    const RULES: [(&str, &str); 23] = [
+    const RULES: [(&str, &str); 28] = [
         ("Quelle und Ziel", "target"),
         ("Ignoriermuster", "ignore"),
         ("Spiegel-Löschungen", "deletePolicy"),
@@ -310,11 +328,16 @@ pub(super) fn field_for_message(message: &str) -> &'static str {
         ("Uhrzeit", "calendar"),
         ("Tag im Monat", "calendar"),
         ("Verzögerung", "rtDebounceSecs"),
+        ("Höchstwartezeit", "rtMaxLatencySecs"),
+        ("Abfrageintervall", "rtPollSecs"),
+        ("Kontroll-Lauf", "verifyIntervalSecs"),
+        ("Vollprüfung des Ziels", "verifyTargetSecs"),
+        ("Mindestzahl an Löschungen", "maxDeleteMin"),
         ("Lösch-Schutz in Prozent", "maxDeletePct"),
         ("prozentuale Lösch-Schutz", "maxDeletePct"),
         ("Lösch-Schutz", "maxDelete"),
         ("Zeit-Toleranz", "job"),
-        ("Versionen behalten", "job"),
+        ("Versionen behalten", "retainCount"),
         ("Mindestgröße", "job"),
         ("Maximalgröße", "job"),
         ("Mindestalter", "job"),

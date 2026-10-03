@@ -90,8 +90,12 @@ fun SyncScreen() {
         )
         is SyncPage.Merge -> MergeScreen(page.merge, onBack = vm::back)
         SyncPage.Background -> BackgroundPage(onBack = vm::back)
+        is SyncPage.Versions -> VersionsScreen(page.job, onBack = vm::back)
     }
     vm.details?.let { text -> DetailsDialog(text, onDismiss = { vm.details = null }) }
+    vm.confirmingBlock?.let { job ->
+        BlockDialog(job, onConfirm = vm::confirmBlock, onDismiss = { vm.confirmingBlock = null })
+    }
     if (vm.pendingLeave != null) {
         // A notification, the mirror dialog or a snackbar wants another page over an unsaved job.
         ConfirmDialog(
@@ -115,7 +119,7 @@ private fun JobsPage(vm: SyncViewModel) {
     var mirror by rememberSaveable { mutableStateOf(false) }
     var deleting by remember { mutableStateOf<SyncJob?>(null) }
     LaunchedEffect(Unit) { vm.reloadJobs() }
-    RepeatWhileStarted(STATUS_INTERVAL_MS) { vm.loadStatus() }
+    RepeatWhileStarted(STATUS_INTERVAL_MS) { vm.refreshState() }
 
     Scaffold(
         topBar = {
@@ -158,13 +162,15 @@ private fun JobsPage(vm: SyncViewModel) {
                         volumes = volumes,
                         running = taskId != null && (task == null || task.isActive),
                         runTask = task,
-                        daemonRuns = vm.status?.activeJob.let { it != null && it == job.name.ifBlank { job.id } },
+                        daemonRuns = job.state?.running?.runner == "daemon",
                         actions = JobActions(
                             onRun = { vm.runNow(job) },
                             onEdit = { vm.openEditor(job) },
                             onToggle = { vm.setEnabled(job, !job.enabled) },
                             onConflicts = { vm.openConflicts(job) },
                             onDelete = { deleting = job },
+                            onCheck = { vm.check(job) },
+                            onVersions = { vm.openVersions(job) },
                         ),
                     )
                 }

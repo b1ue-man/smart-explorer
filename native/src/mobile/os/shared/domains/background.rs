@@ -18,6 +18,19 @@ const LOG_LINES: usize = 20_000;
 
 /// Catch-up runs started by this facade that have not finished yet.
 static CATCH_UPS: Mutex<BTreeSet<u64>> = Mutex::new(BTreeSet::new());
+pub(super) fn install_hooks() {
+    crate::daemon::set_problem_notifier(|notice| {
+        if let Ok(rt) = Runtime::get() { rt.emit(json!({ "type": "syncProblem",
+            "jobId": notice.job_id, "title": notice.title, "text": notice.text })); }
+    });
+}
+struct CatchUpGuard(u64);
+impl Drop for CatchUpGuard {
+    fn drop(&mut self) {
+        crate::daemon::cancel_catch_up(self.0);
+        CATCH_UPS.lock().unwrap_or_else(PoisonError::into_inner).remove(&self.0);
+    }
+}
 
 fn wait_ready() -> Result<(), ApiError> {
     match crate::daemon::ensure_embedded_daemon(READY_WAIT) {
@@ -49,6 +62,10 @@ pub(super) fn status() -> Result<Value, ApiError> {
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .is_empty();
+    let last = crate::daemon::last_catch_up().map(|last| json!({
+        "finishedMs": last.finished_ms, "ran": last.ran, "succeeded": last.succeeded,
+        "failed": last.failed, "message": last.message,
+    }));
     Ok(json!({
         "syncEnabled": crate::autostart::is_enabled(),
         "daemonRunning": crate::daemon::is_running(),
@@ -60,7 +77,10 @@ pub(super) fn status() -> Result<Value, ApiError> {
         "cadenceSecs": cadence,
         "catchUpRunning": catch_up_running,
         "lastCatchUpMs": crate::daemon::last_catch_up_ms(),
+        "lastCatchUpResult": last,
         "activeJob": crate::daemon::active_job(),
+        "nextScheduledRunMs": crate::daemon::next_scheduled_run(super::args::now_secs()).map(|at| at.saturating_mul(1000)),
+        "storageAccess": crate::daemon::storage_access(),
     }))
 }
 
@@ -154,11 +174,9 @@ fn catch_up_task(ctx: &TaskCtx) -> Result<Value, ApiError> {
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .insert(id);
+    let guard = CatchUpGuard(id);
     let outcome = follow_catch_up(ctx, id);
-    CATCH_UPS
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .remove(&id);
+    drop(guard);
     if let Ok(rt) = Runtime::get() {
         rt.emit(json!({ "type": "jobs" }));
     }
@@ -216,6 +234,8 @@ fn follow_catch_up(ctx: &TaskCtx, id: u64) -> Result<Value, ApiError> {
                 "admitted": status.admitted,
                 "skipped": skipped,
                 "message": status.message,
+                "failed": status.failed,
+                "retrySuggested": status.retry_suggested,
             }));
         }
         std::thread::sleep(CATCH_UP_POLL);

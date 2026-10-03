@@ -6,13 +6,13 @@ use super::args::{bool_arg, invalid, io_error, str_arg};
 use super::job_json::{apply_draft, field_for_message, job_json, FieldErrors};
 use super::job_json::{CALENDAR_DAILY, CALENDAR_MONTHLY, CALENDAR_WEEKLY};
 use super::{sync_conflicts, sync_run};
-use crate::bisync::{CompareMode, ConflictMode, DeletePolicy, Direction, VersioningScheme};
+use crate::bisync::{CompareMode, ConflictMode, DeletePolicy, Direction, VersioningScheme, VersionsLocation};
 use crate::mobile::{ApiError, Runtime};
 use crate::syncjobs::editor::JobEditor;
 use crate::syncjobs::{SyncJob, Trigger};
 
 pub(super) fn load_jobs() -> Result<Vec<SyncJob>, ApiError> {
-    crate::syncjobs::load().map_err(|error| io_error("Sync-Jobs laden", error))
+    crate::syncjobs::load_report().map(|report| report.jobs).map_err(|error| io_error("Sync-Jobs laden", error))
 }
 
 pub(super) fn find_job(id: &str) -> Result<SyncJob, ApiError> {
@@ -27,12 +27,13 @@ pub(super) fn notify_jobs(rt: &Runtime) {
 }
 
 fn one_job(job: &SyncJob) -> Value {
-    let results = crate::syncjobs::load_results();
-    job_json(
+    let states = crate::syncjobs::load_job_states(std::slice::from_ref(job));
+    let value = job_json(
         job,
-        results.get(&job.id),
+        None,
         sync_run::running_task(&job.id).as_deref(),
-    )
+    );
+    states.get(&job.id).map_or(value.clone(), |state| super::sync_state_json::attach(value, state, super::args::now_secs()))
 }
 
 pub(super) fn options() -> Result<Value, ApiError> {
@@ -62,6 +63,7 @@ pub(super) fn options() -> Result<Value, ApiError> {
         "deletePolicies": deletes.iter().map(|d| entry(d.as_str(), d.label())).collect::<Vec<_>>(),
         "compares": compares.iter().map(|c| entry(c.as_str(), c.label())).collect::<Vec<_>>(),
         "versionings": VersioningScheme::ALL.iter().map(|v| entry(v.as_str(), v.label())).collect::<Vec<_>>(),
+        "versionsLocations": VersionsLocation::ALL.iter().map(|v| entry(v.as_str(), v.label())).collect::<Vec<_>>(),
         "triggers": triggers.map(|t| entry(t.as_str(), t.label())).collect::<Vec<_>>(),
         "calendarKinds": [
             entry(CALENDAR_DAILY, "Täglich"),
@@ -73,18 +75,22 @@ pub(super) fn options() -> Result<Value, ApiError> {
 }
 
 pub(super) fn jobs() -> Result<Value, ApiError> {
-    let jobs = load_jobs()?;
-    let results = crate::syncjobs::load_results();
-    let list: Vec<Value> = jobs
+    let report = crate::syncjobs::load_report().map_err(|error| io_error("Sync-Jobs laden", error))?;
+    let states = crate::syncjobs::load_job_states(&report.jobs);
+    let mut list: Vec<Value> = report.jobs
         .iter()
         .map(|job| {
-            job_json(
+            let value = job_json(
                 job,
-                results.get(&job.id),
+                None,
                 sync_run::running_task(&job.id).as_deref(),
-            )
+            );
+            states.get(&job.id).map_or(value.clone(), |state| super::sync_state_json::attach(value, state, super::args::now_secs()))
         })
         .collect();
+    list.extend(report.broken.into_iter().map(|broken| json!({ "id": broken.id,
+        "name": broken.id, "enabled": false, "brokenConfig": broken.error,
+        "state": { "problem": "needs_action", "loadError": broken.error } })));
     Ok(Value::Array(list))
 }
 
@@ -155,14 +161,19 @@ pub(super) fn save(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
             return Err(invalid(message));
         }
     };
+    let _edit = sync_run::reserve_job(&job.id)?;
+    sync_conflicts::settle_reserved(&job.id)?;
     crate::syncjobs::upsert(&job).map_err(|error| io_error("Sync-Job speichern", error))?;
+    sync_conflicts::forget(&job.id);
     notify_jobs(rt);
     Ok(one_job(&job))
 }
 
 pub(super) fn delete(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
     let id = str_arg(args, "id")?;
-    if sync_run::running_task(id).is_some() {
+    let _edit = sync_run::reserve_job(id)?;
+    if crate::syncjobs::load_job_state(id)
+        .map_err(|error| io_error("Job-Zustand laden", error))?.running_now(super::args::now_secs()).is_some() {
         return Err(ApiError::new(
             "busy",
             "Der Job läuft gerade – bitte warten oder abbrechen.",
@@ -170,6 +181,17 @@ pub(super) fn delete(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
     }
     crate::syncjobs::remove(id).map_err(|error| io_error("Sync-Job löschen", error))?;
     sync_conflicts::forget(id);
+    notify_jobs(rt);
+    Ok(json!({}))
+}
+
+pub(super) fn confirm_block(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
+    let id = str_arg(args, "id")?;
+    find_job(id)?;
+    let kind: crate::syncjobs::BlockKind = serde_json::from_value(args.get("kind").cloned()
+        .ok_or_else(|| invalid("Die angezeigte Sperre fehlt."))?).map_err(|_| invalid("Ungültige Sperre."))?;
+    if crate::syncjobs::block_confirmation(&kind).is_none() { return Err(invalid("Bitte die Einstellungen und den Zustand prüfen; diese Sperre kann nicht übergangen werden.")); }
+    crate::syncjobs::confirm_block(id, &kind).map_err(|e| io_error("Sperre bestätigen", e))?;
     notify_jobs(rt);
     Ok(json!({}))
 }

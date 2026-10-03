@@ -16,7 +16,8 @@ import kotlinx.coroutines.launch
 /**
  * Wake alarm of the background service (spec A2): an inexact `setAndAllowWhileIdle` alarm on
  * `ELAPSED_REALTIME_WAKEUP` every [INTERVAL_MS] starts [KeepAliveReceiver] – in a process
- * Android ended as well – which restarts the service if needed and probes the Share connection.
+ * Android ended as well – which dispatches a worker and probes the Share connection. A service
+ * restart additionally requires the app's battery exemption; this inexact alarm grants none.
  * 10 min = 6 per hour stays within the 7 while-idle alarms per hour an app without battery
  * exemption gets (android-background-reachability.md §1.5) and needs no exact-alarm permission.
  * The alarm is chained: every delivery plans the next one; boot, process start and every

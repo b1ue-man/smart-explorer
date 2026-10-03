@@ -32,6 +32,7 @@ internal sealed interface SyncPage {
     data class Merge(val merge: MergeSession) : SyncPage
 
     data object Background : SyncPage
+    data class Versions(val job: SyncJob) : SyncPage
 }
 
 /**
@@ -54,6 +55,7 @@ internal class SyncViewModel : ViewModel() {
 
     /** Text for the [Details] dialog, `null` when closed. */
     var details by mutableStateOf<String?>(null)
+    var confirmingBlock by mutableStateOf<SyncJob?>(null)
 
     /** Page switch from outside that waits for "Änderungen verwerfen?" over a dirty editor. */
     var pendingLeave by mutableStateOf<(() -> Unit)?>(null)
@@ -93,8 +95,13 @@ internal class SyncViewModel : ViewModel() {
         }
     }
 
-    private suspend fun loadJobs() {
-        loading = true
+    suspend fun refreshState() {
+        loadStatus()
+        loadJobs(showLoading = false)
+    }
+
+    private suspend fun loadJobs(showLoading: Boolean = true) {
+        if (showLoading) loading = true
         try {
             jobs = SyncApi.jobs()
             loadError = null
@@ -102,7 +109,7 @@ internal class SyncViewModel : ViewModel() {
         } catch (e: CoreException) {
             loadError = e.displayText()
         } finally {
-            loading = false
+            if (showLoading) loading = false
         }
     }
 
@@ -157,7 +164,8 @@ internal class SyncViewModel : ViewModel() {
                 SyncApi.run(job.id)
             } catch (e: CoreException) {
                 startedRuns.remove(job.id)
-                Snackbars.show("„${job.name}“ nicht gestartet: ${e.displayText()}")
+                loadJobs()
+                Snackbars.show(if (e.kind == "busy") "„${job.name}“ läuft bereits." else "„${job.name}“ nicht gestartet: ${e.displayText()}")
                 return@launch
             }
             startedRuns[job.id] = taskId
@@ -173,13 +181,53 @@ internal class SyncViewModel : ViewModel() {
         }
     }
 
+    fun check(job: SyncJob) {
+        if (job.id in startedRuns) return
+        startedRuns[job.id] = ""
+        viewModelScope.launch {
+            try {
+                val id = SyncApi.checkConflicts(job.id)
+                startedRuns[job.id] = id
+                val end = SyncApi.awaitTask(id)
+                loadJobs()
+                val current = jobs.firstOrNull { it.id == job.id }
+                when {
+                    end.state != "done" -> details = end.failureText()
+                    current?.state?.blocked != null -> confirmingBlock = current
+                    else -> Snackbars.show("„${job.name}“ geprüft; kein Sicherheitsstopp.")
+                }
+            } catch (e: CoreException) {
+                details = e.displayText()
+            } finally { startedRuns.remove(job.id) }
+        }
+    }
+
+    fun confirmBlock() {
+        val job = confirmingBlock ?: return
+        val block = job.state?.blocked ?: return
+        confirmingBlock = null
+        viewModelScope.launch {
+            try {
+                SyncApi.confirmBlock(job.id, block)
+                runNow(job)
+            } catch (e: CoreException) {
+                details = e.displayText()
+                loadJobs()
+            }
+        }
+    }
+
+    fun openVersions(job: SyncJob) { leaveThen { page = SyncPage.Versions(job) } }
+
     private fun reportRun(job: SyncJob, state: String, result: SyncRunResult?, failure: String) {
         val name = job.name.ifBlank { "Sync-Job" }
         when {
+            state == "done" && result?.blocked == true ->
+                Snackbars.show("$name: angehalten", "Prüfen") { check(job) }
             state == "done" && result != null && result.conflicts > 0 ->
                 Snackbars.show("$name: ${result.conflicts} Konflikte", "Konflikte") { openConflicts(job) }
             state == "done" -> Snackbars.show("$name: ${result?.summary?.ifBlank { null } ?: "fertig"}")
-            state == "canceled" -> Snackbars.show("$name: abgebrochen")
+            state == "canceled" -> Snackbars.show("$name: abgebrochen", "Details") { details = failure }
             else -> Snackbars.show("$name fehlgeschlagen", "Details") { details = failure }
         }
     }
@@ -283,12 +331,14 @@ internal class SyncViewModel : ViewModel() {
 
     fun openConflictsById(jobId: String) {
         viewModelScope.launch {
-            if (!loaded) loadJobs()
+            loadJobs(showLoading = false)
             val job = jobs.firstOrNull { it.id == jobId }
             if (job == null) {
                 Snackbars.show("Sync-Job nicht gefunden")
             } else {
-                openConflicts(job)
+                if (job.state?.problem != null || job.state?.loadError != null) {
+                    leaveThen { page = SyncPage.Jobs; check(job) }
+                } else { openConflicts(job) }
             }
         }
     }

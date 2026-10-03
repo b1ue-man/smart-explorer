@@ -3,10 +3,15 @@ package app.smartexplorer.android.system
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
 import android.util.Log
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.app.NotificationCompat
 import app.smartexplorer.android.R
+import app.smartexplorer.android.ui.AppNav
+import app.smartexplorer.android.ui.NavRequest
+import app.smartexplorer.android.core.CoreEvent
 
 /** Notification channels and a permission-safe notify (android-apis.md §2). */
 object Notifications {
@@ -14,6 +19,8 @@ object Notifications {
     const val CHANNEL_BACKGROUND = "background"
     const val CHANNEL_UPDATES = "updates"
     const val CHANNEL_SHARE = "share"
+    const val CHANNEL_SYNC_PROBLEMS = "sync-problems"
+    private const val ID_SYNC_PROBLEM = 1200
 
     /** Ongoing notifications of commands other devices run on this phone (ExecHostNotifier). */
     const val CHANNEL_EXEC = "exec"
@@ -43,6 +50,9 @@ object Notifications {
                 channel(context, CHANNEL_UPDATES, R.string.channel_updates, R.string.channel_updates_description, normal),
                 channel(context, CHANNEL_SHARE, R.string.channel_share, R.string.channel_share_description, normal),
                 execChannel(low),
+                NotificationChannel(CHANNEL_SYNC_PROBLEMS, "Sync-Probleme", normal).apply {
+                    description = "Angehaltene Jobs, fehlender Zugriff und wiederholte Sync-Fehler"
+                },
             ),
         )
     }
@@ -72,6 +82,20 @@ object Notifications {
 
     fun cancel(context: Context, id: Int) {
         NotificationManagerCompat.from(context).cancel(id)
+    }
+
+    fun syncProblem(context: Context, problem: CoreEvent.SyncProblem) {
+        if (!Permissions.canPostNotifications(context)) return
+        ensureChannels(context)
+        val open = PendingIntent.getActivity(context, ID_SYNC_PROBLEM,
+            AppNav.intentFor(context, NavRequest.OpenJobConflicts(problem.jobId)),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val notification = NotificationCompat.Builder(context, CHANNEL_SYNC_PROBLEMS)
+            .setSmallIcon(R.drawable.ic_warning).setContentTitle(problem.title)
+            .setContentText(problem.text).setStyle(NotificationCompat.BigTextStyle().bigText(problem.text))
+            .setContentIntent(open).setAutoCancel(true).build()
+        try { NotificationManagerCompat.from(context).notify("sync-job:${problem.jobId}", ID_SYNC_PROBLEM, notification) }
+        catch (e: SecurityException) { Log.w(TAG, "Sync-Problemmeldung nicht zugestellt", e) }
     }
 
     private fun channel(context: Context, id: String, name: Int, description: Int, importance: Int) =

@@ -164,7 +164,7 @@ private fun TriggerFields(draft: JobDraft) {
                 draft.intervalMin,
                 { draft.intervalMin = it },
                 error = draft.errorFor("intervalMin"),
-                hint = "Im Modus „Periodisch“ prüft Android frühestens alle 15 Minuten.",
+                hint = "Android plant zusätzlich den nächsten fälligen Job; Systemgrenzen und Bedingungen können den Start verzögern.",
                 number = true,
             )
             SyncJob.TRIGGER_CALENDAR -> CalendarFields(draft)
@@ -214,7 +214,7 @@ private fun CalendarFields(draft: JobDraft) {
     if (JobDraft.isMonthly(draft.calendarKind)) {
         FormTextField("Tag im Monat (1–31)", draft.monthday, { draft.monthday = it }, number = true)
     }
-    HintText("Im Modus „Periodisch“ holt der Hintergrundlauf verpasste Termine nach; pünktlich nur im Dauerbetrieb.")
+    HintText("Ein Jobalarm weckt Android zum nächsten Termin. Ohne das Recht für genaue Alarme oder bei Systemgrenzen kann der Start später erfolgen.")
 }
 
 @Composable
@@ -246,7 +246,22 @@ private fun AdvancedFields(draft: JobDraft) {
         error = draft.errorFor("retainDays"),
         number = true,
     )
+    FormTextField("Versionen je Datei behalten (0 = unbegrenzt)", draft.retainCount,
+        { draft.retainCount = it }, error = draft.errorFor("retainCount"), number = true)
+    ChoiceField("Sicherungsort", options.versionsLocations, draft.versionsLocation, draft.errorFor("versionsLocation")) { draft.versionsLocation = it }
     SwitchRow("Versteckte Dateien einschließen", draft.includeHidden, { draft.includeHidden = it })
+    SwitchRow("Eingehängte Dateisysteme einbeziehen", draft.crossMounts, { draft.crossMounts = it },
+        hint = "Links und Junctions werden weiterhin geschützt ausgelassen.")
+    SectionTitle("Änderungsabdeckung")
+    FormTextField("Maximale Wartezeit bei laufenden Änderungen (Sekunden)", draft.rtMaxLatencySecs,
+        { draft.rtMaxLatencySecs = it }, error = draft.errorFor("rtMaxLatencySecs"), hint = "0 = automatisch.", number = true)
+    FormTextField("Abstand ergänzender Abfragen (Sekunden)", draft.rtPollSecs,
+        { draft.rtPollSecs = it }, error = draft.errorFor("rtPollSecs"), number = true)
+    FormTextField("Kontrolllauf der Quelle(n) (Sekunden)", draft.verifyIntervalSecs,
+        { draft.verifyIntervalSecs = it }, error = draft.errorFor("verifyIntervalSecs"), number = true)
+    FormTextField("Vollkontrolle des reinen Ziels (Sekunden)", draft.verifyTargetSecs,
+        { draft.verifyTargetSecs = it }, error = draft.errorFor("verifyTargetSecs"), number = true)
+    HintText("0 schaltet die jeweilige Einstellung aus. Bei eingeschränkten Änderungshinweisen bleiben notwendige Sicherheitsabfragen aktiv; MediaStore erfasst nicht alle Dateien.")
     FormTextField(
         "Ignoriermuster",
         draft.ignore,
@@ -292,6 +307,8 @@ private fun AdvancedFields(draft: JobDraft) {
         )
     }
     HintText("Bricht einen Lauf ab, der mehr löschen würde; 0 = keine Grenze.")
+    FormTextField("Mindestzahl für den prozentualen Löschschutz", draft.maxDeleteMin,
+        { draft.maxDeleteMin = it }, error = draft.errorFor("maxDeleteMin"), number = true)
     SwitchRow(
         "Papierkorb für lokale Löschungen",
         draft.useRecycleBin,
@@ -299,9 +316,10 @@ private fun AdvancedFields(draft: JobDraft) {
         hint = "Lokal gelöschte Dateien landen im Papierkorb statt endgültig gelöscht zu werden.",
     )
     SectionTitle("Befehle")
-    val commandHint = "Nur bei Hintergrundläufen (wie am Desktop); läuft auf Android mit /system/bin/sh in der App-Sandbox."
+    val commandHint = "Bei echten Jobläufen; läuft auf Android mit /system/bin/sh in der App-Sandbox."
     FormTextField("Befehl vorher", draft.runBefore, { draft.runBefore = it }, error = draft.errorFor("runBefore"), hint = commandHint)
     FormTextField("Befehl nachher", draft.runAfter, { draft.runAfter = it }, error = draft.errorFor("runAfter"), hint = commandHint)
+    FormTextField("Befehl bei Abbruch/Startfehler", draft.runCleanup, { draft.runCleanup = it }, error = draft.errorFor("runCleanup"), hint = commandHint)
 }
 
 @Composable

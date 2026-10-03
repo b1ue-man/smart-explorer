@@ -75,8 +75,15 @@ internal fun BackgroundStatusBlock(mode: String, status: BgStatus?, nextRunMs: L
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Text(BackgroundText.summary(mode, status, nextRunMs), style = MaterialTheme.typography.bodyLarge)
         if (status != null) {
-            val last = status.lastCatchUpMs
-            HintText(if (last != null) "Letzter Hintergrundlauf: ${BackgroundText.moment(last)}" else "Noch kein Hintergrundlauf")
+            val last = status.lastCatchUpResult
+            if (last != null) {
+                HintText("Letzter Hintergrundlauf: ${BackgroundText.moment(last.finishedMs)} · ${last.succeeded} erfolgreich, ${last.failed} fehlgeschlagen")
+                if (last.message.isNotBlank()) HintText(last.message)
+            } else {
+                val time = status.lastCatchUpMs
+                HintText(if (time != null) "Älterer Hintergrundlauf: ${BackgroundText.moment(time)} · Ergebnis unbekannt" else "Noch kein Hintergrundlauf mit ausgeführtem Job")
+            }
+            if (status.storageAccess == false) ErrorText("Dateizugriff fehlt: lokale Jobs im gemeinsamen Speicher sind angehalten.")
             if (!status.daemonRunning) HintText("Der Hintergrund-Worker startet noch.")
         }
         if (error != null) ErrorText("Status nicht verfügbar: $error")
@@ -142,6 +149,10 @@ private fun CatchUpOutcome(task: TaskInfo) {
         else -> "Nachholen fehlgeschlagen"
     }
     Text(headline, style = MaterialTheme.typography.bodyMedium)
+    result?.let {
+        if (it.failed > 0) ErrorText("${it.failed} Job(s) fehlgeschlagen")
+        if (it.retrySuggested) HintText("Mindestens ein vorübergehender Fehler: Android plant einen erneuten Versuch.")
+    }
     result?.skipped?.forEach { skip ->
         HintText("Übersprungen: ${skip.jobName.ifBlank { skip.jobId }} – ${skip.reason}")
     }
