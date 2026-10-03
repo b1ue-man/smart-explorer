@@ -128,10 +128,10 @@ fn review_task_s09_transport_rejects_wrong_pin_and_replayed_confirm() {
     });
     drop(fixture);
     drop(rt);
-    let fixture = Fixture::start(24);
+    let mut fixture = Fixture::start(24);
     let rt = fixture.a.rt.clone();
     rt.block_on(async {
-        let connection = fixture.connect().await;
+        let (connection, _) = fixture.positive().await;
         let identity = local_identity(&fixture.a).unwrap();
         let (mut send, first_nonce) = raw_challenge(&connection, identity.clone(), [1; 32]).await;
         send_status_frame(
@@ -144,7 +144,11 @@ fn review_task_s09_transport_rejects_wrong_pin_and_replayed_confirm() {
         .await;
         send.finish().unwrap();
         wait_until("first real Confirm", || {
-            !fixture.b.lan_link_snapshot().is_empty()
+            fixture
+                .b
+                .lan_link_snapshot()
+                .iter()
+                .any(|fact| fact.challenge == first_nonce)
         })
         .await;
         let server = fixture.server_connection();
