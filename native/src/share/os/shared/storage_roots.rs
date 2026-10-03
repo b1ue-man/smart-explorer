@@ -114,9 +114,11 @@ pub(in crate::share) fn local_path(target: &fs::ResolvedTarget) -> io::Result<Pa
 pub(in crate::share) fn open_local(target: &fs::ResolvedTarget) -> io::Result<crate::local_access::DirectoryHandle> {
     let (root, relative) = local_parts(target)?;
     let mut directory = crate::local_access::DirectoryHandle::open_root(&root)?;
+    fs::ensure_local_share_handle_allowed(&directory)?;
     for part in relative.components() {
         let std::path::Component::Normal(name) = part else { return Err(io::ErrorKind::PermissionDenied.into()); };
         directory = directory.open_child(name)?;
+        fs::ensure_local_share_handle_allowed(&directory)?;
     }
     Ok(directory)
 }
