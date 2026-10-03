@@ -1,8 +1,7 @@
 //! Fsynced append-only checkpoint frames. A torn final frame is ignored and
 //! truncated before further appends; fully written corrupt frames are errors.
 //! Compaction writes baseline and folder history before retiring the journal.
-use std::fs::OpenOptions;
-use std::io::{self, Read, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -128,7 +127,7 @@ impl Journal {
             ));
         }
         if let Some(parent) = self.path.parent() {
-            std::fs::create_dir_all(parent)?;
+            crate::creds::private_storage::ensure_directory(parent)?;
         }
         let bytes = serde_json::to_vec(frame).map_err(io::Error::other)?;
         if self
@@ -143,24 +142,24 @@ impl Journal {
             ));
         }
         let mut file = match std::fs::symlink_metadata(&self.path) {
-            Ok(meta) if meta.is_file() && !meta.file_type().is_symlink() => OpenOptions::new()
-                .write(true)
-                .append(true)
-                .open(&self.path)?,
+            Ok(meta) if meta.is_file() && !meta.file_type().is_symlink() => {
+                crate::creds::private_storage::open_file(&self.path, true)?
+            }
             Ok(_) => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     "checkpoint journal is not a regular file",
                 ))
             }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => OpenOptions::new()
-                .write(true)
-                .append(true)
-                .create_new(true)
-                .open(&self.path)?,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                crate::creds::private_storage::create_file(&self.path)?
+            }
             Err(error) => return Err(error),
         };
+        // The pair lock serializes writes. A Windows append-only handle cannot
+        // truncate a torn tail; use the validated private RW handle and seek.
         file.set_len(self.valid_bytes)?;
+        file.seek(SeekFrom::Start(self.valid_bytes))?;
         file.write_all(&(bytes.len() as u64).to_be_bytes())?;
         file.write_all(&Sha256::digest(&bytes))?;
         file.write_all(&bytes)?;
