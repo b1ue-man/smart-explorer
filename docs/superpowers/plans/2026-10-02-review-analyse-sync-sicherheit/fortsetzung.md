@@ -43,6 +43,6 @@ keine GitHub-Actions-Ausführung.
 ## Status
 
 - Abgleich abgeschlossen: vorhandene Vertragsänderungen und Teilimplementierungen, keine vollständige Abnahme.
-- Umsetzung: Die sieben begonnenen Quellenblöcke sind jeweils committed: S-REVOKE (`0d36bdd`), S-SIGNAL (`af77ead`), A-CLIENT (`594ed68`), E-PLAN (`dd0dccf`), V-LOCAL (`cd8632d`), H-ANALYSIS (`5098ee0`), T-JOBS (`7806d24`). V-REMOTE, E-APPLY, H-DISPATCH, S-POLICY, S-LOCAL, Windows-FA6 und Android-Sync schließen die Anschlüsse. Gemeinsame Registrierungen und weitere UI-Consumer bleiben bis zur Gesamtintegration offen.
+- Umsetzung: Die sieben begonnenen Quellenblöcke sind jeweils committed: S-REVOKE (`0d36bdd`), S-SIGNAL (`af77ead`), A-CLIENT (`594ed68`), E-PLAN (`dd0dccf`), V-LOCAL (`cd8632d`), H-ANALYSIS (`5098ee0`), T-JOBS (`7806d24`). S-POLICY (`d3cced7`), Windows-FA6 (`708b6f1`) und S-LOCAL (`0a2a39e2`) sind ebenfalls quellenfertig committed. V-REMOTE, E-APPLY, H-DISPATCH sowie Desktop-/Android-Consumer schließen die Anschlüsse; S09-LINK und E-ENGINE sind exakt abgegrenzte Restanschlüsse dokumentierter Befunde. Gemeinsame Registrierungen und weitere UI-Consumer bleiben bis zur Gesamtintegration offen.
 - Remote-Abnahme: noch nicht ausgelöst.
 - Release: noch nicht ausgelöst.

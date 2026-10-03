@@ -52,3 +52,18 @@ gemeinsame Remote-Task-Suite bestätigt am Ende die direkt betroffenen Abläufe 
 - Allfilesverlust: AND-SYNC ergänzt dieselbe kurze Weak-Cancel-Registrierung für aktive manuelle und Hintergrundläufe; `platform::requires_storage_access` schützt nur lokale Shared-Storage-Endpunkte, Fern/Fern und App-privat bleiben erhalten.
 
 Diese Ergänzungen schließen die vorhandenen Befunde; sie eröffnen keine neue Review-Runde.
+
+## Abgeschlossene Anschlussquellen 2026-10-03
+
+- H-TRASH-WINDOWS `708b6f1`: vollständiger sichtbarer Smart-Explorer-Host-Papierkorb und NoReplace-Restore; Windows-FA6-Unsupported aus dem früheren H-ANALYSIS-Handoff ist für diesen Anschluss superseded. Gemeinsame Remote-Abnahme bleibt offen.
+- S-POLICY `d3cced7` und Native-Android-Facaden `f7d6af7`/`58aa0e7`: explizite Rechte, voll gepinnte Raum-/Grant-Zulassung, incoming-only Widerruf und Ask/AutoAccept verwenden die vorhandenen persistierten Autorisierungsgrenzen.
+- Parent `787e893` bindet den tatsächlichen PrivateAncestor-Handle-Guard an storage_roots und Hash-Walk; `461fc73`/`a8b90ae`/`3116d16` forwarden Literal-/Recovery-/bewiesene Legacy-ID-Haken durch die vorhandenen Hüllen.
+- Parent `d546712` hält automatische Duplicate-Repairs im laufenden ApplyScope statt einer zweiten unabhängigen Default-Applytransaktion.
+- S-LOCAL-A2: `bin/se.rs` ruft den vorhandenen Uplink-Helper vor normaler CLI-Verarbeitung auf; Linux `net::run_uplink_helper_if_requested` erkennt exakt `--lan-uplink-cleanup`. Es existiert kein Linux-Uninstall-Script; `install-linux.sh` installiert ausschließlich. Canonical README/RELEASING dokumentieren diesen vorhandenen Disable-/Cleanup-Weg vor manueller Binärentfernung als ursprünglicher App-Benutzer (`7cb1f2ef`). Kein neuer Installer-Uninstall-Modus wird erfunden.
+- S-LOCAL-A4 ist durch `4f4d75b` private Atomic-Exec-Journal-Erzeugung erledigt. S09-LINK bleibt vor Abschluss des gepinnten realen Session-/Interface-Kanals offen; signierte Beacons allein erlauben keinen privilegierten Start.
+
+Diese Liste ist Quellenintegration, keine Behauptung einer Ausführungs-/Releaseabnahme. Alle erwarteten Ergebnisse gehen erst nach dem vollständigen Batch gemeinsam in die eine Remote-Task-Suite.
+
+- Parent `810b0df9`: Recovery-Sibling heißt exakt `.se-replace-<16lowerhex>` ohne User-Dateibasename und ist im Stagefilter eine geschützte eigene Datei. Der frische Uplink-Cache-Getter macht keinen OS-/Netzwerkaufruf im Tick; fehlende Fakten bleiben unbekannt.
+- Parent `a7014641`/`fc687a56`: `expectedAccess` und `expectedShared` werden im selben Share-Profil-CAS geprüft; eine veraltete Rechtebestätigung darf keinen zwischenzeitlichen Entzug überschreiben.
+- E-APPLY → Desktop/Android: `recorded_original_paths_for_key` liefert die unter StateKey autorisierten tatsächlichen Seitenschreibweisen über `vfs::sync_path`. Consumer erzeugen keine eigenen Vergleichsschlüssel-/Locator-Encoder. Teilmerge-Wiederanlauf verwendet weiter die ursprünglichen Bytes; der Persistenzanschluss nach Neustart gehört zum selben E-APPLY-Ergebnis.
