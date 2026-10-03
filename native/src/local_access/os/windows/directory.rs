@@ -38,9 +38,10 @@ const SPECIAL_TAGS: [u32; 4] = [0x8000_0023, 0x8000_0024, 0x8000_0025, 0x8000_00
 mod sync_link_task_tests;
 
 /// The information-class query behind every batch; tests substitute a
-/// provider that fails part-way.
+/// provider that fails part-way. Keep the owned iterator movable with its
+/// pinned directory handle; captured query state must also be `Send`.
 type Query<'a> =
-    Box<dyn FnMut(&File, FILE_INFO_BY_HANDLE_CLASS, &mut [u64]) -> io::Result<()> + 'a>;
+    Box<dyn FnMut(&File, FILE_INFO_BY_HANDLE_CLASS, &mut [u64]) -> io::Result<()> + Send + 'a>;
 
 pub(crate) struct Directory<'a> {
     path: PathBuf,
@@ -109,7 +110,7 @@ fn read_directory_with_layout(path: &Path, layout: Layout) -> io::Result<Directo
 fn read_directory_with_query<'a>(
     path: &Path,
     layout: Layout,
-    query: impl FnMut(&File, FILE_INFO_BY_HANDLE_CLASS, &mut [u64]) -> io::Result<()> + 'a,
+    query: impl FnMut(&File, FILE_INFO_BY_HANDLE_CLASS, &mut [u64]) -> io::Result<()> + Send + 'a,
 ) -> io::Result<Directory<'a>> {
     let file = open(path, FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES)?;
     read_directory_from_file(path, file, layout, true, query)
@@ -130,7 +131,7 @@ fn read_directory_from_file<'a>(
     file: File,
     layout: Layout,
     consented: bool,
-    query: impl FnMut(&File, FILE_INFO_BY_HANDLE_CLASS, &mut [u64]) -> io::Result<()> + 'a,
+    query: impl FnMut(&File, FILE_INFO_BY_HANDLE_CLASS, &mut [u64]) -> io::Result<()> + Send + 'a,
 ) -> io::Result<Directory<'a>> {
     // The attribute probe is advisory: a provider that cannot answer it still
     // gets to enumerate, and a non-directory shows up as an enumeration error.

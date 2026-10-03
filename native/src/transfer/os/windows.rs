@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 
 /// Redirecting links are walk boundaries. Data reparse points (cloud,
 /// WOF and dedup) retain their ordinary-file transfer behavior.
-pub(crate) fn upload_is_link_like(metadata: &std::fs::Metadata) -> bool {
-    crate::local_access::metadata_is_link_like(metadata)
+pub(crate) fn upload_is_link_like(path: &Path, metadata: &std::fs::Metadata) -> bool {
+    crate::local_access::metadata_is_link_like(path, metadata)
 }
 
 /// `\` separates path components on Windows; it is never part of a name.

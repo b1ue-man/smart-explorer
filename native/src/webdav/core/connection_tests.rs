@@ -79,6 +79,8 @@ fn backend_for_timeout(base: String, timeout: Duration) -> WebdavBackend {
             .build(),
         url: base.clone(),
         identity: format!("webdav:{base}"),
+        hashes_observed: Arc::new(AtomicBool::new(false)),
+        stage_times: Arc::new(Mutex::new(HashMap::new())),
     }
 }
 

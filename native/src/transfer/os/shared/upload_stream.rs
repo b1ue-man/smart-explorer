@@ -13,7 +13,7 @@ struct Observation {
 }
 
 fn observation(metadata: &Metadata, path: &Path) -> Result<Observation, String> {
-    if super::platform::upload_is_link_like(metadata) || !metadata.is_file() {
+    if super::platform::upload_is_link_like(path, metadata) || !metadata.is_file() {
         return Err(format!(
             "{}: Upload-Quelle ist keine reguläre Datei ohne Link/Reparse-Punkt",
             path.display()

@@ -96,13 +96,14 @@ fn is_recovery_directory(directory: &Path) -> bool {
     let Ok(metadata) = std::fs::symlink_metadata(directory) else {
         return false;
     };
-    if !metadata.is_dir() || crate::app::upload_is_link_like(&metadata) {
+    if !metadata.is_dir() || crate::app::upload_is_link_like(directory, &metadata) {
         return false;
     }
-    let Ok(marker) = std::fs::symlink_metadata(directory.join(PRESERVE_MARKER)) else {
+    let marker_path = directory.join(PRESERVE_MARKER);
+    let Ok(marker) = std::fs::symlink_metadata(&marker_path) else {
         return false;
     };
-    marker.is_file() && !crate::app::upload_is_link_like(&marker)
+    marker.is_file() && !crate::app::upload_is_link_like(&marker_path, &marker)
 }
 
 fn is_direct_child(root: &Path, candidate: &Path) -> bool {
