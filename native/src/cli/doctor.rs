@@ -145,7 +145,9 @@ fn connection_health(app_data: &Path) -> Health {
 }
 
 fn profile_health() -> Health {
-    match crate::share::ShareProfiles::load_checked(None) {
+    match crate::share::ShareProfiles::load_checked(
+        crate::support_dirs::home_dir().map(|home| home.to_string_lossy().replace('\\', "/")),
+    ) {
         Ok(profiles) => Health::ok(format!(
             "{} peer(s), {} room(s)",
             profiles.direct_contacts.len(),
