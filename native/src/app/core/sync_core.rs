@@ -11,7 +11,7 @@ impl App {
         let (src, root) = self.pane_backend(self.active_tab);
         let dst = crate::vfs::sync_backend(dst);
         let (tx, rx) = unbounded();
-        let h = crate::sync::start_sync(
+        let mut h = crate::sync::start_sync(
             src,
             root,
             dst,
@@ -22,9 +22,11 @@ impl App {
             },
             tx,
         );
+        if let Some(worker) = h.take_worker() { self.track_desktop_sync_worker(worker, h.cancel.clone()); }
         self.sync_cancel = Some(h.cancel);
         self.sync_rx = Some(rx);
         self.sync_running = true;
+        self.sync_wake = Some(crate::keep_awake::hold(crate::keep_awake::Reason::SyncRun));
         self.notice = Some((
             "⇅ Spiegelung gestartet…".to_string(),
             std::time::Instant::now(),
@@ -40,6 +42,7 @@ impl App {
                 self.sync_running = false;
                 self.sync_progress = None;
                 self.sync_cancel = None;
+                self.sync_wake = None;
                 self.error_msg =
                     Some("Spiegelungs-Thread wurde ohne Ergebnis beendet.".to_string());
                 return;
@@ -58,6 +61,7 @@ impl App {
                 self.sync_running = false;
                 self.sync_progress = None;
                 self.sync_cancel = None;
+                self.sync_wake = None;
                 let omitted = r.omissions.summary().map(|s| format!("; {s}")).unwrap_or_default();
                 if r.stats.errors > 0 {
                     let example = r
@@ -127,6 +131,10 @@ impl App {
         bounds: (u64, u64, i64, i64),
         job_id: Option<String>,
     ) {
+        if let Some(id) = job_id {
+            self.start_saved_desktop_run(&id, None);
+            return;
+        }
         if self.bisync_running
             || self.sync_running
             || self.conflict_resolution.is_some()
@@ -173,6 +181,8 @@ impl App {
             b: b.clone(),
             root_b: root_b.clone(),
             pair,
+            state: None,
+            job_id: None,
             baseline: crate::bisync::Baseline::new(),
         };
         let (tx, rx) = unbounded();
@@ -181,6 +191,7 @@ impl App {
         let spawn = std::thread::Builder::new()
             .name("bisync".into())
             .spawn(move || {
+                let _awake = crate::keep_awake::hold(crate::keep_awake::Reason::SyncRun);
                 let f = crate::bisync::WalkFilter {
                     include_hidden,
                     ignore: &ignore,
@@ -189,17 +200,18 @@ impl App {
                     after_mtime_ms: bounds.2,
                     before_mtime_ms: bounds.3,
                 };
-                let _ = tx.send(crate::bisync::run(
-                    &*a, &root_a, &*b, &root_b, opts, &cancel_t, &f,
-                ));
+                let request = crate::bisync::RunRequest::new(
+                    &*a, &root_a, &*b, &root_b, opts, &f, &cancel_t);
+                let _ = tx.send(crate::bisync::run_with(request));
             });
         match spawn {
-            Ok(_) => {
+            Ok(worker) => {
+                self.track_desktop_sync_worker(worker, cancel.clone());
                 self.bisync_ctx = Some(context);
                 self.bisync_cancel = Some(cancel);
                 self.bisync_rx = Some(rx);
                 self.bisync_running = true;
-                self.running_job = job_id;
+                self.running_job = None;
                 self.notice = Some((
                     "⇄ 2-Wege-Sync läuft…".to_string(),
                     std::time::Instant::now(),

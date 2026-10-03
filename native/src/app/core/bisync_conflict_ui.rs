@@ -11,11 +11,7 @@ impl App {
             return;
         }
         if self.bisync_conflicts.is_empty() {
-            if !self.conflict_baseline_dirty {
-                self.finish_bisync_conflicts();
-                return;
-            }
-            self.ui_conflict_save_retry(ctx);
+            self.finish_bisync_conflicts();
             return;
         }
 
@@ -210,21 +206,7 @@ impl App {
         }
     }
 
-    fn ui_conflict_save_retry(&mut self, ctx: &egui::Context) {
-        egui::Window::new("Konfliktstand speichern")
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .show(ctx, |ui| {
-                ui.colored_label(
-                    theme::warning(ui),
-                    "Die Dateien wurden aufgelöst, aber der neue Synchronisationsstand ist noch nicht dauerhaft gespeichert.",
-                );
-                if ui.button("Speichern erneut versuchen").clicked() {
-                    self.finish_bisync_conflicts();
-                }
-            });
-    }
+
 }
 
 fn resolve_phase_label(phase: crate::bisync::ResolvePhase) -> &'static str {

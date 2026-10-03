@@ -64,6 +64,10 @@ pub(in crate::app) struct ConflictResolutionTask {
 }
 
 impl ConflictResolutionTask {
+    pub(in crate::app) fn worker_active(&self) -> bool {
+        self.worker.as_ref().is_some_and(|worker| !worker.is_finished())
+    }
+
     fn request_cancel(&self) {
         self.cancel.store(true, Ordering::Release);
     }
@@ -125,12 +129,15 @@ impl App {
             self.error_msg = Some("Konfliktlösung: Synchronisationskontext fehlt".into());
             return false;
         };
-        let (a, root_a, b, root_b, pair) = (
+        let Some(key) = context.state.clone() else {
+            self.error_msg = Some("Konfliktlösung: gespeicherter Sync-Zustand fehlt; bitte neu vergleichen.".into());
+            return false;
+        };
+        let (a, root_a, b, root_b) = (
             context.a.clone(),
             context.root_a.clone(),
             context.b.clone(),
             context.root_b.clone(),
-            context.pair.clone(),
         );
         let rel = conflict.rel.clone();
         let cancel = Arc::new(AtomicBool::new(false));
@@ -141,7 +148,8 @@ impl App {
         let spawn = std::thread::Builder::new()
             .name("bisync-conflict".into())
             .spawn(move || {
-                let result = crate::bisync::resolve_variant_checked(
+                let _awake = crate::keep_awake::hold(crate::keep_awake::Reason::SyncRun);
+                let result = crate::bisync::resolve_recorded(
                     &*a,
                     &root_a,
                     &*b,
@@ -149,7 +157,7 @@ impl App {
                     &conflict,
                     side.keep_a(),
                     variant_id.as_deref(),
-                    &pair,
+                    &key,
                     &worker_cancel,
                     |phase| {
                         let _ = tx.try_send(ConflictResolutionMessage::Phase(phase));
@@ -230,11 +238,10 @@ impl App {
             self.error_msg = Some("Konfliktauflösung verlor ihren Worker-Zustand.".into());
             return;
         };
-        let panicked = task
-            .worker
-            .take()
-            .is_some_and(|worker| worker.join().is_err());
-        if panicked || (disconnected && terminal.is_none()) {
+        if let Some(worker) = task.worker.take() {
+            self.track_desktop_sync_worker(worker, task.cancel.clone());
+        }
+        if disconnected && terminal.is_none() {
             self.conflict_bulk = None;
             self.error_msg = Some(
                 "Konfliktauflösung wurde ohne verlässliches Ergebnis beendet; der Konflikt bleibt offen."
@@ -292,7 +299,7 @@ impl App {
         context
             .baseline
             .insert(result.rel.clone(), result.signatures);
-        self.conflict_baseline_dirty = true;
+        self.conflict_baseline_dirty = false;
 
         let index = self
             .bisync_conflicts
@@ -329,31 +336,15 @@ impl App {
         }
     }
 
-    /// Persist an updated conflict baseline before dismissing the dialog. A
-    /// failed save keeps the window open and offers an explicit retry.
+    /// Dismiss only after recorded actions returned their durable result.
     pub(in crate::app) fn finish_bisync_conflicts(&mut self) -> bool {
         if self.conflict_resolution.is_some() {
             self.error_msg =
                 Some("Die laufende Konfliktauflösung muss zuerst abgeschlossen werden.".into());
             return false;
         }
-        if self.conflict_baseline_dirty {
-            let Some(context) = &self.bisync_ctx else {
-                self.error_msg = Some(
-                    "Konfliktstand konnte nicht gespeichert werden: Synchronisationskontext fehlt"
-                        .into(),
-                );
-                return false;
-            };
-            let path = crate::bisync::baseline_path(&context.pair);
-            if let Err(error) = crate::bisync::save_baseline(&path, &context.baseline) {
-                self.error_msg = Some(format!(
-                    "Konfliktstand konnte nicht gespeichert werden: {error}"
-                ));
-                return false;
-            }
-            self.conflict_baseline_dirty = false;
-        }
+        // Recorded resolution commits its journal/baseline before returning.
+        self.conflict_baseline_dirty = false;
         self.show_bisync_conflicts = false;
         self.conflict_bulk = None;
         if !self.root_path.is_empty() {

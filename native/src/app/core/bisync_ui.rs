@@ -22,7 +22,7 @@ impl App {
                         .color(theme::muted(ui)),
                 );
                 ui.separator();
-                if self.preview_running {
+                if self.preview_running || self.apply_one_rx.is_some() {
                     ui.horizontal(|ui| {
                         ui.spinner();
                         ui.label("Vergleiche beide Seiten…");
@@ -44,6 +44,9 @@ impl App {
                 if let Some(e) = &p.error {
                     ui.colored_label(theme::danger(ui), format!("Fehler: {}", e));
                     return;
+                }
+                if let Some(block) = &p.blocked {
+                    ui.colored_label(theme::warning(ui), block.message());
                 }
                 let mut to_b = 0usize;
                 let mut to_a = 0usize;
@@ -105,7 +108,7 @@ impl App {
                         .color(theme::muted(ui)),
                 );
                 ui.separator();
-                let busy = self.apply_one_rx.is_some();
+                let busy = self.apply_one_rx.is_some() || p.blocked.is_some();
                 let conflict_rows = p.conflicts.len();
                 let total_rows = conflict_rows.saturating_add(p.actions.len());
                 egui::ScrollArea::vertical()
@@ -185,105 +188,56 @@ impl App {
             Some(Ok(out)) => out,
             Some(Err(crossbeam_channel::TryRecvError::Empty)) | None => return,
             Some(Err(crossbeam_channel::TryRecvError::Disconnected)) => {
-                self.bisync_rx = None;
-                self.bisync_running = false;
-                self.bisync_cancel = None;
-                self.running_job = None;
-                self.error_msg = Some("2-Wege-Sync wurde unerwartet abgebrochen".into());
+                self.bisync_rx = None; self.bisync_running = false; self.bisync_cancel = None;
+                self.running_job = None; self.desktop_run = None;
+                self.error_msg = Some("Sync endete ohne Ergebnis; gespeicherten Laufzustand prüfen.".into());
                 return;
             }
         };
-        let was_canceled = self.bisync_cancel.as_ref()
-            .is_some_and(|cancel| cancel.load(std::sync::atomic::Ordering::Relaxed));
-        self.bisync_rx = None;
-        self.bisync_running = false;
-        self.bisync_cancel = None;
-        // Stamp the saved job (if this run came from one) so its schedule and
-        // "last run" reflect reality, then refresh the cached list.
+        let cancelled = out.canceled || self.bisync_cancel.as_ref()
+            .is_some_and(|cancel| cancel.load(std::sync::atomic::Ordering::Acquire));
+        self.bisync_rx = None; self.bisync_running = false; self.bisync_cancel = None;
         let mut persistence_errors = Vec::new();
-        if let Some(id) = self.running_job.take() {
-            if let Err(error) = crate::syncjobs::mark_run(&id) {
-                persistence_errors.push(format!("Letzten Lauf speichern: {error}"));
-            }
-            let note = if was_canceled || out.errors.iter().any(|(k, _)| k == "abgebrochen") {
-                "abgebrochen"
-            } else if !out.errors.is_empty() {
-                "Fehler"
-            } else if !out.conflicts.is_empty() {
-                "Konflikte"
-            } else {
-                "ok"
-            };
-            if let Err(error) = crate::syncjobs::record_result(
-                &id,
-                &crate::syncjobs::JobResult {
-                    when: now_secs_i64(),
-                    a_to_b: out.stats.a_to_b,
-                    b_to_a: out.stats.b_to_a,
-                    deleted: out.stats.deleted,
-                    conflicts: out.conflicts.len() as u64,
-                    errors: out.errors.len() as u64,
-                    note: out.omissions.result_note(note),
-                },
-            ) {
-                persistence_errors.push(format!("Laufergebnis speichern: {error}"));
-            }
-            match crate::syncjobs::load() {
-                Ok(jobs) => self.sync_jobs = jobs,
-                Err(error) => {
-                    persistence_errors.push(format!("Sync-Jobs neu laden: {error}"));
-                }
-            }
+        let mut pending = Vec::new();
+        if let Some(run) = self.desktop_run.take() {
+            let mut data = run.mailbox.lock().unwrap_or_else(|e| e.into_inner());
+            self.bisync_ctx = data.context.take();
+            persistence_errors = std::mem::take(&mut data.persistence_errors);
+            pending = std::mem::take(&mut data.pending);
         }
-        if let Some(ctx) = self.bisync_ctx.as_mut() {
-            ctx.baseline = out.baseline;
+        if self.running_job.take().is_some() { self.reload_sync_jobs("Sync-Setups neu laden"); }
+        if let Some(context) = self.bisync_ctx.as_mut() {
+            context.state = out.state.clone(); context.baseline = out.baseline;
         }
-        self.conflict_bulk = None;
-        self.conflict_baseline_dirty = false;
+        self.conflict_bulk = None; self.conflict_baseline_dirty = false;
         self.bisync_conflicts = out.conflicts;
+        for conflict in pending {
+            if !self.bisync_conflicts.iter().any(|current| current.rel == conflict.rel) {
+                self.bisync_conflicts.push(conflict);
+            }
+        }
         let s = out.stats;
-        let mut summary = format!(
-            "⇄ Sync: {} →, {} ←, {} gelöscht, {} Konflikte ({} MB)",
-            s.a_to_b,
-            s.b_to_a,
-            s.deleted,
-            self.bisync_conflicts.len(),
-            s.bytes / 1_048_576
-        );
-        if let Some(omitted) = out.omissions.summary() {
-            summary = format!("⚠ {summary}; {omitted}");
+        let mut summary = if let Some(block) = &out.blocked { block.message() }
+            else if out.busy { "Sync ist bereits in einem anderen Fenster oder Dienst aktiv.".into() }
+            else { format!("Sync: {} →, {} ←, {} gelöscht, {} Konflikte ({} MB)",
+                s.a_to_b, s.b_to_a, s.deleted, self.bisync_conflicts.len(), s.bytes / 1_048_576) };
+        if cancelled { summary = format!("Abgebrochen; {summary}"); }
+        if let Some(stop) = &out.stopped { summary.push_str(&format!("; {}", stop.message())); }
+        if !out.deferred.is_empty() {
+            summary.push_str(&format!("; {} Dateien wegen neuer Änderungen zurückgestellt", out.deferred.len()));
         }
-        if was_canceled {
-            summary = format!("Abgebrochen; {summary}");
-        }
-        if !out.errors.is_empty() {
-            let persistence = if persistence_errors.is_empty() {
-                String::new()
-            } else {
-                format!("; {}", persistence_errors.join("; "))
-            };
-            self.error_msg = Some(format!(
-                "{summary}; {} Fehler{persistence}",
-                out.errors.len()
-            ));
-        } else if !persistence_errors.is_empty() {
-            self.error_msg = Some(persistence_errors.join("; "));
+        if let Some(omitted) = out.omissions.summary() { summary.push_str(&format!("; {omitted}")); }
+        let errors = s.errors.max(out.errors.len() as u64);
+        if errors > 0 || !persistence_errors.is_empty() {
+            let example = out.errors.first().map(|(path, detail)| format!("; {path}: {detail}")).unwrap_or_default();
+            let persistence = if persistence_errors.is_empty() { String::new() }
+                else { format!("; {}", persistence_errors.join("; ")) };
+            self.error_msg = Some(format!("{summary}; {errors} Fehler{example}{persistence}"));
         } else {
-            self.notice = Some((
-                if self.bisync_conflicts.is_empty() {
-                    summary
-                } else {
-                    format!("⚠ {summary} — Lösung erforderlich")
-                },
-                std::time::Instant::now(),
-            ));
+            if !self.bisync_conflicts.is_empty() { summary.push_str(" — Lösung erforderlich"); }
+            self.notice = Some((summary, std::time::Instant::now()));
         }
-        if !self.bisync_conflicts.is_empty() {
-            self.show_bisync_conflicts = true;
-        }
-        // The current view may have changed on disk.
-        if !self.root_path.is_empty() {
-            self.rescan();
-        }
+        if !self.bisync_conflicts.is_empty() { self.show_bisync_conflicts = true; }
+        if !self.root_path.is_empty() { self.rescan(); }
     }
 }

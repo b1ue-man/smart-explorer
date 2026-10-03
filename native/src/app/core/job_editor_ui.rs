@@ -18,6 +18,7 @@ impl App {
             .and_then(|id| self.sync_jobs.iter().find(|job| &job.id == id))
             .cloned();
         let mut job_to_save = None;
+        let busy = ed.id.as_deref().is_some_and(|id| self.desktop_job_busy(id));
         let mut cancel = false;
         // Set when a "Durchsuchen" button is clicked → open the in-app picker
         // after `ed` is restored to self.job_editor (so the picker can write
@@ -306,7 +307,7 @@ impl App {
                         });
                         ui.end_row();
 
-                        ui.label("Befehl davor").on_hover_text("Vor dem Lauf ausführen (nur Hintergrund-Dienst). Ein Fehler bricht den Sync ab; es werden keine Dateien verändert.");
+                        ui.label("Befehl davor").on_hover_text("Vor manuellem oder geplantem Lauf und vor dem Verbinden ausführen. Ein Fehler bricht den Sync ab; es werden keine Dateien verändert.");
                         ui.add(egui::TextEdit::singleline(&mut ed.run_before).hint_text("optional").desired_width(360.0));
                         ui.end_row();
                         ui.label("Befehl danach").on_hover_text("Nach jedem gestarteten Sync ausführen, auch bei Sync-Fehlern oder Konflikten (nicht nach Abbruch). Fehler werden im Ergebnis protokolliert.");
@@ -323,9 +324,10 @@ impl App {
                 if let Err(error) = &validation {
                     ui.colored_label(theme::danger(ui), error);
                 }
+                if busy { ui.colored_label(theme::warning(ui), "Dieses Setup ist noch in einem Lauf oder einer Konfliktauflösung geöffnet. Vor dem Speichern bitte abschließen."); }
                 ui.horizontal(|ui| {
                     if ui
-                        .add_enabled(validation.is_ok(), egui::Button::new("✔ Speichern"))
+                        .add_enabled(validation.is_ok() && !busy, egui::Button::new("✔ Speichern"))
                         .clicked()
                     {
                         job_to_save = validation.ok();

@@ -1,130 +1,80 @@
-use crate::app::theme;
 use super::prelude::*;
 use super::*;
+use super::sync_merge_types::{MergeDecision, line_display};
 
 impl App {
-    /// The line-merge window: a synced, side-by-side (git-diff-like) view of both
-    /// versions; tick the line(s) from each side to keep in the merged result.
     pub(in crate::app) fn ui_merge(&mut self, ctx: &egui::Context) {
-        let mut m = match self.merge.take() {
-            Some(m) => m,
-            None => return,
-        };
-        let loading = self.merge_load_rx.is_some();
-        let mut open = true;
-        let mut save = false;
-        let mut keep_both_files = false;
-        egui::Window::new(format!("⇄ Zeilenvergleich: {}", m.rel))
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(true)
-            .default_size([900.0, 600.0])
-            .max_size(theme::window_content_limit(ctx))
-            .constrain_to(ctx.screen_rect().shrink(16.0))
+        let Some(mut m) = self.merge.take() else { return; };
+        let busy = self.merge_load_rx.is_some() || self.merge_apply_rx.is_some();
+        let mut open = true; let mut decision = None; let mut retry = false;
+        egui::Window::new(format!("Zeilenvergleich: {}", m.rel)).open(&mut open)
+            .collapsible(false).resizable(true).default_size([900.0, 600.0])
+            .max_size(theme::window_content_limit(ctx)).constrain_to(ctx.screen_rect().shrink(16.0))
             .show(ctx, |ui| {
-                if loading {
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.label("Lade beide Versionen…");
-                    });
+                if busy {
+                    ui.horizontal(|ui| { ui.spinner(); ui.label("Originale laden oder sicher speichern…"); });
+                    if ui.button("Abbrechen").clicked() { self.cancel_merge(); }
                     return;
                 }
-                ui.label(
-                    RichText::new("A = Quelle (links), B = Ziel (rechts). Gleiche Zeile auf beiden Seiten = Konflikt → genau EINE Seite wählen (Zeilen werden nicht zusammengefügt). Nur-eine-Seite-Zeilen kannst du einzeln übernehmen/weglassen.")
-                        .small()
-                        .color(theme::muted(ui)),
-                );
-                ui.horizontal(|ui| {
-                    if ui.small_button("Alle A").clicked() {
-                        for r in m.rows.iter_mut().filter(|r| !r.equal) { r.take_left = r.left.is_some(); r.take_right = false; }
-                    }
-                    if ui.small_button("Alle B").clicked() {
-                        for r in m.rows.iter_mut().filter(|r| !r.equal) { r.take_right = r.right.is_some(); r.take_left = false; }
-                    }
-                });
-                ui.separator();
-                let gray = theme::muted(ui);
-                let green = theme::success(ui);
-                let blue = theme::accent(ui);
-                let colw = ((ui.available_width() - 40.0) / 2.0).max(120.0);
-                egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
-                    egui::Grid::new("merge_grid").num_columns(2).striped(true).min_col_width(colw).show(ui, |ui| {
-                        for r in m.rows.iter_mut() {
-                            // Same line changed on BOTH sides = a real conflict:
-                            // exactly one side may be taken (never concatenated).
-                            let conflict = !r.equal && r.left.is_some() && r.right.is_some();
-                            // Left (A) cell.
-                            ui.horizontal(|ui| {
-                                if r.equal {
-                                    ui.add_space(20.0);
-                                    ui.label(RichText::new(r.left.clone().unwrap_or_default()).monospace().color(gray));
-                                } else if let Some(l) = r.left.clone() {
-                                    if conflict {
-                                        if ui.selectable_label(r.take_left, "A").on_hover_text("Diese Seite übernehmen").clicked() {
-                                            r.take_left = true;
-                                            r.take_right = false;
-                                        }
-                                    } else {
-                                        ui.checkbox(&mut r.take_left, "");
-                                    }
-                                    ui.label(RichText::new(l).monospace().color(green));
-                                } else {
-                                    ui.add_space(20.0);
-                                    ui.label(RichText::new("∅").monospace().color(theme::muted(ui)));
-                                }
-                            });
-                            // Right (B) cell.
-                            ui.horizontal(|ui| {
-                                if r.equal {
-                                    ui.add_space(20.0);
-                                    ui.label(RichText::new(r.right.clone().unwrap_or_default()).monospace().color(gray));
-                                } else if let Some(l) = r.right.clone() {
-                                    if conflict {
-                                        if ui.selectable_label(r.take_right, "B").on_hover_text("Diese Seite übernehmen").clicked() {
-                                            r.take_right = true;
-                                            r.take_left = false;
-                                        }
-                                    } else {
-                                        ui.checkbox(&mut r.take_right, "");
-                                    }
-                                    ui.label(RichText::new(l).monospace().color(blue));
-                                } else {
-                                    ui.add_space(20.0);
-                                    ui.label(RichText::new("∅").monospace().color(theme::muted(ui)));
-                                }
-                            });
-                            ui.end_row();
+                if let Some(error) = &m.last_error { ui.colored_label(theme::warning(ui), error); }
+                if m.retry.is_some() {
+                    ui.label("Wiederholung mit den ursprünglichen Bytes und derselben Entscheidung.");
+                    if ui.button("Erneut versuchen").clicked() { retry = true; }
+                    return;
+                }
+                if let Some(error) = &m.text_error { ui.colored_label(theme::warning(ui), error); }
+                ui.label("A = Quelle, B = Ziel. Bei geänderter Zeile genau eine Seite wählen.");
+                ui.label("Das Zeilenformat stammt anfangs von A; „Alle B“ übernimmt auch dessen Zeilenformat.");
+                ui.add_enabled_ui(m.text_error.is_none(), |ui| {
+                    ui.horizontal(|ui| {
+                        if ui.small_button("Alle A").clicked() {
+                            for r in &mut m.rows { r.take_left = r.left.is_some(); r.take_right = false; }
+                            m.shape = m.shape_a;
+                        }
+                        if ui.small_button("Alle B").clicked() {
+                            for r in &mut m.rows { r.take_right = r.right.is_some(); r.take_left = false; }
+                            m.shape = m.shape_b;
                         }
                     });
-                });
-                ui.separator();
-                ui.horizontal(|ui| {
-                    if ui.button("✔ Zusammenführen & speichern").clicked() {
-                        save = true;
+                    let width = (ui.available_width() / 2.0 - 8.0).max(80.0);
+                    egui::ScrollArea::vertical().max_height(420.0).show_rows(ui, 24.0, m.rows.len(), |ui, visible| {
+                        for index in visible {
+                            let row = &mut m.rows[index];
+                            let conflict = !row.equal && row.left.is_some() && row.right.is_some();
+                            ui.horizontal(|ui| {
+                                ui.allocate_ui_with_layout(egui::vec2(width,24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                                    if !row.equal {
+                                        if conflict {
+                                            if ui.selectable_label(row.take_left,"A").clicked() { row.take_left=true; row.take_right=false; }
+                                        } else { ui.checkbox(&mut row.take_left, ""); }
+                                    }
+                                    ui.add(egui::Label::new(RichText::new(line_display(row.left.as_deref().unwrap_or("∅"))).monospace()).truncate());
+                                });
+                                ui.allocate_ui_with_layout(egui::vec2(width,24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                                    if !row.equal {
+                                        if conflict {
+                                            if ui.selectable_label(row.take_right,"B").clicked() { row.take_right=true; row.take_left=false; }
+                                        } else { ui.checkbox(&mut row.take_right, ""); }
+                                    }
+                                    ui.add(egui::Label::new(RichText::new(line_display(row.right.as_deref().unwrap_or("∅"))).monospace()).truncate());
+                                });
+                            });
+                        }
+                    });
+                    if ui.button("Zusammenführen und speichern").clicked() {
+                        decision = Some(MergeDecision::Rows(m.shape));
                     }
-                    if ui
-                        .button("Beide als getrennte Dateien")
-                        .on_hover_text("Kein Zusammenführen: A behält den Namen, B wird als „(Konflikt …)“-Kopie auf beiden Seiten gespeichert")
-                        .clicked()
-                    {
-                        keep_both_files = true;
-                    }
                 });
+                let both = m.session.as_ref().is_some_and(|s| s.original_a.is_some() && s.original_b.is_some());
+                if ui.add_enabled(both, egui::Button::new("Beide Originaldateien behalten (Name von A)"))
+                    .on_hover_text("A behält den Namen, B bleibt als eigene Kopie auf beiden Seiten erhalten. Originalbytes bleiben unverändert.").clicked() {
+                    decision = Some(MergeDecision::KeepBoth { keep_a:true });
+                }
             });
-        if save {
-            let merged = crate::linemerge::assemble_rows(&m.rows);
-            self.start_merge_apply(m.rel.clone(), merged);
-            self.merge = None; // close; result lands via drain
-        } else if keep_both_files {
-            let a_full = crate::linemerge::side_a(&m.rows);
-            let b_full = crate::linemerge::side_b(&m.rows);
-            self.start_merge_keep_both(m.rel.clone(), a_full, b_full);
-            self.merge = None;
-        } else if open {
+        if retry || decision.is_some() { self.submit_merge(m, decision); }
+        else if open || busy {
+            if !open { self.cancel_merge(); }
             self.merge = Some(m);
         }
-        // !open → leave closed (m dropped)
     }
-
-    // ─── View ───────────────────────────────────────────────────────────
 }

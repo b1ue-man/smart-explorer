@@ -79,13 +79,13 @@ impl App {
         let connections: Vec<crate::creds::SavedConnection> =
             self.saved_connections.iter().rev().cloned().collect();
         let gdrive_connected = crate::cloud::is_connected(crate::cloud::Provider::GDrive);
-        let sync_results = crate::syncjobs::load_results();
+        let sync_states = super::sync_job_state_ui::states(ui.ctx(), &self.sync_jobs);
 
         let action_tiles = self.landing_action_tiles();
         let place_tiles = self.landing_place_tiles(&common, &recent, &favorites, &[]);
         let drive_tiles = self.landing_place_tiles(&[], &[], &[], &drives);
         let remote_tiles = self.landing_remote_tiles(&connections, gdrive_connected);
-        let sync_tiles = self.landing_sync_tiles(&sync_results);
+        let sync_tiles = self.landing_sync_tiles(&sync_states);
 
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
@@ -259,13 +259,13 @@ impl App {
 
     fn landing_sync_tiles(
         &self,
-        results: &std::collections::BTreeMap<String, crate::syncjobs::JobResult>,
+        states: &std::collections::BTreeMap<String, crate::syncjobs::JobState>,
     ) -> Vec<LandingTile> {
         let mut tiles = Vec::new();
         for job in &self.sync_jobs {
-            let result = results.get(&job.id);
+            let state = states.get(&job.id);
             let detail = format!("{}  <->  {}", job.source, job.target);
-            let (meta, warn) = landing_sync_meta(job, result);
+            let (meta, warn) = landing_sync_meta(job, state);
             tiles.push(
                 LandingTile::action(job.name.clone(), detail, meta, LandingAction::ShowSyncJobs)
                     .warn(warn),
@@ -309,40 +309,8 @@ impl App {
     }
 }
 
-fn landing_sync_meta(
-    job: &crate::syncjobs::SyncJob,
-    result: Option<&crate::syncjobs::JobResult>,
-) -> (String, bool) {
-    let last = result
-        .map(|r| landing_time_secs(r.when))
-        .filter(|s| !s.is_empty())
-        .or_else(|| {
-            if job.last_run > 0 {
-                Some(landing_time_secs(job.last_run))
-            } else {
-                None
-            }
-        })
-        .unwrap_or_else(|| "noch nie".to_string());
-    let mut warn = false;
-    let status = match result {
-        Some(r) => {
-            warn = r.conflicts > 0 || r.errors > 0;
-            format!(
-                "{} | Konflikte: {} | Fehler: {} | {} -> {}",
-                r.note, r.conflicts, r.errors, r.a_to_b, r.b_to_a
-            )
-        }
-        None => "kein Ergebnis gespeichert".to_string(),
-    };
-    let enabled = if job.enabled { "aktiv" } else { "pausiert" };
-    (format!("Zuletzt: {last} | {enabled} | {status}"), warn)
-}
-
-fn landing_time_secs(secs: i64) -> String {
-    if secs <= 0 {
-        String::new()
-    } else {
-        format_date(secs.saturating_mul(1000))
-    }
+fn landing_sync_meta(job: &crate::syncjobs::SyncJob, state: Option<&crate::syncjobs::JobState>) -> (String, bool) {
+    let (status, warn) = super::sync_job_state_ui::summary(state);
+    let enabled = if job.enabled { "aktiv" } else { "Zeitplan aus" };
+    (format!("{enabled} · {status}"), warn)
 }

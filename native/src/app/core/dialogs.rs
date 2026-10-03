@@ -92,33 +92,10 @@ impl App {
                 });
             });
         if restart {
-            let preflight = match &ready {
-                ReadyUpdate::Staged(bundle) => crate::updater::verify_staged_update(bundle),
-                ReadyUpdate::InstalledRollback { .. } => Ok(()),
-            };
-            if let Err(error) = preflight {
-                self.error_msg = Some(format!("Update-Staging ist nicht mehr gültig: {error}"));
-                return;
-            }
-            if let Err(error) = self.prepare_for_update_apply() {
-                self.error_msg = Some(format!(
-                    "Neustart wurde nicht begonnen; laufende Arbeit konnte nicht sicher bewahrt werden: {error}"
-                ));
-                return;
-            }
-            let launch = match &ready {
-                ReadyUpdate::Staged(bundle) => crate::updater::apply_staged_update(bundle),
-                ReadyUpdate::InstalledRollback { executable, .. } => spawn_updated_app(executable)
-                    .map_err(|error| format!("Rollback-Version starten: {error}")),
-            };
-            match launch {
-                Ok(()) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-                Err(error) => {
-                    self.shutdown_prepared = false;
-                    self.error_msg = Some(format!(
-                        "Neustart-Helfer konnte nicht gestartet werden; das gestagte Update bleibt erhalten: {error}"
-                    ));
-                }
+            if self.desktop_sync_active() {
+                self.request_sync_exit(super::sync_exit_gate::ExitIntent::Update);
+            } else {
+                self.apply_ready_update(ctx, ready);
             }
         } else if discard {
             let ReadyUpdate::Staged(bundle) = &ready else {

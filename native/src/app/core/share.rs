@@ -12,6 +12,8 @@ mod rooms_ui;
 mod direct_ui;
 #[path = "share_window_ui.rs"]
 mod window_ui;
+#[path = "share_host_trash_ui.rs"]
+mod host_trash_ui;
 use super::prelude::*;
 use super::*;
 
