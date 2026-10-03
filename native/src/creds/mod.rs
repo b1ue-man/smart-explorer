@@ -11,5 +11,12 @@ mod secure_store;
 #[path = "core/transaction.rs"]
 mod transaction;
 
+#[cfg(windows)]
+#[path = "os/private_storage_windows.rs"]
+pub(crate) mod private_storage;
+#[cfg(not(windows))]
+#[path = "os/private_storage_unix.rs"]
+pub(crate) mod private_storage;
+
 pub use core::*;
 pub use os::*;
