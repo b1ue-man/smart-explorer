@@ -39,20 +39,24 @@
     "native/src/bisync/os/shared/merge_execution.rs",
     "native/src/bisync/os/shared/merge_resume.rs",
     "native/src/bisync/os/shared/merge_recovery.rs",
-    "native/src/webdav/core/webdav.rs",
-    "native/src/webdav/core/writer.rs",
-    "native/src/webdav/core/metadata.rs",
-    "native/src/webdav/core/multistatus.rs",
-    "native/src/webdav/core/stage_move.rs",
-    "native/src/webdav/core/connection_tests.rs",
     "docs/refs/sync-remote-metadata.md",
-    "android/app/src/androidTest/java/app/smartexplorer/android/task/ReviewMergeDavFixture.kt"
+    "native/src/ftp/core/connection.rs",
+    "native/src/ftp/core/metadata.rs",
+    "native/src/ftp/core/staging.rs",
+    "native/src/ftp/core/extensions.rs",
+    "native/src/ftp/core/ftp.rs",
+    "native/src/ftp/core/streams.rs",
+    "native/src/ftp/core/transfer_fixture.rs",
+    "native/src/bisync/os/shared/replacement_publish.rs",
+    "native/src/bisync/os/shared/version_save.rs",
+    "docs/refs/ftp-pool.md",
+    "android/app/src/androidTest/java/app/smartexplorer/android/task/ReviewMergeFtpFixture.kt"
   ],
   "modify_files": [],
   "create_files": [
     "android/app/src/androidTest/java/app/smartexplorer/android/task/ReviewSyncTaskTest.kt",
     "docs/superpowers/plans/2026-10-02-review-analyse-sync-sicherheit/abnahme/ANDROID-SYNC-SUITE.md",
-    "android/app/src/androidTest/java/app/smartexplorer/android/task/ReviewMergeDavFixture.kt"
+    "android/app/src/androidTest/java/app/smartexplorer/android/task/ReviewMergeFtpFixture.kt"
   ],
   "phase": "Plan and exact API reading only until Parent explicitly says all product implementation is complete. Then implement test fixtures and own report only.",
   "forbidden": "No production/UI/CI/release/graph edits, no broad review or exploration, no builds/tests/formatter/servers/installs/long processes/commits/push/children. Report missing exact read scope to Parent.",
@@ -64,5 +68,11 @@
     "native/src/mobile/os/shared/runtime.rs": "Only is_app_internal and Config/path getters for isolated fixture paths.",
     "native/src/daemon/os/shared/hooks.rs": "Only actual runBefore/After shell and cancellation ordering."
   },
-  "fixture_helper_grant": "Test-only real loopback HTTP/WebDAV fixture may deterministically fail one second-side publish after successful first-side commit, then allow recorded retry. Bind fixture to actual backend protocol contract; no product fault route, native hook, new release step or external service. Helper owns bounded sockets/threads/cleanup. End-to-end JNI inputs/bytes remain actual."
+  "fixture_helper_grant": "Test-only genuine FTP loopback fixture with OS-discovered ServerSocket port may reject one second-side stage RNTO and then allow the exact recorded retry. Use actual native FEAT/listing/stat/stage/publish protocol. No HTTPS downgrade or product fault endpoint. Helper owns all bounded sockets, data connections, threads and cleanup.",
+  "external_sources": [
+    "https://docs.oracle.com/en/java/javase/17/docs/api/java.base/java/net/ServerSocket.html",
+    "https://docs.oracle.com/en/java/javase/17/docs/api/java.base/java/net/Socket.html",
+    "https://docs.oracle.com/en/java/javase/17/docs/api/java.base/java/util/concurrent/ExecutorService.html"
+  ],
+  "restart_contract": "ReviewSyncTaskTest#recordedMergeRetrySurvivesProcessRestart; reviewMergePhase=prepare/retry; Parent force-stops actual target between phases; fixture retains exact isolated port/namespace/job/conn/session only after successful prepare and cleans everything after retry/error."
 }

@@ -61,7 +61,7 @@ class ShareRoomTaskTest {
         assertTrue("Raumfreigabe fehlt: $exports", exports.toString().contains("PhoneDocs"))
         Api.call("share.removeExport", args("scope" to profileId, "path" to export.absolutePath))
 
-        Api.call("share.discoverable", args("target" to "direct", "alias" to "SE Task", "pin" to "4826", "minutes" to 5))
+        Api.call("share.discoverable", args("target" to "direct", "alias" to "SE Task", "pin" to "481902", "minutes" to 5))
         var offer: JsonObject? = null
         waitFor("eigenes Discovery-Angebot", 60_000) {
             offer = Api.obj("share.status").field("discovery").obj()["offer"] as? JsonObject
@@ -72,7 +72,7 @@ class ShareRoomTaskTest {
         Api.call("share.discover")
         // PIN pairing needs a second device with a running offer; the desktop CLI has none
         // (explicit exception): only the contract's answers to unknown ids are exercised.
-        TaskReport.note("share.connect", Api.attempt("share.connect", args("discoveryId" to "unbekannt", "pin" to "4826")).toString())
+        TaskReport.note("share.connect", Api.attempt("share.connect", args("discoveryId" to "unbekannt", "pin" to "481902")).toString())
         TaskReport.note("share.cancelConnect", Api.attempt("share.cancelConnect", args("exchangeId" to "unbekannt")).toString())
 
         val exec = Api.await(Api.start("share.exec", args("location" to location, "command" to "echo hallo", "shell" to false, "timeoutSecs" to 15)), 120_000)

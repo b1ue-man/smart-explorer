@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Desktop side of the G5 Share check, called by android/test-android-task.sh (emulator-run).
-# Follows native/test-share-room-e2e.sh: a local se-share-server (signaling + Iroh relay on the
+# Uses a local TLS se-share-server (signaling + HTTPS Iroh relay on the
 # next port) and one headless desktop CLI client (`se`) with its own HOME/XDG directories. The
 # server binds the runner's non-loopback address so the runner and the emulator reach the same
 # signaling and relay endpoints. Linux only (daemon discovery reads /proc).
@@ -8,6 +8,7 @@
 #   share-desktop.sh up ROOT SE_BIN SHARE_SERVER_BIN   start server + client, Room "Team" with a
 #                                                      Room-only export; writes ROOT/state.env
 #   share-desktop.sh args ROOT                          instrumentation arguments (-e name value)
+#   share-desktop.sh accept ROOT SECONDS INSTRUMENT_OUT accept exactly the current RV1 phone request
 #   share-desktop.sh members ROOT COUNT                 wait until the desktop sees COUNT members
 #   share-desktop.sh exec ROOT [INSTRUMENT_OUT]         desktop side of the exec-host check, while
 #                                                      ShareExecTaskTest runs on the phone (adb)
@@ -18,11 +19,13 @@
 #
 # Each call is its own bash process with errexit, so a failed step always fails the call.
 set -Eeuo pipefail
-trap 'echo "share-desktop.sh failed at line $LINENO: $BASH_COMMAND" >&2' ERR
+umask 077
+trap 'share_failed "$?" "$LINENO" "$BASH_COMMAND"' ERR
 
 SHARE_ROOT=""
 SHARE_CLIENT=""
 SHARE_SERVER_PID=""
+SHARE_SERVER_STAMP=""
 SHARE_SERVER=""
 SHARE_RELAY=""
 SHARE_ROOM_CODE=""
@@ -34,6 +37,71 @@ SHARE_ROOM_FILE=vom-desktop.bin
 SHARE_ROOM_FILE_SHA256=""
 SE_BIN=""
 SE_SHARE_SERVER_BIN=""
+SHARE_STATE_VERSION=2
+SHARE_READY=0
+SHARE_UP_OWNER=""
+
+share_failed() {
+  local status=$1 line=$2 command=$3
+  echo "share-desktop.sh failed at line $line: $command" >&2
+  if [[ -n "$SHARE_UP_OWNER" && "$SHARE_UP_OWNER" == "$BASHPID" ]]; then
+    SHARE_UP_OWNER=""
+    share_desktop_down "$SHARE_ROOT/failure-logs" || true
+  fi
+  exit "$status"
+}
+
+# A PID alone may be reused between up/down; retain its Linux start-time identity.
+share_process_stamp() {
+  local pid=$1 stat
+  local -a fields
+  [[ "$pid" =~ ^[1-9][0-9]*$ && -r "/proc/$pid/stat" ]] || return 0
+  IFS= read -r stat <"/proc/$pid/stat" 2>/dev/null || return 0
+  stat="${stat##*) }"
+  read -r -a fields <<<"$stat"
+  [[ "${fields[0]:-Z}" != Z ]] || return 0
+  printf '%s\n' "${fields[19]:-}"
+}
+
+share_signal_process() {
+  local signal=$1 pid=$2 stamp=$3 stat
+  [[ "$pid" != "$BASHPID" ]] || return 0
+  [[ -n "$stamp" && "$(share_process_stamp "$pid")" == "$stamp" ]] || return 0
+  IFS= read -r stat <"/proc/$pid/stat" 2>/dev/null || return 0
+  stat="${stat##*) }"
+  local -a fields
+  read -r -a fields <<<"$stat"
+  if [[ "${fields[2]:-}" == "$pid" ]]; then
+    kill -s "$signal" -- "-$pid" 2>/dev/null || true
+  else
+    kill -s "$signal" "$pid" 2>/dev/null || true
+  fi
+}
+
+share_stop_process() {
+  local pid=$1 stamp=$2 label=$3 deadline=$((SECONDS + 10))
+  [[ -n "$stamp" ]] || return 0
+  share_signal_process TERM "$pid" "$stamp"
+  while [[ "$(share_process_stamp "$pid")" == "$stamp" ]] && ((SECONDS < deadline)); do sleep 0.1; done
+  if [[ "$(share_process_stamp "$pid")" == "$stamp" ]]; then
+    share_signal_process KILL "$pid" "$stamp"
+    deadline=$((SECONDS + 3))
+    while [[ "$(share_process_stamp "$pid")" == "$stamp" ]] && ((SECONDS < deadline)); do sleep 0.1; done
+  fi
+  [[ "$(share_process_stamp "$pid")" != "$stamp" ]] || {
+    echo "$label did not stop" >&2
+    return 1
+  }
+}
+
+share_register_helper() {
+  local pid=$BASHPID stamp owner
+  stamp="$(share_process_stamp "$pid")"
+  [[ -n "$stamp" ]] || return 1
+  owner="$SHARE_ROOT/helper-owner-$pid-$stamp"
+  mkdir -m 700 "$owner"
+  printf '%s %s\n' "$pid" "$stamp" >"$owner/process"
+}
 
 # The address of the default route, not 127.0.0.1 and not the Docker bridge.
 share_runner_ip() {
@@ -51,6 +119,7 @@ share_client() {
     XDG_RUNTIME_DIR="$SHARE_CLIENT/runtime" \
     APPDATA="$SHARE_CLIENT/data" \
     LOCALAPPDATA="$SHARE_CLIENT/data" \
+    SE_SHARE_FIXTURE_ROOT="$SHARE_ROOT" \
     SE_SHARE_RELAY_ONLY=1 \
     "$SE_BIN" "$@"
 }
@@ -59,7 +128,7 @@ share_daemon_pids() {
   local expected="XDG_DATA_HOME=$SHARE_CLIENT/data" env_file pid command
   for env_file in /proc/[0-9]*/environ; do
     [[ -r "$env_file" ]] || continue
-    if tr '\0' '\n' 2>/dev/null <"$env_file" | grep -Fqx "$expected"; then
+    if tr '\0' '\n' 2>/dev/null <"$env_file" | grep -Fx "$expected" >/dev/null; then
       pid="${env_file#/proc/}"
       pid="${pid%/environ}"
       command="$(tr '\0' ' ' 2>/dev/null <"/proc/$pid/cmdline" || true)"
@@ -71,17 +140,13 @@ share_daemon_pids() {
 }
 
 share_stop_daemon() {
-  local pid deadline=$((SECONDS + 10))
+  local pid stamp failed=0
   while read -r pid; do
-    if [[ -n "$pid" ]]; then kill "$pid" 2>/dev/null || true; fi
+    [[ -n "$pid" ]] || continue
+    stamp="$(share_process_stamp "$pid")"
+    share_stop_process "$pid" "$stamp" "desktop Share daemon" || failed=1
   done < <(share_daemon_pids)
-  while ((SECONDS < deadline)) && [[ -n "$(share_daemon_pids)" ]]; do
-    sleep 0.1
-  done
-  [[ -z "$(share_daemon_pids)" ]] || {
-    echo "desktop Share daemon did not stop" >&2
-    return 1
-  }
+  return "$failed"
 }
 
 share_wait_relay_route() {
@@ -123,31 +188,80 @@ share_wait_members() {
 
 # Server, client, Room "Team" with a Room-only export RoomDocs holding one test file.
 share_desktop_up() {
-  local root=$1 port ip identity room_create export_dir
-  SE_BIN=$2
-  SE_SHARE_SERVER_BIN=$3
+  local root=$1 port ip identity room_create room_policy export_dir cert key pin bind tool deadline
+  for tool in ip jq timeout openssl python3 setsid sha256sum realpath; do
+    command -v "$tool" >/dev/null || { echo "required fixture tool missing: $tool" >&2; return 1; }
+  done
+  SE_BIN="$(realpath -- "$2")"
+  SE_SHARE_SERVER_BIN="$(realpath -- "$3")"
+  [[ -x "$SE_BIN" && -x "$SE_SHARE_SERVER_BIN" ]] || return 1
+  root="$(cd -- "$root" && pwd -P)"
+  [[ ! -e "$root/state.env" && ! -L "$root/state.env" && ! -e "$root/desktop" && ! -L "$root/desktop" &&
+     ! -e "$root/tls" && ! -L "$root/tls" ]] || {
+    echo "up needs a fresh fixture root; existing state is preserved in $root" >&2
+    return 1
+  }
   SHARE_ROOT=$root
   SHARE_CLIENT="$root/desktop"
-  mkdir -p "$SHARE_CLIENT/home" "$SHARE_CLIENT/data" "$SHARE_CLIENT/config" "$SHARE_CLIENT/runtime"
-  chmod 700 "$SHARE_CLIENT/home" "$SHARE_CLIENT/data" "$SHARE_CLIENT/config" "$SHARE_CLIENT/runtime"
+  mkdir -m 700 "$SHARE_CLIENT" "$root/tls"
+  SHARE_UP_OWNER=$BASHPID
+  mkdir -m 700 "$SHARE_CLIENT/home" "$SHARE_CLIENT/data" "$SHARE_CLIENT/config" "$SHARE_CLIENT/runtime"
   ip="$(share_runner_ip)"
   [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ && "$ip" != 127.* ]] || {
     echo "no non-loopback IPv4 address on the runner (got '$ip')" >&2
     return 1
   }
-  port=$((34000 + ($$ % 12000)))
-  SHARE_SERVER="$ip:$port"
-  SHARE_RELAY="http://$ip:$((port + 1))"
+  # Discover an available adjacent pair. A later bind race fails with retained logs.
+  port="$(python3 - "$ip" <<'PY'
+import socket, sys
+for _ in range(128):
+    with socket.socket() as signal, socket.socket() as relay:
+        signal.bind((sys.argv[1], 0))
+        port = signal.getsockname()[1]
+        if port == 65535:
+            continue
+        try:
+            relay.bind((sys.argv[1], port + 1))
+        except OSError:
+            continue
+        print(port)
+        break
+else:
+    raise SystemExit("no available adjacent signaling/relay ports")
+PY
+)"
+  cert="$root/tls/server.pem"
+  key="$root/tls/server-key.pem"
+  openssl req -x509 -newkey rsa:2048 -sha256 -days 2 -nodes \
+    -keyout "$key" -out "$cert" -subj '/CN=Smart Explorer RV1 fixture' \
+    -addext "subjectAltName=IP:$ip" -addext 'basicConstraints=critical,CA:FALSE' \
+    >"$root/tls-generation.log" 2>&1
+  pin="$(openssl x509 -in "$cert" -outform DER | sha256sum | awk '{ print $1 }')"
+  [[ "$pin" =~ ^[0-9a-f]{64}$ ]] || return 1
+  bind="$ip:$port"
+  SHARE_SERVER="wss://$bind/#sha256=$pin"
+  SHARE_RELAY="https://$ip:$((port + 1))"
+  share_save_state
   # The shortest idle keepalive the server accepts, so the device suite sees several server
   # keepalives of the backgrounded phone within its time budget (default 180 s).
-  SE_SHARE_IDLE_KEEPALIVE_SECS=30 "$SE_SHARE_SERVER_BIN" "$SHARE_SERVER" >"$root/share-server.log" 2>&1 &
+  setsid env SE_SHARE_IDLE_KEEPALIVE_SECS=30 SE_SHARE_ALLOW_PLAINTEXT=0 \
+    SE_SHARE_REQUIRE_KEY_LOGIN=0 SE_IROH_RELAY_DISABLE=0 SE_IROH_RELAY_BIND="$ip:$((port + 1))" \
+    SE_SHARE_FIXTURE_ROOT="$root" "$SE_SHARE_SERVER_BIN" "$bind" \
+    --tls-cert "$cert" --tls-key "$key" --state-file "$root/server-bindings.json" \
+    >"$root/share-server.log" 2>&1 &
   SHARE_SERVER_PID=$!
+  SHARE_SERVER_STAMP="$(share_process_stamp "$SHARE_SERVER_PID")"
+  [[ -n "$SHARE_SERVER_STAMP" ]] || { cat "$root/share-server.log" >&2; return 1; }
   share_save_state
-  sleep 1
-  kill -0 "$SHARE_SERVER_PID" || {
-    cat "$root/share-server.log" >&2
-    return 1
-  }
+  deadline=$((SECONDS + 30))
+  until grep -Fq "signaling on $bind (TLS WebSocket" "$root/share-server.log" &&
+        grep -Fq "relay listening on $SHARE_RELAY" "$root/share-server.log"; do
+    [[ "$(share_process_stamp "$SHARE_SERVER_PID")" == "$SHARE_SERVER_STAMP" && SECONDS -lt deadline ]] || {
+      cat "$root/share-server.log" >&2
+      return 1
+    }
+    sleep 0.1
+  done
 
   identity="$(share_client share identity --json)"
   SHARE_DESKTOP_DEVICE="$(jq -er '.device_id' <<<"$identity")"
@@ -156,6 +270,9 @@ share_desktop_up() {
   share_stop_daemon
   share_client share status --json >/dev/null
   share_wait_relay_route
+  share_client share request list --json >"$root/direct-initial.json"
+  jq -e '.count == 0 and (.requests | length) == 0 and (.legacy_requests | length) == 0' \
+    "$root/direct-initial.json" >/dev/null
 
   room_create="$(share_client share room create --name Team)"
   SHARE_ROOM_CODE="$(awk -F '\t' '$1 == "room_code" { print $2 }' <<<"$room_create")"
@@ -165,6 +282,11 @@ share_desktop_up() {
   }
   SHARE_ROOM_RELATION="${SHARE_ROOM_CODE#SE-R3-}"
   SHARE_ROOM_RELATION="${SHARE_ROOM_RELATION%-*}"
+  # Explicit fixture admission grants Room reading; leave write and exec unchanged.
+  room_policy="$(share_client share export policy --room Team --confirm-new-members false)"
+  printf '%s\n' "$room_policy" >"$root/room-policy.txt"
+  awk '$1 == "room_policy" && $3 == "members_may_write=false" &&
+    $4 ~ /^confirm_new_members=false/ { found=1 } END { exit !found }' "$root/room-policy.txt"
 
   # Room-only export: remove the Direct defaults a new Room inherits (see the E2E script).
   export_dir="$SHARE_CLIENT/home/room-export"
@@ -179,9 +301,74 @@ share_desktop_up() {
   done < <(share_client share export list --room Team --json | jq -r --arg keep "$SHARE_ROOM_FOLDER" '.roots[] | select(.label != $keep) | .label')
   share_client share worker refresh >/dev/null
   share_client share export list --room Team --json |
-    jq -e --arg keep "$SHARE_ROOM_FOLDER" '.roots | length == 1 and .[0].label == $keep' >/dev/null
+    jq -e --arg keep "$SHARE_ROOM_FOLDER" \
+      '.roots | length == 1 and .[0].label == $keep and .[0].access == "read_only" and
+       .[0].allow_system_writes != true' >/dev/null
+  SHARE_READY=1
   share_save_state
+  SHARE_UP_OWNER=""
   echo "desktop Share ready: server $SHARE_SERVER, room $SHARE_ROOM_RELATION, device $SHARE_DESKTOP_DEVICE"
+}
+
+# One bounded foreground companion of ReviewShareTaskTest. The suite owns stop/wait.
+share_accept_phone_request() {
+  local seconds=$1 instrument=$2 deadline request fingerprint remaining inbox
+  [[ "$seconds" =~ ^[1-9][0-9]{0,3}$ && -n "$instrument" && "$SHARE_READY" == 1 ]] || return 2
+  [[ ! -e "$SHARE_ROOT/direct-accepted.json" ]] || {
+    echo "this fixture has already accepted its phone request" >&2
+    return 1
+  }
+  mkdir -m 700 "$SHARE_ROOT/direct-accept-owner"
+  jq -e '.count == 0' "$SHARE_ROOT/direct-initial.json" >/dev/null
+  deadline=$((SECONDS + seconds))
+  inbox="$SHARE_ROOT/direct-inbox.json"
+  while ((SECONDS < deadline)); do
+    if grep -q 'INSTRUMENTATION_CODE' "$instrument" 2>/dev/null; then
+      echo "phone instrumentation ended before its Direct request was accepted" >&2
+      return 1
+    fi
+    remaining=$((deadline - SECONDS))
+    ((remaining <= 10)) || remaining=10
+    if SHARE_CLIENT_TIMEOUT="${remaining}s" share_client share request --json \
+        >"$inbox" 2>>"$SHARE_ROOT/direct-inbox.err"; then
+      jq -e '.count == (.requests | length) + (.legacy_requests | length) and
+        (.count | type) == "number" and (.acceptable_count | type) == "number"' "$inbox" >/dev/null
+      if jq -e '.count > 1 or (.legacy_requests | length) > 0 or
+          any(.requests[]; .identity_conflict == true or .direction != "incoming" or
+            .peer.device_name != "RV1-Android-Share")' "$inbox" >/dev/null; then
+        echo "fixture inbox is not the sole current conflict-free RV1 phone request" >&2
+        return 1
+      fi
+      if jq -e '.count == 1 and .acceptable_count == 1 and .blocked_count == 0 and
+          .next_command == "se share request accept" and
+          (.requests[0] | .direction == "incoming" and .identity_conflict == false and
+            .authorization.active == false and .peer.role == "requester" and
+            .peer.device_name == "RV1-Android-Share" and
+            ([.request_id, .peer.device_id, .peer.node_id, .peer.public_key, .peer.fingerprint] |
+              all(.[]; type == "string" and length > 0)))' "$inbox" >/dev/null; then
+        request="$(jq -er '.requests[0].request_id' "$inbox")"
+        fingerprint="$(jq -er '.requests[0].peer.fingerprint' "$inbox")"
+        remaining=$((deadline - SECONDS))
+        ((remaining > 0)) || break
+        ((remaining <= 10)) || remaining=10
+        # Exact signed identity, never an eval of next_command or a stale history entry.
+        SHARE_CLIENT_TIMEOUT="${remaining}s" share_client share request accept "$request" \
+          --fingerprint "$fingerprint" --json \
+          >"$SHARE_ROOT/direct-decision.json" 2>"$SHARE_ROOT/direct-accept.err"
+        jq -e --slurpfile pending "$inbox" --arg id "$request" \
+          '.action == "accepted" and .request.request_id == $id and
+           .request.direction == "incoming" and .request.identity_conflict == false and
+           .request.decision.state == "accepted" and .request.authorization.active == true and
+           .request.peer == $pending[0].requests[0].peer' "$SHARE_ROOT/direct-decision.json" >/dev/null
+        cp -- "$SHARE_ROOT/direct-decision.json" "$SHARE_ROOT/direct-accepted.json"
+        cat "$SHARE_ROOT/direct-accepted.json"
+        return 0
+      fi
+    fi
+    sleep 0.5
+  done
+  echo "no current acceptable RV1 phone request within ${seconds}s" >&2
+  return 1
 }
 
 # Exec host (phase A2): markers on the phone's primary volume coordinate with ShareExecTaskTest.
@@ -309,8 +496,9 @@ share_reach_check() {
   }
 }
 
-STATE_VARS=(SHARE_ROOT SHARE_CLIENT SHARE_SERVER_PID SHARE_SERVER SHARE_RELAY SHARE_ROOM_CODE SHARE_ROOM_RELATION
-  SHARE_DESKTOP_DEVICE SHARE_DESKTOP_DIRECT_CODE SHARE_ROOM_FOLDER SHARE_ROOM_FILE SHARE_ROOM_FILE_SHA256 SE_BIN SE_SHARE_SERVER_BIN)
+STATE_VARS=(SHARE_STATE_VERSION SHARE_ROOT SHARE_CLIENT SHARE_SERVER_PID SHARE_SERVER_STAMP SHARE_READY
+  SHARE_SERVER SHARE_RELAY SHARE_ROOM_CODE SHARE_ROOM_RELATION SHARE_DESKTOP_DEVICE SHARE_DESKTOP_DIRECT_CODE
+  SHARE_ROOM_FOLDER SHARE_ROOM_FILE SHARE_ROOM_FILE_SHA256 SE_BIN SE_SHARE_SERVER_BIN)
 
 share_save_state() {
   local name
@@ -326,7 +514,9 @@ share_load_state() {
     return 1
   }
   # shellcheck disable=SC1091
+  SHARE_STATE_VERSION=0
   source "$root/state.env"
+  [[ "$SHARE_STATE_VERSION" == 2 ]] || { echo "unsupported fixture state; start a fresh root" >&2; return 1; }
 }
 
 share_instrumentation_args() {
@@ -341,23 +531,40 @@ share_instrumentation_args() {
 }
 
 share_desktop_down() {
-  local logs=$1
-  mkdir -p "$logs"
+  local logs=$1 failed=0 pid stamp path
+  mkdir -p "$logs" || failed=1
+  for path in "$SHARE_ROOT"/helper-owner-*/process; do
+    [[ -r "$path" ]] || continue
+    if read -r pid stamp <"$path"; then
+      share_stop_process "$pid" "$stamp" "desktop fixture helper" || failed=1
+    else
+      echo "incomplete helper ownership record: $path" >&2
+      failed=1
+    fi
+  done
   if [[ -n "$SHARE_CLIENT" && -d "$SHARE_CLIENT" ]]; then
-    share_client share status --json >"$logs/desktop-share-status.json" 2>&1 || true
-    share_stop_daemon || true
+    if [[ "$SHARE_READY" == 1 ]]; then
+      SHARE_CLIENT_TIMEOUT=10s share_client share status --json >"$logs/desktop-share-status.json" 2>&1 || true
+    fi
+    share_stop_daemon || failed=1
   fi
   if [[ -n "$SHARE_SERVER_PID" ]]; then
-    kill "$SHARE_SERVER_PID" 2>/dev/null || true
-    local deadline=$((SECONDS + 10))
-    while kill -0 "$SHARE_SERVER_PID" 2>/dev/null && ((SECONDS < deadline)); do sleep 0.2; done
+    share_stop_process "$SHARE_SERVER_PID" "$SHARE_SERVER_STAMP" "TLS Share server" || failed=1
   fi
-  [[ -z "$SHARE_ROOT" ]] || cp -- "$SHARE_ROOT/share-server.log" "$logs/" 2>/dev/null || true
+  for path in "$SHARE_ROOT/share-server.log" "$SHARE_ROOT/tls-generation.log" "$SHARE_ROOT/room-policy.txt" \
+      "$SHARE_ROOT/direct-initial.json" "$SHARE_ROOT/direct-inbox.json" "$SHARE_ROOT/direct-inbox.err" \
+      "$SHARE_ROOT/direct-decision.json" "$SHARE_ROOT/direct-accepted.json" "$SHARE_ROOT/direct-accept.err" \
+      "$SHARE_ROOT"/exec-*.out "$SHARE_ROOT"/exec-*.err "$SHARE_ROOT/reach.err"; do
+    [[ -f "$path" ]] || continue
+    [[ "$path" -ef "$logs/${path##*/}" ]] && continue
+    cp -- "$path" "$logs/" || failed=1
+  done
+  return "$failed"
 }
 
 case "${1:-}" in
   up)
-    [[ "$#" -eq 4 ]] || { sed -n '8,17p' "$0" >&2; exit 2; }
+    [[ "$#" -eq 4 ]] || { sed -n '8,18p' "$0" >&2; exit 2; }
     mkdir -p "$2"
     share_desktop_up "$2" "$3" "$4"
     ;;
@@ -366,20 +573,29 @@ case "${1:-}" in
     share_load_state "$2"
     share_instrumentation_args
     ;;
+  accept)
+    [[ "$#" -eq 4 ]] || exit 2
+    share_load_state "$2"
+    share_register_helper
+    share_accept_phone_request "$3" "$4"
+    ;;
   members)
     [[ "$#" -eq 3 ]] || exit 2
     share_load_state "$2"
+    share_register_helper
     share_wait_members "$3"
     ;;
   exec)
     [[ "$#" -eq 2 || "$#" -eq 3 ]] || exit 2
     share_load_state "$2"
+    share_register_helper
     SHARE_EXEC_INSTRUMENT="${3:-}"
     share_exec_check
     ;;
   reach)
     [[ "$#" -eq 4 ]] || exit 2
     share_load_state "$2"
+    share_register_helper
     share_reach_check "$3" "$4"
     ;;
   down)
@@ -388,7 +604,7 @@ case "${1:-}" in
     share_desktop_down "$3"
     ;;
   *)
-    sed -n '8,17p' "$0" >&2
+    sed -n '8,18p' "$0" >&2
     exit 2
     ;;
 esac

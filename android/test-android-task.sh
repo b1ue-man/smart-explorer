@@ -18,6 +18,9 @@
 #   emulator-run          G4/G5/G6 on the booted emulator (inside android-emulator-runner);
 #                         needs SE_TASK_ARTIFACTS=<dir with apk/ and bin/>
 #
+#   review-build --out D  RV1: only x86_64 JNI/APKs and directly affected JVM classes.
+#                         Called through native/test-review-task.sh, no separate RV1 pipeline.
+#
 # AGENTS.md: never run on the workstation – remote CI only, outer timeout ≥ 30 minutes.
 set -Eeuo pipefail
 shopt -s inherit_errexit
@@ -551,6 +554,64 @@ PY
   step "android-build passed: G3 (tree, arm64 check, x86_64 .so 16 KB, APKs, JVM unit tests)"
 }
 
+# RV1 reuses NDK discovery/alignment but builds only the emulator component.
+cmd_review_build() {
+  local out=$1 maven gradle_status=0 apk test_apk
+  require_tools cargo rustup jq java python3 sha256sum
+  resolve_ndk
+  rustup target list --installed | grep -qx x86_64-linux-android || rustup target add x86_64-linux-android
+  if ! cargo ndk --version 2>/dev/null | grep -q '4\.1\.2'; then
+    cargo install cargo-ndk --locked --version 4.1.2
+  fi
+  local jni_libs="$android_dir/app/src/main/jniLibs"
+  # The runner checks out no committed development JNI. Never mix an old ABI into this APK.
+  rm -f -- "$jni_libs"/*/libsmart_explorer_android.so
+  (cd "$native_dir" && cargo ndk -t x86_64 --platform 30 -o "$jni_libs" build --locked -p smart_explorer_android)
+  [[ -s "$jni_libs/x86_64/libsmart_explorer_android.so" ]] || die 'Missing x86_64 JNI'
+  assert_16k_aligned "$jni_libs/x86_64/libsmart_explorer_android.so"
+  maven="$(cd "$native_dir" && cargo metadata --locked --format-version 1 --filter-platform x86_64-linux-android |
+    jq -r '[.packages[] | select(.name == "rustls-platform-verifier-android") | .manifest_path] | unique |
+           if length == 1 then .[0] else error("expected exactly one rustls-platform-verifier-android") end')"
+  maven="$(dirname "$maven")/maven"
+  [[ -d "$maven/rustls/rustls-platform-verifier" ]] || die 'Missing verifier Maven repository'
+  local classes=(
+    app.smartexplorer.android.api.ReviewTaskAnalyzeShapesTest
+    app.smartexplorer.android.api.SyncConflictVariantTest
+    app.smartexplorer.android.ui.share.WeakPinTest
+    app.smartexplorer.android.ui.sync.JobDraftTest
+    app.smartexplorer.android.service.ReviewTaskCpuTasksTest
+  ) filters=() cls spec
+  for cls in "${classes[@]}"; do filters+=(--tests "$cls"); done
+  local results="$android_dir/app/build/test-results/testDebugUnitTest"
+  rm -rf -- "$results"
+  (cd "$android_dir" && sh ./gradlew --no-daemon --console=plain --stacktrace --continue "-PrustlsVerifierMaven=$maven" \
+    :app:assembleDebug :app:assembleDebugAndroidTest :app:testDebugUnitTest "${filters[@]}") || gradle_status=$?
+  cp -r -- "$results" "$log_root/unit-test-results" 2>/dev/null || true
+  cp -r -- "$android_dir/app/build/reports" "$log_root/gradle-reports" 2>/dev/null || true
+  spec="$(IFS=,; printf '%s' "${classes[*]}")"
+  python3 "$eval_py" unit-tests --results "$results" --sources "$unit_test_sources" --classes "$spec" || gradle_status=1
+  apk="$(find "$android_dir/app/build/outputs/apk/debug" -maxdepth 1 -name '*.apk' | sort | head -n 1)"
+  test_apk="$(find "$android_dir/app/build/outputs/apk/androidTest/debug" -maxdepth 1 -name '*.apk' | sort | head -n 1)"
+  if [[ -s "$apk" && -s "$test_apk" ]]; then
+    mkdir -p "$out"
+    cp -- "$apk" "$out/app-debug.apk"
+    cp -- "$test_apk" "$out/app-debug-androidTest.apk"
+    python3 - "$out" <<'META'
+import hashlib,json,os,sys,zipfile
+from pathlib import Path
+root=Path(sys.argv[1])
+with zipfile.ZipFile(root/'app-debug.apk') as apk:
+    assert 'lib/x86_64/libsmart_explorer_android.so' in apk.namelist(), 'APK lacks x86_64 JNI'
+records={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in root.glob('*.apk')}
+(root/'provenance.json').write_text(json.dumps({'candidate':os.environ['CANDIDATE_SHA'],'artifacts':records},indent=2))
+META
+  else
+    gradle_status=1
+    echo 'RV1 debug/test APK missing' >&2
+  fi
+  [[ "$gradle_status" -eq 0 ]] || die 'RV1 Android build/affected JVM behavior failed; inspect logs'
+}
+
 # ---------------------------------------------------------------------------------------------
 # Emulator (G4/G5/G6). Every stage runs; failures are collected and the artifacts are always kept.
 emulator_failures=()
@@ -1014,9 +1075,11 @@ case "$command_name" in
       exit 2
     fi
     ;;
-  desktop-bins | android-build)
+  desktop-bins | android-build | review-build)
     [[ "$#" -eq 2 && "$1" == --out ]] || { usage; exit 2; }
-    if [[ "$command_name" == desktop-bins ]]; then cmd_desktop_bins "$2"; else cmd_android_build "$2"; fi
+    if [[ "$command_name" == desktop-bins ]]; then cmd_desktop_bins "$2";
+    elif [[ "$command_name" == review-build ]]; then cmd_review_build "$2";
+    else cmd_android_build "$2"; fi
     ;;
   emulator-run)
     [[ "$#" -eq 0 ]] || { usage; exit 2; }

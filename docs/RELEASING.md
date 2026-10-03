@@ -620,6 +620,19 @@ complete-release transaction. Its SHA gate, pinned Windows/WSL environment,
 timeouts, permissions, and wrapper-owned internal publication dispatch are
 separate from both ordinary development CI and the verify-only path.
 
+The documented RV1 batch uses one dispatch of `review-task.yml`, with
+`candidate_sha` equal to the full pushed checkout SHA. Its single checked-in
+entrypoint, `native/test-review-task.sh`, owns the `native`, `android-build` and
+`device` stages on Linux, native Windows and the isolated Android emulator.
+Only affected development components are built incrementally; validated outputs
+are reused, and Linux CLI/server plus emulator APKs have source/SHA-256-bound
+handoffs. The Linux stage owns its temporary FAT32, exFAT and FUSE/SFTP mounts;
+the device stage owns its pinned TLS host and actual merge process restart.
+Failed runs retain diagnostics and a candidate-bound formatter patch when needed.
+Apply fixes, commit/push, and rerun this same suite; no local build/test or extra
+verification pipeline belongs to this batch. Once its results pass, the complete
+release dispatch above starts the terminal transaction without repeating the suite.
+
 The normal release wrapper does not use the verify-only path. On a human-run
 host its one tag push, or its mutually exclusive `release/v*` fallback, starts
 the publication consumer; on the GitHub-hosted path the wrapper starts that

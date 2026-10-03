@@ -1,7 +1,15 @@
-# RV1 – offene Integrationen der Fortsetzung
+# RV1 – Integrationen der Fortsetzung
 
 Stand: 2026-10-03. Diese Liste verbindet ausschließlich die bereits dokumentierten Umsetzungsblöcke;
 sie ist kein weiterer Review-Bericht. Details und Status stehen in den jeweiligen `anfragen/`-Dateien.
+
+Aktueller Quellenstatus: Alle unten protokollierten RV1-Anschlussanfragen sind durch
+die Produkt-Meilensteine bis `4a8130a2` integriert. Frühere Formulierungen wie
+„noch“, „müssen“ oder „stehen aus“ in den datierten Übergaben dokumentieren den
+damaligen Handoff; die Schlusszuordnung steht in `fortsetzung.md`. Insbesondere
+H-REPLACE (`c785407d`), H-POLICY-BOUNDARY (`bdec3084`), E-APPLY (`b9f9b2ae`),
+Desktop/Y156 (`b4fd5851`) und E-ENGINE (`4a8130a2`) schließen die zuletzt offenen
+Quellgrenzen. Gemeinsame Remote-Abnahme und Release bleiben ausstehend.
 
 | Besitzer | Betroffene Grenze | Erwartetes Ergebnis |
 |---|---|---|
