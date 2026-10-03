@@ -47,9 +47,13 @@ fn search_recursive_access_task_authenticated_helper_reuses_read_handles_in_pare
     std::fs::create_dir(&root).unwrap();
     let source = root.join("asset.blend");
     std::fs::write(&source, b"protected payload").unwrap();
+    let child_dir = root.join("protected-child");
+    std::fs::create_dir(&child_dir).unwrap();
+    std::fs::write(child_dir.join("inside.txt"), b"protected child payload").unwrap();
     std::fs::write(fixture.path().join("outside.txt"), b"outside").unwrap();
     let denied = DeniedDirectory::new(&root);
     let denied_file = DeniedDirectory::new(&source);
+    let denied_child = DeniedDirectory::new(&child_dir);
     denied.assert_ordinary_denied();
     denied_file.assert_file_read_denied();
     let root_text = root.to_string_lossy().replace('\\', "/");
@@ -108,6 +112,35 @@ fn search_recursive_access_task_authenticated_helper_reuses_read_handles_in_pare
     let child = process.0.as_handle().try_clone_to_owned().unwrap();
     broker::install(root_text.clone(), pipe, child).unwrap();
     assert!(broker::granted(&root_text));
+    // A foreign/ordinary scan cannot borrow a GUI grant. The explicitly
+    // consented scan keeps the same read-only authority through child pins.
+    {
+        let _identity = super::access_task::Identity::new(true);
+        assert!(super::DirectoryHandle::open_root(&root).is_err());
+        assert!(super::DirectoryHandle::open_root_consented(&root).is_err());
+    }
+    // Exercise the authenticated PinRoot and PinChild protocol even when the
+    // runner itself also owns backup privilege and could open them directly.
+    let root_pins = broker::pin_granted(&root, true).unwrap().unwrap();
+    assert!(!root_pins.files.is_empty());
+    let child_pins = broker::pin_granted(&child_dir, false).unwrap().unwrap();
+    assert_eq!(child_pins.files.len(), 1);
+    // Use the very constructor used by open_root_consented's broker fallback.
+    // This ensures the fixture exercises the RPC branch on elevated runners.
+    let pinned = super::DirectoryHandle::from_root_pins(
+        root_pins, super::normalize_scan_root(&root),
+    ).unwrap();
+    drop(super::DirectoryHandle::open_root_consented(&root).unwrap());
+    let names: Vec<_> = pinned.read_directory().unwrap()
+        .map(|entry| entry.unwrap().name).collect();
+    assert!(names.iter().any(|name| name == "asset.blend"));
+    let child_pin = pinned.open_child(std::ffi::OsStr::new("protected-child")).unwrap();
+    let mut child_file = child_pin.open_regular_child(std::ffi::OsStr::new("inside.txt")).unwrap();
+    let mut payload = String::new();
+    child_file.read_to_string(&mut payload).unwrap();
+    assert_eq!(payload, "protected child payload");
+    assert!(child_file.write_all(b"cannot write").is_err());
+    assert!(std::fs::rename(&child_dir, root.join("moved-child")).is_err());
     for _ in 0..2 {
         let mut file: File = broker::open_granted(&source, ReadKind::File)
             .unwrap()
@@ -131,6 +164,14 @@ fn search_recursive_access_task_authenticated_helper_reuses_read_handles_in_pare
         );
         std::thread::sleep(Duration::from_millis(10));
     }
+    // Duplicated pins still deny rename after the helper session ends.
+    assert!(std::fs::rename(&child_dir, root.join("moved-child")).is_err());
+    assert!(std::fs::rename(&root, fixture.path().join("moved-root")).is_err());
+    drop(child_file);
+    drop(child_pin);
+    drop(pinned);
+    drop(child_pins);
+    drop(denied_child);
     drop(denied_file);
     drop(denied);
     assert_eq!(std::fs::read(&source).unwrap(), b"protected payload");

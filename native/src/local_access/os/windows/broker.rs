@@ -1,4 +1,4 @@
-use super::{image_lock::LockedImage, pipe::Pipe, read::open_scoped};
+use super::{image_lock::LockedImage, pipe::Pipe};
 use crate::local_access::protocol::{self, ReadKind, ReadReply, ReadRequest, Startup};
 use std::{
     fs::File,
@@ -19,6 +19,10 @@ use windows_sys::Win32::{
         PROCESS_DUP_HANDLE, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
     },
 };
+
+#[path = "broker_pins.rs"]
+mod pins;
+pub(super) use pins::DirectoryPins;
 
 pub(super) struct Client {
     root: String,
@@ -104,6 +108,20 @@ pub(super) fn granted(path: &str) -> bool {
 
 pub(super) fn open_granted(path: &Path, kind: ReadKind) -> Option<io::Result<File>> {
     let path = super::display_path(path).replace('\\', "/");
+    if matches!(kind, ReadKind::PinRoot | ReadKind::PinChild) {
+        return Some(Err(io::Error::from(io::ErrorKind::InvalidInput)));
+    }
+    let client = client_for(&path)?;
+    Some(client.read(path, kind))
+}
+
+pub(super) fn pin_granted(path: &Path, all_ancestors: bool) -> Option<io::Result<DirectoryPins>> {
+    let path = super::display_path(path).replace('\\', "/");
+    let client = client_for(&path)?;
+    Some(client.pin(path, all_ancestors))
+}
+
+fn client_for(path: &str) -> Option<Arc<Client>> {
     let client = clients()
         .lock()
         .ok()?
@@ -111,7 +129,7 @@ pub(super) fn open_granted(path: &Path, kind: ReadKind) -> Option<io::Result<Fil
         .filter(|client| client.alive() && protocol::contains(&client.root, &path))
         .max_by_key(|client| client.root.len())
         .cloned()?;
-    Some(client.read(path, kind))
+    Some(client)
 }
 
 pub(super) fn serve(request: Startup) -> Result<(), String> {
@@ -137,14 +155,14 @@ pub(super) fn serve(request: Startup) -> Result<(), String> {
     }
     // Validate the requested root and backup capability before acknowledging
     // consent. No data and no privileged token is transferred during admission.
-    let result = open_scoped(&request.root, &request.root, ReadKind::Directory);
+    let result = pins::GrantedRoot::open(&request.root);
     let reply = ReadReply {
         handle: 0,
         error: result.as_ref().err().map(error_code),
     };
     pipe.send(&reply, parent.as_raw_handle())
         .map_err(|error| error.to_string())?;
-    result.map_err(|error| error.to_string())?;
+    let root = result.map_err(|error| error.to_string())?;
     loop {
         let operation: ReadRequest =
             match pipe.receive(parent.as_raw_handle(), Duration::from_secs(60)) {
@@ -152,7 +170,12 @@ pub(super) fn serve(request: Startup) -> Result<(), String> {
                 Err(error) if error.kind() == io::ErrorKind::TimedOut => continue,
                 Err(_) => return Ok(()),
             };
-        let result = open_scoped(&request.root, &operation.path, operation.kind)
+        if matches!(operation.kind, ReadKind::PinRoot | ReadKind::PinChild) {
+            root.send_pins(&operation, &pipe, parent.as_raw_handle())
+                .map_err(|error| error.to_string())?;
+            continue;
+        }
+        let result = root.read(&operation)
             .and_then(|file| duplicate_file(&file, parent.as_raw_handle()));
         let reply = match result {
             Ok(handle) => ReadReply {

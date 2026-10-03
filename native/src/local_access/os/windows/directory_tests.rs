@@ -176,3 +176,30 @@ fn analytics_access_task_full_record_fallback_and_reparse_classification() {
     // An unreadable reparse tag never drops the entry.
     assert_eq!(reparse_tag(Path::new(r"\\?\C:\definitely\missing\path")), 0);
 }
+
+#[test]
+fn review_task_special_reparse_tags_are_special_files() {
+    for tag in SPECIAL_TAGS {
+        assert_eq!(kind(FILE_ATTRIBUTE_REPARSE_POINT, tag), EntryKind::Other);
+        assert!(!link_like(FILE_ATTRIBUTE_REPARSE_POINT, tag));
+    }
+    // IO_REPARSE_TAG_SYMLINK and IO_REPARSE_TAG_LX_SYMLINK are links.
+    assert_eq!(
+        kind(FILE_ATTRIBUTE_REPARSE_POINT, 0xA000_000C),
+        EntryKind::Link
+    );
+    assert_eq!(
+        kind(FILE_ATTRIBUTE_REPARSE_POINT, 0xA000_001D),
+        EntryKind::Link
+    );
+    // Cloud placeholders and WOF-compressed files are ordinary files.
+    assert_eq!(
+        kind(FILE_ATTRIBUTE_REPARSE_POINT, 0x9000_001A),
+        EntryKind::File
+    );
+    assert_eq!(
+        kind(FILE_ATTRIBUTE_REPARSE_POINT, 0x8000_0017),
+        EntryKind::File
+    );
+    assert_eq!(kind(FILE_ATTRIBUTE_DEVICE, 0), EntryKind::Other);
+}

@@ -7,30 +7,45 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const UNIQUE_ATTEMPTS: u32 = 1000;
 
 pub(super) fn promote_to_id<B: Backend + ?Sized>(
-    backend: &B, staged: &str, destination: &str, id: Option<&str>,
+    backend: &B,
+    staged: &str,
+    destination: &str,
+    id: Option<&str>,
 ) -> io::Result<()> {
     if backend.has_duplicate_file_names() {
-        return Err(io::Error::new(io::ErrorKind::Unsupported,
-            "provider cannot replace a selected duplicate by ID"));
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "provider cannot replace a selected duplicate by ID",
+        ));
     }
     if backend.stat(destination)?.id.as_deref() != id {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "destination identity changed"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "destination identity changed",
+        ));
     }
     backend.promote_staged(staged, destination)
 }
 
-/// Allocate an absent, hard-to-guess sibling name. Probe failures are errors,
-/// never interpreted as a free path.
+/// Allocate an absent, hard-to-guess sibling name
+/// `<name>.se-<purpose>-<16 hex>`; a long `<name>` is shortened so the stage
+/// stays one storable name component (255 bytes and UTF-16 units). Probe
+/// failures are errors, never interpreted as a free path.
 pub fn unique_staging_path<B: Backend + ?Sized>(
     backend: &B,
     destination: &str,
     purpose: &str,
 ) -> io::Result<String> {
+    let (parent, name) = match destination.rfind('/') {
+        Some(index) => destination.split_at(index + 1),
+        None => ("", destination),
+    };
     for attempt in 0..UNIQUE_ATTEMPTS {
-        let candidate = format!(
-            "{destination}.se-{purpose}-{:016x}",
+        let tail = format!(
+            ".se-{purpose}-{:016x}",
             random_suffix(destination, purpose, attempt)
         );
+        let candidate = format!("{parent}{}", super::fit_stage_name("", name, &tail));
         if !backend.try_exists(&candidate)? {
             return Ok(candidate);
         }
@@ -120,10 +135,10 @@ pub(crate) fn promote_staged_with<B: Backend + ?Sized>(
     validate_staged_file(backend, staged)?;
 
     let destination_meta = backend.stat(destination)?;
-    if destination_meta.is_dir || destination_meta.is_symlink {
+    if destination_meta.is_dir || destination_meta.is_symlink || destination_meta.special {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "refusing to replace a directory or link-like destination with a file",
+            "refusing to replace a directory, link or special destination with a file",
         ));
     }
     replace(staged, destination)
@@ -131,7 +146,7 @@ pub(crate) fn promote_staged_with<B: Backend + ?Sized>(
 
 fn validate_staged_file<B: Backend + ?Sized>(backend: &B, staged: &str) -> io::Result<()> {
     let staged_meta = backend.stat(staged)?;
-    if staged_meta.is_dir || staged_meta.is_symlink {
+    if staged_meta.is_dir || staged_meta.is_symlink || staged_meta.special {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "staged promotion source must be a regular file",

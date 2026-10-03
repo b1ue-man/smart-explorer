@@ -1,9 +1,7 @@
-//! Android filesystem adapters.
-//!
-//! Shared storage on Android 11+ is served by the MediaProvider FUSE daemon,
-//! which lacks some Linux primitives the desktop adapters rely on. The module
-//! is compiled for Android, and for unix test builds so the chain also runs on
-//! the Linux host; the desktop adapters never call it.
+//! Filesystem adapters for Linux and Android storage that lacks primitives
+//! the local adapters rely on: the no-replace rename ladder serves NFS, FUSE
+//! (sshfs, ntfs-3g, FAT through FUSE) and Android's MediaProvider FUSE
+//! storage, and is used by the VFS and the copy module on both platforms.
 #[path = "os/rename.rs"]
 mod rename;
 #[cfg(test)]

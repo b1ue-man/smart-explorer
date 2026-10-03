@@ -5,7 +5,7 @@
 //! `copy_file_range` (server-side on NFS and CIFS). Remote connections that
 //! are local filesystems underneath (UNC shares) copy inside one share with
 //! it, so no byte crosses the network twice.
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
@@ -68,13 +68,9 @@ fn copy_by_handles(
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(u64),
 ) -> io::Result<(u64, File)> {
-    let mut writer = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(stage)?;
+    let mut writer = crate::vfs::create_local_copy_stage(stage)?;
     let copied = platform::copy_handles(reader, &mut writer, cancel, progress).and_then(|copied| {
-        let permissions = reader.metadata()?.permissions();
-        writer.set_permissions(permissions)?;
+        platform::copy_permissions(&writer, &reader.metadata()?, None)?;
         copied.ok_or_else(|| io::Error::new(io::ErrorKind::Interrupted, "Serverkopie abgebrochen"))
     });
     match copied {

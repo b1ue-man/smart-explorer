@@ -1,9 +1,6 @@
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
-#[cfg(test)]
-use super::super::platform;
-
 /// Refuses to copy or move the folder `src` to `target` when `target` is
 /// `src` itself or lies below it, compared on canonical paths (links and case
 /// variants resolved as far as the paths exist).
@@ -77,13 +74,15 @@ pub(super) fn prepare_target_parent(root: &Path, target: &Path) -> io::Result<()
     }
 
     match std::fs::symlink_metadata(&target) {
-        Ok(metadata) if platform::metadata_is_link_like(&metadata) => Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!(
-                "destination is a link or reparse point: {}",
-                target.display()
-            ),
-        )),
+        Ok(metadata) if crate::local_access::metadata_is_link_like(&target, &metadata) => {
+            Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "destination is a link or reparse point: {}",
+                    target.display()
+                ),
+            ))
+        }
         Ok(_) => Ok(()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error),
@@ -131,7 +130,7 @@ fn ensure_plain_directory(path: &Path) -> io::Result<()> {
 
 #[cfg(test)]
 fn validate_plain_directory(path: &Path, metadata: &std::fs::Metadata) -> io::Result<()> {
-    if platform::metadata_is_link_like(metadata) {
+    if crate::local_access::metadata_is_link_like(path, metadata) {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             format!(

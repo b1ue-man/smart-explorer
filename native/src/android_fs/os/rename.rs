@@ -1,19 +1,21 @@
-//! Rename that never replaces an existing name, with a fallback chain for
-//! Android storage.
+//! Rename that never replaces an existing name, with the fallback ladder of
+//! systemd's `rename_noreplace()` for Linux and Android filesystems.
 //!
-//! 1. `renameat2(RENAME_NOREPLACE)`: atomic. Raw syscall as on Linux; bionic
-//!    lists `renameat2` in `SYSCALLS.TXT` since API 30 (the minimum API
-//!    level), so the app seccomp allowlist generated from it permits the call.
+//! 1. `renameat2(RENAME_NOREPLACE)`: atomic. Raw syscall (the libc crate has
+//!    no wrapper on musl); bionic lists `renameat2` in `SYSCALLS.TXT` since
+//!    API 30 (the minimum API level), so the app seccomp allowlist permits it.
 //! 2. The kernel or filesystem lacks the flag (`EINVAL`, `ENOSYS`,
-//!    `EOPNOTSUPP`; a FUSE server without rename2 support, such as shared
-//!    storage may be, yields `EINVAL`) and the source is not a directory: hard
-//!    link to the destination, which is create-only and therefore still
-//!    refuses an existing name atomically, then remove the source.
-//! 3. The link failed for another reason than an existing name (FUSE storage
-//!    may not offer hard links), or the source is a directory: existence
-//!    check, then `rename`. Documented residual risk: a name created between
-//!    the check and the rename is replaced (a file or an empty directory); a
-//!    non-empty directory is never replaced (`ENOTEMPTY`).
+//!    `EOPNOTSUPP`: NFS always, FUSE without rename2 such as sshfs or
+//!    ntfs-3g) and the source is not a directory: hard link to the
+//!    destination, which is create-only and therefore still refuses an
+//!    existing name atomically, then remove the source.
+//! 3. The link failed for another reason than an existing name (FAT/exFAT
+//!    through FUSE, Android storage: no hard links), or the source is a
+//!    directory: existence check, then `rename` – on Android for every move,
+//!    elsewhere only to publish the app's own randomly named stages (other
+//!    moves fail with `Unsupported` there). Documented residual risk: a name
+//!    created between the check and the rename is replaced (a file or an
+//!    empty directory); a non-empty directory is never replaced (`ENOTEMPTY`).
 //!
 //! Each error number that triggered a fallback is recorded once per process
 //! and, once host values are set (the Android app), appended to
@@ -74,7 +76,27 @@ pub(crate) fn rename_no_replace(source: &Path, destination: &Path) -> io::Result
             Err(error) => record_fallback(Attempt::HardLink, error.raw_os_error()),
         }
     }
+    if !checked_rename_allowed(source) {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            format!(
+                "{}: dieses Dateisystem kann nicht umbenennen, ohne vorhandene Namen zu ersetzen ({error})",
+                destination.display()
+            ),
+        ));
+    }
     checked_rename(source, destination)
+}
+
+/// The racy last step: on Android for every move (shared storage has no
+/// hard links), elsewhere only to publish one of the app's own stages, whose
+/// random name no other writer uses.
+pub(super) fn checked_rename_allowed(source: &Path) -> bool {
+    cfg!(target_os = "android")
+        || source
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(crate::vfs::is_staging_name)
 }
 
 /// `renameat2` failed because the no-replace flag is unsupported, not because

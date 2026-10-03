@@ -104,12 +104,12 @@ fn token_id(token: HANDLE) -> (u32, i32) {
     );
     (stats.TokenId.LowPart, stats.TokenId.HighPart)
 }
-struct Identity {
+pub(super) struct Identity {
     previous: Option<Token>,
     _token: Token,
 }
 impl Identity {
-    fn new(restricted: bool) -> Self {
+    pub(super) fn new(restricted: bool) -> Self {
         let previous = thread_token();
         let process = process_token();
         let mut duplicated = null_mut();

@@ -28,6 +28,10 @@ use windows_sys::Win32::{
 const BUFFER_WORDS: usize = 8192;
 const MAX_BUFFER_WORDS: usize = 8192 * 16;
 const NAME_SURROGATE: u32 = 0x2000_0000;
+// Special-file reparse tags (no name-surrogate bit, no data stream to read):
+// AF_UNIX sockets and the FIFO/character/block nodes WSL stores on NTFS.
+// Values as in windows-sys 0.59 `IO_REPARSE_TAG_AF_UNIX` / `IO_REPARSE_TAG_LX_*`.
+const SPECIAL_TAGS: [u32; 4] = [0x8000_0023, 0x8000_0024, 0x8000_0025, 0x8000_0026];
 
 #[cfg(test)]
 #[path = "sync_link_task_tests.rs"]
@@ -51,6 +55,7 @@ pub(crate) struct Directory<'a> {
     /// ordinary listing does not repeat them.
     yielded: HashSet<OsString>,
     dedupe: bool,
+    consented: bool,
     query: Query<'a>,
 }
 
@@ -63,7 +68,7 @@ fn open(path: &Path, access: u32) -> io::Result<File> {
     super::read::open(path, kind)
 }
 
-fn attributes(file: &File) -> io::Result<FILE_ATTRIBUTE_TAG_INFO> {
+pub(super) fn attributes(file: &File) -> io::Result<FILE_ATTRIBUTE_TAG_INFO> {
     let mut result = FILE_ATTRIBUTE_TAG_INFO {
         FileAttributes: 0,
         ReparseTag: 0,
@@ -107,6 +112,26 @@ fn read_directory_with_query<'a>(
     query: impl FnMut(&File, FILE_INFO_BY_HANDLE_CLASS, &mut [u64]) -> io::Result<()> + 'a,
 ) -> io::Result<Directory<'a>> {
     let file = open(path, FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES)?;
+    read_directory_from_file(path, file, layout, true, query)
+}
+
+/// Use a freshly opened handle under the caller's pinned ancestry. Ordinary
+/// host scans never consult an unrelated GUI broker for reparse-tag probes.
+pub(super) fn read_directory_handle(
+    path: &Path,
+    file: File,
+    consented: bool,
+) -> io::Result<Directory<'static>> {
+    read_directory_from_file(path, file, Layout::Extended, consented, query_directory)
+}
+
+fn read_directory_from_file<'a>(
+    path: &Path,
+    file: File,
+    layout: Layout,
+    consented: bool,
+    query: impl FnMut(&File, FILE_INFO_BY_HANDLE_CLASS, &mut [u64]) -> io::Result<()> + 'a,
+) -> io::Result<Directory<'a>> {
     // The attribute probe is advisory: a provider that cannot answer it still
     // gets to enumerate, and a non-directory shows up as an enumeration error.
     if let Ok(info) = attributes(&file) {
@@ -131,6 +156,7 @@ fn read_directory_with_query<'a>(
         fallback: None,
         yielded: HashSet::new(),
         dedupe: false,
+        consented,
         query: Box::new(query),
     };
     // Establish the listing here so callers can distinguish a failed root
@@ -233,12 +259,12 @@ impl Directory<'_> {
                     continue;
                 }
                 let metadata = entry.metadata().map_err(|error| {
-                    io::Error::new(error.kind(), format!("{}: {error}", entry.path().display()))
+                    super::super::EntryError::wrap(name.clone(), &entry.path(), error)
                 })?;
                 use std::os::windows::fs::MetadataExt;
                 let attrs = metadata.file_attributes();
                 let tag = if attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-                    reparse_tag(&entry.path())
+                    reparse_tag_with_access(&entry.path(), self.consented)
                 } else {
                     0
                 };
@@ -321,7 +347,7 @@ impl Directory<'_> {
                 match record.tag {
                     Some(tag) => tag,
                     None if record.unrepresentable => 0,
-                    None => reparse_tag(&self.path.join(&record.name)),
+                    None => reparse_tag_with_access(&self.path.join(&record.name), self.consented),
                 }
             } else {
                 0
@@ -346,15 +372,27 @@ impl Directory<'_> {
 /// The reparse tag of `path`, or 0 when it cannot be read: an unreadable tag
 /// classifies the entry as an ordinary file or folder instead of dropping it.
 fn reparse_tag(path: &Path) -> u32 {
-    open(path, FILE_READ_ATTRIBUTES)
+    reparse_tag_with_access(path, true)
+}
+
+fn reparse_tag_with_access(path: &Path, consented: bool) -> u32 {
+    let file = if consented {
+        open(path, FILE_READ_ATTRIBUTES)
+    } else {
+        super::read::open_direct(
+            path,
+            crate::local_access::protocol::ReadKind::Metadata,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        )
+    };
+    file
         .and_then(|file| attributes(&file))
         .map(|info| info.ReparseTag)
         .unwrap_or(0)
 }
 
 fn link_like(attributes: u32, tag: u32) -> bool {
-    attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
-        && (tag == 0 || tag & NAME_SURROGATE != 0)
+    attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 && (tag == 0 || tag & NAME_SURROGATE != 0)
 }
 
 /// Data reparse points (for example cloud placeholders) are ordinary entries.
@@ -367,12 +405,50 @@ pub(crate) fn metadata_is_link_like(path: &Path, metadata: &std::fs::Metadata) -
         || (attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0 && link_like(attrs, reparse_tag(path)))
 }
 
+/// Link boundary and special class with at most one reparse-tag read.
+pub(crate) fn metadata_class(
+    path: &Path,
+    metadata: &std::fs::Metadata,
+) -> crate::local_access::MetadataClass {
+    use std::os::windows::fs::MetadataExt;
+    let attrs = metadata.file_attributes();
+    let tag = if attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        reparse_tag(path)
+    } else {
+        0
+    };
+    let boundary = metadata.is_symlink()
+        || (attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0 && link_like(attrs, tag));
+    crate::local_access::MetadataClass {
+        link_like: boundary,
+        special: !boundary && kind(attrs, tag) == EntryKind::Other,
+    }
+}
+
+/// The classification of this handle, even if its former path was replaced.
+pub(crate) fn classify_open_file(file: &File) -> io::Result<crate::local_access::MetadataClass> {
+    use std::os::windows::fs::MetadataExt;
+    let metadata = file.metadata()?;
+    let attrs = metadata.file_attributes();
+    let tag = if attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        attributes(file)?.ReparseTag
+    } else {
+        0
+    };
+    let boundary = metadata.is_symlink() || link_like(attrs, tag);
+    Ok(crate::local_access::MetadataClass {
+        link_like: boundary,
+        special: !boundary && kind(attrs, tag) == EntryKind::Other,
+    })
+}
+
 fn kind(attributes: u32, tag: u32) -> EntryKind {
-    if attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 && tag & NAME_SURROGATE != 0 {
+    let reparse = attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0;
+    if reparse && tag & NAME_SURROGATE != 0 {
         EntryKind::Link
     } else if attributes & FILE_ATTRIBUTE_DIRECTORY != 0 {
         EntryKind::Directory
-    } else if attributes & FILE_ATTRIBUTE_DEVICE != 0 {
+    } else if attributes & FILE_ATTRIBUTE_DEVICE != 0 || (reparse && SPECIAL_TAGS.contains(&tag)) {
         EntryKind::Other
     } else {
         EntryKind::File

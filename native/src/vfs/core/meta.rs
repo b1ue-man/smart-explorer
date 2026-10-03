@@ -3,12 +3,16 @@
 use std::io;
 
 /// Backend-neutral directory entry / file metadata. Fields a remote backend
-/// can't supply (`btime`, `hidden`, `system`) default to `0` / `false`.
+/// can't supply (`btime`, `hidden`, `system`, `special`) default to `0` / `false`.
 #[derive(Clone, Debug, Default)]
 pub struct VfsMeta {
     pub name: String,
     pub is_dir: bool,
     pub is_symlink: bool,
+    /// Neither file, folder nor link: FIFO, socket, block/character device
+    /// (Windows: `FILE_ATTRIBUTE_DEVICE`, AF_UNIX and WSL `LX_*` reparse tags).
+    /// Its content is no data stream: walks omit it, readers never open it.
+    pub special: bool,
     pub size: u64,
     pub mtime_ms: i64,
     pub btime_ms: i64,
