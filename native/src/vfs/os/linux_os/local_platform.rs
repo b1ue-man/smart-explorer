@@ -115,13 +115,15 @@ pub(crate) fn mount_boundary(path: &Path) -> std::io::Result<Option<super::Mount
 pub(crate) fn filesystem_profile(path: &Path) -> std::io::Result<super::fs_profile::FsProfile> {
     let resolved = mountinfo::resolve_existing(path)?;
     let mounts = mountinfo::read()?;
-    let fs_type =
-        mountinfo::containing(&mounts, &resolved).map_or("", |mount| mount.fs_type.as_str());
+    let mount = mountinfo::containing(&mounts, &resolved);
+    let fs_type = mount.map_or("", |mount| mount.fs_type.as_str());
     let mut profile = super::fs_profile::linux_profile(fs_type);
     if cfg!(target_os = "android") {
         if let Some(lower) = android_lower_type(&mounts, &resolved) {
             profile.limits = super::fs_profile::linux_profile(lower).limits;
         }
+    } else if let Some(lower) = mount.and_then(volume_id::fuse_block_type) {
+        profile.limits = super::fs_profile::linux_profile(&lower).limits;
     }
     Ok(profile)
 }

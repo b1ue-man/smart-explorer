@@ -627,6 +627,9 @@ entrypoint, `native/test-review-task.sh`, owns the `native`, `android-build` and
 Only affected development components are built incrementally; validated outputs
 are reused, and Linux CLI/server plus emulator APKs have source/SHA-256-bound
 handoffs. The Linux stage owns its temporary FAT32, exFAT and FUSE/SFTP mounts;
+when its kernel lacks exFAT, the installed exFAT FUSE driver mounts the same
+real formatted loop image. The OS adapter derives its storage limits from the
+source block device and keeps FUSE's conservative per-file flush contract.
 the device stage owns its pinned TLS host and actual merge process restart.
 Failed runs retain diagnostics and a candidate-bound formatter patch when needed.
 Apply fixes, commit/push, and rerun this same suite; no local build/test or extra

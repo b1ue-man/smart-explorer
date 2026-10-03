@@ -51,7 +51,7 @@ jobs:
           set -Eeuo pipefail
           sudo -n true
           sudo apt-get update
-          sudo apt-get install -y jq socat sshfs openssh-sftp-server dosfstools exfatprogs libegl1 libgl1 libxkbcommon0 libxkbcommon-x11-0
+          sudo apt-get install -y jq socat sshfs openssh-sftp-server dosfstools exfatprogs exfat-fuse libegl1 libgl1 libxkbcommon0 libxkbcommon-x11-0
       - uses: actions/cache/restore@v4
         id: outputs
         with:
