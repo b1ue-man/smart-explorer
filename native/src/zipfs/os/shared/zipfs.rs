@@ -84,6 +84,7 @@ fn add_child(
         name: name.to_string(),
         is_dir,
         is_symlink: false,
+        special: false,
         size,
         mtime_ms,
         btime_ms: 0,
