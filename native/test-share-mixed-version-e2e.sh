@@ -471,10 +471,35 @@ old_pending="$(wait_old_pending_status "$old_target" "$root/new-to-old-old-statu
 old_request_device_id="$(jq -er '.pending_requests[0].device_id' <<<"$old_pending")"
 old_request_fingerprint="$(jq -er '.pending_requests[0].fingerprint' <<<"$old_pending")"
 
+stage="NEW to OLD: prove an explicit probe cannot activate a pending legacy grant"
+if run_se "$se_bin" "$new_requester" ls "$new_endpoint" \
+  >"$root/new-to-old-pending-probe.txt" 2>"$root/new-to-old-pending-probe.stderr"; then
+  fail "current requester opened the legacy target before its explicit acceptance"
+else
+  pending_probe_exit=$?
+  [[ "$pending_probe_exit" -ne 124 && "$pending_probe_exit" -ne 137 ]] || fail \
+    "pending legacy probe timed out instead of returning a real refusal"
+fi
+wait_current_request "$new_requester" "$new_request_id" '
+  .direction == "outgoing" and
+  .delivery.state == "server_queued" and
+  .relay.outcome == "legacy_forwarded" and
+  .peer_receipt.request.state == "unconfirmed" and
+  .decision.state == "pending" and
+  .decision.effective_state == "pending" and
+  .authorization.state == "inactive" and
+  .authorization.active == false
+' "$root/new-to-old-after-pending-probe.json" \
+  "NEW to OLD refused probe" >/dev/null
+
 stage="NEW to OLD: accept using only values emitted by legacy share status"
 run_se "$legacy_bin" "$old_target" share request accept \
   --fingerprint "$old_request_fingerprint" "$old_request_device_id" \
   >"$root/new-to-old-legacy-accept.txt"
+
+stage="NEW to OLD: explicitly probe the pinned peer after legacy acceptance"
+run_se "$se_bin" "$new_requester" ls "$new_endpoint" \
+  >"$root/new-to-old-explicit-probe.txt"
 
 wait_current_request "$new_requester" "$new_request_id" '
   .direction == "outgoing" and

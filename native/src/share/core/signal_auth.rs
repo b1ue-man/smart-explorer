@@ -17,6 +17,11 @@ mod replay;
 pub(super) use replay::remember_replay;
 use replay::{remember_presence, replay_key, signature_seen};
 
+/// A probe must preserve the immediate, cross-relation downgrade marker too.
+pub(super) fn peer_signature_seen(state: &ShareAuthState, presence: &PeerPresence) -> bool {
+    signature_seen(&state.seen_nonces, presence)
+}
+
 /// Handles one legacy signaling line; returns whether it was a pong. With
 /// `tracked_direct` negotiated, legacy decisions are dropped: they carry no
 /// signed decision and must not override verified ones (S30, S46).
