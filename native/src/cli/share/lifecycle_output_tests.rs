@@ -78,6 +78,7 @@ fn grant(peer: DirectPeerIdentity) -> DirectGrant {
         state: DirectGrantState::Accepted,
         updated_at: 20,
         exec: Default::default(),
+        write: false,
     }
 }
 
@@ -123,6 +124,7 @@ fn output_separates_delivery_receipt_authorization_and_connectivity() {
         lan_candidates: Vec::new(),
         lan_seen_at: None,
         lan_uplink: None,
+        relation: Default::default(),
     });
     profiles
         .queue_outgoing_direct_request("contact", request.clone())

@@ -19,6 +19,7 @@ fn stale_generation_never_runs_an_acceptance_mutation() {
             state: DirectGrantState::Accepted,
             updated_at: 1,
             exec: Default::default(),
+            write: false,
         });
         Ok(())
     });

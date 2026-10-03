@@ -3,11 +3,11 @@ use super::core::public_fingerprint;
 use super::direct_reciprocal_coordinator::DirectReciprocalCoordinator;
 use super::fs::ShareExportConfig;
 use super::identity::ShareIdentity;
+use super::server_address::SignalServerConfig;
 use super::service::ShareService;
 use super::signal_auth::{
     remember_nonce, verify_direct_access_accepted_using, verify_local_direct_request,
 };
-use super::signal_connection::{normalize_signal_endpoint, normalize_tcp_addr, signal_endpoints};
 use super::signal_presence::build_presence;
 use super::types::ShareAuthState;
 use super::types::{
@@ -65,6 +65,7 @@ fn configure_requires_worker_ack_before_reporting_success() {
         lan_candidates: Vec::new(),
         lan_seen_at: None,
         lan_uplink: None,
+        relation: Default::default(),
     };
     let room = RoomProfile {
         id: "room-profile-a".into(),
@@ -75,6 +76,7 @@ fn configure_requires_worker_ack_before_reporting_success() {
         status: ShareStatus::Waiting,
         members: Vec::new(),
         exports: ShareExportConfig::default(),
+        policy: crate::share::RoomPolicy::new_room(),
     };
     assert!(svc
         .cmd(ShareCmd::Configure {
@@ -155,28 +157,44 @@ fn local_commands_are_acknowledged_while_server_hello_is_stalled() {
 
 #[test]
 fn signal_endpoint_config_supports_https_and_fallbacks() {
+    let config =
+        SignalServerConfig::parse_stored(" wss://share.example/ws ; 10.0.0.5:51820 ").unwrap();
+    let labels: Vec<_> = config
+        .endpoints()
+        .iter()
+        .map(|endpoint| endpoint.label())
+        .collect();
+    assert_eq!(labels, ["wss://share.example/ws", "tcp://10.0.0.5:51820"]);
+    // With TLS configured the plaintext entry is never a fallback.
+    assert_eq!(config.active_endpoints().len(), 1);
     assert_eq!(
-        signal_endpoints(" wss://share.example/ws ; 10.0.0.5:51820 "),
-        vec![
-            "wss://share.example/ws".to_string(),
-            "10.0.0.5:51820".to_string()
-        ]
-    );
-    assert_eq!(
-        normalize_signal_endpoint("https://share.example/ws"),
+        SignalServerConfig::parse_stored("https://share.example/ws")
+            .unwrap()
+            .canonical(),
         "wss://share.example/ws"
     );
     assert_eq!(
-        normalize_signal_endpoint("http://share.example/ws"),
+        SignalServerConfig::parse_stored("http://share.example/ws")
+            .unwrap()
+            .canonical(),
         "ws://share.example/ws"
     );
 }
 
 #[test]
 fn tcp_endpoint_defaults_to_share_port() {
-    assert_eq!(normalize_tcp_addr("share.example"), "share.example:51820");
-    assert_eq!(normalize_tcp_addr("share.example:443"), "share.example:443");
-    assert_eq!(normalize_tcp_addr("[::1]:51820"), "[::1]:51820");
+    for (stored, canonical) in [
+        ("share.example", "tcp://share.example:51820"),
+        ("share.example:443", "tcp://share.example:443"),
+        ("[::1]:51820", "tcp://[::1]:51820"),
+    ] {
+        assert_eq!(
+            SignalServerConfig::parse_stored(stored)
+                .unwrap()
+                .canonical(),
+            canonical
+        );
+    }
 }
 
 #[test]
@@ -239,6 +257,7 @@ fn direct_accept_or_reject_requires_signed_owner_presence() {
         lan_candidates: Vec::new(),
         lan_seen_at: None,
         lan_uplink: None,
+        relation: Default::default(),
     };
     svc.auth.lock().unwrap().direct_contacts = vec![contact];
     let signed = build_presence("direct", "lookup-owner", &owner, &secret, &svc.iroh).unwrap();
@@ -293,6 +312,7 @@ fn presence_binds_node_id_and_relay_url() {
         lan_candidates: Vec::new(),
         lan_seen_at: None,
         lan_uplink: None,
+        relation: Default::default(),
     };
     svc.auth.lock().unwrap().direct_contacts = vec![contact];
     let presence = build_presence("direct", relation_id, &owner, &secret, &svc.iroh).unwrap();
