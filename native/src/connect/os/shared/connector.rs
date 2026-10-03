@@ -344,7 +344,7 @@ fn connect_share(form: ConnectForm, secret: Option<String>, port: u16) -> Connec
 /// Blocks on the network - call off the UI thread.
 pub fn open_gdrive(path: &str) -> Result<(BackendHandle, String), String> {
     let be = crate::gdrive::GDriveBackend::connect(path)?;
-    let root = if path.trim().is_empty() {
+    let root = if path.is_empty() {
         "/".to_string()
     } else {
         path.to_string()

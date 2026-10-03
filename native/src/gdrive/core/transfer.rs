@@ -134,11 +134,12 @@ impl GDriveBackend {
         spool: &mut File,
         size: u64,
         expected_md5: &str,
+        mtime_ms: Option<i64>,
     ) -> VfsResult<()> {
         // A retry after the content commit but before staging cleanup can finish
         // without starting a second upload.
         if self.uploaded_id_matches(target_id, size, expected_md5)? {
-            return Ok(());
+            return self.preserve_modified_time(target_id, mtime_ms);
         }
 
         let upload = self.upload_url();
@@ -148,14 +149,18 @@ impl GDriveBackend {
         );
         let bearer = format!("Bearer {}", self.bearer()?);
         let agent = self.http.api();
-        let session = match initiate(&agent, "PATCH", &url, &bearer, size, "{}") {
+        let metadata = match mtime_ms.and_then(super::stage_time::formatted) {
+            Some(time) => serde_json::json!({"modifiedTime": time}).to_string(),
+            None => "{}".to_string(),
+        };
+        let session = match initiate(&agent, "PATCH", &url, &bearer, size, &metadata) {
             Ok(location) => location,
             Err(error) => {
                 if self
                     .uploaded_id_matches(target_id, size, expected_md5)
                     .unwrap_or(false)
                 {
-                    return Ok(());
+                    return self.preserve_modified_time(target_id, mtime_ms);
                 }
                 return Err(error);
             }
@@ -172,7 +177,8 @@ impl GDriveBackend {
         // Promotion requires stronger confirmation than the ordinary writer:
         // the preserved destination ID, byte count, and checksum must all match
         // before the staging object can be removed.
-        self.verify_uploaded_id(target_id, size, expected_md5)
+        self.verify_uploaded_id(target_id, size, expected_md5)?;
+        self.preserve_modified_time(target_id, mtime_ms)
     }
 
     /// The ID a create at `key` uses: the one an earlier, possibly committed

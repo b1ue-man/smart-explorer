@@ -74,10 +74,7 @@ pub(super) async fn rename_request(
     };
     Ok(match session.extended(POSIX_RENAME, payload).await? {
         Packet::Status(status) if status.status_code == StatusCode::Ok => Ok(()),
-        Packet::Status(status) => Err(io::Error::other(format!(
-            "posix-rename {from} → {to}: {}: {}",
-            status.status_code, status.error_message
-        ))),
+        Packet::Status(status) => Err(io_err(SftpError::Status(status))),
         _ => Err(io::Error::other(
             "posix-rename: unerwartete Antwort des SFTP-Servers",
         )),

@@ -29,6 +29,10 @@ mod connection;
 mod copy_data;
 #[path = "core/errors.rs"]
 mod errors;
+#[path = "core/extensions.rs"]
+mod extensions;
+#[path = "core/reversible_replace.rs"]
+mod reversible_replace;
 #[path = "core/exec.rs"]
 mod exec;
 #[path = "core/io_adapters.rs"]

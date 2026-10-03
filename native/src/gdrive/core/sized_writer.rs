@@ -36,6 +36,7 @@ pub(super) fn open_fresh(
         path,
         size,
         Purpose::Fresh,
+        None,
     )?))
 }
 
@@ -49,7 +50,13 @@ pub(super) fn open_stage(
         path,
         size,
         Purpose::Stage,
+        None,
     )?))
+}
+
+pub(super) fn open_stage_timed(backend: &GDriveBackend, path: &str, size: u64, mtime_ms: i64)
+    -> VfsResult<Box<dyn Write + Send>> {
+    Ok(Box::new(SizedWriter::open(backend, path, size, Purpose::Stage, Some(mtime_ms))?))
 }
 
 struct SizedWriter {
@@ -87,7 +94,7 @@ enum Body {
 }
 
 impl SizedWriter {
-    fn open(backend: &GDriveBackend, path: &str, size: u64, purpose: Purpose) -> VfsResult<Self> {
+    fn open(backend: &GDriveBackend, path: &str, size: u64, purpose: Purpose, mtime_ms: Option<i64>) -> VfsResult<Self> {
         let key = norm(path);
         if key.is_empty() {
             return Err(io::Error::new(
@@ -124,6 +131,7 @@ impl SizedWriter {
                 parent_id,
                 title,
                 declare_binary: matches!(purpose, Purpose::Stage),
+                mtime_ms,
             },
             size,
             received: 0,

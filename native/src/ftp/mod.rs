@@ -20,3 +20,9 @@ mod writer;
 mod transfer_engine_task_tests;
 
 pub use core_impl::backend_from_url;
+#[path = "core/errors.rs"]
+mod errors;
+#[path = "core/extensions.rs"]
+mod extensions;
+#[path = "core/metadata.rs"]
+mod metadata;

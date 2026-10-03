@@ -17,6 +17,8 @@ fn request_err(error: ureq::Error, create_new: bool) -> io::Error {
     }
     let kind = if create_new && matches!(&error, ureq::Error::Status(412, _)) {
         io::ErrorKind::AlreadyExists
+    } else if matches!(&error, ureq::Error::Status(401 | 403, _)) {
+        io::ErrorKind::PermissionDenied
     } else {
         io::ErrorKind::Other
     };

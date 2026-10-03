@@ -6,6 +6,7 @@ fn object(id: &str) -> DriveObject {
         mime_type: "application/octet-stream".into(),
         size: Some(3),
         md5: Some("900150983cd24fb0d6963f7d28e17f72".into()),
+        mtime_ms: None,
     }
 }
 

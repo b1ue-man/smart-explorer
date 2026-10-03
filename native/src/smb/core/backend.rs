@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct SmbBackend {
-    session: Arc<SmbSession>,
+    pub(super) session: Arc<SmbSession>,
     /// The share of the connection root: the only entry at the server level.
     share: String,
     root: String,
@@ -212,6 +212,7 @@ impl SmbBackend {
 }
 
 impl Backend for SmbBackend {
+    fn extensions(&self) -> Option<&dyn crate::vfs::BackendExtensions> { Some(self) }
     fn scheme(&self) -> Scheme {
         Scheme::Smb
     }

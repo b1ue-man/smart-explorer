@@ -115,7 +115,7 @@ fn propfind_retries_when_body_drops_after_headers() {
     });
 
     let backend = backend_for(format!("http://{address}"));
-    assert_eq!(backend.propfind("/", "0").unwrap(), "<multistatus/>");
+    assert_eq!(&*backend.propfind("/", "0").unwrap(), "<multistatus/>");
     server.join().unwrap();
     assert_eq!(requests.load(Ordering::SeqCst), 2);
 }
@@ -197,8 +197,8 @@ fn propfind_reconnects_after_ambiguous_stale_pool_close() {
     let base = format!("http://{address}");
     let backend = backend_for(base);
 
-    assert_eq!(backend.propfind("/", "0").unwrap(), "<multistatus/>");
-    assert_eq!(backend.propfind("/", "0").unwrap(), "<multistatus/>");
+    assert_eq!(&*backend.propfind("/", "0").unwrap(), "<multistatus/>");
+    assert_eq!(&*backend.propfind("/", "0").unwrap(), "<multistatus/>");
     server.join().unwrap();
     assert_eq!(requests.load(Ordering::SeqCst), 3);
 }

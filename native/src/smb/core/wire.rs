@@ -5,7 +5,7 @@
 //! whether it is a link or a data file (`listing::is_data_reparse_tag`).
 use super::listing::{self, Attributes};
 use super::url::host_of;
-use crate::vfs::VfsMeta;
+use crate::vfs::{VfsListing, VfsMeta};
 use smb2::client::Connection;
 use smb2::msg::close::CloseRequest;
 use smb2::msg::create::{
@@ -128,7 +128,7 @@ pub(super) fn attributes_of(created: &CreateResponse) -> Attributes {
 
 /// QUERY_INFO(FileAttributeTagInformation) for `file_id` (the sentinel
 /// inside a compound).
-fn attribute_tag_request(file_id: FileId) -> QueryInfoRequest {
+pub(super) fn attribute_tag_request(file_id: FileId) -> QueryInfoRequest {
     QueryInfoRequest {
         info_type: InfoType::File,
         file_info_class: FILE_ATTRIBUTE_TAG_INFORMATION,
@@ -142,7 +142,7 @@ fn attribute_tag_request(file_id: FileId) -> QueryInfoRequest {
 
 /// The reparse tag of a QUERY_INFO answer; `None` when the server refused
 /// or answered something unreadable (the entry then stays link-like).
-fn reparse_tag_of(frame: &Frame) -> Option<u32> {
+pub(super) fn reparse_tag_of(frame: &Frame) -> Option<u32> {
     if frame.header.status != NtStatus::SUCCESS {
         return None;
     }
@@ -198,6 +198,12 @@ pub(super) fn ends_listing(status: NtStatus, first_query: bool) -> bool {
 /// Opening follows a link to a directory (browsing into it is allowed);
 /// the entries keep their own reparse attribute.
 pub(super) async fn list(conn: &Connection, tree: &Tree, rel: &str) -> smb2::Result<Vec<VfsMeta>> {
+    let listing = list_tolerant(conn, tree, rel).await?;
+    if !listing.omitted.is_empty() { return Err(Error::invalid_data("SMB listing has protected omissions")) }
+    Ok(listing.entries)
+}
+
+pub(super) async fn list_tolerant(conn: &Connection, tree: &Tree, rel: &str) -> smb2::Result<VfsListing> {
     let open = open_request(
         tree,
         rel,
@@ -218,12 +224,13 @@ pub(super) async fn list(conn: &Connection, tree: &Tree, rel: &str) -> smb2::Res
     Ok(entries)
 }
 
-async fn query_all(conn: &Connection, tree: &Tree, file_id: FileId) -> smb2::Result<Vec<VfsMeta>> {
+async fn query_all(conn: &Connection, tree: &Tree, file_id: FileId) -> smb2::Result<VfsListing> {
     let buffer_len = conn
         .params()
         .map(|params| params.max_transact_size.min(QUERY_BUFFER_LEN))
         .unwrap_or(QUERY_BUFFER_LEN);
-    let mut entries = Vec::new();
+    let mut entries = VfsListing::default();
+    let mut names = std::collections::HashSet::new();
     let mut restart = true;
     loop {
         let request = QueryDirectoryRequest {
@@ -251,9 +258,15 @@ async fn query_all(conn: &Connection, tree: &Tree, file_id: FileId) -> smb2::Res
         if response.output_buffer.is_empty() {
             return Ok(entries);
         }
-        entries.extend(
-            listing::parse_directory_info(&response.output_buffer).map_err(Error::invalid_data)?,
-        );
+        let page = listing::parse_directory_info_tolerant(&response.output_buffer).map_err(Error::invalid_data)?;
+        for name in page.entries.iter().map(|entry| &entry.name)
+            .chain(page.omitted.iter().map(|omission| &omission.rel)) {
+            if !names.insert(name.clone()) {
+                return Err(Error::invalid_data("SMB listing repeated or lossily collided on a child name"));
+            }
+        }
+        entries.entries.extend(page.entries);
+        entries.omitted.extend(page.omitted);
         restart = false;
     }
 }

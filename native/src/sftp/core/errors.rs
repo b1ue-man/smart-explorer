@@ -38,10 +38,20 @@ impl IntoIoError for russh::keys::Error {
 
 impl IntoIoError for russh_sftp::client::error::Error {
     fn into_io_error(self) -> io::Error {
-        match self {
-            error @ Self::Timeout => io::Error::new(io::ErrorKind::TimedOut, error.to_string()),
-            error => io::Error::other(error.to_string()),
-        }
+        use russh_sftp::protocol::StatusCode;
+        let kind = match &self {
+            Self::Timeout => io::ErrorKind::TimedOut,
+            Self::Status(status) => match status.status_code {
+                StatusCode::NoSuchFile => io::ErrorKind::NotFound,
+                StatusCode::PermissionDenied => io::ErrorKind::PermissionDenied,
+                StatusCode::OpUnsupported => io::ErrorKind::Unsupported,
+                StatusCode::NoConnection | StatusCode::ConnectionLost => io::ErrorKind::ConnectionAborted,
+                StatusCode::BadMessage => io::ErrorKind::InvalidInput,
+                _ => io::ErrorKind::Other,
+            },
+            _ => io::ErrorKind::Other,
+        };
+        io::Error::new(kind, self.to_string())
     }
 }
 

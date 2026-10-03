@@ -18,14 +18,9 @@
 //! want of a connection.
 use std::io;
 
-use super::core_impl::{basename, parent_dir, parse_list_line};
+use super::core_impl::{basename, parent_dir};
 use super::io_adapters::FtpConnection;
 use crate::vfs::{Backend, VfsMeta};
-use suppaftp::FtpError;
-
-fn io_err<E: std::fmt::Display>(error: E) -> io::Error {
-    io::Error::other(error.to_string())
-}
 
 fn already_exists(path: &str) -> io::Error {
     io::Error::new(
@@ -46,44 +41,29 @@ pub(super) fn require_absent<B: Backend + ?Sized>(backend: &B, path: &str) -> io
 /// Fails with `AlreadyExists` when a file named `path` (a stage's random
 /// name) exists: SIZE where the server has it, else a listing of the parent.
 pub(super) fn require_stage_free(connection: &FtpConnection, path: &str) -> io::Result<()> {
-    let taken = match size_probe(connection, path)? {
-        Some(taken) => taken,
-        None => entry(connection, path)?.is_some(),
-    };
+    let taken = entry(connection, path)?.is_some();
     if taken {
         return Err(already_exists(path));
     }
     Ok(())
 }
 
-/// `Some(true)`: SIZE found a file; `Some(false)`: the server answered 550,
-/// no file of that name; `None`: the answer says nothing about the name (no
-/// SIZE, or not in this transfer mode).
-fn size_probe(connection: &FtpConnection, path: &str) -> io::Result<Option<bool>> {
-    connection.with_stream_read(|stream| match stream.size(path) {
-        Ok(_) => Ok(Some(true)),
-        Err(FtpError::UnexpectedResponse(response)) if response.status.code() == 550 => {
-            Ok(Some(false))
-        }
-        Err(FtpError::UnexpectedResponse(_)) => Ok(None),
-        Err(error) => Err(io_err(error)),
-    })
-}
-
 fn listing(connection: &FtpConnection, folder: &str) -> io::Result<Vec<VfsMeta>> {
-    let lines = connection.with_stream_read(|stream| stream.list(Some(folder)).map_err(io_err))?;
-    lines
-        .into_iter()
-        .map(|line| parse_list_line(&line))
-        .collect()
+    let listing = super::metadata::list(connection, folder)?;
+    if !listing.omitted.is_empty() {
+        return Err(io::Error::new(io::ErrorKind::InvalidData,
+            "FTP promotion needs a complete, addressable namespace listing"));
+    }
+    Ok(listing.entries)
 }
 
 /// `path`'s entry in a listing of its parent.
 fn entry(connection: &FtpConnection, path: &str) -> io::Result<Option<VfsMeta>> {
-    let name = basename(path);
-    Ok(listing(connection, &parent_dir(path))?
-        .into_iter()
-        .find(|meta| meta.name == name))
+    match super::metadata::stat(connection, path) {
+        Ok(meta) => Ok(Some(meta)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 /// Publishes the flushed stage `staged` as `destination` on `connection`;
@@ -94,7 +74,12 @@ pub(super) fn publish(
     destination: &str,
     replace: bool,
 ) -> io::Result<()> {
-    let (stage, existing) = if parent_dir(staged) == parent_dir(destination) {
+    let (stage, existing) = if connection.features()?.mlst {
+        // Existing objects need one MLST each, not a data connection and
+        // full parent listing for every promotion. Ambiguous 550 still uses
+        // the metadata module's complete-listing absence proof.
+        (entry(connection, staged)?, entry(connection, destination)?)
+    } else if parent_dir(staged) == parent_dir(destination) {
         let entries = listing(connection, &parent_dir(destination))?;
         let find = |path: &str| {
             let name = basename(path);
@@ -107,7 +92,7 @@ pub(super) fn publish(
     let stage = stage.ok_or_else(|| {
         io::Error::new(io::ErrorKind::NotFound, format!("{staged} nicht gefunden"))
     })?;
-    if stage.is_dir || stage.is_symlink {
+    if stage.is_dir || stage.is_symlink || stage.special {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "staged promotion source must be a regular file",
@@ -116,7 +101,7 @@ pub(super) fn publish(
     match existing {
         None => {}
         Some(_) if !replace => return Err(already_exists(destination)),
-        Some(meta) if meta.is_dir || meta.is_symlink => {
+        Some(meta) if meta.is_dir || meta.is_symlink || meta.special => {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "refusing to replace a directory or link-like destination with a file",
@@ -124,5 +109,7 @@ pub(super) fn publish(
         }
         Some(_) => {}
     }
-    connection.with_stream_mutation(|stream| stream.rename(staged, destination).map_err(io_err))
+    super::errors::command_path(staged)?;
+    super::errors::command_path(destination)?;
+    connection.with_stream_mutation(|stream| stream.rename(staged, destination).map_err(super::errors::map))
 }

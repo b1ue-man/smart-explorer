@@ -1,6 +1,5 @@
-use std::future::Future;
 use std::io;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::sync::{mpsc, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -36,29 +35,9 @@ impl DnsService {
         thread::Builder::new()
             .name("ftp-dns".to_string())
             .spawn(move || {
-                let initialized = (|| {
-                    let runtime = tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()
-                        .map_err(|error| error.to_string())?;
-                    let resolver = hickory_resolver::Resolver::builder_tokio()
-                        .map_err(|error| error.to_string())?
-                        .build()
-                        .map_err(|error| error.to_string())?;
-                    Ok::<_, String>((runtime, resolver))
-                })();
-                let (runtime, resolver) = match initialized {
-                    Ok(initialized) => {
-                        let _ = startup.send(Ok(()));
-                        initialized
-                    }
-                    Err(error) => {
-                        let _ = startup.send(Err(error));
-                        return;
-                    }
-                };
+                let _ = startup.send(Ok::<(), String>(()));
                 while let Ok(request) = incoming.recv() {
-                    let result = resolve_request(&runtime, &resolver, &request);
+                    let result = resolve_request(&request);
                     let _ = request.reply.send(result);
                 }
             })
@@ -82,37 +61,18 @@ fn service(startup_timeout: Duration) -> io::Result<&'static DnsService> {
     }
 }
 
-fn run_lookup<T>(
-    runtime: &tokio::runtime::Runtime,
-    timeout: Duration,
-    lookup: impl Future<Output = io::Result<T>>,
-) -> io::Result<T> {
-    runtime.block_on(async {
-        tokio::time::timeout(timeout, lookup)
-            .await
-            .map_err(|_| timed_out("FTP DNS resolution timed out"))?
-    })
-}
-
-fn resolve_request(
-    runtime: &tokio::runtime::Runtime,
-    resolver: &hickory_resolver::TokioResolver,
-    request: &DnsRequest,
-) -> io::Result<Vec<SocketAddr>> {
-    let remaining = request
+fn resolve_request(request: &DnsRequest) -> io::Result<Vec<SocketAddr>> {
+    request
         .expires
         .checked_duration_since(Instant::now())
         .filter(|remaining| !remaining.is_zero())
         .ok_or_else(|| timed_out("FTP DNS resolution timed out in queue"))?;
-    let lookup = run_lookup(runtime, remaining, async {
-        resolver
-            .lookup_ip(request.host.as_str())
-            .await
-            .map_err(io_err)
-    })?;
+    // getaddrinfo uses the OS's mDNS/LLMNR/VPN policy. There is exactly one
+    // worker and a bounded queue: an uninterruptible OS call can block that
+    // worker, but callers still time out and cannot spawn unbounded workers.
+    let lookup = (request.host.as_str(), request.port).to_socket_addrs()?;
     let mut addresses = Vec::new();
-    for ip in lookup.iter() {
-        let address = SocketAddr::new(ip, request.port);
+    for address in lookup {
         if !addresses.contains(&address) {
             addresses.push(address);
         }
@@ -123,6 +83,7 @@ fn resolve_request(
     if addresses.is_empty() {
         Err(io_err("FTP DNS returned no address"))
     } else {
+        if Instant::now() >= request.expires { return Err(timed_out("FTP OS resolver exceeded its deadline")) }
         Ok(addresses)
     }
 }
@@ -181,25 +142,6 @@ pub(super) fn resolve_host(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn pending_lookup_is_cancelled_by_deadline_on_current_thread_runtime() {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let started = Instant::now();
-        for _ in 0..4 {
-            let error = run_lookup(
-                &runtime,
-                Duration::from_millis(10),
-                std::future::pending::<io::Result<Vec<IpAddr>>>(),
-            )
-            .unwrap_err();
-            assert_eq!(error.kind(), io::ErrorKind::TimedOut);
-        }
-        assert!(started.elapsed() < Duration::from_secs(2));
-    }
 
     #[test]
     fn literal_ip_bypasses_dns_service_even_after_deadline() {

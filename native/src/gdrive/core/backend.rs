@@ -20,19 +20,13 @@ impl Backend for GDriveBackend {
     }
 
     fn state_identity(&self) -> String {
-        use sha2::{Digest, Sha256};
-        let account = self
-            .tokens_guard()
-            .ok()
-            .map(|tokens| {
-                let digest = Sha256::digest(tokens.refresh_token.as_bytes());
-                digest[..12]
-                    .iter()
-                    .map(|byte| format!("{byte:02x}"))
-                    .collect::<String>()
-            })
-            .unwrap_or_else(|| "token-cache-unavailable".into());
-        format!("gdrive:path-v2:{account}:{}", self.root)
+        // The permission ID identifies the account through refresh-token
+        // rotation. Persisted path-v2 locators retain their existing meaning.
+        format!("gdrive:path-v2:{}:{}", self.drive_account_key, self.root)
+    }
+
+    fn extensions(&self) -> Option<&dyn crate::vfs::BackendExtensions> {
+        Some(self)
     }
 
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
@@ -97,20 +91,17 @@ impl Backend for GDriveBackend {
         self.stat_marker_aware(path)
     }
 
-    fn has_duplicate_file_names(&self) -> bool { true }
+    fn has_duplicate_file_names(&self) -> bool {
+        true
+    }
 
     fn list_dir_for_sync(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
-        let mut entries = self.list_dir(path)?;
-        for entry in &mut entries {
-            // Directory aliases identify distinct roots and stay distinct.
-            // Literal marker-like titles are encoded and never match here.
-            if !entry.is_dir && !entry.is_symlink {
-                if let Some((plain, _)) = super::duplicates::parse_marker(&entry.name) {
-                    entry.name = plain.to_string();
-                }
-            }
+        let listing = self.sync_listing(path)?;
+        if !listing.omitted.is_empty() {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData,
+                "Drive sync listing has protected omissions; use the tolerant listing"));
         }
-        Ok(entries)
+        Ok(listing.entries)
     }
 
     fn item_id(&self, path: &str) -> VfsResult<Option<String>> {
@@ -272,7 +263,12 @@ impl Backend for GDriveBackend {
     fn promote_staged(&self, staged: &str, destination: &str) -> VfsResult<()> {
         self.promote_staged_file(staged, destination)
     }
-    fn promote_staged_to_id(&self, staged: &str, destination: &str, id: Option<&str>) -> VfsResult<()> {
+    fn promote_staged_to_id(
+        &self,
+        staged: &str,
+        destination: &str,
+        id: Option<&str>,
+    ) -> VfsResult<()> {
         self.promote_staged_file_to_id(staged, destination, id)
     }
 
@@ -352,9 +348,20 @@ impl Backend for GDriveBackend {
 }
 
 impl GDriveBackend {
+    /// The former token-keyed identity, solely to migrate an existing
+    /// baseline belonging to the currently authenticated account. It cannot
+    /// recover identities of tokens that were already rotated and lost.
+    pub(crate) fn legacy_state_identity(&self) -> VfsResult<String> {
+        use sha2::{Digest, Sha256};
+        let tokens = self.tokens_guard()?;
+        let digest = Sha256::digest(tokens.refresh_token.as_bytes());
+        let account = digest[..12].iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+        Ok(format!("gdrive:path-v2:{account}:{}", self.root))
+    }
+
     /// The listing exactly as Drive returns it: same-name siblings keep their
     /// raw name. `list_dir` renders it path-unique before anyone sees it.
-    fn list_dir_entries(&self, path: &str) -> VfsResult<Vec<RawEntry>> {
+    pub(super) fn list_dir_entries(&self, path: &str) -> VfsResult<Vec<RawEntry>> {
         let id = self.resolve(path)?;
         let mut out = Vec::new();
         let mut page_token: Option<String> = None;
@@ -382,6 +389,7 @@ impl GDriveBackend {
                 out.push(RawEntry {
                     meta,
                     mime: f["mimeType"].as_str().map(str::to_string),
+                    sync_problem: Self::sync_metadata_problem(f),
                 });
             }
             page_token = page.next_token.map(str::to_owned);
@@ -408,6 +416,7 @@ impl GDriveBackend {
                 name: "/".into(),
                 is_dir: true,
                 is_symlink: false,
+                special: false,
                 size: 0,
                 mtime_ms: 0,
                 btime_ms: 0,
@@ -446,7 +455,8 @@ impl GDriveBackend {
     }
 }
 
-struct RawEntry {
-    meta: VfsMeta,
-    mime: Option<String>,
+pub(super) struct RawEntry {
+    pub(super) meta: VfsMeta,
+    pub(super) mime: Option<String>,
+    pub(super) sync_problem: Option<&'static str>,
 }

@@ -22,6 +22,10 @@ pub(super) fn overload_or_full(error: &ureq::Error) -> Option<io::Error> {
             io::ErrorKind::StorageFull,
             format!("Kein Speicherplatz mehr auf dem WebDAV-Server: {error}"),
         )),
+        ureq::Error::Status(413, _) => Some(io::Error::new(
+            io::ErrorKind::QuotaExceeded,
+            format!("WebDAV-Server verweigert den Umfang des Uploads: {error}"),
+        )),
         _ => None,
     }
 }
