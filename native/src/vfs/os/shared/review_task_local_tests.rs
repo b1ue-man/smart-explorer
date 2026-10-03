@@ -325,8 +325,11 @@ mod unix {
             assert_eq!(limits.mtime_precision, precision, "{variable}");
             assert_eq!(limits.max_file_size, max_file_size, "{variable}");
             assert!(limits.windows_names, "{variable}");
-            let identity = local_volume_identity(&directory).unwrap();
-            assert!(identity.is_some(), "{variable}: the image has a UUID");
+            let identity = local_volume_identity(&directory)
+                .unwrap()
+                .expect("the real image has a UUID");
+            let batched_flush =
+                crate::vfs::fs_profile::mount_kind(&identity.fs_type) != MountKind::Fuse;
             let stage = format!("{directory}/review-task.txt.se-sync-0123456789abcdef");
             std::fs::write(&stage, b"x").unwrap();
             let wanted = 1_600_000_001_234;
@@ -345,7 +348,7 @@ mod unix {
                 precision.same_instant(stored, wanted),
                 "{stored} vs {wanted}"
             );
-            assert!(sync_filesystem(&backend, &directory).unwrap());
+            assert_eq!(sync_filesystem(&backend, &directory).unwrap(), batched_flush);
             std::fs::remove_file(&stage).unwrap();
         }
     }

@@ -5,7 +5,7 @@
 use std::ffi::OsStr;
 use std::io;
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::{Path, PathBuf};
 
 use super::mountinfo::{self, Mount};
@@ -81,14 +81,32 @@ fn uuid_from_links(devices: &[(u32, u32)]) -> Option<String> {
 
 /// `E:ID_FS_UUID=` of the udev database entry of a block device.
 fn uuid_from_udev((major, minor): (u32, u32)) -> Option<String> {
+    udev_property((major, minor), "ID_FS_UUID").map(|uuid| uuid.to_ascii_lowercase())
+}
+
+/// A FUSE block driver names its real source device, unlike a network FUSE
+/// mount. The device's udev type describes limits, never FUSE durability.
+pub(super) fn fuse_block_type(mount: &Mount) -> Option<String> {
+    if mount.fs_type != "fuseblk" || !mount.source.starts_with("/dev/") {
+        return None;
+    }
+    let metadata = std::fs::metadata(&mount.source).ok()?;
+    if !metadata.file_type().is_block_device() {
+        return None;
+    }
+    udev_property(mountinfo::split_device(metadata.rdev()), "ID_FS_TYPE")
+}
+
+fn udev_property((major, minor): (u32, u32), property: &str) -> Option<String> {
     if major == 0 {
         return None;
     }
     let text = std::fs::read_to_string(format!("{UDEV_DATA}/b{major}:{minor}")).ok()?;
+    let prefix = format!("E:{property}=");
     text.lines()
-        .find_map(|line| line.strip_prefix("E:ID_FS_UUID="))
-        .filter(|uuid| !uuid.is_empty())
-        .map(str::to_ascii_lowercase)
+        .find_map(|line| line.strip_prefix(prefix.as_str()))
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
 }
 
 /// udev link names encode special characters as `\xHH`.

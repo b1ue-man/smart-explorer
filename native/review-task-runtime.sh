@@ -30,7 +30,7 @@ trap cleanup EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
 sudo -n true
-for tool in losetup mkfs.fat mkfs.exfat mount umount sshfs fusermount3 socat udevadm; do
+for tool in losetup mkfs.fat mkfs.exfat mount mount.exfat-fuse umount sshfs fusermount3 socat udevadm; do
   command -v "$tool" >/dev/null || { echo "Missing runtime tool: $tool" >&2; exit 1; }
 done
 [[ -x /usr/lib/openssh/sftp-server ]] || { echo 'OpenSSH sftp-server missing' >&2; exit 1; }
@@ -40,8 +40,15 @@ for fs in fat exfat; do
   loops+=("$device")
   if [[ $fs == fat ]]; then sudo -n mkfs.fat -F 32 "$device"; else sudo -n mkfs.exfat "$device"; fi
   mkdir "$runtime/$fs"
-  sudo -n mount -o "uid=$(id -u),gid=$(id -g),umask=077" "$device" "$runtime/$fs"
   mounts+=("$runtime/$fs")
+  options="uid=$(id -u),gid=$(id -g),umask=077"
+  if [[ $fs == fat ]]; then
+    timeout 45 sudo -n mount -t vfat -o "$options" "$device" "$runtime/$fs"
+  elif ! timeout 45 sudo -n mount -t exfat -o "$options" "$device" "$runtime/$fs"; then
+    echo 'Kernel exFAT mount unavailable; using the real exFAT FUSE driver'
+    timeout 45 sudo -n mount.exfat-fuse -o "$options" "$device" "$runtime/$fs"
+  fi
+  mountpoint -q "$runtime/$fs"
   sudo -n udevadm trigger --action=change "/sys/class/block/${device#/dev/}"
 done
 sudo -n udevadm settle --timeout=30
