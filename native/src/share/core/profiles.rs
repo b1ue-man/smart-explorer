@@ -8,6 +8,7 @@ use super::exec_policy::{reset_all_for_legacy_migration, ExecGrant};
 use super::fs::ShareExportConfig;
 use super::legacy_direct_request::{LegacyDirectRequestEntry, LegacyDirectRequestTombstone};
 use super::removed_direct_peers::RemovedDirectPeer;
+use super::profile_migration::AutoHomeMigration;
 use super::room_relation::RoomRelationMaterial;
 use super::types::{DirectContact, DirectGrant, DirectGrantState, PeerPresence, RoomProfile};
 
@@ -44,6 +45,9 @@ pub struct ShareProfiles {
     pub auto_connect: bool,
     #[serde(default)]
     pub default_direct_exports: ShareExportConfig,
+    /// Durable explanation of the one-time implicit Home restriction.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub auto_home_migrations: Vec<AutoHomeMigration>,
     #[serde(default)]
     pub direct_contacts: Vec<DirectContact>,
     #[serde(default)]
@@ -71,6 +75,7 @@ impl Default for ShareProfiles {
             schema_version: SHARE_PROFILE_VERSION,
             auto_connect: true,
             default_direct_exports: ShareExportConfig::default(),
+            auto_home_migrations: Vec::new(),
             direct_contacts: Vec::new(),
             direct_grants: Vec::new(),
             direct_requests: Vec::new(),
@@ -107,6 +112,7 @@ impl ShareProfiles {
         state: DirectGrantState,
     ) -> Result<(), String> {
         let now = super::core::now_secs();
+        let withdrawn = state == DirectGrantState::Ignored;
         if let Some(g) = self
             .direct_grants
             .iter_mut()
@@ -139,7 +145,15 @@ impl ShareProfiles {
                 state,
                 updated_at: now,
                 exec: ExecGrant::default(),
+                write: false,
             });
+        }
+        if withdrawn {
+            self.withdraw_direct_key(&super::direct_protocol::DirectPeerIdentity {
+                device_id: presence.device_id.clone(), device_name: presence.device_name.clone(),
+                public_key: presence.public_key.clone(), fingerprint: presence.fingerprint.clone(),
+                node_id: presence.node_id.clone(),
+            }, now);
         }
         Ok(())
     }

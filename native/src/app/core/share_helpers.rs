@@ -36,7 +36,9 @@ pub(super) fn export_summary(cfg: &crate::share::ShareExportConfig) -> String {
         parts.push(format!("{} Ordner/Laufwerke", cfg.roots.len()));
     }
     if cfg.include_connections {
-        parts.push("gespeicherte Verbindungen".to_string());
+        parts.push("alte Verbindungsfreigabe; Migration ausstehend".into());
+    } else if cfg.shares_connections() {
+        parts.push(format!("{} gespeicherte Verbindungen", cfg.shared_connections.len()));
     }
     parts.join(", ")
 }

@@ -7,7 +7,7 @@ use std::{fmt, str};
 #[path = "profile_transaction.rs"]
 mod profile_transaction;
 
-use super::profile_persistence::{ProfileChange, ProfilePersistence};
+use super::profile_persistence::{encode_profiles, ProfileChange, ProfilePersistence, MAX_PROFILE_BYTES};
 use super::profiles::{
     direct_contact_secret_account, room_secret_account, ProfileRevision, ShareProfiles,
     SHARE_PROFILE_VERSION,
@@ -16,7 +16,6 @@ use super::room_relation::RoomRelationMaterial;
 use super::types::{DirectContact, DirectGrantState, PeerPresence, RoomProfile};
 
 const PROFILES_FILE: &str = "share_profiles.json";
-const MAX_PROFILE_BYTES: u64 = 1024 * 1024;
 const SECRET_BYTES: usize = 32;
 const PROFILES_LOCK_FILE: &str = "share_profiles.lock";
 static PROFILE_WRITE_LOCK: Mutex<()> = Mutex::new(());
@@ -144,19 +143,30 @@ struct ProfileWriteGuard {
 
 impl ShareProfiles {
     pub fn load_checked(default_home: Option<String>) -> Result<Self, String> {
-        Self::load_checked_with(default_home, &mut SystemProfilePersistence)
+        let mut storage = SystemProfilePersistence::default();
+        for _ in 0..5 {
+            storage.save_conflict = false;
+            match Self::load_checked_with(default_home.clone(), &mut storage) {
+                Err(_) if storage.save_conflict => continue,
+                result => return result,
+            }
+        }
+        Err("Share-Profile wurden waehrend der Migration wiederholt geaendert; bitte erneut versuchen".into())
     }
 
     pub fn load(default_home: Option<String>) -> Self {
-        Self::load_checked(default_home).unwrap_or_default()
+        Self::load_checked(default_home).unwrap_or_else(|_| Self {
+            storage_revision: ProfileRevision::Missing,
+            ..Self::default()
+        })
     }
 
     pub fn save(&mut self) -> Result<(), String> {
-        self.save_with(&mut SystemProfilePersistence)
+        self.save_with(&mut SystemProfilePersistence::default())
     }
 
     pub fn persist_replacement(&mut self, candidate: ShareProfiles) -> Result<(), String> {
-        self.persist_replacement_with(candidate, &mut SystemProfilePersistence)
+        self.persist_replacement_with(candidate, &mut SystemProfilePersistence::default())
     }
 
     /// Reapply an idempotent, field-level mutation to the latest persisted
@@ -182,7 +192,7 @@ impl ShareProfiles {
     }
 
     pub fn add_direct_from_code(&mut self, code: &str, name: &str) -> Result<String, String> {
-        self.add_direct_from_code_with(code, name, &mut SystemProfilePersistence)
+        self.add_direct_from_code_with(code, name, &mut SystemProfilePersistence::default())
     }
 
     pub fn set_direct_grant_persisted(
@@ -190,19 +200,19 @@ impl ShareProfiles {
         presence: &PeerPresence,
         state: DirectGrantState,
     ) -> Result<(), String> {
-        self.set_direct_grant_persisted_with(presence, state, &mut SystemProfilePersistence)
+        self.set_direct_grant_persisted_with(presence, state, &mut SystemProfilePersistence::default())
     }
 
     pub fn remove_direct_contact(&mut self, contact_id: &str) -> Result<ProfileChange, String> {
-        self.remove_direct_contact_with(contact_id, &mut SystemProfilePersistence)
+        self.remove_direct_contact_with(contact_id, &mut SystemProfilePersistence::default())
     }
 
     pub fn add_room_from_code(&mut self, code: &str, name: &str) -> Result<String, String> {
-        self.add_room_from_code_with(code, name, &mut SystemProfilePersistence)
+        self.add_room_from_code_with(code, name, &mut SystemProfilePersistence::default())
     }
 
     pub fn remove_room(&mut self, room_id: &str) -> Result<ProfileChange, String> {
-        self.remove_room_with(room_id, &mut SystemProfilePersistence)
+        self.remove_room_with(room_id, &mut SystemProfilePersistence::default())
     }
 
     pub fn direct_secret_checked(contact: &DirectContact) -> Result<Option<Vec<u8>>, String> {
@@ -247,9 +257,15 @@ impl ShareProfiles {
     }
 }
 
-struct SystemProfilePersistence;
+#[derive(Default)]
+struct SystemProfilePersistence { save_conflict: bool }
 
 impl ProfilePersistence for SystemProfilePersistence {
+    fn saved_connection_accounts(&mut self) -> Result<Option<Vec<String>>, String> {
+        Ok(Some(crate::creds::load_connections_checked()?.iter()
+            .map(|connection| connection.account()).collect()))
+    }
+
     fn load_profiles(&mut self) -> Result<Option<String>, String> {
         load_profiles().map_err(|error| error.to_string())
     }
@@ -259,7 +275,13 @@ impl ProfilePersistence for SystemProfilePersistence {
         contents: &str,
         expected: &ProfileRevision,
     ) -> Result<ProfileRevision, String> {
-        save_profiles(contents, expected).map_err(|error| error.to_string())
+        match save_profiles(contents, expected) {
+            Ok(revision) => { self.save_conflict = false; Ok(revision) }
+            Err(error) => {
+                self.save_conflict = error.kind() == io::ErrorKind::WouldBlock;
+                Err(error.to_string())
+            }
+        }
     }
 
     fn save_secret(&mut self, account: &str, secret: &str) -> Result<(), String> {
@@ -277,6 +299,10 @@ fn commit_transaction_candidate(
 ) -> Result<(), profile_transaction::CommitError> {
     candidate.schema_version = SHARE_PROFILE_VERSION;
     candidate.reconcile_legacy_grants(super::core::now_secs());
+    candidate.recompute_all_identity_conflicts();
+    candidate.validate_direct_ledger().map_err(|error| {
+        profile_transaction::CommitError::Fatal(format!("Share-Profile sind beschaedigt: {error}"))
+    })?;
     candidate
         .validate_legacy_direct_requests()
         .map_err(|error| {
@@ -284,9 +310,7 @@ fn commit_transaction_candidate(
                 "Share-Profile sind beschaedigt: {error}"
             ))
         })?;
-    let contents = serde_json::to_string_pretty(candidate).map_err(|error| {
-        profile_transaction::CommitError::Fatal(format!("Share-Profile kodieren: {error}"))
-    })?;
+    let contents = encode_profiles(candidate).map_err(profile_transaction::CommitError::Fatal)?;
     match save_profiles(&contents, &candidate.storage_revision) {
         Ok(revision) => {
             candidate.storage_revision = revision;
@@ -317,22 +341,19 @@ fn load_relation_secret(account: &str, label: &str) -> Result<Option<Vec<u8>>, S
 
 fn load_profiles() -> io::Result<Option<String>> {
     let path = profiles_path();
-    let metadata = match std::fs::symlink_metadata(&path) {
-        Ok(metadata) => metadata,
+    let file = match crate::support_dirs::open_private_file(&path) {
+        Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),
     };
-    if !metadata.file_type().is_file() {
-        return Err(invalid("Share profiles are not a regular file"));
-    }
+    let metadata = file.metadata()?;
     if metadata.len() > MAX_PROFILE_BYTES {
         return Err(invalid("Share profiles exceed their byte budget"));
     }
     let capacity = usize::try_from(metadata.len())
         .map_err(|_| invalid("Share profile size does not fit this platform"))?;
     let mut bytes = Vec::with_capacity(capacity);
-    std::fs::File::open(path)?
-        .take(MAX_PROFILE_BYTES + 1)
+    file.take(MAX_PROFILE_BYTES + 1)
         .read_to_end(&mut bytes)?;
     if bytes.len() as u64 > MAX_PROFILE_BYTES {
         return Err(invalid("Share profiles exceed their byte budget"));
@@ -351,7 +372,11 @@ fn save_profiles(contents: &str, expected: &ProfileRevision) -> io::Result<Profi
         .as_deref()
         .map(ProfileRevision::from_contents)
         .unwrap_or(ProfileRevision::Missing);
-    if !matches!(expected, ProfileRevision::Untracked) && expected != &current {
+    let matches_current = match expected {
+        ProfileRevision::Untracked => current == ProfileRevision::Missing,
+        revision => revision == &current,
+    };
+    if !matches_current {
         return Err(io::Error::new(
             io::ErrorKind::WouldBlock,
             "Share profiles changed concurrently; reload and retry",
@@ -359,7 +384,7 @@ fn save_profiles(contents: &str, expected: &ProfileRevision) -> io::Result<Profi
     }
     let path = profiles_path();
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    std::fs::create_dir_all(parent)?;
+    crate::support_dirs::ensure_private_dir(parent)?;
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -370,11 +395,7 @@ fn save_profiles(contents: &str, expected: &ProfileRevision) -> io::Result<Profi
             "se-profiles-{}-{nonce:x}-{attempt:x}.tmp",
             std::process::id()
         ));
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&candidate)
-        {
+        match crate::support_dirs::create_private_file(&candidate) {
             Ok(mut file) => {
                 let result = file
                     .write_all(contents.as_bytes())
@@ -414,22 +435,9 @@ fn profile_write_guard() -> io::Result<ProfileWriteGuard> {
         Err(poisoned) => poisoned.into_inner(),
     };
     let directory = crate::support_dirs::app_data_dir();
-    std::fs::create_dir_all(&directory)?;
+    crate::support_dirs::ensure_private_dir(&directory)?;
     let path = directory.join(PROFILES_LOCK_FILE);
-    if let Ok(metadata) = std::fs::symlink_metadata(&path) {
-        if !metadata.file_type().is_file() {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "Share profile transaction lock is not a regular file",
-            ));
-        }
-    }
-    let file_guard = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(path)?;
+    let file_guard = crate::support_dirs::open_private_lock(&path)?;
     file_guard.lock()?;
     Ok(ProfileWriteGuard {
         _process_guard: process_guard,

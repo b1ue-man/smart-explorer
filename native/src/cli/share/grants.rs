@@ -9,6 +9,8 @@ mod grants_exec;
 mod grants_removed;
 #[path = "grants_readmit.rs"]
 mod grants_readmit;
+#[path = "grants_write.rs"]
+mod grants_write;
 
 #[derive(Args)]
 #[command(long_about = "Inspect and revoke direct authorization grants.\n\n\
@@ -25,6 +27,8 @@ pub(super) struct GrantsArgs {
 enum GrantsCommand {
     #[command(about = "List local direct authorization grants and linked requests")]
     List,
+    #[command(about = "Set the write right of one existing contact authorization")]
+    Set(grants_write::WriteArgs),
     #[command(about = "Revoke an authorization; auto-selects the only active grant")]
     Revoke(RevokeArgs),
     #[command(about = "Deliberately reactivate a blocked or suspended grant; Exec stays disabled")]
@@ -76,6 +80,7 @@ struct RevokeArgs {
 pub(super) fn run(args: GrantsArgs) -> Result<(), String> {
     match args.command {
         None | Some(GrantsCommand::List) => list(args.json),
+        Some(GrantsCommand::Set(command)) => grants_write::run(command, args.json),
         Some(GrantsCommand::Revoke(command)) => revoke(command, args.json),
         Some(GrantsCommand::Allow(command)) => grants_readmit::run(command, args.json),
         Some(GrantsCommand::Delete(command)) => grants_removed::delete(command, args.json),
@@ -104,6 +109,7 @@ pub(super) fn values(profiles: &crate::share::ShareProfiles) -> Vec<serde_json::
                 "fingerprint": grant.fingerprint,
                 "grant_state": grant_state_code(&grant.state),
                 "updated_at": grant.updated_at,
+                "write": grant.write,
                 "authorization": {
                     "state": if grant.state == crate::share::DirectGrantState::Accepted {
                         "active"
@@ -140,7 +146,7 @@ pub(super) fn text(profiles: &crate::share::ShareProfiles) -> Vec<String> {
             .collect::<Vec<_>>()
             .join(",");
         lines.push(format!(
-            "grant\t{}\tdevice_name={}\tfingerprint={}\tstate={}\tupdated_at={}\tauthorization={}\texec={}\texec_revision={}\tconnectivity=unknown\trequest_ids={}\tlegacy_selectors={}",
+            "grant\t{}\tdevice_name={}\tfingerprint={}\tstate={}\tupdated_at={}\tauthorization={}\twrite={}\texec={}\texec_revision={}\tconnectivity=unknown\trequest_ids={}\tlegacy_selectors={}",
             clean(&grant.device_id),
             clean(&grant.device_name),
             clean(&grant.fingerprint),
@@ -151,6 +157,7 @@ pub(super) fn text(profiles: &crate::share::ShareProfiles) -> Vec<String> {
             } else {
                 "inactive"
             },
+            grant.write,
             if grant.exec.enabled { "enabled" } else { "disabled" },
             grant.exec.policy_revision,
             request_ids,

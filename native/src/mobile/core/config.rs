@@ -81,9 +81,9 @@ impl HostSettings {
         self.cache_dir.join(name)
     }
 
-    /// The default home location: `homeDir`, else the primary volume. It is
-    /// the default Share export, so without either it is an empty folder of
-    /// its own, never `filesDir` (credentials, tokens and keys live there).
+    /// The browsing home: `homeDir`, else the primary volume. It is also the
+    /// legacy Home migration identity; new Share profiles export nothing.
+    /// The fallback stays separate from files containing credentials/keys.
     pub(crate) fn home(&self) -> PathBuf {
         self.home_dir
             .clone()

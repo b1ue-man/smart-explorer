@@ -162,6 +162,11 @@ impl App {
                     remove_room = Some(room.id.clone());
                 }
             });
+            ui.horizontal_wrapped(|ui| {
+                changed |= ui.checkbox(&mut room.policy.members_may_write, "Mitglieder duerfen schreiben").changed();
+                changed |= ui.checkbox(&mut room.policy.confirm_new_members, "Neue Mitglieder bestaetigen").changed();
+                ui.label("Ein Raum-Code gibt allein keine Ordner frei.");
+            });
             for member in &mut room.members {
                 ui.horizontal_wrapped(|ui| {
                     ui.add(
