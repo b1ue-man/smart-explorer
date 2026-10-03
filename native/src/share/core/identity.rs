@@ -26,7 +26,7 @@ struct IdentityDisk {
     pending_cleanup: Option<IdentityRepairAction>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ShareIdentity {
     pub device_id: String,
     pub device_name: String,
@@ -38,7 +38,7 @@ pub struct ShareIdentity {
     pub(crate) direct_secret: [u8; SECRET_BYTES],
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct DirectCodeRotation {
     pub code: String,
     pub cleanup_warning: Option<String>,
