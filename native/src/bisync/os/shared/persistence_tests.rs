@@ -1,4 +1,5 @@
 use super::*;
+use crate::bisync::{Versioning, VersioningScheme};
 
 fn temp(name: &str) -> PathBuf {
     std::env::temp_dir().join(format!(

@@ -123,6 +123,19 @@ pub(super) fn target_touched_drifted(
     false
 }
 
+pub(super) fn target_touched_drifted_spelled(
+    target: &dyn Backend, root: &str, target_items: &BTreeMap<String, ItemRecord>,
+    changes: &[ResolvedChange], opts: BisyncOptions, spellings: &super::Spellings,
+    side: super::PairSide,
+) -> bool {
+    let mapped: Vec<_> = changes.iter().cloned().map(|mut change| {
+        change.rel = spellings.side_rel(&change.rel, side).to_string();
+        change.old_rel = change.old_rel.map(|old| spellings.side_rel(&old, side).to_string());
+        change
+    }).collect();
+    target_touched_drifted(target, root, target_items, &mapped, opts)
+}
+
 fn target_rel_drifted(
     target: &dyn Backend,
     root: &str,
@@ -144,7 +157,7 @@ fn target_rel_drifted(
         .get(rel)
         .and_then(|i| (!i.deleted).then_some(i.sig).flatten());
     let actual = match target.stat(&join(root, rel)) {
-        Ok(metadata) if metadata.is_symlink || metadata.is_dir => return true,
+        Ok(metadata) if metadata.is_symlink || metadata.is_dir || metadata.special => return true,
         Ok(metadata) => sig_from_meta(&metadata),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(_) => return true,
@@ -157,26 +170,12 @@ pub(super) fn delete_guard_trips(
     target_items: &BTreeMap<String, ItemRecord>,
     opts: BisyncOptions,
 ) -> bool {
-    let deletes = plan
-        .upserts
-        .iter()
-        .chain(plan.deletes.iter())
-        .filter(|action| {
-            matches!(
-                action,
-                Action::DeleteA(_)
-                    | Action::DeleteB(_)
-                    | Action::FinalizeMoveAtoB(_)
-                    | Action::FinalizeMoveBtoA(_)
-            )
-        })
-        .count() as u64;
-    if deletes == 0 {
-        return false;
-    }
-    let total = target_items.values().filter(|i| !i.deleted).count() as u64;
-    (opts.max_delete > 0 && deletes > opts.max_delete)
-        || (opts.max_delete_pct > 0 && deletes > total * opts.max_delete_pct as u64 / 100)
+    let mut deletes = super::guards::DeleteCounts::of(&plan.upserts);
+    let explicit = super::guards::DeleteCounts::of(&plan.deletes);
+    deletes.add(super::PairSide::A, explicit.a);
+    deletes.add(super::PairSide::B, explicit.b);
+    let total = target_items.values().filter(|item| !item.deleted && !item.is_dir).count() as u64;
+    super::guards::deletion_block(deletes, total, total, &opts).is_some()
 }
 
 pub(super) fn source_item_after(side: Side, ch: &ResolvedChange) -> ItemRecord {
@@ -241,7 +240,7 @@ pub(super) fn deleted_item(side: Side, rel: &str, prev: Option<&ItemRecord>) -> 
 }
 
 fn sig_from_meta(m: &VfsMeta) -> Option<Sig> {
-    if m.is_dir || m.is_symlink {
+    if m.is_dir || m.is_symlink || m.special {
         return None;
     }
     Some(Sig {

@@ -4,14 +4,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::vfs::{Backend, ChangeKind, VfsChange, VfsMeta};
 
-use super::core::sig_eq;
+use super::compare::{same_entry, Against};
 use super::paths::join;
-use super::snapshot::{hash_mode, md5_hex_to_u64, walk_files, WalkFilter};
+use super::snapshot::{hash_mode, md5_hex_to_u64, walk_snapshot_with_options, WalkFilter};
 use super::state_store::{ItemRecord, PairRecord, Side, SyncStateStore};
 use super::types::{BisyncOptions, Sig, Tree};
 
-const MAX_CHANGE_NODES: usize = 1_000_000;
-const MAX_CHANGE_TEXT_BYTES: usize = 128 * 1024 * 1024;
 const MAX_CHANGE_DEPTH: usize = 512;
 
 #[derive(Clone, Copy)]
@@ -22,11 +20,12 @@ pub(super) struct CollectionLimits {
 }
 
 impl CollectionLimits {
-    const STANDARD: Self = Self {
-        max_nodes: MAX_CHANGE_NODES,
-        max_text_bytes: MAX_CHANGE_TEXT_BYTES,
-        max_depth: MAX_CHANGE_DEPTH,
-    };
+    fn standard() -> Self {
+        let limits = super::SyncLimits::for_memory(crate::transfer::physical_memory());
+        Self { max_nodes: usize::try_from(limits.walk_entries).unwrap_or(usize::MAX),
+            max_text_bytes: usize::try_from(limits.walk_text_bytes).unwrap_or(usize::MAX),
+            max_depth: MAX_CHANGE_DEPTH }
+    }
 
     #[cfg(test)]
     pub(super) const fn new(max_nodes: usize, max_text_bytes: usize, max_depth: usize) -> Self {
@@ -107,7 +106,7 @@ pub(super) fn changes_from_backend(
         source_items,
         filter,
         cancel,
-        CollectionLimits::STANDARD,
+        CollectionLimits::standard(),
     )
 }
 
@@ -210,6 +209,16 @@ pub(super) fn changes_from_source_walk(
     source_items: &BTreeMap<String, ItemRecord>,
     cancel: &AtomicBool,
 ) -> ChangeCollection {
+    changes_from_source_walk_scoped(source, root, target, opts, filter, source_items, cancel,
+        None, super::KeyPolicy::default())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn changes_from_source_walk_scoped(
+    source: &dyn Backend, root: &str, target: &dyn Backend, opts: BisyncOptions,
+    filter: &WalkFilter, source_items: &BTreeMap<String, ItemRecord>, cancel: &AtomicBool,
+    dirs: Option<&super::DirSet>, keys: super::KeyPolicy,
+) -> ChangeCollection {
     let prev_tree: Tree = source_items
         .iter()
         .filter_map(|(rel, item)| {
@@ -220,14 +229,24 @@ pub(super) fn changes_from_source_walk(
         })
         .collect();
     let mode = hash_mode(source, target, opts.compare);
-    let current = match walk_files(source, root, cancel, filter, mode, Some(&prev_tree)) {
-        Ok(current) => current,
+    let snapshot = match walk_snapshot_with_options(source, root, cancel, filter, mode,
+        Some(&prev_tree), false, keys.fold_case, opts) {
+        Ok(snapshot) => snapshot,
         Err(error) if error.kind() == io::ErrorKind::Interrupted => {
             return ChangeCollection::Canceled
         }
         Err(_) => return ChangeCollection::Rebuild,
     };
-    let mut budget = CollectionBudget::new(CollectionLimits::STANDARD);
+    // A partial walk is never "absence" and never certifies a complete cache.
+    if !snapshot.omissions.is_empty() || !snapshot.filtered.is_empty() {
+        return ChangeCollection::Rebuild;
+    }
+    let current_dirs: BTreeSet<String> = snapshot.dirs.iter().map(|rel| keys.key(rel).into_owned()).collect();
+    let previous_dirs: BTreeSet<String> = dirs.into_iter().flatten().map(|rel| keys.key(rel).into_owned()).collect();
+    if current_dirs != previous_dirs { return ChangeCollection::Rebuild; }
+    let current = snapshot.tree;
+    let precision = crate::vfs::mtime_precision(source, root);
+    let mut budget = CollectionBudget::new(CollectionLimits::standard());
     let mut changes = Vec::new();
     let rels = current
         .keys()
@@ -241,7 +260,7 @@ pub(super) fn changes_from_source_walk(
         }
         let now = current.get(rel).copied();
         let previous = prev_tree.get(rel).copied();
-        if sig_eq(now, previous, &opts) {
+        if same_entry(now, previous, precision, &opts, Against::Baseline) {
             continue;
         }
         let kind = now.map_or(ChangeKind::Remove, |_| ChangeKind::Upsert);
@@ -403,7 +422,8 @@ fn item_in_scope(rel: &str, item: Option<&ItemRecord>, filter: &WalkFilter) -> b
 }
 
 fn path_in_scope(rel: &str, hidden: bool, filter: &WalkFilter) -> bool {
-    !filter.ignore.is_match(rel)
+    !rel.split('/').any(|name| super::is_engine_name(name) || crate::vfs::is_staging_name(name))
+        && !filter.ignore.is_match(rel)
         && (filter.include_hidden
             || (!hidden
                 && !rel
@@ -413,7 +433,7 @@ fn path_in_scope(rel: &str, hidden: bool, filter: &WalkFilter) -> bool {
 }
 
 fn sig_from_meta(metadata: &VfsMeta) -> Option<Sig> {
-    if metadata.is_dir || metadata.is_symlink {
+    if metadata.is_dir || metadata.is_symlink || metadata.special {
         return None;
     }
     Some(Sig {

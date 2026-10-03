@@ -1,15 +1,15 @@
-use std::collections::BTreeSet;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::types::{Baseline, Sig, Versioning, VersioningScheme};
+use super::limits::SyncLimits;
+use super::types::{Baseline, Sig};
 use crate::vfs::Backend;
 
 const BASELINE_MAGIC: &[u8] = b"SEBL\x02";
-const MAX_BASELINE_BYTES: u64 = 128 * 1024 * 1024;
-const MAX_BASELINE_ENTRIES: usize = 1_000_000;
-const MAX_BASELINE_TEXT_BYTES: usize = 128 * 1024 * 1024;
+fn limits() -> SyncLimits {
+    SyncLimits::for_memory(crate::transfer::physical_memory())
+}
 
 fn app_data_dir() -> PathBuf {
     crate::support_dirs::sync_data_dir()
@@ -61,31 +61,36 @@ pub fn versions_dir(pair: &str) -> PathBuf {
 }
 
 pub fn load_baseline(path: &Path) -> io::Result<Baseline> {
-    let file = match std::fs::File::open(path) {
-        Ok(file) => file,
+    let limits = limits();
+    let backend = crate::vfs::LocalBackend::new("/");
+    let path = unicode_path(path)?;
+    let metadata = match backend.stat(path) {
+        Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Baseline::new()),
         Err(error) => return Err(error),
     };
-    if file.metadata()?.len() > MAX_BASELINE_BYTES {
+    if metadata.is_dir || metadata.is_symlink || metadata.special
+        || metadata.size > limits.state_file_bytes().saturating_add(BASELINE_MAGIC.len() as u64) {
         return Err(invalid("bisync baseline exceeds its byte budget"));
     }
+    let file = crate::vfs::open_read_regular(&backend, path, None)?;
     let mut bytes = Vec::new();
-    file.take(MAX_BASELINE_BYTES + 1).read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > MAX_BASELINE_BYTES {
+    file.take(limits.state_file_bytes().saturating_add(BASELINE_MAGIC.len() as u64) + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > limits.state_file_bytes().saturating_add(BASELINE_MAGIC.len() as u64) {
         return Err(invalid("bisync baseline exceeds its byte budget"));
     }
     if let Some(body) = bytes.strip_prefix(BASELINE_MAGIC) {
-        parse_binary(body)
+        parse_binary_with_limits(body, limits)
     } else {
-        parse_legacy(&bytes)
+        parse_legacy_with_limits(&bytes, limits)
     }
 }
 
-fn parse_binary(mut input: &[u8]) -> io::Result<Baseline> {
+fn parse_binary_with_limits(mut input: &[u8], limits: SyncLimits) -> io::Result<Baseline> {
     let mut baseline = Baseline::new();
     let mut text_bytes = 0usize;
     while !input.is_empty() {
-        if baseline.len() >= MAX_BASELINE_ENTRIES {
+        if baseline.len() >= usize::try_from(limits.state_entries).unwrap_or(usize::MAX) {
             return Err(invalid("bisync baseline exceeds its entry budget"));
         }
         let rel_len = read_u32(&mut input)? as usize;
@@ -94,7 +99,7 @@ fn parse_binary(mut input: &[u8]) -> io::Result<Baseline> {
         }
         text_bytes = text_bytes
             .checked_add(rel_len)
-            .filter(|total| *total <= MAX_BASELINE_TEXT_BYTES)
+            .filter(|total| *total <= usize::try_from(limits.state_text_bytes).unwrap_or(usize::MAX))
             .ok_or_else(|| invalid("bisync baseline exceeds its path-text budget"))?;
         let rel_bytes = take(&mut input, rel_len)?;
         let rel = std::str::from_utf8(rel_bytes)
@@ -110,13 +115,13 @@ fn parse_binary(mut input: &[u8]) -> io::Result<Baseline> {
     Ok(baseline)
 }
 
-fn parse_legacy(bytes: &[u8]) -> io::Result<Baseline> {
+fn parse_legacy_with_limits(bytes: &[u8], limits: SyncLimits) -> io::Result<Baseline> {
     let text =
         std::str::from_utf8(bytes).map_err(|_| invalid("legacy bisync baseline is not UTF-8"))?;
     let mut baseline = Baseline::new();
     let mut text_bytes = 0usize;
     for (index, line) in text.lines().enumerate() {
-        if baseline.len() >= MAX_BASELINE_ENTRIES {
+        if baseline.len() >= usize::try_from(limits.state_entries).unwrap_or(usize::MAX) {
             return Err(invalid("legacy bisync baseline exceeds its entry budget"));
         }
         let fields: Vec<&str> = line.split('\t').collect();
@@ -129,7 +134,7 @@ fn parse_legacy(bytes: &[u8]) -> io::Result<Baseline> {
         validate_rel(fields[0])?;
         text_bytes = text_bytes
             .checked_add(fields[0].len())
-            .filter(|total| *total <= MAX_BASELINE_TEXT_BYTES)
+            .filter(|total| *total <= usize::try_from(limits.state_text_bytes).unwrap_or(usize::MAX))
             .ok_or_else(|| invalid("legacy baseline exceeds its path-text budget"))?;
         let value = (parse_legacy_sig(fields[1])?, parse_legacy_sig(fields[2])?);
         if baseline.insert(fields[0].to_string(), value).is_some() {
@@ -211,7 +216,8 @@ pub fn save_baseline(path: &Path, baseline: &Baseline) -> io::Result<()> {
     let staged_text = unicode_path(&staged)?;
     let path_text = unicode_path(path)?;
     let backend = crate::vfs::LocalBackend::new("/");
-    let result = crate::vfs::promote_staged_replace(&backend, staged_text, path_text);
+    let result = crate::vfs::promote_staged_replace(&backend, staged_text, path_text)
+        .and_then(|()| crate::vfs::sync_filesystem(&backend, path_text).map(|_| ()));
     if result.is_err() {
         let _ = std::fs::remove_file(staged);
     }
@@ -219,7 +225,8 @@ pub fn save_baseline(path: &Path, baseline: &Baseline) -> io::Result<()> {
 }
 
 fn validate_baseline(baseline: &Baseline) -> io::Result<()> {
-    if baseline.len() > MAX_BASELINE_ENTRIES {
+    let limits = limits();
+    if baseline.len() > usize::try_from(limits.state_entries).unwrap_or(usize::MAX) {
         return Err(invalid("bisync baseline exceeds its entry budget"));
     }
     let mut bytes = BASELINE_MAGIC.len() as u64;
@@ -229,10 +236,10 @@ fn validate_baseline(baseline: &Baseline) -> io::Result<()> {
         let rel_len = u32::try_from(rel.len()).map_err(|_| invalid("baseline path is too long"))?;
         text_bytes = text_bytes
             .checked_add(rel_len as usize)
-            .filter(|total| *total <= MAX_BASELINE_TEXT_BYTES)
+            .filter(|total| *total <= usize::try_from(limits.state_text_bytes).unwrap_or(usize::MAX))
             .ok_or_else(|| invalid("bisync baseline exceeds its path-text budget"))?;
         bytes = bytes.saturating_add(4 + rel_len as u64 + 2 + 48);
-        if bytes > MAX_BASELINE_BYTES {
+        if bytes > limits.state_file_bytes().saturating_add(BASELINE_MAGIC.len() as u64) {
             return Err(invalid("bisync baseline exceeds its byte budget"));
         }
     }
@@ -297,128 +304,7 @@ fn validate_rel(rel: &str) -> io::Result<()> {
     crate::agent_proto::ValidatedRelativePath::parse(rel).map(|_| ())
 }
 
-/// Prune timestamped recovery snapshots without following link-like entries.
-/// Every filesystem error is returned so recovery loss is never silent.
-pub fn prune_versions(versions: &Path, versioning: &Versioning) -> io::Result<()> {
-    let backend = crate::vfs::LocalBackend::new("/");
-    let root_text = unicode_path(versions)?;
-    let root = match backend.stat(root_text) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error),
-    };
-    if root.is_symlink || !root.is_dir {
-        return Err(invalid("versions root is not a real directory"));
-    }
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0);
-    let mut snapshots = Vec::new();
-    for entry in std::fs::read_dir(versions)? {
-        let entry = entry?;
-        let Some(timestamp) = entry
-            .file_name()
-            .to_str()
-            .and_then(|name| name.parse::<u64>().ok())
-        else {
-            continue;
-        };
-        snapshots.push((timestamp, entry.path()));
-    }
-    snapshots.sort_by_key(|(timestamp, _)| std::cmp::Reverse(*timestamp));
-
-    match versioning.scheme {
-        VersioningScheme::Days => {
-            if versioning.days == 0 {
-                return Ok(());
-            }
-            let cutoff = now.saturating_sub(versioning.days.saturating_mul(86_400));
-            for (timestamp, path) in &snapshots {
-                if *timestamp < cutoff {
-                    remove_snapshot(&backend, path)?;
-                }
-            }
-            Ok(())
-        }
-        VersioningScheme::Count => {
-            if versioning.count == 0 {
-                return Ok(());
-            }
-            for (_, path) in snapshots.iter().skip(versioning.count as usize) {
-                remove_snapshot(&backend, path)?;
-            }
-            Ok(())
-        }
-        VersioningScheme::Staggered => keep_per_bucket(&backend, &snapshots, now, staggered_bucket),
-        VersioningScheme::Gfs => keep_per_bucket(&backend, &snapshots, now, gfs_bucket),
-    }
-}
-
-fn remove_snapshot(backend: &crate::vfs::LocalBackend, path: &Path) -> io::Result<()> {
-    let path_text = unicode_path(path)?;
-    let metadata = backend.stat(path_text)?;
-    if metadata.is_symlink || !metadata.is_dir {
-        return Err(invalid(format!(
-            "refusing to prune non-directory recovery entry: {path_text}"
-        )));
-    }
-    crate::vfs::remove_entry(
-        backend,
-        &crate::vfs::DeleteTarget {
-            path: path_text.to_string(),
-            id: metadata.id,
-            is_dir: true,
-            is_symlink: false,
-        },
-    )
-}
-
-fn keep_per_bucket(
-    backend: &crate::vfs::LocalBackend,
-    snapshots: &[(u64, PathBuf)],
-    now: u64,
-    bucket: impl Fn(u64, u64) -> Option<String>,
-) -> io::Result<()> {
-    let mut seen = BTreeSet::new();
-    for (timestamp, path) in snapshots {
-        match bucket(*timestamp, now) {
-            Some(key) => {
-                if !seen.insert(key) {
-                    remove_snapshot(backend, path)?;
-                }
-            }
-            None => remove_snapshot(backend, path)?,
-        }
-    }
-    Ok(())
-}
-
-fn staggered_bucket(timestamp: u64, now: u64) -> Option<String> {
-    let age = now.saturating_sub(timestamp);
-    if age < 86_400 {
-        Some(format!("s{timestamp}"))
-    } else if age < 30 * 86_400 {
-        Some(format!("d{}", timestamp / 86_400))
-    } else {
-        Some(format!("w{}", timestamp / (7 * 86_400)))
-    }
-}
-
-fn gfs_bucket(timestamp: u64, now: u64) -> Option<String> {
-    let age = now.saturating_sub(timestamp);
-    if age < 86_400 {
-        Some(format!("h{}", timestamp / 3_600))
-    } else if age < 7 * 86_400 {
-        Some(format!("d{}", timestamp / 86_400))
-    } else if age < 28 * 86_400 {
-        Some(format!("w{}", timestamp / (7 * 86_400)))
-    } else if age < 365 * 86_400 {
-        Some(format!("m{}", timestamp / (30 * 86_400)))
-    } else {
-        None
-    }
-}
+pub use super::persistence_versions::prune_versions;
 
 fn unicode_path(path: &Path) -> io::Result<&str> {
     path.to_str()
@@ -432,3 +318,12 @@ fn invalid(message: impl Into<String>) -> io::Error {
 #[cfg(test)]
 #[path = "persistence_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+fn parse_binary(input: &[u8]) -> io::Result<Baseline> {
+    parse_binary_with_limits(input, limits())
+}
+#[cfg(test)]
+fn parse_legacy(bytes: &[u8]) -> io::Result<Baseline> {
+    parse_legacy_with_limits(bytes, limits())
+}

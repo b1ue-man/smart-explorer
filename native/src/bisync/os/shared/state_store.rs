@@ -11,7 +11,7 @@ use super::state_validation::{
 use super::types::{Baseline, Sig};
 
 pub struct SyncStateStore {
-    conn: Connection,
+    pub(super) conn: Connection,
 }
 
 impl SyncStateStore {
@@ -120,37 +120,7 @@ impl SyncStateStore {
     }
 
     pub fn save_pair(&self, rec: &PairRecord) -> rusqlite::Result<()> {
-        validate_pair(rec)?;
-        self.conn.execute(
-            "INSERT INTO pairs(pair, root_a, root_b, mode, source_side, source_cursor,
-                 root_a_id, root_b_id, bootstrapped, target_managed, updated_ms)
-             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
-             ON CONFLICT(pair) DO UPDATE SET
-                 root_a = excluded.root_a,
-                 root_b = excluded.root_b,
-                 mode = excluded.mode,
-                 source_side = excluded.source_side,
-                 source_cursor = excluded.source_cursor,
-                 root_a_id = excluded.root_a_id,
-                 root_b_id = excluded.root_b_id,
-                 bootstrapped = excluded.bootstrapped,
-                 target_managed = excluded.target_managed,
-                 updated_ms = excluded.updated_ms",
-            params![
-                rec.pair,
-                rec.root_a,
-                rec.root_b,
-                rec.mode,
-                rec.source_side.as_str(),
-                rec.source_cursor,
-                rec.root_a_id,
-                rec.root_b_id,
-                rec.bootstrapped as i64,
-                rec.target_managed as i64,
-                now_ms(),
-            ],
-        )?;
-        Ok(())
+        write_pair(&self.conn, rec)
     }
 
     /// Removes a pair's record and items in one transaction; the next full
@@ -204,64 +174,6 @@ impl SyncStateStore {
         )?;
         if changed != 1 {
             return Err(rusqlite::Error::QueryReturnedNoRows);
-        }
-        tx.commit()
-    }
-
-    pub fn replace_from_baseline(
-        &mut self,
-        pair: &str,
-        baseline: &Baseline,
-        ids_a: &BTreeMap<String, (Option<String>, Option<String>)>,
-        ids_b: &BTreeMap<String, (Option<String>, Option<String>)>,
-    ) -> rusqlite::Result<()> {
-        let mut budget = StateBudget::for_pair();
-        for (rel, (a, b)) in baseline {
-            for (side, sig, ids) in [(Side::A, *a, ids_a.get(rel)), (Side::B, *b, ids_b.get(rel))] {
-                budget.record_item(&ItemRecord {
-                    side,
-                    rel: rel.clone(),
-                    id: ids.and_then(|value| value.0.clone()),
-                    parent_id: ids.and_then(|value| value.1.clone()),
-                    name: rel.rsplit('/').next().map(str::to_owned),
-                    sig,
-                    is_dir: false,
-                    deleted: sig.is_none(),
-                })?;
-            }
-        }
-        let tx = self.conn.transaction()?;
-        tx.execute("DELETE FROM items WHERE pair = ?1", [pair])?;
-        for (rel, (a, b)) in baseline {
-            let name = rel.rsplit('/').next().map(|s| s.to_string());
-            upsert_item_tx(
-                &tx,
-                pair,
-                &ItemRecord {
-                    side: Side::A,
-                    rel: rel.clone(),
-                    id: ids_a.get(rel).and_then(|v| v.0.clone()),
-                    parent_id: ids_a.get(rel).and_then(|v| v.1.clone()),
-                    name: name.clone(),
-                    sig: *a,
-                    is_dir: false,
-                    deleted: a.is_none(),
-                },
-            )?;
-            upsert_item_tx(
-                &tx,
-                pair,
-                &ItemRecord {
-                    side: Side::B,
-                    rel: rel.clone(),
-                    id: ids_b.get(rel).and_then(|v| v.0.clone()),
-                    parent_id: ids_b.get(rel).and_then(|v| v.1.clone()),
-                    name,
-                    sig: *b,
-                    is_dir: false,
-                    deleted: b.is_none(),
-                },
-            )?;
         }
         tx.commit()
     }
@@ -353,12 +265,17 @@ impl SyncStateStore {
     }
 }
 
-fn upsert_item_tx(
+pub(super) fn upsert_item_tx(
     tx: &rusqlite::Transaction<'_>,
     pair: &str,
     item: &ItemRecord,
 ) -> rusqlite::Result<()> {
     validate_item(item)?;
+    if item.deleted {
+        tx.execute("DELETE FROM items WHERE pair = ?1 AND side = ?2 AND rel = ?3",
+            params![pair, item.side.as_str(), item.rel])?;
+        return Ok(());
+    }
     let (size, mtime, hash) = match item.sig {
         Some(sig) => (
             Some(sig.size.to_string()),
@@ -399,11 +316,45 @@ fn upsert_item_tx(
     Ok(())
 }
 
+pub(super) fn write_pair(conn: &Connection, rec: &PairRecord) -> rusqlite::Result<()> {
+        validate_pair(rec)?;
+        conn.execute(
+            "INSERT INTO pairs(pair, root_a, root_b, mode, source_side, source_cursor,
+                 root_a_id, root_b_id, bootstrapped, target_managed, updated_ms)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+             ON CONFLICT(pair) DO UPDATE SET
+                 root_a = excluded.root_a,
+                 root_b = excluded.root_b,
+                 mode = excluded.mode,
+                 source_side = excluded.source_side,
+                 source_cursor = excluded.source_cursor,
+                 root_a_id = excluded.root_a_id,
+                 root_b_id = excluded.root_b_id,
+                 bootstrapped = excluded.bootstrapped,
+                 target_managed = excluded.target_managed,
+                 updated_ms = excluded.updated_ms",
+            params![
+                rec.pair,
+                rec.root_a,
+                rec.root_b,
+                rec.mode,
+                rec.source_side.as_str(),
+                rec.source_cursor,
+                rec.root_a_id,
+                rec.root_b_id,
+                rec.bootstrapped as i64,
+                rec.target_managed as i64,
+                now_ms(),
+            ],
+        )?;
+        Ok(())
+}
+
 fn default_db_path() -> PathBuf {
     crate::support_dirs::sync_data_dir().join("sync_state.sqlite")
 }
 
-fn now_ms() -> i64 {
+pub(super) fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)

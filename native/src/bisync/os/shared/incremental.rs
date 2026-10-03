@@ -1,22 +1,23 @@
+//! Optional one-way mirror cache. The authoritative checkpoint always wins;
+//! any untrusted cache, partial scan or ambiguous key selects the full planner.
+use std::collections::{BTreeMap, BTreeSet};
+use std::io;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 
-use crate::vfs::{Backend, ChangeKind};
+use crate::vfs::Backend;
+use sha2::{Digest, Sha256};
 
-use super::apply::apply_planned_with_results;
-use super::incremental_changes::{
-    action_plan_for, apply_trees, collect_ids, delete_guard_trips, deleted_item, source_item_after,
-    target_item_after, target_touched_drifted,
-};
-use super::incremental_collect::{
-    changes_from_backend, changes_from_source_walk, ChangeCollection,
-};
-use super::orchestration::Outcome;
-use super::persistence::{baseline_path, pair_id_for, save_baseline, versions_dir};
-use super::snapshot::WalkFilter;
-use super::state_store::{PairRecord, Side, SyncStateStore};
-use super::state_validation::{baseline_from_items, is_untrusted_record};
-use super::types::{Baseline, BisyncOptions, BisyncStats, Conflict, DeletePolicy, Direction};
+use super::checkpoint::ApplyScope;
+use super::checkpoint_run::CheckpointSink;
+use super::guards::{deletion_block, empty_side_block, unconfirmed, DeleteCounts};
+use super::incremental_changes::{apply_trees, action_plan_for, collect_ids, target_touched_drifted_spelled};
+use super::incremental_collect::{changes_from_backend, changes_from_source_walk_scoped, ChangeCollection};
+use super::orchestration::{failure, Outcome, RunState};
+use super::replica_state::index_id;
+use super::state_metadata::{index_dirty_path, save_history, write_bytes, PairHistory};
+use super::state_store::{ItemRecord, PairRecord, Side, SyncStateStore};
+use super::types::{Baseline, BisyncOptions, DeletePolicy, Direction, PairSide};
 
 #[derive(Clone, Copy)]
 pub(super) struct SyncEndpoints<'a> {
@@ -65,363 +66,235 @@ pub(super) fn mirror_source<'a>(
     }
 }
 
-pub(super) fn try_incremental_mirror(
-    endpoints: SyncEndpoints<'_>,
-    opts: BisyncOptions,
-    cancel: &AtomicBool,
-    filter: &WalkFilter,
-    store_path: Option<&Path>,
-) -> Option<Outcome> {
-    if opts.dry_run || endpoints.a.has_duplicate_file_names() || endpoints.b.has_duplicate_file_names() {
-        // A change-feed cursor cannot prove that the other side has no newly
-        // duplicated names. Only a complete paired observation can authorize repair.
-        return None;
-    }
-    if cancel.load(Ordering::Relaxed) {
-        return Some(Outcome::default());
-    }
+pub(super) fn try_incremental_run(state: &RunState<'_>) -> Option<Outcome> {
+    let endpoints = state.endpoints;
+    let opts = state.opts;
+    if opts.dry_run || endpoints.a.has_duplicate_file_names() || endpoints.b.has_duplicate_file_names()
+        || state.history.is_none() || index_dirty_path(state.key).ok()?.try_exists().ok()?
+    { return None; }
+    if state.cancel.load(Ordering::Acquire) { return Some(Outcome::default()); }
     let (source, source_root, source_side) = mirror_source(endpoints, opts)?;
-    let SyncEndpoints {
-        a,
-        root_a,
-        b,
-        root_b,
-    } = endpoints;
-    let (target, target_root, target_side) = if source_side == Side::A {
-        (b, root_b, Side::B)
-    } else {
-        (a, root_a, Side::A)
-    };
-    let pair = pair_id_for(a, root_a, b, root_b);
-    let mut store = open_store(store_path).ok()?;
+    let (target, target_root) = if source_side == Side::A {
+        (endpoints.b, endpoints.root_b)
+    } else { (endpoints.a, endpoints.root_a) };
+    let source_pair = if source_side == Side::A { PairSide::A } else { PairSide::B };
+    let target_pair = source_pair.other();
+    let keys = super::orchestration_plan::keys(endpoints);
+    let pair = index_id(state.key).ok()?;
+    let mut store = open_store(state.store_path).ok()?;
     let rec = store.load_pair(&pair).ok().flatten()?;
-    if !record_matches(&rec, root_a, root_b, source_side) {
-        return None;
-    }
-    if !root_id_matches(a, root_a, rec.root_a_id.as_deref())
-        || !root_id_matches(b, root_b, rec.root_b_id.as_deref())
-    {
-        return None;
-    }
-    // Treat any malformed or over-budget persisted state as an untrusted
-    // incremental index. Returning None here selects the bounded full rebuild
-    // before any target mutation or cursor advancement.
+    if !record_matches(&rec, endpoints, source_side) || rec.mode != mode(state)
+        || !root_id_matches(endpoints.a, endpoints.root_a, rec.root_a_id.as_deref())
+        || !root_id_matches(endpoints.b, endpoints.root_b, rec.root_b_id.as_deref())
+    { return None; }
     let (items_a, items_b) = store.load_pair_items(&pair).ok()?;
-    let previous_baseline = baseline_from_items(&items_a, &items_b);
-    let (source_items, target_items) = if source_side == Side::A {
-        (&items_a, &items_b)
+    if cache_by_key(&items_a, &items_b, keys)? != baseline_by_key(state.baseline, keys) { return None; }
+    let (source_items, target_items) = if source_side == Side::A { (&items_a, &items_b) } else { (&items_b, &items_a) };
+    let collection = if source.supports_changes() && state.settings.depth == super::ScanDepth::Incremental {
+        changes_from_backend(&store, &rec, source, source_root, source_side, source_items, state.filter, state.cancel)
     } else {
-        (&items_b, &items_a)
+        changes_from_source_walk_scoped(source, source_root, target, opts, state.filter,
+            source_items, state.cancel, state.dirs, keys)
     };
-    let collection = if source.supports_changes() {
-        changes_from_backend(
-            &store,
-            &rec,
-            source,
-            source_root,
-            source_side,
-            source_items,
-            filter,
-            cancel,
-        )
-    } else if source.is_local() {
-        changes_from_source_walk(
-            source,
-            source_root,
-            target,
-            opts,
-            filter,
-            source_items,
-            cancel,
-        )
-    } else {
-        return None;
-    };
-    let (changes, new_cursor) = match collection {
-        ChangeCollection::Ready {
-            changes,
-            new_cursor,
-        } => (changes, new_cursor),
+    let (changes, cursor) = match collection {
+        ChangeCollection::Ready { changes, new_cursor } => (changes, new_cursor),
         ChangeCollection::Rebuild => return None,
-        ChangeCollection::Canceled => {
-            return Some(Outcome {
-                baseline: previous_baseline,
-                ..Default::default()
-            })
-        }
+        ChangeCollection::Canceled => return Some(Outcome { baseline: state.baseline.clone(), ..Outcome::default() }),
     };
-    if cancel.load(Ordering::Relaxed) {
-        return Some(Outcome {
-            baseline: previous_baseline,
-            ..Default::default()
-        });
-    }
-    if changes.is_empty() {
-        if let Some(c) = new_cursor.as_deref() {
-            if let Err(error) = store.update_cursor(&pair, Some(c)) {
-                return Some(Outcome {
-                    errors: vec![(
-                        pair.clone(),
-                        format!("inkrementeller Cursor konnte nicht gespeichert werden: {error}"),
-                    )],
-                    baseline: previous_baseline,
-                    ..Default::default()
-                });
-            }
+    // A filter transition must become a protected omission in the pair
+    // planner. Advancing only a feed cursor would leave an old managed row
+    // able to authorize a later deletion (e.g. a now-hidden Windows file).
+    if changes.iter().any(|change| !change.managed) { return None; }
+    // Case/NFC alias transitions and rename cycles that collapse onto the
+    // same receiving object require the complete pair planner, never a later
+    // deletion of a path a copy just published.
+    let mut aliases = BTreeSet::new();
+    for change in &changes {
+        if !aliases.insert(keys.key(&change.rel).into_owned()) { return None; }
+        if change.old_rel.as_deref().is_some_and(|old| keys.key(old) == keys.key(&change.rel) && old != change.rel) {
+            return None;
         }
-        return Some(Outcome {
-            baseline: previous_baseline,
-            ..Default::default()
-        });
     }
-    if target_touched_drifted(target, target_root, target_items, &changes, opts) {
+    let mut names = super::state_spellings::load(state.key, keys).ok()?;
+    let planned = action_plan_for(source_side, &changes);
+    let upsert_keys: BTreeSet<_> = planned.upserts.iter().map(super::core::action_rel)
+        .map(|rel| keys.key(rel).into_owned()).collect();
+    if planned.deletes.iter().map(super::core::action_rel)
+        .any(|rel| upsert_keys.contains(keys.key(rel).as_ref())) { return None; }
+    let actions: Vec<_> = planned.upserts.iter().chain(&planned.deletes).cloned().collect();
+    let spellings = names.for_actions(&actions, source_pair, keys);
+    if target_touched_drifted_spelled(target, target_root, target_items, &changes, opts, &spellings, target_pair) {
         return None;
     }
-    let actions = action_plan_for(source_side, &changes);
     let (planned_a, planned_b) = apply_trees(source_side, source_items, target_items, &changes)?;
-    if delete_guard_trips(&actions, target_items, opts) {
-        return Some(Outcome {
-            errors: vec![(
-                "abgebrochen".into(),
-                "Sicherheitsstopp: inkrementeller Mirror wuerde zu viele Dateien loeschen.".into(),
-            )],
-            baseline: previous_baseline,
-            ..Default::default()
-        });
+    let source_empty = if source_side == Side::A { planned_a.is_empty() } else { planned_b.is_empty() };
+    let source_empty = source_empty && state.dirs.is_none_or(|dirs| dirs.is_empty());
+    if let Some(block) = unconfirmed(empty_side_block(source_pair, source_empty, state.baseline), &state.settings.confirmed) {
+        return Some(Outcome { blocked: Some(block), baseline: state.baseline.clone(), ..Outcome::default() });
     }
-    let mut errors = Vec::new();
-    let copy_report = apply_planned_with_results(
-        &actions.upserts,
-        &planned_a,
-        &planned_b,
-        a,
-        root_a,
-        b,
-        root_b,
-        opts,
-        &versions_dir(&pair),
-        &mut errors,
-        cancel,
-    );
-    if cancel.load(Ordering::Relaxed) || !errors.is_empty() {
-        return Some(Outcome {
-            stats: copy_report.stats,
-            errors,
-            baseline: previous_baseline,
-            ..Default::default()
-        });
+    let files_a = items_a.values().filter(|item| !item.deleted && !item.is_dir).count() as u64;
+    let files_b = items_b.values().filter(|item| !item.deleted && !item.is_dir).count() as u64;
+    let deletes = DeleteCounts::of(&actions);
+    if let Some(block) = unconfirmed(deletion_block(deletes, files_a, files_b, &opts), &state.settings.confirmed) {
+        return Some(Outcome { blocked: Some(block), baseline: state.baseline.clone(), ..Outcome::default() });
     }
-    // Copies publish every final path first. Only after all of them succeed do
-    // we remove obsolete paths; swap/cycle destinations were pruned from this
-    // phase by action_plan_for and can therefore never be deleted afterward.
-    let delete_report = apply_planned_with_results(
-        &actions.deletes,
-        &planned_a,
-        &planned_b,
-        a,
-        root_a,
-        b,
-        root_b,
-        opts,
-        &versions_dir(&pair),
-        &mut errors,
-        cancel,
-    );
-    let mut stats = copy_report.stats;
-    merge_stats(&mut stats, delete_report.stats);
-    if cancel.load(Ordering::Relaxed) || !errors.is_empty() {
-        return Some(Outcome {
-            stats,
-            errors,
-            baseline: previous_baseline,
-            ..Default::default()
-        });
+    // There is only one deleting side in an incremental mirror, but its
+    // percentage stop remains independent of a confirmed absolute limit.
+    let mut percentage = opts;
+    percentage.max_delete = 0;
+    if let Some(block) = unconfirmed(deletion_block(deletes, files_a, files_b, &percentage), &state.settings.confirmed) {
+        return Some(Outcome { blocked: Some(block), baseline: state.baseline.clone(), ..Outcome::default() });
     }
-    let mut updates = Vec::new();
-    // Tombstone every retired/unmanaged path before writing active upserts.
-    // That ordering is important for A<->B rename swaps in one transaction.
-    for ch in &changes {
-        if let Some(old) = ch.old_rel.as_deref() {
-            updates.push(deleted_item(source_side, old, source_items.get(old)));
-            updates.push(deleted_item(target_side, old, target_items.get(old)));
+    if actions.is_empty() {
+        if let Some(cursor) = cursor.as_deref() {
+            if store.update_cursor(&pair, Some(cursor)).is_err() { return None; }
         }
-        if !ch.managed || ch.kind == ChangeKind::Remove {
-            updates.push(deleted_item(
-                source_side,
-                &ch.rel,
-                source_items.get(&ch.rel),
-            ));
-            updates.push(deleted_item(
-                target_side,
-                &ch.rel,
-                target_items.get(&ch.rel),
-            ));
-        }
+        return Some(Outcome { baseline: state.baseline.clone(), ..Outcome::default() });
     }
-    for ch in changes
-        .iter()
-        .filter(|change| change.managed && change.kind == ChangeKind::Upsert)
-    {
-        if cancel.load(Ordering::Relaxed) {
-            return Some(Outcome {
-                stats,
-                baseline: previous_baseline,
-                ..Default::default()
-            });
-        }
-        updates.push(source_item_after(source_side, ch));
-        let target_update = match target_item_after(target, target_root, target_side, ch) {
-            Ok(update) => update,
-            Err(error) => {
-                return Some(Outcome {
-                    stats,
-                    errors: vec![(
-                        ch.rel.clone(),
-                        format!("Zielstatus nach inkrementeller Änderung unklar: {error}"),
-                    )],
-                    baseline: previous_baseline,
-                    ..Default::default()
-                });
-            }
-        };
-        updates.push(target_update);
-    }
-    if cancel.load(Ordering::Relaxed) {
-        return Some(Outcome {
-            stats,
-            baseline: previous_baseline,
-            ..Default::default()
-        });
-    }
-    let cursor = new_cursor.as_deref().or(rec.source_cursor.as_deref());
-    if let Err(error) = store.save_items_and_cursor(&pair, &updates, cursor) {
-        return Some(Outcome {
-            stats,
-            errors: vec![(
-                pair.clone(),
-                format!("inkrementeller Stand konnte nicht gespeichert werden: {error}"),
-            )],
-            baseline: previous_baseline,
-            ..Default::default()
-        });
-    }
-    let baseline = match store.load_baseline(&pair) {
-        Ok(baseline) => baseline,
-        Err(error) => {
-            return Some(Outcome {
-                stats,
-                errors: vec![(
-                    pair.clone(),
-                    format!("inkrementeller Stand kann nicht gelesen werden: {error}"),
-                )],
-                baseline: previous_baseline,
-                ..Default::default()
-            })
-        }
+    if let Err(error) = retire_index(state) { return Some(failure("Sync-Zwischenstand", error)); }
+    let sink = match CheckpointSink::new(endpoints, state.lock, state.key, keys, state.observer) {
+        Ok(sink) => sink,
+        Err(error) => return Some(failure("Zwischenstand", error)),
     };
-    if let Err(error) = save_baseline(&baseline_path(&pair), &baseline) {
-        errors.push((
-            pair.clone(),
-            format!("Legacy-Synchronisierungsstand konnte nicht gespeichert werden: {error}"),
-        ));
-    }
-    Some(Outcome {
-        stats,
-        conflicts: Vec::<Conflict>::new(),
-        errors,
-        baseline,
-        ..Default::default()
-    })
-}
-
-/// A full pass may preserve omitted paths or fail after partial writes. Retire
-/// the old index first; only a complete successful pass may bootstrap it again.
-pub(super) fn invalidate_incremental_state(
-    endpoints: SyncEndpoints<'_>,
-    opts: BisyncOptions,
-    store_path: Option<&Path>,
-) -> rusqlite::Result<()> {
-    if opts.dry_run || mirror_source(endpoints, opts).is_none() {
-        return Ok(());
-    }
-    let pair = pair_id_for(endpoints.a, endpoints.root_a, endpoints.b, endpoints.root_b);
-    let mut store = open_store(store_path)?;
-    match store.load_pair(&pair) {
-        Ok(Some(mut record)) => {
-            record.bootstrapped = false;
-            store.save_pair(&record)
+    let scope = ApplyScope { sink: &sink, versions: state.versions, spellings: &spellings };
+    let mut errors = Vec::new();
+    let mut stats = sink.during(|| {
+        let copied = super::apply::apply_planned_reporting(&planned.upserts, &[], &planned_a,
+            &planned_b, endpoints, opts, &scope, &mut errors, state.cancel);
+        let mut stats = copied.stats;
+        // Retired paths are removed only after every upsert has been committed;
+        // a failed/deferred copy cannot authorize deleting the user's old path.
+        if !state.cancel.load(Ordering::Acquire) && errors.is_empty() && stats.errors == 0
+            && sink.can_delete()
+            && !super::ApplySink::should_stop(&sink)
+        {
+            let deleted = super::apply::apply_planned_reporting(&planned.deletes, &[], &planned_a,
+                &planned_b, endpoints, opts, &scope, &mut errors, state.cancel);
+            merge_stats(&mut stats, deleted.stats);
         }
-        Ok(None) => Ok(()),
-        // A record that no longer validates is exactly the state the full
-        // scan replaces: dropped, neither this scan nor a later incremental
-        // run can act on it. Refusing the scan instead would block the sync
-        // until someone repaired the database.
-        Err(error) if is_untrusted_record(&error) => store.forget_pair(&pair),
-        Err(error) => Err(error),
+        stats
+    });
+    let checkpoint = sink.finish();
+    let mut omissions = super::SyncOmissions::new(keys.fold_case);
+    for (rel, kind) in checkpoint.omitted { omissions.record_kind(&rel, kind, kind.reported_by_default()); }
+    if let Some(error) = checkpoint.error {
+        errors.push(("Zwischenstand".into(), error));
+        stats.errors = stats.errors.saturating_add(1);
     }
+    names.applied(&actions, &spellings, &checkpoint.baseline, keys);
+    if let Err(error) = super::state_spellings::save(state.key, &names) {
+        errors.push(("Pfad-Schreibweisen".into(), error.to_string()));
+        stats.errors = stats.errors.saturating_add(1);
+    }
+    let history = PairHistory { replica_a: state.key.replica_a.clone(), replica_b: state.key.replica_b.clone(),
+        entries_a: super::guards::recorded_entries(&checkpoint.baseline, PairSide::A).saturating_add(checkpoint.dirs.len() as u64),
+        entries_b: super::guards::recorded_entries(&checkpoint.baseline, PairSide::B).saturating_add(checkpoint.dirs.len() as u64),
+        full_ms: state.history.map_or(0, |history| history.full_ms) };
+    if let Err(error) = save_history(state.key, &history) {
+        errors.push(("Replika-Zustand".into(), error.to_string()));
+        stats.errors = stats.errors.saturating_add(1);
+    }
+    let out = Outcome { stats, errors, baseline: checkpoint.baseline, omissions,
+        deferred: checkpoint.deferred, stopped: checkpoint.stopped, ..Outcome::default() };
+    if out.stats.errors == 0 && out.omissions.is_empty() && out.deferred.is_empty()
+        && out.stopped.is_none() && !state.cancel.load(Ordering::Acquire)
+    {
+        let cursor = cursor.or(rec.source_cursor);
+        let _ = bootstrap_run(state, &out.baseline, cursor);
+    }
+    Some(out)
 }
 
-fn merge_stats(left: &mut BisyncStats, right: BisyncStats) {
+/// A durable dirty marker disqualifies the old cache even if SQLite itself is
+/// corrupt, read-only or busy. A full scan can then work without the database.
+pub(super) fn retire_index(state: &RunState<'_>) -> io::Result<()> {
+    if state.opts.dry_run || mirror_source(state.endpoints, state.opts).is_none() { return Ok(()); }
+    write_bytes(&index_dirty_path(state.key)?, b"full planner required\n")?;
+    if let (Ok(pair), Ok(mut store)) = (index_id(state.key), open_store(state.store_path)) {
+        let _ = store.forget_pair(&pair);
+    }
+    Ok(())
+}
+
+pub(super) fn bootstrap_run(state: &RunState<'_>, baseline: &Baseline, cursor: Option<String>) -> rusqlite::Result<()> {
+    let Some((_, _, source_side)) = mirror_source(state.endpoints, state.opts) else { return Ok(()); };
+    let keys = super::orchestration_plan::keys(state.endpoints);
+    let names = super::state_spellings::load(state.key, keys).map_err(|_| rusqlite::Error::InvalidQuery)?;
+    let rows = names.cache_baseline(baseline, keys);
+    let pair = index_id(state.key).map_err(|_| rusqlite::Error::InvalidQuery)?;
+    let record = pair_record(state.endpoints, pair, mode(state), source_side, cursor);
+    let ids_a = collect_ids(state.endpoints.a, state.endpoints.root_a, &rows, Side::A);
+    let ids_b = collect_ids(state.endpoints.b, state.endpoints.root_b, &rows, Side::B);
+    open_store(state.store_path)?.bootstrap(&record, &rows, &ids_a, &ids_b)?;
+    std::fs::remove_file(index_dirty_path(state.key).map_err(|_| rusqlite::Error::InvalidQuery)?)
+        .map_err(|_| rusqlite::Error::InvalidQuery)?;
+    Ok(())
+}
+
+// These cache-only entry points remain for existing integrations and fixtures.
+pub(super) fn bootstrap_incremental_state(
+    endpoints: SyncEndpoints<'_>, opts: BisyncOptions, baseline: &Baseline,
+    cursor: Option<String>, path: Option<&Path>,
+) -> rusqlite::Result<()> {
+    let Some((_, _, side)) = mirror_source(endpoints, opts) else { return Ok(()); };
+    let pair = super::pair_id_for(endpoints.a, endpoints.root_a, endpoints.b, endpoints.root_b);
+    let record = pair_record(endpoints, pair, "mirror".into(), side, cursor);
+    let ids_a = collect_ids(endpoints.a, endpoints.root_a, baseline, Side::A);
+    let ids_b = collect_ids(endpoints.b, endpoints.root_b, baseline, Side::B);
+    open_store(path)?.bootstrap(&record, baseline, &ids_a, &ids_b)
+}
+
+pub(super) fn invalidate_incremental_state(endpoints: SyncEndpoints<'_>, opts: BisyncOptions, path: Option<&Path>)
+    -> rusqlite::Result<()> {
+    if opts.dry_run || mirror_source(endpoints, opts).is_none() { return Ok(()); }
+    let pair = super::pair_id_for(endpoints.a, endpoints.root_a, endpoints.b, endpoints.root_b);
+    open_store(path)?.forget_pair(&pair)
+}
+
+fn open_store(path: Option<&Path>) -> rusqlite::Result<SyncStateStore> {
+    path.map_or_else(SyncStateStore::open_default, SyncStateStore::open_at)
+}
+fn record_matches(record: &PairRecord, endpoints: SyncEndpoints<'_>, source_side: Side) -> bool {
+    record.root_a == endpoints.root_a && record.root_b == endpoints.root_b
+        && record.source_side == source_side && record.bootstrapped && record.target_managed
+}
+fn root_id_matches(backend: &dyn Backend, root: &str, saved: Option<&str>) -> bool {
+    saved.is_none_or(|id| backend.change_root_id(root).ok().flatten().as_deref() == Some(id))
+}
+fn pair_record(endpoints: SyncEndpoints<'_>, pair: String, mode: String, source_side: Side, cursor: Option<String>) -> PairRecord {
+    PairRecord { pair, root_a: endpoints.root_a.into(), root_b: endpoints.root_b.into(), mode, source_side,
+        source_cursor: cursor, root_a_id: endpoints.a.change_root_id(endpoints.root_a).ok().flatten(),
+        root_b_id: endpoints.b.change_root_id(endpoints.root_b).ok().flatten(), bootstrapped: true, target_managed: true }
+}
+fn mode(state: &RunState<'_>) -> String {
+    // Debug is an opaque cache fingerprint, never a persisted endpoint or a
+    // protocol contract. A dependency update may invalidate it safely.
+    let text = format!("{:?}:{}:{}:{:?}:{}:{}:{}:{}:{}", state.opts.compare, state.opts.modify_window_ms,
+        state.opts.cross_mounts, state.filter.ignore, state.filter.include_hidden,
+        state.filter.min_size, state.filter.max_size, state.filter.after_mtime_ms, state.filter.before_mtime_ms);
+    format!("mirror-rv1:{:x}", Sha256::digest(text.as_bytes()))
+}
+fn baseline_by_key(base: &Baseline, keys: super::KeyPolicy) -> Baseline {
+    base.iter().map(|(rel, entry)| (keys.key(rel).into_owned(), *entry)).collect()
+}
+fn cache_by_key(a: &BTreeMap<String, ItemRecord>, b: &BTreeMap<String, ItemRecord>, keys: super::KeyPolicy) -> Option<Baseline> {
+    let mut base = Baseline::new();
+    for (side, items) in [(PairSide::A, a), (PairSide::B, b)] {
+        let mut seen = BTreeSet::new();
+        for (rel, item) in items.iter().filter(|(_, item)| !item.deleted && !item.is_dir) {
+            let key = keys.key(rel).into_owned();
+            if !seen.insert(key.clone()) { return None; }
+            let entry = base.entry(key).or_default();
+            match side { PairSide::A => entry.0 = item.sig, PairSide::B => entry.1 = item.sig }
+        }
+    }
+    Some(base)
+}
+fn merge_stats(left: &mut super::BisyncStats, right: super::BisyncStats) {
     left.a_to_b = left.a_to_b.saturating_add(right.a_to_b);
     left.b_to_a = left.b_to_a.saturating_add(right.b_to_a);
     left.deleted = left.deleted.saturating_add(right.deleted);
     left.conflicts = left.conflicts.saturating_add(right.conflicts);
     left.bytes = left.bytes.saturating_add(right.bytes);
     left.errors = left.errors.saturating_add(right.errors);
-}
-
-pub(super) fn bootstrap_incremental_state(
-    endpoints: SyncEndpoints<'_>,
-    opts: BisyncOptions,
-    baseline: &Baseline,
-    source_cursor: Option<String>,
-    store_path: Option<&Path>,
-) -> rusqlite::Result<()> {
-    let Some((_, _, source_side)) = mirror_source(endpoints, opts) else {
-        return Ok(());
-    };
-    let SyncEndpoints {
-        a,
-        root_a,
-        b,
-        root_b,
-    } = endpoints;
-    let pair = pair_id_for(a, root_a, b, root_b);
-    let mut store = open_store(store_path)?;
-    let rec = PairRecord {
-        pair: pair.clone(),
-        root_a: root_a.into(),
-        root_b: root_b.into(),
-        mode: "mirror".into(),
-        source_side,
-        source_cursor,
-        root_a_id: a.change_root_id(root_a).ok().flatten(),
-        root_b_id: b.change_root_id(root_b).ok().flatten(),
-        bootstrapped: true,
-        target_managed: true,
-    };
-    store.save_pair(&rec)?;
-    let ids_a = collect_ids(a, root_a, baseline, Side::A);
-    let ids_b = collect_ids(b, root_b, baseline, Side::B);
-    store.replace_from_baseline(&pair, baseline, &ids_a, &ids_b)
-}
-
-fn open_store(path: Option<&Path>) -> rusqlite::Result<SyncStateStore> {
-    path.map_or_else(SyncStateStore::open_default, SyncStateStore::open_at)
-}
-
-fn record_matches(rec: &PairRecord, root_a: &str, root_b: &str, source_side: Side) -> bool {
-    rec.root_a == root_a
-        && rec.root_b == root_b
-        && rec.mode == "mirror"
-        && rec.source_side == source_side
-        && rec.bootstrapped
-        && rec.target_managed
-}
-
-fn root_id_matches(be: &dyn Backend, root: &str, saved: Option<&str>) -> bool {
-    match saved {
-        Some(id) => be.change_root_id(root).ok().flatten().as_deref() == Some(id),
-        None => true,
-    }
 }

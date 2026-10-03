@@ -1,5 +1,7 @@
 use super::types::{SyncJob, Trigger};
-use crate::bisync::{CompareMode, ConflictMode, DeletePolicy, Direction, VersioningScheme};
+use crate::bisync::{
+    CompareMode, ConflictMode, DeletePolicy, Direction, VersioningScheme, VersionsLocation,
+};
 use std::str::FromStr;
 
 /// Strip characters that would break the one-value-per-line format.
@@ -9,6 +11,34 @@ pub(super) fn san(s: &str) -> String {
 
 /// Serialize one job as a `key=value` block (the body of its `.conf` file).
 pub(super) fn serialize_kv(j: &SyncJob) -> String {
+    let mut s = serialize_kv_core(j);
+    push_rv1_keys(&mut s, j);
+    s
+}
+
+/// Keys RV1 added after the original ones (older versions ignore them).
+fn push_rv1_keys(s: &mut String, j: &SyncJob) {
+    s.push_str(&format!("config_version={}\n", j.config_version));
+    s.push_str(&format!("rt_max_latency_secs={}\n", j.rt_max_latency_secs));
+    s.push_str(&format!("rt_poll_secs={}\n", j.rt_poll_secs));
+    s.push_str(&format!(
+        "verify_interval_secs={}\n",
+        j.verify_interval_secs
+    ));
+    s.push_str(&format!("verify_target_secs={}\n", j.verify_target_secs));
+    s.push_str(&format!("max_delete_min={}\n", j.max_delete_min));
+    s.push_str(&format!(
+        "versions_location={}\n",
+        j.versions_location.as_str()
+    ));
+    push_bool(s, "cross_mounts", j.cross_mounts);
+    s.push_str(&format!("run_cleanup={}\n", san(&j.run_cleanup)));
+}
+
+/// The keys every version before RV1 wrote, in their order. The legacy
+/// import verifies jobs by a hash over exactly these, so it stays stable when
+/// keys are added.
+pub(super) fn serialize_kv_core(j: &SyncJob) -> String {
     let mut s = String::new();
     s.push_str("# Smart Explorer sync job\n");
     s.push_str(&format!("id={}\n", san(&j.id)));
@@ -74,7 +104,10 @@ fn push_endpoint(output: &mut String, key: &str, value: &str) {
     } else {
         // No lossy plain-path fallback: an older reader must reject this job
         // rather than synchronize a different directory after trimming it.
-        output.push_str(&format!("{key}_json={}\n", serde_json::Value::String(value.into())));
+        output.push_str(&format!(
+            "{key}_json={}\n",
+            serde_json::Value::String(value.into())
+        ));
     }
 }
 
@@ -84,6 +117,7 @@ pub(super) fn parse_kv_checked(body: &str) -> Result<SyncJob, String> {
     let mut job = SyncJob::new(String::new(), String::new(), String::new());
     job.id.clear();
     job.ignore.clear();
+    pre_rv1_defaults(&mut job);
     let mut saw_any = false;
     let mut saw_trigger = false;
     for (index, raw_line) in body.lines().enumerate() {
@@ -104,10 +138,14 @@ pub(super) fn parse_kv_checked(body: &str) -> Result<SyncJob, String> {
             "name" => job.name = value.to_string(),
             "source" => job.source = value.to_string(),
             "target" => job.target = value.to_string(),
-            "source_json" => job.source = serde_json::from_str(value)
-                .map_err(|error| format!("invalid source path encoding: {error}"))?,
-            "target_json" => job.target = serde_json::from_str(value)
-                .map_err(|error| format!("invalid target path encoding: {error}"))?,
+            "source_json" => {
+                job.source = serde_json::from_str(value)
+                    .map_err(|error| format!("invalid source path encoding: {error}"))?
+            }
+            "target_json" => {
+                job.target = serde_json::from_str(value)
+                    .map_err(|error| format!("invalid target path encoding: {error}"))?
+            }
             "direction" => job.direction = parse_enum(key, value, Direction::parse)?,
             "conflict" => job.conflict = parse_enum(key, value, ConflictMode::parse)?,
             "retain_days" => job.retain_days = parse_num(key, value)?,
@@ -152,6 +190,17 @@ pub(super) fn parse_kv_checked(body: &str) -> Result<SyncJob, String> {
             "retry_delay_secs" => job.retry_delay_secs = parse_num(key, value)?,
             "run_before" => job.run_before = value.to_string(),
             "run_after" => job.run_after = value.to_string(),
+            "run_cleanup" => job.run_cleanup = value.to_string(),
+            "config_version" => job.config_version = parse_num(key, value)?,
+            "rt_max_latency_secs" => job.rt_max_latency_secs = parse_num(key, value)?,
+            "rt_poll_secs" => job.rt_poll_secs = parse_num(key, value)?,
+            "verify_interval_secs" => job.verify_interval_secs = parse_num(key, value)?,
+            "verify_target_secs" => job.verify_target_secs = parse_num(key, value)?,
+            "max_delete_min" => job.max_delete_min = parse_num(key, value)?,
+            "versions_location" => {
+                job.versions_location = parse_enum(key, value, VersionsLocation::parse)?
+            }
+            "cross_mounts" => job.cross_mounts = parse_bool(key, value)?,
             _ => {}
         }
     }
@@ -171,6 +220,16 @@ pub(super) fn parse_kv(body: &str) -> Option<SyncJob> {
     parse_kv_checked(body).ok()
 }
 
+/// What a job saved before RV1 means for the settings RV1 added: no
+/// percentage stop unless one is stored, other mounted file systems included,
+/// configuration version 0 (migrated when the jobs are loaded).
+fn pre_rv1_defaults(job: &mut SyncJob) {
+    job.config_version = 0;
+    job.max_delete_pct = 0;
+    job.max_delete_min = 0;
+    job.cross_mounts = true;
+}
+
 /// Legacy positional-TSV parser used for the one-time import.
 pub(super) fn parse_legacy(line: &str) -> Option<SyncJob> {
     let fields: Vec<&str> = line.split('\t').collect();
@@ -182,6 +241,7 @@ pub(super) fn parse_legacy(line: &str) -> Option<SyncJob> {
         fields[2].to_string(),
         fields[3].to_string(),
     );
+    pre_rv1_defaults(&mut job);
     job.id = fields[0].to_string();
     job.direction = Direction::parse(fields[4])?;
     job.conflict = ConflictMode::parse(fields[5])?;
@@ -258,8 +318,13 @@ mod tests {
 
     #[test]
     fn sync_paths_task_saved_paths_roundtrip_without_whitespace_or_url_decoding() {
-        for path in ["/space at end ", "/tab\tand\nnewline", "gdrive:///Ü %20 # ? ",
-            "sftp://user@host:22/Ü %20 # ? ", "share://direct/a/Gate/Ü "] {
+        for path in [
+            "/space at end ",
+            "/tab\tand\nnewline",
+            "gdrive:///Ü %20 # ? ",
+            "sftp://user@host:22/Ü %20 # ? ",
+            "share://direct/a/Gate/Ü ",
+        ] {
             let mut job = sample();
             job.source = path.into();
             job.target = "/distinct-target".into();
@@ -270,7 +335,10 @@ mod tests {
             assert!(!saved.contains("source=/space at end\n"));
         }
         let legacy = "id=legacy\nname=legacy\nsource=sftp://u@host:22/old%20name\ntarget=/local\n";
-        assert_eq!(parse_kv_checked(legacy).unwrap().source, "sftp://u@host:22/old%20name");
+        assert_eq!(
+            parse_kv_checked(legacy).unwrap().source,
+            "sftp://u@host:22/old%20name"
+        );
     }
 
     #[test]
@@ -304,3 +372,7 @@ mod tests {
         assert!(parse_kv_checked(body).unwrap_err().contains("key=value"));
     }
 }
+
+#[cfg(test)]
+#[path = "persistence_review_tests.rs"]
+mod review_tests;

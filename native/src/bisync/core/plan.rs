@@ -1,247 +1,33 @@
+//! Compatibility entry points for the shared pair planner. Runtime planning
+//! uses complete side snapshots; callers of `plan` retain the tree-only API.
 use std::collections::BTreeSet;
 
-use super::types::{
-    Action, Baseline, BisyncOptions, CompareMode, Conflict, ConflictMode, DeletePolicy, Direction,
-    Sig, Tree,
-};
+use super::compare::{same_entry, Against, TimeRules};
+use super::plan_pair::plan_pair;
+use super::plan_types::PlanContext;
+use super::snapshot_types::SideSnapshot;
+use super::types::{Action, Baseline, BisyncOptions, Conflict, Sig, Tree};
 
-fn sig_mtime(s: Option<Sig>) -> i64 {
-    s.map(|s| s.mtime_ms).unwrap_or(i64::MIN)
-}
-fn sig_size(s: Option<Sig>) -> u64 {
-    s.map(|s| s.size).unwrap_or(0)
-}
-
-/// Comparison-mode-aware equality of two optional signatures.
 pub(super) fn sig_eq(x: Option<Sig>, y: Option<Sig>, opts: &BisyncOptions) -> bool {
-    match (x, y) {
-        (None, None) => true,
-        (Some(a), Some(b)) => {
-            if a.size != b.size {
-                return false;
-            }
-            // Content-hash short-circuit: when BOTH sides carry a real content
-            // hash (a server's free native MD5 and/or a cheap local read), equal
-            // size+hash means identical content — independent of mtime. This is
-            // what lets a local→Drive sync skip files whose mtime differs but
-            // content matches (no re-transfer), in EVERY compare mode. Which
-            // sides get a hash is decided per-mode by `hash_mode` at walk time, so
-            // SizeOnly (no hashing) stays pure size and only the modes that should
-            // use content do. A hash of 0 means "not hashed" → not eligible.
-            if a.hash != 0 && b.hash != 0 {
-                return a.hash == b.hash;
-            }
-            match opts.compare {
-                CompareMode::SizeOnly => true,
-                CompareMode::Checksum => a.hash != 0 && b.hash != 0 && a.hash == b.hash,
-                CompareMode::MtimeSize => (a.mtime_ms - b.mtime_ms).abs() <= opts.modify_window_ms,
-            }
-        }
-        _ => false,
-    }
+    same_entry(x, y, TimeRules::EXACT.cross(), opts, Against::OtherSide)
 }
 
-/// Decide the actions + conflicts from the two current trees and the baseline.
-/// Returns (actions, conflicts, converged) where `converged` lists rels that are
-/// now identical on both sides (baseline should record them).
 pub fn plan(
     a: &Tree,
     b: &Tree,
     base: &Baseline,
     opts: BisyncOptions,
 ) -> (Vec<Action>, Vec<Conflict>, Vec<String>) {
-    let mut actions = Vec::new();
-    let mut conflicts = Vec::new();
-    let mut converged = Vec::new();
-
-    // Mirror: a stateless, one-way exact replica — the destination is made
-    // identical to the source, deleting orphans. The baseline isn't consulted.
-    if opts.delete == DeletePolicy::Mirror
-        && matches!(opts.direction, Direction::AtoB | Direction::BtoA)
-    {
-        let atob = opts.direction == Direction::AtoB;
-        let (src, dst) = if atob { (a, b) } else { (b, a) };
-        let mut rels: BTreeSet<&String> = BTreeSet::new();
-        rels.extend(src.keys());
-        rels.extend(dst.keys());
-        for rel in rels {
-            let sn = src.get(rel).copied();
-            let dn = dst.get(rel).copied();
-            if opts.move_files && sn.is_none() {
-                // A completed move intentionally leaves the destination while
-                // the source is absent. It must never be reinterpreted as a
-                // mirror deletion after a baseline-save failure.
-                converged.push(rel.clone());
-                continue;
-            }
-            if sig_eq(sn, dn, &opts) {
-                if opts.move_files && sn.is_some() {
-                    actions.push(if atob {
-                        Action::FinalizeMoveAtoB(rel.clone())
-                    } else {
-                        Action::FinalizeMoveBtoA(rel.clone())
-                    });
-                } else {
-                    converged.push(rel.clone());
-                }
-                continue;
-            }
-            match (sn, dn) {
-                (Some(_), _) => actions.push(if atob {
-                    Action::CopyAtoB(rel.clone())
-                } else {
-                    Action::CopyBtoA(rel.clone())
-                }),
-                (None, Some(_)) => actions.push(if atob {
-                    Action::DeleteB(rel.clone())
-                } else {
-                    Action::DeleteA(rel.clone())
-                }),
-                (None, None) => {}
-            }
-        }
-        return (actions, conflicts, converged);
-    }
-
-    let mut rels: BTreeSet<&String> = BTreeSet::new();
-    rels.extend(a.keys());
-    rels.extend(b.keys());
-    rels.extend(base.keys());
-
-    let allow_a_to_b = matches!(opts.direction, Direction::AtoB | Direction::Both);
-    let allow_b_to_a = matches!(opts.direction, Direction::BtoA | Direction::Both);
-    let allow_delete = opts.delete != DeletePolicy::NoDelete;
-
-    for rel in rels {
-        let an = a.get(rel).copied();
-        let bn = b.get(rel).copied();
-        let (ba, bb) = base.get(rel).copied().unwrap_or((None, None));
-
-        if opts.move_files {
-            match opts.direction {
-                Direction::AtoB if an.is_none() => {
-                    // Destination-only is the expected terminal state of a
-                    // move, including when the prior baseline write failed.
-                    converged.push(rel.clone());
-                    continue;
-                }
-                Direction::BtoA if bn.is_none() => {
-                    converged.push(rel.clone());
-                    continue;
-                }
-                Direction::AtoB if an.is_some() && sig_eq(an, bn, &opts) => {
-                    actions.push(Action::FinalizeMoveAtoB(rel.clone()));
-                    continue;
-                }
-                Direction::BtoA if bn.is_some() && sig_eq(an, bn, &opts) => {
-                    actions.push(Action::FinalizeMoveBtoA(rel.clone()));
-                    continue;
-                }
-                _ => {}
-            }
-        }
-        let a_changed = !sig_eq(an, ba, &opts);
-        let b_changed = !sig_eq(bn, bb, &opts);
-
-        if !a_changed && !b_changed {
-            continue; // in sync per the baseline
-        }
-        // Both sides ended up identical (e.g. same edit on both) → no work.
-        if sig_eq(an, bn, &opts) {
-            converged.push(rel.clone());
-            continue;
-        }
-
-        match (a_changed, b_changed) {
-            (true, false) => {
-                // propagate A's state to B
-                if allow_a_to_b {
-                    match an {
-                        Some(_) => actions.push(Action::CopyAtoB(rel.clone())),
-                        None => {
-                            if allow_delete {
-                                actions.push(Action::DeleteB(rel.clone()))
-                            }
-                        }
-                    }
-                }
-            }
-            (false, true) => {
-                if allow_b_to_a {
-                    match bn {
-                        Some(_) => actions.push(Action::CopyBtoA(rel.clone())),
-                        None => {
-                            if allow_delete {
-                                actions.push(Action::DeleteA(rel.clone()))
-                            }
-                        }
-                    }
-                }
-            }
-            (true, true) => {
-                if opts.conflict == ConflictMode::FileLevel {
-                    conflicts.push(Conflict {
-                        rel: rel.clone(),
-                        a: an,
-                        b: bn,
-                        duplicates: None,
-                    });
-                } else if opts.conflict == ConflictMode::KeepBoth {
-                    // Winner (newer) keeps the name; loser preserved as a copy.
-                    let a_wins = match (an, bn) {
-                        (Some(_), None) => true,
-                        (None, Some(_)) => false,
-                        (Some(sa), Some(sb)) => sa.mtime_ms >= sb.mtime_ms,
-                        (None, None) => continue,
-                    };
-                    if a_wins && allow_a_to_b {
-                        actions.push(Action::KeepBothAtoB(rel.clone()));
-                    } else if !a_wins && allow_b_to_a {
-                        actions.push(Action::KeepBothBtoA(rel.clone()));
-                    }
-                } else {
-                    // A deterministic winner side from the policy.
-                    let a_wins = match opts.conflict {
-                        ConflictMode::SourceWins => true,
-                        ConflictMode::DestWins => false,
-                        ConflictMode::NewerWins => sig_mtime(an) >= sig_mtime(bn),
-                        ConflictMode::OlderWins => sig_mtime(an) <= sig_mtime(bn),
-                        ConflictMode::LargerWins => sig_size(an) >= sig_size(bn),
-                        ConflictMode::SmallerWins => sig_size(an) <= sig_size(bn),
-                        _ => true,
-                    };
-                    if a_wins {
-                        if allow_a_to_b {
-                            match an {
-                                Some(_) => actions.push(Action::CopyAtoB(rel.clone())),
-                                None => {
-                                    if allow_delete {
-                                        actions.push(Action::DeleteB(rel.clone()))
-                                    }
-                                }
-                            }
-                        }
-                    } else if allow_b_to_a {
-                        match bn {
-                            Some(_) => actions.push(Action::CopyBtoA(rel.clone())),
-                            None => {
-                                if allow_delete {
-                                    actions.push(Action::DeleteA(rel.clone()))
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            (false, false) => unreachable!(),
-        }
-    }
-    (actions, conflicts, converged)
+    let mut a = SideSnapshot { tree: a.clone(), ..SideSnapshot::default() };
+    let mut b = SideSnapshot { tree: b.clone(), ..SideSnapshot::default() };
+    let planned = plan_pair(&mut a, &mut b, base, &PlanContext::new(opts));
+    let converged = planned.records.into_iter().map(|(rel, _)| rel)
+        .chain(planned.forget).collect();
+    (planned.actions, planned.conflicts, converged)
 }
 
-/// Build the new baseline after a run: successful actions + converged rels are
-/// now in sync (record both sides' current sig); conflicts, failed actions, and
-/// skipped rels keep their previous baseline so they're re-detected next time.
+/// Legacy helper for callers that already hold authoritative action results.
+/// Runtime runs record `CompletedAction` signatures directly, without a rewalk.
 pub fn update_baseline(
     base: &Baseline,
     a: &Tree,
@@ -250,31 +36,20 @@ pub fn update_baseline(
     converged: &[String],
     conflicts: &[Conflict],
 ) -> Baseline {
-    let conflict_set: BTreeSet<&str> = conflicts.iter().map(|c| c.rel.as_str()).collect();
-    let mut nb = base.clone();
-    let mut record = |rel: &str| {
-        nb.insert(rel.to_string(), (a.get(rel).copied(), b.get(rel).copied()));
-    };
-    for act in applied {
-        let rel = match act {
-            Action::CopyAtoB(r)
-            | Action::CopyBtoA(r)
-            | Action::FinalizeMoveAtoB(r)
-            | Action::FinalizeMoveBtoA(r)
-            | Action::DeleteA(r)
-            | Action::DeleteB(r)
-            | Action::KeepBothAtoB(r)
-            | Action::KeepBothBtoA(r) => r,
-        };
-        // After a copy both sides match; after a delete both are absent. For
-        // NewerWins the loser side may not match yet — record current state so
-        // the next walk reconciles. (Deletes leave the entry absent.)
-        record(rel);
+    let conflicts: BTreeSet<&str> = conflicts.iter().map(|c| c.rel.as_str()).collect();
+    let mut next = base.clone();
+    for rel in applied.iter().map(action_rel).chain(converged.iter().map(String::as_str)) {
+        next.insert(rel.to_string(), (a.get(rel).copied(), b.get(rel).copied()));
     }
-    for rel in converged {
-        record(rel);
+    next.retain(|rel, (a, b)| a.is_some() || b.is_some() || conflicts.contains(rel.as_str()));
+    next
+}
+
+pub(super) fn action_rel(action: &Action) -> &str {
+    match action {
+        Action::CopyAtoB(rel) | Action::CopyBtoA(rel)
+        | Action::FinalizeMoveAtoB(rel) | Action::FinalizeMoveBtoA(rel)
+        | Action::DeleteA(rel) | Action::DeleteB(rel)
+        | Action::KeepBothAtoB(rel) | Action::KeepBothBtoA(rel) => rel,
     }
-    // Drop entries that are now absent on both sides and not in conflict.
-    nb.retain(|rel, (x, y)| x.is_some() || y.is_some() || conflict_set.contains(rel.as_str()));
-    nb
 }
