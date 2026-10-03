@@ -1,0 +1,70 @@
+{
+  "owner": "v-local",
+  "read_files": [
+    "/tmp/rv1-ci-third/device/merge-prepare-evaluate.log",
+    "/tmp/rv1-ci-third/device/sync-manifestVersionRestoreRejectsStaleTokens-evaluate.log",
+    "/tmp/rv1-ci-third/v-local.json",
+    "docs/refs/local-fs-identity-durability.md",
+    "docs/refs/rv1-remote-suite.md",
+    "docs/superpowers/plans/2026-10-02-review-analyse-sync-sicherheit/ci-closure-fixes.md",
+    "native/src/bisync/os/shared/checkpoint_journal.rs",
+    "native/src/bisync/os/shared/checkpoint_review_tests.rs",
+    "native/src/creds/mod.rs",
+    "native/src/creds/os/private_storage_tests.rs",
+    "native/src/creds/os/private_storage_unix.rs",
+    "native/src/creds/os/private_storage_windows.rs",
+    "native/src/local_access/mod.rs",
+    "native/src/local_access/os/linux_os.rs",
+    "native/src/local_access/os/windows/create.rs",
+    "native/src/local_access/os/windows/directory_handle.rs",
+    "native/src/local_access/os/windows/private_access.rs",
+    "native/src/local_access/os/windows/private_security.rs",
+    "native/src/local_access/os/windows/read.rs",
+    "native/src/share/os/shared/identity_store.rs",
+    "native/src/vfs/core/extension_calls.rs",
+    "native/src/vfs/os/shared/local_extensions.rs",
+    "native/src/vfs/os/windows/local_platform.rs",
+    "native/src/local_access/os/windows/private_ancestors.rs",
+    "native/src/bisync/os/shared/replica_state.rs",
+    "native/src/bisync/os/shared/persistence.rs",
+    "native/src/bisync/os/shared/state_metadata.rs",
+    "native/src/vfs/os/windows/volume_info.rs",
+    "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.186/src/unix/linux_like/android/mod.rs"
+  ],
+  "modify_files": [
+    "native/src/creds/os/private_storage_unix.rs",
+    "native/src/creds/os/private_storage_windows.rs",
+    "native/src/local_access/os/linux_os.rs",
+    "native/src/local_access/os/windows/create.rs",
+    "native/src/local_access/os/windows/private_access.rs",
+    "native/src/local_access/os/windows/private_security.rs",
+    "native/src/bisync/os/shared/checkpoint_journal.rs"
+  ],
+  "create_files": [
+    "docs/refs/private-file-access.md",
+    "docs/superpowers/plans/2026-10-02-review-analyse-sync-sicherheit/abnahme/CI-3-V-LOCAL.md"
+  ],
+  "read_rule": "Only listed files, this scope and own new files. No folder listing or alternate exploration; exact missing definitions go to Root.",
+  "forbidden": "Other reads/edits, general review, independent test creation, builds/compiler/test/suite/formatter/server/install/Git/CI/graph/release/child agents. Do not mask cascades, lower assertions, narrow supported paths or bypass safety.",
+  "deliverable": "Close only assigned actual third-run failures. Fresh plan/API reading then implement and own static self-review. Report files read, created/modified, findings, decisions, preserved acceptance and exact unresolved dependencies; then stop.",
+  "acceptance": "Same Root-owned complete remote RV1 suite; every existing protection and compatibility assertion remains.",
+  "connected_surface_reason": "One connected private-object capability boundary: Windows checkpoint creation/open/hardening and Android app-private identity/store traversal. Exact consumers are read-only; no UI or fixture weakening.",
+  "external_sources": [
+    "https://man7.org/linux/man-pages/man2/open.2.html",
+    "https://android.googlesource.com/platform/bionic/+/refs/heads/android13-release/libc/kernel/uapi/asm-generic/fcntl.h",
+    "https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew",
+    "https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-setsecurityinfo",
+    "https://android.googlesource.com/platform/bionic/+/refs/heads/main/libc/kernel/uapi/asm-generic/fcntl.h",
+    "https://doc.rust-lang.org/std/fs/struct.OpenOptions.html#method.append",
+    "https://doc.rust-lang.org/src/std/sys/fs/windows.rs.html",
+    "https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-setendoffile",
+    "https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-setfilepointerex",
+    "https://github.com/rust-lang/rust/blob/1.99.0/library/std/src/sys/fs/windows.rs",
+    "https://doc.rust-lang.org/src/std/sys/fs/windows/mod.rs.html",
+    "https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-setfileinformationbyhandle",
+    "https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ntsetinformationfile"
+  ],
+  "read_limits": {
+    "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.186/src/unix/linux_like/android/mod.rs": "O_PATH/O_DIRECTORY/O_NOFOLLOW constant definitions only, lines 675-710"
+  }
+}

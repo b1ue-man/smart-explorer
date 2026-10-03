@@ -69,13 +69,21 @@ fn directory(path: &Path, create: bool) -> io::Result<File> {
             _ => None,
         })
         .collect();
-    let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
-    let fd = unsafe { libc::open(c"/".as_ptr(), flags) };
+    let traversal = libc::O_PATH | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+    let readable = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+    // System ancestors may grant search but no listing (Android's data root).
+    // Only the final private directory needs a readable fchmod/fsync handle.
+    let fd = unsafe { libc::open(c"/".as_ptr(), traversal) };
     if fd < 0 {
         return Err(io::Error::last_os_error());
     }
     let mut parent = unsafe { File::from_raw_fd(fd) };
-    for name in names {
+    for (index, name) in names.iter().enumerate() {
+        let flags = if index + 1 == names.len() {
+            readable
+        } else {
+            traversal
+        };
         let name = component(name)?;
         let mut fd = unsafe { libc::openat(parent.as_raw_fd(), name.as_ptr(), flags) };
         if fd < 0 && create && io::Error::last_os_error().kind() == io::ErrorKind::NotFound {
