@@ -20,7 +20,7 @@ pub(super) fn list(backend: &PeerBackend, path: &str) -> io::Result<VfsListing> 
     let mut result = VfsListing::default();
     let mut names = HashSet::new();
     let mut previous: Option<String> = None;
-    let mut memory = 0usize;
+    let mut memory = 0u64;
     peer_stream::call(
         backend,
         FsRequest::ListDirBatch(FsListBatch {
@@ -41,10 +41,15 @@ pub(super) fn list(backend: &PeerBackend, path: &str) -> io::Result<VfsListing> 
                     }
                     previous = Some(entry.name.clone());
                     memory = memory.saturating_add(
-                        entry.name.capacity() * 2
-                            + entry.id.as_ref().map_or(0, String::capacity)
-                            + std::mem::size_of::<crate::vfs::VfsMeta>() * 2
-                            + 3 * std::mem::size_of::<String>(),
+                        (entry.name.capacity() as u64)
+                            .saturating_mul(2)
+                            .saturating_add(entry.id.as_ref().map_or(0, |id| id.capacity() as u64))
+                            .saturating_add(
+                                (std::mem::size_of::<crate::vfs::VfsMeta>() as u64).saturating_mul(2),
+                            )
+                            .saturating_add(
+                                (std::mem::size_of::<String>() as u64).saturating_mul(3),
+                            ),
                     );
                     result.entries.push(entry.into());
                 }
@@ -58,10 +63,16 @@ pub(super) fn list(backend: &PeerBackend, path: &str) -> io::Result<VfsListing> 
                         ));
                     }
                     memory = memory.saturating_add(
-                        hole.rel.capacity() * 2
-                            + hole.detail.capacity()
-                            + std::mem::size_of::<crate::vfs::VfsOmission>() * 2
-                            + 3 * std::mem::size_of::<String>(),
+                        (hole.rel.capacity() as u64)
+                            .saturating_mul(2)
+                            .saturating_add(hole.detail.capacity() as u64)
+                            .saturating_add(
+                                (std::mem::size_of::<crate::vfs::VfsOmission>() as u64)
+                                    .saturating_mul(2),
+                            )
+                            .saturating_add(
+                                (std::mem::size_of::<String>() as u64).saturating_mul(3),
+                            ),
                     );
                     result.omitted.push(hole.into());
                 }

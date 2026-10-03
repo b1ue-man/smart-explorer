@@ -245,7 +245,7 @@ fn strings_bytes(items: &Vec<String>) -> u64 {
 fn tree_bytes(tree: &SizeNode) -> u64 {
     let node = |node: &SizeNode| {
         NODE_BYTES
-            .saturating_add(node.name.capacity() as u64)
+            .saturating_add(node.name.len() as u64)
             .saturating_add(
                 (node.children.capacity().saturating_sub(node.children.len()) as u64)
                     .saturating_mul(std::mem::size_of::<SizeNode>() as u64),
