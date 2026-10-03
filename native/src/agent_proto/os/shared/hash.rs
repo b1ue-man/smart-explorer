@@ -1,10 +1,10 @@
-use std::io::{self, Read};
+use std::io;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::fs::{is_pseudo_dir, systemtime_ms};
 use super::session::{emit, Sink};
-use super::{Frame, CHUNK};
+use super::Frame;
 
 /// Walk `root` emitting size+mtime (and optionally md5) per file.
 pub(crate) fn handle_walk_hashed(
@@ -25,16 +25,20 @@ pub(crate) fn handle_walk_hashed(
         }
         let metadata = std::fs::symlink_metadata(&dir)?;
         if super::local_platform::metadata_is_link_like(&dir, &metadata) {
-            return Err(io::Error::new(io::ErrorKind::Unsupported,
-                super::HASH_WALK_LINK_BOUNDARY));
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                super::HASH_WALK_LINK_BOUNDARY,
+            ));
         }
         for ent in std::fs::read_dir(&dir)? {
             let ent = ent?;
             let p = ent.path();
             let md = std::fs::symlink_metadata(&p)?;
             if super::local_platform::metadata_is_link_like(&p, &md) {
-                return Err(io::Error::new(io::ErrorKind::Unsupported,
-                    super::HASH_WALK_LINK_BOUNDARY));
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    super::HASH_WALK_LINK_BOUNDARY,
+                ));
             }
             let rel = p
                 .strip_prefix(base)
@@ -69,7 +73,9 @@ pub(crate) fn handle_walk_hashed(
                 stack.push(p.clone());
             } else if md.is_file() {
                 let size = md.len();
-                let md5 = if want_hash { Some(md5_file(&p)?) } else { None };
+                let md5 = if want_hash {
+                    Some(super::ext_ops::md5_file(&p, size, cancel)?)
+                } else { None };
                 emit(
                     sink,
                     id,
@@ -87,21 +93,8 @@ pub(crate) fn handle_walk_hashed(
     emit(sink, id, &Frame::End)
 }
 
-fn md5_file(path: &Path) -> io::Result<String> {
-    let mut f = std::fs::File::open(path)?;
-    let mut ctx = Md5::new();
-    let mut buf = vec![0u8; CHUNK];
-    loop {
-        let n = f.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        ctx.update(&buf[..n]);
-    }
-    Ok(ctx.finish_hex())
-}
-
-struct Md5 {
+/// MD5 without dependencies (the standalone agent includes this module).
+pub(crate) struct Md5 {
     a: u32,
     b: u32,
     c: u32,
@@ -112,7 +105,7 @@ struct Md5 {
 }
 
 impl Md5 {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Md5 {
             a: 0x67452301,
             b: 0xefcdab89,
@@ -124,7 +117,7 @@ impl Md5 {
         }
     }
 
-    fn update(&mut self, mut data: &[u8]) {
+    pub(crate) fn update(&mut self, mut data: &[u8]) {
         self.len = self.len.wrapping_add(data.len() as u64);
         if self.buf_len > 0 {
             let need = 64 - self.buf_len;
@@ -150,7 +143,7 @@ impl Md5 {
         }
     }
 
-    fn finish_hex(mut self) -> String {
+    pub(crate) fn finish_hex(mut self) -> String {
         let bit_len = self.len.wrapping_mul(8);
         let mut pad = [0u8; 72];
         pad[0] = 0x80;

@@ -1,17 +1,31 @@
 use crate::agent_proto::WireMeta;
 use crate::vfs::VfsMeta;
 
-pub(super) fn wire_to_vfs(m: WireMeta) -> VfsMeta {
+pub(crate) fn wire_to_vfs(m: WireMeta) -> VfsMeta {
     VfsMeta {
         name: m.name,
         is_dir: m.is_dir,
         is_symlink: m.is_symlink,
+        special: m.special,
         size: m.size,
         mtime_ms: m.mtime_ms,
         btime_ms: 0,
         hidden: false,
         system: false,
         id: None,
+        content_md5: m.content_md5,
+    }
+}
+
+/// The entry a server of this protocol sends for `m`.
+pub(crate) fn vfs_to_wire(m: VfsMeta) -> WireMeta {
+    WireMeta {
+        name: m.name,
+        is_dir: m.is_dir,
+        is_symlink: m.is_symlink,
+        special: m.special,
+        size: m.size,
+        mtime_ms: m.mtime_ms,
         content_md5: m.content_md5,
     }
 }

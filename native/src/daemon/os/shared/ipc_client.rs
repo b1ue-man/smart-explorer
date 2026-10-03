@@ -368,9 +368,17 @@ pub(super) fn share_backend_identity(label: String, target: crate::share::PeerOp
     Arc::new(UnavailableBackend { label, target })
 }
 
-struct UnavailableBackend {
+pub(super) struct UnavailableBackend {
     label: String,
     target: crate::share::PeerOpenTarget,
+}
+
+impl UnavailableBackend {
+    pub(super) fn live_backend(&self) -> io::Result<crate::vfs::BackendHandle> {
+        open_share_backend(self.target.clone())
+            .map(|(_, backend, _)| backend)
+            .map_err(io::Error::other)
+    }
 }
 
 impl crate::vfs::Backend for UnavailableBackend {
@@ -385,6 +393,10 @@ impl crate::vfs::Backend for UnavailableBackend {
 
     fn root_display(&self) -> String {
         self.label.clone()
+    }
+
+    fn extensions(&self) -> Option<&dyn crate::vfs::BackendExtensions> {
+        Some(self)
     }
 
     fn list_dir(&self, _path: &str) -> crate::vfs::VfsResult<Vec<crate::vfs::VfsMeta>> {

@@ -73,8 +73,8 @@ pub(super) fn handle_client(
                 },
             )
         }
-        IpcRequest::AnalyzeShare { target, root, .. } => {
-            super::ipc_analysis::serve(stream, root, || {
+        IpcRequest::AnalyzeShare { target, root, node_budget, .. } => {
+            super::ipc_analysis::serve(stream, root, node_budget, || {
                 host.open_share(target).map(|(_, backend, _)| backend).map_err(io::Error::other)
             })
         }

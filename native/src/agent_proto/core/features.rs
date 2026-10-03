@@ -10,6 +10,8 @@ pub const LABEL_CREDIT: &str = "credit-v1";
 pub const LABEL_BATCH: &str = "batch-v1";
 /// `CopyToStage`, `CreateDir`, `DiscardStage`.
 pub const LABEL_STAGE: &str = "stage-v1";
+/// The extension frames (`ListTolerant` … `Watch`, `ops_types`).
+pub const LABEL_EXT: &str = "ext-v1";
 /// Prefix of the label announcing the admitted concurrent requests.
 const LABEL_SLOTS: &str = "slots-";
 
@@ -31,7 +33,7 @@ pub fn server_version(batch: bool) -> String {
 pub fn server_version_with(batch: bool, slots: usize) -> String {
     let slots = slots.clamp(1, CREDIT_REQUEST_LIMIT);
     let mut version = format!(
-        "{}+{LABEL_LINKS}.{LABEL_CREDIT}.{LABEL_STAGE}.{LABEL_SLOTS}{slots}",
+        "{}+{LABEL_LINKS}.{LABEL_CREDIT}.{LABEL_STAGE}.{LABEL_EXT}.{LABEL_SLOTS}{slots}",
         env!("CARGO_PKG_VERSION")
     );
     if batch {
@@ -59,6 +61,8 @@ pub struct ServerFeatures {
     pub credit: bool,
     pub batch: bool,
     pub stage: bool,
+    /// The extension frames of `ops_types` (`ext-v1`).
+    pub extensions: bool,
     /// Requests the server admits at once, when it announced them.
     pub slots: Option<usize>,
     /// The background service (announces itself with a trailing `worker`).
@@ -82,6 +86,7 @@ impl ServerFeatures {
                 LABEL_CREDIT => features.credit = true,
                 LABEL_BATCH => features.batch = true,
                 LABEL_STAGE => features.stage = true,
+                LABEL_EXT => features.extensions = true,
                 other => {
                     if let Some(slots) = other.strip_prefix(LABEL_SLOTS) {
                         features.slots = slots.parse().ok().filter(|slots| *slots > 0);

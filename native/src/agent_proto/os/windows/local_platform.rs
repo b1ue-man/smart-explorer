@@ -5,14 +5,21 @@ use std::path::Path;
 pub(crate) type FileIdentity = (u32, u64);
 
 pub(crate) fn metadata_is_link_like(path: &Path, metadata: &std::fs::Metadata) -> bool {
-    use std::os::windows::{fs::{MetadataExt, OpenOptionsExt}, io::AsRawHandle};
+    metadata_class(path, metadata).0
+}
+
+pub(crate) fn metadata_class(path: &Path, metadata: &std::fs::Metadata) -> (bool, bool) {
+    use std::os::windows::{
+        fs::{MetadataExt, OpenOptionsExt},
+        io::AsRawHandle,
+    };
     use windows_sys::Win32::Storage::FileSystem::*;
 
     if metadata.is_symlink() {
-        return true;
+        return (true, false);
     }
     if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0 {
-        return false;
+        return (false, metadata.file_attributes() & FILE_ATTRIBUTE_DEVICE != 0);
     }
     let Ok(file) = std::fs::OpenOptions::new()
         .access_mode(FILE_READ_ATTRIBUTES)
@@ -20,17 +27,76 @@ pub(crate) fn metadata_is_link_like(path: &Path, metadata: &std::fs::Metadata) -
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
         .open(path)
     else {
-        return true;
+        return (true, false);
     };
     let mut info: FILE_ATTRIBUTE_TAG_INFO = unsafe { std::mem::zeroed() };
     let read = unsafe {
         GetFileInformationByHandleEx(
-            file.as_raw_handle(), FileAttributeTagInfo,
+            file.as_raw_handle(),
+            FileAttributeTagInfo,
             (&mut info as *mut FILE_ATTRIBUTE_TAG_INFO).cast(),
             std::mem::size_of::<FILE_ATTRIBUTE_TAG_INFO>() as u32,
         )
     };
-    read == 0 || info.ReparseTag == 0 || info.ReparseTag & 0x2000_0000 != 0
+    classify_tag(read != 0, info.ReparseTag, metadata.file_attributes())
+}
+
+fn classify_tag(known: bool, tag: u32, attributes: u32) -> (bool, bool) {
+    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_DEVICE;
+    let link = !known || tag == 0 || tag & 0x2000_0000 != 0;
+    // AF_UNIX / LX_FIFO / LX_CHR / LX_BLK (WDK tags); cloud, WOF and
+    // deduplication data reparse points remain ordinary files/directories.
+    let special = !link && (attributes & FILE_ATTRIBUTE_DEVICE != 0
+        || matches!(tag, 0x8000_0023..=0x8000_0026));
+    (link, special)
+}
+
+pub(crate) fn open_regular_no_follow(path: &Path, write: bool) -> io::Result<std::fs::File> {
+    use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
+    use windows_sys::Win32::Storage::FileSystem::*;
+    let file = std::fs::OpenOptions::new()
+        .read(!write)
+        .write(write)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)?;
+    let metadata = file.metadata()?;
+    use std::os::windows::fs::MetadataExt;
+    let mut info: FILE_ATTRIBUTE_TAG_INFO = unsafe { std::mem::zeroed() };
+    // SAFETY: the handle and output buffer remain live across the query.
+    let read = unsafe { GetFileInformationByHandleEx(file.as_raw_handle(), FileAttributeTagInfo,
+        (&mut info as *mut FILE_ATTRIBUTE_TAG_INFO).cast(),
+        std::mem::size_of::<FILE_ATTRIBUTE_TAG_INFO>() as u32) };
+    let (link, special) = if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        classify_tag(read != 0, info.ReparseTag, metadata.file_attributes())
+    } else {
+        (false, metadata.file_attributes() & FILE_ATTRIBUTE_DEVICE != 0)
+    };
+    if link || special || !metadata.is_file() {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "keine reguläre Datei"));
+    }
+    Ok(file)
+}
+
+pub(crate) fn set_file_mode(_file: &std::fs::File, _mode: u32) -> io::Result<()> {
+    Ok(())
+}
+
+/// Opens `path` for reading only when it is a regular file.
+pub(crate) fn open_regular_file(path: &Path) -> io::Result<std::fs::File> {
+    let file = std::fs::File::open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("keine reguläre Datei: {}", path.display()),
+        ));
+    }
+    Ok(file)
+}
+
+/// No filesystem-wide flush on Windows (per-file flushes cover a stage).
+pub(crate) fn sync_filesystem(_path: &Path) -> io::Result<bool> {
+    Ok(false)
 }
 
 pub(crate) fn file_identity(file: &std::fs::File) -> io::Result<FileIdentity> {

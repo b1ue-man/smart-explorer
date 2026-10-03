@@ -22,7 +22,8 @@ pub(crate) fn handle_read(
     len: u64,
     cancel: &AtomicBool,
 ) -> io::Result<()> {
-    let mut f = std::fs::File::open(path)?;
+    // Never waits on a FIFO, never reads a device (links are followed).
+    let mut f = super::local_platform::open_regular_file(Path::new(path))?;
     if offset > 0 {
         f.seek(SeekFrom::Start(offset))?;
     }

@@ -10,6 +10,7 @@ import app.smartexplorer.android.api.DuplicateGroup
 import app.smartexplorer.android.api.FilesApi
 import app.smartexplorer.android.api.ReclaimSummary
 import app.smartexplorer.android.core.CoreException
+import app.smartexplorer.android.service.TaskKeeper
 import app.smartexplorer.android.ui.common.Snackbars
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -50,21 +51,28 @@ internal class DuplicatesViewModel : ViewModel() {
     var error by mutableStateOf<String?>(null)
         private set
 
-    /** The place has no trash (`fs.delete` answered `unsupported`): groups are shown only. */
+    /** No currently verified trash capability: groups are shown only. */
     var trashUnsupported by mutableStateOf(false)
+        private set
+    var remoteResult by mutableStateOf(false)
         private set
     var deleting by mutableStateOf(false)
         private set
 
     private var scanJob: Job? = null
+    private var recycleTaskId: String? = null
+    private var cleared = false
 
     fun preselect(current: String?) {
         if (phase == ScanPhase.Setup && location == null) location = current
     }
 
     fun start() {
+        if (deleting) return
         val target = location ?: return
         if (phase == ScanPhase.Scanning) cancel()
+        // The page shows one result: the former one is freed at once.
+        taskId?.let { releaseResult(it) }
         scanJob?.cancel()
         phase = ScanPhase.Scanning
         error = null
@@ -73,6 +81,7 @@ internal class DuplicatesViewModel : ViewModel() {
         ambiguous = emptySet()
         summary = null
         trashUnsupported = false
+        remoteResult = false
         taskId = null
         val threshold = minSize
         scanJob = viewModelScope.launch {
@@ -92,6 +101,9 @@ internal class DuplicatesViewModel : ViewModel() {
                         val (found, shared) = withContext(Dispatchers.Default) { arrange(all) }
                         ambiguous = shared
                         groups = found
+                        remoteResult = summary?.remote == true
+                        trashUnsupported = summary?.canRecycle != true ||
+                            (remoteResult && found.none { it.contentVerified })
                         searchedMinSize = threshold
                         phase = ScanPhase.Result
                     }
@@ -123,7 +135,10 @@ internal class DuplicatesViewModel : ViewModel() {
     }
 
     fun backToSetup() {
+        if (deleting) return
         if (phase == ScanPhase.Scanning) cancel()
+        taskId?.let { releaseResult(it) }
+        taskId = null
         scanJob?.cancel()
         phase = ScanPhase.Setup
         groups = emptyList()
@@ -134,6 +149,7 @@ internal class DuplicatesViewModel : ViewModel() {
 
     /** Selects or deselects one copy; the last unselected copy of a group stays. */
     fun toggle(group: DuplicateGroup, location: String) {
+        if (deleting || trashUnsupported || (remoteResult && !group.contentVerified)) return
         if (location in ambiguous) {
             Snackbars.show("Gleichnamige Dateien am selben Ort lassen sich nicht einzeln löschen.")
             return
@@ -151,7 +167,9 @@ internal class DuplicatesViewModel : ViewModel() {
 
     /** [Kopien automatisch auswählen]: all but the oldest copy of every group (never an [ambiguous] one). */
     fun autoSelect() {
+        if (deleting || trashUnsupported) return
         selected = groups.flatMap { group ->
+            if (remoteResult && !group.contentVerified) return@flatMap emptyList()
             val keep = group.items.minByOrNull { it.mtimeMs } ?: return@flatMap emptyList()
             group.items.filter { it !== keep && it.location != keep.location && it.location !in ambiguous }.map { it.location }
         }.toSet()
@@ -160,22 +178,32 @@ internal class DuplicatesViewModel : ViewModel() {
     /** [In den Papierkorb]: never permanent; failures keep their entries in the list. */
     fun trashSelected() {
         val targets = selected.toList()
-        if (targets.isEmpty() || deleting) return
-        viewModelScope.launch {
-            deleting = true
+        if (targets.isEmpty() || deleting || trashUnsupported) return
+        val source = taskId ?: return
+        deleting = true
+        // The action keeps its result until exact successes have been read,
+        // including when the page is closed while the host is moving a copy.
+        TaskKeeper.scope.launch {
             try {
-                val task = FilesApi.awaitTask(FilesApi.delete(targets, permanent = false))
+                val action = if (remoteResult) AnalyzeApi.reclaimRecycle(source, targets)
+                    else FilesApi.delete(targets, permanent = false)
+                recycleTaskId = action
+                if (cleared) FilesApi.cancelTask(action)
+                val task = FilesApi.awaitTask(action)
                 val failed = task.errors.map { it.path }.toSet()
                 // A partly failed task names its failures; without names nothing is known to be moved.
-                val removed = when {
+                val removed = if (remoteResult) {
+                    AnalyzeApi.recycleResult(action).moved.toSet().intersect(targets.toSet())
+                } else when {
                     task.state == "done" || (task.state == "failed" && failed.isNotEmpty()) -> targets.filterNot { it in failed }.toSet()
                     else -> emptySet()
                 }
                 groups = groups.map { group -> group.copy(items = group.items.filter { it.location !in removed }) }.filter { it.items.size > 1 }
                 selected = selected - removed
                 when {
-                    task.state == "done" && failed.isEmpty() -> Snackbars.show("${removed.size} Dateien in den Papierkorb verschoben")
-                    task.state == "canceled" -> Snackbars.show("Abgebrochen – für eine aktuelle Liste erneut suchen")
+                    task.state == "done" && failed.isEmpty() && removed.size == targets.size ->
+                        Snackbars.show("${removed.size} Dateien in den Papierkorb verschoben")
+                    task.state == "canceled" -> Snackbars.show("Abgebrochen – ${removed.size} Dateien verschoben")
                     else -> Snackbars.show(
                         "${removed.size} verschoben, ${targets.size - removed.size} nicht: " +
                             (task.message ?: task.errors.firstOrNull()?.message ?: "Fehler"),
@@ -189,9 +217,21 @@ internal class DuplicatesViewModel : ViewModel() {
                     Snackbars.show("Nicht gelöscht: ${e.message ?: e.kind}")
                 }
             } finally {
+                if (remoteResult) recycleTaskId?.let { releaseResult(it) }
+                recycleTaskId = null
                 deleting = false
             }
         }
+    }
+
+    /** The activity is gone for good: its result is unreachable, so the core frees it. */
+    override fun onCleared() {
+        cleared = true
+        recycleTaskId?.let { id -> TaskKeeper.scope.launch {
+            try { FilesApi.cancelTask(id) } catch (_: CoreException) { }
+        } }
+        taskId?.let { releaseResult(it) }
+        super.onCleared()
     }
 
     /**

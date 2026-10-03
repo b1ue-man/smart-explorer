@@ -12,13 +12,15 @@ const MAX_FRAME: usize = 1024 * 1024;
 
 pub(super) fn scan(target: crate::share::PeerOpenTarget, root: &str, progress: &Progress) -> io::Result<ScanOutcome> {
     progress.check_cancel()?;
+    // Freeze the offered limit: request and decoder must use the same value.
+    progress.set_node_budget(progress.node_budget());
     let token = super::ipc_storage::read_token().map_err(io::Error::other)?;
     let address = super::ipc_storage::read_ipc_addr().ok_or_else(|| io::Error::other("Analyse-Worker nicht erreichbar"))?;
     let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(3))?;
     stream.set_write_timeout(Some(Duration::from_secs(60)))?;
     stream.set_nodelay(true)?;
     super::ipc_protocol::write_request(&mut stream, &super::ipc_protocol::IpcRequest::AnalyzeShare {
-        token, target, root: root.into(),
+        token, target, root: root.into(), node_budget: Some(progress.node_budget()),
     })?;
     receive(stream, progress)
 }
@@ -46,7 +48,7 @@ pub(super) fn receive(stream: TcpStream, progress: &Progress) -> io::Result<Scan
         }
     })?;
     let guard = ReaderGuard { socket: stream, reader: Some(reader) };
-    let mut receiver = AnalysisReceiver::default();
+    let mut receiver = AnalysisReceiver::with_node_budget(progress.node_budget());
     let mut last = Instant::now();
     let result = (|| loop {
         progress.check_cancel()?;
@@ -73,13 +75,15 @@ pub(super) fn receive(stream: TcpStream, progress: &Progress) -> io::Result<Scan
 }
 
 pub(super) fn serve(
-    stream: TcpStream, root: String, open: impl FnOnce() -> io::Result<BackendHandle>,
+    stream: TcpStream, root: String, node_budget: Option<u64>,
+    open: impl FnOnce() -> io::Result<BackendHandle>,
 ) -> io::Result<()> {
     stream.set_write_timeout(Some(Duration::from_secs(60)))?;
     stream.set_nodelay(true)?;
     let mut read = stream.try_clone()?;
     let sink = Arc::new(Mutex::new(stream.try_clone()?));
     let progress = Progress::default();
+    if let Some(budget) = node_budget { progress.set_node_budget(budget); }
     progress.set_phase(ScanPhase::Preparing, &root);
     let cancellation = progress.cancel.clone();
     let reader = thread::Builder::new().name("analysis-ipc-cancel".into()).spawn(move || {
@@ -112,7 +116,8 @@ pub(super) fn serve(
         emitter_result?;
         progress.check_cancel()?;
         progress.set_phase(ScanPhase::Assembling, &root);
-        analysis_transfer::send_outcome(&mut outcome, &progress, None,
+        analysis_transfer::send_outcome_with(&mut outcome, &progress,
+            analysis_transfer::SendOptions { deflate: true, host_scan_ms: None },
             |message| send_control(&sink, message), |bytes| send_frame(&sink, DATA, &bytes))
     });
     if let Err(error) = &result { let _ = send_frame(&sink, ERROR, error.to_string().as_bytes()); }
