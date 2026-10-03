@@ -1,54 +1,52 @@
-//! Signed peer facts crossing from the daemon to the privileged uplink worker.
-use super::{lan_presence_match, lan_privacy, DirectAccessState, LanProof, LanSighting, ShareProfiles};
+//! Short private leases from live paired TLS links to the privileged worker.
+use super::lan_link_facts::{AuthenticatedLanFact, MAX_LINK_PEERS};
+use super::{LanSettings, ShareProfiles};
 
 const FILE: &str = "lan_uplink_evidence.json";
 const MAX_BYTES: u64 = 256 * 1024;
-const MAX_PEERS: usize = 128;
-
 #[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Evidence {
-    sighting: LanSighting,
-    proof: LanProof,
+    version: u8,
+    published_at: i64,
+    facts: Vec<AuthenticatedLanFact>,
 }
 
-pub(crate) fn publish<'a>(peers: impl Iterator<Item = (&'a LanSighting, &'a LanProof)>) -> Result<(), String> {
-    let peers: Vec<_> = peers.take(MAX_PEERS).map(|(sighting, proof)| Evidence {
-        sighting: sighting.clone(), proof: proof.clone(),
-    }).collect();
-    let bytes = serde_json::to_vec(&peers).map_err(|error| error.to_string())?;
+pub(crate) fn publish(facts: &[AuthenticatedLanFact]) -> Result<(), String> {
+    if facts.len() > MAX_LINK_PEERS { return Err("Zu viele LAN-Link-Nachweise".into()); }
+    let now = super::core_now_secs();
+    let evidence = Evidence { version: 1, published_at: now,
+        facts: facts.iter().filter(|fact| fact.fresh(now)).cloned().collect() };
+    let bytes = serde_json::to_vec(&evidence).map_err(|error| error.to_string())?;
     if bytes.len() as u64 > MAX_BYTES { return Err("LAN-Nachweis ist zu gross".into()); }
     crate::support_dirs::write_private_atomic(&crate::support_dirs::app_data_file(FILE), &bytes)
         .map_err(|error| format!("LAN-Nachweis speichern: {error}"))
 }
 
-/// Verify private dial hints, but fail closed until the paired-link Iroh
-/// channel proves both no uplink and the selected local private interface.
+/// A worker never starts from mDNS. Recheck the full current profile pins,
+/// opt-in and exact current OS interface before consuming a short TLS lease.
 pub(crate) fn authorize(private_index: u32, facts: &[crate::net::InterfaceFacts]) -> Result<(), String> {
+    let settings = LanSettings::load()?;
+    if !settings.presence_enabled || !settings.uplink_sharing_enabled || !settings.uplink_setup_done {
+        return Err("LAN-Uplink-Freigabe ist ausgeschaltet oder nicht eingerichtet".into());
+    }
     let text = crate::support_dirs::read_private_text(&crate::support_dirs::app_data_file(FILE), MAX_BYTES)
         .map_err(|error| format!("LAN-Nachweis lesen: {error}"))?;
-    let evidence: Vec<Evidence> = serde_json::from_str(&text).map_err(|error| error.to_string())?;
-    if evidence.len() > MAX_PEERS { return Err("Zu viele LAN-Nachweise".into()); }
+    let evidence: Evidence = serde_json::from_str(&text).map_err(|error| error.to_string())?;
+    let now = super::core_now_secs();
+    if now <= 0 || evidence.published_at <= 0 || evidence.version != 1
+        || evidence.facts.len() > MAX_LINK_PEERS || evidence.published_at > now
+        || now.saturating_sub(evidence.published_at) >= super::lan_link_facts::MAX_FACT_LIFETIME_SECS {
+        return Err("LAN-Link-Nachweis ist veraltet oder ungueltig".into());
+    }
     let home = crate::support_dirs::home_dir().map(|path| path.to_string_lossy().replace('\\', "/"));
     let profiles = ShareProfiles::load_checked(home)?;
-    let links = crate::net::classify_links(facts, &[], None, &[]);
-    let now = super::core_now_secs();
-    for peer in evidence {
-        if peer.sighting.uplink
-            || !lan_presence_match::peer_interfaces(&peer.sighting, &links).contains(&private_index) {
-            continue;
-        }
-        for contact in &profiles.direct_contacts {
-            if contact.access_state != DirectAccessState::Accepted || contact.remote_device_id.is_none() { continue; }
-            let node = if !contact.expected_node_id.is_empty() { Some(contact.expected_node_id.as_str()) }
-                else { contact.remote_public_key.as_deref().or(contact.accepted_public_key.as_deref()) };
-            let Some(node) = node else { continue; };
-            let Some(mut secret) = ShareProfiles::direct_secret_checked(contact)? else { continue; };
-            let valid = lan_privacy::verify_sighting(&peer.sighting, &peer.proof, node, &secret, now);
-            secret.fill(0);
-            if valid {
-                return Err("Iroh-Linkbestaetigung fehlt; signierte LAN-Sichtung allein erlaubt keine Uplink-Freigabe".into());
-            }
+    for fact in &evidence.facts {
+        if !fact.peer_uplink && fact.interface.index == private_index
+            && fact.current(now, &profiles.direct_contacts, &profiles.direct_grants, facts)
+            && fact.can_share_on(facts, &[]) {
+            return Ok(());
         }
     }
-    Err("Kein frischer signierter Nachweis eines gekoppelten Geraets auf diesem Link".into())
+    Err("Kein frischer gepinnter TLS-LAN-Link auf diesem privaten Interface".into())
 }

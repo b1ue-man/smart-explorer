@@ -194,12 +194,14 @@ impl ShareHost {
     /// and Iroh ports; queue sightings for `drain_events` and refresh the
     /// status snapshot. Never blocks the host on multicast I/O.
     fn lan_tick(&self) {
-        let (contacts, node_id, ports) = {
+        let (contacts, grants, paired_links, node_id, ports) = {
             let Ok(state) = self.state.lock() else {
                 return;
             };
             (
                 state.profiles.direct_contacts.clone(),
+                state.profiles.direct_grants.clone(),
+                state.service.as_ref().map(|service| service.lan_link_snapshot()).unwrap_or_default(),
                 state
                     .identity
                     .as_ref()
@@ -218,14 +220,20 @@ impl ShareHost {
         let uplink_advisory = lan.uplink_advisory(now);
         let events = lan.tick(super::lan_runtime::LanTickInput {
             contacts: &contacts,
+            grants: &grants,
+            paired_links: &paired_links,
             own_node_id: node_id.as_deref(),
             ports,
             uplink_advisory,
             now,
         });
         let status = lan.status(&contacts, now);
+        let host_facts = lan.link_host_facts();
         drop(lan);
         if let Ok(mut state) = self.state.lock() {
+            if let Some(service) = state.service.as_ref() {
+                let _ = service.update_lan_link_host(host_facts);
+            }
             state.pending_lan_events.extend(events);
             state.lan_status = status;
         }

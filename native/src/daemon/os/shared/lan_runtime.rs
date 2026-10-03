@@ -7,8 +7,9 @@ use std::time::{Duration, Instant};
 
 use crate::net::{InterfaceFacts, LinkClass};
 use crate::share::lan_uplink_policy::PeerOnLink;
+use crate::share::lan_link_facts::{self, AuthenticatedLanFact, LanLinkHostFacts, LanPeerPin, OwnUplink};
 use crate::share::{
-    lan_presence_match, DirectContact, LanEvent, LanFacility, LanPeerView,
+    lan_presence_match, DirectContact, DirectGrant, LanEvent, LanFacility, LanPeerView,
     LanPresence, LanSettings, LanSighting, LanStatus, LinkView, ShareEvent, UplinkView,
     LAN_PRESENCE_TTL_SECS,
 };
@@ -23,6 +24,8 @@ mod presence_operations;
 
 pub(super) struct LanTickInput<'a> {
     pub(super) contacts: &'a [DirectContact],
+    pub(super) grants: &'a [DirectGrant],
+    pub(super) paired_links: &'a [AuthenticatedLanFact],
     pub(super) own_node_id: Option<&'a str>,
     pub(super) ports: (Option<u16>, Option<u16>),
     pub(super) uplink_advisory: bool,
@@ -42,7 +45,9 @@ pub(super) struct LanRuntime {
     proofs: HashMap<String, crate::share::LanProof>,
     authenticator: crate::share::lan_presence_auth::LanAuthenticator,
     authenticated_contacts: Vec<String>,
-    evidence_revision: Option<Vec<(String, String)>>,
+    link_facts: Vec<AuthenticatedLanFact>,
+    uplink_pins: Vec<LanPeerPin>,
+    evidence_revision: Option<Vec<AuthenticatedLanFact>>,
     /// contact id → (candidates, uplink) currently reported as seen.
     reported: HashMap<String, (Vec<String>, bool)>,
     /// Hashed ids of the sightings that matched a paired contact.
@@ -69,6 +74,8 @@ impl LanRuntime {
             proofs: HashMap::new(),
             authenticator: crate::share::lan_presence_auth::LanAuthenticator::new(),
             authenticated_contacts: Vec::new(),
+            link_facts: Vec::new(),
+            uplink_pins: Vec::new(),
             evidence_revision: None,
             reported: HashMap::new(),
             reported_hashes: Vec::new(),
@@ -81,47 +88,40 @@ impl LanRuntime {
 
     /// Stop an active sharing session synchronously (daemon shutdown).
     pub(super) fn shutdown(&mut self) {
+        self.link_facts.clear();
+        let _ = crate::share::lan_uplink_evidence::publish(&[]);
         self.uplink.shutdown();
         if let Some(presence) = self.presence.take() {
             presence.withdraw();
         }
     }
 
-    /// Interfaces where a paired peer was seen recently.
+    /// Interfaces confirmed by current pinned status channels.
     pub(super) fn peer_ifaces(&self, now: i64) -> Vec<u32> {
-        let links = self.classified_links();
-        let mut out = Vec::new();
-        for sighting in self.sightings.values() {
-            if sighting.seen_at.saturating_add(LAN_PRESENCE_TTL_SECS) < now {
-                continue;
-            }
-            if !self.reported_hashes.contains(&sighting.id) {
-                continue;
-            }
-            if self.proofs.get(&sighting.id).is_none_or(|proof| proof.expires_at < now) { continue; }
-            out.extend(lan_presence_match::peer_interfaces(sighting, &links));
-        }
+        let mut out: Vec<_> = self.link_facts.iter().filter(|fact| fact.fresh(now))
+            .map(|fact| fact.interface.index).collect();
         out.sort_unstable();
         out.dedup();
         out
     }
 
-    /// Paired peers seen recently, with the advisory uplink flag.
+    /// Only current channel answers, without mDNS subnet estimates.
     pub(super) fn paired_sightings(&self, now: i64) -> Vec<(String, bool, Vec<u32>)> {
-        let links = self.classified_links();
-        self.sightings
-            .values()
-            .filter(|sighting| sighting.seen_at.saturating_add(LAN_PRESENCE_TTL_SECS) >= now)
-            .filter(|sighting| self.reported_hashes.contains(&sighting.id))
-            .filter(|sighting| self.proofs.get(&sighting.id).is_some_and(|proof| proof.expires_at >= now))
-            .map(|sighting| {
-                (
-                    sighting.id.clone(),
-                    sighting.uplink,
-                    lan_presence_match::peer_interfaces(sighting, &links),
-                )
-            })
-            .collect()
+        self.link_facts.iter().filter(|fact| fact.fresh(now) && fact.can_share_on(&self.facts, &self.shared_ifaces)).map(|fact|
+            (lan_presence_match::hashed_lan_id(&fact.pin.node_id), fact.peer_uplink, vec![fact.interface.index])).collect()
+    }
+
+    /// Parent hands this RAM-only snapshot to ShareService after the tick.
+    pub(super) fn link_host_facts(&self) -> LanLinkHostFacts {
+        let known = self.settings_error.is_none() && self.facts_error.is_none()
+            && self.last_facts_at.is_some_and(|at| at.elapsed() <= FACTS_INTERVAL + Duration::from_secs(1));
+        let interfaces = if known { self.facts.clone() } else { Vec::new() };
+        let own_uplink = if known && !interfaces.is_empty() {
+            OwnUplink::from_interfaces(&interfaces, self.uplink.internet_verdict_snapshot(),
+                &self.peer_ifaces(crate::share::core_now_secs()), &self.shared_ifaces)
+        } else { OwnUplink::Unknown };
+        LanLinkHostFacts { enabled: self.settings.presence_enabled && self.settings_error.is_none(),
+            interfaces, shared_ifaces: self.shared_ifaces.clone(), own_uplink }
     }
 
     pub(super) fn classified_links(&self) -> Vec<(InterfaceFacts, LinkClass)> {
@@ -140,6 +140,14 @@ impl LanRuntime {
     pub(super) fn tick(&mut self, input: LanTickInput<'_>) -> Vec<ShareEvent> {
         self.refresh_settings();
         self.refresh_facts();
+        self.link_facts = if self.settings.presence_enabled && self.settings_error.is_none()
+            && self.facts_error.is_none() {
+            input.paired_links.iter().take(lan_link_facts::MAX_LINK_PEERS)
+                .filter(|fact| fact.current(input.now, input.contacts, input.grants, &self.facts))
+                .cloned().collect()
+        } else { Vec::new() };
+        self.link_facts.sort_by(|left, right| left.pin.node_id.cmp(&right.pin.node_id)
+            .then(left.connection_id.cmp(&right.connection_id)));
         let mut events = Vec::new();
         if !self.settings.presence_enabled {
             if self.presence.take().is_some() {
@@ -165,26 +173,31 @@ impl LanRuntime {
             self.expire_sightings(input.now);
             events.extend(self.reconcile(input.contacts, input.now));
         }
-        let mut revision: Vec<_> = self.reported_hashes.iter().filter_map(|id|
-            self.proofs.get(id).map(|proof| (id.clone(), proof.signature.clone()))).collect();
-        revision.sort();
+        let revision = if self.settings.uplink_sharing_enabled { self.link_facts.clone() } else { Vec::new() };
         if self.evidence_revision.as_ref() != Some(&revision) {
-            match crate::share::lan_uplink_evidence::publish(self.reported_hashes.iter().filter_map(|id|
-                Some((self.sightings.get(id)?, self.proofs.get(id)?)))) {
+            match crate::share::lan_uplink_evidence::publish(&revision) {
                 Ok(()) => self.evidence_revision = Some(revision),
                 Err(error) => {
                     self.presence_error = Some(error);
-                    self.reported_hashes.clear();
-                    self.authenticated_contacts.clear();
+                    self.link_facts.clear();
                 }
             }
         }
-        self.tick_uplink(input.own_node_id, input.now);
+        let revoked = self.uplink_pins.iter().any(|pin| !lan_link_facts::pin_current(pin, input.contacts, input.grants));
+        let authority_lost = revoked && self.shared_ifaces.iter().any(|index|
+            !self.link_facts.iter().any(|fact| fact.interface.index == *index));
+        self.tick_uplink(input.own_node_id, input.now, authority_lost);
+        if self.shared_ifaces.is_empty() { self.uplink_pins.clear(); }
+        for fact in &self.link_facts {
+            if self.uplink_pins.len() < lan_link_facts::MAX_LINK_PEERS && !self.uplink_pins.contains(&fact.pin) {
+                self.uplink_pins.push(fact.pin.clone());
+            }
+        }
         events
     }
 
     /// Feed the uplink policy with the current links and paired sightings.
-    fn tick_uplink(&mut self, own_node_id: Option<&str>, now: i64) {
+    fn tick_uplink(&mut self, own_node_id: Option<&str>, now: i64, authority_lost: bool) {
         let peer_ifaces = self.peer_ifaces(now);
         let peers: Vec<PeerOnLink> = self
             .paired_sightings(now)
@@ -193,16 +206,16 @@ impl LanRuntime {
                 hashed_id,
                 uplink,
                 ifaces,
-                // A signed beacon cannot prove the selected Iroh path. The
-                // S09 channel integration supplies the stronger fact later.
-                authenticated: false,
+                authenticated: true,
             })
             .collect();
         let own_hashed_id = own_node_id
             .map(lan_presence_match::hashed_lan_id)
             .unwrap_or_default();
         let mut settings = self.settings.clone();
-        if self.settings_error.is_some() { settings.uplink_sharing_enabled = false; }
+        if self.settings_error.is_some() || !settings.presence_enabled || authority_lost {
+            settings.uplink_sharing_enabled = false;
+        }
         let facts = self.facts.clone();
         let view = self.uplink.tick(UplinkTickInput {
             settings: &settings,
@@ -289,8 +302,9 @@ impl LanRuntime {
                 contact_id: contact.id.clone(),
                 display_name: contact.display_name.clone(),
                 candidates: contact.lan_candidates.clone(),
-                uplink: self.authenticated_contacts.contains(&contact.id)
-                    .then_some(contact.lan_uplink).flatten(),
+                uplink: self.link_facts.iter().find(|fact| fact.fresh(now)
+                    && matches!(&fact.pin.origin, lan_link_facts::PinOrigin::Contact { id, .. } if id == &contact.id))
+                    .map(|fact| fact.peer_uplink),
                 seen_at: contact.lan_seen_at.unwrap_or_default(),
             })
             .collect();

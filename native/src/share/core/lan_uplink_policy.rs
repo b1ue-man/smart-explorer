@@ -7,15 +7,14 @@ pub const START_DEBOUNCE_SECS: i64 = 5;
 pub const STOP_GRACE_SECS: i64 = 90;
 pub const UPLINK_LOSS_SECS: i64 = 15;
 
-/// One paired peer seen on the LAN: its hashed id, its advisory "I have my
-/// own internet" flag, and the local interfaces it was seen on.
+/// One paired peer's current challenged TLS status and exact local interface.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PeerOnLink {
     pub hashed_id: String,
     pub uplink: bool,
     pub ifaces: Vec<u32>,
-    /// True only after validating the fresh device signature and the
-    /// contact-bound rotating identifier; a legacy dial hint is false.
+    /// True only for a fresh pinned TLS status channel whose selected direct
+    /// IP path identifies an exact private local interface. Beacons are false.
     pub authenticated: bool,
 }
 

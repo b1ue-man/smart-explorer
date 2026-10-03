@@ -34,6 +34,14 @@ pub struct ShareService {
 }
 
 impl ShareService {
+    pub(crate) fn update_lan_link_host(&self, facts: super::lan_link_facts::LanLinkHostFacts) -> io::Result<()> {
+        self.iroh.update_lan_link_host(facts)
+    }
+
+    pub(crate) fn lan_link_snapshot(&self) -> Vec<super::lan_link_facts::AuthenticatedLanFact> {
+        self.iroh.lan_link_snapshot()
+    }
+
     pub fn cmd(&self, c: ShareCmd) -> Result<ShareCmdResult, String> {
         const ACK_TIMEOUT: Duration = Duration::from_secs(5);
         let is_stop = matches!(&c, ShareCmd::Stop);

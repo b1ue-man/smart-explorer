@@ -39,6 +39,10 @@ impl ShareIrohNode {
                         }
                         Err(_) => return,
                     };
+                    if connection.alpn() == super::lan_link_wire::LAN_LINK_ALPN {
+                        let _ = node.accept_lan_link(connection).await;
+                        return;
+                    }
                     let remote = connection.remote_id().to_string();
                     let known = node.known_endpoint(&remote);
                     let timeout = if known { KNOWN_HANDSHAKE } else { UNKNOWN_HANDSHAKE };

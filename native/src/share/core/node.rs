@@ -50,6 +50,7 @@ pub(crate) struct ShareIrohNode {
     pub(super) session_epoch: AtomicU64,
     pub(super) policy: super::node_policy::SessionPolicy,
     pub(super) mount_leases: Arc<super::mount_lease::PeerMountLeases>,
+    pub(super) lan_links: Arc<super::lan_link_transport::LanLinkTransport>,
     sharing_active: AtomicBool,
     incoming_sessions: Mutex<HashMap<u64, idle::IncomingEntry>>,
     next_incoming_session: AtomicU64,
@@ -142,7 +143,7 @@ impl ShareIrohNode {
         };
         let mut builder = Endpoint::builder(presets::Minimal)
             .secret_key(identity.iroh_secret.clone())
-            .alpns(vec![ALPN.to_vec(), EXEC_ALPN.to_vec()])
+            .alpns(vec![ALPN.to_vec(), EXEC_ALPN.to_vec(), super::lan_link_wire::LAN_LINK_ALPN.to_vec()])
             .relay_mode(relay_mode)
             .transport_config(iroh_transport_config());
         if let Some(config) = transport_options.ca_tls_config() {
@@ -167,6 +168,7 @@ impl ShareIrohNode {
             session_epoch: AtomicU64::new(0),
             policy: super::node_policy::SessionPolicy::default(),
             mount_leases: Arc::new(super::mount_lease::PeerMountLeases::default()),
+            lan_links: Arc::new(super::lan_link_transport::LanLinkTransport::default()),
             sharing_active: AtomicBool::new(true),
             incoming_sessions: Mutex::new(HashMap::new()),
             next_incoming_session: AtomicU64::new(0),
@@ -321,6 +323,7 @@ impl ShareIrohNode {
         self.exec_registry
             .as_ref()
             .cancel_all(ExecCancelReason::WorkerStopping);
+        self.lan_links.disable();
         let invalidation = self.invalidate_sessions().map(|_| ());
         self.block_on(self.endpoint.close());
         invalidation
