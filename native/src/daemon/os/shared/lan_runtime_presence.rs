@@ -100,7 +100,11 @@ impl LanRuntime {
                     entry.0.sort();
                     entry.0.dedup();
                     if authenticated.is_some() {
-                        entry.1 = sighting.uplink;
+                        // The beacon only provides a route. Own uplink is
+                        // learned from the fresh pinned status channel.
+                        entry.1 = self.link_facts.iter().find(|fact| fact.fresh(now)
+                            && matches!(&fact.pin.origin, lan_link_facts::PinOrigin::Contact { id, .. } if id == &contact_id))
+                            .is_some_and(|fact| fact.peer_uplink);
                         seen_hashes.push(sighting.id.clone());
                         authenticated_contacts.push(contact_id);
                     }
