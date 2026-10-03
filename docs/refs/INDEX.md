@@ -37,3 +37,4 @@ Lokal gesicherte API-/Lib-Syntax (Abrufdatum im Kopf jeder Datei).
 - [Iroh authenticated LAN paths](iroh-authenticated-lan-paths.md): S09 pinned status channel and actual selected local interface; Iroh 1.0.0 APIs checked 2026-10-03.
 
 - [egui/eframe 0.29.1 Close-Lifecycle](egui-close-lifecycle.md) – Y156: CancelClose im Frame, terminales Worker-Drain vor Close/Update; geprüft 2026-10-03.
+| [rv1-remote-suite.md](rv1-remote-suite.md) | Cargo/libtest, Python subprocess, bestehende Android-/OS-Runnerverträge | 2026-10-03 | Schmaler inkrementeller Testhost, kurze Windows-Filter, Prozessbesitz und tatsächliche Runnerfakten für die eine RV1-Abnahme |
