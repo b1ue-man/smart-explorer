@@ -124,7 +124,10 @@ pub(super) async fn handle_connection(
                 send_ctrl(
                     &mut send,
                     &Ctrl::FsResp {
-                        resp: super::fs_error::response(&io::Error::new(io::ErrorKind::PermissionDenied, "Share-Anmeldung nicht autorisiert")),
+                        resp: super::fs_error::response(&io::Error::new(
+                            io::ErrorKind::PermissionDenied,
+                            "Share-Anmeldung nicht autorisiert",
+                        )),
                     },
                 ),
             )
@@ -132,7 +135,8 @@ pub(super) async fn handle_connection(
             return Err(error);
         }
     };
-    node.bind_incoming_principal(&conn, session.principal()).await?;
+    node.bind_incoming_principal(&conn, session.principal())
+        .await?;
     session.authorize(&node.auth)?;
     io_deadline::run_until(
         handshake_deadline,
@@ -201,7 +205,10 @@ pub(super) async fn handle_connection(
             }
             // Drain replies/FIN before a pressure close: a completed mutation
             // cannot be mistaken for an unexecuted retry.
-            if tokio::time::timeout(io_deadline::PEER_OP_TIMEOUT, acknowledged).await.is_err() {
+            if tokio::time::timeout(io_deadline::PEER_OP_TIMEOUT, acknowledged)
+                .await
+                .is_err()
+            {
                 // Delivery is ambiguous. This is never an IDLE retry signal,
                 // which could replay an already completed mutation.
                 connection.close(VarInt::from_u32(0x5348), b"reply acknowledgment timeout");
@@ -256,7 +263,16 @@ async fn handle_peer_stream(
                         )
                         .await
                     }
-                    _ => reply_err(&mut send, io::Error::new(io::ErrorKind::PermissionDenied, "Share-Anfrage nicht autorisiert")).await,
+                    _ => {
+                        reply_err(
+                            &mut send,
+                            io::Error::new(
+                                io::ErrorKind::PermissionDenied,
+                                "Share-Anfrage nicht autorisiert",
+                            ),
+                        )
+                        .await
+                    }
                 }
             })
             .await;
@@ -271,7 +287,14 @@ async fn handle_peer_stream(
     let _awake = crate::keep_awake::hold(crate::keep_awake::Reason::PeerService);
     let _stream_hold = node.incoming_stream_started(&context.activity);
     if req.mutates_filesystem() && !session_rights.may_write {
-        return reply_err(&mut send, io::Error::new(io::ErrorKind::ReadOnlyFilesystem, "Share-Beziehung ist nur lesbar")).await;
+        return reply_err(
+            &mut send,
+            io::Error::new(
+                io::ErrorKind::ReadOnlyFilesystem,
+                "Share-Beziehung ist nur lesbar",
+            ),
+        )
+        .await;
     }
     let mount_leases = node.mount_leases.clone();
     let activity = context.activity.clone();
@@ -281,7 +304,11 @@ async fn handle_peer_stream(
             acquire_lease,
             lease_request_id,
         } => {
-            let access = FsAccess::dynamic(session_rights.exports.clone()).authorized(session.clone(), auth.clone(), &node)?;
+            let access = FsAccess::dynamic(session_rights.exports.clone()).authorized(
+                session.clone(),
+                auth.clone(),
+                &node,
+            )?;
             let query = super::server_capabilities::CapabilityQuery {
                 path,
                 acquire_lease,
@@ -304,12 +331,17 @@ async fn handle_peer_stream(
             let token = token.to_string();
             let released = token.clone();
             let admitted = principal.clone();
-            let result = super::blocking::run_for(admitted, super::blocking::Class::Control, "Share release mount lease", move || {
-                let removed = mount_leases.release(&token, &principal)?;
-                let existed = removed.is_some();
-                drop(removed);
-                Ok(existed)
-            })
+            let result = super::blocking::run_for(
+                admitted,
+                super::blocking::Class::Control,
+                "Share release mount lease",
+                move || {
+                    let removed = mount_leases.release(&token, &principal)?;
+                    let existed = removed.is_some();
+                    drop(removed);
+                    Ok(existed)
+                },
+            )
             .await;
             return match result {
                 Ok(_) => {

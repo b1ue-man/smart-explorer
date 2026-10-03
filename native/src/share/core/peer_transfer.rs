@@ -49,7 +49,8 @@ const MIN_SERVER_COPY_RATE: u64 = 1024 * 1024;
 #[derive(Default)]
 pub(in crate::share) struct PeerTransferState {
     caps: Mutex<Option<CachedCaps>>,
-    pub(in crate::share) features: Mutex<Option<(Option<usize>, crate::share::wire::FsHostFeatures)>>,
+    pub(in crate::share) features:
+        Mutex<Option<(Option<usize>, crate::share::wire::FsHostFeatures)>>,
     stages: Mutex<HashSet<String>>,
 }
 

@@ -70,7 +70,9 @@ pub(super) fn plan_dirs(
             continue;
         }
         let missing = present.other();
-        let was_on_both = history.as_ref().is_some_and(|history| history.contains(key));
+        let was_on_both = history
+            .as_ref()
+            .is_some_and(|history| history.contains(key));
         let create = match one_sided(present, was_on_both, ctx) {
             Some(Change::Create) => true,
             Some(Change::Remove) => {

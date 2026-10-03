@@ -1,5 +1,4 @@
 use super::negotiated;
-use std::{cell::Cell, io};
 use crate::share::{
     export_config::ExportAccess,
     fs::{ShareExportConfig, SharedRoot},
@@ -7,6 +6,7 @@ use crate::share::{
     fs_request::FsReversibleReplace,
     wire::{FsHostFeatures, FsRequest, FsResponse},
 };
+use std::{cell::Cell, io};
 
 fn request() -> FsReversibleReplace {
     FsReversibleReplace {
@@ -41,7 +41,10 @@ fn review_task_h_replace_no_feature_is_mutation_free() {
 
 #[test]
 fn review_task_h_replace_idle_close_and_lost_ack_never_replay_or_release() {
-    for kind in [io::ErrorKind::ConnectionAborted, io::ErrorKind::UnexpectedEof] {
+    for kind in [
+        io::ErrorKind::ConnectionAborted,
+        io::ErrorKind::UnexpectedEof,
+    ] {
         let fixture = tempfile::tempdir().unwrap();
         let stage = fixture.path().join("stage");
         let destination = fixture.path().join("destination");
@@ -113,17 +116,22 @@ fn review_task_h_replace_readonly_host_preserves_all_objects() {
     std::fs::write(fixture.path().join(stage_name), b"prepared").unwrap();
     std::fs::write(fixture.path().join("file"), b"original").unwrap();
     let access = FsAccess::dynamic(ShareExportConfig {
-        roots: vec![SharedRoot::new(
-            "Docs",
-            fixture.path().to_string_lossy().replace('\\', "/"),
-        )
-        .with_access(ExportAccess::ReadOnly)],
+        roots: vec![
+            SharedRoot::new("Docs", fixture.path().to_string_lossy().replace('\\', "/"))
+                .with_access(ExportAccess::ReadOnly),
+        ],
         ..Default::default()
     });
     let error = access.replace_staged_reversible(&request()).unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::ReadOnlyFilesystem);
-    assert_eq!(std::fs::read(fixture.path().join(stage_name)).unwrap(), b"prepared");
-    assert_eq!(std::fs::read(fixture.path().join("file")).unwrap(), b"original");
+    assert_eq!(
+        std::fs::read(fixture.path().join(stage_name)).unwrap(),
+        b"prepared"
+    );
+    assert_eq!(
+        std::fs::read(fixture.path().join("file")).unwrap(),
+        b"original"
+    );
     assert!(!fixture.path().join(".se-replace-fedcba9876543210").exists());
 }
 

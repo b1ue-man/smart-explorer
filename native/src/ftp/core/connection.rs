@@ -132,28 +132,45 @@ pub(super) fn parse_ftp_url(url: &str) -> io::Result<FtpUrl> {
         None => ("anonymous".to_string(), "anonymous@example.com".to_string()),
     };
     let (host, port) = if let Some(bracketed) = hostport.strip_prefix('[') {
-        let (host, tail) = bracketed.split_once(']').ok_or_else(|| io_err("ungültiger FTP-IPv6-Host"))?;
-        let port = if tail.is_empty() { 21 } else {
-            tail.strip_prefix(':').ok_or_else(|| io_err("ungültiger FTP-Port"))?
-                .parse::<u16>().map_err(|_| io_err("ungültiger FTP-Port"))?
+        let (host, tail) = bracketed
+            .split_once(']')
+            .ok_or_else(|| io_err("ungültiger FTP-IPv6-Host"))?;
+        let port = if tail.is_empty() {
+            21
+        } else {
+            tail.strip_prefix(':')
+                .ok_or_else(|| io_err("ungültiger FTP-Port"))?
+                .parse::<u16>()
+                .map_err(|_| io_err("ungültiger FTP-Port"))?
         };
         (host.to_string(), port)
-    } else { match hostport.rfind(':') {
-        Some(index) => {
-            let port = hostport[index + 1..]
-                .parse::<u16>()
-                .map_err(|_| io_err("ungültiger FTP-Port"))?;
-            (hostport[..index].to_string(), port)
+    } else {
+        match hostport.rfind(':') {
+            Some(index) => {
+                let port = hostport[index + 1..]
+                    .parse::<u16>()
+                    .map_err(|_| io_err("ungültiger FTP-Port"))?;
+                (hostport[..index].to_string(), port)
+            }
+            None => (hostport.to_string(), 21),
         }
-        None => (hostport.to_string(), 21),
-    }};
+    };
     if host.is_empty() {
         return Err(io_err("FTP-Host fehlt"));
     }
-    if [user.as_str(), password.as_str(), host.as_str(), root.as_str()]
-        .iter().any(|field| field.contains(['\r', '\n', '\0'])) {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput,
-            "FTP connection fields contain a control-command delimiter"));
+    if [
+        user.as_str(),
+        password.as_str(),
+        host.as_str(),
+        root.as_str(),
+    ]
+    .iter()
+    .any(|field| field.contains(['\r', '\n', '\0']))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "FTP connection fields contain a control-command delimiter",
+        ));
     }
     Ok(FtpUrl {
         secure,

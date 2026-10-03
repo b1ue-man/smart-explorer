@@ -55,7 +55,10 @@ fn one_of_each() -> Vec<FsRequest> {
         FsRequest::ReleaseLease,
         FsRequest::ListDir { path: path() },
         FsRequest::Stat { path: path() },
-        FsRequest::SyncChildPath { parent: path(), literal_name: "100%.pdf".into() },
+        FsRequest::SyncChildPath {
+            parent: path(),
+            literal_name: "100%.pdf".into(),
+        },
         FsRequest::WalkTree { path: path() },
         FsRequest::StorageSnapshot { path: path() },
         FsRequest::StorageAnalysis(FsStorageAnalysis {

@@ -6,12 +6,16 @@ pub(crate) fn ensure_private_dir(path: &std::path::Path) -> std::io::Result<()> 
 }
 
 pub(crate) fn create_private_file(path: &std::path::Path) -> std::io::Result<std::fs::File> {
-    if let Some(parent) = path.parent() { ensure_private_dir(parent)?; }
+    if let Some(parent) = path.parent() {
+        ensure_private_dir(parent)?;
+    }
     crate::creds::private_storage::create_file(path)
 }
 
 pub(crate) fn open_private_file(path: &std::path::Path) -> std::io::Result<std::fs::File> {
-    if let Some(parent) = path.parent() { ensure_private_dir(parent)?; }
+    if let Some(parent) = path.parent() {
+        ensure_private_dir(parent)?;
+    }
     crate::creds::private_storage::open_file(path, false)
 }
 
@@ -36,29 +40,42 @@ pub(crate) fn read_private_text(path: &std::path::Path, max_bytes: u64) -> std::
     use std::io::Read;
     let file = open_private_file(path)?;
     if file.metadata()?.len() > max_bytes {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData,
-            "private application file exceeds its byte limit"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "private application file exceeds its byte limit",
+        ));
     }
     let mut bytes = Vec::new();
-    file.take(max_bytes.saturating_add(1)).read_to_end(&mut bytes)?;
+    file.take(max_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)?;
     if bytes.len() as u64 > max_bytes {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData,
-            "private application file exceeds its byte limit"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "private application file exceeds its byte limit",
+        ));
     }
-    String::from_utf8(bytes).map_err(|_| std::io::Error::new(
-        std::io::ErrorKind::InvalidData, "private application file is not UTF-8"))
+    String::from_utf8(bytes).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "private application file is not UTF-8",
+        )
+    })
 }
 
 /// Atomic, private, durable application metadata. An existing unsafe target
 /// is rejected before staging; failed promotion preserves its contents.
 pub(crate) fn write_private_atomic(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
-    let parent = path.parent().ok_or_else(|| std::io::Error::new(
-        std::io::ErrorKind::InvalidInput, "private file needs a parent"))?;
+    let parent = path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "private file needs a parent",
+        )
+    })?;
     ensure_private_dir(parent)?;
     match open_private_file(path) {
-        Ok(_) => {},
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error),
     }
     let mut nonce = [0u8; 16];
@@ -73,7 +90,9 @@ pub(crate) fn write_private_atomic(path: &std::path::Path, bytes: &[u8]) -> std:
         crate::vfs::replace_local_file(&stage, path)?;
         crate::creds::private_storage::sync_directory(parent)
     })();
-    if result.is_err() { let _ = std::fs::remove_file(&stage); }
+    if result.is_err() {
+        let _ = std::fs::remove_file(&stage);
+    }
     result
 }
 
@@ -111,7 +130,9 @@ pub fn host() -> Option<&'static HostConfig> {
 
 /// An actual host/OS home fact; migration must never invent a temporary home.
 pub(crate) fn home_dir() -> Option<PathBuf> {
-    if let Some(host) = host() { return Some(host.home_dir.clone()); }
+    if let Some(host) = host() {
+        return Some(host.home_dir.clone());
+    }
     #[cfg(windows)]
     let home = std::env::var_os("USERPROFILE");
     #[cfg(not(windows))]

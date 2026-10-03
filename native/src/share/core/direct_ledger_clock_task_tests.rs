@@ -23,7 +23,8 @@ fn request(created_at: i64) -> SignedDirectRequest {
         None,
         &SECRET,
         &key(1),
-    ).unwrap()
+    )
+    .unwrap()
 }
 
 fn key(byte: u8) -> iroh::SecretKey {
@@ -35,8 +36,13 @@ fn review_task_future_request_is_received_without_waiting_for_local_clock() {
     let request = request(NOW + 90);
     request.verify_at(&SECRET, NOW).unwrap();
     let mut profiles = ShareProfiles::default();
-    profiles.record_incoming_direct_request("lookup", request.clone(), NOW).unwrap();
-    assert_eq!(profiles.direct_requests[0].record.delivery.changed_at, NOW + 90);
+    profiles
+        .record_incoming_direct_request("lookup", request.clone(), NOW)
+        .unwrap();
+    assert_eq!(
+        profiles.direct_requests[0].record.delivery.changed_at,
+        NOW + 90
+    );
     assert_eq!(profiles.direct_requests[0].record.request, request);
     profiles.validate_direct_ledger().unwrap();
 }
@@ -56,15 +62,26 @@ fn review_task_decision_delivery_accepts_clock_skew_in_both_directions() {
             None,
             &SECRET,
             &key(2),
-        ).unwrap();
+        )
+        .unwrap();
         decision.verify_for(&request, &SECRET, NOW).unwrap();
         let mut profiles = ShareProfiles::default();
-        profiles.direct_requests.push(DirectRequestEntry::outgoing("contact".into(), request));
-        profiles.record_direct_decision(decision.clone(), NOW).unwrap();
+        profiles
+            .direct_requests
+            .push(DirectRequestEntry::outgoing("contact".into(), request));
+        profiles
+            .record_direct_decision(decision.clone(), NOW)
+            .unwrap();
         let entry = &profiles.direct_requests[0];
         assert_eq!(entry.record.decision.changed_at, created_at.max(decided_at));
-        assert_eq!(entry.record.decision_delivery.changed_at, created_at.max(decided_at));
-        assert_eq!(entry.record.decision_delivery.state, DirectDecisionDeliveryState::Received);
+        assert_eq!(
+            entry.record.decision_delivery.changed_at,
+            created_at.max(decided_at)
+        );
+        assert_eq!(
+            entry.record.decision_delivery.state,
+            DirectDecisionDeliveryState::Received
+        );
         assert_eq!(entry.decision.as_ref(), Some(&decision));
         profiles.validate_direct_ledger().unwrap();
     }

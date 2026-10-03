@@ -364,7 +364,10 @@ fn review_task_restriction_keeps_other_principal_launch_and_blocks_old_token() {
     let mut restrictions = RestrictionSet::default();
     restrictions.push(RightsRestriction {
         relation: RelationScope::Direct,
-        principal: Some(PrincipalKey { public_key: alice.public_key.clone(), node_id: alice.node_id.clone() }),
+        principal: Some(PrincipalKey {
+            public_key: alice.public_key.clone(),
+            node_id: alice.node_id.clone(),
+        }),
         reason: RestrictionReason::WriteRevoked,
     });
     registry.restrict_authorization(2, &restrictions).unwrap();
@@ -373,12 +376,18 @@ fn review_task_restriction_keeps_other_principal_launch_and_blocks_old_token() {
     assert_eq!(first.cancellation.reason(), Some(ExecCancelReason::Revoked));
     assert!(other.cancellation.reason().is_none());
     registry.commit_start(&other.lease, || Ok(())).unwrap();
-    assert_error(registry.commit_start(&first.lease, || Ok(())), ExecRegistryError::StaleAuthorization);
+    assert_error(
+        registry.commit_start(&first.lease, || Ok(())),
+        ExecRegistryError::StaleAuthorization,
+    );
     assert_error(
         registry.prepare(alice.clone(), auth(1, 1, "old"), &start("42", "old"), 12),
         ExecRegistryError::StaleAuthorization,
     );
     // The separate Exec grant remains enabled: a new session may start.
     reserve(&registry, alice, &start("43", "new"), auth(1, 2, "new"));
-    assert_error(registry.apply_authorization(&bob, 1, 1, true), ExecRegistryError::StaleAuthorization);
+    assert_error(
+        registry.apply_authorization(&bob, 1, 1, true),
+        ExecRegistryError::StaleAuthorization,
+    );
 }

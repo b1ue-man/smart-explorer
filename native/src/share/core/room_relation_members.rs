@@ -99,7 +99,10 @@ impl RoomProfile {
     /// room to „Neue Mitglieder bestätigen“ (B15); unblocking also admits a
     /// pending member. Returns whether anything changed.
     pub fn set_member_blocked(&mut self, device_id: &str, blocked: bool, now: i64) -> bool {
-        let Some(principal) = self.members.iter().find(|member| member.device_id == device_id)
+        let Some(principal) = self
+            .members
+            .iter()
+            .find(|member| member.device_id == device_id)
         else {
             return false;
         };

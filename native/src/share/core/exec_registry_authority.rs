@@ -32,14 +32,20 @@ impl ExecRegistry {
         let minimum_epoch = if changed {
             epoch
         } else {
-            state.policies.get(&identity).map_or(epoch, |policy| policy.minimum_epoch)
+            state
+                .policies
+                .get(&identity)
+                .map_or(epoch, |policy| policy.minimum_epoch)
         };
         state.authorization_epoch = epoch;
-        state.policies.insert(identity.clone(), PolicyAuthority {
-            revision,
-            enabled,
-            minimum_epoch,
-        });
+        state.policies.insert(
+            identity.clone(),
+            PolicyAuthority {
+                revision,
+                enabled,
+                minimum_epoch,
+            },
+        );
         if changed || !enabled {
             cancel_matching(
                 &mut state,

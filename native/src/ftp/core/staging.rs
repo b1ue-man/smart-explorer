@@ -51,8 +51,10 @@ pub(super) fn require_stage_free(connection: &FtpConnection, path: &str) -> io::
 fn listing(connection: &FtpConnection, folder: &str) -> io::Result<Vec<VfsMeta>> {
     let listing = super::metadata::list(connection, folder)?;
     if !listing.omitted.is_empty() {
-        return Err(io::Error::new(io::ErrorKind::InvalidData,
-            "FTP promotion needs a complete, addressable namespace listing"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "FTP promotion needs a complete, addressable namespace listing",
+        ));
     }
     Ok(listing.entries)
 }
@@ -111,5 +113,9 @@ pub(super) fn publish(
     }
     super::errors::command_path(staged)?;
     super::errors::command_path(destination)?;
-    connection.with_stream_mutation(|stream| stream.rename(staged, destination).map_err(super::errors::map))
+    connection.with_stream_mutation(|stream| {
+        stream
+            .rename(staged, destination)
+            .map_err(super::errors::map)
+    })
 }

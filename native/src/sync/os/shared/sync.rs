@@ -42,7 +42,11 @@ pub(super) struct WalkBudget {
 
 impl Default for WalkBudget {
     fn default() -> Self {
-        Self { limits: crate::bisync::SyncLimits::for_memory(crate::transfer::physical_memory()), nodes: 0, text_bytes: 0 }
+        Self {
+            limits: crate::bisync::SyncLimits::for_memory(crate::transfer::physical_memory()),
+            nodes: 0,
+            text_bytes: 0,
+        }
     }
 }
 
@@ -54,10 +58,16 @@ impl WalkBudget {
         self.nodes = self.nodes.saturating_add(1);
         self.text_bytes = self.text_bytes.saturating_add(path.len() as u64);
         if self.nodes > self.limits.walk_entries {
-            return Err(format!("sync tree exceeds {} entries", self.limits.walk_entries));
+            return Err(format!(
+                "sync tree exceeds {} entries",
+                self.limits.walk_entries
+            ));
         }
         if self.text_bytes > self.limits.walk_text_bytes {
-            return Err(format!("sync relative-path data exceeds {} bytes", self.limits.walk_text_bytes));
+            return Err(format!(
+                "sync relative-path data exceeds {} bytes",
+                self.limits.walk_text_bytes
+            ));
         }
         Ok(())
     }
@@ -227,8 +237,12 @@ fn run(
         Ok(run) => run,
         Err(error) => {
             record_error(&mut stats, &mut errors, "Sync-Sperre", error.to_string());
-            let _ = tx.send(SyncMsg::Done(SyncResult { stats, errors, omissions,
-                elapsed_ms: start.elapsed().as_millis() as u64 }));
+            let _ = tx.send(SyncMsg::Done(SyncResult {
+                stats,
+                errors,
+                omissions,
+                elapsed_ms: start.elapsed().as_millis() as u64,
+            }));
             return;
         }
     };
@@ -319,7 +333,12 @@ fn run(
     }
 
     if let Err(error) = run.finish(&*dst, &dst_root, &cancel) {
-        record_error(&mut stats, &mut errors, &dst_root, format!("finish mirror versions: {error}"));
+        record_error(
+            &mut stats,
+            &mut errors,
+            &dst_root,
+            format!("finish mirror versions: {error}"),
+        );
     }
 
     let _ = tx.send(SyncMsg::Done(SyncResult {
@@ -336,7 +355,9 @@ pub(super) fn require_plain_directory(
     create: bool,
 ) -> io::Result<()> {
     if crate::bisync::snapshot_policy::own_path(backend, path) {
-        return Err(crate::bisync::apply_boundary::protected(crate::bisync::OmissionKind::OwnFile));
+        return Err(crate::bisync::apply_boundary::protected(
+            crate::bisync::OmissionKind::OwnFile,
+        ));
     }
     let metadata = match backend.stat(path) {
         Ok(metadata) => metadata,

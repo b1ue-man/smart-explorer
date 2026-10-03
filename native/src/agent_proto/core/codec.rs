@@ -88,7 +88,9 @@ impl<'a> Reader<'a> {
 
     pub(super) fn tree_string(&mut self, maximum: usize) -> io::Result<String> {
         let length = self.u32()? as usize;
-        if length > maximum { return Err(bad(TREE_BUDGET_ERROR)); }
+        if length > maximum {
+            return Err(bad(TREE_BUDGET_ERROR));
+        }
         let bytes = self.take(length)?;
         String::from_utf8(bytes.to_vec()).map_err(|_| bad("invalid utf8"))
     }
@@ -150,7 +152,10 @@ impl Frame {
         Self::decode_with_tree_budget(body, None)
     }
 
-    pub fn decode_with_tree_budget(body: &[u8], budget: Option<TreeDecodeBudget>) -> io::Result<(u64, Frame)> {
+    pub fn decode_with_tree_budget(
+        body: &[u8],
+        budget: Option<TreeDecodeBudget>,
+    ) -> io::Result<(u64, Frame)> {
         validate_frame_len(body.len())?;
         let mut r = Reader::new(body);
         let req_id = r.u64()?;

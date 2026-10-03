@@ -302,9 +302,15 @@ impl Backend for FakeRemote {
         self.overloaded("write")?;
         self.call_hook("write", path);
         if self.fail_writes_to.as_ref().is_some_and(|name| {
-            path.rsplit('/').next().unwrap_or(path).contains(name.as_str())
+            path.rsplit('/')
+                .next()
+                .unwrap_or(path)
+                .contains(name.as_str())
         }) {
-            return Err(io::Error::new(io::ErrorKind::PermissionDenied, "injected write failure"));
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "injected write failure",
+            ));
         }
         self.inner.open_write_new(&self.real(path)?)
     }
@@ -317,7 +323,9 @@ impl Backend for FakeRemote {
         self.inner.discard_copy_stage(&self.real(path)?)
     }
 
-    fn extensions(&self) -> Option<&dyn crate::vfs::BackendExtensions> { Some(self) }
+    fn extensions(&self) -> Option<&dyn crate::vfs::BackendExtensions> {
+        Some(self)
+    }
 
     fn rename(&self, source: &str, destination: &str) -> VfsResult<()> {
         self.inner
@@ -383,19 +391,35 @@ impl crate::vfs::BackendExtensions for FakeRemote {
         let open = self.calls.open_reads.fetch_add(1, Ordering::SeqCst) + 1;
         self.calls.peak_reads.fetch_max(open, Ordering::SeqCst);
         std::thread::sleep(self.delay);
-        let result = self.real(path).and_then(|real| crate::vfs::open_read_regular(&self.inner, &real, id));
+        let result = self
+            .real(path)
+            .and_then(|real| crate::vfs::open_read_regular(&self.inner, &real, id));
         match result {
-            Ok(reader) => Ok(Box::new(Tracked { reader, calls: self.calls.clone() })),
-            Err(error) => { self.calls.open_reads.fetch_sub(1, Ordering::SeqCst); Err(error) }
+            Ok(reader) => Ok(Box::new(Tracked {
+                reader,
+                calls: self.calls.clone(),
+            })),
+            Err(error) => {
+                self.calls.open_reads.fetch_sub(1, Ordering::SeqCst);
+                Err(error)
+            }
         }
     }
 
-    fn open_write_copy_stage_timed(&self, path: &str, size: u64, _mtime_ms: i64)
-        -> VfsResult<Box<dyn Write + Send>> {
+    fn open_write_copy_stage_timed(
+        &self,
+        path: &str,
+        size: u64,
+        _mtime_ms: i64,
+    ) -> VfsResult<Box<dyn Write + Send>> {
         self.open_write_copy_stage_sized(path, size)
     }
 
-    fn finish_stage(&self, path: &str, finish: crate::vfs::StageFinish) -> VfsResult<crate::vfs::StageFinished> {
+    fn finish_stage(
+        &self,
+        path: &str,
+        finish: crate::vfs::StageFinish,
+    ) -> VfsResult<crate::vfs::StageFinished> {
         crate::vfs::finish_stage(&self.inner, &self.real(path)?, finish)
     }
 
@@ -404,7 +428,9 @@ impl crate::vfs::BackendExtensions for FakeRemote {
     }
 
     fn target_limits(&self, root: &str) -> crate::vfs::TargetLimits {
-        self.real(root).map(|real| crate::vfs::target_limits(&self.inner, &real)).unwrap_or_default()
+        self.real(root)
+            .map(|real| crate::vfs::target_limits(&self.inner, &real))
+            .unwrap_or_default()
     }
 
     fn unix_mode(&self, path: &str) -> VfsResult<Option<u32>> {

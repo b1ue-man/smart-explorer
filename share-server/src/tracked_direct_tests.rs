@@ -301,7 +301,10 @@ fn routed_state(
         ..State::default()
     };
     // Receipts and decisions require the target's current publication too.
-    state.direct.insert(lookup.unwrap_or("lookup").into(), (2, presence(target_device)));
+    state.direct.insert(
+        lookup.unwrap_or("lookup").into(),
+        (2, presence(target_device)),
+    );
     (Arc::new(Mutex::new(state)), requester_rx, target_rx)
 }
 

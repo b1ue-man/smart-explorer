@@ -4,19 +4,24 @@ impl App {
     pub(super) fn ui_share_direct(&mut self, ui: &mut egui::Ui) {
         theme::section(ui, "Meine Geräte");
         if self.share_profiles.direct_contacts.is_empty() {
-            ui.label("Noch kein Gerät verbunden. Ein Gerät finden oder seinen Direkt-Code hinzufügen.");
+            ui.label(
+                "Noch kein Gerät verbunden. Ein Gerät finden oder seinen Direkt-Code hinzufügen.",
+            );
         }
         self.ui_share_saved_devices(ui);
         ui.add_space(8.0);
         egui::CollapsingHeader::new("Gerät per Direkt-Code hinzufügen")
-            .id_salt("share_add_device_v2").show(ui, |ui| self.ui_share_add_device(ui));
+            .id_salt("share_add_device_v2")
+            .show(ui, |ui| self.ui_share_add_device(ui));
         egui::CollapsingHeader::new("Geräte entdecken")
-            .id_salt("share_discover_v2").default_open(self.share_profiles.direct_contacts.is_empty())
+            .id_salt("share_discover_v2")
+            .default_open(self.share_profiles.direct_contacts.is_empty())
             .show(ui, |ui| self.ui_share_discovery_direct(ui));
         ui.separator();
         lifecycle_ui::ui_lifecycle(self, ui);
         egui::CollapsingHeader::new("Dieses Gerät & Direkt-Code")
-            .id_salt("share_this_device_v2").show(ui, |ui| self.ui_share_identity_controls(ui));
+            .id_salt("share_this_device_v2")
+            .show(ui, |ui| self.ui_share_identity_controls(ui));
         ui.separator();
         egui::CollapsingHeader::new(format!(
             "Quick Share (LAN) — {} gefunden",
@@ -108,7 +113,6 @@ impl App {
                 }
             });
         }
-
     }
 
     fn ui_share_add_device(&mut self, ui: &mut egui::Ui) {
@@ -116,16 +120,15 @@ impl App {
         let mut share_back =
             ui.data_mut(|data| data.get_temp::<bool>(choice_id).unwrap_or_default());
         if ui
-            .checkbox(&mut share_back, "Auch meine Freigaben fuer dieses Geraet oeffnen")
+            .checkbox(
+                &mut share_back,
+                "Auch meine Freigaben fuer dieses Geraet oeffnen",
+            )
             .changed()
         {
             ui.data_mut(|data| data.insert_temp(choice_id, share_back));
         }
-        ui.label(
-            RichText::new("Direkt-Code")
-                .small()
-                .color(theme::muted(ui)),
-        );
+        ui.label(RichText::new("Direkt-Code").small().color(theme::muted(ui)));
         ui.horizontal_wrapped(|ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut self.share_direct_code_input)
@@ -177,7 +180,6 @@ impl App {
                 ui.data_mut(|data| data.insert_temp(choice_id, false));
             }
         });
-
     }
 
     fn ui_share_saved_devices(&mut self, ui: &mut egui::Ui) {
@@ -214,52 +216,61 @@ impl App {
                     request_direct = Some(c.id.clone());
                 }
                 ui.menu_button("Verwalten", |ui| {
-                let mut share_back = c.relation.share_back;
-                if ui
-                    .checkbox(&mut share_back, "Auch meine Freigaben fuer dieses Geraet oeffnen")
-                    .changed()
-                {
-                    share_back_change = Some((c.id.clone(), share_back));
-                }
-                if ui.checkbox(&mut c.auto_connect, "Automatisch verbinden").changed() {
-                    changed = true;
-                }
-                if ui.checkbox(&mut c.auto_open, "Automatisch öffnen").changed() {
-                    changed = true;
-                }
-                if ui.button("Diagnose").clicked() {
-                    let presence = c
-                        .presence
-                        .as_ref()
-                        .map(|p| {
-                            format!(
-                                "node={}, relay={}, candidates={:?}, expires_at={}",
-                                p.node_id, p.relay_url, p.candidates, p.expires_at
-                            )
-                        })
-                        .unwrap_or_else(|| "keine Presence".to_string());
-                    pending_diag = Some(format!(
-                        "Direct {}: lookup={}, fp={}, status={}, {}\n",
-                        c.display_name,
-                        c.lookup_id,
-                        c.expected_fingerprint,
-                        c.status.label(),
-                        presence
-                    ));
-                }
-                if ui.button("Fingerprint").clicked() {
-                    ui.ctx().copy_text(c.expected_fingerprint.clone());
-                }
-                if ui.button("Vertrauen zurücksetzen").clicked() {
-                    c.remote_device_id = None;
-                    c.remote_public_key = None;
-                    c.presence = None;
-                    c.status = crate::share::ShareStatus::Waiting;
-                    changed = true;
-                }
-                if ui.button("Entfernen").clicked() {
-                    remove = Some(c.id.clone());
-                }
+                    let mut share_back = c.relation.share_back;
+                    if ui
+                        .checkbox(
+                            &mut share_back,
+                            "Auch meine Freigaben fuer dieses Geraet oeffnen",
+                        )
+                        .changed()
+                    {
+                        share_back_change = Some((c.id.clone(), share_back));
+                    }
+                    if ui
+                        .checkbox(&mut c.auto_connect, "Automatisch verbinden")
+                        .changed()
+                    {
+                        changed = true;
+                    }
+                    if ui
+                        .checkbox(&mut c.auto_open, "Automatisch öffnen")
+                        .changed()
+                    {
+                        changed = true;
+                    }
+                    if ui.button("Diagnose").clicked() {
+                        let presence = c
+                            .presence
+                            .as_ref()
+                            .map(|p| {
+                                format!(
+                                    "node={}, relay={}, candidates={:?}, expires_at={}",
+                                    p.node_id, p.relay_url, p.candidates, p.expires_at
+                                )
+                            })
+                            .unwrap_or_else(|| "keine Presence".to_string());
+                        pending_diag = Some(format!(
+                            "Direct {}: lookup={}, fp={}, status={}, {}\n",
+                            c.display_name,
+                            c.lookup_id,
+                            c.expected_fingerprint,
+                            c.status.label(),
+                            presence
+                        ));
+                    }
+                    if ui.button("Fingerprint").clicked() {
+                        ui.ctx().copy_text(c.expected_fingerprint.clone());
+                    }
+                    if ui.button("Vertrauen zurücksetzen").clicked() {
+                        c.remote_device_id = None;
+                        c.remote_public_key = None;
+                        c.presence = None;
+                        c.status = crate::share::ShareStatus::Waiting;
+                        changed = true;
+                    }
+                    if ui.button("Entfernen").clicked() {
+                        remove = Some(c.id.clone());
+                    }
                 });
             });
         }
@@ -290,6 +301,5 @@ impl App {
         if let Some(target) = open_target {
             self.open_share_target(target);
         }
-
     }
 }

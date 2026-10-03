@@ -142,6 +142,12 @@ mod exec_platform;
 #[path = "core/exec_policy.rs"]
 mod exec_policy;
 // Pure `/proc` logic of the Android exec host; the Linux host tests cover it.
+#[path = "core/analysis_admission.rs"]
+mod analysis_admission;
+#[path = "os/shared/analysis_spool.rs"]
+mod analysis_spool;
+#[path = "os/shared/analysis_tasks.rs"]
+mod analysis_tasks;
 #[cfg(any(target_os = "android", all(target_os = "linux", test)))]
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 #[path = "os/android/exec_proc.rs"]
@@ -185,12 +191,6 @@ mod fs_response;
 mod handshake_limits;
 #[path = "core/host_requests.rs"]
 mod host_requests;
-#[path = "core/analysis_admission.rs"]
-mod analysis_admission;
-#[path = "os/shared/analysis_spool.rs"]
-mod analysis_spool;
-#[path = "os/shared/analysis_tasks.rs"]
-mod analysis_tasks;
 #[path = "core/identity.rs"]
 mod identity;
 #[path = "core/identity_debug.rs"]
@@ -210,36 +210,36 @@ mod identity_store;
 mod io_deadline;
 #[path = "core/keepalive.rs"]
 mod keepalive;
-#[path = "os/shared/lan_presence.rs"]
-mod lan_presence;
-#[path = "core/lan_presence_match.rs"]
-pub(crate) mod lan_presence_match;
-#[path = "core/lan_settings.rs"]
-mod lan_settings;
-#[path = "core/lan_privacy.rs"]
-pub(crate) mod lan_privacy;
-#[path = "os/shared/lan_presence_auth.rs"]
-pub(crate) mod lan_presence_auth;
-#[path = "os/shared/lan_uplink_evidence.rs"]
-pub(crate) mod lan_uplink_evidence;
-#[path = "core/lan_link_facts.rs"]
-pub(crate) mod lan_link_facts;
-#[path = "core/lan_link_wire.rs"]
-mod lan_link_wire;
-#[path = "os/shared/lan_link_transport.rs"]
-mod lan_link_transport;
 #[path = "os/shared/lan_link_exchange.rs"]
 mod lan_link_exchange;
+#[path = "core/lan_link_facts.rs"]
+pub(crate) mod lan_link_facts;
+#[path = "os/shared/lan_link_transport.rs"]
+mod lan_link_transport;
+#[path = "core/lan_link_wire.rs"]
+mod lan_link_wire;
 #[cfg(windows)]
 #[path = "os/windows/lan_permission.rs"]
 mod lan_permission;
 #[cfg(not(windows))]
 #[path = "os/shared/lan_permission_unavailable.rs"]
 mod lan_permission;
+#[path = "os/shared/lan_presence.rs"]
+mod lan_presence;
+#[path = "os/shared/lan_presence_auth.rs"]
+pub(crate) mod lan_presence_auth;
+#[path = "core/lan_presence_match.rs"]
+pub(crate) mod lan_presence_match;
+#[path = "core/lan_privacy.rs"]
+pub(crate) mod lan_privacy;
+#[path = "core/lan_settings.rs"]
+mod lan_settings;
+#[path = "os/shared/lan_uplink_evidence.rs"]
+pub(crate) mod lan_uplink_evidence;
 pub use lan_permission::{lan_firewall_repair_available, request_lan_firewall_repair};
 #[path = "os/shared/lan_permission_job.rs"]
 mod lan_permission_job;
-pub use lan_permission_job::{start_lan_firewall_repair, poll_lan_firewall_repair};
+pub use lan_permission_job::{poll_lan_firewall_repair, start_lan_firewall_repair};
 #[path = "os/shared/lan_settings_store.rs"]
 mod lan_settings_store;
 #[path = "core/lan_status.rs"]
@@ -312,12 +312,12 @@ pub(crate) mod poll_status;
 pub mod power;
 #[path = "os/shared/profile_edits.rs"]
 pub(crate) mod profile_edits;
+#[path = "core/profile_migration.rs"]
+mod profile_migration;
 #[path = "os/shared/profile_operations.rs"]
 mod profile_operations;
 #[path = "core/profile_persistence.rs"]
 mod profile_persistence;
-#[path = "core/profile_migration.rs"]
-mod profile_migration;
 #[path = "core/profile_policy.rs"]
 mod profile_policy;
 #[path = "os/shared/profile_policy_actions.rs"]
@@ -471,8 +471,8 @@ pub use self::export_config::{ExportAccess, ShareExportConfig, SharedConnection,
 pub use self::identity::{DirectCodeRotation, IdentityRepair, IdentityRepairAction, ShareIdentity};
 pub(crate) use self::identity_store::with_matching_identity_generation;
 pub use self::lan_presence::{LanAnnouncement, LanEvent, LanPresence};
-pub use self::lan_privacy::LanProof;
 pub use self::lan_presence_match::{LanSighting, LAN_PRESENCE_TTL_SECS};
+pub use self::lan_privacy::LanProof;
 pub use self::lan_settings::LanSettings;
 pub use self::lan_status::{
     LanFacility, LanPeerView, LanStatus, LinkView, UplinkSharingState, UplinkView,
@@ -489,8 +489,8 @@ pub use self::legacy_direct_request::{
 };
 #[cfg(target_os = "android")]
 pub(crate) use self::platform_exec::{exec_host_activity, set_exec_host_listener};
-pub use self::profile_persistence::ProfileChange;
 pub use self::profile_migration::AutoHomeMigration;
+pub use self::profile_persistence::ProfileChange;
 pub use self::profile_policy_actions::set_direct_peer_write;
 pub(crate) use self::profiles::ProfileRevision;
 pub use self::profiles::ShareProfiles;
@@ -579,10 +579,10 @@ mod storage_duplicate_host;
 #[path = "core/peer_stream.rs"]
 mod peer_stream;
 
-#[path = "os/shared/host_stream.rs"]
-mod host_stream;
 #[path = "os/shared/host_list.rs"]
 mod host_list;
+#[path = "os/shared/host_stream.rs"]
+mod host_stream;
 
 #[path = "os/shared/host_duplicate_verify.rs"]
 mod host_duplicate_verify;
@@ -616,12 +616,17 @@ mod analysis_resources;
 #[path = "core/node_policy.rs"]
 mod node_policy;
 
-#[path = "core/fs_policy.rs"]
-mod fs_policy;
-#[path = "os/shared/fs_host_policy.rs"]
-mod fs_host_policy;
+#[path = "core/fs_delete.rs"]
+mod fs_delete;
+#[path = "core/fs_guard_backend.rs"]
+mod fs_guard_backend;
 #[path = "os/shared/fs_host_destructive.rs"]
 mod fs_host_destructive;
+#[path = "os/shared/fs_host_policy.rs"]
+mod fs_host_policy;
+#[cfg(test)]
+#[path = "os/shared/fs_host_policy_task_tests.rs"]
+mod fs_host_policy_task_tests;
 #[path = "os/shared/fs_local_paths.rs"]
 mod fs_local_paths;
 #[cfg(windows)]
@@ -630,13 +635,8 @@ mod fs_path_adapter;
 #[cfg(not(windows))]
 #[path = "os/linux_os/fs_path_adapter.rs"]
 mod fs_path_adapter;
-#[cfg(test)]
-#[path = "os/shared/fs_host_policy_task_tests.rs"]
-mod fs_host_policy_task_tests;
-#[path = "core/fs_guard_backend.rs"]
-mod fs_guard_backend;
-#[path = "core/fs_delete.rs"]
-mod fs_delete;
+#[path = "core/fs_policy.rs"]
+mod fs_policy;
 
 #[path = "core/fair_admission.rs"]
 mod fair_admission;

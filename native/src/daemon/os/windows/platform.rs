@@ -4,16 +4,24 @@ pub(crate) use shell::{shell_command, spawn_shell};
 
 pub(crate) fn open_log(path: &std::path::Path) -> std::io::Result<std::fs::File> {
     use std::os::windows::fs::OpenOptionsExt;
-    let file = std::fs::OpenOptions::new().create(true).append(true)
-        .custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT).open(path)?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)?;
     let metadata = file.metadata()?;
     if !metadata.is_file() || metadata.file_type().is_symlink() {
-        return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "log must be a regular file"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "log must be a regular file",
+        ));
     }
     Ok(file)
 }
 
-pub(crate) fn requires_storage_access(_endpoint: &str) -> bool { false }
+pub(crate) fn requires_storage_access(_endpoint: &str) -> bool {
+    false
+}
 
 use std::borrow::Cow;
 
@@ -276,7 +284,9 @@ mod tests {
 mod drives;
 #[path = "volume_monitor.rs"]
 mod volume_monitor;
-pub(crate) fn drive_snapshot() -> Option<Vec<DriveInfo>> { volume_monitor::snapshot() }
+pub(crate) fn drive_snapshot() -> Option<Vec<DriveInfo>> {
+    volume_monitor::snapshot()
+}
 
 mod power {
     pub fn battery_saver_on() -> bool {
@@ -306,7 +316,9 @@ mod power {
     }
 }
 
-pub(crate) fn watch_case_fold() -> bool { true }
+pub(crate) fn watch_case_fold() -> bool {
+    true
+}
 
 #[path = "session.rs"]
 mod session;
@@ -314,7 +326,10 @@ pub(crate) use session::session_marker;
 pub(crate) fn daemon_command(executable: &std::path::Path) -> std::process::Command {
     use std::os::windows::process::CommandExt;
     let mut command = std::process::Command::new(executable);
-    command.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null())
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
     command
 }

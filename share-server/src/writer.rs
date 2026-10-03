@@ -77,7 +77,9 @@ impl Drop for ByteReservation {
 impl WriterControl {
     fn close(&self) {
         if !self.closed.swap(true, Ordering::AcqRel) {
-            if let Some(wake) = self.wake.get() { wake.notify_one(); }
+            if let Some(wake) = self.wake.get() {
+                wake.notify_one();
+            }
             if let Some(stream) = &self.shutdown {
                 let _ = stream.shutdown(Shutdown::Both);
             }
@@ -150,9 +152,11 @@ impl Writer {
         };
         match self.sender.try_send(message) {
             Ok(()) => {
-                if let Some(wake) = self.control.wake.get() { wake.notify_one(); }
+                if let Some(wake) = self.control.wake.get() {
+                    wake.notify_one();
+                }
                 true
-            },
+            }
             Err(TrySendError::Full(_)) => false,
             Err(TrySendError::Disconnected(_)) => {
                 self.control.close();

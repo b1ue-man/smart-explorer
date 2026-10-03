@@ -185,8 +185,10 @@ fn exports_json(config: &ShareExportConfig) -> Vec<Value> {
     config
         .roots
         .iter()
-        .map(|root| json!({ "label": root.label, "path": root.path,
-            "access": root.access, "allowSystemWrites": root.allow_system_writes }))
+        .map(|root| {
+            json!({ "label": root.label, "path": root.path,
+            "access": root.access, "allowSystemWrites": root.allow_system_writes })
+        })
         .collect()
 }
 

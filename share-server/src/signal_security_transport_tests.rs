@@ -28,18 +28,30 @@ struct Certificates {
 impl Certificates {
     fn new() -> Self {
         let directory = std::env::temp_dir().join(format!(
-            "se-signal-tls-{}-{}", std::process::id(), login::hex(&login::nonce().unwrap())
+            "se-signal-tls-{}-{}",
+            std::process::id(),
+            login::hex(&login::nonce().unwrap())
         ));
         std::fs::create_dir(&directory).unwrap();
         let first = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
-        let second = rcgen::generate_simple_self_signed(vec!["localhost".into(), "renewal.example".into()]).unwrap();
-        let files = Self { directory, first, second };
+        let second =
+            rcgen::generate_simple_self_signed(vec!["localhost".into(), "renewal.example".into()])
+                .unwrap();
+        let files = Self {
+            directory,
+            first,
+            second,
+        };
         files.write(&files.first);
         files
     }
 
-    fn cert(&self) -> PathBuf { self.directory.join("cert.pem") }
-    fn key(&self) -> PathBuf { self.directory.join("key.pem") }
+    fn cert(&self) -> PathBuf {
+        self.directory.join("cert.pem")
+    }
+    fn key(&self) -> PathBuf {
+        self.directory.join("key.pem")
+    }
     fn write(&self, certificate: &rcgen::CertifiedKey<rcgen::KeyPair>) {
         std::fs::write(self.cert(), certificate.cert.pem()).unwrap();
         std::fs::write(self.key(), certificate.signing_key.serialize_pem()).unwrap();
@@ -47,7 +59,9 @@ impl Certificates {
 }
 
 impl Drop for Certificates {
-    fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.directory); }
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.directory);
+    }
 }
 
 fn hello(secret: &SecretKey) -> Value {
@@ -85,26 +99,47 @@ fn run_wss(config: Arc<ServerConfig>, certificate: &rcgen::Certificate) {
     let server_state = state.clone();
     let server = std::thread::spawn(move || {
         let (socket, _) = listener.accept().unwrap();
-        transport::handle_with_security(socket, server_state, SourceKey::from_socket(address),
-            &SignalTiming::default(), Some(config), false)
+        transport::handle_with_security(
+            socket,
+            server_state,
+            SourceKey::from_socket(address),
+            &SignalTiming::default(),
+            Some(config),
+            false,
+        )
     });
     let mut roots = RootCertStore::empty();
     roots.add(certificate.der().clone()).unwrap();
-    let client_config = ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
-        .with_safe_default_protocol_versions().unwrap()
-        .with_root_certificates(roots).with_no_client_auth();
+    let client_config =
+        ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
     let socket = TcpStream::connect(address).unwrap();
-    socket.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-    socket.set_write_timeout(Some(Duration::from_secs(2))).unwrap();
-    let client = ClientConnection::new(Arc::new(client_config), "localhost".try_into().unwrap()).unwrap();
+    socket
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    socket
+        .set_write_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    let client =
+        ClientConnection::new(Arc::new(client_config), "localhost".try_into().unwrap()).unwrap();
     let (mut websocket, _) = tungstenite::client(
-        format!("wss://localhost:{}/se-share", address.port()), StreamOwned::new(client, socket)
-    ).unwrap();
+        format!("wss://localhost:{}/se-share", address.port()),
+        StreamOwned::new(client, socket),
+    )
+    .unwrap();
     let secret = SecretKey::from_bytes(&[21; 32]);
-    websocket.send(Message::Text(hello(&secret).to_string())).unwrap();
+    websocket
+        .send(Message::Text(hello(&secret).to_string()))
+        .unwrap();
     let response = auth(read_ws(&mut websocket), &secret);
     websocket.send(Message::Text(response.to_string())).unwrap();
-    assert_eq!(read_ws(&mut websocket)["capabilities"], json!([login::CAPABILITY]));
+    assert_eq!(
+        read_ws(&mut websocket)["capabilities"],
+        json!([login::CAPABILITY])
+    );
     let writer = {
         let state = state.lock().unwrap();
         let client = state.clients.values().next().unwrap();
@@ -112,7 +147,9 @@ fn run_wss(config: Arc<ServerConfig>, certificate: &rcgen::Certificate) {
         client.writer.clone()
     };
     // No inbound heartbeat is needed to flush an asynchronously queued output.
-    assert!(writer.try_send(&Out::DirectOffline { lookup_id: "queued-wake".into() }));
+    assert!(writer.try_send(&Out::DirectOffline {
+        lookup_id: "queued-wake".into()
+    }));
     assert_eq!(read_ws(&mut websocket)["lookup_id"], "queued-wake");
     websocket.close(None).unwrap();
     server.join().unwrap().unwrap();
@@ -141,12 +178,21 @@ fn review_task_plaintext_is_refused_before_registration() {
     let server_state = state.clone();
     let server = std::thread::spawn(move || {
         let (socket, _) = listener.accept().unwrap();
-        transport::handle_with_security(socket, server_state, SourceKey::from_socket(address),
-            &SignalTiming::default(), None, false)
+        transport::handle_with_security(
+            socket,
+            server_state,
+            SourceKey::from_socket(address),
+            &SignalTiming::default(),
+            None,
+            false,
+        )
     });
     let mut client = TcpStream::connect(address).unwrap();
     writeln!(client, "{}", hello(&SecretKey::from_bytes(&[21; 32]))).unwrap();
-    assert_eq!(server.join().unwrap().unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+    assert_eq!(
+        server.join().unwrap().unwrap_err().kind(),
+        io::ErrorKind::PermissionDenied
+    );
     assert!(state.lock().unwrap().clients.is_empty());
 }
 
@@ -156,16 +202,24 @@ fn review_task_raw_tcp_key_login_rejects_another_signer() {
     let address = listener.local_addr().unwrap();
     let state = Arc::new(Mutex::new(State::default()));
     let server_state = state.clone();
-    let server = std::thread::spawn(move || transport::handle(listener.accept().unwrap().0, server_state));
+    let server =
+        std::thread::spawn(move || transport::handle(listener.accept().unwrap().0, server_state));
     let mut client = TcpStream::connect(address).unwrap();
-    client.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    client
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
     let mut reader = BufReader::new(client.try_clone().unwrap());
     let secret = SecretKey::from_bytes(&[21; 32]);
     writeln!(client, "{}", hello(&secret)).unwrap();
     let mut line = String::new();
     reader.read_line(&mut line).unwrap();
     let challenge = serde_json::from_str(&line).unwrap();
-    writeln!(client, "{}", auth(challenge, &SecretKey::from_bytes(&[22; 32]))).unwrap();
+    writeln!(
+        client,
+        "{}",
+        auth(challenge, &SecretKey::from_bytes(&[22; 32]))
+    )
+    .unwrap();
     line.clear();
     reader.read_line(&mut line).unwrap();
     let rejection: Value = serde_json::from_str(&line).unwrap();
@@ -181,14 +235,26 @@ fn review_task_login_challenge_is_connection_bound_and_single_use() {
     let mut second = HelloSession::begin(serde_json::from_value(hello(&secret)).unwrap()).unwrap();
     let challenge = serde_json::to_value(first.challenge().unwrap()).unwrap();
     let signed = auth(challenge, &secret);
-    assert!(second.answer(serde_json::from_value(signed.clone()).unwrap()).is_err());
-    first.answer(serde_json::from_value(signed.clone()).unwrap()).unwrap();
+    assert!(second
+        .answer(serde_json::from_value(signed.clone()).unwrap())
+        .is_err());
+    first
+        .answer(serde_json::from_value(signed.clone()).unwrap())
+        .unwrap();
     assert_eq!(first.identity, ClientIdentity::Proven(secret.public()));
-    assert!(first.answer(serde_json::from_value(signed).unwrap()).is_err());
-    assert_eq!(first.capabilities, HashSet::from([login::CAPABILITY.to_string()]));
+    assert!(first
+        .answer(serde_json::from_value(signed).unwrap())
+        .is_err());
+    assert_eq!(
+        first.capabilities,
+        HashSet::from([login::CAPABILITY.to_string()])
+    );
     let mut legacy = hello(&secret);
     legacy["capabilities"] = json!([]);
     let legacy = HelloSession::begin(serde_json::from_value(legacy).unwrap()).unwrap();
-    assert_eq!(legacy.identity, ClientIdentity::LegacyClaimed(secret.public()));
+    assert_eq!(
+        legacy.identity,
+        ClientIdentity::LegacyClaimed(secret.public())
+    );
     assert!(legacy.challenge().is_none());
 }

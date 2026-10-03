@@ -13,7 +13,9 @@ pub(super) struct ConnectionsArgs {
 #[derive(Subcommand)]
 enum ConnectionCommand {
     List(ExportListArgs),
-    #[command(about = "Share exactly one saved account (new entries read-only), change its rights, or withdraw it")]
+    #[command(
+        about = "Share exactly one saved account (new entries read-only), change its rights, or withdraw it"
+    )]
     Set(SetArgs),
 }
 
@@ -47,44 +49,77 @@ fn list(args: ExportListArgs) -> Result<(), String> {
         json!({"account": account, "label": connection.display(), "access": config.connection_access(&account)})
     }).collect::<Vec<_>>();
     if args.json {
-        println!("{}", serde_json::to_string_pretty(&json!({
-            "warning": "Peers use your saved credentials for each selected connection",
-            "connections": connections,
-            "shared_connections": config.shared_connections,
-        })).map_err(|error| error.to_string())?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "warning": "Peers use your saved credentials for each selected connection",
+                "connections": connections,
+                "shared_connections": config.shared_connections,
+            }))
+            .map_err(|error| error.to_string())?
+        );
     } else {
         println!("warning\tPeers use your saved credentials for each selected connection");
         for connection in saved {
             let account = connection.account();
-            let access = config.connection_access(&account).map(exports_policy::access_name).unwrap_or("not_shared");
-            println!("connection\t{account}\tlabel={}\taccess={access}", connection.display());
+            let access = config
+                .connection_access(&account)
+                .map(exports_policy::access_name)
+                .unwrap_or("not_shared");
+            println!(
+                "connection\t{account}\tlabel={}\taccess={access}",
+                connection.display()
+            );
         }
         for connection in &config.shared_connections {
-            println!("shared_connection\t{}\taccess={}", connection.account, exports_policy::access_name(connection.access));
+            println!(
+                "shared_connection\t{}\taccess={}",
+                connection.account,
+                exports_policy::access_name(connection.access)
+            );
         }
     }
     Ok(())
 }
 
 fn set(args: SetArgs) -> Result<(), String> {
-    if !args.remove && !crate::creds::load_connections_checked()?.iter().any(|saved| saved.account() == args.account) {
+    if !args.remove
+        && !crate::creds::load_connections_checked()?
+            .iter()
+            .any(|saved| saved.account() == args.account)
+    {
         return Err("saved account not found; use the exact account from connections list".into());
     }
     let before = super::super::checked_profiles()?;
     let scope = exports_policy::scope_id(&before, args.scope.room.as_deref())?;
-    let requested = if args.write { Some(ExportAccess::ReadWrite) }
-        else if args.read_only { Some(ExportAccess::ReadOnly) } else { None };
+    let requested = if args.write {
+        Some(ExportAccess::ReadWrite)
+    } else if args.read_only {
+        Some(ExportAccess::ReadOnly)
+    } else {
+        None
+    };
     let mut committed_access = None;
     ShareProfiles::mutate_persisted(Some(super::super::default_home()), |profiles| {
         let config = profiles.export_config_mut(&scope)?;
-        let access = if args.remove { None } else {
-            requested.or(config.connection_access(&args.account)).or(Some(ExportAccess::ReadOnly))
+        let access = if args.remove {
+            None
+        } else {
+            requested
+                .or(config.connection_access(&args.account))
+                .or(Some(ExportAccess::ReadOnly))
         };
         config.set_connection_access(&args.account, access)?;
         committed_access = access;
         Ok(())
     })?;
-    println!("Updated connection {}: {}{}", args.account,
-        committed_access.map(exports_policy::access_name).unwrap_or("not_shared"), super::super::refresh_note());
+    println!(
+        "Updated connection {}: {}{}",
+        args.account,
+        committed_access
+            .map(exports_policy::access_name)
+            .unwrap_or("not_shared"),
+        super::super::refresh_note()
+    );
     Ok(())
 }

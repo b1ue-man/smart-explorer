@@ -5,10 +5,14 @@ use rusqlite::types::Type;
 use super::state_types::{ItemRecord, PairRecord, Side};
 use super::types::{Baseline, Sig};
 
-static LIMITS: std::sync::LazyLock<super::SyncLimits> = std::sync::LazyLock::new(||
-    super::SyncLimits::for_memory(crate::transfer::physical_memory()));
-fn entry_limit() -> usize { usize::try_from(LIMITS.walk_entries).unwrap_or(usize::MAX) }
-fn text_limit() -> usize { usize::try_from(LIMITS.walk_text_bytes).unwrap_or(usize::MAX) }
+static LIMITS: std::sync::LazyLock<super::SyncLimits> =
+    std::sync::LazyLock::new(|| super::SyncLimits::for_memory(crate::transfer::physical_memory()));
+fn entry_limit() -> usize {
+    usize::try_from(LIMITS.walk_entries).unwrap_or(usize::MAX)
+}
+fn text_limit() -> usize {
+    usize::try_from(LIMITS.walk_text_bytes).unwrap_or(usize::MAX)
+}
 const MAX_STATE_DEPTH: usize = 512;
 
 pub(super) struct StateBudget {

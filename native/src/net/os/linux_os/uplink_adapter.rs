@@ -83,8 +83,16 @@ impl UplinkAdapter for NetworkManagerAdapter {
         self.probed_at = None;
         let mut state = crate::net::UplinkState::load()?;
         if let Some(record) = &state.sharing {
-            let private = UplinkTarget { index: record.private_index, name: record.private_name.clone(), adapter_id: record.private_id.clone() };
-            let public = UplinkTarget { index: record.public_index, name: record.public_name.clone(), adapter_id: record.public_id.clone() };
+            let private = UplinkTarget {
+                index: record.private_index,
+                name: record.private_name.clone(),
+                adapter_id: record.private_id.clone(),
+            };
+            let public = UplinkTarget {
+                index: record.public_index,
+                name: record.public_name.clone(),
+                adapter_id: record.public_id.clone(),
+            };
             self.disable(&private, &public)?;
         }
         let message = uplink_polkit::cleanup().map_err(|error| error.to_string())?;

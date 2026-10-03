@@ -157,11 +157,15 @@ impl SftpBackend {
         expected: Option<u64>,
         commit: Commit,
     ) -> VfsResult<Box<dyn Write + Send>> {
-        if let Some(writer) = self.open_pool_writer(path, flags, expected, commit)
-            .map_err(|error| self.target_error(path, error))? {
+        if let Some(writer) = self
+            .open_pool_writer(path, flags, expected, commit)
+            .map_err(|error| self.target_error(path, error))?
+        {
             return Ok(self.target_writer(path, Box::new(writer)));
         }
-        let writer = self.open_main_writer(path, flags, commit).map_err(|error| self.target_error(path, error))?;
+        let writer = self
+            .open_main_writer(path, flags, commit)
+            .map_err(|error| self.target_error(path, error))?;
         let writer: Box<dyn Write + Send> = match expected {
             Some(size) => Box::new(SizedWriter::new(writer, size)),
             None => Box::new(writer),
@@ -217,7 +221,8 @@ impl Backend for SftpBackend {
         // russh-sftp bounds each READDIR request. An advancing large listing
         // must not also fit the ordinary 20-s single-metadata budget.
         let (_, dir) = self.safe_sftp_on(|generation| {
-            self.rt.block_on(generation.sftp().read_dir(path.to_string()))
+            self.rt
+                .block_on(generation.sftp().read_dir(path.to_string()))
         })?;
         let mut out = Vec::new();
         for e in dir {

@@ -3,7 +3,9 @@ use std::io;
 use suppaftp::FtpError;
 
 pub(super) fn map(error: FtpError) -> io::Error {
-    if let FtpError::ConnectionError(error) = error { return error }
+    if let FtpError::ConnectionError(error) = error {
+        return error;
+    }
     let code = reply_code(&error);
     let kind = match code {
         Some(452) => io::ErrorKind::StorageFull,
@@ -26,8 +28,10 @@ pub(super) fn reply_code(error: &FtpError) -> Option<u32> {
 
 pub(super) fn command_path(path: &str) -> io::Result<()> {
     if path.contains(['\r', '\n', '\0']) {
-        return Err(io::Error::new(io::ErrorKind::InvalidFilename,
-            "FTP path contains a control-command delimiter"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidFilename,
+            "FTP path contains a control-command delimiter",
+        ));
     }
     Ok(())
 }

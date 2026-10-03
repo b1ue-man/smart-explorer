@@ -96,5 +96,9 @@ pub fn empty_side_block(side: PairSide, empty: bool, base: &Baseline) -> Option<
 
 /// `block` unless the user confirmed it for this run.
 pub fn unconfirmed(block: Option<RunBlock>, confirmed: &[BlockConfirmation]) -> Option<RunBlock> {
-    block.filter(|block| !confirmed.iter().any(|confirmation| confirmation.covers(block)))
+    block.filter(|block| {
+        !confirmed
+            .iter()
+            .any(|confirmation| confirmation.covers(block))
+    })
 }

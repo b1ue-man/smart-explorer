@@ -48,7 +48,9 @@ pub(super) fn route_request(
     if !require_capability(origin_id, origin, state) {
         return;
     }
-    if !super::direct_presence::require_identity(state, origin_id, origin, &request.requester) { return; }
+    if !super::direct_presence::require_identity(state, origin_id, origin, &request.requester) {
+        return;
+    }
     if let Err(error) = direct_validation::validate_request(&request) {
         send_retain_error(origin, error);
         return;
@@ -92,8 +94,12 @@ pub(super) fn route_request_receipt(
     if !require_capability(origin_id, origin, state) {
         return;
     }
-    if !super::direct_presence::require_identity(state, origin_id, origin, &receipt.target) { return; }
-    if !super::direct_presence::require_owner(state, origin_id, origin, &receipt.lookup_id) { return; }
+    if !super::direct_presence::require_identity(state, origin_id, origin, &receipt.target) {
+        return;
+    }
+    if !super::direct_presence::require_owner(state, origin_id, origin, &receipt.lookup_id) {
+        return;
+    }
     if let Err(error) = direct_validation::validate_request_receipt(&receipt) {
         send_retain_error(origin, error);
         return;
@@ -113,8 +119,12 @@ pub(super) fn route_decision(
     if !require_capability(origin_id, origin, state) {
         return;
     }
-    if !super::direct_presence::require_identity(state, origin_id, origin, &decision.target) { return; }
-    if !super::direct_presence::require_owner(state, origin_id, origin, &decision.lookup_id) { return; }
+    if !super::direct_presence::require_identity(state, origin_id, origin, &decision.target) {
+        return;
+    }
+    if !super::direct_presence::require_owner(state, origin_id, origin, &decision.lookup_id) {
+        return;
+    }
     if let Err(error) = direct_validation::validate_decision(&decision) {
         send_retain_error(origin, error);
         return;
@@ -134,7 +144,9 @@ pub(super) fn route_decision_receipt(
     if !require_capability(origin_id, origin, state) {
         return;
     }
-    if !super::direct_presence::require_identity(state, origin_id, origin, &receipt.requester) { return; }
+    if !super::direct_presence::require_identity(state, origin_id, origin, &receipt.requester) {
+        return;
+    }
     if let Err(error) = direct_validation::validate_decision_receipt(&receipt) {
         send_retain_error(origin, error);
         return;

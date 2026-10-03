@@ -272,8 +272,10 @@ pub(super) fn upsert_item_tx(
 ) -> rusqlite::Result<()> {
     validate_item(item)?;
     if item.deleted {
-        tx.execute("DELETE FROM items WHERE pair = ?1 AND side = ?2 AND rel = ?3",
-            params![pair, item.side.as_str(), item.rel])?;
+        tx.execute(
+            "DELETE FROM items WHERE pair = ?1 AND side = ?2 AND rel = ?3",
+            params![pair, item.side.as_str(), item.rel],
+        )?;
         return Ok(());
     }
     let (size, mtime, hash) = match item.sig {
@@ -317,9 +319,9 @@ pub(super) fn upsert_item_tx(
 }
 
 pub(super) fn write_pair(conn: &Connection, rec: &PairRecord) -> rusqlite::Result<()> {
-        validate_pair(rec)?;
-        conn.execute(
-            "INSERT INTO pairs(pair, root_a, root_b, mode, source_side, source_cursor,
+    validate_pair(rec)?;
+    conn.execute(
+        "INSERT INTO pairs(pair, root_a, root_b, mode, source_side, source_cursor,
                  root_a_id, root_b_id, bootstrapped, target_managed, updated_ms)
              VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
              ON CONFLICT(pair) DO UPDATE SET
@@ -333,21 +335,21 @@ pub(super) fn write_pair(conn: &Connection, rec: &PairRecord) -> rusqlite::Resul
                  bootstrapped = excluded.bootstrapped,
                  target_managed = excluded.target_managed,
                  updated_ms = excluded.updated_ms",
-            params![
-                rec.pair,
-                rec.root_a,
-                rec.root_b,
-                rec.mode,
-                rec.source_side.as_str(),
-                rec.source_cursor,
-                rec.root_a_id,
-                rec.root_b_id,
-                rec.bootstrapped as i64,
-                rec.target_managed as i64,
-                now_ms(),
-            ],
-        )?;
-        Ok(())
+        params![
+            rec.pair,
+            rec.root_a,
+            rec.root_b,
+            rec.mode,
+            rec.source_side.as_str(),
+            rec.source_cursor,
+            rec.root_a_id,
+            rec.root_b_id,
+            rec.bootstrapped as i64,
+            rec.target_managed as i64,
+            now_ms(),
+        ],
+    )?;
+    Ok(())
 }
 
 fn default_db_path() -> PathBuf {

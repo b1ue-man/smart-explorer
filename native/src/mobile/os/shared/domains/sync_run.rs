@@ -60,9 +60,16 @@ pub(super) struct SlotGuard {
 /// The same reservation also covers short edits and synchronous merge reads.
 /// A reserved task without its public id already owns the saved locators.
 pub(super) fn reserve_job(job_id: &str) -> Result<SlotGuard, ApiError> {
-    let token = claim(job_id).ok_or_else(|| ApiError::new("busy",
-        "Für diesen Sync-Job läuft bereits ein Vorgang – bitte warten."))?;
-    Ok(SlotGuard { job_id: job_id.to_owned(), token })
+    let token = claim(job_id).ok_or_else(|| {
+        ApiError::new(
+            "busy",
+            "Für diesen Sync-Job läuft bereits ein Vorgang – bitte warten.",
+        )
+    })?;
+    Ok(SlotGuard {
+        job_id: job_id.to_owned(),
+        token,
+    })
 }
 
 impl Drop for SlotGuard {
@@ -91,13 +98,28 @@ where
     spawn_for_snapshot(rt, find_job(job_id)?, title, work)
 }
 
-pub(super) fn spawn_for_snapshot<F>(rt: &Runtime, job: SyncJob, title: String, work: F) -> Result<String, ApiError>
-where F: FnOnce(&TaskCtx) -> Result<Value, ApiError> + Send + 'static {
+pub(super) fn spawn_for_snapshot<F>(
+    rt: &Runtime,
+    job: SyncJob,
+    title: String,
+    work: F,
+) -> Result<String, ApiError>
+where
+    F: FnOnce(&TaskCtx) -> Result<Value, ApiError> + Send + 'static,
+{
     spawn_owned(rt, job, title, false, work)
 }
 
-fn spawn_owned<F>(rt: &Runtime, job: SyncJob, title: String, actual_attempt: bool, work: F) -> Result<String, ApiError>
-where F: FnOnce(&TaskCtx) -> Result<Value, ApiError> + Send + 'static {
+fn spawn_owned<F>(
+    rt: &Runtime,
+    job: SyncJob,
+    title: String,
+    actual_attempt: bool,
+    work: F,
+) -> Result<String, ApiError>
+where
+    F: FnOnce(&TaskCtx) -> Result<Value, ApiError> + Send + 'static,
+{
     let job_id = job.id.clone();
     let guard = reserve_job(&job_id)?;
     let token = guard.token;
@@ -105,14 +127,22 @@ where F: FnOnce(&TaskCtx) -> Result<Value, ApiError> + Send + 'static {
         let result = (|| {
             let current = find_job(&guard.job_id)?;
             if current.source != job.source || current.target != job.target {
-                return Err(ApiError::new("conflict", "Die Sync-Orte haben sich geändert. Bitte neu laden."));
+                return Err(ApiError::new(
+                    "conflict",
+                    "Die Sync-Orte haben sich geändert. Bitte neu laden.",
+                ));
             }
             let _lease = match attempt::Lease::acquire(&job, ctx) {
                 Ok(lease) => lease,
                 Err(error) => {
                     if actual_attempt && error.kind != "busy" {
-                        attempt::record(&job, super::args::now_secs(), crate::syncjobs::RunCause::Manual,
-                            attempt::api_outcome(&error), None)?;
+                        attempt::record(
+                            &job,
+                            super::args::now_secs(),
+                            crate::syncjobs::RunCause::Manual,
+                            attempt::api_outcome(&error),
+                            None,
+                        )?;
                     }
                     return Err(error);
                 }
@@ -125,7 +155,10 @@ where F: FnOnce(&TaskCtx) -> Result<Value, ApiError> + Send + 'static {
         }
         result
     });
-    if let Some(slot) = running().get_mut(&job_id).filter(|slot| slot.token == token) {
+    if let Some(slot) = running()
+        .get_mut(&job_id)
+        .filter(|slot| slot.token == token)
+    {
         slot.task = Some(task.clone());
     }
     notify_jobs(rt);
@@ -155,10 +188,19 @@ pub(super) fn open_pair(job: &SyncJob) -> Result<PairContext, ApiError> {
 }
 
 pub(super) fn open_pair_for(ctx: &TaskCtx, job: &SyncJob) -> Result<PairContext, ApiError> {
-    open_pair_checked(job, || if ctx.cancelled() { Err(canceled("Abgebrochen")) } else { Ok(()) })
+    open_pair_checked(job, || {
+        if ctx.cancelled() {
+            Err(canceled("Abgebrochen"))
+        } else {
+            Ok(())
+        }
+    })
 }
 
-fn open_pair_checked(job: &SyncJob, check: impl Fn() -> Result<(), ApiError>) -> Result<PairContext, ApiError> {
+fn open_pair_checked(
+    job: &SyncJob,
+    check: impl Fn() -> Result<(), ApiError>,
+) -> Result<PairContext, ApiError> {
     check()?;
     let (a, root_a) = crate::connect::resolve_endpoint(&job.source)
         .map_err(|error| text_error("network", "Seite A", error))?;
@@ -186,15 +228,26 @@ pub(super) fn run_bisync(
     dry_run: bool,
 ) -> Result<crate::bisync::Outcome, ApiError> {
     let mut settings = crate::bisync::RunSettings::for_job(&job.id);
-    if dry_run { settings.depth = crate::bisync::ScanDepth::Full; }
+    if dry_run {
+        settings.depth = crate::bisync::ScanDepth::Full;
+    }
     run_bisync_with(ctx, job, pair, dry_run, settings)
 }
 
-fn run_bisync_with(ctx: &TaskCtx, job: &SyncJob, pair: &PairContext, dry_run: bool,
-    settings: crate::bisync::RunSettings) -> Result<crate::bisync::Outcome, ApiError> {
+fn run_bisync_with(
+    ctx: &TaskCtx,
+    job: &SyncJob,
+    pair: &PairContext,
+    dry_run: bool,
+    settings: crate::bisync::RunSettings,
+) -> Result<crate::bisync::Outcome, ApiError> {
     let (opts, bounds, _) = checked_settings(job, dry_run)?;
-    let ignore = job.checked_glob_set_for(crate::bisync::pair_key_policy(
-        &*pair.a, &pair.root_a, &*pair.b, &pair.root_b).fold_case).map_err(invalid)?;
+    let ignore = job
+        .checked_glob_set_for(
+            crate::bisync::pair_key_policy(&*pair.a, &pair.root_a, &*pair.b, &pair.root_b)
+                .fold_case,
+        )
+        .map_err(invalid)?;
     let filter = crate::bisync::WalkFilter {
         include_hidden: job.include_hidden,
         ignore: &ignore,
@@ -204,10 +257,20 @@ fn run_bisync_with(ctx: &TaskCtx, job: &SyncJob, pair: &PairContext, dry_run: bo
         before_mtime_ms: bounds.3,
     };
     let cancel = ctx.cancel_flag();
-    let observer = attempt::Observer { ctx, items: std::sync::atomic::AtomicI64::new(0) };
+    let observer = attempt::Observer {
+        ctx,
+        items: std::sync::atomic::AtomicI64::new(0),
+    };
     Ok(crate::bisync::run_with(crate::bisync::RunRequest {
-        a: &*pair.a, root_a: &pair.root_a, b: &*pair.b, root_b: &pair.root_b,
-        opts, cancel: &cancel, filter: &filter, settings, observer: Some(&observer),
+        a: &*pair.a,
+        root_a: &pair.root_a,
+        b: &*pair.b,
+        root_b: &pair.root_b,
+        opts,
+        cancel: &cancel,
+        filter: &filter,
+        settings,
+        observer: Some(&observer),
     }))
 }
 
@@ -218,7 +281,10 @@ pub(super) fn run(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
     let state = crate::syncjobs::load_job_state(&job.id)
         .map_err(|e| ApiError::new("internal", e.to_string()))?;
     if state.blocked.as_ref().is_some_and(|block| !block.confirmed) || state.load_error.is_some() {
-        return Err(ApiError::new("blocked", "Der Job ist angehalten. Bitte zuerst prüfen und gegebenenfalls einmal bestätigen."));
+        return Err(ApiError::new(
+            "blocked",
+            "Der Job ist angehalten. Bitte zuerst prüfen und gegebenenfalls einmal bestätigen.",
+        ));
     }
     // Resolutions not yet saved would be overwritten by the next run.
     sync_conflicts::settle_before_run(&job.id)?;
@@ -279,15 +345,26 @@ pub(super) fn mirror(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
 fn mirror_task(ctx: &TaskCtx, source: &str, target: &str) -> Result<Value, ApiError> {
     let cancel = ctx.cancel_flag();
     let storage = crate::daemon::register_storage_run(source, target, &cancel);
-    if storage.access_missing() { return Err(ApiError::new("permission", "Dateizugriff fehlt: Zugriff auf alle Dateien erlauben.")); }
+    if storage.access_missing() {
+        return Err(ApiError::new(
+            "permission",
+            "Dateizugriff fehlt: Zugriff auf alle Dateien erlauben.",
+        ));
+    }
     let _awake = crate::keep_awake::hold(crate::keep_awake::Reason::SyncRun);
-    if ctx.cancelled() { return Err(canceled("Abgebrochen")); }
+    if ctx.cancelled() {
+        return Err(canceled("Abgebrochen"));
+    }
     ctx.message("Verbinde…");
     let rt = Runtime::get()?;
     let (src, src_root) = rt.resolve(source)?;
-    if ctx.cancelled() { return Err(canceled("Abgebrochen")); }
+    if ctx.cancelled() {
+        return Err(canceled("Abgebrochen"));
+    }
     let (dst, dst_root) = rt.resolve(target)?;
-    if ctx.cancelled() { return Err(canceled("Abgebrochen")); }
+    if ctx.cancelled() {
+        return Err(canceled("Abgebrochen"));
+    }
     let (tx, rx) = crossbeam_channel::unbounded();
     let handle = crate::sync::start_sync(
         crate::vfs::sync_backend(src),

@@ -151,7 +151,9 @@ impl BackendExtensions for MockBackend {
         _min_bytes: u64,
         progress: &ReclaimProgress,
     ) -> VfsResult<Option<DuplicateReport>> {
-        if self.host_withdraws { progress.files.store(100, Ordering::Relaxed); }
+        if self.host_withdraws {
+            progress.files.store(100, Ordering::Relaxed);
+        }
         Ok(self.host_search.as_ref().map(|report| DuplicateReport {
             groups: report.groups.clone(),
             summary: report.summary.clone(),
@@ -350,20 +352,47 @@ fn review_task_host_search_is_preferred_over_any_walk() {
 
 #[test]
 fn review_task_withdrawn_host_search_keeps_the_sparse_fallback() {
-    let be = Arc::new(MockBackend { host_withdraws: true, ..MockBackend::default() });
-    be.entries.lock().unwrap().insert("/".into(),
-        vec![file("a", 3, None), file("b", 3, None), file("unique", 7, None)]);
-    be.contents.lock().unwrap().extend([("/a".into(), b"abc".to_vec()), ("/b".into(), b"abc".to_vec())]);
+    let be = Arc::new(MockBackend {
+        host_withdraws: true,
+        ..MockBackend::default()
+    });
+    be.entries.lock().unwrap().insert(
+        "/".into(),
+        vec![
+            file("a", 3, None),
+            file("b", 3, None),
+            file("unique", 7, None),
+        ],
+    );
+    be.contents.lock().unwrap().extend([
+        ("/a".into(), b"abc".to_vec()),
+        ("/b".into(), b"abc".to_vec()),
+    ]);
     let report = find_backend_duplicates(be.clone(), "/", &ReclaimProgress::default(), 1);
     assert!(report.root_error.is_none());
     assert_eq!(report.summary.files, 3);
     assert_eq!(report.groups.len(), 1);
-    assert!(!be.read_paths.lock().unwrap().iter().any(|path| path == "/unique"));
+    assert!(!be
+        .read_paths
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|path| path == "/unique"));
     be.read_paths.lock().unwrap().clear();
-    let report = scan_reclaim_backend(be.clone(), "/", &ReclaimProgress::default(), &duplicates_from_one_byte());
+    let report = scan_reclaim_backend(
+        be.clone(),
+        "/",
+        &ReclaimProgress::default(),
+        &duplicates_from_one_byte(),
+    );
     assert_eq!(report.files, 3);
     assert_eq!(report.duplicate_groups.len(), 1);
-    assert!(!be.read_paths.lock().unwrap().iter().any(|path| path == "/unique"));
+    assert!(!be
+        .read_paths
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|path| path == "/unique"));
 }
 
 #[test]

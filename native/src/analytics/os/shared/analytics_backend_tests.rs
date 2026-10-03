@@ -142,7 +142,9 @@ fn review_task_listing_fallback_honours_the_offered_node_budget() {
     assert_eq!(outcome.status, ScanStatus::Complete);
     let tree = outcome.tree.unwrap();
     assert_eq!(tree.size, 351);
-    fn count(node: &SizeNode) -> usize { 1 + node.children.iter().map(count).sum::<usize>() }
+    fn count(node: &SizeNode) -> usize {
+        1 + node.children.iter().map(count).sum::<usize>()
+    }
     assert!(count(&tree) <= 2);
     assert!(!outcome.notes.is_empty());
 }

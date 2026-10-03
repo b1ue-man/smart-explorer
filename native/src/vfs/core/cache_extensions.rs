@@ -22,7 +22,10 @@ impl BackendExtensions for CachingBackend {
     }
 
     fn replace_staged_reversible(
-        &self, staged: &str, destination: &str, retained: &str,
+        &self,
+        staged: &str,
+        destination: &str,
+        retained: &str,
     ) -> VfsResult<bool> {
         let result = calls::replace_staged_reversible(&*self.inner, staged, destination, retained);
         self.invalidate(staged);

@@ -29,7 +29,9 @@ use super::connection::FtpUrl;
 #[cfg(test)]
 use std::time::Duration;
 
-fn io_err(error: FtpError) -> io::Error { super::errors::map(error) }
+fn io_err(error: FtpError) -> io::Error {
+    super::errors::map(error)
+}
 
 fn systime_ms(t: SystemTime) -> i64 {
     match t.duration_since(UNIX_EPOCH) {
@@ -88,7 +90,10 @@ pub(super) fn parse_list_line_unchecked(line: &str) -> VfsResult<VfsMeta> {
     Ok(VfsMeta {
         is_dir: file.is_directory(),
         is_symlink: file.is_symlink(),
-        special: line.as_bytes().first().is_some_and(|kind| matches!(kind, b'b' | b'c' | b'p' | b's')),
+        special: line
+            .as_bytes()
+            .first()
+            .is_some_and(|kind| matches!(kind, b'b' | b'c' | b'p' | b's')),
         size: file.size() as u64,
         mtime_ms: systime_ms(file.modified()),
         btime_ms: 0,
@@ -184,7 +189,9 @@ impl FtpBackend {
 }
 
 impl Backend for FtpBackend {
-    fn extensions(&self) -> Option<&dyn crate::vfs::BackendExtensions> { Some(self) }
+    fn extensions(&self) -> Option<&dyn crate::vfs::BackendExtensions> {
+        Some(self)
+    }
     fn scheme(&self) -> Scheme {
         Scheme::Ftp
     }
@@ -207,8 +214,10 @@ impl Backend for FtpBackend {
         self.pool.retire_idle();
         let listing = super::metadata::list_browse(self.pool.primary(), path)?;
         if !listing.omitted.is_empty() {
-            return Err(io::Error::new(io::ErrorKind::InvalidData,
-                "FTP listing has protected omissions; use list_dir_tolerant"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "FTP listing has protected omissions; use list_dir_tolerant",
+            ));
         }
         Ok(listing.entries)
     }
@@ -216,8 +225,10 @@ impl Backend for FtpBackend {
     fn list_dir_for_sync(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
         let listing = super::metadata::list(self.pool.primary(), path)?;
         if !listing.omitted.is_empty() {
-            return Err(io::Error::new(io::ErrorKind::InvalidData,
-                "FTP sync listing has protected omissions; use list_dir_tolerant"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "FTP sync listing has protected omissions; use list_dir_tolerant",
+            ));
         }
         Ok(listing.entries)
     }

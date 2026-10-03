@@ -73,11 +73,16 @@ pub(super) fn handle_client(
                 },
             )
         }
-        IpcRequest::AnalyzeShare { target, root, node_budget, .. } => {
-            super::ipc_analysis::serve(stream, root, node_budget, || {
-                host.open_share(target).map(|(_, backend, _)| backend).map_err(io::Error::other)
-            })
-        }
+        IpcRequest::AnalyzeShare {
+            target,
+            root,
+            node_budget,
+            ..
+        } => super::ipc_analysis::serve(stream, root, node_budget, || {
+            host.open_share(target)
+                .map(|(_, backend, _)| backend)
+                .map_err(io::Error::other)
+        }),
         IpcRequest::OpenShare { target, .. } => match host.open_share(target) {
             Ok((label, backend, status)) => {
                 write_response(&mut stream, &IpcResponse::OpenOk { label, status })?;

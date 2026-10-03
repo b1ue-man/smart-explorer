@@ -1,6 +1,10 @@
 //! Bounded paging of durable intents; each broken entry keeps its own error.
+use super::{
+    platform::{self, Location},
+    record::{self, CatalogEntry, CatalogPage, EntryState},
+    store::Store,
+};
 use std::{cmp::Reverse, collections::BinaryHeap, io};
-use super::{platform::{self, Location}, record::{self, CatalogEntry, CatalogPage, EntryState}, store::Store};
 
 pub(crate) fn list(cursor: Option<&str>) -> io::Result<CatalogPage> {
     let store = Store::open()?;
@@ -8,7 +12,10 @@ pub(crate) fn list(cursor: Option<&str>) -> io::Result<CatalogPage> {
 }
 pub(super) fn list_in(store: &Store, cursor: Option<&str>) -> io::Result<CatalogPage> {
     if cursor.is_some_and(|cursor| !record::lower_hex(cursor, 32)) {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Ungültiger Papierkorb-Seitenanker"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Ungültiger Papierkorb-Seitenanker",
+        ));
     }
     let mut page = CatalogPage::default();
     // Keep only this page plus its successor marker, never all filenames.
@@ -16,19 +23,42 @@ pub(super) fn list_in(store: &Store, cursor: Option<&str>) -> io::Result<Catalog
     for entry in store.area.directory.read_directory()? {
         let entry = match entry {
             Ok(entry) => entry,
-            Err(error) => { issue(&mut page, format!("Eintrag nicht lesbar: {error}")); continue; }
+            Err(error) => {
+                issue(&mut page, format!("Eintrag nicht lesbar: {error}"));
+                continue;
+            }
         };
-        let Some(name) = entry.name.to_str() else { issue(&mut page, "Eintragname nicht darstellbar".into()); continue; };
-        if name == "operation.lock" || crate::vfs::is_staging_name(name) { continue; }
-        let Some(id) = name.strip_suffix(".json").filter(|id| record::lower_hex(id, 32)) else {
-            issue(&mut page, format!("Unbekannter Store-Eintrag: {name}")); continue;
+        let Some(name) = entry.name.to_str() else {
+            issue(&mut page, "Eintragname nicht darstellbar".into());
+            continue;
         };
-        if cursor.is_some_and(|cursor| id >= cursor) { continue; }
+        if name == "operation.lock" || crate::vfs::is_staging_name(name) {
+            continue;
+        }
+        let Some(id) = name
+            .strip_suffix(".json")
+            .filter(|id| record::lower_hex(id, 32))
+        else {
+            issue(&mut page, format!("Unbekannter Store-Eintrag: {name}"));
+            continue;
+        };
+        if cursor.is_some_and(|cursor| id >= cursor) {
+            continue;
+        }
         selected.push(Reverse(id.to_owned()));
-        if selected.len() > record::PAGE_SIZE + 1 { selected.pop(); }
+        if selected.len() > record::PAGE_SIZE + 1 {
+            selected.pop();
+        }
     }
-    let mut ids: Vec<String> = selected.into_sorted_vec().into_iter().map(|id| id.0).collect();
-    if ids.len() > record::PAGE_SIZE { ids.pop(); page.next = ids.last().cloned(); }
+    let mut ids: Vec<String> = selected
+        .into_sorted_vec()
+        .into_iter()
+        .map(|id| id.0)
+        .collect();
+    if ids.len() > record::PAGE_SIZE {
+        ids.pop();
+        page.next = ids.last().cloned();
+    }
     for id in ids {
         let entry = match store.load(&id) {
             Ok(record) => {
@@ -50,6 +80,9 @@ pub(super) fn list_in(store: &Store, cursor: Option<&str>) -> io::Result<Catalog
     Ok(page)
 }
 fn issue(page: &mut CatalogPage, text: String) {
-    if page.issues.len() < record::PAGE_SIZE { page.issues.push(text); }
-    else { page.suppressed_issues = page.suppressed_issues.saturating_add(1); }
+    if page.issues.len() < record::PAGE_SIZE {
+        page.issues.push(text);
+    } else {
+        page.suppressed_issues = page.suppressed_issues.saturating_add(1);
+    }
 }

@@ -44,10 +44,10 @@ const MAX_BACKOFF: Duration = Duration::from_secs(3_600);
 /// event with a maximal name.
 const READ_WORDS: usize = 8_192;
 
-#[path = "inotify_events.rs"]
-mod events;
 #[path = "inotify_confined.rs"]
 mod confined;
+#[path = "inotify_events.rs"]
+mod events;
 
 struct Dir {
     path: PathBuf,
@@ -178,9 +178,15 @@ impl Tree {
                 // no inotify mount event. Cross-mount jobs retain a poll so
                 // such a subtree cannot silently lose coverage.
                 let kind = if kind == super::types::Coverage::Complete
-                    && self.roots.get(&id).is_some_and(|root| root.spec.options.cross_mounts) {
+                    && self
+                        .roots
+                        .get(&id)
+                        .is_some_and(|root| root.spec.options.cross_mounts)
+                {
                     super::types::Coverage::LocalOnly
-                } else { kind };
+                } else {
+                    kind
+                };
                 emit(id, vec![WatchEvent::Ready(kind)]);
             }
             Err(WalkError::Limit) => self.fail(id, UnavailableReason::WatchLimit),
@@ -310,7 +316,11 @@ impl Tree {
         // path wins (it may have been renamed meanwhile).
         // A confined watch shares the kernel wd with overlapping job roots,
         // but its /proc spelling must not replace a job's traversal path.
-        if self.roots.get(&id).is_some_and(|root| root.spec.anchor.is_none()) {
+        if self
+            .roots
+            .get(&id)
+            .is_some_and(|root| root.spec.anchor.is_none())
+        {
             entry.path = dir.to_path_buf();
         }
         entry.users.insert(id, rel.to_string());

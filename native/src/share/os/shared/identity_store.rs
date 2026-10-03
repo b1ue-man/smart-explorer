@@ -305,13 +305,17 @@ fn identity_transaction_guard() -> io::Result<IdentityTransactionGuard> {
             Err(std::sync::TryLockError::WouldBlock) => {
                 let remaining = deadline.saturating_duration_since(std::time::Instant::now());
                 if remaining.is_zero() {
-                    return Err(io::Error::new(io::ErrorKind::TimedOut, "Share identity transaction is busy; retry"));
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "Share identity transaction is busy; retry",
+                    ));
                 }
                 std::thread::sleep(remaining.min(std::time::Duration::from_millis(25)));
             }
         }
     };
-    let system_guard = super::identity_lock::acquire_until(&crate::support_dirs::app_data_dir(), deadline)?;
+    let system_guard =
+        super::identity_lock::acquire_until(&crate::support_dirs::app_data_dir(), deadline)?;
     Ok(IdentityTransactionGuard {
         _process_guard: process_guard,
         _system_guard: system_guard,

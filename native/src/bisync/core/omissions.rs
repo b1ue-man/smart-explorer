@@ -205,7 +205,9 @@ impl SyncOmissions {
     /// Nothing besides the engine's own entries (replica marker, versions,
     /// staging files) was left out.
     pub fn is_empty(&self) -> bool {
-        self.roots.values().all(|kind| *kind == OmissionKind::OwnFile)
+        self.roots
+            .values()
+            .all(|kind| *kind == OmissionKind::OwnFile)
     }
 
     pub fn summary(&self) -> Option<String> {

@@ -13,9 +13,9 @@ use super::wire::SrvMsg;
 
 #[path = "signal_auth_replay.rs"]
 mod replay;
-use replay::{remember_presence, replay_key, signature_seen};
 #[cfg(test)]
 pub(super) use replay::remember_replay;
+use replay::{remember_presence, replay_key, signature_seen};
 
 /// Handles one legacy signaling line; returns whether it was a pong. With
 /// `tracked_direct` negotiated, legacy decisions are dropped: they carry no
@@ -174,10 +174,14 @@ pub(super) fn verify_local_direct_request(
     let signed_before = state.direct_contacts.iter().any(|contact| {
         contact.relation.signed_presence
             && (contact.remote_public_key.as_deref() == Some(presence.public_key.as_str())
-                || !contact.expected_node_id.is_empty() && contact.expected_node_id == presence.node_id)
+                || !contact.expected_node_id.is_empty()
+                    && contact.expected_node_id == presence.node_id)
     });
     if !verify_hmac(&state.direct_secret, &payload, &presence.proof)
-        || !accepts_signature(presence, signed_before || signature_seen(&state.seen_nonces, presence))
+        || !accepts_signature(
+            presence,
+            signed_before || signature_seen(&state.seen_nonces, presence),
+        )
     {
         return false;
     }
@@ -187,7 +191,8 @@ pub(super) fn verify_local_direct_request(
     if presence.is_signed() {
         for contact in &mut state.direct_contacts {
             if contact.remote_public_key.as_deref() == Some(presence.public_key.as_str())
-                || !contact.expected_node_id.is_empty() && contact.expected_node_id == presence.node_id
+                || !contact.expected_node_id.is_empty()
+                    && contact.expected_node_id == presence.node_id
             {
                 contact.relation.signed_presence = true;
             }
@@ -203,7 +208,9 @@ fn verify_direct_access_accepted(
     presence: Option<&PeerPresence>,
     auth: &Arc<Mutex<ShareAuthState>>,
 ) -> bool {
-    if presence.is_none_or(|presence| !presence.matches_legacy_decision(requester_device_id, accepted)) {
+    if presence
+        .is_none_or(|presence| !presence.matches_legacy_decision(requester_device_id, accepted))
+    {
         return false;
     }
     verify_direct_access_accepted_using(
@@ -278,7 +285,10 @@ where
         &presence.nonce,
     );
     if !verify_hmac(&secret, &payload, &presence.proof)
-        || !accepts_signature(presence, signed_before || signature_seen(&state.seen_nonces, presence))
+        || !accepts_signature(
+            presence,
+            signed_before || signature_seen(&state.seen_nonces, presence),
+        )
     {
         return false;
     }
@@ -305,8 +315,14 @@ fn pins_match(contact: &DirectContact, presence: &PeerPresence) -> bool {
             .remote_public_key
             .as_deref()
             .is_none_or(|key| key == presence.public_key)
-        && contact.remote_device_id.as_deref().is_none_or(|id| id == presence.device_id)
-        && contact.accepted_public_key.as_deref().is_none_or(|key| key == presence.public_key)
+        && contact
+            .remote_device_id
+            .as_deref()
+            .is_none_or(|id| id == presence.device_id)
+        && contact
+            .accepted_public_key
+            .as_deref()
+            .is_none_or(|key| key == presence.public_key)
 }
 
 fn verify_direct_presence(
@@ -358,7 +374,10 @@ fn verify_direct_presence(
         &presence.nonce,
     );
     if !verify_hmac(&secret, &payload, &presence.proof)
-        || !accepts_signature(presence, signed_before || signature_seen(&state.seen_nonces, presence))
+        || !accepts_signature(
+            presence,
+            signed_before || signature_seen(&state.seen_nonces, presence),
+        )
     {
         return false;
     }
@@ -398,15 +417,12 @@ fn verify_room_presence(
     }) {
         return false;
     }
-    let signed_before = room
-        .members
-        .iter()
-        .any(|member| {
-            member.relation.signed_presence
-                && (member.device_id == presence.device_id
-                    || member.public_key == presence.public_key
-                    || !member.node_id.is_empty() && member.node_id == presence.node_id)
-        });
+    let signed_before = room.members.iter().any(|member| {
+        member.relation.signed_presence
+            && (member.device_id == presence.device_id
+                || member.public_key == presence.public_key
+                || !member.node_id.is_empty() && member.node_id == presence.node_id)
+    });
     let Some(secret) = ShareProfiles::room_secret(room) else {
         return false;
     };
@@ -429,7 +445,10 @@ fn verify_room_presence(
         &presence.nonce,
     );
     if !verify_hmac(&secret, &payload, &presence.proof)
-        || !accepts_signature(presence, signed_before || signature_seen(&state.seen_nonces, presence))
+        || !accepts_signature(
+            presence,
+            signed_before || signature_seen(&state.seen_nonces, presence),
+        )
     {
         return false;
     }
@@ -437,8 +456,7 @@ fn verify_room_presence(
         return false;
     }
     if presence.is_signed() && presence.device_id != state.identity.device_id {
-        if let Some(room) = state.rooms.iter_mut().find(|room| room.room_id == room_id)
-        {
+        if let Some(room) = state.rooms.iter_mut().find(|room| room.room_id == room_id) {
             // Pin the first valid signature immediately. The daemon may not
             // yet have folded this roster event when the next one arrives.
             room.upsert_member_from_presence(presence.clone().with_local_fingerprint(), now);

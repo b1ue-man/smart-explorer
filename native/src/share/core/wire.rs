@@ -20,8 +20,8 @@ pub(crate) use self::batch_wire::{
     BATCH_MAX_FILES, NONCE_HEX_LEN, TRANSFER_V1_CAPABILITY,
 };
 pub(crate) use self::fs_request::{
-    FsDuplicateSearch, FsHashWalk, FsListBatch, FsRecycle, FsReversibleReplace, FsRequest, FsStageFinish,
-    FsStorageAnalysis, FsSyncFilesystem, FsWatch,
+    FsDuplicateSearch, FsHashWalk, FsListBatch, FsRecycle, FsRequest, FsReversibleReplace,
+    FsStageFinish, FsStorageAnalysis, FsSyncFilesystem, FsWatch,
 };
 pub(crate) use self::fs_request::{FsHashAlgo, FsStageDurability};
 pub(crate) use self::wire_capabilities::{FsHostFeatures, FsTargetLimits};

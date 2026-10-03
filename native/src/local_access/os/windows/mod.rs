@@ -1,5 +1,6 @@
 mod broker;
 mod directory;
+mod directory_handle;
 mod directory_records;
 mod elevation;
 mod image_lock;
@@ -8,7 +9,6 @@ mod pipe;
 mod privilege;
 mod read;
 mod regular;
-mod directory_handle;
 
 pub(crate) use directory::classify_open_file;
 pub(crate) use directory_handle::{secure_private_handle, DirectoryHandle, QuarantinedChild};

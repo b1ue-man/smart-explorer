@@ -5,10 +5,10 @@ use super::lifecycle_output;
 
 #[path = "grants_exec.rs"]
 mod grants_exec;
-#[path = "grants_removed.rs"]
-mod grants_removed;
 #[path = "grants_readmit.rs"]
 mod grants_readmit;
+#[path = "grants_removed.rs"]
+mod grants_removed;
 #[path = "grants_write.rs"]
 mod grants_write;
 

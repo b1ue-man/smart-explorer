@@ -88,16 +88,24 @@ fn is_unsupported_error(error: &io::Error) -> bool {
     error.kind() == io::ErrorKind::Unsupported && is_unsupported(&error.to_string())
 }
 
-fn send_notice(tx: &Sender<ChangeNotice>, mut notice: ChangeNotice, cancel: &AtomicBool) -> io::Result<()> {
+fn send_notice(
+    tx: &Sender<ChangeNotice>,
+    mut notice: ChangeNotice,
+    cancel: &AtomicBool,
+) -> io::Result<()> {
     loop {
         if cancel.load(Ordering::Relaxed) {
-            return Err(io::Error::new(io::ErrorKind::Interrupted, "change subscription canceled"));
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "change subscription canceled",
+            ));
         }
         match tx.send_timeout(notice, CANCEL_POLL) {
             Ok(()) => return Ok(()),
             Err(crossbeam_channel::SendTimeoutError::Timeout(pending)) => notice = pending,
-            Err(crossbeam_channel::SendTimeoutError::Disconnected(_)) =>
-                return Err(io::Error::new(io::ErrorKind::BrokenPipe, "receiver gone")),
+            Err(crossbeam_channel::SendTimeoutError::Disconnected(_)) => {
+                return Err(io::Error::new(io::ErrorKind::BrokenPipe, "receiver gone"))
+            }
         }
     }
 }
@@ -156,7 +164,12 @@ impl BackendExtensions for AgentBackend {
         crate::vfs::sync_child_path(&*self.inner, parent, literal_name)
     }
 
-    fn replace_staged_reversible(&self, staged: &str, destination: &str, retained: &str) -> VfsResult<bool> {
+    fn replace_staged_reversible(
+        &self,
+        staged: &str,
+        destination: &str,
+        retained: &str,
+    ) -> VfsResult<bool> {
         crate::vfs::replace_staged_reversible(&*self.inner, staged, destination, retained)
     }
 
@@ -186,7 +199,9 @@ impl BackendExtensions for AgentBackend {
 
     fn finish_stage(&self, stage: &str, finish: StageFinish) -> VfsResult<StageFinished> {
         if !self.features().extensions {
-            if self.features().service { return Ok(StageFinished::default()); }
+            if self.features().service {
+                return Ok(StageFinished::default());
+            }
             return vfs::finish_stage(&*self.inner, stage, finish);
         }
         let request = Frame::FinishStage {
@@ -211,7 +226,9 @@ impl BackendExtensions for AgentBackend {
 
     fn sync_filesystem(&self, root: &str) -> VfsResult<bool> {
         if !self.features().extensions {
-            if self.features().service { return Ok(false); }
+            if self.features().service {
+                return Ok(false);
+            }
             return vfs::sync_filesystem(&*self.inner, root);
         }
         Ok(self.query(query::SYNC_FILESYSTEM, root)? != 0)
@@ -219,7 +236,9 @@ impl BackendExtensions for AgentBackend {
 
     fn target_limits(&self, root: &str) -> TargetLimits {
         if !self.serves_peer() {
-            if self.features().service { return TargetLimits::default(); }
+            if self.features().service {
+                return TargetLimits::default();
+            }
             return vfs::target_limits(&*self.inner, root);
         }
         let request = Frame::TargetLimits(root.to_string());
@@ -276,7 +295,12 @@ impl BackendExtensions for AgentBackend {
         });
         match result {
             Ok(()) => summary
-                .map(|summary| Some(report_from_wire(groups.into_iter().map(group_from_wire).collect(), summary)))
+                .map(|summary| {
+                    Some(report_from_wire(
+                        groups.into_iter().map(group_from_wire).collect(),
+                        summary,
+                    ))
+                })
                 .ok_or_else(|| {
                     io::Error::new(
                         io::ErrorKind::InvalidData,
@@ -337,11 +361,15 @@ impl BackendExtensions for AgentBackend {
             // A full downstream queue must not hide a cancel from the host.
             let mut pending = item;
             loop {
-                if cancel.load(Ordering::Relaxed) { return Err(receiver_gone()); }
+                if cancel.load(Ordering::Relaxed) {
+                    return Err(receiver_gone());
+                }
                 match tx.send_timeout(pending, CANCEL_POLL) {
                     Ok(()) => return Ok(()),
                     Err(crossbeam_channel::SendTimeoutError::Timeout(item)) => pending = item,
-                    Err(crossbeam_channel::SendTimeoutError::Disconnected(_)) => return Err(receiver_gone()),
+                    Err(crossbeam_channel::SendTimeoutError::Disconnected(_)) => {
+                        return Err(receiver_gone())
+                    }
                 }
             }
         });
@@ -354,7 +382,9 @@ impl BackendExtensions for AgentBackend {
 
     fn supports_recycle(&self, path: &str) -> VfsResult<bool> {
         if !self.serves_peer() {
-            if self.features().service { return Ok(false); }
+            if self.features().service {
+                return Ok(false);
+            }
             return vfs::supports_recycle(&*self.inner, path);
         }
         Ok(self.query(query::RECYCLE, path)? != 0)
@@ -362,7 +392,9 @@ impl BackendExtensions for AgentBackend {
 
     fn recycle(&self, path: &str, expected: &RecycleExpectation) -> VfsResult<RecycleOutcome> {
         if !self.serves_peer() {
-            if self.features().service { return Err(unsupported()); }
+            if self.features().service {
+                return Err(unsupported());
+            }
             return vfs::recycle(&*self.inner, path, expected);
         }
         let request = Frame::Recycle {
@@ -379,7 +411,9 @@ impl BackendExtensions for AgentBackend {
 
     fn change_signal_mode(&self, root: &str) -> VfsResult<Option<ChangeSignalMode>> {
         if !self.serves_peer() {
-            if self.features().service { return Ok(None); }
+            if self.features().service {
+                return Ok(None);
+            }
             return vfs::change_signal_mode(&*self.inner, root);
         }
         Ok(match self.query(query::CHANGE_SIGNAL, root)? {
@@ -396,7 +430,9 @@ impl BackendExtensions for AgentBackend {
         tx: Sender<ChangeNotice>,
     ) -> VfsResult<Option<ChangeSubscription>> {
         if !self.serves_peer() {
-            if self.features().service { return Ok(None); }
+            if self.features().service {
+                return Ok(None);
+            }
             return vfs::change_signal(&*self.inner, root, poll_interval, tx);
         }
         if self.change_signal_mode(root)?.is_none() {
@@ -414,7 +450,9 @@ impl BackendExtensions for AgentBackend {
             .spawn(move || {
                 let notices = tx.clone();
                 let result = stream(&pool, request, &watching, |frame| match frame {
-                    Frame::Change(change) => send_notice(&notices, change_from_wire(change), &watching),
+                    Frame::Change(change) => {
+                        send_notice(&notices, change_from_wire(change), &watching)
+                    }
                     other => Err(unexpected("change signal", &other)),
                 });
                 if !watching.load(Ordering::Relaxed) {

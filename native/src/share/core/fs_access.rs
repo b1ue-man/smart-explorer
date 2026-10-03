@@ -20,7 +20,10 @@ pub(super) mod reversible_replace;
 pub(super) enum FsAccess {
     Dynamic(Arc<Mutex<ShareExportConfig>>),
     Mounted(Arc<PeerMountLease>),
-    Authorized { access: Box<FsAccess>, authority: Arc<AccessAuthority> },
+    Authorized {
+        access: Box<FsAccess>,
+        authority: Arc<AccessAuthority>,
+    },
 }
 
 impl From<Arc<Mutex<ShareExportConfig>>> for FsAccess {
@@ -38,66 +41,109 @@ impl FsAccess {
         Self::Mounted(lease)
     }
 
-    pub(in crate::share) fn authorized(self, session: Arc<super::session::IncomingSession>,
-        auth: Arc<Mutex<super::types::ShareAuthState>>, node: &Arc<super::node::ShareIrohNode>) -> io::Result<Self> {
+    pub(in crate::share) fn authorized(
+        self,
+        session: Arc<super::session::IncomingSession>,
+        auth: Arc<Mutex<super::types::ShareAuthState>>,
+        node: &Arc<super::node::ShareIrohNode>,
+    ) -> io::Result<Self> {
         let (authority, rights) = AccessAuthority::new(session, auth, node)?;
-        let access = match self { Self::Dynamic(_) => Self::dynamic(rights.exports), other => other };
+        let access = match self {
+            Self::Dynamic(_) => Self::dynamic(rights.exports),
+            other => other,
+        };
         access.check_read()?;
-        Ok(Self::Authorized { access: Box::new(access), authority: Arc::new(authority) })
+        Ok(Self::Authorized {
+            access: Box::new(access),
+            authority: Arc::new(authority),
+        })
     }
 
     pub(super) fn stream_guard(&self) -> Option<StreamGuard> {
-        match self { Self::Authorized { authority, .. } => authority.stream_guard(), _ => None }
+        match self {
+            Self::Authorized { authority, .. } => authority.stream_guard(),
+            _ => None,
+        }
     }
 
     pub(super) fn export_snapshot(&self) -> io::Result<ShareExportConfig> {
         self.check_read()?;
         match self {
-            Self::Dynamic(exports) => Ok(exports.lock().map_err(|_| eio("Share-Exporte gesperrt"))?.clone()),
+            Self::Dynamic(exports) => Ok(exports
+                .lock()
+                .map_err(|_| eio("Share-Exporte gesperrt"))?
+                .clone()),
             Self::Authorized { access, .. } => access.export_snapshot(),
             Self::Mounted(_) => Err(eio("Exporttabelle ist an eine Mount-Lease gebunden")),
         }
     }
 
     pub(in crate::share) fn is_dynamic(&self) -> bool {
-        match self { Self::Dynamic(_) => true, Self::Mounted(_) => false,
-            Self::Authorized { access, .. } => access.is_dynamic() }
+        match self {
+            Self::Dynamic(_) => true,
+            Self::Mounted(_) => false,
+            Self::Authorized { access, .. } => access.is_dynamic(),
+        }
     }
 
     pub(in crate::share) fn check_read(&self) -> io::Result<()> {
-        match self { Self::Dynamic(_) => Ok(()), Self::Mounted(lease) => lease.check_live(),
-            Self::Authorized { access, authority } => { authority.check()?; access.check_read() } }
+        match self {
+            Self::Dynamic(_) => Ok(()),
+            Self::Mounted(lease) => lease.check_live(),
+            Self::Authorized { access, authority } => {
+                authority.check()?;
+                access.check_read()
+            }
+        }
     }
 
     pub(in crate::share) fn check_write(&self) -> io::Result<()> {
         self.check_read()?;
-        if let Self::Authorized { authority, .. } = self { authority.check_write()?; }
+        if let Self::Authorized { authority, .. } = self {
+            authority.check_write()?;
+        }
         Ok(())
     }
 
-    pub(in crate::share) fn register_cancel(&self, cancel: &Arc<std::sync::atomic::AtomicBool>) -> io::Result<()> {
-        match self { Self::Authorized { authority, .. } => authority.register_cancel(cancel),
-            _ => self.check_read() }
+    pub(in crate::share) fn register_cancel(
+        &self,
+        cancel: &Arc<std::sync::atomic::AtomicBool>,
+    ) -> io::Result<()> {
+        match self {
+            Self::Authorized { authority, .. } => authority.register_cancel(cancel),
+            _ => self.check_read(),
+        }
     }
 
     pub(in crate::share) fn policy_key(&self) -> io::Result<String> {
         self.check_read()?;
         match self {
-            Self::Dynamic(exports) => serde_json::to_string(&*exports.lock()
-                .map_err(|_| eio("Share-Exporte gesperrt"))?).map_err(io::Error::other),
+            Self::Dynamic(exports) => {
+                serde_json::to_string(&*exports.lock().map_err(|_| eio("Share-Exporte gesperrt"))?)
+                    .map_err(io::Error::other)
+            }
             Self::Mounted(lease) => Ok(format!("lease:{:p}", Arc::as_ptr(lease))),
-            Self::Authorized { access, authority } => Ok(format!("{}:rights:{}",
-                access.policy_key()?, authority.revision())),
+            Self::Authorized { access, authority } => Ok(format!(
+                "{}:rights:{}",
+                access.policy_key()?,
+                authority.revision()
+            )),
         }
     }
 
     pub(in crate::share) fn retained_snapshot(&self) -> io::Result<Self> {
         self.check_read()?;
         Ok(match self {
-            Self::Dynamic(exports) => Self::dynamic(exports.lock().map_err(|_| eio("Share-Exporte gesperrt"))?.clone()),
+            Self::Dynamic(exports) => Self::dynamic(
+                exports
+                    .lock()
+                    .map_err(|_| eio("Share-Exporte gesperrt"))?
+                    .clone(),
+            ),
             Self::Mounted(lease) => Self::Mounted(lease.clone()),
             Self::Authorized { access, authority } => Self::Authorized {
-                access: Box::new(access.retained_snapshot()?), authority: Arc::new(authority.retained()),
+                access: Box::new(access.retained_snapshot()?),
+                authority: Arc::new(authority.retained()),
             },
         })
     }

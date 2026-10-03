@@ -19,7 +19,10 @@ pub(crate) fn metadata_class(path: &Path, metadata: &std::fs::Metadata) -> (bool
         return (true, false);
     }
     if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0 {
-        return (false, metadata.file_attributes() & FILE_ATTRIBUTE_DEVICE != 0);
+        return (
+            false,
+            metadata.file_attributes() & FILE_ATTRIBUTE_DEVICE != 0,
+        );
     }
     let Ok(file) = std::fs::OpenOptions::new()
         .access_mode(FILE_READ_ATTRIBUTES)
@@ -46,8 +49,8 @@ fn classify_tag(known: bool, tag: u32, attributes: u32) -> (bool, bool) {
     let link = !known || tag == 0 || tag & 0x2000_0000 != 0;
     // AF_UNIX / LX_FIFO / LX_CHR / LX_BLK (WDK tags); cloud, WOF and
     // deduplication data reparse points remain ordinary files/directories.
-    let special = !link && (attributes & FILE_ATTRIBUTE_DEVICE != 0
-        || matches!(tag, 0x8000_0023..=0x8000_0026));
+    let special = !link
+        && (attributes & FILE_ATTRIBUTE_DEVICE != 0 || matches!(tag, 0x8000_0023..=0x8000_0026));
     (link, special)
 }
 
@@ -64,16 +67,27 @@ pub(crate) fn open_regular_no_follow(path: &Path, write: bool) -> io::Result<std
     use std::os::windows::fs::MetadataExt;
     let mut info: FILE_ATTRIBUTE_TAG_INFO = unsafe { std::mem::zeroed() };
     // SAFETY: the handle and output buffer remain live across the query.
-    let read = unsafe { GetFileInformationByHandleEx(file.as_raw_handle(), FileAttributeTagInfo,
-        (&mut info as *mut FILE_ATTRIBUTE_TAG_INFO).cast(),
-        std::mem::size_of::<FILE_ATTRIBUTE_TAG_INFO>() as u32) };
+    let read = unsafe {
+        GetFileInformationByHandleEx(
+            file.as_raw_handle(),
+            FileAttributeTagInfo,
+            (&mut info as *mut FILE_ATTRIBUTE_TAG_INFO).cast(),
+            std::mem::size_of::<FILE_ATTRIBUTE_TAG_INFO>() as u32,
+        )
+    };
     let (link, special) = if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
         classify_tag(read != 0, info.ReparseTag, metadata.file_attributes())
     } else {
-        (false, metadata.file_attributes() & FILE_ATTRIBUTE_DEVICE != 0)
+        (
+            false,
+            metadata.file_attributes() & FILE_ATTRIBUTE_DEVICE != 0,
+        )
     };
     if link || special || !metadata.is_file() {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "keine reguläre Datei"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "keine reguläre Datei",
+        ));
     }
     Ok(file)
 }

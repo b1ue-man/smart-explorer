@@ -82,16 +82,31 @@ impl ShareIrohNode {
     }
 
     fn known_endpoint(&self, remote: &str) -> bool {
-        let Ok(auth) = self.auth.lock() else { return false };
-        let matches = |key: &str, node: &str| !remote.is_empty()
-            && ((!node.is_empty() && node == remote) || (node.is_empty() && key == remote));
-        auth.direct_grants.iter().any(|grant| grant.state == super::types::DirectGrantState::Accepted
-            && matches(&grant.public_key, &grant.node_id))
-            || auth.direct_contacts.iter().any(|contact| contact.access_state == super::types::DirectAccessState::Accepted
-                && matches(contact.remote_public_key.as_deref().or(contact.accepted_public_key.as_deref()).unwrap_or_default(),
-                    &contact.expected_node_id))
-            || auth.rooms.iter().filter(|room| room.auto_join).any(|room| room.members.iter()
-                .any(|member| member.is_admitted() && matches(&member.public_key, &member.node_id)))
+        let Ok(auth) = self.auth.lock() else {
+            return false;
+        };
+        let matches = |key: &str, node: &str| {
+            !remote.is_empty()
+                && ((!node.is_empty() && node == remote) || (node.is_empty() && key == remote))
+        };
+        auth.direct_grants.iter().any(|grant| {
+            grant.state == super::types::DirectGrantState::Accepted
+                && matches(&grant.public_key, &grant.node_id)
+        }) || auth.direct_contacts.iter().any(|contact| {
+            contact.access_state == super::types::DirectAccessState::Accepted
+                && matches(
+                    contact
+                        .remote_public_key
+                        .as_deref()
+                        .or(contact.accepted_public_key.as_deref())
+                        .unwrap_or_default(),
+                    &contact.expected_node_id,
+                )
+        }) || auth.rooms.iter().filter(|room| room.auto_join).any(|room| {
+            room.members
+                .iter()
+                .any(|member| member.is_admitted() && matches(&member.public_key, &member.node_id))
+        })
     }
 }
 

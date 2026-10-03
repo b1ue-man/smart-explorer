@@ -97,8 +97,12 @@ impl FtpConnection {
         state.stream = Some(replacement);
         state.health = ControlHealth::Healthy;
         state.last_activity = Instant::now();
-        if let Ok(mut features) = self.features.lock() { *features = None; }
-        if let Ok(mut precision) = self.precision.lock() { *precision = crate::vfs::MtimePrecision::Unknown; }
+        if let Ok(mut features) = self.features.lock() {
+            *features = None;
+        }
+        if let Ok(mut precision) = self.precision.lock() {
+            *precision = crate::vfs::MtimePrecision::Unknown;
+        }
         Ok(())
     }
 

@@ -1,4 +1,6 @@
-use crate::vfs::{validate_child_name, OmissionReason, VfsListing, VfsMeta, VfsOmission, VfsResult};
+use crate::vfs::{
+    validate_child_name, OmissionReason, VfsListing, VfsMeta, VfsOmission, VfsResult,
+};
 use roxmltree::Node;
 use std::collections::HashSet;
 use std::io;
@@ -30,7 +32,9 @@ fn dav_status_error(code: u16) -> io::Error {
     io::Error::new(kind, format!("WebDAV resource status was HTTP {code}"))
 }
 
-pub(super) fn successful_props<'a, 'input>(response: Node<'a, 'input>) -> VfsResult<Vec<Node<'a, 'input>>> {
+pub(super) fn successful_props<'a, 'input>(
+    response: Node<'a, 'input>,
+) -> VfsResult<Vec<Node<'a, 'input>>> {
     if let Some(status) = response.children().find(|node| named(*node, "status")) {
         let code = status_code(status)
             .ok_or_else(|| invalid_data("WebDAV response has a malformed status line"))?;
@@ -118,7 +122,9 @@ fn hex(byte: u8) -> Option<u8> {
 /// The path portion of an href that may be an absolute URL or absolute path.
 pub(super) fn href_path(href: &str) -> VfsResult<String> {
     let (path, lossy) = href_path_checked(href);
-    if lossy { return Err(invalid_data("WebDAV href is not UTF-8")) }
+    if lossy {
+        return Err(invalid_data("WebDAV href is not UTF-8"));
+    }
     Ok(path)
 }
 
@@ -176,7 +182,9 @@ pub(super) fn immediate_child_name(path: &str, request_path: &str) -> VfsResult<
 pub(super) fn parse_multistatus(xml: &str, request_path: &str) -> VfsResult<Vec<VfsMeta>> {
     let listed = parse_multistatus_tolerant(xml, request_path)?;
     if !listed.omitted.is_empty() {
-        return Err(invalid_data("WebDAV listing has protected omissions; use list_dir_tolerant"));
+        return Err(invalid_data(
+            "WebDAV listing has protected omissions; use list_dir_tolerant",
+        ));
     }
     Ok(listed.entries)
 }
@@ -206,7 +214,9 @@ pub(super) fn parse_multistatus_tolerant(xml: &str, request_path: &str) -> VfsRe
             .ok_or_else(|| invalid_data("WebDAV response is missing href"))?;
         let (path, lossy) = href_path_checked(href);
         let Some(name) = immediate_child_name(&path, request_path)? else {
-            if lossy { return Err(invalid_data("WebDAV collection href is not UTF-8")) }
+            if lossy {
+                return Err(invalid_data("WebDAV collection href is not UTF-8"));
+            }
             successful_props(response)?;
             saw_self = true;
             continue;
@@ -217,16 +227,25 @@ pub(super) fn parse_multistatus_tolerant(xml: &str, request_path: &str) -> VfsRe
             )));
         }
         if lossy || validate_child_name(&name).is_err() {
-            out.omitted.push(VfsOmission { rel: name, reason: OmissionReason::Unrepresentable,
-                detail: "WebDAV href is not a safely addressable Unicode child".into() });
+            out.omitted.push(VfsOmission {
+                rel: name,
+                reason: OmissionReason::Unrepresentable,
+                detail: "WebDAV href is not a safely addressable Unicode child".into(),
+            });
             continue;
         }
         let props = match successful_props(response) {
             Ok(props) => props,
             Err(error) => {
-                out.omitted.push(VfsOmission { rel: name,
-                    reason: if error.kind() == io::ErrorKind::NotFound { OmissionReason::Vanished }
-                        else { OmissionReason::Unreadable }, detail: error.to_string() });
+                out.omitted.push(VfsOmission {
+                    rel: name,
+                    reason: if error.kind() == io::ErrorKind::NotFound {
+                        OmissionReason::Vanished
+                    } else {
+                        OmissionReason::Unreadable
+                    },
+                    detail: error.to_string(),
+                });
                 continue;
             }
         };
@@ -307,7 +326,10 @@ mod tests {
     fn rv1_remote_provider_task_dav_literal_replacement_character_is_not_a_lossy_name() {
         let xml = SAMPLE.replace("notes.txt", "%EF%BF%BD.txt");
         let listing = parse_multistatus_tolerant(&xml, "/dav/files/me").unwrap();
-        assert!(listing.entries.iter().any(|entry| entry.name == "\u{fffd}.txt"));
+        assert!(listing
+            .entries
+            .iter()
+            .any(|entry| entry.name == "\u{fffd}.txt"));
         assert!(listing.omitted.is_empty());
         let xml = SAMPLE.replace("notes.txt", "%FF.txt");
         let listing = parse_multistatus_tolerant(&xml, "/dav/files/me").unwrap();

@@ -123,15 +123,25 @@ pub(super) fn target_touched_drifted(
 }
 
 pub(super) fn target_touched_drifted_spelled(
-    target: &dyn Backend, root: &str, target_items: &BTreeMap<String, ItemRecord>,
-    changes: &[ResolvedChange], opts: BisyncOptions, spellings: &super::Spellings,
+    target: &dyn Backend,
+    root: &str,
+    target_items: &BTreeMap<String, ItemRecord>,
+    changes: &[ResolvedChange],
+    opts: BisyncOptions,
+    spellings: &super::Spellings,
     side: super::PairSide,
 ) -> bool {
-    let mapped: Vec<_> = changes.iter().cloned().map(|mut change| {
-        change.rel = spellings.side_rel(&change.rel, side).to_string();
-        change.old_rel = change.old_rel.map(|old| spellings.side_rel(&old, side).to_string());
-        change
-    }).collect();
+    let mapped: Vec<_> = changes
+        .iter()
+        .cloned()
+        .map(|mut change| {
+            change.rel = spellings.side_rel(&change.rel, side).to_string();
+            change.old_rel = change
+                .old_rel
+                .map(|old| spellings.side_rel(&old, side).to_string());
+            change
+        })
+        .collect();
     target_touched_drifted(target, root, target_items, &mapped, opts)
 }
 
@@ -146,7 +156,9 @@ fn target_rel_drifted(
     // junction and make a redirected target look like an unchanged plain file.
     for (end, _) in rel.match_indices('/') {
         match crate::vfs::sync_path(target, root, &rel[..end]).and_then(|path| target.stat(&path)) {
-            Ok(metadata) if metadata.is_symlink || metadata.special || !metadata.is_dir => return true,
+            Ok(metadata) if metadata.is_symlink || metadata.special || !metadata.is_dir => {
+                return true
+            }
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
             Err(_) => return true,
@@ -155,17 +167,23 @@ fn target_rel_drifted(
     let expected = target_items
         .get(rel)
         .and_then(|i| (!i.deleted).then_some(i.sig).flatten());
-    let actual = match crate::vfs::sync_path(target, root, rel).and_then(|path| target.stat(&path)) {
+    let actual = match crate::vfs::sync_path(target, root, rel).and_then(|path| target.stat(&path))
+    {
         Ok(metadata) if metadata.is_symlink || metadata.is_dir || metadata.special => return true,
         Ok(metadata) => sig_from_meta(&metadata),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(_) => return true,
     };
     if target.has_duplicate_file_names() {
-        let entries = crate::vfs::sync_path(target, root, rel).and_then(|path|
-            super::duplicate_observation::metadata_named(target, &path, rel.rsplit('/').next().unwrap_or(rel)));
+        let entries = crate::vfs::sync_path(target, root, rel).and_then(|path| {
+            super::duplicate_observation::metadata_named(
+                target,
+                &path,
+                rel.rsplit('/').next().unwrap_or(rel),
+            )
+        });
         match entries {
-            Ok(entries) if entries.len() == usize::from(expected.is_some()) => {},
+            Ok(entries) if entries.len() == usize::from(expected.is_some()) => {}
             _ => return true,
         }
     }
@@ -181,7 +199,10 @@ pub(super) fn delete_guard_trips(
     let explicit = super::guards::DeleteCounts::of(&plan.deletes);
     deletes.add(super::PairSide::A, explicit.a);
     deletes.add(super::PairSide::B, explicit.b);
-    let total = target_items.values().filter(|item| !item.deleted && !item.is_dir).count() as u64;
+    let total = target_items
+        .values()
+        .filter(|item| !item.deleted && !item.is_dir)
+        .count() as u64;
     super::guards::deletion_block(deletes, total, total, &opts).is_some()
 }
 
@@ -271,7 +292,10 @@ pub(super) fn collect_ids(
                 (
                     rel.clone(),
                     (
-                        crate::vfs::sync_path(be, root, rel).and_then(|path| be.item_id(&path)).ok().flatten(),
+                        crate::vfs::sync_path(be, root, rel)
+                            .and_then(|path| be.item_id(&path))
+                            .ok()
+                            .flatten(),
                         parent_id_for(be, root, rel),
                     ),
                 )
@@ -283,6 +307,10 @@ pub(super) fn collect_ids(
 fn parent_id_for(be: &dyn Backend, root: &str, rel: &str) -> Option<String> {
     let parent_path = rel
         .rsplit_once('/')
-        .map_or_else(|| Ok(root.to_string()), |(p, _)| crate::vfs::sync_path(be, root, p)).ok()?;
+        .map_or_else(
+            || Ok(root.to_string()),
+            |(p, _)| crate::vfs::sync_path(be, root, p),
+        )
+        .ok()?;
     be.item_id(&parent_path).ok().flatten()
 }

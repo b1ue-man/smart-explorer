@@ -43,7 +43,9 @@ pub(super) fn verify(
     public_key: &str,
     signature_hex: &str,
 ) -> Option<PublicKey> {
-    if signature_hex.len() != Signature::LENGTH * 2 { return None; }
+    if signature_hex.len() != Signature::LENGTH * 2 {
+        return None;
+    }
     let key = parse_key(public_key)?;
     let bytes: [u8; Signature::LENGTH] = hex_decode(signature_hex)?.try_into().ok()?;
     let signature = Signature::from_bytes(&bytes);
@@ -103,7 +105,10 @@ mod tests {
     #[test]
     fn review_task_login_digest_matches_the_app_vector() {
         let nonce: Vec<u8> = (0u8..16).collect();
-        assert_eq!(hex(&digest(&nonce, "device-a", "pk-a")), LOGIN_DIGEST_VECTOR);
+        assert_eq!(
+            hex(&digest(&nonce, "device-a", "pk-a")),
+            LOGIN_DIGEST_VECTOR
+        );
     }
 
     #[test]
@@ -121,7 +126,9 @@ mod tests {
         // Another device id, nonce or key: refused.
         assert_eq!(verify(&nonce, "device-b", &public_key, &signature), None);
         assert_eq!(verify(&[0; 16], "device-a", &public_key, &signature), None);
-        let other = iroh_base::SecretKey::from_bytes(&[4; 32]).public().to_string();
+        let other = iroh_base::SecretKey::from_bytes(&[4; 32])
+            .public()
+            .to_string();
         assert_eq!(verify(&nonce, "device-a", &other, &signature), None);
         assert_eq!(verify(&nonce, "device-a", &public_key, "zz"), None);
         assert_eq!(hex_decode("0aFF"), Some(vec![0x0a, 0xff]));

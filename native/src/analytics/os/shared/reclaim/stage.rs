@@ -105,20 +105,34 @@ impl ReclaimStage {
     }
 
     pub(crate) fn map_directories(&self, mut roots: Vec<(String, String)>) {
-        for (physical, _) in &mut roots { *physical = crate::analytics::progress::normalize_path(physical); }
+        for (physical, _) in &mut roots {
+            *physical = crate::analytics::progress::normalize_path(physical);
+        }
         roots.sort_by_key(|(physical, _)| std::cmp::Reverse(physical.len()));
-        *self.0.visible_roots.lock().unwrap_or_else(|p| p.into_inner()) = roots;
+        *self
+            .0
+            .visible_roots
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = roots;
     }
 
     fn current(&self) -> String {
         let current = self.0.current.lock().unwrap_or_else(|p| p.into_inner());
         let raw = super::util::to_fwd(&current);
-        let roots = self.0.visible_roots.lock().unwrap_or_else(|p| p.into_inner());
-        if roots.is_empty() { return raw; }
+        let roots = self
+            .0
+            .visible_roots
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        if roots.is_empty() {
+            return raw;
+        }
         let normalized = crate::analytics::progress::normalize_path(&raw);
         for (physical, visible) in roots.iter() {
             if let Some(rest) = normalized.strip_prefix(physical.trim_end_matches('/')) {
-                if rest.is_empty() || rest.starts_with('/') { return format!("{}{rest}", visible.trim_end_matches('/')); }
+                if rest.is_empty() || rest.starts_with('/') {
+                    return format!("{}{rest}", visible.trim_end_matches('/'));
+                }
             }
         }
         String::new()

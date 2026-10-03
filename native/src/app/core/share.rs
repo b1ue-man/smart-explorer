@@ -1,19 +1,19 @@
-#[path = "share_diagnostics_ui.rs"]
-mod diagnostics_ui;
-#[path = "share_exports_ui.rs"]
-mod exports_ui;
 #[path = "share_connections_ui.rs"]
 mod connections_ui;
+#[path = "share_diagnostics_ui.rs"]
+mod diagnostics_ui;
+#[path = "share_direct_ui.rs"]
+mod direct_ui;
+#[path = "share_exports_ui.rs"]
+mod exports_ui;
+#[path = "share_host_trash_ui.rs"]
+mod host_trash_ui;
 #[path = "share_policy_ui.rs"]
 mod policy_ui;
 #[path = "share_rooms_ui.rs"]
 mod rooms_ui;
-#[path = "share_direct_ui.rs"]
-mod direct_ui;
 #[path = "share_window_ui.rs"]
 mod window_ui;
-#[path = "share_host_trash_ui.rs"]
-mod host_trash_ui;
 use super::prelude::*;
 use super::*;
 
@@ -363,5 +363,4 @@ impl App {
             }
         }
     }
-
 }

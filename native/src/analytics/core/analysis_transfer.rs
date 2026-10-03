@@ -122,14 +122,24 @@ impl AnalysisReceiver {
             }
             AnalysisMessage::Ready { report } if self.report.is_none() => {
                 report.validate()?;
-                if self.node_budget.is_some_and(|limit| report.shape.nodes > limit) {
-                    return Err(invalid("Analyse-Ergebnis überschreitet das Knotenbudget des Empfängers"));
+                if self
+                    .node_budget
+                    .is_some_and(|limit| report.shape.nodes > limit)
+                {
+                    return Err(invalid(
+                        "Analyse-Ergebnis überschreitet das Knotenbudget des Empfängers",
+                    ));
                 }
-                let memory = report.shape.bytes.saturating_add(report.shape.nodes.saturating_mul(
-                    2 * std::mem::size_of::<super::SizeNode>() as u64,
-                ));
+                let memory = report.shape.bytes.saturating_add(
+                    report
+                        .shape
+                        .nodes
+                        .saturating_mul(2 * std::mem::size_of::<super::SizeNode>() as u64),
+                );
                 if self.node_budget.is_some() && memory > crate::transfer::memory_budget() as u64 {
-                    return Err(invalid("Analyse-Ergebnis überschreitet das Speicherbudget des Empfängers"));
+                    return Err(invalid(
+                        "Analyse-Ergebnis überschreitet das Speicherbudget des Empfängers",
+                    ));
                 }
                 self.decoder.set_shape(report.shape);
                 progress.receive_result(report.progress.clone())?;
@@ -157,7 +167,9 @@ impl AnalysisReceiver {
                 }
                 let tree = std::mem::take(&mut self.decoder).finish(report.shape)?;
                 let mut final_state = report.progress.clone();
-                if let Some(tree) = &tree { final_state.bytes = tree.size; }
+                if let Some(tree) = &tree {
+                    final_state.bytes = tree.size;
+                }
                 progress.receive_result(final_state)?;
                 progress.set_phase(ScanPhase::Verifying, &report.progress.current);
                 self.done = true;
@@ -174,7 +186,9 @@ impl AnalysisReceiver {
 
     pub(crate) fn data(&mut self, bytes: &[u8], progress: &Progress) -> io::Result<()> {
         progress.check_cancel()?;
-        if bytes.is_empty() { return Err(invalid("Leerer Analyse-Datenblock")); }
+        if bytes.is_empty() {
+            return Err(invalid("Leerer Analyse-Datenblock"));
+        }
         if self.report.is_none() || self.done {
             return Err(invalid("Analyse-Daten ohne Ankündigung"));
         }

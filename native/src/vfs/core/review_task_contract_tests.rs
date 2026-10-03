@@ -118,13 +118,17 @@ fn review_task_staging_names_are_recognized_and_fit_one_component() {
     ] {
         assert!(!is_staging_name(user), "{user}");
     }
-    assert!(is_staging_name(".se-private-0123456789abcdef0123456789abcdef.tmp"));
-    for user in ["notes.tmp", ".se-private-user.tmp",
+    assert!(is_staging_name(
+        ".se-private-0123456789abcdef0123456789abcdef.tmp"
+    ));
+    for user in [
+        "notes.tmp",
+        ".se-private-user.tmp",
         ".se-private-0123456789abcdef0123456789abcde.tmp",
         ".se-private-0123456789abcdef0123456789abcdef0.tmp",
         ".se-private-0123456789abcdef0123456789abcdeg.tmp",
-        "prefix.se-private-0123456789abcdef0123456789abcdef.tmp"]
-    {
+        "prefix.se-private-0123456789abcdef0123456789abcdef.tmp",
+    ] {
         assert!(!is_staging_name(user), "{user}");
     }
     let tail = ".se-sync-0123456789abcdef";

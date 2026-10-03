@@ -4,11 +4,11 @@ use std::path::{Path, PathBuf};
 
 #[path = "local_writes.rs"]
 mod local_writes;
-#[path = "volume_info.rs"]
-mod volume_info;
 #[cfg(test)]
 #[path = "review_task_stage_tests.rs"]
 mod review_task_stage_tests;
+#[path = "volume_info.rs"]
+mod volume_info;
 
 pub(crate) use local_writes::{check_new_name, create_new_private, open_stage, replace_file};
 

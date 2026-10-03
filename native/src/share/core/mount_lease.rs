@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::io;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use super::core::{eio, random_token};
 use super::fs::{self, ResolvedTarget, ShareExportConfig};
@@ -31,8 +31,11 @@ pub(super) struct PeerMountLease {
 
 impl PeerMountLease {
     pub(super) fn check_live(&self) -> io::Result<()> {
-        if self.revoked.load(Ordering::Acquire) { Err(permission_denied("Peer-Mount-Lease wurde entzogen")) }
-        else { Ok(()) }
+        if self.revoked.load(Ordering::Acquire) {
+            Err(permission_denied("Peer-Mount-Lease wurde entzogen"))
+        } else {
+            Ok(())
+        }
     }
 
     fn new(
@@ -89,8 +92,9 @@ impl PeerMountLease {
         authorization_epoch: u64,
     ) -> io::Result<()> {
         let _ = (current, authorization_epoch);
-        if self.revoked.load(Ordering::Acquire) { Err(permission_denied("Peer-Mount-Lease wurde entzogen")) }
-        else if &self.principal != principal {
+        if self.revoked.load(Ordering::Acquire) {
+            Err(permission_denied("Peer-Mount-Lease wurde entzogen"))
+        } else if &self.principal != principal {
             Err(permission_denied(
                 "Peer-Mount-Lease gehoert nicht zu dieser authentifizierten Identitaet",
             ))
@@ -98,7 +102,9 @@ impl PeerMountLease {
             Err(permission_denied(
                 "Legacy-Mount-Lease gehoert zu einer beendeten Verbindung",
             ))
-        } else { Ok(()) }
+        } else {
+            Ok(())
+        }
     }
 
     fn same_binding(&self, other: &Self) -> bool {
@@ -176,9 +182,7 @@ impl PeerMountLeases {
         let Some((token, lease)) = existing else {
             return Ok(None);
         };
-        if lease.virtual_root != virtual_root
-            || lease.revoked.load(Ordering::Acquire)
-        {
+        if lease.virtual_root != virtual_root || lease.revoked.load(Ordering::Acquire) {
             return Err(permission_denied(
                 "Mount-Anforderungs-ID wurde fuer eine andere Root- oder Policy-Bindung wiederverwendet",
             ));
@@ -339,16 +343,28 @@ impl PeerMountLeases {
             .collect())
     }
 
-    pub(super) fn invalidate(&self, restrictions: &super::relation_rights::RestrictionSet) -> io::Result<Vec<Arc<PeerMountLease>>> {
+    pub(super) fn invalidate(
+        &self,
+        restrictions: &super::relation_rights::RestrictionSet,
+    ) -> io::Result<Vec<Arc<PeerMountLease>>> {
         let removed = {
-            let mut entries = self.entries.lock().map_err(|_| eio("Peer-Mount-Leases gesperrt"))?;
-            let tokens: Vec<_> = entries.iter().filter(|(_, lease)| lease.principal.affected_by(restrictions))
-                .map(|(token, _)| token.clone()).collect();
-            tokens.into_iter().filter_map(|token| {
-                let lease = entries.remove(&token)?;
-                lease.revoked.store(true, Ordering::Release);
-                Some(lease)
-            }).collect::<Vec<_>>()
+            let mut entries = self
+                .entries
+                .lock()
+                .map_err(|_| eio("Peer-Mount-Leases gesperrt"))?;
+            let tokens: Vec<_> = entries
+                .iter()
+                .filter(|(_, lease)| lease.principal.affected_by(restrictions))
+                .map(|(token, _)| token.clone())
+                .collect();
+            tokens
+                .into_iter()
+                .filter_map(|token| {
+                    let lease = entries.remove(&token)?;
+                    lease.revoked.store(true, Ordering::Release);
+                    Some(lease)
+                })
+                .collect::<Vec<_>>()
         };
         Ok(removed)
     }
@@ -359,7 +375,10 @@ impl PeerMountLeases {
             .lock()
             .map_err(|_| eio("Peer-Mount-Lease-Tabelle ist gesperrt"))?
             .drain()
-            .map(|(_, lease)| { lease.revoked.store(true, Ordering::Release); lease })
+            .map(|(_, lease)| {
+                lease.revoked.store(true, Ordering::Release);
+                lease
+            })
             .collect();
         drop(removed);
         Ok(())

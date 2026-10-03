@@ -105,7 +105,8 @@ impl SourceClassifier {
     }
 
     pub(super) fn is_trusted_ip(&self, address: IpAddr) -> bool {
-        self.externally_limited_proxies.contains(&canonical_ip(address))
+        self.externally_limited_proxies
+            .contains(&canonical_ip(address))
     }
 
     pub(super) fn classify(&self, address: SocketAddr) -> SourceKey {

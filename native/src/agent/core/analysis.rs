@@ -4,15 +4,20 @@
 use std::sync::atomic::Ordering;
 
 use super::backend::AgentBackend;
-use crate::analytics::{Progress, ScanOutcome, ScanPhase};
 use crate::agent_proto::TreeDecodeBudget;
+use crate::analytics::{Progress, ScanOutcome, ScanPhase};
 use crate::vfs::VfsResult;
 
 impl AgentBackend {
-    pub(super) fn scan_storage_budgeted(&self, root: &str, progress: &Progress)
-        -> VfsResult<Option<ScanOutcome>> {
+    pub(super) fn scan_storage_budgeted(
+        &self,
+        root: &str,
+        progress: &Progress,
+    ) -> VfsResult<Option<ScanOutcome>> {
         let host = self.inner.scan_storage(root, progress)?;
-        if host.is_some() || self.features().service { return Ok(host); }
+        if host.is_some() || self.features().service {
+            return Ok(host);
+        }
         let files = progress.files.load(Ordering::Relaxed);
         let bytes = progress.bytes.load(Ordering::Relaxed);
         progress.set_phase(ScanPhase::Legacy, root);
@@ -20,13 +25,18 @@ impl AgentBackend {
         progress.set_node_budget(offered);
         let budget = TreeDecodeBudget::new(offered, crate::transfer::memory_budget());
         let on_progress = |done, total| {
-            progress.files.store(files.saturating_add(done), Ordering::Relaxed);
-            progress.bytes.store(bytes.saturating_add(total), Ordering::Relaxed);
+            progress
+                .files
+                .store(files.saturating_add(done), Ordering::Relaxed);
+            progress
+                .bytes
+                .store(bytes.saturating_add(total), Ordering::Relaxed);
             progress.check_cancel().is_ok()
         };
         match self.walk_tree_with_budget(root, &on_progress, Some(budget)) {
-            Ok(Some(tree)) if progress.check_cancel().is_ok() =>
-                Ok(Some(crate::analytics::finish_legacy_tree(tree, progress, files, bytes))),
+            Ok(Some(tree)) if progress.check_cancel().is_ok() => Ok(Some(
+                crate::analytics::finish_legacy_tree(tree, progress, files, bytes),
+            )),
             Err(error) if error.kind() == std::io::ErrorKind::OutOfMemory => {
                 progress.check_cancel()?;
                 progress.files.store(files, Ordering::Relaxed);
@@ -36,7 +46,10 @@ impl AgentBackend {
                 Ok(Some(outcome))
             }
             Ok(None) => Ok(None),
-            Ok(Some(_)) => Err(std::io::Error::new(std::io::ErrorKind::Interrupted, "agent analysis canceled")),
+            Ok(Some(_)) => Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "agent analysis canceled",
+            )),
             Err(error) => Err(error),
         }
     }

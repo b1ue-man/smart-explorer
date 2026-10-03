@@ -102,7 +102,14 @@ impl Walk<'_> {
         std::slice::from_ref(self.protected)
     }
 
-    fn visit(&self, dir: &Path, handle: &crate::local_access::DirectoryHandle, depth: u32, inside_cleanup: bool, is_root: bool) {
+    fn visit(
+        &self,
+        dir: &Path,
+        handle: &crate::local_access::DirectoryHandle,
+        depth: u32,
+        inside_cleanup: bool,
+        is_root: bool,
+    ) {
         if self.stopped() {
             return;
         }
@@ -155,12 +162,16 @@ impl Walk<'_> {
                 break;
             }
             let text = name.to_string_lossy();
-            if entry.is_link_like || entry.kind == crate::local_access::EntryKind::Link || skipped_name(&text) {
+            if entry.is_link_like
+                || entry.kind == crate::local_access::EntryKind::Link
+                || skipped_name(&text)
+            {
                 continue;
             }
             if entry.unreachable || name.to_str().is_none() {
-                self.issues.failed(self.areas(), &path, false,
-                    || format!("{}: Name nicht darstellbar", to_fwd(&path)));
+                self.issues.failed(self.areas(), &path, false, || {
+                    format!("{}: Name nicht darstellbar", to_fwd(&path))
+                });
                 continue;
             }
             if entry.kind == crate::local_access::EntryKind::Directory {
@@ -169,7 +180,13 @@ impl Walk<'_> {
                 {
                     subdirs.push(path);
                     if subdirs.len() == 256 {
-                        self.visit_children(dir, handle, std::mem::take(&mut subdirs), depth, skip_detail);
+                        self.visit_children(
+                            dir,
+                            handle,
+                            std::mem::take(&mut subdirs),
+                            depth,
+                            skip_detail,
+                        );
                         self.progress.stage.enter_directory(dir);
                     }
                 }
@@ -200,17 +217,28 @@ impl Walk<'_> {
         self.visit_children(dir, handle, subdirs, depth, skip_detail);
     }
 
-    fn visit_children(&self, _: &Path, handle: &crate::local_access::DirectoryHandle,
-        subdirs: Vec<PathBuf>, depth: u32, skip_detail: bool,
+    fn visit_children(
+        &self,
+        _: &Path,
+        handle: &crate::local_access::DirectoryHandle,
+        subdirs: Vec<PathBuf>,
+        depth: u32,
+        skip_detail: bool,
     ) {
         let next = depth.saturating_add(1);
         let visit = |sub: &PathBuf| match handle.open_child(sub.file_name().unwrap_or_default()) {
             Ok(child) => self.visit(sub, &child, next, skip_detail, false),
-            Err(error) => self.issues.failed(self.areas(), sub, false,
-                || format!("{}: {error}", to_fwd(sub))),
+            Err(error) => self.issues.failed(self.areas(), sub, false, || {
+                format!("{}: {error}", to_fwd(sub))
+            }),
         };
-        if self.parallel && subdirs.len() > 1 { subdirs.par_iter().for_each(visit); }
-        else { for sub in &subdirs { visit(sub); } }
+        if self.parallel && subdirs.len() > 1 {
+            subdirs.par_iter().for_each(visit);
+        } else {
+            for sub in &subdirs {
+                visit(sub);
+            }
+        }
     }
 
     /// Records a protected area the walk enters; the root may lie inside one.

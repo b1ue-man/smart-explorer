@@ -179,7 +179,8 @@ impl Walker<'_> {
         let mut dir_names = HashSet::new();
         let tolerant = crate::vfs::list_dir_tolerant(self.backend, path)?;
         for omitted in tolerant.omitted {
-            self.diagnostics.record(child_path(path, &omitted.rel), omitted.detail, false);
+            self.diagnostics
+                .record(child_path(path, &omitted.rel), omitted.detail, false);
         }
         for metadata in tolerant.entries {
             if self.progress.cancel.load(Ordering::Relaxed) {

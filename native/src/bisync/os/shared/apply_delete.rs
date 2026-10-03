@@ -114,9 +114,10 @@ pub(super) fn delete_guarded_with_progress_and_guard(
         backend.remove_file_id(path, id)
     };
     result.map_err(AttemptError::commit_attempted)?;
-    super::apply_stage::require_durable(super::apply_stage::namespace(backend, path)
-        .map_err(AttemptError::commit_attempted)?)
-        .map_err(AttemptError::commit_attempted)
+    super::apply_stage::require_durable(
+        super::apply_stage::namespace(backend, path).map_err(AttemptError::commit_attempted)?,
+    )
+    .map_err(AttemptError::commit_attempted)
 }
 
 /// Desktop: the operating system's recycle bin.

@@ -82,7 +82,10 @@ impl<'a> RunRequest<'a> {
 
 /// The pair's planning keys, shared by planning and job ignore patterns.
 pub fn pair_key_policy(a: &dyn Backend, root_a: &str, b: &dyn Backend, root_b: &str) -> KeyPolicy {
-    KeyPolicy::for_pair(a.case_sensitive_paths(root_a), b.case_sensitive_paths(root_b))
+    KeyPolicy::for_pair(
+        a.case_sensitive_paths(root_a),
+        b.case_sensitive_paths(root_b),
+    )
 }
 
 pub fn run_with(request: RunRequest<'_>) -> Outcome {
@@ -90,19 +93,37 @@ pub fn run_with(request: RunRequest<'_>) -> Outcome {
 }
 
 pub fn run(
-    a: &dyn Backend, root_a: &str, b: &dyn Backend, root_b: &str,
-    opts: BisyncOptions, cancel: &AtomicBool, filter: &WalkFilter,
+    a: &dyn Backend,
+    root_a: &str,
+    b: &dyn Backend,
+    root_b: &str,
+    opts: BisyncOptions,
+    cancel: &AtomicBool,
+    filter: &WalkFilter,
 ) -> Outcome {
     run_with(RunRequest::new(a, root_a, b, root_b, opts, filter, cancel))
 }
 
 #[cfg(test)]
 pub(super) fn run_with_store_path(
-    endpoints: SyncEndpoints<'_>, opts: BisyncOptions, cancel: &AtomicBool,
-    filter: &WalkFilter, store_path: &Path,
+    endpoints: SyncEndpoints<'_>,
+    opts: BisyncOptions,
+    cancel: &AtomicBool,
+    filter: &WalkFilter,
+    store_path: &Path,
 ) -> Outcome {
-    run_at(RunRequest::new(endpoints.a, endpoints.root_a, endpoints.b,
-        endpoints.root_b, opts, filter, cancel), Some(store_path))
+    run_at(
+        RunRequest::new(
+            endpoints.a,
+            endpoints.root_a,
+            endpoints.b,
+            endpoints.root_b,
+            opts,
+            filter,
+            cancel,
+        ),
+        Some(store_path),
+    )
 }
 
 pub(super) struct RunState<'a> {
@@ -122,9 +143,22 @@ pub(super) struct RunState<'a> {
 }
 
 fn run_at(request: RunRequest<'_>, store_path: Option<&Path>) -> Outcome {
-    let RunRequest { a, root_a, b, root_b, opts, filter, cancel, settings, observer } = request;
+    let RunRequest {
+        a,
+        root_a,
+        b,
+        root_b,
+        opts,
+        filter,
+        cancel,
+        settings,
+        observer,
+    } = request;
     let endpoints = SyncEndpoints::new(a, root_a, b, root_b);
-    let finish = |mut out: Outcome| { out.canceled = cancel.load(Ordering::Acquire); out };
+    let finish = |mut out: Outcome| {
+        out.canceled = cancel.load(Ordering::Acquire);
+        out
+    };
     if let Err(error) = crate::vfs::validate_sync_roots(a, root_a, b, root_b) {
         return finish(failure("Sync-Pfade", error));
     }
@@ -132,15 +166,24 @@ fn run_at(request: RunRequest<'_>, store_path: Option<&Path>) -> Outcome {
     let lock = match super::PairLock::acquire_wait(&id, settings.lock_wait, cancel) {
         Ok(lock) => lock,
         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-            return finish(Outcome { busy: true, ..Outcome::default() });
+            return finish(Outcome {
+                busy: true,
+                ..Outcome::default()
+            });
         }
-        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => return finish(Outcome::default()),
+        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
+            return finish(Outcome::default())
+        }
         Err(error) => return finish(failure("Paarsperre", error)),
     };
-    let _identity_locks = match super::backend_identity_migration::migrate(&lock, endpoints, cancel) {
+    let _identity_locks = match super::backend_identity_migration::migrate(&lock, endpoints, cancel)
+    {
         Ok(locks) => locks,
         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-            return finish(Outcome { busy: true, ..Outcome::default() });
+            return finish(Outcome {
+                busy: true,
+                ..Outcome::default()
+            });
         }
         Err(error) => return finish(failure("Backend-Identität", error)),
     };
@@ -150,11 +193,24 @@ fn run_at(request: RunRequest<'_>, store_path: Option<&Path>) -> Outcome {
     };
     let key = &replicas.key;
     if let Some(block) = replicas.blocked {
-        return finish(Outcome { blocked: Some(block), state: Some(key.clone()), ..Outcome::default() });
+        return finish(Outcome {
+            blocked: Some(block),
+            state: Some(key.clone()),
+            ..Outcome::default()
+        });
     }
     if !opts.dry_run {
-        if let Err(error) = super::replacement_recovery::recover_locked(&lock, key, endpoints, opts.cross_mounts, cancel) {
-            return finish(Outcome { state: Some(key.clone()), ..failure("Replacement-Wiederanlauf", error) });
+        if let Err(error) = super::replacement_recovery::recover_locked(
+            &lock,
+            key,
+            endpoints,
+            opts.cross_mounts,
+            cancel,
+        ) {
+            return finish(Outcome {
+                state: Some(key.clone()),
+                ..failure("Replacement-Wiederanlauf", error)
+            });
         }
     }
     let path = match super::baseline_file(key) {
@@ -177,19 +233,31 @@ fn run_at(request: RunRequest<'_>, store_path: Option<&Path>) -> Outcome {
             let keys = pair_key_policy(a, root_a, b, root_b);
             match super::checkpoint_journal::Journal::load(previous, keys) {
                 Ok((_, records, dirs)) => {
-                    if opts.dry_run { transient_base = Some(records.baseline); }
-                    else {
+                    if opts.dry_run {
+                        transient_base = Some(records.baseline);
+                    } else {
                         let saved = super::save_baseline(&path, &records.baseline).and_then(|()| {
-                            if let Some(dirs) = dirs { super::state_metadata::save_dirs(key, &dirs) } else { Ok(()) }
+                            if let Some(dirs) = dirs {
+                                super::state_metadata::save_dirs(key, &dirs)
+                            } else {
+                                Ok(())
+                            }
                         });
-                        if let Err(error) = saved { return finish(failure("Replika-Markierung", error)); }
+                        if let Err(error) = saved {
+                            return finish(failure("Replika-Markierung", error));
+                        }
                     }
                 }
                 Err(error) => return finish(failure("Replika-Markierung", error)),
             }
         }
     }
-    if import && !state_exists && replicas.upgraded_from.is_none() && replicas.history.is_none() && !key.is_legacy() {
+    if import
+        && !state_exists
+        && replicas.upgraded_from.is_none()
+        && replicas.history.is_none()
+        && !key.is_legacy()
+    {
         match super::load_baseline(&super::baseline_path(&key.pair_id)) {
             Ok(base) if opts.dry_run => transient_base = Some(base),
             Ok(base) => {
@@ -200,26 +268,51 @@ fn run_at(request: RunRequest<'_>, store_path: Option<&Path>) -> Outcome {
             Err(error) => return finish(failure("Altzustand-Migration", error)),
         }
     }
-    let (mut journal, records, dirs) = match super::checkpoint_journal::Journal::load(key, pair_key_policy(a, root_a, b, root_b)) {
+    let (mut journal, records, dirs) = match super::checkpoint_journal::Journal::load(
+        key,
+        pair_key_policy(a, root_a, b, root_b),
+    ) {
         Ok(loaded) => loaded,
         Err(error) => return finish(failure("Synchronisierungsstand", error)),
     };
     if !opts.dry_run && state_exists {
-        if let Err(error) = journal.compact(key, &records, dirs.as_ref().unwrap_or(&super::DirSet::new())) {
+        if let Err(error) = journal.compact(
+            key,
+            &records,
+            dirs.as_ref().unwrap_or(&super::DirSet::new()),
+        ) {
             return finish(failure("Zwischenstand-Wiederaufnahme", error));
         }
     }
     let baseline = transient_base.unwrap_or(records.baseline);
     let versions = super::versions::RunVersions::begin(super::versions::VersionsContext::new(
-        &key.pair_id, key.owner.clone(), opts.versions, opts.versioning,
+        &key.pair_id,
+        key.owner.clone(),
+        opts.versions,
+        opts.versioning,
     ));
-    let state = RunState { endpoints, opts, settings: &settings, cancel, filter, observer,
-        lock: &lock, key, history: replicas.history.as_ref(), baseline: &baseline,
-        dirs: dirs.as_ref(), versions: &versions, store_path };
-    let due = opts.verify_target_secs > 0 && state.history.is_none_or(|history| {
-        let elapsed = super::state_metadata::now_ms().saturating_sub(history.full_ms).max(0) as u64;
-        history.full_ms == 0 || elapsed >= opts.verify_target_secs.saturating_mul(1000)
-    });
+    let state = RunState {
+        endpoints,
+        opts,
+        settings: &settings,
+        cancel,
+        filter,
+        observer,
+        lock: &lock,
+        key,
+        history: replicas.history.as_ref(),
+        baseline: &baseline,
+        dirs: dirs.as_ref(),
+        versions: &versions,
+        store_path,
+    };
+    let due = opts.verify_target_secs > 0
+        && state.history.is_none_or(|history| {
+            let elapsed = super::state_metadata::now_ms()
+                .saturating_sub(history.full_ms)
+                .max(0) as u64;
+            history.full_ms == 0 || elapsed >= opts.verify_target_secs.saturating_mul(1000)
+        });
     let mut out = if settings.depth != super::ScanDepth::Full && !replicas.changed && !due {
         super::incremental::try_incremental_run(&state)
             .unwrap_or_else(|| super::orchestration_full::run_full_locked(&state))
@@ -229,12 +322,27 @@ fn run_at(request: RunRequest<'_>, store_path: Option<&Path>) -> Outcome {
     out.state = Some(key.clone());
     out.run_id = Some(versions.run_id().to_string());
     if !opts.dry_run && out.blocked.is_none() {
-        for result in [versions.finish(), super::versions::prune_after_run(
-            &lock, &key.pair_id, &[
-                super::versions::VersionSide { side: super::PairSide::A, backend: a, root: root_a },
-                super::versions::VersionSide { side: super::PairSide::B, backend: b, root: root_b },
-            ], &opts.versioning, &AtomicBool::new(false),
-        )] {
+        for result in [
+            versions.finish(),
+            super::versions::prune_after_run(
+                &lock,
+                &key.pair_id,
+                &[
+                    super::versions::VersionSide {
+                        side: super::PairSide::A,
+                        backend: a,
+                        root: root_a,
+                    },
+                    super::versions::VersionSide {
+                        side: super::PairSide::B,
+                        backend: b,
+                        root: root_b,
+                    },
+                ],
+                &opts.versioning,
+                &AtomicBool::new(false),
+            ),
+        ] {
             if let Err(error) = result {
                 out.errors.push(("Versionen".into(), error.to_string()));
                 out.stats.errors = out.stats.errors.saturating_add(1);
@@ -245,6 +353,12 @@ fn run_at(request: RunRequest<'_>, store_path: Option<&Path>) -> Outcome {
 }
 
 pub(super) fn failure(stage: &str, error: impl std::fmt::Display) -> Outcome {
-    Outcome { errors: vec![(stage.to_string(), error.to_string())],
-        stats: super::BisyncStats { errors: 1, ..super::BisyncStats::default() }, ..Outcome::default() }
+    Outcome {
+        errors: vec![(stage.to_string(), error.to_string())],
+        stats: super::BisyncStats {
+            errors: 1,
+            ..super::BisyncStats::default()
+        },
+        ..Outcome::default()
+    }
 }

@@ -23,7 +23,11 @@ pub(super) fn volume_root(rt: &Runtime, location: &str) -> VolumeRoot {
 
 pub(super) fn remember_totals(rt: &Runtime, location: &str, totals: &PlatformTotals) {
     if let Some(place) = crate::apptrash::volume_place(Path::new(location)) {
-        if rt.volumes().iter().any(|volume| volume.primary && Path::new(&volume.path) == place.volume.as_path()) {
+        if rt
+            .volumes()
+            .iter()
+            .any(|volume| volume.primary && Path::new(&volume.path) == place.volume.as_path())
+        {
             crate::analytics::remember_platform_totals(&place.volume, totals);
         }
     }

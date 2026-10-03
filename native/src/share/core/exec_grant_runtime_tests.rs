@@ -127,23 +127,40 @@ fn review_task_online_extension_preserves_policy_after_offline_barrier() {
         ..ExecRegistryLimits::default()
     });
     let enabled = mutate(&auth, &registry, target, true, 10).unwrap();
-    let ExecAdmission::Prepared(reservation) = registry.prepare(
-        enabled.principal.clone(), authorization(&enabled, "before"), &start(), 11,
-    ).unwrap() else { panic!("launch was not reserved") };
+    let ExecAdmission::Prepared(reservation) = registry
+        .prepare(
+            enabled.principal.clone(),
+            authorization(&enabled, "before"),
+            &start(),
+            11,
+        )
+        .unwrap()
+    else {
+        panic!("launch was not reserved")
+    };
     let current = auth.lock().unwrap().clone();
     let mut offline = current.clone();
     offline.direct_online = false;
     offline.authorization_epoch = current.authorization_epoch + 1;
-    apply_configuration_transition(&current, &offline, offline.authorization_epoch, &registry).unwrap();
-    assert_eq!(reservation.cancellation.reason(), Some(ExecCancelReason::Revoked));
+    apply_configuration_transition(&current, &offline, offline.authorization_epoch, &registry)
+        .unwrap();
+    assert_eq!(
+        reservation.cancellation.reason(),
+        Some(ExecCancelReason::Revoked)
+    );
     let mut online = offline.clone();
     online.direct_online = true;
     // Enabling availability grants no new Exec revision and needs no epoch.
-    assert!(crate::share::relation_rights::authorization_restrictions(&offline, &online).is_empty());
-    apply_configuration_transition(&offline, &online, online.authorization_epoch, &registry).unwrap();
+    assert!(
+        crate::share::relation_rights::authorization_restrictions(&offline, &online).is_empty()
+    );
+    apply_configuration_transition(&offline, &online, online.authorization_epoch, &registry)
+        .unwrap();
     let mut token = authorization(&enabled, "after");
     token.authorization_epoch = online.authorization_epoch;
-    assert!(registry.prepare(enabled.principal, token, &start(), 12).is_ok());
+    assert!(registry
+        .prepare(enabled.principal, token, &start(), 12)
+        .is_ok());
 }
 
 fn direct_state() -> (Arc<Mutex<ShareAuthState>>, ExecGrantTarget) {

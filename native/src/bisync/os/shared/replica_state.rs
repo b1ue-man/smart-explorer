@@ -43,8 +43,10 @@ pub fn merge_baseline_entries(
 }
 
 pub(super) fn merge_with_keys(
-    lock: &PairLock, key: &StateKey,
-    entries: &[(String, (Option<Sig>, Option<Sig>))], keys: super::KeyPolicy,
+    lock: &PairLock,
+    key: &StateKey,
+    entries: &[(String, (Option<Sig>, Option<Sig>))],
+    keys: super::KeyPolicy,
 ) -> io::Result<()> {
     if lock.id() != key.lock_id.to_ascii_lowercase() {
         return Err(io::Error::new(
@@ -54,10 +56,17 @@ pub(super) fn merge_with_keys(
     }
     let (mut journal, mut records, dirs) = super::checkpoint_journal::Journal::load(key, keys)?;
     let mut dirs = dirs.unwrap_or_default();
-    let frame = super::checkpoint_journal::Frame { fold_case: keys.fold_case, records: entries.to_vec(),
-        ..super::checkpoint_journal::Frame::default() };
-    frame.ensure_fits(&records, &dirs, super::checkpoint_journal::dir_bytes(&dirs),
-        super::SyncLimits::for_memory(crate::transfer::physical_memory()))?;
+    let frame = super::checkpoint_journal::Frame {
+        fold_case: keys.fold_case,
+        records: entries.to_vec(),
+        ..super::checkpoint_journal::Frame::default()
+    };
+    frame.ensure_fits(
+        &records,
+        &dirs,
+        super::checkpoint_journal::dir_bytes(&dirs),
+        super::SyncLimits::for_memory(crate::transfer::physical_memory()),
+    )?;
     journal.append(&frame)?;
     frame.apply(&mut records, &mut dirs)?;
     journal.compact(key, &records, &dirs)
@@ -71,8 +80,14 @@ pub fn forget_job_state(job_id: &str) -> io::Result<()> {
     let pairs = match std::fs::read_dir(&root) {
         Ok(pairs) => pairs,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return SyncStateStore::open_default().and_then(|mut store| store.forget_owner(&owner_token(&StateOwner::Job(job_id.to_string()))
-                .map_err(|_| rusqlite::Error::InvalidQuery)?)).map_err(index_error);
+            return SyncStateStore::open_default()
+                .and_then(|mut store| {
+                    store.forget_owner(
+                        &owner_token(&StateOwner::Job(job_id.to_string()))
+                            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    )
+                })
+                .map_err(index_error);
         }
         Err(error) => return Err(error),
     };
@@ -84,8 +99,14 @@ pub fn forget_job_state(job_id: &str) -> io::Result<()> {
         remove_files(&pair.path(), |name| name.starts_with(&prefix))?;
         remove_dir_if_empty(&pair.path())?;
     }
-    SyncStateStore::open_default().and_then(|mut store| store.forget_owner(
-        &owner_token(&StateOwner::Job(job_id.to_string())).map_err(|_| rusqlite::Error::InvalidQuery)?)).map_err(index_error)
+    SyncStateStore::open_default()
+        .and_then(|mut store| {
+            store.forget_owner(
+                &owner_token(&StateOwner::Job(job_id.to_string()))
+                    .map_err(|_| rusqlite::Error::InvalidQuery)?,
+            )
+        })
+        .map_err(index_error)
 }
 
 /// Removes the stored state of one pair for every owner: the per-pair folder,
@@ -142,12 +163,23 @@ pub(super) fn owner_token(owner: &StateOwner) -> io::Result<String> {
 }
 
 pub(super) fn owner_from_token(token: &str) -> io::Result<StateOwner> {
-    let owner = if token == "adhoc" { StateOwner::AdHoc } else {
-        StateOwner::Job(token.strip_prefix("job-").ok_or_else(|| io::Error::new(
-            io::ErrorKind::InvalidData, "invalid pending state owner"))?.to_string())
+    let owner = if token == "adhoc" {
+        StateOwner::AdHoc
+    } else {
+        StateOwner::Job(
+            token
+                .strip_prefix("job-")
+                .ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "invalid pending state owner")
+                })?
+                .to_string(),
+        )
     };
     if owner_token(&owner)? != token {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid pending state owner"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid pending state owner",
+        ));
     }
     Ok(owner)
 }
@@ -155,7 +187,8 @@ pub(super) fn owner_from_token(token: &str) -> io::Result<StateOwner> {
 /// Only owners of these exact ordered endpoints and physical replicas are
 /// relevant to a pending merge. Their state entries are never imported.
 pub(super) fn pending_owner_keys(key: &StateKey) -> io::Result<Vec<StateKey>> {
-    let mut owners = std::collections::BTreeSet::from([owner_token(&key.owner)?, "adhoc".to_string()]);
+    let mut owners =
+        std::collections::BTreeSet::from([owner_token(&key.owner)?, "adhoc".to_string()]);
     let suffix = format!(".{}.merge-", replica_token(&key.replica_a, &key.replica_b));
     let entries = match std::fs::read_dir(pair_dir(&key.pair_id)) {
         Ok(entries) => Some(entries),
@@ -166,9 +199,15 @@ pub(super) fn pending_owner_keys(key: &StateKey) -> io::Result<Vec<StateKey>> {
     let mut count = 0u64;
     for entry in entries.into_iter().flatten() {
         count = count.saturating_add(1);
-        if count > limits.state_entries { return Err(io::Error::other("pending owner collection exceeds its budget")); }
+        if count > limits.state_entries {
+            return Err(io::Error::other(
+                "pending owner collection exceeds its budget",
+            ));
+        }
         let name = entry?.file_name();
-        let Some(name) = name.to_str() else { continue; };
+        let Some(name) = name.to_str() else {
+            continue;
+        };
         if name.ends_with(".json") {
             if let Some((owner, _)) = name.split_once(&suffix) {
                 owner_from_token(owner)?;
@@ -176,14 +215,24 @@ pub(super) fn pending_owner_keys(key: &StateKey) -> io::Result<Vec<StateKey>> {
             }
         }
     }
-    let mut keys = owners.into_iter().map(|owner| Ok(StateKey {
-        owner: owner_from_token(&owner)?, ..key.clone()
-    })).collect::<io::Result<Vec<_>>>()?;
+    let mut keys = owners
+        .into_iter()
+        .map(|owner| {
+            Ok(StateKey {
+                owner: owner_from_token(&owner)?,
+                ..key.clone()
+            })
+        })
+        .collect::<io::Result<Vec<_>>>()?;
     if !key.is_legacy() {
         // The old pair-wide adhoc intent has no marker tokens. Its inputs
         // remain protected without adopting its baseline into this replica.
-        keys.push(StateKey { owner: StateOwner::AdHoc, replica_a: ReplicaRef::Unknown,
-            replica_b: ReplicaRef::Unknown, ..key.clone() });
+        keys.push(StateKey {
+            owner: StateOwner::AdHoc,
+            replica_a: ReplicaRef::Unknown,
+            replica_b: ReplicaRef::Unknown,
+            ..key.clone()
+        });
     }
     Ok(keys)
 }
@@ -204,8 +253,12 @@ pub(super) fn index_id(key: &StateKey) -> io::Result<String> {
     if key.is_legacy() {
         return Ok(key.pair_id.clone());
     }
-    Ok(format!("{}:{}:{}", key.pair_id, owner_token(&key.owner)?,
-        replica_token(&key.replica_a, &key.replica_b)))
+    Ok(format!(
+        "{}:{}:{}",
+        key.pair_id,
+        owner_token(&key.owner)?,
+        replica_token(&key.replica_a, &key.replica_b)
+    ))
 }
 
 fn feed_replica(hash: &mut u64, replica: &ReplicaRef) {

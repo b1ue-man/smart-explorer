@@ -1,8 +1,8 @@
 use super::*;
 use crate::vfs::{LocalBackend, Scheme, VfsMeta, VfsResult};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::io::Read;
 
 fn temp_dir(tag: &str) -> PathBuf {
     let nanos = SystemTime::now()
@@ -138,11 +138,25 @@ impl Backend for HookBackend {
         self.inner.open_write(path)
     }
 
-    fn open_write_new(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> { self.inner.open_write_new(path) }
-    fn open_write_copy_stage(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> { self.inner.open_write_copy_stage(path) }
-    fn open_write_copy_stage_sized(&self, path: &str, size: u64) -> VfsResult<Box<dyn Write + Send>> { self.inner.open_write_copy_stage_sized(path,size) }
-    fn discard_copy_stage(&self, path: &str) -> VfsResult<()> { self.inner.discard_copy_stage(path) }
-    fn extensions(&self) -> Option<&dyn crate::vfs::BackendExtensions> { Some(self) }
+    fn open_write_new(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
+        self.inner.open_write_new(path)
+    }
+    fn open_write_copy_stage(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
+        self.inner.open_write_copy_stage(path)
+    }
+    fn open_write_copy_stage_sized(
+        &self,
+        path: &str,
+        size: u64,
+    ) -> VfsResult<Box<dyn Write + Send>> {
+        self.inner.open_write_copy_stage_sized(path, size)
+    }
+    fn discard_copy_stage(&self, path: &str) -> VfsResult<()> {
+        self.inner.discard_copy_stage(path)
+    }
+    fn extensions(&self) -> Option<&dyn crate::vfs::BackendExtensions> {
+        Some(self)
+    }
 
     fn rename(&self, source: &str, destination: &str) -> VfsResult<()> {
         self.inner.rename(source, destination)
@@ -183,21 +197,34 @@ impl Backend for HookBackend {
 
 impl crate::vfs::BackendExtensions for HookBackend {
     fn open_read_regular(&self, path: &str, id: Option<&str>) -> VfsResult<Box<dyn Read + Send>> {
-        let reader = crate::vfs::open_read_regular(&self.inner,path,id)?;
+        let reader = crate::vfs::open_read_regular(&self.inner, path, id)?;
         #[cfg(unix)]
-        if let Hook::SwapSourceToLink { source, link_target, swapped } = &self.hook {
+        if let Hook::SwapSourceToLink {
+            source,
+            link_target,
+            swapped,
+        } = &self.hook
+        {
             if path == source && !swapped.swap(true, Ordering::Relaxed) {
                 std::fs::remove_file(source)?;
-                std::os::unix::fs::symlink(link_target,source)?;
+                std::os::unix::fs::symlink(link_target, source)?;
             }
         }
         Ok(reader)
     }
-    fn finish_stage(&self,path:&str,finish:crate::vfs::StageFinish)->VfsResult<crate::vfs::StageFinished> {
-        crate::vfs::finish_stage(&self.inner,path,finish)
+    fn finish_stage(
+        &self,
+        path: &str,
+        finish: crate::vfs::StageFinish,
+    ) -> VfsResult<crate::vfs::StageFinished> {
+        crate::vfs::finish_stage(&self.inner, path, finish)
     }
-    fn sync_filesystem(&self,root:&str)->VfsResult<bool> { crate::vfs::sync_filesystem(&self.inner,root) }
-    fn unix_mode(&self,path:&str)->VfsResult<Option<u32>> { crate::vfs::unix_mode(&self.inner,path) }
+    fn sync_filesystem(&self, root: &str) -> VfsResult<bool> {
+        crate::vfs::sync_filesystem(&self.inner, root)
+    }
+    fn unix_mode(&self, path: &str) -> VfsResult<Option<u32>> {
+        crate::vfs::unix_mode(&self.inner, path)
+    }
 }
 
 #[test]

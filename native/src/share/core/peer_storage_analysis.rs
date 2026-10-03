@@ -19,38 +19,72 @@ pub(super) fn scan(
         lease_request_id: None,
     })?;
     let features = match response {
-        FsResponse::Capabilities { storage_analysis_v2: true, capabilities, .. } => capabilities.features,
-        FsResponse::Capabilities { .. } => { progress.set_phase(ScanPhase::Legacy, root); return Ok(None); }
+        FsResponse::Capabilities {
+            storage_analysis_v2: true,
+            capabilities,
+            ..
+        } => capabilities.features,
+        FsResponse::Capabilities { .. } => {
+            progress.set_phase(ScanPhase::Legacy, root);
+            return Ok(None);
+        }
         _ => return Err(invalid("Gegenstelle meldet keine Analyse-Fähigkeiten")),
     };
-    let request = FsStorageAnalysis { path: root.into(), node_budget: Some(progress.node_budget()),
+    let request = FsStorageAnalysis {
+        path: root.into(),
+        node_budget: Some(progress.node_budget()),
         compress: features.analysis_deflate_v1,
-        request_id: if features.analysis_reattach_v1 { Some(super::core::random_token(16).map_err(io::Error::other)?) } else { None },
+        request_id: if features.analysis_reattach_v1 {
+            Some(super::core::random_token(16).map_err(io::Error::other)?)
+        } else {
+            None
+        },
     };
     for attempt in 0..2 {
         progress.check_cancel()?;
         let endpoint = backend.current_endpoint()?;
         let mut opened = match backend.node.open_stream(&endpoint, &backend.identity) {
             Ok(opened) => opened,
-            Err(error) if attempt == 0 && features.analysis_reattach_v1 && super::peer_stream::transport(&error) => continue,
+            Err(error)
+                if attempt == 0
+                    && features.analysis_reattach_v1
+                    && super::peer_stream::transport(&error) =>
+            {
+                continue
+            }
             Err(error) => return Err(error),
         };
         let lease = backend.mount_lease_token()?;
-        let result = backend.node.block_on(receive(&mut opened.send, &mut opened.recv, request.clone(), lease, progress));
+        let result = backend.node.block_on(receive(
+            &mut opened.send,
+            &mut opened.recv,
+            request.clone(),
+            lease,
+            progress,
+        ));
         match result {
             Ok(result) => return Ok(Some(result)),
             Err(error) => {
                 if super::peer_stream::transport(&error) {
-                    let _ = backend.node.invalidate_outgoing_session(&opened.session_key, opened.generation);
+                    let _ = backend
+                        .node
+                        .invalidate_outgoing_session(&opened.session_key, opened.generation);
                 }
-                if attempt == 0 && features.analysis_reattach_v1 && super::peer_stream::transport(&error) {
-                    progress.restart_remote(); continue;
+                if attempt == 0
+                    && features.analysis_reattach_v1
+                    && super::peer_stream::transport(&error)
+                {
+                    progress.restart_remote();
+                    continue;
                 }
                 return Err(error);
             }
         }
     }
-    Err(io::Error::new(io::ErrorKind::NotConnected, "Analyse-Verbindung nicht wiederhergestellt"))
+    Err(io::Error::new(
+        io::ErrorKind::NotConnected,
+        "Analyse-Verbindung nicht wiederhergestellt",
+    ))
 }
 
 async fn receive(

@@ -3,8 +3,12 @@ use super::*;
 use std::{cmp::Reverse, collections::BinaryHeap};
 
 pub(super) fn scan_entries(
-    traversal: &Traversal<'_>, dir: &Path, name: Box<str>,
-    entries: io::Result<impl Iterator<Item = io::Result<LocalEntry>>>, depth: u32, is_root: bool,
+    traversal: &Traversal<'_>,
+    dir: &Path,
+    name: Box<str>,
+    entries: io::Result<impl Iterator<Item = io::Result<LocalEntry>>>,
+    depth: u32,
+    is_root: bool,
 ) -> SizeNode {
     scan_entries_with(traversal, dir, name, entries, depth, is_root, None, &[])
 }
@@ -54,8 +58,10 @@ pub(super) fn scan_entries_with(
                 let nm: Box<str> = ent.name.to_string_lossy().into_owned().into_boxed_str();
                 // The app trash (Android) is left out like in every other walk.
                 if crate::apptrash::excluded_name(&nm)
-                    || crate::bisync::is_engine_name(&nm) || crate::vfs::is_staging_name(&nm)
-                    || excluded.iter().any(|hidden| hidden == &dir.join(&ent.name)) {
+                    || crate::bisync::is_engine_name(&nm)
+                    || crate::vfs::is_staging_name(&nm)
+                    || excluded.iter().any(|hidden| hidden == &dir.join(&ent.name))
+                {
                     continue;
                 }
                 if ent.kind == EntryKind::Directory {
@@ -81,16 +87,28 @@ pub(super) fn scan_entries_with(
                     subdirs.push((path, nm, retention));
                     if subdirs.len() == 256 {
                         p.dirs.fetch_add(subdirs.len() as u64, Ordering::Relaxed);
-                        fold_children(scan_children(traversal, std::mem::take(&mut subdirs), depth, handle, excluded),
-                            &mut dir_nodes, &mut subtree_bytes, &mut aggregated_bytes, &mut aggregated_entries);
+                        fold_children(
+                            scan_children(
+                                traversal,
+                                std::mem::take(&mut subdirs),
+                                depth,
+                                handle,
+                                excluded,
+                            ),
+                            &mut dir_nodes,
+                            &mut subtree_bytes,
+                            &mut aggregated_bytes,
+                            &mut aggregated_entries,
+                        );
                         p.enter_directory(&crate::analytics::os::display_path(dir));
                     }
                 } else if ent.kind == EntryKind::File {
                     own_files += 1;
                     own_bytes = own_bytes.saturating_add(ent.size);
                     let keep = files.len() < MAX_RETAINED_FILES_PER_DIRECTORY
-                        || files.peek().is_some_and(|(size, name, _)| ent.size > size.0
-                            || (ent.size == size.0 && nm.as_ref() < name.as_ref()));
+                        || files.peek().is_some_and(|(size, name, _)| {
+                            ent.size > size.0 || (ent.size == size.0 && nm.as_ref() < name.as_ref())
+                        });
                     if keep {
                         if files.len() == MAX_RETAINED_FILES_PER_DIRECTORY {
                             if let Some((size, _, _)) = files.pop() {
@@ -127,17 +145,25 @@ pub(super) fn scan_entries_with(
     // directory into one aggregate node so totals stay exact.
     let mut files = files.into_vec();
     if own_files > MAX_RETAINED_FILES_PER_DIRECTORY as u64 {
-        files.sort_by(|left, right| right.0.0.cmp(&left.0.0).then_with(|| left.1.cmp(&right.1)));
-    } else { files.sort_by_key(|file| file.2); }
+        files.sort_by(|left, right| {
+            right
+                .0
+                 .0
+                .cmp(&left.0 .0)
+                .then_with(|| left.1.cmp(&right.1))
+        });
+    } else {
+        files.sort_by_key(|file| file.2);
+    }
     let mut file_nodes: Vec<SizeNode> =
         Vec::with_capacity(files.len().min(MAX_RETAINED_FILES_PER_DIRECTORY));
     for (Reverse(size), file_name, _) in files {
         let retained = budget.claim(
-                &dir.join(&*file_name),
-                depth.saturating_add(1),
-                file_name.len() as u64,
-                diagnostics,
-            ) == Retention::Keep;
+            &dir.join(&*file_name),
+            depth.saturating_add(1),
+            file_name.len() as u64,
+            diagnostics,
+        ) == Retention::Keep;
         if retained {
             file_nodes.push(SizeNode {
                 name: file_name,
@@ -152,8 +178,13 @@ pub(super) fn scan_entries_with(
     }
     diagnostics.count_aggregated_files(own_files.saturating_sub(file_nodes.len() as u64));
 
-    fold_children(scan_children(traversal, subdirs, depth, handle, excluded),
-        &mut dir_nodes, &mut subtree_bytes, &mut aggregated_bytes, &mut aggregated_entries);
+    fold_children(
+        scan_children(traversal, subdirs, depth, handle, excluded),
+        &mut dir_nodes,
+        &mut subtree_bytes,
+        &mut aggregated_bytes,
+        &mut aggregated_entries,
+    );
     let size = own_bytes.saturating_add(subtree_bytes);
     let mut children = Vec::with_capacity(dir_nodes.len() + file_nodes.len() + 1);
     children.append(&mut dir_nodes);
@@ -161,14 +192,25 @@ pub(super) fn scan_entries_with(
     if aggregated_entries > 0 {
         children.push(SizeNode {
             name: crate::analytics::aggregate_name(aggregated_entries).into_boxed_str(),
-            size: aggregated_bytes, is_dir: false, children: Vec::new(),
+            size: aggregated_bytes,
+            is_dir: false,
+            children: Vec::new(),
         });
     }
-    SizeNode { name, size, is_dir: true, children }
+    SizeNode {
+        name,
+        size,
+        is_dir: true,
+        children,
+    }
 }
 
-fn scan_children(traversal: &Traversal<'_>, subdirs: Vec<(PathBuf, Box<str>, Retention)>,
-    depth: u32, handle: Option<&crate::local_access::DirectoryHandle>, excluded: &[PathBuf],
+fn scan_children(
+    traversal: &Traversal<'_>,
+    subdirs: Vec<(PathBuf, Box<str>, Retention)>,
+    depth: u32,
+    handle: Option<&crate::local_access::DirectoryHandle>,
+    excluded: &[PathBuf],
 ) -> Vec<(SizeNode, Retention)> {
     let visit = |(path, name, retention): (PathBuf, Box<str>, Retention)| {
         let child = match handle {
@@ -181,7 +223,18 @@ fn scan_children(traversal: &Traversal<'_>, subdirs: Vec<(PathBuf, Box<str>, Ret
             },
             None => None,
         };
-        (scan_dir_with(traversal, &path, name, depth.saturating_add(1), false, child.as_ref(), excluded), retention)
+        (
+            scan_dir_with(
+                traversal,
+                &path,
+                name,
+                depth.saturating_add(1),
+                false,
+                child.as_ref(),
+                excluded,
+            ),
+            retention,
+        )
     };
     if traversal.progress.cancel.load(Ordering::Relaxed) {
         Vec::new()
@@ -192,8 +245,12 @@ fn scan_children(traversal: &Traversal<'_>, subdirs: Vec<(PathBuf, Box<str>, Ret
     }
 }
 
-fn fold_children(visited: Vec<(SizeNode, Retention)>, dir_nodes: &mut Vec<SizeNode>,
-    size: &mut u64, aggregated_bytes: &mut u64, aggregated_entries: &mut u64,
+fn fold_children(
+    visited: Vec<(SizeNode, Retention)>,
+    dir_nodes: &mut Vec<SizeNode>,
+    size: &mut u64,
+    aggregated_bytes: &mut u64,
+    aggregated_entries: &mut u64,
 ) {
     for (node, retention) in visited {
         *size = size.saturating_add(node.size);

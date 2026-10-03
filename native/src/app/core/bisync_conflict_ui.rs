@@ -1,7 +1,7 @@
-use crate::app::theme;
 use super::bisync_conflicts::{ConflictBulkRun, ConflictSide};
 use super::prelude::*;
 use super::*;
+use crate::app::theme;
 
 const CONFLICT_ROW_HEIGHT: f32 = 30.0;
 
@@ -205,8 +205,6 @@ impl App {
             );
         }
     }
-
-
 }
 
 fn resolve_phase_label(phase: crate::bisync::ResolvePhase) -> &'static str {
@@ -220,32 +218,61 @@ fn resolve_phase_label(phase: crate::bisync::ResolvePhase) -> &'static str {
 }
 
 fn variant_choice(
-    ui: &mut egui::Ui, conflict: &crate::bisync::Conflict,
-    side: ConflictSide, enabled: bool,
+    ui: &mut egui::Ui,
+    conflict: &crate::bisync::Conflict,
+    side: ConflictSide,
+    enabled: bool,
 ) -> Option<Option<String>> {
     let letter = if side.keep_a() { "A" } else { "B" };
     let mut selected = None;
     ui.add_enabled_ui(enabled, |ui| {
-        if let Some(group) = conflict.duplicates.as_ref().filter(|d| d.needs_variant_choice(side.keep_a())) {
+        if let Some(group) = conflict
+            .duplicates
+            .as_ref()
+            .filter(|d| d.needs_variant_choice(side.keep_a()))
+        {
             ui.menu_button(format!("{letter}: Version wählen…"), |ui| {
-                ui.label("Mehrere Dateien mit demselben Namen. Diese Version bleibt auf beiden Seiten:");
+                ui.label(
+                    "Mehrere Dateien mit demselben Namen. Diese Version bleibt auf beiden Seiten:",
+                );
                 for (index, variant) in group.variants(side.keep_a()).iter().enumerate() {
-                    let label = format!("Version {} · {} B · {} · Inhalt {}", index + 1,
-                        variant.content_size, fmt_ms(variant.signature.mtime_ms),
-                        variant.content_md5.chars().take(8).collect::<String>());
-                    if ui.button(label).on_hover_text(format!("Datei-ID: {}\nPrüfsumme: {}",
-                        variant.id.as_deref().unwrap_or("Pfad"), variant.content_md5)).clicked() {
+                    let label = format!(
+                        "Version {} · {} B · {} · Inhalt {}",
+                        index + 1,
+                        variant.content_size,
+                        fmt_ms(variant.signature.mtime_ms),
+                        variant.content_md5.chars().take(8).collect::<String>()
+                    );
+                    if ui
+                        .button(label)
+                        .on_hover_text(format!(
+                            "Datei-ID: {}\nPrüfsumme: {}",
+                            variant.id.as_deref().unwrap_or("Pfad"),
+                            variant.content_md5
+                        ))
+                        .clicked()
+                    {
                         selected = Some(variant.id.clone());
                         ui.close_menu();
                     }
                 }
             });
         } else {
-            let signature = if side.keep_a() { conflict.a } else { conflict.b };
-            let detail = signature.map(|s| format!("{} B, {}", s.size, fmt_ms(s.mtime_ms)))
+            let signature = if side.keep_a() {
+                conflict.a
+            } else {
+                conflict.b
+            };
+            let detail = signature
+                .map(|s| format!("{} B, {}", s.size, fmt_ms(s.mtime_ms)))
                 .unwrap_or_else(|| "gelöscht".into());
-            if ui.small_button(format!("{letter} verwenden ({})", side.direction()))
-                .on_hover_text(detail).clicked() { selected = Some(None); }
+            if ui
+                .small_button(format!("{letter} verwenden ({})", side.direction()))
+                .on_hover_text(detail)
+                .clicked()
+            {
+                selected = Some(None);
+            }
         }
     });
     selected

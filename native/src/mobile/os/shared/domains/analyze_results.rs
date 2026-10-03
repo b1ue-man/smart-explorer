@@ -29,7 +29,9 @@ pub(super) enum Stored {
         base: String,
         recycling: bool,
     },
-    Recycled { moved: Vec<String> },
+    Recycled {
+        moved: Vec<String>,
+    },
 }
 
 struct Slot {
@@ -118,12 +120,19 @@ pub(super) fn with_stored<T>(
     })
 }
 
-pub(super) fn with_stored_mut<T>(task: &str,
-    work: impl FnOnce(&mut Stored) -> Result<T, ApiError>) -> Result<T, ApiError> {
+pub(super) fn with_stored_mut<T>(
+    task: &str,
+    work: impl FnOnce(&mut Stored) -> Result<T, ApiError>,
+) -> Result<T, ApiError> {
     with_results(|slots| {
-        let slot = slots.iter_mut().find(|slot| slot.task.as_deref() == Some(task))
+        let slot = slots
+            .iter_mut()
+            .find(|slot| slot.task.as_deref() == Some(task))
             .ok_or_else(|| ApiError::new("not_found", "Ergebnis nicht mehr vorhanden."))?;
-        let stored = slot.result.as_mut().ok_or_else(|| ApiError::new("busy", "Der Scan läuft noch."))?;
+        let stored = slot
+            .result
+            .as_mut()
+            .ok_or_else(|| ApiError::new("busy", "Der Scan läuft noch."))?;
         let result = work(stored);
         slot.bytes = result_bytes(stored);
         result
@@ -148,7 +157,13 @@ fn trim(slots: &mut VecDeque<Slot>, keep: u64, budget: u64) {
         .fold(0u64, |total, slot| total.saturating_add(slot.bytes));
     let mut index = 0;
     while total > budget && index < slots.len() {
-        let recycling = matches!(&slots[index].result, Some(Stored::Duplicates { recycling: true, .. }));
+        let recycling = matches!(
+            &slots[index].result,
+            Some(Stored::Duplicates {
+                recycling: true,
+                ..
+            })
+        );
         if slots[index].result.is_some() && slots[index].token != keep && !recycling {
             total = total.saturating_sub(slots[index].bytes);
             slots.remove(index);
@@ -160,29 +175,55 @@ fn trim(slots: &mut VecDeque<Slot>, keep: u64, budget: u64) {
 
 fn result_bytes(result: &Stored) -> u64 {
     let heap = match result {
-        Stored::Analysis { outcome, approx, base, root } => outcome.tree.as_ref().map_or(0, tree_bytes)
+        Stored::Analysis {
+            outcome,
+            approx,
+            base,
+            root,
+        } => outcome
+            .tree
+            .as_ref()
+            .map_or(0, tree_bytes)
             .saturating_add(approx.estimated_heap_bytes())
-            .saturating_add(outcome.platform.as_ref().map_or(0, |figures| figures.estimated_heap_bytes()))
+            .saturating_add(
+                outcome
+                    .platform
+                    .as_ref()
+                    .map_or(0, |figures| figures.estimated_heap_bytes()),
+            )
             .saturating_add(strings_bytes(&outcome.notes))
             .saturating_add(vec_bytes(&outcome.issues))
-            .saturating_add(outcome.issues.iter().fold(0u64, |total, issue|
-                total.saturating_add(issue.path.capacity() as u64).saturating_add(issue.detail.capacity() as u64)))
+            .saturating_add(outcome.issues.iter().fold(0u64, |total, issue| {
+                total
+                    .saturating_add(issue.path.capacity() as u64)
+                    .saturating_add(issue.detail.capacity() as u64)
+            }))
             .saturating_add(vec_bytes(&outcome.protected))
-            .saturating_add(base.capacity() as u64).saturating_add(root.capacity() as u64),
-        Stored::Recycled { moved } => moved.iter().fold(0, |total: u64, path|
-            total.saturating_add(32 + path.len() as u64)),
-        Stored::Duplicates { groups, summary, base, .. } => groups.iter().fold(0u64, |total, group| {
-            group.items.iter().fold(
-                total.saturating_add(ITEM_BYTES + group.hash.hex.len() as u64),
-                |total, item| {
-                    let texts = item.path.len()
-                        + item.name.len()
-                        + item.reason.len()
-                        + item.backend_id.as_ref().map_or(0, String::len);
-                    total.saturating_add(ITEM_BYTES + texts as u64)
-                },
-            )
-        }).saturating_add(strings_bytes(&summary.errors))
+            .saturating_add(base.capacity() as u64)
+            .saturating_add(root.capacity() as u64),
+        Stored::Recycled { moved } => moved.iter().fold(0, |total: u64, path| {
+            total.saturating_add(32 + path.len() as u64)
+        }),
+        Stored::Duplicates {
+            groups,
+            summary,
+            base,
+            ..
+        } => groups
+            .iter()
+            .fold(0u64, |total, group| {
+                group.items.iter().fold(
+                    total.saturating_add(ITEM_BYTES + group.hash.hex.len() as u64),
+                    |total, item| {
+                        let texts = item.path.len()
+                            + item.name.len()
+                            + item.reason.len()
+                            + item.backend_id.as_ref().map_or(0, String::len);
+                        total.saturating_add(ITEM_BYTES + texts as u64)
+                    },
+                )
+            })
+            .saturating_add(strings_bytes(&summary.errors))
             .saturating_add(strings_bytes(&summary.limits))
             .saturating_add(vec_bytes(&summary.protected))
             .saturating_add(base.capacity() as u64),
@@ -195,14 +236,21 @@ fn vec_bytes<T>(items: &Vec<T>) -> u64 {
 }
 
 fn strings_bytes(items: &Vec<String>) -> u64 {
-    items.iter().fold(vec_bytes(items), |total, text| total.saturating_add(text.capacity() as u64))
+    items.iter().fold(vec_bytes(items), |total, text| {
+        total.saturating_add(text.capacity() as u64)
+    })
 }
 
 /// Heap bytes of a size tree; the walk keeps one iterator per level only.
 fn tree_bytes(tree: &SizeNode) -> u64 {
-    let node = |node: &SizeNode| NODE_BYTES.saturating_add(node.name.capacity() as u64)
-        .saturating_add((node.children.capacity().saturating_sub(node.children.len()) as u64)
-            .saturating_mul(std::mem::size_of::<SizeNode>() as u64));
+    let node = |node: &SizeNode| {
+        NODE_BYTES
+            .saturating_add(node.name.capacity() as u64)
+            .saturating_add(
+                (node.children.capacity().saturating_sub(node.children.len()) as u64)
+                    .saturating_mul(std::mem::size_of::<SizeNode>() as u64),
+            )
+    };
     let mut total = node(tree);
     let mut levels = vec![tree.children.iter()];
     while let Some(children) = levels.last_mut() {
@@ -287,15 +335,29 @@ mod tests {
     #[test]
     fn review_task_host_app_figures_participate_in_result_retention() {
         use crate::analytics::{PlatformFigures, PlatformTotals, VolumeRoot};
-        let place = VolumeRoot { whole_volume: true, app_data: Some(Vec::new()) };
+        let place = VolumeRoot {
+            whole_volume: true,
+            app_data: Some(Vec::new()),
+        };
         let mut totals = PlatformTotals::default();
-        totals.add_app("host.package".repeat(1024), "Host app".repeat(1024), 50, 25, 5);
+        totals.add_app(
+            "host.package".repeat(1024),
+            "Host app".repeat(1024),
+            50,
+            25,
+            5,
+        );
         let mut outcome = ScanOutcome::complete(file("root"));
         outcome.platform = Some(PlatformFigures::new(&place, &totals, 0));
         let approx = Approximations::compute(outcome.tree.as_ref().unwrap(), &place, totals, true);
         let expected = approx.estimated_heap_bytes()
             + outcome.platform.as_ref().unwrap().estimated_heap_bytes();
-        let result = Stored::Analysis { outcome, approx, base: "share://direct/host/root".into(), root: "/root".into() };
+        let result = Stored::Analysis {
+            outcome,
+            approx,
+            base: "share://direct/host/root".into(),
+            root: "/root".into(),
+        };
         let bytes = result_bytes(&result);
         assert!(bytes >= expected && expected > 20_000);
         let mut old = slot(1, bytes, true);

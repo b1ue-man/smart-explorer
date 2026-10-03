@@ -73,7 +73,9 @@ pub(super) fn serve_websocket(
             return Ok(());
         };
         flush_websocket_out(websocket, outbound)?;
-        let wait = timing.read_timeout(now, until).unwrap_or(ACTIVE_READ_WINDOW);
+        let wait = timing
+            .read_timeout(now, until)
+            .unwrap_or(ACTIVE_READ_WINDOW);
         websocket.get_mut().set_read_timeout(Some(wait))?;
         let mut received = false;
         let read = read_websocket_json_until(

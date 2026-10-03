@@ -199,13 +199,22 @@ pub(crate) fn find_duplicates_in_roots(
     guard: Option<Guard<'_>>,
     excluded: &[std::path::PathBuf],
 ) -> DuplicateReport {
-    find_duplicates_in_roots_with_open(roots, progress, limits, guard, excluded,
-        &crate::local_access::DirectoryHandle::open_root_consented)
+    find_duplicates_in_roots_with_open(
+        roots,
+        progress,
+        limits,
+        guard,
+        excluded,
+        &crate::local_access::DirectoryHandle::open_root_consented,
+    )
 }
 
 pub(crate) fn find_duplicates_in_roots_with_open(
-    roots: &[FinderRoot], progress: &ReclaimProgress, limits: FinderLimits,
-    guard: Option<Guard<'_>>, excluded: &[std::path::PathBuf],
+    roots: &[FinderRoot],
+    progress: &ReclaimProgress,
+    limits: FinderLimits,
+    guard: Option<Guard<'_>>,
+    excluded: &[std::path::PathBuf],
     open: &dyn Fn(&Path) -> io::Result<crate::local_access::DirectoryHandle>,
 ) -> DuplicateReport {
     let limits = FinderLimits {
@@ -232,8 +241,12 @@ pub(crate) fn find_duplicates_in_roots_with_open(
         let handle = match open(&root.path) {
             Ok(handle) => handle,
             Err(error) => {
-                issues.failed(std::slice::from_ref(&root.protected), &root.path, true,
-                    || format!("{}: {error}", to_fwd(&root.path)));
+                issues.failed(
+                    std::slice::from_ref(&root.protected),
+                    &root.path,
+                    true,
+                    || format!("{}: {error}", to_fwd(&root.path)),
+                );
                 continue;
             }
         };

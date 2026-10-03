@@ -44,7 +44,8 @@ pub(super) fn read_ipc_addr() -> Option<SocketAddr> {
 }
 
 pub(super) fn read_ipc_generation() -> Option<String> {
-    let generation = crate::support_dirs::read_private_text(&ipc_generation_path().ok()?, 1024).ok()?;
+    let generation =
+        crate::support_dirs::read_private_text(&ipc_generation_path().ok()?, 1024).ok()?;
     let generation = generation.trim();
     (generation.len() == 32 && generation.bytes().all(|byte| byte.is_ascii_hexdigit()))
         .then(|| generation.to_string())

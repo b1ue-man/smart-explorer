@@ -41,12 +41,7 @@ pub(super) fn check(policy: &TargetPolicy, path: &str) -> io::Result<()> {
     Ok(())
 }
 
-fn frame(
-    handle: DirectoryHandle,
-    path: PathBuf,
-    budget: u64,
-    used: &mut u64,
-) -> io::Result<Frame> {
+fn frame(handle: DirectoryHandle, path: PathBuf, budget: u64, used: &mut u64) -> io::Result<Frame> {
     ensure_handle_allowed(&handle)?;
     // Includes the platform's bounded enumeration buffer and retained path.
     let bytes = 128 * 1024 + (path.as_os_str().len() as u64).saturating_mul(4);

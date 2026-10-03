@@ -21,20 +21,40 @@ pub(super) struct SocketIo {
 
 impl SocketIo {
     pub(super) fn new(socket: TcpStream) -> io::Result<Self> {
-        let reactor = REACTOR.get_or_init(|| tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1).enable_all().thread_name("share-server-io").build()
-            .map_err(|error| error.to_string())).as_ref().map_err(|error| io::Error::other(error.clone()))?;
+        let reactor = REACTOR
+            .get_or_init(|| {
+                tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(1)
+                    .enable_all()
+                    .thread_name("share-server-io")
+                    .build()
+                    .map_err(|error| error.to_string())
+            })
+            .as_ref()
+            .map_err(|error| io::Error::other(error.clone()))?;
         socket.set_nonblocking(true)?;
         let registered = {
             let _entered = reactor.enter();
             tokio::net::TcpStream::from_std(socket.try_clone()?)?
         };
-        Ok(Self { socket, registered, reactor, notify: Arc::new(Notify::new()), write_deadline: None })
+        Ok(Self {
+            socket,
+            registered,
+            reactor,
+            notify: Arc::new(Notify::new()),
+            write_deadline: None,
+        })
     }
 
-    pub(super) fn socket(&self) -> &TcpStream { &self.socket }
-    pub(super) fn notify(&self) -> Arc<Notify> { self.notify.clone() }
-    pub(super) fn set_write_deadline(&mut self, deadline: Option<Instant>) { self.write_deadline = deadline; }
+    pub(super) fn socket(&self) -> &TcpStream {
+        &self.socket
+    }
+    pub(super) fn notify(&self) -> Arc<Notify> {
+        self.notify.clone()
+    }
+    pub(super) fn set_write_deadline(&mut self, deadline: Option<Instant>) {
+        self.write_deadline = deadline;
+    }
 
     pub(super) fn wait_readable(&self, deadline: Instant) -> io::Result<()> {
         self.reactor.block_on(async {
@@ -59,23 +79,38 @@ impl Read for SocketIo {
 impl Write for SocketIo {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         let timeout = Instant::now() + crate::writer::WRITE_TIMEOUT;
-        let deadline = self.write_deadline.map_or(timeout, |deadline| deadline.min(timeout));
+        let deadline = self
+            .write_deadline
+            .map_or(timeout, |deadline| deadline.min(timeout));
         loop {
             if Instant::now() >= deadline {
-                return Err(io::Error::new(io::ErrorKind::TimedOut, "signaling write deadline expired"));
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "signaling write deadline expired",
+                ));
             }
             match self.registered.try_write(bytes) {
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                    self.reactor.block_on(async {
-                        tokio::time::timeout_at(deadline.into(), self.registered.writable()).await
-                    }).map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "signaling write deadline expired"))??;
+                    self.reactor
+                        .block_on(async {
+                            tokio::time::timeout_at(deadline.into(), self.registered.writable())
+                                .await
+                        })
+                        .map_err(|_| {
+                            io::Error::new(
+                                io::ErrorKind::TimedOut,
+                                "signaling write deadline expired",
+                            )
+                        })??;
                 }
                 result => return result,
             }
         }
     }
 
-    fn flush(&mut self) -> io::Result<()> { Ok(()) }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -92,21 +127,30 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let _client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let mut socket = SocketIo::new(listener.accept().unwrap().0).unwrap();
-        assert_eq!(socket.read(&mut [0]).unwrap_err().kind(), io::ErrorKind::WouldBlock);
+        assert_eq!(
+            socket.read(&mut [0]).unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
         let (writer, outbound) = Writer::test_raw_channel(1);
         writer.set_wake(socket.notify());
         let (ready_send, ready) = mpsc::channel();
         let (done_send, done) = mpsc::channel();
         let wait = std::thread::spawn(move || {
             ready_send.send(()).unwrap();
-            socket.wait_readable(Instant::now() + Duration::from_secs(10)).unwrap();
-            let message: serde_json::Value = serde_json::from_slice(outbound.try_recv().unwrap().json()).unwrap();
+            socket
+                .wait_readable(Instant::now() + Duration::from_secs(10))
+                .unwrap();
+            let message: serde_json::Value =
+                serde_json::from_slice(outbound.try_recv().unwrap().json()).unwrap();
             done_send.send(message).unwrap();
         });
         ready.recv_timeout(Duration::from_secs(2)).unwrap();
         assert!(writer.try_send(&Out::Pong));
         // A wake does not depend on inbound traffic or the ten-second timer.
-        assert_eq!(done.recv_timeout(Duration::from_secs(2)).unwrap()["t"], "pong");
+        assert_eq!(
+            done.recv_timeout(Duration::from_secs(2)).unwrap()["t"],
+            "pong"
+        );
         wait.join().unwrap();
     }
 }

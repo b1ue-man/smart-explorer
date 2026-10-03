@@ -83,7 +83,9 @@ fn resolve_request(request: &DnsRequest) -> io::Result<Vec<SocketAddr>> {
     if addresses.is_empty() {
         Err(io_err("FTP DNS returned no address"))
     } else {
-        if Instant::now() >= request.expires { return Err(timed_out("FTP OS resolver exceeded its deadline")) }
+        if Instant::now() >= request.expires {
+            return Err(timed_out("FTP OS resolver exceeded its deadline"));
+        }
         Ok(addresses)
     }
 }

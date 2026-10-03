@@ -30,10 +30,10 @@ use budget::{AnalyticsBudget, Retention};
 use outcome::Diagnostics;
 #[path = "analytics_walk.rs"]
 mod walk;
+pub use outcome::{ScanIssue, ScanOutcome, ScanStatus};
 #[cfg(test)]
 use walk::scan_entries;
 use walk::scan_entries_with;
-pub use outcome::{ScanIssue, ScanOutcome, ScanStatus};
 
 /// One node of the size tree. `name` is this node's own segment, never the full
 /// path; `size` is recursive (subtree total) for a directory and the file size
@@ -111,19 +111,43 @@ fn scan_in(
     scan_in_with(root, p, guard, protected, shared, false, &[], None)
 }
 
-pub(crate) fn scan_confined(root: &Path, p: &Progress, budget: &ScanBudget, excluded: &[PathBuf]) -> ScanOutcome {
+pub(crate) fn scan_confined(
+    root: &Path,
+    p: &Progress,
+    budget: &ScanBudget,
+    excluded: &[PathBuf],
+) -> ScanOutcome {
     scan_in_with(root, p, None, None, Some(&budget.0), true, excluded, None)
 }
 
-pub(crate) fn scan_confined_with(root: &Path, p: &Progress, budget: &ScanBudget,
-    excluded: &[PathBuf], handle: crate::local_access::DirectoryHandle,
+pub(crate) fn scan_confined_with(
+    root: &Path,
+    p: &Progress,
+    budget: &ScanBudget,
+    excluded: &[PathBuf],
+    handle: crate::local_access::DirectoryHandle,
 ) -> ScanOutcome {
-    scan_in_with(root, p, None, None, Some(&budget.0), true, excluded, Some(handle))
+    scan_in_with(
+        root,
+        p,
+        None,
+        None,
+        Some(&budget.0),
+        true,
+        excluded,
+        Some(handle),
+    )
 }
 
-fn scan_in_with(root: &Path, p: &Progress, guard: Option<ScanGuard<'_>>,
-    protected: Option<ProtectedAreas>, shared: Option<&AnalyticsBudget>, confined: bool,
-    excluded: &[PathBuf], provided: Option<crate::local_access::DirectoryHandle>,
+fn scan_in_with(
+    root: &Path,
+    p: &Progress,
+    guard: Option<ScanGuard<'_>>,
+    protected: Option<ProtectedAreas>,
+    shared: Option<&AnalyticsBudget>,
+    confined: bool,
+    excluded: &[PathBuf],
+    provided: Option<crate::local_access::DirectoryHandle>,
 ) -> ScanOutcome {
     let name = root
         .file_name()
@@ -160,11 +184,34 @@ fn scan_in_with(root: &Path, p: &Progress, guard: Option<ScanGuard<'_>>,
         parallel: pool.is_some(),
         guard,
     };
-    let handle = confined.then(|| provided.map(Ok).unwrap_or_else(|| crate::local_access::DirectoryHandle::open_root(&root)));
+    let handle = confined.then(|| {
+        provided
+            .map(Ok)
+            .unwrap_or_else(|| crate::local_access::DirectoryHandle::open_root(&root))
+    });
     let visit = || match &handle {
-        Some(Err(error)) => { diagnostics.dir_failed(&root, error, true); empty_dir(name.into_boxed_str()) }
-        Some(Ok(handle)) => scan_dir_with(&traversal, &root, name.into_boxed_str(), 0, true, Some(handle), excluded),
-        None => scan_dir_with(&traversal, &root, name.into_boxed_str(), 0, true, None, excluded),
+        Some(Err(error)) => {
+            diagnostics.dir_failed(&root, error, true);
+            empty_dir(name.into_boxed_str())
+        }
+        Some(Ok(handle)) => scan_dir_with(
+            &traversal,
+            &root,
+            name.into_boxed_str(),
+            0,
+            true,
+            Some(handle),
+            excluded,
+        ),
+        None => scan_dir_with(
+            &traversal,
+            &root,
+            name.into_boxed_str(),
+            0,
+            true,
+            None,
+            excluded,
+        ),
     };
     let tree = match pool {
         Some(pool) => pool.install(visit),
@@ -248,8 +295,26 @@ fn scan_dir_with(
             }
         }
         match handle {
-            Some(handle) => scan_entries_with(traversal, dir, name, handle.read_directory(), depth, is_root, Some(handle), excluded),
-            None => scan_entries_with(traversal, dir, name, read_directory(dir), depth, is_root, None, excluded),
+            Some(handle) => scan_entries_with(
+                traversal,
+                dir,
+                name,
+                handle.read_directory(),
+                depth,
+                is_root,
+                Some(handle),
+                excluded,
+            ),
+            None => scan_entries_with(
+                traversal,
+                dir,
+                name,
+                read_directory(dir),
+                depth,
+                is_root,
+                None,
+                excluded,
+            ),
         }
     });
     match std::panic::catch_unwind(visit) {

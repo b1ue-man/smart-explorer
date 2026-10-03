@@ -1,9 +1,9 @@
 //! Resolve and subscribe away from the scheduler and local event receiver.
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 use crate::bisync::PairSide;
 use crate::vfs::{ChangeNotice, ChangeSignalMode};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 
 pub(super) struct Message {
     pub(super) side: PairSide,
@@ -11,8 +11,14 @@ pub(super) struct Message {
     pub(super) mode: Option<ChangeSignalMode>,
 }
 
-pub(super) fn start(endpoint: String, side: PairSide, interval: u64,
-    stop: Arc<AtomicBool>, overflow: Arc<AtomicBool>, sink: crossbeam_channel::Sender<Message>) {
+pub(super) fn start(
+    endpoint: String,
+    side: PairSide,
+    interval: u64,
+    stop: Arc<AtomicBool>,
+    overflow: Arc<AtomicBool>,
+    sink: crossbeam_channel::Sender<Message>,
+) {
     let error_sink = sink.clone();
     if let Err(error) = std::thread::Builder::new().name("sync-remote-watch".into()).spawn(move || {
         let poll = Duration::from_secs(if interval == 0 { 300 } else { interval });
@@ -78,12 +84,15 @@ pub(super) fn start(endpoint: String, side: PairSide, interval: u64,
 }
 
 fn deliver(sink: &crossbeam_channel::Sender<Message>, overflow: &AtomicBool, message: Message) {
-    if sink.try_send(message).is_err() { overflow.store(true, Ordering::Release); }
+    if sink.try_send(message).is_err() {
+        overflow.store(true, Ordering::Release);
+    }
 }
 
 fn wait(stop: &AtomicBool, duration: Duration) -> bool {
     let deadline = std::time::Instant::now().checked_add(duration);
-    while !stop.load(Ordering::Acquire) && deadline.is_some_and(|at| std::time::Instant::now() < at) {
+    while !stop.load(Ordering::Acquire) && deadline.is_some_and(|at| std::time::Instant::now() < at)
+    {
         std::thread::sleep(Duration::from_secs(1));
     }
     stop.load(Ordering::Acquire)

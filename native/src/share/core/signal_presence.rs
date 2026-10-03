@@ -70,14 +70,20 @@ impl PeerPresence {
     /// New legacy answers bind both unsigned envelope fields into the signed
     /// nonce. Unsigned old peers retain the pending-only compatibility path;
     /// a signed ordinary presence never authorizes an accept/reject envelope.
-    pub(crate) fn matches_legacy_decision(&self, requester_device_id: &str, accepted: bool) -> bool {
+    pub(crate) fn matches_legacy_decision(
+        &self,
+        requester_device_id: &str,
+        accepted: bool,
+    ) -> bool {
         let Some((context, _)) = self.nonce.split_once(SIGNATURE_MARKER) else {
             return true;
         };
         let expected = decision_context(requester_device_id, accepted);
         context.strip_prefix(&expected).is_some_and(|random| {
             random.len() == 8
-                && random.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+                && random
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
         })
     }
 }
@@ -148,9 +154,14 @@ pub(crate) fn build_direct_decision_presence(
 }
 
 fn decision_context(requester_device_id: &str, accepted: bool) -> String {
-    let payload = format!("smart-explorer/share/legacy-decision-recipient/v1:{requester_device_id}");
+    let payload =
+        format!("smart-explorer/share/legacy-decision-recipient/v1:{requester_device_id}");
     let recipient = sha256_b64(payload.as_bytes());
-    format!("d1{}.{}.", if accepted { 't' } else { 'f' }, &recipient[..22])
+    format!(
+        "d1{}.{}.",
+        if accepted { 't' } else { 'f' },
+        &recipient[..22]
+    )
 }
 
 fn build_presence_with_nonce(

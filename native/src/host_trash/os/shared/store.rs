@@ -1,8 +1,14 @@
 //! Private immutable intent records; capture waits for their durable write.
+use super::{
+    platform::{self, StoreArea},
+    record::{self, Record},
+};
 use std::{ffi::OsStr, fs::File, io, path::Path};
-use super::{platform::{self, StoreArea}, record::{self, Record}};
 
-pub(super) struct Store { pub(super) area: StoreArea, _lock: File }
+pub(super) struct Store {
+    pub(super) area: StoreArea,
+    _lock: File,
+}
 impl Store {
     pub(super) fn open() -> io::Result<Self> {
         Self::at(&crate::support_dirs::app_data_dir().join("host-trash"))
@@ -16,7 +22,10 @@ impl Store {
         record.validate()?;
         let bytes = serde_json::to_vec(record).map_err(io::Error::other)?;
         if bytes.len() as u64 > record::MAX_RECORD_BYTES {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "Papierkorb-Intent überschreitet die Pfadgrenze"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Papierkorb-Intent überschreitet die Pfadgrenze",
+            ));
         }
         let name = format!("{}.json", record.id);
         // Reserve the ID exclusively before using the established private
@@ -30,14 +39,20 @@ impl Store {
     }
     pub(super) fn load(&self, id: &str) -> io::Result<Record> {
         if !record::lower_hex(id, 32) {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "Ungültiger Papierkorb-Eintrag"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Ungültiger Papierkorb-Eintrag",
+            ));
         }
         let path = self.area.path.join(format!("{id}.json"));
         let raw = crate::support_dirs::read_private_text(&path, record::MAX_RECORD_BYTES)?;
         let record: Record = serde_json::from_str(&raw).map_err(io::Error::other)?;
         record.validate()?;
         if record.id != id {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "Papierkorb-Intent gehört zu einer anderen ID"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Papierkorb-Intent gehört zu einer anderen ID",
+            ));
         }
         Ok(record)
     }

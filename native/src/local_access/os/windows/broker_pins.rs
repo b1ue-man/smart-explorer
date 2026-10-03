@@ -1,12 +1,15 @@
 //! Read-only directory pins for an existing, authenticated local grant.
-use super::{Client, duplicate_file, error_code};
 use super::super::{directory_handle::DirectoryHandle, pipe::Pipe, privilege::BackupRead};
+use super::{duplicate_file, error_code, Client};
 use crate::local_access::protocol::{self, PinReply, ReadKind, ReadRequest};
 use std::{
     ffi::{OsStr, OsString},
     fs::File,
     io,
-    os::windows::{ffi::{OsStrExt, OsStringExt}, io::{AsRawHandle, FromRawHandle}},
+    os::windows::{
+        ffi::{OsStrExt, OsStringExt},
+        io::{AsRawHandle, FromRawHandle},
+    },
     path::PathBuf,
     ptr::null_mut,
     sync::atomic::Ordering,
@@ -21,22 +24,35 @@ pub(crate) struct DirectoryPins {
 
 impl Client {
     pub(super) fn pin(&self, path: String, all_ancestors: bool) -> io::Result<DirectoryPins> {
-        let channel = self.channel.lock()
+        let channel = self
+            .channel
+            .lock()
             .map_err(|_| io::Error::other("Lesehelfer-Verbindung unterbrochen"))?;
         if !self.alive() {
             return Err(io::Error::from(io::ErrorKind::BrokenPipe));
         }
         let peer = self.child.as_raw_handle();
-        channel.send(&ReadRequest {
-            path,
-            kind: if all_ancestors { ReadKind::PinRoot } else { ReadKind::PinChild },
-        }, peer).inspect_err(|_| self.healthy.store(false, Ordering::Release))?;
-        let reply: PinReply = channel.receive(peer, Duration::from_secs(30))
+        channel
+            .send(
+                &ReadRequest {
+                    path,
+                    kind: if all_ancestors {
+                        ReadKind::PinRoot
+                    } else {
+                        ReadKind::PinChild
+                    },
+                },
+                peer,
+            )
+            .inspect_err(|_| self.healthy.store(false, Ordering::Release))?;
+        let reply: PinReply = channel
+            .receive(peer, Duration::from_secs(30))
             .inspect_err(|_| self.healthy.store(false, Ordering::Release))?;
         // Adopt all duplicates first so a later validation failure closes them.
         let mut files = Vec::new();
         for raw in reply.handles {
-            let raw = usize::try_from(raw).map_err(|_| io::Error::other("Ungültiger Ordner-Pin"))?;
+            let raw =
+                usize::try_from(raw).map_err(|_| io::Error::other("Ungültiger Ordner-Pin"))?;
             if raw == 0 || raw == usize::MAX {
                 return Err(io::Error::other("Ungültiger Ordner-Pin"));
             }
@@ -45,8 +61,11 @@ impl Client {
         if let Some(error) = reply.error {
             return Err(io::Error::from_raw_os_error(error));
         }
-        if files.is_empty() || (!all_ancestors && files.len() != 1)
-            || reply.path.is_empty() || reply.path.len() > 32767 || reply.path.contains(&0)
+        if files.is_empty()
+            || (!all_ancestors && files.len() != 1)
+            || reply.path.is_empty()
+            || reply.path.len() > 32767
+            || reply.path.contains(&0)
         {
             return Err(io::Error::other("Ungültige gepinnte Verzeichnisantwort"));
         }
@@ -71,7 +90,10 @@ impl GrantedRoot {
         // Only the authorized root follows links. Keep its entire physical
         // ancestry pinned for the helper session, even between requests.
         let directory = DirectoryHandle::open_root(std::path::Path::new(logical))?;
-        Ok(Self { logical: logical.to_owned(), directory })
+        Ok(Self {
+            logical: logical.to_owned(),
+            directory,
+        })
     }
 
     fn directory(&self, path: &str) -> io::Result<DirectoryHandle> {
@@ -92,7 +114,8 @@ impl GrantedRoot {
             let directory = self.directory(&request.path)?;
             // A new handle preserves independent enumeration positions.
             return super::super::read::open_direct(
-                directory.path(), ReadKind::Directory,
+                directory.path(),
+                ReadKind::Directory,
                 windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ
                     | windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE
                     | windows_sys::Win32::Storage::FileSystem::FILE_SHARE_DELETE,
@@ -121,9 +144,12 @@ impl GrantedRoot {
         }
     }
 
-    pub(super) fn send_pins(&self, request: &ReadRequest, pipe: &Pipe, parent: HANDLE)
-        -> io::Result<()>
-    {
+    pub(super) fn send_pins(
+        &self,
+        request: &ReadRequest,
+        pipe: &Pipe,
+        parent: HANDLE,
+    ) -> io::Result<()> {
         let result = (|| {
             let _backup = BackupRead::enable()?;
             let directory = self.directory(&request.path)?;
@@ -143,12 +169,18 @@ impl GrantedRoot {
                 }
             }
             Ok(PinReply {
-                handles, path: directory.path().as_os_str().encode_wide().collect(), error: None,
+                handles,
+                path: directory.path().as_os_str().encode_wide().collect(),
+                error: None,
             })
         })();
         let reply = match result {
             Ok(reply) => reply,
-            Err(error) => PinReply { handles: Vec::new(), path: Vec::new(), error: Some(error_code(&error)) },
+            Err(error) => PinReply {
+                handles: Vec::new(),
+                path: Vec::new(),
+                error: Some(error_code(&error)),
+            },
         };
         if let Err(error) = pipe.send(&reply, parent) {
             // An atomic failed pipe send did not hand duplicates to the client.
@@ -162,8 +194,15 @@ impl GrantedRoot {
 fn close_remote(handles: &[u64], parent: HANDLE) {
     for &handle in handles {
         unsafe {
-            DuplicateHandle(parent, handle as usize as HANDLE, null_mut(), null_mut(),
-                0, 0, DUPLICATE_CLOSE_SOURCE);
+            DuplicateHandle(
+                parent,
+                handle as usize as HANDLE,
+                null_mut(),
+                null_mut(),
+                0,
+                0,
+                DUPLICATE_CLOSE_SOURCE,
+            );
         }
     }
 }

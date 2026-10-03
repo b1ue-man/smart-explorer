@@ -2,10 +2,10 @@
 use super::imp::{record_error, SyncMsg, WalkBudget};
 use super::sync_pass::{Crew, Pass, Report, State};
 use super::sync_scan::{DirTask, Target};
-use crate::bisync::KeyPolicy;
 use crate::bisync::sync_flows::{PairFlows, PairSide};
 use crate::bisync::sync_overload::Progress;
 use crate::bisync::versions::RunVersions;
+use crate::bisync::KeyPolicy;
 use crate::transfer::engine::folders::FolderRegister;
 use crate::transfer::Side;
 use crate::vfs::{Backend, Scheme};
@@ -39,7 +39,10 @@ pub(super) fn copy_pass_scoped(
         dst,
         dst_root,
         dry_run,
-        keys: KeyPolicy::for_pair(src.case_sensitive_paths(src_root), dst.case_sensitive_paths(dst_root)),
+        keys: KeyPolicy::for_pair(
+            src.case_sensitive_paths(src_root),
+            dst.case_sensitive_paths(dst_root),
+        ),
         versions,
         stopped: AtomicBool::new(false),
         cancel,

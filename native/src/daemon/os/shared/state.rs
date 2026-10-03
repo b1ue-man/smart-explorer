@@ -258,7 +258,9 @@ pub fn request_stop() -> io::Result<()> {
     write_control(&stop_path(), "stop")
 }
 
-pub(crate) fn log(msg: &str) { super::log_store::log(msg); }
+pub(crate) fn log(msg: &str) {
+    super::log_store::log(msg);
+}
 
 pub(super) fn read_optional(path: &std::path::Path) -> io::Result<Option<String>> {
     match std::fs::read_to_string(path) {

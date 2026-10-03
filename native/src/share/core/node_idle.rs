@@ -104,10 +104,17 @@ impl IncomingActivity {
     pub(super) fn can_yield_connection(&self) -> bool {
         // Old lease tokens are tied to the physical connection. Preserve that
         // compatibility; current v2 acquisitions can reattach to the new one.
-        !self.leases().iter().any(|token| !token.starts_with(crate::share::mount_lease::RELEASABLE_LEASE_PREFIX))
+        !self
+            .leases()
+            .iter()
+            .any(|token| !token.starts_with(crate::share::mount_lease::RELEASABLE_LEASE_PREFIX))
     }
-    pub(super) fn fair_yield_requested(&self) -> bool { self.yielding.load(Ordering::Acquire) }
-    pub(super) fn fair_yield_ready(&self) -> bool { self.open_streams.load(Ordering::Acquire) == 0 }
+    pub(super) fn fair_yield_requested(&self) -> bool {
+        self.yielding.load(Ordering::Acquire)
+    }
+    pub(super) fn fair_yield_ready(&self) -> bool {
+        self.open_streams.load(Ordering::Acquire) == 0
+    }
     pub(super) fn request_fair_yield(&self) {
         self.yielding.store(true, Ordering::Release);
         self.close.notify_one();
@@ -267,10 +274,17 @@ impl ShareIrohNode {
 
     /// An accepted stream prevents an idle-close race while its bounded
     /// frame is read. It has no CPU/power hold until authorization succeeds.
-    pub(super) fn incoming_stream_pending(&self, activity: &Arc<IncomingActivity>) -> impl Send + 'static {
+    pub(super) fn incoming_stream_pending(
+        &self,
+        activity: &Arc<IncomingActivity>,
+    ) -> impl Send + 'static {
         activity.open_streams.fetch_add(1, Ordering::AcqRel);
         struct Pending(Arc<IncomingActivity>);
-        impl Drop for Pending { fn drop(&mut self) { self.0.stream_finished(); } }
+        impl Drop for Pending {
+            fn drop(&mut self) {
+                self.0.stream_finished();
+            }
+        }
         Pending(activity.clone())
     }
 

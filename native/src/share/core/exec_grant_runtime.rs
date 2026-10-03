@@ -276,8 +276,7 @@ fn effective_policies(state: &ShareAuthState) -> Vec<EffectivePolicy> {
             // Going offline is a session restriction, not an Exec policy
             // decision. Its epoch barrier cancels old work; returning online
             // must not look like re-enabling a revoked policy revision.
-            enabled: grant.state == DirectGrantState::Accepted
-                && grant.exec.enabled,
+            enabled: grant.state == DirectGrantState::Accepted && grant.exec.enabled,
         });
     }
     for room in &state.rooms {

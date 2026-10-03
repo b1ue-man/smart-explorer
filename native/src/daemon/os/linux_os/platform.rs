@@ -4,13 +4,24 @@ pub(crate) use shell::{shell_command, spawn_shell};
 
 pub(crate) fn open_log(path: &std::path::Path) -> std::io::Result<std::fs::File> {
     use std::os::unix::fs::OpenOptionsExt;
-    let file = std::fs::OpenOptions::new().create(true).append(true).mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC).open(path)?;
-    if !file.metadata()?.is_file() { return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "log must be a regular file")); }
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "log must be a regular file",
+        ));
+    }
     Ok(file)
 }
 
-pub(crate) fn requires_storage_access(_endpoint: &str) -> bool { false }
+pub(crate) fn requires_storage_access(_endpoint: &str) -> bool {
+    false
+}
 
 use std::borrow::Cow;
 use std::fs::{DirBuilder, File, OpenOptions};
@@ -36,8 +47,12 @@ pub(crate) struct DaemonInstanceGuard {
 
 #[path = "drives.rs"]
 mod drives;
-pub(crate) fn drive_snapshot() -> Option<Vec<DriveInfo>> { drives::snapshot() }
-pub(crate) fn removable_drives() -> Vec<DriveInfo> { drive_snapshot().unwrap_or_default() }
+pub(crate) fn drive_snapshot() -> Option<Vec<DriveInfo>> {
+    drives::snapshot()
+}
+pub(crate) fn removable_drives() -> Vec<DriveInfo> {
+    drive_snapshot().unwrap_or_default()
+}
 
 pub(crate) fn battery_saver_on() -> bool {
     false
@@ -377,16 +392,24 @@ mod tests {
     }
 }
 
-pub(crate) fn watch_case_fold() -> bool { false }
+pub(crate) fn watch_case_fold() -> bool {
+    false
+}
 
 pub(crate) fn session_marker() -> Option<String> {
-    if let Ok(marker) = std::env::var("SE_SYNC_SESSION") { return Some(marker); }
+    if let Ok(marker) = std::env::var("SE_SYNC_SESSION") {
+        return Some(marker);
+    }
     let boot = std::fs::read_to_string("/proc/sys/kernel/random/boot_id").ok()?;
-    let session = std::env::var("XDG_SESSION_ID").unwrap_or_else(|_| unsafe { libc::getsid(0) }.to_string());
+    let session =
+        std::env::var("XDG_SESSION_ID").unwrap_or_else(|_| unsafe { libc::getsid(0) }.to_string());
     Some(format!("{}:{session}", boot.trim()))
 }
 pub(crate) fn daemon_command(executable: &Path) -> std::process::Command {
     let mut command = std::process::Command::new(executable);
-    command.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
     command
 }

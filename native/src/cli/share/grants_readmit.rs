@@ -28,7 +28,9 @@ pub(super) fn run(args: AllowArgs, json: bool) -> Result<(), String> {
         [grant] => *grant,
         [] => return Err("inactive grant not found; run `se share grants`".into()),
         _ => {
-            return Err("multiple inactive grants; choose one selector from `se share grants`".into());
+            return Err(
+                "multiple inactive grants; choose one selector from `se share grants`".into(),
+            );
         }
     };
     super::super::request_selection::verify_optional_fingerprint(
@@ -37,10 +39,8 @@ pub(super) fn run(args: AllowArgs, json: bool) -> Result<(), String> {
         &grant.device_id,
     )?;
     let device_id = grant.device_id.clone();
-    let change = crate::share::allow_direct_peer_again(
-        Some(super::super::default_home()),
-        &device_id,
-    )?;
+    let change =
+        crate::share::allow_direct_peer_again(Some(super::super::default_home()), &device_id)?;
     let (worker_state, worker_error) = super::worker_refresh();
     if json {
         println!(
@@ -59,7 +59,8 @@ pub(super) fn run(args: AllowArgs, json: bool) -> Result<(), String> {
     } else {
         println!(
             "action\tallowed\tdevice_id={}\tpersisted=true\texec=disabled\tworker_refresh={}",
-            super::clean(&device_id), worker_state,
+            super::clean(&device_id),
+            worker_state,
         );
         if let Some(error) = worker_error {
             println!("worker_error\t{}", super::clean(&error));

@@ -201,7 +201,11 @@ impl ShareHost {
             (
                 state.profiles.direct_contacts.clone(),
                 state.profiles.direct_grants.clone(),
-                state.service.as_ref().map(|service| service.lan_link_snapshot()).unwrap_or_default(),
+                state
+                    .service
+                    .as_ref()
+                    .map(|service| service.lan_link_snapshot())
+                    .unwrap_or_default(),
                 state
                     .identity
                     .as_ref()

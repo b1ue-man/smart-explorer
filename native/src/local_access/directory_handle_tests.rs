@@ -65,17 +65,29 @@ fn review_task_directory_handles_create_private_children_without_replacement() {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        assert_eq!(private.metadata().unwrap().permissions().mode() & 0o777, 0o700);
-        assert_eq!(record.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            private.metadata().unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            record.metadata().unwrap().permissions().mode() & 0o777,
+            0o600
+        );
     }
     record.write_all(b"private record").unwrap();
     record.sync_all().unwrap();
     let error = private.create_file_new(OsStr::new("record")).unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
-    let error = root.create_private_child(OsStr::new("private")).err().unwrap();
+    let error = root
+        .create_private_child(OsStr::new("private"))
+        .err()
+        .unwrap();
     assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
     drop(record);
-    assert_eq!(std::fs::read(fixture.path().join("private/record")).unwrap(), b"private record");
+    assert_eq!(
+        std::fs::read(fixture.path().join("private/record")).unwrap(),
+        b"private record"
+    );
 }
 
 #[test]
@@ -94,11 +106,13 @@ fn review_task_private_handle_hardening_refuses_hardlinked_records() {
     {
         use std::os::windows::fs::OpenOptionsExt;
         use windows_sys::Win32::Storage::FileSystem::{
-            FILE_READ_ATTRIBUTES, FILE_SHARE_READ, FILE_FLAG_OPEN_REPARSE_POINT,
-            READ_CONTROL, WRITE_DAC,
+            FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES, FILE_SHARE_READ, READ_CONTROL,
+            WRITE_DAC,
         };
-        options.access_mode(FILE_READ_ATTRIBUTES | READ_CONTROL | WRITE_DAC)
-            .share_mode(FILE_SHARE_READ).custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+        options
+            .access_mode(FILE_READ_ATTRIBUTES | READ_CONTROL | WRITE_DAC)
+            .share_mode(FILE_SHARE_READ)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     }
     std::fs::hard_link(&source, fixture.path().join("alias")).unwrap();
     let file = options.open(&source).unwrap();
@@ -106,7 +120,10 @@ fn review_task_private_handle_hardening_refuses_hardlinked_records() {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        assert_eq!(file.metadata().unwrap().permissions().mode() & 0o7777, 0o666);
+        assert_eq!(
+            file.metadata().unwrap().permissions().mode() & 0o7777,
+            0o666
+        );
     }
     drop(file);
     std::fs::remove_file(fixture.path().join("alias")).unwrap();
@@ -116,9 +133,15 @@ fn review_task_private_handle_hardening_refuses_hardlinked_records() {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        assert_eq!(file.metadata().unwrap().permissions().mode() & 0o7777, 0o600);
+        assert_eq!(
+            file.metadata().unwrap().permissions().mode() & 0o7777,
+            0o600
+        );
     }
-    DirectoryHandle::open_root(fixture.path()).unwrap().secure_private().unwrap();
+    DirectoryHandle::open_root(fixture.path())
+        .unwrap()
+        .secure_private()
+        .unwrap();
 }
 
 #[test]
@@ -128,13 +151,18 @@ fn review_task_recycle_quarantine_restore_never_replaces_a_new_child() {
     std::fs::write(&original, b"expected").unwrap();
     let root = DirectoryHandle::open_root(fixture.path()).unwrap();
     let expected = root.open_regular_child(OsStr::new("file")).unwrap();
-    let mut captured = root.quarantine_regular_child(OsStr::new("file"), &expected).unwrap();
+    let mut captured = root
+        .quarantine_regular_child(OsStr::new("file"), &expected)
+        .unwrap();
     assert!(!original.exists());
     let mut content = String::new();
     captured.file().read_to_string(&mut content).unwrap();
     assert_eq!(content, "expected");
     std::fs::write(&original, b"new child").unwrap();
-    assert_eq!(captured.restore().unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+    assert_eq!(
+        captured.restore().unwrap_err().kind(),
+        io::ErrorKind::AlreadyExists
+    );
     assert_eq!(std::fs::read(&original).unwrap(), b"new child");
     assert!(captured.retained_location().is_file());
     std::fs::remove_file(&original).unwrap();
@@ -151,11 +179,25 @@ fn review_task_recycle_quarantine_moves_only_to_a_free_anchored_name() {
     let root = DirectoryHandle::open_root(fixture.path()).unwrap();
     let destination = root.open_child(OsStr::new("destination")).unwrap();
     let expected = root.open_regular_child(OsStr::new("file")).unwrap();
-    let mut captured = root.quarantine_regular_child(OsStr::new("file"), &expected).unwrap();
-    assert_eq!(captured.move_to(&destination, OsStr::new("taken")).unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+    let mut captured = root
+        .quarantine_regular_child(OsStr::new("file"), &expected)
+        .unwrap();
+    assert_eq!(
+        captured
+            .move_to(&destination, OsStr::new("taken"))
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::AlreadyExists
+    );
     captured.move_to(&destination, OsStr::new("free")).unwrap();
-    assert_eq!(std::fs::read(fixture.path().join("destination/taken")).unwrap(), b"keep");
-    assert_eq!(std::fs::read(fixture.path().join("destination/free")).unwrap(), b"expected");
+    assert_eq!(
+        std::fs::read(fixture.path().join("destination/taken")).unwrap(),
+        b"keep"
+    );
+    assert_eq!(
+        std::fs::read(fixture.path().join("destination/free")).unwrap(),
+        b"expected"
+    );
 }
 
 #[test]
@@ -166,11 +208,15 @@ fn review_task_recycle_quarantine_refuses_a_replaced_expected_child() {
     let expected = root.open_regular_child(OsStr::new("file")).unwrap();
     std::fs::rename(fixture.path().join("file"), fixture.path().join("moved")).unwrap();
     std::fs::write(fixture.path().join("file"), b"replacement").unwrap();
-    let error = root.quarantine_regular_child(OsStr::new("file"), &expected)
+    let error = root
+        .quarantine_regular_child(OsStr::new("file"), &expected)
         .err()
         .expect("different object");
     assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-    assert_eq!(std::fs::read(fixture.path().join("file")).unwrap(), b"replacement");
+    assert_eq!(
+        std::fs::read(fixture.path().join("file")).unwrap(),
+        b"replacement"
+    );
 }
 
 #[cfg(unix)]
@@ -202,12 +248,14 @@ mod unix {
             .collect::<io::Result<Vec<_>>>()
             .unwrap();
         assert!(entries.iter().any(|entry| entry.name == raw));
-        assert!(entries.iter().any(|entry| {
-            entry.name == OsStr::new("pipe") && entry.kind == EntryKind::Other
-        }));
+        assert!(entries
+            .iter()
+            .any(|entry| { entry.name == OsStr::new("pipe") && entry.kind == EntryKind::Other }));
         let error = root.open_child(OsStr::new("dir-link")).err().unwrap();
         assert_eq!(NotRegular::of(&error), Some(NotRegular::Link));
-        let error = root.open_regular_child(OsStr::new("file-link")).unwrap_err();
+        let error = root
+            .open_regular_child(OsStr::new("file-link"))
+            .unwrap_err();
         assert_eq!(NotRegular::of(&error), Some(NotRegular::Link));
         let error = root.open_regular_child(OsStr::new("pipe")).unwrap_err();
         assert_eq!(NotRegular::of(&error), Some(NotRegular::Special));
@@ -252,11 +300,16 @@ mod unix {
         std::fs::write(outside.join("file"), b"outside").unwrap();
         let root = DirectoryHandle::open_root(&chosen).unwrap();
         let expected = root.open_regular_child(OsStr::new("file")).unwrap();
-        let mut captured = root.quarantine_regular_child(OsStr::new("file"), &expected).unwrap();
+        let mut captured = root
+            .quarantine_regular_child(OsStr::new("file"), &expected)
+            .unwrap();
         std::fs::rename(&chosen, fixture.path().join("moved")).unwrap();
         symlink(&outside, &chosen).unwrap();
         captured.restore().unwrap();
-        assert_eq!(std::fs::read(fixture.path().join("moved/file")).unwrap(), b"expected");
+        assert_eq!(
+            std::fs::read(fixture.path().join("moved/file")).unwrap(),
+            b"expected"
+        );
         assert_eq!(std::fs::read(outside.join("file")).unwrap(), b"outside");
     }
 }

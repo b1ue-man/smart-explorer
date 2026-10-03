@@ -1,14 +1,15 @@
 //! Line merge of a text conflict (`sync.mergeRows/mergeApply/mergeKeepBoth`),
 //! as the desktop merge dialog: both sides get the same result, and the
 //! baseline records it like a manual A/B resolution.
+use serde_json::{json, Value};
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use serde_json::{json, Value};
 
 use super::args::{canceled, invalid, str_arg};
 use super::sync_conflicts::{
-    apply_resolution, lookup, merge_len, recorded_state, set_merge, take_merge, MergeDraft, PairContext,
+    apply_resolution, lookup, merge_len, recorded_state, set_merge, take_merge, MergeDraft,
+    PairContext,
 };
 use super::sync_jobs::find_job;
 use super::sync_run::{reserve_job, spawn_for_snapshot};
@@ -23,32 +24,62 @@ pub(super) mod recovery;
 const MAX_TEXT: usize = 16 * 1024 * 1024;
 
 fn check(cancel: &AtomicBool) -> Result<(), ApiError> {
-    if cancel.load(Ordering::Acquire) { Err(canceled("Abgebrochen; bitte Dateizugriff prüfen.")) } else { Ok(()) }
+    if cancel.load(Ordering::Acquire) {
+        Err(canceled("Abgebrochen; bitte Dateizugriff prüfen."))
+    } else {
+        Ok(())
+    }
 }
 
-fn original(backend: &dyn Backend, path: &str, signature: Option<crate::bisync::Sig>,
-    cancel: &AtomicBool) -> Result<(String, (u64, i64)), ApiError> {
+fn original(
+    backend: &dyn Backend,
+    path: &str,
+    signature: Option<crate::bisync::Sig>,
+    cancel: &AtomicBool,
+) -> Result<(String, (u64, i64)), ApiError> {
     check(cancel)?;
-    let signature = signature.ok_or_else(|| invalid("Die Originaldatei fehlt. Bitte Konflikte neu prüfen."))?;
-    if signature.size > MAX_TEXT as u64 { return Err(invalid("Text-Zusammenführung ist auf 16 MiB pro Datei begrenzt.")); }
+    let signature =
+        signature.ok_or_else(|| invalid("Die Originaldatei fehlt. Bitte Konflikte neu prüfen."))?;
+    if signature.size > MAX_TEXT as u64 {
+        return Err(invalid(
+            "Text-Zusammenführung ist auf 16 MiB pro Datei begrenzt.",
+        ));
+    }
     let mut reader = crate::vfs::open_read_regular(backend, path, None)
         .map_err(|e| super::args::io_error("Original lesen", e))?;
     let mut bytes = Vec::new();
     let mut block = [0; 32 * 1024];
     loop {
         check(cancel)?;
-        let count = reader.read(&mut block).map_err(|e| super::args::io_error("Original lesen", e))?;
+        let count = reader
+            .read(&mut block)
+            .map_err(|e| super::args::io_error("Original lesen", e))?;
         check(cancel)?;
-        if count == 0 { break; }
-        if bytes.len().saturating_add(count) > MAX_TEXT { return Err(invalid("Text-Zusammenführung ist auf 16 MiB pro Datei begrenzt.")); }
+        if count == 0 {
+            break;
+        }
+        if bytes.len().saturating_add(count) > MAX_TEXT {
+            return Err(invalid(
+                "Text-Zusammenführung ist auf 16 MiB pro Datei begrenzt.",
+            ));
+        }
         bytes.extend_from_slice(&block[..count]);
     }
-    if bytes.contains(&0) { return Err(invalid("Keine Textdatei – bitte A/B behalten nutzen.")); }
-    let text = String::from_utf8(bytes).map_err(|_| invalid("Keine UTF-8-Textdatei – bitte A/B behalten nutzen."))?;
+    if bytes.contains(&0) {
+        return Err(invalid("Keine Textdatei – bitte A/B behalten nutzen."));
+    }
+    let text = String::from_utf8(bytes)
+        .map_err(|_| invalid("Keine UTF-8-Textdatei – bitte A/B behalten nutzen."))?;
     Ok((text, (signature.size, signature.mtime_ms)))
 }
 
-fn load_draft(pair: &PairContext, key: &crate::bisync::StateKey, conflict: &Conflict, cid: &str, cancel: &AtomicBool) -> Result<MergeDraft, ApiError> {
+fn load_draft(
+    pair: &PairContext,
+    key: &crate::bisync::StateKey,
+    conflict: &Conflict,
+    cid: &str,
+    cancel: &AtomicBool,
+) -> Result<MergeDraft, ApiError> {
     if let Some(pending) = recovery::load(pair, key, &conflict.rel, cancel)? {
         return Ok(recovery::draft(cid, pending));
     }
@@ -56,8 +87,15 @@ fn load_draft(pair: &PairContext, key: &crate::bisync::StateKey, conflict: &Conf
         return Err(invalid("Bitte zuerst eine konkrete Dateiversion auswählen; mehrere gleichnamige Dateien können nicht zeilenweise zusammengeführt werden."));
     }
     check(cancel)?;
-    let paths = crate::bisync::recorded_original_paths_for_key(&*pair.a, &pair.root_a, &*pair.b, &pair.root_b, key, &conflict.rel)
-        .map_err(|e| super::args::io_error("Aufgezeichnete Originalpfade", e))?;
+    let paths = crate::bisync::recorded_original_paths_for_key(
+        &*pair.a,
+        &pair.root_a,
+        &*pair.b,
+        &pair.root_b,
+        key,
+        &conflict.rel,
+    )
+    .map_err(|e| super::args::io_error("Aufgezeichnete Originalpfade", e))?;
     let (text_a, state_a) = original(&*pair.a, &paths.path_a, conflict.a, cancel)?;
     let (text_b, state_b) = original(&*pair.b, &paths.path_b, conflict.b, cancel)?;
     check(cancel)?;
@@ -82,7 +120,12 @@ pub(super) fn rows(args: &Value) -> Result<Value, ApiError> {
     let job = find_job(job_id)?;
     let cancel = Arc::new(AtomicBool::new(false));
     let storage = crate::daemon::register_storage_run(&job.source, &job.target, &cancel);
-    if storage.access_missing() { return Err(ApiError::new("permission", "Dateizugriff fehlt: Zugriff auf alle Dateien erlauben.")); }
+    if storage.access_missing() {
+        return Err(ApiError::new(
+            "permission",
+            "Dateizugriff fehlt: Zugriff auf alle Dateien erlauben.",
+        ));
+    }
     let (pair, conflict) = lookup(job_id, cid)?;
     let key = recorded_state(job_id)?;
     let draft = match recovery::load(&pair, &key, &conflict.rel, &cancel)? {
@@ -140,7 +183,9 @@ pub(super) fn apply(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
             take_merge(&job_id, &cid).ok_or_else(|| invalid("Zusammenführung bitte neu laden."))?;
         if draft.pending.is_some() {
             set_merge(&job_id, draft);
-            return Err(invalid("Bitte den gespeicherten Merge-Auftrag unverändert wiederholen."));
+            return Err(invalid(
+                "Bitte den gespeicherten Merge-Auftrag unverändert wiederholen.",
+            ));
         }
         if draft.rows.len() != choices.len() {
             return Err(invalid("Zusammenführung bitte neu laden."));
@@ -154,11 +199,27 @@ pub(super) fn apply(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
         // Line endings and a final newline follow the inputs (the rows drop them).
         let shape = TextShape::merged(TextShape::of(&draft.text_a), TextShape::of(&draft.text_b));
         let merged = shape.apply(crate::linemerge::assemble_rows(&draft.rows));
-        let result = merge(ctx, &job_id, &cid, &pair, &key, &conflict,
-            crate::bisync::OriginalContent { signature: conflict.a, bytes: Some(draft.text_a.as_bytes()) },
-            crate::bisync::OriginalContent { signature: conflict.b, bytes: Some(draft.text_b.as_bytes()) },
-            crate::bisync::MergeChoice::Write(merged.as_bytes()));
-        if result.is_err() { draft.retry = true; set_merge(&job_id, draft); }
+        let result = merge(
+            ctx,
+            &job_id,
+            &cid,
+            &pair,
+            &key,
+            &conflict,
+            crate::bisync::OriginalContent {
+                signature: conflict.a,
+                bytes: Some(draft.text_a.as_bytes()),
+            },
+            crate::bisync::OriginalContent {
+                signature: conflict.b,
+                bytes: Some(draft.text_b.as_bytes()),
+            },
+            crate::bisync::MergeChoice::Write(merged.as_bytes()),
+        );
+        if result.is_err() {
+            draft.retry = true;
+            set_merge(&job_id, draft);
+        }
         result
     })?;
     Ok(json!({ "taskId": task }))
@@ -179,13 +240,31 @@ pub(super) fn keep_both(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
         };
         if draft.pending.is_some() {
             set_merge(&job_id, draft);
-            return Err(invalid("Bitte den gespeicherten Merge-Auftrag unverändert wiederholen."));
+            return Err(invalid(
+                "Bitte den gespeicherten Merge-Auftrag unverändert wiederholen.",
+            ));
         }
-        let result = merge(ctx, &job_id, &cid, &pair, &key, &conflict,
-            crate::bisync::OriginalContent { signature: conflict.a, bytes: Some(draft.text_a.as_bytes()) },
-            crate::bisync::OriginalContent { signature: conflict.b, bytes: Some(draft.text_b.as_bytes()) },
-            crate::bisync::MergeChoice::KeepBoth { keep_a: true });
-        if result.is_err() { draft.retry = true; set_merge(&job_id, draft); }
+        let result = merge(
+            ctx,
+            &job_id,
+            &cid,
+            &pair,
+            &key,
+            &conflict,
+            crate::bisync::OriginalContent {
+                signature: conflict.a,
+                bytes: Some(draft.text_a.as_bytes()),
+            },
+            crate::bisync::OriginalContent {
+                signature: conflict.b,
+                bytes: Some(draft.text_b.as_bytes()),
+            },
+            crate::bisync::MergeChoice::KeepBoth { keep_a: true },
+        );
+        if result.is_err() {
+            draft.retry = true;
+            set_merge(&job_id, draft);
+        }
         result
     })?;
     Ok(json!({ "taskId": task }))
@@ -197,25 +276,55 @@ pub(super) fn retry(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
     let (pair, conflict) = lookup(&job_id, &cid)?;
     let key = recorded_state(&job_id)?;
     let job = find_job(&job_id)?;
-    let task = spawn_for_snapshot(rt, job, format!("Merge wiederholen: {}", conflict.rel), move |ctx| {
-        let cancel = ctx.cancel_flag();
-        let pending = recovery::load(&pair, &key, &conflict.rel, &cancel)?
+    let task = spawn_for_snapshot(
+        rt,
+        job,
+        format!("Merge wiederholen: {}", conflict.rel),
+        move |ctx| {
+            let cancel = ctx.cancel_flag();
+            let pending = recovery::load(&pair, &key, &conflict.rel, &cancel)?
             .ok_or_else(|| invalid("Der gespeicherte Auftrag ist nicht mehr offen. Bitte Konflikte neu prüfen."))?;
-        let choice = match pending.choice {
-            crate::bisync::RecordedMergeChoice::Write => crate::bisync::MergeChoice::Write(&pending.merged),
-            crate::bisync::RecordedMergeChoice::KeepBoth { keep_a } => crate::bisync::MergeChoice::KeepBoth { keep_a },
-        };
-        merge(ctx, &job_id, &cid, &pair, &key, &pending.conflict,
-            crate::bisync::OriginalContent { signature: pending.conflict.a, bytes: pending.original_a.as_deref() },
-            crate::bisync::OriginalContent { signature: pending.conflict.b, bytes: pending.original_b.as_deref() }, choice)
-    })?;
+            let choice = match pending.choice {
+                crate::bisync::RecordedMergeChoice::Write => {
+                    crate::bisync::MergeChoice::Write(&pending.merged)
+                }
+                crate::bisync::RecordedMergeChoice::KeepBoth { keep_a } => {
+                    crate::bisync::MergeChoice::KeepBoth { keep_a }
+                }
+            };
+            merge(
+                ctx,
+                &job_id,
+                &cid,
+                &pair,
+                &key,
+                &pending.conflict,
+                crate::bisync::OriginalContent {
+                    signature: pending.conflict.a,
+                    bytes: pending.original_a.as_deref(),
+                },
+                crate::bisync::OriginalContent {
+                    signature: pending.conflict.b,
+                    bytes: pending.original_b.as_deref(),
+                },
+                choice,
+            )
+        },
+    )?;
     Ok(json!({ "taskId": task }))
 }
 
-fn merge(ctx: &crate::mobile::TaskCtx, job: &str, cid: &str, pair: &PairContext,
-    key: &crate::bisync::StateKey, conflict: &Conflict,
-    original_a: crate::bisync::OriginalContent<'_>, original_b: crate::bisync::OriginalContent<'_>,
-    choice: crate::bisync::MergeChoice<'_>) -> Result<Value, ApiError> {
+fn merge(
+    ctx: &crate::mobile::TaskCtx,
+    job: &str,
+    cid: &str,
+    pair: &PairContext,
+    key: &crate::bisync::StateKey,
+    conflict: &Conflict,
+    original_a: crate::bisync::OriginalContent<'_>,
+    original_b: crate::bisync::OriginalContent<'_>,
+    choice: crate::bisync::MergeChoice<'_>,
+) -> Result<Value, ApiError> {
     let cancel = ctx.cancel_flag();
     check(&cancel)?;
     let keys = crate::bisync::pair_key_policy(&*pair.a, &pair.root_a, &*pair.b, &pair.root_b);
@@ -233,11 +342,15 @@ fn merge(ctx: &crate::mobile::TaskCtx, job: &str, cid: &str, pair: &PairContext,
         ctx.set_failure_result(report_json(&failure.partial, false));
         ApiError::new("conflict", format!("Zusammenführung unvollständig: {}. Bestätigte Teiländerungen bleiben gespeichert. Erneut laden verwendet dieselben Originale für einen sicheren Wiederanlauf.", failure.error))
     })?;
-    let recorded = report.confirmed_a && report.confirmed_b
+    let recorded = report.confirmed_a
+        && report.confirmed_b
         && report.baseline.get(keys.key(&conflict.rel).as_ref()) == Some(&(report.a, report.b));
     if !recorded {
         ctx.set_failure_result(report_json(&report, false));
-        return Err(ApiError::new("conflict", "Das vollständige Ergebnis ist nicht als Sync-Stand bestätigt. Bitte erneut laden."));
+        return Err(ApiError::new(
+            "conflict",
+            "Das vollständige Ergebnis ist nicht als Sync-Stand bestätigt. Bitte erneut laden.",
+        ));
     }
     let remaining = apply_resolution(job, cid, &conflict.rel, (report.a, report.b))?;
     let mut value = report_json(&report, true);

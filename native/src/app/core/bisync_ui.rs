@@ -1,6 +1,6 @@
-use crate::app::theme;
 use super::prelude::*;
 use super::*;
+use crate::app::theme;
 
 impl App {
     /// The compare-result window: per-file differences, grouped by direction.
@@ -188,15 +188,24 @@ impl App {
             Some(Ok(out)) => out,
             Some(Err(crossbeam_channel::TryRecvError::Empty)) | None => return,
             Some(Err(crossbeam_channel::TryRecvError::Disconnected)) => {
-                self.bisync_rx = None; self.bisync_running = false; self.bisync_cancel = None;
-                self.running_job = None; self.desktop_run = None;
-                self.error_msg = Some("Sync endete ohne Ergebnis; gespeicherten Laufzustand prüfen.".into());
+                self.bisync_rx = None;
+                self.bisync_running = false;
+                self.bisync_cancel = None;
+                self.running_job = None;
+                self.desktop_run = None;
+                self.error_msg =
+                    Some("Sync endete ohne Ergebnis; gespeicherten Laufzustand prüfen.".into());
                 return;
             }
         };
-        let cancelled = out.canceled || self.bisync_cancel.as_ref()
-            .is_some_and(|cancel| cancel.load(std::sync::atomic::Ordering::Acquire));
-        self.bisync_rx = None; self.bisync_running = false; self.bisync_cancel = None;
+        let cancelled = out.canceled
+            || self
+                .bisync_cancel
+                .as_ref()
+                .is_some_and(|cancel| cancel.load(std::sync::atomic::Ordering::Acquire));
+        self.bisync_rx = None;
+        self.bisync_running = false;
+        self.bisync_cancel = None;
         let mut persistence_errors = Vec::new();
         let mut pending = Vec::new();
         if let Some(run) = self.desktop_run.take() {
@@ -205,39 +214,79 @@ impl App {
             persistence_errors = std::mem::take(&mut data.persistence_errors);
             pending = std::mem::take(&mut data.pending);
         }
-        if self.running_job.take().is_some() { self.reload_sync_jobs("Sync-Setups neu laden"); }
-        if let Some(context) = self.bisync_ctx.as_mut() {
-            context.state = out.state.clone(); context.baseline = out.baseline;
+        if self.running_job.take().is_some() {
+            self.reload_sync_jobs("Sync-Setups neu laden");
         }
-        self.conflict_bulk = None; self.conflict_baseline_dirty = false;
+        if let Some(context) = self.bisync_ctx.as_mut() {
+            context.state = out.state.clone();
+            context.baseline = out.baseline;
+        }
+        self.conflict_bulk = None;
+        self.conflict_baseline_dirty = false;
         self.bisync_conflicts = out.conflicts;
         for conflict in pending {
-            if !self.bisync_conflicts.iter().any(|current| current.rel == conflict.rel) {
+            if !self
+                .bisync_conflicts
+                .iter()
+                .any(|current| current.rel == conflict.rel)
+            {
                 self.bisync_conflicts.push(conflict);
             }
         }
         let s = out.stats;
-        let mut summary = if let Some(block) = &out.blocked { block.message() }
-            else if out.busy { "Sync ist bereits in einem anderen Fenster oder Dienst aktiv.".into() }
-            else { format!("Sync: {} →, {} ←, {} gelöscht, {} Konflikte ({} MB)",
-                s.a_to_b, s.b_to_a, s.deleted, self.bisync_conflicts.len(), s.bytes / 1_048_576) };
-        if cancelled { summary = format!("Abgebrochen; {summary}"); }
-        if let Some(stop) = &out.stopped { summary.push_str(&format!("; {}", stop.message())); }
-        if !out.deferred.is_empty() {
-            summary.push_str(&format!("; {} Dateien wegen neuer Änderungen zurückgestellt", out.deferred.len()));
+        let mut summary = if let Some(block) = &out.blocked {
+            block.message()
+        } else if out.busy {
+            "Sync ist bereits in einem anderen Fenster oder Dienst aktiv.".into()
+        } else {
+            format!(
+                "Sync: {} →, {} ←, {} gelöscht, {} Konflikte ({} MB)",
+                s.a_to_b,
+                s.b_to_a,
+                s.deleted,
+                self.bisync_conflicts.len(),
+                s.bytes / 1_048_576
+            )
+        };
+        if cancelled {
+            summary = format!("Abgebrochen; {summary}");
         }
-        if let Some(omitted) = out.omissions.summary() { summary.push_str(&format!("; {omitted}")); }
+        if let Some(stop) = &out.stopped {
+            summary.push_str(&format!("; {}", stop.message()));
+        }
+        if !out.deferred.is_empty() {
+            summary.push_str(&format!(
+                "; {} Dateien wegen neuer Änderungen zurückgestellt",
+                out.deferred.len()
+            ));
+        }
+        if let Some(omitted) = out.omissions.summary() {
+            summary.push_str(&format!("; {omitted}"));
+        }
         let errors = s.errors.max(out.errors.len() as u64);
         if errors > 0 || !persistence_errors.is_empty() {
-            let example = out.errors.first().map(|(path, detail)| format!("; {path}: {detail}")).unwrap_or_default();
-            let persistence = if persistence_errors.is_empty() { String::new() }
-                else { format!("; {}", persistence_errors.join("; ")) };
+            let example = out
+                .errors
+                .first()
+                .map(|(path, detail)| format!("; {path}: {detail}"))
+                .unwrap_or_default();
+            let persistence = if persistence_errors.is_empty() {
+                String::new()
+            } else {
+                format!("; {}", persistence_errors.join("; "))
+            };
             self.error_msg = Some(format!("{summary}; {errors} Fehler{example}{persistence}"));
         } else {
-            if !self.bisync_conflicts.is_empty() { summary.push_str(" — Lösung erforderlich"); }
+            if !self.bisync_conflicts.is_empty() {
+                summary.push_str(" — Lösung erforderlich");
+            }
             self.notice = Some((summary, std::time::Instant::now()));
         }
-        if !self.bisync_conflicts.is_empty() { self.show_bisync_conflicts = true; }
-        if !self.root_path.is_empty() { self.rescan(); }
+        if !self.bisync_conflicts.is_empty() {
+            self.show_bisync_conflicts = true;
+        }
+        if !self.root_path.is_empty() {
+            self.rescan();
+        }
     }
 }

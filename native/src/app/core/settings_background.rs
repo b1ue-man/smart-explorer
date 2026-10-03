@@ -5,11 +5,7 @@ impl App {
     pub(super) fn ui_settings_background(&mut self, ui: &mut egui::Ui) {
         // ─── Background sync (runs setups on their schedule, app closed) ──
         ui.separator();
-        ui.label(
-            RichText::new("HINTERGRUND")
-                .small()
-                .color(theme::muted(ui)),
-        );
+        ui.label(RichText::new("HINTERGRUND").small().color(theme::muted(ui)));
         let mut bg = crate::autostart::is_enabled();
         if ui
             .checkbox(&mut bg, "Beim Anmelden im Hintergrund synchronisieren")
@@ -66,14 +62,34 @@ impl App {
         });
         let bg = crate::autostart::is_enabled();
         let running = crate::daemon::is_running();
-        match (running,crate::daemon::last_heartbeat_age()) {
-            (true,Some(age)) => { ui.colored_label(theme::accent(ui),format!("Dienst aktiv · letzte Meldung vor {age} s")); }
-            (true,None) => { ui.colored_label(theme::warning(ui),"Dienst meldet Aktivität; Zeitpunkt unbekannt"); }
-            (false,Some(age)) => { ui.colored_label(theme::warning(ui),format!("Keine aktuelle Dienstmeldung · letzte vor {age} s")); }
-            (false,None) => { ui.colored_label(theme::muted(ui),"Keine Dienstmeldung vorhanden"); }
+        match (running, crate::daemon::last_heartbeat_age()) {
+            (true, Some(age)) => {
+                ui.colored_label(
+                    theme::accent(ui),
+                    format!("Dienst aktiv · letzte Meldung vor {age} s"),
+                );
+            }
+            (true, None) => {
+                ui.colored_label(
+                    theme::warning(ui),
+                    "Dienst meldet Aktivität; Zeitpunkt unbekannt",
+                );
+            }
+            (false, Some(age)) => {
+                ui.colored_label(
+                    theme::warning(ui),
+                    format!("Keine aktuelle Dienstmeldung · letzte vor {age} s"),
+                );
+            }
+            (false, None) => {
+                ui.colored_label(theme::muted(ui), "Keine Dienstmeldung vorhanden");
+            }
         }
-        ui.label(if bg { "Autostart aktiv · Dienst wird beim Anmelden mit Wiederanlauf bei Absturz gestartet." }
-            else { "Autostart aus · ein aktiver Share-Sitzungsdienst kann weiterlaufen." });
+        ui.label(if bg {
+            "Autostart aktiv · Dienst wird beim Anmelden mit Wiederanlauf bei Absturz gestartet."
+        } else {
+            "Autostart aus · ein aktiver Share-Sitzungsdienst kann weiterlaufen."
+        });
         ui.label(RichText::new("Die Dienstmeldung zeigt den Sync-Prozess. Für den Wächter gibt es keine eigene Aktivitätsmeldung.").small().color(theme::muted(ui)));
         // Check cadence (how often the daemon evaluates schedules / reacts).
         ui.horizontal(|ui| {

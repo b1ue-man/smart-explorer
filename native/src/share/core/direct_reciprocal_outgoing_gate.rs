@@ -9,7 +9,9 @@ use crate::share::direct_reciprocal_session::DirectRepairSessionError;
 use crate::share::direct_reciprocal_store::DirectRepairStoreError;
 use crate::share::identity::ShareIdentity;
 use crate::share::profiles::{fingerprint_matches, ShareProfiles};
-use crate::share::types::{DirectAccessState, DirectContact, PeerEndpoint, ShareAuthState, ShareScope};
+use crate::share::types::{
+    DirectAccessState, DirectContact, PeerEndpoint, ShareAuthState, ShareScope,
+};
 
 pub(crate) struct OutgoingRepairPersistGate {
     pub(crate) transition_slot: Arc<Semaphore>,
@@ -19,10 +21,15 @@ pub(crate) struct OutgoingRepairPersistGate {
 }
 
 impl OutgoingRepairPersistGate {
-    pub(super) async fn acquire(self) -> Result<SharedDirectRepairRuntimeGuard, DirectRepairSessionError> {
+    pub(super) async fn acquire(
+        self,
+    ) -> Result<SharedDirectRepairRuntimeGuard, DirectRepairSessionError> {
         // Opportunistic repair yields to a configuration transition instead
         // of queuing another peer-controlled writer ahead of revocation.
-        let transition = self.transition_slot.clone().try_acquire_owned()
+        let transition = self
+            .transition_slot
+            .clone()
+            .try_acquire_owned()
             .map_err(|_| DirectRepairSessionError::Store(DirectRepairStoreError::Retryable))?;
         self.authorize_using(ShareProfiles::direct_secret)?;
         Ok(direct_repair_runtime_guard(transition, None))
@@ -32,7 +39,9 @@ impl OutgoingRepairPersistGate {
         &self,
         secret_for: impl Fn(&DirectContact) -> Option<Vec<u8>>,
     ) -> Result<(), DirectRepairSessionError> {
-        let state = self.auth.lock()
+        let state = self
+            .auth
+            .lock()
             .map_err(|_| DirectRepairSessionError::Store(DirectRepairStoreError::Unavailable))?;
         let local = &state.identity;
         if !state.direct_online
@@ -55,11 +64,19 @@ impl OutgoingRepairPersistGate {
                 && contact.access_state == DirectAccessState::Accepted
                 && fingerprint_matches(&peer.public_key, &contact.expected_fingerprint)
                 && (contact.expected_node_id.is_empty() || contact.expected_node_id == peer.node_id)
-                && contact.remote_device_id.as_deref().is_none_or(|id| id == peer.device_id)
-                && contact.remote_public_key.as_deref().is_none_or(|key| key == peer.public_key)
-                && contact.accepted_public_key.as_deref().is_none_or(|key| key == peer.public_key)
-                && secret_for(contact)
-                    .is_some_and(|secret| secret == self.endpoint.relation_secret)
+                && contact
+                    .remote_device_id
+                    .as_deref()
+                    .is_none_or(|id| id == peer.device_id)
+                && contact
+                    .remote_public_key
+                    .as_deref()
+                    .is_none_or(|key| key == peer.public_key)
+                && contact
+                    .accepted_public_key
+                    .as_deref()
+                    .is_none_or(|key| key == peer.public_key)
+                && secret_for(contact).is_some_and(|secret| secret == self.endpoint.relation_secret)
         });
         if authorized {
             Ok(())

@@ -28,35 +28,51 @@ pub(super) struct AdmissionQueue {
 
 impl AdmissionQueue {
     pub(super) fn accept(
-        &mut self, stream: TcpStream, peer: SocketAddr, host: &ShareHost, token: &str,
+        &mut self,
+        stream: TcpStream,
+        peer: SocketAddr,
+        host: &ShareHost,
+        token: &str,
         mut serve: impl FnMut(TcpStream),
     ) {
-        if !peer.ip().is_loopback() || stream.set_nonblocking(true).is_err() { return; }
+        if !peer.ip().is_loopback() || stream.set_nonblocking(true).is_err() {
+            return;
+        }
         match inspect(&stream, |hint| authorized(hint, host, token)) {
             Ok(Some(true)) => serve(stream),
             Ok(None) => {
                 // Reclaim an unproven connection rather than reserve all
                 // capacity against newly arriving legitimate clients.
-                if self.pending.len() == MAX_PENDING { self.pending.pop_front(); }
+                if self.pending.len() == MAX_PENDING {
+                    self.pending.pop_front();
+                }
                 self.pending.push_back(Pending {
-                    stream, deadline: Instant::now() + PRELUDE_TIMEOUT,
+                    stream,
+                    deadline: Instant::now() + PRELUDE_TIMEOUT,
                 });
             }
-            _ => {},
+            _ => {}
         }
     }
 
     pub(super) fn poll(
-        &mut self, host: &ShareHost, token: &str, mut serve: impl FnMut(TcpStream),
+        &mut self,
+        host: &ShareHost,
+        token: &str,
+        mut serve: impl FnMut(TcpStream),
     ) -> bool {
         let count = self.pending.len().min(POLL_BUDGET);
         for _ in 0..count {
-            let Some(pending) = self.pending.pop_front() else { break; };
-            if Instant::now() >= pending.deadline { continue; }
+            let Some(pending) = self.pending.pop_front() else {
+                break;
+            };
+            if Instant::now() >= pending.deadline {
+                continue;
+            }
             match inspect(&pending.stream, |hint| authorized(hint, host, token)) {
                 Ok(Some(true)) => serve(pending.stream),
                 Ok(None) => self.pending.push_back(pending),
-                _ => {},
+                _ => {}
             }
         }
         !self.pending.is_empty()
@@ -103,9 +119,13 @@ impl<'de> Visitor<'de> for HintVisitor {
                     hint.token = Some(map.next_value()?);
                     hint.token_field = Some(key);
                 }
-                _ => { let _ = map.next_value::<IgnoredAny>()?; },
+                _ => {
+                    let _ = map.next_value::<IgnoredAny>()?;
+                }
             }
-            if hint.complete() { return Ok(hint); }
+            if hint.complete() {
+                return Ok(hint);
+            }
         }
         Err(serde::de::Error::custom("IPC capability is missing"))
     }
@@ -132,19 +152,41 @@ fn authorized(hint: &Hint, host: &ShareHost, expected_token: &str) -> bool {
         return false;
     };
     match kind {
-        "mount_host_attach" => hint.token_field.as_deref() == Some("launch_token")
-            && hint.id.as_ref().is_some_and(|id| host.mounts.check_launch_token(id, token).is_ok()),
-        "mount_host_backend" => hint.token_field.as_deref() == Some("backend_token")
-            && hint.id.as_ref().is_some_and(|id| host.mounts.check_backend_token(id, token).is_ok()),
-        "mount_host_status" => hint.token_field.as_deref() == Some("session_token")
-            && hint.id.as_ref().is_some_and(|id| host.mounts.check_session_token(id, token).is_ok()),
-        _ => hint.token_field.as_deref() == Some("token") && constant_time_eq(expected_token, token),
+        "mount_host_attach" => {
+            hint.token_field.as_deref() == Some("launch_token")
+                && hint
+                    .id
+                    .as_ref()
+                    .is_some_and(|id| host.mounts.check_launch_token(id, token).is_ok())
+        }
+        "mount_host_backend" => {
+            hint.token_field.as_deref() == Some("backend_token")
+                && hint
+                    .id
+                    .as_ref()
+                    .is_some_and(|id| host.mounts.check_backend_token(id, token).is_ok())
+        }
+        "mount_host_status" => {
+            hint.token_field.as_deref() == Some("session_token")
+                && hint
+                    .id
+                    .as_ref()
+                    .is_some_and(|id| host.mounts.check_session_token(id, token).is_ok())
+        }
+        _ => {
+            hint.token_field.as_deref() == Some("token") && constant_time_eq(expected_token, token)
+        }
     }
 }
 
 fn constant_time_eq(left: &str, right: &str) -> bool {
-    if left.len() != right.len() { return false; }
-    left.bytes().zip(right.bytes()).fold(0u8, |difference, (a, b)| difference | (a ^ b)) == 0
+    if left.len() != right.len() {
+        return false;
+    }
+    left.bytes()
+        .zip(right.bytes())
+        .fold(0u8, |difference, (a, b)| difference | (a ^ b))
+        == 0
 }
 
 #[cfg(test)]
@@ -160,10 +202,14 @@ mod tests {
         let (server, _) = listener.accept().unwrap();
         server.set_nonblocking(true).unwrap();
         assert_eq!(inspect(&server, |_| true).unwrap(), None);
-        client.write_all(b"{\"t\":\"ping\",\"token\":\"valid\"}\n").unwrap();
+        client
+            .write_all(b"{\"t\":\"ping\",\"token\":\"valid\"}\n")
+            .unwrap();
         let deadline = Instant::now() + Duration::from_secs(1);
         loop {
-            if let Some(accepted) = inspect(&server, |hint| hint.token.as_deref() == Some("valid")).unwrap() {
+            if let Some(accepted) =
+                inspect(&server, |hint| hint.token.as_deref() == Some("valid")).unwrap()
+            {
                 assert!(accepted);
                 break;
             }
@@ -171,7 +217,9 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         server.set_nonblocking(false).unwrap();
-        server.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+        server
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
         use std::io::Read;
         let expected = b"{\"t\":\"ping\",\"token\":\"valid\"}\n";
         let mut bytes = vec![0u8; expected.len()];
@@ -182,7 +230,8 @@ mod tests {
     #[test]
     fn review_task_ipc_prelude_allows_large_authenticated_payload_after_small_prefix() {
         let mut decoder = serde_json::Deserializer::from_slice(
-            b"{\"t\":\"share_command\",\"token\":\"valid\",\"cmd\":");
+            b"{\"t\":\"share_command\",\"token\":\"valid\",\"cmd\":",
+        );
         let hint = decoder.deserialize_map(HintVisitor).unwrap();
         assert_eq!(hint.token.as_deref(), Some("valid"));
         assert!(constant_time_eq("same", "same"));

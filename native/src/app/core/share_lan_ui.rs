@@ -1,12 +1,15 @@
 //! "LAN" tab of the Share view: local-network presence of paired devices,
 //! link classification, and (Stage 2) automatic uplink sharing.
-use crate::app::theme;
 use super::*;
+use crate::app::theme;
 
 pub(super) fn ui(app: &mut App, ui: &mut egui::Ui) {
     if let Some(outcome) = crate::share::poll_lan_firewall_repair() {
         match outcome {
-            Ok(()) => app.share_lan_notice = Some("LAN-Firewall fuer private und Domaenen-Netze eingerichtet".into()),
+            Ok(()) => {
+                app.share_lan_notice =
+                    Some("LAN-Firewall fuer private und Domaenen-Netze eingerichtet".into())
+            }
             Err(error) => app.error_msg = Some(format!("LAN-Firewall einrichten: {error}")),
         }
     }
@@ -42,9 +45,13 @@ pub(super) fn ui(app: &mut App, ui: &mut egui::Ui) {
         app.set_lan_presence_enabled(presence_enabled);
     }
     if crate::share::lan_firewall_repair_available()
-        && ui.button("LAN-Firewall freigeben / reparieren").clicked() {
+        && ui.button("LAN-Firewall freigeben / reparieren").clicked()
+    {
         match crate::share::start_lan_firewall_repair() {
-            Ok(()) => app.share_lan_notice = Some("LAN-Firewall: Administratorfreigabe bestaetigen".into()),
+            Ok(()) => {
+                app.share_lan_notice =
+                    Some("LAN-Firewall: Administratorfreigabe bestaetigen".into())
+            }
             Err(error) => app.error_msg = Some(format!("LAN-Firewall einrichten: {error}")),
         }
     }

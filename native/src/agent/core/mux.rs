@@ -97,7 +97,10 @@ impl Mux {
         self.register_with_tree_budget(None)
     }
 
-    pub(super) fn register_with_tree_budget(&self, budget: Option<crate::agent_proto::TreeDecodeBudget>) -> (u64, RequestRx) {
+    pub(super) fn register_with_tree_budget(
+        &self,
+        budget: Option<crate::agent_proto::TreeDecodeBudget>,
+    ) -> (u64, RequestRx) {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (mut route, rx) = if self.credit_mode() {
             RequestRx::credited(

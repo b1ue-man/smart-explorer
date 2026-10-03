@@ -152,11 +152,20 @@ pub fn is_enabled() -> bool {
 /// Settings "Autostart", `StartupApproved\Run`); the settings show it.
 pub fn disabled_by_system() -> bool {
     use winreg::enums::{HKEY_CURRENT_USER, REG_BINARY};
-    let key = winreg::RegKey::predef(HKEY_CURRENT_USER).open_subkey(
-        r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run");
-    let Ok(value) = key.and_then(|key| key.get_raw_value(RUN_VALUE)) else { return false; };
-    if value.vtype != REG_BINARY || value.bytes.len() < 4 { return false; }
-    let state = u32::from_le_bytes([value.bytes[0], value.bytes[1], value.bytes[2], value.bytes[3]]);
+    let key = winreg::RegKey::predef(HKEY_CURRENT_USER)
+        .open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run");
+    let Ok(value) = key.and_then(|key| key.get_raw_value(RUN_VALUE)) else {
+        return false;
+    };
+    if value.vtype != REG_BINARY || value.bytes.len() < 4 {
+        return false;
+    }
+    let state = u32::from_le_bytes([
+        value.bytes[0],
+        value.bytes[1],
+        value.bytes[2],
+        value.bytes[3],
+    ]);
     // Known Task Manager disable states only; do not guess newer encodings,
     // or modify Windows' approval metadata when refreshing our Run value.
     matches!(state, 3 | 7)

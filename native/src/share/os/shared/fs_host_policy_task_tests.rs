@@ -23,7 +23,9 @@ fn review_task_host_read_only_is_a_rights_error_for_normal_write_paths() {
 
 #[test]
 fn review_task_host_system_opt_in_never_opens_app_private_or_versions() {
-    let root = crate::support_dirs::app_data_dir().to_string_lossy().replace('\\', "/");
+    let root = crate::support_dirs::app_data_dir()
+        .to_string_lossy()
+        .replace('\\', "/");
     let policy = TargetPolicy::new(ExportAccess::ReadWrite, true, true);
     assert!(policy.read(&format!("{root}/identity.json")).is_err());
     assert!(policy.write(&format!("{root}/identity.json")).is_err());

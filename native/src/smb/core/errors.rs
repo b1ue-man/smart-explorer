@@ -38,7 +38,9 @@ fn kind_of(error: &Error) -> io::ErrorKind {
         _ if error.status() == Some(NtStatus::DIRECTORY_NOT_EMPTY) => {
             io::ErrorKind::DirectoryNotEmpty
         }
-        _ if matches!(error.status(), Some(NtStatus(0xC000_0044 | 0xC000_0802))) => io::ErrorKind::QuotaExceeded,
+        _ if matches!(error.status(), Some(NtStatus(0xC000_0044 | 0xC000_0802))) => {
+            io::ErrorKind::QuotaExceeded
+        }
         _ if error.status() == Some(NtStatus(0xC000_00A2)) => io::ErrorKind::ReadOnlyFilesystem,
         _ => io_kind(error.kind()),
     }

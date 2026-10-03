@@ -14,11 +14,19 @@ impl GDriveBackend {
         let Some(mime) = f["mimeType"].as_str().filter(|mime| !mime.is_empty()) else {
             return Some("Drive object type is unavailable");
         };
-        if f["modifiedTime"].as_str().and_then(parse_rfc3339_ms).is_none() {
+        if f["modifiedTime"]
+            .as_str()
+            .and_then(parse_rfc3339_ms)
+            .is_none()
+        {
             return Some("Drive modification time is unavailable or invalid");
         }
         if !mime.starts_with("application/vnd.google-apps.")
-            && f["size"].as_str().and_then(|size| size.parse::<u64>().ok()).is_none() {
+            && f["size"]
+                .as_str()
+                .and_then(|size| size.parse::<u64>().ok())
+                .is_none()
+        {
             return Some("Drive binary size is unavailable or invalid");
         }
         None
@@ -77,8 +85,11 @@ impl GDriveBackend {
             hidden: false,
             system: false,
             id: f["id"].as_str().map(|s| s.to_string()),
-            content_md5: f["md5Checksum"].as_str().filter(|hash|
-                hash.len() == 32 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()))
+            content_md5: f["md5Checksum"]
+                .as_str()
+                .filter(|hash| {
+                    hash.len() == 32 && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+                })
                 .map(str::to_string),
         })
     }

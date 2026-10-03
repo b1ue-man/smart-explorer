@@ -7,7 +7,9 @@ use std::{fmt, str};
 #[path = "profile_transaction.rs"]
 mod profile_transaction;
 
-use super::profile_persistence::{encode_profiles, ProfileChange, ProfilePersistence, MAX_PROFILE_BYTES};
+use super::profile_persistence::{
+    encode_profiles, ProfileChange, ProfilePersistence, MAX_PROFILE_BYTES,
+};
 use super::profiles::{
     direct_contact_secret_account, room_secret_account, ProfileRevision, ShareProfiles,
     SHARE_PROFILE_VERSION,
@@ -200,7 +202,11 @@ impl ShareProfiles {
         presence: &PeerPresence,
         state: DirectGrantState,
     ) -> Result<(), String> {
-        self.set_direct_grant_persisted_with(presence, state, &mut SystemProfilePersistence::default())
+        self.set_direct_grant_persisted_with(
+            presence,
+            state,
+            &mut SystemProfilePersistence::default(),
+        )
     }
 
     pub fn remove_direct_contact(&mut self, contact_id: &str) -> Result<ProfileChange, String> {
@@ -258,12 +264,18 @@ impl ShareProfiles {
 }
 
 #[derive(Default)]
-struct SystemProfilePersistence { save_conflict: bool }
+struct SystemProfilePersistence {
+    save_conflict: bool,
+}
 
 impl ProfilePersistence for SystemProfilePersistence {
     fn saved_connection_accounts(&mut self) -> Result<Option<Vec<String>>, String> {
-        Ok(Some(crate::creds::load_connections_checked()?.iter()
-            .map(|connection| connection.account()).collect()))
+        Ok(Some(
+            crate::creds::load_connections_checked()?
+                .iter()
+                .map(|connection| connection.account())
+                .collect(),
+        ))
     }
 
     fn load_profiles(&mut self) -> Result<Option<String>, String> {
@@ -276,7 +288,10 @@ impl ProfilePersistence for SystemProfilePersistence {
         expected: &ProfileRevision,
     ) -> Result<ProfileRevision, String> {
         match save_profiles(contents, expected) {
-            Ok(revision) => { self.save_conflict = false; Ok(revision) }
+            Ok(revision) => {
+                self.save_conflict = false;
+                Ok(revision)
+            }
             Err(error) => {
                 self.save_conflict = error.kind() == io::ErrorKind::WouldBlock;
                 Err(error.to_string())
@@ -353,8 +368,7 @@ fn load_profiles() -> io::Result<Option<String>> {
     let capacity = usize::try_from(metadata.len())
         .map_err(|_| invalid("Share profile size does not fit this platform"))?;
     let mut bytes = Vec::with_capacity(capacity);
-    file.take(MAX_PROFILE_BYTES + 1)
-        .read_to_end(&mut bytes)?;
+    file.take(MAX_PROFILE_BYTES + 1).read_to_end(&mut bytes)?;
     if bytes.len() as u64 > MAX_PROFILE_BYTES {
         return Err(invalid("Share profiles exceed their byte budget"));
     }

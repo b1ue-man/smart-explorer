@@ -24,7 +24,10 @@ pub(super) struct FakeDrive {
 
 impl FakeDrive {
     pub(super) fn insert(&self, id: &str, name: &str, parent: &str, mime: &str, content: &[u8]) {
-        self.media.lock().unwrap().insert(id.to_string(), content.to_vec());
+        self.media
+            .lock()
+            .unwrap()
+            .insert(id.to_string(), content.to_vec());
         self.objects.lock().unwrap().insert(
             id.to_string(),
             object(id, name, parent, mime, Some(content)),
@@ -125,11 +128,23 @@ impl FakeDrive {
                     metadata["modifiedTime"] = json!(time);
                 }
                 metadata["_replace"] = json!(true);
-                let total = request.header("x-upload-content-length").unwrap().parse().unwrap();
+                let total = request
+                    .header("x-upload-content-length")
+                    .unwrap()
+                    .parse()
+                    .unwrap();
                 let session = format!("s{}", self.next.fetch_add(1, Ordering::SeqCst));
-                self.sessions.lock().unwrap().insert(session.clone(), (metadata, total, Vec::new()));
-                Answer::json(json!({})).header("Location", &format!(
-                    "http://{}/upload/session/{session}", request.header("host").unwrap()))
+                self.sessions
+                    .lock()
+                    .unwrap()
+                    .insert(session.clone(), (metadata, total, Vec::new()));
+                Answer::json(json!({})).header(
+                    "Location",
+                    &format!(
+                        "http://{}/upload/session/{session}",
+                        request.header("host").unwrap()
+                    ),
+                )
             }
             ("GET", "/drive/v3/files") => {
                 let query = request.query("q").unwrap_or_default();
@@ -161,17 +176,32 @@ impl FakeDrive {
                     .lock()
                     .unwrap()
                     .insert(metadata["id"].as_str().unwrap().to_string(), copy.clone());
-                let copied_bytes = self.media.lock().unwrap().get(source["id"].as_str().unwrap()).cloned();
+                let copied_bytes = self
+                    .media
+                    .lock()
+                    .unwrap()
+                    .get(source["id"].as_str().unwrap())
+                    .cloned();
                 if let Some(bytes) = copied_bytes {
-                    self.media.lock().unwrap().insert(metadata["id"].as_str().unwrap().to_string(), bytes);
+                    self.media
+                        .lock()
+                        .unwrap()
+                        .insert(metadata["id"].as_str().unwrap().to_string(), bytes);
                 }
                 Answer::json(copy)
             }
             ("GET", item) if item.starts_with("/drive/v3/files/") => {
                 match self.object(item.rsplit('/').next().unwrap()) {
                     Some(object) if request.query("alt").as_deref() == Some("media") => Answer {
-                        status: 200, headers: Vec::new(),
-                        body: self.media.lock().unwrap().get(object["id"].as_str().unwrap()).cloned().unwrap_or_default(),
+                        status: 200,
+                        headers: Vec::new(),
+                        body: self
+                            .media
+                            .lock()
+                            .unwrap()
+                            .get(object["id"].as_str().unwrap())
+                            .cloned()
+                            .unwrap_or_default(),
                     },
                     Some(object) => Answer::json(object),
                     None => Answer::status(404, json!({"error": {"message": "File not found"}})),
@@ -220,7 +250,10 @@ impl FakeDrive {
         }
         objects.insert(id, created.clone());
         if let Some(content) = content {
-            self.media.lock().unwrap().insert(metadata["id"].as_str().unwrap().to_string(), content.to_vec());
+            self.media.lock().unwrap().insert(
+                metadata["id"].as_str().unwrap().to_string(),
+                content.to_vec(),
+            );
         }
         Answer::json(created)
     }
@@ -251,8 +284,13 @@ impl FakeDrive {
             drop(sessions);
             if metadata["_replace"].as_bool() == Some(true) {
                 let id = metadata["id"].as_str().unwrap();
-                self.insert(id, metadata["name"].as_str().unwrap(), metadata["parents"][0].as_str().unwrap(),
-                    metadata["mimeType"].as_str().unwrap(), &content);
+                self.insert(
+                    id,
+                    metadata["name"].as_str().unwrap(),
+                    metadata["parents"][0].as_str().unwrap(),
+                    metadata["mimeType"].as_str().unwrap(),
+                    &content,
+                );
                 if let Some(time) = metadata["modifiedTime"].as_str() {
                     self.objects.lock().unwrap().get_mut(id).unwrap()["modifiedTime"] = json!(time);
                 }

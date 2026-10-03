@@ -11,14 +11,18 @@ use super::login::{hex_decode, sha256};
 
 /// The SHA-256 of a presented proof (64 hex digits for 32 bytes).
 pub(super) fn proof_hash(proof_hex: &str) -> Option<[u8; 32]> {
-    if proof_hex.len() != 64 { return None; }
+    if proof_hex.len() != 64 {
+        return None;
+    }
     let proof = hex_decode(proof_hex)?;
     (proof.len() == 32).then(|| sha256(&proof))
 }
 
 /// A hash the owner left (64 hex digits).
 pub(super) fn parse_hash(hash_hex: &str) -> Option<[u8; 32]> {
-    if hash_hex.len() != 64 { return None; }
+    if hash_hex.len() != 64 {
+        return None;
+    }
     hex_decode(hash_hex)?.try_into().ok()
 }
 

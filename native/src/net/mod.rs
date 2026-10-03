@@ -90,8 +90,15 @@ pub fn run_uplink_helper_if_requested(
     #[cfg(target_os = "linux")]
     {
         if arguments.len() == 1 && arguments[0] == std::ffi::OsStr::new("--lan-uplink-cleanup") {
-            Some(uplink_adapter().cleanup_installation().map(|_| ()).map_err(std::io::Error::other))
-        } else { None }
+            Some(
+                uplink_adapter()
+                    .cleanup_installation()
+                    .map(|_| ())
+                    .map_err(std::io::Error::other),
+            )
+        } else {
+            None
+        }
     }
     #[cfg(not(any(windows, target_os = "linux")))]
     {

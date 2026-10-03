@@ -82,7 +82,9 @@ pub(super) fn find_duplicates(
         Err(_) => return Err(io::Error::other("duplicate search of the peer stopped")),
     };
     for group in report.groups {
-        crate::agent_proto::emit_duplicate_parts(group_to_wire(group), |part| emit(sink, id, &part))?;
+        crate::agent_proto::emit_duplicate_parts(group_to_wire(group), |part| {
+            emit(sink, id, &part)
+        })?;
     }
     let summary = summary_to_wire(report.summary, report.root_error);
     emit(sink, id, &Frame::DupSummary(summary))?;

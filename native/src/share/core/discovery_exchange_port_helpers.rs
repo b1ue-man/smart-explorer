@@ -52,7 +52,9 @@ pub(super) fn require_packet(
 
 pub(super) fn validate_pin_length(pin: &[u8]) -> Result<(), DiscoveryPortError> {
     if pin.is_empty() {
-        Err(DiscoveryPortError::InvalidRequest("PIN must not be empty".to_string()))
+        Err(DiscoveryPortError::InvalidRequest(
+            "PIN must not be empty".to_string(),
+        ))
     } else if pin.len() > DISCOVERY_PIN_MAX_BYTES {
         Err(DiscoveryPortError::InvalidRequest(
             "PIN exceeds the supported byte limit".to_string(),

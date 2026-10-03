@@ -8,14 +8,22 @@ pub(super) fn encode(name: &str) -> String {
     let device = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
         || ["COM", "LPT"].iter().any(|prefix| {
             stem.strip_prefix(prefix).is_some_and(|suffix| {
-                matches!(suffix, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³")
+                matches!(
+                    suffix,
+                    "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+                )
             })
         });
-    let end = name.trim_end_matches(|c: char| c.is_whitespace() || c == '.').len();
+    let end = name
+        .trim_end_matches(|c: char| c.is_whitespace() || c == '.')
+        .len();
     let mut output = String::with_capacity(name.len());
     for (offset, c) in name.char_indices() {
         let escape = c.is_control()
-            || matches!(c, '/' | '\\' | '%' | ':' | '"' | '<' | '>' | '|' | '?' | '*')
+            || matches!(
+                c,
+                '/' | '\\' | '%' | ':' | '"' | '<' | '>' | '|' | '?' | '*'
+            )
             || (marker && c == '[')
             || (offset >= end && (c.is_whitespace() || c == '.'))
             || (offset == 0 && (c.is_whitespace() || device));

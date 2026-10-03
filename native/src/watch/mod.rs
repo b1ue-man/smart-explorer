@@ -42,8 +42,8 @@ mod service;
 mod types;
 
 pub use host_signal::{host_cursor, report_host_change, set_host_cursor};
-pub use service::{watch, WatchHandle};
 pub(crate) use service::watch_confined;
+pub use service::{watch, WatchHandle};
 pub use types::{
     Change, Coverage, EventKind, UnavailableReason, WatchEntry, WatchEvent, WatchFilter, WatchId,
     WatchMessage, WatchOptions, WatchSink,

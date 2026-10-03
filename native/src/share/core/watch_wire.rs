@@ -41,8 +41,18 @@ impl FsWatchEvent {
     /// The client side; `None` for keepalives.
     pub(crate) fn into_notice(self) -> Option<ChangeNotice> {
         match self {
-            Self::Ready { generation, complete: true } => Some(ChangeNotice::Ready { generation: Some(generation) }),
-            Self::Ready { generation, complete: false } => Some(ChangeNotice::ReadyPartial { generation: Some(generation) }),
+            Self::Ready {
+                generation,
+                complete: true,
+            } => Some(ChangeNotice::Ready {
+                generation: Some(generation),
+            }),
+            Self::Ready {
+                generation,
+                complete: false,
+            } => Some(ChangeNotice::ReadyPartial {
+                generation: Some(generation),
+            }),
             Self::Changed { generation, paths } => Some(ChangeNotice::Changed {
                 generation: Some(generation),
                 paths,

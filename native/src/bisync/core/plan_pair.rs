@@ -76,7 +76,10 @@ pub fn plan_pair(
 }
 
 fn protect_directory_collisions(
-    a: &SideSnapshot, b: &SideSnapshot, keys: KeyPolicy, omissions: &mut SyncOmissions,
+    a: &SideSnapshot,
+    b: &SideSnapshot,
+    keys: KeyPolicy,
+    omissions: &mut SyncOmissions,
 ) {
     let mut directory_keys = std::collections::BTreeMap::<String, String>::new();
     for snapshot in [a, b] {
@@ -186,9 +189,15 @@ impl Planner<'_, '_> {
                         PairSide::B => self.dirs_b,
                     };
                     let spelled = destination_spelling(&rel, dirs, self.keys);
-                    if spelled.split('/').any(|name| limits.name_issue(name).is_some()) {
-                        self.omissions
-                            .record_kind(&rel, OmissionKind::NameImpossibleOnTarget, true);
+                    if spelled
+                        .split('/')
+                        .any(|name| limits.name_issue(name).is_some())
+                    {
+                        self.omissions.record_kind(
+                            &rel,
+                            OmissionKind::NameImpossibleOnTarget,
+                            true,
+                        );
                         return;
                     }
                     self.plan.spellings.insert(&rel, to, &spelled);
@@ -209,18 +218,10 @@ impl Planner<'_, '_> {
 
 fn action_for(step: Step, rel: String) -> Action {
     match step {
-        Step::Copy {
-            from: PairSide::A,
-        } => Action::CopyAtoB(rel),
-        Step::Copy {
-            from: PairSide::B,
-        } => Action::CopyBtoA(rel),
-        Step::FinalizeMove {
-            from: PairSide::A,
-        } => Action::FinalizeMoveAtoB(rel),
-        Step::FinalizeMove {
-            from: PairSide::B,
-        } => Action::FinalizeMoveBtoA(rel),
+        Step::Copy { from: PairSide::A } => Action::CopyAtoB(rel),
+        Step::Copy { from: PairSide::B } => Action::CopyBtoA(rel),
+        Step::FinalizeMove { from: PairSide::A } => Action::FinalizeMoveAtoB(rel),
+        Step::FinalizeMove { from: PairSide::B } => Action::FinalizeMoveBtoA(rel),
         Step::Delete { side: PairSide::A } => Action::DeleteA(rel),
         Step::Delete { side: PairSide::B } => Action::DeleteB(rel),
         Step::KeepBoth {

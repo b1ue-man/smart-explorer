@@ -32,36 +32,56 @@ pub(super) struct Record {
 }
 
 pub(super) fn lower_hex(text: &str, length: usize) -> bool {
-    text.len() == length && text.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    text.len() == length
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 pub(super) fn held_name(name: &str) -> bool {
-    name.strip_prefix(".held.se-recycle-").is_some_and(|nonce| lower_hex(nonce, 16))
+    name.strip_prefix(".held.se-recycle-")
+        .is_some_and(|nonce| lower_hex(nonce, 16))
 }
 
 impl Record {
     pub(super) fn validate(&self) -> io::Result<()> {
-        let total = self.relative.iter().try_fold(self.root.len(), |sum, name|
-            sum.checked_add(name.len()).and_then(|sum| sum.checked_add(1)));
-        let valid_component = |name: &Vec<u16>| !name.is_empty()
-            && name.as_slice() != &[46] && name.as_slice() != &[46, 46]
-            && !name.iter().any(|unit| matches!(*unit, 0 | 47 | 58 | 92));
-        if self.version != VERSION || !lower_hex(&self.id, 32)
-            || self.root.is_empty() || self.root.contains(&0)
-            || self.relative.is_empty() || !self.relative.iter().all(valid_component)
+        let total = self.relative.iter().try_fold(self.root.len(), |sum, name| {
+            sum.checked_add(name.len())
+                .and_then(|sum| sum.checked_add(1))
+        });
+        let valid_component = |name: &Vec<u16>| {
+            !name.is_empty()
+                && name.as_slice() != &[46]
+                && name.as_slice() != &[46, 46]
+                && !name.iter().any(|unit| matches!(*unit, 0 | 47 | 58 | 92))
+        };
+        if self.version != VERSION
+            || !lower_hex(&self.id, 32)
+            || self.root.is_empty()
+            || self.root.contains(&0)
+            || self.relative.is_empty()
+            || !self.relative.iter().all(valid_component)
             || total.is_none_or(|units| units > MAX_PATH_UNITS)
             || !lower_hex(&self.sha256, 64)
-            || !held_name(&self.held) || !held_name(&self.restore_held)
+            || !held_name(&self.held)
+            || !held_name(&self.restore_held)
             || self.held == self.restore_held
-            || self.root_identity.volume == 0 || self.root_identity.file == [0; 16]
-            || self.file_identity.volume == 0 || self.file_identity.file == [0; 16]
+            || self.root_identity.volume == 0
+            || self.root_identity.file == [0; 16]
+            || self.file_identity.volume == 0
+            || self.file_identity.file == [0; 16]
         {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "Ungültiger Papierkorb-Intent"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Ungültiger Papierkorb-Intent",
+            ));
         }
         Ok(())
     }
 
-    pub(super) fn slots(&self) -> [&str; 2] { [&self.held, &self.restore_held] }
+    pub(super) fn slots(&self) -> [&str; 2] {
+        [&self.held, &self.restore_held]
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -108,4 +128,7 @@ pub(crate) struct CatalogPage {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum RestoreOutcome { Restored, AlreadyAtOriginal }
+pub(crate) enum RestoreOutcome {
+    Restored,
+    AlreadyAtOriginal,
+}

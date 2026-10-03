@@ -197,13 +197,23 @@ pub(super) fn host_report(
     progress: &ReclaimProgress,
     min_bytes: u64,
 ) -> Option<DuplicateReport> {
-    let counters = [&progress.files, &progress.dirs, &progress.bytes, &progress.fingerprinted,
-        &progress.hashed, &progress.candidates];
+    let counters = [
+        &progress.files,
+        &progress.dirs,
+        &progress.bytes,
+        &progress.fingerprinted,
+        &progress.hashed,
+        &progress.candidates,
+    ];
     let before = counters.map(|counter| counter.load(Ordering::Relaxed));
     match crate::vfs::find_duplicates(&**backend, root, min_bytes, progress) {
         Ok(None) => {
-            for (counter, value) in counters.into_iter().zip(before) { counter.store(value, Ordering::Relaxed); }
-            progress.stage.begin(super::types::ReclaimPhase::Walking, 0, 0);
+            for (counter, value) in counters.into_iter().zip(before) {
+                counter.store(value, Ordering::Relaxed);
+            }
+            progress
+                .stage
+                .begin(super::types::ReclaimPhase::Walking, 0, 0);
             None
         }
         Ok(report) => report,

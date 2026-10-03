@@ -45,7 +45,10 @@ pub(super) fn validate_server(server: &str) -> Result<String, String> {
             );
         }
         if let Some((scheme, _)) = endpoint.split_once("://") {
-            if !matches!(scheme.to_ascii_lowercase().as_str(), "tcp" | "ws" | "wss" | "http" | "https") {
+            if !matches!(
+                scheme.to_ascii_lowercase().as_str(),
+                "tcp" | "ws" | "wss" | "http" | "https"
+            ) {
                 return Err(format!("Nicht unterstütztes Share-Server-Schema: {scheme}"));
             }
         }

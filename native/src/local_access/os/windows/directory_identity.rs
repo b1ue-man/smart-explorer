@@ -14,13 +14,24 @@ enum Identity {
 fn identity(file: &File) -> io::Result<Identity> {
     let mut full: FILE_ID_INFO = unsafe { std::mem::zeroed() };
     if unsafe {
-        GetFileInformationByHandleEx(file.as_raw_handle(), FileIdInfo,
-            (&mut full as *mut FILE_ID_INFO).cast(), size_of::<FILE_ID_INFO>() as u32)
-    } != 0 {
+        GetFileInformationByHandleEx(
+            file.as_raw_handle(),
+            FileIdInfo,
+            (&mut full as *mut FILE_ID_INFO).cast(),
+            size_of::<FILE_ID_INFO>() as u32,
+        )
+    } != 0
+    {
         if full.FileId.Identifier == [0; 16] {
-            return Err(io::Error::new(io::ErrorKind::Unsupported, "provider has no directory identity"));
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "provider has no directory identity",
+            ));
         }
-        return Ok(Identity::Full(full.VolumeSerialNumber, full.FileId.Identifier));
+        return Ok(Identity::Full(
+            full.VolumeSerialNumber,
+            full.FileId.Identifier,
+        ));
     }
     let error = io::Error::last_os_error();
     if !matches!(error.raw_os_error(), Some(1 | 50 | 87 | 124)) {
@@ -33,9 +44,16 @@ fn identity(file: &File) -> io::Result<Identity> {
         return Err(io::Error::last_os_error());
     }
     if legacy.nFileIndexHigh == 0 && legacy.nFileIndexLow == 0 {
-        return Err(io::Error::new(io::ErrorKind::Unsupported, "provider has no directory identity"));
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "provider has no directory identity",
+        ));
     }
-    Ok(Identity::Legacy(legacy.dwVolumeSerialNumber, legacy.nFileIndexHigh, legacy.nFileIndexLow))
+    Ok(Identity::Legacy(
+        legacy.dwVolumeSerialNumber,
+        legacy.nFileIndexHigh,
+        legacy.nFileIndexLow,
+    ))
 }
 
 pub(super) fn same_object(left: &File, right: &File) -> io::Result<bool> {

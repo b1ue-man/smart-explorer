@@ -52,7 +52,12 @@ impl App {
                         );
                     }
                 });
-            if !self.share_profiles.rooms.iter().any(|room| room.id == self.share_export_target_id) {
+            if !self
+                .share_profiles
+                .rooms
+                .iter()
+                .any(|room| room.id == self.share_export_target_id)
+            {
                 ui.label("Bitte einen Raum waehlen, um dessen Freigaben zu bearbeiten.");
                 return;
             }
@@ -65,7 +70,12 @@ impl App {
         let mut changed = false;
         ui.label("Neue Freigaben erlauben Lesen. Schreiben braucht zusaetzlich das Schreibrecht des Geraets bzw. Raums.");
         let root_count = cfg.roots.len();
-        let scope = if self.share_export_scope == 2 { self.share_export_target_id.as_str() } else { "direct" }.to_string();
+        let scope = if self.share_export_scope == 2 {
+            self.share_export_target_id.as_str()
+        } else {
+            "direct"
+        }
+        .to_string();
         for (i, root) in cfg.roots.iter_mut().enumerate() {
             ui.horizontal_wrapped(|ui| {
                 ui.add(egui::Label::new(format!("{} ->", root.label)).wrap());
@@ -92,13 +102,32 @@ impl App {
                 }
             });
             ui.horizontal_wrapped(|ui| {
-                changed |= ui.selectable_value(&mut root.access, crate::share::ExportAccess::ReadOnly, "Nur lesen").changed();
-                changed |= ui.selectable_value(&mut root.access, crate::share::ExportAccess::ReadWrite, "Lesen und schreiben").changed();
-                changed |= ui.checkbox(&mut root.allow_system_writes,
-                    "Auch Autostart-, Login- und Schluesseldateien beschreibbar (unsicher)").changed();
+                changed |= ui
+                    .selectable_value(
+                        &mut root.access,
+                        crate::share::ExportAccess::ReadOnly,
+                        "Nur lesen",
+                    )
+                    .changed();
+                changed |= ui
+                    .selectable_value(
+                        &mut root.access,
+                        crate::share::ExportAccess::ReadWrite,
+                        "Lesen und schreiben",
+                    )
+                    .changed();
+                changed |= ui
+                    .checkbox(
+                        &mut root.allow_system_writes,
+                        "Auch Autostart-, Login- und Schluesseldateien beschreibbar (unsicher)",
+                    )
+                    .changed();
             });
             if root.access == crate::share::ExportAccess::ReadOnly
-                && self.share_profiles.auto_home_was_migrated(&scope, &root.path) {
+                && self
+                    .share_profiles
+                    .auto_home_was_migrated(&scope, &root.path)
+            {
                 ui.horizontal_wrapped(|ui| {
                     ui.label("Die alte automatische Home-Freigabe wurde auf Lesen umgestellt.");
                     if ui.button("Schreiben wieder erlauben").clicked() {

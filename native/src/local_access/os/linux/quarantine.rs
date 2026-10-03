@@ -43,35 +43,33 @@ impl DirectoryHandle {
         // kept even when the selected root or a parent is moved meanwhile.
         let directory = self.private_quarantine_directory()?;
         rename_no_replace(self, name, &directory, OsStr::new(HELD_NAME))?;
-        let captured = directory.open_regular_child(OsStr::new(HELD_NAME)).and_then(|file| {
-            if same_object(&file.metadata()?, &expected_metadata) {
-                Ok(file)
-            } else {
-                Err(changed())
-            }
-        });
-        match captured {
-            Ok(file) => {
-                Ok(QuarantinedChild {
-                    parent: self.clone(),
-                    original: name.to_os_string(),
-                    directory,
-                    file,
-                    active: true,
-                })
-            }
-            Err(cause) => {
-                match rename_no_replace(&directory, OsStr::new(HELD_NAME), self, name) {
-                    Ok(()) => Err(cause),
-                    Err(restore) => Err(io::Error::new(
-                        cause.kind(),
-                        format!(
-                            "{cause}; captured entry retained at {}: {restore}",
-                            retained_path(&directory).display(),
-                        ),
-                    )),
+        let captured = directory
+            .open_regular_child(OsStr::new(HELD_NAME))
+            .and_then(|file| {
+                if same_object(&file.metadata()?, &expected_metadata) {
+                    Ok(file)
+                } else {
+                    Err(changed())
                 }
-            }
+            });
+        match captured {
+            Ok(file) => Ok(QuarantinedChild {
+                parent: self.clone(),
+                original: name.to_os_string(),
+                directory,
+                file,
+                active: true,
+            }),
+            Err(cause) => match rename_no_replace(&directory, OsStr::new(HELD_NAME), self, name) {
+                Ok(()) => Err(cause),
+                Err(restore) => Err(io::Error::new(
+                    cause.kind(),
+                    format!(
+                        "{cause}; captured entry retained at {}: {restore}",
+                        retained_path(&directory).display(),
+                    ),
+                )),
+            },
         }
     }
 
@@ -87,7 +85,10 @@ impl DirectoryHandle {
                 Err(error) => return Err(error),
             }
         }
-        Err(io::Error::new(io::ErrorKind::AlreadyExists, "quarantine names kept colliding"))
+        Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "quarantine names kept colliding",
+        ))
     }
 }
 
@@ -121,7 +122,10 @@ impl QuarantinedChild {
     pub(crate) fn move_to(&mut self, target: &DirectoryHandle, name: &OsStr) -> io::Result<()> {
         validate_name(name)?;
         if !self.active {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "quarantine is no longer active"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "quarantine is no longer active",
+            ));
         }
         self.verify()?;
         rename_no_replace(&self.directory, OsStr::new(HELD_NAME), target, name)?;
@@ -179,7 +183,10 @@ fn rename_no_replace(
         return Ok(());
     }
     let error = io::Error::last_os_error();
-    if matches!(error.raw_os_error(), Some(libc::EINVAL | libc::ENOSYS | libc::EOPNOTSUPP)) {
+    if matches!(
+        error.raw_os_error(),
+        Some(libc::EINVAL | libc::ENOSYS | libc::EOPNOTSUPP)
+    ) {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "filesystem cannot capture/restore without replacement",

@@ -48,14 +48,28 @@ fn review_task_missing_paths_resolve_through_their_ancestor() {
 
 #[test]
 fn review_task_mount_boundaries_include_same_device_binds_and_autofs() {
-    let mounts = parse(b"1 0 8:1 / / rw - ext4 /dev/sda1 rw\n\
+    let mounts = parse(
+        b"1 0 8:1 / / rw - ext4 /dev/sda1 rw\n\
 2 1 8:1 /home/shared /backup/bind rw - ext4 /dev/sda1 rw\n\
 3 1 0:7 / /backup/trigger rw - autofs systemd-1 rw\n\
 4 1 0:8 / /backup/network rw - nfs4 host:/srv rw\n\
-5 1 0:9 / /backup/fuse rw - fuse.sshfs host:/srv rw\n");
-    assert_eq!(boundary(&mounts, Path::new("/backup/bind")), Some(crate::vfs::MountKind::Local));
-    assert_eq!(boundary(&mounts, Path::new("/backup/trigger")), Some(crate::vfs::MountKind::Automount));
-    assert_eq!(boundary(&mounts, Path::new("/backup/network")), Some(crate::vfs::MountKind::Network));
-    assert_eq!(boundary(&mounts, Path::new("/backup/fuse")), Some(crate::vfs::MountKind::Fuse));
+5 1 0:9 / /backup/fuse rw - fuse.sshfs host:/srv rw\n",
+    );
+    assert_eq!(
+        boundary(&mounts, Path::new("/backup/bind")),
+        Some(crate::vfs::MountKind::Local)
+    );
+    assert_eq!(
+        boundary(&mounts, Path::new("/backup/trigger")),
+        Some(crate::vfs::MountKind::Automount)
+    );
+    assert_eq!(
+        boundary(&mounts, Path::new("/backup/network")),
+        Some(crate::vfs::MountKind::Network)
+    );
+    assert_eq!(
+        boundary(&mounts, Path::new("/backup/fuse")),
+        Some(crate::vfs::MountKind::Fuse)
+    );
     assert_eq!(boundary(&mounts, Path::new("/backup/plain")), None);
 }

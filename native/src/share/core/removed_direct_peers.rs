@@ -106,13 +106,12 @@ impl ShareProfiles {
     /// Refresh the same identity, preserving every prior key/node alias.
     /// Explicit revocations never expire merely because more peers are removed.
     pub fn record_removed_direct_peer(&mut self, peer: &DirectPeerIdentity, now: i64) {
-        self.removed_direct_peers
-            .retain(|record| {
-                record.device_id != peer.device_id
-                    || record.public_key != peer.public_key
-                    || record.node_id != peer.node_id
-                    || record.fingerprint != peer.fingerprint
-            });
+        self.removed_direct_peers.retain(|record| {
+            record.device_id != peer.device_id
+                || record.public_key != peer.public_key
+                || record.node_id != peer.node_id
+                || record.fingerprint != peer.fingerprint
+        });
         self.removed_direct_peers.push(RemovedDirectPeer {
             device_id: peer.device_id.clone(),
             device_name: peer.device_name.clone(),
@@ -188,14 +187,11 @@ impl ShareProfiles {
         let mut identities: Vec<DirectPeerIdentity> = pinned.into_iter().collect();
         for grant in &removed_grants {
             let identity = grant_identity(grant);
-            if !identities
-                .iter()
-                .any(|known| {
-                    known.device_id == identity.device_id
-                        && known.public_key == identity.public_key
-                        && known.node_id == identity.node_id
-                })
-            {
+            if !identities.iter().any(|known| {
+                known.device_id == identity.device_id
+                    && known.public_key == identity.public_key
+                    && known.node_id == identity.node_id
+            }) {
                 identities.push(identity);
             }
         }

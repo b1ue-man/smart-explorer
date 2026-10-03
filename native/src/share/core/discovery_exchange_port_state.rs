@@ -113,10 +113,11 @@ impl ExchangeState {
     }
 
     pub(super) fn failed_after_persistence(&self) -> Option<Self> {
-        self.persisted_outcome().map(|completion| Self::Unconfirmed {
-            completion: completion.clone(),
-            publisher_offer_id: self.publisher_offer_id().map(str::to_string),
-        })
+        self.persisted_outcome()
+            .map(|completion| Self::Unconfirmed {
+                completion: completion.clone(),
+                publisher_offer_id: self.publisher_offer_id().map(str::to_string),
+            })
     }
 
     fn publisher_offer_id(&self) -> Option<&str> {
@@ -130,7 +131,9 @@ impl ExchangeState {
             Self::PublisherComplete { state, .. } => {
                 Some(state.binding().offer().offer_id().as_str())
             }
-            Self::Unconfirmed { publisher_offer_id, .. } => publisher_offer_id.as_deref(),
+            Self::Unconfirmed {
+                publisher_offer_id, ..
+            } => publisher_offer_id.as_deref(),
             _ => None,
         }
     }

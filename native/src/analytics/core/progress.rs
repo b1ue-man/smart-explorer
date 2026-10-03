@@ -111,7 +111,10 @@ impl Progress {
     }
 
     pub fn set_node_budget(&self, nodes: u64) {
-        self.node_limit.store(nodes.clamp(2, super::tree_transfer::MAX_NODES), Ordering::Relaxed);
+        self.node_limit.store(
+            nodes.clamp(2, super::tree_transfer::MAX_NODES),
+            Ordering::Relaxed,
+        );
     }
 
     /// Counters and cancellation are shared; only path presentation is scoped.
@@ -240,9 +243,10 @@ impl Progress {
         // A host may walk deeper than one frame should carry: keep the end.
         snapshot.current = shorten_tail(&self.visible_path(&snapshot.current), MAX_CURRENT_BYTES);
         let previous = self.snapshot();
-        if (!final_result && (snapshot.files < previous.files
-            || snapshot.dirs < previous.dirs
-            || snapshot.bytes < previous.bytes))
+        if (!final_result
+            && (snapshot.files < previous.files
+                || snapshot.dirs < previous.dirs
+                || snapshot.bytes < previous.bytes))
             || snapshot.transferred > snapshot.transfer_total
         {
             return Err(io::Error::new(

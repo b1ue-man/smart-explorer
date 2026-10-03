@@ -67,12 +67,15 @@ pub(super) fn set_direct_online(
         let changed = state.direct_online != online;
         let mut candidate = state.clone();
         candidate.direct_online = online;
-        let restrictions = super::super::relation_rights::authorization_restrictions(&state, &candidate);
+        let restrictions =
+            super::super::relation_rights::authorization_restrictions(&state, &candidate);
         if changed {
             let next_epoch = if restrictions.is_empty() {
                 state.authorization_epoch
             } else {
-                state.authorization_epoch.checked_add(1)
+                state
+                    .authorization_epoch
+                    .checked_add(1)
                     .ok_or_else(|| eio("Share authorization epoch exhausted"))?
             };
             candidate.authorization_epoch = next_epoch;
@@ -84,7 +87,11 @@ pub(super) fn set_direct_online(
             )?;
             *state = candidate;
         }
-        (state.identity.direct_lookup_id.clone(), changed, restrictions)
+        (
+            state.identity.direct_lookup_id.clone(),
+            changed,
+            restrictions,
+        )
     };
     let invalidation = if !restrictions.is_empty() {
         iroh.invalidate_restrictions(&restrictions).map(|_| ())

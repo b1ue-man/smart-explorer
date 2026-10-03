@@ -58,8 +58,10 @@ impl PairLock {
         let deadline = Instant::now().checked_add(wait);
         loop {
             if cancel.load(Ordering::Acquire) {
-                return Err(io::Error::new(io::ErrorKind::Interrupted,
-                    "Warten auf die Synchronisierungssperre abgebrochen"));
+                return Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "Warten auf die Synchronisierungssperre abgebrochen",
+                ));
             }
             match Self::acquire(lock_id) {
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
@@ -75,7 +77,9 @@ impl PairLock {
             if deadline.is_some_and(|deadline| now >= deadline) {
                 return Err(busy());
             }
-            std::thread::sleep(deadline.map_or(RETRY_SLICE, |deadline| RETRY_SLICE.min(deadline - now)));
+            std::thread::sleep(
+                deadline.map_or(RETRY_SLICE, |deadline| RETRY_SLICE.min(deadline - now)),
+            );
         }
     }
 

@@ -60,9 +60,16 @@ pub(super) fn walk_hashed2(
     min_bytes: u64,
     cancel: &AtomicBool,
 ) -> io::Result<()> {
-    if !matches!(algorithm, crate::agent_proto::digest::NONE | crate::agent_proto::digest::MD5
-        | crate::agent_proto::digest::SHA256) {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "unbekannter Hashalgorithmus"));
+    if !matches!(
+        algorithm,
+        crate::agent_proto::digest::NONE
+            | crate::agent_proto::digest::MD5
+            | crate::agent_proto::digest::SHA256
+    ) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "unbekannter Hashalgorithmus",
+        ));
     }
     let request = HashWalkRequest {
         algorithm: algorithm_from_wire(algorithm),

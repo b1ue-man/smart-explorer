@@ -69,14 +69,30 @@ pub fn load_baseline(path: &Path) -> io::Result<Baseline> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Baseline::new()),
         Err(error) => return Err(error),
     };
-    if metadata.is_dir || metadata.is_symlink || metadata.special
-        || metadata.size > limits.state_file_bytes().saturating_add(BASELINE_MAGIC.len() as u64) {
+    if metadata.is_dir
+        || metadata.is_symlink
+        || metadata.special
+        || metadata.size
+            > limits
+                .state_file_bytes()
+                .saturating_add(BASELINE_MAGIC.len() as u64)
+    {
         return Err(invalid("bisync baseline exceeds its byte budget"));
     }
     let file = crate::vfs::open_read_regular(&backend, path, None)?;
     let mut bytes = Vec::new();
-    file.take(limits.state_file_bytes().saturating_add(BASELINE_MAGIC.len() as u64) + 1).read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > limits.state_file_bytes().saturating_add(BASELINE_MAGIC.len() as u64) {
+    file.take(
+        limits
+            .state_file_bytes()
+            .saturating_add(BASELINE_MAGIC.len() as u64)
+            + 1,
+    )
+    .read_to_end(&mut bytes)?;
+    if bytes.len() as u64
+        > limits
+            .state_file_bytes()
+            .saturating_add(BASELINE_MAGIC.len() as u64)
+    {
         return Err(invalid("bisync baseline exceeds its byte budget"));
     }
     if let Some(body) = bytes.strip_prefix(BASELINE_MAGIC) {
@@ -99,7 +115,9 @@ fn parse_binary_with_limits(mut input: &[u8], limits: SyncLimits) -> io::Result<
         }
         text_bytes = text_bytes
             .checked_add(rel_len)
-            .filter(|total| *total <= usize::try_from(limits.state_text_bytes).unwrap_or(usize::MAX))
+            .filter(|total| {
+                *total <= usize::try_from(limits.state_text_bytes).unwrap_or(usize::MAX)
+            })
             .ok_or_else(|| invalid("bisync baseline exceeds its path-text budget"))?;
         let rel_bytes = take(&mut input, rel_len)?;
         let rel = std::str::from_utf8(rel_bytes)
@@ -134,7 +152,9 @@ fn parse_legacy_with_limits(bytes: &[u8], limits: SyncLimits) -> io::Result<Base
         validate_rel(fields[0])?;
         text_bytes = text_bytes
             .checked_add(fields[0].len())
-            .filter(|total| *total <= usize::try_from(limits.state_text_bytes).unwrap_or(usize::MAX))
+            .filter(|total| {
+                *total <= usize::try_from(limits.state_text_bytes).unwrap_or(usize::MAX)
+            })
             .ok_or_else(|| invalid("legacy baseline exceeds its path-text budget"))?;
         let value = (parse_legacy_sig(fields[1])?, parse_legacy_sig(fields[2])?);
         if baseline.insert(fields[0].to_string(), value).is_some() {
@@ -236,10 +256,16 @@ fn validate_baseline(baseline: &Baseline) -> io::Result<()> {
         let rel_len = u32::try_from(rel.len()).map_err(|_| invalid("baseline path is too long"))?;
         text_bytes = text_bytes
             .checked_add(rel_len as usize)
-            .filter(|total| *total <= usize::try_from(limits.state_text_bytes).unwrap_or(usize::MAX))
+            .filter(|total| {
+                *total <= usize::try_from(limits.state_text_bytes).unwrap_or(usize::MAX)
+            })
             .ok_or_else(|| invalid("bisync baseline exceeds its path-text budget"))?;
         bytes = bytes.saturating_add(4 + rel_len as u64 + 2 + 48);
-        if bytes > limits.state_file_bytes().saturating_add(BASELINE_MAGIC.len() as u64) {
+        if bytes
+            > limits
+                .state_file_bytes()
+                .saturating_add(BASELINE_MAGIC.len() as u64)
+        {
             return Err(invalid("bisync baseline exceeds its byte budget"));
         }
     }

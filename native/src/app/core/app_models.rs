@@ -229,7 +229,13 @@ impl StorageScanSource {
             backend,
             // Backslashes can be literal remote names; only local roots use
             // the platform path normalisation above.
-            root: if root.is_empty() { String::new() } else if trimmed.is_empty() { "/".into() } else { trimmed.into() },
+            root: if root.is_empty() {
+                String::new()
+            } else if trimmed.is_empty() {
+                "/".into()
+            } else {
+                trimmed.into()
+            },
             label: label.into(),
             endpoint_prefix,
             account,

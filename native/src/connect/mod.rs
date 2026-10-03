@@ -15,20 +15,20 @@ mod cleanup;
 mod connector;
 #[path = "core/endpoint.rs"]
 mod endpoint;
-#[path = "core/location.rs"]
-mod location;
 #[path = "core/local_endpoint.rs"]
 mod local_endpoint;
+#[path = "core/location.rs"]
+mod location;
 #[path = "os/shared/location_prefs.rs"]
 mod location_prefs;
 #[path = "os/shared/persistence.rs"]
 mod persistence;
+#[path = "os/shared/poll_signal.rs"]
+mod poll_signal;
 #[path = "core/removal_scope.rs"]
 mod removal_scope;
 #[path = "os/shared/resolution.rs"]
 mod resolution;
-#[path = "os/shared/poll_signal.rs"]
-mod poll_signal;
 #[path = "core/types.rs"]
 mod types;
 
@@ -41,17 +41,17 @@ pub(crate) use endpoint::parse_remote_url;
 #[allow(unused_imports)]
 pub use endpoint::{gdrive_endpoint, remote_endpoint};
 pub use endpoint::{is_remote_url, saved_and_path};
+pub use local_endpoint::local_endpoint_path;
 pub(crate) use location::paths_overlap as location_paths_overlap;
 pub(crate) use location::{local_root, saved_location, validate_sync_endpoints};
-pub use local_endpoint::local_endpoint_path;
 pub use location_prefs::{
     favorites_path, load_dir_sort, load_favorites, save_dir_sort, save_favorites,
 };
 #[allow(unused_imports)]
 pub use persistence::build_saved;
+pub(crate) use poll_signal::{poll_subscription, PollNotice};
 pub use removal_scope::{location_key, CleanupReport, MountScope, RemovedEndpointScope};
 pub use resolution::resolve_endpoint;
-pub(crate) use poll_signal::{poll_subscription, PollNotice};
 pub use types::{ConnectForm, ConnectResult, Connected, RemoteState};
 
 #[cfg(test)]

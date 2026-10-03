@@ -164,7 +164,10 @@ pub(crate) enum FsRequest {
         path: String,
     },
     /// `literal_children_v1`: provider-encoded child of this unchanged parent.
-    SyncChildPath { parent: String, literal_name: String },
+    SyncChildPath {
+        parent: String,
+        literal_name: String,
+    },
     WalkTree {
         path: String,
     },

@@ -68,7 +68,9 @@ pub(super) fn perform_action(app: &mut App, action: LifecycleAction) {
                 .find(|contact| contact.remote_device_id.as_deref() == Some(device_id.as_str()))
                 .map(|contact| contact.id.clone());
             match contact_id {
-                Some(contact_id) => { app.remove_direct_peer_completely(&contact_id); }
+                Some(contact_id) => {
+                    app.remove_direct_peer_completely(&contact_id);
+                }
                 None => app.delete_direct_grant_entry(&device_id),
             }
         }

@@ -34,7 +34,10 @@ pub struct ShareService {
 }
 
 impl ShareService {
-    pub(crate) fn update_lan_link_host(&self, facts: super::lan_link_facts::LanLinkHostFacts) -> io::Result<()> {
+    pub(crate) fn update_lan_link_host(
+        &self,
+        facts: super::lan_link_facts::LanLinkHostFacts,
+    ) -> io::Result<()> {
         self.iroh.update_lan_link_host(facts)
     }
 

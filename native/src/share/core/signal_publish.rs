@@ -198,14 +198,16 @@ pub(in crate::share) fn send_direct_answer(
         .lock()
         .map_err(|_| eio("Share-State gesperrt"))?
         .clone();
-    let presence = Some(crate::share::signal_presence::build_direct_decision_presence(
-        &lookup_id,
-        &requester_device_id,
-        accepted,
-        &state.identity,
-        &state.direct_secret,
-        iroh,
-    )?);
+    let presence = Some(
+        crate::share::signal_presence::build_direct_decision_presence(
+            &lookup_id,
+            &requester_device_id,
+            accepted,
+            &state.identity,
+            &state.direct_secret,
+            iroh,
+        )?,
+    );
     send_line(
         stream,
         &ClientMsg::DirectAccessAccepted {

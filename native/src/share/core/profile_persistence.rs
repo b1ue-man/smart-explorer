@@ -16,13 +16,17 @@ pub(super) fn encode_profiles(profiles: &ShareProfiles) -> Result<String, String
     impl std::io::Write for Buffer {
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
             if (self.0.len() as u64).saturating_add(bytes.len() as u64) > MAX_PROFILE_BYTES {
-                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData,
-                    "Share profiles exceed their byte budget; history was not discarded"));
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Share profiles exceed their byte budget; history was not discarded",
+                ));
             }
             self.0.extend_from_slice(bytes);
             Ok(bytes.len())
         }
-        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
     }
     let mut buffer = Buffer(Vec::new());
     serde_json::to_writer_pretty(&mut buffer, profiles)
@@ -87,12 +91,18 @@ impl ShareProfiles {
             .map_err(|error| format!("Share-Profile sind beschaedigt: {error}"))?;
         if let Some(raw) = raw {
             let legacy_connections = profiles.default_direct_exports.include_connections
-                || profiles.rooms.iter().any(|room| room.exports.include_connections);
+                || profiles
+                    .rooms
+                    .iter()
+                    .any(|room| room.exports.include_connections);
             let accounts = if legacy_connections {
                 storage.saved_connection_accounts()?.ok_or_else(||
                     "Gespeicherte Verbindungskonten fuer die Freigabenmigration nicht verfuegbar".to_string())?
-            } else { Vec::new() };
-            let migrated = profiles.migrate_export_policy(&raw, default_home.as_deref(), &accounts)?;
+            } else {
+                Vec::new()
+            };
+            let migrated =
+                profiles.migrate_export_policy(&raw, default_home.as_deref(), &accounts)?;
             if migrated || old_version != profiles.schema_version {
                 // The old configuration remains intact if the write fails;
                 // no uncommitted migration is handed to the host runtime.
@@ -109,9 +119,11 @@ impl ShareProfiles {
         let mut candidate = self.clone();
         candidate.reconcile_legacy_grants(super::core::now_secs());
         candidate.recompute_all_identity_conflicts();
-        candidate.validate_direct_ledger()
+        candidate
+            .validate_direct_ledger()
             .map_err(|error| format!("Share-Profile sind beschaedigt: {error}"))?;
-        candidate.validate_legacy_direct_requests()
+        candidate
+            .validate_legacy_direct_requests()
             .map_err(|error| format!("Share-Profile sind beschaedigt: {error}"))?;
         let contents = encode_profiles(&candidate)?;
         let expected = match &self.storage_revision {
@@ -314,7 +326,9 @@ fn cleanup_new_secret(
 pub(super) trait ProfilePersistence {
     /// `None` cannot silently turn the legacy all-connections flag into
     /// an empty explicit set. The system adapter supplies the current list.
-    fn saved_connection_accounts(&mut self) -> Result<Option<Vec<String>>, String> { Ok(None) }
+    fn saved_connection_accounts(&mut self) -> Result<Option<Vec<String>>, String> {
+        Ok(None)
+    }
     fn load_profiles(&mut self) -> Result<Option<String>, String>;
     fn save_profiles(
         &mut self,

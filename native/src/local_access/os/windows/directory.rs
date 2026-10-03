@@ -385,8 +385,7 @@ fn reparse_tag_with_access(path: &Path, consented: bool) -> u32 {
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
         )
     };
-    file
-        .and_then(|file| attributes(&file))
+    file.and_then(|file| attributes(&file))
         .map(|info| info.ReparseTag)
         .unwrap_or(0)
 }

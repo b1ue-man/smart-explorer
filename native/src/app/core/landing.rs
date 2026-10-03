@@ -309,7 +309,10 @@ impl App {
     }
 }
 
-fn landing_sync_meta(job: &crate::syncjobs::SyncJob, state: Option<&crate::syncjobs::JobState>) -> (String, bool) {
+fn landing_sync_meta(
+    job: &crate::syncjobs::SyncJob,
+    state: Option<&crate::syncjobs::JobState>,
+) -> (String, bool) {
     let (status, warn) = super::sync_job_state_ui::summary(state);
     let enabled = if job.enabled { "aktiv" } else { "Zeitplan aus" };
     (format!("{enabled} · {status}"), warn)

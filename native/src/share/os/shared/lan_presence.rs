@@ -27,7 +27,10 @@ pub struct LanAnnouncement {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LanEvent {
     Seen(LanSighting),
-    SeenAuthenticated { sighting: LanSighting, proof: LanProof },
+    SeenAuthenticated {
+        sighting: LanSighting,
+        proof: LanProof,
+    },
     Lost(String),
     Error(String),
 }
@@ -52,9 +55,7 @@ impl LanPresence {
             .spawn(move || {
                 while let Ok(event) = browse.recv() {
                     let mapped = match event {
-                        mdns_sd::ServiceEvent::ServiceResolved(info) => {
-                            event_from(&info)
-                        }
+                        mdns_sd::ServiceEvent::ServiceResolved(info) => event_from(&info),
                         mdns_sd::ServiceEvent::ServiceRemoved(_, fullname) => {
                             id_from_fullname(&fullname).map(LanEvent::Lost)
                         }
@@ -62,7 +63,7 @@ impl LanPresence {
                     };
                     if let Some(mapped) = mapped {
                         match tx.try_send(mapped) {
-                            Ok(()) | Err(TrySendError::Full(_)) => {},
+                            Ok(()) | Err(TrySendError::Full(_)) => {}
                             Err(TrySendError::Disconnected(_)) => break,
                         }
                     }
@@ -81,10 +82,11 @@ impl LanPresence {
     }
 
     pub fn announced(&self) -> Option<LanAnnouncement> {
-        self.announced
-            .lock()
-            .ok()
-            .and_then(|guard| guard.as_ref().map(|(_, announcement, _)| announcement.clone()))
+        self.announced.lock().ok().and_then(|guard| {
+            guard
+                .as_ref()
+                .map(|(_, announcement, _)| announcement.clone())
+        })
     }
 
     /// Register (or replace) our own announcement. Unchanged announcements
@@ -93,25 +95,35 @@ impl LanPresence {
         self.announce_with_proof(announcement, None)
     }
 
-    pub fn announce_authenticated(&self, announcement: &LanAnnouncement, proof: &LanProof) -> Result<(), String> {
+    pub fn announce_authenticated(
+        &self,
+        announcement: &LanAnnouncement,
+        proof: &LanProof,
+    ) -> Result<(), String> {
         self.announce_with_proof(announcement, Some(proof))
     }
 
-    fn announce_with_proof(&self, announcement: &LanAnnouncement, proof: Option<&LanProof>) -> Result<(), String> {
+    fn announce_with_proof(
+        &self,
+        announcement: &LanAnnouncement,
+        proof: Option<&LanProof>,
+    ) -> Result<(), String> {
         let mut guard = self
             .announced
             .lock()
             .map_err(|_| "mDNS-Ankuendigung ist gesperrt".to_string())?;
-        if guard
-            .as_ref()
-            .is_some_and(|(_, current, previous)| current == announcement && match (previous, proof) {
-                (Some(previous), Some(proof)) => previous.epoch == proof.epoch
-                    && previous.addresses == proof.addresses
-                    && previous.expires_at > super::core::now_secs().saturating_add(60),
-                (None, None) => true,
-                _ => false,
-            })
-        {
+        if guard.as_ref().is_some_and(|(_, current, previous)| {
+            current == announcement
+                && match (previous, proof) {
+                    (Some(previous), Some(proof)) => {
+                        previous.epoch == proof.epoch
+                            && previous.addresses == proof.addresses
+                            && previous.expires_at > super::core::now_secs().saturating_add(60)
+                    }
+                    (None, None) => true,
+                    _ => false,
+                }
+        }) {
             return Ok(());
         }
         if let Some((fullname, _, _)) = guard.take() {
@@ -120,7 +132,15 @@ impl LanPresence {
         let instance = format!("{INSTANCE_PREFIX}{}", announcement.hashed_id);
         let host = format!("{instance}.local.");
         let mut properties: HashMap<String, String> = HashMap::from([
-            ("v".to_string(), if proof.is_some() { "2" } else { LAN_PRESENCE_VERSION }.to_string()),
+            (
+                "v".to_string(),
+                if proof.is_some() {
+                    "2"
+                } else {
+                    LAN_PRESENCE_VERSION
+                }
+                .to_string(),
+            ),
             ("id".to_string(), announcement.hashed_id.clone()),
             ("p4".to_string(), announcement.p4.to_string()),
             ("p6".to_string(), announcement.p6.to_string()),
@@ -202,11 +222,17 @@ fn sighting_from(info: &mdns_sd::ServiceInfo) -> Option<LanSighting> {
 
 fn event_from(info: &mdns_sd::ServiceInfo) -> Option<LanEvent> {
     let mut sighting = sighting_from(info)?;
-    if info.get_property_val_str("v") != Some("2") { return Some(LanEvent::Seen(sighting)); }
-    if sighting.id.len() != 32 { return None; }
+    if info.get_property_val_str("v") != Some("2") {
+        return Some(LanEvent::Seen(sighting));
+    }
+    if sighting.id.len() != 32 {
+        return None;
+    }
     let mut addresses = Vec::new();
     for index in 0..MAX_ADDRESSES {
-        let Some(value) = info.get_property_val_str(&format!("a{index}")) else { break; };
+        let Some(value) = info.get_property_val_str(&format!("a{index}")) else {
+            break;
+        };
         addresses.push(value.parse().ok()?);
     }
     // Never attribute an authenticated advisory to addresses injected into
@@ -214,12 +240,18 @@ fn event_from(info: &mdns_sd::ServiceInfo) -> Option<LanEvent> {
     // can later identify a private link.
     sighting.addrs.retain(|address| addresses.contains(address));
     let signature = info.get_property_val_str("s")?;
-    if signature.len() > 128 { return None; }
-    Some(LanEvent::SeenAuthenticated { sighting, proof: LanProof {
-        epoch: info.get_property_val_str("e")?.parse().ok()?,
-        expires_at: info.get_property_val_str("x")?.parse().ok()?,
-        addresses, signature: signature.to_string(),
-    } })
+    if signature.len() > 128 {
+        return None;
+    }
+    Some(LanEvent::SeenAuthenticated {
+        sighting,
+        proof: LanProof {
+            epoch: info.get_property_val_str("e")?.parse().ok()?,
+            expires_at: info.get_property_val_str("x")?.parse().ok()?,
+            addresses,
+            signature: signature.to_string(),
+        },
+    })
 }
 
 fn id_from_fullname(fullname: &str) -> Option<String> {
@@ -244,6 +276,8 @@ mod tests {
         );
         assert!(id_from_fullname("other._se-share._udp.local.").is_none());
         assert!(id_from_fullname("se-short._se-share._udp.local.").is_none());
-        assert!(id_from_fullname("se-0123456789abcdef0123456789abcdef._se-share._udp.local.").is_some());
+        assert!(
+            id_from_fullname("se-0123456789abcdef0123456789abcdef._se-share._udp.local.").is_some()
+        );
     }
 }

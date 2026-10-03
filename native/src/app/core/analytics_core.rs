@@ -228,11 +228,16 @@ impl App {
         root: String,
         label: String,
     ) {
-        let current = self.remote.as_ref().filter(|remote| Arc::ptr_eq(&remote.backend, &backend));
+        let current = self
+            .remote
+            .as_ref()
+            .filter(|remote| Arc::ptr_eq(&remote.backend, &backend));
         let label = current.map_or(label, |remote| remote.label.clone());
         let prefix = current.and_then(|remote| remote.endpoint_prefix.clone());
         let account = current.and_then(|remote| remote.account.clone());
-        self.start_analytics_source(StorageScanSource::remote_at(backend, root, label, prefix, account));
+        self.start_analytics_source(StorageScanSource::remote_at(
+            backend, root, label, prefix, account,
+        ));
     }
 
     /// Drain a finished analytics scan into the tree (called each frame).
@@ -242,11 +247,18 @@ impl App {
         match message {
             Some(Ok(mut outcome)) => {
                 self.update_analytics_access(outcome.permission_denied);
-                if let Some(StorageScanSource::Remote { host_volume, host_platform, .. }) = self.analytics_source.as_mut() {
+                if let Some(StorageScanSource::Remote {
+                    host_volume,
+                    host_platform,
+                    ..
+                }) = self.analytics_source.as_mut()
+                {
                     *host_volume = outcome.volume;
                     *host_platform = outcome.platform.clone();
-                } else if self.analytics_source.as_ref().is_some_and(|source|
-                    super::analytics_mounts::MountRoute::of(&self.mount_ui.mounts, source.root()).is_some()) {
+                } else if self.analytics_source.as_ref().is_some_and(|source| {
+                    super::analytics_mounts::MountRoute::of(&self.mount_ui.mounts, source.root())
+                        .is_some()
+                }) {
                     super::analytics_mounts::host_notes(&mut outcome);
                 }
                 self.analytics_totals = self.analytics_scan.as_ref().map(|scan| {
@@ -339,17 +351,21 @@ impl App {
     ) {
         match source {
             StorageScanSource::Local { .. } => self.remote = None,
-            StorageScanSource::Remote { backend, label, endpoint_prefix, account, .. } => {
-                let same_backend = self
-                    .remote
-                    .as_ref()
-                    .is_some_and(|remote| {
-                        if endpoint_prefix.is_some() {
-                            remote.endpoint_prefix == *endpoint_prefix && remote.account == *account
-                        } else {
-                            Arc::ptr_eq(&remote.backend, backend) && (account.is_none() || remote.account == *account)
-                        }
-                    });
+            StorageScanSource::Remote {
+                backend,
+                label,
+                endpoint_prefix,
+                account,
+                ..
+            } => {
+                let same_backend = self.remote.as_ref().is_some_and(|remote| {
+                    if endpoint_prefix.is_some() {
+                        remote.endpoint_prefix == *endpoint_prefix && remote.account == *account
+                    } else {
+                        Arc::ptr_eq(&remote.backend, backend)
+                            && (account.is_none() || remote.account == *account)
+                    }
+                });
                 if !same_backend {
                     self.remote = Some(crate::connect::RemoteState {
                         backend: backend.clone(),
@@ -363,8 +379,11 @@ impl App {
                 }
             }
         }
-        let native = if source.is_remote() { target.to_string() }
-            else { target.replace('/', std::path::MAIN_SEPARATOR_STR) };
+        let native = if source.is_remote() {
+            target.to_string()
+        } else {
+            target.replace('/', std::path::MAIN_SEPARATOR_STR)
+        };
         self.start_scan(PathBuf::from(native));
     }
 
@@ -437,13 +456,16 @@ impl App {
     /// Remote usage is supplied exclusively by the storing host.
     pub(in crate::app) fn drive_usage(&self, source: &StorageScanSource) -> Option<(u64, u64)> {
         if let StorageScanSource::Remote { host_volume, .. } = source {
-            return host_volume.filter(|usage| usage.total_bytes > 0)
+            return host_volume
+                .filter(|usage| usage.total_bytes > 0)
                 .map(|usage| (usage.used_bytes(), usage.total_bytes));
         }
         let StorageScanSource::Local { root } = source else {
             return None;
         };
-        if super::analytics_mounts::MountRoute::of(&self.mount_ui.mounts, root).is_some() { return None; }
+        if super::analytics_mounts::MountRoute::of(&self.mount_ui.mounts, root).is_some() {
+            return None;
+        }
         let dl = root.get(0..2)?.to_ascii_uppercase();
         for (r, free, total) in &self.drive_info {
             if *total > 0 && r.to_ascii_uppercase().starts_with(&dl) {

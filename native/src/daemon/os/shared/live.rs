@@ -68,7 +68,9 @@ pub fn active_job() -> Option<String> {
 /// unreadable).
 pub fn last_catch_up_ms() -> Option<i64> {
     let path = crate::support_dirs::sync_data_dir().join(LAST_CATCH_UP_FILE);
-    last_catch_up().map(|record| record.finished_ms).or_else(|| read_optional(&path).ok()??.trim().parse().ok())
+    last_catch_up()
+        .map(|record| record.finished_ms)
+        .or_else(|| read_optional(&path).ok()??.trim().parse().ok())
 }
 
 /// The last finished catch-up run that ran at least one job, with its outcome
@@ -161,8 +163,11 @@ pub(super) fn service_catch_up(supervisor: &mut JobSupervisor, gate: impl FnOnce
         return;
     }
     let gate = gate();
-    let jobs = (requested && matches!(gate, CatchUpGate::Open))
-        .then(|| crate::syncjobs::load_report().map(|report| report.jobs).map_err(|error| error.to_string()));
+    let jobs = (requested && matches!(gate, CatchUpGate::Open)).then(|| {
+        crate::syncjobs::load_report()
+            .map(|report| report.jobs)
+            .map_err(|error| error.to_string())
+    });
     let report = {
         let mut live = lock();
         let report = live
@@ -186,11 +191,19 @@ fn record_finished(report: &ServiceReport) {
     for (id, message) in &report.finished {
         log(&format!("catch-up run {id} finished: {message}"));
     }
-    let Some(record) = report.records.last() else { return; };
+    let Some(record) = report.records.last() else {
+        return;
+    };
     let directory = crate::support_dirs::sync_data_dir();
-    match serde_json::to_string(record).and_then(|text| write_control(&directory.join("catchup.last.json"), &text)
-        .map_err(serde_json::Error::io)) {
-        Ok(()) => { let _ = write_control(&directory.join(LAST_CATCH_UP_FILE), &record.finished_ms.to_string()); }
+    match serde_json::to_string(record).and_then(|text| {
+        write_control(&directory.join("catchup.last.json"), &text).map_err(serde_json::Error::io)
+    }) {
+        Ok(()) => {
+            let _ = write_control(
+                &directory.join(LAST_CATCH_UP_FILE),
+                &record.finished_ms.to_string(),
+            );
+        }
         Err(error) => log(&format!("catch-up result could not be stored: {error}")),
     }
 }

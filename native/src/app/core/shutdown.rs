@@ -15,7 +15,10 @@ impl App {
         self.drain_desktop_sync_workers();
         if self.desktop_sync_active() {
             self.cancel_desktop_sync();
-            return Err("Synchronisierung wird noch beendet. Das Fenster bleibt bis zum Abschluss offen.".into());
+            return Err(
+                "Synchronisierung wird noch beendet. Das Fenster bleibt bis zum Abschluss offen."
+                    .into(),
+            );
         }
 
         let transfer_worker_active = self.transfer_center.lane.workers_unfinished();

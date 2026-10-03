@@ -137,7 +137,10 @@ pub(crate) fn handle_walk_hashed2(
         );
     }
     if !matches!(algorithm, digest::NONE | digest::MD5) {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "unbekannter Hashalgorithmus"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "unbekannter Hashalgorithmus",
+        ));
     }
     let base = Path::new(root);
     let metadata = std::fs::symlink_metadata(base)?;
@@ -301,9 +304,15 @@ pub(super) fn md5_file(path: &Path, expected_size: u64, cancel: &AtomicBool) -> 
         context.update(&buffer[..read]);
     }
     let after = file.metadata()?;
-    if bytes != expected_size || before.len() != expected_size || after.len() != expected_size
-        || before.modified().ok() != after.modified().ok() {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "Datei während des Hashens geändert"));
+    if bytes != expected_size
+        || before.len() != expected_size
+        || after.len() != expected_size
+        || before.modified().ok() != after.modified().ok()
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Datei während des Hashens geändert",
+        ));
     }
     Ok(context.finish_hex())
 }

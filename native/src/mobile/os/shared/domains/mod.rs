@@ -45,14 +45,14 @@ mod share_status;
 mod sync_conflicts;
 #[path = "sync_jobs.rs"]
 mod sync_jobs;
-#[path = "sync_state_json.rs"]
-mod sync_state_json;
-#[path = "sync_versions.rs"]
-mod sync_versions;
 #[path = "sync_merge.rs"]
 mod sync_merge;
 #[path = "sync_run.rs"]
 mod sync_run;
+#[path = "sync_state_json.rs"]
+mod sync_state_json;
+#[path = "sync_versions.rs"]
+mod sync_versions;
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;

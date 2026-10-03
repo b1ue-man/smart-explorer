@@ -104,15 +104,11 @@ fn merge_members(
             .iter()
             .find(|member| member.device_id == updated_member.device_id);
         if previous_member.is_none() {
-            if !current
-                .members
-                .iter()
-                .any(|member| {
-                    member.device_id == updated_member.device_id
-                        || member.public_key == updated_member.public_key
-                        || !member.node_id.is_empty() && member.node_id == updated_member.node_id
-                })
-            {
+            if !current.members.iter().any(|member| {
+                member.device_id == updated_member.device_id
+                    || member.public_key == updated_member.public_key
+                    || !member.node_id.is_empty() && member.node_id == updated_member.node_id
+            }) {
                 if let Some(presence) = &updated_member.presence {
                     current.upsert_member_from_presence(
                         presence.clone(),
@@ -141,7 +137,8 @@ fn merge_members(
             }
             if updated_member.public_key != previous_member.public_key
                 || updated_member.fingerprint != previous_member.fingerprint
-                || !previous_member.node_id.is_empty() && updated_member.node_id != previous_member.node_id
+                || !previous_member.node_id.is_empty()
+                    && updated_member.node_id != previous_member.node_id
             {
                 continue;
             }
@@ -193,7 +190,10 @@ mod tests {
         let mut latest = before.clone();
         latest.direct_contacts[0].access_state = DirectAccessState::Ignored;
         merge_worker_updates(&mut latest, &before, &worker);
-        assert_eq!(latest.direct_contacts[0].access_state, DirectAccessState::Ignored);
+        assert_eq!(
+            latest.direct_contacts[0].access_state,
+            DirectAccessState::Ignored
+        );
         assert_eq!(latest.direct_contacts[0].accepted_at, None);
         assert!(latest.direct_contacts[0].relation.signed_presence);
         let mut unsigned_worker = latest.clone();
@@ -208,16 +208,29 @@ mod tests {
     fn review_task_new_worker_room_member_uses_current_confirmation_policy() {
         let mut before = ShareProfiles::default();
         before.rooms.push(crate::share::RoomProfile {
-            id: "profile".into(), name: "Room".into(), room_id: "room".into(),
-            auto_join: true, last_seen: None, status: ShareStatus::Waiting,
-            members: Vec::new(), exports: Default::default(),
+            id: "profile".into(),
+            name: "Room".into(),
+            room_id: "room".into(),
+            auto_join: true,
+            last_seen: None,
+            status: ShareStatus::Waiting,
+            members: Vec::new(),
+            exports: Default::default(),
             policy: crate::share::RoomPolicy::new_room(),
         });
         let presence = crate::share::PeerPresence {
-            kind: "room".into(), relation_id: "room".into(), device_id: "peer".into(),
-            device_name: "Peer".into(), public_key: "key".into(), fingerprint: "fp".into(),
-            node_id: "key".into(), relay_url: String::new(), candidates: Vec::new(),
-            expires_at: 100, nonce: "verified.ps1.signature".into(), proof: String::new(),
+            kind: "room".into(),
+            relation_id: "room".into(),
+            device_id: "peer".into(),
+            device_name: "Peer".into(),
+            public_key: "key".into(),
+            fingerprint: "fp".into(),
+            node_id: "key".into(),
+            relay_url: String::new(),
+            candidates: Vec::new(),
+            expires_at: 100,
+            nonce: "verified.ps1.signature".into(),
+            proof: String::new(),
         };
         let mut worker = before.clone();
         worker.rooms[0].upsert_member_from_presence(presence, 2);

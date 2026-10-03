@@ -131,7 +131,9 @@ fn run_worker(changes: Receiver<()>) {
             let mut shared = shared();
             shared.applied = applied;
             if shared.counts.iter().all(|count| *count == 0) {
-                if wanted.iter().any(|held| *held) { continue; }
+                if wanted.iter().any(|held| *held) {
+                    continue;
+                }
                 // The backend released everything for the empty counters; a
                 // later hold starts a new worker.
                 shared.worker = None;

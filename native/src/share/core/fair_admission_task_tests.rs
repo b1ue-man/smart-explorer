@@ -5,7 +5,9 @@ use crate::share::session::PeerPrincipal;
 fn review_task_host_fairness_borrows_capacity_and_prioritizes_waiting_device() {
     let pool = Pool::new(4);
     let mut owned = Vec::new();
-    for _ in 0..4 { owned.push(pool.enqueue("a").unwrap().try_acquire().unwrap().unwrap()); }
+    for _ in 0..4 {
+        owned.push(pool.enqueue("a").unwrap().try_acquire().unwrap().unwrap());
+    }
     let same = pool.enqueue("a").unwrap();
     let other = pool.enqueue("b").unwrap();
     assert!(other.try_acquire().unwrap().is_none());
@@ -25,7 +27,12 @@ fn review_task_host_fairness_shares_direct_room_device_but_keeps_principal() {
     assert_ne!(direct, room);
     assert_eq!(direct.device_identity(), room.device_identity());
     let pool = Pool::new(1);
-    let held = pool.enqueue(direct.device_identity()).unwrap().try_acquire().unwrap().unwrap();
+    let held = pool
+        .enqueue(direct.device_identity())
+        .unwrap()
+        .try_acquire()
+        .unwrap()
+        .unwrap();
     let waiting = pool.enqueue(room.device_identity()).unwrap();
     assert!(waiting.try_acquire().unwrap().is_none());
     drop(held);

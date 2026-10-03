@@ -18,11 +18,21 @@ pub fn plan(
     base: &Baseline,
     opts: BisyncOptions,
 ) -> (Vec<Action>, Vec<Conflict>, Vec<String>) {
-    let mut a = SideSnapshot { tree: a.clone(), ..SideSnapshot::default() };
-    let mut b = SideSnapshot { tree: b.clone(), ..SideSnapshot::default() };
+    let mut a = SideSnapshot {
+        tree: a.clone(),
+        ..SideSnapshot::default()
+    };
+    let mut b = SideSnapshot {
+        tree: b.clone(),
+        ..SideSnapshot::default()
+    };
     let planned = plan_pair(&mut a, &mut b, base, &PlanContext::new(opts));
-    let converged = planned.records.into_iter().map(|(rel, _)| rel)
-        .chain(planned.forget).collect();
+    let converged = planned
+        .records
+        .into_iter()
+        .map(|(rel, _)| rel)
+        .chain(planned.forget)
+        .collect();
     (planned.actions, planned.conflicts, converged)
 }
 
@@ -38,7 +48,11 @@ pub fn update_baseline(
 ) -> Baseline {
     let conflicts: BTreeSet<&str> = conflicts.iter().map(|c| c.rel.as_str()).collect();
     let mut next = base.clone();
-    for rel in applied.iter().map(action_rel).chain(converged.iter().map(String::as_str)) {
+    for rel in applied
+        .iter()
+        .map(action_rel)
+        .chain(converged.iter().map(String::as_str))
+    {
         next.insert(rel.to_string(), (a.get(rel).copied(), b.get(rel).copied()));
     }
     next.retain(|rel, (a, b)| a.is_some() || b.is_some() || conflicts.contains(rel.as_str()));
@@ -47,9 +61,13 @@ pub fn update_baseline(
 
 pub(super) fn action_rel(action: &Action) -> &str {
     match action {
-        Action::CopyAtoB(rel) | Action::CopyBtoA(rel)
-        | Action::FinalizeMoveAtoB(rel) | Action::FinalizeMoveBtoA(rel)
-        | Action::DeleteA(rel) | Action::DeleteB(rel)
-        | Action::KeepBothAtoB(rel) | Action::KeepBothBtoA(rel) => rel,
+        Action::CopyAtoB(rel)
+        | Action::CopyBtoA(rel)
+        | Action::FinalizeMoveAtoB(rel)
+        | Action::FinalizeMoveBtoA(rel)
+        | Action::DeleteA(rel)
+        | Action::DeleteB(rel)
+        | Action::KeepBothAtoB(rel)
+        | Action::KeepBothBtoA(rel) => rel,
     }
 }

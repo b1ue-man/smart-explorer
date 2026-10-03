@@ -351,8 +351,15 @@ impl DiscoverySignalRuntime {
                     );
                 }
                 _ => {
-                    let event = self.exchange_ended(&exchange_id, Some(&exchange), None,
-                        ExchangeEnd::Failed("Discovery-Austausch konnte nicht sicher abgeschlossen werden".into()), false);
+                    let event = self.exchange_ended(
+                        &exchange_id,
+                        Some(&exchange),
+                        None,
+                        ExchangeEnd::Failed(
+                            "Discovery-Austausch konnte nicht sicher abgeschlossen werden".into(),
+                        ),
+                        false,
+                    );
                     self.port.cancel_exchange(&exchange_id);
                     send_discovery_event(events, event);
                 }

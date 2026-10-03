@@ -19,6 +19,9 @@ pub fn set_problem_notifier(notifier: fn(&ProblemNotice)) {
 pub(super) fn notify(jobs: &[crate::syncjobs::SyncJob], now: i64) {
     let notifier = *NOTIFIER.lock().unwrap_or_else(PoisonError::into_inner);
     for notice in crate::syncjobs::take_problem_notices(jobs, now) {
-        match notifier { Some(notifier) => notifier(&notice), None => crate::notify_desktop::notify(&notice) }
+        match notifier {
+            Some(notifier) => notifier(&notice),
+            None => crate::notify_desktop::notify(&notice),
+        }
     }
 }

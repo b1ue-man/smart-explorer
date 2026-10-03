@@ -218,7 +218,9 @@ fn review_task_watch_confined_never_reopens_a_swapped_root_or_ancestor() {
         let literal_root = export.join("child");
         std::fs::create_dir_all(literal_root.join("nested")).unwrap();
         let export_pin = crate::local_access::DirectoryHandle::open_root(&export).unwrap();
-        let pin = export_pin.open_child(std::ffi::OsStr::new("child")).unwrap();
+        let pin = export_pin
+            .open_child(std::ffi::OsStr::new("child"))
+            .unwrap();
         let retained = directory.path().join("retained");
         let (retained_root, outside_root) = if swap_ancestor {
             std::fs::create_dir(outside.path().join("child")).unwrap();
@@ -231,13 +233,25 @@ fn review_task_watch_confined_never_reopens_a_swapped_root_or_ancestor() {
             (retained, outside.path().to_path_buf())
         };
         let (sender, events) = crossbeam_channel::bounded(1024);
-        let handle = watch_confined(&pin, &literal_root, WatchOptions::default(),
-            WatchFilter::all(), WatchSink::from(sender)).unwrap();
+        let handle = watch_confined(
+            &pin,
+            &literal_root,
+            WatchOptions::default(),
+            WatchFilter::all(),
+            WatchSink::from(sender),
+        )
+        .unwrap();
         drop(pin);
         drop(export_pin);
-        assert_eq!(wait_for(&events, &handle,
-            |event| matches!(event, WatchEvent::Ready(_)), WAIT),
-            Some(WatchEvent::Ready(Coverage::LocalOnly)));
+        assert_eq!(
+            wait_for(
+                &events,
+                &handle,
+                |event| matches!(event, WatchEvent::Ready(_)),
+                WAIT
+            ),
+            Some(WatchEvent::Ready(Coverage::LocalOnly))
+        );
 
         std::fs::write(outside_root.join("outside-name.txt"), b"x").unwrap();
         // A path-only signal cannot prove which directory object it names.
@@ -245,8 +259,12 @@ fn review_task_watch_confined_never_reopens_a_swapped_root_or_ancestor() {
         // Partial coverage deliberately avoids a path-based descendant walk.
         std::fs::write(retained_root.join("nested/deep.txt"), b"x").unwrap();
         std::fs::write(retained_root.join("authorized.txt"), b"x").unwrap();
-        let first = wait_for(&events, &handle,
-            |event| matches!(event, WatchEvent::Change(_)), WAIT);
+        let first = wait_for(
+            &events,
+            &handle,
+            |event| matches!(event, WatchEvent::Change(_)),
+            WAIT,
+        );
         match first {
             Some(WatchEvent::Change(change)) => assert_eq!(change.rel, "authorized.txt"),
             other => panic!("expected an event from the held object: {other:?}"),
@@ -262,16 +280,33 @@ fn review_task_watch_confined_overlap_preserves_recursive_job_watches() {
     ready(&job_events, &job_watch);
     let pin = crate::local_access::DirectoryHandle::open_root(root).unwrap();
     let (sender, events) = crossbeam_channel::bounded(1024);
-    let confined = watch_confined(&pin, root, WatchOptions::default(),
-        WatchFilter::all(), WatchSink::from(sender)).unwrap();
+    let confined = watch_confined(
+        &pin,
+        root,
+        WatchOptions::default(),
+        WatchFilter::all(),
+        WatchSink::from(sender),
+    )
+    .unwrap();
     ready(&events, &confined);
     drop(confined);
     drop(pin);
     std::fs::create_dir(root.join("new")).unwrap();
-    assert!(wait_for(&job_events, &job_watch, change("new", EventKind::Created), WAIT).is_some());
+    assert!(wait_for(
+        &job_events,
+        &job_watch,
+        change("new", EventKind::Created),
+        WAIT
+    )
+    .is_some());
     std::fs::write(root.join("new/deep.txt"), b"x").unwrap();
-    assert!(wait_for(&job_events, &job_watch,
-        change("new/deep.txt", EventKind::Created), WAIT).is_some());
+    assert!(wait_for(
+        &job_events,
+        &job_watch,
+        change("new/deep.txt", EventKind::Created),
+        WAIT
+    )
+    .is_some());
 }
 
 #[test]

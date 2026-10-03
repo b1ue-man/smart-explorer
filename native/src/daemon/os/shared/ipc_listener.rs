@@ -78,10 +78,18 @@ pub(crate) fn start_listener(host: ShareHost) -> io::Result<IpcListener> {
                 ACCEPT_WAIT,
                 &loop_stopping,
                 &|| stop_requested_for(&generation),
-                |stream, peer| admissions.borrow_mut().accept(stream, peer, &host, &token,
-                    |stream| admit_client(stream, &host, &token, &limiter)),
-                || admissions.borrow_mut().poll(&host, &token,
-                    |stream| admit_client(stream, &host, &token, &limiter)),
+                |stream, peer| {
+                    admissions
+                        .borrow_mut()
+                        .accept(stream, peer, &host, &token, |stream| {
+                            admit_client(stream, &host, &token, &limiter)
+                        })
+                },
+                || {
+                    admissions.borrow_mut().poll(&host, &token, |stream| {
+                        admit_client(stream, &host, &token, &limiter)
+                    })
+                },
             );
         });
 
@@ -119,7 +127,11 @@ fn accept_loop(
                 admit(stream, peer);
             }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                let wait = if pending { wait.min(admission::PRELUDE_WAIT) } else { wait };
+                let wait = if pending {
+                    wait.min(admission::PRELUDE_WAIT)
+                } else {
+                    wait
+                };
                 if let Err(error) = platform::wait_for_ipc_client(listener, wait) {
                     log(&format!("daemon IPC wait failed: {error}"));
                     std::thread::sleep(Duration::from_secs(1));
@@ -133,12 +145,7 @@ fn accept_loop(
     }
 }
 
-fn admit_client(
-    stream: TcpStream,
-    host: &ShareHost,
-    token: &str,
-    limiter: &Arc<PreAuthLimiter>,
-) {
+fn admit_client(stream: TcpStream, host: &ShareHost, token: &str, limiter: &Arc<PreAuthLimiter>) {
     let Some(permit) = limiter.try_acquire() else {
         return;
     };

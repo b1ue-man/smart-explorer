@@ -92,9 +92,14 @@ impl GDriveBackend {
     }
 
     pub(super) fn promote_staged_file_to_id(
-        &self, staged: &str, destination: &str, id: Option<&str>,
+        &self,
+        staged: &str,
+        destination: &str,
+        id: Option<&str>,
     ) -> VfsResult<()> {
-        let id = id.filter(|id| !id.is_empty()).ok_or_else(|| invalid("Drive replacement needs an exact ID"))?;
+        let id = id
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| invalid("Drive replacement needs an exact ID"))?;
         self.promote_staged_file_with_mode(staged, destination, true, Some(id))
     }
 
@@ -150,7 +155,9 @@ impl GDriveBackend {
             })?;
             validate_staging_object(&staged_object)?;
             let destination_object = match destination_id {
-                Some(id) => Some(self.exact_named_object(&destination_parent_id, destination_name, id)?),
+                Some(id) => {
+                    Some(self.exact_named_object(&destination_parent_id, destination_name, id)?)
+                }
                 None => require_one(
                     self.named_objects(destination_parent_id.as_str(), destination_name)?,
                     "Drive destination path",
@@ -180,7 +187,12 @@ impl GDriveBackend {
             (staged_object, destination_object)
         };
 
-        let replaced = self.replace_existing(&context, staged_object, destination_object, destination_id.is_some());
+        let replaced = self.replace_existing(
+            &context,
+            staged_object,
+            destination_object,
+            destination_id.is_some(),
+        );
         if replaced.is_ok() {
             self.forget_owned_stage(&staged);
         }
@@ -264,9 +276,15 @@ impl GDriveBackend {
         identity_bound: bool,
     ) -> VfsResult<()> {
         let mut content = self.spool_staged(context.source, &staged_object)?;
-        if self.exact_named_object(context.destination_parent_id, context.destination_name,
-            &destination_object.id)? != destination_object {
-            return Err(invalid("Drive destination changed before selected-ID replacement"));
+        if self.exact_named_object(
+            context.destination_parent_id,
+            context.destination_name,
+            &destination_object.id,
+        )? != destination_object
+        {
+            return Err(invalid(
+                "Drive destination changed before selected-ID replacement",
+            ));
         }
         self.replace_spooled_id(
             &destination_object.id,
@@ -310,20 +328,24 @@ impl GDriveBackend {
         // old ID in place. Still fail explicitly if an external client made the
         // namespace ambiguous while the media update was in flight.
         let verification = if identity_bound {
-            self.exact_named_object(context.destination_parent_id, context.destination_name,
-                &destination_object.id).and_then(|object| validate_staged_content(&object, content.size, &content.md5))
+            self.exact_named_object(
+                context.destination_parent_id,
+                context.destination_name,
+                &destination_object.id,
+            )
+            .and_then(|object| validate_staged_content(&object, content.size, &content.md5))
         } else {
             self.named_objects(context.destination_parent_id, context.destination_name)
                 .and_then(|objects| verify_unique_id(&objects, &destination_object.id))
         };
         verification.map_err(|error| {
-                committed_cleanup_error(
-                    error.kind(),
-                    &destination_object.id,
-                    &staged_object.id,
-                    &format!("destination cleanup verification failed: {error}"),
-                )
-            })?;
+            committed_cleanup_error(
+                error.kind(),
+                &destination_object.id,
+                &staged_object.id,
+                &format!("destination cleanup verification failed: {error}"),
+            )
+        })?;
 
         if let Err(error) = self.trash_id(&staged_object.id) {
             return Err(committed_cleanup_error(

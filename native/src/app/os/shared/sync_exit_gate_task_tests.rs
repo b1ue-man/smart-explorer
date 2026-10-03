@@ -72,10 +72,7 @@ impl HeldWorker {
             progress,
             published: false,
         };
-        assert_eq!(
-            fixture.progress.recv_timeout(WORKER_TIMEOUT),
-            Ok("started")
-        );
+        assert_eq!(fixture.progress.recv_timeout(WORKER_TIMEOUT), Ok("started"));
         fixture
     }
 
@@ -84,10 +81,7 @@ impl HeldWorker {
             return;
         }
         self.publish.send(()).expect("publish Y156 result");
-        assert_eq!(
-            self.progress.recv_timeout(WORKER_TIMEOUT),
-            Ok("published")
-        );
+        assert_eq!(self.progress.recv_timeout(WORKER_TIMEOUT), Ok("published"));
         self.published = true;
     }
 
@@ -145,7 +139,10 @@ impl HeldWorker {
             std::thread::sleep(Duration::from_millis(1));
         }
         assert_eq!(self.app.drain_desktop_sync_workers(), 0);
-        assert!(!self.rescued.load(Ordering::Acquire), "worker needed rescue");
+        assert!(
+            !self.rescued.load(Ordering::Acquire),
+            "worker needed rescue"
+        );
     }
 }
 
@@ -211,9 +208,18 @@ fn review_task_y156_results_drain_while_worker_is_still_alive() {
     assert!(fixture.app.apply_one_rx.is_none());
     assert!(!fixture.app.bisync_running);
     assert!(fixture.app.bisync_cancel.is_none());
-    assert!(fixture.app.error_msg.as_deref().is_some_and(|e| e.contains(RESULT_ERROR)));
+    assert!(fixture
+        .app
+        .error_msg
+        .as_deref()
+        .is_some_and(|e| e.contains(RESULT_ERROR)));
     assert_eq!(
-        fixture.app.preview.as_ref().expect("original plan retained").actions,
+        fixture
+            .app
+            .preview
+            .as_ref()
+            .expect("original plan retained")
+            .actions,
         vec![Action::CopyAtoB("held.txt".into())]
     );
     assert!(fixture.app.desktop_sync_active());
@@ -250,19 +256,30 @@ fn review_task_y156_update_preflight_waits_for_actual_completion() {
     fixture.app.request_sync_exit(ExitIntent::Update);
     let ctx = egui::Context::default();
     fixture.frame(&ctx, false).assert_held();
-    assert!(fixture.app.error_msg.is_none(), "no active-worker preflight");
+    assert!(
+        fixture.app.error_msg.is_none(),
+        "no active-worker preflight"
+    );
     fixture.cancel_and_expire_ui_wait();
     fixture.frame(&ctx, false).assert_held();
-    assert!(fixture.app.error_msg.is_none(), "deadline permits no preflight");
+    assert!(
+        fixture.app.error_msg.is_none(),
+        "deadline permits no preflight"
+    );
     assert!(fixture.app.prepare_for_update_apply().is_err());
     assert!(!fixture.app.shutdown_prepared);
     fixture.complete();
     fixture.frame(&ctx, false).assert_held();
     assert!(!fixture.app.desktop_sync_active());
-    assert!(!fixture.app.shutdown_prepared, "verification precedes shutdown");
+    assert!(
+        !fixture.app.shutdown_prepared,
+        "verification precedes shutdown"
+    );
     assert_eq!(
         fixture.app.error_msg.as_deref(),
-        Some("Update-Staging ist nicht mehr gültig: Nicht unterstuetztes Staging-Manifest-Schema 0")
+        Some(
+            "Update-Staging ist nicht mehr gültig: Nicht unterstuetztes Staging-Manifest-Schema 0"
+        )
     );
     assert!(matches!(
         fixture.app.update_ready.as_ref(),

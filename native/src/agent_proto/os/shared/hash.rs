@@ -75,7 +75,9 @@ pub(crate) fn handle_walk_hashed(
                 let size = md.len();
                 let md5 = if want_hash {
                     Some(super::ext_ops::md5_file(&p, size, cancel)?)
-                } else { None };
+                } else {
+                    None
+                };
                 emit(
                     sink,
                     id,

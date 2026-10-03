@@ -11,8 +11,8 @@ mod host;
 #[cfg(all(not(windows), not(target_os = "android")))]
 #[path = "linux_os.rs"]
 mod host;
-pub(crate) use host::{host_permission_note, recycle, volume_usage};
 pub(crate) use host::host_recycle_available;
+pub(crate) use host::{host_permission_note, recycle, volume_usage};
 
 /// Default worker count of a local scan. Android's shared storage is served
 /// by MediaProvider's multi-threaded FUSE daemon, whose readdirplus answers

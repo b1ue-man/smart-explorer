@@ -25,7 +25,10 @@ fn review_task_finish_stage_refuses_links_and_specials() {
     };
     let error = finish_stage(&backend, stage.to_str().unwrap(), finish).unwrap_err();
     assert_eq!(NotRegular::of(&error), Some(NotRegular::Link));
-    assert_eq!(std::fs::metadata(&victim).unwrap().modified().unwrap(), before);
+    assert_eq!(
+        std::fs::metadata(&victim).unwrap().modified().unwrap(),
+        before
+    );
     std::fs::remove_file(&stage).unwrap();
     let fifo = CString::new(stage.as_os_str().as_bytes()).unwrap();
     // SAFETY: NUL-terminated fixture path and plain permission bits.
@@ -37,9 +40,13 @@ fn review_task_finish_stage_refuses_links_and_specials() {
         &backend,
         stage.to_str().unwrap(),
         destination.to_str().unwrap(),
-    ).is_err());
+    )
+    .is_err());
     assert!(!destination.exists());
-    assert!(std::fs::symlink_metadata(&stage).is_ok(), "refusal retains the stage");
+    assert!(
+        std::fs::symlink_metadata(&stage).is_ok(),
+        "refusal retains the stage"
+    );
 }
 
 #[test]

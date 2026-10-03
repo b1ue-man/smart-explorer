@@ -7,12 +7,11 @@ use std::sync::Mutex;
 use super::snapshot_dir::WalkContext;
 pub use super::snapshot_hash::HashMode;
 pub(super) use super::snapshot_hash::{hash_mode, md5_hex_to_u64, md5_to_u64};
+use super::snapshot_types::DirSet;
 use super::snapshot_walk::walk_tree;
 use super::sync_flows::next_job;
 use super::sync_overload::Progress;
 use super::types::{Baseline, BisyncOptions, Tree};
-use super::snapshot_types::DirSet;
-
 
 /// What to skip while walking: hidden files, ignore globs (matched on the
 /// relative path), and size/age bounds (Group G). A bound of 0 means "no limit".
@@ -131,21 +130,44 @@ pub(super) fn walk_snapshot(
     allow_duplicate_files: bool,
     fold_case: bool,
 ) -> io::Result<Snapshot> {
-    walk_snapshot_with_options(be, root, cancel, filter, hash, prev,
-        allow_duplicate_files, fold_case, BisyncOptions { cross_mounts: true, ..Default::default() })
+    walk_snapshot_with_options(
+        be,
+        root,
+        cancel,
+        filter,
+        hash,
+        prev,
+        allow_duplicate_files,
+        fold_case,
+        BisyncOptions {
+            cross_mounts: true,
+            ..Default::default()
+        },
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn walk_snapshot_with_options(
-    be: &dyn Backend, root: &str, cancel: &AtomicBool, filter: &WalkFilter,
-    hash: HashMode, prev: Option<&Tree>, allow_duplicate_files: bool,
-    fold_case: bool, opts: BisyncOptions,
+    be: &dyn Backend,
+    root: &str,
+    cancel: &AtomicBool,
+    filter: &WalkFilter,
+    hash: HashMode,
+    prev: Option<&Tree>,
+    allow_duplicate_files: bool,
+    fold_case: bool,
+    opts: BisyncOptions,
 ) -> io::Result<Snapshot> {
     if cancel.load(Ordering::Acquire) {
-        return Err(io::Error::new(io::ErrorKind::Interrupted, "synchronization tree walk canceled"));
+        return Err(io::Error::new(
+            io::ErrorKind::Interrupted,
+            "synchronization tree walk canceled",
+        ));
     }
     super::apply_boundary::guard(be, root, "", opts.cross_mounts)?;
-    if let Some(snapshot) = super::snapshot_agent::walk_snapshot_via_agent(be, root, cancel, filter, hash, opts, fold_case)? {
+    if let Some(snapshot) = super::snapshot_agent::walk_snapshot_via_agent(
+        be, root, cancel, filter, hash, opts, fold_case,
+    )? {
         return Ok(snapshot);
     }
     let omissions = Mutex::new(super::omissions::SyncOmissions::new(fold_case));
@@ -154,16 +176,27 @@ pub(super) fn walk_snapshot_with_options(
     let dirs = Mutex::new(DirSet::new());
     let flow = (!be.is_local()).then(|| flow_for(be, root));
     let context = WalkContext {
-        be, root, cancel, filter, hash, prev, allow_duplicate_files,
-        omissions: Some(&omissions), duplicates: Some(&duplicates),
-        filtered: Some(&filtered), dirs: Some(&dirs), opts,
+        be,
+        root,
+        cancel,
+        filter,
+        hash,
+        prev,
+        allow_duplicate_files,
+        omissions: Some(&omissions),
+        duplicates: Some(&duplicates),
+        filtered: Some(&filtered),
+        dirs: Some(&dirs),
+        opts,
         limits: super::SyncLimits::for_memory(crate::transfer::physical_memory()),
-        nodes: AtomicU64::new(0), text_bytes: AtomicU64::new(0),
+        nodes: AtomicU64::new(0),
+        text_bytes: AtomicU64::new(0),
         reads: flow.clone().map(|flow| (flow, next_job())),
         progress: Progress::default(),
     };
     let tree = walk_tree(&context, flow, be.parallelism().max(1))?;
-    Ok(Snapshot { tree,
+    Ok(Snapshot {
+        tree,
         filtered: filtered.into_inner().unwrap_or_else(|e| e.into_inner()),
         dirs: dirs.into_inner().unwrap_or_else(|e| e.into_inner()),
         omissions: omissions.into_inner().unwrap_or_else(|e| e.into_inner()),

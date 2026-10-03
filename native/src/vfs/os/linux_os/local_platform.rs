@@ -4,15 +4,15 @@ use std::path::{Path, PathBuf};
 #[path = "mountinfo.rs"]
 mod mountinfo;
 #[cfg(test)]
-#[path = "review_task_mountinfo_tests.rs"]
-mod review_task_mountinfo_tests;
-#[path = "volume_id.rs"]
-mod volume_id;
-#[path = "stage.rs"]
-mod stage;
-#[cfg(test)]
 #[path = "review_task_local_guard_tests.rs"]
 mod review_task_local_guard_tests;
+#[cfg(test)]
+#[path = "review_task_mountinfo_tests.rs"]
+mod review_task_mountinfo_tests;
+#[path = "stage.rs"]
+mod stage;
+#[path = "volume_id.rs"]
+mod volume_id;
 
 pub(crate) use stage::open_stage;
 

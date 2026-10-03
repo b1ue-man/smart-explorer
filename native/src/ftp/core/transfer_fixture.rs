@@ -67,7 +67,12 @@ fn transfer(
     reply(control, "226 transfer complete")
 }
 
-pub(super) fn serve(mut stream: TcpStream, rules: &Rules, store: &Mutex<Store>, open: &Arc<AtomicUsize>) {
+pub(super) fn serve(
+    mut stream: TcpStream,
+    rules: &Rules,
+    store: &Mutex<Store>,
+    open: &Arc<AtomicUsize>,
+) {
     let _ = stream.set_nonblocking(false);
     let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
     let over = open.fetch_add(1, Ordering::SeqCst) + 1 > rules.max_connections;
@@ -110,7 +115,10 @@ pub(super) fn serve(mut stream: TcpStream, rules: &Rules, store: &Mutex<Store>, 
             ),
             "PASS" => reply(&mut stream, "230 logged in"),
             "TYPE" => reply(&mut stream, "200 binary"),
-            "PWD" => reply(&mut stream, &format!("257 \"{current}\" is current directory")),
+            "PWD" => reply(
+                &mut stream,
+                &format!("257 \"{current}\" is current directory"),
+            ),
             "CWD" if argument == "/" || lock(store).dirs.contains(&argument) => {
                 current = argument.clone();
                 reply(&mut stream, "250 directory changed")
@@ -159,7 +167,11 @@ pub(super) fn serve(mut stream: TcpStream, rules: &Rules, store: &Mutex<Store>, 
                 reply(&mut stream, &format!("350 Restarting at {rest}"))
             }
             "LIST" => transfer(&mut stream, passive.take(), |data| {
-                let folder = if argument == "-a" { &current } else { &argument };
+                let folder = if argument == "-a" {
+                    &current
+                } else {
+                    &argument
+                };
                 let lines = listing(&lock(store), folder);
                 data.write_all(lines.as_bytes())
             }),

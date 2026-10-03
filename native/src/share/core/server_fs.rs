@@ -44,7 +44,9 @@ pub(super) struct BatchAuthority {
 }
 
 impl BatchAuthority {
-    pub(super) fn stream_access(&self) -> FsAccess { self.access.clone() }
+    pub(super) fn stream_access(&self) -> FsAccess {
+        self.access.clone()
+    }
     fn new(
         access: FsAccess,
         lease: Option<MountLeaseAuthorization>,
@@ -91,29 +93,47 @@ pub(super) async fn serve(stream: FsStream, req: FsRequest) -> io::Result<()> {
         FsRequest::ReleaseLease => Err(eio("Lease-Freigabe wurde doppelt verarbeitet")),
         FsRequest::ReplaceStagedReversible(request) => {
             crate::share::fs_access::reversible_replace::serve(
-                send, request, access, authorization, principal,
-            ).await
+                send,
+                request,
+                access,
+                authorization,
+                principal,
+            )
+            .await
         }
         FsRequest::WriteDone => reply_err(&mut send, eio("unerwartetes Schreib-Ende")).await,
         FsRequest::ListDir { path } => {
-            match control(&principal, "Share list directory", move || access.list_dir(&path)).await {
+            match control(&principal, "Share list directory", move || {
+                access.list_dir(&path)
+            })
+            .await
+            {
                 Ok(entries) => reply(&mut send, FsResponse::Entries { entries }).await,
                 Err(error) => reply_err(&mut send, error).await,
             }
         }
-        FsRequest::Stat { path } => match control(&principal, "Share stat", move || access.stat(&path)).await {
-            Ok(meta) => reply(&mut send, FsResponse::Meta { meta }).await,
-            Err(error) => reply_err(&mut send, error).await,
-        },
-        FsRequest::SyncChildPath { parent, literal_name } => {
-            let result = control(&principal, "Share literal child", move ||
-                crate::share::peer_extensions::literal_paths::host(&access, &parent, &literal_name)).await;
+        FsRequest::Stat { path } => {
+            match control(&principal, "Share stat", move || access.stat(&path)).await {
+                Ok(meta) => reply(&mut send, FsResponse::Meta { meta }).await,
+                Err(error) => reply_err(&mut send, error).await,
+            }
+        }
+        FsRequest::SyncChildPath {
+            parent,
+            literal_name,
+        } => {
+            let result = control(&principal, "Share literal child", move || {
+                crate::share::peer_extensions::literal_paths::host(&access, &parent, &literal_name)
+            })
+            .await;
             match result {
                 Ok(path) => reply(&mut send, FsResponse::ChildPath { path }).await,
                 Err(error) => reply_err(&mut send, error).await,
             }
         }
-        FsRequest::WalkTree { path } => crate::share::walk::serve_walk_for(send, path, access, principal).await,
+        FsRequest::WalkTree { path } => {
+            crate::share::walk::serve_walk_for(send, path, access, principal).await
+        }
         FsRequest::StorageSnapshot { path } => {
             crate::share::storage_snapshot::serve_snapshot(send, path, access, principal).await
         }
@@ -275,7 +295,11 @@ pub(super) async fn serve(stream: FsStream, req: FsRequest) -> io::Result<()> {
                 "Share remove directory",
                 move |target| {
                     crate::share::fs::require_target_destructive(&target)?;
-                    crate::share::fs_delete::remove_tree_checked(&*target.backend, &target.path, &|| live.check_write())
+                    crate::share::fs_delete::remove_tree_checked(
+                        &*target.backend,
+                        &target.path,
+                        &|| live.check_write(),
+                    )
                 },
             )
             .await

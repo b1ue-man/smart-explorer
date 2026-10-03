@@ -1,15 +1,15 @@
 #[path = "core/webdav.rs"]
 mod core_impl;
-#[path = "core/multistatus.rs"]
-mod multistatus;
 #[path = "core/extensions.rs"]
 mod extensions;
-#[path = "core/metadata.rs"]
-mod metadata;
-#[path = "core/stage_move.rs"]
-mod stage_move;
 #[path = "core/listing_body.rs"]
 mod listing_body;
+#[path = "core/metadata.rs"]
+mod metadata;
+#[path = "core/multistatus.rs"]
+mod multistatus;
+#[path = "core/stage_move.rs"]
+mod stage_move;
 #[path = "core/status.rs"]
 mod status;
 #[path = "core/stream_put.rs"]
