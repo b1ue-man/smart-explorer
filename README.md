@@ -376,24 +376,28 @@ Dateisystemdaten im Klartext. **Share-Server** in der Werkzeugleiste (bei schmal
 [`docs/SHARE_PLAN.md`](docs/SHARE_PLAN.md).
 
 In der Teilen-Ansicht lassen sich das eigene Direct-Gerät und vorhandene Räume
-zeitlich begrenzt **suchbar machen**. Fünf Minuten sind voreingestellt; eine
-andere positive Dauer ist frei wählbar. Die PIN wird als exakte UTF-8-Bytefolge
-verwendet, nicht getrimmt und nicht dauerhaft gespeichert. Es gibt bewusst
-keine Mindestlänge: auch eine leere PIN und exakt `0` funktionieren, werden aber
-als trivial zu erraten gekennzeichnet. Die getrennten Listen für auffindbare
-Direct-Geräte und Räume zeigen den ungeprüften Anzeigenamen, Ablauf und
+zeitlich begrenzt **suchbar machen**. Fünf Minuten sind voreingestellt, höchstens
+30 Minuten sind möglich. Vorgeschlagen wird eine zufällige sechsstellige PIN.
+Eigene PINs werden als exakte UTF-8-Bytefolge verwendet, nicht getrimmt und nicht
+dauerhaft gespeichert. Kurze oder leicht zu erratende PINs benötigen eine
+bewusste Zustimmung; im Terminal gilt das auch für eine leere PIN und exakt
+`0`. Android verlangt eine nichtleere PIN. Ein Angebot endet nach der ersten
+Kopplung oder nach fünf fehlgeschlagenen Versuchen. Die getrennten Listen für
+auffindbare Direct-Geräte und Räume zeigen Anzeigenamen, Ablauf und
 Kompatibilität. **Connect** plus PIN startet den authentifizierten,
-verschlüsselten Schlüsselaustausch vollständig im Hintergrund; die
-Freigabeseite des veröffentlichenden Geräts muss nicht noch einmal zustimmen.
+verschlüsselten Schlüsselaustausch im Hintergrund. Die Freigabe der eigenen
+Ordner an das andere Gerät ist eine gesonderte Entscheidung (**Share-back**).
 
 Im Terminal geht dasselbe mit **`se share discoverable`**: `se share
-discoverable --minutes 5 --pin 1454` macht dieses Gerät fünf Minuten suchbar,
-`--room NAME` stattdessen einen Raum, `--name` ändert den angezeigten Namen.
-Damit die PIN nicht in der Prozessliste steht, liest `--pin-stdin` genau die
-erste Zeile der Standardeingabe als PIN, und ohne PIN-Angabe fragt `se` im
-Terminal verdeckt danach (nur der abschließende Zeilenumbruch wird entfernt;
-endet die Eingabe ohne Zeile, bricht `se` ab). Die PIN erscheint in keiner
-Ausgabe, keinem Protokoll und keiner Datei. Die Ausgabe nennt Angebots-ID, Ziel,
+discoverable --minutes 5` erzeugt und zeigt eine zufällige sechsstellige PIN;
+`--room NAME` veröffentlicht stattdessen einen Raum, `--name` ändert den
+angezeigten Namen. `--pin 481902` setzt eine eigene PIN, die dabei in der
+Prozessliste sichtbar sein kann. `--pin-stdin` liest genau die erste Zeile der
+Standardeingabe, `--pin-prompt` fragt im Terminal verdeckt danach. Nur der
+abschließende Zeilenumbruch wird entfernt. Kurze oder leicht zu erratende PINs
+benötigen `--allow-weak-pin`. Nur die erzeugte Zufalls-PIN wird ausgegeben;
+eigene PINs werden nicht ausgegeben oder gespeichert. Die Ausgabe nennt
+Angebots-ID, Ziel,
 Namen, Endzeit, Restzeit und ob der Share-Server das Angebot schon bestätigt hat
 (`published`) oder noch nicht (`prepared`). Scheitert das Veröffentlichen, beendet
 `se` ein Angebot, das der Worker dabei trotzdem behalten hat, damit das Gerät
@@ -409,13 +413,30 @@ der Share-Worker gestoppt, neu gestartet oder nach einem Update an eine neue
 Version übergeben, enden seine Angebote, und App, Android und Terminal zeigen
 sie nicht mehr an.
 
-Eine erfolgreiche Direct-Kopplung installiert die vollständige Relation auf
-beiden Geräten, sodass beide Seiten sofort als Remote-Gerät nutzbar sind.
+Eine erfolgreiche Direct-Kopplung installiert die Beziehung auf beiden
+Geräten. Der Dateizugriff richtet sich nach den gewählten Freigaben und Rechten.
 Bestehende einseitige Direct-Beziehungen werden bei kompatiblen aktuellen
 Clients im Hintergrund nachgezogen, sobald beide Geräte online sind. Exakte
 Identitäts- oder Relation-Konflikte sowie zuvor ignorierte, abgelehnte,
 widerrufene oder gelöschte Beziehungen bleiben dabei fail-closed und werden
 nicht automatisch überschrieben.
+
+Neue Ordnerfreigaben sind zunächst **nur lesbar**. Schreibzugriff braucht
+sowohl die Freigabe am Ordner als auch das Schreibrecht des Kontakts oder Raums.
+`se share exports set ORDNER --write` und `se share grants set GERÄT --write`
+setzen diese Rechte getrennt; `--read-only` nimmt sie wieder zurück. Gespeicherte
+Verbindungen werden einzeln ausgewählt (`se share exports connections list` /
+`set KONTO`) und nutzen dabei die auf dem Host gespeicherten Zugangsdaten.
+Bisher ausdrücklich eingerichtete Rechte bleiben erhalten; eine frühere
+automatische Home-Freigabe wird mit einem sichtbaren Migrationshinweis begrenzt.
+Autostart-, Anmelde- und Schlüsseldateien bleiben auch in schreibbaren Freigaben
+geschützt; `--allow-system-writes` ist ein gesondertes Opt-in am Ordner.
+
+Neue Share-Server-Adressen verwenden TLS: `host[:port]` beziehungsweise
+`wss://host[:port]/pfad`. Für ein selbst signiertes Zertifikat lässt sich
+`#sha256=FINGERABDRUCK` anhängen. `tcp://` und `ws://` benötigen in
+`se share configure` beziehungsweise `se share server set` ausdrücklich
+`--allow-plaintext`; die Oberfläche zeigt die entsprechende Zustimmung.
 
 **Übertragungen (ab 0.5.166):** Kopieren merkt sich nur die Auswahl; Einfügen,
 Ablegen, „Kopieren/Herunterladen nach…“ und Downloads starten sofort – auch bei
@@ -846,7 +867,11 @@ die private Share-Identität das Gerät nicht verlassen.
   OAuth-Client-ID (F13).
 - **Sync und Hintergrund:** Ordner einmalig spiegeln (F14); Sync-Jobs im
   Desktop-Format mit allen Richtungen, Regeln und Auslösern (F15); Konflikte
-  prüfen, lösen und Textdateien zusammenführen (F16); Hintergrund-Worker mit
+  prüfen, lösen und Textdateien zusammenführen (F16); Jobkarten zeigen letzten
+  Versuch, letzten Erfolg, aktive Läufe und Sperren getrennt. **Prüfen** öffnet
+  die passende einmalige Bestätigung; **Versionen** listet Sicherungen und
+  bietet Wiederherstellung. Unterbrochene Zusammenführungen bleiben über
+  **Wiederholen** fortsetzbar. Hintergrund-Worker mit
   den Modi Aus, Periodisch (WorkManager, mindestens alle 15 Minuten) und
   Dauerbetrieb (Vordergrunddienst), Pause und automatischer Pause bei
   Energiesparmodus oder getaktetem Netz (F17).
