@@ -12,6 +12,76 @@ use super::extension_types::{
 };
 use super::{Backend, VfsResult, VolumeIdentity};
 
+pub(super) fn default_sync_child_path(parent: &str, literal_name: &str) -> VfsResult<String> {
+    if literal_name.is_empty()
+        || matches!(literal_name, "." | "..")
+        || literal_name.contains('/')
+        || literal_name.contains('\0')
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "sync child must be one literal path component",
+        ));
+    }
+    Ok(format!("{}/{}", parent.trim_end_matches('/'), literal_name))
+}
+
+/// Encode only one new literal name, retaining the parent's locator meaning.
+pub fn sync_child_path<B: Backend + ?Sized>(
+    backend: &B,
+    parent: &str,
+    literal_name: &str,
+) -> VfsResult<String> {
+    // Every implementation receives a single validated component.
+    default_sync_child_path(parent, literal_name)?;
+    match backend.extensions() {
+        Some(extensions) => extensions.sync_child_path(parent, literal_name),
+        None => default_sync_child_path(parent, literal_name),
+    }
+}
+
+/// Resolve literal relative sync components below an unchanged provider root.
+pub fn sync_path<B: Backend + ?Sized>(
+    backend: &B,
+    root: &str,
+    literal_rel: &str,
+) -> VfsResult<String> {
+    let mut path = root.to_string();
+    if !literal_rel.is_empty() {
+        for name in literal_rel.split('/') {
+            path = sync_child_path(backend, &path, name)?;
+        }
+    }
+    Ok(path)
+}
+
+/// Reversible publication with a pre-journaled recovery sibling. No fallback
+/// deletes or overwrites the original when the backend has no such operation.
+pub fn replace_staged_reversible<B: Backend + ?Sized>(
+    backend: &B,
+    staged: &str,
+    destination: &str,
+    retained: &str,
+) -> VfsResult<bool> {
+    let (parent, name) = retained.rsplit_once('/').unwrap_or(("", retained));
+    let destination_parent = destination.rsplit_once('/').map_or("", |(parent, _)| parent);
+    let valid_nonce = name.rsplit_once(".se-replace-").is_some_and(|(base, nonce)| {
+        !base.is_empty()
+            && nonce.len() == 16
+            && nonce.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    });
+    if parent != destination_parent || !valid_nonce || retained == staged || retained == destination {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "replacement recovery path must be a unique generated sibling",
+        ));
+    }
+    match backend.extensions() {
+        Some(extensions) => extensions.replace_staged_reversible(staged, destination, retained),
+        None => Ok(false),
+    }
+}
+
 /// Listing that reports unlistable entries instead of failing the folder.
 pub fn list_dir_tolerant<B: Backend + ?Sized>(backend: &B, path: &str) -> VfsResult<VfsListing> {
     match backend.extensions() {

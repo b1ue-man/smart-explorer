@@ -17,6 +17,30 @@ use super::{Backend, VfsResult, VolumeIdentity};
 /// guard access (export roots, mounts) must not hand out the extensions of
 /// the backend they wrap unchanged.
 pub trait BackendExtensions: Backend {
+    /// Build a provider path for one literal sync name. Persisted locators
+    /// and the parent keep their existing encoding; providers encode only
+    /// the new literal component. Never decode or canonicalize the parent.
+    fn sync_child_path(&self, parent: &str, literal_name: &str) -> VfsResult<String> {
+        super::extension_calls::default_sync_child_path(parent, literal_name)
+    }
+
+    /// Publish a stage on protocols lacking an atomic replacing rename.
+    /// The caller durably journals the exact absent sibling `retained`
+    /// before this call. `Ok(false)` means unsupported without mutation;
+    /// `Ok(true)` leaves the old original at `retained`. An error restores
+    /// without replacing or preserves the original at that same known path.
+    /// Implementations never delete the retained original and must not claim
+    /// atomic namespace replacement for this reversible sequence.
+    fn replace_staged_reversible(
+        &self,
+        staged: &str,
+        destination: &str,
+        retained: &str,
+    ) -> VfsResult<bool> {
+        let _ = (staged, destination, retained);
+        Ok(false)
+    }
+
     /// `list_dir` that keeps going past entries it cannot list.
     fn list_dir_tolerant(&self, path: &str) -> VfsResult<VfsListing> {
         self.list_dir(path).map(VfsListing::complete)

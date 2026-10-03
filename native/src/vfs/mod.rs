@@ -28,20 +28,36 @@ mod congestion;
 mod copy_transfer;
 #[path = "core/core.rs"]
 mod core;
-#[path = "core/delete.rs"]
-mod delete;
 #[path = "core/dedupe.rs"]
 mod dedupe;
+#[path = "core/delete.rs"]
+mod delete;
 #[path = "core/dispatch.rs"]
 mod dispatch;
+#[path = "core/error_classes.rs"]
+mod error_classes;
+#[path = "core/extension_calls.rs"]
+mod extension_calls;
+#[path = "core/extension_types.rs"]
+mod extension_types;
+#[path = "core/extensions.rs"]
+mod extensions;
+#[path = "core/fs_profile.rs"]
+mod fs_profile;
 #[path = "os/shared/local.rs"]
 mod local;
+#[path = "os/shared/local_dirs.rs"]
+mod local_dirs;
+#[path = "os/shared/local_extensions.rs"]
+mod local_extensions;
 #[cfg(windows)]
 #[path = "os/windows/local_platform.rs"]
 mod local_platform;
 #[cfg(not(windows))]
 #[path = "os/linux_os/local_platform.rs"]
 mod local_platform;
+#[path = "os/shared/local_stage.rs"]
+mod local_stage;
 #[path = "core/meta.rs"]
 mod meta;
 #[path = "core/promotion.rs"]
@@ -50,12 +66,38 @@ mod promotion;
 pub mod remote_util;
 #[path = "core/scheme.rs"]
 mod scheme;
+#[path = "core/staging_names.rs"]
+mod staging_names;
 #[path = "os/shared/sync_roots.rs"]
 mod sync_roots;
 pub(crate) use sync_roots::{sync_backend, validate_sync_roots};
+#[path = "core/trait_defaults.rs"]
+mod trait_defaults;
 #[cfg(windows)]
 #[path = "os/windows/verbatim.rs"]
 mod verbatim;
+#[path = "core/volume.rs"]
+mod volume;
+
+pub use self::error_classes::{is_target_refusal, omission_reason};
+pub use self::extension_calls::{
+    change_signal, change_signal_mode, find_duplicates, finish_stage, hash_walk, list_dir_tolerant,
+    mtime_precision, open_read_regular, open_write_copy_stage_timed, recycle,
+    replace_staged_reversible, supports_duplicate_search, supports_hash_walk, supports_recycle,
+    sync_child_path, sync_filesystem, sync_path,
+    target_limits, unix_mode, volume_identity,
+};
+pub use self::extension_types::{
+    ChangeNotice, ChangeSignalMode, ChangeSubscription, HashWalkEntry, HashWalkItem,
+    HashWalkRequest, MtimePrecision, NameIssue, NameLimit, OmissionReason, RecycleExpectation,
+    RecycleOutcome, StageDurability, StageFinish, StageFinished, TargetLimits, VfsListing,
+    VfsOmission,
+};
+pub use self::extensions::BackendExtensions;
+pub use self::local_extensions::{local_mount_boundary, local_volume_identity};
+pub(crate) use self::staging_names::fit_stage_name;
+pub use self::staging_names::is_staging_name;
+pub use self::volume::{MountKind, VolumeIdentity};
 
 pub use self::cache::CachingBackend;
 pub use self::capabilities::{MountPathCapabilities, RootConfinement, StagedWriteCapabilities};
@@ -74,6 +116,8 @@ pub use self::delete::{
 pub use self::dispatch::{backend_for, is_remote_root};
 pub use self::local::LocalBackend;
 pub(crate) use self::local_platform::rename_no_replace as promote_local_copy;
+pub(crate) use self::local_platform::replace_file as replace_local_file;
+pub(crate) use self::local_platform::create_new_private as create_local_copy_stage;
 pub use self::promotion::{promote_staged_create, promote_staged_replace, unique_staging_path};
 pub(crate) use self::promotion::{promote_staged_no_replace_with, promote_staged_with};
 
@@ -89,6 +133,12 @@ mod promotion_tests;
 #[cfg(test)]
 #[path = "core/remote_drive_task_cache_tests.rs"]
 mod remote_drive_task_cache_tests;
+#[cfg(test)]
+#[path = "core/review_task_contract_tests.rs"]
+mod review_task_contract_tests;
+#[cfg(test)]
+#[path = "os/shared/review_task_local_tests.rs"]
+mod review_task_local_tests;
 #[cfg(test)]
 #[path = "core/tests.rs"]
 mod tests;
