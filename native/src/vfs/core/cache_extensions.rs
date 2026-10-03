@@ -13,6 +13,20 @@ use super::super::{
 use super::CachingBackend;
 
 impl BackendExtensions for CachingBackend {
+    fn sync_child_path(&self, parent: &str, literal_name: &str) -> VfsResult<String> {
+        calls::sync_child_path(&*self.inner, parent, literal_name)
+    }
+
+    fn replace_staged_reversible(
+        &self, staged: &str, destination: &str, retained: &str,
+    ) -> VfsResult<bool> {
+        let result = calls::replace_staged_reversible(&*self.inner, staged, destination, retained);
+        self.invalidate(staged);
+        self.invalidate(destination);
+        self.invalidate(retained);
+        result
+    }
+
     fn list_dir_tolerant(&self, path: &str) -> VfsResult<VfsListing> {
         calls::list_dir_tolerant(&*self.inner, path)
     }
