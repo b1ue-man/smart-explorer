@@ -54,14 +54,23 @@ pub(super) fn with_regular_child<T>(
     path: &Path,
     selected: impl FnOnce(&Path, &Path, &DirectoryHandle, &OsStr, &File) -> io::Result<T>,
 ) -> io::Result<T> {
-    let root = std::fs::canonicalize(root)?;
-    let path = crate::local_access::normalize_scan_root(path);
-    let relative = path.strip_prefix(&root).map_err(|_| {
-        io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "Papierkorbpfad liegt außerhalb der autorisierten Wurzel",
-        )
-    })?;
+    let canonical_root = std::fs::canonicalize(root)?;
+    let input_root = crate::local_access::normalize_scan_root(root);
+    let root = crate::local_access::normalize_scan_root(&canonical_root);
+    let requested_path = crate::local_access::normalize_scan_root(path);
+    // Canonicalization can change the root's spelling (e.g. a Windows short
+    // path). Both spellings come from this same authorized root; children
+    // are still opened relative to its pinned handle, never canonicalized.
+    let relative = requested_path
+        .strip_prefix(&root)
+        .or_else(|_| requested_path.strip_prefix(&input_root))
+        .map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Papierkorbpfad liegt außerhalb der autorisierten Wurzel",
+            )
+        })?;
+    let path = root.join(relative);
     let mut directory = DirectoryHandle::open_root(&root)?;
     let mut parts = relative.components().peekable();
     let name = loop {
