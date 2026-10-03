@@ -173,17 +173,22 @@ pub(super) fn baseline_from_items(
 }
 
 fn active_sig(item: Option<&ItemRecord>) -> Option<Sig> {
-    item.filter(|item| !item.deleted).and_then(|item| item.sig)
+    item.filter(|item| !item.deleted && !item.is_dir)
+        .and_then(|item| item.sig)
 }
 
 pub(super) fn validate_item(item: &ItemRecord) -> rusqlite::Result<()> {
     validate_relative_path(1, &item.rel)?;
     if item.is_dir {
-        return Err(invalid(
-            7,
-            Type::Integer,
-            "directory stored in file sync state",
-        ));
+        if item.sig.is_some() {
+            return Err(invalid(
+                7,
+                Type::Integer,
+                "directory sync item has a file signature",
+            ));
+        }
+        // Complete provider ancestry includes folders, never file content.
+        return Ok(());
     }
     // A deletion command may carry its last observed signature; the writer
     // removes the row; the decoder clears stored tombstone signatures.

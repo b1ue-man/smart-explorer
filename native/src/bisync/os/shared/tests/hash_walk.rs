@@ -227,6 +227,9 @@ impl Backend for Counting {
     fn root_display(&self) -> String {
         self.inner.root_display()
     }
+    fn extensions(&self) -> Option<&dyn crate::vfs::BackendExtensions> {
+        Some(self)
+    }
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
         self.lists.fetch_add(1, Ordering::Relaxed);
         self.inner.list_dir(path)
@@ -239,6 +242,12 @@ impl Backend for Counting {
     }
     fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
         self.inner.open_write(path)
+    }
+    fn open_write_new(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
+        self.inner.open_write_new(path)
+    }
+    fn discard_copy_stage(&self, path: &str) -> VfsResult<()> {
+        self.inner.discard_copy_stage(path)
     }
     fn rename(&self, source: &str, destination: &str) -> VfsResult<()> {
         self.inner.rename(source, destination)
@@ -266,6 +275,35 @@ impl Backend for Counting {
     }
 }
 
+impl crate::vfs::BackendExtensions for Counting {
+    fn list_dir_tolerant(&self, path: &str) -> VfsResult<crate::vfs::VfsListing> {
+        self.lists.fetch_add(1, Ordering::Relaxed);
+        crate::vfs::list_dir_tolerant(&self.inner, path)
+    }
+    fn open_read_regular(&self, path: &str, id: Option<&str>) -> VfsResult<Box<dyn Read + Send>> {
+        crate::vfs::open_read_regular(&self.inner, path, id)
+    }
+    fn finish_stage(
+        &self,
+        path: &str,
+        finish: crate::vfs::StageFinish,
+    ) -> VfsResult<crate::vfs::StageFinished> {
+        crate::vfs::finish_stage(&self.inner, path, finish)
+    }
+    fn sync_filesystem(&self, root: &str) -> VfsResult<bool> {
+        crate::vfs::sync_filesystem(&self.inner, root)
+    }
+    fn target_limits(&self, root: &str) -> crate::vfs::TargetLimits {
+        crate::vfs::target_limits(&self.inner, root)
+    }
+    fn unix_mode(&self, path: &str) -> VfsResult<Option<u32>> {
+        crate::vfs::unix_mode(&self.inner, path)
+    }
+    fn volume_identity(&self, root: &str) -> VfsResult<Option<crate::vfs::VolumeIdentity>> {
+        crate::vfs::volume_identity(&self.inner, root)
+    }
+}
+
 #[test]
 fn no_op_run_skips_rewalk() {
     let a = tmp("nora");
@@ -289,7 +327,13 @@ fn no_op_run_skips_rewalk() {
     let first = super::super::run(
         &backend_a, &root_a, &backend_b, &root_b, options, &cancel, &filter,
     );
-    assert!(first.errors.is_empty());
+    assert!(
+        first.errors.is_empty(),
+        "first run: errors={:?}, blocked={:?}, deferred={:?}",
+        first.errors,
+        first.blocked,
+        first.deferred
+    );
     assert_eq!(lists_a.load(Ordering::Relaxed), 2);
     assert_eq!(lists_b.load(Ordering::Relaxed), 2);
     lists_a.store(0, Ordering::Relaxed);
@@ -297,15 +341,22 @@ fn no_op_run_skips_rewalk() {
     let second = super::super::run(
         &backend_a, &root_a, &backend_b, &root_b, options, &cancel, &filter,
     );
+    assert!(
+        second.errors.is_empty(),
+        "second run: errors={:?}, blocked={:?}, deferred={:?}",
+        second.errors,
+        second.blocked,
+        second.deferred
+    );
     assert_eq!(
         second.stats.a_to_b + second.stats.b_to_a + second.stats.deleted,
         0
     );
     assert_eq!(lists_a.load(Ordering::Relaxed), 1);
     assert_eq!(lists_b.load(Ordering::Relaxed), 1);
-    let pair = pair_id_for(&backend_a, &root_a, &backend_b, &root_b);
-    std::fs::remove_file(baseline_path(&pair)).ok();
-    std::fs::remove_dir_all(versions_dir(&pair)).ok();
+    let state = first.state.as_ref().expect("recorded first run state");
+    std::fs::remove_file(baseline_file(state).unwrap()).ok();
+    std::fs::remove_dir_all(versions_dir(&state.pair_id)).ok();
     std::fs::remove_dir_all(a).ok();
     std::fs::remove_dir_all(b).ok();
 }

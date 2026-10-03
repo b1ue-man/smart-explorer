@@ -20,6 +20,8 @@ pub(super) fn walk_snapshot_via_agent(
     // The old protocol has no cross-mount policy field. Metadata walking is
     // authoritative when the caller requests that boundary; local walks
     // also need the device's own-data and previously mounted-path policy.
+    // Hash entries omit hidden attributes. Only metadata walking can exclude
+    // hidden files whose names do not start with a dot, including on Windows.
     if backend.is_local()
         || !opts.cross_mounts
         || !filter.include_hidden
