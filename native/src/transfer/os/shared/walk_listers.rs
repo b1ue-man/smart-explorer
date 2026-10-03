@@ -25,6 +25,10 @@ pub(crate) struct Listed {
 
 impl From<VfsMeta> for Listed {
     fn from(meta: VfsMeta) -> Self {
+        // A FIFO, socket or device has no content to copy, wherever it is.
+        let problem = meta
+            .special
+            .then(|| "Spezialdatei wird nicht übertragen".to_string());
         Self {
             name: meta.name,
             is_dir: meta.is_dir && !meta.is_symlink,
@@ -36,7 +40,7 @@ impl From<VfsMeta> for Listed {
             system: meta.system,
             id: meta.id,
             md5: meta.content_md5,
-            problem: None,
+            problem,
         }
     }
 }
@@ -123,7 +127,7 @@ impl Lister for LocalLister {
         let native_path = native(path);
         {
             let metadata = crate::local_access::symlink_metadata(&native_path)?;
-            let is_link = crate::local_access::metadata_is_link_like(&native_path, &metadata);
+            let class = crate::local_access::metadata_class(&native_path, &metadata);
             let name = path
                 .trim_end_matches('/')
                 .rsplit('/')
@@ -132,9 +136,13 @@ impl Lister for LocalLister {
                 .to_string();
             Ok(Listed {
                 name,
-                is_dir: metadata.is_dir() && !is_link,
-                is_link: is_link || !(metadata.is_dir() || metadata.is_file()),
-                size: if metadata.is_dir() { 0 } else { metadata.len() },
+                is_dir: metadata.is_dir() && !class.link_like && !class.special,
+                is_link: class.link_like,
+                size: if metadata.is_file() && !class.link_like && !class.special {
+                    metadata.len()
+                } else {
+                    0
+                },
                 mtime_ms: metadata
                     .modified()
                     .map(crate::local_access::system_time_ms)
@@ -147,8 +155,50 @@ impl Lister for LocalLister {
                 system: false,
                 id: None,
                 md5: None,
-                problem: None,
+                problem: class
+                    .special
+                    .then(|| "Spezialdatei wird nicht übertragen".to_string()),
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod review_task_tests {
+    use super::Listed;
+    use crate::vfs::VfsMeta;
+
+    #[test]
+    fn review_task_remote_special_entries_are_reported_not_transferred() {
+        let special = Listed::from(VfsMeta {
+            name: "pipe".into(),
+            special: true,
+            ..VfsMeta::default()
+        });
+        assert!(special.problem.is_some());
+        let file = Listed::from(VfsMeta {
+            name: "file".into(),
+            size: 1,
+            ..VfsMeta::default()
+        });
+        assert!(file.problem.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn review_task_local_single_special_entry_is_reported_not_transferred() {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+        use super::{Lister, LocalLister};
+
+        let fixture = tempfile::tempdir().unwrap();
+        let fifo = fixture.path().join("pipe");
+        let name = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        // SAFETY: NUL-terminated fixture path and plain permission bits.
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        let listed = LocalLister.stat(fifo.to_str().unwrap()).unwrap();
+        assert!(listed.problem.is_some());
+        assert!(!listed.is_link && !listed.is_dir);
+        assert_eq!(listed.size, 0);
     }
 }

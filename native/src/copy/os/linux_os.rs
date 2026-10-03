@@ -1,6 +1,5 @@
-use std::fs::{File, Metadata};
+use std::fs::File;
 use std::io;
-use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
@@ -19,16 +18,49 @@ pub(super) fn file_identity(file: &File) -> io::Result<FileIdentity> {
 }
 
 pub(super) fn path_matches_identity(path: &Path, expected: FileIdentity) -> io::Result<bool> {
-    let file = match File::open(path) {
-        Ok(file) => file,
+    let actual = match path_identity(path) {
+        Ok(identity) => identity,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
         Err(error) => return Err(error),
     };
-    Ok(file_identity(&file)? == expected)
+    Ok(actual == expected)
 }
 
-pub(super) fn metadata_is_link_like(metadata: &Metadata) -> bool {
-    metadata.file_type().is_symlink()
+/// Final ordinary permissions, never set-id bits; replacing a private
+/// destination cannot make its contents more readable than before.
+pub(super) fn copy_permissions(
+    writer: &File,
+    source: &std::fs::Metadata,
+    destination: Option<&Path>,
+) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut mode = source.permissions().mode() & 0o777;
+    if let Some(destination) = destination {
+        match std::fs::symlink_metadata(destination) {
+            Ok(metadata) if metadata.is_file() => mode &= metadata.permissions().mode(),
+            Ok(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "destination is not a regular file",
+                ))
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    match writer.set_permissions(std::fs::Permissions::from_mode(mode)) {
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::Unsupported
+                    | io::ErrorKind::InvalidInput
+                    | io::ErrorKind::PermissionDenied
+            ) =>
+        {
+            Ok(())
+        }
+        result => result,
+    }
 }
 
 pub(super) fn path_text(path: &Path) -> io::Result<String> {
@@ -43,14 +75,14 @@ pub(super) fn path_key(path: &Path) -> io::Result<String> {
 
 pub(super) fn commit_staged(staged: &Path, dest: &Path, overwrite: bool) -> io::Result<()> {
     if overwrite {
-        return std::fs::rename(staged, dest);
+        return crate::vfs::replace_local_file(staged, dest);
     }
     rename_no_replace(staged, dest)
 }
 
 pub(super) fn move_file(src: &Path, dest: &Path, overwrite: bool) -> io::Result<()> {
     if overwrite {
-        return std::fs::rename(src, dest);
+        return crate::vfs::replace_local_file(src, dest);
     }
     rename_no_replace(src, dest)
 }
@@ -105,43 +137,8 @@ pub(super) fn copy_handles(
     }
 }
 
-#[cfg(target_os = "linux")]
-fn rename_no_replace(source: &Path, destination: &Path) -> io::Result<()> {
-    let source = std::ffi::CString::new(source.as_os_str().as_bytes()).map_err(|_| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "source path contains a NUL byte",
-        )
-    })?;
-    let destination = std::ffi::CString::new(destination.as_os_str().as_bytes()).map_err(|_| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "destination path contains a NUL byte",
-        )
-    })?;
-    // The libc crate omits the renameat2 wrapper on musl. The raw Linux
-    // syscall preserves the required atomic no-replace contract on both libc
-    // families; ENOSYS must propagate instead of falling back to a racy probe.
-    let result = unsafe {
-        libc::syscall(
-            libc::SYS_renameat2,
-            libc::AT_FDCWD,
-            source.as_ptr(),
-            libc::AT_FDCWD,
-            destination.as_ptr(),
-            libc::RENAME_NOREPLACE,
-        )
-    };
-    if result == 0 {
-        Ok(())
-    } else {
-        Err(io::Error::last_os_error())
-    }
-}
-
-/// Android storage may lack `RENAME_NOREPLACE` and hard links; the fallback
-/// chain lives in `android_fs`.
-#[cfg(target_os = "android")]
+/// Publish or move without replacing: `renameat2(RENAME_NOREPLACE)` with the
+/// link and checked-rename fallbacks for NFS, FUSE and Android storage.
 fn rename_no_replace(source: &Path, destination: &Path) -> io::Result<()> {
     crate::android_fs::rename_no_replace(source, destination)
 }

@@ -8,6 +8,8 @@ use super::{
     DeleteDisposition, HashHit, Scheme, SearchHit, VfsChangeBatch, VfsMeta, VfsResult,
 };
 
+#[path = "cache_extensions.rs"]
+mod cache_extensions;
 #[path = "cache_index.rs"]
 mod cache_index;
 #[path = "cache_load.rs"]
@@ -125,6 +127,9 @@ impl Backend for CachingBackend {
                 .uncached_backend()
                 .unwrap_or_else(|| self.inner.clone()),
         )
+    }
+    fn extensions(&self) -> Option<&dyn super::BackendExtensions> {
+        Some(self)
     }
 
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
@@ -253,7 +258,12 @@ impl Backend for CachingBackend {
     fn list_dir_for_sync(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
         self.inner.list_dir_for_sync(path)
     }
-    fn promote_staged_to_id(&self, staged: &str, destination: &str, id: Option<&str>) -> VfsResult<()> {
+    fn promote_staged_to_id(
+        &self,
+        staged: &str,
+        destination: &str,
+        id: Option<&str>,
+    ) -> VfsResult<()> {
         let result = self.inner.promote_staged_to_id(staged, destination, id);
         self.invalidate(staged);
         self.invalidate(destination);

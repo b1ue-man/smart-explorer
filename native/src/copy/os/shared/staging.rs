@@ -4,7 +4,7 @@
 //! afterwards. New copies are not synced to disk file by file (like Explorer
 //! and cp); moves and replacements are.
 use std::collections::hash_map::RandomState;
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::hash::{BuildHasher, Hash, Hasher};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -64,6 +64,7 @@ pub(super) fn stage_copy(
     target: &Path,
     cancel: &AtomicBool,
     durable: bool,
+    preserve_destination_mode: bool,
     progress: &mut dyn FnMut(u64),
 ) -> Result<Option<Staged>, LocalFailure> {
     let (reader, before) = open_source(source)?;
@@ -88,7 +89,13 @@ pub(super) fn stage_copy(
         .and_then(|()| {
             reader
                 .metadata()
-                .and_then(|metadata| writer.set_permissions(metadata.permissions()))
+                .and_then(|metadata| {
+                    platform::copy_permissions(
+                        &writer,
+                        &metadata,
+                        preserve_destination_mode.then_some(target),
+                    )
+                })
                 .map_err(LocalFailure::Target)
         })
         .and_then(|()| {
@@ -115,7 +122,9 @@ pub(super) fn stage_copy(
 pub(super) fn open_source(source: &Path) -> Result<(File, SourceSnapshot), LocalFailure> {
     let link_metadata =
         crate::local_access::symlink_metadata(source).map_err(LocalFailure::Source)?;
-    if platform::metadata_is_link_like(&link_metadata) || !link_metadata.is_file() {
+    if crate::local_access::metadata_is_link_like(source, &link_metadata)
+        || !link_metadata.is_file()
+    {
         return Err(LocalFailure::Source(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!(
@@ -124,7 +133,10 @@ pub(super) fn open_source(source: &Path) -> Result<(File, SourceSnapshot), Local
             ),
         )));
     }
-    let reader = crate::local_access::open_read(source).map_err(LocalFailure::Source)?;
+    // Opened without following a link and without waiting on a FIFO that
+    // replaced the file after the check above.
+    let reader = crate::local_access::open_regular(source, crate::local_access::FinalLink::Refuse)
+        .map_err(LocalFailure::Source)?;
     let before = source_snapshot_file(&reader).map_err(LocalFailure::Source)?;
     if source_snapshot_path(source).map_err(LocalFailure::Source)? != before {
         return Err(LocalFailure::Source(source_changed_error(source)));
@@ -213,20 +225,17 @@ fn stage_name(target: &Path, attempt: u32) -> PathBuf {
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| "copy".to_string());
-    parent.join(format!(
-        ".{name}.smart-explorer-{:016x}.part",
+    let tail = format!(
+        ".smart-explorer-{:016x}.part",
         random_suffix(target, attempt)
-    ))
+    );
+    parent.join(crate::vfs::fit_stage_name(".", &name, &tail))
 }
 
 pub(super) fn create_temp_sibling(target: &Path) -> io::Result<(PathBuf, File)> {
     for attempt in 0..STAGE_ATTEMPTS {
         let candidate = stage_name(target, attempt);
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&candidate)
-        {
+        match crate::vfs::create_local_copy_stage(&candidate) {
             Ok(file) => return Ok((candidate, file)),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(error) => return Err(error),

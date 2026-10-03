@@ -1,5 +1,5 @@
 use std::ffi::c_void;
-use std::fs::{File, Metadata};
+use std::fs::File;
 use std::io;
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::AsRawHandle;
@@ -66,17 +66,20 @@ pub(super) fn file_identity(file: &File) -> io::Result<FileIdentity> {
 }
 
 pub(super) fn path_matches_identity(path: &Path, expected: FileIdentity) -> io::Result<bool> {
-    let file = match crate::local_access::open_read(path) {
-        Ok(file) => file,
+    let actual = match path_identity(path) {
+        Ok(identity) => identity,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
         Err(error) => return Err(error),
     };
-    Ok(file_identity(&file)? == expected)
+    Ok(actual == expected)
 }
 
-pub(super) fn metadata_is_link_like(metadata: &Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-    metadata.file_attributes() & 0x400 != 0
+pub(super) fn copy_permissions(
+    writer: &File,
+    source: &std::fs::Metadata,
+    _destination: Option<&Path>,
+) -> io::Result<()> {
+    writer.set_permissions(source.permissions())
 }
 
 pub(super) fn path_text(path: &Path) -> io::Result<String> {
@@ -113,15 +116,10 @@ fn move_file_no_replace(src: &Path, dest: &Path) -> io::Result<()> {
     move_file_ex(src, dest, MOVEFILE_WRITE_THROUGH)
 }
 
+/// Write-through replace that also replaces a read-only destination (its
+/// attribute moves to the new file).
 fn replace_file_atomic(src: &Path, dest: &Path) -> io::Result<()> {
-    use windows_sys::Win32::Storage::FileSystem::{
-        MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
-    };
-    move_file_ex(
-        src,
-        dest,
-        MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-    )
+    crate::vfs::replace_local_file(src, dest)
 }
 
 fn move_file_ex(src: &Path, dest: &Path, flags: u32) -> io::Result<()> {
@@ -325,16 +323,15 @@ fn hresult_error(result: i32) -> io::Error {
 /// point, and accepts only a plain regular file (K12 identity check); with
 /// its length on disk.
 fn open_staged(stage: &Path) -> io::Result<(File, u64)> {
-    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
-    use windows_sys::Win32::Storage::FileSystem::{
-        FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT,
-    };
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
     let file = std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
         .open(crate::local_access::normalize_scan_root(stage))?;
     let metadata = file.metadata()?;
-    if !metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+    let class = crate::local_access::classify_open_file(&file)?;
+    if !metadata.is_file() || class.link_like || class.special {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "Kopierstufe ist keine direkte reguläre Datei",

@@ -51,3 +51,21 @@ fn search_recursive_access_task_helper_admits_exact_read_protocol_only() {
     assert_eq!(quote("C:\\with space\\"), "\"C:\\with space\\\\\"");
     assert_eq!(quote("a\"b"), "\"a\\\"b\"");
 }
+
+#[test]
+fn review_task_broker_child_suffix_stays_under_the_pinned_root() {
+    assert_eq!(child_names("C:/Allowed", "c:/ALLOWED/child/a. "),
+        Some(vec!["child".into(), "a. ".into()]));
+    assert_eq!(child_names("C:/", "c:/folder"), Some(vec!["folder".into()]));
+    assert_eq!(child_names("C:/Ärea", "c:/ärea/ß-file"), Some(vec!["ß-file".into()]));
+    assert_eq!(child_names("C:/Allowed/", "c:/allowed"), Some(vec![]));
+    for refused in ["C:/Allowed-other/child", "C:/Allowed/../outside", "D:/Allowed/a",
+        "C:/Allowed/child:stream", "C:/Allowed//child"]
+    {
+        assert!(child_names("C:/Allowed", refused).is_none(), "{refused}");
+    }
+    for kind in ["PinRoot", "PinChild"] {
+        let request = format!(r#"{{"path":"C:/Allowed","kind":"{kind}"}}"#);
+        assert!(serde_json::from_str::<ReadRequest>(&request).is_ok());
+    }
+}

@@ -21,7 +21,7 @@ pub(super) struct QuarantinedSource {
 }
 
 pub(super) fn source_snapshot_path(path: &Path) -> io::Result<SourceSnapshot> {
-    let file = crate::local_access::open_read(path)?;
+    let file = crate::local_access::open_regular(path, crate::local_access::FinalLink::Refuse)?;
     source_snapshot_file(&file)
 }
 
@@ -42,10 +42,11 @@ pub(super) fn quarantine_source(source: &Path) -> io::Result<QuarantinedSource> 
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| "source".to_string());
     for attempt in 0..1000u32 {
-        let candidate = parent.join(format!(
-            ".{name}.smart-explorer-{:016x}.move",
+        let tail = format!(
+            ".smart-explorer-{:016x}.move",
             random_suffix(source, attempt)
-        ));
+        );
+        let candidate = parent.join(crate::vfs::fit_stage_name(".", &name, &tail));
         match platform::move_file(source, &candidate, false) {
             Ok(()) => {
                 let actual = match source_snapshot_path(&candidate) {

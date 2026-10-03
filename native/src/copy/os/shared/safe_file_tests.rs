@@ -139,3 +139,76 @@ fn destination_symlink_ancestor_is_rejected() {
     assert!(!base.join("outside/victim").exists());
     let _ = std::fs::remove_dir_all(&base);
 }
+
+#[cfg(unix)]
+#[test]
+fn review_task_copy_stage_is_private_before_receiving_content() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = tempfile::tempdir().unwrap();
+    let (path, writer) = super::super::staging::create_temp_sibling(&fixture.path().join("target"))
+        .unwrap();
+    assert_eq!(writer.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+    assert_eq!(writer.metadata().unwrap().len(), 0);
+    drop(writer);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn review_task_staged_copy_overwrite_keeps_private_destination_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = tempfile::tempdir().unwrap();
+    let source = fixture.path().join("source");
+    let target = fixture.path().join("target");
+    std::fs::write(&source, b"new").unwrap();
+    std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o6754)).unwrap();
+    std::fs::write(&target, b"old").unwrap();
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o640)).unwrap();
+    let result = transfer(
+        &source,
+        &target,
+        fixture.path(),
+        Conflict::Overwrite,
+        CopyMode::Copy,
+        &AtomicBool::new(false),
+    ).unwrap();
+    assert!(matches!(result, TransferResult::Completed));
+    assert_eq!(std::fs::read(&target).unwrap(), b"new");
+    assert_eq!(std::fs::metadata(&target).unwrap().permissions().mode() & 0o7777, 0o640);
+}
+
+#[cfg(unix)]
+#[test]
+fn review_task_copy_identity_never_follows_a_replaced_stage_link() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = tempfile::tempdir().unwrap();
+    let staged = fixture.path().join("stage");
+    std::fs::write(&staged, b"stage").unwrap();
+    let file = std::fs::File::open(&staged).unwrap();
+    let identity = platform::file_identity(&file).unwrap();
+    let moved = fixture.path().join("moved");
+    std::fs::rename(&staged, &moved).unwrap();
+    symlink(&moved, &staged).unwrap();
+    assert!(!platform::path_matches_identity(&staged, identity).unwrap());
+}
+
+#[cfg(unix)]
+#[test]
+fn review_task_copy_source_snapshot_refuses_a_fifo() {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let fixture = tempfile::tempdir().unwrap();
+    let fifo = fixture.path().join("pipe");
+    let name = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+    // SAFETY: NUL-terminated fixture path and ordinary mode bits.
+    assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+    let error = source_snapshot_path(&fifo).unwrap_err();
+    assert_eq!(
+        crate::local_access::NotRegular::of(&error),
+        Some(crate::local_access::NotRegular::Special),
+    );
+}

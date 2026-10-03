@@ -11,6 +11,9 @@ pub(super) enum ReadKind {
     Metadata,
     Directory,
     File,
+    /// Read-only pins deny write/delete sharing; no token is transferred.
+    PinRoot,
+    PinChild,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -25,6 +28,34 @@ pub(super) struct ReadRequest {
 pub(super) struct ReadReply {
     pub handle: u64,
     pub error: Option<i32>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct PinReply {
+    /// Ancestors in path order, with the directory itself last. A child
+    /// request returns only that directory: its caller already pins parents.
+    pub handles: Vec<u64>,
+    /// UTF-16 preserves literal names, including unpaired surrogates.
+    pub path: Vec<u16>,
+    pub error: Option<i32>,
+}
+
+/// Interpret the suffix against the already pinned, explicitly authorized
+/// root. Never reinterpret a differently cased textual root as another root.
+pub(super) fn child_names(root: &str, path: &str) -> Option<Vec<String>> {
+    validate_root(root).ok()?;
+    validate_root(path).ok()?;
+    let root = root.replace('\\', "/");
+    let path = path.replace('\\', "/");
+    let root: Vec<_> = root.trim_end_matches('/').split('/').collect();
+    let path: Vec<_> = path.trim_end_matches('/').split('/').collect();
+    if path.len() < root.len()
+        || root.iter().zip(&path).any(|(a, b)| a.to_lowercase() != b.to_lowercase())
+    {
+        return None;
+    }
+    Some(path[root.len()..].iter().map(|name| (*name).to_owned()).collect())
 }
 
 pub(super) struct Startup {

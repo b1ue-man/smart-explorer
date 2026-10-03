@@ -51,7 +51,9 @@ pub(crate) fn transfer_local(
     let src = request.source;
     let source_metadata =
         crate::local_access::symlink_metadata(src).map_err(LocalFailure::Source)?;
-    if platform::metadata_is_link_like(&source_metadata) || !source_metadata.is_file() {
+    if crate::local_access::metadata_is_link_like(src, &source_metadata)
+        || !source_metadata.is_file()
+    {
         return Err(LocalFailure::Source(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("source is not a regular, non-link file: {}", src.display()),
@@ -159,7 +161,14 @@ pub(crate) fn transfer_local(
     }
 
     let durable = request.mode == CopyMode::Move || request.conflict == Conflict::Overwrite;
-    let staged = match stage_copy(&source_path, &target, request.cancel, durable, progress) {
+    let staged = match stage_copy(
+        &source_path,
+        &target,
+        request.cancel,
+        durable,
+        request.conflict == Conflict::Overwrite,
+        progress,
+    ) {
         Ok(Some(staged)) => staged,
         Ok(None) => {
             restore_quarantine_if_any(quarantine.as_ref()).map_err(LocalFailure::Source)?;
@@ -285,7 +294,7 @@ fn select_initial_target(
             format!("destination is a directory: {}", target.display()),
         )));
     }
-    if platform::metadata_is_link_like(&metadata) {
+    if crate::local_access::metadata_is_link_like(target, &metadata) {
         return Err(LocalFailure::Target(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!(
@@ -293,6 +302,11 @@ fn select_initial_target(
                 target.display()
             ),
         )));
+    }
+    if crate::local_access::metadata_class(target, &metadata).special || !metadata.is_file() {
+        return Err(LocalFailure::Target(
+            crate::local_access::NotRegular::Special.error(),
+        ));
     }
     let source = platform::path_identity(src).map_err(LocalFailure::Source)?;
     let existing = platform::path_identity(target).map_err(|error| {

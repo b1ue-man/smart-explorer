@@ -2,6 +2,16 @@ use std::ffi::{OsStr, OsString};
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 
+#[path = "local_writes.rs"]
+mod local_writes;
+#[path = "volume_info.rs"]
+mod volume_info;
+#[cfg(test)]
+#[path = "review_task_stage_tests.rs"]
+mod review_task_stage_tests;
+
+pub(crate) use local_writes::{check_new_name, create_new_private, open_stage, replace_file};
+
 const MAX_LONG_PATH_UNITS: usize = 32_768;
 
 fn file_attributes(meta: &std::fs::Metadata) -> u32 {
@@ -113,6 +123,71 @@ fn long_path(path: &Path) -> Option<PathBuf> {
         }
         output.resize(written, 0);
     }
+}
+
+/// Windows offers no unprivileged filesystem-wide flush (a volume handle for
+/// `FlushFileBuffers` needs administrator rights): stages are flushed one by
+/// one and published by write-through renames, so nothing is left to do.
+pub(crate) fn flush_filesystem(_path: &Path) -> std::io::Result<()> {
+    Ok(())
+}
+
+/// Windows files carry ACLs inherited from their folder, not Unix modes.
+pub(crate) fn unix_mode(_metadata: &std::fs::Metadata) -> Option<u32> {
+    None
+}
+
+pub(crate) fn set_unix_mode(_file: &std::fs::File, _mode: u32) -> std::io::Result<()> {
+    Ok(())
+}
+
+/// Volume identity of `path`: 64-bit volume serial number plus the location
+/// inside the volume (independent of drive letter, mount folder and
+/// junctions on the way). `Ok(None)` = the volume has no serial number,
+/// treated as "unknown", never as "another volume".
+pub(crate) fn volume_identity(path: &Path) -> std::io::Result<Option<super::VolumeIdentity>> {
+    let facts = volume_info::volume_facts(path)?;
+    Ok((facts.serial != 0).then(|| super::VolumeIdentity {
+        volume_id: format!("{:016x}", facts.serial),
+        relative_path: facts.inside,
+        fs_type: facts.fs_name,
+    }))
+}
+
+/// What the volume holding `path` (or its nearest existing ancestor) can
+/// store and how it flushes.
+pub(crate) fn filesystem_profile(path: &Path) -> std::io::Result<super::fs_profile::FsProfile> {
+    let mut current = path;
+    loop {
+        match volume_info::volume_facts(current) {
+            Ok(facts) => {
+                return Ok(super::fs_profile::windows_profile(
+                    &facts.fs_name,
+                    facts.max_component,
+                ))
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => match current.parent() {
+                Some(parent) => current = parent,
+                None => return Err(error),
+            },
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+/// Win32 names remain constrained even when a volume cannot be queried.
+pub(crate) fn fallback_limits() -> super::TargetLimits {
+    super::fs_profile::windows_profile("", 0).limits
+}
+
+/// Stages are never batched on Windows, so no device number is needed.
+pub(crate) fn device_of(_metadata: &std::fs::Metadata) -> Option<u64> {
+    None
+}
+
+/// Volumes mounted in folders are junctions, which walks treat as links.
+pub(crate) fn mount_boundary(_path: &Path) -> std::io::Result<Option<super::MountKind>> {
+    Ok(None)
 }
 
 pub(crate) fn remove_file_like(path: &Path) -> std::io::Result<()> {

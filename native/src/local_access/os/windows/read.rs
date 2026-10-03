@@ -1,18 +1,20 @@
 use super::{broker, normalize_scan_root, privilege::BackupRead};
-use crate::local_access::protocol::{self, ReadKind};
-use std::os::windows::io::AsRawHandle;
+use crate::local_access::protocol::ReadKind;
+use crate::local_access::FinalLink;
 use std::{
     fs::{File, Metadata, OpenOptions},
     io,
-    os::windows::fs::{MetadataExt, OpenOptionsExt},
-    path::{Component, Path, PathBuf},
+    os::windows::fs::OpenOptionsExt,
+    path::Path,
 };
 use windows_sys::Win32::Storage::FileSystem::*;
 
 fn access(kind: ReadKind) -> u32 {
     match kind {
         ReadKind::Metadata => FILE_READ_ATTRIBUTES,
-        ReadKind::Directory => FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
+        ReadKind::Directory | ReadKind::PinRoot | ReadKind::PinChild => {
+            FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES
+        }
         ReadKind::File => FILE_GENERIC_READ,
     }
 }
@@ -43,7 +45,7 @@ pub(super) fn open(path: &Path, kind: ReadKind) -> io::Result<File> {
     }
 }
 
-fn open_direct(path: &Path, kind: ReadKind, sharing: u32) -> io::Result<File> {
+pub(super) fn open_direct(path: &Path, kind: ReadKind, sharing: u32) -> io::Result<File> {
     OpenOptions::new()
         .access_mode(access(kind))
         .share_mode(sharing)
@@ -58,14 +60,16 @@ pub(crate) fn open_read(path: &Path) -> io::Result<File> {
         Err(error) => return Err(error),
     }
     let file = open(path, ReadKind::File)?;
-    let metadata = file.metadata()?;
-    if !metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "Lesequelle ist keine direkte reguläre Datei",
-        ));
-    }
+    super::regular::validate_file(&file, true)?;
     Ok(file)
+}
+
+/// With `FinalLink::Refuse` the entry itself is classified first (one
+/// reparse-tag read), so a link is refused instead of followed; the opened
+/// handle must then be a regular file. Data reparse points (cloud
+/// placeholders, WOF, dedup) are regular files and open as usual.
+pub(crate) fn open_regular(path: &Path, final_link: FinalLink) -> io::Result<File> {
+    super::regular::open_regular(path, final_link)
 }
 
 pub(crate) fn symlink_metadata(path: &Path) -> io::Result<Metadata> {
@@ -76,74 +80,4 @@ pub(crate) fn symlink_metadata(path: &Path) -> io::Result<Metadata> {
         }
         result => result,
     }
-}
-
-/// The helper pins every ancestor while opening the leaf. A rename or reparse
-/// replacement cannot redirect a consented path outside the authorized root.
-pub(super) fn open_scoped(root: &str, path: &str, kind: ReadKind) -> io::Result<File> {
-    if !protocol::contains(root, path) {
-        return Err(io::Error::from(io::ErrorKind::PermissionDenied));
-    }
-    let _backup = BackupRead::enable()?;
-    let target = normalize_scan_root(Path::new(path));
-    let mut held = Vec::new();
-    let mut current = PathBuf::new();
-    for component in target.components() {
-        current.push(component.as_os_str());
-        if matches!(component, Component::Prefix(_)) || current == target {
-            continue;
-        }
-        if !matches!(component, Component::RootDir | Component::Normal(_)) {
-            return Err(io::Error::from(io::ErrorKind::InvalidInput));
-        }
-        let file = open_direct(&current, ReadKind::Metadata, FILE_SHARE_READ)?;
-        let metadata = file.metadata()?;
-        if !metadata.is_dir() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-            return Err(io::Error::from(io::ErrorKind::PermissionDenied));
-        }
-        verify_root_identity(root, &current, &file)?;
-        held.push(file);
-    }
-    let file = open_direct(&target, kind, FILE_SHARE_READ | FILE_SHARE_WRITE)?;
-    let metadata = file.metadata()?;
-    if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-        || (matches!(kind, ReadKind::Directory) && !metadata.is_dir())
-        || (matches!(kind, ReadKind::File) && !metadata.is_file())
-    {
-        return Err(io::Error::from(io::ErrorKind::PermissionDenied));
-    }
-    verify_root_identity(root, &target, &file)?;
-    Ok(file)
-}
-
-fn verify_root_identity(root: &str, current: &Path, file: &File) -> io::Result<()> {
-    let current = super::display_path(current);
-    if !protocol::contains(root, &current) || !protocol::contains(&current, root) {
-        return Ok(());
-    }
-    // NTFS can enable case-sensitive directories. A textual case-folded
-    // containment check alone must not admit a different sibling root.
-    let authorized = open_direct(
-        &normalize_scan_root(Path::new(root)),
-        ReadKind::Metadata,
-        FILE_SHARE_READ,
-    )?;
-    if authorized.metadata()?.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-        || identity(file)? != identity(&authorized)?
-    {
-        return Err(io::Error::from(io::ErrorKind::PermissionDenied));
-    }
-    Ok(())
-}
-
-fn identity(file: &File) -> io::Result<(u32, u32, u32)> {
-    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
-    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok((
-        info.dwVolumeSerialNumber,
-        info.nFileIndexHigh,
-        info.nFileIndexLow,
-    ))
 }
