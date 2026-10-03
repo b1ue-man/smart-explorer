@@ -449,7 +449,10 @@ fn link_like_destination_child_never_receives_copied_content() {
     );
     let result = wait(&receiver);
     assert!(result.errors.is_empty(), "{:?}", result.errors);
-    assert_eq!(result.omissions.reported_paths().collect::<Vec<_>>(), ["sub"]);
+    assert_eq!(
+        result.omissions.reported_paths().collect::<Vec<_>>(),
+        ["sub"]
+    );
     assert!(!victim.join("file.txt").exists());
     std::fs::remove_file(destination.join("sub")).ok();
     for directory in [source, destination, victim] {

@@ -1,15 +1,21 @@
 use super::prelude::*;
-use super::*;
 use super::sync_paths_task_fixture::{forward, remote, Location};
+use super::*;
 use crate::vfs::{Backend, CachingBackend, LocalBackend, Scheme};
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 fn synchronize(a: &Location, b: &Location) -> crate::bisync::Outcome {
     let ignore = crate::bisync::empty_globset();
-    crate::bisync::run(&*a.backend, &a.root, &*b.backend, &b.root,
-        crate::bisync::BisyncOptions::default(), &AtomicBool::new(false),
-        &crate::bisync::WalkFilter::basic(true, &ignore))
+    crate::bisync::run(
+        &*a.backend,
+        &a.root,
+        &*b.backend,
+        &b.root,
+        crate::bisync::BisyncOptions::default(),
+        &AtomicBool::new(false),
+        &crate::bisync::WalkFilter::basic(true, &ignore),
+    )
 }
 
 fn finish(app: &mut App) {
@@ -27,26 +33,51 @@ fn finish(app: &mut App) {
 #[test]
 #[ignore = "requires the isolated remote sync-path task profile"]
 fn sync_paths_task_all_backend_pairs_transfer_changes_and_keep_baselines_separate() {
-    let schemes = [Scheme::Local, Scheme::Sftp, Scheme::Ftp, Scheme::Webdav, Scheme::GDrive, Scheme::Peer];
+    let schemes = [
+        Scheme::Local,
+        Scheme::Sftp,
+        Scheme::Ftp,
+        Scheme::Webdav,
+        Scheme::GDrive,
+        Scheme::Peer,
+    ];
     for left in schemes {
         for right in schemes {
             let (a, b) = (Location::new(left), Location::new(right));
             std::fs::write(a.disk.join("from-a Ü %20.txt"), b"alpha").unwrap();
             std::fs::write(b.disk.join("from-b #.txt"), b"bravo").unwrap();
             let first = synchronize(&a, &b);
-            assert!(first.errors.is_empty(), "{left:?} -> {right:?}: {:?}", first.errors);
+            assert!(
+                first.errors.is_empty(),
+                "{left:?} -> {right:?}: {:?}",
+                first.errors
+            );
             assert!(first.conflicts.is_empty());
-            assert_eq!(std::fs::read(b.disk.join("from-a Ü %20.txt")).unwrap(), b"alpha");
-            assert_eq!(std::fs::read(a.disk.join("from-b #.txt")).unwrap(), b"bravo");
+            assert_eq!(
+                std::fs::read(b.disk.join("from-a Ü %20.txt")).unwrap(),
+                b"alpha"
+            );
+            assert_eq!(
+                std::fs::read(a.disk.join("from-b #.txt")).unwrap(),
+                b"bravo"
+            );
             std::fs::write(a.disk.join("from-a Ü %20.txt"), b"changed alpha").unwrap();
             let updated = synchronize(&a, &b);
             assert!(updated.errors.is_empty(), "{:?}", updated.errors);
-            assert_eq!(std::fs::read(b.disk.join("from-a Ü %20.txt")).unwrap(), b"changed alpha");
+            assert_eq!(
+                std::fs::read(b.disk.join("from-a Ü %20.txt")).unwrap(),
+                b"changed alpha"
+            );
             let stable = synchronize(&a, &b);
             assert!(stable.errors.is_empty());
-            assert_eq!(stable.stats.a_to_b + stable.stats.b_to_a + stable.stats.deleted, 0);
-            assert_ne!(crate::bisync::pair_id_for(&*a.backend, &a.root, &*b.backend, &b.root),
-                crate::bisync::pair_id_for(&*b.backend, &b.root, &*a.backend, &a.root));
+            assert_eq!(
+                stable.stats.a_to_b + stable.stats.b_to_a + stable.stats.deleted,
+                0
+            );
+            assert_ne!(
+                crate::bisync::pair_id_for(&*a.backend, &a.root, &*b.backend, &b.root),
+                crate::bisync::pair_id_for(&*b.backend, &b.root, &*a.backend, &a.root)
+            );
         }
     }
 }
@@ -54,8 +85,15 @@ fn sync_paths_task_all_backend_pairs_transfer_changes_and_keep_baselines_separat
 #[test]
 #[ignore = "requires the isolated remote sync-path task profile"]
 fn sync_paths_task_picker_setup_and_quick_actions_retain_remote_provenance() {
-    for prefix in ["sftp://u@h:22", "ftp://u@h:21", "ftps://u@h:21", "webdav://u@h:443",
-        "gdrive://", "share://direct/contact-a", "share://room/room-a/device-a"] {
+    for prefix in [
+        "sftp://u@h:22",
+        "ftp://u@h:21",
+        "ftps://u@h:21",
+        "webdav://u@h:443",
+        "gdrive://",
+        "share://direct/contact-a",
+        "share://room/room-a/device-a",
+    ] {
         let mut app = App::new_for_copy_task();
         let (a, b) = (Location::new(Scheme::Sftp), Location::new(Scheme::GDrive));
         app.root_path = a.root.clone();
@@ -73,8 +111,11 @@ fn sync_paths_task_picker_setup_and_quick_actions_retain_remote_provenance() {
         assert_eq!(job.source, editor.source);
         app.open_picker(PickerPurpose::MirrorDest, "");
         assert!(!app.picker.as_ref().unwrap().purpose.local_only());
-        let selection = app.picker_tab_locations().into_iter().find(|location|
-            location.prefix == "sftp://other@second:22").unwrap();
+        let selection = app
+            .picker_tab_locations()
+            .into_iter()
+            .find(|location| location.prefix == "sftp://other@second:22")
+            .unwrap();
         app.picker_use_location(selection);
         let deadline = Instant::now() + Duration::from_secs(5);
         while app.picker.as_ref().unwrap().listing {
@@ -87,11 +128,17 @@ fn sync_paths_task_picker_setup_and_quick_actions_retain_remote_provenance() {
         std::fs::write(a.disk.join("mirror.txt"), b"copy to chosen remote").unwrap();
         app.start_mirror(picker.backend.unwrap(), picker.cwd);
         finish(&mut app);
-        assert_eq!(std::fs::read(b.disk.join("mirror.txt")).unwrap(), b"copy to chosen remote");
+        assert_eq!(
+            std::fs::read(b.disk.join("mirror.txt")).unwrap(),
+            b"copy to chosen remote"
+        );
         std::fs::write(b.disk.join("reverse.txt"), b"from target").unwrap();
         app.start_bisync(b.backend.clone(), b.root.clone());
         finish(&mut app);
-        assert_eq!(std::fs::read(a.disk.join("reverse.txt")).unwrap(), b"from target");
+        assert_eq!(
+            std::fs::read(a.disk.join("reverse.txt")).unwrap(),
+            b"from target"
+        );
     }
 }
 
@@ -102,10 +149,16 @@ fn sync_paths_task_split_same_paths_on_different_remotes_and_uncached_metadata()
     let (a, b) = (Location::new(Scheme::Peer), Location::new(Scheme::Peer));
     let cached: crate::vfs::BackendHandle = Arc::new(CachingBackend::new(a.backend.clone()));
     assert!(cached.list_dir(&a.root).unwrap().is_empty());
-    assert_ne!(a.backend.namespace_identity(), b.backend.namespace_identity());
+    assert_ne!(
+        a.backend.namespace_identity(),
+        b.backend.namespace_identity()
+    );
     assert_eq!(cached.state_identity(), a.backend.state_identity());
     assert_eq!(cached.namespace_identity(), a.backend.namespace_identity());
-    assert!(Arc::ptr_eq(&crate::vfs::sync_backend(cached.clone()), &a.backend));
+    assert!(Arc::ptr_eq(
+        &crate::vfs::sync_backend(cached.clone()),
+        &a.backend
+    ));
     std::fs::write(a.disk.join("fresh.txt"), b"fresh after browser listing").unwrap();
     app.root_path = a.root.clone();
     app.remote = Some(remote(cached, "share://direct/first"));
@@ -119,12 +172,23 @@ fn sync_paths_task_split_same_paths_on_different_remotes_and_uncached_metadata()
     app.sync_split_panes();
     assert!(app.bisync_running, "{:?}", app.error_msg);
     finish(&mut app);
-    assert_eq!(std::fs::read(b.disk.join("fresh.txt")).unwrap_or_else(|error| {
-        panic!("split sync did not publish fresh.txt: {error}; notice={:?}; error={:?}",
-            app.notice, app.error_msg)
-    }), b"fresh after browser listing");
+    assert_eq!(
+        std::fs::read(b.disk.join("fresh.txt")).unwrap_or_else(|error| {
+            panic!(
+                "split sync did not publish fresh.txt: {error}; notice={:?}; error={:?}",
+                app.notice, app.error_msg
+            )
+        }),
+        b"fresh after browser listing"
+    );
     assert!(crate::vfs::validate_sync_roots(&*a.backend, &a.root, &*a.backend, &a.root).is_err());
-    assert!(crate::vfs::validate_sync_roots(&*a.backend, &a.root, &*a.backend, &format!("{}/sub", a.root)).is_err());
+    assert!(crate::vfs::validate_sync_roots(
+        &*a.backend,
+        &a.root,
+        &*a.backend,
+        &format!("{}/sub", a.root)
+    )
+    .is_err());
 }
 
 #[test]
@@ -144,9 +208,18 @@ fn sync_paths_task_saved_local_job_uses_worker_resolution_and_preserves_old_beha
     assert!(app.bisync_cancel.is_some());
     assert_eq!(app.running_job.as_deref(), Some(id.as_str()));
     finish(&mut app);
-    assert_eq!(std::fs::read(b.disk.join("local.txt")).unwrap(), b"local source");
+    assert_eq!(
+        std::fs::read(b.disk.join("local.txt")).unwrap(),
+        b"local source"
+    );
     let root = forward(a.disk.parent().unwrap());
-    assert!(crate::vfs::validate_sync_roots(&LocalBackend::new(&root), &root, &*a.backend, &a.root).is_err());
+    assert!(crate::vfs::validate_sync_roots(
+        &LocalBackend::new(&root),
+        &root,
+        &*a.backend,
+        &a.root
+    )
+    .is_err());
 }
 
 #[test]
@@ -158,15 +231,38 @@ fn sync_paths_task_real_share_cross_peer_sync_and_local_roundtrip() {
     std::fs::write(second.root_a.join("second %20.txt"), b"second peer").unwrap();
     let ignore = crate::bisync::empty_globset();
     let filter = crate::bisync::WalkFilter::basic(true, &ignore);
-    let result = crate::bisync::run(&*first.backend, "/A", &*second.backend, "/A",
-        crate::bisync::BisyncOptions::default(), &AtomicBool::new(false), &filter);
+    let result = crate::bisync::run(
+        &*first.backend,
+        "/A",
+        &*second.backend,
+        "/A",
+        crate::bisync::BisyncOptions::default(),
+        &AtomicBool::new(false),
+        &filter,
+    );
     assert!(result.errors.is_empty(), "{:?}", result.errors);
     assert!(result.conflicts.is_empty());
-    assert_eq!(std::fs::read(second.root_a.join("first Ü.txt")).unwrap(), b"first peer");
-    assert_eq!(std::fs::read(first.root_a.join("second %20.txt")).unwrap(), b"second peer");
+    assert_eq!(
+        std::fs::read(second.root_a.join("first Ü.txt")).unwrap(),
+        b"first peer"
+    );
+    assert_eq!(
+        std::fs::read(first.root_a.join("second %20.txt")).unwrap(),
+        b"second peer"
+    );
     let local = Location::new(Scheme::Local);
-    let result = crate::bisync::run(&*first.backend, "/A", &*local.backend, &local.root,
-        crate::bisync::BisyncOptions::default(), &AtomicBool::new(false), &filter);
+    let result = crate::bisync::run(
+        &*first.backend,
+        "/A",
+        &*local.backend,
+        &local.root,
+        crate::bisync::BisyncOptions::default(),
+        &AtomicBool::new(false),
+        &filter,
+    );
     assert!(result.errors.is_empty(), "{:?}", result.errors);
-    assert_eq!(std::fs::read(local.disk.join("first Ü.txt")).unwrap(), b"first peer");
+    assert_eq!(
+        std::fs::read(local.disk.join("first Ü.txt")).unwrap(),
+        b"first peer"
+    );
 }

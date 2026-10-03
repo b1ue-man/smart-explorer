@@ -412,7 +412,9 @@ fn review_task_agent_walk_cancel_arrives_without_entries() {
     let cancel = progress.cancel.clone();
     let started = Instant::now();
     let canceler = std::thread::spawn(move || {
-        walk_started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        walk_started_rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
         cancel.store(true, Ordering::Relaxed);
     });
     let report = find_backend_duplicates(be.clone(), "/", &progress, 1);

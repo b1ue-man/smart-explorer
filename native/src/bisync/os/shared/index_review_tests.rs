@@ -92,10 +92,7 @@ fn review_task_index_tombstones_remove_rows_and_owner_cleanup_stays_scoped() {
         .is_empty());
     let mut remaining = baseline("file");
     remaining.get_mut("file").unwrap().0 = None;
-    assert_eq!(
-        store.load_baseline("pair:job-first:r1").unwrap(),
-        remaining
-    );
+    assert_eq!(store.load_baseline("pair:job-first:r1").unwrap(), remaining);
 
     // Historic rows can keep a complete pre-delete signature. It remains
     // validated, but neither the baseline nor ID lookup may adopt it.
@@ -115,10 +112,7 @@ fn review_task_index_tombstones_remove_rows_and_owner_cleanup_stays_scoped() {
         .rel_for_id("pair:job-first:r1", Side::A, "deleted-id")
         .unwrap()
         .is_none());
-    assert_eq!(
-        store.load_baseline("pair:job-first:r1").unwrap(),
-        remaining
-    );
+    assert_eq!(store.load_baseline("pair:job-first:r1").unwrap(), remaining);
 
     // Invalid encodings still invalidate the whole cache, even on a
     // tombstone; no partial baseline is returned.

@@ -26,10 +26,10 @@ mod create;
 pub(crate) use create::secure_private_handle;
 #[path = "directory_identity.rs"]
 mod identity;
-#[path = "private_ancestors.rs"]
-mod private_ancestors;
 #[path = "private_access.rs"]
 mod private_access;
+#[path = "private_ancestors.rs"]
+mod private_ancestors;
 #[path = "remove.rs"]
 mod remove;
 

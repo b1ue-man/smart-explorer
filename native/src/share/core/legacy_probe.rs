@@ -151,8 +151,7 @@ impl PendingLegacyProbe {
             || contact.relation.signed_presence
             || contact.expected_node_id.is_empty()
             || contact.expected_node_id != peer.node_id
-            || self.endpoint.expected_node_id.as_deref()
-                != Some(contact.expected_node_id.as_str())
+            || self.endpoint.expected_node_id.as_deref() != Some(contact.expected_node_id.as_str())
             || contact.remote_device_id.as_deref() != Some(peer.device_id.as_str())
             || contact.remote_public_key.as_deref() != Some(peer.public_key.as_str())
             || !fingerprint_matches(&peer.public_key, &contact.expected_fingerprint)
@@ -191,9 +190,10 @@ impl PendingLegacyProbe {
         let peer = &self.endpoint.presence;
         if entry != &self.request
             || entry.direction != DirectRequestDirection::Outgoing
-            || entry.local_lookup_id.as_deref().is_some_and(|lookup| {
-                lookup != self.identity.direct_lookup_id.as_str()
-            })
+            || entry
+                .local_lookup_id
+                .as_deref()
+                .is_some_and(|lookup| lookup != self.identity.direct_lookup_id.as_str())
             || entry.request_receipt.is_some()
             || entry.decision.is_some()
             || entry.decision_receipt.is_some()
