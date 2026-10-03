@@ -11,7 +11,7 @@ pub(super) enum ReadKind {
     Metadata,
     Directory,
     File,
-    /// Read-only pins deny write/delete sharing; no token is transferred.
+    /// Read-only directory pins deny delete sharing; no token is transferred.
     PinRoot,
     PinChild,
 }

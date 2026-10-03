@@ -1,14 +1,7 @@
 //! Windows private objects reuse the V1 protected-DACL implementation.
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io;
-use std::os::windows::fs::OpenOptionsExt;
 use std::path::Path;
-
-use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE};
-use windows_sys::Win32::Storage::FileSystem::{
-    FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE,
-    READ_CONTROL, WRITE_DAC,
-};
 
 pub(crate) fn ensure_directory(path: &Path) -> io::Result<()> {
     match std::fs::symlink_metadata(path) {
@@ -75,23 +68,7 @@ pub(crate) fn open_file(path: &Path, writable: bool) -> io::Result<File> {
         .file_name()
         .ok_or_else(|| io::Error::other("private file needs a name"))?;
     let root = crate::local_access::DirectoryHandle::open_root(parent)?;
-    root.secure_private()?;
-    let physical = root
-        .watch_path()
-        .ok_or_else(|| io::Error::other("private parent has no pinned path"))?
-        .join(name);
-    let access = GENERIC_READ
-        | FILE_READ_ATTRIBUTES
-        | READ_CONTROL
-        | WRITE_DAC
-        | if writable { GENERIC_WRITE } else { 0 };
-    let file = OpenOptions::new()
-        .access_mode(access)
-        .share_mode(FILE_SHARE_READ | if writable { FILE_SHARE_WRITE } else { 0 })
-        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
-        .open(physical)?;
-    secure(&file, false)?;
-    Ok(file)
+    root.open_private_child(name, writable)
 }
 
 pub(crate) fn secure(file: &File, directory: bool) -> io::Result<()> {
