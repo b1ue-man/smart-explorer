@@ -1,13 +1,13 @@
 //! Bounded listing and retention by original file, side and replica.
 use super::pair_lock::PairLock;
-use super::paths::{join, parent_of, validate_child_name};
+use super::paths::{join, parent_of};
 use super::transfer_stream::check;
 use super::types::Versioning;
 use super::version_listing::{children, legacy, managed, Managed};
 use super::version_manifest::{self as record, Manifest};
 use super::version_retention::{keep_version, selected};
 use super::versions::{VersionEntry, VersionSide, VersionStore};
-use crate::vfs::{Backend, LocalBackend};
+use crate::vfs::{validate_child_name, Backend, LocalBackend};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::sync::atomic::AtomicBool;

@@ -1,9 +1,9 @@
 //! Bounded target/appdata version discovery, including compatible legacy runs.
-use super::paths::{join, validate_child_name};
+use super::paths::join;
 use super::transfer_stream::check;
 use super::version_manifest::{self as record, Manifest};
 use super::versions::{VersionEntry, VersionSide, VersionStore};
-use crate::vfs::{Backend, LocalBackend};
+use crate::vfs::{validate_child_name, Backend, LocalBackend};
 use std::io;
 use std::sync::atomic::AtomicBool;
 

@@ -201,7 +201,7 @@ fn create_marker(backend: &dyn Backend, root: &str, pair: &str) -> io::Result<Re
     };
     let path = crate::vfs::sync_child_path(backend, root, REPLICA_MARKER_NAME)?;
     let stage = crate::vfs::unique_staging_path(backend, &path, "sync-replica")?;
-    let result = (|| {
+    let result: io::Result<ReplicaRef> = (|| {
         let bytes = serde_json::to_vec(&marker).map_err(io::Error::other)?;
         let mut writer = backend.open_write_copy_stage_sized(&stage, bytes.len() as u64)?;
         writer.write_all(&bytes)?;
