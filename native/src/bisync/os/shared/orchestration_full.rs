@@ -154,8 +154,8 @@ pub(super) fn run_full_locked(state: &RunState<'_>) -> Outcome {
         if state.cancel.load(Ordering::Acquire) || super::ApplySink::should_stop(&sink) { break; }
         if plan.omissions.protects(&repair.rel) { continue; }
         let id = repair.duplicates.as_ref().and_then(|group| group.common_choice()).and_then(|(a, _)| a.id.as_deref());
-        match super::duplicate_apply::resolve(endpoints, repair, true, id,
-            state.versions.app_data_dir(), state.cancel, opts.bwlimit_bps, |_| {}) {
+        match super::duplicate_apply::resolve_scoped(endpoints, repair, true, id,
+            opts, &scope, state.cancel, opts.bwlimit_bps, |_| {}) {
             Ok(entry) => {
                 deduped = deduped.saturating_add(repair.duplicates.as_ref().map_or(0, |group| group.redundant_count()));
                 if let Err(error) = sink.planned(Frame { records: vec![(repair.rel.clone(), entry)], ..Frame::default() }) {
