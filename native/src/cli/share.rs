@@ -52,11 +52,11 @@ enum Command {
     Status(status::StatusArgs),
     #[command(about = "Inspect and decide durable direct access requests")]
     Request(requests::RequestArgs),
-    #[command(about = "Inspect and revoke direct authorization grants")]
+    #[command(about = "Inspect and revoke direct authorization grants", visible_alias = "contacts")]
     Grants(grants::GrantsArgs),
     #[command(about = "Inspect and cancel active or recent remote executions")]
     Exec(exec_status::ExecStatusArgs),
-    #[command(about = "Manage local folders exported to peers")]
+    #[command(about = "Manage local folders exported to peers", visible_alias = "exports")]
     Export(exports::ExportArgs),
     #[command(about = "Create a Share room and print its invite code")]
     Room(RoomArgs),
