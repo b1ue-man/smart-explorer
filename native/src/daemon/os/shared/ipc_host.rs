@@ -433,7 +433,9 @@ fn load_share_server() -> Result<String, String> {
     if metadata.len() > MAX_SHARE_SERVER_BYTES {
         return Err("Share server configuration exceeds its 16 KiB limit".into());
     }
-    if let Some(canonical) = crate::share::migrate_server_file(&path)? {
+    if let Some(canonical) =
+        crate::share::migrate_server_file(&path).map_err(|error| error.to_string())?
+    {
         return Ok(canonical);
     }
     let mut bytes = Vec::with_capacity(metadata.len() as usize);

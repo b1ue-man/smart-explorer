@@ -20,7 +20,7 @@ use super::metadata::wire_to_vfs;
 use super::pool::AgentPool;
 use crate::agent_proto::{query, Frame};
 use crate::vfs::{
-    self as vfs, BackendExtensions, ChangeNotice, ChangeSignalMode, ChangeSubscription,
+    self as vfs, Backend, BackendExtensions, ChangeNotice, ChangeSignalMode, ChangeSubscription,
     HashWalkEntry, HashWalkItem, HashWalkRequest, RecycleExpectation, RecycleOutcome, StageFinish,
     StageFinished, TargetLimits, VfsListing, VfsResult, VolumeIdentity,
 };

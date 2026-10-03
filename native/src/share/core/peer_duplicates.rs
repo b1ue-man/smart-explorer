@@ -61,7 +61,7 @@ fn receive(
     let mut groups = Vec::new();
     let mut pending: Option<FsDuplicateGroup> = None;
     let mut names = HashSet::new();
-    let mut memory = 0usize;
+    let mut memory = 0u64;
     peer_stream::call(
         backend,
         FsRequest::DuplicateSearch(request),
@@ -94,10 +94,17 @@ fn receive(
                             ));
                         }
                         memory = memory.saturating_add(
-                            file.path.capacity().saturating_mul(3)
-                                + 2 * std::mem::size_of::<crate::analytics::ReclaimItem>()
-                                + 2 * std::mem::size_of::<super::fs_response::FsDuplicateFile>()
-                                + 128,
+                            (file.path.capacity() as u64)
+                                .saturating_mul(3)
+                                .saturating_add(
+                                    (std::mem::size_of::<crate::analytics::ReclaimItem>() as u64)
+                                        .saturating_mul(2),
+                                )
+                                .saturating_add(
+                                    (std::mem::size_of::<super::fs_response::FsDuplicateFile>() as u64)
+                                        .saturating_mul(2),
+                                )
+                                .saturating_add(128),
                         );
                     }
                     if memory > crate::transfer::memory_budget() {
@@ -153,19 +160,20 @@ fn receive(
                     .chain(&summary.limits)
                     .chain(summary.root_error.iter())
                     .map(|text| {
-                        text.capacity()
-                            .saturating_add(std::mem::size_of::<String>() * 2)
+                        (text.capacity() as u64)
+                            .saturating_add((std::mem::size_of::<String>() as u64).saturating_mul(2))
                     })
-                    .fold(0usize, usize::saturating_add);
+                    .fold(0u64, u64::saturating_add);
                 let protected = summary
                     .protected
                     .iter()
                     .map(|area| {
-                        area.area.capacity().saturating_add(
-                            std::mem::size_of::<crate::analytics::ProtectedOmission>() * 2,
+                        (area.area.capacity() as u64).saturating_add(
+                            (std::mem::size_of::<crate::analytics::ProtectedOmission>() as u64)
+                                .saturating_mul(2),
                         )
                     })
-                    .fold(0usize, usize::saturating_add);
+                    .fold(0u64, u64::saturating_add);
                 if memory.saturating_add(diagnostic).saturating_add(protected)
                     > crate::transfer::memory_budget()
                 {

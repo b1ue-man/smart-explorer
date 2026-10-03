@@ -59,9 +59,9 @@ fn bridge(peer: BackendHandle) -> io::Result<Bridge> {
         std::io::BufReader::new(stream.try_clone()?).read_line(&mut line)?;
         let request: IpcRequest = serde_json::from_str(&line).map_err(io::Error::other)?;
         super::require_token(&token, request.daemon_token().unwrap_or(""))?;
-        let IpcRequest::AnalyzeShare { target, root, .. } = request else { return Err(unused()) };
+        let IpcRequest::AnalyzeShare { target, root, node_budget, .. } = request else { return Err(unused()) };
         assert!(matches!(target, PeerOpenTarget::Direct { contact_id } if contact_id == "task-direct-identity"));
-        ipc_analysis::serve(stream, root, || Ok(analysis_peer))
+        ipc_analysis::serve(stream, root, node_budget, || Ok(analysis_peer))
     });
     let ordinary = TcpListener::bind("127.0.0.1:0")?;
     let client = TcpStream::connect(ordinary.local_addr()?)?;
@@ -170,7 +170,12 @@ fn windows_remote_task_analysis_ipc_cancellation_reaches_active_worker() -> io::
     while active.load(Ordering::Relaxed) && start.elapsed() < Duration::from_secs(2) { thread::sleep(Duration::from_millis(5)); }
     assert!(!active.load(Ordering::Relaxed), "actual worker survived the canceled IPC request");
     assert!(start.elapsed() < Duration::from_secs(2));
-    let request = IpcRequest::AnalyzeShare { token: "correct".into(), target: PeerOpenTarget::Direct { contact_id: "identity".into() }, root: "/literal root".into() };
+    let request = IpcRequest::AnalyzeShare {
+        token: "correct".into(),
+        target: PeerOpenTarget::Direct { contact_id: "identity".into() },
+        root: "/literal root".into(),
+        node_budget: Some(progress.node_budget()),
+    };
     assert_eq!(request.daemon_token(), Some("correct"));
     assert_eq!(super::require_token("wrong", request.daemon_token().unwrap()).unwrap_err().kind(), io::ErrorKind::PermissionDenied);
     Ok(())
