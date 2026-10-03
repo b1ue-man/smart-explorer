@@ -44,3 +44,28 @@ Reales privates IPv4, ifindex und Interfacename kommen aus `ip -j` beziehungswei
 `Get-NetIPAddress` und werden vom Statusfixture gegen OS-Fakten erneut geprüft. FUSE,
 FAT32 und exFAT werden auf dem isolierten Linux-Runner eingerichtet und in `finally`/Trap
 abgehängt; alle Laufzeitpfade/Ports/Releaseassets stammen aus den Einrichtungskommandos.
+
+## Isolierter FUSE-/Volume-Anschluss
+
+Am 2026-10-03 geprüft: [SSHFS-Upstream](https://github.com/libfuse/sshfs),
+[SSHFS-Manpage](https://raw.githubusercontent.com/libfuse/sshfs/master/sshfs.rst),
+[losetup](https://man7.org/linux/man-pages/man8/losetup.8.html),
+[mount](https://man7.org/linux/man-pages/man8/mount.8.html). SSHFS unterstützt
+`-o directport=PORT` zu einem auf Loopback gebundenen `socat` mit OpenSSH
+`sftp-server`; dies bleibt ein echter FUSE/SFTP-Mount auf dem isolierten Runner.
+`fusermount3 -u` hängt ihn ab. Der Einstieg besitzt die eigene Socat-Prozessgruppe.
+`losetup --find --show` entdeckt die jeweilige Loopdatei; die Suite hängt ihre
+FAT32-/exFAT-Mounts vor `losetup --detach` ab. Nicht-interaktives sudo wird zuerst
+geprüft. Die Entwicklungssuite verändert keine Produkt-Transportvorgabe.
+
+Runner-APIs am 2026-10-03 gegen [setup-python](https://github.com/actions/setup-python),
+[cache restore](https://github.com/actions/cache/blob/main/restore/README.md) und
+[cache save](https://github.com/actions/cache/blob/main/save/README.md) abgeglichen.
+Die bestehende Projektkonvention `setup-python@v6` mit `python-version: '3.12'`
+bleibt verwendbar. Separate Restore-/Save-Schritte erhalten auch fehlgeschlagene
+inkrementelle Ausgaben; die Suite validiert jede wiederverwendete ausführbare Datei
+selbst gegen alle Buildinputs und SHA-256. Rustfmt wird nur remote über stdin/
+stdout verwendet ([Upstream-README](https://github.com/rust-lang/rustfmt/blob/main/README.md)).
+Der [ModResolver](https://github.com/rust-lang/rustfmt/blob/master/src/modules.rs)
+überspringt externe Kindmodule für stdin; deshalb kann jede geänderte Datei separat
+einen präzisen Patch liefern, einschließlich additiver Modulregistrierungen.

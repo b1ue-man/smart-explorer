@@ -98,6 +98,9 @@ mod incremental_changes;
 mod incremental_collect;
 #[path = "os/shared/engine_change_feed.rs"]
 mod engine_change_feed;
+#[cfg(test)]
+#[path = "os/shared/engine_provider_task_tests.rs"]
+mod engine_provider_task_tests;
 #[path = "core/keys.rs"]
 mod keys;
 #[path = "core/limits.rs"]

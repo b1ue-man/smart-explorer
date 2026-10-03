@@ -313,3 +313,7 @@ pub(super) fn current_pin(node: &ShareIrohNode, connection: &Connection, identit
 
 fn busy() -> io::Error { io::Error::new(io::ErrorKind::WouldBlock, "LAN-Link-Zulassung oder Snapshot belegt") }
 fn close(connection: &Connection) { connection.close(VarInt::from_u32(0x534c), b"paired link status ended"); }
+
+#[cfg(test)]
+#[path = "lan_link_transport_task_tests.rs"]
+mod task_tests;

@@ -427,7 +427,7 @@ wait_connected "$legacy_bin" "$old_target" "$root/new-to-old-legacy-connected.js
   "legacy target"
 
 run_se "$se_bin" "$new_requester" share configure \
-  --server "127.0.0.1:$signal_port" \
+  --server "tcp://127.0.0.1:$signal_port" --allow-plaintext \
   >"$root/new-to-old-current-configure.txt"
 wait_connected "$se_bin" "$new_requester" "$root/new-to-old-current-connected.json" \
   "current requester"
@@ -500,7 +500,7 @@ new_identity="$(run_se "$se_bin" "$new_target" share identity --json)"
 printf '%s\n' "$new_identity" >"$root/old-to-new-current-identity.json"
 new_direct_code="$(jq -er '.direct_code' <<<"$new_identity")"
 run_se "$se_bin" "$new_target" share configure \
-  --server "127.0.0.1:$signal_port" \
+  --server "tcp://127.0.0.1:$signal_port" --allow-plaintext \
   >"$root/old-to-new-current-configure.txt"
 wait_connected "$se_bin" "$new_target" "$root/old-to-new-current-connected.json" \
   "current target"
@@ -709,7 +709,7 @@ reject_target_identity="$(run_se "$se_bin" "$new_reject_target" share identity -
 printf '%s\n' "$reject_target_identity" >"$root/reject-current-identity.json"
 reject_direct_code="$(jq -er '.direct_code' <<<"$reject_target_identity")"
 run_se "$se_bin" "$new_reject_target" share configure \
-  --server "127.0.0.1:$signal_port" >"$root/reject-current-configure.txt"
+  --server "tcp://127.0.0.1:$signal_port" --allow-plaintext >"$root/reject-current-configure.txt"
 wait_connected "$se_bin" "$new_reject_target" "$root/reject-current-connected.json" \
   "reject current target"
 

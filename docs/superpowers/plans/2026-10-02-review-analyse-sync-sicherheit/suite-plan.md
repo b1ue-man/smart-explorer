@@ -27,6 +27,14 @@ parallelen Verifikationspipelines für diesen Kandidaten.
    Fehlgeschlagene Stufen behalten Logs und Runtimewerte; der Einstieg besitzt Cleanup,
    Subprozesse und Fristen.
 
+Der Recorded-Merge läuft in zwei Aufrufen derselben tatsächlichen Methode mit
+`reviewMergePhase=prepare|retry`. Dazwischen beendet `am force-stop` den entdeckten
+App-Prozess; das gespeicherte Job-/Verbindungs-/FTP-Namespace wird unverändert
+weiterverwendet. `sys.hostState` bildet beim Storage-Widerrufsfall den echten
+JNI-Hostfaktenanschluss ab, keinen behaupteten Android-AppOps-Entzug. Der echte
+Room-Datei-Download prüft daneben Providerzugriff und SHA-256 über den gepinnten
+TLS-Host. Private Fixture-Schlüssel liegen außerhalb der hochgeladenen Logs.
+
 Jeder ausführende Job erhält mindestens 30 Minuten. Formatter-Diagnostik liefert bei
 Bedarf einen an den Kandidaten gebundenen Patch als Artefakt; lokal wird kein Formatter
 gestartet. Ein Fehler verhindert den Release. Ein Fix wird committed/gepusht und nur

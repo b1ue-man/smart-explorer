@@ -114,7 +114,8 @@ def cmd_instrumentation(args) -> int:
 
 
 def cmd_unit_tests(args) -> int:
-    expected = {f"{cls}#{name}" for cls, names in source_tests(Path(args.sources)).items() for name in names}
+    tests = source_tests(Path(args.sources))
+    expected = expected_for(tests, args.classes) if args.classes else {f"{cls}#{name}" for cls, names in tests.items() for name in names}
     seen, problems = {}, []
     files = sorted(Path(args.results).glob("TEST-*.xml"))
     if not files:
@@ -317,6 +318,7 @@ def main() -> int:
     p = sub.add_parser("unit-tests")
     p.add_argument("--results", required=True)
     p.add_argument("--sources", required=True)
+    p.add_argument("--classes", help="Only the directly affected JVM classes/methods of a later task batch")
     p = sub.add_parser("coverage")
     p.add_argument("--api", required=True)
     p.add_argument("--calls", nargs="+", required=True)

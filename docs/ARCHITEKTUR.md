@@ -1,6 +1,6 @@
 # Smart Explorer – Architektur
 
-Stand: 2026-10-01. Kurzüberblick als erster Einstieg; Details liefert der Code-Graph
+Stand: 2026-10-03. Kurzüberblick als erster Einstieg; Details liefert der Code-Graph
 (`graphify query "…"`, siehe AGENTS.md) und die Lesungen unter `docs/lesungen/`.
 
 ## Zweck
@@ -22,11 +22,14 @@ Speicheranalyse – als Desktop-App (Windows, Linux; Rust + egui) und als Androi
 | Explorer-Übergabe Remote (Windows) | virtuelle Dateien `native/src/virtual_clipboard/os/remote/` (STA-Thread, Liste bei erster Explorer-Anfrage, Vorausladen), Ziehen `native/src/dragout/os/remote.rs`, Auswahlquelle `transfer/os/shared/selection.rs` |
 | App-Übertragungen | Einfügen/Ablegen/Dialoge → Job `native/src/app/core/transfer_route.rs`, Fenster „⇅ Übertragungen“ `app/core/transfer_window.rs`/`transfer_center.rs`, Zwischenablage `app/core/transfer_clip.rs` |
 | Sync | Jobs `native/src/syncjobs/`, Zwei-Wege `native/src/bisync/`, Einweg-Spiegeln `native/src/sync/` |
+| Sync-Zustand, Wiederanlauf und Versionen | `bisync/core/run_types.rs` (`StateKey`, `RunSettings`), `bisync/os/shared/{apply_reporting,replacement_journal,versions}.rs`; beide Seiten und Jobowner teilen dieselbe Engine-Grenze |
+| Desktop-Close/Update bei laufendem Sync | `app/os/shared/sync_exit_gate.rs`, `app/core/sync_run_state.rs`; tatsächliche Worker-Completion gibt Shutdown frei |
 | Hintergrund-Daemon | `native/src/daemon/` (`run_daemon`, eingebettet `ensure_embedded_daemon`, Nachhol-Lauf `request_catch_up`), `native/src/autostart/` |
 | Share/P2P | `native/src/share/` (Iroh/QUIC, Profile, Discovery, Räume), Share-Server `share-server/` |
 | Share-Energie/Ruhemodus | `share/core/power.rs` (prozessweit: `set_low_power`, `request_probe`, Wachhalte-Hook), Signal-Worker `signal_worker.rs` + `signal_{connected,session,idle,schedule,power,publish,readiness}.rs` (ereignisgesteuert, Wächter-Thread `share-signal-rd`), Leerlauf-Aufräumen `node_idle.rs`; Server `share-server/src/{idle,idle_outbox,signal_session,transport_serve,writer_idle}.rs` (Fähigkeit `idle_keepalive_v1`, Takt K, Bündelung), Relay-Ping-Plan im vendored `iroh-relay` (`AccessControl::ping_schedule`) |
 | Eigene Discovery-Angebote (suchbar machen) | Daemon-Buch `share/core/discovery_offer_book.rs` (aus Worker-Ereignissen, in `ShareWorkerSnapshot.discovery_offers`), IPC `daemon/os/shared/ipc_host_commands.rs` (`send_command` → `ShareCommandReply`), CLI `cli/share/discoverable.rs` |
 | Speicheranalyse/Duplikate | `native/src/analytics/` (geschützte Bereiche `core/protected.rs` + `apptrash::ProtectedAreas`, Anzeige-Schätzzeilen `core/storage_view.rs`, Android-Duplikatsuche `os/shared/reclaim/finder*.rs`) |
+| Fernanalyse, behaltene Ergebnisse und Host-Papierkorb | `share/os/shared/{storage_analysis_host,analysis_tasks,analysis_spool,host_watch}.rs`, `analytics/os/{windows,linux_os,linux_trash}.rs`; handlebasierter Zugriff über `local_access/` |
 | Updates | Desktop `native/src/updater/`, Terminal `se update` `cli/update.rs` → `updater/os/shared/terminal.rs` (Feed-Prüfung, Installationsart, Ersatz an Ort und Stelle), Android `update.*` in `native/src/mobile/os/shared/domains/` |
 | Release | `native/publish-release-local.ps1` (einziger Einstieg), `docs/RELEASING.md` |
 
@@ -55,6 +58,13 @@ Speicheranalyse – als Desktop-App (Windows, Linux; Rust + egui) und als Androi
   veröffentlichen ohne Ersetzen; Fortschritt ~150 ms, Fehler als JSON-Zeilen in einer Protokolldatei.
 - Persistenz: App-Daten unter `support_dirs::app_data_dir()` (Android: `<filesDir>/smart_explorer`),
   Sync-Jobs `sync/jobs/*.conf`, Zugangsdaten `secrets-v1/` (Datei-Store), Share-Profile/Identität.
+- Sync: gespeicherter Endpunkt → gemeinsame VFS-/Literalpfad-Auflösung → `StateKey`/Pairlock →
+  optionsbewusster Snapshot → `ApplyScope` mit Checkpoints, Versionen und vorab dauerhaftem
+  ReplacementIntent → bestätigte Teilaktionen. Pending-Merge und unklare Veröffentlichung
+  schützen ihre Originalpfade bis zum ausdrücklichen Wiederanlauf.
+- Share: vollständig gepinnter Principal → aktuelle persistierte Export-/Kontakt-/Raumrechte →
+  OS-Handle-/Pfadgrenze. Statuskanal und mDNS erteilen keine FS-/Exec- oder Uplink-Rechte;
+  Rechteentzug invalidiert betroffene Sitzungen, ein Transportabbruch allein keine Analyse-Retention.
 
 ## Externe Abhängigkeiten
 Rust-Crates und ihre Android-Tauglichkeit: `docs/refs/android-rust-deps.md`; JNI: `docs/refs/rust-jni-022.md`;
@@ -64,6 +74,8 @@ Android-APIs: `docs/refs/android-apis.md`, `docs/refs/android-platform.md`; CI: 
 ## Bauen, Prüfen, Konventionen
 - Keine lokalen Builds/Tests (AGENTS.md); Prüfung ausschließlich über die eine Remote-Task-Suite je Batch
   (Android: `.github/workflows/android-task.yml` → `android/test-android-task.sh`).
+- RV1: `.github/workflows/review-task.yml` → `native/test-review-task.sh`; eine kandidatengebundene
+  Suite mit nativem Linux/Windows und Android-Build/Gerät. Vertrag: `docs/refs/rv1-remote-suite.md`.
 - Android-Bibliothek: `cargo ndk -t arm64-v8a -t x86_64 --platform 30 -o android/app/src/main/jniLibs build -p smart_explorer_android`
   (im Verzeichnis `native/`), NDK aus `android/ndk-version`; Gradle braucht `-PrustlsVerifierMaven=<Pfad>`.
 - Release-APK: `android/build-release-apk.sh` (Job `android-release-apk` in `build.yml`), Signatur aus Repo-Secrets.

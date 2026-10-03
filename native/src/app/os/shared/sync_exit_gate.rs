@@ -129,3 +129,7 @@ impl App {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "sync_exit_gate_task_tests.rs"]
+mod task_tests;
