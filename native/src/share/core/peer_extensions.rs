@@ -4,8 +4,13 @@ use crate::{analytics::{DuplicateReport, ReclaimProgress}, vfs::{Backend, Backen
     ChangeSubscription, HashWalkItem, HashWalkRequest, RecycleExpectation, RecycleOutcome,
     StageDurability, StageFinish, StageFinished, TargetLimits, VfsListing}};
 use super::{backend::PeerBackend, peer_stream, wire::{FsRecycle, FsRequest, FsResponse, FsStageDurability, FsStageFinish, FsSyncFilesystem}};
+#[path = "peer_literal_paths.rs"]
+pub(super) mod literal_paths;
 
 impl BackendExtensions for PeerBackend {
+    fn sync_child_path(&self, parent: &str, literal_name: &str) -> io::Result<String> {
+        literal_paths::client(self, parent, literal_name)
+    }
     fn list_dir_tolerant(&self,path:&str)->io::Result<VfsListing> { super::peer_list_batch::list(self,path) }
     fn finish_stage(&self,stage:&str,finish:StageFinish)->io::Result<StageFinished> {
         if !self.owns_stage(stage) { return Err(io::Error::new(io::ErrorKind::PermissionDenied,"Stage wurde nicht von diesem Backend angelegt")); }

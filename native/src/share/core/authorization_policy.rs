@@ -79,3 +79,30 @@ fn same_presence(left: Option<&PeerPresence>, right: Option<&PeerPresence>) -> b
         _ => false,
     }
 }
+
+/// Preserve facts authenticated by the running worker, even if the daemon
+/// has not yet saved the event. Device aliases cannot reset the key's flag.
+pub(super) fn preserve_signature_facts(current: &ShareAuthState, candidate: &mut ShareAuthState) {
+    for contact in &mut candidate.direct_contacts {
+        contact.relation.signed_presence |= current.direct_contacts.iter().any(|old| {
+            let key = old.remote_public_key.as_deref().filter(|key| !key.is_empty())
+                .or(old.accepted_public_key.as_deref().filter(|key| !key.is_empty()));
+            let candidate_key = contact.remote_public_key.as_deref().filter(|key| !key.is_empty())
+                .or(contact.accepted_public_key.as_deref().filter(|key| !key.is_empty()));
+            old.relation.signed_presence && ((key.is_some() && key == candidate_key)
+                || (!old.expected_node_id.is_empty() && old.expected_node_id == contact.expected_node_id))
+        });
+    }
+    for room in &mut candidate.rooms {
+        let Some(old_room) = current.rooms.iter().find(|old| old.room_id == room.room_id) else { continue };
+        for member in &mut room.members {
+            member.relation.signed_presence |= old_room.members.iter().any(|old| {
+                old.relation.signed_presence && ((!old.public_key.is_empty() && old.public_key == member.public_key)
+                    || (!old.node_id.is_empty() && old.node_id == member.node_id))
+            });
+        }
+    }
+    // Preserve unparseable session namespaces as well as signed markers;
+    // only the owner of a nonce namespace may decide its expiry.
+    candidate.seen_nonces.extend(current.seen_nonces.iter().cloned());
+}

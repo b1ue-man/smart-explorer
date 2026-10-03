@@ -42,6 +42,7 @@ pub(super) struct BatchAuthority {
 }
 
 impl BatchAuthority {
+    pub(super) fn stream_access(&self) -> FsAccess { self.access.clone() }
     fn new(
         access: FsAccess,
         lease: Option<MountLeaseAuthorization>,
@@ -64,8 +65,9 @@ impl BatchAuthority {
             return lease.run(|| operation(&self.access));
         }
         self.node.require_sharing_active()?;
-        let exports = self.session.authorize(&self.auth)?;
-        operation(&FsAccess::dynamic(exports))
+        self.session.authorize(&self.auth)?;
+        self.access.check_read()?;
+        operation(&self.access)
     }
 }
 
@@ -87,21 +89,29 @@ pub(super) async fn serve(stream: FsStream, req: FsRequest) -> io::Result<()> {
         FsRequest::ReleaseLease => Err(eio("Lease-Freigabe wurde doppelt verarbeitet")),
         FsRequest::WriteDone => reply_err(&mut send, eio("unerwartetes Schreib-Ende")).await,
         FsRequest::ListDir { path } => {
-            match control("Share list directory", move || access.list_dir(&path)).await {
+            match control(&principal, "Share list directory", move || access.list_dir(&path)).await {
                 Ok(entries) => reply(&mut send, FsResponse::Entries { entries }).await,
                 Err(error) => reply_err(&mut send, error).await,
             }
         }
-        FsRequest::Stat { path } => match control("Share stat", move || access.stat(&path)).await {
+        FsRequest::Stat { path } => match control(&principal, "Share stat", move || access.stat(&path)).await {
             Ok(meta) => reply(&mut send, FsResponse::Meta { meta }).await,
             Err(error) => reply_err(&mut send, error).await,
         },
-        FsRequest::WalkTree { path } => crate::share::walk::serve_walk(send, path, access).await,
-        FsRequest::StorageSnapshot { path } => {
-            crate::share::storage_snapshot::serve_snapshot(send, path, access).await
+        FsRequest::SyncChildPath { parent, literal_name } => {
+            let result = control(&principal, "Share literal child", move ||
+                crate::share::peer_extensions::literal_paths::host(&access, &parent, &literal_name)).await;
+            match result {
+                Ok(path) => reply(&mut send, FsResponse::ChildPath { path }).await,
+                Err(error) => reply_err(&mut send, error).await,
+            }
         }
-        FsRequest::StorageAnalysis { path } => {
-            crate::share::storage_analysis_server::serve(send, path, access).await
+        FsRequest::WalkTree { path } => crate::share::walk::serve_walk_for(send, path, access, principal).await,
+        FsRequest::StorageSnapshot { path } => {
+            crate::share::storage_snapshot::serve_snapshot(send, path, access, principal).await
+        }
+        FsRequest::StorageAnalysis(request) => {
+            crate::share::storage_analysis_server::serve(send, request, access, principal).await
         }
         FsRequest::Read { path } => {
             let source = ReadSource {
@@ -143,6 +153,7 @@ pub(super) async fn serve(stream: FsStream, req: FsRequest) -> io::Result<()> {
                 path,
                 access,
                 authorization,
+                &principal,
                 "Share create directory",
                 |target| target.backend.mkdir_all(&target.path),
             )
@@ -154,6 +165,7 @@ pub(super) async fn serve(stream: FsStream, req: FsRequest) -> io::Result<()> {
                 path,
                 access,
                 authorization,
+                &principal,
                 "Share create one directory",
                 move |target| {
                     if exclusive {
@@ -166,14 +178,14 @@ pub(super) async fn serve(stream: FsStream, req: FsRequest) -> io::Result<()> {
             .await
         }
         FsRequest::Rename { src, dst } => {
-            let result = control("Share rename", move || {
+            let result = control(&principal, "Share rename", move || {
                 run_authorized(authorization.as_ref(), || access.rename(&src, &dst, false))
             })
             .await;
             reply_unit(&mut send, result).await
         }
         FsRequest::RenameNoReplace { src, dst } => {
-            let result = control("Share no-replace rename", move || {
+            let result = control(&principal, "Share no-replace rename", move || {
                 run_authorized(authorization.as_ref(), || access.rename(&src, &dst, true))
             })
             .await;
@@ -183,7 +195,7 @@ pub(super) async fn serve(stream: FsStream, req: FsRequest) -> io::Result<()> {
             staged,
             destination,
         } => {
-            let result = control("Share promote staged file", move || {
+            let result = control(&principal, "Share promote staged file", move || {
                 run_authorized(authorization.as_ref(), || {
                     access.promote_staged(&staged, &destination)
                 })
@@ -196,7 +208,7 @@ pub(super) async fn serve(stream: FsStream, req: FsRequest) -> io::Result<()> {
             destination,
             copy,
         } => {
-            let result = control("Share publish stage", move || {
+            let result = control(&principal, "Share publish stage", move || {
                 run_authorized(authorization.as_ref(), || {
                     access.promote_no_replace(&staged, &destination, copy)
                 })
@@ -219,6 +231,7 @@ pub(super) async fn serve(stream: FsStream, req: FsRequest) -> io::Result<()> {
                 path,
                 access,
                 authorization,
+                &principal,
                 "Share discard stage",
                 |target| target.backend.discard_copy_stage(&target.path),
             )
@@ -238,19 +251,25 @@ pub(super) async fn serve(stream: FsStream, req: FsRequest) -> io::Result<()> {
                 path,
                 access,
                 authorization,
+                &principal,
                 "Share remove file",
                 |target| target.backend.remove_file(&target.path),
             )
             .await
         }
         FsRequest::RemoveDir { path } => {
+            let live = access.clone();
             simple(
                 &mut send,
                 path,
                 access,
                 authorization,
+                &principal,
                 "Share remove directory",
-                |target| crate::share::fs::remove_dir_recursive(&*target.backend, &target.path),
+                move |target| {
+                    crate::share::fs::require_target_destructive(&target)?;
+                    crate::share::fs_delete::remove_tree_checked(&*target.backend, &target.path, &|| live.check_write())
+                },
             )
             .await
         }
@@ -296,6 +315,58 @@ pub(super) async fn serve(stream: FsStream, req: FsRequest) -> io::Result<()> {
             };
             let authority = BatchAuthority::new(access, authorization, &context);
             super::batch_get::serve(send, items, authority, slot, context.stall()).await
+        }
+        FsRequest::DuplicateSearch(request) => {
+            crate::share::host_requests::serve_duplicate_search(send, request, access, principal)
+                .await
+        }
+        FsRequest::HashWalk(request) => {
+            crate::share::host_requests::serve_hash_walk(send, request, access, principal).await
+        }
+        FsRequest::ListDirBatch(request) => {
+            crate::share::host_requests::serve_list_batch(send, request, access, principal).await
+        }
+        FsRequest::WatchExport(request) => {
+            crate::share::host_requests::serve_watch(send, request, access, principal).await
+        }
+        FsRequest::Recycle(request) => {
+            let path = request.path.clone();
+            answer(
+                &mut send,
+                path,
+                access,
+                authorization,
+                &principal,
+                "Share recycle",
+                move |target| crate::share::host_requests::serve_recycle(target, request),
+            )
+            .await
+        }
+        FsRequest::FinishStage(request) => {
+            let path = request.staged.clone();
+            answer(
+                &mut send,
+                path,
+                access,
+                authorization,
+                &principal,
+                "Share finish stage",
+                move |target| crate::share::host_requests::serve_finish_stage(target, request),
+            )
+            .await
+        }
+        FsRequest::SyncFilesystem(request) => {
+            let path = request.path.clone();
+            answer(
+                &mut send,
+                path,
+                access,
+                authorization,
+                &principal,
+                "Share sync filesystem",
+                move |target| crate::share::host_requests::serve_sync_filesystem(target, request),
+            )
+            .await
         }
     }
 }
@@ -349,19 +420,45 @@ async fn simple<F>(
     path: String,
     access: FsAccess,
     authorization: Option<MountLeaseAuthorization>,
+    principal: &PeerPrincipal,
     label: &'static str,
     operation: F,
 ) -> io::Result<()>
 where
     F: FnOnce(ResolvedTarget) -> io::Result<()> + Send + 'static,
 {
-    let result = control(label, move || {
+    let result = control(principal, label, move || {
         run_authorized(authorization.as_ref(), || {
-            access.resolve(&path).and_then(operation)
+            access.resolve_write(&path).and_then(operation)
         })
     })
     .await;
     reply_unit(send, result).await
+}
+
+/// Like `simple`, for an operation that builds its own reply.
+async fn answer<F>(
+    send: &mut SendStream,
+    path: String,
+    access: FsAccess,
+    authorization: Option<MountLeaseAuthorization>,
+    principal: &PeerPrincipal,
+    label: &'static str,
+    operation: F,
+) -> io::Result<()>
+where
+    F: FnOnce(ResolvedTarget) -> io::Result<FsResponse> + Send + 'static,
+{
+    let result = control(principal, label, move || {
+        run_authorized(authorization.as_ref(), || {
+            access.resolve_write(&path).and_then(operation)
+        })
+    })
+    .await;
+    match result {
+        Ok(response) => reply(send, response).await,
+        Err(error) => reply_err(send, error).await,
+    }
 }
 
 async fn reply_unit(send: &mut SendStream, result: io::Result<()>) -> io::Result<()> {
@@ -371,10 +468,13 @@ async fn reply_unit(send: &mut SendStream, result: io::Result<()>) -> io::Result
     }
 }
 
-async fn control<T, F>(label: &'static str, operation: F) -> io::Result<T>
+async fn control<T, F>(principal: &PeerPrincipal, label: &'static str, operation: F) -> io::Result<T>
 where
     T: Send + 'static,
     F: FnOnce() -> io::Result<T> + Send + 'static,
 {
-    crate::share::blocking::run(label, operation).await
+    let class = if matches!(label, "Share remove directory" | "Share recycle" | "Share sync filesystem") {
+        crate::share::blocking::Class::Background
+    } else { crate::share::blocking::Class::Control };
+    crate::share::blocking::run_for(principal.clone(), class, label, operation).await
 }

@@ -1,5 +1,5 @@
 //! Host admission of transfers (reads, writes, server copies, batches): the
-//! buffer memory, a slot of the principal and a slot of the host are taken
+//! buffer memory, a slot of the authenticated device and a host slot are taken
 //! before any work (K4). A client that declared transfer v1 is told `Busy`
 //! at once when one of them is exhausted, so its adaptive flow backs off
 //! instead of queueing silently behind its own deadline. Older clients wait
@@ -15,7 +15,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use crate::share::core::eio;
 use crate::share::keepalive::TRANSFER_STREAMS_PER_CONNECTION;
 use crate::share::server_transfer::STREAM_BUFFER_CHUNKS;
-use crate::share::session::PeerPrincipal;
+use crate::share::session::{PeerDeviceKey, PeerPrincipal};
 use crate::transfer::MemoryReservation;
 
 /// Transfers across all connections: half of the 512 blocking threads Tokio
@@ -24,7 +24,8 @@ use crate::transfer::MemoryReservation;
 /// 32-slot control pool, Exec, Direct repair and Iroh itself.
 pub(super) const HOST_TRANSFER_SLOTS: usize = 256;
 
-/// Transfers of one principal over all its connections: the admission it is
+/// Transfers of one authenticated device across Direct/Room and all connections:
+/// the admission it is
 /// told (60). A client keeping to it (its flow plus the foreground reads it
 /// keeps free) never meets this bound; one that does not cannot take the
 /// slots of the others.
@@ -53,26 +54,27 @@ fn host_slots() -> Arc<Semaphore> {
         .clone()
 }
 
-type PrincipalSlots = Mutex<HashMap<PeerPrincipal, Weak<Semaphore>>>;
+type PrincipalSlots = Mutex<HashMap<PeerDeviceKey, Weak<Semaphore>>>;
 
 fn principal_table() -> &'static PrincipalSlots {
     static TABLE: OnceLock<PrincipalSlots> = OnceLock::new();
     TABLE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// The slots of `principal`; they live while one of its transfers runs.
+/// Device slots shared by every relation alias of `principal`.
 fn principal_slots(principal: &PeerPrincipal) -> Arc<Semaphore> {
+    let device = principal.device_identity();
     let mut table = principal_table()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Some(slots) = table.get(principal).and_then(Weak::upgrade) {
+    if let Some(slots) = table.get(&device).and_then(Weak::upgrade) {
         return slots;
     }
     // A new semaphore is created only when none of the principal's
     // transfers runs; entries of idle principals are dropped then.
     table.retain(|_, slots| slots.strong_count() > 0);
     let slots = Arc::new(Semaphore::new(PRINCIPAL_TRANSFER_SLOTS));
-    table.insert(principal.clone(), Arc::downgrade(&slots));
+    table.insert(device, Arc::downgrade(&slots));
     slots
 }
 
@@ -83,7 +85,7 @@ pub(super) fn principal_in_use(principal: &PeerPrincipal) -> usize {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     table
-        .get(principal)
+        .get(&principal.device_identity())
         .and_then(Weak::upgrade)
         .map_or(0, |slots| {
             PRINCIPAL_TRANSFER_SLOTS.saturating_sub(slots.available_permits())

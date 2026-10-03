@@ -25,12 +25,19 @@ pub(super) async fn serve_walk(
     root: String,
     access: FsAccess,
 ) -> io::Result<()> {
+    serve_walk_for(send, root, access, super::session::PeerPrincipal::new("legacy", "", "", "", "")).await
+}
+
+pub(super) async fn serve_walk_for(mut send: SendStream, root: String, access: FsAccess,
+    principal: super::session::PeerPrincipal) -> io::Result<()> {
+    let live = access.clone();
     let (responses, mut response_rx) = mpsc::channel(WALK_RESPONSE_BUFFER);
-    let worker = super::blocking::spawn("Share tree walk", move || {
+    let worker = super::blocking::spawn_for(principal, super::blocking::Class::Background, "Share tree walk", move || {
         walk_worker(root, access, responses)
     })
     .await?;
     while let Some(response) = response_rx.recv().await {
+        live.check_read()?;
         match response {
             Ok(response) => reply_walk(&mut send, response).await?,
             Err(error) => {

@@ -124,7 +124,7 @@ pub(super) async fn handle_connection(
                 send_ctrl(
                     &mut send,
                     &Ctrl::FsResp {
-                        resp: super::fs_error::response(&error),
+                        resp: super::fs_error::response(&io::Error::new(io::ErrorKind::PermissionDenied, "Share-Anmeldung nicht autorisiert")),
                     },
                 ),
             )
@@ -132,6 +132,8 @@ pub(super) async fn handle_connection(
             return Err(error);
         }
     };
+    node.bind_incoming_principal(&conn, session.principal()).await?;
+    session.authorize(&node.auth)?;
     io_deadline::run_until(
         handshake_deadline,
         "Session-Bestaetigung Timeout",
@@ -139,6 +141,8 @@ pub(super) async fn handle_connection(
     )
     .await?;
     drop(handshake_permit);
+    drop(send);
+    drop(recv);
     let _ = node.ev.try_send(ShareEvent::Status(format!(
         "Iroh-Session akzeptiert: {} ({})",
         hello.device_id, remote_node
@@ -152,6 +156,14 @@ pub(super) async fn handle_connection(
         node.rt.clone(),
     );
     loop {
+        if activity.fair_yield_requested() {
+            if activity.fair_yield_ready() {
+                conn.close(VarInt::from_u32(IDLE_CLOSE_CODE), IDLE_CLOSE_REASON);
+                return Ok(());
+            }
+            activity.close_requested().await;
+            continue;
+        }
         // A waiting stream always wins over an idle close, so a close never
         // races a request this loop has seen; one that arrives later was
         // never started and the client may send it again (`IDLE`).
@@ -170,7 +182,7 @@ pub(super) async fn handle_connection(
             Ok(streams) => streams,
             Err(error) => return Err(eio(error)),
         };
-        let stream = node.incoming_stream_started(&activity);
+        let pending = node.incoming_stream_pending(&activity);
         let context = StreamContext {
             session: session.clone(),
             auth: node.auth.clone(),
@@ -180,10 +192,19 @@ pub(super) async fn handle_connection(
             activity: activity.clone(),
         };
         let node = node.clone();
+        let connection = conn.clone();
         tokio::spawn(async move {
-            let _stream = stream;
+            let _pending = pending;
+            let acknowledged = send.stopped();
             if let Err(error) = handle_peer_stream(send, recv, context).await {
                 node.emit_connection_error(ConnectionErrorKind::FsStream, error.to_string());
+            }
+            // Drain replies/FIN before a pressure close: a completed mutation
+            // cannot be mistaken for an unexecuted retry.
+            if tokio::time::timeout(io_deadline::PEER_OP_TIMEOUT, acknowledged).await.is_err() {
+                // Delivery is ambiguous. This is never an IDLE retry signal,
+                // which could replay an already completed mutation.
+                connection.close(VarInt::from_u32(0x5348), b"reply acknowledgment timeout");
             }
         });
     }
@@ -205,6 +226,9 @@ async fn handle_peer_stream(
     let legacy_connection = context.legacy_connection;
     node.require_sharing_active()?;
     if matches!(&ctrl, Ctrl::DirectReciprocal) {
+        session.authorize_direct_repair(&auth)?;
+        let _awake = crate::keep_awake::hold(crate::keep_awake::Reason::PeerService);
+        let _stream_hold = node.incoming_stream_started(&context.activity);
         super::direct_reciprocal_transport::serve_incoming_bounded(
             send,
             recv,
@@ -218,7 +242,7 @@ async fn handle_peer_stream(
         .await?;
         return Ok(());
     }
-    let exports = match session.authorize(&auth) {
+    let session_rights = match session.authorize(&auth) {
         Ok(exports) => exports,
         Err(error) => {
             return io_deadline::run("Share authorization rejection", async {
@@ -227,12 +251,12 @@ async fn handle_peer_stream(
                         send_ctrl(
                             &mut send,
                             &Ctrl::ExecErr {
-                                msg: error.to_string(),
+                                msg: "Share-Anfrage nicht autorisiert".into(),
                             },
                         )
                         .await
                     }
-                    _ => reply_err(&mut send, error).await,
+                    _ => reply_err(&mut send, io::Error::new(io::ErrorKind::PermissionDenied, "Share-Anfrage nicht autorisiert")).await,
                 }
             })
             .await;
@@ -244,6 +268,11 @@ async fn handle_peer_stream(
         _ => return Err(eio("Dateioperation erwartet")),
     };
     let principal = session.principal();
+    let _awake = crate::keep_awake::hold(crate::keep_awake::Reason::PeerService);
+    let _stream_hold = node.incoming_stream_started(&context.activity);
+    if req.mutates_filesystem() && !session_rights.may_write {
+        return reply_err(&mut send, io::Error::new(io::ErrorKind::ReadOnlyFilesystem, "Share-Beziehung ist nur lesbar")).await;
+    }
     let mount_leases = node.mount_leases.clone();
     let activity = context.activity.clone();
     let req = match req {
@@ -252,11 +281,14 @@ async fn handle_peer_stream(
             acquire_lease,
             lease_request_id,
         } => {
+            let access = FsAccess::dynamic(session_rights.exports.clone()).authorized(session.clone(), auth.clone(), &node)?;
             let query = super::server_capabilities::CapabilityQuery {
                 path,
                 acquire_lease,
                 lease_request_id,
-                exports,
+                exports: session_rights.exports.clone(),
+                may_write: session_rights.may_write,
+                access,
                 principal,
                 legacy_connection,
                 authorization_epoch: node.filesystem_authorization_epoch(),
@@ -271,7 +303,8 @@ async fn handle_peer_stream(
             };
             let token = token.to_string();
             let released = token.clone();
-            let result = blocking_fs("Share release mount lease", move || {
+            let admitted = principal.clone();
+            let result = super::blocking::run_for(admitted, super::blocking::Class::Control, "Share release mount lease", move || {
                 let removed = mount_leases.release(&token, &principal)?;
                 let existed = removed.is_some();
                 drop(removed);
@@ -298,7 +331,7 @@ async fn handle_peer_stream(
             match mount_leases.authorize(
                 &token,
                 &principal,
-                &exports,
+                &session_rights.exports,
                 legacy_connection,
                 node.filesystem_authorization_epoch(),
             ) {
@@ -308,9 +341,9 @@ async fn handle_peer_stream(
                         MountLeaseAuthorization::new(
                             token,
                             lease.clone(),
-                            session,
-                            auth,
-                            node,
+                            session.clone(),
+                            auth.clone(),
+                            node.clone(),
                             legacy_connection,
                         )
                     });
@@ -319,8 +352,14 @@ async fn handle_peer_stream(
                 Err(error) => return reply_err(&mut send, error).await,
             }
         }
-        None => (FsAccess::dynamic(exports), None),
+        None => (FsAccess::dynamic(session_rights.exports), None),
     };
+    let access = match access.authorized(session, auth, &node) {
+        Ok(access) => access,
+        Err(error) => return reply_err(&mut send, error).await,
+    };
+    let _transport_guard = access.stream_guard();
+    let stopped = send.stopped();
     let stream = fs_dispatch::FsStream {
         send,
         recv,
@@ -329,7 +368,10 @@ async fn handle_peer_stream(
         context,
         principal,
     };
-    fs_dispatch::serve(stream, req).await
+    tokio::select! {
+        result = fs_dispatch::serve(stream, req) => result,
+        _ = stopped => Err(io::Error::new(io::ErrorKind::ConnectionAborted, "Share-Anfrage beendet")),
+    }
 }
 
 async fn handle_exec_stream(

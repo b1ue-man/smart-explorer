@@ -6,6 +6,7 @@ pub(super) fn request_label(request: &FsRequest) -> &'static str {
         FsRequest::ReleaseLease => "release_lease",
         FsRequest::ListDir { .. } => "list_dir",
         FsRequest::Stat { .. } => "stat",
+        FsRequest::SyncChildPath { .. } => "sync_child_path",
         FsRequest::WalkTree { .. } => "walk_tree",
         FsRequest::StorageSnapshot { .. } => "storage_snapshot",
         FsRequest::StorageAnalysis(_) => "storage_analysis",
@@ -64,6 +65,7 @@ pub(super) fn response_summary(response: &FsResponse) -> String {
         ),
         FsResponse::Entries { entries } => format!("{} Eintraege", entries.len()),
         FsResponse::Meta { meta } => format!("meta size={} dir={}", meta.size, meta.is_dir),
+        FsResponse::ChildPath { .. } => "kindpfad".into(),
         FsResponse::WalkBatch {
             nodes,
             files,

@@ -1,5 +1,6 @@
 use std::io;
 use std::sync::Arc;
+use std::time::Duration;
 
 use iroh::endpoint::{Connection, VarInt};
 
@@ -27,38 +28,75 @@ impl ShareIrohNode {
                 };
                 let node = node.clone();
                 tokio::spawn(async move {
-                    match incoming.await {
-                        Ok(connection) => {
-                            let remote = connection.remote_id().to_string();
-                            let peer_permit = match node.peer_handshake_slots.try_acquire(&remote) {
-                                Ok(permit) => permit,
-                                Err(_) => {
-                                    connection.close(
-                                        VarInt::from_u32(2),
-                                        b"application handshake admission limit reached",
-                                    );
-                                    return;
-                                }
-                            };
-                            let permit = ApplicationHandshakePermit::new(permit, peer_permit);
-                            let error_kind = match connection.alpn() {
-                                ALPN => ConnectionErrorKind::FsConnection,
-                                EXEC_ALPN => ConnectionErrorKind::ExecConnection,
-                                _ => ConnectionErrorKind::Accept,
-                            };
-                            if let Err(error) =
-                                dispatch_connection(node.clone(), connection, permit).await
-                            {
-                                node.emit_connection_error(error_kind, error.to_string());
-                            }
+                    // TLS identity is not known before this bounded phase.
+                    let connected = tokio::time::timeout(UNKNOWN_HANDSHAKE, incoming).await;
+                    drop(permit);
+                    let connection = match connected {
+                        Ok(Ok(connection)) => connection,
+                        Ok(Err(error)) => {
+                            node.emit_connection_error(ConnectionErrorKind::Accept, error.to_string());
+                            return;
                         }
-                        Err(error) => node
-                            .emit_connection_error(ConnectionErrorKind::Accept, error.to_string()),
+                        Err(_) => return,
+                    };
+                    let remote = connection.remote_id().to_string();
+                    let known = node.known_endpoint(&remote);
+                    let timeout = if known { KNOWN_HANDSHAKE } else { UNKNOWN_HANDSHAKE };
+                    let deadline = tokio::time::Instant::now() + timeout;
+                    let ticket = match node.application_handshakes.enqueue(remote, known) {
+                        Ok(ticket) => ticket,
+                        Err(_) => { refuse(&connection); return; }
+                    };
+                    let admitted = match tokio::time::timeout_at(deadline, ticket.acquire()).await {
+                        Ok(Ok(permit)) => permit,
+                        _ => { refuse(&connection); return; }
+                    };
+                    let (permit, completion) = ApplicationHandshakePermit::admitted(admitted);
+                    let error_kind = match connection.alpn() {
+                        ALPN => ConnectionErrorKind::FsConnection,
+                        EXEC_ALPN => ConnectionErrorKind::ExecConnection,
+                        _ => ConnectionErrorKind::Accept,
+                    };
+                    let dispatch = dispatch_connection(node.clone(), connection.clone(), permit);
+                    tokio::pin!(dispatch);
+                    // Dropping the application permit after verified Hello ends
+                    // only the handshake deadline, never a live FS/Exec session.
+                    let result = tokio::select! {
+                        result = &mut dispatch => result,
+                        () = completion.wait() => dispatch.await,
+                        () = tokio::time::sleep_until(deadline) => {
+                            refuse(&connection);
+                            Err(io::Error::new(io::ErrorKind::TimedOut, "Share-Anmeldung abgelaufen"))
+                        }
+                    };
+                    if let Err(error) = result {
+                        node.emit_connection_error(error_kind, error.to_string());
                     }
                 });
             }
         });
     }
+
+    fn known_endpoint(&self, remote: &str) -> bool {
+        let Ok(auth) = self.auth.lock() else { return false };
+        let matches = |key: &str, node: &str| !remote.is_empty()
+            && ((!node.is_empty() && node == remote) || (node.is_empty() && key == remote));
+        auth.direct_grants.iter().any(|grant| grant.state == super::types::DirectGrantState::Accepted
+            && matches(&grant.public_key, &grant.node_id))
+            || auth.direct_contacts.iter().any(|contact| contact.access_state == super::types::DirectAccessState::Accepted
+                && matches(contact.remote_public_key.as_deref().or(contact.accepted_public_key.as_deref()).unwrap_or_default(),
+                    &contact.expected_node_id))
+            || auth.rooms.iter().filter(|room| room.auto_join).any(|room| room.members.iter()
+                .any(|member| member.is_admitted() && matches(&member.public_key, &member.node_id)))
+    }
+}
+
+// Unknown application peers cannot hold the 20 s window reserved for pinned
+// identities. Separate pools preserve that capacity under untrusted load.
+const UNKNOWN_HANDSHAKE: Duration = Duration::from_secs(3);
+const KNOWN_HANDSHAKE: Duration = Duration::from_secs(20);
+fn refuse(connection: &Connection) {
+    connection.close(VarInt::from_u32(2), b"Share admission rejected");
 }
 
 async fn dispatch_connection(

@@ -78,6 +78,7 @@ pub(super) async fn read_file<G: Send + 'static>(
 ) -> io::Result<()> {
     let (ready_tx, ready_rx) = oneshot::channel();
     let (data_tx, mut data_rx) = mpsc::channel(STREAM_BUFFER_CHUNKS);
+    let live = access.clone();
     let worker = blocking::spawn_holding("Share read", slot, move || {
         read_worker(source, access, ready_tx, data_tx)
     });
@@ -87,14 +88,17 @@ pub(super) async fn read_file<G: Send + 'static>(
         Ok(Err(error)) => return reply_err(&mut send, error).await,
         Err(_) => return Err(worker.join().await.unwrap_err_or_worker_exit("Share read")),
     };
+    live.check_read()?;
     let header = reply(&mut send, FsResponse::Data { size });
     io_deadline::run_for("Share read data", stall, header).await?;
     while let Some(chunk) = data_rx.recv().await {
         let chunk = chunk?;
+        live.check_read()?;
         let sent = send_tagged(&mut send, TAG_DATA, &chunk);
         // Returning drops the channel: the worker stops and frees the slot.
         io_deadline::run_for("Share read data", stall, sent).await?;
     }
+    live.check_read()?;
     worker.join().await
 }
 
@@ -323,7 +327,7 @@ fn write_worker(
     }
     // Opening the private stage/new target is the first mutation admission.
     let prepared = run_authorized(lease_authorization.as_ref(), || {
-        let target = access.resolve(&path)?;
+        let target = access.resolve_write(&path)?;
         let opened = match mode {
             WriteMode::Replace => {
                 crate::vfs::unique_staging_path(&*target.backend, &target.path, "peer").and_then(
@@ -373,6 +377,7 @@ fn write_worker(
                 // A multi-phase write is admitted again at its commit boundary:
                 // a revoke since writer creation prevents flush/promotion.
                 break run_authorized(lease_authorization.as_ref(), || {
+                    access.resolve_write(&path)?;
                     let Some(mut output) = writer.take() else {
                         return Err(eio("Schreibkanal ist geschlossen"));
                     };

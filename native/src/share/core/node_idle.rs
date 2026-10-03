@@ -97,9 +97,26 @@ pub(crate) struct IncomingActivity {
     open_streams: AtomicUsize,
     leases: Mutex<HashSet<String>>,
     close: tokio::sync::Notify,
+    yielding: AtomicBool,
 }
 
 impl IncomingActivity {
+    pub(super) fn can_yield_connection(&self) -> bool {
+        // Old lease tokens are tied to the physical connection. Preserve that
+        // compatibility; current v2 acquisitions can reattach to the new one.
+        !self.leases().iter().any(|token| !token.starts_with(crate::share::mount_lease::RELEASABLE_LEASE_PREFIX))
+    }
+    pub(super) fn fair_yield_requested(&self) -> bool { self.yielding.load(Ordering::Acquire) }
+    pub(super) fn fair_yield_ready(&self) -> bool { self.open_streams.load(Ordering::Acquire) == 0 }
+    pub(super) fn request_fair_yield(&self) {
+        self.yielding.store(true, Ordering::Release);
+        self.close.notify_one();
+    }
+    fn stream_finished(&self) {
+        if self.open_streams.fetch_sub(1, Ordering::AcqRel) == 1 && self.fair_yield_requested() {
+            self.close.notify_one();
+        }
+    }
     fn leases(&self) -> MutexGuard<'_, HashSet<String>> {
         self.leases
             .lock()
@@ -160,7 +177,7 @@ struct IncomingStreamGuard {
 
 impl Drop for IncomingStreamGuard {
     fn drop(&mut self) {
-        self.activity.open_streams.fetch_sub(1, Ordering::AcqRel);
+        self.activity.stream_finished();
         self.holds.active.fetch_sub(1, Ordering::AcqRel);
     }
 }
@@ -246,6 +263,15 @@ impl ShareIrohNode {
         }
         snapshots.retain(|id, _| live.contains(id));
         report
+    }
+
+    /// An accepted stream prevents an idle-close race while its bounded
+    /// frame is read. It has no CPU/power hold until authorization succeeds.
+    pub(super) fn incoming_stream_pending(&self, activity: &Arc<IncomingActivity>) -> impl Send + 'static {
+        activity.open_streams.fetch_add(1, Ordering::AcqRel);
+        struct Pending(Arc<IncomingActivity>);
+        impl Drop for Pending { fn drop(&mut self) { self.0.stream_finished(); } }
+        Pending(activity.clone())
     }
 
     /// Counts one incoming stream; in low power it also holds the CPU for

@@ -11,10 +11,10 @@ use super::connection_events::{ConnectionErrorKind, ConnectionEventReporter};
 use super::core::eio;
 use super::direct_reciprocal_coordinator::DirectReciprocalCoordinator;
 use super::direct_reciprocal_transport::SharedDirectRepairStore;
-use super::endpoint_routes::{EndpointRoutes, PublishedEndpointRoutes};
+use super::endpoint_routes::{EndpointRoutes, NodeTransportOptions, PublishedEndpointRoutes};
 use super::exec_protocol::EXEC_ALPN;
 use super::exec_registry::{ExecCancelReason, ExecRegistry, ExecRegistryLimits};
-use super::handshake_limits::PeerHandshakeLimiter;
+use super::handshake_limits::HandshakeAdmission;
 use super::identity::ShareIdentity;
 use super::io_deadline;
 use super::keepalive::iroh_transport_config;
@@ -22,6 +22,9 @@ use super::power::PowerHub;
 use super::session::endpoint_addr;
 use super::types::{PeerEndpoint, ShareAuthState, ShareEvent};
 use super::wire::FsTransferCapabilities;
+
+#[path = "node_restrictions.rs"]
+mod restrictions;
 
 #[path = "node_idle.rs"]
 mod idle;
@@ -32,7 +35,6 @@ pub(crate) use self::idle::{closed_idle, IncomingActivity, IDLE_CLOSE_CODE, IDLE
 
 pub(super) const ALPN: &[u8] = b"smart-explorer/share-fs/3";
 const MAX_PENDING_APPLICATION_HANDSHAKES: usize = 64;
-const MAX_PENDING_HANDSHAKES_PER_ENDPOINT: usize = 4;
 const MAX_CONCURRENT_DIRECT_REPAIRS: usize = 4;
 const RUNTIME_TRANSITION_PERMITS: u32 = 8;
 
@@ -46,6 +48,7 @@ pub(crate) struct ShareIrohNode {
     pub(super) sessions: Mutex<HashMap<String, Connection>>,
     pub(super) session_connects: Mutex<HashMap<String, Weak<tokio::sync::Mutex<()>>>>,
     pub(super) session_epoch: AtomicU64,
+    pub(super) policy: super::node_policy::SessionPolicy,
     pub(super) mount_leases: Arc<super::mount_lease::PeerMountLeases>,
     sharing_active: AtomicBool,
     incoming_sessions: Mutex<HashMap<u64, idle::IncomingEntry>>,
@@ -55,9 +58,10 @@ pub(crate) struct ShareIrohNode {
     pub(super) handshake_slots: Arc<Semaphore>,
     pub(super) direct_repair_slots: Arc<Semaphore>,
     pub(super) runtime_transition_slot: Arc<Semaphore>,
-    pub(super) peer_handshake_slots: PeerHandshakeLimiter,
+    pub(super) application_handshakes: HandshakeAdmission,
     pub(super) routes: EndpointRoutes,
     relay_configured: bool,
+    pub(super) transport_options: NodeTransportOptions,
     power: Arc<PowerHub>,
     wake: wake::NodeWake,
     idle: idle::NodeIdle,
@@ -132,7 +136,7 @@ impl ShareIrohNode {
         let transport_options = super::transport_options::load(server);
         let relay_configured = !transport_options.relay_urls.is_empty();
         let relay_mode = if relay_configured {
-            RelayMode::custom(transport_options.relay_urls)
+            RelayMode::custom(transport_options.relay_urls.clone())
         } else {
             RelayMode::Disabled
         };
@@ -141,6 +145,9 @@ impl ShareIrohNode {
             .alpns(vec![ALPN.to_vec(), EXEC_ALPN.to_vec()])
             .relay_mode(relay_mode)
             .transport_config(iroh_transport_config());
+        if let Some(config) = transport_options.ca_tls_config() {
+            builder = builder.ca_tls_config(config);
+        }
         if transport_options.relay_only {
             builder = builder.clear_ip_transports();
         }
@@ -158,6 +165,7 @@ impl ShareIrohNode {
             sessions: Mutex::new(HashMap::new()),
             session_connects: Mutex::new(HashMap::new()),
             session_epoch: AtomicU64::new(0),
+            policy: super::node_policy::SessionPolicy::default(),
             mount_leases: Arc::new(super::mount_lease::PeerMountLeases::default()),
             sharing_active: AtomicBool::new(true),
             incoming_sessions: Mutex::new(HashMap::new()),
@@ -167,12 +175,10 @@ impl ShareIrohNode {
             handshake_slots: Arc::new(Semaphore::new(MAX_PENDING_APPLICATION_HANDSHAKES)),
             direct_repair_slots: Arc::new(Semaphore::new(MAX_CONCURRENT_DIRECT_REPAIRS)),
             runtime_transition_slot: Arc::new(Semaphore::new(RUNTIME_TRANSITION_PERMITS as usize)),
-            peer_handshake_slots: PeerHandshakeLimiter::new(
-                MAX_PENDING_HANDSHAKES_PER_ENDPOINT,
-                MAX_PENDING_APPLICATION_HANDSHAKES,
-            ),
+            application_handshakes: HandshakeAdmission::new(MAX_PENDING_APPLICATION_HANDSHAKES),
             routes,
             relay_configured,
+            transport_options,
             power,
             wake,
             idle: idle::NodeIdle::default(),
@@ -297,37 +303,6 @@ impl ShareIrohNode {
         })
     }
 
-    pub(super) fn invalidate_sessions(&self) -> io::Result<usize> {
-        self.session_epoch.fetch_add(1, Ordering::AcqRel);
-        let lease_clear = self.mount_leases.clear();
-        if let Ok(mut gates) = self.session_connects.lock() {
-            gates.retain(|_, gate| gate.strong_count() > 0);
-        }
-        let mut connections: Vec<Connection> = self
-            .sessions
-            .lock()
-            .map_err(|_| eio("Ausgehende Share-Sessions sind gesperrt"))?
-            .drain()
-            .map(|(_, connection)| connection)
-            .collect();
-        connections.extend(
-            self.incoming_sessions
-                .lock()
-                .map_err(|_| eio("Eingehende Share-Sessions sind gesperrt"))?
-                .drain()
-                .map(|(_, entry)| entry.connection),
-        );
-        let count = connections.len();
-        for connection in connections {
-            connection.close(
-                VarInt::from_u32(0x5345),
-                b"authorization or export policy changed",
-            );
-        }
-        lease_clear?;
-        Ok(count)
-    }
-
     pub(super) fn filesystem_authorization_epoch(&self) -> u64 {
         self.session_epoch.load(Ordering::Acquire)
     }
@@ -359,13 +334,16 @@ impl ShareIrohNode {
             }
         }
         let local_addr = self.routes.current(&self.endpoint);
-        let addr = endpoint_addr(&endpoint.presence, &local_addr)?;
-        self.block_on(io_deadline::run("peer exec connection", async {
-            self.endpoint
-                .connect(addr, EXEC_ALPN)
-                .await
-                .map_err(io_deadline::disconnected)
-        }))
+        let addr = endpoint_addr(&endpoint.presence, &local_addr, &self.transport_options)?;
+        let generation = self.policy.snapshot(super::session::PeerPrincipal::from_endpoint(endpoint))?;
+        let connection = self.block_on(io_deadline::run("peer exec connection", async {
+            self.endpoint.connect(addr, EXEC_ALPN).await.map_err(io_deadline::disconnected)
+        }))?;
+        if let Err(error) = self.policy.bind(&connection, generation) {
+            connection.close(VarInt::from_u32(0x5345), b"authorization changed during handshake");
+            return Err(error);
+        }
+        Ok(connection)
     }
 
     pub(super) fn start_exec(
@@ -444,7 +422,7 @@ impl Drop for IncomingConnectionGuard {
     fn drop(&mut self) {
         if let Some(node) = self.node.upgrade() {
             if let Ok(mut sessions) = node.incoming_sessions.lock() {
-                sessions.remove(&self.id);
+                if let Some(entry) = sessions.remove(&self.id) { node.policy.unbind(entry.connection.stable_id()); }
             };
         }
     }

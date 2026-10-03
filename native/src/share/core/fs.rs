@@ -1,35 +1,37 @@
 use std::io;
-use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use crate::creds::{Protocol, SavedConnection};
 use crate::vfs::{BackendHandle, LocalBackend, VfsMeta};
-use serde::{Deserialize, Serialize};
 
 use super::core::eio;
+use super::export_config::ExportAccess;
 use super::fs_paths::norm_root;
+#[path = "fs_local_paths.rs"]
+pub(super) mod local_paths;
+pub(super) use local_paths::secure_local_target;
+#[cfg(test)]
+use local_paths::to_os_path;
 pub(super) use super::fs_paths::{join_under, split_clean};
 use super::wire::FsMeta;
+
+/// The export types live in `export_config.rs` (V2); their former paths stay.
+pub use super::export_config::{ShareExportConfig, SharedRoot};
 
 const CONNECTIONS_MOUNT: &str = "Verbindungen";
 pub(crate) const CHUNK: usize = 256 * 1024;
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SharedRoot {
-    pub label: String,
-    pub path: String,
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ShareExportConfig {
-    pub roots: Vec<SharedRoot>,
-    pub include_connections: bool,
-}
-
 #[derive(Clone)]
 enum MountTarget {
-    Local(String),
-    Connection(SavedConnection),
+    Local {
+        path: String,
+        access: ExportAccess,
+        allow_system_writes: bool,
+    },
+    Connection {
+        connection: SavedConnection,
+        access: ExportAccess,
+    },
 }
 
 #[derive(Clone)]
@@ -43,6 +45,10 @@ pub(crate) struct ResolvedTarget {
     pub(crate) backend: BackendHandle,
     pub(crate) path: String,
     pub(crate) mount_key: String,
+    /// Access peers have to the export (or exported connection) that holds
+    /// `path`; writes need `ReadWrite` (FC1, enforced by the dispatcher).
+    pub(crate) access: ExportAccess,
+    pub(super) allow_system_writes: bool,
     _net: Option<crate::net::NetConnection>,
 }
 
@@ -50,6 +56,9 @@ pub(crate) fn list_dir(
     path: &str,
     exports: &Arc<Mutex<ShareExportConfig>>,
 ) -> io::Result<Vec<FsMeta>> {
+    if super::fs_policy::private_path(path) {
+        return Err(io::Error::new(io::ErrorKind::PermissionDenied, "Pfad ist nicht freigegeben"));
+    }
     let parts = split_clean(path)?;
     if parts.is_empty() {
         let cfg = snapshot(exports);
@@ -57,16 +66,17 @@ pub(crate) fn list_dir(
             .into_iter()
             .map(|m| dir_meta(m.name))
             .collect();
-        if cfg.include_connections && !connection_mounts().is_empty() {
+        if !connection_mounts(&cfg).is_empty() {
             out.push(dir_meta(CONNECTIONS_MOUNT.to_string()));
         }
         return Ok(out);
     }
     if parts.len() == 1 && parts[0] == CONNECTIONS_MOUNT {
-        if !snapshot(exports).include_connections {
+        let cfg = snapshot(exports);
+        if !cfg.shares_connections() {
             return Err(eio("Eigene Verbindungen sind nicht freigegeben"));
         }
-        return Ok(connection_mounts()
+        return Ok(connection_mounts(&cfg)
             .into_iter()
             .map(|m| dir_meta(m.name))
             .collect());
@@ -80,25 +90,27 @@ pub(crate) fn list_dir(
 }
 
 pub(crate) fn stat(path: &str, exports: &Arc<Mutex<ShareExportConfig>>) -> io::Result<FsMeta> {
+    if super::fs_policy::private_path(path) {
+        return Err(io::Error::new(io::ErrorKind::PermissionDenied, "Pfad ist nicht freigegeben"));
+    }
     let parts = split_clean(path)?;
     if parts.is_empty() {
         return Ok(dir_meta("/".to_string()));
     }
     if parts.len() == 1 {
-        if parts[0] == CONNECTIONS_MOUNT && snapshot(exports).include_connections {
+        let cfg = snapshot(exports);
+        if parts[0] == CONNECTIONS_MOUNT && cfg.shares_connections() {
             return Ok(dir_meta(CONNECTIONS_MOUNT.to_string()));
         }
-        if local_mounts(&snapshot(exports))
-            .into_iter()
-            .any(|m| m.name == parts[0])
-        {
+        if local_mounts(&cfg).into_iter().any(|m| m.name == parts[0]) {
             return Ok(dir_meta(parts[0].clone()));
         }
     }
     if parts.len() == 2
         && parts[0] == CONNECTIONS_MOUNT
-        && snapshot(exports).include_connections
-        && connection_mounts().into_iter().any(|m| m.name == parts[1])
+        && connection_mounts(&snapshot(exports))
+            .into_iter()
+            .any(|m| m.name == parts[1])
     {
         return Ok(dir_meta(parts[1].clone()));
     }
@@ -147,42 +159,53 @@ pub(crate) fn resolve(
     path: &str,
     exports: &Arc<Mutex<ShareExportConfig>>,
 ) -> io::Result<ResolvedTarget> {
+    if super::fs_policy::private_path(path) {
+        return Err(io::Error::new(io::ErrorKind::PermissionDenied, "Pfad ist nicht freigegeben"));
+    }
     let parts = split_clean(path)?;
     let (head, rest) = parts
         .split_first()
         .ok_or_else(|| eio("Wurzel ist kein Datei-Ziel"))?;
+    let cfg = snapshot(exports);
     if head == CONNECTIONS_MOUNT {
-        if !snapshot(exports).include_connections {
+        if !cfg.shares_connections() {
             return Err(eio("Eigene Verbindungen sind nicht freigegeben"));
         }
         let (conn_name, conn_rest) = rest.split_first().ok_or_else(|| eio("Verbindung fehlt"))?;
-        let mount = connection_mounts()
+        let mount = connection_mounts(&cfg)
             .into_iter()
             .find(|m| m.name == *conn_name)
             .ok_or_else(|| eio("Unbekannte Verbindung"))?;
-        let MountTarget::Connection(c) = mount.target else {
+        let MountTarget::Connection { connection, access } = mount.target else {
             return Err(eio("Ungueltiges Verbindungsziel"));
         };
-        return resolve_connection(&c, conn_rest);
+        return resolve_connection(&connection, conn_rest, access);
     }
 
-    let mount = local_mounts(&snapshot(exports))
+    let mount = local_mounts(&cfg)
         .into_iter()
         .find(|m| m.name == *head)
         .ok_or_else(|| eio("Unbekannte Freigabe"))?;
-    let MountTarget::Local(root) = mount.target else {
+    let MountTarget::Local { path: root, access, allow_system_writes } = mount.target else {
         return Err(eio("Ungueltiges Freigabeziel"));
     };
+    let root = secure_local_target(&root, &[])?;
     let target = secure_local_target(&root, rest)?;
-    Ok(ResolvedTarget {
+    guard_target(ResolvedTarget {
         backend: Arc::new(LocalBackend::new(&root)),
         path: target,
         mount_key: format!("local:{head}"),
+        access,
+        allow_system_writes,
         _net: None,
-    })
+    }, None)
 }
 
-fn resolve_connection(c: &SavedConnection, rest: &[String]) -> io::Result<ResolvedTarget> {
+fn resolve_connection(
+    c: &SavedConnection,
+    rest: &[String],
+    access: ExportAccess,
+) -> io::Result<ResolvedTarget> {
     if c.protocol == Protocol::Share {
         let secret = crate::creds::get_secret_checked(&c.account()).map_err(eio)?;
         let nc = crate::net::NetConnection::connect(
@@ -190,46 +213,58 @@ fn resolve_connection(c: &SavedConnection, rest: &[String]) -> io::Result<Resolv
             opt(&c.user).as_deref(),
             secret.as_deref(),
         )?;
-        let root = c.root.replace('\\', "/");
+        let configured = c.root.replace('\\', "/");
+        let root = secure_local_target(&configured, &[])?;
         let path = secure_local_target(&root, rest)?;
-        return Ok(ResolvedTarget {
+        return guard_target(ResolvedTarget {
             backend: Arc::new(LocalBackend::new(&root)),
             path,
             mount_key: c.account(),
+            access,
+            allow_system_writes: false,
             _net: Some(nc),
-        });
+        }, None);
     }
 
     let target = join_under(&norm_root(&c.root), rest);
     let (backend, root) = crate::connect::open_saved_at(c, &target).map_err(eio)?;
-    Ok(ResolvedTarget {
+    guard_target(ResolvedTarget {
         backend,
         path: root,
         mount_key: c.account(),
+        access,
+        allow_system_writes: false,
         _net: None,
-    })
+    }, None)
 }
 
 pub(crate) fn remove_dir_recursive(be: &dyn crate::vfs::Backend, path: &str) -> io::Result<()> {
-    for entry in be.list_dir(path)? {
-        let child = format!("{}/{}", path.trim_end_matches('/'), entry.name);
-        if entry.is_symlink && !entry.is_dir {
-            be.remove_file_id(&child, entry.id.as_deref())?;
-        } else if entry.is_dir {
-            let meta = be.stat(&child)?;
-            if meta.is_symlink {
-                return Err(eio("Symlink/Reparse-Point wird nicht rekursiv geloescht"));
-            }
-            if meta.is_dir {
-                remove_dir_recursive(be, &child)?;
-            } else {
-                be.remove_file_id(&child, entry.id.as_deref())?;
-            }
-        } else {
-            be.remove_file_id(&child, entry.id.as_deref())?;
-        }
-    }
-    be.remove_dir(path)
+    super::fs_delete::remove_tree(be, path)
+}
+
+pub(super) fn guard_target(mut target: ResolvedTarget,
+    authority: Option<Arc<super::fs_access::AccessAuthority>>) -> io::Result<ResolvedTarget> {
+    let policy = super::fs_policy::TargetPolicy::new(target.access,
+        target.allow_system_writes, target.backend.is_local()).with_root(&target.backend.root_display());
+    policy.read(&target.path)?;
+    target.backend = Arc::new(super::fs_guard_backend::GuardedBackend::new(target.backend, policy, authority));
+    Ok(target)
+}
+
+pub(super) fn require_target_write(target: &ResolvedTarget) -> io::Result<()> {
+    super::fs_policy::TargetPolicy::new(target.access, target.allow_system_writes,
+        target.backend.is_local()).with_root(&target.backend.root_display()).write(&target.path)
+}
+
+pub(super) fn require_target_destructive(target: &ResolvedTarget) -> io::Result<()> {
+    super::fs_policy::TargetPolicy::new(target.access, target.allow_system_writes,
+        target.backend.is_local()).with_root(&target.backend.root_display()).destructive(&target.path)
+}
+
+/// Foreign analysis traversals call this immediately after opening a root or
+/// child. The decision uses the held physical object, including UNC/bind aliases.
+pub(in crate::share) fn ensure_local_share_handle_allowed(handle: &crate::local_access::DirectoryHandle) -> io::Result<()> {
+    super::fs_policy::ensure_handle_allowed(handle)
 }
 
 fn opt(s: &str) -> Option<String> {
@@ -259,19 +294,31 @@ fn local_mounts(cfg: &ShareExportConfig) -> Vec<Mount> {
             }
             Some(Mount {
                 name: unique_name(&mut used, &r.label),
-                target: MountTarget::Local(path.replace('\\', "/")),
+                target: MountTarget::Local {
+                    path: path.replace('\\', "/"),
+                    access: r.access,
+                    allow_system_writes: r.allow_system_writes,
+                },
             })
         })
         .collect()
 }
 
-fn connection_mounts() -> Vec<Mount> {
+/// The exported saved connections; none without loading credentials when
+/// the configuration exports no connection.
+fn connection_mounts(cfg: &ShareExportConfig) -> Vec<Mount> {
+    if !cfg.shares_connections() {
+        return Vec::new();
+    }
     let mut used = Vec::new();
     crate::creds::load_connections()
         .into_iter()
-        .map(|c| Mount {
-            name: unique_name(&mut used, &c.display()),
-            target: MountTarget::Connection(c),
+        .filter_map(|connection| {
+            let access = cfg.connection_access(&connection.account())?;
+            Some(Mount {
+                name: unique_name(&mut used, &connection.display()),
+                target: MountTarget::Connection { connection, access },
+            })
         })
         .collect()
 }
@@ -308,61 +355,6 @@ fn clean_mount_label(label: &str) -> String {
     }
 }
 
-pub(super) fn secure_local_target(root: &str, rest: &[String]) -> io::Result<String> {
-    let root_norm = norm_root(root);
-    let root_os = to_os_path(&root_norm);
-    let root_canon = std::fs::canonicalize(&root_os).map_err(|error| {
-        io::Error::new(error.kind(), format!("Freigabe-Wurzel kann nicht gelesen werden: {error}"))
-    })?;
-    let target_os = rest
-        .iter()
-        .fold(root_canon.clone(), |p, segment| p.join(segment));
-    ensure_under_root(&root_canon, &target_os)?;
-    Ok(from_os_path(&target_os))
-}
-
-fn ensure_under_root(root_canon: &Path, target: &Path) -> io::Result<()> {
-    if target.exists() {
-        let target_canon = std::fs::canonicalize(target)?;
-        if !target_canon.starts_with(root_canon) {
-            return Err(eio("Symlink/Reparse-Point fuehrt aus der Freigabe heraus"));
-        }
-        return Ok(());
-    }
-
-    let mut existing = target;
-    while !existing.exists() {
-        existing = existing
-            .parent()
-            .ok_or_else(|| eio("Ziel hat keinen gueltigen Elternordner"))?;
-    }
-    let existing_canon = std::fs::canonicalize(existing)?;
-    if !existing_canon.starts_with(root_canon) {
-        return Err(eio("Ziel liegt ausserhalb der Freigabe"));
-    }
-    Ok(())
-}
-
-fn to_os_path(path: &str) -> PathBuf {
-    let b = path.as_bytes();
-    let rooted;
-    let path = if b.len() == 2 && b[1] == b':' && b[0].is_ascii_alphabetic() {
-        rooted = format!("{path}/");
-        rooted.as_str()
-    } else {
-        path
-    };
-    if std::path::MAIN_SEPARATOR == '/' {
-        PathBuf::from(path)
-    } else {
-        PathBuf::from(path.replace('/', std::path::MAIN_SEPARATOR_STR))
-    }
-}
-
-fn from_os_path(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
-}
-
 fn dir_meta(name: String) -> FsMeta {
     FsMeta {
         name,
@@ -374,6 +366,7 @@ fn dir_meta(name: String) -> FsMeta {
         hidden: false,
         system: false,
         id: None,
+        special: false,
     }
 }
 
@@ -389,6 +382,7 @@ impl From<VfsMeta> for FsMeta {
             hidden: m.hidden,
             system: m.system,
             id: m.id,
+            special: m.special,
         }
     }
 }

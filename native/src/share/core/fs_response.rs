@@ -47,6 +47,8 @@ pub(crate) enum FsResponse {
     Meta {
         meta: FsMeta,
     },
+    /// `literal_children_v1`: still in the same virtual parent/root/lease.
+    ChildPath { path: String },
     WalkBatch {
         nodes: Vec<FsWalkNode>,
         files: u64,

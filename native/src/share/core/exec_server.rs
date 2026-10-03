@@ -86,6 +86,7 @@ pub(super) async fn handle_connection(
                 return Err(error);
             }
         };
+    node.bind_incoming_principal(&connection, super::session::PeerPrincipal::from_exec(&authorized.principal)).await?;
     node.exec_registry()
         .apply_authorization(
             &authorized.principal,
