@@ -171,6 +171,8 @@ mod fs_response;
 mod handshake_limits;
 #[path = "core/identity.rs"]
 mod identity;
+#[path = "core/identity_debug.rs"]
+mod identity_debug;
 #[cfg(not(windows))]
 #[path = "os/linux_os/identity_lock.rs"]
 mod identity_lock;
