@@ -8,7 +8,7 @@ use iroh::endpoint::{Connection, VarInt};
 use std::{collections::HashSet, io, sync::atomic::Ordering};
 
 impl ShareIrohNode {
-    pub(super) async fn bind_incoming_principal(
+    pub(in crate::share) async fn bind_incoming_principal(
         &self,
         connection: &Connection,
         principal: PeerPrincipal,
@@ -54,7 +54,7 @@ impl ShareIrohNode {
         Ok(())
     }
 
-    pub(super) fn invalidate_sessions(&self) -> io::Result<usize> {
+    pub(in crate::share) fn invalidate_sessions(&self) -> io::Result<usize> {
         self.invalidate_restrictions(&RestrictionSet::everything(RestrictionReason::Unattributed))
     }
 
@@ -70,7 +70,7 @@ impl ShareIrohNode {
         self.invalidate_restrictions_at(restrictions, epoch)
     }
 
-    pub(super) fn invalidate_restrictions_at(
+    pub(in crate::share) fn invalidate_restrictions_at(
         &self,
         restrictions: &RestrictionSet,
         epoch: u64,

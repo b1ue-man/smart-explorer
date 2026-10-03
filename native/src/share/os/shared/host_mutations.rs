@@ -35,7 +35,7 @@ pub(in crate::share) fn recycle(
             &expected,
         )
         .map_err(|error| {
-            log::warn!("Host recycle {}: {error}", target.path);
+            eprintln!("Host recycle {}: {error}", target.path);
             let physical =
                 std::fs::canonicalize(&root).unwrap_or_else(|_| std::path::PathBuf::from(&root));
             let physical = crate::local_access::display_path(&physical);
