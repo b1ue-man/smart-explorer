@@ -355,6 +355,8 @@ impl ShareIrohNode {
             Ok(permit) => permit,
             Err(_) => {
                 close(&connection);
+                #[cfg(test)]
+                diagnose_failure(&self.ev, &connection, "inbound_slots", &busy());
                 return Err(busy());
             }
         };
@@ -373,10 +375,23 @@ impl ShareIrohNode {
         if !known || connection.alpn() != LAN_LINK_ALPN || transport.register(&connection).is_err()
         {
             close(&connection);
+            #[cfg(test)]
+            diagnose_failure(
+                &self.ev,
+                &connection,
+                "admission",
+                &eio("Kein aktueller Direct-Pin fuer LAN-Link"),
+            );
             return Err(eio("Kein aktueller Direct-Pin fuer LAN-Link"));
         }
+        #[cfg(test)]
+        let diagnostics = self.ev.clone();
         let result =
             super::lan_link_exchange::run(self, transport.clone(), connection.clone(), None).await;
+        #[cfg(test)]
+        if let Err(error) = &result {
+            diagnose_failure(&diagnostics, &connection, "round", error);
+        }
         transport.remove(&connection);
         drop(permit);
         result
@@ -416,6 +431,22 @@ fn busy() -> io::Error {
 }
 fn close(connection: &Connection) {
     connection.close(VarInt::from_u32(0x534c), b"paired link status ended");
+}
+
+#[cfg(test)]
+fn diagnose_failure(
+    events: &crossbeam_channel::Sender<super::types::ShareEvent>,
+    connection: &Connection,
+    stage: &str,
+    error: &io::Error,
+) {
+    let detail: String = error.to_string().chars().take(256).collect();
+    let path = selected_ip_path(connection).map(|path| (path.local, path.remote, path.id));
+    let _ = events.send(super::types::ShareEvent::Error(format!(
+        "LAN-Link diagnostic: channel={}, stage={stage}, path={path:?}, kind={:?}, error={detail}",
+        connection.stable_id(),
+        error.kind(),
+    )));
 }
 
 #[cfg(test)]
