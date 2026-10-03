@@ -70,6 +70,18 @@ impl PeerEndpointSource {
             }
         }
     }
+
+    pub(super) fn legacy_direct(&self, endpoint: &PeerEndpoint) -> io::Result<bool> {
+        match self {
+            Self::Static(_) => Ok(false),
+            Self::Live { target, auth, .. } => {
+                let state = auth
+                    .lock()
+                    .map_err(|_| eio("Share-State fuer Faehigkeiten ist gesperrt"))?;
+                super::backend_capabilities::is_legacy_direct(&state, target, endpoint)
+            }
+        }
+    }
 }
 
 fn current_presence(

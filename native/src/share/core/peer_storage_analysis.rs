@@ -13,6 +13,10 @@ pub(super) fn scan(
     progress: &Progress,
 ) -> io::Result<Option<ScanOutcome>> {
     progress.check_cancel()?;
+    if backend.legacy_capabilities()? {
+        progress.set_phase(ScanPhase::Legacy, root);
+        return Ok(None);
+    }
     let response = backend.request(FsRequest::Capabilities {
         path: root.into(),
         acquire_lease: false,

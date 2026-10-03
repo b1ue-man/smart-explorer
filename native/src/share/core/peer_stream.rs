@@ -12,6 +12,9 @@ use std::{
 };
 
 pub(super) fn features(backend: &PeerBackend, root: &str) -> io::Result<FsHostFeatures> {
+    if backend.legacy_capabilities()? {
+        return Ok(FsHostFeatures::default());
+    }
     let generation = backend.node.outgoing_generation(backend.initial_endpoint());
     if let Some((known, features)) = backend.transfer.features.lock().ok().and_then(|slot| *slot) {
         if generation.is_some() && known == generation {

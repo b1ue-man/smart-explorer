@@ -4,6 +4,8 @@
 mod authorization_policy;
 #[path = "core/backend.rs"]
 mod backend;
+#[path = "core/backend_capabilities.rs"]
+mod backend_capabilities;
 #[path = "core/blocking.rs"]
 mod blocking;
 #[path = "core/configuration_runtime.rs"]
