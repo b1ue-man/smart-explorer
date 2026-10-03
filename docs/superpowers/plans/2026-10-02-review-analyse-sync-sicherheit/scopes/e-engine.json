@@ -81,7 +81,11 @@
     "native/src/bisync/os/shared/state_types.rs",
     "native/src/bisync/os/shared/engine_change_feed.rs",
     "native/src/bisync/os/shared/backend_identity_state.rs",
-    "native/src/bisync/os/shared/version_manifest.rs"
+    "native/src/bisync/os/shared/version_manifest.rs",
+    "native/src/bisync/os/shared/version_save.rs",
+    "native/src/bisync/os/shared/merge_execution.rs",
+    "native/src/bisync/os/shared/duplicate_observation.rs",
+    "native/src/bisync/os/shared/replacement_publish.rs"
   ],
   "modify_files": [
     "native/src/bisync/os/shared/orchestration.rs",
@@ -102,7 +106,10 @@
     "native/src/bisync/os/shared/duplicate_plan.rs",
     "native/src/bisync/os/shared/version_manifest.rs",
     "native/src/bisync/os/shared/version_ops.rs",
-    "native/src/bisync/os/shared/version_restore.rs"
+    "native/src/bisync/os/shared/version_restore.rs",
+    "native/src/bisync/os/shared/apply_transaction.rs",
+    "native/src/bisync/os/shared/merge_execution.rs",
+    "native/src/bisync/os/shared/version_save.rs"
   ],
   "create_files": [
     "native/src/bisync/os/shared/backend_identity_migration.rs",
@@ -113,17 +120,23 @@
     "docs/superpowers/plans/2026-10-02-review-analyse-sync-sicherheit/anfragen/E-ENGINE.md",
     "docs/superpowers/plans/2026-10-02-review-analyse-sync-sicherheit/api-delta/E-ENGINE.md",
     "native/src/bisync/os/shared/engine_change_feed.rs",
-    "native/src/bisync/os/shared/backend_identity_state.rs"
+    "native/src/bisync/os/shared/backend_identity_state.rs",
+    "native/src/bisync/os/shared/replacement_publish.rs"
   ],
   "registrations_only": [
     "native/src/bisync/mod.rs"
   ],
   "new_file_rule": "Only exact create_files; new file needed outside these requires Parent grant. No edits to Provider/Share/Android/UI/Release/CI/graph sources.",
   "connected_surface_reason": "One required Y124/Y132/Y134/Y140/Y142 provider-to-sync integration boundary: literal path construction, account-wide change feed, same-account state identity import and durable reversible replacement. Guards/backup/checkpoint semantics cannot be split away safely.",
-  "preview_grant": "Only pending merge protection before planning/index/convergence and preserve Root-added preview_with(...,RunSettings) for existing Y148 job owner truth. No UI edits.",
-  "single_grant": "Only reject pending durable merge original/KeepBoth siblings under already held PairLock before stage/apply. Preserve recorded state, checkpoint, backups and unrelated single-action behavior.",
-  "orchestration_full_grant": "Only pending merge protection before full index/convergence; preserve omitted paths and checkpoint semantics.",
+  "preview_grant": "Only pending merge protection before planning/index/convergence and preserve Root-added preview_with(...,RunSettings) for existing Y148 job owner truth. No UI edits. Also same identity migration under existing PairLock before replica::identify; no owner relabeling or new UI behavior. Also protect pending durable ReplacementIntent relatives beside pending merge relatives through the same protect_pending boundary before planning, indexing, convergence or single apply. Read-only intent lookup validates lock/key/endpoints; preview/single must not mutate or clear recovery.",
+  "single_grant": "Only reject pending durable merge original/KeepBoth siblings under already held PairLock before stage/apply. Preserve recorded state, checkpoint, backups and unrelated single-action behavior. Also protect pending durable ReplacementIntent relatives beside pending merge relatives through the same protect_pending boundary before planning, indexing, convergence or single apply. Read-only intent lookup validates lock/key/endpoints; preview/single must not mutate or clear recovery.",
+  "orchestration_full_grant": "Only pending merge protection before full index/convergence; preserve omitted paths and checkpoint semantics. Also protect pending durable ReplacementIntent relatives beside pending merge relatives through the same protect_pending boundary before planning, indexing, convergence or single apply. Read-only intent lookup validates lock/key/endpoints; preview/single must not mutate or clear recovery.",
   "duplicate_plan_grant": "Only remaining literal path metadata/hash observations and pending merge omissions; preserve dedupe counts and repeated apply identity guard.",
   "identity_versions_grant": "Only verified same-account identity aliases for old version pair/backend/lock read and restore; no changes to version retention/ordinary serialization/backup semantics.",
-  "engine_feed_grant": "Cohesive account-feed ancestry and bootstrap integration from incremental_collect; unknown parent Rebuild, foreign-root ignore, no unproven deletion/duplicate collapse."
+  "engine_feed_grant": "Cohesive account-feed ancestry and bootstrap integration from incremental_collect; unknown parent Rebuild, foreign-root ignore, no unproven deletion/duplicate collapse.",
+  "apply_transaction_binding_grant": "Only pass typed RunVersions/VersionSide pair/lock/owner/root/relative identity into Staged before reversible provider fallback. No global or inferred context; preserve backup/transaction semantics.",
+  "merge_stage_binding_grant": "Only pass existing Versions/StateKey/VersionSide identity into outstanding original-side Stage before existing publish; preserve all original checks, backup ordering, partial recovery and create-only sibling behavior.",
+  "version_save_grant": "Only replica marker path formation through sync_child_path, preserving existing identity and archive/copy/backup semantics.",
+  "replacement_publish_grant": "Extract only the current Staged publication/verification and the new NoReplace Intent branch into one cohesive helper below the formatted size limit. Staged::publish remains a compatible delegating wrapper; no additional behavior or scope.",
+  "restore_backup_binding_grant": "In version_restore::transfer only: use existing Preserved.signature (when !moved) as typed destination_expected content evidence after successful AppData backup, instead of freshly synthesized hash:0. Preserve all backup, retention, restore and bind ordering."
 }
