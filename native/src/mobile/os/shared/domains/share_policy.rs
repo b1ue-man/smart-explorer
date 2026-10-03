@@ -114,6 +114,21 @@ pub(super) fn allow_grant_again(rt: &Runtime, args: &Value) -> Result<Value, Api
     Ok(finish(rt, profiles, changed))
 }
 
+pub(super) fn withdraw_grant(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
+    let peer = peer(args)?;
+    let profiles = ShareProfiles::mutate_persisted(default_home(), |profiles| {
+        let mut matches = profiles.direct_grants.iter().filter(|grant| grant.device_id == peer.device_id);
+        let pinned = matches.next().is_some_and(|grant|
+            grant.public_key == peer.public_key && grant.node_id == peer.node_id && grant.fingerprint == peer.fingerprint);
+        if !pinned || matches.next().is_some() {
+            return Err("Geraeteidentitaet wurde geaendert; bitte neu laden".into());
+        }
+        profiles.withdraw_direct_key(&peer, crate::share::core_now_secs());
+        Ok(())
+    }).map_err(error)?;
+    Ok(finish(rt, profiles, true))
+}
+
 pub(super) fn set_room_member(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
     let profile_id = str_arg(args, "profileId")?;
     let room_id = str_arg(args, "roomId")?;
