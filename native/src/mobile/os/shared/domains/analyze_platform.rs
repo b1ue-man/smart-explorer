@@ -21,6 +21,14 @@ pub(super) fn volume_root(rt: &Runtime, location: &str) -> VolumeRoot {
     VolumeRoot::from_segments(&place.below, primary)
 }
 
+pub(super) fn remember_totals(rt: &Runtime, location: &str, totals: &PlatformTotals) {
+    if let Some(place) = crate::apptrash::volume_place(Path::new(location)) {
+        if rt.volumes().iter().any(|volume| volume.primary && Path::new(&volume.path) == place.volume.as_path()) {
+            crate::analytics::remember_platform_totals(&place.volume, totals);
+        }
+    }
+}
+
 /// `platform: {volumeUsedBytes?, otherAppsBytes?, apps?: [{package, label,
 /// appBytes, dataBytes, cacheBytes}]}`: missing, `null` or negative totals
 /// are unknown, entries without a package are skipped and missing or
@@ -57,7 +65,7 @@ pub(super) fn platform_totals(args: &Value) -> PlatformTotals {
 mod tests {
     use serde_json::json;
 
-    use super::super::{bind_task, node, open_slot, store, Stored};
+    use super::super::{bind_task, node, Pending, Stored};
     use super::platform_totals;
     use crate::analytics::{Approximations, ScanOutcome, SizeNode, VolumeRoot};
 
@@ -121,17 +129,14 @@ mod tests {
         let place = VolumeRoot::from_segments(&[], true);
         let approx = Approximations::compute(&tree, &place, platform_totals(&args), true);
         let task = "android-background-task-apps";
-        let token = open_slot();
-        bind_task(token, task);
-        store(
-            token,
-            Stored::Analysis {
-                outcome: ScanOutcome::complete(tree),
-                approx,
-                base: "/storage/emulated/0".to_string(),
-                root: "/storage/emulated/0".to_string(),
-            },
-        );
+        let pending = Pending::open();
+        bind_task(pending.token(), task);
+        pending.store(Stored::Analysis {
+            outcome: ScanOutcome::complete(tree),
+            approx,
+            base: "/storage/emulated/0".to_string(),
+            root: "/storage/emulated/0".to_string(),
+        });
 
         let root = node(&json!({ "taskId": task, "path": [] })).expect("root");
         assert_eq!(root["location"], "/storage/emulated/0");

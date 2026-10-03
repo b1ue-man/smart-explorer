@@ -36,8 +36,10 @@ pub const CREDIT_REQUEST_LIMIT: usize = (CREDIT_CONNECTION_BUDGET / CREDIT_INITI
 /// (a grant is due once outstanding credit falls to half the window).
 const FRAME_COST_MAX: u64 = CREDIT_INITIAL / 2;
 
-/// Wire tags of the charged frames: `Data`, `TreeEntry`, `Match`, `HashEntry`.
-const CHARGED_TAGS: [u8; 4] = [11, 18, 20, 22];
+/// Wire tags of the charged frames: `Data`, `TreeEntry`, `Match`, `HashEntry`
+/// and the streamed parts of the extension frames (`DirPart`, `HashOmitted`,
+/// `DupGroup`, `DupSummary`, `Change`).
+const CHARGED_TAGS: [u8; 9] = [11, 18, 20, 22, 46, 48, 51, 52, 61];
 
 /// Frames whose number a stream does not bound consume credit. Replies,
 /// terminals, control frames and the per-item batch frames stay free: a
@@ -46,7 +48,15 @@ const CHARGED_TAGS: [u8; 4] = [11, 18, 20, 22];
 pub fn charged(frame: &Frame) -> bool {
     matches!(
         frame,
-        Frame::Data(_) | Frame::TreeEntry { .. } | Frame::Match { .. } | Frame::HashEntry { .. }
+        Frame::Data(_)
+            | Frame::TreeEntry { .. }
+            | Frame::Match { .. }
+            | Frame::HashEntry { .. }
+            | Frame::DirPart { .. }
+            | Frame::HashOmitted(_)
+            | Frame::DupGroup(_)
+            | Frame::DupSummary(_)
+            | Frame::Change(_)
     )
 }
 

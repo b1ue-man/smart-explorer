@@ -33,7 +33,7 @@ fn mount_vault_task_all_frame_variants_keep_exact_protocol_bytes() {
     let n = [8, 7, 6, 5, 4, 3, 2, 1];
     let negative = [254, 255, 255, 255, 255, 255, 255, 255];
     let meta = WireMeta {
-        name: path.into(), is_dir: true, is_symlink: false, size: number,
+        name: path.into(), is_dir: true, is_symlink: false, special: false, size: number,
         mtime_ms: -2, content_md5: Some(path.into()),
     };
     let meta_bytes = join(&[&p, &[1, 0], &n, &negative, &[1], &p]);
@@ -119,6 +119,7 @@ fn mount_vault_task_directory_above_50000_real_entries_roundtrips() {
             name: format!("note-{index:05}-é.md"),
             is_dir: index % 17 == 0,
             is_symlink: index % 19 == 0,
+            special: false,
             size: index as u64 * 31,
             mtime_ms: index as i64 - 25_000,
             content_md5: (index % 23 == 0).then(|| "0123456789abcdef0123456789abcdef".into()),

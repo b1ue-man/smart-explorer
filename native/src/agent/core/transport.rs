@@ -1,6 +1,6 @@
 use super::lanes::{make_out_channel, run_writer};
 use super::mux::Mux;
-use super::route::{close_transport, route_frame};
+use super::route::{close_transport, incoming_tree_budget, route_frame};
 use crate::agent_proto::{self, Frame, ServerFeatures};
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
@@ -244,7 +244,8 @@ fn establish((r, w): AgentStreams, handshake_deadline: Duration) -> io::Result<(
         .spawn(move || {
             let mut r = r;
             loop {
-                let read = agent_proto::read_frame(&mut r);
+                let read = agent_proto::read_frame_with_tree_budget(&mut r,
+                    |id| Some(incoming_tree_budget(&pending_r, id)));
                 if !route_frame(&pending_r, &activity_r, &control_r, read) {
                     break;
                 }

@@ -196,7 +196,7 @@ impl Backend for AgentBackend {
         root: &str,
         progress: &crate::analytics::Progress,
     ) -> VfsResult<Option<crate::analytics::ScanOutcome>> {
-        self.inner.scan_storage(root, progress)
+        self.scan_storage_budgeted(root, progress)
     }
 
     fn supports_bulk_tree(&self) -> bool {
@@ -448,5 +448,9 @@ impl Backend for AgentBackend {
 
     fn provides_content_hash(&self) -> bool {
         self.inner.provides_content_hash()
+    }
+
+    fn extensions(&self) -> Option<&dyn crate::vfs::BackendExtensions> {
+        Some(self)
     }
 }

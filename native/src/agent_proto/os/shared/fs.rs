@@ -88,11 +88,13 @@ pub fn list_local(path: &str) -> std::io::Result<Vec<WireMeta>> {
                 "directory listing exceeds its bounded collection budget",
             ));
         }
+        let (is_symlink, special) = super::local_platform::metadata_class(&ent.path(), &md);
         out.push(WireMeta {
             name,
-            is_dir: md.is_dir(),
-            is_symlink: super::local_platform::metadata_is_link_like(&ent.path(), &md),
-            size: md.len(),
+            is_dir: md.is_dir() && !special,
+            is_symlink,
+            special,
+            size: if special { 0 } else { md.len() },
             mtime_ms: md.modified().ok().map(systemtime_ms).unwrap_or(0),
             content_md5: None,
         });
@@ -104,15 +106,17 @@ pub fn list_local(path: &str) -> std::io::Result<Vec<WireMeta>> {
 pub fn stat_local(path: &str) -> std::io::Result<WireMeta> {
     let p = Path::new(path);
     let md = std::fs::symlink_metadata(p)?;
+    let (is_symlink, special) = super::local_platform::metadata_class(p, &md);
     Ok(WireMeta {
         name: p
             .file_name()
             .map(|s| wire_name(s.to_os_string()))
             .transpose()?
             .unwrap_or_else(|| path.to_string()),
-        is_dir: md.is_dir(),
-        is_symlink: super::local_platform::metadata_is_link_like(p, &md),
-        size: md.len(),
+        is_dir: md.is_dir() && !special,
+        is_symlink,
+        special,
+        size: if special { 0 } else { md.len() },
         mtime_ms: md.modified().ok().map(systemtime_ms).unwrap_or(0),
         content_md5: None,
     })

@@ -72,8 +72,8 @@ internal fun DuplicatesScreen(onBack: () -> Unit) {
             startLabel = "Suchen",
             onStart = { vm.start() },
             onClose = onBack,
-            hint = "Vergleicht alle Dateien ab der Mindestgröße und findet die mit gleichem Inhalt. " +
-                "Remote-Orte ohne Papierkorb werden nur angezeigt.",
+            hint = "Vergleicht alle Dateien ab der Mindestgröße und findet die mit gleichem Inhalt; gelesen werden nur " +
+                "Dateien, deren Größe mehrfach vorkommt. Remote-Orte ohne Papierkorb werden nur angezeigt.",
             options = { MinSizeChips(vm.minSize, onSelect = { vm.minSize = it }) },
         )
         ScanPhase.Scanning -> ScanProgressPage(
@@ -108,7 +108,9 @@ private fun DuplicatesResult(vm: DuplicatesViewModel, onBack: () -> Unit) {
         title = "Duplikate",
         onBack = onBack,
         actions = {
-            IconButton(onClick = { vm.backToSetup() }) { SeIcon(R.drawable.ic_search, contentDescription = "Neue Suche") }
+            IconButton(onClick = { vm.backToSetup() }, enabled = !vm.deleting) {
+                SeIcon(R.drawable.ic_search, contentDescription = "Neue Suche")
+            }
         },
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
@@ -144,18 +146,23 @@ private fun DuplicatesResult(vm: DuplicatesViewModel, onBack: () -> Unit) {
     report?.let { TextReportDialog(it.title, it.text, onDismiss = { report = null }) }
 }
 
-/** "1.234 Dateien durchsucht (12 GB) · 567 ab 1 MB verglichen"; `null` without totals. */
+/**
+ * "1.234 Dateien durchsucht (12 GB) · 567 ab 1 MB, 120 gleich große verglichen"; `null` without
+ * totals. Files of a size no other file has cannot have a copy and are not read.
+ */
 private fun searchFacts(summary: ReclaimSummary?, minSize: Long): String? = summary?.let {
-    "${it.files} Dateien durchsucht (${Format.size(it.bytes)}) · ${it.candidates} ab ${Format.size(minSize)} verglichen"
+    "${it.files} Dateien durchsucht (${Format.size(it.bytes)}) · ${it.candidates} ab ${Format.size(minSize)}, " +
+        "${it.compared} gleich große verglichen"
 }
 
 /** Early stop, unreadable paths and protected areas of the search (B1/B5); nothing when complete. */
 @Composable
 private fun SearchNotices(summary: ReclaimSummary?, onReport: (ReportText) -> Unit) {
     if (summary == null) return
+    // The core words every reason itself (walk stopped early, candidates not compared, groups not
+    // shown), one per line.
     summary.limit?.trim()?.takeIf { it.isNotEmpty() }?.let { limit ->
-        val reason = if (limit.endsWith('.')) limit else "$limit."
-        ErrorCard("$reason Weitere Ordner wurden nicht durchsucht – das Ergebnis ist unvollständig.", title = "Suche vorzeitig beendet")
+        ErrorCard(limit, title = "Ergebnis unvollständig")
     }
     if (summary.errorCount > 0) {
         NoticeRow(
@@ -169,10 +176,10 @@ private fun SearchNotices(summary: ReclaimSummary?, onReport: (ReportText) -> Un
     if (summary.protectedCount > 0) {
         NoticeRow(
             R.drawable.ic_lock,
-            protectedLabel(summary.protectedCount),
+            protectedLabel(summary.protectedCount, summary.remote),
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
             actionLabel = "Details",
-            onAction = { onReport(ReportText("Geschützte Bereiche", PROTECTED_EXPLANATION)) },
+            onAction = { onReport(ReportText("Geschützte Bereiche", summary.protectedText.ifBlank { PROTECTED_EXPLANATION })) },
         )
     }
 }
@@ -188,9 +195,10 @@ private fun NoGroups(vm: DuplicatesViewModel, onReport: (ReportText) -> Unit, mo
         }
         EmptyState(
             if (locked) R.drawable.ic_lock else R.drawable.ic_duplicate,
-            if (locked) "Von Android geschützt" else "Keine Duplikate gefunden",
+            if (locked) "Geschützte Bereiche" else "Keine Duplikate gefunden",
             modifier = Modifier.weight(1f),
-            message = if (locked) PROTECTED_EXPLANATION else searchFacts(summary, vm.searchedMinSize) ?: vm.location,
+            message = if (locked) summary?.protectedText?.ifBlank { PROTECTED_EXPLANATION }
+                else searchFacts(summary, vm.searchedMinSize) ?: vm.location,
             actionLabel = "Anderer Ort",
             onAction = { vm.backToSetup() },
         )
@@ -219,9 +227,12 @@ private fun GroupList(
                 }
                 SearchNotices(vm.summary, onReport)
                 if (vm.trashUnsupported) {
-                    ErrorCard("Dieser Ort hat keinen Papierkorb – die Duplikate werden nur angezeigt.", title = "Nur Anzeige")
+                    ErrorCard(vm.summary?.recycleNote?.takeIf { it.isNotBlank() }
+                        ?: "Für diesen Ort ist derzeit keine sichere Papierkorbaktion verfügbar.", title = "Nur Anzeige")
                 } else {
-                    OutlinedButton(onClick = { vm.autoSelect() }) { Text("Kopien automatisch auswählen") }
+                    OutlinedButton(onClick = { vm.autoSelect() }, enabled = !vm.deleting) {
+                        Text("Kopien automatisch auswählen")
+                    }
                 }
             }
         }
@@ -235,7 +246,8 @@ private fun GroupList(
                     CopyRow(
                         line.item,
                         checked = location in vm.selected,
-                        enabled = !vm.trashUnsupported && !shared,
+                        enabled = !vm.trashUnsupported && !vm.deleting && !shared &&
+                            (!vm.remoteResult || line.group.contentVerified),
                         shared = shared,
                         onToggle = { vm.toggle(line.group, it) },
                     )

@@ -94,8 +94,12 @@ impl Mux {
 
     /// Allocate a fresh req_id and a channel to receive its frames.
     pub(super) fn register(&self) -> (u64, RequestRx) {
+        self.register_with_tree_budget(None)
+    }
+
+    pub(super) fn register_with_tree_budget(&self, budget: Option<crate::agent_proto::TreeDecodeBudget>) -> (u64, RequestRx) {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let (route, rx) = if self.credit_mode() {
+        let (mut route, rx) = if self.credit_mode() {
             RequestRx::credited(
                 id,
                 Arc::new(RecvWindow::new(self.streams.clone())),
@@ -104,6 +108,7 @@ impl Mux {
         } else {
             RequestRx::legacy()
         };
+        route.tree_budget = budget;
         let mut p = lock_pending(&self.pending);
         if !self.closed.load(Ordering::Acquire) && !self.retired.load(Ordering::Acquire) {
             p.insert(id, route);

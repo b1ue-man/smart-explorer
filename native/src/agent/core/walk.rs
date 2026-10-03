@@ -9,9 +9,15 @@ impl AgentBackend {
         root: &str,
         on_progress: &(dyn Fn(u64, u64) -> bool + Sync),
     ) -> VfsResult<Option<crate::agent_proto::WireNode>> {
+        self.walk_tree_with_budget(root, on_progress, None)
+    }
+
+    pub(super) fn walk_tree_with_budget(&self, root: &str,
+        on_progress: &(dyn Fn(u64, u64) -> bool + Sync),
+        budget: Option<crate::agent_proto::TreeDecodeBudget>) -> VfsResult<Option<crate::agent_proto::WireNode>> {
         let lease = self.pool.lease();
         let mux = lease.mux()?;
-        let (id, rx) = mux.register();
+        let (id, rx) = mux.register_with_tree_budget(budget);
         let result = (|| {
             mux.send(id, Frame::WalkTree(root.to_string()))?;
             let mut last = (0u64, 0u64);
@@ -28,6 +34,8 @@ impl AgentBackend {
                         }
                     }
                     Ok(Frame::Tree(node)) => return Ok(Some(node)),
+                    Ok(Frame::Err(error)) if error == crate::agent_proto::TREE_BUDGET_ERROR =>
+                        return Err(io::Error::new(io::ErrorKind::OutOfMemory, error)),
                     Ok(Frame::Err(error)) => return Err(agent_error(error)),
                     Ok(other) => {
                         return Err(io::Error::new(

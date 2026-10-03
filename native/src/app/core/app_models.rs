@@ -194,6 +194,10 @@ pub(in crate::app) enum StorageScanSource {
         backend: crate::vfs::BackendHandle,
         root: String,
         label: String,
+        endpoint_prefix: Option<String>,
+        account: Option<String>,
+        host_volume: Option<crate::analytics::VolumeUsage>,
+        host_platform: Option<crate::analytics::PlatformFigures>,
     },
 }
 
@@ -209,10 +213,28 @@ impl StorageScanSource {
         root: impl Into<String>,
         label: impl Into<String>,
     ) -> Self {
+        Self::remote_at(backend, root, label, None, None)
+    }
+
+    pub(in crate::app) fn remote_at(
+        backend: crate::vfs::BackendHandle,
+        root: impl Into<String>,
+        label: impl Into<String>,
+        endpoint_prefix: Option<String>,
+        account: Option<String>,
+    ) -> Self {
+        let root = root.into();
+        let trimmed = root.trim_end_matches('/');
         Self::Remote {
             backend,
-            root: normalize_storage_root(root.into()),
+            // Backslashes can be literal remote names; only local roots use
+            // the platform path normalisation above.
+            root: if root.is_empty() { String::new() } else if trimmed.is_empty() { "/".into() } else { trimmed.into() },
             label: label.into(),
+            endpoint_prefix,
+            account,
+            host_volume: None,
+            host_platform: None,
         }
     }
 

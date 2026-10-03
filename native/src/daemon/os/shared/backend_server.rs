@@ -2,10 +2,9 @@ use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use crate::agent_proto::{
-    self, busy_message, Frame, RequestContext, ServerSession, WireMeta, PROTO_VERSION,
-};
-use crate::vfs::{BackendHandle, VfsMeta};
+use crate::agent::vfs_to_wire;
+use crate::agent_proto::{self, busy_message, Frame, RequestContext, ServerSession, PROTO_VERSION};
+use crate::vfs::BackendHandle;
 
 use super::backend_batch::{handle_get_batch_backend, handle_put_batch_backend};
 use super::backend_delete::remove_tree_backend;
@@ -293,22 +292,38 @@ fn dispatch_backend(
         Frame::DiscardStage(stage) => {
             answer(backend.discard_copy_stage(&stage).map(|()| Frame::Ok))
         }
+        Frame::ListTolerant(path) => super::backend_ops::list_tolerant(sink, id, &backend, &path),
+        Frame::WalkHashed2 {
+            root,
+            algorithm,
+            min_bytes,
+        } => super::backend_hash::walk_hashed2(
+            sink, id, &backend, &root, algorithm, min_bytes, cancel,
+        ),
+        Frame::FindDuplicates { root, min_bytes } => {
+            super::backend_ops::find_duplicates(sink, id, &backend, &root, min_bytes, cancel)
+        }
+        Frame::Query { kind, path } => answer(super::backend_ops::query(&backend, kind, &path)),
+        Frame::Recycle { path, size, sha256 } => {
+            answer(super::backend_ops::recycle(&backend, &path, size, sha256))
+        }
+        Frame::FinishStage {
+            stage,
+            mtime_ms,
+            mode,
+            durability,
+        } => answer(super::backend_ops::finish_stage(
+            &backend, &stage, mtime_ms, mode, durability,
+        )),
+        Frame::TargetLimits(root) => answer(Ok(super::backend_ops::target_limits(&backend, &root))),
+        Frame::Watch { root, poll_ms } => {
+            super::backend_ops::watch(sink, id, &backend, &root, poll_ms, cancel)
+        }
         other => emit(
             sink,
             id,
             &Frame::Err(format!("unsupported request: {other:?}")),
         ),
-    }
-}
-
-fn vfs_to_wire(m: VfsMeta) -> WireMeta {
-    WireMeta {
-        name: m.name,
-        is_dir: m.is_dir,
-        is_symlink: m.is_symlink,
-        size: m.size,
-        mtime_ms: m.mtime_ms,
-        content_md5: m.content_md5,
     }
 }
 

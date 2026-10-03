@@ -1,19 +1,23 @@
 use std::io;
 
-use super::node_codec::decode_node;
+use super::node_codec::{decode_node_with_budget, TreeDecodeBudget, TREE_BUDGET_ERROR};
 use super::relative_path::ValidatedRelativePath;
 use super::types::{Frame, SearchSpec, WireMeta, CHUNK};
 
 pub(super) const MAX_FRAME: usize = 64 * 1024 * 1024;
-// Empty-name WireMeta: u32 name length, two flags, u64 size, i64 mtime,
-// and one optional-md5 flag. Variable string bytes can only increase this.
+// Empty-name WireMeta: u32 name length, directory flag, entry flags, u64
+// size, i64 mtime, and one optional-md5 flag. Variable string bytes can only
+// increase this.
 pub(super) const MIN_WIRE_META_BYTES: usize = 23;
+/// Entry flags of a `WireMeta` (the byte after the directory flag).
+pub(super) const META_LINK: u8 = 1;
+pub(super) const META_SPECIAL: u8 = 2;
 
 #[path = "frame_encode.rs"]
 mod frame_encode;
 #[path = "frame_io.rs"]
 mod frame_io;
-pub use frame_io::{read_frame, write_frame};
+pub use frame_io::{read_frame, read_frame_with_tree_budget, write_frame};
 
 #[cfg(test)]
 #[path = "vault_frame_task_tests.rs"]
@@ -82,6 +86,13 @@ impl<'a> Reader<'a> {
         String::from_utf8(s.to_vec()).map_err(|_| bad("invalid utf8"))
     }
 
+    pub(super) fn tree_string(&mut self, maximum: usize) -> io::Result<String> {
+        let length = self.u32()? as usize;
+        if length > maximum { return Err(bad(TREE_BUDGET_ERROR)); }
+        let bytes = self.take(length)?;
+        String::from_utf8(bytes.to_vec()).map_err(|_| bad("invalid utf8"))
+    }
+
     fn bytes(&mut self) -> io::Result<Vec<u8>> {
         let n = self.u32()? as usize;
         Ok(self.take(n)?.to_vec())
@@ -95,7 +106,7 @@ impl<'a> Reader<'a> {
         Ok(self.take(length)?.to_vec())
     }
 
-    fn remaining(&self) -> usize {
+    pub(super) fn remaining(&self) -> usize {
         self.b.len() - self.i
     }
 
@@ -117,10 +128,17 @@ fn bad(msg: &str) -> io::Error {
 }
 
 fn get_meta(r: &mut Reader) -> io::Result<WireMeta> {
+    let name = r.string()?;
+    let is_dir = r.bool()?;
+    let flags = r.u8()?;
+    if flags & !(META_LINK | META_SPECIAL) != 0 {
+        return Err(bad("unknown directory entry flags"));
+    }
     Ok(WireMeta {
-        name: r.string()?,
-        is_dir: r.bool()?,
-        is_symlink: r.bool()?,
+        name,
+        is_dir,
+        is_symlink: flags & META_LINK != 0,
+        special: flags & META_SPECIAL != 0,
         size: r.u64()?,
         mtime_ms: r.i64()?,
         content_md5: r.opt_str()?,
@@ -129,6 +147,10 @@ fn get_meta(r: &mut Reader) -> io::Result<WireMeta> {
 
 impl Frame {
     pub fn decode(body: &[u8]) -> io::Result<(u64, Frame)> {
+        Self::decode_with_tree_budget(body, None)
+    }
+
+    pub fn decode_with_tree_budget(body: &[u8], budget: Option<TreeDecodeBudget>) -> io::Result<(u64, Frame)> {
         validate_frame_len(body.len())?;
         let mut r = Reader::new(body);
         let req_id = r.u64()?;
@@ -155,7 +177,7 @@ impl Frame {
             5 => Frame::Stat(r.string()?),
             6 => Frame::Meta(get_meta(&mut r)?),
             7 => Frame::WalkTree(r.string()?),
-            8 => Frame::Tree(decode_node(&mut r)?),
+            8 => Frame::Tree(decode_node_with_budget(&mut r, budget)?),
             9 => Frame::Read {
                 path: r.string()?,
                 offset: r.u64()?,
@@ -240,7 +262,10 @@ impl Frame {
             33 => Frame::WriteNew(r.string()?),
             t => match frame_encode::frame_ext::decode(t, &mut r)? {
                 Some(frame) => frame,
-                None => return Err(bad(&format!("unknown frame tag {t}"))),
+                None => match frame_encode::frame_ops::decode(t, &mut r)? {
+                    Some(frame) => frame,
+                    None => return Err(bad(&format!("unknown frame tag {t}"))),
+                },
             },
         };
         if !r.is_finished() {

@@ -18,6 +18,10 @@ mod codec;
 mod codec_tests;
 #[path = "core/credit.rs"]
 mod credit;
+#[path = "os/shared/ext_ops.rs"]
+mod ext_ops;
+#[path = "core/extension_parts.rs"]
+mod extension_parts;
 #[path = "core/features.rs"]
 mod features;
 #[path = "os/shared/fs.rs"]
@@ -32,6 +36,8 @@ mod local_platform;
 mod local_platform;
 #[path = "core/node_codec.rs"]
 mod node_codec;
+#[path = "core/ops_types.rs"]
+mod ops_types;
 #[path = "os/shared/promotion.rs"]
 mod promotion;
 #[path = "os/shared/put_tree.rs"]
@@ -56,14 +62,14 @@ mod session;
 mod stage_ops;
 #[path = "os/shared/transfer.rs"]
 mod transfer;
-#[path = "core/transport_error.rs"]
-mod transport_error;
 #[cfg(test)]
 #[path = "core/transfer_engine_task_bounds_tests.rs"]
 mod transfer_engine_task_bounds_tests;
 #[cfg(test)]
 #[path = "core/transfer_engine_task_tests.rs"]
 mod transfer_engine_task_tests;
+#[path = "core/transport_error.rs"]
+mod transport_error;
 #[path = "core/types.rs"]
 mod types;
 #[path = "os/shared/write_new.rs"]
@@ -74,7 +80,8 @@ pub use batch_limits::{
     split_batch, BATCH_HEADER_MAX, BATCH_MAX_BYTES, BATCH_MAX_FILES, BATCH_UNKNOWN_MARKER,
     ITEM_PATH_MAX, ITEM_TEXT_MAX,
 };
-pub use codec::{read_frame, write_frame};
+pub use codec::{read_frame, read_frame_with_tree_budget, write_frame};
+pub use node_codec::{TreeDecodeBudget, TREE_BUDGET_ERROR};
 pub use credit::{
     busy_message, charged, credit_cost, parse_busy, window_target, RecvWindow, SendCredit,
     StreamCount, CREDIT_CONNECTION_BUDGET, CREDIT_INITIAL, CREDIT_REQUEST_LIMIT, CREDIT_WINDOW_MAX,
@@ -84,6 +91,8 @@ pub use features::{
     LABEL_STAGE,
 };
 pub use fs::{is_pseudo_dir, list_local, stat_local, walk_local, WalkCounter};
+pub(crate) use extension_parts::{append_duplicate_part, emit_duplicate_parts, emit_listing_parts};
+pub use ops_types::{digest, omission, query, UNSUPPORTED_EXTENSION};
 pub(crate) use promotion::validate_destination_root;
 pub(crate) use put_tree::{BufferedTree, BufferedTreeReceiver, TreeManifestValidator};
 pub use relative_path::ValidatedRelativePath;
@@ -95,8 +104,12 @@ pub(crate) use session::{Inbound, Sink};
 pub(crate) use transfer::{
     collect_local_tree, finish_local_tree_file, open_local_tree_file, LocalTreeEntry,
 };
+pub(crate) use transport_error::{parse_transport_error, transport_error_message};
 pub use types::{
     has_link_aware_hash, BatchEntry, BatchItem, Frame, SearchSpec, WireMeta, WireNode, CHUNK,
     HASH_WALK_LINK_BOUNDARY, HASH_WALK_SERVER_VERSION, PROTO_VERSION, TRANSFER_FRAME_BACKLOG,
 };
-pub(crate) use transport_error::{parse_transport_error, transport_error_message};
+pub use types::{
+    WireChange, WireDuplicateGroup, WireDuplicateItem, WireDuplicateSummary, WireOmission,
+    WireReclaimProgress, WireTargetLimits,
+};

@@ -42,8 +42,9 @@ internal const val PROTECTED_EXPLANATION =
         "auch nicht mit „Zugriff auf alle Dateien“. Diese Bereiche zählen daher nicht als Lesefehler."
 
 /** "1 Bereich …" / "n Bereiche von Android geschützt". */
-internal fun protectedLabel(count: Long): String =
-    if (count == 1L) "1 Bereich von Android geschützt" else "$count Bereiche von Android geschützt"
+internal fun protectedLabel(count: Long, remote: Boolean = false): String =
+    if (remote) { if (count == 1L) "1 geschützter Bereich" else "$count geschützte Bereiche" }
+    else if (count == 1L) "1 Bereich von Android geschützt" else "$count Bereiche von Android geschützt"
 
 /** One-line notice with icon and an optional action (read problems, protected areas). */
 @Composable

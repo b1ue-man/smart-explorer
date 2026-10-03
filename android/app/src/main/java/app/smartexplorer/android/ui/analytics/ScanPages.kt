@@ -93,9 +93,10 @@ internal fun ScanSetupPage(
 }
 
 /**
- * Running scan: place, files and bytes so far (a determinate bar once the core reports totals),
- * the core's phase and current folder (`message`, one line each, shortened in the middle so the
- * folder name stays visible) and [Abbrechen] ([cancelEnabled]: also before the task exists).
+ * Running scan: place, files and bytes so far (a determinate bar once the core reports totals:
+ * for a remote analysis the transfer of the finished result), the core's phase, current folder and
+ * how long the other device has been silent (`message`, one line each, shortened in the middle so
+ * the folder name stays visible) and [Abbrechen] ([cancelEnabled]: also before the task exists).
  * [preparing] describes the work before the task exists (instead of "Wird gestartet …").
  */
 @Composable
@@ -135,12 +136,20 @@ internal fun ScanProgressPage(
     }
 }
 
+/**
+ * "1.234 Dateien · 5,6 GB"; with byte totals (a remote analysis transferring its result) the bytes
+ * are that transfer: "1.234 Dateien · Ergebnis 12 MB von 40 MB".
+ */
 private fun progressLine(task: TaskInfo?): String = when {
     task == null || task.state == "queued" -> "Wird gestartet …"
     else -> buildString {
         append(task.doneItems)
         if (task.totalItems > 0) append(" von ").append(task.totalItems)
-        append(" Dateien · ").append(Format.size(task.doneBytes))
-        if (task.totalBytes > 0) append(" von ").append(Format.size(task.totalBytes))
+        append(" Dateien · ")
+        if (task.totalBytes > 0) {
+            append("Ergebnis ").append(Format.size(task.doneBytes)).append(" von ").append(Format.size(task.totalBytes))
+        } else {
+            append(Format.size(task.doneBytes))
+        }
     }
 }

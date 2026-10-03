@@ -29,7 +29,7 @@ import app.smartexplorer.android.ui.common.Snackbars
  * other app, so this is the way to act on them.
  */
 @Composable
-internal fun AppDetailDialog(app: AnalyzeChild, onDismiss: () -> Unit) {
+internal fun AppDetailDialog(app: AnalyzeChild, remote: Boolean = false, onDismiss: () -> Unit) {
     val context = LocalContext.current
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     AlertDialog(
@@ -45,19 +45,21 @@ internal fun AppDetailDialog(app: AnalyzeChild, onDismiss: () -> Unit) {
                 HorizontalDivider()
                 FigureRow("Gesamt", app.size, style = MaterialTheme.typography.titleSmall)
                 Text(
-                    "Werte laut Android. Cache leeren und Speicher verwalten lässt sich in der App-Info.",
+                    if (remote) "Werte der Gegenstelle. Cache und Speicher lassen sich dort in der App-Info verwalten."
+                    else "Werte laut Android. Cache leeren und Speicher verwalten lässt sich in der App-Info.",
                     style = MaterialTheme.typography.bodySmall,
                     color = muted,
                 )
             }
         },
         confirmButton = {
-            TextButton(onClick = {
+            if (remote) TextButton(onClick = onDismiss) { Text("Schließen") }
+            else TextButton(onClick = {
                 val opened = app.packageName?.let { StorageStatsAccess.openAppDetails(context, it) } == true
                 if (opened) onDismiss() else Snackbars.show("App-Info nicht verfügbar.")
             }) { Text("App-Info öffnen") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Schließen") } },
+        dismissButton = { if (!remote) TextButton(onClick = onDismiss) { Text("Schließen") } },
     )
 }
 

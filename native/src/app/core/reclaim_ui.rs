@@ -1,9 +1,9 @@
-use crate::app::theme;
 use super::prelude::*;
 use super::*;
 use crate::app::reclaim_results_ui::{
     result_count_label, select_items, selected_bytes, ui_empty, ui_item, ui_items, ui_section,
 };
+use crate::app::theme;
 
 impl App {
     pub(in crate::app) fn ui_reclaim(&mut self, ctx: &egui::Context) {
@@ -12,10 +12,12 @@ impl App {
         let drives = self.drive_info.clone();
         let source = self.reclaim_source.clone();
         let current_remote = self.remote.as_ref().map(|remote| {
-            StorageScanSource::remote(
+            StorageScanSource::remote_at(
                 remote.backend.clone(),
                 self.root_path.clone(),
                 remote.label.clone(),
+                remote.endpoint_prefix.clone(),
+                remote.account.clone(),
             )
         });
         let scan_info = self.reclaim_scan.as_ref().map(|s| {
@@ -224,17 +226,22 @@ impl App {
                             clear_selection = true;
                         }
                         let selected_bytes = selected_bytes(r, &selected);
-                        if ui
-                            .add_enabled(
-                                !selected.is_empty() && !r.is_remote,
-                                egui::Button::new(format!(
-                                    "Papierkorb ({}, {})",
-                                    selected.len(),
-                                    format_bytes(selected_bytes)
-                                )),
+                        let trash = ui.add_enabled(
+                            !selected.is_empty(),
+                            egui::Button::new(format!(
+                                "Papierkorb ({}, {})",
+                                selected.len(),
+                                format_bytes(selected_bytes)
+                            )),
+                        );
+                        let trash = if r.is_remote {
+                            trash.on_hover_text(
+                                "Duplikatkopien in den Papierkorb des Geräts, das sie speichert (wenn es einen hat); es prüft jede Kopie vorher.",
                             )
-                            .clicked()
-                        {
+                        } else {
+                            trash
+                        };
+                        if trash.clicked() {
                             trash_selected = true;
                         }
                     });
@@ -277,7 +284,7 @@ impl App {
                                                 "{} {} · {}",
                                                 group.hash.algorithm.label(),
                                                 hash_short,
-                                                group.evidence.label()
+                                                evidence_label(group.evidence, r.is_remote)
                                             ))
                                             .monospace(),
                                         );
@@ -409,5 +416,14 @@ impl App {
             self.cancel_analytics_scan();
             self.show_analytics = false;
         }
+    }
+}
+
+/// How a group's equality was established; a remote place's content is read
+/// and hashed here, which "lokal" would misname.
+fn evidence_label(evidence: crate::analytics::DuplicateEvidence, remote: bool) -> &'static str {
+    match evidence {
+        crate::analytics::DuplicateEvidence::LocalSha256 if remote => "Inhalt gelesen + SHA-256",
+        other => other.label(),
     }
 }

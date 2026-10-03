@@ -1,5 +1,5 @@
 //! `AgentBackend` - a `vfs::Backend` that drives a remote `se-agent` over the
-//! multiplexed, streaming protocol-v6 framed stdio stream.
+//! multiplexed, versioned framed stdio stream.
 //!
 //! A channel carries many operations, tagged by `req_id`: a writer thread
 //! serializes outgoing frames (control frames ahead of upload data) and a
@@ -11,6 +11,8 @@
 mod agent_error;
 #[path = "core/backend.rs"]
 mod backend;
+#[path = "core/analysis.rs"]
+mod analysis;
 #[path = "core/batch_get.rs"]
 mod batch_get;
 #[path = "core/batch_put.rs"]
@@ -19,6 +21,10 @@ mod batch_put;
 mod deploy;
 #[path = "core/engine_ops.rs"]
 mod engine_ops;
+#[path = "core/ext_wire.rs"]
+pub(crate) mod ext_wire;
+#[path = "core/extensions.rs"]
+mod extensions;
 #[path = "core/lanes.rs"]
 mod lanes;
 #[path = "core/metadata.rs"]
@@ -43,6 +49,7 @@ mod walk;
 pub use backend::AgentBackend;
 #[allow(unused_imports)]
 pub use deploy::{artifact_for, deploy_over_sftp, remove_from_sftp, AgentArtifact};
+pub(crate) use metadata::vfs_to_wire;
 
 #[cfg(test)]
 #[path = "core/error_tests.rs"]

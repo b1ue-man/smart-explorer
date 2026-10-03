@@ -1,6 +1,6 @@
 /// Bumped whenever the wire format OR the agent's behaviour changes; the client
 /// re-uploads the agent on a mismatch.
-pub const PROTO_VERSION: u32 = 9;
+pub const PROTO_VERSION: u32 = 11;
 
 /// Existing error frames can request a metadata walk without changing wire
 /// layouts. A hash-only stream cannot represent protected link boundaries.
@@ -16,6 +16,11 @@ pub fn has_link_aware_hash(version: &str) -> bool {
         .is_some_and(|(_, labels)| labels.split('.').any(|label| label == "sync-links-v1"))
 }
 
+pub use super::ops_types::{
+    WireChange, WireDuplicateGroup, WireDuplicateItem, WireDuplicateSummary, WireOmission,
+    WireReclaimProgress, WireTargetLimits,
+};
+
 /// Payload chunk size for streamed byte transfers.
 pub const CHUNK: usize = 256 * 1024;
 
@@ -29,6 +34,8 @@ pub struct WireMeta {
     pub name: String,
     pub is_dir: bool,
     pub is_symlink: bool,
+    /// FIFO, socket or device: no data stream to read (never a folder or link).
+    pub special: bool,
     pub size: u64,
     pub mtime_ms: i64,
     pub content_md5: Option<String>,
@@ -230,4 +237,66 @@ pub enum Frame {
     },
     /// Remove an unpublished private stage this client created (`stage-v1`).
     DiscardStage(String),
+    /// Listing that keeps going past entries it cannot list (`ext-v1`):
+    /// `DirPart`* then `End`.
+    ListTolerant(String),
+    /// A part of a tolerant listing.
+    DirPart {
+        entries: Vec<WireMeta>,
+        omitted: Vec<WireOmission>,
+    },
+    /// Walk with digests next to the data (`ext-v1`): `HashEntry` (the digest
+    /// of `algorithm` in its `md5` field) and `HashOmitted`*, then `End`.
+    /// Regular files below `min_bytes` are left out.
+    WalkHashed2 {
+        root: String,
+        algorithm: u8,
+        min_bytes: u64,
+    },
+    /// A link, special file or unreadable entry of a `WalkHashed2`.
+    HashOmitted(WireOmission),
+    /// Duplicate search on the storing host (`ext-v1`): `DupProgress`*,
+    /// `DupGroup`*, one `DupSummary`, then `End`.
+    FindDuplicates {
+        root: String,
+        min_bytes: u64,
+    },
+    DupProgress(WireReclaimProgress),
+    DupGroup(WireDuplicateGroup),
+    DupSummary(WireDuplicateSummary),
+    /// One question about an extension (`ops_types::query`): `Answer`.
+    Query {
+        kind: u8,
+        path: String,
+    },
+    Answer(u64),
+    /// Move to the storing device's trash after re-checking the content
+    /// (`ext-v1`): `Answer(1)` moved, `Answer(2)` content changed.
+    Recycle {
+        path: String,
+        size: u64,
+        sha256: Option<String>,
+    },
+    /// Give a complete stage its time, mode and durability (`ext-v1`):
+    /// `StageDone`. `durability`: 0 not required, 1 deferred, 2 now.
+    FinishStage {
+        stage: String,
+        mtime_ms: Option<i64>,
+        mode: Option<u32>,
+        durability: u8,
+    },
+    StageDone {
+        mtime_applied: bool,
+        durable: bool,
+    },
+    /// What the target below a root can store (`ext-v1`): `Limits`.
+    TargetLimits(String),
+    Limits(WireTargetLimits),
+    /// Change subscription (`ext-v1`): `Change`* until the client cancels;
+    /// an ended subscription answers `Err`.
+    Watch {
+        root: String,
+        poll_ms: u64,
+    },
+    Change(WireChange),
 }

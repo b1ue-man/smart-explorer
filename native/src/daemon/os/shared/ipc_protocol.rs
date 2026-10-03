@@ -275,6 +275,8 @@ pub(super) enum IpcRequest {
         token: String,
         target: crate::share::PeerOpenTarget,
         root: String,
+        #[serde(default)]
+        node_budget: Option<u64>,
     },
     OpenShare {
         token: String,

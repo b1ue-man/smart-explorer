@@ -82,7 +82,11 @@ impl App {
         root: String,
         label: String,
     ) {
-        self.start_reclaim_source(StorageScanSource::remote(backend, root, label));
+        let current = self.remote.as_ref().filter(|remote| Arc::ptr_eq(&remote.backend, &backend));
+        let label = current.map_or(label, |remote| remote.label.clone());
+        let prefix = current.and_then(|remote| remote.endpoint_prefix.clone());
+        let account = current.and_then(|remote| remote.account.clone());
+        self.start_reclaim_source(StorageScanSource::remote_at(backend, root, label, prefix, account));
     }
 
     pub(in crate::app) fn poll_reclaim_scan(&mut self) {
@@ -169,7 +173,8 @@ impl App {
             return;
         };
         if report_snapshot.is_remote {
-            self.error_msg = Some("Remote-Reclaim ist in diesem Release read-only.".to_string());
+            // The storing device moves duplicate copies into its own trash.
+            self.trash_reclaim_remote(report_snapshot);
             return;
         }
         let paths = self.reclaim_selected_paths_expanded();

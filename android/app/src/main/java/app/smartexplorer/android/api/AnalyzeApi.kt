@@ -2,6 +2,7 @@ package app.smartexplorer.android.api
 
 import app.smartexplorer.android.core.Core
 import app.smartexplorer.android.core.CoreException
+import app.smartexplorer.android.service.TaskKeeper
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonArray
@@ -95,6 +96,10 @@ data class AnalyzeNode(
     val children: List<AnalyzeChild> = emptyList(),
     /** Place to open in "Dateien", `null` when the core has none (also for the app list). */
     val location: String? = null,
+    /** Volume figures of the storing host (root node only; null = unknown). */
+    val volumeTotal: Long? = null,
+    val volumeFree: Long? = null,
+    val remote: Boolean = false,
 ) {
     val isAppList: Boolean
         get() = kind == "apps"
@@ -102,12 +107,15 @@ data class AnalyzeNode(
 
 /**
  * Read problems of an analysis; [count] excludes the areas Android locks for every app, which are
- * counted in [protectedCount] and described in [protectedText].
+ * counted in [protectedCount] and described in [protectedText]. [notes] are remarks of the walk or
+ * of the device that analysed a remote place (summarised detail, an older analysis path, areas it
+ * protects); they never make the result incomplete.
  */
 @Serializable
 data class AnalyzeIssues(
     val count: Int = 0,
     val text: String = "",
+    val notes: List<String> = emptyList(),
     val protectedCount: Long = 0,
     val protectedText: String = "",
 )
@@ -134,38 +142,58 @@ data class DuplicateItem(val location: String, val mtimeMs: Long = 0)
 
 /** Files with equal content; [size] is the size of one copy. */
 @Serializable
-data class DuplicateGroup(val size: Long = 0, val items: List<DuplicateItem> = emptyList())
+data class DuplicateGroup(
+    val size: Long = 0,
+    val items: List<DuplicateItem> = emptyList(),
+    /** The core retained a whole-content SHA-256 for a safe remote trash request. */
+    val contentVerified: Boolean = false,
+)
 
 /**
  * Totals of a finished duplicate search: [files]/[bytes] walked, [candidates] files at or above
- * the minimum size, [groups] found, [protectedCount] areas Android locks, [errorCount] unreadable
- * paths ([errorText] lists them) and [limit], the reason the walk stopped early (`null` = complete).
+ * the minimum size, [compared] of them shared their size with another one and were compared,
+ * [groups] found, [protectedCount] areas Android locks, [errorCount] unreadable paths ([errorText]
+ * lists them) and [limit], why the search saw or compared less than everything (one reason per
+ * line, worded by the core; `null` = complete).
  */
 @Serializable
 data class ReclaimSummary(
     val files: Long = 0,
     val bytes: Long = 0,
     val candidates: Long = 0,
+    val compared: Long = 0,
     val groups: Long = 0,
     val protectedCount: Long = 0,
+    val protectedText: String = "",
     val errorCount: Long = 0,
     val errorText: String = "",
     val limit: String? = null,
+    val remote: Boolean = false,
+    val canRecycle: Boolean = false,
+    val recycleNote: String = "",
 )
+
+@Serializable
+data class RecycleResult(val moved: List<String> = emptyList())
 
 /** Suspending wrappers for api.md §4.9; every call throws [CoreException] on errors. */
 object AnalyzeApi {
     /**
      * Starts the analysis; progress: `doneItems` files, `doneBytes`, `message` = phase and current
-     * folder. [platform] only for a local root on a mounted volume; unknown figures are left out.
+     * folder, one fact per line. A remote place is analysed by the device that holds it: the
+     * message names its phases, and while the finished result is transferred `doneBytes` of
+     * `totalBytes` is that transfer. [platform] only for a local root on a mounted volume; unknown
+     * figures are left out.
      */
-    suspend fun start(location: String, platform: AnalyzePlatform? = null): String = Core.request<TaskId>(
-        "analyze.start",
-        buildJsonObject {
-            put("location", location)
-            if (platform != null) put("platform", platformJson(platform))
-        },
-    ).taskId
+    suspend fun start(location: String, platform: AnalyzePlatform? = null): String = started(
+        Core.request<Started>(
+            "analyze.start",
+            buildJsonObject {
+                put("location", location)
+                if (platform != null) put("platform", platformJson(platform))
+            },
+        ),
+    )
 
     /** `analyze.start.platform` (api.md §4.9); unknown figures are left out. */
     fun platformJson(platform: AnalyzePlatform): JsonObject = buildJsonObject {
@@ -203,14 +231,23 @@ object AnalyzeApi {
     suspend fun issues(taskId: String): AnalyzeIssues =
         Core.request<AnalyzeIssues>("analyze.issues", buildJsonObject { put("taskId", taskId) })
 
+    /**
+     * Frees the kept result of [taskId] (analysis or duplicate search) once the page shows it no
+     * more; `false` when the core had nothing kept for it.
+     */
+    suspend fun release(taskId: String): Boolean =
+        Core.request<Released>("analyze.release", buildJsonObject { put("taskId", taskId) }).released
+
     /** Duplicate search for files of at least [minSize] bytes; progress `message` = phase. */
-    suspend fun reclaimStart(location: String, minSize: Long): String = Core.request<TaskId>(
-        "reclaim.start",
-        buildJsonObject {
-            put("location", location)
-            put("minSize", minSize)
-        },
-    ).taskId
+    suspend fun reclaimStart(location: String, minSize: Long): String = started(
+        Core.request<Started>(
+            "reclaim.start",
+            buildJsonObject {
+                put("location", location)
+                put("minSize", minSize)
+            },
+        ),
+    )
 
     /** All groups of the finished search. */
     suspend fun reclaimGroups(taskId: String): List<DuplicateGroup> =
@@ -219,6 +256,31 @@ object AnalyzeApi {
     suspend fun reclaimSummary(taskId: String): ReclaimSummary =
         Core.request<ReclaimSummary>("reclaim.summary", buildJsonObject { put("taskId", taskId) })
 
+    /** The source search, not caller-provided hashes, authorises each selected copy. */
+    suspend fun reclaimRecycle(taskId: String, locations: List<String>): String = started(
+        Core.request<Started>("reclaim.recycle", buildJsonObject {
+            put("taskId", taskId)
+            put("locations", JsonArray(locations.map { JsonPrimitive(it) }))
+        }),
+    )
+
+    suspend fun recycleResult(taskId: String): RecycleResult =
+        Core.request<RecycleResult>("reclaim.recycleResult", buildJsonObject { put("taskId", taskId) })
+
+    /**
+     * A task against another device keeps the CPU awake for as long as it runs: with the screen off
+     * the phone would otherwise suspend, the other side's connection would time out and the
+     * result would be partial or lost.
+     */
+    private fun started(answer: Started): String {
+        if (answer.remote) TaskKeeper.keepCpuAwake(answer.taskId)
+        return answer.taskId
+    }
+
+    /** Answer of `analyze.start` / `reclaim.start`; [remote] = the task works against another device. */
     @Serializable
-    private data class TaskId(val taskId: String)
+    private data class Started(val taskId: String, val remote: Boolean = false)
+
+    @Serializable
+    private data class Released(val released: Boolean = false)
 }
