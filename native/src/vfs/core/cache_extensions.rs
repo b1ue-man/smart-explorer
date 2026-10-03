@@ -13,6 +13,10 @@ use super::super::{
 use super::CachingBackend;
 
 impl BackendExtensions for CachingBackend {
+    fn previous_state_identities(&self) -> VfsResult<Vec<String>> {
+        calls::previous_state_identities(&*self.inner)
+    }
+
     fn sync_child_path(&self, parent: &str, literal_name: &str) -> VfsResult<String> {
         calls::sync_child_path(&*self.inner, parent, literal_name)
     }

@@ -27,6 +27,17 @@ pub(super) fn default_sync_child_path(parent: &str, literal_name: &str) -> VfsRe
 }
 
 /// Encode only one new literal name, retaining the parent's locator meaning.
+pub fn previous_state_identities<B: Backend + ?Sized>(backend: &B) -> VfsResult<Vec<String>> {
+    let identities = match backend.extensions() {
+        Some(extension) => extension.previous_state_identities()?,
+        None => Vec::new(),
+    };
+    if identities.len() > 8 || identities.iter().any(|identity| identity.is_empty() || identity.len() > 4096) {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid previous backend identities"));
+    }
+    Ok(identities)
+}
+
 pub fn sync_child_path<B: Backend + ?Sized>(
     backend: &B,
     parent: &str,
