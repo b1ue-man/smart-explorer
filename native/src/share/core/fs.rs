@@ -7,11 +7,8 @@ use crate::vfs::{BackendHandle, LocalBackend, VfsMeta};
 use super::core::eio;
 use super::export_config::ExportAccess;
 use super::fs_paths::norm_root;
-#[path = "fs_local_paths.rs"]
-pub(super) mod local_paths;
+pub(super) use super::fs_local_paths as local_paths;
 pub(super) use local_paths::secure_local_target;
-#[cfg(test)]
-use local_paths::to_os_path;
 pub(super) use super::fs_paths::{join_under, split_clean};
 use super::wire::FsMeta;
 
@@ -244,7 +241,7 @@ pub(crate) fn remove_dir_recursive(be: &dyn crate::vfs::Backend, path: &str) -> 
 
 pub(super) fn guard_target(mut target: ResolvedTarget,
     authority: Option<Arc<super::fs_access::AccessAuthority>>) -> io::Result<ResolvedTarget> {
-    let policy = super::fs_policy::TargetPolicy::new(target.access,
+    let policy = super::fs_host_policy::TargetPolicy::new(target.access,
         target.allow_system_writes, target.backend.is_local()).with_root(&target.backend.root_display());
     policy.read(&target.path)?;
     target.backend = Arc::new(super::fs_guard_backend::GuardedBackend::new(target.backend, policy, authority));
@@ -252,19 +249,19 @@ pub(super) fn guard_target(mut target: ResolvedTarget,
 }
 
 pub(super) fn require_target_write(target: &ResolvedTarget) -> io::Result<()> {
-    super::fs_policy::TargetPolicy::new(target.access, target.allow_system_writes,
+    super::fs_host_policy::TargetPolicy::new(target.access, target.allow_system_writes,
         target.backend.is_local()).with_root(&target.backend.root_display()).write(&target.path)
 }
 
 pub(super) fn require_target_destructive(target: &ResolvedTarget) -> io::Result<()> {
-    super::fs_policy::TargetPolicy::new(target.access, target.allow_system_writes,
+    super::fs_host_policy::TargetPolicy::new(target.access, target.allow_system_writes,
         target.backend.is_local()).with_root(&target.backend.root_display()).destructive(&target.path)
 }
 
 /// Foreign analysis traversals call this immediately after opening a root or
 /// child. The decision uses the held physical object, including UNC/bind aliases.
 pub(in crate::share) fn ensure_local_share_handle_allowed(handle: &crate::local_access::DirectoryHandle) -> io::Result<()> {
-    super::fs_policy::ensure_handle_allowed(handle)
+    super::fs_host_policy::ensure_handle_allowed(handle)
 }
 
 fn opt(s: &str) -> Option<String> {
@@ -389,45 +386,12 @@ impl From<VfsMeta> for FsMeta {
 
 #[cfg(test)]
 mod tests {
-    use super::{secure_local_target, split_clean, to_os_path};
+    use super::split_clean;
 
     #[test]
     fn split_clean_blocks_traversal() {
         assert!(split_clean("/root/../secret").is_err());
         assert!(split_clean("/root\\secret").is_err());
         assert!(split_clean("/root/ok").is_ok());
-    }
-
-    #[test]
-    fn local_target_stays_under_root() {
-        let root = std::env::temp_dir().join(format!("se-share-root-{}", std::process::id()));
-        std::fs::create_dir_all(root.join("sub")).unwrap();
-        let root_s = root.to_string_lossy().replace('\\', "/");
-        let p = secure_local_target(&root_s, &["sub".to_string(), "file.txt".to_string()]).unwrap();
-        let p = to_os_path(&p);
-        let parent = p.parent().unwrap().canonicalize().unwrap();
-        assert!(parent.starts_with(root.canonicalize().unwrap()));
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn symlink_escape_is_blocked_when_supported() {
-        let base = std::env::temp_dir().join(format!("se-share-symlink-{}", std::process::id()));
-        let root = base.join("root");
-        let outside = base.join("outside");
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::create_dir_all(&outside).unwrap();
-        let link = root.join("link");
-
-        #[cfg(windows)]
-        let linked = std::os::windows::fs::symlink_dir(&outside, &link);
-        #[cfg(not(windows))]
-        let linked = std::os::unix::fs::symlink(&outside, &link);
-
-        if linked.is_ok() {
-            let root_s = root.to_string_lossy().replace('\\', "/");
-            assert!(secure_local_target(&root_s, &["link".to_string()]).is_err());
-        }
-        let _ = std::fs::remove_dir_all(base);
     }
 }

@@ -1,7 +1,7 @@
 //! Bounded provider streams keep backpressure and cancellation at the guard.
 use std::{io, sync::{Arc, atomic::{AtomicBool, Ordering}}, time::Duration};
 use crossbeam_channel::{bounded, Receiver, Sender, RecvTimeoutError, SendTimeoutError};
-use super::super::{fs_access::AccessAuthority, fs_policy::TargetPolicy};
+use super::super::{fs_access::AccessAuthority, fs_host_policy::TargetPolicy};
 
 const TICK: Duration = Duration::from_millis(50);
 const BACKLOG: usize = 16;
