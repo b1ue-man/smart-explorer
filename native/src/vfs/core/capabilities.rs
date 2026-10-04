@@ -53,3 +53,23 @@ impl RootConfinement {
         matches!(self, Self::Enforced)
     }
 }
+
+pub(super) fn staged_write_defaults<B: super::Backend + ?Sized>(
+    backend: &B,
+) -> StagedWriteCapabilities {
+    StagedWriteCapabilities {
+        create: false,
+        replace: backend.rename_overwrites(),
+        namespace_replace: backend.rename_overwrites(),
+    }
+}
+
+pub(super) fn mount_path_defaults<B: super::Backend + ?Sized>(
+    backend: &B,
+    root: &str,
+) -> super::VfsResult<MountPathCapabilities> {
+    Ok(MountPathCapabilities {
+        staged_write: backend.staged_write_capabilities(root),
+        root_confinement: backend.root_confinement(root),
+    })
+}

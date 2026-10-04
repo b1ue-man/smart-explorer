@@ -219,8 +219,7 @@ pub(super) fn execute(
                 && !sides[index].backend.has_duplicate_file_names()
                 && !sides[index]
                     .backend
-                    .mount_path_capabilities(paths[index])?
-                    .staged_write
+                    .probe_staged_write_capabilities(paths[index])?
                     .namespace_replace
             {
                 stage.bind(versions, &sides[index], rels[index], false)?;

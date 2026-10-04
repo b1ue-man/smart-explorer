@@ -146,8 +146,7 @@ pub(super) fn copy(
             && !destination.backend.has_duplicate_file_names()
             && !destination
                 .backend
-                .mount_path_capabilities(destination_path)?
-                .staged_write
+                .probe_staged_write_capabilities(destination_path)?
                 .namespace_replace
         {
             let versions = versions.ok_or_else(|| {

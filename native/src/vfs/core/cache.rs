@@ -12,6 +12,8 @@ use super::{
 mod cache_extensions;
 #[path = "cache_index.rs"]
 mod cache_index;
+#[path = "cache_limits.rs"]
+mod cache_limits;
 #[path = "cache_load.rs"]
 mod cache_load;
 #[path = "cache_paths.rs"]
@@ -23,6 +25,7 @@ mod cache_support;
 #[path = "cache_writer.rs"]
 mod cache_writer;
 use cache_index::ChildKey;
+use cache_limits::CacheLimits;
 use cache_load::{DirectoryLoad, DirectorySnapshot};
 use cache_writer::InvalidatingWriter;
 
@@ -37,26 +40,6 @@ mod vault_cache_task_tests;
 /// sync re-opens a fresh backend per run and walks each folder once, so a cache
 /// would only add staleness with no hit benefit.
 const CACHE_TTL: Duration = Duration::from_secs(20);
-#[derive(Clone, Copy)]
-struct CacheLimits {
-    directories: usize,
-    entries: usize,
-    bytes: usize,
-}
-
-impl CacheLimits {
-    const BROWSING: Self = Self {
-        directories: 4_096,
-        entries: 50_000,
-        bytes: 32 * 1024 * 1024,
-    };
-    // Mount limits govern retention, never directory validity or traversal.
-    const MOUNT: Self = Self {
-        directories: usize::MAX,
-        entries: usize::MAX,
-        bytes: 64 * 1024 * 1024,
-    };
-}
 
 struct CachedDirectory {
     snapshot: DirectorySnapshot,
@@ -370,6 +353,12 @@ impl Backend for CachingBackend {
     }
     fn staged_write_capabilities(&self, root: &str) -> super::StagedWriteCapabilities {
         self.inner.staged_write_capabilities(root)
+    }
+    fn probe_staged_write_capabilities(
+        &self,
+        root: &str,
+    ) -> VfsResult<super::StagedWriteCapabilities> {
+        self.inner.probe_staged_write_capabilities(root)
     }
     fn case_sensitive_paths(&self, root: &str) -> bool {
         self.inner.case_sensitive_paths(root)
