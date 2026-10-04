@@ -2,6 +2,13 @@
 
 Lokal gesicherte API-/Lib-Syntax (Abrufdatum im Kopf jeder Datei).
 
+- [Cryptomator-Vault-APIs](cryptomator-vault-api-2026-10-04.md): CryptoFS 2.10.0,
+  CryptoLib 2.2.2 und CLI 0.6.2; Release-Signaturen, Schlüsseldateien,
+  Schreibgarantien und Prozesslebenszyklus; geprüft 2026-10-04.
+- [Cryptomator-Laufwerksanbindung](cryptomator-mounting-2026-10-04.md): Desktop
+  1.19.3, FUSE-NIO 6.0.1, jFUSE 0.7.3 und WinFsp; Windows-Mountkette,
+  Plattformvergleich, Handles/Flush/Unmount, WebDAV und Lizenzen; geprüft 2026-10-04.
+
 | Datei | Version | Datum | Themen |
 |---|---|---|---|
 | [android-toolchain.md](android-toolchain.md) | AGP 9.4 / Kotlin 2.4.20 / BOM 2026.09.00 (Stand) | 2026-09-25 | Versionen, 16-KB-Seiten, Runner-SDK/NDK, Signatur, cargo-ndk |
