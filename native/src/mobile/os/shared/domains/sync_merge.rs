@@ -342,9 +342,16 @@ fn merge(
         ctx.set_failure_result(report_json(&failure.partial, false));
         ApiError::new("conflict", format!("Zusammenführung unvollständig: {}. Bestätigte Teiländerungen bleiben gespeichert. Erneut laden verwendet dieselben Originale für einen sicheren Wiederanlauf.", failure.error))
     })?;
+    // Baseline records keep literal spellings; compare their planning keys.
+    let planned_key = keys.key(&conflict.rel);
+    let mut matching = report
+        .baseline
+        .iter()
+        .filter(|(rel, _)| keys.key(rel).as_ref() == planned_key.as_ref());
     let recorded = report.confirmed_a
         && report.confirmed_b
-        && report.baseline.get(keys.key(&conflict.rel).as_ref()) == Some(&(report.a, report.b));
+        && matching.next().map(|(_, entry)| entry) == Some(&(report.a, report.b))
+        && matching.next().is_none();
     if !recorded {
         ctx.set_failure_result(report_json(&report, false));
         return Err(ApiError::new(
