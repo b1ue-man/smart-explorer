@@ -29,5 +29,19 @@ migrationsbedürftig. Microsoft empfiehlt für Datei-/Verzeichnisobjekte
 [SetKernelObjectSecurity](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-setkernelobjectsecurity)
 wird nicht verwendet. Bestehende NoFollow-/Owner-/Hardlink-Prüfungen bleiben.
 
+Der erste Remote-Lauf bestätigte zusätzlich einen Fehler der 0.5.170-
+Ownerprüfung: gewöhnlich erstellte Windows-Objekte können dem Standardbesitzer
+des effektiven Tokens gehören, der bei administrativen Tokens eine Gruppe ist.
+[TOKEN_OWNER](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-token_owner)
+und [Owner of a New Object](https://learn.microsoft.com/en-us/windows/win32/secauthz/owner-of-a-new-object)
+beschreiben diese vom System gültig bestimmte Benutzer-/Gruppen-SID.
+[GetTokenInformation](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-gettokeninformation)
+liest `TokenUser` und `TokenOwner` mit `TOKEN_QUERY` am selben effektiven Token.
+Der Fix akzeptiert genau diese beiden Owner-SIDs. DACL-Zugriff erhält weiterhin
+nur `TokenUser`; Owner-/SACL-Änderungen, Takeover und beliebige Gruppenmitgliedschaft
+sind kein Teil des Pfads. Die vorhandene Hardlink-Grenze bleibt vor der Mutation.
+Windows-Suite prüft den unveränderten tatsächlichen Owner und lehnt World-SID
+und Null-SID ab. API-/Binding-Lücken erneut am 2026-10-04 geprüft.
+
 Die API-Aussagen sind Quellenbelege; Laufzeitbeweis erfolgt ausschließlich durch
 die fokussierte Remote-Windows-Suite mit echten vorhandenen Dateien und DACLs.
