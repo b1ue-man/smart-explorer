@@ -197,8 +197,7 @@ fn backup_failure_blocks_overwrite_and_delete() {
     assert_eq!(report.stats.a_to_b, 0);
     assert_eq!(report.stats.deleted, 0);
     assert_eq!(
-        report.stats.errors,
-        2,
+        report.stats.errors, 2,
         "errors={errs:?}, completed={:?}",
         report.completed
     );

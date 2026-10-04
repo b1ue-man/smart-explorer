@@ -25,4 +25,3 @@ pub(super) fn assert_query(request: &Request, parent: &str, name: &str) {
         request
     );
 }
-

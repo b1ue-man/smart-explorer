@@ -112,11 +112,11 @@ mod transfer_engine_task_tests;
 pub use state::GDriveBackend;
 
 #[cfg(test)]
-#[path = "core/gui_task_http.rs"]
-pub(crate) mod gui_task_http;
-#[cfg(test)]
 #[path = "core/gui_task_fixture.rs"]
 mod gui_task_fixture;
+#[cfg(test)]
+#[path = "core/gui_task_http.rs"]
+pub(crate) mod gui_task_http;
 #[cfg(test)]
 #[path = "core/gui_task_tests.rs"]
 mod gui_task_tests;

@@ -191,7 +191,10 @@ fn sync_paths_task_split_same_paths_on_different_remotes_and_uncached_metadata()
     app.sync_split_panes();
     assert!(app.bisync_running, "{:?}", app.error_msg);
     finish(&mut app);
-    let context = app.bisync_ctx.as_ref().expect("finished split sync context");
+    let context = app
+        .bisync_ctx
+        .as_ref()
+        .expect("finished split sync context");
     assert!(
         context.state.is_some(),
         "split sync returned no engine state"

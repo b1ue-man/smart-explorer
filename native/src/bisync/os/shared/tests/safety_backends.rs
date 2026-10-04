@@ -142,7 +142,10 @@ impl Backend for WriteFail<'_> {
 
     fn open_write_new(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
         if path.contains(self.needle) {
-            Err(io::Error::new(io::ErrorKind::PermissionDenied, "write blocked"))
+            Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "write blocked",
+            ))
         } else {
             self.inner.open_write_new(path)
         }
