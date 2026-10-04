@@ -113,7 +113,16 @@ pub(super) fn scan_listing(
             ));
         }
         let rel = literal_child(dir_rel, &m.name);
-        let p = crate::vfs::sync_child_path(ctx.be, dir, &m.name)?;
+        let p = match crate::vfs::sync_child_path(ctx.be, dir, &m.name) {
+            Ok(path) => path,
+            Err(error) => {
+                if let Some(kind) = super::apply_boundary::omitted(&error) {
+                    record_omission(ctx, &rel, kind, true);
+                    continue;
+                }
+                return Err(error);
+            }
+        };
         if ctx.nodes.fetch_add(1, Ordering::Relaxed) >= ctx.limits.walk_entries
             || ctx
                 .text_bytes

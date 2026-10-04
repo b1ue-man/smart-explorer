@@ -73,7 +73,7 @@ fn canceled_error() -> io::Error {
 
 fn list_plain_directory(ctx: &WalkContext<'_>, path: &str) -> io::Result<crate::vfs::VfsListing> {
     let be = ctx.be;
-    let metadata = be.stat(path)?;
+    let metadata = crate::vfs::sync_stat(be, path)?;
     if metadata.is_symlink || !metadata.is_dir || metadata.special {
         return Err(super::apply_boundary::protected(if metadata.is_symlink {
             super::OmissionKind::Link
@@ -88,12 +88,7 @@ fn list_plain_directory(ctx: &WalkContext<'_>, path: &str) -> io::Result<crate::
             return Err(super::apply_boundary::protected(kind));
         }
     }
-    if be.has_duplicate_file_names() && ctx.duplicates.is_some() {
-        be.list_dir_for_sync(path)
-            .map(crate::vfs::VfsListing::complete)
-    } else {
-        crate::vfs::list_dir_tolerant(be, path)
-    }
+    crate::vfs::list_dir_tolerant(be, path)
 }
 
 #[derive(Default)]

@@ -192,6 +192,8 @@ mod state_types;
 mod state_validation;
 #[path = "os/shared/sync_flows.rs"]
 pub(crate) mod sync_flows;
+#[path = "os/shared/sync_observation.rs"]
+mod sync_observation;
 #[path = "os/shared/sync_overload.rs"]
 pub(crate) mod sync_overload;
 #[path = "os/shared/transfer_stream.rs"]

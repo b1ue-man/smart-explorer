@@ -25,8 +25,7 @@ pub(super) fn changed() -> io::Error {
 }
 
 pub(super) fn metadata(backend: &dyn Backend, path: &str) -> io::Result<Vec<VfsMeta>> {
-    let name = path.rsplit('/').next().unwrap_or(path);
-    metadata_named(backend, path, name)
+    checked_metadata(super::sync_observation::at_path(backend, path)?)
 }
 
 pub(super) fn metadata_named(
@@ -34,20 +33,12 @@ pub(super) fn metadata_named(
     path: &str,
     literal_name: &str,
 ) -> io::Result<Vec<VfsMeta>> {
-    let parent = parent_of(path).unwrap_or_default();
-    backend.invalidate_cache();
-    match backend.stat(&parent) {
-        Ok(meta) if meta.is_dir && !meta.is_symlink && !meta.special => {}
-        Ok(_) => return Err(changed()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => return Err(error),
-    }
+    let parent = parent_of(path).ok_or_else(changed)?;
+    checked_metadata(super::sync_observation::named(backend, &parent, literal_name)?)
+}
+
+fn checked_metadata(mut entries: Vec<VfsMeta>) -> io::Result<Vec<VfsMeta>> {
     let mut ids = HashSet::new();
-    let mut entries: Vec<_> = backend
-        .list_dir_for_sync(&parent)?
-        .into_iter()
-        .filter(|meta| meta.name == literal_name)
-        .collect();
     for meta in &entries {
         if meta.is_dir
             || meta.is_symlink
@@ -63,7 +54,8 @@ pub(super) fn metadata_named(
 }
 
 fn same_metadata(a: &VfsMeta, b: &VfsMeta) -> bool {
-    a.id == b.id
+    a.name == b.name
+        && a.id == b.id
         && a.size == b.size
         && a.mtime_ms == b.mtime_ms
         && a.content_md5 == b.content_md5
@@ -78,13 +70,7 @@ pub(super) fn observe(
     expected: Option<&[VfsMeta]>,
     cancel: &AtomicBool,
 ) -> io::Result<Vec<FileVariant>> {
-    observe_named(
-        backend,
-        path,
-        path.rsplit('/').next().unwrap_or(path),
-        expected,
-        cancel,
-    )
+    observe_with(backend, path, None, expected, cancel)
 }
 
 pub(super) fn observe_named(
@@ -94,8 +80,22 @@ pub(super) fn observe_named(
     expected: Option<&[VfsMeta]>,
     cancel: &AtomicBool,
 ) -> io::Result<Vec<FileVariant>> {
+    observe_with(backend, path, Some(literal_name), expected, cancel)
+}
+
+fn observe_with(
+    backend: &dyn Backend,
+    path: &str,
+    literal_name: Option<&str>,
+    expected: Option<&[VfsMeta]>,
+    cancel: &AtomicBool,
+) -> io::Result<Vec<FileVariant>> {
     check_cancel(cancel)?;
-    let entries = metadata_named(backend, path, literal_name)?;
+    let current = || match literal_name {
+        Some(name) => metadata_named(backend, path, name),
+        None => metadata(backend, path),
+    };
+    let entries = current()?;
     if let Some(expected) = expected {
         if entries.len() != expected.len()
             || entries
@@ -132,7 +132,7 @@ pub(super) fn observe_named(
             content_md5,
         });
     }
-    let after = metadata_named(backend, path, literal_name)?;
+    let after = current()?;
     if after.len() != entries.len()
         || entries
             .iter()

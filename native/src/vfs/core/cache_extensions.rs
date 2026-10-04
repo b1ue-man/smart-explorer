@@ -8,7 +8,7 @@ use super::super::extension_calls as calls;
 use super::super::{
     BackendExtensions, ChangeNotice, ChangeSignalMode, ChangeSubscription, HashWalkItem,
     HashWalkRequest, RecycleExpectation, RecycleOutcome, StageFinish, StageFinished, TargetLimits,
-    VfsListing, VfsResult, VolumeIdentity,
+    VfsListing, VfsMeta, VfsResult, VolumeIdentity,
 };
 use super::CachingBackend;
 
@@ -19,6 +19,10 @@ impl BackendExtensions for CachingBackend {
 
     fn sync_child_path(&self, parent: &str, literal_name: &str) -> VfsResult<String> {
         calls::sync_child_path(&*self.inner, parent, literal_name)
+    }
+
+    fn sync_stat(&self, path: &str) -> VfsResult<VfsMeta> {
+        calls::sync_stat(&*self.inner, path)
     }
 
     fn replace_staged_reversible(

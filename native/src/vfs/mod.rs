@@ -85,7 +85,7 @@ pub use self::extension_calls::{
     change_signal, change_signal_mode, find_duplicates, finish_stage, hash_walk, list_dir_tolerant,
     mtime_precision, open_read_regular, open_write_copy_stage_timed, previous_state_identities,
     recycle, replace_staged_reversible, supports_duplicate_search, supports_hash_walk,
-    supports_recycle, sync_child_path, sync_filesystem, sync_path, target_limits, unix_mode,
+    supports_recycle, sync_child_path, sync_filesystem, sync_path, sync_stat, target_limits, unix_mode,
     volume_identity,
 };
 pub use self::extension_types::{

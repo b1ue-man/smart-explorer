@@ -1,6 +1,6 @@
 # Sync-Verlässlichkeit – detaillierter Umsetzungs- und Abnahmeplan
 
-Stand: 2026-10-04. Phase: finale Planung nach einmaliger Kritik; noch keine Umsetzung.
+Stand: 2026-10-04. Phase: Umsetzung nach einmaliger Kritik; Remote-Abnahme ausstehend.
 Ziel ist die komplette Spec F1–F7, nicht allein das Entfernen einer Meldung.
 
 ## Meilensteine
@@ -158,7 +158,9 @@ nimmt vor Code den vollständigen Plan auseinander; keine weitere Reviewrunde.
 | Stufe 1 / erste Recherche | fertig | `recherche.md`, gesicherte Refs |
 | Stufe 2 / zweite Recherche | fertig, Lücken eingearbeitet | dieser Plan und `abnahme.md` |
 | Einmalige Plan-Kritik | abgeschlossen, alle Befunde eingearbeitet | `review.md` |
-| M1–M4 | offen | noch kein Code |
+| M1/M2 | Umsetzung und Self-Review laufen | Drive-Provider; noch keine Laufzeitabnahme |
+| M3 | Code und eigener Self-Review fertig | additive Sync-Stat-Grenze, tolerante Beobachtung, Literalpfad-Resolve und erhaltenes Bootstrapgate; Remote-Abnahme ausstehend |
+| M4 | Umsetzung und Self-Review laufen | bestehende Job-/Workergrenzen; noch keine Laufzeitabnahme |
 | M5 Remote-Gesamtablauf | offen | keine lokale Ausführung |
 | M6 Release | offen | erst nach M5 |
 

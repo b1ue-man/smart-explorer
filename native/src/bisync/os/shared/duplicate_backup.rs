@@ -15,6 +15,8 @@ pub(super) fn save(
     cancel: &AtomicBool,
     throttle: &super::types::Throttle,
 ) -> io::Result<()> {
+    super::duplicate_observation::check_cancel(cancel)?;
+    let source = capture_variant(backend, path, rel, variant)?;
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_secs())
@@ -43,13 +45,10 @@ pub(super) fn save(
                 )?,
                 variant,
             )?;
+            super::apply_guard::revalidate(backend, path, &source, "backup variant")?;
             file.flush()?;
             file.sync_all()?;
-            let text = target
-                .to_str()
-                .ok_or_else(|| io::Error::other("backup path is not Unicode"))?;
-            let local = crate::vfs::LocalBackend::new(text);
-            super::apply_stage::require_durable(super::apply_stage::namespace(&local, text)?)
+            super::apply_stage::require_durable(super::apply_stage::native_namespace(&target)?)
         })();
         drop(file);
         if let Err(error) = saved {
@@ -72,25 +71,8 @@ pub(super) fn save_scoped(
     variant: &FileVariant,
     cancel: &AtomicBool,
 ) -> io::Result<()> {
-    let parent =
-        super::paths::parent_of(path).ok_or_else(|| io::Error::other("variant has no parent"))?;
-    let name = rel.rsplit('/').next().unwrap_or(rel);
-    let meta = side
-        .backend
-        .list_dir_for_sync(&parent)?
-        .into_iter()
-        .find(|meta| meta.name == name && meta.id == variant.id)
-        .ok_or_else(super::duplicate_observation::changed)?;
-    if meta.is_dir || meta.is_symlink || meta.special {
-        return Err(super::apply_boundary::protected(if meta.is_symlink {
-            super::OmissionKind::Link
-        } else {
-            super::OmissionKind::Special
-        }));
-    }
-    let captured = super::apply_guard::CapturedFile {
-        metadata: Some(meta),
-    };
+    super::duplicate_observation::check_cancel(cancel)?;
+    let captured = capture_variant(side.backend, path, rel, variant)?;
     let mut context = versions.context().clone();
     // Captured IDs cannot be addressed by rename(path) on a duplicate
     // provider. Keep each exact variant in the private fallback store.
@@ -109,4 +91,30 @@ pub(super) fn save_scoped(
         cancel,
     )?;
     Ok(())
+}
+
+fn capture_variant(
+    backend: &dyn Backend,
+    path: &str,
+    rel: &str,
+    variant: &FileVariant,
+) -> io::Result<super::apply_guard::CapturedFile> {
+    let name = rel.rsplit('/').next().unwrap_or(rel);
+    let metadata = super::duplicate_observation::metadata_named(backend, path, name)?
+        .into_iter()
+        .find(|meta| meta.id == variant.id)
+        .ok_or_else(super::duplicate_observation::changed)?;
+    if metadata.size != variant.signature.size
+        || metadata.mtime_ms != variant.signature.mtime_ms
+        || metadata.content_md5.as_ref().is_some_and(|hash| {
+            hash.len() == 32
+                && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+                && !hash.eq_ignore_ascii_case(&variant.content_md5)
+        })
+    {
+        return Err(super::duplicate_observation::changed());
+    }
+    Ok(super::apply_guard::CapturedFile {
+        metadata: Some(metadata),
+    })
 }

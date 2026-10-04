@@ -40,8 +40,17 @@ pub(super) fn observe(
             unique.extend(group);
             continue;
         }
-        let path = crate::vfs::sync_child_path(ctx.be, dir, &name)?;
         let rel = super::snapshot_dir::literal_child(dir_rel, &name);
+        let path = match crate::vfs::sync_child_path(ctx.be, dir, &name) {
+            Ok(path) => path,
+            Err(error) => {
+                if let Some(kind) = super::apply_boundary::omitted(&error) {
+                    super::snapshot_dir::record_omission(ctx, &rel, kind, true);
+                    continue;
+                }
+                return Err(error);
+            }
+        };
         let mut ids = HashSet::new();
         for entry in &group {
             if ctx.cancel.load(Ordering::Relaxed) {

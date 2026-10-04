@@ -10,7 +10,7 @@ use super::extension_types::{
     MtimePrecision, RecycleExpectation, RecycleOutcome, StageFinish, StageFinished, TargetLimits,
     VfsListing,
 };
-use super::{Backend, VfsResult, VolumeIdentity};
+use super::{Backend, VfsMeta, VfsResult, VolumeIdentity};
 
 pub(super) fn default_sync_child_path(parent: &str, literal_name: &str) -> VfsResult<String> {
     if literal_name.is_empty()
@@ -55,6 +55,14 @@ pub fn sync_child_path<B: Backend + ?Sized>(
     match backend.extensions() {
         Some(extensions) => extensions.sync_child_path(parent, literal_name),
         None => default_sync_child_path(parent, literal_name),
+    }
+}
+
+/// Metadata in the sync naming boundary; ordinary stat is the fallback.
+pub fn sync_stat<B: Backend + ?Sized>(backend: &B, path: &str) -> VfsResult<VfsMeta> {
+    match backend.extensions() {
+        Some(extensions) => extensions.sync_stat(path),
+        None => backend.stat(path),
     }
 }
 
@@ -108,6 +116,9 @@ pub fn replace_staged_reversible<B: Backend + ?Sized>(
 pub fn list_dir_tolerant<B: Backend + ?Sized>(backend: &B, path: &str) -> VfsResult<VfsListing> {
     match backend.extensions() {
         Some(extensions) => extensions.list_dir_tolerant(path),
+        None if backend.has_duplicate_file_names() => {
+            backend.list_dir_for_sync(path).map(VfsListing::complete)
+        }
         None => backend.list_dir(path).map(VfsListing::complete),
     }
 }

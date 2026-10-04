@@ -9,7 +9,7 @@ use super::ipc_client::UnavailableBackend;
 use crate::vfs::{
     self as vfs, BackendExtensions, ChangeNotice, ChangeSignalMode, ChangeSubscription,
     HashWalkItem, HashWalkRequest, RecycleExpectation, RecycleOutcome, StageFinish, StageFinished,
-    TargetLimits, VfsListing, VfsResult, VolumeIdentity,
+    TargetLimits, VfsListing, VfsMeta, VfsResult, VolumeIdentity,
 };
 
 impl BackendExtensions for UnavailableBackend {
@@ -19,6 +19,10 @@ impl BackendExtensions for UnavailableBackend {
 
     fn sync_child_path(&self, parent: &str, literal_name: &str) -> VfsResult<String> {
         vfs::sync_child_path(&*self.live_backend()?, parent, literal_name)
+    }
+
+    fn sync_stat(&self, path: &str) -> VfsResult<VfsMeta> {
+        vfs::sync_stat(&*self.live_backend()?, path)
     }
 
     fn replace_staged_reversible(

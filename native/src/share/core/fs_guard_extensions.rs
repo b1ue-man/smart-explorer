@@ -25,6 +25,12 @@ impl BackendExtensions for GuardedBackend {
         self.read(&child)?;
         Ok(child)
     }
+    fn sync_stat(&self, path: &str) -> VfsResult<vfs::VfsMeta> {
+        self.read(path)?;
+        let metadata = vfs::sync_stat(&*self.inner, path)?;
+        self.read(path)?;
+        Ok(metadata)
+    }
     fn replace_staged_reversible(
         &self,
         staged: &str,

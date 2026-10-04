@@ -30,7 +30,7 @@ pub(crate) fn guard(
     if !rel.is_empty() {
         crate::agent_proto::ValidatedRelativePath::parse(rel)?;
     }
-    let meta = backend.stat(root)?;
+    let meta = crate::vfs::sync_stat(backend, root)?;
     if meta.is_symlink {
         return Err(protected(OmissionKind::Link));
     }
@@ -53,7 +53,7 @@ pub(crate) fn guard(
             return Err(protected(OmissionKind::OwnFile));
         }
         path = crate::vfs::sync_child_path(backend, &path, name)?;
-        match backend.stat(&path) {
+        match crate::vfs::sync_stat(backend, &path) {
             Ok(meta) => {
                 if let Some(kind) =
                     super::snapshot_policy::protected(backend, root, &path, &meta, cross_mounts)?
@@ -108,7 +108,7 @@ pub(crate) fn normalized_missing(
     let parts: Vec<_> = rel.split('/').collect();
     for (index, wanted) in parts.iter().enumerate() {
         super::transfer_stream::check(cancel)?;
-        let parent = backend.stat(&path)?;
+        let parent = crate::vfs::sync_stat(backend, &path)?;
         if !parent.is_dir || parent.is_symlink || parent.special {
             return Err(protected(OmissionKind::Unreadable));
         }
