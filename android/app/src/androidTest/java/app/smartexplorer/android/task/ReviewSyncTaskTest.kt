@@ -144,7 +144,11 @@ class ReviewSyncTaskTest {
     fun sharedStorageRevokeStopsOnlySharedJobs() = coreTest {
         isolated("storage") { case ->
             val a = case.dir("a"); val b = case.dir("b")
-            val privateRoot = File(Api.obj("sys.info").text("cacheDir"), case.root.name)
+            // Appprivate user data is allowed; the whole cache and filesDir/smart_explorer
+            // remain protected own data. InitConfig passes these exact Context directories.
+            val privateRoot = File(appContext.filesDir, "review-sync-${case.root.name}")
+            val protectedCache = File(Api.obj("sys.info").text("cacheDir")).canonicalPath + File.separator
+            assertFalse("Private fixture lies in protected cache", privateRoot.canonicalPath.startsWith(protectedCache))
             assertTrue(privateRoot.mkdirs()); case.directories.add(privateRoot)
             val privateA = File(privateRoot, "a").apply { assertTrue(mkdirs()) }
             val privateB = File(privateRoot, "b").apply { assertTrue(mkdirs()) }
@@ -228,7 +232,9 @@ class ReviewSyncTaskTest {
             val failed = case.await(failedTask)
             assertEquals("$failed", "failed", failed.state)
             val partial = failed.resultObj()
-            assertTrue(partial.bool("partial")); assertTrue(partial.bool("confirmedA"))
+            TaskReport.note("review-merge-publication", "task=$failed result=$partial")
+            assertTrue("Missing partial publication: task=$failed result=$partial", partial.bool("partial"))
+            assertTrue("First merge side not confirmed: task=$failed result=$partial", partial.bool("confirmedA"))
             assertFalse(partial.bool("confirmedB")); assertFalse(partial.bool("baselineRecorded"))
             assertTrue(partial.bool("reload")); assertTrue(partial.bool("retry"))
             assertEquals(1, server.rejectedPublishes)
