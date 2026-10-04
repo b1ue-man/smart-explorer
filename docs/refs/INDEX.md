@@ -2,6 +2,10 @@
 
 Lokal gesicherte API-/Lib-Syntax (Abrufdatum im Kopf jeder Datei).
 
+- [Drive-Namenssuche und Identität](drive-name-identity-2026-10-04.md): Drive API v3,
+  clientseitiger Literalvergleich, Pagination, unterschiedliche IDs und Root-Alias;
+  Primärquellen geprüft 2026-10-04.
+
 - [Cryptomator-Vault-APIs](cryptomator-vault-api-2026-10-04.md): CryptoFS 2.10.0,
   CryptoLib 2.2.2 und CLI 0.6.2; Release-Signaturen, Schlüsseldateien,
   Schreibgarantien und Prozesslebenszyklus; geprüft 2026-10-04.
