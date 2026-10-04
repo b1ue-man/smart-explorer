@@ -1,0 +1,23 @@
+{
+  "read_rule": "Only the listed exact files, own scope and own created files. No folder listings or scope expansion; ask Root for missing exact definitions.",
+  "forbidden": "No broad/new project review, build/compiler/test/formatter/server/install/Git/CI/graph/release/child agents. Preserve existing assertions; no masking failures.",
+  "deliverable": "Fresh own plan and referenced API reading before edits; close only assigned fourth-run evidence; own static self-review. Report files read, modified, created, key changes, decisions, preserved compatibility, exact unresolved dependencies; then stop.",
+  "acceptance": "The same single Root-owned complete remote RV1 suite only. No independent tests or local workload.",
+  "owner": "s-revoke",
+  "read_files": [
+    "docs/superpowers/plans/2026-10-02-review-analyse-sync-sicherheit/ci-fourth-fixes.md",
+    "native/test-share-mixed-version-e2e.sh",
+    "docs/refs/share-server-tls-auth.md",
+    "docs/refs/rv1-remote-suite.md",
+    "/tmp/rv1-ci-fourth/linux/mixed-version.log"
+  ],
+  "modify_files": [
+    "native/test-share-mixed-version-e2e.sh"
+  ],
+  "create_files": [
+    "docs/superpowers/plans/2026-10-02-review-analyse-sync-sicherheit/abnahme/CI-4-S-REVOKE.md"
+  ],
+  "connected_surface_reason": "Only additional admitted-legacy observation in the same existing stage; product protocol, admission and capability sources are forbidden.",
+  "read_diagnostics_directory": "/tmp/rv1-ci-fourth/linux",
+  "diagnostics_rule": "Only owned mixed-version subdirectory daemon logs and CLI operation/lifecycle artifacts. No token, credential, private identity/profile or lock-secret reads; discover exact subdirectory from existing mixed-version log."
+}
