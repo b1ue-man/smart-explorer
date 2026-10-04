@@ -54,8 +54,8 @@ pub struct ClientConfig {
 }
 
 pub use super::os::shared::{
-    disconnect, is_connected, load_config, refresh_token, refresh_token_checked, save_config,
-    store_refresh_token,
+    disconnect, is_connected, load_config, load_config_checked, refresh_token, refresh_token_checked,
+    save_config, store_refresh_token,
 };
 
 // ── PKCE ─────────────────────────────────────────────────────────────────────
@@ -263,7 +263,7 @@ fn post_token_with_timeout(
 /// loopback redirect, exchanges the code). Blocking — call off the UI thread.
 /// On success the refresh token is stored in the keyring.
 pub fn authorize(p: Provider) -> Result<Tokens, String> {
-    let cfg = load_config(p);
+    let cfg = load_config_checked(p).map_err(|error| error.to_string())?;
     if cfg.client_id.trim().is_empty() {
         return Err("Kein OAuth Client-ID konfiguriert".into());
     }
@@ -317,12 +317,19 @@ pub fn authorize(p: Provider) -> Result<Tokens, String> {
 
 /// Exchange the stored refresh token for a fresh access token. Blocking.
 pub fn refresh_access(p: Provider) -> Result<Tokens, String> {
-    let cfg = load_config(p);
+    refresh_access_from(p, p.token_url())
+}
+
+fn refresh_access_from(p: Provider, token_url: &str) -> Result<Tokens, String> {
+    let cfg = load_config_checked(p).map_err(|error| error.to_string())?;
+    if cfg.client_id.trim().is_empty() {
+        return Err("Gespeicherte OAuth-Konfiguration enthält keine Client-ID".into());
+    }
     let refresh = refresh_token_checked(p)?
         .filter(|token| !token.is_empty())
         .ok_or_else(|| "Nicht verbunden".to_string())?;
     let tokens = post_token(
-        p.token_url(),
+        token_url,
         &[
             ("grant_type", "refresh_token"),
             ("refresh_token", &refresh),

@@ -15,13 +15,14 @@ use windows_sys::Win32::{
         HANDLE, INVALID_HANDLE_VALUE,
     },
     Security::{
-        AddAccessAllowedAce,
+        AddAccessAllowedAceEx,
         Authorization::{SetSecurityInfo, SE_FILE_OBJECT},
         EqualSid, GetAce, GetKernelObjectSecurity, GetLengthSid, GetSecurityDescriptorControl,
         GetSecurityDescriptorDacl, GetSecurityDescriptorOwner, GetTokenInformation, InitializeAcl,
         InitializeSecurityDescriptor, SetSecurityDescriptorControl, SetSecurityDescriptorDacl,
         SetSecurityDescriptorOwner, TokenUser, ACCESS_ALLOWED_ACE, ACL, DACL_SECURITY_INFORMATION,
-        OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSID, SECURITY_ATTRIBUTES,
+        CONTAINER_INHERIT_ACE, OBJECT_INHERIT_ACE, OWNER_SECURITY_INFORMATION,
+        PROTECTED_DACL_SECURITY_INFORMATION, PSID, SECURITY_ATTRIBUTES,
         SECURITY_DESCRIPTOR, SE_DACL_PROTECTED, TOKEN_QUERY, TOKEN_USER,
     },
     Storage::FileSystem::{
@@ -54,7 +55,7 @@ struct PrivateSecurity {
 }
 
 impl PrivateSecurity {
-    fn new() -> io::Result<Self> {
+    fn new(is_directory: bool) -> io::Result<Self> {
         let user = token_user()?;
         // SAFETY: token_user returned a complete, aligned TOKEN_USER buffer.
         let sid = unsafe { (*(user.as_ptr().cast::<TOKEN_USER>())).User.Sid };
@@ -68,9 +69,10 @@ impl PrivateSecurity {
         let pointer = (&mut descriptor as *mut SECURITY_DESCRIPTOR).cast();
         unsafe {
             win(InitializeAcl(acl_pointer, acl_bytes as u32, ACL_REVISION))?;
-            win(AddAccessAllowedAce(
+            win(AddAccessAllowedAceEx(
                 acl_pointer,
                 ACL_REVISION,
+                inheritance_flags(is_directory),
                 FILE_ALL_ACCESS,
                 sid,
             ))?;
@@ -108,7 +110,7 @@ impl PrivateSecurity {
 }
 
 pub(super) fn create_directory(path: &Path) -> io::Result<File> {
-    let mut security = PrivateSecurity::new()?;
+    let mut security = PrivateSecurity::new(true)?;
     let name: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
     let attributes = security.attributes();
     // SAFETY: both NUL-terminated path and absolute descriptor remain live.
@@ -119,12 +121,12 @@ pub(super) fn create_directory(path: &Path) -> io::Result<File> {
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
         .open(path)?;
     validate_object(&file, true)?;
-    verify_private(&file, security.sid())?;
+    verify_private(&file, security.sid(), true)?;
     Ok(file)
 }
 
 pub(super) fn create_file(path: &Path) -> io::Result<File> {
-    let mut security = PrivateSecurity::new()?;
+    let mut security = PrivateSecurity::new(false)?;
     let name: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
     let attributes = security.attributes();
     // SAFETY: path, attributes and descriptor are live; CREATE_NEW is
@@ -147,15 +149,15 @@ pub(super) fn create_file(path: &Path) -> io::Result<File> {
     let file = unsafe { File::from_raw_handle(handle) };
     super::super::super::regular::validate_file(&file, true)?;
     validate_object(&file, false)?;
-    verify_private(&file, security.sid())?;
+    verify_private(&file, security.sid(), false)?;
     Ok(file)
 }
 
-/// Validate ownership and kind before tightening only this opened object.
+/// Validate ownership and kind before installing the owner-only DACL.
 /// No owner takeover, named-path ACL mutation or privilege activation.
 pub(crate) fn secure_private_handle(file: &File, is_directory: bool) -> io::Result<()> {
     validate_object(file, is_directory)?;
-    let mut security = PrivateSecurity::new()?;
+    let mut security = PrivateSecurity::new(is_directory)?;
     let mut owned = descriptor(file, OWNER_SECURITY_INFORMATION)?;
     let mut owner = std::ptr::null_mut();
     let mut defaulted = 0;
@@ -168,14 +170,17 @@ pub(crate) fn secure_private_handle(file: &File, is_directory: bool) -> io::Resu
             "private object has a foreign owner",
         ));
     }
-    match verify_private(file, security.sid()) {
+    match verify_private(file, security.sid(), is_directory) {
         Ok(()) => return validate_object(file, is_directory),
         Err(error)
             if error.kind() == io::ErrorKind::PermissionDenied
                 && error.raw_os_error().is_none() => {}
         Err(error) => return Err(error),
     }
-    // This non-inheritable owner ACE introduces no grants to descendants.
+    // Directory children must inherit this owner's access: removing the old
+    // inheritable ACEs otherwise empties existing child DACLs and denies the
+    // owner's ordinary config, job and control-file I/O. Private file ACEs do
+    // not inherit. Protected child directories are upgraded on their own open.
     // SetSecurityInfo is the documented handle API for filesystem objects;
     // only the DACL changes, never the owner or a SACL.
     let error = unsafe {
@@ -192,7 +197,7 @@ pub(crate) fn secure_private_handle(file: &File, is_directory: bool) -> io::Resu
     if error != 0 {
         return Err(io::Error::from_raw_os_error(error as i32));
     }
-    verify_private(file, security.sid())?;
+    verify_private(file, security.sid(), is_directory)?;
     validate_object(file, is_directory)
 }
 
@@ -297,7 +302,15 @@ fn descriptor(file: &File, information: u32) -> io::Result<Vec<u64>> {
     Ok(buffer)
 }
 
-fn verify_private(file: &File, expected_owner: PSID) -> io::Result<()> {
+fn inheritance_flags(is_directory: bool) -> u32 {
+    if is_directory {
+        OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE
+    } else {
+        0
+    }
+}
+
+fn verify_private(file: &File, expected_owner: PSID, is_directory: bool) -> io::Result<()> {
     let mut buffer = descriptor(file, DACL_SECURITY_INFORMATION | OWNER_SECURITY_INFORMATION)?;
     let descriptor = buffer.as_mut_ptr().cast();
     let mut owner = std::ptr::null_mut();
@@ -337,7 +350,7 @@ fn verify_private(file: &File, expected_owner: PSID) -> io::Result<()> {
         win(GetAce(acl, 0, &mut ace))?;
         let ace = ace.cast::<ACCESS_ALLOWED_ACE>();
         if (*ace).Header.AceType != 0
-            || (*ace).Header.AceFlags != 0
+            || (*ace).Header.AceFlags != inheritance_flags(is_directory) as u8
             || (*ace).Mask != FILE_ALL_ACCESS
             || EqualSid(
                 std::ptr::addr_of_mut!((*ace).SidStart).cast(),
