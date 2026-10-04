@@ -4245,9 +4245,9 @@
     "semantic_hash": "273cbbb1cdb96d1dc93b15d1d41f3645"
   },
   "local_access/os/windows/private_security.rs": {
-    "mtime": 1791132960.8659582,
-    "ast_hash": "d9fda83b1af790f1d52931885c8431f6",
-    "semantic_hash": "d9fda83b1af790f1d52931885c8431f6"
+    "mtime": 1791134778.0518942,
+    "ast_hash": "aa2387ec3be3a77bcc6bfcf9d0cf630c",
+    "semantic_hash": "aa2387ec3be3a77bcc6bfcf9d0cf630c"
   },
   "local_access/os/windows/privilege.rs": {
     "mtime": 1789852347.0682073,
@@ -4275,9 +4275,9 @@
     "semantic_hash": "12da5a425809092dc9872bed44eddb0f"
   },
   "local_access/os/windows/startup_regression_task_tests.rs": {
-    "mtime": 1791132960.8669581,
-    "ast_hash": "05fc94c2ced6421f88beecf357c332f6",
-    "semantic_hash": "05fc94c2ced6421f88beecf357c332f6"
+    "mtime": 1791134888.5992885,
+    "ast_hash": "fab609cbc39a154494a55d92125905a3",
+    "semantic_hash": "fab609cbc39a154494a55d92125905a3"
   },
   "local_access/os/windows/sync_link_task_tests.rs": {
     "mtime": 1790159257.349769,
