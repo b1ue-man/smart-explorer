@@ -95,14 +95,10 @@ impl GDriveBackend {
         // The account lookup already opens the pooled socket later calls use.
         let drive_account_key = load_drive_account_key(&http.api(), &tokens.access_token)?;
         let cache_path = super::binding_store::account_cache_path(&drive_account_key);
-        let (loaded, legacy) = match super::cache::load_from_path(&cache_path) {
-            Ok(loaded) => (loaded, false),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => (super::cache::load(), true),
-            // This is only a hint cache. Durable folder records have their
-            // own checked format and must never fall back to empty state.
-            Err(_) => (super::cache::LoadedCache::default(), false),
-        };
-        let captured_legacy_hints = if legacy { loaded.ids.clone() } else { HashMap::new() };
+        // Both files are merely hints. The immutable registry has its own
+        // checked format and never falls back to empty state on read failure.
+        let caches = super::cache::load_account(&cache_path, &super::cache::cache_path());
+        let loaded = caches.hints;
         let mut ids = loaded.ids;
         ids.insert(String::new(), "root".to_string());
         let untrusted_ids = super::cache::loaded_untrusted(&ids);
@@ -110,7 +106,7 @@ impl GDriveBackend {
             tokens,
             ids,
             untrusted_ids,
-            captured_legacy_hints,
+            captured_legacy_hints: caches.historical_ids,
             mimes: loaded.mimes,
             drive_account_key,
             pending_folder_dir: Some(super::folder_create_journal::record_dir()),
@@ -260,6 +256,21 @@ impl GDriveBackend {
         self.remember_path(key, id, Some(super::api::FOLDER_MIME)).unwrap();
         self.untrusted_guard().unwrap().insert(key.to_string());
         self.captured_legacy_hints.lock().unwrap().insert(key.to_string(), id.to_string());
+    }
+
+    #[cfg(test)]
+    pub(super) fn test_with_loaded_caches(
+        mut self, account_path: PathBuf, legacy_path: &std::path::Path,
+    ) -> Self {
+        let caches = super::cache::load_account(&account_path, legacy_path);
+        *self.ids_guard().unwrap() = caches.hints.ids;
+        self.ids_guard().unwrap().insert(String::new(), "root".to_string());
+        *self.untrusted_guard().unwrap() = super::cache::loaded_untrusted(&self.ids_guard().unwrap());
+        *self.mimes_guard().unwrap() = caches.hints.mimes;
+        *self.captured_legacy_hints.lock().unwrap() = caches.historical_ids;
+        self.cache_store = Arc::new(CacheStore::new(Some(account_path),
+            Arc::clone(&self.ids), Arc::clone(&self.mimes)));
+        self
     }
 
     pub(super) fn mimes_guard(&self) -> io::Result<MutexGuard<'_, HashMap<String, String>>> {

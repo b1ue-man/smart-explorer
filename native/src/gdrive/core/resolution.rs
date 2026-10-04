@@ -81,7 +81,8 @@ impl GDriveBackend {
         if let Some(bound) = self.resolve_folder_path(&parent, segment, key)? {
             return Ok(Some(bound));
         }
-        let folder_hint = self.mimes_guard()?.get(key).is_some_and(|mime| mime == FOLDER_MIME);
+        let folder_hint = self.mimes_guard()?.get(key).is_some_and(|mime| mime == FOLDER_MIME)
+            || (self.root_hop(key, key) && self.captured_legacy_id(key)?.as_deref() == Some(id.as_str()));
         // A trusted legacy folder hint must become durable before use.
         if self.cached_id_is_trusted(key)? && !folder_hint { return Ok(Some(id)); }
         if self.validate_cached_id(key, &id, &parent, segment)? {
@@ -112,6 +113,14 @@ impl GDriveBackend {
         if !in_parent(&json, parent)? || text(&json, "name")? != title { return Ok(false); }
         let mime = text(&json, "mimeType")?;
         if mime == FOLDER_MIME {
+            if self.root_hop(key, key) && super::duplicates::parse_marker(segment).is_none()
+                && self.captured_legacy_id(key)?.as_deref() != Some(id)
+            {
+                let selected = self.child_object(parent, segment, true)?.ok_or_else(|| not_found(key))?;
+                if text(&selected, "id")? != id {
+                    return Err(invalid("Drive root choice differs from its cached folder identity"));
+                }
+            }
             self.bind_folder_path(parent, &title, id, segment)?;
         }
         self.mimes_guard()?.insert(key.to_string(), mime.to_string());
