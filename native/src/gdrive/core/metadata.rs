@@ -119,7 +119,7 @@ impl GDriveBackend {
         if let Some(pending) = self.pending_folder_create(&key)? {
             return self.resume_pending_folder_create(&parent, &key, name, &parent_id, &pending);
         }
-        if let Some(id) = self.resolve_bound_folder(&parent_id, name)? {
+        if let Some(id) = self.resolve_folder_path(&parent_id, name, &key)? {
             return Ok(id);
         }
         // Re-check in the slot - another thread may have just created it.

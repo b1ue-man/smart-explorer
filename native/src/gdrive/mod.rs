@@ -83,6 +83,8 @@ mod sync_bindings;
 mod sync_listing;
 #[path = "core/sync_projection.rs"]
 mod sync_projection;
+#[path = "core/sync_projection_names.rs"]
+mod sync_projection_names;
 #[path = "core/transfer.rs"]
 mod transfer;
 #[path = "core/transfer_ops.rs"]

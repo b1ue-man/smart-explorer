@@ -53,6 +53,20 @@ Ziel ist die komplette Spec F1–F7, nicht allein das Entfernen einer Meldung.
   in Baselines/Versionen wörtlich und in Provider-Locators korrekt kodiert.
 - Abnahme: S2/S3/S4/S8. Abhängigkeit: M1.
 
+Aus der konkreten C03-Ablaufkonstruktion folgt eine zusätzliche Herkunftsgrenze:
+Eine kanonische Plain-Bindung aus der vollständigen Projektion eines mehrdeutigen
+Elternbaums belegt keine frühere Auswahl eines unbekannten alten Jobroots.
+Die dauerhafte Zuordnung muss diese Evidenz unterscheiden. Erwartet ist:
+mehrdeutiger Altroot bleibt nach einem anderen Parent-Sync geschützt; seine
+bisher validierte alte ID oder eine ausdrückliche exakte Pickerauswahl bleibt
+wirksam. Eindeutige Roots und vollständige unabhängige Childbäume bleiben
+automatisch synchronisierbar. Dieser zeitliche Cross-Job-Ablauf gehört zu C03
+und derselben M2-Implementierung, ohne zusätzlichen Jobcodec oder StateKey.
+Nur tatsächlich aus dem alten globalen Cache übernommene ID-Hints werden als
+Altevidenz erfasst und frisch geprüft. Ein von einer neuen Parent-Projektion
+geschriebener Accountcache erhält diese Herkunft auch nach Neustart nicht.
+Die Herkunftsgrenze gilt ebenso für den normalen `ensure_dir`-Writer.
+
 ### M3 Gemeinsame sichere Sync-Integration
 
 - F2–F6. Dateien: betroffene Consumer unter `bisync/os/shared/`, insbesondere
@@ -158,7 +172,7 @@ nimmt vor Code den vollständigen Plan auseinander; keine weitere Reviewrunde.
 | Stufe 1 / erste Recherche | fertig | `recherche.md`, gesicherte Refs |
 | Stufe 2 / zweite Recherche | fertig, Lücken eingearbeitet | dieser Plan und `abnahme.md` |
 | Einmalige Plan-Kritik | abgeschlossen, alle Befunde eingearbeitet | `review.md` |
-| M1/M2 | Code und eigener Self-Review fertig | vollständige Kandidatensammlung, reale Root-ID, private dauerhafte Folderbindung und stabile Projektion; Remote-Abnahme ausstehend |
+| M1/M2 | Code und eigener Self-Review fertig | vollständige Kandidatensammlung, reale Root-ID, private Folderbindung und stabile Projektion; Herkunftsbeweis getrennt von Parentprojektion und neuem Accountcache, auch am normalen Writer; Remote-Abnahme ausstehend |
 | M3 | Code und eigener Self-Review fertig | additive Sync-Stat-Grenze, tolerante Beobachtung, Literalpfad-Resolve und erhaltenes Bootstrapgate; Remote-Abnahme ausstehend |
 | M4 | Code und eigener Self-Review fertig | fehlende Edit-ID geschützt, wiederanlaufbare Ursachenklassifikation, Loader-Recovery über Workerwechsel; Remote-Abnahme ausstehend |
 | M5 Remote-Gesamtablauf | Suite wird nach abgeschlossener Produktumsetzung erstellt | keine lokale Ausführung; C10 benötigt noch die angefragte Drive-Testautorisierung |
