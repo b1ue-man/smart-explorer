@@ -100,7 +100,8 @@ impl PeerBackend {
             },
             deadline,
         )?;
-        self.mount_lease.accept_capabilities(response, acquire_lease)
+        self.mount_lease
+            .accept_capabilities(response, acquire_lease)
     }
 }
 
@@ -115,9 +116,7 @@ pub(super) fn is_legacy_direct(
     let PeerOpenTarget::Direct { contact_id } = target else {
         return Ok(false);
     };
-    let ShareScope::Direct {
-        contact_id: scoped,
-    } = &endpoint.scope else {
+    let ShareScope::Direct { contact_id: scoped } = &endpoint.scope else {
         return Ok(false);
     };
     let Some(contact) = state

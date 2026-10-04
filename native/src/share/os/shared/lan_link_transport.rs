@@ -251,7 +251,10 @@ impl LanLinkTransport {
             .filter(|channel| channel.control_epoch == self.control_epoch.load(Ordering::Acquire))
             .ok_or_else(|| eio("LAN-Link geschlossen"))?;
         if channel.revision != revision {
-            return Err(io::Error::new(io::ErrorKind::Interrupted, PathRevisionChanged));
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                PathRevisionChanged,
+            ));
         }
         state.cache.remove(&connection.stable_id());
         if let Some(peer_uplink) = uplink.known() {
