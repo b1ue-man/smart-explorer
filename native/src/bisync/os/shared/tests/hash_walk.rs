@@ -361,7 +361,10 @@ fn no_op_run_skips_rewalk() {
     assert_eq!(lists_a.load(Ordering::Relaxed), 1);
     assert_eq!(lists_b.load(Ordering::Relaxed), 1);
     let state = first.state.as_ref().expect("recorded first run state");
-    assert_eq!(load_baseline(&baseline_file(state).unwrap()).unwrap(), first.baseline);
+    assert_eq!(
+        load_baseline(&baseline_file(state).unwrap()).unwrap(),
+        first.baseline
+    );
     std::fs::remove_file(baseline_file(state).unwrap()).ok();
     std::fs::remove_dir_all(versions_dir(&state.pair_id)).ok();
     std::fs::remove_dir_all(a).ok();
