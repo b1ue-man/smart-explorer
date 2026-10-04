@@ -1,5 +1,6 @@
 package app.smartexplorer.android.task
 
+import android.net.Uri
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.smartexplorer.android.core.CoreException
 import app.smartexplorer.android.core.Entry
@@ -84,6 +85,18 @@ class ShareRoomTaskTest {
 
 /** Share helpers shared by both G5 phases. */
 object Share {
+    private fun canonicalServer(value: String): String {
+        val uri = Uri.parse(value)
+        require(uri.isHierarchical && !uri.encodedAuthority.isNullOrEmpty()) {
+            "Ungültiger Share-Server: $value"
+        }
+        return if (uri.encodedPath.isNullOrEmpty()) {
+            uri.buildUpon().encodedPath("/").build().toString()
+        } else {
+            uri.toString()
+        }
+    }
+
     suspend fun goOnline(server: String) {
         Api.obj("bg.ensureDaemon")
         Api.call("share.setServer", args("server" to server))
@@ -95,7 +108,7 @@ object Share {
             status.bool("running") && status.bool("connected")
         }
         val configured = Api.obj("share.status").text("server")
-        assertTrue("Share-Server $configured statt $server", configured.contains(server))
+        assertEquals("Share-Server $configured statt $server", canonicalServer(server), canonicalServer(configured))
     }
 
     suspend fun room(predicate: (JsonObject) -> Boolean): JsonObject? =
