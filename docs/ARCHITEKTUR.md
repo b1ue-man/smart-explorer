@@ -25,6 +25,7 @@ Speicheranalyse – als Desktop-App (Windows, Linux; Rust + egui) und als Androi
 | Explorer-Übergabe Remote (Windows) | virtuelle Dateien `native/src/virtual_clipboard/os/remote/` (STA-Thread, Liste bei erster Explorer-Anfrage, Vorausladen), Ziehen `native/src/dragout/os/remote.rs`, Auswahlquelle `transfer/os/shared/selection.rs` |
 | App-Übertragungen | Einfügen/Ablegen/Dialoge → Job `native/src/app/core/transfer_route.rs`, Fenster „⇅ Übertragungen“ `app/core/transfer_window.rs`/`transfer_center.rs`, Zwischenablage `app/core/transfer_clip.rs` |
 | Sync | Jobs `native/src/syncjobs/`, Zwei-Wege `native/src/bisync/`, Einweg-Spiegeln `native/src/sync/` |
+| Drive-Syncnamen und dauerhafte Ordneridentität | `gdrive/core/{listing,listing_query}.rs` sammeln vollständige Namenskandidaten; `identity.rs`, `sync_projection.rs` und `sync_bindings.rs` trennen Literalnamen, logische Schlüssel und IDs. `gdrive/os/shared/binding_store.rs` besitzt private, dateigesperrte atomare Account-/Parent-Records; `vfs::sync_stat` liefert die passende frische Sync-Metadatenansicht. |
 | Sync-Zustand, Wiederanlauf und Versionen | `bisync/core/run_types.rs` (`StateKey`, `RunSettings`), `bisync/os/shared/{apply_reporting,replacement_journal,versions}.rs`; inkrementelle Planung in `incremental.rs`, vollständige Indexpersistenz und Cache-Retirement in `incremental_index_commit.rs`; beide Seiten und Jobowner teilen dieselbe Engine-Grenze |
 | Desktop-Close/Update bei laufendem Sync | `app/os/shared/sync_exit_gate.rs`, `app/core/sync_run_state.rs`; tatsächliche Worker-Completion gibt Shutdown frei |
 | Hintergrund-Daemon | `native/src/daemon/` (`run_daemon`, eingebettet `ensure_embedded_daemon`, Nachhol-Lauf `request_catch_up`); `catch_up.rs` besitzt Abschluss/Cancel/Retry, `catch_up_attempt.rs` Zulassung und Fortschritt; `native/src/autostart/` |
@@ -96,6 +97,10 @@ Android-APIs: `docs/refs/android-apis.md`, `docs/refs/android-platform.md`; CI: 
 - Windows-Startregression 0.5.170: `startup-regression-task.yml` →
   `native/test-startup-regression-task.py`, reale bestehende DACLs und Worker-Handoff
   aus v0.5.169 mit den inkrementellen Development-Ausgaben derselben RV1-Caches.
+- Sync-Verlässlichkeit: `sync-reliability-task.yml` → `native/test-sync-reliability-task.py`
+  als einziger Remote-Einstieg für native Provider-/Job-/Wiederanlaufverträge und
+  echtes Android-Altappupdate. Plan und Ergebnisorakel: `docs/plaene/2026-10-04-sync-verlaesslichkeit/`.
+  Reale Google-Abnahme benötigt autorisierte Test-Secrets; fehlende Anmeldung ist kein Pass.
 - Android-Bibliothek: `cargo ndk -t arm64-v8a -t x86_64 --platform 30 -o android/app/src/main/jniLibs build -p smart_explorer_android`
   (im Verzeichnis `native/`), NDK aus `android/ndk-version`; Gradle braucht `-PrustlsVerifierMaven=<Pfad>`.
 - Release-APK: `android/build-release-apk.sh` (Job `android-release-apk` in `build.yml`), Signatur aus Repo-Secrets.

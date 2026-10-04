@@ -71,6 +71,9 @@ val releaseKeyPassword = providers.environmentVariable("ANDROID_KEY_PASSWORD").o
 val hasReleaseSigning = listOf(keystoreFile, keystorePassword, releaseKeyAlias, releaseKeyPassword)
     .all { !it.isNullOrBlank() }
 
+val syncReliabilitySigning = providers.gradleProperty("syncReliabilitySigning").orNull == "true"
+require(!syncReliabilitySigning || hasReleaseSigning) { "Sync reliability acceptance requires all release signing secrets" }
+
 // NDK pinned for the whole batch (android/ndk-version): AGP uses it for stripping debug symbols.
 val pinnedNdkVersion = providers.fileContents(rootProject.layout.projectDirectory.file("ndk-version"))
     .asText.orNull?.trim()?.takeIf { it.isNotEmpty() }
@@ -105,6 +108,9 @@ android {
     }
 
     buildTypes {
+        if (syncReliabilitySigning) {
+            getByName("debug") { signingConfig = signingConfigs.getByName("release") }
+        }
         release {
             // R8 stays off: JNI entry points and the rustls verifier component are only reached
             // from native code. proguard-rules.pro keeps them should minification be enabled.

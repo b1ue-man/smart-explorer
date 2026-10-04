@@ -63,3 +63,5 @@ Lokal gesicherte API-/Lib-Syntax (Abrufdatum im Kopf jeder Datei).
 - [Bestätigung veröffentlichter Verzeichniseinträge](post-publication-namespace.md): additive VFS-Grenze, gepinnter Linux-/Android-Parent-FD und begrenzte System-FUSE-Zulassung, bestehender Windows-Publishvertrag; Filecontents und Whole-filesystem-Flush bleiben getrennt. Primärquellen geprüft 2026-10-04.
 
 - [Windows Owner-Vererbung](windows-private-inheritance.md): automatische Reparatur vorhandener Kinder-DACLs nach 0.5.170, geschützte Owner-DACL mit Object-/Container-Inheritance; Win32-Verträge geprüft 2026-10-04.
+
+- [Sync-Provider-Fixtures](sync-provider-fixtures-2026-10-04.md): echte protokollübergreifende Gegenstellen, owned Docker-/Share-Prozesse, TLS-CA und Windows UNC/Mapping; Primärsyntax geprüft 2026-10-04.

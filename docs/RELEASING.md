@@ -234,6 +234,25 @@ binary must include its source SHA and SHA-256. See
 Its release follows the completed mount v0.5.152 transaction; never overlap two
 artifact-mutating release transactions.
 
+For the sync reliability batch, use only the exact-SHA dispatch
+`.github/workflows/sync-reliability-task.yml`. Its single checked-in entrypoint is
+`native/test-sync-reliability-task.py`, with native Linux/Windows, an incremental
+emulator bridge/APK build, the actual published Android update, and one combined
+evaluation. The native hosts reuse the validated RV1 development cache; they do
+not build installers, feeds or release artifacts. Each provider pair verifies
+actual seed/change/counterchange/no-op bytes through the saved location boundary.
+The old published `v0.5.169` worker first executes a normal stored job before the
+candidate takes over the same profile. Android development/test APKs select the
+existing release certificate only for this explicit task, retaining old app data.
+Live Google Drive uses `SE_DRIVE_TEST_CLIENT_ID`, `SE_DRIVE_TEST_CLIENT_SECRET`
+and `SE_DRIVE_TEST_REFRESH_TOKEN` from authorized Actions secrets; missing
+authorization fails the acceptance rather than skipping it. Native job/task
+timeouts are 360/340 minutes; Android build 240/220; device 180/160. Fixes repeat
+this same entrypoint. Only a successfully evaluated complete batch enters the
+existing `build.yml` complete-release transaction; the release procedure remains
+`native/publish-release-local.ps1`. See the
+[sync acceptance plan](plaene/2026-10-04-sync-verlaesslichkeit/abnahme.md).
+
 For the local/Share/cross-remote clipboard repair, use only
 `native/test-copy-paste-task.ps1` through the exact-SHA
 `.github/workflows/copy-paste-task.yml` Windows 2025 dispatch. It reuses a
