@@ -161,6 +161,16 @@ impl JobEditor {
         &self,
         existing: Option<&crate::syncjobs::SyncJob>,
     ) -> Result<crate::syncjobs::SyncJob, String> {
+        match (self.id.as_deref(), existing) {
+            (None, None) => {}
+            (Some(id), Some(job)) if id == job.id => {}
+            (Some(_), None) => {
+                return Err(
+                    "Das bestehende Setup konnte nicht geladen werden. Bitte neu laden; es wird kein neues Setup erzeugt.".into(),
+                );
+            }
+            _ => return Err("Das Setup hat sich geändert. Bitte neu laden.".into()),
+        }
         let source = self.source.as_str();
         let target = self.target.as_str();
         validate_endpoints(source, target)?;

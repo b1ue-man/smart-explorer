@@ -160,7 +160,7 @@ nimmt vor Code den vollständigen Plan auseinander; keine weitere Reviewrunde.
 | Einmalige Plan-Kritik | abgeschlossen, alle Befunde eingearbeitet | `review.md` |
 | M1/M2 | Umsetzung und Self-Review laufen | Drive-Provider; noch keine Laufzeitabnahme |
 | M3 | Code und eigener Self-Review fertig | additive Sync-Stat-Grenze, tolerante Beobachtung, Literalpfad-Resolve und erhaltenes Bootstrapgate; Remote-Abnahme ausstehend |
-| M4 | Umsetzung und Self-Review laufen | bestehende Job-/Workergrenzen; noch keine Laufzeitabnahme |
+| M4 | Code und eigener Self-Review fertig | fehlende Edit-ID geschützt, wiederanlaufbare Ursachenklassifikation, Loader-Recovery über Workerwechsel; Remote-Abnahme ausstehend |
 | M5 Remote-Gesamtablauf | offen | keine lokale Ausführung |
 | M6 Release | offen | erst nach M5 |
 
