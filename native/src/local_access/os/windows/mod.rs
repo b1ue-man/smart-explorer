@@ -2,6 +2,7 @@ mod broker;
 mod directory;
 mod directory_handle;
 mod directory_records;
+mod directory_rename;
 mod elevation;
 mod image_lock;
 mod paths;

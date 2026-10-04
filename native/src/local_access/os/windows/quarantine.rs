@@ -5,16 +5,14 @@ use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::hash::{BuildHasher, Hasher};
 use std::io;
-use std::mem::{offset_of, size_of};
-use std::os::windows::ffi::OsStrExt;
+use std::mem::size_of;
 use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::AsRawHandle;
 use std::path::PathBuf;
 
 use windows_sys::Win32::Storage::FileSystem::{
-    FileIdInfo, FileRenameInfo, GetFileInformationByHandleEx, SetFileInformationByHandle, DELETE,
-    FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_INFO, FILE_READ_ATTRIBUTES, FILE_RENAME_INFO,
-    FILE_SHARE_READ,
+    FileIdInfo, GetFileInformationByHandleEx, DELETE, FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_INFO,
+    FILE_READ_ATTRIBUTES, FILE_SHARE_READ,
 };
 
 use super::{validate_name, DirectoryHandle};
@@ -201,38 +199,7 @@ fn identity(file: &File) -> io::Result<(u64, [u8; 16])> {
 
 fn rename_no_replace(file: &File, target: &DirectoryHandle, name: &OsStr) -> io::Result<()> {
     validate_name(name)?;
-    let mut wide: Vec<u16> = name.encode_wide().collect();
-    let name_bytes = wide
-        .len()
-        .checked_mul(size_of::<u16>())
-        .and_then(|length| u32::try_from(length).ok())
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "rename target too long"))?;
-    wide.push(0); // Explicit terminator; FileNameLength excludes it.
-    let bytes = offset_of!(FILE_RENAME_INFO, FileName)
-        .checked_add(name_bytes as usize)
-        .and_then(|length| length.checked_add(size_of::<u16>()))
-        .and_then(|length| u32::try_from(length).ok())
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "rename record too long"))?;
-    let mut buffer = vec![0u64; (bytes as usize).div_ceil(size_of::<u64>())];
-    let info = buffer.as_mut_ptr().cast::<FILE_RENAME_INFO>();
-    // SAFETY: u64 storage provides the structure's alignment on supported
-    // targets and includes the filename plus its explicit terminator. Zero
-    // ReplaceIfExists preserves collisions; the live directory handle binds
-    // this single child name to the pinned destination object.
-    unsafe {
-        (*info).Anonymous.ReplaceIfExists = 0;
-        (*info).RootDirectory = target.file().as_raw_handle();
-        (*info).FileNameLength = name_bytes;
-        std::ptr::copy_nonoverlapping(
-            wide.as_ptr(),
-            std::ptr::addr_of_mut!((*info).FileName).cast::<u16>(),
-            wide.len(),
-        );
-        if SetFileInformationByHandle(file.as_raw_handle(), FileRenameInfo, info.cast(), bytes) == 0
-        {
-            return Err(io::Error::last_os_error());
-        }
-    }
+    super::super::directory_rename::no_replace(file, target, name)?;
     // Do not claim a completed hop from the API status alone. The target is
     // reopened without following links, while the DELETE reservation remains
     // live. On failure callers keep their durable predecessor/successor slots.

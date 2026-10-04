@@ -1,0 +1,60 @@
+{
+  "read_rule": "Only the listed exact files, own scope and own created files. No folder listings or scope expansion; ask Root for missing exact definitions.",
+  "forbidden": "No broad/new project review, build/compiler/test/formatter/server/install/Git/CI/graph/release/child agents. Preserve existing assertions; no masking failures.",
+  "deliverable": "Fresh own plan and referenced API reading before edits; close only assigned fourth-run evidence; own static self-review. Report files read, modified, created, key changes, decisions, preserved compatibility, exact unresolved dependencies; then stop.",
+  "acceptance": "The same single Root-owned complete remote RV1 suite only. No independent tests or local workload.",
+  "owner": "h-analysis",
+  "read_files": [
+    "docs/superpowers/plans/2026-10-02-review-analyse-sync-sicherheit/ci-fourth-fixes.md",
+    "native/Cargo.toml",
+    "native/src/local_access/mod.rs",
+    "native/src/local_access/os/windows/directory_handle.rs",
+    "native/src/local_access/os/windows/directory.rs",
+    "native/src/local_access/os/windows/directory_tests.rs",
+    "native/src/local_access/os/windows/quarantine.rs",
+    "native/src/host_trash/os/windows.rs",
+    "native/src/host_trash/os/shared/restore.rs",
+    "native/src/host_trash/os/shared/review_task_tests.rs",
+    "native/src/analytics/os/shared/checked_recycle.rs",
+    "docs/refs/windows-held-rename.md",
+    "docs/refs/local-fs-identity-durability.md",
+    "/tmp/rv1-ci-fourth/h-analysis.json",
+    "native/src/local_access/os/windows/mod.rs",
+    "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/windows-sys-0.59.0/src/Windows/Wdk/Storage/FileSystem/mod.rs",
+    "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/windows-sys-0.59.0/src/Windows/Win32/System/IO/mod.rs",
+    "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/windows-sys-0.59.0/src/Windows/Win32/Foundation/mod.rs",
+    "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/windows-sys-0.59.0/src/Windows/Win32/System/Threading/mod.rs"
+  ],
+  "modify_files": [
+    "native/src/local_access/os/windows/quarantine.rs",
+    "docs/refs/windows-held-rename.md",
+    "native/Cargo.toml",
+    "native/src/local_access/os/windows/mod.rs"
+  ],
+  "create_files": [
+    "docs/superpowers/plans/2026-10-02-review-analyse-sync-sicherheit/abnahme/CI-4-H-ANALYSIS.md",
+    "native/src/local_access/os/windows/directory_rename.rs"
+  ],
+  "connected_surface_reason": "Only failing first held capture/restore primitive and existing callers; retain held roots, full identity and hash. Cargo and registrations are read-only unless Root grants the exact necessary adapter change.",
+  "external_read_urls": [
+    "https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_rename_info",
+    "https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-setfileinformationbyhandle",
+    "https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_file_rename_information",
+    "https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ntsetinformationfile",
+    "https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_io_status_block",
+    "https://learn.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-rtlntstatustodoserror",
+    "https://learn.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-waitforsingleobject",
+    "https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew",
+    "https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ntcreatefile"
+  ],
+  "read_limits": {
+    "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/windows-sys-0.59.0/src/Windows/Wdk/Storage/FileSystem/mod.rs": "NtSetInformationFile cfg/signature, FILE_RENAME_INFORMATION/union and FileRenameInformation class only",
+    "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/windows-sys-0.59.0/src/Windows/Win32/System/IO/mod.rs": "IO_STATUS_BLOCK/union definitions only",
+    "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/windows-sys-0.59.0/src/Windows/Win32/Foundation/mod.rs": "RtlNtStatusToDosError and HANDLE/NTSTATUS/BOOLEAN definitions only; STATUS_PENDING, WAIT_OBJECT_0, WAIT_FAILED constants only",
+    "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/windows-sys-0.59.0/src/Windows/Win32/System/Threading/mod.rs": "WaitForSingleObject signature and related wait constants only"
+  },
+  "modify_limits": {
+    "native/Cargo.toml": "target Windows windows-sys features: additive Wdk_Storage_FileSystem feature and explanatory comment only; no version/dependency changes",
+    "native/src/local_access/os/windows/mod.rs": "add private mod directory_rename registration only"
+  }
+}
