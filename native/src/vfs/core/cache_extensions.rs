@@ -63,6 +63,10 @@ impl BackendExtensions for CachingBackend {
         calls::sync_filesystem(&*self.inner, root)
     }
 
+    fn confirm_namespace(&self, parent: &str) -> VfsResult<bool> {
+        calls::confirm_namespace(&*self.inner, parent)
+    }
+
     fn target_limits(&self, root: &str) -> TargetLimits {
         calls::target_limits(&*self.inner, root)
     }

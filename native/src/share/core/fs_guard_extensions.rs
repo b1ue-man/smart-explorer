@@ -73,6 +73,12 @@ impl BackendExtensions for GuardedBackend {
         self.write(root)?;
         vfs::sync_filesystem(&*self.inner, root)
     }
+    fn confirm_namespace(&self, parent: &str) -> VfsResult<bool> {
+        self.write(parent)?;
+        let durable = vfs::confirm_namespace(&*self.inner, parent)?;
+        self.write(parent)?;
+        Ok(durable)
+    }
     fn target_limits(&self, root: &str) -> vfs::TargetLimits {
         vfs::target_limits(&*self.inner, root)
     }
