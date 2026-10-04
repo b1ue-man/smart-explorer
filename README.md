@@ -1013,6 +1013,10 @@ Der vollständige Flow (bauen → Feed → GitHub-Release → Selbst-Update) ste
    in `[task candidate]`, damit die allgemeine Push-Matrix übersprungen wird und
    nur die exakt an den SHA gebundene Task-Suite Build-/Test-Arbeit ausführt.
    Zwischencommits sind keine Releases.
+   Der Sync-Verlässlichkeitsblock nutzt ausschließlich `sync-reliability-task.yml`
+   mit `native/test-sync-reliability-task.py`: echte Providerpaare, Wiederanlauf,
+   alte Desktop-Jobs und ein Android-Update unter Erhalt der Appdaten. Ein fehlender
+   autorisierter Google-Testzugang blockiert dessen Live-Drive-Abnahme.
    Der Mount-Massenzugriffs-Block nutzt ausschließlich
    `mount-optimization-task.yml` auf Windows 2025 mit
    `native/test-mount-optimization-task.ps1`: gepinntes Node/libuv,

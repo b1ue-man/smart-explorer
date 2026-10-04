@@ -557,6 +557,8 @@ PY
 # RV1 reuses NDK discovery/alignment but builds only the emulator component.
 cmd_review_build() {
   local out=$1 maven gradle_status=0 apk test_apk
+  local signing=()
+  if [[ "${2:-}" == sync-reliability ]]; then signing=(-PsyncReliabilitySigning=true); fi
   require_tools cargo rustup jq java python3 sha256sum
   resolve_ndk
   rustup target list --installed | grep -qx x86_64-linux-android || rustup target add x86_64-linux-android
@@ -581,10 +583,13 @@ cmd_review_build() {
     app.smartexplorer.android.ui.sync.JobDraftTest
     app.smartexplorer.android.service.ReviewTaskCpuTasksTest
   ) filters=() cls spec
+  if [[ "${2:-}" == sync-reliability ]]; then
+    classes=(app.smartexplorer.android.api.SyncConflictVariantTest app.smartexplorer.android.ui.sync.JobDraftTest)
+  fi
   for cls in "${classes[@]}"; do filters+=(--tests "$cls"); done
   local results="$android_dir/app/build/test-results/testDebugUnitTest"
   rm -rf -- "$results"
-  (cd "$android_dir" && sh ./gradlew --no-daemon --console=plain --stacktrace --continue "-PrustlsVerifierMaven=$maven" \
+  (cd "$android_dir" && sh ./gradlew --no-daemon --console=plain --stacktrace --continue "-PrustlsVerifierMaven=$maven" "${signing[@]}" \
     :app:assembleDebug :app:assembleDebugAndroidTest :app:testDebugUnitTest "${filters[@]}") || gradle_status=$?
   cp -r -- "$results" "$log_root/unit-test-results" 2>/dev/null || true
   cp -r -- "$android_dir/app/build/reports" "$log_root/gradle-reports" 2>/dev/null || true
@@ -1075,10 +1080,11 @@ case "$command_name" in
       exit 2
     fi
     ;;
-  desktop-bins | android-build | review-build)
+  desktop-bins | android-build | review-build | sync-reliability-build)
     [[ "$#" -eq 2 && "$1" == --out ]] || { usage; exit 2; }
     if [[ "$command_name" == desktop-bins ]]; then cmd_desktop_bins "$2";
     elif [[ "$command_name" == review-build ]]; then cmd_review_build "$2";
+    elif [[ "$command_name" == sync-reliability-build ]]; then cmd_review_build "$2" sync-reliability;
     else cmd_android_build "$2"; fi
     ;;
   emulator-run)
