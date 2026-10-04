@@ -271,7 +271,16 @@ fn engine_provider_recorded_lost_ack_preserves_old_baseline_until_retry() {
     assert!(intent(&identity.pair).path().unwrap().exists());
     let resumed =
         engine::orchestration::run_with_store_path(endpoints, opts, &cancel, &filter, &db);
-    assert!(resumed.errors.is_empty() && resumed.blocked.is_none() && resumed.stopped.is_none());
+    assert!(
+        resumed.errors.is_empty() && resumed.blocked.is_none() && resumed.stopped.is_none(),
+        "retry errors={:?}, blocked={:?}, stopped={:?}, deferred={:?}, omissions={:?}, state={:?}",
+        resumed.errors,
+        resumed.blocked,
+        resumed.stopped,
+        resumed.deferred,
+        resumed.omissions,
+        resumed.state
+    );
     assert_eq!(target.promotions.load(Ordering::SeqCst), 1);
     let (_, records, _) =
         engine::checkpoint_journal::Journal::load(&key, Default::default()).unwrap();

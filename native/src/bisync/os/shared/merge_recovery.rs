@@ -72,11 +72,7 @@ pub(super) fn remove(key: &StateKey, rel: &str) -> io::Result<()> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error),
     }
-    let text = path
-        .to_str()
-        .ok_or_else(|| io::Error::other("merge recovery path is not Unicode"))?;
-    let backend = crate::vfs::LocalBackend::new(text);
-    super::apply_stage::require_durable(super::apply_stage::namespace(&backend, text)?)
+    super::apply_stage::require_durable(super::apply_stage::native_namespace(&path)?)
 }
 
 /// Exact owner/replica filenames keep another job's recovery separate.

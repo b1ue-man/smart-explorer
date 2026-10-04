@@ -266,7 +266,7 @@ fn destination_drift_after_backup_blocks_promotion() {
     .unwrap_err()
     .into_io();
 
-    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData, "{error}");
     assert_eq!(
         std::fs::read(&destination_path).unwrap(),
         b"concurrent-destination-change"

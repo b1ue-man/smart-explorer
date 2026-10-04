@@ -35,6 +35,21 @@ pub(crate) fn namespace(backend: &dyn Backend, path: &str) -> io::Result<bool> {
     )
 }
 
+/// Private state paths are native PathBufs, not backend-relative literal paths.
+pub(super) fn native_namespace(path: &std::path::Path) -> io::Result<bool> {
+    let parent = path
+        .parent()
+        .and_then(|parent| parent.to_str())
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "native namespace has no Unicode parent",
+            )
+        })?;
+    let backend = crate::vfs::LocalBackend::new(parent);
+    crate::vfs::confirm_namespace(&backend, parent)
+}
+
 /// A parent namespace confirmation cannot flush an unfinished stage's contents.
 fn flush_unconfirmed_stage(backend: &dyn Backend, path: &str) -> io::Result<()> {
     if crate::vfs::sync_filesystem(

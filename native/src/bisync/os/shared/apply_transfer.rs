@@ -323,13 +323,7 @@ pub(super) fn back_up_captured(
             file.flush()?;
             file.sync_all()?;
             revalidate(backend, path, captured, "backup source")?;
-            let destination = destination
-                .to_str()
-                .ok_or_else(|| drift("backup path is not Unicode"))?;
-            let local = crate::vfs::LocalBackend::new(
-                parent_of(destination).as_deref().unwrap_or(destination),
-            );
-            super::apply_stage::require_durable(super::apply_stage::namespace(&local, destination)?)
+            super::apply_stage::require_durable(super::apply_stage::native_namespace(&destination)?)
         })();
         if let Err(error) = result {
             drop(file);
