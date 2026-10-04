@@ -44,7 +44,10 @@ fn sync_links_task_nested_link_preserves_counterparts_baseline_and_incremental_r
         .expect("the run records its owner and replica");
     let baseline = baseline_file(state).unwrap();
     let index_id = replica_state::index_id(state).unwrap();
-    assert!(baseline.try_exists().unwrap(), "first state={state:?}, baseline={baseline:?}");
+    assert!(
+        baseline.try_exists().unwrap(),
+        "first state={state:?}, baseline={baseline:?}"
+    );
     assert_eq!(load_baseline(&baseline).unwrap(), first.baseline);
     assert!(
         state_store::SyncStateStore::open_at(&store)
@@ -83,10 +86,17 @@ fn sync_links_task_nested_link_preserves_counterparts_baseline_and_incremental_r
 
     let partial = run_with_store_path(endpoints, opts, &cancel, &filter, &store);
     assert!(
-        partial.errors.is_empty() && partial.blocked.is_none() && partial.stopped.is_none()
-            && partial.deferred.is_empty() && !partial.busy,
+        partial.errors.is_empty()
+            && partial.blocked.is_none()
+            && partial.stopped.is_none()
+            && partial.deferred.is_empty()
+            && !partial.busy,
         "partial errors={:?}, blocked={:?}, stopped={:?}, deferred={:?}, busy={}, omissions={:?}",
-        partial.errors, partial.blocked, partial.stopped, partial.deferred, partial.busy,
+        partial.errors,
+        partial.blocked,
+        partial.stopped,
+        partial.deferred,
+        partial.busy,
         partial.omissions
     );
     assert_eq!(partial.state, first.state);
@@ -253,13 +263,25 @@ fn sync_links_task_incremental_target_junction_returns_to_full_protected_scan() 
     let filter = WalkFilter::basic(true, &globs);
     let first = run_with_store_path(endpoints, options, &cancel, &filter, &store);
     assert!(
-        first.errors.is_empty() && first.blocked.is_none() && first.stopped.is_none()
-            && first.deferred.is_empty() && !first.busy,
+        first.errors.is_empty()
+            && first.blocked.is_none()
+            && first.stopped.is_none()
+            && first.deferred.is_empty()
+            && !first.busy,
         "first errors={:?}, blocked={:?}, stopped={:?}, deferred={:?}, busy={}, omissions={:?}",
-        first.errors, first.blocked, first.stopped, first.deferred, first.busy, first.omissions
+        first.errors,
+        first.blocked,
+        first.stopped,
+        first.deferred,
+        first.busy,
+        first.omissions
     );
     let baseline = baseline_file(first.state.as_ref().unwrap()).unwrap();
-    assert!(baseline.try_exists().unwrap(), "first state={:?}, baseline={baseline:?}", first.state);
+    assert!(
+        baseline.try_exists().unwrap(),
+        "first state={:?}, baseline={baseline:?}",
+        first.state
+    );
     assert_eq!(load_baseline(&baseline).unwrap(), first.baseline);
     std::fs::remove_dir_all(b.path().join("folder")).unwrap();
     std::fs::write(outside.path().join("entry.txt"), b"old").unwrap();
@@ -272,10 +294,18 @@ fn sync_links_task_incremental_target_junction_returns_to_full_protected_scan() 
     std::fs::write(a.path().join("independent.txt"), b"keep syncing").unwrap();
     let next = run_with_store_path(endpoints, options, &cancel, &filter, &store);
     assert!(
-        next.errors.is_empty() && next.blocked.is_none() && next.stopped.is_none()
-            && next.deferred.is_empty() && !next.busy,
+        next.errors.is_empty()
+            && next.blocked.is_none()
+            && next.stopped.is_none()
+            && next.deferred.is_empty()
+            && !next.busy,
         "next errors={:?}, blocked={:?}, stopped={:?}, deferred={:?}, busy={}, omissions={:?}",
-        next.errors, next.blocked, next.stopped, next.deferred, next.busy, next.omissions
+        next.errors,
+        next.blocked,
+        next.stopped,
+        next.deferred,
+        next.busy,
+        next.omissions
     );
     assert_eq!(next.state, first.state);
     assert_eq!(

@@ -353,6 +353,11 @@ fn review_task_daily_target_verification_finds_untracked_mirror_orphans() {
     assert!(
         !fixture.root.join("b/orphan").exists(),
         "blocked={:?}, stopped={:?}, deferred={:?}, busy={}, omissions={:?}, state={:?}",
-        daily.blocked, daily.stopped, daily.deferred, daily.busy, daily.omissions, daily.state
+        daily.blocked,
+        daily.stopped,
+        daily.deferred,
+        daily.busy,
+        daily.omissions,
+        daily.state
     );
 }

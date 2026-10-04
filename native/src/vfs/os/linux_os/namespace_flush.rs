@@ -5,8 +5,8 @@ use std::os::unix::fs::MetadataExt;
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 
-use super::mountinfo::{self, Mount};
 use super::super::fs_profile::{linux_profile, FlushModel};
+use super::mountinfo::{self, Mount};
 use crate::local_access::DirectoryHandle;
 
 pub(crate) fn confirm_namespace(parent: &Path) -> io::Result<bool> {

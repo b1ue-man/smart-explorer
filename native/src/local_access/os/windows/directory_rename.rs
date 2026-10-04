@@ -9,8 +9,8 @@ use windows_sys::Wdk::Storage::FileSystem::{
 use windows_sys::Win32::Foundation::{
     RtlNtStatusToDosError, STATUS_PENDING, WAIT_FAILED, WAIT_OBJECT_0,
 };
-use windows_sys::Win32::System::IO::{IO_STATUS_BLOCK, IO_STATUS_BLOCK_0};
 use windows_sys::Win32::System::Threading::{WaitForSingleObject, INFINITE};
+use windows_sys::Win32::System::IO::{IO_STATUS_BLOCK, IO_STATUS_BLOCK_0};
 
 use super::directory_handle::DirectoryHandle;
 
@@ -24,8 +24,8 @@ pub(super) fn no_replace(file: &File, target: &DirectoryHandle, name: &OsStr) ->
         .and_then(|length| u32::try_from(length).ok())
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "rename target too long"))?;
     wide.push(0); // Explicit terminator; FileNameLength excludes it.
-    // The native contract requires sizeof(record) plus the filename bytes.
-    // Keep a further terminator word rather than relying on structure padding.
+                  // The native contract requires sizeof(record) plus the filename bytes.
+                  // Keep a further terminator word rather than relying on structure padding.
     let bytes = size_of::<FILE_RENAME_INFORMATION>()
         .checked_add(name_bytes as usize)
         .and_then(|length| length.checked_add(size_of::<u16>()))
@@ -92,9 +92,9 @@ pub(super) fn no_replace(file: &File, target: &DirectoryHandle, name: &OsStr) ->
     };
     if status < 0 {
         // SAFETY: RtlNtStatusToDosError accepts this returned NTSTATUS value.
-        return Err(io::Error::from_raw_os_error(unsafe {
-            RtlNtStatusToDosError(status)
-        } as i32));
+        return Err(io::Error::from_raw_os_error(
+            unsafe { RtlNtStatusToDosError(status) } as i32,
+        ));
     }
     Ok(())
 }
