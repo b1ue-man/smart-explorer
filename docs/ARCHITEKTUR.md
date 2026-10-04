@@ -68,6 +68,8 @@ Speicheranalyse – als Desktop-App (Windows, Linux; Rust + egui) und als Androi
   Sync-Jobs `sync/jobs/*.conf`, Zugangsdaten `secrets-v1/` (Datei-Store), Share-Profile/Identität.
   Private Ancestorpfade bleiben auf Android nur durchsuchbar; der private Leaf wird lesbar geöffnet.
   Windows-Journale nutzen RW plus expliziten Seek, damit bestätigte Tail-Kürzung ihre nötigen Handle-Rechte hat.
+  Private Windows-Verzeichnisse vererben Owner-Zugriff an gewöhnliche Konfigurations-/Job-/Control-Kinder;
+  private Dateien behalten ihre geschützte DACL ohne Vererbungsflags.
 - Sync: gespeicherter Endpunkt → gemeinsame VFS-/Literalpfad-Auflösung → `StateKey`/Pairlock →
   optionsbewusster Snapshot → `ApplyScope` mit Checkpoints, Versionen und vorab dauerhaftem
   ReplacementIntent → bestätigte Teilaktionen. Pending-Merge und unklare Veröffentlichung
@@ -91,6 +93,9 @@ Android-APIs: `docs/refs/android-apis.md`, `docs/refs/android-platform.md`; CI: 
   (Android: `.github/workflows/android-task.yml` → `android/test-android-task.sh`).
 - RV1: `.github/workflows/review-task.yml` → `native/test-review-task.sh`; eine kandidatengebundene
   Suite mit nativem Linux/Windows und Android-Build/Gerät. Vertrag: `docs/refs/rv1-remote-suite.md`.
+- Windows-Startregression 0.5.170: `startup-regression-task.yml` →
+  `native/test-startup-regression-task.py`, reale bestehende DACLs und Worker-Handoff
+  aus v0.5.169 mit den inkrementellen Development-Ausgaben derselben RV1-Caches.
 - Android-Bibliothek: `cargo ndk -t arm64-v8a -t x86_64 --platform 30 -o android/app/src/main/jniLibs build -p smart_explorer_android`
   (im Verzeichnis `native/`), NDK aus `android/ndk-version`; Gradle braucht `-PrustlsVerifierMaven=<Pfad>`.
 - Release-APK: `android/build-release-apk.sh` (Job `android-release-apk` in `build.yml`), Signatur aus Repo-Secrets.

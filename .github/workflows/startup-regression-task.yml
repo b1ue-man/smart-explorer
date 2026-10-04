@@ -1,0 +1,73 @@
+name: startup-regression-task
+run-name: Windows startup regression ${{ inputs.candidate_sha }}
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Exact pushed source SHA matching the selected main ref
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: startup-regression-task-${{ github.repository }}
+  cancel-in-progress: false
+env:
+  CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+  CARGO_BUILD_JOBS: 1
+  CARGO_INCREMENTAL: 1
+  CARGO_PROFILE_TEST_DEBUG: 0
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_TERM_COLOR: never
+jobs:
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+        id: rust
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            native
+            share-server
+          shared-key: rv1-native
+          cache-on-failure: true
+      - uses: actions/cache/restore@v4
+        id: outputs
+        with:
+          path: |
+            native/target
+            share-server/target
+            .review-task-cache
+          key: rv1-${{ runner.os }}-${{ steps.rust.outputs.cachekey }}-${{ github.sha }}-${{ github.run_attempt }}
+          restore-keys: rv1-${{ runner.os }}-${{ steps.rust.outputs.cachekey }}-
+      - name: Run the one focused startup task suite
+        shell: pwsh
+        timeout-minutes: 170
+        run: python native/test-startup-regression-task.py
+      - uses: actions/cache/save@v4
+        if: ${{ always() && steps.outputs.outcome == 'success' }}
+        with:
+          path: |
+            native/target
+            share-server/target
+            .review-task-cache
+          key: ${{ steps.outputs.outputs.cache-primary-key }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: startup-regression-${{ inputs.candidate_sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/startup-regression-task
+          if-no-files-found: warn
+          retention-days: 7

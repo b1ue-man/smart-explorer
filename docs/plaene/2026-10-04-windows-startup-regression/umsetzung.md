@@ -49,5 +49,9 @@ Der Windows-Runner muss insbesondere die automatische Reparatur vorhandener leer
 Kinder-DACLs belegen. Daten werden nicht gelöscht, Client-IDs nicht ersetzt und
 Benutzer müssen keine Verbindung neu einrichten.
 
-Status: Milestones 1/2 implementiert und gegen Source/API selbst geprüft.
+Status: Milestones 1/2 implementiert in `e5920bdf` und gegen Source/API selbst geprüft.
+Milestone 3 ist als kandidatengebundener Windows-Workflow und ein einzelner
+Remote-Einstieg implementiert; Cache-, Prozess- und Fehlerausgabegrenzen bleiben
+in diesem Einstieg. Die Suite prüft auch den Fehler beim erneuten Anlegen des
+vorhandenen Jobsverzeichnisses mit der alten leeren Kinder-DACL.
 Remote-Laufzeitabnahme und Veröffentlichung stehen aus.
