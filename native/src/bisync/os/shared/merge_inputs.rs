@@ -186,11 +186,5 @@ pub(super) fn remove(key: &StateKey, rel: &str) -> io::Result<()> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error),
     }
-    let path = dir
-        .to_str()
-        .ok_or_else(|| io::Error::other("merge inputs path is not Unicode"))?;
-    super::apply_stage::require_durable(super::apply_stage::namespace(
-        &crate::vfs::LocalBackend::new(path),
-        path,
-    )?)
+    super::apply_stage::require_durable(super::apply_stage::native_namespace(&dir)?)
 }

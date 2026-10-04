@@ -272,11 +272,5 @@ pub(super) fn remove(intent: &Intent) -> io::Result<()> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error),
     }
-    let text = path
-        .to_str()
-        .ok_or_else(|| drift("replacement metadata path is not Unicode"))?;
-    super::apply_stage::require_durable(super::apply_stage::namespace(
-        &crate::vfs::LocalBackend::new(text),
-        text,
-    )?)
+    super::apply_stage::require_durable(super::apply_stage::native_namespace(&path)?)
 }
