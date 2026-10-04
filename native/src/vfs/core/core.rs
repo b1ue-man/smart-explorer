@@ -275,11 +275,13 @@ pub trait Backend: Send + Sync {
     /// Safe staged-write guarantees at `root` (`create` = atomic `open_write_new`);
     /// path-dependent exports (Share peers) may inspect the subtree.
     fn staged_write_capabilities(&self, _root: &str) -> StagedWriteCapabilities {
-        StagedWriteCapabilities {
-            create: false,
-            replace: self.rename_overwrites(),
-            namespace_replace: self.rename_overwrites(),
-        }
+        super::capabilities::staged_write_defaults(self)
+    }
+
+    /// Fallibly inspect staged writes without replacing an active mount binding.
+    /// Stateful backends must override this with a non-acquiring probe.
+    fn probe_staged_write_capabilities(&self, root: &str) -> VfsResult<StagedWriteCapabilities> {
+        Ok(self.mount_path_capabilities(root)?.staged_write)
     }
 
     /// Whether every pathname below `root` has proven case-sensitive lookup.
@@ -299,10 +301,7 @@ pub trait Backend: Send + Sync {
     /// Mount write and root guarantees as one snapshot (dynamic proxies
     /// override this with one fallible remote probe).
     fn mount_path_capabilities(&self, root: &str) -> VfsResult<MountPathCapabilities> {
-        Ok(MountPathCapabilities {
-            staged_write: self.staged_write_capabilities(root),
-            root_confinement: self.root_confinement(root),
-        })
+        super::capabilities::mount_path_defaults(self, root)
     }
 
     /// Open by backend-unique `id` when known (one item among duplicate names);

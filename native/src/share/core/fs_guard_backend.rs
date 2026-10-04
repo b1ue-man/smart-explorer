@@ -255,6 +255,17 @@ impl Backend for GuardedBackend {
             self.inner.staged_write_capabilities(root)
         }
     }
+    fn probe_staged_write_capabilities(
+        &self,
+        root: &str,
+    ) -> VfsResult<vfs::StagedWriteCapabilities> {
+        self.read(root)?;
+        let mut capabilities = self.inner.probe_staged_write_capabilities(root)?;
+        if self.write(root).is_err() {
+            capabilities = vfs::StagedWriteCapabilities::default();
+        }
+        Ok(capabilities)
+    }
     fn mount_path_capabilities(&self, root: &str) -> VfsResult<vfs::MountPathCapabilities> {
         self.read(root)?;
         let mut capabilities = self.inner.mount_path_capabilities(root)?;

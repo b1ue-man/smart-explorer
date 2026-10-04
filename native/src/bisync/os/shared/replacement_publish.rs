@@ -33,8 +33,7 @@ pub(super) fn publish(
         } else {
             if staged
                 .backend
-                .mount_path_capabilities(destination)?
-                .staged_write
+                .probe_staged_write_capabilities(destination)?
                 .namespace_replace
             {
                 staged.published = true;

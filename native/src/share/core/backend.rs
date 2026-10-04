@@ -426,6 +426,14 @@ impl Backend for PeerBackend {
             .unwrap_or_default()
     }
 
+    fn probe_staged_write_capabilities(
+        &self,
+        root: &str,
+    ) -> VfsResult<crate::vfs::StagedWriteCapabilities> {
+        self.probe_mount_path_capabilities(root)
+            .map(|capabilities| capabilities.staged_write)
+    }
+
     fn mount_path_capabilities(&self, root: &str) -> VfsResult<crate::vfs::MountPathCapabilities> {
         self.query_mount_path_capabilities(
             root,
