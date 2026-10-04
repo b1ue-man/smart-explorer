@@ -12,19 +12,37 @@ fn cfg_path(p: Provider) -> PathBuf {
 }
 
 pub fn load_config(p: Provider) -> ClientConfig {
+    load_config_checked(p).unwrap_or_default()
+}
+
+/// A failed read of an existing configuration must not become an empty ID.
+pub fn load_config_checked(p: Provider) -> std::io::Result<ClientConfig> {
     let mut c = ClientConfig::default();
-    if let Ok(s) = std::fs::read_to_string(cfg_path(p)) {
-        for line in s.lines() {
-            if let Some((k, v)) = line.split_once('=') {
-                match k.trim() {
-                    "client_id" => c.client_id = v.trim().to_string(),
-                    "client_secret" => c.client_secret = v.trim().to_string(),
-                    _ => {}
+    let path = cfg_path(p);
+    match std::fs::read_to_string(&path) {
+        Ok(s) => {
+            for line in s.lines() {
+                if let Some((k, v)) = line.split_once('=') {
+                    match k.trim() {
+                        "client_id" => c.client_id = v.trim().to_string(),
+                        "client_secret" => c.client_secret = v.trim().to_string(),
+                        _ => {}
+                    }
                 }
             }
         }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(std::io::Error::new(
+                error.kind(),
+                format!(
+                    "Cloud-Konfiguration {} konnte nicht gelesen werden: {error}",
+                    path.display()
+                ),
+            ));
+        }
     }
-    c
+    Ok(c)
 }
 
 pub fn save_config(p: Provider, c: &ClientConfig) -> std::io::Result<()> {
