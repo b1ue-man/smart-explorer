@@ -16,6 +16,11 @@ pub(super) struct FolderBinding {
     pub(super) segment: String,
     /// Exact existing picker/cache locators that proved the same object.
     pub(super) aliases: Vec<String>,
+    /// Only freshly proved locator selections authorize a stored plain root.
+    /// Missing provenance in an unreleased v1 record stays conservative; its
+    /// IDs and reserved names are retained and its original checksum survives.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) evidence: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -53,6 +58,14 @@ impl FolderBindings {
                     return Err(invalid("Drive folder bindings contain conflicting locators"));
                 }
             }
+            let mut evidence = HashSet::new();
+            for segment in folder.evidence.iter().flatten() {
+                if !evidence.insert(segment)
+                    || (segment != &folder.segment && !folder.aliases.contains(segment))
+                {
+                    return Err(invalid("Drive folder bindings contain conflicting provenance"));
+                }
+            }
         }
         Ok(())
     }
@@ -70,16 +83,20 @@ impl FolderBindings {
     }
 
     pub(super) fn bind_exact(
-        &mut self, title: &str, id: &str, segment: &str, sync_name: &str,
+        &mut self, title: &str, id: &str, segment: &str, sync_name: &str, proved: bool,
     ) -> io::Result<FolderBinding> {
         if let Some(existing) = self.by_segment(segment) {
             if existing.id != id || existing.title != title {
                 return Err(invalid("Drive locator is reserved for another folder identity"));
             }
-            return Ok(existing.clone());
+            let index = self.folders.iter().position(|folder| folder.title == title && folder.id == id)
+                .ok_or_else(|| invalid("Drive folder binding lost its identity"))?;
+            if proved { self.folders[index].prove(segment); }
+            return Ok(self.folders[index].clone());
         }
         if let Some(index) = self.folders.iter().position(|folder| folder.title == title && folder.id == id) {
             self.folders[index].aliases.push(segment.to_string());
+            if proved { self.folders[index].prove(segment); }
             return Ok(self.folders[index].clone());
         }
         if self.by_name(sync_name).is_some() {
@@ -87,9 +104,21 @@ impl FolderBindings {
         }
         let folder = FolderBinding {
             title: title.into(), id: id.into(), sync_name: sync_name.into(), segment: segment.into(), aliases: Vec::new(),
+            evidence: Some(if proved { vec![segment.to_string()] } else { Vec::new() }),
         };
         self.folders.push(folder.clone());
         Ok(folder)
+    }
+}
+
+impl FolderBinding {
+    pub(super) fn proves(&self, segment: &str) -> bool {
+        self.evidence.as_ref().is_some_and(|evidence| evidence.iter().any(|known| known == segment))
+    }
+
+    fn prove(&mut self, segment: &str) {
+        let evidence = self.evidence.get_or_insert_with(Vec::new);
+        if !evidence.iter().any(|known| known == segment) { evidence.push(segment.to_string()); }
     }
 }
 

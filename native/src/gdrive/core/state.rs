@@ -17,6 +17,9 @@ pub struct GDriveBackend {
     /// Paths loaded from disk must be validated once before they can short-cut
     /// `resolve`; ids learned in this session are not included here.
     pub(super) untrusted_ids: Arc<Mutex<HashSet<String>>>,
+    /// Only the old global cache is historical locator evidence. Account
+    /// caches written by a new parent projection cannot legitimize old roots.
+    captured_legacy_hints: Arc<Mutex<HashMap<String, String>>>,
     /// path -> mimeType (so we know which files are Google-Docs editors that
     /// must be exported instead of downloaded).
     pub(super) mimes: Arc<Mutex<HashMap<String, String>>>,
@@ -71,6 +74,7 @@ struct Setup {
     tokens: cloud::Tokens,
     ids: HashMap<String, String>,
     untrusted_ids: HashSet<String>,
+    captured_legacy_hints: HashMap<String, String>,
     mimes: HashMap<String, String>,
     drive_account_key: String,
     pending_folder_dir: Option<PathBuf>,
@@ -91,13 +95,14 @@ impl GDriveBackend {
         // The account lookup already opens the pooled socket later calls use.
         let drive_account_key = load_drive_account_key(&http.api(), &tokens.access_token)?;
         let cache_path = super::binding_store::account_cache_path(&drive_account_key);
-        let loaded = match super::cache::load_from_path(&cache_path) {
-            Ok(loaded) => loaded,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => super::cache::load(),
+        let (loaded, legacy) = match super::cache::load_from_path(&cache_path) {
+            Ok(loaded) => (loaded, false),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => (super::cache::load(), true),
             // This is only a hint cache. Durable folder records have their
             // own checked format and must never fall back to empty state.
-            Err(_) => super::cache::LoadedCache::default(),
+            Err(_) => (super::cache::LoadedCache::default(), false),
         };
+        let captured_legacy_hints = if legacy { loaded.ids.clone() } else { HashMap::new() };
         let mut ids = loaded.ids;
         ids.insert(String::new(), "root".to_string());
         let untrusted_ids = super::cache::loaded_untrusted(&ids);
@@ -105,6 +110,7 @@ impl GDriveBackend {
             tokens,
             ids,
             untrusted_ids,
+            captured_legacy_hints,
             mimes: loaded.mimes,
             drive_account_key,
             pending_folder_dir: Some(super::folder_create_journal::record_dir()),
@@ -125,6 +131,7 @@ impl GDriveBackend {
             tokens: Arc::new(Mutex::new(setup.tokens)),
             ids,
             untrusted_ids: Arc::new(Mutex::new(setup.untrusted_ids)),
+            captured_legacy_hints: Arc::new(Mutex::new(setup.captured_legacy_hints)),
             mimes,
             listed: Arc::new(Mutex::new(HashSet::new())),
             create_slots: KeyLocks::new("Drive-Erzeugungssperre vergiftet"),
@@ -207,6 +214,7 @@ impl GDriveBackend {
             },
             ids,
             untrusted_ids: HashSet::new(),
+            captured_legacy_hints: HashMap::new(),
             mimes: HashMap::new(),
             drive_account_key: super::folder_create_journal::account_key(permission_id),
             pending_folder_dir,
@@ -240,6 +248,18 @@ impl GDriveBackend {
         self.untrusted_ids
             .lock()
             .map_err(|_| io::Error::other("Drive-ID-Trust-Cache vergiftet"))
+    }
+
+    pub(super) fn captured_legacy_id(&self, key: &str) -> io::Result<Option<String>> {
+        Ok(self.captured_legacy_hints.lock().map_err(|_| io::Error::other("Drive legacy hint context poisoned"))?
+            .get(key).cloned())
+    }
+
+    #[cfg(test)]
+    pub(super) fn test_capture_legacy_folder(&self, key: &str, id: &str) {
+        self.remember_path(key, id, Some(super::api::FOLDER_MIME)).unwrap();
+        self.untrusted_guard().unwrap().insert(key.to_string());
+        self.captured_legacy_hints.lock().unwrap().insert(key.to_string(), id.to_string());
     }
 
     pub(super) fn mimes_guard(&self) -> io::Result<MutexGuard<'_, HashMap<String, String>>> {
