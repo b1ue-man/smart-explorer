@@ -280,3 +280,19 @@ pub(crate) mod test_remote;
 #[cfg(test)]
 #[path = "os/shared/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "os/shared/sync_reliability_task_backend_fixture.rs"]
+mod sync_reliability_task_backend_fixture;
+#[cfg(test)]
+#[path = "os/shared/sync_reliability_task_fixture.rs"]
+mod sync_reliability_task_fixture;
+#[cfg(test)]
+#[path = "os/shared/sync_reliability_task_options_tests.rs"]
+mod sync_reliability_task_options_tests;
+#[cfg(test)]
+#[path = "os/shared/sync_reliability_task_resume_tests.rs"]
+mod sync_reliability_task_resume_tests;
+#[cfg(test)]
+#[path = "os/shared/sync_reliability_task_protection_tests.rs"]
+mod sync_reliability_task_protection_tests;

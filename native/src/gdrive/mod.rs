@@ -126,6 +126,25 @@ mod transfer_engine_task_tests;
 pub use state::GDriveBackend;
 
 #[cfg(test)]
+#[path = "core/sync_reliability_task_fixture.rs"]
+pub(crate) mod sync_reliability_task_fixture;
+#[cfg(test)]
+#[path = "core/sync_reliability_task_notebook_tests.rs"]
+mod sync_reliability_task_notebook_tests;
+#[cfg(test)]
+#[path = "core/sync_reliability_task_names_tests.rs"]
+mod sync_reliability_task_names_tests;
+#[cfg(test)]
+#[path = "core/sync_reliability_task_identity_tests.rs"]
+mod sync_reliability_task_identity_tests;
+#[cfg(test)]
+#[path = "core/sync_reliability_task_resume_tests.rs"]
+mod sync_reliability_task_resume_tests;
+#[cfg(test)]
+#[path = "core/sync_reliability_task_live_tests.rs"]
+mod sync_reliability_task_live_tests;
+
+#[cfg(test)]
 #[path = "core/gui_task_fixture.rs"]
 mod gui_task_fixture;
 #[cfg(test)]
@@ -134,3 +153,47 @@ pub(crate) mod gui_task_http;
 #[cfg(test)]
 #[path = "core/gui_task_tests.rs"]
 mod gui_task_tests;
+
+#[cfg(test)]
+#[path = "core/sync_reliability_task_paging_tests.rs"]
+mod sync_reliability_task_paging_tests;
+
+#[cfg(test)]
+#[path = "core/sync_reliability_task_migration_tests.rs"]
+mod sync_reliability_task_migration_tests;
+
+#[cfg(test)]
+#[path = "core/sync_reliability_task_hint_tests.rs"]
+mod sync_reliability_task_hint_tests;
+
+#[cfg(test)]
+#[path = "core/sync_reliability_task_oauth_tests.rs"]
+mod sync_reliability_task_oauth_tests;
+
+#[cfg(test)]
+#[path = "core/sync_reliability_task_auth_failure_tests.rs"]
+mod sync_reliability_task_auth_failure_tests;
+
+#[cfg(test)]
+#[path = "core/sync_reliability_task_lost_ack_tests.rs"]
+mod sync_reliability_task_lost_ack_tests;
+
+#[cfg(test)]
+#[path = "core/sync_reliability_task_roundtrip_tests.rs"]
+mod sync_reliability_task_roundtrip_tests;
+
+#[cfg(test)]
+#[path = "core/sync_reliability_task_live_fixture.rs"]
+mod sync_reliability_task_live_fixture;
+
+#[cfg(test)]
+#[path = "core/sync_reliability_task_auth_fixture.rs"]
+mod sync_reliability_task_auth_fixture;
+
+#[cfg(test)]
+#[path = "core/sync_reliability_task_cache_migration_tests.rs"]
+mod sync_reliability_task_cache_migration_tests;
+
+#[cfg(test)]
+#[path = "core/sync_reliability_task_legacy_missing_tests.rs"]
+mod sync_reliability_task_legacy_missing_tests;

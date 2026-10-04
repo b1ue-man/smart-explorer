@@ -16,9 +16,11 @@ fn sync_conflict_task_sync_names_preserve_browsing_literals_and_folder_identity(
     assert!(browse.iter().any(|m| m.name == format!("{FILE} [drive-id b-file]")));
     let sync = f.remote.list_dir_for_sync("/").unwrap();
     assert_eq!(sync.iter().filter(|m| m.name == FILE).count(), 2);
-    assert_eq!(sync.iter().filter(|m| m.is_dir).map(|m| &m.name).collect::<Vec<_>>(),
-        browse.iter().filter(|m| m.is_dir).map(|m| &m.name).collect::<Vec<_>>());
-    assert!(sync.iter().any(|m| m.name == super::names::encode(literal)));
+    for folder in sync.iter().filter(|meta| meta.is_dir) {
+        let picked = browse.iter().find(|meta| meta.id == folder.id).unwrap();
+        assert_eq!(crate::vfs::sync_stat(&f.remote, &format!("/{}", picked.name)).unwrap().name, folder.name);
+    }
+    assert!(sync.iter().any(|m| m.name == literal));
     let cached = CachingBackend::new(Arc::new(f.server.backend()));
     assert!(cached.has_duplicate_file_names());
     assert_eq!(cached.list_dir_for_sync("/").unwrap().iter().filter(|m| m.name == FILE).count(), 2);

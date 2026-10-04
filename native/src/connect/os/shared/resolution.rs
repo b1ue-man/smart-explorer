@@ -5,6 +5,10 @@ use crate::connect::location::{saved_location, EndpointSpec};
 use crate::vfs::BackendHandle;
 
 pub fn resolve_endpoint(endpoint: &str) -> Result<(BackendHandle, String), String> {
+    #[cfg(test)]
+    if let Some(fixture) = crate::daemon::sync_reliability_task_old_jobs_tests::resolve_fixture(endpoint) {
+        return fixture;
+    }
     match EndpointSpec::parse(endpoint)? {
         EndpointSpec::Local(path) => {
             if crate::net::is_unc(&path) {

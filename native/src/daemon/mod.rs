@@ -231,6 +231,18 @@ pub use state::{
 #[path = "core/tests.rs"]
 mod tests;
 #[cfg(test)]
+#[path = "os/shared/sync_reliability_task_old_jobs_fixture.rs"]
+mod sync_reliability_task_old_jobs_fixture;
+#[cfg(test)]
+#[path = "os/shared/sync_reliability_task_old_jobs_tests.rs"]
+pub(crate) mod sync_reliability_task_old_jobs_tests;
+#[cfg(test)]
+#[path = "os/shared/sync_reliability_task_old_jobs_loader_tests.rs"]
+mod sync_reliability_task_old_jobs_loader_tests;
+#[cfg(test)]
+#[path = "os/shared/sync_reliability_task_old_jobs_trigger_tests.rs"]
+mod sync_reliability_task_old_jobs_trigger_tests;
+#[cfg(test)]
 pub(crate) use backend_server::serve_backend as serve_sync_link_fixture;
 
 #[cfg(test)]

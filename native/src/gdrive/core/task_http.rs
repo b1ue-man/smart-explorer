@@ -62,6 +62,11 @@ impl Answer {
         self.headers.push((name.to_string(), value.to_string()));
         self
     }
+
+    /// The request reached the server, but no acknowledgement reaches Drive.
+    pub(super) fn disconnect() -> Self {
+        Self { status: 0, headers: Vec::new(), body: Vec::new() }
+    }
 }
 
 type Handler = dyn Fn(&Request) -> Answer + Send + Sync;
@@ -72,6 +77,7 @@ pub(super) struct Server {
     connections: Arc<AtomicUsize>,
     stop: Arc<AtomicBool>,
     acceptor: Option<JoinHandle<()>>,
+    workers: Arc<Mutex<Vec<JoinHandle<()>>>>,
 }
 
 impl Server {
@@ -83,12 +89,14 @@ impl Server {
         let requests = Arc::new(Mutex::new(Vec::new()));
         let connections = Arc::new(AtomicUsize::new(0));
         let stop = Arc::new(AtomicBool::new(false));
+        let workers = Arc::new(Mutex::new(Vec::new()));
         let acceptor = {
             let (requests, connections, stop) = (
                 Arc::clone(&requests),
                 Arc::clone(&connections),
                 Arc::clone(&stop),
             );
+            let workers = Arc::clone(&workers);
             thread::spawn(move || {
                 while !stop.load(Ordering::SeqCst) {
                     match listener.accept() {
@@ -99,7 +107,9 @@ impl Server {
                                 Arc::clone(&requests),
                                 Arc::clone(&stop),
                             );
-                            thread::spawn(move || serve(stream, &*handler, &requests, &stop));
+                            workers.lock().unwrap().push(thread::spawn(move || {
+                                serve(stream, &*handler, &requests, &stop)
+                            }));
                         }
                         Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                             thread::sleep(Duration::from_millis(2));
@@ -115,13 +125,18 @@ impl Server {
             connections,
             stop,
             acceptor: Some(acceptor),
+            workers,
         }
     }
 
     /// A test backend (memory-only cache, fake token) against this server.
     pub(super) fn backend(&self) -> GDriveBackend {
-        GDriveBackend::test_backend(&format!("{}/drive/v3", self.base))
+        GDriveBackend::test_backend_with_identity(&self.api_base(), Duration::from_secs(3),
+            None, None, &self.base, "")
     }
+
+    pub(super) fn api_base(&self) -> String { format!("{}/drive/v3", self.base) }
+    pub(super) fn url(&self, path: &str) -> String { format!("{}{}", self.base, path) }
 
     pub(super) fn requests(&self) -> Vec<Request> {
         self.requests.lock().unwrap().clone()
@@ -138,6 +153,9 @@ impl Drop for Server {
         if let Some(acceptor) = self.acceptor.take() {
             let _ = acceptor.join();
         }
+        let mut failed = false;
+        for worker in self.workers.lock().unwrap().drain(..) { failed |= worker.join().is_err(); }
+        assert!(!failed || thread::panicking(), "fixture connection worker failed");
     }
 }
 
@@ -177,6 +195,7 @@ fn serve(stream: TcpStream, handler: &Handler, requests: &Mutex<Vec<Request>>, s
         };
         let answer = handler(&request);
         requests.lock().unwrap().push(request);
+        if answer.status == 0 { return; }
         let mut head = format!("HTTP/1.1 {} Fixture\r\n", answer.status);
         for (name, value) in &answer.headers {
             head.push_str(&format!("{name}: {value}\r\n"));
@@ -244,4 +263,65 @@ pub(super) fn decode(text: &str) -> String {
         }
     }
     String::from_utf8_lossy(&out).into_owned()
+}
+
+/// The metadata JSON and the media bytes of a `multipart/related` body.
+pub(super) fn multipart(request: &Request) -> (serde_json::Value, Vec<u8>) {
+    let boundary = request
+        .header("content-type")
+        .and_then(|value| value.split_once("boundary="))
+        .map(|(_, boundary)| boundary.to_string())
+        .unwrap();
+    let body = &request.body;
+    let head = format!("--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n");
+    let tail = format!("\r\n--{boundary}--\r\n");
+    assert!(
+        body.starts_with(head.as_bytes()),
+        "multipart starts with the metadata part"
+    );
+    assert!(
+        body.ends_with(tail.as_bytes()),
+        "multipart ends with the closing boundary"
+    );
+    let rest = &body[head.len()..body.len() - tail.len()];
+    let separator = format!("\r\n--{boundary}\r\nContent-Type: application/octet-stream\r\n\r\n");
+    let split = rest
+        .windows(separator.len())
+        .position(|window| window == separator.as_bytes())
+        .unwrap();
+    let metadata = serde_json::from_slice(&rest[..split]).unwrap();
+    (metadata, rest[split + separator.len()..].to_vec())
+}
+
+pub(super) fn query_literal(text: &str) -> String {
+    let mut result = String::new();
+    let mut escaped = false;
+    for c in text.chars() {
+        if escaped { result.push(c); escaped = false; }
+        else if c == '\\' { escaped = true; }
+        else if c == '\'' { break; }
+        else { result.push(c); }
+    }
+    result
+}
+
+pub(super) fn list_page(request: &Request, mut files: Vec<serde_json::Value>, configured: usize) -> Answer {
+    let query = request.query("q").unwrap_or_default();
+    if let Some(rest) = query.split(" and name = '").nth(1) {
+        let name = query_literal(rest).to_lowercase();
+        files.retain(|file| file["name"].as_str().unwrap().to_lowercase() == name);
+    }
+    let requested = request.query("pageSize").and_then(|n| n.parse().ok()).unwrap_or(100);
+    let size = if configured == 0 { requested } else { requested.min(configured) }.max(1);
+    let start = match request.query("pageToken") {
+        None => 0,
+        Some(token) => match token.strip_prefix("offset:").and_then(|n| n.parse::<usize>().ok()) {
+            Some(start) if start <= files.len() => start,
+            _ => return Answer::status(400, serde_json::json!({"error":{"message":"page token rejected","errors":[{"reason":"invalid"}]}})),
+        },
+    };
+    let end = start.saturating_add(size).min(files.len());
+    let mut page = serde_json::json!({"files": files[start..end], "incompleteSearch": false});
+    if end < files.len() { page["nextPageToken"] = serde_json::json!(format!("offset:{end}")); }
+    Answer::json(page)
 }

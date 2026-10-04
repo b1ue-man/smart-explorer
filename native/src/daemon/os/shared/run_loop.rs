@@ -381,6 +381,12 @@ fn load_configured_jobs(broken: &mut HashMap<String, String>) -> Vec<SyncJob> {
     }
 }
 
+/// New process memory, persisted files unchanged: exercise real load recovery.
+#[cfg(test)]
+pub(super) fn sync_reliability_task_reload_after_restart() -> Vec<SyncJob> {
+    load_configured_jobs(&mut HashMap::new())
+}
+
 fn recovered_config_load(
     job: &SyncJob,
     state: &crate::syncjobs::JobState,

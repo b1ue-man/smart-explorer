@@ -317,8 +317,18 @@ pub fn authorize(p: Provider) -> Result<Tokens, String> {
 
 /// Exchange the stored refresh token for a fresh access token. Blocking.
 pub fn refresh_access(p: Provider) -> Result<Tokens, String> {
+    #[cfg(test)]
+    if let Some(url) = sync_reliability_task_refresh_hook::endpoint()? {
+        return refresh_access_from(p, &url);
+    }
     refresh_access_from(p, p.token_url())
 }
+
+#[cfg(test)]
+#[path = "sync_reliability_task_refresh_hook.rs"]
+mod sync_reliability_task_refresh_hook;
+#[cfg(test)]
+pub use sync_reliability_task_refresh_hook::{test_refresh_endpoint, TestRefreshEndpoint};
 
 fn refresh_access_from(p: Provider, token_url: &str) -> Result<Tokens, String> {
     let cfg = load_config_checked(p).map_err(|error| error.to_string())?;

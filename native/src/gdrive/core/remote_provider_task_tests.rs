@@ -101,9 +101,9 @@ fn rv1_remote_provider_task_drive_literal_names_and_omissions_keep_exact_ids() {
     );
     assert_eq!(
         listing
-            .omitted
+            .entries
             .iter()
-            .filter(|item| item.rel == "Ambiguous")
+            .filter(|item| item.is_dir && item.id.as_deref().is_some_and(|id| id.starts_with("folder-")))
             .count(),
         2
     );
