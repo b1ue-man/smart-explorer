@@ -10,9 +10,9 @@ use super::extension_types::{
     ChangeNotice, ChangeSignalMode, ChangeSubscription, HashWalkItem, HashWalkRequest,
     RecycleExpectation, RecycleOutcome, StageFinish, StageFinished, TargetLimits, VfsListing,
 };
-use super::{Backend, VfsResult, VolumeIdentity};
+use super::{Backend, VfsMeta, VfsResult, VolumeIdentity};
 
-/// Every method has a "not supported" default, so an implementation names
+/// Every method has a conservative default, so an implementation names
 /// only what its protocol or host can do. Wrappers that rewrite paths or
 /// guard access (export roots, mounts) must not hand out the extensions of
 /// the backend they wrap unchanged.
@@ -28,6 +28,13 @@ pub trait BackendExtensions: Backend {
     /// the new literal component. Never decode or canonicalize the parent.
     fn sync_child_path(&self, parent: &str, literal_name: &str) -> VfsResult<String> {
         super::extension_calls::default_sync_child_path(parent, literal_name)
+    }
+
+    /// Observe a sync locator with the same logical name as tolerant listings.
+    /// ID providers keep their exact object binding; browsing aliases must not
+    /// replace literal file names or projected folder keys in this result.
+    fn sync_stat(&self, path: &str) -> VfsResult<VfsMeta> {
+        self.stat(path)
     }
 
     /// Publish a stage on protocols lacking an atomic replacing rename.
@@ -49,7 +56,13 @@ pub trait BackendExtensions: Backend {
 
     /// `list_dir` that keeps going past entries it cannot list.
     fn list_dir_tolerant(&self, path: &str) -> VfsResult<VfsListing> {
-        self.list_dir(path).map(VfsListing::complete)
+        // Preserve the existing sync-name contract of duplicate providers
+        // that have not added a genuinely tolerant implementation yet.
+        if self.has_duplicate_file_names() {
+            self.list_dir_for_sync(path).map(VfsListing::complete)
+        } else {
+            self.list_dir(path).map(VfsListing::complete)
+        }
     }
 
     /// Open an entry a listing reported as a regular file: a link, folder or

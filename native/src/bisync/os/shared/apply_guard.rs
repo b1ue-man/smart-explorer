@@ -104,31 +104,13 @@ pub(super) fn revalidate(
     captured: &CapturedFile,
     label: &str,
 ) -> io::Result<()> {
-    let current = if backend.has_duplicate_file_names()
-        && captured
-            .metadata
-            .as_ref()
-            .is_some_and(|meta| meta.id.is_some())
+    let current = match captured
+        .metadata
+        .as_ref()
+        .filter(|_| backend.has_duplicate_file_names())
     {
-        let id = captured
-            .metadata
-            .as_ref()
-            .and_then(|meta| meta.id.as_deref());
-        let parent = super::paths::parent_of(path).ok_or_else(|| drift("ID file has no parent"))?;
-        let name = captured.metadata.as_ref().map(|meta| meta.name.as_str());
-        let directory = backend.stat(&parent)?;
-        if !directory.is_dir || directory.is_symlink || directory.special {
-            return Err(super::apply_boundary::protected(super::OmissionKind::Link));
-        }
-        backend.invalidate_cache();
-        backend
-            .list_dir_for_sync(&parent)?
-            .into_iter()
-            .find(|meta| meta.id.as_deref() == id && Some(meta.name.as_str()) == name)
-            .map(|meta| regular(meta, label))
-            .transpose()?
-    } else {
-        current_metadata(backend, path, label)?
+        Some(metadata) => current_identity(backend, path, metadata, label)?,
+        None => current_metadata(backend, path, label)?,
     };
     let unchanged = match (captured.metadata.as_ref(), current.as_ref()) {
         (None, None) => true,
@@ -155,19 +137,48 @@ fn regular(metadata: VfsMeta, label: &str) -> io::Result<VfsMeta> {
 }
 
 fn current_metadata(backend: &dyn Backend, path: &str, label: &str) -> io::Result<Option<VfsMeta>> {
-    match backend.stat(path) {
-        Ok(metadata) => Ok(Some(regular(metadata, label)?)),
+    match crate::vfs::sync_stat(backend, path) {
+        Ok(metadata) => {
+            let metadata = regular(metadata, label)?;
+            if backend.has_duplicate_file_names()
+                && metadata.id.as_deref().is_none_or(|id| id.is_empty())
+            {
+                return Err(drift("ID-addressed file has no stable ID"));
+            }
+            Ok(Some(metadata))
+        }
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(stat_error) => match backend.try_exists(path) {
-            Ok(false) => Ok(None),
-            Ok(true) => Err(stat_error),
-            Err(existence_error) => Err(existence_error),
-        },
+        // A failed exact-ID/logical-name observation is never repaired with
+        // a browsing existence hint that might resolve another identity.
+        Err(error) => Err(error),
     }
 }
 
+fn current_identity(
+    backend: &dyn Backend,
+    path: &str,
+    previous: &VfsMeta,
+    label: &str,
+) -> io::Result<Option<VfsMeta>> {
+    let id = previous
+        .id
+        .as_deref()
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| drift("ID-addressed file has no stable ID"))?;
+    let parent = super::paths::parent_of(path).ok_or_else(|| drift("ID file has no parent"))?;
+    let mut matching = super::sync_observation::named(backend, &parent, &previous.name)?
+        .into_iter()
+        .filter(|meta| meta.id.as_deref() == Some(id));
+    let metadata = matching.next().map(|meta| regular(meta, label)).transpose()?;
+    if matching.next().is_some() {
+        return Err(drift("sync listing repeated a captured identity"));
+    }
+    Ok(metadata)
+}
+
 fn same_identity(before: &VfsMeta, after: &VfsMeta) -> bool {
-    before.size == after.size
+    before.name == after.name
+        && before.size == after.size
         && before.mtime_ms == after.mtime_ms
         && before.id == after.id
         && before.content_md5 == after.content_md5
@@ -198,15 +209,7 @@ pub(super) fn current_like(
 ) -> io::Result<CapturedFile> {
     if backend.has_duplicate_file_names() {
         if let Some(meta) = &previous.metadata {
-            let parent =
-                super::paths::parent_of(path).ok_or_else(|| drift("ID file has no parent"))?;
-            backend.invalidate_cache();
-            let metadata = backend
-                .list_dir_for_sync(&parent)?
-                .into_iter()
-                .find(|entry| entry.id == meta.id && entry.name == meta.name)
-                .map(|meta| regular(meta, label))
-                .transpose()?;
+            let metadata = current_identity(backend, path, meta, label)?;
             return Ok(CapturedFile { metadata });
         }
     }

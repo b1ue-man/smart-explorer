@@ -1,4 +1,4 @@
-use crate::vfs::Backend;
+use crate::vfs::{self, Backend};
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -6,7 +6,6 @@ use super::apply_delete::{delete_guarded_with_progress_and_guard, DeleteGuardedP
 use super::apply_guard::{capture, revalidate, ExpectedFile};
 use super::apply_transfer::{copy_replace, copy_replace_with_progress, CopyReplacePhase};
 use super::pair_lock::PairLock;
-use super::paths::join;
 use super::persistence::versions_dir;
 use super::replica_state::merge_baseline_entries;
 use super::run_types::StateKey;
@@ -35,8 +34,8 @@ pub fn resolve(
     pair: &str,
 ) -> io::Result<(Option<Sig>, Option<Sig>)> {
     let versions = versions_dir(pair);
-    let path_a = join(root_a, rel);
-    let path_b = join(root_b, rel);
+    let path_a = vfs::sync_path(a, root_a, rel)?;
+    let path_b = vfs::sync_path(b, root_b, rel)?;
     let throttle = Throttle::new(0);
     let cancel = AtomicBool::new(false);
     let result = if keep_a {
@@ -180,19 +179,21 @@ fn resolve_single_recorded(
         (_, None, None) => {
             capture(
                 endpoints.a,
-                &join(
+                &vfs::sync_path(
+                    endpoints.a,
                     endpoints.root_a,
                     spellings.side_rel(&conflict.rel, PairSide::A),
-                ),
+                )?,
                 ExpectedFile::Missing,
                 "conflict side A",
             )?;
             capture(
                 endpoints.b,
-                &join(
+                &vfs::sync_path(
+                    endpoints.b,
                     endpoints.root_b,
                     spellings.side_rel(&conflict.rel, PairSide::B),
-                ),
+                )?,
                 ExpectedFile::Missing,
                 "conflict side B",
             )?;
@@ -274,8 +275,8 @@ pub fn resolve_variant_checked(
     }
 
     let versions = versions_dir(pair);
-    let path_a = join(root_a, &conflict.rel);
-    let path_b = join(root_b, &conflict.rel);
+    let path_a = vfs::sync_path(a, root_a, &conflict.rel)?;
+    let path_b = vfs::sync_path(b, root_b, &conflict.rel)?;
     let expected_a = expected(conflict.a);
     let expected_b = expected(conflict.b);
     let throttle = Throttle::new(0);
@@ -361,7 +362,7 @@ fn destination_expected_is_present(expected: ExpectedFile) -> bool {
 }
 
 fn sig_of(backend: &dyn Backend, path: &str) -> io::Result<Option<Sig>> {
-    match backend.stat(path) {
+    match vfs::sync_stat(backend, path) {
         Ok(metadata) if metadata.is_dir || metadata.is_symlink || metadata.special => {
             Err(io::Error::new(
                 io::ErrorKind::InvalidData,
