@@ -520,9 +520,11 @@ prove_remote_filesystem "$se_bin" "$new_requester" "$new_endpoint" "new-to-old"
 
 stage="NEW to OLD: keep capability RPCs out of the admitted legacy filesystem path"
 legacy_daemon_log="$old_target/data/smart_explorer/sync/daemon.log"
+current_daemon_log="$new_requester/data/smart_explorer/sync/daemon.log"
 [[ -s "$legacy_daemon_log" ]] || fail "legacy daemon admission log is missing"
-grep -Fq 'Iroh-Session akzeptiert:' "$legacy_daemon_log" || fail \
-  "legacy target has not recorded an admitted peer session"
+[[ -s "$current_daemon_log" ]] || fail "current daemon admission log is missing"
+grep -Fq 'Iroh-Session authentifiziert:' "$current_daemon_log" || fail \
+  "current requester has not recorded its authenticated legacy peer session"
 if grep -Fq 'unknown variant `capabilities`' "$legacy_daemon_log"; then
   fail "current requester sent unsupported capability RPCs to its admitted legacy peer"
 fi
