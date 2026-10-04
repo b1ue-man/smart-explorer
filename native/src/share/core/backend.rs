@@ -25,10 +25,10 @@ pub(crate) use super::node::ShareIrohNode;
 mod peer_batch_get;
 #[path = "peer_batch_put.rs"]
 mod peer_batch_put;
-#[path = "peer_transfer.rs"]
-mod peer_transfer;
 #[path = "peer_stages.rs"]
 pub(super) mod peer_stages;
+#[path = "peer_transfer.rs"]
+mod peer_transfer;
 
 pub struct PeerBackend {
     pub(super) endpoint_source: PeerEndpointSource,
@@ -306,12 +306,18 @@ impl Backend for PeerBackend {
 
     fn rename(&self, src: &str, dst: &str) -> VfsResult<()> {
         let ticket = self.begin_tracked_mutation(src)?;
-        match self.tracked_request(FsRequest::Rename {
-            src: src.to_string(),
-            dst: dst.to_string(),
-        }, ticket.as_ref(), "rename")? {
+        match self.tracked_request(
+            FsRequest::Rename {
+                src: src.to_string(),
+                dst: dst.to_string(),
+            },
+            ticket.as_ref(),
+            "rename",
+        )? {
             FsResponse::Ok => {
-                if let Some(ticket) = ticket { ticket.release(); }
+                if let Some(ticket) = ticket {
+                    ticket.release();
+                }
                 Ok(())
             }
             _ => Err(eio("unerwartete Antwort auf rename")),
@@ -324,12 +330,18 @@ impl Backend for PeerBackend {
 
     fn rename_no_replace(&self, src: &str, dst: &str) -> VfsResult<()> {
         let ticket = self.begin_tracked_mutation(src)?;
-        match self.tracked_request(FsRequest::RenameNoReplace {
-            src: src.to_string(),
-            dst: dst.to_string(),
-        }, ticket.as_ref(), "rename_no_replace")? {
+        match self.tracked_request(
+            FsRequest::RenameNoReplace {
+                src: src.to_string(),
+                dst: dst.to_string(),
+            },
+            ticket.as_ref(),
+            "rename_no_replace",
+        )? {
             FsResponse::Ok => {
-                if let Some(ticket) = ticket { ticket.release(); }
+                if let Some(ticket) = ticket {
+                    ticket.release();
+                }
                 Ok(())
             }
             _ => Err(eio("unerwartete Antwort auf rename_no_replace")),
@@ -338,10 +350,13 @@ impl Backend for PeerBackend {
 
     fn promote_staged(&self, staged: &str, destination: &str) -> VfsResult<()> {
         let ticket = self.begin_stage_publication(staged)?;
-        match self.stage_request_once(FsRequest::PromoteStaged {
-            staged: staged.to_string(),
-            destination: destination.to_string(),
-        }, "promote_staged")? {
+        match self.stage_request_once(
+            FsRequest::PromoteStaged {
+                staged: staged.to_string(),
+                destination: destination.to_string(),
+            },
+            "promote_staged",
+        )? {
             FsResponse::Ok => {
                 ticket.release();
                 Ok(())
@@ -352,11 +367,17 @@ impl Backend for PeerBackend {
 
     fn remove_file(&self, path: &str) -> VfsResult<()> {
         let ticket = self.begin_tracked_mutation(path)?;
-        match self.tracked_request(FsRequest::RemoveFile {
-            path: path.to_string(),
-        }, ticket.as_ref(), "remove_file")? {
+        match self.tracked_request(
+            FsRequest::RemoveFile {
+                path: path.to_string(),
+            },
+            ticket.as_ref(),
+            "remove_file",
+        )? {
             FsResponse::Ok => {
-                if let Some(ticket) = ticket { ticket.release(); }
+                if let Some(ticket) = ticket {
+                    ticket.release();
+                }
                 Ok(())
             }
             _ => Err(eio("unerwartete Antwort auf remove_file")),

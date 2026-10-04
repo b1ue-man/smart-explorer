@@ -22,13 +22,21 @@ pub(super) fn client(
     };
     validate(&request)?;
     let supported = peer_stream::features(backend, destination)?.reversible_replace_v1;
-    let ticket = if supported { Some(backend.begin_stage_publication(staged)?) } else { None };
+    let ticket = if supported {
+        Some(backend.begin_stage_publication(staged)?)
+    } else {
+        None
+    };
     let result = negotiated(
         &request,
         supported,
         ticket.is_some(),
         |request| call_once(backend, request, "replace_staged_reversible"),
-        || { if let Some(ticket) = &ticket { ticket.release(); } },
+        || {
+            if let Some(ticket) = &ticket {
+                ticket.release();
+            }
+        },
     );
     if let (Ok(false), Some(ticket)) = (&result, &ticket) {
         // Explicit false confirms that this mutation did not consume the stage.
@@ -69,7 +77,9 @@ fn negotiated(
 /// Bypass Attempts entirely, including its extra Idle-close retry. Opening
 /// may establish a transport, but this operation frame is sent exactly once.
 pub(in crate::share) fn call_once(
-    backend: &PeerBackend, request: FsRequest, operation: &'static str,
+    backend: &PeerBackend,
+    request: FsRequest,
+    operation: &'static str,
 ) -> io::Result<FsResponse> {
     let started = Instant::now();
     let lease = backend.mount_lease_token()?;
@@ -85,12 +95,7 @@ pub(in crate::share) fn call_once(
         lease,
         Instant::now() + io_deadline::PEER_OP_TIMEOUT,
     )?)?;
-    peer_telemetry::report_fs_success(
-        &backend.node.ev,
-        operation,
-        started,
-        &response,
-    );
+    peer_telemetry::report_fs_success(&backend.node.ev, operation, started, &response);
     Ok(response)
 }
 

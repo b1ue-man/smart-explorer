@@ -80,7 +80,11 @@ pub(in crate::share) struct StageTicket {
 }
 
 impl StageLedger {
-    pub(in crate::share) fn reserve(&self, path: &str, binding: Binding) -> io::Result<StageTicket> {
+    pub(in crate::share) fn reserve(
+        &self,
+        path: &str,
+        binding: Binding,
+    ) -> io::Result<StageTicket> {
         if !client_stage_name(path) {
             return Err(not_own());
         }
@@ -93,11 +97,14 @@ impl StageLedger {
         }
         ledger.serial = ledger.serial.checked_add(1).ok_or_else(poisoned)?;
         let serial = ledger.serial;
-        ledger.entries.insert(path.into(), Entry {
-            serial,
-            binding,
-            phase: Phase::Creating,
-        });
+        ledger.entries.insert(
+            path.into(),
+            Entry {
+                serial,
+                binding,
+                phase: Phase::Creating,
+            },
+        );
         Ok(StageTicket {
             ledger: self.clone(),
             path: path.into(),
@@ -106,14 +113,15 @@ impl StageLedger {
     }
 
     pub(in crate::share) fn contains(&self, path: &str) -> io::Result<bool> {
-        Ok(self.0.lock().map_err(|_| poisoned())?.entries.contains_key(path))
+        Ok(self
+            .0
+            .lock()
+            .map_err(|_| poisoned())?
+            .entries
+            .contains_key(path))
     }
 
-    pub(in crate::share) fn ready(
-        &self,
-        path: &str,
-        binding: &Binding,
-    ) -> io::Result<StageTicket> {
+    pub(in crate::share) fn ready(&self, path: &str, binding: &Binding) -> io::Result<StageTicket> {
         let mut ledger = self.0.lock().map_err(|_| poisoned())?;
         let entry = ledger.entries.get_mut(path).ok_or_else(not_own)?;
         if &entry.binding != binding {
@@ -153,7 +161,10 @@ impl StageLedger {
             return Err(not_own());
         };
         if snapshot.size != proof.size
-            || proof.snapshot.as_ref().is_some_and(|expected| expected != &snapshot)
+            || proof
+                .snapshot
+                .as_ref()
+                .is_some_and(|expected| expected != &snapshot)
         {
             entry.phase = Phase::Pending(None);
             return Err(denied("Stage wurde seit dem Schreibabschluss verändert"));
@@ -252,7 +263,11 @@ impl StageTicket {
 
     pub(in crate::share) fn release(&self) {
         if let Ok(mut ledger) = self.ledger.0.lock() {
-            if ledger.entries.get(&self.path).is_some_and(|entry| entry.serial == self.serial) {
+            if ledger
+                .entries
+                .get(&self.path)
+                .is_some_and(|entry| entry.serial == self.serial)
+            {
                 ledger.entries.remove(&self.path);
             }
         }
@@ -266,9 +281,7 @@ impl PeerBackend {
     ) -> io::Result<Box<dyn std::io::Write + Send>> {
         let ticket = self.reserve_stage(path)?;
         let opened = self.open_writer(
-            crate::share::wire::FsRequest::WriteNew {
-                path: path.into(),
-            },
+            crate::share::wire::FsRequest::WriteNew { path: path.into() },
             "peer exclusive write open",
         );
         match (opened, ticket) {
@@ -302,7 +315,10 @@ impl PeerBackend {
         if !client_stage_name(path) {
             return Ok(None);
         }
-        self.transfer.stages.reserve(path, self.stage_binding()?).map(Some)
+        self.transfer
+            .stages
+            .reserve(path, self.stage_binding()?)
+            .map(Some)
     }
 
     pub(in crate::share) fn verify_owned_stage(&self, path: &str) -> io::Result<StageTicket> {
@@ -321,7 +337,9 @@ impl PeerBackend {
         };
         if binding != self.stage_binding()? {
             ticket.uncertain();
-            return Err(denied("Share-Freigabe hat sich während der Stageprüfung geändert"));
+            return Err(denied(
+                "Share-Freigabe hat sich während der Stageprüfung geändert",
+            ));
         }
         self.transfer.stages.verify(path, &binding, &meta)
     }
@@ -366,16 +384,20 @@ impl PeerBackend {
 
 fn client_stage_name(path: &str) -> bool {
     let name = path.rsplit('/').next().unwrap_or(path);
-    ["upload", "bisync", "merge", "transfer", "copy"].into_iter().any(|purpose| {
-        let marker = format!(".se-{purpose}-");
-        let Some(position) = name.rfind(&marker) else {
-            return false;
-        };
-        let suffix = &name[position + marker.len()..];
-        position > 0
-            && suffix.len() == 16
-            && suffix.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    })
+    ["upload", "bisync", "merge", "transfer", "copy"]
+        .into_iter()
+        .any(|purpose| {
+            let marker = format!(".se-{purpose}-");
+            let Some(position) = name.rfind(&marker) else {
+                return false;
+            };
+            let suffix = &name[position + marker.len()..];
+            position > 0
+                && suffix.len() == 16
+                && suffix
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        })
 }
 
 fn denied(message: &str) -> io::Error {

@@ -1,22 +1,34 @@
 use super::negotiated;
 use crate::share::{
+    backend::peer_stages::{Binding, StageLedger},
+    peer_writer::owned_writer,
+};
+use crate::share::{
     export_config::ExportAccess,
     fs::{ShareExportConfig, SharedRoot},
     fs_access::{reversible_replace::validate, FsAccess},
     fs_request::FsReversibleReplace,
     wire::{FsHostFeatures, FsRequest, FsResponse},
 };
-use std::{cell::Cell, io};
-use crate::share::{backend::peer_stages::{Binding, StageLedger}, peer_writer::owned_writer};
 use crate::vfs::VfsMeta;
 use std::io::Write;
+use std::{cell::Cell, io};
 
 fn binding() -> Binding {
-    Binding::new("peer:Direct:fixture:node".into(), Some("fixture-lease".into()))
+    Binding::new(
+        "peer:Direct:fixture:node".into(),
+        Some("fixture-lease".into()),
+    )
 }
 
 fn stage_meta() -> VfsMeta {
-    VfsMeta { name: "file".into(), size: 8, mtime_ms: 42, id: Some("created-id".into()), ..Default::default() }
+    VfsMeta {
+        name: "file".into(),
+        size: 8,
+        mtime_ms: 42,
+        id: Some("created-id".into()),
+        ..Default::default()
+    }
 }
 
 fn request() -> FsReversibleReplace {
@@ -93,9 +105,19 @@ fn review_task_h_replace_idle_close_and_lost_ack_never_replay_or_release() {
     let ticket = ledger.verify(path, &binding(), &stage_meta()).unwrap();
     ticket.begin().unwrap();
     assert!(ledger.contains(path).unwrap());
-    assert_eq!(ledger.verify(path, &binding(), &stage_meta()).err().unwrap().kind(), io::ErrorKind::PermissionDenied);
+    assert_eq!(
+        ledger
+            .verify(path, &binding(), &stage_meta())
+            .err()
+            .unwrap()
+            .kind(),
+        io::ErrorKind::PermissionDenied
+    );
     ticket.uncertain();
-    assert_eq!(ticket.unmodified().unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+    assert_eq!(
+        ticket.unmodified().unwrap_err().kind(),
+        io::ErrorKind::PermissionDenied
+    );
 }
 
 #[test]
@@ -134,8 +156,10 @@ fn review_task_h_replace_only_confirmed_true_releases_own_stage() {
 
     let unmanaged = StageLedger::default();
     for path in [
-        "/Docs/regular-file", "/Docs/file.se-batch-0123456789abcdef",
-        "/Docs/file.se-peer-0123456789abcdef", "/Docs/file.se-upload-0123456789abcdeF",
+        "/Docs/regular-file",
+        "/Docs/file.se-batch-0123456789abcdef",
+        "/Docs/file.se-peer-0123456789abcdef",
+        "/Docs/file.se-upload-0123456789abcdeF",
     ] {
         assert!(unmanaged.reserve(path, binding()).is_err());
     }
@@ -157,19 +181,45 @@ fn review_task_h_replace_only_confirmed_true_releases_own_stage() {
         let foreign = StageLedger::default();
         assert!(foreign.verify(&path, &binding(), &stage_meta()).is_err());
         for changed in [
-            VfsMeta { id: Some("foreign-id".into()), ..stage_meta() },
-            VfsMeta { size: 9, ..stage_meta() },
-            VfsMeta { mtime_ms: 43, ..stage_meta() },
-            VfsMeta { is_symlink: true, ..stage_meta() },
-            VfsMeta { special: true, ..stage_meta() },
+            VfsMeta {
+                id: Some("foreign-id".into()),
+                ..stage_meta()
+            },
+            VfsMeta {
+                size: 9,
+                ..stage_meta()
+            },
+            VfsMeta {
+                mtime_ms: 43,
+                ..stage_meta()
+            },
+            VfsMeta {
+                is_symlink: true,
+                ..stage_meta()
+            },
+            VfsMeta {
+                special: true,
+                ..stage_meta()
+            },
         ] {
             let changed_ledger = StageLedger::default();
             let changed_ticket = changed_ledger.reserve(&path, binding()).unwrap();
             changed_ticket.opened().unwrap();
             changed_ticket.committed(8).unwrap();
-            changed_ledger.verify(&path, &binding(), &stage_meta()).unwrap();
-            assert_eq!(changed_ledger.verify(&path, &binding(), &changed).err().unwrap().kind(), io::ErrorKind::PermissionDenied);
-            assert!(changed_ledger.verify(&path, &binding(), &stage_meta()).is_err());
+            changed_ledger
+                .verify(&path, &binding(), &stage_meta())
+                .unwrap();
+            assert_eq!(
+                changed_ledger
+                    .verify(&path, &binding(), &changed)
+                    .err()
+                    .unwrap()
+                    .kind(),
+                io::ErrorKind::PermissionDenied
+            );
+            assert!(changed_ledger
+                .verify(&path, &binding(), &stage_meta())
+                .is_err());
         }
         verified.begin().unwrap();
         assert!(ledger.verify(&path, &binding(), &stage_meta()).is_err());
@@ -185,8 +235,12 @@ fn review_task_h_replace_only_confirmed_true_releases_own_stage() {
     ticket.opened().unwrap();
     ticket.committed(8).unwrap();
     let changed_binding = Binding::new("peer:Direct:fixture:node".into(), Some("new-lease".into()));
-    assert!(replaced_binding.verify(path, &changed_binding, &stage_meta()).is_err());
-    assert!(replaced_binding.verify(path, &binding(), &stage_meta()).is_err());
+    assert!(replaced_binding
+        .verify(path, &changed_binding, &stage_meta())
+        .is_err());
+    assert!(replaced_binding
+        .verify(path, &binding(), &stage_meta())
+        .is_err());
     let ledger = StageLedger::default();
     let ticket = ledger.reserve(path, binding()).unwrap();
     ticket.opened().unwrap();
@@ -197,9 +251,14 @@ fn review_task_h_replace_only_confirmed_true_releases_own_stage() {
 
     struct FailedAck;
     impl Write for FailedAck {
-        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> { Ok(bytes.len()) }
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            Ok(bytes.len())
+        }
         fn flush(&mut self) -> io::Result<()> {
-            Err(io::Error::new(io::ErrorKind::UnexpectedEof, "writer acknowledgement lost"))
+            Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "writer acknowledgement lost",
+            ))
         }
     }
     let failed = StageLedger::default();
@@ -207,14 +266,22 @@ fn review_task_h_replace_only_confirmed_true_releases_own_stage() {
     ticket.opened().unwrap();
     let mut writer = owned_writer(Box::new(FailedAck), ticket);
     writer.write_all(b"prepared").unwrap();
-    assert_eq!(writer.flush().unwrap_err().kind(), io::ErrorKind::UnexpectedEof);
-    assert_eq!(writer.flush().unwrap_err().kind(), io::ErrorKind::UnexpectedEof);
+    assert_eq!(
+        writer.flush().unwrap_err().kind(),
+        io::ErrorKind::UnexpectedEof
+    );
+    assert_eq!(
+        writer.flush().unwrap_err().kind(),
+        io::ErrorKind::UnexpectedEof
+    );
     drop(writer);
     assert!(failed.verify(path, &binding(), &stage_meta()).is_err());
 }
 
 fn writer_ticket_cannot_regrant(
-    ledger: &StageLedger, path: &str, old: crate::share::backend::peer_stages::StageTicket,
+    ledger: &StageLedger,
+    path: &str,
+    old: crate::share::backend::peer_stages::StageTicket,
 ) {
     let next = ledger.reserve(path, binding()).unwrap();
     next.opened().unwrap();
