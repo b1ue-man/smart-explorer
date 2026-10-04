@@ -132,6 +132,22 @@ pub(crate) fn flush_filesystem(_path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Successful local publications already use write-through renames after
+/// their file flush. Preserve that contract without a privileged volume flush.
+pub(crate) fn confirm_namespace(path: &Path) -> std::io::Result<bool> {
+    if !std::fs::metadata(path)?.is_dir() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotADirectory,
+            "namespace parent must be a directory",
+        ));
+    }
+    if filesystem_profile(path)?.flush == super::fs_profile::FlushModel::PerFileOnly {
+        return Ok(false);
+    }
+    flush_filesystem(path)?;
+    Ok(true)
+}
+
 /// Windows files carry ACLs inherited from their folder, not Unix modes.
 pub(crate) fn unix_mode(_metadata: &std::fs::Metadata) -> Option<u32> {
     None
