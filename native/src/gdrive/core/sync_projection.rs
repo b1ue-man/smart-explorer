@@ -98,8 +98,11 @@ impl GDriveBackend {
         for (key, id) in cached {
             let (cache_parent, segment) = split_parent(&key);
             if cache_parent != path { continue; }
+            // New account-cache snapshots contain projections, not evidence
+            // of an old job root's historical selection.
+            if self.captured_legacy_id(&key)?.as_deref() != Some(id.as_str()) { continue; }
             if let Some(binding) = known.by_segment(segment) {
-                if binding.proves(segment) || self.captured_legacy_id(&key)?.as_deref() != Some(id.as_str()) {
+                if binding.proves(segment) {
                     continue;
                 }
             }

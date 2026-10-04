@@ -66,6 +66,14 @@ Nur tatsächlich aus dem alten globalen Cache übernommene ID-Hints werden als
 Altevidenz erfasst und frisch geprüft. Ein von einer neuen Parent-Projektion
 geschriebener Accountcache erhält diese Herkunft auch nach Neustart nicht.
 Die Herkunftsgrenze gilt ebenso für den normalen `ensure_dir`-Writer.
+Der alte globale Cache wird deshalb unabhängig von einem inzwischen vorhandenen
+Accountcache geladen. Seine IDs bleiben als historische, frisch zu prüfende
+Evidenz erreichbar, wenn zuerst ein anderer Job gelaufen ist; die alte Datei
+wird dabei nicht überschrieben. Ein bloßer Accountcache darf weder beim
+normalen Resolve noch beim Import einer Parentprojektion eine unbekannte
+historische Root-Auswahl beweisen. Auch ein alter Root-Hint ohne MIME-Angabe
+bleibt nach bestätigtem Löschen, Verschieben oder Umbenennen reserviert,
+statt bei der ersten Migration einen neuen gleichnamigen Ordner zu wählen.
 
 ### M3 Gemeinsame sichere Sync-Integration
 
@@ -172,7 +180,7 @@ nimmt vor Code den vollständigen Plan auseinander; keine weitere Reviewrunde.
 | Stufe 1 / erste Recherche | fertig | `recherche.md`, gesicherte Refs |
 | Stufe 2 / zweite Recherche | fertig, Lücken eingearbeitet | dieser Plan und `abnahme.md` |
 | Einmalige Plan-Kritik | abgeschlossen, alle Befunde eingearbeitet | `review.md` |
-| M1/M2 | Code und eigener Self-Review fertig | vollständige Kandidatensammlung, reale Root-ID, private Folderbindung und stabile Projektion; Herkunftsbeweis getrennt von Parentprojektion und neuem Accountcache, auch am normalen Writer; Remote-Abnahme ausstehend |
+| M1/M2 | Code und eigener Self-Review fertig | vollständige Kandidatensammlung, reale Root-ID, private Folderbindung und stabile Projektion; Herkunftsbeweis getrennt von Parentprojektion und neuem Accountcache, auch am normalen Writer und gemeinsamen Dateilader über wechselnde Job-Reihenfolge; bestätigtes Missing bereits bei erster Migration geschützt; Remote-Abnahme ausstehend |
 | M3 | Code und eigener Self-Review fertig | additive Sync-Stat-Grenze, tolerante Beobachtung, Literalpfad-Resolve und erhaltenes Bootstrapgate; Remote-Abnahme ausstehend |
 | M4 | Code und eigener Self-Review fertig | fehlende Edit-ID geschützt, wiederanlaufbare Ursachenklassifikation, Loader-Recovery über Workerwechsel; Remote-Abnahme ausstehend |
 | M5 Remote-Gesamtablauf | Suite wird nach abgeschlossener Produktumsetzung erstellt | keine lokale Ausführung; C10 benötigt noch die angefragte Drive-Testautorisierung |

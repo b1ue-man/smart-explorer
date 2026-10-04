@@ -13,6 +13,11 @@ pub(super) struct LoadedCache {
     pub mimes: HashMap<String, String>,
 }
 
+pub(super) struct LoadedCaches {
+    pub hints: LoadedCache,
+    pub historical_ids: HashMap<String, String>,
+}
+
 #[derive(Deserialize, Serialize)]
 struct DiskCache {
     version: u32,
@@ -20,12 +25,24 @@ struct DiskCache {
     mimes: HashMap<String, String>,
 }
 
-pub(super) fn load() -> LoadedCache {
-    load_from_path(&cache_path()).unwrap_or_default()
-}
-
 pub(super) fn cache_path() -> PathBuf {
     super::binding_store::legacy_cache_path()
+}
+
+/// Opening an unrelated root can already have written an account cache.
+/// Keep the still-existing global v2 hints independently reachable; only
+/// those bytes establish historical origin, never the account cache alone.
+pub(super) fn load_account(account_path: &Path, legacy_path: &Path) -> LoadedCaches {
+    let historical = load_from_path(legacy_path).unwrap_or_default();
+    let mut hints = load_from_path(account_path).unwrap_or_default();
+    for (key, id) in &historical.ids {
+        hints.ids.insert(key.clone(), id.clone());
+        match historical.mimes.get(key) {
+            Some(mime) => { hints.mimes.insert(key.clone(), mime.clone()); }
+            None => { hints.mimes.remove(key); }
+        }
+    }
+    LoadedCaches { hints, historical_ids: historical.ids }
 }
 
 pub(super) fn load_from_path(path: &Path) -> io::Result<LoadedCache> {
