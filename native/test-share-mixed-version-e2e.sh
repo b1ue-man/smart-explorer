@@ -535,6 +535,12 @@ stage="OLD to NEW: learn the current invite and connect both workers"
 new_identity="$(run_se "$se_bin" "$new_target" share identity --json)"
 printf '%s\n' "$new_identity" >"$root/old-to-new-current-identity.json"
 new_direct_code="$(jq -er '.direct_code' <<<"$new_identity")"
+
+# Fresh profiles start with no exports. Select ordinary read-only data explicitly;
+# the existing inbox restart must preserve it for the later root-list/stat probe.
+mkdir -p "$root/old-to-new-export"
+run_se "$se_bin" "$new_target" share export add "$root/old-to-new-export" \
+  --label "Files" >"$root/old-to-new-export-add.txt"
 run_se "$se_bin" "$new_target" share configure \
   --server "tcp://127.0.0.1:$signal_port" --allow-plaintext \
   >"$root/old-to-new-current-configure.txt"
