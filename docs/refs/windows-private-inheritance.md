@@ -43,5 +43,10 @@ sind kein Teil des Pfads. Die vorhandene Hardlink-Grenze bleibt vor der Mutation
 Windows-Suite prüft den unveränderten tatsächlichen Owner und lehnt World-SID
 und Null-SID ab. API-/Binding-Lücken erneut am 2026-10-04 geprüft.
 
-Die API-Aussagen sind Quellenbelege; Laufzeitbeweis erfolgt ausschließlich durch
-die fokussierte Remote-Windows-Suite mit echten vorhandenen Dateien und DACLs.
+Die API-Aussagen sind Quellenbelege. Den Laufzeitbeweis lieferte am 2026-10-04 die
+[fokussierte Remote-Windows-Suite](https://github.com/b1ue-man/smart-explorer/actions/runs/37220814819)
+für Source `e388ea36`: echte vorhandene Dateien und DACLs reproduzierten den
+Zugriffsverlust sowie `os error 183`; der reparierte Zugriff erhält Jobs,
+Konfiguration und tatsächlichen Owner. Gewöhnliche neue Kinder bleiben zugänglich,
+fremde Owner und private Hardlinks bleiben abgelehnt. Ausgeliefert in
+[v0.5.171](https://github.com/b1ue-man/smart-explorer/releases/tag/v0.5.171).
