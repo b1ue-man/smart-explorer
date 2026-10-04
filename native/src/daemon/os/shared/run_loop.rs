@@ -23,6 +23,9 @@ use super::state::{
 
 const HANDOFF_ACTIVATION_TIMEOUT: Duration = Duration::from_secs(2);
 const DAEMON_HANDOFF_TIMEOUT: Duration = Duration::from_secs(300);
+// The durable origin distinguishes a configuration read from a rejected
+// resolver/run configuration. Only a successfully reloaded job clears it.
+const JOB_LOAD_FAILURE_PREFIX: &str = "Sync-Jobdatei konnte nicht geladen werden: ";
 
 /// A version-upgrade handoff of the desktop worker process: the replacement's
 /// own generation and the one it retires (both validated by the caller).
@@ -314,18 +317,19 @@ fn load_configured_jobs(broken: &mut HashMap<String, String>) -> Vec<SyncJob> {
                 ));
                 let mut job = SyncJob::new(invalid.id.clone(), String::new(), String::new());
                 job.id = invalid.id.clone();
+                let load_error = format!("{JOB_LOAD_FAILURE_PREFIX}{}", invalid.error);
                 super::job::persist(
                     &job,
                     now_secs(),
                     RunCause::Other,
                     crate::syncjobs::AttemptOutcome::Failed(crate::syncjobs::JobError {
                         kind: crate::syncjobs::FailureKind::Config,
-                        message: invalid.error.clone(),
+                        message: load_error.clone(),
                     }),
                     crate::syncjobs::JobResult {
                         when: now_secs(),
                         errors: 1,
-                        note: invalid.error.clone(),
+                        note: load_error,
                         ..Default::default()
                     },
                 );
@@ -333,10 +337,11 @@ fn load_configured_jobs(broken: &mut HashMap<String, String>) -> Vec<SyncJob> {
             }
             super::problem_notify::notify(&invalid_notices, now_secs());
             for job in &report.jobs {
-                if crate::syncjobs::load_job_state(&job.id)
-                    .ok()
-                    .is_some_and(|state| state.load_error.is_some())
-                {
+                let previous = broken.remove(&job.id);
+                let Ok(loaded) = crate::syncjobs::load_job_state(&job.id) else {
+                    continue;
+                };
+                if loaded.load_error.is_some() {
                     // Store/quarantine once, retaining an explicit safety stop
                     // rather than inferring that the old state had no block.
                     if let Err(error) = crate::syncjobs::update_job_state(&job.id, |_| {}) {
@@ -345,18 +350,24 @@ fn load_configured_jobs(broken: &mut HashMap<String, String>) -> Vec<SyncJob> {
                             job.id
                         ));
                     }
+                    continue;
                 }
-                if let Some(previous) = broken.remove(&job.id) {
-                    let _ = crate::syncjobs::update_job_state(&job.id, |state| {
-                        if state.last_error.as_ref().is_some_and(|error| {
-                            error.kind == crate::syncjobs::FailureKind::Config
-                                && error.message == previous
-                        }) {
+                if recovered_config_load(job, &loaded, previous.as_deref()) {
+                    if let Err(error) = crate::syncjobs::update_job_state(&job.id, |state| {
+                        if state.last_attempt == loaded.last_attempt
+                            && state.last_error == loaded.last_error
+                            && recovered_config_load(job, state, previous.as_deref())
+                        {
                             state.last_error = None;
                             state.consecutive_failures = 0;
                             state.retry_at = None;
                         }
-                    });
+                    }) {
+                        log(&format!(
+                            "job '{}' load recovery cannot be stored: {error}",
+                            job.id
+                        ));
+                    }
                 }
             }
             report.jobs
@@ -368,6 +379,60 @@ fn load_configured_jobs(broken: &mut HashMap<String, String>) -> Vec<SyncJob> {
             Vec::new()
         }
     }
+}
+
+fn recovered_config_load(
+    job: &SyncJob,
+    state: &crate::syncjobs::JobState,
+    previous: Option<&str>,
+) -> bool {
+    use crate::syncjobs::{FailureKind, Runner};
+    let Some(error) = &state.last_error else {
+        return false;
+    };
+    if error.kind != FailureKind::Config
+        || state.load_error.is_some()
+        || state.running_now(now_secs()).is_some()
+    {
+        return false;
+    }
+    let message = error.message.as_str();
+    if message.starts_with(JOB_LOAD_FAILURE_PREFIX) || previous == Some(message) {
+        return true;
+    }
+    // Before this origin was persisted, load_job_file reported its exact
+    // configuration path (or a bare std::io error). Preparation/resolution
+    // failures never used these diagnostics with the loader's Other cause.
+    if state.last_runner != Some(Runner::Daemon)
+        || state.last_cause != Some(RunCause::Other)
+        || !state
+            .last_result
+            .as_ref()
+            .is_some_and(|result| result.note == message)
+    {
+        return false;
+    }
+    let path = crate::syncjobs::jobs_dir().join(format!("{}.conf", job.id));
+    message.starts_with(&format!(
+        "invalid sync job configuration {}:",
+        path.display()
+    ))
+        || (message.starts_with("sync job ")
+            && message.ends_with(&format!(": {}", path.display())))
+        || message.starts_with("Löschschutz-Migration: ")
+        || legacy_io_load_failure(message)
+}
+
+fn legacy_io_load_failure(message: &str) -> bool {
+    let Some((description, code)) = message.rsplit_once(" (os error ") else {
+        return false;
+    };
+    !description.is_empty()
+        && !description.contains([':', '\n', '\r'])
+        && code
+            .strip_suffix(')')
+            .and_then(|code| code.parse::<i32>().ok())
+            .is_some_and(|code| code > 0)
 }
 
 fn enqueue_job(supervisor: &mut JobSupervisor, job: &SyncJob, cause: RunCause, generation: &str) {

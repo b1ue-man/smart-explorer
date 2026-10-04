@@ -247,31 +247,51 @@ mod tests {
 /// Authentication and permissions never cause automatic account probes.
 pub fn classify_failure(message: &str) -> FailureKind {
     let lower = message.to_lowercase();
-    if [
-        "auth",
-        "anmeld",
-        "passwort",
-        "password",
-        "credential",
-        "unauthorized",
-        "401",
-        "invalid_grant",
-        "schlüssel",
-        "key rejected",
-        "login",
-        "not logged in",
-        "530 ",
-        "host key",
-        "certificate",
-        "zertifikat",
+    // Operation labels describe where an error happened, not its cause. In
+    // particular, a failed read of the credential store is not a rejected
+    // login, and an invalid remote response is not a broken saved job.
+    let detail = [
+        "gespeicherte anmeldeinformation lesen: ",
+        "oauth-verbindung dauerhaft speichern: ",
+        "erneuertes oauth-token dauerhaft speichern: ",
+        "drive account identity request failed: ",
+        "drive account identity response failed: ",
     ]
     .iter()
-    .any(|part| lower.contains(part))
+    .find_map(|prefix| lower.split_once(*prefix).map(|(_, detail)| detail))
+    .unwrap_or(lower.as_str());
+    if lower.contains("drive account identity response is invalid:")
+        || lower.contains("drive account identity response has no permissionid")
+        || transient_http_status(detail)
+    {
+        return FailureKind::Unreachable;
+    }
+    if detail.trim() == "nicht verbunden"
+        || [
+            "auth",
+            "anmeld",
+            "passwort",
+            "password",
+            "credential",
+            "unauthorized",
+            "401",
+            "invalid_grant",
+            "schlüssel",
+            "key rejected",
+            "login",
+            "not logged in",
+            "530 ",
+            "host key",
+            "certificate",
+            "zertifikat",
+        ]
+        .iter()
+        .any(|part| detail.contains(part))
     {
         FailureKind::Auth
     } else if ["permission", "zugriff", "access denied", "403"]
         .iter()
-        .any(|part| lower.contains(part))
+        .any(|part| detail.contains(part))
     {
         FailureKind::Access
     } else if [
@@ -282,10 +302,23 @@ pub fn classify_failure(message: &str) -> FailureKind {
         "keine gespeicherte",
     ]
     .iter()
-    .any(|part| lower.contains(part))
+    .any(|part| detail.contains(part))
     {
         FailureKind::Config
     } else {
         FailureKind::Unreachable
     }
+}
+
+fn transient_http_status(detail: &str) -> bool {
+    // Match an actual response status rather than arbitrary digits in a path
+    // or authority; OAuth/request context must not turn a 5xx into Auth.
+    ["status code ", "http status ", "http "]
+        .iter()
+        .filter_map(|prefix| detail.split_once(*prefix).map(|(_, tail)| tail))
+        .any(|tail| {
+            let code = tail.split(|ch: char| !ch.is_ascii_digit()).next();
+            code.and_then(|code| code.parse::<u16>().ok())
+                .is_some_and(|code| matches!(code, 408 | 429 | 500..=599))
+        })
 }
