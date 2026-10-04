@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parent.parent
 BASE = "7fc17ecf355b6473a506d756ad4c1fb2d2c0d173"
 PREFIXES = ["review_task_", "rv1_remote_provider_task_", "sync_paths_task_", "sync_links_task_", "engine_provider_"]
 EXTRA = ["walks_searches_and_hashes_report_listing_failures",
+    "transfer_engine_task_sized_stage_commits_only_exact_length",
     "desktop_merge_preserves_crlf_final_separator_and_empty_line",
     "desktop_merge_excluding_all_lines_does_not_create_newline",
     "desktop_merge_rejects_lossy_and_mixed_text_without_changing_bytes",
