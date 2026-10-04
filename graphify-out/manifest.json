@@ -2660,9 +2660,14 @@
     "semantic_hash": "2f7f81f4d7382103602931efa842ea6d"
   },
   "cloud/core/cloud.rs": {
-    "mtime": 1790352539.9109457,
-    "ast_hash": "01723ea5588597f0cb72c219bdfa600b",
-    "semantic_hash": "01723ea5588597f0cb72c219bdfa600b"
+    "mtime": 1791132606.3674803,
+    "ast_hash": "41a48894d3c25884f35e5d8c04c9a301",
+    "semantic_hash": "41a48894d3c25884f35e5d8c04c9a301"
+  },
+  "cloud/core/startup_regression_task_tests.rs": {
+    "mtime": 1791132960.8669581,
+    "ast_hash": "54ed152d76a2515c1e5b06791402685e",
+    "semantic_hash": "54ed152d76a2515c1e5b06791402685e"
   },
   "cloud/core/token_persistence.rs": {
     "mtime": 1783653915.7198641,
@@ -2690,9 +2695,9 @@
     "semantic_hash": "53ce499e963f75eacb417e03a093e4f3"
   },
   "cloud/os/shared.rs": {
-    "mtime": 1783653915.718864,
-    "ast_hash": "d64caed9c60fbfab673d4d773a6efd09",
-    "semantic_hash": "d64caed9c60fbfab673d4d773a6efd09"
+    "mtime": 1791132465.0646954,
+    "ast_hash": "ce169a0d0d3bcf1b758f30e125c760f7",
+    "semantic_hash": "ce169a0d0d3bcf1b758f30e125c760f7"
   },
   "cloud/os/windows.rs": {
     "mtime": 1790352539.9109457,
@@ -4240,9 +4245,9 @@
     "semantic_hash": "273cbbb1cdb96d1dc93b15d1d41f3645"
   },
   "local_access/os/windows/private_security.rs": {
-    "mtime": 1791067566.0464911,
-    "ast_hash": "f290e2c8ef6ee433bc2b6d2a46389652",
-    "semantic_hash": "f290e2c8ef6ee433bc2b6d2a46389652"
+    "mtime": 1791132960.8659582,
+    "ast_hash": "d9fda83b1af790f1d52931885c8431f6",
+    "semantic_hash": "d9fda83b1af790f1d52931885c8431f6"
   },
   "local_access/os/windows/privilege.rs": {
     "mtime": 1789852347.0682073,
@@ -4268,6 +4273,11 @@
     "mtime": 1791055116.3129725,
     "ast_hash": "12da5a425809092dc9872bed44eddb0f",
     "semantic_hash": "12da5a425809092dc9872bed44eddb0f"
+  },
+  "local_access/os/windows/startup_regression_task_tests.rs": {
+    "mtime": 1791132960.8669581,
+    "ast_hash": "05fc94c2ced6421f88beecf357c332f6",
+    "semantic_hash": "05fc94c2ced6421f88beecf357c332f6"
   },
   "local_access/os/windows/sync_link_task_tests.rs": {
     "mtime": 1790159257.349769,
