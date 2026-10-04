@@ -64,4 +64,7 @@ wird nur protokolliert. Windows-Standardbesitz wurde fälschlich abgewiesen; die
 reale Kompatibilitätsfehler wird im selben Milestone korrigiert. Die Altzustands-
 Fixture umfasst nun auch den vor 0.5.170 gewöhnlich erbenden Sync-Parent, damit
 der denied Handoff nicht durch einen schon geschützten Fixture-Parent verdeckt wird.
+Gespeicherte Jobs werden sowohl im aktuellen Format byte-identisch als auch mit
+der echten Vor-Update-Migration (`config_version=0`, bestehende `.conf` ersetzen,
+Baselineberechtigung behalten) im selben Startup-Szenario geprüft.
 Remote-Laufzeitabnahme und Veröffentlichung stehen aus.

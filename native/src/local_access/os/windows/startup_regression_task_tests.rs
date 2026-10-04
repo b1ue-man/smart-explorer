@@ -121,6 +121,15 @@ fn startup_regression_task_repairs_existing_jobs_cloud_and_control_writes() {
     crate::syncjobs::upsert(&job).unwrap();
     let job_path = crate::syncjobs::jobs_dir().join(format!("{}.conf", job.id));
     let job_body = std::fs::read(&job_path).unwrap();
+    let mut legacy = crate::syncjobs::SyncJob::new(
+        "pre-update job".into(),
+        "sftp://other-account/data".into(),
+        "gdrive:///older-backup".into(),
+    );
+    legacy.config_version = 0;
+    legacy.max_delete_pct = 0;
+    legacy.max_delete_min = 0;
+    crate::syncjobs::upsert(&legacy).unwrap();
 
     // Before 0.5.170, this ordinary directory inherited its app-data access.
     // The root's old non-inheritable DACL then removes its inherited ACEs.
@@ -146,10 +155,17 @@ fn startup_regression_task_repairs_existing_jobs_cloud_and_control_writes() {
 
     // These are the production startup paths, not a direct fixture ACL repair.
     let loaded = crate::syncjobs::load().unwrap();
-    assert_eq!(loaded.len(), 1);
-    assert_eq!(loaded[0].id, job.id);
-    assert_eq!(loaded[0].source, job.source);
-    assert_eq!(loaded[0].target, job.target);
+    assert_eq!(loaded.len(), 2);
+    let current = loaded.iter().find(|saved| saved.id == job.id).unwrap();
+    assert_eq!(current.source, job.source);
+    assert_eq!(current.target, job.target);
+    let upgraded = loaded.iter().find(|saved| saved.id == legacy.id).unwrap();
+    assert_eq!(upgraded.source, legacy.source);
+    assert_eq!(upgraded.target, legacy.target);
+    assert_eq!(upgraded.config_version, crate::syncjobs::CURRENT_CONFIG_VERSION);
+    assert_eq!(upgraded.max_delete_pct, 50);
+    assert_eq!(upgraded.max_delete_min, 25);
+    assert!(crate::syncjobs::legacy_baseline_pending(&legacy.id).unwrap());
     assert_eq!(std::fs::read(&job_path).unwrap(), job_body);
     let config = crate::cloud::load_config_checked(crate::cloud::Provider::GDrive).unwrap();
     assert_eq!(config.client_id, "stored.apps.googleusercontent.com");
@@ -161,7 +177,11 @@ fn startup_regression_task_repairs_existing_jobs_cloud_and_control_writes() {
         "stop"
     );
     crate::daemon::request_stop().unwrap();
-    assert_eq!(crate::syncjobs::load().unwrap()[0].id, job.id);
+    let reloaded = crate::syncjobs::load().unwrap();
+    assert_eq!(reloaded.len(), 2);
+    assert!(reloaded.iter().any(|saved| saved.id == job.id));
+    assert!(reloaded.iter().any(|saved| saved.id == legacy.id));
+    assert!(crate::syncjobs::legacy_baseline_pending(&legacy.id).unwrap());
 }
 
 #[test]
