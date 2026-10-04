@@ -29,10 +29,25 @@ pub(crate) fn namespace(backend: &dyn Backend, path: &str) -> io::Result<bool> {
     if !backend.is_local() {
         return Ok(true);
     }
-    crate::vfs::sync_filesystem(
+    crate::vfs::confirm_namespace(
         backend,
         &parent_of(path).unwrap_or_else(|| path.to_string()),
     )
+}
+
+/// A parent namespace confirmation cannot flush an unfinished stage's contents.
+fn flush_unconfirmed_stage(backend: &dyn Backend, path: &str) -> io::Result<()> {
+    if crate::vfs::sync_filesystem(
+        backend,
+        &parent_of(path).unwrap_or_else(|| path.to_string()),
+    )? {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "filesystem did not confirm the staged file contents",
+        ))
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -184,7 +199,7 @@ pub(super) fn stage<'a>(
         },
     )?;
     if destination.is_local() && durability == StageDurability::Now && !finished.durable {
-        require_durable(namespace(destination, &staged.path)?)?;
+        flush_unconfirmed_stage(destination, &staged.path)?;
     }
     staged.bytes = transferred;
     staged.source.hash = transferred.hash();
@@ -256,7 +271,7 @@ pub(super) fn stage_bytes<'a>(
         },
     )?;
     if destination.is_local() && !finished.durable {
-        require_durable(namespace(destination, &staged.path)?)?;
+        flush_unconfirmed_stage(destination, &staged.path)?;
     }
     staged.bytes.digest = md5::compute(bytes).0;
     Ok(staged)

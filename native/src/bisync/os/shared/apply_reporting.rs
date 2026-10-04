@@ -44,7 +44,14 @@ pub(super) fn classify(
     }
     if let Some(kind) = super::apply_boundary::omitted(error) {
         scope.sink.omitted(rel, kind);
-        return true;
+        // The read classifier also describes failed writes and backups. Keep
+        // their old basis protected, but do not report the action as successful.
+        return !matches!(
+            kind,
+            super::omissions::OmissionKind::Unreadable
+                | super::omissions::OmissionKind::Vanished
+                | super::omissions::OmissionKind::NotRepresentable
+        );
     }
     let stop = match error.kind() {
         io::ErrorKind::StorageFull | io::ErrorKind::QuotaExceeded => {
@@ -270,7 +277,8 @@ pub(super) fn run(
                     target_side(action),
                     scope,
                     &stopped,
-                ) {
+                ) && error.before_commit()
+                {
                     Ok(BisyncStats::default())
                 } else {
                     Err(error)

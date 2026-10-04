@@ -293,6 +293,9 @@ impl crate::vfs::BackendExtensions for Counting {
     fn sync_filesystem(&self, root: &str) -> VfsResult<bool> {
         crate::vfs::sync_filesystem(&self.inner, root)
     }
+    fn confirm_namespace(&self, parent: &str) -> VfsResult<bool> {
+        crate::vfs::confirm_namespace(&self.inner, parent)
+    }
     fn target_limits(&self, root: &str) -> crate::vfs::TargetLimits {
         crate::vfs::target_limits(&self.inner, root)
     }
@@ -334,8 +337,11 @@ fn no_op_run_skips_rewalk() {
         first.blocked,
         first.deferred
     );
-    assert_eq!(lists_a.load(Ordering::Relaxed), 2);
-    assert_eq!(lists_b.load(Ordering::Relaxed), 2);
+    // Published signatures feed the checkpoint directly; no source rewalk.
+    assert_eq!(lists_a.load(Ordering::Relaxed), 1);
+    assert_eq!(lists_b.load(Ordering::Relaxed), 1);
+    assert_eq!(first.stats.a_to_b, 1);
+    assert_eq!(std::fs::read(b.join("f.txt")).unwrap(), b"hello");
     lists_a.store(0, Ordering::Relaxed);
     lists_b.store(0, Ordering::Relaxed);
     let second = super::super::run(
@@ -355,6 +361,7 @@ fn no_op_run_skips_rewalk() {
     assert_eq!(lists_a.load(Ordering::Relaxed), 1);
     assert_eq!(lists_b.load(Ordering::Relaxed), 1);
     let state = first.state.as_ref().expect("recorded first run state");
+    assert_eq!(load_baseline(&baseline_file(state).unwrap()).unwrap(), first.baseline);
     std::fs::remove_file(baseline_file(state).unwrap()).ok();
     std::fs::remove_dir_all(versions_dir(&state.pair_id)).ok();
     std::fs::remove_dir_all(a).ok();

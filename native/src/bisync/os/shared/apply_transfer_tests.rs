@@ -222,6 +222,9 @@ impl crate::vfs::BackendExtensions for HookBackend {
     fn sync_filesystem(&self, root: &str) -> VfsResult<bool> {
         crate::vfs::sync_filesystem(&self.inner, root)
     }
+    fn confirm_namespace(&self, parent: &str) -> VfsResult<bool> {
+        crate::vfs::confirm_namespace(&self.inner, parent)
+    }
     fn unix_mode(&self, path: &str) -> VfsResult<Option<u32>> {
         crate::vfs::unix_mode(&self.inner, path)
     }
