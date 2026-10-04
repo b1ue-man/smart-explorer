@@ -2,8 +2,67 @@ use super::super::*;
 use super::fwd;
 use crate::agent::AgentBackend;
 use crate::vfs::{Backend, BackendHandle, LocalBackend};
+use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::{atomic::AtomicBool, Arc};
+
+/// A remote client location cannot satisfy a framed request through local I/O.
+struct RemoteClient(LocalBackend);
+
+impl RemoteClient {
+    fn unavailable<T>() -> io::Result<T> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "remote fixture must use its agent transport",
+        ))
+    }
+}
+
+impl Backend for RemoteClient {
+    fn scheme(&self) -> crate::vfs::Scheme {
+        self.0.scheme()
+    }
+
+    fn root_display(&self) -> String {
+        self.0.root_display()
+    }
+
+    fn is_local(&self) -> bool {
+        false
+    }
+
+    fn list_dir(&self, _path: &str) -> crate::vfs::VfsResult<Vec<crate::vfs::VfsMeta>> {
+        Self::unavailable()
+    }
+
+    fn stat(&self, _path: &str) -> crate::vfs::VfsResult<crate::vfs::VfsMeta> {
+        Self::unavailable()
+    }
+
+    fn open_read(&self, _path: &str) -> crate::vfs::VfsResult<Box<dyn Read + Send>> {
+        Self::unavailable()
+    }
+
+    fn open_write(&self, _path: &str) -> crate::vfs::VfsResult<Box<dyn Write + Send>> {
+        Self::unavailable()
+    }
+
+    fn rename(&self, _source: &str, _destination: &str) -> crate::vfs::VfsResult<()> {
+        Self::unavailable()
+    }
+
+    fn remove_file(&self, _path: &str) -> crate::vfs::VfsResult<()> {
+        Self::unavailable()
+    }
+
+    fn remove_dir(&self, _path: &str) -> crate::vfs::VfsResult<()> {
+        Self::unavailable()
+    }
+
+    fn mkdir_all(&self, _path: &str) -> crate::vfs::VfsResult<()> {
+        Self::unavailable()
+    }
+}
 
 struct Endpoint {
     backend: AgentBackend,
@@ -26,10 +85,28 @@ impl Endpoint {
         root: &str,
         handler: impl FnOnce(TcpStream, TcpStream, BackendHandle) + Send + 'static,
     ) -> Self {
+        Self::connect_client(root, false, handler)
+    }
+
+    fn remote(root: &str) -> Self {
+        Self::connect_client(root, true, |reader, writer, _| {
+            let _ = crate::agent_proto::serve(reader, writer);
+        })
+    }
+
+    fn connect_client(
+        root: &str,
+        remote: bool,
+        handler: impl FnOnce(TcpStream, TcpStream, BackendHandle) + Send + 'static,
+    ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
-        let inner: BackendHandle = Arc::new(LocalBackend::new(root));
-        let served = inner.clone();
+        let served: BackendHandle = Arc::new(LocalBackend::new(root));
+        let inner: BackendHandle = if remote {
+            Arc::new(RemoteClient(LocalBackend::new(root)))
+        } else {
+            served.clone()
+        };
         let server = std::thread::spawn(move || {
             let (writer, _) = listener.accept().unwrap();
             let reader = writer.try_clone().unwrap();
@@ -137,7 +214,8 @@ fn sync_links_task_regular_agent_tree_keeps_fast_hash_path_and_filters() {
         .unwrap();
     }
     let root = fwd(directory.path());
-    let endpoint = Endpoint::new(&root, false);
+    let endpoint = Endpoint::remote(&root);
+    assert!(!endpoint.backend.is_local());
     let mut builder = globset::GlobSetBuilder::new();
     builder.add(globset::Glob::new("ignored").unwrap());
     builder.add(globset::Glob::new(".hidden/**").unwrap());

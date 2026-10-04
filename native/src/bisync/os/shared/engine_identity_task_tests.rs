@@ -246,7 +246,10 @@ fn engine_provider_recorded_lost_ack_preserves_old_baseline_until_retry() {
     let outcome =
         engine::orchestration::run_with_store_path(endpoints, opts, &cancel, &filter, &db);
     assert!(
-        !outcome.errors.is_empty() || outcome.stopped.is_some() || !outcome.deferred.is_empty()
+        !outcome.errors.is_empty() || outcome.stopped.is_some() || !outcome.deferred.is_empty(),
+        "promotions={}, errors={:?}, blocked={:?}, stopped={:?}, deferred={:?}, busy={}, omissions={:?}, state={:?}",
+        target.promotions.load(Ordering::SeqCst), outcome.errors, outcome.blocked, outcome.stopped,
+        outcome.deferred, outcome.busy, outcome.omissions, outcome.state
     );
     assert_eq!(
         target.promotions.load(Ordering::SeqCst),

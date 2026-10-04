@@ -115,6 +115,8 @@ impl From<crate::vfs::OmissionReason> for OmissionKind {
 pub struct SyncOmissions {
     /// Protected paths by planning key, with the first reason recorded.
     roots: BTreeMap<String, OmissionKind>,
+    /// Literal paths, including silent omissions, survive a change of key policy.
+    originals: BTreeMap<String, OmissionKind>,
     reported: BTreeMap<String, OmissionKind>,
     keys: KeyPolicy,
 }
@@ -144,15 +146,25 @@ impl SyncOmissions {
     pub(crate) fn record_kind(&mut self, relative: &str, kind: OmissionKind, report: bool) {
         let key = self.key(relative);
         self.roots.entry(key).or_insert(kind);
+        self.originals.entry(relative.to_string()).or_insert(kind);
         if report {
             self.reported.insert(relative.to_string(), kind);
         }
     }
 
     pub(crate) fn extend(&mut self, other: Self) {
-        for (path, kind) in other.roots {
-            let key = self.key(&path);
-            self.roots.entry(key).or_insert(kind);
+        let same_policy = self.keys.fold_case == other.keys.fold_case;
+        if same_policy {
+            for (path, kind) in other.roots {
+                self.roots.entry(path).or_insert(kind);
+            }
+        }
+        for (path, kind) in other.originals {
+            if !same_policy {
+                let key = self.key(&path);
+                self.roots.entry(key).or_insert(kind);
+            }
+            self.originals.entry(path).or_insert(kind);
         }
         self.reported.extend(other.reported);
     }

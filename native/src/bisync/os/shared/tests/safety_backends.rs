@@ -289,6 +289,10 @@ impl BackendExtensions for WriteFail<'_> {
         crate::vfs::sync_filesystem(self.inner, root)
     }
 
+    fn confirm_namespace(&self, parent: &str) -> VfsResult<bool> {
+        crate::vfs::confirm_namespace(self.inner, parent)
+    }
+
     fn target_limits(&self, root: &str) -> TargetLimits {
         crate::vfs::target_limits(self.inner, root)
     }
@@ -317,6 +321,10 @@ impl BackendExtensions for StatFail<'_> {
 
     fn sync_filesystem(&self, root: &str) -> VfsResult<bool> {
         crate::vfs::sync_filesystem(self.inner, root)
+    }
+
+    fn confirm_namespace(&self, parent: &str) -> VfsResult<bool> {
+        crate::vfs::confirm_namespace(self.inner, parent)
     }
 
     fn target_limits(&self, root: &str) -> TargetLimits {

@@ -427,6 +427,10 @@ impl crate::vfs::BackendExtensions for FakeRemote {
         crate::vfs::sync_filesystem(&self.inner, &self.real(root)?)
     }
 
+    fn confirm_namespace(&self, parent: &str) -> VfsResult<bool> {
+        crate::vfs::confirm_namespace(&self.inner, &self.real(parent)?)
+    }
+
     fn target_limits(&self, root: &str) -> crate::vfs::TargetLimits {
         self.real(root)
             .map(|real| crate::vfs::target_limits(&self.inner, &real))

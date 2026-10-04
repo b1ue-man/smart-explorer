@@ -309,7 +309,11 @@ fn review_task_corrupt_optional_index_does_not_block_completed_file_work() {
     let next =
         orchestration::run_with_store_path(fixture.endpoints(), opts, &cancel, &filter, &store);
     assert_eq!(next.stats.errors, 0, "{:?}", next.errors);
-    assert_eq!(next.stats.a_to_b, 1);
+    assert_eq!(
+        next.stats.a_to_b, 1,
+        "blocked={:?}, stopped={:?}, deferred={:?}, busy={}, omissions={:?}, state={:?}",
+        next.blocked, next.stopped, next.deferred, next.busy, next.omissions, next.state
+    );
     assert_eq!(
         std::fs::read(fixture.root.join("b/file")).unwrap(),
         b"after, longer"
@@ -346,5 +350,9 @@ fn review_task_daily_target_verification_finds_untracked_mirror_orphans() {
         orchestration::run_with_store_path(fixture.endpoints(), opts, &cancel, &filter, &store);
     assert_eq!(daily.stats.errors, 0, "{:?}", daily.errors);
     assert_eq!(daily.stats.a_to_b, 0);
-    assert!(!fixture.root.join("b/orphan").exists());
+    assert!(
+        !fixture.root.join("b/orphan").exists(),
+        "blocked={:?}, stopped={:?}, deferred={:?}, busy={}, omissions={:?}, state={:?}",
+        daily.blocked, daily.stopped, daily.deferred, daily.busy, daily.omissions, daily.state
+    );
 }

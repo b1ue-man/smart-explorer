@@ -44,6 +44,16 @@ fn sync_links_task_nested_link_preserves_counterparts_baseline_and_incremental_r
         .expect("the run records its owner and replica");
     let baseline = baseline_file(state).unwrap();
     let index_id = replica_state::index_id(state).unwrap();
+    assert!(baseline.try_exists().unwrap(), "first state={state:?}, baseline={baseline:?}");
+    assert_eq!(load_baseline(&baseline).unwrap(), first.baseline);
+    assert!(
+        state_store::SyncStateStore::open_at(&store)
+            .unwrap()
+            .load_pair(&index_id)
+            .unwrap()
+            .unwrap()
+            .bootstrapped
+    );
 
     std::fs::remove_dir_all(&link).unwrap();
     link_fixture::directory(outside.path(), &link);
@@ -72,7 +82,14 @@ fn sync_links_task_nested_link_preserves_counterparts_baseline_and_incremental_r
     );
 
     let partial = run_with_store_path(endpoints, opts, &cancel, &filter, &store);
-    assert!(partial.errors.is_empty(), "{:?}", partial.errors);
+    assert!(
+        partial.errors.is_empty() && partial.blocked.is_none() && partial.stopped.is_none()
+            && partial.deferred.is_empty() && !partial.busy,
+        "partial errors={:?}, blocked={:?}, stopped={:?}, deferred={:?}, busy={}, omissions={:?}",
+        partial.errors, partial.blocked, partial.stopped, partial.deferred, partial.busy,
+        partial.omissions
+    );
+    assert_eq!(partial.state, first.state);
     assert!(partial.conflicts.is_empty());
     assert_eq!(partial.baseline[&package], saved);
     assert_eq!(
@@ -91,7 +108,11 @@ fn sync_links_task_nested_link_preserves_counterparts_baseline_and_incremental_r
         .result_note("ok")
         .starts_with("mit Auslassungen"));
     let index = state_store::SyncStateStore::open_at(&store).unwrap();
-    assert!(!index.load_pair(&index_id).unwrap().unwrap().bootstrapped);
+    // The optional cache may be retired entirely by a partial protected scan.
+    assert!(!index
+        .load_pair(&index_id)
+        .unwrap()
+        .is_some_and(|pair| pair.bootstrapped));
     assert_eq!(load_baseline(&baseline).unwrap()[&package], saved);
     drop(index);
 
@@ -201,6 +222,12 @@ fn sync_links_task_protection_keeps_ancestors_case_aliases_and_component_boundar
     exact.record("Upper", true);
     assert!(!exact.protects("upper"));
     assert!(omitted.result_note("Fehler").starts_with("Fehler; "));
+    let mut silent = SyncOmissions::new(true);
+    silent.record_kind("Literal%2F/OwnFile", OmissionKind::OwnFile, false);
+    exact.extend(silent);
+    assert!(exact.protects("Literal%2F/OwnFile/child"));
+    assert!(!exact.protects("LITERAL%2F/OWNFILE/child"));
+    assert_eq!(exact.reported_paths().collect::<Vec<_>>(), ["Upper"]);
 }
 
 #[test]
@@ -225,7 +252,15 @@ fn sync_links_task_incremental_target_junction_returns_to_full_protected_scan() 
     let globs = empty_globset();
     let filter = WalkFilter::basic(true, &globs);
     let first = run_with_store_path(endpoints, options, &cancel, &filter, &store);
-    assert!(first.errors.is_empty(), "{:?}", first.errors);
+    assert!(
+        first.errors.is_empty() && first.blocked.is_none() && first.stopped.is_none()
+            && first.deferred.is_empty() && !first.busy,
+        "first errors={:?}, blocked={:?}, stopped={:?}, deferred={:?}, busy={}, omissions={:?}",
+        first.errors, first.blocked, first.stopped, first.deferred, first.busy, first.omissions
+    );
+    let baseline = baseline_file(first.state.as_ref().unwrap()).unwrap();
+    assert!(baseline.try_exists().unwrap(), "first state={:?}, baseline={baseline:?}", first.state);
+    assert_eq!(load_baseline(&baseline).unwrap(), first.baseline);
     std::fs::remove_dir_all(b.path().join("folder")).unwrap();
     std::fs::write(outside.path().join("entry.txt"), b"old").unwrap();
     link_fixture::directory(outside.path(), &b.path().join("folder"));
@@ -236,7 +271,13 @@ fn sync_links_task_incremental_target_junction_returns_to_full_protected_scan() 
     .unwrap();
     std::fs::write(a.path().join("independent.txt"), b"keep syncing").unwrap();
     let next = run_with_store_path(endpoints, options, &cancel, &filter, &store);
-    assert!(next.errors.is_empty(), "{:?}", next.errors);
+    assert!(
+        next.errors.is_empty() && next.blocked.is_none() && next.stopped.is_none()
+            && next.deferred.is_empty() && !next.busy,
+        "next errors={:?}, blocked={:?}, stopped={:?}, deferred={:?}, busy={}, omissions={:?}",
+        next.errors, next.blocked, next.stopped, next.deferred, next.busy, next.omissions
+    );
+    assert_eq!(next.state, first.state);
     assert_eq!(
         next.omissions.reported_paths().collect::<Vec<_>>(),
         ["folder"]
@@ -254,7 +295,7 @@ fn sync_links_task_incremental_target_junction_returns_to_full_protected_scan() 
         b"keep syncing"
     );
     link_fixture::remove_directory(&b.path().join("folder"));
-    std::fs::remove_file(baseline_file(first.state.as_ref().unwrap()).unwrap()).unwrap();
+    std::fs::remove_file(baseline).unwrap();
 }
 
 #[test]
