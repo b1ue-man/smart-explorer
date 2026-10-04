@@ -14,15 +14,48 @@ use std::sync::{Arc, Mutex};
 /// Open upload sessions: metadata, announced length and the bytes so far.
 type Sessions = HashMap<String, (Value, u64, Vec<u8>)>;
 
-#[derive(Default)]
 pub(super) struct FakeDrive {
+    pub(super) root_id: String,
+    pub(super) permission_id: String,
     next: AtomicUsize,
+    page_size: AtomicUsize,
     objects: Mutex<HashMap<String, Value>>,
     sessions: Mutex<Sessions>,
     media: Mutex<HashMap<String, Vec<u8>>>,
 }
 
+impl Default for FakeDrive {
+    fn default() -> Self {
+        static SERIAL: AtomicUsize = AtomicUsize::new(0);
+        let serial = SERIAL.fetch_add(1, Ordering::SeqCst);
+        Self::new(&format!("fake-root-{serial}"), &format!("fake-user-{serial}"))
+    }
+}
+
 impl FakeDrive {
+    pub(super) fn new(root_id: &str, permission_id: &str) -> Self {
+        Self { root_id: root_id.into(), permission_id: permission_id.into(),
+            next: AtomicUsize::new(0), page_size: AtomicUsize::new(0),
+            objects: Mutex::new(HashMap::new()), sessions: Mutex::new(HashMap::new()),
+            media: Mutex::new(HashMap::new()) }
+    }
+
+    fn parent<'a>(&'a self, parent: &'a str) -> &'a str {
+        if parent == "root" { &self.root_id } else { parent }
+    }
+
+    pub(super) fn set_page_size(&self, size: usize) { self.page_size.store(size, Ordering::SeqCst); }
+
+    pub(super) fn change(&self, id: &str, changes: Value) {
+        let mut objects = self.objects.lock().unwrap();
+        let current = objects.get_mut(id).expect("fixture object exists");
+        for (key, value) in changes.as_object().unwrap() { current[key] = value.clone(); }
+    }
+
+    pub(super) fn bytes(&self, id: &str) -> Vec<u8> {
+        self.media.lock().unwrap().get(id).expect("fixture media exists").clone()
+    }
+
     pub(super) fn insert(&self, id: &str, name: &str, parent: &str, mime: &str, content: &[u8]) {
         self.media
             .lock()
@@ -30,15 +63,21 @@ impl FakeDrive {
             .insert(id.to_string(), content.to_vec());
         self.objects.lock().unwrap().insert(
             id.to_string(),
-            object(id, name, parent, mime, Some(content)),
+            object(id, name, self.parent(parent), mime, Some(content)),
         );
     }
 
     pub(super) fn object(&self, id: &str) -> Option<Value> {
+        if id == "root" || id == self.root_id {
+            return Some(json!({"id": self.root_id, "name": "My Drive", "parents": [],
+                "mimeType": FOLDER_MIME, "trashed": false,
+                "modifiedTime": "2026-10-02T12:34:56.789Z"}));
+        }
         self.objects.lock().unwrap().get(id).cloned()
     }
 
     pub(super) fn named(&self, parent: &str, name: &str) -> Vec<Value> {
+        let parent = self.parent(parent);
         let mut named: Vec<Value> = self
             .objects
             .lock()
@@ -55,7 +94,8 @@ impl FakeDrive {
         named
     }
 
-    fn children(&self, parent: &str) -> Vec<Value> {
+    pub(super) fn children(&self, parent: &str) -> Vec<Value> {
+        let parent = self.parent(parent);
         let mut children: Vec<Value> = self
             .objects
             .lock()
@@ -71,6 +111,7 @@ impl FakeDrive {
     pub(super) fn answer(&self, request: &Request) -> Answer {
         let path = request.path().to_string();
         match (request.method.as_str(), path.as_str()) {
+            ("GET", "/drive/v3/about") => Answer::json(json!({"user": {"permissionId": self.permission_id}})),
             ("GET", "/drive/v3/files/generateIds") => {
                 let count: usize = request
                     .query("count")
@@ -148,19 +189,8 @@ impl FakeDrive {
             }
             ("GET", "/drive/v3/files") => {
                 let query = request.query("q").unwrap_or_default();
-                let parent = query.split('\'').nth(1).unwrap_or_default().to_string();
-                let name = query
-                    .split(" and name = '")
-                    .nth(1)
-                    .and_then(|rest| rest.split("' and trashed").next())
-                    .unwrap_or_default()
-                    .replace("\\'", "'");
-                let files = if query.contains(" and name = '") {
-                    self.named(&parent, &name)
-                } else {
-                    self.children(&parent)
-                };
-                Answer::json(json!({ "files": files }))
+                let parent = super::task_http::query_literal(query.trim_start_matches('\''));
+                super::task_http::list_page(request, self.children(&parent), self.page_size.load(Ordering::SeqCst))
             }
             ("POST", copy) if copy.ends_with("/copy") => {
                 let source = copy.trim_end_matches("/copy").rsplit('/').next().unwrap();
@@ -171,7 +201,7 @@ impl FakeDrive {
                 let mut copy = source.clone();
                 copy["id"] = metadata["id"].clone();
                 copy["name"] = metadata["name"].clone();
-                copy["parents"] = metadata["parents"].clone();
+                copy["parents"] = json!([self.parent(metadata["parents"][0].as_str().unwrap())]);
                 self.objects
                     .lock()
                     .unwrap()
@@ -241,7 +271,7 @@ impl FakeDrive {
         let mut created = object(
             &id,
             metadata["name"].as_str().unwrap(),
-            metadata["parents"][0].as_str().unwrap(),
+            self.parent(metadata["parents"][0].as_str().unwrap()),
             mime,
             content,
         );
@@ -319,33 +349,7 @@ fn object(id: &str, name: &str, parent: &str, mime: &str, content: Option<&[u8]>
     object
 }
 
-/// The metadata JSON and the media bytes of a `multipart/related` body.
-pub(super) fn multipart(request: &Request) -> (Value, Vec<u8>) {
-    let boundary = request
-        .header("content-type")
-        .and_then(|value| value.split_once("boundary="))
-        .map(|(_, boundary)| boundary.to_string())
-        .unwrap();
-    let body = &request.body;
-    let head = format!("--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n");
-    let tail = format!("\r\n--{boundary}--\r\n");
-    assert!(
-        body.starts_with(head.as_bytes()),
-        "multipart starts with the metadata part"
-    );
-    assert!(
-        body.ends_with(tail.as_bytes()),
-        "multipart ends with the closing boundary"
-    );
-    let rest = &body[head.len()..body.len() - tail.len()];
-    let separator = format!("\r\n--{boundary}\r\nContent-Type: application/octet-stream\r\n\r\n");
-    let split = rest
-        .windows(separator.len())
-        .position(|window| window == separator.as_bytes())
-        .unwrap();
-    let metadata = serde_json::from_slice(&rest[..split]).unwrap();
-    (metadata, rest[split + separator.len()..].to_vec())
-}
+pub(super) use super::task_http::multipart;
 
 pub(super) fn drive_server() -> (Arc<FakeDrive>, Server) {
     let drive = Arc::new(FakeDrive::default());

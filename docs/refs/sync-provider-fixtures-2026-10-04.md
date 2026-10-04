@@ -57,6 +57,59 @@ verwaltete `se --sync-daemon`-Prozesse. Identitäten, Direct-Code, acceptierter
 Grant, Roomcode und Exportberechtigungen entstehen durch normale CLI-Aufrufe.
 Der Peerprozess nutzt einen eigenen isolierten Profilepfad. Jede Prozess- und
 Containerreferenz wird vor Readiness gespeichert; jeder Exitpfad schließt sie.
+Der Mainpeer übernimmt den Namespace der Suite/Testhost-CLI; der separate Peer
+bekommt einen eigenen gültigen `SMART_EXPLORER_E2E_TEST_NAMESPACE` (42 ASCII-Zeichen,
+aus Suitekennung und eigenem Profilepfad gehasht). Windows-Credentialstore und
+IPC-Kennung fallen dadurch trotz gemeinsamem Runnerbenutzer nicht zusammen.
+Jeder Peer startet eine eigene byteidentische, SHA-256-geprüfte CLI-Kopie im
+privaten Fixtureverzeichnis. Cleanup schreibt zuerst das normale `daemon.stop`
+am tatsächlich veröffentlichten IPC-Profilepfad. Der Worker beendet sich damit
+normal, und sein Guardian beendet die Beaufsichtigung. Cleanup wartet auf beide
+Prozessgenerationen und das IPC-Ende. Bei Fristüberschreitung werden ausschließlich
+Prozesse mit diesem exakten eigenen Executablepfad beendet: Windows bindet einen
+Processhandle und prüft dessen MainModule erneut, Linux bindet einen PID-FD und
+prüft Executable/Startzeit unmittelbar vor dem Signal erneut. Ein vollständiger
+Abschluss wird in einem Cleanup-Log erst nach nachgewiesenem Prozess- und IPC-Ende
+festgehalten; fremde Executables/Namespaces werden nicht beendet.
+Die verwendeten Python-Signaturen sind
+[`os.pidfd_open(pid, flags=0)`](https://docs.python.org/3/library/os.html#os.pidfd_open)
+und [`signal.pidfd_send_signal(pidfd, signalnum, siginfo=None, flags=0)`](https://docs.python.org/3/library/signal.html#signal.pidfd_send_signal).
+Die Linux-Eskalation benötigt Python ab 3.9 und Kernel ab 5.3; ein fehlender
+PID-FD-Pfad wird nicht durch einen unsicheren numerischen PID-Kill ersetzt.
+
+## Gespeicherte SFTP-Schlüsselanmeldung
+
+Die zusätzliche Linux-Authority `sftp-key` gehört zur selben vollständigen
+Providermatrix einschließlich Selbstpaar, beidseitiger Änderungen,
+Gegenänderungen und No-op. Es gibt dafür keinen zweiten Suitefall.
+[`ssh-keygen`](https://man.openbsd.org/ssh-keygen) erzeugt auf dem Remote-Runner
+mit `-q -t ed25519 -N <eigene Passphrase> -f <Privatroot>/sftp-fixture-key`
+einen verschlüsselten privaten Schlüssel und die dazugehörige `.pub`-Datei.
+Beide Pfade entstehen unter dem eigenen temporären Privatroot; die Schlüssel
+werden nicht in hochgeladene Logs geschrieben. Die private Datei bleibt auf
+dem Host und hat Modus 0600.
+
+Nach dem [atmoz-Key-Vertrag](https://raw.githubusercontent.com/atmoz/sftp/master/README.md)
+wird ausschließlich die Publickeydatei read-only nach
+`/home/<User>/.ssh/keys/sync-task.pub` gemountet. Der normale Entrypoint erstellt
+`authorized_keys` mit seinen geforderten Rechten. Usersyntax `<User>::::upload`
+enthält kein Loginpasswort; diese Gegenstelle kann deshalb nicht durch eine
+versehentliche Passwortauthentifizierung erfolgreich geöffnet werden. Der
+tatsächliche veröffentlichte SSH-Port stammt aus `docker port` nach Readiness.
+
+Das vorhandene `SE_SYNC_PROVIDER_MANIFEST` enthält für diesen Anschluss zusätzlich
+`key_path`; sein bisheriges `password`-Secretfeld enthält hier die Keypassphrase.
+Rust persistiert exakt `AuthKind::Key { path }` und diese Passphrase durch die
+normale Connection-/Credentialstoretransaktion, liest beides erneut und öffnet
+den gespeicherten Locator über den normalen Resolver. Die bestehende Session
+lädt mit `load_secret_key(path, passphrase)` und meldet sich per Publickey an.
+Die unveränderten Passwortanschlüsse und der `use_agent`-Anschluss bleiben
+Bestandteil der Matrix. `use_agent` bezeichnet den deployten SSH-Remote-Agent;
+eine `SSH_AUTH_SOCK`-Anmeldevariante wird nicht eingeführt.
+Private Keys, Credentials und Peerprofile liegen außerhalb hochgeladener Logs;
+nach erfolgreichem Prozesscleanup wird ausschließlich der eigene temporäre Root
+entfernt. Bei unvollständigem Cleanup bleibt dieser Root als private Diagnose
+erhalten, ohne als Logartefakt veröffentlicht zu werden.
 
 Windows besitzt UNC und dessen reales Mapping; die vollständige Protokoll-
 Paarmatrix läuft auf Linux, während Windows seine tatsächlichen lokalen/UNC/

@@ -1,6 +1,6 @@
 # Sync-Verlässlichkeit – verbindliche Spec
 
-Stand: 2026-10-04. Status: Planung, vor Umsetzung und Abnahme.
+Stand: 2026-10-04. Status: Definition und Planung abgeschlossen; Remote-Abnahme ausstehend.
 
 ## Vollständiger Auftrag und Preflight
 

@@ -54,6 +54,27 @@ const IO_INACTIVITY_TIMEOUT: Duration = Duration::from_secs(60);
 /// were in use at once.
 const IDLE_CONNECTIONS_PER_HOST: usize = 100;
 
+fn transport_builder() -> ureq::AgentBuilder {
+    let builder = ureq::AgentBuilder::new();
+    #[cfg(test)]
+    if let Some(path) = std::env::var_os("SE_SYNC_FIXTURE_CA_DER") {
+        let mut roots = rustls::RootCertStore::empty();
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let der = std::fs::read(path).expect("read owned sync fixture CA");
+        roots.add(rustls::pki_types::CertificateDer::from(der))
+            .expect("valid owned sync fixture CA");
+        let config = rustls::ClientConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .expect("ring supports default protocols")
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+        return builder.tls_config(Arc::new(config));
+    }
+    builder
+}
+
 pub struct WebdavConfig {
     pub https: bool,
     pub host: String,
@@ -103,20 +124,20 @@ impl WebdavBackend {
                 STANDARD.encode(format!("{}:{}", cfg.user, cfg.password))
             )
         };
-        let agent = ureq::AgentBuilder::new()
+        let agent = transport_builder()
             .timeout_connect(CONNECT_TIMEOUT)
             .timeout_read(IO_INACTIVITY_TIMEOUT)
             .timeout_write(IO_INACTIVITY_TIMEOUT)
             .max_idle_connections_per_host(IDLE_CONNECTIONS_PER_HOST)
             .build();
-        let mutation_agent = ureq::AgentBuilder::new()
+        let mutation_agent = transport_builder()
             .timeout_connect(CONNECT_TIMEOUT)
             .timeout_read(IO_INACTIVITY_TIMEOUT)
             .timeout_write(IO_INACTIVITY_TIMEOUT)
             .redirects(0)
             .max_idle_connections(0)
             .build();
-        let write_agent = ureq::AgentBuilder::new()
+        let write_agent = transport_builder()
             .timeout_connect(CONNECT_TIMEOUT)
             .timeout_read(IO_INACTIVITY_TIMEOUT)
             .timeout_write(IO_INACTIVITY_TIMEOUT)

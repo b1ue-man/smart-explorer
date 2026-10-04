@@ -244,8 +244,9 @@ actual seed/change/counterchange/no-op bytes through the saved location boundary
 The old published `v0.5.169` worker first executes a normal stored job before the
 candidate takes over the same profile. Android development/test APKs select the
 existing release certificate only for this explicit task, retaining old app data.
-Live Google Drive uses `SE_DRIVE_TEST_CLIENT_ID`, `SE_DRIVE_TEST_CLIENT_SECRET`
-and `SE_DRIVE_TEST_REFRESH_TOKEN` from authorized Actions secrets; missing
+Live Google Drive requires `SE_DRIVE_TEST_CLIENT_ID` and
+`SE_DRIVE_TEST_REFRESH_TOKEN` from authorized Actions secrets; configure
+`SE_DRIVE_TEST_CLIENT_SECRET` when that OAuth client requires it. Missing
 authorization fails the acceptance rather than skipping it. Native job/task
 timeouts are 360/340 minutes; Android build 240/220; device 180/160. Fixes repeat
 this same entrypoint. Only a successfully evaluated complete batch enters the

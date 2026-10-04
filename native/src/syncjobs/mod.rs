@@ -76,3 +76,10 @@ pub use types::{SyncJob, Trigger, CURRENT_CONFIG_VERSION};
 pub(crate) use job_state_lock::StateLock as RuntimeFileLock;
 
 pub use job_state_classify::classify_failure;
+
+#[cfg(test)]
+#[path = "os/shared/sync_reliability_task_old_jobs_tests.rs"]
+mod sync_reliability_task_old_jobs_tests;
+#[cfg(test)]
+#[path = "os/shared/sync_reliability_task_old_jobs_editor_tests.rs"]
+mod sync_reliability_task_old_jobs_editor_tests;

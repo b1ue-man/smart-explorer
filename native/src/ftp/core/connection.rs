@@ -185,6 +185,13 @@ pub(super) fn parse_ftp_url(url: &str) -> io::Result<FtpUrl> {
 fn rustls_client_config() -> Arc<rustls::ClientConfig> {
     let mut roots = rustls::RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    // The remote task owns this CA. Production builds have no fixture input.
+    #[cfg(test)]
+    if let Some(path) = std::env::var_os("SE_SYNC_FIXTURE_CA_DER") {
+        let der = std::fs::read(path).expect("read owned sync fixture CA");
+        roots.add(rustls::pki_types::CertificateDer::from(der))
+            .expect("valid owned sync fixture CA");
+    }
     let config = rustls::ClientConfig::builder_with_provider(Arc::new(
         rustls::crypto::ring::default_provider(),
     ))
