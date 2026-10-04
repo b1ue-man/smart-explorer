@@ -148,6 +148,8 @@ windows-sys = { version = "0.59", features = [
     "Win32_Security_Cryptography",
     "Win32_Security_WinTrust",
     "Win32_Storage_FileSystem",
+    # Native handle-relative no-replace rename of a confirmed recycle child.
+    "Wdk_Storage_FileSystem",
     "Win32_System_Com",
     # RV1: volume arrival (CM_Register_Notification), bus type
     # (IOCTL_STORAGE_QUERY_PROPERTY), power requests while syncing or serving
