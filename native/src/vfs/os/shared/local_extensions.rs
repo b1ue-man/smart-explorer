@@ -53,6 +53,10 @@ impl BackendExtensions for LocalBackend {
         Ok(true)
     }
 
+    fn confirm_namespace(&self, parent: &str) -> VfsResult<bool> {
+        local_platform::confirm_namespace(&local_platform::to_os(parent))
+    }
+
     fn target_limits(&self, root: &str) -> TargetLimits {
         local_platform::filesystem_profile(&local_platform::to_os(root))
             .map(|profile| profile.limits)

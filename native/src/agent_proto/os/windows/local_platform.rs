@@ -108,9 +108,17 @@ pub(crate) fn open_regular_file(path: &Path) -> io::Result<std::fs::File> {
     Ok(file)
 }
 
-/// No filesystem-wide flush on Windows (per-file flushes cover a stage).
-pub(crate) fn sync_filesystem(_path: &Path) -> io::Result<bool> {
-    Ok(false)
+/// Required stages (including Deferred) are already flushed individually;
+/// both publication operations use write-through renames. Confirm only
+/// that existing protocol contract, without claiming a volume flush.
+pub(crate) fn sync_filesystem(path: &Path) -> io::Result<bool> {
+    if !std::fs::metadata(path)?.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotADirectory,
+            "namespace parent must be a directory",
+        ));
+    }
+    Ok(true)
 }
 
 pub(crate) fn file_identity(file: &std::fs::File) -> io::Result<FileIdentity> {

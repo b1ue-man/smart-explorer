@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 
 #[path = "mountinfo.rs"]
 mod mountinfo;
+#[path = "namespace_flush.rs"]
+mod namespace_flush;
 #[cfg(test)]
 #[path = "review_task_local_guard_tests.rs"]
 mod review_task_local_guard_tests;
@@ -14,6 +16,7 @@ mod stage;
 #[path = "volume_id.rs"]
 mod volume_id;
 
+pub(crate) use namespace_flush::confirm_namespace;
 pub(crate) use stage::open_stage;
 
 pub(crate) fn local_attrs(_meta: &std::fs::Metadata) -> (bool, bool) {

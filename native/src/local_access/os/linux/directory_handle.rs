@@ -34,6 +34,12 @@ impl DirectoryHandle {
         self.file.metadata()
     }
 
+    /// Borrow the live read-only directory pin for metadata and namespace
+    /// sync. The file carries no additional path or child authorization.
+    pub(crate) fn directory_file(&self) -> &File {
+        self.file.as_ref()
+    }
+
     pub(crate) fn secure_private(&self) -> io::Result<()> {
         super::secure_private_handle(&self.file, true)
     }
