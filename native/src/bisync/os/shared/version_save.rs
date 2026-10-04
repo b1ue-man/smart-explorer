@@ -249,6 +249,10 @@ fn copy_private(
     super::apply_stage::require_durable(outcome.durable)?;
     let private_file = crate::support_dirs::open_private_file(std::path::Path::new(&data))?;
     crate::support_dirs::secure_private_file(&private_file)?;
+    // Harden read-only backups before reopening for FlushFileBuffers, which
+    // requires write access. Close the read pin for Windows share compatibility.
+    drop(private_file);
+    let private_file = crate::creds::private_storage::open_file(std::path::Path::new(&data), true)?;
     private_file.sync_all()?;
     manifest.size = outcome.bytes;
     manifest.digest = Some(

@@ -100,3 +100,50 @@ Owner-/DACL-/Mode-Migration und NoFollow-/Hardlink-Prüfung erfolgen auf den
 tatsächlich geöffneten privaten Objekten. Das gültige Frame-Präfix, Budget,
 SHA-256, begrenzte Tail-Recovery und bereits gespeicherte Baselines behalten
 ihre Bedeutung. Dieser Vertrag erlaubt keine parallelen freien Appendwriter.
+
+## Windows-Versionsbackup: Flush am privaten Datenhandle
+
+Für den konkreten `version_save::save`-Fehler aus
+[Run 37162485159](https://github.com/b1ue-man/smart-explorer/actions/runs/37162485159)
+am 2026-10-04 frisch gelesen:
+[Microsoft FlushFileBuffers](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-flushfilebuffers),
+[Rust File::sync_all](https://doc.rust-lang.org/std/fs/struct.File.html#method.sync_all)
+und die [Rust-1.99.0-Windows-Implementierung](https://github.com/rust-lang/rust/blob/1.99.0/library/std/src/sys/fs/windows.rs).
+Die native Syntax lautet `BOOL FlushFileBuffers(HANDLE hFile)`; der
+Dateihandle benötigt ausdrücklich `GENERIC_WRITE`. Null signalisiert einen
+Fehler mit `GetLastError`. Rust stellt `sync_all(&self) -> io::Result<()>`
+bereit und ruft in der Windows-Implementierung über `fsync` tatsächlich
+`FlushFileBuffers` auf; ein Fehler wird propagiert. Ein Lesehandle erhält
+diese Capability weder durch DACL-Härtung noch durch Sharing.
+
+Die konkrete Sourcekette ist `version_save::copy_private` →
+`support_dirs::open_private_file` → `private_storage::open_file(path, false)`
+→ `DirectoryHandle::open_private_child(name, false)` → `File::sync_all`.
+Dieser private Readpin hat unter Windows bewusst kein `GENERIC_WRITE`.
+Die vorhandene RW-Variante
+`creds::private_storage::open_file(path, true) -> io::Result<File>`
+liefert dagegen den zum Flush erforderlichen Zugriff nach privater
+Owner-/DACL-/NoFollow-/Hardlink-Prüfung. Sie öffnet ein vorhandenes Objekt,
+ohne es zu erstellen oder zu kürzen.
+
+Entscheidung: Die bestehende Öffnung und Härtung des privaten Backups als
+Leseobjekt bleiben erhalten, damit ein aus einem schreibgeschützten
+Quellmode entstandenes Backup zuerst privat gehärtet wird. Danach wird
+der Readpin ausdrücklich geschlossen, bevor die vorhandene geprüfte
+RW-API ausschließlich für `sync_all` verwendet wird. Das Schließen ist
+auch für die Windows-Sharekompatibilität nötig: Der gewöhnliche Readpin
+gewährt kein `FILE_SHARE_WRITE`. Reguläre Leseobjekte und Quellhandles
+bekommen dadurch keine neuen Zugriffs- oder Sharingrechte.
+
+Die anschließend gezielt freigegebenen aktuellen Unix-Definitionen
+bestätigen diese Reihenfolge: `open_file(path, writable)` delegiert an
+`open(path, writable, false)`; `secure(file, false)` prüft am geöffneten
+Objekt UID, regulären Dateityp und genau einen Hardlink, setzt bei Bedarf
+0600 über den Handle und kontrolliert Owner, Mode und Linkanzahl erneut.
+Die private Härtung erfolgt somit weiterhin vor der RW-Öffnung.
+
+Härtungs-, Öffnungs- und Flushfehler bleiben Fehler des Backupschritts.
+`entry.json` wird weiterhin erst nach erfolgreichem Flush geschrieben;
+Intent, exklusive Veröffentlichung, kopierter Digest und abschließende
+Quellrevalidierung behalten ihre Bedeutung. Es wird weder ein Fehler
+ignoriert noch eine neue Verzeichnis- oder Namespace-Durability zugesagt.
