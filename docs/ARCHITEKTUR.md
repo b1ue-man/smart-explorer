@@ -1,6 +1,6 @@
 # Smart Explorer – Architektur
 
-Stand: 2026-10-03. Kurzüberblick als erster Einstieg; Details liefert der Code-Graph
+Stand: 2026-10-04. Kurzüberblick als erster Einstieg; Details liefert der Code-Graph
 (`graphify query "…"`, siehe AGENTS.md) und die Lesungen unter `docs/lesungen/`.
 
 ## Zweck
@@ -16,7 +16,8 @@ Speicheranalyse – als Desktop-App (Windows, Linux; Rust + egui) und als Androi
 | Android-App | `android/app/src/main/java/app/smartexplorer/android/` (`SmartExplorerApp`, `MainActivity`, `ui/AppRoot.kt`) |
 | Kotlin↔Rust-Vertrag | `docs/superpowers/plans/2026-09-25-android-apk/api.md`; Kotlin `core/Core.kt` + `core/NativeBridge.kt`; Rust `native/android-bridge/src/lib.rs` → `native/src/mobile/` |
 | Dateisystem-/Remote-Zugriff | `native/src/vfs/` (`Backend`-Trait), Backends `sftp/`, `ftp/`, `webdav/`, `gdrive/`, `zipfs/`, Share über `daemon::open_share_backend` |
-| Lokaler Handle-/Privatzugriff | `native/src/local_access/` (autorisierte Root und gepinnte Childgrenzen); Windows `os/windows/directory_handle.rs` und `private_access.rs::open_private_child` für private Inhalte unter gehaltenen Eltern |
+| Lokaler Handle-/Privatzugriff | `native/src/local_access/` (autorisierte Root und gepinnte Childgrenzen); Windows `os/windows/directory_handle.rs` und `private_access.rs::open_private_child` für private Inhalte unter gehaltenen Eltern; `directory_rename.rs` für native NT-NoReplace-Hops am gehaltenen Zielroot |
+| Bestätigung veröffentlichter Verzeichniseinträge | `vfs::confirm_namespace` → `BackendExtensions::confirm_namespace` → ausgewählter Local-/Agent-OS-Adapter; Linux/Android `vfs/os/linux_os/namespace_flush.rs` hält und prüft den tatsächlichen Parent-FD und Mount. Cache, Share-Guard und IPC geben die tatsächliche Bestätigung weiter. Dateiinhalte und Whole-filesystem-Flush bleiben getrennte Verträge. |
 | Orte/Endpunkt-Strings | `native/src/connect/core/location.rs` (`EndpointSpec`), `connect/os/shared/resolution.rs` (`resolve_endpoint`) |
 | Filter und Scan | `native/src/filter/`, `native/src/scanner/`, `native/src/rscan/`, Baumzeilen `filter/core/tree.rs` |
 | Kopieren/Übertragen | Engine `native/src/transfer/os/shared/engine/` (`run_job` für jede Endpunkt-Kombination: Walker `walk*.rs`, Worker, Ordner-Register, Pakete, Serverkopie, Fehlerprotokoll), Job-Vertrag `transfer/core/job.rs`, Flows `transfer/os/shared/flow.rs` + Regler `transfer/core/flow_control.rs`, Lane `lane.rs`; lokale Kernel-Kopie `native/src/copy/`; Verhalten und Grenzen je Protokoll `docs/TRANSFER_ENGINE.md` |
@@ -68,6 +69,9 @@ Speicheranalyse – als Desktop-App (Windows, Linux; Rust + egui) und als Androi
   optionsbewusster Snapshot → `ApplyScope` mit Checkpoints, Versionen und vorab dauerhaftem
   ReplacementIntent → bestätigte Teilaktionen. Pending-Merge und unklare Veröffentlichung
   schützen ihre Originalpfade bis zum ausdrücklichen Wiederanlauf.
+  Ein bestätigter Parent-Namespace ersetzt keinen ausstehenden Fileflush. Unbekannte Adapter
+  bestätigen ihn nicht; Androids zusätzlicher FUSE-Pfad verlangt die tatsächliche System-Storage-
+  Mountinstanz und erfolgreiches Directory-fsync. Vertrag: `docs/refs/post-publication-namespace.md`.
 - Share: vollständig gepinnter Principal → aktuelle persistierte Export-/Kontakt-/Raumrechte →
   OS-Handle-/Pfadgrenze. Statuskanal und mDNS erteilen keine FS-/Exec- oder Uplink-Rechte;
   Rechteentzug invalidiert betroffene Sitzungen, ein Transportabbruch allein keine Analyse-Retention.
