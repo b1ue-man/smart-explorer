@@ -20,10 +20,10 @@ use windows_sys::Win32::{
         EqualSid, GetAce, GetKernelObjectSecurity, GetLengthSid, GetSecurityDescriptorControl,
         GetSecurityDescriptorDacl, GetSecurityDescriptorOwner, GetTokenInformation, InitializeAcl,
         InitializeSecurityDescriptor, SetSecurityDescriptorControl, SetSecurityDescriptorDacl,
-        SetSecurityDescriptorOwner, TokenUser, ACCESS_ALLOWED_ACE, ACL, CONTAINER_INHERIT_ACE,
-        DACL_SECURITY_INFORMATION, OBJECT_INHERIT_ACE, OWNER_SECURITY_INFORMATION,
+        SetSecurityDescriptorOwner, TokenOwner, TokenUser, ACCESS_ALLOWED_ACE, ACL,
+        CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, OBJECT_INHERIT_ACE, OWNER_SECURITY_INFORMATION,
         PROTECTED_DACL_SECURITY_INFORMATION, PSID, SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR,
-        SE_DACL_PROTECTED, TOKEN_QUERY, TOKEN_USER,
+        SE_DACL_PROTECTED, TOKEN_INFORMATION_CLASS, TOKEN_OWNER, TOKEN_QUERY, TOKEN_USER,
     },
     Storage::FileSystem::{
         CreateDirectoryW, CreateFileW, GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
@@ -52,12 +52,15 @@ struct PrivateSecurity {
     descriptor: SECURITY_DESCRIPTOR,
     _acl: Vec<u64>,
     user: Vec<u64>,
+    default_owner: Vec<u64>,
 }
 
 impl PrivateSecurity {
     fn new(is_directory: bool) -> io::Result<Self> {
-        let user = token_user()?;
-        // SAFETY: token_user returned a complete, aligned TOKEN_USER buffer.
+        let token = effective_token()?;
+        let user = token_information(&token, TokenUser, size_of::<TOKEN_USER>())?;
+        let default_owner = token_information(&token, TokenOwner, size_of::<TOKEN_OWNER>())?;
+        // SAFETY: token_information returned a complete, aligned TOKEN_USER buffer.
         let sid = unsafe { (*(user.as_ptr().cast::<TOKEN_USER>())).User.Sid };
         let length = unsafe { GetLengthSid(sid) } as usize;
         let acl_bytes = size_of::<ACL>() + offset_of!(ACCESS_ALLOWED_ACE, SidStart) + length;
@@ -92,6 +95,7 @@ impl PrivateSecurity {
             descriptor,
             _acl: acl,
             user,
+            default_owner,
         })
     }
 
@@ -107,6 +111,20 @@ impl PrivateSecurity {
         // SAFETY: owns the still-live complete TOKEN_USER buffer.
         unsafe { (*(self.user.as_ptr().cast::<TOKEN_USER>())).User.Sid }
     }
+
+    fn accepts_owner(&self, owner: PSID) -> bool {
+        if owner.is_null() {
+            return false;
+        }
+        // Windows may default ordinary objects to an ownership group (for
+        // example Administrators). Query that exact SID from the same effective
+        // token, not arbitrary group membership; never change the object's owner.
+        unsafe {
+            let default_owner = (*(self.default_owner.as_ptr().cast::<TOKEN_OWNER>())).Owner;
+            EqualSid(owner, self.sid()) != 0
+                || (!default_owner.is_null() && EqualSid(owner, default_owner) != 0)
+        }
+    }
 }
 
 pub(super) fn create_directory(path: &Path) -> io::Result<File> {
@@ -121,7 +139,7 @@ pub(super) fn create_directory(path: &Path) -> io::Result<File> {
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
         .open(path)?;
     validate_object(&file, true)?;
-    verify_private(&file, security.sid(), true)?;
+    verify_private(&file, &security, true)?;
     Ok(file)
 }
 
@@ -149,7 +167,7 @@ pub(super) fn create_file(path: &Path) -> io::Result<File> {
     let file = unsafe { File::from_raw_handle(handle) };
     super::super::super::regular::validate_file(&file, true)?;
     validate_object(&file, false)?;
-    verify_private(&file, security.sid(), false)?;
+    verify_private(&file, &security, false)?;
     Ok(file)
 }
 
@@ -164,13 +182,13 @@ pub(crate) fn secure_private_handle(file: &File, is_directory: bool) -> io::Resu
     win(unsafe {
         GetSecurityDescriptorOwner(owned.as_mut_ptr().cast(), &mut owner, &mut defaulted)
     })?;
-    if owner.is_null() || unsafe { EqualSid(owner, security.sid()) } == 0 {
+    if !security.accepts_owner(owner) {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "private object has a foreign owner",
         ));
     }
-    match verify_private(file, security.sid(), is_directory) {
+    match verify_private(file, &security, is_directory) {
         Ok(()) => return validate_object(file, is_directory),
         Err(error)
             if error.kind() == io::ErrorKind::PermissionDenied
@@ -197,7 +215,7 @@ pub(crate) fn secure_private_handle(file: &File, is_directory: bool) -> io::Resu
     if error != 0 {
         return Err(io::Error::from_raw_os_error(error as i32));
     }
-    verify_private(file, security.sid(), is_directory)?;
+    verify_private(file, &security, is_directory)?;
     validate_object(file, is_directory)
 }
 
@@ -225,7 +243,7 @@ fn validate_object(file: &File, is_directory: bool) -> io::Result<()> {
     Ok(())
 }
 
-fn token_user() -> io::Result<Vec<u64>> {
+fn effective_token() -> io::Result<Token> {
     let mut handle = std::ptr::null_mut();
     // SAFETY: plain token query; no privileges or impersonation are changed.
     if unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, 1, &mut handle) } == 0 {
@@ -235,26 +253,33 @@ fn token_user() -> io::Result<Vec<u64>> {
         }
         win(unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut handle) })?;
     }
-    let token = Token(handle);
+    Ok(Token(handle))
+}
+
+fn token_information(
+    token: &Token,
+    information: TOKEN_INFORMATION_CLASS,
+    minimum: usize,
+) -> io::Result<Vec<u64>> {
     let mut needed = 0;
     let first =
-        unsafe { GetTokenInformation(token.0, TokenUser, std::ptr::null_mut(), 0, &mut needed) };
+        unsafe { GetTokenInformation(token.0, information, std::ptr::null_mut(), 0, &mut needed) };
     if first != 0
         || io::Error::last_os_error().raw_os_error() != Some(ERROR_INSUFFICIENT_BUFFER as i32)
     {
         return Err(io::Error::last_os_error());
     }
-    if needed < size_of::<TOKEN_USER>() as u32 || needed > 64 * 1024 {
+    if needed < minimum as u32 || needed > 64 * 1024 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "invalid token user size",
+            "invalid token identity size",
         ));
     }
     let mut buffer = vec![0u64; (needed as usize).div_ceil(size_of::<u64>())];
     win(unsafe {
         GetTokenInformation(
             token.0,
-            TokenUser,
+            information,
             buffer.as_mut_ptr().cast(),
             needed,
             &mut needed,
@@ -310,7 +335,7 @@ fn inheritance_flags(is_directory: bool) -> u32 {
     }
 }
 
-fn verify_private(file: &File, expected_owner: PSID, is_directory: bool) -> io::Result<()> {
+fn verify_private(file: &File, security: &PrivateSecurity, is_directory: bool) -> io::Result<()> {
     let mut buffer = descriptor(file, DACL_SECURITY_INFORMATION | OWNER_SECURITY_INFORMATION)?;
     let descriptor = buffer.as_mut_ptr().cast();
     let mut owner = std::ptr::null_mut();
@@ -337,8 +362,7 @@ fn verify_private(file: &File, expected_owner: PSID, is_directory: bool) -> io::
             &mut control,
             &mut revision,
         ))?;
-        if owner.is_null()
-            || EqualSid(owner, expected_owner) == 0
+        if !security.accepts_owner(owner)
             || present == 0
             || acl.is_null()
             || control & SE_DACL_PROTECTED == 0
@@ -354,7 +378,7 @@ fn verify_private(file: &File, expected_owner: PSID, is_directory: bool) -> io::
             || (*ace).Mask != FILE_ALL_ACCESS
             || EqualSid(
                 std::ptr::addr_of_mut!((*ace).SidStart).cast(),
-                expected_owner,
+                security.sid(),
             ) == 0
         {
             return Err(not_private());

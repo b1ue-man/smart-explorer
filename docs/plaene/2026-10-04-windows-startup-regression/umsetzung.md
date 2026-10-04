@@ -7,8 +7,8 @@ vollständigen korrigierten Release veröffentlichen. Keine weitere Projektrevie
 
 Vergleich mit v0.5.169: `support_dirs` härtet seit 0.5.170 App-/Sync-Verzeichnisse.
 Die Windows-DACL enthält nur eine nicht vererbende Owner-ACE. `SetSecurityInfo`
-entfernt damit geerbte Rechte vorhandener Kinder; neue gewöhnliche Kinder erhalten
-keine Owner-Rechte. Der Handoff schreibt eine gewöhnliche temporäre Datei; Sync
+entfernt damit geerbte Rechte vorhandener Kinder. Der Handoff schreibt eine
+gewöhnliche temporäre Datei; Sync
 erstellt/liest gewöhnliche Jobsverzeichnisse. Cloud-Konfiguration liest unverändert
 gewöhnliche Dateien und verwandelt Lesefehler in eine leere Client-ID, die beim
 Refresh nicht geprüft wird. Die OAuth-Requestimplementierung selbst ist seit
@@ -27,6 +27,10 @@ OAuth-Konfigurationsfehler propagieren und vor Netzwerkzugriff prüfen.
    geschützte DACL und Fehlerweitergabe bleiben. Erwartung: vorhandene gewöhnliche
    Konfigurationen und Sync-Jobs bleiben zugänglich; auch bereits durch 0.5.170
    entzogene geerbte Zugriffe werden durch den nächsten Root-/Sync-Open repariert.
+   Nach Befund des ersten Remote-Laufs gehört dazu die Anerkennung von
+   `TokenOwner` aus demselben effektiven Token neben `TokenUser`: Windows-Standard-
+   Gruppenbesitz bleibt unverändert; fremde Owner und beliebige Gruppen bleiben
+   abgelehnt. Die DACL gewährt weiterhin ausschließlich `TokenUser` Zugriff.
 2. Cloud-Konfiguration: checked Loader liefert echte Lesefehler; Authorize und
    Refresh verwenden ihn. Refresh prüft Client-ID vor dem Request. Erwartung:
    vorhandene Client-ID und Token bleiben erhalten; ein Lesefehler erzeugt keinen
@@ -52,6 +56,12 @@ Benutzer müssen keine Verbindung neu einrichten.
 Status: Milestones 1/2 implementiert in `e5920bdf` und gegen Source/API selbst geprüft.
 Milestone 3 ist als kandidatengebundener Windows-Workflow und ein einzelner
 Remote-Einstieg implementiert; Cache-, Prozess- und Fehlerausgabegrenzen bleiben
-in diesem Einstieg. Die Suite prüft auch den Fehler beim erneuten Anlegen des
-vorhandenen Jobsverzeichnisses mit der alten leeren Kinder-DACL.
+in diesem Einstieg. Erster Lauf [37218777791](https://github.com/b1ue-man/smart-explorer/actions/runs/37218777791):
+vorhandene Cloud-/Jobdateien verlieren nach der alten DACL tatsächlich Zugriff;
+OAuth-Konfiguration/Request und NoReplace bestanden. Normales Anlegen eines
+bereits vorhandenen Jobsverzeichnisses ist am Runner kein negativer Beweis und
+wird nur protokolliert. Windows-Standardbesitz wurde fälschlich abgewiesen; dieser
+reale Kompatibilitätsfehler wird im selben Milestone korrigiert. Die Altzustands-
+Fixture umfasst nun auch den vor 0.5.170 gewöhnlich erbenden Sync-Parent, damit
+der denied Handoff nicht durch einen schon geschützten Fixture-Parent verdeckt wird.
 Remote-Laufzeitabnahme und Veröffentlichung stehen aus.
