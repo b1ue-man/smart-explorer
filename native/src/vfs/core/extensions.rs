@@ -88,6 +88,14 @@ pub trait BackendExtensions: Backend {
         Ok(false)
     }
 
+    /// Confirm the parent namespace after a successful publication. This
+    /// does not flush deferred file contents or advertise whole-filesystem
+    /// durability. Unsupported implementations return `Ok(false)`.
+    fn confirm_namespace(&self, parent: &str) -> VfsResult<bool> {
+        let _ = parent;
+        Ok(false)
+    }
+
     /// What the filesystem or protocol below `root` can store (names, file
     /// size, time resolution); unknown parts stay `None`/`Unknown`.
     fn target_limits(&self, root: &str) -> TargetLimits {
