@@ -28,7 +28,12 @@ Development-Binaries. Die konkrete Serversteuerung wird aus vorhandenen
 abgeleitet; Aufrufsyntax, Banner-/Readiness-Formate und TLS/SSH-Agent-Verträge
 werden vor deren Implementierung frisch gelesen und gesichert. Server werden
 exklusiv pro Run erzeugt und in `finally` beendet. CA-Vertrauen bleibt im
-isolierten Remote-Testprofil; die App bekommt keine gelockerten TLS-Prüfungen.
+isolierten Remote-Testprofil. Da FTP/ureq gebündelte CA-Wurzeln verwenden,
+bekommt nur das cfg(test)-Transportsetup die echte Fixture-CA als zusätzliche
+Vertrauenswurzel; OS-Truststoreänderungen allein reichen nicht. Resolver,
+Protokoll und Sync bleiben unverändert; die App bekommt keine gelockerten
+TLS-Prüfungen. Syntax/Eingangsbytes sind in
+`docs/refs/sync-task-runtime-2026-10-04.md` gesichert.
 
 Der Mainagent wertet jeden Fall einschließlich dessen Laufzeit-Orakel aus.
 Fehlende Provider, historische Bytes, Runtimewerte oder tatsächlich aufgerufene

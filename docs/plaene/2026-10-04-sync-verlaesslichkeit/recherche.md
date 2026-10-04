@@ -98,3 +98,17 @@ Release-APK wird durch das etablierte komplette Release erstellt.
 Die detaillierten Szenarien und Acceptance-Signale stehen in `umsetzung.md`.
 Vor Code entsteht genau eine Plan-Kritik; deren Entscheidungen werden in
 `review.md` festgehalten.
+
+## Konkretisierte Laufzeitgrenzen vor M5
+
+`docs/refs/sync-task-runtime-2026-10-04.md` hält die tatsächlichen Server-
+Entrypoints, TLS-Vertrauensinjektion ausschließlich für cfg(test) sowie den
+signierten Android-Altapp-Updatevertrag fest. Die veröffentlichte v0.5.169-APK
+ist statisch gegen ihre Sidecar geprüft und enthält die benötigte x86_64-ABI.
+Der spätere Ablauf muss trotzdem die alte App real starten, den Job ausführen
+und ihre Daten durch ein passendes APK-Update erhalten.
+
+Für C10 fehlen gegenwärtig die drei Drive-Testsecrets auf GitHub Actions und
+eine lokale Testanmeldung. Der Nutzer wurde nach dem autorisierten Testzugang
+gefragt; Umsetzung und übrige Abnahme werden unabhängig davon vorbereitet.
+Das ist ein offener Runtimezugang, kein ausgeführter oder erfolgreicher Fall.

@@ -2,6 +2,10 @@
 
 Lokal gesicherte API-/Lib-Syntax (Abrufdatum im Kopf jeder Datei).
 
+- [Sync-Task-Laufzeit](sync-task-runtime-2026-10-04.md): tatsächliche SFTP-/FTP-/
+  FTPS-Fixtures, isoliertes Test-CA-Vertrauen und Android-Altapp-Update mit
+  passender Development-/Instrumentation-Signatur; geprüft 2026-10-04.
+
 - [Drive-Namenssuche und Identität](drive-name-identity-2026-10-04.md): Drive API v3,
   clientseitiger Literalvergleich, Pagination, unterschiedliche IDs und Root-Alias;
   Primärquellen geprüft 2026-10-04.
