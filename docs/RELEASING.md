@@ -640,6 +640,15 @@ Apply fixes, commit/push, and rerun this same suite; no local build/test or extr
 verification pipeline belongs to this batch. Once its results pass, the complete
 release dispatch above starts the terminal transaction without repeating the suite.
 
+The Windows startup correction after 0.5.170 uses `startup-regression-task.yml`
+with the full pushed `candidate_sha` and its single remote-only entrypoint,
+`native/test-startup-regression-task.py`. It reuses the RV1 development cache,
+reproduces the old directory DACL on existing jobs and cloud configuration,
+checks the real OAuth refresh request, and hands off a published v0.5.169 worker
+to the current CLI. Its owned workers are stopped before completion. Once that
+suite passes, the same complete-release dispatch described above publishes the
+corrected release without repeating the suite or changing the release procedure.
+
 The normal release wrapper does not use the verify-only path. On a human-run
 host its one tag push, or its mutually exclusive `release/v*` fallback, starts
 the publication consumer; on the GitHub-hosted path the wrapper starts that

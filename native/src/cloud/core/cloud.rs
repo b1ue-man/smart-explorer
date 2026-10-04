@@ -365,6 +365,10 @@ fn accept_with_deadline(
 }
 
 #[cfg(test)]
+#[path = "startup_regression_task_tests.rs"]
+mod startup_regression_task_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

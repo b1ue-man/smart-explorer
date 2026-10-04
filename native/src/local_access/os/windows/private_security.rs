@@ -11,8 +11,8 @@ use std::path::Path;
 
 use windows_sys::Win32::{
     Foundation::{
-        CloseHandle, ERROR_INSUFFICIENT_BUFFER, ERROR_NO_TOKEN, GENERIC_READ, GENERIC_WRITE,
-        HANDLE, INVALID_HANDLE_VALUE,
+        CloseHandle, ERROR_INSUFFICIENT_BUFFER, ERROR_NO_TOKEN, GENERIC_READ, GENERIC_WRITE, HANDLE,
+        INVALID_HANDLE_VALUE,
     },
     Security::{
         AddAccessAllowedAceEx,
@@ -20,10 +20,10 @@ use windows_sys::Win32::{
         EqualSid, GetAce, GetKernelObjectSecurity, GetLengthSid, GetSecurityDescriptorControl,
         GetSecurityDescriptorDacl, GetSecurityDescriptorOwner, GetTokenInformation, InitializeAcl,
         InitializeSecurityDescriptor, SetSecurityDescriptorControl, SetSecurityDescriptorDacl,
-        SetSecurityDescriptorOwner, TokenUser, ACCESS_ALLOWED_ACE, ACL, DACL_SECURITY_INFORMATION,
-        CONTAINER_INHERIT_ACE, OBJECT_INHERIT_ACE, OWNER_SECURITY_INFORMATION,
-        PROTECTED_DACL_SECURITY_INFORMATION, PSID, SECURITY_ATTRIBUTES,
-        SECURITY_DESCRIPTOR, SE_DACL_PROTECTED, TOKEN_QUERY, TOKEN_USER,
+        SetSecurityDescriptorOwner, TokenUser, ACCESS_ALLOWED_ACE, ACL, CONTAINER_INHERIT_ACE,
+        DACL_SECURITY_INFORMATION, OBJECT_INHERIT_ACE, OWNER_SECURITY_INFORMATION,
+        PROTECTED_DACL_SECURITY_INFORMATION, PSID, SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR,
+        SE_DACL_PROTECTED, TOKEN_QUERY, TOKEN_USER,
     },
     Storage::FileSystem::{
         CreateDirectoryW, CreateFileW, GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
@@ -377,3 +377,7 @@ fn not_private() -> io::Error {
         "provider did not retain an owner-private protected DACL",
     )
 }
+
+#[cfg(test)]
+#[path = "startup_regression_task_tests.rs"]
+mod startup_regression_task_tests;

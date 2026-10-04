@@ -53,3 +53,5 @@ Lokal gesicherte API-/Lib-Syntax (Abrufdatum im Kopf jeder Datei).
 - [Android Share-URI-Vergleich](android-share-uri.md): leerer WebSocket-Rootpfad zu `/`, vollständiger exakter Konfigurationsvergleich einschließlich Zertifikatpin; Android-API und RFC geprüft 2026-10-04.
 
 - [Bestätigung veröffentlichter Verzeichniseinträge](post-publication-namespace.md): additive VFS-Grenze, gepinnter Linux-/Android-Parent-FD und begrenzte System-FUSE-Zulassung, bestehender Windows-Publishvertrag; Filecontents und Whole-filesystem-Flush bleiben getrennt. Primärquellen geprüft 2026-10-04.
+
+- [Windows Owner-Vererbung](windows-private-inheritance.md): automatische Reparatur vorhandener Kinder-DACLs nach 0.5.170, geschützte Owner-DACL mit Object-/Container-Inheritance; Win32-Verträge geprüft 2026-10-04.
