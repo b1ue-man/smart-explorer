@@ -17,6 +17,8 @@ mod api;
 mod auth;
 #[path = "core/backend.rs"]
 mod backend;
+#[path = "os/shared/binding_store.rs"]
+mod binding_store;
 #[path = "core/cache.rs"]
 mod cache;
 #[path = "core/cache_store.rs"]
@@ -41,8 +43,14 @@ mod folder_create_journal;
 mod http;
 #[path = "core/id_pool.rs"]
 mod id_pool;
+#[path = "core/identity.rs"]
+mod identity;
 #[path = "core/key_locks.rs"]
 mod key_locks;
+#[path = "core/listing.rs"]
+mod listing;
+#[path = "core/listing_query.rs"]
+mod listing_query;
 #[path = "core/metadata.rs"]
 mod metadata;
 #[path = "core/names.rs"]
@@ -69,8 +77,12 @@ mod sized_writer;
 mod stage_time;
 #[path = "core/state.rs"]
 mod state;
+#[path = "core/sync_bindings.rs"]
+mod sync_bindings;
 #[path = "core/sync_listing.rs"]
 mod sync_listing;
+#[path = "core/sync_projection.rs"]
+mod sync_projection;
 #[path = "core/transfer.rs"]
 mod transfer;
 #[path = "core/transfer_ops.rs"]

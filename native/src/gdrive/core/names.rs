@@ -40,11 +40,22 @@ pub(super) fn encode(name: &str) -> String {
 }
 
 pub(super) fn decode(segment: &str) -> io::Result<String> {
-    crate::vfs::validate_child_name(segment)?;
+    validate_component(segment)?;
     // Recognize only the canonical encoding emitted by older versions. A
     // noncanonical percent sequence is a literal title, not malformed URI
     // input. New sync names always pass through sync_child_path/encode first.
     Ok(decode_canonical(segment).unwrap_or_else(|| segment.to_string()))
+}
+
+/// Provider-relative and logical sync components have no Windows path
+/// semantics. Backslash, colon and whitespace remain literal title bytes;
+/// physical target restrictions belong to the selected TargetLimits.
+pub(super) fn validate_component(name: &str) -> io::Result<()> {
+    if name.is_empty() || matches!(name, "." | "..") || name.contains('/') || name.contains('\0') {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput,
+            "Drive name is not one path component"));
+    }
+    Ok(())
 }
 
 fn decode_canonical(segment: &str) -> Option<String> {

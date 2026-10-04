@@ -41,9 +41,16 @@ impl GDriveBackend {
         let (destination_parent, destination_name) = split_parent(&destination);
         let source_parent_id = self.resolve(&source_parent)?;
         let destination_parent_id = self.ensure_dir(&destination_parent)?;
+        let binding = self.bound_folder(&source_parent_id, source_segment)?;
+        if self.bound_folder(&destination_parent_id, destination_name)?.is_some() {
+            return Err(io::Error::new(io::ErrorKind::AlreadyExists,
+                "Drive rename destination is reserved for another folder identity"));
+        }
         let marker = super::duplicates::parse_marker(source_segment);
-        let source_name =
-            super::names::decode(marker.map(|(plain, _)| plain).unwrap_or(source_segment))?;
+        let source_name = match &binding {
+            Some(binding) => binding.title.clone(),
+            None => super::names::decode(marker.map(|(plain, _)| plain).unwrap_or(source_segment))?,
+        };
         let destination_name = super::names::decode(destination_name)?;
         let source_name = source_name.as_str();
         let destination_name = destination_name.as_str();
@@ -53,7 +60,9 @@ impl GDriveBackend {
             (source_parent_id.as_str(), source_name),
             (destination_parent_id.as_str(), destination_name),
         ])?;
-        let source_object = if let Some((_, prefix)) = marker {
+        let source_object = if let Some(binding) = binding {
+            Some(self.exact_named_object(&source_parent_id, source_name, &binding.id)?)
+        } else if let Some((_, prefix)) = marker {
             self.marker_object(&source_parent_id, source_name, prefix)?
         } else {
             require_one(
@@ -132,6 +141,11 @@ impl GDriveBackend {
         } else {
             self.ensure_dir(&destination_parent)?
         };
+        let (_, destination_segment) = split_parent(&destination);
+        if self.bound_folder(&destination_parent_id, destination_segment)?.is_some() {
+            return Err(io::Error::new(io::ErrorKind::AlreadyExists,
+                "Drive file destination is a reserved folder locator"));
+        }
         let context = MoveContext {
             source: &staged,
             destination: &destination,
@@ -404,6 +418,11 @@ impl GDriveBackend {
         id: &str,
         mime_type: Option<&str>,
     ) -> VfsResult<()> {
+        if mime_type == Some(super::api::FOLDER_MIME) {
+            let (parent, segment) = split_parent(destination);
+            let parent = self.resolve(&parent)?;
+            self.bind_folder_path(&parent, &super::names::decode(segment)?, id, segment)?;
+        }
         // Generic callers clean `source` after an error. Keep that exact-ID
         // mapping until the destination mapping is installed so cleanup cannot
         // resolve an unrelated same-name object.

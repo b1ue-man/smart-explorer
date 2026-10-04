@@ -5,6 +5,7 @@ use std::io;
 pub(super) struct FileListPage<'a> {
     pub(super) files: &'a [Value],
     pub(super) next_token: Option<&'a str>,
+    pub(super) incomplete: bool,
 }
 
 impl<'a> FileListPage<'a> {
@@ -13,11 +14,11 @@ impl<'a> FileListPage<'a> {
         if object.contains_key("error") {
             return Err(invalid("unexpected error response"));
         }
-        match object.get("incompleteSearch") {
-            None | Some(Value::Null) | Some(Value::Bool(false)) => {},
-            Some(Value::Bool(true)) => return Err(invalid("search is incomplete")),
+        let incomplete = match object.get("incompleteSearch") {
+            None | Some(Value::Null) | Some(Value::Bool(false)) => false,
+            Some(Value::Bool(true)) => true,
             Some(_) => return Err(invalid("incompleteSearch is not a boolean")),
-        }
+        };
         // Google's quickstart defaults an absent `files` to []; ProtoJSON also
         // treats null repeated fields as unset. Other types are never absence.
         let files = match object.get("files") {
@@ -31,7 +32,7 @@ impl<'a> FileListPage<'a> {
             Some(Value::String(token)) => Some(token.as_str()),
             Some(_) => return Err(invalid("nextPageToken is not a string")),
         };
-        Ok(Self { files, next_token })
+        Ok(Self { files, next_token, incomplete })
     }
 }
 

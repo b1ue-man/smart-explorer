@@ -54,6 +54,8 @@ pub struct GDriveBackend {
     upload_paths: Arc<KeyLocks>,
     pub(super) id_pool: Arc<IdPool>,
     pub(super) cache_store: Arc<CacheStore>,
+    pub(super) binding_store: Arc<super::binding_store::BindingStore>,
+    root_id: Arc<Mutex<Option<String>>>,
     pub(super) root: String,
     pub(super) api_base: Arc<str>,
     pub(super) request_timeout: Duration,
@@ -73,6 +75,7 @@ struct Setup {
     drive_account_key: String,
     pending_folder_dir: Option<PathBuf>,
     cache_path: Option<PathBuf>,
+    binding_dir: Option<PathBuf>,
     root: String,
     api_base: String,
     request_timeout: Duration,
@@ -87,7 +90,14 @@ impl GDriveBackend {
         let http = DriveHttp::new(super::api::DRIVE_REQUEST_TIMEOUT);
         // The account lookup already opens the pooled socket later calls use.
         let drive_account_key = load_drive_account_key(&http.api(), &tokens.access_token)?;
-        let loaded = super::cache::load();
+        let cache_path = super::binding_store::account_cache_path(&drive_account_key);
+        let loaded = match super::cache::load_from_path(&cache_path) {
+            Ok(loaded) => loaded,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => super::cache::load(),
+            // This is only a hint cache. Durable folder records have their
+            // own checked format and must never fall back to empty state.
+            Err(_) => super::cache::LoadedCache::default(),
+        };
         let mut ids = loaded.ids;
         ids.insert(String::new(), "root".to_string());
         let untrusted_ids = super::cache::loaded_untrusted(&ids);
@@ -98,7 +108,8 @@ impl GDriveBackend {
             mimes: loaded.mimes,
             drive_account_key,
             pending_folder_dir: Some(super::folder_create_journal::record_dir()),
-            cache_path: Some(super::cache::cache_path()),
+            cache_path: Some(cache_path),
+            binding_dir: Some(super::binding_store::record_dir()),
             root: super::core::norm(root),
             api_base: super::api::API.to_string(),
             request_timeout: super::api::DRIVE_REQUEST_TIMEOUT,
@@ -126,6 +137,8 @@ impl GDriveBackend {
             upload_paths: KeyLocks::new("Drive-Upload-Pfadsperre vergiftet"),
             id_pool: Arc::new(IdPool::default()),
             cache_store: Arc::new(cache_store),
+            binding_store: Arc::new(super::binding_store::BindingStore::new(setup.binding_dir)),
+            root_id: Arc::new(Mutex::new(None)),
             root: setup.root,
             api_base: Arc::from(setup.api_base),
             request_timeout: setup.request_timeout,
@@ -170,6 +183,20 @@ impl GDriveBackend {
         request_timeout: Duration,
         pending_folder_dir: Option<PathBuf>,
     ) -> Self {
+        let binding_dir = pending_folder_dir.as_ref().map(|root| root.join("sync-bindings"));
+        Self::test_backend_with_identity(api_base, request_timeout, pending_folder_dir,
+            binding_dir, "test-drive-permission-id", "")
+    }
+
+    #[cfg(test)]
+    pub(super) fn test_backend_with_identity(
+        api_base: &str,
+        request_timeout: Duration,
+        pending_folder_dir: Option<PathBuf>,
+        binding_dir: Option<PathBuf>,
+        permission_id: &str,
+        root: &str,
+    ) -> Self {
         let mut ids = HashMap::new();
         ids.insert(String::new(), "root".to_string());
         Self::from_setup(Setup {
@@ -181,13 +208,12 @@ impl GDriveBackend {
             ids,
             untrusted_ids: HashSet::new(),
             mimes: HashMap::new(),
-            drive_account_key: super::folder_create_journal::account_key(
-                "test-drive-permission-id",
-            ),
+            drive_account_key: super::folder_create_journal::account_key(permission_id),
             pending_folder_dir,
             // Memory-only path cache.
             cache_path: None,
-            root: String::new(),
+            binding_dir,
+            root: super::core::norm(root),
             api_base: api_base.to_string(),
             request_timeout,
             http: DriveHttp::new(request_timeout),
@@ -198,6 +224,10 @@ impl GDriveBackend {
         self.tokens
             .lock()
             .map_err(|_| io::Error::other("Drive-Token-Cache vergiftet"))
+    }
+
+    pub(super) fn root_id_guard(&self) -> io::Result<MutexGuard<'_, Option<String>>> {
+        self.root_id.lock().map_err(|_| io::Error::other("Drive root identity cache poisoned"))
     }
 
     pub(super) fn ids_guard(&self) -> io::Result<MutexGuard<'_, HashMap<String, String>>> {
@@ -299,7 +329,7 @@ fn load_drive_account_key(agent: &ureq::Agent, access_token: &str) -> Result<Str
     parse_drive_account_key(&body)
 }
 
-fn parse_drive_account_key(body: &str) -> Result<String, String> {
+pub(super) fn parse_drive_account_key(body: &str) -> Result<String, String> {
     let json: serde_json::Value = serde_json::from_str(body)
         .map_err(|error| format!("Drive account identity response is invalid: {error}"))?;
     let permission_id = json["user"]["permissionId"]

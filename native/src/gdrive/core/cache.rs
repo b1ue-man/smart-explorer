@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 const CACHE_VERSION: u32 = 2;
 const CACHE_FILE: &str = "path_cache.json";
@@ -26,13 +25,11 @@ pub(super) fn load() -> LoadedCache {
 }
 
 pub(super) fn cache_path() -> PathBuf {
-    crate::support_dirs::app_data_dir()
-        .join("gdrive")
-        .join(CACHE_FILE)
+    super::binding_store::legacy_cache_path()
 }
 
 pub(super) fn load_from_path(path: &Path) -> io::Result<LoadedCache> {
-    let text = std::fs::read_to_string(path)?;
+    let text = super::binding_store::read_hint_cache(path)?;
     let disk: DiskCache = serde_json::from_str(&text).map_err(io::Error::other)?;
     if disk.version != CACHE_VERSION {
         return Ok(LoadedCache::default());
@@ -43,44 +40,19 @@ pub(super) fn load_from_path(path: &Path) -> io::Result<LoadedCache> {
     })
 }
 
-/// Write the cache as compact JSON through a private temporary file and a
-/// rename, so readers never see a partial file.
+/// Keep the v2 hint format; the host adapter owns private durable replacement.
 pub(super) fn save_to_path(
     path: &Path,
     ids: HashMap<String, String>,
     mimes: HashMap<String, String>,
 ) -> io::Result<()> {
-    static NEXT_TMP: AtomicU64 = AtomicU64::new(0);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
     let disk = DiskCache {
         version: CACHE_VERSION,
         ids: clean_map(ids),
         mimes: clean_map(mimes),
     };
     let bytes = serde_json::to_vec(&disk).map_err(io::Error::other)?;
-    // Unique per write: two connections of one process never share a
-    // temporary file.
-    let tmp = path.with_extension(format!(
-        "json.{}-{}.tmp",
-        std::process::id(),
-        NEXT_TMP.fetch_add(1, Ordering::Relaxed)
-    ));
-    if let Err(error) = std::fs::write(&tmp, bytes) {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(error);
-    }
-    match std::fs::rename(&tmp, path) {
-        Ok(()) => Ok(()),
-        Err(first) => {
-            let _ = std::fs::remove_file(path);
-            std::fs::rename(&tmp, path).map_err(|_| {
-                let _ = std::fs::remove_file(&tmp);
-                first
-            })
-        }
-    }
+    super::binding_store::write_hint_cache(path, &bytes)
 }
 
 fn clean_map(mut map: HashMap<String, String>) -> HashMap<String, String> {

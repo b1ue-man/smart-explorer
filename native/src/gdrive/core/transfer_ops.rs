@@ -1,7 +1,7 @@
 //! Transfer-engine operations of the Drive backend (plan C4): exclusive folder
 //! creation under a reserved ID, discarding an own copy stage by exact ID,
 //! resuming a download by byte range and server-side copies into a stage.
-use super::api::{drive_request, export_format, open_stream, FOLDER_MIME};
+use super::api::{export_format, FOLDER_MIME};
 use super::core::{cloud_urlenc, norm, split_parent};
 use super::new_object::NewObject;
 use super::overload::http_status;
@@ -64,9 +64,12 @@ impl GDriveBackend {
             self.resume_pending_folder_create(&parent, &key, name, &parent_id, &pending)?;
             return Err(taken(&key));
         }
-        let parent_listed = self.listed_guard()?.contains(&parent);
-        let known_absent = parent_listed && self.cached_id(&key)?.is_none();
-        if !known_absent && !self.named_objects(&parent_id, &title)?.is_empty() {
+        // A tombstone still reserves the locator; it cannot be reused by an
+        // unrelated folder after cache clearing or a remote deletion.
+        if self.bound_folder(&parent_id, name)?.is_some() {
+            return Err(taken(&key));
+        }
+        if !self.named_objects(&parent_id, &title)?.is_empty() {
             return Err(taken(&key));
         }
         let id = self.take_generated_id()?;
@@ -153,18 +156,8 @@ impl GDriveBackend {
             return Ok(None);
         }
         let url = self.api_url(&format!("files/{}?alt=media", cloud_urlenc(&id)));
-        let bearer = format!("Bearer {}", self.bearer()?);
         let range = format!("bytes={offset}-");
-        let agent = self.http.stream();
-        let response = open_stream(|| {
-            drive_request(
-                agent
-                    .get(&url)
-                    .set("Authorization", &bearer)
-                    .set("Range", &range)
-                    .call(),
-            )
-        })?;
+        let response = self.authenticated_stream(&url, Some(&range))?;
         match response.status() {
             206 => {
                 let starts_at_offset = response

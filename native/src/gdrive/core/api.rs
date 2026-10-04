@@ -109,6 +109,20 @@ fn retry_read(attempt: usize, backoff: &mut Backoff, error: &io::Error, again: b
     }
 }
 
+/// A pagination restart is another bounded idempotent read attempt. Use the
+/// same backoff as metadata reads; callers discard every partial collection.
+pub(super) fn listing_backoff() -> Backoff {
+    Backoff::new(RETRY_INITIAL_DELAY, RETRY_MAX_DELAY)
+}
+
+pub(super) fn restart_listing_read(
+    attempt: usize,
+    backoff: &mut Backoff,
+    error: &io::Error,
+) -> bool {
+    retry_read(attempt, backoff, error, true)
+}
+
 /// Execute a Drive request, returning the streaming response. Retries transient
 /// failures (rate-limit / 5xx / transport) with jittered exponential backoff so
 /// the parallel sync engine can drive high concurrency without falling over.

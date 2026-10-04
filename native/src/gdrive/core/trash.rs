@@ -28,6 +28,7 @@ impl GDriveBackend {
             Some(id) => id.clone(),
             None => self.resolve(&key)?,
         };
+        if pending_id.is_none() { self.validate_trash_path(&key, &id)?; }
         match self.trash_id_once(&id) {
             Ok(()) => {
                 if pending_id.is_some() {
@@ -47,6 +48,7 @@ impl GDriveBackend {
     pub(super) fn trash_path_id(&self, path: &str, id: &str) -> VfsResult<()> {
         let key = norm(path);
         let _path_guard = self.upload_path_guard(&key)?;
+        self.validate_trash_path(&key, id)?;
         match self.trash_id_once(id) {
             Ok(()) => {
                 self.forget_path_prefix(&key);
@@ -63,6 +65,30 @@ impl GDriveBackend {
     /// Trash one file by its exact id (targets a specific duplicate-named file).
     pub(super) fn trash_id(&self, id: &str) -> VfsResult<()> {
         self.trash_id_once(id).map_err(TrashFailure::into_io)
+    }
+
+    fn validate_trash_path(&self, key: &str, id: &str) -> VfsResult<()> {
+        if key.is_empty() {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "Drive root cannot be trashed"));
+        }
+        let (parent, segment) = split_parent(key);
+        let parent = self.resolve(&parent)?;
+        let title = match self.bound_folder(&parent, segment)? {
+            Some(binding) => {
+                if binding.id != id {
+                    return Err(io::Error::new(io::ErrorKind::InvalidData,
+                        "Drive trash ID differs from its reserved folder locator"));
+                }
+                binding.title
+            }
+            None => match super::duplicates::parse_marker(segment) {
+                Some((plain, prefix)) if id.starts_with(prefix) => super::names::decode(plain)?,
+                Some(_) => return Err(io::Error::new(io::ErrorKind::InvalidData,
+                    "Drive trash ID differs from the selected marker")),
+                None => super::names::decode(segment)?,
+            },
+        };
+        self.exact_named_object(&parent, &title, id).map(|_| ())
     }
 
     fn trash_id_once(&self, id: &str) -> Result<(), TrashFailure> {

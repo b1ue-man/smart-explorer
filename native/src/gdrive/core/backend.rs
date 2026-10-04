@@ -1,4 +1,4 @@
-use super::api::{drive_request, export_ext, export_format, open_stream};
+use super::api::{export_ext, export_format};
 use super::core::{cloud_urlenc, norm};
 use super::transfer::open_writer;
 use super::GDriveBackend;
@@ -30,58 +30,47 @@ impl Backend for GDriveBackend {
     }
 
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
-        // Same-name siblings get a `[drive-id ...]` marker so path-based
-        // consumers see unique names; `find_child` resolves the marker back to
-        // the exact object. Every returned (possibly marked) path is cached.
-        let entries = self.list_dir_entries(path)?;
-        let base = norm(path);
-        let child_path = |name: &str| {
-            if base.is_empty() {
-                name.to_string()
-            } else {
-                format!("{}/{}", base, name)
-            }
-        };
-        let mut mimes: HashMap<String, String> = HashMap::new();
-        let mut name_counts: HashMap<String, usize> = HashMap::new();
-        let mut raw = Vec::with_capacity(entries.len());
-        for entry in entries {
-            if let (Some(id), Some(mime)) = (entry.meta.id.as_deref(), entry.mime.as_deref()) {
-                mimes.insert(id.to_string(), mime.to_string());
-            }
-            *name_counts.entry(entry.meta.name.clone()).or_default() += 1;
-            raw.push(entry.meta);
+        let (raw, folders) = self.projected_listing(path)?;
+        let unprojected = raw.iter().filter(|entry| !entry.meta.is_dir
+            || !entry.meta.id.as_deref().is_some_and(|id| folders.contains_key(id)))
+            .map(|entry| entry.meta.clone()).collect();
+        let mut listed = Vec::with_capacity(raw.len());
+        let mut used = std::collections::HashSet::new();
+        for entry in raw.iter().filter(|entry| entry.meta.is_dir) {
+            let Some(folder) = entry.meta.id.as_deref().and_then(|id| folders.get(id)) else {
+                continue;
+            };
+            let mut meta = entry.meta.clone();
+            meta.name = folder.segment.clone();
+            used.insert(meta.name.clone());
+            listed.push(meta);
         }
-        // A duplicate's plain name may now point at a different (newer)
-        // object than before, so drop every cached descendant of that name
-        // before the exact current mapping is remembered.
-        for (name, count) in &name_counts {
-            if *count > 1 {
-                self.forget_path_prefix(&child_path(&super::names::encode(name)));
+        // Titles outside the sync component contract remain browsable through
+        // the established encoded namespace, including duplicate directories.
+        for mut file in super::duplicates::disambiguate(unprojected) {
+            if used.contains(&file.name) {
+                let title = raw.iter().find(|entry| entry.meta.id == file.id)
+                    .map(|entry| entry.meta.name.as_str())
+                    .ok_or_else(|| std::io::Error::other("Drive browser file has no identity"))?;
+                let id = file.id.as_deref().ok_or_else(|| std::io::Error::other("Drive browser file has no ID"))?;
+                file.name = format!("{}{}{}{}", super::names::encode(title),
+                    super::duplicates::MARKER_PREFIX, id, super::duplicates::MARKER_SUFFIX);
             }
+            used.insert(file.name.clone());
+            listed.push(file);
         }
-        let listed = super::duplicates::disambiguate(raw);
+        let mimes: HashMap<_, _> = raw.iter().filter_map(|entry| {
+            Some((entry.meta.id.as_deref()?, entry.mime.as_deref()?))
+        }).collect();
         let mut names = std::collections::HashSet::new();
         for entry in &listed {
             crate::vfs::validate_child_name(&entry.name)?;
             if !names.insert(&entry.name) {
-                return Err(std::io::Error::other(
-                    "Drive returned conflicting path names",
-                ));
+                return Err(std::io::Error::other("Drive returned conflicting path names"));
             }
+            let id = entry.id.as_deref().ok_or_else(|| std::io::Error::other("Drive browser entry has no ID"))?;
+            self.remember_path(&super::sync_projection::child_key(path, &entry.name), id, mimes.get(id).copied())?;
         }
-        for entry in &listed {
-            let Some(id) = entry.id.as_deref().filter(|id| !id.is_empty()) else {
-                continue;
-            };
-            self.remember_path(
-                &child_path(&entry.name),
-                id,
-                mimes.get(id).map(String::as_str),
-            )?;
-        }
-        // Folder creation can use this complete snapshot to skip a redundant
-        // lookup. File uploads still re-probe because Drive names are not unique.
         self.listed_guard()?.insert(norm(path));
         self.persist_path_cache();
         Ok(listed)
@@ -117,7 +106,6 @@ impl Backend for GDriveBackend {
             Some(i) if !i.is_empty() => i.to_string(),
             _ => return self.open_read(path),
         };
-        let auth = self.bearer()?;
         // A download right after a listing costs one request: the listing
         // cached this exact ID's type.
         let mime = self.mime_for(path, &id).unwrap_or_default();
@@ -130,16 +118,12 @@ impl Backend for GDriveBackend {
         } else {
             self.api_url(&format!("files/{}?alt=media", cloud_urlenc(&id)))
         };
-        let bearer = format!("Bearer {}", auth);
-        let agent = self.http.stream();
-        let resp =
-            open_stream(|| drive_request(agent.get(&url).set("Authorization", &bearer).call()))?;
+        let resp = self.authenticated_stream(&url, None)?;
         Ok(Box::new(resp.into_reader()))
     }
 
     fn open_read(&self, path: &str) -> VfsResult<Box<dyn Read + Send>> {
         let id = self.resolve(path)?;
-        let auth = self.bearer()?;
         // Google-Docs editors files (Docs/Sheets/Slides/Drawings) have no binary
         // content and 403 on alt=media ("fileNotDownloadable") - they must be
         // EXPORTED to an Office/PDF format instead.
@@ -153,10 +137,7 @@ impl Backend for GDriveBackend {
         } else {
             self.api_url(&format!("files/{}?alt=media", cloud_urlenc(&id)))
         };
-        let bearer = format!("Bearer {}", auth);
-        let agent = self.http.stream();
-        let resp =
-            open_stream(|| drive_request(agent.get(&url).set("Authorization", &bearer).call()))?;
+        let resp = self.authenticated_stream(&url, None)?;
         Ok(Box::new(resp.into_reader()))
     }
 
@@ -364,104 +345,4 @@ impl GDriveBackend {
         Ok(format!("gdrive:path-v2:{account}:{}", self.root))
     }
 
-    /// The listing exactly as Drive returns it: same-name siblings keep their
-    /// raw name. `list_dir` renders it path-unique before anyone sees it.
-    pub(super) fn list_dir_entries(&self, path: &str) -> VfsResult<Vec<RawEntry>> {
-        let id = self.resolve(path)?;
-        let mut out = Vec::new();
-        let mut page_token: Option<String> = None;
-        let mut seen = std::collections::HashSet::new();
-        loop {
-            let q = format!("'{}' in parents and trashed = false", id);
-            let mut url = self.api_url(&format!(
-                "files?q={}&fields=nextPageToken,incompleteSearch,files(id,name,mimeType,size,modifiedTime,createdTime,md5Checksum)&pageSize=1000",
-                cloud_urlenc(&q)
-            ));
-            if let Some(t) = &page_token {
-                url.push_str(&format!("&pageToken={}", cloud_urlenc(t)));
-            }
-            let v = self.get_json(&url)?;
-            let page = super::file_list::FileListPage::parse(&v)?;
-            for f in page.files {
-                let meta = Self::meta_from_json(f, None).ok_or_else(|| {
-                    std::io::Error::other("Drive listing contains an object without a name")
-                })?;
-                if meta.id.as_deref().is_none_or(|id| id.is_empty()) {
-                    return Err(std::io::Error::other(
-                        "Drive listing contains an object without an ID",
-                    ));
-                }
-                out.push(RawEntry {
-                    meta,
-                    mime: f["mimeType"].as_str().map(str::to_string),
-                    sync_problem: Self::sync_metadata_problem(f),
-                });
-            }
-            page_token = page.next_token.map(str::to_owned);
-            match &page_token {
-                None => break,
-                Some(token)
-                    if !token.is_empty() && seen.len() < 1_000 && seen.insert(token.clone()) => {}
-                _ => {
-                    return Err(std::io::Error::other(
-                        "Drive folder listing repeated or exceeded its page tokens",
-                    ))
-                }
-            }
-        }
-        Ok(out)
-    }
-
-    /// `stat` whose returned name matches the path segment even when that
-    /// segment carries a duplicate marker.
-    fn stat_marker_aware(&self, path: &str) -> VfsResult<VfsMeta> {
-        let key = norm(path);
-        if key.is_empty() {
-            return Ok(VfsMeta {
-                name: "/".into(),
-                is_dir: true,
-                is_symlink: false,
-                special: false,
-                size: 0,
-                mtime_ms: 0,
-                btime_ms: 0,
-                hidden: false,
-                system: false,
-                id: None,
-                content_md5: None,
-            });
-        }
-        let id = self.resolve(&key)?;
-        let url = self.api_url(&format!(
-            "files/{}?fields=id,name,mimeType,size,modifiedTime,createdTime,md5Checksum",
-            cloud_urlenc(&id)
-        ));
-        let v = self.get_json(&url)?;
-        let segment = key.rsplit('/').next().filter(|s| !s.is_empty());
-        let mut meta = Self::meta_from_json(&v, segment).ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Drive-Metadaten ohne Namen",
-            )
-        })?;
-        if let Some(segment) = segment {
-            let plain = super::duplicates::parse_marker(segment)
-                .map(|(plain, _)| plain)
-                .unwrap_or(segment);
-            if super::names::decode(plain)? != meta.name {
-                self.forget_path_prefix(&key);
-                return Err(std::io::Error::other(
-                    "Drive object title changed; refresh the folder",
-                ));
-            }
-            meta.name = segment.to_string();
-        }
-        Ok(meta)
-    }
-}
-
-pub(super) struct RawEntry {
-    pub(super) meta: VfsMeta,
-    pub(super) mime: Option<String>,
-    pub(super) sync_problem: Option<&'static str>,
 }

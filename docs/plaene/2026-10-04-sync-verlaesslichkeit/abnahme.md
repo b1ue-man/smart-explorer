@@ -35,6 +35,12 @@ Protokoll und Sync bleiben unverändert; die App bekommt keine gelockerten
 TLS-Prüfungen. Syntax/Eingangsbytes sind in
 `docs/refs/sync-task-runtime-2026-10-04.md` gesichert.
 
+Die ZIP-Quelle wird über den vorhandenen `ZipBackend` an der gemeinsamen
+Enginegrenze geöffnet. `EndpointSpec` kennt keinen gespeicherten ZIP-Joblocator;
+die Abnahme erfindet dafür keinen neuen Job-/Resolververtrag. Die bestehende
+read-only Quelle wird in ihrer zulässigen Quellrichtung geprüft, während alle
+gespeicherten Remote-Provider über ihre tatsächliche Resolvergrenze laufen.
+
 Der Mainagent wertet jeden Fall einschließlich dessen Laufzeit-Orakel aus.
 Fehlende Provider, historische Bytes, Runtimewerte oder tatsächlich aufgerufene
 Fälle lassen die eine Abnahme scheitern. Fixes werden gesammelt committed,

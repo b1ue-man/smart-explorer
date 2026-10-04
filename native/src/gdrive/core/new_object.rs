@@ -133,9 +133,10 @@ impl GDriveBackend {
         size: u64,
         md5: Option<&str>,
     ) -> VfsResult<String> {
+        let parent_id = self.actual_parent_id(&object.parent_id)?;
         let failure = match result {
             Ok(response) => match response.into_string().map_err(err).and_then(parse_json) {
-                Ok(json) if created_matches(&json, object, size, md5) => return Ok(mime_of(&json)),
+                Ok(json) if created_matches(&json, object, &parent_id, size, md5) => return Ok(mime_of(&json)),
                 Ok(_) => io::Error::new(
                     io::ErrorKind::InvalidData,
                     "Drive bestätigte das neue Objekt mit abweichenden Angaben",
@@ -165,12 +166,13 @@ impl GDriveBackend {
         md5: Option<&str>,
         failure: io::Error,
     ) -> VfsResult<String> {
+        let parent_id = self.actual_parent_id(&object.parent_id)?;
         let url = self.api_url(&format!(
             "files/{}?fields={CREATED_FIELDS}",
             cloud_urlenc(&object.id)
         ));
         match self.get_json(&url) {
-            Ok(json) if created_matches(&json, object, size, md5) => Ok(mime_of(&json)),
+            Ok(json) if created_matches(&json, object, &parent_id, size, md5) => Ok(mime_of(&json)),
             Ok(_) => Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!(
@@ -195,6 +197,7 @@ impl GDriveBackend {
 fn created_matches(
     json: &serde_json::Value,
     object: &NewObject,
+    parent_id: &str,
     size: u64,
     md5: Option<&str>,
 ) -> bool {
@@ -203,7 +206,7 @@ fn created_matches(
         && json["name"].as_str() == Some(object.title.as_str())
         && json["trashed"].as_bool() == Some(false)
         && json["parents"].as_array().is_some_and(|parents| {
-            parents.len() == 1 && parents[0].as_str() == Some(object.parent_id.as_str())
+            parents.len() == 1 && parents[0].as_str() == Some(parent_id)
         })
         && json["size"]
             .as_str()

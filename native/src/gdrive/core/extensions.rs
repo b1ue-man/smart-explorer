@@ -28,11 +28,11 @@ impl BackendExtensions for GDriveBackend {
                 "Drive sync name is not one component",
             ));
         }
-        Ok(format!(
-            "{}/{}",
-            parent.trim_end_matches('/'),
-            super::names::encode(literal_name)
-        ))
+        self.sync_child_locator(parent, literal_name)
+    }
+
+    fn sync_stat(&self, path: &str) -> VfsResult<crate::vfs::VfsMeta> {
+        self.sync_meta(path)
     }
 
     fn list_dir_tolerant(&self, path: &str) -> VfsResult<VfsListing> {
