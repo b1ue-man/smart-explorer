@@ -88,7 +88,11 @@ fn sync_paths_task_all_backend_pairs_transfer_changes_and_keep_baselines_separat
                 b"changed alpha"
             );
             let stable = synchronize(&a, &b);
-            assert!(stable.errors.is_empty());
+            assert!(
+                stable.errors.is_empty(),
+                "{left:?} -> {right:?}: errors={:?}, blocked={:?}, stopped={:?}, deferred={:?}, state={:?}",
+                stable.errors, stable.blocked, stable.stopped, stable.deferred, stable.state
+            );
             assert_eq!(
                 stable.stats.a_to_b + stable.stats.b_to_a + stable.stats.deleted,
                 0

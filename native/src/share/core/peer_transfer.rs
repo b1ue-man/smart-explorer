@@ -1,7 +1,6 @@
 //! Client side of transfer v1: the host's advertised features (probed once
 //! per connection), the connection's flow identity and transfer slots, this
 //! client's own copy stages, and single-file requests that save round trips.
-use std::collections::HashSet;
 use std::io::{self, Read, Write};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -9,6 +8,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 
 use crate::share::core::eio;
+#[cfg(test)]
 use crate::share::io_deadline::PEER_OP_TIMEOUT;
 use crate::share::keepalive::TRANSFER_STREAMS_PER_CONNECTION;
 use crate::share::node_sessions::OpenedPeerStream;
@@ -35,14 +35,7 @@ const FOREGROUND_TRANSFERS: u32 = crate::share::keepalive::CONTROL_STREAM_RESERV
 /// an unreachable host does not cost a probe per file.
 const FAILED_PROBE_RETRY: Duration = Duration::from_secs(10);
 
-/// Own stages tracked at once: far above any in-flight window (60 per
-/// connection), so only leaked entries could fill it.
-const MAX_TRACKED_STAGES: usize = 1 << 16;
-
-/// A host copies at least 1 MiB/s even between slow backends (an SD card, a
-/// remote connection on a thin uplink). The live connection (keepalive 5 s,
-/// idle timeout 20 s) ends the wait at once if the host goes away, so this
-/// generous bound only limits a stuck host.
+#[cfg(test)]
 const MIN_SERVER_COPY_RATE: u64 = 1024 * 1024;
 
 /// Transfer state of one PeerBackend.
@@ -51,7 +44,7 @@ pub(in crate::share) struct PeerTransferState {
     caps: Mutex<Option<CachedCaps>>,
     pub(in crate::share) features:
         Mutex<Option<(Option<usize>, crate::share::wire::FsHostFeatures)>>,
-    stages: Mutex<HashSet<String>>,
+    pub(super) stages: super::peer_stages::StageLedger,
 }
 
 #[derive(Clone, Copy)]
@@ -171,35 +164,6 @@ impl PeerBackend {
         format!("share:{session}")
     }
 
-    /// Remembers a file this backend created exclusively when its name is an
-    /// upload stage (engine stages also arrive through the background
-    /// service's plain `open_write_new`); only those may be discarded.
-    pub(super) fn track_stage(&self, stage: &str) {
-        let name = stage.rsplit('/').next().unwrap_or(stage);
-        if !discardable_stage(name) {
-            return;
-        }
-        if let Ok(mut stages) = self.transfer.stages.lock() {
-            if stages.len() < MAX_TRACKED_STAGES {
-                stages.insert(stage.to_string());
-            }
-        }
-    }
-
-    /// The stage was published, renamed or removed: no longer ours to drop.
-    pub(in crate::share) fn release_stage(&self, stage: &str) {
-        if let Ok(mut stages) = self.transfer.stages.lock() {
-            stages.remove(stage);
-        }
-    }
-
-    pub(in crate::share) fn owns_stage(&self, stage: &str) -> bool {
-        self.transfer
-            .stages
-            .lock()
-            .is_ok_and(|stages| stages.contains(stage))
-    }
-
     /// One directory level in one request; before transfer v1 the path-based
     /// fallbacks of the Backend trait (MkdirAll, probe before exclusive).
     pub(super) fn create_directory(&self, path: &str, exclusive: bool) -> VfsResult<()> {
@@ -227,21 +191,25 @@ impl PeerBackend {
         destination: &str,
         copy: bool,
     ) -> VfsResult<()> {
+        let ticket = self.begin_stage_publication(staged)?;
         let result = if self.transfer_v1() {
             let request = FsRequest::PromoteNoReplace {
                 staged: staged.to_string(),
                 destination: destination.to_string(),
                 copy,
             };
-            self.request(request)
+            self.stage_request_once(request, "promote_no_replace")
                 .and_then(|response| expect_ok(response, "promote_no_replace"))
         } else {
             crate::vfs::promote_staged_no_replace_with(self, staged, destination, |from, to| {
-                self.rename_no_replace(from, to)
+                // The ticket already entered Pending before this one mutation.
+                expect_ok(self.stage_request_once(FsRequest::RenameNoReplace {
+                    src: from.into(), dst: to.into(),
+                }, "rename_no_replace")?, "rename_no_replace")
             })
         };
         if result.is_ok() {
-            self.release_stage(staged);
+            ticket.release();
         }
         result
     }
@@ -249,45 +217,42 @@ impl PeerBackend {
     /// Removes a stage this backend created and never published; any other
     /// path, or a host before transfer v1, stays `Unsupported` (K17).
     pub(super) fn discard_own_stage(&self, stage: &str) -> VfsResult<()> {
-        if !self.owns_stage(stage) || !self.transfer_v1() {
+        let name = stage.rsplit('/').next().unwrap_or(stage);
+        if !discardable_stage(name) || !self.transfer_v1() {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 "Nur eigene, unveröffentlichte Stufen werden entfernt",
             ));
         }
+        let ticket = self.begin_stage_publication(stage).map_err(|error| {
+            if error.kind() == io::ErrorKind::PermissionDenied {
+                io::Error::new(io::ErrorKind::Unsupported, "Nur eigene, unveröffentlichte Stufen werden entfernt")
+            } else { error }
+        })?;
         let request = FsRequest::DiscardStage {
             path: stage.to_string(),
         };
         let result = self
-            .request(request)
+            .stage_request_once(request, "discard_stage")
             .and_then(|response| expect_ok(response, "discard_stage"));
         match &result {
-            Ok(()) => self.release_stage(stage),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => self.release_stage(stage),
+            Ok(()) => ticket.release(),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => ticket.release(),
             Err(_) => {}
         }
         result
     }
 
-    /// Host-side copy into a new private stage (CopyFile exists on every
-    /// host); the reply waits for the whole copy, so its deadline grows with
-    /// the size.
+    /// CopyFile may replace its destination, so it cannot establish exclusive
+    /// ownership of an engine stage. Retain normal `copy_file`, but let stage
+    /// callers use their existing WriteNew streaming fallback.
     pub(super) fn copy_to_stage(
         &self,
-        src: &str,
-        stage: &str,
-        size: u64,
+        _src: &str,
+        _stage: &str,
+        _size: u64,
     ) -> VfsResult<Option<u64>> {
-        self.track_stage(stage);
-        let request = FsRequest::CopyFile {
-            src: src.to_string(),
-            dst: stage.to_string(),
-        };
-        match self.request_with_budget(request, server_copy_budget(size))? {
-            FsResponse::Data { size } => Ok(Some(size)),
-            FsResponse::Ok => self.stat(stage).map(|metadata| Some(metadata.size)),
-            _ => Err(eio("unerwartete Antwort auf copy_file")),
-        }
+        Ok(None)
     }
 
     /// Reads from `offset` to resume; `None` where the host cannot.
@@ -345,6 +310,7 @@ fn expect_ok(response: FsResponse, operation: &str) -> io::Result<()> {
     }
 }
 
+#[cfg(test)]
 fn server_copy_budget(size: u64) -> Duration {
     PEER_OP_TIMEOUT.saturating_add(Duration::from_secs(size / MIN_SERVER_COPY_RATE))
 }

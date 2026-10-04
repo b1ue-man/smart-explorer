@@ -38,12 +38,7 @@ impl BackendExtensions for PeerBackend {
         super::peer_list_batch::list(self, path)
     }
     fn finish_stage(&self, stage: &str, finish: StageFinish) -> io::Result<StageFinished> {
-        if !self.owns_stage(stage) {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "Stage wurde nicht von diesem Backend angelegt",
-            ));
-        }
+        let ticket = self.verify_owned_stage(stage)?;
         if !peer_stream::features(self, stage)?.stage_finish_v1 {
             return Ok(StageFinished::default());
         }
@@ -52,19 +47,20 @@ impl BackendExtensions for PeerBackend {
             StageDurability::Deferred => FsStageDurability::Deferred,
             StageDurability::Now => FsStageDurability::Now,
         };
-        match self.request(FsRequest::FinishStage(FsStageFinish {
+        ticket.begin()?;
+        match self.stage_request_once(FsRequest::FinishStage(FsStageFinish {
             staged: stage.into(),
             mtime_ms: finish.mtime_ms,
             mode: finish.mode,
             durability,
-        }))? {
+        }), "finish_stage")? {
             FsResponse::StageFinished {
                 mtime_applied,
                 durable,
-            } => Ok(StageFinished {
-                mtime_applied,
-                durable,
-            }),
+            } => {
+                ticket.finished(&self.stat(stage)?)?;
+                Ok(StageFinished { mtime_applied, durable })
+            }
             _ => Err(peer_stream::invalid("Unerwartete Stage-Antwort")),
         }
     }

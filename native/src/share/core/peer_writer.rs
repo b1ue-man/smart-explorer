@@ -8,6 +8,72 @@ use super::framing::{decode_resp, recv_resp_wire, send_ctrl, send_tagged, TAG_DA
 use super::fs;
 use super::node::ShareIrohNode;
 use super::wire::{Ctrl, FsRequest, FsResponse};
+use super::backend::peer_stages::StageTicket;
+
+/// A successful WriteDone acknowledgement, rather than Ready or the filename,
+/// makes an exclusively created stage available to finish/publication.
+pub(super) fn owned_writer(
+    inner: Box<dyn Write + Send>,
+    ticket: StageTicket,
+) -> Box<dyn Write + Send> {
+    Box::new(OwnedStageWriter { inner, ticket, written: 0, committed: false, failure: None })
+}
+
+struct OwnedStageWriter {
+    inner: Box<dyn Write + Send>,
+    ticket: StageTicket,
+    written: u64,
+    committed: bool,
+    failure: Option<(io::ErrorKind, String)>,
+}
+
+impl OwnedStageWriter {
+    fn remember_failure(&mut self, error: io::Error) -> io::Error {
+        self.ticket.uncertain();
+        self.failure = Some((error.kind(), error.to_string()));
+        error
+    }
+
+    fn failed(&self) -> io::Result<()> {
+        if let Some((kind, message)) = &self.failure {
+            return Err(io::Error::new(*kind, message.clone()));
+        }
+        Ok(())
+    }
+}
+
+impl Write for OwnedStageWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.failed()?;
+        if self.committed { return Err(eio("Peer-Schreibkanal ist bereits abgeschlossen")); }
+        match self.inner.write(bytes) {
+            Ok(count) => {
+                let Some(total) = self.written.checked_add(count as u64) else {
+                    return Err(self.remember_failure(io::Error::other("Share-Stufe ist zu groß")));
+                };
+                self.written = total;
+                Ok(count)
+            }
+            Err(error) => Err(self.remember_failure(error)),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.failed()?;
+        if self.committed { return Ok(()); }
+        if let Err(error) = self.inner.flush().and_then(|()| self.ticket.committed(self.written)) {
+            return Err(self.remember_failure(error));
+        }
+        self.committed = true;
+        Ok(())
+    }
+}
+
+impl Drop for OwnedStageWriter {
+    fn drop(&mut self) {
+        if !self.committed { self.ticket.uncertain(); }
+    }
+}
 
 pub(super) fn writer(
     node: Arc<ShareIrohNode>,
