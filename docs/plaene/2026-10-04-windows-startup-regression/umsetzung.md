@@ -1,7 +1,8 @@
 # Windows-Regression nach 0.5.170
 
-Stand: 2026-10-04. Batch: die drei vom Nutzer gemeldeten Fehler beheben und einen
-vollständigen korrigierten Release veröffentlichen. Keine weitere Projektreview.
+Stand: 2026-10-04. Batch abgeschlossen und als 0.5.171 veröffentlicht: die drei
+vom Nutzer gemeldeten Fehler beheben und einen vollständigen korrigierten Release
+veröffentlichen. Keine weitere Projektreview.
 
 ## Stufe 1: Ursache und Ansatz
 
@@ -53,18 +54,57 @@ Der Windows-Runner muss insbesondere die automatische Reparatur vorhandener leer
 Kinder-DACLs belegen. Daten werden nicht gelöscht, Client-IDs nicht ersetzt und
 Benutzer müssen keine Verbindung neu einrichten.
 
-Status: Milestones 1/2 implementiert in `e5920bdf` und gegen Source/API selbst geprüft.
-Milestone 3 ist als kandidatengebundener Windows-Workflow und ein einzelner
-Remote-Einstieg implementiert; Cache-, Prozess- und Fehlerausgabegrenzen bleiben
-in diesem Einstieg. Erster Lauf [37218777791](https://github.com/b1ue-man/smart-explorer/actions/runs/37218777791):
+Milestones 1/2 implementiert in `e5920bdf`, die zusätzliche Windows-Ownerkorrektur
+in `3f33b6f0`; Source/API selbst geprüft. Milestone 3 ist als kandidatengebundener
+Windows-Workflow und ein einzelner Remote-Einstieg implementiert; Cache-, Prozess-
+und Fehlerausgabegrenzen bleiben in diesem Einstieg. Erster Lauf
+[37218777791](https://github.com/b1ue-man/smart-explorer/actions/runs/37218777791):
 vorhandene Cloud-/Jobdateien verlieren nach der alten DACL tatsächlich Zugriff;
-OAuth-Konfiguration/Request und NoReplace bestanden. Normales Anlegen eines
-bereits vorhandenen Jobsverzeichnisses ist am Runner kein negativer Beweis und
-wird nur protokolliert. Windows-Standardbesitz wurde fälschlich abgewiesen; dieser
-reale Kompatibilitätsfehler wird im selben Milestone korrigiert. Die Altzustands-
+OAuth-Konfiguration/Request und NoReplace bestanden. Die erste Fixture hatte
+einen schon geschützten Sync-Parent und reproduzierte deshalb beim vorhandenen
+Jobsverzeichnis noch keinen Anlagefehler. Windows-Standardbesitz wurde fälschlich abgewiesen;
+dieser reale Kompatibilitätsfehler wurde im selben Milestone korrigiert. Die Altzustands-
 Fixture umfasst nun auch den vor 0.5.170 gewöhnlich erbenden Sync-Parent, damit
 der denied Handoff nicht durch einen schon geschützten Fixture-Parent verdeckt wird.
 Gespeicherte Jobs werden sowohl im aktuellen Format byte-identisch als auch mit
 der echten Vor-Update-Migration (`config_version=0`, bestehende `.conf` ersetzen,
 Baselineberechtigung behalten) im selben Startup-Szenario geprüft.
-Remote-Laufzeitabnahme und Veröffentlichung stehen aus.
+
+## Abnahme und Auslieferung
+
+Dieselbe fokussierte [Remote-Suite 37220814819](https://github.com/b1ue-man/smart-explorer/actions/runs/37220814819)
+hat den endgültigen Source-Kandidaten `e388ea36624e472d2de5c595312e7434e34893ff`
+erfolgreich abgenommen; Logs und Ergebnisartefakt wurden ausgewertet. Die
+korrigierte Altzustands-Fixture reproduziert jetzt ausdrücklich auch das reale
+`os error 183` beim Jobsverzeichnis. Danach gelingen die Reparatur der vorhandenen
+Cloud-/Jobdateien, wiederholte Control-Dateischreibvorgänge, das Laden der
+unveränderten aktuellen Jobs und die echte Vor-Update-Migration älterer Jobs mit
+erhaltener Baselineberechtigung und Remote-Endpunktidentität. Der tatsächliche
+Refresh-Request am lokalen HTTP-Provider des Windows-Runners enthält die
+gespeicherte Client-ID und das Token; ungültige Konfiguration sendet keinen Request.
+Der veröffentlichte 0.5.169-Worker wurde durch den Kandidaten ersetzt und war
+danach erreichbar; alle von der Suite gestarteten Prozesse wurden geschlossen.
+Damit ist der erste fehlgeschlagene Lauf durch die korrigierte Abnahme ersetzt.
+
+Der einmalige vollständige [Release-Lauf 37223197372](https://github.com/b1ue-man/smart-explorer/actions/runs/37223197372)
+hat `native/publish-release-local.ps1` auf dem Remote-Runner ausgeführt und
+Release-Commit `2641fe9ed488754f361c26570ff5fec6aaa6d953` mit Parent `e388ea36`
+erstellt und gepusht. Der zugehörige einzelne
+[Publikationslauf 37231116590](https://github.com/b1ue-man/smart-explorer/actions/runs/37231116590)
+war erfolgreich; [v0.5.171](https://github.com/b1ue-man/smart-explorer/releases/tag/v0.5.171)
+ist seit 2026-10-04 20:15:35 UTC sichtbar. Cargo-Version, Feed-Version, Tag und
+Installer stimmen überein. Alle veröffentlichten Asset-Größen und SHA-256-Digests
+entsprechen den committed Bytes; die Desktop-/Android-Feed-Sidecars stimmen ebenfalls.
+Kein lokaler Build, Test oder Release-Lauf wurde ausgeführt.
+
+Die bereits beauftragten lokalen Linux-Installationen wurden anschließend aus
+diesen veröffentlichten Bytes aktualisiert. `se --version` liefert `0.5.171`;
+der operative Worker-Handoff meldet `worker=replaced`, `worker_error=null` und
+die laufenden Worker verwenden denselben Digest wie das veröffentlichte CLI.
+Der Share-Server wurde nach gesicherter Kopie seines vorherigen Binaries atomar
+ersetzt; Service, TLS-/Proxy-Konfiguration und Daten blieben erhalten. Der Service
+ist `active/running`, ohne Neustartschleife, und lauscht weiterhin auf 51820/51821.
+Der Digest seines laufenden Prozesses entspricht dem veröffentlichten Server:
+
+- Linux `se`: `8b18239450e130df5f2ee73f395bf9986786bf883e93b166499805d88e470238`
+- Linux Share-Server: `91e7b177e875784864cacc4e64e89f8987985630c82cbcc2cadae2b1d85eef45`
