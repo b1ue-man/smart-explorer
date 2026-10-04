@@ -48,18 +48,24 @@ impl BackendExtensions for PeerBackend {
             StageDurability::Now => FsStageDurability::Now,
         };
         ticket.begin()?;
-        match self.stage_request_once(FsRequest::FinishStage(FsStageFinish {
-            staged: stage.into(),
-            mtime_ms: finish.mtime_ms,
-            mode: finish.mode,
-            durability,
-        }), "finish_stage")? {
+        match self.stage_request_once(
+            FsRequest::FinishStage(FsStageFinish {
+                staged: stage.into(),
+                mtime_ms: finish.mtime_ms,
+                mode: finish.mode,
+                durability,
+            }),
+            "finish_stage",
+        )? {
             FsResponse::StageFinished {
                 mtime_applied,
                 durable,
             } => {
                 ticket.finished(&self.stat(stage)?)?;
-                Ok(StageFinished { mtime_applied, durable })
+                Ok(StageFinished {
+                    mtime_applied,
+                    durable,
+                })
             }
             _ => Err(peer_stream::invalid("Unerwartete Stage-Antwort")),
         }

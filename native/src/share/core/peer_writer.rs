@@ -3,12 +3,12 @@ use std::sync::Arc;
 
 use iroh::endpoint::{RecvStream, SendStream};
 
+use super::backend::peer_stages::StageTicket;
 use super::core::eio;
 use super::framing::{decode_resp, recv_resp_wire, send_ctrl, send_tagged, TAG_DATA};
 use super::fs;
 use super::node::ShareIrohNode;
 use super::wire::{Ctrl, FsRequest, FsResponse};
-use super::backend::peer_stages::StageTicket;
 
 /// A successful WriteDone acknowledgement, rather than Ready or the filename,
 /// makes an exclusively created stage available to finish/publication.
@@ -16,7 +16,13 @@ pub(super) fn owned_writer(
     inner: Box<dyn Write + Send>,
     ticket: StageTicket,
 ) -> Box<dyn Write + Send> {
-    Box::new(OwnedStageWriter { inner, ticket, written: 0, committed: false, failure: None })
+    Box::new(OwnedStageWriter {
+        inner,
+        ticket,
+        written: 0,
+        committed: false,
+        failure: None,
+    })
 }
 
 struct OwnedStageWriter {
@@ -45,7 +51,9 @@ impl OwnedStageWriter {
 impl Write for OwnedStageWriter {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         self.failed()?;
-        if self.committed { return Err(eio("Peer-Schreibkanal ist bereits abgeschlossen")); }
+        if self.committed {
+            return Err(eio("Peer-Schreibkanal ist bereits abgeschlossen"));
+        }
         match self.inner.write(bytes) {
             Ok(count) => {
                 let Some(total) = self.written.checked_add(count as u64) else {
@@ -60,8 +68,14 @@ impl Write for OwnedStageWriter {
 
     fn flush(&mut self) -> io::Result<()> {
         self.failed()?;
-        if self.committed { return Ok(()); }
-        if let Err(error) = self.inner.flush().and_then(|()| self.ticket.committed(self.written)) {
+        if self.committed {
+            return Ok(());
+        }
+        if let Err(error) = self
+            .inner
+            .flush()
+            .and_then(|()| self.ticket.committed(self.written))
+        {
             return Err(self.remember_failure(error));
         }
         self.committed = true;
@@ -71,7 +85,9 @@ impl Write for OwnedStageWriter {
 
 impl Drop for OwnedStageWriter {
     fn drop(&mut self) {
-        if !self.committed { self.ticket.uncertain(); }
+        if !self.committed {
+            self.ticket.uncertain();
+        }
     }
 }
 

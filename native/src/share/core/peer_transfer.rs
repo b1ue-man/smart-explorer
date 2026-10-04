@@ -203,9 +203,16 @@ impl PeerBackend {
         } else {
             crate::vfs::promote_staged_no_replace_with(self, staged, destination, |from, to| {
                 // The ticket already entered Pending before this one mutation.
-                expect_ok(self.stage_request_once(FsRequest::RenameNoReplace {
-                    src: from.into(), dst: to.into(),
-                }, "rename_no_replace")?, "rename_no_replace")
+                expect_ok(
+                    self.stage_request_once(
+                        FsRequest::RenameNoReplace {
+                            src: from.into(),
+                            dst: to.into(),
+                        },
+                        "rename_no_replace",
+                    )?,
+                    "rename_no_replace",
+                )
             })
         };
         if result.is_ok() {
@@ -226,8 +233,13 @@ impl PeerBackend {
         }
         let ticket = self.begin_stage_publication(stage).map_err(|error| {
             if error.kind() == io::ErrorKind::PermissionDenied {
-                io::Error::new(io::ErrorKind::Unsupported, "Nur eigene, unveröffentlichte Stufen werden entfernt")
-            } else { error }
+                io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "Nur eigene, unveröffentlichte Stufen werden entfernt",
+                )
+            } else {
+                error
+            }
         })?;
         let request = FsRequest::DiscardStage {
             path: stage.to_string(),
