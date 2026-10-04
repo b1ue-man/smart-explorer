@@ -46,6 +46,8 @@ pub(super) fn prepare(
 ) -> PairPlan {
     let mut plan = plan_pair(a, b, base, ctx);
     if plan.verify.is_empty() {
+        a.omissions.extend(plan.omissions.clone());
+        b.omissions.extend(plan.omissions.clone());
         return plan;
     }
     for rel in &plan.verify {
@@ -83,6 +85,10 @@ pub(super) fn prepare(
     let mut final_plan = plan_pair(a, b, base, &final_ctx);
     final_plan.files_a = counts.0;
     final_plan.files_b = counts.1;
+    // The planner takes the omissions. Later guards and checkpoint observations
+    // still need them to distinguish a protected entry from an empty volume.
+    a.omissions.extend(final_plan.omissions.clone());
+    b.omissions.extend(final_plan.omissions.clone());
     final_plan
 }
 
