@@ -55,6 +55,10 @@ impl BackendExtensions for UnavailableBackend {
         vfs::sync_filesystem(&*self.live_backend()?, root)
     }
 
+    fn confirm_namespace(&self, parent: &str) -> VfsResult<bool> {
+        vfs::confirm_namespace(&*self.live_backend()?, parent)
+    }
+
     fn target_limits(&self, root: &str) -> TargetLimits {
         self.live_backend()
             .map(|backend| vfs::target_limits(&*backend, root))

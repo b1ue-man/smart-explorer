@@ -234,6 +234,10 @@ impl BackendExtensions for AgentBackend {
         Ok(self.query(query::SYNC_FILESYSTEM, root)? != 0)
     }
 
+    fn confirm_namespace(&self, parent: &str) -> VfsResult<bool> {
+        self.sync_filesystem(parent)
+    }
+
     fn target_limits(&self, root: &str) -> TargetLimits {
         if !self.serves_peer() {
             if self.features().service {
