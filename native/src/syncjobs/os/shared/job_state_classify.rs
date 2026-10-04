@@ -260,6 +260,13 @@ pub fn classify_failure(message: &str) -> FailureKind {
     .iter()
     .find_map(|prefix| lower.split_once(*prefix).map(|(_, detail)| detail))
     .unwrap_or(lower.as_str());
+    // Only a freshly confirmed principal mismatch needs reauthentication;
+    // ordinary rotation or an unavailable about response remains retryable.
+    if detail.trim_end().ends_with(
+        "drive-konto wurde gewechselt; gespeicherte ordnerbindung gehört zu einem anderen konto",
+    ) {
+        return FailureKind::Auth;
+    }
     if lower.contains("drive account identity response is invalid:")
         || lower.contains("drive account identity response has no permissionid")
         || transient_http_status(detail)

@@ -126,12 +126,20 @@ impl SizedWriter {
             // kept, so a retry gets 409 instead of making a second file.
             Purpose::Fresh => {
                 let parent_id = backend.resolve(&parent)?;
+                if backend.bound_folder(&parent_id, name)?.is_some() {
+                    return Err(io::Error::new(io::ErrorKind::AlreadyExists,
+                        "Drive file destination is a reserved folder locator"));
+                }
                 let (id, new_id) = claim_upload_id(backend, &key)?;
                 (parent_id, id, new_id)
             }
             // A stage owns a new ID, never a pending or cached one of its path.
             Purpose::Stage => {
                 let parent_id = backend.ensure_dir(&parent)?;
+                if backend.bound_folder(&parent_id, name)?.is_some() {
+                    return Err(io::Error::new(io::ErrorKind::AlreadyExists,
+                        "Drive stage name is a reserved folder locator"));
+                }
                 let id = backend.take_generated_id()?;
                 backend.own_stage(&key, &id)?;
                 (parent_id, id, true)

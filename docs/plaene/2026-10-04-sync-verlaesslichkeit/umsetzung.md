@@ -158,10 +158,10 @@ nimmt vor Code den vollständigen Plan auseinander; keine weitere Reviewrunde.
 | Stufe 1 / erste Recherche | fertig | `recherche.md`, gesicherte Refs |
 | Stufe 2 / zweite Recherche | fertig, Lücken eingearbeitet | dieser Plan und `abnahme.md` |
 | Einmalige Plan-Kritik | abgeschlossen, alle Befunde eingearbeitet | `review.md` |
-| M1/M2 | Umsetzung und Self-Review laufen | Drive-Provider; noch keine Laufzeitabnahme |
+| M1/M2 | Code und eigener Self-Review fertig | vollständige Kandidatensammlung, reale Root-ID, private dauerhafte Folderbindung und stabile Projektion; Remote-Abnahme ausstehend |
 | M3 | Code und eigener Self-Review fertig | additive Sync-Stat-Grenze, tolerante Beobachtung, Literalpfad-Resolve und erhaltenes Bootstrapgate; Remote-Abnahme ausstehend |
 | M4 | Code und eigener Self-Review fertig | fehlende Edit-ID geschützt, wiederanlaufbare Ursachenklassifikation, Loader-Recovery über Workerwechsel; Remote-Abnahme ausstehend |
-| M5 Remote-Gesamtablauf | offen | keine lokale Ausführung |
+| M5 Remote-Gesamtablauf | Suite wird nach abgeschlossener Produktumsetzung erstellt | keine lokale Ausführung; C10 benötigt noch die angefragte Drive-Testautorisierung |
 | M6 Release | offen | erst nach M5 |
 
 Pro Meilenstein: gegen Refs und Aufrufer selbst prüfen, kohärent committen;

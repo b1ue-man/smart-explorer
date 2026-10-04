@@ -2,11 +2,7 @@ use super::api::{drive_request, mutation_once, parse_json, MutationRequestError}
 use super::core::cloud_urlenc;
 use super::GDriveBackend;
 use crate::vfs::VfsResult;
-use std::collections::HashSet;
 use std::io;
-
-const QUERY_LIMIT: usize = 2;
-const MAX_QUERY_PAGES: usize = 1_000;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct DriveObject {
@@ -18,49 +14,12 @@ pub(super) struct DriveObject {
 }
 
 impl GDriveBackend {
-    /// Return at most two exact-name children: zero means absent, one is
-    /// unambiguous, and two is sufficient to reject a duplicate namespace.
+    /// Collect every distinct exact-name identity before deciding absence or
+    /// ambiguity. Resolution and mutation use the same complete collection.
     pub(super) fn named_objects(&self, parent_id: &str, name: &str) -> VfsResult<Vec<DriveObject>> {
-        let query = format!(
-            "'{}' in parents and name = '{}' and trashed = false",
-            query_literal(parent_id),
-            query_literal(name)
-        );
-        let mut output = Vec::with_capacity(QUERY_LIMIT);
-        let mut page_token: Option<String> = None;
-        let mut seen_tokens = HashSet::new();
-        for _ in 0..MAX_QUERY_PAGES {
-            let mut url = self.api_url(&format!(
-                "files?q={}&fields=nextPageToken,incompleteSearch,files(id,name,mimeType,size,md5Checksum,modifiedTime,parents,trashed)&pageSize={QUERY_LIMIT}",
-                cloud_urlenc(&query)
-            ));
-            if let Some(token) = page_token.as_deref() {
-                url.push_str(&format!("&pageToken={}", cloud_urlenc(token)));
-            }
-            let json = self.get_json(&url)?;
-            let page = super::file_list::FileListPage::parse(&json)?;
-            for file in page.files {
-                let object = parse_object(file, parent_id, name)?;
-                if output
-                    .iter()
-                    .any(|existing: &DriveObject| existing.id == object.id)
-                {
-                    return Err(invalid("Drive returned the same object ID more than once"));
-                }
-                output.push(object);
-                if output.len() == QUERY_LIMIT {
-                    return Ok(output);
-                }
-            }
-            page_token = page.next_token.map(str::to_owned);
-            let Some(token) = page_token.as_ref() else {
-                return Ok(output);
-            };
-            if !seen_tokens.insert(token.clone()) {
-                return Err(invalid("Drive repeated a file-list page token"));
-            }
-        }
-        Err(invalid("Drive named-object query exceeded its page budget"))
+        let parent_id = self.actual_parent_id(parent_id)?;
+        self.collect_files(&parent_id, Some(name))?.iter()
+            .map(|file| parse_object(file, &parent_id, name)).collect()
     }
 
     /// The exact object a `[drive-id <prefix>]` marker names among the
@@ -91,7 +50,7 @@ impl GDriveBackend {
             cloud_urlenc(id)
         ));
         let json = self.get_json(&url)?;
-        let object = parse_object(&json, parent_id, plain)?;
+        let object = parse_object(&json, &self.actual_parent_id(parent_id)?, plain)?;
         if object.id != id {
             return Err(invalid("Drive returned a different selected object ID"));
         }
@@ -108,12 +67,14 @@ impl GDriveBackend {
         destination_name: &str,
         mtime_ms: Option<i64>,
     ) -> VfsResult<()> {
+        let source_parent_id = self.actual_parent_id(source_parent_id)?;
+        let destination_parent_id = self.actual_parent_id(destination_parent_id)?;
         let mut url = self.api_url(&format!("files/{}?fields=id", cloud_urlenc(id)));
         if source_parent_id != destination_parent_id {
             url.push_str(&format!(
                 "&addParents={}&removeParents={}",
-                cloud_urlenc(destination_parent_id),
-                cloud_urlenc(source_parent_id)
+                cloud_urlenc(&destination_parent_id),
+                cloud_urlenc(&source_parent_id)
             ));
         }
         let bearer = format!("Bearer {}", self.bearer()?);
@@ -144,7 +105,7 @@ impl GDriveBackend {
                 if let Err(response_error) = response_state {
                     if let Err(verify_error) = self.verify_renamed_id(
                         id,
-                        destination_parent_id,
+                        &destination_parent_id,
                         destination_name,
                         mtime_ms,
                     ) {
@@ -155,14 +116,14 @@ impl GDriveBackend {
             Err(MutationRequestError::Definite(error)) => return Err(error),
             Err(MutationRequestError::Ambiguous(send_error)) => {
                 if let Err(verify_error) =
-                    self.verify_renamed_id(id, destination_parent_id, destination_name, mtime_ms)
+                    self.verify_renamed_id(id, &destination_parent_id, destination_name, mtime_ms)
                 {
                     return Err(ambiguous_rename(id, &send_error, &verify_error));
                 }
             }
         }
         if mtime_ms.is_some() {
-            self.verify_renamed_id(id, destination_parent_id, destination_name, mtime_ms)?;
+            self.verify_renamed_id(id, &destination_parent_id, destination_name, mtime_ms)?;
         }
         Ok(())
     }
@@ -179,6 +140,7 @@ impl GDriveBackend {
             cloud_urlenc(id)
         ));
         let json = self.get_json(&url)?;
+        let destination_parent_id = self.actual_parent_id(destination_parent_id)?;
         let expected = json["id"].as_str() == Some(id)
             && json["name"].as_str() == Some(destination_name)
             && json["trashed"].as_bool() == Some(false)
@@ -186,7 +148,7 @@ impl GDriveBackend {
                 .as_str()
                 .is_some_and(|mime| !mime.is_empty())
             && json["parents"].as_array().is_some_and(|parents| {
-                parents.len() == 1 && parents[0].as_str() == Some(destination_parent_id)
+                parents.len() == 1 && parents[0].as_str() == Some(destination_parent_id.as_str())
             });
         let time_matches = mtime_ms.is_none_or(|expected| {
             json["modifiedTime"]
@@ -218,9 +180,7 @@ fn parse_object(
     if json["name"].as_str() != Some(expected_name)
         || json["trashed"].as_bool() != Some(false)
         || !json["parents"].as_array().is_some_and(|parents| {
-            parents
-                .iter()
-                .any(|parent| parent.as_str() == Some(expected_parent_id))
+            parents.len() == 1 && parents[0].as_str() == Some(expected_parent_id)
         })
     {
         return Err(invalid(
@@ -260,6 +220,7 @@ fn required_text(json: &serde_json::Value, field: &str) -> VfsResult<String> {
         .ok_or_else(|| invalid(format!("Drive object has no usable {field}")))
 }
 
+#[cfg(test)]
 fn query_literal(value: &str) -> String {
     value.replace('\\', "\\\\").replace('\'', "\\'")
 }

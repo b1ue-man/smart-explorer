@@ -110,13 +110,7 @@ impl GDriveBackend {
     pub(super) fn ensure_dir(&self, path: &str) -> VfsResult<String> {
         let key = norm(path);
         if key.is_empty() {
-            return Ok("root".to_string());
-        }
-        let pending = self.pending_folder_create(&key)?;
-        if pending.is_none() {
-            if let Some(id) = self.valid_cached_id(&key)? {
-                return Ok(id);
-            }
+            return self.actual_parent_id("root");
         }
         let (parent, name) = split_parent(&key);
         let parent_id = self.ensure_dir(&parent)?;
@@ -125,18 +119,23 @@ impl GDriveBackend {
         if let Some(pending) = self.pending_folder_create(&key)? {
             return self.resume_pending_folder_create(&parent, &key, name, &parent_id, &pending);
         }
-        // Re-check in the slot - another thread may have just created it.
-        if let Some(id) = self.valid_cached_id(&key)? {
+        if let Some(id) = self.resolve_bound_folder(&parent_id, name)? {
             return Ok(id);
         }
-        // If the parent's children are fully known and this folder isn't among
-        // them, it's known-absent -> skip the existence query.
-        let known_absent = self.listed_guard()?.contains(&parent);
-        let existing = if known_absent {
-            None
-        } else {
-            self.find_child(&parent_id, name)?
-        };
+        // Re-check in the slot - another thread may have just created it.
+        if let Some(id) = self.valid_cached_id(&key)? {
+            let json = self.object_json(&id)?;
+            if !super::identity::in_parent(&json, &parent_id)?
+                || json["mimeType"].as_str() != Some(FOLDER_MIME)
+            {
+                return Err(io::Error::new(io::ErrorKind::AlreadyExists,
+                    "Drive directory path no longer names a folder in its expected parent"));
+            }
+            self.bind_folder_path(&parent_id, super::identity::text(&json, "name")?, &id, name)?;
+            return Ok(id);
+        }
+        // A prior list is not a name reservation against other Drive clients.
+        let existing = self.find_folder_child(&parent_id, name)?;
         if let Some(id) = existing {
             self.remember_path(&key, &id, None)?;
             self.persist_path_cache();
@@ -165,7 +164,7 @@ impl GDriveBackend {
     ) -> VfsResult<String> {
         if pending.key != key
             || pending.name != super::names::decode(name)?
-            || pending.parent_id != parent_id
+            || self.actual_parent_id(&pending.parent_id)? != parent_id
             || pending.account_key.as_str() != self.drive_account_key.as_ref()
         {
             return Err(io::Error::other(format!(
@@ -275,6 +274,8 @@ impl GDriveBackend {
         key: &str,
         pending: &PendingFolderCreate,
     ) -> VfsResult<String> {
+        let (_, segment) = split_parent(key);
+        self.bind_folder_path(&pending.parent_id, &pending.name, &pending.id, segment)?;
         self.remember_path(key, &pending.id, Some(FOLDER_MIME))?;
         // A brand-new folder has no children -> its contents are fully known.
         self.listed_guard()?.insert(key.to_string());
@@ -291,7 +292,7 @@ impl GDriveBackend {
             cloud_urlenc(id)
         ));
         let json = self.get_json(&url)?;
-        if folder_state_matches(&json, id, name, parent_id) {
+        if folder_state_matches(&json, id, name, &self.actual_parent_id(parent_id)?) {
             Ok(())
         } else {
             Err(io::Error::new(
