@@ -159,6 +159,15 @@ pub fn sync_filesystem<B: Backend + ?Sized>(backend: &B, root: &str) -> VfsResul
     }
 }
 
+/// Confirm `parent` after publication; deferred file contents need their
+/// separate `sync_filesystem` contract. `Ok(false)` means unconfirmed.
+pub fn confirm_namespace<B: Backend + ?Sized>(backend: &B, parent: &str) -> VfsResult<bool> {
+    match backend.extensions() {
+        Some(extensions) => extensions.confirm_namespace(parent),
+        None => Ok(false),
+    }
+}
+
 /// What the target below `root` can store (all unknown without extensions).
 pub fn target_limits<B: Backend + ?Sized>(backend: &B, root: &str) -> TargetLimits {
     match backend.extensions() {

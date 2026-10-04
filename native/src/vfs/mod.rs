@@ -80,6 +80,7 @@ mod verbatim;
 mod volume;
 
 pub use self::error_classes::{is_target_refusal, omission_reason};
+pub use self::extension_calls::confirm_namespace;
 pub use self::extension_calls::{
     change_signal, change_signal_mode, find_duplicates, finish_stage, hash_walk, list_dir_tolerant,
     mtime_precision, open_read_regular, open_write_copy_stage_timed, previous_state_identities,
