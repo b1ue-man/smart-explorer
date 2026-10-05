@@ -134,7 +134,10 @@ fn sync_reliability_task_options_legacy_spellings_recorded_retry_keeps_literal_s
     let a = TestRemote::new(a_dir.path(), "legacy-recorded-a");
     let b = TestRemote::new(b_dir.path(), "legacy-recorded-b");
     let identity = Identity::current(engine::incremental::SyncEndpoints::new(
-        &a, REMOTE_ROOT, &b, REMOTE_ROOT,
+        &a,
+        REMOTE_ROOT,
+        &b,
+        REMOTE_ROOT,
     ));
     let _files = StateFiles::new(&[identity]);
     let db = state_dir.path().join("index.sqlite");
@@ -145,7 +148,11 @@ fn sync_reliability_task_options_legacy_spellings_recorded_retry_keeps_literal_s
     let initial = run(&a, &b, options, &db);
     complete(&initial);
     assert_eq!(
-        initial.baseline.keys().map(String::as_str).collect::<Vec<_>>(),
+        initial
+            .baseline
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
         vec![A_REL]
     );
     let key = initial.state.clone().unwrap();
@@ -161,7 +168,13 @@ fn sync_reliability_task_options_legacy_spellings_recorded_retry_keeps_literal_s
     let filter = engine::WalkFilter::basic(true, &ignore);
     let cancel = AtomicBool::new(false);
     let preview = engine::preview(
-        &exact_a, REMOTE_ROOT, &exact_b, REMOTE_ROOT, options, &cancel, &filter,
+        &exact_a,
+        REMOTE_ROOT,
+        &exact_b,
+        REMOTE_ROOT,
+        options,
+        &cancel,
+        &filter,
     );
     assert!(preview.error.is_none(), "{:?}", preview.error);
     assert!(preview.actions.is_empty());
@@ -190,12 +203,22 @@ fn sync_reliability_task_options_legacy_spellings_recorded_retry_keeps_literal_s
     assert_eq!(conflict.conflicts[0].rel, A_REL);
     assert_eq!(conflict.baseline, initial.baseline);
     let paths = engine::recorded_original_paths_for_key(
-        &exact_a, REMOTE_ROOT, &exact_b, REMOTE_ROOT, &key, A_REL,
+        &exact_a,
+        REMOTE_ROOT,
+        &exact_b,
+        REMOTE_ROOT,
+        &key,
+        A_REL,
     )
     .unwrap();
     assert_eq!((paths.rel_a.as_str(), paths.rel_b.as_str()), (A_REL, B_REL));
     let old_recorded = engine::recorded_original_paths_for_key(
-        &exact_a, REMOTE_ROOT, &exact_b, REMOTE_ROOT, &key, B_REL,
+        &exact_a,
+        REMOTE_ROOT,
+        &exact_b,
+        REMOTE_ROOT,
+        &key,
+        B_REL,
     )
     .unwrap();
     assert_eq!(old_recorded, paths);
@@ -213,16 +236,17 @@ fn sync_reliability_task_options_legacy_spellings_recorded_retry_keeps_literal_s
         |_| {},
     );
     assert_eq!(failed.unwrap_err().kind(), io::ErrorKind::ConnectionReset);
-    assert_eq!(std::fs::read(b_dir.path().join(B_REL)).unwrap(), b"winner-a");
+    assert_eq!(
+        std::fs::read(b_dir.path().join(B_REL)).unwrap(),
+        b"winner-a"
+    );
     assert_eq!(engine::load_baseline(&base_path).unwrap(), initial.baseline);
     let pending = fixture::intent(&key.pair_id);
     assert_eq!(pending.destination, format!("{REMOTE_ROOT}/{B_REL}"));
     {
         let lock = engine::PairLock::acquire(&key.lock_id).unwrap();
         let blocked = engine::single_recorded::apply_one(
-            engine::incremental::SyncEndpoints::new(
-                &exact_a, REMOTE_ROOT, &exact_b, REMOTE_ROOT,
-            ),
+            engine::incremental::SyncEndpoints::new(&exact_a, REMOTE_ROOT, &exact_b, REMOTE_ROOT),
             &lock,
             &key,
             &engine::Action::DeleteA(A_REL.into()),
@@ -232,16 +256,28 @@ fn sync_reliability_task_options_legacy_spellings_recorded_retry_keeps_literal_s
             &cancel,
         );
         assert_eq!(blocked.unwrap_err().kind(), io::ErrorKind::WouldBlock);
-        assert_eq!(std::fs::read(a_dir.path().join(A_REL)).unwrap(), b"winner-a");
-        assert_eq!(std::fs::read(b_dir.path().join(B_REL)).unwrap(), b"winner-a");
+        assert_eq!(
+            std::fs::read(a_dir.path().join(A_REL)).unwrap(),
+            b"winner-a"
+        );
+        assert_eq!(
+            std::fs::read(b_dir.path().join(B_REL)).unwrap(),
+            b"winner-a"
+        );
     }
     let promotions = b.promotions.load(Ordering::SeqCst);
     let resumed = run(&exact_a, &exact_b, options, &db);
     complete(&resumed);
     assert_eq!(b.promotions.load(Ordering::SeqCst), promotions);
     fixture::assert_publication_finished(&exact_b, &pending);
-    assert_eq!(std::fs::read(a_dir.path().join(A_REL)).unwrap(), b"winner-a");
-    assert_eq!(std::fs::read(b_dir.path().join(B_REL)).unwrap(), b"winner-a");
+    assert_eq!(
+        std::fs::read(a_dir.path().join(A_REL)).unwrap(),
+        b"winner-a"
+    );
+    assert_eq!(
+        std::fs::read(b_dir.path().join(B_REL)).unwrap(),
+        b"winner-a"
+    );
     let side = engine::versions::VersionSide {
         side: engine::PairSide::B,
         backend: &exact_b,
@@ -304,7 +340,10 @@ fn sync_reliability_task_options_legacy_spellings_incremental_and_invalid_maps_k
     let a = TestRemote::new(a_dir.path(), "legacy-index-a");
     let b = TestRemote::new(b_dir.path(), "legacy-index-b");
     let identity = Identity::current(engine::incremental::SyncEndpoints::new(
-        &a, REMOTE_ROOT, &b, REMOTE_ROOT,
+        &a,
+        REMOTE_ROOT,
+        &b,
+        REMOTE_ROOT,
     ));
     let _files = StateFiles::new(&[identity]);
     let db = state_dir.path().join("index.sqlite");
@@ -327,8 +366,14 @@ fn sync_reliability_task_options_legacy_spellings_incremental_and_invalid_maps_k
     complete(&changed);
     assert_eq!(changed.stats.a_to_b, 1);
     assert_eq!(exact_b.listings.load(Ordering::SeqCst), 0);
-    assert_eq!(std::fs::read(b_dir.path().join(B_REL)).unwrap(), b"mirror change");
-    assert!(!base_path.with_extension("index-dirty").try_exists().unwrap());
+    assert_eq!(
+        std::fs::read(b_dir.path().join(B_REL)).unwrap(),
+        b"mirror change"
+    );
+    assert!(!base_path
+        .with_extension("index-dirty")
+        .try_exists()
+        .unwrap());
     let store = engine::state_store::SyncStateStore::open_at(&db).unwrap();
     let pair = engine::replica_state::index_id(&key).unwrap();
     let record = store.load_pair(&pair).unwrap().unwrap();
@@ -347,7 +392,10 @@ fn sync_reliability_task_options_legacy_spellings_incremental_and_invalid_maps_k
     assert_eq!(failed.errors[0].0, "Pfad-Schreibweisen");
     assert_eq!(std::fs::read(&names_path).unwrap(), invalid_bytes);
     assert_eq!(std::fs::read(&base_path).unwrap(), base_bytes);
-    assert_eq!(std::fs::read(b_dir.path().join(B_REL)).unwrap(), b"mirror change");
+    assert_eq!(
+        std::fs::read(b_dir.path().join(B_REL)).unwrap(),
+        b"mirror change"
+    );
     engine::state_metadata::write_bytes(&names_path, &valid_names).unwrap();
     exact_b.listings.store(0, Ordering::SeqCst);
     let noop = run(&exact_a, &exact_b, options, &db);
@@ -358,5 +406,8 @@ fn sync_reliability_task_options_legacy_spellings_incremental_and_invalid_maps_k
         (0, 0, 0)
     );
     assert_eq!(exact_b.listings.load(Ordering::SeqCst), 0);
-    assert!(!base_path.with_extension("index-dirty").try_exists().unwrap());
+    assert!(!base_path
+        .with_extension("index-dirty")
+        .try_exists()
+        .unwrap());
 }

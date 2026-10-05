@@ -385,11 +385,7 @@ pub(super) fn state_baseline(key: &StateKey) -> bisync::Baseline {
 
 /// Reconstruct the former folded pair from real seed signatures and side
 /// spellings. The caller removed only the extra exact-case seed copies.
-pub(super) fn legacy_folded_state(
-    seed: &Outcome,
-    rel_a: &str,
-    rel_b: &str,
-) -> bisync::Baseline {
+pub(super) fn legacy_folded_state(seed: &Outcome, rel_a: &str, rel_b: &str) -> bisync::Baseline {
     let path = bisync::baseline_file(seed.state.as_ref().unwrap()).unwrap();
     let mut baseline = seed.baseline.clone();
     let a = baseline[rel_a].0;

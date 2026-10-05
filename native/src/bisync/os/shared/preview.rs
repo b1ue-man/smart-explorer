@@ -96,7 +96,12 @@ pub fn preview_with(
             .map_err(|(path, error)| io::Error::other(format!("{path}: {error}")))?;
         let empty = (snapshot.a.is_empty(), snapshot.b.is_empty());
         super::orchestration_plan::protect_pending_spelled(
-            &_lock, &key, endpoints, keys, &names.aliases, &mut snapshot,
+            &_lock,
+            &key,
+            endpoints,
+            keys,
+            &names.aliases,
+            &mut snapshot,
         )?;
         let mut planning_base = base.clone();
         for conflict in &snapshot.conflicts {
@@ -153,7 +158,8 @@ pub fn preview_with(
                 .map(|repair| keys.key(&repair.rel).into_owned())
                 .collect();
             let candidates = backend.plan_dedupe_recursive(root, &|rel| {
-                source_keys.contains(&names.aliases.key(rel, side, keys)) || plan.omissions.protects(rel)
+                source_keys.contains(&names.aliases.key(rel, side, keys))
+                    || plan.omissions.protects(rel)
             })?;
             let candidates: Vec<_> = candidates
                 .iter()
@@ -166,7 +172,9 @@ pub fn preview_with(
             let orphans: std::collections::BTreeSet<_> = candidates
                 .iter()
                 .map(|entry| {
-                    names.aliases.key(&super::paths::rel_of(&entry.path, root), side, keys)
+                    names
+                        .aliases
+                        .key(&super::paths::rel_of(&entry.path, root), side, keys)
                 })
                 .filter(|key| !source_keys.contains(key))
                 .collect();

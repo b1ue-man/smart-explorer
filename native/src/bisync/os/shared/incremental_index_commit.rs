@@ -81,7 +81,10 @@ pub(super) fn commit_incremental(
         || !super::record_matches(previous, state.endpoints, source_side)
         || previous.mode != mode(state)
         || engine::state_spelling_aliases::cache_by_key(items[0], items[1], keys, aliases)
-            != Some(engine::state_spelling_aliases::baseline_by_key(state.baseline, keys))
+            != Some(engine::state_spelling_aliases::baseline_by_key(
+                state.baseline,
+                keys,
+            ))
         || !super::root_id_matches(
             state.endpoints.a,
             state.endpoints.root_a,
@@ -100,7 +103,11 @@ pub(super) fn commit_incremental(
     }
     let names = engine::state_spellings::load(state.key, keys).map_err(|_| invalid())?;
     let confirmed = names.cache_baseline(baseline, keys);
-    let source_pair = if source_side == Side::A { engine::PairSide::A } else { engine::PairSide::B };
+    let source_pair = if source_side == Side::A {
+        engine::PairSide::A
+    } else {
+        engine::PairSide::B
+    };
     let touched: BTreeSet<_> = changes
         .iter()
         .flat_map(|change| std::iter::once(change.rel.as_str()).chain(change.old_rel.as_deref()))
@@ -140,7 +147,11 @@ pub(super) fn commit_incremental(
                         }
                     },
                 );
-            let pair_side = if side == Side::A { engine::PairSide::A } else { engine::PairSide::B };
+            let pair_side = if side == Side::A {
+                engine::PairSide::A
+            } else {
+                engine::PairSide::B
+            };
             if !touched.contains(&aliases.key(&item.rel, pair_side, keys)) && now != item.sig {
                 return Err(invalid());
             }
@@ -161,7 +172,11 @@ pub(super) fn commit_incremental(
             if state.cancel.load(Ordering::Acquire) {
                 return Err(invalid());
             }
-            let pair_side = if side == Side::A { engine::PairSide::A } else { engine::PairSide::B };
+            let pair_side = if side == Side::A {
+                engine::PairSide::A
+            } else {
+                engine::PairSide::B
+            };
             let item = if touched.contains(&aliases.key(rel, pair_side, keys)) {
                 confirmed_item(state, side, backend, root, rel, signature).map_err(|_| invalid())?
             } else {

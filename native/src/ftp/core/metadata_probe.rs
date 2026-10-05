@@ -23,7 +23,9 @@ pub(super) fn regular_file(
         .split_ascii_whitespace()
         .nth(1)
         .and_then(|value| value.parse::<u64>().ok())
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "FTP SIZE response is not u64"))?;
+        .ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "FTP SIZE response is not u64")
+        })?;
     // If MDTM is unavailable, both listing and stat must retain the same
     // parent-LIST facts, rather than combining LIST time with a zero-time stat.
     let Some(mtime_ms) = read_time(stream, path)? else {

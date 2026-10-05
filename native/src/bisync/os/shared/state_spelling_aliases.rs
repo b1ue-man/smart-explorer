@@ -23,7 +23,10 @@ pub(super) fn cache_by_key(
     let mut base = Baseline::new();
     for (side, items) in [(PairSide::A, a), (PairSide::B, b)] {
         let mut seen = BTreeSet::new();
-        for (rel, item) in items.iter().filter(|(_, item)| !item.deleted && !item.is_dir) {
+        for (rel, item) in items
+            .iter()
+            .filter(|(_, item)| !item.deleted && !item.is_dir)
+        {
             let key = aliases.key(rel, side, keys);
             if !seen.insert(key.clone()) {
                 return None;

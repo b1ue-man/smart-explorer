@@ -129,7 +129,9 @@ pub fn merge_recorded_for_key(
         if requested_rel != conflict.rel {
             if let Some(canonical) = merge_recovery::load(key, &conflict.rel)? {
                 if saved_recovery.is_some() {
-                    return Err(drift("two stored merges claim the same historical relation"));
+                    return Err(drift(
+                        "two stored merges claim the same historical relation",
+                    ));
                 }
                 saved_recovery = Some(canonical);
             }

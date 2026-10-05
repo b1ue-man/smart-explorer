@@ -147,11 +147,7 @@ impl PathAliases {
                 let logical = self.logical(&rel, side, keys);
                 omissions.record_kind(&logical, kind, reported);
                 for target in [PairSide::A, PairSide::B] {
-                    omissions.record_kind(
-                        &self.spelling(&logical, target, keys),
-                        kind,
-                        reported,
-                    );
+                    omissions.record_kind(&self.spelling(&logical, target, keys), kind, reported);
                 }
             }
         }

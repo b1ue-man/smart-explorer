@@ -233,7 +233,14 @@ pub(super) fn protect_pending(
     keys: KeyPolicy,
     snapshot: &mut super::snapshot_pair::PairSnapshot,
 ) -> io::Result<()> {
-    protect_pending_spelled(lock, key, endpoints, keys, &PathAliases::default(), snapshot)
+    protect_pending_spelled(
+        lock,
+        key,
+        endpoints,
+        keys,
+        &PathAliases::default(),
+        snapshot,
+    )
 }
 
 pub(super) fn protect_pending_spelled(

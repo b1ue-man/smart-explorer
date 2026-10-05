@@ -169,12 +169,12 @@ impl StateSpellings {
         // Unresolved conflicts may have no baseline yet. Their observed
         // spellings stay available to resolve_recorded; SQL uses only baseline
         // signatures and is bootstrapped only after an entirely safe run.
-        self.legacy.files.retain(|key, _| {
-            self.files_a.contains_key(key) || self.files_b.contains_key(key)
-        });
-        self.legacy.dirs.retain(|key, _| {
-            self.dirs_a.contains_key(key) || self.dirs_b.contains_key(key)
-        });
+        self.legacy
+            .files
+            .retain(|key, _| self.files_a.contains_key(key) || self.files_b.contains_key(key));
+        self.legacy
+            .dirs
+            .retain(|key, _| self.dirs_a.contains_key(key) || self.dirs_b.contains_key(key));
     }
 
     /// The SQL rows retain each side's literal path; the baseline remains a

@@ -158,13 +158,8 @@ pub(super) fn publication_case(fault: Fault) {
         b"original"
     );
     for _ in 0..2 {
-        let result = engine::replacement_recovery::recover_locked(
-            &lock,
-            &legacy,
-            endpoints,
-            false,
-            &cancel,
-        );
+        let result =
+            engine::replacement_recovery::recover_locked(&lock, &legacy, endpoints, false, &cancel);
         if matches!(fault, Fault::ForeignCreator) {
             assert_eq!(result.unwrap_err().kind(), io::ErrorKind::WouldBlock);
             assert_eq!(
@@ -191,9 +186,11 @@ pub(super) fn publication_case(fault: Fault) {
             };
             assert_eq!(std::fs::read(folder.path().join("file")).unwrap(), expected);
             assert_publication_finished(&remote, &prepared);
-            assert!(engine::orchestration_plan::pending_paths(&lock, &legacy, endpoints)
-                .unwrap()
-                .is_empty());
+            assert!(
+                engine::orchestration_plan::pending_paths(&lock, &legacy, endpoints)
+                    .unwrap()
+                    .is_empty()
+            );
         }
         assert!(!baseline.exists() && !baseline.with_extension("journal").exists());
         assert_eq!(
