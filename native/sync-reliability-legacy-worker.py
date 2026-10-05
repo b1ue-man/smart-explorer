@@ -291,6 +291,128 @@ def _preserved_payload(root, payload, exclude):
             and path.read_bytes() == payload]
 
 
+def _diagnostics(work, logs, report):
+    """Project selected public facts; never copy raw command output or profiles."""
+    commands = {}
+    inputs = report["runtimeInputs"]
+    for name, key in (("old-version.log", "oldVersion"), ("candidate-version.log", "candidateVersion")):
+        version = inputs.get(key, "")
+        if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][a-zA-Z0-9.-]+)?", version):
+            _atomic_text(logs / name, version + "\n")
+    names = ("old-version.log", "candidate-version.log", "old-worker.json",
+             "candidate-worker.json", "handoff.json", "restarted-worker.json")
+    for name in names:
+        source = work / name
+        if not source.is_file():
+            continue
+        stderr = source.with_suffix(".stderr.log")
+        commands[name] = {"stdoutBytes": source.stat().st_size,
+                          "stderrBytes": stderr.stat().st_size if stderr.is_file() else 0}
+        if not name.endswith(".json"):
+            continue
+        try:
+            answer = json.loads(source.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeError):
+            commands[name]["jsonParsed"] = False
+            continue
+        commands[name]["jsonParsed"] = isinstance(answer, dict)
+        if not isinstance(answer, dict):
+            continue
+        if name == "handoff.json":
+            selected = {"versionMatched": bool(inputs.get("candidateVersion"))
+                        and answer.get("version") == inputs["candidateVersion"],
+                        "workerReplaced": answer.get("worker") == "replaced",
+                        "workerErrorPresent": answer.get("worker_error") is not None}
+        else:
+            worker = answer.get("worker")
+            if not isinstance(worker, dict):
+                continue
+            selected = {key: worker[key] for key in ("reachable", "running", "connected")
+                        if isinstance(worker.get(key), bool)}
+            selected["lastErrorPresent"] = worker.get("last_error") is not None
+        _atomic_text(logs / name, json.dumps({"diagnosticProjection": True, **selected}, indent=2) + "\n")
+    _atomic_text(logs / "commands.json", json.dumps(commands, indent=2) + "\n")
+
+
+class _PrivateRoot:
+    """Explicit owner: no automatic removal when worker cleanup is incomplete."""
+    def __init__(self, logs, candidate_sha):
+        self.logs = logs.resolve()
+        # native_stage uploads logs.parent, including this helper's log directory.
+        upload_root = self.logs.parent
+        temporary = Path(tempfile.gettempdir()).resolve(strict=True)
+        if temporary.is_relative_to(upload_root):
+            raise RuntimeError("C08 private temporary directory is inside the upload tree")
+        self.root = Path(tempfile.mkdtemp(prefix="c08-legacy-worker-", dir=temporary))
+        identity = self.root.lstat()
+        self.identity = (identity.st_dev, identity.st_ino)
+        name = "se.exe" if os.name == "nt" else "se"
+        self.paths = {self.root / "previous" / name, self.root / "candidate" / name}
+        self.sync = self.root / "data/smart_explorer/sync"
+        self.activation = None
+        self.report = {"case": "C08", "candidate": candidate_sha,
+                       "runtimeInputs": {"platform": sys.platform, "privateRoot": str(self.root)}}
+
+    def _check_owner(self):
+        identity = self.root.lstat()
+        if (self.root.is_symlink() or not self.root.is_dir() or self.root.resolve() != self.root
+                or (identity.st_dev, identity.st_ino) != self.identity):
+            raise RuntimeError("C08 private root changed externally; refusing cleanup")
+
+    def __enter__(self):
+        self._check_owner()
+        return self
+
+    def __exit__(self, exception_type, exception, traceback):
+        errors = []
+        failures = []
+        report = self.report
+        report.update(activationRestored=False, ownedProcessesClosed=False,
+                      privateDataRemoved=False, privateRootRetained=True)
+
+        def step(label, action):
+            try:
+                action()
+                return True
+            except BaseException as error:
+                errors.append(error)
+                failures.append({"step": label, "errorType": type(error).__name__})
+                return False
+
+        owned = step("private-root-owner", self._check_owner)
+        if owned:
+            step("worker-stop", lambda: _stop(self.sync, self.paths, force=True))
+        report["activationRestored"] = step(
+            "activation-restore", lambda: self.activation.restore() if self.activation is not None else None)
+
+        def closed():
+            report["ownedProcessesClosed"] = not _owned_pids(self.paths)
+            if not report["ownedProcessesClosed"]:
+                raise RuntimeError("C08 cleanup did not close all owned workers and guardians")
+
+        if owned:
+            step("worker-exit-proof", closed)
+            step("selected-diagnostics", lambda: _diagnostics(self.root, self.logs, report))
+        if not errors and report["ownedProcessesClosed"] and report["activationRestored"]:
+            def remove():
+                self._check_owner()
+                shutil.rmtree(self.root)
+                if self.root.exists() or self.root.is_symlink():
+                    raise RuntimeError("C08 private root still exists after removal")
+                report.update(privateDataRemoved=True, privateRootRetained=False)
+
+            step("private-root-remove", remove)
+        report["cleanupErrors"] = failures
+        step("runtime-diagnostics", lambda: _atomic_text(self.logs / "runtime.json",
+                                                        json.dumps(report, indent=2, ensure_ascii=False) + "\n"))
+        if errors:
+            if exception is not None:
+                errors.insert(0, exception)
+            state = "retained privately" if report["privateRootRetained"] else "removed after confirmed cleanup"
+            raise BaseExceptionGroup(f"C08 cleanup/diagnostics failed; private root {state}: {self.root}", errors)
+        return False
+
+
 def run(candidate_cli: Path, logs: Path, env: dict, candidate_sha: str) -> dict:
     """Run C08 on Linux/Windows remote CI and return discovered runtimeInputs."""
     if env.get("GITHUB_ACTIONS") != "true" or sys.platform not in ("linux", "win32"):
@@ -301,7 +423,12 @@ def run(candidate_cli: Path, logs: Path, env: dict, candidate_sha: str) -> dict:
     if not re.fullmatch(r"[a-f0-9]{40}", candidate_sha) or head != candidate_sha or env.get("GITHUB_SHA") != head:
         raise RuntimeError("C08 checkout, workflow and requested candidate must match")
     logs.mkdir(parents=True, exist_ok=True)
-    work = Path(tempfile.mkdtemp(prefix="c08-legacy-worker-", dir=logs)).resolve()
+    with _PrivateRoot(logs, candidate_sha) as fixture:
+        return _run_fixture(candidate_cli, env, fixture)
+
+
+def _run_fixture(candidate_cli, env, fixture):
+    work = fixture.root
     name = "se.exe" if os.name == "nt" else "se"
     previous, current = work / "previous" / name, work / "candidate" / name
     previous.parent.mkdir()
@@ -345,164 +472,155 @@ def run(candidate_cli: Path, logs: Path, env: dict, candidate_sha: str) -> dict:
     job.write_text("# historical normal job\n" + "".join(f"{key}={value}\n" for key, value in body.items()), encoding="utf-8")
     (sync / "cadence.txt").write_text("2", encoding="utf-8")
     activation = _Activation(config, previous)
-    paths = {previous.resolve(), current.resolve()}
-    report = {"case": "C08", "candidate": candidate_sha, "runtimeInputs": {
+    fixture.activation = activation
+    paths = fixture.paths
+    report = fixture.report
+    report["runtimeInputs"].update({
         "platform": sys.platform, "profile": str(data), "configProfile": str(config),
         "sourceRoot": str(source), "targetRoot": str(target), "jobFile": str(job), "jobId": JOB_ID,
         "initialByteSha256": {rel: hashlib.sha256(payload).hexdigest() for rel, payload in initial.items()},
         "oldTag": OLD_TAG, "oldTagCommit": subprocess.check_output(["git", "rev-parse", OLD_TAG + "^{commit}"], cwd=ROOT, text=True, timeout=30).strip(),
-        "oldCli": str(previous), "oldCliSha256": sidecar, "candidateCli": str(current), "candidateCliSha256": _sha(current)}}
-    try:
-        activation.enable()
-        old_version = _command([previous, "--version"], work / "old-version.log", runtime_env).split()[-1]
-        version = _command([current, "--version"], work / "candidate-version.log", runtime_env).split()[-1]
-        if old_version != OLD_TAG.removeprefix("v"):
-            raise RuntimeError("C08 extracted CLI reports another historical version")
-        report["runtimeInputs"].update(oldVersion=old_version, candidateVersion=version)
-        before = json.loads(_command([previous, "share", "status", "--json"], work / "old-worker.json", runtime_env))
-        if not before["worker"]["reachable"] or not _owned_pids({previous.resolve()}):
-            raise RuntimeError("C08 normal old CLI did not start its own reachable worker")
-        old_generation = _generation(sync)
-        report["runtimeInputs"]["oldWorkerPids"] = sorted(_owned_pids({previous.resolve()}))
+        "oldCli": str(previous), "oldCliSha256": sidecar, "candidateCli": str(current), "candidateCliSha256": _sha(current)})
+    activation.enable()
+    old_version = _command([previous, "--version"], work / "old-version.log", runtime_env).split()[-1]
+    version = _command([current, "--version"], work / "candidate-version.log", runtime_env).split()[-1]
+    if old_version != OLD_TAG.removeprefix("v"):
+        raise RuntimeError("C08 extracted CLI reports another historical version")
+    report["runtimeInputs"].update(oldVersion=old_version, candidateVersion=version)
+    before = json.loads(_command([previous, "share", "status", "--json"], work / "old-worker.json", runtime_env))
+    if not before["worker"]["reachable"] or not _owned_pids({previous.resolve()}):
+        raise RuntimeError("C08 normal old CLI did not start its own reachable worker")
+    old_generation = _generation(sync)
+    report["runtimeInputs"]["oldWorkerPids"] = sorted(_owned_pids({previous.resolve()}))
 
-        def old_run():
-            result = sync / "results.tsv"
-            if not result.is_file():
-                return None
-            for line in result.read_text(encoding="utf-8").splitlines():
-                fields = line.split("\t")
-                if fields[0] == JOB_ID and len(fields) >= 8:
-                    if int(fields[6]):
-                        raise RuntimeError("C08 old worker reported an actual job error: " + line)
-                    if int(fields[2]) >= len(initial) and int(fields[1]) > 0:
-                        return {"when": int(fields[1]), "a_to_b": int(fields[2]), "b_to_a": int(fields[3]),
-                                "deleted": int(fields[4]), "conflicts": int(fields[5]), "errors": int(fields[6]),
-                                "note": "\t".join(fields[7:])}
+    def old_run():
+        result = sync / "results.tsv"
+        if not result.is_file():
             return None
+        for line in result.read_text(encoding="utf-8").splitlines():
+            fields = line.split("\t")
+            if fields[0] == JOB_ID and len(fields) >= 8:
+                if int(fields[6]):
+                    raise RuntimeError("C08 old worker reported an actual job error: " + line)
+                if int(fields[2]) >= len(initial) and int(fields[1]) > 0:
+                    return {"when": int(fields[1]), "a_to_b": int(fields[2]), "b_to_a": int(fields[3]),
+                            "deleted": int(fields[4]), "conflicts": int(fields[5]), "errors": int(fields[6]),
+                            "note": "\t".join(fields[7:])}
+        return None
 
-        old_result = _wait("successful published old job", old_run)
-        old_when = old_result["when"]
-        _same_bytes(source, target, initial)
-        if (target / ".hidden").exists() or (target / "ignored.skip").exists():
-            raise RuntimeError("C08 old worker did not apply the saved hidden/ignore filters")
-        old_baselines = list(sync.glob("baseline_*.sebl"))
-        if len(old_baselines) != 1 or not set(initial).issubset(_baseline(old_baselines[0])):
-            raise RuntimeError("C08 old worker did not create its actual pair-wide baseline")
-        protected = _settings(job)
-        report["oldRun"] = dict(old_result, baseline=str(old_baselines[0]), baselineSha256=_sha(old_baselines[0]))
-        completion = json.loads(_command([current, "update", "--complete-install", version], work / "handoff.json", runtime_env))
-        if completion != {"version": version, "worker": "replaced", "worker_error": None}:
-            raise RuntimeError("C08 normal version-bound worker replacement failed: " + json.dumps(completion))
-        status = json.loads(_command([current, "share", "status", "--json"], work / "candidate-worker.json", runtime_env))
-        new_generation = _generation(sync)
-        if not status["worker"]["reachable"] or new_generation == old_generation:
-            raise RuntimeError("C08 replacement did not publish a reachable new generation")
-        _wait("retiring old worker exit", lambda: not _owned_pids({previous.resolve()}), seconds=45)
-        state = _wait("candidate adoption of the original job", lambda: _success(sync, old_when))
-        baseline = _owned_baseline(sync)
-        adopted_key = _state_key(baseline)
-        if not set(initial).issubset(_baseline(baseline)):
-            raise RuntimeError("C08 migration lost old baseline entries")
-        if any(_settings(job).get(key) != value for key, value in protected.items()):
-            raise RuntimeError("C08 worker update changed saved endpoints or options")
-        report["runtimeInputs"].update(oldGeneration=old_generation, candidateGeneration=new_generation,
-                                      baseline=str(baseline), ownerToken=f"job-{JOB_ID}",
-                                      candidateWorkerPids=sorted(_owned_pids({current.resolve()})),
-                                      savedSettings=protected, stateKey=adopted_key)
-        _atomic_text(sync / "pause.until", str(2**63 - 1))
-        (source / "change.txt").write_bytes(b"candidate changed existing file")
-        (source / "added.txt").write_bytes(b"candidate added file")
-        (source / "delete.txt").unlink()
-        (sync / "pause.until").unlink()
-        changed = _wait("candidate changed-file and delete run", lambda: _success(sync, state["last_success"]))
-        _same_bytes(source, target, ["change.txt", "added.txt"])
-        if (target / "delete.txt").exists() or changed["last_result"]["deleted"] < 1:
-            raise RuntimeError("C08 stored delete policy did not propagate the deletion")
-        for rel in (".hidden", "ignored.skip"):
-            if (target / rel).exists():
-                raise RuntimeError("C08 stored filters changed meaning after update")
-        _atomic_text(sync / "pause.until", str(2**63 - 1))
-        winner, loser = b"candidate conflict winner", b"candidate conflict losing bytes"
-        (source / "conflict.txt").write_bytes(winner)
-        (target / "conflict.txt").write_bytes(loser)
-        stamp = time.time()
-        os.utime(source / "conflict.txt", (stamp + 10, stamp + 10))
-        os.utime(target / "conflict.txt", (stamp + 5, stamp + 5))
-        (sync / "pause.until").unlink()
-        conflict = _wait("stored keep-both conflict choice", lambda: _success(sync, changed["last_success"]))
-        _same_bytes(source, target, ["conflict.txt"])
-        if (target / "conflict.txt").read_bytes() != winner:
-            raise RuntimeError("C08 stored conflict choice selected unexpected bytes")
-        preserved = _preserved_payload(work, loser, {source / "conflict.txt", target / "conflict.txt"})
-        deleted_backup = _preserved_payload(work, initial["delete.txt"], set())
-        if not preserved or not deleted_backup:
-            raise RuntimeError("C08 overwritten/deleted bytes are not recoverable")
-        baseline_before = _baseline(baseline)
-        (work / "baseline-before-interruption.sebl").write_bytes(baseline.read_bytes())
-        _atomic_text(sync / "pause.until", str(2**63 - 1))
-        chunk = b"C08 interrupted atomically\x00"
-        payload = chunk * (32 * 1024 * 1024 // len(chunk))
-        (source / "resume.bin").write_bytes(payload)
-        (sync / "pause.until").unlink()
+    old_result = _wait("successful published old job", old_run)
+    old_when = old_result["when"]
+    _same_bytes(source, target, initial)
+    if (target / ".hidden").exists() or (target / "ignored.skip").exists():
+        raise RuntimeError("C08 old worker did not apply the saved hidden/ignore filters")
+    old_baselines = list(sync.glob("baseline_*.sebl"))
+    if len(old_baselines) != 1 or not set(initial).issubset(_baseline(old_baselines[0])):
+        raise RuntimeError("C08 old worker did not create its actual pair-wide baseline")
+    protected = _settings(job)
+    report["oldRun"] = dict(old_result, baseline=str(old_baselines[0]), baselineSha256=_sha(old_baselines[0]))
+    completion = json.loads(_command([current, "update", "--complete-install", version], work / "handoff.json", runtime_env))
+    if completion != {"version": version, "worker": "replaced", "worker_error": None}:
+        raise RuntimeError("C08 normal version-bound worker replacement failed; inspect selected handoff diagnostics")
+    status = json.loads(_command([current, "share", "status", "--json"], work / "candidate-worker.json", runtime_env))
+    new_generation = _generation(sync)
+    if not status["worker"]["reachable"] or new_generation == old_generation:
+        raise RuntimeError("C08 replacement did not publish a reachable new generation")
+    _wait("retiring old worker exit", lambda: not _owned_pids({previous.resolve()}), seconds=45)
+    state = _wait("candidate adoption of the original job", lambda: _success(sync, old_when))
+    baseline = _owned_baseline(sync)
+    adopted_key = _state_key(baseline)
+    if not set(initial).issubset(_baseline(baseline)):
+        raise RuntimeError("C08 migration lost old baseline entries")
+    if any(_settings(job).get(key) != value for key, value in protected.items()):
+        raise RuntimeError("C08 worker update changed saved endpoints or options")
+    report["runtimeInputs"].update(oldGeneration=old_generation, candidateGeneration=new_generation,
+                                  baseline=str(baseline), ownerToken=f"job-{JOB_ID}",
+                                  candidateWorkerPids=sorted(_owned_pids({current.resolve()})),
+                                  savedSettings=protected, stateKey=adopted_key)
+    _atomic_text(sync / "pause.until", str(2**63 - 1))
+    (source / "change.txt").write_bytes(b"candidate changed existing file")
+    (source / "added.txt").write_bytes(b"candidate added file")
+    (source / "delete.txt").unlink()
+    (sync / "pause.until").unlink()
+    changed = _wait("candidate changed-file and delete run", lambda: _success(sync, state["last_success"]))
+    _same_bytes(source, target, ["change.txt", "added.txt"])
+    if (target / "delete.txt").exists() or changed["last_result"]["deleted"] < 1:
+        raise RuntimeError("C08 stored delete policy did not propagate the deletion")
+    for rel in (".hidden", "ignored.skip"):
+        if (target / rel).exists():
+            raise RuntimeError("C08 stored filters changed meaning after update")
+    _atomic_text(sync / "pause.until", str(2**63 - 1))
+    winner, loser = b"candidate conflict winner", b"candidate conflict losing bytes"
+    (source / "conflict.txt").write_bytes(winner)
+    (target / "conflict.txt").write_bytes(loser)
+    stamp = time.time()
+    os.utime(source / "conflict.txt", (stamp + 10, stamp + 10))
+    os.utime(target / "conflict.txt", (stamp + 5, stamp + 5))
+    (sync / "pause.until").unlink()
+    conflict = _wait("stored keep-both conflict choice", lambda: _success(sync, changed["last_success"]))
+    _same_bytes(source, target, ["conflict.txt"])
+    if (target / "conflict.txt").read_bytes() != winner:
+        raise RuntimeError("C08 stored conflict choice selected unexpected bytes")
+    preserved = _preserved_payload(work, loser, {source / "conflict.txt", target / "conflict.txt"})
+    deleted_backup = _preserved_payload(work, initial["delete.txt"], set())
+    if not preserved or not deleted_backup:
+        raise RuntimeError("C08 overwritten/deleted bytes are not recoverable")
+    baseline_before = _baseline(baseline)
+    (work / "baseline-before-interruption.sebl").write_bytes(baseline.read_bytes())
+    _atomic_text(sync / "pause.until", str(2**63 - 1))
+    chunk = b"C08 interrupted atomically\x00"
+    payload = chunk * (32 * 1024 * 1024 // len(chunk))
+    (source / "resume.bin").write_bytes(payload)
+    (sync / "pause.until").unlink()
 
-        def transferring():
-            running = _state(sync)
-            if not running or not running.get("running"):
-                return None
-            # apply_stage::stage -> unique_staging_path(..., "bisync");
-            # LocalBackend streams directly into this exclusive private stage.
-            for path in target.iterdir():
-                if not re.fullmatch(r"resume\.bin\.se-bisync-[0-9a-f]{16}", path.name):
-                    continue
-                try:
-                    size = path.stat().st_size
-                except FileNotFoundError:
-                    continue
-                if 0 < size < len(payload):
-                    return {"path": str(path), "partialSize": size, "expectedSize": len(payload),
-                            "jobStarted": running["running"]["started"],
-                            "payloadSha256": hashlib.sha256(payload).hexdigest()}
+    def transferring():
+        running = _state(sync)
+        if not running or not running.get("running"):
             return None
-
-        report["interruptionInput"] = _wait("actual in-flight staged transfer", transferring)
-        stopping_pids = sorted(_owned_pids(paths))
-        _stop(sync, paths, force=False)
-        report["normalStop"] = {"ownedWorkerAndGuardianPids": stopping_pids,
-                                "remainingOwnedPids": sorted(_owned_pids(paths))}
-        if not stopping_pids or report["normalStop"]["remainingOwnedPids"]:
-            raise RuntimeError("C08 normal stop did not close all owned worker/guardian processes")
-        cancelled = _state(sync)
-        if not cancelled or cancelled.get("running") or cancelled.get("last_success") != conflict["last_success"] or not cancelled.get("pending_trigger"):
-            raise RuntimeError("C08 interruption lost pending trigger or falsely confirmed success")
-        if not (cancelled.get("last_result") or {}).get("note", "").startswith("abgebrochen"):
-            raise RuntimeError("C08 stopped worker did not record its actual cancellation")
-        if (target / "resume.bin").read_bytes() != initial["resume.bin"] or _baseline(baseline)["resume.bin"] != baseline_before["resume.bin"]:
-            raise RuntimeError("C08 interrupted replacement lost original bytes/baseline")
-        restarted = json.loads(_command([current, "share", "status", "--json"], work / "restarted-worker.json", runtime_env))
-        restart_generation = _generation(sync)
-        if not restarted["worker"]["reachable"] or restart_generation == new_generation:
-            raise RuntimeError("C08 same profile did not restart with a new reachable generation")
-        resumed = _wait("same saved job convergence after interruption", lambda: _success(sync, conflict["last_success"]), seconds=240)
-        if (target / "resume.bin").read_bytes() != payload or _owned_baseline(sync) != baseline or _state_key(baseline) != adopted_key:
-            raise RuntimeError("C08 retry changed owner/replicas or failed to publish complete bytes")
-        before_noop = _sha(baseline)
-        noop = _wait("unchanged saved-job follow-up", lambda: _success(sync, resumed["last_success"]))
-        if any(noop["last_result"][key] for key in ("a_to_b", "b_to_a", "deleted", "conflicts", "errors")) or _sha(baseline) != before_noop:
-            raise RuntimeError("C08 follow-up did not converge to a baseline-preserving no-op")
-        if any(_settings(job).get(key) != value for key, value in protected.items()):
-            raise RuntimeError("C08 restart changed the original job settings")
-        report["runtimeInputs"]["restartGeneration"] = restart_generation
-        report.update(changedRun=changed, conflictRun=conflict, cancelledRun=cancelled, resumedRun=resumed,
-                      noopRun=noop, preservedConflictBytes=preserved, deletedBackupBytes=deleted_backup,
-                      finalBaselineSha256=before_noop)
-    finally:
-        try:
+        # apply_stage::stage -> unique_staging_path(..., "bisync");
+        # LocalBackend streams directly into this exclusive private stage.
+        for path in target.iterdir():
+            if not re.fullmatch(r"resume\.bin\.se-bisync-[0-9a-f]{16}", path.name):
+                continue
             try:
-                _stop(sync, paths, force=True)
-            finally:
-                activation.restore()
-                report["activationRestored"] = True
-        finally:
-            report["ownedProcessesClosed"] = not _owned_pids(paths)
-            (work / "runtime.json").write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+                size = path.stat().st_size
+            except FileNotFoundError:
+                continue
+            if 0 < size < len(payload):
+                return {"path": str(path), "partialSize": size, "expectedSize": len(payload),
+                        "jobStarted": running["running"]["started"],
+                        "payloadSha256": hashlib.sha256(payload).hexdigest()}
+        return None
+
+    report["interruptionInput"] = _wait("actual in-flight staged transfer", transferring)
+    stopping_pids = sorted(_owned_pids(paths))
+    _stop(sync, paths, force=False)
+    report["normalStop"] = {"ownedWorkerAndGuardianPids": stopping_pids,
+                            "remainingOwnedPids": sorted(_owned_pids(paths))}
+    if not stopping_pids or report["normalStop"]["remainingOwnedPids"]:
+        raise RuntimeError("C08 normal stop did not close all owned worker/guardian processes")
+    cancelled = _state(sync)
+    if not cancelled or cancelled.get("running") or cancelled.get("last_success") != conflict["last_success"] or not cancelled.get("pending_trigger"):
+        raise RuntimeError("C08 interruption lost pending trigger or falsely confirmed success")
+    if not (cancelled.get("last_result") or {}).get("note", "").startswith("abgebrochen"):
+        raise RuntimeError("C08 stopped worker did not record its actual cancellation")
+    if (target / "resume.bin").read_bytes() != initial["resume.bin"] or _baseline(baseline)["resume.bin"] != baseline_before["resume.bin"]:
+        raise RuntimeError("C08 interrupted replacement lost original bytes/baseline")
+    restarted = json.loads(_command([current, "share", "status", "--json"], work / "restarted-worker.json", runtime_env))
+    restart_generation = _generation(sync)
+    if not restarted["worker"]["reachable"] or restart_generation == new_generation:
+        raise RuntimeError("C08 same profile did not restart with a new reachable generation")
+    resumed = _wait("same saved job convergence after interruption", lambda: _success(sync, conflict["last_success"]), seconds=240)
+    if (target / "resume.bin").read_bytes() != payload or _owned_baseline(sync) != baseline or _state_key(baseline) != adopted_key:
+        raise RuntimeError("C08 retry changed owner/replicas or failed to publish complete bytes")
+    before_noop = _sha(baseline)
+    noop = _wait("unchanged saved-job follow-up", lambda: _success(sync, resumed["last_success"]))
+    if any(noop["last_result"][key] for key in ("a_to_b", "b_to_a", "deleted", "conflicts", "errors")) or _sha(baseline) != before_noop:
+        raise RuntimeError("C08 follow-up did not converge to a baseline-preserving no-op")
+    if any(_settings(job).get(key) != value for key, value in protected.items()):
+        raise RuntimeError("C08 restart changed the original job settings")
+    report["runtimeInputs"]["restartGeneration"] = restart_generation
+    report.update(changedRun=changed, conflictRun=conflict, cancelledRun=cancelled, resumedRun=resumed,
+                  noopRun=noop, preservedConflictBytes=preserved, deletedBackupBytes=deleted_backup,
+                  finalBaselineSha256=before_noop)
     return report
