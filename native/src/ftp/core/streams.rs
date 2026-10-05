@@ -3,6 +3,7 @@
 //! Each checks the control connection out for its whole transfer and hands
 //! it back when the data stream is finalized, so the control channel always
 //! reads the server's closing answer before the next command.
+use super::data_finish::UploadData;
 use super::io_adapters::FtpConnection;
 use std::io::{self, Read, Write};
 use std::sync::Arc;
@@ -73,10 +74,13 @@ impl FtpConnection {
     ) -> io::Result<FtpStoreWriter> {
         super::errors::command_path(path)?;
         let (control, data) = self.checkout(false, |stream| {
-            stream
-                .put_with_stream(path)
-                .map(|data| Box::new(data) as Box<dyn Write + Send>)
-                .map_err(super::errors::map)
+            let data = stream.put_with_stream(path).map_err(super::errors::map)?;
+            let retained = if matches!(&data, suppaftp::DataStream::Ssl(_)) {
+                data.get_ref().try_clone().map(Some)
+            } else {
+                Ok(None)
+            };
+            Ok(UploadData::new(data, retained))
         })?;
         Ok(FtpStoreWriter {
             owner: self.clone(),
@@ -154,7 +158,7 @@ enum StoreState {
 pub(super) struct FtpStoreWriter {
     owner: Arc<FtpConnection>,
     control: Option<RustlsFtpStream>,
-    data: Option<Box<dyn Write + Send>>,
+    data: Option<UploadData>,
     expected: u64,
     written: u64,
     state: StoreState,
@@ -168,9 +172,7 @@ impl FtpStoreWriter {
             return Err(io_err("FTP-Upload ist bereits beendet"));
         };
         let result = match self.data.take() {
-            Some(data) => control
-                .finalize_put_stream(data)
-                .map_err(super::errors::map),
+            Some(data) => data.finish(&mut control),
             None => Err(io_err("FTP-Datenstrom fehlt")),
         };
         self.owner.return_stream(control, result.is_ok());
@@ -180,7 +182,7 @@ impl FtpStoreWriter {
     fn fail(&mut self, error: io::Error) -> io::Error {
         self.state = StoreState::Failed;
         if let Err(server) = self.finish() {
-            if crate::vfs::is_target_refusal(&server) {
+            if super::data_finish::terminal_refusal(&server) {
                 return server;
             }
         }

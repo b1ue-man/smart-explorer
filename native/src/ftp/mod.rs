@@ -1,5 +1,7 @@
 #[path = "core/connection.rs"]
 mod connection;
+#[path = "core/data_finish.rs"]
+mod data_finish;
 #[path = "core/ftp.rs"]
 mod core_impl;
 #[path = "core/io_adapters.rs"]
@@ -32,3 +34,7 @@ mod metadata_probe;
 #[cfg(test)]
 #[path = "core/sync_reliability_task_provider_metadata_tests.rs"]
 mod sync_reliability_task_provider_metadata_tests;
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "core/sync_reliability_task_provider_ftps_tests.rs"]
+mod sync_reliability_task_provider_ftps_tests;
