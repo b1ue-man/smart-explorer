@@ -246,6 +246,8 @@ candidate takes over the same profile. Android development/test APKs select the
 existing release certificate only for this explicit task, retaining old app data.
 The device stage consumes the final candidate/hash/certificate handoff only
 after that build stage succeeds; an intermediate APK manifest is insufficient.
+Native test profiles and private legacy-worker working directories are excluded
+from report artifacts; only their acceptance results and selected logs are retained.
 Live Google Drive requires `SE_DRIVE_TEST_CLIENT_ID` and
 `SE_DRIVE_TEST_REFRESH_TOKEN` from authorized Actions secrets; configure
 `SE_DRIVE_TEST_CLIENT_SECRET` when that OAuth client requires it. Missing

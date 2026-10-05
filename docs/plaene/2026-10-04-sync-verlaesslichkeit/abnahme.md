@@ -1,7 +1,7 @@
 # Eine Remote-Abnahme: konkrete Eingänge und Ergebnisorakel
 
-Stand 2026-10-04. Die vor Code festgelegten Orakel sind umgesetzt;
-die Ausführung und Auswertung auf dem Remote-Runner stehen noch aus.
+Stand 2026-10-05. Die vor Code festgelegten Orakel sind umgesetzt;
+der gemeinsame Remote-Fixloop läuft. Die erfolgreiche Gesamtabnahme steht aus.
 Ein checked-in Einstieg `native/test-sync-reliability-task.py` besitzt die
 Stufen `native`, `android-build`, `device` und `evaluate` desselben kandidatengebundenen
 Workflows. Die finale Zuordnung wird im selben Script maschinenlesbar gehalten.
@@ -98,3 +98,21 @@ nur einen Fehler ohne dessen Ursache. Die Instrumentation übernimmt deshalb
 den vollständigen vorhandenen `task.get`-Snapshot mit Pfad und Fehlermeldung
 in ihre Assertion. Sie verlangt weiterhin dieselben erfolgreichen Sync-Zähler;
 eine Komponente wird ohne diese Diagnose nicht als Ursache behauptet.
+
+Die Linux-Stufe des zweiten Laufs ist ausgewertet. Notebook, Paging/
+Bindungsmigration und geschützte Grenzen erfüllen ihre Orakel. Die tatsächliche
+veröffentlichte Desktop-Worker-Übernahme mit erhaltenem Job, Konfliktbytes,
+Abbruch/Wiederanlauf und No-op ist ebenfalls erfolgreich; C08 bleibt wegen
+der fehlenden Crossremote-Fixture insgesamt offen. Der HTTPS-DAV-Readinessaufruf
+erhält HTTP 405; deshalb fehlen die regulären Provider-Fixtures auch dem
+Crossremote-Altjob. Weitere konkrete Fehlstellen betreffen KeepBoth-Erhaltung,
+RunDepth/Mirror-Erwartungen, einen temporären Stage-Create-Fehler, den
+Move-Finalize-Wiederanlauf und die Identitätsprüfung im Drive-Roundtrip.
+Diese Ursachen werden vor dem nächsten Aufruf desselben Einstiegs behoben.
+Die Windows-Stufe läuft zu diesem Stand noch; C10 nennt weiterhin fehlende
+Client-ID und Refresh-Token.
+
+Das Linux-Logartefakt enthielt außerdem das private Arbeitsverzeichnis der
+Altworker-Fixture. Der Upload schließt dessen gesamte generierte Verzeichnisse
+jetzt wie das native Testprofil aus. Ergebnis-/Bytehashbelege bleiben im
+kandidatgebundenen Summary; private Profile sind keine Logartefakte.

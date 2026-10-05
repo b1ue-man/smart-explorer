@@ -92,6 +92,7 @@ jobs:
           path: |
             ${{ runner.temp }}/sync-reliability-task/${{ matrix.stage }}/
             !${{ runner.temp }}/sync-reliability-task/${{ matrix.stage }}/native-profile/**
+            !${{ runner.temp }}/sync-reliability-task/${{ matrix.stage }}/legacy-worker/c08-legacy-worker-*/**
           if-no-files-found: error
           retention-days: 7
       - uses: actions/upload-artifact@v4

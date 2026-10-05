@@ -1,6 +1,6 @@
 # Sync-Verlässlichkeit – detaillierter Umsetzungs- und Abnahmeplan
 
-Stand: 2026-10-04. Phase: Umsetzung nach einmaliger Kritik; Remote-Abnahme ausstehend.
+Stand: 2026-10-05. Phase: Remote-Fixloop nach einmaliger Kritik; Gesamtabnahme offen.
 Ziel ist die komplette Spec F1–F7, nicht allein das Entfernen einer Meldung.
 
 ## Meilensteine
@@ -183,7 +183,7 @@ nimmt vor Code den vollständigen Plan auseinander; keine weitere Reviewrunde.
 | M1/M2 | Code und eigener Self-Review fertig | vollständige Kandidatensammlung, reale Root-ID, private Folderbindung und stabile Projektion; Herkunftsbeweis getrennt von Parentprojektion und neuem Accountcache, auch am normalen Writer und gemeinsamen Dateilader über wechselnde Job-Reihenfolge; bestätigtes Missing bereits bei erster Migration geschützt; Remote-Abnahme ausstehend |
 | M3 | Code und eigener Self-Review fertig | additive Sync-Stat-Grenze, tolerante Beobachtung, Literalpfad-Resolve und erhaltenes Bootstrapgate; Remote-Abnahme ausstehend |
 | M4 | Code und eigener Self-Review fertig | fehlende Edit-ID geschützt, wiederanlaufbare Ursachenklassifikation, Loader-Recovery über Workerwechsel; Remote-Abnahme ausstehend |
-| M5 Remote-Gesamtablauf | erster Workflow ausgewertet; korrigierter Wiederanlauf desselben Einstiegs vorbereitet | APK-Ausgabeparser, verifizierte Geräteübergabe, Editor-Modulpfad und Remote-Formatpatch korrigiert; eigentliche native Sync-Abnahme noch offen; keine lokale Ausführung; C10 benötigt die angefragte Drive-Testautorisierung |
+| M5 Remote-Gesamtablauf | zweiter Workflow im Fixloop; Linux ausgewertet, Windows läuft | Notebook/Bindungsmigration/Schutz und veröffentlichte Linux-Altworker-Übernahme erfolgreich; konkrete Provider-, Optionen-, Retry- und Drive-Roundtrip-Fehlstellen offen. C09 erhält vollständige alte Task-Fehlerdiagnose; native/private Altworkerprofile vom Logupload ausgeschlossen. Keine lokale Ausführung; C10 benötigt die angefragte Drive-Testautorisierung |
 | M6 Release | offen | erst nach M5 |
 
 Pro Meilenstein: gegen Refs und Aufrufer selbst prüfen, kohärent committen;
