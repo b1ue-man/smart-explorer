@@ -97,6 +97,34 @@ Der gemeinsame C04-Ablauf prüft weiterhin echte FTP/FTPS-Bytes, beidseitige
 Änderungen, TLS-Verifikation und No-op; Engine-Capture, Backups, Partialscan-
 und Lost-ACK-Grenzen werden dafür nicht gelockert.
 
+## Gespeicherte DAV-Collections und Redirects
+
+Primärabgleich 2026-10-05, Cargo.lock: ureq 2.12.1.
+[RFC 4918, Abschnitt 5.2](https://www.rfc-editor.org/rfc/rfc4918.html#section-5.2)
+beschreibt die Slashform einer Collection und verlangt, dass Clients auf
+Redirects dieser Form vorbereitet sind. Der gespeicherte Pfad bleibt dabei
+dieselbe Collection; die Root- oder Accountidentität wird nicht erweitert.
+
+Die gepinnte [ureq-Redirectimplementierung](https://raw.githubusercontent.com/algesten/ureq/2.12.1/src/unit.rs)
+ändert PROPFIND bei 301/302/303 zu GET, verwirft den Body und entfernt mit
+der Standardpolicy Authorization. Der
+[AgentBuilder](https://raw.githubusercontent.com/algesten/ureq/2.12.1/src/agent.rs)
+liefert mit `redirects(0)` die ursprüngliche 3xx-Antwort. Seine Option
+`RedirectAuthHeaders::SameHost` prüft keinen Port und bewahrt weder Methode
+noch Body; sie erfüllt den benötigten DAV-Vertrag daher nicht.
+
+Der echte HTTPS-DAV-Log des sechsten Remote-Laufs bestätigt genau die Folge
+authentifiziertes `PROPFIND /pair-008` → 301 → anonymes `GET /pair-008/` → 401.
+Die Produkt-Metadatengrenze muss eine sichere kanonische Collectionantwort
+mit derselben Methode, Depth, XML-Body und Authentisierung verarbeiten.
+Zugangsdaten dürfen nur an dieselbe Origin aus Scheme, Host und effektivem
+Port gelangen; Pfad-/Root-, Literal-Encoding- und TLS-Grenzen bleiben erhalten.
+Ein Redirect darf keine neue Authority oder unabhängige Ressource auswählen.
+Bestehende GET-Downloads und Mutation-once-/Write-no-follow-Verträge bleiben
+erhalten. Die Abnahme benutzt weiter die normale Apache-Collectioncanonicalisierung,
+keinen Serverworkaround, und verlangt gespeichertes Wiederöffnen plus vollständigen
+Byte-/Backup-/Gegenänderungs-/No-op-Ablauf.
+
 ## Interner Helpervertrag
 
 `native/sync-reliability-providers.py::fixtures(logs, env, cli, share_server)`

@@ -120,6 +120,17 @@ Rename-/Auswahlaktion oder belegten unabhängigen Markeradresse muss derselbe
 alte Job vollständig konvergieren und No-op erreichen. Neue Notebook/notebook-
 Bäume ohne belegte physische Überschneidung bleiben automatisch unabhängig.
 
+Die sechste Gesamtabnahme erreicht die historischen C02-/C05-Flows und
+belegt eine falsch interpretierte Dirbasis: `Checkpoint::planned` speichert
+gefaltete Planungsschlüssel, keine zweite Literalschreibweise. M2 unterscheidet
+daher Existenzkeys, tatsächliche Viermap-Slots und bestätigte Baseline-Vorfahren.
+Lesen: aktualisierte Runtime-Ref, `checkpoint_run`, Journal-/Dirreplay und
+`state_spelling_policy`. Erwartet sind dieselben unveränderten historischen
+Recorded-/Incremental-/Backup-/Restart-/No-op-Abläufe; echte widersprüchliche
+Anker bleiben geschützt. Die Drive-Fixture muss den belegten historischen
+Dirkeyvertrag materialisieren, ohne unbestätigte moderne Dirsidecars als
+Voraussetzung zu behaupten oder ihre übrigen Byte-/ID-Orakel abzuschwächen.
+
 ### M3 Gemeinsame sichere Sync-Integration
 
 - F2–F6. Dateien: betroffene Consumer unter `bisync/os/shared/`, insbesondere
@@ -204,6 +215,17 @@ unveränderte Baseline/Checkpoint prüfen. Die fünf real fehlgeschlagenen
 oder unklaren Publikationszweige behalten ihre offenen-Intent-, Fremdbyte-,
 Ownerorientierungs- und Cleanup-Orakel. Kein Produktguard wird hierfür
 geändert; dieselben vorhandenen ausgewählten FQNs bleiben erhalten.
+
+Die sechste Windows-Auswertung bestätigt Creator-/ACK-Publish und erreicht
+im echten Direct-Altjob sowie C04 die Versionsgrenze: `Versionen: Pfad ist
+nicht freigegeben`. M3/M4 verfolgen hierfür Versionssave/-listing/-prune,
+die bestehende private Appdata-Ausweichwahl und deren Peer-/IPC-Weiterleitung.
+Lesen: Runtime-Ref, aktuelle `version_listing`, Versionskontext, Peer-/IPC-
+Backendidentität und Share-Private-Policy. Erwartet sind vollständiger normaler
+Sync, auffindbare restaurierbare Sicherungen und No-op auf beiden Hosts.
+Private Sharearchive, zurückgezogene Exports, fremde Owner und tatsächlich
+unlesbare vorhandene Archive behalten ihren Schutz. Die Abnahme darf keine
+PermissionDenied-Fehler allgemein als leere Sicherungsliste behandeln.
 
 ### M4 Bestehende Job-/Updategrenzen vollständig erhalten
 
@@ -296,6 +318,19 @@ alle Remote-Locator-/Identitäts-/Byte-/No-op-Verträge bleiben bestehen.
 Die beiden konkreten Grenzen werden im selben vollständigen C04-Providerflow
 bestätigt, einschließlich aller bislang danach nicht erreichten Provider.
 
+Der sechste Linux-C04-Flow bestätigt nun SFTP/Key/Agent, FTP/FTPS und SMB und
+scheitert beim normalen Wiederöffnen eines gespeicherten DAV-Childroots an
+301→GET→401. M5 ergänzt dafür die belegte Collection-Metadatengrenze;
+Lesen: aktualisierte Provider-Fixture-Ref, gepinnte ureq-Syntax, DAV-Connect/
+PROPFIND und bestehende Write-/Mutation-Redirectguards. Erwartet sind erhaltene
+Methode/Body/Auth ausschließlich an der zulässigen kanonischen Collection
+derselben Origin sowie unveränderte gespeicherte Identität, TLS und GET-Verträge.
+Der reale Server bleibt unverändert. Die beiden neuen FTP-Metadaten-Fixtures
+erreichen unter Windows keinen Login; deren tatsächlicher kontrollierter
+Listener-/Setup-/Cleanupvertrag wird korrigiert, ohne Produktions-Timeouts
+oder Signatur-/550-/Literal-Orakel zu lockern. Alles läuft ausschließlich
+im selben vollständigen Remote-Suite-Einstieg.
+
 ### M6 Ein vollständiger Release
 
 - F7. Bestehender Remote-Workflow `build.yml` ruft ausschließlich den stabilen
@@ -349,21 +384,20 @@ nimmt vor Code den vollständigen Plan auseinander; keine weitere Reviewrunde.
 | Stufe 1 / erste Recherche | fertig | `recherche.md`, gesicherte Refs |
 | Stufe 2 / zweite Recherche | fertig, Lücken eingearbeitet | dieser Plan und `abnahme.md` |
 | Einmalige Plan-Kritik | abgeschlossen, alle Befunde eingearbeitet | `review.md` |
-| M1/M2 | exakte Drivefähigkeit, historische C02-Flows und Engine-Anschluss umgesetzt; eigene Self-Reviews abgeschlossen | C01/C03 auf beiden Hosts bestätigt. `f9283c2b` erhält die exakte Drivefähigkeit und historische C02-Flows; `1bd8140c` verbindet die bewiesenen Seitenschreibweisen mit Full/Preview/Incremental/Recorded und ergänzt die C05-Gesamtabläufe. Gemeinsame Remote-Bestätigung offen |
-| M3 | bestätigter Publish-Vertrag und konkrete C06/C07-Orakel umgesetzt; gemeinsame Bestätigung offen | C05 und vollständige reale SFTP-Flows bestätigt. `4a40e514` prüft tatsächlichen erfolgreichen Abschluss sowie echte offene Failure-/Lost-ACK-/Fremdbyte-/Baseline-/Backupfälle; keine Guardlockerung |
-| M4 | gemeinsame Unique-Stage-Grammatik umgesetzt; C09 vollständig bestätigt | Beide echten Desktop-Workerübernahmen und Android-Update/Force-stop/Retry/Konflikt/Gegenänderung erfolgreich. `2c8062fe` erhält die Creator-/ACK-Kette auch für den gültigen Replica-Purpose; Windows-Altjob gemeinsam remote zu bestätigen |
-| M5 Remote-Gesamtablauf | fünfter Workflow vollständig fehlgeschlagen ausgewertet; gleicher Fixloop | Beide Hosts vollständig ohne Abbruch und exakt ausgewertet. C01/C03/C05 und C09 bestätigt; C02/C04/C06/C07 sowie Windows-C08 bleiben offen. `b6d6bf7e` korrigiert FTP-Metadaten und ausschließlich das mapped-Pfad-Orakel. C10 benötigt weiterhin die angefragte echte Drive-Testautorisierung |
+| M1/M2 | C01/C03 und moderner vollständiger Drive-Roundtrip auf beiden Hosts bestätigt; historische Dirkeykorrektur offen | Sechster Lauf: tatsächliche Spellingmigration und historische C02-Dirfixture unterscheiden gefaltete Existenzkeys noch nicht korrekt von Literalankern. Die unveränderten historischen C02/C05-Flows bleiben verpflichtend |
+| M3 | C06/C07 vollständig auf beiden Hosts bestätigt; Provider-Versionenanschluss offen | Sechster Lauf bestätigt erfolgreichen Publish/Cleanup, reale Failure-/Lost-ACK-/Fremdbyte-/Baseline-/Backupfälle und Schutzgrenzen. Der Windows-Direct-Flow erreicht nun die konkrete Versionszugriffsgrenze |
+| M4 | Linux-C08 und Android-C09 vollständig bestätigt; Windows-C08 bleibt an Versionsgrenze offen | Beide veröffentlichten Desktop-Workerübernahmen erfolgreich. Tatsächlicher Windows-Crossremote-Altjob bestätigt normale Writer-/Creator-/ACK-Kette, scheitert danach konkret am Versionszugriff |
+| M5 Remote-Gesamtablauf | sechster Workflow vollständig fehlgeschlagen ausgewertet; gleicher Fixloop | C01/C03/C06/C07 auf beiden Hosts, Linux-C08 und Android-C09 bestätigt. C02/C05 brauchen historische Dirkeykorrektur, Linux-C04 DAV-Collectionhandling, Windows-C04/C08 Versionsanschluss und Windows-FTP-Fixturekorrektur. C10 benötigt weiterhin die angefragte echte Drive-Testautorisierung |
 | M6 Release | offen | erst nach M5 |
 
-Der [fünfte Workflow](https://github.com/b1ue-man/smart-explorer/actions/runs/37267225051)
-prüft `9b4bb4d2d27dc3fcdd14e96ebaf2ea23deb467ce` und ist vollständig
-fehlgeschlagen ausgewertet. Beide Hosts führen alle gewählten Fälle ohne
-Prozessabbruch aus; unmittelbare Diagnosen und passende Ergebniszähler
-sind bestätigt. Der tatsächliche Android-Altjob schließt alle Update-/
-Neustartphasen erfolgreich ab. Die konkreten verbleibenden
-Befunde stehen bei M3/M4 und in `abnahme.md`; sie werden gemeinsam im selben
-Suite-Einstieg bestätigt. Private Uploadgrenzen und alle bestehenden
-Erhaltungs-/No-op-Orakel bleiben verbindlich. Kein Release vor erfolgreichem M5.
+Der [sechste Workflow](https://github.com/b1ue-man/smart-explorer/actions/runs/37276864627)
+prüft `0f672429d1f6b933ebd36d2a9878576bd8969b6c` und ist vollständig
+fehlgeschlagen ausgewertet. Alle eigenen Provider-/Workerprozesse wurden
+abgeschlossen; die genaue Ausführung und private Uploadgrenze sind bestätigt.
+Die neuen konkreten Grenzen stehen bei M2–M5 und in `abnahme.md`; Korrekturen
+werden gemeinsam durch denselben Suite-Einstieg bestätigt. Es entsteht weder
+eine weitere Plan-Kritik noch eine zweite Abnahme-Suite. Kein Release vor
+vollständigem erfolgreichem M5.
 
 Pro Meilenstein: gegen Refs und Aufrufer selbst prüfen, kohärent committen;
 Abnahme erst gesammelt nach kompletter Umsetzung. Nach nativen Änderungen

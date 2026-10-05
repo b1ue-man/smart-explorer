@@ -443,3 +443,43 @@ gesamten neuen Fixkandidaten findet keine Syntaxfehler oder Rohgrößenverstöß
 Format, Kompilation und tatsächliche gemeinsame Konvergenz bleiben durch
 denselben Remote-Einstieg zu bestätigen; diese Quellprüfung ist kein
 Laufzeitpass und autorisiert noch keinen Release.
+
+Der [sechste gemeinsame Lauf](https://github.com/b1ue-man/smart-explorer/actions/runs/37276864627)
+prüft `0f672429d1f6b933ebd36d2a9878576bd8969b6c` und ist am 2026-10-05
+vollständig fehlgeschlagen ausgewertet. C01/C03/C06/C07 erfüllen auf beiden
+Desktophosts ihre Orakel. Der moderne vollständige Drive-Literal-/Case-/ID-/
+Backup-/Restore-/Restart-Roundtrip schließt ab. Linux bestätigt C08 einschließlich
+des tatsächlichen normalen Direct-/Room-Altjobs; Android C09 bestätigt den
+vollständigen veröffentlichten Altzustand über Update und Force-stop hinweg.
+Beide tatsächlichen veröffentlichten Desktopworker werden erfolgreich übernommen.
+
+Konkrete verbleibende Befunde desselben Fixloops:
+
+- C02: Zwei historische Drive-Fixtures setzen einen nicht vorhandenen modernen
+  Dirsidecar-Eintrag voraus und behaupten für den Altstand eine Literalschreibweise.
+  Tatsächlich speichert der alte Checkpoint gefaltete Dirplanungsschlüssel.
+- C05: Die Migration wertet diesen alten Dirkey und einen passenden bestätigten
+  Baseline-Vorfahren als mehrere Literalanker. Dieselben beiden vollständigen
+  Recorded-/Incremental-Flows verlangen weiterhin Erfolg und alle Erhaltungsorakel.
+- Linux C04: Reale SFTP-/Passwort-/Key-/Agent-, FTP-/FTPS- und SMB-Flows schließen
+  ab. Der gespeicherte DAV-Childroot bekommt authentifiziert 301; ureq macht daraus
+  ein anonymes GET mit 401. Korrektur erfolgt an der Produkt-Metadatengrenze.
+- Windows C04/C08: UNC und mapped sowie Direct-Write/Creator/ACK funktionieren.
+  Die anschließende Versionsgrenze meldet `Pfad ist nicht freigegeben`.
+  Private Sharearchive und tatsächliche Autorisierungsfehler bleiben geschützt;
+  der bestehende private Sicherungsfallback muss über die wirklichen Wrapper wirken.
+- Windows C04: Die zwei neuen FTP-Metadaten-Fixtures erreichen keinen Login.
+  Ihr eigener Listener-/Setupvertrag wird am konkreten Befund korrigiert.
+- C10: Die erforderlichen OAuth-Eingänge fehlen weiterhin; kein Google-Lauf
+  wird als erfolgreich oder übersprungen ausgegeben.
+
+Linux-, Windows-, Device- und Gesamtreport sind an exakt diesen Kandidaten
+gebunden. Ihre Archive stimmen mit den GitHub-API-SHA-256-Digests überein;
+private Profile und Altworker-Arbeitsdaten sind nicht enthalten. Beide Hosts
+beenden ihre eigenen Provider und Altworker regulär. Der geprüfte Remote-
+Formatpatch mit SHA-256
+`83ca19b61341ed4c6ec8601f2563c41d0a2ce14b5854221f68ed225ce40c07ea`
+ist nach vollständigem Laufende und exaktem Source-/Pfadabgleich statisch
+übernommen (`1c0c5e87`). Der Remote-Formatreport nennt keinen Größenverstoß.
+Alle Korrekturen werden vor dem nächsten Aufruf gesammelt umgesetzt, committed
+und gepusht; bestätigt wird ausschließlich derselbe vollständige Suite-Einstieg.
