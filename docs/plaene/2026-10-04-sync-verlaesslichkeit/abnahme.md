@@ -293,6 +293,23 @@ durch denselben vollständigen Suite-Einstieg bestätigt. C10 nennt weiterhin
 fehlende `SE_DRIVE_TEST_CLIENT_ID` und `SE_DRIVE_TEST_REFRESH_TOKEN`; tatsächliche
 Google-Abnahme und terminaler Release bleiben offen.
 
+Die Folgekorrekturen des vierten Laufs sind implementiert und gegen die
+aktuellen Verträge selbst geprüft. Der erfolgreiche Replacementpublish
+schließt nach frischer Byte-/ID- und Namespaceprüfung seine bekannten
+Recovery-Slots und zuletzt den privaten Intent ab. C02 behält seine strikte
+Auslassungsassertion und nennt zusätzlich die genaue Flowphase und sämtliche
+geschützten Pfade samt Grund; seine Laufzeitursache ist weiterhin offen.
+Der Peerledger erfasst jetzt auch exklusiv angelegte daemon-Stages.
+C08 verbindet erfolgreiche ACKs, fremde Ledger/IDs, verlorene ACKs und
+Leasewechsel mit dem tatsächlichen Direct-Ablauf: Das regulär separat
+geöffnete Backend darf den Stage nicht beanspruchen; die Bytes bleiben
+erhalten und der ursprüngliche Creator veröffentlicht anschließend
+erfolgreich. Diese Datei gehört danach zum selben Altjob, seiner Baseline,
+dem Restart und No-op. Der ungültige Recovery-Sibling bleibt ausdrücklich
+abgewiesen. Dieselbe Case-Discovery nimmt die neuen `old_jobs`-FQNs auf;
+es gibt keinen neuen Suite-Einstieg und keine lokale Ausführung.
+Die gemeinsame Laufzeit-/Formatbestätigung bleibt ausstehend.
+
 Das Linux-Logartefakt enthielt außerdem das private Arbeitsverzeichnis der
 Altworker-Fixture; das Windows-Archiv hatte dieselbe Grenze. Der Upload schließt
 deren gesamte generierte Verzeichnisse jetzt wie das native Testprofil aus.

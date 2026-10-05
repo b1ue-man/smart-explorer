@@ -106,3 +106,27 @@ unverändert. Die Remote-Fixture verwendet dafür die vorhandenen `Frame`,
 `read_frame`/`write_frame` und `PROTO_VERSION` aus `agent_proto/mod.rs`; der
 Hello-Versionstoken ohne Build-/Featurelabels aktiviert laut
 `ServerFeatures::parse` keine Credit-/Service-/Extensionfeatures.
+
+## Bestätigte Ersetzung und IPC-Stagebesitz
+
+Quellabgleich am 2026-10-05: `replacement_publish` bestätigte bislang die
+Veröffentlichung, ließ aber den vorher vorbereiteten privaten Intent offen.
+Eine legitime spätere Gegenänderung konnte dadurch beim nächsten Recovery
+als fremde Replacementdestination gelten. Der Abschluss benutzt nun dieselbe
+enge `replacement_recovery::finish_published`-Grenze wie der bestätigte
+Lost-ACK-Wiederanlauf: Destinationbytes und aufgezeichnete ID prüfen,
+bekannte Stage-/Retained-Slots frisch prüfen und sicher entfernen,
+Destination erneut prüfen und erst zuletzt den privaten Intent löschen.
+Unklare oder fehlgeschlagene Veröffentlichung behält die Recoveryevidenz.
+Kein Matcher, Backup-, Baseline- oder fremder Creatorvertrag wird gelockert.
+
+`daemon::backend_stream` legt für reguläres IPC-Schreiben exklusiv einen
+`*.se-daemon-<16lowerhex>`-Stage an und veröffentlicht ihn nach Writer-ACK.
+`share::backend::peer_stages` muss diesen Purpose deshalb in seiner bestehenden
+Reserve→Writing→ACK→Ready-Kette registrieren. Jeder normale
+`PeerBackend::new_live` erhält über `PeerTransferState::default` einen eigenen
+`StageLedger`; Worker desselben Opens klonen denselben Backend-Arc. Ein
+separates reguläres Open erhält keinen Creatorbeweis allein durch gleichen
+Pfad, Peer oder Lease. Die konkrete C08-Abnahme prüft diese Grenze am realen
+Direct-Transport und danach im gespeicherten Altjob über Restart und No-op.
+Besitzdiagnosen enthalten ausschließlich escaped Stagepfad und Ledgerphase.
