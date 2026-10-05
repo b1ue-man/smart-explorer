@@ -306,7 +306,13 @@ fn sync_reliability_task_options_legacy_spellings_recorded_retry_keeps_literal_s
         &cancel,
         |_| {},
     );
-    assert_eq!(failed.unwrap_err().kind(), io::ErrorKind::ConnectionReset);
+    let failed = failed.unwrap_err();
+    assert_eq!(failed.kind(), io::ErrorKind::Other);
+    assert!(
+        failed.to_string().contains("injected lost publish ACK"),
+        "{failed}"
+    );
+    assert!(!b.lose_next_ack.load(Ordering::SeqCst));
     assert_eq!(
         std::fs::read(b_dir.path().join(B_REL)).unwrap(),
         b"winner-a"
@@ -314,6 +320,8 @@ fn sync_reliability_task_options_legacy_spellings_recorded_retry_keeps_literal_s
     assert_eq!(engine::load_baseline(&base_path).unwrap(), initial.baseline);
     let pending = fixture::intent(&key.pair_id);
     assert_eq!(pending.destination, format!("{REMOTE_ROOT}/{B_REL}"));
+    assert_eq!(pending.binding.rel, B_REL);
+    assert_eq!(pending.binding.lock, key.lock_id);
     {
         let lock = engine::PairLock::acquire(&key.lock_id).unwrap();
         let blocked = engine::single_recorded::apply_one(
