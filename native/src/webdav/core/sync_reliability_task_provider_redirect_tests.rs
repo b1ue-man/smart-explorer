@@ -204,10 +204,7 @@ fn sync_reliability_task_provider_dav_collection_redirect_rejects_authority_and_
                 2 => "/sibling/".into(),
                 3 => "/root/?query=1".into(),
                 4 => "/root/#fragment".into(),
-                _ => format!(
-                    "http://fixture:secret@{}/root/",
-                    request.headers["host"]
-                ),
+                _ => format!("http://fixture:secret@{}/root/", request.headers["host"]),
             };
             (301, Some(location), String::new())
         });

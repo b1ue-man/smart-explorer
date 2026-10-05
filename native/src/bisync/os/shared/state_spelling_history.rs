@@ -74,13 +74,8 @@ impl DirectoryHistory {
         names: &StateSpellings,
         keys: KeyPolicy,
     ) -> io::Result<()> {
-        let sink = CheckpointSink::new(
-            state.endpoints,
-            state.lock,
-            state.key,
-            keys,
-            state.observer,
-        )?;
+        let sink =
+            CheckpointSink::new(state.endpoints, state.lock, state.key, keys, state.observer)?;
         self.checkpoint(&sink)?;
         if let Some(error) = sink.finish().error {
             return Err(io::Error::other(error));

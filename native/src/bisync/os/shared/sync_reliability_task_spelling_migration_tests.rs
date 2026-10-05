@@ -261,9 +261,11 @@ fn sync_reliability_task_options_legacy_spellings_recorded_retry_keeps_literal_s
     assert_eq!(dirs(&key), BTreeSet::from(["OldTree".into()]));
     std::fs::create_dir(a_dir.path().join("EmptyHistory")).unwrap();
     complete(&run(&exact_a, &exact_b, options, &db));
-    assert!(std::fs::read_dir(b_dir.path())
+    assert!(std::fs::read_dir(b_dir.path()).unwrap().any(|entry| entry
         .unwrap()
-        .any(|entry| entry.unwrap().file_name().to_str() == Some("EmptyHistory")));
+        .file_name()
+        .to_str()
+        == Some("EmptyHistory")));
     std::fs::write(a_dir.path().join(A_REL), b"winner-a").unwrap();
     std::fs::write(b_dir.path().join(B_REL), b"loser-b").unwrap();
     let conflict = run(&exact_a, &exact_b, options, &db);
