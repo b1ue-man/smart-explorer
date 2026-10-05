@@ -135,16 +135,7 @@ fn recover(backend: &dyn Backend, intent: &Intent, cancel: &AtomicBool) -> io::R
             // content and namespace confirmation. No baseline is manufactured:
             // the full planner observes the current pair and records it, and
             // recorded merges keep their independent durable recovery inputs.
-            super::apply_stage::require_durable(super::apply_stage::namespace(
-                backend,
-                &intent.destination,
-            )?)?;
-            if let Some(retained) = retained {
-                erase_known(backend, &intent.retained, &retained, cancel)?;
-            }
-            if let Some(stage) = stage {
-                erase_known(backend, &intent.stage, &stage, cancel)?;
-            }
+            return finish_published(backend, intent, cancel);
         }
         Some(actual) if journal::matches(actual, &intent.original) => {
             // No mutation, or a confirmed create-only rollback. Its old
@@ -193,6 +184,47 @@ fn recover(backend: &dyn Backend, intent: &Intent, cancel: &AtomicBool) -> io::R
     }
     journal::remove(intent)
 }
+
+/// Retire only a verified publication, never the rollback or foreign-byte branch.
+pub(super) fn finish_published(
+    backend: &dyn Backend,
+    intent: &Intent,
+    cancel: &AtomicBool,
+) -> io::Result<()> {
+    super::transfer_stream::check(cancel)?;
+    intent.validate(backend)?;
+    journal::require_match(
+        journal::observe(backend, &intent.destination, cancel)?.as_ref(),
+        &intent.staged,
+    )?;
+    let retained = journal::observe(backend, &intent.retained, cancel)?;
+    let stage = journal::observe(backend, &intent.stage, cancel)?;
+    if let Some(retained) = retained.as_ref() {
+        journal::require_match(Some(retained), &intent.original)?;
+    }
+    if let Some(stage) = stage.as_ref() {
+        journal::require_match(Some(stage), &intent.staged)?;
+    }
+    super::apply_stage::require_durable(super::apply_stage::namespace(
+        backend,
+        &intent.destination,
+    )?)?;
+    // Validate both slots before removing either, then recheck each exact
+    // observed identity immediately before its non-recursive removal.
+    if let Some(retained) = retained {
+        erase_known(backend, &intent.retained, &retained, cancel)?;
+    }
+    if let Some(stage) = stage {
+        erase_known(backend, &intent.stage, &stage, cancel)?;
+    }
+    journal::require_match(
+        journal::observe(backend, &intent.destination, cancel)?.as_ref(),
+        &intent.staged,
+    )?;
+    super::transfer_stream::check(cancel)?;
+    journal::remove(intent)
+}
+
 fn erase_known(
     backend: &dyn Backend,
     path: &str,

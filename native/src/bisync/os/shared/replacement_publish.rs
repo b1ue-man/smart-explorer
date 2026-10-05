@@ -20,6 +20,7 @@ pub(super) fn publish(
     // mutation. Retain the stage for intent recovery instead of
     // letting Drop discard possible recovery evidence.
     let mut reversible_publication = false;
+    let mut replacement_intent = None;
     let result = if let Some(meta) = current.metadata.as_ref() {
         if staged.backend.has_duplicate_file_names() {
             let id = meta
@@ -56,7 +57,7 @@ pub(super) fn publish(
                 )?;
                 reversible_publication = true;
                 staged.published = true;
-                match crate::vfs::replace_staged_reversible(
+                let published = match crate::vfs::replace_staged_reversible(
                     staged.backend,
                     &staged.path,
                     destination,
@@ -72,7 +73,9 @@ pub(super) fn publish(
                         destination,
                     ),
                     Err(error) => Err(error),
-                }
+                };
+                replacement_intent = Some(intent);
+                published
             }
         }
     } else {
@@ -117,6 +120,14 @@ pub(super) fn publish(
     } else {
         namespace(staged.backend, destination)?
     };
+    if durable {
+        if let Some(intent) = replacement_intent.as_ref() {
+            // Finish a verified commit even if cancellation arrived after
+            // publication. Failed or unconfirmed publishes retain their intent.
+            let finish = AtomicBool::new(false);
+            super::replacement_recovery::finish_published(staged.backend, intent, &finish)?;
+        }
+    }
     Ok(CopyOutcome {
         bytes: staged.bytes.bytes,
         digest: staged.bytes.digest,
