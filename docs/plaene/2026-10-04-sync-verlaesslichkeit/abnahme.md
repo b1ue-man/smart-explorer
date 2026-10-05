@@ -49,6 +49,9 @@ einen echten Konflikt und verliert genau einen Publish-ACK. Reguläres Resolve
 und Recovery müssen den tatsächlichen alten Side-B-Slot benutzen, dessen
 Sicherung erhalten und ohne erneute Veröffentlichung abschließen. Ein neues
 Kind unter dem alten B-Ordner wird auf seinen belegten A-Präfix übertragen.
+Nach bestätigt propagierter Löschung wird eine neue exakte Literaldatei
+angelegt; sie muss ohne wiederverwendeten gelöschten Dateialias übertragen
+werden und den unveränderten Job nach Restart ohne Mutation abschließen.
 Der inkrementelle Mirror-Ablauf verlangt die richtige Zieladresse ohne
 Zielvollwalk, eine bestätigte vollständige Indexgeneration und No-op. Eine
 anschließend widersprüchliche Spellingdatei darf weder Baseline noch Bytes
@@ -377,10 +380,11 @@ gegen SHA-256 `a7a8f6a5e32faba69b9c41a320f1e93e02a3ce39c56ab14f825421574223fa19`
 überein. Es bleiben keine unausgeführten Android-Gerätephasen dieses Ablaufs.
 
 C02 nennt nun `Notebook`/`notebook` als Zielnamenskollision bereits beim
-Drive↔Drive-Seed mit `KeyPolicy { fold_case: true }`. Aktueller Source belegt
-den noch geerbten konservativen VFS-Default im Driveadapter. Seine exakte
-Fähigkeit und die damit direkt betroffene alte Spellingpolicy-Migration
-werden gemeinsam korrigiert; alte Baseline-/Seitenschreibweisen dürfen nicht
+Drive↔Drive-Seed mit `KeyPolicy { fold_case: true }`. Der geprüfte Source
+dieses fünften Kandidaten erbt noch den konservativen VFS-Default im
+Driveadapter. Seine exakte Fähigkeit und die direkt betroffene alte
+Spellingpolicy-Migration werden im selben Fixloop gemeinsam korrigiert;
+alte Baseline-/Seitenschreibweisen dürfen nicht
 verworfen oder neue Namen unbewiesen gepaart werden. Derselbe C02-Roundtrip
 behält seine Literal-, Overwrite-, Backup-, Restore-, Reopen- und No-op-Orakel.
 
@@ -424,3 +428,18 @@ Eine erneute GitHub-API-Prüfung am 2026-10-05 während dieses Fixloops nennt
 weiterhin genau beide erforderlichen Secret-Namen als fehlend; auch das
 optionale Client-Secret ist nicht eingerichtet. Die Abfrage liest nur Namen,
 keine Secretwerte. Die bereits angefragte Autorisierung bleibt erforderlich.
+
+Die konkreten Folgekorrekturen sind am 2026-10-05 vollständig umgesetzt und
+von ihren jeweiligen Umsetzern selbst geprüft: `b6d6bf7e` vereinheitlicht
+FTP-Dateisignaturen und korrigiert ausschließlich das native mapped-Orakel;
+`2c8062fe` erhält Creator-/ACK-Belege für alle gültigen Unique-Stages;
+`4a40e514` verbindet erfolgreiche Publikation mit tatsächlichem Cleanup und
+bewahrt alle realen Fault-/Lost-ACK-Orakel; `f9283c2b` meldet die exakte
+Drivefähigkeit und ergänzt historische C02-Gesamtabläufe; `1bd8140c`
+integriert die belegte alte Spellingpolicy über Full/Preview/Incremental/
+Recorded einschließlich Löschlebenszyklus, Pending-Counterparts und der
+bestehenden Merge-Recoveryidentität. Die statische Rust-Parseprüfung des
+gesamten neuen Fixkandidaten findet keine Syntaxfehler oder Rohgrößenverstöße.
+Format, Kompilation und tatsächliche gemeinsame Konvergenz bleiben durch
+denselben Remote-Einstieg zu bestätigen; diese Quellprüfung ist kein
+Laufzeitpass und autorisiert noch keinen Release.
