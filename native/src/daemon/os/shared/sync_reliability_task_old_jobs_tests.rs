@@ -43,6 +43,14 @@ pub(super) fn assert_noop(state: &crate::syncjobs::JobState) {
     );
 }
 
+fn crossremote_checkpoint(provider: &str, phase: &str) {
+    use std::io::Write;
+    // Direct writes survive libtest's per-test capture if a later call aborts.
+    let mut stderr = std::io::stderr().lock();
+    writeln!(stderr, "C08 crossremote provider={provider} phase={phase}").unwrap();
+    stderr.flush().unwrap();
+}
+
 #[test]
 fn sync_reliability_task_old_jobs_resolver_overrides_are_exact_and_thread_scoped() {
     let (_temp, a, _) = local_pair();
@@ -153,7 +161,9 @@ fn sync_reliability_task_old_jobs_crossremote_runs_normal_saved_connection_and_d
     let mut nonce = [0u8; 8];
     getrandom::getrandom(&mut nonce).unwrap();
     let child = format!("c08-{:016x}", u64::from_be_bytes(nonce));
+    crossremote_checkpoint(required, "opening-normal-saved-child");
     let (b, root_b) = provider.open(&child);
+    crossremote_checkpoint(required, "normal-saved-child-opened");
     let target = format!(
         "{}/{child}",
         provider.endpoint.trim_end_matches(['/', '\\'])
@@ -166,9 +176,11 @@ fn sync_reliability_task_old_jobs_crossremote_runs_normal_saved_connection_and_d
     assert_eq!(reopened_root, root_b);
     assert_eq!(reopened.state_identity(), b.state_identity());
     assert_ne!(a.namespace_identity(), b.namespace_identity());
+    crossremote_checkpoint(required, "saved-target-reopened");
     drive.write_file("drive.txt", b"old Drive into actual remote");
     provider_fixture::write(&*b, &root_b, "remote.txt", b"actual remote into old Drive");
     let saved = SavedJob::old(source, &target, "realtime");
+    crossremote_checkpoint(required, "running-original-saved-job");
     saved.run();
     assert_eq!(
         provider_fixture::read(&*b, &root_b, "drive.txt"),
@@ -179,8 +191,22 @@ fn sync_reliability_task_old_jobs_crossremote_runs_normal_saved_connection_and_d
         b"actual remote into old Drive"
     );
     let key = saved.key(&*a, &root_a, &*b, &root_b);
+    let baseline = crate::bisync::baseline_file(&key).unwrap();
+    let initial = crate::bisync::load_baseline(&baseline).unwrap();
+    assert!(initial.contains_key("drive.txt") && initial.contains_key("remote.txt"));
+    crossremote_checkpoint(required, "original-bytes-and-owned-baseline-confirmed");
     let restarted = drive.restart();
     endpoints.insert(source, restarted.clone(), &root_a);
+    let restarted_job = reload(&saved);
+    assert_eq!(restarted_job.id, saved.id);
+    assert_eq!(
+        (&*restarted_job.source, &*restarted_job.target),
+        (source, &*target)
+    );
+    let (restarted_remote, restarted_root) = crate::connect::resolve_endpoint(&target).unwrap();
+    assert_eq!(restarted_root, root_b);
+    assert_eq!(restarted_remote.state_identity(), b.state_identity());
+    crossremote_checkpoint(required, "job-reloaded-and-both-endpoints-recreated");
     drive.write_file("drive.txt", b"changed after worker recreation");
     provider_fixture::write(
         &*b,
@@ -188,6 +214,7 @@ fn sync_reliability_task_old_jobs_crossremote_runs_normal_saved_connection_and_d
         "remote.txt",
         b"remote change after recreation",
     );
+    crossremote_checkpoint(required, "running-recreated-saved-job");
     saved.run();
     assert_eq!(
         provider_fixture::read(&*b, &root_b, "drive.txt"),
@@ -197,10 +224,15 @@ fn sync_reliability_task_old_jobs_crossremote_runs_normal_saved_connection_and_d
         drive.read_file("remote.txt"),
         b"remote change after recreation"
     );
-    assert_eq!(saved.key(&*restarted, &root_a, &*reopened, &root_b), key);
-    let baseline = crate::bisync::baseline_file(&key).unwrap();
+    assert_eq!(
+        saved.key(&*restarted, &root_a, &*restarted_remote, &root_b),
+        key
+    );
+    assert_eq!(crate::bisync::baseline_file(&key).unwrap(), baseline);
+    crossremote_checkpoint(required, "recreated-bytes-and-state-key-confirmed");
     let before = std::fs::read(&baseline).unwrap();
     assert_noop(&saved.run());
     assert_eq!(std::fs::read(baseline).unwrap(), before);
     saved.assert_options(source, &target);
+    crossremote_checkpoint(required, "saved-options-baseline-and-noop-confirmed");
 }

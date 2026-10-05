@@ -13,25 +13,14 @@ use crate::vfs::{
 };
 
 impl BackendExtensions for UnavailableBackend {
-    fn previous_state_identities(&self) -> VfsResult<Vec<String>> {
-        vfs::previous_state_identities(&*self.live_backend()?)
-    }
-
-    fn sync_child_path(&self, parent: &str, literal_name: &str) -> VfsResult<String> {
-        vfs::sync_child_path(&*self.live_backend()?, parent, literal_name)
-    }
-
+    // AgentBackend delegates previous identities, literal child paths and
+    // reversible replacement to this stub. Reopening that same agent here would
+    // recurse through its identical stub forever. Keep the VFS defaults:
+    // no proven old identity, a literal peer child path, and unsupported
+    // reversible replacement without mutation. Actual RPC operations below
+    // retain their live peer and its authorization checks.
     fn sync_stat(&self, path: &str) -> VfsResult<VfsMeta> {
         vfs::sync_stat(&*self.live_backend()?, path)
-    }
-
-    fn replace_staged_reversible(
-        &self,
-        staged: &str,
-        destination: &str,
-        retained: &str,
-    ) -> VfsResult<bool> {
-        vfs::replace_staged_reversible(&*self.live_backend()?, staged, destination, retained)
     }
 
     fn list_dir_tolerant(&self, path: &str) -> VfsResult<VfsListing> {
@@ -127,3 +116,7 @@ impl BackendExtensions for UnavailableBackend {
         vfs::change_signal(&*self.live_backend()?, root, poll_interval, tx)
     }
 }
+
+#[cfg(test)]
+#[path = "sync_reliability_task_old_jobs_ipc_boundary_tests.rs"]
+mod sync_reliability_task_old_jobs_ipc_boundary_tests;
