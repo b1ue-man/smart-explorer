@@ -31,7 +31,7 @@ impl Binding {
         checkpoint_allowed: bool,
     ) -> io::Result<Self> {
         super::version_manifest::validate_pair(&versions.context().pair_id)?;
-        crate::agent_proto::ValidatedRelativePath::parse(rel)?;
+        super::sync_relative_path::SyncRelativePath::parse(rel)?;
         let lock = versions.lock_id();
         if lock.len() != 16 || !lock.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return Err(drift("replacement has no held pair-lock binding"));
@@ -81,6 +81,7 @@ impl Intent {
     }
     pub(super) fn validate(&self, backend: &dyn Backend) -> io::Result<()> {
         super::version_manifest::validate_pair(&self.binding.pair)?;
+        super::sync_relative_path::SyncRelativePath::parse(&self.binding.rel)?;
         if self.format != 1
             || !valid_nonce(&self.nonce)
             || self.binding.root.contains('\0')

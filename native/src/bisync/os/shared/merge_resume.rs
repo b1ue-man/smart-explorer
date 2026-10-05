@@ -19,7 +19,7 @@ pub fn pending_merge_for_key(
         super::incremental::SyncEndpoints::new(a, root_a, b, root_b),
         key,
     )?;
-    crate::agent_proto::ValidatedRelativePath::parse(rel)?;
+    super::sync_relative_path::SyncRelativePath::parse(rel)?;
     let keys = super::KeyPolicy::for_pair(
         a.case_sensitive_paths(root_a),
         b.case_sensitive_paths(root_b),

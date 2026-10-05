@@ -243,7 +243,6 @@ pub(super) fn changes_from_source_walk(
         filter,
         source_items,
         cancel,
-        None,
         super::KeyPolicy::default(),
     )
 }
@@ -257,7 +256,6 @@ pub(super) fn changes_from_source_walk_scoped(
     filter: &WalkFilter,
     source_items: &BTreeMap<String, ItemRecord>,
     cancel: &AtomicBool,
-    dirs: Option<&super::DirSet>,
     keys: super::KeyPolicy,
 ) -> ChangeCollection {
     let prev_tree: Tree = source_items
@@ -296,10 +294,13 @@ pub(super) fn changes_from_source_walk_scoped(
         .iter()
         .map(|rel| keys.key(rel).into_owned())
         .collect();
-    let previous_dirs: BTreeSet<String> = dirs
-        .into_iter()
-        .flatten()
-        .map(|rel| keys.key(rel).into_owned())
+    // Common checkpoint folder history does not include every source folder:
+    // a successful copy may create its filled target parents implicitly.
+    // The complete source-side index is the matching observation generation.
+    let previous_dirs: BTreeSet<String> = source_items
+        .values()
+        .filter(|item| item.is_dir && !item.deleted)
+        .map(|item| keys.key(&item.rel).into_owned())
         .collect();
     if current_dirs != previous_dirs {
         return ChangeCollection::Rebuild;
@@ -374,7 +375,7 @@ pub(super) fn changes_from_source_walk_scoped(
 }
 
 fn normalize_change_paths(change: &mut ResolvedChange, max_depth: usize) -> bool {
-    let Ok(rel) = crate::agent_proto::ValidatedRelativePath::parse(&change.rel) else {
+    let Ok(rel) = super::sync_relative_path::SyncRelativePath::parse(&change.rel) else {
         return false;
     };
     if rel.as_str().split('/').count() > max_depth {
@@ -382,7 +383,7 @@ fn normalize_change_paths(change: &mut ResolvedChange, max_depth: usize) -> bool
     }
     change.rel = rel.as_str().to_owned();
     if let Some(old) = change.old_rel.as_mut() {
-        let Ok(normalized) = crate::agent_proto::ValidatedRelativePath::parse(old) else {
+        let Ok(normalized) = super::sync_relative_path::SyncRelativePath::parse(old) else {
             return false;
         };
         if normalized.as_str().split('/').count() > max_depth {
@@ -394,7 +395,7 @@ fn normalize_change_paths(change: &mut ResolvedChange, max_depth: usize) -> bool
 }
 
 fn valid_rel(rel: &str, max_depth: usize) -> bool {
-    crate::agent_proto::ValidatedRelativePath::parse(rel)
+    super::sync_relative_path::SyncRelativePath::parse(rel)
         .is_ok_and(|path| path.as_str().split('/').count() <= max_depth)
 }
 

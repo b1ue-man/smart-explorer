@@ -39,6 +39,7 @@ fn path(key: &StateKey, rel: &str) -> io::Result<PathBuf> {
     )
 }
 pub(super) fn load(key: &StateKey, rel: &str) -> io::Result<Option<Recovery>> {
+    super::sync_relative_path::SyncRelativePath::parse(rel)?;
     let path = path(key, rel)?;
     match crate::support_dirs::read_private_text(&path, 256 * 1024) {
         Ok(text) => {
@@ -50,7 +51,7 @@ pub(super) fn load(key: &StateKey, rel: &str) -> io::Result<Option<Recovery>> {
                 ));
             }
             if let Some(sibling) = &recovery.sibling {
-                crate::agent_proto::ValidatedRelativePath::parse(sibling)?;
+                super::sync_relative_path::SyncRelativePath::parse(sibling)?;
             }
             Ok(Some(recovery))
         }
@@ -59,6 +60,10 @@ pub(super) fn load(key: &StateKey, rel: &str) -> io::Result<Option<Recovery>> {
     }
 }
 pub(super) fn save(key: &StateKey, recovery: &Recovery) -> io::Result<()> {
+    super::sync_relative_path::SyncRelativePath::parse(&recovery.rel)?;
+    if let Some(sibling) = &recovery.sibling {
+        super::sync_relative_path::SyncRelativePath::parse(sibling)?;
+    }
     let bytes = serde_json::to_vec_pretty(recovery).map_err(io::Error::other)?;
     if bytes.len() > 256 * 1024 {
         return Err(io::Error::other("merge recovery exceeds its budget"));
@@ -113,7 +118,7 @@ pub(super) fn relatives(key: &StateKey) -> io::Result<Vec<String>> {
         }
         let bytes = crate::support_dirs::read_private_text(&entry.path(), 256 * 1024)?;
         let recovery: Recovery = serde_json::from_str(&bytes).map_err(io::Error::other)?;
-        crate::agent_proto::ValidatedRelativePath::parse(&recovery.rel)?;
+        super::sync_relative_path::SyncRelativePath::parse(&recovery.rel)?;
         if recovery.pair != key.pair_id
             || recovery.lock != key.lock_id
             || path(key, &recovery.rel)? != entry.path()
@@ -125,7 +130,7 @@ pub(super) fn relatives(key: &StateKey) -> io::Result<Vec<String>> {
         }
         relatives.insert(recovery.rel);
         if let Some(sibling) = recovery.sibling {
-            crate::agent_proto::ValidatedRelativePath::parse(&sibling)?;
+            super::sync_relative_path::SyncRelativePath::parse(&sibling)?;
             relatives.insert(sibling);
         }
     }

@@ -143,7 +143,6 @@ pub(super) fn try_incremental_run(state: &RunState<'_>) -> Option<Outcome> {
                 state.filter,
                 source_items,
                 state.cancel,
-                state.dirs,
                 keys,
             )
         };

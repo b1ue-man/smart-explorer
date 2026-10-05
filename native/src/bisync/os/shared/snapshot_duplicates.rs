@@ -23,7 +23,7 @@ pub(super) fn observe(
     }
     let mut groups: BTreeMap<String, Vec<VfsMeta>> = BTreeMap::new();
     for entry in entries {
-        if crate::vfs::validate_child_name(&entry.name).is_err() {
+        if super::sync_relative_path::validate_component(&entry.name).is_err() {
             super::snapshot_dir::record_omission(
                 ctx,
                 &super::snapshot_dir::literal_child(dir_rel, &entry.name),

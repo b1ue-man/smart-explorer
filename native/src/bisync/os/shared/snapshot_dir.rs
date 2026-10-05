@@ -71,7 +71,7 @@ pub(super) fn scan_listing(
         if ctx.cancel.load(Ordering::Relaxed) {
             break; // stop promptly mid-directory (esp. when hashing)
         }
-        if let Err(error) = crate::vfs::validate_child_name(&m.name) {
+        if let Err(error) = super::sync_relative_path::validate_component(&m.name) {
             if let Some(omissions) = ctx.omissions {
                 if dir_rel.is_empty() {
                     return Err(error);

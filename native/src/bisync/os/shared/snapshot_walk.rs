@@ -323,7 +323,7 @@ impl TreeWalk<'_> {
             Err(error) => return Err(error),
         };
         for omission in listing.omitted {
-            let rel = match crate::vfs::validate_child_name(&omission.rel) {
+            let rel = match super::sync_relative_path::validate_component(&omission.rel) {
                 Ok(()) => super::snapshot_dir::literal_child(dir_rel, &omission.rel),
                 Err(error) if dir_rel.is_empty() => return Err(error),
                 Err(_) => dir_rel.to_string(),

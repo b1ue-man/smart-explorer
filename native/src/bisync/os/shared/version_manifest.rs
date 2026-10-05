@@ -98,6 +98,7 @@ impl Manifest {
     }
 }
 pub(super) fn write(backend: &dyn Backend, path: &str, manifest: &Manifest) -> io::Result<()> {
+    super::sync_relative_path::SyncRelativePath::parse(&manifest.rel)?;
     let bytes = serde_json::to_vec_pretty(manifest).map_err(io::Error::other)?;
     if bytes.len() as u64 > MAX_MANIFEST {
         return Err(invalid("version manifest exceeds its budget"));
@@ -154,7 +155,7 @@ pub(super) fn read(backend: &dyn Backend, path: &str, cancel: &AtomicBool) -> io
     super::apply_guard::revalidate(backend, path, &observed, "version record")?;
     let manifest: Manifest = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
     crate::vfs::validate_child_name(&manifest.run)?;
-    crate::agent_proto::ValidatedRelativePath::parse(&manifest.rel)?;
+    super::sync_relative_path::SyncRelativePath::parse(&manifest.rel)?;
     let parent = parent_of(path).ok_or_else(|| invalid("version record has no parent"))?;
     if manifest.data != join(&parent, "data") || manifest.format != 1 {
         return Err(invalid("version record redirects outside its entry"));
