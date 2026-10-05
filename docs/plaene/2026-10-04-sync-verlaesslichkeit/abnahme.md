@@ -571,3 +571,45 @@ ist nach sauberem HEAD-, Report-, Digest- und Sourcepfadabgleich statisch als
 `135bf3b6` übernommen. Der Formatreport enthält keine Größenverstöße.
 Die zweistufige Anschlussplanung steht bei M3.C04-7 und M2.C05-7;
 keine weitere Reviewrunde, Suite oder vorzeitiger Release.
+
+
+Der bereits veröffentlichte Ausgangsstand bleibt v0.5.171. Am 2026-10-05
+ist die lokale Installation statisch gegen den aktuellen
+[GitHub Release](https://github.com/b1ue-man/smart-explorer/releases/tag/v0.5.171)
+abgeglichen: `se` (`8b18239450e130df5f2ee73f395bf9986786bf883e93b166499805d88e470238`)
+und Share-Server (`91e7b177e875784864cacc4e64e89f8987985630c82cbcc2cadae2b1d85eef45`)
+stimmen mit dessen tatsächlichen Assets überein. Cargo-/Feedversion, Installer,
+Tag `2641fe9ed488754f361c26570ff5fec6aaa6d953`, alle sechs Desktoppayloads
+und die Android-APK samt Sidecars passen zu diesem veröffentlichten Stand.
+Dies ist kein M6-Nachweis für den noch offenen Kandidaten 0.5.172.
+C10-Testsecret-Namen erneut um 10:29 UTC geprüft: erforderliche Client-ID
+und Refresh-Token fehlen weiterhin; die bestehende Autorisierungsfrage
+bleibt offen. Keine Credentials oder lokalen Binaries wurden ausgeführt.
+
+
+Die Folgekorrekturen sind quellenfertig und vom jeweiligen Umsetzer selbst
+geprüft: `5ad57a22` adressiert MKCOL direkt mit der kodierten Collection-URL
+und erhält einzelne Mutation, Pooling und alle tatsächlichen Fehlergrenzen.
+Belegte Nicht-Collectionnamen werden nur nach frischem Originalstat als
+belegt behandelt; ein fehlgeschlagener Stat behält seinen tatsächlichen
+Fehler. ZIP verwendet `/` und verlangt weiterhin read-only-Source, genaue
+Bytekopie und No-op einschließlich null Löschungen. `cffaec5d` prüft den
+konkreten Recorded-Fehlertext und konsumierte Injektion sowie zusätzliche
+Intent-/Pairlock-/B-Literalbindung; alle bisherigen Recoveryorakel bleiben.
+Die bestehenden FQNs und Discovery bleiben erhalten.
+
+Erst nach vollständiger Umsetzung ist der eine Suite-Einstieg ergänzt:
+C04 enthält zusätzlich die vorhandenen genauen FQNs für einzelne MKCOLs,
+Mutationpooling und Congestion/Retry-After. Die neuen Collectionguards
+werden durch denselben bestehenden C04-Prefix entdeckt. Die gesamte
+Provider- und Altjobabnahme bleibt ein gemeinsamer Remote-Aufruf.
+
+
+Der vollständige Folgefixkandidat besteht die statische Rust-/Python-AST-
+prüfung ohne Compiler-/Testaufruf. Alle geänderten Rustquellen liegen roh
+unter 500 Zeilen und 50 KiB; formatierte Größen und tatsächliches Verhalten
+bleiben Aufgabe derselben Remote-Abnahme. Der Rootgraph ist nach allen
+nativen Änderungen vollständig neu extrahiert und geclustert. Sein Manifest
+entspricht exakt dem gesamten aktuellen Nativekorpus, ohne separaten oder
+partiellen Graph. Quellen, Suite, Dokumentation und Graph werden gemeinsam
+als ein ungetaggter Kandidat gepusht.
