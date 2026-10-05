@@ -93,6 +93,25 @@ statt bei der ersten Migration einen neuen gleichnamigen Ordner zu wählen.
   StateKey, Pairlock, Retrys, Cancel und Recovery bleiben korrekt.
 - Abnahme: S4–S7. Abhängigkeit: M2.
 
+Der zweite gemeinsame Remote-Lauf belegt zwei zusätzliche betroffene
+Integrationsgrenzen innerhalb M3. `sync_observation::matching/named` muss
+denselben Literal-Ein-Komponentenvertrag wie `sync_child_path` verwenden;
+ein für ein lokales Windows-Ziel unrepräsentierbares Drive-Geschwister darf
+weder eine gesunde unabhängige Datei noch einen zulässigen Drive↔Drive-
+Literalnamen sperren. Die strengere rekursive Löschvalidierung bleibt erhalten.
+Unter `incremental_changes.rs`, `incremental.rs` und
+`incremental_index_commit.rs` benötigt Checksum eine frische Zielsignatur an
+berührten Pfaden statt eines hashlosen Statvergleichs. Ein erfolgreich
+inkrementeller Lauf aktualisiert den zuvor vollständig bestätigten Index mit
+bestätigten Deltas, statt beide Bäume erneut vollständig zu laufen. Fehlt die
+belegte alte Cachebasis oder bleibt ein Scan/Apply teilweise bzw. geschützt,
+wird daraus keine vollständige Indexgeneration. Erwartet sind tatsächliche
+Mirror-Endbytes/No-op ohne Vollwalk unberührter Zielsubtrees sowie weiterhin
+erhaltene Baselines und Indexschutz in C02/C05/C06/C07. Die API-/Gapprüfung
+verwendet die tatsächlichen Index-/Snapshot-/Bootstrap-/Publishverträge von
+`engine_change_feed`; ein zweiter Plan-Kritiker oder eine zweite Suite entsteht
+dadurch nicht.
+
 ### M4 Bestehende Job-/Updategrenzen vollständig erhalten
 
 - F3/F5/F6. Dateien: `syncjobs`/`daemon`/`connect`/Desktop-/Mobile-Sync-Grenzen
