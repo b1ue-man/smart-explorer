@@ -170,9 +170,11 @@ mod tests {
                 root: &backend.root,
             };
             let cancel = AtomicBool::new(false);
-            assert!(super::super::version_listing::managed_sync_root(&side, PAIR, &cancel)
-                .unwrap()
-                .is_empty());
+            assert!(
+                super::super::version_listing::managed_sync_root(&side, PAIR, &cancel)
+                    .unwrap()
+                    .is_empty()
+            );
             assert_eq!(backend.archive_calls.load(Ordering::SeqCst), 0);
             *backend.denied.lock().unwrap() = Some((backend.root.clone(), kind));
             // Browsing still has the old parent listing; versions must bypass it.
@@ -198,7 +200,9 @@ mod tests {
         for shape in 1..=3 {
             backend.shape.store(shape, Ordering::SeqCst);
             assert_eq!(
-                uses_provider_archive(&backend.side(), &cancel).unwrap_err().kind(),
+                uses_provider_archive(&backend.side(), &cancel)
+                    .unwrap_err()
+                    .kind(),
                 io::ErrorKind::InvalidData
             );
         }
@@ -217,10 +221,10 @@ mod tests {
         for denied in [&root, &format!("{root}/owned-run")] {
             *backend.denied.lock().unwrap() =
                 Some((denied.clone(), io::ErrorKind::PermissionDenied));
-            let error = super::super::version_listing::managed_sync_root(
-                &backend.side(), PAIR, &cancel)
-                .err()
-                .unwrap();
+            let error =
+                super::super::version_listing::managed_sync_root(&backend.side(), PAIR, &cancel)
+                    .err()
+                    .unwrap();
             assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
             assert_eq!(std::fs::read(&foreign).unwrap(), b"foreign archived bytes");
         }

@@ -332,7 +332,9 @@ fn sync_reliability_task_options_share_private_versions_restore_restart_and_noop
                 std::fs::read(&archived.stored_path).unwrap(),
                 b"share initial bytes"
             );
-            let error = b.stat(&fixture::path(&b, &root_b, ".se-versions")).unwrap_err();
+            let error = b
+                .stat(&fixture::path(&b, &root_b, ".se-versions"))
+                .unwrap_err();
             assert!(
                 error.to_string().contains("Pfad ist nicht freigegeben"),
                 "{error}"
@@ -351,13 +353,19 @@ fn sync_reliability_task_options_share_private_versions_restore_restart_and_noop
                 fixture::read(&b, &root_b, "file.txt"),
                 b"share replacement with different bytes"
             );
-            assert_eq!(std::fs::read(baseline_file(key).unwrap()).unwrap(), baseline);
+            assert_eq!(
+                std::fs::read(baseline_file(key).unwrap()).unwrap(),
+                baseline
+            );
             versions::restore_version(&lock, &key.pair_id, archived, &sides[1], &cancel).unwrap();
             assert_eq!(
                 fixture::read(&b, &root_b, "file.txt"),
                 b"share initial bytes"
             );
-            assert_eq!(std::fs::read(baseline_file(key).unwrap()).unwrap(), baseline);
+            assert_eq!(
+                std::fs::read(baseline_file(key).unwrap()).unwrap(),
+                baseline
+            );
             assert!(versions::list_versions(&key.pair_id, &sides, &cancel)
                 .unwrap()
                 .iter()
@@ -384,10 +392,21 @@ fn sync_reliability_task_options_share_private_versions_restore_restart_and_noop
         let quiet = run(&*reopened, &reopened_root);
         assert_eq!(quiet.state, restored.state);
         assert_eq!(quiet.baseline, restored.baseline);
-        assert_eq!(std::fs::read(baseline_file(key).unwrap()).unwrap(), baseline_after_restore);
-        assert_eq!(fixture::read(&*reopened, &reopened_root, "file.txt"), b"share initial bytes");
         assert_eq!(
-            (quiet.stats.a_to_b, quiet.stats.b_to_a, quiet.stats.deleted, quiet.stats.bytes),
+            std::fs::read(baseline_file(key).unwrap()).unwrap(),
+            baseline_after_restore
+        );
+        assert_eq!(
+            fixture::read(&*reopened, &reopened_root, "file.txt"),
+            b"share initial bytes"
+        );
+        assert_eq!(
+            (
+                quiet.stats.a_to_b,
+                quiet.stats.b_to_a,
+                quiet.stats.deleted,
+                quiet.stats.bytes
+            ),
             (0, 0, 0, 0)
         );
         println!("C05 {name} normal saved locator/private version/restore/reopen/owner/baseline/noop confirmed");

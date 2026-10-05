@@ -295,7 +295,9 @@ impl<'a> CheckpointSink<'a> {
                         frame.dirs_add.push(self.directory_key(&action.rel, side));
                     }
                     CompletedKind::DirRemoved { side } => {
-                        frame.dirs_remove.push(self.directory_key(&action.rel, side));
+                        frame
+                            .dirs_remove
+                            .push(self.directory_key(&action.rel, side));
                     }
                     _ => {}
                 }

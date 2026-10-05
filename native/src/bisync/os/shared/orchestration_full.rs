@@ -27,19 +27,16 @@ pub(super) fn run_full_locked(state: &RunState<'_>) -> Outcome {
             }
         }
     };
-    let dir_history = match super::state_spelling_history::DirectoryHistory::load(
-        &names,
-        state.dirs,
-        keys,
-    ) {
-        Ok(history) => history,
-        Err(error) => {
-            return Outcome {
-                baseline: state.baseline.clone(),
-                ..failure("Ordner-Zwischenstand", error)
+    let dir_history =
+        match super::state_spelling_history::DirectoryHistory::load(&names, state.dirs, keys) {
+            Ok(history) => history,
+            Err(error) => {
+                return Outcome {
+                    baseline: state.baseline.clone(),
+                    ..failure("Ordner-Zwischenstand", error)
+                }
             }
-        }
-    };
+        };
     if let Err(error) = super::incremental::retire_index(state) {
         return failure("Sync-Zwischenstand", error);
     }
@@ -241,10 +238,11 @@ pub(super) fn run_full_locked(state: &RunState<'_>) -> Outcome {
     }
     let sink = match CheckpointSink::new(endpoints, state.lock, state.key, ctx.keys, state.observer)
     {
-        Ok(sink) => {
-            sink.with_path_aliases(&names.aliases)
-                .with_observations([&snapshot.a, &snapshot.b], &plan.spellings, observed_counts)
-        }
+        Ok(sink) => sink.with_path_aliases(&names.aliases).with_observations(
+            [&snapshot.a, &snapshot.b],
+            &plan.spellings,
+            observed_counts,
+        ),
         Err(error) => return failure("Zwischenstand", error),
     };
     if let Err(error) = dir_history.checkpoint(&sink) {

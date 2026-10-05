@@ -35,9 +35,10 @@ pub(super) fn legacy_folded_state(seed: &Outcome, rel_a: &str, rel_b: &str) -> B
         serde_json::from_slice(&std::fs::read(&spelling_path).unwrap()).unwrap();
     // Read the real recorded slots, then serialize exactly the historical
     // four-map schema without any post-upgrade provenance fields.
-    source.as_object_mut().unwrap().retain(|field, _| {
-        matches!(field.as_str(), "files_a" | "files_b" | "dirs_a" | "dirs_b")
-    });
+    source
+        .as_object_mut()
+        .unwrap()
+        .retain(|field, _| matches!(field.as_str(), "files_a" | "files_b" | "dirs_a" | "dirs_b"));
     let mut maps: FourMaps = serde_json::from_value(source).unwrap();
     if rel_a != rel_b {
         maps.files_a.remove(rel_b);

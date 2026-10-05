@@ -116,19 +116,16 @@ pub(super) fn try_incremental_run(state: &RunState<'_>) -> Option<Outcome> {
         }
     };
     let path_aliases = names.aliases.clone();
-    let dir_history = match super::state_spelling_history::DirectoryHistory::load(
-        &names,
-        state.dirs,
-        keys,
-    ) {
-        Ok(history) => history,
-        Err(error) => {
-            return Some(Outcome {
-                baseline: state.baseline.clone(),
-                ..failure("Ordner-Zwischenstand", error)
-            })
-        }
-    };
+    let dir_history =
+        match super::state_spelling_history::DirectoryHistory::load(&names, state.dirs, keys) {
+            Ok(history) => history,
+            Err(error) => {
+                return Some(Outcome {
+                    baseline: state.baseline.clone(),
+                    ..failure("Ordner-Zwischenstand", error)
+                })
+            }
+        };
     let pair = index_id(state.key).ok()?;
     let mut store = open_store(state.store_path).ok()?;
     let rec = store.load_pair(&pair).ok().flatten()?;
@@ -256,11 +253,7 @@ pub(super) fn try_incremental_run(state: &RunState<'_>) -> Option<Outcome> {
     } else {
         planned_b.is_empty()
     };
-    let source_empty = source_empty
-        && dir_history
-            .dirs
-            .as_ref()
-            .is_none_or(|dirs| dirs.is_empty());
+    let source_empty = source_empty && dir_history.dirs.as_ref().is_none_or(|dirs| dirs.is_empty());
     if let Some(block) = unconfirmed(
         empty_side_block(source_pair, source_empty, state.baseline),
         &state.settings.confirmed,
