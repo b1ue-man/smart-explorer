@@ -186,6 +186,10 @@ mod state_bootstrap;
 mod state_metadata;
 #[path = "os/shared/state_spellings.rs"]
 mod state_spellings;
+#[path = "os/shared/state_spelling_policy.rs"]
+mod state_spelling_policy;
+#[path = "os/shared/state_spelling_aliases.rs"]
+mod state_spelling_aliases;
 #[path = "os/shared/state_store.rs"]
 mod state_store;
 #[path = "os/shared/state_types.rs"]

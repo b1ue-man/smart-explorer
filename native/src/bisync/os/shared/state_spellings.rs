@@ -6,7 +6,7 @@ use std::io;
 
 use serde::{Deserialize, Serialize};
 
-use super::keys::{KeyPolicy, Spellings};
+use super::keys::{KeyPolicy, PathAliases, Spellings};
 use super::plan_index::destination_spelling;
 use super::run_types::StateKey;
 use super::snapshot_types::SideSnapshot;
@@ -18,10 +18,18 @@ pub(super) struct StateSpellings {
     pub files_b: BTreeMap<String, String>,
     pub dirs_a: BTreeMap<String, String>,
     pub dirs_b: BTreeMap<String, String>,
+    #[serde(
+        default,
+        skip_serializing_if = "super::state_spelling_policy::LegacyAliases::is_empty"
+    )]
+    pub legacy: super::state_spelling_policy::LegacyAliases,
+    #[serde(skip)]
+    pub aliases: PathAliases,
 }
 
 impl StateSpellings {
     pub fn observe(&mut self, side: PairSide, snapshot: &SideSnapshot, keys: KeyPolicy) {
+        let aliases = &self.aliases;
         let (files, dirs) = match side {
             PairSide::A => (&mut self.files_a, &mut self.dirs_a),
             PairSide::B => (&mut self.files_b, &mut self.dirs_b),
@@ -30,20 +38,20 @@ impl StateSpellings {
             .tree
             .keys()
             .chain(snapshot.filtered.keys())
-            .map(|rel| keys.key(rel).into_owned())
+            .map(|rel| aliases.key(rel, side, keys))
             .collect();
         files.retain(|key, rel| present_files.contains(key) || snapshot.omissions.protects(rel));
         for rel in snapshot.tree.keys().chain(snapshot.filtered.keys()) {
-            files.insert(keys.key(rel).into_owned(), rel.clone());
+            files.insert(aliases.key(rel, side, keys), rel.clone());
         }
         let present: std::collections::BTreeSet<_> = snapshot
             .dirs
             .iter()
-            .map(|rel| keys.key(rel).into_owned())
+            .map(|rel| aliases.key(rel, side, keys))
             .collect();
         dirs.retain(|key, rel| present.contains(key) || snapshot.omissions.protects(rel));
         for rel in &snapshot.dirs {
-            dirs.insert(keys.key(rel).into_owned(), rel.clone());
+            dirs.insert(aliases.key(rel, side, keys), rel.clone());
         }
     }
 
@@ -64,26 +72,68 @@ impl StateSpellings {
         self.files(side)
             .get(keys.key(rel).as_ref())
             .cloned()
-            .unwrap_or_else(|| destination_spelling(rel, self.dirs(side), keys))
+            .unwrap_or_else(|| {
+                let target = self.aliases.spelling(rel, side, keys);
+                if target != rel {
+                    target
+                } else {
+                    destination_spelling(rel, self.dirs(side), keys)
+                }
+            })
     }
 
     pub fn for_actions(&self, actions: &[Action], source: PairSide, keys: KeyPolicy) -> Spellings {
         let mut spellings = Spellings::default();
         for rel in actions.iter().map(super::core::action_rel) {
-            // Change feeds and source walks already supply the source's path.
+            let source_rel = self.rel(rel, source, keys);
+            spellings.insert(rel, source, &source_rel);
             let target = self.rel(rel, source.other(), keys);
             spellings.insert(rel, source.other(), &target);
         }
         spellings
     }
 
+    /// Recorded inputs can predate the policy change and name an exact old
+    /// side slot. Normal new actions never use this compatibility lookup.
+    pub fn recorded_rel(&self, rel: &str, keys: KeyPolicy) -> io::Result<String> {
+        let key = keys.key(rel);
+        let mut candidates = BTreeMap::new();
+        if [&self.files_a, &self.files_b, &self.dirs_a, &self.dirs_b]
+            .iter()
+            .any(|map| map.contains_key(key.as_ref()))
+        {
+            candidates.insert(key.into_owned(), rel.to_string());
+        }
+        for side in [PairSide::A, PairSide::B] {
+            let logical = self.aliases.logical(rel, side, keys);
+            if logical.as_ref() != rel {
+                candidates.insert(keys.key(&logical).into_owned(), logical.into_owned());
+            }
+        }
+        if candidates.len() > 1 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "recorded path has contradictory historical side relations",
+            ));
+        }
+        Ok(candidates
+            .into_values()
+            .next()
+            .unwrap_or_else(|| rel.to_string()))
+    }
+
     pub fn applied(
         &mut self,
         actions: &[Action],
         spellings: &Spellings,
+        previous: &Baseline,
         baseline: &Baseline,
         keys: KeyPolicy,
     ) {
+        let previous_keys: std::collections::BTreeSet<_> = previous
+            .keys()
+            .map(|rel| keys.key(rel).into_owned())
+            .collect();
         let by_key: BTreeMap<_, _> = baseline
             .iter()
             .map(|(rel, entry)| (keys.key(rel).into_owned(), *entry))
@@ -109,11 +159,22 @@ impl StateSpellings {
                         map.remove(&key);
                     }
                 }
+            } else if previous_keys.contains(&key) {
+                // A confirmed deletion retires its old file relation. Failed
+                // actions still have their authoritative previous entry.
+                self.files_a.remove(&key);
+                self.files_b.remove(&key);
             }
         }
         // Unresolved conflicts may have no baseline yet. Their observed
         // spellings stay available to resolve_recorded; SQL uses only baseline
         // signatures and is bootstrapped only after an entirely safe run.
+        self.legacy.files.retain(|key, _| {
+            self.files_a.contains_key(key) || self.files_b.contains_key(key)
+        });
+        self.legacy.dirs.retain(|key, _| {
+            self.dirs_a.contains_key(key) || self.dirs_b.contains_key(key)
+        });
     }
 
     /// The SQL rows retain each side's literal path; the baseline remains a
@@ -135,20 +196,13 @@ impl StateSpellings {
 pub(super) fn load(key: &StateKey, keys: KeyPolicy) -> io::Result<StateSpellings> {
     let path = super::replica_state::baseline_file(key)?.with_extension("spellings.json");
     let limits = super::SyncLimits::for_memory(crate::transfer::physical_memory());
-    let value: StateSpellings =
-        super::state_metadata::read_json(&path, limits.state_file_bytes().saturating_mul(4))?
+    let mut value: StateSpellings =
+        super::state_metadata::read_json(&path, limits.state_file_bytes().saturating_mul(6))?
             .unwrap_or_default();
     let mut entries = 0u64;
     let mut text = 0u64;
     for map in [&value.files_a, &value.files_b, &value.dirs_a, &value.dirs_b] {
         for (key, rel) in map {
-            super::sync_relative_path::SyncRelativePath::parse(rel)?;
-            if keys.key(rel).as_ref() != key {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "stored spelling does not match its planning key",
-                ));
-            }
             entries = entries.saturating_add(1);
             text = text
                 .saturating_add(key.len() as u64)
@@ -163,6 +217,7 @@ pub(super) fn load(key: &StateKey, keys: KeyPolicy) -> io::Result<StateSpellings
             "side spellings exceed their budget",
         ));
     }
+    super::state_spelling_policy::validate(&mut value, key, keys)?;
     Ok(value)
 }
 

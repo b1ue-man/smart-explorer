@@ -254,6 +254,12 @@ impl SyncOmissions {
         self.reported.keys().map(String::as_str)
     }
 
+    pub(crate) fn paths(&self) -> impl Iterator<Item = (&str, OmissionKind, bool)> {
+        self.originals.iter().map(|(path, kind)| {
+            (path.as_str(), *kind, self.reported.contains_key(path))
+        })
+    }
+
     /// Reported paths with the reason each one was left out.
     pub fn reported(&self) -> impl Iterator<Item = (&str, OmissionKind)> {
         self.reported

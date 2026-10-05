@@ -58,13 +58,22 @@ pub(super) fn apply_one(
     let rel = super::core::action_rel(action);
     super::sync_relative_path::SyncRelativePath::parse(rel)?;
     let keys = super::orchestration_plan::keys(endpoints);
+    let mut names = super::state_spellings::load(key, keys)?;
     let mut protected = super::SyncOmissions::new(keys.fold_case);
     for pending in super::orchestration_plan::pending_paths(lock, key, endpoints)? {
         protected.record_kind(&pending, super::OmissionKind::Unreadable, false);
     }
-    if protected.protects(rel) {
-        return Err(io::Error::new(io::ErrorKind::WouldBlock,
-            "Für diesen Pfad ist ein geschützter Wiederanlauf offen; bitte den betreffenden Lauf fortsetzen"));
+    names.aliases.protect_counterparts(&mut protected, keys);
+    if protected.protects(rel)
+        || [PairSide::A, PairSide::B].into_iter().any(|side| {
+            protected.protects(spellings.side_rel(rel, side))
+                || !super::state_spelling_aliases::target_available(rel, side, keys, &names)
+        })
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "Für diesen Pfad ist ein geschützter Wiederanlauf offen; bitte den betreffenden Lauf fortsetzen",
+        ));
     }
     let mut a = Tree::new();
     let mut b = Tree::new();
@@ -78,8 +87,8 @@ pub(super) fn apply_one(
             tree.insert(path.to_string(), signature);
         }
     }
-    let mut names = super::state_spellings::load(key, keys)?;
     let history = load_history(key)?;
+    let (_, previous, _) = super::checkpoint_journal::Journal::load(key, keys)?;
     let collected = CollectingSink::default();
     let sink = CheckpointSink::new(endpoints, lock, key, keys, Some(&collected))?;
     opts.dry_run = false;
@@ -144,6 +153,7 @@ pub(super) fn apply_one(
         names.applied(
             std::slice::from_ref(action),
             spellings,
+            &previous.baseline,
             &checkpoint.baseline,
             keys,
         );

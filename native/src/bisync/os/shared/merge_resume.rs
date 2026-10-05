@@ -25,6 +25,7 @@ pub fn pending_merge_for_key(
         b.case_sensitive_paths(root_b),
     );
     let names = super::state_spellings::load(key, keys)?;
+    let logical = names.recorded_rel(rel, keys)?;
     let opts = match &key.owner {
         super::StateOwner::Job(id) => crate::syncjobs::recorded_options(id)?,
         super::StateOwner::AdHoc => super::BisyncOptions::default(),
@@ -32,16 +33,28 @@ pub fn pending_merge_for_key(
     super::apply_boundary::guard(
         a,
         root_a,
-        &names.rel(rel, super::PairSide::A, keys),
+        &names.rel(&logical, super::PairSide::A, keys),
         opts.cross_mounts,
     )?;
     super::apply_boundary::guard(
         b,
         root_b,
-        &names.rel(rel, super::PairSide::B, keys),
+        &names.rel(&logical, super::PairSide::B, keys),
         opts.cross_mounts,
     )?;
-    super::merge_recovery::load(key, rel)?
+    let mut recovery = super::merge_recovery::load(key, rel)?;
+    if logical != rel {
+        if let Some(canonical) = super::merge_recovery::load(key, &logical)? {
+            if recovery.is_some() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "two pending merges claim one historical relation",
+                ));
+            }
+            recovery = Some(canonical);
+        }
+    }
+    recovery
         .map(|recovery| super::merge_inputs::load(key, &recovery))
         .transpose()
 }

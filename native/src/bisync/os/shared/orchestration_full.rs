@@ -8,7 +8,7 @@ use super::checkpoint_run::CheckpointSink;
 use super::guards::{unconfirmed, DeleteCounts};
 use super::omissions::OmissionKind;
 use super::orchestration::{failure, Outcome, RunState};
-use super::orchestration_plan::{blocked, context, prepare};
+use super::orchestration_plan::{blocked, context, prepare_spelled};
 use super::run_types::RunBlock;
 use super::snapshot_pair::read_pair;
 use super::state_metadata::{now_ms, save_history, PairHistory};
@@ -17,6 +17,16 @@ use super::types::{Action, DeletePolicy, Direction, PairSide};
 pub(super) fn run_full_locked(state: &RunState<'_>) -> Outcome {
     let endpoints = state.endpoints;
     let opts = state.opts;
+    let keys = super::orchestration_plan::keys(endpoints);
+    let mut names = match super::state_spellings::load(state.key, keys) {
+        Ok(names) => names,
+        Err(error) => {
+            return Outcome {
+                baseline: state.baseline.clone(),
+                ..failure("Pfad-Schreibweisen", error)
+            }
+        }
+    };
     if let Err(error) = super::incremental::retire_index(state) {
         return failure("Sync-Zwischenstand", error);
     }
@@ -35,12 +45,12 @@ pub(super) fn run_full_locked(state: &RunState<'_>) -> Outcome {
     let empty_a = snapshot.a.is_empty();
     let empty_b = snapshot.b.is_empty();
     let observed_counts = [snapshot.a.entry_count(), snapshot.b.entry_count()];
-    let keys = super::orchestration_plan::keys(endpoints);
-    if let Err(error) = super::orchestration_plan::protect_pending(
+    if let Err(error) = super::orchestration_plan::protect_pending_spelled(
         state.lock,
         state.key,
         endpoints,
         keys,
+        &names.aliases,
         &mut snapshot,
     ) {
         return Outcome {
@@ -48,12 +58,6 @@ pub(super) fn run_full_locked(state: &RunState<'_>) -> Outcome {
             ..failure("Merge-Wiederanlauf", error)
         };
     }
-    let mut names = match super::state_spellings::load(state.key, keys) {
-        Ok(names) => names,
-        Err(_) => super::state_spellings::StateSpellings::default(),
-    };
-    names.observe(PairSide::A, &snapshot.a, keys);
-    names.observe(PairSide::B, &snapshot.b, keys);
     // Rotation has an independent baseline, but an empty newly observed
     // volume still requires explicit acceptance before mirror deletion.
     if let Some(history) = state.history {
@@ -82,14 +86,17 @@ pub(super) fn run_full_locked(state: &RunState<'_>) -> Outcome {
         );
     }
     let ctx = context(endpoints, opts, state.dirs);
-    let mut plan = prepare(
+    let mut plan = prepare_spelled(
         endpoints,
         &mut snapshot.a,
         &mut snapshot.b,
         &base,
         &ctx,
+        &names.aliases,
         state.cancel,
     );
+    names.observe(PairSide::A, &snapshot.a, keys);
+    names.observe(PairSide::B, &snapshot.b, keys);
     plan.conflicts.extend(snapshot.conflicts);
     let repair_keys: std::collections::BTreeSet<_> = snapshot
         .repairs
@@ -129,10 +136,10 @@ pub(super) fn run_full_locked(state: &RunState<'_>) -> Outcome {
         };
         let source_keys: std::collections::BTreeSet<_> = source
             .keys()
-            .map(|rel| keys.key(rel).into_owned())
+            .map(|rel| names.aliases.key(rel, dedupe_side.other(), keys))
             .collect();
         match backend.plan_dedupe_recursive(dedupe_root, &|rel| {
-            source_keys.contains(keys.key(rel).as_ref()) || plan.omissions.protects(rel)
+            source_keys.contains(&names.aliases.key(rel, dedupe_side, keys)) || plan.omissions.protects(rel)
         }) {
             Ok(planned) => dedupe = planned,
             Err(error) => {
@@ -150,8 +157,7 @@ pub(super) fn run_full_locked(state: &RunState<'_>) -> Outcome {
         let orphans: std::collections::BTreeSet<_> = dedupe
             .iter()
             .map(|entry| {
-                keys.key(&super::paths::rel_of(&entry.path, dedupe_root))
-                    .into_owned()
+                names.aliases.key(&super::paths::rel_of(&entry.path, dedupe_root), dedupe_side, keys)
             })
             .filter(|key| !source_keys.contains(key))
             .collect();
@@ -228,12 +234,9 @@ pub(super) fn run_full_locked(state: &RunState<'_>) -> Outcome {
         .retain(|(rel, _)| !repair_keys.contains(keys.key(rel).as_ref()));
     plan.forget
         .retain(|rel| !repair_keys.contains(keys.key(rel).as_ref()));
-    let present_dirs: std::collections::BTreeSet<_> = snapshot
-        .a
-        .dirs
-        .iter()
-        .chain(&snapshot.b.dirs)
-        .map(|rel| keys.key(rel).into_owned())
+    let present_dirs: std::collections::BTreeSet<_> = snapshot.a.dirs.iter()
+        .map(|rel| names.aliases.key(rel, PairSide::A, keys))
+        .chain(snapshot.b.dirs.iter().map(|rel| names.aliases.key(rel, PairSide::B, keys)))
         .collect();
     let dirs_remove = state
         .dirs
@@ -353,7 +356,13 @@ pub(super) fn run_full_locked(state: &RunState<'_>) -> Outcome {
         )
     });
     let checkpoint = sink.finish();
-    names.applied(&plan.actions, &plan.spellings, &checkpoint.baseline, keys);
+    names.applied(
+        &plan.actions,
+        &plan.spellings,
+        state.baseline,
+        &checkpoint.baseline,
+        keys,
+    );
     for (rel, kind) in checkpoint.omitted {
         plan.omissions
             .record_kind(&rel, kind, kind.reported_by_default());
