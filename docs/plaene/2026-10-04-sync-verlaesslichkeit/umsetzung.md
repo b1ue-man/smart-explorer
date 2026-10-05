@@ -129,6 +129,27 @@ Das verbleibende Mirror-Nested-Orakel bleibt unverändert. Der Deletepolicy-
 Ablauf fordert für die frisch hinzugefügte target-only Datei nun ausdrücklich
 den vorhandenen `ScanDepth::Full`-Vertrag statt eines inkrementellen Laufs.
 
+Der vierte Lauf bestätigt C05/C06/C07 auf beiden Desktopplattformen. C02
+meldet im erweiterten Literal-/Versionsroundtrip eine geschützte Auslassung,
+ohne ihren Pfad oder die Phase zu nennen. Vor einer weiteren Produktänderung
+muss derselbe Ablauf diese konkrete Diagnose liefern. C04 erreicht unter
+Linux den regulären SFTP-Ersetzungspfad und meldet dort eine unklare
+Replacementdestination. Die Anschlusslesung verfolgt `replacement_journal`,
+`replacement_publish`, `replacement_recovery` und die tatsächlichen
+SFTP-/Agent-Metadaten-/Writerverträge. Erwartet sind erfolgreiche bestätigte
+Ersetzung, restaurierbare alte Bytes und No-op; fremde Destinationen, verlorene
+ACKs und unbestätigte Baselines bleiben durch die vorhandenen C06/C07-Orakel
+geschützt. Keine Fehlerunterdrückung und keine zweite Abnahme-Suite.
+
+Die anschließende Sourceprüfung belegt einen offenen Intent nach erfolgreichem
+`replacement_publish`: Die Datei wurde verifiziert und ihr Namespace bestätigt,
+der alte Wiederanlaufauftrag bleibt aber bestehen. Der Providerflow schreibt
+danach legitime Gegenbytes, die der nächste Recoverylauf gegen diesen veralteten
+Auftrag als fremd behandelt. Der bestätigte eigene Publish muss deshalb seine
+bekannten Retained-/Stage-Slots sicher aufräumen und den Intent abschließen.
+Unbestätigte oder fehlgeschlagene Veröffentlichung behält dagegen ihre
+Recoveryevidenz; kein Digest-/Identitäts-/Ownerguard wird geschwächt.
+
 ### M4 Bestehende Job-/Updategrenzen vollständig erhalten
 
 - F3/F5/F6. Dateien: `syncjobs`/`daemon`/`connect`/Desktop-/Mobile-Sync-Grenzen
@@ -143,6 +164,32 @@ den vorhandenen `ScanDepth::Full`-Vertrag statt eines inkrementellen Laufs.
   Ergebnisbytes und zweiter No-op-Lauf stimmen. Intervall/Calendar/Realtime/
   Startup/Connect/Catch-up behalten ihre bestehenden Zulassungen und Optionen.
 - Abnahme: S5/S6/S8. Abhängigkeit: M3.
+
+Der vierte Lauf führt den Windows-Host ohne Stackoverflow vollständig aus.
+Der tatsächliche Direct-Altjob scheitert vor Jobstart beim normalen
+Writerabschluss: `backend_stream` erzeugt einen exklusiven
+`*.se-daemon-<16lowerhex>`-Stage, dessen Purpose im `PeerBackend`-Creatorledger
+noch nicht registriert wird. M4 verfolgt die bestehende Reserve→Writing→ACK→
+Ready-Kette über IPC und Peerwriter; derselbe Stage muss diese Ownership-
+Prüfung erfolgreich durchlaufen. Fremde und unbestätigte Stages bleiben
+abgewiesen. Die isolierte Fallback-Abnahme verwendet einen tatsächlich
+gültigen generierten Recovery-Sibling; deren Validierung wird nicht gelockert.
+
+Gespeicherte UNC-Verbindungen behalten `Protocol::Share` und ihren bisherigen
+Credentialaccount mit Port `0`. Der Connector darf diesen ungenutzten Wert
+beim normalen Wiederöffnen nicht als ungültigen TCP-Port ablehnen. URL-/TCP-
+Provider behalten dagegen ihre positive Portprüfung. C04 prüft weiterhin
+denselben gespeicherten UNC-/mapped-Resolver und vollständigen Byteroundtrip.
+
+C09 erzeugt den echten Altzustand erfolgreich unter der veröffentlichten
+APK. Der dokumentierte RV1-Lader ergänzt Konfigurationskeys und migriert den
+fehlenden Deleteguard; die alte Jobdatei ist deshalb kein Byteidentitätsorakel
+für diesen einmaligen Schritt. Die Abnahme erfasst ihre tatsächlichen alten
+Keys und prüft ausschließlich die exakt belegten Migrationsdeltas. Alle
+anderen alten Konfigurations-/Result-/Baselinehashes und Backupbytes bleiben
+strikt. Der erste neue No-op entdeckt die reale Job-/Replica-Ownerbaseline,
+deren bestätigte Records erhalten bleiben müssen; beim anschließenden
+Force-stop gelten wieder unveränderte Config-/Ownerbaseline-/Journalhashes.
 
 ### M5 Eine komplette Remote-Task-Suite
 
@@ -217,30 +264,20 @@ nimmt vor Code den vollständigen Plan auseinander; keine weitere Reviewrunde.
 | Stufe 2 / zweite Recherche | fertig, Lücken eingearbeitet | dieser Plan und `abnahme.md` |
 | Einmalige Plan-Kritik | abgeschlossen, alle Befunde eingearbeitet | `review.md` |
 | M1/M2 | Code und eigener Self-Review fertig | vollständige Kandidatensammlung, reale Root-ID, private Folderbindung und stabile Projektion; Herkunftsbeweis getrennt von Parentprojektion und neuem Accountcache, auch am normalen Writer und gemeinsamen Dateilader über wechselnde Job-Reihenfolge; bestätigtes Missing bereits bei erster Migration geschützt; Remote-Abnahme ausstehend |
-| M3 | Korrekturcode und eigener Self-Review fertig | C06-Retry auf Linux bestätigt; reiner Sync-Literalrel-Vertrag durch Apply/Persistenz/Versionen/Recovery angeschlossen. Nested-Mirror vergleicht die bestätigte Sourceindexgeneration; bestehendes Null-Listing-Orakel und voller Schutz bleiben erhalten. Gemeinsame Laufzeitbestätigung offen |
-| M4 | Korrekturcode und eigener Self-Review fertig | fehlende Edit-ID, Ursachenklassifikation und echte veröffentlichte Workerübernahme bestätigt; drei rekursive Share-IPC-Fallbacks entfernt. Crossremote-Altjob behält normalen Resolver/Runner und zusätzliche echte Reload-/StateKey-/Baselinebelege; Laufzeitbestätigung offen |
-| M5 Remote-Gesamtablauf | dritter Workflow vollständig fehlgeschlagen ausgewertet; nächste Korrektursammlung fertig | Linux C01/C03/C06/C07 und veröffentlichte Altworker-Übernahme erfolgreich; Windows C07 und veröffentlichte Altworker-Übernahme erfolgreich, spätere Drive-Fälle wegen Stackoverflow unausgeführt. Share-Refresh, Literalrel, Nested-Mirror und C09-Fixturebasis werden im selben Suite-Einstieg bestätigt. Sofortige Hostdiagnosen erhalten die exakte Ergebnisprüfung und private Uploadgrenze; betroffene Exec-Rechte-/Cancellationgrenzen sind zugeordnet. C10 benötigt weiterhin die angefragte Drive-Testautorisierung |
+| M3 | konkreter Fixloop des vierten Laufs | C05 einschließlich Nested-Mirror sowie C06/C07 auf Linux/Windows bestätigt. C02 verlangt präzise Auslassungsdiagnose; C04-SFTP-Ersetzung bleibt offen. Literal-/Persistenz-/Versions-, Fremdbyte-, Backup- und Indexorakel bleiben erhalten |
+| M4 | konkreter Fixloop des vierten Laufs | Beide veröffentlichten Desktop-Workerübernahmen und Linux-SFTP-Crossremote samt Reload/StateKey/No-op bestätigt. Windows-Host vollständig ohne Stackoverflow; Direct-Writer-Ownership und gültige isolierte Fallback-Fixture werden korrigiert. UNC-Port0-Korrektur und exakte C09-Format-/Ownerimportprüfung implementiert; erneute Bestätigung offen |
+| M5 Remote-Gesamtablauf | vierter Workflow vollständig fehlgeschlagen ausgewertet; konkrete Korrekturen in Arbeit | Linux/Windows C01/C03/C05/C06/C07 und echte veröffentlichte Altworker-Übernahme erfolgreich. Beide Hosts vollständig und exakt ausgewertet; C02/C04/C08 und Android-Updateabnahme bleiben offen. Share-Refresh-/Exec-Verträge bestätigt. C10 benötigt weiterhin die angefragte Drive-Testautorisierung |
 | M6 Release | offen | erst nach M5 |
 
-Der dritte Workflow ist vollständig fehlgeschlagen ausgewertet. Neben den
-M3-Namens-/Indexkorrekturen muss M5 die echte Direct-/Room-Einrichtung bis
-zur regulären Konfigurationsaktualisierung weiterführen: Linux meldet dabei
-`StaleAuthorization`. Die Recherche verfolgt CLI → Worker-Refresh →
-`RuntimeConfiguration` → `apply_configuration_transition` → Exec-Registry
-und die zugehörigen Profil-/Member-Daten. Erwartet sind erfolgreiche normale
-Export-/Policy-Änderungen und tatsächlicher Peer-Sync bei erhaltenen
-Revocations-, Grant-, Replay- und Epochengrenzen; kein Fixture-Bypass.
-
-Unter Windows ist die Server-/Peer-Fixture erfolgreich eingerichtet, der
-Native-Host bricht aber im Crossremote-Altjob mit Stackoverflow ab. M4/M5
-verfolgen hierfür die tatsächliche Resolver-/Backend-/Runner-Aufrufkette und
-deren Windows-/Runtime-Stackvertrag vor einer Änderung. Erwartet ist derselbe
-Crossremote-Altjob einschließlich Restart, Owner, Baseline, Bytes und No-op
-ohne Prozessabbruch. Spätere dadurch fehlende Fälle bleiben unabgenommen.
-M5 muss außerdem Fehlerdiagnosen vor einem Prozessabbruch sichern, weil die
-gepufferte libtest-Ausgabe die vorangegangene C04-Fehlermeldung verloren hat.
-Exakte Ausführung, Ergebniszähler, private Uploadgrenzen und derselbe einzige
-Suite-Einstieg bleiben unverändert verpflichtend.
+Der [vierte Workflow](https://github.com/b1ue-man/smart-explorer/actions/runs/37261440798)
+prüft `7b3cda8a92a957f85e4c65dfe092c8deeb0f1335` und ist vollständig
+fehlgeschlagen ausgewertet. Die echten Direct-/Room-Fixtures und die
+zugeordneten Exec-Rechte-/Cancellation-Abläufe sind erfolgreich. Beide Hosts
+führen alle gewählten Fälle ohne Prozessabbruch aus; unmittelbare Diagnosen
+und passende Ergebniszähler sind bestätigt. Die konkreten verbleibenden
+Befunde stehen bei M3/M4 und in `abnahme.md`; sie werden gemeinsam im selben
+Suite-Einstieg bestätigt. Private Uploadgrenzen und alle bestehenden
+Erhaltungs-/No-op-Orakel bleiben verbindlich. Kein Release vor erfolgreichem M5.
 
 Pro Meilenstein: gegen Refs und Aufrufer selbst prüfen, kohärent committen;
 Abnahme erst gesammelt nach kompletter Umsetzung. Nach nativen Änderungen

@@ -22,11 +22,8 @@ pub(super) fn save(
         .map(|duration| duration.as_secs())
         .unwrap_or(0);
     for offset in 0..1000 {
-        let target = super::legacy_backup_path::destination(
-            versions,
-            stamp.saturating_add(offset),
-            rel,
-        )?;
+        let target =
+            super::legacy_backup_path::destination(versions, stamp.saturating_add(offset), rel)?;
         if let Some(parent) = target.parent() {
             crate::support_dirs::ensure_private_dir(parent)?;
         }

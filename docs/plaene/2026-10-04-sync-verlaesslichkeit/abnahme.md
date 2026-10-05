@@ -201,7 +201,7 @@ Principal-Abläufe. Sie beantworten ausschließlich die durch die gemeinsame
 Registryänderung betroffenen Rechte-/Cancellationfragen; kein weiterer
 Suiteaufruf und keine breite Exec-Matrix werden eingeführt.
 
-Die nächste Korrektursammlung enthält einen reinen `SyncRelativePath` für
+Die im vierten Lauf geprüfte Korrektursammlung enthält einen reinen `SyncRelativePath` für
 Apply, Baseline, SQL, Checkpoint, Spellings, Versionsmanifest und Replacement-/
 Merge-Recovery. `:`, Backslash und `%` bleiben Providerliterale; native Namen,
 Root-/Linkschutz und Agent-Wire werden an ihren bestehenden Grenzen geprüft.
@@ -224,7 +224,74 @@ verlangen keine Dateisystem-RPCs und geschlossene Streams. Der tatsächliche
 Crossremote-Altjob behält normalen Resolver und Runner; Loader-Restart,
 StateKey, Owner, Optionen, Baseline und No-op bleiben überprüfbar. Der
 Windows-Abbruch selbst enthält keinen Callframe; seine Behebung und die
-vorher unausgeführten Fälle bleiben bis zum nächsten selben Gesamtlauf offen.
+vorher unausgeführten Fälle waren vor dem vierten Gesamtlauf noch offen.
+
+Der [vierte gemeinsame Remote-Lauf](https://github.com/b1ue-man/smart-explorer/actions/runs/37261440798)
+prüft `7b3cda8a92a957f85e4c65dfe092c8deeb0f1335`. Am 2026-10-05 ist er
+vollständig als fehlgeschlagen ausgewertet. Sein kombinierter Report ist
+gegen SHA-256 `d72c1025a69f59af914a3ac78fbf4efbd84a24aff102df74e0d25ea2160069de`
+verifiziert; die Linux-/Windows-/Gerätereports wurden ebenfalls vor der
+gezielten Diagnose gegen ihre API-Digests geprüft. Kein Privatprofil oder
+Altworker-Arbeitsverzeichnis liegt in den nativen Reportarchiven.
+
+Linux und Windows bestätigen C01/C03/C05/C06/C07, einschließlich Notebook,
+Altbindung, Nested-Mirror, Retry, Schutz und der betroffenen Exec-Rechte- und
+Cancellationgrenzen. Beide Hosts führen alle ausgewählten Namen exakt einmal
+mit konsistenter terminaler Summary aus. Der Windows-Stackoverflow tritt
+nicht mehr auf; die vorher fehlenden Drive-/Jobfälle sind jetzt ausgeführt.
+Die separate tatsächliche veröffentlichte Desktop-Workerübernahme erfüllt
+auf beiden OS ihren Byte-/Job-/Baseline-/Konflikt-/Retry-/No-op-Vertrag sowie
+Prozessende, Autostart-Restaurierung und Entfernung des Privatroots.
+
+C02 nennt auf beiden OS im erweiterten Drive-Roundtrip nur eine geschützte
+Auslassung. Ohne konkreten Pfad oder Phase wird daraus kein Produktgrund
+behauptet; derselbe Ablauf muss diese Diagnose präzisieren. C04 unter Linux
+erreicht den normalen SFTP-Ablauf und meldet dort eine unklare
+Replacementdestination für `.obsidian/preferences.json`. Der SFTP-Altjob in
+C08 schließt dagegen Seed, Änderung, Reload beider Endpunkte, erhaltenen
+StateKey/Baseline und No-op erfolgreich ab. C04 auf Windows scheitert im
+normalen gespeicherten UNC-Resolver an der generischen Portprüfung. Der
+bestehende `Protocol::Share`-Portwert `0` gehört zum Credentialaccount, wird
+aber von WNet nicht als TCP-Port benutzt. Der Connector erhält diesen
+Vertrag; andere TCP-Provider behalten die positive Portprüfung.
+
+Die SFTP-Anschlusslesung belegt einen nicht abgeschlossenen Intent nach
+verifizierter erfolgreicher Veröffentlichung. Der nächste tatsächliche
+Providerlauf enthält bereits eine neue legitime Gegenänderung; Recovery
+vergleicht diese gegen den zurückgelassenen alten Intent. Diese Sourcekette
+erklärt den Befund, ohne einen SFTP-ID- oder Digestvertrag zu lockern. Der
+Fix schließt ausschließlich bestätigten eigenen Publish mit exaktem Cleanup
+ab; alle Lost-ACK-/Fremdbyte-/Backup-/Baselineschutz-Orakel bleiben bestehen.
+
+C08 erreicht auf Windows beide normalen Direct-Opens und scheitert danach
+beim tatsächlichen `open_write`-/Flush-Abschluss vor dem Jobstart. Die
+Anschlusslesung belegt einen fehlenden Creator-Ticket-Purpose für den
+exklusiven `*.se-daemon-<16lowerhex>`-Stage in derselben vorhandenen
+Peerbackend-Ownershipkette; keine verlorene Backendinstanz ist bewiesen.
+Der eigene isolierte reversible-Fallback-Fall verwendet zudem einen
+ungültigen Recovery-Sibling. Seine Fixture muss den tatsächlichen generierten
+Siblingvertrag benutzen, ohne die produktive Validierung zu lockern.
+
+C09 erzeugt unter der unveränderten veröffentlichten APK den echten Job,
+Baseline und Altversionsbytes erfolgreich. Die erste aktuelle `sync.jobs`-
+Abfrage führt die dokumentierte RV1-Konfigurationsmigration aus; deshalb
+scheitert die bisher pauschale Bytehashprüfung dieser einen Jobdatei.
+Die korrigierte Abnahme erfasst alle echten historischen Konfigurationskeys,
+einschließlich mehrfacher Ignorewerte und nicht per API exponierter Settings,
+und erlaubt ausschließlich die belegten RV1-Zusatzkeys und Deleteguard-Deltas.
+Alle anderen alten Persistenzhashes und Backupbytes bleiben strikt. Der
+normale erste No-op muss die tatsächliche Job-/Replica-Ownerbaseline mit
+denselben bestätigten Records erzeugen; Config-/Ownerbaseline-/Journalhashes
+bleiben beim folgenden Force-stop erhalten. Die restlichen Gerätephasen sind
+für diesen Kandidaten nicht ausgeführt und nicht als Pass bestätigt.
+
+Der exakt gebundene Remote-Formatpatch
+`a63b727bd56856d0912087f510d55203bbb7abb73762cea602c7d5dfeb20cf98`
+ist statisch übernommen; sein Report enthält keine Größenverletzung. Die
+konkreten Folgekorrekturen werden gemeinsam committed/gepusht und ausschließlich
+durch denselben vollständigen Suite-Einstieg bestätigt. C10 nennt weiterhin
+fehlende `SE_DRIVE_TEST_CLIENT_ID` und `SE_DRIVE_TEST_REFRESH_TOKEN`; tatsächliche
+Google-Abnahme und terminaler Release bleiben offen.
 
 Das Linux-Logartefakt enthielt außerdem das private Arbeitsverzeichnis der
 Altworker-Fixture; das Windows-Archiv hatte dieselbe Grenze. Der Upload schließt

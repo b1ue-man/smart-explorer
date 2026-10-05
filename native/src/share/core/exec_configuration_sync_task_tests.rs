@@ -184,5 +184,7 @@ fn sync_reliability_task_provider_rejected_refresh_preserves_epoch_and_launch() 
     // Epoch 0 remains current; the failed restrictive candidate was never
     // published, and a legitimate retry may still finish its original launch.
     apply_configuration_transition(&current, &current, 0, &registry).unwrap();
-    registry.commit_start(&reservation.lease, || Ok(())).unwrap();
+    registry
+        .commit_start(&reservation.lease, || Ok(()))
+        .unwrap();
 }
