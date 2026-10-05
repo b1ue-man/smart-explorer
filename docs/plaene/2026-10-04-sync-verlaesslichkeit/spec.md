@@ -1,6 +1,6 @@
 # Sync-Verlässlichkeit – verbindliche Spec
 
-Stand: 2026-10-04. Status: Definition und Planung abgeschlossen; Remote-Abnahme ausstehend.
+Stand: 2026-10-05. Status: Umsetzung und Remote-C01–C09 bestätigt; vollständiger Release angefordert, ohne weiteren Testlauf.
 
 ## Vollständiger Auftrag und Preflight
 
@@ -14,7 +14,10 @@ nicht angefordert.
 
 Einordnung: zusammenhängender Umbau des Drive-/Sync-Vertrags, volle Kette.
 Ziel: verlässlich abgeschlossene Synchronisation, erhaltene Daten und ein
-einziger vollständiger Release nach erfolgreicher Remote-Abnahme. Die bestehende
+einziger vollständiger Release. Nach ausdrücklicher Nutzerkorrektur vom
+2026-10-05 ist kein Echtwelttest eine Releasevoraussetzung; der Release erfolgt
+ohne weiteren Testlauf. Der offene Google-Livefall bleibt unbestätigt und ist
+keine Veröffentlichungssperre. Die bestehende
 Windows-Startkorrektur aus 0.5.171 bleibt Teil der Kompatibilitätsabnahme.
 
 ## A Definition
