@@ -779,3 +779,103 @@ Der vollständige Release 0.5.172 verwendet unmittelbar den bestehenden
 stabilen Remote-Wrapper. Kein neuer Suite-/Funktionslauf, keine zusätzliche
 Review oder Abnahmesperre. Versions-, Hash-, Signatur-, Artefakt- und
 Publikationsprüfung gehören weiterhin zur vollständigen Lieferung.
+
+Der vollständige Remote-Release wurde einmal gestartet:
+[Workflow 37317892808](https://github.com/b1ue-man/smart-explorer/actions/runs/37317892808),
+exakter Main-Sourcekandidat `0805113644f5a55f9b44b9c86b81c9804e5723de`.
+Der Dispatch ist mit HTTP 204 bestätigt; um 13:35:27 UTC war genau dieser
+Initiator `in_progress`. Vor dem Start sind keine anderen aktiven
+Remote-Workflows vorhanden; die letzte veröffentlichte Version war 0.5.171.
+Der Wrapper plante den einen nachfolgenden vollständigen Release 0.5.172.
+Es wurde kein weiterer Suite-/Funktionslauf angefordert. Während der
+Transaktion blieb der gebundene Main-Sourcekandidat unverändert; diese
+Statusnotiz wird erst nach ihrem Abschluss committed und gepusht.
+
+Die erste planmäßige Beobachtung um 14:05:27 UTC bestätigt denselben
+laufenden Initiator. `android-release-apk` ist erfolgreich abgeschlossen;
+der Log belegt den einmaligen Bump auf 0.5.172 und die verifizierte signierte
+APK mit `versionCode 5172`, SHA-256
+`d0cecd6cf4accee41e8f7012e438add126df448e52f7af1bf3bb9c13950beae8`.
+`complete-release` führt den stabilen Windows-/Linux-Wrapper aus.
+Zusätzliche native/E2E-Testjobs sind übersprungen, kein weiterer
+Sync-Suite-Lauf gestartet. Dies ist ein Build-/Lieferbeleg, kein neuer
+Funktions- oder Google-Livenachweis.
+
+## Abgeschlossene Lieferung 0.5.172 am 2026-10-05
+
+Der [einzige vollständige Release-Lauf](https://github.com/b1ue-man/smart-explorer/actions/runs/37317892808)
+ist bei der planmäßigen Statusabfrage um 15:39:20 UTC als erfolgreich
+abgeschlossen bestätigt. Sein stabiler Wrapper hat
+Versionierung, vollständige Artefakterzeugung, Staging, Commit, Main-Push, Tag
+und genau einen [Publikationsconsumer](https://github.com/b1ue-man/smart-explorer/actions/runs/37333336254)
+koordiniert. Dieser Consumer ist ebenfalls erfolgreich und verwendet den
+Release-Commit `254a65c5e2b2b506f9bd3ca7e8b7da376053cae9`, dessen direkter
+Parent der gebundene Sourcekandidat `0805113644f5a55f9b44b9c86b81c9804e5723de` ist.
+
+[GitHub Release v0.5.172](https://github.com/b1ue-man/smart-explorer/releases/tag/v0.5.172)
+ist seit 15:35:23 UTC veröffentlicht, weder Draft noch Prerelease.
+`native/Cargo.toml`, `release-native/update-feed/version.txt`, der passende
+Installer und der unveränderte Tag `v0.5.172` stimmen überein. Die signierte
+Android-APK ist die vorbereitete Version 0.5.172 mit `versionCode 5172` und
+dem bereits belegten SHA-256 `d0cecd6cf4accee41e8f7012e438add126df448e52f7af1bf3bb9c13950beae8`.
+
+Der statische Lieferabgleich vergleicht jedes veröffentlichte Asset über Größe
+und GitHub-Asset-SHA-256 mit den tatsächlichen Dateien des Release-Commits.
+Die sieben Payload-Sidecars stimmen mit ihren Payloads und Namen überein;
+das Windows-Buildmanifest bindet Version, Source und Windows-Payloadhashes.
+Die zusätzlichen Windows-Kopien neben dem Feed haben dieselben Hashes.
+
+| Veröffentlichtes Asset | Geprüfter SHA-256 |
+|---|---|
+| `install-linux.sh` | `a5ac7fb143968a55988979dee5abd1882b61e198f3264e578a8fd10d9c0293c4` |
+| `Smart.Explorer.Setup.0.5.172.exe` | `42b8bca25539b0753df1d9f5b143929f89dfdd5eadc5b241dcb52e3bc2ab8205` |
+| `smart_explorer_command.dll` | `b0172fe81157b93d6659c64c1a0d3c8a431cffada4d08bc2e56be70269622b98` |
+| `se-share-server-linux` | `a008d0d25955e5453e02cc67326eeb673d46e654afc224a04e0b5afd404f3a81` |
+| `se-share-server.exe` | `254f848be9a871c62b74e4ae2d1e95299fd1347bc2a4cbef74f7f7b2a5408526` |
+| `smart_explorer.exe` | `cd71e3b29871fb835f0bedb000c55d3cb52331f08e68a79354f591f7a24d70c8` |
+| `smart_explorer.exe.sha256` | `606846a737bc4450920eb3bf65a2a3dbdf8f1fdaa1e501757fbac4a542603291` |
+| `smart_explorer_updater.exe` | `ffcb8c6c6e83486ebfdbbb11ca8b0cd3fcfc669c21afcee72069fc7c2e1d5f2d` |
+| `smart_explorer_updater.exe.sha256` | `508afa1891dd7023a558cb660f4617e8e07bb38673f2f4f0a317ef5d25593dc9` |
+| `se.exe` | `ccd417ac4df39d51a9c1331b156e701c6aec9241c5704f8d4bf463f1607556f4` |
+| `se.exe.sha256` | `4d593c9fbf07c09f0579352df3902047a4235379ab7e0cc94a48bf9a3198a1ee` |
+| `smart_explorer` | `5fbef7b95f77abee5beed8ded0dc22342d683921076f644e3f7ea4824018082d` |
+| `smart_explorer.sha256` | `1765f8dd206c91ed28f0dfb985c6aa4276a39db447f6dd03ea28fc66ccb48b31` |
+| `smart_explorer_updater` | `235d994b1532f2f57f49cfede6856f171e376a58e534e71d2eec2cc45d44bc61` |
+| `smart_explorer_updater.sha256` | `4deac8ca9516c4e00c2bb9b8e83423c70a7247c7a122f3e4c485215429a9b214` |
+| `se` | `8c88c33a4d37b23801226e1c022fd4cac3e8af5134a4295964b205484e498325` |
+| `se.sha256` | `5545e77094f7ddeb44c559f687cecd7210e4653c2b0ebf28e8caa1e62ebda3bb` |
+| `smart-explorer-android.apk` | `d0cecd6cf4accee41e8f7012e438add126df448e52f7af1bf3bb9c13950beae8` |
+| `smart-explorer-android.apk.sha256` | `67e1bc916d87e726fa3edd0c295b85eaf2f2b95afb7612b53fdf40604c5256a6` |
+| `version.txt` | `0f168e17cbbe233a31215846cfbb4da115f62f11c610cebd0c0050ea0cb71720` |
+
+### Autorisierte lokale Installation
+
+Die bestehende CLI-only-Installation wurde mit dem normalen `install-linux.sh`
+auf `v0.5.172` aktualisiert. `SMART_EXPLORER_REQUIRE_RELEASE_ASSETS=1` bindet
+diesen Lauf an veröffentlichte Payloads. Die bestehende Update-Quelle bleibt
+erhalten; die Versionsausgabe lautet `se 0.5.172`. Die unmittelbar vor dem
+normalen `se update --complete-install 0.5.172` geprüfte CLI-Datei stimmt
+mit dem veröffentlichten `se`-Hash überein. Die Completion bestätigt
+`{"version":"0.5.172","worker":"replaced","worker_error":null}`.
+Der laufende Daemon und sein Kindprozess verwenden beide diese tatsächlichen Bytes.
+
+Der eigenständige Share-server wurde nach verifiziertem Backup atomar durch
+das veröffentlichte Linux-Payload ersetzt. `se-share-server.service` läuft
+`active/running`; der Hash seiner tatsächlich laufenden Prozessdatei stimmt
+mit `se-share-server-linux` überein. Die Hashes der Service-Unit und ihrer
+Environmentdatei stimmen mit dem Ausgangsstand überein.
+
+Der erste sofortige Prozessabgleich nach dem Serverneustart war verfrüht und
+führte zur Wiederherstellung der verifizierten vorherigen Serverdatei. Der
+korrigierte Abgleich wartet auf das tatsächliche Serverprogramm. Die erneute
+Startbeobachtung erfasst zunächst `systemd-executor` und dann die passende
+Serverdatei. Das entspricht der [systemd-255-Dokumentation zu Type=simple](https://github.com/systemd/systemd/blob/v255/man/systemd.service.xml):
+Der Startauftrag kann vor `execve` erfolgreich enden. Der abgeschlossene
+Prozesswechsel und der richtige Payloadhash sind anschließend bestätigt.
+
+Diese Lieferung enthält keinen zusätzlichen Sync-Suite- oder Google-Livelauf.
+Die zuvor ausgewertete C01–C09-Evidenz bleibt erhalten; C10 ist unbestätigt
+und ausdrücklich keine Releasevoraussetzung. Die früher gestellten
+C10-Autorisierungsfragen werden für diesen Batch nicht weiterverfolgt.
+Der Abschluss dokumentiert
+Veröffentlichung und Installation, keinen behaupteten Live-Test-Pass.
