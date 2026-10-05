@@ -79,3 +79,30 @@ unterscheidet diese Vertrauensinjektion vom regulären OAuth-/Drive-Aufruf C10.
 CA-/Ports-/Authwerte werden von der Suite erzeugt oder durch Readiness-
 Kommandos entdeckt. Sämtliche Server/PIDs gehören genau diesem Remote-Lauf
 und werden auch beim Fehler geschlossen.
+
+## Sync-Literale und IPC-Identitätsfallback
+
+Quellabgleich am 2026-10-05: `bisync/core/sync_relative_path.rs` akzeptiert
+unveränderte Providerkomponenten einschließlich `:`, Backslash und `%`.
+Slash bleibt Trenner; leere Komponenten, `.`/`..` und NUL bleiben verboten.
+Das bestehende 32-KiB-Bytebudget des vorher benutzten Agent-Parsers bleibt
+erhalten, eine zusätzliche pauschale Tiefenbegrenzung wird nicht eingeführt.
+Bestehende konkrete SQL-/Incremental-/Scanbudgets bleiben an ihren Grenzen.
+Apply und Persistenz verwenden denselben Literalvertrag; tatsächliche
+native Namen werden zusätzlich vor nativen Zugriffen geprüft. Alte physische
+Archive benutzen `legacy_backup_path.rs`; moderne Versionsmanifeste speichern
+Providerliterale getrennt von opaken privaten Datenpfaden. Die Agent-Wire-
+Grammatik in `agent_proto/core/relative_path.rs` bleibt unverändert.
+
+`AgentBackend` delegiert drei reine Fallbackgrenzen an seinen inneren
+Share-Identitätsstub. `UnavailableBackend` darf dafür keinen weiteren
+identischen Agent öffnen: Die vorigen Overrides erzeugten einen unbedingten
+Zyklus. Die vorhandenen VFS-Defaults liefern Literalchild, keine unbewiesenen
+vorherigen IDs und `Ok(false)` ohne Mutation für den reversiblen Fallback.
+Bisync prüft vorher seine Sicherung und nutzt danach die sichere Backend-
+Promotion ohne Remove-Fallback; Recovery-Intent und Ownerbindung bleiben
+erhalten. Alle echten IPC-RPC-Methoden und Autorisierungsprüfungen bleiben
+unverändert. Die Remote-Fixture verwendet dafür die vorhandenen `Frame`,
+`read_frame`/`write_frame` und `PROTO_VERSION` aus `agent_proto/mod.rs`; der
+Hello-Versionstoken ohne Build-/Featurelabels aktiviert laut
+`ServerFeatures::parse` keine Credit-/Service-/Extensionfeatures.
