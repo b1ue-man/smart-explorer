@@ -19,7 +19,7 @@ nach Korrekturen wiederholt. S9 ist kein Suitefall, sondern der terminale Releas
 | **C07 Geschützte Grenzen und Owner** | Ausgewählte `sync_links_task_*`, snapshot-walk, engine-identity/account/lock, backup-failure und stat/recycle-failure Abläufe; echte lokale Symlink-/Windows-Junction- und Agent/Peer-Fixtures. | Unabhängige Dateien fertig, geschützte Subtree-Gegenstücke und Baseline erhalten, keine unbestätigte komplette Indexgeneration. Neue Fremdinhalte und fremde Accounts unberührt; Lösch-/Backupzulassung unverändert. |
 | **C08 Echter Desktop-Altjob und Update** | Der Suite-Einstieg extrahiert veröffentlichte v0.5.169-`se`-Bytes und Sidecar aus dem Tag, isoliert APPDATA/XDG, erstellt normale historische Jobdatei und startet mit `se share status --json` den damaligen Worker. Ein zulässiger OnStartup/Intervall-Trigger führt den Job aus. Script entdeckt Jobstate/Baseline unter dem Profile und wartet auf tatsächlich bestätigten Lauf. Danach `se update --complete-install <aktuelle Runtimeversion>` mit Kandidaten-CLI, Änderung und erneutem Trigger. Zusätzliche cfg(test)-`sync_reliability_task_old_jobs_*` führt tatsächliches `daemon::job::run_one` mit alten Drive-/Crossremote-Locators aus; Provider-Injektion nur cfg(test). | Alter Worker hat real Dateien und Zustand erzeugt. Neue Generation übernimmt exakt dieselben Jobdateien/Endpunkte/Options/StateKey und schließt Änderung/Konflikt/Wiederanlauf ab. Kein Neuanlegen und No-op-Folgelauf. Windows DACL-/OAuth-Konfigkorrektur und alte TSV-/Baselineimporte bleiben wirksam. |
 | **C09 Echter Android-Altzustand und Neustart** | Vorhandener Emulator-/JNI-/Instrumentation-Vertrag; neue kohärente Klasse `SyncReliabilityTaskTest`. Alte gehashte veröffentlichte APK v0.5.169 führt Job durch unveränderte API aus. Gleich signierte inkrementelle **Development**-APK übernimmt das bestehende Paket/Appdata. Release-Signing-Secrets sind bereits vorhanden; Debug/Testsignierung wird nur für diese Remote-Abnahme ausgewählt. Native Build nur betroffene Bridge für Emulator-ABI aus Cache, kein vollständiger Releasebuild. | Aus derselben Appdata werden alter Job, Baseline, Optionen und Providerbindung erhalten. `force-stop`/Neustart zwischen Prepare und Retry; neue JNI-/Worker-Läufe konvergieren und behalten private Daten/Versionsorte. Quelle-/Zielbytes werden vom Gerät gelesen. |
-| **C10 Echter Google Drive** | `sync_reliability_task_live_drive_*`, nur auf Remote-Runner; reguläre Cloudconfig und Credentialstore mit `SE_DRIVE_TEST_CLIENT_ID`, `SE_DRIVE_TEST_CLIENT_SECRET`, `SE_DRIVE_TEST_REFRESH_TOKEN`. Eigener eindeutig erzeugter Testroot, erzeugte IDs aus API-Antworten; exklusive Mutationen innerhalb dieses Roots. API-Basis und OAuth bleiben unveränderte Produktionsendpunkte. | Realer Google-Notebook-Lauf mit zusätzlicher Schreibweise und echten Datei-/Folderduplikaten; Inhalt/Backup/ID-Wahl, Restart derselben Bindung, Änderungs- und No-op-Lauf. Cleanup ausschließlich eigener erfasster IDs. Fehlt die Autorisierung, wird C10 als Abnahmeblocker ausgegeben; niemals Skip=Pass. |
+| **C10 Echter Google Drive** | `sync_reliability_task_live_drive_*`, nur auf Remote-Runner; reguläre Cloudconfig und Credentialstore mit erforderlichen `SE_DRIVE_TEST_CLIENT_ID`/`SE_DRIVE_TEST_REFRESH_TOKEN` und optionalem `SE_DRIVE_TEST_CLIENT_SECRET` gemäß OAuth-Client. Eigener eindeutig erzeugter Testroot, erzeugte IDs aus API-Antworten; exklusive Mutationen innerhalb dieses Roots. API-Basis und OAuth bleiben unveränderte Produktionsendpunkte. | Realer Google-Notebook-Lauf mit zusätzlicher Schreibweise und echten Datei-/Folderduplikaten; Inhalt/Backup/ID-Wahl, Restart derselben Bindung, Änderungs- und No-op-Lauf. Cleanup ausschließlich eigener erfasster IDs. Fehlt die Autorisierung, wird C10 als Abnahmeblocker ausgegeben; niemals Skip=Pass. |
 
 C03 schließt ausdrücklich die erste Migration mit noch vorhandener globaler
 Hintdatei und inzwischen geschriebenem Accountcache ein. Der gemeinsame echte
@@ -488,3 +488,38 @@ ist nach vollständigem Laufende und exaktem Source-/Pfadabgleich statisch
 übernommen (`1c0c5e87`). Der Remote-Formatreport nennt keinen Größenverstoß.
 Alle Korrekturen werden vor dem nächsten Aufruf gesammelt umgesetzt, committed
 und gepusht; bestätigt wird ausschließlich derselbe vollständige Suite-Einstieg.
+
+
+Die Folgekorrekturen des sechsten Laufs sind quellenfertig und jeweils vom
+Umsetzer selbst geprüft: `59d1d380` erhält authentifiziertes PROPFIND bei der
+zulässigen Collectioncanonicalisierung und korrigiert nur den kontrollierten
+Windows-FTP-Fixturestream; `082e5fab` rekonstruiert die tatsächliche historische
+Viermap-/Baseline-/gefaltete Dirbasis. `19134797` erhält den privaten
+Sharearchivvertrag typisiert über Peer, IPC, Agent und Cache, mit frischer
+Rootprüfung; `4d443a2c` erhält die bewiesene alte Ordnerhistory in Full,
+Preview, Incremental und bestätigten Completedereignissen. Fehlgeschlagener
+Remove behält seine Basis; erfolgreicher Retry und Neuerstellung ohne alten
+Alias bleiben im unveränderten C05-Gesamtablauf verpflichtend.
+
+Die eine Suite ist erst nach Abschluss aller Implementierungen ergänzt:
+C04 nimmt die vorhandenen exakten DAV-Mutation-/PUT-No-follow-FQNs auf.
+Die neuen metadata-/Private-Policy-/normalen Direct-/Room-Versionen-/IPC-Fälle
+werden über dieselben vorhandenen C04-/C05-/C08-Prefixe entdeckt. Der echte
+Direct-/Room-Versionsablauf fordert Jobowner, restaurierbare Byte-Sicherung,
+abgewiesenen fremden Owner, unveränderte Restorebaseline, Wiederöffnung,
+Konvergenz und No-op; bestehende Provider- und Altjoborakel sind unverändert.
+Die am 2026-10-05 um 09:09 UTC erneut allein anhand von Namen geprüften
+GitHub-Secrets enthalten weiterhin weder Client-ID noch Refresh-Token für
+C10. Die Quellenfertigkeit ist kein Laufpass und noch keine Releasefreigabe.
+
+Die statische Rust-AST-Prüfung des gesamten Folgefixkandidaten findet keine
+Syntaxfehler; alle betroffenen Quellen liegen roh unter 500 Zeilen/50 KiB.
+Der Suite-Einstieg lässt sich als Python-AST vollständig parsen. Diese Checks
+rufen weder Compiler noch Tests auf; formatierte Größen, Kompilation und
+Verhalten werden ausschließlich im selben Remote-Workflow bestätigt.
+
+Der Rootgraph ist nach Abschluss aller nativen Änderungen vollständig neu
+extrahiert und geclustert. Sein Manifest entspricht exakt dem aktuellen
+`native/src`-Korpus; es gibt keinen separaten oder partiellen nativen Graph.
+Die Änderungen werden als ein Kandidat gepusht und ausschließlich durch den
+bestehenden vollständigen Remote-Suite-Einstieg bestätigt.
