@@ -33,6 +33,8 @@ pub fn resolve(
     keep_a: bool,
     pair: &str,
 ) -> io::Result<(Option<Sig>, Option<Sig>)> {
+    super::apply_boundary::target(a, root_a, rel, None)?;
+    super::apply_boundary::target(b, root_b, rel, None)?;
     let versions = versions_dir(pair);
     let path_a = vfs::sync_path(a, root_a, rel)?;
     let path_b = vfs::sync_path(b, root_b, rel)?;
@@ -169,7 +171,14 @@ fn resolve_single_recorded(
     let names = super::state_spellings::load(state, keys)?;
     let mut spellings = super::Spellings::default();
     for side in [PairSide::A, PairSide::B] {
-        spellings.insert(&conflict.rel, side, &names.rel(&conflict.rel, side, keys));
+        let rel = names.rel(&conflict.rel, side, keys);
+        let (backend, root) = if side == PairSide::A {
+            (endpoints.a, endpoints.root_a)
+        } else {
+            (endpoints.b, endpoints.root_b)
+        };
+        super::apply_boundary::target(backend, root, &rel, None)?;
+        spellings.insert(&conflict.rel, side, &rel);
     }
     let action = match (keep_a, conflict.a, conflict.b) {
         (true, Some(_), _) => Action::CopyAtoB(conflict.rel.clone()),
@@ -254,6 +263,9 @@ pub fn resolve_variant_checked(
         return Err(interrupted());
     }
     progress(ResolvePhase::Preparing);
+
+    super::apply_boundary::target(a, root_a, &conflict.rel, None)?;
+    super::apply_boundary::target(b, root_b, &conflict.rel, None)?;
 
     if conflict.duplicates.is_some() {
         return super::duplicate_apply::resolve(

@@ -112,7 +112,7 @@ impl<'a> FeedIndex<'a> {
         }
         let rel = if let Some(rel) = &raw.rel {
             // Root-relative feeds retain their existing explicit contract.
-            crate::agent_proto::ValidatedRelativePath::parse(rel)?;
+            super::sync_relative_path::SyncRelativePath::parse(rel)?;
             rel.clone()
         } else {
             let id = raw
@@ -173,15 +173,13 @@ impl<'a> FeedIndex<'a> {
 }
 
 fn child(parent: &str, name: &str) -> io::Result<String> {
-    if name.is_empty() || matches!(name, "." | "..") || name.contains('/') || name.contains('\0') {
-        return Err(rebuild());
-    }
+    super::sync_relative_path::validate_component(name)?;
     let rel = if parent.is_empty() {
         name.to_string()
     } else {
         format!("{parent}/{name}")
     };
-    crate::agent_proto::ValidatedRelativePath::parse(&rel)?;
+    super::sync_relative_path::SyncRelativePath::parse(&rel)?;
     Ok(rel)
 }
 

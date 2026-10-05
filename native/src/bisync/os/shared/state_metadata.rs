@@ -59,7 +59,7 @@ pub(super) fn load_dirs(key: &StateKey) -> io::Result<Option<DirSet>> {
             ));
         }
         for dir in dirs {
-            crate::agent_proto::ValidatedRelativePath::parse(dir)?;
+            super::sync_relative_path::SyncRelativePath::parse(dir)?;
         }
     }
     Ok(dirs)

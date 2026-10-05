@@ -286,7 +286,7 @@ pub(super) fn back_up_captured(
     expected: ExpectedFile,
     cancel: Option<&AtomicBool>,
 ) -> io::Result<()> {
-    crate::agent_proto::ValidatedRelativePath::parse(rel)?;
+    super::sync_relative_path::SyncRelativePath::parse(rel)?;
     let metadata = captured.regular("backup source")?;
     let not_canceled = AtomicBool::new(false);
     let cancel = cancel.unwrap_or(&not_canceled);
@@ -296,9 +296,11 @@ pub(super) fn back_up_captured(
         .unwrap_or(0);
     for offset in 0..UNIQUE_ATTEMPTS {
         check(cancel)?;
-        let destination = versions_dir
-            .join(timestamp.saturating_add(offset).to_string())
-            .join(rel);
+        let destination = super::legacy_backup_path::destination(
+            versions_dir,
+            timestamp.saturating_add(offset),
+            rel,
+        )?;
         if let Some(parent) = destination.parent() {
             crate::support_dirs::ensure_private_dir(parent)?;
         }

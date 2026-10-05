@@ -8,11 +8,27 @@ use std::collections::HashSet;
 use std::sync::atomic::AtomicBool;
 
 fn remote_run(left: &DriveFixture, right: &DriveFixture, direction: Direction) -> bisync::Outcome {
-    bisync::run(
+    run_backends(
         &left.backend,
         &left.root,
         &right.backend,
         &right.root,
+        direction,
+    )
+}
+
+fn run_backends(
+    left: &dyn Backend,
+    left_root: &str,
+    right: &dyn Backend,
+    right_root: &str,
+    direction: Direction,
+) -> bisync::Outcome {
+    bisync::run(
+        left,
+        left_root,
+        right,
+        right_root,
         options(direction),
         &AtomicBool::new(false),
         &filter(&bisync::empty_globset()),
@@ -177,4 +193,177 @@ fn sync_reliability_task_names_drive_roundtrip_keeps_trees_literals_and_marker_o
         (left_posts, right_posts)
     );
     super::sync_reliability_task_fixture::assert_persisted(&noop);
+    literal_overwrite_restore(&left, &right);
+}
+
+fn literal_overwrite_restore(left: &DriveFixture, right: &DriveFixture) {
+    use super::sync_reliability_task_fixture::{assert_persisted, read};
+    use crate::bisync::versions::{
+        list_versions, restore_version, VersionReason, VersionSide, VersionStore,
+    };
+    use crate::bisync::{PairLock, PairSide};
+
+    let cases = [
+        ("%3A", b"literal percent replacement".as_slice()),
+        ("colon:name", b"literal colon replacement".as_slice()),
+        ("back\\slash", b"literal slash replacement".as_slice()),
+        (
+            "literal [drive-id samepref]",
+            b"literal marker replacement".as_slice(),
+        ),
+    ];
+    let aliases = (left.aliases(&left.root), right.aliases(&right.root));
+    let posts = (left.folder_posts(), right.folder_posts());
+    for (rel, bytes) in cases {
+        left.write_file(rel, bytes);
+    }
+    let overwritten = remote_run(left, right, Direction::AtoB);
+    assert_complete(&overwritten);
+    assert_eq!(overwritten.stats.a_to_b, cases.len() as u64);
+    assert_eq!(overwritten.stats.b_to_a + overwritten.stats.deleted, 0);
+    assert_eq!(
+        overwritten.stats.bytes,
+        cases
+            .iter()
+            .map(|(_, bytes)| bytes.len() as u64)
+            .sum::<u64>()
+    );
+    assert_persisted(&overwritten);
+
+    // Open new endpoint handles before loading manifests and the checkpoint.
+    let a = left.restart();
+    let b = right.restart();
+    let cancel = AtomicBool::new(false);
+    let sides = [
+        VersionSide {
+            side: PairSide::A,
+            backend: a.as_ref(),
+            root: &left.root,
+        },
+        VersionSide {
+            side: PairSide::B,
+            backend: b.as_ref(),
+            root: &right.root,
+        },
+    ];
+    let state = overwritten.state.as_ref().unwrap();
+    let versions = list_versions(&state.pair_id, &sides, &cancel).unwrap();
+    let originals: Vec<_> = cases
+        .iter()
+        .map(|(rel, bytes)| {
+            for (backend, root) in [(a.as_ref(), &left.root), (b.as_ref(), &right.root)] {
+                let path = vfs::sync_path(backend, root, rel).unwrap();
+                assert_eq!(vfs::sync_stat(backend, &path).unwrap().name, *rel);
+                assert_eq!(read(backend, &path), *bytes);
+            }
+            let exact = right.drive.named(&right.root_object_id(), rel);
+            assert_eq!(exact.len(), 1, "overwrite keeps one literal destination");
+            assert_eq!(exact[0]["name"].as_str(), Some(*rel));
+            assert!(overwritten.baseline.contains_key(*rel));
+            let recorded = bisync::recorded_original_paths_for_key(
+                a.as_ref(),
+                &left.root,
+                b.as_ref(),
+                &right.root,
+                state,
+                rel,
+            )
+            .unwrap();
+            assert_eq!(recorded.rel_a, *rel);
+            assert_eq!(recorded.rel_b, *rel);
+            assert_eq!(read(a.as_ref(), &recorded.path_a), *bytes);
+            assert_eq!(read(b.as_ref(), &recorded.path_b), *bytes);
+            let matches: Vec<_> = versions
+                .iter()
+                .filter(|entry| {
+                    entry.rel == *rel
+                        && entry.side == Some(PairSide::B)
+                        && entry.reason == Some(VersionReason::Replaced)
+                })
+                .collect();
+            assert_eq!(matches.len(), 1, "one exact backup for {rel}");
+            let entry = matches[0];
+            assert_eq!(entry.store, VersionStore::AppData);
+            assert_eq!(std::fs::read(&entry.stored_path).unwrap(), rel.as_bytes());
+            (*entry).clone()
+        })
+        .collect();
+    let mutations = left.mutations() + right.mutations();
+    let reopened = run_backends(
+        a.as_ref(),
+        &left.root,
+        b.as_ref(),
+        &right.root,
+        Direction::Both,
+    );
+    assert_complete(&reopened);
+    assert_eq!(reopened.state, overwritten.state);
+    assert_eq!(reopened.baseline, overwritten.baseline);
+    assert_eq!(reopened.stats.bytes, 0);
+    assert_eq!(
+        reopened.stats.a_to_b + reopened.stats.b_to_a + reopened.stats.deleted,
+        0
+    );
+    assert_eq!(left.mutations() + right.mutations(), mutations);
+    assert_persisted(&reopened);
+    {
+        let lock = PairLock::acquire(&state.lock_id).unwrap();
+        for entry in &originals {
+            restore_version(&lock, &state.pair_id, entry, &sides[1], &cancel).unwrap();
+            let path = vfs::sync_path(b.as_ref(), &right.root, &entry.rel).unwrap();
+            assert_eq!(read(b.as_ref(), &path), entry.rel.as_bytes());
+        }
+    }
+    assert_persisted(&overwritten);
+    let restored_versions = list_versions(&state.pair_id, &sides, &cancel).unwrap();
+    for (rel, bytes) in cases {
+        assert!(
+            restored_versions.iter().any(|entry| {
+                entry.rel == rel
+                    && entry.side == Some(PairSide::B)
+                    && entry.reason == Some(VersionReason::Restored)
+                    && std::fs::read(&entry.stored_path).unwrap() == bytes
+            }),
+            "restore preserves overwritten bytes of {rel}"
+        );
+    }
+    let restored = run_backends(
+        a.as_ref(),
+        &left.root,
+        b.as_ref(),
+        &right.root,
+        Direction::Both,
+    );
+    assert_complete(&restored);
+    assert_eq!(restored.stats.b_to_a, cases.len() as u64);
+    assert_eq!(restored.stats.a_to_b + restored.stats.deleted, 0);
+    assert_persisted(&restored);
+    for (rel, _) in cases {
+        assert_eq!(left.read_file(rel), rel.as_bytes());
+        assert_eq!(right.read_file(rel), rel.as_bytes());
+    }
+    let mutations = left.mutations() + right.mutations();
+    let a = left.restart();
+    let b = right.restart();
+    let noop = run_backends(
+        a.as_ref(),
+        &left.root,
+        b.as_ref(),
+        &right.root,
+        Direction::Both,
+    );
+    assert_complete(&noop);
+    assert_eq!(noop.baseline, restored.baseline);
+    assert_eq!(noop.stats.bytes, 0);
+    assert_eq!(
+        noop.stats.a_to_b + noop.stats.b_to_a + noop.stats.deleted,
+        0
+    );
+    assert_eq!(left.mutations() + right.mutations(), mutations);
+    assert_eq!(
+        (left.aliases(&left.root), right.aliases(&right.root)),
+        aliases
+    );
+    assert_eq!((left.folder_posts(), right.folder_posts()), posts);
+    assert_persisted(&noop);
 }

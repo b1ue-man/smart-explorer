@@ -56,7 +56,7 @@ pub(super) fn apply_one(
         return Err(interrupted());
     }
     let rel = super::core::action_rel(action);
-    crate::agent_proto::ValidatedRelativePath::parse(rel)?;
+    super::sync_relative_path::SyncRelativePath::parse(rel)?;
     let keys = super::orchestration_plan::keys(endpoints);
     let mut protected = super::SyncOmissions::new(keys.fold_case);
     for pending in super::orchestration_plan::pending_paths(lock, key, endpoints)? {
@@ -73,7 +73,7 @@ pub(super) fn apply_one(
         (PairSide::B, expected.1, &mut b),
     ] {
         let path = spellings.side_rel(rel, side);
-        crate::agent_proto::ValidatedRelativePath::parse(path)?;
+        super::sync_relative_path::SyncRelativePath::parse(path)?;
         if let Some(signature) = signature {
             tree.insert(path.to_string(), signature);
         }

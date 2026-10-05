@@ -327,7 +327,7 @@ fn take<'a>(input: &mut &'a [u8], count: usize) -> io::Result<&'a [u8]> {
 }
 
 fn validate_rel(rel: &str) -> io::Result<()> {
-    crate::agent_proto::ValidatedRelativePath::parse(rel).map(|_| ())
+    super::sync_relative_path::SyncRelativePath::parse(rel).map(|_| ())
 }
 
 pub use super::persistence_versions::prune_versions;

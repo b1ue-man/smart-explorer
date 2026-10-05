@@ -203,7 +203,7 @@ pub(super) fn validate_item(item: &ItemRecord) -> rusqlite::Result<()> {
 }
 
 pub(super) fn validate_relative_path(index: usize, rel: &str) -> rusqlite::Result<()> {
-    let path = crate::agent_proto::ValidatedRelativePath::parse(rel)
+    let path = super::sync_relative_path::SyncRelativePath::parse(rel)
         .map_err(|error| invalid(index, Type::Text, error.to_string()))?;
     if path.as_str() != rel || path.as_str().split('/').count() > MAX_STATE_DEPTH {
         return Err(invalid(

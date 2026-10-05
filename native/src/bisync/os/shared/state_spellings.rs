@@ -142,7 +142,7 @@ pub(super) fn load(key: &StateKey, keys: KeyPolicy) -> io::Result<StateSpellings
     let mut text = 0u64;
     for map in [&value.files_a, &value.files_b, &value.dirs_a, &value.dirs_b] {
         for (key, rel) in map {
-            crate::agent_proto::ValidatedRelativePath::parse(rel)?;
+            super::sync_relative_path::SyncRelativePath::parse(rel)?;
             if keys.key(rel).as_ref() != key {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,

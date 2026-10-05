@@ -27,7 +27,7 @@ pub(super) fn save(
     check(cancel)?;
     record::validate_pair(&versions.context().pair_id)?;
     super::apply_boundary::guard(side.backend, side.root, rel, true)?;
-    crate::agent_proto::ValidatedRelativePath::parse(rel)?;
+    super::sync_relative_path::SyncRelativePath::parse(rel)?;
     let meta = captured.regular("version source")?;
     let signature = Sig {
         size: meta.size,

@@ -28,7 +28,7 @@ pub(crate) fn guard(
     cross_mounts: bool,
 ) -> io::Result<()> {
     if !rel.is_empty() {
-        crate::agent_proto::ValidatedRelativePath::parse(rel)?;
+        super::sync_relative_path::SyncRelativePath::parse(rel)?;
     }
     let meta = crate::vfs::sync_stat(backend, root)?;
     if meta.is_symlink {
@@ -46,6 +46,9 @@ pub(crate) fn guard(
     if rel.is_empty() {
         return Ok(());
     }
+    // Provider literals must also be addressable by this actual backend.
+    // Native Windows drive/stream/separator names never reach native stat.
+    target(backend, root, rel, None)?;
     let mut path = root.to_string();
     let parts: Vec<_> = rel.split('/').collect();
     for (index, name) in parts.iter().enumerate() {
@@ -78,6 +81,7 @@ pub(crate) fn target(
     rel: &str,
     size: Option<u64>,
 ) -> io::Result<()> {
+    super::sync_relative_path::SyncRelativePath::parse(rel)?;
     let limits = crate::vfs::target_limits(backend, root);
     if rel.split('/').any(|name| limits.name_issue(name).is_some()) {
         return Err(protected(OmissionKind::NameImpossibleOnTarget));
@@ -102,8 +106,7 @@ pub(crate) fn normalized_missing(
     cross_mounts: bool,
     cancel: &std::sync::atomic::AtomicBool,
 ) -> io::Result<bool> {
-    guard(backend, root, "", cross_mounts)?;
-    crate::agent_proto::ValidatedRelativePath::parse(rel)?;
+    guard(backend, root, rel, cross_mounts)?;
     let mut path = root.to_string();
     let parts: Vec<_> = rel.split('/').collect();
     for (index, wanted) in parts.iter().enumerate() {
@@ -115,7 +118,8 @@ pub(crate) fn normalized_missing(
         let listing = crate::vfs::list_dir_tolerant(backend, &path)?;
         let key = keys.key(wanted);
         if listing.omitted.iter().any(|entry| {
-            crate::vfs::validate_child_name(&entry.rel).is_err() || keys.key(&entry.rel) == key
+            crate::vfs::sync_child_path(backend, &path, &entry.rel).is_err()
+                || keys.key(&entry.rel) == key
         }) {
             return Err(protected(OmissionKind::Unreadable));
         }

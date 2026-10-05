@@ -91,6 +91,8 @@ mod incremental_collect;
 mod keys;
 #[path = "core/limits.rs"]
 mod limits;
+#[path = "os/shared/legacy_backup_path.rs"]
+mod legacy_backup_path;
 #[path = "os/shared/merge_execution.rs"]
 mod merge_execution;
 #[path = "os/shared/merge_inputs.rs"]
@@ -194,6 +196,8 @@ mod state_validation;
 pub(crate) mod sync_flows;
 #[path = "os/shared/sync_observation.rs"]
 mod sync_observation;
+#[path = "core/sync_relative_path.rs"]
+mod sync_relative_path;
 #[path = "os/shared/sync_overload.rs"]
 pub(crate) mod sync_overload;
 #[path = "os/shared/transfer_stream.rs"]

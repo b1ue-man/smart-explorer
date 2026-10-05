@@ -244,7 +244,7 @@ impl Frame {
             .chain(&self.dirs_add)
             .chain(&self.dirs_remove)
         {
-            if crate::agent_proto::ValidatedRelativePath::parse(rel)?.as_str() != rel {
+            if super::sync_relative_path::SyncRelativePath::parse(rel)?.as_str() != rel {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     "checkpoint path is not canonical",
@@ -260,19 +260,19 @@ impl Frame {
             fold_case: self.fold_case,
         });
         for rel in &self.forget {
-            crate::agent_proto::ValidatedRelativePath::parse(rel)?;
+            super::sync_relative_path::SyncRelativePath::parse(rel)?;
             records.forget(rel);
         }
         for (rel, entry) in &self.records {
-            crate::agent_proto::ValidatedRelativePath::parse(rel)?;
+            super::sync_relative_path::SyncRelativePath::parse(rel)?;
             records.record(rel, *entry);
         }
         for rel in &self.dirs_remove {
-            crate::agent_proto::ValidatedRelativePath::parse(rel)?;
+            super::sync_relative_path::SyncRelativePath::parse(rel)?;
             dirs.remove(rel);
         }
         for rel in &self.dirs_add {
-            crate::agent_proto::ValidatedRelativePath::parse(rel)?;
+            super::sync_relative_path::SyncRelativePath::parse(rel)?;
             dirs.insert(rel.clone());
         }
         Ok(())
