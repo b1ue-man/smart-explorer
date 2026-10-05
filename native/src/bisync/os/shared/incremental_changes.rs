@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::vfs::{Backend, ChangeKind, VfsMeta};
 
@@ -105,16 +106,19 @@ pub(super) fn target_touched_drifted(
     target_items: &BTreeMap<String, ItemRecord>,
     changes: &[ResolvedChange],
     opts: BisyncOptions,
+    cancel: &AtomicBool,
 ) -> bool {
     for ch in changes.iter().filter(|change| change.managed) {
-        if target_rel_drifted(target, root, target_items, &ch.rel, opts) {
+        if cancel.load(Ordering::Acquire)
+            || target_rel_drifted(target, root, target_items, &ch.rel, opts, cancel)
+        {
             return true;
         }
         if ch.old_managed
             && ch
                 .old_rel
                 .as_deref()
-                .is_some_and(|old| target_rel_drifted(target, root, target_items, old, opts))
+                .is_some_and(|old| target_rel_drifted(target, root, target_items, old, opts, cancel))
         {
             return true;
         }
@@ -130,6 +134,7 @@ pub(super) fn target_touched_drifted_spelled(
     opts: BisyncOptions,
     spellings: &super::Spellings,
     side: super::PairSide,
+    cancel: &AtomicBool,
 ) -> bool {
     let mapped: Vec<_> = changes
         .iter()
@@ -142,7 +147,7 @@ pub(super) fn target_touched_drifted_spelled(
             change
         })
         .collect();
-    target_touched_drifted(target, root, target_items, &mapped, opts)
+    target_touched_drifted(target, root, target_items, &mapped, opts, cancel)
 }
 
 fn target_rel_drifted(
@@ -151,11 +156,14 @@ fn target_rel_drifted(
     target_items: &BTreeMap<String, ItemRecord>,
     rel: &str,
     opts: BisyncOptions,
+    cancel: &AtomicBool,
 ) -> bool {
     // Inspect ancestors before the leaf: statting a child alone may follow a
     // junction and make a redirected target look like an unchanged plain file.
     for (end, _) in rel.match_indices('/') {
-        match crate::vfs::sync_path(target, root, &rel[..end]).and_then(|path| target.stat(&path)) {
+        match crate::vfs::sync_path(target, root, &rel[..end])
+            .and_then(|path| crate::vfs::sync_stat(target, &path))
+        {
             Ok(metadata) if metadata.is_symlink || metadata.special || !metadata.is_dir => {
                 return true
             }
@@ -167,13 +175,26 @@ fn target_rel_drifted(
     let expected = target_items
         .get(rel)
         .and_then(|i| (!i.deleted).then_some(i.sig).flatten());
-    let actual = match crate::vfs::sync_path(target, root, rel).and_then(|path| target.stat(&path))
-    {
+    let path = match crate::vfs::sync_path(target, root, rel) {
+        Ok(path) => path,
+        Err(_) => return true,
+    };
+    let mut actual = match crate::vfs::sync_stat(target, &path) {
         Ok(metadata) if metadata.is_symlink || metadata.is_dir || metadata.special => return true,
         Ok(metadata) => sig_from_meta(&metadata),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(_) => return true,
     };
+    // Stat need not provide a digest. Checksum mode reads this touched file
+    // freshly instead of mistaking an unhashed observation for target drift.
+    if let Some(signature) = actual.as_mut() {
+        if opts.compare == super::types::CompareMode::Checksum && signature.hash == 0 {
+            signature.hash = match super::snapshot_hash::hash_file(target, &path, cancel) {
+                Ok(hash) => hash,
+                Err(_) => return true,
+            };
+        }
+    }
     if target.has_duplicate_file_names() {
         let entries = crate::vfs::sync_path(target, root, rel).and_then(|path| {
             super::duplicate_observation::metadata_named(

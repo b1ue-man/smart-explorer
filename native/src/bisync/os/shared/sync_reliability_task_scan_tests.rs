@@ -97,6 +97,7 @@ fn sync_reliability_task_options_mirror_uses_confirmed_incremental_index() {
             ..forward()
         };
         pair.put(source, "file.txt", b"seed", TIME);
+        pair.put(source, "unchanged/note.txt", b"confirmed nested bytes", TIME);
         let first = pair.run(opts, &filter);
         clean(&first);
         assert!(pair.index_complete(&first));
@@ -114,6 +115,14 @@ fn sync_reliability_task_options_mirror_uses_confirmed_incremental_index() {
             b"incrementally changed"
         );
         assert_eq!(pair.stored(&changed), changed.baseline);
+        assert_eq!(
+            changed.baseline["unchanged/note.txt"],
+            first.baseline["unchanged/note.txt"]
+        );
+        assert_eq!(
+            pair.bytes(source.other(), "unchanged/note.txt"),
+            b"confirmed nested bytes"
+        );
         assert!(pair.index_complete(&changed));
         pair.no_op(opts, &filter);
     }
