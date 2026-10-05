@@ -89,3 +89,12 @@ ist geprüft und übernommen; dessen Kontext wurde ausschließlich für den
 bereits korrigierten Editorpfad angepasst. Kein Format-/Größenproblem bleibt
 im ersten Formatreport offen. Bestätigung der Korrekturen und eigentliche
 Sync-Abnahme erfolgen ausschließlich im selben Remote-Suite-Einstieg.
+
+Der [korrigierte zweite Lauf](https://github.com/b1ue-man/smart-explorer/actions/runs/37247279728)
+prüft `13cb308caf0d350b3de32c0be37e250c81ff6e99`. Android-Build und verifizierte
+APK-Übergabe sind erfolgreich. C09 scheitert danach im ersten Sync von
+`old-prepare` unter der unveränderten veröffentlichten APK; die Antwort nennt
+nur einen Fehler ohne dessen Ursache. Die Instrumentation übernimmt deshalb
+den vollständigen vorhandenen `task.get`-Snapshot mit Pfad und Fehlermeldung
+in ihre Assertion. Sie verlangt weiterhin dieselben erfolgreichen Sync-Zähler;
+eine Komponente wird ohne diese Diagnose nicht als Ursache behauptet.
