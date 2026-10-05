@@ -186,6 +186,10 @@ mod sync_reliability_task_roundtrip_tests;
 mod sync_reliability_task_spelling_migration_tests;
 
 #[cfg(test)]
+#[path = "core/sync_reliability_task_legacy_fixture.rs"]
+mod sync_reliability_task_legacy_fixture;
+
+#[cfg(test)]
 #[path = "core/sync_reliability_task_live_fixture.rs"]
 mod sync_reliability_task_live_fixture;
 

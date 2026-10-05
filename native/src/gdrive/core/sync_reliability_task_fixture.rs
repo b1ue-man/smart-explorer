@@ -2,12 +2,13 @@
 //! transport, resolver-facing handle, private registry and sync engine are real.
 use super::api::FOLDER_MIME;
 use super::sync_conflict_task_fixture::{filter, MIME};
+pub(super) use super::sync_reliability_task_legacy_fixture::legacy_folded_state;
 use super::task_drive::FakeDrive;
 use super::task_http::{Answer, Request, Server};
 use super::GDriveBackend;
 use crate::bisync::{self, BisyncOptions, CompareMode, Direction, Outcome, StateKey};
 use crate::vfs::{self, Backend, BackendHandle, LocalBackend};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -381,56 +382,6 @@ fn collect_bytes(root: &Path, json_only: bool) -> BTreeMap<String, Vec<u8>> {
 
 pub(super) fn state_baseline(key: &StateKey) -> bisync::Baseline {
     bisync::load_baseline(&bisync::baseline_file(key).unwrap()).unwrap()
-}
-
-/// Reconstruct the former folded pair from real seed signatures and side
-/// spellings. The caller removed only the extra exact-case seed copies.
-pub(super) fn legacy_folded_state(seed: &Outcome, rel_a: &str, rel_b: &str) -> bisync::Baseline {
-    let path = bisync::baseline_file(seed.state.as_ref().unwrap()).unwrap();
-    let mut baseline = seed.baseline.clone();
-    let a = baseline[rel_a].0;
-    let b = baseline[rel_b].1;
-    assert!(a.is_some() && b.is_some());
-    if rel_a != rel_b {
-        baseline.remove(rel_b);
-    }
-    baseline.insert(rel_a.into(), (a, b));
-    let spelling_path = path.with_extension("spellings.json");
-    let mut value: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&spelling_path).unwrap()).unwrap();
-    let mut legacy = serde_json::Map::new();
-    for field in ["files_a", "files_b", "dirs_a", "dirs_b"] {
-        let entries = value[field].as_object_mut().unwrap();
-        if rel_a != rel_b && field.ends_with("_b") {
-            entries.remove(rel_a);
-            entries.remove(rel_a.rsplit_once('/').unwrap().0);
-        } else if rel_a != rel_b {
-            entries.remove(rel_b);
-            entries.remove(rel_b.rsplit_once('/').unwrap().0);
-        }
-        let mut folded = serde_json::Map::new();
-        for (key, rel) in std::mem::take(entries) {
-            let name = rel.as_str().unwrap();
-            assert!(name.is_ascii()); // exactly the prior KeyPolicy for these fixtures
-            assert_eq!(key, name);
-            assert!(folded.insert(name.to_uppercase(), rel).is_none());
-        }
-        legacy.insert(field.to_string(), serde_json::Value::Object(folded));
-    }
-    std::fs::write(&spelling_path, serde_json::to_vec_pretty(&legacy).unwrap()).unwrap();
-    let dirs_path = path.with_extension("dirs.json");
-    let mut dirs: BTreeSet<String> =
-        serde_json::from_slice(&std::fs::read(&dirs_path).unwrap()).unwrap();
-    if rel_a != rel_b {
-        // The completed old folded pair had one common A-spelled dir record,
-        // while the modern exact seed had both independently copied trees.
-        assert!(dirs.remove(rel_b.rsplit_once('/').unwrap().0));
-        assert!(dirs.contains(rel_a.rsplit_once('/').unwrap().0));
-    }
-    std::fs::write(&dirs_path, serde_json::to_vec(&dirs).unwrap()).unwrap();
-    assert!(!path.with_extension("journal").exists());
-    bisync::save_baseline(&path, &baseline).unwrap();
-    baseline
 }
 
 /// Selecting an exact root can start a new pair with retained local bytes.
