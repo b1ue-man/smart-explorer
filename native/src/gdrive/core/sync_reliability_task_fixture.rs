@@ -287,7 +287,8 @@ pub(super) fn assert_complete(out: &Outcome) {
     );
     assert!(
         out.omissions.is_empty(),
-        "protected omissions are a partial result"
+        "protected omissions are a partial result: {:?}",
+        out.omissions
     );
     assert!(out.blocked.is_none() && out.stopped.is_none() && !out.busy && !out.canceled);
     assert!(out.deferred.is_empty(), "deferred files are not converged");

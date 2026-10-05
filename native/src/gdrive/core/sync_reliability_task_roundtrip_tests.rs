@@ -35,6 +35,11 @@ fn run_backends(
     )
 }
 
+fn assert_complete_at(out: &bisync::Outcome, phase: &str) {
+    eprintln!("C02 Drive roundtrip phase={phase}");
+    assert_complete(out);
+}
+
 #[test]
 fn sync_reliability_task_names_drive_roundtrip_keeps_trees_literals_and_marker_origins() {
     let left = DriveFixture::new("Job");
@@ -123,7 +128,7 @@ fn sync_reliability_task_names_drive_roundtrip_keeps_trees_literals_and_marker_o
     assert_ne!(aliases["mixed-folder"], "Mixed");
 
     let seed = remote_run(&left, &right, Direction::AtoB);
-    assert_complete(&seed);
+    assert_complete_at(&seed, "seed AtoB");
     for (id, alias) in &aliases {
         let rel = format!("{alias}/note.md");
         assert_eq!(
@@ -162,7 +167,7 @@ fn sync_reliability_task_names_drive_roundtrip_keeps_trees_literals_and_marker_o
     let changed_rel = format!("{}/note.md", aliases["sameprefixAB"]);
     let changed_id = right.write_file(&changed_rel, b"changed from other account");
     let changed = remote_run(&left, &right, Direction::BtoA);
-    assert_complete(&changed);
+    assert_complete_at(&changed, "nested counterchange BtoA");
     assert_eq!(
         left.drive.bytes("sameprefixAB-file"),
         b"changed from other account"
@@ -180,7 +185,7 @@ fn sync_reliability_task_names_drive_roundtrip_keeps_trees_literals_and_marker_o
     assert_eq!(right.aliases(&right.root), remote_aliases);
     let mutations = left.mutations() + right.mutations();
     let noop = remote_run(&left, &right, Direction::Both);
-    assert_complete(&noop);
+    assert_complete_at(&noop, "initial Both no-op");
     assert_eq!(noop.stats.bytes, 0);
     assert_eq!(
         noop.stats.a_to_b + noop.stats.b_to_a + noop.stats.deleted,
@@ -218,7 +223,7 @@ fn literal_overwrite_restore(left: &DriveFixture, right: &DriveFixture) {
         left.write_file(rel, bytes);
     }
     let overwritten = remote_run(left, right, Direction::AtoB);
-    assert_complete(&overwritten);
+    assert_complete_at(&overwritten, "literal overwrite AtoB");
     assert_eq!(overwritten.stats.a_to_b, cases.len() as u64);
     assert_eq!(overwritten.stats.b_to_a + overwritten.stats.deleted, 0);
     assert_eq!(
@@ -296,7 +301,7 @@ fn literal_overwrite_restore(left: &DriveFixture, right: &DriveFixture) {
         &right.root,
         Direction::Both,
     );
-    assert_complete(&reopened);
+    assert_complete_at(&reopened, "literal reopened Both no-op");
     assert_eq!(reopened.state, overwritten.state);
     assert_eq!(reopened.baseline, overwritten.baseline);
     assert_eq!(reopened.stats.bytes, 0);
@@ -309,6 +314,7 @@ fn literal_overwrite_restore(left: &DriveFixture, right: &DriveFixture) {
     {
         let lock = PairLock::acquire(&state.lock_id).unwrap();
         for entry in &originals {
+            eprintln!("C02 Drive roundtrip phase=literal restore rel={:?}", entry.rel);
             restore_version(&lock, &state.pair_id, entry, &sides[1], &cancel).unwrap();
             let path = vfs::sync_path(b.as_ref(), &right.root, &entry.rel).unwrap();
             assert_eq!(read(b.as_ref(), &path), entry.rel.as_bytes());
@@ -334,7 +340,7 @@ fn literal_overwrite_restore(left: &DriveFixture, right: &DriveFixture) {
         &right.root,
         Direction::Both,
     );
-    assert_complete(&restored);
+    assert_complete_at(&restored, "literal restored Both convergence");
     assert_eq!(restored.stats.b_to_a, cases.len() as u64);
     assert_eq!(restored.stats.a_to_b + restored.stats.deleted, 0);
     assert_persisted(&restored);
@@ -352,7 +358,7 @@ fn literal_overwrite_restore(left: &DriveFixture, right: &DriveFixture) {
         &right.root,
         Direction::Both,
     );
-    assert_complete(&noop);
+    assert_complete_at(&noop, "literal restored reopened Both no-op");
     assert_eq!(noop.baseline, restored.baseline);
     assert_eq!(noop.stats.bytes, 0);
     assert_eq!(
