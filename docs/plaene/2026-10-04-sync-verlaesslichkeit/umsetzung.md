@@ -419,10 +419,10 @@ nimmt vor Code den vollständigen Plan auseinander; keine weitere Reviewrunde.
 | Stufe 1 / erste Recherche | fertig | `recherche.md`, gesicherte Refs |
 | Stufe 2 / zweite Recherche | fertig, Lücken eingearbeitet | dieser Plan und `abnahme.md` |
 | Einmalige Plan-Kritik | abgeschlossen, alle Befunde eingearbeitet | `review.md` |
-| M1/M2 | Drive-Namens-/Identitätsflüsse bestätigt; Recorded-Anschlussorakel noch offen | C02/C03 samt historischen Viermaps, gefalteten Dirkeys, Counterpart-/Backup-/Restore-/Restart-/No-op-Flows bestehen im siebten Lauf; inkrementelle C05-History besteht. M2.C05-7 korrigiert die belegte öffentliche Fehlergrenze ohne Abschwächung der Recoverybeweise |
-| M3 | Schutz-/Recovery-/Versionen bestätigt; DAV-Anlage offen | C06/C07 und private Direct-/Room-Versionen bestehen auf beiden Hosts. M3.C04-7 erhält MKCOL-Collectionkonvention, Mutationsschutz und vollständige Providerintegration |
+| M1/M2 | Drive-Namens-/Identitätsflüsse bestätigt; vollständiger Recorded-Wiederanlauf noch zu bestätigen | C02/C03 samt historischen Viermaps, gefalteten Dirkeys, Counterpart-/Backup-/Restore-/Restart-/No-op-Flows bestehen im siebten Lauf; inkrementelle C05-History besteht. M2.C05-7 korrigiert die belegte öffentliche Fehlergrenze ohne Abschwächung der Recoverybeweise |
+| M3 | Schutz-/Recovery-/Versionen bestätigt; DAV-Korrektur braucht Laufbestätigung | C06/C07 und private Direct-/Room-Versionen bestehen auf beiden Hosts. M3.C04-7 erhält MKCOL-Collectionkonvention, Mutationsschutz und vollständige Providerintegration |
 | M4 | alte Desktop-/Android-Jobs bestätigt | C08 besteht auf beiden Hosts einschließlich realem v0.5.169-Workerwechsel. C09 bestätigt das echte Altappupdate mit Force-stop, erhaltenem Jobowner und Wiederanlauf. Derselbe ganze Ablauf bleibt verpflichtend |
-| M5 Remote-Gesamtablauf | siebter Workflow vollständig ausgewertet; konkrete Folgekorrekturen geplant | C04: DAV-MKCOL Linux, ungültige ZIP-Fixtureroot Windows. C05: Recorded-Fehlerorakel auf beiden Hosts. Kandidatgebundener Remote-Formatpatch übernommen (`135bf3b6`). C10 braucht weiterhin angefragte echte Drive-Testautorisierung |
+| M5 Remote-Gesamtablauf | siebter Workflow vollständig ausgewertet; sämtliche Anschlusskorrekturen quellenfertig | Folgekorrekturen quellenfertig: `5ad57a22` erhält kanonische DAV-Anlage und gültige ZIP-Root; `cffaec5d` erhält konkrete Recorded-Lost-ACK-Beweise am öffentlichen API. Dieselbe Suite nimmt vorhandene MKCOL-/Pooling-/Congestionguards auf. Remote-Formatpatch `135bf3b6`; C10 braucht weiterhin angefragte echte Drive-Testautorisierung |
 | M6 Release | offen | erst nach vollständig erfolgreichem M5 |
 
 Der [siebte Workflow](https://github.com/b1ue-man/smart-explorer/actions/runs/37289323834)
@@ -469,7 +469,8 @@ Es entsteht keine weitere Plan-Kritik, zweite Suite oder Patchveröffentlichung.
   Recovery ohne weitere Promotion, Backup-/Restorebytes, alte Dirlöschung,
   Neuerstellung, Wiederöffnung und No-op. Echte Fehler und alte Seitenslots
   bleiben strikt. Abhängigkeit: bereits implementierte bewiesene History.
-- Beide Anschlussmilestones werden selbst geprüft und kohärent committed.
+- Beide Anschlussmilestones sind quellenfertig, selbst geprüft und kohärent
+  committed: `5ad57a22` (C04), `cffaec5d` (C05).
   Erst nach kompletter Umsetzung passt Main den einen Suite-Einstieg an,
   aktualisiert den Rootgraph, pusht den gesamten Kandidaten und startet
   ausschließlich dieselbe vollständige Remote-Abnahme.
