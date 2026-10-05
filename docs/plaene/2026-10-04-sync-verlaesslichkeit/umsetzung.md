@@ -130,6 +130,17 @@ Recorded-/Incremental-/Backup-/Restart-/No-op-Abläufe; echte widersprüchliche
 Anker bleiben geschützt. Die Drive-Fixture muss den belegten historischen
 Dirkeyvertrag materialisieren, ohne unbestätigte moderne Dirsidecars als
 Voraussetzung zu behaupten oder ihre übrigen Byte-/ID-Orakel abzuschwächen.
+Der unmittelbar betroffene `plan_dirs::history`-Anschluss muss denselben
+Altkeyvertrag erhalten: Ein gefalteter alter Existenzkey belegt die bisher
+beidseitige Ordnerrelation auch nach dem Wechsel zur exakten Policy.
+Erwartet sind bestätigte einseitige Ordnerlöschung → richtige Propagation →
+Restart/No-op im selben historischen Gesamtablauf. Geschützte oder
+fehlgeschlagene Löschungen behalten ihre Ordnerbasis und Gegenstücke.
+Die belegte History-Rekeygrenze betrifft `state_spelling_history`, Full-/
+Preview-/Incremental-Kontexte und `Checkpoint::flush`: Die alte Dirbasis
+bleibt bis zur bestätigten Aktion erhalten; der Completedrecord adressiert
+denselben belegten logischen Ordnerkey. Ein alleiniger Foldvergleich in
+`plan_dirs` ersetzt diese zusammenhängende Persistenzgrenze nicht.
 
 ### M3 Gemeinsame sichere Sync-Integration
 
@@ -226,6 +237,17 @@ Sync, auffindbare restaurierbare Sicherungen und No-op auf beiden Hosts.
 Private Sharearchive, zurückgezogene Exports, fremde Owner und tatsächlich
 unlesbare vorhandene Archive behalten ihren Schutz. Die Abnahme darf keine
 PermissionDenied-Fehler allgemein als leere Sicherungsliste behandeln.
+Die Anschlusslesung belegt den genauen Verlust: `Frame::Err(String)` trägt
+die deutsche private-Archivmeldung, während `agent_error` diesen Text als
+`Other` rekonstruiert. Der Schutzvertrag wird deshalb als kleine typisierte
+Provider-/AppPrivate-Archivpolicy durch VFS, Peer, IPC, Agent und Cache
+weitergegeben, mit konservativem Providerdefault. Der Consumer validiert
+den aktuellen echten Root über uncached Sync-Stat und Cancel/plain-Grenzen,
+bevor private Sicherungskopie oder Listing/Retention gewählt werden.
+Keine Hostpolicy-, Wire-, Credential-, Identity- oder Leaseänderung.
+Die bestehenden C04/C08-Flows bleiben unverändert; derselbe C05-Block verlangt
+zusätzlich echten Direct-/Room-Save → Listing → Restore → Konvergenz → No-op
+sowie verweigerte/entzogene Roots und strikte vorhandene fremde Archive.
 
 ### M4 Bestehende Job-/Updategrenzen vollständig erhalten
 
@@ -330,6 +352,10 @@ erreichen unter Windows keinen Login; deren tatsächlicher kontrollierter
 Listener-/Setup-/Cleanupvertrag wird korrigiert, ohne Produktions-Timeouts
 oder Signatur-/550-/Literal-Orakel zu lockern. Alles läuft ausschließlich
 im selben vollständigen Remote-Suite-Einstieg.
+Die DAV-/Windows-FTP-Korrektur ist quellenfertig und vom eigenen Umsetzer
+gegen die gesicherten Primärrefs geprüft. Der aktualisierte Fixtureconstructor
+erhält den eigenen Metadata-Agent; die Abnahme ergänzt die vorhandenen
+exakten Mutation-/PUT-No-follow-Abläufe ausschließlich zu C04.
 
 ### M6 Ein vollständiger Release
 
