@@ -96,6 +96,20 @@ unabhängige Casebäume, Gegenänderung, genaue Backup-/Restorebytes, Restart
 und No-op. Die Enginegrenze deckt zusätzlich historische unterschiedliche
 Seitenschreibweisen und ihre gespeicherten Auflösungswege ab.
 
+Zusätzliche betroffene Grenze: historisch A `Notebook`↔B `notebook`, danach
+ein neuer unabhängiger A-Baum `notebook`. Der neue logische Schlüssel darf
+den bereits belegten physischen Counterpart nicht übernehmen. Der vorhandene
+Destinationvertrag hat für einen solchen belegten Slot keine unabhängige
+Folder-ID-/Markerallokation. Ohne tatsächlich registrierte unabhängige
+Adresse wird diese konkrete Gruppe daher vor File-/Dirapply geschützt;
+beide Altgegenstücke und ihre Baseline bleiben erhalten, gesunde unabhängige
+Dateien schließen ab und Partialscan wird kein vollständiger Index.
+Die historische Fixture muss ohne moderne Reservierungstombstones diesen
+echten Zustand herstellen. Nach einer normalen ausdrücklich eindeutigen
+Rename-/Auswahlaktion oder belegten unabhängigen Markeradresse muss derselbe
+alte Job vollständig konvergieren und No-op erreichen. Neue Notebook/notebook-
+Bäume ohne belegte physische Überschneidung bleiben automatisch unabhängig.
+
 ### M3 Gemeinsame sichere Sync-Integration
 
 - F2–F6. Dateien: betroffene Consumer unter `bisync/os/shared/`, insbesondere
@@ -325,10 +339,10 @@ nimmt vor Code den vollständigen Plan auseinander; keine weitere Reviewrunde.
 | Stufe 1 / erste Recherche | fertig | `recherche.md`, gesicherte Refs |
 | Stufe 2 / zweite Recherche | fertig, Lücken eingearbeitet | dieser Plan und `abnahme.md` |
 | Einmalige Plan-Kritik | abgeschlossen, alle Befunde eingearbeitet | `review.md` |
-| M1/M2 | konkreter C02-Policyfix und Altspellingmigration in Umsetzung | C01/C03 auf beiden Hosts bestätigt. Drive muss seine exakte Pfadfähigkeit melden und belegte alte Seitenschreibweisen erhalten; historischer Seed/Restart und neue unabhängige Casebäume gehören zum unveränderten C02-Gesamtablauf |
-| M3 | konkrete Folgekorrekturen in Umsetzung; gemeinsame Bestätigung offen | C05 bestätigt; vollständige reale SFTP-Flows schließen nach verifiziertem Intentabschluss ab. Zwei C06/C07-Orakel werden auf tatsächlichen erfolgreichen Abschluss ausgerichtet; alle realen Failure-/Lost-ACK-/Fremdbyte-/Baseline-/Backupguards bleiben erhalten |
-| M4 | konkrete Unique-Stage-Korrektur in Umsetzung; C09 vollständig bestätigt | Beide echten veröffentlichten Desktop-Workerübernahmen und Android-Update einschließlich Force-stop/Retry/Konflikt/Gegenänderung erfolgreich. Tatsächlicher Direct-ACK/Creatorwechsel/Publish erfolgreich; der folgende alte Job benötigt dieselbe Ownershipkette auch für seinen gültigen Replica-Purpose |
-| M5 Remote-Gesamtablauf | fünfter Workflow vollständig fehlgeschlagen ausgewertet; gleicher Fixloop | Beide Hosts vollständig ohne Abbruch und exakt ausgewertet. C01/C03/C05 und C09 bestätigt; C02/C04/C06/C07 sowie Windows-C08 bleiben offen. FTP-Metadaten und mapped-Pfad-Orakel werden korrigiert. C10 benötigt weiterhin die angefragte echte Drive-Testautorisierung |
+| M1/M2 | exakte Drivefähigkeit und historische C02-Flows umgesetzt; Engine-Anschluss im Self-Review | C01/C03 auf beiden Hosts bestätigt. `f9283c2b` erhält die exakte Drivefähigkeit und vollständige historische Seeds/Restarts/Casebäume/Backup-/Restore-/Kollisionsabläufe; gemeinsame Remote-Bestätigung offen |
+| M3 | bestätigter Publish-Vertrag und konkrete C06/C07-Orakel umgesetzt; gemeinsame Bestätigung offen | C05 und vollständige reale SFTP-Flows bestätigt. `4a40e514` prüft tatsächlichen erfolgreichen Abschluss sowie echte offene Failure-/Lost-ACK-/Fremdbyte-/Baseline-/Backupfälle; keine Guardlockerung |
+| M4 | gemeinsame Unique-Stage-Grammatik umgesetzt; C09 vollständig bestätigt | Beide echten Desktop-Workerübernahmen und Android-Update/Force-stop/Retry/Konflikt/Gegenänderung erfolgreich. `2c8062fe` erhält die Creator-/ACK-Kette auch für den gültigen Replica-Purpose; Windows-Altjob gemeinsam remote zu bestätigen |
+| M5 Remote-Gesamtablauf | fünfter Workflow vollständig fehlgeschlagen ausgewertet; gleicher Fixloop | Beide Hosts vollständig ohne Abbruch und exakt ausgewertet. C01/C03/C05 und C09 bestätigt; C02/C04/C06/C07 sowie Windows-C08 bleiben offen. `b6d6bf7e` korrigiert FTP-Metadaten und ausschließlich das mapped-Pfad-Orakel. C10 benötigt weiterhin die angefragte echte Drive-Testautorisierung |
 | M6 Release | offen | erst nach M5 |
 
 Der [fünfte Workflow](https://github.com/b1ue-man/smart-explorer/actions/runs/37267225051)

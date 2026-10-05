@@ -67,6 +67,12 @@ Vorhandene Syntaxrefs: [Taskruntime](sync-task-runtime-2026-10-04.md),
   `Path`-Komponenten: `Z:/child` und der gültige native Childroot `Z:\/child`
   bezeichnen denselben Ort. Remote-Roots und Literalnamen werden dafür nicht
   über native Pfad-APIs geschickt; Namespace-, Byte- und No-op-Orakel bleiben.
+  Primärabgleich 2026-10-05, Rust 1.99:
+  [`Path::components`](https://doc.rust-lang.org/std/path/struct.Path.html#method.components)
+  erkennt unter Windows beide Separatoren und ignoriert Wiederholungen;
+  [`Path::PartialEq`](https://doc.rust-lang.org/src/std/path.rs.html#3753-3759)
+  vergleicht genau diese Komponenten. Der Vergleich greift nicht auf das
+  Dateisystem zu und löst keine Links oder `..` auf.
 
 ## Konsistente FTP-Checksum-Signaturen
 
