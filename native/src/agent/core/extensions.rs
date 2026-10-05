@@ -156,6 +156,10 @@ impl AgentBackend {
 }
 
 impl BackendExtensions for AgentBackend {
+    fn version_archive_policy(&self) -> vfs::VersionArchivePolicy {
+        vfs::version_archive_policy(&*self.inner)
+    }
+
     fn previous_state_identities(&self) -> VfsResult<Vec<String>> {
         crate::vfs::previous_state_identities(&*self.inner)
     }

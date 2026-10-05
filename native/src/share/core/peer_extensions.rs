@@ -23,6 +23,10 @@ pub(super) mod literal_paths;
 pub(super) mod reversible_replace;
 
 impl BackendExtensions for PeerBackend {
+    fn version_archive_policy(&self) -> crate::vfs::VersionArchivePolicy {
+        crate::vfs::VersionArchivePolicy::AppPrivate
+    }
+
     fn replace_staged_reversible(
         &self,
         staged: &str,

@@ -147,21 +147,29 @@ und unveränderter Literalpräfixe; die Remote-Suite entdeckt sie im selben C08.
 ## Private Peer-Sicherungen über IPC
 
 Sourceabgleich 2026-10-05: Share hält `.se-versions` ausdrücklich privat
-(`fs_policy::private_name`). `version_listing::managed_sync_root` kennt
-bereits den bestätigten privaten Appdata-Fallback für Peer, hängt ihn bisher
-aber an `PermissionDenied`. `agent_error::kind_from_message` erkennt die
+(`fs_policy::private_name`). Der bisherige private Appdata-Fallback in
+`version_listing::managed_sync_root` hing an `PermissionDenied`.
+`agent_error::kind_from_message` erkennt die
 englischen Texte; das deutsche `Pfad ist nicht freigegeben` ohne OS-Code
 bleibt `Other`. Der tatsächliche Windows-C04-/C08-Lauf meldet daher nach
 erfolgreichen normalen Transfers einen Fehler an der Versionsgrenze.
 
-Der bestehende private Archivvertrag muss als typisierte Providerfaktengrenze
-über reale Peer-, IPC-, Agent- und Cache-Handles erhalten bleiben. Ein
-unbekannter Provider bleibt beim strikten normalen Archivzugriff. Die private
-Wahl benötigt weiterhin frischen erfolgreichen Root-Stat, plain Root und
-Cancellation; vorhandene Providerarchive, deren verweigerte Kinder, widerrufene
-Freigaben und fremde Owner dürfen nicht als leere private Archive gelten.
+`vfs::VersionArchivePolicy::{Provider, AppPrivate}` erhält jetzt den Archivvertrag
+über reale Peer-, IPC-, Agent- und Cache-Handles. Die reine
+`vfs::version_archive_policy(backend) -> VersionArchivePolicy`-Abfrage öffnet
+keinen Agent und führt keinen RPC aus. Peer und IPC-Identitätsstub liefern
+`AppPrivate`; Agent und Cache delegieren. Ein unbekannter Provider bleibt
+beim strikten normalen Archivzugriff. `version_provider_policy::uses_provider_archive`
+prüft für die private Wahl Cancellation und den tatsächlichen Root über
+`vfs::sync_stat`; damit reicht ein alter warmer Browsingcache nicht aus.
+Der Root muss ein gewöhnliches Verzeichnis sein. Verweigerte Providerarchive
+und deren Kinder, widerrufene Freigaben und fremde Owner bleiben Fehler.
 Backupbytes bleiben über die vorhandene durable private Kopie restorable;
 Listing/Retention und Restore behalten dieselbe Pair-/Owneridentität.
+Der zusätzliche C05-Ablauf benutzt normale gespeicherte Direct-/Room-Locators
+mit eigenem Jobowner und verlangt Save, Listing, abgewiesenen fremden Owner,
+Restore bei unveränderter Baseline, Wiederöffnung, Konvergenz und No-op.
+Der Laufnachweis gehört ausschließlich zur nächsten vollständigen Remote-Abnahme.
 
 ## Alte Spellingpolicy und tatsächliche Seitenpfade
 

@@ -10,7 +10,16 @@ use super::extension_types::{
     MtimePrecision, RecycleExpectation, RecycleOutcome, StageFinish, StageFinished, TargetLimits,
     VfsListing,
 };
+use super::extensions::VersionArchivePolicy;
 use super::{Backend, VfsMeta, VfsResult, VolumeIdentity};
+
+/// Archive location policy only; a caller must separately validate root access.
+pub fn version_archive_policy<B: Backend + ?Sized>(backend: &B) -> VersionArchivePolicy {
+    match backend.extensions() {
+        Some(extensions) => extensions.version_archive_policy(),
+        None => VersionArchivePolicy::Provider,
+    }
+}
 
 pub(super) fn default_sync_child_path(parent: &str, literal_name: &str) -> VfsResult<String> {
     if literal_name.is_empty()

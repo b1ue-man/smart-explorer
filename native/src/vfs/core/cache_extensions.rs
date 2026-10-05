@@ -13,6 +13,10 @@ use super::super::{
 use super::CachingBackend;
 
 impl BackendExtensions for CachingBackend {
+    fn version_archive_policy(&self) -> crate::vfs::VersionArchivePolicy {
+        calls::version_archive_policy(&*self.inner)
+    }
+
     fn previous_state_identities(&self) -> VfsResult<Vec<String>> {
         calls::previous_state_identities(&*self.inner)
     }

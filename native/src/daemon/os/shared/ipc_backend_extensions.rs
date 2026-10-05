@@ -13,6 +13,10 @@ use crate::vfs::{
 };
 
 impl BackendExtensions for UnavailableBackend {
+    fn version_archive_policy(&self) -> vfs::VersionArchivePolicy {
+        vfs::VersionArchivePolicy::AppPrivate
+    }
+
     // AgentBackend delegates previous identities, literal child paths and
     // reversible replacement to this stub. Reopening that same agent here would
     // recurse through its identical stub forever. Keep the VFS defaults:

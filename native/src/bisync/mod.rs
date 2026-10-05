@@ -214,6 +214,8 @@ mod version_listing;
 mod version_manifest;
 #[path = "os/shared/version_ops.rs"]
 mod version_ops;
+#[path = "os/shared/version_provider_policy.rs"]
+mod version_provider_policy;
 #[path = "os/shared/version_restore.rs"]
 mod version_restore;
 #[path = "os/shared/version_retention.rs"]
