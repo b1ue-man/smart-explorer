@@ -217,10 +217,30 @@ nimmt vor Code den vollständigen Plan auseinander; keine weitere Reviewrunde.
 | Stufe 2 / zweite Recherche | fertig, Lücken eingearbeitet | dieser Plan und `abnahme.md` |
 | Einmalige Plan-Kritik | abgeschlossen, alle Befunde eingearbeitet | `review.md` |
 | M1/M2 | Code und eigener Self-Review fertig | vollständige Kandidatensammlung, reale Root-ID, private Folderbindung und stabile Projektion; Herkunftsbeweis getrennt von Parentprojektion und neuem Accountcache, auch am normalen Writer und gemeinsamen Dateilader über wechselnde Job-Reihenfolge; bestätigtes Missing bereits bei erster Migration geschützt; Remote-Abnahme ausstehend |
-| M3 | Code und eigener Self-Review einschließlich konkreter CI-Korrekturen fertig | additive Sync-Stat-Grenze, tolerante frische Literalbeobachtung, Literalpfad-Resolve, frische Checksum berührter Ziele und Indexdelta aus vollständig bestätigter Cachebasis mit erhaltenem Bootstrap-/Dirtyschutz; gemeinsame Laufzeitbestätigung offen |
-| M4 | Code und eigener Self-Review fertig | fehlende Edit-ID geschützt, wiederanlaufbare Ursachenklassifikation, Loader-Recovery über Workerwechsel; Remote-Abnahme ausstehend |
-| M5 Remote-Gesamtablauf | zweiter Workflow vollständig ausgewertet; bekannte Korrekturen implementiert, gemeinsamer Wiederanlauf vorbereitet | Notebook/Bindungsmigration/Schutz und veröffentlichte Altworker-Übernahme auf beiden Desktop-OS erfolgreich. Provider-Fixtures, konkrete Optionen-/Retry-Orakel, Drive-Fixtureidentität, frische Literalbeobachtung und bestätigter inkrementeller Index korrigiert; Laufzeitbestätigung offen. C09 erhält vollständige alte Task-Fehlerdiagnose; private Altworkerdaten liegen außerhalb der Uploadgrenze. Keine lokale Ausführung; C10 benötigt die angefragte Drive-Testautorisierung |
+| M3 | konkreter CI-Fixloop in Arbeit | C06-Retry auf Linux bestätigt; verbleibende Literalrel-Grammatik und Source-DirSet im Nested-Mirror werden korrigiert. Vollscan-Orakel für neu erschienene Targetdateien ist erhalten; gemeinsame Laufzeitbestätigung offen |
+| M4 | konkreter CI-Fixloop in Arbeit | fehlende Edit-ID, Ursachenklassifikation und echte veröffentlichte Workerübernahme bestätigt; unbedingte Rekursion im Share-IPC-Identitätsadapter des Windows-Crossremote-Altjobs wird korrigiert |
+| M5 Remote-Gesamtablauf | dritter Workflow vollständig fehlgeschlagen ausgewertet; nächste Korrektursammlung in Arbeit | Linux C01/C03/C06/C07 und veröffentlichte Altworker-Übernahme erfolgreich; Windows C07 und veröffentlichte Altworker-Übernahme erfolgreich, spätere Drive-Fälle wegen Stackoverflow unausgeführt. Share-Refresh, Literalrel, Nested-Mirror und C09-Fixturebasis werden im selben Suite-Einstieg bestätigt. Sofortige Hostdiagnosen erhalten die exakte Ergebnisprüfung und private Uploadgrenze. C10 benötigt weiterhin die angefragte Drive-Testautorisierung |
 | M6 Release | offen | erst nach M5 |
+
+Der dritte Workflow ist vollständig fehlgeschlagen ausgewertet. Neben den
+M3-Namens-/Indexkorrekturen muss M5 die echte Direct-/Room-Einrichtung bis
+zur regulären Konfigurationsaktualisierung weiterführen: Linux meldet dabei
+`StaleAuthorization`. Die Recherche verfolgt CLI → Worker-Refresh →
+`RuntimeConfiguration` → `apply_configuration_transition` → Exec-Registry
+und die zugehörigen Profil-/Member-Daten. Erwartet sind erfolgreiche normale
+Export-/Policy-Änderungen und tatsächlicher Peer-Sync bei erhaltenen
+Revocations-, Grant-, Replay- und Epochengrenzen; kein Fixture-Bypass.
+
+Unter Windows ist die Server-/Peer-Fixture erfolgreich eingerichtet, der
+Native-Host bricht aber im Crossremote-Altjob mit Stackoverflow ab. M4/M5
+verfolgen hierfür die tatsächliche Resolver-/Backend-/Runner-Aufrufkette und
+deren Windows-/Runtime-Stackvertrag vor einer Änderung. Erwartet ist derselbe
+Crossremote-Altjob einschließlich Restart, Owner, Baseline, Bytes und No-op
+ohne Prozessabbruch. Spätere dadurch fehlende Fälle bleiben unabgenommen.
+M5 muss außerdem Fehlerdiagnosen vor einem Prozessabbruch sichern, weil die
+gepufferte libtest-Ausgabe die vorangegangene C04-Fehlermeldung verloren hat.
+Exakte Ausführung, Ergebniszähler, private Uploadgrenzen und derselbe einzige
+Suite-Einstieg bleiben unverändert verpflichtend.
 
 Pro Meilenstein: gegen Refs und Aufrufer selbst prüfen, kohärent committen;
 Abnahme erst gesammelt nach kompletter Umsetzung. Nach nativen Änderungen
