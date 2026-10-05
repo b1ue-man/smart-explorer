@@ -6,6 +6,19 @@ lokaler Build-/Testauftrag und keine Änderung produktiver TLS- oder Signaturreg
 
 ## Android-Update statt Neuinstallation
 
+- Nachprüfung 2026-10-05: [`File.getCanonicalFile()`](https://developer.android.com/reference/java/io/File#getCanonicalFile())
+  (API 1) liefert den kanonischen `File` für denselben Ort; unter Unix werden
+  dabei symbolische Links aufgelöst. Dateisystemfehler können `IOException`
+  auslösen und werden von der Instrumentation als Fehler weitergegeben.
+  C09 verwendet den kanonischen bestehenden `Context.filesDir` als Basis für
+  seinen eigenen Fixture-Root und relative Persistenzbelege. Die unveränderte
+  v0.5.169 prüft in `LocalBackend::mkdir_all` alle Vorfahren strikt; der dritte
+  Remote-Lauf belegt ihre Ablehnung des Android-Systemaliases `/data/user/0`.
+  Die Fixture wird deshalb vor der normalen alten `sync.save`-API kanonisch
+  angelegt. Die gespeicherten Endpunkte werden beim Update nicht umgeschrieben.
+  Alte Appdata-Versionen entstehen im Tag über `std::fs::create_dir_all` und
+  exklusives `OpenOptions::create_new` unter `smart_explorer/sync/versions_*`;
+  ihr tatsächlicher Inhalt und ihre Erhaltung bleiben Pflichtorakel.
 - [Android App Signing](https://developer.android.com/studio/publish/app-signing):
   ein APK-Update benötigt einen zur installierten App passenden Signaturschlüssel.
   Der automatisch erzeugte Debugschlüssel erfüllt das für eine veröffentlichte
