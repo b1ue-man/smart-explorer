@@ -181,6 +181,9 @@ mod sync_reliability_task_lost_ack_tests;
 #[cfg(test)]
 #[path = "core/sync_reliability_task_roundtrip_tests.rs"]
 mod sync_reliability_task_roundtrip_tests;
+#[cfg(test)]
+#[path = "core/sync_reliability_task_spelling_migration_tests.rs"]
+mod sync_reliability_task_spelling_migration_tests;
 
 #[cfg(test)]
 #[path = "core/sync_reliability_task_live_fixture.rs"]

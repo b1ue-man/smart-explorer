@@ -1,6 +1,6 @@
 use super::api::FOLDER_MIME;
-use super::sync_conflict_task_fixture::{filter, MIME};
-use super::sync_reliability_task_fixture::{assert_complete, options, DriveFixture};
+use super::sync_conflict_task_fixture::MIME;
+use super::sync_reliability_task_fixture::{assert_complete_at, run_backends, DriveFixture};
 use crate::bisync::{self, Direction};
 use crate::vfs::{self, Backend};
 use serde_json::json;
@@ -17,29 +17,6 @@ fn remote_run(left: &DriveFixture, right: &DriveFixture, direction: Direction) -
     )
 }
 
-fn run_backends(
-    left: &dyn Backend,
-    left_root: &str,
-    right: &dyn Backend,
-    right_root: &str,
-    direction: Direction,
-) -> bisync::Outcome {
-    bisync::run(
-        left,
-        left_root,
-        right,
-        right_root,
-        options(direction),
-        &AtomicBool::new(false),
-        &filter(&bisync::empty_globset()),
-    )
-}
-
-fn assert_complete_at(out: &bisync::Outcome, phase: &str) {
-    eprintln!("C02 Drive roundtrip phase={phase}");
-    assert_complete(out);
-}
-
 #[test]
 fn sync_reliability_task_names_drive_roundtrip_keeps_trees_literals_and_marker_origins() {
     let left = DriveFixture::new("Job");
@@ -54,8 +31,12 @@ fn sync_reliability_task_names_drive_roundtrip_keeps_trees_literals_and_marker_o
     assert_eq!(right_previous.len(), 1);
     assert_ne!(left_previous, right_previous);
     for (fixture, previous) in [(&left, &left_previous), (&right, &right_previous)] {
+        assert!(fixture.backend.case_sensitive_paths(&fixture.root));
+        let reopened = fixture.fresh_backend(&fixture.root);
+        assert!(reopened.case_sensitive_paths(&fixture.root));
+        assert_eq!(reopened.state_identity(), fixture.backend.state_identity());
         assert_eq!(
-            vfs::previous_state_identities(&fixture.fresh_backend(&fixture.root)).unwrap(),
+            vfs::previous_state_identities(&reopened).unwrap(),
             *previous
         );
     }
@@ -314,7 +295,10 @@ fn literal_overwrite_restore(left: &DriveFixture, right: &DriveFixture) {
     {
         let lock = PairLock::acquire(&state.lock_id).unwrap();
         for entry in &originals {
-            eprintln!("C02 Drive roundtrip phase=literal restore rel={:?}", entry.rel);
+            eprintln!(
+                "C02 Drive roundtrip phase=literal restore rel={:?}",
+                entry.rel
+            );
             restore_version(&lock, &state.pair_id, entry, &sides[1], &cancel).unwrap();
             let path = vfs::sync_path(b.as_ref(), &right.root, &entry.rel).unwrap();
             assert_eq!(read(b.as_ref(), &path), entry.rel.as_bytes());
