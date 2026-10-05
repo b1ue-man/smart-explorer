@@ -25,6 +25,13 @@ impl Backend for GDriveBackend {
         format!("gdrive:path-v2:{}:{}", self.drive_account_key, self.root)
     }
 
+    fn case_sensitive_paths(&self, _root: &str) -> bool {
+        // Name searches gather candidates; resolution and mutation compare
+        // their literal titles exactly. Registered folder aliases preserve
+        // that distinction across reconnects as well.
+        true
+    }
+
     fn extensions(&self) -> Option<&dyn crate::vfs::BackendExtensions> {
         Some(self)
     }

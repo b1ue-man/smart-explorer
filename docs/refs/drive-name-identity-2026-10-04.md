@@ -28,6 +28,20 @@ tatsächlichen `item.Name` danach. Entscheidung: Suchtreffer mit anderem
 Literalnamen aussortieren. Das ist kein Hinweis auf doppelte Ordner. Echte
 gleichnamige Objekte behalten ihre unterschiedlichen IDs.
 
+Quellabgleich 2026-10-05: Der M1/M2-Provider benutzt diese exakte Titel- und
+ID-Prüfung auch für Pfadauflösung und Mutation. `GDriveBackend` meldet deshalb
+`case_sensitive_paths=true`: `Notebook` und `notebook` bleiben verschiedene
+Literalnamen, auch nach Wiederöffnen. Die Kandidatensuche ist keine Aussage
+über die Gleichheit von Providerpfaden. Der konservative VFS-Default und
+die gemeinsame NFC-Normalisierung bleiben erhalten; sobald eine Gegenstelle
+keine bewiesene Case-Sensitivität meldet, faltet die Pair-KeyPolicy weiterhin
+Groß-/Kleinschreibung und schützt unvereinbare Zielnamen. Account-/Root-IDs,
+gespeicherte Locators, Literalmarker und bestehende Ordnerbindungen ändern
+sich durch diese Fähigkeitsangabe nicht. Der Policywechsel benötigt die
+Erhaltung bisheriger Baseline- und seitenspezifischer Schreibweisenrecords;
+alte gefaltete Schlüssel dürfen nicht als beschädigte Zustände verworfen
+oder als neue Pfadauswahl interpretiert werden.
+
 Leere/teilweise Seiten dürfen vor dem Ende auftreten. `nextPageToken` bestimmt
 das Ende. Neue oder entfernte Objekte können Ergebnisse während der Pagination
 verändern. Ein erneut auftauchendes gleiches Objekt ist keine zweite Identität;
