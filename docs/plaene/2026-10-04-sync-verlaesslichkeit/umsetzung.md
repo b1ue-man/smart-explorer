@@ -96,6 +96,16 @@ unabhängige Casebäume, Gegenänderung, genaue Backup-/Restorebytes, Restart
 und No-op. Die Enginegrenze deckt zusätzlich historische unterschiedliche
 Seitenschreibweisen und ihre gespeicherten Auflösungswege ab.
 
+Der Self-Review der betroffenen Enginefläche ergänzt den Lebenszyklus eines
+Dateialiases: Eine tatsächlich bestätigte propagierte Löschung muss die nicht
+mehr vorhandene alte Dateizuordnung freigeben. Sie darf eine später neu
+angelegte exakte Literaldatei nicht weiterhin auf die gelöschte Relation
+umleiten oder schützen. Die vorherige bestätigte Baseline und der erfolgreiche
+Applyabschluss sind der Beleg; fehlgeschlagene Schritte behalten ihre alte
+Zuordnung. Bereits bestehende Ordnerrelationen werden dadurch nicht umgewidmet.
+Erwartet ist Delete → neue Literaldatei → Übertragung an den tatsächlich
+richtigen Seitenpfad → Restart/No-op im selben bestehenden Migrationsablauf.
+
 Zusätzliche betroffene Grenze: historisch A `Notebook`↔B `notebook`, danach
 ein neuer unabhängiger A-Baum `notebook`. Der neue logische Schlüssel darf
 den bereits belegten physischen Counterpart nicht übernehmen. Der vorhandene
@@ -339,7 +349,7 @@ nimmt vor Code den vollständigen Plan auseinander; keine weitere Reviewrunde.
 | Stufe 1 / erste Recherche | fertig | `recherche.md`, gesicherte Refs |
 | Stufe 2 / zweite Recherche | fertig, Lücken eingearbeitet | dieser Plan und `abnahme.md` |
 | Einmalige Plan-Kritik | abgeschlossen, alle Befunde eingearbeitet | `review.md` |
-| M1/M2 | exakte Drivefähigkeit und historische C02-Flows umgesetzt; Engine-Anschluss im Self-Review | C01/C03 auf beiden Hosts bestätigt. `f9283c2b` erhält die exakte Drivefähigkeit und vollständige historische Seeds/Restarts/Casebäume/Backup-/Restore-/Kollisionsabläufe; gemeinsame Remote-Bestätigung offen |
+| M1/M2 | exakte Drivefähigkeit, historische C02-Flows und Engine-Anschluss umgesetzt; eigene Self-Reviews abgeschlossen | C01/C03 auf beiden Hosts bestätigt. `f9283c2b` erhält die exakte Drivefähigkeit und historische C02-Flows; `1bd8140c` verbindet die bewiesenen Seitenschreibweisen mit Full/Preview/Incremental/Recorded und ergänzt die C05-Gesamtabläufe. Gemeinsame Remote-Bestätigung offen |
 | M3 | bestätigter Publish-Vertrag und konkrete C06/C07-Orakel umgesetzt; gemeinsame Bestätigung offen | C05 und vollständige reale SFTP-Flows bestätigt. `4a40e514` prüft tatsächlichen erfolgreichen Abschluss sowie echte offene Failure-/Lost-ACK-/Fremdbyte-/Baseline-/Backupfälle; keine Guardlockerung |
 | M4 | gemeinsame Unique-Stage-Grammatik umgesetzt; C09 vollständig bestätigt | Beide echten Desktop-Workerübernahmen und Android-Update/Force-stop/Retry/Konflikt/Gegenänderung erfolgreich. `2c8062fe` erhält die Creator-/ACK-Kette auch für den gültigen Replica-Purpose; Windows-Altjob gemeinsam remote zu bestätigen |
 | M5 Remote-Gesamtablauf | fünfter Workflow vollständig fehlgeschlagen ausgewertet; gleicher Fixloop | Beide Hosts vollständig ohne Abbruch und exakt ausgewertet. C01/C03/C05 und C09 bestätigt; C02/C04/C06/C07 sowie Windows-C08 bleiben offen. `b6d6bf7e` korrigiert FTP-Metadaten und ausschließlich das mapped-Pfad-Orakel. C10 benötigt weiterhin die angefragte echte Drive-Testautorisierung |

@@ -1,8 +1,8 @@
 # Sync-Abnahme: tatsächliche Server und alte Android-Appdaten
 
-Primärquellen und aktuelle Implementierung geprüft am 2026-10-04.
-Diese Ref beschreibt ausschließlich die Remote-Task-Abnahme; sie ist kein
-lokaler Build-/Testauftrag und keine Änderung produktiver TLS- oder Signaturregeln.
+Primärquellen geprüft am 2026-10-04; betroffene Quellverträge zuletzt am
+2026-10-05. Diese Ref beschreibt die betroffenen Produktionsverträge und
+ihre Remote-Abnahme. Produktive TLS- und Signaturregeln bleiben unverändert.
 
 ## Android-Update statt Neuinstallation
 
@@ -174,6 +174,11 @@ geschützte Teilscans werden weiterhin keine vollständige Indexgeneration.
 Gespeicherte Konflikt-/Merge-/Resume-Pfade können ausschließlich eine exakt
 aufgezeichnete alte Seitenschreibweise zurück auf ihren logischen Anker
 führen. Normale neue Actions verwenden keine allgemeine Foldsuche.
+Bezeichnet ein gespeicherter Literaltext zugleich eine neue kanonische Relation
+und einen anderen belegten alten Seitenslot, ist diese Auswahl mehrdeutig.
+Die Recorded-Grenze wählt dann keinen der beiden Owner; ihre vorhandenen
+Bytes und Beziehungen bleiben erhalten. Die reguläre neue Planung verwendet
+weiterhin ihre exakten kanonischen Schlüssel.
 
 `apply_actions` übergibt beim Copy den tatsächlichen `target_rel`, beim Delete
 den tatsächlichen `source_rel` an `apply_transaction`. Versionsmanifest und
@@ -182,6 +187,12 @@ Restore adressiert genau diesen Pfad. Offene Replacement-Rels werden für den
 Schutz auf ihre belegten logischen und tatsächlichen Gegenstücke erweitert.
 Eine erfolgreiche Recovery bestätigt Veröffentlichung und Cleanup; die
 anschließende reguläre Planung beobachtet und schreibt die Baseline.
+
+Eine bestätigte propagierte Dateilöschung beendet ihre alte Dateirelation;
+eine danach neu angelegte Literaldatei erhält keine gelöschte Aliasbindung.
+Die vorherige bestätigte Baseline und erfolgreicher Applyabschluss belegen
+die Freigabe. Fehlgeschlagene Schritte behalten ihre Zuordnung; bestehende
+Ordnerrelationen werden dadurch nicht umgewidmet.
 
 Ein neu auftauchender unabhängiger Baum kann physisch auf den bereits
 belegten Counterpart eines Altpaars treffen, etwa A `Notebook` ↔ B `notebook`
