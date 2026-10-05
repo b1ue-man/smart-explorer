@@ -32,6 +32,20 @@ Werte. POSIX `start_new_session=True` trennt die Kindgruppe. `wait(timeout=...)`
 Windows benutzt `CREATE_NEW_PROCESS_GROUP` und das bestehende `taskkill /PID ... /T /F`-
 Muster. Logs werden in Dateien geführt, damit keine Pipe durch ungeholte Ausgabe blockiert.
 
+## Eigene CI-Reportarchive mit privaten Fixtureprofilen
+
+Am 2026-10-05 gegen die
+[GitHub-Artifacts-API](https://docs.github.com/en/rest/actions/artifacts#delete-an-artifact)
+geprüft: `GET /repos/{owner}/{repo}/actions/artifacts/{artifact_id}` liefert
+Name und Workflowzuordnung. Vor Entfernen eines eigenen Diagnosearchivs
+werden ID, erwarteter Name, abgeschlossener Run und exakter Kandidat geprüft.
+`DELETE` an derselben Adresse verlangt Actions-Schreibrecht und bestätigt
+mit HTTP 204; die folgende Sichtprüfung muss HTTP 404 liefern.
+Im Sync-Fixloop werden nur die zwei identifizierten nativen Reportarchive mit
+privaten Altworkerprofilen entfernt, nachdem die kombinierte Summary und
+gezielte nicht sensitive Diagnose gesichert sind. Keine Release-/APK-/
+Binärartefakte oder fremden Runs werden dadurch geändert.
+
 ## Android und OS-Fixtures
 
 Die etablierten, versionsgebundenen Android-Aufrufe bleiben in

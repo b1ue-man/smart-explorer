@@ -109,10 +109,22 @@ Crossremote-Altjob. Weitere konkrete Fehlstellen betreffen KeepBoth-Erhaltung,
 RunDepth/Mirror-Erwartungen, einen temporären Stage-Create-Fehler, den
 Move-Finalize-Wiederanlauf und die Identitätsprüfung im Drive-Roundtrip.
 Diese Ursachen werden vor dem nächsten Aufruf desselben Einstiegs behoben.
-Die Windows-Stufe läuft zu diesem Stand noch; C10 nennt weiterhin fehlende
-Client-ID und Refresh-Token.
+Die Windows-Stufe ist ebenfalls vollständig ausgewertet. Notebook,
+Bindungsmigration, Schutz und die echte Altworker-Übernahme erfüllen auch dort
+ihre Orakel. Zusätzlich scheitert die gesunde `healthy.txt`-Änderung an einem
+unrepräsentierbaren Backslash-Geschwister; dessen geschützter Teilstatus darf
+unabhängige Dateien nicht verhindern. Die Windows-Provider-Fixture meldet
+fehlende Direct-Request-Readiness. Der Share-Server konnte seinen Relay-Port
+nicht binden, während der Helper bloße Worker-Erreichbarkeit akzeptiert hatte;
+die Korrektur muss Serverlistener und tatsächlich verbundene Peers bestätigen.
+Die vollständige gemeinsame Evaluation ist fehlgeschlagen. C10 nennt weiterhin
+fehlende Client-ID und Refresh-Token. Keine Releasephase wurde gestartet.
 
 Das Linux-Logartefakt enthielt außerdem das private Arbeitsverzeichnis der
-Altworker-Fixture. Der Upload schließt dessen gesamte generierte Verzeichnisse
-jetzt wie das native Testprofil aus. Ergebnis-/Bytehashbelege bleiben im
-kandidatgebundenen Summary; private Profile sind keine Logartefakte.
+Altworker-Fixture; das Windows-Archiv hatte dieselbe Grenze. Der Upload schließt
+deren gesamte generierte Verzeichnisse jetzt wie das native Testprofil aus.
+Die beiden eigenen Reportarchive `11319887997` und `11320438715` wurden nach
+Sicherung der gezielten Diagnose entfernt (`DELETE` 204, folgende Sichtprüfung
+404); kombinierte Summary und Joblogs bleiben erhalten. Ergebnis-/Bytehashbelege
+bleiben im kandidatgebundenen Summary. Der Helper trennt zusätzlich seine
+privaten Arbeitsdaten von ausgewählten hochladbaren Diagnosen.
