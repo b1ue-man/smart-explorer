@@ -98,11 +98,9 @@ mod tests {
             (226, io::ErrorKind::ConnectionReset),
         ] {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-            let client = TcpStream::connect_timeout(
-                &listener.local_addr().unwrap(),
-                Duration::from_secs(5),
-            )
-            .unwrap();
+            let client =
+                TcpStream::connect_timeout(&listener.local_addr().unwrap(), Duration::from_secs(5))
+                    .unwrap();
             let (mut server, _) = listener.accept().unwrap();
             client
                 .set_read_timeout(Some(Duration::from_secs(5)))

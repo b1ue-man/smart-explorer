@@ -1,9 +1,9 @@
 #[path = "core/connection.rs"]
 mod connection;
-#[path = "core/data_finish.rs"]
-mod data_finish;
 #[path = "core/ftp.rs"]
 mod core_impl;
+#[path = "core/data_finish.rs"]
+mod data_finish;
 #[path = "core/io_adapters.rs"]
 mod io_adapters;
 #[path = "core/pool.rs"]
