@@ -13,22 +13,27 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-struct Seen {
-    method: String,
-    path: String,
+pub(super) struct Seen {
+    pub(super) method: String,
+    pub(super) path: String,
     headers: HashMap<String, String>,
     body: Vec<u8>,
     connection: usize,
 }
 
-struct Answer {
+pub(super) struct Answer {
     status: u16,
     headers: Vec<(&'static str, String)>,
     body: Vec<u8>,
 }
 
 impl Answer {
-    fn status(status: u16) -> Self {
+    /// Close the owned connection after recording the request, without an ACK.
+    pub(super) fn disconnect() -> Self {
+        Self::status(0)
+    }
+
+    pub(super) fn status(status: u16) -> Self {
         Self {
             status,
             headers: Vec::new(),
@@ -36,7 +41,7 @@ impl Answer {
         }
     }
 
-    fn with(mut self, name: &'static str, value: impl Into<String>) -> Self {
+    pub(super) fn with(mut self, name: &'static str, value: impl Into<String>) -> Self {
         self.headers.push((name, value.into()));
         self
     }
@@ -47,7 +52,7 @@ impl Answer {
     }
 }
 
-fn propfind(path: &str, size: Option<u64>) -> Answer {
+pub(super) fn propfind(path: &str, size: Option<u64>) -> Answer {
     let props = match size {
         Some(size) => format!("<d:resourcetype/><d:getcontentlength>{size}</d:getcontentlength>"),
         None => "<d:resourcetype><d:collection/></d:resourcetype>".to_string(),
@@ -59,7 +64,7 @@ fn propfind(path: &str, size: Option<u64>) -> Answer {
 
 type Route = dyn Fn(&Seen) -> Answer + Send + Sync;
 
-struct Http {
+pub(super) struct Http {
     address: SocketAddr,
     stop: Arc<AtomicBool>,
     seen: Arc<Mutex<Vec<Seen>>>,
@@ -71,7 +76,7 @@ fn lock(seen: &Mutex<Vec<Seen>>) -> MutexGuard<'_, Vec<Seen>> {
 }
 
 impl Http {
-    fn start(route: impl Fn(&Seen) -> Answer + Send + Sync + 'static) -> Self {
+    pub(super) fn start(route: impl Fn(&Seen) -> Answer + Send + Sync + 'static) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let address = listener.local_addr().unwrap();
@@ -113,7 +118,7 @@ impl Http {
         }
     }
 
-    fn backend(&self) -> WebdavBackend {
+    pub(super) fn backend(&self) -> WebdavBackend {
         WebdavBackend::connect(WebdavConfig {
             https: false,
             host: self.address.ip().to_string(),
@@ -126,7 +131,7 @@ impl Http {
     }
 
     /// Connection index of every complete request `method path`.
-    fn connections(&self, method: &str, path: &str) -> Vec<usize> {
+    pub(super) fn connections(&self, method: &str, path: &str) -> Vec<usize> {
         lock(&self.seen)
             .iter()
             .filter(|seen| seen.method == method && seen.path == path)
@@ -199,6 +204,9 @@ fn handle(stream: TcpStream, connection: usize, route: &Route, seen: &Mutex<Vec<
     while let Some(request) = read_request(&mut reader, connection) {
         let answer = route(&request);
         lock(seen).push(request);
+        if answer.status == 0 {
+            return;
+        }
         let mut head = format!(
             "HTTP/1.1 {} Scripted\r\nContent-Length: {}\r\nConnection: keep-alive\r\n",
             answer.status,
@@ -276,8 +284,8 @@ fn transfer_engine_task_webdav_mutations_reuse_pooled_connections() {
     backend.remove_file("/b").unwrap();
     drop(backend);
 
-    let first = http.connections("MKCOL", "/a");
-    let second = http.connections("MKCOL", "/b");
+    let first = http.connections("MKCOL", "/a/");
+    let second = http.connections("MKCOL", "/b/");
     let moved = http.connections("MOVE", "/a");
     assert_eq!(first.len(), 1);
     assert_eq!(first, second, "MKCOL reuses the pooled connection");
@@ -295,9 +303,9 @@ fn transfer_engine_task_webdav_mutations_reuse_pooled_connections() {
 fn transfer_engine_task_webdav_overload_is_congestion_with_retry_after() {
     let http = Http::start(|seen| match (seen.method.as_str(), seen.path.as_str()) {
         ("PROPFIND", path) => propfind(path, None),
-        ("MKCOL", "/busy") => Answer::status(503).with("Retry-After", "7"),
-        ("MKCOL", "/limited") => Answer::status(429),
-        ("MKCOL", "/full") => Answer::status(507),
+        ("MKCOL", "/busy/") => Answer::status(503).with("Retry-After", "7"),
+        ("MKCOL", "/limited/") => Answer::status(429),
+        ("MKCOL", "/full/") => Answer::status(507),
         _ => Answer::status(500),
     });
     let backend = http.backend();
@@ -328,7 +336,7 @@ fn transfer_engine_task_webdav_folders_take_one_mkcol() {
     let http = Http::start(|seen| match (seen.method.as_str(), seen.path.as_str()) {
         ("PROPFIND", "/file") => propfind("/file", Some(1)),
         ("PROPFIND", path) => propfind(path, None),
-        ("MKCOL", "/exists") | ("MKCOL", "/file") => Answer::status(405),
+        ("MKCOL", "/exists/") | ("MKCOL", "/file/") => Answer::status(405),
         ("MKCOL", _) => Answer::status(201),
         _ => Answer::status(500),
     });
@@ -347,7 +355,7 @@ fn transfer_engine_task_webdav_folders_take_one_mkcol() {
     drop(backend);
     // A free name costs exactly one request.
     assert_eq!(http.connections("PROPFIND", "/new").len(), 0);
-    assert_eq!(http.connections("MKCOL", "/new").len(), 1);
+    assert_eq!(http.connections("MKCOL", "/new/").len(), 1);
 }
 
 #[test]

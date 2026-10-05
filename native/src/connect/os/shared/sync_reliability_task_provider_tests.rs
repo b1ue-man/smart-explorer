@@ -266,20 +266,23 @@ fn sync_reliability_task_provider_matrix() {
         );
     }
     let zipped = fixture::zip();
+    let archive_root = "/";
+    assert!(!zipped.is_local(), "ZIP is a logical archive backend");
+    assert!(zipped.stat(archive_root).unwrap().is_dir);
     let local = providers.iter().find(|p| p.name == "local").unwrap();
     let (target, root) = local.open("zip-source");
     let bytes = b"{\"zip\":\"readonly source\"}\n";
     assert_eq!(
-        fixture::read(&zipped, "", ".obsidian/preferences.json"),
+        fixture::read(&zipped, archive_root, ".obsidian/preferences.json"),
         bytes
     );
     assert!(
-        zipped.open_write("denied.txt").is_err(),
+        zipped.open_write("/denied.txt").is_err(),
         "ZIP must remain read-only"
     );
     run(
         &zipped,
-        "",
+        archive_root,
         &*target,
         &root,
         "sync-provider-zip-source",
@@ -291,15 +294,28 @@ fn sync_reliability_task_provider_matrix() {
     );
     let quiet = run(
         &zipped,
-        "",
+        archive_root,
         &*target,
         &root,
         "sync-provider-zip-source",
         Direction::AtoB,
     );
     assert_eq!(
-        (quiet.stats.a_to_b, quiet.stats.b_to_a, quiet.stats.bytes),
-        (0, 0, 0)
+        (
+            quiet.stats.a_to_b,
+            quiet.stats.b_to_a,
+            quiet.stats.deleted,
+            quiet.stats.bytes
+        ),
+        (0, 0, 0, 0)
+    );
+    assert_eq!(
+        fixture::read(&zipped, archive_root, ".obsidian/preferences.json"),
+        bytes
+    );
+    assert_eq!(
+        fixture::read(&*target, &root, ".obsidian/preferences.json"),
+        bytes
     );
     println!("C04 readonly ZIP source bytes=confirmed; provider pairs={index}");
 }
