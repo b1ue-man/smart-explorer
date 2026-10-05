@@ -419,10 +419,10 @@ nimmt vor Code den vollständigen Plan auseinander; keine weitere Reviewrunde.
 | Stufe 1 / erste Recherche | fertig | `recherche.md`, gesicherte Refs |
 | Stufe 2 / zweite Recherche | fertig, Lücken eingearbeitet | dieser Plan und `abnahme.md` |
 | Einmalige Plan-Kritik | abgeschlossen, alle Befunde eingearbeitet | `review.md` |
-| M1/M2 | Drive-Namens-/Identitätsflüsse und vollständiger Recorded-Wiederanlauf bestätigt | Der achte Lauf bestätigt historische Viermaps, gefaltete Dirkeys, inkrementelle History und vollständige Recorded-Lost-ACK-/Backup-/Restore-/Restart-/No-op-Flows mit unveränderten strikten Orakeln |
-| M3 | Schutz-/Recovery-/Versionen und DAV bestätigt; FTPS-Korrektur quellenfertig | C06/C07 und DAV-Guards bestehen. M3.C04-8 ist als `e1e7ae93` umgesetzt und selbst geprüft; tatsächliche FTPS-/Matrixbestätigung bleibt Aufgabe derselben Remote-Suite |
-| M4 | alte Desktop-/Android-Jobs bestätigt | C08 besteht auf beiden Hosts einschließlich realem v0.5.169-Workerwechsel. C09 bestätigt das echte Altappupdate mit Force-stop, erhaltenem Jobowner und Wiederanlauf. Derselbe ganze Ablauf bleibt verpflichtend |
-| M5 Remote-Gesamtablauf | achter Workflow vollständig ausgewertet; vollständiger Folgefixkandidat wird gemeinsam abgenommen | `8a1a36ca` besteht auf Windows und Android; Linux scheitert an C04 FTP→FTPS und C10-Zugang. Formatpatch `91f46ce3` und M3.C04-8 `e1e7ae93` sind committed. Dieselbe Suite bindet beide neuen C04-Fälle und die konkreten vorhandenen FTP-Kompatibilitätsguards; echte Drive-Testautorisierung bleibt offen |
+| M1/M2 | Drive-Vertragsfälle und vollständiger Recorded-Wiederanlauf bestätigt | Der neunte Lauf bestätigt C01–C03/C05 einschließlich historischer Viermaps, gefalteter Dirkeys, inkrementeller History und vollständiger Recorded-Lost-ACK-/Backup-/Restore-/Restart-/No-op-Flows. Der echte Google-Lauf C10 bleibt offen |
+| M3 | Schutz-/Recovery-/Versionen, DAV und vollständige Providerabläufe bestätigt | Im neunten Lauf bestehen C04/C06/C07 auf beiden Hosts. Linux schließt die gesamte Provider-Matrix einschließlich FTPS ab; beide Uploadwege und die direkt betroffenen FTP-Kompatibilitätsguards bestehen. M3.C04-8 ist damit bestätigt |
+| M4 | alte Desktop-/Android-Jobs bestätigt | Der neunte Lauf bestätigt C08 auf beiden Hosts einschließlich realem v0.5.169-Workerwechsel. C09 bestätigt dasselbe alte Jobobjekt über Altappupdate, Force-stop und Wiederanlauf mit tatsächlichen Endbytes und No-op |
+| M5 Remote-Gesamtablauf | neunter Workflow vollständig ausgewertet; echter Google-Zugang bleibt Abnahmeblocker | Kandidat `f64699ec` bestätigt alle funktionalen C01–C09. Linux scheitert noch an fehlender C10-Autorisierung und der Sourceformat-Grenze; deren exakter Remote-Patch ist als reine Formatänderung `5ebdd5aa` übernommen. Kein vollständiger M5-Pass. Der endgültige gepushte Kandidat benötigt dieselbe ganze Remote-Suite mit tatsächlichem Google-Zugang |
 | M6 Release | offen | erst nach vollständig erfolgreichem M5 |
 
 Der [siebte Workflow](https://github.com/b1ue-man/smart-explorer/actions/runs/37289323834)
@@ -514,6 +514,27 @@ Es entsteht keine weitere Plan-Kritik, zweite Suite oder Patchveröffentlichung.
   Beide neuen C04-FQNs werden durch das vorhandene Präfix entdeckt; die
   vorhandenen Längen-, Spool-/Flush-/Nichtwiederholungs-, Reconnect- und
   FTPS-Datentimeoutguards sind an denselben Eintritt gebunden.
+- Im vollständig ausgewerteten neunten Lauf auf `f64699ec` bestätigt:
+  beide neuen FQNs, vorhandene direkte FTP-Guards und die gesamte tatsächliche
+  Linux-C04-Matrix bis Drive↔Drive bestehen; Windows bestätigt seine gesamte
+  Providerabnahme. Seed, Änderung, Gegenänderung, Wiederöffnung und No-op
+  bleiben vollständige gemeinsame Orakel. Es bleibt kein FTPS-Folgebefund.
+
+### Verbleibender Abschluss nach dem neunten Lauf
+
+- Der kandidatgebundene Remote-Formatpatch betrifft ausschließlich die
+  FTP-Modulreihenfolge und eine Testaufrufdarstellung. `5ebdd5aa` bewahrt
+  die Modulattribute und sämtliche semantischen Tokens; ein optionales
+  Argument-Abschlusskomma entfällt. Statische AST-Prüfung, kein lokaler
+  Formatter oder Build. Der vollständige Rootgraph ist danach aktualisiert.
+- Erforderliche Repository-Secret-Namen sind am 2026-10-05 um 13:06:53 UTC
+  erneut geprüft: `SE_DRIVE_TEST_CLIENT_ID` und
+  `SE_DRIVE_TEST_REFRESH_TOKEN` fehlen. Die bereits gestellte
+  Autorisierungsfrage bleibt offen; keine Werte gelesen oder veröffentlicht.
+- Nach Verfügbarkeit des Zugangs bestätigt ausschließlich derselbe
+  checked-in Suite-Einstieg den dann gepushten exakten Kandidaten gemeinsam
+  einschließlich C10. Kein übersprungener Google-Lauf als Erfolg, keine
+  unverändert aussichtslose Wiederholung und kein vorzeitiger Release.
 
 Pro Meilenstein: gegen Refs und Aufrufer selbst prüfen, kohärent committen;
 Abnahme erst gesammelt nach kompletter Umsetzung. Nach nativen Änderungen
