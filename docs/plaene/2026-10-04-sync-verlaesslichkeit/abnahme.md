@@ -193,6 +193,39 @@ Pretty-Ausgabe; sie verlangt weiterhin jeden ausgewählten vollen Namen genau
 einmal und eine passende terminale Summary. Unvollständige/duplizierte Fälle
 oder abweichende Ergebniszähler bleiben fehlgeschlagen.
 
+Die Room-Refresh-Korrektur wird im selben C04-Ablauf auf Default-Deny-
+Wiederauftauchen, aktiven Widerruf und einen atomar abgewiesenen Batch geprüft.
+C07 übernimmt zusätzlich die vorhandenen exakten Direct-/Room-Grant-,
+Offline-/Online-Barrieren-, parallelen Revoke-/Launch- und unabhängigen
+Principal-Abläufe. Sie beantworten ausschließlich die durch die gemeinsame
+Registryänderung betroffenen Rechte-/Cancellationfragen; kein weiterer
+Suiteaufruf und keine breite Exec-Matrix werden eingeführt.
+
+Die nächste Korrektursammlung enthält einen reinen `SyncRelativePath` für
+Apply, Baseline, SQL, Checkpoint, Spellings, Versionsmanifest und Replacement-/
+Merge-Recovery. `:`, Backslash und `%` bleiben Providerliterale; native Namen,
+Root-/Linkschutz und Agent-Wire werden an ihren bestehenden Grenzen geprüft.
+Alte physische Archive behalten ihren nativen Pfadvertrag, moderne Versionen
+verwenden opake private Datenpfade. Derselbe C02-Roundtrip fordert zusätzlich
+Literal-Overwrite, genaue Backupbytes, wiedergeöffnete Endpunkte, gespeicherte
+Originalpfade, Restore und abschließendes No-op. Im Nested-Mirror wird gegen
+die vollständige bestätigte Sourceindexgeneration verglichen, die auch
+implizit erzeugte Eltern enthält; das Null-Listing-Orakel bleibt unverändert.
+
+Der statisch belegte Zyklus `AgentBackend` → `UnavailableBackend` →
+`live_backend` → neuer identischer Agent betrifft `sync_child_path`,
+`previous_state_identities` und `replace_staged_reversible`. Der Stub verwendet
+hier wieder die konservativen VFS-Defaults: Literalpfad, keine unbewiesene
+Altidentität und `Ok(false)` ohne Mutation. Der bestehende Bisync-Anschluss
+behält geprüfte Sicherung vor Veröffentlichung, sicheres Replace ohne
+Delete-Fallback und Recovery-Intents. Die neuen C08-Grenzfälle verwenden den
+echten Agent-Dispatch mit bestehendem Hello-Framing für Direct/Room und Cache,
+verlangen keine Dateisystem-RPCs und geschlossene Streams. Der tatsächliche
+Crossremote-Altjob behält normalen Resolver und Runner; Loader-Restart,
+StateKey, Owner, Optionen, Baseline und No-op bleiben überprüfbar. Der
+Windows-Abbruch selbst enthält keinen Callframe; seine Behebung und die
+vorher unausgeführten Fälle bleiben bis zum nächsten selben Gesamtlauf offen.
+
 Das Linux-Logartefakt enthielt außerdem das private Arbeitsverzeichnis der
 Altworker-Fixture; das Windows-Archiv hatte dieselbe Grenze. Der Upload schließt
 deren gesamte generierte Verzeichnisse jetzt wie das native Testprofil aus.

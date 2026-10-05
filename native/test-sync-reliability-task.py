@@ -52,6 +52,11 @@ INTEGRATIONS = {"C05": [
     "bisync::tests::safety::backup_failure_blocks_overwrite_and_delete",
     "bisync::tests::safety::stat_failure_blocks_reversible_overwrite",
     "bisync::pair_lock::tests::review_task_pair_lock_excludes_a_second_holder_until_dropped",
+    "share::exec_grant_runtime::tests::exact_direct_target_enables_then_disable_cancels_and_denies",
+    "share::exec_grant_runtime::tests::exact_room_member_policy_is_independent",
+    "share::exec_grant_runtime::tests::review_task_online_extension_preserves_policy_after_offline_barrier",
+    "share::exec_registry::tests::revoke_and_launch_commit_have_two_atomic_orderings",
+    "share::exec_registry::tests::review_task_restriction_keeps_other_principal_launch_and_blocks_old_token",
 ], "C08": [
     "cloud::core_impl::startup_regression_task_tests::startup_regression_task_refresh_sends_preserved_client_id_and_token",
     "cloud::core_impl::startup_regression_task_tests::startup_regression_task_bad_config_stops_before_any_http_request",
