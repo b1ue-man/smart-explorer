@@ -1017,6 +1017,7 @@ Der vollständige Flow (bauen → Feed → GitHub-Release → Selbst-Update) ste
    mit `native/test-sync-reliability-task.py`: echte Providerpaare, Wiederanlauf,
    alte Desktop-Jobs und ein Android-Update unter Erhalt der Appdaten. Ein fehlender
    autorisierter Google-Testzugang blockiert dessen Live-Drive-Abnahme.
+   Der Geräteablauf beginnt erst nach der vollständig verifizierten APK-Übergabe.
    Der Mount-Massenzugriffs-Block nutzt ausschließlich
    `mount-optimization-task.yml` auf Windows 2025 mit
    `native/test-mount-optimization-task.ps1`: gepinntes Node/libuv,

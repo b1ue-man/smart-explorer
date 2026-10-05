@@ -145,6 +145,7 @@ jobs:
           umask 077
           printf '%s' "$KEYSTORE_BYTES" | base64 --decode > "$RUNNER_TEMP/sync-reliability.keystore"
       - name: Build the affected emulator bridge and APKs
+        id: build
         shell: bash
         timeout-minutes: 220
         env:
@@ -163,7 +164,7 @@ jobs:
           path: native/target
           key: ${{ steps.outputs.outputs.cache-primary-key }}
       - id: handoff
-        if: always()
+        if: ${{ always() && steps.build.outcome == 'success' }}
         shell: bash
         run: |
           if [[ -s "$RUNNER_TEMP/sync-reliability-apks/provenance.json" ]]; then
