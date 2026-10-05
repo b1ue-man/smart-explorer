@@ -105,6 +105,25 @@ und [`signal.pidfd_send_signal(pidfd, signalnum, siginfo=None, flags=0)`](https:
 Die Linux-Eskalation benötigt Python ab 3.9 und Kernel ab 5.3; ein fehlender
 PID-FD-Pfad wird nicht durch einen unsicheren numerischen PID-Kill ersetzt.
 
+## Normaler Room-Konfigurationsrefresh
+
+Im Remote-Lauf 37252322674 waren Direct-Setup und beide TLS-Worker verbunden;
+der folgende normale Room-Export-/Policyrefresh meldete `StaleAuthorization`.
+`apply_configuration_transition` erzeugte beim vorübergehenden Fehlen eines
+bereits Exec-verweigernden Members eine synthetische Revocationrevision. Eine
+später gelernte/persistierte Presence mit der ursprünglichen Default-deny-
+Revision wurde dadurch abgelehnt. Für schon verweigernde Policies bleibt die
+Revision beim Entfernen nun erhalten; entfernte tatsächlich aktive Exec-
+Policies erhalten weiterhin die höhere Revocationrevision.
+
+Die Exec-Registry validiert einen vollständigen Konfigurationsbatch unter
+ihrem Lock, bevor sie Epoch, Restriktionsbarrieren, Cancellation und Policies
+übernimmt. Ein abgelehnter Batch lässt den bisherigen Zustand unverändert;
+ein gültiger Batch setzt alle Denybarrieren vor Veröffentlichung des neuen
+Authsnapshots. Revision-Rollback und Enable derselben revoked Revision bleiben
+verboten. Signaturfakten, Nonce-Replayzustand, Session-/Mount-/Rootgrenzen und
+die gewöhnliche CLI-/Resolver-Konfigurationsfolge bleiben unverändert.
+
 ## Gespeicherte SFTP-Schlüsselanmeldung
 
 Die zusätzliche Linux-Authority `sftp-key` gehört zur selben vollständigen
