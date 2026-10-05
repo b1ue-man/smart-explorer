@@ -28,8 +28,11 @@ CASES = {
     "C10": {"meaning": "real Google OAuth and Drive sync", "prefix": "sync_reliability_task_live_drive_"},
 }
 # Existing flows are selected by their full names for the directly affected
-# publication, cancellation, protected-tree and persisted-startup contracts.
-INTEGRATIONS = {"C05": [
+# metadata redirects, publication, cancellation, protected-tree and startup contracts.
+INTEGRATIONS = {"C04": [
+    "webdav::core_impl::connection_tests::mutation_redirect_is_not_followed_or_reported_as_success",
+    "webdav::core_impl::connection_tests::put_redirect_is_terminal_and_never_followed",
+], "C05": [
     "bisync::tests::safety::remote_absolute_path_never_uses_local_recycle_bin",
     "bisync::tests::safety::recycle_failure_does_not_fall_back_to_permanent_delete",
 ], "C06": [
