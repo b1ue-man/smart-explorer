@@ -694,3 +694,72 @@ vollständig extrahiert und geclustert: Manifest exakt gleich dem gesamten
 Nativekorpus (1825 Dateien), 32224 Nodes, 81174 Kanten und 1121 Communities.
 Kein Teilgraph oder verschachtelter Nativegraph bleibt. Dies ist der vollständige
 Quellkandidat für die erneute gemeinsame Remote-Bestätigung, kein M5-Pass.
+
+## Neunter Lauf: Provider- und Altjobabläufe bestätigt, Google-Zugang offen
+
+Der [neunte Workflow](https://github.com/b1ue-man/smart-explorer/actions/runs/37306768672)
+prüft exakt `f64699ecee39d47545523a3ec2fcfe8e9b37e264` und ist am
+2026-10-05 um 13:01:21 UTC vollständig fehlgeschlagen abgeschlossen.
+Alle fünf Jobs sind beendet. Windows, Android-Build und echter
+Android-Geräteablauf sind erfolgreich. Sämtliche vier Ausführungsreports
+und ihre Gesamtauswertung sind an denselben exakten Kandidaten gebunden.
+
+C01–C08 bestehen auf beiden nativen Hosts. Linux-C04 schließt die gesamte
+reale Provider-Matrix einschließlich der vorher fehlgeschlagenen
+FTP→FTPS-Strecke bis zu Room↔Room, Room↔Drive und Drive↔Drive ab.
+Seed, Änderung, Gegenänderung, Wiederöffnung und tatsächliche Endbytes
+mit abschließendem No-op sind bestätigt. Beide FTPS-Writer bestehen
+zusätzlich ihren gemeinsamen echten Datenabschlussfall. Terminale
+Zielablehnung nach Datenfehler, plain-FTP-Uploadlänge, einmaliger Flush,
+Diskspool, Nichtwiederholung, Suspect-Reconnect und FTPS-Datentimeout
+bleiben durch die direkt betroffenen Guards bestätigt. DAV-, ZIP-,
+Literal-/Account-/Locator-, Schutz-, Recovery- und Versionsorakel bestehen.
+Die Drive-Gegenstellen der Provider-Matrix sind Vertragsserver; diese
+Ergebnisse ersetzen ausdrücklich keinen Lauf gegen Google.
+
+Exakte native Ausführung, eigene Providerbereinigung und Wechsel des
+veröffentlichten alten Desktopworkers bestehen auf Linux und Windows.
+C09 bestätigt das tatsächliche Android-Altappupdate: dieselbe Job-ID
+bleibt über `old-prepare`, `update-prepare` und `retry` erhalten.
+Force-stop/Restart erzeugt jeweils einen neuen Prozess; endgültige
+Quell- und Zielhashes stimmen überein. Der abschließende No-op enthält
+keine Änderungen, Konflikte, Löschungen oder Fehler und ist nicht blockiert.
+
+Die einzige verbleibende funktionale Abnahmegrenze ist C10: erforderliche
+Google-Autorisierung fehlt. Linux meldet daneben `source-format`; der
+zusätzliche `whole-flow-host`-Fehler ist der Hostabschluss derselben
+fehlenden C10-Abnahme. Die Gesamtauswertung enthält genau diese Grenzen
+und keinen weiteren funktionalen Befund. Kein vollständiger M5-Pass.
+
+Alle folgenden Evidenzarchive sind gegen GitHubs SHA-256 geprüft und
+ausschließlich an zulässigen relativen Textpfaden ausgewertet:
+
+- Linux `11345884124`: `c02fb60bb1830cfc8884e3cbf47995c8dbda0f2495232e8e37ba6688e93e50ee`.
+- Windows `11346698439`: `7f4df45a0dce31bee34af556fc5d9f282e85f3954cf7b204e32e8cd21e7a8793`.
+- Gerät `11345206643`: `f549de013ab908b9bff6762c035cae88d3ceec63e82ad972383a907cd9d35ede`.
+- Android-Buildreport `11344273340`: `5b5834e43cf4acd5c6cd74fbe7fdf244976cdc573de3e59405465cd6f9b097ee`.
+- Gesamtauswertung `11346469100`: `71017b69e177163e23df619a81274d890ae2748116a2cb82666231426fed21b4`.
+
+Der exakte Remote-Formatpatch
+`f0abdb4a8660e8e371f8f3ba829babd529fcc7febfcccecd3f6e640316d1498c`
+ist kandidat-, digest- und pfadgebunden als `5ebdd5aa` übernommen.
+Er sortiert ausschließlich die bestehenden FTP-Moduldeklarationen samt
+unveränderten Attributen und formatiert einen Testaufruf. Die statische
+Token-/AST-Prüfung berücksichtigt das entfallene optionale Argumentkomma;
+alle semantischen Tokens bleiben gleich. Der Formatreport enthält keine
+Größenverstöße. Kein Compiler, Formatter oder Test lokal ausgeführt.
+
+Secret-Namen erneut am 2026-10-05 um 13:06:53 UTC gelesen:
+`SE_DRIVE_TEST_CLIENT_ID` und `SE_DRIVE_TEST_REFRESH_TOKEN` fehlen.
+Die bestehende Autorisierungsfrage bleibt offen; keine Secretwerte gelesen
+oder ausgegeben. Nach deren Verfügbarkeit muss dieselbe vollständige
+Remote-Suite den endgültigen gepushten Kandidaten einschließlich C10
+bestätigen. Erst danach folgt der eine vollständige Remote-Release 0.5.172.
+Es ist keine weitere Pipeline mit unverändert fehlenden Eingaben gestartet.
+
+Nach der Formatübernahme ist der Rootgraph vollständig neu extrahiert und
+geclustert: Manifest exakt gleich dem gesamten Nativekorpus (1825 Dateien),
+32224 Nodes, 81174 Kanten und 1120 Communities. Kein partieller oder
+verschachtelter Graph bleibt. Auswertung, aktueller offener Boardstatus
+und vollständiger Graph werden mit dem Formatcommit auf `main` gepusht;
+dieser Entwicklungscheckpoint ist kein Release und kein vollständiger M5-Pass.
