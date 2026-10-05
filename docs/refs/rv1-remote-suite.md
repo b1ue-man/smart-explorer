@@ -22,6 +22,25 @@ Prozesszustand. `--exact` gilt für sämtliche Filter und eignet sich nur für v
 Windows darf statt einer überlangen Liste voller Namen kurze Filter verwenden, sofern
 entdeckte Auswahl und tatsächliche erfolgreiche Ergebnisse vollständig abgeglichen werden.
 
+Am 2026-10-05 für den Sync-Fixloop frisch geprüft:
+[`--no-capture`](https://doc.rust-lang.org/rustc/tests/index.html#--no-capture)
+liefert stdout/stderr unmittelbar; `--show-output` wartet auf das Ende aller
+Fälle. `--format=pretty`, `--color=never` und `--test-threads=1` sind stabile
+Optionen. JSON-Ausgabe wäre instabil, `--logfile` ist deprecated; beides wird
+nicht eingeführt. Der
+[PrettyFormatter](https://github.com/rust-lang/rust/blob/master/library/test/src/formatters/pretty.rs)
+schreibt bei serieller Ausführung vor dem Fall dessen Namen und danach das
+geflushte Ergebnis mit Newline. Dazwischen dürfen Diagnosen stehen. Der
+Suite-Parser ordnet die Abschlusswörter deshalb den Namensabschnitten zu und
+verlangt zusätzlich eindeutige vollständige Namen, genau einen Laufheader
+und eine terminale Summary mit passenden Passed/Failed/Ignored-Zählern und
+ohne gemessene Benchmarks. Ein Prozessabbruch bleibt fehlgeschlagen; bis
+dahin ausgegebene Ursachen bleiben im selben Log erhalten.
+Die dafür verwendete
+[`collections.Counter`](https://docs.python.org/3/library/collections.html#collections.Counter)
+zählt die Startnamen und Abschlusszustände; fehlende Schlüssel haben den
+Wert null. Die API wurde am selben Tag gegen Python 3 überprüft.
+
 ## Subprozesse
 
 Primärquelle: [Python subprocess](https://docs.python.org/3/library/subprocess.html).

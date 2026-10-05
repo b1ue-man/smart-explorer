@@ -143,8 +143,8 @@ Fixture-Roots vor dem alten `sync.save` kanonisch auf; relative Hash-/Baseline-
 und Versionsbelege benutzen dieselbe Basis. Die veröffentlichte alte App
 erzeugt weiterhin den gesamten Altzustand, und beim Update bleiben ihre
 gespeicherten Locators unverändert. Byte-, Baseline-, Backup- und No-op-Orakel
-werden nicht abgeschwächt. Die nativen Stufen laufen noch; weder der dritte
-Gesamtlauf noch die Android-Korrektur sind bereits erfolgreich abgenommen.
+werden nicht abgeschwächt. Der dritte Workflow ist vollständig fehlgeschlagen
+ausgewertet; die Android-Korrektur ist noch nicht erneut abgenommen.
 
 Die abgeschlossene Linux-Stufe des dritten Laufs bestätigt zusätzlich die
 Unterbrechungs-/Retry-Korrekturen (C06). Die veröffentlichte Altworker-Übernahme
@@ -166,7 +166,7 @@ Der geprüfte kandidatgebundene Formatpatch
 `177a72fb52b60f62a01677acd94a15b467d8e4015aedb24ede977883e9721f0d`
 ist statisch übernommen; sein Report enthält keine Größenverletzung.
 
-Die Windows-Stufe ist ebenfalls vollständig ausgewertet. Notebook,
+Die Windows-Stufe des zweiten Laufs ist ebenfalls vollständig ausgewertet. Notebook,
 Bindungsmigration, Schutz und die echte Altworker-Übernahme erfüllen auch dort
 ihre Orakel. Zusätzlich scheitert die gesunde `healthy.txt`-Änderung an einem
 unrepräsentierbaren Backslash-Geschwister; dessen geschützter Teilstatus darf
@@ -176,6 +176,22 @@ nicht binden, während der Helper bloße Worker-Erreichbarkeit akzeptiert hatte;
 die Korrektur muss Serverlistener und tatsächlich verbundene Peers bestätigen.
 Die vollständige gemeinsame Evaluation ist fehlgeschlagen. C10 nennt weiterhin
 fehlende Client-ID und Refresh-Token. Keine Releasephase wurde gestartet.
+
+Im dritten Lauf ist die Windows-Server-/Peer-Einrichtung erfolgreich. C07
+und die separate tatsächliche veröffentlichte Altworker-Übernahme erfüllen
+ihre Orakel; deren Privatroot wurde nach Prozessende und Autostart-Restaurierung
+entfernt und liegt nicht im Reportarchiv. Der gemeinsame native Host bricht
+im Crossremote-Altjob mit Windows-Status `3221225725` und Stackoverflow ab.
+C01–C03 und spätere Drive-/Jobfälle wurden dadurch nicht ausgeführt; sie sind
+für diesen Kandidaten nicht als erfolgreich bestätigt. Die vorangegangene
+C04-Assertion bleibt in der gepufferten Ausgabe ohne Ursache. Die gemeinsame
+Evaluation verweigert den Kandidaten einschließlich der fehlenden Ausführung.
+Das kombinierte Reportarchiv ist gegen SHA-256
+`6c242df5395ea78411989a2b18c63c2d08778f058ae61add987eeb02f9bc65c5`
+verifiziert. Die Suite liefert nun Diagnosen unmittelbar mit serieller
+Pretty-Ausgabe; sie verlangt weiterhin jeden ausgewählten vollen Namen genau
+einmal und eine passende terminale Summary. Unvollständige/duplizierte Fälle
+oder abweichende Ergebniszähler bleiben fehlgeschlagen.
 
 Das Linux-Logartefakt enthielt außerdem das private Arbeitsverzeichnis der
 Altworker-Fixture; das Windows-Archiv hatte dieselbe Grenze. Der Upload schließt

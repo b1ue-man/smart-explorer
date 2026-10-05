@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """One candidate-bound remote sync acceptance entrypoint; never a release build."""
 import argparse
+from collections import Counter
 import contextlib
 import importlib.util
 import json
@@ -121,6 +122,36 @@ def discover(shared, binary, env, report):
     return mapping
 
 
+def host_results(text, selected):
+    # Serial pretty output prints the name before execution, then flushes the
+    # result after any uncaptured diagnostics. An aborted case has no result.
+    starts = list(re.finditer(r"^test (\S+) \.\.\. ", text, re.MULTILINE))
+    footers = list(re.finditer(r"^(?:failures(?: \(time limit exceeded\))?|successes):[ \t]*$|^test result:",
+                               text, re.MULTILINE))
+    observed = {}
+    for index, start in enumerate(starts):
+        end = starts[index + 1].start() if index + 1 < len(starts) else len(text)
+        end = next((footer.start() for footer in footers if start.end() <= footer.start() < end), end)
+        result = re.search(r"(ok|FAILED|ignored)(?:, [^\r\n]*)?\Z", text[start.end():end].rstrip())
+        if result:
+            observed[start.group(1)] = result.group(1)
+    names = Counter(start.group(1) for start in starts)
+    summaries = re.findall(r"^test result: (ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored; (\d+) measured;",
+                           text, re.MULTILINE)
+    running = re.findall(r"^running (\d+) tests?$", text, re.MULTILINE)
+    counters = tuple(map(int, summaries[0][1:])) if len(summaries) == 1 else None
+    actual = tuple(Counter(observed.values())[status] for status in ("ok", "FAILED", "ignored"))
+    exact = (set(names) == set(selected) == set(observed) and all(count == 1 for count in names.values())
+             and running == [str(len(selected))] and counters is not None
+             and counters == (*actual, 0) and sum(counters) == len(selected)
+             and summaries[0][0] == ("FAILED" if actual[1] else "ok"))
+    evidence = {"missing": sorted(set(selected) - observed.keys()),
+                "unexpected": sorted(names.keys() - set(selected)),
+                "duplicates": sorted(name for name, count in names.items() if count != 1),
+                "reported_counters": counters, "completed_counters": actual}
+    return observed, exact, evidence
+
+
 def native_stage(args, env, source, logs, shared):
     records, failures = {}, []
     if os.name != "nt":
@@ -174,14 +205,15 @@ def native_stage(args, env, source, logs, shared):
                 # Other cases still run and C04 itself must fail for missing
                 # runtime fixtures. Missing providers never become a skip.
             stage("whole-flow-host", lambda: shared.run(
-                [binary, "--exact", *selected, "--include-ignored", "--test-threads=1", "--show-output"],
+                [binary, "--exact", *selected, "--include-ignored", "--test-threads=1",
+                 "--no-capture", "--format=pretty", "--color=never"],
                 logs / "whole-flow.log", fixture_env, seconds=10800))
             text = (logs / "whole-flow.log").read_text(errors="replace") if (logs / "whole-flow.log").exists() else ""
-            observed = dict(re.findall(r"^test (\S+) \.\.\. (ok|FAILED|ignored)\s*$", text, re.MULTILINE))
-            total = re.search(r"test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored;", text)
-            if set(observed) != set(selected) or total is None or sum(map(int, total.groups())) != len(selected):
+            observed, exact, evidence = host_results(text, selected)
+            records["exact-execution"] = {"result": "passed" if exact else "failed", "evidence": evidence}
+            if not exact:
                 failures.append("exact-execution")
-                records["exact-execution"] = {"result": "failed", "error": "Actual test host did not report every selected case exactly once."}
+                records["exact-execution"]["error"] = "Actual test host did not report every selected case exactly once with matching counters."
             for case, names in mapping.items():
                 records[case] = {"result": "passed" if all(observed.get(name) == "ok" for name in names) else "failed",
                                  "scenarios": {name: observed.get(name, "missing") for name in names}}
