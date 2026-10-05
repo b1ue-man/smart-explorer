@@ -115,10 +115,9 @@ pub(super) fn target_touched_drifted(
             return true;
         }
         if ch.old_managed
-            && ch
-                .old_rel
-                .as_deref()
-                .is_some_and(|old| target_rel_drifted(target, root, target_items, old, opts, cancel))
+            && ch.old_rel.as_deref().is_some_and(|old| {
+                target_rel_drifted(target, root, target_items, old, opts, cancel)
+            })
         {
             return true;
         }

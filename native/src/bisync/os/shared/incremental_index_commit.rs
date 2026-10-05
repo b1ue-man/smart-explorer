@@ -128,9 +128,16 @@ pub(super) fn commit_incremental(
             ids.insert(root_id.to_string());
         }
         for item in before.values().filter(|item| !item.is_dir && !item.deleted) {
-            let now = confirmed.get(&item.rel).and_then(|entry| {
-                if side == Side::A { entry.0 } else { entry.1 }
-            });
+            let now =
+                confirmed.get(&item.rel).and_then(
+                    |entry| {
+                        if side == Side::A {
+                            entry.0
+                        } else {
+                            entry.1
+                        }
+                    },
+                );
             if !touched.contains(keys.key(&item.rel).as_ref()) && now != item.sig {
                 return Err(invalid());
             }
@@ -152,8 +159,7 @@ pub(super) fn commit_incremental(
                 return Err(invalid());
             }
             let item = if touched.contains(keys.key(rel).as_ref()) {
-                confirmed_item(state, side, backend, root, rel, signature)
-                    .map_err(|_| invalid())?
+                confirmed_item(state, side, backend, root, rel, signature).map_err(|_| invalid())?
             } else {
                 before
                     .get(rel)
@@ -214,10 +220,17 @@ fn confirmed_item(
     use engine::apply_guard::{capture, revalidate, ExpectedFile};
     engine::apply_boundary::guard(backend, root, rel, state.opts.cross_mounts)?;
     let path = crate::vfs::sync_path(backend, root, rel)?;
-    let captured = capture(backend, &path, ExpectedFile::Present(signature), "indexed result")?;
+    let captured = capture(
+        backend,
+        &path,
+        ExpectedFile::Present(signature),
+        "indexed result",
+    )?;
     let meta = captured.regular("indexed result")?;
     if signature.hash != 0
-        && meta.content_md5.as_deref()
+        && meta
+            .content_md5
+            .as_deref()
             .is_none_or(|digest| engine::snapshot_hash::md5_hex_to_u64(digest) == 0)
         && engine::snapshot_hash::hash_file(backend, &path, state.cancel)? != signature.hash
     {
@@ -226,8 +239,14 @@ fn confirmed_item(
         ));
     }
     let id = backend.item_id(&path)?.or(meta.id.clone());
-    if meta.id.as_ref().is_some_and(|captured_id| id.as_ref() != Some(captured_id)) {
-        return Err(engine::apply_guard::drift("indexed result identity changed"));
+    if meta
+        .id
+        .as_ref()
+        .is_some_and(|captured_id| id.as_ref() != Some(captured_id))
+    {
+        return Err(engine::apply_guard::drift(
+            "indexed result identity changed",
+        ));
     }
     let parent = rel.rsplit_once('/').map_or("", |(parent, _)| parent);
     let parent_id = backend.item_id(&crate::vfs::sync_path(backend, root, parent)?)?;
