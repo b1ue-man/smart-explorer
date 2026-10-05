@@ -1,6 +1,6 @@
 # Owned Sync-Provider-Fixtures
 
-Primärquellen und aktuelle lokale Source geprüft am 2026-10-04. Diese Syntax
+Primärquellen und aktuelle lokale Source geprüft am 2026-10-05. Diese Syntax
 gehört ausschließlich zur einen Remote-Task-Suite. Keine lokale Ausführung.
 Vorhandene Syntaxrefs: [Taskruntime](sync-task-runtime-2026-10-04.md),
 [Remote-Metadaten](sync-remote-metadata.md), [Samba](samba-container.md),
@@ -15,7 +15,23 @@ Vorhandene Syntaxrefs: [Taskruntime](sync-task-runtime-2026-10-04.md),
   benötigt `mod_dav`/`mod_dav_fs` und einen für Apache schreibbaren `DavLockDB`.
   Der eigene TLS-Vhost nutzt Basic-Auth ausschließlich über HTTPS. Die Image-
   Standardkonfiguration bleibt bestehen; ein zusätzlicher Vhost lädt die DAV-
-  und TLS-Module. `PROPFIND` mit `Depth: 0` ist der authentifizierte Readinesspfad.
+  und TLS-Module. Der Vhost besitzt `/tmp/sync-dav/data` als eigenes Repository,
+  `Dav On` im URL-Scope `<Location />` und
+  [DirectoryIndex disabled](https://httpd.apache.org/docs/2.4/mod/mod_dir.html#directoryindex)
+  sowie `DirectoryCheckHandler On`, damit mod_dir den DAV-Handler respektiert.
+  Die Image-Startseite ist kein DAV-Repository. Der
+  [offizielle Image-Dockerfile](https://raw.githubusercontent.com/docker-library/httpd/master/2.4/Dockerfile)
+  setzt heute `User`/`Group` auf `www-data`; der Helper ermittelt beide aus der
+  tatsächlichen Konfiguration und setzt den Repositorybesitzer entsprechend.
+  `PROPFIND` mit `Depth: 0` muss über authentifiziertes, CA-geprüftes HTTPS
+  HTTP 207 und XML `DAV:multistatus` mit mindestens einer Response liefern.
+  Remote-Lauf 37247279728 lieferte für den bisherigen Image-Root authentifiziert
+  HTTP 405. Die [mod_dir-Source](https://raw.githubusercontent.com/apache/httpd/2.4.x/modules/mappers/mod_dir.c)
+  zeigt den betroffenen Konfigurationsweg: der späte Directory-Fixup kann bei
+  nicht aktiviertem Handlercheck die Index-Subrequest per internem Redirect
+  übernehmen, obwohl mod_dav zuvor seinen Handler gesetzt hat. Eigenes leeres
+  Repository, deaktivierter DirectoryIndex und Handlercheck beseitigen diesen
+  Weg; HTTP 207 bleibt ein tatsächliches Remote-Abnahmeorakel.
 - [Apache mod_ssl](https://httpd.apache.org/docs/2.4/mod/mod_ssl.html):
   `SSLEngine on`, `SSLCertificateFile`, `SSLCertificateKeyFile` konfigurieren
   den wirklichen TLS-Listener. Der Client prüft die tatsächliche Fixture-CA,
@@ -44,7 +60,8 @@ Vorhandene Syntaxrefs: [Taskruntime](sync-task-runtime-2026-10-04.md),
 
 `native/sync-reliability-providers.py::fixtures(logs, env, cli, share_server)`
 ist ein Contextmanager. Er liefert eine vollständige Environmentkopie mit
-`SE_SYNC_PROVIDER_MANIFEST` und auf Linux `SE_SYNC_FIXTURE_CA_DER`. Das Manifest
+`SE_SYNC_PROVIDER_MANIFEST`, `SE_SHARE_RELAY_URL` und auf Linux
+`SE_SYNC_FIXTURE_CA_DER`. Das Manifest
 enthält die zur Laufzeit gewonnenen Ports, normalen Providercredentials und
 Direct-/Room-Locators. Credentials werden durch Rust über die reguläre
 `save_connection_with_secret`-Transaktion gespeichert; Resolver öffnet sie
@@ -57,6 +74,17 @@ verwaltete `se --sync-daemon`-Prozesse. Identitäten, Direct-Code, acceptierter
 Grant, Roomcode und Exportberechtigungen entstehen durch normale CLI-Aufrufe.
 Der Peerprozess nutzt einen eigenen isolierten Profilepfad. Jede Prozess- und
 Containerreferenz wird vor Readiness gespeichert; jeder Exitpfad schließt sie.
+Signaling- und Relayport entstehen unabhängig durch OS-Portvergabe (`bind` auf
+Port 0) mit tatsächlichem `listen`; Windows setzt vorher
+[SO_EXCLUSIVEADDRUSE](https://learn.microsoft.com/en-us/windows/win32/winsock/using-so-reuseaddr-and-so-exclusiveaddruse).
+Ein benachbarter Port wird nicht als verfügbar angenommen. Beide Listener und
+das Weiterleben des eigenen Servers werden vor den Peercommands geprüft.
+Die vorhandene normale Transportoption `SE_SHARE_RELAY_URL` führt die ermittelte
+HTTPS-Relayadresse zu beiden Peerworkers und zum späteren Resolvertesthost;
+die normalen Zertifikatpins bleiben wirksam. Peerreadiness verlangt zugleich
+`worker.reachable`, `worker.running`, `worker.connected` und genau diese RelayURL.
+IPC-Erreichbarkeit allein ist keine Share-Verbindungsreadiness. Ein vorzeitig
+beendeter eigener Server unterbricht die nachfolgenden Readinesswaits sofort.
 Der Mainpeer übernimmt den Namespace der Suite/Testhost-CLI; der separate Peer
 bekommt einen eigenen gültigen `SMART_EXPLORER_E2E_TEST_NAMESPACE` (42 ASCII-Zeichen,
 aus Suitekennung und eigenem Profilepfad gehasht). Windows-Credentialstore und

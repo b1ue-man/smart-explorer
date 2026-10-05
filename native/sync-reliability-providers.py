@@ -16,6 +16,7 @@ import subprocess
 import tempfile
 import time
 import zipfile
+import xml.etree.ElementTree as ET
 
 
 class Owner:
@@ -187,9 +188,8 @@ def linux_protocols(owner):
     port = owner.port(name, 445)
     wait_port(port)
     result.append(connection("smb", "smb", port, user, password, "/sync"))
-    # Keep the image's established module/listener configuration; append one TLS DAV vhost.
-    dav = owner.root / "dav"
-    dav.mkdir()
+    # Own a container-private writable repository, separate from the image's
+    # static welcome page. URL-scope DAV also covers the collection root.
     conf = owner.root / "dav.conf"
     conf.write_text('''LoadModule dav_module modules/mod_dav.so
 LoadModule dav_fs_module modules/mod_dav_fs.so
@@ -202,28 +202,43 @@ ServerName localhost
 SSLEngine on
 SSLCertificateFile /fixture/server.pem
 SSLCertificateKeyFile /fixture/server.key
-DocumentRoot /usr/local/apache2/htdocs
-<Directory /usr/local/apache2/htdocs>
+DocumentRoot /tmp/sync-dav/data
+<Directory /tmp/sync-dav/data>
+Options None
+AllowOverride None
+DirectoryIndex disabled
+DirectoryCheckHandler On
+Require all granted
+</Directory>
+<Location />
 Dav On
 AuthType Basic
 AuthName SyncTask
 AuthUserFile /tmp/dav.passwd
 Require valid-user
-</Directory>
+</Location>
 </VirtualHost>
 ''')
     hashed = owner.command(["openssl", "passwd", "-apr1", "-stdin"], input=password + "\n")
     (owner.root / "dav.passwd").write_text(user + ":" + hashed + "\n")
     name = owner.docker("dav", "httpd:2.4", ["-p", "127.0.0.1::443", "-v", f"{owner.root}:/fixture:ro"],
-                        ["sh", "-c", "printf '\\nInclude /fixture/dav.conf\\n' >> /usr/local/apache2/conf/httpd.conf; "
+                        ["sh", "-c", "set -eu; printf '\\nInclude /fixture/dav.conf\\n' >> /usr/local/apache2/conf/httpd.conf; "
                          "cp /fixture/dav.passwd /tmp/dav.passwd; chmod 644 /tmp/dav.passwd; "
-                         "chown -R daemon:daemon /usr/local/apache2/htdocs; exec httpd-foreground"])
+                         "mkdir -p /tmp/sync-dav/data; "
+                         "dav_user=$(awk '$1 == \"User\" { print $2; exit }' /usr/local/apache2/conf/httpd.conf); "
+                         "dav_group=$(awk '$1 == \"Group\" { print $2; exit }' /usr/local/apache2/conf/httpd.conf); "
+                         "test -n \"$dav_user\" && test -n \"$dav_group\" && "
+                         "chown -R \"$dav_user:$dav_group\" /tmp/sync-dav && exec httpd-foreground"])
     port = owner.port(name, 443)
     wait_port(port)
     # Actual authenticated TLS/PROPFIND readiness, with the owned CA, not merely a socket.
-    owner.command(["curl", "--fail", "--silent", "--cacert", owner.root / "ca.pem",
+    response = owner.command(["curl", "--fail", "--silent", "--cacert", owner.root / "ca.pem",
                    "--user", f"{user}:{password}", "--request", "PROPFIND", "--header", "Depth: 0",
-                   f"https://127.0.0.1:{port}/"])
+                   "--write-out", "\n%{http_code}", f"https://127.0.0.1:{port}/"])
+    body, status = response.rsplit("\n", 1)
+    multistatus = ET.fromstring(body)
+    if status != "207" or multistatus.tag != "{DAV:}multistatus" or not multistatus.findall("{DAV:}response"):
+        raise RuntimeError("owned HTTPS DAV root did not return a DAV multistatus")
     result.append(connection("webdav", "webdav", port, user, password, "/"))
     return result
 
@@ -299,7 +314,8 @@ def fixtures(logs: Path, env: dict, cli: Path, share_server: Path | None):
             manifest = root / "providers.json"
             manifest.write_text(json.dumps(dict(providers=protocols, zip=str(archive))), encoding="utf-8")
             manifest.chmod(0o600)
-            runtime = dict(env, SE_SYNC_PROVIDER_MANIFEST=str(manifest))
+            runtime = dict(env, SE_SYNC_PROVIDER_MANIFEST=str(manifest),
+                           SE_SHARE_RELAY_URL=owned.env["SE_SHARE_RELAY_URL"])
             if os.name != "nt":
                 runtime["SE_SYNC_FIXTURE_CA_DER"] = str(root / "ca.der")
             yield runtime

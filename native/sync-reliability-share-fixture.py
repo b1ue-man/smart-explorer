@@ -12,18 +12,32 @@ import time
 
 
 def pair_ports():
-    for _ in range(100):
-        with socket.socket() as signal, socket.socket() as relay:
-            signal.bind(("127.0.0.1", 0))
-            port = signal.getsockname()[1]
-            if port == 65535:
-                continue
-            try:
-                relay.bind(("127.0.0.1", port + 1))
-            except OSError:
-                continue
-            return port, port + 1
-    raise RuntimeError("no free owned signaling/relay port pair")
+    # An adjacent port may be reserved/excluded on Windows even when a bind
+    # probe succeeds. Probe actual exclusive listeners, each on an OS port.
+    with socket.socket() as signaling, socket.socket() as relay:
+        for listener in (signaling, relay):
+            if os.name == "nt":
+                listener.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            listener.bind(("127.0.0.1", 0))
+            listener.listen(1)
+        return signaling.getsockname()[1], relay.getsockname()[1]
+
+
+def wait_server(process, ports, seconds=30):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise RuntimeError("owned Share server exited before TLS listeners; see share-server.log")
+        try:
+            for port in ports:
+                with socket.create_connection(("127.0.0.1", port), timeout=1):
+                    pass
+            if process.poll() is None:
+                return
+        except OSError:
+            pass
+        time.sleep(0.1)
+    raise RuntimeError("owned Share server did not publish both TLS listeners")
 
 
 def isolated(base, root):
@@ -173,6 +187,8 @@ class Client:
         while time.monotonic() < deadline:
             if self.process.poll() is not None:
                 raise RuntimeError(f"owned daemon {self.label} exited during {description}")
+            if hasattr(self, "server_process") and self.server_process.poll() is not None:
+                raise RuntimeError(f"owned Share server exited during {description}; see share-server.log")
             try:
                 value = callback()
                 if value:
@@ -262,7 +278,11 @@ def peers(owner, cli, server):
                                    env=server_env, stdin=subprocess.DEVNULL,
                                    stdout=server_log, stderr=subprocess.STDOUT)
         (owner.logs / "share-server-owner.json").write_text(json.dumps(dict(pid=process.pid, started=time.time())))
+        wait_server(process, (signal, relay))
         address = f"wss://127.0.0.1:{signal}/#sha256={pin}"
+        # The normal transport defaults to signaling-port + 1. Both peers and
+        # the later resolver testhost must use the actually owned relay port.
+        owner.env["SE_SHARE_RELAY_URL"] = f"https://127.0.0.1:{relay}"
         # Both identities/configurations use ordinary production commands.
         main = Client(owner, cli, dict(owner.env, SE_SHARE_RELAY_ONLY="1"), "main")
         clients.append(main)
@@ -271,10 +291,14 @@ def peers(owner, cli, server):
             raise RuntimeError("Main and remote Share peers must have different test namespaces")
         remote = Client(owner, cli, remote_env, "remote")
         clients.append(remote)
+        def connected(client):
+            worker = json.loads(client.call("share", "status", "--json").stdout).get("worker", {})
+            return (worker.get("reachable") and worker.get("running") and worker.get("connected")
+                    and worker.get("relay_url", "").rstrip("/") == f"https://127.0.0.1:{relay}")
         for client in clients:
+            client.server_process = process
             client.call("share", "configure", "--server", address)
-            client.wait(lambda c=client: json.loads(c.call("share", "status", "--json").stdout)
-                        .get("worker", {}).get("reachable"), "connected TLS Share worker")
+            client.wait(lambda c=client: connected(c), "connected TLS Share worker and owned relay")
         identity = json.loads(remote.call("share", "identity", "--json").stdout)
         direct = json.loads(main.call("connections", "add-peer", "--code", identity["direct_code"],
                                      "--name", "SyncTaskPeer", "--json").stdout)

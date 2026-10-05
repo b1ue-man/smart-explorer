@@ -108,7 +108,21 @@ erhält HTTP 405; deshalb fehlen die regulären Provider-Fixtures auch dem
 Crossremote-Altjob. Weitere konkrete Fehlstellen betreffen KeepBoth-Erhaltung,
 RunDepth/Mirror-Erwartungen, einen temporären Stage-Create-Fehler, den
 Move-Finalize-Wiederanlauf und die Identitätsprüfung im Drive-Roundtrip.
-Diese Ursachen werden vor dem nächsten Aufruf desselben Einstiegs behoben.
+Die Anschlusslesung unterscheidet dabei bewiesene falsche Fixtureannahmen
+von Produktfehlern: KeepBoth erhält den Verlierer in einer bestätigten
+Konfliktkopie; der temporäre Create-Fehler traf zunächst den Replica-Marker;
+der Move-Testwrapper bot keinen exklusiven Stage-/Finishvertrag. Diese
+Gesamtabläufe werden am tatsächlichen bestehenden Vertrag korrigiert.
+Der Incremental-Mirror hingegen fällt beim hashlosen Statvergleich unter
+Checksum auf Vollscan zurück und bootstrapped anschließend erneut vollständig;
+dieser betroffene Produktanschluss muss frische berührte Signaturen und die
+bereits bestätigte Indexbasis verwenden. Im Drive-Roundtrip hatten die zwei
+Fixturekonten unterschiedliche Permission-IDs, aber denselben synthetischen
+Refresh-Token und deshalb denselben Legacyalias. Jeder Fixtureaccount erhält
+nun einen stabil eigenen Token; die tatsächliche Pairalias-Prüfung bleibt
+unverändert. Die Provider-Korrektur besitzt einen eigenen DAV-Root mit
+bestätigtem Multistatus sowie unabhängig ermittelte Relayports und tatsächlich
+verbundene Peers. Diese Änderungen sind noch keine erneute Laufzeitabnahme.
 Die Windows-Stufe ist ebenfalls vollständig ausgewertet. Notebook,
 Bindungsmigration, Schutz und die echte Altworker-Übernahme erfüllen auch dort
 ihre Orakel. Zusätzlich scheitert die gesunde `healthy.txt`-Änderung an einem
