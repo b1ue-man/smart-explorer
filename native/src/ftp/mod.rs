@@ -26,3 +26,9 @@ mod errors;
 mod extensions;
 #[path = "core/metadata.rs"]
 mod metadata;
+#[path = "core/metadata_probe.rs"]
+mod metadata_probe;
+
+#[cfg(test)]
+#[path = "core/sync_reliability_task_provider_metadata_tests.rs"]
+mod sync_reliability_task_provider_metadata_tests;

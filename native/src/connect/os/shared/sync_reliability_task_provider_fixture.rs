@@ -125,7 +125,16 @@ impl Provider {
         let locator = format!("{}/{}", self.endpoint.trim_end_matches(['/', '\\']), child);
         let (reopened, reopened_root) = super::resolution::resolve_endpoint(&locator)
             .unwrap_or_else(|error| panic!("{} saved child locator: {error}", self.name));
-        assert_eq!(reopened_root.replace('\\', "/"), subroot.replace('\\', "/"));
+        if self.name == "mapped" {
+            // This provider owns a native Windows drive root, whose Path
+            // components treat repeated/mixed separators equivalently.
+            assert_eq!(
+                std::path::Path::new(&reopened_root),
+                std::path::Path::new(&subroot)
+            );
+        } else {
+            assert_eq!(reopened_root.replace('\\', "/"), subroot.replace('\\', "/"));
+        }
         assert_eq!(
             backend.namespace_identity(),
             reopened.namespace_identity(),

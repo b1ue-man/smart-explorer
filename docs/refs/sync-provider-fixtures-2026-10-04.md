@@ -63,6 +63,33 @@ Vorhandene Syntaxrefs: [Taskruntime](sync-task-runtime-2026-10-04.md),
   des separaten `Protocol::Smb`-TCP-Anschlusses, verlangen weiterhin einen
   positiven Port. Die Fixture ersetzt den UNC-Anschluss nicht durch `smb://`
   und ändert weder gespeicherte Accounts noch Credentials oder Root-Locators.
+  Das mapped-Rootorakel vergleicht ausschließlich für diesen nativen Provider
+  `Path`-Komponenten: `Z:/child` und der gültige native Childroot `Z:\/child`
+  bezeichnen denselben Ort. Remote-Roots und Literalnamen werden dafür nicht
+  über native Pfad-APIs geschickt; Namespace-, Byte- und No-op-Orakel bleiben.
+
+## Konsistente FTP-Checksum-Signaturen
+
+Der echte vsftpd-Anschluss im Remote-Lauf 37267225051 bestätigte STOR mit den
+erwarteten Bytes, während der spätere Checksum-Scan `Unreadable` meldete.
+Die [gesicherten FTP-Metadatenrefs](sync-remote-metadata.md#suppaftp-630-ftpftps-synchron)
+beschreiben die Ursache: vsftpd liefert kein MLSx, LIST-Zeiten haben Minuten-
+oder Tagesauflösung ohne Zeitzone, MDTM liefert dagegen UTC-Sekunden.
+Ein unverändert strikter Capture-Guard darf diese unterschiedlichen Signaturen
+nicht als dieselbe frische Beobachtung akzeptieren.
+
+Reguläre, ansprechbare LIST-Kinder erhalten deshalb dieselben SIZE-/MDTM-
+Fakten wie die Einzelabfrage, über einen gemeinsamen Probe ohne Enumeration.
+Links, Verzeichnisse, Specialfiles und unrepräsentierbare Namen werden nicht
+als reguläre Dateien geprobt. Unsupported-/550-Antworten beweisen keine
+Abwesenheit: Beide Aufrufer behalten dann den vollständigen Eltern-LIST-
+Vertrag einschließlich seiner gröberen Zeit. Weitere Probefehler werden als
+geschützte Unreadable-Kinder gemeldet; unabhängige Einträge bleiben verfügbar.
+Nur bei tatsächlich geprobten regulären Kindern wird Sekundenpräzision
+gemeldet. Exakte Literalnamen einschließlich `%20` bleiben unverändert.
+Der gemeinsame C04-Ablauf prüft weiterhin echte FTP/FTPS-Bytes, beidseitige
+Änderungen, TLS-Verifikation und No-op; Engine-Capture, Backups, Partialscan-
+und Lost-ACK-Grenzen werden dafür nicht gelockert.
 
 ## Interner Helpervertrag
 
