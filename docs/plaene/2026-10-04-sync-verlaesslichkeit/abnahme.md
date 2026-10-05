@@ -133,8 +133,18 @@ Diagnose exportiert nur rekonstruierte Versionen, ausgewählte Worker-/Handoff-
 Statusfelder, Command-Größen/Hashes und den Ergebnisbericht. Entfernt wird der
 Privatroot erst nach bestätigtem Prozessende und Autostart-Restaurierung;
 Cleanupfehler lassen ihn privat erhalten und schlagen die Stufe fehl.
-Der nächste gemeinsame Remote-Aufruf muss die gesammelten Korrekturen bestätigen
-und die mit vollständigem `task.get` ergänzte Android-Altzustandsdiagnose liefern.
+Der [dritte gemeinsame Remote-Aufruf](https://github.com/b1ue-man/smart-explorer/actions/runs/37252322674)
+prüft `bf6bd7552fcb5ea67b096953b55b4011ccf8e1e1`. Die Android-Buildstufe ist
+erfolgreich. Die ergänzte C09-Diagnose belegt im unveränderten alten APK
+`directory ancestor is a link or reparse point: /data/user/0` beim ersten
+`CopyAtoB("note.txt")`. Der historische `mkdir_all`-Vertrag prüft sämtliche
+Vorfahren. C09 löst deshalb ausschließlich die Basis seines eigenen
+Fixture-Roots vor dem alten `sync.save` kanonisch auf; relative Hash-/Baseline-
+und Versionsbelege benutzen dieselbe Basis. Die veröffentlichte alte App
+erzeugt weiterhin den gesamten Altzustand, und beim Update bleiben ihre
+gespeicherten Locators unverändert. Byte-, Baseline-, Backup- und No-op-Orakel
+werden nicht abgeschwächt. Die nativen Stufen laufen noch; weder der dritte
+Gesamtlauf noch die Android-Korrektur sind bereits erfolgreich abgenommen.
 
 Die Windows-Stufe ist ebenfalls vollständig ausgewertet. Notebook,
 Bindungsmigration, Schutz und die echte Altworker-Übernahme erfüllen auch dort

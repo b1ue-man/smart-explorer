@@ -16,7 +16,10 @@ import org.junit.runner.RunWith
 /** The host installs the published APK first; no run-as or fabricated job persistence. */
 @RunWith(AndroidJUnit4::class)
 class SyncReliabilityTaskTest {
-    private val root get() = File(appContext.filesDir, "sync-reliability-fixture")
+    // Published 0.5.169 rejects linked ancestors, including Android's filesDir alias.
+    // Resolve our fixture before the old job is saved; keep that stored locator across the update.
+    private val filesDir get() = appContext.filesDir.canonicalFile
+    private val root get() = File(filesDir, "sync-reliability-fixture")
     private val session get() = File(root, "session.json")
     private val a get() = File(root, "a")
     private val b get() = File(root, "b")
@@ -58,20 +61,20 @@ class SyncReliabilityTaskTest {
     }
     private fun isBaseline(file: File) = file.name.startsWith("baseline_") && file.extension == "sebl"
     private fun validateBaseline(path: String) {
-        val file = File(appContext.filesDir, path)
+        val file = File(filesDir, path)
         assertTrue("Not a pair baseline: $path", isBaseline(file))
         file.inputStream().use { input ->
             val magic = ByteArray(5); assertEquals(5, input.read(magic))
             assertArrayEquals(byteArrayOf(83, 69, 66, 76, 2), magic)
         }
     }
-    private fun persisted(): Map<String, String> = File(appContext.filesDir, "smart_explorer").walkTopDown()
+    private fun persisted(): Map<String, String> = File(filesDir, "smart_explorer").walkTopDown()
         .filter { it.isFile && (it.extension in setOf("conf", "tsv") || isBaseline(it)) }
-        .associate { it.relativeTo(appContext.filesDir).path to Fixture.sha256(it) }
+        .associate { it.relativeTo(filesDir).path to Fixture.sha256(it) }
 
     private suspend fun oldPrepare() {
         assertEquals("0.5.169", appContext.packageManager.getPackageInfo(appContext.packageName, 0).versionName)
-        assertFalse(root.canonicalPath.startsWith(File(appContext.filesDir, "smart_explorer").canonicalPath + File.separator))
+        assertFalse(root.canonicalPath.startsWith(File(filesDir, "smart_explorer").canonicalPath + File.separator))
         assertFalse(root.canonicalPath.startsWith(appContext.cacheDir.canonicalPath + File.separator))
         assertFalse("Fixture already exists", root.exists()); assertTrue(a.mkdirs()); assertTrue(b.mkdirs())
         write(File(a, "note.txt"), "old seed")
@@ -89,10 +92,10 @@ class SyncReliabilityTaskTest {
         val baselines = state.keys.filter { isBaseline(File(it)) }
         assertTrue("No actual published pair baseline", baselines.isNotEmpty())
         baselines.forEach { validateBaseline(it) }
-        val backupRoots = listOf(root, File(appContext.filesDir, "smart_explorer/sync"))
+        val backupRoots = listOf(root, File(filesDir, "smart_explorer/sync"))
         val backups = backupRoots.flatMap { dir -> dir.walkTopDown().filter { it.isFile &&
             (it.path.contains("/versions_") || it.path.contains("/.se-versions/")) &&
-            it.readBytes().contentEquals("old seed".toByteArray()) }.map { it.relativeTo(appContext.filesDir).path }.toList() }
+            it.readBytes().contentEquals("old seed".toByteArray()) }.map { it.relativeTo(filesDir).path }.toList() }
         assertTrue("Published job did not preserve displaced bytes in its legacy appdata store", backups.any {
             it.startsWith("smart_explorer/sync/versions_")
         })
@@ -102,9 +105,9 @@ class SyncReliabilityTaskTest {
         val old = record.field("job").obj(); val id = old.text("id"); val now = job(id)
         fields.forEach { assertEquals("Stored option $it", old[it], now[it]) }
         record.field("persisted").obj().forEach { (path, hash) ->
-            assertEquals("Persisted state $path", hash, jsonOf(Fixture.sha256(File(appContext.filesDir, path))))
+            assertEquals("Persisted state $path", hash, jsonOf(Fixture.sha256(File(filesDir, path))))
         }
-        record.texts("backups").forEach { assertArrayEquals("old seed".toByteArray(), File(appContext.filesDir, it).readBytes()) }
+        record.texts("backups").forEach { assertArrayEquals("old seed".toByteArray(), File(filesDir, it).readBytes()) }
         return id
     }
     private suspend fun updatePrepare() {
@@ -121,12 +124,12 @@ class SyncReliabilityTaskTest {
                 failed.state == "failed" || (failed.result as? JsonObject)?.int("errors")?.let { it > 0 } == true)
             bytes(b, "published changed bytes")
             beforeFailure.filterKeys { isBaseline(File(it)) }.forEach { (path, hash) ->
-                assertEquals("Failed apply changed baseline $path", hash, Fixture.sha256(File(appContext.filesDir, path)))
+                assertEquals("Failed apply changed baseline $path", hash, Fixture.sha256(File(filesDir, path)))
             }
         } finally { assertTrue("Cannot restore fixture target writes", b.setWritable(true, true)) }
         // Retry the same saved job through JNI after restoring actual filesystem access.
         sync(id); bytes(b, "temporary failure change")
-        assertTrue("Failure removed old baseline", beforeFailure.keys.all { File(appContext.filesDir, it).isFile })
+        assertTrue("Failure removed old baseline", beforeFailure.keys.all { File(filesDir, it).isFile })
         write(File(a, "note.txt"), "candidate side A"); write(File(b, "note.txt"), "candidate side B longer")
         run("sync.checkConflicts", id)
         assertEquals(1, call("sync.conflicts", args("id" to id)).obj().objects("items").size)
