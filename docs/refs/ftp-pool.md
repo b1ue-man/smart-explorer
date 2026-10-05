@@ -1,6 +1,6 @@
 # FTP-Verbindungs-Pool – suppaftp 6.3.0 und Server-Grenzen
 
-Stand: 2026-09-28. Quellen: lokaler Crate-Quellcode
+Stand: 2026-10-05; Pool-/Serverrecherche vom 2026-09-28 bleibt erhalten. Quellen: lokaler Crate-Quellcode
 `/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/suppaftp-6.3.0/src/{types,status}.rs`,
 `src/sync_ftp/{mod,data_stream}.rs`, `src/sync_ftp/tls/rustls.rs`, `src/lib.rs` (Version aus
 `native/Cargo.lock`); vsftpd-Handbuch (security.appspot.com/vsftpd/vsftpd_conf.html),
@@ -67,9 +67,10 @@ dieselbe Konfiguration schon einmal erfolgreich angemeldet hat, ist eine 421/530
 - `abort(stream)` (:551-561): ABOR, Strom schließen, 226/426 und dann 226 lesen.
 - `mkdir(path)` (:361-365): MKD, erwartet 257; ein vorhandener Name ergibt eine Ablehnung
   (üblich 550) – MKD ist serverseitig ein `mkdir(2)` und damit exklusiv.
-- `DataStream<T>` (data_stream.rs:12-18) implementiert `Read` und `Write`; `RustlsStream::drop`
-  sendet bei gesetztem `ssl_shutdown` `close_notify` (tls/rustls.rs:85-97), der Datenkanal endet
-  also sauber beim Schließen.
+- `DataStream<T>` (data_stream.rs:12-18) implementiert `Read` und `Write`.
+  `RustlsStream::drop` versucht bei gesetztem `ssl_shutdown` nach einem Flush
+  genau einen `write_tls` für `close_notify` (tls/rustls.rs:85-97). Fehler werden
+  nur geloggt; dies beweist keinen vollständigen TLS-/TCP-Abschluss.
 - Typen: `RustlsFtpStream = ImplFtpStream<RustlsStream>` (lib.rs:188).
 
 ## 4. Pool-Verhalten vergleichbarer Clients
@@ -83,3 +84,66 @@ Folgerungen für das Backend: Ein Pool, der beim Erreichen der Grenze wartet, ka
 Operation verklemmen, die selbst schon eine Verbindung hält (Lesen + Schreiben auf demselben
 Server). Deshalb meldet der Pool an der gelernten Grenze sofort Überlast
 (`vfs::congestion_error`) statt zu warten; die Flow-Regelung nimmt die Parallelität zurück.
+
+## 5. FTPS-Datenabschluss: zweite Recherche am 2026-10-05
+
+Versionen aus dem aktuellen `native/Cargo.lock`: suppaftp **6.3.0**, rustls
+**0.23.40**. Die gepinnte Crate nennt VCS-Commit
+`96cb46417e65ccb0f9f0b7ec8613c141c151c6b5` und VCS-Pfad `suppaftp`.
+Exakte Syntax ist lokal in den genannten Crates gesichert; öffentliche
+[SuppaFTP-Source](https://github.com/veeso/suppaftp/tree/96cb46417e65ccb0f9f0b7ec8613c141c151c6b5/suppaftp/src).
+
+```rust
+// suppaftp 6.3.0, sync_ftp/data_stream.rs
+pub enum DataStream<T> { Tcp(TcpStream), Ssl(Box<T>) } // T: internes TlsStream
+pub fn get_ref(&self) -> &TcpStream;
+// sync_ftp/mod.rs:522; schließt data zuerst, liest danach 226/250
+pub fn finalize_put_stream(&mut self, data: impl Write) -> FtpResult<()>;
+// tls/rustls.rs: standardmäßig ssl_shutdown=true, kein abschaltender Apppfad
+// Drop: StreamOwned::flush; send_close_notify; einmal write_tls; Fehler nur loggen
+```
+
+Die Crate exportiert `RustlsConnector`, `RustlsFtpStream` und `DataStream`.
+Ihr `RustlsStream` und dessen `TlsStream`-Trait sind am Crateroot nicht
+öffentlich exportiert. Ein direkter Appaufruf von `mut_ref`, eigener
+`TlsStream`-Implementation oder Zugriff auf dessen private TLS-Felder ist
+damit kein verfügbarer API-Pfad dieser Version.
+
+[Rustls 0.23.40](https://github.com/rustls/rustls/tree/v/0.23.40/rustls/src):
+`CommonState::send_close_notify(&mut self)` stellt den Alert nur in die
+Sendewarteschlange. `ConnectionCommon::write_tls(&mut self, &mut dyn Write)`
+meldet geschriebene Bytes; der Puffer kann danach weiterhin gefüllt sein.
+`wants_write()` zeigt verbleibende TLS-Bytes an. `StreamOwned::flush()`
+delegiert an `Stream::flush` und dessen `complete_io`; ein einziges rohes
+`write_tls` ist folglich kein genereller vollständiger Schreibbeweis.
+
+[RFC 4217, 12.6/12.7](https://www.rfc-editor.org/rfc/rfc4217.html#section-12.7)
+stellt den TLS-Abschluss und Datenkanalabschluss vor die positive
+FTP-Abschlussantwort. [RFC 8446, 6.1](https://www.rfc-editor.org/rfc/rfc8446.html#section-6.1)
+verlangt einen TLS-Abschlussalert vor dem Schließen der Schreibseite;
+ein Transport-EOF allein beweist keine vollständige Übertragung.
+Das [vsftpd-Handbuch](https://security.appspot.com/vsftpd/vsftpd_conf.html)
+erläutert dieselbe Upload-Integritätsgrenze bei `strict_ssl_read_eof`.
+Die bestehende echte Fixture und deren Integritätsprüfung bleiben erhalten.
+
+[TcpStream::try_clone](https://doc.rust-lang.org/std/net/struct.TcpStream.html#method.try_clone)
+liefert einen weiteren Besitzhandle desselben Sockets; Daten und Optionen
+werden geteilt. `shutdown` betrifft den zugrunde liegenden Kanal, nicht nur
+den jeweiligen Handle. Die
+[Linux-TCP-Source](https://github.com/torvalds/linux/blob/21e4675d9305f6ccd20b95d943882d607c8ae288/net/ipv4/tcp.c)
+sendet beim endgültigen Close mit ungelesenen Empfangsbytes einen Reset.
+Ein unmittelbarer letzter Socket-Drop nach einem TLS-Schreibversuch ist
+deshalb kein allgemein sicherer Abschluss, etwa bei TLS-Nachrichten nach
+dem Handshake. Ob genau dieser Reset den konkreten Lauf ausgelöst hat,
+ist aus dem Serverlog allein nicht bewiesen.
+
+Remote-Lauf `37297823833` belegt unmittelbar: FTPS-STOR der 37-Byte-Stage von
+FTP→FTPS (`pair-051`) endet mit 426; der echte Server meldet fehlenden
+SSL-Abschluss. Die App finalisiert sowohl den normalen gespoolten Writer
+als auch den bekannten-Längen-Stagewriter bisher durch den undurchsichtigen
+Daten-Drop. Die Korrektur muss diese zusammenhängende Besitz-/Abschlussgrenze
+behandeln, weiterhin die echte Abschlussantwort auswerten, Datenfehler und
+451/452/552 erhalten und einen unklaren STOR niemals automatisch wiederholen.
+TCP, REST/RETR, Timeouts, Poolgesundheit und verifizierte TLS-Anmeldung sind
+dabei bestehende Verträge. Eine Lösung mit vorhandenen APIs vermeidet eine
+für diesen Fehler nicht belegte breite Bibliotheks-/Protokollmigration.

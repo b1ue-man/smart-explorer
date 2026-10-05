@@ -613,3 +613,49 @@ nativen Änderungen vollständig neu extrahiert und geclustert. Sein Manifest
 entspricht exakt dem gesamten aktuellen Nativekorpus, ohne separaten oder
 partiellen Graph. Quellen, Suite, Dokumentation und Graph werden gemeinsam
 als ein ungetaggter Kandidat gepusht.
+
+## Achter Lauf: vollständige Auswertung und verbleibende Abschlussgrenze
+
+Der [achte Workflow](https://github.com/b1ue-man/smart-explorer/actions/runs/37297823833)
+prüft exakt `8a1a36caa1486d8243b40ba827cd8bcc11e312cf` und endet am
+2026-10-05 um 11:38:41 UTC vollständig fehlgeschlagen. Sämtliche Jobs sind
+abgeschlossen; Windows, Android-Build und echter Android-Geräteablauf sind
+erfolgreich. Alle vier Summaryreports besitzen exakt denselben Kandidaten.
+Native exakte Ausführung, eigene Providerbereinigung und alter
+veröffentlichter Desktopworkerwechsel sind auf beiden Hosts bestätigt.
+
+Linux bestätigt C01/C02/C03 sowie C05/C06/C07/C08, insbesondere den nun
+vollständigen historischen Recorded-Lost-ACK-Wiederanlauf mit unveränderten
+Baseline-/Intent-/Backup-/Restore-/Restart-/No-op-Orakeln. Die kanonischen
+DAV-Collection-, Redirect-, Pooling- und Congestionguards bestehen. Windows
+bestätigt zusätzlich seinen vollständigen C04 einschließlich ZIP-Quelle.
+Der echte C09-Updateablauf erhält dieselbe alte Job-ID über alte App,
+Update und Force-stop/Restart; endgültige Quell-/Zielhashes sind gleich,
+der abschließende No-op meldet keine Änderungen oder Fehler.
+
+Linux-C04 erreicht erstmals nach den DAV-Korrekturen FTP→FTPS bei
+`pair-051`. STOR von `.obsidian/preferences.json` in seine eigene Stage
+liefert 426. Der echte Server meldet um 10:58 UTC fehlenden SSL-Abschluss
+und einen fehlgeschlagenen 37-Byte-Upload. Der ganze Providerflow ist
+damit offen; vorausgegangene Providerpaare oder spätere unreached Phasen
+werden nicht als vollständige Matrixabnahme behauptet. Die aktuelle
+zweistufige Primärrecherche und M3.C04-8 behandeln beide FTP-Uploadpfade,
+die Datenbesitzgrenze und weiterhin strikte tatsächliche Abschlussantworten.
+Der angefragte C10-Zugang fehlt unverändert: Required-Secret-Namen um
+11:11:57 UTC gelesen; Client-ID und Refresh-Token sind nicht vorhanden.
+
+Evidenzarchive jeweils gegen GitHubs SHA-256 geprüft und nur als zulässige
+relative Textpfade ausgewertet:
+
+- Linux `11342491663`: `7a9a25984299014173b8c182562dda0f27a8ff5c45af72a8a69a6c1beabd178f`.
+- Windows `11343305976`: `2e6f6c6f71bef5a39f0505d38d027d14d4a01ce4e07bc9aad8b86056177a1170`.
+- Gerät `11340419560`: `88f3d9e439e37745381ed8c302074e6628e8fb30ee558ab4d448324b1978fc2e`.
+- Gesamtauswertung `11342702141`: `a7244042806ed74ad68250793c2dd5e3cd3d38ba7fb539bec7e36d8a9007e17b`.
+
+Der exakte Remote-Formatpatch
+`8b245bf69799690976beb23c55d975b6817b60037c70926cebdc42163d13f78c`
+ist nach sauberem HEAD-, Report-, Digest- und Sourcepfadabgleich als
+`91f46ce3` übernommen. Er betrifft ausschließlich die neue
+DAV-Collection-Testdatei; sein Report enthält keine Größenverstöße.
+FTPS-Korrektur, ihre erneute gemeinsame Laufbestätigung und tatsächlicher
+Google-Zugang bleiben vor dem einen terminalen Release verpflichtend.
