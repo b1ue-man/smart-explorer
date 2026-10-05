@@ -77,14 +77,19 @@ impl DriveFixture {
         account: &str,
         root: &str,
     ) -> GDriveBackend {
-        GDriveBackend::test_backend_with_identity(
+        let backend = GDriveBackend::test_backend_with_identity(
             &server.api_base(),
             Duration::from_secs(2),
             Some(directory.path().join("pending")),
             Some(directory.path().join("bindings")),
             account,
             root,
-        )
+        );
+        // A refresh credential belongs to one account. The generic factory's
+        // shared token would make unrelated accounts claim the same legacy
+        // state identity, which the real pair owner correctly rejects.
+        backend.tokens_guard().unwrap().refresh_token = format!("reliability-refresh-{account}");
+        backend
     }
 
     pub(super) fn fresh_backend(&self, root: &str) -> GDriveBackend {

@@ -2,7 +2,7 @@ use super::api::FOLDER_MIME;
 use super::sync_conflict_task_fixture::{filter, MIME};
 use super::sync_reliability_task_fixture::{assert_complete, options, DriveFixture};
 use crate::bisync::{self, Direction};
-use crate::vfs;
+use crate::vfs::{self, Backend};
 use serde_json::json;
 use std::collections::HashSet;
 use std::sync::atomic::AtomicBool;
@@ -23,6 +23,18 @@ fn remote_run(left: &DriveFixture, right: &DriveFixture, direction: Direction) -
 fn sync_reliability_task_names_drive_roundtrip_keeps_trees_literals_and_marker_origins() {
     let left = DriveFixture::new("Job");
     let right = DriveFixture::new("Job");
+    assert_ne!(left.backend.state_identity(), right.backend.state_identity());
+    let left_previous = vfs::previous_state_identities(&left.backend).unwrap();
+    let right_previous = vfs::previous_state_identities(&right.backend).unwrap();
+    assert_eq!(left_previous.len(), 1);
+    assert_eq!(right_previous.len(), 1);
+    assert_ne!(left_previous, right_previous);
+    for (fixture, previous) in [(&left, &left_previous), (&right, &right_previous)] {
+        assert_eq!(
+            vfs::previous_state_identities(&fixture.fresh_backend(&fixture.root)).unwrap(),
+            *previous
+        );
+    }
     let parent = left.root_object_id();
     for (id, title, bytes) in [
         ("sameprefixAA", "Notebook", b"first tree".as_slice()),
