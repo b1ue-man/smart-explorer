@@ -253,8 +253,10 @@ Live Google Drive requires `SE_DRIVE_TEST_CLIENT_ID` and
 `SE_DRIVE_TEST_CLIENT_SECRET` when that OAuth client requires it. Missing
 authorization fails the acceptance rather than skipping it. Native job/task
 timeouts are 360/340 minutes; Android build 240/220; device 180/160. Fixes repeat
-this same entrypoint. Only a successfully evaluated complete batch enters the
-existing `build.yml` complete-release transaction; the release procedure remains
+this same entrypoint when confirmation is required. A missing live authorization
+remains an unverified test result and never blocks a release. When the user requests
+a release without further tests, use the existing `build.yml` complete-release
+transaction directly; do not repeat this suite. The release procedure remains
 `native/publish-release-local.ps1`. See the
 [sync acceptance plan](plaene/2026-10-04-sync-verlaesslichkeit/abnahme.md).
 

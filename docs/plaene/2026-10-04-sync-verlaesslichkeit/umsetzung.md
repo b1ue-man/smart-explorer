@@ -1,6 +1,6 @@
 # Sync-Verlässlichkeit – detaillierter Umsetzungs- und Abnahmeplan
 
-Stand: 2026-10-05. Phase: Remote-Fixloop nach einmaliger Kritik; Gesamtabnahme offen.
+Stand: 2026-10-05. Phase: 0.5.172 vollständig veröffentlicht; lokale Installationen aktualisiert.
 Ziel ist die komplette Spec F1–F7, nicht allein das Entfernen einer Meldung.
 
 ## Meilensteine
@@ -412,8 +412,8 @@ die additive VFS-Grenze samt Wrappern; Job-Umsetzer besitzt die von M4
 betroffenen Job-/Resolver-/Worker-Verträge. Diese Schreibflächen überlappen
 nicht. Der VFS-Vertrag `sync_stat` ist das gemeinsame Fundament, dessen
 Signatur schon hier feststeht. Der Mainagent orchestriert, integriert und
-besitzt Suite, Commits/Push und Release; keine parallelen Builds oder lokalen
-Ausführungen. Jeder Umsetzer macht seinen eigenen Self-Review. Genau ein read-only Kritiker
+besitzt Suite, Commits/Push und Release; keine parallelen Builds. Suite und
+Release-Wrapper laufen ausschließlich remote. Jeder Umsetzer macht seinen eigenen Self-Review. Genau ein read-only Kritiker
 nimmt vor Code den vollständigen Plan auseinander; keine weitere Reviewrunde.
 
 | Meilenstein | Status | Evidenz |
@@ -422,11 +422,11 @@ nimmt vor Code den vollständigen Plan auseinander; keine weitere Reviewrunde.
 | Stufe 1 / erste Recherche | fertig | `recherche.md`, gesicherte Refs |
 | Stufe 2 / zweite Recherche | fertig, Lücken eingearbeitet | dieser Plan und `abnahme.md` |
 | Einmalige Plan-Kritik | abgeschlossen, alle Befunde eingearbeitet | `review.md` |
-| M1/M2 | Drive-Vertragsfälle und vollständiger Recorded-Wiederanlauf bestätigt | Der neunte Lauf bestätigt C01–C03/C05 einschließlich historischer Viermaps, gefalteter Dirkeys, inkrementeller History und vollständiger Recorded-Lost-ACK-/Backup-/Restore-/Restart-/No-op-Flows. Der echte Google-Lauf C10 bleibt offen |
+| M1/M2 | Drive-Vertragsfälle und vollständiger Recorded-Wiederanlauf bestätigt | Der neunte Lauf bestätigt C01–C03/C05 einschließlich historischer Viermaps, gefalteter Dirkeys, inkrementeller History und vollständiger Recorded-Lost-ACK-/Backup-/Restore-/Restart-/No-op-Flows. Der echte Google-Lauf C10 ist unbestätigt und keine Releasevoraussetzung |
 | M3 | Schutz-/Recovery-/Versionen, DAV und vollständige Providerabläufe bestätigt | Im neunten Lauf bestehen C04/C06/C07 auf beiden Hosts. Linux schließt die gesamte Provider-Matrix einschließlich FTPS ab; beide Uploadwege und die direkt betroffenen FTP-Kompatibilitätsguards bestehen. M3.C04-8 ist damit bestätigt |
 | M4 | alte Desktop-/Android-Jobs bestätigt | Der neunte Lauf bestätigt C08 auf beiden Hosts einschließlich realem v0.5.169-Workerwechsel. C09 bestätigt dasselbe alte Jobobjekt über Altappupdate, Force-stop und Wiederanlauf mit tatsächlichen Endbytes und No-op |
 | M5 Remote-Gesamtablauf | neunter Workflow vollständig ausgewertet; kein weiterer Testlauf angefordert | Kandidat `f64699ec` bestätigt alle funktionalen C01–C09. Der exakte Remote-Formatpatch ist als reine Formatänderung `5ebdd5aa` übernommen. C10 bleibt ohne tatsächlichen Google-Zugang unbestätigt; ausdrücklich keine Releasevoraussetzung. Es wird kein vollständiger C01–C10-Pass behauptet |
-| M6 Release | vollständige Remote-Veröffentlichung unmittelbar angefordert | Ein terminaler Release 0.5.172 über den bestehenden Wrapper; kein weiterer Testlauf und keine Echtwelttest-Sperre |
+| M6 Release | vollständig veröffentlicht und lokal aktualisiert | [Einziger Initiator](https://github.com/b1ue-man/smart-explorer/actions/runs/37317892808) auf Source `0805113644f5a55f9b44b9c86b81c9804e5723de` und [einziger Publikationsconsumer](https://github.com/b1ue-man/smart-explorer/actions/runs/37333336254) erfolgreich. [0.5.172](https://github.com/b1ue-man/smart-explorer/releases/tag/v0.5.172) veröffentlicht von `254a65c5e2b2b506f9bd3ca7e8b7da376053cae9`; Cargo, Feed, Installer, Tag und sämtliche Asset-/Sidecarhashes stimmen. Lokales `se`, seine laufenden Daemonprozesse und der Share-server verwenden die veröffentlichten Bytes; Service-Unit und Environmentdatei unverändert. Lieferbelege in `abnahme.md` |
 
 Der [siebte Workflow](https://github.com/b1ue-man/smart-explorer/actions/runs/37289323834)
 prüft `ffba5c54323ef093b63b8d8407ffcc612847ebc8` und ist am
@@ -532,11 +532,12 @@ Es entsteht keine weitere Plan-Kritik, zweite Suite oder Patchveröffentlichung.
   Formatter oder Build. Der vollständige Rootgraph ist danach aktualisiert.
 - Erforderliche Repository-Secret-Namen sind am 2026-10-05 um 13:06:53 UTC
   erneut geprüft: `SE_DRIVE_TEST_CLIENT_ID` und
-  `SE_DRIVE_TEST_REFRESH_TOKEN` fehlen. Die bereits gestellte
-  Autorisierungsfrage bleibt offen; keine Werte gelesen oder veröffentlicht.
+  `SE_DRIVE_TEST_REFRESH_TOKEN` fehlen. Die zuvor gestellte Autorisierungsfrage
+  wird aufgrund der Nutzeranweisung für diesen Batch nicht weiterverfolgt;
+  der Release erfordert keine Live-Testzugänge. Keine Werte gelesen oder veröffentlicht.
 - Ausdrückliche Nutzerkorrektur vom 2026-10-05: Ein Echtwelttest ist nie
   Releasevoraussetzung. M6 veröffentlicht den vollständigen Stand ohne
-  weiteren Testlauf. C10 bleibt ein offen dokumentierter Livefall; sein
+  weiteren Testlauf. C10 bleibt ein unbestätigter dokumentierter Livefall; sein
   fehlender Zugang sperrt keinen Release und wird nicht als Pass dargestellt.
 
 Pro Meilenstein: gegen Refs und Aufrufer selbst prüfen, kohärent committen;
