@@ -130,3 +130,16 @@ separates reguläres Open erhält keinen Creatorbeweis allein durch gleichen
 Pfad, Peer oder Lease. Die konkrete C08-Abnahme prüft diese Grenze am realen
 Direct-Transport und danach im gespeicherten Altjob über Restart und No-op.
 Besitzdiagnosen enthalten ausschließlich escaped Stagepfad und Ledgerphase.
+
+Der fünfte Remote-Lauf bestätigt diese daemon-Ownershipgrenze im tatsächlichen
+Direct-Transport. Der anschließende Job erzeugt außerdem einen exklusiven
+Replica-Stage mit Purpose `sync-replica`. Der Creatorledger benutzt deshalb
+die gemeinsame enge `vfs::is_unique_stage`-Grammatik für
+`<nonempty file>.se-<purpose [a-z0-9-]+>-<16lowerhex>` statt einer
+Purpose-Aufzählung. Das ist nur die Zulassung zur bestehenden Creator-
+Erfassung; exklusiver WriteNew, erfolgreicher Writer-ACK, eigener Ledger,
+Bindung und frischer Metadatensnapshot bleiben die Ownershipbeweise.
+Die breitere `is_staging_name`-Erkennung und der separate Upload-Discardguard
+erteilen keine zusätzlichen Lösch- oder Publishrechte. Neue Grenzfälle
+benutzen den tatsächlichen Unique-Stage-Generator einschließlich Replica
+und unveränderter Literalpräfixe; die Remote-Suite entdeckt sie im selben C08.

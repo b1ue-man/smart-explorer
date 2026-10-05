@@ -61,7 +61,8 @@ fn lower_hex(text: &str) -> bool {
 }
 
 /// `<file>.se-<purpose>-<16 hex>`; `<file>` may be shortened, never empty.
-fn is_unique_stage(name: &str) -> bool {
+/// Name recognition does not establish creation or ownership.
+pub(crate) fn is_unique_stage(name: &str) -> bool {
     let Some((head, suffix)) = name.rsplit_once('-') else {
         return false;
     };

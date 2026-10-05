@@ -402,22 +402,8 @@ impl PeerBackend {
 
 fn client_stage_name(path: &str) -> bool {
     let name = path.rsplit('/').next().unwrap_or(path);
-    // The IPC backend writer exclusively creates daemon stages before its
-    // replacing Write publishes them through this same creator ledger.
-    ["upload", "bisync", "merge", "transfer", "copy", "daemon"]
-        .into_iter()
-        .any(|purpose| {
-            let marker = format!(".se-{purpose}-");
-            let Some(position) = name.rfind(&marker) else {
-                return false;
-            };
-            let suffix = &name[position + marker.len()..];
-            position > 0
-                && suffix.len() == 16
-                && suffix
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        })
+    // Eligibility for exclusive creator tracking, never proof of ownership.
+    crate::vfs::is_unique_stage(name)
 }
 
 fn denied(message: &str) -> io::Error {
