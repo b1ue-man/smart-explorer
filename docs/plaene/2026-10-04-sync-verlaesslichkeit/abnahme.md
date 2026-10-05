@@ -659,3 +659,38 @@ ist nach sauberem HEAD-, Report-, Digest- und Sourcepfadabgleich als
 DAV-Collection-Testdatei; sein Report enthält keine Größenverstöße.
 FTPS-Korrektur, ihre erneute gemeinsame Laufbestätigung und tatsächlicher
 Google-Zugang bleiben vor dem einen terminalen Release verpflichtend.
+
+Die zusammenhängende FTPS-Korrektur ist als `e1e7ae93` quellenfertig.
+`UploadData` wird von beiden bisherigen Writern verwendet. Nur der tatsächliche
+`DataStream::Ssl` erhält einen zusätzlichen `try_clone`-Besitzhandle bis nach
+TLS-Drop und der echten FTP-Abschlussantwort. Plain FTP bleibt bei seinem
+gewöhnlichen EOF. Expliziter Flush, fallibler Besitz und terminale Antwort
+werden ausgewertet; 451/452/552 haben Vorrang vor einem Datenfehler. Auch
+ein positiver FTP-Code heilt keinen belegten Flush-/Besitzfehler. Es gibt
+keine neue Wartephase, keinen vorzeitigen Shutdown oder automatischen STOR-Retry.
+Der Umsetzer hat die exakten öffentlichen/private API-Grenzen selbst geprüft;
+keine Dependency oder öffentliche VFS-/Provider-/Locator-Schnittstelle geändert.
+
+Neue FQNs im bestehenden C04-Präfix:
+
+- `ftp::data_finish::tests::sync_reliability_task_provider_upload_data_error_still_consumes_terminal_refusal`.
+- Linux: `ftp::sync_reliability_task_provider_ftps_tests::sync_reliability_task_provider_ftps_both_writers_confirm_bytes_after_tls_close`.
+
+Der erste Fall verlangt trotz Datenfehler die echte terminale Antwort und
+korrekte Zielablehnung, der zweite benutzt dieselbe reale gespeicherte
+FTPS-Auflösung mit beiden Writern, leeren/kleinen/größeren Bytes, weiterem
+Flush, Wiederöffnung und tatsächlichen Zielbytes. Die vollständige Matrix
+und sämtliche bestehenden Orakel sind unverändert. Nach allen Quelländerungen
+ist ausschließlich der eine Suite-Einstieg um die vorhandenen genauen FQNs
+für Uploadlänge, Diskspool, Nichtwiederholung, ungesendeten Writerdrop,
+Suspect-Reconnect und FTPS-Datentimeout ergänzt. Keine separaten Läufe.
+Required-Secret-Namen erneut um 11:52:50 UTC geprüft: Client-ID und
+Refresh-Token fehlen weiterhin; keine Secretwerte gelesen oder ausgegeben.
+
+Alle geänderten Rustquellen bestehen die statische AST- und rohe Größenprüfung;
+der eine Python-Einstieg ist statisch geparst. Kein Compiler, Formatter oder
+Test ist lokal ausgeführt. Nach sämtlichen nativen Änderungen ist der Rootgraph
+vollständig extrahiert und geclustert: Manifest exakt gleich dem gesamten
+Nativekorpus (1825 Dateien), 32224 Nodes, 81174 Kanten und 1121 Communities.
+Kein Teilgraph oder verschachtelter Nativegraph bleibt. Dies ist der vollständige
+Quellkandidat für die erneute gemeinsame Remote-Bestätigung, kein M5-Pass.

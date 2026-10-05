@@ -3794,6 +3794,11 @@
     "ast_hash": "4ba06a8f1269d134b65d2ae69cb8bbc5",
     "semantic_hash": "4ba06a8f1269d134b65d2ae69cb8bbc5"
   },
+  "ftp/core/data_finish.rs": {
+    "mtime": 1791201191.6734638,
+    "ast_hash": "00d7b11a721e45efff7a51bed5ad7ff3",
+    "semantic_hash": "00d7b11a721e45efff7a51bed5ad7ff3"
+  },
   "ftp/core/errors.rs": {
     "mtime": 1791055116.3089726,
     "ast_hash": "0b2fc424a336d539ed395d7a7781c156",
@@ -3845,9 +3850,14 @@
     "semantic_hash": "800ade6510db58869565f95b26492e2c"
   },
   "ftp/core/streams.rs": {
-    "mtime": 1791055116.3099725,
-    "ast_hash": "585a54d6a81939fd8be8f62bbbb9be59",
-    "semantic_hash": "585a54d6a81939fd8be8f62bbbb9be59"
+    "mtime": 1791201036.6175106,
+    "ast_hash": "4f51ed4e7f784b5e7c655ce49efcf2fa",
+    "semantic_hash": "4f51ed4e7f784b5e7c655ce49efcf2fa"
+  },
+  "ftp/core/sync_reliability_task_provider_ftps_tests.rs": {
+    "mtime": 1791201036.6185105,
+    "ast_hash": "33553215d4b18298f26d7088c9b11424",
+    "semantic_hash": "33553215d4b18298f26d7088c9b11424"
   },
   "ftp/core/sync_reliability_task_provider_metadata_tests.rs": {
     "mtime": 1791188866.680996,
@@ -3865,14 +3875,14 @@
     "semantic_hash": "ead85e208f74698602652edf27609264"
   },
   "ftp/core/writer.rs": {
-    "mtime": 1791033266.2943974,
-    "ast_hash": "0602be01730cc0e3d8f13088d002da02",
-    "semantic_hash": "0602be01730cc0e3d8f13088d002da02"
+    "mtime": 1791201223.5418653,
+    "ast_hash": "979104b5558e880aee1a86af1210be3b",
+    "semantic_hash": "979104b5558e880aee1a86af1210be3b"
   },
   "ftp/mod.rs": {
-    "mtime": 1791181095.3067327,
-    "ast_hash": "abcd9a6c5e77c2bd527bc801a638b5c6",
-    "semantic_hash": "abcd9a6c5e77c2bd527bc801a638b5c6"
+    "mtime": 1791201036.6185105,
+    "ast_hash": "c62db02946cfa891996d2d56d057982e",
+    "semantic_hash": "c62db02946cfa891996d2d56d057982e"
   },
   "gdrive/core/api.rs": {
     "mtime": 1791152334.0465689,
@@ -9050,9 +9060,9 @@
     "semantic_hash": "9c426aa5df134be4bc1f9e0b8beabe69"
   },
   "webdav/core/sync_reliability_task_provider_collections_tests.rs": {
-    "mtime": 1791196307.8127484,
-    "ast_hash": "8d94e129d6d56b0b44d0080711cc3d87",
-    "semantic_hash": "8d94e129d6d56b0b44d0080711cc3d87"
+    "mtime": 1791200418.5647357,
+    "ast_hash": "9101acb8f4fd5d928dafeb656bed2984",
+    "semantic_hash": "9101acb8f4fd5d928dafeb656bed2984"
   },
   "webdav/core/sync_reliability_task_provider_redirect_tests.rs": {
     "mtime": 1791196219.4626403,

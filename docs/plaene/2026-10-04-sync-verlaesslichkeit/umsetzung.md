@@ -420,9 +420,9 @@ nimmt vor Code den vollständigen Plan auseinander; keine weitere Reviewrunde.
 | Stufe 2 / zweite Recherche | fertig, Lücken eingearbeitet | dieser Plan und `abnahme.md` |
 | Einmalige Plan-Kritik | abgeschlossen, alle Befunde eingearbeitet | `review.md` |
 | M1/M2 | Drive-Namens-/Identitätsflüsse und vollständiger Recorded-Wiederanlauf bestätigt | Der achte Lauf bestätigt historische Viermaps, gefaltete Dirkeys, inkrementelle History und vollständige Recorded-Lost-ACK-/Backup-/Restore-/Restart-/No-op-Flows mit unveränderten strikten Orakeln |
-| M3 | Schutz-/Recovery-/Versionen und DAV bestätigt; FTPS-Abschluss offen | C06/C07 bestehen auf beiden Hosts; C04-DAV-Collection-/Redirect-/Poolingguards bestehen. Der echte Linux-Providerflow belegt einen FTPS-Abschlussfehler; M3.C04-8 behandelt diese Grenze |
+| M3 | Schutz-/Recovery-/Versionen und DAV bestätigt; FTPS-Korrektur quellenfertig | C06/C07 und DAV-Guards bestehen. M3.C04-8 ist als `e1e7ae93` umgesetzt und selbst geprüft; tatsächliche FTPS-/Matrixbestätigung bleibt Aufgabe derselben Remote-Suite |
 | M4 | alte Desktop-/Android-Jobs bestätigt | C08 besteht auf beiden Hosts einschließlich realem v0.5.169-Workerwechsel. C09 bestätigt das echte Altappupdate mit Force-stop, erhaltenem Jobowner und Wiederanlauf. Derselbe ganze Ablauf bleibt verpflichtend |
-| M5 Remote-Gesamtablauf | achter Workflow vollständig ausgewertet; FTPS-Folgekorrektur geplant | `8a1a36ca` besteht auf Windows und Android; Linux scheitert an C04 FTP→FTPS und C10-Zugang. Kandidatgebundener Formatpatch `91f46ce3` übernommen. M3.C04-8 und echte Drive-Testautorisierung bleiben offen; dieselbe Suite bleibt der einzige Abnahmeeinstieg |
+| M5 Remote-Gesamtablauf | achter Workflow vollständig ausgewertet; vollständiger Folgefixkandidat wird gemeinsam abgenommen | `8a1a36ca` besteht auf Windows und Android; Linux scheitert an C04 FTP→FTPS und C10-Zugang. Formatpatch `91f46ce3` und M3.C04-8 `e1e7ae93` sind committed. Dieselbe Suite bindet beide neuen C04-Fälle und die konkreten vorhandenen FTP-Kompatibilitätsguards; echte Drive-Testautorisierung bleibt offen |
 | M6 Release | offen | erst nach vollständig erfolgreichem M5 |
 
 Der [siebte Workflow](https://github.com/b1ue-man/smart-explorer/actions/runs/37289323834)
@@ -509,6 +509,11 @@ Es entsteht keine weitere Plan-Kritik, zweite Suite oder Patchveröffentlichung.
   bindet Main die benötigten vorhandenen FQNs an dieselbe Suite, aktualisiert
   den vollständigen Rootgraph, committet/pusht den Kandidaten und startet
   ausschließlich `sync-reliability-task.yml` mit demselben Eintrittsskript.
+- Quellenfertig und vom Umsetzer gegen die gepinnten APIs selbst geprüft:
+  `e1e7ae93`. Keine öffentliche Schnittstelle oder Dependency geändert.
+  Beide neuen C04-FQNs werden durch das vorhandene Präfix entdeckt; die
+  vorhandenen Längen-, Spool-/Flush-/Nichtwiederholungs-, Reconnect- und
+  FTPS-Datentimeoutguards sind an denselben Eintritt gebunden.
 
 Pro Meilenstein: gegen Refs und Aufrufer selbst prüfen, kohärent committen;
 Abnahme erst gesammelt nach kompletter Umsetzung. Nach nativen Änderungen
