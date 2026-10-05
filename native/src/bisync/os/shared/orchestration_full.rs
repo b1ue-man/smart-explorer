@@ -139,7 +139,8 @@ pub(super) fn run_full_locked(state: &RunState<'_>) -> Outcome {
             .map(|rel| names.aliases.key(rel, dedupe_side.other(), keys))
             .collect();
         match backend.plan_dedupe_recursive(dedupe_root, &|rel| {
-            source_keys.contains(&names.aliases.key(rel, dedupe_side, keys)) || plan.omissions.protects(rel)
+            source_keys.contains(&names.aliases.key(rel, dedupe_side, keys))
+                || plan.omissions.protects(rel)
         }) {
             Ok(planned) => dedupe = planned,
             Err(error) => {
@@ -157,7 +158,11 @@ pub(super) fn run_full_locked(state: &RunState<'_>) -> Outcome {
         let orphans: std::collections::BTreeSet<_> = dedupe
             .iter()
             .map(|entry| {
-                names.aliases.key(&super::paths::rel_of(&entry.path, dedupe_root), dedupe_side, keys)
+                names.aliases.key(
+                    &super::paths::rel_of(&entry.path, dedupe_root),
+                    dedupe_side,
+                    keys,
+                )
             })
             .filter(|key| !source_keys.contains(key))
             .collect();
@@ -234,9 +239,18 @@ pub(super) fn run_full_locked(state: &RunState<'_>) -> Outcome {
         .retain(|(rel, _)| !repair_keys.contains(keys.key(rel).as_ref()));
     plan.forget
         .retain(|rel| !repair_keys.contains(keys.key(rel).as_ref()));
-    let present_dirs: std::collections::BTreeSet<_> = snapshot.a.dirs.iter()
+    let present_dirs: std::collections::BTreeSet<_> = snapshot
+        .a
+        .dirs
+        .iter()
         .map(|rel| names.aliases.key(rel, PairSide::A, keys))
-        .chain(snapshot.b.dirs.iter().map(|rel| names.aliases.key(rel, PairSide::B, keys)))
+        .chain(
+            snapshot
+                .b
+                .dirs
+                .iter()
+                .map(|rel| names.aliases.key(rel, PairSide::B, keys)),
+        )
         .collect();
     let dirs_remove = state
         .dirs

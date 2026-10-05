@@ -255,9 +255,9 @@ impl SyncOmissions {
     }
 
     pub(crate) fn paths(&self) -> impl Iterator<Item = (&str, OmissionKind, bool)> {
-        self.originals.iter().map(|(path, kind)| {
-            (path.as_str(), *kind, self.reported.contains_key(path))
-        })
+        self.originals
+            .iter()
+            .map(|(path, kind)| (path.as_str(), *kind, self.reported.contains_key(path)))
     }
 
     /// Reported paths with the reason each one was left out.

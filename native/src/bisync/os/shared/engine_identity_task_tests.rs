@@ -217,18 +217,15 @@ fn engine_provider_account_identity_preserves_state_locks_inputs_and_versions() 
     );
     assert_publication_finished(&a, &prepared);
     assert_eq!(state_bytes(), unchanged);
-    let mut restored_backups: Vec<_> = engine::versions::list_versions(
-        &current.pair,
-        std::slice::from_ref(&side),
-        &cancel,
-    )
-    .unwrap()
-    .into_iter()
-    .filter(|version| {
-        version.reason == Some(VersionReason::Restored)
-            && std::fs::read(&version.stored_path).unwrap() == b"changed"
-    })
-    .collect();
+    let mut restored_backups: Vec<_> =
+        engine::versions::list_versions(&current.pair, std::slice::from_ref(&side), &cancel)
+            .unwrap()
+            .into_iter()
+            .filter(|version| {
+                version.reason == Some(VersionReason::Restored)
+                    && std::fs::read(&version.stored_path).unwrap() == b"changed"
+            })
+            .collect();
     assert_eq!(restored_backups.len(), 1);
     a.lose_next_ack.store(true, Ordering::SeqCst);
     let error = engine::versions::restore_version(
@@ -242,13 +239,19 @@ fn engine_provider_account_identity_preserves_state_locks_inputs_and_versions() 
     assert_eq!(error.kind(), io::ErrorKind::ConnectionReset);
     let pending = intent(&current.pair);
     assert!(!pending.binding.checkpoint_allowed);
-    assert_eq!(std::fs::read(a_dir.path().join("file")).unwrap(), b"changed");
+    assert_eq!(
+        std::fs::read(a_dir.path().join("file")).unwrap(),
+        b"changed"
+    );
     assert_eq!(state_bytes(), unchanged);
     let promotions = a.promotions.load(Ordering::SeqCst);
     engine::replacement_recovery::recover_locked(&lock, &key, endpoints, false, &cancel).unwrap();
     assert_eq!(a.promotions.load(Ordering::SeqCst), promotions);
     assert_publication_finished(&a, &pending);
-    assert_eq!(std::fs::read(a_dir.path().join("file")).unwrap(), b"changed");
+    assert_eq!(
+        std::fs::read(a_dir.path().join("file")).unwrap(),
+        b"changed"
+    );
     assert_eq!(state_bytes(), unchanged);
     engine::versions::restore_version(&lock, &current.pair, &entry, &side, &cancel).unwrap();
     let prepared = a.prepared.lock().unwrap().last().unwrap().clone();

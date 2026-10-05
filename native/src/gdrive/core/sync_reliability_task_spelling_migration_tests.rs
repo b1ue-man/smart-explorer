@@ -16,7 +16,8 @@ fn sync_reliability_task_names_legacy_folded_different_spellings_keep_exact_coun
 }
 
 #[test]
-fn sync_reliability_task_names_legacy_alias_target_collision_preserves_pair_until_explicit_rename() {
+fn sync_reliability_task_names_legacy_alias_target_collision_preserves_pair_until_explicit_rename()
+{
     let left = DriveFixture::new("Job");
     let right = DriveFixture::new("Job");
     let rel_a = "Notebook/note.md";
@@ -71,7 +72,10 @@ fn sync_reliability_task_names_legacy_alias_target_collision_preserves_pair_unti
     );
     assert_eq!(right.drive.bytes(&healthy_id), b"healthy after");
     assert_eq!(right.read_file(rel_b), b"old alias pair");
-    assert!(right.drive.named(&right.root_object_id(), "Notebook").is_empty());
+    assert!(right
+        .drive
+        .named(&right.root_object_id(), "Notebook")
+        .is_empty());
     assert!(contains_bytes(
         &bisync::versions_dir(&partial.state.as_ref().unwrap().pair_id),
         b"healthy before"
@@ -116,7 +120,10 @@ fn sync_reliability_task_names_legacy_alias_target_collision_preserves_pair_unti
         Some(new_folder.as_str())
     );
     a.rename(&source, &target).unwrap();
-    assert_eq!(left.drive.object(&new_folder).unwrap()["name"], "Independent");
+    assert_eq!(
+        left.drive.object(&new_folder).unwrap()["name"],
+        "Independent"
+    );
     assert_eq!(left.drive.bytes(&new_id), b"new independent lower tree");
     let a = left.restart();
     let b = right.restart();
@@ -149,7 +156,10 @@ fn sync_reliability_task_names_legacy_alias_target_collision_preserves_pair_unti
         b"new independent lower tree"
     );
     assert_eq!(right.drive.bytes(&healthy_id), b"healthy after");
-    assert!(right.drive.named(&right.root_object_id(), "Notebook").is_empty());
+    assert!(right
+        .drive
+        .named(&right.root_object_id(), "Notebook")
+        .is_empty());
     assert_persisted(&recovered);
     reopened_noop(
         &left,
@@ -372,7 +382,10 @@ fn historical_side_b_restore(
     assert_eq!(right.drive.bytes(id_b), b"historical counterchange");
     assert_eq!(left.drive.bytes(id_a), b"historical overwrite");
     if rel_a != rel_b {
-        assert!(right.drive.named(&right.root_object_id(), "OldTree").is_empty());
+        assert!(right
+            .drive
+            .named(&right.root_object_id(), "OldTree")
+            .is_empty());
     }
     assert_persisted(&overwritten);
     let versions = list_versions(&state.pair_id, &sides, &cancel).unwrap();

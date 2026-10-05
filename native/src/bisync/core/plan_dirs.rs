@@ -60,7 +60,11 @@ pub(super) fn plan_dirs(
         let (present, spelling) = match (in_a, in_b) {
             (Some(spelling), Some(_)) => {
                 if !omissions.protects(spelling) {
-                    in_sync.insert(aliases.logical(spelling, PairSide::A, ctx.keys).into_owned());
+                    in_sync.insert(
+                        aliases
+                            .logical(spelling, PairSide::A, ctx.keys)
+                            .into_owned(),
+                    );
                 }
                 continue;
             }

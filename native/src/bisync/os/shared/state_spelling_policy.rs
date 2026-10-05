@@ -39,12 +39,7 @@ pub(super) fn validate(
             return Err(invalid("one recorded slot is both a file and a folder"));
         }
     }
-    let maps = [
-        &value.files_a,
-        &value.files_b,
-        &value.dirs_a,
-        &value.dirs_b,
-    ];
+    let maps = [&value.files_a, &value.files_b, &value.dirs_a, &value.dirs_b];
     for map in maps {
         for rel in map.values() {
             super::sync_relative_path::SyncRelativePath::parse(rel)?;
@@ -89,7 +84,9 @@ pub(super) fn validate(
                     if folded.key(physical) != folded.key(logical)
                         || !aliases.insert(side, logical, physical, directory, keys)
                     {
-                        return Err(invalid("historical spelling relations contradict each other"));
+                        return Err(invalid(
+                            "historical spelling relations contradict each other",
+                        ));
                     }
                 }
             }
@@ -101,7 +98,9 @@ pub(super) fn validate(
     ] {
         for (key, rel) in files.iter().chain(dirs) {
             if aliases.key(rel, side, keys) != *key {
-                return Err(invalid("stored spelling does not match its proven planning key"));
+                return Err(invalid(
+                    "stored spelling does not match its proven planning key",
+                ));
             }
             if let Some((parent, _)) = rel.rsplit_once('/') {
                 let logical = aliases.logical(rel, side, keys);
@@ -123,7 +122,9 @@ pub(super) fn validate(
 
 fn migrate(value: &mut StateSpellings, state: &StateKey, keys: KeyPolicy) -> io::Result<()> {
     if keys.fold_case {
-        return Err(invalid("stored spelling does not match the folded pair policy"));
+        return Err(invalid(
+            "stored spelling does not match the folded pair policy",
+        ));
     }
     let folded = KeyPolicy { fold_case: true };
     let (_, records, dirs) = super::checkpoint_journal::Journal::load(state, keys)?;
@@ -158,7 +159,9 @@ fn migrate(value: &mut StateSpellings, state: &StateKey, keys: KeyPolicy) -> io:
                     .flatten()
                     .any(|rel| folded.key(rel).as_ref() != old)
                 {
-                    return Err(invalid("stored key is neither current nor a historical folded key"));
+                    return Err(invalid(
+                        "stored key is neither current nor a historical folded key",
+                    ));
                 }
                 let candidates: BTreeSet<_> = if directory {
                     dir_basis
@@ -175,7 +178,9 @@ fn migrate(value: &mut StateSpellings, state: &StateKey, keys: KeyPolicy) -> io:
                         .collect()
                 };
                 if candidates.len() > 1 {
-                    return Err(invalid("historical folded key has several authoritative spellings"));
+                    return Err(invalid(
+                        "historical folded key has several authoritative spellings",
+                    ));
                 }
                 // A stored A/B relation is evidence even for an unresolved
                 // conflict with no baseline. No unrecorded sibling is joined.
@@ -191,13 +196,19 @@ fn migrate(value: &mut StateSpellings, state: &StateKey, keys: KeyPolicy) -> io:
                     .ok_or_else(|| invalid("stored spelling has no side path"))?
             };
             let key = keys.key(&logical).into_owned();
-            if slots.iter().flatten().any(|rel| keys.key(rel).as_ref() != key) {
+            if slots
+                .iter()
+                .flatten()
+                .any(|rel| keys.key(rel).as_ref() != key)
+            {
                 anchors.insert(key.clone(), logical);
             }
             for (slot, map) in [(slots[0], &mut new_a), (slots[1], &mut new_b)] {
                 if let Some(rel) = slot {
                     if map.insert(key.clone(), rel.clone()).is_some() {
-                        return Err(invalid("historical spelling migration would merge recorded slots"));
+                        return Err(invalid(
+                            "historical spelling migration would merge recorded slots",
+                        ));
                     }
                 }
             }
