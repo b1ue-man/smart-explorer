@@ -47,7 +47,7 @@ Vorhandene Syntaxrefs: [Taskruntime](sync-task-runtime-2026-10-04.md),
   eigene DAV-Passwortdatei; das Klartextpasswort steht nicht in den Argumenten.
 - [ureq 2.12.1 AgentBuilder](https://raw.githubusercontent.com/algesten/ureq/2.12.1/src/agent.rs):
   `tls_config(self, Arc<rustls::ClientConfig>) -> Self` behält die tatsächliche
-  Rustls-Prüfung bei. Alle drei DAV-Agenten erhalten im Test denselben zusätzlichen
+  Rustls-Prüfung bei. Alle vier DAV-Agenten erhalten im Test denselben zusätzlichen
   Roottrust; ihr bisheriges Pooling-/Mutation-once-Verhalten bleibt bestehen.
 - [Microsoft New-SmbShare](https://learn.microsoft.com/en-us/powershell/module/smbshare/new-smbshare)
   und [New-SmbMapping](https://learn.microsoft.com/en-us/powershell/module/smbshare/new-smbmapping):
@@ -124,6 +124,32 @@ Bestehende GET-Downloads und Mutation-once-/Write-no-follow-Verträge bleiben
 erhalten. Die Abnahme benutzt weiter die normale Apache-Collectioncanonicalisierung,
 keinen Serverworkaround, und verlangt gespeichertes Wiederöffnen plus vollständigen
 Byte-/Backup-/Gegenänderungs-/No-op-Ablauf.
+
+Die Sourcekorrektur trennt `webdav/core/connection.rs` von
+`metadata_request.rs`: GET behält seine bestehende Redirectpolicy, PROPFIND
+besitzt einen gepoolten No-follow-Agent und verarbeitet ausschließlich einen
+301/302/307/308-Slashredirect zur gleichen Origin und identischen Collection.
+Query, Fragment, Userinfo, andere Ports/Hosts/Schemes, Geschwister und weitere
+Redirects werden vor einer Folgeanfrage abgewiesen. Die bestehenden
+Write-/Mutationagenten behalten No-follow und ihr bisheriges Pooling.
+Die neuen C04-Flows prüfen tatsächliche Methode/Depth/Body/Auth, Literal-%-
+Encoding, Root-/Stateidentität, GET-Redirectbytes, MKCOL-No-follow und fehlende
+Requests an fremde Authorities. Die vorhandenen Mutation-/PUT-No-follow-
+Abläufe werden im selben C04-Suitevertrag mitgeführt.
+
+## Eigene TCP-Fixtures auf Windows
+
+Primärabgleich 2026-10-05:
+[Winsock accept](https://learn.microsoft.com/en-us/windows/win32/api/winsock2/nf-winsock2-accept)
+übernimmt Socket-Eigenschaften des Listeners. Ein zum abbrechbaren Accept
+nonblocking geschalteter Listener darf deshalb keinen unbeabsichtigt
+nonblocking Control-/Datastream an den synchronen Fixturehandler weitergeben.
+[`TcpStream::set_nonblocking(&self, bool) -> io::Result<()>`](https://doc.rust-lang.org/std/net/struct.TcpStream.html#method.set_nonblocking)
+setzt den Modus ausdrücklich. Der handlergebundene Stream verwendet danach
+weiter die vorhandenen begrenzten Read-/Write-Timeouts; Listenerdeadline,
+Stopflag, eigenes Socket-Shutdown und Threadjoin bleiben erhalten.
+Das betrifft nur die beiden kontrollierten FTP-Metadaten-Fixtures, nicht
+Produkt-Login-Timeouts, TLS oder die Signatur-/550-Orakel.
 
 ## Interner Helpervertrag
 

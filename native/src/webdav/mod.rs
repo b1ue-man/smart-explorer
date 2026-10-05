@@ -21,4 +21,8 @@ mod writer;
 #[path = "core/transfer_engine_task_tests.rs"]
 mod transfer_engine_task_tests;
 
+#[cfg(test)]
+#[path = "core/sync_reliability_task_provider_redirect_tests.rs"]
+mod sync_reliability_task_provider_redirect_tests;
+
 pub use core_impl::{WebdavBackend, WebdavConfig};
