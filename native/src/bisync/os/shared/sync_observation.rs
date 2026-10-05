@@ -31,9 +31,8 @@ fn matching(
     };
     for omitted in listing.omitted {
         // An unaddressable omission cannot prove which child was protected.
-        let child = vfs::sync_child_path(backend, parent, &omitted.rel).map_err(|_| {
-            super::apply_boundary::protected(super::OmissionKind::NotRepresentable)
-        })?;
+        let child = vfs::sync_child_path(backend, parent, &omitted.rel)
+            .map_err(|_| super::apply_boundary::protected(super::OmissionKind::NotRepresentable))?;
         if matches(&omitted.rel, &child) {
             return Err(super::apply_boundary::protected(omitted.reason.into()));
         }

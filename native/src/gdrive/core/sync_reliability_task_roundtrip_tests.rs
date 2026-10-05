@@ -23,7 +23,10 @@ fn remote_run(left: &DriveFixture, right: &DriveFixture, direction: Direction) -
 fn sync_reliability_task_names_drive_roundtrip_keeps_trees_literals_and_marker_origins() {
     let left = DriveFixture::new("Job");
     let right = DriveFixture::new("Job");
-    assert_ne!(left.backend.state_identity(), right.backend.state_identity());
+    assert_ne!(
+        left.backend.state_identity(),
+        right.backend.state_identity()
+    );
     let left_previous = vfs::previous_state_identities(&left.backend).unwrap();
     let right_previous = vfs::previous_state_identities(&right.backend).unwrap();
     assert_eq!(left_previous.len(), 1);

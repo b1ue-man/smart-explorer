@@ -97,7 +97,12 @@ fn sync_reliability_task_options_mirror_uses_confirmed_incremental_index() {
             ..forward()
         };
         pair.put(source, "file.txt", b"seed", TIME);
-        pair.put(source, "unchanged/note.txt", b"confirmed nested bytes", TIME);
+        pair.put(
+            source,
+            "unchanged/note.txt",
+            b"confirmed nested bytes",
+            TIME,
+        );
         let first = pair.run(opts, &filter);
         clean(&first);
         assert!(pair.index_complete(&first));

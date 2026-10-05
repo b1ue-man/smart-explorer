@@ -112,6 +112,23 @@ verwendet die tatsächlichen Index-/Snapshot-/Bootstrap-/Publishverträge von
 `engine_change_feed`; ein zweiter Plan-Kritiker oder eine zweite Suite entsteht
 dadurch nicht.
 
+Der dritte Lauf erreicht `colon:name` im Drive↔Drive-Roundtrip und belegt die
+falsche Anwendung der Agent-Wire-Pfadgrammatik in `apply_boundary`. Vor der
+Korrektur werden die betroffenen Apply-/Baseline-/Checkpoint-/Index-/Versions-
+und Recovery-Verbraucher derselben relativen Syncnamen gemeinsam gelesen.
+Sie brauchen den providerunabhängigen Literal-Komponentenvertrag mit einer
+eigenen relativen Pfadprüfung; Backend-/TargetLimits und effektive Rootgrenzen
+bleiben für jede reale Aktion maßgeblich. Keine Lockerung der Agent-Wire-
+Grammatik oder Traversal-/Link-/Backup-/Destruktionsregeln. Erwartet sind
+vollständiger Literal-Roundtrip einschließlich persistierter Baseline,
+Änderung und No-op auf beiden Desktop-OS; unrepräsentierbare Windows-Ziele
+bleiben geschützt und unabhängige gültige Dateien schließen ab. Die erneute
+API-/Gapprüfung benutzt `vfs::sync_path/sync_child_path`, aktuelle Journal-
+und Versionsformate und den getrennten `ValidatedRelativePath`-Wirevertrag.
+Das verbleibende Mirror-Nested-Orakel bleibt unverändert. Der Deletepolicy-
+Ablauf fordert für die frisch hinzugefügte target-only Datei nun ausdrücklich
+den vorhandenen `ScanDepth::Full`-Vertrag statt eines inkrementellen Laufs.
+
 ### M4 Bestehende Job-/Updategrenzen vollständig erhalten
 
 - F3/F5/F6. Dateien: `syncjobs`/`daemon`/`connect`/Desktop-/Mobile-Sync-Grenzen

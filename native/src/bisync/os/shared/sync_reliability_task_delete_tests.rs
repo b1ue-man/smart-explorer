@@ -20,7 +20,16 @@ fn sync_reliability_task_options_delete_policies_move_and_restorable_deletes() {
         clean(&seeded);
         std::fs::remove_file(pair.path(PairSide::A, "gone")).unwrap();
         pair.put(PairSide::B, "orphan", b"never on source", TIME);
-        let out = pair.run(opts, &filter);
+        // A newly added target-only file needs the explicit full target scan.
+        // Incremental mirror intentionally checks its confirmed managed index.
+        let out = pair.run_settings(
+            opts,
+            &filter,
+            RunSettings {
+                depth: ScanDepth::Full,
+                ..Default::default()
+            },
+        );
         clean(&out);
         let deleted = match delete {
             DeletePolicy::Mirror => 2,

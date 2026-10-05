@@ -224,7 +224,9 @@ fn failed_source_delete_retries_as_verified_finalize_without_recopy() {
     assert_eq!(first.completed.len(), 0);
     assert_eq!(first_errors.len(), 1);
     assert!(
-        first_errors[0].1.contains("injected move-source removal failure"),
+        first_errors[0]
+            .1
+            .contains("injected move-source removal failure"),
         "{first_errors:?}"
     );
     assert!(a.join("file.txt").exists());
@@ -291,7 +293,10 @@ fn failed_source_delete_retries_as_verified_finalize_without_recopy() {
     );
     assert_eq!(updated["file.txt"].0, None);
     assert!(updated["file.txt"].1.is_some());
-    assert_eq!(std::fs::read(b.join("file.txt")).unwrap(), b"move me safely");
+    assert_eq!(
+        std::fs::read(b.join("file.txt")).unwrap(),
+        b"move me safely"
+    );
     let (noop, conflicts, _) = plan(&final_a, &final_b, &updated, options);
     assert!(noop.is_empty() && conflicts.is_empty());
     for directory in [a, b, versions] {

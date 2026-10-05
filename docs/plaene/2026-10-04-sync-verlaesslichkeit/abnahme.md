@@ -146,6 +146,26 @@ gespeicherten Locators unverändert. Byte-, Baseline-, Backup- und No-op-Orakel
 werden nicht abgeschwächt. Die nativen Stufen laufen noch; weder der dritte
 Gesamtlauf noch die Android-Korrektur sind bereits erfolgreich abgenommen.
 
+Die abgeschlossene Linux-Stufe des dritten Laufs bestätigt zusätzlich die
+Unterbrechungs-/Retry-Korrekturen (C06). Die veröffentlichte Altworker-Übernahme
+bestätigt erhaltene Job-/Baseline-/Konflikt-/Sicherungsbytes und No-op sowie
+Prozessende, Autostart-Restaurierung und Entfernung des Privatroots. Das
+Reportarchiv enthält keine privaten Profile oder Altworker-Arbeitsdaten mehr.
+Der Literal-Roundtrip scheitert jetzt konkret an `colon:name` in der
+Sync-Engine (`relative path contains a drive or stream prefix`); die
+Agent-Wire-Pfadgrammatik ist kein allgemeiner Drive-Namensvertrag. C05 nennt
+weiter zwei Listings im zuvor bestätigten Mirror-Target. Sein Null-Listing-
+und Nested-Byte-/Baseline-Orakel bleibt bestehen. Der Deletepolicy-Ablauf
+fordert zudem zwei Löschungen einschließlich einer neu erschienenen
+target-only Datei, ruft aber den inkrementellen statt den vollständigen Scan
+auf. Er benutzt nun ausdrücklich `ScanDepth::Full`; alle Lösch-/Erhaltungs-
+und restaurierbaren Backup-Orakel bleiben unverändert. Die erfolgreiche
+Direct-Einrichtung führt in C04 beim Room-Export-Refresh zu `StaleAuthorization`;
+dies blockiert auch den Crossremote-Altjob. C10-Autorisierung fehlt weiterhin.
+Der geprüfte kandidatgebundene Formatpatch
+`177a72fb52b60f62a01677acd94a15b467d8e4015aedb24ede977883e9721f0d`
+ist statisch übernommen; sein Report enthält keine Größenverletzung.
+
 Die Windows-Stufe ist ebenfalls vollständig ausgewertet. Notebook,
 Bindungsmigration, Schutz und die echte Altworker-Übernahme erfüllen auch dort
 ihre Orakel. Zusätzlich scheitert die gesunde `healthy.txt`-Änderung an einem
