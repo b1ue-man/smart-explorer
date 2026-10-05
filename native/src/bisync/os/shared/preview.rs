@@ -82,6 +82,8 @@ pub fn preview_with(
         let keys = super::orchestration_plan::keys(endpoints);
         let names = super::state_spellings::load(&key, keys)?;
         let (_, records, dirs) = super::checkpoint_journal::Journal::load(&key, keys)?;
+        let dir_history =
+            super::state_spelling_history::DirectoryHistory::load(&names, dirs.as_ref(), keys)?;
         let path = super::baseline_file(&key)?;
         let base = if !path.try_exists()?
             && !path.with_extension("journal").try_exists()?
@@ -112,7 +114,7 @@ pub fn preview_with(
                 false,
             );
         }
-        let ctx = super::orchestration_plan::context(endpoints, opts, dirs.as_ref());
+        let ctx = super::orchestration_plan::context(endpoints, opts, dir_history.dirs.as_ref());
         let mut plan = super::orchestration_plan::prepare_spelled(
             endpoints,
             &mut snapshot.a,

@@ -1,5 +1,6 @@
 //! Historical side relations through readonly observation, recorded retry
 //! and a previously complete incremental mirror generation.
+use std::collections::BTreeSet;
 use std::io::{self, Read, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -14,6 +15,7 @@ const B_REL: &str = "oldtree/note.md";
 struct ExactRemote<'a> {
     inner: &'a TestRemote,
     listings: AtomicUsize,
+    deny_empty_remove: AtomicBool,
 }
 
 impl<'a> ExactRemote<'a> {
@@ -21,6 +23,7 @@ impl<'a> ExactRemote<'a> {
         Self {
             inner,
             listings: AtomicUsize::new(0),
+            deny_empty_remove: AtomicBool::new(false),
         }
     }
 }
@@ -67,6 +70,14 @@ impl Backend for ExactRemote<'_> {
         self.inner.remove_file(path)
     }
     fn remove_dir(&self, path: &str) -> io::Result<()> {
+        if path == format!("{REMOTE_ROOT}/emptyhistory")
+            && self.deny_empty_remove.swap(false, Ordering::SeqCst)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "historical directory removal denied once",
+            ));
+        }
         self.inner.remove_dir(path)
     }
     fn mkdir_all(&self, path: &str) -> io::Result<()> {
@@ -118,11 +129,36 @@ fn complete(out: &engine::Outcome) {
     assert_eq!(out.stats.errors, 0);
 }
 
+fn observed_preview(
+    a: &dyn Backend,
+    b: &dyn Backend,
+    options: engine::BisyncOptions,
+) -> engine::preview::Preview {
+    let ignore = engine::empty_globset();
+    let filter = engine::WalkFilter::basic(true, &ignore);
+    engine::preview(
+        a,
+        REMOTE_ROOT,
+        b,
+        REMOTE_ROOT,
+        options,
+        &AtomicBool::new(false),
+        &filter,
+    )
+}
+
 fn seed(a: &Path, b: &Path) {
     std::fs::create_dir_all(a.join("OldTree")).unwrap();
     std::fs::create_dir_all(b.join("oldtree")).unwrap();
     std::fs::write(a.join(A_REL), b"original").unwrap();
     std::fs::write(b.join(B_REL), b"original").unwrap();
+}
+
+fn dirs(key: &engine::StateKey) -> BTreeSet<String> {
+    let path = engine::baseline_file(key)
+        .unwrap()
+        .with_extension("dirs.json");
+    serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
 }
 
 #[test]
@@ -131,6 +167,8 @@ fn sync_reliability_task_options_legacy_spellings_recorded_retry_keeps_literal_s
     let b_dir = tempfile::tempdir().unwrap();
     let state_dir = tempfile::tempdir().unwrap();
     seed(a_dir.path(), b_dir.path());
+    std::fs::create_dir(a_dir.path().join("EmptyHistory")).unwrap();
+    std::fs::create_dir(b_dir.path().join("emptyhistory")).unwrap();
     let a = TestRemote::new(a_dir.path(), "legacy-recorded-a");
     let b = TestRemote::new(b_dir.path(), "legacy-recorded-b");
     let identity = Identity::current(engine::incremental::SyncEndpoints::new(
@@ -158,27 +196,24 @@ fn sync_reliability_task_options_legacy_spellings_recorded_retry_keeps_literal_s
     let key = initial.state.clone().unwrap();
     let base_path = engine::baseline_file(&key).unwrap();
     let names_path = base_path.with_extension("spellings.json");
+    let dirs_path = base_path.with_extension("dirs.json");
+    let historical_dirs = std::fs::read(&dirs_path).unwrap();
+    assert_eq!(
+        dirs(&key),
+        BTreeSet::from(["EMPTYHISTORY".into(), "OLDTREE".into()])
+    );
     let historical_names = std::fs::read(&names_path).unwrap();
     let old_json: serde_json::Value = serde_json::from_slice(&historical_names).unwrap();
     assert_eq!(old_json.as_object().unwrap().len(), 4);
     let base_bytes = std::fs::read(&base_path).unwrap();
     let exact_a = ExactRemote::new(&a);
     let exact_b = ExactRemote::new(&b);
-    let ignore = engine::empty_globset();
-    let filter = engine::WalkFilter::basic(true, &ignore);
     let cancel = AtomicBool::new(false);
-    let preview = engine::preview(
-        &exact_a,
-        REMOTE_ROOT,
-        &exact_b,
-        REMOTE_ROOT,
-        options,
-        &cancel,
-        &filter,
-    );
+    let preview = observed_preview(&exact_a, &exact_b, options);
     assert!(preview.error.is_none(), "{:?}", preview.error);
     assert!(preview.actions.is_empty());
     assert!(preview.conflicts.is_empty());
+    assert!(preview.dirs.is_empty());
     complete(&run(
         &exact_a,
         &exact_b,
@@ -190,11 +225,45 @@ fn sync_reliability_task_options_legacy_spellings_recorded_retry_keeps_literal_s
     ));
     assert_eq!(std::fs::read(&names_path).unwrap(), historical_names);
     assert_eq!(std::fs::read(&base_path).unwrap(), base_bytes);
+    assert_eq!(std::fs::read(&dirs_path).unwrap(), historical_dirs);
     let reopened = run(&exact_a, &exact_b, options, &db);
     complete(&reopened);
     assert_eq!(reopened.state.as_ref(), Some(&key));
     assert_eq!(reopened.baseline, initial.baseline);
     assert_eq!((reopened.stats.a_to_b, reopened.stats.b_to_a), (0, 0));
+    engine::state_metadata::write_bytes(&dirs_path, &historical_dirs).unwrap();
+    std::fs::remove_dir(a_dir.path().join("EmptyHistory")).unwrap();
+    let deletion = observed_preview(&exact_a, &exact_b, options);
+    assert!(deletion.error.is_none(), "{:?}", deletion.error);
+    assert!(deletion.dirs.iter().any(|action| {
+        matches!(
+            action,
+            engine::DirAction::Remove {
+                side: engine::PairSide::B,
+                rel
+            } if rel == "emptyhistory"
+        )
+    }));
+    assert_eq!(std::fs::read(&dirs_path).unwrap(), historical_dirs);
+    exact_b.deny_empty_remove.store(true, Ordering::SeqCst);
+    let failed_remove = run(&exact_a, &exact_b, options, &db);
+    assert_eq!(failed_remove.baseline, initial.baseline);
+    assert_eq!(engine::load_baseline(&base_path).unwrap(), initial.baseline);
+    assert!(failed_remove.stats.errors > 0 || !failed_remove.omissions.is_empty());
+    assert!(!exact_b.deny_empty_remove.load(Ordering::SeqCst));
+    assert!(b_dir.path().join("emptyhistory").try_exists().unwrap());
+    assert_eq!(
+        dirs(&key),
+        BTreeSet::from(["EmptyHistory".into(), "OldTree".into()])
+    );
+    complete(&run(&exact_a, &exact_b, options, &db));
+    assert!(!b_dir.path().join("emptyhistory").try_exists().unwrap());
+    assert_eq!(dirs(&key), BTreeSet::from(["OldTree".into()]));
+    std::fs::create_dir(a_dir.path().join("EmptyHistory")).unwrap();
+    complete(&run(&exact_a, &exact_b, options, &db));
+    assert!(std::fs::read_dir(b_dir.path())
+        .unwrap()
+        .any(|entry| entry.unwrap().file_name().to_str() == Some("EmptyHistory")));
     std::fs::write(a_dir.path().join(A_REL), b"winner-a").unwrap();
     std::fs::write(b_dir.path().join(B_REL), b"loser-b").unwrap();
     let conflict = run(&exact_a, &exact_b, options, &db);
@@ -357,9 +426,11 @@ fn sync_reliability_task_options_legacy_spellings_incremental_and_invalid_maps_k
     complete(&initial);
     let key = initial.state.clone().unwrap();
     let base_path = engine::baseline_file(&key).unwrap();
+    assert_eq!(dirs(&key), BTreeSet::from(["OLDTREE".into()]));
     let exact_a = ExactRemote::new(&a);
     let exact_b = ExactRemote::new(&b);
     complete(&run(&exact_a, &exact_b, options, &db));
+    assert_eq!(dirs(&key), BTreeSet::from(["OldTree".into()]));
     exact_b.listings.store(0, Ordering::SeqCst);
     std::fs::write(a_dir.path().join(A_REL), b"mirror change").unwrap();
     let changed = run(&exact_a, &exact_b, options, &db);

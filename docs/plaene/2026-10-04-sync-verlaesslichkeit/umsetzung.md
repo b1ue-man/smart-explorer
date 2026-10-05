@@ -141,6 +141,11 @@ Preview-/Incremental-Kontexte und `Checkpoint::flush`: Die alte Dirbasis
 bleibt bis zur bestätigten Aktion erhalten; der Completedrecord adressiert
 denselben belegten logischen Ordnerkey. Ein alleiniger Foldvergleich in
 `plan_dirs` ersetzt diese zusammenhängende Persistenzgrenze nicht.
+Die Historykorrektur ist quellenfertig und im Self-Review geprüft; der bestehende
+`plan_dirs`-Vertrag bleibt unverändert. Dieselben beiden C05-FQNs prüfen zusätzlich
+historische Dirkeys, nichtmutierende Löschvorschau, fehlgeschlagenen Remove mit
+erhaltener Basis, erfolgreichen Retry und Neuerstellung ohne alten Alias.
+Die Laufbestätigung gehört zur nächsten vollständigen Remote-Abnahme.
 
 ### M3 Gemeinsame sichere Sync-Integration
 

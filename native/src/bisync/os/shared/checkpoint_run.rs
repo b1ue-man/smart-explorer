@@ -8,7 +8,7 @@ use super::baseline_records::RecordBook;
 use super::checkpoint_journal::{Frame, Journal};
 use super::completion::{ApplySink, CompletedAction, CompletedKind};
 use super::incremental::SyncEndpoints;
-use super::keys::{KeyPolicy, Spellings};
+use super::keys::{KeyPolicy, PathAliases, Spellings};
 use super::omissions::OmissionKind;
 use super::pair_lock::PairLock;
 use super::run_types::{RunStop, StateKey};
@@ -50,6 +50,7 @@ pub(super) struct CheckpointSink<'a> {
     keys: KeyPolicy,
     observer: Option<&'a dyn ApplySink>,
     observed: Option<([&'a SideSnapshot; 2], &'a Spellings)>,
+    aliases: Option<&'a PathAliases>,
     state: Mutex<State>,
 }
 
@@ -78,6 +79,7 @@ impl<'a> CheckpointSink<'a> {
             keys,
             observer,
             observed: None,
+            aliases: None,
             state: Mutex::new(State {
                 records,
                 dirs,
@@ -104,6 +106,18 @@ impl<'a> CheckpointSink<'a> {
         self.observed = Some((observed, spellings));
         self.lock().counts = Some(counts);
         self
+    }
+
+    pub fn with_path_aliases(mut self, aliases: &'a PathAliases) -> Self {
+        self.aliases = Some(aliases);
+        self
+    }
+
+    fn directory_key(&self, rel: &str, side: PairSide) -> String {
+        self.aliases.map_or_else(
+            || self.keys.key(rel).into_owned(),
+            |aliases| aliases.key(rel, side, self.keys),
+        )
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
@@ -276,10 +290,13 @@ impl<'a> CheckpointSink<'a> {
             if let Some(entry) = action.baseline_entry() {
                 frame.records.push((action.rel.clone(), entry));
             } else {
-                let rel = self.keys.key(&action.rel).into_owned();
                 match action.kind {
-                    CompletedKind::DirCreated { .. } => frame.dirs_add.push(rel),
-                    CompletedKind::DirRemoved { .. } => frame.dirs_remove.push(rel),
+                    CompletedKind::DirCreated { side } => {
+                        frame.dirs_add.push(self.directory_key(&action.rel, side));
+                    }
+                    CompletedKind::DirRemoved { side } => {
+                        frame.dirs_remove.push(self.directory_key(&action.rel, side));
+                    }
                     _ => {}
                 }
             }

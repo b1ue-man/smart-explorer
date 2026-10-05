@@ -189,6 +189,18 @@ und der belegte Vorfahr `OldTree` sind nicht zwei konkurrierende Literalnamen.
 Tatsächlich mehrere Baseline-Anker oder widersprüchliche Seitenslots bleiben
 mehrdeutig und geschützt. Dieser Sourcevertrag ist am 2026-10-05 gegen
 `checkpoint_run.rs`, Journalreplay und den sechsten Remote-Lauf geprüft.
+Die implementierte `state_spelling_history::DirectoryHistory::load(names,
+recorded, keys)` bildet ausschließlich diese belegten alten Beziehungen auf
+die aktuellen logischen Dirkeys ab. Full-/Incremental-Läufe schreiben ihren
+Keydelta über `CheckpointSink::planned(Frame)` unter dem bestehenden Pairlock;
+Preview bildet nur dieselbe readonly Sicht. Bei belegtem inkrementellem No-op
+benötigt die reine Metadatenmigration keinen Zielwalk oder neue Indexgeneration.
+`CheckpointSink::with_path_aliases` überträgt bestätigte DirCreated-/DirRemoved-
+Ereignisse anhand ihrer wirklichen Seite auf den gemeinsamen logischen Key.
+`StateSpellings::applied_directory_history` retiert den Alias erst, wenn der
+vorher bestätigte Key im Completedzustand entfernt ist. Fehlgeschlagene oder
+geschützte Removes behalten die Beziehung; aufgezeichnete Datei-Elternslots
+bleiben bei fehlgeschlagenen Childaktionen für den Retry verfügbar.
 Für eine bereits gespeicherte ungelöste Relation ohne Baseline gelten nur
 ihre tatsächlichen Seitenslots als Beleg. Mehrdeutige oder widersprüchliche
 Records werden nicht in eine erfundene Zuordnung umgewandelt.

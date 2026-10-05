@@ -27,6 +27,19 @@ pub(super) fn run_full_locked(state: &RunState<'_>) -> Outcome {
             }
         }
     };
+    let dir_history = match super::state_spelling_history::DirectoryHistory::load(
+        &names,
+        state.dirs,
+        keys,
+    ) {
+        Ok(history) => history,
+        Err(error) => {
+            return Outcome {
+                baseline: state.baseline.clone(),
+                ..failure("Ordner-Zwischenstand", error)
+            }
+        }
+    };
     if let Err(error) = super::incremental::retire_index(state) {
         return failure("Sync-Zwischenstand", error);
     }
@@ -85,7 +98,7 @@ pub(super) fn run_full_locked(state: &RunState<'_>) -> Outcome {
             false,
         );
     }
-    let ctx = context(endpoints, opts, state.dirs);
+    let ctx = context(endpoints, opts, dir_history.dirs.as_ref());
     let mut plan = prepare_spelled(
         endpoints,
         &mut snapshot.a,
@@ -229,10 +242,17 @@ pub(super) fn run_full_locked(state: &RunState<'_>) -> Outcome {
     let sink = match CheckpointSink::new(endpoints, state.lock, state.key, ctx.keys, state.observer)
     {
         Ok(sink) => {
-            sink.with_observations([&snapshot.a, &snapshot.b], &plan.spellings, observed_counts)
+            sink.with_path_aliases(&names.aliases)
+                .with_observations([&snapshot.a, &snapshot.b], &plan.spellings, observed_counts)
         }
         Err(error) => return failure("Zwischenstand", error),
     };
+    if let Err(error) = dir_history.checkpoint(&sink) {
+        return Outcome {
+            baseline: state.baseline.clone(),
+            ..failure("Ordner-Zwischenstand", error)
+        };
+    }
     // Duplicate repairs own their exact rels. Their old basis is not replaced
     // by a tentative convergence record before the repair actually succeeded.
     plan.records
@@ -252,8 +272,9 @@ pub(super) fn run_full_locked(state: &RunState<'_>) -> Outcome {
                 .map(|rel| names.aliases.key(rel, PairSide::B, keys)),
         )
         .collect();
-    let dirs_remove = state
+    let dirs_remove = dir_history
         .dirs
+        .as_ref()
         .into_iter()
         .flatten()
         .filter(|dir| {
@@ -370,6 +391,7 @@ pub(super) fn run_full_locked(state: &RunState<'_>) -> Outcome {
         )
     });
     let checkpoint = sink.finish();
+    names.applied_directory_history(dir_history.dirs.as_ref(), &checkpoint.dirs);
     names.applied(
         &plan.actions,
         &plan.spellings,
