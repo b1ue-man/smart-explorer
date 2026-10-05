@@ -42,6 +42,15 @@ Erhaltung bisheriger Baseline- und seitenspezifischer Schreibweisenrecords;
 alte gefaltete Schlüssel dürfen nicht als beschädigte Zustände verworfen
 oder als neue Pfadauswahl interpretiert werden.
 
+Die historische C02-Fixture verwendet dafür
+`sync_reliability_task_legacy_fixture.rs`: echte Seed-Signaturen, exakt vier
+alte Spellingmaps mit erhaltenen Side-Literalwerten und gefaltete
+Dir-Existenzkeys. Gemeinsame tatsächlich gespeicherte A/B-Dirslots und
+bestätigte gepaarte Baseline-Vorfahren belegen diese Dirbasis; eine moderne
+`.dirs.json` mit möglicherweise nur implizit angelegten Eltern ist kein
+zusätzlicher Altidentitätsbeweis. Die vollständigen historischen Abläufe
+behalten ihre ID-, Side-B-Backup-/Restore-, Restart-, Rename- und No-op-Orakel.
+
 Leere/teilweise Seiten dürfen vor dem Ende auftreten. `nextPageToken` bestimmt
 das Ende. Neue oder entfernte Objekte können Ergebnisse während der Pagination
 verändern. Ein erneut auftauchendes gleiches Objekt ist keine zweite Identität;
