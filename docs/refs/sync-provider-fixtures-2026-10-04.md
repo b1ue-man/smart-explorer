@@ -272,3 +272,43 @@ Datei kopieren/löschen und keine Transferbytes melden. Beide unabhängigen SFTP
 Authorities bekommen außerdem unter exakt gleichen relativen Roots bewusst
 verschiedene Bytes; Identitäten und Inhalte müssen voneinander getrennt bleiben.
 Dies beschreibt das Orakel, keinen bereits ausgeführten Erfolg.
+
+## Folgegrenzen aus der siebten gemeinsamen Abnahme
+
+Primärquellen und aktuelle Source erneut geprüft am 2026-10-05 vor Änderungen.
+[RFC 4918 §5.2](https://www.rfc-editor.org/rfc/rfc4918.html#section-5.2)
+empfiehlt die Slashform für Collection-URLs; der tatsächliche Ressourcentyp
+kommt aus `DAV:resourcetype`. [§9.3](https://www.rfc-editor.org/rfc/rfc4918.html#section-9.3)
+verlangt einen Fehler für bereits belegte Namen und fehlende Vorfahren;
+201 bedeutet Erstellung, 405 einen belegten Request-URI, 409 fehlende
+Vorfahren. MKCOL ist idempotent, aber mutierend. Der Apache-Standard
+[DirectorySlash On](https://httpd.apache.org/docs/2.4/mod/mod_dir.html#directoryslash)
+canonicalisiert bestehende Ordner ohne Slash per Redirect.
+
+Der echte Serverlog von Lauf `37289323834` bestätigt: erstes MKCOL
+`/pair-008/.obsidian` liefert 201, dessen frisches PROPFIND erreicht mit der
+bereits implementierten Auth-/Slashgrenze 207, das wiederholte MKCOL ohne
+Slash liefert 301. `transfer_ops::make_collection` akzeptiert diesen Redirect
+zu Recht nicht. Die Ordneranlage muss daher den Collection-URL-Vertrag schon
+bei ihrem ersten Request erfüllen. Agent-/TLS-/Poolingvertrag und einzelne
+Mutation bleiben erhalten; Redirects werden weder als Erfolg gewertet noch
+mit einem zweiten Schreibaufruf verfolgt. Bestehende normale Collection
+ist idempotent, exklusive Anlage meldet jeden belegten Namen als
+`AlreadyExists`. Ein vorhandener regulärer Dateiname mit Slash kann einen
+anderen Serverstatus liefern: eine nötige Prüfung muss die tatsächliche
+ursprüngliche Ressource belegen, ohne echte Permission-/Transport-/fehlende
+Parentfehler zu Erfolg umzudeuten. Glückliche Neuanlage braucht keinen
+zusätzlichen Metadatenwalk. Der Server wird dafür nicht umkonfiguriert.
+
+Windows erreicht anschließend den echten ZIP-Sourcefall. Seine Fixture
+übergibt der Engine bisher die leere Root, während
+`vfs/os/shared/sync_roots.rs::validate_sync_roots` leere Roots ausdrücklich
+ablehnt. `ZipBackend::archive_key` normalisiert `/` auf seine Archivwurzel.
+Trotz `Scheme::Local` erbt ZIP `Backend::is_local() == false`, hat keine
+Extensions und bindet State-/Namespaceidentität an seine tatsächliche
+Archivdatei. Die nichtleere logische Archivwurzel geht damit durch den
+Backendvertrag, nicht durch native Rootcanonicalisierung oder lokalen Walk.
+Die Fixture verwendet diesen bestehenden Vertrag; leere Syncwurzeln bleiben
+ungültig. Read-only-Abweisung, genaue Quell-/Zielbytes und anschließender
+No-op bleiben verpflichtend. Es entsteht weiterhin kein gespeicherter
+ZIP-Locator und keine Änderung der allgemeinen Endpunktgrammatik.
