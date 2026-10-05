@@ -248,6 +248,10 @@ Keine Hostpolicy-, Wire-, Credential-, Identity- oder Leaseänderung.
 Die bestehenden C04/C08-Flows bleiben unverändert; derselbe C05-Block verlangt
 zusätzlich echten Direct-/Room-Save → Listing → Restore → Konvergenz → No-op
 sowie verweigerte/entzogene Roots und strikte vorhandene fremde Archive.
+Diese typisierte Archivgrenze und ihre zusätzlichen C05-/C08-Abläufe sind
+quellenfertig und im Self-Review gegen die gesicherten Verträge geprüft.
+Die bestehenden C04-/C08-Provider- und Altjobabläufe wurden nicht abgeschwächt.
+Der Laufnachweis bleibt bis zur vollständigen Remote-Auswertung offen.
 
 ### M4 Bestehende Job-/Updategrenzen vollständig erhalten
 

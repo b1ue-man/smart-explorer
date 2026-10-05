@@ -12,11 +12,26 @@ use super::extension_types::{
 };
 use super::{Backend, VfsMeta, VfsResult, VolumeIdentity};
 
+/// Where automatic sync versions can be stored; this grants no root access.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum VersionArchivePolicy {
+    #[default]
+    Provider,
+    /// Provider archives are private to its host; use the caller's app data.
+    AppPrivate,
+}
+
 /// Every method has a conservative default, so an implementation names
 /// only what its protocol or host can do. Wrappers that rewrite paths or
 /// guard access (export roots, mounts) must not hand out the extensions of
 /// the backend they wrap unchanged.
 pub trait BackendExtensions: Backend {
+    /// Intrinsic archive policy, independent of the current export grant.
+    /// App-private consumers must still freshly validate the actual sync root.
+    fn version_archive_policy(&self) -> VersionArchivePolicy {
+        VersionArchivePolicy::Provider
+    }
+
     /// Older identities proven to belong to this same live connection.
     /// Used only for a one-time import, never to equate different accounts.
     fn previous_state_identities(&self) -> VfsResult<Vec<String>> {

@@ -237,6 +237,26 @@ fn sync_reliability_task_old_jobs_ipc_previous_identity_is_finite_and_unproven()
 }
 
 #[test]
+fn sync_reliability_task_old_jobs_ipc_archive_policy_is_finite_without_worker_rpc() {
+    for target in targets() {
+        let fixture = OfflineAgent::new(target);
+        let agent = fixture.handle();
+        let cached = CachingBackend::new(agent.clone());
+        for backend in [&*agent, &cached as &dyn Backend] {
+            let identity = backend.state_identity();
+            for _ in 0..32 {
+                assert_eq!(
+                    vfs::version_archive_policy(backend),
+                    vfs::VersionArchivePolicy::AppPrivate
+                );
+            }
+            assert_eq!(backend.state_identity(), identity);
+        }
+        fixture.assert_metadata_only();
+    }
+}
+
+#[test]
 fn sync_reliability_task_old_jobs_ipc_reversible_fallback_is_finite_without_mutation() {
     for target in targets() {
         let fixture = OfflineAgent::new(target);

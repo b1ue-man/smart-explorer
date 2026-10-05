@@ -86,7 +86,7 @@ pub use self::extension_calls::{
     mtime_precision, open_read_regular, open_write_copy_stage_timed, previous_state_identities,
     recycle, replace_staged_reversible, supports_duplicate_search, supports_hash_walk,
     supports_recycle, sync_child_path, sync_filesystem, sync_path, sync_stat, target_limits,
-    unix_mode, volume_identity,
+    unix_mode, version_archive_policy, volume_identity,
 };
 pub use self::extension_types::{
     ChangeNotice, ChangeSignalMode, ChangeSubscription, HashWalkEntry, HashWalkItem,
@@ -94,7 +94,7 @@ pub use self::extension_types::{
     RecycleOutcome, StageDurability, StageFinish, StageFinished, TargetLimits, VfsListing,
     VfsOmission,
 };
-pub use self::extensions::BackendExtensions;
+pub use self::extensions::{BackendExtensions, VersionArchivePolicy};
 pub use self::local_extensions::{local_mount_boundary, local_volume_identity};
 pub use self::staging_names::is_staging_name;
 pub(crate) use self::staging_names::{fit_stage_name, is_unique_stage};

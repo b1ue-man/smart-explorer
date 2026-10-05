@@ -3,7 +3,7 @@ use super::paths::join;
 use super::transfer_stream::check;
 use super::version_manifest::{self as record, Manifest};
 use super::versions::{VersionEntry, VersionSide, VersionStore};
-use crate::vfs::{validate_child_name, Backend, LocalBackend, Scheme};
+use crate::vfs::{validate_child_name, Backend, LocalBackend};
 use std::io;
 use std::sync::atomic::AtomicBool;
 
@@ -123,24 +123,11 @@ pub(super) fn managed_sync_root(
     cancel: &AtomicBool,
 ) -> io::Result<Vec<Managed>> {
     check(cancel)?;
+    if !super::version_provider_policy::uses_provider_archive(side, cancel)? {
+        return Ok(Vec::new());
+    }
     let root = join(side.root, ".se-versions");
     match side.backend.stat(&root) {
-        Err(error)
-            if side.backend.scheme() == Scheme::Peer
-                && error.kind() == io::ErrorKind::PermissionDenied =>
-        {
-            // Share keeps this archive name private. Auto save already uses
-            // the durable app-data copy; discovery must retain that choice.
-            // A revoked export or a denied child of an existing archive is
-            // still an error, rather than an empty versions list.
-            check(cancel)?;
-            let current = side.backend.stat(side.root)?;
-            if !current.is_dir || current.is_symlink || current.special {
-                return Err(record::invalid("version fallback root is not plain"));
-            }
-            check(cancel)?;
-            return Ok(Vec::new());
-        }
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => return Err(error),
         Ok(_) => {}

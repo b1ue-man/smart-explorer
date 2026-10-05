@@ -41,6 +41,7 @@ pub(super) fn save(
     // A provider with duplicate names needs an ID; rename(path) would select
     // an arbitrary member. The fallback copies precisely the captured ID.
     if versions.context().location == VersionsLocation::Auto
+        && super::version_provider_policy::uses_provider_archive(side, cancel)?
         && !side.backend.has_duplicate_file_names()
         && side.backend.download_name(path, &meta.name) == meta.name
     {
