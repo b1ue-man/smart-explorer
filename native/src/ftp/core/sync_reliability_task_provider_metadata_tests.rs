@@ -23,7 +23,12 @@ fn accept(listener: &TcpListener, stop: &AtomicBool) -> Option<TcpStream> {
     let deadline = Instant::now() + Duration::from_secs(5);
     while !stop.load(Ordering::Acquire) && Instant::now() < deadline {
         match listener.accept() {
-            Ok((stream, _)) => return Some(stream),
+            Ok((stream, _)) => {
+                // Winsock accept inherits the listener's nonblocking mode.
+                // Control/data parsers need bounded blocking I/O on both OSes.
+                stream.set_nonblocking(false).unwrap();
+                return Some(stream);
+            }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                 thread::sleep(Duration::from_millis(5));
             }

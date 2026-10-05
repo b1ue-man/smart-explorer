@@ -64,6 +64,12 @@ fn backend_for_timeout(base: String, timeout: Duration) -> WebdavBackend {
             .timeout_read(timeout)
             .timeout_write(timeout)
             .build(),
+        metadata_agent: ureq::AgentBuilder::new()
+            .timeout_connect(Duration::from_secs(3))
+            .timeout_read(timeout)
+            .timeout_write(timeout)
+            .redirects(0)
+            .build(),
         mutation_agent: ureq::AgentBuilder::new()
             .timeout_connect(Duration::from_secs(3))
             .timeout_read(Duration::from_secs(3))
