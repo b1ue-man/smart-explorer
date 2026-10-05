@@ -18,8 +18,10 @@ impl GDriveBackend {
     /// ambiguity. Resolution and mutation use the same complete collection.
     pub(super) fn named_objects(&self, parent_id: &str, name: &str) -> VfsResult<Vec<DriveObject>> {
         let parent_id = self.actual_parent_id(parent_id)?;
-        self.collect_files(&parent_id, Some(name))?.iter()
-            .map(|file| parse_object(file, &parent_id, name)).collect()
+        self.collect_files(&parent_id, Some(name))?
+            .iter()
+            .map(|file| parse_object(file, &parent_id, name))
+            .collect()
     }
 
     /// The exact object a `[drive-id <prefix>]` marker names among the

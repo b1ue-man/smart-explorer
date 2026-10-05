@@ -291,8 +291,8 @@ mod sync_reliability_task_fixture;
 #[path = "os/shared/sync_reliability_task_options_tests.rs"]
 mod sync_reliability_task_options_tests;
 #[cfg(test)]
-#[path = "os/shared/sync_reliability_task_resume_tests.rs"]
-mod sync_reliability_task_resume_tests;
-#[cfg(test)]
 #[path = "os/shared/sync_reliability_task_protection_tests.rs"]
 mod sync_reliability_task_protection_tests;
+#[cfg(test)]
+#[path = "os/shared/sync_reliability_task_resume_tests.rs"]
+mod sync_reliability_task_resume_tests;

@@ -31,9 +31,18 @@ impl Backend for GDriveBackend {
 
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
         let (raw, folders) = self.projected_listing(path)?;
-        let unprojected = raw.iter().filter(|entry| !entry.meta.is_dir
-            || !entry.meta.id.as_deref().is_some_and(|id| folders.contains_key(id)))
-            .map(|entry| entry.meta.clone()).collect();
+        let unprojected = raw
+            .iter()
+            .filter(|entry| {
+                !entry.meta.is_dir
+                    || !entry
+                        .meta
+                        .id
+                        .as_deref()
+                        .is_some_and(|id| folders.contains_key(id))
+            })
+            .map(|entry| entry.meta.clone())
+            .collect();
         let mut listed = Vec::with_capacity(raw.len());
         let mut used = std::collections::HashSet::new();
         for entry in raw.iter().filter(|entry| entry.meta.is_dir) {
@@ -49,27 +58,47 @@ impl Backend for GDriveBackend {
         // the established encoded namespace, including duplicate directories.
         for mut file in super::duplicates::disambiguate(unprojected) {
             if used.contains(&file.name) {
-                let title = raw.iter().find(|entry| entry.meta.id == file.id)
+                let title = raw
+                    .iter()
+                    .find(|entry| entry.meta.id == file.id)
                     .map(|entry| entry.meta.name.as_str())
                     .ok_or_else(|| std::io::Error::other("Drive browser file has no identity"))?;
-                let id = file.id.as_deref().ok_or_else(|| std::io::Error::other("Drive browser file has no ID"))?;
-                file.name = format!("{}{}{}{}", super::names::encode(title),
-                    super::duplicates::MARKER_PREFIX, id, super::duplicates::MARKER_SUFFIX);
+                let id = file
+                    .id
+                    .as_deref()
+                    .ok_or_else(|| std::io::Error::other("Drive browser file has no ID"))?;
+                file.name = format!(
+                    "{}{}{}{}",
+                    super::names::encode(title),
+                    super::duplicates::MARKER_PREFIX,
+                    id,
+                    super::duplicates::MARKER_SUFFIX
+                );
             }
             used.insert(file.name.clone());
             listed.push(file);
         }
-        let mimes: HashMap<_, _> = raw.iter().filter_map(|entry| {
-            Some((entry.meta.id.as_deref()?, entry.mime.as_deref()?))
-        }).collect();
+        let mimes: HashMap<_, _> = raw
+            .iter()
+            .filter_map(|entry| Some((entry.meta.id.as_deref()?, entry.mime.as_deref()?)))
+            .collect();
         let mut names = std::collections::HashSet::new();
         for entry in &listed {
             crate::vfs::validate_child_name(&entry.name)?;
             if !names.insert(&entry.name) {
-                return Err(std::io::Error::other("Drive returned conflicting path names"));
+                return Err(std::io::Error::other(
+                    "Drive returned conflicting path names",
+                ));
             }
-            let id = entry.id.as_deref().ok_or_else(|| std::io::Error::other("Drive browser entry has no ID"))?;
-            self.remember_path(&super::sync_projection::child_key(path, &entry.name), id, mimes.get(id).copied())?;
+            let id = entry
+                .id
+                .as_deref()
+                .ok_or_else(|| std::io::Error::other("Drive browser entry has no ID"))?;
+            self.remember_path(
+                &super::sync_projection::child_key(path, &entry.name),
+                id,
+                mimes.get(id).copied(),
+            )?;
         }
         self.listed_guard()?.insert(norm(path));
         self.persist_path_cache();
@@ -344,5 +373,4 @@ impl GDriveBackend {
             .collect::<String>();
         Ok(format!("gdrive:path-v2:{account}:{}", self.root))
     }
-
 }

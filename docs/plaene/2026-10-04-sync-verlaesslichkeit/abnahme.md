@@ -72,11 +72,20 @@ Installer, Feeds oder Releasepayloads und veröffentlicht nichts.
 
 Der [erste gemeinsame Remote-Lauf](https://github.com/b1ue-man/smart-explorer/actions/runs/37244738623)
 prüft Kandidat `1123d125d637b8d6628e729c1f8f4d006c7cf1a7`.
-Am 2026-10-05 ist die Auswertung noch nicht abgeschlossen. Die Android-Buildstufe
+Am 2026-10-05 ist dieser Lauf vollständig als fehlgeschlagen ausgewertet. Die Android-Buildstufe
 belegt eine erfolgreich verifizierte alte APK mit der Ausgabe `V2 Signer`,
 die der neue Helper zunächst nicht erkannt hat. Der korrigierte Parser übernimmt
 die dokumentierten Signerformen des bestehenden Release-Scripts, normalisiert
 und dedupliziert vollständige SHA-256-Digests und verlangt genau ein Zertifikat
 für alle drei APKs. Die Geräteübergabe benötigt die erfolgreich abgeschlossene
 Buildstufe mit finaler Provenienz; ein Zwischenmanifest autorisiert sie nicht.
-Bestätigung erfolgt ausschließlich im selben Remote-Suite-Einstieg.
+Die nativen Hosts wurden vor den Sync-Abläufen durch `E0433` beim falschen
+`JobEditor`-Modulpfad angehalten; der Pfad ist auf den vorhandenen öffentlichen
+`syncjobs::editor`-Vertrag korrigiert. Daraus folgt noch kein Laufzeitnachweis
+für C01–C08. Der Linux-Report bestätigt außerdem fehlende C10-Autorisierung.
+Der kandidatgebundene Formatpatch mit SHA-256
+`29cbe118d34d282718a93611bf27eb4eda2f3e9842b7f3638d1d864331d62bbe`
+ist geprüft und übernommen; dessen Kontext wurde ausschließlich für den
+bereits korrigierten Editorpfad angepasst. Kein Format-/Größenproblem bleibt
+im ersten Formatreport offen. Bestätigung der Korrekturen und eigentliche
+Sync-Abnahme erfolgen ausschließlich im selben Remote-Suite-Einstieg.

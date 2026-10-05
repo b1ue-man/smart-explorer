@@ -38,11 +38,18 @@ pub(super) fn load_account(account_path: &Path, legacy_path: &Path) -> LoadedCac
     for (key, id) in &historical.ids {
         hints.ids.insert(key.clone(), id.clone());
         match historical.mimes.get(key) {
-            Some(mime) => { hints.mimes.insert(key.clone(), mime.clone()); }
-            None => { hints.mimes.remove(key); }
+            Some(mime) => {
+                hints.mimes.insert(key.clone(), mime.clone());
+            }
+            None => {
+                hints.mimes.remove(key);
+            }
         }
     }
-    LoadedCaches { hints, historical_ids: historical.ids }
+    LoadedCaches {
+        hints,
+        historical_ids: historical.ids,
+    }
 }
 
 pub(super) fn load_from_path(path: &Path) -> io::Result<LoadedCache> {

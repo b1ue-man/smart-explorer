@@ -422,9 +422,7 @@ fn recovered_config_load(
     message.starts_with(&format!(
         "invalid sync job configuration {}:",
         path.display()
-    ))
-        || (message.starts_with("sync job ")
-            && message.ends_with(&format!(": {}", path.display())))
+    )) || (message.starts_with("sync job ") && message.ends_with(&format!(": {}", path.display())))
         || message.starts_with("Löschschutz-Migration: ")
         || legacy_io_load_failure(message)
 }

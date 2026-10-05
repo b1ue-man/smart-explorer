@@ -169,7 +169,10 @@ fn current_identity(
     let mut matching = super::sync_observation::named(backend, &parent, &previous.name)?
         .into_iter()
         .filter(|meta| meta.id.as_deref() == Some(id));
-    let metadata = matching.next().map(|meta| regular(meta, label)).transpose()?;
+    let metadata = matching
+        .next()
+        .map(|meta| regular(meta, label))
+        .transpose()?;
     if matching.next().is_some() {
         return Err(drift("sync listing repeated a captured identity"));
     }

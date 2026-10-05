@@ -34,7 +34,11 @@ pub(super) fn metadata_named(
     literal_name: &str,
 ) -> io::Result<Vec<VfsMeta>> {
     let parent = parent_of(path).ok_or_else(changed)?;
-    checked_metadata(super::sync_observation::named(backend, &parent, literal_name)?)
+    checked_metadata(super::sync_observation::named(
+        backend,
+        &parent,
+        literal_name,
+    )?)
 }
 
 fn checked_metadata(mut entries: Vec<VfsMeta>) -> io::Result<Vec<VfsMeta>> {

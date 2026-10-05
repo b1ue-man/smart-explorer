@@ -1,5 +1,7 @@
-use super::sync_reliability_task_fixture::{assert_complete, options, state_baseline, DriveFixture};
-use super::sync_reliability_task_auth_fixture::{token_answer, oauth_credentials as credentials};
+use super::sync_reliability_task_auth_fixture::{oauth_credentials as credentials, token_answer};
+use super::sync_reliability_task_fixture::{
+    assert_complete, options, state_baseline, DriveFixture,
+};
 use super::task_drive::drive_error;
 use super::task_http::Answer;
 use crate::bisync::Direction;
@@ -17,9 +19,14 @@ fn sync_reliability_task_resume_temporary_about_and_invalid_grant_preserve_basel
                 if request.path() == "/oauth/token" && invalid && fault.load(Ordering::SeqCst) {
                     return Some(Answer::status(400, json!({"error":"invalid_grant"})));
                 }
-                if let Some(answer) = token_answer(request) { return Some(answer); }
+                if let Some(answer) = token_answer(request) {
+                    return Some(answer);
+                }
                 if request.path() == "/drive/v3/about" && !invalid && fault.load(Ordering::SeqCst) {
-                    return Some(drive_error(503, "backendError", "about temporarily unavailable").header("Retry-After", "0"));
+                    return Some(
+                        drive_error(503, "backendError", "about temporarily unavailable")
+                            .header("Retry-After", "0"),
+                    );
                 }
                 None
             }
@@ -45,7 +52,9 @@ fn sync_reliability_task_resume_temporary_about_and_invalid_grant_preserve_basel
         assert_eq!(recovered.state, seed.state);
         assert_eq!(f.local_bytes("note.md"), b"after restored token check");
         assert!(super::sync_reliability_task_fixture::contains_bytes(
-            &crate::bisync::versions_dir(&recovered.state.as_ref().unwrap().pair_id), b"confirmed before token check"));
+            &crate::bisync::versions_dir(&recovered.state.as_ref().unwrap().pair_id),
+            b"confirmed before token check"
+        ));
         assert_eq!(f.registry_bytes(), records);
         f.assert_noop(opts, &recovered);
     }

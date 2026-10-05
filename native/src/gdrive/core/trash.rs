@@ -28,7 +28,9 @@ impl GDriveBackend {
             Some(id) => id.clone(),
             None => self.resolve(&key)?,
         };
-        if pending_id.is_none() { self.validate_trash_path(&key, &id)?; }
+        if pending_id.is_none() {
+            self.validate_trash_path(&key, &id)?;
+        }
         match self.trash_id_once(&id) {
             Ok(()) => {
                 if pending_id.is_some() {
@@ -69,22 +71,31 @@ impl GDriveBackend {
 
     fn validate_trash_path(&self, key: &str, id: &str) -> VfsResult<()> {
         if key.is_empty() {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "Drive root cannot be trashed"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Drive root cannot be trashed",
+            ));
         }
         let (parent, segment) = split_parent(key);
         let parent = self.resolve(&parent)?;
         let title = match self.bound_folder(&parent, segment)? {
             Some(binding) => {
                 if binding.id != id {
-                    return Err(io::Error::new(io::ErrorKind::InvalidData,
-                        "Drive trash ID differs from its reserved folder locator"));
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "Drive trash ID differs from its reserved folder locator",
+                    ));
                 }
                 binding.title
             }
             None => match super::duplicates::parse_marker(segment) {
                 Some((plain, prefix)) if id.starts_with(prefix) => super::names::decode(plain)?,
-                Some(_) => return Err(io::Error::new(io::ErrorKind::InvalidData,
-                    "Drive trash ID differs from the selected marker")),
+                Some(_) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "Drive trash ID differs from the selected marker",
+                    ))
+                }
                 None => super::names::decode(segment)?,
             },
         };

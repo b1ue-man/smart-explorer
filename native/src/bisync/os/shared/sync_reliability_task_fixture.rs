@@ -23,20 +23,31 @@ impl Pair {
     pub(super) fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
         let roots = [dir.path().join("a"), dir.path().join("b")];
-        for root in &roots { std::fs::create_dir(root).unwrap(); }
+        for root in &roots {
+            std::fs::create_dir(root).unwrap();
+        }
         let roots = roots.map(|p| p.to_str().unwrap().replace('\\', "/"));
         let db = dir.path().join("index.sqlite");
         let pair = Self {
-            a: Probe::new(roots[0].clone()), b: Probe::new(roots[1].clone()),
-            roots, db, _dir: dir, cancel: Arc::new(AtomicBool::new(false)),
+            a: Probe::new(roots[0].clone()),
+            b: Probe::new(roots[1].clone()),
+            roots,
+            db,
+            _dir: dir,
+            cancel: Arc::new(AtomicBool::new(false)),
             owned: Mutex::new(BTreeSet::new()),
         };
-        for id in [pair_id_for(&pair.a, &pair.roots[0], &pair.b, &pair.roots[1]),
-            pair_id_for(&pair.b, &pair.roots[1], &pair.a, &pair.roots[0])] {
+        for id in [
+            pair_id_for(&pair.a, &pair.roots[0], &pair.b, &pair.roots[1]),
+            pair_id_for(&pair.b, &pair.roots[1], &pair.a, &pair.roots[0]),
+        ] {
             pair.track(&id);
         }
         for path in pair.owned.lock().unwrap().iter() {
-            assert!(!path.try_exists().unwrap(), "fixture state already exists: {path:?}");
+            assert!(
+                !path.try_exists().unwrap(),
+                "fixture state already exists: {path:?}"
+            );
         }
         pair
     }
@@ -44,7 +55,13 @@ impl Pair {
         let mut owned = self.owned.lock().unwrap();
         owned.insert(super::replica_state::pair_dir(id));
         owned.insert(versions_dir(id));
-        for extension in ["sebl", "journal", "dirs.json", "spellings.json", "index-dirty"] {
+        for extension in [
+            "sebl",
+            "journal",
+            "dirs.json",
+            "spellings.json",
+            "index-dirty",
+        ] {
             owned.insert(baseline_path(id).with_extension(extension));
         }
     }
@@ -55,74 +72,171 @@ impl Pair {
         let path = self.path(side, rel);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, bytes).unwrap();
-        let backend = if side == PairSide::A { &self.a.inner } else { &self.b.inner };
-        assert!(crate::vfs::finish_stage(backend, path.to_str().unwrap(), crate::vfs::StageFinish {
-            mtime_ms: Some(time), ..Default::default()
-        }).unwrap().mtime_applied);
+        let backend = if side == PairSide::A {
+            &self.a.inner
+        } else {
+            &self.b.inner
+        };
+        assert!(
+            crate::vfs::finish_stage(
+                backend,
+                path.to_str().unwrap(),
+                crate::vfs::StageFinish {
+                    mtime_ms: Some(time),
+                    ..Default::default()
+                }
+            )
+            .unwrap()
+            .mtime_applied
+        );
     }
     pub(super) fn bytes(&self, side: PairSide, rel: &str) -> Vec<u8> {
         std::fs::read(self.path(side, rel)).unwrap()
     }
     pub(super) fn run(&self, opts: BisyncOptions, filter: &WalkFilter<'_>) -> Outcome {
         let out = super::orchestration::run_with_store_path(
-            super::incremental::SyncEndpoints::new(&self.a, &self.roots[0], &self.b, &self.roots[1]),
-            opts, &self.cancel, filter, &self.db,
+            super::incremental::SyncEndpoints::new(
+                &self.a,
+                &self.roots[0],
+                &self.b,
+                &self.roots[1],
+            ),
+            opts,
+            &self.cancel,
+            filter,
+            &self.db,
         );
-        if let Some(state) = &out.state { self.track(&state.pair_id); }
+        if let Some(state) = &out.state {
+            self.track(&state.pair_id);
+        }
         out
     }
-    pub(super) fn run_settings(&self, opts: BisyncOptions, filter: &WalkFilter<'_>, settings: RunSettings) -> Outcome {
-        let mut request = RunRequest::new(&self.a, &self.roots[0], &self.b, &self.roots[1], opts, filter, &self.cancel);
+    pub(super) fn run_settings(
+        &self,
+        opts: BisyncOptions,
+        filter: &WalkFilter<'_>,
+        settings: RunSettings,
+    ) -> Outcome {
+        let mut request = RunRequest::new(
+            &self.a,
+            &self.roots[0],
+            &self.b,
+            &self.roots[1],
+            opts,
+            filter,
+            &self.cancel,
+        );
         request.settings = settings;
         let out = run_with(request);
-        if let Some(state) = &out.state { self.track(&state.pair_id); }
+        if let Some(state) = &out.state {
+            self.track(&state.pair_id);
+        }
         out
     }
     pub(super) fn preview(&self, opts: BisyncOptions, filter: &WalkFilter<'_>) -> Preview {
-        preview(&self.a, &self.roots[0], &self.b, &self.roots[1], opts, &self.cancel, filter)
+        preview(
+            &self.a,
+            &self.roots[0],
+            &self.b,
+            &self.roots[1],
+            opts,
+            &self.cancel,
+            filter,
+        )
     }
-    pub(super) fn preview_settings(&self, opts: BisyncOptions, filter: &WalkFilter<'_>, settings: RunSettings) -> Preview {
-        preview_with(&self.a, &self.roots[0], &self.b, &self.roots[1], opts, &self.cancel, filter, settings)
+    pub(super) fn preview_settings(
+        &self,
+        opts: BisyncOptions,
+        filter: &WalkFilter<'_>,
+        settings: RunSettings,
+    ) -> Preview {
+        preview_with(
+            &self.a,
+            &self.roots[0],
+            &self.b,
+            &self.roots[1],
+            opts,
+            &self.cancel,
+            filter,
+            settings,
+        )
     }
     pub(super) fn stored(&self, out: &Outcome) -> Baseline {
         let keys = pair_key_policy(&self.a, &self.roots[0], &self.b, &self.roots[1]);
-        let (_, records, _) = super::checkpoint_journal::Journal::load(out.state.as_ref().unwrap(), keys).unwrap();
+        let (_, records, _) =
+            super::checkpoint_journal::Journal::load(out.state.as_ref().unwrap(), keys).unwrap();
         records.baseline
     }
     pub(super) fn sides(&self) -> [versions::VersionSide<'_>; 2] {
-        [versions::VersionSide { side: PairSide::A, backend: &self.a, root: &self.roots[0] },
-         versions::VersionSide { side: PairSide::B, backend: &self.b, root: &self.roots[1] }]
+        [
+            versions::VersionSide {
+                side: PairSide::A,
+                backend: &self.a,
+                root: &self.roots[0],
+            },
+            versions::VersionSide {
+                side: PairSide::B,
+                backend: &self.b,
+                root: &self.roots[1],
+            },
+        ]
     }
     pub(super) fn versions(&self, out: &Outcome) -> Vec<versions::VersionEntry> {
-        versions::list_versions(&out.state.as_ref().unwrap().pair_id, &self.sides(), &self.cancel).unwrap()
+        versions::list_versions(
+            &out.state.as_ref().unwrap().pair_id,
+            &self.sides(),
+            &self.cancel,
+        )
+        .unwrap()
     }
     pub(super) fn version_bytes(&self, entry: &versions::VersionEntry) -> Vec<u8> {
         let mut bytes = Vec::new();
         if entry.store == versions::VersionStore::AppData {
             return std::fs::read(&entry.stored_path).unwrap();
         }
-        let backend = if entry.side == Some(PairSide::A) { &self.a } else { &self.b };
-        backend.open_read(&entry.stored_path).unwrap().read_to_end(&mut bytes).unwrap();
+        let backend = if entry.side == Some(PairSide::A) {
+            &self.a
+        } else {
+            &self.b
+        };
+        backend
+            .open_read(&entry.stored_path)
+            .unwrap()
+            .read_to_end(&mut bytes)
+            .unwrap();
         bytes
     }
     pub(super) fn restore(&self, out: &Outcome, entry: &versions::VersionEntry, side: PairSide) {
         let state = out.state.as_ref().unwrap();
         let lock = PairLock::acquire(&state.lock_id).unwrap();
         let sides = self.sides();
-        versions::restore_version(&lock, &state.pair_id, entry,
-            &sides[if side == PairSide::A { 0 } else { 1 }], &self.cancel).unwrap();
+        versions::restore_version(
+            &lock,
+            &state.pair_id,
+            entry,
+            &sides[if side == PairSide::A { 0 } else { 1 }],
+            &self.cancel,
+        )
+        .unwrap();
     }
     pub(super) fn index_complete(&self, out: &Outcome) -> bool {
         let id = super::replica_state::index_id(out.state.as_ref().unwrap()).unwrap();
-        super::state_store::SyncStateStore::open_at(&self.db).unwrap().load_pair(&id)
-            .unwrap().is_some_and(|record| record.bootstrapped)
+        super::state_store::SyncStateStore::open_at(&self.db)
+            .unwrap()
+            .load_pair(&id)
+            .unwrap()
+            .is_some_and(|record| record.bootstrapped)
     }
     pub(super) fn no_op(&self, opts: BisyncOptions, filter: &WalkFilter<'_>) -> Outcome {
-        let promotions = self.a.promotions.load(Ordering::SeqCst) + self.b.promotions.load(Ordering::SeqCst);
+        let promotions =
+            self.a.promotions.load(Ordering::SeqCst) + self.b.promotions.load(Ordering::SeqCst);
         let out = self.run(opts, filter);
         clean(&out);
         assert_eq!(out.stats.a_to_b + out.stats.b_to_a + out.stats.deleted, 0);
-        assert_eq!(self.a.promotions.load(Ordering::SeqCst) + self.b.promotions.load(Ordering::SeqCst), promotions);
+        assert_eq!(
+            self.a.promotions.load(Ordering::SeqCst) + self.b.promotions.load(Ordering::SeqCst),
+            promotions
+        );
         assert_eq!(self.stored(&out), out.baseline);
         out
     }
@@ -130,10 +244,16 @@ impl Pair {
 impl Drop for Pair {
     fn drop(&mut self) {
         for path in self.owned.get_mut().unwrap().iter() {
-            let result = if path.is_dir() { std::fs::remove_dir_all(path) } else { std::fs::remove_file(path) };
+            let result = if path.is_dir() {
+                std::fs::remove_dir_all(path)
+            } else {
+                std::fs::remove_file(path)
+            };
             if let Err(error) = result {
-                assert!(error.kind() == io::ErrorKind::NotFound || std::thread::panicking(),
-                    "fixture cleanup {path:?}: {error}");
+                assert!(
+                    error.kind() == io::ErrorKind::NotFound || std::thread::panicking(),
+                    "fixture cleanup {path:?}: {error}"
+                );
             }
         }
     }
@@ -146,5 +266,9 @@ pub(super) fn clean(out: &Outcome) {
         out.errors, out.conflicts.len(), out.blocked, out.stopped, out.deferred, out.busy, out.canceled);
 }
 pub(super) fn forward() -> BisyncOptions {
-    BisyncOptions { direction: Direction::AtoB, max_transfers: 1, ..Default::default() }
+    BisyncOptions {
+        direction: Direction::AtoB,
+        max_transfers: 1,
+        ..Default::default()
+    }
 }

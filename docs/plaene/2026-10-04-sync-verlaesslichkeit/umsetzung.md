@@ -183,7 +183,7 @@ nimmt vor Code den vollständigen Plan auseinander; keine weitere Reviewrunde.
 | M1/M2 | Code und eigener Self-Review fertig | vollständige Kandidatensammlung, reale Root-ID, private Folderbindung und stabile Projektion; Herkunftsbeweis getrennt von Parentprojektion und neuem Accountcache, auch am normalen Writer und gemeinsamen Dateilader über wechselnde Job-Reihenfolge; bestätigtes Missing bereits bei erster Migration geschützt; Remote-Abnahme ausstehend |
 | M3 | Code und eigener Self-Review fertig | additive Sync-Stat-Grenze, tolerante Beobachtung, Literalpfad-Resolve und erhaltenes Bootstrapgate; Remote-Abnahme ausstehend |
 | M4 | Code und eigener Self-Review fertig | fehlende Edit-ID geschützt, wiederanlaufbare Ursachenklassifikation, Loader-Recovery über Workerwechsel; Remote-Abnahme ausstehend |
-| M5 Remote-Gesamtablauf | ein kandidatengebundener Einstieg und alle Orakel erstellt; Remote-Ausführung ausstehend | native Linux-/Windows-Provider, gespeicherte alte Jobs und echter Altworker-/Android-Updateablauf; keine lokale Ausführung; C10 benötigt noch die angefragte Drive-Testautorisierung |
+| M5 Remote-Gesamtablauf | erster Workflow ausgewertet; korrigierter Wiederanlauf desselben Einstiegs vorbereitet | APK-Ausgabeparser, verifizierte Geräteübergabe, Editor-Modulpfad und Remote-Formatpatch korrigiert; eigentliche native Sync-Abnahme noch offen; keine lokale Ausführung; C10 benötigt die angefragte Drive-Testautorisierung |
 | M6 Release | offen | erst nach M5 |
 
 Pro Meilenstein: gegen Refs und Aufrufer selbst prüfen, kohärent committen;

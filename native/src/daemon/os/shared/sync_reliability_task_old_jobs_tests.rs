@@ -1,5 +1,7 @@
 //! C08 executes old saved jobs across production loader, resolver and runner.
-pub(crate) use super::sync_reliability_task_old_jobs_fixture::{resolve_fixture, EndpointFixtures, SavedJob};
+pub(crate) use super::sync_reliability_task_old_jobs_fixture::{
+    resolve_fixture, EndpointFixtures, SavedJob,
+};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
@@ -13,17 +15,32 @@ pub(super) fn local_pair() -> (tempfile::TempDir, String, String) {
     let b = temp.path().join("target");
     std::fs::create_dir(&a).unwrap();
     std::fs::create_dir(&b).unwrap();
-    (temp, a.to_str().unwrap().replace('\\', "/"), b.to_str().unwrap().replace('\\', "/"))
+    (
+        temp,
+        a.to_str().unwrap().replace('\\', "/"),
+        b.to_str().unwrap().replace('\\', "/"),
+    )
 }
 
 pub(super) fn reload(saved: &SavedJob) -> crate::syncjobs::SyncJob {
-    super::run_loop::sync_reliability_task_reload_after_restart().into_iter()
-        .find(|job| job.id == saved.id).expect("same saved job loaded after restart")
+    super::run_loop::sync_reliability_task_reload_after_restart()
+        .into_iter()
+        .find(|job| job.id == saved.id)
+        .expect("same saved job loaded after restart")
 }
 
 pub(super) fn assert_noop(state: &crate::syncjobs::JobState) {
     let result = state.last_result.as_ref().unwrap();
-    assert_eq!((result.a_to_b, result.b_to_a, result.deleted, result.conflicts, result.errors), (0, 0, 0, 0, 0));
+    assert_eq!(
+        (
+            result.a_to_b,
+            result.b_to_a,
+            result.deleted,
+            result.conflicts,
+            result.errors
+        ),
+        (0, 0, 0, 0, 0)
+    );
 }
 
 #[test]
@@ -35,13 +52,20 @@ fn sync_reliability_task_old_jobs_resolver_overrides_are_exact_and_thread_scoped
         let guard = EndpointFixtures::new(vec![(endpoint.into(), backend.clone(), a.clone())]);
         assert_eq!(crate::connect::resolve_endpoint(endpoint).unwrap().1, a);
         assert!(resolve_fixture("gdrive:///fixture-exact/").is_none());
-        assert!(std::thread::spawn(move || resolve_fixture(endpoint).is_none()).join().unwrap());
+        assert!(
+            std::thread::spawn(move || resolve_fixture(endpoint).is_none())
+                .join()
+                .unwrap()
+        );
         let nested = EndpointFixtures::new(vec![(endpoint.into(), backend, "nested".into())]);
         assert_eq!(resolve_fixture(endpoint).unwrap().unwrap().1, "nested");
         drop(nested);
         assert_eq!(resolve_fixture(endpoint).unwrap().unwrap().1, a);
         guard.insert_failure(endpoint, "Authentication failed");
-        assert_eq!(crate::connect::resolve_endpoint(endpoint).err().unwrap(), "Authentication failed");
+        assert_eq!(
+            crate::connect::resolve_endpoint(endpoint).err().unwrap(),
+            "Authentication failed"
+        );
     }
     assert!(resolve_fixture(endpoint).is_none());
 }
@@ -60,26 +84,50 @@ fn sync_reliability_task_old_jobs_drive_restart_keeps_options_owner_and_converge
     let endpoints = EndpointFixtures::new(vec![(source.into(), backend.clone(), root.clone())]);
     let saved = SavedJob::old(source, &target, "interval");
     let first = saved.run();
-    assert_eq!(std::fs::read(temp.path().join("old.txt")).unwrap(), b"published old Drive bytes");
-    assert_eq!(std::fs::read(temp.path().join(".hidden")).unwrap(), b"literal Drive dot-name bytes");
+    assert_eq!(
+        std::fs::read(temp.path().join("old.txt")).unwrap(),
+        b"published old Drive bytes"
+    );
+    assert_eq!(
+        std::fs::read(temp.path().join(".hidden")).unwrap(),
+        b"literal Drive dot-name bytes"
+    );
     assert!(!temp.path().join("ignored.skip").exists());
     let local = crate::vfs::LocalBackend::new(&target);
     let key = saved.key(&*backend, &root, &local, &target);
     let baseline = crate::bisync::baseline_file(&key).unwrap();
-    assert!(crate::bisync::load_baseline(&baseline).unwrap().contains_key("old.txt"));
+    assert!(crate::bisync::load_baseline(&baseline)
+        .unwrap()
+        .contains_key("old.txt"));
     saved.assert_options(source, &target);
 
     let restarted = drive.restart();
     assert_eq!(restarted.state_identity(), backend.state_identity());
     endpoints.insert(source, restarted.clone(), &root);
-    assert_eq!(drive.write_file("old.txt", b"Drive changed after restart"), file_id);
-    std::fs::write(temp.path().join("from-target.txt"), b"bidirectional local bytes").unwrap();
+    assert_eq!(
+        drive.write_file("old.txt", b"Drive changed after restart"),
+        file_id
+    );
+    std::fs::write(
+        temp.path().join("from-target.txt"),
+        b"bidirectional local bytes",
+    )
+    .unwrap();
     let changed = saved.run();
     assert!(changed.last_success >= first.last_success);
-    assert_eq!(std::fs::read(temp.path().join("old.txt")).unwrap(), b"Drive changed after restart");
-    assert_eq!(drive.read_file("from-target.txt"), b"bidirectional local bytes");
+    assert_eq!(
+        std::fs::read(temp.path().join("old.txt")).unwrap(),
+        b"Drive changed after restart"
+    );
+    assert_eq!(
+        drive.read_file("from-target.txt"),
+        b"bidirectional local bytes"
+    );
     assert_eq!(drive.read_file(".hidden"), b"literal Drive dot-name bytes");
-    assert_eq!(std::fs::read(temp.path().join(".hidden")).unwrap(), b"literal Drive dot-name bytes");
+    assert_eq!(
+        std::fs::read(temp.path().join(".hidden")).unwrap(),
+        b"literal Drive dot-name bytes"
+    );
     assert_eq!(saved.key(&*restarted, &root, &local, &target), key);
     let before = std::fs::read(&baseline).unwrap();
     assert_noop(&saved.run());
@@ -92,8 +140,12 @@ fn sync_reliability_task_old_jobs_drive_restart_keeps_options_owner_and_converge
 fn sync_reliability_task_old_jobs_crossremote_runs_normal_saved_connection_and_drive() {
     use crate::connect::sync_reliability_task_provider_fixture as provider_fixture;
     let required = if cfg!(windows) { "direct" } else { "sftp" };
-    let provider = provider_fixture::providers().into_iter().find(|provider| provider.name == required)
-        .unwrap_or_else(|| panic!("C08 requires actual {required} provider in discovered manifest"));
+    let provider = provider_fixture::providers()
+        .into_iter()
+        .find(|provider| provider.name == required)
+        .unwrap_or_else(|| {
+            panic!("C08 requires actual {required} provider in discovered manifest")
+        });
     let source = "gdrive:///Crossremote";
     let drive = crate::gdrive::sync_reliability_task_fixture::DriveFixture::new("/Crossremote");
     let (a, root_a) = drive.endpoint();
@@ -102,8 +154,14 @@ fn sync_reliability_task_old_jobs_crossremote_runs_normal_saved_connection_and_d
     getrandom::getrandom(&mut nonce).unwrap();
     let child = format!("c08-{:016x}", u64::from_be_bytes(nonce));
     let (b, root_b) = provider.open(&child);
-    let target = format!("{}/{child}", provider.endpoint.trim_end_matches(['/', '\\']));
-    assert!(resolve_fixture(&target).is_none(), "remote target must use production connection resolution");
+    let target = format!(
+        "{}/{child}",
+        provider.endpoint.trim_end_matches(['/', '\\'])
+    );
+    assert!(
+        resolve_fixture(&target).is_none(),
+        "remote target must use production connection resolution"
+    );
     let (reopened, reopened_root) = crate::connect::resolve_endpoint(&target).unwrap();
     assert_eq!(reopened_root, root_b);
     assert_eq!(reopened.state_identity(), b.state_identity());
@@ -112,16 +170,33 @@ fn sync_reliability_task_old_jobs_crossremote_runs_normal_saved_connection_and_d
     provider_fixture::write(&*b, &root_b, "remote.txt", b"actual remote into old Drive");
     let saved = SavedJob::old(source, &target, "realtime");
     saved.run();
-    assert_eq!(provider_fixture::read(&*b, &root_b, "drive.txt"), b"old Drive into actual remote");
-    assert_eq!(drive.read_file("remote.txt"), b"actual remote into old Drive");
+    assert_eq!(
+        provider_fixture::read(&*b, &root_b, "drive.txt"),
+        b"old Drive into actual remote"
+    );
+    assert_eq!(
+        drive.read_file("remote.txt"),
+        b"actual remote into old Drive"
+    );
     let key = saved.key(&*a, &root_a, &*b, &root_b);
     let restarted = drive.restart();
     endpoints.insert(source, restarted.clone(), &root_a);
     drive.write_file("drive.txt", b"changed after worker recreation");
-    provider_fixture::write(&*b, &root_b, "remote.txt", b"remote change after recreation");
+    provider_fixture::write(
+        &*b,
+        &root_b,
+        "remote.txt",
+        b"remote change after recreation",
+    );
     saved.run();
-    assert_eq!(provider_fixture::read(&*b, &root_b, "drive.txt"), b"changed after worker recreation");
-    assert_eq!(drive.read_file("remote.txt"), b"remote change after recreation");
+    assert_eq!(
+        provider_fixture::read(&*b, &root_b, "drive.txt"),
+        b"changed after worker recreation"
+    );
+    assert_eq!(
+        drive.read_file("remote.txt"),
+        b"remote change after recreation"
+    );
     assert_eq!(saved.key(&*restarted, &root_a, &*reopened, &root_b), key);
     let baseline = crate::bisync::baseline_file(&key).unwrap();
     let before = std::fs::read(&baseline).unwrap();

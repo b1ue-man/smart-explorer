@@ -186,9 +186,17 @@ impl GDriveBackend {
         request_timeout: Duration,
         pending_folder_dir: Option<PathBuf>,
     ) -> Self {
-        let binding_dir = pending_folder_dir.as_ref().map(|root| root.join("sync-bindings"));
-        Self::test_backend_with_identity(api_base, request_timeout, pending_folder_dir,
-            binding_dir, "test-drive-permission-id", "")
+        let binding_dir = pending_folder_dir
+            .as_ref()
+            .map(|root| root.join("sync-bindings"));
+        Self::test_backend_with_identity(
+            api_base,
+            request_timeout,
+            pending_folder_dir,
+            binding_dir,
+            "test-drive-permission-id",
+            "",
+        )
     }
 
     #[cfg(test)]
@@ -231,7 +239,9 @@ impl GDriveBackend {
     }
 
     pub(super) fn root_id_guard(&self) -> io::Result<MutexGuard<'_, Option<String>>> {
-        self.root_id.lock().map_err(|_| io::Error::other("Drive root identity cache poisoned"))
+        self.root_id
+            .lock()
+            .map_err(|_| io::Error::other("Drive root identity cache poisoned"))
     }
 
     pub(super) fn ids_guard(&self) -> io::Result<MutexGuard<'_, HashMap<String, String>>> {
@@ -247,29 +257,45 @@ impl GDriveBackend {
     }
 
     pub(super) fn captured_legacy_id(&self, key: &str) -> io::Result<Option<String>> {
-        Ok(self.captured_legacy_hints.lock().map_err(|_| io::Error::other("Drive legacy hint context poisoned"))?
-            .get(key).cloned())
+        Ok(self
+            .captured_legacy_hints
+            .lock()
+            .map_err(|_| io::Error::other("Drive legacy hint context poisoned"))?
+            .get(key)
+            .cloned())
     }
 
     #[cfg(test)]
     pub(super) fn test_capture_legacy_folder(&self, key: &str, id: &str) {
-        self.remember_path(key, id, Some(super::api::FOLDER_MIME)).unwrap();
+        self.remember_path(key, id, Some(super::api::FOLDER_MIME))
+            .unwrap();
         self.untrusted_guard().unwrap().insert(key.to_string());
-        self.captured_legacy_hints.lock().unwrap().insert(key.to_string(), id.to_string());
+        self.captured_legacy_hints
+            .lock()
+            .unwrap()
+            .insert(key.to_string(), id.to_string());
     }
 
     #[cfg(test)]
     pub(super) fn test_with_loaded_caches(
-        mut self, account_path: PathBuf, legacy_path: &std::path::Path,
+        mut self,
+        account_path: PathBuf,
+        legacy_path: &std::path::Path,
     ) -> Self {
         let caches = super::cache::load_account(&account_path, legacy_path);
         *self.ids_guard().unwrap() = caches.hints.ids;
-        self.ids_guard().unwrap().insert(String::new(), "root".to_string());
-        *self.untrusted_guard().unwrap() = super::cache::loaded_untrusted(&self.ids_guard().unwrap());
+        self.ids_guard()
+            .unwrap()
+            .insert(String::new(), "root".to_string());
+        *self.untrusted_guard().unwrap() =
+            super::cache::loaded_untrusted(&self.ids_guard().unwrap());
         *self.mimes_guard().unwrap() = caches.hints.mimes;
         *self.captured_legacy_hints.lock().unwrap() = caches.historical_ids;
-        self.cache_store = Arc::new(CacheStore::new(Some(account_path),
-            Arc::clone(&self.ids), Arc::clone(&self.mimes)));
+        self.cache_store = Arc::new(CacheStore::new(
+            Some(account_path),
+            Arc::clone(&self.ids),
+            Arc::clone(&self.mimes),
+        ));
         self
     }
 

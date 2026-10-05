@@ -54,8 +54,8 @@ pub struct ClientConfig {
 }
 
 pub use super::os::shared::{
-    disconnect, is_connected, load_config, load_config_checked, refresh_token, refresh_token_checked,
-    save_config, store_refresh_token,
+    disconnect, is_connected, load_config, load_config_checked, refresh_token,
+    refresh_token_checked, save_config, store_refresh_token,
 };
 
 // ── PKCE ─────────────────────────────────────────────────────────────────────

@@ -40,8 +40,10 @@ impl DriveFixture {
         let local_path = directory.path().join("local");
         std::fs::create_dir(&local_path).unwrap();
         let local_root = local_path.to_string_lossy().replace('\\', "/");
-        let drive = Arc::new(FakeDrive::new(&format!("reliability-root-{serial}"),
-            &format!("reliability-user-{serial}")));
+        let drive = Arc::new(FakeDrive::new(
+            &format!("reliability-root-{serial}"),
+            &format!("reliability-user-{serial}"),
+        ));
         drive.set_page_size(2);
         let mut parent = drive.root_id.clone();
         for (index, name) in root.split('/').filter(|name| !name.is_empty()).enumerate() {
@@ -51,30 +53,65 @@ impl DriveFixture {
         }
         let server = {
             let drive = drive.clone();
-            Server::start(move |request| handler(&drive, request).unwrap_or_else(|| drive.answer(request)))
+            Server::start(move |request| {
+                handler(&drive, request).unwrap_or_else(|| drive.answer(request))
+            })
         };
         let backend = Self::open(&server, &directory, &drive.permission_id, root);
         let local = LocalBackend::new(&local_root);
-        Self { drive, server, backend, local, local_root,
-            root: format!("/{}", root.trim_matches('/')), directory, next: AtomicUsize::new(0) }
+        Self {
+            drive,
+            server,
+            backend,
+            local,
+            local_root,
+            root: format!("/{}", root.trim_matches('/')),
+            directory,
+            next: AtomicUsize::new(0),
+        }
     }
 
-    fn open(server: &Server, directory: &tempfile::TempDir, account: &str, root: &str) -> GDriveBackend {
-        GDriveBackend::test_backend_with_identity(&server.api_base(), Duration::from_secs(2),
-            Some(directory.path().join("pending")), Some(directory.path().join("bindings")), account, root)
+    fn open(
+        server: &Server,
+        directory: &tempfile::TempDir,
+        account: &str,
+        root: &str,
+    ) -> GDriveBackend {
+        GDriveBackend::test_backend_with_identity(
+            &server.api_base(),
+            Duration::from_secs(2),
+            Some(directory.path().join("pending")),
+            Some(directory.path().join("bindings")),
+            account,
+            root,
+        )
     }
 
     pub(super) fn fresh_backend(&self, root: &str) -> GDriveBackend {
-        Self::open(&self.server, &self.directory, &self.drive.permission_id, root)
+        Self::open(
+            &self.server,
+            &self.directory,
+            &self.drive.permission_id,
+            root,
+        )
     }
 
-    pub(super) fn historical_cache_backend(&self, root: &str, key: &str, id: &str) -> GDriveBackend {
+    pub(super) fn historical_cache_backend(
+        &self,
+        root: &str,
+        key: &str,
+        id: &str,
+    ) -> GDriveBackend {
         let legacy = self.directory.path().join("legacy-path-cache.json");
         let account = self.directory.path().join("account-path-cache.json");
-        super::cache::save_to_path(&legacy,
+        super::cache::save_to_path(
+            &legacy,
             std::collections::HashMap::from([(key.to_string(), id.to_string())]),
-            std::collections::HashMap::from([(key.to_string(), FOLDER_MIME.to_string())])).unwrap();
-        self.fresh_backend(root).test_with_loaded_caches(account, &legacy)
+            std::collections::HashMap::from([(key.to_string(), FOLDER_MIME.to_string())]),
+        )
+        .unwrap();
+        self.fresh_backend(root)
+            .test_with_loaded_caches(account, &legacy)
     }
 
     pub(crate) fn endpoint(&self) -> (BackendHandle, String) {
@@ -105,15 +142,25 @@ impl DriveFixture {
             };
         }
         let existing = self.drive.named(&parent, title);
-        assert!(existing.len() <= 1, "ordinary fixture writes never pick a duplicate");
-        let id = existing.first().and_then(|file| file["id"].as_str())
-            .map(str::to_owned).unwrap_or_else(|| self.id());
+        assert!(
+            existing.len() <= 1,
+            "ordinary fixture writes never pick a duplicate"
+        );
+        let id = existing
+            .first()
+            .and_then(|file| file["id"].as_str())
+            .map(str::to_owned)
+            .unwrap_or_else(|| self.id());
         self.drive.insert(&id, title, &parent, MIME, bytes);
         id
     }
 
     fn id(&self) -> String {
-        format!("{}-seed-{}", self.drive.root_id, self.next.fetch_add(1, Ordering::SeqCst))
+        format!(
+            "{}-seed-{}",
+            self.drive.root_id,
+            self.next.fetch_add(1, Ordering::SeqCst)
+        )
     }
 
     pub(super) fn root_object_id(&self) -> String {
@@ -127,7 +174,10 @@ impl DriveFixture {
     }
 
     pub(crate) fn read_file(&self, rel: &str) -> Vec<u8> {
-        read(&self.backend, &vfs::sync_path(&self.backend, &self.root, rel).unwrap())
+        read(
+            &self.backend,
+            &vfs::sync_path(&self.backend, &self.root, rel).unwrap(),
+        )
     }
 
     pub(super) fn local_bytes(&self, rel: &str) -> Vec<u8> {
@@ -141,8 +191,15 @@ impl DriveFixture {
     }
 
     pub(super) fn preview(&self, opts: BisyncOptions) -> bisync::Preview {
-        bisync::preview(&self.local, &self.local_root, &self.backend, &self.root, opts,
-            &AtomicBool::new(false), &filter(&bisync::empty_globset()))
+        bisync::preview(
+            &self.local,
+            &self.local_root,
+            &self.backend,
+            &self.root,
+            opts,
+            &AtomicBool::new(false),
+            &filter(&bisync::empty_globset()),
+        )
     }
 
     pub(super) fn run(&self, opts: BisyncOptions) -> Outcome {
@@ -150,23 +207,41 @@ impl DriveFixture {
     }
 
     pub(super) fn run_cancel(&self, opts: BisyncOptions, cancel: &AtomicBool) -> Outcome {
-        bisync::run(&self.local, &self.local_root, &self.backend, &self.root, opts,
-            cancel, &filter(&bisync::empty_globset()))
+        bisync::run(
+            &self.local,
+            &self.local_root,
+            &self.backend,
+            &self.root,
+            opts,
+            cancel,
+            &filter(&bisync::empty_globset()),
+        )
     }
 
     pub(super) fn mutations(&self) -> usize {
-        self.server.requests().iter().filter(|request| request.method != "GET").count()
+        self.server
+            .requests()
+            .iter()
+            .filter(|request| request.method != "GET")
+            .count()
     }
 
     pub(super) fn folder_posts(&self) -> usize {
-        self.server.requests().iter().filter(|request| request.method == "POST"
-            && request.path() == "/drive/v3/files").count()
+        self.server
+            .requests()
+            .iter()
+            .filter(|request| request.method == "POST" && request.path() == "/drive/v3/files")
+            .count()
     }
 
     pub(super) fn aliases(&self, path: &str) -> BTreeMap<String, String> {
-        vfs::list_dir_tolerant(&self.backend, path).unwrap().entries.into_iter()
+        vfs::list_dir_tolerant(&self.backend, path)
+            .unwrap()
+            .entries
+            .into_iter()
             .filter(|entry| entry.is_dir)
-            .map(|entry| (entry.id.unwrap(), entry.name)).collect()
+            .map(|entry| (entry.id.unwrap(), entry.name))
+            .collect()
     }
 
     pub(super) fn registry_bytes(&self) -> BTreeMap<String, Vec<u8>> {
@@ -178,7 +253,10 @@ impl DriveFixture {
         let next = self.run(opts);
         assert_complete(&next);
         assert_eq!(next.stats.bytes, 0);
-        assert_eq!(next.stats.a_to_b + next.stats.b_to_a + next.stats.deleted, 0);
+        assert_eq!(
+            next.stats.a_to_b + next.stats.b_to_a + next.stats.deleted,
+            0
+        );
         assert_eq!(next.baseline, expected.baseline);
         assert_eq!(self.mutations(), mutations);
         assert_persisted(&next);
@@ -187,13 +265,25 @@ impl DriveFixture {
 }
 
 pub(super) fn options(direction: Direction) -> BisyncOptions {
-    BisyncOptions { direction, compare: CompareMode::Checksum, max_transfers: 1, ..Default::default() }
+    BisyncOptions {
+        direction,
+        compare: CompareMode::Checksum,
+        max_transfers: 1,
+        ..Default::default()
+    }
 }
 
 pub(super) fn assert_complete(out: &Outcome) {
     assert!(out.errors.is_empty(), "{:?}", out.errors);
-    assert!(out.conflicts.is_empty(), "unresolved conflicts: {}", out.conflicts.len());
-    assert!(out.omissions.is_empty(), "protected omissions are a partial result");
+    assert!(
+        out.conflicts.is_empty(),
+        "unresolved conflicts: {}",
+        out.conflicts.len()
+    );
+    assert!(
+        out.omissions.is_empty(),
+        "protected omissions are a partial result"
+    );
     assert!(out.blocked.is_none() && out.stopped.is_none() && !out.busy && !out.canceled);
     assert!(out.deferred.is_empty(), "deferred files are not converged");
 }
@@ -205,21 +295,34 @@ pub(super) fn assert_persisted(out: &Outcome) {
 
 pub(super) fn read(backend: &dyn Backend, path: &str) -> Vec<u8> {
     let mut bytes = Vec::new();
-    backend.open_read(path).unwrap().read_to_end(&mut bytes).unwrap();
+    backend
+        .open_read(path)
+        .unwrap()
+        .read_to_end(&mut bytes)
+        .unwrap();
     bytes
 }
 
 pub(super) fn contains_bytes(path: &Path, expected: &[u8]) -> bool {
-    collect_bytes(path, false).values().any(|bytes| bytes == expected)
+    collect_bytes(path, false)
+        .values()
+        .any(|bytes| bytes == expected)
 }
 
 fn collect_bytes(root: &Path, json_only: bool) -> BTreeMap<String, Vec<u8>> {
     fn visit(path: &Path, base: &Path, json_only: bool, files: &mut BTreeMap<String, Vec<u8>>) {
-        let Ok(entries) = std::fs::read_dir(path) else { return; };
-        for entry in entries { let path = entry.unwrap().path();
-            if path.is_dir() { visit(&path, base, json_only, files); }
-            else if !json_only || path.extension().is_some_and(|ext| ext == "json") {
-                files.insert(path.strip_prefix(base).unwrap().to_string_lossy().into(), std::fs::read(path).unwrap());
+        let Ok(entries) = std::fs::read_dir(path) else {
+            return;
+        };
+        for entry in entries {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                visit(&path, base, json_only, files);
+            } else if !json_only || path.extension().is_some_and(|ext| ext == "json") {
+                files.insert(
+                    path.strip_prefix(base).unwrap().to_string_lossy().into(),
+                    std::fs::read(path).unwrap(),
+                );
             }
         }
     }
@@ -236,16 +339,37 @@ pub(super) fn state_baseline(key: &StateKey) -> bisync::Baseline {
 /// Preserve the normal strict file-conflict flow and explicitly choose the
 /// selected Drive copy if that first preview reports the existing note.
 pub(super) fn resolve_initial_note(
-    f: &DriveFixture, backend: &GDriveBackend, root: &str, opts: BisyncOptions,
+    f: &DriveFixture,
+    backend: &GDriveBackend,
+    root: &str,
+    opts: BisyncOptions,
 ) {
-    let preview = bisync::preview(&f.local, &f.local_root, backend, root, opts,
-        &AtomicBool::new(false), &filter(&bisync::empty_globset()));
+    let preview = bisync::preview(
+        &f.local,
+        &f.local_root,
+        backend,
+        root,
+        opts,
+        &AtomicBool::new(false),
+        &filter(&bisync::empty_globset()),
+    );
     assert!(preview.error.is_none() && preview.blocked.is_none());
     let state = preview.state.unwrap();
     for conflict in &preview.conflicts {
         assert_eq!(conflict.rel, "note.md");
         assert!(conflict.duplicates.is_none());
-        bisync::resolve_recorded(&f.local, &f.local_root, backend, root, conflict, false,
-            None, &state, &AtomicBool::new(false), |_| {}).unwrap();
+        bisync::resolve_recorded(
+            &f.local,
+            &f.local_root,
+            backend,
+            root,
+            conflict,
+            false,
+            None,
+            &state,
+            &AtomicBool::new(false),
+            |_| {},
+        )
+        .unwrap();
     }
 }

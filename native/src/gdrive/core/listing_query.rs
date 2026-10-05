@@ -14,7 +14,9 @@ enum AttemptError {
 }
 
 impl From<io::Error> for AttemptError {
-    fn from(error: io::Error) -> Self { Self::Terminal(error) }
+    fn from(error: io::Error) -> Self {
+        Self::Terminal(error)
+    }
 }
 
 impl GDriveBackend {
@@ -74,7 +76,10 @@ impl GDriveBackend {
             };
             let page = FileListPage::parse(&json)?;
             if page.incomplete {
-                return Err(AttemptError::Restart(invalid("Drive search is incomplete"), true));
+                return Err(AttemptError::Restart(
+                    invalid("Drive search is incomplete"),
+                    true,
+                ));
             }
             for file in page.files {
                 // Search equality is only a candidate filter, including case
@@ -95,22 +100,35 @@ impl GDriveBackend {
                 output.entry(id).or_insert_with(|| file.clone());
             }
             token = page.next_token.map(str::to_owned);
-            let Some(next) = &token else { break; };
+            let Some(next) = &token else {
+                break;
+            };
             if !tokens.insert(next.clone()) {
-                return Err(AttemptError::Restart(invalid("Drive repeated a listing page token"), false));
+                return Err(AttemptError::Restart(
+                    invalid("Drive repeated a listing page token"),
+                    false,
+                ));
             }
         }
         // Overlapping pages identify one object. Contradictory observations
         // need a fresh exact-ID read; they never prove another sibling exists.
         for id in conflicting {
-            if !output.contains_key(&id) { continue; }
+            if !output.contains_key(&id) {
+                continue;
+            }
             match self.object_json(&id) {
                 Ok(file) => {
                     let matches = in_parent(&file, parent)?
                         && name.is_none_or(|expected| file["name"].as_str() == Some(expected));
-                    if matches { output.insert(id, file); } else { output.remove(&id); }
+                    if matches {
+                        output.insert(id, file);
+                    } else {
+                        output.remove(&id);
+                    }
                 }
-                Err(error) if http_status(&error) == Some(404) => { output.remove(&id); }
+                Err(error) if http_status(&error) == Some(404) => {
+                    output.remove(&id);
+                }
                 Err(error) => return Err(error.into()),
             }
         }
