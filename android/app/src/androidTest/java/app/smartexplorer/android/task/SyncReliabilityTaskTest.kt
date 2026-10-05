@@ -36,8 +36,11 @@ class SyncReliabilityTaskTest {
     private suspend fun run(method: String, id: String): JsonObject {
         val task = call(method, args("id" to id)).obj().text("taskId")
         val done = Api.await(task)
-        assertEquals("$method: $done", "done", done.state)
-        return done.resultObj()
+        val diagnostics = call("task.get", args("id" to task)).obj()
+        assertEquals("$method: $diagnostics", "done", done.state)
+        return done.resultObj().also {
+            if (method == "sync.run") assertEquals("$method: $diagnostics", 0, it.int("errors"))
+        }
     }
     private suspend fun job(id: String) = (call("sync.jobs") as JsonArray).map { it.obj() }.single { it.text("id") == id }
     private suspend fun sync(id: String) = run("sync.run", id).also {
