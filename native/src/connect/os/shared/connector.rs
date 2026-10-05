@@ -96,7 +96,9 @@ fn do_connect_with_agent_fallback(
         form.protocol.default_port()
     } else {
         match form.port.trim().parse::<u16>() {
-            Ok(port) if port > 0 => port,
+            // Saved UNC connections use an unused port 0; WNet connects by
+            // share path. URL protocols still require a positive TCP port.
+            Ok(port) if port > 0 || form.protocol == Protocol::Share => port,
             _ => return ConnectResult::Err("Ungültiger Port (erwartet: 1–65535)".into()),
         }
     };

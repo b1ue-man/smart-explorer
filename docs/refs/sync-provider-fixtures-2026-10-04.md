@@ -55,6 +55,14 @@ Vorhandene Syntaxrefs: [Taskruntime](sync-task-runtime-2026-10-04.md),
   Runnerprincipal, wählt eine tatsächlich freie Laufwerkskennung und erzeugt
   ein nichtpersistentes Mapping. Cleanup entfernt ausschließlich die eigene
   Freigabe und ihr eigenes Mapping; fehlende Rechte sind Abnahmefehler.
+  Die gespeicherte UNC-Verbindung verwendet den bestehenden `Protocol::Share`-
+  Vertrag mit Port `0`. Dieser Port gehört zum stabilen Credentialaccount,
+  wird aber von `NetConnection`/Windows-WNet nicht als TCP-Port verwendet.
+  Beim normalen Wiederöffnen akzeptiert der Connector deshalb explizites `0`
+  ausschließlich für `Protocol::Share`; alle URL-Protokolle, einschließlich
+  des separaten `Protocol::Smb`-TCP-Anschlusses, verlangen weiterhin einen
+  positiven Port. Die Fixture ersetzt den UNC-Anschluss nicht durch `smb://`
+  und ändert weder gespeicherte Accounts noch Credentials oder Root-Locators.
 
 ## Interner Helpervertrag
 
