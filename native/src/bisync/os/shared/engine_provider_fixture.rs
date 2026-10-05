@@ -9,7 +9,7 @@ use crate::vfs::{Backend, BackendExtensions, ChangeKind, Scheme, VfsChange, VfsM
 pub(super) use engine::backend_identity_state::Binding as Identity;
 pub(super) use engine::test_remote::{FakeRemote, REMOTE_ROOT};
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(super) enum Fault {
     AtomicBefore,
     AtomicAfter,
@@ -29,7 +29,9 @@ pub(super) struct TestRemote {
     pub(super) reject_archives: bool,
     pub(super) hooks: AtomicUsize,
     pub(super) promotions: AtomicUsize,
+    pub(super) lose_next_ack: AtomicBool,
     pub(super) intent_pair: Mutex<Option<String>>,
+    pub(super) prepared: Mutex<Vec<engine::replacement_journal::Intent>>,
     pub(super) requested: Mutex<Vec<String>>,
 }
 
@@ -46,7 +48,9 @@ impl TestRemote {
             reject_archives: false,
             hooks: AtomicUsize::new(0),
             promotions: AtomicUsize::new(0),
+            lose_next_ack: AtomicBool::new(false),
             intent_pair: Mutex::new(None),
+            prepared: Mutex::new(Vec::new()),
             requested: Mutex::new(Vec::new()),
         }
     }
@@ -130,7 +134,8 @@ impl Backend for TestRemote {
         }
         self.inner
             .promote_staged(&self.path(staged), &self.path(destination))?;
-        if matches!(self.fault, Some(Fault::AtomicAfter)) {
+        let lose_ack = self.lose_next_ack.swap(false, Ordering::SeqCst);
+        if matches!(self.fault, Some(Fault::AtomicAfter)) || lose_ack {
             return Err(lost_ack());
         }
         Ok(())
@@ -178,6 +183,7 @@ impl BackendExtensions for TestRemote {
                 ),
                 (staged, destination, retained)
             );
+            self.prepared.lock().unwrap().push(prepared);
         }
         self.hooks.fetch_add(1, Ordering::SeqCst);
         if !matches!(
@@ -282,20 +288,50 @@ pub(super) fn signature(backend: &dyn Backend, path: &str) -> engine::Sig {
 }
 
 pub(super) fn intent(pair: &str) -> engine::replacement_journal::Intent {
+    let mut found = intents(pair);
+    assert_eq!(found.len(), 1, "expected one open replacement for {pair}");
+    found.pop().unwrap()
+}
+
+pub(super) fn intents(pair: &str) -> Vec<engine::replacement_journal::Intent> {
     let dir = engine::replica_state::pair_dir(pair);
-    let path = std::fs::read_dir(dir)
-        .unwrap()
-        .filter_map(Result::ok)
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Vec::new(),
+        Err(error) => panic!("cannot read replacement directory {dir:?}: {error}"),
+    };
+    entries
+        .map(Result::unwrap)
         .map(|entry| entry.path())
-        .find(|path| {
+        .filter(|path| {
             path.file_name()
                 .unwrap()
                 .to_string_lossy()
                 .contains(".replace-")
         })
-        .unwrap();
-    let text = crate::support_dirs::read_private_text(&path, 256 * 1024).unwrap();
-    serde_json::from_str(&text).unwrap()
+        .map(|path| {
+            let text = crate::support_dirs::read_private_text(&path, 256 * 1024).unwrap();
+            serde_json::from_str(&text).unwrap()
+        })
+        .collect()
+}
+
+pub(super) fn assert_publication_finished(
+    backend: &dyn Backend,
+    prepared: &engine::replacement_journal::Intent,
+) {
+    assert!(intents(&prepared.binding.pair).is_empty());
+    assert!(!prepared.path().unwrap().try_exists().unwrap());
+    assert!(!backend.try_exists(&prepared.stage).unwrap());
+    assert!(!backend.try_exists(&prepared.retained).unwrap());
+}
+
+pub(super) fn optional_file_bytes(path: &Path) -> Option<Vec<u8>> {
+    match std::fs::read(path) {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => panic!("cannot read fixture state {path:?}: {error}"),
+    }
 }
 
 pub(super) fn merge(key: &engine::StateKey, rel: &str, sibling: Option<&str>) {

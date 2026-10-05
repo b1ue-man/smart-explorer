@@ -14,6 +14,8 @@ use crate::vfs::{Backend, ChangeKind, VfsChange};
 mod fixture;
 #[path = "engine_identity_task_tests.rs"]
 mod identity_tests;
+#[path = "engine_publication_task_tests.rs"]
+mod publication_tests;
 use fixture::*;
 
 #[test]
