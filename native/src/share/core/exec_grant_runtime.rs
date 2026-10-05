@@ -120,20 +120,14 @@ pub(super) fn apply_exact(
 }
 
 /// Applies a complete configuration transition to the runtime registry before
-/// the caller replaces `current` under the same auth lock. Any partial failure
-/// can only remove authority; it cannot make the uncommitted candidate usable.
+/// the caller replaces `current` under the same auth lock. Validation failure
+/// leaves the registry unchanged; no uncommitted candidate becomes usable.
 pub(super) fn apply_configuration_transition(
     current: &ShareAuthState,
     candidate: &ShareAuthState,
     next_epoch: u64,
     registry: &ExecRegistry,
 ) -> io::Result<()> {
-    registry
-        .restrict_authorization(
-            next_epoch,
-            &super::relation_rights::authorization_restrictions(current, candidate),
-        )
-        .map_err(eio)?;
     let old = effective_policies(current)
         .into_iter()
         .map(|policy| (principal_key(&policy.principal), policy))
@@ -143,28 +137,31 @@ pub(super) fn apply_configuration_transition(
         .map(|policy| (principal_key(&policy.principal), policy))
         .collect::<HashMap<_, _>>();
 
+    let mut updates = Vec::new();
     for (key, old_policy) in &old {
         let replacement = new.get(key);
-        if replacement.is_none_or(|policy| !policy.enabled) {
-            let revision = replacement
-                .map(|policy| policy.revision)
-                .unwrap_or_else(|| old_policy.revision.saturating_add(1));
-            registry
-                .apply_authorization(&old_policy.principal, revision, next_epoch, false)
-                .map_err(eio)?;
+        if replacement.is_none() {
+            // An already denied policy needs no additional revoke revision.
+            // In particular, a persisted-later member's default-deny policy
+            // must still accept its later verified presence at revision 0.
+            let revision = if old_policy.enabled {
+                old_policy.revision.saturating_add(1)
+            } else {
+                old_policy.revision
+            };
+            updates.push((old_policy.principal.clone(), revision, false));
         }
     }
     for policy in new.values() {
-        registry
-            .apply_authorization(
-                &policy.principal,
-                policy.revision,
-                next_epoch,
-                policy.enabled,
-            )
-            .map_err(eio)?;
+        updates.push((policy.principal.clone(), policy.revision, policy.enabled));
     }
-    Ok(())
+    registry
+        .apply_configuration_authorizations(
+            next_epoch,
+            &super::relation_rights::authorization_restrictions(current, candidate),
+            &updates,
+        )
+        .map_err(eio)
 }
 
 fn resolve_exact_policy<'a>(
@@ -331,3 +328,7 @@ fn denied(message: &'static str) -> io::Error {
 #[cfg(test)]
 #[path = "exec_grant_runtime_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "exec_configuration_sync_task_tests.rs"]
+mod sync_reliability_task_tests;
