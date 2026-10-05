@@ -72,6 +72,7 @@ pub(super) fn commit_incremental(
     items: [&BTreeMap<String, ItemRecord>; 2],
     changes: &[engine::incremental_collect::ResolvedChange],
     cursor: Option<String>,
+    aliases: &engine::keys::PathAliases,
 ) -> rusqlite::Result<()> {
     let invalid = || rusqlite::Error::InvalidQuery;
     let (_, _, source_side) = mirror_source(state.endpoints, state.opts).ok_or_else(invalid)?;
@@ -79,8 +80,8 @@ pub(super) fn commit_incremental(
     if previous.pair != index_id(state.key).map_err(|_| invalid())?
         || !super::record_matches(previous, state.endpoints, source_side)
         || previous.mode != mode(state)
-        || super::cache_by_key(items[0], items[1], keys)
-            != Some(super::baseline_by_key(state.baseline, keys))
+        || engine::state_spelling_aliases::cache_by_key(items[0], items[1], keys, aliases)
+            != Some(engine::state_spelling_aliases::baseline_by_key(state.baseline, keys))
         || !super::root_id_matches(
             state.endpoints.a,
             state.endpoints.root_a,
@@ -99,10 +100,11 @@ pub(super) fn commit_incremental(
     }
     let names = engine::state_spellings::load(state.key, keys).map_err(|_| invalid())?;
     let confirmed = names.cache_baseline(baseline, keys);
+    let source_pair = if source_side == Side::A { engine::PairSide::A } else { engine::PairSide::B };
     let touched: BTreeSet<_> = changes
         .iter()
         .flat_map(|change| std::iter::once(change.rel.as_str()).chain(change.old_rel.as_deref()))
-        .map(|rel| keys.key(rel).into_owned())
+        .map(|rel| aliases.key(rel, source_pair, keys))
         .collect();
     let mut rows = Vec::new();
     let mut budget = engine::state_validation::StateBudget::for_pair();
@@ -138,7 +140,8 @@ pub(super) fn commit_incremental(
                         }
                     },
                 );
-            if !touched.contains(keys.key(&item.rel).as_ref()) && now != item.sig {
+            let pair_side = if side == Side::A { engine::PairSide::A } else { engine::PairSide::B };
+            if !touched.contains(&aliases.key(&item.rel, pair_side, keys)) && now != item.sig {
                 return Err(invalid());
             }
         }
@@ -158,7 +161,8 @@ pub(super) fn commit_incremental(
             if state.cancel.load(Ordering::Acquire) {
                 return Err(invalid());
             }
-            let item = if touched.contains(keys.key(rel).as_ref()) {
+            let pair_side = if side == Side::A { engine::PairSide::A } else { engine::PairSide::B };
+            let item = if touched.contains(&aliases.key(rel, pair_side, keys)) {
                 confirmed_item(state, side, backend, root, rel, signature).map_err(|_| invalid())?
             } else {
                 before

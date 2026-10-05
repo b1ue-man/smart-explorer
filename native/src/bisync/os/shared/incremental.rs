@@ -1,6 +1,6 @@
 //! Optional one-way mirror cache. The authoritative checkpoint always wins;
 //! any untrusted cache, partial scan or ambiguous key selects the full planner.
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::io;
 use std::sync::atomic::Ordering;
 
@@ -16,8 +16,9 @@ use super::incremental_collect::{
 use super::orchestration::{failure, Outcome, RunState};
 use super::replica_state::index_id;
 use super::state_metadata::{index_dirty_path, save_history, PairHistory};
-use super::state_store::{ItemRecord, PairRecord, Side};
-use super::types::{Baseline, BisyncOptions, DeletePolicy, Direction, PairSide};
+use super::state_spelling_aliases::{baseline_by_key, cache_by_key, logical_changes, target_available};
+use super::state_store::{PairRecord, Side};
+use super::types::{BisyncOptions, DeletePolicy, Direction, PairSide};
 
 #[path = "incremental_index_commit.rs"]
 mod index_commit;
@@ -103,6 +104,14 @@ pub(super) fn try_incremental_run(state: &RunState<'_>) -> Option<Outcome> {
     };
     let target_pair = source_pair.other();
     let keys = super::orchestration_plan::keys(endpoints);
+    let mut names = match super::state_spellings::load(state.key, keys) {
+        Ok(names) => names,
+        Err(error) => return Some(Outcome {
+            baseline: state.baseline.clone(),
+            ..failure("Pfad-Schreibweisen", error)
+        }),
+    };
+    let path_aliases = names.aliases.clone();
     let pair = index_id(state.key).ok()?;
     let mut store = open_store(state.store_path).ok()?;
     let rec = store.load_pair(&pair).ok().flatten()?;
@@ -114,7 +123,7 @@ pub(super) fn try_incremental_run(state: &RunState<'_>) -> Option<Outcome> {
         return None;
     }
     let (items_a, items_b) = store.load_pair_items(&pair).ok()?;
-    if cache_by_key(&items_a, &items_b, keys)? != baseline_by_key(state.baseline, keys) {
+    if cache_by_key(&items_a, &items_b, keys, &path_aliases)? != baseline_by_key(state.baseline, keys) {
         return None;
     }
     let (source_items, target_items) = if source_side == Side::A {
@@ -170,19 +179,23 @@ pub(super) fn try_incremental_run(state: &RunState<'_>) -> Option<Outcome> {
     // deletion of a path a copy just published.
     let mut aliases = BTreeSet::new();
     for change in &changes {
-        if !aliases.insert(keys.key(&change.rel).into_owned()) {
+        if !aliases.insert(path_aliases.key(&change.rel, source_pair, keys)) {
             return None;
         }
         if change
             .old_rel
             .as_deref()
-            .is_some_and(|old| keys.key(old) == keys.key(&change.rel) && old != change.rel)
+            .is_some_and(|old| {
+                path_aliases.key(old, source_pair, keys)
+                    == path_aliases.key(&change.rel, source_pair, keys)
+                    && old != change.rel
+            })
         {
             return None;
         }
     }
-    let mut names = super::state_spellings::load(state.key, keys).ok()?;
-    let planned = action_plan_for(source_side, &changes);
+    let logical = logical_changes(&changes, source_pair, keys, &path_aliases);
+    let planned = action_plan_for(source_side, &logical);
     let upsert_keys: BTreeSet<_> = planned
         .upserts
         .iter()
@@ -203,12 +216,17 @@ pub(super) fn try_incremental_run(state: &RunState<'_>) -> Option<Outcome> {
         .chain(&planned.deletes)
         .cloned()
         .collect();
+    if actions.iter().any(|action| {
+        !target_available(super::core::action_rel(action), target_pair, keys, &names)
+    }) {
+        return None;
+    }
     let spellings = names.for_actions(&actions, source_pair, keys);
     if target_touched_drifted_spelled(
         target,
         target_root,
         target_items,
-        &changes,
+        &logical,
         opts,
         &spellings,
         target_pair,
@@ -335,7 +353,13 @@ pub(super) fn try_incremental_run(state: &RunState<'_>) -> Option<Outcome> {
         errors.push(("Zwischenstand".into(), error));
         stats.errors = stats.errors.saturating_add(1);
     }
-    names.applied(&actions, &spellings, &checkpoint.baseline, keys);
+    names.applied(
+        &actions,
+        &spellings,
+        state.baseline,
+        &checkpoint.baseline,
+        keys,
+    );
     if let Err(error) = super::state_spellings::save(state.key, &names) {
         errors.push(("Pfad-Schreibweisen".into(), error.to_string()));
         stats.errors = stats.errors.saturating_add(1);
@@ -376,6 +400,7 @@ pub(super) fn try_incremental_run(state: &RunState<'_>) -> Option<Outcome> {
             [&items_a, &items_b],
             &changes,
             cursor,
+            &path_aliases,
         );
     }
     Some(out)
@@ -390,36 +415,6 @@ fn record_matches(record: &PairRecord, endpoints: SyncEndpoints<'_>, source_side
 }
 fn root_id_matches(backend: &dyn Backend, root: &str, saved: Option<&str>) -> bool {
     saved.is_none_or(|id| backend.change_root_id(root).ok().flatten().as_deref() == Some(id))
-}
-fn baseline_by_key(base: &Baseline, keys: super::KeyPolicy) -> Baseline {
-    base.iter()
-        .map(|(rel, entry)| (keys.key(rel).into_owned(), *entry))
-        .collect()
-}
-fn cache_by_key(
-    a: &BTreeMap<String, ItemRecord>,
-    b: &BTreeMap<String, ItemRecord>,
-    keys: super::KeyPolicy,
-) -> Option<Baseline> {
-    let mut base = Baseline::new();
-    for (side, items) in [(PairSide::A, a), (PairSide::B, b)] {
-        let mut seen = BTreeSet::new();
-        for (rel, item) in items
-            .iter()
-            .filter(|(_, item)| !item.deleted && !item.is_dir)
-        {
-            let key = keys.key(rel).into_owned();
-            if !seen.insert(key.clone()) {
-                return None;
-            }
-            let entry = base.entry(key).or_default();
-            match side {
-                PairSide::A => entry.0 = item.sig,
-                PairSide::B => entry.1 = item.sig,
-            }
-        }
-    }
-    Some(base)
 }
 fn merge_stats(left: &mut super::BisyncStats, right: super::BisyncStats) {
     left.a_to_b = left.a_to_b.saturating_add(right.a_to_b);

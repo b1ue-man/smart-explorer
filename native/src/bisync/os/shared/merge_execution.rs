@@ -272,6 +272,10 @@ pub(super) fn execute(
     if !recovery.done_a || !recovery.done_b {
         return Err(drift("merge lacks confirmed writes"));
     }
+    let mut names = super::state_spellings::load(key, keys)?;
+    for file in &mut report.preserved {
+        file.rel = names.recorded_rel(&file.rel, keys)?;
+    }
     let mut records = vec![(conflict.rel.clone(), (report.a, report.b))];
     records.extend(
         report
@@ -281,7 +285,6 @@ pub(super) fn execute(
             .map(|file| (file.rel.clone(), (file.a, file.b))),
     );
     super::replica_state::merge_with_keys(lock, key, &records, keys)?;
-    let mut names = super::state_spellings::load(key, keys)?;
     names
         .files_a
         .insert(keys.key(&conflict.rel).into_owned(), rel_a.to_string());
@@ -289,21 +292,22 @@ pub(super) fn execute(
         .files_b
         .insert(keys.key(&conflict.rel).into_owned(), rel_b.to_string());
     if let Some(sibling) = &recovery.sibling {
+        let logical = names.recorded_rel(sibling, keys)?;
         names.files_a.insert(
-            keys.key(sibling).into_owned(),
+            keys.key(&logical).into_owned(),
             super::merge_keep_both::sibling_spelling(sibling, rel_a),
         );
         names.files_b.insert(
-            keys.key(sibling).into_owned(),
+            keys.key(&logical).into_owned(),
             super::merge_keep_both::sibling_spelling(sibling, rel_b),
         );
     }
     super::state_spellings::save(key, &names)?;
     let (_, records, _) = super::checkpoint_journal::Journal::load(key, keys)?;
     report.baseline = records.baseline;
-    merge_recovery::remove(key, &conflict.rel)?;
+    merge_recovery::remove(key, &recovery.rel)?;
     // Both durable results are already recorded. A failed cleanup
     // cannot recreate a pending conflict or revoke that baseline.
-    let _ = super::merge_inputs::remove(key, &conflict.rel);
+    let _ = super::merge_inputs::remove(key, &recovery.rel);
     Ok(())
 }

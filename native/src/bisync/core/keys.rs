@@ -9,8 +9,153 @@ use super::types::PairSide;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct KeyPolicy {
     /// Either side ignores letter case (NTFS, exFAT, FAT, SMB, Android
-    /// shared storage, Drive): `Photo.JPG` and `photo.jpg` are one entry.
+    /// shared storage): `Photo.JPG` and `photo.jpg` are one entry.
     pub fold_case: bool,
+}
+
+/// Exact, previously recorded side paths. Only these proven relations may
+/// outlive a change from folded to case-sensitive pair keys.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct PathAliases {
+    a: AliasSide,
+    b: AliasSide,
+}
+
+#[derive(Clone, Debug, Default)]
+struct AliasSide {
+    files: BTreeMap<String, String>,
+    dirs: BTreeMap<String, String>,
+    file_targets: BTreeMap<String, String>,
+    dir_targets: BTreeMap<String, String>,
+}
+
+impl PathAliases {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.a.files.is_empty()
+            && self.a.dirs.is_empty()
+            && self.b.files.is_empty()
+            && self.b.dirs.is_empty()
+    }
+
+    fn side(&self, side: PairSide) -> &AliasSide {
+        match side {
+            PairSide::A => &self.a,
+            PairSide::B => &self.b,
+        }
+    }
+
+    pub(crate) fn insert(
+        &mut self,
+        side: PairSide,
+        logical: &str,
+        physical: &str,
+        directory: bool,
+        keys: KeyPolicy,
+    ) -> bool {
+        let side = match side {
+            PairSide::A => &mut self.a,
+            PairSide::B => &mut self.b,
+        };
+        let (sources, targets) = if directory {
+            (&mut side.dirs, &mut side.dir_targets)
+        } else {
+            (&mut side.files, &mut side.file_targets)
+        };
+        let source = keys.key(physical).into_owned();
+        let target = keys.key(logical).into_owned();
+        if sources
+            .get(&source)
+            .is_some_and(|old| keys.key(old).as_ref() != target)
+            || targets
+                .get(&target)
+                .is_some_and(|old| keys.key(old).as_ref() != source)
+        {
+            return false;
+        }
+        sources.insert(source, logical.to_string());
+        targets.insert(target, physical.to_string());
+        true
+    }
+
+    pub(crate) fn logical<'a>(
+        &self,
+        rel: &'a str,
+        side: PairSide,
+        keys: KeyPolicy,
+    ) -> Cow<'a, str> {
+        let aliases = self.side(side);
+        let key = keys.key(rel);
+        if let Some(logical) = aliases
+            .files
+            .get(key.as_ref())
+            .or_else(|| aliases.dirs.get(key.as_ref()))
+        {
+            return Cow::Owned(logical.clone());
+        }
+        for ((raw_end, _), (key_end, _)) in rel
+            .match_indices('/')
+            .rev()
+            .zip(key.match_indices('/').rev())
+        {
+            if let Some(parent) = aliases.dirs.get(&key[..key_end]) {
+                return Cow::Owned(format!("{parent}{}", &rel[raw_end..]));
+            }
+        }
+        Cow::Borrowed(rel)
+    }
+
+    pub(crate) fn key(&self, rel: &str, side: PairSide, keys: KeyPolicy) -> String {
+        keys.key(&self.logical(rel, side, keys)).into_owned()
+    }
+
+    pub(crate) fn spelling(&self, rel: &str, side: PairSide, keys: KeyPolicy) -> String {
+        let aliases = self.side(side);
+        let key = keys.key(rel);
+        if let Some(physical) = aliases
+            .file_targets
+            .get(key.as_ref())
+            .or_else(|| aliases.dir_targets.get(key.as_ref()))
+        {
+            return physical.clone();
+        }
+        for ((raw_end, _), (key_end, _)) in rel
+            .match_indices('/')
+            .rev()
+            .zip(key.match_indices('/').rev())
+        {
+            if let Some(parent) = aliases.dir_targets.get(&key[..key_end]) {
+                return format!("{parent}{}", &rel[raw_end..]);
+            }
+        }
+        rel.to_string()
+    }
+
+    pub(crate) fn protect_counterparts(
+        &self,
+        omissions: &mut super::omissions::SyncOmissions,
+        keys: KeyPolicy,
+    ) {
+        if self.is_empty() {
+            return;
+        }
+        let paths: Vec<_> = omissions
+            .paths()
+            .map(|(rel, kind, reported)| (rel.to_string(), kind, reported))
+            .collect();
+        for (rel, kind, reported) in paths {
+            for side in [PairSide::A, PairSide::B] {
+                let logical = self.logical(&rel, side, keys);
+                omissions.record_kind(&logical, kind, reported);
+                for target in [PairSide::A, PairSide::B] {
+                    omissions.record_kind(
+                        &self.spelling(&logical, target, keys),
+                        kind,
+                        reported,
+                    );
+                }
+            }
+        }
+    }
 }
 
 impl KeyPolicy {

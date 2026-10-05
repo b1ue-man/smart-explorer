@@ -80,6 +80,7 @@ pub fn preview_with(
             });
         }
         let keys = super::orchestration_plan::keys(endpoints);
+        let names = super::state_spellings::load(&key, keys)?;
         let (_, records, dirs) = super::checkpoint_journal::Journal::load(&key, keys)?;
         let path = super::baseline_file(&key)?;
         let base = if !path.try_exists()?
@@ -94,7 +95,9 @@ pub fn preview_with(
         let mut snapshot = read_pair(endpoints, opts, cancel, filter, &base)
             .map_err(|(path, error)| io::Error::other(format!("{path}: {error}")))?;
         let empty = (snapshot.a.is_empty(), snapshot.b.is_empty());
-        super::orchestration_plan::protect_pending(&_lock, &key, endpoints, keys, &mut snapshot)?;
+        super::orchestration_plan::protect_pending_spelled(
+            &_lock, &key, endpoints, keys, &names.aliases, &mut snapshot,
+        )?;
         let mut planning_base = base.clone();
         for conflict in &snapshot.conflicts {
             planning_base.remove(&conflict.rel);
@@ -105,12 +108,13 @@ pub fn preview_with(
             );
         }
         let ctx = super::orchestration_plan::context(endpoints, opts, dirs.as_ref());
-        let mut plan = super::orchestration_plan::prepare(
+        let mut plan = super::orchestration_plan::prepare_spelled(
             endpoints,
             &mut snapshot.a,
             &mut snapshot.b,
             &planning_base,
             &ctx,
+            &names.aliases,
             cancel,
         );
         plan.conflicts.extend(snapshot.conflicts);
@@ -141,7 +145,7 @@ pub fn preview_with(
         if let Some((backend, root, side, source)) = target {
             let source_keys: std::collections::BTreeSet<_> = source
                 .keys()
-                .map(|rel| keys.key(rel).into_owned())
+                .map(|rel| names.aliases.key(rel, side.other(), keys))
                 .collect();
             let repair_keys: std::collections::BTreeSet<_> = snapshot
                 .repairs
@@ -149,7 +153,7 @@ pub fn preview_with(
                 .map(|repair| keys.key(&repair.rel).into_owned())
                 .collect();
             let candidates = backend.plan_dedupe_recursive(root, &|rel| {
-                source_keys.contains(keys.key(rel).as_ref()) || plan.omissions.protects(rel)
+                source_keys.contains(&names.aliases.key(rel, side, keys)) || plan.omissions.protects(rel)
             })?;
             let candidates: Vec<_> = candidates
                 .iter()
@@ -162,8 +166,7 @@ pub fn preview_with(
             let orphans: std::collections::BTreeSet<_> = candidates
                 .iter()
                 .map(|entry| {
-                    keys.key(&super::paths::rel_of(&entry.path, root))
-                        .into_owned()
+                    names.aliases.key(&super::paths::rel_of(&entry.path, root), side, keys)
                 })
                 .filter(|key| !source_keys.contains(key))
                 .collect();

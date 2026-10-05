@@ -31,8 +31,9 @@ pub fn recorded_original_paths_for_key(
         b.case_sensitive_paths(root_b),
     );
     let spellings = super::state_spellings::load(key, keys)?;
-    let rel_a = spellings.rel(rel, super::PairSide::A, keys);
-    let rel_b = spellings.rel(rel, super::PairSide::B, keys);
+    let logical = spellings.recorded_rel(rel, keys)?;
+    let rel_a = spellings.rel(&logical, super::PairSide::A, keys);
+    let rel_b = spellings.rel(&logical, super::PairSide::B, keys);
     let opts = match &key.owner {
         super::StateOwner::Job(id) => crate::syncjobs::recorded_options(id)?,
         super::StateOwner::AdHoc => super::BisyncOptions::default(),

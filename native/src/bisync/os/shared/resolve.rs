@@ -112,10 +112,14 @@ pub fn resolve_recorded(
     let endpoints = super::incremental::SyncEndpoints::new(a, root_a, b, root_b);
     super::single_recorded::validate_state(endpoints, state)?;
     let keys = super::orchestration_plan::keys(endpoints);
-    if super::merge_resume::pending_merge_relatives(&lock, state)?
-        .iter()
-        .any(|rel| keys.key(rel) == keys.key(&conflict.rel))
-    {
+    let names = super::state_spellings::load(state, keys)?;
+    let logical = names.recorded_rel(&conflict.rel, keys)?;
+    let mut protected = super::SyncOmissions::new(keys.fold_case);
+    for rel in super::merge_resume::pending_merge_relatives(&lock, state)? {
+        protected.record_kind(&rel, super::OmissionKind::Unreadable, false);
+    }
+    names.aliases.protect_counterparts(&mut protected, keys);
+    if protected.protects(&logical) {
         return Err(io::Error::new(
             io::ErrorKind::WouldBlock,
             "Dieser Pfad hat eine unbeendete Merge-Auflösung; denselben Merge erneut bestätigen",
@@ -169,6 +173,9 @@ fn resolve_single_recorded(
     progress(ResolvePhase::Preparing);
     let keys = super::orchestration_plan::keys(endpoints);
     let names = super::state_spellings::load(state, keys)?;
+    let mut recorded = conflict.clone();
+    recorded.rel = names.recorded_rel(&conflict.rel, keys)?;
+    let conflict = &recorded;
     let mut spellings = super::Spellings::default();
     for side in [PairSide::A, PairSide::B] {
         let rel = names.rel(&conflict.rel, side, keys);

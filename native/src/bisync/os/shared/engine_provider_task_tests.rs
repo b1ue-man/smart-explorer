@@ -16,6 +16,8 @@ mod fixture;
 mod identity_tests;
 #[path = "engine_publication_task_tests.rs"]
 mod publication_tests;
+#[path = "sync_reliability_task_spelling_migration_tests.rs"]
+mod spelling_migration_tests;
 use fixture::*;
 
 #[test]

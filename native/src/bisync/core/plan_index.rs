@@ -3,12 +3,13 @@
 //! and are protected instead of failing every run.
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::keys::KeyPolicy;
+use super::keys::{KeyPolicy, PathAliases};
 use super::types::{Baseline, PairSide, Sig, Tree};
 
 /// One planning key: what each side and the baseline hold under it.
 #[derive(Clone, Debug, Default)]
 pub(super) struct Keyed {
+    pub(super) logical: Option<String>,
     pub(super) a: Option<(String, Sig)>,
     pub(super) b: Option<(String, Sig)>,
     pub(super) base: Option<(String, (Option<Sig>, Option<Sig>))>,
@@ -47,7 +48,9 @@ impl Keyed {
     /// The rel actions and records use: side A's spelling, else side B's,
     /// else the baseline's.
     pub(super) fn rel(&self) -> &str {
-        self.spelling(PairSide::A)
+        self.logical
+            .as_deref()
+            .or_else(|| self.spelling(PairSide::A))
             .or_else(|| self.spelling(PairSide::B))
             .or_else(|| self.base.as_ref().map(|(rel, _)| rel.as_str()))
             .unwrap_or_default()
@@ -61,17 +64,32 @@ pub(super) struct PairIndex {
 }
 
 pub(super) fn index(a: &Tree, b: &Tree, base: &Baseline, keys: KeyPolicy) -> PairIndex {
+    index_spelled(a, b, base, keys, &PathAliases::default())
+}
+
+pub(super) fn index_spelled(
+    a: &Tree,
+    b: &Tree,
+    base: &Baseline,
+    keys: KeyPolicy,
+    aliases: &PathAliases,
+) -> PairIndex {
     let mut entries: BTreeMap<String, Keyed> = BTreeMap::new();
     let mut collisions = Vec::new();
     for (side, tree) in [(PairSide::A, a), (PairSide::B, b)] {
         let mut collided: BTreeSet<String> = BTreeSet::new();
         for (rel, sig) in tree {
-            let key = keys.key(rel).into_owned();
+            let logical = aliases.logical(rel, side, keys);
+            let key = keys.key(&logical).into_owned();
             if collided.contains(&key) {
                 collisions.push((side, rel.clone()));
                 continue;
             }
-            let slot = entries.entry(key.clone()).or_default().slot(side);
+            let keyed = entries.entry(key.clone()).or_default();
+            if logical.as_ref() != rel {
+                keyed.logical = Some(logical.into_owned());
+            }
+            let slot = keyed.slot(side);
             match slot.take() {
                 None => *slot = Some((rel.clone(), *sig)),
                 Some((first, _)) => {
@@ -142,7 +160,16 @@ pub(super) fn destination_spelling(
 
 /// Folders of one side by planning key (that side's spelling).
 pub(super) fn dirs_by_key(dirs: &BTreeSet<String>, keys: KeyPolicy) -> BTreeMap<String, String> {
+    dirs_by_key_spelled(dirs, PairSide::A, keys, &PathAliases::default())
+}
+
+pub(super) fn dirs_by_key_spelled(
+    dirs: &BTreeSet<String>,
+    side: PairSide,
+    keys: KeyPolicy,
+    aliases: &PathAliases,
+) -> BTreeMap<String, String> {
     dirs.iter()
-        .map(|dir| (keys.key(dir).into_owned(), dir.clone()))
+        .map(|dir| (aliases.key(dir, side, keys), dir.clone()))
         .collect()
 }

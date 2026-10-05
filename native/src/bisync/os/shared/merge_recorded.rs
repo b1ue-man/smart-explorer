@@ -91,6 +91,10 @@ pub fn merge_recorded_for_key(
         let (_, records, _) = super::checkpoint_journal::Journal::load(key, keys)?;
         report.baseline = records.baseline;
         let names = super::state_spellings::load(key, keys)?;
+        let requested_rel = conflict.rel.clone();
+        let mut recorded = conflict.clone();
+        recorded.rel = names.recorded_rel(&conflict.rel, keys)?;
+        let conflict = &recorded;
         let rel_a = names.rel(&conflict.rel, PairSide::A, keys);
         let rel_b = names.rel(&conflict.rel, PairSide::B, keys);
         let path_a = crate::vfs::sync_path(a, root_a, &rel_a)?;
@@ -121,7 +125,15 @@ pub fn merge_recorded_for_key(
         };
         let digest_a = original_a.bytes.map(digest);
         let digest_b = original_b.bytes.map(digest);
-        let saved_recovery = merge_recovery::load(key, &conflict.rel)?;
+        let mut saved_recovery = merge_recovery::load(key, &requested_rel)?;
+        if requested_rel != conflict.rel {
+            if let Some(canonical) = merge_recovery::load(key, &conflict.rel)? {
+                if saved_recovery.is_some() {
+                    return Err(drift("two stored merges claim the same historical relation"));
+                }
+                saved_recovery = Some(canonical);
+            }
+        }
         let recovering = saved_recovery.is_some();
         let mut recovery = match saved_recovery {
             Some(recovery)

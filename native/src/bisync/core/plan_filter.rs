@@ -4,7 +4,7 @@
 //! destination copy outside the filter is still updated or kept.
 use std::collections::BTreeSet;
 
-use super::keys::KeyPolicy;
+use super::keys::{KeyPolicy, PathAliases};
 use super::omissions::{OmissionKind, SyncOmissions};
 use super::plan_decide::source_side;
 use super::snapshot_types::SideSnapshot;
@@ -18,6 +18,7 @@ pub(super) fn apply_pair_filter(
     b: &mut SideSnapshot,
     direction: Direction,
     keys: KeyPolicy,
+    aliases: &PathAliases,
     omissions: &mut SyncOmissions,
 ) {
     match source_side(direction) {
@@ -42,10 +43,10 @@ pub(super) fn apply_pair_filter(
             let source_keys: BTreeSet<String> = source_snapshot
                 .tree
                 .keys()
-                .map(|rel| keys.key(rel).into_owned())
+                .map(|rel| aliases.key(rel, source, keys))
                 .collect();
             for (rel, sig) in std::mem::take(&mut destination.filtered) {
-                if source_keys.contains(keys.key(&rel).as_ref()) {
+                if source_keys.contains(&aliases.key(&rel, source.other(), keys)) {
                     destination.tree.insert(rel, sig);
                 } else {
                     omissions.record_kind(&rel, OmissionKind::Filtered, false);

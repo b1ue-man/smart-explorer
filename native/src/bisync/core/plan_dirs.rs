@@ -5,6 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::completion::DirAction;
+use super::keys::PathAliases;
 use super::omissions::SyncOmissions;
 use super::plan_decide::{may_send, source_side};
 use super::plan_index::destination_spelling;
@@ -42,6 +43,7 @@ impl DirSides<'_> {
 pub(super) fn plan_dirs(
     sides: &DirSides<'_>,
     ctx: &PlanContext<'_>,
+    aliases: &PathAliases,
     omissions: &SyncOmissions,
 ) -> (Vec<DirAction>, DirSet) {
     let history: Option<BTreeSet<String>> = ctx.base_dirs.map(|dirs| {
@@ -58,7 +60,7 @@ pub(super) fn plan_dirs(
         let (present, spelling) = match (in_a, in_b) {
             (Some(spelling), Some(_)) => {
                 if !omissions.protects(spelling) {
-                    in_sync.insert(spelling.clone());
+                    in_sync.insert(aliases.logical(spelling, PairSide::A, ctx.keys).into_owned());
                 }
                 continue;
             }
@@ -87,7 +89,13 @@ pub(super) fn plan_dirs(
         if !create || sides.filled(missing).contains(key) {
             continue;
         }
-        let rel = destination_spelling(spelling, sides.dirs(missing), ctx.keys);
+        let logical = aliases.logical(spelling, present, ctx.keys);
+        let mapped = aliases.spelling(&logical, missing, ctx.keys);
+        let rel = if mapped != logical.as_ref() {
+            mapped
+        } else {
+            destination_spelling(&logical, sides.dirs(missing), ctx.keys)
+        };
         let limits = ctx.limits(missing);
         if rel.split('/').all(|name| limits.name_issue(name).is_none()) {
             creates.push(DirAction::Create { side: missing, rel });

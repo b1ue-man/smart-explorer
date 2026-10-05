@@ -5,9 +5,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use super::compare::TimeRules;
 use super::guards::{deletion_block, empty_side_block, unconfirmed, DeleteCounts};
 use super::incremental::SyncEndpoints;
-use super::keys::KeyPolicy;
+use super::keys::{KeyPolicy, PathAliases};
 use super::omissions::{OmissionKind, SyncOmissions};
-use super::plan_pair::plan_pair;
+use super::plan_pair::plan_pair_spelled;
 use super::plan_types::{PairPlan, PlanContext};
 use super::run_types::{RunBlock, RunSettings};
 use super::snapshot_types::{DirSet, SideSnapshot};
@@ -44,7 +44,20 @@ pub(super) fn prepare(
     ctx: &PlanContext<'_>,
     cancel: &AtomicBool,
 ) -> PairPlan {
-    let mut plan = plan_pair(a, b, base, ctx);
+    prepare_spelled(endpoints, a, b, base, ctx, &PathAliases::default(), cancel)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn prepare_spelled(
+    endpoints: SyncEndpoints<'_>,
+    a: &mut SideSnapshot,
+    b: &mut SideSnapshot,
+    base: &Baseline,
+    ctx: &PlanContext<'_>,
+    aliases: &PathAliases,
+    cancel: &AtomicBool,
+) -> PairPlan {
+    let mut plan = plan_pair_spelled(a, b, base, ctx, aliases);
     if plan.verify.is_empty() {
         a.omissions.extend(plan.omissions.clone());
         b.omissions.extend(plan.omissions.clone());
@@ -82,7 +95,7 @@ pub(super) fn prepare(
     a.omissions.extend(plan.omissions);
     let mut final_ctx = *ctx;
     final_ctx.can_hash = false;
-    let mut final_plan = plan_pair(a, b, base, &final_ctx);
+    let mut final_plan = plan_pair_spelled(a, b, base, &final_ctx, aliases);
     final_plan.files_a = counts.0;
     final_plan.files_b = counts.1;
     // The planner takes the omissions. Later guards and checkpoint observations
@@ -220,10 +233,22 @@ pub(super) fn protect_pending(
     keys: KeyPolicy,
     snapshot: &mut super::snapshot_pair::PairSnapshot,
 ) -> io::Result<()> {
+    protect_pending_spelled(lock, key, endpoints, keys, &PathAliases::default(), snapshot)
+}
+
+pub(super) fn protect_pending_spelled(
+    lock: &super::PairLock,
+    key: &super::StateKey,
+    endpoints: SyncEndpoints<'_>,
+    keys: KeyPolicy,
+    aliases: &PathAliases,
+    snapshot: &mut super::snapshot_pair::PairSnapshot,
+) -> io::Result<()> {
     let mut omissions = SyncOmissions::new(keys.fold_case);
     for rel in pending_paths(lock, key, endpoints)? {
         omissions.record_kind(&rel, OmissionKind::Unreadable, true);
     }
+    aliases.protect_counterparts(&mut omissions, keys);
     snapshot
         .repairs
         .retain(|repair| !omissions.protects(&repair.rel));
