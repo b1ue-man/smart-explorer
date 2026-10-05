@@ -8,7 +8,7 @@ use crate::vfs::Backend;
 use engine::apply_guard::{capture, ExpectedFile};
 use engine::checkpoint_journal::{Frame, Journal};
 use engine::incremental::SyncEndpoints;
-use engine::types::{Baseline, BisyncOptions, DeletePolicy, Direction, PairSide};
+use engine::types::{Baseline, BisyncOptions, DeletePolicy, Direction};
 use engine::versions::{RunVersions, VersionReason, VersionSide, VersionsContext};
 use std::sync::atomic::Ordering;
 
@@ -185,17 +185,78 @@ fn engine_provider_account_identity_preserves_state_locks_inputs_and_versions() 
         engine::versions::list_versions(&current.pair, std::slice::from_ref(&side), &cancel)
             .unwrap();
     assert!(listed.contains(&entry));
+    let job_basis = engine::baseline_file(&key).unwrap();
+    let legacy_basis = engine::baseline_file(&legacy).unwrap();
+    let state_paths = [
+        job_basis.clone(),
+        job_basis.with_extension("journal"),
+        legacy_basis.clone(),
+        legacy_basis.with_extension("journal"),
+    ];
+    let state_bytes = || {
+        state_paths
+            .iter()
+            .map(|path| optional_file_bytes(path))
+            .collect::<Vec<_>>()
+    };
+    let unchanged = state_bytes();
+    *a.intent_pair.lock().unwrap() = Some(current.pair.clone());
     std::fs::write(a_dir.path().join("file"), b"changed").unwrap();
     engine::versions::restore_version(&lock, &current.pair, &entry, &side, &cancel).unwrap();
     assert_eq!(std::fs::read(a_dir.path().join("file")).unwrap(), b"saved");
     assert_eq!(std::fs::read(&manifest_path).unwrap(), immutable);
-    let intent = intent(&current.pair);
-    assert!(!intent.binding.checkpoint_allowed);
+    let prepared = {
+        let observed = a.prepared.lock().unwrap();
+        assert_eq!(observed.len(), 1);
+        observed[0].clone()
+    };
+    assert!(!prepared.binding.checkpoint_allowed);
     assert_eq!(
-        intent.original.digest,
+        prepared.original.digest,
         format!("{:x}", md5::compute(b"changed"))
     );
+    assert_publication_finished(&a, &prepared);
+    assert_eq!(state_bytes(), unchanged);
+    let mut restored_backups: Vec<_> = engine::versions::list_versions(
+        &current.pair,
+        std::slice::from_ref(&side),
+        &cancel,
+    )
+    .unwrap()
+    .into_iter()
+    .filter(|version| {
+        version.reason == Some(VersionReason::Restored)
+            && std::fs::read(&version.stored_path).unwrap() == b"changed"
+    })
+    .collect();
+    assert_eq!(restored_backups.len(), 1);
+    a.lose_next_ack.store(true, Ordering::SeqCst);
+    let error = engine::versions::restore_version(
+        &lock,
+        &current.pair,
+        &restored_backups.remove(0),
+        &side,
+        &cancel,
+    )
+    .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::ConnectionReset);
+    let pending = intent(&current.pair);
+    assert!(!pending.binding.checkpoint_allowed);
+    assert_eq!(std::fs::read(a_dir.path().join("file")).unwrap(), b"changed");
+    assert_eq!(state_bytes(), unchanged);
+    let promotions = a.promotions.load(Ordering::SeqCst);
     engine::replacement_recovery::recover_locked(&lock, &key, endpoints, false, &cancel).unwrap();
+    assert_eq!(a.promotions.load(Ordering::SeqCst), promotions);
+    assert_publication_finished(&a, &pending);
+    assert_eq!(std::fs::read(a_dir.path().join("file")).unwrap(), b"changed");
+    assert_eq!(state_bytes(), unchanged);
+    engine::versions::restore_version(&lock, &current.pair, &entry, &side, &cancel).unwrap();
+    let prepared = a.prepared.lock().unwrap().last().unwrap().clone();
+    assert!(!prepared.binding.checkpoint_allowed);
+    assert_publication_finished(&a, &prepared);
+    assert_eq!(std::fs::read(a_dir.path().join("file")).unwrap(), b"saved");
+    assert_eq!(std::fs::read(&manifest_path).unwrap(), immutable);
+    assert_eq!(state_bytes(), unchanged);
     assert_eq!(
         engine::load_baseline(&engine::baseline_file(&key).unwrap()).unwrap(),
         baseline
@@ -268,7 +329,8 @@ fn engine_provider_recorded_lost_ack_preserves_old_baseline_until_retry() {
         std::fs::read(target_dir.path().join("file")).unwrap(),
         b"replacement"
     );
-    assert!(intent(&identity.pair).path().unwrap().exists());
+    let pending = intent(&identity.pair);
+    assert!(pending.path().unwrap().exists());
     let resumed =
         engine::orchestration::run_with_store_path(endpoints, opts, &cancel, &filter, &db);
     assert!(
@@ -282,6 +344,8 @@ fn engine_provider_recorded_lost_ack_preserves_old_baseline_until_retry() {
         resumed.state
     );
     assert_eq!(target.promotions.load(Ordering::SeqCst), 1);
+    assert_eq!(target.prepared.lock().unwrap().len(), 1);
+    assert_publication_finished(&target, &pending);
     let (_, records, _) =
         engine::checkpoint_journal::Journal::load(&key, Default::default()).unwrap();
     assert_eq!(records.baseline["file"].1.unwrap().size, 11);
@@ -305,159 +369,6 @@ fn engine_provider_publication_and_lost_ack_use_exactly_one_contract() {
         Fault::AtomicSuccess,
         Fault::NoReplaceSuccess,
     ] {
-        publication_case(fault);
+        super::publication_tests::publication_case(fault);
     }
-}
-
-fn publication_case(fault: Fault) {
-    let folder = tempfile::tempdir().unwrap();
-    std::fs::write(folder.path().join("file"), b"original").unwrap();
-    let mut remote = TestRemote::new(folder.path(), "publication");
-    remote.fault = Some(fault);
-    let other_folder = tempfile::tempdir().unwrap();
-    let other = FakeRemote::new(other_folder.path(), "other");
-    let endpoints = SyncEndpoints::new(&remote, REMOTE_ROOT, &other, REMOTE_ROOT);
-    let identity = Identity::current(endpoints);
-    *remote.intent_pair.lock().unwrap() = Some(identity.pair.clone());
-    let _files = StateFiles::new(&[identity.clone(), reverse(&identity)]);
-    let lock = engine::PairLock::acquire(&identity.lock).unwrap();
-    let legacy = engine::StateKey::legacy(&identity.pair, &identity.lock);
-    let versions = RunVersions::begin(VersionsContext::new(
-        &identity.pair,
-        engine::StateOwner::AdHoc,
-        engine::VersionsLocation::AppData,
-        Default::default(),
-    ));
-    versions.bind_lock(lock.id()).unwrap();
-    let side = VersionSide {
-        side: PairSide::A,
-        backend: &remote,
-        root: REMOTE_ROOT,
-    };
-    let cancel = AtomicBool::new(false);
-    let path = "/data/file";
-    let original = signature(&remote, path);
-    let current = capture(&remote, path, ExpectedFile::Present(original), "fixture").unwrap();
-    let backup = engine::version_save::save(
-        &versions,
-        &side,
-        path,
-        "file",
-        &current,
-        ExpectedFile::Present(original),
-        VersionReason::Replaced,
-        &cancel,
-    )
-    .unwrap();
-    assert!(!backup.moved);
-    let mut stage = engine::apply_stage::stage_bytes(
-        &remote,
-        path,
-        &current,
-        b"replacement",
-        original.mtime_ms,
-        &cancel,
-    )
-    .unwrap();
-    stage.bind(&versions, &side, "file", true).unwrap();
-    stage.require_backup(backup.signature).unwrap();
-    let stage_path = stage.path.clone();
-    let result = stage.publish(path, &current, true, &cancel);
-    let atomic = matches!(
-        fault,
-        Fault::AtomicBefore | Fault::AtomicAfter | Fault::AtomicSuccess
-    );
-    let succeeded = matches!(fault, Fault::AtomicSuccess | Fault::NoReplaceSuccess);
-    assert_eq!(result.is_ok(), succeeded);
-    if let Ok(outcome) = result {
-        assert!(outcome.durable);
-        assert_eq!(outcome.bytes, 11);
-        assert_eq!(outcome.digest, md5::compute(b"replacement").0);
-        assert_eq!(outcome.destination, signature(&remote, path));
-    }
-    assert_eq!(remote.hooks.load(Ordering::SeqCst), 1);
-    assert_eq!(
-        remote.promotions.load(Ordering::SeqCst),
-        usize::from(atomic)
-    );
-    let intent = intent(&legacy.pair_id);
-    assert_eq!(intent.stage, stage_path);
-    assert_eq!(intent.binding.side, "a");
-    assert_eq!(
-        intent.original.digest,
-        format!("{:x}", md5::compute(b"original"))
-    );
-    assert_eq!(
-        engine::orchestration_plan::pending_paths(&lock, &legacy, endpoints).unwrap(),
-        vec!["file"]
-    );
-    let other_key = key(&identity, "other-owner");
-    let reversed_key = engine::StateKey {
-        pair_id: reverse(&identity).pair,
-        replica_a: other_key.replica_b.clone(),
-        replica_b: other_key.replica_a.clone(),
-        ..other_key.clone()
-    };
-    let reversed = SyncEndpoints::new(&other, REMOTE_ROOT, &remote, REMOTE_ROOT);
-    for (owner, endpoints) in [(&other_key, endpoints), (&reversed_key, reversed)] {
-        assert_eq!(
-            engine::orchestration_plan::pending_paths(&lock, owner, endpoints).unwrap(),
-            vec!["file"]
-        );
-        let action = engine::Action::DeleteA("file".into());
-        let blocked = engine::single_recorded::apply_one(
-            endpoints,
-            &lock,
-            owner,
-            &action,
-            (None, None),
-            &Default::default(),
-            Default::default(),
-            &cancel,
-        );
-        assert_eq!(blocked.unwrap_err().kind(), io::ErrorKind::WouldBlock);
-    }
-    let baseline = engine::baseline_file(&legacy).unwrap();
-    assert!(!baseline.exists() && !baseline.with_extension("journal").exists());
-    assert_eq!(remote.try_exists(&intent.retained).unwrap(), !atomic);
-    let published = matches!(
-        fault,
-        Fault::AtomicAfter
-            | Fault::NoReplacePublished
-            | Fault::AtomicSuccess
-            | Fault::NoReplaceSuccess
-    );
-    assert_eq!(remote.try_exists(&stage_path).unwrap(), !published);
-    let versions = engine::versions::list_versions(&identity.pair, &[side], &cancel).unwrap();
-    assert_eq!(versions.len(), 1);
-    assert_eq!(
-        std::fs::read(&versions[0].stored_path).unwrap(),
-        b"original"
-    );
-    let result =
-        engine::replacement_recovery::recover_locked(&lock, &legacy, endpoints, false, &cancel);
-    if matches!(fault, Fault::ForeignCreator) {
-        assert!(result.is_err());
-        assert_eq!(
-            std::fs::read(folder.path().join("file")).unwrap(),
-            b"foreign"
-        );
-        assert!(intent.path().unwrap().exists() && remote.try_exists(&intent.retained).unwrap());
-        assert!(remote.try_exists(&stage_path).unwrap());
-    } else {
-        result.unwrap();
-        let expected: &[u8] = if published {
-            b"replacement"
-        } else {
-            b"original"
-        };
-        assert_eq!(std::fs::read(folder.path().join("file")).unwrap(), expected);
-        assert!(!intent.path().unwrap().exists() && !remote.try_exists(&stage_path).unwrap());
-        assert!(!remote.try_exists(&intent.retained).unwrap());
-    }
-    assert!(!baseline.exists() && !baseline.with_extension("journal").exists());
-    assert_eq!(
-        std::fs::read(&versions[0].stored_path).unwrap(),
-        b"original"
-    );
 }
