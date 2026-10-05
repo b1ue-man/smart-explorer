@@ -81,11 +81,7 @@ impl Write for HelloWriter {
                     Frame::HelloOk {
                         proto,
                         // A bare version advertises no service or feature labels.
-                        version: env!("CARGO_PKG_VERSION")
-                            .split('+')
-                            .next()
-                            .unwrap()
-                            .into(),
+                        version: env!("CARGO_PKG_VERSION").split('+').next().unwrap().into(),
                     }
                 }
                 _ => {
@@ -140,8 +136,9 @@ impl OfflineAgent {
         };
         let inner =
             super::super::ipc_client::share_backend_identity("C08 offline peer".into(), target);
-        let agent = crate::agent::AgentBackend::from_streams(Box::new(reader), Box::new(writer), inner)
-            .expect("normal framed AgentBackend Hello handshake");
+        let agent =
+            crate::agent::AgentBackend::from_streams(Box::new(reader), Box::new(writer), inner)
+                .expect("normal framed AgentBackend Hello handshake");
         fixture.backend = Some(Arc::new(agent));
         fixture
     }
@@ -210,7 +207,9 @@ fn sync_reliability_task_old_jobs_ipc_literal_child_is_finite_without_worker_rpc
             }
             for invalid in ["", ".", "..", "sub/name", "nul\0name"] {
                 assert_eq!(
-                    vfs::sync_child_path(backend, "/", invalid).unwrap_err().kind(),
+                    vfs::sync_child_path(backend, "/", invalid)
+                        .unwrap_err()
+                        .kind(),
                     io::ErrorKind::InvalidInput
                 );
             }
@@ -247,12 +246,23 @@ fn sync_reliability_task_old_jobs_ipc_reversible_fallback_is_finite_without_muta
             for _ in 0..32 {
                 assert!(!vfs::replace_staged_reversible(
                     backend,
-                    "/stage",
-                    "/destination",
-                    "/retained",
+                    "/Docs/file.se-transfer-0123456789abcdef",
+                    "/Docs/file",
+                    "/Docs/.se-replace-fedcba9876543210",
                 )
                 .unwrap());
             }
+            assert_eq!(
+                vfs::replace_staged_reversible(
+                    backend,
+                    "/Docs/file.se-transfer-0123456789abcdef",
+                    "/Docs/file",
+                    "/Docs/retained",
+                )
+                .unwrap_err()
+                .kind(),
+                io::ErrorKind::InvalidInput
+            );
         }
         fixture.assert_metadata_only();
     }

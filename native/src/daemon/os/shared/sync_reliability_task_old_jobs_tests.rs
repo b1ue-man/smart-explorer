@@ -51,6 +51,51 @@ fn crossremote_checkpoint(provider: &str, phase: &str) {
     stderr.flush().unwrap();
 }
 
+const DIRECT_STAGE_PROOF_FILE: &str = "ipc-owner.txt";
+const DIRECT_STAGE_PROOF_BYTES: &[u8] = b"real Direct creator bytes";
+
+fn confirm_direct_stage_owner(
+    owner: &dyn crate::vfs::Backend,
+    reopened: &dyn crate::vfs::Backend,
+    root: &str,
+) {
+    use crate::connect::sync_reliability_task_provider_fixture as provider_fixture;
+    use std::io::Write;
+    let destination = crate::vfs::sync_child_path(owner, root, DIRECT_STAGE_PROOF_FILE).unwrap();
+    assert!(!owner.try_exists(&destination).unwrap());
+    let stage = crate::vfs::unique_staging_path(owner, &destination, "daemon").unwrap();
+    let stage_name = stage.rsplit('/').next().unwrap();
+    crossremote_checkpoint("direct", "opening-exclusive-daemon-stage");
+    let mut writer = owner.open_write_new(&stage).unwrap();
+    writer.write_all(DIRECT_STAGE_PROOF_BYTES).unwrap();
+    writer.flush().unwrap();
+    drop(writer);
+    crossremote_checkpoint("direct", "exclusive-daemon-stage-acknowledged");
+    let error = reopened.promote_staged(&stage, &destination).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("Stage wurde nicht von diesem Backend angelegt"),
+        "unexpected publication refusal: {error}"
+    );
+    assert_eq!(
+        provider_fixture::read(owner, root, stage_name),
+        DIRECT_STAGE_PROOF_BYTES
+    );
+    assert!(!owner.try_exists(&destination).unwrap());
+    crossremote_checkpoint("direct", "reopened-backend-cannot-claim-creator-stage");
+    owner.promote_staged(&stage, &destination).unwrap();
+    assert!(!owner.try_exists(&stage).unwrap());
+    assert_eq!(
+        provider_fixture::read(reopened, root, DIRECT_STAGE_PROOF_FILE),
+        DIRECT_STAGE_PROOF_BYTES
+    );
+    crossremote_checkpoint(
+        "direct",
+        "creator-stage-published-and-reopened-bytes-confirmed",
+    );
+}
+
 #[test]
 fn sync_reliability_task_old_jobs_resolver_overrides_are_exact_and_thread_scoped() {
     let (_temp, a, _) = local_pair();
@@ -177,8 +222,13 @@ fn sync_reliability_task_old_jobs_crossremote_runs_normal_saved_connection_and_d
     assert_eq!(reopened.state_identity(), b.state_identity());
     assert_ne!(a.namespace_identity(), b.namespace_identity());
     crossremote_checkpoint(required, "saved-target-reopened");
+    if required == "direct" {
+        confirm_direct_stage_owner(&*b, &*reopened, &root_b);
+    }
     drive.write_file("drive.txt", b"old Drive into actual remote");
+    crossremote_checkpoint(required, "writing-normal-provider-file");
     provider_fixture::write(&*b, &root_b, "remote.txt", b"actual remote into old Drive");
+    crossremote_checkpoint(required, "normal-provider-write-published");
     let saved = SavedJob::old(source, &target, "realtime");
     crossremote_checkpoint(required, "running-original-saved-job");
     saved.run();
@@ -194,6 +244,13 @@ fn sync_reliability_task_old_jobs_crossremote_runs_normal_saved_connection_and_d
     let baseline = crate::bisync::baseline_file(&key).unwrap();
     let initial = crate::bisync::load_baseline(&baseline).unwrap();
     assert!(initial.contains_key("drive.txt") && initial.contains_key("remote.txt"));
+    if required == "direct" {
+        assert!(initial.contains_key(DIRECT_STAGE_PROOF_FILE));
+        assert_eq!(
+            drive.read_file(DIRECT_STAGE_PROOF_FILE),
+            DIRECT_STAGE_PROOF_BYTES
+        );
+    }
     crossremote_checkpoint(required, "original-bytes-and-owned-baseline-confirmed");
     let restarted = drive.restart();
     endpoints.insert(source, restarted.clone(), &root_a);
@@ -229,6 +286,16 @@ fn sync_reliability_task_old_jobs_crossremote_runs_normal_saved_connection_and_d
         key
     );
     assert_eq!(crate::bisync::baseline_file(&key).unwrap(), baseline);
+    if required == "direct" {
+        assert_eq!(
+            provider_fixture::read(&*restarted_remote, &root_b, DIRECT_STAGE_PROOF_FILE),
+            DIRECT_STAGE_PROOF_BYTES
+        );
+        assert_eq!(
+            drive.read_file(DIRECT_STAGE_PROOF_FILE),
+            DIRECT_STAGE_PROOF_BYTES
+        );
+    }
     crossremote_checkpoint(required, "recreated-bytes-and-state-key-confirmed");
     let before = std::fs::read(&baseline).unwrap();
     assert_noop(&saved.run());
