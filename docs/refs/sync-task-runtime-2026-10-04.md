@@ -151,8 +151,17 @@ Quellabgleich am 2026-10-05: Die exakte Drivefähigkeit verändert die gemeinsam
 `StateSpellings` enthalten vier Maps mit den wirklich gespeicherten Datei-
 und Ordnerschreibweisen je Seite. `state_spelling_policy::validate` prüft
 alle Komponenten mit `SyncRelativePath` und erkennt alte gefaltete Schlüssel.
-Die Migration liest denselben StateKey über `checkpoint_journal::Journal`;
-vorhandene Baseline-/Dirrecords liefern den gemeinsamen logischen Anker.
+Die Migration liest denselben StateKey über `checkpoint_journal::Journal`.
+Die Baseline hält tatsächliche logische Relativnamen. Dagegen normalisiert
+`Checkpoint::planned` die `dirs_add`/`dirs_remove` schon vor Journalreplay
+mit der damaligen `KeyPolicy`; die historische `.dirs.json` enthält deshalb
+gefaltete Planungsschlüssel, keine zusätzliche Literal-Schreibweise.
+Ordnerbelege müssen diese Existenzinformation von den wirklich gespeicherten
+Seitenslots und Baseline-Vorfahren unterscheiden. Ein Schlüssel `OLDTREE`
+und der belegte Vorfahr `OldTree` sind nicht zwei konkurrierende Literalnamen.
+Tatsächlich mehrere Baseline-Anker oder widersprüchliche Seitenslots bleiben
+mehrdeutig und geschützt. Dieser Sourcevertrag ist am 2026-10-05 gegen
+`checkpoint_run.rs`, Journalreplay und den sechsten Remote-Lauf geprüft.
 Für eine bereits gespeicherte ungelöste Relation ohne Baseline gelten nur
 ihre tatsächlichen Seitenslots als Beleg. Mehrdeutige oder widersprüchliche
 Records werden nicht in eine erfundene Zuordnung umgewandelt.

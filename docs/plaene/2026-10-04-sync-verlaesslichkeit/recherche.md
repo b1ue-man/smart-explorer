@@ -108,7 +108,21 @@ ist statisch gegen ihre Sidecar geprüft und enthält die benötigte x86_64-ABI.
 Der spätere Ablauf muss trotzdem die alte App real starten, den Job ausführen
 und ihre Daten durch ein passendes APK-Update erhalten.
 
-Für C10 fehlen gegenwärtig die drei Drive-Testsecrets auf GitHub Actions und
-eine lokale Testanmeldung. Der Nutzer wurde nach dem autorisierten Testzugang
+Für C10 fehlen die erforderlichen Client-ID-/Refresh-Token-Testsecrets auf
+GitHub Actions und eine lokale Testanmeldung. Das Client-Secret ist optional
+und nur bei einem entsprechend konfigurierten OAuth-Client erforderlich. Der Nutzer wurde nach dem autorisierten Testzugang
 gefragt; Umsetzung und übrige Abnahme werden unabhängig davon vorbereitet.
 Das ist ein offener Runtimezugang, kein ausgeführter oder erfolgreicher Fall.
+
+## Zweite Gapprüfung des sechsten gemeinsamen Fixloops
+
+Aktualisiert 2026-10-05 vor Anschlussänderungen. Der vollständige sechste Lauf
+belegt historische Dirkeys, DAV-Collectionredirects, den Windows-Direct-
+Versionszugriff und zwei Windows-FTP-Fixture-Logins als konkrete Grenzen.
+Die aktualisierten Runtime-/Providerrefs sichern den tatsächlichen Checkpoint-
+Schreibvertrag, RFC 4918 §5.2 und die gepinnte ureq-2.12.1-API/Implementierung.
+Der vorhandene private Versionsfallback wird zusammen mit Peer-/IPC-Scheme
+und Authorization verfolgt; Share-Private-/Ownerguards bleiben maßgeblich.
+Die konkreten erwarteten Ergebnisse stehen bei M2–M5 und in `abnahme.md`.
+Keine neue allgemeine Reviewrunde oder zusätzliche Suite. C10 benötigt zwei
+erforderliche OAuth-Eingänge; das Client-Secret hängt vom verwendeten Client ab.
