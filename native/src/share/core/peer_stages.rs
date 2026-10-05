@@ -44,6 +44,17 @@ enum Phase {
     Pending(Option<Proof>),
 }
 
+impl Phase {
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Creating => "creating",
+            Self::Writing => "writing",
+            Self::Ready(_) => "ready",
+            Self::Pending(_) => "pending",
+        }
+    }
+}
+
 #[derive(Clone)]
 struct Proof {
     size: u64,
@@ -86,7 +97,7 @@ impl StageLedger {
         binding: Binding,
     ) -> io::Result<StageTicket> {
         if !client_stage_name(path) {
-            return Err(not_own());
+            return Err(not_own_at(path, "unrecognized-name"));
         }
         let mut ledger = self.0.lock().map_err(|_| poisoned())?;
         if ledger.entries.contains_key(path) {
@@ -123,13 +134,16 @@ impl StageLedger {
 
     pub(in crate::share) fn ready(&self, path: &str, binding: &Binding) -> io::Result<StageTicket> {
         let mut ledger = self.0.lock().map_err(|_| poisoned())?;
-        let entry = ledger.entries.get_mut(path).ok_or_else(not_own)?;
+        let entry = ledger
+            .entries
+            .get_mut(path)
+            .ok_or_else(|| not_own_at(path, "untracked"))?;
         if &entry.binding != binding {
             entry.phase = Phase::Pending(None);
             return Err(denied("Stage gehört zu einer anderen Share-Freigabe"));
         }
         if !matches!(&entry.phase, Phase::Ready(_)) {
-            return Err(not_own());
+            return Err(not_own_at(path, entry.phase.label()));
         }
         Ok(StageTicket {
             ledger: self.clone(),
@@ -145,7 +159,10 @@ impl StageLedger {
         meta: &VfsMeta,
     ) -> io::Result<StageTicket> {
         let mut ledger = self.0.lock().map_err(|_| poisoned())?;
-        let entry = ledger.entries.get_mut(path).ok_or_else(not_own)?;
+        let entry = ledger
+            .entries
+            .get_mut(path)
+            .ok_or_else(|| not_own_at(path, "untracked"))?;
         if &entry.binding != binding {
             entry.phase = Phase::Pending(None);
             return Err(denied("Stage gehört zu einer anderen Share-Freigabe"));
@@ -157,8 +174,9 @@ impl StageLedger {
                 return Err(error);
             }
         };
-        let Phase::Ready(proof) = &mut entry.phase else {
-            return Err(not_own());
+        let proof = match &mut entry.phase {
+            Phase::Ready(proof) => proof,
+            phase => return Err(not_own_at(path, phase.label())),
         };
         if snapshot.size != proof.size
             || proof
@@ -384,7 +402,9 @@ impl PeerBackend {
 
 fn client_stage_name(path: &str) -> bool {
     let name = path.rsplit('/').next().unwrap_or(path);
-    ["upload", "bisync", "merge", "transfer", "copy"]
+    // The IPC backend writer exclusively creates daemon stages before its
+    // replacing Write publishes them through this same creator ledger.
+    ["upload", "bisync", "merge", "transfer", "copy", "daemon"]
         .into_iter()
         .any(|purpose| {
             let marker = format!(".se-{purpose}-");
@@ -406,6 +426,15 @@ fn denied(message: &str) -> io::Error {
 fn not_own() -> io::Error {
     denied("Stage wurde nicht von diesem Backend angelegt")
 }
+fn not_own_at(path: &str, phase: &str) -> io::Error {
+    denied(&format!(
+        "Stage wurde nicht von diesem Backend angelegt (path={path:?}, state={phase})"
+    ))
+}
 fn poisoned() -> io::Error {
     io::Error::other("Share-Stage-Ledger ist nicht verfügbar")
 }
+
+#[cfg(test)]
+#[path = "sync_reliability_task_old_jobs_peer_stage_tests.rs"]
+mod sync_reliability_task_old_jobs_peer_stage_tests;
