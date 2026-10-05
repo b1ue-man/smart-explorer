@@ -143,3 +143,51 @@ Die breitere `is_staging_name`-Erkennung und der separate Upload-Discardguard
 erteilen keine zusätzlichen Lösch- oder Publishrechte. Neue Grenzfälle
 benutzen den tatsächlichen Unique-Stage-Generator einschließlich Replica
 und unveränderter Literalpräfixe; die Remote-Suite entdeckt sie im selben C08.
+
+## Alte Spellingpolicy und tatsächliche Seitenpfade
+
+Quellabgleich am 2026-10-05: Die exakte Drivefähigkeit verändert die gemeinsame
+`KeyPolicy` nur, wenn beide Seiten exakte Pfade unterstützen. Vorhandene
+`StateSpellings` enthalten vier Maps mit den wirklich gespeicherten Datei-
+und Ordnerschreibweisen je Seite. `state_spelling_policy::validate` prüft
+alle Komponenten mit `SyncRelativePath` und erkennt alte gefaltete Schlüssel.
+Die Migration liest denselben StateKey über `checkpoint_journal::Journal`;
+vorhandene Baseline-/Dirrecords liefern den gemeinsamen logischen Anker.
+Für eine bereits gespeicherte ungelöste Relation ohne Baseline gelten nur
+ihre tatsächlichen Seitenslots als Beleg. Mehrdeutige oder widersprüchliche
+Records werden nicht in eine erfundene Zuordnung umgewandelt.
+
+`keys::PathAliases` ist eine reine, seitenspezifische Zuordnung zwischen
+logischem Schlüssel und tatsächlichem Pfad. Ein belegter Ordnerpräfix gilt
+für seine tatsächlichen Kinder; neue ähnliche Namen werden dadurch nicht
+allgemein gefaltet. Die private Spellingdatei ergänzt für unterschiedlich
+geschriebene Altpaare den logischen Anker. Laden und Vorschau schreiben diese
+Datei nicht; Persistenz benutzt weiterhin den bestehenden Pairlock und den
+privaten atomaren Store. Ungültiger Altzustand fällt nicht auf leere Maps
+mit anschließend behaupteter neuer Basis zurück.
+
+Vollscan, Vorschau und inkrementelle Planung benutzen dieselbe Zuordnung.
+Ein optionaler Index ist nur verwendbar, wenn seine tatsächlichen Seiten-
+Records nach dieser Zuordnung genau die vorhandene Baseline belegen.
+Unsichere oder kollidierende Caches gehen zurück zum vollständigen Scan;
+geschützte Teilscans werden weiterhin keine vollständige Indexgeneration.
+Gespeicherte Konflikt-/Merge-/Resume-Pfade können ausschließlich eine exakt
+aufgezeichnete alte Seitenschreibweise zurück auf ihren logischen Anker
+führen. Normale neue Actions verwenden keine allgemeine Foldsuche.
+
+`apply_actions` übergibt beim Copy den tatsächlichen `target_rel`, beim Delete
+den tatsächlichen `source_rel` an `apply_transaction`. Versionsmanifest und
+Replacementbinding behalten damit die Literaladresse ihrer jeweiligen Seite;
+Restore adressiert genau diesen Pfad. Offene Replacement-Rels werden für den
+Schutz auf ihre belegten logischen und tatsächlichen Gegenstücke erweitert.
+Eine erfolgreiche Recovery bestätigt Veröffentlichung und Cleanup; die
+anschließende reguläre Planung beobachtet und schreibt die Baseline.
+
+Ein neu auftauchender unabhängiger Baum kann physisch auf den bereits
+belegten Counterpart eines Altpaars treffen, etwa A `Notebook` ↔ B `notebook`
+und danach zusätzlich A `notebook`. Ohne eigenständig registrierte Zieladresse
+darf die Engine den belegten Slot nicht umwidmen. File-/Dirapply schützen
+diese Gruppe, erhalten alte Bytes und Baseline und schließen unabhängige
+Dateien ab. Nach einer regulären eindeutigen Umbenennung kann derselbe alte
+Job vollständig konvergieren. Der Gesamtablauf unterscheidet diesen
+Teilstatus ausdrücklich von vollständigem Erfolg.

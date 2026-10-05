@@ -29,6 +29,32 @@ keine alte mehrdeutige Root-Auswahl. Bereits vor der ersten neuen Registry
 gelöschte, verschobene oder umbenannte historische IDs dürfen kein erreichbares
 gleichnamiges Ersatzobjekt übernehmen; geprüft wird auch ein Hint ohne MIME.
 
+C02 enthält zusätzlich drei vollständige historische Spellingabläufe unter
+`gdrive::sync_reliability_task_spelling_migration_tests`: gleiche tatsächliche
+Schreibweise, unterschiedliche Seitenpfade und eine neu auftretende physische
+Alias-Zielkollision. Die Fixture erzeugt Signaturen über einen regulären Seed,
+materialisiert dessen historische Viermap-/Baseline-/Dirbasis und entfernt
+nur die eigene neue Registry. Unveränderter Restart, Gegenänderung, neue
+unabhängige Casebäume, tatsächliche Datei-IDs, Side-B-Backup und Restore sowie
+No-op bleiben Pflicht. Der Kollisionsfall erhält beide alten Counterparts
+und die Baseline, bestätigt eine unabhängige gesunde Datei und wiederholt
+den geschützten Teilstatus nach Restart. Nach regulärem Rename ausschließlich
+des geprüften neuen Folder-IDs muss derselbe Job vollständig konvergieren.
+
+C05 entdeckt über seinen bestehenden Prefix die beiden Abläufe unter
+`bisync::engine_provider_task_tests::spelling_migration_tests`. Der Recorded-
+Retry-Ablauf startet mit einer echten gefalteten Viermap-Datei, bestätigt
+nichtmutierende Vorschau/Dry-run, unveränderten StateKey und No-op, erzeugt
+einen echten Konflikt und verliert genau einen Publish-ACK. Reguläres Resolve
+und Recovery müssen den tatsächlichen alten Side-B-Slot benutzen, dessen
+Sicherung erhalten und ohne erneute Veröffentlichung abschließen. Ein neues
+Kind unter dem alten B-Ordner wird auf seinen belegten A-Präfix übertragen.
+Der inkrementelle Mirror-Ablauf verlangt die richtige Zieladresse ohne
+Zielvollwalk, eine bestätigte vollständige Indexgeneration und No-op. Eine
+anschließend widersprüchliche Spellingdatei darf weder Baseline noch Bytes
+oder die vorherige Datei überschreiben; Wiederherstellung der gültigen
+Datei ermöglicht demselben Job den erfolgreichen Folgelauf.
+
 Für C10 sind Client-ID und Refresh-Token erforderlich; das Client-Secret wird
 nur gesetzt, wenn der verwendete OAuth-Client es verlangt. Im Abnahmebericht
 stehen ausschließlich Namen fehlender Eingänge, keine Credentialwerte.
@@ -393,3 +419,8 @@ committed/gepusht und durch denselben vollständigen Suite-Einstieg geprüft.
 C10 meldet weiterhin fehlende `SE_DRIVE_TEST_CLIENT_ID` und
 `SE_DRIVE_TEST_REFRESH_TOKEN`. Echte Google-Abnahme und terminaler Release
 bleiben offen; keine lokale Build-/Test-/Releaseausführung wurde gestartet.
+
+Eine erneute GitHub-API-Prüfung am 2026-10-05 während dieses Fixloops nennt
+weiterhin genau beide erforderlichen Secret-Namen als fehlend; auch das
+optionale Client-Secret ist nicht eingerichtet. Die Abfrage liest nur Namen,
+keine Secretwerte. Die bereits angefragte Autorisierung bleibt erforderlich.
