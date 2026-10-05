@@ -146,6 +146,12 @@ def device(logs: Path, handoff: Path, apks: Path, env: dict, candidate_sha: str)
         ids = {m["job"]["id"] for m in markers}
         if len(ids) != 1 or markers[-1]["sourceSha256"] != markers[-1]["targetSha256"]:
             raise RuntimeError("C09 end-to-end job identity/byte oracle failed")
+        owner = markers[1]["ownerState"]
+        if owner["owner"] != "job-" + markers[0]["job"]["id"] or not owner["replicas"]:
+            raise RuntimeError("C09 lacks the discovered imported job/replica owner")
+        migration = markers[1]["migration"]
+        if migration["fromBody"] != markers[0]["configBody"] or migration["afterRunsBody"] != markers[1]["configBody"]:
+            raise RuntimeError("C09 migration evidence differs from actual device job files")
         expected = hashlib.sha256(b"restarted reverse change").hexdigest()
         if markers[-1]["sourceSha256"] != expected:
             raise RuntimeError("C09 wrong final device bytes")
