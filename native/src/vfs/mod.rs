@@ -96,8 +96,8 @@ pub use self::extension_types::{
 };
 pub use self::extensions::BackendExtensions;
 pub use self::local_extensions::{local_mount_boundary, local_volume_identity};
-pub(crate) use self::staging_names::fit_stage_name;
 pub use self::staging_names::is_staging_name;
+pub(crate) use self::staging_names::{fit_stage_name, is_unique_stage};
 pub use self::volume::{MountKind, VolumeIdentity};
 
 pub use self::cache::CachingBackend;
