@@ -144,6 +144,25 @@ erteilen keine zusätzlichen Lösch- oder Publishrechte. Neue Grenzfälle
 benutzen den tatsächlichen Unique-Stage-Generator einschließlich Replica
 und unveränderter Literalpräfixe; die Remote-Suite entdeckt sie im selben C08.
 
+## Private Peer-Sicherungen über IPC
+
+Sourceabgleich 2026-10-05: Share hält `.se-versions` ausdrücklich privat
+(`fs_policy::private_name`). `version_listing::managed_sync_root` kennt
+bereits den bestätigten privaten Appdata-Fallback für Peer, hängt ihn bisher
+aber an `PermissionDenied`. `agent_error::kind_from_message` erkennt die
+englischen Texte; das deutsche `Pfad ist nicht freigegeben` ohne OS-Code
+bleibt `Other`. Der tatsächliche Windows-C04-/C08-Lauf meldet daher nach
+erfolgreichen normalen Transfers einen Fehler an der Versionsgrenze.
+
+Der bestehende private Archivvertrag muss als typisierte Providerfaktengrenze
+über reale Peer-, IPC-, Agent- und Cache-Handles erhalten bleiben. Ein
+unbekannter Provider bleibt beim strikten normalen Archivzugriff. Die private
+Wahl benötigt weiterhin frischen erfolgreichen Root-Stat, plain Root und
+Cancellation; vorhandene Providerarchive, deren verweigerte Kinder, widerrufene
+Freigaben und fremde Owner dürfen nicht als leere private Archive gelten.
+Backupbytes bleiben über die vorhandene durable private Kopie restorable;
+Listing/Retention und Restore behalten dieselbe Pair-/Owneridentität.
+
 ## Alte Spellingpolicy und tatsächliche Seitenpfade
 
 Quellabgleich am 2026-10-05: Die exakte Drivefähigkeit verändert die gemeinsame

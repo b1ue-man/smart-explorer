@@ -57,6 +57,11 @@ Zielvollwalk, eine bestätigte vollständige Indexgeneration und No-op. Eine
 anschließend widersprüchliche Spellingdatei darf weder Baseline noch Bytes
 oder die vorherige Datei überschreiben; Wiederherstellung der gültigen
 Datei ermöglicht demselben Job den erfolgreichen Folgelauf.
+Der historische Flow erhält außerdem die alte gemeinsame Ordnerhistorie:
+Nach dem Policywechsel muss eine bestätigte einseitige Ordnerlöschung am
+richtigen Gegenstück propagiert werden und nach Restart ohne Mutation bleiben.
+Ein alter Foldkey wird hierfür nicht als neuer Literalordner interpretiert;
+geschützte oder fehlgeschlagene Löschungen geben keine Beziehung frei.
 
 Für C10 sind Client-ID und Refresh-Token erforderlich; das Client-Secret wird
 nur gesetzt, wenn der verwendete OAuth-Client es verlangt. Im Abnahmebericht
