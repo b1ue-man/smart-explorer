@@ -318,3 +318,78 @@ Sicherung der gezielten Diagnose entfernt (`DELETE` 204, folgende Sichtprüfung
 404); kombinierte Summary und Joblogs bleiben erhalten. Ergebnis-/Bytehashbelege
 bleiben im kandidatgebundenen Summary. Der Helper trennt zusätzlich seine
 privaten Arbeitsdaten von ausgewählten hochladbaren Diagnosen.
+
+Der [fünfte gemeinsame Remote-Lauf](https://github.com/b1ue-man/smart-explorer/actions/runs/37267225051)
+prüft exakt `9b4bb4d2d27dc3fcdd14e96ebaf2ea23deb467ce` und endet am
+2026-10-05 um 06:09:10 UTC vollständig fehlgeschlagen. Vor der Auswertung
+sind die eigenen Reportarchive gegen die GitHub-API-Digests verifiziert:
+
+| Bericht | Artefakt | SHA-256 |
+|---|---|---|
+| Linux | `11327977763` | `0a36f8e352c3c118f788640d16a880a88e14e18590ce2341efbd4da0c8fb39d5` |
+| Windows | `11328427395` | `1b60fceeef260c69e7b2044b3561490f69b46590ec7c0fd7b7cadb1494dad09c` |
+| Android-Gerät | `11327427264` | `e4516303b59673da4c12896330f6260f543799f5d789a20505919aa90448230b` |
+| Gemeinsame Evaluation | `11327508974` | `46572f68d5f25f37fbb7195a2b960826d624397422f938e98afffb4dded173d2` |
+
+Beide nativen Archive enthalten weder `native-profile/` noch private
+`c08-legacy-worker-*/`-Arbeitsdaten. Beide Hosts führen sämtliche ausgewählten
+FQNs exakt einmal aus und liefern konsistente terminale Ergebnisse; kein
+Stackoverflow oder vorzeitiger Hostabbruch. C01/C03/C05 sind auf beiden
+Hosts erfolgreich. Die separate tatsächliche veröffentlichte Desktop-
+Workerübernahme schließt auf beiden OS einschließlich Zustands-/Backupbytes,
+Wiederanlauf, No-op, Workerende, Autostart-Restaurierung und Privatcleanup ab.
+
+C09 ist vollständig erfolgreich: veröffentlichte 0.5.169-APK, echter alter
+Job, tatsächlich importierte Ownerbaseline und alte Sicherungen, normales
+Update mit derselben Signatur, erzwungener Prozessneustart, Retry, Konflikt,
+Gegenänderung, Versionswiederherstellung und No-op. Alle Phasen behalten
+Job-ID `18db8b74fd40356f`. Die ursprüngliche Baseline mit SHA-256
+`8bac57738c747440bbbc5e8bccdce42ce1f9f8c6aa81a9d7a8d021d768b2d803`
+ist im tatsächlichen Ownerzustand übernommen; Force-stop erhält Konfiguration,
+Ownerbaseline und Journal. Die letzten tatsächlichen Quell-/Zielbytes stimmen
+gegen SHA-256 `a7a8f6a5e32faba69b9c41a320f1e93e02a3ce39c56ab14f825421574223fa19`
+überein. Es bleiben keine unausgeführten Android-Gerätephasen dieses Ablaufs.
+
+C02 nennt nun `Notebook`/`notebook` als Zielnamenskollision bereits beim
+Drive↔Drive-Seed mit `KeyPolicy { fold_case: true }`. Aktueller Source belegt
+den noch geerbten konservativen VFS-Default im Driveadapter. Seine exakte
+Fähigkeit und die damit direkt betroffene alte Spellingpolicy-Migration
+werden gemeinsam korrigiert; alte Baseline-/Seitenschreibweisen dürfen nicht
+verworfen oder neue Namen unbewiesen gepaart werden. Derselbe C02-Roundtrip
+behält seine Literal-, Overwrite-, Backup-, Restore-, Reopen- und No-op-Orakel.
+
+C04 unter Linux schließt die vollständigen tatsächlichen SFTP-, Key- und
+SSH-Agent-Paare einschließlich Gegenänderung und No-op ab. Der nächste FTP-
+Flow meldet `literal%20-file.txt` als `Unreadable`; der echte Server bestätigt
+exakten STOR und dessen Bytes. LIST liefert ohne MLSx eine gröbere mtime als
+SIZE+MDTM beim Stat; Checksumcapture verlangt zu Recht gleiche frische
+Signaturen. Die Korrektur vereinheitlicht reguläre adressierbare Kinder mit
+einem gemeinsamen nichtrekursiven Probe. Unsupported/550 und Links behalten
+ihren geschützten Eltern-LIST-Vertrag. Windows schließt den UNC-Flow ab;
+der folgende mapped-Vergleich scheitert am Textvergleich äquivalenter nativer
+Separatorpfade. Nur dieses Fixture-Orakel wird auf native Pfadgleichheit
+ausgerichtet. Spätere Providerflows sind noch nicht als erfolgreich bestätigt.
+
+C06/C07 scheitern jeweils an zwei bisherigen Fixtureannahmen, die nach
+erfolgreichem Restore/Publish noch einen offenen Intent erwarten. Der nun
+korrekt abgeschlossene Intent ist dort nicht mehr vorhanden. Das korrigierte
+Orakel prüft tatsächliche Slot-/Intent-Abwesenheit, restaurierbare Backupbytes
+und erhaltene Baseline/Checkpoint; echte Fehler-/Lost-ACK-/fremde Creator-
+und Ownerorientierungsfälle behalten ihre strikten Recoveryerwartungen.
+
+C08 unter Windows bestätigt exklusive daemon-Stageerstellung mit ACK,
+Abweisung des separat geöffneten Backends, Original-Creator-Publish und
+reguläres Providerwrite. Der danach gestartete alte Job scheitert an seinem
+gültigen `sync-replica`-Unique-Stage als `untracked`. Die Ownershipgrenze muss
+die gemeinsame enge Unique-Stage-Grammatik verwenden; Namensform allein
+erteilt weiterhin keinen Creatorbeweis. Der tatsächliche alte Job, Baseline,
+Restart und No-op bleiben im selben C08-Ablauf verbindlich.
+
+Der kandidatgebundene Remote-Formatpatch mit SHA-256
+`08b1ef792d85d79070c2921696a0b0184d16da59eeaed68993d84b8f840307d4`
+ist nach exaktem Source-/Pfadabgleich statisch übernommen. Kein Größenverstoß
+steht im Formatreport. Alle konkreten Folgekorrekturen werden zusammen
+committed/gepusht und durch denselben vollständigen Suite-Einstieg geprüft.
+C10 meldet weiterhin fehlende `SE_DRIVE_TEST_CLIENT_ID` und
+`SE_DRIVE_TEST_REFRESH_TOKEN`. Echte Google-Abnahme und terminaler Release
+bleiben offen; keine lokale Build-/Test-/Releaseausführung wurde gestartet.

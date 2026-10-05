@@ -75,6 +75,27 @@ historische Root-Auswahl beweisen. Auch ein alter Root-Hint ohne MIME-Angabe
 bleibt nach bestätigtem Löschen, Verschieben oder Umbenennen reserviert,
 statt bei der ersten Migration einen neuen gleichnamigen Ordner zu wählen.
 
+Der fünfte Lauf präzisiert C02: `Notebook` und `notebook` werden bei
+Drive↔Drive schon im Seed als `NameImpossibleOnTarget` geschützt. Der
+Driveadapter erbt noch den konservativen case-insensitive VFS-Default,
+obwohl M1/M2 Titel und IDs exakt unterscheiden. M2 meldet deshalb den
+belegten exakten Drivepfadvertrag; eine konservative Gegenstelle behält
+weiterhin die gefaltete Pairpolicy. Lesen: Drive-Name-Ref, `KeyPolicy`,
+`state_spellings`, Journalreplay, Full-/Incrementalplanung und gespeicherte
+Conflict-/Restore-/Resume-Pfade. Die zweite Gapprüfung belegt: vorhandene
+gefaltete Spellingkeys dürfen beim Policywechsel weder verworfen werden
+noch ihre tatsächlich unterschiedlichen Seitenschreibweisen verlieren.
+Erwartet ist eine beleggebundene Migration unter unverändertem Pairlock,
+StateKey und atomarem privaten Store; Preview bleibt nichtmutierend.
+Nur tatsächlich gespeicherte gültige alte Zuordnungen sind Aliasbelege;
+neue gleich gefaltet aussehende Namen werden dadurch nicht neu gepaart.
+Malformed/widersprüchliche Records bleiben geschützt. Der bestehende
+C02-Gesamtablauf erhält historische Spellingbytes aus seinem echten Seed,
+öffnet dieselben Endpunkte erneut und verlangt No-op, anschließend neue
+unabhängige Casebäume, Gegenänderung, genaue Backup-/Restorebytes, Restart
+und No-op. Die Enginegrenze deckt zusätzlich historische unterschiedliche
+Seitenschreibweisen und ihre gespeicherten Auflösungswege ab.
+
 ### M3 Gemeinsame sichere Sync-Integration
 
 - F2–F6. Dateien: betroffene Consumer unter `bisync/os/shared/`, insbesondere
@@ -150,6 +171,16 @@ bekannten Retained-/Stage-Slots sicher aufräumen und den Intent abschließen.
 Unbestätigte oder fehlgeschlagene Veröffentlichung behält dagegen ihre
 Recoveryevidenz; kein Digest-/Identitäts-/Ownerguard wird geschwächt.
 
+Der fünfte Lauf bestätigt die vollständigen SFTP-/Key-/SSH-Agent-Flows
+mit legitimer Gegenänderung nach erfolgreichem Publish. Zwei bisherige
+C06/C07-Fixtureassertions erwarten danach noch einen offenen Intent.
+Ihr Orakel muss stattdessen tatsächlichen erfolgreichen Abschluss ohne
+Intent, Stage und Retainedslot sowie restaurierbare Backupbytes und
+unveränderte Baseline/Checkpoint prüfen. Die fünf real fehlgeschlagenen
+oder unklaren Publikationszweige behalten ihre offenen-Intent-, Fremdbyte-,
+Ownerorientierungs- und Cleanup-Orakel. Kein Produktguard wird hierfür
+geändert; dieselben vorhandenen ausgewählten FQNs bleiben erhalten.
+
 ### M4 Bestehende Job-/Updategrenzen vollständig erhalten
 
 - F3/F5/F6. Dateien: `syncjobs`/`daemon`/`connect`/Desktop-/Mobile-Sync-Grenzen
@@ -191,6 +222,21 @@ strikt. Der erste neue No-op entdeckt die reale Job-/Replica-Ownerbaseline,
 deren bestätigte Records erhalten bleiben müssen; beim anschließenden
 Force-stop gelten wieder unveränderte Config-/Ownerbaseline-/Journalhashes.
 
+Der fünfte Windows-Lauf bestätigt den exklusiven daemon-ACK, die Abweisung
+des separat geöffneten Backends und den Publish durch den ursprünglichen
+Creator. Der folgende reale Altjob erreicht einen weiteren gültigen
+`unique_staging_path(..., "sync-replica")`-Stage, den die Purpose-Liste nicht
+erfasst. M4 verwendet deshalb die vorhandene enge Unique-Stage-Grammatik
+für Creator-Eligibility aller tatsächlich erzeugten Purposes. Die breitere
+Quarantäne-/Recovery-/Privatnamenerkennung ist kein Creatorbeweis.
+Reserve→WriteNew→ACK→Ready, Ledger/Bindung/Snapshot/Mutation-once und der
+separate Upload-Discardvertrag bleiben unverändert. C08 verlangt weiterhin
+den vollständigen echten Altjob mit derselben Baseline, Restart und No-op;
+ungültige Nonces, fremde Creator, verlorene ACKs und Leasewechsel bleiben
+abgewiesen. C09 bestätigt nun das tatsächliche veröffentlichte APK-Update
+und den vollständigen Force-stop-/Retry-/Konflikt-/Versions-/Gegenänderungs-
+Ablauf mit übernommenem alten Job, Ownerbaseline und alten Sicherungen.
+
 ### M5 Eine komplette Remote-Task-Suite
 
 - F1–F7. Erst nach M1–M4 implementieren/aktualisieren.
@@ -209,6 +255,22 @@ Force-stop gelten wieder unveränderte Config-/Ownerbaseline-/Journalhashes.
   Szenarien, übersprungene Gegenstellen oder Cleanupfehler sind kein Pass.
 - Abnahme: alle S1–S8/C01–C10 als ein Pipelineergebnis, konkret in `abnahme.md`.
   S9 gehört ausschließlich M6. Abhängigkeit: M1–M4 komplett.
+
+Die fünfte C04-Auswertung erreicht nach vollständigen SFTP-Flows FTP.
+Der reale Server bestätigt den unveränderten Literalnamen beim Upload;
+LIST ohne MLSx liefert eine gröbere mtime als SIZE+MDTM beim frischen Stat.
+Lesen→umsetzen: Remote-Metadaten-/Provider-Fixture-Refs, FTP-Metadatengrenze,
+RFC-3659-Vertrag und die unveränderten Checksumcapture-/Applyguards.
+Erwartet sind konsistente frische Dateisignaturen für reguläre adressierbare
+LIST-Kinder und Stat aus demselben nichtrekursiven Probe. Unsupported/550,
+Links und nicht adressierbare Namen behalten vollständige Eltern-LIST- und
+geschützte Omissionsentscheidungen; keine Guards werden gelockert.
+Der Windows-UNC-Flow schließt vollständig ab. Der folgende mapped-Vergleich
+vergleicht dagegen gültige native Pfade mit gemischten/doppelten Separatoren
+als Text. Nur dieses native Fixture-Orakel verwendet native Pfadgleichheit;
+alle Remote-Locator-/Identitäts-/Byte-/No-op-Verträge bleiben bestehen.
+Die beiden konkreten Grenzen werden im selben vollständigen C04-Providerflow
+bestätigt, einschließlich aller bislang danach nicht erreichten Provider.
 
 ### M6 Ein vollständiger Release
 
@@ -263,18 +325,18 @@ nimmt vor Code den vollständigen Plan auseinander; keine weitere Reviewrunde.
 | Stufe 1 / erste Recherche | fertig | `recherche.md`, gesicherte Refs |
 | Stufe 2 / zweite Recherche | fertig, Lücken eingearbeitet | dieser Plan und `abnahme.md` |
 | Einmalige Plan-Kritik | abgeschlossen, alle Befunde eingearbeitet | `review.md` |
-| M1/M2 | Code und eigener Self-Review fertig | vollständige Kandidatensammlung, reale Root-ID, private Folderbindung und stabile Projektion; Herkunftsbeweis getrennt von Parentprojektion und neuem Accountcache, auch am normalen Writer und gemeinsamen Dateilader über wechselnde Job-Reihenfolge; bestätigtes Missing bereits bei erster Migration geschützt; Remote-Abnahme ausstehend |
-| M3 | Folgekorrektur und eigener Self-Review abgeschlossen; Laufzeitbestätigung offen | C05 einschließlich Nested-Mirror sowie C06/C07 auf Linux/Windows bestätigt. C04 schließt jetzt den bestätigten eigenen Replacementintent ab. C02 nennt jede Auslassung samt Phase und Pfad; seine Ursache bleibt bis zur Diagnose offen. Literal-/Persistenz-/Versions-, Fremdbyte-, Backup- und Indexorakel bleiben erhalten |
-| M4 | Folgekorrekturen und eigener Self-Review abgeschlossen; Laufzeitbestätigung offen | Beide veröffentlichten Desktop-Workerübernahmen und Linux-SFTP-Crossremote samt Reload/StateKey/No-op bestätigt. Direct registriert den exklusiven daemon-Purpose in derselben Creator-Kette; Abweisung des zweiten geöffneten Backends und erfolgreicher Original-Creator-Publish gehören zu C08. Gültige Fallback-Fixture, UNC-Port0-Vertrag und exakte C09-Format-/Ownerimportprüfung sind implementiert |
-| M5 Remote-Gesamtablauf | vierter Workflow vollständig fehlgeschlagen ausgewertet; Folgekorrekturen werden gemeinsam bestätigt | Linux/Windows C01/C03/C05/C06/C07 und echte veröffentlichte Altworker-Übernahme erfolgreich. Beide Hosts vollständig und exakt ausgewertet; C02/C04/C08 und Android-Updateabnahme bleiben offen. Share-Refresh-/Exec-Verträge bestätigt. C10 benötigt weiterhin die angefragte Drive-Testautorisierung |
+| M1/M2 | konkreter C02-Policyfix und Altspellingmigration in Umsetzung | C01/C03 auf beiden Hosts bestätigt. Drive muss seine exakte Pfadfähigkeit melden und belegte alte Seitenschreibweisen erhalten; historischer Seed/Restart und neue unabhängige Casebäume gehören zum unveränderten C02-Gesamtablauf |
+| M3 | konkrete Folgekorrekturen in Umsetzung; gemeinsame Bestätigung offen | C05 bestätigt; vollständige reale SFTP-Flows schließen nach verifiziertem Intentabschluss ab. Zwei C06/C07-Orakel werden auf tatsächlichen erfolgreichen Abschluss ausgerichtet; alle realen Failure-/Lost-ACK-/Fremdbyte-/Baseline-/Backupguards bleiben erhalten |
+| M4 | konkrete Unique-Stage-Korrektur in Umsetzung; C09 vollständig bestätigt | Beide echten veröffentlichten Desktop-Workerübernahmen und Android-Update einschließlich Force-stop/Retry/Konflikt/Gegenänderung erfolgreich. Tatsächlicher Direct-ACK/Creatorwechsel/Publish erfolgreich; der folgende alte Job benötigt dieselbe Ownershipkette auch für seinen gültigen Replica-Purpose |
+| M5 Remote-Gesamtablauf | fünfter Workflow vollständig fehlgeschlagen ausgewertet; gleicher Fixloop | Beide Hosts vollständig ohne Abbruch und exakt ausgewertet. C01/C03/C05 und C09 bestätigt; C02/C04/C06/C07 sowie Windows-C08 bleiben offen. FTP-Metadaten und mapped-Pfad-Orakel werden korrigiert. C10 benötigt weiterhin die angefragte echte Drive-Testautorisierung |
 | M6 Release | offen | erst nach M5 |
 
-Der [vierte Workflow](https://github.com/b1ue-man/smart-explorer/actions/runs/37261440798)
-prüft `7b3cda8a92a957f85e4c65dfe092c8deeb0f1335` und ist vollständig
-fehlgeschlagen ausgewertet. Die echten Direct-/Room-Fixtures und die
-zugeordneten Exec-Rechte-/Cancellation-Abläufe sind erfolgreich. Beide Hosts
-führen alle gewählten Fälle ohne Prozessabbruch aus; unmittelbare Diagnosen
-und passende Ergebniszähler sind bestätigt. Die konkreten verbleibenden
+Der [fünfte Workflow](https://github.com/b1ue-man/smart-explorer/actions/runs/37267225051)
+prüft `9b4bb4d2d27dc3fcdd14e96ebaf2ea23deb467ce` und ist vollständig
+fehlgeschlagen ausgewertet. Beide Hosts führen alle gewählten Fälle ohne
+Prozessabbruch aus; unmittelbare Diagnosen und passende Ergebniszähler
+sind bestätigt. Der tatsächliche Android-Altjob schließt alle Update-/
+Neustartphasen erfolgreich ab. Die konkreten verbleibenden
 Befunde stehen bei M3/M4 und in `abnahme.md`; sie werden gemeinsam im selben
 Suite-Einstieg bestätigt. Private Uploadgrenzen und alle bestehenden
 Erhaltungs-/No-op-Orakel bleiben verbindlich. Kein Release vor erfolgreichem M5.
