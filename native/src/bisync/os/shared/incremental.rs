@@ -213,6 +213,7 @@ pub(super) fn try_incremental_run(state: &RunState<'_>) -> Option<Outcome> {
         opts,
         &spellings,
         target_pair,
+        state.cancel,
     ) {
         return None;
     }
@@ -368,8 +369,15 @@ pub(super) fn try_incremental_run(state: &RunState<'_>) -> Option<Outcome> {
         && out.stopped.is_none()
         && !state.cancel.load(Ordering::Acquire)
     {
-        let cursor = cursor.or(rec.source_cursor);
-        let _ = bootstrap_run(state, &out.baseline, cursor);
+        let cursor = cursor.or(rec.source_cursor.clone());
+        let _ = index_commit::commit_incremental(
+            state,
+            &out.baseline,
+            &rec,
+            [&items_a, &items_b],
+            &changes,
+            cursor,
+        );
     }
     Some(out)
 }

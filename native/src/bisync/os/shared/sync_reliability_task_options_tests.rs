@@ -133,27 +133,43 @@ fn sync_reliability_task_options_all_conflicts_preserve_losing_bytes() {
         assert_eq!(pair.bytes(PairSide::B, "file.txt"), winner, "{conflict:?}");
         let settled = pair.run(opts, &filter);
         clean(&settled);
-        assert!(
-            pair.versions(&settled)
-                .iter()
-                .any(|entry| pair.version_bytes(entry) == loser),
-            "{conflict:?}"
-        );
+        assert_eq!(pair.stored(&settled), settled.baseline);
         if conflict == ConflictMode::KeepBoth {
+            // KeepBoth uses the confirmed sibling as its reversible backup.
+            // It does not also archive the same loser in the versions store.
+            let mut saved_name = None;
             for side in [PairSide::A, PairSide::B] {
-                let sibling = std::fs::read_dir(pair.path(side, ""))
+                let siblings: Vec<_> = std::fs::read_dir(pair.path(side, ""))
                     .unwrap()
                     .map(|entry| entry.unwrap().path())
-                    .find(|path| {
+                    .filter(|path| {
                         path.file_name()
                             .unwrap()
                             .to_str()
                             .unwrap()
                             .contains("Konflikt")
                     })
-                    .unwrap();
+                    .collect();
+                assert_eq!(siblings.len(), 1);
+                let sibling = &siblings[0];
+                let name = sibling.file_name().unwrap().to_str().unwrap().to_string();
+                if let Some(saved_name) = &saved_name {
+                    assert_eq!(&name, saved_name);
+                } else {
+                    saved_name = Some(name.clone());
+                }
                 assert_eq!(std::fs::read(sibling).unwrap(), loser);
+                let recorded = settled.baseline[&name];
+                assert!(recorded.0.is_some() && recorded.1.is_some());
             }
+            assert!(pair.versions(&settled).is_empty());
+        } else {
+            assert!(
+                pair.versions(&settled)
+                    .iter()
+                    .any(|entry| pair.version_bytes(entry) == loser),
+                "{conflict:?}"
+            );
         }
         pair.no_op(opts, &filter);
     }

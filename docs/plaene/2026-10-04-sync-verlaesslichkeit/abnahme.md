@@ -123,6 +123,19 @@ nun einen stabil eigenen Token; die tatsächliche Pairalias-Prüfung bleibt
 unverändert. Die Provider-Korrektur besitzt einen eigenen DAV-Root mit
 bestätigtem Multistatus sowie unabhängig ermittelte Relayports und tatsächlich
 verbundene Peers. Diese Änderungen sind noch keine erneute Laufzeitabnahme.
+
+Die konkreten nativen Korrekturen sind implementiert und durch die jeweiligen
+Umsetzer selbst geprüft. Die bisherigen vollständigen Byte-/Backup-/No-op-
+Orakel bleiben erhalten; der Indexbeweis fordert zusätzlich eine vollständig
+bestätigte, nicht dirty Cachegeneration mit genauen Journal-Signaturen.
+Der private Altworkerroot liegt jetzt außerhalb der Uploadgrenze. Seine
+Diagnose exportiert nur rekonstruierte Versionen, ausgewählte Worker-/Handoff-
+Statusfelder, Command-Größen/Hashes und den Ergebnisbericht. Entfernt wird der
+Privatroot erst nach bestätigtem Prozessende und Autostart-Restaurierung;
+Cleanupfehler lassen ihn privat erhalten und schlagen die Stufe fehl.
+Der nächste gemeinsame Remote-Aufruf muss die gesammelten Korrekturen bestätigen
+und die mit vollständigem `task.get` ergänzte Android-Altzustandsdiagnose liefern.
+
 Die Windows-Stufe ist ebenfalls vollständig ausgewertet. Notebook,
 Bindungsmigration, Schutz und die echte Altworker-Übernahme erfüllen auch dort
 ihre Orakel. Zusätzlich scheitert die gesunde `healthy.txt`-Änderung an einem

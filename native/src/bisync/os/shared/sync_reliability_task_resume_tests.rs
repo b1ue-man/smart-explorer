@@ -122,8 +122,18 @@ fn sync_reliability_task_resume_safe_transient_retry_happens_before_single_publi
     job.retry_delay_secs = 0;
     job.verify = true;
     job.max_transfers = 1;
+    job.versions_location = VersionsLocation::AppData;
     let opts = job.checked_opts(false).unwrap();
-    pair.put(PairSide::A, "file.txt", b"retried complete content", TIME);
+    pair.put(PairSide::A, "file.txt", b"confirmed before retry", TIME);
+    let seeded = pair.run_settings(opts, &filter, RunSettings::for_job(&job.id));
+    clean(&seeded);
+    assert_eq!(pair.bytes(PairSide::B, "file.txt"), b"confirmed before retry");
+    assert_eq!(pair.stored(&seeded), seeded.baseline);
+    let opens = pair.b.stage_opens.load(Ordering::SeqCst);
+    let promotions = pair.b.promotions.load(Ordering::SeqCst);
+    // Replica markers already exist, so this fault reaches the copy stage
+    // inside run_with_retry rather than first-run replica identification.
+    pair.put(PairSide::A, "file.txt", b"retried complete content", TIME + 10_000);
     *pair.b.write_fault.lock().unwrap() = Some((io::ErrorKind::ConnectionReset, 1));
     let out = pair.run_settings(opts, &filter, RunSettings::for_job(&job.id));
     clean(&out);
@@ -131,13 +141,17 @@ fn sync_reliability_task_resume_safe_transient_retry_happens_before_single_publi
         out.state.as_ref().unwrap().owner,
         StateOwner::Job(job.id.clone())
     );
-    assert_eq!(pair.b.stage_opens.load(Ordering::SeqCst), 2);
-    assert_eq!(pair.b.promotions.load(Ordering::SeqCst), 1);
+    assert_eq!(out.state, seeded.state);
+    assert_eq!(pair.b.stage_opens.load(Ordering::SeqCst), opens + 2);
+    assert_eq!(pair.b.promotions.load(Ordering::SeqCst), promotions + 1);
     assert_eq!(
         pair.bytes(PairSide::B, "file.txt"),
         b"retried complete content"
     );
     assert_eq!(pair.stored(&out), out.baseline);
+    let old = pair.versions(&out);
+    assert_eq!(old.len(), 1);
+    assert_eq!(pair.version_bytes(&old[0]), b"confirmed before retry");
     let noop = pair.run_settings(opts, &filter, RunSettings::for_job(&job.id));
     clean(&noop);
     assert_eq!(noop.state, out.state);
@@ -145,7 +159,11 @@ fn sync_reliability_task_resume_safe_transient_retry_happens_before_single_publi
         noop.stats.a_to_b + noop.stats.b_to_a + noop.stats.deleted,
         0
     );
-    assert_eq!(pair.b.promotions.load(Ordering::SeqCst), 1);
+    assert_eq!(pair.b.promotions.load(Ordering::SeqCst), promotions + 1);
+    assert_eq!(pair.stored(&noop), noop.baseline);
+    pair.restore(&out, &old[0], PairSide::B);
+    assert_eq!(pair.bytes(PairSide::B, "file.txt"), b"confirmed before retry");
+    assert_eq!(pair.stored(&out), out.baseline);
 }
 
 #[test]

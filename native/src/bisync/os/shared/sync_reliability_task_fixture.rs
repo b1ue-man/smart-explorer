@@ -220,12 +220,41 @@ impl Pair {
         .unwrap();
     }
     pub(super) fn index_complete(&self, out: &Outcome) -> bool {
-        let id = super::replica_state::index_id(out.state.as_ref().unwrap()).unwrap();
-        super::state_store::SyncStateStore::open_at(&self.db)
+        let state = out.state.as_ref().unwrap();
+        if super::state_metadata::index_dirty_path(state)
             .unwrap()
+            .try_exists()
+            .unwrap()
+        {
+            return false;
+        }
+        let id = super::replica_state::index_id(state).unwrap();
+        let store = super::state_store::SyncStateStore::open_at(&self.db).unwrap();
+        if !store
             .load_pair(&id)
             .unwrap()
-            .is_some_and(|record| record.bootstrapped)
+            .is_some_and(|record| record.bootstrapped && record.target_managed)
+        {
+            return false;
+        }
+        let keys = pair_key_policy(&self.a, &self.roots[0], &self.b, &self.roots[1]);
+        let confirmed: Baseline = self
+            .stored(out)
+            .into_iter()
+            .map(|(rel, entry)| (keys.key(&rel).into_owned(), entry))
+            .collect();
+        let (a, b) = store.load_pair_items(&id).unwrap();
+        let mut cached = Baseline::new();
+        for (side, items) in [(PairSide::A, a), (PairSide::B, b)] {
+            for item in items.values().filter(|item| !item.is_dir && !item.deleted) {
+                let entry = cached.entry(keys.key(&item.rel).into_owned()).or_default();
+                match side {
+                    PairSide::A => entry.0 = item.sig,
+                    PairSide::B => entry.1 = item.sig,
+                }
+            }
+        }
+        cached == confirmed
     }
     pub(super) fn no_op(&self, opts: BisyncOptions, filter: &WalkFilter<'_>) -> Outcome {
         let promotions =

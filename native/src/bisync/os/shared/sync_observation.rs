@@ -9,8 +9,8 @@ pub(super) fn named(
     parent: &str,
     literal_name: &str,
 ) -> io::Result<Vec<VfsMeta>> {
-    vfs::validate_child_name(literal_name)?;
-    matching(backend, parent, |name| Ok(name == literal_name))
+    vfs::sync_child_path(backend, parent, literal_name)?;
+    matching(backend, parent, |name, _| name == literal_name)
 }
 
 /// Resolve a file locator through its provider's child contract rather than
@@ -18,34 +18,33 @@ pub(super) fn named(
 pub(super) fn at_path(backend: &dyn Backend, path: &str) -> io::Result<Vec<VfsMeta>> {
     let parent = super::paths::parent_of(path)
         .ok_or_else(|| super::apply_guard::drift("sync file has no parent"))?;
-    matching(backend, &parent, |name| {
-        vfs::sync_child_path(backend, &parent, name).map(|child| child == path)
-    })
+    matching(backend, &parent, |_, child| child == path)
 }
 
 fn matching(
     backend: &dyn Backend,
     parent: &str,
-    matches: impl Fn(&str) -> io::Result<bool>,
+    matches: impl Fn(&str, &str) -> bool,
 ) -> io::Result<Vec<VfsMeta>> {
     let Some(listing) = directory(backend, parent)? else {
         return Ok(Vec::new());
     };
     for omitted in listing.omitted {
         // An unaddressable omission cannot prove which child was protected.
-        if vfs::validate_child_name(&omitted.rel).is_err() {
-            return Err(super::apply_boundary::protected(
-                super::OmissionKind::NotRepresentable,
-            ));
-        }
-        if matches(&omitted.rel)? {
+        let child = vfs::sync_child_path(backend, parent, &omitted.rel).map_err(|_| {
+            super::apply_boundary::protected(super::OmissionKind::NotRepresentable)
+        })?;
+        if matches(&omitted.rel, &child) {
             return Err(super::apply_boundary::protected(omitted.reason.into()));
         }
     }
     let mut entries = Vec::new();
     for entry in listing.entries {
-        vfs::validate_child_name(&entry.name)?;
-        if matches(&entry.name)? {
+        // Sync uses the provider's literal child contract. The recursive
+        // deletion validator has stricter native-path rules (e.g. backslash)
+        // and must not reject a valid Drive sibling or selected literal file.
+        let child = vfs::sync_child_path(backend, parent, &entry.name)?;
+        if matches(&entry.name, &child) {
             entries.push(entry);
         }
     }
