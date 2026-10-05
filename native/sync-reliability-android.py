@@ -64,9 +64,15 @@ def certificates(apks, env, logs):
     for name in ("old-release.apk", "app-debug.apk", "app-debug-androidTest.apk"):
         output = command([signer(env), "verify", "--verbose", "--print-certs", apks / name], env,
                          log=logs / (name + "-certificate.log"))
-        hashes = sorted(re.findall(r"Signer #\d+ certificate SHA-256 digest: ([0-9a-fA-F]+)", output))
-        if not hashes:
-            raise RuntimeError("No verified APK signing certificate: " + name)
+        # Keep the same signer forms as android/build-release-apk.sh: numbered,
+        # SDK-range and per-scheme signers; exclude source stamps and lineage.
+        hashes = sorted({digest.lower() for line in output.splitlines()
+                         if " in lineage certificate " not in line
+                         for digest in re.findall(
+                             r"^(?:V[0-9.]+ )?Signer[^:]*:? certificate SHA-256 digest: *([0-9a-fA-F]{64})\s*$",
+                             line)})
+        if len(hashes) != 1:
+            raise RuntimeError("Expected one verified APK signing certificate: " + name)
         result[name] = hashes
     if len({tuple(value) for value in result.values()}) != 1:
         raise RuntimeError("Published/development/instrumentation APK signatures differ")
