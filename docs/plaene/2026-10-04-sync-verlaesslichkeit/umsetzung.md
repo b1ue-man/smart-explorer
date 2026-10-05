@@ -419,20 +419,60 @@ nimmt vor Code den vollständigen Plan auseinander; keine weitere Reviewrunde.
 | Stufe 1 / erste Recherche | fertig | `recherche.md`, gesicherte Refs |
 | Stufe 2 / zweite Recherche | fertig, Lücken eingearbeitet | dieser Plan und `abnahme.md` |
 | Einmalige Plan-Kritik | abgeschlossen, alle Befunde eingearbeitet | `review.md` |
-| M1/M2 | vollständige Umsetzung quellenfertig; historische Korrekturen brauchen Remote-Bestätigung | `082e5fab` materialisiert den tatsächlichen historischen Dirkeyvertrag; `4d443a2c` erhält belegte History über Full/Preview/Incremental/Completed und Lösch-Retry. Die vollständigen historischen C02/C05-Orakel bleiben verpflichtend |
-| M3 | vollständige Umsetzung quellenfertig; Provideranschlüsse brauchen Remote-Bestätigung | `59d1d380` erhält DAV-Collection-Metadaten samt Auth; `19134797` verbindet den privaten Sharearchivvertrag typisiert über Peer/IPC/Agent/Cache mit frischer Rootprüfung. Die vorher bestätigten C06/C07-Schutz-/Backup-/Recovery-Orakel bleiben in derselben Suite |
-| M4 | Umsetzung quellenfertig; Windows-Altjob braucht Bestätigung der Versionskorrektur | Bestehende C04/C08-Locators und Altjobabläufe unverändert. Zusätzlicher normaler Direct-/Room-C05-Flow verlangt private Backupbytes, Ownerabwehr, Restore, Reopen und No-op; reine IPC-Policy erzeugt keinen Worker-RPC |
-| M5 Remote-Gesamtablauf | sechster Workflow vollständig ausgewertet; ein aktualisierter Suite-Einstieg bereit | Dieselben C01–C10 plus vorhandene exakte DAV-Mutation-/PUT-No-follow-Orakel in C04. Kein lokaler Lauf und keine zusätzliche Pipeline. C10 benötigt weiterhin die angefragte echte Drive-Testautorisierung |
-| M6 Release | offen | erst nach M5 |
+| M1/M2 | Drive-Namens-/Identitätsflüsse bestätigt; Recorded-Anschlussorakel noch offen | C02/C03 samt historischen Viermaps, gefalteten Dirkeys, Counterpart-/Backup-/Restore-/Restart-/No-op-Flows bestehen im siebten Lauf; inkrementelle C05-History besteht. M2.C05-7 korrigiert die belegte öffentliche Fehlergrenze ohne Abschwächung der Recoverybeweise |
+| M3 | Schutz-/Recovery-/Versionen bestätigt; DAV-Anlage offen | C06/C07 und private Direct-/Room-Versionen bestehen auf beiden Hosts. M3.C04-7 erhält MKCOL-Collectionkonvention, Mutationsschutz und vollständige Providerintegration |
+| M4 | alte Desktop-/Android-Jobs bestätigt | C08 besteht auf beiden Hosts einschließlich realem v0.5.169-Workerwechsel. C09 bestätigt das echte Altappupdate mit Force-stop, erhaltenem Jobowner und Wiederanlauf. Derselbe ganze Ablauf bleibt verpflichtend |
+| M5 Remote-Gesamtablauf | siebter Workflow vollständig ausgewertet; konkrete Folgekorrekturen geplant | C04: DAV-MKCOL Linux, ungültige ZIP-Fixtureroot Windows. C05: Recorded-Fehlerorakel auf beiden Hosts. Kandidatgebundener Remote-Formatpatch übernommen (`135bf3b6`). C10 braucht weiterhin angefragte echte Drive-Testautorisierung |
+| M6 Release | offen | erst nach vollständig erfolgreichem M5 |
 
-Der [sechste Workflow](https://github.com/b1ue-man/smart-explorer/actions/runs/37276864627)
-prüft `0f672429d1f6b933ebd36d2a9878576bd8969b6c` und ist vollständig
-fehlgeschlagen ausgewertet. Alle eigenen Provider-/Workerprozesse wurden
-abgeschlossen; die genaue Ausführung und private Uploadgrenze sind bestätigt.
-Die neuen konkreten Grenzen stehen bei M2–M5 und in `abnahme.md`; Korrekturen
-werden gemeinsam durch denselben Suite-Einstieg bestätigt. Es entsteht weder
-eine weitere Plan-Kritik noch eine zweite Abnahme-Suite. Kein Release vor
-vollständigem erfolgreichem M5.
+Der [siebte Workflow](https://github.com/b1ue-man/smart-explorer/actions/runs/37289323834)
+prüft `ffba5c54323ef093b63b8d8407ffcc612847ebc8` und ist am
+2026-10-05 um 10:20:24 UTC vollständig fehlgeschlagen abgeschlossen.
+Alle eigenen Provider-/Workerprozesse sind abgeschlossen; exakte Ausführung
+und Uploadgrenzen sind bestätigt. Die nachfolgenden Anschlussmilestones sind
+vor Änderungen anhand aktueller Source und Primärprotokolle geplant.
+Es entsteht keine weitere Plan-Kritik, zweite Suite oder Patchveröffentlichung.
+
+### M3.C04-7 Bestehende Providerabläufe vollständig abschließen
+
+- Quellen: `webdav/core/transfer_ops.rs`, vorhandene DAV-Collection-/Redirect-
+  Guards sowie `connect/os/shared/sync_reliability_task_provider_tests.rs`.
+  Verbundene Grenzen: `webdav/core/{extensions,webdav,connection}.rs`,
+  `zipfs/os/shared/zipfs.rs`, `vfs/core/core.rs`, `vfs/os/shared/sync_roots.rs`
+  und Backend-Snapshotauswahl. Lesen: aktualisierte Provider-/Runtime-Refs.
+- Outcome: normale neue und bereits vorhandene DAV-Collections funktionieren
+  ohne Schreibredirect oder zweite Mutation. Exklusive Anlage schützt auch
+  einen vorhandenen Dateinamen; fehlende Parents, Entzug, Transport und
+  unerwartete Redirects bleiben echte Fehler. Literalencoding, TLS, Agenten,
+  Pooling, gespeicherte Identität und GET-/PUT-/MOVE-/COPY-Verträge bleiben.
+- ZIP-Source verwendet die gültige bestehende logische Archivwurzel. Die
+  allgemeine Nichtleer-/Overlapgrenze wird nicht gelockert. Tatsächliche
+  read-only-Abweisung, genaue Bytekopie und weiterer No-op bleiben erhalten.
+- Erwartetes Signal: derselbe komplette C04 schließt alle tatsächlichen
+  Linux-/Windows-Providerpaare, Wiederöffnung, Gegenänderung und ZIP ab;
+  vorhandene schmale MKCOL-/Mutation-/Congestionguards bestätigen die direkt
+  betroffene Grenze in derselben Suite. Abhängigkeit: bestehender M3-Code.
+
+### M2.C05-7 Gespeicherte Wiederaufnahme am wirklichen API prüfen
+
+- Quellen: `bisync/os/shared/sync_reliability_task_spelling_migration_tests.rs`;
+  verbundene readonly Grenzen `resolve.rs`, `single_recorded.rs`,
+  `engine_provider_fixture.rs`, Recorded-/Intent-/Checkpoint-Verträge.
+  Lesen: aktualisierte Runtime-Ref und bestehende Literal-/Historyverträge.
+- Outcome: das historische C05-Orakel erkennt den tatsächlich injizierten
+  Lost-ACK an der öffentlichen Recorded-Grenze. Der konkrete Fehlertext,
+  konsumierte Injektion, veröffentlichte Literal-Gewinnerbytes, unveränderte
+  alte Baseline und offener gebundener Intent bilden zusammen den Beweis.
+  Kein pauschales `is_err`, Baseline-Reset oder Produktionskindwechsel nur
+  zur Anpassung an die bisherige unzutreffende Fixtureannahme.
+- Erwartetes Signal: derselbe bestehende FQN erreicht den geschützten Delete,
+  Recovery ohne weitere Promotion, Backup-/Restorebytes, alte Dirlöschung,
+  Neuerstellung, Wiederöffnung und No-op. Echte Fehler und alte Seitenslots
+  bleiben strikt. Abhängigkeit: bereits implementierte bewiesene History.
+- Beide Anschlussmilestones werden selbst geprüft und kohärent committed.
+  Erst nach kompletter Umsetzung passt Main den einen Suite-Einstieg an,
+  aktualisiert den Rootgraph, pusht den gesamten Kandidaten und startet
+  ausschließlich dieselbe vollständige Remote-Abnahme.
 
 Pro Meilenstein: gegen Refs und Aufrufer selbst prüfen, kohärent committen;
 Abnahme erst gesammelt nach kompletter Umsetzung. Nach nativen Änderungen

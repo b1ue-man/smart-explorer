@@ -126,3 +126,27 @@ und Authorization verfolgt; Share-Private-/Ownerguards bleiben maßgeblich.
 Die konkreten erwarteten Ergebnisse stehen bei M2–M5 und in `abnahme.md`.
 Keine neue allgemeine Reviewrunde oder zusätzliche Suite. C10 benötigt zwei
 erforderliche OAuth-Eingänge; das Client-Secret hängt vom verwendeten Client ab.
+
+## Siebter Fixloop: zweistufige Anschlussplanung
+
+Am 2026-10-05 ist Lauf `37289323834` auf `ffba5c54` einschließlich aller
+vier Stufen ausgewertet. Stufe 1 lokalisiert die konkreten Restfehler anhand
+der echten Serverlogs, Hostberichte und aktuellen Source: wiederholtes DAV-
+MKCOL ohne Slash, leere ZIP-Scanwurzel der Fixture und eine rohe Provider-
+Fehlerart als unzutreffende Erwartung am öffentlichen Recorded-API.
+Die primäre Protokollrecherche prüft RFC 4918 §5.2/§9.3 und Apache
+DirectorySlash; die Syntax und aktuelle API stehen in der Provider-Ref.
+
+Stufe 2 konkretisiert M3.C04-7 und M2.C05-7 in `umsetzung.md`. Die zweite
+Gapprüfung verfolgt ZIP durch `Backend::is_local`, Namespaceidentität und
+`validate_sync_roots`: die bestehende logische Archivwurzel `/` wird nicht
+als natives Root behandelt. Recorded-Apply rekonstruiert den konkreten
+Fehlertext als `Other`; Injektion, Slotbytes, Intent, Baseline und Replay
+bleiben eigenständige strikte Beweise. Für MKCOL werden belegte Dateinamen,
+fehlende Parents, Rechte, Transport, Pooling, Redirects und literal kodierte
+URLs ausdrücklich erhalten. Nur eine nachgewiesene vorhandene Collection
+erlaubt idempotenten Erfolg. Kein Serverworkaround und kein Fehler-Skip.
+
+Der bereits einmal vollständig kritisierte Plan bleibt derselbe. Es gibt
+keine neue Reviewrunde, zweite Suite oder Zwischenveröffentlichung. C10
+bleibt wegen fehlender tatsächlicher Google-OAuth-Eingänge offen.

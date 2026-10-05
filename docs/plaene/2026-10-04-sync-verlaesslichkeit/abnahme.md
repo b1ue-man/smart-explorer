@@ -523,3 +523,51 @@ extrahiert und geclustert. Sein Manifest entspricht exakt dem aktuellen
 `native/src`-Korpus; es gibt keinen separaten oder partiellen nativen Graph.
 Die Änderungen werden als ein Kandidat gepusht und ausschließlich durch den
 bestehenden vollständigen Remote-Suite-Einstieg bestätigt.
+
+
+## Siebte gemeinsame Abnahme und konkrete Restgrenzen
+
+Lauf [37289323834](https://github.com/b1ue-man/smart-explorer/actions/runs/37289323834)
+auf `ffba5c54323ef093b63b8d8407ffcc612847ebc8` ist am 2026-10-05 um
+10:20:24 UTC vollständig abgeschlossen und ausgewertet. Beide Hostberichte
+bestätigen exakte Ausführung und vollständiges Provider-/Workercleanup.
+Android-Build und tatsächlicher Gerätelauf bestehen; alle Berichte sind
+an denselben Kandidaten und dieselben vier Stufen gebunden.
+
+C01–C03 und C06–C08 bestehen auf beiden Hosts: Notebook, aktuelle sowie
+historische Drive-Namen/IDs/Backups/Restore/Restart, geschützte Publish-/Retry-
+und Link-/Ownergrenzen, sämtliche alten Desktopjobs und realer alter
+v0.5.169-Workerwechsel. C05 bestätigt inkrementelle historische History und
+normale Direct-/Room-Privatversionen samt Ownerabwehr, Restore, Reopen und
+No-op. C09 bestätigt tatsächliches Altappupdate, Force-stop und Retry mit
+beibehaltenem Job-/Ownerzustand, Konflikt, Backuprestore und Gegenänderung.
+Diese Erfolge ersetzen keinen vollständigen C04-/C05-/C10-Pass.
+
+Konkrete Restgrenzen: Linux C04 scheitert bei wiederholtem MKCOL einer
+vorhandenen `.obsidian`-Collection an HTTP 301; frische Metadaten und erste
+Anlage sind bestätigt. Windows C04 schließt seine Providerpaare ab und
+scheitert anschließend an der leeren ZIP-Fixture-Scanwurzel. C05 erreicht
+auf beiden Hosts den aufgezeichneten Lost-ACK und scheitert am Kindvergleich
+`Other` gegen `ConnectionReset`; die vorausgehenden alten Dirhistoryphasen
+bestehen. Die nachfolgenden Recorded-Recoverybeweise sind damit noch offen.
+C10 nennt unverändert fehlende `SE_DRIVE_TEST_CLIENT_ID` und
+`SE_DRIVE_TEST_REFRESH_TOKEN`; die Autorisierungsfrage bleibt offen.
+
+Alle hochgeladenen Evidenzarchive sind gegen GitHubs SHA-256 geprüft und nur
+an zulässigen relativen Textpfaden ausgewertet: Linux `11338665176`
+(`dd792300d1ee2b3ec0e49530b07f8e7608394e14805faa812ea3ce1bf7c50f26`),
+Windows `11339090166`
+(`d4617d237da687b8ce23fcf0cfea4ff185be64e6957b9164554115fd4e19728f`),
+Gerät `11336278102`
+(`f2e1b7d4a5578691995112529e9f20f3edbc8bf97e5e3f108f3e265c966e20a2`),
+Gesamtauswertung `11338617424`
+(`0762d262a04c35abc8e1dc08326b6a43a6c49ec6855d76876765edef25a33244`).
+Es wurden keine Profile, Credentials, APKs oder Developmentbinaries lokal
+zur Ausführung übernommen.
+
+Der exakte Remote-Formatpatch
+`64ff5adc09922d2bd99b8982a8c2059d8e6a4d5fcedac31db2a0f2bbf33450ea`
+ist nach sauberem HEAD-, Report-, Digest- und Sourcepfadabgleich statisch als
+`135bf3b6` übernommen. Der Formatreport enthält keine Größenverstöße.
+Die zweistufige Anschlussplanung steht bei M3.C04-7 und M2.C05-7;
+keine weitere Reviewrunde, Suite oder vorzeitiger Release.

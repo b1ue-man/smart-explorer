@@ -250,3 +250,21 @@ diese Gruppe, erhalten alte Bytes und Baseline und schließen unabhängige
 Dateien ab. Nach einer regulären eindeutigen Umbenennung kann derselbe alte
 Job vollständig konvergieren. Der Gesamtablauf unterscheidet diesen
 Teilstatus ausdrücklich von vollständigem Erfolg.
+
+## Aufgezeichneter Lost-ACK und öffentliche Fehlergrenze
+
+Aktuelle Source und beide Hostberichte von Lauf `37289323834` geprüft am
+2026-10-05. `engine_provider_fixture::lost_ack` injiziert beim bestätigten
+Publish eine `ConnectionReset`-Fehlerursache. Der öffentliche gespeicherte
+Auflösungsweg `resolve_recorded` delegiert an `single_recorded::apply_one`;
+dieser rekonstruiert bei `report.stats.errors > 0` den tatsächlichen ersten
+Applyfehler als `io::Error::other(String)`. Der belegte öffentliche Kindwert
+ist somit `Other`; die rohe Providerursache ist kein API-Kindvertrag.
+
+Das vorhandene historische C05-Orakel muss die konkrete injizierte Ursache
+an dieser öffentlichen Grenze erkennen, einschließlich tatsächlich
+konsumierter Injektion und veröffentlichter Gewinnerbytes. Alte Baseline,
+literal gebundener ReplacementIntent, Schutz des Gegenstücks, Replayfreiheit,
+Backupbytes, erfolgreicher Wiederanlauf, Restart und No-op bleiben strikt.
+Eine bloße `is_err()`-Prüfung oder eine Änderung der Produktionsfehlerart
+allein zur Anpassung an das bisher falsche Fixture-Orakel genügt nicht.
