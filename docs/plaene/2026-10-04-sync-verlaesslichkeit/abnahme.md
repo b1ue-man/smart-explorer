@@ -19,7 +19,7 @@ nach Korrekturen wiederholt. S9 ist kein Suitefall, sondern der terminale Releas
 | **C07 Geschützte Grenzen und Owner** | Ausgewählte `sync_links_task_*`, snapshot-walk, engine-identity/account/lock, backup-failure und stat/recycle-failure Abläufe; echte lokale Symlink-/Windows-Junction- und Agent/Peer-Fixtures. | Unabhängige Dateien fertig, geschützte Subtree-Gegenstücke und Baseline erhalten, keine unbestätigte komplette Indexgeneration. Neue Fremdinhalte und fremde Accounts unberührt; Lösch-/Backupzulassung unverändert. |
 | **C08 Echter Desktop-Altjob und Update** | Der Suite-Einstieg extrahiert veröffentlichte v0.5.169-`se`-Bytes und Sidecar aus dem Tag, isoliert APPDATA/XDG, erstellt normale historische Jobdatei und startet mit `se share status --json` den damaligen Worker. Ein zulässiger OnStartup/Intervall-Trigger führt den Job aus. Script entdeckt Jobstate/Baseline unter dem Profile und wartet auf tatsächlich bestätigten Lauf. Danach `se update --complete-install <aktuelle Runtimeversion>` mit Kandidaten-CLI, Änderung und erneutem Trigger. Zusätzliche cfg(test)-`sync_reliability_task_old_jobs_*` führt tatsächliches `daemon::job::run_one` mit alten Drive-/Crossremote-Locators aus; Provider-Injektion nur cfg(test). | Alter Worker hat real Dateien und Zustand erzeugt. Neue Generation übernimmt exakt dieselben Jobdateien/Endpunkte/Options/StateKey und schließt Änderung/Konflikt/Wiederanlauf ab. Kein Neuanlegen und No-op-Folgelauf. Windows DACL-/OAuth-Konfigkorrektur und alte TSV-/Baselineimporte bleiben wirksam. |
 | **C09 Echter Android-Altzustand und Neustart** | Vorhandener Emulator-/JNI-/Instrumentation-Vertrag; neue kohärente Klasse `SyncReliabilityTaskTest`. Alte gehashte veröffentlichte APK v0.5.169 führt Job durch unveränderte API aus. Gleich signierte inkrementelle **Development**-APK übernimmt das bestehende Paket/Appdata. Release-Signing-Secrets sind bereits vorhanden; Debug/Testsignierung wird nur für diese Remote-Abnahme ausgewählt. Native Build nur betroffene Bridge für Emulator-ABI aus Cache, kein vollständiger Releasebuild. | Aus derselben Appdata werden alter Job, Baseline, Optionen und Providerbindung erhalten. `force-stop`/Neustart zwischen Prepare und Retry; neue JNI-/Worker-Läufe konvergieren und behalten private Daten/Versionsorte. Quelle-/Zielbytes werden vom Gerät gelesen. |
-| **C10 Echter Google Drive** | `sync_reliability_task_live_drive_*`, nur auf Remote-Runner; reguläre Cloudconfig und Credentialstore mit erforderlichen `SE_DRIVE_TEST_CLIENT_ID`/`SE_DRIVE_TEST_REFRESH_TOKEN` und optionalem `SE_DRIVE_TEST_CLIENT_SECRET` gemäß OAuth-Client. Eigener eindeutig erzeugter Testroot, erzeugte IDs aus API-Antworten; exklusive Mutationen innerhalb dieses Roots. API-Basis und OAuth bleiben unveränderte Produktionsendpunkte. | Realer Google-Notebook-Lauf mit zusätzlicher Schreibweise und echten Datei-/Folderduplikaten; Inhalt/Backup/ID-Wahl, Restart derselben Bindung, Änderungs- und No-op-Lauf. Cleanup ausschließlich eigener erfasster IDs. Fehlt die Autorisierung, wird C10 als Abnahmeblocker ausgegeben; niemals Skip=Pass. |
+| **C10 Echter Google Drive** | `sync_reliability_task_live_drive_*`, nur auf Remote-Runner; reguläre Cloudconfig und Credentialstore mit erforderlichen `SE_DRIVE_TEST_CLIENT_ID`/`SE_DRIVE_TEST_REFRESH_TOKEN` und optionalem `SE_DRIVE_TEST_CLIENT_SECRET` gemäß OAuth-Client. Eigener eindeutig erzeugter Testroot, erzeugte IDs aus API-Antworten; exklusive Mutationen innerhalb dieses Roots. API-Basis und OAuth bleiben unveränderte Produktionsendpunkte. | Realer Google-Notebook-Lauf mit zusätzlicher Schreibweise und echten Datei-/Folderduplikaten; Inhalt/Backup/ID-Wahl, Restart derselben Bindung, Änderungs- und No-op-Lauf. Cleanup ausschließlich eigener erfasster IDs. Ohne Autorisierung bleibt C10 unbestätigt; niemals Skip=Pass und niemals Releasevoraussetzung. |
 
 C03 schließt ausdrücklich die erste Migration mit noch vorhandener globaler
 Hintdatei und inzwischen geschriebenem Accountcache ein. Der gemeinsame echte
@@ -763,3 +763,19 @@ geclustert: Manifest exakt gleich dem gesamten Nativekorpus (1825 Dateien),
 verschachtelter Graph bleibt. Auswertung, aktueller offener Boardstatus
 und vollständiger Graph werden mit dem Formatcommit auf `main` gepusht;
 dieser Entwicklungscheckpoint ist kein Release und kein vollständiger M5-Pass.
+
+## Nutzerkorrektur: Echtwelttests sind keine Releasevoraussetzung
+
+Am 2026-10-05 fordert der Nutzer ausdrücklich den vollständigen Release ohne
+weiteren Test und stellt die dauerhafte Projektregel klar: Ein Echtwelttest
+ist nie eine Releasevoraussetzung. Die zuvor hier dokumentierte C10-Sperre
+ist damit aufgehoben. Die vorstehenden Workflowergebnisse bleiben historische
+Evidenz; weder wird ihr fehlgeschlagener Gesamtstatus umgeschrieben noch ein
+Google-Lauf behauptet. C01–C09 sind bestätigt, der reine Formatpatch ist
+übernommen, und C10 bleibt ohne Zugang unbestätigt.
+
+Der vollständige Release 0.5.172 verwendet unmittelbar den bestehenden
+`build.yml`-Modus `complete_release_source_sha` und ausschließlich den
+stabilen Remote-Wrapper. Kein neuer Suite-/Funktionslauf, keine zusätzliche
+Review oder Abnahmesperre. Versions-, Hash-, Signatur-, Artefakt- und
+Publikationsprüfung gehören weiterhin zur vollständigen Lieferung.

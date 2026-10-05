@@ -2,6 +2,22 @@
 
 Architecture overview and entry points: `docs/ARCHITEKTUR.md` (read it before broad exploration).
 
+## mandatory release; real-world tests never gate it
+
+- Every completed native implementation batch must end in one complete remote release.
+  Do not withhold the installable release while waiting for a real-world test, a live
+  provider account, user testing, or external test credentials. Real-world tests are
+  never a release prerequisite in this project. Record unverified behavior honestly;
+  missing live credentials are not a release blocker and an omitted test is not a pass.
+- An explicit user instruction to release without further tests means: do not start
+  or repeat a task suite or functional test; proceed through the existing complete
+  remote release path. Do not invent another acceptance gate or ask for permission again.
+- This release obligation overrides later wording that makes publication conditional
+  on a test or suite. Keep one terminal release per completed implementation batch,
+  the ban on local builds, the stable release wrapper, immutable tags, and artifact,
+  signature, hash, version, and publication-integrity checks. Documentation-only
+  changes still do not independently require a native release.
+
 ## no local builds or test execution
 
 - Codex must not run builds, compilers, linkers, test suites, packaging, release builds, or

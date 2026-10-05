@@ -425,7 +425,14 @@ before it, by the `android-release-apk` job described in
 [Android APK](#android-apk-build-signing-and-feed) below; the wrapper receives
 it through `-AndroidApkDirectory` and stages it itself. This is the authoritative unattended path:
 the initiating workstation only commits, pushes, dispatches, and monitors;
-compilation, tests, packaging, and publication execute on GitHub-hosted runners.
+compilation, packaging, and publication execute on GitHub-hosted runners.
+
+Every completed native implementation batch must produce one complete release.
+Real-world tests, live provider credentials, and user testing are never release
+prerequisites. If the user requests a release without further tests, dispatch this
+same complete-release mode directly; do not run or repeat a task suite. Record any
+unverified live behavior without claiming a test pass. Artifact signatures, hashes,
+versions, immutable tags, and complete publication remain part of delivery.
 
 Codex leaves release jobs unattended and checks their status at most once every
 30 minutes, working on other authorized tasks meanwhile. Do not actively poll

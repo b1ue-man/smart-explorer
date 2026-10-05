@@ -370,7 +370,9 @@ exakten Mutation-/PUT-No-follow-Abläufe ausschließlich zu C04.
 
 - F7. Bestehender Remote-Workflow `build.yml` ruft ausschließlich den stabilen
   `native/publish-release-local.ps1` auf, >=2 Stunden Timeout. Erst nach
-  erfolgreicher Auswertung M5. Ein beabsichtigter Patch 0.5.172; fehlgeschlagene
+  ausgewerteter vorhandener Evidenz, ohne weiteren Testlauf gemäß ausdrücklicher
+  Nutzeranweisung vom 2026-10-05. Echtwelttests und C10-Zugang sind keine
+  Releasevoraussetzung. Ein beabsichtigter Patch 0.5.172; fehlgeschlagene
   ungetaggte Stufen bleiben in diesem Batch und derselben Version.
 - Preflight aller Runner-/Tool-/Credential-/Publikationsbedingungen; Lock und
   vorhandene Wrapper-Prozesskoordination erhalten. Ein Build, ein Tag, eine
@@ -380,7 +382,8 @@ exakten Mutation-/PUT-No-follow-Abläufe ausschließlich zu C04.
 - Erwartet: vollständiger passender veröffentlichter Release; lokale `se`-/
   Share-Server-Versionen stimmen. Dokumentation/Graph/TODO sind aktuell,
   Meilenstein- und Abschlusscommits auf `main` gepusht.
-- Abnahme: S9. Abhängigkeit: ausgewertete M5-Abnahme.
+- Abnahme: S9. Abhängigkeit: vollständige Umsetzung und ausgewertete vorhandene
+  Remote-Evidenz; keine Sperre durch offenen Echtweltfall.
 
 ## Gesamtablauf und vollständige Vertragsmatrix
 
@@ -422,8 +425,8 @@ nimmt vor Code den vollständigen Plan auseinander; keine weitere Reviewrunde.
 | M1/M2 | Drive-Vertragsfälle und vollständiger Recorded-Wiederanlauf bestätigt | Der neunte Lauf bestätigt C01–C03/C05 einschließlich historischer Viermaps, gefalteter Dirkeys, inkrementeller History und vollständiger Recorded-Lost-ACK-/Backup-/Restore-/Restart-/No-op-Flows. Der echte Google-Lauf C10 bleibt offen |
 | M3 | Schutz-/Recovery-/Versionen, DAV und vollständige Providerabläufe bestätigt | Im neunten Lauf bestehen C04/C06/C07 auf beiden Hosts. Linux schließt die gesamte Provider-Matrix einschließlich FTPS ab; beide Uploadwege und die direkt betroffenen FTP-Kompatibilitätsguards bestehen. M3.C04-8 ist damit bestätigt |
 | M4 | alte Desktop-/Android-Jobs bestätigt | Der neunte Lauf bestätigt C08 auf beiden Hosts einschließlich realem v0.5.169-Workerwechsel. C09 bestätigt dasselbe alte Jobobjekt über Altappupdate, Force-stop und Wiederanlauf mit tatsächlichen Endbytes und No-op |
-| M5 Remote-Gesamtablauf | neunter Workflow vollständig ausgewertet; echter Google-Zugang bleibt Abnahmeblocker | Kandidat `f64699ec` bestätigt alle funktionalen C01–C09. Linux scheitert noch an fehlender C10-Autorisierung und der Sourceformat-Grenze; deren exakter Remote-Patch ist als reine Formatänderung `5ebdd5aa` übernommen. Kein vollständiger M5-Pass. Der endgültige gepushte Kandidat benötigt dieselbe ganze Remote-Suite mit tatsächlichem Google-Zugang |
-| M6 Release | offen | erst nach vollständig erfolgreichem M5 |
+| M5 Remote-Gesamtablauf | neunter Workflow vollständig ausgewertet; kein weiterer Testlauf angefordert | Kandidat `f64699ec` bestätigt alle funktionalen C01–C09. Der exakte Remote-Formatpatch ist als reine Formatänderung `5ebdd5aa` übernommen. C10 bleibt ohne tatsächlichen Google-Zugang unbestätigt; ausdrücklich keine Releasevoraussetzung. Es wird kein vollständiger C01–C10-Pass behauptet |
+| M6 Release | vollständige Remote-Veröffentlichung unmittelbar angefordert | Ein terminaler Release 0.5.172 über den bestehenden Wrapper; kein weiterer Testlauf und keine Echtwelttest-Sperre |
 
 Der [siebte Workflow](https://github.com/b1ue-man/smart-explorer/actions/runs/37289323834)
 prüft `ffba5c54323ef093b63b8d8407ffcc612847ebc8` und ist am
@@ -531,10 +534,10 @@ Es entsteht keine weitere Plan-Kritik, zweite Suite oder Patchveröffentlichung.
   erneut geprüft: `SE_DRIVE_TEST_CLIENT_ID` und
   `SE_DRIVE_TEST_REFRESH_TOKEN` fehlen. Die bereits gestellte
   Autorisierungsfrage bleibt offen; keine Werte gelesen oder veröffentlicht.
-- Nach Verfügbarkeit des Zugangs bestätigt ausschließlich derselbe
-  checked-in Suite-Einstieg den dann gepushten exakten Kandidaten gemeinsam
-  einschließlich C10. Kein übersprungener Google-Lauf als Erfolg, keine
-  unverändert aussichtslose Wiederholung und kein vorzeitiger Release.
+- Ausdrückliche Nutzerkorrektur vom 2026-10-05: Ein Echtwelttest ist nie
+  Releasevoraussetzung. M6 veröffentlicht den vollständigen Stand ohne
+  weiteren Testlauf. C10 bleibt ein offen dokumentierter Livefall; sein
+  fehlender Zugang sperrt keinen Release und wird nicht als Pass dargestellt.
 
 Pro Meilenstein: gegen Refs und Aufrufer selbst prüfen, kohärent committen;
 Abnahme erst gesammelt nach kompletter Umsetzung. Nach nativen Änderungen
