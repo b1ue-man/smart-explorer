@@ -148,7 +148,7 @@ fn sync_reliability_task_provider_dav_collection_redirect_preserves_metadata_and
             "PROPFIND" => (207, None, collection(&request.path)),
             "GET" if request.path == "/file" => (302, Some("/read".into()), String::new()),
             "GET" => (200, None, "actual bytes".into()),
-            "MKCOL" => (301, Some("/new/".into()), String::new()),
+            "MKCOL" => (301, Some("/unexpected/".into()), String::new()),
             _ => panic!("unexpected request: {request:?}"),
         });
         let root = "/literal%20-folder";
@@ -189,6 +189,7 @@ fn sync_reliability_task_provider_dav_collection_redirect_preserves_metadata_and
         assert_eq!(requests[4].method, "GET");
         assert_eq!(requests[5].method, "GET");
         assert_eq!(requests[6].method, "MKCOL");
+        assert_eq!(requests[6].path, "/new/");
     }
 }
 

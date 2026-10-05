@@ -10,8 +10,13 @@ use std::io::{self, Read, Write};
 impl WebdavBackend {
     /// One MKCOL; `Ok(false)` when the name is taken (405, RFC 4918 §9.3.1).
     fn make_collection(&self, path: &str) -> io::Result<bool> {
+        // Send the collection URL initially; never follow a mutation redirect.
+        let mut url = self.url_for(path);
+        if !url.ends_with('/') {
+            url.push('/');
+        }
         match self
-            .auth_req(self.write_agent.request("MKCOL", &self.url_for(path)))
+            .auth_req(self.write_agent.request("MKCOL", &url))
             .call()
         {
             Ok(response) if (200..300).contains(&response.status()) && response.status() != 207 => {
@@ -22,6 +27,19 @@ impl WebdavBackend {
                 response.status()
             ))),
             Err(ureq::Error::Status(405, _)) => Ok(false),
+            Err(error @ ureq::Error::Status(404 | 409, _)) => {
+                // A slash-addressed regular file can look missing or conflict.
+                // Only a fresh proof of the original file establishes collision;
+                // absent parents, denied probes and transport errors stay errors.
+                match self.stat(path) {
+                    Ok(meta) if !meta.is_dir => Err(io::Error::new(
+                        io::ErrorKind::AlreadyExists,
+                        format!("{path} existiert bereits"),
+                    )),
+                    Err(probe) if probe.kind() != io::ErrorKind::NotFound => Err(probe),
+                    _ => Err(request_err(error)),
+                }
+            }
             Err(error) => Err(request_err(error)),
         }
     }
