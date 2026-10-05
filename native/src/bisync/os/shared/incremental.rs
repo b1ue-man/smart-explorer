@@ -116,6 +116,19 @@ pub(super) fn try_incremental_run(state: &RunState<'_>) -> Option<Outcome> {
         }
     };
     let path_aliases = names.aliases.clone();
+    let dir_history = match super::state_spelling_history::DirectoryHistory::load(
+        &names,
+        state.dirs,
+        keys,
+    ) {
+        Ok(history) => history,
+        Err(error) => {
+            return Some(Outcome {
+                baseline: state.baseline.clone(),
+                ..failure("Ordner-Zwischenstand", error)
+            })
+        }
+    };
     let pair = index_id(state.key).ok()?;
     let mut store = open_store(state.store_path).ok()?;
     let rec = store.load_pair(&pair).ok().flatten()?;
@@ -243,7 +256,11 @@ pub(super) fn try_incremental_run(state: &RunState<'_>) -> Option<Outcome> {
     } else {
         planned_b.is_empty()
     };
-    let source_empty = source_empty && state.dirs.is_none_or(|dirs| dirs.is_empty());
+    let source_empty = source_empty
+        && dir_history
+            .dirs
+            .as_ref()
+            .is_none_or(|dirs| dirs.is_empty());
     if let Some(block) = unconfirmed(
         empty_side_block(source_pair, source_empty, state.baseline),
         &state.settings.confirmed,
@@ -288,6 +305,14 @@ pub(super) fn try_incremental_run(state: &RunState<'_>) -> Option<Outcome> {
         });
     }
     if actions.is_empty() {
+        if dir_history.changed() {
+            if let Err(error) = dir_history.commit_noop(state, &names, keys) {
+                return Some(Outcome {
+                    baseline: state.baseline.clone(),
+                    ..failure("Ordner-Zwischenstand", error)
+                });
+            }
+        }
         if let Some(cursor) = cursor.as_deref() {
             if store.update_cursor(&pair, Some(cursor)).is_err() {
                 return None;
@@ -302,9 +327,15 @@ pub(super) fn try_incremental_run(state: &RunState<'_>) -> Option<Outcome> {
         return Some(failure("Sync-Zwischenstand", error));
     }
     let sink = match CheckpointSink::new(endpoints, state.lock, state.key, keys, state.observer) {
-        Ok(sink) => sink,
+        Ok(sink) => sink.with_path_aliases(&path_aliases),
         Err(error) => return Some(failure("Zwischenstand", error)),
     };
+    if let Err(error) = dir_history.checkpoint(&sink) {
+        return Some(Outcome {
+            baseline: state.baseline.clone(),
+            ..failure("Ordner-Zwischenstand", error)
+        });
+    }
     let scope = ApplyScope {
         sink: &sink,
         versions: state.versions,
@@ -356,6 +387,7 @@ pub(super) fn try_incremental_run(state: &RunState<'_>) -> Option<Outcome> {
         errors.push(("Zwischenstand".into(), error));
         stats.errors = stats.errors.saturating_add(1);
     }
+    names.applied_directory_history(dir_history.dirs.as_ref(), &checkpoint.dirs);
     names.applied(
         &actions,
         &spellings,

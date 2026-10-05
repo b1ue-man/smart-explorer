@@ -127,8 +127,11 @@ fn migrate(value: &mut StateSpellings, state: &StateKey, keys: KeyPolicy) -> io:
         ));
     }
     let folded = KeyPolicy { fold_case: true };
-    let (_, records, dirs) = super::checkpoint_journal::Journal::load(state, keys)?;
-    let mut dir_basis = dirs.unwrap_or_default();
+    let (_, records, _) = super::checkpoint_journal::Journal::load(state, keys)?;
+    // Directory history contains planning keys, not literal spellings.
+    // OLDTREE and its confirmed ancestor OldTree are one relation; only
+    // actual baseline ancestors can supply authoritative literal anchors.
+    let mut dir_basis = BTreeSet::new();
     for rel in records.baseline.keys() {
         for (end, _) in rel.match_indices('/') {
             dir_basis.insert(rel[..end].to_string());
@@ -196,10 +199,11 @@ fn migrate(value: &mut StateSpellings, state: &StateKey, keys: KeyPolicy) -> io:
                     .ok_or_else(|| invalid("stored spelling has no side path"))?
             };
             let key = keys.key(&logical).into_owned();
-            if slots
-                .iter()
-                .flatten()
-                .any(|rel| keys.key(rel).as_ref() != key)
+            if (directory && changed)
+                || slots
+                    .iter()
+                    .flatten()
+                    .any(|rel| keys.key(rel).as_ref() != key)
             {
                 anchors.insert(key.clone(), logical);
             }

@@ -166,6 +166,24 @@ impl StateSpellings {
                 self.files_b.remove(&key);
             }
         }
+        // A failed child action can retain a file on a currently absent side.
+        // Its recorded literal ancestors keep the existing directory relation
+        // available for retry; no fresh case pairing is inferred here.
+        for (files, dirs) in [
+            (&self.files_a, &mut self.dirs_a),
+            (&self.files_b, &mut self.dirs_b),
+        ] {
+            for (key, rel) in files {
+                for ((key_end, _), (rel_end, _)) in
+                    key.match_indices('/').zip(rel.match_indices('/'))
+                {
+                    if self.legacy.dirs.contains_key(&key[..key_end]) {
+                        dirs.entry(key[..key_end].to_string())
+                            .or_insert_with(|| rel[..rel_end].to_string());
+                    }
+                }
+            }
+        }
         // Unresolved conflicts may have no baseline yet. Their observed
         // spellings stay available to resolve_recorded; SQL uses only baseline
         // signatures and is bootstrapped only after an entirely safe run.
@@ -175,6 +193,27 @@ impl StateSpellings {
         self.legacy
             .dirs
             .retain(|key, _| self.dirs_a.contains_key(key) || self.dirs_b.contains_key(key));
+    }
+
+    pub fn applied_directory_history(
+        &mut self,
+        previous: Option<&super::snapshot_types::DirSet>,
+        current: &super::snapshot_types::DirSet,
+    ) {
+        let retired: Vec<_> = self
+            .legacy
+            .dirs
+            .keys()
+            .filter(|key| {
+                previous.is_some_and(|dirs| dirs.contains(*key)) && !current.contains(*key)
+            })
+            .cloned()
+            .collect();
+        for key in retired {
+            self.dirs_a.remove(&key);
+            self.dirs_b.remove(&key);
+            self.legacy.dirs.remove(&key);
+        }
     }
 
     /// The SQL rows retain each side's literal path; the baseline remains a
