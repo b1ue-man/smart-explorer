@@ -419,10 +419,10 @@ nimmt vor Code den vollständigen Plan auseinander; keine weitere Reviewrunde.
 | Stufe 1 / erste Recherche | fertig | `recherche.md`, gesicherte Refs |
 | Stufe 2 / zweite Recherche | fertig, Lücken eingearbeitet | dieser Plan und `abnahme.md` |
 | Einmalige Plan-Kritik | abgeschlossen, alle Befunde eingearbeitet | `review.md` |
-| M1/M2 | Drive-Namens-/Identitätsflüsse bestätigt; vollständiger Recorded-Wiederanlauf noch zu bestätigen | C02/C03 samt historischen Viermaps, gefalteten Dirkeys, Counterpart-/Backup-/Restore-/Restart-/No-op-Flows bestehen im siebten Lauf; inkrementelle C05-History besteht. M2.C05-7 korrigiert die belegte öffentliche Fehlergrenze ohne Abschwächung der Recoverybeweise |
-| M3 | Schutz-/Recovery-/Versionen bestätigt; DAV-Korrektur braucht Laufbestätigung | C06/C07 und private Direct-/Room-Versionen bestehen auf beiden Hosts. M3.C04-7 erhält MKCOL-Collectionkonvention, Mutationsschutz und vollständige Providerintegration |
+| M1/M2 | Drive-Namens-/Identitätsflüsse und vollständiger Recorded-Wiederanlauf bestätigt | Der achte Lauf bestätigt historische Viermaps, gefaltete Dirkeys, inkrementelle History und vollständige Recorded-Lost-ACK-/Backup-/Restore-/Restart-/No-op-Flows mit unveränderten strikten Orakeln |
+| M3 | Schutz-/Recovery-/Versionen und DAV bestätigt; FTPS-Abschluss offen | C06/C07 bestehen auf beiden Hosts; C04-DAV-Collection-/Redirect-/Poolingguards bestehen. Der echte Linux-Providerflow belegt einen FTPS-Abschlussfehler; M3.C04-8 behandelt diese Grenze |
 | M4 | alte Desktop-/Android-Jobs bestätigt | C08 besteht auf beiden Hosts einschließlich realem v0.5.169-Workerwechsel. C09 bestätigt das echte Altappupdate mit Force-stop, erhaltenem Jobowner und Wiederanlauf. Derselbe ganze Ablauf bleibt verpflichtend |
-| M5 Remote-Gesamtablauf | siebter Workflow vollständig ausgewertet; sämtliche Anschlusskorrekturen quellenfertig | Folgekorrekturen quellenfertig: `5ad57a22` erhält kanonische DAV-Anlage und gültige ZIP-Root; `cffaec5d` erhält konkrete Recorded-Lost-ACK-Beweise am öffentlichen API. Dieselbe Suite nimmt vorhandene MKCOL-/Pooling-/Congestionguards auf. Remote-Formatpatch `135bf3b6`; C10 braucht weiterhin angefragte echte Drive-Testautorisierung |
+| M5 Remote-Gesamtablauf | achter Workflow vollständig ausgewertet; FTPS-Folgekorrektur geplant | `8a1a36ca` besteht auf Windows und Android; Linux scheitert an C04 FTP→FTPS und C10-Zugang. Kandidatgebundener Formatpatch `91f46ce3` übernommen. M3.C04-8 und echte Drive-Testautorisierung bleiben offen; dieselbe Suite bleibt der einzige Abnahmeeinstieg |
 | M6 Release | offen | erst nach vollständig erfolgreichem M5 |
 
 Der [siebte Workflow](https://github.com/b1ue-man/smart-explorer/actions/runs/37289323834)
@@ -474,6 +474,41 @@ Es entsteht keine weitere Plan-Kritik, zweite Suite oder Patchveröffentlichung.
   Erst nach kompletter Umsetzung passt Main den einen Suite-Einstieg an,
   aktualisiert den Rootgraph, pusht den gesamten Kandidaten und startet
   ausschließlich dieselbe vollständige Remote-Abnahme.
+
+### M3.C04-8 Verlässlicher FTPS-Datenabschluss in beiden Uploadpfaden
+
+- Evidenz und Abhängigkeit: vollständiger achter Lauf auf `8a1a36ca`,
+  bewertete C04-426-Fehlerstelle und echtes FTPS-Serverlog; aktualisierte
+  zweite Recherche in `recherche.md` und exakte API-Ref `ftp-pool.md`.
+  M3.C04-7 und M2.C05-7 sind im Lauf bestätigt, keine erneute Implementierung.
+- Zusammenhängende Quellen: `ftp/core/{streams,writer,connection,io_adapters,
+  pool,errors}.rs`, interne FTP-Modulregistrierung, bestehende FTP-Guards und
+  realer Providerflow unter `connect/os/shared/sync_reliability_task_provider_*`.
+  Eine kleine eigene Abschluss-/Besitzdatei ist erlaubt; alle neuen oder
+  wesentlich geänderten Rustdateien bleiben unter den Architekturgrenzen.
+- Outcome: gespoolter Writer und bekannte-Längen-STOR beenden denselben
+  verifizierten TLS-Datenkanal zuverlässig, ohne dessen letzte Besitzgrenze
+  vor dem erforderlichen Protokollabschluss zu verlieren. Echte 226/250-
+  Bestätigung bleibt Voraussetzung für Erfolg und gesunden Poolrücklauf.
+  Ein 426/Transportfehler darf keinen bestätigten Upload oder neue erfolgreiche
+  Baseline erzeugen. Ein unklarer STOR wird nicht automatisch wiederholt.
+- Kompatibilität: plain FTP muss weiter per wirklichem EOF finalisieren;
+  RETR/REST/Abort, Uploadlängen, einmaliger Flush, Diskspool, Timeouts und
+  Pool-/Reconnectverträge bleiben erhalten. Terminale 451/452/552-
+  Zielablehnungen behalten ihre Bedeutung auch nach einem Datenfehler.
+  Kein vorzeitiges Transport-Shutdown, kein unbeschränktes Warten und kein
+  TLS-/Serverintegritätsschalter als Ersatz für korrekten Abschluss.
+  Locator-/Account-/Altjob-, Backup-, Cancellation- und Stagegrenzen bleiben.
+- Erwartetes Signal: dieselbe vollständige C04-Matrix schließt insbesondere
+  FTP→FTPS mit wirklichen Zielbytes, Gegenänderung, Wiederöffnung und No-op.
+  Beide Writer sowie die unmittelbar betroffenen plain-FTP-Längen- und
+  Nichtwiederholungsgrenzen sind innerhalb derselben finalen Task-Suite
+  abgebildet. Alle übrigen C01–C10-Verträge bleiben verpflichtend.
+- Ablauf: Umsetzer liest den aktuellen Plan und die exakten Refs, implementiert
+  das zusammenhängende Outcome und macht Self-Review. Nach allen Änderungen
+  bindet Main die benötigten vorhandenen FQNs an dieselbe Suite, aktualisiert
+  den vollständigen Rootgraph, committet/pusht den Kandidaten und startet
+  ausschließlich `sync-reliability-task.yml` mit demselben Eintrittsskript.
 
 Pro Meilenstein: gegen Refs und Aufrufer selbst prüfen, kohärent committen;
 Abnahme erst gesammelt nach kompletter Umsetzung. Nach nativen Änderungen

@@ -1,6 +1,45 @@
 # Sync-Verlässlichkeit – Recherche und Planstufen
 
-Stand: 2026-10-04, vor Umsetzung.
+## Anschlussrecherche nach dem achten Remote-Lauf
+
+Am 2026-10-05 ist `37297823833` auf `8a1a36ca` vollständig ausgewertet.
+Windows, Android-Build und der tatsächliche Android-Altjobupdateablauf
+bestehen. Linux bestätigt jetzt auch den vollständigen Recorded-Recovery-
+und die DAV-Collectionflows. Seine Provider-Matrix erreicht FTP→FTPS und
+scheitert beim echten STOR mit 426; der Server bestätigt fehlenden
+SSL-Datenabschluss. C10 fehlt weiterhin der angefragte autorisierte Zugang.
+
+**Stufe 1, aktuelle Quellen:** Die zusammenhängende Grenze liegt bei
+`ftp/core/streams.rs::FtpStoreWriter::finish` und
+`ftp/core/writer.rs::FtpUpload::upload`: beide lassen suppaftp beim
+Finalisieren den Datenstrom schließen und anschließend die Steuerantwort
+lesen. Verbindung, Timeouts, Fehlerklassen und Poolgesundheit bleiben
+bestehende Verträge. Das erfolgreiche Windows-Ergebnis ersetzt keinen
+Beweis dieser tatsächlichen Linux-TLS-Providerstrecke.
+
+**Erste Primärrecherche:** RFC 4217 und TLS-Abschlussregeln sowie die exakt
+gepinnten suppaftp-/rustls-Quellen bestätigen, dass TLS-Abschluss und
+positive FTP-Antwort gemeinsam maßgeblich sind. Der Bibliotheks-Drop
+liefert keinen falliblen vollständigen TLS-Abschluss. Stufe-1-Ansatz:
+eine zusammenhängende FTP-Datenabschlusskorrektur für beide Writer,
+keine Wiederholung eines mehrdeutigen STOR und keine gelockerte Fixture.
+
+**Stufe 2 und zweite Lückenrecherche:** Öffentliche/private Crate-APIs,
+`TcpStream`-Besitz und die Linux-Resetgrenze sind in
+[ftp-pool.md](../../refs/ftp-pool.md#5-ftps-datenabschluss-zweite-recherche-am-2026-10-05)
+mit exakter Syntax gesichert. Private Rustls-Felder sind kein verfügbarer
+Appadapter; Transport-EOF ist kein TLS-Erfolgsbeweis. Der konkrete Reset
+bleibt eine aus Plattformquellen abgeleitete mögliche Ursache, während
+426 und der fehlende SSL-Abschluss unmittelbar belegt sind. Die finale
+Abnahme bleibt der echte strenge Providerflow plus vorhandene schmale
+Längen-/STOR-/Poolguards in derselben Suite. M3.C04-8 beschreibt den
+vollständigen Outcome, seine Abhängigkeiten und das erwartete Signal.
+Keine neue Plan-Kritik, Suite oder vorgezogene Version entsteht.
+
+## Ursprüngliche Planung vom 2026-10-04
+
+Die folgenden Ausgangsbefunde stammen aus der Planung vor Umsetzung;
+der aktuelle Anschlussstatus steht oben und in `umsetzung.md`.
 
 ## Stufe 1: Code, Dokumentation und etablierte Verträge
 
