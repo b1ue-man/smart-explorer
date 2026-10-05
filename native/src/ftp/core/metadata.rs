@@ -176,6 +176,8 @@ fn list_mode(
     let (mlsx, lines) = lines;
     let mut out = VfsListing::default();
     let mut names = std::collections::HashSet::new();
+    let mut regular_files = 0;
+    let mut all_regular_exact = true;
     for line in lines {
         if !mlsx && line.starts_with("total ") {
             continue;
@@ -190,7 +192,7 @@ fn list_mode(
         } else {
             parse_list_line_unchecked(&line).map(Some)
         };
-        let entry = match parsed {
+        let mut entry = match parsed {
             Ok(None) => continue,
             Ok(Some(meta)) => meta,
             Err(error) => {
@@ -224,6 +226,28 @@ fn list_mode(
                 detail: "FTP child cannot be addressed by this path/control interface".into(),
             });
         } else {
+            if !mlsx && !entry.is_dir && !entry.is_symlink && !entry.special {
+                regular_files += 1;
+                let path = format!("{}/{}", folder.trim_end_matches('/'), entry.name);
+                match connection.with_stream_read(|stream| {
+                    super::metadata_probe::regular_file(stream, &path, &entry.name)
+                }) {
+                    Ok(Some(exact)) => {
+                        entry.size = exact.size;
+                        entry.mtime_ms = exact.mtime_ms;
+                    }
+                    Ok(None) => all_regular_exact = false,
+                    Err(error) => {
+                        all_regular_exact = false;
+                        out.omitted.push(VfsOmission {
+                            rel: entry.name,
+                            reason: OmissionReason::Unreadable,
+                            detail: error.to_string(),
+                        });
+                        continue;
+                    }
+                }
+            }
             out.entries.push(entry);
         }
     }
@@ -232,6 +256,8 @@ fn list_mode(
             MtimePrecision::Seconds
         } else if mlsx {
             MtimePrecision::Unknown
+        } else if regular_files > 0 && all_regular_exact {
+            MtimePrecision::Seconds
         } else {
             MtimePrecision::Days
         };
@@ -288,28 +314,7 @@ pub(super) fn stat(connection: &FtpConnection, path: &str) -> io::Result<VfsMeta
                 Err(error) => return Err(map(error)),
             }
         }
-        match stream.custom_command(format!("SIZE {path}"), &[Status::File]) {
-            Ok(response) => {
-                let reply = response
-                    .as_string()
-                    .map_err(|error| invalid(error.to_string()))?;
-                let size = reply
-                    .split_ascii_whitespace()
-                    .nth(1)
-                    .and_then(|s| s.parse::<u64>().ok())
-                    .ok_or_else(|| invalid("FTP SIZE response is not u64"))?;
-                let time = read_time(stream, path)?;
-                Ok(Some(VfsMeta {
-                    name: base.clone(),
-                    hidden: base.starts_with('.'),
-                    size,
-                    mtime_ms: time.unwrap_or(0),
-                    ..VfsMeta::default()
-                }))
-            }
-            Err(error) if matches!(reply_code(&error), Some(500 | 502 | 504 | 550)) => Ok(None),
-            Err(error) => Err(map(error)),
-        }
+        super::metadata_probe::regular_file(stream, path, &base)
     })?;
     if let Some(meta) = direct {
         return Ok(meta);
