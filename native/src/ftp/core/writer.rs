@@ -16,13 +16,19 @@ impl FtpUpload for FtpConnection {
     fn upload(&self, path: &str, source: &mut File) -> io::Result<()> {
         super::errors::command_path(path)?;
         self.with_stream_mutation(|stream| {
-            let mut data = stream.put_with_stream(path).map_err(super::errors::map)?;
+            let data = stream.put_with_stream(path).map_err(super::errors::map)?;
+            let retained = if matches!(&data, suppaftp::DataStream::Ssl(_)) {
+                data.get_ref().try_clone().map(Some)
+            } else {
+                Ok(None)
+            };
+            let mut data = super::data_finish::UploadData::new(data, retained);
             let copied = io::copy(source, &mut data);
             // Always consume the terminal reply, even after a data-socket
-            // error: it may carry the decisive 452/552 target refusal.
-            let finished = stream.finalize_put_stream(data).map_err(super::errors::map);
+            // error: it may carry the decisive 451/452/552 target refusal.
+            let finished = data.finish(stream);
             match (copied, finished) {
-                (_, Err(error)) if crate::vfs::is_target_refusal(&error) => Err(error),
+                (_, Err(error)) if super::data_finish::terminal_refusal(&error) => Err(error),
                 (Err(error), _) => Err(error),
                 (Ok(_), result) => result,
             }
