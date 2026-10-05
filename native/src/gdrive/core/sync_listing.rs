@@ -11,12 +11,16 @@ impl GDriveBackend {
         let record = self.binding_store.read(&self.drive_account_key, &parent)?;
         let mut file_counts = HashMap::new();
         for entry in raw.iter().filter(|entry| !entry.meta.is_dir) {
-            *file_counts.entry(entry.meta.name.as_str()).or_insert(0usize) += 1;
+            *file_counts
+                .entry(entry.meta.name.as_str())
+                .or_insert(0usize) += 1;
         }
         let mut listing = VfsListing::default();
         for entry in &raw {
             let projection = entry.meta.id.as_deref().and_then(|id| folders.get(id));
-            let name = projection.map(|folder| &folder.sync_name).unwrap_or(&entry.meta.name);
+            let name = projection
+                .map(|folder| &folder.sync_name)
+                .unwrap_or(&entry.meta.name);
             let reason = if !super::sync_projection::representable(&entry.meta.name) {
                 Some((
                     OmissionReason::Unrepresentable,
@@ -43,7 +47,8 @@ impl GDriveBackend {
             // Folder locators are exact registered IDs. Files retain literal
             // locators and captured IDs for the existing duplicate policy.
             if entry.meta.is_dir || file_counts[name.as_str()] == 1 {
-                let segment = projection.map(|folder| folder.segment.clone())
+                let segment = projection
+                    .map(|folder| folder.segment.clone())
                     .unwrap_or_else(|| super::names::encode(name));
                 let child = super::sync_projection::child_key(path, &segment);
                 self.remember_path(

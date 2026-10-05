@@ -189,7 +189,8 @@ fn rustls_client_config() -> Arc<rustls::ClientConfig> {
     #[cfg(test)]
     if let Some(path) = std::env::var_os("SE_SYNC_FIXTURE_CA_DER") {
         let der = std::fs::read(path).expect("read owned sync fixture CA");
-        roots.add(rustls::pki_types::CertificateDer::from(der))
+        roots
+            .add(rustls::pki_types::CertificateDer::from(der))
             .expect("valid owned sync fixture CA");
     }
     let config = rustls::ClientConfig::builder_with_provider(Arc::new(

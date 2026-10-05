@@ -128,8 +128,10 @@ impl GDriveBackend {
             if !super::identity::in_parent(&json, &parent_id)?
                 || json["mimeType"].as_str() != Some(FOLDER_MIME)
             {
-                return Err(io::Error::new(io::ErrorKind::AlreadyExists,
-                    "Drive directory path no longer names a folder in its expected parent"));
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    "Drive directory path no longer names a folder in its expected parent",
+                ));
             }
             self.bind_folder_path(&parent_id, super::identity::text(&json, "name")?, &id, name)?;
             return Ok(id);

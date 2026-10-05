@@ -42,9 +42,14 @@ impl GDriveBackend {
         let source_parent_id = self.resolve(&source_parent)?;
         let destination_parent_id = self.ensure_dir(&destination_parent)?;
         let binding = self.bound_folder(&source_parent_id, source_segment)?;
-        if self.bound_folder(&destination_parent_id, destination_name)?.is_some() {
-            return Err(io::Error::new(io::ErrorKind::AlreadyExists,
-                "Drive rename destination is reserved for another folder identity"));
+        if self
+            .bound_folder(&destination_parent_id, destination_name)?
+            .is_some()
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "Drive rename destination is reserved for another folder identity",
+            ));
         }
         let marker = super::duplicates::parse_marker(source_segment);
         let source_name = match &binding {
@@ -142,9 +147,14 @@ impl GDriveBackend {
             self.ensure_dir(&destination_parent)?
         };
         let (_, destination_segment) = split_parent(&destination);
-        if self.bound_folder(&destination_parent_id, destination_segment)?.is_some() {
-            return Err(io::Error::new(io::ErrorKind::AlreadyExists,
-                "Drive file destination is a reserved folder locator"));
+        if self
+            .bound_folder(&destination_parent_id, destination_segment)?
+            .is_some()
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "Drive file destination is a reserved folder locator",
+            ));
         }
         let context = MoveContext {
             source: &staged,

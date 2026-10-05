@@ -6,16 +6,21 @@ use crate::vfs::BackendHandle;
 
 pub fn resolve_endpoint(endpoint: &str) -> Result<(BackendHandle, String), String> {
     #[cfg(test)]
-    if let Some(fixture) = crate::daemon::sync_reliability_task_old_jobs_tests::resolve_fixture(endpoint) {
+    if let Some(fixture) =
+        crate::daemon::sync_reliability_task_old_jobs_tests::resolve_fixture(endpoint)
+    {
         return fixture;
     }
     match EndpointSpec::parse(endpoint)? {
         EndpointSpec::Local(path) => {
             if crate::net::is_unc(&path) {
                 let connections = crate::creds::load_connections_checked()?;
-                if let Some(connection) = connections.iter()
-                    .filter(|connection| !connection.protocol.is_url()
-                        && unc_is_same_or_below(&path, &connection.root))
+                if let Some(connection) = connections
+                    .iter()
+                    .filter(|connection| {
+                        !connection.protocol.is_url()
+                            && unc_is_same_or_below(&path, &connection.root)
+                    })
                     .max_by_key(|connection| connection.root.len())
                 {
                     return super::connector::open_saved_at(connection, &path);
@@ -39,9 +44,18 @@ pub fn resolve_endpoint(endpoint: &str) -> Result<(BackendHandle, String), Strin
 }
 
 fn unc_is_same_or_below(candidate: &str, root: &str) -> bool {
-    let candidate = candidate.replace('/', "\\").trim_end_matches('\\').to_lowercase();
-    let root = root.replace('/', "\\").trim_end_matches('\\').to_lowercase();
-    candidate == root || candidate.strip_prefix(&root).is_some_and(|rest| rest.starts_with('\\'))
+    let candidate = candidate
+        .replace('/', "\\")
+        .trim_end_matches('\\')
+        .to_lowercase();
+    let root = root
+        .replace('/', "\\")
+        .trim_end_matches('\\')
+        .to_lowercase();
+    candidate == root
+        || candidate
+            .strip_prefix(&root)
+            .is_some_and(|rest| rest.starts_with('\\'))
 }
 
 #[cfg(test)]
@@ -50,8 +64,17 @@ mod tests {
 
     #[test]
     fn unc_saved_root_matching_respects_share_boundary() {
-        assert!(unc_is_same_or_below(r"\\server\share\folder", r"\\SERVER\share"));
-        assert!(unc_is_same_or_below("//server/share/folder", r"\\server\share\"));
-        assert!(!unc_is_same_or_below(r"\\server\share-two\folder", r"\\server\share"));
+        assert!(unc_is_same_or_below(
+            r"\\server\share\folder",
+            r"\\SERVER\share"
+        ));
+        assert!(unc_is_same_or_below(
+            "//server/share/folder",
+            r"\\server\share\"
+        ));
+        assert!(!unc_is_same_or_below(
+            r"\\server\share-two\folder",
+            r"\\server\share"
+        ));
     }
 }

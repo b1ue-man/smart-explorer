@@ -34,28 +34,42 @@ pub(super) struct FolderBindings {
 
 impl FolderBindings {
     pub(super) fn empty(account: &str, parent: &str) -> Self {
-        Self { version: VERSION, account: account.into(), parent: parent.into(), folders: Vec::new() }
+        Self {
+            version: VERSION,
+            account: account.into(),
+            parent: parent.into(),
+            folders: Vec::new(),
+        }
     }
 
     pub(super) fn validate(&self, account: &str, parent: &str) -> io::Result<()> {
         if self.version != VERSION || self.account != account || self.parent != parent {
-            return Err(invalid("Drive folder bindings have an unknown version or namespace"));
+            return Err(invalid(
+                "Drive folder bindings have an unknown version or namespace",
+            ));
         }
         let mut objects = HashSet::new();
         let mut names = HashSet::new();
         let mut segments = HashSet::new();
         for folder in &self.folders {
-            if folder.id.is_empty() || folder.title.is_empty()
+            if folder.id.is_empty()
+                || folder.title.is_empty()
                 || !objects.insert((&folder.id, &folder.title))
                 || !names.insert(&folder.sync_name)
             {
-                return Err(invalid("Drive folder bindings contain conflicting identities"));
+                return Err(invalid(
+                    "Drive folder bindings contain conflicting identities",
+                ));
             }
             super::names::validate_component(&folder.sync_name)?;
             for segment in std::iter::once(&folder.segment).chain(&folder.aliases) {
                 super::names::validate_component(segment)?;
-                if !segments.insert(segment) || !segment_matches(segment, &folder.title, &folder.id)? {
-                    return Err(invalid("Drive folder bindings contain conflicting locators"));
+                if !segments.insert(segment)
+                    || !segment_matches(segment, &folder.title, &folder.id)?
+                {
+                    return Err(invalid(
+                        "Drive folder bindings contain conflicting locators",
+                    ));
                 }
             }
             let mut evidence = HashSet::new();
@@ -63,7 +77,9 @@ impl FolderBindings {
                 if !evidence.insert(segment)
                     || (segment != &folder.segment && !folder.aliases.contains(segment))
                 {
-                    return Err(invalid("Drive folder bindings contain conflicting provenance"));
+                    return Err(invalid(
+                        "Drive folder bindings contain conflicting provenance",
+                    ));
                 }
             }
         }
@@ -71,7 +87,9 @@ impl FolderBindings {
     }
 
     pub(super) fn by_segment(&self, segment: &str) -> Option<&FolderBinding> {
-        self.folders.iter().find(|folder| folder.segment == segment || folder.aliases.iter().any(|alias| alias == segment))
+        self.folders.iter().find(|folder| {
+            folder.segment == segment || folder.aliases.iter().any(|alias| alias == segment)
+        })
     }
 
     pub(super) fn by_name(&self, name: &str) -> Option<&FolderBinding> {
@@ -79,32 +97,62 @@ impl FolderBindings {
     }
 
     pub(super) fn by_object(&self, title: &str, id: &str) -> Option<&FolderBinding> {
-        self.folders.iter().find(|folder| folder.title == title && folder.id == id)
+        self.folders
+            .iter()
+            .find(|folder| folder.title == title && folder.id == id)
     }
 
     pub(super) fn bind_exact(
-        &mut self, title: &str, id: &str, segment: &str, sync_name: &str, proved: bool,
+        &mut self,
+        title: &str,
+        id: &str,
+        segment: &str,
+        sync_name: &str,
+        proved: bool,
     ) -> io::Result<FolderBinding> {
         if let Some(existing) = self.by_segment(segment) {
             if existing.id != id || existing.title != title {
-                return Err(invalid("Drive locator is reserved for another folder identity"));
+                return Err(invalid(
+                    "Drive locator is reserved for another folder identity",
+                ));
             }
-            let index = self.folders.iter().position(|folder| folder.title == title && folder.id == id)
+            let index = self
+                .folders
+                .iter()
+                .position(|folder| folder.title == title && folder.id == id)
                 .ok_or_else(|| invalid("Drive folder binding lost its identity"))?;
-            if proved { self.folders[index].prove(segment); }
+            if proved {
+                self.folders[index].prove(segment);
+            }
             return Ok(self.folders[index].clone());
         }
-        if let Some(index) = self.folders.iter().position(|folder| folder.title == title && folder.id == id) {
+        if let Some(index) = self
+            .folders
+            .iter()
+            .position(|folder| folder.title == title && folder.id == id)
+        {
             self.folders[index].aliases.push(segment.to_string());
-            if proved { self.folders[index].prove(segment); }
+            if proved {
+                self.folders[index].prove(segment);
+            }
             return Ok(self.folders[index].clone());
         }
         if self.by_name(sync_name).is_some() {
-            return Err(invalid("Drive logical name is reserved for another folder identity"));
+            return Err(invalid(
+                "Drive logical name is reserved for another folder identity",
+            ));
         }
         let folder = FolderBinding {
-            title: title.into(), id: id.into(), sync_name: sync_name.into(), segment: segment.into(), aliases: Vec::new(),
-            evidence: Some(if proved { vec![segment.to_string()] } else { Vec::new() }),
+            title: title.into(),
+            id: id.into(),
+            sync_name: sync_name.into(),
+            segment: segment.into(),
+            aliases: Vec::new(),
+            evidence: Some(if proved {
+                vec![segment.to_string()]
+            } else {
+                Vec::new()
+            }),
         };
         self.folders.push(folder.clone());
         Ok(folder)
@@ -113,21 +161,31 @@ impl FolderBindings {
 
 impl FolderBinding {
     pub(super) fn proves(&self, segment: &str) -> bool {
-        self.evidence.as_ref().is_some_and(|evidence| evidence.iter().any(|known| known == segment))
+        self.evidence
+            .as_ref()
+            .is_some_and(|evidence| evidence.iter().any(|known| known == segment))
     }
 
     fn prove(&mut self, segment: &str) {
         let evidence = self.evidence.get_or_insert_with(Vec::new);
-        if !evidence.iter().any(|known| known == segment) { evidence.push(segment.to_string()); }
+        if !evidence.iter().any(|known| known == segment) {
+            evidence.push(segment.to_string());
+        }
     }
 }
 
 fn segment_matches(mut segment: &str, title: &str, id: &str) -> io::Result<bool> {
-    if super::names::decode(segment)? == title { return Ok(true); }
+    if super::names::decode(segment)? == title {
+        return Ok(true);
+    }
     while let Some((plain, prefix)) = super::duplicates::parse_marker(segment) {
-        if !id.starts_with(prefix) { return Ok(false); }
+        if !id.starts_with(prefix) {
+            return Ok(false);
+        }
         segment = plain;
-        if super::names::decode(segment)? == title { return Ok(true); }
+        if super::names::decode(segment)? == title {
+            return Ok(true);
+        }
     }
     Ok(false)
 }

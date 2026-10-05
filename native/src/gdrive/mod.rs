@@ -129,20 +129,20 @@ pub use state::GDriveBackend;
 #[path = "core/sync_reliability_task_fixture.rs"]
 pub(crate) mod sync_reliability_task_fixture;
 #[cfg(test)]
-#[path = "core/sync_reliability_task_notebook_tests.rs"]
-mod sync_reliability_task_notebook_tests;
+#[path = "core/sync_reliability_task_identity_tests.rs"]
+mod sync_reliability_task_identity_tests;
+#[cfg(test)]
+#[path = "core/sync_reliability_task_live_tests.rs"]
+mod sync_reliability_task_live_tests;
 #[cfg(test)]
 #[path = "core/sync_reliability_task_names_tests.rs"]
 mod sync_reliability_task_names_tests;
 #[cfg(test)]
-#[path = "core/sync_reliability_task_identity_tests.rs"]
-mod sync_reliability_task_identity_tests;
+#[path = "core/sync_reliability_task_notebook_tests.rs"]
+mod sync_reliability_task_notebook_tests;
 #[cfg(test)]
 #[path = "core/sync_reliability_task_resume_tests.rs"]
 mod sync_reliability_task_resume_tests;
-#[cfg(test)]
-#[path = "core/sync_reliability_task_live_tests.rs"]
-mod sync_reliability_task_live_tests;
 
 #[cfg(test)]
 #[path = "core/gui_task_fixture.rs"]

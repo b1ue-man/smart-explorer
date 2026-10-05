@@ -136,7 +136,9 @@ impl GDriveBackend {
         let parent_id = self.actual_parent_id(&object.parent_id)?;
         let failure = match result {
             Ok(response) => match response.into_string().map_err(err).and_then(parse_json) {
-                Ok(json) if created_matches(&json, object, &parent_id, size, md5) => return Ok(mime_of(&json)),
+                Ok(json) if created_matches(&json, object, &parent_id, size, md5) => {
+                    return Ok(mime_of(&json))
+                }
                 Ok(_) => io::Error::new(
                     io::ErrorKind::InvalidData,
                     "Drive bestätigte das neue Objekt mit abweichenden Angaben",
@@ -205,9 +207,9 @@ fn created_matches(
     json["id"].as_str() == Some(object.id.as_str())
         && json["name"].as_str() == Some(object.title.as_str())
         && json["trashed"].as_bool() == Some(false)
-        && json["parents"].as_array().is_some_and(|parents| {
-            parents.len() == 1 && parents[0].as_str() == Some(parent_id)
-        })
+        && json["parents"]
+            .as_array()
+            .is_some_and(|parents| parents.len() == 1 && parents[0].as_str() == Some(parent_id))
         && json["size"]
             .as_str()
             .and_then(|value| value.parse::<u64>().ok())

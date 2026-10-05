@@ -5,9 +5,18 @@ use crate::daemon::sync_reliability_task_old_jobs_tests::SavedJob;
 #[test]
 fn sync_reliability_task_old_jobs_literal_remote_locators_keep_options_through_migration() {
     let endpoints = [
-        ("gdrive:///Notebook ", "sftp://one@example.test:2222/the same root"),
-        ("sftp://one@example.test:2222/shared", "webdav://two@example.test:443/shared"),
-        ("//server/share/literal %2F", "ftp://other@example.test:2121/literal %2F"),
+        (
+            "gdrive:///Notebook ",
+            "sftp://one@example.test:2222/the same root",
+        ),
+        (
+            "sftp://one@example.test:2222/shared",
+            "webdav://two@example.test:443/shared",
+        ),
+        (
+            "//server/share/literal %2F",
+            "ftp://other@example.test:2121/literal %2F",
+        ),
     ];
     for (source, target) in endpoints {
         let saved = SavedJob::old(source, target, "calendar");
@@ -21,7 +30,10 @@ fn sync_reliability_task_old_jobs_literal_remote_locators_keep_options_through_m
         assert_eq!(super::persistence_codec::serialize_kv(&edited), original);
         crate::syncjobs::upsert(&edited).unwrap();
         saved.assert_options(source, target);
-        assert_eq!((&*saved.load().source, &*saved.load().target), (source, target));
+        assert_eq!(
+            (&*saved.load().source, &*saved.load().target),
+            (source, target)
+        );
     }
 }
 
@@ -54,7 +66,10 @@ fn sync_reliability_task_old_jobs_edit_keeps_owner_and_missing_id_cannot_create_
     assert_eq!(edited.last_run, job.last_run);
     crate::syncjobs::upsert(&edited).unwrap();
     let result = saved.run().last_result.unwrap();
-    assert_eq!((result.a_to_b, result.b_to_a, result.deleted, result.errors), (0, 0, 0, 0));
+    assert_eq!(
+        (result.a_to_b, result.b_to_a, result.deleted, result.errors),
+        (0, 0, 0, 0)
+    );
     assert_eq!(saved.key(&local_a, &root_a, &local_b, &root_b), key);
     assert_eq!(std::fs::read(baseline).unwrap(), before);
 }
@@ -72,9 +87,23 @@ fn sync_reliability_task_old_jobs_explicit_zero_after_upgrade_survives_restart()
     job.versions_location = crate::bisync::VersionsLocation::AppData;
     crate::syncjobs::upsert(&job).unwrap();
     let back = saved.load();
-    assert_eq!((back.max_delete_pct, back.max_delete_min, back.rt_poll_secs,
-        back.verify_interval_secs, back.verify_target_secs), (0, 0, 0, 0, 0));
+    assert_eq!(
+        (
+            back.max_delete_pct,
+            back.max_delete_min,
+            back.rt_poll_secs,
+            back.verify_interval_secs,
+            back.verify_target_secs
+        ),
+        (0, 0, 0, 0, 0)
+    );
     assert!(!back.cross_mounts);
-    assert_eq!(back.versions_location, crate::bisync::VersionsLocation::AppData);
-    assert_eq!((&*back.id, &*back.source, &*back.target), (&*job.id, &*job.source, &*job.target));
+    assert_eq!(
+        back.versions_location,
+        crate::bisync::VersionsLocation::AppData
+    );
+    assert_eq!(
+        (&*back.id, &*back.source, &*back.target),
+        (&*job.id, &*job.source, &*job.target)
+    );
 }

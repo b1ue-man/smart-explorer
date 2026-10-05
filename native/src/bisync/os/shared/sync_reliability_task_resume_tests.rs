@@ -9,17 +9,28 @@ fn sync_reliability_task_resume_scan_failure_preserves_checkpoint_without_comple
     let pair = Pair::new();
     let globs = empty_globset();
     let filter = WalkFilter::basic(true, &globs);
-    let opts = BisyncOptions { delete: DeletePolicy::Mirror, ..forward() };
+    let opts = BisyncOptions {
+        delete: DeletePolicy::Mirror,
+        ..forward()
+    };
     pair.put(PairSide::A, "file.txt", b"recorded old bytes", TIME);
     let seeded = pair.run(opts, &filter);
     clean(&seeded);
     assert!(pair.index_complete(&seeded));
-    pair.put(PairSide::A, "file.txt", b"replacement after reconnect", TIME + 10_000);
+    pair.put(
+        PairSide::A,
+        "file.txt",
+        b"replacement after reconnect",
+        TIME + 10_000,
+    );
     let promotions = pair.b.promotions.load(Ordering::SeqCst);
     let listings = pair.a.listings.load(Ordering::SeqCst);
     *pair.a.listing_fault.lock().unwrap() = Some(io::ErrorKind::ConnectionReset);
     let failed = pair.run(opts, &filter);
-    assert!(!failed.errors.is_empty(), "incomplete enumeration must fail the scan");
+    assert!(
+        !failed.errors.is_empty(),
+        "incomplete enumeration must fail the scan"
+    );
     assert!(pair.a.listings.load(Ordering::SeqCst) > listings);
     assert_eq!(pair.bytes(PairSide::B, "file.txt"), b"recorded old bytes");
     assert_eq!(pair.stored(&seeded), seeded.baseline);
@@ -29,7 +40,10 @@ fn sync_reliability_task_resume_scan_failure_preserves_checkpoint_without_comple
     let resumed = pair.run(opts, &filter);
     clean(&resumed);
     assert_eq!(resumed.state, seeded.state);
-    assert_eq!(pair.bytes(PairSide::B, "file.txt"), b"replacement after reconnect");
+    assert_eq!(
+        pair.bytes(PairSide::B, "file.txt"),
+        b"replacement after reconnect"
+    );
     assert_eq!(pair.stored(&resumed), resumed.baseline);
     assert!(pair.index_complete(&resumed));
     pair.no_op(opts, &filter);
@@ -37,7 +51,11 @@ fn sync_reliability_task_resume_scan_failure_preserves_checkpoint_without_comple
 
 #[test]
 fn sync_reliability_task_resume_create_failures_retry_without_publishing_old_baseline() {
-    for kind in [io::ErrorKind::PermissionDenied, io::ErrorKind::StorageFull, io::ErrorKind::ConnectionReset] {
+    for kind in [
+        io::ErrorKind::PermissionDenied,
+        io::ErrorKind::StorageFull,
+        io::ErrorKind::ConnectionReset,
+    ] {
         let pair = Pair::new();
         let globs = empty_globset();
         let filter = WalkFilter::basic(true, &globs);
@@ -45,14 +63,28 @@ fn sync_reliability_task_resume_create_failures_retry_without_publishing_old_bas
         pair.put(PairSide::A, "file.txt", b"old destination", TIME);
         let seeded = pair.run(opts, &filter);
         clean(&seeded);
-        pair.put(PairSide::A, "file.txt", b"eventual full replacement", TIME + 10_000);
+        pair.put(
+            PairSide::A,
+            "file.txt",
+            b"eventual full replacement",
+            TIME + 10_000,
+        );
         let promotions = pair.b.promotions.load(Ordering::SeqCst);
         let opens = pair.b.stage_opens.load(Ordering::SeqCst);
         *pair.b.write_fault.lock().unwrap() = Some((kind, usize::MAX));
         let failed = pair.run(opts, &filter);
-        assert!(!failed.errors.is_empty() || failed.stopped.is_some() || failed.omissions.protects("file.txt"), "{kind:?}");
+        assert!(
+            !failed.errors.is_empty()
+                || failed.stopped.is_some()
+                || failed.omissions.protects("file.txt"),
+            "{kind:?}"
+        );
         assert!(pair.b.stage_opens.load(Ordering::SeqCst) > opens);
-        assert_eq!(pair.bytes(PairSide::B, "file.txt"), b"old destination", "{kind:?}");
+        assert_eq!(
+            pair.bytes(PairSide::B, "file.txt"),
+            b"old destination",
+            "{kind:?}"
+        );
         assert_eq!(pair.stored(&seeded), seeded.baseline, "{kind:?}");
         assert_eq!(pair.b.promotions.load(Ordering::SeqCst), promotions);
         assert_eq!(pair.b.active.load(Ordering::SeqCst), 0);
@@ -60,9 +92,16 @@ fn sync_reliability_task_resume_create_failures_retry_without_publishing_old_bas
         let resumed = pair.run(opts, &filter);
         clean(&resumed);
         assert_eq!(resumed.state, seeded.state);
-        assert_eq!(pair.bytes(PairSide::B, "file.txt"), b"eventual full replacement");
+        assert_eq!(
+            pair.bytes(PairSide::B, "file.txt"),
+            b"eventual full replacement"
+        );
         assert_eq!(pair.b.promotions.load(Ordering::SeqCst), promotions + 1);
-        let old = pair.versions(&resumed).into_iter().find(|entry| entry.rel == "file.txt").unwrap();
+        let old = pair
+            .versions(&resumed)
+            .into_iter()
+            .find(|entry| entry.rel == "file.txt")
+            .unwrap();
         assert_eq!(pair.version_bytes(&old), b"old destination");
         pair.no_op(opts, &filter);
     }
@@ -73,7 +112,11 @@ fn sync_reliability_task_resume_safe_transient_retry_happens_before_single_publi
     let pair = Pair::new();
     let globs = empty_globset();
     let filter = WalkFilter::basic(true, &globs);
-    let mut job = crate::syncjobs::SyncJob::new("retry this job".into(), pair.roots[0].clone(), pair.roots[1].clone());
+    let mut job = crate::syncjobs::SyncJob::new(
+        "retry this job".into(),
+        pair.roots[0].clone(),
+        pair.roots[1].clone(),
+    );
     job.direction = Direction::AtoB;
     job.retries = 1;
     job.retry_delay_secs = 0;
@@ -84,15 +127,24 @@ fn sync_reliability_task_resume_safe_transient_retry_happens_before_single_publi
     *pair.b.write_fault.lock().unwrap() = Some((io::ErrorKind::ConnectionReset, 1));
     let out = pair.run_settings(opts, &filter, RunSettings::for_job(&job.id));
     clean(&out);
-    assert_eq!(out.state.as_ref().unwrap().owner, StateOwner::Job(job.id.clone()));
+    assert_eq!(
+        out.state.as_ref().unwrap().owner,
+        StateOwner::Job(job.id.clone())
+    );
     assert_eq!(pair.b.stage_opens.load(Ordering::SeqCst), 2);
     assert_eq!(pair.b.promotions.load(Ordering::SeqCst), 1);
-    assert_eq!(pair.bytes(PairSide::B, "file.txt"), b"retried complete content");
+    assert_eq!(
+        pair.bytes(PairSide::B, "file.txt"),
+        b"retried complete content"
+    );
     assert_eq!(pair.stored(&out), out.baseline);
     let noop = pair.run_settings(opts, &filter, RunSettings::for_job(&job.id));
     clean(&noop);
     assert_eq!(noop.state, out.state);
-    assert_eq!(noop.stats.a_to_b + noop.stats.b_to_a + noop.stats.deleted, 0);
+    assert_eq!(
+        noop.stats.a_to_b + noop.stats.b_to_a + noop.stats.deleted,
+        0
+    );
     assert_eq!(pair.b.promotions.load(Ordering::SeqCst), 1);
 }
 
@@ -101,7 +153,10 @@ fn sync_reliability_task_resume_cancel_during_stream_preserves_old_bytes_and_che
     let pair = Pair::new();
     let globs = empty_globset();
     let filter = WalkFilter::basic(true, &globs);
-    let opts = BisyncOptions { verify: true, ..forward() };
+    let opts = BisyncOptions {
+        verify: true,
+        ..forward()
+    };
     pair.put(PairSide::A, "file.txt", b"old complete bytes", TIME);
     let seeded = pair.run(opts, &filter);
     clean(&seeded);
@@ -134,7 +189,12 @@ fn sync_reliability_task_resume_backup_denial_blocks_mutation_then_recovers() {
     pair.put(PairSide::A, "file.txt", b"recoverable original", TIME);
     let seeded = pair.run(opts, &filter);
     clean(&seeded);
-    pair.put(PairSide::A, "file.txt", b"new content after rights recover", TIME + 10_000);
+    pair.put(
+        PairSide::A,
+        "file.txt",
+        b"new content after rights recover",
+        TIME + 10_000,
+    );
     let promotions = pair.b.promotions.load(Ordering::SeqCst);
     pair.b.read_fault.store(true, Ordering::Release);
     let failed = pair.run(opts, &filter);
@@ -147,8 +207,15 @@ fn sync_reliability_task_resume_backup_denial_blocks_mutation_then_recovers() {
     let resumed = pair.run(opts, &filter);
     clean(&resumed);
     assert_eq!(resumed.state, seeded.state);
-    assert_eq!(pair.bytes(PairSide::B, "file.txt"), b"new content after rights recover");
-    let old = pair.versions(&resumed).into_iter().find(|entry| entry.rel == "file.txt").unwrap();
+    assert_eq!(
+        pair.bytes(PairSide::B, "file.txt"),
+        b"new content after rights recover"
+    );
+    let old = pair
+        .versions(&resumed)
+        .into_iter()
+        .find(|entry| entry.rel == "file.txt")
+        .unwrap();
     assert_eq!(pair.version_bytes(&old), b"recoverable original");
     pair.no_op(opts, &filter);
     pair.restore(&resumed, &old, PairSide::B);

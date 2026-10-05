@@ -31,7 +31,8 @@ impl GDriveBackend {
 
     pub(super) fn object_json(&self, id: &str) -> io::Result<Value> {
         let json = self.get_json(&self.api_url(&format!(
-            "files/{}?fields={OBJECT_FIELDS}", cloud_urlenc(id)
+            "files/{}?fields={OBJECT_FIELDS}",
+            cloud_urlenc(id)
         )))?;
         if text(&json, "id")? != id {
             return Err(invalid("Drive returned a different selected object ID"));
@@ -62,9 +63,9 @@ impl GDriveBackend {
     }
 
     pub(super) fn narrowed_listing_corpus(&self, parent: &str) -> io::Result<String> {
-        let json = self.get_json(&self.api_url(&format!(
-            "files/{}?fields=id,driveId", cloud_urlenc(parent)
-        )))?;
+        let json = self.get_json(
+            &self.api_url(&format!("files/{}?fields=id,driveId", cloud_urlenc(parent))),
+        )?;
         if text(&json, "id")? != parent {
             return Err(invalid("Drive returned a different listing parent"));
         }
@@ -79,17 +80,26 @@ impl GDriveBackend {
 }
 
 pub(super) fn text<'a>(json: &'a Value, field: &str) -> io::Result<&'a str> {
-    json[field].as_str().filter(|value| !value.is_empty())
+    json[field]
+        .as_str()
+        .filter(|value| !value.is_empty())
         .ok_or_else(|| invalid(format!("Drive object has no usable {field}")))
 }
 
 pub(super) fn in_parent(json: &Value, parent: &str) -> io::Result<bool> {
-    let trashed = json["trashed"].as_bool()
+    let trashed = json["trashed"]
+        .as_bool()
         .ok_or_else(|| invalid("Drive object has no trash-state evidence"))?;
-    if trashed { return Ok(false); }
-    let parents = json["parents"].as_array()
+    if trashed {
+        return Ok(false);
+    }
+    let parents = json["parents"]
+        .as_array()
         .ok_or_else(|| invalid("Drive object has no parent-identity evidence"))?;
-    if parents.iter().any(|parent| parent.as_str().is_none_or(str::is_empty)) {
+    if parents
+        .iter()
+        .any(|parent| parent.as_str().is_none_or(str::is_empty))
+    {
         return Err(invalid("Drive object has invalid parent identities"));
     }
     Ok(parents.len() == 1 && parents[0].as_str() == Some(parent))

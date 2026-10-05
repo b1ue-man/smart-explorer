@@ -65,7 +65,11 @@ impl Answer {
 
     /// The request reached the server, but no acknowledgement reaches Drive.
     pub(super) fn disconnect() -> Self {
-        Self { status: 0, headers: Vec::new(), body: Vec::new() }
+        Self {
+            status: 0,
+            headers: Vec::new(),
+            body: Vec::new(),
+        }
     }
 }
 
@@ -131,12 +135,22 @@ impl Server {
 
     /// A test backend (memory-only cache, fake token) against this server.
     pub(super) fn backend(&self) -> GDriveBackend {
-        GDriveBackend::test_backend_with_identity(&self.api_base(), Duration::from_secs(3),
-            None, None, &self.base, "")
+        GDriveBackend::test_backend_with_identity(
+            &self.api_base(),
+            Duration::from_secs(3),
+            None,
+            None,
+            &self.base,
+            "",
+        )
     }
 
-    pub(super) fn api_base(&self) -> String { format!("{}/drive/v3", self.base) }
-    pub(super) fn url(&self, path: &str) -> String { format!("{}{}", self.base, path) }
+    pub(super) fn api_base(&self) -> String {
+        format!("{}/drive/v3", self.base)
+    }
+    pub(super) fn url(&self, path: &str) -> String {
+        format!("{}{}", self.base, path)
+    }
 
     pub(super) fn requests(&self) -> Vec<Request> {
         self.requests.lock().unwrap().clone()
@@ -154,8 +168,13 @@ impl Drop for Server {
             let _ = acceptor.join();
         }
         let mut failed = false;
-        for worker in self.workers.lock().unwrap().drain(..) { failed |= worker.join().is_err(); }
-        assert!(!failed || thread::panicking(), "fixture connection worker failed");
+        for worker in self.workers.lock().unwrap().drain(..) {
+            failed |= worker.join().is_err();
+        }
+        assert!(
+            !failed || thread::panicking(),
+            "fixture connection worker failed"
+        );
     }
 }
 
@@ -195,7 +214,9 @@ fn serve(stream: TcpStream, handler: &Handler, requests: &Mutex<Vec<Request>>, s
         };
         let answer = handler(&request);
         requests.lock().unwrap().push(request);
-        if answer.status == 0 { return; }
+        if answer.status == 0 {
+            return;
+        }
         let mut head = format!("HTTP/1.1 {} Fixture\r\n", answer.status);
         for (name, value) in &answer.headers {
             head.push_str(&format!("{name}: {value}\r\n"));
@@ -297,31 +318,59 @@ pub(super) fn query_literal(text: &str) -> String {
     let mut result = String::new();
     let mut escaped = false;
     for c in text.chars() {
-        if escaped { result.push(c); escaped = false; }
-        else if c == '\\' { escaped = true; }
-        else if c == '\'' { break; }
-        else { result.push(c); }
+        if escaped {
+            result.push(c);
+            escaped = false;
+        } else if c == '\\' {
+            escaped = true;
+        } else if c == '\'' {
+            break;
+        } else {
+            result.push(c);
+        }
     }
     result
 }
 
-pub(super) fn list_page(request: &Request, mut files: Vec<serde_json::Value>, configured: usize) -> Answer {
+pub(super) fn list_page(
+    request: &Request,
+    mut files: Vec<serde_json::Value>,
+    configured: usize,
+) -> Answer {
     let query = request.query("q").unwrap_or_default();
     if let Some(rest) = query.split(" and name = '").nth(1) {
         let name = query_literal(rest).to_lowercase();
         files.retain(|file| file["name"].as_str().unwrap().to_lowercase() == name);
     }
-    let requested = request.query("pageSize").and_then(|n| n.parse().ok()).unwrap_or(100);
-    let size = if configured == 0 { requested } else { requested.min(configured) }.max(1);
+    let requested = request
+        .query("pageSize")
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(100);
+    let size = if configured == 0 {
+        requested
+    } else {
+        requested.min(configured)
+    }
+    .max(1);
     let start = match request.query("pageToken") {
         None => 0,
-        Some(token) => match token.strip_prefix("offset:").and_then(|n| n.parse::<usize>().ok()) {
+        Some(token) => match token
+            .strip_prefix("offset:")
+            .and_then(|n| n.parse::<usize>().ok())
+        {
             Some(start) if start <= files.len() => start,
-            _ => return Answer::status(400, serde_json::json!({"error":{"message":"page token rejected","errors":[{"reason":"invalid"}]}})),
+            _ => {
+                return Answer::status(
+                    400,
+                    serde_json::json!({"error":{"message":"page token rejected","errors":[{"reason":"invalid"}]}}),
+                )
+            }
         },
     };
     let end = start.saturating_add(size).min(files.len());
     let mut page = serde_json::json!({"files": files[start..end], "incompleteSearch": false});
-    if end < files.len() { page["nextPageToken"] = serde_json::json!(format!("offset:{end}")); }
+    if end < files.len() {
+        page["nextPageToken"] = serde_json::json!(format!("offset:{end}"));
+    }
     Answer::json(page)
 }

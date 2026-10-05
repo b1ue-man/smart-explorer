@@ -67,7 +67,9 @@ impl GDriveBackend {
                 Err(error) => return Err(error),
             }
         }
-        Err(io::Error::other("Drive metadata authentication retry did not finish"))
+        Err(io::Error::other(
+            "Drive metadata authentication retry did not finish",
+        ))
     }
 
     fn metadata_text(&self, url: &str, token: &str) -> VfsResult<String> {
@@ -108,6 +110,8 @@ impl GDriveBackend {
                 Err(error) => return Err(error),
             }
         }
-        Err(io::Error::other("Drive stream authentication retry did not finish"))
+        Err(io::Error::other(
+            "Drive stream authentication retry did not finish",
+        ))
     }
 }

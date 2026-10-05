@@ -52,8 +52,10 @@ pub(super) fn decode(segment: &str) -> io::Result<String> {
 /// physical target restrictions belong to the selected TargetLimits.
 pub(super) fn validate_component(name: &str) -> io::Result<()> {
     if name.is_empty() || matches!(name, "." | "..") || name.contains('/') || name.contains('\0') {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput,
-            "Drive name is not one path component"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Drive name is not one path component",
+        ));
     }
     Ok(())
 }

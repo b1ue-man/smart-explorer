@@ -10,7 +10,9 @@ pub(super) struct FileListPage<'a> {
 
 impl<'a> FileListPage<'a> {
     pub(super) fn parse(value: &'a Value) -> io::Result<Self> {
-        let object = value.as_object().ok_or_else(|| invalid("response is not an object"))?;
+        let object = value
+            .as_object()
+            .ok_or_else(|| invalid("response is not an object"))?;
         if object.contains_key("error") {
             return Err(invalid("unexpected error response"));
         }
@@ -32,10 +34,17 @@ impl<'a> FileListPage<'a> {
             Some(Value::String(token)) => Some(token.as_str()),
             Some(_) => return Err(invalid("nextPageToken is not a string")),
         };
-        Ok(Self { files, next_token, incomplete })
+        Ok(Self {
+            files,
+            next_token,
+            incomplete,
+        })
     }
 }
 
 fn invalid(detail: &str) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, format!("Drive files.list: {detail}"))
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("Drive files.list: {detail}"),
+    )
 }

@@ -15,11 +15,19 @@ fn sync_reliability_task_identity_paging_restarts_complete_collection_and_conver
         let f = DriveFixture::with_handler("Job", {
             let (phase, observed) = (phase.clone(), observed.clone());
             move |drive, request| {
-                let parent = drive.named("root", "Job")[0]["id"].as_str().unwrap().to_string();
+                let parent = drive.named("root", "Job")[0]["id"]
+                    .as_str()
+                    .unwrap()
+                    .to_string();
                 let query = request.query("q").unwrap_or_default();
-                if request.method != "GET" || request.path() != "/drive/v3/files"
-                    || !query.starts_with(&format!("'{parent}' in parents")) || query.contains("name =")
-                    || phase.load(Ordering::SeqCst) == 0 { return None; }
+                if request.method != "GET"
+                    || request.path() != "/drive/v3/files"
+                    || !query.starts_with(&format!("'{parent}' in parents"))
+                    || query.contains("name =")
+                    || phase.load(Ordering::SeqCst) == 0
+                {
+                    return None;
+                }
                 observed.fetch_add(1, Ordering::SeqCst);
                 let token = request.query("pageToken");
                 let stage = phase.load(Ordering::SeqCst);
@@ -30,8 +38,12 @@ fn sync_reliability_task_identity_paging_restarts_complete_collection_and_conver
                     phase.store(2, Ordering::SeqCst);
                     return Some(Answer::json(match fault {
                         "incomplete" => json!({"files":[ghost],"incompleteSearch":true}),
-                        "overlap" => json!({"files":[],"nextPageToken":"empty","incompleteSearch":false}),
-                        _ => json!({"files":[ghost],"nextPageToken":"fault-token","incompleteSearch":false}),
+                        "overlap" => {
+                            json!({"files":[],"nextPageToken":"empty","incompleteSearch":false})
+                        }
+                        _ => {
+                            json!({"files":[ghost],"nextPageToken":"fault-token","incompleteSearch":false})
+                        }
                     }));
                 }
                 if fault == "rejected" && stage == 2 && token.as_deref() == Some("fault-token") {
@@ -40,7 +52,9 @@ fn sync_reliability_task_identity_paging_restarts_complete_collection_and_conver
                 }
                 if fault == "cyclic" && stage == 2 && token.as_deref() == Some("fault-token") {
                     phase.store(3, Ordering::SeqCst);
-                    return Some(Answer::json(json!({"files":[],"nextPageToken":"fault-token","incompleteSearch":false})));
+                    return Some(Answer::json(
+                        json!({"files":[],"nextPageToken":"fault-token","incompleteSearch":false}),
+                    ));
                 }
                 if fault == "incomplete" && stage == 2 {
                     assert_eq!(request.query("corpora").as_deref(), Some("user"));
@@ -50,17 +64,23 @@ fn sync_reliability_task_identity_paging_restarts_complete_collection_and_conver
                     let mut stale = drive.children(&parent)[0].clone();
                     stale["md5Checksum"] = json!("stale-checksum");
                     phase.store(3, Ordering::SeqCst);
-                    return Some(Answer::json(json!({"files":[stale],"nextPageToken":"overlap","incompleteSearch":false})));
+                    return Some(Answer::json(
+                        json!({"files":[stale],"nextPageToken":"overlap","incompleteSearch":false}),
+                    ));
                 }
                 if fault == "overlap" && stage == 3 && token.as_deref() == Some("overlap") {
                     phase.store(4, Ordering::SeqCst);
-                    return Some(Answer::json(json!({"files":drive.children(&parent),"incompleteSearch":false})));
+                    return Some(Answer::json(
+                        json!({"files":drive.children(&parent),"incompleteSearch":false}),
+                    ));
                 }
                 None
             }
         });
         let a = f.write_file("a.md", b"seed a");
-        for title in ["b.md", "c.md", "d.md"] { f.write_file(title, title.as_bytes()); }
+        for title in ["b.md", "c.md", "d.md"] {
+            f.write_file(title, title.as_bytes());
+        }
         let opts = options(Direction::BtoA);
         let seed = f.run(opts);
         assert_complete(&seed);
@@ -75,12 +95,20 @@ fn sync_reliability_task_identity_paging_restarts_complete_collection_and_conver
         assert_eq!(f.local_bytes("e.md"), b"last page");
         assert_eq!(f.drive.bytes(&added), b"last page");
         assert!(super::sync_reliability_task_fixture::contains_bytes(
-            &crate::bisync::versions_dir(&recovered.state.as_ref().unwrap().pair_id), b"seed a"));
+            &crate::bisync::versions_dir(&recovered.state.as_ref().unwrap().pair_id),
+            b"seed a"
+        ));
         assert!(!recovered.baseline.contains_key("ghost.md"));
-        assert!(!std::path::Path::new(&f.local_root).join("ghost.md").exists());
+        assert!(!std::path::Path::new(&f.local_root)
+            .join("ghost.md")
+            .exists());
         assert!(observed.load(Ordering::SeqCst) >= 3);
         if fault == "overlap" {
-            assert!(f.server.requests().iter().any(|r| r.path() == format!("/drive/v3/files/{a}")));
+            assert!(f
+                .server
+                .requests()
+                .iter()
+                .any(|r| r.path() == format!("/drive/v3/files/{a}")));
         }
         assert_eq!(f.folder_posts(), 0);
         f.assert_noop(opts, &recovered);

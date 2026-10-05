@@ -127,8 +127,10 @@ impl SizedWriter {
             Purpose::Fresh => {
                 let parent_id = backend.resolve(&parent)?;
                 if backend.bound_folder(&parent_id, name)?.is_some() {
-                    return Err(io::Error::new(io::ErrorKind::AlreadyExists,
-                        "Drive file destination is a reserved folder locator"));
+                    return Err(io::Error::new(
+                        io::ErrorKind::AlreadyExists,
+                        "Drive file destination is a reserved folder locator",
+                    ));
                 }
                 let (id, new_id) = claim_upload_id(backend, &key)?;
                 (parent_id, id, new_id)
@@ -137,8 +139,10 @@ impl SizedWriter {
             Purpose::Stage => {
                 let parent_id = backend.ensure_dir(&parent)?;
                 if backend.bound_folder(&parent_id, name)?.is_some() {
-                    return Err(io::Error::new(io::ErrorKind::AlreadyExists,
-                        "Drive stage name is a reserved folder locator"));
+                    return Err(io::Error::new(
+                        io::ErrorKind::AlreadyExists,
+                        "Drive stage name is a reserved folder locator",
+                    ));
                 }
                 let id = backend.take_generated_id()?;
                 backend.own_stage(&key, &id)?;

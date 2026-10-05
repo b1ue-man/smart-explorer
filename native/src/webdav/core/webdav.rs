@@ -61,7 +61,8 @@ fn transport_builder() -> ureq::AgentBuilder {
         let mut roots = rustls::RootCertStore::empty();
         roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
         let der = std::fs::read(path).expect("read owned sync fixture CA");
-        roots.add(rustls::pki_types::CertificateDer::from(der))
+        roots
+            .add(rustls::pki_types::CertificateDer::from(der))
             .expect("valid owned sync fixture CA");
         let config = rustls::ClientConfig::builder_with_provider(Arc::new(
             rustls::crypto::ring::default_provider(),

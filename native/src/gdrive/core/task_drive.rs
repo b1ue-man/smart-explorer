@@ -28,32 +28,53 @@ impl Default for FakeDrive {
     fn default() -> Self {
         static SERIAL: AtomicUsize = AtomicUsize::new(0);
         let serial = SERIAL.fetch_add(1, Ordering::SeqCst);
-        Self::new(&format!("fake-root-{serial}"), &format!("fake-user-{serial}"))
+        Self::new(
+            &format!("fake-root-{serial}"),
+            &format!("fake-user-{serial}"),
+        )
     }
 }
 
 impl FakeDrive {
     pub(super) fn new(root_id: &str, permission_id: &str) -> Self {
-        Self { root_id: root_id.into(), permission_id: permission_id.into(),
-            next: AtomicUsize::new(0), page_size: AtomicUsize::new(0),
-            objects: Mutex::new(HashMap::new()), sessions: Mutex::new(HashMap::new()),
-            media: Mutex::new(HashMap::new()) }
+        Self {
+            root_id: root_id.into(),
+            permission_id: permission_id.into(),
+            next: AtomicUsize::new(0),
+            page_size: AtomicUsize::new(0),
+            objects: Mutex::new(HashMap::new()),
+            sessions: Mutex::new(HashMap::new()),
+            media: Mutex::new(HashMap::new()),
+        }
     }
 
     fn parent<'a>(&'a self, parent: &'a str) -> &'a str {
-        if parent == "root" { &self.root_id } else { parent }
+        if parent == "root" {
+            &self.root_id
+        } else {
+            parent
+        }
     }
 
-    pub(super) fn set_page_size(&self, size: usize) { self.page_size.store(size, Ordering::SeqCst); }
+    pub(super) fn set_page_size(&self, size: usize) {
+        self.page_size.store(size, Ordering::SeqCst);
+    }
 
     pub(super) fn change(&self, id: &str, changes: Value) {
         let mut objects = self.objects.lock().unwrap();
         let current = objects.get_mut(id).expect("fixture object exists");
-        for (key, value) in changes.as_object().unwrap() { current[key] = value.clone(); }
+        for (key, value) in changes.as_object().unwrap() {
+            current[key] = value.clone();
+        }
     }
 
     pub(super) fn bytes(&self, id: &str) -> Vec<u8> {
-        self.media.lock().unwrap().get(id).expect("fixture media exists").clone()
+        self.media
+            .lock()
+            .unwrap()
+            .get(id)
+            .expect("fixture media exists")
+            .clone()
     }
 
     pub(super) fn insert(&self, id: &str, name: &str, parent: &str, mime: &str, content: &[u8]) {
@@ -69,9 +90,11 @@ impl FakeDrive {
 
     pub(super) fn object(&self, id: &str) -> Option<Value> {
         if id == "root" || id == self.root_id {
-            return Some(json!({"id": self.root_id, "name": "My Drive", "parents": [],
+            return Some(
+                json!({"id": self.root_id, "name": "My Drive", "parents": [],
                 "mimeType": FOLDER_MIME, "trashed": false,
-                "modifiedTime": "2026-10-02T12:34:56.789Z"}));
+                "modifiedTime": "2026-10-02T12:34:56.789Z"}),
+            );
         }
         self.objects.lock().unwrap().get(id).cloned()
     }
@@ -111,7 +134,9 @@ impl FakeDrive {
     pub(super) fn answer(&self, request: &Request) -> Answer {
         let path = request.path().to_string();
         match (request.method.as_str(), path.as_str()) {
-            ("GET", "/drive/v3/about") => Answer::json(json!({"user": {"permissionId": self.permission_id}})),
+            ("GET", "/drive/v3/about") => {
+                Answer::json(json!({"user": {"permissionId": self.permission_id}}))
+            }
             ("GET", "/drive/v3/files/generateIds") => {
                 let count: usize = request
                     .query("count")
@@ -190,7 +215,11 @@ impl FakeDrive {
             ("GET", "/drive/v3/files") => {
                 let query = request.query("q").unwrap_or_default();
                 let parent = super::task_http::query_literal(query.trim_start_matches('\''));
-                super::task_http::list_page(request, self.children(&parent), self.page_size.load(Ordering::SeqCst))
+                super::task_http::list_page(
+                    request,
+                    self.children(&parent),
+                    self.page_size.load(Ordering::SeqCst),
+                )
             }
             ("POST", copy) if copy.ends_with("/copy") => {
                 let source = copy.trim_end_matches("/copy").rsplit('/').next().unwrap();

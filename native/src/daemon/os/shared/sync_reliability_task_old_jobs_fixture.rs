@@ -23,11 +23,15 @@ pub(crate) struct EndpointFixtures {
 impl EndpointFixtures {
     pub(crate) fn new(entries: Vec<(String, BackendHandle, String)>) -> Self {
         let id = NEXT_SCOPE.fetch_add(1, Ordering::Relaxed);
-        let entries = entries.into_iter().map(|(endpoint, backend, root)| {
-            (endpoint, Ok((backend, root)))
-        }).collect();
+        let entries = entries
+            .into_iter()
+            .map(|(endpoint, backend, root)| (endpoint, Ok((backend, root))))
+            .collect();
         ENDPOINTS.with(|scopes| scopes.borrow_mut().push((id, entries)));
-        Self { id, _thread: PhantomData }
+        Self {
+            id,
+            _thread: PhantomData,
+        }
     }
 
     pub(crate) fn insert(&self, endpoint: &str, backend: BackendHandle, root: &str) {
@@ -41,8 +45,11 @@ impl EndpointFixtures {
     fn put(&self, endpoint: &str, value: Endpoint) {
         ENDPOINTS.with(|scopes| {
             let mut scopes = scopes.borrow_mut();
-            let entries = &mut scopes.iter_mut().find(|(id, _)| *id == self.id)
-                .expect("live endpoint fixture guard").1;
+            let entries = &mut scopes
+                .iter_mut()
+                .find(|(id, _)| *id == self.id)
+                .expect("live endpoint fixture guard")
+                .1;
             entries.insert(endpoint.to_string(), value);
         });
     }
@@ -55,8 +62,13 @@ impl Drop for EndpointFixtures {
 }
 
 pub(crate) fn resolve_fixture(endpoint: &str) -> Option<Endpoint> {
-    ENDPOINTS.with(|scopes| scopes.borrow().iter().rev()
-        .find_map(|(_, entries)| entries.get(endpoint).cloned()))
+    ENDPOINTS.with(|scopes| {
+        scopes
+            .borrow()
+            .iter()
+            .rev()
+            .find_map(|(_, entries)| entries.get(endpoint).cloned())
+    })
 }
 
 pub(crate) struct SavedJob {
@@ -85,7 +97,10 @@ impl SavedJob {
     pub(crate) fn with_body(id: String, original: String) -> Self {
         std::fs::create_dir_all(crate::syncjobs::jobs_dir()).unwrap();
         let fixture = Self { id, original };
-        assert!(!fixture.path().exists(), "fixture must not replace an existing job");
+        assert!(
+            !fixture.path().exists(),
+            "fixture must not replace an existing job"
+        );
         fixture.repair();
         fixture
     }
@@ -95,7 +110,9 @@ impl SavedJob {
     }
 
     pub(crate) fn state_path(&self) -> PathBuf {
-        crate::support_dirs::sync_data_dir().join("job-state").join(format!("{}.json", self.id))
+        crate::support_dirs::sync_data_dir()
+            .join("job-state")
+            .join(format!("{}.json", self.id))
     }
 
     pub(crate) fn repair(&self) {
@@ -104,15 +121,26 @@ impl SavedJob {
 
     pub(crate) fn load(&self) -> SyncJob {
         let report = crate::syncjobs::load_report().unwrap();
-        assert!(!report.broken.iter().any(|broken| broken.id == self.id), "{:?}", report.broken);
-        report.jobs.into_iter().find(|job| job.id == self.id).expect("original saved job remains")
+        assert!(
+            !report.broken.iter().any(|broken| broken.id == self.id),
+            "{:?}",
+            report.broken
+        );
+        report
+            .jobs
+            .into_iter()
+            .find(|job| job.id == self.id)
+            .expect("original saved job remains")
     }
 
     pub(crate) fn run(&self) -> JobState {
         super::job::run_one(&self.load(), &AtomicBool::new(false));
         let state = crate::syncjobs::load_job_state(&self.id).unwrap();
         assert!(state.last_success.is_some(), "{state:?}");
-        assert!(state.last_error.is_none() && state.blocked.is_none(), "{state:?}");
+        assert!(
+            state.last_error.is_none() && state.blocked.is_none(),
+            "{state:?}"
+        );
         assert_eq!(state.last_result.as_ref().unwrap().errors, 0);
         state
     }
@@ -125,10 +153,14 @@ impl SavedJob {
         root_b: &str,
     ) -> crate::bisync::StateKey {
         let pair_id = crate::bisync::pair_id_for(a, root_a, b, root_b);
-        let directory = crate::support_dirs::sync_data_dir().join("pairs").join(&pair_id);
-        let history: serde_json::Value = serde_json::from_slice(&std::fs::read(
-            directory.join(format!("job-{}.replicas.json", self.id)),
-        ).expect("actual job-owned replica history")).unwrap();
+        let directory = crate::support_dirs::sync_data_dir()
+            .join("pairs")
+            .join(&pair_id);
+        let history: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(directory.join(format!("job-{}.replicas.json", self.id)))
+                .expect("actual job-owned replica history"),
+        )
+        .unwrap();
         let key = crate::bisync::StateKey {
             pair_id,
             lock_id: crate::bisync::pair_lock_id(a, root_a, b, root_b),
@@ -142,12 +174,24 @@ impl SavedJob {
 
     pub(crate) fn assert_options(&self, source: &str, target: &str) {
         let job = self.load();
-        assert_eq!((&*job.id, &*job.source, &*job.target), (&*self.id, source, target));
+        assert_eq!(
+            (&*job.id, &*job.source, &*job.target),
+            (&*self.id, source, target)
+        );
         assert_eq!(job.conflict, crate::bisync::ConflictMode::KeepBoth);
         assert_eq!(job.compare, crate::bisync::CompareMode::Checksum);
-        assert_eq!((job.retain_days, job.retain_count, job.modify_window_sec), (19, 7, 2));
-        assert_eq!(job.versioning_scheme, crate::bisync::VersioningScheme::Count);
-        assert_eq!(job.ignore, vec!["ignored/**".to_string(), "*.skip".to_string()]);
+        assert_eq!(
+            (job.retain_days, job.retain_count, job.modify_window_sec),
+            (19, 7, 2)
+        );
+        assert_eq!(
+            job.versioning_scheme,
+            crate::bisync::VersioningScheme::Count
+        );
+        assert_eq!(
+            job.ignore,
+            vec!["ignored/**".to_string(), "*.skip".to_string()]
+        );
         assert!(!job.include_hidden && job.atomic_copy && job.verify && job.cross_mounts);
         assert_eq!((job.max_delete_pct, job.max_delete_min), (20, 0));
         assert_eq!(job.config_version, crate::syncjobs::CURRENT_CONFIG_VERSION);
