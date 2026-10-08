@@ -88,6 +88,8 @@ pub(super) fn read_pair(
         }
         stop.store(true, Ordering::Release);
     };
+    // Both sides are read on their own threads; they log into this run's log.
+    let log = super::run_log::current();
     let read = &|side: u8,
                  backend: &dyn Backend,
                  root: &str,
@@ -95,6 +97,7 @@ pub(super) fn read_pair(
                  prev: &Tree,
                  duplicates: bool|
      -> SideRead {
+        let _current = super::run_log::enter(log.clone());
         let walked = std::panic::catch_unwind(AssertUnwindSafe(|| {
             walk_snapshot_with_options(
                 backend,
