@@ -216,6 +216,12 @@ fn server(command: ServerCommand) -> Result<(), String> {
             println!("server\t{}", config.canonical());
             println!("security\t{}", config.security().wire());
             println!("summary\t{}", config.summary());
+            if let Some(encrypted) = config.encrypted_alternative() {
+                println!("encrypted\t{encrypted}");
+                println!(
+                    "hint\tVerschlüsselt umstellen: se share server set {encrypted} (der Server braucht ein TLS-Zertifikat für diesen Namen: SE_SHARE_TLS_CERT/SE_SHARE_TLS_KEY; selbst signiert: #sha256=<Fingerabdruck> anhängen)"
+                );
+            }
         }
         ServerCommand::Set {
             server,

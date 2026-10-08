@@ -39,7 +39,11 @@ impl App {
         {
             ui.data_mut(|data| data.insert_temp(allow_id, allow_plaintext));
         }
-        server_security_line(ui, &self.share_server_draft, allow_plaintext);
+        if let Some(encrypted) = server_security_line(ui, &self.share_server_draft, allow_plaintext)
+        {
+            self.share_server_draft = encrypted;
+            ui.data_mut(|data| data.insert_temp(allow_id, false));
+        }
         ui.label("Gerätename");
         ui.add(
             egui::TextEdit::singleline(&mut self.share_device_draft)
@@ -187,11 +191,13 @@ fn stored_plaintext(stored: &str) -> bool {
 }
 
 /// Transport security of the entered address, or why it cannot be saved.
-fn server_security_line(ui: &mut egui::Ui, draft: &str, allow_plaintext: bool) {
+/// For a plaintext address it explains the encrypted setup and returns the
+/// encrypted address when the user adopts it (saved with the usual button).
+fn server_security_line(ui: &mut egui::Ui, draft: &str, allow_plaintext: bool) -> Option<String> {
     use crate::share::server_address::{ServerSecurity, SignalServerConfig};
     if draft.trim().is_empty() {
         ui.small("Kein Share-Server: Direktgeräte nur über das lokale Netz.");
-        return;
+        return None;
     }
     match SignalServerConfig::parse_input(draft, allow_plaintext) {
         Ok(config) if config.security() == ServerSecurity::Plaintext => {
@@ -202,12 +208,35 @@ fn server_security_line(ui: &mut egui::Ui, draft: &str, allow_plaintext: bool) {
                     config.summary()
                 ),
             );
+            let encrypted = config.encrypted_alternative()?;
+            ui.small(
+                "Verschlüsselt verbinden: Der Server braucht ein TLS-Zertifikat für den \
+                 eingetragenen Namen (se-share-server mit --tls-cert/--tls-key bzw. \
+                 SE_SHARE_TLS_CERT/SE_SHARE_TLS_KEY). Ein selbst signiertes Zertifikat \
+                 wird mit #sha256=<Fingerabdruck> angeheftet. Ein TLS-Fehler fällt nie \
+                 auf Klartext zurück.",
+            );
+            if config.names_ip_address() {
+                ui.colored_label(
+                    theme::warning(ui),
+                    "Die Adresse ist eine IP-Adresse: Trage den Servernamen ein, auf den das \
+                     Zertifikat ausgestellt ist, oder hefte das Zertifikat mit #sha256= an.",
+                );
+            }
+            ui.button(format!("Verschlüsselte Adresse übernehmen: {encrypted}"))
+                .on_hover_text(
+                    "Trägt die Adresse ein; danach „Verbindungseinstellungen speichern“.",
+                )
+                .clicked()
+                .then_some(encrypted)
         }
         Ok(config) => {
             ui.colored_label(theme::success(ui), config.summary());
+            None
         }
         Err(error) => {
             ui.colored_label(theme::danger(ui), error);
+            None
         }
     }
 }
