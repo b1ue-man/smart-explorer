@@ -107,6 +107,10 @@ impl App {
                                         toggle_id = Some(j.id.clone());
                                     }
                                     if ui.small_button("Versionen").clicked() { versions_id = Some(j.id.clone()); }
+                                    if ui.small_button("📜 Protokoll").on_hover_text("Live-Protokoll dieses Syncs: jeder gelesene Ordner, jeder Vergleich, jede Aktion").clicked() {
+                                        let name = if j.name.trim().is_empty() { j.id.clone() } else { j.name.clone() };
+                                        super::sync_job_log_ui::open(ctx, &j.id, &name);
+                                    }
                                     if !self.bisync_running
                                         && states.get(&j.id).is_some_and(|state| state.blocked.is_none() && state.load_error.is_none() && state.running_now(now_secs_i64()).is_none())
                                         && ui.button("▶ Jetzt").on_hover_text("Diesen Sync jetzt ausführen").clicked()

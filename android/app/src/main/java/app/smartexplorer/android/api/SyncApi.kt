@@ -20,6 +20,16 @@ import kotlinx.serialization.json.put
 // calls the background side needs. Field names exactly as api.md (camelCase); defaults keep
 // decoding tolerant and `Core.json` encodes them, so requests always carry every field.
 
+/** `sync.log`: complete lines of a job's live log from an offset (api.md). */
+@Serializable
+data class SyncLogChunk(
+    val text: String = "",
+    val next: Long = 0,
+    val size: Long = 0,
+    val restarted: Boolean = false,
+    val verbose: Boolean = false,
+)
+
 /** One `{value, label}` pair of `sync.options`; `value` is the Rust enum's `as_str()`. */
 @Serializable
 data class SyncChoice(
@@ -282,6 +292,18 @@ object SyncApi {
     }
 
     suspend fun versions(id: String): String = taskOf("sync.versions", buildJsonObject { put("id", id) })
+
+    /** Lines of the job's live log from [from] (null: the last page). */
+    suspend fun log(id: String, from: Long?): SyncLogChunk =
+        Core.request<SyncLogChunk>("sync.log", buildJsonObject {
+            put("id", id)
+            from?.let { put("from", it) }
+        })
+
+    /** Log unchanged entries one by one from the next run on. */
+    suspend fun setLogVerbose(id: String, verbose: Boolean) {
+        Core.call("sync.setLogVerbose", buildJsonObject { put("id", id); put("verbose", verbose) })
+    }
 
     suspend fun restoreVersion(id: String, version: SyncVersion, side: String? = null): String =
         taskOf("sync.restoreVersion", buildJsonObject {

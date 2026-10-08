@@ -168,6 +168,13 @@ pub(super) fn walk_snapshot_with_options(
     if let Some(snapshot) = super::snapshot_agent::walk_snapshot_via_agent(
         be, root, cancel, filter, hash, opts, fold_case,
     )? {
+        super::run_log::note(
+            "Scan",
+            &format!(
+                "{root} vom Gegenstellen-Agenten gelesen: {} Dateien",
+                snapshot.tree.len()
+            ),
+        );
         return Ok(snapshot);
     }
     let omissions = Mutex::new(super::omissions::SyncOmissions::new(fold_case));
@@ -193,8 +200,20 @@ pub(super) fn walk_snapshot_with_options(
         text_bytes: AtomicU64::new(0),
         reads: flow.clone().map(|flow| (flow, next_job())),
         progress: Progress::default(),
+        log: super::run_log::current(),
     };
+    let started = std::time::Instant::now();
     let tree = walk_tree(&context, flow, be.parallelism().max(1))?;
+    if let Some(log) = &context.log {
+        log.line(
+            "Scan",
+            &format!(
+                "{root} vollständig gelesen: {} Dateien in {:.1} s",
+                tree.len(),
+                started.elapsed().as_secs_f64()
+            ),
+        );
+    }
     Ok(Snapshot {
         tree,
         filtered: filtered.into_inner().unwrap_or_else(|e| e.into_inner()),

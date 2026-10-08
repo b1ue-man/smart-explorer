@@ -258,6 +258,8 @@ Aufzählungswerte (`direction`, `conflict`, `deletePolicy`, `compare`, `versioni
 - `sync.confirmBlock {id,kind}` → `{}`; bestätigt genau den angezeigten aktuellen Block einmal
   für den nächsten echten Lauf. Eine geänderte Sperre fordert erneute Prüfung.
 - `sync.versions {id}` → `{taskId}`; Ergebnis `{items:[{token,path,side,runId,preservedMs,size,reason,store}]}`.
+- `sync.log {id, from?}` → `{text, next, size, restarted, verbose}`: vollständige Zeilen des Live-Protokolls ab Offset `from` (ohne `from`: letzte Seite, höchstens 1 MiB); `restarted` = Datei rotiert/gekürzt.
+- `sync.setLogVerbose {id, verbose}` → `{verbose}`: unveränderte Einträge ab dem nächsten Lauf einzeln protokollieren.
   Token ist opaque und an Job sowie unveränderte Endpunkte gebunden.
 - `sync.restoreVersion {id,token,side?}` → `{taskId}`; `side` ist bei Legacy-Versionen ohne Seite
   erforderlich. Frische Verbindung, Paarsperre und erneuter Manifestabgleich vor sicherem Restore.

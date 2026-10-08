@@ -96,6 +96,7 @@ impl App {
         if self.show_sync_jobs {
             self.ui_sync_jobs(ctx);
         }
+        super::sync_job_log_ui::show(ctx);
         if self.show_preview {
             self.ui_preview(ctx);
         }

@@ -156,6 +156,10 @@ mod replica;
 mod replica_state;
 #[path = "os/shared/resolve.rs"]
 mod resolve_conflict;
+#[path = "os/shared/run_log.rs"]
+mod run_log;
+#[path = "os/shared/run_log_lines.rs"]
+mod run_log_lines;
 #[path = "core/run_types.rs"]
 mod run_types;
 #[path = "os/shared/single_recorded.rs"]
@@ -253,6 +257,10 @@ pub use replica_state::{
 pub use resolve_conflict::{
     resolve, resolve_checked, resolve_recorded, resolve_variant_checked, ResolvePhase,
 };
+pub use run_log::{
+    job_log_line, job_log_path, job_log_verbose, last_activity, read_job_log, set_job_log_verbose,
+    LogChunk, JOB_LOG_READ_BYTES, JOB_LOG_ROTATE_BYTES,
+};
 pub use run_types::{
     BlockConfirmation, ReplicaRef, RunBlock, RunSettings, RunStop, ScanDepth, StateKey, StateOwner,
 };
@@ -308,3 +316,6 @@ mod sync_reliability_task_protection_tests;
 #[cfg(test)]
 #[path = "os/shared/sync_reliability_task_resume_tests.rs"]
 mod sync_reliability_task_resume_tests;
+#[cfg(test)]
+#[path = "os/shared/sync_transparency_task_log_tests.rs"]
+mod sync_transparency_task_log_tests;

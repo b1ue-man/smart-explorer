@@ -42,6 +42,8 @@ pub(super) struct WalkContext<'a> {
     pub(super) reads: Option<(Arc<Flow>, u64)>,
     /// When the walk last got a listing or read through (overload patience).
     pub(super) progress: Progress,
+    /// The job's live log of the run that started this walk.
+    pub(super) log: Option<std::sync::Arc<super::run_log::RunLog>>,
 }
 
 /// What one folder contributes to the snapshot.

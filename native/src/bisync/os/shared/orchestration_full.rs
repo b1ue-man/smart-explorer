@@ -108,6 +108,9 @@ pub(super) fn run_full_locked(state: &RunState<'_>) -> Outcome {
     names.observe(PairSide::A, &snapshot.a, keys);
     names.observe(PairSide::B, &snapshot.b, keys);
     plan.conflicts.extend(snapshot.conflicts);
+    if let Some(log) = super::run_log::current() {
+        super::run_log_lines::plan_lines(&log, &plan, &snapshot.a, &snapshot.b, &base);
+    }
     let repair_keys: std::collections::BTreeSet<_> = snapshot
         .repairs
         .iter()
