@@ -63,6 +63,11 @@ pub(super) fn run_for(
     if !admitted {
         return AttemptOutcome::Cancelled;
     }
+    crate::bisync::job_log_line(
+        &job.id,
+        "Auslöser",
+        &format!("{cause:?}: Hintergrunddienst startet den Lauf"),
+    );
     let cursor = super::job_triggers::host_cursor(job);
     let (mut outcome, result) = attempt(job, &state, cancel, cause, progress);
     if !persist(job, started, cause, outcome.clone(), result) {

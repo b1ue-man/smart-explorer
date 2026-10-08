@@ -284,6 +284,7 @@ impl TreeWalk<'_> {
                 format!("sync tree exceeds {MAX_WALK_DEPTH} levels"),
             ));
         }
+        let started = Instant::now();
         let entries = match &self.flow {
             None => list_plain_directory(self.context, dir),
             Some(flow) => under_permits(
@@ -336,7 +337,19 @@ impl TreeWalk<'_> {
                 !filtered,
             );
         }
-        scan_listing(self.context, dir, dir_rel, listing.entries)
+        let listed = scan_listing(self.context, dir, dir_rel, listing.entries)?;
+        if let Some(log) = &self.context.log {
+            log.line(
+                "Gelesen",
+                &format!(
+                    "{dir}: {} Dateien, {} Ordner, {} ms",
+                    listed.files.len(),
+                    listed.dirs.len(),
+                    started.elapsed().as_millis()
+                ),
+            );
+        }
+        Ok(listed)
     }
 
     fn merge(&self, listed: Listed, depth: usize) {

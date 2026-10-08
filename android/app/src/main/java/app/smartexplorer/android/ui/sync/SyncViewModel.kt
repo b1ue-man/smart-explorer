@@ -33,6 +33,7 @@ internal sealed interface SyncPage {
 
     data object Background : SyncPage
     data class Versions(val job: SyncJob) : SyncPage
+    data class Log(val job: SyncJob) : SyncPage
 }
 
 /**
@@ -218,6 +219,8 @@ internal class SyncViewModel : ViewModel() {
     }
 
     fun openVersions(job: SyncJob) { leaveThen { page = SyncPage.Versions(job) } }
+
+    fun openLog(job: SyncJob) { leaveThen { page = SyncPage.Log(job) } }
 
     private fun reportRun(job: SyncJob, state: String, result: SyncRunResult?, failure: String) {
         val name = job.name.ifBlank { "Sync-Job" }

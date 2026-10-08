@@ -238,6 +238,8 @@ mod support_paths;
 mod sync_core;
 #[path = "os/shared/sync_exit_gate.rs"]
 mod sync_exit_gate;
+#[path = "core/sync_job_log_ui.rs"]
+mod sync_job_log_ui;
 #[path = "core/sync_job_state_ui.rs"]
 mod sync_job_state_ui;
 #[path = "os/shared/sync_jobs.rs"]

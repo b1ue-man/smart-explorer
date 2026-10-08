@@ -45,6 +45,8 @@ mod share_status;
 mod sync_conflicts;
 #[path = "sync_jobs.rs"]
 mod sync_jobs;
+#[path = "sync_log.rs"]
+mod sync_log;
 #[path = "sync_merge.rs"]
 mod sync_merge;
 #[path = "sync_run.rs"]
@@ -108,6 +110,8 @@ fn sync_method(rt: &Runtime, method: &str, args: &Value) -> Option<Result<Value,
         "sync.run" => sync_run::run(rt, args),
         "sync.confirmBlock" => sync_jobs::confirm_block(rt, args),
         "sync.versions" => sync_versions::list(rt, args),
+        "sync.log" => sync_log::read(args),
+        "sync.setLogVerbose" => sync_log::set_verbose(args),
         "sync.restoreVersion" => sync_versions::restore(rt, args),
         "sync.mirror" => sync_run::mirror(rt, args),
         "sync.conflicts" => sync_conflicts::conflicts(args),

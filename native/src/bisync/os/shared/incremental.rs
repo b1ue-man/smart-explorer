@@ -176,7 +176,13 @@ pub(super) fn try_incremental_run(state: &RunState<'_>) -> Option<Outcome> {
             changes,
             new_cursor,
         } => (changes, new_cursor),
-        ChangeCollection::Rebuild => return None,
+        ChangeCollection::Rebuild => {
+            super::run_log::note(
+                "Plan",
+                "Änderungsliste nicht eindeutig; beide Seiten werden vollständig verglichen",
+            );
+            return None;
+        }
         ChangeCollection::Canceled => {
             return Some(Outcome {
                 baseline: state.baseline.clone(),
@@ -248,6 +254,9 @@ pub(super) fn try_incremental_run(state: &RunState<'_>) -> Option<Outcome> {
         return None;
     }
     let (planned_a, planned_b) = apply_trees(source_side, source_items, target_items, &changes)?;
+    if let Some(log) = super::run_log::current() {
+        super::run_log_lines::incremental_lines(&log, changes.len(), &actions);
+    }
     let source_empty = if source_side == Side::A {
         planned_a.is_empty()
     } else {

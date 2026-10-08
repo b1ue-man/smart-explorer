@@ -91,6 +91,7 @@ fun SyncScreen() {
         is SyncPage.Merge -> MergeScreen(page.merge, onBack = vm::back)
         SyncPage.Background -> BackgroundPage(onBack = vm::back)
         is SyncPage.Versions -> VersionsScreen(page.job, onBack = vm::back)
+        is SyncPage.Log -> SyncLogScreen(page.job, onBack = vm::back)
     }
     vm.details?.let { text -> DetailsDialog(text, onDismiss = { vm.details = null }) }
     vm.confirmingBlock?.let { job ->
@@ -171,6 +172,7 @@ private fun JobsPage(vm: SyncViewModel) {
                             onDelete = { deleting = job },
                             onCheck = { vm.check(job) },
                             onVersions = { vm.openVersions(job) },
+                            onLog = { vm.openLog(job) },
                         ),
                     )
                 }

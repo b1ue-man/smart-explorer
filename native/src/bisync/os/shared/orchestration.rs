@@ -142,7 +142,35 @@ pub(super) struct RunState<'a> {
     pub store_path: Option<&'a Path>,
 }
 
+/// Runs with the saved job's live log (`run_log`): the walk, the comparisons
+/// and every apply event of this run are written to the job's log file.
 fn run_at(request: RunRequest<'_>, store_path: Option<&Path>) -> Outcome {
+    let log = match &request.settings.owner {
+        super::StateOwner::Job(id) => super::run_log::open_job_log(id),
+        super::StateOwner::AdHoc => None,
+    };
+    let Some(log) = log else {
+        return run_at_inner(request, store_path);
+    };
+    let _current = super::run_log::enter(Some(log.clone()));
+    super::run_log_lines::start_line(&log, &request);
+    let logging = super::run_log::LoggingSink {
+        log: log.clone(),
+        inner: request.observer,
+    };
+    let started = std::time::Instant::now();
+    let out = run_at_inner(
+        RunRequest {
+            observer: Some(&logging),
+            ..request
+        },
+        store_path,
+    );
+    super::run_log_lines::outcome_lines(&log, &out, started.elapsed());
+    out
+}
+
+fn run_at_inner(request: RunRequest<'_>, store_path: Option<&Path>) -> Outcome {
     let RunRequest {
         a,
         root_a,
