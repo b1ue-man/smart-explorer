@@ -8,7 +8,6 @@ use std::time::Duration;
 pub(super) struct Message {
     pub(super) side: PairSide,
     pub(super) event: ChangeNotice,
-    pub(super) mode: Option<ChangeSignalMode>,
 }
 
 pub(super) fn start(
@@ -28,7 +27,7 @@ pub(super) fn start(
                 Ok(value) => value,
                 Err(error) => {
                     let needs_user = super::job_triggers::connect_failure(&error).needs_user();
-                    deliver(&sink, &overflow, Message { side, event: ChangeNotice::Ended(error), mode: None });
+                    deliver(&sink, &overflow, Message { side, event: ChangeNotice::Ended(error) });
                     if needs_user { return; }
                     if wait(&stop, retry) { return; }
                     retry = retry.saturating_mul(2).min(Duration::from_secs(6 * 3600));
@@ -37,7 +36,7 @@ pub(super) fn start(
             };
             let mode = crate::vfs::change_signal_mode(&*backend, &root).ok().flatten();
             if interval == 0 && mode == Some(ChangeSignalMode::Poll) {
-                deliver(&sink, &overflow, Message { side, event: ChangeNotice::Ended("Änderungsabfrage ist ausgeschaltet".into()), mode: None });
+                deliver(&sink, &overflow, Message { side, event: ChangeNotice::Ended("Änderungsabfrage ist ausgeschaltet".into()) });
                 return;
             }
             let (sender, receiver) = crossbeam_channel::bounded(4096);
@@ -45,12 +44,12 @@ pub(super) fn start(
                 Ok(Some(subscription)) => subscription,
                 Ok(None) => {
                     deliver(&sink, &overflow, Message { side,
-                        event: ChangeNotice::Ended("Keine Änderungsereignisse; Abfrage aktiv".into()), mode: None });
+                        event: ChangeNotice::Ended("Keine Änderungsereignisse; Abfrage aktiv".into()) });
                     return;
                 }
                 Err(error) => {
                     let needs_user = super::job_triggers::connect_failure(&error.to_string()).needs_user();
-                    deliver(&sink, &overflow, Message { side, event: ChangeNotice::Ended(error.to_string()), mode: None });
+                    deliver(&sink, &overflow, Message { side, event: ChangeNotice::Ended(error.to_string()) });
                     if needs_user { return; }
                     if wait(&stop, retry) { return; }
                     retry = retry.saturating_mul(2).min(Duration::from_secs(6 * 3600));
@@ -63,14 +62,14 @@ pub(super) fn start(
                     Ok(event) => {
                         let needs_user = matches!(&event, ChangeNotice::Ended(error) if super::job_triggers::connect_failure(error).needs_user());
                         let ended = matches!(event, ChangeNotice::Ended(_));
-                        deliver(&sink, &overflow, Message { side, event, mode });
+                        deliver(&sink, &overflow, Message { side, event });
                         if needs_user { return; }
                         if ended { break; }
                     }
                     Err(crossbeam_channel::RecvTimeoutError::Timeout) => {},
                     Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
                         deliver(&sink, &overflow, Message { side,
-                            event: ChangeNotice::Ended("Änderungsabonnement beendet".into()), mode: None });
+                            event: ChangeNotice::Ended("Änderungsabonnement beendet".into()) });
                         break;
                     }
                 }
@@ -79,7 +78,7 @@ pub(super) fn start(
             if wait(&stop, retry) { return; }
         }
     }) {
-        let _ = error_sink.try_send(Message { side, event: ChangeNotice::Ended(error.to_string()), mode: None });
+        let _ = error_sink.try_send(Message { side, event: ChangeNotice::Ended(error.to_string()) });
     }
 }
 
