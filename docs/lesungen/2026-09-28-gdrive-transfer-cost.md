@@ -1,5 +1,9 @@
 # Google Drive backend: per-file transfer cost
 
+> Stand-Hinweis 2026-10-08: Abschnitt 1 ist überholt. Metadaten-, Listing- und Upload-Aufrufe
+> laufen inzwischen über gepoolte Clients (`gdrive/core/http.rs`), Backoff mit `Retry-After`
+> und Zufallsanteil (`overload.rs`). Aktueller Vergleich: `docs/refs/gdrive-opensource-sync-2026-10-08.md`.
+
 ## Purpose
 
 Hard facts about `native/src/gdrive`'s Drive v3 backend, gathered to inform a
