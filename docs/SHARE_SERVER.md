@@ -48,6 +48,22 @@ The client status reports **verschlüsselt** or **⚠ unverschlüsselt**. Its He
 keeps legacy fields but sends no local-address list, device name or fingerprint.
 Presence announcements continue to carry the routing material peers need.
 
+## Switching an existing plaintext address to TLS
+
+An address saved as `tcp://host:51820` (or `ws://…`) works only with the
+plaintext permission and is shown as **⚠ unverschlüsselt**. To encrypt it:
+
+1. The server must terminate TLS on its signaling port: `--tls-cert`/`--tls-key`
+   or `SE_SHARE_TLS_CERT`/`SE_SHARE_TLS_KEY` (see below). The certificate must
+   name the host the clients enter; an IP address needs a certificate for that IP
+   or a pinned self-signed certificate (`#sha256=…`).
+2. Enter the same host as `wss://host:51820` (or simply `host`, which means
+   exactly that). The desktop settings and the Android Share settings offer this
+   address with one click ("Verschlüsselte Adresse übernehmen"), the terminal
+   prints it in `se share server show` (`encrypted` line); then save.
+3. A TLS failure never falls back to plaintext. Once every client uses `wss://`,
+   `SE_SHARE_ALLOW_PLAINTEXT` can be removed from the server.
+
 ## Native TLS and Key Login
 
 The server can terminate TLS for both signaling and the adjacent Iroh relay:
