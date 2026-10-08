@@ -306,6 +306,41 @@ impl SignalServerConfig {
         pins
     }
 
+    /// The same servers over TLS, for switching a plaintext setup: `tcp://h:p`
+    /// becomes `wss://h:p` (`se-share-server` terminates TLS on its signaling
+    /// port), `ws://h[:p]/path` becomes `wss://h[:p]/path`. `None` when the
+    /// configuration is empty or already encrypted. Whether the server really
+    /// serves TLS there is only proven by connecting.
+    pub fn encrypted_alternative(&self) -> Option<String> {
+        if self.security() != ServerSecurity::Plaintext {
+            return None;
+        }
+        let entries: Vec<String> = self
+            .endpoints
+            .iter()
+            .map(|endpoint| {
+                let port = match (endpoint.scheme, endpoint.port) {
+                    (SignalScheme::Tcp, _) => Some(endpoint.port()),
+                    (_, port) => port,
+                };
+                let authority = match port {
+                    Some(port) => format!("{}:{port}", endpoint.url_host()),
+                    None => endpoint.url_host(),
+                };
+                format!("wss://{authority}{}", endpoint.path)
+            })
+            .collect();
+        Some(entries.join(", "))
+    }
+
+    /// An entry names its server by IP address; certificates from public
+    /// authorities name hosts, so TLS then needs the host name or a pin.
+    pub fn names_ip_address(&self) -> bool {
+        self.endpoints
+            .iter()
+            .any(|endpoint| endpoint.host.parse::<std::net::IpAddr>().is_ok())
+    }
+
     /// One line for status and settings: security, active and ignored entries.
     pub fn summary(&self) -> String {
         let active: Vec<String> = self
@@ -365,3 +400,7 @@ fn parse(raw: &str, reading: Reading) -> Result<SignalServerConfig, String> {
 #[cfg(test)]
 #[path = "signal_connection_config_tests.rs"]
 mod review_task_tests;
+
+#[cfg(test)]
+#[path = "sync_transparency_task_server_tests.rs"]
+mod sync_transparency_task_server_tests;

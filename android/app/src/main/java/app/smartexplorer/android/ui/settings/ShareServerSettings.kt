@@ -72,6 +72,24 @@ internal fun ShareServerSettings() {
                 color = if (current.security == "plaintext") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
             )
             if (current.migrated) Text("Die alte Adresse bleibt TCP. Für Verschlüsselung eine TLS-Adresse eingeben.")
+            current.encryptedAlternative?.let { encrypted ->
+                Text(
+                    "Verschlüsselt verbinden: Der Server braucht ein TLS-Zertifikat für den eingetragenen Namen " +
+                        "(se-share-server mit --tls-cert/--tls-key bzw. SE_SHARE_TLS_CERT/SE_SHARE_TLS_KEY). " +
+                        "Selbst signiert: #sha256=<Fingerabdruck> anhängen. Ein TLS-Fehler fällt nie auf Klartext zurück.",
+                )
+                if (current.namesIpAddress) {
+                    Text(
+                        "Die Adresse ist eine IP-Adresse: den Servernamen eintragen, auf den das Zertifikat ausgestellt ist.",
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                OutlinedButton(
+                    onClick = { server = encrypted; allowPlaintext = false },
+                    enabled = !saving && !loading,
+                ) { Text("Übernehmen: $encrypted") }
+                Text("Danach speichern.")
+            }
             if (current.ignoredPlaintext > 0) Text("${current.ignoredPlaintext} alte Klartexteinträge werden unter TLS ignoriert. Kein Rückfall auf Klartext.")
         }
         OutlinedTextField(

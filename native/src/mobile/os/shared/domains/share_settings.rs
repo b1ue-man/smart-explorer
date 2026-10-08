@@ -124,6 +124,8 @@ fn server_json(config: &SignalServerConfig, migrated: bool) -> Value {
         "plaintext": config.endpoints().iter().any(|endpoint| !endpoint.is_encrypted()),
         "ignoredPlaintext": config.ignored_plaintext(),
         "migrated": migrated,
+        "encryptedAlternative": config.encrypted_alternative(),
+        "namesIpAddress": config.names_ip_address(),
     })
 }
 

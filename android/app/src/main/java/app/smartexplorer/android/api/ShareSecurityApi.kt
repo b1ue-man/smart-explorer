@@ -13,6 +13,8 @@ data class ShareServerInfo(
     val plaintext: Boolean = false,
     val ignoredPlaintext: Int = 0,
     val migrated: Boolean = false,
+    val encryptedAlternative: String? = null,
+    val namesIpAddress: Boolean = false,
 )
 
 @Serializable
