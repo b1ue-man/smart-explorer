@@ -55,9 +55,9 @@ mod validation;
 
 pub use job_state::{
     AttemptOutcome, AttemptReport, BlockKind, Blocked, ChangeDetection, ConnectMark, FailureKind,
-    JobError, JobSide, JobState, Notified, PendingKind, PendingTrigger, ProblemKind, ProblemNotice,
-    RunCause, RunMark, Runner, WatchStatus, FAILURE_SERIES_MIN, JOB_STATE_VERSION,
-    RUN_MARK_STALE_SECS,
+    Interrupted, JobError, JobSide, JobState, Notified, PendingKind, PendingTrigger, ProblemKind,
+    ProblemNotice, Recheck, RunCause, RunMark, Runner, WatchStatus, FAILURE_SERIES_MIN,
+    JOB_STATE_VERSION, RUN_MARK_STALE_SECS,
 };
 pub use job_state_classify::{block_confirmation, block_kind, classify_run};
 pub use job_state_store::{
@@ -83,3 +83,6 @@ mod sync_reliability_task_old_jobs_editor_tests;
 #[cfg(test)]
 #[path = "os/shared/sync_reliability_task_old_jobs_tests.rs"]
 mod sync_reliability_task_old_jobs_tests;
+#[cfg(test)]
+#[path = "os/shared/sync_transparency_task_state_tests.rs"]
+mod sync_transparency_task_state_tests;

@@ -17,7 +17,9 @@ use super::job_state::{
     AttemptReport, BlockKind, Blocked, JobState, Notified, ProblemNotice, JOB_STATE_VERSION,
 };
 use super::job_state_lock::StateLock;
-use super::job_state_policy::{apply_attempt, build_notice, confirm, notice_due, problem_key};
+use super::job_state_policy::{
+    apply_attempt, attempt_text, build_notice, confirm, notice_due, problem_key,
+};
 use super::persistence::{
     app_data_dir, atomic_write, job_file, jobs_dir, load_job_file, read_regular_utf8, san_id,
 };
@@ -223,7 +225,44 @@ pub fn update_job_state(id: &str, change: impl FnOnce(&mut JobState)) -> io::Res
 /// times, failure series and backoff, error, block, result, run mark and the
 /// outstanding trigger it covered.
 pub fn record_attempt(id: &str, report: &AttemptReport) -> io::Result<JobState> {
-    update_job_state(id, |state| apply_attempt(state, report))
+    let stored = update_job_state(id, |state| apply_attempt(state, report));
+    let text = match &stored {
+        Ok(state) => attempt_text(report, state),
+        Err(error) => format!("Ergebnis konnte nicht gespeichert werden: {error}"),
+    };
+    crate::bisync::job_log_line(id, "Ergebnis", &text);
+    stored
+}
+
+/// A saved edit of the job may have fixed what only the user could fix
+/// (configuration, login, access): one automatic retry. Best effort; the
+/// configuration itself is already stored.
+pub(super) fn recheck_after_edit(id: &str) {
+    let waits = load_job_state(id).is_ok_and(|state| {
+        state.consecutive_failures > 0
+            && state
+                .last_error
+                .as_ref()
+                .is_some_and(|error| error.kind.needs_user())
+    });
+    if !waits {
+        return;
+    }
+    let now = now_secs();
+    let stored = update_job_state(id, |state| {
+        state.recheck = Some(super::job_state::Recheck {
+            evidence: now,
+            reason: "Einstellungen wurden gespeichert".into(),
+            pending: true,
+        });
+    });
+    if stored.is_ok() {
+        crate::bisync::job_log_line(
+            id,
+            "Wiederholung",
+            "Einstellungen wurden gespeichert; ein neuer Versuch ist vorgemerkt",
+        );
+    }
 }
 
 /// The user confirmed the shown block ("Trotzdem ausführen"): the next run may

@@ -171,7 +171,15 @@ pub(crate) fn run_daemon_with(handoff: Option<Handoff>) {
         // worker owns background runs) holds these enqueues only; running
         // jobs and catch-up runs continue.
         if controls.may_schedule(sync_enabled) {
-            let states = crate::syncjobs::load_job_states(&configured_jobs);
+            let mut states = crate::syncjobs::load_job_states(&configured_jobs);
+            let active: HashSet<String> = job_supervisor
+                .active_ids()
+                .into_iter()
+                .map(str::to_string)
+                .collect();
+            if super::job_recheck::refresh(&configured_jobs, &states, now, &active) {
+                states = crate::syncjobs::load_job_states(&configured_jobs);
+            }
             for job in &configured_jobs {
                 let Some(state) = states
                     .get(&job.id)

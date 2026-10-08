@@ -21,6 +21,13 @@ pub(super) const RENOTIFY_SECS: i64 = 86_400;
 /// Applies one finished attempt (see contract V4, `record_attempt`).
 pub(super) fn apply_attempt(state: &mut JobState, report: &AttemptReport) {
     state.last_attempt = Some(report.started);
+    state.interrupted = None;
+    // A cancelled attempt (pause, stop, host) did not test the evidence.
+    if !matches!(report.outcome, AttemptOutcome::Cancelled) {
+        if let Some(recheck) = state.recheck.as_mut() {
+            recheck.pending = false;
+        }
+    }
     state.last_runner = Some(report.runner);
     state.last_cause = Some(report.cause);
     if let Some(result) = &report.result {
@@ -38,6 +45,7 @@ pub(super) fn apply_attempt(state: &mut JobState, report: &AttemptReport) {
             state.last_success = Some(report.finished);
             state.consecutive_failures = 0;
             state.last_error = None;
+            state.recheck = None;
             state.blocked = None;
             state.retry_at = None;
             clear_covered_trigger(state, report.started);
@@ -67,6 +75,30 @@ pub(super) fn apply_attempt(state: &mut JobState, report: &AttemptReport) {
             clear_covered_trigger(state, report.started);
         }
     }
+}
+
+/// The job log's result line of one recorded attempt (any runner).
+pub(super) fn attempt_text(report: &AttemptReport, state: &JobState) -> String {
+    let outcome = match &report.outcome {
+        AttemptOutcome::Success => "Erfolg".to_string(),
+        AttemptOutcome::Failed(error) => format!("Fehler ({:?}): {}", error.kind, error.message),
+        AttemptOutcome::Cancelled => "abgebrochen; offene Auslöser bleiben vorgemerkt".into(),
+        AttemptOutcome::Blocked(block) => format!("Sicherheitsstopp: {}", block.detail),
+    };
+    let retry = state
+        .retry_at
+        .and_then(|at| chrono::DateTime::<chrono::Utc>::from_timestamp(at, 0))
+        .map(|at| {
+            format!(
+                " · nächster automatischer Versuch {}",
+                at.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M")
+            )
+        })
+        .unwrap_or_default();
+    format!(
+        "{outcome} · {:?} ({:?}) · {} Fehler in Folge{retry}",
+        report.runner, report.cause, state.consecutive_failures
+    )
 }
 
 fn clear_covered_trigger(state: &mut JobState, started: i64) {

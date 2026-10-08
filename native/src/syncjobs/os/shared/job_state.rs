@@ -68,6 +68,13 @@ pub struct JobState {
     pub last_connect: Option<ConnectMark>,
     /// Worker bookkeeping: the last problem notification (throttle).
     pub notified: Option<Notified>,
+    /// New evidence that a failure only the user could fix may be gone
+    /// (credentials changed, configuration edited, another job on the same
+    /// OAuth account succeeded): allows exactly one automatic retry.
+    pub recheck: Option<Recheck>,
+    /// A run mark whose runner stopped renewing it (process ended, update,
+    /// crash) was cleared; shown until the next attempt finishes.
+    pub interrupted: Option<Interrupted>,
     /// Not stored: why the stored state could not be read (the file was set
     /// aside and this state starts empty).
     #[serde(skip)]
@@ -96,6 +103,30 @@ impl JobState {
             None
         }
     }
+}
+
+/// Evidence that allows one retry of a `needs_user` failure.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Recheck {
+    /// Time of the evidence (credential change, edit, sibling success).
+    pub evidence: i64,
+    /// German explanation for the job line and the log.
+    pub reason: String,
+    /// The retry has not run yet.
+    pub pending: bool,
+}
+
+/// A run that ended without reporting its result.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Interrupted {
+    pub runner: Runner,
+    pub started: i64,
+    /// Last sign of life of the run.
+    pub alive: i64,
+    /// When the service noticed it.
+    pub detected: i64,
 }
 
 /// Why an attempt failed.
