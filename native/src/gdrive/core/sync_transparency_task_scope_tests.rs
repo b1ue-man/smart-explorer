@@ -41,9 +41,9 @@ fn tree() -> Map<&'static str, Option<&'static str>> {
     ])
 }
 
-fn lookup_in(
-    tree: &Map<&'static str, Option<&'static str>>,
-) -> impl FnMut(&str) -> io::Result<Option<String>> + '_ {
+fn lookup_in<'a>(
+    tree: &'a Map<&'static str, Option<&'static str>>,
+) -> impl FnMut(&str) -> io::Result<Option<String>> + 'a {
     move |id: &str| {
         tree.get(id)
             .map(|parent| parent.map(str::to_string))
