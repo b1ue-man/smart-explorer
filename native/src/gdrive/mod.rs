@@ -23,6 +23,8 @@ mod binding_store;
 mod cache;
 #[path = "core/cache_store.rs"]
 mod cache_store;
+#[path = "core/change_scope.rs"]
+mod change_scope;
 #[path = "core/changes.rs"]
 mod changes;
 #[path = "core/chunk_stream.rs"]

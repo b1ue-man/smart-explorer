@@ -223,10 +223,10 @@ fn receive(
             use crate::vfs::ChangeNotice;
             match message.event {
                 ChangeNotice::Ready { .. } => {
-                    coverage.insert(
-                        message.side,
-                        Some(message.mode == Some(crate::vfs::ChangeSignalMode::Push)),
-                    );
+                    // `Ready` promises complete coverage of the root (pushed
+                    // notices or a complete polled feed such as Drive's);
+                    // partial subscriptions send `ReadyPartial`.
+                    coverage.insert(message.side, Some(true));
                     verification = true;
                 }
                 ChangeNotice::ReadyPartial { .. } => {

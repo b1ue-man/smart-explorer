@@ -111,13 +111,17 @@ impl BackendExtensions for GDriveBackend {
 
     fn change_signal(
         &self,
-        _root: &str,
+        root: &str,
         interval: Duration,
         tx: crossbeam_channel::Sender<crate::vfs::ChangeNotice>,
     ) -> VfsResult<Option<ChangeSubscription>> {
+        // Only changes below the root trigger a run; the feed covers the root
+        // completely in My Drive (shared drives need their own feed).
+        let mut scope = super::change_scope::ChangeScope::new(self, root)?;
+        let complete = scope.feed_complete(self);
         let mut cursor = self.start_page_token()?;
         let backend = self.clone();
-        crate::connect::poll_subscription(interval, tx, true, move |canceled| {
+        crate::connect::poll_subscription(interval, tx, complete, move |canceled| {
             let batch = backend.drive_changes_since_poll(&cursor, canceled)?;
             if canceled.load(std::sync::atomic::Ordering::Acquire) {
                 return Err(io::Error::new(
@@ -135,10 +139,10 @@ impl BackendExtensions for GDriveBackend {
                     "Drive change page has no terminal cursor",
                 )
             })?;
-            Ok(if batch.changes.is_empty() {
-                crate::connect::PollNotice::Quiet
-            } else {
+            Ok(if scope.relevant(&backend, &batch.changes) {
                 crate::connect::PollNotice::Changed
+            } else {
+                crate::connect::PollNotice::Quiet
             })
         })
         .map(Some)
