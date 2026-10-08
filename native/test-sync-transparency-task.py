@@ -77,6 +77,9 @@ INTEGRATION_MODULES = [
     "creds::",
 ]
 INTEGRATION_LINUX = ["sync_state_json::"]
+# Needs the real SFTP/FTP/Share protocol fixtures (case C04) that only the
+# sync-reliability suite provisions; its behavior is outside this batch.
+EXCLUDED = ["sync_reliability_task_options_share_private_versions_restore_restart_and_noop"]
 
 # Batch files: formatting gate (all were rustfmt-clean before the batch).
 FORMAT_FILES = """
@@ -85,7 +88,7 @@ app/core/sync_job_log_ui.rs app/core/sync_job_state_ui.rs app/mod.rs
 bisync/mod.rs bisync/os/shared/incremental.rs bisync/os/shared/orchestration.rs
 bisync/os/shared/orchestration_full.rs bisync/os/shared/run_log.rs
 bisync/os/shared/run_log_lines.rs bisync/os/shared/snapshot.rs
-bisync/os/shared/snapshot_dir.rs bisync/os/shared/snapshot_walk.rs
+bisync/os/shared/snapshot_dir.rs bisync/os/shared/snapshot_pair.rs bisync/os/shared/snapshot_walk.rs
 bisync/os/shared/sync_transparency_task_log_tests.rs cli/share.rs creds/os/shared.rs
 daemon/mod.rs daemon/os/shared/due.rs daemon/os/shared/job.rs
 daemon/os/shared/job_recheck.rs daemon/os/shared/job_supervisor.rs
@@ -237,7 +240,8 @@ def main():
     selected = {name for names in mapping.values() for name in names}
     modules = INTEGRATION_MODULES + ([] if os.name == "nt" else INTEGRATION_LINUX)
     for module in modules:
-        found = [name for name in available if module in name]
+        found = [name for name in available if module in name
+            and not any(name.endswith("::" + excluded) for excluded in EXCLUDED)]
         if not found:
             raise RuntimeError(f"Directly affected module has no tests in this binary: {module}")
         selected.update(found)
