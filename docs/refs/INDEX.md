@@ -2,6 +2,10 @@
 
 Lokal gesicherte API-/Lib-Syntax (Abrufdatum im Kopf jeder Datei).
 
+- [Google-Drive-Sync in Open-Source-Projekten](gdrive-opensource-sync-2026-10-08.md):
+  rclone 1.75.1, onedrive 2.5.11, google-drive-ocamlfuse 0.9.0, grive2; Drive-API-Kontingente
+  und Feed-Vertrag; ergebnisoffene Bewertung gegen den eigenen Bestand; geprüft 2026-10-08.
+
 - [Sync-Task-Laufzeit](sync-task-runtime-2026-10-04.md): tatsächliche SFTP-/FTP-/
   FTPS-Fixtures, isoliertes Test-CA-Vertrauen und Android-Altapp-Update mit
   passender Development-/Instrumentation-Signatur; geprüft 2026-10-04.

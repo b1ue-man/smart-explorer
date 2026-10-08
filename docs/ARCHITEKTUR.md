@@ -1,6 +1,6 @@
 # Smart Explorer – Architektur
 
-Stand: 2026-10-05. Kurzüberblick als erster Einstieg; Details liefert der Code-Graph
+Stand: 2026-10-08. Kurzüberblick als erster Einstieg; Details liefert der Code-Graph
 (`graphify query "…"`, siehe AGENTS.md) und die Lesungen unter `docs/lesungen/`.
 
 ## Zweck
@@ -34,6 +34,9 @@ Speicheranalyse – als Desktop-App (Windows, Linux; Rust + egui) und als Androi
 | Sync-Literalpfade | `bisync/core/sync_relative_path.rs` erhält Providerliterale für Apply, Baseline, Checkpoints, SQL, Versionsmanifeste und Recovery. Native Zugriffe prüfen zusätzlich die tatsächlichen Backendlimits; `legacy_backup_path.rs` hält den physischen Pfadvertrag alter Archive. Die separate Agent-Wire-Grammatik bleibt in `agent_proto/core/relative_path.rs`. |
 | Alte seitenspezifische Syncnamen | `bisync/core/keys.rs::PathAliases` bildet ausschließlich belegte alte Seitenpfade auf ihren gemeinsamen logischen Schlüssel ab. `os/shared/state_spelling_policy.rs` liest und validiert historische Viermap-Records; `state_spelling_aliases.rs` verbindet diese Zuordnung mit Indexbeweis und berührten Änderungen. `state_spelling_history.rs::DirectoryHistory` trennt historische gefaltete Existenzkeys von Literalankern und rekeyed über den bestehenden Checkpointjournalpfad. Bestätigte Ordneraktionen verwenden ihren logischen Aliaskey; fehlgeschlagene Aktionen behalten ihre Basis. Vollscan, Vorschau, inkrementeller Lauf und gespeicherte Auflösung erhalten tatsächliche I/O-Pfade und schützen belegte physische Zielkollisionen. |
 | Desktop-Close/Update bei laufendem Sync | `app/os/shared/sync_exit_gate.rs`, `app/core/sync_run_state.rs`; tatsächliche Worker-Completion gibt Shutdown frei |
+| Live-Sync-Protokoll je Job | `bisync/os/shared/run_log.rs` (Datei `<sync data>/job-logs/<id>.log`, Rotation 8 MiB, Leser mit Offset, Aktivität als Fortschritt, Thread-Kontext des Laufs, `LoggingSink` um den Apply-Beobachter), Zeilentexte `run_log_lines.rs`; Ergebniszeile aller Läufer in `syncjobs::record_attempt`; Anzeige Desktop `app/core/sync_job_log_ui.rs`, Android `sync.log` (`mobile/.../sync_log.rs`) → `ui/sync/SyncLogScreen.kt` |
+| Wiederaufnahme nach Anmeldefehlern, tote Laufmarken | `daemon/os/shared/job_recheck.rs` (Belege: `creds::credentials_revision`, späterer Erfolg auf demselben Google-Konto; Laufmarke ohne Lebenszeichen → `JobState::interrupted` + Kontrolllauf), Editor-Beleg `syncjobs::job_state_store::recheck_after_edit`; Zulassung `due::recheck_pending`. Keine automatischen Login-Versuche ohne Beleg (Kontosperren). |
+| Drive-Änderungsfeed je Sync-Ordner | `gdrive/core/change_scope.rs` (bekannte IDs aus dem Konto-Cache, Elternkette per `files.get`, Shared Drive = Teilabdeckung); `realtime.rs` wertet `ChangeNotice::Ready` als vollständige Abdeckung. Vergleich mit Open-Source-Clients: `docs/refs/gdrive-opensource-sync-2026-10-08.md` |
 | Hintergrund-Daemon | `native/src/daemon/` (`run_daemon`, eingebettet `ensure_embedded_daemon`, Nachhol-Lauf `request_catch_up`); `catch_up.rs` besitzt Abschluss/Cancel/Retry, `catch_up_attempt.rs` Zulassung und Fortschritt; `native/src/autostart/` |
 | Share/P2P | `native/src/share/` (Iroh/QUIC, Profile, Discovery, Räume), stabile Fassade `share/api_exports.rs`, Exec-Zulassung `share/core/exec_admission.rs`, LAN-Probe-/Dial-Actor `share/os/shared/lan_link_dial.rs`; Share-Server `share-server/` |
 | Eigene Share-Stages | `share/core/peer_stages.rs` hält Creatortickets pro `PeerBackend` für die gemeinsame enge Unique-Stage-Grammatik unter `vfs/core/staging_names.rs`; `peer_writer.rs` bestätigt die exklusive Erstellung erst nach Writer-ACK. Finish, Veröffentlichung und Discard konsumieren diese Grenze über `peer_extensions.rs`, `peer_transfer.rs` und `peer_reversible_replace.rs`. Unklare Veröffentlichungen bleiben gesperrt. |
@@ -103,6 +106,8 @@ Android-APIs: `docs/refs/android-apis.md`, `docs/refs/android-platform.md`; CI: 
 - Windows-Startregression 0.5.170: `startup-regression-task.yml` →
   `native/test-startup-regression-task.py`, reale bestehende DACLs und Worker-Handoff
   aus v0.5.169 mit den inkrementellen Development-Ausgaben derselben RV1-Caches.
+- Sync-Transparenz 2026-10-08: `sync-transparency-task.yml` → `native/test-sync-transparency-task.py`
+  (Präfix `sync_transparency_task_`, Linux/Windows plus Android-Build). Plan: `docs/plaene/2026-10-08-sync-transparenz/`.
 - Sync-Verlässlichkeit: `sync-reliability-task.yml` → `native/test-sync-reliability-task.py`
   als einziger Remote-Einstieg für native Provider-/Job-/Wiederanlaufverträge und
   echtes Android-Altappupdate. Plan und Ergebnisorakel: `docs/plaene/2026-10-04-sync-verlaesslichkeit/`.
