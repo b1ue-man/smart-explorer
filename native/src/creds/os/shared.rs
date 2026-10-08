@@ -37,7 +37,32 @@ fn connections_path() -> PathBuf {
 // ── secrets (platform credential backend) ───────────────────────────────────
 
 pub fn set_secret(account: &str, secret: &str) -> Result<(), String> {
-    secure_store::set_secret(account, secret)
+    secure_store::set_secret(account, secret)?;
+    mark_credentials_changed();
+    Ok(())
+}
+
+fn credentials_revision_path() -> PathBuf {
+    app_data_dir().join("creds-revision")
+}
+
+/// Records that a credential was stored (new login, new password, rotated
+/// token). Sync jobs that wait for the user after a login failure retry
+/// once when this is newer than their failed attempt. Best effort: the
+/// credential itself is already stored.
+fn mark_credentials_changed() {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0);
+    let _ = std::fs::write(credentials_revision_path(), now.to_string());
+}
+
+/// Unix seconds of the last credential change this installation recorded.
+pub fn credentials_revision() -> Option<i64> {
+    std::fs::read_to_string(credentials_revision_path())
+        .ok()
+        .and_then(|text| text.trim().parse().ok())
 }
 
 pub fn get_secret_checked(account: &str) -> Result<Option<String>, String> {
@@ -298,6 +323,16 @@ mod tests {
             label: "Work box".into(),
             use_agent: false,
         }
+    }
+
+    #[test]
+    fn sync_transparency_task_stored_credentials_advance_the_revision() {
+        let before = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        mark_credentials_changed();
+        assert!(credentials_revision().is_some_and(|at| at >= before));
     }
 
     #[test]

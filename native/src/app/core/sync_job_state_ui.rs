@@ -1,6 +1,6 @@
 //! Shared cached JobState display for setup manager and landing tiles.
 use super::*;
-use crate::syncjobs::{BlockKind, ChangeDetection, JobState, Runner, SyncJob};
+use crate::syncjobs::{BlockKind, ChangeDetection, JobState, PendingKind, Runner, SyncJob};
 use eframe::egui;
 use std::{
     collections::BTreeMap,
@@ -87,13 +87,30 @@ pub(in crate::app) fn summary(state: Option<&JobState>) -> (String, bool) {
         return (format!("Laufzustand nicht lesbar: {error}"), true);
     }
     let detail = if let Some(mark) = state.running_now(now_secs_i64()) {
-        format!("{} läuft", runner(mark.runner))
+        format!(
+            "{} läuft seit {}",
+            runner(mark.runner),
+            time(Some(mark.started))
+        )
     } else if state.blocked.is_some() {
         "Sicherheitsstopp · Bestätigung erforderlich".into()
     } else if let Some(error) = &state.last_error {
+        let next = if !error.kind.needs_user() {
+            ""
+        } else if state
+            .recheck
+            .as_ref()
+            .is_some_and(|recheck| recheck.pending)
+        {
+            " · neuer Versuch vorgemerkt"
+        } else {
+            " · wartet auf erneute Anmeldung oder geänderte Einstellungen"
+        };
         format!(
-            "{} Fehler in Folge: {}",
-            state.consecutive_failures, error.message
+            "{} Fehler in Folge, zuletzt {}: {}{next}",
+            state.consecutive_failures,
+            time(state.last_attempt),
+            error.message
         )
     } else if let Some(result) = &state.last_result {
         format!("{} · {} Konflikte", result.note, result.conflicts)
@@ -152,18 +169,45 @@ pub(in crate::app) fn render(ui: &mut egui::Ui, state: Option<&JobState>) {
             result.note
         ));
     }
+    let running = state.running_now(now_secs_i64()).is_some();
     if let Some(mark) = state.running_now(now_secs_i64()) {
-        if mark.stalled_since.is_some() {
+        if let Some(since) = mark.stalled_since {
             ui.colored_label(
                 theme::warning(ui),
-                "Lauf ohne Fortschritt; Dienst prüft Wiederanlauf.",
+                format!(
+                    "Keine Lauf-Aktivität seit {}; der letzte Schritt steht im Protokoll.",
+                    time(Some(since))
+                ),
             );
         }
-    } else if state.running.is_some() {
+    } else if let Some(mark) = &state.running {
         ui.colored_label(
             theme::warning(ui),
-            "Letzter Läufer meldet sich nicht mehr; Ergebnis prüfen.",
+            format!(
+                "Lauf von {} ({}) meldet sich seit {} nicht mehr; er wird als unterbrochen vermerkt.",
+                time(Some(mark.started)),
+                runner(mark.runner),
+                time(Some(mark.alive))
+            ),
         );
+    }
+    if let Some(interrupted) = &state.interrupted {
+        ui.colored_label(
+            theme::warning(ui),
+            format!(
+                "Lauf von {} ({}) endete ohne Ergebnis (letztes Lebenszeichen {}); ein Kontrolllauf ist vorgemerkt.",
+                time(Some(interrupted.started)),
+                runner(interrupted.runner),
+                time(Some(interrupted.alive))
+            ),
+        );
+    }
+    if let Some(recheck) = state.recheck.as_ref().filter(|recheck| recheck.pending) {
+        ui.label(format!(
+            "Neuer Versuch vorgemerkt: {} ({})",
+            recheck.reason,
+            time(Some(recheck.evidence))
+        ));
     }
     if let Some(retry) = state.retry_at {
         ui.label(format!(
@@ -171,8 +215,24 @@ pub(in crate::app) fn render(ui: &mut egui::Ui, state: Option<&JobState>) {
             time(Some(retry))
         ));
     }
-    if state.pending_trigger.is_some() {
-        ui.label("Ausstehender Auslöser bleibt vorgemerkt.");
+    if let Some(pending) = &state.pending_trigger {
+        let what = match pending.kind {
+            PendingKind::Change => "Änderung erkannt",
+            PendingKind::Verify => "Kontrolllauf fällig",
+            PendingKind::Startup => "Startlauf offen",
+            PendingKind::Connect => "Laufwerk angeschlossen",
+            PendingKind::Confirmed => "Bestätigter Lauf offen",
+            PendingKind::Other => "Geplanter Lauf offen",
+        };
+        let when = if running {
+            "wird nach dem laufenden Lauf übernommen"
+        } else {
+            "wird im nächsten Lauf übernommen"
+        };
+        ui.label(format!(
+            "{what} seit {}; {when}.",
+            time(Some(pending.since))
+        ));
     }
     if let Some(watch) = &state.watch {
         let detection = match &watch.detection {
@@ -251,6 +311,30 @@ mod tests {
         assert!(text.contains("3 Fehler in Folge"));
         assert!(text.contains("Anmeldung erforderlich"));
     }
+    #[test]
+    fn sync_transparency_task_job_line_dates_errors_and_names_the_way_out() {
+        let mut state = JobState {
+            last_attempt: Some(2000),
+            consecutive_failures: 7,
+            last_error: Some(crate::syncjobs::JobError {
+                kind: crate::syncjobs::FailureKind::Auth,
+                message: "HTTP 400: invalid_grant".into(),
+            }),
+            ..Default::default()
+        };
+        let (text, warn) = summary(Some(&state));
+        assert!(warn);
+        assert!(text.contains(&format!("7 Fehler in Folge, zuletzt {}", time(Some(2000)))));
+        assert!(text.contains("wartet auf erneute Anmeldung"));
+        state.recheck = Some(crate::syncjobs::Recheck {
+            evidence: 3000,
+            reason: "Anmeldedaten wurden geändert".into(),
+            pending: true,
+        });
+        let (text, _) = summary(Some(&state));
+        assert!(text.contains("neuer Versuch vorgemerkt"));
+    }
+
     #[test]
     fn desktop_job_state_block_takes_precedence_over_old_success_result() {
         let mut state = JobState::default();

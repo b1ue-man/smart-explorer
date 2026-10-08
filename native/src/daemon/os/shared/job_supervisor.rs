@@ -133,7 +133,12 @@ impl JobSupervisor {
             self.last_beat = Instant::now();
             let now = super::state::now_secs();
             for active in &self.active {
-                let progress = active.progress.load(Ordering::Acquire);
+                // Scanning and comparing write log lines; they count as
+                // progress as much as finished apply actions do.
+                let progress = active
+                    .progress
+                    .load(Ordering::Acquire)
+                    .max(crate::bisync::last_activity(&active.id).unwrap_or(i64::MIN));
                 if let Err(error) = crate::syncjobs::update_job_state(&active.id, |state| {
                     if let Some(mark) = state.running.as_mut().filter(|mark| {
                         mark.runner == Runner::Daemon && mark.started == active.started
@@ -450,13 +455,17 @@ fn admission_allowed(state: &crate::syncjobs::JobState, cause: RunCause, now: i6
     if state.blocked.is_some() {
         return false;
     }
+    let needs_user = state
+        .last_error
+        .as_ref()
+        .is_some_and(|error| error.kind.needs_user());
     state.consecutive_failures == 0
         || (cause == RunCause::Retry
-            && !state
-                .last_error
-                .as_ref()
-                .is_some_and(|error| error.kind.needs_user())
-            && state.retry_at.is_some_and(|at| at <= now))
+            && if needs_user {
+                super::due::recheck_pending(state)
+            } else {
+                state.retry_at.is_some_and(|at| at <= now)
+            })
 }
 fn current_trigger(job: &SyncJob, cause: RunCause) -> bool {
     use crate::syncjobs::Trigger;
@@ -481,6 +490,9 @@ impl Drop for JobSupervisor {
     }
 }
 
+#[cfg(test)]
+#[path = "sync_transparency_task_supervisor_tests.rs"]
+mod sync_transparency_task_supervisor_tests;
 #[cfg(test)]
 #[path = "job_supervisor_tests.rs"]
 mod tests;

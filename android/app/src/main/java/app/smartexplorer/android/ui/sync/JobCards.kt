@@ -90,6 +90,7 @@ internal class JobActions(
     val onDelete: () -> Unit,
     val onCheck: () -> Unit,
     val onVersions: () -> Unit,
+    val onLog: () -> Unit,
 )
 
 /**
@@ -127,7 +128,11 @@ internal fun JobCard(
             Box(Modifier.padding(end = 12.dp)) {
                 when {
                     running -> RunningLine(runTask?.message?.ifBlank { null } ?: "Synchronisiere…")
-                    daemonRuns || job.state?.running != null -> RunningLine(if (job.state?.running?.stalledSinceMs != null) "Lauf wartet auf E/A…" else "Läuft im Hintergrund…")
+                    daemonRuns || job.state?.running != null -> RunningLine(
+                        job.state?.running?.stalledSinceMs?.let { "Keine Lauf-Aktivität seit ${BackgroundText.moment(it)} – letzter Schritt im Protokoll" }
+                            ?: job.state?.running?.startedMs?.let { "Läuft im Hintergrund seit ${BackgroundText.moment(it)}…" }
+                            ?: "Läuft im Hintergrund…",
+                    )
                     else -> JobStateLine(job, actions)
                 }
             }
@@ -146,6 +151,7 @@ private fun JobMenu(job: SyncJob, actions: JobActions) {
             if (job.direction == SyncJob.DIRECTION_BOTH) MenuEntry("Konflikte", { open = false }, actions.onConflicts)
             MenuEntry("Prüfen", { open = false }, actions.onCheck)
             MenuEntry("Versionen", { open = false }, actions.onVersions)
+            MenuEntry("Protokoll", { open = false }, actions.onLog)
             MenuEntry("Löschen", { open = false }, actions.onDelete)
         }
     }
@@ -164,6 +170,10 @@ private fun JobStateLine(job: SyncJob, actions: JobActions) {
         state?.lastSuccessMs?.let { HintText("Letzter Erfolg: ${BackgroundText.moment(it)}") }
         state?.retryAtMs?.let { HintText("Erneuter Versuch: ${BackgroundText.moment(it)}") }
         state?.pendingTrigger?.let { HintText("Folgelauf offen seit ${BackgroundText.moment(it.sinceMs)}") }
+        state?.interrupted?.let {
+            HintText("Lauf von ${BackgroundText.moment(it.startedMs)} endete ohne Ergebnis (letztes Lebenszeichen ${BackgroundText.moment(it.aliveMs)}); Kontrolllauf vorgemerkt")
+        }
+        state?.recheck?.takeIf { it.pending }?.let { HintText("Neuer Versuch vorgemerkt: ${it.reason}") }
         state?.watch?.let { watch ->
             val text = when (watch.detection?.mode) {
                 "events" -> "Änderungshinweise und Kontrollläufe"

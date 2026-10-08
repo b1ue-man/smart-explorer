@@ -264,6 +264,8 @@ mod windows_remote_task_tests;
 
 #[path = "os/shared/due.rs"]
 mod due;
+#[path = "os/shared/job_recheck.rs"]
+mod job_recheck;
 #[path = "os/shared/job_triggers.rs"]
 mod job_triggers;
 #[path = "os/shared/own_writes.rs"]

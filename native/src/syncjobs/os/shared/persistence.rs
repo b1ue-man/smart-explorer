@@ -238,7 +238,9 @@ pub fn load_report() -> io::Result<JobLoadReport> {
 /// Add or replace a job (by id) - rewrites just that job's file.
 pub fn upsert(job: &SyncJob) -> io::Result<()> {
     let directory = ensure_jobs_dir()?;
-    write_job(&directory, job)
+    write_job(&directory, job)?;
+    super::job_state_store::recheck_after_edit(&job.id);
+    Ok(())
 }
 
 /// Removes a job's configuration and its runtime state (one deletion path

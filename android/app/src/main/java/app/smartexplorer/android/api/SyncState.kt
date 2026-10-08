@@ -21,7 +21,17 @@ data class SyncState(
     val lastVerifyMs: Long? = null,
     val verifyCursor: String? = null,
     val pendingTrigger: SyncPendingTrigger? = null,
+    val interrupted: SyncInterrupted? = null,
+    val recheck: SyncRecheck? = null,
 )
+
+/** A run that stopped reporting (process ended); a verification run follows. */
+@Serializable
+data class SyncInterrupted(val runner: String = "other", val startedMs: Long = 0, val aliveMs: Long = 0, val detectedMs: Long = 0)
+
+/** New evidence (login changed, settings saved) allows one retry of a failure only the user could fix. */
+@Serializable
+data class SyncRecheck(val reason: String = "", val evidenceMs: Long = 0, val pending: Boolean = false)
 
 @Serializable
 data class SyncPendingTrigger(val kind: String = "other", val sinceMs: Long = 0)

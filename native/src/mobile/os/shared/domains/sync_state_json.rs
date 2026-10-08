@@ -28,6 +28,13 @@ pub(super) fn attach(mut job: Value, state: &JobState, now: i64) -> Value {
             "kind": pending.kind, "sinceMs": ms(pending.since),
         })), "watch": state.watch,
         "lastVerifyMs": state.last_verify.map(ms), "verifyCursor": state.verify_cursor,
+        "interrupted": state.interrupted.as_ref().map(|run| json!({
+            "runner": run.runner, "startedMs": ms(run.started), "aliveMs": ms(run.alive),
+            "detectedMs": ms(run.detected),
+        })),
+        "recheck": state.recheck.as_ref().map(|recheck| json!({
+            "reason": recheck.reason, "evidenceMs": ms(recheck.evidence), "pending": recheck.pending,
+        })),
     });
     job
 }
@@ -63,5 +70,30 @@ mod tests {
         assert!(row["lastResult"].is_null());
         assert_eq!(row["state"]["running"]["startedMs"], 190000);
         assert!(attach(json!({"id":"job"}), &state, 10000)["state"]["running"].is_null());
+    }
+
+    #[test]
+    fn sync_transparency_task_android_state_carries_interruption_and_recheck() {
+        let state = JobState {
+            interrupted: Some(crate::syncjobs::Interrupted {
+                runner: crate::syncjobs::Runner::Desktop,
+                started: 10,
+                alive: 20,
+                detected: 30,
+            }),
+            recheck: Some(crate::syncjobs::Recheck {
+                evidence: 40,
+                reason: "Einstellungen wurden gespeichert".into(),
+                pending: true,
+            }),
+            ..JobState::default()
+        };
+        let row = attach(json!({"id":"job"}), &state, 50);
+        assert_eq!(row["state"]["interrupted"]["startedMs"], 10_000);
+        assert_eq!(row["state"]["interrupted"]["aliveMs"], 20_000);
+        assert_eq!(row["state"]["recheck"]["pending"], true);
+        assert_eq!(row["state"]["recheck"]["evidenceMs"], 40_000);
+        let empty = attach(json!({"id":"job"}), &JobState::default(), 50);
+        assert!(empty["state"]["interrupted"].is_null() && empty["state"]["recheck"].is_null());
     }
 }

@@ -37,6 +37,14 @@ fn automatic(job: &SyncJob) -> bool {
     job.enabled && job.trigger != Trigger::Manual
 }
 
+/// New evidence allows one retry of a failure only the user could fix.
+pub(super) fn recheck_pending(state: &JobState) -> bool {
+    state
+        .recheck
+        .as_ref()
+        .is_some_and(|recheck| recheck.pending)
+}
+
 /// Why the job should start now (`None`: not now). `since` is the previous
 /// evaluation of the timer schedules.
 pub(super) fn due_now(
@@ -72,7 +80,9 @@ pub(super) fn due_now(
             .as_ref()
             .is_some_and(|error| error.kind.needs_user())
         {
-            return None;
+            // No automatic login attempts (account lockout, fail2ban); only
+            // new evidence (changed credentials, edit, sibling success).
+            return recheck_pending(state).then_some(RunCause::Retry);
         }
         let retry = match state.retry_at {
             Some(at) => now >= at,
@@ -124,7 +134,7 @@ pub(super) fn next_due(job: &SyncJob, state: &JobState, now: i64) -> Option<i64>
             .as_ref()
             .is_some_and(|error| error.kind.needs_user())
         {
-            return None;
+            return recheck_pending(state).then_some(now);
         }
         return state.retry_at.map(|at| at.max(now));
     }
