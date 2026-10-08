@@ -128,3 +128,33 @@ Zwei-Wege-Vollscan; der inkrementelle Zwei-Wege-Planer bleibt als `GDRIVE-INCR` 
 - 2026-10-08: M1–M7 umgesetzt (Dateien siehe D), Tests mit Präfix `sync_transparency_task_`,
   Suite `sync-transparency-task.yml` → `native/test-sync-transparency-task.py`. Formatierung
   der Batchdateien lokal statisch mit `rustfmt` (stdin) geprüft; keine lokale Kompilierung.
+- 2026-10-08: Remote-Suite `sync-transparency-task.yml`: Lauf 37785236569 (`1352a2d1`) scheiterte
+  an einer fehlenden Lebensdauerangabe im Drive-Filtertest; Lauf 37788742856 (`9efb4ec5`) zeigte,
+  dass die Seiten-Threads von `read_pair` den Protokollkontext nicht erbten (keine „Gelesen“-Zeilen),
+  und dass der C04-Test echte Protokoll-Fixtures der Sync-Verlässlichkeits-Suite braucht (aus dieser
+  Suite ausgenommen). [Lauf 37791272768](https://github.com/b1ue-man/smart-explorer/actions/runs/37791272768)
+  auf `159d678b`: Linux 151/151, Windows 143/143 Tests bestanden, Android-Build, APKs und JVM-Tests
+  bestanden. Formatgate sauber.
+- 2026-10-08: [Vollständiger Release](https://github.com/b1ue-man/smart-explorer/actions/runs/37794039183)
+  aus `159d678b` und [Publikationslauf](https://github.com/b1ue-man/smart-explorer/actions/runs/37807741762)
+  erfolgreich; [v0.5.173](https://github.com/b1ue-man/smart-explorer/releases/tag/v0.5.173) seit
+  16:23:41 UTC veröffentlicht (kein Draft/Prerelease), Tag auf Release-Commit `b34c95cf`.
+  `native/Cargo.toml`, `release-native/update-feed/version.txt` und Installer = 0.5.173. Alle 20
+  Assets heruntergeladen: die sieben Payload-Sidecars stimmen mit ihren Payloads, jedes Asset
+  stimmt byteidentisch mit der Datei im Release-Commit (Installer-SHA-256
+  `b8e3f70b553eb27de644f8bc725a04e98215d780fa426adcb99f4f8d87c650d7`).
+- 2026-10-08: Lokale Installation: `install-linux.sh --cli-only` mit
+  `SMART_EXPLORER_REQUIRE_RELEASE_ASSETS=1` → `se 0.5.173` (Update-Quelle unverändert);
+  `se update --complete-install 0.5.173` → `{"version":"0.5.173","worker":"replaced","worker_error":null}`;
+  beide Daemonprozesse laufen aus der veröffentlichten Datei (SHA-256
+  `10481ee259dd06ea6c39078a3841e9fb03976099649b6e3154807aae6725a1a9`). `se-share-server` nach
+  verifiziertem Backup (`se-share-server.bak-0.5.172`) atomar ersetzt, Dienst `active`, laufende
+  Prozessdatei = `se-share-server-linux` (`ce6a2056…f006`), Ports 51820/51821.
+- 2026-10-08: Lokale Share-Adresse `tcp://silasweis.de:51820` → `wss://silasweis.de:51820`
+  (Vorschlag aus `se share server show`); Daemonlog: „Share-Server verbunden (🔒 verschlüsselt,
+  wss://silasweis.de:51820, Schluessel-Anmeldung=true)“, Relay `https://silasweis.de:51821/`.
+  `SE_SHARE_ALLOW_PLAINTEXT=1` bleibt auf dem Server, solange Windows-/Android-Clients noch
+  `tcp://` verwenden.
+- Nicht belegt: Verhalten auf dem Windows-Rechner des Nutzers (Drive-Feed-Filter mit echtem Konto,
+  Wiederaufnahme des Notebook-Jobs nach dem Update) und die Oberflächen von Protokollfenster/-bildschirm
+  wurden nicht in echter Nutzung gesehen; belegt sind Kompilierung, Unit-/Integrationstests und Build.
