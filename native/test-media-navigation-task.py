@@ -165,7 +165,12 @@ def main():
         raise RuntimeError("The requested full candidate SHA does not match the checked-out source.")
     env = dict(os.environ)
     env.update(CARGO_BUILD_JOBS="1", CARGO_INCREMENTAL="1", CARGO_PROFILE_TEST_DEBUG="0",
-        CARGO_PROFILE_DEV_DEBUG="0", CARGO_TERM_COLOR="never", RUST_BACKTRACE="1")
+        CARGO_PROFILE_DEV_DEBUG="0", CARGO_TERM_COLOR="never", RUST_BACKTRACE="1",
+        # The remote-open tests build their App through the isolated task constructor.
+        SMART_EXPLORER_COPY_PASTE_TASK="1",
+        SMART_EXPLORER_E2E_TEST_NAMESPACE="media_nav_" + candidate[:12])
+    for name in ["SE_SHARE_RELAY_URL", "SE_SHARE_RELAY_ONLY"]:
+        env.pop(name, None)
     format_gate(logs, env)
     binary = fixture(args, logs, env, candidate)
     run([str(binary), "--list", "--format", "terse"], logs / "available-tests.txt", 120, env)
