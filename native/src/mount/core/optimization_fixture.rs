@@ -32,6 +32,7 @@ struct Inner {
     read_override: Mutex<Option<Vec<u8>>>,
     stat_gate: Mutex<Option<StatGate>>,
     fail_upload: AtomicBool,
+    lose_promotion: Mutex<Option<Vec<u8>>>,
 }
 
 pub(crate) struct OptimizationBackend(Arc<Inner>);
@@ -48,6 +49,7 @@ impl OptimizationBackend {
             read_override: Mutex::new(None),
             stat_gate: Mutex::new(None),
             fail_upload: AtomicBool::new(false),
+            lose_promotion: Mutex::new(None),
         })));
         backend.mkdir("/");
         backend
@@ -103,6 +105,23 @@ impl OptimizationBackend {
 
     pub(crate) fn fail_upload(&self, fail: bool) {
         self.0.fail_upload.store(fail, Ordering::SeqCst);
+    }
+
+    /// The next promotion loses its reply after another writer stored `bytes`
+    /// at the destination; later promotions behave normally.
+    pub(crate) fn lose_next_promotion(&self, bytes: &[u8]) {
+        *self.0.lose_promotion.lock().unwrap() = Some(bytes.to_vec());
+    }
+
+    fn promote(&self, source: &str, destination: &str, replace: bool) -> io::Result<()> {
+        let lost = self.0.lose_promotion.lock().unwrap().take();
+        match lost {
+            Some(bytes) => {
+                self.put(destination, &bytes);
+                Err(io::Error::new(io::ErrorKind::TimedOut, "fixture promotion reply lost"))
+            }
+            None => self.move_node(source, destination, replace),
+        }
     }
 
     pub(crate) fn make_link(&self, path: &str) {
@@ -231,8 +250,8 @@ impl Backend for OptimizationBackend {
     fn open_write_new(&self, path: &str) -> io::Result<Box<dyn Write + Send>> { self.writer(path, true) }
     fn rename(&self, src: &str, dst: &str) -> io::Result<()> { self.move_node(src, dst, true) }
     fn rename_no_replace(&self, src: &str, dst: &str) -> io::Result<()> { self.move_node(src, dst, false) }
-    fn promote_staged(&self, src: &str, dst: &str) -> io::Result<()> { self.move_node(src, dst, true) }
-    fn promote_staged_no_replace(&self, src: &str, dst: &str) -> io::Result<()> { self.move_node(src, dst, false) }
+    fn promote_staged(&self, src: &str, dst: &str) -> io::Result<()> { self.promote(src, dst, true) }
+    fn promote_staged_no_replace(&self, src: &str, dst: &str) -> io::Result<()> { self.promote(src, dst, false) }
 
     fn remove_file(&self, path: &str) -> io::Result<()> {
         let mut nodes = self.0.nodes.lock().unwrap();

@@ -303,9 +303,9 @@ landet die Datei unter genau dem gewählten Namen. Smart Explorer lädt intern
 zuerst in einen Zwischennamen `<name>.se-mount-<zufall>` hoch und benennt dann
 um; ein Speichervorgang ohne Wirkung räumt diesen Zwischennamen wieder weg (die
 Änderung bleibt im lokalen Spool und wird wiederholt). Hat sich die Datei auf
-der Gegenseite währenddessen geändert, wird nichts überschrieben: die eigene
-Fassung erscheint als `Name (Konflikt JJJJMMTT-hhmmss).ext` mit erhaltener
-Endung.
+der Gegenseite währenddessen geändert oder geht die Antwort auf das Umbenennen
+verloren, wird nichts überschrieben: die eigene Fassung erscheint als
+`Name (Konflikt JJJJMMTT-hhmmss).ext` mit erhaltener Endung.
 
 Ohne `--read-write` ist das eingebundene Laufwerk absichtlich
 schreibgeschützt. Zusätzlich zur Root-Zulassung wird der Schreibmodus schon

@@ -123,11 +123,18 @@ impl MountEngine {
                 state.condition = EntryCondition::Conflict(conflict.clone());
                 return Ok(FlushOutcome::Conflict(conflict));
             }
-            let detail = format!(
+            let mut detail = format!(
                 "remote save may already be committed after an ambiguous promotion response: {error}; destination={}; staging={}",
                 destination.summary(),
                 staged_state.summary()
             );
+            if staged_state.is_plain_file() {
+                // The stage still holds this save. Whatever the promotion did,
+                // the save must not stay visible under the stage spelling.
+                if let Some(copy) = self.publish_conflict_copy(&staged, &state.remote_path) {
+                    detail.push_str(&format!("; die gespeicherte Fassung liegt als {copy}"));
+                }
+            }
             let conflict = self.post_commit_conflict(&mut state, destination.current(), &detail);
             return Ok(FlushOutcome::CommittedPendingVerification(conflict));
         }
