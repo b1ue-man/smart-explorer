@@ -9,10 +9,12 @@ import app.smartexplorer.android.api.UploadConflict
 import app.smartexplorer.android.core.CoreException
 import app.smartexplorer.android.core.Entry
 import app.smartexplorer.android.core.TaskInfo
+import app.smartexplorer.android.prefs.AppPrefs
 import app.smartexplorer.android.system.ShareIntentHandler
 import app.smartexplorer.android.ui.AppNav
 import app.smartexplorer.android.ui.NavRequest
 import app.smartexplorer.android.ui.common.Snackbars
+import app.smartexplorer.android.ui.viewer.mediaSetFor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -43,13 +45,19 @@ private fun reportTask(task: TaskInfo, success: String, failure: String) {
 
 // ---- open, share ----
 
-/** Tap on a row: folders and local ZIP archives open inside, files open in another app. */
+/**
+ * Tap on a row: folders and local ZIP archives open inside; pictures, videos and audio open in the
+ * media viewer with the other media of the list (setting "Medien im eigenen Betrachter öffnen");
+ * other files open in another app.
+ */
 internal fun FilesViewModel.openEntry(tab: BrowserTab, entry: Entry, local: Boolean) {
+    val media = if (AppPrefs.mediaViewer.value) mediaSetFor(tab.shownEntries(), entry, local) else null
     when {
         entry.isDir -> tab.open(entry.location)
         // ZIP archives on local storage browse like folders (read-only); the core lists them as
         // `zip://<lokaler zip-pfad>!/` places. Remote or nested archives open like other files.
         isZip(entry) && local && tab.listing?.backend == "local" -> tab.open(entry.location)
+        media != null -> viewer = media
         else -> openFile(entry, local, chooser = false)
     }
 }
