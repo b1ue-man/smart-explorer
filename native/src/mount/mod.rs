@@ -71,6 +71,8 @@ mod recovery_state;
 mod replace;
 #[path = "core/spool.rs"]
 mod spool;
+#[path = "core/stage_ledger.rs"]
+mod stage_ledger;
 #[path = "core/startup.rs"]
 mod startup;
 #[path = "core/types.rs"]

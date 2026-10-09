@@ -1,4 +1,5 @@
 use super::journal::{Journal, PersistedDelete, PersistedEntry, RecoveredJournal};
+use super::stage_ledger::StageLedger;
 use super::types::{MountId, NamespaceIntent};
 use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
@@ -22,6 +23,7 @@ pub(super) struct WholeFileSpool {
     referenced: Mutex<HashSet<String>>,
     missing_recovery: HashSet<String>,
     cleanup_ready: bool,
+    stages: StageLedger,
 }
 
 pub fn prepare_spool_root(path: &Path) -> io::Result<PathBuf> {
@@ -95,6 +97,7 @@ impl WholeFileSpool {
             ),
             missing_recovery: HashSet::new(),
             cleanup_ready: false,
+            stages: StageLedger::open(&root),
         };
         let mut names = HashSet::new();
         for entry in recovered.entries.values_mut() {
@@ -115,6 +118,10 @@ impl WholeFileSpool {
         spool.cleanup_ready = true;
         spool.remove_orphan_clean_files(&referenced)?;
         Ok((spool, recovered))
+    }
+
+    pub(super) fn stages(&self) -> &StageLedger {
+        &self.stages
     }
 
     pub fn allocate(&self) -> io::Result<AllocatedSpool> {

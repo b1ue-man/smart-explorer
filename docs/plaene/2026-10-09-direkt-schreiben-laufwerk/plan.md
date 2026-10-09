@@ -64,7 +64,7 @@ Stand: 2026-10-09. Quellen: Nutzernachrichten 2–5 vom 2026-10-09 (in derselben
 | S1 | Schreibrecht neuer Geräte | `share/core/direct_relation.rs`, `direct_ledger_projection.rs`, `legacy_direct_request_decision.rs`, `profiles.rs`, `direct_reciprocal.rs` | angenommenes Gerät `write == true` (`direct_ledger_tests`, `relation_rights_task_tests`) |
 | S2 | Freigabe-Standard je Bereich | `share/core/export_config.rs`, `api_exports.rs`, `app/core/share_exports_ui.rs`, `cli/share/exports.rs`, `mobile/os/shared/domains/share_peers.rs`, Android `ShareDialogHost.kt` | `share_rights_task_new_direct_exports_write_and_room_exports_read` |
 | S3 | Home-Freigabe Direkt | `share/core/profile_migration.rs` | `share_rights_task_restricted_direct_home_writes_again_once`, angepasste FC1-Migrations-Tests |
-| S4 | Laufwerk ohne Zwischennamen | `mount/core/file_commit.rs`, `file_commit_stage.rs`, `baseline_match.rs`, `commit.rs`, `replace.rs` | `mount_save_task_*` (Upload-Fehler, Konfliktkopie mit Endung, verlorene Umbenennungs-Antwort, Vergleichsregel) |
+| S4 | Laufwerk ohne Zwischennamen | `mount/core/file_commit.rs`, `file_commit_stage.rs`, `stage_ledger.rs`, `spool.rs`, `startup.rs`, `baseline_match.rs`, `commit.rs`, `replace.rs` | `mount_save_task_*` (Upload-Fehler, Konfliktkopie mit Endung, verlorene Umbenennungs-Antwort, verwaiste Stage nach Abbruch, Vergleichsregel) |
 | S5 | Doku | `README.md`, `docs/TODO.md`, `docs/ARCHITEKTUR.md`, dieser Plan | – |
 | S6 | Suite + Release | `native/test-share-write-mount-save-task.py`, `.github/workflows/share-write-mount-save-task.yml` | ein grüner Lauf, dann Release |
 
@@ -78,4 +78,10 @@ Stand: 2026-10-09. Quellen: Nutzernachrichten 2–5 vom 2026-10-09 (in derselben
   dem Gerät des Nutzers ist ohne dessen Protokolle nicht belegt; abgedeckt sind alle Pfade, auf
   denen `file_commit.rs` die Stage zuvor liegen ließ (Upload-Fehler, nicht bestätigte Prüfung,
   wirkungsloses Umbenennen, Konflikt nach dem Upload, `AlreadyExists`, mehrdeutige Antwort).
-  Offen bleibt nur ein Abbruch des Prozesses bzw. der Verbindung mitten im Upload.
+- 2026-10-09: Nachtrag S4b: Bricht die Verbindung oder der Prozess mitten im Speichern ab, kann
+  der Speichervorgang seine Stage nicht selbst entfernen. Jede Stage steht deshalb vor dem
+  Anlegen in `stages.json` neben dem Wiederherstellungs-Journal (`mount/core/stage_ledger.rs`);
+  der nächste Speichervorgang bzw. das nächste Einbinden entfernt verwaiste Stages (nur reguläre
+  Datei bis zur aufgezeichneten Größe, laufende Speichervorgänge ausgenommen, unerreichbare
+  Gegenseite → später erneut). Tests `mount_save_task_stage_ledger_survives_restarts_and_skips_running_saves`,
+  `mount_save_task_orphaned_stage_is_removed_on_the_next_mount`.

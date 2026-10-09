@@ -3,7 +3,9 @@
 //! saving through the drive must never find its file under the stage
 //! spelling: a save without effect removes its own stage (the spool keeps
 //! the content for the retry), and a save that meets a changed remote file
-//! becomes a conflict copy that keeps the file name and type.
+//! becomes a conflict copy that keeps the file name and type. A stage that
+//! cannot be removed at once (lost connection, interrupted process) stays in
+//! the stage ledger and is removed by the next save or mount.
 use super::engine::MountEngine;
 use crate::vfs::remote_util::{conflict_rel_name, numbered_remote_name, REMOTE_UNIQUE_ATTEMPTS};
 use std::io;
@@ -13,20 +15,45 @@ impl MountEngine {
     /// larger than the uploaded spool. Anything else at that spelling is not
     /// provably this flush's stage and stays.
     pub(super) fn discard_own_stage(&self, staged: &str, spool_len: u64) {
-        self.invalidate_metadata(staged, false);
-        let own = self
-            .backend
-            .stat(staged)
-            .is_ok_and(|meta| !meta.is_dir && !meta.is_symlink && meta.size <= spool_len);
-        if own {
-            let _ = self.backend.remove_file(staged);
+        self.remove_recorded_stage(staged, spool_len);
+    }
+
+    /// Removes stages earlier saves left behind (lost connection, interrupted
+    /// process) that the stage ledger still records. A remote that cannot be
+    /// reached keeps the record for the next save or mount.
+    pub(super) fn collect_orphan_stages(&self) {
+        if self.require_writable().is_err() {
+            return;
         }
-        self.invalidate_metadata(staged, false);
+        for (stage, max_len) in self.spool.stages().orphans() {
+            self.remove_recorded_stage(&stage, max_len);
+        }
+    }
+
+    /// Only a plain file within the recorded size is removed; anything else
+    /// at that spelling is not this mount's stage and is only forgotten.
+    fn remove_recorded_stage(&self, stage: &str, max_len: u64) {
+        self.invalidate_metadata(stage, false);
+        let gone = match self.backend.stat(stage) {
+            Ok(meta) if !meta.is_dir && !meta.is_symlink && meta.size <= max_len => {
+                match self.backend.remove_file(stage) {
+                    Ok(()) => true,
+                    Err(error) => error.kind() == io::ErrorKind::NotFound,
+                }
+            }
+            Ok(_) => true,
+            Err(error) => error.kind() == io::ErrorKind::NotFound,
+        };
+        if gone {
+            self.spool.stages().resolve(stage);
+        }
+        self.invalidate_metadata(stage, false);
     }
 
     /// Publishes the uploaded stage as `<name> (Konflikt <time>)[ (n)].<ext>`
     /// next to `remote_path` without replacing anything. `None`: the stage
-    /// stays where it is (it holds the only remote copy of this save).
+    /// stays where it is (it holds the only remote copy of this save; the
+    /// stage ledger removes it later, the spool keeps the content).
     pub(super) fn publish_conflict_copy(&self, staged: &str, remote_path: &str) -> Option<String> {
         let base = conflict_rel_name(remote_path);
         for index in 1..=REMOTE_UNIQUE_ATTEMPTS {
@@ -35,6 +62,7 @@ impl MountEngine {
                 Ok(()) => {
                     self.invalidate_metadata(staged, false);
                     self.invalidate_metadata(&candidate, false);
+                    self.spool.stages().resolve(staged);
                     return Some(candidate);
                 }
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,

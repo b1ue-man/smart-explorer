@@ -25,7 +25,9 @@ impl MountEngine {
 
     pub fn prepare_host_remote(&self) -> io::Result<()> {
         validate_backend_root(&*self.backend, self.projector.root().as_str())?;
-        self.recover_pending_deletes()
+        self.recover_pending_deletes()?;
+        self.collect_orphan_stages();
+        Ok(())
     }
 }
 
