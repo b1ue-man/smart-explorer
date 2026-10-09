@@ -194,7 +194,9 @@ def main():
             XDG_CACHE_HOME=str(Path(profile) / "cache"))
         for name in ["APPDATA", "LOCALAPPDATA", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME"]:
             Path(env[name]).mkdir(parents=True, exist_ok=True)
-        run([str(binary), "--test-threads=1", "--exact", *selected], logs / "suite.log", 3600, env)
+        # The remote-open tests are ignored outside an isolated task profile (this one).
+        run([str(binary), "--include-ignored", "--test-threads=1", "--exact", *selected],
+            logs / "suite.log", 3600, env)
     result = (logs / "suite.log").read_text(encoding="utf-8", errors="replace")
     missing = [name for name in selected if f"test {name} ... ok" not in result]
     if missing:
