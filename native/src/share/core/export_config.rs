@@ -48,6 +48,9 @@ pub struct SharedRoot {
     pub allow_system_writes: bool,
 }
 
+/// Scope name of the Direct default exports (rooms use their profile id).
+pub const DIRECT_EXPORT_SCOPE: &str = "direct";
+
 impl SharedRoot {
     /// A new export: read-only, system locations protected.
     pub fn new(label: impl Into<String>, path: impl Into<String>) -> Self {
@@ -63,6 +66,19 @@ impl SharedRoot {
     pub fn with_access(mut self, access: ExportAccess) -> Self {
         self.access = access;
         self
+    }
+
+    /// A new export of `scope`: Direct exports are read-write, since writing
+    /// between one's own accepted devices is the purpose of Direct Share
+    /// (user decision 2026-10-09, revising the FC1 default); room exports
+    /// stay read-only. System locations stay protected in both.
+    pub fn new_in_scope(label: impl Into<String>, path: impl Into<String>, scope: &str) -> Self {
+        let access = if scope == DIRECT_EXPORT_SCOPE {
+            ExportAccess::ReadWrite
+        } else {
+            ExportAccess::ReadOnly
+        };
+        Self::new(label, path).with_access(access)
     }
 }
 
@@ -142,6 +158,16 @@ impl ShareExportConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn share_rights_task_new_direct_exports_write_and_room_exports_read() {
+        let direct = SharedRoot::new_in_scope("Fotos", "/home/u/Fotos", DIRECT_EXPORT_SCOPE);
+        assert_eq!(direct.access, ExportAccess::ReadWrite);
+        assert!(!direct.allow_system_writes);
+        let room = SharedRoot::new_in_scope("Fotos", "/home/u/Fotos", "room-profile-1");
+        assert_eq!(room.access, ExportAccess::ReadOnly);
+        assert!(!room.allow_system_writes);
+    }
 
     #[test]
     fn review_task_new_exports_are_read_only_and_old_profiles_keep_writing() {

@@ -397,7 +397,7 @@ impl ShareProfiles {
                 state: DirectGrantState::Accepted,
                 updated_at: now,
                 exec: Default::default(),
-                write: false,
+                write: super::direct_relation::NEW_DIRECT_GRANT_WRITE,
             });
             changed = true;
         }

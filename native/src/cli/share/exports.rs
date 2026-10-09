@@ -143,9 +143,11 @@ fn add_export(args: ExportAddArgs) -> Result<(), String> {
         if config.roots.iter().any(|root| root.path == path) {
             return Err(format!("export already exists: {path}"));
         }
-        config
-            .roots
-            .push(crate::share::SharedRoot::new(label.clone(), path.clone()));
+        config.roots.push(crate::share::SharedRoot::new_in_scope(
+            label.clone(),
+            path.clone(),
+            room.as_deref().unwrap_or(crate::share::DIRECT_EXPORT_SCOPE),
+        ));
         Ok(())
     })?;
     println!("Added export {path}{}", super::refresh_note());

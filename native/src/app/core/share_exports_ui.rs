@@ -68,7 +68,7 @@ impl App {
         let mut move_up: Option<usize> = None;
         let mut move_down: Option<usize> = None;
         let mut changed = false;
-        ui.label("Neue Freigaben erlauben Lesen. Schreiben braucht zusaetzlich das Schreibrecht des Geraets bzw. Raums.");
+        ui.label("Neue Direkt-Freigaben erlauben Lesen und Schreiben, neue Raum-Freigaben nur Lesen. Schreiben braucht zusaetzlich das Schreibrecht des Geraets (fuer neue Geraete an) bzw. des Raums.");
         let root_count = cfg.roots.len();
         let scope = if self.share_export_scope == 2 {
             self.share_export_target_id.as_str()
@@ -184,7 +184,8 @@ impl App {
                 for d in self.drives.clone() {
                     let label = d.trim_end_matches(['\\', '/']).to_string();
                     if !cfg.roots.iter().any(|r| r.path == d) {
-                        cfg.roots.push(crate::share::SharedRoot::new(label, d));
+                        cfg.roots
+                            .push(crate::share::SharedRoot::new_in_scope(label, d, &scope));
                         changed = true;
                     }
                 }
@@ -192,9 +193,10 @@ impl App {
             if ui.button("Hinzufuegen").clicked() {
                 let path = self.share_export_path_draft.trim().replace('\\', "/");
                 if !path.is_empty() && !cfg.roots.iter().any(|r| r.path == path) {
-                    cfg.roots.push(crate::share::SharedRoot::new(
+                    cfg.roots.push(crate::share::SharedRoot::new_in_scope(
                         self.share_export_label_draft.trim(),
                         path,
+                        &scope,
                     ));
                     changed = true;
                 }

@@ -2,6 +2,7 @@
 //! grant they install. A request from a device without a grant waits for the
 //! user unless the device policy is `AutoAccept`.
 use super::direct_protocol::DirectPeerIdentity;
+use super::direct_relation::NEW_DIRECT_GRANT_WRITE;
 use super::exec_policy::ExecGrant;
 use super::legacy_direct_request::{
     LegacyDirectDecisionDelivery, LegacyDirectDecisionSource, LegacyDirectDecisionState,
@@ -185,7 +186,7 @@ pub(super) fn set_exact_grant(
                 ));
             }
             grant.exec.reset_for_identity_change(now);
-            grant.write = false;
+            grant.write = NEW_DIRECT_GRANT_WRITE;
             grant.public_key = peer.public_key.clone();
             grant.fingerprint = peer.fingerprint.clone();
             grant.node_id = peer.node_id.clone();
@@ -211,7 +212,7 @@ pub(super) fn set_exact_grant(
         state,
         updated_at: now,
         exec: ExecGrant::default(),
-        write: false,
+        write: NEW_DIRECT_GRANT_WRITE,
     });
     if !accepted {
         profiles.withdraw_direct_key(peer, now);

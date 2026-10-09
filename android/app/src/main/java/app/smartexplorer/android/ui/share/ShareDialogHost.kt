@@ -10,6 +10,7 @@ import app.smartexplorer.android.api.ShareRequestPolicy
 import app.smartexplorer.android.api.ShareRoom
 import app.smartexplorer.android.api.ShareWriteGrant
 import app.smartexplorer.android.api.RemovedDevice
+import app.smartexplorer.android.api.SHARE_DIRECT
 import app.smartexplorer.android.api.UnconfirmedPairing
 import app.smartexplorer.android.ui.connections.LocalFilePickerDialog
 import app.smartexplorer.android.ui.picker.LocationPickerDialog
@@ -204,14 +205,26 @@ internal fun ShareDialogHost(
             onPick = { path -> onReplace(ShareDialog.ConfirmExport(dialog.scope, path)) },
             onDismiss = onDismiss,
         )
-        is ShareDialog.ConfirmExport -> ShareConfirmAction(
-            title = "Ordner nur lesend freigeben?",
-            message = "${dialog.path}\n\nDieser Ordner wird nur lesbar. Schreibrecht wählst du anschließend ausdrücklich unter Rechte.",
-            confirm = "Nur lesend freigeben",
-            failure = "Ordner nicht freigegeben",
-            vm = vm,
-            onDismiss = onDismiss,
-        ) { ShareApi.addExport(dialog.scope, dialog.path, label = null) }
+        // New Direct exports are read-write (own accepted devices), room exports read-only.
+        is ShareDialog.ConfirmExport -> if (dialog.scope == SHARE_DIRECT) {
+            ShareConfirmAction(
+                title = "Ordner für deine Geräte freigeben?",
+                message = "${dialog.path}\n\nDeine angenommenen Geräte dürfen hier lesen und schreiben. „Nur lesen“ wählst du anschließend unter Rechte.",
+                confirm = "Freigeben",
+                failure = "Ordner nicht freigegeben",
+                vm = vm,
+                onDismiss = onDismiss,
+            ) { ShareApi.addExport(dialog.scope, dialog.path, label = null) }
+        } else {
+            ShareConfirmAction(
+                title = "Ordner nur lesend freigeben?",
+                message = "${dialog.path}\n\nDieser Ordner wird nur lesbar. Schreibrecht wählst du anschließend ausdrücklich unter Rechte.",
+                confirm = "Nur lesend freigeben",
+                failure = "Ordner nicht freigegeben",
+                vm = vm,
+                onDismiss = onDismiss,
+            ) { ShareApi.addExport(dialog.scope, dialog.path, label = null) }
+        }
         is ShareDialog.ExportAccess -> ExportAccessDialog(dialog.scope, dialog.export, vm, onDismiss, dialog.restoreHome)
         is ShareDialog.Connections -> ShareConnectionDialog(dialog.scope, vm, onDismiss)
         is ShareDialog.ContactWrite -> ContactWriteDialog(dialog.grant, vm, onDismiss)

@@ -59,7 +59,9 @@ pub use self::exec_types::{
     ExecCommand, ExecId, ExecJobView, ExecLifecycleState, ExecProviderStatus, ExecStart,
     ExecTerminal, ExecTerminalKind,
 };
-pub use self::export_config::{ExportAccess, ShareExportConfig, SharedConnection, SharedRoot};
+pub use self::export_config::{
+    ExportAccess, ShareExportConfig, SharedConnection, SharedRoot, DIRECT_EXPORT_SCOPE,
+};
 pub use self::identity::{DirectCodeRotation, IdentityRepair, IdentityRepairAction, ShareIdentity};
 pub(crate) use self::identity_store::with_matching_identity_generation;
 pub use self::lan_presence::{LanAnnouncement, LanEvent, LanPresence};

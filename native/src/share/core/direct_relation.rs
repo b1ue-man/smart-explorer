@@ -39,6 +39,12 @@ pub(crate) fn legacy_relation_write() -> bool {
     true
 }
 
+/// „Darf schreiben“ of a Direct grant created or re-admitted from now on:
+/// on. Writing between one's own accepted devices is the purpose of Direct
+/// Share (user decision 2026-10-09, revising the FC1 default); the export's
+/// own „Nur lesen“ and an explicit per-device „Nur lesen“ still apply.
+pub(crate) const NEW_DIRECT_GRANT_WRITE: bool = true;
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum DirectGrantState {
     /// Access with the rights of the grant (`write`, `exec`).
@@ -67,8 +73,8 @@ pub struct DirectGrant {
     #[serde(default)]
     pub exec: ExecGrant,
     /// FC1 „Darf schreiben“: the peer may write where an export is
-    /// read-write. New grants start without it; grants persisted before V5
-    /// keep it.
+    /// read-write. New grants start with it (`NEW_DIRECT_GRANT_WRITE`);
+    /// grants persisted before V5 keep it; an explicit choice is kept.
     #[serde(default = "legacy_relation_write")]
     pub write: bool,
 }
@@ -371,7 +377,7 @@ impl ShareProfiles {
                     state: DirectGrantState::Accepted,
                     updated_at: now,
                     exec: ExecGrant::default(),
-                    write: false,
+                    write: NEW_DIRECT_GRANT_WRITE,
                 });
                 changed = true;
             }

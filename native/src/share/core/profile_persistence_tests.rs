@@ -143,7 +143,11 @@ fn review_task_fc1_implicit_home_and_connections_migrate_once_without_new_grants
     let migrated =
         ShareProfiles::load_checked_with(Some("/home/alice".into()), &mut storage).unwrap();
     let config = &migrated.default_direct_exports;
-    assert_eq!(config.roots[0].access, crate::share::ExportAccess::ReadOnly);
+    // The implicit Direct Home keeps writing (user decision 2026-10-09).
+    assert_eq!(
+        config.roots[0].access,
+        crate::share::ExportAccess::ReadWrite
+    );
     assert_eq!(
         config.roots[1].access,
         crate::share::ExportAccess::ReadWrite
@@ -173,12 +177,12 @@ fn review_task_fc1_implicit_home_and_connections_migrate_once_without_new_grants
         crate::share::ExportAccess::ReadWrite
     );
     assert!(migrated.direct_grants.is_empty());
-    assert_eq!(migrated.auto_home_migrations.len(), 1);
+    assert!(migrated.auto_home_migrations.is_empty());
     let committed = storage.profiles.clone();
     storage.saved_accounts.push("webdav://u@later:443/".into());
     let reloaded =
         ShareProfiles::load_checked_with(Some("/home/alice".into()), &mut storage).unwrap();
-    assert_eq!(reloaded.auto_home_migrations.len(), 1);
+    assert!(reloaded.auto_home_migrations.is_empty());
     assert_eq!(
         reloaded
             .default_direct_exports
@@ -191,7 +195,8 @@ fn review_task_fc1_implicit_home_and_connections_migrate_once_without_new_grants
 #[test]
 fn review_task_fc1_failed_migration_is_retryable_and_returns_no_runtime_profile() {
     let raw = serde_json::json!({"schema_version": SHARE_PROFILE_VERSION,
-        "default_direct_exports": {"roots": [{"label":"Home", "path":"/home/alice"}]}})
+        "rooms": [{"id": "p1", "name": "Old room", "room_id": "r1", "auto_join": false,
+            "last_seen": null, "exports": {"roots": [{"label":"Home", "path":"/home/alice"}]}}]})
     .to_string();
     let mut storage = FakePersistence {
         profiles: Some(raw.clone()),
@@ -208,10 +213,54 @@ fn review_task_fc1_failed_migration_is_retryable_and_returns_no_runtime_profile(
     let migrated =
         ShareProfiles::load_checked_with(Some("/home/alice".into()), &mut storage).unwrap();
     assert_eq!(
-        migrated.default_direct_exports.roots[0].access,
+        migrated.rooms[0].exports.roots[0].access,
         crate::share::ExportAccess::ReadOnly
     );
     assert_ne!(storage.profiles.as_deref(), Some(raw.as_str()));
+}
+
+#[test]
+fn share_rights_task_restricted_direct_home_writes_again_once() {
+    let raw = serde_json::json!({
+        "schema_version": SHARE_PROFILE_VERSION,
+        "default_direct_exports": {"roots": [
+            {"label": "Home", "path": "/home/alice", "access": "read_only"},
+            {"label": "Fotos", "path": "/home/alice/Fotos", "access": "read_only"}
+        ]},
+        "auto_home_migrations": [
+            {"scope": "direct", "path": "/home/alice"},
+            {"scope": "p1", "path": "/home/alice"}
+        ],
+        "rooms": [{"id": "p1", "name": "Room", "room_id": "r1", "auto_join": false,
+            "last_seen": null, "exports": {"roots": [
+                {"label": "Home", "path": "/home/alice", "access": "read_only"}
+            ]}}]
+    });
+    let mut storage = FakePersistence {
+        profiles: Some(raw.to_string()),
+        ..FakePersistence::default()
+    };
+    let mut restored =
+        ShareProfiles::load_checked_with(Some("/home/alice".into()), &mut storage).unwrap();
+    let direct = &restored.default_direct_exports.roots;
+    assert_eq!(direct[0].access, crate::share::ExportAccess::ReadWrite);
+    // An explicit read-only export without the migration notice stays.
+    assert_eq!(direct[1].access, crate::share::ExportAccess::ReadOnly);
+    assert_eq!(
+        restored.rooms[0].exports.roots[0].access,
+        crate::share::ExportAccess::ReadOnly
+    );
+    assert_eq!(restored.auto_home_migrations.len(), 1);
+    assert_eq!(restored.auto_home_migrations[0].scope, "p1");
+    // A later explicit „Nur lesen“ is kept.
+    restored.default_direct_exports.roots[0].access = crate::share::ExportAccess::ReadOnly;
+    restored.save_with(&mut storage).unwrap();
+    let reloaded =
+        ShareProfiles::load_checked_with(Some("/home/alice".into()), &mut storage).unwrap();
+    assert_eq!(
+        reloaded.default_direct_exports.roots[0].access,
+        crate::share::ExportAccess::ReadOnly
+    );
 }
 
 #[test]

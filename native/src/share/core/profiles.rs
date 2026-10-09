@@ -145,7 +145,7 @@ impl ShareProfiles {
                 state,
                 updated_at: now,
                 exec: ExecGrant::default(),
-                write: false,
+                write: super::direct_relation::NEW_DIRECT_GRANT_WRITE,
             });
         }
         if withdrawn {

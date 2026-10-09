@@ -1,5 +1,6 @@
 use super::direct_ledger::DirectRequestDirection;
 use super::direct_protocol::{DirectDecisionKind, SignedDirectDecision};
+use super::direct_relation::NEW_DIRECT_GRANT_WRITE;
 use super::profiles::ShareProfiles;
 use super::types::{DirectAccessState, DirectGrant, DirectGrantState, ShareStatus};
 
@@ -90,8 +91,10 @@ impl ShareProfiles {
                 && grant.state != DirectGrantState::Accepted;
             if !identity_changed || may_replace_inactive {
                 if identity_changed {
+                    // A re-admitted identity is a new grant: Exec ends, write
+                    // takes the default of a new Direct grant.
                     grant.exec.reset_for_identity_change(decision.decided_at);
-                    grant.write = false;
+                    grant.write = NEW_DIRECT_GRANT_WRITE;
                 } else if decision.decision != DirectDecisionKind::Accepted
                     || grant.state != DirectGrantState::Accepted
                 {
@@ -129,7 +132,7 @@ impl ShareProfiles {
                 state,
                 updated_at: decision.decided_at,
                 exec,
-                write: false,
+                write: NEW_DIRECT_GRANT_WRITE,
             });
         }
         self.recompute_identity_conflicts_for_device(&device_id);
