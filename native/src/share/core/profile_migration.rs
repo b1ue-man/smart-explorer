@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::export_config::{ExportAccess, ShareExportConfig};
+use super::export_config::{ExportAccess, ShareExportConfig, DIRECT_EXPORT_SCOPE};
 use super::profiles::ShareProfiles;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -31,6 +31,7 @@ impl ShareProfiles {
             saved_accounts,
             &mut self.auto_home_migrations,
         );
+        changed |= self.restore_direct_auto_home_write();
         for room in &mut self.rooms {
             let old = raw
                 .get("rooms")
@@ -51,6 +52,26 @@ impl ShareProfiles {
             );
         }
         Ok(changed)
+    }
+
+    /// Writing between one's own accepted devices is the purpose of Direct
+    /// Share (user decision 2026-10-09): the implicit Direct Home export that
+    /// FC1 restricted once becomes read-write again, and its notice is
+    /// dropped, so a later explicit „Nur lesen“ stays. Room exports keep the
+    /// restriction.
+    fn restore_direct_auto_home_write(&mut self) -> bool {
+        let before = self.auto_home_migrations.len();
+        let roots = &mut self.default_direct_exports.roots;
+        self.auto_home_migrations.retain(|migration| {
+            if migration.scope != DIRECT_EXPORT_SCOPE {
+                return true;
+            }
+            for root in roots.iter_mut().filter(|root| root.path == migration.path) {
+                root.access = ExportAccess::ReadWrite;
+            }
+            false
+        });
+        self.auto_home_migrations.len() != before
     }
 
     pub fn auto_home_was_migrated(&self, scope: &str, path: &str) -> bool {
@@ -76,16 +97,15 @@ fn requires_home_fact(raw: &Value) -> bool {
                 })
             })
     };
-    raw.get("default_direct_exports").is_some_and(pending)
-        || raw
-            .get("rooms")
-            .and_then(Value::as_array)
-            .is_some_and(|rooms| {
-                rooms
-                    .iter()
-                    .filter_map(|room| room.get("exports"))
-                    .any(pending)
-            })
+    // Direct exports no longer restrict the implicit Home (2026-10-09).
+    raw.get("rooms")
+        .and_then(Value::as_array)
+        .is_some_and(|rooms| {
+            rooms
+                .iter()
+                .filter_map(|room| room.get("exports"))
+                .any(pending)
+        })
 }
 
 fn migrate_config(
@@ -106,6 +126,10 @@ fn migrate_config(
     else {
         return changed;
     };
+    // Direct exports keep the old read-write Home (user decision 2026-10-09).
+    if scope == DIRECT_EXPORT_SCOPE {
+        return changed;
+    }
     // The old app seeded exactly this root. An explicit access value, a
     // custom label/path, or unsafe opt-in is always the user's configuration.
     for (root, old) in config.roots.iter_mut().zip(roots) {

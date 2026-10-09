@@ -185,6 +185,8 @@ fn incoming_decision_outbox_survives_accept_and_newer_revoke() {
         145
     );
     assert_eq!(profiles.direct_grants[0].state, DirectGrantState::Accepted);
+    // An accepted new device may write (Direct default since 2026-10-09).
+    assert!(profiles.direct_grants[0].write);
     profiles.direct_grants[0].exec.enabled = true;
 
     let revoked = decision(&request, DirectDecisionKind::Revoked, 2, 250);
