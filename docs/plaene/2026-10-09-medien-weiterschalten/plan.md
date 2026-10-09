@@ -153,3 +153,10 @@ Fortschritt: siehe Abschnitt E (wird je Meilenstein ergänzt).
   `IStorageFile` braucht in windows 0.58 das Feature `Storage_Streams`. Behoben in `68bc9e7a`
   (expliziter `cast::<IStorageFile>()`, Suite mit `--include-ignored` im isolierten Profil).
 - Lauf 37928311753 (`68bc9e7a`): Android grün; Windows kompiliert jetzt den WinRT-Adapter, Abbruch bei der Auswahl (`mobile` existiert nur unter Unix/Android); Linux: die acht `remote_open`-Tests verlangen `SMART_EXPLORER_COPY_PASTE_TASK=1` (isolierter Konstruktor). Behoben in `c6dbddec` und dem folgenden Suite-Commit.
+- Lauf 37930602918 (`469f2ad3`): Linux, Windows und Android grün.
+- Release v0.5.174: Complete-Release `build.yml` 37931532338 (Quelle `469f2ad3`, Release-Commit
+  `ed93b619`, Tag `v0.5.174`), Publikation 37945856734 erfolgreich. GitHub-Release mit Installer,
+  Windows/Linux app/updater/`se` samt `.sha256`, Android-APK samt `.sha256`, `install-linux.sh`,
+  Kontextmenü-DLL, Share-Server (Windows/Linux) und `version.txt`; die `.sha256`-Dateien und
+  `version.txt` stimmen mit `release-native/update-feed` am Tag überein (geprüft 2026-10-09).
+  Nicht am echten Gerät beobachtet. Offen bleibt `MEDIANAV-REMOTE` (Nutzerentscheid, C4).
