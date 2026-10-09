@@ -40,10 +40,11 @@ REQUIRED = {
 # use the shared classification, the Win32 name rules of the touched `types`
 # module, and the desktop open/edit path around `open_local_path`.
 INTEGRATION_MODULES = [
-    "mobile::core_tests::",
     "types::",
     "app::remote_open::",
 ]
+# `mobile` is built for Android and Unix test hosts only (lib.rs).
+INTEGRATION_LINUX = ["mobile::core_tests::"]
 
 # Batch files: formatting gate (all were rustfmt-clean before the batch).
 FORMAT_FILES = """
@@ -185,7 +186,7 @@ def main():
                 raise RuntimeError(f"{milestone}: acceptance test absent or ambiguous: {suffix}")
             mapping[milestone].extend(found)
     selected = {name for names in mapping.values() for name in names}
-    for module in INTEGRATION_MODULES:
+    for module in INTEGRATION_MODULES + ([] if os.name == "nt" else INTEGRATION_LINUX):
         found = [name for name in available if name.startswith(module)]
         if not found:
             raise RuntimeError(f"Directly affected module has no tests in this binary: {module}")
