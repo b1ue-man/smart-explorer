@@ -19,6 +19,7 @@ import app.smartexplorer.android.core.SortSpec
 import app.smartexplorer.android.prefs.AppPrefs
 import app.smartexplorer.android.ui.common.Snackbars
 import app.smartexplorer.android.ui.trash.TRASH_RETENTION_DAYS
+import app.smartexplorer.android.ui.viewer.MediaSet
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
@@ -53,6 +54,9 @@ internal class FilesViewModel : ViewModel() {
     var sheet by mutableStateOf<FilesSheet?>(null)
     var picker by mutableStateOf<PickerRequest?>(null)
     var openProgress by mutableStateOf<OpenProgress?>(null)
+
+    /** Media shown in the viewer (`null` = closed). */
+    var viewer by mutableStateOf<MediaSet?>(null)
     val search = FolderSearchState(viewModelScope)
 
     private val effectChannel = Channel<FilesEffect>(Channel.BUFFERED)

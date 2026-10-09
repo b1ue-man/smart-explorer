@@ -61,6 +61,7 @@ import app.smartexplorer.android.ui.common.rememberAllFilesAccess
 import app.smartexplorer.android.ui.more.MoreRequests
 import app.smartexplorer.android.ui.transfers.TransfersBar
 import app.smartexplorer.android.ui.trash.TrashScreen
+import app.smartexplorer.android.ui.viewer.MediaViewer
 import kotlinx.coroutines.launch
 
 /** Backends that exist only inside the app and never become favorites (api.md §2). */
@@ -131,6 +132,20 @@ fun FilesScreen() {
         }
     }
     FilesOverlays(vm, tasks)
+    vm.viewer?.let { media ->
+        MediaViewer(
+            set = media,
+            onClose = { vm.viewer = null },
+            onOpenExternal = { entry, loaded, chooser ->
+                // An already loaded copy goes straight to the other app; otherwise as "Öffnen".
+                if (loaded != null) {
+                    vm.emit(FilesEffect.Open(loaded.path, loaded.mime, chooser))
+                } else {
+                    vm.openFile(entry, media.local, chooser)
+                }
+            },
+        )
+    }
 }
 
 @Composable

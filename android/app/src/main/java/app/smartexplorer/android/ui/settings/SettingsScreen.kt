@@ -131,11 +131,20 @@ private fun FileListSettings() {
     val dirsFirst by AppPrefs.dirsFirst.collectAsStateWithLifecycle()
     val compact by AppPrefs.compact.collectAsStateWithLifecycle()
     val thumbnails by AppPrefs.thumbnails.collectAsStateWithLifecycle()
+    val mediaViewer by AppPrefs.mediaViewer.collectAsStateWithLifecycle()
     SectionHeader("Dateiliste")
     ToggleSetting("Versteckte Dateien zeigen", showHidden, AppPrefs::setShowHidden)
     ToggleSetting("Ordner zuerst", dirsFirst, AppPrefs::setDirsFirst)
     ToggleSetting("Kompakte Zeilen", compact, AppPrefs::setCompact)
     ToggleSetting("Bildvorschau", thumbnails, AppPrefs::setThumbnails)
+    ToggleSetting("Medien im eigenen Betrachter öffnen", mediaViewer, AppPrefs::setMediaViewer)
+    HintLine(
+        if (mediaViewer) {
+            "Wischen oder ←/→ blättert durch die Bilder und Videos (bzw. Audiodateien) der Liste."
+        } else {
+            "Bilder, Videos und Audio öffnen direkt in einer anderen App (ohne Weiterblättern)."
+        },
+    )
 }
 
 @Composable

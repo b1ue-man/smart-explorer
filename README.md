@@ -84,6 +84,16 @@ nativen App-Auswahldialog verwenden; Smart Explorer materialisiert dafür eine
 überwachte lokale Kopie und lädt gespeicherte Änderungen über den bestehenden
 Save-back-Pfad zurück.
 
+**Bilder, Videos und Musik weiterschalten:** Öffnet Smart Explorer unter Windows
+eine lokale Mediendatei, bekommt die Standard-App den Ordner mit – die
+Microsoft-Fotos-App blättert dann mit ←/→ wie beim Öffnen aus dem Explorer
+(aktuelle Fotos-App über `ms-photos:viewer`, ältere Fotos-Versionen und andere
+Store-Apps über die Nachbardatei-Abfrage von Windows). Klassische Betrachter wie
+IrfanView oder VLC lesen den Ordner selbst und starten unverändert. Unter Linux
+übergibt Smart Explorer den echten Pfad; Loupe, Eye of GNOME und Gwenview
+blättern damit durch den Ordner. Grenze: Remote-Dateien öffnen am Desktop als
+einzelne Kopie, dort gibt es noch keine Nachbarn (TODO `MEDIANAV-REMOTE`).
+
 **Google Drive (ab 0.5.16):** durchsuchen und **synchronisieren** über denselben
 `Backend`-Mechanismus. Smart Explorer ist **kein Cloud-Dienst** — du hinterlegst
 einmalig eine eigene **Google OAuth Client-ID** (Anleitung:
@@ -859,6 +869,10 @@ die private Share-Identität das Gerät nicht verlassen.
   Benachrichtigung, auch nach Verlassen der App (F8);
   Öffnen in passenden Apps, Teilen und Empfangen, auch für Remote-Orte, und
   „In Smart Explorer öffnen“ für Ordner, die eine andere App übergibt (F9);
+  eigener Medienbetrachter: Bilder und Videos (bzw. Audiodateien) der Liste mit
+  Wischen oder ←/→ weiterschalten, Bilder zoomen, Videos/Audio abspielen, auch
+  remote (jede Seite wird beim Anzeigen geladen); „In App öffnen“/„Öffnen mit…“
+  im Menü, abschaltbar unter Einstellungen → Dateiliste;
   ZIP lesen und entpacken (F10); Papierkorb je Speichervolume mit
   Wiederherstellen und Löschung nach 30 Tagen (F11).
 - **Verbindungen:** SFTP, FTP/FTPS, WebDAV und SMB (SMB2/3, Freigabe als erste
@@ -894,6 +908,10 @@ Versions-Rollback; Google-Play-Veröffentlichung; Storage-Access-Framework-Bäum
 
 **Grenzen:**
 
+- Der Medienbetrachter zeigt die Bildformate, die Android selbst dekodiert
+  (z. B. JPEG, PNG, WebP, GIF als Standbild, HEIF); SVG und TIFF öffnen über
+  „Mit App öffnen“. Bilder werden in Bildschirmgröße dekodiert, starkes
+  Hineinzoomen wird dadurch unscharf.
 - Echtzeit-Jobs laufen nur im Dauerbetrieb oder bei geöffneter App; im Modus
   „Periodisch“ holt der Worker sie einmal je Lauf nach.
 - Kalender-Jobs sind nur im Dauerbetrieb minutengenau; „Periodisch“ holt

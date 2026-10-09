@@ -26,6 +26,7 @@ object AppPrefs {
     private val dirsFirstFlow = MutableStateFlow(true)
     private val compactFlow = MutableStateFlow(false)
     private val thumbnailsFlow = MutableStateFlow(true)
+    private val mediaViewerFlow = MutableStateFlow(true)
     private val bgModeFlow = MutableStateFlow("periodic")
     private val bgIntervalMinFlow = MutableStateFlow(60)
     private val bgWifiOnlyFlow = MutableStateFlow(true)
@@ -44,6 +45,12 @@ object AppPrefs {
     val dirsFirst: StateFlow<Boolean> = dirsFirstFlow.asStateFlow()
     val compact: StateFlow<Boolean> = compactFlow.asStateFlow()
     val thumbnails: StateFlow<Boolean> = thumbnailsFlow.asStateFlow()
+
+    /**
+     * "Medien im eigenen Betrachter öffnen" (default on): tapping a picture, video or audio file
+     * opens the viewer that steps through the media of the list; off opens it directly in another app.
+     */
+    val mediaViewer: StateFlow<Boolean> = mediaViewerFlow.asStateFlow()
 
     /** `off|periodic|persistent`; default "Periodisch, 60 min, nur WLAN" (spec). */
     val bgMode: StateFlow<String> = bgModeFlow.asStateFlow()
@@ -79,6 +86,7 @@ object AppPrefs {
         dirsFirstFlow.value = p.getBoolean(KEY_DIRS_FIRST, dirsFirstFlow.value)
         compactFlow.value = p.getBoolean(KEY_COMPACT, compactFlow.value)
         thumbnailsFlow.value = p.getBoolean(KEY_THUMBNAILS, thumbnailsFlow.value)
+        mediaViewerFlow.value = p.getBoolean(KEY_MEDIA_VIEWER, mediaViewerFlow.value)
         bgModeFlow.value = p.getString(KEY_BG_MODE, bgModeFlow.value)?.takeIf { it in BG_MODES } ?: bgModeFlow.value
         bgIntervalMinFlow.value = p.getInt(KEY_BG_INTERVAL_MIN, bgIntervalMinFlow.value).coerceAtLeast(MIN_BG_INTERVAL_MIN)
         bgWifiOnlyFlow.value = p.getBoolean(KEY_BG_WIFI_ONLY, bgWifiOnlyFlow.value)
@@ -106,6 +114,8 @@ object AppPrefs {
     fun setCompact(value: Boolean) = setBoolean(compactFlow, KEY_COMPACT, value)
 
     fun setThumbnails(value: Boolean) = setBoolean(thumbnailsFlow, KEY_THUMBNAILS, value)
+
+    fun setMediaViewer(value: Boolean) = setBoolean(mediaViewerFlow, KEY_MEDIA_VIEWER, value)
 
     fun setBgMode(value: String) {
         require(value in BG_MODES) { "unknown background mode '$value'" }
@@ -159,6 +169,7 @@ object AppPrefs {
     private const val KEY_DIRS_FIRST = "dirs_first"
     private const val KEY_COMPACT = "compact"
     private const val KEY_THUMBNAILS = "thumbnails"
+    private const val KEY_MEDIA_VIEWER = "media_viewer"
     private const val KEY_BG_MODE = "bg_mode"
     private const val KEY_BG_INTERVAL_MIN = "bg_interval_min"
     private const val KEY_BG_WIFI_ONLY = "bg_wifi_only"
