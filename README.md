@@ -298,6 +298,15 @@ Schreibgarantien – RW bleiben; ein exportiertes Local-/UNC-/plain-SFTP-Ziel
 bleibt wegen seines Check-to-operation-TOCTOU `Unverified` und braucht die
 explizite Vertrauensfreigabe.
 
+Speichert eine Anwendung über das Laufwerk (zum Beispiel „Drucken als PDF“),
+landet die Datei unter genau dem gewählten Namen. Smart Explorer lädt intern
+zuerst in einen Zwischennamen `<name>.se-mount-<zufall>` hoch und benennt dann
+um; ein Speichervorgang ohne Wirkung räumt diesen Zwischennamen wieder weg (die
+Änderung bleibt im lokalen Spool und wird wiederholt). Hat sich die Datei auf
+der Gegenseite währenddessen geändert, wird nichts überschrieben: die eigene
+Fassung erscheint als `Name (Konflikt JJJJMMTT-hhmmss).ext` mit erhaltener
+Endung.
+
 Ohne `--read-write` ist das eingebundene Laufwerk absichtlich
 schreibgeschützt. Zusätzlich zur Root-Zulassung wird der Schreibmodus schon
 beim Einbinden abgelehnt, wenn das aktive Backend nicht alle drei Garantien
@@ -431,10 +440,14 @@ Identitäts- oder Relation-Konflikte sowie zuvor ignorierte, abgelehnte,
 widerrufene oder gelöschte Beziehungen bleiben dabei fail-closed und werden
 nicht automatisch überschrieben.
 
-Neue Ordnerfreigaben sind zunächst **nur lesbar**. Schreibzugriff braucht
-sowohl die Freigabe am Ordner als auch das Schreibrecht des Kontakts oder Raums.
-`se share exports set ORDNER --write` und `se share grants set GERÄT --write`
-setzen diese Rechte getrennt; `--read-only` nimmt sie wieder zurück. Gespeicherte
+Neue **Direkt-Freigaben** (für die eigenen, angenommenen Geräte) sind lesbar
+**und beschreibbar**, und neu angenommene Geräte haben Schreibrecht – das ist
+der Zweck von Direct Share. Neue **Raum-Freigaben** sind zunächst nur lesbar,
+und Raum-Mitglieder schreiben erst nach ausdrücklicher Erlaubnis. Schreibzugriff
+braucht immer sowohl die Freigabe am Ordner als auch das Schreibrecht des Geräts
+oder Raums. `se share exports set ORDNER --write` und `se share grants set GERÄT
+--write` setzen diese Rechte getrennt; `--read-only` nimmt sie zurück, und ein
+so gesetztes „Nur lesen“ bleibt erhalten. Gespeicherte
 Verbindungen werden einzeln ausgewählt (`se share exports connections list` /
 `set KONTO`) und nutzen dabei die auf dem Host gespeicherten Zugangsdaten.
 Bisher ausdrücklich eingerichtete Rechte bleiben erhalten; eine frühere
