@@ -2,6 +2,12 @@
 
 Lokal gesicherte API-/Lib-Syntax (Abrufdatum im Kopf jeder Datei).
 
+- [Weiterschalten zwischen Medien](medien-weiterschalten-2026-10-09.md): Windows-Fotos
+  (Nachbarabfrage `LauncherOptions.NeighboringFilesQuery`, `ms-photos:viewer?fileName=`, Total-
+  Commander-Changelog 2016–2025, Directory Opus 13.18.8), Linux-Betrachter (Loupe, Gwenview, eog
+  lesen den Ordner selbst), Android (eine URI je `ACTION_VIEW`, eigener Betrachter wie Material
+  Files); geprüft 2026-10-09.
+
 - [Google-Drive-Sync in Open-Source-Projekten](gdrive-opensource-sync-2026-10-08.md):
   rclone 1.75.1, onedrive 2.5.11, google-drive-ocamlfuse 0.9.0, grive2; Drive-API-Kontingente
   und Feed-Vertrag; ergebnisoffene Bewertung gegen den eigenen Bestand; geprüft 2026-10-08.

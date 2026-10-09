@@ -148,6 +148,8 @@ windows-sys = { version = "0.59", features = [
     "Win32_Security_Cryptography",
     "Win32_Security_WinTrust",
     "Win32_Storage_FileSystem",
+    # Installed Microsoft Photos generation picks its media launch method.
+    "Win32_Storage_Packaging_Appx",
     # Native handle-relative no-replace rename of a confirmed recycle child.
     "Wdk_Storage_FileSystem",
     "Win32_System_Com",
@@ -201,6 +203,13 @@ windows = { version = "0.58", features = [
     "Win32_UI_Shell_Common",
     "Win32_UI_WindowsAndMessaging",
     "Networking_Connectivity",
+    # Media launch with a neighboring-files query (Windows.System.Launcher)
+    # so viewers can step to the previous/next file of the folder.
+    "Foundation",
+    "Foundation_Collections",
+    "Storage",
+    "Storage_Search",
+    "System",
 ] }
 
 # Desktop GUI and OS recycle bin. Android builds only the core library behind
