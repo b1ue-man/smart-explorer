@@ -302,7 +302,9 @@ Speichert eine Anwendung über das Laufwerk (zum Beispiel „Drucken als PDF“)
 landet die Datei unter genau dem gewählten Namen. Smart Explorer lädt intern
 zuerst in einen Zwischennamen `<name>.se-mount-<zufall>` hoch und benennt dann
 um; ein Speichervorgang ohne Wirkung räumt diesen Zwischennamen wieder weg (die
-Änderung bleibt im lokalen Spool und wird wiederholt). Hat sich die Datei auf
+Änderung bleibt im lokalen Spool und wird wiederholt). Bricht die Verbindung oder
+das Programm mitten im Speichern ab, entfernt das nächste Speichern bzw. Einbinden
+den liegengebliebenen Zwischennamen. Hat sich die Datei auf
 der Gegenseite währenddessen geändert oder geht die Antwort auf das Umbenennen
 verloren, wird nichts überschrieben: die eigene Fassung erscheint als
 `Name (Konflikt JJJJMMTT-hhmmss).ext` mit erhaltener Endung.

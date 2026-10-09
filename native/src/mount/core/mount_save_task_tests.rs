@@ -134,3 +134,29 @@ fn mount_save_task_lost_promotion_reply_never_leaves_the_stage_name() {
     assert_eq!(backend.bytes(&format!("/{copy}")), b"mine");
     engine.close(handle).unwrap();
 }
+
+#[test]
+fn mount_save_task_orphaned_stage_is_removed_on_the_next_mount() {
+    let directory = FixtureDirectory::new();
+    let backend = OptimizationBackend::new();
+    backend.put("/Scan.pdf", b"old");
+    let orphan = "/Scan.pdf.se-mount-00000000000000ab";
+    let foreign = "/Notiz.txt.se-mount-00000000000000cd";
+    {
+        // Saves whose connection dropped mid-upload: their stages exist and
+        // could not be removed by the saves themselves.
+        let engine = new_engine(&directory, &backend);
+        drop(engine.spool.stages().begin(orphan, 16));
+        drop(engine.spool.stages().begin(foreign, 2));
+    }
+    backend.put(orphan, b"partial");
+    backend.put(foreign, b"larger than this mount uploaded");
+    let engine = new_engine(&directory, &backend);
+    assert_eq!(
+        names(&backend),
+        ["Notiz.txt.se-mount-00000000000000cd", "Scan.pdf"],
+        "the orphan is removed; a larger occupant is not provably ours and stays"
+    );
+    assert!(engine.spool.stages().orphans().is_empty());
+    assert_eq!(backend.bytes("/Scan.pdf"), b"old");
+}

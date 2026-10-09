@@ -32,6 +32,7 @@ impl MountEngine {
             state.condition = EntryCondition::Conflict(conflict.clone());
             return Ok(FlushOutcome::Conflict(conflict));
         }
+        self.collect_orphan_stages();
         let staged = unique_staging_path(&*self.backend, &state.remote_path, "mount")?;
         self.invalidate_content(&state.remote_path, false);
         self.invalidate_content(&staged, false);
@@ -39,10 +40,21 @@ impl MountEngine {
         let mut source = self.spool.open_file(&state.spool_name, true)?;
         source.sync_data()?;
         let spool_len = source.metadata()?.len();
+        // Recorded before the exclusive create, so that a stage this save
+        // cannot remove itself is removed by the next save or mount.
+        let _active_stage = self.spool.stages().begin(&staged, spool_len);
         // A failed exclusive open does not transfer ownership of `staged`.
         // In particular, never clean that spelling up on AlreadyExists: it may
         // belong to a concurrent actor or to a case alias on the remote.
-        let mut destination = self.backend.open_write_new(&staged)?;
+        let mut destination = match self.backend.open_write_new(&staged) {
+            Ok(destination) => destination,
+            Err(error) => {
+                if error.kind() == io::ErrorKind::AlreadyExists {
+                    self.spool.stages().resolve(&staged);
+                }
+                return Err(error);
+            }
+        };
         let upload = (|| {
             io::copy(&mut source, &mut destination)?;
             destination.flush()?;
@@ -89,6 +101,9 @@ impl MountEngine {
             Baseline::Present { .. } => self.backend.promote_staged(&staged, &state.remote_path),
         };
         self.invalidate_metadata(&state.remote_path, false);
+        if promotion.is_ok() {
+            self.spool.stages().resolve(&staged);
+        }
         if let Err(error) = promotion {
             let destination = self.observe_path(&state.remote_path);
             let staged_state = self.observe_path(&staged);

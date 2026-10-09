@@ -43,6 +43,8 @@ REQUIRED = {
         "mount_save_task_failed_upload_leaves_no_stage_and_retries_cleanly",
         "mount_save_task_remote_change_during_save_becomes_a_typed_conflict_copy",
         "mount_save_task_lost_promotion_reply_never_leaves_the_stage_name",
+        "mount_save_task_stage_ledger_survives_restarts_and_skips_running_saves",
+        "mount_save_task_orphaned_stage_is_removed_on_the_next_mount",
     ],
 }
 
@@ -70,7 +72,7 @@ share/core/direct_ledger_projection.rs share/core/direct_ledger_tests.rs
 share/core/direct_reciprocal.rs share/core/direct_relation.rs share/core/export_config.rs
 share/core/legacy_direct_request_decision.rs share/core/profile_migration.rs
 share/core/profile_persistence_tests.rs share/core/profiles.rs
-share/core/relation_rights_task_tests.rs
+share/core/relation_rights_task_tests.rs mount/core/stage_ledger.rs mount/core/startup.rs
 """.split()
 
 
