@@ -146,4 +146,10 @@ Fortschritt: siehe Abschnitt E (wird je Meilenstein ergänzt).
   PlayerPage, MediaViewer), Einstellung `media_viewer`, JVM-Test `MediaSetTest`; README,
   ARCHITEKTUR, TODO (`MEDIANAV`, `MEDIANAV-REMOTE`). Graph aktualisiert (`95d34de9`).
 - M6: Suite `native/test-media-navigation-task.py`, Workflow `media-navigation-task.yml`
-  (Linux, Windows, Android-Build mit JVM-Tests). Lauf: offen.
+  (Linux, Windows, Android-Build mit JVM-Tests).
+- Lauf 37927265898 (`a723c686`): Android grün (48/48 JVM-Tests inkl. `MediaSetTest`); Linux:
+  alle sechs `media_navigation_task_*` grün, aber die acht `app::remote_open`-Tests waren
+  `#[ignore]` und liefen ohne `--include-ignored` nicht; Windows: E0277, `StorageFile` →
+  `IStorageFile` braucht in windows 0.58 das Feature `Storage_Streams`. Behoben in `68bc9e7a`
+  (expliziter `cast::<IStorageFile>()`, Suite mit `--include-ignored` im isolierten Profil).
+- Lauf 37928311753 (`68bc9e7a`): Android grün; Windows kompiliert jetzt den WinRT-Adapter, Abbruch bei der Auswahl (`mobile` existiert nur unter Unix/Android); Linux: die acht `remote_open`-Tests verlangen `SMART_EXPLORER_COPY_PASTE_TASK=1` (isolierter Konstruktor). Behoben in `c6dbddec` und dem folgenden Suite-Commit.
