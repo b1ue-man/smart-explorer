@@ -138,3 +138,12 @@ Fortschritt: siehe Abschnitt E (wird je Meilenstein ergänzt).
 
 ## E — Fortschritt
 - 2026-10-09: A–D festgehalten; Refs gesichert.
+- M1–M3 umgesetzt (`3b0fc624`): `types/core/media_kind.rs`, `app/core/media_launch_plan.rs` mit
+  Tests `media_navigation_task_*`, `app/os/windows/media_launch.rs`, `open_local_path(Default)`;
+  Cargo-Features `windows` (Foundation, Foundation_Collections, Storage, Storage_Search, System)
+  und `windows-sys` (Win32_Storage_Packaging_Appx). rustfmt-Prüfung der Batchdateien sauber.
+- M4/M5 umgesetzt (`cf41c335`): `android/…/ui/viewer/` (MediaSet, MediaLoader, ImagePage,
+  PlayerPage, MediaViewer), Einstellung `media_viewer`, JVM-Test `MediaSetTest`; README,
+  ARCHITEKTUR, TODO (`MEDIANAV`, `MEDIANAV-REMOTE`). Graph aktualisiert (`95d34de9`).
+- M6: Suite `native/test-media-navigation-task.py`, Workflow `media-navigation-task.yml`
+  (Linux, Windows, Android-Build mit JVM-Tests). Lauf: offen.

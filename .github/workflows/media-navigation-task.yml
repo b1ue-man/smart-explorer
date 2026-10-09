@@ -1,0 +1,157 @@
+name: media-navigation-task
+run-name: Media navigation (Windows viewer launch, Android media viewer) ${{ inputs.candidate_sha }}
+
+# Single task-level suite of the 2026-10-09 batch
+# (docs/plaene/2026-10-09-medien-weiterschalten/plan.md). Dispatch it once for the exact
+# pushed candidate SHA; it never builds release artifacts or publishes anything.
+#   suite    native acceptance + directly affected modules on Linux and Windows
+#            (the Windows fixture build also compiles the WinRT media launch adapter)
+#   android  Android tree (media viewer, Kotlin screens, NDK library, debug APKs, JVM tests)
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Full pushed candidate SHA, matching the selected ref
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: media-navigation-task-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  suite:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 300
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      CARGO_BUILD_JOBS: 1
+      CARGO_INCREMENTAL: 1
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Bind workflow and checkout to the requested candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
+          [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+          # Reuse the preceding host-library task's dependency/incremental output.
+          shared-key: search-recursive-access
+          cache-on-failure: true
+          cache-workspace-crates: true
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/media-navigation-binary
+          key: media-navigation-binary-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: media-navigation-binary-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Run the one task entrypoint
+        shell: bash
+        timeout-minutes: 290
+        run: >-
+          python native/test-media-navigation-task.py
+          --log-root "$RUNNER_TEMP/media-navigation-task"
+          --binary-cache "$RUNNER_TEMP/media-navigation-binary"
+
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: ${{ runner.temp }}/media-navigation-binary
+          key: media-navigation-binary-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Preserve acceptance and failure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: media-navigation-${{ runner.os }}-${{ inputs.candidate_sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/media-navigation-task
+          if-no-files-found: error
+          retention-days: 14
+
+  android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Bind the run to the exact candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          log_root="$RUNNER_TEMP/android-task-logs"
+          mkdir -p "$log_root"
+          printf 'SMART_EXPLORER_TASK_LOG_ROOT=%s\n' "$log_root" >> "$GITHUB_ENV"
+          [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
+          [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+          shared-key: android-task-ndk
+          cache-on-failure: true
+
+      - name: Build and check the Android side (facade, screens, NDK library, JVM tests)
+        shell: bash
+        timeout-minutes: 170
+        run: |
+          set -Eeuo pipefail
+          bash android/test-android-task.sh android-build --out "$RUNNER_TEMP/media-navigation-apk" 2>&1 | \
+            tee "$SMART_EXPLORER_TASK_LOG_ROOT/suite-android-build.log"
+
+      - name: Preserve Android evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: media-navigation-android-${{ inputs.candidate_sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/android-task-logs
+          if-no-files-found: warn
+          retention-days: 14
