@@ -448,7 +448,7 @@ fn source_conflict() -> io::Error {
 fn baseline_matches(expected: &Baseline, current: &Option<Baseline>) -> bool {
     match (expected, current) {
         (Baseline::Missing, None) => true,
-        (expected @ Baseline::Present { .. }, Some(actual)) => expected == actual,
+        (expected @ Baseline::Present { .. }, Some(actual)) => expected.same_remote_state(actual),
         _ => false,
     }
 }

@@ -27,7 +27,7 @@ impl PathObservation {
             ) => {
                 !is_symlink
                     && expected_is_dir.map_or(true, |expected_dir| expected_dir == *is_dir)
-                    && baseline == expected
+                    && baseline.same_remote_state(expected)
             }
             _ => false,
         }

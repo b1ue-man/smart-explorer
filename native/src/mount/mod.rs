@@ -16,6 +16,10 @@ mod retirement_queue;
 mod engine_recovery;
 #[path = "core/file_commit.rs"]
 mod file_commit;
+#[path = "core/file_commit_stage.rs"]
+mod file_commit_stage;
+#[path = "core/baseline_match.rs"]
+mod baseline_match;
 #[path = "core/materialization.rs"]
 mod materialization;
 #[path = "core/case_semantics.rs"]
@@ -100,6 +104,9 @@ pub(crate) mod optimization_fixture;
 #[cfg(test)]
 #[path = "core/optimization_cache_tests.rs"]
 mod optimization_cache_tests;
+#[cfg(test)]
+#[path = "core/mount_save_task_tests.rs"]
+mod mount_save_task_tests;
 #[cfg(test)]
 #[path = "core/optimization_policy_tests.rs"]
 mod optimization_policy_tests;
