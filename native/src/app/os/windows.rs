@@ -1,3 +1,5 @@
+#[path = "windows/media_launch.rs"]
+mod media_launch;
 #[path = "windows/platform.rs"]
 mod platform;
 #[path = "shared/platform_helpers.rs"]

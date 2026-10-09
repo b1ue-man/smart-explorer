@@ -1,7 +1,7 @@
 //! The `Entry` JSON type (api.md §2): name, location, type class and the
 //! warning for names Windows cannot address.
 use super::location::{join, Loc};
-use crate::types::{win32_name_issue, FileEntry};
+use crate::types::{media_kind_of_ext, win32_name_issue, FileEntry};
 use crate::vfs::VfsMeta;
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -22,13 +22,10 @@ pub(crate) fn kind_of(ext: &str, is_dir: bool) -> &'static str {
     if is_dir {
         return "dir";
     }
+    if let Some(media) = media_kind_of_ext(ext) {
+        return media.as_str();
+    }
     match ext {
-        "jpg" | "jpeg" | "png" | "gif" | "webp" | "heic" | "heif" | "bmp" | "svg" | "tif"
-        | "tiff" | "avif" | "ico" | "dng" => "image",
-        "mp4" | "mkv" | "mov" | "avi" | "webm" | "m4v" | "3gp" | "wmv" | "flv" | "mpg" | "mpeg"
-        | "ts" => "video",
-        "mp3" | "flac" | "wav" | "ogg" | "opus" | "m4a" | "aac" | "wma" | "mid" | "midi"
-        | "amr" => "audio",
         "txt" | "md" | "log" | "csv" | "json" | "xml" | "yml" | "yaml" | "ini" | "conf" | "cfg"
         | "toml" | "rs" | "kt" | "java" | "py" | "js" | "html" | "htm" | "css" | "sh" | "c"
         | "h" | "cpp" | "tsv" | "srt" => "text",

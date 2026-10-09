@@ -99,6 +99,9 @@ mod landing;
 mod landing_tiles;
 #[path = "core/location_labels.rs"]
 mod location_labels;
+#[cfg(any(windows, test))]
+#[path = "core/media_launch_plan.rs"]
+mod media_launch_plan;
 #[path = "core/menus_settings.rs"]
 mod menus_settings;
 #[path = "core/menus_sync.rs"]

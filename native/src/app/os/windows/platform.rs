@@ -89,7 +89,13 @@ fn shell_execute_path(path: &str, verb: Option<&str>) {
 
 pub(in crate::app) fn open_local_path(path: &str, mode: OpenMode) {
     match mode {
-        OpenMode::Default => shell_execute_path(path, None),
+        // Media go to their viewer together with the folder's neighbors so
+        // previous/next works as from Explorer; everything else is unchanged.
+        OpenMode::Default => {
+            if !super::media_launch::open_media_with_neighbors(&path.replace('/', "\\")) {
+                shell_execute_path(path, None)
+            }
+        }
         OpenMode::With => shell_execute_path(path, Some("openas")),
     }
 }
