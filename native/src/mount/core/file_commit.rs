@@ -1,7 +1,10 @@
 use super::engine::{baseline_from_meta, lock, Entry, EntryState, MountEngine};
 use super::types::{Baseline, EntryCondition, FlushOutcome, MountConflict};
 use crate::vfs::unique_staging_path;
-use std::{io::{self, Write}, sync::Arc};
+use std::{
+    io::{self, Write},
+    sync::Arc,
+};
 impl MountEngine {
     pub(super) fn flush_entry(&self, entry: &Arc<Entry>) -> io::Result<FlushOutcome> {
         let mut state = lock(&entry.state)?;
@@ -35,6 +38,7 @@ impl MountEngine {
         self.invalidate_metadata(&state.remote_path, false);
         let mut source = self.spool.open_file(&state.spool_name, true)?;
         source.sync_data()?;
+        let spool_len = source.metadata()?.len();
         // A failed exclusive open does not transfer ownership of `staged`.
         // In particular, never clean that spelling up on AlreadyExists: it may
         // belong to a concurrent actor or to a case alias on the remote.
@@ -46,18 +50,25 @@ impl MountEngine {
             Ok(())
         })();
         if let Err(error) = upload {
-            // A layered writer may have committed before its final reply was
-            // lost. Without a stable item identity, path cleanup could remove
-            // a concurrent replacement, so retain the stage.
+            // The spool keeps the content for the retry; a stage left next to
+            // the user's file would show up as `<name>.se-mount-…`.
+            self.discard_own_stage(&staged, spool_len);
             return Err(error);
         }
         // Uploading a whole-file spool may take minutes. Revalidate immediately
         // before the atomic promotion so a remote edit during that transfer is
         // not silently overwritten.
         match self.detect_conflict(&state) {
-            Ok(Some(conflict)) => {
-                // The stage spelling is not an ownership proof after the remote
-                // upload. Preserve it rather than deleting a possible replacement.
+            Ok(Some(mut conflict)) => {
+                // Never overwrite the changed remote file, and never leave this
+                // save under the stage spelling: publish it as a conflict copy
+                // that keeps the user's file name and type.
+                if let Some(copy) = self.publish_conflict_copy(&staged, &state.remote_path) {
+                    conflict.detail = format!(
+                        "{}; die gespeicherte Fassung liegt als {copy}",
+                        conflict.detail
+                    );
+                }
                 let persisted = state.with_condition(EntryCondition::Conflict(conflict.clone()));
                 self.spool.persist_entry(&persisted)?;
                 state.condition = EntryCondition::Conflict(conflict.clone());
@@ -65,8 +76,9 @@ impl MountEngine {
             }
             Ok(None) => {}
             Err(error) => {
-                // Verification is inconclusive; retain the stage as recovery
-                // evidence and never delete an unknown current occupant.
+                // Verification is inconclusive: the destination stays as it
+                // is, the spool keeps the content for the retry.
+                self.discard_own_stage(&staged, spool_len);
                 return Err(error);
             }
         }
@@ -82,10 +94,34 @@ impl MountEngine {
             let staged_state = self.observe_path(&staged);
             if destination.matches(&state.baseline, Some(false)) && staged_state.is_plain_file() {
                 // Both pre-mutation names are still intact. This is the only
-                // observation that proves the promotion did not take effect.
-                // It does not, however, prove that the current staging occupant
-                // is still the exclusively opened item, so retain it.
+                // observation that proves the promotion did not take effect;
+                // the spool keeps the content for the retry.
+                self.discard_own_stage(&staged, spool_len);
                 return Err(error);
+            }
+            if matches!(state.baseline, Baseline::Missing)
+                && error.kind() == io::ErrorKind::AlreadyExists
+                && staged_state.is_plain_file()
+            {
+                // A no-replace publication refused by a name that appeared in
+                // the meantime did not take effect: keep the other file and
+                // publish this save beside it, never under the stage spelling.
+                let mut conflict = MountConflict {
+                    path: state.remote_path.clone(),
+                    baseline: state.baseline.clone(),
+                    current: destination.current(),
+                    detail: "a file with this name appeared on the remote while saving".into(),
+                };
+                if let Some(copy) = self.publish_conflict_copy(&staged, &state.remote_path) {
+                    conflict.detail = format!(
+                        "{}; die gespeicherte Fassung liegt als {copy}",
+                        conflict.detail
+                    );
+                }
+                let persisted = state.with_condition(EntryCondition::Conflict(conflict.clone()));
+                self.spool.persist_entry(&persisted)?;
+                state.condition = EntryCondition::Conflict(conflict.clone());
+                return Ok(FlushOutcome::Conflict(conflict));
             }
             let detail = format!(
                 "remote save may already be committed after an ambiguous promotion response: {error}; destination={}; staging={}",
@@ -149,7 +185,9 @@ impl MountEngine {
         let matches = !unsafe_type
             && match (&state.baseline, &current) {
                 (Baseline::Missing, None) => true,
-                (expected @ Baseline::Present { .. }, Some(actual)) => expected == actual,
+                (expected @ Baseline::Present { .. }, Some(actual)) => {
+                    expected.same_remote_state(actual)
+                }
                 _ => false,
             };
         Ok((!matches).then(|| MountConflict {
