@@ -143,9 +143,9 @@ fn spawn_neighbor_launch(path: String) -> bool {
 /// neighboring-files query over the parent folder (the query Explorer hands
 /// to a file activation).
 fn launch_with_neighbors(path: &str) -> windows::core::Result<bool> {
-    use windows::core::HSTRING;
+    use windows::core::{Interface, HSTRING};
     use windows::Storage::Search::{FolderDepth, IndexerOption, QueryOptions, SortEntry};
-    use windows::Storage::{StorageFile, StorageFolder};
+    use windows::Storage::{IStorageFile, StorageFile, StorageFolder};
     use windows::System::{Launcher, LauncherOptions};
 
     let Some(parent) = Path::new(path).parent() else {
@@ -165,6 +165,9 @@ fn launch_with_neighbors(path: &str) -> windows::core::Result<bool> {
     }
     let options = LauncherOptions::new()?;
     options.SetNeighboringFilesQuery(&folder.CreateFileQueryWithOptions(&query)?)?;
+    // windows 0.58 offers the StorageFile → IStorageFile conversion only with
+    // the `Storage_Streams` feature; QueryInterface gives the same interface.
+    let file: IStorageFile = file.cast()?;
     Launcher::LaunchFileWithOptionsAsync(&file, &options)?.get()
 }
 
