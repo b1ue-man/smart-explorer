@@ -51,7 +51,8 @@ Stand: 2026-10-09. Quellen: Nutzernachrichten 2–5 vom 2026-10-09 (in derselben
   unterscheiden und bleiben – sie sind je Gerät umschaltbar.
 - **R6:** Kein Speichervorgang hinterlässt den Zwischennamen: ohne Wirkung → eigene Stage
   löschen (nur wenn noch reguläre Datei ≤ Spoolgröße), Spool behält den Inhalt für den Retry;
-  Konflikt nach dem Upload bzw. `AlreadyExists` beim Ohne-Ersetzen → Stage als
+  Konflikt nach dem Upload, `AlreadyExists` beim Ohne-Ersetzen bzw. eine verlorene
+  Antwort auf das Umbenennen, nach der die Stage noch besteht → Stage als
   „Name (Konflikt JJJJMMTT-hhmmss)[ (n)].ext“ veröffentlichen (Endung bleibt, nichts wird
   ersetzt). Vergleich von Dateiständen: nur auf einer Seite bekannte Fakten gelten als unbekannt,
   sekundengenau gekürzte Zeit als gleich (`mount/core/baseline_match.rs`).
@@ -63,7 +64,7 @@ Stand: 2026-10-09. Quellen: Nutzernachrichten 2–5 vom 2026-10-09 (in derselben
 | S1 | Schreibrecht neuer Geräte | `share/core/direct_relation.rs`, `direct_ledger_projection.rs`, `legacy_direct_request_decision.rs`, `profiles.rs`, `direct_reciprocal.rs` | angenommenes Gerät `write == true` (`direct_ledger_tests`, `relation_rights_task_tests`) |
 | S2 | Freigabe-Standard je Bereich | `share/core/export_config.rs`, `api_exports.rs`, `app/core/share_exports_ui.rs`, `cli/share/exports.rs`, `mobile/os/shared/domains/share_peers.rs`, Android `ShareDialogHost.kt` | `share_rights_task_new_direct_exports_write_and_room_exports_read` |
 | S3 | Home-Freigabe Direkt | `share/core/profile_migration.rs` | `share_rights_task_restricted_direct_home_writes_again_once`, angepasste FC1-Migrations-Tests |
-| S4 | Laufwerk ohne Zwischennamen | `mount/core/file_commit.rs`, `file_commit_stage.rs`, `baseline_match.rs`, `commit.rs`, `replace.rs` | `mount_save_task_*` (Upload-Fehler, Konfliktkopie mit Endung, Vergleichsregel) |
+| S4 | Laufwerk ohne Zwischennamen | `mount/core/file_commit.rs`, `file_commit_stage.rs`, `baseline_match.rs`, `commit.rs`, `replace.rs` | `mount_save_task_*` (Upload-Fehler, Konfliktkopie mit Endung, verlorene Umbenennungs-Antwort, Vergleichsregel) |
 | S5 | Doku | `README.md`, `docs/TODO.md`, `docs/ARCHITEKTUR.md`, dieser Plan | – |
 | S6 | Suite + Release | `native/test-share-write-mount-save-task.py`, `.github/workflows/share-write-mount-save-task.yml` | ein grüner Lauf, dann Release |
 
@@ -71,3 +72,10 @@ Stand: 2026-10-09. Quellen: Nutzernachrichten 2–5 vom 2026-10-09 (in derselben
 - 2026-10-09: S1–S5 umgesetzt (lokal, rustfmt sauber). Push erst nach Abschluss des laufenden
   Releases der Medien-Navigation (`build.yml` 37931532338), damit dessen Versions-Commit nicht
   abgewiesen wird.
+- 2026-10-09: Nachtrag S4: auch nach einer verlorenen Antwort auf das Umbenennen (Stage besteht
+  noch, Ziel verändert) wird die Stage als Konfliktkopie veröffentlicht
+  (`mount_save_task_lost_promotion_reply_never_leaves_the_stage_name`). Die genaue Ursache auf
+  dem Gerät des Nutzers ist ohne dessen Protokolle nicht belegt; abgedeckt sind alle Pfade, auf
+  denen `file_commit.rs` die Stage zuvor liegen ließ (Upload-Fehler, nicht bestätigte Prüfung,
+  wirkungsloses Umbenennen, Konflikt nach dem Upload, `AlreadyExists`, mehrdeutige Antwort).
+  Offen bleibt nur ein Abbruch des Prozesses bzw. der Verbindung mitten im Upload.

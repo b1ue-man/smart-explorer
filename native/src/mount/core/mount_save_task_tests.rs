@@ -105,3 +105,32 @@ fn mount_save_task_remote_change_during_save_becomes_a_typed_conflict_copy() {
     assert_eq!(backend.bytes(&format!("/{copy}")), b"mine");
     engine.close(handle).unwrap();
 }
+
+#[test]
+fn mount_save_task_lost_promotion_reply_never_leaves_the_stage_name() {
+    let directory = FixtureDirectory::new();
+    let backend = OptimizationBackend::new();
+    backend.put("/Brief.pdf", b"old");
+    let engine = new_engine(&directory, &backend);
+    let handle = open_writable(&engine, "\\Brief.pdf");
+    engine.write(handle, 0, b"mine").unwrap();
+    // Another writer replaces the file while this promotion's reply is lost.
+    backend.lose_next_promotion(b"theirs!");
+    let outcome = engine.flush(handle).unwrap();
+    assert!(
+        matches!(outcome, FlushOutcome::CommittedPendingVerification(_)),
+        "{outcome:?}"
+    );
+    assert_eq!(backend.bytes("/Brief.pdf"), b"theirs!");
+    let names = names(&backend);
+    assert!(
+        names.iter().all(|name| !name.contains(".se-mount-")),
+        "{names:?}"
+    );
+    let copy = names
+        .iter()
+        .find(|name| name.starts_with("Brief (Konflikt ") && name.ends_with(").pdf"))
+        .unwrap_or_else(|| panic!("the save is kept with name and type: {names:?}"));
+    assert_eq!(backend.bytes(&format!("/{copy}")), b"mine");
+    engine.close(handle).unwrap();
+}
