@@ -60,12 +60,15 @@ INTEGRATION_PREFIXES = [
     "mount::stage_ledger::",
     "mount::mount_save_task_tests::",
     "mount::optimization_cache_tests::",
-    "mount::remote_drive_task_tests::",
     "mount::recovery_cache_task_tests::",
     "mount::range_read_task_tests::",
     "mount::retirement_queue::",
     "mount::peer_names::",
 ]
+# Platform-gated modules: the portable drive host tests are `not(windows)`, the
+# Dokany host adapter (flush, recovery, handles) exists only on Windows.
+INTEGRATION_NON_WINDOWS = ["mount::remote_drive_task_tests::"]
+INTEGRATION_WINDOWS = ["mount::os::windows::"]
 INTEGRATION_FRAGMENTS = [
     "profile_persistence",
     "profile_policy",
@@ -226,7 +229,8 @@ def main():
                 raise RuntimeError(f"{milestone}: acceptance test absent, ignored or ambiguous: {suffix}")
             mapping[milestone].extend(found)
     selected = {name for names in mapping.values() for name in names}
-    for prefix in INTEGRATION_PREFIXES:
+    platform = INTEGRATION_WINDOWS if os.name == "nt" else INTEGRATION_NON_WINDOWS
+    for prefix in INTEGRATION_PREFIXES + platform:
         found = [name for name in available if name.startswith(prefix) and name not in ignored]
         if not found:
             raise RuntimeError(f"Directly affected module has no tests in this binary: {prefix}")

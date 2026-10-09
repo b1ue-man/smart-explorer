@@ -91,4 +91,8 @@ Stand: 2026-10-09. Quellen: Nutzernachrichten 2–5 vom 2026-10-09 (in derselben
   `MOUNT-META-TESTS`). Die Integrationsauswahl war mit `mount::` zu breit; sie umfasst jetzt die
   betroffenen Module des Speicherpfads (Flush/Upload/Promotion, Konfliktprüfung, atomares Ersetzen,
   Spool- und Journal-Wiederherstellung, Spool-Rückhaltung, Stage-Namen).
+- Lauf 37949756976 (`e2a43ed2`): Linux grün; Windows brach bei der Auswahl ab
+  (`mount::remote_drive_task_tests` ist `not(windows)`). Die Auswahl ist jetzt plattformabhängig:
+  Windows prüft zusätzlich den Dokany-Host `mount::os::windows::`, die übrigen Plattformen
+  `mount::remote_drive_task_tests::`.
 
