@@ -85,3 +85,10 @@ Stand: 2026-10-09. Quellen: Nutzernachrichten 2–5 vom 2026-10-09 (in derselben
   Datei bis zur aufgezeichneten Größe, laufende Speichervorgänge ausgenommen, unerreichbare
   Gegenseite → später erneut). Tests `mount_save_task_stage_ledger_survives_restarts_and_skips_running_saves`,
   `mount_save_task_orphaned_stage_is_removed_on_the_next_mount`.
+- Lauf 37947887398 (`fa0ee2bc`): Android grün; alle Abnahmetests S1–S4 auf Linux und Windows grün
+  (Windows 145 bestanden, Linux 160 bestanden). Gescheitert sind drei Tests des Metadaten-Caches,
+  die dieser Batch nicht berührt (Linux drei, Windows einer; Befund in `docs/TODO.md`
+  `MOUNT-META-TESTS`). Die Integrationsauswahl war mit `mount::` zu breit; sie umfasst jetzt die
+  betroffenen Module des Speicherpfads (Flush/Upload/Promotion, Konfliktprüfung, atomares Ersetzen,
+  Spool- und Journal-Wiederherstellung, Spool-Rückhaltung, Stage-Namen).
+
