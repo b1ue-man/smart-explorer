@@ -98,4 +98,11 @@ Stand: 2026-10-09. Quellen: Nutzernachrichten 2–5 vom 2026-10-09 (in derselben
 - Lauf 37950257228 (`cd2fc800`): Linux, Windows und Android grün. Alle Abnahmetests S1–S4 bestanden
   auf beiden Desktop-Plattformen (Windows 102 ausgewählte Tests einschließlich des Dokany-Hosts,
   Linux 98 einschließlich der portablen Laufwerks-Host-Tests). Danach ein Complete-Release.
+- Release v0.5.175: Complete-Release `build.yml` 37951502940 (Quelle `6a33191a`, Release-Commit
+  `c086fae2`, Tag `v0.5.175`), Publikation 37963754167 erfolgreich. GitHub-Release mit Installer,
+  Windows/Linux app/updater/`se` samt `.sha256`, Android-APK samt `.sha256`, `install-linux.sh`,
+  Kontextmenü-DLL, Share-Server (Windows/Linux) und `version.txt`; die `.sha256`-Dateien und
+  `version.txt` stimmen mit `release-native/update-feed` am Tag überein (geprüft 2026-10-09).
+  Nicht am echten Gerät beobachtet. Offen: `MOUNT-META-TESTS` (vorbestehend, nicht Teil dieses
+  Batches).
 
