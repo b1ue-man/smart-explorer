@@ -33,3 +33,16 @@ internal fun mediaSetFor(shown: List<Entry>, opened: Entry, local: Boolean): Med
     val start = items.indexOfFirst { it.location == opened.location }
     return if (start < 0) MediaSet(listOf(opened), 0, local) else MediaSet(items, start, local)
 }
+
+/** `m:ss` or `h:mm:ss`. */
+internal fun clock(ms: Int): String {
+    val total = (ms.coerceAtLeast(0) / 1000)
+    val hours = total / 3600
+    val minutes = (total % 3600) / 60
+    val seconds = total % 60
+    return if (hours > 0) {
+        "%d:%02d:%02d".format(hours, minutes, seconds)
+    } else {
+        "%d:%02d".format(minutes, seconds)
+    }
+}
