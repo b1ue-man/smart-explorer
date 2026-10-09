@@ -95,4 +95,7 @@ Stand: 2026-10-09. Quellen: Nutzernachrichten 2–5 vom 2026-10-09 (in derselben
   (`mount::remote_drive_task_tests` ist `not(windows)`). Die Auswahl ist jetzt plattformabhängig:
   Windows prüft zusätzlich den Dokany-Host `mount::os::windows::`, die übrigen Plattformen
   `mount::remote_drive_task_tests::`.
+- Lauf 37950257228 (`cd2fc800`): Linux, Windows und Android grün. Alle Abnahmetests S1–S4 bestanden
+  auf beiden Desktop-Plattformen (Windows 102 ausgewählte Tests einschließlich des Dokany-Hosts,
+  Linux 98 einschließlich der portablen Laufwerks-Host-Tests). Danach ein Complete-Release.
 
