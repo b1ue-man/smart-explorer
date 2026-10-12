@@ -259,7 +259,8 @@ def stage_mcp(results, se_binary, work, log_root, tree, skipped):
                 small = session.call("read", {"target": str(tree / "link_file")})
                 ensure(small["content"] == "alpha" and small["through_link"] is True, small)
                 ensure(small["size"] is None and small["next_offset"] is None, small)
-                expected = (tree / "big.txt").read_text()
+                # Raw content (Windows writes the fixture with CRLF).
+                expected = (tree / "big.txt").read_bytes().decode()
                 text, offset, pages = "", 0, 0
                 while offset is not None:
                     page = session.call("read", {"target": str(tree / "link_big"), "offset": offset})
