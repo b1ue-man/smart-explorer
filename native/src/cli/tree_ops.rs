@@ -68,13 +68,16 @@ pub(super) fn copy_entry_with(
     if let (Some(check), Some(root)) = (request.destination_check, plan.entries.first()) {
         check(&root.destination)?;
     }
-    let (files, directories, bytes) = plan.entries.iter().fold((0u64, 0u64, 0u64), |totals, entry| {
-        if entry.source.is_dir {
-            (totals.0, totals.1 + 1, totals.2)
-        } else {
-            (totals.0 + 1, totals.1, totals.2 + entry.source.size)
-        }
-    });
+    let (files, directories, bytes) =
+        plan.entries
+            .iter()
+            .fold((0u64, 0u64, 0u64), |totals, entry| {
+                if entry.source.is_dir {
+                    (totals.0, totals.1 + 1, totals.2)
+                } else {
+                    (totals.0 + 1, totals.1, totals.2 + entry.source.size)
+                }
+            });
     observer.planned(files, directories, bytes);
     observer.set_phase(TreePhase::Reading);
     let spool = SourceSpool::collect(source, &plan, observer)?;
