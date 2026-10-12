@@ -19,6 +19,7 @@ mod transfer;
 mod tree_apply;
 mod tree_destination;
 mod tree_guard;
+mod tree_observer;
 mod tree_ops;
 mod tree_plan;
 #[cfg(test)]

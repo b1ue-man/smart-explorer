@@ -3,6 +3,7 @@ use super::tree_guard::{
     inspect_destination, join, metadata_text_bytes, reject_link, validate_destination_state,
     validate_listed_names, validate_listing, validate_same_source, DestinationState,
 };
+use super::tree_observer::TreeObserver;
 use crate::vfs::{Backend, VfsMeta};
 use std::collections::HashMap;
 
@@ -120,6 +121,7 @@ impl PlanBudget {
 }
 
 impl TransferPlan {
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn build(
         source: &dyn Backend,
         source_path: &str,
@@ -128,6 +130,7 @@ impl TransferPlan {
         recursive: bool,
         force: bool,
         expected_root: Option<&VfsMeta>,
+        observer: &TreeObserver,
     ) -> Result<Self, String> {
         let mut budget = PlanBudget::default();
         let root_accounted =
@@ -143,6 +146,7 @@ impl TransferPlan {
         let mut entries: Vec<PlanEntry> = Vec::new();
 
         while let Some(work) = pending.pop() {
+            observer.check()?;
             let fresh = source
                 .stat(&work.source_path)
                 .map_err(|error| format!("preflight stat {}: {error}", work.source_path))?;

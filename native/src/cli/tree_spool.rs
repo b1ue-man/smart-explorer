@@ -1,3 +1,4 @@
+use super::tree_observer::{Counter, TreeObserver};
 use super::tree_plan::TransferPlan;
 use crate::vfs::Backend;
 use std::fs::{File, OpenOptions};
@@ -15,7 +16,11 @@ struct SpoolFile {
 }
 
 impl SourceSpool {
-    pub(super) fn collect(source: &dyn Backend, plan: &TransferPlan) -> Result<Self, String> {
+    pub(super) fn collect(
+        source: &dyn Backend,
+        plan: &TransferPlan,
+        observer: &TreeObserver,
+    ) -> Result<Self, String> {
         // Re-list the exact tree before opening any source file. All output
         // below is private local staging, never a destination-backend path.
         plan.validate_source_tree(source)?;
@@ -31,6 +36,7 @@ impl SourceSpool {
             if entry.source.is_dir {
                 continue;
             }
+            observer.check()?;
             plan.validate_source_entry(source, index)?;
             let path = directory.path().join(format!("{index:016x}.part"));
             let mut writer = OpenOptions::new()
@@ -41,7 +47,13 @@ impl SourceSpool {
             let reader = source
                 .open_read_id(&entry.source_path, entry.source.id.as_deref())
                 .map_err(|error| format!("cannot read source {}: {error}", entry.source_path))?;
-            copy_exact(reader, &mut writer, entry.source.size, &entry.source_path)?;
+            copy_exact(
+                observer.reader(reader, Counter::Read),
+                &mut writer,
+                entry.source.size,
+                &entry.source_path,
+            )
+            .map_err(|error| observer.explain(error))?;
             writer
                 .flush()
                 .map_err(|error| format!("cannot flush private transfer spool: {error}"))?;
@@ -50,6 +62,7 @@ impl SourceSpool {
                 .map_err(|error| format!("cannot sync private transfer spool: {error}"))?;
             drop(writer);
             plan.validate_source_entry(source, index)?;
+            observer.file_done(Counter::Read);
             files[index] = Some(SpoolFile {
                 path,
                 expected_size: entry.source.size,
@@ -68,6 +81,7 @@ impl SourceSpool {
         &self,
         index: usize,
         writer: &mut dyn Write,
+        observer: &TreeObserver,
     ) -> Result<u64, String> {
         let file = self
             .files
@@ -84,7 +98,13 @@ impl SourceSpool {
         }
         let reader = File::open(&file.path)
             .map_err(|error| format!("cannot reopen private transfer spool: {error}"))?;
-        let copied = copy_exact(reader, writer, file.expected_size, "private transfer spool")?;
+        let copied = copy_exact(
+            observer.reader(reader, Counter::Written),
+            writer,
+            file.expected_size,
+            "private transfer spool",
+        )
+        .map_err(|error| observer.explain(error))?;
         let after = std::fs::symlink_metadata(&file.path)
             .map_err(|error| format!("cannot recheck private transfer spool: {error}"))?;
         if !after.is_file() || after.file_type().is_symlink() || after.len() != file.expected_size {

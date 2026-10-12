@@ -18,18 +18,34 @@ pub(super) fn run(args: StatusArgs) -> Result<(), String> {
         Err(error) => (crate::daemon::ShareWorkerSnapshot::default(), Some(error)),
     };
     if args.json {
-        print_json(&snapshot, worker_error.as_deref(), &profiles)
+        let value = json_value(&snapshot, worker_error.as_deref(), &profiles);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?
+        );
+        Ok(())
     } else {
         print_text(&snapshot, worker_error.as_deref(), &profiles);
         Ok(())
     }
 }
 
-fn print_json(
+/// The `se share status --json` document; a worker that cannot be reached is
+/// reported inside the document, not as an error.
+pub(super) fn status_value() -> Result<serde_json::Value, String> {
+    let profiles = super::checked_profiles()?;
+    let (snapshot, worker_error) = match crate::daemon::share_worker_snapshot() {
+        Ok(snapshot) => (snapshot, None),
+        Err(error) => (crate::daemon::ShareWorkerSnapshot::default(), Some(error)),
+    };
+    Ok(json_value(&snapshot, worker_error.as_deref(), &profiles))
+}
+
+fn json_value(
     snapshot: &crate::daemon::ShareWorkerSnapshot,
     worker_error: Option<&str>,
     profiles: &crate::share::ShareProfiles,
-) -> Result<(), String> {
+) -> serde_json::Value {
     let contacts = profiles.direct_contacts.iter().map(|contact| {
         serde_json::json!({
             "id": contact.id,
@@ -73,7 +89,7 @@ fn print_json(
         .iter()
         .map(|entry| lifecycle_output::request_value(entry, profiles))
         .collect::<Vec<_>>();
-    let value = serde_json::json!({
+    serde_json::json!({
         "worker": {
             "reachable": worker_error.is_none(),
             "running": worker_error.is_none().then_some(snapshot.running),
@@ -99,12 +115,7 @@ fn print_json(
             .collect::<Vec<_>>(),
         "events": snapshot.events.iter().filter_map(public_event).collect::<Vec<_>>(),
         "discoverable": discoverable_values(snapshot, profiles),
-    });
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?
-    );
-    Ok(())
+    })
 }
 
 fn print_text(
