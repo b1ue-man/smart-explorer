@@ -12,12 +12,14 @@ pub(super) struct TransferReceipt {
 }
 
 /// A link or special file inside a copied tree that was not transferred.
+#[derive(Debug)]
 pub(super) struct Omission {
     pub(super) path: String,
     pub(super) kind: EntryKind,
 }
 
 /// Result of `se cp`/`se mv` and the MCP `copy`/`move` jobs.
+#[derive(Debug)]
 pub(super) struct TreeOutcome {
     /// Path of the copied or moved root at the destination.
     pub(super) destination: String,

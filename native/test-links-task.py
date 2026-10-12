@@ -141,7 +141,9 @@ def stage_local(results, se_binary, work, log_root):
         expected = {"a.txt": "-", "big.txt": "-", "sub": "d", "sub/b.txt": "-", **skipped}
         ensure(found == expected, f"{found} != {expected}")
         no_dirs = hits(se("search", str(tree), "b"))
-        expected_b = {"sub/b.txt": "-", "big.txt": "-", **{name: "l" for name in skipped if "b" in name}}
+        # The query matches entry names, not the path above them.
+        expected_b = {"sub/b.txt": "-", "big.txt": "-",
+                      **{name: "l" for name in skipped if "b" in name.rsplit("/", 1)[-1]}}
         ensure(no_dirs == expected_b, f"{no_dirs} != {expected_b}")
         named = hits(se("search", str(tree), "link*", "--glob"))
         ensure(set(named) == {name for name in skipped if name.startswith("link")}, named)
