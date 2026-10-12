@@ -31,7 +31,7 @@ pub(super) fn install(executable: &Path) -> Result<Value, String> {
             "plugin",
             "marketplace",
             "add",
-            &root_text,
+            root_text.as_str(),
             "--scope",
             "user",
         ],
