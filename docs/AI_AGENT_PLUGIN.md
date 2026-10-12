@@ -51,11 +51,11 @@ Plugin- und Skill-Dateien auf (Versions-/Pfadmarker `.se-generated.json`).
 |---|---|---|
 | `status` | Version, Installation, Zugangsdatenspeicher, Hintergrunddienst, Share-Zustand, Plugin-Dateien | nur lesend |
 | `connections` | gespeicherte Remotes und Share-Peers mit `target`-Präfix und `exec`-Art (`ssh`/`share`) | nur lesend |
-| `list`, `stat`, `read` | Verzeichnis (seitenweise), Metadaten mit `etag`, Inhalt ab Byte-Offset (Text oder base64) | nur lesend |
-| `write`, `edit` | Datei anlegen/ersetzen, exakte Textersetzungen; `if_match` = `etag` schützt vor verlorenen Änderungen | zerstörend |
+| `list`, `stat`, `read` | Verzeichnis (seitenweise, `type` `file`/`dir`/`symlink`/`special`), Metadaten mit `etag`, Inhalt ab Byte-Offset (Text oder base64; über einen Link der Inhalt seines Ziels mit `size`/`etag` = null und `through_link: true`) | nur lesend |
+| `write`, `edit` | Datei anlegen/ersetzen, exakte Textersetzungen; `if_match` = `etag` schützt vor verlorenen Änderungen; nie durch einen Link als Datei hindurch | zerstörend |
 | `mkdir`, `remove` | Ordner anlegen; löschen wie `se rm --force` (Wurzeln nur mit `allow_root`) | ändernd / zerstörend |
-| `copy`, `move` | wie `se cp`/`se mv` zwischen beliebigen Zielen, als Job | zerstörend (Überschreiben) |
-| `search` | Namenssuche (Text oder Glob), Treffer seitenweise, als Job | nur lesend |
+| `copy`, `move` | wie `se cp`/`se mv` zwischen beliebigen Zielen, als Job; Ergebnis mit `omitted` (übersprungene Links/Sonderdateien) und `kept_directories` (beim Verschieben behaltene Quellordner) | zerstörend (Überschreiben) |
+| `search` | Namenssuche (Text oder Glob), Treffer seitenweise, als Job; Links und Sonderdateien als eigene Treffer (`symlink`, `special`), nie betreten | nur lesend |
 | `exec` | Befehl auf gespeichertem SFTP-Remote (SSH) oder Share-Peer, als Job | zerstörend |
 | `job_status`, `job_input`, `job_cancel` | Jobs verfolgen (Ausgabe ab Offset), stdin senden, abbrechen | lesend / ändernd |
 | `se` | jeder weitere `se`-Befehl als Kindprozess (Share-Verwaltung, Verbindungen anlegen, Laufwerke, Update, Diagnose) | zerstörend |
@@ -131,6 +131,10 @@ Terminal-Update `se update` (Versionsübergabe) beendet den Server nicht.
   unter Windows läuft das Kind ohne Konsolenfenster und wird direkt beendet.
 - `copy`/`move` übernehmen die Grenzen von `se cp`: höchstens 1 000 000 Einträge, 128 MiB
   Pfadtext, Tiefe 512, und lesen jede Quelldatei vor dem Veröffentlichen in einen lokalen Spool.
+- Links: Links innerhalb eines kopierten Ordners werden nie verfolgt oder neu angelegt (kein
+  Backend kann Links anlegen); ein als `source`/`destination` genannter Link wird verfolgt, Links
+  auf Ordner nur bei lokalen Pfaden. Die serverseitige Suche von SSH-Agenten und Share-Peers
+  überspringt Links; nur die Ordnerdurchsuchung meldet sie.
 - SSH-Server ohne `signal`-Unterstützung sehen beim Abbruch nur das Schließen des Kanals.
 
 ## Fehlersuche

@@ -576,7 +576,17 @@ Datenträger. Beispiele: `se doctor --json`, `se connections list`,
 `se ls @label:/pfad`,
 `se get @sftp:/bericht.pdf .`, `se put ./lokal.txt @webdav:/ziel/`,
 `se cp @drive:/a.txt @share:/b.txt`, `se search @label:/ "*.rs"`,
-`se share discoverable --minutes 5 --pin-stdin`, `se update --check`. Remote
+`se share discoverable --minutes 5 --pin-stdin`, `se update --check`.
+**Links (ab 0.5.177):** `se search` meldet Links (`l`) und FIFOs/Sockets/Geräte
+(`s`) über ihren Namen und betritt Links nie; `--dirs` nimmt Ordner zusätzlich
+auf. `se cp -r`/`se mv -r` überspringen Links und Sonderdateien innerhalb eines
+Ordners, übertragen den Rest und listen jede Auslassung auf stderr; `se mv`
+lässt sie samt ihren Ordnern in der Quelle. Ein ausdrücklich genannter Link als
+Quelle oder Ziel wird verfolgt wie bei `cp` (Ordner-Links nur bei lokalen
+Pfaden), `se mv` benennt einen Link selbst um. Innerhalb einer Verbindung
+benennt `se mv` auch Ordner direkt um; FTP, Google Drive und ZIP ohne atomares
+Umbenennen verschieben per Kopieren und Löschen. `se stat` zeigt `symlink`
+bzw. `special`. Remote
 Execution ist ab 0.5.134 als separate, standardmaessig deaktivierte
 Geraeteberechtigung verfuegbar. `se share grants exec` zeigt die exakten
 Identitaeten, `enable --yes` erlaubt einem Geraet die vollstaendige Shell-Autoritaet
