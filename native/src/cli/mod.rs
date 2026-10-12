@@ -5,6 +5,7 @@ mod doctor;
 mod drive;
 mod exec;
 mod exec_ssh;
+mod mcp;
 mod ops;
 #[cfg(test)]
 mod ops_safety_tests;
@@ -13,6 +14,7 @@ mod ops_search_tests;
 #[cfg(test)]
 mod ops_transfer_tests;
 mod os;
+mod plugin;
 mod setup;
 mod share;
 mod target;
@@ -53,6 +55,7 @@ Examples:
   se share status --json
   se share discoverable --minutes 5 --pin-stdin
   se update --check
+  se plugin install
   se drive runtime
   se drive install-runtime
   se drive mount @prod:/srv --letter M
@@ -85,6 +88,10 @@ enum Command {
     Completions(completions::CompletionsArgs),
     #[command(about = "Check the update feed and install a newer se (and app)")]
     Update(update::UpdateArgs),
+    #[command(about = "Serve Smart Explorer to AI agents over MCP (stdio; started by the agent)")]
+    Mcp(mcp::McpArgs),
+    #[command(about = "Install the Smart Explorer plugin into AI agents (Claude Code, Codex)")]
+    Plugin(plugin::PluginArgs),
     #[command(about = "List a directory")]
     Ls(PathArg),
     #[command(about = "Show file or directory metadata")]
@@ -198,6 +205,8 @@ fn run_inner(cli: Cli) -> Result<i32, String> {
         Command::Connections(args) => connections::run(args),
         Command::Completions(args) => completions::run(args),
         Command::Update(args) => update::run(args),
+        Command::Mcp(args) => mcp::run(args),
+        Command::Plugin(args) => plugin::run(args),
         Command::Ls(args) => {
             let t = target::resolve(&args.target)?;
             ops::list(&t)?;

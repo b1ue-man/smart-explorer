@@ -72,10 +72,27 @@ impl Target {
     }
 }
 
+/// Opens a saved URL connection (SFTP, FTP, FTPS, WebDAV, SMB) for a path.
+pub(super) type OpenSaved<'a> =
+    &'a dyn Fn(&SavedConnection, &str) -> Result<(BackendHandle, String), String>;
+
 pub(crate) fn resolve(spec: &str) -> Result<Target, String> {
+    resolve_with(spec, None)
+}
+
+/// [`resolve`] for a long-running caller that reuses one login per saved URL
+/// connection (`open`). Windows UNC shares, Share peers, Google Drive and
+/// local paths resolve exactly as in [`resolve`].
+pub(super) fn resolve_with(spec: &str, open: Option<OpenSaved<'_>>) -> Result<Target, String> {
     if let Some((conn, path)) = saved_shorthand(spec)? {
         let preserved_root = same_normalized_path(&path, &conn.root);
-        let (backend, opened, net) = open_connection_at(&conn, &path)?;
+        let (backend, opened, net) = match open {
+            Some(open) if conn.protocol != Protocol::Share => {
+                let (backend, opened) = open(&conn, &path)?;
+                (backend, opened, None)
+            }
+            _ => open_connection_at(&conn, &path)?,
+        };
         return Ok(Target {
             backend,
             path: opened,
@@ -87,9 +104,18 @@ pub(crate) fn resolve(spec: &str) -> Result<Target, String> {
     }
     let normalized = normalize_local(spec);
     let (namespace_key, rename_key) = endpoint_backend_keys(&normalized);
-    let saved_configured_root =
-        crate::connect::saved_and_path(&normalized).map(|(connection, _)| connection.root);
-    let (backend, path) = crate::connect::resolve_endpoint(&normalized)?;
+    let saved = crate::connect::saved_and_path(&normalized);
+    let saved_configured_root = saved
+        .as_ref()
+        .map(|(connection, _)| connection.root.clone());
+    let (backend, path) = match (open, saved) {
+        (Some(open), Some((connection, path)))
+            if connection.protocol.is_url() && crate::connect::is_remote_url(&normalized) =>
+        {
+            open(&connection, &path)?
+        }
+        _ => crate::connect::resolve_endpoint(&normalized)?,
+    };
     let preserved_root = is_endpoint_namespace_root(&normalized, &path)
         || saved_configured_root
             .as_deref()

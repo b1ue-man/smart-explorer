@@ -195,6 +195,7 @@ pub use exec_state::{
     cancel_remote as cancel_exec, load as exec_jobs, ExecCancelTarget, ExecJobDirection,
     ExecJobsSnapshot,
 };
+pub use handoff::update_stop_marker;
 pub use hooks::{run_job_hook, HookPhase};
 pub use host_state::{
     defer_scheduling_until_reported, host_state, set_host_state, set_storage_access,

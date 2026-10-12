@@ -8,3 +8,6 @@ release-native/update-feed/windows-build.manifest text eol=lf
 /android/gradlew text eol=lf
 /android/gradlew.bat text eol=crlf
 *.jar binary
+
+# Embedded AI agent skill: identical bytes on every platform (include_str!).
+/native/src/cli/plugin/assets/* text eol=lf
