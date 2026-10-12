@@ -87,7 +87,7 @@ fn do_connect(form: ConnectForm, secret: Option<String>) -> ConnectResult {
     do_connect_with_agent_fallback(form, secret, AgentFallback::Allow)
 }
 
-fn do_connect_with_agent_fallback(
+pub(super) fn do_connect_with_agent_fallback(
     form: ConnectForm,
     secret: Option<String>,
     agent_fallback: AgentFallback,

@@ -21,6 +21,8 @@
 mod backend;
 #[path = "core/channel_pool.rs"]
 mod channel_pool;
+#[path = "core/command.rs"]
+mod command;
 #[path = "core/config.rs"]
 mod config;
 #[path = "core/connection.rs"]
@@ -67,6 +69,7 @@ mod stage_copy_task_tests;
 mod transfer_engine_task_tests;
 
 pub use backend::SftpBackend;
+pub use command::{signal_number, SshCommand, SshCommandControl, SshCommandEnd, SshCommandEvent};
 pub use config::{SftpAuth, SftpConfig};
 pub use url::backend_from_url;
 

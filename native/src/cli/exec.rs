@@ -10,20 +10,29 @@ explicitly authorized Share peer. File access does not imply Exec access.
 The target may be omitted when exactly one ready peer exists. Otherwise the
 command prints every valid target and an immediately usable example.
 
+A saved SFTP remote (`@label`, `@label:/dir`, or its saved sftp:// endpoint)
+runs the command over that connection's SSH login through the remote user's
+login shell, like `ssh host 'command'`; a path in the selector becomes the
+working directory. --cwd, --env and the argv form need a POSIX shell there;
+use --shell with the target shell's own syntax for Windows OpenSSH servers.
+
 Examples:
   se exec Laptop -- uname -a
   se exec share://direct/peer-id -- powershell -NoProfile -Command Get-Date
   se exec Laptop --shell 'printf \"%s\\n\" \"$HOME\"'
   se exec Laptop --cwd /srv --env MODE=production -- ./deploy --force
+  se exec @prod:/srv/app -- git status --short
 
 There is no default runtime or output limit. Use --timeout or --max-output only
-when you explicitly want one. Ctrl+C cancels the contained remote process tree.";
+when you explicitly want one. Ctrl+C cancels the contained remote process tree;
+on SSH remotes it sends TERM, then KILL after 10 seconds, to the command's
+process group.";
 
 #[derive(Args)]
 #[command(long_about = EXEC_HELP)]
 pub(super) struct ExecArgs {
     #[arg(
-        help = "Optional peer selector or share:// endpoint; omit when exactly one peer is ready",
+        help = "Optional peer selector, share:// endpoint, or saved SFTP remote (@label[:/dir]); omit when exactly one peer is ready",
         add = ArgValueCandidates::new(crate::cli::completions::exec_target_candidates)
     )]
     pub(super) target: Option<String>,
@@ -66,7 +75,17 @@ pub(super) struct ExecArgs {
 }
 
 pub(super) fn run(args: ExecArgs) -> Result<i32, String> {
-    let target = select_target(args.target.as_deref())?;
+    let ssh_target = match args.target.as_deref() {
+        Some(selector) => super::exec_ssh::ssh_target(selector)?,
+        None => None,
+    };
+    // Share peers keep their original order: the peer is selected (and listed
+    // on failure) before the command is checked.
+    let peer = if ssh_target.is_some() {
+        None
+    } else {
+        Some(select_target(args.target.as_deref())?)
+    };
     let command = match (args.shell, args.argv.split_first()) {
         (Some(command), None) if !command.trim().is_empty() => {
             crate::share::ExecCommand::Shell { command }
@@ -83,6 +102,17 @@ pub(super) fn run(args: ExecArgs) -> Result<i32, String> {
             )
         }
     };
+    if let Some(target) = ssh_target {
+        return super::exec_ssh::run(super::exec_ssh::SshRun {
+            target,
+            command,
+            cwd: args.cwd,
+            env: parse_environment(args.env)?,
+            timeout_seconds: args.timeout,
+            max_output: args.max_output,
+        });
+    }
+    let target = peer.ok_or_else(|| "no Exec peer was selected".to_string())?;
     let start = crate::share::ExecStart {
         exec_id: crate::share::ExecId::generate().map_err(|error| error.to_string())?,
         command,

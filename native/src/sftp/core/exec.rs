@@ -121,7 +121,7 @@ impl SftpBackend {
         ))
     }
 
-    fn request_exec(
+    pub(super) fn request_exec(
         &self,
         generation: &Arc<SftpGeneration>,
         channel: &russh::Channel<client::Msg>,

@@ -29,6 +29,8 @@ mod poll_signal;
 mod removal_scope;
 #[path = "os/shared/resolution.rs"]
 mod resolution;
+#[path = "os/shared/ssh_session.rs"]
+mod ssh_session;
 #[path = "core/types.rs"]
 mod types;
 
@@ -52,6 +54,7 @@ pub use persistence::build_saved;
 pub(crate) use poll_signal::{poll_subscription, PollNotice};
 pub use removal_scope::{location_key, CleanupReport, MountScope, RemovedEndpointScope};
 pub use resolution::resolve_endpoint;
+pub use ssh_session::open_saved_ssh;
 pub use types::{ConnectForm, ConnectResult, Connected, RemoteState};
 
 #[cfg(test)]

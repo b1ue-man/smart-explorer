@@ -4,6 +4,7 @@ mod connections;
 mod doctor;
 mod drive;
 mod exec;
+mod exec_ssh;
 mod ops;
 #[cfg(test)]
 mod ops_safety_tests;
@@ -104,7 +105,9 @@ enum Command {
     Mkdir(PathArg),
     #[command(about = "Search names below a target")]
     Search(SearchArgs),
-    #[command(about = "Run an unrestricted command on an explicitly authorized Share peer")]
+    #[command(
+        about = "Run an unrestricted command on an explicitly authorized Share peer or saved SSH remote"
+    )]
     Exec(exec::ExecArgs),
 }
 
