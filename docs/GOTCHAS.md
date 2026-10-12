@@ -2,6 +2,32 @@
 
 Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
 
+## AI agent plugin (`se mcp`)
+
+- **Long-lived `se` processes block desktop updates.** The updater helper waits
+  at most 30 s for every process running the app or `se` image (Toolhelp on
+  Windows, `/proc/<pid>/exe` on Linux) after writing `daemon.stop` = `stop`.
+  Anything that keeps an `se` process alive for hours (the MCP server) must
+  watch that request and exit (`cli/mcp/update_stop.rs`); a value already
+  present at start is stale and ignored.
+- **Two MCP lifecycles.** Codex starts servers with `initialize` and protocol
+  `2025-06-18`; Claude Code's v2 runtime probes the stateless `2026-07-28`
+  `server/discover` first. rmcp 3.5.1 serves both on one connection; a server
+  limited to one generation breaks one host. rmcp needs Rust 1.88 and is built
+  without its macros (tool schemas are plain JSON in `cli/mcp/catalog.rs`).
+- **Never print to stdout from code `se mcp` reaches.** The server writes the
+  protocol to a duplicate of stdout and points stdout at stderr, but tests and
+  new code should still use stderr for diagnostics.
+- **Codex filters MCP server environments** (Unix: `HOME`, `PATH`, `USER`,
+  `LANG`, `TERM`, `TMPDIR`, `TZ` and a few more). `se plugin install codex`
+  passes `XDG_DATA_HOME`, `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`
+  explicitly; without them `se` would read the default app data and could
+  start the worker without the user session bus.
+- **Claude Code plugins cannot ship permission rules**; users allow
+  `mcp__plugin_smart-explorer_se__*` themselves. Local-marketplace plugins are
+  loaded from their folder at every session start (no cache copy), which is
+  why `se mcp` refreshes the generated files after an update.
+
 ## Build / toolchain
 
 - **GNU toolchain only.** Built with `x86_64-pc-windows-gnu` + Strawberry GCC as
