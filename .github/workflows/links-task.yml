@@ -1,0 +1,88 @@
+name: links-task
+run-name: Links and special files in se (search, cp, mv, MCP) ${{ inputs.candidate_sha }}
+
+# Single task-level suite of the 2026-10-12 links batch
+# (docs/plaene/2026-10-12-links-in-se/plan.md). Dispatch it once for the exact
+# pushed candidate SHA; it never builds release artifacts or publishes anything.
+#   suite  fmt, development build, unit tests, local trees with links/junctions
+#          and special files through the CLI and `se mcp` on Linux and Windows;
+#          SFTP (OpenSSH container) and FTP (pyftpdlib) on Linux
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Full pushed candidate SHA, matching the selected ref
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: links-task-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  suite:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 300
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 1
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          # The fmt stage diffs the batch against its base commit.
+          fetch-depth: 50
+          persist-credentials: false
+
+      - name: Bind workflow and checkout to the requested candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
+          [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            native
+            share-server
+          # Reuse the preceding host-library tasks' dependency/incremental output.
+          shared-key: search-recursive-access
+          cache-on-failure: true
+          cache-workspace-crates: true
+
+      - name: Run the one task entrypoint
+        shell: bash
+        timeout-minutes: 290
+        run: >-
+          python native/test-links-task.py
+          --log-root "$RUNNER_TEMP/links-task"
+
+      - name: Preserve acceptance and failure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: links-${{ runner.os }}-${{ inputs.candidate_sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/links-task
+          if-no-files-found: error
+          retention-days: 14
