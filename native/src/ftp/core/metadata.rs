@@ -319,7 +319,22 @@ pub(super) fn stat(connection: &FtpConnection, path: &str) -> io::Result<VfsMeta
     if let Some(meta) = direct {
         return Ok(meta);
     }
-    let listed = list(connection, &parent_dir(path))?;
+    let parent = parent_dir(path);
+    let listed = match list(connection, &parent) {
+        Ok(listed) => listed,
+        // The parent cannot be listed (pyftpdlib answers MLSD of a missing
+        // directory with 501). When the parent is proven absent through its
+        // own parent's listing, so is `path`; otherwise the error stands.
+        Err(error) => {
+            return match stat(connection, &parent) {
+                Err(missing) if missing.kind() == io::ErrorKind::NotFound => Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("{path} nicht gefunden"),
+                )),
+                _ => Err(error),
+            };
+        }
+    };
     if let Some(omission) = listed.omitted.iter().find(|entry| entry.rel == base) {
         return Err(invalid(omission.detail.clone()));
     }
