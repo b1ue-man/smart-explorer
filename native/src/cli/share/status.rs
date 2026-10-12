@@ -32,7 +32,7 @@ pub(super) fn run(args: StatusArgs) -> Result<(), String> {
 
 /// The `se share status --json` document; a worker that cannot be reached is
 /// reported inside the document, not as an error.
-pub(super) fn status_value() -> Result<serde_json::Value, String> {
+pub(in crate::cli) fn status_value() -> Result<serde_json::Value, String> {
     let profiles = super::checked_profiles()?;
     let (snapshot, worker_error) = match crate::daemon::share_worker_snapshot() {
         Ok(snapshot) => (snapshot, None),

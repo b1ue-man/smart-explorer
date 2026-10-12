@@ -31,7 +31,7 @@ pub(super) fn print_connections(json: bool) -> Result<(), String> {
 }
 
 /// The rows of `se connections list --json`: saved remotes, then Share peers.
-pub(super) fn connections_value() -> Result<serde_json::Value, String> {
+pub(in crate::cli) fn connections_value() -> Result<serde_json::Value, String> {
     let (connections, profiles) = load()?;
     Ok(serde_json::Value::Array(rows(&connections, &profiles)))
 }
