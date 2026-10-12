@@ -240,7 +240,19 @@ jobs:
 
       - name: Prepare Windows release tools
         shell: pwsh
-        run: choco install strawberryperl nsis -y --no-progress
+        run: |
+          $ErrorActionPreference = "Stop"
+          # The community feed answered 504 for nsis on 2026-10-12 (run 38279200247) and
+          # choco still exited successfully. Retry transient feed failures and require
+          # the installed tools before the release transaction starts.
+          $makensis = @("$env:ProgramFiles\NSIS\makensis.exe", "${env:ProgramFiles(x86)}\NSIS\makensis.exe")
+          foreach ($attempt in 1..3) {
+            choco install strawberryperl nsis -y --no-progress
+            if ($makensis | Where-Object { Test-Path -LiteralPath $_ }) { break }
+            if ($attempt -eq 3) { throw "NSIS (makensis.exe) is still missing after $attempt Chocolatey attempts." }
+            Write-Host "makensis.exe missing after attempt $attempt; retrying in 60 seconds."
+            Start-Sleep -Seconds 60
+          }
 
       - name: Select WSL1 before Ubuntu installation
         shell: pwsh

@@ -476,7 +476,9 @@ For a human-operated workstation release, use the same wrapper directly:
    pwsh ./native/publish-release-local.ps1 -CheckEnvOnly
    ```
 
-   It checks Windows/WSL or Linux cross-build tooling, Rust targets,
+   The remote `complete-release` job installs NSIS and Strawberry Perl with up to
+   three Chocolatey attempts (60 s apart, for transient feed errors) and stops
+   before the transaction when `makensis.exe` is still missing. It checks Windows/WSL or Linux cross-build tooling, Rust targets,
    `rustfmt`/Clippy, Zig, NSIS, MinGW, 7-Zip, network access, the active workflow, and
    non-interactive Git write authentication for `main` plus at least one of the
    exact tag or `release/vX.Y.Z` trigger paths. Without `-AndroidApkDirectory`
