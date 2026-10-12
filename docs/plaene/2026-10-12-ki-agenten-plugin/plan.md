@@ -226,3 +226,14 @@ Nicht-Android); Release-Artefaktsatz unverändert (Plugin-Dateien stecken in `se
 
 Reihenfolge: M1 → M2 → M3 → M4 → M5 → M6 → M7 → M8 → M9 → M10 → M11 → M12. Testpräfix:
 `mcp_task_`. Keine lokalen Builds; Prüfung ausschließlich über M11.
+
+## Fortschritt
+
+| Nr. | Stand | Beleg |
+|---|---|---|
+| M1–M2 | umgesetzt | Commit `b41f7952` |
+| M3 | umgesetzt | Commit `f50cd74e` |
+| M4–M9 | umgesetzt | Commit `36435761` (+ Korrekturen in `71ee7676`) |
+| M10 | umgesetzt | Commit `b75db946` |
+| M11 | Suite geschrieben, erster Lauf gestartet | Commit `71ee7676`, Lauf 38271037995 für `d1790ce5` |
+| M12 | Graph aufgefrischt (`d1790ce5`, `--code-only`, weil `SKILL.md` unter `native/src` als Dokument zählt); Release folgt nach grüner Suite | — |
