@@ -49,6 +49,10 @@ pub(super) fn transfer_plan_as(
             match os::same_file(&src.path, &dst_path) {
                 Ok(same) => same,
                 Err(e) if e.kind() == io::ErrorKind::NotFound => false,
+                // A link to a directory (Windows refuses to open a junction
+                // as a file) or a dangling link leads to no file that could
+                // be the destination; the link itself is what moves.
+                Err(_) if meta.is_symlink => false,
                 Err(e) => {
                     return Err(format!(
                         "cannot verify that local source and destination differ: {e}"
