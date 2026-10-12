@@ -155,6 +155,22 @@ pub(crate) fn stop_requested_for(generation: &str) -> bool {
     stop_requested_checked_for(generation).unwrap_or(true)
 }
 
+/// Modification time of a desktop-update stop request: `daemon.stop` holding
+/// `stop`, which in production only the updater helper writes before it waits
+/// for every Smart Explorer and `se` process to exit. `None` when there is no
+/// such request (absent file, a version handoff, or an unreadable control).
+pub fn update_stop_marker() -> Option<std::time::SystemTime> {
+    let path = state::stop_path();
+    match stop_control_checked() {
+        Ok(Some(StopControl::Manual)) => Some(
+            std::fs::metadata(&path)
+                .and_then(|metadata| metadata.modified())
+                .unwrap_or(std::time::UNIX_EPOCH),
+        ),
+        _ => None,
+    }
+}
+
 pub(crate) fn stop_requested_checked_for(generation: &str) -> io::Result<bool> {
     Ok(match stop_control_checked()? {
         None => false,
