@@ -235,5 +235,5 @@ Reihenfolge: M1 → M2 → M3 → M4 → M5 → M6 → M7 → M8 → M9 → M10 
 | M3 | umgesetzt | Commit `f50cd74e` |
 | M4–M9 | umgesetzt | Commit `36435761` (+ Korrekturen in `71ee7676`) |
 | M10 | umgesetzt | Commit `b75db946` |
-| M11 | Suite geschrieben, erster Lauf gestartet | Commit `71ee7676`, Lauf 38271037995 für `d1790ce5` |
-| M12 | Graph aufgefrischt (`d1790ce5`, `--code-only`, weil `SKILL.md` unter `native/src` als Dokument zählt); Release folgt nach grüner Suite | — |
+| M11 | grün | Lauf 38271037995 (`d1790ce5`): vier Sichtbarkeitsfehler (`pub(super)` in Untermodulen) + zwei Formatabweichungen → `b7c09cbb`; Lauf 38273905954: Windows 84/84, Android grün, Linux 92/93 (Share-Testserver ohne Schema = TLS) → `e2cda215`; **Lauf 38276492148 (`e2cda215`): Linux 95/95, Windows 84/84, Android grün**, darunter echter Claude-Code-Healthcheck `plugin:smart-explorer:se … ✔ Connected` auf Linux und Windows |
+| M12 | Graph aufgefrischt (`d1790ce5`, `--code-only`, weil `SKILL.md` unter `native/src` als Dokument zählt); ein Release über `build.yml` (`complete-release`) | — |
