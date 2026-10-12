@@ -1,36 +1,15 @@
+use super::entry_kind::EntryKind;
+use super::link_paths::{
+    copy_remote_link, link_move_refused, resolve_destination, source_root, SourceRoot,
+};
 use super::target::Target;
-use super::transfer::{transfer_plan, try_rename_fast};
+use super::transfer::{transfer_plan, transfer_plan_as, try_rename_fast};
 use super::tree_observer::{TreeObserver, TreePhase};
-use super::tree_ops::{copy_entry_with, remove_copied_source, remove_existing, TreeRequest};
-use crate::agent_proto::SearchSpec;
-use crate::vfs::{Backend, SearchHit};
+use super::tree_ops::{
+    copy_entry_with, remove_copied_source, remove_existing, TreeOutcome, TreeRequest,
+};
 use std::io::{self, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-
-const MAX_SEARCH_NODES: u64 = 1_000_000;
-const MAX_SEARCH_TEXT_BYTES: u64 = 128 * 1024 * 1024;
-const MAX_SEARCH_DEPTH: usize = 512;
-
-#[derive(Default)]
-struct SearchBudget {
-    nodes: u64,
-    text_bytes: u64,
-}
-
-impl SearchBudget {
-    fn record(&mut self, path: &str, depth: usize) -> Result<(), String> {
-        if depth > MAX_SEARCH_DEPTH {
-            return Err(format!("search tree exceeds {MAX_SEARCH_DEPTH} levels"));
-        }
-        self.nodes = self.nodes.saturating_add(1);
-        self.text_bytes = self.text_bytes.saturating_add(path.len() as u64);
-        if self.nodes > MAX_SEARCH_NODES || self.text_bytes > MAX_SEARCH_TEXT_BYTES {
-            return Err("search tree exceeds its bounded collection budget".to_string());
-        }
-        Ok(())
-    }
-}
 
 pub(crate) fn list(target: &Target) -> Result<(), String> {
     for entry in target
@@ -38,7 +17,12 @@ pub(crate) fn list(target: &Target) -> Result<(), String> {
         .list_dir(&target.path)
         .map_err(|e| e.to_string())?
     {
-        let kind = if entry.is_dir { "d" } else { "-" };
+        // Second column: `l` for links (kept for scripts that read it).
+        let kind = match EntryKind::of(&entry) {
+            EntryKind::Dir => 'd',
+            EntryKind::Special => 's',
+            EntryKind::File | EntryKind::Link => '-',
+        };
         let symlink = if entry.is_symlink { "l" } else { "-" };
         println!("{kind}{symlink}\t{}\t{}", entry.size, entry.name);
     }
@@ -52,7 +36,7 @@ pub(crate) fn stat(target: &Target) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     println!("path\t{}", target.path);
     println!("name\t{}", meta.name);
-    println!("type\t{}", if meta.is_dir { "dir" } else { "file" });
+    println!("type\t{}", EntryKind::of(&meta).label());
     println!("size\t{}", meta.size);
     println!("mtime_ms\t{}", meta.mtime_ms);
     if let Some(id) = meta.id {
@@ -68,26 +52,52 @@ pub(crate) fn cat(target: &Target) -> Result<(), String> {
     let mut r = target
         .backend
         .open_read(&target.path)
-        .map_err(|e| e.to_string())?;
+        .map_err(|error| explain_read_error(target, error))?;
     let mut out = io::stdout().lock();
     io::copy(&mut r, &mut out).map_err(|e| e.to_string())?;
     out.flush().map_err(|e| e.to_string())
 }
 
+/// A read through a link that fails names the link as the cause.
+pub(super) fn explain_read_error(target: &Target, error: io::Error) -> String {
+    match target.backend.stat(&target.path) {
+        Ok(meta) if meta.is_symlink => format!(
+            "{} is a link whose target does not exist, is not a file, or cannot be read: {error}",
+            target.path
+        ),
+        _ => error.to_string(),
+    }
+}
+
+/// `se cp`: prints one stderr line per skipped link or special file.
 pub(crate) fn copy(src: &Target, dst: &Target, recursive: bool, force: bool) -> Result<(), String> {
-    copy_observed(src, dst, recursive, force, &TreeObserver::default()).map(|_| ())
+    let outcome = copy_observed(src, dst, recursive, force, &TreeObserver::default())?;
+    print_notices(&outcome);
+    Ok(())
 }
 
 /// `se cp` for background callers: the same checks and pipeline with
-/// cancellation and progress. Returns the destination path of the copied root.
+/// cancellation and progress.
 pub(super) fn copy_observed(
     src: &Target,
     dst: &Target,
     recursive: bool,
     force: bool,
     observer: &TreeObserver,
-) -> Result<String, String> {
-    let (source_snapshot, dst_path) = transfer_plan(src, dst)?;
+) -> Result<TreeOutcome, String> {
+    let resolved_dst = resolve_destination(dst)?;
+    let dst = resolved_dst.as_ref().unwrap_or(dst);
+    let meta = src.backend.stat(&src.path).map_err(|e| e.to_string())?;
+    let (resolved_src, name) = match source_root(src, &meta)? {
+        SourceRoot::Plain => (None, None),
+        SourceRoot::Resolved { target, name } => (Some(target), Some(name)),
+        SourceRoot::RemoteLink => {
+            let (_, dst_path) = transfer_plan(src, dst)?;
+            return copy_remote_link(src, dst, &dst_path, force, observer);
+        }
+    };
+    let src = resolved_src.as_ref().unwrap_or(src);
+    let (source_snapshot, dst_path) = transfer_plan_as(src, dst, name.as_deref())?;
     let receipt = copy_entry_with(
         &*src.backend,
         &src.path,
@@ -102,35 +112,47 @@ pub(super) fn copy_observed(
         },
     )?;
     observer.set_phase(TreePhase::Done);
-    Ok(receipt.destination().to_string())
+    Ok(TreeOutcome {
+        destination: receipt.destination().to_string(),
+        omitted: receipt.omissions(),
+        kept: Vec::new(),
+    })
 }
 
+/// `se mv`: prints skipped entries and the source directories kept for them.
 pub(crate) fn move_path(
     src: &Target,
     dst: &Target,
     recursive: bool,
     force: bool,
 ) -> Result<(), String> {
-    move_observed(src, dst, recursive, force, &TreeObserver::default()).map(|_| ())
+    let outcome = move_observed(src, dst, recursive, force, &TreeObserver::default())?;
+    print_notices(&outcome);
+    Ok(())
 }
 
 /// `se mv` for background callers. A cancellation that arrives after the
 /// copy completed keeps the source: the removal phase is never interrupted
-/// halfway.
+/// halfway. A source link is renamed, never followed.
 pub(super) fn move_observed(
     src: &Target,
     dst: &Target,
     recursive: bool,
     force: bool,
     observer: &TreeObserver,
-) -> Result<String, String> {
+) -> Result<TreeOutcome, String> {
+    let resolved_dst = resolve_destination(dst)?;
+    let dst = resolved_dst.as_ref().unwrap_or(dst);
     let (meta, dst_path) = transfer_plan(src, dst)?;
     if meta.is_dir && !recursive {
         return Err(format!("{} is a directory; pass --recursive", src.path));
     }
     if try_rename_fast(src, dst, &meta, &dst_path, force)? {
         observer.set_phase(TreePhase::Done);
-        return Ok(dst_path);
+        return Ok(TreeOutcome::complete(dst_path));
+    }
+    if meta.is_symlink {
+        return Err(link_move_refused(&src.path));
     }
     let receipt = copy_entry_with(
         &*src.backend,
@@ -147,9 +169,20 @@ pub(super) fn move_observed(
     )?;
     observer.check()?;
     observer.set_phase(TreePhase::RemovingSource);
-    remove_copied_source(&*src.backend, &receipt)?;
+    let kept = remove_copied_source(&*src.backend, &receipt)?;
     observer.set_phase(TreePhase::Done);
-    Ok(receipt.destination().to_string())
+    Ok(TreeOutcome {
+        destination: receipt.destination().to_string(),
+        omitted: receipt.omissions(),
+        kept,
+    })
+}
+
+fn print_notices(outcome: &TreeOutcome) {
+    let mut err = io::stderr().lock();
+    for line in outcome.notices() {
+        let _ = writeln!(err, "se: {line}");
+    }
 }
 
 pub(crate) fn remove(
@@ -168,218 +201,6 @@ pub(crate) fn remove(
         );
     }
     remove_existing(&*target.backend, &target.path, recursive)
-}
-
-pub(crate) fn search(
-    target: &Target,
-    query: &str,
-    glob: bool,
-    max_results: u64,
-    want_dirs: bool,
-) -> Result<(), String> {
-    let spec = search_spec(query, glob, max_results, want_dirs);
-    let cancel = AtomicBool::new(false);
-    search_with(target, &spec, &cancel, &mut |hit| print_hit(hit))
-}
-
-pub(super) fn search_spec(
-    query: &str,
-    glob: bool,
-    max_results: u64,
-    want_dirs: bool,
-) -> SearchSpec {
-    SearchSpec {
-        query: query.to_string(),
-        glob,
-        min_size: 0,
-        max_size: 0,
-        max_results,
-        want_dirs,
-    }
-}
-
-/// Streams every validated hit below `target` to `sink`: server-side search
-/// where the backend has one, otherwise the bounded listing walk. Setting
-/// `cancel` stops either path; the result is then an error.
-pub(super) fn search_with(
-    target: &Target,
-    spec: &SearchSpec,
-    cancel: &AtomicBool,
-    sink: &mut dyn FnMut(SearchHit),
-) -> Result<(), String> {
-    if target.backend.supports_search() {
-        let (tx, rx) = crossbeam_channel::bounded(1024);
-        let mut invalid = None;
-        let mut received = false;
-        let ran = std::thread::scope(|scope| {
-            let handle = scope.spawn(|| target.backend.search(&target.path, spec, tx, cancel));
-            for hit in rx {
-                received = true;
-                if invalid.is_some() {
-                    continue;
-                }
-                if let Err(error) = crate::agent_proto::ValidatedRelativePath::parse(&hit.rel) {
-                    cancel.store(true, Ordering::Relaxed);
-                    invalid = Some(error.to_string());
-                } else {
-                    sink(hit);
-                }
-            }
-            handle
-                .join()
-                .map_err(|_| "server-side search worker panicked".to_string())
-        })?;
-        if let Some(error) = invalid {
-            return Err(error);
-        }
-        let ran = ran.map_err(|error| error.to_string())?;
-        if cancel.load(Ordering::Relaxed) {
-            return Err(SEARCH_CANCELLED.to_string());
-        }
-        match ran {
-            true => return Ok(()),
-            false if received => {
-                return Err(
-                    "backend reported search unsupported after streaming results".to_string(),
-                );
-            }
-            false => {}
-        }
-    }
-    let mut count = 0u64;
-    fallback_search(
-        &*target.backend,
-        &target.path,
-        "",
-        spec,
-        &mut count,
-        0,
-        &mut SearchBudget::default(),
-        sink,
-        cancel,
-    )
-}
-
-pub(super) const SEARCH_CANCELLED: &str = "search cancelled";
-
-#[allow(clippy::too_many_arguments)]
-fn fallback_search(
-    be: &dyn Backend,
-    dir: &str,
-    rel_dir: &str,
-    spec: &SearchSpec,
-    count: &mut u64,
-    depth: usize,
-    budget: &mut SearchBudget,
-    sink: &mut dyn FnMut(SearchHit),
-    cancel: &AtomicBool,
-) -> Result<(), String> {
-    if cancel.load(Ordering::Relaxed) {
-        return Err(SEARCH_CANCELLED.to_string());
-    }
-    budget.record(dir, depth)?;
-    let mut names = std::collections::HashSet::new();
-    for child in be.list_dir(dir).map_err(|e| e.to_string())? {
-        if spec.max_results != 0 && *count >= spec.max_results {
-            break;
-        }
-        crate::vfs::validate_child_name(&child.name).map_err(|error| error.to_string())?;
-        if !names.insert(child.name.clone()) {
-            return Err(format!(
-                "backend returned duplicate child name in {dir}: {:?}",
-                child.name
-            ));
-        }
-        if child.is_symlink {
-            return Err(format!(
-                "link-like search entry is unsupported: {dir}/{}",
-                child.name
-            ));
-        }
-        budget.record(&join(dir, &child.name), depth + 1)?;
-        let rel = if rel_dir.is_empty() {
-            child.name.clone()
-        } else {
-            format!("{rel_dir}/{}", child.name)
-        };
-        if matches_spec(&child.name, child.is_dir, child.size, spec) {
-            *count += 1;
-            sink(SearchHit {
-                rel: rel.clone(),
-                is_dir: child.is_dir,
-                size: child.size,
-                mtime_ms: child.mtime_ms,
-            });
-        }
-        if child.is_dir {
-            fallback_search(
-                be,
-                &join(dir, &child.name),
-                &rel,
-                spec,
-                count,
-                depth + 1,
-                budget,
-                sink,
-                cancel,
-            )?;
-        }
-    }
-    Ok(())
-}
-
-fn matches_spec(name: &str, is_dir: bool, size: u64, spec: &SearchSpec) -> bool {
-    if is_dir && !spec.want_dirs {
-        return false;
-    }
-    if !is_dir && ((spec.max_size != 0 && size > spec.max_size) || size < spec.min_size) {
-        return false;
-    }
-    if spec.query.is_empty() {
-        return true;
-    }
-    if spec.glob {
-        glob_match(&spec.query, name)
-    } else {
-        name.to_lowercase().contains(&spec.query.to_lowercase())
-    }
-}
-
-fn glob_match(pat: &str, text: &str) -> bool {
-    let (p, t): (Vec<char>, Vec<char>) = (
-        pat.to_lowercase().chars().collect(),
-        text.to_lowercase().chars().collect(),
-    );
-    let (mut pi, mut ti, mut star, mut mark) = (0usize, 0usize, usize::MAX, 0usize);
-    while ti < t.len() {
-        if pi < p.len() && (p[pi] == '?' || p[pi] == t[ti]) {
-            pi += 1;
-            ti += 1;
-        } else if pi < p.len() && p[pi] == '*' {
-            star = pi;
-            mark = ti;
-            pi += 1;
-        } else if star != usize::MAX {
-            pi = star + 1;
-            mark += 1;
-            ti = mark;
-        } else {
-            return false;
-        }
-    }
-    while pi < p.len() && p[pi] == '*' {
-        pi += 1;
-    }
-    pi == p.len()
-}
-
-fn print_hit(hit: SearchHit) {
-    println!(
-        "{}\t{}\t{}",
-        if hit.is_dir { "d" } else { "-" },
-        hit.size,
-        hit.rel
-    );
 }
 
 pub(super) fn parent_of(path: &str) -> Option<String> {
@@ -427,14 +248,8 @@ mod tests {
     use crate::cli::target::Target;
     use crate::vfs::{BackendHandle, LocalBackend};
 
-    use super::{glob_match, parent_of, remove};
+    use super::{parent_of, remove};
     use crate::cli::tree_ops::{copy_entry, remove_existing};
-
-    #[test]
-    fn glob_matches_case_insensitive() {
-        assert!(glob_match("*.TXT", "note.txt"));
-        assert!(!glob_match("a?.txt", "abc.txt"));
-    }
 
     #[test]
     fn parent_handles_root_children() {

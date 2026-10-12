@@ -16,11 +16,10 @@ pub(super) fn inspect_destination(
     force: bool,
 ) -> Result<DestinationState, String> {
     match backend.stat(path) {
-        Ok(metadata) if metadata.is_symlink && source_is_dir => Err(format!(
-            "destination exists and is not a plain directory (link-like and unsafe): {path}"
-        )),
+        // Links named in a local destination path were resolved before
+        // planning; any link left here would redirect the write.
         Ok(metadata) if metadata.is_symlink => Err(format!(
-            "destination exists and is not a regular file (link-like and unsafe): {path}"
+            "destination {path} is a link; Smart Explorer does not write through it (only links in a local destination path are followed). Name the path the link points to instead."
         )),
         Ok(metadata) if source_is_dir && metadata.is_dir => {
             Ok(DestinationState::Directory(metadata))
@@ -152,6 +151,8 @@ fn validate_same_destination(
     }
 }
 
+/// A link where the plan expected a file or directory (it changed after it
+/// was listed, or a caller passed an unresolved link root).
 pub(super) fn reject_link(metadata: &VfsMeta, path: &str) -> Result<(), String> {
     if metadata.is_symlink {
         Err(format!("link-like source is not copied: {path}"))

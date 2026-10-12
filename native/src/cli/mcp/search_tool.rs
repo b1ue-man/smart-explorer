@@ -1,5 +1,6 @@
 //! `search` as a job: the `se search` walk (server-side where available)
-//! streams hits as JSON lines into the job's `hits` output.
+//! streams hits as JSON lines into the job's `hits` output. Links and special
+//! files are hits of their own type (`symlink`, `special`) and never entered.
 use super::args::Args;
 use super::jobs::{spawn_worker, Job, JobControl, JobEnd, JobKind, JobStatus};
 use super::session::Session;
@@ -25,7 +26,7 @@ impl JobControl for SearchControl {
 pub(super) fn start(session: &Session, args: &Args<'_>) -> Result<Arc<Job>, String> {
     let target_spec = args.string("target")?;
     let query = args.opt_string("query")?.unwrap_or_default();
-    let spec = crate::cli::ops::search_spec(
+    let spec = crate::cli::search::search_spec(
         &query,
         args.flag("glob")?,
         args.opt_u64("max_results")?.unwrap_or(0),
@@ -45,14 +46,14 @@ pub(super) fn start(session: &Session, args: &Args<'_>) -> Result<Arc<Job>, Stri
     }));
     spawn_worker(job.clone(), move |job| {
         let mut write_error = None;
-        let outcome = crate::cli::ops::search_with(&target, &spec, &cancel, &mut |hit| {
+        let outcome = crate::cli::search::search_with(&target, &spec, &cancel, &mut |hit| {
             if write_error.is_some() {
                 return;
             }
             let mut line = json!({
                 "path": crate::cli::ops::join(&target.path, &hit.rel),
                 "relative": hit.rel,
-                "type": if hit.is_dir { "dir" } else { "file" },
+                "type": hit.kind.label(),
                 "size": hit.size,
                 "mtime_ms": hit.mtime_ms,
             })

@@ -118,7 +118,7 @@ fn recursive_copy_rejects_a_descendant_reached_through_a_symlink() {
 
 #[cfg(unix)]
 #[test]
-fn symlink_source_move_fails_closed_without_modifying_either_path() {
+fn symlink_source_move_renames_the_link_without_touching_its_target() {
     let temp = TempRoot::new("rename-symlink-guard");
     let original = temp.file("original.txt", b"contents");
     let src = temp.path("source-link.txt");
@@ -127,21 +127,20 @@ fn symlink_source_move_fails_closed_without_modifying_either_path() {
     let backend = Arc::new(CountingLocal::new());
     let handle: BackendHandle = backend.clone();
 
-    let error = move_path(
+    move_path(
         &target(&handle, &src, "local"),
         &target(&handle, &dst, "local"),
         false,
         false,
     )
-    .unwrap_err();
+    .unwrap();
 
-    assert!(error.contains("link-like source"));
-    assert_eq!(backend.renames.load(Ordering::Relaxed), 0);
-    assert!(fs::symlink_metadata(vfs_to_os(&src))
-        .unwrap()
-        .file_type()
-        .is_symlink());
-    assert!(!vfs_to_os(&dst).exists());
+    assert_eq!(backend.renames.load(Ordering::Relaxed), 1);
+    assert!(fs::symlink_metadata(vfs_to_os(&src)).is_err());
+    assert_eq!(
+        fs::read_link(vfs_to_os(&dst)).unwrap(),
+        vfs_to_os(&original)
+    );
     assert_eq!(fs::read(vfs_to_os(&original)).unwrap(), b"contents");
 }
 
@@ -228,7 +227,7 @@ fn existing_symlink_destination_fails_closed_without_touching_its_target() {
     )
     .unwrap_err();
 
-    assert!(error.contains("not a regular file"));
+    assert!(error.contains("link to a file"), "{error}");
     assert_eq!(backend.renames.load(Ordering::Relaxed), 0);
     assert_eq!(fs::read(vfs_to_os(&src)).unwrap(), b"source");
     assert!(fs::symlink_metadata(vfs_to_os(&dst))

@@ -3,8 +3,14 @@ mod completions_requests;
 mod connections;
 mod doctor;
 mod drive;
+mod entry_kind;
 mod exec;
 mod exec_ssh;
+mod link_paths;
+#[cfg(test)]
+mod links_task_backends;
+#[cfg(test)]
+mod links_task_tests;
 mod mcp;
 mod ops;
 #[cfg(test)]
@@ -15,6 +21,8 @@ mod ops_search_tests;
 mod ops_transfer_tests;
 mod os;
 mod plugin;
+mod private_file;
+mod search;
 mod setup;
 mod share;
 mod target;
@@ -102,15 +110,24 @@ enum Command {
     Get(CopyArgs),
     #[command(about = "Upload from local to remote")]
     Put(CopyArgs),
-    #[command(about = "Copy between local, saved, endpoint, or Share targets")]
+    #[command(
+        about = "Copy between local, saved, endpoint, or Share targets",
+        long_about = "Copy between local, saved, endpoint, or Share targets. A link named as source or destination is followed (directory links only on local paths); links and special files inside a copied directory are skipped and listed on stderr."
+    )]
     Cp(CopyArgs),
-    #[command(about = "Move or rename between targets")]
+    #[command(
+        about = "Move or rename between targets",
+        long_about = "Move or rename between targets. Within one connection the entry is renamed (a link moves as itself); otherwise it is copied and the source removed. Links and special files inside a moved directory stay in the source, and so do the directories holding them; both are listed on stderr."
+    )]
     Mv(MoveArgs),
     #[command(about = "Remove a file or directory")]
     Rm(RemoveArgs),
     #[command(about = "Create a directory")]
     Mkdir(PathArg),
-    #[command(about = "Search names below a target")]
+    #[command(
+        about = "Search names below a target",
+        long_about = "Search names below a target. Prints `kind<TAB>size<TAB>relative path` per hit; kind is - (file), d (directory), l (link) or s (FIFO, socket, device). Links are found by name but never entered."
+    )]
     Search(SearchArgs),
     #[command(
         about = "Run an unrestricted command on an explicitly authorized Share peer or saved SSH remote"
@@ -177,7 +194,10 @@ struct SearchArgs {
         help = "Maximum result count; 0 means unlimited"
     )]
     max_results: u64,
-    #[arg(long, help = "Return matching directories instead of files")]
+    #[arg(
+        long,
+        help = "Also return matching directories (files, links and special files always)"
+    )]
     dirs: bool,
 }
 
@@ -246,7 +266,7 @@ fn run_inner(cli: Cli) -> Result<i32, String> {
         }
         Command::Search(args) => {
             let t = target::resolve(&args.target)?;
-            ops::search(&t, &args.query, args.glob, args.max_results, args.dirs)?;
+            search::search(&t, &args.query, args.glob, args.max_results, args.dirs)?;
             Ok(0)
         }
         Command::Exec(args) => exec::run(args),
