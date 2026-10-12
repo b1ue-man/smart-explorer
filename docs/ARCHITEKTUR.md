@@ -1,6 +1,6 @@
 # Smart Explorer – Architektur
 
-Stand: 2026-10-09. Kurzüberblick als erster Einstieg; Details liefert der Code-Graph
+Stand: 2026-10-12. Kurzüberblick als erster Einstieg; Details liefert der Code-Graph
 (`graphify query "…"`, siehe AGENTS.md) und die Lesungen unter `docs/lesungen/`.
 
 ## Zweck
@@ -50,6 +50,7 @@ Speicheranalyse – als Desktop-App (Windows, Linux; Rust + egui) und als Androi
 | Fernanalyse, behaltene Ergebnisse und Host-Papierkorb | `share/os/shared/{storage_analysis_host,analysis_tasks,analysis_spool,host_watch}.rs`, `analytics/os/{windows,linux_os,linux_trash}.rs`; handlebasierter Zugriff über `local_access/` |
 | Analyse-Bedienung auf dem Desktop | `app/core/analytics_controls_ui.rs` für Auswahl, Navigation, Fortschritt und Cancel; `analytics_ui.rs` für Treemap und nachgelagerte Aktionen |
 | Agent-Wire-Framing | `agent_proto/core/types.rs` definiert `Frame`/`PROTO_VERSION`; `codec.rs` reexportiert den Encoder/Decoder aus `frame_io.rs`. Bestehende Vault-Szenarien liegen in `vault_frame_task_tests.rs` mit privaten I/O-Probes in `vault_frame_fixture.rs`. |
+| KI-Agenten (MCP-Server, Plugins) | `se mcp`: `native/src/cli/mcp.rs` + `cli/mcp/` (rmcp-Server `server.rs`, Katalog `catalog.rs`, Jobs `jobs.rs`/`wait.rs`/`job_view.rs`, Spools `spool.rs`, Ziele mit wiederverwendeter Anmeldung `targets.rs`, Tools `file_tools.rs`/`file_write.rs`/`transfer_tools.rs`/`search_tool.rs`/`exec_*`/`cli_tool.rs`/`status_tools.rs`, Update-Stopp `update_stop.rs`, geschützter Protokollkanal `os/`); `se plugin`: `cli/plugin.rs` + `cli/plugin/` (Claude-Marketplace, Codex-Eintrag, Skill `assets/SKILL.md`); SSH-Befehle `sftp/core/command.rs`, `connect/os/shared/ssh_session.rs`, `cli/exec_ssh.rs`; abbrechbarer Kopierpfad `cli/tree_observer.rs`. Doku `docs/AI_AGENT_PLUGIN.md` |
 | Updates | Desktop `native/src/updater/`, Terminal `se update` `cli/update.rs` → `updater/os/shared/terminal.rs` (Feed-Prüfung, Installationsart, Ersatz an Ort und Stelle), Android `update.*` in `native/src/mobile/os/shared/domains/` |
 | Release | `native/publish-release-local.ps1` (einziger Einstieg), `docs/RELEASING.md` |
 
@@ -73,6 +74,10 @@ Speicheranalyse – als Desktop-App (Windows, Linux; Rust + egui) und als Androi
   `WakeKeeper` (Ereignis `wake` → Partial-Wakelock), `HostMonitor` → `sys.hostState` (Ruhemodus, `deferScheduling`).
 - Desktop: GUI ↔ Daemon-Prozess über Loopback-TCP-IPC (`daemon/os/shared/ipc*.rs`); Share-/Agent-Anfragen
   mit Kredit je Anfrage (`agent_proto/core/credit.rs`), damit eine langsame Übertragung kein Blättern blockiert.
+- KI-Agent: Host startet `se mcp` (stdio) → rmcp (`initialize` 2025-06-18 bzw. `server/discover`
+  2026-07-28) → `call_tool` → Blockier-Pool/Job-Thread → dieselben CLI-Pfade (`cli/target.rs`,
+  `ops.rs`, Baumkopie, `daemon::connect_exec`, SSH-Exec) → `structuredContent`. Lange Arbeit als Job
+  mit Spool im Sitzungsordner; `daemon.stop` = `stop` (Desktop-Update) beendet den Server.
 - Übertragung: App/Android → `TransferRequest::Job` → Lane → `engine::run_job` → Walker listet parallel unter
   dem Flow der Quelle, Worker holen Erlaubnisse der regelnden Flows, schreiben in private Stufen und
   veröffentlichen ohne Ersetzen; Fortschritt ~150 ms, Fehler als JSON-Zeilen in einer Protokolldatei.
@@ -108,6 +113,9 @@ Android-APIs: `docs/refs/android-apis.md`, `docs/refs/android-platform.md`; CI: 
 - Windows-Startregression 0.5.170: `startup-regression-task.yml` →
   `native/test-startup-regression-task.py`, reale bestehende DACLs und Worker-Handoff
   aus v0.5.169 mit den inkrementellen Development-Ausgaben derselben RV1-Caches.
+- KI-Agenten-Plugin 2026-10-12: `ai-plugin-task.yml` → `native/test-ai-plugin-task.py` (Präfix
+  `mcp_task_`, Linux/Windows mit MCP-E2E über beide Protokoll-Lebenszyklen, SSH-/Share-Exec,
+  echten `claude`-/`codex`-CLIs, plus Android-Build). Plan: `docs/plaene/2026-10-12-ki-agenten-plugin/`.
 - Sync-Transparenz 2026-10-08: `sync-transparency-task.yml` → `native/test-sync-transparency-task.py`
   (Präfix `sync_transparency_task_`, Linux/Windows plus Android-Build). Plan: `docs/plaene/2026-10-08-sync-transparenz/`.
 - Sync-Verlässlichkeit: `sync-reliability-task.yml` → `native/test-sync-reliability-task.py`

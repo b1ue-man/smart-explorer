@@ -661,6 +661,19 @@ Andere Verbindungen und Raeume entfernt `se connections remove` beziehungsweise
 `remove-room`; auch dabei werden Favoriten, Ordner-Einstellungen und Mounts
 des Ziels mit entfernt.
 
+**KI-Agenten (Claude Code, Codex, MCP):** `se plugin install` installiert Smart
+Explorer als Plugin in Claude Code (lokaler Plugin-Marketplace mit Server und
+Skill) und in Codex (`codex mcp add` mit Skill); `se plugin config generic`
+gibt die Konfiguration für weitere MCP-Clients aus. Der Agent startet dann
+`se mcp` selbst und bekommt Tools für Dateien auf allen gespeicherten Remotes,
+Share-Peers, Google Drive und lokalen Laufwerken (lesen, schreiben, bearbeiten,
+kopieren, verschieben, löschen, suchen), Remote-Befehle auf gespeicherten
+SSH-Remotes und freigegebenen Share-Peers sowie jeden weiteren `se`-Befehl.
+Lange Vorgänge laufen als Jobs mit vollständiger Ausgabe; Passwörter gehen nie
+über den Agenten. `se exec @label[:/ordner] -- befehl` führt Befehle auch im
+Terminal über die SSH-Anmeldung einer gespeicherten SFTP-Verbindung aus.
+Details: [`docs/AI_AGENT_PLUGIN.md`](docs/AI_AGENT_PLUGIN.md).
+
 **Lokales Netz ohne Server (Teilen → Netzwerk):** gekoppelte Geraete kuendigen ihre
 Iroh-Adresse per mDNS (`_se-share._udp`) an und finden sich damit auch ohne
 erreichbaren Share-Server — etwa ueber ein direktes Kabel oder ein isoliertes

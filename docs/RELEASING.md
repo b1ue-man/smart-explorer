@@ -852,6 +852,11 @@ release-native/update-feed/
 The Linux desktop payload relies on the normal X11 or Wayland client libraries
 provided by desktop distributions. The `--cli-only` installer path needs none
 of those GUI libraries because `se` remains a static-musl executable.
+The terminal companion also carries the MCP server for AI agents (`se mcp`) and
+the plugin/skill files `se plugin install` writes; they add no release asset
+(docs/AI_AGENT_PLUGIN.md). A running `se mcp` exits when the updater helper
+writes its `daemon.stop` request, so it never holds the update past the
+helper's 30-second wait for `se` processes.
 
 The normal update path uses a separate helper installed next to the app binary
 (`Smart Explorer Updater.exe` on Windows, `smart_explorer_updater` on Linux) and
