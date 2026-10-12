@@ -149,26 +149,33 @@ pub(super) fn peer_candidates() -> Vec<clap_complete::CompletionCandidate> {
 }
 
 pub(super) fn exec_target_candidates() -> Vec<clap_complete::CompletionCandidate> {
-    let Ok(profiles) =
-        crate::share::ShareProfiles::load_checked(Some(super::share::default_home()))
-    else {
-        return Vec::new();
-    };
-    let mut values = profiles
-        .direct_contacts
-        .iter()
-        .map(|contact| {
+    let mut values = crate::creds::load_connections_checked()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|connection| connection.protocol == crate::creds::Protocol::Sftp)
+        .map(|connection| {
             candidate(
-                &format!("share://direct/{}", contact.id),
-                format!(
-                    "{} · {} · device {}",
-                    contact.display_name,
-                    contact.status.label(),
-                    contact.remote_device_id.as_deref().unwrap_or("unknown")
-                ),
+                &format!("@{}", connection.display()),
+                format!("SSH · {}", connection.account()),
             )
         })
         .collect::<Vec<_>>();
+    let Ok(profiles) =
+        crate::share::ShareProfiles::load_checked(Some(super::share::default_home()))
+    else {
+        return values;
+    };
+    values.extend(profiles.direct_contacts.iter().map(|contact| {
+        candidate(
+            &format!("share://direct/{}", contact.id),
+            format!(
+                "{} · {} · device {}",
+                contact.display_name,
+                contact.status.label(),
+                contact.remote_device_id.as_deref().unwrap_or("unknown")
+            ),
+        )
+    }));
     values.extend(profiles.rooms.iter().flat_map(|room| {
         room.members.iter().map(|member| {
             candidate(
