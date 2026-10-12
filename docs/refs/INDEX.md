@@ -2,6 +2,15 @@
 
 Lokal gesicherte API-/Lib-Syntax (Abrufdatum im Kopf jeder Datei).
 
+- [Claude Code: Plugins und MCP](claude-code-plugins-mcp-2026-10-12.md): Plugin-Manifest,
+  `.mcp.json`, Skills, Marketplace-Formate und `claude plugin …`/`claude mcp …`-Befehle,
+  Laden lokaler Marketplaces ohne Kopie, MCP-Timeouts/Ausgabegrenzen/Tool Search/
+  `requiresUserInteraction`, Berechtigungsnamen; geprüft 2026-10-12.
+- [Codex, MCP 2026-07-28, rmcp](codex-mcp-spec-rmcp-2026-10-12.md): Codex-Konfiguration,
+  Timeouts, Freigaberegeln nach Annotationen, Umgebungsfilter, Skills/Plugins; MCP-Lebenszyklen
+  alt/neu, Fortschritt, Abbruch, Annotationen; rmcp 3.5.1 bedient `initialize` und
+  `server/discover` auf einer Verbindung; geprüft 2026-10-12.
+
 - [Weiterschalten zwischen Medien](medien-weiterschalten-2026-10-09.md): Windows-Fotos
   (Nachbarabfrage `LauncherOptions.NeighboringFilesQuery`, `ms-photos:viewer?fileName=`, Total-
   Commander-Changelog 2016–2025, Directory Opus 13.18.8), Linux-Betrachter (Loupe, Gwenview, eog
