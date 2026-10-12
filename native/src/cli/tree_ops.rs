@@ -1,3 +1,4 @@
+use super::entry_kind::EntryKind;
 use super::tree_apply::apply_transfer;
 use super::tree_guard::DestinationState;
 use super::tree_observer::{TreeObserver, TreePhase};
@@ -8,6 +9,57 @@ use crate::vfs::{Backend, DeleteTarget};
 
 pub(super) struct TransferReceipt {
     plan: TransferPlan,
+}
+
+/// A link or special file inside a copied tree that was not transferred.
+pub(super) struct Omission {
+    pub(super) path: String,
+    pub(super) kind: EntryKind,
+}
+
+/// Result of `se cp`/`se mv` and the MCP `copy`/`move` jobs.
+pub(super) struct TreeOutcome {
+    /// Path of the copied or moved root at the destination.
+    pub(super) destination: String,
+    pub(super) omitted: Vec<Omission>,
+    /// Move only: source directories kept because they still hold omitted
+    /// entries, root first.
+    pub(super) kept: Vec<String>,
+}
+
+impl TreeOutcome {
+    pub(super) fn complete(destination: String) -> Self {
+        Self {
+            destination,
+            omitted: Vec::new(),
+            kept: Vec::new(),
+        }
+    }
+
+    /// One stderr line per omission and kept directory, as `se cp`/`se mv`
+    /// print them.
+    pub(super) fn notices(&self) -> Vec<String> {
+        let mut lines: Vec<String> = self
+            .omitted
+            .iter()
+            .map(|omission| match omission.kind {
+                EntryKind::Special => format!(
+                    "skipped special file (FIFO, socket or device): {}",
+                    omission.path
+                ),
+                _ => format!(
+                    "skipped link (links inside a tree are not followed or recreated): {}",
+                    omission.path
+                ),
+            })
+            .collect();
+        lines.extend(
+            self.kept.iter().map(|path| {
+                format!("kept source directory, it still holds skipped entries: {path}")
+            }),
+        );
+        lines
+    }
 }
 
 #[cfg(test)]
@@ -87,6 +139,18 @@ pub(super) fn copy_entry_with(
 }
 
 impl TransferReceipt {
+    /// Links and special files the copy left out.
+    pub(super) fn omissions(&self) -> Vec<Omission> {
+        self.plan
+            .omitted
+            .iter()
+            .map(|omitted| Omission {
+                path: omitted.source_path.clone(),
+                kind: omitted.kind,
+            })
+            .collect()
+    }
+
     /// Destination path of the transferred root.
     pub(super) fn destination(&self) -> &str {
         self.plan
@@ -97,10 +161,11 @@ impl TransferReceipt {
     }
 }
 
+/// Returns the source directories kept because they hold omitted entries.
 pub(super) fn remove_copied_source(
     backend: &dyn Backend,
     receipt: &TransferReceipt,
-) -> Result<(), String> {
+) -> Result<Vec<String>, String> {
     remove_transferred_source(backend, &receipt.plan)
 }
 

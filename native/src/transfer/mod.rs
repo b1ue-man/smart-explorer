@@ -112,7 +112,9 @@ pub use lane::{
 };
 pub use local_stage::download_to_id;
 pub use memory::{memory_budget, reserve_memory, try_reserve_memory, MemoryReservation};
-pub(crate) use platform::{physical_memory, replace_file_atomic, upload_is_link_like};
+pub(crate) use platform::{
+    canonical_folder, physical_memory, replace_file_atomic, upload_is_link_like,
+};
 pub use remote_copy::copy_remote_paths_progress;
 pub use selection::{ListedEntry, SelectionListing, SelectionSource};
 pub use snapshot_download::download_clipboard_snapshot;

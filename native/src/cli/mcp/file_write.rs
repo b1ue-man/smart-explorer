@@ -8,14 +8,17 @@ use super::args::Args;
 use super::file_tools::{etag, read_range};
 use super::response;
 use super::session::Session;
+use crate::cli::link_paths::resolve_destination;
+use crate::cli::private_file::PrivateFile;
 use crate::cli::target::Target;
 use crate::cli::tree_guard::DestinationState;
 use crate::cli::tree_observer::TreeObserver;
-use crate::cli::tree_ops::{copy_entry_with, TreeRequest};
+use crate::cli::tree_ops::TreeRequest;
 use base64::Engine as _;
 use rmcp::model::CallToolResult;
 use serde_json::{json, Value};
 use std::cell::RefCell;
+use std::io::Write;
 
 pub(super) fn write(session: &Session, args: &Args<'_>) -> Result<CallToolResult, String> {
     let target = session.targets.resolve(&args.string("target")?)?;
@@ -44,6 +47,12 @@ pub(super) fn edit(session: &Session, args: &Args<'_>) -> Result<CallToolResult,
         .backend
         .stat(&target.path)
         .map_err(|error| error.to_string())?;
+    if meta.is_symlink {
+        return Err(format!(
+            "{} is a link; `edit` changes files only at their real path (Smart Explorer does not write through links)",
+            target.path
+        ));
+    }
     if meta.is_dir || meta.special {
         return Err(format!("{} is not a regular file", target.path));
     }
@@ -138,22 +147,21 @@ fn changed_since_read(path: &str, current: &str) -> CallToolResult {
 }
 
 /// Publishes `bytes` at `target`. Without `overwrite` or `if_match` an
-/// existing file is refused.
+/// existing file is refused. Links in the existing part of a local path lead
+/// where they point; a link as the file itself is refused.
 fn publish(
     target: &Target,
     bytes: &[u8],
     overwrite: bool,
     if_match: Option<&str>,
 ) -> Result<CallToolResult, String> {
-    let directory = tempfile::Builder::new()
-        .prefix("smart-explorer-mcp-write-")
-        .tempdir()
+    let resolved = resolve_destination(target)?;
+    let destination = resolved.as_ref().unwrap_or(target);
+    let (source, mut file) = PrivateFile::create("smart-explorer-mcp-write-")?;
+    file.write_all(bytes)
+        .and_then(|()| file.flush())
         .map_err(|error| format!("cannot create a private staging file: {error}"))?;
-    let source = directory.path().join("content");
-    std::fs::write(&source, bytes)
-        .map_err(|error| format!("cannot create a private staging file: {error}"))?;
-    let source = source.to_string_lossy().replace('\\', "/");
-    let source_backend = crate::vfs::LocalBackend::new("/");
+    drop(file);
     let refused_etag = RefCell::new(None::<String>);
     let created = RefCell::new(false);
     let check = |state: &DestinationState| -> Result<(), String> {
@@ -186,20 +194,14 @@ fn publish(
         destination_check: Some(&check),
         observer: &observer,
     };
-    let outcome = copy_entry_with(
-        &source_backend,
-        &source,
-        &*target.backend,
-        &target.path,
-        &request,
-    );
+    let outcome = source.publish(&*destination.backend, &destination.path, &request);
     if let Some(current) = refused_etag.borrow().as_deref() {
         return Ok(changed_since_read(&target.path, current));
     }
     outcome?;
-    let meta = target
+    let meta = destination
         .backend
-        .stat(&target.path)
+        .stat(&destination.path)
         .map_err(|error| format!("written, but cannot read back {}: {error}", target.path))?;
     let created = *created.borrow();
     Ok(response::ok(json!({

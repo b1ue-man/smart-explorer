@@ -53,9 +53,21 @@ pub(super) fn start(session: &Session, kind: JobKind, args: &Args<'_>) -> Result
         };
         let progress = progress_value(&observer);
         match outcome {
-            Ok(path) => JobEnd {
+            Ok(outcome) => JobEnd {
                 status: JobStatus::Completed,
-                result: json!({ "destination": path, "progress": progress }),
+                result: json!({
+                    "destination": outcome.destination,
+                    "omitted": outcome
+                        .omitted
+                        .iter()
+                        .map(|omission| json!({
+                            "path": omission.path,
+                            "type": omission.kind.label(),
+                        }))
+                        .collect::<Vec<_>>(),
+                    "kept_directories": outcome.kept,
+                    "progress": progress,
+                }),
                 error: None,
             },
             Err(error) => JobEnd {

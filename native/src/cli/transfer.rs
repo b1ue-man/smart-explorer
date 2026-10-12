@@ -6,15 +6,26 @@ use crate::vfs::VfsMeta;
 use std::io;
 
 pub(super) fn transfer_plan(src: &Target, dst: &Target) -> Result<(VfsMeta, String), String> {
+    transfer_plan_as(src, dst, None)
+}
+
+/// [`transfer_plan`] for a source copied under another name (a resolved
+/// link keeps the link's name inside a destination directory).
+pub(super) fn transfer_plan_as(
+    src: &Target,
+    dst: &Target,
+    name: Option<&str>,
+) -> Result<(VfsMeta, String), String> {
     let meta = src.backend.stat(&src.path).map_err(|e| e.to_string())?;
+    let name = name.unwrap_or(&meta.name);
     let dst_path = match dst.backend.stat(&dst.path) {
         Ok(destination) if destination.is_dir && !destination.is_symlink => {
-            crate::vfs::validate_child_name(&meta.name).map_err(|error| error.to_string())?;
-            join(&dst.path, &meta.name)
+            crate::vfs::validate_child_name(name).map_err(|error| error.to_string())?;
+            join(&dst.path, name)
         }
         Ok(destination) if destination.is_dir => {
             return Err(format!(
-                "destination directory is link-like and unsafe: {}",
+                "destination {} is a link; Smart Explorer writes through links only on local paths. Name the directory it points to instead.",
                 dst.path
             ));
         }
@@ -66,7 +77,10 @@ pub(super) fn transfer_plan(src: &Target, dst: &Target) -> Result<(VfsMeta, Stri
 /// Rename only when it preserves the copy+delete command semantics. An
 /// existing directory must still use the recursive merge path, and an existing
 /// file is replaced only when both `--force` and the backend's explicit
-/// atomic-replace guarantee are present.
+/// atomic-replace guarantee are present. A directory or link renamed to a new
+/// name moves as it is: links inside stay links (nothing is read or
+/// followed), so no tree preflight is needed. `Ok(false)` means nothing was
+/// renamed and the copy+delete path decides.
 pub(super) fn try_rename_fast(
     src: &Target,
     dst: &Target,
@@ -74,18 +88,7 @@ pub(super) fn try_rename_fast(
     dst_path: &str,
     force: bool,
 ) -> Result<bool, String> {
-    if src_meta.is_dir {
-        // Recursive moves need the same complete bounded source/destination
-        // preflight as recursive copies. A direct rename would skip that tree
-        // validation and could move a late link-like or ambiguous child.
-        return Ok(false);
-    }
     if !src.same_namespace(dst) || !src.can_rename_with(dst) {
-        return Ok(false);
-    }
-    if src_meta.is_symlink {
-        // The guarded transfer path rejects link-like sources. A rename would
-        // move the link itself and bypass that fail-closed behavior.
         return Ok(false);
     }
     let destination_state = match dst.backend.stat(dst_path) {
@@ -105,7 +108,7 @@ pub(super) fn try_rename_fast(
         // assume that means "absent" and accidentally overwrite an unknown item.
         Err(_) => return Ok(false),
     };
-    validate_same_source(
+    validate_rename_source(
         src_meta,
         &src.backend
             .stat(&src.path)
@@ -115,7 +118,7 @@ pub(super) fn try_rename_fast(
     if let Some(parent) = parent_of(dst_path) {
         src.backend.mkdir_all(&parent).map_err(|e| e.to_string())?;
     }
-    validate_same_source(
+    validate_rename_source(
         src_meta,
         &src.backend.stat(&src.path).map_err(|error| {
             format!(
@@ -133,6 +136,9 @@ pub(super) fn try_rename_fast(
     };
     match renamed {
         Ok(()) => Ok(true),
+        // The backend (FTP, Google Drive, ZIP) or the filesystem cannot
+        // rename without replacing: nothing was renamed, copy+delete moves it.
+        Err(e) if e.kind() == io::ErrorKind::Unsupported => Ok(false),
         Err(e)
             if src.backend.is_local()
                 && (e.kind() == io::ErrorKind::CrossesDevices || e.raw_os_error() == Some(17)) =>
@@ -143,6 +149,23 @@ pub(super) fn try_rename_fast(
             Ok(false)
         }
         Err(e) => Err(format!("rename {} -> {}: {}", src.path, dst_path, e)),
+    }
+}
+
+/// A link is renamed as itself; everything else must be the planned entry.
+fn validate_rename_source(expected: &VfsMeta, actual: &VfsMeta, path: &str) -> Result<(), String> {
+    if !expected.is_symlink {
+        return validate_same_source(expected, actual, path);
+    }
+    if actual.is_symlink
+        && actual.name == expected.name
+        && actual.id == expected.id
+        && actual.size == expected.size
+        && actual.mtime_ms == expected.mtime_ms
+    {
+        Ok(())
+    } else {
+        Err(format!("source link changed before rename: {path}"))
     }
 }
 

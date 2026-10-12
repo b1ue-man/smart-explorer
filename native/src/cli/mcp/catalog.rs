@@ -39,7 +39,7 @@ pub(super) fn tools() -> Vec<Tool> {
             "Every saved remote and Share peer/room with the target prefix to use, its live status, and how commands run there: `exec: \"ssh\"` for saved SFTP remotes (the remote login shell), `exec: \"share\"` for Share peers (works once that device granted this one Exec).",
             json!({}), &[], read_only(false)),
         tool("list", "List a directory",
-            "Directory entries (name, type file|dir|symlink, size, mtime_ms) sorted by name, one page per call; continue with `offset` = `next_offset`.",
+            "Directory entries (name, type file|dir|symlink|special, size, mtime_ms) sorted by name, one page per call; continue with `offset` = `next_offset`. A symlink's size is its own (the length of the path it holds).",
             json!({
                 "target": {"type": "string", "description": TARGET},
                 "offset": {"type": "integer", "minimum": 0, "description": "Index of the first entry (default 0)."},
@@ -49,7 +49,7 @@ pub(super) fn tools() -> Vec<Tool> {
             "Type, size, mtime_ms, provider id/md5 when known, and the `etag` that write/edit accept as `if_match`.",
             json!({"target": {"type": "string", "description": TARGET}}), &["target"], read_only(true)),
         tool("read", "Read a file",
-            "File content from a byte `offset`, as UTF-8 text (default) or base64. Binary files are not dumped as text: request `encoding: \"base64\"` or copy them to a local path. Returns `etag`, `size` and `next_offset` (null at the end).",
+            "File content from a byte `offset`, as UTF-8 text (default) or base64. Binary files are not dumped as text: request `encoding: \"base64\"` or copy them to a local path. Returns `etag`, `size` and `next_offset` (null at the end). Through a link it reads the file the link points to; `size` and `etag` are then null.",
             json!({
                 "target": {"type": "string", "description": TARGET},
                 "offset": {"type": "integer", "minimum": 0, "description": "First byte (default 0)."},
@@ -92,15 +92,15 @@ pub(super) fn tools() -> Vec<Tool> {
                 "recursive": {"type": "boolean", "description": "Required for directories."},
                 "allow_root": {"type": "boolean", "description": "Allow removing a filesystem root or a saved connection's root."}
             }), &["target"], changes(true, true)),
-        transfer_tool("copy", "Copy files", "Copies between any two targets (local, saved remotes, Share peers, Drive) with `se cp` semantics: an existing destination directory receives the source inside it; directories need `recursive`; existing files are replaced only with `overwrite`. Every file is read completely before anything is published, so a failed source never leaves partial files."),
-        transfer_tool("move", "Move or rename", "Moves with `se mv` semantics: a rename inside one connection when possible, otherwise copy, then remove exactly the copied source. A cancellation after the copy keeps the source."),
+        transfer_tool("copy", "Copy files", "Copies between any two targets (local, saved remotes, Share peers, Drive) with `se cp` semantics: an existing destination directory receives the source inside it; directories need `recursive`; existing files are replaced only with `overwrite`. Every file is read completely before anything is published, so a failed source never leaves partial files. A link named as `source` or `destination` is followed (directory links only on local paths); links and special files inside a copied directory are skipped and listed in `omitted`."),
+        transfer_tool("move", "Move or rename", "Moves with `se mv` semantics: a rename inside one connection when possible, otherwise copy, then remove exactly the copied source. A cancellation after the copy keeps the source. A link moves as itself (rename within its connection only). Links and special files inside a copied directory stay in the source (`omitted`), and so do the directories holding them (`kept_directories`)."),
         tool("search", "Search names",
-            "Finds files (or directories with `directories: true`) below `target` whose name contains `query` (case-insensitive) or matches it as a glob (`*`, `?`). Uses the server-side search of Share peers and SSH agents, otherwise walks the tree. Hits page via `hits_offset`.",
+            "Finds files, links and special files (plus directories with `directories: true`) below `target` whose name contains `query` (case-insensitive) or matches it as a glob (`*`, `?`). Links are reported with type `symlink` and never entered. Uses the server-side search of Share peers and SSH agents (those skip links), otherwise walks the tree. Hits page via `hits_offset`.",
             json!({
                 "target": {"type": "string", "description": TARGET},
                 "query": {"type": "string", "description": "Text or glob; empty matches everything."},
                 "glob": {"type": "boolean"},
-                "directories": {"type": "boolean", "description": "Return matching directories instead of files."},
+                "directories": {"type": "boolean", "description": "Also return matching directories."},
                 "max_results": {"type": "integer", "minimum": 0, "description": "Stop after this many hits; 0 or absent = all."},
                 "wait_seconds": {"type": "integer", "minimum": 0, "description": WAIT},
                 "max_bytes": {"type": "integer", "minimum": 1024, "description": MAX_BYTES}

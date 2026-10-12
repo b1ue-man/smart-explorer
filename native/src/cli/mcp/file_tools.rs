@@ -4,6 +4,7 @@ use super::args::Args;
 use super::response;
 use super::session::Session;
 use super::spool::{looks_textual, text_page};
+use crate::cli::entry_kind::EntryKind;
 use crate::vfs::VfsMeta;
 use base64::Engine as _;
 use rmcp::model::CallToolResult;
@@ -29,15 +30,7 @@ pub(super) fn etag(meta: &VfsMeta) -> String {
 }
 
 pub(super) fn kind(meta: &VfsMeta) -> &'static str {
-    if meta.is_symlink {
-        "symlink"
-    } else if meta.is_dir {
-        "dir"
-    } else if meta.special {
-        "special"
-    } else {
-        "file"
-    }
+    EntryKind::of(meta).label()
 }
 
 pub(super) fn meta_value(path: &str, meta: &VfsMeta) -> Value {
@@ -100,18 +93,21 @@ pub(super) fn stat(session: &Session, args: &Args<'_>) -> Result<CallToolResult,
     Ok(response::ok(meta_value(&target.path, &meta)))
 }
 
+/// Reads a page of a file. Through a link the content is the file it points
+/// to; its size is unknown (`size` and `etag` are null) and one byte more
+/// than the page shows whether the file continues.
 pub(super) fn read(session: &Session, args: &Args<'_>) -> Result<CallToolResult, String> {
     let target = session.targets.resolve(&args.string("target")?)?;
     let meta = target
         .backend
         .stat(&target.path)
         .map_err(|error| error.to_string())?;
-    if meta.is_dir {
-        return Err(format!("{} is a directory; use `list`", target.path));
-    }
-    if meta.special {
-        return Err(format!("{} is not a regular file", target.path));
-    }
+    let through_link = match EntryKind::of(&meta) {
+        EntryKind::Dir => return Err(format!("{} is a directory; use `list`", target.path)),
+        EntryKind::Special => return Err(format!("{} is not a regular file", target.path)),
+        EntryKind::Link => true,
+        EntryKind::File => false,
+    };
     let base64 = match args.opt_string("encoding")?.as_deref() {
         None | Some("text") => false,
         Some("base64") => true,
@@ -124,16 +120,29 @@ pub(super) fn read(session: &Session, args: &Args<'_>) -> Result<CallToolResult,
         .opt_u64("length")?
         .map(|length| usize::try_from(length).unwrap_or(usize::MAX))
         .unwrap_or(budget)
-        .min(budget);
+        .clamp(1, budget.max(1));
     let offset = args.opt_u64("offset")?.unwrap_or(0);
-    let tag = etag(&meta);
-    let bytes = if offset >= meta.size {
+    let known_size = (!through_link).then_some(meta.size);
+    let tag = (!through_link).then(|| etag(&meta));
+    let mut bytes = if known_size.is_some_and(|size| offset >= size) {
         Vec::new()
+    } else if through_link {
+        read_range(&target, &meta, offset, length.saturating_add(1)).map_err(|error| {
+            format!(
+                "{} is a link whose target does not exist, is a directory, or cannot be read: {error}",
+                target.path
+            )
+        })?
     } else {
         read_range(&target, &meta, offset, length)?
     };
+    let more = through_link && bytes.len() > length;
+    bytes.truncate(length);
     let end = offset.saturating_add(bytes.len() as u64);
-    let at_end = end >= meta.size;
+    let at_end = match known_size {
+        Some(size) => end >= size,
+        None => !more,
+    };
     let (content, next_offset, lossy) = if base64 {
         let content = base64::engine::general_purpose::STANDARD.encode(&bytes);
         (content, end, false)
@@ -144,20 +153,25 @@ pub(super) fn read(session: &Session, args: &Args<'_>) -> Result<CallToolResult,
                     "{} looks binary; read it with encoding \"base64\" or copy it to a local path",
                     target.path
                 ),
-                json!({ "size": meta.size, "etag": tag }),
+                json!({ "size": known_size, "etag": tag }),
             ));
         }
         let page = text_page(&bytes, offset, at_end);
         (page.text, page.next_offset, page.lossy)
     };
+    let continues = match known_size {
+        Some(size) => next_offset < size,
+        None => more || next_offset < end,
+    };
     Ok(response::ok(json!({
         "path": target.path,
-        "size": meta.size,
+        "size": known_size,
         "etag": tag,
+        "through_link": through_link,
         "offset": offset,
         "encoding": if base64 { "base64" } else { "text" },
         "content": content,
-        "next_offset": (next_offset < meta.size).then_some(next_offset),
+        "next_offset": continues.then_some(next_offset),
         "lossy": lossy,
     })))
 }

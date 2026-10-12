@@ -139,23 +139,29 @@ fn late_destination_collision_is_found_before_any_source_read() {
     assert!(!std::path::Path::new(&merge_root).join("good.txt").exists());
 }
 
+/// A link the user named in a local destination path is followed (like
+/// `cp`); the plan then sees only plain directories, so a link that appears
+/// later still fails closed.
 #[cfg(unix)]
 #[test]
-fn link_like_destination_ancestor_is_rejected_before_apply() {
+fn link_in_named_local_destination_ancestry_is_followed() {
     use std::os::unix::fs::symlink;
 
-    let temp = TempRoot::new("unsafe-destination-ancestor");
+    let temp = TempRoot::new("linked-destination-ancestor");
     let outside = temp.dir("outside");
     let link = temp.path("link");
     symlink(&outside, &link).unwrap();
     let destination = format!("{link}/new-tree");
     let source = Arc::new(TreeSource::new(Fault::None));
 
-    let error = copy_between(&source, &destination, false).unwrap_err();
+    copy_between(&source, &destination, false).unwrap();
 
-    assert!(error.contains("link-like and unsafe"), "{error}");
-    assert!(!std::path::Path::new(&outside).join("new-tree").exists());
-    assert_eq!(source.reads.load(Ordering::Relaxed), 0);
+    let copied = std::path::Path::new(&outside).join("new-tree");
+    assert_eq!(fs::read(copied.join("good.txt")).unwrap(), b"good");
+    assert!(!fs::symlink_metadata(&copied)
+        .unwrap()
+        .file_type()
+        .is_symlink());
 }
 
 fn copy_between(source: &Arc<TreeSource>, destination: &str, force: bool) -> Result<(), String> {

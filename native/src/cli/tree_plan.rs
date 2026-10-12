@@ -1,3 +1,4 @@
+use super::entry_kind::EntryKind;
 use super::ops::parent_of;
 use super::tree_guard::{
     inspect_destination, join, metadata_text_bytes, reject_link, validate_destination_state,
@@ -14,6 +15,9 @@ const MAX_TREE_DEPTH: usize = 512;
 pub(super) struct TransferPlan {
     pub(super) entries: Vec<PlanEntry>,
     pub(super) destination_ancestors: Vec<DestinationAncestor>,
+    /// Links and special files inside the tree: never followed, recreated or
+    /// read. A move keeps them, and the directories holding them, in place.
+    pub(super) omitted: Vec<OmittedEntry>,
 }
 
 pub(super) struct PlanEntry {
@@ -23,6 +27,14 @@ pub(super) struct PlanEntry {
     pub(super) destination: DestinationState,
     pub(super) parent: Option<usize>,
     pub(super) children: Vec<usize>,
+    /// Indexes into [`TransferPlan::omitted`] of this directory's children.
+    pub(super) omitted: Vec<usize>,
+}
+
+pub(super) struct OmittedEntry {
+    pub(super) source_path: String,
+    pub(super) listed: VfsMeta,
+    pub(super) kind: EntryKind,
 }
 
 pub(super) struct DestinationAncestor {
@@ -144,6 +156,7 @@ impl TransferPlan {
             accounted_metadata_text: root_accounted,
         }];
         let mut entries: Vec<PlanEntry> = Vec::new();
+        let mut omitted: Vec<OmittedEntry> = Vec::new();
 
         while let Some(work) = pending.pop() {
             observer.check()?;
@@ -152,6 +165,12 @@ impl TransferPlan {
                 .map_err(|error| format!("preflight stat {}: {error}", work.source_path))?;
             budget.account_fresh_metadata(&fresh, work.accounted_metadata_text)?;
             reject_link(&fresh, &work.source_path)?;
+            if fresh.special && !fresh.is_dir {
+                return Err(format!(
+                    "{} is a special file (FIFO, socket or device) and has no content to copy",
+                    work.source_path
+                ));
+            }
             if work.parent.is_none() {
                 if let Some(expected) = expected_root {
                     validate_same_source(expected, &fresh, &work.source_path)?;
@@ -177,6 +196,7 @@ impl TransferPlan {
                 destination: destination_state,
                 parent: work.parent,
                 children: Vec::new(),
+                omitted: Vec::new(),
             });
             if let Some(parent) = work.parent {
                 entries[parent].children.push(index);
@@ -203,8 +223,18 @@ impl TransferPlan {
             budget.ensure_entry_capacity(listed.len())?;
             validate_listed_names(&entries[index].source_path, &listed)?;
             for child in listed.into_iter().rev() {
-                reject_link(&child, &join(&entries[index].source_path, &child.name))?;
                 let child_source = join(&entries[index].source_path, &child.name);
+                let kind = EntryKind::of(&child);
+                if kind.is_omitted_in_trees() {
+                    budget.reserve_auxiliary_path(&child_source)?;
+                    entries[index].omitted.push(omitted.len());
+                    omitted.push(OmittedEntry {
+                        source_path: child_source,
+                        listed: child,
+                        kind,
+                    });
+                    continue;
+                }
                 let child_destination = join(&entries[index].destination_path, &child.name);
                 let accounted = budget.reserve_entry(
                     &child_source,
@@ -243,6 +273,7 @@ impl TransferPlan {
         let plan = Self {
             entries,
             destination_ancestors,
+            omitted,
         };
         plan.validate_source_tree(source)?;
         plan.validate_destinations(destination)?;
@@ -267,7 +298,7 @@ impl TransferPlan {
                     entry.source_path
                 )
             })?;
-            if listed.len() != entry.children.len() {
+            if listed.len() != entry.children.len() + entry.omitted.len() {
                 return Err(format!(
                     "source tree child count changed before transfer: {}",
                     entry.source_path
@@ -279,7 +310,24 @@ impl TransferPlan {
                 .iter()
                 .map(|child| (self.entries[*child].source.name.as_str(), *child))
                 .collect();
+            let mut skipped: HashMap<&str, &OmittedEntry> = entry
+                .omitted
+                .iter()
+                .map(|index| {
+                    let omission = &self.omitted[*index];
+                    (omission.listed.name.as_str(), omission)
+                })
+                .collect();
             for child in listed {
+                if let Some(omission) = skipped.remove(child.name.as_str()) {
+                    if EntryKind::of(&child) != omission.kind {
+                        return Err(format!(
+                            "source changed type before transfer: {}",
+                            omission.source_path
+                        ));
+                    }
+                    continue;
+                }
                 reject_link(&child, &join(&entry.source_path, &child.name))?;
                 let child_index = expected.remove(child.name.as_str()).ok_or_else(|| {
                     format!(

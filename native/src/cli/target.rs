@@ -33,6 +33,19 @@ impl Target {
         self.preserved_root
     }
 
+    /// The same connection at another path (a link resolved). Borrows the
+    /// connection: the original target must outlive the returned one.
+    pub(super) fn at_path(&self, path: String) -> Self {
+        Self {
+            backend: self.backend.clone(),
+            path,
+            namespace_key: self.namespace_key.clone(),
+            rename_key: self.rename_key.clone(),
+            preserved_root: false,
+            net: None,
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn with_backend_key(
         backend: BackendHandle,

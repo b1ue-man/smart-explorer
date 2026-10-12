@@ -1,4 +1,4 @@
-use super::ops;
+use super::search;
 use super::target::Target;
 use crate::agent_proto::SearchSpec;
 use crate::vfs::{Backend, Scheme, SearchHit, VfsMeta, VfsResult};
@@ -80,7 +80,7 @@ fn partial_server_search_error_does_not_run_listing_fallback() {
     let backend = Arc::new(SearchFailureBackend::default());
     let target = Target::with_backend_key(backend.clone(), "/".into(), "search-error");
 
-    let error = ops::search(&target, "", false, 0, false).unwrap_err();
+    let error = search::search(&target, "", false, 0, false).unwrap_err();
     assert!(error.contains("late server-side search failure"));
     assert_eq!(backend.lists.load(Ordering::Relaxed), 0);
 }
