@@ -1,4 +1,5 @@
 use super::tree_guard::{validate_destination_state, DestinationState};
+use super::tree_observer::{Counter, TreeObserver};
 use super::tree_plan::TransferPlan;
 use super::tree_spool::SourceSpool;
 use crate::vfs::Backend;
@@ -9,6 +10,7 @@ pub(super) fn apply_transfer(
     destination: &dyn Backend,
     mut plan: TransferPlan,
     spool: &SourceSpool,
+    observer: &TreeObserver,
 ) -> Result<TransferPlan, String> {
     // These are the final complete read-only checks. No destination path or
     // adjacent staging object has been created before both succeed.
@@ -21,7 +23,9 @@ pub(super) fn apply_transfer(
         if plan.entries[index].source.is_dir {
             continue;
         }
-        publish_file(source, destination, &plan, spool, index)?;
+        observer.check()?;
+        publish_file(source, destination, &plan, spool, index, observer)?;
+        observer.file_done(Counter::Written);
     }
     Ok(plan)
 }
@@ -83,6 +87,7 @@ fn publish_file(
     plan: &TransferPlan,
     spool: &SourceSpool,
     index: usize,
+    observer: &TreeObserver,
 ) -> Result<(), String> {
     let entry = &plan.entries[index];
     plan.validate_source_entry(source, index)?;
@@ -100,7 +105,7 @@ fn publish_file(
         let mut writer = destination
             .open_write(&staged)
             .map_err(|error| format!("cannot stage destination file {staged}: {error}"))?;
-        let copied = spool.copy_file_into(index, &mut writer)?;
+        let copied = spool.copy_file_into(index, &mut writer, observer)?;
         writer
             .flush()
             .map_err(|error| format!("cannot flush staged destination {staged}: {error}"))?;

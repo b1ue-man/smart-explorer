@@ -42,80 +42,125 @@ impl Health {
     }
 }
 
-pub(super) fn run(args: DoctorArgs) -> Result<i32, String> {
-    let app_data = crate::support_dirs::app_data_dir();
-    let executable = std::env::current_exe()
-        .map(|path| path.to_string_lossy().into_owned())
-        .map_err(|error| format!("current executable: {error}"))?;
-    let connections = connection_health(&app_data);
-    let profiles = profile_health();
-    let identity = identity_health(&app_data);
-    let server = share_server_health(&app_data);
-    let daemon_running = crate::daemon::is_running();
-    let heartbeat_age = crate::daemon::last_heartbeat_age();
-    let credential_backend = crate::creds::secret_store_description();
-    let credential_health = match crate::creds::probe_secret_store() {
-        Ok(()) => Health::ok("credential backend is readable"),
-        Err(error) => Health::error(error),
-    };
-    let exit_code = if [
-        &credential_health,
-        &connections,
-        &profiles,
-        &identity,
-        &server,
-    ]
-    .iter()
-    .any(|health| health.state == "error")
-    {
-        1
-    } else {
-        0
-    };
+struct Report {
+    app_data: std::path::PathBuf,
+    executable: String,
+    connections: Health,
+    profiles: Health,
+    identity: Health,
+    server: Health,
+    daemon_running: bool,
+    heartbeat_age: Option<i64>,
+    credential_backend: &'static str,
+    credential_health: Health,
+}
 
-    if args.json {
-        let value = serde_json::json!({
+impl Report {
+    fn collect() -> Result<Self, String> {
+        let app_data = crate::support_dirs::app_data_dir();
+        let executable = std::env::current_exe()
+            .map(|path| path.to_string_lossy().into_owned())
+            .map_err(|error| format!("current executable: {error}"))?;
+        let connections = connection_health(&app_data);
+        let profiles = profile_health();
+        let identity = identity_health(&app_data);
+        let server = share_server_health(&app_data);
+        let daemon_running = crate::daemon::is_running();
+        let heartbeat_age = crate::daemon::last_heartbeat_age();
+        let credential_backend = crate::creds::secret_store_description();
+        let credential_health = match crate::creds::probe_secret_store() {
+            Ok(()) => Health::ok("credential backend is readable"),
+            Err(error) => Health::error(error),
+        };
+        Ok(Self {
+            app_data,
+            executable,
+            connections,
+            profiles,
+            identity,
+            server,
+            daemon_running,
+            heartbeat_age,
+            credential_backend,
+            credential_health,
+        })
+    }
+
+    fn exit_code(&self) -> i32 {
+        if [
+            &self.credential_health,
+            &self.connections,
+            &self.profiles,
+            &self.identity,
+            &self.server,
+        ]
+        .iter()
+        .any(|health| health.state == "error")
+        {
+            1
+        } else {
+            0
+        }
+    }
+
+    fn json(&self) -> serde_json::Value {
+        serde_json::json!({
             "version": env!("CARGO_PKG_VERSION"),
-            "executable": executable,
+            "executable": self.executable,
             "os": std::env::consts::OS,
             "arch": std::env::consts::ARCH,
-            "app_data": app_data,
-            "credential_backend": credential_backend,
-            "credential_store": credential_health.json(),
-            "connections": connections.json(),
-            "share_profiles": profiles.json(),
-            "share_identity": identity.json(),
-            "share_server": server.json(),
+            "app_data": self.app_data,
+            "credential_backend": self.credential_backend,
+            "credential_store": self.credential_health.json(),
+            "connections": self.connections.json(),
+            "share_profiles": self.profiles.json(),
+            "share_identity": self.identity.json(),
+            "share_server": self.server.json(),
             "daemon": {
-                "running": daemon_running,
-                "heartbeat_age_seconds": heartbeat_age,
+                "running": self.daemon_running,
+                "heartbeat_age_seconds": self.heartbeat_age,
             },
-        });
+        })
+    }
+}
+
+/// The `se doctor --json` document and whether every check passed.
+pub(super) fn doctor_value() -> Result<(serde_json::Value, bool), String> {
+    let report = Report::collect()?;
+    Ok((report.json(), report.exit_code() == 0))
+}
+
+pub(super) fn run(args: DoctorArgs) -> Result<i32, String> {
+    let report = Report::collect()?;
+    let exit_code = report.exit_code();
+
+    if args.json {
         println!(
             "{}",
-            serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?
+            serde_json::to_string_pretty(&report.json()).map_err(|error| error.to_string())?
         );
         return Ok(exit_code);
     }
 
     println!("version\t{}", env!("CARGO_PKG_VERSION"));
-    println!("executable\t{executable}");
+    println!("executable\t{}", report.executable);
     println!(
         "platform\t{}/{}",
         std::env::consts::OS,
         std::env::consts::ARCH
     );
-    println!("app_data\t{}", app_data.display());
-    println!("credential_backend\t{credential_backend}");
-    print_health("credential_store", &credential_health);
-    print_health("connections", &connections);
-    print_health("share_profiles", &profiles);
-    print_health("share_identity", &identity);
-    print_health("share_server", &server);
-    println!("daemon_running\t{daemon_running}");
+    println!("app_data\t{}", report.app_data.display());
+    println!("credential_backend\t{}", report.credential_backend);
+    print_health("credential_store", &report.credential_health);
+    print_health("connections", &report.connections);
+    print_health("share_profiles", &report.profiles);
+    print_health("share_identity", &report.identity);
+    print_health("share_server", &report.server);
+    println!("daemon_running\t{}", report.daemon_running);
     println!(
         "daemon_heartbeat_age_seconds\t{}",
-        heartbeat_age
+        report
+            .heartbeat_age
             .map(|age| age.to_string())
             .unwrap_or_else(|| "-".to_string())
     );

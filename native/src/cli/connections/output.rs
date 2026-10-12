@@ -1,15 +1,7 @@
 pub(super) fn print_connections(json: bool) -> Result<(), String> {
-    let connections = crate::creds::load_connections_checked()?;
-    let profiles = crate::share::ShareProfiles::load_checked(
-        crate::support_dirs::home_dir().map(|home| home.to_string_lossy().replace('\\', "/")),
-    )
-    .map_err(|error| format!("share profiles: {error}"))?;
+    let (connections, profiles) = load()?;
     if json {
-        let rows: Vec<_> = connections
-            .iter()
-            .map(saved_value)
-            .chain(share_values(&profiles))
-            .collect();
+        let rows = rows(&connections, &profiles);
         println!(
             "{}",
             serde_json::to_string_pretty(&rows).map_err(|error| error.to_string())?
@@ -36,6 +28,38 @@ pub(super) fn print_connections(json: bool) -> Result<(), String> {
         println!("connections\t0");
     }
     Ok(())
+}
+
+/// The rows of `se connections list --json`: saved remotes, then Share peers.
+pub(super) fn connections_value() -> Result<serde_json::Value, String> {
+    let (connections, profiles) = load()?;
+    Ok(serde_json::Value::Array(rows(&connections, &profiles)))
+}
+
+fn load() -> Result<
+    (
+        Vec<crate::creds::SavedConnection>,
+        crate::share::ShareProfiles,
+    ),
+    String,
+> {
+    let connections = crate::creds::load_connections_checked()?;
+    let profiles = crate::share::ShareProfiles::load_checked(
+        crate::support_dirs::home_dir().map(|home| home.to_string_lossy().replace('\\', "/")),
+    )
+    .map_err(|error| format!("share profiles: {error}"))?;
+    Ok((connections, profiles))
+}
+
+fn rows(
+    connections: &[crate::creds::SavedConnection],
+    profiles: &crate::share::ShareProfiles,
+) -> Vec<serde_json::Value> {
+    connections
+        .iter()
+        .map(saved_value)
+        .chain(share_values(profiles))
+        .collect()
 }
 
 fn saved_value(connection: &crate::creds::SavedConnection) -> serde_json::Value {

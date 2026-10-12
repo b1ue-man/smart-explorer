@@ -32,6 +32,8 @@ mod requests_support;
 #[path = "share/status.rs"]
 mod status;
 
+pub(super) use status::status_value;
+
 const MAX_SERVER_BYTES: usize = 16 * 1024;
 
 #[derive(Args)]

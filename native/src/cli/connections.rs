@@ -6,6 +6,8 @@ use super::setup;
 #[path = "connections/output.rs"]
 mod output;
 
+pub(super) use output::connections_value;
+
 const CONNECTIONS_HELP: &str = "\
 Manage the same saved remotes and Smart Explorer Share contacts used by the GUI.
 

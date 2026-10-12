@@ -1,6 +1,7 @@
 use super::target::Target;
 use super::transfer::{transfer_plan, try_rename_fast};
-use super::tree_ops::{copy_entry_from_snapshot, remove_copied_source, remove_existing};
+use super::tree_observer::{TreeObserver, TreePhase};
+use super::tree_ops::{copy_entry_with, remove_copied_source, remove_existing, TreeRequest};
 use crate::agent_proto::SearchSpec;
 use crate::vfs::{Backend, SearchHit};
 use std::io::{self, Write};
@@ -74,17 +75,34 @@ pub(crate) fn cat(target: &Target) -> Result<(), String> {
 }
 
 pub(crate) fn copy(src: &Target, dst: &Target, recursive: bool, force: bool) -> Result<(), String> {
+    copy_observed(src, dst, recursive, force, &TreeObserver::default()).map(|_| ())
+}
+
+/// `se cp` for background callers: the same checks and pipeline with
+/// cancellation and progress. Returns the destination path of the copied root.
+pub(super) fn copy_observed(
+    src: &Target,
+    dst: &Target,
+    recursive: bool,
+    force: bool,
+    observer: &TreeObserver,
+) -> Result<String, String> {
     let (source_snapshot, dst_path) = transfer_plan(src, dst)?;
-    copy_entry_from_snapshot(
+    let receipt = copy_entry_with(
         &*src.backend,
         &src.path,
         &*dst.backend,
         &dst_path,
-        recursive,
-        force,
-        Some(&source_snapshot),
-    )
-    .map(|_| ())
+        &TreeRequest {
+            recursive,
+            force,
+            expected_root: Some(&source_snapshot),
+            destination_check: None,
+            observer,
+        },
+    )?;
+    observer.set_phase(TreePhase::Done);
+    Ok(receipt.destination().to_string())
 }
 
 pub(crate) fn move_path(
@@ -93,23 +111,45 @@ pub(crate) fn move_path(
     recursive: bool,
     force: bool,
 ) -> Result<(), String> {
+    move_observed(src, dst, recursive, force, &TreeObserver::default()).map(|_| ())
+}
+
+/// `se mv` for background callers. A cancellation that arrives after the
+/// copy completed keeps the source: the removal phase is never interrupted
+/// halfway.
+pub(super) fn move_observed(
+    src: &Target,
+    dst: &Target,
+    recursive: bool,
+    force: bool,
+    observer: &TreeObserver,
+) -> Result<String, String> {
     let (meta, dst_path) = transfer_plan(src, dst)?;
     if meta.is_dir && !recursive {
         return Err(format!("{} is a directory; pass --recursive", src.path));
     }
     if try_rename_fast(src, dst, &meta, &dst_path, force)? {
-        return Ok(());
+        observer.set_phase(TreePhase::Done);
+        return Ok(dst_path);
     }
-    let receipt = copy_entry_from_snapshot(
+    let receipt = copy_entry_with(
         &*src.backend,
         &src.path,
         &*dst.backend,
         &dst_path,
-        recursive,
-        force,
-        Some(&meta),
+        &TreeRequest {
+            recursive,
+            force,
+            expected_root: Some(&meta),
+            destination_check: None,
+            observer,
+        },
     )?;
-    remove_copied_source(&*src.backend, &receipt)
+    observer.check()?;
+    observer.set_phase(TreePhase::RemovingSource);
+    remove_copied_source(&*src.backend, &receipt)?;
+    observer.set_phase(TreePhase::Done);
+    Ok(receipt.destination().to_string())
 }
 
 pub(crate) fn remove(
@@ -137,21 +177,42 @@ pub(crate) fn search(
     max_results: u64,
     want_dirs: bool,
 ) -> Result<(), String> {
-    let spec = SearchSpec {
+    let spec = search_spec(query, glob, max_results, want_dirs);
+    let cancel = AtomicBool::new(false);
+    search_with(target, &spec, &cancel, &mut |hit| print_hit(hit))
+}
+
+pub(super) fn search_spec(
+    query: &str,
+    glob: bool,
+    max_results: u64,
+    want_dirs: bool,
+) -> SearchSpec {
+    SearchSpec {
         query: query.to_string(),
         glob,
         min_size: 0,
         max_size: 0,
         max_results,
         want_dirs,
-    };
+    }
+}
+
+/// Streams every validated hit below `target` to `sink`: server-side search
+/// where the backend has one, otherwise the bounded listing walk. Setting
+/// `cancel` stops either path; the result is then an error.
+pub(super) fn search_with(
+    target: &Target,
+    spec: &SearchSpec,
+    cancel: &AtomicBool,
+    sink: &mut dyn FnMut(SearchHit),
+) -> Result<(), String> {
     if target.backend.supports_search() {
         let (tx, rx) = crossbeam_channel::bounded(1024);
-        let cancel = AtomicBool::new(false);
         let mut invalid = None;
         let mut received = false;
         let ran = std::thread::scope(|scope| {
-            let handle = scope.spawn(|| target.backend.search(&target.path, &spec, tx, &cancel));
+            let handle = scope.spawn(|| target.backend.search(&target.path, spec, tx, cancel));
             for hit in rx {
                 received = true;
                 if invalid.is_some() {
@@ -161,7 +222,7 @@ pub(crate) fn search(
                     cancel.store(true, Ordering::Relaxed);
                     invalid = Some(error.to_string());
                 } else {
-                    print_hit(hit);
+                    sink(hit);
                 }
             }
             handle
@@ -171,7 +232,11 @@ pub(crate) fn search(
         if let Some(error) = invalid {
             return Err(error);
         }
-        match ran.map_err(|error| error.to_string())? {
+        let ran = ran.map_err(|error| error.to_string())?;
+        if cancel.load(Ordering::Relaxed) {
+            return Err(SEARCH_CANCELLED.to_string());
+        }
+        match ran {
             true => return Ok(()),
             false if received => {
                 return Err(
@@ -186,13 +251,18 @@ pub(crate) fn search(
         &*target.backend,
         &target.path,
         "",
-        &spec,
+        spec,
         &mut count,
         0,
         &mut SearchBudget::default(),
+        sink,
+        cancel,
     )
 }
 
+pub(super) const SEARCH_CANCELLED: &str = "search cancelled";
+
+#[allow(clippy::too_many_arguments)]
 fn fallback_search(
     be: &dyn Backend,
     dir: &str,
@@ -201,7 +271,12 @@ fn fallback_search(
     count: &mut u64,
     depth: usize,
     budget: &mut SearchBudget,
+    sink: &mut dyn FnMut(SearchHit),
+    cancel: &AtomicBool,
 ) -> Result<(), String> {
+    if cancel.load(Ordering::Relaxed) {
+        return Err(SEARCH_CANCELLED.to_string());
+    }
     budget.record(dir, depth)?;
     let mut names = std::collections::HashSet::new();
     for child in be.list_dir(dir).map_err(|e| e.to_string())? {
@@ -229,7 +304,7 @@ fn fallback_search(
         };
         if matches_spec(&child.name, child.is_dir, child.size, spec) {
             *count += 1;
-            print_hit(SearchHit {
+            sink(SearchHit {
                 rel: rel.clone(),
                 is_dir: child.is_dir,
                 size: child.size,
@@ -245,6 +320,8 @@ fn fallback_search(
                 count,
                 depth + 1,
                 budget,
+                sink,
+                cancel,
             )?;
         }
     }

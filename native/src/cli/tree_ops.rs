@@ -1,4 +1,6 @@
 use super::tree_apply::apply_transfer;
+use super::tree_guard::DestinationState;
+use super::tree_observer::{TreeObserver, TreePhase};
 use super::tree_plan::TransferPlan;
 use super::tree_remove::remove_transferred_source;
 use super::tree_spool::SourceSpool;
@@ -17,39 +19,79 @@ pub(super) fn copy_entry(
     recursive: bool,
     force: bool,
 ) -> Result<TransferReceipt, String> {
-    copy_entry_from_snapshot(
+    copy_entry_with(
         source,
         source_path,
         destination,
         destination_path,
-        recursive,
-        force,
-        None,
+        &TreeRequest {
+            recursive,
+            force,
+            expected_root: None,
+            destination_check: None,
+            observer: &TreeObserver::default(),
+        },
     )
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(super) fn copy_entry_from_snapshot(
+/// Options of one tree copy. `destination_check` sees the planned state of
+/// the destination root before anything is read or written (a caller's
+/// precondition such as "unchanged since I read it"); the pipeline itself
+/// re-validates that state before publishing.
+pub(super) struct TreeRequest<'a> {
+    pub(super) recursive: bool,
+    pub(super) force: bool,
+    pub(super) expected_root: Option<&'a crate::vfs::VfsMeta>,
+    pub(super) destination_check: Option<&'a dyn Fn(&DestinationState) -> Result<(), String>>,
+    pub(super) observer: &'a TreeObserver,
+}
+
+pub(super) fn copy_entry_with(
     source: &dyn Backend,
     source_path: &str,
     destination: &dyn Backend,
     destination_path: &str,
-    recursive: bool,
-    force: bool,
-    expected_root: Option<&crate::vfs::VfsMeta>,
+    request: &TreeRequest<'_>,
 ) -> Result<TransferReceipt, String> {
+    let observer = request.observer;
+    observer.set_phase(TreePhase::Planning);
     let plan = TransferPlan::build(
         source,
         source_path,
         destination,
         destination_path,
-        recursive,
-        force,
-        expected_root,
+        request.recursive,
+        request.force,
+        request.expected_root,
+        observer,
     )?;
-    let spool = SourceSpool::collect(source, &plan)?;
-    let plan = apply_transfer(source, destination, plan, &spool)?;
+    if let (Some(check), Some(root)) = (request.destination_check, plan.entries.first()) {
+        check(&root.destination)?;
+    }
+    let (files, directories, bytes) = plan.entries.iter().fold((0u64, 0u64, 0u64), |totals, entry| {
+        if entry.source.is_dir {
+            (totals.0, totals.1 + 1, totals.2)
+        } else {
+            (totals.0 + 1, totals.1, totals.2 + entry.source.size)
+        }
+    });
+    observer.planned(files, directories, bytes);
+    observer.set_phase(TreePhase::Reading);
+    let spool = SourceSpool::collect(source, &plan, observer)?;
+    observer.set_phase(TreePhase::Writing);
+    let plan = apply_transfer(source, destination, plan, &spool, observer)?;
     Ok(TransferReceipt { plan })
+}
+
+impl TransferReceipt {
+    /// Destination path of the transferred root.
+    pub(super) fn destination(&self) -> &str {
+        self.plan
+            .entries
+            .first()
+            .map(|entry| entry.destination_path.as_str())
+            .unwrap_or_default()
+    }
 }
 
 pub(super) fn remove_copied_source(
