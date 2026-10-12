@@ -1,14 +1,16 @@
 //! Links and special files in `se search`, `se cp`, `se mv` (2026-10-12 batch,
 //! docs/plaene/2026-10-12-links-in-se/plan.md).
+#[cfg(unix)]
 use super::entry_kind::EntryKind;
 use super::links_task_backends::{NoAtomicRename, RemoteLinks};
 use super::ops::{copy_observed, move_observed};
+#[cfg(unix)]
 use super::search::{search_spec, search_with};
 use super::target::Target;
 use super::tree_observer::TreeObserver;
 use crate::vfs::{BackendHandle, LocalBackend};
 use std::fs;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 fn target(backend: &BackendHandle, path: &str, key: &str) -> Target {
@@ -73,7 +75,7 @@ fn links_task_walk_search_reports_links_and_specials_without_entering_them() {
     search_with(
         &target(&backend, &src, "local"),
         &search_spec("", false, 0, true),
-        &AtomicBool::new(false),
+        &std::sync::atomic::AtomicBool::new(false),
         &mut |hit| found.push((hit.rel, hit.kind)),
     )
     .unwrap();
@@ -99,7 +101,7 @@ fn links_task_walk_search_reports_links_and_specials_without_entering_them() {
     search_with(
         &target(&backend, &src, "local"),
         &search_spec("link", false, 0, false),
-        &AtomicBool::new(false),
+        &std::sync::atomic::AtomicBool::new(false),
         &mut |hit| names.push(hit.rel),
     )
     .unwrap();
