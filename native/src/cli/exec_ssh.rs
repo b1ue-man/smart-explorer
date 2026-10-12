@@ -140,7 +140,7 @@ pub(super) struct SshRun {
 }
 
 pub(super) fn run(run: SshRun) -> Result<i32, String> {
-    let cwd = run.cwd.or(run.target.cwd);
+    let cwd = run.cwd.clone().or_else(|| run.target.cwd.clone());
     let line = remote_command_line(&run.command, cwd.as_deref(), &run.env)?;
     let backend = crate::connect::open_saved_ssh(&run.target.connection)?;
     let mut command = backend

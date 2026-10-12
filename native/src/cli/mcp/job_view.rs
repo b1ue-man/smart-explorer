@@ -2,7 +2,7 @@
 //! page of every output stream within the answer budget, plus the offsets to
 //! continue. Also the `job_input` and `job_cancel` tools.
 use super::args::Args;
-use super::jobs::Job;
+use super::jobs::{Job, JobStatus};
 use super::response;
 use super::session::Session;
 use super::spool::text_page;
@@ -28,7 +28,17 @@ pub(super) async fn started_job_answer(
             "the call was cancelled; its job was cancelled too",
         ));
     }
-    Ok(response::ok(job_value(job, &Offsets::default(), budget)?))
+    let value = job_value(job, &Offsets::default(), budget)?;
+    // A job that already failed is the failure of this call (a command that
+    // ran and exited non-zero completed; that is not a failure).
+    Ok(match job.end() {
+        Some(end) if end.status == JobStatus::Failed => response::error_with(
+            end.error
+                .unwrap_or_else(|| format!("job {} failed", job.id)),
+            value,
+        ),
+        _ => response::ok(value),
+    })
 }
 
 /// `job_status`: one job with output pages, or every job of the session.
