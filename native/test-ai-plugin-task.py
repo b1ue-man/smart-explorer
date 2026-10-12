@@ -811,7 +811,9 @@ def pair_with_exec(results, se_binary, a, b, signal, relay, logs):
     try:
         code = json.loads(b.se(se_binary, "share", "identity", "--json", log=log).stdout)["direct_code"]
         for client in (b, a):
-            configured = client.se(se_binary, "share", "configure", "--server", signal, log=log)
+            # The fixture server speaks plaintext; addresses without a scheme mean TLS.
+            configured = client.se(se_binary, "share", "configure", "--server", f"tcp://{signal}",
+                                   "--allow-plaintext", log=log)
             ensure(configured.returncode == 0, configured.stderr.decode())
             poll(lambda client=client: worker_ready(client), 90, "Share worker did not connect")
         added = json.loads(a.se(se_binary, "connections", "add-peer", "--code", code, "--name", "Target", "--json",
