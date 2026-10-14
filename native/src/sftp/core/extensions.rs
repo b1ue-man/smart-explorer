@@ -5,12 +5,14 @@ use super::backend::SftpBackend;
 use super::channel_pool::note_failure;
 use super::io_err;
 use crate::vfs::{
-    Backend, BackendExtensions, MtimePrecision, NameLimit, OmissionReason, StageDurability,
-    StageFinish, StageFinished, TargetLimits, VfsListing, VfsOmission, VfsResult,
+    Backend, BackendExtensions, MtimePrecision, NameLimit, OmissionReason, RecursiveDeleteFailure,
+    RecursiveDeleteProgress, RecursiveDeleteReport, StageDurability, StageFinish, StageFinished,
+    TargetLimits, VfsListing, VfsOmission, VfsResult,
 };
 use russh_sftp::protocol::{FileAttributes, OpenFlags};
 use std::collections::HashSet;
 use std::io::{self, Read, Write};
+use std::sync::atomic::AtomicBool;
 
 fn seconds(ms: i64) -> Option<u32> {
     u32::try_from(ms.div_euclid(1_000)).ok()
@@ -172,6 +174,23 @@ impl BackendExtensions for SftpBackend {
                 Box::pin(generation.sftp().symlink_metadata(path.to_string()))
             })
             .map(|attributes| attributes.permissions.map(|mode| mode & 0o777))
+    }
+
+    /// Every folder: one READDIR per folder and pipelined REMOVEs
+    /// (tree_remove.rs) instead of a stat and a round trip per entry.
+    fn supports_remove_tree(&self, _path: &str) -> VfsResult<bool> {
+        Ok(true)
+    }
+
+    fn remove_tree(
+        &self,
+        path: &str,
+        cancel: &AtomicBool,
+        progress: &mut dyn FnMut(RecursiveDeleteProgress),
+    ) -> Result<RecursiveDeleteReport, RecursiveDeleteFailure> {
+        crate::vfs::remove_tree_listed(self, path, cancel, progress, |leaves| {
+            self.remove_leaves(leaves)
+        })
     }
 }
 

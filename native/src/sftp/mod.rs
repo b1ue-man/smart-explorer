@@ -16,6 +16,8 @@
 //! (pipelined_read.rs, pool_writer.rs); listing and metadata stay on the
 //! main session, which also serves transfers when no extra channel opens.
 //! Copies inside one server run on the server (`copy-data`, copy_data.rs).
+//! A folder is deleted with one READDIR per folder and many REMOVEs in
+//! flight on the main session (tree_remove.rs).
 
 #[path = "core/backend.rs"]
 mod backend;
@@ -55,9 +57,14 @@ mod reversible_replace;
 mod session;
 #[path = "core/transfer_ops.rs"]
 mod transfer_ops;
+#[path = "core/tree_remove.rs"]
+mod tree_remove;
 #[path = "core/url.rs"]
 mod url;
 
+#[cfg(test)]
+#[path = "core/delete_speed_task_tests.rs"]
+mod delete_speed_task_tests;
 #[cfg(test)]
 #[path = "core/remote_drive_task_tests.rs"]
 mod remote_drive_task_tests;

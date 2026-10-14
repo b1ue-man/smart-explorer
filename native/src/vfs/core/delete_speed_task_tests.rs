@@ -273,3 +273,26 @@ fn delete_speed_task_listed_tree_refuses_a_link_root_and_honours_cancel() {
     assert_eq!(canceled.removed, 0);
     assert!(backend.removed().is_empty());
 }
+
+#[test]
+fn delete_speed_task_listed_tree_ends_canceled_when_a_slow_remover_stops() {
+    let backend = MemoryTree::new(false);
+    let cancel = AtomicBool::new(false);
+    let report = remove_tree_listed(&backend, "/root", &cancel, &mut |_| {}, |leaves| {
+        leaves
+            .iter()
+            .map(|leaf| {
+                if cancel.load(Ordering::Acquire) {
+                    return Err(io::ErrorKind::Interrupted.into());
+                }
+                // The user cancels while the first leaf is being removed.
+                cancel.store(true, Ordering::Release);
+                backend.remove_file(&leaf.path)
+            })
+            .collect()
+    })
+    .unwrap();
+    assert_eq!(report.status, RecursiveDeleteStatus::Canceled);
+    assert_eq!(report.removed, 1);
+    assert_eq!(backend.removed(), ["/root/sub/deep/c.txt"]);
+}

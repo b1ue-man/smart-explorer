@@ -6,10 +6,11 @@ use super::stream_put::StreamPut;
 use crate::connect::{poll_subscription, PollNotice};
 use crate::vfs::{
     Backend, BackendExtensions, ChangeNotice, ChangeSignalMode, ChangeSubscription, MtimePrecision,
-    StageFinish, StageFinished, TargetLimits, VfsListing, VfsResult,
+    RecursiveDeleteFailure, RecursiveDeleteProgress, RecursiveDeleteReport, StageFinish,
+    StageFinished, TargetLimits, VfsListing, VfsResult,
 };
 use std::io::{self, Write};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 impl BackendExtensions for WebdavBackend {
@@ -95,6 +96,20 @@ impl BackendExtensions for WebdavBackend {
             mtime_applied: applied,
             durable: false,
         })
+    }
+
+    /// A collection goes with one DELETE (tree_remove.rs, RFC 4918 §9.6.1).
+    fn supports_remove_tree(&self, _path: &str) -> VfsResult<bool> {
+        Ok(true)
+    }
+
+    fn remove_tree(
+        &self,
+        path: &str,
+        cancel: &AtomicBool,
+        progress: &mut dyn FnMut(RecursiveDeleteProgress),
+    ) -> Result<RecursiveDeleteReport, RecursiveDeleteFailure> {
+        self.remove_collection(path, cancel, progress)
     }
 
     fn change_signal_mode(&self, root: &str) -> VfsResult<Option<ChangeSignalMode>> {

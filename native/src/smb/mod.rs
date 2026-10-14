@@ -16,7 +16,8 @@
 //! that recursive delete and sync never enter, a link is deleted and renamed
 //! itself (never its target), and replacing is one server-side rename with
 //! `ReplaceIfExists`. Copies inside one share run on the server (COPYCHUNK,
-//! server_copy.rs).
+//! server_copy.rs). A folder is deleted with one listing per folder and
+//! concurrent deletes under the credit window (tree_remove.rs).
 
 #[path = "core/backend.rs"]
 mod backend;
@@ -38,11 +39,16 @@ mod session;
 mod stage_finish;
 #[path = "core/io.rs"]
 mod streams;
+#[path = "core/tree_remove.rs"]
+mod tree_remove;
 #[path = "core/url.rs"]
 mod url;
 #[path = "core/wire.rs"]
 mod wire;
 
+#[cfg(test)]
+#[path = "core/delete_speed_task_tests.rs"]
+mod delete_speed_task_tests;
 #[cfg(test)]
 #[path = "core/server_copy_task_tests.rs"]
 mod server_copy_task_tests;

@@ -14,9 +14,14 @@ mod resolver;
 mod staging;
 #[path = "core/streams.rs"]
 mod streams;
+#[path = "core/tree_remove.rs"]
+mod tree_remove;
 #[path = "core/writer.rs"]
 mod writer;
 
+#[cfg(test)]
+#[path = "core/delete_speed_task_tests.rs"]
+mod delete_speed_task_tests;
 #[cfg(test)]
 #[path = "core/transfer_engine_task_tests.rs"]
 mod transfer_engine_task_tests;
