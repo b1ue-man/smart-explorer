@@ -53,8 +53,10 @@ Explorer app and `se` terminal command.
    persistent shell on `target`; later calls with the same `session` keep its
    working directory, environment and shell state and need no `target`. The
    user can watch or join it with `se shell --attach <name>`; `sessions`
-   (`activity`) shows what others ran there, `close` ends it. Cancel or a
-   timeout end the whole session.
+   (`activity`) shows what others ran there, `close` ends it. `sessions` also
+   lists the user's own shells with their kind: you can join a command shell
+   started with `se shell -T --attachable`. Cancel or a timeout end the whole
+   session.
 
 ## Rules
 
@@ -67,9 +69,11 @@ Explorer app and `se` terminal command.
   with the user.
 - Change Share trust only on the user's explicit request: accepting access
   requests, enabling Exec grants, discoverable mode, adding peers or rooms.
-- Join a user's terminal session (`sessions` with `attach`, listed when they
-  started `se shell --attachable`) only when the user asks for it: it shares
-  their shell, including what they changed or elevated there.
+- Join a user's command shell (`sessions` with `attach`, listed when they
+  started `se shell -T --attachable`) only when the user asks for it: it shares
+  their shell, including what they changed or elevated there. A plain
+  `se shell` in a terminal is a full terminal session (kind terminal); agents
+  cannot join it.
 - When something fails, call `status`; it shows the background worker, Share
   connectivity and credential store state.
 - Any other Smart Explorer function is reachable through the `se` tool, e.g.

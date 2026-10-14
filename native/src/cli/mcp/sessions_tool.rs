@@ -1,11 +1,13 @@
 //! `sessions`: this server's persistent shells and the attachable sessions
-//! of the user's other `se` processes (`se shell --attachable`, other
-//! agents). `list` shows them, `attach` joins one, `activity` returns what
-//! the other participants did since the last call, `close` ends an own
+//! of the user's other `se` processes (`se shell -T --attachable`, other
+//! agents). `list` shows them with their kind, `attach` joins a command
+//! session (a terminal session of `se shell` is refused), `activity` returns
+//! what the other participants did since the last call, `close` ends an own
 //! session or detaches from an attached one.
 use super::args::Args;
 use super::response;
 use super::session::Session;
+use crate::cli::shell_session::SessionKind;
 use rmcp::model::CallToolResult;
 use serde_json::json;
 
@@ -21,6 +23,7 @@ pub(super) fn sessions(session: &Session, args: &Args<'_>) -> Result<CallToolRes
             Ok(response::ok(json!({
                 "session": info.name,
                 "id": info.id,
+                "kind": SessionKind::Commands.label(),
                 "role": "attached",
                 "target": info.target,
                 "dialect": info.dialect,

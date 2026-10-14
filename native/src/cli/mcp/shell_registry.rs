@@ -1,9 +1,11 @@
 //! The shell sessions of one `se mcp` server: sessions it opened (owner) and
-//! sessions of other processes it attached to (`sessions` → attach, e.g. a
-//! `se shell --attachable` of the user). Each keeps a bounded log of what the
-//! other participants did there, for `sessions` → activity.
+//! command sessions of other processes it attached to (`sessions` → attach,
+//! e.g. a `se shell -T --attachable` of the user). Each keeps a bounded log of
+//! what the other participants did there, for `sessions` → activity. Terminal
+//! sessions of `se shell` are listed with their kind but never joined: what
+//! an agent typed there would reach the program the user is running.
 use super::targets::Targets;
-use crate::cli::shell_session::{self, Activity, OpenOptions, SessionClient};
+use crate::cli::shell_session::{self, Activity, OpenOptions, SessionClient, SessionKind};
 use crate::creds::SavedConnection;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -81,9 +83,10 @@ impl ShellRegistry {
         Ok(port)
     }
 
-    /// Joins an attachable session of another process by name or id.
+    /// Joins an attachable command session of another process by name or id.
     pub(super) fn attach(&self, selector: &str) -> Result<Arc<Port>, String> {
         let entry = shell_session::find_attachable(selector)?;
+        agent_may_join(entry.kind, &entry.name)?;
         let slot = self.slot(&entry.name)?;
         let mut current = slot.lock().map_err(|_| poisoned())?;
         if let Some(port) = current
@@ -136,6 +139,7 @@ impl ShellRegistry {
             rows.push(json!({
                 "session": name,
                 "id": info.id,
+                "kind": SessionKind::Commands.label(),
                 "role": if port.owned { "owner" } else { "attached" },
                 "target": info.target,
                 "dialect": info.dialect,
@@ -150,12 +154,7 @@ impl ShellRegistry {
             if joined.contains(&entry.id) {
                 continue;
             }
-            let mut row = entry.public_value();
-            if let Some(fields) = row.as_object_mut() {
-                fields.insert("role".into(), json!("none"));
-                fields.insert("next".into(), json!("sessions with action attach joins it"));
-            }
-            rows.push(row);
+            rows.push(attachable_row(entry.public_value(), entry.kind));
         }
         rows
     }
@@ -275,6 +274,33 @@ impl ActivityLog {
     }
 }
 
+/// Agents join only command sessions. Input typed into a terminal session
+/// would reach whatever the user is running there (an editor, `sudo`, a
+/// REPL) and the text they are typing; the user can still share a shell with
+/// an agent by starting it as `se shell TARGET -T --attachable`.
+fn agent_may_join(kind: SessionKind, name: &str) -> Result<(), String> {
+    match kind {
+        SessionKind::Commands => Ok(()),
+        SessionKind::Terminal => Err(format!(
+            "session `{name}` is a full terminal session of `se shell`; agents can join only command sessions: ask the user to start `se shell TARGET -T --attachable`"
+        )),
+    }
+}
+
+/// The listing row of another process's attachable session: what the
+/// registry publishes (including `kind`) plus how to proceed.
+fn attachable_row(mut row: Value, kind: SessionKind) -> Value {
+    let next = match kind {
+        SessionKind::Commands => "sessions with action attach joins it",
+        SessionKind::Terminal => "a terminal session of the user; agents cannot join it",
+    };
+    if let Some(fields) = row.as_object_mut() {
+        fields.insert("role".into(), json!("none"));
+        fields.insert("next".into(), json!(next));
+    }
+    row
+}
+
 /// A given `target` must name the session's remote: a command must never
 /// run on another machine than the caller expects.
 fn check_target(name: &str, port: &Port, target: &str) -> Result<(), String> {
@@ -305,8 +331,39 @@ fn poisoned() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::ActivityLog;
-    use crate::cli::shell_session::Activity;
+    use super::{agent_may_join, attachable_row, ActivityLog};
+    use crate::cli::shell_session::{Activity, SessionKind};
+    use serde_json::json;
+
+    #[test]
+    fn mcp_task_terminal_sessions_refuse_agents() {
+        assert!(agent_may_join(SessionKind::Commands, "build").is_ok());
+        let refused = agent_may_join(SessionKind::Terminal, "work").unwrap_err();
+        assert!(refused.contains("`work`"), "{refused}");
+        assert!(refused.contains("terminal"), "{refused}");
+        assert!(refused.contains("-T --attachable"), "{refused}");
+    }
+
+    #[test]
+    fn mcp_task_listed_sessions_of_the_user_say_whether_agents_can_join() {
+        let command = attachable_row(
+            json!({"session": "build", "kind": "commands"}),
+            SessionKind::Commands,
+        );
+        assert_eq!(command["kind"], "commands");
+        assert_eq!(command["role"], "none");
+        assert_eq!(command["next"], "sessions with action attach joins it");
+        let terminal = attachable_row(
+            json!({"session": "work", "kind": "terminal"}),
+            SessionKind::Terminal,
+        );
+        assert_eq!(terminal["kind"], "terminal");
+        assert_eq!(terminal["role"], "none");
+        assert_eq!(
+            terminal["next"],
+            "a terminal session of the user; agents cannot join it"
+        );
+    }
 
     #[test]
     fn mcp_task_session_activity_log_is_bounded() {
