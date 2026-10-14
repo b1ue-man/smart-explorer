@@ -93,7 +93,7 @@ unverändert. Die übrigen Tools bleiben verzögert ladbar.
   unter Linux in 0,54 s. Gescheitert sind nur die zwei Prüfungen auf Warnungen in
   Batch-Dateien, beide wegen `cancel_principal` (tote Funktion seit `5098ee06`). Zweiter Lauf
   38526643502 auf `46725dc0`.
-- [ ] M5
+- [x] M5 Release v0.5.178 (`ad99f3a4`, Lauf 38561765530) zusammen mit S7
 
 ## Erweiterung 2026-10-14: persistente Shell-Sitzungen (R4)
 
@@ -262,10 +262,9 @@ benutzereigenen Verzeichnis); sshd_config(5) (`MaxSessions` 10); Jupyter-Verbind
 
 ### Fortschritt
 
-- [ ] S1
-- [ ] S6
-- [ ] S2
-- [ ] S3
-- [ ] S4
-- [ ] S5
-- [ ] S7
+- [x] S1 und S6 `76192d2c`, PowerShell-Arbeitsverzeichnis `3dbc3127`
+- [x] S2 `ca760a00`
+- [x] S3 `54919662`
+- [x] S4 `1842e425`
+- [x] S5 `ebf969b0`, `50dbee44`; Lauf 38551633780 fehlgeschlagen (behoben in `3dbc3127`), Lauf 38559316038 erfolgreich
+- [x] S7 Release v0.5.178 (`ad99f3a4`, Lauf 38561765530)
