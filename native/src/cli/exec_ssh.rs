@@ -96,6 +96,9 @@ pub(super) fn remote_command_line(
                 line.push_str(&quote(argument));
             }
         }
+        // Reached only by a caller that built a terminal start by hand: an
+        // SSH exec channel has no login shell without a terminal.
+        ExecCommand::Login => return Err("an interactive login shell needs a terminal".into()),
     }
     Ok(line)
 }

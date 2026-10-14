@@ -11,11 +11,13 @@ use super::ipc_protocol::{
 
 const MAX_DATA_BYTES: usize = 64 * 1024;
 const MAX_CONTROL_BYTES: usize = 64 * 1024;
+const MAX_RESIZE_BYTES: usize = 256;
 const LOCAL_EVENT_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 
 const INPUT_STDIN: u8 = 1;
 const INPUT_EOF: u8 = 2;
 const INPUT_CANCEL: u8 = 3;
+const INPUT_RESIZE: u8 = 4;
 const EVENT_AUTHORIZED: u8 = 16;
 const EVENT_STARTED: u8 = 17;
 const EVENT_STDOUT: u8 = 18;
@@ -97,6 +99,13 @@ impl ExecIpcInput {
 
     pub fn cancel(&self) -> io::Result<()> {
         self.write(INPUT_CANCEL, &[])
+    }
+
+    /// New window size of a terminal start; any other start drops it.
+    pub fn resize(&self, size: crate::share::ExecTerminalSize) -> io::Result<()> {
+        size.validate()?;
+        let payload = serde_json::to_vec(&size).map_err(io::Error::other)?;
+        self.write(INPUT_RESIZE, &payload)
     }
 
     fn write(&self, tag: u8, payload: &[u8]) -> io::Result<()> {
@@ -339,16 +348,24 @@ fn serve_input(stream: &mut TcpStream, input: crate::share::ShareExecInput) -> i
             }
             Err(error) => return Err(error),
         };
-        match tag {
-            INPUT_STDIN => input.send(crate::share::ExecClientInput::Stdin(payload))?,
-            INPUT_EOF if payload.is_empty() => {
-                input.send(crate::share::ExecClientInput::StdinEof)?
-            }
-            INPUT_CANCEL if payload.is_empty() => {
-                input.send(crate::share::ExecClientInput::Cancel)?;
-            }
-            _ => return Err(invalid("invalid local Exec input frame")),
+        input.send(client_input(tag, payload)?)?;
+    }
+}
+
+/// The client input that one local input frame stands for.
+fn client_input(tag: u8, payload: Vec<u8>) -> io::Result<crate::share::ExecClientInput> {
+    match tag {
+        INPUT_STDIN => Ok(crate::share::ExecClientInput::Stdin(payload)),
+        INPUT_EOF if payload.is_empty() => Ok(crate::share::ExecClientInput::StdinEof),
+        INPUT_CANCEL if payload.is_empty() => Ok(crate::share::ExecClientInput::Cancel),
+        INPUT_RESIZE if payload.len() <= MAX_RESIZE_BYTES => {
+            let size: crate::share::ExecTerminalSize =
+                decode(&payload).map_err(|_| invalid("invalid local Exec input frame"))?;
+            size.validate()
+                .map_err(|_| invalid("invalid local Exec input frame"))?;
+            Ok(crate::share::ExecClientInput::Resize(size))
         }
+        _ => Err(invalid("invalid local Exec input frame")),
     }
 }
 

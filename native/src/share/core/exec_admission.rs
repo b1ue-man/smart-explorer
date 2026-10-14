@@ -1,4 +1,5 @@
 //! Connection authentication and job admission before Exec streaming.
+use super::super::exec_terminal::{host_denial, host_features};
 use super::*;
 
 pub(in crate::share) async fn handle_connection(
@@ -77,9 +78,14 @@ pub(in crate::share) async fn handle_connection(
             true,
         )
         .map_err(eio)?;
-    let provider = tokio::time::timeout_at(
+    let (provider, terminal_supported) = tokio::time::timeout_at(
         handshake_deadline,
-        tokio::task::spawn_blocking(super::super::exec_platform::provider_status),
+        tokio::task::spawn_blocking(|| {
+            (
+                super::super::exec_platform::provider_status(),
+                super::super::exec_platform::terminal_supported(),
+            )
+        }),
     )
     .await
     .map_err(|_| timed_out("Exec-Providerpruefung Timeout"))?
@@ -92,6 +98,7 @@ pub(in crate::share) async fn handle_connection(
             &ExecHelloOk {
                 authorization: authorized.authorization.clone(),
                 provider: provider.clone(),
+                features: host_features(terminal_supported),
             },
         ),
     )
@@ -118,6 +125,14 @@ pub(in crate::share) async fn handle_connection(
     let ClientFrame::Start { start, .. } = first else {
         return Err(eio("Exec-Start fehlt"));
     };
+    // A terminal start is answered like a denied admission: no job is
+    // prepared and no process exists.
+    if let Some(denial) = host_denial(&start, terminal_supported) {
+        protocol.terminal();
+        send_terminal_frame(&mut send, &ServerFrame::Error(denial)).await?;
+        wait_result_ack(&mut recv, &mut protocol, &start.exec_id).await?;
+        return acknowledge_result(&mut send, &start.exec_id, &connection).await;
+    }
     match node.exec_registry().prepare(
         authorized.principal,
         authorized.authorization,

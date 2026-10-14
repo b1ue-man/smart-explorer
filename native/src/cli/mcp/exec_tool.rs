@@ -27,6 +27,7 @@ impl ExecRequest {
                 .chain(args.iter().map(String::as_str))
                 .collect::<Vec<_>>()
                 .join(" "),
+            ExecCommand::Login => "<shell>".to_string(),
         }
     }
 

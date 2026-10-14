@@ -53,6 +53,10 @@ fn run(job: &Arc<Job>, port: &Arc<Port>, request: ExecRequest, name: &str) -> Jo
     let command = match &request.command {
         ExecCommand::Shell { command } => command.clone(),
         ExecCommand::Argv { program, args } => argv_command(dialect, program, args),
+        // MCP arguments never produce a login shell: it needs a terminal.
+        ExecCommand::Login => {
+            return failed("an interactive login shell needs a terminal".into());
+        }
     };
     let stdin = match request.stdin.filter(|text| !text.is_empty()) {
         Some(text) => StdinMode::Text(text),

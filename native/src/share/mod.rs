@@ -171,6 +171,8 @@ mod exec_session;
 mod exec_supervisor_protocol;
 #[path = "core/exec_targets.rs"]
 mod exec_targets;
+#[path = "core/exec_terminal.rs"]
+mod exec_terminal;
 #[path = "core/exec_types.rs"]
 mod exec_types;
 #[path = "core/export_config.rs"]

@@ -2,15 +2,18 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
 
+use super::exec_terminal::ExecTerminalSize;
 use super::exec_types::ExecStart;
 
 const MAX_CONTROL_BYTES: usize = 512 * 1024;
 const MAX_DATA_BYTES: usize = 64 * 1024;
+const MAX_RESIZE_BYTES: usize = 256;
 
 const START: u8 = 1;
 const STDIN: u8 = 2;
 const STDIN_EOF: u8 = 3;
 const CANCEL: u8 = 4;
+const RESIZE: u8 = 5;
 const STARTED: u8 = 16;
 const STDOUT: u8 = 17;
 const STDERR: u8 = 18;
@@ -30,6 +33,8 @@ pub(crate) enum SupervisorCommand {
     Stdin(Vec<u8>),
     StdinEof,
     Cancel,
+    /// New window size of the terminal of a terminal start.
+    Resize(ExecTerminalSize),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -71,6 +76,7 @@ pub(crate) fn send_command(writer: &mut impl Write, command: &SupervisorCommand)
         SupervisorCommand::Stdin(data) => send_data(writer, STDIN, data),
         SupervisorCommand::StdinEof => send_data(writer, STDIN_EOF, &[]),
         SupervisorCommand::Cancel => send_data(writer, CANCEL, &[]),
+        SupervisorCommand::Resize(size) => send_json(writer, RESIZE, size),
     }
 }
 
@@ -81,6 +87,12 @@ pub(crate) fn recv_command(reader: &mut impl Read) -> io::Result<SupervisorComma
         STDIN if payload.len() <= MAX_DATA_BYTES => Ok(SupervisorCommand::Stdin(payload)),
         STDIN_EOF if payload.is_empty() => Ok(SupervisorCommand::StdinEof),
         CANCEL if payload.is_empty() => Ok(SupervisorCommand::Cancel),
+        RESIZE if payload.len() <= MAX_RESIZE_BYTES => {
+            let size: ExecTerminalSize = decode(&payload)?;
+            size.validate()
+                .map_err(|_| invalid("invalid exec supervisor resize"))?;
+            Ok(SupervisorCommand::Resize(size))
+        }
         _ => Err(invalid("invalid exec supervisor command")),
     }
 }
@@ -165,6 +177,33 @@ mod tests {
     }
 
     #[test]
+    fn terminal_task_resize_round_trips_and_rejects_unusable_sizes() {
+        let command = SupervisorCommand::Resize(ExecTerminalSize {
+            cols: 120,
+            rows: 40,
+        });
+        let mut bytes = Vec::new();
+        send_command(&mut bytes, &command).unwrap();
+        assert_eq!(bytes[0], 5);
+        assert_eq!(recv_command(&mut bytes.as_slice()).unwrap(), command);
+
+        for (cols, rows) in [(0, 24), (80, 0), (32768, 24), (80, 32768)] {
+            let mut bytes = Vec::new();
+            let size = ExecTerminalSize { cols, rows };
+            send_command(&mut bytes, &SupervisorCommand::Resize(size)).unwrap();
+            let error = recv_command(&mut bytes.as_slice()).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData, "{cols}x{rows}");
+        }
+
+        let mut oversized = vec![5u8];
+        let padded = format!("{{\"cols\":80,\"rows\":24{}}}", " ".repeat(300));
+        oversized.extend_from_slice(&(padded.len() as u32).to_be_bytes());
+        oversized.extend_from_slice(padded.as_bytes());
+        let error = recv_command(&mut oversized.as_slice()).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
     fn inherited_private_values_are_removed_before_explicit_overrides() {
         let request = ExecStart {
             exec_id: ExecId::parse("01".repeat(16)).unwrap(),
@@ -175,6 +214,7 @@ mod tests {
             env: BTreeMap::from([("SMART_EXPLORER_ALLOWED_BY_CALLER".into(), "yes".into())]),
             timeout_ms: None,
             max_output_bytes: None,
+            terminal: None,
         };
         let environment = environment_for(&request);
         assert_eq!(

@@ -94,6 +94,9 @@ async fn serve_job(
                     ClientFrame::StdinEof { .. } => {
                         pending_input = Some(JobInput::StdinEof);
                     }
+                    ClientFrame::Resize { size, .. } => {
+                        pending_input = Some(JobInput::Resize(size));
+                    }
                     ClientFrame::Cancel { .. } => {
                         registry.cancel(&exec_id, ExecCancelReason::User);
                     }
@@ -203,6 +206,7 @@ fn frame_exec_id(frame: &ClientFrame) -> &ExecId {
         | ClientFrame::StdinEof { exec_id }
         | ClientFrame::Cancel { exec_id }
         | ClientFrame::Ping { exec_id, .. }
+        | ClientFrame::Resize { exec_id, .. }
         | ClientFrame::ResultAck { exec_id } => exec_id,
     }
 }
@@ -263,6 +267,7 @@ fn validate_result_ack_frame(
         ClientFrame::Stdin { .. }
         | ClientFrame::StdinEof { .. }
         | ClientFrame::Cancel { .. }
+        | ClientFrame::Resize { .. }
         | ClientFrame::Ping { .. } => Ok(false),
         ClientFrame::Start { .. } => Err(eio("unerwarteter Start nach Exec-Terminalstatus")),
     }

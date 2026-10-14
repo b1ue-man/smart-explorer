@@ -120,6 +120,7 @@ pub(super) fn run(args: ExecArgs) -> Result<i32, String> {
         env: parse_environment(args.env)?,
         timeout_ms: (args.timeout > 0).then(|| args.timeout.saturating_mul(1_000)),
         max_output_bytes: (args.max_output > 0).then_some(args.max_output),
+        terminal: None,
     };
     start.validate().map_err(|error| error.to_string())?;
     execute(target, start)

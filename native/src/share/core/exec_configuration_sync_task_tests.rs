@@ -75,6 +75,7 @@ fn request() -> ExecStart {
         env: Default::default(),
         timeout_ms: None,
         max_output_bytes: None,
+        terminal: None,
     }
 }
 

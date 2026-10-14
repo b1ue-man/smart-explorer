@@ -16,12 +16,14 @@ use super::exec_types::{ExecId, ExecTerminal};
 
 pub(super) type TransportClosed = Pin<Box<dyn Future<Output = ()> + Send>>;
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn run<W, R>(
     mut send: W,
     recv: R,
     mut input: mpsc::Receiver<ExecClientInput>,
     events: mpsc::Sender<ExecClientEvent>,
     exec_id: ExecId,
+    terminal_start: bool,
     heartbeat_policy: ExecHeartbeatPolicy,
     mut transport_closed: TransportClosed,
 ) -> Result<ExecTerminal, ExecClientFailure>
@@ -149,6 +151,19 @@ where
                         ).await?;
                     }
                     Some(ExecClientInput::Cancel) => {}
+                    // A window size only means something to a terminal start
+                    // that is not being cancelled, and only a usable one is
+                    // sent; the previous size stays otherwise.
+                    Some(ExecClientInput::Resize(size)) => {
+                        if terminal_start && !cancelling && size.validate().is_ok() {
+                            write_frame_with_timeout(
+                                &mut send,
+                                &ClientFrame::Resize { exec_id: exec_id.clone(), size },
+                                true,
+                                active_write_timeout(heartbeat_policy, peer_deadline)?,
+                            ).await?;
+                        }
+                    }
                     Some(_) => return Err(protocol("stdin arrived after EOF or Cancel", true, "input_order")),
                     None => {
                         let _ = write_frame_with_timeout(

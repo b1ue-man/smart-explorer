@@ -9,6 +9,7 @@ use super::exec_platform::{ContainedExec, StopReason};
 use super::exec_protocol::ServerFrame;
 use super::exec_registry::{ExecCancelReason, ExecCancellation, ExecRegistry, ExecReservation};
 use super::exec_supervisor_protocol::{SupervisorEvent, SupervisorExit};
+use super::exec_terminal::ExecTerminalSize;
 use super::exec_types::{ExecStart, ExecTerminal, ExecTerminalKind};
 
 const EVENT_POLL: Duration = Duration::from_millis(25);
@@ -18,6 +19,7 @@ const CONTAINMENT_STOP_TIMEOUT: Duration = Duration::from_secs(15);
 pub(super) enum JobInput {
     Stdin(Vec<u8>),
     StdinEof,
+    Resize(ExecTerminalSize),
 }
 
 struct StopOutcome {
@@ -113,6 +115,22 @@ pub(super) fn run_contained_job(
                         );
                     }
                 }
+                JobInput::Resize(size) => match process.resize(size) {
+                    Ok(()) => {}
+                    // A full supervisor queue loses one window size, which the
+                    // next resize replaces; it must not end the session.
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+                    Err(error) => {
+                        return stop_and_finish(
+                            process,
+                            &registry,
+                            &reservation,
+                            &start,
+                            &output,
+                            StopOutcome::error(error.to_string(), stdout_bytes, stderr_bytes),
+                        );
+                    }
+                },
             }
         }
         match process.next_event(Some(Instant::now() + EVENT_POLL)) {

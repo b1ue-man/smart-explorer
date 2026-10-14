@@ -8,6 +8,7 @@ use std::time::Duration;
 use super::exec_supervisor_protocol::{
     environment_for, SupervisorCommand, SupervisorEvent, SupervisorStart,
 };
+use super::exec_terminal::ExecTerminalSize;
 #[cfg(debug_assertions)]
 use super::exec_types::ExecId;
 use super::exec_types::{ExecProviderStatus, ExecStart};
@@ -65,6 +66,12 @@ impl ContainedExec {
         self.inner.send(&SupervisorCommand::StdinEof)
     }
 
+    /// Tells the supervisor the new window size of a terminal start. A full
+    /// input queue is reported as `WouldBlock`.
+    pub(crate) fn resize(&mut self, size: ExecTerminalSize) -> io::Result<()> {
+        self.inner.send(&SupervisorCommand::Resize(size))
+    }
+
     pub(crate) fn next_event(&mut self, deadline: Option<Instant>) -> io::Result<SupervisorEvent> {
         self.inner.next_event(deadline)
     }
@@ -80,6 +87,11 @@ impl ContainedExec {
 
 pub(crate) fn provider_status() -> ExecProviderStatus {
     super::platform_exec::provider_status()
+}
+
+/// True when this host can give an Exec start a terminal (PTY or ConPTY).
+pub(crate) fn terminal_supported() -> bool {
+    super::platform_exec::terminal_supported()
 }
 
 pub(super) fn run_supervisor_if_requested(arguments: &[OsString]) -> Option<io::Result<()>> {
@@ -104,6 +116,7 @@ pub(super) fn run_platform_self_test() -> io::Result<()> {
         env: Default::default(),
         timeout_ms: Some(10_000),
         max_output_bytes: None,
+        terminal: None,
     };
     let mut process = ContainedExec::prepare(&request)?;
     process.commit(request)?;
@@ -159,6 +172,7 @@ fn run_root_exits_first_test() -> io::Result<()> {
         env: Default::default(),
         timeout_ms: Some(10_000),
         max_output_bytes: None,
+        terminal: None,
     };
     let mut process = ContainedExec::prepare(&request)?;
     process.commit(request)?;

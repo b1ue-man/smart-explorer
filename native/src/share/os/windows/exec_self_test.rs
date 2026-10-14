@@ -241,6 +241,7 @@ fn helper_request(arguments: Vec<String>) -> io::Result<ExecStart> {
         env: Default::default(),
         timeout_ms: Some(10_000),
         max_output_bytes: None,
+        terminal: None,
     })
 }
 

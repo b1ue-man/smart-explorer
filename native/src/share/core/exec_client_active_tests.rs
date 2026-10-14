@@ -66,6 +66,7 @@ fn wrong_exec_id_and_sequence_pongs_are_rejected() {
                 input_rx,
                 event_tx,
                 exec_id.clone(),
+                false,
                 policy(),
                 Box::pin(pending()),
             ));
@@ -118,6 +119,7 @@ fn remote_terminal_error_is_acknowledged_before_it_is_returned() {
             input_rx,
             event_tx,
             exec_id.clone(),
+            false,
             policy(),
             Box::pin(pending()),
         ));
@@ -166,6 +168,7 @@ fn missing_or_wrong_terminal_acknowledgement_never_reports_success() {
             input_rx,
             event_tx,
             exec_id.clone(),
+            false,
             policy(),
             Box::pin(pending()),
         ));
@@ -201,6 +204,7 @@ fn missing_or_wrong_terminal_acknowledgement_never_reports_success() {
             input_rx,
             event_tx,
             exec_id.clone(),
+            false,
             policy(),
             Box::pin(pending()),
         ));
@@ -245,6 +249,7 @@ fn transport_close_requires_ack_and_a_buffered_ack_wins_the_close_race() {
             input_rx,
             event_tx,
             exec_id,
+            false,
             policy(),
             Box::pin(async move {
                 let _ = close_rx.await;
@@ -267,6 +272,7 @@ fn transport_close_requires_ack_and_a_buffered_ack_wins_the_close_race() {
             input_rx,
             event_tx,
             exec_id.clone(),
+            false,
             policy(),
             Box::pin(async move {
                 let _ = close_rx.await;
@@ -312,6 +318,7 @@ fn output_frames_do_not_extend_the_authenticated_peer_deadline() {
             input_rx,
             event_tx,
             exec_id.clone(),
+            false,
             policy(),
             Box::pin(pending()),
         ));
@@ -366,6 +373,7 @@ fn transport_close_and_blocked_writes_are_bounded() {
             input_rx,
             event_tx,
             exec_id.clone(),
+            false,
             policy(),
             Box::pin(async move {
                 let _ = close_rx.await;
@@ -394,6 +402,7 @@ fn transport_close_and_blocked_writes_are_bounded() {
             input_rx,
             event_tx,
             exec_id.clone(),
+            false,
             policy(),
             Box::pin(pending()),
         ));
