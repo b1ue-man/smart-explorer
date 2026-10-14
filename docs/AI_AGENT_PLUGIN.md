@@ -1,7 +1,9 @@
 # Smart Explorer für KI-Agenten (`se mcp`, `se plugin`)
 
-Stand: 2026-10-12. Plan und Entscheidungen:
-[`docs/plaene/2026-10-12-ki-agenten-plugin/plan.md`](plaene/2026-10-12-ki-agenten-plugin/plan.md).
+Stand: 2026-10-14. Plan und Entscheidungen:
+[`docs/plaene/2026-10-12-ki-agenten-plugin/plan.md`](plaene/2026-10-12-ki-agenten-plugin/plan.md),
+Vorrang vor den Datei-Werkzeugen des Hosts:
+[`docs/plaene/2026-10-14-analyse-id-plugin-vorrang/plan.md`](plaene/2026-10-14-analyse-id-plugin-vorrang/plan.md).
 Hostverträge: [`refs/claude-code-plugins-mcp-2026-10-12.md`](refs/claude-code-plugins-mcp-2026-10-12.md),
 [`refs/codex-mcp-spec-rmcp-2026-10-12.md`](refs/codex-mcp-spec-rmcp-2026-10-12.md).
 
@@ -44,6 +46,34 @@ Danach eine neue Agent-Sitzung starten.
 
 Ein Update ersetzt `se` an derselben Stelle; `se mcp` frischt beim nächsten Start die erzeugten
 Plugin- und Skill-Dateien auf (Versions-/Pfadmarker `.se-generated.json`).
+
+## Vorrang vor den Datei-Werkzeugen des Hosts
+
+Ab 0.5.178 empfiehlt sich das Plugin dem Agenten selbst als erste Wahl für jede Dateiaufgabe,
+lokal wie entfernt:
+
+- **Server-Anweisungen** (`instructions` der MCP-Initialisierung): Der erste Absatz verlangt, die
+  Smart-Explorer-Tools vor den eingebauten Datei-Werkzeugen (Read, Write, Edit, Glob, LS) und vor
+  Shell-Dateibefehlen (`ls`, `cat`, `find`, `cp`, `mv`, `rm`, `scp`, `rsync`) zu nutzen. Auf diese
+  weicht der Agent nur aus, wenn ein Smart-Explorer-Tool scheitert oder die Funktion fehlt. Der
+  Absatz ist mit 503 Zeichen in den ersten 512 Zeichen vollständig, die Codex auswertet.
+- **Vorab geladen in Claude Code:** `connections`, `list`, `stat`, `read`, `write`, `edit`,
+  `mkdir`, `remove`, `copy`, `move`, `search` und `job_status` tragen
+  `_meta["anthropic/alwaysLoad"]: true`. Claude Code zeigt sie damit ohne Tool-Suche, ohne den
+  Sitzungsstart aufzuhalten. `exec`, `job_input`, `job_cancel`, `status` und `se` bleiben
+  verzögert; die Anweisungen nennen die Suche nach `smart-explorer`. Wer alle Tools verzögert
+  haben will, setzt im eigenen Servereintrag `"alwaysLoad": false` (ab Claude Code v2.1.287).
+- **Tool-Beschreibungen** nennen jeweils das ersetzte Werkzeug, zum Beispiel „Use it instead of
+  Read or `cat`“.
+- **Skill und Manifest:** Die Skill-Beschreibung (Auslöser in Claude Code und Codex) beginnt mit
+  dem Vorrang. Der Skill führt eine Tabelle Aufgabe → Smart-Explorer-Tool → ersetztes Werkzeug.
+  Die Plugin-Beschreibung in `plugin.json`/`marketplace.json` nennt den Vorrang ebenfalls.
+- Inhaltssuche in Dateien (Grep) und lokale Builds bleiben beim Host, weil `search` nur Namen
+  sucht.
+
+Bestehende Installationen übernehmen das ohne erneutes `se plugin install`. Nach dem Update
+schreibt `se mcp` beim nächsten Start Skill und Plugin-Dateien neu, und die Anweisungen und
+Tool-Metadaten kommen direkt vom Server.
 
 ## Tools
 

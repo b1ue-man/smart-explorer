@@ -5,7 +5,8 @@ Lokal gesicherte API-/Lib-Syntax (Abrufdatum im Kopf jeder Datei).
 - [Claude Code: Plugins und MCP](claude-code-plugins-mcp-2026-10-12.md): Plugin-Manifest,
   `.mcp.json`, Skills, Marketplace-Formate und `claude plugin …`/`claude mcp …`-Befehle,
   Laden lokaler Marketplaces ohne Kopie, MCP-Timeouts/Ausgabegrenzen/Tool Search/
-  `requiresUserInteraction`, Berechtigungsnamen; geprüft 2026-10-12.
+  `requiresUserInteraction`, Berechtigungsnamen; geprüft 2026-10-12. §7 (2026-10-14): `_meta["anthropic/alwaysLoad"]`,
+  Server-`alwaysLoad`, Kürzungsgrenzen 4 096/16 384 Zeichen ab v2.1.296.
 - [Codex, MCP 2026-07-28, rmcp](codex-mcp-spec-rmcp-2026-10-12.md): Codex-Konfiguration,
   Timeouts, Freigaberegeln nach Annotationen, Umgebungsfilter, Skills/Plugins; MCP-Lebenszyklen
   alt/neu, Fortschritt, Abbruch, Annotationen; rmcp 3.5.1 bedient `initialize` und

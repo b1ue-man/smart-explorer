@@ -86,3 +86,29 @@ local, project, user, Plugin, claude.ai-Connector.
 ## 6. Windows
 PATH-/PATHEXT-Auflösung eines MCP-`command` ist nicht dokumentiert. Folgerung für SE: erzeugte
 Konfigurationen tragen den absoluten Pfad der installierten `se`-Datei.
+
+## 7. Nachtrag 2026-10-14: Vorab laden und Längen
+
+Quelle: `https://code.claude.com/docs/en/mcp`, abgerufen 2026-10-14, Abschnitte „Scale with MCP
+tool search“, „Tool search for MCP server authors“, „Mark a tool to load upfront or stay
+deferred“, „Exempt a server from deferral“ und „Defer a server's tools“.
+
+- Tool Search ist Standard. Beim Sitzungsstart laden nur Toolnamen und Server-Anweisungen.
+  Server-Anweisungen sollen sagen, wann Claude die Tools suchen soll.
+- `_meta["anthropic/alwaysLoad"]: true` im `tools/list`-Eintrag eines Tools lädt es vorab. Der
+  Start wartet deswegen nicht auf den Server.
+  - Mit `false` bleibt ein Tool verzögert, auch wenn der Nutzer `"alwaysLoad": true` für den
+    Server setzt. Das gilt für `--mcp-config`, Agent-SDK- und Plugin-Server und erst ab v2.1.285.
+  - Ein Servereintrag mit `"alwaysLoad": false` verzögert alle Tools, auch die vorab markierten.
+    Das gilt ab v2.1.287.
+- Server-weites `"alwaysLoad": true` im Servereintrag lädt alle Tools vorab. Der Start wartet
+  dann auf den Server, höchstens 5 s Verbindungstimeout.
+- Kürzung: Server-Anweisungen und Beschreibungen vorab geladener Tools nach 4 096 Zeichen,
+  Beschreibungen per Tool-Suche geladener Tools nach 16 384 Zeichen. Vor v2.1.296 lag die kürzere
+  Grenze bei 2 048 Zeichen, vor v2.1.295 galt sie für alle Beschreibungen.
+  `CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH` ersetzt beide Grenzen (ab v2.1.280).
+- Die Tabelle in §4 („je 2 048 Zeichen“) beschreibt den Stand vor v2.1.296. SE hält die
+  Anweisungen weiter unter 2 048 Zeichen, damit auch ältere Claude-Code-Versionen sie vollständig
+  zeigen.
+- rmcp 3.5.1: `Tool::with_meta(MetaObject)` serialisiert das Feld als `_meta`
+  (`src/model/tool.rs`, `pub meta: Option<MetaObject>`).
