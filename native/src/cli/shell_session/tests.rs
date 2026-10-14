@@ -319,15 +319,25 @@ fn shell_session_task_local_powershell_keeps_state_across_commands() {
     );
     assert_eq!(first.outcome.status, OutcomeStatus::Completed);
     assert_eq!(first.outcome.exit_code, Some(0), "{}", first.stderr);
-    assert_eq!(first.outcome.cwd.as_deref(), Some("C:\\"));
+    assert_eq!(
+        first.outcome.cwd.as_deref(),
+        Some("C:\\"),
+        "{}",
+        first.stderr
+    );
     let second = run(&client, command("\"$env:SE_X|$myvar|\" + (f one)"));
-    assert_eq!(second.stdout.trim_end(), "kept|v|fn-one");
+    assert_eq!(
+        second.stdout.trim_end(),
+        "kept|v|fn-one",
+        "{}",
+        second.stderr
+    );
     assert_eq!(
         run(&client, command("cmd.exe /c exit 4")).outcome.exit_code,
         Some(4)
     );
     let error = run(&client, command("Write-Error 'boom'"));
-    assert_eq!(error.outcome.exit_code, Some(1));
+    assert_eq!(error.outcome.exit_code, Some(1), "{}", error.stderr);
     assert!(error.stderr.contains("boom"), "{}", error.stderr);
     assert_eq!(
         run(&client, command("throw 'bad'")).outcome.exit_code,
@@ -335,9 +345,14 @@ fn shell_session_task_local_powershell_keeps_state_across_commands() {
     );
     let handled = run(&client, command("try { throw 'x' } catch { 'handled' }"));
     assert_eq!(handled.outcome.exit_code, Some(0), "{}", handled.stderr);
-    assert_eq!(handled.stdout.trim_end(), "handled");
+    assert_eq!(handled.stdout.trim_end(), "handled", "{}", handled.stderr);
     let multi = run(&client, command("foreach ($i in 1..2) {\n  \"line$i\"\n}"));
-    assert_eq!(multi.stdout.replace("\r\n", "\n"), "line1\nline2\n");
+    assert_eq!(
+        multi.stdout.replace("\r\n", "\n"),
+        "line1\nline2\n",
+        "{}",
+        multi.stderr
+    );
     let mut piped = command("$input | ForEach-Object { \"got-$_\" }");
     piped.stdin = StdinMode::Text("data".into());
     assert_eq!(run(&client, piped).stdout.trim_end(), "got-data");
@@ -345,8 +360,8 @@ fn shell_session_task_local_powershell_keeps_state_across_commands() {
     placed.cwd = Some(std::env::temp_dir().display().to_string());
     placed.env.insert("MODE".into(), "x y".into());
     let placed = run(&client, placed);
-    assert_eq!(placed.stdout.trim_end(), "x y");
-    assert!(placed.outcome.cwd.is_some());
+    assert_eq!(placed.stdout.trim_end(), "x y", "stderr: {}", placed.stderr);
+    assert!(placed.outcome.cwd.is_some(), "stderr: {}", placed.stderr);
     let entry = registry::find_in(registry_dir.path(), "pwsh").unwrap();
     assert_eq!(entry.dialect, Dialect::PowerShell);
     let attached = SessionClient::attach(&entry, "attacher").unwrap();
@@ -356,7 +371,7 @@ fn shell_session_task_local_powershell_keeps_state_across_commands() {
     );
     attached.leave();
     let ended = run(&client, command("exit 3"));
-    assert_eq!(ended.outcome.exit_code, Some(3));
-    assert!(ended.outcome.session_ended);
+    assert_eq!(ended.outcome.exit_code, Some(3), "{}", ended.stderr);
+    assert!(ended.outcome.session_ended, "{}", ended.stderr);
     wait_unlisted(registry_dir.path());
 }
