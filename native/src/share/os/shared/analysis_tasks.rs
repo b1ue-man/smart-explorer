@@ -444,18 +444,3 @@ async fn check_explicit_stop(send: &SendStream, task: &Task) {
         task.progress.cancel.store(true, Ordering::Relaxed);
     }
 }
-
-/// Dispatcher calls this when the relationship's authority is narrowed.
-pub(in crate::share) fn cancel_principal(principal: &PeerPrincipal) {
-    tasks()
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .retain(|(peer, _), task| {
-            if peer == principal {
-                task.progress.cancel.store(true, Ordering::Relaxed);
-                false
-            } else {
-                true
-            }
-        });
-}
