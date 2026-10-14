@@ -1,5 +1,6 @@
 //! `exec`: a command on a saved SFTP remote (SSH login) or on a Share peer
-//! that granted this device Exec, run as a job with complete stdout/stderr.
+//! that granted this device Exec, run as a job with complete stdout/stderr;
+//! with `session` in a persistent shell (`exec_session_job.rs`).
 use super::args::Args;
 use super::jobs::Job;
 use super::session::Session;
@@ -18,15 +19,19 @@ pub(super) struct ExecRequest {
 }
 
 impl ExecRequest {
-    pub(super) fn summary(&self) -> String {
-        let command = match &self.command {
+    /// The command as one line, for summaries.
+    pub(super) fn command_text(&self) -> String {
+        match &self.command {
             ExecCommand::Shell { command } => command.clone(),
             ExecCommand::Argv { program, args } => std::iter::once(program.as_str())
                 .chain(args.iter().map(String::as_str))
                 .collect::<Vec<_>>()
                 .join(" "),
-        };
-        let mut summary = format!("exec on {}: {command}", self.selector);
+        }
+    }
+
+    pub(super) fn summary(&self) -> String {
+        let mut summary = format!("exec on {}: {}", self.selector, self.command_text());
         if summary.chars().count() > 160 {
             summary = summary
                 .chars()
@@ -52,8 +57,17 @@ pub(super) fn start(session: &Session, args: &Args<'_>) -> Result<Arc<Job>, Stri
                     .into(),
             ),
         };
+    let session_name = args
+        .opt_string("session")?
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty());
+    // An open session needs no target; opening one does.
+    let selector = match &session_name {
+        Some(_) => args.opt_string("target")?.unwrap_or_default(),
+        None => args.string("target")?,
+    };
     let request = ExecRequest {
-        selector: args.string("target")?,
+        selector,
         command,
         cwd: args.opt_string("cwd")?.filter(|cwd| !cwd.is_empty()),
         env: args.string_map("env")?,
@@ -63,6 +77,13 @@ pub(super) fn start(session: &Session, args: &Args<'_>) -> Result<Arc<Job>, Stri
             .opt_u64("timeout_seconds")?
             .filter(|seconds| *seconds > 0),
     };
+    if let Some(name) = session_name {
+        let attachable = match args.value("attachable") {
+            None => true,
+            Some(_) => args.flag("attachable")?,
+        };
+        return super::exec_session_job::start(session, request, name, attachable);
+    }
     match crate::cli::exec_ssh::ssh_target(&request.selector)? {
         Some(target) => super::exec_ssh_job::start(session, target, request),
         None => super::exec_share_job::start(session, request),

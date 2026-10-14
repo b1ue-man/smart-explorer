@@ -19,10 +19,13 @@ rsync); fall back to those only when a Smart Explorer tool fails or lacks the \
 feature. It reaches saved remotes (SFTP, FTP/FTPS, WebDAV, SMB, Windows \
 shares), Google Drive, Share peers and local disks.
 
-It also runs commands on saved SSH remotes and authorized Share peers (`exec`). \
-Start with `connections` to see targets. Long work returns a job_id: follow it \
-with job_status. Tools not loaded yet (exec, job_input, job_cancel, status, se) \
-are found by a tool search for `smart-explorer`.
+It also runs commands on saved SSH remotes and authorized Share peers (`exec`); \
+with `session` a persistent shell keeps working directory, environment and \
+shell state between calls, and `sessions` joins the user's `se shell \
+--attachable` terminals. Start with `connections` to see targets. Long work \
+returns a job_id: follow it with job_status. Tools not loaded yet (exec, \
+job_input, job_cancel, sessions, status, se) are found by a tool search for \
+`smart-explorer`.
 
 Targets: absolute local paths, `@label:/path` (saved remote, path below its \
 root), saved `sftp://user@host:port/path` endpoints, `share://direct/<id>/path`, \
@@ -132,19 +135,21 @@ pub(super) fn tools() -> Vec<Tool> {
                 "max_bytes": {"type": "integer", "minimum": 1024, "description": MAX_BYTES}
             }), &["target", "query"], read_only(true)),
         tool("exec", "Run a remote command",
-            "Runs a command on a saved SFTP remote over its SSH login (`@label`, `@label:/dir` = working directory, or its saved sftp:// endpoint; through the remote login shell like `ssh host 'cmd'`) or on a Share peer that granted this device Exec (peer name, id or share:// endpoint). Give `command` (one shell string) or `argv` (program and literal arguments; POSIX-quoted on SSH remotes). No time or output limit unless you set one; stdout/stderr are kept completely and paged. Exit status, signal and timing are reported; cancel with job_cancel.",
+            "Runs a command on a saved SFTP remote over its SSH login (`@label`, `@label:/dir` = working directory, or its saved sftp:// endpoint; through the remote login shell like `ssh host 'cmd'`) or on a Share peer that granted this device Exec (peer name, id or share:// endpoint). Give `command` (one shell string) or `argv` (program and literal arguments; POSIX-quoted on SSH remotes). No time or output limit unless you set one; stdout/stderr are kept completely and paged. Exit status, signal and timing are reported; cancel with job_cancel. With `session` (a name) the command runs in a persistent shell instead: the first call opens it on `target`, later calls keep its working directory, environment, variables and functions (no PTY; the result adds `cwd` and `session_ended`). The user can join it with `se shell --attach` unless `attachable` is false; `sessions` lists and closes sessions and joins the user's `se shell --attachable` terminals. Cancel or timeout end the whole session.",
             json!({
-                "target": {"type": "string", "description": "Share peer selector or share:// endpoint, or a saved SFTP remote as @label[:/dir] or its sftp:// endpoint."},
+                "target": {"type": "string", "description": "Share peer selector or share:// endpoint, or a saved SFTP remote as @label[:/dir] or its sftp:// endpoint. Required unless `session` names an open session."},
                 "command": {"type": "string", "description": "Shell command line, run by the remote user's shell."},
                 "argv": {"type": "array", "items": {"type": "string"}, "minItems": 1, "description": "Program and literal arguments, instead of `command`."},
                 "cwd": {"type": "string", "description": "Working directory (default: the remote user's home)."},
                 "env": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Extra environment variables."},
                 "stdin": {"type": "string", "description": "Text written to the command's standard input, followed by end-of-input unless `keep_stdin_open`."},
                 "keep_stdin_open": {"type": "boolean", "description": "Leave standard input open for job_input."},
-                "timeout_seconds": {"type": "integer", "minimum": 1, "description": "Stop the command after this many seconds (default: no limit)."},
+                "timeout_seconds": {"type": "integer", "minimum": 1, "description": "Stop the command after this many seconds (default: no limit); in a session this ends the session."},
+                "session": {"type": "string", "description": "Persistent shell session name (letters, digits, '-', '_', '.'): opened on `target` by the first call, reused by later ones; also a session joined with `sessions`. Input goes as `stdin` (keep_stdin_open is not available)."},
+                "attachable": {"type": "boolean", "description": "Only when the call opens a session: let the user's `se shell --attach` and other agents join it (default true)."},
                 "wait_seconds": {"type": "integer", "minimum": 0, "description": WAIT},
                 "max_bytes": {"type": "integer", "minimum": 1024, "description": MAX_BYTES}
-            }), &["target"], changes(true, false)),
+            }), &[], changes(true, false)),
         tool("job_status", "Follow jobs",
             "Without job_id: every job of this session. With job_id: state, progress, result and the next page of each output stream from the given offsets; `wait_seconds` waits for new output or the end first.",
             json!({
@@ -176,6 +181,12 @@ pub(super) fn tools() -> Vec<Tool> {
                 "wait_seconds": {"type": "integer", "minimum": 0, "description": WAIT},
                 "max_bytes": {"type": "integer", "minimum": 1024, "description": MAX_BYTES}
             }), &["args"], changes(true, false)),
+        tool("sessions", "Persistent shell sessions",
+            "Lists this server's persistent shell sessions (`exec` with `session`) and the user's other attachable sessions (`se shell --attachable` terminals, other agents). `attach` joins one by name or id; afterwards `exec` with that `session` runs in its shared working directory, environment and shell state. `activity` returns what the other participants ran and printed there since the last call. `close` ends a session this server opened or detaches from a joined one. Only sessions of the same OS user are visible.",
+            json!({
+                "action": {"type": "string", "enum": ["list", "attach", "activity", "close"], "description": "list (default), attach, activity or close."},
+                "session": {"type": "string", "description": "Session name or id; needed for attach, activity and close."}
+            }), &[], changes(false, true)),
     ];
     tools.into_iter().map(upfront).collect()
 }
@@ -289,7 +300,8 @@ mod tests {
                 "job_status",
                 "job_input",
                 "job_cancel",
-                "se"
+                "se",
+                "sessions"
             ]
         );
         assert!(INSTRUCTIONS.len() <= 2_048, "{}", INSTRUCTIONS.len());
@@ -319,7 +331,7 @@ mod tests {
                 .cloned();
             let file_tool = !matches!(
                 tool.name.as_ref(),
-                "exec" | "job_input" | "job_cancel" | "status" | "se"
+                "exec" | "job_input" | "job_cancel" | "status" | "se" | "sessions"
             );
             assert_eq!(
                 upfront,

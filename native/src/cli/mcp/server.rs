@@ -8,7 +8,7 @@ use super::session::Session;
 use super::update_stop::UpdateStop;
 use super::{
     catalog, cli_tool, exec_tool, file_tools, file_write, job_view, response, search_tool,
-    status_tools, transfer_tools,
+    sessions_tool, status_tools, transfer_tools,
 };
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, Implementation, ListToolsResult,
@@ -131,6 +131,10 @@ async fn dispatch(
         "job_status" => job_view::status_tool(session, &args, context).await,
         "job_input" => job_view::input_tool(session, &args),
         "job_cancel" => job_view::cancel_tool(session, &args, context).await,
+        "sessions" => {
+            blocking(move || sessions_tool::sessions(&session_for_work, &Args::new(owned.as_ref())))
+                .await
+        }
         other => Err(format!("unknown tool `{other}`")),
     }
 }

@@ -1,18 +1,23 @@
 //! State of one `se mcp` process: its private session directory (job output
-//! spools, guarded by a held lock file), the job registry, reused logins and
-//! the path of the running `se` executable. Directories of sessions whose
-//! process is gone (no lock holder) are removed at the next start.
+//! spools, guarded by a held lock file), the job registry, reused logins, its
+//! persistent shell sessions and the path of the running `se` executable.
+//! Directories of sessions whose process is gone (no lock holder) are removed
+//! at the next start.
 use super::jobs::JobRegistry;
+use super::shell_registry::ShellRegistry;
 use super::targets::Targets;
 use std::fs::File;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 const LOCK_FILE: &str = "session.lock";
 
 pub(super) struct Session {
     pub(super) directory: PathBuf,
     pub(super) jobs: JobRegistry,
-    pub(super) targets: Targets,
+    pub(super) targets: Arc<Targets>,
+    /// Shell sessions this server opened or joined (`exec` with `session`).
+    pub(super) shells: Arc<ShellRegistry>,
     /// The installed `se` that serves this session; the `se` tool runs it.
     pub(super) executable: PathBuf,
     lock: std::sync::Mutex<Option<File>>,
@@ -40,15 +45,17 @@ impl Session {
             .map_err(|error| format!("cannot determine the se executable: {error}"))?;
         Ok(Self {
             jobs: JobRegistry::new(&directory),
-            targets: Targets::default(),
+            targets: Arc::default(),
+            shells: Arc::default(),
             directory,
             executable,
             lock: std::sync::Mutex::new(Some(lock)),
         })
     }
 
-    /// Cancels running jobs, waits up to `grace` for them to stop and removes
-    /// the session directory.
+    /// Cancels running jobs, waits up to `grace` for them to stop, ends own
+    /// shell sessions and leaves joined ones, and removes the session
+    /// directory.
     pub(super) fn close(&self, grace: std::time::Duration) {
         let running = self.jobs.cancel_running();
         let deadline = std::time::Instant::now() + grace;
@@ -56,6 +63,7 @@ impl Session {
         {
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
+        self.shells.close_all();
         if let Ok(mut lock) = self.lock.lock() {
             drop(lock.take());
         }
