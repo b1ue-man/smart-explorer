@@ -1,3 +1,7 @@
+#[path = "exec_conpty.rs"]
+mod exec_conpty;
+#[path = "exec_handles.rs"]
+mod exec_handles;
 #[cfg(debug_assertions)]
 #[path = "exec_self_test.rs"]
 mod exec_self_test;
@@ -13,9 +17,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Mutex};
 use std::time::{Duration, Instant};
 
-use windows_sys::Win32::Foundation::{
-    CloseHandle, SetHandleInformation, HANDLE, HANDLE_FLAG_INHERIT,
-};
+use windows_sys::Win32::Foundation::{SetHandleInformation, HANDLE, HANDLE_FLAG_INHERIT};
 use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
 use windows_sys::Win32::System::JobObjects::{
     CreateJobObjectW, JobObjectBasicAccountingInformation, JobObjectExtendedLimitInformation,
@@ -25,12 +27,12 @@ use windows_sys::Win32::System::JobObjects::{
 };
 use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::{
-    CreateProcessW, DeleteProcThreadAttributeList, InitializeProcThreadAttributeList, ResumeThread,
-    UpdateProcThreadAttribute, CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT,
+    CreateProcessW, ResumeThread, CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT,
     EXTENDED_STARTUPINFO_PRESENT, PROCESS_INFORMATION, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
     PROC_THREAD_ATTRIBUTE_JOB_LIST, STARTF_USESTDHANDLES, STARTUPINFOEXW,
 };
 
+use self::exec_handles::{AttributeList, OwnedHandle};
 use crate::share::exec_platform::StopReason;
 use crate::share::exec_supervisor_protocol::{
     recv_event, send_command, SupervisorCommand, SupervisorEvent,
@@ -213,6 +215,12 @@ pub(crate) fn provider_status() -> ExecProviderStatus {
     }
 }
 
+/// True when this Windows has the pseudoconsole (ConPTY, Windows 10 1809 and
+/// newer), so an Exec start may bring a terminal. Resolved once; cheap.
+pub(crate) fn terminal_supported() -> bool {
+    exec_conpty::terminal_supported()
+}
+
 pub(crate) fn run_supervisor_if_requested(arguments: &[OsString]) -> Option<io::Result<()>> {
     #[cfg(debug_assertions)]
     if let Some(result) = exec_self_test::run_helper_if_requested(arguments) {
@@ -387,97 +395,6 @@ fn process_is_elevated() -> bool {
         )
     };
     ok != 0 && elevation.TokenIsElevated != 0
-}
-
-struct AttributeList {
-    bytes: Vec<usize>,
-    initialized: bool,
-}
-
-impl AttributeList {
-    fn new(count: u32) -> io::Result<Self> {
-        let mut size = 0usize;
-        unsafe { InitializeProcThreadAttributeList(std::ptr::null_mut(), count, 0, &mut size) };
-        if size == 0 {
-            return Err(io::Error::last_os_error());
-        }
-        let words = size.div_ceil(size_of::<usize>());
-        let mut value = Self {
-            bytes: vec![0; words],
-            initialized: false,
-        };
-        if unsafe { InitializeProcThreadAttributeList(value.ptr(), count, 0, &mut size) } == 0 {
-            return Err(io::Error::last_os_error());
-        }
-        value.initialized = true;
-        Ok(value)
-    }
-
-    fn ptr(&mut self) -> windows_sys::Win32::System::Threading::LPPROC_THREAD_ATTRIBUTE_LIST {
-        self.bytes.as_mut_ptr().cast()
-    }
-
-    fn set(
-        &mut self,
-        attribute: usize,
-        value: *const core::ffi::c_void,
-        size: usize,
-    ) -> io::Result<()> {
-        if unsafe {
-            UpdateProcThreadAttribute(
-                self.ptr(),
-                0,
-                attribute,
-                value,
-                size,
-                std::ptr::null_mut(),
-                std::ptr::null(),
-            )
-        } == 0
-        {
-            Err(io::Error::last_os_error())
-        } else {
-            Ok(())
-        }
-    }
-}
-
-impl Drop for AttributeList {
-    fn drop(&mut self) {
-        if self.initialized {
-            unsafe { DeleteProcThreadAttributeList(self.ptr()) };
-        }
-    }
-}
-
-struct OwnedHandle(HANDLE);
-
-impl OwnedHandle {
-    fn new(handle: HANDLE) -> io::Result<Self> {
-        if handle.is_null() {
-            Err(io::Error::last_os_error())
-        } else {
-            Ok(Self(handle))
-        }
-    }
-
-    fn raw(&self) -> HANDLE {
-        self.0
-    }
-
-    fn into_raw(mut self) -> HANDLE {
-        let raw = self.0;
-        self.0 = std::ptr::null_mut();
-        raw
-    }
-}
-
-impl Drop for OwnedHandle {
-    fn drop(&mut self) {
-        if !self.0.is_null() {
-            unsafe { CloseHandle(self.0) };
-        }
-    }
 }
 
 #[cfg(test)]

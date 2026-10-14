@@ -1,3 +1,4 @@
+use std::fs::File;
 use std::io::{self, Read};
 use std::os::windows::process::CommandExt;
 use std::process::{ChildStdin, Command, Stdio};
@@ -5,10 +6,14 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
+use super::exec_conpty::{self, Conpty, Program};
 use crate::share::exec_supervisor_protocol::{
     recv_command, send_event, SupervisorCommand, SupervisorEvent, SupervisorExit, SupervisorStart,
 };
 use crate::share::exec_types::ExecCommand;
+
+/// Keyboard chunks (each at most 64 KiB) waiting for the terminal input pipe.
+const TERMINAL_INPUT_QUEUE: usize = 64;
 
 pub(super) fn run() -> io::Result<()> {
     let mut input = std::io::stdin();
@@ -18,6 +23,9 @@ pub(super) fn run() -> io::Result<()> {
     };
     start.request.validate()?;
     let output = Arc::new(Mutex::new(std::io::stdout()));
+    if start.request.terminal.is_some() {
+        return run_terminal(&start, input, output);
+    }
     let mut child = match spawn(&start) {
         Ok(child) => child,
         Err(error) => {
@@ -53,16 +61,7 @@ pub(super) fn run() -> io::Result<()> {
         true,
     )?;
 
-    let (command_tx, command_rx) = mpsc::sync_channel(16);
-    std::thread::Builder::new()
-        .name("exec-supervisor-input".into())
-        .spawn(move || loop {
-            let result = recv_command(&mut input);
-            let terminal = result.is_err() || matches!(result, Ok(SupervisorCommand::Cancel));
-            if command_tx.send(result).is_err() || terminal {
-                break;
-            }
-        })?;
+    let command_rx = spawn_command_reader(input)?;
 
     let mut stdin = child.stdin.take();
     loop {
@@ -82,6 +81,8 @@ pub(super) fn run() -> io::Result<()> {
         match command_rx.recv_timeout(Duration::from_millis(20)) {
             Ok(Ok(SupervisorCommand::Stdin(data))) => write_stdin(&mut stdin, &data)?,
             Ok(Ok(SupervisorCommand::StdinEof)) => drop(stdin.take()),
+            // Only a terminal start is resized; the host never sends it otherwise.
+            Ok(Ok(SupervisorCommand::Resize(_))) => {}
             Ok(Ok(SupervisorCommand::Cancel))
             | Ok(Err(_))
             | Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -94,6 +95,161 @@ pub(super) fn run() -> io::Result<()> {
                 return Err(invalid("duplicate supervisor start frame"));
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
+        }
+    }
+}
+
+/// Terminal start: the login shell runs in a pseudoconsole (ConPTY). Its
+/// output becomes `Stdout` events, `Stdin` commands become keyboard bytes and
+/// `Resize` commands resize the pseudoconsole. `StdinEof` has no effect: a
+/// terminal has no end of input. The host's Job Object ends whatever survives
+/// this supervisor.
+fn run_terminal(
+    start: &SupervisorStart,
+    input: std::io::Stdin,
+    output: Arc<Mutex<std::io::Stdout>>,
+) -> io::Result<()> {
+    let (mut conpty, pty_output, pty_input) = match launch_terminal(start) {
+        Ok(launched) => launched,
+        Err(error) => {
+            let _ = send_locked(&output, SupervisorEvent::Error(error.to_string()));
+            return Ok(());
+        }
+    };
+    let result = serve_terminal(start, &mut conpty, input, pty_output, pty_input, &output);
+    // However the session ended, nothing of it may stay: end the root process
+    // (nothing to do once it exited) and close the pseudoconsole (nothing to
+    // do once it is closed).
+    let _ = conpty.terminate();
+    let _ = conpty.close_console();
+    result
+}
+
+fn launch_terminal(start: &SupervisorStart) -> io::Result<(Conpty, File, File)> {
+    let terminal = start
+        .request
+        .terminal
+        .as_ref()
+        .ok_or_else(|| invalid("terminal start without a terminal"))?;
+    let program = match &start.request.command {
+        ExecCommand::Login => Program::login_shell()?,
+        ExecCommand::Argv { .. } | ExecCommand::Shell { .. } => {
+            return Err(invalid("a terminal needs the login shell"));
+        }
+    };
+    exec_conpty::start(
+        &program,
+        &start.environment,
+        working_directory(start),
+        terminal.size,
+    )
+}
+
+fn serve_terminal(
+    start: &SupervisorStart,
+    conpty: &mut Conpty,
+    input: std::io::Stdin,
+    pty_output: File,
+    pty_input: File,
+    output: &Arc<Mutex<std::io::Stdout>>,
+) -> io::Result<()> {
+    send_locked(
+        output,
+        SupervisorEvent::Started {
+            pid: conpty.process_id(),
+        },
+    )?;
+    let truncated = Arc::new(AtomicBool::new(false));
+    let reader = spawn_output(
+        pty_output,
+        output.clone(),
+        Arc::new(AtomicU64::new(0)),
+        truncated.clone(),
+        start.request.effective_max_output_bytes(),
+        false,
+    )?;
+    let keys = spawn_terminal_input(pty_input)?;
+    let commands = spawn_command_reader(input)?;
+    let code = loop {
+        if let Some(code) = conpty.wait(Duration::ZERO)? {
+            break code;
+        }
+        match commands.recv_timeout(Duration::from_millis(20)) {
+            Ok(Ok(SupervisorCommand::Stdin(data))) => queue_terminal_input(conpty, &keys, data)?,
+            Ok(Ok(SupervisorCommand::StdinEof)) => {}
+            Ok(Ok(SupervisorCommand::Resize(size))) => {
+                // A failed resize keeps the previous size; the next one replaces it.
+                let _ = conpty.resize(size);
+            }
+            Ok(Ok(SupervisorCommand::Cancel))
+            | Ok(Err(_))
+            | Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
+            Ok(Ok(SupervisorCommand::Start(_))) => {
+                return Err(invalid("duplicate supervisor start frame"));
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+        }
+    };
+    let mut exit = SupervisorExit {
+        code: Some(code as i32),
+        signal: None,
+        output_truncated: false,
+    };
+    send_locked(output, SupervisorEvent::RootExited(exit.clone()))?;
+    // Closing the pseudoconsole flushes its last output and breaks the output
+    // pipe. It runs on its own thread (before Windows 11 24H2 it waits for the
+    // output to be drained) while this thread's reader keeps reading.
+    let _ = conpty.close_console();
+    join_output(reader)?;
+    exit.output_truncated = truncated.load(Ordering::Acquire);
+    send_locked(output, SupervisorEvent::Exited(exit))
+}
+
+/// Writes keyboard bytes to the pseudoconsole input on its own thread, so a
+/// shell that does not read never blocks the command loop.
+fn spawn_terminal_input(mut pty_input: File) -> io::Result<mpsc::SyncSender<Vec<u8>>> {
+    use std::io::Write;
+    let (keys, queue) = mpsc::sync_channel::<Vec<u8>>(TERMINAL_INPUT_QUEUE);
+    std::thread::Builder::new()
+        .name("exec-terminal-input".into())
+        .spawn(move || {
+            while let Ok(data) = queue.recv() {
+                if pty_input.write_all(&data).is_err() {
+                    break;
+                }
+            }
+        })?;
+    Ok(keys)
+}
+
+fn queue_terminal_input(
+    conpty: &Conpty,
+    keys: &mpsc::SyncSender<Vec<u8>>,
+    mut data: Vec<u8>,
+) -> io::Result<()> {
+    loop {
+        match keys.try_send(data) {
+            Ok(()) => return Ok(()),
+            Err(mpsc::TrySendError::Full(returned)) => {
+                // The shell is not reading its input. Later commands wait
+                // behind this one, but the end of the shell is still noticed.
+                if conpty.wait(Duration::from_millis(5))?.is_some() {
+                    return Ok(());
+                }
+                data = returned;
+            }
+            Err(mpsc::TrySendError::Disconnected(_)) => {
+                // The input pipe broke: the shell just ended (the command loop
+                // sees that next) or the pseudoconsole is gone.
+                return if conpty.wait(Duration::ZERO)?.is_some() {
+                    Ok(())
+                } else {
+                    Err(io::Error::new(
+                        io::ErrorKind::BrokenPipe,
+                        "terminal input closed",
+                    ))
+                };
+            }
         }
     }
 }
@@ -117,6 +273,7 @@ fn spawn(start: &SupervisorStart) -> io::Result<std::process::Child> {
             shell_command.raw_arg(command);
             shell_command
         }
+        ExecCommand::Login => return Err(invalid("an interactive login shell needs a terminal")),
     };
     command
         .env_clear()
@@ -125,16 +282,38 @@ fn spawn(start: &SupervisorStart) -> io::Result<std::process::Child> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
-    if let Some(cwd) = start.request.cwd.as_deref().or_else(|| {
+    if let Some(cwd) = working_directory(start) {
+        command.current_dir(cwd);
+    }
+    command.spawn()
+}
+
+/// The requested working directory, else the user's profile directory.
+fn working_directory(start: &SupervisorStart) -> Option<&str> {
+    start.request.cwd.as_deref().or_else(|| {
         start
             .environment
             .get("USERPROFILE")
             .filter(|home| !home.is_empty())
             .map(String::as_str)
-    }) {
-        command.current_dir(cwd);
-    }
-    command.spawn()
+    })
+}
+
+/// Reads the host's commands on a thread; it ends after an error or `Cancel`.
+fn spawn_command_reader(
+    mut input: std::io::Stdin,
+) -> io::Result<mpsc::Receiver<io::Result<SupervisorCommand>>> {
+    let (command_tx, command_rx) = mpsc::sync_channel(16);
+    std::thread::Builder::new()
+        .name("exec-supervisor-input".into())
+        .spawn(move || loop {
+            let result = recv_command(&mut input);
+            let terminal = result.is_err() || matches!(result, Ok(SupervisorCommand::Cancel));
+            if command_tx.send(result).is_err() || terminal {
+                break;
+            }
+        })?;
+    Ok(command_rx)
 }
 
 fn spawn_output<R: Read + Send + 'static>(
