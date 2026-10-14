@@ -27,9 +27,9 @@ build.
 
 The `smart-explorer` MCP server (tools `connections`, `list`, `stat`, `read`,
 `write`, `edit`, `mkdir`, `remove`, `copy`, `move`, `search`, `exec`,
-`job_status`, `job_input`, `job_cancel`, `status`, `se`) uses the same saved
-connections, credentials and background worker as the user's Smart Explorer
-app and `se` terminal command.
+`job_status`, `job_input`, `job_cancel`, `sessions`, `status`, `se`) uses the
+same saved connections, credentials and background worker as the user's Smart
+Explorer app and `se` terminal command.
 
 ## Workflow
 
@@ -48,6 +48,13 @@ app and `se` terminal command.
    the returned `next_offset`), send input with `job_input`, stop with
    `job_cancel`. `job_status` without `job_id` lists all jobs.
 5. Large or binary files: `copy` them to a local path instead of `read`.
+6. Several commands that build on each other (cd, export, activated
+   environments): give `exec` a `session` name. The first call opens a
+   persistent shell on `target`; later calls with the same `session` keep its
+   working directory, environment and shell state and need no `target`. The
+   user can watch or join it with `se shell --attach <name>`; `sessions`
+   (`activity`) shows what others ran there, `close` ends it. Cancel or a
+   timeout end the whole session.
 
 ## Rules
 
@@ -60,6 +67,9 @@ app and `se` terminal command.
   with the user.
 - Change Share trust only on the user's explicit request: accepting access
   requests, enabling Exec grants, discoverable mode, adding peers or rooms.
+- Join a user's terminal session (`sessions` with `attach`, listed when they
+  started `se shell --attachable`) only when the user asks for it: it shares
+  their shell, including what they changed or elevated there.
 - When something fails, call `status`; it shows the background worker, Share
   connectivity and credential store state.
 - Any other Smart Explorer function is reachable through the `se` tool, e.g.

@@ -1,6 +1,6 @@
 # Smart Explorer – Architektur
 
-Stand: 2026-10-12. Kurzüberblick als erster Einstieg; Details liefert der Code-Graph
+Stand: 2026-10-14. Kurzüberblick als erster Einstieg; Details liefert der Code-Graph
 (`graphify query "…"`, siehe AGENTS.md) und die Lesungen unter `docs/lesungen/`.
 
 ## Zweck
@@ -51,6 +51,7 @@ Speicheranalyse – als Desktop-App (Windows, Linux; Rust + egui) und als Androi
 | Analyse-Bedienung auf dem Desktop | `app/core/analytics_controls_ui.rs` für Auswahl, Navigation, Fortschritt und Cancel; `analytics_ui.rs` für Treemap und nachgelagerte Aktionen |
 | Agent-Wire-Framing | `agent_proto/core/types.rs` definiert `Frame`/`PROTO_VERSION`; `codec.rs` reexportiert den Encoder/Decoder aus `frame_io.rs`. Bestehende Vault-Szenarien liegen in `vault_frame_task_tests.rs` mit privaten I/O-Probes in `vault_frame_fixture.rs`. |
 | KI-Agenten (MCP-Server, Plugins) | `se mcp`: `native/src/cli/mcp.rs` + `cli/mcp/` (rmcp-Server `server.rs`, Katalog `catalog.rs`, Jobs `jobs.rs`/`wait.rs`/`job_view.rs`, Spools `spool.rs`, Ziele mit wiederverwendeter Anmeldung `targets.rs`, Tools `file_tools.rs`/`file_write.rs`/`transfer_tools.rs`/`search_tool.rs`/`exec_*`/`cli_tool.rs`/`status_tools.rs`, Update-Stopp `update_stop.rs`, geschützter Protokollkanal `os/`); `se plugin`: `cli/plugin.rs` + `cli/plugin/` (Claude-Marketplace, Codex-Eintrag, Skill `assets/SKILL.md`); SSH-Befehle `sftp/core/command.rs`, `connect/os/shared/ssh_session.rs`, `cli/exec_ssh.rs`; abbrechbarer Kopierpfad `cli/tree_observer.rs`. Doku `docs/AI_AGENT_PLUGIN.md` |
+| Dauerhafte Shell-Sitzungen, Anhängen | `native/src/cli/shell_session.rs` + `cli/shell_session/` (Endmarken `marker.rs`, Dialekte POSIX/PowerShell und Probe `dialect.rs`, Transporte SSH/Share `transports.rs`, Zustandsmaschine `engine_state.rs`, Teilnehmer und Threads `engine.rs`, Loopback-Anhängedienst mit Token-Anmeldung `server.rs`, Rahmen `wire.rs`, Client `client.rs`, Öffnen `host.rs`, besitzergeschützte Einträge `registry.rs` unter `<App-Daten>/shell-sessions/`); CLI `cli/shell.rs` + `cli/shell_repl.rs`; MCP `cli/mcp/{exec_session_job,shell_registry,sessions_tool}.rs`. Plan `docs/plaene/2026-10-14-analyse-id-plugin-vorrang/plan.md` (R4) |
 | Links in `se` (Suche, Kopieren, Verschieben) | Eintragsart `cli/entry_kind.rs`; Namenssuche `cli/search.rs` (Links/Sonderdateien als Treffer, nie betreten); ausgelassene Einträge im Baumplan `cli/tree_plan.rs` (`TransferPlan::omitted`), behaltene Quellordner `cli/tree_remove.rs`, Ergebnis `TreeOutcome` in `cli/tree_ops.rs`; ausdrücklich genannte Links `cli/link_paths.rs`; Umbenennen von Ordnern/Links und `Unsupported`-Rückfall `cli/transfer.rs::try_rename_fast`; private Inhaltsdatei `cli/private_file.rs`. Plan `docs/plaene/2026-10-12-links-in-se/plan.md` |
 | Updates | Desktop `native/src/updater/`, Terminal `se update` `cli/update.rs` → `updater/os/shared/terminal.rs` (Feed-Prüfung, Installationsart, Ersatz an Ort und Stelle), Android `update.*` in `native/src/mobile/os/shared/domains/` |
 | Release | `native/publish-release-local.ps1` (einziger Einstieg), `docs/RELEASING.md` |
@@ -117,6 +118,10 @@ Android-APIs: `docs/refs/android-apis.md`, `docs/refs/android-platform.md`; CI: 
 - KI-Agenten-Plugin 2026-10-12: `ai-plugin-task.yml` → `native/test-ai-plugin-task.py` (Präfix
   `mcp_task_`, Linux/Windows mit MCP-E2E über beide Protokoll-Lebenszyklen, SSH-/Share-Exec,
   echten `claude`-/`codex`-CLIs, plus Android-Build). Plan: `docs/plaene/2026-10-12-ki-agenten-plugin/`.
+- Analyse-ID, Plugin-Vorrang und Shell-Sitzungen 2026-10-14: `analysis-plugin-task.yml` →
+  `native/test-analysis-plugin-task.py` (Präfixe `analysis_id_task_`, `mcp_task_`,
+  `shell_session_task_`; Linux mit OpenSSH-Container und Share-Paar, Windows mit lokaler
+  PowerShell). Plan: `docs/plaene/2026-10-14-analyse-id-plugin-vorrang/`.
 - Sync-Transparenz 2026-10-08: `sync-transparency-task.yml` → `native/test-sync-transparency-task.py`
   (Präfix `sync_transparency_task_`, Linux/Windows plus Android-Build). Plan: `docs/plaene/2026-10-08-sync-transparenz/`.
 - Sync-Verlässlichkeit: `sync-reliability-task.yml` → `native/test-sync-reliability-task.py`

@@ -692,6 +692,21 @@ Tool-Suche. `se exec @label[:/ordner] -- befehl` führt Befehle auch im
 Terminal über die SSH-Anmeldung einer gespeicherten SFTP-Verbindung aus.
 Details: [`docs/AI_AGENT_PLUGIN.md`](docs/AI_AGENT_PLUGIN.md).
 
+**Dauerhafte Shells und Anhängen (ab 0.5.178):** `se shell @label[:/ordner]` oder
+`se shell PEER` öffnet eine dauerhafte Shell auf einer gespeicherten SSH-Verbindung
+oder einem Share-Peer mit Exec-Freigabe. Jede Zeile ist ein Befehl; `cd`, `export`,
+Variablen und Funktionen bleiben wie in einer SSH-Sitzung erhalten (Linux, Android
+und SSH-Server über `bash -l` bzw. `sh -l`, Windows-Gegenstellen über Windows
+PowerShell; kein PTY). KI-Agenten nutzen dasselbe über `exec` mit `session`.
+Shells und Sitzungen lassen sich gegenseitig anhängen: `se shell --list` zeigt die
+anhängbaren Sitzungen des eigenen Benutzers, `se shell --attach NAME` tritt einer
+bei, etwa der eines KI-Agenten (dessen Befehle und Ausgaben erscheinen mit
+`[se mcp (pid …)]`), und eine mit `se shell … --attachable` geöffnete Shell kann ein
+Agent über sein Tool `sessions` übernehmen. Ohne `--attachable` kann niemand einer
+`se shell` beitreten; nur Prozesse desselben Betriebssystembenutzers sehen
+Sitzungen. Befehle laufen nacheinander im gemeinsamen Zustand; Strg+C beendet die
+Sitzung für alle, Strg+D schließt die eigene bzw. löst eine angehängte.
+
 **Lokales Netz ohne Server (Teilen → Netzwerk):** gekoppelte Geraete kuendigen ihre
 Iroh-Adresse per mDNS (`_se-share._udp`) an und finden sich damit auch ohne
 erreichbaren Share-Server — etwa ueber ein direktes Kabel oder ein isoliertes
