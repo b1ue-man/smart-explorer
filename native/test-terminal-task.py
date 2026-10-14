@@ -292,10 +292,16 @@ def plain(text):
     return ANSI.sub("", text)
 
 
+# What a shell writes between the line feed that ends the echo of a typed command and the
+# first line of the command's output: bash (readline) switches bracketed paste off there with
+# ESC[?2004l and a carriage return. Allowed: any CSI sequences, then one carriage return.
+OUTPUT_START = r"(?:\x1b\[[0-?]*[ -/]*[@-~])*\r?"
+
+
 def out_line(text):
     """Pattern for `text` alone on a line of terminal output; the echo of a typed
     command that merely contains it does not match."""
-    return r"(?:^|\n)" + re.escape(text) + r"\r?\n"
+    return r"(?:^|\n)" + OUTPUT_START + re.escape(text) + r"\r?\n"
 
 
 # --------------------------------------------------------------------------- terminals
@@ -567,7 +573,7 @@ def run_checks(results, stage, term, checks):
 def check_tty(term):
     since = sync(term)
     term.send("tty\r")
-    return term.wait(r"\n(/dev/pts/\d+)\r?\n", since, 20, what="tty output").group(1)
+    return term.wait(r"\n" + OUTPUT_START + r"(/dev/pts/\d+)\r?\n", since, 20, what="tty output").group(1)
 
 
 def check_raw_while_running(term):
@@ -647,7 +653,7 @@ def check_nvim(term):
 def check_password(term):
     since = sync(term)
     term.send("python3 -c \"import getpass;print('got:'+getpass.getpass('pw: '))\"\r")
-    term.wait(r"\npw: ", since, 40, what="the password prompt")
+    term.wait(r"\n" + OUTPUT_START + "pw: ", since, 40, what="the password prompt")
     after_prompt = term.mark()
     term.send("secret\r")
     term.wait("got:secret", after_prompt, 20, what="got:secret")
@@ -669,7 +675,8 @@ def check_large_output(term):
     since = sync(term)
     term.send("seq 1 50000; echo seq-end-$((6*7))\r")
     term.wait("seq-end-42", since, 120, what="the end of the long output")
-    numbers = [int(number) for number in re.findall(r"(?:^|\n)(\d+)\r?(?=\n)", term.text(since))]
+    numbers = [int(number) for number in
+               re.findall(r"(?:^|\n)" + OUTPUT_START + r"(\d+)\r?(?=\n)", term.text(since))]
     ensure(numbers == list(range(1, 50001)),
            f"{len(numbers)} numbered lines arrived, the first ones {numbers[:5]}, the last ones {numbers[-5:]}")
     return "50000 lines complete and in order"
@@ -833,6 +840,20 @@ def wait_listed(se_binary, client, log, name, present=True, timeout=90):
                    timeout, f"session {name} {'never listed' if present else 'still listed'}")
 
 
+def isolated_client(work, name, extra=None):
+    """ai.Client with, on Windows, a test namespace of its own: debug builds of `se` name the
+    background worker's single-instance mutex and the Credential Manager entries after
+    SMART_EXPLORER_E2E_TEST_NAMESPACE (native/src/windows_test_namespace.rs). Without it two
+    clients on one Windows runner share one worker slot, and the second worker never starts."""
+    extra = dict(extra or {})
+    if WINDOWS:
+        run = os.environ.get("GITHUB_RUN_ID", "local") + "-" + os.environ.get("GITHUB_RUN_ATTEMPT", "1")
+        namespace = re.sub(r"[^A-Za-z0-9_-]", "-", f"{name}-{run}")[:48]
+        ensure(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,47}", namespace), f"unusable test namespace {namespace!r}")
+        extra["SMART_EXPLORER_E2E_TEST_NAMESPACE"] = namespace
+    return ai.Client(work, name, extra)
+
+
 class ShareFixture:
     """A local Share server and two paired clients: `a` (the user's side, runs `se shell`)
     and `b` (the host, this runner) with Exec granted. Used by the mcp, linux-share and
@@ -867,8 +888,8 @@ class ShareFixture:
         host_env = {"SE_SHARE_RELAY_ONLY": "1"}
         if not WINDOWS:
             host_env["SHELL"] = "/bin/bash"
-        self.a = ai.Client(self.work, "term-a", {"SE_SHARE_RELAY_ONLY": "1", "TERM": "xterm-256color"})
-        self.b = ai.Client(self.work, "term-b", host_env)
+        self.a = isolated_client(self.work, "term-a", {"SE_SHARE_RELAY_ONLY": "1", "TERM": "xterm-256color"})
+        self.b = isolated_client(self.work, "term-b", host_env)
         time.sleep(1)
         self.endpoint = ai.pair_with_exec(self.results, self.se, self.a, self.b, f"127.0.0.1:{port}",
                                           f"http://127.0.0.1:{port + 1}", self.logs)
@@ -896,7 +917,7 @@ def stage_mcp(results, se_binary, work, log_root, fixture):
     stage = "mcp"
     logs = log_root / "mcp"
     logs.mkdir(parents=True, exist_ok=True)
-    plain_client = ai.Client(work, "term-mcp")
+    plain_client = isolated_client(work, "term-mcp")
 
     def catalog(lifecycle):
         def check():
@@ -1177,7 +1198,7 @@ def stage_linux_ssh(results, se_binary, work, log_root, fixture):
     logs = log_root / "linux-ssh"
     logs.mkdir(parents=True, exist_ok=True)
     log = logs / "cli.log"
-    client = ai.Client(work, "term-ssh", {"TERM": "xterm-256color"})
+    client = isolated_client(work, "term-ssh", {"TERM": "xterm-256color"})
     fixture.client = client
     fixture.logs = logs
     try:
@@ -1319,7 +1340,7 @@ def ssh_working_directory(results, se_binary, env, logs):
 
 def ssh_refused_terminal(results, se_binary, work, log_root, logs, containers):
     stage = "linux-ssh"
-    client = ai.Client(work, "term-ssh-deny", {"TERM": "xterm-256color"})
+    client = isolated_client(work, "term-ssh-deny", {"TERM": "xterm-256color"})
     try:
         container, port, user, password = start_ssh_container(log_root, "deny")
         containers.append(container)
@@ -1379,6 +1400,9 @@ def stage_preserve(results, se_binary, fixture):
             since = term.mark()
             term.send("tty\r")
             term.wait("not a tty", since, 60, what="`not a tty` from the remote command")
+            # A line typed while a command runs goes to that command's standard input: type
+            # `exit 3` only after `tty` ended and the line mode showed its next prompt.
+            term.wait(r"not a tty[\s\S]*sshbox:[^\r\n]*\$ ", since, 60, what="the prompt after `tty`")
             term.send("exit 3\r")
             code = term.exit_code(60)
             ensure(code == 3, f"exit code {code}")
@@ -1421,6 +1445,10 @@ def stage_preserve(results, se_binary, fixture):
             term = UnixPty([se_binary, "shell", "--attach", "cmdsh"], env, logs, "attach-cmdsh")
             try:
                 term.wait(r"attached to session cmdsh", 0, 90, what="the attach line")
+                # The line mode prints its prompt after the attach line; a line typed before it
+                # would put the prompt in front of the output.
+                term.wait(r"attached to session cmdsh[^\n]*\n[\s\S]*sshbox:[^\r\n]*\$ ", 0, 90,
+                          what="the line mode prompt after the attach line")
                 since = term.mark()
                 term.send("echo joined-$((2+2))\r")
                 term.wait(out_line("joined-4"), since, 90, what="joined-4")
@@ -1857,6 +1885,16 @@ def stage_windows(results, se_binary, work, log_root, fixture):
 
 # --------------------------------------------------------------------------- main
 
+def compiler_errors(log_root):
+    """The error lines of build.log (`--message-format short`: `path:line:col: error[code]: text`),
+    so that a failed build names its errors in the job log, not only in the artifact."""
+    log = log_root / "build.log"
+    if not log.exists():
+        return []
+    text = log.read_text(encoding="utf-8", errors="replace").replace("\\", "/")
+    return [line for line in text.splitlines() if re.search(r"(?:^|: )error(?:\[E\d{4}\])?: ", line)]
+
+
 def guarded(results, stage, function, *arguments):
     """Runs a stage; a crash outside the individual checks is recorded as a failed check
     so that the later stages still run and the summary lists everything."""
@@ -1876,6 +1914,10 @@ def main():
     results = ai.Results(log_root)
     guarded(results, "fmt", stage_fmt, results)
     built = guarded(results, "build", ai.stage_build, results, log_root)
+    if not (built and all(built)):
+        errors = compiler_errors(log_root)
+        if errors:
+            results.record("build", "compiler errors from build.log", False, "\n".join(errors[:40]))
     built = bool(built and built[0])
     guarded(results, "unit", stage_unit, results, log_root)
     se_binary = ai.NATIVE / "target" / "debug" / ("se.exe" if WINDOWS else "se")
