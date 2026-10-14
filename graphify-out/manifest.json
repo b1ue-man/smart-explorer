@@ -2950,9 +2950,9 @@
     "semantic_hash": "0a3d70151274fddbebacee0bc4de91b7"
   },
   "cli/shell_session/dialect.rs": {
-    "mtime": 1791973802.0661185,
-    "ast_hash": "07e0694cdbe385a709a5b58c29c76375",
-    "semantic_hash": "07e0694cdbe385a709a5b58c29c76375"
+    "mtime": 1791977987.989546,
+    "ast_hash": "91fb675b89add7017696e27f1a490a6d",
+    "semantic_hash": "91fb675b89add7017696e27f1a490a6d"
   },
   "cli/shell_session/engine.rs": {
     "mtime": 1791971165.6064105,
@@ -2995,9 +2995,9 @@
     "semantic_hash": "6b9c4ca8dab4532684b29897a8729513"
   },
   "cli/shell_session/tests.rs": {
-    "mtime": 1791973812.777254,
-    "ast_hash": "c73795199acd56447e94060d0077dcaa",
-    "semantic_hash": "c73795199acd56447e94060d0077dcaa"
+    "mtime": 1791978033.6361077,
+    "ast_hash": "5640aef9ecc807854ff2190db13fabe8",
+    "semantic_hash": "5640aef9ecc807854ff2190db13fabe8"
   },
   "cli/shell_session/transports.rs": {
     "mtime": 1791971091.172479,
