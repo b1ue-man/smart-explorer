@@ -168,10 +168,14 @@ impl SftpBackend {
         let (generation, mut channel) = self
             .open_session_channel()
             .map_err(SshTerminalError::Failed)?;
-        let answer = self.rt.block_on(tokio::time::timeout(
-            TERMINAL_REQUEST_DEADLINE,
-            negotiate_pty(&mut channel, request),
-        ));
+        // The timer of `timeout` needs the runtime: create it inside `block_on`.
+        let answer = self.rt.block_on(async {
+            tokio::time::timeout(
+                TERMINAL_REQUEST_DEADLINE,
+                negotiate_pty(&mut channel, request),
+            )
+            .await
+        });
         match answer {
             Ok(Ok(PtyAnswer::Granted)) => {}
             Ok(Ok(PtyAnswer::Denied)) => {
@@ -194,14 +198,15 @@ impl SftpBackend {
             }
             Err(_) => return Err(self.terminal_deadline_failure(&generation)),
         }
-        let program = self
-            .rt
-            .block_on(tokio::time::timeout(TERMINAL_REQUEST_DEADLINE, async {
+        let program = self.rt.block_on(async {
+            tokio::time::timeout(TERMINAL_REQUEST_DEADLINE, async {
                 match &request.command {
                     Some(command) => channel.exec(true, command.as_bytes().to_vec()).await,
                     None => channel.request_shell(true).await,
                 }
-            }));
+            })
+            .await
+        });
         match program {
             Ok(Ok(())) => Ok(run_channel(self, channel)),
             Ok(Err(error)) => Err(self.terminal_ssh_failure(&generation, error)),
