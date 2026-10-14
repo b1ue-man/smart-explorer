@@ -140,11 +140,19 @@ mod tests {
             .collect()
     }
 
+    /// Feeds the reads in order and stops after the one that leaves, as the
+    /// front-end does: it ends the session at `Step::Leave` and reads no more.
     fn all(filter: &mut EscapeFilter, parts: &[&[u8]]) -> Vec<Step> {
-        parts
-            .iter()
-            .flat_map(|part| filter.feed(part))
-            .collect::<Vec<_>>()
+        let mut steps = Vec::new();
+        for part in parts {
+            let read = filter.feed(part);
+            let leaves = read.contains(&Step::Leave);
+            steps.extend(read);
+            if leaves {
+                break;
+            }
+        }
+        steps
     }
 
     #[test]
