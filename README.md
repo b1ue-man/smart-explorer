@@ -508,6 +508,11 @@ Ordnerzähler werden als „nicht gemeldet“ ausgewiesen. Scan und Ergebnisübe
 sind getrennte Phasen; eine gleiche Gesamtdauer über beliebige Netzverbindungen
 wird nicht behauptet. Abnahme und Veröffentlichung dieses Reparaturstands:
 [Windows-/Direct-Regressionsplan](docs/WINDOWS_REMOTE_REGRESSION.md).
+Zwischen 0.5.170 und 0.5.177 scheiterten Speicheranalyse und Duplikatsuche auf
+einer Share-Gegenstelle mit „Ungültige Analyse-Auftrags-ID“. Der Client sendete
+die Auftrags-ID als Base64url, der Host nahm nur Kleinbuchstaben-Hex an. Seit
+0.5.178 senden Clients Hex, und Hosts nehmen beide Formen an. Es genügt also,
+eines der beiden Geräte zu aktualisieren.
 
 Beim Öffnen einer Remote-Datei wird die lokale Editor-Kopie erst nach einem
 vollständigen Download und einem geschriebenen Wiederherstellungsmanifest
@@ -680,7 +685,10 @@ Share-Peers, Google Drive und lokalen Laufwerken (lesen, schreiben, bearbeiten,
 kopieren, verschieben, löschen, suchen), Remote-Befehle auf gespeicherten
 SSH-Remotes und freigegebenen Share-Peers sowie jeden weiteren `se`-Befehl.
 Lange Vorgänge laufen als Jobs mit vollständiger Ausgabe; Passwörter gehen nie
-über den Agenten. `se exec @label[:/ordner] -- befehl` führt Befehle auch im
+über den Agenten. Ab 0.5.178 empfiehlt sich das Plugin dem Agenten selbst als
+erste Wahl für Dateiaufgaben vor dessen eingebauten Datei-Werkzeugen und
+Shell-Dateibefehlen. Claude Code lädt die Datei-Tools dafür vorab, ohne
+Tool-Suche. `se exec @label[:/ordner] -- befehl` führt Befehle auch im
 Terminal über die SSH-Anmeldung einer gespeicherten SFTP-Verbindung aus.
 Details: [`docs/AI_AGENT_PLUGIN.md`](docs/AI_AGENT_PLUGIN.md).
 
