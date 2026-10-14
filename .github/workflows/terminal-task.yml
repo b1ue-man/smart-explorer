@@ -1,0 +1,186 @@
+name: terminal-task
+run-name: Real terminal for se shell (PTY, ConPTY, SSH pty-req) ${{ inputs.candidate_sha }}
+
+# Single task-level suite of the 2026-10-14 "real terminal" batch
+# (docs/plaene/2026-10-14-echtes-terminal/plan.md): `se shell` behaves like `ssh HOST`
+# in a terminal. Dispatch it once for the exact pushed candidate SHA; it never builds
+# release artifacts or publishes anything.
+#   suite    fmt of the batch's Rust files, development build, unit tests (every named
+#            terminal_task_ test per platform, shell sessions, MCP, Share Exec protocol,
+#            IPC), MCP end-to-end (sessions show the kind, agents cannot join terminal
+#            sessions), on Linux and Windows. Linux: `se shell` in a Python PTY against an
+#            OpenSSH container (bash, nvim, python3; pty-req, window-change, PermitTTY
+#            fallback) and against a paired Share peer (Tab, colours, Ctrl+C, nvim, real
+#            claude and codex TUIs, attaching, update stop, clean-up, revoking Exec),
+#            plus the unchanged pipe mode, -T, --attach and exec. Windows: a paired Share
+#            peer on Windows with `se.exe shell` under pywinpty (ConPTY).
+#   android  Android tree (the native library with the Linux/Android PTY supervisor must
+#            still build)
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Full pushed candidate SHA, matching the selected ref
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terminal-task-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  suite:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 300
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 1
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_TERM_COLOR: never
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          # The fmt stage checks a fixed file list; no history is needed.
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Bind workflow and checkout to the requested candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
+          [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      # Node and the two agent hosts are only started by the Linux checks (Share peer).
+      - uses: actions/setup-node@v5
+        if: runner.os == 'Linux'
+        with:
+          node-version: '22'
+
+      - name: Install the agent hosts whose terminal interfaces the suite starts
+        if: runner.os == 'Linux'
+        shell: bash
+        run: npm install -g @anthropic-ai/claude-code@2.1.296 @openai/codex@0.162.1
+
+      - name: Install neovim for the full-screen program checks
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y neovim
+          nvim --version | head -n 1
+
+      # pywinpty drives `se.exe` through a ConPTY like Windows Terminal does. The version
+      # is pinned: the latest release (3.0.5, 2026-06-10) was the one whose PtyProcess API
+      # (spawn/read/write/setwinsize/isalive/exitstatus) the suite was written against.
+      - name: Install pywinpty to start se.exe in a ConPTY
+        if: runner.os == 'Windows'
+        shell: bash
+        run: python -m pip install pywinpty==3.0.5
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            native
+            share-server
+          # Reuse the preceding host-library tasks' dependency/incremental output.
+          shared-key: search-recursive-access
+          cache-on-failure: true
+          cache-workspace-crates: true
+
+      - name: Run the one task entrypoint
+        shell: bash
+        timeout-minutes: 290
+        run: >-
+          python native/test-terminal-task.py
+          --log-root "$RUNNER_TEMP/terminal-task"
+
+      - name: Preserve acceptance and failure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: terminal-${{ runner.os }}-${{ inputs.candidate_sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/terminal-task
+          if-no-files-found: error
+          retention-days: 14
+
+  android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Bind the run to the exact candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          log_root="$RUNNER_TEMP/android-task-logs"
+          mkdir -p "$log_root"
+          printf 'SMART_EXPLORER_TASK_LOG_ROOT=%s\n' "$log_root" >> "$GITHUB_ENV"
+          [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
+          [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+          shared-key: android-task-ndk
+          cache-on-failure: true
+
+      - name: Build and check the Android side (facade, screens, NDK library, JVM tests)
+        shell: bash
+        timeout-minutes: 170
+        run: |
+          set -Eeuo pipefail
+          bash android/test-android-task.sh android-build --out "$RUNNER_TEMP/terminal-apk" 2>&1 | \
+            tee "$SMART_EXPLORER_TASK_LOG_ROOT/suite-android-build.log"
+
+      - name: Preserve Android evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: terminal-android-${{ inputs.candidate_sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/android-task-logs
+          if-no-files-found: warn
+          retention-days: 14
