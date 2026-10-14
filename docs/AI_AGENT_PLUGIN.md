@@ -2,7 +2,8 @@
 
 Stand: 2026-10-14. Plan und Entscheidungen:
 [`docs/plaene/2026-10-12-ki-agenten-plugin/plan.md`](plaene/2026-10-12-ki-agenten-plugin/plan.md),
-Vorrang vor den Datei-Werkzeugen des Hosts:
+Vorrang vor den Datei-Werkzeugen des Hosts sowie dauerhafte Shell-Sitzungen und Anhängen
+(Abschnitt R4):
 [`docs/plaene/2026-10-14-analyse-id-plugin-vorrang/plan.md`](plaene/2026-10-14-analyse-id-plugin-vorrang/plan.md).
 Hostverträge: [`refs/claude-code-plugins-mcp-2026-10-12.md`](refs/claude-code-plugins-mcp-2026-10-12.md),
 [`refs/codex-mcp-spec-rmcp-2026-10-12.md`](refs/codex-mcp-spec-rmcp-2026-10-12.md).
@@ -60,8 +61,8 @@ lokal wie entfernt:
 - **Vorab geladen in Claude Code:** `connections`, `list`, `stat`, `read`, `write`, `edit`,
   `mkdir`, `remove`, `copy`, `move`, `search` und `job_status` tragen
   `_meta["anthropic/alwaysLoad"]: true`. Claude Code zeigt sie damit ohne Tool-Suche, ohne den
-  Sitzungsstart aufzuhalten. `exec`, `job_input`, `job_cancel`, `status` und `se` bleiben
-  verzögert; die Anweisungen nennen die Suche nach `smart-explorer`. Wer alle Tools verzögert
+  Sitzungsstart aufzuhalten. `exec`, `job_input`, `job_cancel`, `sessions`, `status` und `se`
+  bleiben verzögert; die Anweisungen nennen die Suche nach `smart-explorer`. Wer alle Tools verzögert
   haben will, setzt im eigenen Servereintrag `"alwaysLoad": false` (ab Claude Code v2.1.287).
 - **Tool-Beschreibungen** nennen jeweils das ersetzte Werkzeug, zum Beispiel „Use it instead of
   Read or `cat`“.
@@ -86,7 +87,8 @@ Tool-Metadaten kommen direkt vom Server.
 | `mkdir`, `remove` | Ordner anlegen; löschen wie `se rm --force` (Wurzeln nur mit `allow_root`) | ändernd / zerstörend |
 | `copy`, `move` | wie `se cp`/`se mv` zwischen beliebigen Zielen, als Job; Ergebnis mit `omitted` (übersprungene Links/Sonderdateien) und `kept_directories` (beim Verschieben behaltene Quellordner) | zerstörend (Überschreiben) |
 | `search` | Namenssuche (Text oder Glob), Treffer seitenweise, als Job; Links und Sonderdateien als eigene Treffer (`symlink`, `special`), nie betreten | nur lesend |
-| `exec` | Befehl auf gespeichertem SFTP-Remote (SSH) oder Share-Peer, als Job | zerstörend |
+| `exec` | Befehl auf gespeichertem SFTP-Remote (SSH) oder Share-Peer, als Job; mit `session` in einer dauerhaften Shell | zerstörend |
+| `sessions` | dauerhafte Shell-Sitzungen auflisten, einer `se shell --attachable` beitreten (`attach`), Aktivität der anderen lesen (`activity`), schließen bzw. lösen (`close`) | ändernd |
 | `job_status`, `job_input`, `job_cancel` | Jobs verfolgen (Ausgabe ab Offset), stdin senden, abbrechen | lesend / ändernd |
 | `se` | jeder weitere `se`-Befehl als Kindprozess (Share-Verwaltung, Verbindungen anlegen, Laufwerke, Update, Diagnose) | zerstörend |
 
@@ -130,6 +132,41 @@ FTPS- und WebDAV-Verbindung eine Anmeldung wiederverwendet.
   Entzug und Verlauf: [`REMOTE_EXECUTION_PLAN.md`](REMOTE_EXECUTION_PLAN.md).
 - **FTP, WebDAV, SMB, Drive:** keine Befehlsausführung möglich; `exec` meldet das.
 
+## Dauerhafte Shell-Sitzungen und Anhängen
+
+Ab 0.5.178 läuft Remote-Ausführung auf Wunsch wie eine SSH-Sitzung: Jeder Befehl kehrt mit
+Ergebnis zurück, Arbeitsverzeichnis, Umgebung, Variablen und Funktionen bleiben erhalten.
+
+- **Agent:** `exec` mit `session: "<name>"` (Buchstaben, Ziffern, `-`, `_`, `.`). Der erste Aufruf
+  öffnet die Sitzung auf `target` (ein Pfad in `@label:/ordner` ist das Startverzeichnis), spätere
+  Aufrufe brauchen kein `target`; ein angegebenes `target` muss zum Ziel der Sitzung passen.
+  `cwd`/`env` ändern den Sitzungszustand vor dem Befehl, `stdin` wird als Eingabe übergeben
+  (POSIX als Heredoc mit ergänztem Zeilenende, PowerShell als `$input`); `keep_stdin_open` gibt es
+  hier nicht. Das Ergebnis enthält `exit_code`, `cwd`, `session` und `session_ended`.
+- **Terminal:** `se shell [ZIEL] [--cwd DIR] [--env N=W]… [--name NAME] [--attachable]`. Im
+  Terminal zeigt der Prompt `ziel:cwd$` auf stderr, eine Zeile mit abschließendem `\` (PowerShell:
+  `` ` ``) wird fortgesetzt, Eingaben während eines eigenen Befehls gehen an diesen Befehl
+  (POSIX). Mit Pipe ist jede Zeile ein Befehl ohne eigene Eingabe. Exitcode: der des letzten
+  Befehls oder von `exit N`; 130 nach Strg+C, 125 bei Fehler der Sitzung.
+- **Ablauf:** Eine Probe in der Login-Shell (`echo %OS%;$PSVersionTable`) erkennt cmd.exe bzw.
+  PowerShell (dann `powershell.exe -NoLogo -NoProfile -NonInteractive -Command -`) oder eine
+  POSIX-Shell (dann `bash -l`, sonst `sh -l`). Jeder Befehl endet mit Marken, die Exitcode und
+  Arbeitsverzeichnis tragen und eine zufällige Nonce je Sitzung enthalten.
+- **Anhängen, Shell an Sitzung:** `se shell --list [--json]` zeigt die anhängbaren Sitzungen des
+  Benutzers (Name, ID, Dialekt, Ziel, Besitzer), `se shell --attach NAME|ID` tritt bei. Sitzungen
+  von Agenten sind anhängbar, solange der Agent nicht `attachable: false` setzt; Befehle und
+  Ausgaben der anderen erscheinen mit `[se mcp (pid …)] $ …`. Strg+D löst sich, die Sitzung läuft
+  weiter.
+- **Anhängen, Sitzung an Shell:** Eine mit `se shell … --attachable` geöffnete Shell kann der Agent
+  mit `sessions` `{"action": "attach", "session": "<name>"}` übernehmen und dann mit `exec` und
+  `session: "<name>"` darin arbeiten; `sessions` `activity` liefert, was die anderen dort seitdem
+  ausgeführt und ausgegeben haben (höchstens 64 KiB je Sitzung). `close` beendet eine eigene
+  Sitzung oder löst eine übernommene.
+- **Gemeinsamer Zustand:** Befehle aller Teilnehmer laufen nacheinander in derselben Shell. Ein
+  Abbruch (`job_cancel`, `timeout_seconds`, Strg+C) beendet die ganze Sitzung für alle, weil der
+  Exec-Strom keinen Signalweg zu einem einzelnen Befehl hat; ebenso `exit`. Das Ende des
+  MCP-Servers beendet seine Sitzungen; angehängte Terminals erfahren das.
+
 ## Sicherheit
 
 - Der Server läuft mit den Rechten des angemeldeten Benutzers und sieht alle gespeicherten
@@ -143,6 +180,19 @@ FTPS- und WebDAV-Verbindung eine Anmeldung wiederverwendet.
   neue Peers/Räume) nur auf ausdrücklichen Wunsch des Benutzers zu ändern.
 - Der JSON-RPC-Strom läuft über ein Duplikat der ursprünglichen Standardausgabe; die
   Standardausgabe des Prozesses zeigt auf stderr, damit keine Ausgabe den Protokollstrom stört.
+- Sitzungen erweitern keine Rechte: Sie laufen über dieselbe SSH-Anmeldung bzw. denselben
+  freigegebenen Share-Exec wie `exec`; entzieht die Gegenstelle die Exec-Freigabe, endet die
+  Sitzung für alle.
+- Anhängen: Der besitzende Prozess (`se mcp` oder `se shell`) bedient seine Sitzungen über einen
+  Dienst nur auf `127.0.0.1`. Jeder Client weist im ersten Rahmen binnen 5 s ein Token aus 32
+  Zufallsbytes nach (Vergleich in konstanter Zeit); das Anhängetoken steht nur im
+  besitzergeschützten Eintrag `<App-Daten>/smart_explorer/shell-sessions/<id>.json` (Unix 0700/0600,
+  Windows private DACL), das Besitzertoken nie auf der Platte. Listen zeigen weder Port noch Token.
+  Eine `se shell` ist nur mit `--attachable` gelistet; ohne Zustimmung des Menschen kann kein Agent
+  sie übernehmen. Der Skill weist den Agenten an, nur auf Wunsch des Nutzers beizutreten.
+- Angehängte Clients dürfen Befehle einreihen, Eingabe nur an ihren eigenen laufenden Befehl
+  senden, abbrechen und sich lösen; schließen kann nur der Besitzer. Bezeichner und gezeigte
+  Befehlstexte anderer Teilnehmer werden ohne Steuerzeichen angezeigt.
 
 ## Updates
 
@@ -166,6 +216,13 @@ Terminal-Update `se update` (Versionsübergabe) beendet den Server nicht.
   auf Ordner nur bei lokalen Pfaden. Die serverseitige Suche von SSH-Agenten und Share-Peers
   überspringt Links; nur die Ordnerdurchsuchung meldet sie.
 - SSH-Server ohne `signal`-Unterstützung sehen beim Abbruch nur das Schließen des Kanals.
+- Sitzungen: kein PTY (Vollbildprogramme und Passwortabfragen funktionieren nicht), keine
+  Wiederanbindung nach Verlust des Exec-Stroms und kein Abbruch einzelner Befehle (`EXEC-PTY` in
+  `docs/TODO.md`). Jede Sitzung belegt einen SSH-Kanal (OpenSSH erlaubt standardmäßig 10 je
+  Verbindung) bzw. einen der zwei Exec-Plätze, die eine Share-Gegenstelle je Gerät gleichzeitig
+  zulässt. Höchstens 8 angehängte Clients und 64 wartende Befehle je Sitzung, je Befehl höchstens
+  1 MiB Befehl und Eingabe. Der PowerShell-Dialekt ist nur lokal unter Windows geprüft
+  (`EXECSESS-WIN`).
 
 ## Fehlersuche
 
