@@ -52,9 +52,10 @@ pub(crate) enum FsStageDurability {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct FsStorageAnalysis {
     pub(crate) path: String,
-    /// `analysis_reattach_v1`: key (16 to 64 lowercase hex digits) under
-    /// which the host keeps this analysis for 10 minutes, so the client can
-    /// attach again after a lost connection.
+    /// `analysis_reattach_v1`: key under which the host keeps this analysis
+    /// for 10 minutes, so the client can attach again after a lost
+    /// connection. Clients send 32 lowercase hex digits; hosts accept 16 to
+    /// 64 characters of `A-Za-z0-9_-` (`analysis_request_id`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) request_id: Option<String>,
     /// Retained tree nodes the receiver can hold; the host folds further

@@ -109,11 +109,7 @@ fn task(work: Work, access: FsAccess, principal: PeerPrincipal) -> io::Result<Ar
     let access = access.retained_snapshot()?;
     let binding = binding(&work, &access)?;
     let key = if let Some(id) = work.id() {
-        if !(16..=64).contains(&id.len())
-            || !id
-                .bytes()
-                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-        {
+        if !crate::share::analysis_request_id::is_valid(id) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "Ungültige Analyse-Auftrags-ID",

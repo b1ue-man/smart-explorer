@@ -146,6 +146,8 @@ mod exec_policy;
 // Pure `/proc` logic of the Android exec host; the Linux host tests cover it.
 #[path = "core/analysis_admission.rs"]
 mod analysis_admission;
+#[path = "core/analysis_request_id.rs"]
+mod analysis_request_id;
 #[path = "os/shared/analysis_spool.rs"]
 mod analysis_spool;
 #[path = "os/shared/analysis_tasks.rs"]

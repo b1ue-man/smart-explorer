@@ -221,6 +221,8 @@ impl CopyPastePeerFixture {
     }
 }
 
+#[path = "analysis_request_id_task_tests.rs"]
+mod analysis_request_id_task_tests;
 #[path = "direct_open_task_tests.rs"]
 mod direct_open_task_tests;
 #[path = "transfer_engine_task_limit_tests.rs"]
