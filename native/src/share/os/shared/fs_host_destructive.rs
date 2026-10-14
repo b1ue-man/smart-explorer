@@ -16,7 +16,13 @@ struct Frame {
     bytes: u64,
 }
 
-pub(super) fn check(policy: &TargetPolicy, path: &str) -> io::Result<()> {
+/// `visit` hears of every entry below `path` before it is checked (a count,
+/// a cancel check); its error ends the walk.
+pub(super) fn check(
+    policy: &TargetPolicy,
+    path: &str,
+    visit: &dyn Fn() -> io::Result<()>,
+) -> io::Result<()> {
     let root = DirectoryHandle::open_root(&to_os_path(path))?;
     let budget = crate::transfer::memory_budget() / 8;
     let mut used = 0;
@@ -24,6 +30,7 @@ pub(super) fn check(policy: &TargetPolicy, path: &str) -> io::Result<()> {
     while let Some(top) = stack.last_mut() {
         if let Some(entry) = top.entries.next() {
             let entry = entry?;
+            visit()?;
             if private_name(&entry.name.to_string_lossy()) {
                 return Err(denied());
             }

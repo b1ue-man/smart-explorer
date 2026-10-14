@@ -19,9 +19,20 @@ pub(super) fn remove_tree_checked(
     root: &str,
     check_write: &dyn Fn() -> io::Result<()>,
 ) -> io::Result<()> {
+    remove_tree_observed(backend, root, check_write, &|| {})
+}
+
+/// `remove_tree_checked` that reports every removed entry to `removed`: each
+/// file, link and folder below `root`, and `root` itself last.
+pub(super) fn remove_tree_observed(
+    backend: &dyn Backend,
+    root: &str,
+    check_write: &dyn Fn() -> io::Result<()>,
+    removed: &dyn Fn(),
+) -> io::Result<()> {
     check_write()?;
     if backend.is_local() {
-        return local::remove(backend, root, check_write);
+        return local::remove(backend, root, check_write, removed);
     }
     let budget =
         usize::try_from((crate::transfer::memory_budget() / 8).max(4096)).unwrap_or(usize::MAX);
@@ -40,10 +51,12 @@ pub(super) fn remove_tree_checked(
                 } else {
                     backend.remove_file_id(&child, entry.id.as_deref())?;
                 }
+                removed();
             } else if current.is_dir {
                 stack.push(open(backend, child, budget, &mut used)?);
             } else {
                 backend.remove_file_id(&child, entry.id.as_deref())?;
+                removed();
             }
         } else {
             check_write()?;
@@ -55,6 +68,7 @@ pub(super) fn remove_tree_checked(
                 return Err(changed());
             }
             backend.remove_dir(&directory.path)?;
+            removed();
             used = used.saturating_sub(directory.memory);
         }
     }
@@ -110,6 +124,9 @@ fn changed() -> io::Error {
     )
 }
 
+#[cfg(test)]
+#[path = "fs_delete_count_task_tests.rs"]
+mod count_task_tests;
 #[cfg(test)]
 #[path = "fs_delete_task_tests.rs"]
 mod task_tests;

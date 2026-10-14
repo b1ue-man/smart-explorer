@@ -52,6 +52,7 @@ pub(super) fn response_matches(request: &FsRequest, response: &FsResponse) -> bo
         | FsRequest::HashWalk(_)
         | FsRequest::ListDirBatch(_)
         | FsRequest::WatchExport(_)
+        | FsRequest::RemoveTree { .. }
         | FsRequest::PutBatch { .. }
         | FsRequest::GetBatch { .. } => false,
     }

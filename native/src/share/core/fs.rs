@@ -292,13 +292,30 @@ pub(super) fn require_target_write(target: &ResolvedTarget) -> io::Result<()> {
 }
 
 pub(super) fn require_target_destructive(target: &ResolvedTarget) -> io::Result<()> {
+    require_target_destructive_observed(target, &|| Ok(()))
+}
+
+/// `require_target_destructive`, reporting every entry of the protection walk
+/// below a local folder to `visit` (`TargetPolicy::destructive_observed`).
+pub(super) fn require_target_destructive_observed(
+    target: &ResolvedTarget,
+    visit: &dyn Fn() -> io::Result<()>,
+) -> io::Result<()> {
     super::fs_host_policy::TargetPolicy::new(
         target.access,
         target.allow_system_writes,
         target.backend.is_local(),
     )
     .with_root(&target.backend.root_display())
-    .destructive(&target.path)
+    .destructive_observed(&target.path, visit)
+}
+
+/// Whether the virtual `path` names `/`, an export or an exported connection
+/// itself (`/Verbindungen` and `/Verbindungen/<name>`); a folder delete never
+/// removes one of them.
+pub(super) fn is_export_root(path: &str) -> io::Result<bool> {
+    let parts = split_clean(path)?;
+    Ok(parts.len() < 2 || (parts.len() == 2 && parts[0] == CONNECTIONS_MOUNT))
 }
 
 /// Foreign analysis traversals call this immediately after opening a root or

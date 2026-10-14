@@ -47,6 +47,10 @@ pub(crate) struct FsHostFeatures {
     /// `ReplaceStagedReversible`: one non-replayed, journaled publication.
     #[serde(default, skip_serializing_if = "is_false")]
     pub(crate) reversible_replace_v1: bool,
+    /// `RemoveTree`: a whole folder deleted on the host in one stream, with
+    /// progress and cancel.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) remove_tree_v1: bool,
 }
 
 impl FsHostFeatures {
@@ -64,6 +68,7 @@ impl FsHostFeatures {
             export_access_v1: true,
             literal_children_v1: true,
             reversible_replace_v1: true,
+            remove_tree_v1: true,
         }
     }
 
@@ -85,6 +90,7 @@ impl FsHostFeatures {
             (self.export_access_v1, "export_access_v1"),
             (self.literal_children_v1, "literal_children_v1"),
             (self.reversible_replace_v1, "reversible_replace_v1"),
+            (self.remove_tree_v1, "remove_tree_v1"),
         ]
         .into_iter()
         .filter_map(|(offered, name)| offered.then_some(name))

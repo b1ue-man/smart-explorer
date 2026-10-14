@@ -7,6 +7,8 @@ mod duplicate_wire;
 mod hash_walk_wire;
 #[path = "list_batch_wire.rs"]
 mod list_batch_wire;
+#[path = "remove_tree_wire.rs"]
+mod remove_tree_wire;
 #[path = "watch_wire.rs"]
 mod watch_wire;
 
@@ -19,6 +21,7 @@ pub(crate) use self::list_batch_wire::{
     FsOmission, FsOmissionReason, LIST_BATCH_MAX_BYTES, LIST_BATCH_MAX_ENTRIES, META_JSON_BYTES,
     STREAM_FRAME_LIMIT,
 };
+pub(crate) use self::remove_tree_wire::FsRemoveTreeMessage;
 pub(crate) use self::watch_wire::{FsWatchEvent, ALIVE_SECS, MAX_NOTICE_PATHS, SILENT_SECS};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -136,6 +139,10 @@ pub(crate) enum FsResponse {
     /// RV1 `WatchExport`.
     Watch {
         event: FsWatchEvent,
+    },
+    /// `remove_tree_v1` `RemoveTree`.
+    RemoveTree {
+        message: FsRemoveTreeMessage,
     },
     Err {
         #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -456,6 +456,8 @@ mod host_hash_walk;
 mod host_list;
 #[path = "os/shared/host_mutations.rs"]
 mod host_mutations;
+#[path = "os/shared/host_remove_tree.rs"]
+mod host_remove_tree;
 #[path = "os/shared/host_stream.rs"]
 mod host_stream;
 #[path = "os/shared/host_watch.rs"]

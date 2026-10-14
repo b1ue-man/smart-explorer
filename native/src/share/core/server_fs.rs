@@ -304,6 +304,10 @@ pub(super) async fn serve(stream: FsStream, req: FsRequest) -> io::Result<()> {
             )
             .await
         }
+        FsRequest::RemoveTree { path } => {
+            crate::share::host_remove_tree::serve(send, path, access, authorization, principal)
+                .await
+        }
         FsRequest::PutBatch { nonce, entries } => {
             if let Err(error) = validate_put(&nonce, &entries) {
                 return reply_err(&mut send, error).await;
