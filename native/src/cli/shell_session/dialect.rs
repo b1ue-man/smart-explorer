@@ -8,9 +8,13 @@
 //! prompt; every command is a dot-sourced script block decoded from Base64
 //! UTF-8, so no quoting rule of the command matters, and its markers follow
 //! as a second statement after the command's output was written.
+//!
+//! A terminal session needs no markers; only its start line with a working
+//! directory and environment depends on the dialect (`terminal_command`).
 use super::types::{CommandRequest, Dialect, StdinMode};
 use crate::cli::exec_ssh::quote;
 use base64::Engine as _;
+use std::collections::BTreeMap;
 
 /// Command and input text of one request; larger input belongs in a file
 /// (`copy`) rather than in a shell's standard input.
@@ -72,6 +76,69 @@ pub(in crate::cli) fn argv_command(dialect: Dialect, program: &str, args: &[Stri
             line
         }
     }
+}
+
+/// The `exec` request that starts the login shell of an SSH terminal in
+/// `cwd` with `env` (the terminal's `shell` request needs no line when it has
+/// neither). POSIX: `cd`, `export` and then the login shell replaces the
+/// command shell. PowerShell: a `-Command` script of Base64-decoded literals
+/// only, free of `$`, quotes and backticks, so that neither `cmd.exe` nor an
+/// outer PowerShell changes it; `-NoExit` keeps the interactive shell.
+pub(super) fn terminal_command(
+    dialect: Dialect,
+    cwd: Option<&str>,
+    env: &BTreeMap<String, String>,
+) -> Result<String, String> {
+    // The same value rules as for a command: no NUL, no empty directory, and
+    // names the dialect can export.
+    let values = CommandRequest {
+        command: ":".into(),
+        cwd: cwd.map(str::to_string),
+        env: env.clone(),
+        stdin: StdinMode::Null,
+    };
+    check(dialect, "", &values)?;
+    Ok(match dialect {
+        Dialect::Posix => posix_terminal(cwd, env),
+        Dialect::PowerShell => powershell_terminal(cwd, env),
+    })
+}
+
+fn posix_terminal(cwd: Option<&str>, env: &BTreeMap<String, String>) -> String {
+    let mut line = String::new();
+    if let Some(cwd) = cwd {
+        line.push_str(&format!("cd -- {} && ", quote(cwd)));
+    }
+    for (name, value) in env {
+        line.push_str(&format!("export {name}={} && ", quote(value)));
+    }
+    line.push_str("exec \"${SHELL:-/bin/sh}\" -l");
+    line
+}
+
+fn powershell_terminal(cwd: Option<&str>, env: &BTreeMap<String, String>) -> String {
+    let mut statements = Vec::new();
+    if let Some(cwd) = cwd {
+        let directory = text(cwd);
+        statements.push(format!(
+            "if (-not (Test-Path -LiteralPath ({directory}) -PathType Container)) {{ [Console]::Error.WriteLine('se: the working directory does not exist'); exit 1 }}"
+        ));
+        statements.push(format!("Set-Location -LiteralPath ({directory})"));
+    }
+    for (name, value) in env {
+        statements.push(format!(
+            "[Environment]::SetEnvironmentVariable(({}), ({}))",
+            text(name),
+            text(value)
+        ));
+    }
+    if statements.is_empty() {
+        return "powershell.exe -NoLogo".to_string();
+    }
+    format!(
+        "powershell.exe -NoLogo -NoExit -Command \"{}\"",
+        statements.join("; ")
+    )
 }
 
 /// Rejects requests the session could not run exactly as given.
@@ -244,7 +311,9 @@ fn posix_name(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{argv_command, check, classify, start_line, text, wrap, MAX_REQUEST_BYTES};
+    use super::{
+        argv_command, check, classify, start_line, terminal_command, text, wrap, MAX_REQUEST_BYTES,
+    };
     use crate::cli::shell_session::types::{CommandRequest, Dialect, StdinMode};
     use std::collections::BTreeMap;
 
@@ -344,5 +413,46 @@ mod tests {
         empty_cwd.cwd = Some(" ".into());
         assert!(check(Dialect::Posix, "00ff", &empty_cwd).is_err());
         assert!(check(Dialect::Posix, "00ff", &request("ls")).is_ok());
+    }
+
+    #[test]
+    fn terminal_task_start_lines_quote_and_encode_every_literal() {
+        let mut env = BTreeMap::new();
+        env.insert("MODE".to_string(), "it's $HOME".to_string());
+        assert_eq!(
+            terminal_command(Dialect::Posix, Some("/srv/my app"), &env).unwrap(),
+            "cd -- '/srv/my app' && export MODE='it'\\''s $HOME' && exec \"${SHELL:-/bin/sh}\" -l"
+        );
+        assert_eq!(
+            terminal_command(Dialect::Posix, None, &BTreeMap::new()).unwrap(),
+            "exec \"${SHELL:-/bin/sh}\" -l"
+        );
+        let mut named = BTreeMap::new();
+        named.insert("A B".to_string(), "x\u{2019}y".to_string());
+        let line = terminal_command(Dialect::PowerShell, Some("C:\\Temp\\it's"), &named).unwrap();
+        assert!(
+            line.starts_with("powershell.exe -NoLogo -NoExit -Command \""),
+            "{line}"
+        );
+        for literal in ["Temp", "x\u{2019}y", "A B"] {
+            assert!(!line.contains(literal), "{literal} in {line}");
+        }
+        // Nothing for cmd.exe or an outer PowerShell to expand or end early.
+        let script = &line["powershell.exe -NoLogo -NoExit -Command \"".len()..line.len() - 1];
+        for forbidden in ['$', '"', '`', '%', '!', '&', '|', '<', '>', '^'] {
+            assert!(!script.contains(forbidden), "{forbidden} in {script}");
+        }
+        assert!(script.contains("Set-Location -LiteralPath ("), "{script}");
+        assert_eq!(
+            terminal_command(Dialect::PowerShell, None, &BTreeMap::new()).unwrap(),
+            "powershell.exe -NoLogo"
+        );
+        // The value rules of commands apply.
+        assert!(terminal_command(Dialect::Posix, Some(" "), &BTreeMap::new()).is_err());
+        assert!(terminal_command(Dialect::Posix, Some("a\0b"), &BTreeMap::new()).is_err());
+        let mut bad = BTreeMap::new();
+        bad.insert("A-B".to_string(), String::new());
+        assert!(terminal_command(Dialect::Posix, None, &bad).is_err());
+        assert!(terminal_command(Dialect::PowerShell, None, &bad).is_ok());
     }
 }

@@ -6,7 +6,8 @@
 //! it, an attached client detaches).
 use super::registry::Entry;
 use super::types::{
-    Activity, CommandOutcome, CommandRequest, CommandSink, OutcomeStatus, SessionInfo, Stream,
+    Activity, CommandOutcome, CommandRequest, CommandSink, OutcomeStatus, SessionInfo, SessionKind,
+    Stream,
 };
 use super::wire;
 use crossbeam_channel::{Receiver, Sender};
@@ -58,6 +59,53 @@ impl Drop for LeaveOnDrop {
     }
 }
 
+/// Connects to the attach service on `port`, sends the hello with the protocol
+/// `version` and returns the connection with the payload of the WELCOME
+/// answer; a DENIED answer is the error (shared with `terminal_client.rs`).
+pub(super) fn handshake(
+    port: u16,
+    session: &str,
+    token: &str,
+    label: &str,
+    version: u32,
+) -> Result<(TcpStream, Vec<u8>), String> {
+    let address = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    let stream = TcpStream::connect_timeout(&address, CONNECT_TIMEOUT)
+        .map_err(|error| format!("cannot reach the session: {error}"))?;
+    let _ = stream.set_nodelay(true);
+    let mut writer = &stream;
+    wire::write_json(
+        &mut writer,
+        wire::HELLO,
+        &wire::Hello {
+            version,
+            session: session.to_string(),
+            token: token.to_string(),
+            label: label.to_string(),
+        },
+    )
+    .map_err(|error| format!("cannot reach the session: {error}"))?;
+    stream
+        .set_read_timeout(Some(WELCOME_TIMEOUT))
+        .map_err(|error| error.to_string())?;
+    let mut reader = &stream;
+    let (tag, payload) = wire::read_frame(&mut reader)
+        .map_err(|error| format!("the session did not answer: {error}"))?;
+    match tag {
+        wire::WELCOME => {}
+        wire::DENIED => {
+            return Err(wire::decode::<wire::Text>(&payload)
+                .map(|text| text.text)
+                .unwrap_or_else(|_| "permission denied".to_string()))
+        }
+        _ => return Err("the session answered with an unexpected frame".into()),
+    }
+    stream
+        .set_read_timeout(None)
+        .map_err(|error| error.to_string())?;
+    Ok((stream, payload))
+}
+
 impl SessionClient {
     pub(super) fn connect(
         port: u16,
@@ -65,40 +113,9 @@ impl SessionClient {
         token: &str,
         label: &str,
     ) -> Result<Self, String> {
-        let address = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
-        let stream = TcpStream::connect_timeout(&address, CONNECT_TIMEOUT)
-            .map_err(|error| format!("cannot reach the session: {error}"))?;
-        let _ = stream.set_nodelay(true);
-        let mut writer = &stream;
-        wire::write_json(
-            &mut writer,
-            wire::HELLO,
-            &wire::Hello {
-                version: wire::PROTOCOL_VERSION,
-                session: session.to_string(),
-                token: token.to_string(),
-                label: label.to_string(),
-            },
-        )
-        .map_err(|error| format!("cannot reach the session: {error}"))?;
-        stream
-            .set_read_timeout(Some(WELCOME_TIMEOUT))
-            .map_err(|error| error.to_string())?;
-        let mut reader = &stream;
-        let (tag, payload) = wire::read_frame(&mut reader)
-            .map_err(|error| format!("the session did not answer: {error}"))?;
-        let info: SessionInfo = match tag {
-            wire::WELCOME => wire::decode(&payload).map_err(|error| error.to_string())?,
-            wire::DENIED => {
-                return Err(wire::decode::<wire::Text>(&payload)
-                    .map(|text| text.text)
-                    .unwrap_or_else(|_| "permission denied".to_string()))
-            }
-            _ => return Err("the session answered with an unexpected frame".into()),
-        };
-        stream
-            .set_read_timeout(None)
-            .map_err(|error| error.to_string())?;
+        let (stream, welcome) =
+            handshake(port, session, token, label, wire::PROTOCOL_VERSION_COMMANDS)?;
+        let info: SessionInfo = wire::decode(&welcome).map_err(|error| error.to_string())?;
         let receiving = stream.try_clone().map_err(|error| error.to_string())?;
         let inner = Arc::new(Inner {
             writer: Mutex::new(stream),
@@ -120,8 +137,15 @@ impl SessionClient {
         })
     }
 
-    /// Joins an attachable session of another process (or of this one).
+    /// Joins an attachable command session of another process (or of this
+    /// one). A terminal session needs a terminal client.
     pub(in crate::cli) fn attach(entry: &Entry, label: &str) -> Result<Self, String> {
+        if entry.kind == SessionKind::Terminal {
+            return Err(format!(
+                "session {} ({}) is a terminal session; only a terminal can join it",
+                entry.name, entry.id
+            ));
+        }
         Self::connect(entry.port, &entry.id, &entry.token, label)
     }
 
