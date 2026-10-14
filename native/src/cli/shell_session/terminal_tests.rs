@@ -48,7 +48,7 @@ mod pty {
     use crossbeam_channel::Receiver;
     use std::collections::BTreeMap;
     use std::io::ErrorKind;
-    use std::net::TcpStream;
+    use std::net::{Ipv4Addr, TcpStream};
     use std::path::Path;
     use std::time::{Duration, Instant};
 
@@ -354,7 +354,7 @@ mod pty {
 
     /// The first answer of the attach service to a hello of `version`.
     fn hello(entry: &Entry, version: u32, token: &str) -> (TcpStream, u8, Vec<u8>) {
-        let mut stream = TcpStream::connect(([127, 0, 0, 1], entry.port)).unwrap();
+        let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, entry.port)).unwrap();
         stream.set_read_timeout(Some(WAIT)).unwrap();
         let hello = wire::Hello {
             version,
