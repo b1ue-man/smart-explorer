@@ -1,14 +1,18 @@
 name: analysis-plugin-task
-run-name: Analysis job id and plugin priority ${{ inputs.candidate_sha }}
+run-name: Analysis job id, plugin priority and shell sessions ${{ inputs.candidate_sha }}
 
 # Single task-level suite of the 2026-10-14 batch
-# (docs/plaene/2026-10-14-analyse-id-plugin-vorrang/plan.md). Dispatch it once
-# for the exact pushed candidate SHA; it never builds release artifacts or
+# (docs/plaene/2026-10-14-analyse-id-plugin-vorrang/plan.md, including R4:
+# persistent shell sessions and attaching shells and sessions). Dispatch it
+# once for the exact pushed candidate SHA; it never builds release artifacts or
 # publishes anything.
 #   suite  fmt, development build, unit and loopback tests (remote analysis and
-#          duplicate search between two real Iroh nodes), `se mcp` instructions
-#          and alwaysLoad metadata, generated Claude Code plugin on Linux and
-#          Windows
+#          duplicate search between two real Iroh nodes; shell sessions on a
+#          local bash or Windows PowerShell with attaching in both roles),
+#          `se mcp` instructions, alwaysLoad metadata and the sessions tool,
+#          generated Claude Code plugin on Linux and Windows; on Linux also
+#          sessions, `se shell` and attaching against an OpenSSH container
+#          (Docker) and a paired Share peer (share-server fixture)
 on:
   workflow_dispatch:
     inputs:
