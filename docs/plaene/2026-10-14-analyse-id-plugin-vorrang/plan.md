@@ -113,7 +113,9 @@ aufeinander aufbauende Befehle erhalten. Der Release v0.5.178 wartet auf diesen 
   - Share: `daemon::connect_exec` → `ExecIpcSession::next_event`, `ExecIpcInput::stdin/eof/cancel`.
   - SSH: `SshCommand::next_event`, `SshCommandControl::stdin/eof/cancel`.
   - Damit trägt der vorhandene Transport eine dauerhaft laufende Shell ohne Protokolländerung.
-- Kein PTY. `cancel` beendet immer den ganzen Prozessbaum.
+- Kein PTY. `cancel` beendet bei Share-Gegenstellen den ganzen enthaltenen Prozessbaum. Bei SSH
+  gehen TERM und nach 10 s KILL an die Prozessgruppe des Befehls (OpenSSH ≥ 7.9); Server ohne
+  `signal`-Unterstützung sehen nur das Schließen des Kanals (`sftp/core/command.rs`).
 
 ### C. Entscheidungen
 
@@ -155,7 +157,7 @@ aufeinander aufbauende Befehle erhalten. Der Release v0.5.178 wartet auf diesen 
   - keine Wiederanbindung nach Verbindungsende.
 - Verworfen: Host-seitige Sitzungen mit neuem Protokoll, PTY und Wiederanbindung. Das braucht
   Updates auf beiden Seiten und PTY-Code je Plattform (openpty, ConPTY); aufgeschoben als
-  TODO EXEC-PTY.
+  `EXEC-PTY` in `docs/TODO.md`.
 
 ### D. Arbeitsplan
 
@@ -166,3 +168,104 @@ aufeinander aufbauende Befehle erhalten. Der Release v0.5.178 wartet auf diesen 
 | S3 | CLI | `cli/shell.rs`, `cli/mod.rs` | `se shell @ssh < Zeilen` liefert den Zustand über Zeilen und den Exitcode von `exit 4` |
 | S4 | Doku | `README.md`, `docs/AI_AGENT_PLUGIN.md`, `SKILL.md`, `docs/TODO.md` | Verhalten und Grenzen beschrieben |
 | S5 | Suite | `native/test-analysis-plugin-task.py` | S1 bis S3 auf Linux (SSH-Container, Share-Paar) und Windows (PowerShell lokal, Share-Paar) |
+
+## Erweiterung 2026-10-14: gegenseitiges Anhängen von Shells und Sessions (R4, Teil 2)
+
+Nutzerauftrag: Die Exec-Pläne umsetzen, ergänzt um „shells sollen sich auch an ne session hängen
+können und umgekehrt“; die Umsetzung ist sicherheitsrelevant. Dieser Abschnitt ergänzt R4 und
+ersetzt die Dateilisten der Tabelle D von R4 durch die Tabelle unten.
+
+### B. Bestand
+
+- R4 legt eine Sitzung in den `se mcp`-Prozess; andere Prozesse haben keinen Zugang. Der einzige
+  Zugriff auf laufende Jobs ist `job_status`/`job_input`/`job_cancel` innerhalb desselben Servers.
+- Lokale Authentifizierung im Bestand: Daemon-IPC über Loopback-TCP mit Token aus einer
+  besitzergeschützten Datei, Vergleich in konstanter Zeit (`daemon/os/shared/ipc.rs`).
+- Share-Gegenstellen erlauben je Gerät zwei gleichzeitige Exec-Jobs
+  (`share/core/exec_registry.rs` `ExecRegistryLimits`); OpenSSH erlaubt standardmäßig 10 Kanäle je
+  Verbindung (`MaxSessions`).
+
+### C. Entscheidungen
+
+- Begriffe: Sitzung = dauerhaft laufende Shell über einen Exec-Strom, besessen von genau einem
+  lokalen `se`-Prozess (`se mcp` oder `se shell`). Shell = das Terminalkommando `se shell`.
+  Anhängen = ein weiterer lokaler Client tritt einer laufenden Sitzung bei.
+- Shell an Sitzung: `se shell --attach NAME|ID`. Sitzung an Shell: MCP-Tool `sessions` mit
+  `attach`, danach `exec` mit `session`. `se shell --list` zeigt die anhängbaren Sitzungen.
+- Aufbau: Der Besitzerprozess hostet Sitzung und einen Anhänge-Dienst nur auf `127.0.0.1`. Jeder
+  Client, auch das eigene Frontend, meldet sich im ersten Rahmen binnen 5 s mit einem Token an
+  (32 Zufallsbytes, Vergleich in konstanter Zeit). Besitzertoken nur im Prozess, Anhängetoken nur
+  in `<App-Daten>/smart_explorer/shell-sessions/<id>.json` (privat), daneben die vom Besitzer
+  gehaltene Sperre `<id>.lock`; verwaiste Einträge entfernt die nächste Auflistung.
+- Zustimmung: MCP-Sitzungen sind anhängbar, solange der Agent nicht `attachable: false` setzt
+  (Aufsicht des Menschen über den Agenten). `se shell` ist nur mit `--attachable` anhängbar, weil die
+  Shell des Menschen erhöhte Rechte oder Geheimnisse halten kann.
+- Rollen: Besitzer schließt (beendet die Sitzung); Angehängte reihen Befehle ein, senden Eingabe
+  nur an ihren eigenen Befehl, brechen ab und lösen sich.
+- Ein- und Ausgabe: ein Befehl zur Zeit in Einreichungsreihenfolge; der Einreicher erhält seine
+  Ausgabe verlustfrei, die anderen sehen Befehlstext (ohne Steuerzeichen), Ausgabe und Exitcode als
+  Aktivität (bei langsamen Lesern verlustbehaftet mit Hinweis).
+- Abbruch, Zeitlimit, Strg+C und `exit` beenden die Sitzung für alle; Lösen nicht. Ende des
+  Besitzerprozesses oder ein Desktop-Update beenden seine Sitzungen.
+- Dialekterkennung über die Probe `echo %OS%;$PSVersionTable` in der Login-Shell (cmd.exe oder
+  PowerShell → PowerShell-Dialekt, sonst POSIX). PowerShell erhält je Befehl zwei Anweisungen
+  (Ausführung, dann Marken), alle Literale als Base64-UTF-8. Exitcode PowerShell abweichend von C
+  oben: 1 bei abbrechendem Fehler, sonst `$LASTEXITCODE` ungleich 0, sonst 1 bei einem
+  Fehlerdatensatz, der nicht von einem nativen Programm stammt, sonst `$LASTEXITCODE` oder 0
+  (der Vergleich mit `$Error` meldete auch selbst abgefangene Fehler).
+- Grenzen: 8 angehängte Clients, 64 wartende Befehle, 1 MiB Befehl und Eingabe, Rahmen 64 KiB
+  (Einreichung 8 MiB, Anmeldung 4 KiB), 16 gleichzeitige Anmeldungen, 30 s Stau eines angehängten
+  Clients, 1 MiB Ausgabe zwischen Befehlen, 60 s Start, 30 s Probe, 64 KiB Aktivitätsprotokoll im
+  MCP-Server. Jede Grenze hat einen Speicher-, Thread- oder Protokollgrund.
+- Verworfen: Vermittlung über den Hintergrunddienst (er müsste SSH-Anmeldungen halten, neue
+  IPC-Fläche im langlebigen Dienst); Unix-Socket bzw. Named Pipe mit Peer-Credentials (zwei
+  Plattformimplementierungen ohne Mehrwert gegenüber dem besitzergeschützten Token); alles
+  standardmäßig anhängbar (Agent könnte eine erhöhte Shell des Menschen übernehmen).
+
+### Sicherheit
+
+| Eigenschaft | Abwehr | Prüfung |
+|---|---|---|
+| Ausführungsrechte | Sitzung = gewöhnlicher Exec über dieselbe SSH-Anmeldung bzw. denselben Share-Grant; Entzug beendet die Sitzung | Suite: Grant-Entzug beendet die Sitzung |
+| Lokale Anmeldung | Token im ersten Rahmen, 5-s-Frist, konstanter Vergleich, generische Ablehnung, nur `127.0.0.1` | Unit: gefälschtes Token, Müll und Schweigen am Port |
+| Zustimmung | `se shell` nur mit `--attachable` gelistet | Unit und Suite: ohne `--attachable` kein Anhängen |
+| Tokenvertraulichkeit | private Einträge, Listen ohne Port und Token | Unit und Suite: Listen ohne `token`/`port` |
+| Eingabe-Isolation | Eingabe nur an den eigenen interaktiven Befehl | Unit |
+| Einschleusung | POSIX `eval` mit Einzelquotierung und Nonce-Heredoc, PowerShell Base64 | Unit |
+| Steuerzeichen | Labels und gezeigte Befehle ohne Steuerzeichen | Unit |
+| Aufräumen | Abbruch beendet die Prozessgruppe bzw. den Container; Ende des Servers entfernt Sitzungen und Einträge | Suite: `pgrep` nach Abbruch, Einträge nach MCP-Ende |
+
+Protokolle: kein Befehlstext, keine Ausgabe und kein Token in Logdateien; die Exec-Historie der
+Gegenstelle bleibt redigiert (eine Sitzung erscheint als ein Exec mit Programm `<shell>`).
+
+### D. Arbeitsplan
+
+| Nr. | Meilenstein | Dateien | Erwartetes Ergebnis |
+|---|---|---|---|
+| S1 | Sitzungskern | `cli/shell_session/{types,marker,dialect,transports,engine_state,engine_state_tests,engine,local_transport}.rs` | Lokale bash- bzw. PowerShell-Sitzung: `export`/`cd`/Variable/Funktion bleiben; Exitcodes 0, 1 und `exit 3` (Sitzungsende); Ausgabe ohne Zeilenende; getrenntes stderr; mehrzeiliger Befehl; Eingabe als Heredoc bzw. `$input` |
+| S6 | Anhängen | `cli/shell_session.rs`, `cli/shell_session/{wire,registry,server,client,host,tests}.rs` | gemeinsamer Zustand Besitzer↔Angehängter, Aktivität, gefälschtes Token abgewiesen, Lösen hält die Sitzung, Abbruch beendet für alle, ohne Zustimmung kein Eintrag |
+| S2 | MCP | `cli/mcp.rs`, `cli/mcp/{exec_tool,exec_session_job,shell_registry,sessions_tool,session,server,catalog}.rs` | `exec {session}` auf SSH-Remote und Share-Gegenstelle: zweiter Befehl sieht `export`/`cd` des ersten; `sessions` listet, tritt bei, zeigt Aktivität, schließt; Zeitlimit 124; Ende der MCP-Verbindung beendet die Shells |
+| S3 | CLI | `cli/shell.rs`, `cli/shell_repl.rs`, `cli/mod.rs`, `cli/exec.rs` | `se shell @ssh < Zeilen` liefert den Zustand über Zeilen und den Exitcode von `exit 4`; `--attach` an eine Agentensitzung; Agent an `--attachable` |
+| S4 | Doku | `README.md`, `docs/AI_AGENT_PLUGIN.md`, `native/src/cli/plugin/assets/SKILL.md`, `docs/TODO.md`, `docs/ARCHITEKTUR.md` | Verhalten, Anhängen, Sicherheit und Grenzen beschrieben |
+| S5 | Suite | `native/test-analysis-plugin-task.py`, `native/test-ai-plugin-task.py`, `.github/workflows/analysis-plugin-task.yml` | Linux (OpenSSH-Container, Share-Paar) und Windows (lokale PowerShell) in einem Remote-Lauf grün |
+| S7 | Release | Release-Pfad | v0.5.178 mit allen Assets, zusammen mit M5 |
+
+Zu erhaltendes Verhalten: `exec` ohne `session` und `se exec` unverändert (Exitcodes 124/125/130);
+MCP-Vorrangabsatz, `alwaysLoad` nur auf den zwölf Datei-Tools; Share-Gegenstellen ohne Protokoll-
+oder Grenzänderung; Schließen des MCP-Servers innerhalb der 30-s-Wartezeit des Updaters.
+
+Recherche (abgerufen 2026-10-14): Microsoft Learn about_PowerShell_exe (`-Command -` führt die
+Eingabe Anweisung für Anweisung wie am Prompt aus); PowerShell Issue #21808 (Leerzeile beendet
+mehrzeilige Anweisungen bei stdin); Rust `File::try_lock` (stabil seit 1.89); tmux(1) (Socket im
+benutzereigenen Verzeichnis); sshd_config(5) (`MaxSessions` 10); Jupyter-Verbindungsdatei
+(Loopback-Ports, Schlüssel, nur für den Benutzer lesbar).
+
+### Fortschritt
+
+- [ ] S1
+- [ ] S6
+- [ ] S2
+- [ ] S3
+- [ ] S4
+- [ ] S5
+- [ ] S7
