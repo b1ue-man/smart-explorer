@@ -18,6 +18,8 @@
 //! Copies inside one server run on the server (`copy-data`, copy_data.rs).
 //! A folder is deleted with one READDIR per folder and many REMOVEs in
 //! flight on the main session (tree_remove.rs).
+//! An interactive terminal (pty-req, then shell or exec) opens as one more
+//! session channel and is driven like a command (terminal.rs, command.rs).
 
 #[path = "core/backend.rs"]
 mod backend;
@@ -55,6 +57,8 @@ mod posix_rename;
 mod reversible_replace;
 #[path = "core/session.rs"]
 mod session;
+#[path = "core/terminal.rs"]
+mod terminal;
 #[path = "core/transfer_ops.rs"]
 mod transfer_ops;
 #[path = "core/tree_remove.rs"]
@@ -78,6 +82,7 @@ mod transfer_engine_task_tests;
 pub use backend::SftpBackend;
 pub use command::{signal_number, SshCommand, SshCommandControl, SshCommandEnd, SshCommandEvent};
 pub use config::{SftpAuth, SftpConfig};
+pub use terminal::{SshTerminalError, SshTerminalRequest};
 pub use url::backend_from_url;
 
 pub(crate) use errors::io_err;
