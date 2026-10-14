@@ -20,7 +20,8 @@ const PLUGIN_HELP: &str = "\
 Install the Smart Explorer plugin into AI coding agents. The agent then starts
 `se mcp` itself and gets tools for files on saved remotes, Share peers, Google
 Drive and local disks, remote commands over SSH or Share, and every other se
-command, plus a skill that explains them.
+command, plus a skill that explains them. The plugin tells the agent to use
+these tools before its built-in file tools and shell file commands.
 
 Claude Code: se writes a local plugin marketplace into its app data and runs
 `claude plugin marketplace add` and `claude plugin install
