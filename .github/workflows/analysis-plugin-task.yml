@@ -1,0 +1,98 @@
+name: analysis-plugin-task
+run-name: Analysis job id and plugin priority ${{ inputs.candidate_sha }}
+
+# Single task-level suite of the 2026-10-14 batch
+# (docs/plaene/2026-10-14-analyse-id-plugin-vorrang/plan.md). Dispatch it once
+# for the exact pushed candidate SHA; it never builds release artifacts or
+# publishes anything.
+#   suite  fmt, development build, unit and loopback tests (remote analysis and
+#          duplicate search between two real Iroh nodes), `se mcp` instructions
+#          and alwaysLoad metadata, generated Claude Code plugin on Linux and
+#          Windows
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Full pushed candidate SHA, matching the selected ref
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: analysis-plugin-task-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  suite:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 300
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 1
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          # The fmt stage diffs the batch against its base commit.
+          fetch-depth: 50
+          persist-credentials: false
+
+      - name: Bind workflow and checkout to the requested candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
+          [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      - name: Install the agent host whose plugin contract the suite checks
+        shell: bash
+        run: npm install -g @anthropic-ai/claude-code@2.1.296
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            native
+            share-server
+          # Reuse the preceding host-library tasks' dependency/incremental output.
+          shared-key: search-recursive-access
+          cache-on-failure: true
+          cache-workspace-crates: true
+
+      - name: Run the one task entrypoint
+        shell: bash
+        timeout-minutes: 290
+        run: >-
+          python native/test-analysis-plugin-task.py
+          --log-root "$RUNNER_TEMP/analysis-plugin-task"
+
+      - name: Preserve acceptance and failure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: analysis-plugin-${{ runner.os }}-${{ inputs.candidate_sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/analysis-plugin-task
+          if-no-files-found: error
+          retention-days: 14
