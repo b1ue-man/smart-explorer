@@ -26,7 +26,8 @@ struct PlannedDir {
 /// Delete the plain folder `root` and everything below it. `remove_leaves`
 /// removes a portion of non-folder entries (files, links, special files) and
 /// returns exactly one result per leaf in order; it may keep several requests
-/// in flight. The whole tree is listed before the first removal, within the
+/// in flight, and a slow remover may answer `Interrupted` for leaves it did
+/// not start once `cancel` is set (the run then ends `Canceled`). The whole tree is listed before the first removal, within the
 /// budget of the generic walk, so an unreadable or oversized subtree removes
 /// nothing. The first failure stops the run with the counters reached.
 pub fn remove_tree_listed<B, F>(
@@ -72,6 +73,9 @@ where
                 }
             }
             if let Some(error) = first_error {
+                if error.kind() == io::ErrorKind::Interrupted && cancel.load(Ordering::Acquire) {
+                    return Ok(canceled_report(&budget, removed));
+                }
                 return Err(delete_failure(error, &budget, removed));
             }
         }

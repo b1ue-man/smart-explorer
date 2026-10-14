@@ -14,9 +14,14 @@ mod stage_move;
 mod status;
 #[path = "core/stream_put.rs"]
 mod stream_put;
+#[path = "core/tree_remove.rs"]
+mod tree_remove;
 #[path = "core/writer.rs"]
 mod writer;
 
+#[cfg(test)]
+#[path = "core/delete_speed_task_tests.rs"]
+mod delete_speed_task_tests;
 #[cfg(test)]
 #[path = "core/transfer_engine_task_tests.rs"]
 mod transfer_engine_task_tests;

@@ -2,10 +2,12 @@ use super::backend::SmbBackend;
 use super::url::{entry_path, split_path};
 use super::{stage_finish, wire};
 use crate::vfs::{
-    Backend, BackendExtensions, MtimePrecision, NameLimit, StageDurability, StageFinish,
-    StageFinished, TargetLimits, VfsListing, VfsResult,
+    Backend, BackendExtensions, MtimePrecision, NameLimit, RecursiveDeleteFailure,
+    RecursiveDeleteProgress, RecursiveDeleteReport, StageDurability, StageFinish, StageFinished,
+    TargetLimits, VfsListing, VfsResult,
 };
 use std::io;
+use std::sync::atomic::AtomicBool;
 
 impl BackendExtensions for SmbBackend {
     fn target_limits(&self, _root: &str) -> TargetLimits {
@@ -95,6 +97,34 @@ impl BackendExtensions for SmbBackend {
         Ok(StageFinished {
             mtime_applied: applied,
             durable,
+        })
+    }
+
+    /// A folder inside a share: one listing per folder and concurrent
+    /// deletes (tree_remove.rs). The share root and the server level are no
+    /// entry (`entry_path`) and keep the generic walk unchanged.
+    fn supports_remove_tree(&self, path: &str) -> VfsResult<bool> {
+        Ok(entry_path(path).is_ok())
+    }
+
+    fn remove_tree(
+        &self,
+        path: &str,
+        cancel: &AtomicBool,
+        progress: &mut dyn FnMut(RecursiveDeleteProgress),
+    ) -> Result<RecursiveDeleteReport, RecursiveDeleteFailure> {
+        let share = match entry_path(path) {
+            Ok(target) => target.share,
+            Err(error) => {
+                return Err(RecursiveDeleteFailure {
+                    error,
+                    planned: 0,
+                    removed: 0,
+                })
+            }
+        };
+        crate::vfs::remove_tree_listed(self, path, cancel, progress, |leaves| {
+            self.remove_tree_leaves(&share, leaves)
         })
     }
 }

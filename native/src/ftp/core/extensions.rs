@@ -2,8 +2,10 @@ use super::core_impl::FtpBackend;
 use super::errors::{command_path, map, reply_code};
 use super::metadata::{list, read_time};
 use crate::vfs::{
-    Backend, BackendExtensions, StageFinish, StageFinished, TargetLimits, VfsListing, VfsResult,
+    Backend, BackendExtensions, RecursiveDeleteFailure, RecursiveDeleteProgress,
+    RecursiveDeleteReport, StageFinish, StageFinished, TargetLimits, VfsListing, VfsResult,
 };
+use std::sync::atomic::AtomicBool;
 use suppaftp::Status;
 
 impl BackendExtensions for FtpBackend {
@@ -70,5 +72,20 @@ impl BackendExtensions for FtpBackend {
             mtime_applied: applied,
             durable: false,
         })
+    }
+
+    /// Every folder: one names-and-types listing per folder and one DELE per
+    /// entry, without the generic walk's stats (tree_remove.rs).
+    fn supports_remove_tree(&self, _path: &str) -> VfsResult<bool> {
+        Ok(true)
+    }
+
+    fn remove_tree(
+        &self,
+        path: &str,
+        cancel: &AtomicBool,
+        progress: &mut dyn FnMut(RecursiveDeleteProgress),
+    ) -> Result<RecursiveDeleteReport, RecursiveDeleteFailure> {
+        super::tree_remove::remove_tree(self, path, cancel, progress)
     }
 }

@@ -75,6 +75,8 @@ pub(crate) use sync_roots::{sync_backend, validate_sync_roots};
 mod trait_defaults;
 #[path = "core/tree_remove_listed.rs"]
 mod tree_remove_listed;
+#[path = "core/tree_remove_pipelined.rs"]
+mod tree_remove_pipelined;
 #[cfg(windows)]
 #[path = "os/windows/verbatim.rs"]
 mod verbatim;
@@ -101,6 +103,7 @@ pub use self::local_extensions::{local_mount_boundary, local_volume_identity};
 pub use self::staging_names::is_staging_name;
 pub(crate) use self::staging_names::{fit_stage_name, is_unique_stage};
 pub use self::tree_remove_listed::{remove_tree_listed, TREE_LEAF_PORTION};
+pub use self::tree_remove_pipelined::remove_leaves_pipelined;
 pub use self::volume::{MountKind, VolumeIdentity};
 
 pub use self::cache::CachingBackend;
