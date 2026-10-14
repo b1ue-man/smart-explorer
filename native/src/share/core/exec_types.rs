@@ -4,6 +4,8 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::io;
 
+use super::exec_terminal::ExecTerminalRequest;
+
 pub(crate) const EXEC_PROTOCOL_VERSION: u16 = 2;
 pub(crate) const EXEC_CAPABILITY: &str = "exec_stream_v2";
 pub(crate) const MAX_EXEC_START_BYTES: usize = 128 * 1024;
@@ -40,11 +42,14 @@ impl fmt::Display for ExecId {
     }
 }
 
+/// What a start runs. `Login` is the interactive login shell of the host user
+/// and is valid only together with a terminal.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "mode", rename_all = "snake_case")]
 pub enum ExecCommand {
     Argv { program: String, args: Vec<String> },
     Shell { command: String },
+    Login,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -59,11 +64,16 @@ pub struct ExecStart {
     pub timeout_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_bytes: Option<u64>,
+    /// A start without a terminal serializes without this key, so its bytes
+    /// and digest stay those of hosts and clients that predate terminals.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal: Option<ExecTerminalRequest>,
 }
 
 impl ExecStart {
     pub fn validate(&self) -> io::Result<()> {
         ExecId::parse(self.exec_id.as_str())?;
+        self.validate_terminal()?;
         match &self.command {
             ExecCommand::Argv { program, args } => {
                 validate_os_string(program, "program")?;
@@ -80,6 +90,7 @@ impl ExecStart {
                     return Err(invalid("remote shell command is empty"));
                 }
             }
+            ExecCommand::Login => {}
         }
         if let Some(cwd) = &self.cwd {
             validate_os_string(cwd, "working directory")?;
@@ -101,6 +112,17 @@ impl ExecStart {
         Ok(())
     }
 
+    /// The login shell runs in a terminal and only the login shell does.
+    fn validate_terminal(&self) -> io::Result<()> {
+        let login = matches!(self.command, ExecCommand::Login);
+        match &self.terminal {
+            Some(terminal) if login => terminal.validate(),
+            Some(_) => Err(invalid("a terminal is only valid for the login shell")),
+            None if login => Err(invalid("an interactive login shell needs a terminal")),
+            None => Ok(()),
+        }
+    }
+
     pub fn digest(&self) -> io::Result<String> {
         self.validate()?;
         let encoded = serde_json::to_vec(self).map_err(super::core::eio)?;
@@ -110,7 +132,7 @@ impl ExecStart {
     pub fn display_program(&self) -> &str {
         match &self.command {
             ExecCommand::Argv { program, .. } => program,
-            ExecCommand::Shell { .. } => "<shell>",
+            ExecCommand::Shell { .. } | ExecCommand::Login => "<shell>",
         }
     }
 
@@ -226,6 +248,7 @@ fn invalid(message: &'static str) -> io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::share::ExecTerminalSize;
 
     fn start() -> ExecStart {
         ExecStart {
@@ -238,6 +261,7 @@ mod tests {
             env: BTreeMap::from([("UNICODE".into(), "Gruesse 🌍".into())]),
             timeout_ms: None,
             max_output_bytes: None,
+            terminal: None,
         }
     }
 
@@ -276,5 +300,180 @@ mod tests {
         request.max_output_bytes = Some(0);
         assert_eq!(request.effective_timeout_ms(), None);
         assert_eq!(request.effective_max_output_bytes(), None);
+    }
+
+    fn terminal_request(term: &str, cols: u16, rows: u16) -> ExecTerminalRequest {
+        ExecTerminalRequest {
+            term: term.into(),
+            size: ExecTerminalSize { cols, rows },
+        }
+    }
+
+    fn login(terminal: Option<ExecTerminalRequest>) -> ExecStart {
+        ExecStart {
+            exec_id: ExecId::parse("00".repeat(16)).unwrap(),
+            command: ExecCommand::Login,
+            cwd: None,
+            env: BTreeMap::new(),
+            timeout_ms: None,
+            max_output_bytes: None,
+            terminal,
+        }
+    }
+
+    #[test]
+    fn terminal_task_start_without_terminal_keeps_its_bytes_and_digest() {
+        let request = ExecStart {
+            exec_id: ExecId::parse("00".repeat(16)).unwrap(),
+            command: ExecCommand::Argv {
+                program: "printf".into(),
+                args: vec!["".into(), "a b".into()],
+            },
+            cwd: Some("/tmp/a b".into()),
+            env: BTreeMap::from([("K".into(), "V".into())]),
+            timeout_ms: Some(5000),
+            max_output_bytes: Some(1024),
+            terminal: None,
+        };
+        // The encoding and digest below are those of the start type before
+        // terminals existed: the struct had exactly these keys in this order.
+        let encoded = serde_json::to_string(&request).unwrap();
+        assert_eq!(
+            encoded,
+            r#"{"exec_id":"00000000000000000000000000000000","command":{"mode":"argv","program":"printf","args":["","a b"]},"cwd":"/tmp/a b","env":{"K":"V"},"timeout_ms":5000,"max_output_bytes":1024}"#
+        );
+        assert!(!encoded.contains("terminal"));
+        assert_eq!(
+            request.digest().unwrap(),
+            "b6626090fc5cb1f61c514e981661139a799f40e08688115a35af93d0d349e64a"
+        );
+        let decoded: ExecStart = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded, request);
+    }
+
+    #[test]
+    fn terminal_task_terminal_start_carries_the_key_last_and_round_trips() {
+        let request = login(Some(terminal_request("xterm-256color", 80, 24)));
+        request.validate().unwrap();
+        let encoded = serde_json::to_string(&request).unwrap();
+        assert_eq!(
+            encoded,
+            r#"{"exec_id":"00000000000000000000000000000000","command":{"mode":"login"},"terminal":{"term":"xterm-256color","size":{"cols":80,"rows":24}}}"#
+        );
+        let decoded: ExecStart = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded, request);
+        assert_ne!(
+            request.digest().unwrap(),
+            login(Some(terminal_request("xterm-256color", 80, 25)))
+                .digest()
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn terminal_task_size_limits_are_one_to_32767() {
+        let cases = [
+            (0, 24, false),
+            (80, 0, false),
+            (32768, 24, false),
+            (80, 32768, false),
+            (u16::MAX, u16::MAX, false),
+            (1, 1, true),
+            (80, 24, true),
+            (32767, 32767, true),
+        ];
+        for (cols, rows, valid) in cases {
+            let size = ExecTerminalSize { cols, rows };
+            assert_eq!(size.validate().is_ok(), valid, "{cols}x{rows}");
+            let start = login(Some(terminal_request("xterm", cols, rows)));
+            assert_eq!(start.validate().is_ok(), valid, "{cols}x{rows}");
+            if !valid {
+                let error = size.validate().unwrap_err();
+                assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+            }
+        }
+    }
+
+    #[test]
+    fn terminal_task_term_value_is_a_short_portable_name() {
+        let too_long = "a".repeat(65);
+        let longest = "a".repeat(64);
+        for term in [
+            "",
+            "xterm 256",
+            " xterm",
+            "xterm\u{7}",
+            "xterm\n",
+            "xterm\0",
+            "x/y",
+            "x=y",
+            "grüne",
+            too_long.as_str(),
+        ] {
+            let error = login(Some(terminal_request(term, 80, 24)))
+                .validate()
+                .unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{term:?}");
+        }
+        for term in [
+            "xterm-256color",
+            "linux",
+            "screen.xterm-256color",
+            "a+b_c.d-e",
+            "X",
+            longest.as_str(),
+        ] {
+            login(Some(terminal_request(term, 80, 24)))
+                .validate()
+                .unwrap_or_else(|error| panic!("{term:?}: {error}"));
+        }
+    }
+
+    #[test]
+    fn terminal_task_login_and_terminal_only_exist_together() {
+        let error = login(None).validate().unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        let mut with_options = login(Some(terminal_request("xterm", 80, 24)));
+        with_options.cwd = Some("/tmp".into());
+        with_options.env.insert("LANG".into(), "C".into());
+        with_options.timeout_ms = Some(1000);
+        with_options.validate().unwrap();
+
+        let mut argv = start();
+        argv.terminal = Some(terminal_request("xterm", 80, 24));
+        let error = argv.validate().unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        let mut shell = start();
+        shell.command = ExecCommand::Shell {
+            command: "true".into(),
+        };
+        shell.terminal = Some(terminal_request("xterm", 80, 24));
+        let error = shell.validate().unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        shell.terminal = None;
+        shell.validate().unwrap();
+    }
+
+    #[test]
+    fn terminal_task_login_is_a_unit_mode_and_hidden_in_the_history() {
+        assert_eq!(
+            serde_json::to_string(&ExecCommand::Login).unwrap(),
+            r#"{"mode":"login"}"#
+        );
+        let decoded: ExecCommand = serde_json::from_str(r#"{"mode":"login"}"#).unwrap();
+        assert_eq!(decoded, ExecCommand::Login);
+        let request = login(Some(terminal_request("xterm", 80, 24)));
+        assert_eq!(request.display_program(), "<shell>");
+        assert_eq!(
+            ExecStart {
+                command: ExecCommand::Shell {
+                    command: "secret".into()
+                },
+                terminal: None,
+                ..request
+            }
+            .display_program(),
+            "<shell>"
+        );
     }
 }

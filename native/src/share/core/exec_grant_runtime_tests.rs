@@ -240,5 +240,6 @@ fn start() -> ExecStart {
         env: BTreeMap::new(),
         timeout_ms: None,
         max_output_bytes: None,
+        terminal: None,
     }
 }

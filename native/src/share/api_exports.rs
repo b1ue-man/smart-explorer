@@ -55,6 +55,10 @@ pub(crate) use self::exec_session::{ShareExecInput, ShareExecSession};
 pub use self::exec_targets::{
     exec_target_views, resolve_exec_target, ExecTargetRelation, ExecTargetView,
 };
+// Name of the capability for the terminal sessions built on top of Exec.
+#[allow(unused_imports)]
+pub(crate) use self::exec_terminal::EXEC_TERMINAL_FEATURE;
+pub use self::exec_terminal::{ExecTerminalRequest, ExecTerminalSize};
 pub use self::exec_types::{
     ExecCommand, ExecId, ExecJobView, ExecLifecycleState, ExecProviderStatus, ExecStart,
     ExecTerminal, ExecTerminalKind,

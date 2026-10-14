@@ -5,6 +5,9 @@ use crate::share::exec_heartbeat::ExecHeartbeatPolicy;
 use crate::share::exec_protocol::{
     recv_server_frame, send_client_frame, send_server_frame, ClientFrame, ServerFrame,
 };
+use crate::share::exec_terminal::{
+    host_denial, host_features, ExecTerminalRequest, ExecTerminalSize,
+};
 use crate::share::exec_types::{ExecCommand, ExecId, ExecTerminal, ExecTerminalKind};
 
 fn id(byte: &str) -> ExecId {
@@ -23,6 +26,7 @@ fn terminal_ack_drains_in_flight_frames_and_rejects_other_exec_ids() {
         env: BTreeMap::new(),
         timeout_ms: None,
         max_output_bytes: None,
+        terminal: None,
     };
     let mut protocol = ServerProtocolState::default();
     protocol
@@ -64,6 +68,87 @@ fn terminal_ack_drains_in_flight_frames_and_rejects_other_exec_ids() {
         ClientFrame::ResultAck { exec_id: id("22") },
     )
     .is_err());
+}
+
+fn terminal_start(exec_id: ExecId) -> ExecStart {
+    ExecStart {
+        exec_id,
+        command: ExecCommand::Login,
+        cwd: None,
+        env: BTreeMap::new(),
+        timeout_ms: None,
+        max_output_bytes: None,
+        terminal: Some(ExecTerminalRequest {
+            term: "xterm-256color".into(),
+            size: ExecTerminalSize { cols: 80, rows: 24 },
+        }),
+    }
+}
+
+#[test]
+fn terminal_task_resize_after_the_result_is_drained_only_for_terminal_starts() {
+    let exec_id = id("44");
+    let resize = || ClientFrame::Resize {
+        exec_id: exec_id.clone(),
+        size: ExecTerminalSize {
+            cols: 120,
+            rows: 40,
+        },
+    };
+    let request = terminal_start(exec_id.clone());
+    let mut protocol = ServerProtocolState::default();
+    protocol
+        .accept(&ClientFrame::Start {
+            digest: request.digest().unwrap(),
+            start: request,
+        })
+        .unwrap();
+    protocol.terminal();
+    assert!(!validate_result_ack_frame(&mut protocol, &exec_id, resize()).unwrap());
+    assert!(validate_result_ack_frame(
+        &mut protocol,
+        &exec_id,
+        ClientFrame::ResultAck {
+            exec_id: exec_id.clone(),
+        },
+    )
+    .unwrap());
+
+    let plain = ExecStart {
+        command: ExecCommand::Shell {
+            command: "printf x".into(),
+        },
+        terminal: None,
+        ..terminal_start(exec_id.clone())
+    };
+    let mut protocol = ServerProtocolState::default();
+    protocol
+        .accept(&ClientFrame::Start {
+            digest: plain.digest().unwrap(),
+            start: plain,
+        })
+        .unwrap();
+    protocol.terminal();
+    assert!(validate_result_ack_frame(&mut protocol, &exec_id, resize()).is_err());
+}
+
+#[test]
+fn terminal_task_host_without_terminal_support_denies_only_terminal_starts() {
+    let wanted = terminal_start(id("55"));
+    let plain = ExecStart {
+        command: ExecCommand::Shell {
+            command: "printf x".into(),
+        },
+        terminal: None,
+        ..wanted.clone()
+    };
+    assert_eq!(host_denial(&plain, false), None);
+    assert_eq!(host_denial(&plain, true), None);
+    assert_eq!(host_denial(&wanted, true), None);
+    let denial = host_denial(&wanted, false).unwrap();
+    assert_eq!(denial.code, "terminal_unsupported");
+    assert!(host_features(false).is_empty());
+    assert_eq!(host_features(true), ["exec_terminal_v1"]);
 }
 
 #[test]

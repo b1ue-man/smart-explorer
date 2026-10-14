@@ -72,10 +72,15 @@ fn start(byte: &str) -> ExecStart {
         env: BTreeMap::new(),
         timeout_ms: None,
         max_output_bytes: None,
+        terminal: None,
     }
 }
 
 fn hello_ok(available: bool) -> ExecHelloOk {
+    hello_with_features(available, Vec::new())
+}
+
+fn hello_with_features(available: bool, features: Vec<String>) -> ExecHelloOk {
     ExecHelloOk {
         authorization: ExecAuthorization {
             policy_revision: 3,
@@ -89,6 +94,7 @@ fn hello_ok(available: bool) -> ExecHelloOk {
             elevated: false,
             user_label: "tester".into(),
         },
+        features,
     }
 }
 

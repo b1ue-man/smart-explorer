@@ -79,6 +79,7 @@ fn fork_probe_request() -> io::Result<ExecStart> {
         env: Default::default(),
         timeout_ms: None,
         max_output_bytes: None,
+        terminal: None,
     };
     request.validate()?;
     Ok(request)

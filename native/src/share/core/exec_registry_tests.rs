@@ -27,6 +27,7 @@ fn start(byte: &str, command: &str) -> ExecStart {
         env: BTreeMap::from([("SECRET".into(), "not-persisted".into())]),
         timeout_ms: None,
         max_output_bytes: None,
+        terminal: None,
     }
 }
 

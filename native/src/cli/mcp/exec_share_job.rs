@@ -37,6 +37,7 @@ pub(super) fn start(session: &Session, request: ExecRequest) -> Result<Arc<Job>,
             .timeout_seconds
             .map(|seconds| seconds.saturating_mul(1_000)),
         max_output_bytes: None,
+        terminal: None,
     };
     start.validate().map_err(|error| error.to_string())?;
     let remote = crate::daemon::connect_exec(peer, start)?;

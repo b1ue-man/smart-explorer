@@ -14,6 +14,7 @@ use super::exec_protocol::{
     recv_hello_result, recv_server_hello, send_client_frame, send_client_hello, ClientFrame,
     ExecHelloOk,
 };
+use super::exec_terminal::{require_host_terminal, ExecTerminalSize};
 use super::exec_types::{ExecAuthorization, ExecId, ExecProviderStatus, ExecStart, ExecTerminal};
 use super::identity::ShareIdentity;
 use super::types::PeerEndpoint;
@@ -29,6 +30,8 @@ pub(crate) enum ExecClientInput {
     Stdin(Vec<u8>),
     StdinEof,
     Cancel,
+    /// New window size; sent only for a terminal start, otherwise dropped.
+    Resize(ExecTerminalSize),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -254,7 +257,9 @@ where
         ));
     }
 
+    require_host_terminal(&start, &hello.features)?;
     let exec_id = start.exec_id.clone();
+    let terminal = start.terminal.is_some();
     let digest = start
         .digest()
         .map_err(|error| protocol(error, false, "invalid_start"))?;
@@ -274,6 +279,7 @@ where
         input,
         events,
         exec_id,
+        terminal,
         heartbeat_policy,
         transport_closed,
     )

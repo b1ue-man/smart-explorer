@@ -2,6 +2,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::io;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
+use super::exec_terminal::ExecTerminalSize;
 use super::exec_types::{
     ExecAuthorization, ExecId, ExecProviderStatus, ExecStart, ExecTerminal, EXEC_CAPABILITY,
     EXEC_PROTOCOL_VERSION, MAX_EXEC_DATA_BYTES, MAX_EXEC_START_BYTES,
@@ -9,6 +10,7 @@ use super::exec_types::{
 
 pub(crate) const EXEC_ALPN: &[u8] = b"smart-explorer/share-exec/2";
 const MAX_HANDSHAKE_BYTES: usize = 64 * 1024;
+const MAX_RESIZE_BYTES: usize = 256;
 const HEADER_BYTES: usize = 5;
 
 const SERVER_HELLO: u8 = 1;
@@ -21,6 +23,7 @@ const STDIN_EOF: u8 = 18;
 const CANCEL: u8 = 19;
 const PING: u8 = 20;
 const RESULT_ACK: u8 = 21;
+const RESIZE: u8 = 22;
 const STARTED: u8 = 32;
 const STDOUT: u8 = 33;
 const STDERR: u8 = 34;
@@ -79,6 +82,9 @@ pub(crate) struct ExecClientHello {
 pub(crate) struct ExecHelloOk {
     pub authorization: ExecAuthorization,
     pub provider: ExecProviderStatus,
+    /// Optional host capabilities; hosts that predate them send none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub features: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -87,14 +93,35 @@ pub(crate) struct ExecWireError {
     pub message: String,
 }
 
+/// Frames of the client stream. `Resize` carries the new window size of the
+/// terminal of a terminal start.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ClientFrame {
-    Start { start: ExecStart, digest: String },
-    Stdin { exec_id: ExecId, data: Vec<u8> },
-    StdinEof { exec_id: ExecId },
-    Cancel { exec_id: ExecId },
-    Ping { exec_id: ExecId, sequence: u64 },
-    ResultAck { exec_id: ExecId },
+    Start {
+        start: ExecStart,
+        digest: String,
+    },
+    Stdin {
+        exec_id: ExecId,
+        data: Vec<u8>,
+    },
+    StdinEof {
+        exec_id: ExecId,
+    },
+    Cancel {
+        exec_id: ExecId,
+    },
+    Ping {
+        exec_id: ExecId,
+        sequence: u64,
+    },
+    ResultAck {
+        exec_id: ExecId,
+    },
+    Resize {
+        exec_id: ExecId,
+        size: ExecTerminalSize,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -109,7 +136,7 @@ pub(crate) enum ServerFrame {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum ServerProtocolState {
+enum Phase {
     #[default]
     AwaitStart,
     Running,
@@ -118,31 +145,48 @@ pub(crate) enum ServerProtocolState {
     Terminal,
 }
 
+/// Order rules for the frames of one client stream. It remembers whether the
+/// accepted start asked for a terminal, which alone allows `Resize`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ServerProtocolState {
+    phase: Phase,
+    terminal_start: bool,
+}
+
 impl ServerProtocolState {
     pub(crate) fn accept(&mut self, frame: &ClientFrame) -> io::Result<()> {
-        match (*self, frame) {
-            (Self::AwaitStart, ClientFrame::Start { start, digest }) => {
+        match (self.phase, frame) {
+            (Phase::AwaitStart, ClientFrame::Start { start, digest }) => {
                 start.validate()?;
                 if &start.digest()? != digest {
                     return Err(invalid("exec start digest mismatch"));
                 }
-                *self = Self::Running;
+                self.terminal_start = start.terminal.is_some();
+                self.phase = Phase::Running;
             }
-            (Self::Running, ClientFrame::Stdin { data, .. })
+            (Phase::Running, ClientFrame::Stdin { data, .. })
                 if data.len() <= MAX_EXEC_DATA_BYTES => {}
-            (Self::Running, ClientFrame::StdinEof { .. }) => *self = Self::StdinClosed,
-            (Self::Running | Self::StdinClosed, ClientFrame::Cancel { .. }) => {
-                *self = Self::Cancelling
+            (Phase::Running, ClientFrame::StdinEof { .. }) => self.phase = Phase::StdinClosed,
+            (Phase::Running | Phase::StdinClosed, ClientFrame::Cancel { .. }) => {
+                self.phase = Phase::Cancelling
             }
-            (Self::Running | Self::StdinClosed | Self::Cancelling, ClientFrame::Ping { .. }) => {}
+            (Phase::Running | Phase::StdinClosed | Phase::Cancelling, ClientFrame::Ping { .. }) => {
+            }
+            // Only a terminal start has a window to resize. Like Stdin, a
+            // Resize can still be queued ahead of ResultAck after the
+            // terminal result; it is drained there without effect.
+            (
+                Phase::Running | Phase::StdinClosed | Phase::Cancelling | Phase::Terminal,
+                ClientFrame::Resize { size, .. },
+            ) if self.terminal_start => size.validate()?,
             // Frames written before the peer observed Terminal can still be
             // queued ahead of ResultAck on the ordered client stream. They no
             // longer affect the finished job, but must be drained so the
             // acknowledgement can close the terminal-result handshake.
-            (Self::Terminal, ClientFrame::Stdin { data, .. })
+            (Phase::Terminal, ClientFrame::Stdin { data, .. })
                 if data.len() <= MAX_EXEC_DATA_BYTES => {}
             (
-                Self::Terminal,
+                Phase::Terminal,
                 ClientFrame::StdinEof { .. }
                 | ClientFrame::Cancel { .. }
                 | ClientFrame::Ping { .. }
@@ -157,7 +201,7 @@ impl ServerProtocolState {
     }
 
     pub(crate) fn terminal(&mut self) {
-        *self = Self::Terminal;
+        self.phase = Phase::Terminal;
     }
 }
 
@@ -228,6 +272,10 @@ pub(crate) async fn send_client_frame<W: AsyncWrite + Unpin>(
             send_json(writer, PING, &(exec_id, sequence), 256).await
         }
         ClientFrame::ResultAck { exec_id } => send_json(writer, RESULT_ACK, exec_id, 128).await,
+        ClientFrame::Resize { exec_id, size } => {
+            size.validate()?;
+            send_json(writer, RESIZE, &(exec_id, size), MAX_RESIZE_BYTES).await
+        }
     }
 }
 
@@ -258,6 +306,11 @@ pub(crate) async fn recv_client_frame<R: AsyncRead + Unpin>(
         RESULT_ACK => Ok(ClientFrame::ResultAck {
             exec_id: decode(&payload)?,
         }),
+        RESIZE if payload.len() <= MAX_RESIZE_BYTES => {
+            let (exec_id, size) = decode(&payload)?;
+            Ok(ClientFrame::Resize { exec_id, size })
+        }
+        RESIZE => Err(invalid("exec resize frame exceeds its byte limit")),
         _ => Err(invalid("unknown exec client frame")),
     }
 }
