@@ -73,6 +73,8 @@ mod sync_roots;
 pub(crate) use sync_roots::{sync_backend, validate_sync_roots};
 #[path = "core/trait_defaults.rs"]
 mod trait_defaults;
+#[path = "core/tree_remove_listed.rs"]
+mod tree_remove_listed;
 #[cfg(windows)]
 #[path = "os/windows/verbatim.rs"]
 mod verbatim;
@@ -84,9 +86,9 @@ pub use self::extension_calls::confirm_namespace;
 pub use self::extension_calls::{
     change_signal, change_signal_mode, find_duplicates, finish_stage, hash_walk, list_dir_tolerant,
     mtime_precision, open_read_regular, open_write_copy_stage_timed, previous_state_identities,
-    recycle, replace_staged_reversible, supports_duplicate_search, supports_hash_walk,
-    supports_recycle, sync_child_path, sync_filesystem, sync_path, sync_stat, target_limits,
-    unix_mode, version_archive_policy, volume_identity,
+    recycle, remove_tree, replace_staged_reversible, supports_duplicate_search, supports_hash_walk,
+    supports_recycle, supports_remove_tree, sync_child_path, sync_filesystem, sync_path, sync_stat,
+    target_limits, unix_mode, version_archive_policy, volume_identity,
 };
 pub use self::extension_types::{
     ChangeNotice, ChangeSignalMode, ChangeSubscription, HashWalkEntry, HashWalkItem,
@@ -98,6 +100,7 @@ pub use self::extensions::{BackendExtensions, VersionArchivePolicy};
 pub use self::local_extensions::{local_mount_boundary, local_volume_identity};
 pub use self::staging_names::is_staging_name;
 pub(crate) use self::staging_names::{fit_stage_name, is_unique_stage};
+pub use self::tree_remove_listed::{remove_tree_listed, TREE_LEAF_PORTION};
 pub use self::volume::{MountKind, VolumeIdentity};
 
 pub use self::cache::CachingBackend;
@@ -125,6 +128,9 @@ pub(crate) use self::promotion::{promote_staged_no_replace_with, promote_staged_
 #[cfg(test)]
 #[path = "os/shared/copy_paste_task_tests.rs"]
 mod copy_paste_task_tests;
+#[cfg(test)]
+#[path = "core/delete_speed_task_tests.rs"]
+mod delete_speed_task_tests;
 #[cfg(test)]
 #[path = "core/delete_tests.rs"]
 mod delete_tests;

@@ -6,6 +6,7 @@ use std::io::{Read, Write};
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
+use super::delete::{RecursiveDeleteFailure, RecursiveDeleteProgress, RecursiveDeleteReport};
 use super::extension_types::{
     ChangeNotice, ChangeSignalMode, ChangeSubscription, HashWalkItem, HashWalkRequest,
     RecycleExpectation, RecycleOutcome, StageFinish, StageFinished, TargetLimits, VfsListing,
@@ -197,6 +198,30 @@ pub trait BackendExtensions: Backend {
     fn recycle(&self, path: &str, expected: &RecycleExpectation) -> VfsResult<RecycleOutcome> {
         let _ = (path, expected);
         super::meta::unsupported("recycling on the storing device is not supported")
+    }
+
+    /// Whether `remove_tree` deletes the folder `path` with everything below
+    /// it in one operation next to the data (Share host, SSH agent, background
+    /// service) or with pipelined protocol requests, instead of a caller walk.
+    fn supports_remove_tree(&self, path: &str) -> VfsResult<bool> {
+        let _ = path;
+        Ok(false)
+    }
+
+    /// Delete the plain folder `path` and everything below it. Links are
+    /// removed as entries and never followed; a link or file at `path` is
+    /// refused, and each implementation keeps its root protections (a Share
+    /// host never removes its export root). Counters go to `progress`; a set
+    /// `cancel` ends the run at the next entry with `Canceled` (removed entries
+    /// stay removed); a failure carries the counters reached.
+    fn remove_tree(
+        &self,
+        path: &str,
+        cancel: &AtomicBool,
+        progress: &mut dyn FnMut(RecursiveDeleteProgress),
+    ) -> Result<RecursiveDeleteReport, RecursiveDeleteFailure> {
+        let _ = (path, cancel, progress);
+        Err(super::extension_calls::tree_removal_unsupported())
     }
 
     /// How `change_signal` learns about changes below `root`.

@@ -82,6 +82,15 @@ pub fn remove_entry_controlled<F>(
 where
     F: FnMut(RecursiveDeleteProgress),
 {
+    // A folder goes to the backend's own tree delete when it offers one (the
+    // host, agent or service deletes next to the data, or the protocol
+    // pipelines); otherwise the caller walks it entry by entry below.
+    if target.is_dir
+        && !target.is_symlink
+        && super::extension_calls::supports_remove_tree(backend, &target.path).unwrap_or(false)
+    {
+        return super::extension_calls::remove_tree(backend, &target.path, cancel, &mut progress);
+    }
     let mut budget = DeleteBudget::default();
     let plan = match collect_delete_plan(backend, target, cancel, &mut budget, &mut progress) {
         Ok(Some(plan)) => plan,
@@ -122,13 +131,13 @@ where
 }
 
 #[derive(Default)]
-struct DeleteBudget {
-    entries: u64,
+pub(super) struct DeleteBudget {
+    pub(super) entries: u64,
     text_bytes: u64,
 }
 
 impl DeleteBudget {
-    fn record(&mut self, path: &str, depth: usize) -> VfsResult<()> {
+    pub(super) fn record(&mut self, path: &str, depth: usize) -> VfsResult<()> {
         if depth > MAX_DELETE_DEPTH {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -299,7 +308,7 @@ where
     });
 }
 
-fn canceled_report(budget: &DeleteBudget, removed: u64) -> RecursiveDeleteReport {
+pub(super) fn canceled_report(budget: &DeleteBudget, removed: u64) -> RecursiveDeleteReport {
     RecursiveDeleteReport {
         status: RecursiveDeleteStatus::Canceled,
         planned: budget.entries,
@@ -307,7 +316,11 @@ fn canceled_report(budget: &DeleteBudget, removed: u64) -> RecursiveDeleteReport
     }
 }
 
-fn delete_failure(error: io::Error, budget: &DeleteBudget, removed: u64) -> RecursiveDeleteFailure {
+pub(super) fn delete_failure(
+    error: io::Error,
+    budget: &DeleteBudget,
+    removed: u64,
+) -> RecursiveDeleteFailure {
     RecursiveDeleteFailure {
         error,
         planned: budget.entries,
@@ -330,7 +343,7 @@ pub(crate) fn validate_child_name(name: &str) -> VfsResult<()> {
     Ok(())
 }
 
-fn join_child(parent: &str, child: &str) -> String {
+pub(super) fn join_child(parent: &str, child: &str) -> String {
     let base = parent.trim_end_matches('/');
     if base.is_empty() {
         format!("/{child}")

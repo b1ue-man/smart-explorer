@@ -5,6 +5,7 @@ use std::io::{Read, Write};
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
+use super::delete::{RecursiveDeleteFailure, RecursiveDeleteProgress, RecursiveDeleteReport};
 use super::extension_types::{
     ChangeNotice, ChangeSignalMode, ChangeSubscription, HashWalkItem, HashWalkRequest,
     MtimePrecision, RecycleExpectation, RecycleOutcome, StageFinish, StageFinished, TargetLimits,
@@ -300,5 +301,37 @@ pub fn change_signal<B: Backend + ?Sized>(
     match backend.extensions() {
         Some(extensions) => extensions.change_signal(root, poll_interval, tx),
         None => Ok(None),
+    }
+}
+
+pub fn supports_remove_tree<B: Backend + ?Sized>(backend: &B, path: &str) -> VfsResult<bool> {
+    match backend.extensions() {
+        Some(extensions) => extensions.supports_remove_tree(path),
+        None => Ok(false),
+    }
+}
+
+/// Delete a whole folder in one backend operation; an `Unsupported` failure
+/// without the extension (callers check `supports_remove_tree` first).
+pub fn remove_tree<B: Backend + ?Sized>(
+    backend: &B,
+    path: &str,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(RecursiveDeleteProgress),
+) -> Result<RecursiveDeleteReport, RecursiveDeleteFailure> {
+    match backend.extensions() {
+        Some(extensions) => extensions.remove_tree(path, cancel, progress),
+        None => Err(tree_removal_unsupported()),
+    }
+}
+
+pub(super) fn tree_removal_unsupported() -> RecursiveDeleteFailure {
+    RecursiveDeleteFailure {
+        error: std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "deleting a whole folder in one operation is not supported",
+        ),
+        planned: 0,
+        removed: 0,
     }
 }
