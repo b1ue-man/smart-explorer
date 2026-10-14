@@ -5,7 +5,13 @@
 //! anything else is refused with one generic answer. Only 127.0.0.1 is
 //! bound. The owner token never leaves this process, the attach token only
 //! reaches the owner-only session entry of an attachable session.
+//!
+//! A hosted session is a command session (`engine.rs`, hello versions 1 and 2)
+//! or a terminal session (`terminal_engine.rs`, hello version 2 only); a
+//! terminal session's connections are served by `terminal_server.rs`.
 use super::engine::{Engine, Outbound, OUTBOUND_CAPACITY};
+use super::terminal_engine::TerminalEngine;
+use super::terminal_server;
 use super::types::{Activity, OwnEvent, Role, Stream};
 use super::wire;
 use crossbeam_channel::{Receiver, Sender};
@@ -20,7 +26,11 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 /// Unauthenticated connections served at once; more are closed at once.
 const MAX_HANDSHAKES: usize = 16;
 /// A write stall after which an attached client's connection is closed.
-const ATTACHED_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
+pub(super) const ATTACHED_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
+/// The answer to a client of an older release that tries to join a terminal
+/// session (hello version 1), given only after it proved the token.
+pub(super) const TERMINAL_NEEDS_NEWER_CLIENT: &str =
+    "this is a terminal session; attach with a newer se";
 /// Longest participant label shown to others.
 const MAX_LABEL_CHARS: usize = 64;
 
@@ -30,8 +40,24 @@ pub(super) struct AttachServer {
     handshakes: AtomicUsize,
 }
 
+/// A hosted session; its clients speak the protocol of its kind.
+#[derive(Clone)]
+enum Session {
+    Commands(Arc<Engine>),
+    Terminal(Arc<TerminalEngine>),
+}
+
+impl Session {
+    fn attachable(&self) -> bool {
+        match self {
+            Self::Commands(engine) => engine.meta.attachable,
+            Self::Terminal(engine) => engine.meta.attachable,
+        }
+    }
+}
+
 struct Hosted {
-    engine: Arc<Engine>,
+    session: Session,
     owner_token: String,
     attach_token: String,
 }
@@ -79,27 +105,46 @@ impl AttachServer {
     /// Serves `engine` until its session ends; returns the owner token and
     /// the attach token.
     pub(super) fn host(self: &Arc<Self>, engine: &Arc<Engine>) -> Result<(String, String), String> {
+        let tokens = self.insert(&engine.meta.id, Session::Commands(engine.clone()))?;
+        let server = self.clone();
+        let id = engine.meta.id.clone();
+        engine.on_end(Box::new(move || server.remove(&id)));
+        Ok(tokens)
+    }
+
+    /// Serves a terminal session the same way.
+    pub(super) fn host_terminal(
+        self: &Arc<Self>,
+        engine: &Arc<TerminalEngine>,
+    ) -> Result<(String, String), String> {
+        let tokens = self.insert(&engine.meta.id, Session::Terminal(engine.clone()))?;
+        let server = self.clone();
+        let id = engine.meta.id.clone();
+        engine.on_end(Box::new(move || server.remove(&id)));
+        Ok(tokens)
+    }
+
+    fn insert(&self, id: &str, session: Session) -> Result<(String, String), String> {
         let owner_token = token()?;
         let attach_token = token()?;
         self.hosted
             .lock()
             .map_err(|_| "the attach service lock is poisoned".to_string())?
             .insert(
-                engine.meta.id.clone(),
+                id.to_string(),
                 Hosted {
-                    engine: engine.clone(),
+                    session,
                     owner_token: owner_token.clone(),
                     attach_token: attach_token.clone(),
                 },
             );
-        let server = self.clone();
-        let id = engine.meta.id.clone();
-        engine.on_end(Box::new(move || {
-            if let Ok(mut hosted) = server.hosted.lock() {
-                hosted.remove(&id);
-            }
-        }));
         Ok((owner_token, attach_token))
+    }
+
+    fn remove(&self, id: &str) {
+        if let Ok(mut hosted) = self.hosted.lock() {
+            hosted.remove(id);
+        }
     }
 
     fn accept(self: Arc<Self>, listener: TcpListener) {
@@ -127,8 +172,11 @@ impl AttachServer {
         let admitted = self.handshake(&stream);
         self.handshakes.fetch_sub(1, Ordering::SeqCst);
         match admitted {
-            Some((engine, role, label)) => {
+            Some((Session::Commands(engine), role, label)) => {
                 let _ = connection(engine, role, &label, stream);
+            }
+            Some((Session::Terminal(engine), role, label)) => {
+                let _ = terminal_server::connection(engine, role, &label, stream);
             }
             None => {
                 let _ = stream.shutdown(Shutdown::Both);
@@ -136,36 +184,45 @@ impl AttachServer {
         }
     }
 
-    fn handshake(&self, stream: &TcpStream) -> Option<(Arc<Engine>, Role, String)> {
+    fn handshake(&self, stream: &TcpStream) -> Option<(Session, Role, String)> {
         let deadline = Instant::now() + HANDSHAKE_TIMEOUT;
         stream.set_nodelay(true).ok()?;
         stream.set_write_timeout(Some(HANDSHAKE_TIMEOUT)).ok()?;
         let mut reader = DeadlineReader { stream, deadline };
         let payload = wire::read_hello(&mut reader).ok()?;
         let hello: wire::Hello = wire::decode(&payload).ok()?;
-        if hello.version != wire::PROTOCOL_VERSION {
+        if !matches!(
+            hello.version,
+            wire::PROTOCOL_VERSION_COMMANDS | wire::PROTOCOL_VERSION_TERMINAL
+        ) {
             return deny(stream, "unsupported attach protocol version");
         }
         let admitted = {
             let hosted = self.hosted.lock().ok()?;
             match hosted.get(&hello.session) {
                 Some(entry) if constant_time_eq(&entry.owner_token, &hello.token) => {
-                    Some((entry.engine.clone(), Role::Owner))
+                    Some((entry.session.clone(), Role::Owner))
                 }
                 Some(entry)
-                    if entry.engine.meta.attachable
+                    if entry.session.attachable()
                         && constant_time_eq(&entry.attach_token, &hello.token) =>
                 {
-                    Some((entry.engine.clone(), Role::Attached))
+                    Some((entry.session.clone(), Role::Attached))
                 }
                 _ => None,
             }
         };
-        let Some((engine, role)) = admitted else {
+        let Some((session, role)) = admitted else {
             return deny(stream, "permission denied");
         };
+        // Only a client that proved the token learns the session's kind.
+        if matches!(session, Session::Terminal(_))
+            && hello.version != wire::PROTOCOL_VERSION_TERMINAL
+        {
+            return deny(stream, TERMINAL_NEEDS_NEWER_CLIENT);
+        }
         stream.set_read_timeout(None).ok()?;
-        Some((engine, role, label(&hello.label)))
+        Some((session, role, label(&hello.label)))
     }
 }
 
@@ -321,7 +378,7 @@ fn write_outbound(writer: &mut TcpStream, message: Outbound) -> io::Result<()> {
     }
 }
 
-fn deny<T>(stream: &TcpStream, message: &str) -> Option<T> {
+pub(super) fn deny<T>(stream: &TcpStream, message: &str) -> Option<T> {
     let mut writer = stream;
     let _ = wire::write_json(
         &mut writer,

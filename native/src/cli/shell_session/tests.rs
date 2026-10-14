@@ -187,7 +187,7 @@ fn shell_session_task_attached_clients_share_state_and_activity() {
     let registry_dir = tempfile::tempdir().unwrap();
     let owner = open("shared", true, registry_dir.path());
     let entry = registry::find_in(registry_dir.path(), "shared").unwrap();
-    assert_eq!(entry.dialect, Dialect::Posix);
+    assert_eq!(entry.dialect, Some(Dialect::Posix));
     let attached = SessionClient::attach(&entry, "test attacher").unwrap();
     let watched = attached.activity();
     // The attached client changes the shell state; the owner sees it.
@@ -363,7 +363,7 @@ fn shell_session_task_local_powershell_keeps_state_across_commands() {
     assert_eq!(placed.stdout.trim_end(), "x y", "stderr: {}", placed.stderr);
     assert!(placed.outcome.cwd.is_some(), "stderr: {}", placed.stderr);
     let entry = registry::find_in(registry_dir.path(), "pwsh").unwrap();
-    assert_eq!(entry.dialect, Dialect::PowerShell);
+    assert_eq!(entry.dialect, Some(Dialect::PowerShell));
     let attached = SessionClient::attach(&entry, "attacher").unwrap();
     assert_eq!(
         run(&attached, command("$env:SE_X")).stdout.trim_end(),

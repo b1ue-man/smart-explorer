@@ -7,7 +7,7 @@ use super::engine_state::EngineState;
 use super::marker;
 use super::transports::{Transport, TransportEvent, TransportInput};
 use super::types::{
-    Activity, CommandRequest, Delivery, Dialect, OwnEvent, Role, SessionInfo, Stream,
+    Activity, CommandRequest, Delivery, Dialect, OwnEvent, Role, SessionInfo, SessionKind, Stream,
 };
 use crossbeam_channel::{Sender, TrySendError};
 use std::collections::BTreeMap;
@@ -142,6 +142,7 @@ impl Engine {
     pub(super) fn info(&self, role: Role) -> SessionInfo {
         let cwd = self.state.lock().ok().and_then(|state| state.cwd.clone());
         SessionInfo {
+            kind: SessionKind::Commands,
             id: self.meta.id.clone(),
             name: self.meta.name.clone(),
             target: self.meta.target.clone(),

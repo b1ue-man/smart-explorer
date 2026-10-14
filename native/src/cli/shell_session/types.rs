@@ -1,10 +1,121 @@
 //! Shared types of shell sessions: command requests and their outcomes, the
-//! activity the other participants of a session see, and session facts.
+//! activity the other participants of a session see, session facts, and the
+//! types of terminal sessions (a login shell in a PTY, `terminal_*.rs`).
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// Longest session name; names appear in prompts, listings and entries.
 const MAX_NAME_CHARS: usize = 64;
+/// Largest columns and rows value of a terminal; the limit of the Share
+/// protocol (`share/core/exec_terminal.rs`) and of the SSH channel.
+const MAX_TERMINAL_DIMENSION: u16 = 32_767;
+
+/// What a session runs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(in crate::cli) enum SessionKind {
+    /// Commands one after another with markers for exit status and working
+    /// directory (the sessions of AI agents and of `se shell -T`).
+    #[default]
+    Commands,
+    /// The login shell of the target in a pseudo-terminal: bytes in, bytes out.
+    Terminal,
+}
+
+impl SessionKind {
+    #[allow(dead_code)] // For the listings of the CLI and the MCP tools.
+    pub(in crate::cli) fn label(self) -> &'static str {
+        match self {
+            Self::Commands => "commands",
+            Self::Terminal => "terminal",
+        }
+    }
+}
+
+/// Window size of a terminal in character cells.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(in crate::cli) struct TerminalSize {
+    pub(in crate::cli) cols: u16,
+    pub(in crate::cli) rows: u16,
+}
+
+impl TerminalSize {
+    /// Columns and rows between 1 and 32767, as the Share protocol and SSH
+    /// accept them.
+    pub(in crate::cli) fn validate(&self) -> Result<(), String> {
+        let valid = 1..=MAX_TERMINAL_DIMENSION;
+        if valid.contains(&self.cols) && valid.contains(&self.rows) {
+            Ok(())
+        } else {
+            Err(format!(
+                "terminal columns and rows must be between 1 and {MAX_TERMINAL_DIMENSION}"
+            ))
+        }
+    }
+
+    /// Columns and rows as the SSH `pty-req` and `window-change` carry them.
+    pub(in crate::cli) fn ssh_dimensions(self) -> (u32, u32) {
+        (u32::from(self.cols), u32::from(self.rows))
+    }
+}
+
+impl From<TerminalSize> for crate::share::ExecTerminalSize {
+    fn from(size: TerminalSize) -> Self {
+        Self {
+            cols: size.cols,
+            rows: size.rows,
+        }
+    }
+}
+
+/// What a terminal client receives from its session, in order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::cli) enum TerminalEvent {
+    /// Bytes of the remote terminal, unchanged; chunk borders are arbitrary.
+    Output(Vec<u8>),
+    /// A line from the session itself (a participant attached or detached),
+    /// free of control characters.
+    Notice(String),
+    /// The session is over; always the last event.
+    Ended {
+        exit_code: Option<i32>,
+        message: String,
+    },
+}
+
+/// What opening a terminal session needs.
+#[derive(Clone, Debug)]
+pub(in crate::cli) struct TerminalOptions {
+    pub(in crate::cli) name: String,
+    /// The owning process as others see it, e.g. `se shell (pid 4711)`.
+    pub(in crate::cli) owner: String,
+    /// List the session for `se shell --attach`.
+    pub(in crate::cli) attachable: bool,
+    /// Working directory and environment to start with.
+    pub(in crate::cli) cwd: Option<String>,
+    pub(in crate::cli) env: BTreeMap<String, String>,
+    /// The remote `TERM` (1 to 64 characters of `A-Za-z0-9._+-`).
+    pub(in crate::cli) term: String,
+    /// The size of the owner's terminal.
+    pub(in crate::cli) size: TerminalSize,
+}
+
+/// Facts of a terminal session as one client sees them when it joins.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[allow(dead_code)] // Read by the terminal front-end.
+pub(in crate::cli) struct TerminalInfo {
+    /// Always `terminal`; tells a client which protocol the session speaks.
+    pub(in crate::cli) kind: SessionKind,
+    pub(in crate::cli) id: String,
+    pub(in crate::cli) name: String,
+    pub(in crate::cli) target: String,
+    pub(in crate::cli) owner: String,
+    pub(in crate::cli) attachable: bool,
+    /// The size the remote terminal has when the client joins.
+    pub(in crate::cli) size: TerminalSize,
+    /// This client's role.
+    pub(in crate::cli) role: Role,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -87,6 +198,9 @@ pub(in crate::cli) enum Role {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(in crate::cli) struct SessionInfo {
+    /// Absent in the facts sent by owners before terminal sessions existed.
+    #[serde(default)]
+    pub(in crate::cli) kind: SessionKind,
     pub(in crate::cli) id: String,
     pub(in crate::cli) name: String,
     /// Target selector the session was opened with.
@@ -171,7 +285,36 @@ pub(in crate::cli) fn validate_name(name: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_name, CommandRequest, StdinMode};
+    use super::{validate_name, CommandRequest, SessionKind, StdinMode, TerminalSize};
+
+    #[test]
+    fn terminal_task_sizes_are_bounded_and_convert_to_the_transports() {
+        for (cols, rows, valid) in [
+            (1, 1, true),
+            (80, 24, true),
+            (32_767, 32_767, true),
+            (0, 24, false),
+            (80, 0, false),
+            (32_768, 24, false),
+            (80, 32_768, false),
+        ] {
+            assert_eq!(TerminalSize { cols, rows }.validate().is_ok(), valid);
+        }
+        let size = TerminalSize {
+            cols: 120,
+            rows: 40,
+        };
+        assert_eq!(size.ssh_dimensions(), (120, 40));
+        let shared = crate::share::ExecTerminalSize::from(size);
+        assert_eq!((shared.cols, shared.rows), (120, 40));
+        assert_eq!(SessionKind::default(), SessionKind::Commands);
+        assert_eq!(
+            serde_json::to_value(SessionKind::Terminal).unwrap(),
+            "terminal"
+        );
+        let decoded: SessionKind = serde_json::from_str("\"commands\"").unwrap();
+        assert_eq!(decoded.label(), "commands");
+    }
 
     #[test]
     fn shell_session_task_names_and_requests_have_stable_forms() {

@@ -2,9 +2,11 @@
 //! remote (`sftp/core/command.rs`) or a Share peer's contained Exec stream
 //! through the background worker (`daemon::connect_exec`). Both carry stdin,
 //! stdout and stderr as bytes and report how the remote process ended. The
-//! same selectors as `se exec` choose the target.
+//! same selectors as `se exec` choose the target. The terminal variants of
+//! both (a login shell in a PTY) live in `terminal_transports.rs` and reuse
+//! the event mapping here.
 use super::dialect;
-use super::types::Dialect;
+use super::types::{Dialect, TerminalSize};
 use crate::creds::SavedConnection;
 use crate::daemon::{ExecIpcEvent, ExecIpcInput, ExecIpcSession};
 use crate::sftp::{SftpBackend, SshCommand, SshCommandControl, SshCommandEvent};
@@ -37,6 +39,11 @@ pub(super) trait TransportInput: Send + Sync {
     fn eof(&self) -> Result<(), String>;
     /// Ends the remote process tree (SSH: TERM, then KILL; Share: contained tree).
     fn cancel(&self);
+    /// Gives the remote terminal a new size. Only transports of a terminal
+    /// session have one.
+    fn resize(&self, _size: TerminalSize) -> Result<(), String> {
+        Err("no terminal".to_string())
+    }
 }
 
 pub(super) trait Transport: Send {
@@ -126,7 +133,7 @@ pub(super) fn connect(
     }
 }
 
-fn run_probe(mut transport: Box<dyn Transport>) -> Result<String, String> {
+pub(super) fn run_probe(mut transport: Box<dyn Transport>) -> Result<String, String> {
     let input = transport.input();
     let _ = input.eof();
     let (done, finished) = std::sync::mpsc::channel::<()>();
@@ -181,12 +188,12 @@ impl TransportInput for SshInput {
     }
 }
 
-struct SshTransport {
+pub(super) struct SshTransport {
     command: SshCommand,
     input: Arc<SshInput>,
 }
 
-fn ssh_start(backend: &Arc<SftpBackend>, line: &str) -> Result<SshTransport, String> {
+pub(super) fn ssh_start(backend: &Arc<SftpBackend>, line: &str) -> Result<SshTransport, String> {
     let command = backend
         .clone()
         .start_command(line)
@@ -197,38 +204,43 @@ fn ssh_start(backend: &Arc<SftpBackend>, line: &str) -> Result<SshTransport, Str
 
 impl Transport for SshTransport {
     fn next_event(&mut self) -> TransportEvent {
-        loop {
-            match self.command.next_event() {
-                Some(SshCommandEvent::Started) => {}
-                Some(SshCommandEvent::Stdout(bytes)) => return TransportEvent::Stdout(bytes),
-                Some(SshCommandEvent::Stderr(bytes)) => return TransportEvent::Stderr(bytes),
-                Some(SshCommandEvent::Finished(end)) => {
-                    let signalled = end
-                        .signal
-                        .as_deref()
-                        .and_then(crate::sftp::signal_number)
-                        .map(|number| 128 + number);
-                    return TransportEvent::Ended(TransportEnd {
-                        exit_code: end
-                            .exit_status
-                            .map(|status| i32::try_from(status).unwrap_or(255))
-                            .or(signalled),
-                        cancelled: end.cancelled,
-                        error: end.error,
-                    });
-                }
-                None => {
-                    return TransportEvent::Ended(TransportEnd {
-                        error: Some("the SSH channel ended without a final status".into()),
-                        ..TransportEnd::default()
-                    })
-                }
-            }
-        }
+        next_ssh_event(&mut self.command)
     }
 
     fn input(&self) -> Arc<dyn TransportInput> {
         self.input.clone()
+    }
+}
+
+/// The next event of an SSH channel as a session event; blocks.
+pub(super) fn next_ssh_event(command: &mut SshCommand) -> TransportEvent {
+    loop {
+        match command.next_event() {
+            Some(SshCommandEvent::Started) => {}
+            Some(SshCommandEvent::Stdout(bytes)) => return TransportEvent::Stdout(bytes),
+            Some(SshCommandEvent::Stderr(bytes)) => return TransportEvent::Stderr(bytes),
+            Some(SshCommandEvent::Finished(end)) => {
+                let signalled = end
+                    .signal
+                    .as_deref()
+                    .and_then(crate::sftp::signal_number)
+                    .map(|number| 128 + number);
+                return TransportEvent::Ended(TransportEnd {
+                    exit_code: end
+                        .exit_status
+                        .map(|status| i32::try_from(status).unwrap_or(255))
+                        .or(signalled),
+                    cancelled: end.cancelled,
+                    error: end.error,
+                });
+            }
+            None => {
+                return TransportEvent::Ended(TransportEnd {
+                    error: Some("the SSH channel ended without a final status".into()),
+                    ..TransportEnd::default()
+                })
+            }
+        }
     }
 }
 
@@ -267,6 +279,7 @@ fn share_start(
         env: std::collections::BTreeMap::new(),
         timeout_ms: timeout.map(|limit| u64::try_from(limit.as_millis()).unwrap_or(u64::MAX)),
         max_output_bytes: None,
+        terminal: None,
     };
     start.validate().map_err(|error| error.to_string())?;
     let session = crate::daemon::connect_exec(peer.clone(), start)?;
@@ -278,32 +291,37 @@ fn share_start(
 
 impl Transport for ShareTransport {
     fn next_event(&mut self) -> TransportEvent {
-        loop {
-            match self.session.next_event() {
-                Ok(ExecIpcEvent::Authorized(_) | ExecIpcEvent::Started) => {}
-                Ok(ExecIpcEvent::Stdout(bytes)) => return TransportEvent::Stdout(bytes),
-                Ok(ExecIpcEvent::Stderr(bytes)) => return TransportEvent::Stderr(bytes),
-                Ok(ExecIpcEvent::Terminal(terminal)) => {
-                    return TransportEvent::Ended(terminal_end(&terminal))
-                }
-                Ok(ExecIpcEvent::Failed(failure)) => {
-                    return TransportEvent::Ended(TransportEnd {
-                        error: Some(format!("{}: {}", failure.code, failure.message)),
-                        ..TransportEnd::default()
-                    })
-                }
-                Err(error) => {
-                    return TransportEvent::Ended(TransportEnd {
-                        error: Some(format!("remote execution transport: {error}")),
-                        ..TransportEnd::default()
-                    })
-                }
-            }
-        }
+        next_share_event(&mut self.session)
     }
 
     fn input(&self) -> Arc<dyn TransportInput> {
         self.input.clone()
+    }
+}
+
+/// The next event of a Share Exec stream as a session event; blocks.
+pub(super) fn next_share_event(session: &mut ExecIpcSession) -> TransportEvent {
+    loop {
+        match session.next_event() {
+            Ok(ExecIpcEvent::Authorized(_) | ExecIpcEvent::Started) => {}
+            Ok(ExecIpcEvent::Stdout(bytes)) => return TransportEvent::Stdout(bytes),
+            Ok(ExecIpcEvent::Stderr(bytes)) => return TransportEvent::Stderr(bytes),
+            Ok(ExecIpcEvent::Terminal(terminal)) => {
+                return TransportEvent::Ended(terminal_end(&terminal))
+            }
+            Ok(ExecIpcEvent::Failed(failure)) => {
+                return TransportEvent::Ended(TransportEnd {
+                    error: Some(format!("{}: {}", failure.code, failure.message)),
+                    ..TransportEnd::default()
+                })
+            }
+            Err(error) => {
+                return TransportEvent::Ended(TransportEnd {
+                    error: Some(format!("remote execution transport: {error}")),
+                    ..TransportEnd::default()
+                })
+            }
+        }
     }
 }
 

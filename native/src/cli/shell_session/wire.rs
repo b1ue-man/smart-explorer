@@ -2,11 +2,22 @@
 //! (the owner's own front-end included): one tag byte, a 32-bit big-endian
 //! length, then the payload. Control payloads are JSON, output payloads raw
 //! bytes (own command output with its 8-byte request tag in front).
+//!
+//! Version 1 carries command sessions. Version 2 adds terminal sessions: the
+//! client sends its terminal's input as raw bytes (`TERM_INPUT`) and its size
+//! as JSON (`TERM_RESIZE`), the host sends the remote terminal's output as raw
+//! bytes (`TERM_OUTPUT`) next to the unchanged `NOTICE` and `ENDED`. A host
+//! accepts version 2 for every session and version 1 only for command
+//! sessions; clients send version 1 to command sessions so that owners of
+//! older releases stay reachable.
 use super::types::{CommandOutcome, CommandRequest};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::io::{self, Read, Write};
 
-pub(super) const PROTOCOL_VERSION: u32 = 1;
+/// Hello version of a client of a command session.
+pub(super) const PROTOCOL_VERSION_COMMANDS: u32 = 1;
+/// Hello version of a client of a terminal session.
+pub(super) const PROTOCOL_VERSION_TERMINAL: u32 = 2;
 /// Output and input chunk; the Exec stream's data frame size.
 pub(super) const MAX_DATA: usize = 64 * 1024;
 /// Hello: ids, a token and a label.
@@ -22,6 +33,10 @@ pub(super) const SUBMIT: u8 = 2;
 pub(super) const INPUT: u8 = 3;
 pub(super) const CANCEL: u8 = 4;
 pub(super) const LEAVE: u8 = 5;
+/// Terminal sessions: input bytes of the client's terminal.
+pub(super) const TERM_INPUT: u8 = 6;
+/// Terminal sessions: the client's terminal size, JSON `TerminalSize`.
+pub(super) const TERM_RESIZE: u8 = 7;
 // Host to client.
 pub(super) const WELCOME: u8 = 16;
 pub(super) const DENIED: u8 = 17;
@@ -35,6 +50,8 @@ pub(super) const ACT_STDERR: u8 = 24;
 pub(super) const ACT_DONE: u8 = 25;
 pub(super) const NOTICE: u8 = 26;
 pub(super) const ENDED: u8 = 27;
+/// Terminal sessions: output bytes of the remote terminal.
+pub(super) const TERM_OUTPUT: u8 = 28;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(super) struct Hello {
@@ -91,7 +108,7 @@ fn limit(tag: u8) -> usize {
     match tag {
         HELLO => MAX_HELLO,
         SUBMIT => MAX_SUBMIT,
-        INPUT | ACT_STDOUT | ACT_STDERR => MAX_DATA,
+        INPUT | ACT_STDOUT | ACT_STDERR | TERM_INPUT | TERM_OUTPUT => MAX_DATA,
         OWN_STDOUT | OWN_STDERR => MAX_DATA + 8,
         _ => MAX_CONTROL,
     }
@@ -179,7 +196,8 @@ fn invalid(message: &'static str) -> io::Error {
 mod tests {
     use super::{
         decode, read_frame, read_hello, tagged, untag, write_frame, write_json, Hello, Text, HELLO,
-        INPUT, MAX_DATA, NOTICE, OWN_STDOUT, PROTOCOL_VERSION, SUBMIT,
+        INPUT, MAX_DATA, NOTICE, OWN_STDOUT, PROTOCOL_VERSION_COMMANDS, PROTOCOL_VERSION_TERMINAL,
+        SUBMIT, TERM_INPUT, TERM_OUTPUT, TERM_RESIZE,
     };
 
     #[test]
@@ -204,7 +222,7 @@ mod tests {
         // limit; any other header is refused before a payload is read, so the
         // error is invalid data rather than a missing payload.
         let sent = Hello {
-            version: PROTOCOL_VERSION,
+            version: PROTOCOL_VERSION_COMMANDS,
             session: "id".into(),
             token: "ab".into(),
             label: "me".into(),
@@ -221,5 +239,30 @@ mod tests {
             let refused = read_hello(&mut header.as_slice()).unwrap_err();
             assert_eq!(refused.kind(), std::io::ErrorKind::InvalidData);
         }
+    }
+
+    #[test]
+    fn terminal_task_frames_carry_raw_bytes_within_the_data_limit() {
+        assert_eq!(PROTOCOL_VERSION_COMMANDS, 1);
+        assert_eq!(PROTOCOL_VERSION_TERMINAL, 2);
+        let bytes: Vec<u8> = (0..=255).collect();
+        let mut buffer = Vec::new();
+        write_frame(&mut buffer, TERM_INPUT, &bytes).unwrap();
+        write_frame(&mut buffer, TERM_OUTPUT, &bytes).unwrap();
+        let mut reader = buffer.as_slice();
+        assert_eq!(
+            read_frame(&mut reader).unwrap(),
+            (TERM_INPUT, bytes.clone())
+        );
+        assert_eq!(read_frame(&mut reader).unwrap(), (TERM_OUTPUT, bytes));
+        for tag in [TERM_INPUT, TERM_OUTPUT] {
+            assert!(write_frame(&mut Vec::new(), tag, &vec![0u8; MAX_DATA]).is_ok());
+            assert!(write_frame(&mut Vec::new(), tag, &vec![0u8; MAX_DATA + 1]).is_err());
+            let mut oversized = vec![tag];
+            oversized.extend_from_slice(&u32::MAX.to_be_bytes());
+            assert!(read_frame(&mut oversized.as_slice()).is_err());
+        }
+        // A size report is a small control frame.
+        assert!(write_frame(&mut Vec::new(), TERM_RESIZE, b"{\"cols\":80,\"rows\":24}").is_ok());
     }
 }
