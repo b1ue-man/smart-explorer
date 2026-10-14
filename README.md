@@ -692,20 +692,76 @@ Tool-Suche. `se exec @label[:/ordner] -- befehl` führt Befehle auch im
 Terminal über die SSH-Anmeldung einer gespeicherten SFTP-Verbindung aus.
 Details: [`docs/AI_AGENT_PLUGIN.md`](docs/AI_AGENT_PLUGIN.md).
 
-**Dauerhafte Shells und Anhängen (ab 0.5.178):** `se shell @label[:/ordner]` oder
-`se shell PEER` öffnet eine dauerhafte Shell auf einer gespeicherten SSH-Verbindung
-oder einem Share-Peer mit Exec-Freigabe. Jede Zeile ist ein Befehl; `cd`, `export`,
-Variablen und Funktionen bleiben wie in einer SSH-Sitzung erhalten (Linux, Android
-und SSH-Server über `bash -l` bzw. `sh -l`, Windows-Gegenstellen über Windows
-PowerShell; kein PTY). KI-Agenten nutzen dasselbe über `exec` mit `session`.
-Shells und Sitzungen lassen sich gegenseitig anhängen: `se shell --list` zeigt die
-anhängbaren Sitzungen des eigenen Benutzers, `se shell --attach NAME` tritt einer
-bei, etwa der eines KI-Agenten (dessen Befehle und Ausgaben erscheinen mit
-`[se mcp (pid …)]`), und eine mit `se shell … --attachable` geöffnete Shell kann ein
-Agent über sein Tool `sessions` übernehmen. Ohne `--attachable` kann niemand einer
-`se shell` beitreten; nur Prozesse desselben Betriebssystembenutzers sehen
-Sitzungen. Befehle laufen nacheinander im gemeinsamen Zustand; Strg+C beendet die
-Sitzung für alle, Strg+D schließt die eigene bzw. löst eine angehängte.
+**Dauerhafte Shells, Terminalsitzungen und Anhängen (Befehlssitzungen ab 0.5.178):**
+`se shell @label[:/ordner]` oder `se shell PEER` öffnet eine Shell auf einer
+gespeicherten SSH-Verbindung oder einem Share-Peer mit Exec-Freigabe. Status der
+Terminalsitzung (umgesetzt; Suite und Release stehen aus) und offene Punkte:
+`docs/TODO.md`, Eintrag `ETERM`.
+
+*Im Terminal* (Standardeingabe und Standardausgabe sind Terminals, kein `-T`) ist
+`se shell` eine echte Terminalsitzung wie `ssh HOST`: Die Gegenstelle bekommt ein
+Pseudo-Terminal (PTY) und führt darin ihre interaktive Login-Shell aus, das lokale
+Terminal läuft im Rohmodus und reicht jede Taste und die gesamte Ausgabe unverändert
+durch. Es funktionieren Formatierung (Farben, Cursorsteuerung), Vollbildprogramme wie
+nvim, claude und codex, die Tab-Vervollständigung der Shell auf der Gegenstelle,
+Passwortabfragen (zum Beispiel von `sudo`), Strg+C und Strg+D an das laufende Programm
+der Gegenstelle sowie die Fenstergröße (eine Größenänderung des lokalen Fensters wird
+an die Gegenstelle weitergegeben). Die Sitzung endet, wenn die Shell der Gegenstelle
+endet; das lokale Terminal wird auf jedem Weg hinaus wiederhergestellt. Gegenstellen:
+SSH-Server (pty-req und shell wie bei `ssh`) und Share-Peers mit Linux-, Android- oder
+Windows-Host (Windows-Hosts über ConPTY ab Windows 10 1809 bzw. Server 2019; der
+Android-Host ist nur übersetzt, nicht auf einem Gerät geprüft). Login-Shell: beim
+SSH-Server die des Benutzers wie bei `ssh`; beim Linux-Host das `SHELL` der
+Dienstumgebung (mit `--env` überschreibbar), sonst `/bin/sh`; beim Android-Host
+`/system/bin/sh`; beim Windows-Host
+Windows PowerShell (`powershell.exe -NoLogo`).
+Exitcode: der Exitstatus der Shell der Gegenstelle (`exit N` ergibt N, Beendigung durch
+das Signal n ergibt 128+n); 130 nach `~.` des Besitzers, 0 nach `~.` eines angehängten
+Terminals; 125 bei einem Fehler der Sitzung oder der Verbindung, bei Verbindungsverlust,
+bei Entzug der Exec-Freigabe und wenn ein Update diese Shell beendet; 128+n nach einem
+lokalen SIGTERM, SIGHUP, SIGQUIT oder SIGINT (Windows: 130 nach Strg+Untbr, Schließen des
+Fensters, Abmelden und Herunterfahren).
+Escape-Folgen wie in `ssh(1)`, nur am Zeilenanfang: `~.` verlässt die Sitzung, `~~` sendet
+ein `~`, `~?` listet die Folgen; ein `~` mit einem anderen Byte wird zusammen mit diesem
+Byte gesendet. `--escape-char ZEICHEN` (`-e`) setzt ein anderes ASCII-Zeichen (nicht `.`,
+`?`, Wagenrücklauf und Zeilenvorschub), `--escape-char none` schaltet die Folgen ab. Die
+weiteren Folgen von `ssh(1)` (`~^Z`, `~#`, `~&`, `~B`, `~C`, `~R`, `~V`, `~v`, `~I`) gibt
+es nicht.
+
+*Zeilenmodus:* Mit `-T`/`--no-tty` (wie `ssh -T`), wenn Standardeingabe oder
+Standardausgabe kein Terminal ist (Pipe, Skript) und wenn die Gegenstelle kein PTY
+geben kann, läuft der Zeilenmodus. Jede Zeile ist ein Befehl; `cd`, `export`, Variablen
+und Funktionen bleiben wie in einer SSH-Sitzung erhalten (Linux, Android und
+SSH-Server über `bash -l` bzw. `sh -l`, Windows-Gegenstellen über Windows PowerShell).
+Dieser Modus hat kein PTY: Vollbildprogramme und Passwortabfragen funktionieren dort
+nicht, Strg+C beendet die Sitzung für alle, Strg+D schließt die eigene bzw. löst eine
+angehängte; Exitcode ist der des letzten Befehls oder von `exit N`, 130 nach Strg+C,
+125 bei einem Fehler der Sitzung. Lehnt ein SSH-Server das PTY ab (zum Beispiel mit
+`PermitTTY no`) oder meldet ein Share-Peer die Fähigkeit `exec_terminal_v1` nicht (ältere
+Version von Smart Explorer, Windows-Host vor Windows 10 1809), schreibt `se` den Grund in einer Zeile
+auf die Standardfehlerausgabe und öffnet den Zeilenmodus. Dasselbe gilt für ein lokales
+Terminal, das `se` nicht in den Rohmodus setzen kann, etwa mintty und Git Bash unter
+Windows, wo die Standardeingabe eine Pipe ist; vorgesehen sind unter Windows Konsolen mit
+VT-Unterstützung (Windows Terminal, Eingabeaufforderung ab Windows 10). KI-Agenten nutzen
+dieselbe Befehlssitzung über `exec` mit `session`; sie hat ebenfalls kein PTY, und ein
+Agent bekommt nie ein Terminal.
+
+*Anhängen:* `se shell --list` zeigt die anhängbaren Sitzungen des eigenen Benutzers
+(Name, ID, Dialekt oder `-`, Ziel, Besitzer, Art `terminal` oder `commands`). Eine mit
+`se shell … --attachable` geöffnete Terminalsitzung tritt ein zweites Terminal mit
+`se shell --attach NAME` bei: Beide sehen denselben Bildschirm und tippen in dieselbe
+Shell der Gegenstelle, deren Fenstergröße die des zuletzt aktiven Terminals ist
+(höchstens 8 angehängte Terminals); `~.` löst ein angehängtes Terminal, `~.` des
+Besitzers beendet die Sitzung für alle. Eine Terminalsitzung lässt sich nur aus einem
+Terminal und nicht mit `-T` anhängen. Eine Befehlssitzung (die eines KI-Agenten oder
+eine mit `se shell ZIEL -T --attachable` geöffnete) hängt `--attach` im Zeilenmodus an;
+die Befehle und Ausgaben des Agenten erscheinen mit `[se mcp (pid …)]`. KI-Agenten treten
+nur Befehlssitzungen bei, über ihr Tool `sessions`, und tippen nie in eine
+Terminalsitzung: Sie wird dort mit der Art `terminal` gelistet, ein Beitritt wird
+abgelehnt. Soll ein Agent in der eigenen Shell arbeiten, öffne sie mit
+`se shell ZIEL -T --attachable`. Ohne `--attachable` kann niemand einer `se shell`
+beitreten; nur Prozesse desselben Betriebssystembenutzers sehen Sitzungen. In
+Befehlssitzungen laufen die Befehle nacheinander im gemeinsamen Zustand.
 
 **Lokales Netz ohne Server (Teilen → Netzwerk):** gekoppelte Geraete kuendigen ihre
 Iroh-Adresse per mDNS (`_se-share._udp`) an und finden sich damit auch ohne

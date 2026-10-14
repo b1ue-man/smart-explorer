@@ -296,6 +296,17 @@ emulation is a separate presentation layer, not a prerequisite for arbitrary
 non-interactive shell commands. Adding it later must reuse the same grant,
 transport, registry, and containment boundaries.
 
+Update 2026-10-14: the terminal presentation is implemented as the capability
+`exec_terminal_v1` over the same grant, transport (ALPN
+`smart-explorer/share-exec/2`), registry, and containment. A start with a
+terminal request runs the host user's login shell (`ExecCommand::Login`) in a
+POSIX PTY on Linux and Android hosts or in a ConPTY on Windows hosts (Windows 10
+1809 / Server 2019 or newer); the client sends such a start only to a host that
+reports the capability, and window changes travel as the RESIZE frame. Starts
+without a terminal are byte-identical to before. See
+`docs/plaene/2026-10-14-echtes-terminal/plan.md`; the open parts are tracked as
+`ETERM*` and `EXEC-PTY` in `docs/TODO.md`.
+
 ## 7. Platform containment boundary
 
 The portable core owns command models, policy, state transitions, protocol, and

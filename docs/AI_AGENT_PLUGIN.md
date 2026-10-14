@@ -5,6 +5,8 @@ Stand: 2026-10-14. Plan und Entscheidungen:
 Vorrang vor den Datei-Werkzeugen des Hosts sowie dauerhafte Shell-Sitzungen und Anhängen
 (Abschnitt R4):
 [`docs/plaene/2026-10-14-analyse-id-plugin-vorrang/plan.md`](plaene/2026-10-14-analyse-id-plugin-vorrang/plan.md).
+Echte Terminalsitzungen in `se shell` (PTY, Anhängen von Terminals, Agenten nur an Befehlssitzungen):
+[`docs/plaene/2026-10-14-echtes-terminal/plan.md`](plaene/2026-10-14-echtes-terminal/plan.md).
 Hostverträge: [`refs/claude-code-plugins-mcp-2026-10-12.md`](refs/claude-code-plugins-mcp-2026-10-12.md),
 [`refs/codex-mcp-spec-rmcp-2026-10-12.md`](refs/codex-mcp-spec-rmcp-2026-10-12.md).
 
@@ -88,7 +90,7 @@ Tool-Metadaten kommen direkt vom Server.
 | `copy`, `move` | wie `se cp`/`se mv` zwischen beliebigen Zielen, als Job; Ergebnis mit `omitted` (übersprungene Links/Sonderdateien) und `kept_directories` (beim Verschieben behaltene Quellordner) | zerstörend (Überschreiben) |
 | `search` | Namenssuche (Text oder Glob), Treffer seitenweise, als Job; Links und Sonderdateien als eigene Treffer (`symlink`, `special`), nie betreten | nur lesend |
 | `exec` | Befehl auf gespeichertem SFTP-Remote (SSH) oder Share-Peer, als Job; mit `session` in einer dauerhaften Shell | zerstörend |
-| `sessions` | dauerhafte Shell-Sitzungen auflisten, einer `se shell --attachable` beitreten (`attach`), Aktivität der anderen lesen (`activity`), schließen bzw. lösen (`close`) | ändernd |
+| `sessions` | dauerhafte Shell-Sitzungen auflisten (mit `kind` `commands` oder `terminal`), einer mit `se shell -T --attachable` geöffneten Befehlssitzung beitreten (`attach`; Terminalsitzungen werden abgelehnt), Aktivität der anderen lesen (`activity`), schließen bzw. lösen (`close`) | ändernd |
 | `job_status`, `job_input`, `job_cancel` | Jobs verfolgen (Ausgabe ab Offset), stdin senden, abbrechen | lesend / ändernd |
 | `se` | jeder weitere `se`-Befehl als Kindprozess (Share-Verwaltung, Verbindungen anlegen, Laufwerke, Update, Diagnose) | zerstörend |
 
@@ -136,36 +138,88 @@ FTPS- und WebDAV-Verbindung eine Anmeldung wiederverwendet.
 
 Ab 0.5.178 läuft Remote-Ausführung auf Wunsch wie eine SSH-Sitzung: Jeder Befehl kehrt mit
 Ergebnis zurück, Arbeitsverzeichnis, Umgebung, Variablen und Funktionen bleiben erhalten.
+Es gibt zwei Arten von Sitzungen (Feld `kind`): **Befehlssitzungen** (`commands`: die Sitzungen
+der Agenten, `se shell -T`, `se shell` ohne Terminal und der Rückfall bei einer Gegenstelle ohne
+PTY) und **Terminalsitzungen** (`terminal`:
+`se shell` in einem Terminal, mit PTY auf der Gegenstelle). Agenten arbeiten nur in
+Befehlssitzungen.
 
 - **Agent:** `exec` mit `session: "<name>"` (Buchstaben, Ziffern, `-`, `_`, `.`). Der erste Aufruf
   öffnet die Sitzung auf `target` (ein Pfad in `@label:/ordner` ist das Startverzeichnis), spätere
   Aufrufe brauchen kein `target`; ein angegebenes `target` muss zum Ziel der Sitzung passen.
   `cwd`/`env` ändern den Sitzungszustand vor dem Befehl, `stdin` wird als Eingabe übergeben
   (POSIX als Heredoc mit ergänztem Zeilenende, PowerShell als `$input`); `keep_stdin_open` gibt es
-  hier nicht. Das Ergebnis enthält `exit_code`, `cwd`, `session` und `session_ended`.
-- **Terminal:** `se shell [ZIEL] [--cwd DIR] [--env N=W]… [--name NAME] [--attachable]`. Im
+  hier nicht. Das Ergebnis enthält `exit_code`, `cwd`, `session` und `session_ended`. Die Sitzung
+  ist immer eine Befehlssitzung ohne PTY.
+- **Terminal (Terminalsitzung):**
+  `se shell [ZIEL] [--cwd DIR] [--env N=W]… [--name NAME] [--attachable] [-e ZEICHEN|none]`.
+  Sind Standardeingabe und Standardausgabe Terminals und fehlt `-T`, verhält sich `se shell` wie
+  `ssh HOST`: Die Gegenstelle gibt der Login-Shell ein PTY, das lokale Terminal läuft im
+  Rohmodus, und Tasten und Ausgabe gehen unverändert durch. Damit funktionieren Formatierung,
+  Vollbildprogramme (nvim, claude, codex), die Tab-Vervollständigung der Shell der Gegenstelle,
+  Passwortabfragen, Strg+C an das Vordergrundprogramm und die Fenstergröße. Die Sitzung endet, wenn
+  die Shell der Gegenstelle endet. Exitcode: der Exitstatus dieser Shell (`exit N` ergibt N, Signal
+  n ergibt 128+n); 130 nach `~.` des Besitzers, 0 nach `~.` eines angehängten Terminals; 125 bei
+  Fehler, Verbindungsverlust, Entzug der Exec-Freigabe und Update-Stopp; 128+n nach lokalem
+  SIGTERM, SIGHUP, SIGQUIT oder SIGINT (Windows: 130 nach Strg+Untbr, Schließen des Fensters,
+  Abmelden und Herunterfahren). Escape-Folgen wie `ssh(1)` nur am Zeilenanfang: `~.` verlässt die
+  Sitzung, `~~` sendet ein `~`, `~?` listet sie; `-e ZEICHEN` setzt ein anderes ASCII-Zeichen (nicht
+  `.`, `?`, Wagenrücklauf, Zeilenvorschub), `-e none` schaltet sie ab. Andere `ssh`-Folgen (`~^Z`, `~#`,
+  `~&`, `~B`, `~C`, `~R`, `~V`, `~v`, `~I`) gibt es nicht.
+- **Zeilenmodus (Befehlssitzung):** Mit `-T`/`--no-tty`, ohne Terminal an Standardeingabe oder
+  Standardausgabe (Pipe) und bei einer Gegenstelle ohne PTY läuft `se shell` als Befehlssitzung. Im
   Terminal zeigt der Prompt `ziel:cwd$` auf stderr, eine Zeile mit abschließendem `\` (PowerShell:
   `` ` ``) wird fortgesetzt, Eingaben während eines eigenen Befehls gehen an diesen Befehl
   (POSIX). Mit Pipe ist jede Zeile ein Befehl ohne eigene Eingabe. Exitcode: der des letzten
-  Befehls oder von `exit N`; 130 nach Strg+C, 125 bei Fehler der Sitzung.
-- **Ablauf:** Eine Probe in der Login-Shell (`echo %OS%;$PSVersionTable`) erkennt cmd.exe bzw.
-  PowerShell (dann `powershell.exe -NoLogo -NoProfile -NonInteractive -Command -`) oder eine
-  POSIX-Shell (dann `bash -l`, sonst `sh -l`). Jeder Befehl endet mit Marken, die Exitcode und
+  Befehls oder von `exit N`; 130 nach Strg+C, 125 bei Fehler der Sitzung. Rückfall: Lehnt ein
+  SSH-Server das PTY ab (`PermitTTY no`), meldet ein Share-Host die Fähigkeit `exec_terminal_v1`
+  nicht, oder kann das lokale Terminal nicht in den Rohmodus (mintty/Git Bash unter Windows hat
+  eine Pipe als Standardeingabe), schreibt `se` den Grund in einer Zeile auf stderr und öffnet
+  diesen Modus.
+- **Ablauf der Terminalsitzung:** `se` prüft Name, lokale Fenstergröße und `TERM` (das lokale
+  `TERM`, wenn es 1 bis 64 Zeichen aus `A-Za-z0-9._+-` hat, sonst `xterm-256color`), baut die
+  Verbindung auf und setzt erst danach das lokale Terminal in den Rohmodus. SSH-Ziel: ein Kanal mit
+  `pty-req` (feste Terminalmodi VINTR=3, VQUIT=28, VERASE=127, VKILL=21, VEOF=4, VSUSP=26,
+  IUTF8=1) und `shell`; Größenänderungen gehen als `window-change`. Share-Ziel: derselbe
+  Exec-Weg wie bei `exec` (Grant, ALPN `smart-explorer/share-exec/2`, Registry, Containment) mit
+  dem Befehl `Login` und einer Terminalanforderung (`TERM`, Größe); Größenänderungen gehen als Rahmen
+  RESIZE. Der Host legt das PTY an (Linux und Android: POSIX-PTY mit `setsid`/`TIOCSCTTY`; Windows:
+  ConPTY) und startet die Login-Shell darin: Linux das absolute `SHELL` der Job-Umgebung
+  (Dienstumgebung plus `--env`), sonst `/bin/sh`, mit `argv[0]` `-<Name>` (Login-Konvention wie
+  `sshd`); Android `/system/bin/sh`, ebenfalls mit `argv[0]` `-sh`; Windows
+  `powershell.exe -NoLogo` ohne `TERM`. Startverzeichnis und Umgebung (`--cwd`, `--env`, Ordner im
+  Ziel) setzt `se` beim Start. Die Ausgabe ist der unveränderte Byte-Strom des PTY; Marken, Nonce
+  und der Befehlsstrom der Befehlssitzung gibt es hier nicht.
+- **Ablauf der Befehlssitzung:** Eine Probe in der Login-Shell (`echo %OS%;$PSVersionTable`) erkennt
+  cmd.exe bzw. PowerShell (dann `powershell.exe -NoLogo -NoProfile -NonInteractive -Command -`) oder
+  eine POSIX-Shell (dann `bash -l`, sonst `sh -l`). Jeder Befehl endet mit Marken, die Exitcode und
   Arbeitsverzeichnis tragen und eine zufällige Nonce je Sitzung enthalten.
 - **Anhängen, Shell an Sitzung:** `se shell --list [--json]` zeigt die anhängbaren Sitzungen des
-  Benutzers (Name, ID, Dialekt, Ziel, Besitzer), `se shell --attach NAME|ID` tritt bei. Sitzungen
-  von Agenten sind anhängbar, solange der Agent nicht `attachable: false` setzt; Befehle und
-  Ausgaben der anderen erscheinen mit `[se mcp (pid …)] $ …`. Strg+D löst sich, die Sitzung läuft
-  weiter.
-- **Anhängen, Sitzung an Shell:** Eine mit `se shell … --attachable` geöffnete Shell kann der Agent
-  mit `sessions` `{"action": "attach", "session": "<name>"}` übernehmen und dann mit `exec` und
-  `session: "<name>"` darin arbeiten; `sessions` `activity` liefert, was die anderen dort seitdem
+  Benutzers (Name, ID, Dialekt oder `-`, Ziel, Besitzer, Art `terminal` oder `commands`; in
+  `--json` hat jeder Eintrag `kind` immer und `dialect` nur, wenn er bekannt ist),
+  `se shell --attach NAME|ID` tritt bei. Befehlssitzungen von Agenten sind anhängbar, solange der
+  Agent nicht `attachable: false` setzt; Befehle und Ausgaben der anderen erscheinen mit
+  `[se mcp (pid …)] $ …`, `--attach` arbeitet dort im Zeilenmodus, Strg+D löst sich, die Sitzung
+  läuft weiter. Eine Terminalsitzung (`se shell ZIEL --attachable` im Terminal) tritt ein zweites
+  Terminal bei, wenn Standardeingabe und Standardausgabe Terminals sind und `-T` fehlt (sonst
+  Meldung und Exitcode 125): Alle Teilnehmer sehen dieselbe Ausgabe und tippen in dasselbe PTY, die
+  Größe des PTY folgt dem zuletzt aktiven Teilnehmer (Eingabe, Größenänderung oder Beitritt), und
+  eine Hinweiszeile „attached/detached“ geht an alle. `~.` löst einen Angehängten, `~.` des
+  Besitzers beendet die Sitzung für alle.
+- **Anhängen, Sitzung an Shell:** Eine mit `se shell ZIEL -T --attachable` geöffnete Shell (oder
+  `se shell … --attachable` ohne Terminal) ist eine Befehlssitzung; der Agent übernimmt sie mit
+  `sessions` `{"action": "attach", "session": "<name>"}` und arbeitet dann mit `exec` und
+  `session: "<name>"` darin; `sessions` `activity` liefert, was die anderen dort seitdem
   ausgeführt und ausgegeben haben (höchstens 64 KiB je Sitzung). `close` beendet eine eigene
-  Sitzung oder löst eine übernommene.
-- **Gemeinsamer Zustand:** Befehle aller Teilnehmer laufen nacheinander in derselben Shell. Ein
-  Abbruch (`job_cancel`, `timeout_seconds`, Strg+C) beendet die ganze Sitzung für alle, weil der
-  Exec-Strom keinen Signalweg zu einem einzelnen Befehl hat; ebenso `exit`. Das Ende des
-  MCP-Servers beendet seine Sitzungen; angehängte Terminals erfahren das.
+  Sitzung oder löst eine übernommene. Eine Terminalsitzung kann der Agent nicht übernehmen:
+  `sessions` listet sie mit `kind` `terminal`, `attach` meldet einen Fehler mit dem Hinweis auf
+  `se shell ZIEL -T --attachable`.
+- **Gemeinsamer Zustand (Befehlssitzung):** Befehle aller Teilnehmer laufen nacheinander in
+  derselben Shell. Ein Abbruch (`job_cancel`, `timeout_seconds`, Strg+C) beendet die ganze Sitzung
+  für alle, weil der Exec-Strom keinen Signalweg zu einem einzelnen Befehl hat; ebenso `exit`. Das
+  Ende des MCP-Servers beendet seine Sitzungen; angehängte Terminals erfahren das. In einer
+  Terminalsitzung geht Strg+C als Byte 3 an das Vordergrundprogramm der Gegenstelle und beendet die
+  Sitzung nicht.
 
 ## Sicherheit
 
@@ -193,6 +247,35 @@ Ergebnis zurück, Arbeitsverzeichnis, Umgebung, Variablen und Funktionen bleiben
 - Angehängte Clients dürfen Befehle einreihen, Eingabe nur an ihren eigenen laufenden Befehl
   senden, abbrechen und sich lösen; schließen kann nur der Besitzer. Bezeichner und gezeigte
   Befehlstexte anderer Teilnehmer werden ohne Steuerzeichen angezeigt.
+- Terminalsitzungen (`se shell` im Terminal) bringen kein neues Recht: Sie nutzen dieselbe
+  SSH-Anmeldung bzw. denselben Exec-Grant wie `exec`; entzieht die Gegenstelle die Freigabe, endet
+  die Sitzung für alle (Exitcode 125, Terminal wiederhergestellt). Ein Share-Host startet ein
+  Terminal nur mit der Fähigkeit `exec_terminal_v1`; der Client sendet keinen Terminal-Start an einen
+  Host ohne sie, und ein Host ohne PTY lehnt ihn mit `terminal_unsupported` ab. Gleiche ALPN,
+  Protokollversion und Rahmen ohne Terminal: ältere Clients und Hosts arbeiten wie bisher.
+- Agenten tippen nie in Terminalsitzungen: `sessions` `attach` lehnt sie ab, denn Eingaben eines
+  Agenten träfen jedes gerade laufende Programm (nvim, `sudo`, einen Interpreter) und den halb
+  getippten Text des Menschen. Das Anhängen eines Terminals ist nur mit `--attachable` möglich (ohne
+  das Flag gibt es kein Anhängetoken) und verlangt ein Terminal an Standardeingabe und
+  Standardausgabe; Kindprozesse des MCP-Tools `se` haben Pipes und können keiner Terminalsitzung
+  beitreten. Das Anhängeprotokoll Version 1 (ältere `se`) wird von Terminalsitzungen nach der
+  Tokenprüfung abgelehnt; ältere Besitzer bleiben für Befehlssitzungen erreichbar.
+- Die Eingabe eines Teilnehmers erreicht nur das PTY, nie die anderen Teilnehmer; diese sehen
+  allein, was die Gegenstelle zurückschreibt (bei Passwortabfragen kein Echo). Die Ausgabe der
+  Gegenstelle gelangt wie bei `ssh` unverändert an das lokale Terminal; deren Steuersequenzen
+  (Fenstertitel, Zwischenablage über OSC 52, Terminalabfragen) gelten mit demselben
+  Vertrauensmodell wie bei `ssh`. Eigene Texte von `se` (Hinweise, Namen anderer Teilnehmer,
+  Fehler) enthalten keine Steuerzeichen. Terminalinhalt steht in keiner Protokolldatei; die
+  Exec-Historie des Hosts zeigt `<shell>`.
+- Terminalzustand: Der Rohmodus wird erst nach erfolgreichem Verbindungsaufbau gesetzt und bei
+  normalem Ende, Fehler, Panik, SIGTERM, SIGHUP, SIGQUIT, SIGINT (Unix), Strg+Untbr, Schließen des
+  Fensters, Abmelden, Herunterfahren (Windows) und Update-Stopp wiederhergestellt. Wie `ssh` setzt
+  `se` Modi, die ein Programm der Gegenstelle gesetzt hat (Alternativbildschirm, Mausmeldung,
+  geklammertes Einfügen), nicht zurück.
+- Grenzen gegen Missbrauch: Fenstergrößen 1 bis 32767 Spalten und Zeilen, `TERM` 1 bis 64 Zeichen
+  aus `A-Za-z0-9._+-` (Client und Host prüfen); RESIZE-Rahmen höchstens 256 Byte, Datenrahmen
+  höchstens 64 KiB; höchstens 8 angehängte Terminals; ein Angehängter, dessen Warteschlange 30 s
+  voll bleibt, wird getrennt.
 
 ## Updates
 
@@ -216,13 +299,28 @@ Terminal-Update `se update` (Versionsübergabe) beendet den Server nicht.
   auf Ordner nur bei lokalen Pfaden. Die serverseitige Suche von SSH-Agenten und Share-Peers
   überspringt Links; nur die Ordnerdurchsuchung meldet sie.
 - SSH-Server ohne `signal`-Unterstützung sehen beim Abbruch nur das Schließen des Kanals.
-- Sitzungen: kein PTY (Vollbildprogramme und Passwortabfragen funktionieren nicht), keine
-  Wiederanbindung nach Verlust des Exec-Stroms und kein Abbruch einzelner Befehle (`EXEC-PTY` in
-  `docs/TODO.md`). Jede Sitzung belegt einen SSH-Kanal (OpenSSH erlaubt standardmäßig 10 je
-  Verbindung) bzw. einen der zwei Exec-Plätze, die eine Share-Gegenstelle je Gerät gleichzeitig
-  zulässt. Höchstens 8 angehängte Clients und 64 wartende Befehle je Sitzung, je Befehl höchstens
-  1 MiB Befehl und Eingabe. Der PowerShell-Dialekt ist nur lokal unter Windows geprüft
+- Agenten-Sitzungen (Befehlssitzungen, auch `se shell -T`): kein PTY (Vollbildprogramme und
+  Passwortabfragen funktionieren nicht) und kein Abbruch einzelner Befehle (`EXEC-PTY` in
+  `docs/TODO.md`). Höchstens 8 angehängte Clients und 64 wartende Befehle je Sitzung, je Befehl
+  höchstens 1 MiB Befehl und Eingabe. Der PowerShell-Dialekt ist nur lokal unter Windows geprüft
   (`EXECSESS-WIN`).
+- Alle Sitzungen: keine Wiederanbindung nach Verlust der Verbindung bzw. des Exec-Stroms (auch
+  `ssh` kann das nicht; `EXEC-PTY`). Jede Sitzung, auch eine Terminalsitzung, belegt einen
+  SSH-Kanal (OpenSSH erlaubt standardmäßig 10 je Verbindung) bzw. einen der zwei Exec-Plätze, die
+  eine Share-Gegenstelle je Gerät gleichzeitig zulässt.
+- Terminalsitzungen: Escape-Folgen nur `~.`, `~~`, `~?`. Fenstergrößen 1 bis 32767. Ein Windows-Host
+  braucht Windows 10 1809 bzw. Server 2019 (ConPTY); ältere Versionen melden `exec_terminal_v1`
+  nicht, `se shell` fällt dann in den Zeilenmodus zurück. Ein lokales Terminal unter Windows ohne
+  Konsole (mintty/Git Bash mit Pipe als Standardeingabe) läuft im Zeilenmodus. Nach `~.` meldet
+  `se shell` das Ende sofort. Eine SSH-Gegenstelle endet über Abbruchsignale (TERM, nach 10 s KILL)
+  und das Schließen des Kanals bzw. der Verbindung (der Server sendet SIGHUP an die Sitzung); das
+  kann bis etwa 20 s dauern, und mit `nohup` gestartete Prozesse überleben wie bei `ssh`. Auf einem
+  Share-Host beendet das Containment (systemd-cgroup, Job Object, Android-Subreaper) den
+  gesamten Prozessbaum, auch mit `nohup` gestartete Prozesse.
+  Nicht geprüft: Android-Host auf einem Gerät, Windows-OpenSSH als SSH-Ziel, Linux-Client gegen
+  Windows-Host und Windows-Client gegen Linux-Host (`ETERM-ANDROID`, `AIPLUG-WINSSH`,
+  `ETERM-XHOST` in `docs/TODO.md`). `se exec -t` (ein einzelner Befehl mit PTY) und lesendes
+  Beobachten durch Agenten gibt es nicht (`ETERM-EXEC-T`, `ETERM-AGENT-VIEW`).
 
 ## Fehlersuche
 
