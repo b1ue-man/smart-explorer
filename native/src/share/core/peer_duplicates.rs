@@ -25,7 +25,7 @@ pub(super) fn find(
         path: root.into(),
         min_bytes,
         request_id: if features.analysis_reattach_v1 {
-            Some(super::core::random_token(16).map_err(io::Error::other)?)
+            Some(super::analysis_request_id::new().map_err(io::Error::other)?)
         } else {
             None
         },
@@ -48,7 +48,8 @@ pub(super) fn find(
     }
     Err(io::ErrorKind::NotConnected.into())
 }
-fn receive(
+/// One duplicate search request without the reattach retry of `find`.
+pub(super) fn receive(
     backend: &PeerBackend,
     request: FsDuplicateSearch,
     p: &ReclaimProgress,

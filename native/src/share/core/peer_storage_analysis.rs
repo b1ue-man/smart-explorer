@@ -39,21 +39,29 @@ pub(super) fn scan(
         node_budget: Some(progress.node_budget()),
         compress: features.analysis_deflate_v1,
         request_id: if features.analysis_reattach_v1 {
-            Some(super::core::random_token(16).map_err(io::Error::other)?)
+            Some(super::analysis_request_id::new().map_err(io::Error::other)?)
         } else {
             None
         },
     };
+    let reattach = features.analysis_reattach_v1;
+    request_with(backend, request, reattach, progress).map(Some)
+}
+
+/// Sends one analysis request; with `reattach` a transport loss opens a new
+/// stream once and attaches to the host's job under the same `request_id`.
+pub(super) fn request_with(
+    backend: &PeerBackend,
+    request: FsStorageAnalysis,
+    reattach: bool,
+    progress: &Progress,
+) -> io::Result<ScanOutcome> {
     for attempt in 0..2 {
         progress.check_cancel()?;
         let endpoint = backend.current_endpoint()?;
         let mut opened = match backend.node.open_stream(&endpoint, &backend.identity) {
             Ok(opened) => opened,
-            Err(error)
-                if attempt == 0
-                    && features.analysis_reattach_v1
-                    && super::peer_stream::transport(&error) =>
-            {
+            Err(error) if attempt == 0 && reattach && super::peer_stream::transport(&error) => {
                 continue
             }
             Err(error) => return Err(error),
@@ -67,17 +75,14 @@ pub(super) fn scan(
             progress,
         ));
         match result {
-            Ok(result) => return Ok(Some(result)),
+            Ok(result) => return Ok(result),
             Err(error) => {
                 if super::peer_stream::transport(&error) {
                     let _ = backend
                         .node
                         .invalidate_outgoing_session(&opened.session_key, opened.generation);
                 }
-                if attempt == 0
-                    && features.analysis_reattach_v1
-                    && super::peer_stream::transport(&error)
-                {
+                if attempt == 0 && reattach && super::peer_stream::transport(&error) {
                     progress.restart_remote();
                     continue;
                 }
