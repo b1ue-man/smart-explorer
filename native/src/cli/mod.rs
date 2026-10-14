@@ -442,9 +442,44 @@ mod tests {
         assert!(Cli::try_parse_from(["se", "shell", "--list", "--json"]).is_ok());
         assert!(Cli::try_parse_from(["se", "shell", "--json"]).is_err());
         let help = nested_help(&["shell"]);
-        for word in ["--attachable", "--attach", "--list", "no PTY", "Ctrl+C"] {
+        for word in [
+            "--attachable",
+            "--attach",
+            "--list",
+            "--no-tty",
+            "Ctrl+C",
+            "~.",
+        ] {
             assert!(help.contains(word), "missing {word} in {help}");
         }
+    }
+
+    #[test]
+    fn terminal_task_cli_parses_the_terminal_options_of_shell() {
+        let parse = |arguments: &[&str]| {
+            let mut all = vec!["se", "shell"];
+            all.extend_from_slice(arguments);
+            Cli::try_parse_from(all).map(|cli| match cli.command {
+                super::Command::Shell(args) => args,
+                _ => panic!("wrong command"),
+            })
+        };
+        let plain = parse(&["@prod"]).unwrap();
+        assert!(!plain.no_tty);
+        assert_eq!(plain.escape_char.0, Some(b'~'));
+        assert!(parse(&["@prod", "-T"]).unwrap().no_tty);
+        assert!(parse(&["@prod", "--no-tty"]).unwrap().no_tty);
+        // Joining a command session with -T is allowed.
+        let attached = parse(&["--attach", "build", "-T"]).unwrap();
+        assert!(attached.no_tty && attached.attach.as_deref() == Some("build"));
+        let escape = |value: &str| parse(&["@prod", "-e", value]).map(|args| args.escape_char.0);
+        assert_eq!(escape("none").unwrap(), None);
+        assert_eq!(escape("#").unwrap(), Some(b'#'));
+        for bad in ["ab", ".", ""] {
+            assert!(escape(bad).is_err(), "{bad:?} must be refused");
+        }
+        assert!(parse(&["@prod", "--escape-char", "none"]).is_ok());
+        assert!(parse(&["--attach", "build", "@prod"]).is_err());
     }
 
     fn nested_help(path: &[&str]) -> String {
