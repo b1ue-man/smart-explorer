@@ -41,9 +41,15 @@ NATIVE = Path(__file__).resolve().parent
 _spec = importlib.util.spec_from_file_location("ai_plugin_task", NATIVE / "test-ai-plugin-task.py")
 ai = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(ai)
-# The shared fmt/build helpers read these module globals.
+# The shared fmt/build helpers read these module globals. The build helper
+# matches each fragment anywhere in a warning line, message text included, so
+# every fragment names a file path: a bare `remove_tree` also matched the old
+# dead-code warning "function `remove_tree` is never used" in the unchanged
+# `remove_tree` function of src/share/core/fs_delete.rs.
 ai.BATCH_BASE = "ad99f3a4678c7af34c9cbd1c74cb59dbf4b5846f"
-ai.NEW_FILE_PREFIXES = ("src/vfs/core/tree_remove_", "remove_tree", "delete_speed_task_tests.rs",
+ai.NEW_FILE_PREFIXES = ("src/vfs/core/tree_remove_", "src/daemon/os/shared/backend_remove_tree.rs",
+                        "src/share/core/peer_remove_tree", "src/share/core/remove_tree_wire",
+                        "src/share/os/shared/host_remove_tree", "delete_speed_task_tests.rs",
                         "fs_delete_count_task_tests.rs", "src/agent/core/ext_stream.rs",
                         "src/agent/core/tree_remove.rs", "src/agent_proto/os/shared/tree_remove.rs",
                         "src/sftp/core/tree_remove.rs", "src/smb/core/tree_remove.rs",
