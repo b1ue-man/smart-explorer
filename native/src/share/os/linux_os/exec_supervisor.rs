@@ -1,26 +1,36 @@
+use std::ffi::OsString;
 use std::io::{self, Read};
+use std::os::fd::OwnedFd;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
+use std::path::Path;
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
+use super::exec_pty;
 use crate::share::exec_supervisor_protocol::{
     recv_command, send_event, SupervisorCommand, SupervisorEvent, SupervisorExit, SupervisorStart,
 };
+use crate::share::exec_terminal::ExecTerminalSize;
 use crate::share::exec_types::ExecCommand;
 
 /// How the supervisor starts a job's root process. Linux passes the values
 /// it always used (its systemd unit's cgroup contains the job); Android runs
-/// the supervisor in the app process and adds a per-job intermediate.
+/// the supervisor in the app process and adds a per-job intermediate. A
+/// terminal job (`ExecCommand::Login`) uses the same policy: its root is the
+/// login shell below a pseudo-terminal and leads its own session instead of a
+/// process group.
 pub(crate) struct SpawnPolicy<'a> {
-    /// Shell of `ExecCommand::Shell` unless an absolute `SHELL` is honoured.
+    /// Shell of `ExecCommand::Shell` and `ExecCommand::Login` unless an
+    /// absolute `SHELL` is honoured.
     pub(crate) default_shell: &'static str,
     /// An absolute `SHELL` in the job environment replaces `default_shell`.
     pub(crate) shell_from_environment: bool,
     /// Option placed before the shell command string (`-lc`, `-c`).
     pub(crate) shell_option: &'static str,
-    /// The root process leads its own process group.
+    /// The root process leads its own process group (not set for a terminal
+    /// job, whose `setsid` makes the root a group leader anyway).
     pub(crate) own_process_group: bool,
     /// Process spawned in place of the root; it forks the root itself.
     pub(crate) intermediate: Option<&'a dyn Intermediate>,
@@ -33,10 +43,14 @@ pub(crate) struct SpawnPolicy<'a> {
 pub(crate) trait Intermediate {
     /// Prepares `command` to start as the intermediate (pre-exec hook,
     /// status channel); `own_process_group` applies to the root.
+    /// `controlling_terminal` makes the root, never the intermediate, lead a
+    /// new session with the terminal on its stdin as controlling terminal,
+    /// in place of `own_process_group`.
     fn arm(
         &self,
         command: &mut Command,
         own_process_group: bool,
+        controlling_terminal: bool,
     ) -> io::Result<Box<dyn ArmedIntermediate>>;
 }
 
@@ -100,8 +114,8 @@ pub(super) fn run(
         _ => return Err(invalid("supervisor expected a start frame")),
     };
     start.request.validate()?;
-    let mut root = match spawn(&start, policy) {
-        Ok(root) => root,
+    let (mut root, master) = match spawn(&start, policy) {
+        Ok(spawned) => spawned,
         Err(error) => {
             let _ = send_event(&mut stream, &SupervisorEvent::Error(error.to_string()));
             return Ok(());
@@ -116,28 +130,13 @@ pub(super) fn run(
 
     let writer = Arc::new(Mutex::new(stream.try_clone()?));
     let event_writer = writer.clone();
-    let output = Arc::new(AtomicU64::new(0));
-    let truncated = Arc::new(AtomicBool::new(false));
-    let limit = start.request.effective_max_output_bytes();
-    let stdout = root
-        .child
-        .stdout
-        .take()
-        .ok_or_else(|| invalid("stdout pipe missing"))?;
-    let stderr = root
-        .child
-        .stderr
-        .take()
-        .ok_or_else(|| invalid("stderr pipe missing"))?;
-    let stdout_thread = spawn_output(
-        stdout,
-        writer.clone(),
-        output.clone(),
-        truncated.clone(),
-        limit,
-        false,
-    )?;
-    let stderr_thread = spawn_output(stderr, writer, output, truncated.clone(), limit, true)?;
+    let output = Output {
+        writer,
+        transferred: Arc::new(AtomicU64::new(0)),
+        truncated: Arc::new(AtomicBool::new(false)),
+        limit: start.request.effective_max_output_bytes(),
+    };
+    let (mut input, output_threads) = start_streams(&mut root, master, &output)?;
 
     let (command_tx, command_rx) = mpsc::sync_channel(16);
     std::thread::Builder::new()
@@ -150,7 +149,6 @@ pub(super) fn run(
             }
         })?;
 
-    let mut stdin = root.child.stdin.take();
     loop {
         if let Some(status) = root.exit_status()? {
             let mut exit = SupervisorExit {
@@ -159,15 +157,17 @@ pub(super) fn run(
                 output_truncated: false,
             };
             send_locked_event(&event_writer, SupervisorEvent::RootExited(exit.clone()))?;
-            join_output(stdout_thread)?;
-            join_output(stderr_thread)?;
-            exit.output_truncated = truncated.load(Ordering::Acquire);
+            for thread in output_threads {
+                join_output(thread)?;
+            }
+            exit.output_truncated = output.truncated.load(Ordering::Acquire);
             send_locked_event(&event_writer, SupervisorEvent::Exited(exit))?;
             return Ok(());
         }
         match command_rx.recv_timeout(Duration::from_millis(20)) {
-            Ok(Ok(SupervisorCommand::Stdin(data))) => write_stdin(&mut stdin, &data)?,
-            Ok(Ok(SupervisorCommand::StdinEof)) => drop(stdin.take()),
+            Ok(Ok(SupervisorCommand::Stdin(data))) => input.write(data)?,
+            Ok(Ok(SupervisorCommand::StdinEof)) => input.close(),
+            Ok(Ok(SupervisorCommand::Resize(size))) => input.resize(size),
             Ok(Ok(SupervisorCommand::Cancel))
             | Ok(Err(_))
             | Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -183,31 +183,114 @@ pub(super) fn run(
     }
 }
 
-fn spawn(start: &SupervisorStart, policy: &SpawnPolicy<'_>) -> io::Result<Root> {
-    let mut command = match &start.request.command {
-        ExecCommand::Argv { program, args } => {
+/// What the output readers of one job share: the event writer, the byte count
+/// against the output limit and the truncation flag.
+struct Output {
+    writer: Arc<Mutex<std::os::unix::net::UnixStream>>,
+    transferred: Arc<AtomicU64>,
+    truncated: Arc<AtomicBool>,
+    limit: Option<u64>,
+}
+
+/// Where the controller's `Stdin`, `StdinEof` and `Resize` commands go.
+enum ChildInput {
+    Pipe(Option<ChildStdin>),
+    Terminal(exec_pty::TerminalInput),
+}
+
+impl ChildInput {
+    fn write(&mut self, data: Vec<u8>) -> io::Result<()> {
+        match self {
+            Self::Pipe(stdin) => write_stdin(stdin, &data),
+            Self::Terminal(terminal) => terminal.write(data),
+        }
+    }
+
+    /// End of input closes a pipe. A terminal stays open: closing its master
+    /// would hang the session up.
+    fn close(&mut self) {
+        if let Self::Pipe(stdin) = self {
+            drop(stdin.take());
+        }
+    }
+
+    /// Only a terminal has a window. A failed change keeps the old size and
+    /// the next change replaces it, so it never ends the session.
+    fn resize(&self, size: ExecTerminalSize) {
+        if let Self::Terminal(terminal) = self {
+            let _ = terminal.resize(size);
+        }
+    }
+}
+
+/// Starts the output readers: the pseudo-terminal's master (one stdout
+/// stream, no stderr) or the stdout and stderr pipes of the root.
+fn start_streams(
+    root: &mut Root,
+    master: Option<OwnedFd>,
+    output: &Output,
+) -> io::Result<(ChildInput, Vec<std::thread::JoinHandle<io::Result<()>>>)> {
+    if let Some(master) = master {
+        let (terminal, reader) = exec_pty::start_io(master)?;
+        let thread = spawn_output(reader, output, false)?;
+        return Ok((ChildInput::Terminal(terminal), vec![thread]));
+    }
+    let stdout = root
+        .child
+        .stdout
+        .take()
+        .ok_or_else(|| invalid("stdout pipe missing"))?;
+    let stderr = root
+        .child
+        .stderr
+        .take()
+        .ok_or_else(|| invalid("stderr pipe missing"))?;
+    let threads = vec![
+        spawn_output(stdout, output, false)?,
+        spawn_output(stderr, output, true)?,
+    ];
+    Ok((ChildInput::Pipe(root.child.stdin.take()), threads))
+}
+
+/// The root and, for a terminal job, the master of its pseudo-terminal. The
+/// supervisor keeps no descriptor of the slave once this returns: the output
+/// ends when the job's processes have closed theirs.
+fn spawn(start: &SupervisorStart, policy: &SpawnPolicy<'_>) -> io::Result<(Root, Option<OwnedFd>)> {
+    let terminal = start.request.terminal.as_ref();
+    let mut command = match (&start.request.command, terminal) {
+        (ExecCommand::Argv { program, args }, None) => {
             let mut command = Command::new(program);
             command.args(args);
             command
         }
-        ExecCommand::Shell { command } => {
-            let shell = start
-                .environment
-                .get("SHELL")
-                .filter(|value| policy.shell_from_environment && value.starts_with('/'))
-                .map(String::as_str)
-                .unwrap_or(policy.default_shell);
-            let mut shell_command = Command::new(shell);
+        (ExecCommand::Shell { command }, None) => {
+            let mut shell_command = Command::new(shell_program(start, policy));
             shell_command.args([policy.shell_option, command]);
             shell_command
         }
+        (ExecCommand::Login, Some(_)) => login_command(start, policy)?,
+        (ExecCommand::Login, None) => {
+            return Err(invalid("an interactive login shell needs a terminal"));
+        }
+        (ExecCommand::Argv { .. } | ExecCommand::Shell { .. }, Some(_)) => {
+            return Err(invalid("a terminal is only valid for the login shell"));
+        }
     };
-    command
-        .env_clear()
-        .envs(&start.environment)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    command.env_clear().envs(&start.environment);
+    let master = match terminal {
+        Some(request) => {
+            let pty = exec_pty::open_pair(request.size)?;
+            exec_pty::attach_slave(&mut command, pty.slave, request)?;
+            Some(pty.master)
+        }
+        None => {
+            command
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            None
+        }
+    };
     if let Some(cwd) = start.request.cwd.as_deref().or_else(|| {
         start
             .environment
@@ -218,9 +301,15 @@ fn spawn(start: &SupervisorStart, policy: &SpawnPolicy<'_>) -> io::Result<Root> 
         command.current_dir(cwd);
     }
     let intermediate = match policy.intermediate {
-        Some(intermediate) => Some(intermediate.arm(&mut command, policy.own_process_group)?),
+        Some(intermediate) => {
+            Some(intermediate.arm(&mut command, policy.own_process_group, terminal.is_some())?)
+        }
         None => {
-            if policy.own_process_group {
+            if terminal.is_some() {
+                // SAFETY: the hook makes only async-signal-safe system calls
+                // and allocates nothing.
+                unsafe { command.pre_exec(exec_pty::become_session_leader) };
+            } else if policy.own_process_group {
                 command.process_group(0);
             }
             None
@@ -234,17 +323,43 @@ fn spawn(start: &SupervisorStart, policy: &SpawnPolicy<'_>) -> io::Result<Root> 
     if let Some(intermediate) = root.intermediate.as_mut() {
         intermediate.spawned(pid);
     }
-    Ok(root)
+    Ok((root, master))
+}
+
+/// An absolute `SHELL` of the job environment where the policy honours it,
+/// otherwise the policy's shell.
+fn shell_program<'a>(start: &'a SupervisorStart, policy: &SpawnPolicy<'_>) -> &'a str {
+    start
+        .environment
+        .get("SHELL")
+        .filter(|value| policy.shell_from_environment && value.starts_with('/'))
+        .map(String::as_str)
+        .unwrap_or(policy.default_shell)
+}
+
+/// The login shell of the host user. Its `argv[0]` is `-` and the shell's file
+/// name, the login convention of `sshd`; it gets no arguments.
+fn login_command(start: &SupervisorStart, policy: &SpawnPolicy<'_>) -> io::Result<Command> {
+    let shell = shell_program(start, policy);
+    let name = Path::new(shell)
+        .file_name()
+        .ok_or_else(|| invalid("the login shell path has no file name"))?;
+    let mut arg0 = OsString::from("-");
+    arg0.push(name);
+    let mut command = Command::new(shell);
+    command.arg0(arg0);
+    Ok(command)
 }
 
 fn spawn_output<R: Read + Send + 'static>(
     mut reader: R,
-    writer: Arc<Mutex<std::os::unix::net::UnixStream>>,
-    transferred: Arc<AtomicU64>,
-    truncated: Arc<AtomicBool>,
-    limit: Option<u64>,
+    output: &Output,
     stderr: bool,
 ) -> io::Result<std::thread::JoinHandle<io::Result<()>>> {
+    let writer = output.writer.clone();
+    let transferred = output.transferred.clone();
+    let truncated = output.truncated.clone();
+    let limit = output.limit;
     std::thread::Builder::new()
         .name(if stderr { "exec-stderr" } else { "exec-stdout" }.into())
         .spawn(move || {

@@ -1,3 +1,8 @@
+#[path = "exec_pty.rs"]
+mod exec_pty;
+#[cfg(all(test, target_os = "linux"))]
+#[path = "exec_pty_tests.rs"]
+mod exec_pty_tests;
 #[cfg(debug_assertions)]
 #[path = "exec_self_test.rs"]
 mod exec_self_test;
@@ -282,6 +287,13 @@ pub(crate) fn provider_status() -> ExecProviderStatus {
             user_label,
         },
     }
+}
+
+/// True when this host can give an Exec start a terminal: a pseudo-terminal
+/// opens. The pair itself opens in the supervisor inside the job's transient
+/// unit, which has no `PrivateDevices`, so `/dev/ptmx` is the same there.
+pub(crate) fn terminal_supported() -> bool {
+    exec_pty::terminal_supported()
 }
 
 pub(crate) fn run_supervisor_if_requested(arguments: &[OsString]) -> Option<io::Result<()>> {
