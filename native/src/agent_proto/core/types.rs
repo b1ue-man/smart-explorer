@@ -299,4 +299,10 @@ pub enum Frame {
         poll_ms: u64,
     },
     Change(WireChange),
+    /// Delete the plain folder at the path with everything below it next to
+    /// the data (`ext-v1`); sent only after `Query REMOVE_TREE` answered 1.
+    /// Replies `Progress { done: removed, total: planned }`*, then `End` or
+    /// `Err`. Links are removed as entries and never followed; a link or
+    /// file at the path is refused. `Cancel` stops at the next entry.
+    RemoveTree(String),
 }

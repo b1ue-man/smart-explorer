@@ -323,6 +323,7 @@ fn dispatch(context: &RequestContext, id: u64, req: Frame) -> io::Result<()> {
             super::ext_ops::finish_stage(&stage, mtime_ms, mode, durability),
         ),
         Frame::Query { kind, path } => reply(sink, id, super::ext_ops::answer(kind, &path)),
+        Frame::RemoveTree(path) => super::tree_remove::handle_remove_tree(sink, id, &path, cancel),
         Frame::FindDuplicates { .. }
         | Frame::Recycle { .. }
         | Frame::TargetLimits(_)

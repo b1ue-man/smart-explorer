@@ -18,6 +18,9 @@ mod codec;
 mod codec_tests;
 #[path = "core/credit.rs"]
 mod credit;
+#[cfg(test)]
+#[path = "core/delete_speed_task_tests.rs"]
+mod delete_speed_task_tests;
 #[path = "os/shared/ext_ops.rs"]
 mod ext_ops;
 #[path = "core/extension_parts.rs"]
@@ -70,6 +73,8 @@ mod transfer_engine_task_bounds_tests;
 mod transfer_engine_task_tests;
 #[path = "core/transport_error.rs"]
 mod transport_error;
+#[path = "os/shared/tree_remove.rs"]
+mod tree_remove;
 #[path = "core/types.rs"]
 mod types;
 #[path = "os/shared/write_new.rs"]

@@ -8,85 +8,26 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crossbeam_channel::{RecvTimeoutError, Sender};
+use crossbeam_channel::Sender;
 
 use super::agent_error::agent_error;
 use super::backend::AgentBackend;
+use super::ext_stream::{is_unsupported_error, stream, unexpected, CANCEL_POLL};
 use super::ext_wire::{
     algorithm_to_wire, apply_progress, change_from_wire, durability_to_wire, group_from_wire,
     is_unsupported, limits_from_wire, omission_from_wire, report_from_wire, unsupported,
 };
 use super::metadata::wire_to_vfs;
-use super::pool::AgentPool;
 use crate::agent_proto::{query, Frame};
 use crate::vfs::{
     self as vfs, Backend, BackendExtensions, ChangeNotice, ChangeSignalMode, ChangeSubscription,
-    HashWalkEntry, HashWalkItem, HashWalkRequest, RecycleExpectation, RecycleOutcome, StageFinish,
-    StageFinished, TargetLimits, VfsListing, VfsResult, VolumeIdentity,
+    HashWalkEntry, HashWalkItem, HashWalkRequest, RecursiveDeleteFailure, RecursiveDeleteProgress,
+    RecursiveDeleteReport, RecycleExpectation, RecycleOutcome, StageFinish, StageFinished,
+    TargetLimits, VfsListing, VfsResult, VolumeIdentity,
 };
 
-/// How often a waiting stream looks at its cancel flag.
-const CANCEL_POLL: Duration = Duration::from_millis(200);
 /// Deadline of one question (`Query`, `TargetLimits`).
 const QUERY_TIMEOUT: Duration = Duration::from_secs(20);
-
-fn unexpected(what: &str, frame: &Frame) -> io::Error {
-    io::Error::new(
-        io::ErrorKind::InvalidData,
-        format!("unexpected agent {what} reply: {frame:?}"),
-    )
-}
-
-/// Sends `request` and hands every reply frame to `take` until `End`. An
-/// `Err` frame fails (the serving side's "unsupported" as `Unsupported`), a
-/// set `cancel` sends `Cancel` and stops with `Interrupted`. A dead transport
-/// ends the wait through the connection's heartbeat, so no frame deadline is
-/// needed (a host may hash one large file for a long time).
-fn stream(
-    pool: &Arc<AgentPool>,
-    request: Frame,
-    cancel: &AtomicBool,
-    mut take: impl FnMut(Frame) -> io::Result<()>,
-) -> io::Result<()> {
-    let lease = pool.lease();
-    let mux = lease.mux()?;
-    let (id, rx) = mux.register();
-    let result = (|| {
-        mux.send(id, request)?;
-        loop {
-            if cancel.load(Ordering::Relaxed) {
-                return Err(io::Error::new(
-                    io::ErrorKind::Interrupted,
-                    "agent operation canceled",
-                ));
-            }
-            match rx.recv_timeout(CANCEL_POLL) {
-                Ok(Frame::End) => return Ok(()),
-                Ok(Frame::Err(error)) if is_unsupported(&error) => return Err(unsupported()),
-                Ok(Frame::Err(error)) => return Err(agent_error(error)),
-                // Keepalive of the service while the peer works.
-                Ok(Frame::Progress { .. }) => {}
-                Ok(frame) => take(frame)?,
-                Err(RecvTimeoutError::Timeout) => {}
-                Err(RecvTimeoutError::Disconnected) => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::UnexpectedEof,
-                        "agent stream closed",
-                    ))
-                }
-            }
-        }
-    })();
-    if result.is_err() {
-        let _ = mux.send(id, Frame::Cancel);
-    }
-    mux.unregister(id);
-    result
-}
-
-fn is_unsupported_error(error: &io::Error) -> bool {
-    error.kind() == io::ErrorKind::Unsupported && is_unsupported(&error.to_string())
-}
 
 fn send_notice(
     tx: &Sender<ChangeNotice>,
@@ -119,7 +60,7 @@ impl AgentBackend {
 
     /// One question the serving side answers with a number; `0` from a
     /// server without the extension frames.
-    fn query(&self, kind: u8, path: &str) -> VfsResult<u64> {
+    pub(super) fn query(&self, kind: u8, path: &str) -> VfsResult<u64> {
         if !self.features().extensions {
             return Ok(0);
         }
@@ -415,6 +356,19 @@ impl BackendExtensions for AgentBackend {
             Frame::Answer(2) => Ok(RecycleOutcome::Changed),
             other => Err(unexpected("recycle", &other)),
         }
+    }
+
+    fn supports_remove_tree(&self, path: &str) -> VfsResult<bool> {
+        self.agent_supports_remove_tree(path)
+    }
+
+    fn remove_tree(
+        &self,
+        path: &str,
+        cancel: &AtomicBool,
+        progress: &mut dyn FnMut(RecursiveDeleteProgress),
+    ) -> Result<RecursiveDeleteReport, RecursiveDeleteFailure> {
+        self.agent_remove_tree(path, cancel, progress)
     }
 
     fn change_signal_mode(&self, root: &str) -> VfsResult<Option<ChangeSignalMode>> {

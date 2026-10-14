@@ -104,6 +104,7 @@ pub(super) fn query(backend: &BackendHandle, kind: u8, path: &str) -> io::Result
             None => 0,
         },
         query::SYNC_FILESYSTEM => yes(vfs::sync_filesystem(&**backend, path)?),
+        query::REMOVE_TREE => yes(vfs::supports_remove_tree(&**backend, path)?),
         _ => 0,
     };
     Ok(Frame::Answer(value))
