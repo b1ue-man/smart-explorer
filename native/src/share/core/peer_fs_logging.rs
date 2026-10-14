@@ -22,6 +22,7 @@ pub(super) fn request_label(request: &FsRequest) -> &'static str {
         FsRequest::CopyFile { .. } => "copy_file",
         FsRequest::RemoveFile { .. } => "remove_file",
         FsRequest::RemoveDir { .. } => "remove_dir",
+        FsRequest::RemoveTree { .. } => "remove_tree",
         FsRequest::PutBatch { .. } => "put_batch",
         FsRequest::PutBatchStatus { .. } => "put_batch_status",
         FsRequest::GetBatch { .. } => "get_batch",
@@ -135,6 +136,7 @@ pub(super) fn response_summary(response: &FsResponse) -> String {
         FsResponse::Duplicates { .. } => "duplikatsuche".into(),
         FsResponse::HashWalk { .. } => "pruefsummen".into(),
         FsResponse::Watch { .. } => "beobachtung".into(),
+        FsResponse::RemoveTree { message } => format!("ordnerloeschen {message:?}"),
         FsResponse::Err { msg, .. } => format!("fehler={msg}"),
     }
 }

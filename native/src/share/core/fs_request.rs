@@ -213,6 +213,13 @@ pub(crate) enum FsRequest {
     RemoveDir {
         path: String,
     },
+    /// `remove_tree_v1`: the plain folder `path` and everything below it,
+    /// deleted on the host in one stream (`FsResponse::RemoveTree`); links
+    /// are removed as entries, never followed. Sent only to hosts that offer
+    /// the feature; `RemoveDir` stays for older clients.
+    RemoveTree {
+        path: String,
+    },
     /// Transfer v1: many small new files in one stream. Each entry lands in a
     /// private stage named with `nonce`; nothing is published before the
     /// client's WriteDone, and nothing is ever replaced.
@@ -302,6 +309,7 @@ impl FsRequest {
             | Self::CopyFile { .. }
             | Self::RemoveFile { .. }
             | Self::RemoveDir { .. }
+            | Self::RemoveTree { .. }
             | Self::DiscardStage { .. }
             | Self::PutBatch { .. }
             | Self::Recycle(_)

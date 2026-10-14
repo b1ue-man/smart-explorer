@@ -8,8 +8,9 @@ use crate::{
     analytics::{DuplicateReport, ReclaimProgress},
     vfs::{
         Backend, BackendExtensions, ChangeNotice, ChangeSignalMode, ChangeSubscription,
-        HashWalkItem, HashWalkRequest, RecycleExpectation, RecycleOutcome, StageDurability,
-        StageFinish, StageFinished, TargetLimits, VfsListing,
+        HashWalkItem, HashWalkRequest, RecursiveDeleteFailure, RecursiveDeleteProgress,
+        RecursiveDeleteReport, RecycleExpectation, RecycleOutcome, StageDurability, StageFinish,
+        StageFinished, TargetLimits, VfsListing,
     },
 };
 use std::{
@@ -19,6 +20,8 @@ use std::{
 };
 #[path = "peer_literal_paths.rs"]
 pub(super) mod literal_paths;
+#[path = "peer_remove_tree.rs"]
+mod remove_tree;
 #[path = "peer_reversible_replace.rs"]
 pub(super) mod reversible_replace;
 
@@ -141,6 +144,17 @@ impl BackendExtensions for PeerBackend {
             FsResponse::Recycle { moved: false } => Ok(RecycleOutcome::Changed),
             _ => Err(peer_stream::invalid("Unerwartete Papierkorb-Antwort")),
         }
+    }
+    fn supports_remove_tree(&self, path: &str) -> io::Result<bool> {
+        Ok(peer_stream::features(self, path)?.remove_tree_v1)
+    }
+    fn remove_tree(
+        &self,
+        path: &str,
+        cancel: &AtomicBool,
+        progress: &mut dyn FnMut(RecursiveDeleteProgress),
+    ) -> Result<RecursiveDeleteReport, RecursiveDeleteFailure> {
+        remove_tree::remove(self, path, cancel, progress)
     }
     fn change_signal_mode(&self, root: &str) -> io::Result<Option<ChangeSignalMode>> {
         Ok(peer_stream::features(self, root)?

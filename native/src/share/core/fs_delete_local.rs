@@ -18,10 +18,12 @@ struct Frame {
     bytes: u64,
 }
 
+/// `removed` hears of every entry once it is gone, the target folder last.
 pub(super) fn remove(
     backend: &dyn Backend,
     target: &str,
     check_write: &dyn Fn() -> io::Result<()>,
+    removed: &dyn Fn(),
 ) -> io::Result<()> {
     let root = super::super::fs::local_paths::to_os_path(&backend.root_display());
     let target = super::super::fs::local_paths::to_os_path(target);
@@ -61,6 +63,7 @@ pub(super) fn remove(
                 stack.push(frame(handle, parent, entry.name, child, budget, &mut used)?);
             } else {
                 top.handle.remove_child(&entry.name)?;
+                removed();
             }
         } else {
             check_write()?;
@@ -76,6 +79,7 @@ pub(super) fn remove(
             } = frame;
             drop(entries); // Windows final disposition consumes the last child pin.
             parent.remove_empty_child(&name, handle)?;
+            removed();
             used = used.saturating_sub(bytes);
         }
     }

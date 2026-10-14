@@ -93,6 +93,17 @@ impl TargetPolicy {
     }
 
     pub(super) fn destructive(&self, path: &str) -> io::Result<()> {
+        self.destructive_observed(path, &|| Ok(()))
+    }
+
+    /// `destructive`, reporting every entry the protection walk below a
+    /// local folder visits to `visit` (a count, a cancel check); its error
+    /// ends the walk. Non-local targets have no walk.
+    pub(super) fn destructive_observed(
+        &self,
+        path: &str,
+        visit: &dyn Fn() -> io::Result<()>,
+    ) -> io::Result<()> {
         self.write(path)?;
         if self.local {
             let effective = effective(path)
@@ -107,7 +118,7 @@ impl TargetPolicy {
                 return Err(denied());
             }
             if Path::new(path).is_dir() {
-                fs_host_destructive::check(self, path)?;
+                fs_host_destructive::check(self, path, visit)?;
             }
         }
         Ok(())

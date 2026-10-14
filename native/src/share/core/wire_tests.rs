@@ -93,6 +93,7 @@ fn one_of_each() -> Vec<FsRequest> {
         },
         FsRequest::RemoveFile { path: path() },
         FsRequest::RemoveDir { path: path() },
+        FsRequest::RemoveTree { path: path() },
         FsRequest::PutBatch {
             nonce: "0123456789abcdef".into(),
             entries: Vec::new(),
@@ -177,6 +178,7 @@ fn review_task_every_request_is_classified_as_read_or_write() {
             "copy_file",
             "remove_file",
             "remove_dir",
+            "remove_tree",
             "put_batch",
             "create_dir",
             "promote_no_replace",
@@ -267,6 +269,7 @@ fn review_task_older_host_rejects_rv1_requests_instead_of_misreading_them() {
                 | FsRequest::WatchExport(_)
                 | FsRequest::SyncChildPath { .. }
                 | FsRequest::ReplaceStagedReversible(_)
+                | FsRequest::RemoveTree { .. }
         )
     }) {
         let json = serde_json::to_string(request).unwrap();
