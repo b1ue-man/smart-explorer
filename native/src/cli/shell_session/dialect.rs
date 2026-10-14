@@ -192,8 +192,10 @@ fn posix(nonce: &str, seq: u64, request: &CommandRequest) -> String {
 fn powershell(nonce: &str, seq: u64, request: &CommandRequest) -> String {
     let mut script = String::new();
     if let Some(cwd) = &request.cwd {
+        // In argument mode an unparenthesized `[..]::..(..)` is a string up to
+        // its first `(`, not an expression; the parentheses make it one.
         script.push_str(&format!(
-            "Set-Location -LiteralPath {} -ErrorAction Stop\n",
+            "Set-Location -LiteralPath ({}) -ErrorAction Stop\n",
             text(cwd)
         ));
     }
