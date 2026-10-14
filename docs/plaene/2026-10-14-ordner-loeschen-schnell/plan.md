@@ -93,12 +93,24 @@ Erhalten bleiben die Bedienwege Entf/Umschalt+Entf (Desktop), `se rm -r`, MCP `r
 | M6 | Doku | `docs/ARCHITEKTUR.md`, `docs/FILE_OPS_MATRIX.md`, `docs/TODO.md`, dieser Plan | Bestand und Grenzen beschrieben |
 | M7 | Release | `build.yml` `complete_release_source_sha` | v0.5.179 mit allen Assets |
 
+## Befunde der Umsetzung (2026-10-14)
+
+- **Share-Host.** Ein Link im zu löschenden Ordner, dessen Ziel außerhalb der Freigabe liegt, wird von der vorhandenen Schutzprüfung abgewiesen (`share/os/shared/fs_host_destructive.rs`, `policy.write` je Eintrag). Der bisherige Eintragslauf wies ihn genauso ab, das Verhalten bleibt also gleich. Ein Link auf ein Ziel innerhalb der Freigabe wird als Link entfernt.
+- **Export-Wurzeln.** `RemoveTree` weist alle Export-Wurzeln ab (`fs::is_export_root`: `/`, `/<Export>`, `/Verbindungen`, `/Verbindungen/<Name>`). Auch die Wurzel einer weitergegebenen Verbindung ist damit geschützt.
+- **Weitergegebene Verbindungen.** Der Host löscht weiter Eintrag für Eintrag gegen die Gegenstelle der Verbindung, denn `GuardedBackend` reicht `remove_tree` nicht durch, damit Pfad- und Privatnamenprüfungen je Eintrag bleiben. Der Client braucht trotzdem nur eine Anfrage.
+- **Agent-Protokoll.** `PROTO_VERSION` bleibt 11. Die neue Fähigkeit wird über die Query ausgehandelt, und eine neue GUI kann so mit einem noch laufenden alten Dienst weiterarbeiten. Der SSH-Agent zählt die direkten Kinder des Ordners und den Ordner selbst.
+- **FTP** bleibt sequentiell. Weitere Steuerverbindungen kosten je eine Anmeldung und enden am Verbindungslimit des Servers in Congestion (`ftp/core/pool.rs`). Ein Abbruch greift vor dem nächsten `DELE`.
+- **WebDAV.** Geht die Antwort des `DELETE` verloren, etwa weil ein großer Ordner das 60-s-Inaktivitätslimit überschreitet, entscheidet ein `PROPFIND`: Ist die Collection weg, war das Löschen erfolgreich.
+- **Grenzen.**
+  - SFTP: 64 offene `REMOVE` (`SSH_WINDOW`/256 KiB, wie die Download-Tiefe).
+  - SMB: so viele Löschketten, wie das Credit-Fenster trägt (`credit_capacity_for`, höchstens 170 bei 512 Credits).
+
 ## Fortschritt
 
 - [x] M1 (Code und Tests `vfs/core/delete_speed_task_tests.rs`, Compile-Beleg folgt mit der Suite)
-- [ ] M2
-- [ ] M3
-- [ ] M4
-- [ ] M5
-- [ ] M6
+- [x] M2 (Code und Tests, Compile-Beleg folgt mit der Suite)
+- [x] M3 (Code und Tests, Compile-Beleg folgt mit der Suite)
+- [x] M4 (Code und Tests, Compile-Beleg folgt mit der Suite)
+- [ ] M5 Suite geschrieben, Lauf offen
+- [x] M6
 - [ ] M7

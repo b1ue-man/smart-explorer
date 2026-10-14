@@ -27,8 +27,13 @@ Status: ✅ implemented & wired · ⚠️ partial/limitation · ❌ not supporte
 | `remove_dir` | `fs::remove_dir` primitive; UI uses trash ✅ | `RMDIR`* ✅ | `RMD`* ✅ | `DELETE` ✅ | `files.update trashed=true` ✅ | `FsRequest::RemoveDir` recurses server-side, then removes ✅ |
 | `copy_file` (same backend) | `fs::copy` ✅ | default read->write ✅ | default ✅ | default ✅ | default read->write ✅ (Drive `files.copy` not used) | default peer read->write ✅ |
 
-\* SFTP/FTP `RMDIR`/`RMD` require an empty directory at the protocol level; UI
-delete paths must walk children first when deleting non-empty folders.
+\* SFTP/FTP `RMDIR`/`RMD` require an empty directory at the protocol level. A
+folder delete (Explorer, `se rm -r`, MCP `remove`, Android) goes through
+`remove_tree` (2026-10-14): SFTP lists each folder once and keeps up to 64
+`REMOVE`s in flight, SMB deletes concurrently within its credit window, FTP
+sends `DELE` one after another without a stat per entry, WebDAV sends one
+`DELETE` on the collection, and a Share peer deletes the whole folder on its
+host in one `RemoveTree` request.
 
 Refs: [Drive v3 files](https://developers.google.com/drive/api/v3/reference),
 [files.create (upload)](https://developers.google.com/workspace/drive/api/reference/rest/v3/files/create),
@@ -43,7 +48,7 @@ SFTP [draft-ietf-secsh-filexfer], FTP [RFC 959].
 | Open file (double-click/Enter) | `open_file` -> temp download + launch | ✅ | ✅ temp copy + save-back | ✅ temp copy + save-back |
 | Open remote file with chosen app (Windows right-click) | `open_file(OpenMode::With)` -> temp download + native chooser | native shell menu | ✅ watched temp copy + save-back | ✅ watched temp copy + save-back |
 | New folder | `create_new_folder` -> `mkdir_all` | ✅ | ✅ | ✅ |
-| Delete (Entf) | `trash_selected` -> trash / recursive `remove_*` | ✅ | ✅ (Drive -> trash; SFTP/FTP dirs walked by app) | ✅ recursive peer delete |
+| Delete (Entf) | `trash_selected` -> trash / `remove_tree` / recursive `remove_*` | ✅ | ✅ (Drive -> trash; WebDAV one `DELETE`; SFTP/SMB/FTP listed tree delete) | ✅ one host-side `RemoveTree` (older hosts: entry walk) |
 | Rename (F2) | `confirm_rename` -> `rename` | ✅ | ✅ | ✅ within same peer mount |
 | Right-click menu | shell menu / selection-aware egui menu | ✅ native shell | ✅ row/background actions: open, download, clipboard, rename/delete, favorite/path, analysis, refresh, **Neu**, selection controls; Windows also **Öffnen mit…** | ✅ same remote menu and policy-aware backend dispatch |
 | Copy -> paste into folder | clipboard / upload | ✅ | ✅ paste into remote = `open_write` | ✅ paste into peer = `open_write` |
