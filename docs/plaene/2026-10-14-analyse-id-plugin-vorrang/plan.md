@@ -94,3 +94,75 @@ unverändert. Die übrigen Tools bleiben verzögert ladbar.
   Batch-Dateien, beide wegen `cancel_principal` (tote Funktion seit `5098ee06`). Zweiter Lauf
   38526643502 auf `46725dc0`.
 - [ ] M5
+
+## Erweiterung 2026-10-14: persistente Shell-Sitzungen (R4)
+
+Nutzerauftrag: Remote-Ausführung soll wie eine SSH-Sitzung nutzbar sein. Jeder Befehl kehrt mit
+einem Ergebnis zurück, Umgebungsvariablen, Verzeichnis und Shell-Zustand bleiben aber über
+aufeinander aufbauende Befehle erhalten. Der Release v0.5.178 wartet auf diesen Teil.
+
+### B. Bestand
+
+- Jede Ausführung ist ein eigener Prozess:
+  - Share-Exec: `share/core/exec_types.rs` `ExecStart` mit `ExecCommand::Shell` bzw.
+    `ExecCommand::Argv`. Linux nutzt `$SHELL -lc` bzw. `/bin/sh -lc` mit systemd-cgroup,
+    Windows `cmd.exe /C` mit Job Object, Android `/system/bin/sh`.
+  - SSH: pro Befehl ein Exec-Kanal (`sftp/core/command.rs` `start_command`).
+  - Zustand gibt es nur über `cwd`/`env` je Aufruf.
+- Beide Wege streamen stdin, stdout und stderr binär.
+  - Share: `daemon::connect_exec` → `ExecIpcSession::next_event`, `ExecIpcInput::stdin/eof/cancel`.
+  - SSH: `SshCommand::next_event`, `SshCommandControl::stdin/eof/cancel`.
+  - Damit trägt der vorhandene Transport eine dauerhaft laufende Shell ohne Protokolländerung.
+- Kein PTY. `cancel` beendet immer den ganzen Prozessbaum.
+
+### C. Entscheidungen
+
+- Sitzung = eine dauerhaft laufende Shell über einen vorhandenen Exec-Strom.
+  - Jeder Befehl wird mit einer Endmarke gesendet: `\x1eSE<nonce>:<seq>:<exitcode>:<cwd>\x1e`
+    auf stdout, `\x1eSE<nonce>:<seq>\x1e` auf stderr. `nonce` sind 16 zufällige Hexzeichen
+    je Sitzung.
+  - Der Befehl gilt als fertig, wenn beide Marken da sind.
+  - Ausgabe vor den Marken gehört zum Befehl. Teilmarken am Chunk-Ende werden zurückgehalten.
+- Dialekte:
+  - **POSIX** (Linux, Android, SSH): Start mit `bash -l`, falls vorhanden, sonst `sh -l`.
+    Jeder Befehl läuft als `eval '<Befehl>'` in der laufenden Shell. Damit bleiben `export`,
+    `cd`, Variablen, Funktionen und `source` erhalten.
+    - stdin: `</dev/null` (Standard), Heredoc mit Nonce-Begrenzer (Parameter `stdin`) oder
+      durchgereicht (`se shell` interaktiv).
+  - **PowerShell** (Windows-Gegenstellen, Windows-OpenSSH): Start mit
+    `powershell.exe -NoLogo -NoProfile -NonInteractive -Command -`.
+    - Jeder Befehl läuft als dot-gesourcter Scriptblock aus Base64-UTF-8, Ausgabe über
+      `Out-Default` vor der Marke.
+    - Exitcode: `$LASTEXITCODE`, sonst 1 bei neuem Eintrag in `$Error` oder einer Ausnahme,
+      sonst 0.
+- Plattformerkennung beim Öffnen: Ein kurzer Probe-Befehl `echo %OS% && command -v bash`
+  zeigt `Windows_NT` (cmd.exe) und den bash-Pfad.
+- Bedienwege:
+  - MCP: `exec` bekommt `session: <name>`. Die Sitzung entsteht beim ersten Aufruf und lebt
+    bis `sessions {close}` oder bis zum Ende der MCP-Verbindung.
+    - `cwd`/`env` ändern den Sitzungszustand vor dem Befehl.
+    - Ergebnis: `exit_code`, `cwd`, `session_ended`.
+    - Neues Tool `sessions` (auflisten, schließen).
+  - CLI: `se shell [ZIEL] [--cwd] [--env]`.
+    - Interaktiv: Prompt `ziel:cwd$` auf stderr. Eingaben während eines laufenden Befehls
+      gehen an diesen Befehl. Exitcode ungleich 0 wird angezeigt.
+    - Mit Pipe: eine Zeile je Befehl, abschließendes `\` setzt fort.
+    - Der Exitcode von `se shell` ist der des letzten Befehls oder des `exit N` der Shell.
+- Grenzen dieser Fassung:
+  - kein PTY;
+  - `job_cancel`, ein Timeout oder Strg+C beenden die ganze Sitzung, weil der Exec-Strom
+    keinen Signalweg zum einzelnen Befehl hat;
+  - keine Wiederanbindung nach Verbindungsende.
+- Verworfen: Host-seitige Sitzungen mit neuem Protokoll, PTY und Wiederanbindung. Das braucht
+  Updates auf beiden Seiten und PTY-Code je Plattform (openpty, ConPTY); aufgeschoben als
+  TODO EXEC-PTY.
+
+### D. Arbeitsplan
+
+| Nr. | Meilenstein | Dateien | Erwartetes Ergebnis |
+|---|---|---|---|
+| S1 | Sitzungskern | `cli/shell_session.rs`, `cli/shell_session/{marker,dialect,engine,transports}.rs` | Lokale bash- bzw. PowerShell-Sitzung: `export`/`cd`/Variable bleiben über Befehle erhalten; Exitcodes 0, 1 und `exit 3` (Sitzungsende); Ausgabe ohne abschließenden Zeilenumbruch; getrenntes stderr; mehrzeiliger Befehl; Heredoc-stdin (POSIX) |
+| S2 | MCP | `cli/mcp/exec_tool.rs`, `cli/mcp/exec_session_job.rs`, `cli/mcp/shell_registry.rs`, `cli/mcp/catalog.rs`, `cli/mcp/server.rs`, `cli/mcp/session.rs` | `exec {session}` auf SSH-Remote und Share-Gegenstelle: zweiter Befehl sieht `export`/`cd` des ersten; `sessions` listet und schließt; Ende der MCP-Verbindung beendet die Shells |
+| S3 | CLI | `cli/shell.rs`, `cli/mod.rs` | `se shell @ssh < Zeilen` liefert den Zustand über Zeilen und den Exitcode von `exit 4` |
+| S4 | Doku | `README.md`, `docs/AI_AGENT_PLUGIN.md`, `SKILL.md`, `docs/TODO.md` | Verhalten und Grenzen beschrieben |
+| S5 | Suite | `native/test-analysis-plugin-task.py` | S1 bis S3 auf Linux (SSH-Container, Share-Paar) und Windows (PowerShell lokal, Share-Paar) |
