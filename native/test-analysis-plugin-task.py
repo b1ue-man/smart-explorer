@@ -82,13 +82,28 @@ UPFRONT = {"connections", "list", "stat", "read", "write", "edit", "mkdir", "rem
 PRIORITY_WORDS = ("first", "before", "Read", "Write", "Edit", "Glob", "ls", "cat", "find")
 
 
+def failure_detail(stdout, stderr):
+    """What a failed `cargo test` run reports first: the failed tests and the
+    `failures:` section with their panic messages (both on stdout), then the
+    end of stderr. Without either (the tests did not run, for example after a
+    compile error) it reports the end of stdout and stderr."""
+    lines = stdout.splitlines()
+    failed = [line for line in lines if line.startswith("test ") and line.rstrip().endswith("FAILED")]
+    section = lines[lines.index("failures:"):] if "failures:" in lines else []
+    if not failed and not section:
+        return (stdout + stderr)[-4000:]
+    return "\n".join(failed + [""] + section + ["--- end of stderr ---", stderr[-1000:]])
+
+
 def stage_unit(results, log_root):
     completed = ai.run(["cargo", "test", "--locked", "--lib", "--", *UNIT_FILTERS],
                        cwd=ai.NATIVE, log=log_root / "unit.log", timeout=5400)
-    output = (completed.stdout + completed.stderr).decode(errors="replace")
+    stdout = completed.stdout.decode(errors="replace")
+    stderr = completed.stderr.decode(errors="replace")
+    output = stdout + stderr
     summary = [line for line in output.splitlines() if line.startswith("test result:")]
     results.record("unit", " + ".join(UNIT_FILTERS), completed.returncode == 0,
-                   output[-4000:] if completed.returncode else "; ".join(summary))
+                   failure_detail(stdout, stderr) if completed.returncode else "; ".join(summary))
     passed = [line for line in output.splitlines() if line.startswith("test ") and line.rstrip().endswith("ok")]
     for prefix, expected in EXPECTED_PASSED.items():
         ran = [line for line in passed if prefix in line]
