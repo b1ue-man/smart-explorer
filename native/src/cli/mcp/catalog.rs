@@ -21,8 +21,8 @@ shares), Google Drive, Share peers and local disks.
 
 It also runs commands on saved SSH remotes and authorized Share peers (`exec`); \
 with `session` a persistent shell keeps working directory, environment and \
-shell state between calls, and `sessions` joins the user's `se shell \
---attachable` terminals. Start with `connections` to see targets. Long work \
+shell state between calls, and `sessions` joins the user's `se shell -T \
+--attachable` command shells. Start with `connections` to see targets. Long work \
 returns a job_id: follow it with job_status. Tools not loaded yet (exec, \
 job_input, job_cancel, sessions, status, se) are found by a tool search for \
 `smart-explorer`.
@@ -135,7 +135,7 @@ pub(super) fn tools() -> Vec<Tool> {
                 "max_bytes": {"type": "integer", "minimum": 1024, "description": MAX_BYTES}
             }), &["target", "query"], read_only(true)),
         tool("exec", "Run a remote command",
-            "Runs a command on a saved SFTP remote over its SSH login (`@label`, `@label:/dir` = working directory, or its saved sftp:// endpoint; through the remote login shell like `ssh host 'cmd'`) or on a Share peer that granted this device Exec (peer name, id or share:// endpoint). Give `command` (one shell string) or `argv` (program and literal arguments; POSIX-quoted on SSH remotes). No time or output limit unless you set one; stdout/stderr are kept completely and paged. Exit status, signal and timing are reported; cancel with job_cancel. With `session` (a name) the command runs in a persistent shell instead: the first call opens it on `target`, later calls keep its working directory, environment, variables and functions (no PTY; the result adds `cwd` and `session_ended`). The user can join it with `se shell --attach` unless `attachable` is false; `sessions` lists and closes sessions and joins the user's `se shell --attachable` terminals. Cancel or timeout end the whole session.",
+            "Runs a command on a saved SFTP remote over its SSH login (`@label`, `@label:/dir` = working directory, or its saved sftp:// endpoint; through the remote login shell like `ssh host 'cmd'`) or on a Share peer that granted this device Exec (peer name, id or share:// endpoint). Give `command` (one shell string) or `argv` (program and literal arguments; POSIX-quoted on SSH remotes). No time or output limit unless you set one; stdout/stderr are kept completely and paged. Exit status, signal and timing are reported; cancel with job_cancel. With `session` (a name) the command runs in a persistent shell instead: the first call opens it on `target`, later calls keep its working directory, environment, variables and functions (no PTY; the result adds `cwd` and `session_ended`). The user can join it with `se shell --attach` unless `attachable` is false; `sessions` lists and closes sessions and joins the user's command shells (`se shell -T --attachable`); full terminal sessions of `se shell` cannot be joined. Cancel or timeout end the whole session.",
             json!({
                 "target": {"type": "string", "description": "Share peer selector or share:// endpoint, or a saved SFTP remote as @label[:/dir] or its sftp:// endpoint. Required unless `session` names an open session."},
                 "command": {"type": "string", "description": "Shell command line, run by the remote user's shell."},
@@ -182,7 +182,7 @@ pub(super) fn tools() -> Vec<Tool> {
                 "max_bytes": {"type": "integer", "minimum": 1024, "description": MAX_BYTES}
             }), &["args"], changes(true, false)),
         tool("sessions", "Persistent shell sessions",
-            "Lists this server's persistent shell sessions (`exec` with `session`) and the user's other attachable sessions (`se shell --attachable` terminals, other agents). `attach` joins one by name or id; afterwards `exec` with that `session` runs in its shared working directory, environment and shell state. `activity` returns what the other participants ran and printed there since the last call. `close` ends a session this server opened or detaches from a joined one. Only sessions of the same OS user are visible.",
+            "Lists this server's persistent shell sessions (`exec` with `session`) and the user's other attachable sessions (`se shell -T --attachable` command shells, other agents; `se shell` terminal sessions are listed with kind terminal and cannot be joined). `attach` joins one by name or id; afterwards `exec` with that `session` runs in its shared working directory, environment and shell state. `activity` returns what the other participants ran and printed there since the last call. `close` ends a session this server opened or detaches from a joined one. Only sessions of the same OS user are visible.",
             json!({
                 "action": {"type": "string", "enum": ["list", "attach", "activity", "close"], "description": "list (default), attach, activity or close."},
                 "session": {"type": "string", "description": "Session name or id; needed for attach, activity and close."}
