@@ -7,8 +7,9 @@ use std::time::Duration;
 use super::super::extension_calls as calls;
 use super::super::{
     BackendExtensions, ChangeNotice, ChangeSignalMode, ChangeSubscription, HashWalkItem,
-    HashWalkRequest, RecycleExpectation, RecycleOutcome, StageFinish, StageFinished, TargetLimits,
-    VfsListing, VfsMeta, VfsResult, VolumeIdentity,
+    HashWalkRequest, RecursiveDeleteFailure, RecursiveDeleteProgress, RecursiveDeleteReport,
+    RecycleExpectation, RecycleOutcome, StageFinish, StageFinished, TargetLimits, VfsListing,
+    VfsMeta, VfsResult, VolumeIdentity,
 };
 use super::CachingBackend;
 
@@ -121,6 +122,22 @@ impl BackendExtensions for CachingBackend {
     fn recycle(&self, path: &str, expected: &RecycleExpectation) -> VfsResult<RecycleOutcome> {
         let result = calls::recycle(&*self.inner, path, expected);
         self.invalidate(path);
+        result
+    }
+
+    fn supports_remove_tree(&self, path: &str) -> VfsResult<bool> {
+        calls::supports_remove_tree(&*self.inner, path)
+    }
+
+    fn remove_tree(
+        &self,
+        path: &str,
+        cancel: &AtomicBool,
+        progress: &mut dyn FnMut(RecursiveDeleteProgress),
+    ) -> Result<RecursiveDeleteReport, RecursiveDeleteFailure> {
+        let result = calls::remove_tree(&*self.inner, path, cancel, progress);
+        // Also after a cancel or failure: part of the subtree may be gone.
+        self.invalidate_prefix(path);
         result
     }
 
