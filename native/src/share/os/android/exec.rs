@@ -5,12 +5,17 @@
 //! `setsid` children and double-forked orphans included, while the app's
 //! other children (sync hooks) stay untouched. Shell commands run as
 //! `/system/bin/sh -c`; without a working directory a job starts in the
-//! host's home directory. Platform limits (`docs/refs/android-child-processes.md`):
+//! host's home directory. A terminal start (`ExecCommand::Login`) runs
+//! `/system/bin/sh` as login shell (`argv[0]` `-sh`) on a pseudo-terminal
+//! (`exec_pty.rs`, shared with Linux) below the same subreaper; the root
+//! leads a new session there. Platform limits (`docs/refs/android-child-processes.md`):
 //! the commands end with the app process, Android may kill (phantom-process
 //! limit) or freeze child processes of a background app, and the host is
 //! reachable only while the Share service runs.
 #[path = "exec_contain.rs"]
 mod exec_contain;
+#[path = "../linux_os/exec_pty.rs"]
+mod exec_pty;
 #[path = "../linux_os/exec_supervisor.rs"]
 mod exec_supervisor;
 
@@ -299,6 +304,13 @@ pub(crate) fn provider_status() -> ExecProviderStatus {
         elevated: false,
         user_label: "Android-App".into(),
     }
+}
+
+/// True when this host can give an Exec start a terminal: a pseudo-terminal
+/// opens (SELinux lets an app use PTYs). The login shell is the same
+/// `/system/bin/sh` below the same subreaper, with `argv[0]` `-sh`.
+pub(crate) fn terminal_supported() -> bool {
+    exec_pty::terminal_supported()
 }
 
 /// Android never runs as the hidden supervisor process: the supervisor is a

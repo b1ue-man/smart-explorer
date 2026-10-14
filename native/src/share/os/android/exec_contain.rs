@@ -172,13 +172,16 @@ impl Intermediate for Subreaper {
         &self,
         command: &mut Command,
         own_process_group: bool,
+        controlling_terminal: bool,
     ) -> io::Result<Box<dyn ArmedIntermediate>> {
         let (status, write) = status_pipe()?;
         let status_fd = write.as_raw_fd();
         // SAFETY: the hook runs in the forked child and only makes
         // async-signal-safe calls without allocating (`intermediate_hook`).
         unsafe {
-            command.pre_exec(move || intermediate_hook(status_fd, own_process_group));
+            command.pre_exec(move || {
+                intermediate_hook(status_fd, own_process_group, controlling_terminal)
+            });
         }
         Ok(Box::new(Armed {
             root: self.root.clone(),
@@ -270,9 +273,14 @@ fn status_pipe() -> io::Result<(File, OwnedFd)> {
 /// the atfork handlers, which could wait for locks another thread of the app
 /// held when it forked. The root returns (and execs the shell); the
 /// intermediate never returns.
-fn intermediate_hook(status_fd: RawFd, own_process_group: bool) -> io::Result<()> {
-    // SAFETY: signal-mask and disposition changes, prctl, clone and setpgid
-    // are async-signal-safe system calls on memory owned by this frame.
+fn intermediate_hook(
+    status_fd: RawFd,
+    own_process_group: bool,
+    controlling_terminal: bool,
+) -> io::Result<()> {
+    // SAFETY: signal-mask and disposition changes, prctl, clone, setpgid and
+    // (`become_session_leader`) setsid and ioctl are async-signal-safe system
+    // calls on memory owned by this frame.
     unsafe {
         // Both inherit SIGCHLD reported (not auto-reaped); the intermediate
         // reaps with `waitpid`.
@@ -294,8 +302,15 @@ fn intermediate_hook(status_fd: RawFd, own_process_group: bool) -> io::Result<()
             // The root: its own process group lets one group signal reach
             // the shell and its plain children without the intermediate. A
             // failed exec after this return still reaches the spawner
-            // through std's error pipe, which the root inherited.
-            if own_process_group && libc::setpgid(0, 0) != 0 {
+            // through std's error pipe, which the root inherited. A terminal
+            // job's root leads a new session with the terminal on its stdin
+            // as controlling terminal instead (`setsid` makes it a group
+            // leader as well, and fails after `setpgid`); this runs here in
+            // the root, never in the intermediate, which stays in the app's
+            // session.
+            if controlling_terminal {
+                super::exec_pty::become_session_leader()?;
+            } else if own_process_group && libc::setpgid(0, 0) != 0 {
                 return Err(io::Error::last_os_error());
             }
             // A signal mask survives exec and std keeps the spawner's: the
