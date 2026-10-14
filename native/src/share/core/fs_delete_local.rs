@@ -46,6 +46,12 @@ pub(super) fn remove(
     let budget = crate::transfer::memory_budget() / 8;
     let mut used = 0;
     let mut stack = vec![frame(handle, parent, name, target, budget, &mut used)?];
+    // `check_write` is the live relation/export recheck before every mutation;
+    // the destructive preflight already checked every entry's path policy.
+    // Never reopen a path below a held folder here: a path policy check pins
+    // that folder again without FILE_SHARE_DELETE, which the held Windows
+    // DELETE pin refuses (sharing violation). Deletion uses the held parent;
+    // every entered folder passes the handle-based private check in `frame`.
     while let Some(top) = stack.last_mut() {
         if let Some(entry) = top.entries.next() {
             check_write()?;
@@ -53,11 +59,8 @@ pub(super) fn remove(
             if super::super::fs_policy::private_name(&entry.name.to_string_lossy()) {
                 return Err(refused());
             }
-            let child = top.path.join(&entry.name);
-            // The live wrapper rechecks relation/export rights before every
-            // mutation. Actual deletion is against the held parent, not path.
-            backend.stat(&child.to_string_lossy().replace('\\', "/"))?;
             if entry.is_dir && !entry.is_link_like {
+                let child = top.path.join(&entry.name);
                 let parent = top.handle.clone();
                 let handle = parent.open_child_for_delete(&entry.name)?;
                 stack.push(frame(handle, parent, entry.name, child, budget, &mut used)?);
@@ -68,7 +71,6 @@ pub(super) fn remove(
         } else {
             check_write()?;
             let Some(frame) = stack.pop() else { break };
-            backend.stat(&frame.path.to_string_lossy().replace('\\', "/"))?;
             let Frame {
                 handle,
                 entries,
