@@ -6965,9 +6965,9 @@
     "semantic_hash": "a4962d50c6908fa7a398add8619ce053"
   },
   "share/core/fs_delete_local.rs": {
-    "mtime": 1792003041.6776178,
-    "ast_hash": "5a036adf266cd8ae9f1dfa8286943273",
-    "semantic_hash": "5a036adf266cd8ae9f1dfa8286943273"
+    "mtime": 1792005857.797314,
+    "ast_hash": "d4d2e1ef2ee2feadd92263c012146ec0",
+    "semantic_hash": "d4d2e1ef2ee2feadd92263c012146ec0"
   },
   "share/core/fs_delete_task_tests.rs": {
     "mtime": 1791055116.3179727,
