@@ -367,7 +367,7 @@ fn set_mtime(file: &std::fs::File, ms: i64) -> io::Result<()> {
 /// `Query`: what this agent offers below `path` (`Answer`).
 pub(crate) fn answer(kind: u8, path: &str) -> io::Result<Frame> {
     let value = match kind {
-        query::HASH_WALK => 1,
+        query::HASH_WALK | query::REMOVE_TREE => 1,
         query::SYNC_FILESYSTEM => {
             u64::from(super::local_platform::sync_filesystem(Path::new(path))?)
         }

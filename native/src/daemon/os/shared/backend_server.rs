@@ -304,6 +304,9 @@ fn dispatch_backend(
             super::backend_ops::find_duplicates(sink, id, &backend, &root, min_bytes, cancel)
         }
         Frame::Query { kind, path } => answer(super::backend_ops::query(&backend, kind, &path)),
+        Frame::RemoveTree(path) => {
+            super::backend_remove_tree::remove_tree(sink, id, &backend, &path, cancel)
+        }
         Frame::Recycle { path, size, sha256 } => {
             answer(super::backend_ops::recycle(&backend, &path, size, sha256))
         }

@@ -21,6 +21,8 @@ mod batch_put;
 mod deploy;
 #[path = "core/engine_ops.rs"]
 mod engine_ops;
+#[path = "core/ext_stream.rs"]
+mod ext_stream;
 #[path = "core/ext_wire.rs"]
 pub(crate) mod ext_wire;
 #[path = "core/extensions.rs"]
@@ -43,6 +45,8 @@ mod stream;
 mod transfer;
 #[path = "core/transport.rs"]
 mod transport;
+#[path = "core/tree_remove.rs"]
+mod tree_remove;
 #[path = "core/walk.rs"]
 mod walk;
 
@@ -51,6 +55,9 @@ pub use backend::AgentBackend;
 pub use deploy::{artifact_for, deploy_over_sftp, remove_from_sftp, AgentArtifact};
 pub(crate) use metadata::vfs_to_wire;
 
+#[cfg(test)]
+#[path = "core/delete_speed_task_tests.rs"]
+mod delete_speed_task_tests;
 #[cfg(test)]
 #[path = "core/error_tests.rs"]
 mod error_tests;

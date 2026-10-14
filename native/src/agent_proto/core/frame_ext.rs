@@ -1,7 +1,9 @@
 //! Wire layout of the transfer-engine frames (tags 34..=44): flow-control
-//! credit, batches and the stage/directory unit operations. Kept apart from
-//! the original frame set so either file stays small; the byte layout follows
-//! the same little-endian, length-prefixed rules.
+//! credit, batches and the stage/directory unit operations, plus the folder
+//! deletion request `RemoveTree` (tag 62, `ext-v1`; the other extension
+//! frames live in `frame_ops.rs`). Kept apart from the original frame set so
+//! either file stays small; the byte layout follows the same little-endian,
+//! length-prefixed rules.
 use std::io;
 
 use super::super::super::batch_limits::{BATCH_MAX_FILES, ITEM_PATH_MAX, ITEM_TEXT_MAX};
@@ -38,7 +40,7 @@ pub(in super::super) fn payload_len(frame: &Frame) -> Option<io::Result<usize>> 
             .and_then(|len| sum(len, 8)),
         Frame::Copied(copied) => Ok(if copied.is_some() { 9 } else { 1 }),
         Frame::CreateDir { path, .. } => string_len(path).and_then(|len| sum(len, 1)),
-        Frame::DiscardStage(path) => string_len(path),
+        Frame::DiscardStage(path) | Frame::RemoveTree(path) => string_len(path),
         _ => return None,
     })
 }
@@ -108,6 +110,10 @@ pub(in super::super) fn encode(frame: &Frame, b: &mut Vec<u8>) -> bool {
         }
         Frame::DiscardStage(path) => {
             b.push(44);
+            put_str(b, path);
+        }
+        Frame::RemoveTree(path) => {
+            b.push(62);
             put_str(b, path);
         }
         _ => return false,
@@ -180,6 +186,7 @@ pub(in super::super) fn decode(tag: u8, r: &mut Reader) -> io::Result<Option<Fra
             exclusive: r.bool()?,
         },
         44 => Frame::DiscardStage(r.string()?),
+        62 => Frame::RemoveTree(r.string()?),
         _ => return Ok(None),
     }))
 }

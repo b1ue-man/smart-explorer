@@ -21,6 +21,9 @@ pub mod query {
     pub const CHANGE_SIGNAL: u8 = 4;
     /// Flush what was published below the path; 1 = done durably.
     pub const SYNC_FILESYSTEM: u8 = 5;
+    /// 1 = the folder is deleted in one operation next to the data
+    /// (`Frame::RemoveTree`). Older servers answer 0 and never get that frame.
+    pub const REMOVE_TREE: u8 = 6;
 }
 
 /// `WireOmission::reason` codes.

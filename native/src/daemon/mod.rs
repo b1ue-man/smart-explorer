@@ -28,6 +28,8 @@ mod backend_delete;
 mod backend_hash;
 #[path = "os/shared/backend_ops.rs"]
 mod backend_ops;
+#[path = "os/shared/backend_remove_tree.rs"]
+mod backend_remove_tree;
 #[path = "os/shared/backend_server.rs"]
 mod backend_server;
 #[path = "os/shared/backend_stream.rs"]
