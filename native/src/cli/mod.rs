@@ -25,6 +25,8 @@ mod private_file;
 mod search;
 mod setup;
 mod share;
+mod shell;
+mod shell_session;
 mod target;
 mod transfer;
 mod tree_apply;
@@ -63,6 +65,7 @@ Examples:
   se share status --json
   se share discoverable --minutes 5 --pin-stdin
   se update --check
+  se shell @prod:/srv --attachable
   se plugin install
   se drive runtime
   se drive install-runtime
@@ -133,6 +136,10 @@ enum Command {
         about = "Run an unrestricted command on an explicitly authorized Share peer or saved SSH remote"
     )]
     Exec(exec::ExecArgs),
+    #[command(
+        about = "Open a persistent shell on a Share peer or saved SSH remote, or join a running session"
+    )]
+    Shell(shell::ShellArgs),
 }
 
 #[derive(Args)]
@@ -270,6 +277,7 @@ fn run_inner(cli: Cli) -> Result<i32, String> {
             Ok(0)
         }
         Command::Exec(args) => exec::run(args),
+        Command::Shell(args) => shell::run(args),
     }
 }
 
@@ -405,6 +413,37 @@ mod tests {
         let jobs = nested_help(&["share", "exec"]);
         for command in ["list", "show", "cancel", "history"] {
             assert!(jobs.contains(command), "missing {command} in {jobs}");
+        }
+    }
+
+    #[test]
+    fn shell_session_task_cli_parses_shell_sessions_and_attach() {
+        let cli = Cli::parse_from([
+            "se",
+            "shell",
+            "@prod:/srv",
+            "--attachable",
+            "--name",
+            "build",
+            "--env",
+            "A=1",
+        ]);
+        match cli.command {
+            super::Command::Shell(args) => {
+                assert_eq!(args.target.as_deref(), Some("@prod:/srv"));
+                assert!(args.attachable);
+                assert_eq!(args.name.as_deref(), Some("build"));
+                assert_eq!(args.env, ["A=1"]);
+            }
+            _ => panic!("wrong command"),
+        }
+        assert!(Cli::try_parse_from(["se", "shell", "--attach", "build"]).is_ok());
+        assert!(Cli::try_parse_from(["se", "shell", "@prod", "--attach", "build"]).is_err());
+        assert!(Cli::try_parse_from(["se", "shell", "--list", "--json"]).is_ok());
+        assert!(Cli::try_parse_from(["se", "shell", "--json"]).is_err());
+        let help = nested_help(&["shell"]);
+        for word in ["--attachable", "--attach", "--list", "no PTY", "Ctrl+C"] {
+            assert!(help.contains(word), "missing {word} in {help}");
         }
     }
 

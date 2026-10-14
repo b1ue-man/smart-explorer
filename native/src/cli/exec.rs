@@ -215,7 +215,7 @@ fn exit_code(terminal: &crate::share::ExecTerminal) -> i32 {
     }
 }
 
-fn parse_environment(values: Vec<String>) -> Result<BTreeMap<String, String>, String> {
+pub(super) fn parse_environment(values: Vec<String>) -> Result<BTreeMap<String, String>, String> {
     let mut environment = BTreeMap::new();
     for value in values {
         let (name, value) = value
