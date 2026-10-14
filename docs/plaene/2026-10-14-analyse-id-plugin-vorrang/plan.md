@@ -1,20 +1,15 @@
 # 2026-10-14 Analyse-Auftrags-ID und Plugin-Vorrang
 
-Nutzerauftrag vom 2026-10-14 (eine Nachricht, drei Teile):
+Nutzerauftrag vom 2026-10-14, zwei Teile:
 
-1. Für das neu gekoppelte Gerät Remote-Codeausführung erlauben (Betrieb, kein Code).
-2. „Scan fehlgeschlagen: /Root: Ungültige Analyse-Auftrags-ID“ beim Start einer Analyse
-   beheben; Codeänderung mit Build und Release ist autorisiert.
-3. Das KI-Plugin soll sich bei der Installation selbst anpreisen, damit die KI es vor
+1. „Scan fehlgeschlagen: <Pfad>: Ungültige Analyse-Auftrags-ID“ beim Start einer
+   Remote-Analyse beheben; Codeänderung mit Build und Release ist autorisiert.
+2. Das KI-Plugin soll sich bei der Installation selbst anpreisen, damit die KI es vor
    den normalen Dateiexplorer-Werkzeugen nutzt.
 
 ## A. Erstplan
 
-- Teil 1 erledigt am 2026-10-14 um 06:40 UTC mit
-  `se share grants exec enable 256f4564-9960-4939-899a-860285ae0c6f --yes` (Gerät
-  `SILAS_ASUS`, gekoppelt um 06:34 UTC). Ausgabe: `requested=enabled persisted=true
-  applied=true revision=1`.
-- Teile 2 und 3 brauchen Codeänderungen, danach eine Task-Suite und einen Release.
+- Beide Teile brauchen Codeänderungen, danach eine Task-Suite und einen Release.
 
 ## B. Bestand
 
@@ -26,8 +21,7 @@ Nutzerauftrag vom 2026-10-14 (eine Nachricht, drei Teile):
   `A-Za-z0-9_-`, `share/core/crypto.rs` `b64`). Das trifft die Host-Prüfung fast nie.
 - Beide Seiten kamen mit Commit `5098ee06` (2026-10-03) und sind seit v0.5.170
   ausgeliefert. Seitdem scheitert jede Remote-Speicheranalyse und Duplikatsuche bei
-  Gegenstellen mit `analysis_reattach_v1`. Beobachtet: Der Linux-Host (0.5.177) gibt
-  `Root` → `/` frei, und der Laptop analysiert `/Root`.
+  Gegenstellen mit `analysis_reattach_v1`.
 - Plugin: Die Server-Anweisungen stehen in `cli/mcp/catalog.rs` `INSTRUCTIONS` und
   werden von `server.rs` `with_instructions` gesetzt. Der Skill liegt in
   `cli/plugin/assets/SKILL.md`, die Manifest-Beschreibung in `cli/plugin/files.rs`
@@ -81,7 +75,7 @@ Nutzerauftrag vom 2026-10-14 (eine Nachricht, drei Teile):
 | M2 | Plugin-Vorrang | `cli/mcp/catalog.rs`, `cli/plugin/assets/SKILL.md`, `cli/plugin/files.rs` | `tools/list` von `se mcp` liefert für die zwölf Datei-Tools `_meta["anthropic/alwaysLoad"]=true` und für `exec`, `job_input`, `job_cancel`, `status` und `se` keinen solchen Eintrag; `instructions` nennt in den ersten 512 Zeichen den Vorrang und bleibt unter 2 048 Zeichen; der erzeugte Skill und das Manifest nennen den Vorrang |
 | M3 | Doku | `docs/AI_AGENT_PLUGIN.md`, `README.md`, `docs/TODO.md` falls betroffen | Verhalten beschrieben |
 | M4 | Suite | `native/test-analysis-plugin-task.py`, `.github/workflows/analysis-plugin-task.yml` | Ein Remote-Lauf (Linux und Windows) prüft M1 und M2 |
-| M5 | Release | `build.yml` `complete_release_source_sha` | v0.5.178 auf GitHub, danach die lokale `se`-Installation aktualisiert und der Worker auf 0.5.178 |
+| M5 | Release | `build.yml` `complete_release_source_sha` | v0.5.178 mit allen Assets auf GitHub |
 
 Zu erhaltendes Verhalten: Hosts ohne `analysis_reattach_v1` bekommen weiterhin keine ID.
 Die Wiederanbindung nach Verbindungsverlust (gleiche ID, gleiche Parameter) bleibt
@@ -89,9 +83,14 @@ unverändert. Die übrigen Tools bleiben verzögert ladbar.
 
 ## Fortschritt
 
-- [x] Teil 1, exec für `SILAS_ASUS`
-- [ ] M1
-- [ ] M2
-- [ ] M3
-- [ ] M4
+- [x] M1 `0f746923`, ergänzt um `46725dc0`. Die nie aufgerufene Funktion `cancel_principal`
+  ist entfernt: `NodePolicy::invalidate` bricht zurückgehaltene Analyseaufträge eines
+  eingeschränkten Principals bereits über den in `task()` registrierten Abbruchmarker ab.
+- [x] M2 `87cf2e27`, dazu der Hilfetext von `se plugin` in `ed347872`
+- [x] M3 `a520a3f3`, Graph `17943ec4`
+- [x] M4 `ed347872`. Erster Lauf 38525109436 (`ed347872`): Linux und Windows je 21 von 23
+  Prüfungen bestanden. Die Loopback-Analyse und -Duplikatsuche mit neuer und alter ID liefen
+  unter Linux in 0,54 s. Gescheitert sind nur die zwei Prüfungen auf Warnungen in
+  Batch-Dateien, beide wegen `cancel_principal` (tote Funktion seit `5098ee06`). Zweiter Lauf
+  38526643502 auf `46725dc0`.
 - [ ] M5

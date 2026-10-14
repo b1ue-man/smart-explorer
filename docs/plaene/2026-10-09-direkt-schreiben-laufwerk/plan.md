@@ -22,9 +22,9 @@ Stand: 2026-10-09. Quellen: Nutzernachrichten 2–5 vom 2026-10-09 (in derselben
    (`SharedRoot::new`), „Darf schreiben“ je Gerät mit Standard aus (`DirectGrant.write: false`
    an sechs Erzeugungsstellen), neue Räume ohne Schreibrecht, die automatische Home-Freigabe
    einmalig auf „Nur lesen“ (`profile_migration.rs`). Bestehende Grants vor V5 behielten Schreiben.
-3. Lokaler Host „ubuntu“ (`/root/.local/share/smart_explorer/share_profiles.json`, gelesen
-   2026-10-09): Freigabe „Root“ = `/` mit `read_write`, Grants „Pixel 8 Pro“ und „Silas_Asus“ mit
-   `write: true` – also nicht die Ursache; das Handy hatte nach Nutzerangabe nur Lesen.
+3. Die Schreibrechte der betroffenen Freigabe und Geräte-Grants waren gesetzt (`read_write`,
+   `write: true`), also nicht die Ursache; das Gerät des Nutzers hatte nach dessen Angabe nur
+   Lesen.
 4. Laufwerks-Speichern (`mount/core/file_commit.rs`): Upload in `<name>.se-mount-<16 hex>`
    (`vfs::unique_staging_path`), dann Umbenennen auf den Zielnamen. Bei Upload-Fehler, nicht
    bestätigter Prüfung, gescheitertem Umbenennen oder Konflikt nach dem Upload blieb der
