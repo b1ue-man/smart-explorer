@@ -81,7 +81,7 @@ impl LocalTerminal {
             let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
             // SAFETY: as above; `sigaction` fills it in.
             let mut previous: libc::sigaction = unsafe { std::mem::zeroed() };
-            action.sa_sigaction = on_signal as libc::sighandler_t;
+            action.sa_sigaction = on_signal as extern "C" fn(libc::c_int) as libc::sighandler_t;
             // SAFETY: `sa_mask` is a writable signal set.
             unsafe { libc::sigemptyset(&mut action.sa_mask) };
             action.sa_flags = libc::SA_RESTART;
