@@ -42,7 +42,7 @@ WINDOWS = os.name == "nt"
 BATCH_BASE = "67cde29f645cbec43cb1b11a0045322391a497e3"
 EXPECTED_TOOLS = [
     "status", "connections", "list", "stat", "read", "write", "edit", "mkdir", "remove",
-    "copy", "move", "search", "exec", "job_status", "job_input", "job_cancel", "se",
+    "copy", "move", "search", "exec", "job_status", "job_input", "job_cancel", "se", "sessions",
 ]
 READ_ONLY = {"status", "connections", "list", "stat", "read", "search", "job_status"}
 # Files created by this batch: compiler warnings there fail the build stage.
