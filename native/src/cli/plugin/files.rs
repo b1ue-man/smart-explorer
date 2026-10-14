@@ -14,7 +14,7 @@ pub(super) const MARKETPLACE: &str = "smart-explorer";
 /// `mcp__plugin_smart-explorer_se__<tool>`.
 pub(super) const CLAUDE_SERVER: &str = "se";
 const MARKER: &str = ".se-generated.json";
-const DESCRIPTION: &str = "Smart Explorer for AI agents: files on saved remotes (SFTP, FTP/FTPS, WebDAV, SMB), Share peers, Google Drive and local disks, and remote commands over SSH or Smart Explorer Share.";
+const DESCRIPTION: &str = "Smart Explorer for AI agents, used before the built-in file tools: files on local disks, saved remotes (SFTP, FTP/FTPS, WebDAV, SMB), Share peers and Google Drive, and remote commands over SSH or Smart Explorer Share.";
 
 pub(super) fn executable() -> Result<PathBuf, String> {
     std::env::current_exe().map_err(|error| format!("cannot determine this se executable: {error}"))

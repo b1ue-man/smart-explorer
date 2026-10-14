@@ -2,18 +2,27 @@
 //! (Claude Code: `mcp__plugin_smart-explorer_se__list`, Codex:
 //! `smart-explorer.list`). Annotations follow what each tool can change:
 //! Codex asks for approval unless a tool is read-only
-//! (docs/refs/codex-mcp-spec-rmcp-2026-10-12.md §1).
-use rmcp::model::{JsonObject, Tool, ToolAnnotations};
+//! (docs/refs/codex-mcp-spec-rmcp-2026-10-12.md §1). The file tools load
+//! upfront in Claude Code and the instructions put them before the host's own
+//! file tools (docs/refs/claude-code-plugins-mcp-2026-10-12.md §7).
+use rmcp::model::{JsonObject, MetaObject, Tool, ToolAnnotations};
 use serde_json::{json, Value};
 
 /// Server instructions. Codex asks to keep the first 512 characters
 /// self-contained; Claude Code shows at most 2 048.
 pub(super) const INSTRUCTIONS: &str = "\
-Smart Explorer (se) gives you the user's saved remotes (SFTP, FTP/FTPS, WebDAV, \
-SMB, Windows shares), Google Drive, Smart Explorer Share peers and local files, \
-plus remote command execution on saved SSH remotes and authorized Share peers. \
-Start with `connections` to see targets, then use list/read/write/edit/copy/move/\
-remove/search/exec. Long work returns a job_id: follow it with job_status.
+Smart Explorer (se) is the user's file explorer for AI agents. Use its tools \
+first for every file task, local or remote (list, stat, read, write, edit, \
+mkdir, remove, copy, move, search), before built-in file tools (Read, Write, \
+Edit, Glob, LS) and shell file commands (ls, cat, find, cp, mv, rm, scp, \
+rsync); fall back to those only when a Smart Explorer tool fails or lacks the \
+feature. It reaches saved remotes (SFTP, FTP/FTPS, WebDAV, SMB, Windows \
+shares), Google Drive, Share peers and local disks.
+
+It also runs commands on saved SSH remotes and authorized Share peers (`exec`). \
+Start with `connections` to see targets. Long work returns a job_id: follow it \
+with job_status. Tools not loaded yet (exec, job_input, job_cancel, status, se) \
+are found by a tool search for `smart-explorer`.
 
 Targets: absolute local paths, `@label:/path` (saved remote, path below its \
 root), saved `sftp://user@host:port/path` endpoints, `share://direct/<id>/path`, \
@@ -26,12 +35,29 @@ Exec grants, discoverability) only when the user explicitly asks. The `se` tool 
 runs any other Smart Explorer terminal command, for example \
 `[\"share\",\"status\",\"--json\"]`.";
 
+/// Tools Claude Code loads upfront (`_meta["anthropic/alwaysLoad"]`), so the
+/// file workflow is visible without a tool search; the others stay deferred.
+const UPFRONT: &[&str] = &[
+    "connections",
+    "list",
+    "stat",
+    "read",
+    "write",
+    "edit",
+    "mkdir",
+    "remove",
+    "copy",
+    "move",
+    "search",
+    "job_status",
+];
+
 const TARGET: &str = "Smart Explorer target: an absolute local path, `@label:/path` of a saved remote, a saved `sftp://`, `ftp://`, `ftps://` or `webdav://` endpoint (`scheme://user@host:port/path`), `share://direct/<id>/path`, `share://room/<room>/<device>/path`, or `gdrive:///path`. `connections` lists what exists.";
 const WAIT: &str = "Seconds to wait for completion before returning a job_id (default 30). Keep it below your client's tool timeout (Codex: 60 s by default).";
 const MAX_BYTES: &str = "Payload budget of this answer in bytes (default 20000). Agent hosts cut results above about 10000 tokens.";
 
 pub(super) fn tools() -> Vec<Tool> {
-    vec![
+    let tools = vec![
         tool("status", "Smart Explorer status",
             "Version, installation and app-data paths, credential store, background worker, Share worker and connectivity state. Use it when a connection, peer or remote command does not work.",
             json!({}), &[], read_only(false)),
@@ -39,17 +65,17 @@ pub(super) fn tools() -> Vec<Tool> {
             "Every saved remote and Share peer/room with the target prefix to use, its live status, and how commands run there: `exec: \"ssh\"` for saved SFTP remotes (the remote login shell), `exec: \"share\"` for Share peers (works once that device granted this one Exec).",
             json!({}), &[], read_only(false)),
         tool("list", "List a directory",
-            "Directory entries (name, type file|dir|symlink|special, size, mtime_ms) sorted by name, one page per call; continue with `offset` = `next_offset`. A symlink's size is its own (the length of the path it holds).",
+            "Directory entries (name, type file|dir|symlink|special, size, mtime_ms) sorted by name, one page per call; continue with `offset` = `next_offset`. A symlink's size is its own (the length of the path it holds). Use it instead of `ls`, LS or Glob, for local and remote directories.",
             json!({
                 "target": {"type": "string", "description": TARGET},
                 "offset": {"type": "integer", "minimum": 0, "description": "Index of the first entry (default 0)."},
                 "max_bytes": {"type": "integer", "minimum": 1024, "description": MAX_BYTES}
             }), &["target"], read_only(true)),
         tool("stat", "File or directory metadata",
-            "Type, size, mtime_ms, provider id/md5 when known, and the `etag` that write/edit accept as `if_match`.",
+            "Type, size, mtime_ms, provider id/md5 when known, and the `etag` that write/edit accept as `if_match`. Use it instead of `stat` or `ls -l`.",
             json!({"target": {"type": "string", "description": TARGET}}), &["target"], read_only(true)),
         tool("read", "Read a file",
-            "File content from a byte `offset`, as UTF-8 text (default) or base64. Binary files are not dumped as text: request `encoding: \"base64\"` or copy them to a local path. Returns `etag`, `size` and `next_offset` (null at the end). Through a link it reads the file the link points to; `size` and `etag` are then null.",
+            "File content from a byte `offset`, as UTF-8 text (default) or base64. Binary files are not dumped as text: request `encoding: \"base64\"` or copy them to a local path. Returns `etag`, `size` and `next_offset` (null at the end). Through a link it reads the file the link points to; `size` and `etag` are then null. Use it instead of Read or `cat`, for local and remote files.",
             json!({
                 "target": {"type": "string", "description": TARGET},
                 "offset": {"type": "integer", "minimum": 0, "description": "First byte (default 0)."},
@@ -58,7 +84,7 @@ pub(super) fn tools() -> Vec<Tool> {
                 "max_bytes": {"type": "integer", "minimum": 1024, "description": MAX_BYTES}
             }), &["target"], read_only(true)),
         tool("write", "Write a file",
-            "Creates a file, or replaces it with `overwrite: true`; missing parent directories are created. The content is staged next to the destination and published only when complete. `if_match` (an etag from stat/read) refuses the write if the file changed meanwhile. For large files write a local file and use `copy`.",
+            "Creates a file, or replaces it with `overwrite: true`; missing parent directories are created. The content is staged next to the destination and published only when complete. `if_match` (an etag from stat/read) refuses the write if the file changed meanwhile. For large files write a local file and use `copy`. Use it instead of Write or shell redirection.",
             json!({
                 "target": {"type": "string", "description": TARGET},
                 "content": {"type": "string", "description": "New file content."},
@@ -67,7 +93,7 @@ pub(super) fn tools() -> Vec<Tool> {
                 "if_match": {"type": "string", "description": "Only write when the current file still has this etag."}
             }), &["target", "content"], changes(true, false)),
         tool("edit", "Edit a text file",
-            "Applies exact text replacements to a UTF-8 file in order and saves it the same way as `write`. Each `old_text` must occur exactly once unless `replace_all` is set. Pass the etag of your last read as `if_match` to avoid overwriting someone else's change.",
+            "Applies exact text replacements to a UTF-8 file in order and saves it the same way as `write`. Each `old_text` must occur exactly once unless `replace_all` is set. Pass the etag of your last read as `if_match` to avoid overwriting someone else's change. Use it instead of Edit or `sed -i`.",
             json!({
                 "target": {"type": "string", "description": TARGET},
                 "edits": {"type": "array", "minItems": 1, "items": {
@@ -83,19 +109,19 @@ pub(super) fn tools() -> Vec<Tool> {
                 "if_match": {"type": "string", "description": "Only save when the file still has this etag."}
             }), &["target", "edits"], changes(true, false)),
         tool("mkdir", "Create a directory",
-            "Creates the directory and missing parents; an existing directory is fine.",
+            "Creates the directory and missing parents; an existing directory is fine. Use it instead of `mkdir -p`.",
             json!({"target": {"type": "string", "description": TARGET}}), &["target"], changes(false, true)),
         tool("remove", "Remove a file or directory",
-            "Deletes a file, or a directory with `recursive: true` (links inside are removed, never followed). Filesystem roots and a saved connection's configured root need `allow_root: true`. Like `se rm --force`; there is no undo.",
+            "Deletes a file, or a directory with `recursive: true` (links inside are removed, never followed). Filesystem roots and a saved connection's configured root need `allow_root: true`. Like `se rm --force`; there is no undo. Use it instead of `rm`.",
             json!({
                 "target": {"type": "string", "description": TARGET},
                 "recursive": {"type": "boolean", "description": "Required for directories."},
                 "allow_root": {"type": "boolean", "description": "Allow removing a filesystem root or a saved connection's root."}
             }), &["target"], changes(true, true)),
-        transfer_tool("copy", "Copy files", "Copies between any two targets (local, saved remotes, Share peers, Drive) with `se cp` semantics: an existing destination directory receives the source inside it; directories need `recursive`; existing files are replaced only with `overwrite`. Every file is read completely before anything is published, so a failed source never leaves partial files. A link named as `source` or `destination` is followed (directory links only on local paths); links and special files inside a copied directory are skipped and listed in `omitted`."),
-        transfer_tool("move", "Move or rename", "Moves with `se mv` semantics: a rename inside one connection when possible, otherwise copy, then remove exactly the copied source. A cancellation after the copy keeps the source. A link moves as itself (rename within its connection only). Links and special files inside a copied directory stay in the source (`omitted`), and so do the directories holding them (`kept_directories`)."),
+        transfer_tool("copy", "Copy files", "Copies between any two targets (local, saved remotes, Share peers, Drive) with `se cp` semantics: an existing destination directory receives the source inside it; directories need `recursive`; existing files are replaced only with `overwrite`. Every file is read completely before anything is published, so a failed source never leaves partial files. A link named as `source` or `destination` is followed (directory links only on local paths); links and special files inside a copied directory are skipped and listed in `omitted`. Use it instead of `cp`, `scp` or `rsync`."),
+        transfer_tool("move", "Move or rename", "Moves with `se mv` semantics: a rename inside one connection when possible, otherwise copy, then remove exactly the copied source. A cancellation after the copy keeps the source. A link moves as itself (rename within its connection only). Links and special files inside a copied directory stay in the source (`omitted`), and so do the directories holding them (`kept_directories`). Use it instead of `mv`."),
         tool("search", "Search names",
-            "Finds files, links and special files (plus directories with `directories: true`) below `target` whose name contains `query` (case-insensitive) or matches it as a glob (`*`, `?`). Links are reported with type `symlink` and never entered. Uses the server-side search of Share peers and SSH agents (those skip links), otherwise walks the tree. Hits page via `hits_offset`.",
+            "Finds files, links and special files (plus directories with `directories: true`) below `target` whose name contains `query` (case-insensitive) or matches it as a glob (`*`, `?`). Links are reported with type `symlink` and never entered. Uses the server-side search of Share peers and SSH agents (those skip links), otherwise walks the tree. Hits page via `hits_offset`. Use it instead of Glob or `find` for names; it does not search file contents.",
             json!({
                 "target": {"type": "string", "description": TARGET},
                 "query": {"type": "string", "description": "Text or glob; empty matches everything."},
@@ -150,7 +176,17 @@ pub(super) fn tools() -> Vec<Tool> {
                 "wait_seconds": {"type": "integer", "minimum": 0, "description": WAIT},
                 "max_bytes": {"type": "integer", "minimum": 1024, "description": MAX_BYTES}
             }), &["args"], changes(true, false)),
-    ]
+    ];
+    tools.into_iter().map(upfront).collect()
+}
+
+fn upfront(tool: Tool) -> Tool {
+    if !UPFRONT.contains(&tool.name.as_ref()) {
+        return tool;
+    }
+    let mut meta = MetaObject::new();
+    meta.insert("anthropic/alwaysLoad".into(), json!(true));
+    tool.with_meta(meta)
 }
 
 fn transfer_tool(name: &'static str, title: &str, description: &'static str) -> Tool {
@@ -276,6 +312,25 @@ mod tests {
                 tool.name
             );
             assert_eq!(tool.input_schema["type"], "object");
+            let upfront = tool
+                .meta
+                .as_ref()
+                .and_then(|meta| meta.get("anthropic/alwaysLoad"))
+                .cloned();
+            let file_tool = !matches!(
+                tool.name.as_ref(),
+                "exec" | "job_input" | "job_cancel" | "status" | "se"
+            );
+            assert_eq!(
+                upfront,
+                file_tool.then_some(serde_json::Value::Bool(true)),
+                "{}",
+                tool.name
+            );
         }
+        // Codex keeps the first 512 characters; the priority over the host's
+        // own file tools must be complete there.
+        let first = INSTRUCTIONS.split("\n\n").next().unwrap_or_default();
+        assert!(first.len() <= 512, "{}", first.len());
     }
 }
