@@ -6,6 +6,9 @@
 //! OpenSSH 7.9+ delivers these signals with `killpg` to the command's process
 //! group (`session.c::session_signal_req`); servers without signal support
 //! only see the channel close. See docs/AI_AGENT_PLUGIN.md.
+//!
+//! `run_channel` drives any session channel whose program request is
+//! already sent; `terminal.rs` uses it for interactive channels with a PTY.
 use super::backend::SftpBackend;
 use russh::{client, ChannelMsg, Sig};
 use std::io;
@@ -60,6 +63,7 @@ enum Control {
     Stdin(Vec<u8>),
     Eof,
     Cancel,
+    Resize { cols: u32, rows: u32 },
 }
 
 impl SshCommandControl {
@@ -74,6 +78,11 @@ impl SshCommandControl {
     /// Idempotent; a command that already ended ignores it.
     pub fn cancel(&self) {
         let _ = self.tx.send(Control::Cancel);
+    }
+
+    /// Sends an SSH window-change; only meaningful on a terminal channel.
+    pub fn resize(&self, cols: u32, rows: u32) -> io::Result<()> {
+        self.send(Control::Resize { cols, rows })
     }
 
     fn send(&self, control: Control) -> io::Result<()> {
@@ -101,14 +110,23 @@ impl SftpBackend {
     pub fn start_command(self: Arc<Self>, command: &str) -> io::Result<SshCommand> {
         let (generation, channel) = self.open_session_channel()?;
         self.request_exec(&generation, &channel, true, command)?;
-        let (event_tx, events) = mpsc::channel(EVENT_QUEUE);
-        let (control_tx, control_rx) = mpsc::unbounded_channel();
-        self.rt.spawn(pump(channel, event_tx, control_rx));
-        Ok(SshCommand {
-            events,
-            control: SshCommandControl { tx: control_tx },
-            _backend: self,
-        })
+        Ok(run_channel(self, channel))
+    }
+}
+
+/// Starts the pump for a session channel whose program request (`exec` or
+/// `shell`, with reply requested) was just sent, and returns the handle.
+pub(super) fn run_channel(
+    backend: Arc<SftpBackend>,
+    channel: russh::Channel<client::Msg>,
+) -> SshCommand {
+    let (event_tx, events) = mpsc::channel(EVENT_QUEUE);
+    let (control_tx, control_rx) = mpsc::unbounded_channel();
+    backend.rt.spawn(pump(channel, event_tx, control_rx));
+    SshCommand {
+        events,
+        control: SshCommandControl { tx: control_tx },
+        _backend: backend,
     }
 }
 
@@ -170,6 +188,10 @@ async fn pump(
                     let _ = channel.signal(Sig::TERM).await;
                 }
                 Some(Control::Cancel) => {}
+                Some(Control::Resize { cols, rows }) => {
+                    // RFC 4254 6.7: window-change has no reply.
+                    let _ = channel.window_change(cols, rows, 0, 0).await;
+                }
                 None => control_open = false,
             },
             _ = tokio::time::sleep_until(deadline), if stage != CancelStage::Running => {
