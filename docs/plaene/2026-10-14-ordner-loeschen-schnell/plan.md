@@ -111,6 +111,6 @@ Erhalten bleiben die Bedienwege Entf/Umschalt+Entf (Desktop), `se rm -r`, MCP `r
 - [x] M2 (Code und Tests, Compile-Beleg folgt mit der Suite)
 - [x] M3 (Code und Tests, Compile-Beleg folgt mit der Suite)
 - [x] M4 (Code und Tests, Compile-Beleg folgt mit der Suite)
-- [ ] M5 Suite geschrieben, Lauf offen
+- [x] M5 Suite geschrieben; Lauf 38619376635 scheiterte unter Linux und Windows, Korrekturen `ab41cd96` (Linux) und `2ce10314` (Windows), Graph `63733be5`; Wiederholung 38623831614 grün unter Linux und Windows
 - [x] M6
-- [ ] M7
+- [x] M7 v0.5.179 (Lauf 38626320197)
