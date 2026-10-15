@@ -55,13 +55,23 @@ impl ContainedExec {
         Ok(())
     }
 
-    pub(crate) fn write_stdin(&mut self, bytes: &[u8]) -> io::Result<()> {
+    /// Hands `bytes` to the supervisor in chunks of at most 64 KiB and returns
+    /// how many bytes it took. A full supervisor input queue ends the hand-over
+    /// early, possibly before the first chunk; the caller offers the rest again
+    /// later, so no chunk is sent twice. Any other failure is an error.
+    pub(crate) fn write_stdin(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let mut written = 0;
         for chunk in bytes.chunks(super::exec_types::MAX_EXEC_DATA_BYTES) {
-            self.inner.send(&SupervisorCommand::Stdin(chunk.to_vec()))?;
+            match self.inner.send(&SupervisorCommand::Stdin(chunk.to_vec())) {
+                Ok(()) => written += chunk.len(),
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
+                Err(error) => return Err(error),
+            }
         }
-        Ok(())
+        Ok(written)
     }
 
+    /// Ends the input. A full input queue is reported as `WouldBlock`.
     pub(crate) fn close_stdin(&mut self) -> io::Result<()> {
         self.inner.send(&SupervisorCommand::StdinEof)
     }
