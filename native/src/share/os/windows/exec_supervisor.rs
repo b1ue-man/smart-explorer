@@ -6,6 +6,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
+use windows_sys::Win32::Foundation::{BOOL, FALSE, TRUE};
+use windows_sys::Win32::System::Console::{SetConsoleCtrlHandler, CTRL_BREAK_EVENT, CTRL_C_EVENT};
+
 use super::exec_conpty::{self, Conpty, Program};
 use crate::share::exec_supervisor_protocol::{
     recv_command, send_event, SupervisorCommand, SupervisorEvent, SupervisorExit, SupervisorStart,
@@ -109,7 +112,8 @@ fn run_terminal(
     input: std::io::Stdin,
     output: Arc<Mutex<std::io::Stdout>>,
 ) -> io::Result<()> {
-    let (mut conpty, pty_output, pty_input) = match launch_terminal(start) {
+    let launched = shield_from_interrupts().and_then(|()| launch_terminal(start));
+    let (mut conpty, pty_output, pty_input) = match launched {
         Ok(launched) => launched,
         Err(error) => {
             let _ = send_locked(&output, SupervisorEvent::Error(error.to_string()));
@@ -123,6 +127,26 @@ fn run_terminal(
     let _ = conpty.terminate();
     let _ = conpty.close_console();
     result
+}
+
+/// `exec_conpty::start` gives the shell Ctrl+C by clearing this process's
+/// inherited "ignore Ctrl+C" attribute. This handler keeps Ctrl+C and
+/// Ctrl+Break of the supervisor's own windowless console from ending the
+/// supervisor; handlers are not inherited, so the shell keeps the default.
+fn shield_from_interrupts() -> io::Result<()> {
+    // SAFETY: `ignore_interrupts` has the handler signature and lives for the
+    // whole process.
+    if unsafe { SetConsoleCtrlHandler(Some(ignore_interrupts), TRUE) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+unsafe extern "system" fn ignore_interrupts(kind: u32) -> BOOL {
+    match kind {
+        CTRL_C_EVENT | CTRL_BREAK_EVENT => TRUE,
+        _ => FALSE,
+    }
 }
 
 fn launch_terminal(start: &SupervisorStart) -> io::Result<(Conpty, File, File)> {
