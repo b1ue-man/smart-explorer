@@ -155,7 +155,8 @@ Befehlssitzungen.
   `se shell [ZIEL] [--cwd DIR] [--env N=W]… [--name NAME] [--attachable] [-e ZEICHEN|none]`.
   Sind Standardeingabe und Standardausgabe Terminals und fehlt `-T`, verhält sich `se shell` wie
   `ssh HOST`: Die Gegenstelle gibt der Login-Shell ein PTY, das lokale Terminal läuft im
-  Rohmodus, und Tasten und Ausgabe gehen unverändert durch. Damit funktionieren Formatierung,
+  Rohmodus, und Tasten und Ausgabe gehen unverändert durch (einzige Ausnahme: die Anforderung des
+  win32-input-mode, siehe „Sicherheit“). Damit funktionieren Formatierung,
   Vollbildprogramme (nvim, claude, codex), die Tab-Vervollständigung der Shell der Gegenstelle,
   Passwortabfragen, Strg+C an das Vordergrundprogramm und die Fenstergröße. Die Sitzung endet, wenn
   die Shell der Gegenstelle endet. Exitcode: der Exitstatus dieser Shell (`exit N` ergibt N, Signal
@@ -262,11 +263,16 @@ Befehlssitzungen.
   Tokenprüfung abgelehnt; ältere Besitzer bleiben für Befehlssitzungen erreichbar.
 - Die Eingabe eines Teilnehmers erreicht nur das PTY, nie die anderen Teilnehmer; diese sehen
   allein, was die Gegenstelle zurückschreibt (bei Passwortabfragen kein Echo). Die Ausgabe der
-  Gegenstelle gelangt wie bei `ssh` unverändert an das lokale Terminal; deren Steuersequenzen
-  (Fenstertitel, Zwischenablage über OSC 52, Terminalabfragen) gelten mit demselben
-  Vertrauensmodell wie bei `ssh`. Eigene Texte von `se` (Hinweise, Namen anderer Teilnehmer,
-  Fehler) enthalten keine Steuerzeichen. Terminalinhalt steht in keiner Protokolldatei; die
-  Exec-Historie des Hosts zeigt `<shell>`.
+  Gegenstelle gelangt wie bei `ssh` unverändert an das lokale Terminal, mit einer Ausnahme: `se`
+  entfernt den Parameter 9001 (win32-input-mode) aus jeder Folge `ESC[?…h` bzw. `ESC[?…l` und
+  verwirft die Folge, wenn kein anderer Parameter bleibt. Diese Anforderung schreibt das ConPTY
+  eines Windows-Hosts beim Start; befolgte sie eine Windows-Konsole, meldete sie jede Taste als
+  Steuerfolge, und `~.`, `~?` und `~~` wirkten nicht. Von einer über zwei Ausgabestücke geteilten
+  Folge hält `se` höchstens 64 Byte zurück; eine längere Folge geht unverändert durch. Die übrigen
+  Steuersequenzen der Gegenstelle (Fenstertitel, Zwischenablage über OSC 52, Terminalabfragen)
+  gelten mit demselben Vertrauensmodell wie bei `ssh`. Eigene Texte von `se` (Hinweise, Namen
+  anderer Teilnehmer, Fehler) enthalten keine Steuerzeichen. Terminalinhalt steht in keiner
+  Protokolldatei; die Exec-Historie des Hosts zeigt `<shell>`.
 - Terminalzustand: Der Rohmodus wird erst nach erfolgreichem Verbindungsaufbau gesetzt und bei
   normalem Ende, Fehler, Panik, SIGTERM, SIGHUP, SIGQUIT, SIGINT (Unix), Strg+Untbr, Schließen des
   Fensters, Abmelden, Herunterfahren (Windows) und Update-Stopp wiederhergestellt. Wie `ssh` setzt
