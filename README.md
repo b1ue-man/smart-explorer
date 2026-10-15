@@ -701,8 +701,11 @@ Terminalsitzung (umgesetzt; Suite und Release stehen aus) und offene Punkte:
 *Im Terminal* (Standardeingabe und Standardausgabe sind Terminals, kein `-T`) ist
 `se shell` eine echte Terminalsitzung wie `ssh HOST`: Die Gegenstelle bekommt ein
 Pseudo-Terminal (PTY) und führt darin ihre interaktive Login-Shell aus, das lokale
-Terminal läuft im Rohmodus und reicht jede Taste und die gesamte Ausgabe unverändert
-durch. Es funktionieren Formatierung (Farben, Cursorsteuerung), Vollbildprogramme wie
+Terminal läuft im Rohmodus und reicht jede Taste und die Ausgabe unverändert durch.
+Einzige Ausnahme: `se` entfernt die Anforderung des win32-input-mode (Parameter 9001
+einer Folge `ESC[?…h` bzw. `ESC[?…l`), die das ConPTY eines Windows-Hosts beim Start
+schreibt; eine Windows-Konsole meldete sonst jede Taste als Steuerfolge, und `~.` wirkte
+nicht. Es funktionieren Formatierung (Farben, Cursorsteuerung), Vollbildprogramme wie
 nvim, claude und codex, die Tab-Vervollständigung der Shell auf der Gegenstelle,
 Passwortabfragen (zum Beispiel von `sudo`), Strg+C und Strg+D an das laufende Programm
 der Gegenstelle sowie die Fenstergröße (eine Größenänderung des lokalen Fensters wird
