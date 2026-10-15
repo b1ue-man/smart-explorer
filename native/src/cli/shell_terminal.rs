@@ -9,15 +9,19 @@
 //! standard error: when the session ends, on `~.`, on a failure, on an update
 //! stop request and on a local request to end (Unix signals, Windows console
 //! control events). Platform code lives in `os/terminal_{unix,windows}.rs`.
+#[path = "shell_output_filter.rs"]
+mod output_filter;
+
 use super::escape::{help_text, EscapeFilter, Step};
 use crate::cli::os::{self, LocalEvent, LocalTerminal, TerminalOutput};
 use crate::cli::shell_session::{Role, TerminalClient, TerminalEvent, TerminalSize};
 use crate::share::ExecTerminalRequest;
 use crossbeam_channel::{select, unbounded, Receiver, Sender};
+use output_filter::OutputFilter;
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 /// Exit code when the session or the connection failed (as in the line mode).
 const EXIT_FAILED: i32 = 125;
@@ -119,6 +123,31 @@ impl End {
     }
 }
 
+/// The end to report. A session that ended without an exit status, or a
+/// failure, after a new update stop request is the update stop: the update
+/// also stops the Share worker that carries a session to a Share peer, and
+/// that end can come before the watcher's next look (plan V10). An exit
+/// status of the remote shell and the user's own endings stay.
+fn settle(end: End, updated: bool) -> End {
+    let lost = match &end {
+        End::Session { exit_code, .. } => exit_code.is_none(),
+        End::Failed(_) => true,
+        End::Left | End::Terminated(_) | End::Update => false,
+    };
+    if updated && lost {
+        End::Update
+    } else {
+        end
+    }
+}
+
+/// The rule of the line mode and the MCP server for a desktop update's stop
+/// request: one present at the start does not count, a new or rewritten one
+/// does.
+fn new_update_request(baseline: Option<SystemTime>, current: Option<SystemTime>) -> bool {
+    current.is_some() && current != baseline
+}
+
 /// What goes to the remote terminal, in order, from its own thread so that a
 /// large paste cannot keep this loop from draining the remote output.
 enum Outgoing {
@@ -143,14 +172,16 @@ pub(super) fn run(client: TerminalClient, escape: Option<u8>, size: TerminalSize
     };
     let stop = Arc::new(AtomicBool::new(false));
     let (update_sender, update_events) = unbounded::<()>();
-    let prepared =
-        watch_updates(stop.clone(), update_sender.clone()).and_then(|()| spawn_outbox(&client));
+    let baseline = crate::daemon::update_stop_marker();
+    let prepared = watch_updates(baseline, stop.clone(), update_sender.clone())
+        .and_then(|()| spawn_outbox(&client));
     let end = match prepared {
         Ok(outbox) => {
             let mut front = Front {
                 client: client.clone(),
                 outbox,
                 filter: EscapeFilter::new(escape),
+                remote: OutputFilter::default(),
                 output: TerminalOutput::default(),
                 escape,
                 size,
@@ -166,6 +197,8 @@ pub(super) fn run(client: TerminalClient, escape: Option<u8>, size: TerminalSize
     if waited {
         client.wait_ended(OWNER_WIND_DOWN);
     }
+    let updated = new_update_request(baseline, crate::daemon::update_stop_marker());
+    let end = settle(end, updated);
     say(&end.message(role));
     end.exit_code(role)
 }
@@ -174,6 +207,8 @@ struct Front {
     client: TerminalClient,
     outbox: Sender<Outgoing>,
     filter: EscapeFilter,
+    /// Keeps the remote's win32-input-mode request from the local terminal.
+    remote: OutputFilter,
     output: TerminalOutput,
     escape: Option<u8>,
     /// The size last sent to the session.
@@ -254,7 +289,14 @@ impl Front {
 
     fn session(&mut self, event: TerminalEvent) -> Option<End> {
         match event {
-            TerminalEvent::Output(bytes) => self.show(&bytes),
+            TerminalEvent::Output(bytes) => {
+                let shown = self.remote.filter(&bytes);
+                if shown.is_empty() {
+                    None
+                } else {
+                    self.show(&shown)
+                }
+            }
             TerminalEvent::Notice(text) => {
                 self.show(format!("\r\n[se] {}\r\n", plain(&text)).as_bytes())
             }
@@ -310,9 +352,12 @@ fn spawn_outbox(client: &TerminalClient) -> Result<Sender<Outgoing>, String> {
 }
 
 /// Reports a desktop-update stop request that appears while the shell runs
-/// (the same rule as the line mode: the marker changed since the start).
-fn watch_updates(stop: Arc<AtomicBool>, notify: Sender<()>) -> Result<(), String> {
-    let baseline = crate::daemon::update_stop_marker();
+/// (`baseline` is the marker at the start).
+fn watch_updates(
+    baseline: Option<SystemTime>,
+    stop: Arc<AtomicBool>,
+    notify: Sender<()>,
+) -> Result<(), String> {
     std::thread::Builder::new()
         .name("se-shell-update".into())
         .spawn(move || loop {
@@ -320,8 +365,7 @@ fn watch_updates(stop: Arc<AtomicBool>, notify: Sender<()>) -> Result<(), String
             if stop.load(Ordering::SeqCst) {
                 return;
             }
-            let current = crate::daemon::update_stop_marker();
-            if current.is_some() && current != baseline {
+            if new_update_request(baseline, crate::daemon::update_stop_marker()) {
                 let _ = notify.send(());
                 return;
             }
@@ -332,8 +376,12 @@ fn watch_updates(stop: Arc<AtomicBool>, notify: Sender<()>) -> Result<(), String
 
 #[cfg(test)]
 mod tests {
-    use super::{accepted_term, clamp_size, plain, End, DEFAULT_SIZE, DEFAULT_TERM};
+    use super::{
+        accepted_term, clamp_size, new_update_request, plain, settle, End, DEFAULT_SIZE,
+        DEFAULT_TERM,
+    };
     use crate::cli::shell_session::Role;
+    use std::time::{Duration, UNIX_EPOCH};
 
     #[test]
     fn terminal_task_exit_codes_follow_the_ending() {
@@ -401,5 +449,31 @@ mod tests {
         let normal = clamp_size(120, 40);
         assert_eq!((normal.cols, normal.rows), (120, 40));
         assert_eq!(plain("a\u{1b}[31mb\r\nc\u{7}"), "a[31mbc");
+    }
+
+    #[test]
+    fn terminal_task_a_lost_session_after_an_update_request_is_the_update_stop() {
+        let lost = || End::Session {
+            exit_code: None,
+            message: "remote execution transport: failed to fill whole buffer".into(),
+        };
+        let exited = || End::Session {
+            exit_code: Some(7),
+            message: "the shell exited with status 7".into(),
+        };
+        let failed = End::Failed("the connection to the session was lost".into());
+        assert_eq!(settle(lost(), true), End::Update);
+        assert_eq!(settle(failed, true), End::Update);
+        assert_eq!(settle(lost(), false), lost());
+        assert_eq!(settle(exited(), true), exited());
+        assert_eq!(settle(End::Left, true), End::Left);
+        assert_eq!(settle(End::Terminated(143), true), End::Terminated(143));
+        let old = UNIX_EPOCH + Duration::from_secs(10);
+        let new = UNIX_EPOCH + Duration::from_secs(20);
+        assert!(!new_update_request(None, None));
+        assert!(new_update_request(None, Some(new)));
+        assert!(!new_update_request(Some(old), Some(old)));
+        assert!(new_update_request(Some(old), Some(new)));
+        assert!(!new_update_request(Some(old), None));
     }
 }
