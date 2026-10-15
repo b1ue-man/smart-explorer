@@ -13,6 +13,8 @@ use super::exec_terminal::ExecTerminalSize;
 use super::exec_types::{ExecStart, ExecTerminal, ExecTerminalKind};
 
 const EVENT_POLL: Duration = Duration::from_millis(25);
+/// How soon input that the supervisor's full queue did not take is offered again.
+const INPUT_RETRY: Duration = Duration::from_millis(5);
 const ROOT_OUTPUT_GRACE: Duration = Duration::from_millis(250);
 const CONTAINMENT_STOP_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -79,6 +81,7 @@ pub(super) fn run_contained_job(
     let mut root_exit: Option<SupervisorExit> = None;
     let mut root_grace = None;
     let mut output_complete = false;
+    let mut pending: Option<JobInput> = None;
     loop {
         if timeout_at.is_some_and(|deadline| Instant::now() >= deadline) {
             registry.cancel(&start.exec_id, ExecCancelReason::Timeout);
@@ -89,51 +92,43 @@ pub(super) fn run_contained_job(
         if reservation.cancellation.reason().is_some() {
             break;
         }
-        while let Ok(command) = input.try_recv() {
-            match command {
-                JobInput::Stdin(bytes) => {
-                    if let Err(error) = process.write_stdin(&bytes) {
-                        return stop_and_finish(
-                            process,
-                            &registry,
-                            &reservation,
-                            &start,
-                            &output,
-                            StopOutcome::error(error.to_string(), stdout_bytes, stderr_bytes),
-                        );
-                    }
-                }
-                JobInput::StdinEof => {
-                    if let Err(error) = process.close_stdin() {
-                        return stop_and_finish(
-                            process,
-                            &registry,
-                            &reservation,
-                            &start,
-                            &output,
-                            StopOutcome::error(error.to_string(), stdout_bytes, stderr_bytes),
-                        );
-                    }
-                }
-                JobInput::Resize(size) => match process.resize(size) {
-                    Ok(()) => {}
-                    // A full supervisor queue loses one window size, which the
-                    // next resize replaces; it must not end the session.
-                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
-                    Err(error) => {
-                        return stop_and_finish(
-                            process,
-                            &registry,
-                            &reservation,
-                            &start,
-                            &output,
-                            StopOutcome::error(error.to_string(), stdout_bytes, stderr_bytes),
-                        );
-                    }
+        // Input reaches the supervisor in order. What its full queue does not
+        // take stays pending and no later input is read meanwhile: the input
+        // channel fills up and the peer is slowed down instead of the job
+        // ending (plan S6). Events are still read in between, because the
+        // supervisor may wait for them to be taken.
+        loop {
+            let command = match pending.take() {
+                Some(command) => command,
+                None => match input.try_recv() {
+                    Ok(command) => command,
+                    Err(_) => break,
                 },
+            };
+            match deliver(&mut process, command) {
+                Ok(None) => {}
+                Ok(Some(rest)) => {
+                    pending = Some(rest);
+                    break;
+                }
+                Err(error) => {
+                    return stop_and_finish(
+                        process,
+                        &registry,
+                        &reservation,
+                        &start,
+                        &output,
+                        StopOutcome::error(error.to_string(), stdout_bytes, stderr_bytes),
+                    );
+                }
             }
         }
-        match process.next_event(Some(Instant::now() + EVENT_POLL)) {
+        let poll = if pending.is_some() {
+            INPUT_RETRY
+        } else {
+            EVENT_POLL
+        };
+        match process.next_event(Some(Instant::now() + poll)) {
             Ok(SupervisorEvent::Started { .. }) => {
                 if !emit(
                     &output,
@@ -217,6 +212,33 @@ pub(super) fn run_contained_job(
             stderr_bytes,
         },
     )
+}
+
+/// Hands one input to the supervisor. `Ok(Some(rest))` is what its full input
+/// queue did not take; none of it was sent, so offering it again later sends
+/// every byte once and keeps the order. A full queue drops a window size
+/// instead: the next resize replaces it, and it must not end the session.
+fn deliver(process: &mut ContainedExec, command: JobInput) -> io::Result<Option<JobInput>> {
+    match command {
+        JobInput::Stdin(bytes) => {
+            let written = process.write_stdin(&bytes)?;
+            Ok((written < bytes.len()).then(|| JobInput::Stdin(bytes[written..].to_vec())))
+        }
+        JobInput::StdinEof => match process.close_stdin() {
+            Ok(()) => Ok(None),
+            Err(error) if queue_full(&error) => Ok(Some(JobInput::StdinEof)),
+            Err(error) => Err(error),
+        },
+        JobInput::Resize(size) => match process.resize(size) {
+            Ok(()) => Ok(None),
+            Err(error) if queue_full(&error) => Ok(None),
+            Err(error) => Err(error),
+        },
+    }
+}
+
+fn queue_full(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::WouldBlock
 }
 
 fn stop_and_finish(
