@@ -17,8 +17,10 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use windows_sys::core::HRESULT;
-use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0, WAIT_TIMEOUT};
-use windows_sys::Win32::System::Console::{COORD, HPCON};
+use windows_sys::Win32::Foundation::{
+    FALSE, HANDLE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0, WAIT_TIMEOUT,
+};
+use windows_sys::Win32::System::Console::{SetConsoleCtrlHandler, COORD, HPCON};
 use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
@@ -133,6 +135,15 @@ pub(super) fn start(
             "this Windows has no pseudoconsole (ConPTY)",
         )
     })?;
+    // Ctrl+C typed into the pseudoconsole reaches its processes as a
+    // CTRL_C_EVENT unless they ignore it, and that attribute is inherited
+    // (SetConsoleCtrlHandler, Microsoft Learn), for example from an ancestor
+    // started with CREATE_NEW_PROCESS_GROUP. Clearing it in this process
+    // before the child is created gives the shell Ctrl+C as over SSH.
+    // SAFETY: without a handler routine the call only changes that attribute.
+    if unsafe { SetConsoleCtrlHandler(None, FALSE) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
     // Pipes without security attributes are not inheritable; the child gets
     // its console from the pseudoconsole only.
     let (input_read, input_write) = plain_pipe()?;

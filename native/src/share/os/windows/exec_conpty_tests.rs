@@ -182,6 +182,35 @@ fn terminal_task_closing_the_console_ends_a_running_command() {
 }
 
 #[test]
+fn terminal_task_control_c_ends_a_command_in_the_pseudoconsole() {
+    // Without Ctrl+C ping runs for about a minute (60 echo requests, one per
+    // second); the byte 3 on the pseudoconsole input must end it at once, as
+    // Ctrl+C does over SSH. `start` clears an inherited "ignore Ctrl+C".
+    let program = Program::system("ping.exe", "ping.exe -n 60 127.0.0.1").unwrap();
+    let (mut conpty, output, mut input) =
+        start(&program, &test_environment(), None, size(100, 30)).unwrap();
+    let mut screen = Screen::new(output);
+    assert!(
+        screen.read_until(LIMIT, |text| text.contains("127.0.0.1")),
+        "ping printed nothing, output was {:?}",
+        screen.text()
+    );
+    // ping is attached to the console once it printed; give it a moment to
+    // install its own Ctrl+C handler, then type Ctrl+C.
+    std::thread::sleep(Duration::from_secs(1));
+    input.write_all(b"\x03").unwrap();
+    let limit = Duration::from_secs(10);
+    let ended = conpty.wait(limit).unwrap();
+    let _closer = conpty.close_console();
+    assert!(
+        ended.is_some(),
+        "Ctrl+C did not end ping within {limit:?}, output was {:?}",
+        screen.text()
+    );
+    assert!(screen.read_to_end(LIMIT), "the output pipe did not break");
+}
+
+#[test]
 fn terminal_task_resize_after_close_reports_a_closed_console() {
     let program = Program::system("cmd.exe", "cmd.exe /D /C exit 0").unwrap();
     let (mut conpty, output, _input) =
