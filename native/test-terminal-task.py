@@ -141,6 +141,7 @@ BATCH_RUST_FILES = (
     "native/src/cli/shell_session/terminal_transports.rs",
     "native/src/cli/shell.rs",
     "native/src/cli/shell_terminal.rs",
+    "native/src/cli/shell_output_filter.rs",
     "native/src/cli/shell_escape.rs",
     "native/src/cli/os/mod.rs",
     "native/src/cli/os/terminal_unix.rs",
@@ -159,12 +160,12 @@ UNIT_FILTERS = ["terminal_task_", "shell_session_task_", "mcp_task_", "exec_prot
                 "exec_platform", "exec_terminal", "shell_session::", "cli::completions"]
 
 # Tests that must have passed on this host, per prefix. The counts are the test functions
-# of the source tree (`rg -n "fn terminal_task_"`): 75 terminal_task_ tests, of which 7
+# of the source tree (`rg -n "fn terminal_task_"`): 82 terminal_task_ tests, of which 7
 # run on Linux only (exec_pty_tests), 12 on Unix only (the local-PTY module of
-# terminal_tests.rs) and 13 on Windows only (10 ConPTY tests, 3 console tests); so 62 on
-# Linux and 56 on Windows. shell_session_task_: 23, of which 6 are Unix only and 1 Windows
+# terminal_tests.rs) and 14 on Windows only (11 ConPTY tests, 3 console tests); so 68 on
+# Linux and 63 on Windows. shell_session_task_: 23, of which 6 are Unix only and 1 Windows
 # only (22 / 17). mcp_task_: 26 on both.
-EXPECTED_PASSED = {"terminal_task_": 56 if WINDOWS else 62,
+EXPECTED_PASSED = {"terminal_task_": 63 if WINDOWS else 68,
                    "shell_session_task_": 17 if WINDOWS else 22,
                    "mcp_task_": 26}
 
@@ -205,7 +206,7 @@ COMMON_TESTS = (
         "terminal_task_frames_carry_raw_bytes_within_the_data_limit",
         "terminal_task_the_last_active_participant_sets_the_size",
     )),
-    ("M7 terminal front-end (options, escape sequences, exit codes)", (
+    ("M7 terminal front-end (options, escape sequences, exit codes, update stop, output filter)", (
         "terminal_task_cli_parses_the_terminal_options_of_shell",
         "terminal_task_hints_name_the_session_and_the_leave_sequence",
         "terminal_task_the_escape_character_counts_at_the_start_and_after_a_newline",
@@ -220,6 +221,12 @@ COMMON_TESTS = (
         "terminal_task_closing_messages_name_the_reason",
         "terminal_task_the_remote_term_is_the_local_one_only_when_acceptable",
         "terminal_task_window_sizes_and_notices_are_kept_in_bounds",
+        "terminal_task_a_lost_session_after_an_update_request_is_the_update_stop",
+        "terminal_task_the_win32_input_mode_request_never_reaches_the_local_terminal",
+        "terminal_task_other_modes_of_a_request_with_9001_stay",
+        "terminal_task_a_request_split_anywhere_is_filtered_like_one_read",
+        "terminal_task_other_output_passes_unchanged",
+        "terminal_task_held_back_bytes_are_bounded",
     )),
 )
 UNIX_TESTS = (
@@ -255,6 +262,7 @@ WINDOWS_TESTS = (
         "terminal_task_cmd_runs_in_a_pseudoconsole_with_vt_output",
         "terminal_task_powershell_follows_resize_and_returns_its_exit_code",
         "terminal_task_closing_the_console_ends_a_running_command",
+        "terminal_task_control_c_ends_a_command_in_the_pseudoconsole",
         "terminal_task_resize_after_close_reports_a_closed_console",
         "terminal_task_coordinates_reject_unusable_sizes",
         "terminal_task_environment_block_is_sorted_without_regard_to_case",
@@ -665,7 +673,12 @@ def check_password(term):
 
 def check_raw_stdin(term):
     since = sync(term)
-    term.send("python3 -c 'import tty; tty.setraw(0); print(\"raw ok\")'\r")
+    # The program puts the terminal back as it found it: bash keeps the settings that a
+    # foreground program leaves behind, and a raw terminal (no ICANON, so Ctrl+D is a data
+    # byte) would break the checks after this one. The echo of the typed line never holds
+    # `raw ok`; only the program's output does.
+    term.send("python3 -c 'import termios as t, tty; s = t.tcgetattr(0); tty.setraw(0); "
+              "print(\"raw\", \"ok\"); t.tcsetattr(0, t.TCSADRAIN, s)'\r")
     term.wait(r"raw ok\r?\n", since, 30, what="raw ok")
     sync(term)
 
@@ -1564,6 +1577,7 @@ def stage_linux_share(results, se_binary, work, log_root, fixture):
     a, b, endpoint = fixture.a, fixture.b, fixture.endpoint
     env = tty_env(a)
     canary = "CANARY" + base64.b16encode(os.urandom(6)).decode()
+    canary_ran = []
     owner = None
     try:
         try:
@@ -1580,6 +1594,7 @@ def stage_linux_share(results, se_binary, work, log_root, fixture):
             since = sync(term)
             term.send(f"echo {canary}-$((6*7))\r")
             term.wait(out_line(f"{canary}-42"), since, 30, what="the canary line")
+            canary_ran.append(True)
         run_checks(results, stage, owner, [
             ("(a) tty prints /dev/pts/N", check_tty),
             ("the local terminal is in raw mode while the session runs", check_raw_while_running),
@@ -1594,7 +1609,7 @@ def stage_linux_share(results, se_binary, work, log_root, fixture):
         share_attach(results, se_binary, env, logs, fixture, owner)
         share_cleanup(results, owner)
         share_second_sessions(results, se_binary, env, logs, fixture)
-        share_no_terminal_content(results, b, fixture, canary)
+        share_no_terminal_content(results, b, fixture, canary, bool(canary_ran))
         share_plain_exec(results, se_binary, fixture, logs)
         share_update_stop(results, se_binary, env, logs, fixture)
         share_revoke(results, se_binary, env, logs, fixture)
@@ -1688,11 +1703,13 @@ def share_second_sessions(results, se_binary, env, logs, fixture):
             term.close()
 
 
-def share_no_terminal_content(results, b, fixture, canary):
+def share_no_terminal_content(results, b, fixture, canary, canary_ran):
     stage = "linux-share"
     se_binary = fixture.se
 
     def no_content():
+        # Without the canary line in a terminal session, finding no canary proves nothing.
+        ensure(canary_ran, "the canary line never ran in the terminal session")
         history = b.se(se_binary, "share", "exec", "history", "--json")
         text = history.stdout.decode(errors="replace")
         ensure(history.returncode == 0, history.stderr.decode())
