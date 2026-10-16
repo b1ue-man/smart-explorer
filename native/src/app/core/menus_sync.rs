@@ -1,16 +1,12 @@
-use crate::app::theme;
 use super::prelude::*;
 use super::*;
+use crate::app::theme;
 
 impl App {
     pub(in crate::app) fn ui_menu_connect(&mut self, ui: &mut egui::Ui) {
         ui.add_space(12.0);
         ui.horizontal(|ui| {
-            ui.label(
-                RichText::new("VERBINDEN")
-                    .small()
-                    .color(theme::muted(ui)),
-            );
+            ui.label(RichText::new("VERBINDEN").small().color(theme::muted(ui)));
             if (self.remote.is_some() || self.net_conn.is_some())
                 && ui
                     .small_button("⏏")
@@ -26,10 +22,11 @@ impl App {
         }
         if ui
             .small_button("＋ Neue Verbindung")
-            .on_hover_text("SFTP / FTP / FTPS / Netzlaufwerk")
+            .on_hover_text("SFTP / FTP / FTPS / WebDAV / SMB / Netzlaufwerk")
             .clicked()
         {
             self.connect_form = crate::connect::ConnectForm::default();
+            self.connect_edit = None;
             self.show_connect = true;
         }
         if ui
@@ -45,6 +42,7 @@ impl App {
         // the overflow — older ones beyond the sidebar cap — appears here, so
         // the menu stays uncluttered but no saved connection is ever hidden.
         let mut to_remove: Option<String> = None;
+        let mut to_edit: Option<crate::creds::SavedConnection> = None;
         let mut to_connect: Option<crate::creds::SavedConnection> = None;
         let conns: Vec<crate::creds::SavedConnection> =
             self.saved_connections.iter().rev().cloned().collect();
@@ -71,6 +69,9 @@ impl App {
                         if ui.small_button("×").on_hover_text("Entfernen").clicked() {
                             to_remove = Some(c.account());
                         }
+                        if ui.small_button("✎").on_hover_text("Bearbeiten").clicked() {
+                            to_edit = Some(c.clone());
+                        }
                     });
                 });
             }
@@ -82,6 +83,9 @@ impl App {
         }
         if let Some(acc) = to_remove {
             self.remove_saved_connection_completely(&acc);
+        }
+        if let Some(c) = to_edit {
+            self.open_connection_edit(&c);
         }
         if let Some(c) = to_connect {
             self.connect_saved(&c);
@@ -157,6 +161,5 @@ impl App {
             self.open_settings(settings_ui::SettingsPage::Integration);
             ui.close_menu();
         }
-
     }
 }

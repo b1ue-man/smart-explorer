@@ -36,11 +36,17 @@ pub use archive::{
     pinned_version, resume_auto_update,
 };
 pub use cli_swap::ReplacedCli;
-pub use config::{peek_updater_error, set_update_source, take_updater_error, update_source_str};
+pub use config::{
+    peek_updater_error, set_startup_check, set_update_source, startup_check_enabled,
+    take_updater_error, update_source_str,
+};
 pub use core::is_newer;
 pub use feed::{download_update, download_version, list_remote_versions};
 pub use feed_files::{download_feed_file, file_sha256, read_feed_sha256, read_feed_version};
 pub use flow::{check_async, update_to_latest_async};
+/// The `se` installed next to the running app (the desktop GUI runs it for
+/// `se plugin`).
+pub(crate) use os::installed_cli_path;
 pub use os::revert_to;
 pub use staging::{discard_staged_update, load_staged_update, verify_staged_update};
 pub(crate) use startup_ack::{

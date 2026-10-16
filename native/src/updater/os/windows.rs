@@ -97,7 +97,7 @@ pub(super) fn installed_updater_path() -> Result<PathBuf, String> {
     Ok(dir.join(INSTALLED_UPDATER_EXE))
 }
 
-pub(super) fn installed_cli_path() -> Result<PathBuf, String> {
+pub(crate) fn installed_cli_path() -> Result<PathBuf, String> {
     let cur = std::env::current_exe().map_err(|e| format!("Eigener Pfad unbekannt: {}", e))?;
     let dir = cur
         .parent()

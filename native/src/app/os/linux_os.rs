@@ -75,6 +75,15 @@ pub(in crate::app) fn shell_integration_available() -> bool {
     false
 }
 
+/// Network shares with WNet login (UNC) exist only on Windows; Linux reaches
+/// SMB servers through the SMB protocol of the connection dialog.
+pub(in crate::app) fn unc_connections_available() -> bool {
+    false
+}
+
+/// Child processes of the GUI need no console handling on Linux.
+pub(in crate::app) fn hide_child_console(_command: &mut std::process::Command) {}
+
 pub(in crate::app) fn set_context_menu_enabled(_on: bool) -> std::io::Result<()> {
     Ok(())
 }
