@@ -112,7 +112,7 @@ CLI und MCP hatten keinen Befehl für Sync-Setups. Desktop-Editor: `N/app/core/j
 
 ## Stand nach dem Stapel
 
-Arbeitsbaum vom 2026-10-16 (noch nicht gebaut; Nachweis über die Task-Suite, siehe Plan). „=“ heißt: unverändert wie im Bestand. Für MCP gilt die CLI-Spalte, weil das Werkzeug `se` jeden CLI-Befehl ausführt; der Katalog nennt die neuen Befehle (`N/cli/mcp/catalog.rs:39-41`, Beispiele im Werkzeug `se`) und `status` zeigt Hintergrundwerte und Zahl der Sync-Setups (`N/cli/mcp/status_tools.rs:10-50`).
+Ausgeliefert in v0.5.182 am 2026-10-16 (Nachweis: Suite `luecken-task.yml`, Lauf 38929646147 grün; siehe Plan). „=“ heißt: unverändert wie im Bestand. Für MCP gilt die CLI-Spalte, weil das Werkzeug `se` jeden CLI-Befehl ausführt; der Katalog nennt die neuen Befehle (`N/cli/mcp/catalog.rs:39-41`, Beispiele im Werkzeug `se`) und `status` zeigt Hintergrundwerte und Zahl der Sync-Setups (`N/cli/mcp/status_tools.rs:10-50`).
 
 ### Gespeicherte Verbindungen
 
