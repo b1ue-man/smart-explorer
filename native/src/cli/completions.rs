@@ -87,11 +87,7 @@ fn exec_grant_candidates_from_profiles(
                 format!(
                     "{} · direct · {}",
                     grant.device_name,
-                    if grant.exec.enabled {
-                        "enabled"
-                    } else {
-                        "disabled"
-                    }
+                    exec_state_label(&grant.exec)
                 ),
             )
         });
@@ -113,16 +109,25 @@ fn exec_grant_candidates_from_profiles(
                             "{} / {} · room · {}",
                             room.name,
                             member.device_name,
-                            if member.exec.enabled {
-                                "enabled"
-                            } else {
-                                "disabled"
-                            }
+                            exec_state_label(&member.exec)
                         ),
                     )
                 })
         });
     direct.chain(rooms).collect()
+}
+
+/// `enabled`/`disabled`, plus the account and the program list of a
+/// narrowed grant (`enabled · as deploy · programs uptime,df`).
+fn exec_state_label(exec: &crate::share::ExecGrant) -> String {
+    let mut label = if exec.enabled { "enabled" } else { "disabled" }.to_string();
+    if let Some(account) = exec.run_as.account_name() {
+        label.push_str(&format!(" · as {account}"));
+    }
+    if !exec.programs.is_empty() {
+        label.push_str(&format!(" · programs {}", exec.programs.join(",")));
+    }
+    label
 }
 
 pub(super) fn peer_candidates() -> Vec<clap_complete::CompletionCandidate> {
@@ -388,5 +393,21 @@ mod tests {
             finished_at: None,
             terminal: None,
         }
+    }
+
+    #[test]
+    fn luecken_task_exec_grant_completion_names_account_and_programs() {
+        let mut exec = crate::share::ExecGrant::default();
+        assert_eq!(super::exec_state_label(&exec), "disabled");
+        exec.enabled = true;
+        assert_eq!(super::exec_state_label(&exec), "enabled");
+        exec.run_as = crate::share::ExecRunAs::Account {
+            name: "deploy".into(),
+        };
+        exec.programs = vec!["uptime".into(), "/usr/bin/df".into()];
+        assert_eq!(
+            super::exec_state_label(&exec),
+            "enabled · as deploy · programs uptime,/usr/bin/df"
+        );
     }
 }

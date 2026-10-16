@@ -118,6 +118,14 @@ pub(crate) fn exec_audit_tail(lines: usize) -> std::io::Result<Vec<String>> {
     exec_audit::tail(lines)
 }
 
+pub(crate) use self::exec_audit::{ExecAuditEntry, MAX_VIEW_ENTRIES as MAX_EXEC_AUDIT_VIEW};
+
+/// The last `lines` entries (at most `MAX_EXEC_AUDIT_VIEW`) of this host's
+/// Exec audit log as the GUIs show them: newest first, every field cleaned.
+pub(crate) fn exec_audit_entries(lines: usize) -> std::io::Result<Vec<ExecAuditEntry>> {
+    exec_audit::view(lines)
+}
+
 /// Whether this host can run a granted device's commands as another local
 /// account than the worker's own (Linux with a root worker).
 pub(crate) fn exec_run_as_supported() -> bool {

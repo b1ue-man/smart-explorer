@@ -122,6 +122,8 @@ pub(super) fn values(profiles: &crate::share::ShareProfiles) -> Vec<serde_json::
                     "enabled": grant.exec.enabled,
                     "policy_revision": grant.exec.policy_revision,
                     "changed_at": grant.exec.changed_at,
+                    "run_as": exec_run_as(&grant.exec),
+                    "programs": grant.exec.programs,
                 },
                 "connectivity": {"state": "unknown", "label": "Not tracked per grant"},
                 "tracked": !requests.is_empty(),
@@ -146,7 +148,7 @@ pub(super) fn text(profiles: &crate::share::ShareProfiles) -> Vec<String> {
             .collect::<Vec<_>>()
             .join(",");
         lines.push(format!(
-            "grant\t{}\tdevice_name={}\tfingerprint={}\tstate={}\tupdated_at={}\tauthorization={}\twrite={}\texec={}\texec_revision={}\tconnectivity=unknown\trequest_ids={}\tlegacy_selectors={}",
+            "grant\t{}\tdevice_name={}\tfingerprint={}\tstate={}\tupdated_at={}\tauthorization={}\twrite={}\texec={}\texec_revision={}\tconnectivity=unknown\trequest_ids={}\tlegacy_selectors={}\texec_run_as={}\texec_programs={}",
             clean(&grant.device_id),
             clean(&grant.device_name),
             clean(&grant.fingerprint),
@@ -162,12 +164,32 @@ pub(super) fn text(profiles: &crate::share::ShareProfiles) -> Vec<String> {
             grant.exec.policy_revision,
             request_ids,
             legacy_selectors,
+            exec_run_as(&grant.exec),
+            exec_programs_text(&grant.exec),
         ));
         for entry in related {
             lines.extend(lifecycle_output::request_text(entry, profiles));
         }
     }
     lines
+}
+
+/// `standard` (the worker's own account, "Standardnutzer") or the account.
+pub(super) fn exec_run_as(exec: &crate::share::ExecGrant) -> String {
+    exec.run_as.account_name().unwrap_or("standard").to_string()
+}
+
+/// `full-shell` for an empty program list, otherwise the programs.
+pub(super) fn exec_programs_text(exec: &crate::share::ExecGrant) -> String {
+    if exec.programs.is_empty() {
+        "full-shell".into()
+    } else {
+        exec.programs
+            .iter()
+            .map(|program| clean(program))
+            .collect::<Vec<_>>()
+            .join(",")
+    }
 }
 
 fn list(json: bool) -> Result<(), String> {
