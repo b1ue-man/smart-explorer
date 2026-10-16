@@ -19,6 +19,17 @@ pub(super) fn description() -> &'static str {
     "Windows Credential Manager"
 }
 
+/// Credential Manager encrypts with DPAPI itself; there is nothing to port.
+pub(super) fn status() -> Option<Result<String, String>> {
+    None
+}
+
+/// Nothing to port: no earlier version stored plaintext outside the
+/// Credential Manager.
+pub(super) fn port_store() -> Result<(), String> {
+    Ok(())
+}
+
 fn entry(account: &str) -> Result<Entry, String> {
     let service = keyring_service_name()?;
     Entry::new(service.as_ref(), account)

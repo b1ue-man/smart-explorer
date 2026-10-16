@@ -25,13 +25,25 @@ pub(crate) fn init(config: &str) -> Result<Value, ApiError> {
         runtime.emit(json!({ "type": "volumes" }));
         return Ok(info(runtime));
     }
+    let key_warning = install_secrets_key(config);
     prepare_host(&settings)?;
+    // The data directory is known now. Seal plaintext records of earlier
+    // versions before anything reads a secret and before the embedded worker
+    // starts Share; a failure is only logged below and retried at the next
+    // access.
+    let port_result = crate::creds::port_secret_store();
     crate::install_panic_logger();
     // A process started in the background must not enqueue scheduled jobs
     // before the host said whether its own worker owns them.
     crate::daemon::defer_scheduling_until_reported();
     let runtime = Runtime::install(Runtime::detached(settings));
     runtime.set_volumes(runtime.config().volumes.clone());
+    if let Some(warning) = key_warning {
+        runtime.log_error("Geheimnisspeicher-Schlüssel", &warning);
+    }
+    if let Err(error) = port_result {
+        runtime.log_error("Geheimnisspeicher portieren", &error);
+    }
     crate::cloud::set_url_opener(Box::new(move |url: &str| {
         runtime.emit(json!({ "type": "openUrl", "url": url }));
     }));
@@ -49,6 +61,23 @@ fn info(runtime: &Runtime) -> Value {
         "coreVersion": env!("CARGO_PKG_VERSION"),
         "dataDir": runtime.config().data_dir().to_string_lossy(),
     })
+}
+
+/// `secretsKey` (api.md §1): the credential store's data key, which the app
+/// keeps wrapped by a non-exportable Android Keystore key (`SecretsKey.kt`).
+/// Installed before anything reads a credential; it is not kept in the
+/// settings. A missing key (Keystore failure) leaves sealed records closed
+/// and the store reports why (`creds::key_protector`). A malformed key never
+/// stops the start either: the returned warning (never the key) is logged and
+/// the sealed records stay closed until a valid key arrives.
+fn install_secrets_key(config: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(config).ok()?;
+    let hex = value.get("secretsKey").and_then(Value::as_str)?;
+    let Some(bytes) = crate::creds::sealed_record::hex_decode(hex).map(zeroize::Zeroizing::new)
+    else {
+        return Some("secretsKey ist kein Hex; versiegelte Einträge bleiben geschlossen".into());
+    };
+    crate::creds::install_host_data_key(&bytes).err()
 }
 
 fn prepare_host(settings: &HostSettings) -> Result<(), ApiError> {
@@ -168,5 +197,26 @@ fn remove_old_children(runtime: &Runtime, dir: &Path, max_age: Duration) {
                 &format!("{}: {error}", path.display()),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::install_secrets_key;
+
+    #[test]
+    fn luecken_task_a_malformed_secrets_key_is_a_warning_not_a_failed_start() {
+        let warning = install_secrets_key(r#"{"secretsKey":"not-hex-at-all"}"#)
+            .expect("a malformed key must be reported");
+        assert!(!warning.contains("not-hex-at-all"));
+        let warning = install_secrets_key(r#"{"secretsKey":"abcd"}"#)
+            .expect("a key of the wrong length must be reported");
+        assert!(!warning.contains("abcd"));
+    }
+
+    #[test]
+    fn luecken_task_a_missing_secrets_key_is_not_a_warning() {
+        assert_eq!(install_secrets_key(r#"{"secretsKey":null}"#), None);
+        assert_eq!(install_secrets_key(r#"{"filesDir":"/x"}"#), None);
     }
 }

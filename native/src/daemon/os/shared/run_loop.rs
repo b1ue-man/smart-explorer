@@ -93,6 +93,12 @@ pub(crate) fn run_daemon_with(handoff: Option<Handoff>) {
             return;
         }
     };
+    // Seal plaintext secrets of earlier versions before Share starts, even
+    // when nothing reads a secret. A failure is logged and retried at the next
+    // access; it never stops the worker.
+    if let Err(error) = crate::creds::port_secret_store() {
+        log(&format!("credential store port failed: {error}"));
+    }
     // Publish the lightweight control plane before starting Iroh. A terminal
     // client can now observe the daemon immediately even when relay discovery
     // makes the initial Share load take several seconds.

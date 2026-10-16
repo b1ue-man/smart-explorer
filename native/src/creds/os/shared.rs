@@ -2,8 +2,9 @@
 //!
 //! Two parts, deliberately separated:
 //!  * **Secrets** (passwords / key passphrases) → the platform credential
-//!    backend. Windows uses Credential Manager; Linux uses bounded,
-//!    owner-protected files so headless sessions do not depend on D-Bus.
+//!    backend. Windows uses Credential Manager; Linux and Android use bounded,
+//!    owner-protected files sealed with a protected data key, so headless
+//!    sessions do not depend on D-Bus (`key_protector.rs`).
 //!  * **Connection metadata** (protocol / host / port / user / auth kind / key
 //!    path / root / label — NO secret) → a plain TSV file in appdata, so the
 //!    saved-connection list survives restarts.
@@ -89,6 +90,34 @@ pub fn delete_secret(account: &str) {
 /// nothing about individual accounts and never reads secret material.
 pub fn secret_store_description() -> &'static str {
     secure_store::description()
+}
+
+/// Protector of the data key and plaintext records still waiting for the
+/// port (Linux, Android); `None` where the OS store encrypts (Windows).
+pub fn secret_store_status() -> Option<Result<String, String>> {
+    secure_store::status()
+}
+
+/// Seals plaintext records of earlier versions (Linux, Android) without
+/// reading any secret, so nothing stays in plaintext when no process ever
+/// reads a credential. Called at worker start, app start and by `se doctor`;
+/// a failure leaves every record as it was and is retried at the next
+/// access. Windows: nothing to port.
+pub fn port_secret_store() -> Result<(), String> {
+    secure_store::port_store()
+}
+
+/// Android: the data key the app unwrapped from the Android Keystore. Must be
+/// installed before the first credential access of the process.
+#[cfg(not(windows))]
+pub fn install_host_data_key(bytes: &[u8]) -> Result<(), String> {
+    super::key_protector::install_host_data_key(bytes)
+}
+
+/// Windows has no host data key: the Credential Manager protects the secrets.
+#[cfg(windows)]
+pub fn install_host_data_key(_bytes: &[u8]) -> Result<(), String> {
+    Ok(())
 }
 
 /// Verify that the selected backend can be opened without creating a secret.

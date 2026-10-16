@@ -1,35 +1,64 @@
-use sha2::{Digest, Sha256};
-use std::ffi::CString;
-use std::fs::{DirBuilder, File, OpenOptions};
-use std::io::{self, Read, Write};
-use std::os::fd::{AsRawFd, FromRawFd, RawFd};
-use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+//! File credential store of Linux and Android (`secrets-v1/`).
+//!
+//! Every record is sealed with the store's data key (`sealed_record.rs`);
+//! the key is held by the protector recorded in `keyring-v2`
+//! (`key_protector.rs`). Plaintext records of earlier versions are ported
+//! without any secret access when a worker, the app or `se doctor` starts
+//! (`FileStore::port_existing`) and otherwise on the first access of each
+//! process, then overwritten (`linux_file_store_migrate.rs`). Directory 0700,
+//! files 0600, one `flock` for every access.
 use std::path::PathBuf;
+use std::sync::Arc;
 
-const DIRECTORY_MODE: u32 = 0o700;
-const FILE_MODE: u32 = 0o600;
-const LOCK_NAME: &str = "store.lock";
-const MAGIC: &[u8; 8] = b"SESEC01\0";
-const FORMAT_VERSION: u8 = 1;
-const ACCOUNT_DIGEST_BYTES: usize = 32;
-const CHECKSUM_BYTES: usize = 32;
-const HEADER_BYTES: usize = MAGIC.len() + 1 + ACCOUNT_DIGEST_BYTES + 4;
-const MIN_RECORD_BYTES: usize = HEADER_BYTES + CHECKSUM_BYTES;
-const MAX_SECRET_BYTES: usize = 64 * 1024;
-const MAX_RECORD_BYTES: usize = HEADER_BYTES + MAX_SECRET_BYTES + CHECKSUM_BYTES;
-const STAGE_ATTEMPTS: usize = 64;
+use zeroize::Zeroizing;
+
+#[path = "linux_file_store_fs.rs"]
+mod fs;
+#[path = "linux_file_store_keys.rs"]
+mod keys;
+#[path = "linux_file_store_migrate.rs"]
+mod migrate;
+
+use self::fs::{
+    acquire_lock, open_directory, open_entry, open_existing_directory, read_entry, unlink_in,
+    write_entry,
+};
+use crate::creds::key_protector::{KeyProtector, PlatformProtector};
+use crate::creds::sealed_record::{
+    account_digest, open_legacy, open_sealed, record_kind, record_name_for_digest, seal,
+    RecordKind, MAX_RECORD_BYTES, MAX_SECRET_BYTES,
+};
 
 pub(super) struct FileStore {
     directory: PathBuf,
+    protector: Arc<dyn KeyProtector>,
 }
 
-struct StoreLock {
-    _file: File,
+/// Where the store stands, for `se doctor`.
+#[derive(Default)]
+pub(super) struct StoreStatus {
+    pub(super) protector: Option<String>,
+    /// Plaintext records still waiting for the port.
+    pub(super) plaintext_records: usize,
+    /// Leftover stage files of interrupted writes.
+    pub(super) stage_files: usize,
+    /// Record files the store cannot inspect (see `migrate::Pending`).
+    pub(super) unreadable_records: usize,
+    /// Why the data key cannot be recovered (a descriptor exists, the
+    /// protector delivers no key); `None` when the key opens or is not made yet.
+    pub(super) locked: Option<String>,
 }
 
 impl FileStore {
     pub(super) fn new(directory: PathBuf) -> Self {
-        Self { directory }
+        Self::with_protector(directory, Arc::new(PlatformProtector))
+    }
+
+    pub(super) fn with_protector(directory: PathBuf, protector: Arc<dyn KeyProtector>) -> Self {
+        Self {
+            directory,
+            protector,
+        }
     }
 
     pub(super) fn set(&self, account: &str, secret: &str) -> Result<(), String> {
@@ -39,101 +68,158 @@ impl FileStore {
                 "Linux credential store: secret exceeds {MAX_SECRET_BYTES} bytes"
             ));
         }
-
-        let directory = self.open_directory()?;
+        let directory = open_directory(&self.directory)?;
         let _lock = acquire_lock(&directory)?;
-        let final_name = record_name(account);
-        validate_existing_record(&directory, &final_name)?;
-        let record = encode_record(account, secret);
-        let (stage_name, mut stage) = create_stage(&directory)?;
-        let mut promoted = false;
-        let result = (|| {
-            stage
-                .write_all(&record)
-                .map_err(|error| io_error("write staged record", error))?;
-            stage
-                .sync_all()
-                .map_err(|error| io_error("sync staged record", error))?;
-            validate_record_file(&stage, "staged record")?;
-            drop(stage);
-            rename_in(&directory, &stage_name, &final_name)?;
-            promoted = true;
-            directory
-                .sync_all()
-                .map_err(|error| io_error("sync credential directory", error))
-        })();
-        if result.is_err() && !promoted {
-            let _ = unlink_in(&directory, &stage_name);
+        // Porting other accounts never blocks this write (see `get`).
+        let _ = self.port_once(&directory);
+        let digest = account_digest(account);
+        let name = record_name_for_digest(&digest);
+        // An older version may have written this record in plaintext after
+        // this process ported the store: its old bytes are overwritten once
+        // the sealed record has replaced it.
+        let replaced_plaintext = match open_entry(&directory, &name, true)? {
+            Some(existing) => {
+                fs::validate_record_file(&existing, "existing credential record")?;
+                holds_plaintext(&existing).then_some(existing)
+            }
+            None => None,
+        };
+        let key = keys::load_or_create(&directory, &self.directory, self.protector.as_ref())?;
+        let record = seal(&digest, secret.as_bytes(), &key)?;
+        write_entry(&directory, &name, &record)?;
+        if let Some(old) = replaced_plaintext {
+            fs::scrub(&old);
         }
-        result
+        Ok(())
     }
 
     pub(super) fn get(&self, account: &str) -> Result<Option<String>, String> {
         validate_account(account)?;
-        let directory = self.open_directory()?;
+        let directory = open_directory(&self.directory)?;
         let _lock = acquire_lock(&directory)?;
-        let name = record_name(account);
-        let Some(file) = open_record(&directory, &name)? else {
+        // A failed port never blocks reading: plaintext records stay
+        // readable until the next access ports them.
+        let _ = self.port_once(&directory);
+        let digest = account_digest(account);
+        let name = record_name_for_digest(&digest);
+        let Some(file) = open_entry(&directory, &name, false)? else {
             return Ok(None);
         };
-        let size = validate_record_file(&file, "credential record")?;
-        if size > MAX_RECORD_BYTES {
-            return Err(format!(
-                "Linux credential store: record exceeds {MAX_RECORD_BYTES} bytes"
-            ));
-        }
-        let mut bytes = Vec::with_capacity(size);
-        file.take((MAX_RECORD_BYTES + 1) as u64)
-            .read_to_end(&mut bytes)
-            .map_err(|error| io_error("read credential record", error))?;
-        decode_record(account, &bytes).map(Some)
+        let bytes = read_entry(&file, "credential record", MAX_RECORD_BYTES)?;
+        let secret: Zeroizing<Vec<u8>> = match record_kind(&bytes)? {
+            RecordKind::Sealed(_) => {
+                let keys::StoreKey::Ready(key) =
+                    keys::load(&directory, &self.directory, self.protector.as_ref())?
+                else {
+                    return Err(
+                        "Geheimnisspeicher gesperrt: verschlüsselter Eintrag ohne Schlüsselbeschreibung"
+                            .into(),
+                    );
+                };
+                open_sealed(&digest, &bytes, &key)?
+            }
+            RecordKind::Legacy => {
+                // Written by an older version after this process ported the
+                // store: read it, then port it right away (best effort).
+                let secret = open_legacy(&digest, &bytes)?;
+                if let Ok(key) =
+                    keys::load_or_create(&directory, &self.directory, self.protector.as_ref())
+                {
+                    let _ = migrate::port_record(&directory, &name, &digest, &key);
+                }
+                secret
+            }
+        };
+        String::from_utf8(secret.to_vec())
+            .map(Some)
+            .map_err(|_| "Linux credential store: secret is not valid UTF-8".into())
     }
 
     pub(super) fn delete(&self, account: &str) -> Result<(), String> {
         validate_account(account)?;
-        let directory = self.open_directory()?;
+        let directory = open_directory(&self.directory)?;
         let _lock = acquire_lock(&directory)?;
-        let name = record_name(account);
-        let Some(file) = open_record(&directory, &name)? else {
+        let name = record_name_for_digest(&account_digest(account));
+        let Some(file) = open_entry(&directory, &name, true)? else {
             return Ok(());
         };
-        validate_record_file(&file, "credential record")?;
-        drop(file);
+        fs::validate_record_file(&file, "credential record")?;
         unlink_in(&directory, &name)?;
+        fs::scrub(&file);
         directory
             .sync_all()
-            .map_err(|error| io_error("sync credential directory", error))
+            .map_err(|error| fs::io_error("sync credential directory", error))
     }
 
-    fn open_directory(&self) -> Result<File, String> {
-        let created = match DirBuilder::new()
-            .mode(DIRECTORY_MODE)
-            .create(&self.directory)
-        {
-            Ok(()) => true,
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => false,
-            Err(error) => return Err(io_error("create credential directory", error)),
+    /// Protector in use, what still waits for the port, and whether the data
+    /// key opens. Creates nothing.
+    pub(super) fn status(&self) -> Result<StoreStatus, String> {
+        let Some(directory) = open_existing_directory(&self.directory)? else {
+            return Ok(StoreStatus::default());
         };
-        if created {
-            std::fs::set_permissions(
-                &self.directory,
-                std::fs::Permissions::from_mode(DIRECTORY_MODE),
-            )
-            .map_err(|error| io_error("set credential directory permissions", error))?;
+        let _lock = acquire_lock(&directory)?;
+        let pending = migrate::scan(&directory, &self.directory)?;
+        let protector = keys::protector_name(&directory)?;
+        let locked = if protector.is_some() {
+            keys::load(&directory, &self.directory, self.protector.as_ref()).err()
+        } else {
+            None
+        };
+        Ok(StoreStatus {
+            protector,
+            plaintext_records: pending.legacy.len(),
+            stage_files: pending.stages.len(),
+            unreadable_records: pending.unreadable,
+            locked,
+        })
+    }
+
+    /// Ports plaintext records and leftover stage files without reading any
+    /// secret: at worker start, app start and `se doctor`, so nothing stays in
+    /// plaintext on a host where no process ever reads a secret. Creates
+    /// nothing when there is no store directory yet.
+    pub(super) fn port_existing(&self) -> Result<(), String> {
+        let Some(directory) = open_existing_directory(&self.directory)? else {
+            return Ok(());
+        };
+        let _lock = acquire_lock(&directory)?;
+        self.port_once(&directory)
+    }
+
+    /// Ports plaintext records once per process and directory; the process is
+    /// marked only after everything succeeded, so a failure is retried at the
+    /// next access. Leftover stage files go first and need no key; the data
+    /// key is created only when there is a plaintext record to seal.
+    fn port_once(&self, directory: &std::fs::File) -> Result<(), String> {
+        if migrate::already_ported(&self.directory) {
+            return Ok(());
         }
-        let directory = OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
-            .open(&self.directory)
-            .map_err(|error| io_error("open credential directory", error))?;
-        validate_directory(&directory)?;
-        Ok(directory)
+        let pending = migrate::scan(directory, &self.directory)?;
+        let mut failed = migrate::clear_stages(directory, &pending)?;
+        if !pending.legacy.is_empty() {
+            let key = keys::load_or_create(directory, &self.directory, self.protector.as_ref())?;
+            failed += migrate::port_legacy(directory, &pending, &key);
+        }
+        if failed > 0 {
+            return Err(format!(
+                "Linux credential store: {failed} plaintext record(s) or stage file(s) could not be ported yet"
+            ));
+        }
+        migrate::mark_ported(&self.directory);
+        Ok(())
     }
 
     #[cfg(test)]
     fn record_path(&self, account: &str) -> PathBuf {
-        self.directory.join(record_name(account))
+        self.directory
+            .join(record_name_for_digest(&account_digest(account)))
     }
+}
+
+/// Whether an open record file still holds the plaintext format 1.
+fn holds_plaintext(file: &std::fs::File) -> bool {
+    read_entry(file, "existing credential record", MAX_RECORD_BYTES)
+        .is_ok_and(|bytes| matches!(record_kind(&bytes), Ok(RecordKind::Legacy)))
 }
 
 fn validate_account(account: &str) -> Result<(), String> {
@@ -142,273 +228,6 @@ fn validate_account(account: &str) -> Result<(), String> {
     } else {
         Ok(())
     }
-}
-
-fn validate_directory(directory: &File) -> Result<(), String> {
-    let metadata = directory
-        .metadata()
-        .map_err(|error| io_error("inspect credential directory", error))?;
-    let uid = unsafe { libc::geteuid() };
-    if !metadata.file_type().is_dir()
-        || metadata.uid() != uid
-        || metadata.mode() & 0o7777 != DIRECTORY_MODE
-    {
-        return Err(
-            "Linux credential store: directory must be user-owned mode 0700 and not a link".into(),
-        );
-    }
-    Ok(())
-}
-
-fn acquire_lock(directory: &File) -> Result<StoreLock, String> {
-    let name = c_name(LOCK_NAME)?;
-    let exclusive_flags = libc::O_RDWR
-        | libc::O_CREAT
-        | libc::O_EXCL
-        | libc::O_NOFOLLOW
-        | libc::O_CLOEXEC
-        | libc::O_NONBLOCK;
-    let (fd, created) = match openat(directory.as_raw_fd(), &name, exclusive_flags, FILE_MODE) {
-        Ok(fd) => (fd, true),
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => (
-            openat(
-                directory.as_raw_fd(),
-                &name,
-                libc::O_RDWR | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
-                0,
-            )
-            .map_err(|error| io_error("open credential lock", error))?,
-            false,
-        ),
-        Err(error) => return Err(io_error("create credential lock", error)),
-    };
-    let file = unsafe { File::from_raw_fd(fd) };
-    if created {
-        file.set_permissions(std::fs::Permissions::from_mode(FILE_MODE))
-            .map_err(|error| io_error("set credential lock permissions", error))?;
-    }
-    validate_secure_file(&file, "credential lock")?;
-    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
-        return Err(io_error(
-            "lock credential store",
-            io::Error::last_os_error(),
-        ));
-    }
-    validate_secure_file(&file, "credential lock")?;
-    Ok(StoreLock { _file: file })
-}
-
-fn validate_existing_record(directory: &File, name: &str) -> Result<(), String> {
-    if let Some(file) = open_record(directory, name)? {
-        validate_record_file(&file, "existing credential record")?;
-    }
-    Ok(())
-}
-
-fn open_record(directory: &File, name: &str) -> Result<Option<File>, String> {
-    let name = c_name(name)?;
-    match openat(
-        directory.as_raw_fd(),
-        &name,
-        libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
-        0,
-    ) {
-        Ok(fd) => Ok(Some(unsafe { File::from_raw_fd(fd) })),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(io_error("open credential record", error)),
-    }
-}
-
-fn validate_record_file(file: &File, label: &str) -> Result<usize, String> {
-    validate_secure_file(file, label)?;
-    let length = file
-        .metadata()
-        .map_err(|error| io_error(&format!("inspect {label}"), error))?
-        .len();
-    usize::try_from(length)
-        .map_err(|_| format!("Linux credential store: {label} length does not fit this platform"))
-}
-
-fn validate_secure_file(file: &File, label: &str) -> Result<(), String> {
-    let metadata = file
-        .metadata()
-        .map_err(|error| io_error(&format!("inspect {label}"), error))?;
-    let uid = unsafe { libc::geteuid() };
-    if !metadata.file_type().is_file()
-        || metadata.uid() != uid
-        || metadata.mode() & 0o7777 != FILE_MODE
-        || metadata.nlink() != 1
-    {
-        return Err(format!(
-            "Linux credential store: {label} must be a single-link, user-owned mode 0600 regular file"
-        ));
-    }
-    Ok(())
-}
-
-fn create_stage(directory: &File) -> Result<(String, File), String> {
-    for _ in 0..STAGE_ATTEMPTS {
-        let mut nonce = [0u8; 16];
-        getrandom::getrandom(&mut nonce)
-            .map_err(|error| format!("Linux credential store: generate staging nonce: {error}"))?;
-        let name = format!(".stage-{}-{}", std::process::id(), hex(&nonce));
-        let c_name = c_name(&name)?;
-        match openat(
-            directory.as_raw_fd(),
-            &c_name,
-            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-            FILE_MODE,
-        ) {
-            Ok(fd) => {
-                let file = unsafe { File::from_raw_fd(fd) };
-                let setup = file
-                    .set_permissions(std::fs::Permissions::from_mode(FILE_MODE))
-                    .map_err(|error| io_error("set staged record permissions", error))
-                    .and_then(|()| validate_secure_file(&file, "staged record"));
-                match setup {
-                    Ok(()) => return Ok((name, file)),
-                    Err(error) => {
-                        drop(file);
-                        let _ = unlink_in(directory, &name);
-                        return Err(error);
-                    }
-                }
-            }
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(io_error("create staged record", error)),
-        }
-    }
-    Err("Linux credential store: could not allocate a unique staging file".into())
-}
-
-fn openat(directory: RawFd, name: &CString, flags: i32, mode: u32) -> io::Result<RawFd> {
-    let fd = unsafe { libc::openat(directory, name.as_ptr(), flags, mode) };
-    if fd < 0 {
-        Err(io::Error::last_os_error())
-    } else {
-        Ok(fd)
-    }
-}
-
-fn rename_in(directory: &File, source: &str, destination: &str) -> Result<(), String> {
-    let source = c_name(source)?;
-    let destination = c_name(destination)?;
-    if unsafe {
-        libc::renameat(
-            directory.as_raw_fd(),
-            source.as_ptr(),
-            directory.as_raw_fd(),
-            destination.as_ptr(),
-        )
-    } != 0
-    {
-        return Err(io_error(
-            "promote credential record",
-            io::Error::last_os_error(),
-        ));
-    }
-    Ok(())
-}
-
-fn unlink_in(directory: &File, name: &str) -> Result<(), String> {
-    let name = c_name(name)?;
-    if unsafe { libc::unlinkat(directory.as_raw_fd(), name.as_ptr(), 0) } != 0 {
-        let error = io::Error::last_os_error();
-        if error.kind() != io::ErrorKind::NotFound {
-            return Err(io_error("remove credential record", error));
-        }
-    }
-    Ok(())
-}
-
-fn encode_record(account: &str, secret: &str) -> Vec<u8> {
-    let account_digest = account_digest(account);
-    let mut record = Vec::with_capacity(HEADER_BYTES + secret.len() + CHECKSUM_BYTES);
-    record.extend_from_slice(MAGIC);
-    record.push(FORMAT_VERSION);
-    record.extend_from_slice(&account_digest);
-    record.extend_from_slice(&(secret.len() as u32).to_be_bytes());
-    record.extend_from_slice(secret.as_bytes());
-    let checksum = Sha256::digest(&record);
-    record.extend_from_slice(&checksum);
-    record
-}
-
-fn decode_record(account: &str, record: &[u8]) -> Result<String, String> {
-    if record.len() < MIN_RECORD_BYTES {
-        return Err("Linux credential store: truncated credential record".into());
-    }
-    if record.len() > MAX_RECORD_BYTES {
-        return Err(format!(
-            "Linux credential store: record exceeds {MAX_RECORD_BYTES} bytes"
-        ));
-    }
-    if &record[..MAGIC.len()] != MAGIC {
-        return Err("Linux credential store: invalid credential record magic".into());
-    }
-    if record[MAGIC.len()] != FORMAT_VERSION {
-        return Err("Linux credential store: unsupported credential record version".into());
-    }
-    let digest_start = MAGIC.len() + 1;
-    let digest_end = digest_start + ACCOUNT_DIGEST_BYTES;
-    if record[digest_start..digest_end] != account_digest(account) {
-        return Err("Linux credential store: credential record belongs to another account".into());
-    }
-    let length_end = digest_end + 4;
-    let secret_length = u32::from_be_bytes(
-        record[digest_end..length_end]
-            .try_into()
-            .map_err(|_| "Linux credential store: invalid secret length".to_string())?,
-    ) as usize;
-    if secret_length > MAX_SECRET_BYTES {
-        return Err(format!(
-            "Linux credential store: secret exceeds {MAX_SECRET_BYTES} bytes"
-        ));
-    }
-    let expected = HEADER_BYTES
-        .checked_add(secret_length)
-        .and_then(|length| length.checked_add(CHECKSUM_BYTES))
-        .ok_or_else(|| "Linux credential store: credential length overflow".to_string())?;
-    if record.len() != expected {
-        return Err("Linux credential store: credential record length mismatch".into());
-    }
-    let checksum_start = expected - CHECKSUM_BYTES;
-    let expected_checksum = Sha256::digest(&record[..checksum_start]);
-    if record[checksum_start..] != expected_checksum[..] {
-        return Err("Linux credential store: credential record checksum mismatch".into());
-    }
-    String::from_utf8(record[HEADER_BYTES..checksum_start].to_vec())
-        .map_err(|_| "Linux credential store: secret is not valid UTF-8".into())
-}
-
-fn record_name(account: &str) -> String {
-    format!("{}.secret", hex(&account_digest(account)))
-}
-
-fn account_digest(account: &str) -> [u8; ACCOUNT_DIGEST_BYTES] {
-    let mut hasher = Sha256::new();
-    hasher.update(b"smart_explorer\0");
-    hasher.update(account.as_bytes());
-    hasher.finalize().into()
-}
-
-fn hex(bytes: &[u8]) -> String {
-    const DIGITS: &[u8; 16] = b"0123456789abcdef";
-    let mut output = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        output.push(DIGITS[(byte >> 4) as usize] as char);
-        output.push(DIGITS[(byte & 0x0f) as usize] as char);
-    }
-    output
-}
-
-fn c_name(name: &str) -> Result<CString, String> {
-    CString::new(name)
-        .map_err(|_| "Linux credential store: generated filename contains NUL".to_string())
-}
-
-fn io_error(action: &str, error: io::Error) -> String {
-    format!("Linux credential store: {action}: {error}")
 }
 
 #[cfg(test)]
