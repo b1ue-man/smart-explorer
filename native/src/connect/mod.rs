@@ -11,6 +11,8 @@
 
 #[path = "os/shared/cleanup.rs"]
 mod cleanup;
+#[path = "os/shared/connection_edit.rs"]
+mod connection_edit;
 #[path = "os/shared/connector.rs"]
 mod connector;
 #[path = "core/endpoint.rs"]
@@ -35,6 +37,7 @@ mod ssh_session;
 mod types;
 
 pub use cleanup::cleanup_removed_endpoint_state;
+pub use connection_edit::{same_secret_kind, save_edited_connection, ConnectionEdit};
 #[allow(unused_imports)]
 pub use connector::open_saved_at;
 pub(crate) use connector::open_saved_at_for_mount;

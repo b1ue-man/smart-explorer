@@ -158,21 +158,12 @@ fn parse_input(args: &Value) -> Result<Input, ApiError> {
     })
 }
 
-/// Password and key passphrase are different secrets; a key file that only
-/// moved keeps its passphrase.
-fn same_secret_kind(left: &AuthKind, right: &AuthKind) -> bool {
-    matches!(
-        (left, right),
-        (AuthKind::Password, AuthKind::Password) | (AuthKind::Key { .. }, AuthKind::Key { .. })
-    )
-}
-
 /// The secret stored for `id`, if it is the kind of secret `auth` needs.
 fn stored_secret(id: &str, auth: &AuthKind) -> Result<Option<String>, ApiError> {
     let same_kind = load_all()?
         .iter()
         .find(|connection| connection.account() == id)
-        .is_some_and(|previous| same_secret_kind(&previous.auth, auth));
+        .is_some_and(|previous| crate::connect::same_secret_kind(&previous.auth, auth));
     if !same_kind {
         // A password must never be used as a key passphrase or vice versa.
         return Ok(None);
@@ -207,52 +198,24 @@ pub(super) fn test(args: &Value) -> Result<Value, ApiError> {
 pub(super) fn save(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
     let input = parse_input(args)?;
     let saved = crate::connect::build_saved(&input.form, input.port);
-    let account = saved.account();
     let previous = match &input.id {
         Some(id) => Some(find(id)?),
         None => None,
     };
-    let old_account = previous.as_ref().map(SavedConnection::account);
-    let moved = old_account.as_ref().is_some_and(|old| *old != account);
-    let kind_changed = previous
-        .as_ref()
-        .is_some_and(|previous| !same_secret_kind(&previous.auth, &saved.auth));
-    // An empty secret keeps the stored one; a moved entry takes it along.
-    let secret = if !input.secret.is_empty() {
-        Some(input.secret.clone())
-    } else if moved && !kind_changed {
-        match &old_account {
-            Some(old) => crate::creds::get_secret_checked(old)
-                .map_err(|error| ApiError::new("internal", error))?,
-            None => None,
-        }
-    } else {
-        None
-    };
-    crate::creds::save_connection_with_secret(&saved, secret.as_deref())
-        .map_err(|error| ApiError::new("internal", error))?;
-    if kind_changed && input.secret.is_empty() {
-        // A password must never be used as a key passphrase or vice versa.
-        if let Err(error) = crate::creds::delete_secret_checked(&account) {
-            rt.log_error("conn.save", &error);
-        }
-    }
-    if moved {
-        if let Some(old) = &old_account {
-            if let Err(error) = crate::creds::remove_connection(old) {
-                rt.log_error(
-                    "conn.save",
-                    &format!("Alte Verbindung nicht entfernt: {error}"),
-                );
-            }
-        }
+    // The desktop and `se connections edit` share this path: a moved entry
+    // takes its secret along, an empty secret keeps the stored one.
+    let edit =
+        crate::connect::save_edited_connection(previous.as_ref(), saved, Some(&input.secret))
+            .map_err(|error| ApiError::new("internal", error))?;
+    for warning in &edit.warnings {
+        rt.log_error("conn.save", warning);
     }
     if let Some(previous) = &previous {
         // Open sessions still use the old settings or credentials.
         let scope = crate::connect::RemovedEndpointScope::for_saved_connection(previous);
         rt.drop_backends(&|key| scope.matches_key(key));
     }
-    Ok(connection_json(&saved))
+    Ok(connection_json(&edit.saved))
 }
 
 /// Desktop removal: the connection and its secret, then favourites, folder

@@ -61,6 +61,30 @@ class JobDraftTest {
     }
 
     @Test
+    fun filterAndTransferSettingsOfTheDesktopEditorRoundTrip() {
+        val stored = SyncJob(
+            source = "/a", target = "/b", compare = JobDraft.COMPARE_MTIME_SIZE, modifyWindowSec = 2,
+            filterMinSizeKb = 1, filterMaxSizeKb = 900, filterMaxAgeDays = 30, filterMinAgeDays = 2,
+            bwlimitKbps = 512, maxTransfers = 4, atomicCopy = false, verifyCopies = true, retries = 3,
+            retryDelaySecs = 9, connectMatch = "BACKUP*",
+        )
+        val d = draft(stored)
+        val (unchanged, none) = d.build()
+        assertTrue(none.toString(), none.isEmpty())
+        assertEquals(stored.copy(name = stored.name.trim()), unchanged)
+        assertFalse(d.dirty)
+        d.retries = "5"
+        d.verifyCopies = false
+        d.filterMaxSizeKb = "x"
+        val (job, problems) = d.build()
+        assertEquals(5L, job.retries)
+        assertFalse(job.verifyCopies)
+        assertEquals("BACKUP*", job.connectMatch)
+        assertEquals(setOf("filterMaxSizeKb"), problems.keys)
+        assertTrue(d.dirty)
+    }
+
+    @Test
     fun activeWindowNeedsBothTimes() {
         val d = draft()
         d.activeFrom = "08:00"

@@ -238,6 +238,16 @@ private fun AdvancedFields(draft: JobDraft) {
     if (twoWay) ChoiceField("Konfliktregel", options.conflicts, draft.conflict, draft.errorFor("conflict")) { draft.conflict = it }
     ChoiceField("Löschregel", options.deletePolicies, draft.deletePolicy, draft.errorFor("deletePolicy")) { draft.deletePolicy = it }
     ChoiceField("Vergleich", options.compares, draft.compare, draft.errorFor("compare")) { draft.compare = it }
+    if (draft.compare == JobDraft.COMPARE_MTIME_SIZE) {
+        FormTextField(
+            "Zeit-Toleranz (Sekunden)",
+            draft.modifyWindowSec,
+            { draft.modifyWindowSec = it },
+            error = draft.errorFor("modifyWindowSec"),
+            hint = "Zeitunterschiede bis zu so vielen Sekunden gelten als gleich (FAT/exFAT, Sommerzeit: 1–2).",
+            number = true,
+        )
+    }
     ChoiceField("Versionen", options.versionings, draft.versioning, draft.errorFor("versioning")) { draft.versioning = it }
     FormTextField(
         "Versionen behalten (Tage)",
@@ -315,11 +325,49 @@ private fun AdvancedFields(draft: JobDraft) {
         { draft.useRecycleBin = it },
         hint = "Lokal gelöschte Dateien landen im Papierkorb statt endgültig gelöscht zu werden.",
     )
+    TransferFields(draft)
     SectionTitle("Befehle")
     val commandHint = "Bei echten Jobläufen; läuft auf Android mit /system/bin/sh in der App-Sandbox."
     FormTextField("Befehl vorher", draft.runBefore, { draft.runBefore = it }, error = draft.errorFor("runBefore"), hint = commandHint)
     FormTextField("Befehl nachher", draft.runAfter, { draft.runAfter = it }, error = draft.errorFor("runAfter"), hint = commandHint)
     FormTextField("Befehl bei Abbruch/Startfehler", draft.runCleanup, { draft.runCleanup = it }, error = draft.errorFor("runCleanup"), hint = commandHint)
+}
+
+/** Size and age filters, bandwidth and retries: the desktop pages "Filter" and "Übertragung". */
+@Composable
+private fun TransferFields(draft: JobDraft) {
+    SectionTitle("Filter")
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FormTextField("Mindestgröße (KB)", draft.filterMinSizeKb, { draft.filterMinSizeKb = it }, Modifier.weight(1f),
+            error = draft.errorFor("filterMinSizeKb"), number = true)
+        FormTextField("Höchstgröße (KB)", draft.filterMaxSizeKb, { draft.filterMaxSizeKb = it }, Modifier.weight(1f),
+            error = draft.errorFor("filterMaxSizeKb"), number = true)
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FormTextField("Jünger als (Tage)", draft.filterMaxAgeDays, { draft.filterMaxAgeDays = it }, Modifier.weight(1f),
+            error = draft.errorFor("filterMaxAgeDays"), number = true)
+        FormTextField("Älter als (Tage)", draft.filterMinAgeDays, { draft.filterMinAgeDays = it }, Modifier.weight(1f),
+            error = draft.errorFor("filterMinAgeDays"), number = true)
+    }
+    HintText("Nur Dateien in diesem Bereich werden synchronisiert; 0 = keine Grenze.")
+    SectionTitle("Übertragung")
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FormTextField("Bandbreite (KB/s)", draft.bwlimitKbps, { draft.bwlimitKbps = it }, Modifier.weight(1f),
+            error = draft.errorFor("bwlimitKbps"), number = true)
+        FormTextField("Parallel", draft.maxTransfers, { draft.maxTransfers = it }, Modifier.weight(1f),
+            error = draft.errorFor("maxTransfers"), number = true)
+    }
+    HintText("0 = unbegrenzt bzw. automatisch.")
+    SwitchRow("Sichere Kopien", draft.atomicCopy, { draft.atomicCopy = it },
+        hint = "Erst in eine temporäre Datei schreiben, dann umbenennen.")
+    SwitchRow("Nach dem Kopieren überprüfen", draft.verifyCopies, { draft.verifyCopies = it },
+        hint = "Prüft die Größe nach jeder Übertragung.")
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FormTextField("Wiederholungen", draft.retries, { draft.retries = it }, Modifier.weight(1f),
+            error = draft.errorFor("retries"), number = true)
+        FormTextField("Pause (Sekunden)", draft.retryDelaySecs, { draft.retryDelaySecs = it }, Modifier.weight(1f),
+            error = draft.errorFor("retryDelaySecs"), number = true)
+    }
 }
 
 @Composable

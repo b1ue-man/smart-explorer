@@ -308,6 +308,13 @@ RV1 ergänzt Job-JSON um `state` (`lastAttemptMs`, `lastSuccessMs`, `lastRunner`
 `pendingTrigger`, `lastVerifyMs`, `verifyCursor`), `brokenConfig` für defekte Jobdateien sowie die
 Editoroptionen `rtMaxLatencySecs`, `rtPollSecs`, `verifyIntervalSecs`, `verifyTargetSecs`, `maxDeleteMin`,
 `retainCount`, `versionsLocation`, `crossMounts`, `runCleanup`. `sync.options` ergänzt `versionsLocations`.
+Seit dem Paritätsstapel vom 2026-10-16 trägt Job jedes Feld des Desktop-Editors (`JobEditor`), Ein- und
+Ausgabe: `modifyWindowSec:Long`, `filterMinSizeKb:Long`, `filterMaxSizeKb:Long`, `filterMaxAgeDays:Long`,
+`filterMinAgeDays:Long`, `bwlimitKbps:Long`, `maxTransfers:Long`, `atomicCopy:Boolean`,
+`verifyCopies:Boolean` (Rust `SyncJob::verify`, Größe nach jeder Kopie prüfen), `retries:Long`,
+`retryDelaySecs:Long`, `connectMatch:String` (Muster des Auslösers „Bei Anschluss“; Android bietet den
+Auslöser nicht an und erhält den gespeicherten Wert). `sync.validate` nennt deren Fehler unter diesen
+Schlüsseln. Übersicht aller Oberflächen: `docs/oberflaechen/einstellungen.md`.
 `lastResult` kommt aus JobState; `running` bezeichnet ausschließlich einen lebenden Runmark.
 
 Hintergrund: genau ein eingebetteter Desktop-Daemon je App-Prozess (Thread), beim ersten Bedarf
@@ -321,6 +328,8 @@ gestartet, nie wegen Sichtbarkeit gestoppt. „Aus“ wirkt über das Sync-Flag 
 - `bg.setSyncEnabled {enabled}` → `{}`
 - `bg.pause {seconds:Long}` (−1 = unbegrenzt) → `{}` · `bg.resume {}` → `{}`
 - `bg.setAutopause {battery, metered}` → `{}`
+- `bg.setCadence {seconds:Int}` → `{cadenceSecs}`: Prüfintervall des Workers wie Desktop „Prüfintervall“
+  und `se background cadence` (2–3600 s, sonst `invalid`)
 - `bg.log {maxBytes:Int}` → `{text}`
 - `bg.catchUp {}` → `{taskId}` (Task-`kind` = `catchup`; Nachhol-Lauf des Daemons: fällige Intervall-Jobs,
   Kalender-Termine seit dem letzten Lauf – im Hintergrund immer nachgeholt –, aktivierte Echtzeit-Jobs
@@ -435,12 +444,13 @@ Pairing läuft (`share.watch`), sonst alle 5 s bei sichtbarer App und alle 60 s 
 (`sys.hostState.foreground`); sie hält den letzten Snapshot und sendet `share`/`shareRequest`.
 ```text
 ShareStatus {running, connected, relayUrl:String?, lastError:String?, server:String?,
-  lanPresence:String, identity:{deviceId, deviceName, fingerprint, directCode},
+  lanPresence:String, lanPresenceEnabled:Boolean, identity:{deviceId, deviceName, fingerprint, directCode},
   devices:[{contactId, name, status, statusText, online:Boolean, location, lan:Boolean,
-            shareBack:Boolean, write:Boolean?}],
-  execProvider:{available:Boolean, provider, detail},
+            shareBack:Boolean, write:Boolean?, autoConnect:Boolean, autoOpen:Boolean}],
+  execProvider:{available:Boolean, provider, detail, userLabel, runAsSupported:Boolean},
   execTargets:[{targetKey, relation:"direct|room", roomId:String?, roomName:String?, deviceId, name,
-                fingerprint, enabled:Boolean, baseAuthorized:Boolean, policyRevision:Long}],
+                fingerprint, enabled:Boolean, baseAuthorized:Boolean, policyRevision:Long,
+                runAs:"standard"|Konto, programs:[String]}],
   rooms:[{profileId, roomId, name, status, autoJoin, location:String?,
           policy:{membersMayWrite:Boolean,confirmNewMembers:Boolean},
           members:[{deviceId, name, publicKey, nodeId, fingerprint, status, location, blocked:Boolean,
@@ -563,7 +573,9 @@ Request {requestId, contactId:String?, name, stateText, canAccept, canReject, ca
   sofort ein `share`-Ereignis aus). Freigaben gelten wie am
   Desktop je exakter Identität; `execTargets` entsteht wie `exec_device_views` (Direkt-Freigaben und
   Raummitglieder), Schlüssel `direct/<deviceId>/<fingerprint>` bzw. `room/<roomId>/<deviceId>/<fingerprint>`:
-  - `share.setExec {targetKey, enabled:Boolean}` → `{revision:Long}` (`daemon::mutate_exec_grant`,
+  - `share.setExec {targetKey, enabled:Boolean, programs:[String]?}` → `{revision:Long}` (`daemon::mutate_exec_grant`;
+    `programs` ersetzt die Programmliste im selben Schritt (leer = volle Shell), Android sendet immer den
+    Standardnutzer; ein Eintrag ist ein Programmname oder ein absoluter Pfad, sonst `invalid` vor jeder Änderung;
     Journal wie am Desktop; Schlüssel gegen den aktuellen Profilstand aufgelöst, sonst `not_found`;
     nur vollständig gespeichert **und** angewendet gilt als Erfolg, sonst Fehler mit Detail;
     `enabled:true` bei nicht verfügbarem Anbieter → `unsupported` mit Grund, bei nicht aktiver
@@ -574,7 +586,20 @@ Request {requestId, contactId:String?, name, stateText, canAccept, canReject, ca
     `timed_out`, `revoked`, …), Zeiten in Sekunden seit 1970; eingehende vor ausgehenden, `history`
     unsortiert (die App sortiert)
   - `share.cancelExecJob {direction, execId, peerDeviceId}` → `{}` (nicht mehr aktiv → `not_found`)
-Nicht auf Android: LAN-Uplink, Anfragen im Altformat.
+  - `share.execLog {lines:Int?}` → `{entries:[{at, event, title, device, deviceId, detail}], max:Int}`
+    (neueste zuerst, höchstens `max` = 1000, Standard 200; `event`
+    `auth_rejected|penalty_refused|start_refused|started|finished|unreadable`)
+- Share-Einstellungen je Gerät, Raum und Freigabe (alle → `{persisted:true, changed:Boolean}` außer wo genannt):
+  - `share.setContactOptions {contactId, autoConnect:Boolean?, autoOpen:Boolean?}` (mindestens eines)
+  - `share.resetContactTrust {contactId}` (vergisst die gepinnte Identität, entzieht die Autorisierung, Exec aus)
+  - `share.renameRoom {profileId, name}` (leer = „Raum“, ≤ 256 Byte, keine Steuerzeichen)
+  - `share.rejoinRoom {profileId}` (`autoJoin` wieder an)
+  - `share.resetMemberTrust {profileId, deviceId}` (Präsenz vergessen)
+  - `share.moveExport {scope, path, offset:-1|1}`
+  - `share.setDirectOnline {online:Boolean}` → `{online}` (bis zum Neustart des Workers; ohne Worker `network`)
+  - `share.setLanPresence {enabled:Boolean}` → `{enabled}`
+  - `share.renewCode {}` → `{directCode, warning:String?}` (Worker kurz gestoppt, Direkt-Freigaben pausieren, Exec aus)
+Nicht auf Android: LAN-Uplink, Anfragen im Altformat, Exec als anderes Konto.
 
 FC1-Kompatibilität: Persistente Legacy-Roots ohne `access` behalten RW, alte Grants ohne `write` true,
 alte Raumpolicy ihr bisheriges Schreibrecht. Neue Roots/Konten sind RO, neue Grants/Räume ohne Schreiben,
