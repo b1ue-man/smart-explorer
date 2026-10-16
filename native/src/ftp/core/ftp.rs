@@ -8,10 +8,15 @@
 //! connection of its own from the pool (pool.rs), whose size the server's
 //! connection limit bounds.
 //!
-//! Listings are parsed by suppaftp's `list::File` (posix / dos / mlsx). RETR
-//! streams directly from the data connection (after REST to resume). Uploads
-//! spool to disk and issue a streaming STOR only at the caller's explicit
-//! `flush` commit boundary; a copy stage of known length streams its STOR.
+//! LIST rows are parsed by suppaftp's `ListParser` (posix, then dos); MLSD
+//! and MLST rows by metadata.rs. RETR streams directly from the data
+//! connection (after REST to resume). Uploads spool to disk and issue a
+//! streaming STOR only at the caller's explicit `flush` commit boundary; a
+//! copy stage of known length streams its STOR.
+//!
+//! Every command argument passes `errors::command_path` (CR, LF, NUL) before
+//! it is sent, the PWD reply too (`errors::working_dir`); suppaftp >= 10.0.2
+//! rejects CR and LF once more (RUSTSEC-2026-0271).
 
 use crate::vfs::{Backend, Scheme, VfsMeta, VfsResult};
 use std::io::{self, Read, Write};
@@ -22,6 +27,7 @@ use super::connection::{connect_stream, parse_ftp_url, refusal_code};
 use super::io_adapters::{FtpConnection, FtpReconnect};
 use super::pool::{FtpPool, Leased};
 use super::writer::FtpWriter;
+use suppaftp::list::ListParser;
 use suppaftp::FtpError;
 
 #[cfg(test)]
@@ -79,7 +85,11 @@ pub(super) fn parse_list_line(line: &str) -> VfsResult<VfsMeta> {
 }
 
 pub(super) fn parse_list_line_unchecked(line: &str) -> VfsResult<VfsMeta> {
-    let file = line.parse::<suppaftp::list::File>().map_err(|error| {
+    // POSIX, then DOS, as `list::File::from_str` of suppaftp 6.3 did. The
+    // 10.x one also accepts MLSx facts; MLSD/MLST rows have their own parser
+    // (metadata.rs), so a LIST row never passes as one.
+    let file = ListParser::parse_posix(line).or_else(|_| ListParser::parse_dos(line));
+    let file = file.map_err(|error| {
         let preview: String = line.chars().take(160).collect();
         io::Error::new(
             io::ErrorKind::InvalidData,
@@ -329,7 +339,7 @@ impl Backend for FtpBackend {
         let absolute = path.starts_with('/');
         let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
         self.pool.primary().with_stream_mutation(|stream| {
-            let original = stream.pwd().map_err(io_err)?;
+            let original = super::errors::working_dir(stream)?;
             let mut cur = String::new();
             for part in parts {
                 if cur.is_empty() {
