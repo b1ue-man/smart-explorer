@@ -1,4 +1,8 @@
-# FTP-Verbindungs-Pool – suppaftp 6.3.0 und Server-Grenzen
+# FTP-Verbindungs-Pool – suppaftp und Server-Grenzen
+
+Versionsstand 2026-10-16: `native/Cargo.lock` führt **suppaftp 10.0.2** (RUSTSEC-2026-0271); was sich gegenüber
+6.3.0 für das Backend ändert, steht in Abschnitt 6. Die Abschnitte 1 bis 5 sind die Recherche zu 6.3.0;
+ihre Zeilenangaben beziehen sich auf `suppaftp-6.3.0/src/sync_ftp/mod.rs`.
 
 Stand: 2026-10-05; Pool-/Serverrecherche vom 2026-09-28 bleibt erhalten. Quellen: lokaler Crate-Quellcode
 `/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/suppaftp-6.3.0/src/{types,status}.rs`,
@@ -17,6 +21,7 @@ pub enum FtpError {
     UnexpectedResponse(Response),        // Server hat mit einem anderen Code geantwortet
     BadResponse,                         // Antwortzeile nicht lesbar
     InvalidAddress(std::net::AddrParseError),
+    // ab 7.1 (in 10.0.2 vorhanden): DataConnectionAlreadyOpen, siehe Abschnitt 6
 }
 // types.rs:43-47
 pub struct Response { pub status: Status, pub body: Vec<u8> }
@@ -64,7 +69,8 @@ dieselbe Konfiguration schon einmal erfolgreich angemeldet hat, ist eine 421/530
 - `put_with_stream(path) -> DataStream` (:512-517): STOR, erwartet 125/150;
   `finalize_put_stream(stream)` (:522-530): Strom schließen, dann 226/250 (= Upload bestätigt).
   `put_file` (:500-506) ist genau `put_with_stream` + `io::copy` + `finalize_put_stream`.
-- `abort(stream)` (:551-561): ABOR, Strom schließen, 226/426 und dann 226 lesen.
+- `abort(stream)` (:551-561): ABOR, Strom schließen, 226/426 und dann 226 lesen (10.0.2: die zweite
+  Antwort nur nach 426, Abschnitt 6).
 - `mkdir(path)` (:361-365): MKD, erwartet 257; ein vorhandener Name ergibt eine Ablehnung
   (üblich 550) – MKD ist serverseitig ein `mkdir(2)` und damit exklusiv.
 - `DataStream<T>` (data_stream.rs:12-18) implementiert `Read` und `Write`.
@@ -147,3 +153,46 @@ behandeln, weiterhin die echte Abschlussantwort auswerten, Datenfehler und
 TCP, REST/RETR, Timeouts, Poolgesundheit und verifizierte TLS-Anmeldung sind
 dabei bestehende Verträge. Eine Lösung mit vorhandenen APIs vermeidet eine
 für diesen Fehler nicht belegte breite Bibliotheks-/Protokollmigration.
+
+## 6. suppaftp 10.0.2 (2026-10-16)
+
+Quelle: `suppaftp-10.0.2.crate` von static.crates.io (SHA-256 `821001051ea3d12a…b0b5b8` = `cksum` im
+crates.io-Index = `checksum` in `native/Cargo.lock`), verglichen mit dem Archiv von 6.3.0; CHANGELOG des
+Projekts (github.com/veeso/suppaftp, `main`, gelesen 2026-10-16); RustSec `RUSTSEC-2026-0271`
+(github.com/rustsec/advisory-db, `crates/suppaftp`). Der synchrone Client liegt jetzt in
+`src/sync_ftp.rs`; Zeilen unten beziehen sich darauf.
+
+- Feature: `rustls-ring` (seit 8.0.0 statt `rustls`; `rustls-aws-lc-rs` würde aws-lc ziehen). Mit
+  `default-features = false` hängt 10.0.2 nur an `chrono`, `lazy-regex`, `log`, `rustls` (Features
+  `logging`, `std`, `tls12`, `ring`) und `thiserror`; `futures-lite` entfällt (seit 9.0.0).
+- `perform` (:958) prüft jede Befehlszeile mit `command::validate_command_line` (`command.rs:24`):
+  CR oder LF vor dem Zeilenende → `FtpError::ConnectionError` mit `ErrorKind::InvalidInput`, nichts wird
+  gesendet. NUL wird nicht geprüft; das Backend weist CR, LF und NUL vorher selbst ab
+  (`ftp/core/errors.rs::command_path`, für die PWD-Antwort `working_dir`).
+- Datenkanal-Sperre: `data_command` setzt `data_connection_open`; jeder weitere Datenbefehl scheitert mit
+  `FtpError::DataConnectionAlreadyOpen` (`types.rs:42`, `guard_multiple_data_connections` :1182), bis
+  `finalize_retr_stream` (:484), `finalize_put_stream` (:541), `abort` (:574) oder
+  `close_data_connection` sie löst. Ein abgelehnter Datenbefehl löst sie selbst
+  (`data_command_with_response` :1033, seit 8.0.4).
+- `abort` (:574-590): ABOR, Strom schließen, 226 oder 426 lesen, eine zweite Antwort (226) nur nach 426.
+  War die Übertragung schon beendet (226 der Übertragung bereits gesendet), bleibt die Antwort des Servers
+  auf ABOR (225 bei vsftpd/pyftpdlib, nach RFC 959 ein weiteres 226) ungelesen; das Backend prüft deshalb
+  mit PWD (257), bevor es die Verbindung als gesund zurückgibt (`ftp/core/streams.rs::abort`).
+- `read_response_in` (:880): jede Zeile `NNN<SP>` beendet eine Mehrzeilenantwort (10.0.1, auch mit
+  anderem Code als die erste Zeile); EOF in einer Mehrzeilenantwort → `ConnectionError(UnexpectedEof)`.
+- `mkdir`, `rmdir`, `rm`, `rename`, `cwd` nehmen neben 257/250 auch 200 an (8.0.3/8.0.5, bftpd).
+- PASV/EPSV/MDTM-Antworten mit nicht lesbaren Zahlen geben einen Fehler statt einer Panik (10.0.0).
+- `list::File::from_str`/`TryFrom` probiert nach POSIX und DOS auch MLSD/MLST; der MLSx-Parser nimmt jeden
+  Text als Dateinamen an. LIST-Zeilen laufen deshalb nur über `ListParser::parse_posix` und `parse_dos`
+  (Regex beider Formate unverändert). `parse_posix` setzt für `Mon DD HH:MM`-Zeilen, die mehr als 180 Tage
+  in der Zukunft lägen, das Vorjahr; `parse_dos` liest Größen mit Tausenderkomma.
+- FTPS-Datenabschluss unverändert: `finalize_put_stream` (:541-551) verwirft den Strom vor dem Lesen von
+  226/250, `RustlsStream::drop` (`sync_ftp/tls/rustls.rs:91-103`) flusht, stellt `close_notify` ein und
+  ruft einmal `write_tls`. `DataStream::get_ref` (`sync_ftp/data_stream.rs:42`) und
+  `RustlsConnector::from(Arc<ClientConfig>)` sind gleich; `ftp/core/data_finish.rs::UploadData` hält den
+  Socket wie bisher bis nach der Abschlussantwort. Der Trait `TlsStream` ist seit 7.0.4 öffentlich,
+  `RustlsStream` weiterhin nicht.
+- Nicht übernommen (12.x, Stand 2026-10-16): 12.0.0 ersetzt `finalize_*`/`close_data_connection` durch
+  `TransferStream::finish` (Bruch genau an der FTPS-Abschlussgrenze); 12.1.0 begrenzt Antworten auf 256 KiB
+  und prüft im Aktivmodus den Absender (das Backend nutzt nur Passivmodus); 12.2.1 sendet REST direkt vor
+  RETR/STOR. Keine RustSec-Meldung zu 10.0.2.

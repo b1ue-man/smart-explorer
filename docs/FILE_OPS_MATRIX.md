@@ -72,6 +72,7 @@ full endpoints, local paths, or saved-connection shorthand:
 | `se doctor [--json]` | bounded, non-mutating checks of app-data, credentials, profiles, server config, and daemon heartbeat | ✅ | ✅ corruption and backend errors produce exit 1 | ✅ configuration health without starting Share |
 | `se connections list` | checked credential metadata + `ShareProfiles::load_checked()` | n/a | ✅ saved remotes | ✅ saved Share contacts/rooms |
 | `se connections add` / `remove` | transactional metadata + platform credential store | n/a | ✅ SFTP/FTP/FTPS/WebDAV/UNC setup and removal | n/a |
+| `se connections trust-host-key` / `forget-host-key` | SFTP host-key pin store (`known_hosts_sftp.txt`); the presented key is probed first and pinned only when its fingerprint is the one confirmed (`--fingerprint`, `--replace` for a different recorded key) | n/a | ✅ SFTP only; an unknown key is never stored silently, `@revoked` in OpenSSH's files refuses even a pinned key | n/a |
 | `se connections add-peer` / `add-room` / `remove-peer` / `remove-room` | revision-checked `ShareProfiles` persistence + daemon profile reload | n/a | n/a | ✅ one-sided initiation/removal; a compatible Direct target decides automatically by durable local policy and reciprocal repair completes both endpoints |
 | `se share ...` | checked Share identity/profile persistence + authenticated local daemon IPC | n/a | n/a | ✅ configure, identity, status, requests, exports, rooms, refresh, and stop |
 | `se ls` / `se stat` | `list_dir` / `stat` | ✅ | ✅ | ✅ |
@@ -81,6 +82,7 @@ full endpoints, local paths, or saved-connection shorthand:
 | `se mv` | rename when possible, else copy+delete | ✅ | ✅ | ✅ |
 | `se rm` | `remove_file` / recursive child walk + `remove_dir` | ✅ `--force`; roots also require `--no-preserve-root` | ✅ `--force`; configured roots also require `--no-preserve-root` | ✅ `--force`; virtual roots also require `--no-preserve-root` |
 | `se search` | backend search, fallback traversal | ✅ | ✅ | ✅ |
+| `se share exec log` | reads `exec-audit.log` and `exec-audit-rejected.log` of the app data folder without the worker | n/a | n/a | ✅ target-side audit of Exec starts, ends and refusals |
 | `se exec` | authenticated local daemon IPC -> separate Share Exec ALPN | n/a | ❌ SFTP-agent execution out of scope | ✅ for an explicitly Exec-enabled exact peer when the native containment provider is available |
 
 ## D. Current caveats
@@ -113,23 +115,40 @@ full endpoints, local paths, or saved-connection shorthand:
    default-direct or room export policy enables them. Peer-share connections are
    not persisted as nested exports and therefore cannot recurse back into Share
    sessions.
-6. **Peer remote execution is exact-device, default-deny, and unrestricted once
-   enabled.** Accepting file access does not grant Exec. The receiver verifies
+6. **Peer remote execution is exact-device, default-deny, and a full shell once
+   enabled unless the grant narrows it.** Accepting file access does not grant Exec. The receiver verifies
    the authenticated device, current grant revision, capability, request digest,
    and admission lease before releasing the native launch barrier. Windows uses
    a kill-on-close Job Object and Linux a transient systemd cgroup; if that
    provider is unavailable, no payload starts. Both argv and shell modes have
-   the full authority of the Smart Explorer worker's OS user, without command
-   filters. Starts remain at-most-once and are never retried after an ambiguous
-   transport error.
+   the full authority of the Smart Explorer worker's OS user (the
+   Standardnutzer) unless the grant names another account (Linux root worker)
+   or a program list (argv only, no shell, no terminal; the program is found
+   only by absolute path or in the host's fixed search path, and only `LANG`,
+   `LC_*` and `TERM` are taken from the caller). A program list is not a
+   sandbox: free arguments make a listed shell, interpreter or command runner a
+   full shell. Grants made before the narrowing existed keep the full shell as
+   the Standardnutzer. Starts remain at-most-once and are never retried after an
+   ambiguous transport error. The target keeps a persistent audit log
+   (`exec-audit.log`, rejections in `exec-audit-rejected.log`).
 7. **Remote clipboard and drag-out materialize eagerly.** Remote files/folders
    are downloaded to temp paths before CF_HDROP/OLE hands them to Explorer; very
    large folders therefore need enough local temp space before the drop/paste.
-8. **Linux headless credentials use owner-protected files.** The DBus-free
-   backend enforces a `0700` directory, `0600` single-link records, bounded
-   versioned envelopes, atomic replacement, and interprocess locking. It is not
-   encryption against root, the same Unix account, or offline access to an
-   unencrypted disk. Windows continues to use Credential Manager.
+8. **Linux and Android credentials use sealed owner-protected files.** The
+   DBus-free backend enforces a `0700` directory, `0600` single-link records,
+   bounded versioned envelopes, atomic replacement, and interprocess locking.
+   Since 2026-10-16 every record is sealed with ChaCha20-Poly1305 under a data
+   key held by the protector recorded in `secrets-v1/keyring-v2`: the Android
+   Keystore, `systemd-creds --with-key=host` (root: system scope; others: user
+   scope with systemd 256 or newer) or, without either, a key file
+   `secrets-v1.kek` beside the store. Plaintext records of earlier versions are
+   sealed at worker start, at Android app start, by `se doctor` or on the first
+   secret access of a process, whichever comes first, and overwritten only after
+   the sealed record was read back. The
+   protection never covers root or the same account; with the key-file
+   protector it also does not cover a copy of the whole app data folder or an
+   unencrypted disk (`se doctor` names the protector). Windows continues to use
+   Credential Manager.
 
 ## E. Remote file opening
 

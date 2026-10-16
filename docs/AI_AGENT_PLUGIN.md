@@ -128,10 +128,22 @@ FTPS- und WebDAV-Verbindung eine Anmeldung wiederverwendet.
   Form `command` in ihrer eigenen Shell-Syntax. Abbruch und Zeitlimit senden die Kanalanfrage
   `signal` TERM, nach 10 s KILL, dann wird der Kanal geschlossen; OpenSSH ≥ 7.9 stellt sie mit
   `killpg` an die Prozessgruppe des Befehls zu (nicht bei Forced Command/Subsystem). Dieselbe
-  Funktion bietet die CLI: `se exec @label[:/dir] -- …`.
+  Funktion bietet die CLI: `se exec @label[:/dir] -- …`. Ein noch unbekannter Hostschlüssel wird
+  seit 2026-10-16 nie still gespeichert: der Aufruf scheitert mit Schlüsseltyp und
+  SHA-256-Fingerabdruck. Bestätigen soll ihn der Mensch nach Vergleich mit dem Server, im
+  Terminal per Rückfrage von `se` oder mit
+  `se connections trust-host-key HOST:PORT --fingerprint SHA256:…`; ein Agent, der den
+  Fingerabdruck aus derselben Fehlermeldung übernimmt, prüft nichts.
 - **Share-Peers:** derselbe Weg wie `se exec PEER` über den Hintergrunddienst; das Zielgerät muss
-  diesem Gerät Exec erlaubt haben (`se share grants exec enable` dort). Prozessbaum-Eingrenzung,
-  Entzug und Verlauf: [`REMOTE_EXECUTION_PLAN.md`](REMOTE_EXECUTION_PLAN.md).
+  diesem Gerät Exec erlaubt haben (`se share grants exec enable` dort). Ein Grant kann ein Konto
+  (`--run-as`, Linux-Host mit root-Worker) und eine Programmliste (`--allow-program`, dann weder
+  Shell noch Sitzung) festlegen. Bei einer Programmliste muss `argv[0]` ein gelistetes Programm
+  sein (gefunden über einen absoluten Pfad oder den festen Suchpfad des Hosts, nie über ein
+  mitgesendetes `PATH`), und `env` darf nur `LANG`, `LC_*` und `TERM` enthalten; jede andere
+  Variable lehnt den Start mit ihrem Namen ab. Die Liste ist keine Sandbox: ein gelisteter
+  Interpreter oder Befehlsläufer entspricht einer vollen Shell. Das Zielgerät protokolliert jeden
+  Start dauerhaft (`se share exec log`). Prozessbaum-Eingrenzung, Entzug und Verlauf:
+  [`REMOTE_EXECUTION_PLAN.md`](REMOTE_EXECUTION_PLAN.md).
 - **FTP, WebDAV, SMB, Drive:** keine Befehlsausführung möglich; `exec` meldet das.
 
 ## Dauerhafte Shell-Sitzungen und Anhängen
