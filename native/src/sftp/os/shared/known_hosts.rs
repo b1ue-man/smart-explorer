@@ -123,11 +123,11 @@ fn pin_in(
             ),
         )),
         Some(_) => {
-            let kept: Vec<(String, String)> = entries
+            let mut kept: Vec<(String, String)> = entries
                 .into_iter()
                 .filter(|(host, _)| host != &label)
-                .chain(std::iter::once((label, fingerprint.to_string())))
                 .collect();
+            kept.push((label, fingerprint.to_string()));
             rewrite(&path, &kept)
         }
         None => append(&path, &label, fingerprint),
