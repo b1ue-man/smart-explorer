@@ -1,5 +1,5 @@
 name: luecken-task
-run-name: Security gaps (PQ key exchange, sealed secrets, exec accounts, SSH host keys) ${{ inputs.candidate_sha }}
+run-name: Security gaps and Share/Exec GUI parity (PQ key exchange, sealed secrets, exec accounts, SSH host keys, settings on every surface) ${{ inputs.candidate_sha }}
 
 # Single task-level suite of the 2026-10-16 gap-closing batch
 # (docs/plaene/2026-10-16-luecken-schliessen/plan.md). Dispatch it once for the
@@ -14,13 +14,16 @@ run-name: Security gaps (PQ key exchange, sealed secrets, exec accounts, SSH hos
 #                  OpenSSH container, Share Exec grants (default off, ported
 #                  grant, program list and environment, audit log, run-as on a
 #                  root worker, revoke) and the real update from the published
-#                  `se` 0.5.180; on Windows the credential store
+#                  `se` 0.5.180; on Windows the credential store; on both the
+#                  Share/Exec CLI commands added for GUI parity (stage
+#                  `surfaces`, plan I)
 #   android        (--job android) the Android build stage (dependency tree,
 #                  NDK, APKs, JVM tests)
 #   android-device (--job android-device) the published APK 0.5.180 updated to
 #                  the candidate APK on an emulator (same-certificate signing
 #                  with the repository's release keystore secrets, as in
-#                  sync-reliability-task.yml)
+#                  sync-reliability-task.yml), then the Share/Exec settings of
+#                  the GUI parity through their bridge methods
 on:
   workflow_dispatch:
     inputs:

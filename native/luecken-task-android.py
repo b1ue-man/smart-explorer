@@ -19,7 +19,10 @@ device  (job step 2, inside the emulator) installs the published APK, runs
         force-stop that every record is sealed under the Android Keystore
         protector, no old secret byte is left in the app's files, the identity
         is the same and the saved connection connects with the stored password
-        and the old pin.
+        and the old pin; then `parity-check` drives the Share and Exec settings
+        added for GUI parity through their bridge methods (LAN presence,
+        exec account/programs/log, room rename/leave/rejoin, export order,
+        contact options, Direct code reachability and renewal).
 
 Limit: the signing keystore secrets exist only in the repository's workflow
 context; without them the build step fails and says so (no fallback to a
@@ -252,6 +255,15 @@ def device(lib, results, log_root, apks, env, candidate):
             lib.ensure(new["keyId"] == markers["update-check"]["keyId"], "the data key changed on restart")
             return f"same key {new['keyId']} after a restart"
         results.check(stage, "restart of the updated app: records, key and connection unchanged", restarted)
+
+        def parity():
+            lib.ensure("restart-check" in markers, "the restart check did not run")
+            marker = instrument("parity-check")
+            lib.ensure(all(marker.get(key) is True for key in ("lanToggle", "roomSettings", "exportOrder",
+                                                               "codeRenewed")), marker)
+            return f"{marker['logEntries']} audit entries readable"
+        results.check(stage, "GUI parity in the candidate app: LAN presence switch, exec account/programs/log, "
+                      "room rename/leave/rejoin, export order, contact options checked, Direct code renewed", parity)
     except Exception as error:  # noqa: BLE001
         results.record(stage, "emulator run", False, f"{type(error).__name__}: {error}")
     finally:

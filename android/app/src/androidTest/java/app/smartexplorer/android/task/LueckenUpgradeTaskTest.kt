@@ -27,6 +27,9 @@ import org.junit.runner.RunWith
  *    (`SESEC02`) under the Android Keystore protector, no byte of an old secret is left anywhere in
  *    the app's files, the Share identity and the saved connection (stored password and old pin) work.
  *  - `restart-check` after a force-stop: the same again in a third process, with the same data key.
+ *  - `parity-check` in the candidate app: the Share and Exec settings added for GUI parity
+ *    (2026-10-16) through their bridge methods – LAN presence, exec account/programs/log, room
+ *    rename/leave/rejoin, export order, contact options, Direct code reachability and renewal.
  *
  * The old phase only uses the JSON API of the core (`Api`, `Servers`), whose shape the published
  * app shares with the candidate; the host reads the facts from the status stream (never a secret).
@@ -51,6 +54,7 @@ class LueckenUpgradeTaskTest {
             "old-prepare" -> oldPrepare()
             "update-check" -> afterUpdate("update-check")
             "restart-check" -> afterUpdate("restart-check")
+            "parity-check" -> parityCheck()
             else -> throw AssertionError("Unknown lueckenPhase")
         }
     }
@@ -202,5 +206,71 @@ class LueckenUpgradeTaskTest {
             "listed" to true,
         )
         checkpoint(JsonObject(record + facts), phase, facts)
+    }
+
+    private suspend fun shareStatus(): JsonObject = Api.obj("share.status")
+
+    private suspend fun parityCheck() {
+        val status = shareStatus()
+        val provider = status.field("execProvider").obj()
+        assertTrue("execProvider without userLabel: $provider", provider.text("userLabel").isNotEmpty())
+        assertFalse("Android cannot run commands as another account", provider.bool("runAsSupported"))
+        status.objects("execTargets").forEach { target ->
+            assertTrue("execTarget without runAs/programs: $target", target.containsKey("runAs") && target.containsKey("programs"))
+        }
+
+        Api.call("share.setLanPresence", args("enabled" to false))
+        assertFalse("LAN presence stayed on", shareStatus().bool("lanPresenceEnabled"))
+        Api.call("share.setLanPresence", args("enabled" to true))
+        assertTrue("LAN presence stayed off", shareStatus().bool("lanPresenceEnabled"))
+
+        val log = Api.obj("share.execLog", args("lines" to 50))
+        assertEquals("execLog bound", 1000, log.int("max"))
+        val logEntries = log.array("entries").size
+
+        val room = Api.obj("share.createRoom", args("name" to "Luecken-Raum")).text("profileId")
+        Api.call("share.renameRoom", args("profileId" to room, "name" to "Luecken-Werkstatt"))
+        fun roomOf(status: JsonObject) = status.objects("rooms").single { it.text("profileId") == room }
+        assertEquals("room name", "Luecken-Werkstatt", roomOf(shareStatus()).text("name"))
+        // Leaving persists first; the leave signal needs the running worker (attempted either way).
+        Api.attempt("share.leaveRoom", args("profileId" to room))
+        assertFalse("room still joined", roomOf(shareStatus()).bool("autoJoin"))
+        Api.call("share.rejoinRoom", args("profileId" to room))
+        assertTrue("room not joined again", roomOf(shareStatus()).bool("autoJoin"))
+        Api.call("share.removeRoom", args("profileId" to room))
+
+        val base = File(android.os.Environment.getExternalStorageDirectory(), "SmartExplorerLueckenParity")
+        val first = File(base, "a").apply { mkdirs() }.canonicalPath
+        val second = File(base, "b").apply { mkdirs() }.canonicalPath
+        Api.call("share.addExport", args("scope" to "direct", "path" to first, "label" to "Luecken-A"))
+        Api.call("share.addExport", args("scope" to "direct", "path" to second, "label" to "Luecken-B"))
+        suspend fun order() = shareStatus().field("exports").obj().objects("direct").map { it.text("path") }.filter { it == first || it == second }
+        assertEquals("export order before", listOf(first, second), order())
+        Api.call("share.moveExport", args("scope" to "direct", "path" to second, "offset" to -1))
+        assertEquals("export order after moving up", listOf(second, first), order())
+        Api.failure("share.moveExport", args("scope" to "direct", "path" to second, "offset" to 2), "invalid")
+        Api.call("share.removeExport", args("scope" to "direct", "path" to first))
+        Api.call("share.removeExport", args("scope" to "direct", "path" to second))
+        base.deleteRecursively()
+
+        Api.failure("share.setContactOptions", args("contactId" to "luecken-missing", "autoConnect" to true), "invalid")
+        Api.failure("share.setExec", args("targetKey" to "direct/x/y", "enabled" to false, "programs" to listOf("bin/tool")), "invalid")
+        Api.failure("share.setExec", args("targetKey" to "direct/x/y", "enabled" to false, "programs" to listOf("uptime")), "not_found")
+        Api.attempt("share.setDirectOnline", args("online" to true))
+
+        val before = shareStatus().field("identity").obj().text("directCode")
+        val renewed = Api.obj("share.renewCode").text("directCode")
+        assertNotEquals("the Direct code did not change", before, renewed)
+        assertEquals("status shows another Direct code", renewed, shareStatus().field("identity").obj().text("directCode"))
+
+        val facts = args(
+            "pid" to Process.myPid(),
+            "lanToggle" to true,
+            "roomSettings" to true,
+            "exportOrder" to true,
+            "logEntries" to logEntries,
+            "codeRenewed" to true,
+        )
+        checkpoint(JsonObject(facts), "parity-check", facts)
     }
 }
