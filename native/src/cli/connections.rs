@@ -3,9 +3,12 @@ use clap_complete::ArgValueCandidates;
 
 use super::setup;
 
+#[path = "connections/host_keys.rs"]
+mod host_keys;
 #[path = "connections/output.rs"]
 mod output;
 
+pub(super) use host_keys::ask as ask_host_key;
 pub(super) use output::connections_value;
 
 const CONNECTIONS_HELP: &str = "\
@@ -21,6 +24,8 @@ Examples:
   se connections remove prod
   se connections remove-peer Laptop
   se connections remove-room Team
+  se connections trust-host-key prod
+  se connections forget-host-key nas.example:2222
 
 Peer setup is one-sided: it saves to Smart Explorer's normal profile store, then
 wakes the background Share worker. The other client confirms with `se share
@@ -81,6 +86,12 @@ enum Command {
     RemovePeer(PeerSelectorArgs),
     #[command(about = "Remove one Share room by exact name or id")]
     RemoveRoom(SelectorArgs),
+    #[command(
+        about = "Show an SSH server's host key and pin it after confirmation (or --fingerprint)"
+    )]
+    TrustHostKey(host_keys::TrustHostKeyArgs),
+    #[command(about = "Forget the pinned SSH host key of a server (after a planned key change)")]
+    ForgetHostKey(host_keys::ForgetHostKeyArgs),
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -135,6 +146,12 @@ struct ConnectionAddArgs {
     label: String,
     #[arg(long, help = "SFTP private key path")]
     key: Option<String>,
+    #[arg(
+        long,
+        conflicts_with_all = ["key", "password", "password_stdin"],
+        help = "SFTP: log in with the keys of the running SSH agent (SSH_AUTH_SOCK, Windows OpenSSH agent or Pageant); stores no secret"
+    )]
+    ssh_agent: bool,
     #[arg(
         long,
         help = "Deploy the Smart Explorer acceleration agent after SFTP login"
@@ -225,6 +242,7 @@ pub(super) fn run(args: ConnectionsArgs) -> Result<i32, String> {
                 label: args.label,
                 key: args.key,
                 use_agent: args.agent,
+                ssh_agent: args.ssh_agent,
                 secret,
             })?;
             println!("{saved}");
@@ -252,6 +270,8 @@ pub(super) fn run(args: ConnectionsArgs) -> Result<i32, String> {
             println!("{}", setup::remove_room(&args.selector)?);
             Ok(0)
         }
+        Some(Command::TrustHostKey(args)) => host_keys::trust(args).map(|()| 0),
+        Some(Command::ForgetHostKey(args)) => host_keys::forget(args).map(|()| 0),
     }
 }
 

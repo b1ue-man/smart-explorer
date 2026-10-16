@@ -178,6 +178,8 @@ mod gui_design_task_tests;
 #[cfg(test)]
 #[path = "core/gui_design_task_ui.rs"]
 mod gui_design_task_ui;
+#[path = "core/host_key_ui.rs"]
+mod host_key_ui;
 #[path = "core/navigation_path.rs"]
 mod navigation_path;
 #[path = "core/prefs_tabs.rs"]

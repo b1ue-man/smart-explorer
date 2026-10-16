@@ -20,6 +20,7 @@ pub(super) fn connection_json(connection: &SavedConnection) -> Value {
     let (auth, key_path) = match &connection.auth {
         AuthKind::Password => ("password", None),
         AuthKind::Key { path } => ("key", Some(path.clone())),
+        AuthKind::SshAgent => ("ssh-agent", None),
     };
     json!({
         "id": connection.account(),
@@ -132,6 +133,8 @@ fn parse_input(args: &Value) -> Result<Input, ApiError> {
             secret.clone()
         },
         use_key,
+        // Android has no SSH agent; desktop-made agent logins stay desktop-only.
+        use_ssh_agent: false,
         keyfile: key_path,
         passphrase: if use_key {
             secret.clone()

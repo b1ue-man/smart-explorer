@@ -8,6 +8,8 @@ pub fn build_saved(form: &ConnectForm, port: u16) -> SavedConnection {
         AuthKind::Key {
             path: form.keyfile.trim().to_string(),
         }
+    } else if form.use_ssh_agent && form.protocol == Protocol::Sftp {
+        AuthKind::SshAgent
     } else {
         AuthKind::Password
     };
@@ -61,6 +63,39 @@ mod tests {
                 path: "C:/k".into()
             }
         );
+
+        f.use_key = false;
+        f.use_ssh_agent = true;
+        assert_eq!(build_saved(&f, 22).auth, AuthKind::SshAgent);
+        assert!(ConnectForm::from_saved(&build_saved(&f, 22)).use_ssh_agent);
+        f.protocol = Protocol::Ftp;
+        assert_eq!(build_saved(&f, 21).auth, AuthKind::Password);
+    }
+
+    #[test]
+    fn luecken_task_saved_connections_of_0_5_180_open_with_the_same_login() {
+        let mut saved = SavedConnection {
+            protocol: Protocol::Sftp,
+            host: "nas".into(),
+            port: 22,
+            user: "alice".into(),
+            auth: AuthKind::Password,
+            root: "/home/alice".into(),
+            label: String::new(),
+            use_agent: false,
+        };
+        let form = ConnectForm::from_saved(&saved);
+        assert!(!form.use_key && !form.use_ssh_agent);
+        assert_eq!(build_saved(&form, 22).account(), saved.account());
+        assert_eq!(build_saved(&form, 22).auth, AuthKind::Password);
+
+        saved.auth = AuthKind::Key {
+            path: "/home/alice/.ssh/id".into(),
+        };
+        let form = ConnectForm::from_saved(&saved);
+        assert!(form.use_key && !form.use_ssh_agent);
+        assert_eq!(build_saved(&form, 22).auth, saved.auth);
+        assert_eq!(build_saved(&form, 22).account(), saved.account());
     }
 
     #[test]

@@ -34,6 +34,9 @@ pub struct ConnectForm {
     pub user: String,
     pub password: String,
     pub use_key: bool,
+    /// SFTP: log in with the running SSH agent's keys (exclusive with
+    /// `use_key`); nothing is stored.
+    pub use_ssh_agent: bool,
     pub keyfile: String,
     pub passphrase: String,
     pub root: String,
@@ -53,6 +56,7 @@ impl Default for ConnectForm {
             user: String::new(),
             password: String::new(),
             use_key: false,
+            use_ssh_agent: false,
             keyfile: String::new(),
             passphrase: String::new(),
             root: "/".into(),
@@ -70,7 +74,7 @@ impl ConnectForm {
     pub fn from_saved(c: &SavedConnection) -> Self {
         let (use_key, keyfile) = match &c.auth {
             AuthKind::Key { path } => (true, path.clone()),
-            AuthKind::Password => (false, String::new()),
+            AuthKind::Password | AuthKind::SshAgent => (false, String::new()),
         };
         ConnectForm {
             protocol: c.protocol,
@@ -79,6 +83,7 @@ impl ConnectForm {
             user: c.user.clone(),
             password: String::new(),
             use_key,
+            use_ssh_agent: c.auth == AuthKind::SshAgent,
             keyfile,
             passphrase: String::new(),
             root: if c.protocol.is_url() {

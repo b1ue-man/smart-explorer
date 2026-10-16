@@ -226,7 +226,25 @@ impl App {
                     });
 
                 if f.protocol == Protocol::Sftp {
-                    ui.checkbox(&mut f.use_key, "Mit Schlüsseldatei anmelden");
+                    if ui
+                        .checkbox(&mut f.use_key, "Mit Schlüsseldatei anmelden")
+                        .changed()
+                        && f.use_key
+                    {
+                        f.use_ssh_agent = false;
+                    }
+                    if ui
+                        .checkbox(&mut f.use_ssh_agent, "Mit SSH-Agent anmelden")
+                        .on_hover_text(
+                            "Meldet sich mit den Schlüsseln des laufenden SSH-Agents an \
+                             (ssh-agent, Windows-OpenSSH-Agent oder Pageant, auch \
+                             FIDO2-Schlüssel); es wird kein Geheimnis gespeichert.",
+                        )
+                        .changed()
+                        && f.use_ssh_agent
+                    {
+                        f.use_key = false;
+                    }
                     ui.checkbox(&mut f.use_agent, "Remote-Agent verwenden")
                         .on_hover_text(
                             "Lädt beim Verbinden einen kleinen Helfer auf den Server und führt \
@@ -253,7 +271,9 @@ impl App {
                                 .desired_width(220.0),
                         );
                     });
-                } else if f.protocol != Protocol::Share {
+                } else if f.protocol != Protocol::Share
+                    && !(f.protocol == Protocol::Sftp && f.use_ssh_agent)
+                {
                     ui.horizontal(|ui| {
                         ui.label("Passwort");
                         ui.add(

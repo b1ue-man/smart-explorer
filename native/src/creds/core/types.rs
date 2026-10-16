@@ -51,7 +51,11 @@ impl Protocol {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum AuthKind {
     Password,
-    Key { path: String },
+    Key {
+        path: String,
+    },
+    /// SFTP only: the identities of the running SSH agent; no stored secret.
+    SshAgent,
 }
 
 #[derive(Clone, Debug)]
@@ -117,6 +121,7 @@ pub(super) fn serialize(c: &SavedConnection) -> String {
     let (auth, keypath) = match &c.auth {
         AuthKind::Password => ("password", String::new()),
         AuthKind::Key { path } => ("key", path.clone()),
+        AuthKind::SshAgent => ("ssh-agent", String::new()),
     };
     [
         c.protocol.as_str().to_string(),
@@ -143,6 +148,7 @@ pub(super) fn parse(line: &str) -> Option<SavedConnection> {
         "key" => AuthKind::Key {
             path: f[5].to_string(),
         },
+        "ssh-agent" => AuthKind::SshAgent,
         _ => AuthKind::Password,
     };
     Some(SavedConnection {
@@ -204,6 +210,44 @@ mod tests {
                 path: "C:/keys/id_ed25519".into()
             }
         );
+    }
+
+    #[test]
+    fn luecken_task_ssh_agent_auth_round_trips_and_needs_no_key_path() {
+        let mut c = sample_pw();
+        c.auth = AuthKind::SshAgent;
+        let line = serialize(&c);
+        assert!(line.contains("\tssh-agent\t\t"));
+        assert_eq!(parse(&line).unwrap().auth, AuthKind::SshAgent);
+    }
+
+    #[test]
+    fn luecken_task_saved_connections_of_0_5_180_keep_their_auth_and_identity() {
+        let line = "sftp\tnas\t22\talice\tpassword\t\t/home/alice\tNAS\t1";
+        let password = parse(line).unwrap();
+        assert_eq!(password.auth, AuthKind::Password);
+        assert!(password.use_agent);
+        assert_eq!(password.account(), "sftp://alice@nas:22/home/alice");
+        // The line 0.5.180 wrote is written back byte for byte.
+        assert_eq!(serialize(&password), line);
+
+        // Eight fields (before the acceleration-agent flag) and a key login.
+        let key = parse("sftp\tnas\t22\talice\tkey\t/home/alice/.ssh/id\t/\t").unwrap();
+        assert_eq!(
+            key.auth,
+            AuthKind::Key {
+                path: "/home/alice/.ssh/id".into()
+            }
+        );
+        assert!(!key.use_agent);
+        assert_eq!(key.account(), "sftp://alice@nas:22/");
+
+        // The login kind never enters the account key, so places, favourites
+        // and sync endpoints of an old connection keep their identity.
+        let mut agent = key.clone();
+        agent.auth = AuthKind::SshAgent;
+        assert_eq!(agent.account(), key.account());
+        assert_eq!(agent.to_target(), key.to_target());
     }
 
     #[test]

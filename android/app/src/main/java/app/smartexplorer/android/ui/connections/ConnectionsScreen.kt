@@ -108,7 +108,7 @@ fun ConnectionsScreen(startWithNewForm: Boolean, onNewFormShown: () -> Unit, onB
         is ConnConfirm.ForgetKey -> ConfirmDialog(
             title = "Hostschlüssel vergessen?",
             message = "Nur tun, wenn der Server seinen Schlüssel erwartet geändert hat. Beim nächsten Verbinden " +
-                "wird der dann angebotene Schlüssel ohne Rückfrage gespeichert.",
+                "wird der dann angebotene Schlüssel mit seinem Fingerabdruck zur Bestätigung angezeigt.",
             confirmLabel = "Vergessen",
             destructive = true,
             onConfirm = {
@@ -120,6 +120,15 @@ fun ConnectionsScreen(startWithNewForm: Boolean, onNewFormShown: () -> Unit, onB
         null -> Unit
     }
     vm.report?.let { RemovalReportDialog(it, onDismiss = { vm.report = null }) }
+    vm.hostKeyPrompt?.let { prompt ->
+        ConfirmDialog(
+            title = "SSH-Hostschlüssel prüfen",
+            message = prompt.text + "\n\nNur vertrauen, wenn der Fingerabdruck mit dem des Servers übereinstimmt.",
+            confirmLabel = "Vertrauen",
+            onConfirm = { vm.trustHostKey(prompt) },
+            onDismiss = { vm.dismissHostKey() },
+        )
+    }
 }
 
 @Composable

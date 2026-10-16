@@ -129,6 +129,8 @@ fn connect_sftp(
             path: form.keyfile.trim().to_string(),
             passphrase: opt(&passphrase),
         }
+    } else if form.use_ssh_agent {
+        crate::sftp::SftpAuth::Agent
     } else {
         crate::sftp::SftpAuth::Password(password.clone())
     };
@@ -142,7 +144,14 @@ fn connect_sftp(
     };
     match crate::sftp::SftpBackend::connect(cfg) {
         Ok(be) => {
-            let s = if form.use_key { passphrase } else { password };
+            let s = if form.use_key {
+                passphrase
+            } else if form.use_ssh_agent {
+                // The agent holds the keys; nothing is stored.
+                String::new()
+            } else {
+                password
+            };
             if let Err(error) = persist(&form, port, Some(&s)) {
                 return ConnectResult::Err(format!(
                     "Verbindung hergestellt, aber Speichern fehlgeschlagen: {error}"

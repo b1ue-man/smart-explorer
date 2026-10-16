@@ -7,6 +7,9 @@ pub enum SftpAuth {
         path: String,
         passphrase: Option<String>,
     },
+    /// The identities of the running SSH agent (`SSH_AUTH_SOCK`, the Windows
+    /// OpenSSH agent or Pageant); no secret is stored.
+    Agent,
 }
 
 pub struct SftpConfig {

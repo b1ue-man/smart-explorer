@@ -53,6 +53,8 @@ impl App {
     }
 
     pub(in crate::app) fn ui_status(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        crate::app::host_key_ui::window(self, &ctx);
         let sel_bytes = self.selection_bytes();
         let progress = self.progress.clone();
         let transfers: Vec<(usize, TransferProgress, String, bool)> = self
@@ -202,6 +204,7 @@ impl App {
                 if let Some(ref e) = self.error_msg {
                     ui.colored_label(theme::danger(ui), format!("⚠ {}", e));
                 }
+                crate::app::host_key_ui::status_button(self, ui);
                 let scan_errors = progress.errors.max(self.failed_paths.len() as u64) as usize;
                 let app_errors = if self.app_errors.is_empty() && self.error_msg.is_some() {
                     1
