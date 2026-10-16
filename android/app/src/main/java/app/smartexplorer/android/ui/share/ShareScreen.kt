@@ -30,6 +30,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.smartexplorer.android.R
 import app.smartexplorer.android.api.ShareApi
+import app.smartexplorer.android.api.ShareSettingsApi
 import app.smartexplorer.android.api.ShareStatus
 import app.smartexplorer.android.core.Core
 import app.smartexplorer.android.core.CoreEvent
@@ -202,6 +203,14 @@ private fun ShareBlockContent(block: ShareBlock, vm: ShareViewModel, status: Sha
                     makeDiscoverable = { open(ShareDialog.Discoverable) },
                     stopDiscoverable = { offerId -> vm.act("Nicht beendet") { ShareApi.stopDiscoverable(offerId) } },
                     copyDirectCode = { code -> TextActions.copy(context, "Direct-Code", code) },
+                    setDirectOnline = { online ->
+                        vm.act(
+                            "Direct-Code nicht geändert",
+                            if (online) "Direct-Code ist erreichbar" else "Direct-Code ist nicht erreichbar",
+                        ) { ShareSettingsApi.setDirectOnline(online) }
+                    },
+                    renewCode = { open(ShareDialog.RenewCode) },
+                    setLanPresence = { enabled -> vm.act("LAN-Einstellung nicht gespeichert") { ShareSettingsApi.setLanPresence(enabled) } },
                 ),
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                 serverInfo = vm.serverInfo,
@@ -251,6 +260,9 @@ private fun ShareBlockContent(block: ShareBlock, vm: ShareViewModel, status: Sha
                 onRemove = { scope, export -> vm.act("Freigabe nicht entfernt") { ShareApi.removeExport(scope, export.path) } },
                 onAccess = { scope, export, restoreHome -> open(ShareDialog.ExportAccess(scope, export, restoreHome)) },
                 onConnections = { scope -> open(ShareDialog.Connections(scope)) },
+                onMove = { scope, export, offset ->
+                    vm.act("Reihenfolge nicht geändert") { ShareSettingsApi.moveExport(scope, export.path, offset) }
+                },
             )
         }
         ShareBlock.Rights -> ContactRightsSection(status?.writeGrants, open)
@@ -262,6 +274,8 @@ private fun ShareBlockContent(block: ShareBlock, vm: ShareViewModel, status: Sha
                     allow = { target -> vm.setExec(target, enabled = true) },
                     revoke = { target -> vm.setExec(target, enabled = false) },
                     stop = { job -> vm.stopExec(job) },
+                    programs = { target -> open(ShareDialog.ExecPrograms(target)) },
+                    log = { open(ShareDialog.ExecLog) },
                 ),
             )
         }
@@ -287,4 +301,8 @@ private fun peerActions(vm: ShareViewModel, open: (ShareDialog) -> Unit) = PeerA
     shareBack = { device -> open(ShareDialog.ShareBack(device)) },
     roomPolicy = { room -> open(ShareDialog.RoomPolicy(room)) },
     roomMember = { room, member, action -> open(ShareDialog.RoomMember(room, member, action)) },
+    connection = { device -> open(ShareDialog.DeviceConnection(device)) },
+    renameRoom = { room -> open(ShareDialog.RenameRoom(room)) },
+    rejoinRoom = { room -> vm.act("Nicht beigetreten", "Raum „${room.name}“ wird wieder beigetreten") { ShareSettingsApi.rejoinRoom(room.profileId) } },
+    resetMemberTrust = { room, member -> open(ShareDialog.ResetMemberTrust(room, member)) },
 )

@@ -1,19 +1,22 @@
 //! This phone as exec host (api.md §5): the provider and the grant targets
 //! of `share.status`, `share.setExec` through the daemon's journal-backed
-//! grant mutation (like the desktop), and the job list with cancel
-//! (`share.execJobs`, `share.cancelExecJob`). Commands starting or ending on
-//! this phone wake the Share poller, which then sends `share`.
+//! grant mutation (like the desktop) with an optional program list, the
+//! job list with cancel (`share.execJobs`, `share.cancelExecJob`) and this
+//! host's audit log (`share.execLog`). Android runs commands only as the
+//! app's own account (Standardnutzer); a program list narrows a grant like
+//! `se share grants exec enable --allow-program`. Commands starting or ending
+//! on this phone wake the Share poller, which then sends `share`.
 use std::sync::OnceLock;
 
 use serde_json::{json, Value};
 
-use super::args::{bool_arg, invalid, str_arg};
+use super::args::{bool_arg, invalid, opt_i64, str_arg, string_list};
 use super::share_state::{committed, default_home, wake};
 use crate::daemon::{ExecCancelTarget, ExecJobDirection, ExecJobsSnapshot};
 use crate::mobile::ApiError;
 use crate::share::{
-    exec_target_views, resolve_exec_target, ExecId, ExecJobView, ExecProviderStatus,
-    ExecTargetRelation, ExecTargetView, ShareProfiles,
+    exec_target_views, resolve_exec_target, ExecGrantSettings, ExecId, ExecJobView,
+    ExecProviderStatus, ExecRunAs, ExecTargetRelation, ExecTargetView, ShareProfiles,
 };
 
 /// The exec provider of this device; its first use also ends command trees
@@ -29,6 +32,9 @@ pub(super) fn provider_json(status: &ExecProviderStatus) -> Value {
         "available": status.available,
         "provider": status.provider,
         "detail": status.detail,
+        // The account of the app, the Standardnutzer of every grant here.
+        "userLabel": status.user_label,
+        "runAsSupported": crate::share::exec_run_as_supported(),
     })
 }
 
@@ -55,14 +61,22 @@ fn target_json(view: &ExecTargetView) -> Value {
         "enabled": view.enabled,
         "baseAuthorized": view.base_authorized,
         "policyRevision": view.policy_revision,
+        // `standard` = the app's own account; Android cannot run another.
+        "runAs": view.run_as.account_name().unwrap_or("standard"),
+        // Empty: the full shell; otherwise the only programs it may start.
+        "programs": view.programs,
     })
 }
 
-/// `share.setExec {targetKey, enabled}` → `{revision}`. The key is resolved
-/// against the stored profiles, so a replaced identity is `not_found`.
+/// `share.setExec {targetKey, enabled, programs?}` → `{revision}`. The key
+/// is resolved against the stored profiles, so a replaced identity is
+/// `not_found`. `programs` (the whole list; `[]` = full shell) is checked
+/// like the CLI's `--allow-program` before anything is stored; without it
+/// the grant keeps its list.
 pub(super) fn set_exec(args: &Value) -> Result<Value, ApiError> {
     let key = str_arg(args, "targetKey")?;
     let enabled = bool_arg(args, "enabled")?;
+    let settings = program_settings(args)?;
     let profiles = ShareProfiles::load_checked(default_home())
         .map_err(|error| ApiError::internal(format!("Share-Profile nicht lesbar: {error}")))?;
     let view = resolve_exec_target(&profiles, key).ok_or_else(|| {
@@ -87,7 +101,7 @@ pub(super) fn set_exec(args: &Value) -> Result<Value, ApiError> {
             ));
         }
     }
-    let result = crate::daemon::mutate_exec_grant(view.target, enabled, None)
+    let result = crate::daemon::mutate_exec_grant(view.target, enabled, settings)
         .map_err(|error| ApiError::internal(format!("Befehlsfreigabe nicht geändert: {error}")))?;
     let answer = grant_answer(
         result.persisted,
@@ -102,6 +116,40 @@ pub(super) fn set_exec(args: &Value) -> Result<Value, ApiError> {
     }
     wake();
     Ok(answer)
+}
+
+/// The optional `programs` of `share.setExec` as grant settings for this
+/// phone: always the Standardnutzer, every entry a bare name or an absolute
+/// path (`ExecGrantSettings::validate_for_this_host`).
+pub(super) fn program_settings(args: &Value) -> Result<Option<ExecGrantSettings>, ApiError> {
+    if args.get("programs").is_none_or(Value::is_null) {
+        return Ok(None);
+    }
+    let programs = string_list(args, "programs")?
+        .into_iter()
+        .map(|program| program.trim().to_string())
+        .collect::<Vec<_>>();
+    let settings = ExecGrantSettings {
+        run_as: ExecRunAs::Standard,
+        programs,
+    };
+    settings
+        .validate_for_this_host()
+        .map_err(|error| invalid(format!("Programmliste ungültig: {error}")))?;
+    Ok(Some(settings))
+}
+
+/// `share.execLog {lines?}` → `{entries, max}`: this host's audit log as the
+/// desktop shows it (newest first, every field cut and cleaned, at most
+/// `max` entries).
+pub(super) fn exec_log(args: &Value) -> Result<Value, ApiError> {
+    let max = crate::share::MAX_EXEC_AUDIT_VIEW;
+    let lines = opt_i64(args, "lines")
+        .map(|lines| lines.clamp(1, max as i64) as usize)
+        .unwrap_or(200);
+    let entries = crate::share::exec_audit_entries(lines)
+        .map_err(|error| ApiError::internal(format!("Befehlsprotokoll nicht lesbar: {error}")))?;
+    Ok(json!({ "entries": entries, "max": max }))
 }
 
 /// Only a change that is both stored and applied counts (desktop

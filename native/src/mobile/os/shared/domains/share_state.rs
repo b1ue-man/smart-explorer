@@ -203,6 +203,10 @@ impl ShareState {
             exec_provider,
         });
         status["power"] = share_power::current_power_json();
+        // The stored LAN setting (default on), next to the worker's state.
+        status["lanPresenceEnabled"] =
+            json!(crate::share::LanSettings::load()
+                .map_or(true, |settings| settings.presence_enabled));
         status
     }
 }

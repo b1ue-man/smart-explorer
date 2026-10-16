@@ -44,6 +44,11 @@ internal class PeerActions(
     val shareBack: (ShareDevice) -> Unit,
     val roomPolicy: (ShareRoom) -> Unit,
     val roomMember: (ShareRoom, ShareMember, String) -> Unit,
+    /** „Verbindung…“: connect/open automatically, reset trust. */
+    val connection: (ShareDevice) -> Unit,
+    val renameRoom: (ShareRoom) -> Unit,
+    val rejoinRoom: (ShareRoom) -> Unit,
+    val resetMemberTrust: (ShareRoom, ShareMember) -> Unit,
 )
 
 /** Section "Geräte": Direct devices; tap opens the device's files. */
@@ -66,6 +71,8 @@ private fun DeviceRow(device: ShareDevice, actions: PeerActions) {
         if (device.lan) append(" · LAN")
         append(if (device.shareBack) " · Rückfreigabe an" else " · Keine neue Rückfreigabe")
         device.write?.let { append(if (it) " · Schreibrecht" else " · Nur lesen") }
+        if (!device.autoConnect) append(" · Verbindet nicht automatisch")
+        if (device.autoOpen) append(" · Öffnet automatisch")
     }
     ListItem(
         headlineContent = { Text(name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
@@ -85,6 +92,7 @@ private fun DeviceRow(device: ShareDevice, actions: PeerActions) {
                     "Befehl ausführen" to { actions.exec(target) },
                     "Zugriff anfragen" to { actions.requestAccess(device) },
                     "Eigene Freigaben…" to { actions.shareBack(device) },
+                    "Verbindung…" to { actions.connection(device) },
                     "Entfernen" to { actions.removeDevice(device) },
                 ),
             )
@@ -134,7 +142,8 @@ private fun RoomBlock(room: ShareRoom, actions: PeerActions) {
                     buildList<Pair<String, () -> Unit>> {
                         add("Code anzeigen" to { actions.showRoomCode(room) })
                         add("Rechte und Bestätigung…" to { actions.roomPolicy(room) })
-                        if (room.autoJoin) add("Verlassen" to { actions.leaveRoom(room) })
+                        add("Umbenennen…" to { actions.renameRoom(room) })
+                        if (room.autoJoin) add("Verlassen" to { actions.leaveRoom(room) }) else add("Wieder beitreten" to { actions.rejoinRoom(room) })
                         add("Entfernen" to { actions.removeRoom(room) })
                     },
                 )
@@ -173,10 +182,11 @@ private fun MemberRow(room: ShareRoom, member: ShareMember, actions: PeerActions
                     add("Befehl ausführen" to { actions.exec(target) })
                 }
                 when {
-                    member.blocked -> add("Wieder zulassen…" to { actions.roomMember(room, member, "allow") })
                     pending -> add("Zulassen…" to { actions.roomMember(room, member, "admit") })
+                    member.blocked -> add("Wieder zulassen…" to { actions.roomMember(room, member, "allow") })
                     else -> add("Sperren…" to { actions.roomMember(room, member, "block") })
                 }
+                add("Vertrauen zurücksetzen" to { actions.resetMemberTrust(room, member) })
             })
         },
         modifier = Modifier.clickable(enabled = usable) { actions.open(member.location) },

@@ -69,8 +69,8 @@ private fun RequestCard(request: ShareRequestInfo, incoming: Boolean, actions: R
 
 /**
  * Section "Freigaben": local folders this device offers to Direct devices and per room, each with
- * [+ Ordner freigeben] and ⋮ Entfernen. [onAdd]/[onRemove] get the scope (`direct` or a room
- * profile id).
+ * [+ Ordner freigeben] and ⋮ Rechte…/Nach oben/Nach unten/Entfernen (the order other devices see).
+ * [onAdd]/[onRemove] get the scope (`direct` or a room profile id); [onMove] the offset -1 or 1.
  */
 @Composable
 internal fun ExportsSection(
@@ -79,15 +79,34 @@ internal fun ExportsSection(
     onRemove: (scope: String, export: ShareExport) -> Unit,
     onAccess: (scope: String, export: ShareExport, restoreHome: Boolean) -> Unit,
     onConnections: (scope: String) -> Unit,
+    onMove: (scope: String, export: ShareExport, offset: Int) -> Unit,
 ) {
     SectionHeader("Freigaben")
     HintLine("Ordner, die andere Geräte auf diesem Telefon sehen dürfen.")
-    ExportGroup("Für Direkt-Geräte", SHARE_DIRECT, status.exports.direct, status.connectionExports.direct, status, onAdd, onRemove, onAccess, onConnections)
+    val actions = ExportActions(onAdd, onRemove, onAccess, onConnections, onMove)
+    ExportGroup("Für Direkt-Geräte", SHARE_DIRECT, status.exports.direct, status.connectionExports.direct, status, actions)
     status.rooms.forEach { room ->
         ExportGroup("Raum „${room.name.ifBlank { "Raum" }}“", room.profileId, status.exports.rooms[room.profileId].orEmpty(),
-            status.connectionExports.rooms[room.profileId].orEmpty(), status, onAdd, onRemove, onAccess, onConnections)
+            status.connectionExports.rooms[room.profileId].orEmpty(), status, actions)
     }
 }
+
+private class ExportActions(
+    val onAdd: (String) -> Unit,
+    val onRemove: (String, ShareExport) -> Unit,
+    val onAccess: (String, ShareExport, Boolean) -> Unit,
+    val onConnections: (String) -> Unit,
+    val onMove: (String, ShareExport, Int) -> Unit,
+)
+
+/** Menu entries of one export at [index] of [count]. */
+private fun exportMenu(scope: String, export: ShareExport, index: Int, count: Int, actions: ExportActions): List<Pair<String, () -> Unit>> =
+    buildList<Pair<String, () -> Unit>> {
+        add("Rechte…" to { actions.onAccess(scope, export, false) })
+        if (index > 0) add("Nach oben" to { actions.onMove(scope, export, -1) })
+        if (index < count - 1) add("Nach unten" to { actions.onMove(scope, export, 1) })
+        add("Entfernen" to { actions.onRemove(scope, export) })
+    }
 
 @Composable
 private fun ExportGroup(
@@ -96,19 +115,19 @@ private fun ExportGroup(
     exports: List<ShareExport>,
     connections: List<ShareConnectionExport>,
     status: ShareStatus,
-    onAdd: (String) -> Unit,
-    onRemove: (String, ShareExport) -> Unit,
-    onAccess: (String, ShareExport, Boolean) -> Unit,
-    onConnections: (String) -> Unit,
+    actions: ExportActions,
 ) {
+    val onAdd = actions.onAdd
+    val onAccess = actions.onAccess
+    val onConnections = actions.onConnections
     Text(title, style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(start = 16.dp, top = 12.dp))
     if (exports.isEmpty()) HintLine("Keine Ordner freigegeben.")
-    exports.forEach { export ->
+    exports.forEachIndexed { index, export ->
         ListItem(
             headlineContent = { Text(export.label.ifBlank { export.path }, maxLines = 1, overflow = TextOverflow.Ellipsis) },
             supportingContent = { Text("${accessLabel(export.access)}\n${export.path}", maxLines = 3, overflow = TextOverflow.Ellipsis) },
             leadingContent = { SeIcon(R.drawable.ic_folder, contentDescription = null) },
-            trailingContent = { RowMenu(listOf("Rechte…" to { onAccess(scope, export, false) }, "Entfernen" to { onRemove(scope, export) })) },
+            trailingContent = { RowMenu(exportMenu(scope, export, index, exports.size, actions)) },
         )
         if (status.autoHomeMigrations.any { it.scope == scope && it.path == export.path }) {
             HintLine("Die frühere automatische Home-Freigabe wurde einmalig nur lesbar. Aktuell: ${accessLabel(export.access)}.")

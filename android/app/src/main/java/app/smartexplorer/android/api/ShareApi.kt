@@ -30,6 +30,10 @@ data class ShareDevice(
     val lan: Boolean = false,
     val shareBack: Boolean = false,
     val write: Boolean? = null,
+    /** Connect to this device automatically (desktop „Automatisch verbinden“). */
+    val autoConnect: Boolean = true,
+    /** Open its files once it is reachable. */
+    val autoOpen: Boolean = false,
 )
 
 @Serializable
@@ -155,6 +159,8 @@ data class ShareStatus(
     /** `null` = no Share server configured (LAN only). */
     val server: String? = null,
     val lanPresence: String = "",
+    /** The stored setting „Gekoppelte Geräte im lokalen Netz finden“ (default on). */
+    val lanPresenceEnabled: Boolean = true,
     val identity: ShareIdentityInfo = ShareIdentityInfo(),
     val devices: List<ShareDevice> = emptyList(),
     /** This phone as exec host (ShareExecApi.kt). */

@@ -102,6 +102,8 @@ fn device_json(profiles: &ShareProfiles, contact: &DirectContact, now_secs: i64)
         "lan": lan,
         "shareBack": contact.relation.share_back,
         "write": policy_status::contact_write(profiles, contact),
+        "autoConnect": contact.auto_connect,
+        "autoOpen": contact.auto_open,
     })
 }
 
