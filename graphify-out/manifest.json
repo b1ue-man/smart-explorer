@@ -1170,9 +1170,9 @@
     "semantic_hash": "f730451486b20469cd00c08997cd0861"
   },
   "app/core/share_exec_ui_tests.rs": {
-    "mtime": 1792161334.963641,
-    "ast_hash": "fbd286564f86263d8f81efb14ea9d917",
-    "semantic_hash": "fbd286564f86263d8f81efb14ea9d917"
+    "mtime": 1792165622.8038306,
+    "ast_hash": "6359411da92911ee60d014a9e22b086c",
+    "semantic_hash": "6359411da92911ee60d014a9e22b086c"
   },
   "app/core/share_exports_ui.rs": {
     "mtime": 1791557633.0806913,
@@ -2620,9 +2620,9 @@
     "semantic_hash": "6c79bb71485e54c53e27b540bfe04e77"
   },
   "cli/connections/edit.rs": {
-    "mtime": 1792161641.3759384,
-    "ast_hash": "2c1d6f4eea81dda6346d2e46213fc0e6",
-    "semantic_hash": "2c1d6f4eea81dda6346d2e46213fc0e6"
+    "mtime": 1792164307.2277582,
+    "ast_hash": "0c4719480ef9e34708931a007c3e63d1",
+    "semantic_hash": "0c4719480ef9e34708931a007c3e63d1"
   },
   "cli/connections/gdrive.rs": {
     "mtime": 1792162502.7678182,
@@ -3235,9 +3235,9 @@
     "semantic_hash": "249694640c8a85bd938b1e5227a931ef"
   },
   "cli/sync_jobs/output.rs": {
-    "mtime": 1792163101.7931838,
-    "ast_hash": "d5f22e5f57a6b50fe39108b4532ff5f1",
-    "semantic_hash": "d5f22e5f57a6b50fe39108b4532ff5f1"
+    "mtime": 1792164135.7418568,
+    "ast_hash": "16abb16fe084ca073482be19ee5dfb26",
+    "semantic_hash": "16abb16fe084ca073482be19ee5dfb26"
   },
   "cli/target.rs": {
     "mtime": 1792134288.826519,
@@ -3380,9 +3380,9 @@
     "semantic_hash": "deedcd83ca5f2b2e4bbce95bfa769e40"
   },
   "connect/mod.rs": {
-    "mtime": 1792161544.3523297,
-    "ast_hash": "2b19a082402ada19bb39c86044ca597e",
-    "semantic_hash": "2b19a082402ada19bb39c86044ca597e"
+    "mtime": 1792164274.5163898,
+    "ast_hash": "c237648c836b693538bf057e861545be",
+    "semantic_hash": "c237648c836b693538bf057e861545be"
   },
   "connect/os/shared/cleanup.rs": {
     "mtime": 1790354782.3838184,
@@ -3390,9 +3390,14 @@
     "semantic_hash": "49037152a25d2fe7f0ce6ec520523a30"
   },
   "connect/os/shared/connection_edit.rs": {
-    "mtime": 1792161544.4673316,
-    "ast_hash": "20215fba506f93df2c63025a57c601f3",
-    "semantic_hash": "20215fba506f93df2c63025a57c601f3"
+    "mtime": 1792164274.5173898,
+    "ast_hash": "9e9ec884c988b4d3a58fd4d03ce3e9ec",
+    "semantic_hash": "9e9ec884c988b4d3a58fd4d03ce3e9ec"
+  },
+  "connect/os/shared/connection_edit_refs.rs": {
+    "mtime": 1792164264.8732817,
+    "ast_hash": "3af7074a278f3913e3676e8d1f46de53",
+    "semantic_hash": "3af7074a278f3913e3676e8d1f46de53"
   },
   "connect/os/shared/connector.rs": {
     "mtime": 1792134178.7310054,
@@ -5330,9 +5335,9 @@
     "semantic_hash": "17cb8bf4ad95c3387d48a7dc382a8757"
   },
   "mobile/os/shared/domains/connections.rs": {
-    "mtime": 1792161557.2015457,
-    "ast_hash": "87c0cfd8aeaf4041495fa075f01e6d70",
-    "semantic_hash": "87c0cfd8aeaf4041495fa075f01e6d70"
+    "mtime": 1792164284.124498,
+    "ast_hash": "28c110baff5517463ae9e385eed55275",
+    "semantic_hash": "28c110baff5517463ae9e385eed55275"
   },
   "mobile/os/shared/domains/gdrive.rs": {
     "mtime": 1790358782.5484574,
@@ -5345,9 +5350,9 @@
     "semantic_hash": "6b77a31e9b7a5950cb9e3d906f87357b"
   },
   "mobile/os/shared/domains/job_json.rs": {
-    "mtime": 1792162296.4948726,
-    "ast_hash": "9950305672e0a84fca833890c77efe91",
-    "semantic_hash": "9950305672e0a84fca833890c77efe91"
+    "mtime": 1792164135.7418568,
+    "ast_hash": "42dee15e644d72c86bd209365d90f890",
+    "semantic_hash": "42dee15e644d72c86bd209365d90f890"
   },
   "mobile/os/shared/domains/locations.rs": {
     "mtime": 1790358782.68246,
@@ -5380,9 +5385,9 @@
     "semantic_hash": "b2129a94e5cd8fb65cd54ed3b6347ba0"
   },
   "mobile/os/shared/domains/share_exec_tests.rs": {
-    "mtime": 1790972070.177932,
-    "ast_hash": "c8733d764edabb54239c7a8be0aa88df",
-    "semantic_hash": "c8733d764edabb54239c7a8be0aa88df"
+    "mtime": 1792165007.0440261,
+    "ast_hash": "951a868305b1dfbba806571541874a97",
+    "semantic_hash": "951a868305b1dfbba806571541874a97"
   },
   "mobile/os/shared/domains/share_peers.rs": {
     "mtime": 1791557633.0816913,
