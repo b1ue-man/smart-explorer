@@ -154,17 +154,40 @@ fn exec_grant_ipc_reports_durable_and_runtime_state() {
         token: "token".into(),
         target: target.clone(),
         enabled: true,
+        settings: None,
     };
     let json = serde_json::to_string(&request).unwrap();
+    assert!(!json.contains("settings"));
     match serde_json::from_str::<IpcRequest>(&json).unwrap() {
         IpcRequest::MutateExecGrant {
             token,
             target: decoded,
             enabled,
+            settings,
         } => {
             assert_eq!(token, "token");
             assert_eq!(decoded, target);
             assert!(enabled);
+            assert!(settings.is_none());
+        }
+        _ => panic!("wrong request"),
+    }
+    let with_settings = IpcRequest::MutateExecGrant {
+        token: "token".into(),
+        target: target.clone(),
+        enabled: true,
+        settings: Some(crate::share::ExecGrantSettings {
+            run_as: crate::share::ExecRunAs::Account {
+                name: "deploy".into(),
+            },
+            programs: vec!["/usr/bin/uptime".into()],
+        }),
+    };
+    let json = serde_json::to_string(&with_settings).unwrap();
+    match serde_json::from_str::<IpcRequest>(&json).unwrap() {
+        IpcRequest::MutateExecGrant { settings, .. } => {
+            let settings = settings.unwrap();
+            assert_eq!(settings.programs, vec!["/usr/bin/uptime".to_string()]);
         }
         _ => panic!("wrong request"),
     }

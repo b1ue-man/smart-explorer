@@ -19,6 +19,25 @@ enum ExecStatusCommand {
     Cancel(OptionalSelector),
     #[command(about = "List bounded redacted recent execution history")]
     History,
+    #[command(
+        about = "Show this host's persistent Exec audit log (exec-audit.log)",
+        long_about = "Show the last entries of this host's persistent Exec audit log: refused \
+authentications and penalties, refused starts, starts and ends, each with device, \
+fingerprint, mode, program or <shell>, digest of the whole start, working directory, \
+account and result. Shell command text is never logged; text sent by the other device is \
+cut to 256 characters. The log survives restarts. It has two parts in the app data \
+folder, each keeping between 4 and 8 MiB (the previous file ends in .1): exec-audit.log \
+holds refused starts, starts and ends of authorized devices; exec-audit-rejected.log \
+holds refused authentications, penalized EndpointIds and devices without Exec \
+permission, so strangers cannot push out what authorized devices did."
+    )]
+    Log(LogArgs),
+}
+
+#[derive(Args)]
+struct LogArgs {
+    #[arg(long, default_value_t = 50, help = "Number of newest entries to show")]
+    lines: usize,
 }
 
 #[derive(Args)]
@@ -34,6 +53,9 @@ struct OptionalSelector {
 }
 
 pub(super) fn run(args: ExecStatusArgs) -> Result<(), String> {
+    if let Some(ExecStatusCommand::Log(log)) = &args.command {
+        return print_audit_log(log.lines, args.json);
+    }
     let snapshot = crate::daemon::exec_jobs()?;
     match args.command {
         None | Some(ExecStatusCommand::List) => {
@@ -44,6 +66,7 @@ pub(super) fn run(args: ExecStatusArgs) -> Result<(), String> {
             Ok(())
         }
         Some(ExecStatusCommand::History) => print(history(&snapshot), args.json),
+        Some(ExecStatusCommand::Log(_)) => Ok(()),
         Some(ExecStatusCommand::Show(selector)) => {
             let all = active(&snapshot)
                 .into_iter()
@@ -70,6 +93,30 @@ pub(super) fn run(args: ExecStatusArgs) -> Result<(), String> {
             Ok(())
         }
     }
+}
+
+/// The audit log is read directly from this installation's app data, so it
+/// works while the background worker is stopped.
+fn print_audit_log(lines: usize, json: bool) -> Result<(), String> {
+    let entries =
+        crate::share::exec_audit_tail(lines).map_err(|error| format!("Exec audit log: {error}"))?;
+    if json {
+        let values: Vec<serde_json::Value> = entries
+            .iter()
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&values).map_err(|error| error.to_string())?
+        );
+    } else if entries.is_empty() {
+        println!("exec_audit\t0\tno executions recorded on this host");
+    } else {
+        for entry in entries {
+            println!("{entry}");
+        }
+    }
+    Ok(())
 }
 
 fn cancel_target(job: JobChoice<'_>) -> crate::daemon::ExecCancelTarget {

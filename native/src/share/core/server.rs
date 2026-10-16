@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use iroh::endpoint::{Connection, RecvStream, SendStream, VarInt};
 
+use super::auth_penalty::PenaltyKind;
 use super::connection_events::ConnectionErrorKind;
 use super::core::eio;
 use super::framing::{
@@ -78,6 +79,15 @@ pub(super) fn transfers_in_use(principal: &super::session::PeerPrincipal) -> usi
     admission::principal_in_use(principal)
 }
 
+/// File sessions of paired devices reconnect on their own and are never
+/// penalized; an unknown endpoint's failures count (`auth_penalty.rs`).
+fn penalize_unknown(node: &ShareIrohNode, remote: &str, kind: PenaltyKind) {
+    if !node.known_endpoint(remote) {
+        node.auth_penalties()
+            .record(remote, kind, std::time::Instant::now());
+    }
+}
+
 pub(super) async fn handle_connection(
     node: Arc<ShareIrohNode>,
     conn: Connection,
@@ -96,10 +106,17 @@ pub(super) async fn handle_connection(
         "Session-Hello Timeout",
         recv_ctrl_limited(&mut recv, MAX_HANDSHAKE_CTRL_FRAME),
     )
-    .await?
+    .await
     {
-        Ctrl::PeerHello { hello } => hello,
-        _ => return Err(eio("Session-Hello fehlt")),
+        Ok(Ctrl::PeerHello { hello }) => hello,
+        Ok(_) => {
+            penalize_unknown(&node, &remote_node, PenaltyKind::NoAuthentication);
+            return Err(eio("Session-Hello fehlt"));
+        }
+        Err(error) => {
+            penalize_unknown(&node, &remote_node, PenaltyKind::NoAuthentication);
+            return Err(error);
+        }
     };
     if hello.protocol_version != 3 {
         io_deadline::run_until(
@@ -118,6 +135,7 @@ pub(super) async fn handle_connection(
     let session = match authenticate_incoming_session(&hello, &remote_node, &node.auth) {
         Ok(session) => session,
         Err(error) => {
+            penalize_unknown(&node, &remote_node, PenaltyKind::AuthFailure);
             io_deadline::run_until(
                 handshake_deadline,
                 "Session-Ablehnung Timeout",

@@ -1,4 +1,4 @@
-use super::super::exec_policy::ExecGrant;
+use super::super::exec_policy::{ExecGrant, ExecGrantSettings};
 use super::super::exec_types::ExecPrincipal;
 use super::super::identity::ShareIdentity;
 use super::super::profiles::{fingerprint_matches, ShareProfiles};
@@ -6,18 +6,24 @@ use super::super::types::{DirectGrantState, ExecGrantTarget};
 use super::ExecGrantMutation;
 
 impl ExecGrantMutation {
+    /// `settings` replaces run-as account and program list; `None` keeps
+    /// them (every enable/disable before run-as existed).
     pub(crate) fn prepare_persisted(
         profiles: &mut ShareProfiles,
         identity: &ShareIdentity,
         target: ExecGrantTarget,
         enabled: bool,
+        settings: Option<&ExecGrantSettings>,
         changed_at: i64,
     ) -> Result<(Self, u64), String> {
+        if let Some(settings) = settings {
+            settings.validate()?;
+        }
         let (principal, current) = resolve_profile_policy(profiles, identity, &target, enabled)?;
         let expected_revision = current.policy_revision;
         let mut policy = current.clone();
         policy
-            .set_runtime_enabled(enabled, changed_at)
+            .set_runtime_policy(enabled, settings, changed_at)
             .map_err(str::to_string)?;
         Ok((
             Self {

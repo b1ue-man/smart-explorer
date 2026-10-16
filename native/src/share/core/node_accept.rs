@@ -45,6 +45,22 @@ impl ShareIrohNode {
                     }
                     let remote = connection.remote_id().to_string();
                     let known = node.known_endpoint(&remote);
+                    // Penalized after failed authentication: Exec always,
+                    // file sessions only for unknown endpoints, so automatic
+                    // reconnects of paired devices are never throttled.
+                    let exec = connection.alpn() == EXEC_ALPN;
+                    if super::auth_penalty::refusal_applies(exec, known) {
+                        let now = std::time::Instant::now();
+                        if let Some(remaining) = node.auth_penalties().refusal(&remote, now) {
+                            super::exec_audit::record(super::exec_audit::AuditEvent::PenaltyRefused {
+                                remote_node: &remote,
+                                protocol: if exec { "exec" } else { "fs" },
+                                remaining_secs: remaining.as_secs(),
+                            });
+                            refuse(&connection);
+                            return;
+                        }
+                    }
                     let timeout = if known { KNOWN_HANDSHAKE } else { UNKNOWN_HANDSHAKE };
                     let deadline = tokio::time::Instant::now() + timeout;
                     let ticket = match node.application_handshakes.enqueue(remote, known) {
@@ -81,7 +97,7 @@ impl ShareIrohNode {
         });
     }
 
-    fn known_endpoint(&self, remote: &str) -> bool {
+    pub(super) fn known_endpoint(&self, remote: &str) -> bool {
         let Ok(auth) = self.auth.lock() else {
             return false;
         };

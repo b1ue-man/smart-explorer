@@ -248,7 +248,13 @@ impl ShareHost {
         &self,
         target: crate::share::ExecGrantTarget,
         enabled: bool,
+        settings: Option<crate::share::ExecGrantSettings>,
     ) -> Result<ExecGrantPersistResult, String> {
+        // Before anything is locked or written: a refused change leaves the
+        // grant exactly as it is.
+        if let Some(settings) = &settings {
+            settings.validate_for_this_host()?;
+        }
         let _exclusive = self
             .exec_grant_lock
             .lock()
@@ -280,6 +286,7 @@ impl ShareHost {
                 &identity,
                 target,
                 enabled,
+                settings.as_ref(),
                 crate::share::core_now_secs(),
             )?;
         let entry = JournalEntry::new(mutation, expected_policy_revision)?;

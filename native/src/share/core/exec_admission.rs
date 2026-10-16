@@ -1,5 +1,10 @@
 //! Connection authentication and job admission before Exec streaming.
+use super::super::auth_penalty::PenaltyKind;
+use super::super::exec_audit::{self, AuditEvent};
+use super::super::exec_auth::AuthorizedExecPeer;
+use super::super::exec_supervisor_protocol::RunAsAccount;
 use super::super::exec_terminal::{host_denial, host_features};
+use super::super::exec_types::{ExecProviderStatus, ExecStart};
 use super::*;
 
 pub(in crate::share) async fn handle_connection(
@@ -37,16 +42,40 @@ pub(in crate::share) async fn handle_connection(
         send_server_hello(&mut send, &server_hello),
     )
     .await?;
-    let client_hello = io_deadline::run_until(
+    let client_hello = match io_deadline::run_until(
         handshake_deadline,
         "Exec-Authentifizierung Timeout",
         recv_client_hello(&mut recv),
     )
-    .await?;
+    .await
+    {
+        Ok(hello) => hello,
+        Err(error) => {
+            node.auth_penalties().record(
+                &remote_node,
+                PenaltyKind::NoAuthentication,
+                std::time::Instant::now(),
+            );
+            return Err(error);
+        }
+    };
     let authorized =
         match authorize_client_hello(&server_hello, &client_hello, &remote_node, &node.auth) {
             Ok(authorized) => authorized,
-            Err(error) => {
+            Err(rejection) => {
+                if rejection.counts_as_failed_authentication() {
+                    node.auth_penalties().record(
+                        &remote_node,
+                        PenaltyKind::AuthFailure,
+                        std::time::Instant::now(),
+                    );
+                }
+                exec_audit::record(AuditEvent::AuthRejected {
+                    remote_node: &remote_node,
+                    claimed_device: &client_hello.device_id,
+                    reason: rejection.audit_reason(),
+                });
+                let error = io::Error::from(rejection);
                 let denied = ExecWireError {
                     code: "permission_denied".into(),
                     message: "exec authentication failed".into(),
@@ -128,11 +157,32 @@ pub(in crate::share) async fn handle_connection(
     // A terminal start is answered like a denied admission: no job is
     // prepared and no process exists.
     if let Some(denial) = host_denial(&start, terminal_supported) {
+        exec_audit::record(AuditEvent::StartRefused {
+            principal: &authorized.principal,
+            start: &start,
+            reason: &denial.message,
+        });
         protocol.terminal();
         send_terminal_frame(&mut send, &ServerFrame::Error(denial)).await?;
         wait_result_ack(&mut recv, &mut protocol, &start.exec_id).await?;
         return acknowledge_result(&mut send, &start.exec_id, &connection).await;
     }
+    // The grant's program list and run-as account are host decisions made
+    // before any process exists; a refusal is answered like a denied admission.
+    let launch = match grant_launch(&authorized, &start, &provider).await {
+        Ok(launch) => launch,
+        Err(denial) => {
+            exec_audit::record(AuditEvent::StartRefused {
+                principal: &authorized.principal,
+                start: &start,
+                reason: &denial.message,
+            });
+            protocol.terminal();
+            send_terminal_frame(&mut send, &ServerFrame::Error(denial)).await?;
+            wait_result_ack(&mut recv, &mut protocol, &start.exec_id).await?;
+            return acknowledge_result(&mut send, &start.exec_id, &connection).await;
+        }
+    };
     match node.exec_registry().prepare(
         authorized.principal,
         authorized.authorization,
@@ -142,8 +192,13 @@ pub(in crate::share) async fn handle_connection(
         Ok(ExecAdmission::Prepared(reservation)) => {
             serve_job(
                 node.exec_registry().clone(),
-                start,
-                reservation,
+                JobLaunch {
+                    start,
+                    reservation,
+                    account: launch.account,
+                    account_label: launch.account_label,
+                    program: launch.program,
+                },
                 send,
                 recv,
                 protocol,
@@ -186,5 +241,65 @@ pub(in crate::share) async fn handle_connection(
             wait_result_ack(&mut recv, &mut protocol, &start.exec_id).await?;
             acknowledge_result(&mut send, &start.exec_id, &connection).await
         }
+    }
+}
+
+/// What the grant decided about one start.
+struct GrantLaunch {
+    account: Option<RunAsAccount>,
+    /// The account as the audit log names it.
+    account_label: String,
+    /// The program file of a grant with a program list.
+    program: Option<std::path::PathBuf>,
+}
+
+/// Applies the grant to `start`: its program list and environment rule may
+/// refuse it (file system lookups, so on the blocking pool), and its run-as
+/// account is resolved (user database lookups block as well). Both are host
+/// decisions made before any job process exists.
+async fn grant_launch(
+    authorized: &AuthorizedExecPeer,
+    start: &ExecStart,
+    provider: &ExecProviderStatus,
+) -> Result<GrantLaunch, ExecWireError> {
+    let grant = authorized.grant.clone();
+    let checked = start.clone();
+    let program = tokio::task::spawn_blocking(move || {
+        grant.authorize_start(&checked, &super::super::exec_platform::program_search())
+    })
+    .await
+    .map_err(|_| refused("the program check of this host did not complete"))?
+    .map_err(refused)?;
+    let run_as = authorized.grant.run_as.clone();
+    let name = run_as.account_name().unwrap_or("standard").to_string();
+    let resolved =
+        tokio::task::spawn_blocking(move || super::super::exec_platform::resolve_run_as(&run_as))
+            .await
+            .map_err(|error| ExecWireError {
+                code: "account_unavailable".into(),
+                message: error.to_string(),
+            })?;
+    match resolved {
+        Ok(Some(account)) => Ok(GrantLaunch {
+            account_label: format!("{} (uid {})", account.name, account.uid),
+            account: Some(account),
+            program,
+        }),
+        Ok(None) => Ok(GrantLaunch {
+            account: None,
+            account_label: format!("standard ({})", provider.user_label),
+            program,
+        }),
+        Err(error) => Err(ExecWireError {
+            code: "account_unavailable".into(),
+            message: format!("run-as account {name:?} of this device: {error}"),
+        }),
+    }
+}
+
+fn refused(message: impl Into<String>) -> ExecWireError {
+    ExecWireError {
+        code: "program_not_permitted".into(),
+        message: message.into(),
     }
 }

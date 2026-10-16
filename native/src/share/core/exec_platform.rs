@@ -1,17 +1,19 @@
 use std::ffi::OsString;
 use std::io;
+use std::path::Path;
 use std::time::Instant;
 
 #[cfg(debug_assertions)]
 use std::time::Duration;
 
 use super::exec_supervisor_protocol::{
-    environment_for, SupervisorCommand, SupervisorEvent, SupervisorStart,
+    environment_for, environment_for_account, RunAsAccount, SupervisorCommand, SupervisorEvent,
+    SupervisorStart,
 };
 use super::exec_terminal::ExecTerminalSize;
 #[cfg(debug_assertions)]
 use super::exec_types::ExecId;
-use super::exec_types::{ExecProviderStatus, ExecStart};
+use super::exec_types::{ExecCommand, ExecProviderStatus, ExecStart};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum StopReason {
@@ -37,7 +39,17 @@ impl ContainedExec {
         })
     }
 
-    pub(crate) fn commit(&mut self, request: ExecStart) -> io::Result<()> {
+    /// Releases the start. `account` is the grant's resolved run-as account;
+    /// `None` runs the job as the worker's own account, as always before.
+    /// `program` is the path the worker resolved and authorized for a grant
+    /// with a program list: the supervisor then starts exactly that file and
+    /// never looks the name up itself (not in the job's `PATH` either).
+    pub(crate) fn commit(
+        &mut self,
+        mut request: ExecStart,
+        account: Option<RunAsAccount>,
+        program: Option<&Path>,
+    ) -> io::Result<()> {
         request.validate()?;
         if self.committed {
             return Err(io::Error::new(
@@ -45,11 +57,24 @@ impl ContainedExec {
                 "execution already committed",
             ));
         }
-        let environment = environment_for(&request);
+        if account.is_some() && !run_as_supported() {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "this host runs commands only as the worker's own account",
+            ));
+        }
+        if let Some(path) = program {
+            pin_program(&mut request, path)?;
+        }
+        let environment = match &account {
+            Some(account) => environment_for_account(&request, account),
+            None => environment_for(&request),
+        };
         self.inner.configure(&request)?;
         self.inner.send(&SupervisorCommand::Start(SupervisorStart {
             request,
             environment,
+            account,
         }))?;
         self.committed = true;
         Ok(())
@@ -95,13 +120,53 @@ impl ContainedExec {
     }
 }
 
+/// Replaces the program of an argv start by the authorized absolute path.
+fn pin_program(request: &mut ExecStart, path: &Path) -> io::Result<()> {
+    let ExecCommand::Argv { program, .. } = &mut request.command else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "a resolved program path only applies to an argv start",
+        ));
+    };
+    let path = path.to_str().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "the resolved program path is not valid UTF-8",
+        )
+    })?;
+    *program = path.to_string();
+    Ok(())
+}
+
 pub(crate) fn provider_status() -> ExecProviderStatus {
     super::platform_exec::provider_status()
+}
+
+/// Where this host looks bare program names up for a grant with a program
+/// list: a fixed list of system directories, never the caller's `PATH`.
+pub(crate) fn program_search() -> super::exec_policy::program_path::ProgramSearch {
+    super::platform_exec::program_search()
 }
 
 /// True when this host can give an Exec start a terminal (PTY or ConPTY).
 pub(crate) fn terminal_supported() -> bool {
     super::platform_exec::terminal_supported()
+}
+
+/// True when a grant may name another local account than the worker's.
+pub(crate) fn run_as_supported() -> bool {
+    super::platform_exec::run_as_supported()
+}
+
+/// Resolves a grant's run-as account on this host; `Ok(None)` for the
+/// Standardnutzer (the worker's own account).
+pub(crate) fn resolve_run_as(
+    run_as: &super::exec_policy::ExecRunAs,
+) -> io::Result<Option<RunAsAccount>> {
+    match run_as.account_name() {
+        None => Ok(None),
+        Some(name) => super::platform_exec::resolve_account(name).map(Some),
+    }
 }
 
 pub(super) fn run_supervisor_if_requested(arguments: &[OsString]) -> Option<io::Result<()>> {
@@ -129,7 +194,7 @@ pub(super) fn run_platform_self_test() -> io::Result<()> {
         terminal: None,
     };
     let mut process = ContainedExec::prepare(&request)?;
-    process.commit(request)?;
+    process.commit(request, None, None)?;
     let deadline = Instant::now() + Duration::from_secs(15);
     let mut saw_started = false;
     let mut saw_output = false;
@@ -185,7 +250,7 @@ fn run_root_exits_first_test() -> io::Result<()> {
         terminal: None,
     };
     let mut process = ContainedExec::prepare(&request)?;
-    process.commit(request)?;
+    process.commit(request, None, None)?;
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         match process.next_event(Some(deadline))? {
@@ -243,4 +308,42 @@ fn error_marker() -> &'static [u8] {
 #[cfg(all(debug_assertions, windows))]
 fn root_exits_first_command() -> &'static str {
     "start \"\" /b cmd /D /S /C \"ping -t 127.0.0.1 >nul\" & exit /b 9"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    fn start(command: ExecCommand) -> ExecStart {
+        ExecStart {
+            exec_id: super::super::exec_types::ExecId::parse("0c".repeat(16)).unwrap(),
+            command,
+            cwd: None,
+            env: BTreeMap::new(),
+            timeout_ms: None,
+            max_output_bytes: None,
+            terminal: None,
+        }
+    }
+
+    #[test]
+    fn luecken_task_the_supervisor_gets_the_authorized_path_instead_of_the_name() {
+        let mut request = start(ExecCommand::Argv {
+            program: "uptime".into(),
+            args: vec!["-p".into()],
+        });
+        pin_program(&mut request, Path::new("/usr/bin/uptime")).unwrap();
+        assert_eq!(
+            request.command,
+            ExecCommand::Argv {
+                program: "/usr/bin/uptime".into(),
+                args: vec!["-p".into()],
+            }
+        );
+        let mut shell = start(ExecCommand::Shell {
+            command: "true".into(),
+        });
+        assert!(pin_program(&mut shell, Path::new("/usr/bin/uptime")).is_err());
+    }
 }

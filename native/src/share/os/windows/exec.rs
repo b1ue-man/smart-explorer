@@ -13,6 +13,7 @@ use std::io;
 use std::mem::{size_of, zeroed};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::FromRawHandle;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Mutex};
 use std::time::{Duration, Instant};
@@ -219,6 +220,42 @@ pub(crate) fn provider_status() -> ExecProviderStatus {
 /// newer), so an Exec start may bring a terminal. Resolved once; cheap.
 pub(crate) fn terminal_supported() -> bool {
     exec_conpty::terminal_supported()
+}
+
+/// Lookup path of a grant with a program list: the Windows system
+/// directories below the worker's own `SystemRoot`, fixed, never the
+/// caller's `PATH`. Only `.exe` and `.com` complete a bare name; command
+/// scripts would start a shell.
+pub(crate) fn program_search() -> crate::share::exec_policy::program_path::ProgramSearch {
+    let root = std::env::var_os("SystemRoot")
+        .or_else(|| std::env::var_os("windir"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
+    crate::share::exec_policy::program_path::ProgramSearch {
+        directories: vec![
+            root.join("System32"),
+            root.clone(),
+            root.join(r"System32\Wbem"),
+        ],
+        suffixes: &[".exe", ".com"],
+    }
+}
+
+/// A Windows host runs Exec only as the worker's account: another account
+/// would need that account's password (`CreateProcessWithLogonW`) or a
+/// SYSTEM service with `SeTcbPrivilege` (S4U logon), neither of which the
+/// per-user worker has.
+pub(crate) fn run_as_supported() -> bool {
+    false
+}
+
+pub(crate) fn resolve_account(
+    _name: &str,
+) -> io::Result<crate::share::exec_supervisor_protocol::RunAsAccount> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "Windows hosts run commands only as the Smart Explorer user",
+    ))
 }
 
 pub(crate) fn run_supervisor_if_requested(arguments: &[OsString]) -> Option<io::Result<()>> {

@@ -6,9 +6,12 @@ use super::super::ipc_protocol::{
 };
 use super::super::ipc_storage::{read_ipc_addr, read_token};
 
+/// `settings` sets run-as account and program list in the same change;
+/// `None` keeps the grant's own.
 pub(crate) fn mutate_exec_grant(
     target: crate::share::ExecGrantTarget,
     enabled: bool,
+    settings: Option<crate::share::ExecGrantSettings>,
 ) -> Result<super::super::ipc_host::exec_grant_journal::ExecGrantPersistResult, String> {
     super::ensure_worker_ready()?;
     let token = read_token().map_err(|error| format!("Background-Worker Token: {error}"))?;
@@ -22,6 +25,7 @@ pub(crate) fn mutate_exec_grant(
             token,
             target,
             enabled,
+            settings,
         },
     )
     .map_err(|error| error.to_string())?;

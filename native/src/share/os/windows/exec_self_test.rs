@@ -197,6 +197,7 @@ fn run_prepared_contained_helper(request: ExecStart, mut process: ContainedExec)
     process.send(&SupervisorCommand::Start(SupervisorStart {
         request,
         environment,
+        account: None,
     }))?;
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut root_exited = false;

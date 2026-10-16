@@ -9,14 +9,14 @@ use super::core::{eio, now_secs, random_token};
 use super::exec_auth::authorize_client_hello;
 use super::exec_frame_reader;
 use super::exec_heartbeat::{ExecHeartbeatPolicy, EXEC_HEARTBEAT_POLICY};
-use super::exec_job::{run_contained_job, JobInput};
+use super::exec_job::{run_contained_job, JobInput, JobLaunch};
 use super::exec_protocol::{
     recv_client_frame, recv_client_hello, send_hello_error, send_hello_ok, send_server_frame,
     send_server_hello, ClientFrame, ExecHelloOk, ExecServerHello, ExecWireError, ServerFrame,
     ServerProtocolState,
 };
-use super::exec_registry::{ExecAdmission, ExecCancelReason, ExecRegistry, ExecReservation};
-use super::exec_types::{ExecId, ExecStart};
+use super::exec_registry::{ExecAdmission, ExecCancelReason, ExecRegistry};
+use super::exec_types::ExecId;
 use super::handshake_limits::ApplicationHandshakePermit;
 use super::io_deadline;
 use super::node::ShareIrohNode;
@@ -29,19 +29,18 @@ pub(super) use admission::handle_connection;
 
 async fn serve_job(
     registry: Arc<ExecRegistry>,
-    start: ExecStart,
-    reservation: ExecReservation,
+    launch: JobLaunch,
     mut send: iroh::endpoint::SendStream,
     recv: iroh::endpoint::RecvStream,
     mut protocol: ServerProtocolState,
     connection: Connection,
 ) -> io::Result<()> {
-    let exec_id = start.exec_id.clone();
+    let exec_id = launch.start.exec_id.clone();
     let (input_tx, input_rx) = mpsc::channel(16);
     let (output_tx, mut output_rx) = mpsc::channel(16);
     let worker_registry = registry.clone();
     let worker = tokio::task::spawn_blocking(move || {
-        run_contained_job(worker_registry, start, reservation, input_rx, output_tx)
+        run_contained_job(worker_registry, launch, input_rx, output_tx)
     });
     let mut frames = exec_frame_reader::client_frames(recv);
     let mut last_ping = tokio::time::Instant::now();

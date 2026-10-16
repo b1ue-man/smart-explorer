@@ -25,7 +25,31 @@ const ERROR: u8 = 21;
 pub(crate) struct SupervisorStart {
     pub(crate) request: ExecStart,
     pub(crate) environment: BTreeMap<String, String>,
+    /// `None`: the job runs as the worker's own account (Standardnutzer).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) account: Option<RunAsAccount>,
 }
+
+/// A local account resolved by the root worker (`getpwnam_r`,
+/// `getgrouplist`) for a grant's `run_as`. The supervisor switches the job's
+/// root process to exactly these ids before `exec`.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct RunAsAccount {
+    pub(crate) name: String,
+    pub(crate) uid: u32,
+    pub(crate) gid: u32,
+    pub(crate) groups: Vec<u32>,
+    pub(crate) home: String,
+    pub(crate) shell: String,
+}
+
+/// Search path of a job that runs as another account, the default of
+/// OpenSSH (`_PATH_STDPATH`) with the local prefixes.
+pub(crate) const ACCOUNT_PATH: &str =
+    "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+/// Worker values a job of another account keeps: locale (`LANG`, `LC_ALL`,
+/// `LC_CTYPE`) and time zone (`TZ`).
+const ACCOUNT_INHERITED: [&str; 4] = ["LANG", "LC_ALL", "LC_CTYPE", "TZ"];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum SupervisorCommand {
@@ -52,6 +76,30 @@ pub(crate) enum SupervisorEvent {
     RootExited(SupervisorExit),
     Exited(SupervisorExit),
     Error(String),
+}
+
+/// Environment of a job that runs as `account`: like an `sshd` session it
+/// starts clean (HOME, USER, LOGNAME, SHELL, PATH, locale) instead of
+/// inheriting the root worker's variables, then takes the caller's values.
+pub(crate) fn environment_for_account(
+    request: &ExecStart,
+    account: &RunAsAccount,
+) -> BTreeMap<String, String> {
+    let mut environment = BTreeMap::new();
+    for name in ACCOUNT_INHERITED {
+        if let Ok(value) = std::env::var(name) {
+            environment.insert(name.to_string(), value);
+        }
+    }
+    environment.insert("HOME".into(), account.home.clone());
+    environment.insert("USER".into(), account.name.clone());
+    environment.insert("LOGNAME".into(), account.name.clone());
+    environment.insert("SHELL".into(), account.shell.clone());
+    environment.insert("PATH".into(), ACCOUNT_PATH.into());
+    for (name, value) in &request.env {
+        environment.insert(name.clone(), value.clone());
+    }
+    environment
 }
 
 pub(crate) fn environment_for(request: &ExecStart) -> BTreeMap<String, String> {
@@ -222,6 +270,51 @@ mod tests {
                 .get("SMART_EXPLORER_ALLOWED_BY_CALLER")
                 .map(String::as_str),
             Some("yes")
+        );
+    }
+
+    #[test]
+    fn luecken_task_other_account_starts_with_a_clean_environment() {
+        let mut request = ExecStart {
+            exec_id: ExecId::parse("02".repeat(16)).unwrap(),
+            command: ExecCommand::Shell {
+                command: "true".into(),
+            },
+            cwd: None,
+            env: BTreeMap::from([("EDITOR".into(), "vi".into())]),
+            timeout_ms: None,
+            max_output_bytes: None,
+            terminal: None,
+        };
+        let account = RunAsAccount {
+            name: "alice".into(),
+            uid: 1000,
+            gid: 1000,
+            groups: vec![1000, 27],
+            home: "/home/alice".into(),
+            shell: "/bin/bash".into(),
+        };
+        let environment = environment_for_account(&request, &account);
+        assert_eq!(environment["HOME"], "/home/alice");
+        assert_eq!(environment["USER"], "alice");
+        assert_eq!(environment["LOGNAME"], "alice");
+        assert_eq!(environment["SHELL"], "/bin/bash");
+        assert_eq!(environment["EDITOR"], "vi");
+        assert!(environment["PATH"].starts_with("/usr/local/sbin"));
+        assert!(!environment.contains_key("XDG_RUNTIME_DIR"));
+        request.env.insert("HOME".into(), "/tmp".into());
+        assert_eq!(environment_for_account(&request, &account)["HOME"], "/tmp");
+
+        let start = SupervisorStart {
+            request,
+            environment: BTreeMap::new(),
+            account: Some(account),
+        };
+        let mut bytes = Vec::new();
+        send_command(&mut bytes, &SupervisorCommand::Start(start.clone())).unwrap();
+        assert_eq!(
+            recv_command(&mut bytes.as_slice()).unwrap(),
+            SupervisorCommand::Start(start)
         );
     }
 }

@@ -205,3 +205,41 @@ fn legacy_contact_target_migrates_to_the_journal_principals_exact_pins() {
         }
     );
 }
+
+#[test]
+fn luecken_task_a_narrowed_grant_survives_the_journal_and_stays_off_for_old_readers() {
+    use super::JournalEntry;
+    // The stored form of a grant with a program list: switched off for readers
+    // that do not know the narrowing, the real switch in `restricted_enabled`.
+    let mutation: crate::share::ExecGrantMutation = serde_json::from_value(serde_json::json!({
+        "target": {"Direct": {
+            "device_id": "device-a", "public_key": "key-a",
+            "fingerprint": "print-a", "node_id": "key-a"}},
+        "principal": {
+            "relation_kind": "direct", "relation_id": "lookup",
+            "device_id": "device-a", "device_name": "A", "public_key": "key-a",
+            "fingerprint": "print-a", "node_id": "key-a"},
+        "policy": {
+            "enabled": false, "restricted_enabled": true, "policy_revision": 5,
+            "changed_at": 3, "run_as": {"kind": "standard"},
+            "programs": ["/usr/bin/uptime"]},
+        "authorization_epoch": 0
+    }))
+    .unwrap();
+    assert!(mutation.policy.enabled);
+    let entry = JournalEntry::new(mutation, 4).unwrap();
+    assert_eq!(entry.phase, JournalPhase::PendingApply);
+
+    let encoded = serde_json::to_vec(&entry).unwrap();
+    let written: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
+    assert_eq!(written["mutation"]["policy"]["enabled"], false);
+    assert_eq!(written["mutation"]["policy"]["restricted_enabled"], true);
+    let decoded = decode_entry(&encoded).unwrap();
+    decoded.validate().unwrap();
+    assert_eq!(decoded, entry);
+    assert!(decoded.mutation.policy.enabled);
+    assert_eq!(
+        decoded.mutation.policy.programs,
+        vec!["/usr/bin/uptime".to_string()]
+    );
+}

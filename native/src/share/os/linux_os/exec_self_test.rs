@@ -60,6 +60,7 @@ fn start_fork_probe() -> io::Result<ContainedExec> {
     process.send(&SupervisorCommand::Start(SupervisorStart {
         request,
         environment,
+        account: None,
     }))?;
     Ok(process)
 }
@@ -256,6 +257,7 @@ fn run_runtime_backstop_test() -> io::Result<()> {
             &SupervisorCommand::Start(SupervisorStart {
                 request,
                 environment,
+                account: None,
             }),
         )?;
         wait_for_raw_fork_ready(&mut stream, backstop_started + Duration::from_secs(5))?;
