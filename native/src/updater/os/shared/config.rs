@@ -75,3 +75,29 @@ pub fn set_update_source(path: &str) -> std::io::Result<()> {
         std::fs::write(override_path(), path)
     }
 }
+
+fn startup_check_path() -> PathBuf {
+    appdata_dir().join("update_startup_check.txt")
+}
+
+/// Whether the desktop app looks for updates when it starts ("Beim Start nach
+/// Updates suchen"; Android has its own "Beim Start prüfen"). On unless the
+/// user turned it off; a rollback pin pauses it separately.
+pub fn startup_check_enabled() -> bool {
+    std::fs::read_to_string(startup_check_path())
+        .map(|value| value.trim() != "0")
+        .unwrap_or(true)
+}
+
+/// Turns the start-up update check on (removes the marker) or off.
+pub fn set_startup_check(enabled: bool) -> std::io::Result<()> {
+    if enabled {
+        match std::fs::remove_file(startup_check_path()) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        }
+    } else {
+        std::fs::write(startup_check_path(), "0")
+    }
+}

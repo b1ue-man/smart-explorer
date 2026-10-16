@@ -145,6 +145,7 @@ impl App {
         // A snoozed bundle remains the only candidate on the next launch.
         // Do not silently replace it with a new download before consent.
         let update_rx = if !background
+            || !crate::updater::startup_check_enabled()
             || post_update_startup_pending
             || staged_update.is_some()
             || staging_load_failed
@@ -365,6 +366,7 @@ impl App {
             connecting: false,
             connect_form: crate::connect::ConnectForm::default(),
             connect_rx: None,
+            connect_edit: None,
 
             sync_rx: None,
             sync_exit_gate: super::sync_exit_gate::SyncExitGate::default(),

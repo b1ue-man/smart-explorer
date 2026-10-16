@@ -335,6 +335,8 @@ pub struct App {
     pub(in crate::app) connecting: bool,
     pub(in crate::app) connect_form: crate::connect::ConnectForm,
     pub(in crate::app) connect_rx: Option<Receiver<crate::connect::ConnectResult>>,
+    /// The saved connection the dialog edits ("Verbindung bearbeiten").
+    pub(in crate::app) connect_edit: Option<crate::creds::SavedConnection>,
 
     // One-way mirror of the current location to a chosen folder.
     pub(in crate::app) sync_rx: Option<Receiver<crate::sync::SyncMsg>>,

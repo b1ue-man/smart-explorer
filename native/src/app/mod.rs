@@ -40,8 +40,12 @@ mod clipboard_provide;
 mod clipboard_state;
 #[path = "core/cloud_ui_core.rs"]
 mod cloud_ui_core;
+#[path = "core/connect_dialog_ui.rs"]
+mod connect_dialog_ui;
 #[path = "core/connection_cleanup.rs"]
 mod connection_cleanup;
+#[path = "core/connection_edit_ui.rs"]
+mod connection_edit_ui;
 #[cfg(all(test, windows))]
 #[path = "os/shared/copy_paste_task_tests.rs"]
 mod copy_paste_task_tests;
@@ -89,6 +93,11 @@ mod index_persistence;
 mod init;
 #[path = "core/job_editor.rs"]
 mod job_editor;
+#[path = "core/job_editor_pages.rs"]
+mod job_editor_pages;
+#[cfg(test)]
+#[path = "core/job_editor_pages_tests.rs"]
+mod job_editor_pages_tests;
 #[path = "core/job_editor_ui.rs"]
 mod job_editor_ui;
 #[path = "core/job_editor_validation.rs"]
@@ -153,6 +162,8 @@ mod recursive_tree;
 #[cfg(test)]
 #[path = "core/search_recursive_access_task.rs"]
 mod search_recursive_access_task;
+#[path = "core/settings_ai_plugin.rs"]
+mod settings_ai_plugin;
 #[path = "core/settings_background.rs"]
 mod settings_background;
 #[path = "core/settings_cloud.rs"]

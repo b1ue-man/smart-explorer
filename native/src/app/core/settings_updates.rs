@@ -5,11 +5,7 @@ impl App {
     pub(super) fn ui_settings_updates(&mut self, ui: &mut egui::Ui) {
         // ─── Update ───────────────────────────────────────────────────
         ui.add_space(12.0);
-        ui.label(
-            RichText::new("App-Updates")
-                .small()
-                .color(theme::muted(ui)),
-        );
+        ui.label(RichText::new("App-Updates").small().color(theme::muted(ui)));
         ui.colored_label(
             theme::muted(ui),
             format!("Version {}", env!("CARGO_PKG_VERSION")),
@@ -25,35 +21,50 @@ impl App {
                 }
             }
         }
-        if ui.button("Jetzt nach Updates suchen").clicked() { self.check_updates_manual(); }
+        if ui.button("Jetzt nach Updates suchen").clicked() {
+            self.check_updates_manual();
+        }
+        let mut startup_check = crate::updater::startup_check_enabled();
+        if ui
+            .checkbox(&mut startup_check, "Beim Start nach Updates suchen")
+            .on_hover_text(
+                "Prüft beim Start die Updatequelle und stellt ein neueres Update bereit; \
+                 installiert wird erst nach Bestätigung (wie `se update --startup-check`).",
+            )
+            .changed()
+        {
+            if let Err(error) = crate::updater::set_startup_check(startup_check) {
+                self.error_msg = Some(format!("Update-Einstellung speichern: {error}"));
+            }
+        }
         egui::CollapsingHeader::new("Updatequelle ändern")
-            .id_salt("settings_update_source_v2").show(ui, |ui| {
-        let update_payload = update_payload_name();
-        ui.add(
-            egui::TextEdit::singleline(&mut self.update_feed_draft)
-                .hint_text("Feed-Ordner oder Git/HTTPS-URL…")
-                .desired_width(f32::INFINITY),
-        )
-        .on_hover_text(format!(
-            "Quelle mit version.txt und {update_payload}. Entweder ein Ordner \
+            .id_salt("settings_update_source_v2")
+            .show(ui, |ui| {
+                let update_payload = update_payload_name();
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.update_feed_draft)
+                        .hint_text("Feed-Ordner oder Git/HTTPS-URL…")
+                        .desired_width(f32::INFINITY),
+                )
+                .on_hover_text(format!(
+                    "Quelle mit version.txt und {update_payload}. Entweder ein Ordner \
              (lokal/Netzlaufwerk) ODER eine https-URL bzw. ein GitHub-Repo-Link \
              (z. B. https://github.com/b1ue-man/smart-explorer) — dann updatet \
              sich die App direkt aus dem Git. Beim Start wird automatisch geprüft."
-        ));
-        ui.horizontal(|ui| {
-            if ui.small_button("Speichern").clicked() {
-                match crate::updater::set_update_source(&self.update_feed_draft) {
-                    Ok(_) => {
-                        self.notice = Some((
-                            "✓ Update-Feed gespeichert".to_string(),
-                            std::time::Instant::now(),
-                        ));
+                ));
+                ui.horizontal(|ui| {
+                    if ui.small_button("Speichern").clicked() {
+                        match crate::updater::set_update_source(&self.update_feed_draft) {
+                            Ok(_) => {
+                                self.notice = Some((
+                                    "✓ Update-Feed gespeichert".to_string(),
+                                    std::time::Instant::now(),
+                                ));
+                            }
+                            Err(e) => self.error_msg = Some(format!("Feed speichern: {}", e)),
+                        }
                     }
-                    Err(e) => self.error_msg = Some(format!("Feed speichern: {}", e)),
-                }
-            }
-        });
-
+                });
             });
 
         // Rollback to a previously-installed version + pause/resume auto-update.
@@ -95,10 +106,7 @@ impl App {
         // here (auto-discovered, so no "Jetzt prüfen" needed, and independent of
         // the main-branch feed version).
         if let Some(newest) = self.update_release_available.clone() {
-            ui.colored_label(
-                theme::success(ui),
-                format!("⬆ Update verfügbar: v{newest}"),
-            );
+            ui.colored_label(theme::success(ui), format!("⬆ Update verfügbar: v{newest}"));
             if ui
                 .add_enabled(!downloading, egui::Button::new("⬆ Installieren"))
                 .on_hover_text("Diese neuere Version laden und installieren (Neustart)")
@@ -228,6 +236,5 @@ impl App {
                 Err(e) => self.error_msg = Some(format!("Zurückrollen: {}", e)),
             }
         }
-
     }
 }

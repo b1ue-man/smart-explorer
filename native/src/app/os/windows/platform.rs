@@ -186,6 +186,16 @@ pub(in crate::app) fn shell_integration_available() -> bool {
     true
 }
 
+pub(in crate::app) fn unc_connections_available() -> bool {
+    true
+}
+
+/// A console program started by the GUI (`se`) gets no console window.
+pub(in crate::app) fn hide_child_console(command: &mut std::process::Command) {
+    use std::os::windows::process::CommandExt;
+    command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
+}
+
 pub(in crate::app) fn set_context_menu_enabled(on: bool) -> std::io::Result<()> {
     crate::shell_register::set_context_menu(on)
 }
