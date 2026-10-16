@@ -18,9 +18,9 @@ fn luecken_task_unknown_keys_are_never_stored_silently() {
 #[test]
 fn luecken_task_pins_trust_their_key_and_reject_a_changed_one() {
     let directory = tempfile::tempdir().unwrap();
-    let fingerprint = fingerprint(&key(KEY_ONE));
-    pin_in(directory.path(), "host", 2222, &fingerprint, false).unwrap();
-    pin_in(directory.path(), "host", 2222, &fingerprint, false).unwrap();
+    let first = fingerprint(&key(KEY_ONE));
+    pin_in(directory.path(), "host", 2222, &first, false).unwrap();
+    pin_in(directory.path(), "host", 2222, &first, false).unwrap();
     assert_eq!(
         verify_in(directory.path(), &[], "host", 2222, &key(KEY_ONE)).unwrap(),
         HostKeyVerdict::Trusted
