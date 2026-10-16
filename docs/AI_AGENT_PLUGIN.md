@@ -29,6 +29,13 @@ allen Remotes, Übertragungen, Namenssuche, Befehle auf entfernten Rechnern und 
 
 Danach eine neue Agent-Sitzung starten.
 
+Dieselben Schritte bietet die Desktop-App unter **Einstellungen → Integration → KI-Agenten
+(Claude Code, Codex)**: Status je Host, „In alle gefundenen installieren“, „Nur Claude Code“,
+„Nur Codex“, „Entfernen“ und „Konfiguration zeigen“ für die übrigen MCP-Clients. Die App führt dafür
+das neben ihr installierte `se` mit `plugin …` aus, sodass GUI und Terminal dieselben Dateien und
+Host-Einträge erzeugen (`native/src/app/core/settings_ai_plugin.rs`). Auf Android gibt es kein `se`
+und damit keinen MCP-Server.
+
 - **Claude Code:** `se` schreibt einen lokalen Plugin-Marketplace nach
   `<App-Daten>/smart_explorer/ai-plugins/claude/` (Plugin `smart-explorer` mit `.mcp.json` →
   absoluter Pfad dieses `se` + `mcp`, Skill `smart-explorer`) und ruft
