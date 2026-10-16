@@ -456,7 +456,12 @@ requester identity and relation.
 
 ## Manage Requests and Grants
 
-The GUI's **Teilen** view shows three durable sections:
+The desktop window **Geräte & Freigaben** (since 2026-10-16 one page per area:
+**Geräte**, **Anfragen**, **Räume**, **Freigaben**, **Befehle**, **Dieses
+Gerät**, **Netzwerk**, **Diagnose**, Windows **Papierkorb**; details of a
+device or room on its own page) and the Android **Teilen** view show three
+durable sections, on the desktop the first two on **Anfragen** and the third on
+each device page (**Geräte → Details**):
 
 - **Eingehende Anfragen**: request ID, requester identity, fingerprint,
   transport/receipt state, automatic policy decision, authorization, and
@@ -600,7 +605,7 @@ re-validates the request file (age, GUIDs, router-less private adapter);
 Linux activates a dedicated NetworkManager profile `Smart Explorer LAN-Uplink
 (<iface>)` with `ipv4.method=shared` (NAT + dnsmasq) and deletes it again on
 stop. `lan_uplink_state.json` records the active session so a restarted daemon
-reconciles it. Status: GUI **Teilen → LAN**, `se share lan [--json]`.
+reconciles it. Status: desktop **Geräte & Freigaben → Netzwerk**, `se share lan [--json]`.
 
 ## Lifecycle Regression Guard
 
