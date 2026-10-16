@@ -102,7 +102,7 @@ Abkürzungen: `N/` = `native/src/`, `A/` = `android/app/src/main/java/app/smarte
 | Share-Zusammenfassung | `status` (`status_tools.rs:38-49`) zählt Grants | – |
 | Exec-Ablehnung am Gerät | `ServerFrame::Error` mit Text der Programmliste (`exec_policy.rs:171-199`, `exec_program_path.rs:73-78`) | Ausnahme: `ExecHelloOk` trägt keine Einschränkung; der Host verrät seine Liste nicht vorab, die Ablehnung nennt die Regel |
 
-## Stand nach dem Stapel (Arbeitsbaum 2026-10-16, nicht gebaut)
+## Stand nach dem Stapel (ausgeliefert in v0.5.182, 2026-10-16)
 
 Jede Lücke des Bestands ist geschlossen oder als Ausnahme begründet. Neue Belege:
 

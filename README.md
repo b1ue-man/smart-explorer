@@ -648,7 +648,7 @@ Protokoll des Hosts: Starts, Enden und abgelehnte Starts autorisierter Geräte s
 `exec-audit.log`, abgelehnte Anmeldungen und gesperrte Gegenstellen getrennt in
 `exec-audit-rejected.log` (je Datei 4 MiB, dazu eine Vorgängerdatei), nie der Text eines
 Shell-Befehls.
-**Exec-Einstellungen in den Apps (umgesetzt am 2026-10-16; Suite und Release stehen aus):**
+**Exec-Einstellungen in den Apps (ab 0.5.182):**
 In der Desktop-App zeigt **Geräte & Freigaben → Befehle** je Gerät, ob es Befehle
 starten darf, als welches Konto und mit welcher Programmliste; **Einstellungen**
 öffnet die Karte des Geräts mit Aktivieren/Deaktivieren, Kontofeld (nur Linux mit
@@ -661,8 +661,7 @@ bereinigt). Die Android-App zeigt unter **Teilen → Befehle auf diesem Telefon*
 Gerät „Ausführen als: Standardnutzer“ (Android kann kein anderes Konto) und die
 Programme, ⋮ **Programme…** bearbeitet die Liste, **Befehlsprotokoll anzeigen** zeigt
 das Protokoll des Telefons.
-**Share-Einstellungen auf jeder Oberfläche (umgesetzt am 2026-10-16; Suite und Release
-stehen aus):** Das Desktop-Fenster **Geräte & Freigaben** zeigt je Bereich eine knappe
+**Share-Einstellungen auf jeder Oberfläche (ab 0.5.182):** Das Desktop-Fenster **Geräte & Freigaben** zeigt je Bereich eine knappe
 Übersicht (**Geräte**, **Anfragen**, **Räume**, **Freigaben**, **Befehle**, **Dieses
 Gerät**, **Netzwerk**, **Diagnose**, unter Windows **Papierkorb**); **Details** öffnet
 die Seite eines Geräts (Verbindung mit automatisch verbinden/öffnen und Vertrauen
@@ -706,8 +705,7 @@ Peer-Empfang. Erst der signierte Request-Receipt des Zielgeraets meldet
 `received`. Entscheidung (`pending`/`accepted`/`rejected`/`revoked`), aktive
 Autorisierung und aktuelle Verbindung werden getrennt angezeigt.
 
-**Alle übrigen Einstellungen auf jeder Oberfläche (umgesetzt am 2026-10-16; Suite und Release
-stehen aus):** Jede Einstellung der App ist in der GUI und im Terminal erreichbar; KI-Agenten
+**Alle übrigen Einstellungen auf jeder Oberfläche (ab 0.5.182):** Jede Einstellung der App ist in der GUI und im Terminal erreichbar; KI-Agenten
 erreichen sie über das MCP-Werkzeug `se`. **Sync-Setups:** `se sync list|show|add|edit|remove|
 enable|disable|log` mit einer Option je Feld des Desktop-Editors (Optionsnamen = Schlüssel von
 `se sync show --json`, gleiche Prüfungen und Meldungen wie die GUI; `@label:/pfad` wird zum
