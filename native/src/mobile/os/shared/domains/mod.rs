@@ -148,6 +148,7 @@ fn connection_method(rt: &Runtime, method: &str, args: &Value) -> Option<Result<
         "conn.save" => connections::save(rt, args),
         "conn.delete" => connections::delete(rt, args),
         "conn.forgetHostKey" => host_keys::forget(args),
+        "conn.trustHostKey" => host_keys::trust(args),
         "gdrive.status" => gdrive::status(),
         "gdrive.configure" => gdrive::configure(args),
         "gdrive.signIn" => gdrive::sign_in(rt),

@@ -177,7 +177,10 @@ fn open(plan: Plan) -> Result<(BackendHandle, String), ApiError> {
 /// A failed connect: a missing SMB share is `not_found` (named in the
 /// message), sign-in failures `auth`, everything else `network`.
 pub(crate) fn connect_error(message: String) -> ApiError {
-    if crate::smb::names_missing_share(&message) {
+    if crate::sftp::unknown_host_key(&message).is_some() {
+        // The app asks the person and confirms with `conn.trustHostKey`.
+        ApiError::new("host_key_unknown", message)
+    } else if crate::smb::names_missing_share(&message) {
         ApiError::not_found(message)
     } else {
         ApiError::connection(message)

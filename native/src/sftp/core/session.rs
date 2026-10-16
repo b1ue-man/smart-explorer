@@ -1,16 +1,23 @@
-use super::config::{SftpAuth, SftpConfig};
+use super::config::SftpConfig;
+use super::host_key::{HostKeyVerdict, UnknownHostKey};
 use super::io_err;
-use super::known_hosts::known_hosts_accept;
+use super::known_hosts;
 use russh::client;
 use russh_sftp::client::SftpSession;
+use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::io;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::task::JoinSet;
 use tokio::time::Instant;
+
+#[path = "session_auth.rs"]
+mod auth;
+#[path = "host_key_handler.rs"]
+mod handler;
 
 const SSH_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 const SSH_KEEPALIVE_MAX_MISSED: usize = 3;
@@ -27,93 +34,131 @@ const SSH_MAX_PACKET: u32 = 32 * 1024;
 /// (and with it every other channel): one full window of full-size packets.
 const SSH_CHANNEL_BUFFER: usize = (SSH_WINDOW / SSH_MAX_PACKET) as usize;
 
+/// How the client treats the server's host key.
+#[derive(Clone, Debug)]
+pub(super) enum HostKeyMode {
+    /// Pinned or OpenSSH-known keys only; an unknown key ends the handshake
+    /// with its fingerprint (`UnknownHostKey::message`).
+    Verify,
+    /// Pins the presented key when its fingerprint is `expected`; a different
+    /// recorded key is replaced only with `replace`.
+    Trust { expected: String, replace: bool },
+    /// Records the key and its verdict, then ends the handshake.
+    Probe,
+}
+
+/// What the handshake learned about the host key.
+#[derive(Clone, Debug, Default)]
+pub(super) struct HostKeyOutcome {
+    pub(super) presented: Option<UnknownHostKey>,
+    pub(super) verdict: Option<HostKeyVerdict>,
+    pub(super) error: Option<String>,
+}
+
 pub(super) struct Client {
     host: String,
     port: u16,
-    host_key_error: Arc<std::sync::Mutex<Option<String>>>,
+    mode: HostKeyMode,
+    outcome: Arc<Mutex<HostKeyOutcome>>,
 }
 
-impl client::Handler for Client {
-    type Error = russh::Error;
+/// Why the SSH handshake did not produce a session.
+enum HandshakeError {
+    /// The host-key decision refused the server (detail for the person).
+    HostKey(String),
+    /// No host-key algorithm in common: the server only offers `ssh-rsa`
+    /// with SHA-1 signatures, which new connections no longer accept.
+    NoCommonHostKeyAlgorithm(russh::Error),
+    Other(io::Error),
+}
 
-    async fn check_server_key(
-        &mut self,
-        server_public_key: &russh::keys::PublicKey,
-    ) -> Result<bool, Self::Error> {
-        match known_hosts_accept(&self.host, self.port, server_public_key) {
-            Ok(true) => Ok(true),
-            Ok(false) => {
-                if let Ok(mut error) = self.host_key_error.lock() {
-                    *error = Some(format!(
-                        "SFTP host key changed for {}:{}",
-                        self.host, self.port
-                    ));
-                }
-                Ok(false)
+impl From<HandshakeError> for io::Error {
+    fn from(error: HandshakeError) -> Self {
+        match error {
+            HandshakeError::HostKey(detail) => {
+                io::Error::new(io::ErrorKind::PermissionDenied, detail)
             }
-            Err(storage_error) => {
-                if let Ok(mut error) = self.host_key_error.lock() {
-                    *error = Some(format!(
-                        "SFTP host key could not be verified for {}:{}: {storage_error}",
-                        self.host, self.port
-                    ));
-                }
-                Ok(false)
-            }
+            HandshakeError::NoCommonHostKeyAlgorithm(error) => io_err(error),
+            HandshakeError::Other(error) => error,
         }
     }
+}
+
+/// One SSH handshake; the host-key outcome is returned with the result,
+/// because a probe learns the key exactly when the handshake is refused.
+async fn handshake(
+    host: &str,
+    port: u16,
+    mode: HostKeyMode,
+    legacy_sha1: bool,
+) -> (
+    Result<client::Handle<Client>, HandshakeError>,
+    HostKeyOutcome,
+) {
+    let config = Arc::new(client_config_with(legacy_sha1));
+    let outcome = Arc::new(Mutex::new(HostKeyOutcome::default()));
+    let handler = Client {
+        host: host.to_string(),
+        port,
+        mode,
+        outcome: outcome.clone(),
+    };
+    let result = match connect_tcp(host, port).await {
+        Err(error) => Err(HandshakeError::Other(error)),
+        Ok(socket) => {
+            if config.nodelay {
+                let _ = socket.set_nodelay(true);
+            }
+            client::connect_stream(config, socket, handler)
+                .await
+                .map_err(|error| classify(error, &outcome))
+        }
+    };
+    let snapshot = outcome
+        .lock()
+        .map(|outcome| outcome.clone())
+        .unwrap_or_default();
+    (result, snapshot)
+}
+
+fn classify(error: russh::Error, outcome: &Mutex<HostKeyOutcome>) -> HandshakeError {
+    if let Ok(detail) = outcome.lock() {
+        if let Some(detail) = detail.error.clone() {
+            return HandshakeError::HostKey(detail);
+        }
+    }
+    if matches!(
+        error,
+        russh::Error::NoCommonAlgo {
+            kind: russh::AlgorithmKind::Key,
+            ..
+        }
+    ) {
+        return HandshakeError::NoCommonHostKeyAlgorithm(error);
+    }
+    HandshakeError::Other(io_err(error))
 }
 
 pub(super) async fn connect_async(
     cfg: &SftpConfig,
 ) -> io::Result<(client::Handle<Client>, SftpSession)> {
-    let config = Arc::new(client_config());
-    let host_key_error = Arc::new(std::sync::Mutex::new(None));
-    let handler = Client {
-        host: cfg.host.clone(),
-        port: cfg.port,
-        host_key_error: host_key_error.clone(),
-    };
-    let socket = connect_tcp(&cfg.host, cfg.port).await?;
-    if config.nodelay {
-        let _ = socket.set_nodelay(true);
-    }
-    let mut session = match client::connect_stream(config, socket, handler).await {
+    let mut session = match handshake(&cfg.host, cfg.port, HostKeyMode::Verify, false)
+        .await
+        .0
+    {
         Ok(session) => session,
-        Err(error) => {
-            if let Ok(mut detail) = host_key_error.lock() {
-                if let Some(detail) = detail.take() {
-                    return Err(io::Error::new(io::ErrorKind::PermissionDenied, detail));
-                }
-            }
-            return Err(io_err(error));
-        }
-    };
-
-    let authed = match &cfg.auth {
-        SftpAuth::Password(pw) => session
-            .authenticate_password(&cfg.user, pw)
-            .await
-            .map_err(io_err)?
-            .success(),
-        SftpAuth::Key { path, passphrase } => {
-            let key = russh::keys::load_secret_key(path, passphrase.as_deref()).map_err(io_err)?;
-            let hash = session
-                .best_supported_rsa_hash()
+        // A server pinned before SHA-1 signatures were dropped keeps working;
+        // its pinned key still has to match. New servers never get SHA-1.
+        Err(HandshakeError::NoCommonHostKeyAlgorithm(_))
+            if known_hosts::has_pin(&cfg.host, cfg.port) =>
+        {
+            handshake(&cfg.host, cfg.port, HostKeyMode::Verify, true)
                 .await
-                .map_err(io_err)?
-                .flatten();
-            session
-                .authenticate_publickey(
-                    &cfg.user,
-                    russh::keys::PrivateKeyWithHashAlg::new(Arc::new(key), hash),
-                )
-                .await
-                .map_err(io_err)?
-                .success()
+                .0?
         }
+        Err(error) => return Err(error.into()),
     };
-    if !authed {
+    if !auth::authenticate(&mut session, cfg).await? {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "SFTP-Authentifizierung fehlgeschlagen",
@@ -129,6 +174,39 @@ pub(super) async fn connect_async(
         .await
         .map_err(io_err)?;
     Ok((session, sftp))
+}
+
+/// Host-key handshake without login: `Probe` reports the presented key and
+/// its verdict, `Trust` pins a confirmed key.
+pub(super) async fn host_key_async(
+    host: &str,
+    port: u16,
+    mode: HostKeyMode,
+) -> io::Result<HostKeyOutcome> {
+    let probing = matches!(mode, HostKeyMode::Probe);
+    let mut legacy_sha1 = false;
+    loop {
+        let (result, outcome) = handshake(host, port, mode.clone(), legacy_sha1).await;
+        match result {
+            Ok(session) => {
+                let _ = session
+                    .disconnect(russh::Disconnect::ByApplication, "", "")
+                    .await;
+                return Ok(outcome);
+            }
+            // A pinned legacy server is checked the way `connect_async` does.
+            Err(HandshakeError::NoCommonHostKeyAlgorithm(_))
+                if !legacy_sha1 && known_hosts::has_pin(host, port) =>
+            {
+                legacy_sha1 = true;
+            }
+            // A probe ends the handshake itself once it saw the key.
+            Err(_) if probing && outcome.presented.is_some() && outcome.error.is_none() => {
+                return Ok(outcome);
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
 }
 
 async fn connect_tcp(host: &str, port: u16) -> io::Result<TcpStream> {
@@ -227,12 +305,33 @@ fn spawn_connect(attempts: &mut JoinSet<io::Result<TcpStream>>, address: SocketA
 }
 
 pub(super) fn client_config() -> client::Config {
+    client_config_with(false)
+}
+
+/// `legacy_sha1` also offers `ssh-rsa` host keys with SHA-1 signatures
+/// (OpenSSH turned them off by default in 8.8); only a server Smart Explorer
+/// pinned earlier gets it.
+fn client_config_with(legacy_sha1: bool) -> client::Config {
+    let mut preferred = russh::Preferred::default();
+    if !legacy_sha1 {
+        preferred.key = Cow::Owned(
+            preferred
+                .key
+                .iter()
+                .filter(|algorithm| {
+                    !matches!(algorithm, russh::keys::Algorithm::Rsa { hash: None })
+                })
+                .cloned()
+                .collect(),
+        );
+    }
     client::Config {
         keepalive_interval: Some(SSH_KEEPALIVE_INTERVAL),
         keepalive_max: SSH_KEEPALIVE_MAX_MISSED,
         window_size: SSH_WINDOW,
         maximum_packet_size: SSH_MAX_PACKET,
         channel_buffer_size: SSH_CHANNEL_BUFFER,
+        preferred,
         ..client::Config::default()
     }
 }
@@ -248,5 +347,58 @@ mod tests {
         assert_eq!(config.keepalive_interval, Some(Duration::from_secs(15)));
         assert_eq!(config.keepalive_max, 3);
         assert_eq!(config.inactivity_timeout, None);
+    }
+
+    /// Pins of 0.5.180 hold the key type russh 0.61.2 negotiated: the first
+    /// entry of its own `Preferred::DEFAULT.key` that the server supports
+    /// (russh 0.61.2 negotiation.rs lines 155-173 and 378-402). russh 0.64.1
+    /// lists the same algorithms in the same order (negotiation.rs lines
+    /// 213-231 and 484-508), so the type a server presents, and with it the
+    /// fingerprint an old pin holds, stays the same. A russh update that
+    /// reorders the list must fail here before it breaks stored pins.
+    #[test]
+    fn luecken_task_host_key_algorithm_order_matches_0_5_180() {
+        use russh::keys::{Algorithm, EcdsaCurve, HashAlg};
+
+        let expected = vec![
+            Algorithm::Ed25519,
+            Algorithm::Ecdsa {
+                curve: EcdsaCurve::NistP256,
+            },
+            Algorithm::Ecdsa {
+                curve: EcdsaCurve::NistP384,
+            },
+            Algorithm::Ecdsa {
+                curve: EcdsaCurve::NistP521,
+            },
+            Algorithm::Rsa {
+                hash: Some(HashAlg::Sha512),
+            },
+            Algorithm::Rsa {
+                hash: Some(HashAlg::Sha256),
+            },
+        ];
+        assert_eq!(client_config().preferred.key.to_vec(), expected);
+        let mut with_sha1 = expected;
+        with_sha1.push(Algorithm::Rsa { hash: None });
+        assert_eq!(client_config_with(true).preferred.key.to_vec(), with_sha1);
+        // No host-key certificate algorithm is offered, so no server can
+        // present a certificate instead of the pinned bare key.
+        assert!(client_config().preferred.host_key_certificates.is_empty());
+    }
+
+    #[test]
+    fn luecken_task_new_connections_never_offer_sha1_host_key_signatures() {
+        let sha1 = russh::keys::Algorithm::Rsa { hash: None };
+        assert!(!client_config().preferred.key.contains(&sha1));
+        assert!(client_config()
+            .preferred
+            .key
+            .contains(&russh::keys::Algorithm::Ed25519));
+        assert!(client_config_with(true).preferred.key.contains(&sha1));
+        assert_eq!(
+            client_config().preferred.kex.first(),
+            Some(&russh::kex::MLKEM768X25519_SHA256)
+        );
     }
 }

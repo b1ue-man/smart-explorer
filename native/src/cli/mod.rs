@@ -6,6 +6,7 @@ mod drive;
 mod entry_kind;
 mod exec;
 mod exec_ssh;
+mod host_key_prompt;
 mod link_paths;
 #[cfg(test)]
 mod links_task_backends;

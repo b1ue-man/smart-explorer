@@ -229,7 +229,11 @@ fn open(args: &ShellArgs, label: String, mut in_terminal: bool) -> Result<i32, S
             term: terminal::local_term(),
             size,
         };
-        match shell_session::open_terminal(&target, &crate::connect::open_saved_ssh, options)? {
+        match shell_session::open_terminal(
+            &target,
+            &super::host_key_prompt::open_saved_ssh,
+            options,
+        )? {
             TerminalOpen::Ready(client) => {
                 if args.attachable {
                     let info = client.info();
@@ -249,7 +253,7 @@ fn open(args: &ShellArgs, label: String, mut in_terminal: bool) -> Result<i32, S
         cwd: args.cwd.clone(),
         env,
     };
-    let client = shell_session::open(&target, &crate::connect::open_saved_ssh, options)?;
+    let client = shell_session::open(&target, &super::host_key_prompt::open_saved_ssh, options)?;
     if args.attachable {
         let info = client.info();
         eprintln!("{}", joinable_hint(&info.name, &info.id));

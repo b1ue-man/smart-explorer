@@ -32,6 +32,18 @@ internal class ConnectionFormState(initial: ConnectionDraft) {
 /** What was removed with a place and which sync jobs still use it (spec F12 "Löschen"). */
 internal data class RemovalReport(val name: String, val removal: EndpointRemoval)
 
+/**
+ * An unknown SFTP host key to confirm: [message] is the core's `host_key_unknown` text (type and
+ * fingerprint), [retry] repeats the action that met the key once it is saved.
+ */
+internal data class HostKeyPrompt(val message: String, val retry: () -> Unit) {
+    /** The message without the machine-readable marker at its end. */
+    val text: String
+        get() = message.substringBefore("[se-host-key-unknown").trim()
+}
+
+private const val HOST_KEY_UNKNOWN = "host_key_unknown"
+
 /** State of "Mehr → Verbindungen": list, form and the actions of the row menu. */
 internal class ConnectionsViewModel : ViewModel() {
     var connections by mutableStateOf<List<Connection>?>(null)
@@ -43,6 +55,8 @@ internal class ConnectionsViewModel : ViewModel() {
     var form by mutableStateOf<ConnectionFormState?>(null)
         private set
     var report by mutableStateOf<RemovalReport?>(null)
+    var hostKeyPrompt by mutableStateOf<HostKeyPrompt?>(null)
+        private set
 
     /** Called whenever the page is shown (the model outlives the page). */
     fun load() {
@@ -81,7 +95,8 @@ internal class ConnectionsViewModel : ViewModel() {
             state.outcome = try {
                 TestOutcome(true, ConnApi.test(input).ifBlank { "Verbindung OK" })
             } catch (e: CoreException) {
-                TestOutcome(false, e.message ?: e.kind)
+                askHostKey(e) { testForm(state) }
+                TestOutcome(false, HostKeyPrompt(e.message ?: e.kind, {}).text)
             } finally {
                 state.testing = false
             }
@@ -100,7 +115,8 @@ internal class ConnectionsViewModel : ViewModel() {
                 Snackbars.show("Gespeichert: ${saved.label.ifBlank { saved.host }}")
                 load()
             } catch (e: CoreException) {
-                state.outcome = TestOutcome(false, "Nicht gespeichert: ${e.message ?: e.kind}")
+                askHostKey(e) { saveForm(state) }
+                state.outcome = TestOutcome(false, "Nicht gespeichert: ${HostKeyPrompt(e.message ?: e.kind, {}).text}")
             } finally {
                 state.saving = false
             }
@@ -114,7 +130,8 @@ internal class ConnectionsViewModel : ViewModel() {
             val text = try {
                 ConnApi.test(input).ifBlank { "Verbindung OK" }
             } catch (e: CoreException) {
-                e.message ?: e.kind
+                askHostKey(e) { test(connection) }
+                HostKeyPrompt(e.message ?: e.kind, {}).text
             }
             Snackbars.show("${connection.label}: $text")
         }
@@ -136,10 +153,31 @@ internal class ConnectionsViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 ConnApi.forgetHostKey(connection.id)
-                Snackbars.show("Hostschlüssel vergessen – der nächste Schlüssel wird gespeichert.")
+                Snackbars.show("Hostschlüssel vergessen – beim nächsten Verbinden wird der neue Schlüssel zur Bestätigung angezeigt.")
             } catch (e: CoreException) {
                 Snackbars.show("Nicht vergessen: ${e.message ?: e.kind}")
             }
         }
+    }
+
+    /** "Vertrauen" in the host-key dialog: saves the key, then repeats the action. */
+    fun trustHostKey(prompt: HostKeyPrompt) {
+        hostKeyPrompt = null
+        viewModelScope.launch {
+            try {
+                ConnApi.trustHostKey(prompt.message)
+                prompt.retry()
+            } catch (e: CoreException) {
+                Snackbars.show("Hostschlüssel nicht gespeichert: ${e.message ?: e.kind}")
+            }
+        }
+    }
+
+    fun dismissHostKey() {
+        hostKeyPrompt = null
+    }
+
+    private fun askHostKey(e: CoreException, retry: () -> Unit) {
+        if (e.kind == HOST_KEY_UNKNOWN) hostKeyPrompt = HostKeyPrompt(e.message ?: "", retry)
     }
 }

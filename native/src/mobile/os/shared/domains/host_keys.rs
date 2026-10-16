@@ -1,6 +1,9 @@
 //! `conn.forgetHostKey`: removes exactly the `host:port` entry from the SFTP
-//! trust-on-first-use store (`known_hosts_sftp.txt`) under the same lock file
-//! the SFTP client takes, so the next connect stores the new key again.
+//! host-key store (`known_hosts_sftp.txt`) under the same lock file the SFTP
+//! client takes; the next connect reports the new key for confirmation.
+//! `conn.trustHostKey`: pins the unknown key named in a `host_key_unknown`
+//! error after the person confirmed it, only if the server still presents
+//! exactly that fingerprint.
 use std::fs::OpenOptions;
 use std::io::{self, Read, Write};
 use std::path::Path;
@@ -15,6 +18,19 @@ use crate::mobile::ApiError;
 const STORE_NAME: &str = "known_hosts_sftp.txt";
 const LOCK_NAME: &str = "known_hosts_sftp.lock";
 const MAX_STORE_BYTES: u64 = 1024 * 1024;
+
+pub(super) fn trust(args: &Value) -> Result<Value, ApiError> {
+    let key = crate::sftp::unknown_host_key(str_arg(args, "message")?)
+        .ok_or_else(|| ApiError::invalid("Die Meldung nennt keinen unbekannten Hostschlüssel."))?;
+    let pinned = crate::sftp::trust_host_key(&key.host, key.port, &key.fingerprint, false)
+        .map_err(|error| io_error("Hostschlüssel speichern", error))?;
+    Ok(json!({
+        "host": pinned.host,
+        "port": pinned.port,
+        "algorithm": pinned.algorithm,
+        "fingerprint": pinned.fingerprint,
+    }))
+}
 
 pub(super) fn forget(args: &Value) -> Result<Value, ApiError> {
     let connection = find(str_arg(args, "id")?)?;
@@ -107,4 +123,24 @@ fn not_regular() -> io::Error {
         io::ErrorKind::PermissionDenied,
         "SFTP host-key store is not a regular file",
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn luecken_task_trust_host_key_needs_a_message_that_names_an_unknown_key() {
+        // None of these reaches the network: the key is parsed first.
+        assert!(trust(&json!({})).is_err());
+        assert!(trust(&json!({"message": "SFTP host key changed for x:22"})).is_err());
+        assert!(trust(&json!({
+            "message": "[se-host-key-unknown host=x port=22 type=ssh-ed25519 fp=MD5:00]"
+        }))
+        .is_err());
+        assert!(trust(&json!({
+            "message": "[se-host-key-unknown host= port=22 type=ssh-ed25519 fp=SHA256:aa]"
+        }))
+        .is_err());
+    }
 }

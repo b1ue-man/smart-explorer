@@ -20,7 +20,11 @@ data class Connection(
     val port: Int = 0,
     val user: String = "",
     val root: String = "",
-    /** `password|key` */
+    /**
+     * `password|key|ssh-agent`. `ssh-agent` is a desktop login with the keys of a running SSH agent;
+     * Android has no agent: such a connection cannot log in here, and an edit sent back with this
+     * value is saved as a password login (the core reads every value except `key` as `password`).
+     */
     val auth: String = "password",
     val keyPath: String? = null,
     val useAgent: Boolean = false,
@@ -81,9 +85,18 @@ object ConnApi {
     suspend fun delete(id: String): EndpointRemoval =
         Core.request<EndpointRemoval>("conn.delete", buildJsonObject { put("id", id) })
 
-    /** Removes the stored SFTP host key; the next connect trusts the new key (TOFU). */
+    /** Removes the stored SFTP host key; the next connect shows the new key for confirmation. */
     suspend fun forgetHostKey(id: String) {
         Core.call("conn.forgetHostKey", buildJsonObject { put("id", id) })
+    }
+
+    /**
+     * Pins the unknown SFTP host key named in a `host_key_unknown` error [message] after the person
+     * confirmed it; the core connects again and saves it only if the server still presents exactly
+     * that fingerprint.
+     */
+    suspend fun trustHostKey(message: String) {
+        Core.call("conn.trustHostKey", buildJsonObject { put("message", message) })
     }
 
     suspend fun gdriveStatus(): GdriveStatus = Core.request<GdriveStatus>("gdrive.status")

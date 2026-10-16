@@ -127,7 +127,9 @@ pub(super) fn resolve_with(spec: &str, open: Option<OpenSaved<'_>>) -> Result<Ta
         {
             open(&connection, &path)?
         }
-        _ => crate::connect::resolve_endpoint(&normalized)?,
+        _ => super::host_key_prompt::with_host_key_prompt(|| {
+            crate::connect::resolve_endpoint(&normalized)
+        })?,
     };
     let preserved_root = is_endpoint_namespace_root(&normalized, &path)
         || saved_configured_root
@@ -221,7 +223,8 @@ fn open_connection_at(
             Some(net),
         ));
     }
-    let (backend, opened) = crate::connect::open_saved_at(c, path)?;
+    let (backend, opened) =
+        super::host_key_prompt::with_host_key_prompt(|| crate::connect::open_saved_at(c, path))?;
     Ok((backend, opened, None))
 }
 

@@ -1,8 +1,15 @@
 //! SFTP backend (`russh` + `russh-sftp`) implementing `vfs::Backend`.
 //!
-//! Auth: username/password OR keyfile (+ optional passphrase). Host keys use
-//! trust-on-first-use against the app data `known_hosts_sftp.txt`
-//! (accept + persist on first sight, reject on later mismatch).
+//! Auth: password (with keyboard-interactive for PAM servers), key file
+//! (+ optional passphrase and OpenSSH user certificate) or the running SSH
+//! agent (session_auth.rs). Host keys: pinned in the app data
+//! `known_hosts_sftp.txt` or listed in OpenSSH's known_hosts; an unknown key
+//! is never stored silently but reported with its fingerprint until a person
+//! confirms it (host_key.rs, host_key_ops.rs; the decision per handshake in
+//! host_key_handler.rs, which also refuses every channel the server opens on
+//! its own). An `@revoked` entry in OpenSSH's files refuses even a pinned key.
+//! New connections no longer accept `ssh-rsa` host keys with SHA-1
+//! signatures; servers pinned earlier keep them.
 //!
 //! Async↔sync bridge: a private multi-threaded tokio runtime owned by the
 //! backend. A worker thread continuously drives russh's background connection
@@ -39,6 +46,10 @@ mod errors;
 mod exec;
 #[path = "core/extensions.rs"]
 mod extensions;
+#[path = "core/host_key.rs"]
+mod host_key;
+#[path = "core/host_key_ops.rs"]
+mod host_key_ops;
 #[path = "core/io_adapters.rs"]
 mod io_adapters;
 #[path = "os/shared/known_hosts.rs"]
@@ -57,6 +68,12 @@ mod posix_rename;
 mod reversible_replace;
 #[path = "core/session.rs"]
 mod session;
+#[cfg(unix)]
+#[path = "os/ssh_agent_unix.rs"]
+mod ssh_agent;
+#[cfg(windows)]
+#[path = "os/ssh_agent_windows.rs"]
+mod ssh_agent;
 #[path = "core/terminal.rs"]
 mod terminal;
 #[path = "core/transfer_ops.rs"]
@@ -82,6 +99,10 @@ mod transfer_engine_task_tests;
 pub use backend::SftpBackend;
 pub use command::{signal_number, SshCommand, SshCommandControl, SshCommandEnd, SshCommandEvent};
 pub use config::{SftpAuth, SftpConfig};
+pub use host_key::UnknownHostKey;
+pub use host_key_ops::{
+    forget_host_key, probe_host_key, trust_host_key, unknown_host_key, PresentedHostKey,
+};
 pub use terminal::{SshTerminalError, SshTerminalRequest};
 pub use url::backend_from_url;
 
