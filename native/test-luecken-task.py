@@ -56,11 +56,27 @@ milestone once:
            then the candidate replaces it in place and every old record is
            sealed by the worker start alone, nothing else changes
            (native/luecken-task-update.py)
+  surfaces (Linux, Windows) GUI parity of the Share and Exec settings
+           (2026-10-16, plan I): the CLI commands added next to the desktop and
+           Android GUI (device name, Direct code renewal, request policy, rooms,
+           export order, devices, host trash) in an isolated client; inside the
+           `exec` stage the Exec account and program list in `se share grants`
+           and `se share status`, device settings of a paired contact and the
+           Direct code switch (native/luecken-task-surfaces.py)
+  settings (Linux, Windows) Parity of every other setting in an isolated client:
+           se sync add/show/edit/disable/enable/log/remove against the GUI job
+           file, se background cadence/pause/resume/autopause/status (Linux also
+           enable/disable with the login entry), se connections add smb/edit/remove
+           with the favourites cleanup, se connections gdrive configure/status,
+           se integration context-menu, se update --startup-check
+           (native/luecken-task-settings.py)
   android  (--job android) the Android build stage of android/test-android-task.sh:
            dependency tree, NDK check and build, APKs, JVM unit tests
   android-device  (--job android-device, emulator) the published APK 0.5.180
            is updated to the candidate APK: sealed records under the Android
-           Keystore, identity and saved connection unchanged
+           Keystore, identity and saved connection unchanged; then the Share
+           and Exec settings added for GUI parity through their bridge methods
+           (phase `parity-check`)
            (native/luecken-task-android.py, LueckenUpgradeTaskTest.kt)
 
 Helpers (results, process runner, isolated clients) come from
@@ -101,13 +117,28 @@ ai.NEW_FILE_PREFIXES = ("src/share/core/pq_kx", "src/share/core/auth_penalty.rs"
                         "src/sftp/os/ssh_agent_",
                         "src/app/core/host_key_ui.rs", "src/cli/connections/host_keys.rs",
                         "src/cli/host_key_prompt.rs", "src/cli/setup_tests.rs",
-                        "src/ftp/core/luecken_task_ftp")
+                        "src/ftp/core/luecken_task_ftp",
+                        # GUI parity of the Share and Exec settings (plan I).
+                        "src/share/core/profile_settings", "src/app/core/share_exec_programs_ui.rs",
+                        "src/app/core/share_exec_log_ui.rs", "src/app/core/share_pages_ui.rs",
+                        "src/app/core/share_device_page_ui.rs", "src/app/core/share_room_page_ui.rs",
+                        "src/app/core/share_this_device_ui.rs", "src/cli/share/rooms.rs",
+                        "src/cli/share/devices.rs", "src/cli/share/requests_policy.rs",
+                        "src/cli/share/exports_order.rs", "src/cli/share/host_trash.rs",
+                        "src/mobile/os/shared/domains/share_device_settings",
+                        # Parity of every other setting (plan docs/plaene/2026-10-16-paritaet-einstellungen).
+                        "src/cli/background.rs", "src/cli/sync_jobs", "src/cli/integration.rs",
+                        "src/cli/parse_tests.rs", "src/cli/connections/edit.rs",
+                        "src/cli/connections/gdrive.rs", "src/connect/os/shared/connection_edit.rs",
+                        "src/app/core/connect_dialog_ui.rs", "src/app/core/connection_edit_ui.rs",
+                        "src/app/core/job_editor_pages", "src/app/core/settings_ai_plugin.rs",
+                        "src/mobile/os/shared/domains/settings_parity_tests.rs")
 WINDOWS = ai.WINDOWS
 ensure = ai.ensure
 Client = ai.Client
 UNIT_FILTERS = ["luecken_task_", "creds::", "sftp::", "share::exec", "share::node", "share::handshake_limits",
                 "share::server_admission", "share::auth_penalty", "share::fair_admission", "share::profile",
-                "connect::", "daemon::ipc_protocol", "exec_grant_journal", "cli::", "app::share_exec_ui",
+                "connect::", "daemon::ipc_protocol", "exec_grant_journal", "cli::", "app::share",
                 "app::host_key_ui", "mobile::domains", "mobile::init", "mobile::pool", "ftp::"]
 # Lib tests inside those filters that need real servers from a manifest
 # (SE_SYNC_PROVIDER_MANIFEST): the FTPS one runs in the `ftps` stage, the
@@ -115,17 +146,24 @@ UNIT_FILTERS = ["luecken_task_", "creds::", "sftp::", "share::exec", "share::nod
 UNIT_SKIPS = ["sync_reliability_task_provider_ftps", "sync_reliability_task_provider_matrix"]
 FTPS_PROVIDER_TEST = ("ftp::sync_reliability_task_provider_ftps_tests::"
                       "sync_reliability_task_provider_ftps_both_writers_confirm_bytes_after_tls_close")
-# The `luecken_task_` test functions of native/src (125: `grep -c "fn luecken_task_"`)
-# and what each platform compiles. Windows lacks the Linux/Android file store
-# and its tests (`creds/os/linux_*`, 20), the `mobile` module (3: it is built
-# for `any(target_os = "android", all(unix, test))`), the Linux account and
+# The `luecken_task_` test functions of native/src (146: `grep -c "fn luecken_task_"`
+# over the gap batch and the Share/Exec GUI parity of plan I; 125 + 21) and what each
+# platform compiles. Windows lacks the Linux/Android file store and its tests
+# (`creds/os/linux_*`, 20), the `mobile` module (6: it is built for
+# `any(target_os = "android", all(unix, test))`), the Linux account and
 # program-search adapters (2) and three tests gated with `cfg(unix)` (3).
-EXPECTED_LINUX = 125
-EXPECTED_WINDOWS = 97
+# The name check below runs every compiled `luecken_task_` test of the sources,
+# also those other parts of the batch add. The parity of every other setting adds
+# 29 (Windows 26: without the three bridge tests of
+# mobile/os/shared/domains/settings_parity_tests.rs).
+EXPECTED_LINUX = 146 + 29
+EXPECTED_WINDOWS = 115 + 26
 NOT_ON_WINDOWS_FILES = ("creds/os/linux_file_store_port_tests.rs", "creds/os/linux_file_store_tests.rs",
                         "creds/os/linux_os.rs", "mobile/os/shared/init.rs",
                         "mobile/os/shared/domains/host_keys.rs", "share/os/linux_os/exec_account.rs",
-                        "share/os/linux_os/exec_program_search.rs")
+                        "share/os/linux_os/exec_program_search.rs",
+                        "mobile/os/shared/domains/share_device_settings_tests.rs",
+                        "mobile/os/shared/domains/settings_parity_tests.rs")
 NOT_ON_WINDOWS_TESTS = ("luecken_task_openssh_files_are_read_through_links_like_ssh_does",
                         "luecken_task_a_listed_applet_does_not_open_the_other_applets_of_its_binary",
                         "luecken_task_audit_files_are_owner_only")
@@ -946,6 +984,7 @@ def exec_standard_checks(results, se_binary, work, logs, signal, relay):
             ensure(b"LUECKEN_SHELL_TEXT" not in raw and b"LUECKEN_SHELL_TEXT" not in json.dumps(entries).encode(),
                    "shell command text was logged")
         results.check(stage, "audit log: starts, ends and refusals with device, never shell text", audit)
+        helper("surfaces").paired_checks(this_module(), results, se_binary, a, b, log)
 
         def audit_survives_restart():
             def execution_ids(entries):
@@ -1018,6 +1057,7 @@ def exec_standard_checks(results, se_binary, work, logs, signal, relay):
             ensure(ran.stdout.decode().strip() == worker_user, text(ran))
         results.check(stage, "disabling Exec ends a running command at once; enabling again restores the full shell",
                       disable_revokes_running)
+        helper("surfaces").direct_online_last(this_module(), results, se_binary, b, log)
     finally:
         ai.stop_background_daemons(clients)
 
@@ -1417,6 +1457,8 @@ def main():
         return results.finish()
     work = Path(tempfile.mkdtemp(prefix="se-luecken-"))
     try:
+        helper("surfaces").stage_surfaces(this_module(), results, se_binary, work, log_root)
+        helper("settings").stage_settings(this_module(), results, se_binary, work, log_root)
         if WINDOWS:
             stage_windows_secrets(results, se_binary, work, log_root)
         else:
