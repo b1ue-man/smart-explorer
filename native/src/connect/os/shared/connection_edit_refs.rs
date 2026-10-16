@@ -102,7 +102,11 @@ mod tests {
 
     const JOBS: [(&str, &str, &str); 3] = [
         ("Docs", "/home/alice/Docs", "sftp://alice@nas:22/srv/docs"),
-        ("Fotos", "sftp://alice@nas:22/srv/fotos", "/home/alice/Fotos"),
+        (
+            "Fotos",
+            "sftp://alice@nas:22/srv/fotos",
+            "/home/alice/Fotos",
+        ),
         ("Lokal", "/home/alice/a", "/home/alice/b"),
     ];
 
