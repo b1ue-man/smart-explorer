@@ -41,6 +41,14 @@ Manager).
    - Danach steht oben **„● Verbunden“**. **„☁ Drive öffnen“** durchsucht dein
      Drive; in Sync-Setups erscheint Drive im Ordner-Picker als **„☁ Google
      Drive“**.
+   - **Im Terminal** geht dasselbe mit
+     `se connections gdrive sign-in --client-id <ID> --client-secret-stdin`
+     (Secret über die Standardeingabe). `se` zeigt die Anmeldeadresse an und
+     öffnet den Browser auf diesem Rechner; die Rückleitung geht an
+     `127.0.0.1`, über SSH also den Browser auf demselben Rechner nutzen oder
+     den angezeigten Port weiterleiten. `se connections gdrive status`,
+     `configure` und `sign-out` entsprechen Status, Speichern und „Trennen“
+     der App; danach `se ls gdrive:///`.
 
 ---
 
