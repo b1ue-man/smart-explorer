@@ -40,6 +40,8 @@ internal object InitConfig {
             put("updateFeedUrl", JsonNull)
             put("startDaemon", true)
             put("volumes", Core.json.encodeToJsonElement(ListSerializer(VolumeInfo.serializer()), volumes))
+            // Credential store data key, unwrapped by the Android Keystore; null when that failed.
+            put("secretsKey", SecretsKey.hex(app))
         }
         return if (BuildConfig.DEBUG) withTestOverrides(config, File(app.filesDir, OVERRIDES_FILE)) else config
     }

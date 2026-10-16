@@ -57,6 +57,9 @@ struct Report {
 
 impl Report {
     fn collect() -> Result<Self, String> {
+        // Seal plaintext records of earlier versions first, so the status below
+        // shows the result and every other check opens a sealed store.
+        let port = crate::creds::port_secret_store();
         let app_data = crate::support_dirs::app_data_dir();
         let executable = std::env::current_exe()
             .map(|path| path.to_string_lossy().into_owned())
@@ -68,10 +71,7 @@ impl Report {
         let daemon_running = crate::daemon::is_running();
         let heartbeat_age = crate::daemon::last_heartbeat_age();
         let credential_backend = crate::creds::secret_store_description();
-        let credential_health = match crate::creds::probe_secret_store() {
-            Ok(()) => Health::ok("credential backend is readable"),
-            Err(error) => Health::error(error),
-        };
+        let credential_health = credential_store_health(port);
         Ok(Self {
             app_data,
             executable,
@@ -169,6 +169,25 @@ pub(super) fn run(args: DoctorArgs) -> Result<i32, String> {
 
 fn print_health(label: &str, health: &Health) {
     println!("{label}\t{}\t{}", health.state, health.detail);
+}
+
+/// Protector, plaintext records still to port and whether the data key opens;
+/// a failed port is an error because plaintext may remain.
+fn credential_store_health(port: Result<(), String>) -> Health {
+    if let Err(error) = crate::creds::probe_secret_store() {
+        return Health::error(error);
+    }
+    let status = match crate::creds::secret_store_status() {
+        Some(Ok(status)) => format!("credential backend is readable; {status}"),
+        Some(Err(error)) => return Health::error(error),
+        None => return Health::ok("credential backend is readable"),
+    };
+    match port {
+        Ok(()) => Health::ok(status),
+        Err(error) => Health::error(format!(
+            "{status}; plaintext records could not be sealed yet: {error}"
+        )),
+    }
 }
 
 fn connection_health(app_data: &Path) -> Health {
