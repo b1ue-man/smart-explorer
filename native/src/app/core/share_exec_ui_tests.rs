@@ -204,8 +204,13 @@ fn inactive_base_authorization_remains_visible_but_cannot_be_enabled() {
 fn luecken_task_exec_programs_are_added_with_the_rules_of_the_cli() {
     let mut draft = Vec::new();
     add_program(&mut draft, "  uptime ").unwrap();
-    add_program(&mut draft, "/usr/bin/df").unwrap();
-    assert_eq!(draft, ["uptime", "/usr/bin/df"]);
+    // Absolute on every host (`/usr/bin/df` has no drive on Windows).
+    let absolute = std::env::temp_dir()
+        .join("df")
+        .to_string_lossy()
+        .into_owned();
+    add_program(&mut draft, &absolute).unwrap();
+    assert_eq!(draft, ["uptime", absolute.as_str()]);
     // Duplicates, empty input, relative paths and NUL are refused; the
     // draft stays as it was.
     for refused in ["uptime", "   ", "bin/tool", "./tool", "to\0ol"] {
