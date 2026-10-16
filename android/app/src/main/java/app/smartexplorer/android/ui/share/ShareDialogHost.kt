@@ -2,12 +2,14 @@ package app.smartexplorer.android.ui.share
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import app.smartexplorer.android.api.ExecTarget
 import app.smartexplorer.android.api.ShareApi
 import app.smartexplorer.android.api.ShareDevice
 import app.smartexplorer.android.api.ShareExport
 import app.smartexplorer.android.api.ShareMember
 import app.smartexplorer.android.api.ShareRequestPolicy
 import app.smartexplorer.android.api.ShareRoom
+import app.smartexplorer.android.api.ShareSettingsApi
 import app.smartexplorer.android.api.ShareWriteGrant
 import app.smartexplorer.android.api.RemovedDevice
 import app.smartexplorer.android.api.SHARE_DIRECT
@@ -60,6 +62,13 @@ internal sealed interface ShareDialog {
     data class Readmit(val device: RemovedDevice) : ShareDialog
     data class PairingDecision(val pairing: UnconfirmedPairing, val revoke: Boolean) : ShareDialog
     data class RequestPolicy(val policy: ShareRequestPolicy) : ShareDialog
+    data class DeviceConnection(val device: ShareDevice) : ShareDialog
+    data class ResetTrust(val device: ShareDevice) : ShareDialog
+    data class RenameRoom(val room: ShareRoom) : ShareDialog
+    data class ResetMemberTrust(val room: ShareRoom, val member: ShareMember) : ShareDialog
+    data object RenewCode : ShareDialog
+    data class ExecPrograms(val target: ExecTarget) : ShareDialog
+    data object ExecLog : ShareDialog
 }
 
 /**
@@ -235,6 +244,49 @@ internal fun ShareDialogHost(
         is ShareDialog.RoomMember -> RoomMemberDialog(dialog.room, dialog.member, dialog.action, vm, onDismiss)
         is ShareDialog.PairingDecision -> PairingDecisionDialog(dialog.pairing, dialog.revoke, vm, onDismiss)
         is ShareDialog.RequestPolicy -> RequestPolicyDialog(dialog.policy, vm, onDismiss)
+        is ShareDialog.DeviceConnection -> DeviceConnectionDialog(dialog.device, vm, onDismiss, onResetTrust = {
+            onReplace(ShareDialog.ResetTrust(dialog.device))
+        })
+        is ShareDialog.ResetTrust -> ShareConfirmAction(
+            title = "Vertrauen zu ${dialog.device.name.ifBlank { "Gerät" }} zurücksetzen?",
+            message = "Die gespeicherte Identität dieses Geräts wird vergessen und sein Zugriff auf deine Freigaben entzogen " +
+                "(Befehle aus). Das Gerät bleibt in der Liste und muss neu bestätigt werden.",
+            confirm = "Zurücksetzen",
+            failure = "Vertrauen nicht zurückgesetzt",
+            vm = vm,
+            onDismiss = onDismiss,
+        ) { ShareSettingsApi.resetContactTrust(dialog.device.contactId) }
+        is ShareDialog.RenameRoom -> TextInputDialog(
+            title = "Raum umbenennen",
+            label = "Name des Raums",
+            initial = dialog.room.name,
+            confirmLabel = "Speichern",
+            onConfirm = { name ->
+                action.submit(vm, "Raum nicht umbenannt", onDismiss) { ShareSettingsApi.renameRoom(dialog.room.profileId, name) }
+            },
+            onDismiss = onDismiss,
+            hint = "Der Name gilt nur auf diesem Telefon.",
+            action = action,
+        )
+        is ShareDialog.ResetMemberTrust -> ShareConfirmAction(
+            title = "Vertrauen zu ${dialog.member.name.ifBlank { "Gerät" }} zurücksetzen?",
+            message = "Die zuletzt gesehene Adresse dieses Mitglieds wird vergessen und neu gesucht. Zulassung und Befehle bleiben, wie sie sind.",
+            confirm = "Zurücksetzen",
+            failure = "Mitglied nicht zurückgesetzt",
+            vm = vm,
+            onDismiss = onDismiss,
+        ) { ShareSettingsApi.resetMemberTrust(dialog.room.profileId, dialog.member.deviceId) }
+        ShareDialog.RenewCode -> ShareConfirmAction(
+            title = "Direct-Code erneuern?",
+            message = "Der bisherige Direct-Code gilt danach nicht mehr. Bestehende Direkt-Freigaben pausieren bis zur erneuten " +
+                "Bestätigung, ihre Befehle werden ausgeschaltet. Der Share-Dienst startet dafür kurz neu.",
+            confirm = "Erneuern",
+            failure = "Direct-Code nicht erneuert",
+            vm = vm,
+            onDismiss = onDismiss,
+        ) { ShareSettingsApi.renewCode() }
+        is ShareDialog.ExecPrograms -> ExecProgramsDialog(dialog.target, vm, onDismiss)
+        ShareDialog.ExecLog -> ExecAuditDialog(onDismiss)
         is ShareDialog.Readmit -> ShareConfirmAction(
             title = "${dialog.device.name.ifBlank { "Gerät" }} wieder zulassen?",
             message = "Die gespeicherte Identität darf sich wieder koppeln. Befehle werden nicht aktiviert.\n${dialog.device.deviceId}",

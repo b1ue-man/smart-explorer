@@ -31,6 +31,11 @@ internal class DeviceCardActions(
     val makeDiscoverable: () -> Unit,
     val stopDiscoverable: (offerId: String) -> Unit,
     val copyDirectCode: (String) -> Unit,
+    /** Direct code reachable (`true`) or not for new contacts until the worker restarts. */
+    val setDirectOnline: (Boolean) -> Unit,
+    /** „Code erneuern…“ (asks first). */
+    val renewCode: () -> Unit,
+    val setLanPresence: (Boolean) -> Unit,
 )
 
 /**
@@ -80,6 +85,7 @@ internal fun ThisDeviceCard(status: ShareStatus, nowMs: Long, actions: DeviceCar
                 Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = inset)
             }
             ToggleSetting("Online", status.running, actions.setOnline)
+            ToggleSetting("Gekoppelte Geräte im lokalen Netz finden", status.lanPresenceEnabled, actions.setLanPresence)
             if (status.running && status.server != null && !status.connected) {
                 OutlinedButton(onClick = actions.reconnect, modifier = inset) { Text("Erneut verbinden") }
             }
@@ -99,6 +105,16 @@ internal fun ThisDeviceCard(status: ShareStatus, nowMs: Long, actions: DeviceCar
                 TextButton(onClick = { actions.copyDirectCode(identity.directCode) }, modifier = Modifier.padding(start = 4.dp)) {
                     Text("Direct-Code kopieren")
                 }
+            }
+            Text(
+                "Direct-Code für neue Kontakte (bis zum nächsten Start des Share-Dienstes):",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = inset,
+            )
+            Row(Modifier.padding(start = 4.dp)) {
+                TextButton(onClick = { actions.setDirectOnline(true) }) { Text("Erreichbar") }
+                TextButton(onClick = { actions.setDirectOnline(false) }) { Text("Nicht erreichbar") }
+                TextButton(onClick = actions.renewCode) { Text("Code erneuern…") }
             }
             if (identity.fingerprint.isNotBlank()) {
                 Text(

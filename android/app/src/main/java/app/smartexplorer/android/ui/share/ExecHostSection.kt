@@ -29,6 +29,7 @@ import app.smartexplorer.android.api.EXEC_INCOMING
 import app.smartexplorer.android.api.EXEC_RELATION_ROOM
 import app.smartexplorer.android.api.ExecJob
 import app.smartexplorer.android.api.ExecJobs
+import app.smartexplorer.android.api.ExecProviderInfo
 import app.smartexplorer.android.api.ExecTarget
 import app.smartexplorer.android.api.ShareStatus
 import app.smartexplorer.android.ui.common.Format
@@ -45,13 +46,20 @@ internal class ExecHostActions(
     val allow: (ExecTarget) -> Unit,
     val revoke: (ExecTarget) -> Unit,
     val stop: (ExecJob) -> Unit,
+    /** „Programme…“: the program list of one device. */
+    val programs: (ExecTarget) -> Unit,
+    /** „Befehlsprotokoll“ of this phone. */
+    val log: () -> Unit,
 )
 
 /**
  * Section "Befehle auf diesem Telefon" (spec G4 B): per Direct device and room member (no global
  * switch) [Erlauben…] → warning with the Android risks and "Ich habe verstanden" → [Aktivieren];
- * [Entziehen] without a question. Below, the running commands of other devices with [Stopp] and
- * the last finished ones. Without an exec provider the reason is shown and allowing is disabled.
+ * [Entziehen] without a question; ⋮ „Programme…“ narrows a device to a program list (as the CLI's
+ * `--allow-program` and the desktop page „Befehle“). Each row names the account („Standardnutzer“:
+ * Android runs commands only as the app) and the programs. Below, the running commands of other
+ * devices with [Stopp], the last finished ones and [Befehlsprotokoll]. Without an exec provider the
+ * reason is shown and allowing is disabled.
  */
 @Composable
 internal fun ExecHostSection(status: ShareStatus, jobs: ExecJobs?, actions: ExecHostActions) {
@@ -70,8 +78,15 @@ internal fun ExecHostSection(status: ShareStatus, jobs: ExecJobs?, actions: Exec
     }
     if (status.execTargets.isEmpty()) HintLine("Noch keine Direkt-Geräte oder Raummitglieder.")
     status.execTargets.forEach { target ->
-        ExecTargetRow(target, provider.available, onAllow = { confirmKey = target.targetKey }, onRevoke = { actions.revoke(target) })
+        ExecTargetRow(
+            target,
+            provider,
+            onAllow = { confirmKey = target.targetKey },
+            onRevoke = { actions.revoke(target) },
+            onPrograms = { actions.programs(target) },
+        )
     }
+    TextButton(onClick = actions.log, modifier = Modifier.padding(start = 4.dp)) { Text("Befehlsprotokoll anzeigen") }
     val running = runningIncoming(jobs)
     if (running.isNotEmpty()) {
         JobsTitle("Laufende Befehle")
@@ -104,15 +119,17 @@ private fun JobsTitle(text: String) {
 }
 
 @Composable
-private fun ExecTargetRow(target: ExecTarget, providerAvailable: Boolean, onAllow: () -> Unit, onRevoke: () -> Unit) {
+private fun ExecTargetRow(target: ExecTarget, provider: ExecProviderInfo, onAllow: () -> Unit, onRevoke: () -> Unit, onPrograms: () -> Unit) {
     val state = buildString {
         append(execRelationText(target))
         append(if (target.enabled) " · Befehle erlaubt" else " · Keine Befehle")
         if (!target.baseAuthorized) append(" · Freigabe inaktiv")
+        append("\nAusführen als: ").append(execRunAsText(target, provider))
+        append("\nProgramme: ").append(execProgramsText(target.programs))
     }
     ListItem(
         headlineContent = { Text(target.name.ifBlank { "Gerät" }, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-        supportingContent = { Text(state, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+        supportingContent = { Text(state, maxLines = 4, overflow = TextOverflow.Ellipsis) },
         leadingContent = {
             SeIcon(
                 R.drawable.ic_terminal,
@@ -121,10 +138,13 @@ private fun ExecTargetRow(target: ExecTarget, providerAvailable: Boolean, onAllo
             )
         },
         trailingContent = {
-            if (target.enabled) {
-                TextButton(onClick = onRevoke) { Text("Entziehen") }
-            } else {
-                TextButton(onClick = onAllow, enabled = providerAvailable && target.baseAuthorized) { Text("Erlauben…") }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (target.enabled) {
+                    TextButton(onClick = onRevoke) { Text("Entziehen") }
+                } else {
+                    TextButton(onClick = onAllow, enabled = provider.available && target.baseAuthorized) { Text("Erlauben…") }
+                }
+                RowMenu(listOf("Programme…" to onPrograms))
             }
         },
     )
@@ -153,7 +173,15 @@ private fun ExecGrantDialog(target: ExecTarget, onConfirm: () -> Unit, onDismiss
         title = { Text("Befehle von „$name“ erlauben?") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("„$name“ kann danach ohne weitere Rückfrage beliebige Shell-Befehle auf diesem Telefon starten.")
+                Text(
+                    if (target.programs.isEmpty()) {
+                        "„$name“ kann danach ohne weitere Rückfrage beliebige Shell-Befehle auf diesem Telefon starten."
+                    } else {
+                        "„$name“ kann danach ohne weitere Rückfrage diese Programme mit beliebigen Argumenten starten, " +
+                            "ohne Shell und Terminal: ${target.programs.joinToString(", ")}. Enthält die Liste eine Shell oder " +
+                            "einen Interpreter, ist das eine volle Shell."
+                    },
+                )
                 Text(
                     "Die Befehle laufen mit den Rechten von Smart Explorer: Sie können die Daten der App lesen – " +
                         "gespeicherte Verbindungspasswörter, die Share-Identität und Google-Drive-Tokens – und alle " +
