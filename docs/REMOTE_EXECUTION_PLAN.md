@@ -169,8 +169,17 @@ state and its `policy_revision` (no running session is revoked by the
 update); the next profile write stores `run_as` explicitly. Changing the
 account or the program list is a policy change: it advances the revision and
 ends the device's running jobs like any revocation. Set with
-`se share grants exec enable [--run-as USER|standard] [--allow-program PATH …|--full]`
-or the account field of the desktop Share page (Linux root worker).
+`se share grants exec enable [--run-as USER|standard] [--allow-program PATH …|--full]`,
+on the desktop under „Geräte & Freigaben → Befehle → Einstellungen“ (account
+field on a Linux root worker; „Programmliste bearbeiten“ with the rules of
+`--allow-program`, an empty list is the full shell, every change of an enabled
+grant needs a confirmation; `app/core/share_exec_programs_ui.rs`) and on Android
+under „Teilen → Befehle auf diesem Telefon → ⋮ Programme…“ (`share.setExec`
+with `programs`; Android always sends the Standardnutzer). Both send the same
+`MutateExecGrant { settings }` through the daemon journal as the CLI. `se share
+grants`, `se share status` and the shell completion name the account and the
+list (`exec_run_as`, `exec_programs`); the surface inventory is
+`docs/oberflaechen/share-exec.md`.
 
 Older versions (E8). Versions up to 0.5.180 read the profile of schema 8 with
 the five fields above and ignore unknown ones. A grant that is enabled and
@@ -535,7 +544,12 @@ cannot act on the terminal that shows the log. Shell command text is never
 logged, like OpenSSH, whose `auth.log` names logins but no commands. A write
 error never blocks an execution. `se share exec log [--lines N] [--json]` merges
 both classes by time (seconds; within one second the first class first) and
-works without the running worker.
+works without the running worker. The desktop („Befehle → Exec-Protokoll dieses
+Hosts“) and Android („Befehlsprotokoll anzeigen“, `share.execLog`) read the same
+files through `share/os/shared/exec_audit_view.rs`: at most 1000 entries,
+newest first, one line per entry, and every field cut and cleaned again with
+the writer's rules, because a file can be edited from outside; a line that is
+no JSON object shows as „Unlesbare Zeile“.
 
 A device holder can still produce `start_refused` lines of its own class in
 bulk and so push older entries of that class out after about 8 MiB; every such

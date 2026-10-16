@@ -393,7 +393,7 @@ versucht zuerst einen direkten Gerätepfad. Falls der nicht erreichbar ist, kann
 der mitgelieferte **`se-share-server`** (Linux + Windows, in
 [`release-native/share-server/`](release-native/share-server)) verschlüsselte
 Transportpakete weiterleiten; er erhält keine Relation-Secrets oder
-Dateisystemdaten im Klartext. **Share-Server** in der Werkzeugleiste (bei schmalen Fenstern unter **»**); Server unter **Einstellungen → Verbindungen**. Der frühere Noise/TCP-Entwurf steht historisch in
+Dateisystemdaten im Klartext. **Share-Server** in der Werkzeugleiste (bei schmalen Fenstern unter **»**) öffnet das Fenster **Geräte & Freigaben** (Seiten siehe „Share-Einstellungen auf jeder Oberfläche“); Server unter **Einstellungen → Verbindungen**. Der frühere Noise/TCP-Entwurf steht historisch in
 [`docs/SHARE_PLAN.md`](docs/SHARE_PLAN.md).
 
 In der Teilen-Ansicht lassen sich das eigene Direct-Gerät und vorhandene Räume
@@ -575,7 +575,7 @@ Secrets im Credential Manager. Unter Linux und Android nutzt Smart Explorer bewu
 einen DBus-freien, benutzereigenen Dateispeicher
 (`$XDG_DATA_HOME/smart_explorer/secrets-v1`, Verzeichnis `0700`, Dateien `0600`),
 damit SSH, CI und Dienste funktionieren.
-**Versiegelte Datensätze (umgesetzt am 2026-10-16; Suite und Release stehen aus):**
+**Versiegelte Datensätze (ab 0.5.181):**
 Jeder Datensatz ist mit ChaCha20-Poly1305 unter einem 32-Byte-Datenschlüssel
 versiegelt (Format `SESEC02`). Den Schlüssel hält nicht der Speicher selbst,
 sondern ein Schlüsselhüter, den der Speicher beim ersten Bedarf wählt und in
@@ -602,7 +602,8 @@ Plattenverschlüsselung. Beispiele: `se doctor --json`, `se connections list`,
 `se ls @label:/pfad`,
 `se get @sftp:/bericht.pdf .`, `se put ./lokal.txt @webdav:/ziel/`,
 `se cp @drive:/a.txt @share:/b.txt`, `se search @label:/ "*.rs"`,
-`se share discoverable --minutes 5 --pin-stdin`, `se update --check`.
+`se share discoverable --minutes 5 --pin-stdin`, `se update --check`,
+`se sync list`, `se background status`, `se connections edit LABEL --host NEU`.
 **Links (ab 0.5.177):** `se search` meldet Links (`l`) und FIFOs/Sockets/Geräte
 (`s`) über ihren Namen und betritt Links nie; `--dirs` nimmt Ordner zusätzlich
 auf. `se cp -r`/`se mv -r` überspringen Links und Sonderdateien innerhalb eines
@@ -627,7 +628,7 @@ Optionen gibt es bewusst keine Command-, Pfad- oder Shell-Filter: die Freigabe i
 Remote-Codeausfuehrung als der laufende Benutzer (der „Standardnutzer“, das Konto
 des Smart-Explorer-Workers). Jede bisher erteilte Freigabe bleibt genau so bestehen,
 mit unveränderter `enabled`-Angabe und unveränderter Revision.
-**Konto und Programmliste (umgesetzt am 2026-10-16; Suite und Release stehen aus):**
+**Konto und Programmliste (ab 0.5.181):**
 `enable --run-as USER` führt die Befehle des Geräts auf einem Linux-Host, dessen
 Worker als root läuft, als dieses lokale Konto aus (`--run-as standard` kehrt zum
 Worker-Konto zurück; Windows, Android und Linux ohne root-Worker lehnen ein anderes
@@ -647,7 +648,40 @@ Protokoll des Hosts: Starts, Enden und abgelehnte Starts autorisierter Geräte s
 `exec-audit.log`, abgelehnte Anmeldungen und gesperrte Gegenstellen getrennt in
 `exec-audit-rejected.log` (je Datei 4 MiB, dazu eine Vorgängerdatei), nie der Text eines
 Shell-Befehls.
-**SFTP-Hostschlüssel (umgesetzt am 2026-10-16; Suite und Release stehen aus):** Ein
+**Exec-Einstellungen in den Apps (umgesetzt am 2026-10-16; Suite und Release stehen aus):**
+In der Desktop-App zeigt **Geräte & Freigaben → Befehle** je Gerät, ob es Befehle
+starten darf, als welches Konto und mit welcher Programmliste; **Einstellungen**
+öffnet die Karte des Geräts mit Aktivieren/Deaktivieren, Kontofeld (nur Linux mit
+root-Worker), **Programmliste bearbeiten** (Programmname oder absoluter Pfad, „Volle
+Shell (Liste leeren)“, dieselben Regeln und Warnungen wie `--allow-program`; jede
+Änderung an einem erlaubten Gerät braucht eine Bestätigung und beendet dessen laufende
+Befehle) und darunter die Jobs sowie **Exec-Protokoll dieses Hosts** (neueste 50, 200
+oder 1000 Einträge, nach Gerät filterbar, jedes Feld gekürzt und von Steuerzeichen
+bereinigt). Die Android-App zeigt unter **Teilen → Befehle auf diesem Telefon** je
+Gerät „Ausführen als: Standardnutzer“ (Android kann kein anderes Konto) und die
+Programme, ⋮ **Programme…** bearbeitet die Liste, **Befehlsprotokoll anzeigen** zeigt
+das Protokoll des Telefons.
+**Share-Einstellungen auf jeder Oberfläche (umgesetzt am 2026-10-16; Suite und Release
+stehen aus):** Das Desktop-Fenster **Geräte & Freigaben** zeigt je Bereich eine knappe
+Übersicht (**Geräte**, **Anfragen**, **Räume**, **Freigaben**, **Befehle**, **Dieses
+Gerät**, **Netzwerk**, **Diagnose**, unter Windows **Papierkorb**); **Details** öffnet
+die Seite eines Geräts (Verbindung mit automatisch verbinden/öffnen und Vertrauen
+zurücksetzen, Rückfreigabe, Autorisierung, Schreibrecht, Befehle) oder eines Raums
+(Name, Beitreten/Verlassen, Code, Freigaben, Rechte, Mitglieder zulassen/sperren). Die
+Anfrageregel (immer fragen oder Anfragen mit dem eigenen Direkt-Code automatisch
+annehmen) steht unter **Anfragen**. Dieselben Einstellungen erreicht das Terminal:
+`se share device list|set|reset-trust` (`--auto-connect`, `--auto-open`,
+`--share-back`), `se share room list|create|join|leave|rejoin|rename|code|remove` und
+`se share room member RAUM GERÄT admit|block|allow|reset-trust`, `se share request
+policy [ask|auto-accept]`, `se share identity --set-name NAME`, `--direct-online
+true|false` und `--rotate-code`, `se share export move FREIGABE --up|--down` und
+`se share trash list|restore` (Windows); `se share grants` und `se share status` nennen
+zusätzlich `exec_run_as`/`exec_programs`. Die Android-App ergänzt im Gerätemenü
+**Verbindung…**, im Raummenü **Umbenennen…** und **Wieder beitreten**, je Mitglied
+**Vertrauen zurücksetzen**, je Freigabe **Nach oben/unten** und in der Gerätekarte die
+LAN-Erkennung, die Erreichbarkeit des Direct-Codes und **Code erneuern…**. Welche
+Einstellung wo erreichbar ist, führt `docs/oberflaechen/share-exec.md`.
+**SFTP-Hostschlüssel (ab 0.5.181):** Ein
 unbekannter Hostschlüssel wird nie still gespeichert. Der Zugriff scheitert mit
 Schlüsseltyp und SHA-256-Fingerabdruck; im Terminal fragt `se` wie `ssh`, sonst
 bestätigt `se connections trust-host-key LABEL|HOST[:PORT] --fingerprint SHA256:…`
@@ -672,6 +706,30 @@ Peer-Empfang. Erst der signierte Request-Receipt des Zielgeraets meldet
 `received`. Entscheidung (`pending`/`accepted`/`rejected`/`revoked`), aktive
 Autorisierung und aktuelle Verbindung werden getrennt angezeigt.
 
+**Alle übrigen Einstellungen auf jeder Oberfläche (umgesetzt am 2026-10-16; Suite und Release
+stehen aus):** Jede Einstellung der App ist in der GUI und im Terminal erreichbar; KI-Agenten
+erreichen sie über das MCP-Werkzeug `se`. **Sync-Setups:** `se sync list|show|add|edit|remove|
+enable|disable|log` mit einer Option je Feld des Desktop-Editors (Optionsnamen = Schlüssel von
+`se sync show --json`, gleiche Prüfungen und Meldungen wie die GUI; `@label:/pfad` wird zum
+gespeicherten Endpunkt). Der Desktop-Editor zeigt die Felder auf fünf Seiten (**Allgemein**,
+**Zeitplan**, **Vergleich & Versionen**, **Filter**, **Übertragung & Befehle**) und hat jetzt auch
+Höchstwartezeit, Abfrageintervall, Kontroll-Lauf, Vollprüfung des Ziels, Versionsort,
+Mindestzahl des Löschschutzes, eingehängte Dateisysteme und „Befehl bei Abbruch“; die
+Android-App hat Zeit-Toleranz, Größen- und Altersfilter, Bandbreite, parallele Übertragungen,
+sichere Kopien, Überprüfen und Wiederholungen. **Hintergrund:** `se background status|enable|
+disable|cadence|pause|resume|autopause|log` wie **Einstellungen → Integration → Hintergrund**;
+das Prüfintervall ist auch auf Android einstellbar. **Verbindungen:** `se connections add smb`
+(Startpfad `/<freigabe>/<ordner>`), `se connections edit` (Geheimnis wandert mit, ein Passwort
+wird nie zur Schlüssel-Passphrase), `se connections remove` räumt wie die GUI Favoriten,
+Ordnereinstellungen und Laufwerke mit auf; die Desktop-App bietet SMB auf Windows und Linux an
+(UNC nur noch unter Windows), **Verbindung bearbeiten…** und **SSH-Hostschlüssel vergessen**.
+**Google Drive:** `se connections gdrive status|configure|sign-in|sign-out`. **Integration:**
+`se integration context-menu on|off` (Windows) und in der App **Einstellungen → Integration →
+KI-Agenten** (Status, Installieren, Entfernen, Konfiguration für andere MCP-Clients, wie
+`se plugin`). **Updates:** „Beim Start nach Updates suchen“ bzw. `se update --startup-check
+true|false`; `se update --check` nennt eine Auto-Update-Pause nach einem Rollback. Übersicht mit
+Belegen: [docs/oberflaechen/einstellungen.md](docs/oberflaechen/einstellungen.md).
+
 `se share request` zeigt ohne weitere Argumente die offene Inbox samt
 Request-ID, Geraet, Fingerprint, Empfangs-, Entscheidungs- und
 Autorisierungsstatus. Eine kryptografisch gültige neue Direct-Anfrage wird vom
@@ -692,8 +750,8 @@ signierten Widerruf traegt; danach kann auch sie geloescht werden. `show`,
 `retry` und `delete` waehlen wie die Entscheidungsbefehle den einzigen passenden
 Eintrag automatisch. `se share grants` zeigt ohne Unterbefehl
 aktive und inaktive Autorisierungen; `se share grants revoke` waehlt die einzige
-aktive Freigabe automatisch. In der GUI trennt **Share-Server** offene Anfragen vom
-eingeklappten Verlauf. Offene Anfragen und sicher abgeschlossene Historie koennen
+aktive Freigabe automatisch. In der GUI trennt **Geräte & Freigaben → Anfragen** offene
+Anfragen vom eingeklappten Verlauf. Offene Anfragen und sicher abgeschlossene Historie koennen
 dort ebenfalls lokal geloescht werden; **Ablehnen** und **Widerrufen** bleiben
 die expliziten signierten Peer-Entscheidungen.
 
@@ -705,8 +763,8 @@ und offene Tabs auf diesem Ziel; Sync-Setups bleiben erhalten und werden als
 nicht mehr automatisch wieder eintragen (weder ueber die Hintergrund-Reparatur
 noch ueber eine neue Anfrage mit dem bekannten Direkt-Code); eine bewusste neue
 Kopplung per PIN, Direkt-Code oder Annehmen hebt die Sperre auf, ebenso
-**Erneut zulassen**. Unter **Autorisierte Geraete** loescht **Geraet entfernen**
-beziehungsweise **Eintrag loeschen** auch alte oder widerrufene Freigaben
+**Erneut zulassen** (Seite **Geräte → Entfernte Geräte**). Auf der Seite eines Geräts
+loescht **Geraet entfernen** beziehungsweise **Eintrag loeschen** auch alte oder widerrufene Freigaben
 vollstaendig (`se share grants delete`, `se share grants removed [--readmit]`).
 Favoriten auf Remotes heissen `<Remote> › <Ordner>` und oeffnen Share-Ziele
 direkt am gespeicherten Ordner.
@@ -749,7 +807,7 @@ Details: [`docs/AI_AGENT_PLUGIN.md`](docs/AI_AGENT_PLUGIN.md).
 **Dauerhafte Shells, Terminalsitzungen und Anhängen (Befehlssitzungen ab 0.5.178):**
 `se shell @label[:/ordner]` oder `se shell PEER` öffnet eine Shell auf einer
 gespeicherten SSH-Verbindung oder einem Share-Peer mit Exec-Freigabe. Status der
-Terminalsitzung (umgesetzt; Suite und Release stehen aus) und offene Punkte:
+Terminalsitzung (ab 0.5.180) und offene Punkte:
 `docs/TODO.md`, Eintrag `ETERM`.
 
 *Im Terminal* (Standardeingabe und Standardausgabe sind Terminals, kein `-T`) ist
@@ -932,7 +990,9 @@ Telefon installieren (Sideload). Details, Updates und Grenzen stehen unten unter
 
 ## 🔄 Updates bekommen — *das hier eintragen*
 
-Die App prüft bei **jedem Start** automatisch auf eine neuere Version. Sie lädt
+Die App prüft bei **jedem Start** automatisch auf eine neuere Version (abschaltbar unter
+**Einstellungen → Updates → Beim Start nach Updates suchen** oder mit
+`se update --startup-check false`). Sie lädt
 und prüft ein gefundenes Update, ändert aber noch keine installierte Datei. Erst
 „Jetzt neu starten" startet die Installation; „Später" bewahrt das geprüfte
 Staging und fragt beim nächsten Start wieder. Dafür muss **eine Update-Quelle**
@@ -1299,7 +1359,7 @@ Installation und der Neustart erfolgen erst nach ausdrücklicher Bestätigung
 
 ## Daten der App
 
-- Windows-Daten: `%APPDATA%\smart_explorer\` (folder_index.txt, recent.txt, update_source.txt, sync/sync_state.sqlite)
+- Windows-Daten: `%APPDATA%\smart_explorer\` (folder_index.txt, recent.txt, update_source.txt, update_startup_check.txt = `0` schaltet die Update-Prüfung beim Start ab, sync/sync_state.sqlite)
 - Linux-Daten: `$XDG_DATA_HOME/smart_explorer/` bzw. `~/.local/share/smart_explorer/`
 - Windows-Installation: `%LOCALAPPDATA%\Programs\Smart Explorer\`
 - Linux-Installation: `~/.local/opt/smart-explorer/`
