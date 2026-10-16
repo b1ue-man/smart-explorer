@@ -227,7 +227,10 @@ ConnectionInput = Connection ohne id/location, plus password:String?, passphrase
   mit `ReplaceIfExists` auf dem Server, neue Dateien werden exklusiv angelegt.
 - `conn.list {}` → `[Connection]`
 - `conn.test {input:ConnectionInput}` → `{message}` (Fehler mit `kind` auth/network/…)
-- `conn.save {input:ConnectionInput}` → `Connection` (leeres `password` bei Bearbeitung = unverändert)
+- `conn.save {input:ConnectionInput}` → `Connection` mit `warnings:[String]` (leeres `password` bei
+  Bearbeitung = unverändert; ändert die Bearbeitung Host, Port, Benutzer oder Startpfad, nennt
+  `warnings` die Sync-Setups und Laufwerke, die weiter die alte Adresse nutzen – sie werden wie bei
+  `conn.delete` nicht geändert)
 - `conn.delete {id}` → `{removedFavorites:Int, orphanedJobs:[String]}` (Jobs werden wie am Desktop nur
   gemeldet, nicht gelöscht)
 - `conn.forgetHostKey {id}` → `{}` (der nächste Verbindungsversuch meldet den neuen Schlüssel zur

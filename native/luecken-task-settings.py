@@ -118,8 +118,18 @@ def stage_settings(lib, results, se_binary, work, log_root):
         ensure(bad.returncode != 0 and "share" in _text(bad), _text(bad))
         rows = [row for row in _json(se("connections", "list", "--json")) if row.get("label") == "lueckennas"]
         ensure(len(rows) == 1 and rows[0]["protocol"] == "smb" and rows[0]["auth"] == "password", rows)
+        # A sync setup on the connection: the move names it and leaves it unchanged.
+        linked = se("sync", "add", "--name", "LueckenNas", "--source", str(side_a),
+                    "--target", "@lueckennas:/sub", "--json")
+        ensure(linked.returncode == 0, _text(linked))
+        endpoint = _json(linked)["target"]
+        ensure(endpoint.startswith("smb://") and "@nas.invalid:" in endpoint, endpoint)
         moved = se("connections", "edit", "lueckennas", "--host", "nas2.invalid")
         ensure(moved.returncode == 0 and "was smb://" in _text(moved), _text(moved))
+        ensure("alte Adresse" in _text(moved) and "LueckenNas" in _text(moved), _text(moved))
+        ensure(_json(se("sync", "show", "LueckenNas", "--json"))["target"] == endpoint,
+               "the edit changed the sync setup")
+        ensure(se("sync", "remove", "LueckenNas").returncode == 0, "the sync setup was not removed")
         rows = [row for row in _json(se("connections", "list", "--json")) if row.get("label") == "lueckennas"]
         ensure(len(rows) == 1 and rows[0]["host"] == "nas2.invalid", rows)
         refused = se("connections", "edit", "lueckennas", "--key", "/k/id")
@@ -129,7 +139,8 @@ def stage_settings(lib, results, se_binary, work, log_root):
         removed = se("connections", "remove", "lueckennas")
         ensure(removed.returncode == 0 and "favorites removed=1" in _text(removed), _text(removed))
         ensure(favorites.read_text(encoding="utf-8").strip() == "/elsewhere", "the GUI cleanup did not run")
-    results.check(stage, "se connections: add smb, edit (moved entry), remove with the GUI cleanup", connections)
+    results.check(stage, "se connections: add smb, edit (moved entry names its sync setup), remove with the GUI cleanup",
+                  connections)
 
     def google_drive():
         configured = se("connections", "gdrive", "configure", "--client-id", "luecken.apps.googleusercontent.com",

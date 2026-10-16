@@ -720,7 +720,8 @@ sichere Kopien, Überprüfen und Wiederholungen. **Hintergrund:** `se background
 disable|cadence|pause|resume|autopause|log` wie **Einstellungen → Integration → Hintergrund**;
 das Prüfintervall ist auch auf Android einstellbar. **Verbindungen:** `se connections add smb`
 (Startpfad `/<freigabe>/<ordner>`), `se connections edit` (Geheimnis wandert mit, ein Passwort
-wird nie zur Schlüssel-Passphrase), `se connections remove` räumt wie die GUI Favoriten,
+wird nie zur Schlüssel-Passphrase; Sync-Setups und Laufwerke auf der alten Adresse werden wie beim
+Entfernen nur genannt, nicht geändert), `se connections remove` räumt wie die GUI Favoriten,
 Ordnereinstellungen und Laufwerke mit auf; die Desktop-App bietet SMB auf Windows und Linux an
 (UNC nur noch unter Windows), **Verbindung bearbeiten…** und **SSH-Hostschlüssel vergessen**.
 **Google Drive:** `se connections gdrive status|configure|sign-in|sign-out`. **Integration:**

@@ -13,7 +13,8 @@ const EDIT_HELP: &str = "\
 Change a saved remote. Options not given keep their saved value; an empty
 password keeps the stored one. Changing host, port, user or root moves the
 entry: its stored password or key passphrase moves along unless the login kind
-changes (a password is never used as a key passphrase).
+changes (a password is never used as a key passphrase). Sync setups and drives
+that still use the old address are named in a warning and left unchanged.
 
 Examples:
   se connections edit prod --host prod.example.com

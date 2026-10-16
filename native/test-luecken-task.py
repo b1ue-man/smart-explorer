@@ -130,6 +130,7 @@ ai.NEW_FILE_PREFIXES = ("src/share/core/pq_kx", "src/share/core/auth_penalty.rs"
                         "src/cli/background.rs", "src/cli/sync_jobs", "src/cli/integration.rs",
                         "src/cli/parse_tests.rs", "src/cli/connections/edit.rs",
                         "src/cli/connections/gdrive.rs", "src/connect/os/shared/connection_edit.rs",
+                        "src/connect/os/shared/connection_edit_refs.rs",
                         "src/app/core/connect_dialog_ui.rs", "src/app/core/connection_edit_ui.rs",
                         "src/app/core/job_editor_pages", "src/app/core/settings_ai_plugin.rs",
                         "src/mobile/os/shared/domains/settings_parity_tests.rs")
@@ -154,10 +155,10 @@ FTPS_PROVIDER_TEST = ("ftp::sync_reliability_task_provider_ftps_tests::"
 # program-search adapters (2) and three tests gated with `cfg(unix)` (3).
 # The name check below runs every compiled `luecken_task_` test of the sources,
 # also those other parts of the batch add. The parity of every other setting adds
-# 29 (Windows 26: without the three bridge tests of
+# 31 (Windows 28: without the three bridge tests of
 # mobile/os/shared/domains/settings_parity_tests.rs).
-EXPECTED_LINUX = 146 + 29
-EXPECTED_WINDOWS = 115 + 26
+EXPECTED_LINUX = 146 + 31
+EXPECTED_WINDOWS = 115 + 28
 NOT_ON_WINDOWS_FILES = ("creds/os/linux_file_store_port_tests.rs", "creds/os/linux_file_store_tests.rs",
                         "creds/os/linux_os.rs", "mobile/os/shared/init.rs",
                         "mobile/os/shared/domains/host_keys.rs", "share/os/linux_os/exec_account.rs",

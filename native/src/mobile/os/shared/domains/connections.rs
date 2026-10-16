@@ -215,7 +215,10 @@ pub(super) fn save(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
         let scope = crate::connect::RemovedEndpointScope::for_saved_connection(previous);
         rt.drop_backends(&|key| scope.matches_key(key));
     }
-    Ok(connection_json(&edit.saved))
+    let mut value = connection_json(&edit.saved);
+    // Shown after "Speichern": sync setups and drives left on the old address.
+    value["warnings"] = json!(edit.warnings);
+    Ok(value)
 }
 
 /// Desktop removal: the connection and its secret, then favourites, folder
