@@ -15,6 +15,11 @@ SE_SFTP_PORT=2222
 SE_SFTP_USER=setester
 SE_SFTP_PASS=se-task-sftp-pass
 SE_SFTP_ROOT=/upload
+# Host-key fingerprints (comma-separated SHA256:… values, one per key type) that servers_up scans
+# from the SFTP and SSH containers with ssh-keyscan; the app never stores an unknown SSH host key
+# silently, so the tests compare the key it reports with these and only then confirm it.
+SE_SFTP_FINGERPRINTS=""
+SE_SSH_FINGERPRINTS=""
 
 # A full SSH server (exec allowed) for connections with the Remote-Agent, which deploys itself over
 # SFTP plus exec channels; the user's home /config is writable.
@@ -84,9 +89,41 @@ servers_wait_port() {
   return 1
 }
 
+# The SHA256 host-key fingerprints of an SSH server container on the runner's loopback, one per key
+# type it offers, comma-separated (ssh-keyscan, fingerprinted with ssh-keygen). The emulator reaches
+# the same server as 10.0.2.2 and sees the same keys.
+servers_host_fingerprints() {
+  local port=$1 attempt scanned="" line fingerprint fingerprints=""
+  for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    scanned="$(ssh-keyscan -p "$port" 127.0.0.1 2>/dev/null | grep -v '^#' || true)"
+    if [[ -n "$scanned" ]]; then
+      break
+    fi
+    sleep 1
+  done
+  if [[ -z "$scanned" ]]; then
+    echo "test server on port $port presented no SSH host key" >&2
+    return 1
+  fi
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    fingerprint="$(ssh-keygen -l -E sha256 -f - <<<"$line" | awk '{ print $2; exit }')"
+    if [[ "$fingerprint" != SHA256:* ]]; then
+      echo "test server on port $port: no SHA256 fingerprint for a scanned host key" >&2
+      return 1
+    fi
+    fingerprints+="${fingerprints:+,}$fingerprint"
+  done <<<"$scanned"
+  printf '%s\n' "$fingerprints"
+}
+
 servers_up() {
   command -v docker >/dev/null 2>&1 || {
     echo "docker is required for the SFTP/FTP test servers" >&2
+    return 1
+  }
+  command -v ssh-keyscan >/dev/null 2>&1 && command -v ssh-keygen >/dev/null 2>&1 || {
+    echo "ssh-keyscan and ssh-keygen are required to confirm the SSH test servers' host keys" >&2
     return 1
   }
   docker rm -f "$SE_SFTP_CONTAINER" "$SE_SSH_CONTAINER" "$SE_FTP_CONTAINER" "$SE_SMB_CONTAINER" >/dev/null 2>&1 || true
@@ -114,6 +151,10 @@ servers_up() {
     "$SE_SMB_IMAGE" >/dev/null
   servers_wait_banner SFTP "$SE_SFTP_PORT" "SSH-"
   servers_wait_banner SSH "$SE_SSH_PORT" "SSH-"
+  SE_SFTP_FINGERPRINTS="$(servers_host_fingerprints "$SE_SFTP_PORT")" || return 1
+  SE_SSH_FINGERPRINTS="$(servers_host_fingerprints "$SE_SSH_PORT")" || return 1
+  echo "test server SFTP host key fingerprints: $SE_SFTP_FINGERPRINTS"
+  echo "test server SSH host key fingerprints: $SE_SSH_FINGERPRINTS"
   servers_wait_banner FTP "$SE_FTP_PORT" "220"
   servers_wait_port SMB "$SE_SMB_PORT"
   # A banner session must not end the server (see above).
@@ -147,7 +188,9 @@ servers_instrumentation_args() {
   printf '%s\n' \
     -e seServerHost "$SE_TASK_EMULATOR_HOST" \
     -e seSftpPort "$SE_SFTP_PORT" -e seSftpUser "$SE_SFTP_USER" -e seSftpPass "$SE_SFTP_PASS" -e seSftpRoot "$SE_SFTP_ROOT" \
+    -e seSftpFingerprints "$SE_SFTP_FINGERPRINTS" \
     -e seSshPort "$SE_SSH_PORT" -e seSshUser "$SE_SSH_USER" -e seSshPass "$SE_SSH_PASS" -e seSshRoot "$SE_SSH_ROOT" \
+    -e seSshFingerprints "$SE_SSH_FINGERPRINTS" \
     -e seFtpPort "$SE_FTP_PORT" -e seFtpUser "$SE_FTP_USER" -e seFtpPass "$SE_FTP_PASS" -e seFtpRoot "$SE_FTP_ROOT" \
     -e seFtpFixture "$SE_FTP_FIXTURE" -e seFtpFixtureSha256 "$SE_FTP_FIXTURE_SHA" \
     -e seSmbPort "$SE_SMB_PORT" -e seSmbUser "$SE_SMB_USER" -e seSmbPass "$SE_SMB_PASS" -e seSmbShare "$SE_SMB_SHARE" \

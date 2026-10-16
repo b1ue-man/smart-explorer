@@ -278,6 +278,8 @@ def stage_ssh_sessions(results, se_binary, work, log_root):
         results.record(stage, "OpenSSH container fixture", False, error)
         return
     try:
+        results.check(stage, "fresh server's host key confirmed before the first connection",
+                      lambda: " ".join(ai.trust_ssh_host_key(client, se_binary, "127.0.0.1", port, log)))
         added = client.se(se_binary, "connections", "add", "sftp", "--host", "127.0.0.1", "--port", str(port),
                           "--user", user, "--root", "/config", "--label", "sshbox", "--password-stdin",
                           input_text=password + "\n", log=log)

@@ -325,6 +325,8 @@ def stage_sftp(results, se_binary, work, log_root):
         made = ai.run(["docker", "exec", "-u", f"{os.getuid()}:{os.getgid()}", container, "sh", "-c", script],
                       log=log)
         results.record(stage, "remote tree with links and a FIFO", made.returncode == 0, errors(made))
+        results.check(stage, "fresh server's host key confirmed before the first connection",
+                      lambda: " ".join(ai.trust_ssh_host_key(client, se_binary, "127.0.0.1", port, log)))
         added = client.se(se_binary, "connections", "add", "sftp", "--host", "127.0.0.1", "--port", str(port),
                           "--user", user, "--root", "/config", "--label", "box", "--password-stdin",
                           input_text=password + "\n", log=log)

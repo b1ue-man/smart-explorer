@@ -19,11 +19,19 @@ import zipfile
 import xml.etree.ElementTree as ET
 
 
+# Host-key types in the order Smart Explorer's SSH client prefers them: of the
+# types a server offers, the first one of this list is the key it presents.
+SSH_HOST_KEY_ORDER = ("ssh-ed25519", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384",
+                      "ecdsa-sha2-nistp521", "ssh-rsa")
+
+
 class Owner:
     def __init__(self, root, logs, env):
         self.root, self.logs, self.env = root, logs, env
         self.names, self.cleanups = [], []
         self.prefix = "se-sync-" + secrets.token_hex(6)
+        # The development `se` that confirms SSH host keys (set by fixtures()).
+        self.cli = None
 
     def command(self, args, *, input=None, timeout=180, check=True):
         result = subprocess.run([str(x) for x in args], env=self.env, input=input,
@@ -49,6 +57,47 @@ class Owner:
         if len(rows) != 1 or not rows[0].startswith("127.0.0.1:"):
             raise RuntimeError(f"unexpected owned port mapping: {rows}")
         return int(rows[0].rsplit(":", 1)[1])
+
+    def trust_ssh_host_key(self, port):
+        """Confirms the host key of an owned SSH server before the first connection.
+
+        Smart Explorer no longer stores an unknown SSH host key silently. The
+        fingerprint comes from `ssh-keyscan` and `ssh-keygen -lf -`;
+        `se connections trust-host-key` pins it, under the same profile
+        (self.env) the sync task runs with, only when the server presents
+        exactly that key again. The key types are tried in the client's
+        preference order, and a fingerprint of another type is refused without
+        storing anything.
+        """
+        lines = []
+        for _ in range(10):
+            scanned = self.command(["ssh-keyscan", "-p", port, "127.0.0.1"], check=False)
+            lines = [line for line in scanned.splitlines() if line.strip() and not line.startswith("#")]
+            if lines:
+                break
+            time.sleep(1)
+        if not lines:
+            raise RuntimeError(f"ssh-keyscan returned no host key of owned SSH port {port}")
+        fingerprints = {}
+        for line in lines:
+            listed = self.command(["ssh-keygen", "-l", "-E", "sha256", "-f", "-"], input=line + "\n")
+            found = [part for part in listed.split() if part.startswith("SHA256:")]
+            if not found:
+                raise RuntimeError(f"ssh-keygen gave no SHA256 fingerprint for owned SSH port {port}")
+            fingerprints[line.split()[1]] = found[0]
+        if self.cli is None:
+            raise RuntimeError("the development se binary is needed to confirm an SSH host key")
+        for algorithm in SSH_HOST_KEY_ORDER:
+            if algorithm not in fingerprints:
+                continue
+            try:
+                self.command([self.cli, "connections", "trust-host-key", f"127.0.0.1:{port}",
+                              "--fingerprint", fingerprints[algorithm]])
+                return
+            except RuntimeError:
+                continue
+        raise RuntimeError(f"no host key of owned SSH port {port} could be confirmed "
+                           f"(scanned {sorted(fingerprints)}); see fixture-commands.log")
 
     def close(self):
         failures = []
@@ -144,6 +193,7 @@ def linux_protocols(owner):
                             [f"{user}:{password}:::upload"])
         port = owner.port(name, 22)
         wait_port(port, b"SSH-")
+        owner.trust_ssh_host_key(port)
         result.append(connection(label, "sftp", port, user, password, "/upload"))
     # The encrypted private key remains on the host; only its public half is
     # mounted into the owned SFTP-only server. Its password login is disabled.
@@ -158,6 +208,7 @@ def linux_protocols(owner):
                         [f"{user}::::upload"])
     port = owner.port(name, 22)
     wait_port(port, b"SSH-")
+    owner.trust_ssh_host_key(port)
     keyed = connection("sftp-key", "sftp", port, user, passphrase, "/upload")
     keyed["key_path"] = str(key)
     result.append(keyed)
@@ -167,6 +218,7 @@ def linux_protocols(owner):
                          "-e", f"USER_PASSWORD={password}"])
     port = owner.port(name, 2222)
     wait_port(port, b"SSH-")
+    owner.trust_ssh_host_key(port)
     result.append(connection("agent", "sftp", port, user, password, "/config", True))
     for protocol in ("ftp", "ftps"):
         low, high = passive_ports()
@@ -295,6 +347,7 @@ def fixtures(logs: Path, env: dict, cli: Path, share_server: Path | None):
     root = Path(tempfile.mkdtemp(prefix="sync-provider-"))
     root.chmod(0o700)
     owned = Owner(root, logs, dict(env))
+    owned.cli = Path(cli)
     try:
         protocols = windows_protocols(owned) if os.name == "nt" else linux_protocols_with_ca(owned)
         local = root / "local"

@@ -371,6 +371,39 @@ object Servers {
         "password" to password,
     )
 
+    /** `[se-host-key-unknown host=… port=… type=… fp=SHA256:…]` in the message of a `host_key_unknown` error. */
+    private val hostKeyMarker = Regex("""\[se-host-key-unknown host=(\S+) port=(\d+) type=(\S+) fp=(SHA256:[^\]\s]+)\]""")
+
+    /**
+     * Confirms the SSH host key of the SFTP server [input] names before its first connection. The core
+     * never stores an unknown key silently: `conn.test` reports it as `host_key_unknown` with the key's
+     * type and fingerprint, and [trustReportedHostKey] pins it after comparing the fingerprint with the
+     * scan of the host script. A server whose key is already trusted needs nothing; any other outcome of
+     * the probe is left to the caller's own calls.
+     */
+    suspend fun confirmHostKey(input: JsonObject) {
+        if (input.text("protocol") != "sftp") return
+        val reported = Api.attempt("conn.test", args("input" to input)).exceptionOrNull() as? CoreException ?: return
+        if (reported.kind == "host_key_unknown") trustReportedHostKey(input, reported)
+    }
+
+    /**
+     * Pins the unknown key named in [reported] (a `host_key_unknown` failure for [input]'s server), but
+     * only when its fingerprint is one the host script scanned from that container with `ssh-keyscan`
+     * (`seSftpFingerprints`, `seSshFingerprints`: comma-separated SHA256 values). `conn.trustHostKey`
+     * then connects again and stores the key only if the server presents exactly that fingerprint.
+     */
+    suspend fun trustReportedHostKey(input: JsonObject, reported: CoreException) {
+        val message = reported.message.orEmpty()
+        val marker = hostKeyMarker.find(message)
+            ?: throw AssertionError("Die Meldung nennt keinen unbekannten Hostschlüssel: $message")
+        val fingerprint = marker.groupValues[4]
+        val scanned = TaskArgs.get(if (input.int("port") == TaskArgs.int("seSshPort")) "seSshFingerprints" else "seSftpFingerprints")
+            .split(',').filter { it.isNotBlank() }
+        assertTrue("Der Server zeigt $fingerprint, der Host hat gescannt: $scanned", fingerprint in scanned)
+        Api.call("conn.trustHostKey", args("message" to message))
+    }
+
     /** The saved SFTP connection (created on first use). */
     suspend fun sftp(): JsonObject = ensure(sftpInput())
 
@@ -381,6 +414,7 @@ object Servers {
     suspend fun agentSftp(): JsonObject = ensure(agentSftpInput())
 
     private suspend fun ensure(input: JsonObject): JsonObject {
+        confirmHostKey(input)
         val existing = Api.objects("conn.list").firstOrNull { connection ->
             connection.text("protocol") == input.text("protocol") &&
                 connection.int("port") == input.int("port") &&

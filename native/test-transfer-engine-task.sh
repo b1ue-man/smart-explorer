@@ -364,7 +364,7 @@ fi
 
 # ---------------------------------------------------------------------------
 # Real servers: SFTP (OpenSSH) and FTP (vsftpd) containers on loopback.
-for command_name in docker jq timeout cmp head sudo tc comm; do
+for command_name in docker jq timeout cmp head sudo tc comm ssh-keyscan ssh-keygen; do
     command -v "$command_name" >/dev/null 2>&1 || {
         echo "$command_name is required for the server checks" >&2
         exit 1
@@ -398,8 +398,34 @@ wait_banner() {
     docker logs "se-engine-$name" >&2 || true
     return 1
 }
+# The SHA256 host-key fingerprints of the SFTP container, one per key type it
+# offers, in the order Smart Explorer's SSH client prefers the types (Ed25519,
+# the ECDSA curves, then RSA). Smart Explorer never stores an unknown SSH host
+# key silently, so the Rust server checks confirm the fresh container's key
+# first (native/tests/transfer_task/support.rs): `trust_host_key` pins a
+# fingerprint only when the server presents exactly that key.
+scan_host_fingerprints() {
+    local port=$1 attempt scanned="" key_type line fingerprint
+    local -a ordered=()
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+        scanned="$(ssh-keyscan -p "$port" 127.0.0.1 2>/dev/null | grep -v '^#' || true)"
+        [[ -n "$scanned" ]] && break
+        sleep 1
+    done
+    [[ -n "$scanned" ]] || return 1
+    for key_type in ssh-ed25519 ecdsa-sha2-nistp256 ecdsa-sha2-nistp384 ecdsa-sha2-nistp521 ssh-rsa; do
+        line="$(awk -v type="$key_type" '$2 == type { print; exit }' <<<"$scanned")"
+        [[ -n "$line" ]] || continue
+        fingerprint="$(ssh-keygen -l -E sha256 -f - <<<"$line" | awk '{ print $2; exit }')"
+        [[ "$fingerprint" == SHA256:* ]] || return 1
+        ordered+=("$fingerprint")
+    done
+    [[ "${#ordered[@]}" -ne 0 ]] || return 1
+    echo "${ordered[*]}"
+}
 stop_servers
 servers_ready=true
+sftp_fingerprints=""
 docker run -d --name se-engine-sftp -p "$sftp_port:22" atmoz/sftp:latest \
     "$sftp_user:$sftp_pass:::upload" >/dev/null || servers_ready=false
 # vsftpd on the host network: its data connections need no published port
@@ -415,6 +441,14 @@ if [[ "$servers_ready" == true ]]; then
     wait_banner sftp "$sftp_port" "SSH-" || servers_ready=false
     wait_banner ftp 21 "220" || servers_ready=false
 fi
+if [[ "$servers_ready" == true ]]; then
+    if sftp_fingerprints="$(scan_host_fingerprints "$sftp_port")"; then
+        echo "test server sftp: host key fingerprints $sftp_fingerprints"
+    else
+        echo "the SFTP test server's host keys could not be scanned" >&2
+        servers_ready=false
+    fi
+fi
 if [[ "$servers_ready" != true ]]; then
     stage_failed "the SFTP/FTP test servers did not start (server and throughput checks not run)"
 elif ! (
@@ -424,6 +458,7 @@ elif ! (
     stage_failed "the server and throughput checks did not build"
 else
     export SE_TASK_SFTP="127.0.0.1:$sftp_port:$sftp_user:$sftp_pass:/upload"
+    export SE_TASK_SFTP_FINGERPRINTS="$sftp_fingerprints"
     export SE_TASK_FTP_URL="ftp://$ftp_user:$ftp_pass@127.0.0.1:21/ftp/$ftp_user"
     containers_log="$suite_tmp/containers.log"
     echo "transfer engine task suite: whole trees against the servers"

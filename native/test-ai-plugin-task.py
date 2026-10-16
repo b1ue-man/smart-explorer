@@ -12,7 +12,9 @@ release build), then checks every milestone once:
            Claude Code `server/discover` 2026-07-28): catalog, stray-print
            protection, local file tools, jobs and cancellation, the `se` tool,
            status/connections, update stop, session cleanup
-  ssh      (Linux) saved SFTP remote in an OpenSSH container: remote files,
+  ssh      (Linux) saved SFTP remote in an OpenSSH container (its host key is
+           confirmed with the `ssh-keyscan` fingerprint before the first
+           connection): remote files,
            `exec` streams/exit codes/argv quoting/cwd/env/stdin/timeout/cancel,
            process-group termination, `se exec @label`
   share    (Linux) two paired clients with a local Share server: `exec` on the
@@ -615,6 +617,58 @@ def docker_ssh(work, log_root):
     return name, port, user, password
 
 
+# Host-key types in the order Smart Explorer's SSH client prefers them (Ed25519,
+# the ECDSA curves, then RSA): of the types a server offers, the first one of this
+# list is the key it presents.
+SSH_HOST_KEY_ORDER = ("ssh-ed25519", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521",
+                      "ssh-rsa")
+
+
+def scan_ssh_host_keys(host, port, log=None):
+    """`{key type: SHA256 fingerprint}` of the host keys a freshly started SSH
+    server presents, from `ssh-keyscan` and `ssh-keygen -lf -`."""
+    lines = []
+    for _ in range(10):
+        scanned = run(["ssh-keyscan", "-p", str(port), host], log=log, timeout=60)
+        lines = [line for line in scanned.stdout.decode().splitlines()
+                 if line.strip() and not line.startswith("#")]
+        if lines:
+            break
+        time.sleep(1)
+    ensure(lines, f"ssh-keyscan returned no host key of {host}:{port}")
+    fingerprints = {}
+    for line in lines:
+        listed = run(["ssh-keygen", "-l", "-E", "sha256", "-f", "-"], input_text=line + "\n", log=log)
+        found = [part for part in listed.stdout.decode().split() if part.startswith("SHA256:")]
+        ensure(listed.returncode == 0 and found,
+               f"ssh-keygen gave no SHA256 fingerprint: {(listed.stdout + listed.stderr).decode(errors='replace')[:300]}")
+        fingerprints[line.split()[1]] = found[0]
+    return fingerprints
+
+
+def trust_ssh_host_key(client, se_binary, host, port, log=None):
+    """Confirms the host key of a freshly started SSH server before the first
+    connection: since the gap-closing batch (2026-10-16) Smart Explorer no
+    longer stores an unknown key silently. The fingerprint comes from
+    `ssh-keyscan`; `se connections trust-host-key` pins it only when the server
+    presents exactly that key again, so the types are tried in the client's
+    preference order and a fingerprint of another type is refused without
+    storing anything. Returns `(key type, fingerprint)` of the pinned key."""
+    fingerprints = scan_ssh_host_keys(host, port, log)
+    refused = []
+    for algorithm in SSH_HOST_KEY_ORDER:
+        fingerprint = fingerprints.get(algorithm)
+        if fingerprint is None:
+            continue
+        trusted = client.se(se_binary, "connections", "trust-host-key", f"{host}:{port}",
+                            "--fingerprint", fingerprint, log=log)
+        if trusted.returncode == 0:
+            return algorithm, fingerprint
+        refused.append(f"{algorithm} {fingerprint}: {(trusted.stdout + trusted.stderr).decode(errors='replace')[-300:]}")
+    raise AssertionError(f"no host key of {host}:{port} could be confirmed (scanned {sorted(fingerprints)}): "
+                         + " | ".join(refused))
+
+
 def stage_ssh(results, se_binary, work, log_root):
     stage = "ssh"
     client = Client(work, "ssh")
@@ -626,6 +680,8 @@ def stage_ssh(results, se_binary, work, log_root):
         results.record(stage, "OpenSSH container fixture", False, error)
         return
     try:
+        results.check(stage, "fresh server's host key confirmed before the first connection",
+                      lambda: " ".join(trust_ssh_host_key(client, se_binary, "127.0.0.1", port, logs / "cli.log")))
         added = client.se(se_binary, "connections", "add", "sftp", "--host", "127.0.0.1", "--port", str(port),
                           "--user", user, "--root", "/config", "--label", "sshbox", "--password-stdin",
                           input_text=password + "\n", log=logs / "cli.log")

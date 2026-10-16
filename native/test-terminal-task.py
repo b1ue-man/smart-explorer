@@ -1183,6 +1183,11 @@ def prepare_container(container, user, install, permit_tty, log):
 
 
 def add_connection(client, se_binary, port, user, password, label, root, log):
+    # Since the gap-closing batch an unknown host key is never stored silently:
+    # the fresh container's key is confirmed by its ssh-keyscan fingerprint before
+    # the first connection (repeating it for a later label of the same server
+    # only finds the pin that already exists).
+    ai.trust_ssh_host_key(client, se_binary, "127.0.0.1", port, log)
     added = client.se(se_binary, "connections", "add", "sftp", "--host", "127.0.0.1", "--port", str(port),
                       "--user", user, "--root", root, "--label", label, "--password-stdin",
                       input_text=password + "\n", log=log)
@@ -1226,7 +1231,7 @@ def stage_linux_ssh(results, se_binary, work, log_root, fixture):
         add_connection(client, se_binary, port, user, password, "sshbox", "/config", log)
         warm = client.se(se_binary, "exec", "@sshbox", "--", "mkdir", "-p", "work", log=log, timeout=240)
         ensure(warm.returncode == 0, warm.stderr.decode())
-        results.record(stage, "saved connection @sshbox (root /config) added, host key accepted without a terminal", True)
+        results.record(stage, "saved connection @sshbox (root /config) added, host key confirmed by its fingerprint", True)
     except Exception as error:  # noqa: BLE001
         results.record(stage, "container preparation and saved connection @sshbox", False,
                        f"{type(error).__name__}: {error}")
