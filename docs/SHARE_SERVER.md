@@ -645,6 +645,8 @@ locally patched `iroh-relay` 1.0.0 (`vendor/iroh-relay-1.0.0`,
 | `rustls-webpki` | 0.103.15 | 0.103.13 | rustls 0.23.46 requires `^0.103.14` |
 | `iroh-base` | 1.1.0 | 1.0.0 | GHSA-jx4g-cg2x-jc35 (medium, panic when deserializing a crafted `CustomAddr`; fixed from 1.1.0) |
 | `iroh-relay` | 1.0.0 (vendored) | 1.0.0 | unchanged, see below |
+| `h2` | 0.4.16 | 0.4.15 | RUSTSEC-2026-0258 (unbounded empty DATA frames; reported by the suite's `cargo audit` of this lock) |
+| `lru` | 0.18.2 | 0.18.0 | RUSTSEC-2026-0253 (unsound `LruCache::pop()` without panic safety; the server's rate limiter uses `LruCache`) |
 
 Sources: GitHub repository advisories of `rustls/rustls` and `n0-computer/iroh`
 (REST API, retrieved 2026-10-16), RustSec pages for `rustls` and

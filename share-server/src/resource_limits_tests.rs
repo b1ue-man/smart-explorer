@@ -9,7 +9,6 @@ use tungstenite::Message;
 use super::limits::{
     SourceKey, MAX_PUBLISHED_DIRECTS_PER_CLIENT, MAX_REGISTERED_CLIENTS,
     MAX_REGISTERED_CLIENTS_PER_SOURCE, MAX_ROOMS_PER_CLIENT, MAX_WATCHES_PER_CLIENT,
-    WRITER_QUEUE_CAPACITY,
 };
 use super::state::{cleanup, join_room, lock_state, register_client, RegistrationError, State};
 use super::transport::{handle, handle_with_timeout};
@@ -231,9 +230,20 @@ fn websocket_queue_saturation_drops_excess_without_disconnect() {
     );
 
     let writer = wait_for_registered_writer(&state);
+    // The client stops reading. Large messages fill both socket buffers, the
+    // writer thread blocks inside its write timeout and the bounded queue
+    // (count or byte budget) then refuses further messages; tiny messages
+    // alone could be drained as fast as they are queued.
+    let large = Out::Error {
+        scope: "saturation".into(),
+        msg: "x".repeat(200 * 1024),
+    };
     let mut rejected = false;
-    for _ in 0..=WRITER_QUEUE_CAPACITY {
-        rejected |= !writer.try_send(&Out::Pong);
+    for _ in 0..4_096 {
+        if !writer.try_send(&large) {
+            rejected = true;
+            break;
+        }
     }
     assert!(rejected, "bounded queue did not saturate");
     assert!(!writer.is_closed());

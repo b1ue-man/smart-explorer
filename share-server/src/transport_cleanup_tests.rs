@@ -2,6 +2,7 @@ use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 
+use super::rate_limits::INBOUND_MESSAGE_BURST;
 use super::state::{lock_state, State};
 use super::transport::handle;
 
@@ -54,7 +55,9 @@ fn raw_rate_limit_error_cleans_registration_and_allows_reconnect() {
     });
 
     let mut attacker = TcpStream::connect(address).unwrap();
-    let heartbeats = "{\"t\":\"heartbeat\"}\n".repeat(140);
+    // More heartbeats than the whole inbound burst plus two seconds of refill,
+    // so the message budget runs out regardless of runner speed.
+    let heartbeats = "{\"t\":\"heartbeat\"}\n".repeat(INBOUND_MESSAGE_BURST as usize + 256);
     attacker
         .write_all(format!("{HELLO}\n{heartbeats}").as_bytes())
         .unwrap();
