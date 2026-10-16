@@ -571,13 +571,34 @@ oberhalb von 6 Mio. Knoten wird nur noch zusammengefasst, nie abgebrochen.
 **Terminal (ab 0.5.118):** der mitinstallierte Companion **`se`** arbeitet auch
 ohne GUI-Sitzung und nutzt dieselben gespeicherten Verbindungen, App-Daten,
 Zugangsdaten, Share-Profile und den Daemon wie die GUI. Unter Windows liegen
-Secrets im Credential Manager. Unter Linux nutzt Smart Explorer bewusst einen
-DBus-freien, benutzereigenen Dateispeicher
+Secrets im Credential Manager. Unter Linux und Android nutzt Smart Explorer bewusst
+einen DBus-freien, benutzereigenen Dateispeicher
 (`$XDG_DATA_HOME/smart_explorer/secrets-v1`, Verzeichnis `0700`, Dateien `0600`),
-damit SSH, CI und Dienste funktionieren. Dieser Linux-Speicher schützt durch
-Unix-Rechte vor anderen normalen Benutzern, verschlüsselt aber nicht gegen
-`root`, denselben Benutzer oder Offline-Zugriff auf einen unverschlüsselten
-Datenträger. Beispiele: `se doctor --json`, `se connections list`,
+damit SSH, CI und Dienste funktionieren.
+**Versiegelte Datensätze (umgesetzt am 2026-10-16; Suite und Release stehen aus):**
+Jeder Datensatz ist mit ChaCha20-Poly1305 unter einem 32-Byte-Datenschlüssel
+versiegelt (Format `SESEC02`). Den Schlüssel hält nicht der Speicher selbst,
+sondern ein Schlüsselhüter, den der Speicher beim ersten Bedarf wählt und in
+`secrets-v1/keyring-v2` vermerkt: der Android-Keystore (Android), sonst
+`systemd-creds --with-key=host` im Systembereich für root bzw. im Benutzerbereich
+ab systemd 256 (`systemd-creds-system`, `systemd-creds-user`), sonst die
+Schlüsseldatei `secrets-v1.kek` neben dem Speicher (`app-key-file`).
+Datensätze früherer Versionen (`SESEC01`: Klartext plus Prüfsumme) werden beim Start des
+Hintergrunddienstes, beim Start der Android-App, durch `se doctor` und beim ersten
+Geheimniszugriff eines Prozesses versiegelt; der Klartext wird erst überschrieben,
+nachdem der versiegelte Datensatz zurückgelesen und geöffnet wurde (auf SSDs und
+Copy-on-Write-Dateisystemen ist das Überschreiben nicht garantiert). Eine ältere
+Version, die danach noch läuft, schreibt neue Datensätze wieder im Klartext; sie
+werden beim nächsten Lesen oder Prozessstart versiegelt. `se doctor` zeigt
+`protector=… plaintext_records=N stage_files=N unreadable_records=N`. Antwortet der
+Hüter nicht, bleibt der Klartext unverändert, `se doctor` meldet den Speicher als
+gesperrt (Fehler, Exit-Code 1), und es entsteht weder ein neuer Schlüssel noch eine
+neue Geräteidentität. Der Speicher schützt durch Unix-Rechte vor anderen normalen
+Benutzern und, solange der Hüter nicht zugänglich ist, vor einer Kopie des Ordners
+`secrets-v1` allein; gegen `root` und denselben Benutzer schützt er nicht. Beim Hüter
+`app-key-file` liegt der Schlüssel im selben Datenordner: Gegen Offline-Zugriff auf den
+ganzen Datenordner (zum Beispiel eine Datensicherung davon) hilft dort nur
+Plattenverschlüsselung. Beispiele: `se doctor --json`, `se connections list`,
 `se ls @label:/pfad`,
 `se get @sftp:/bericht.pdf .`, `se put ./lokal.txt @webdav:/ziel/`,
 `se cp @drive:/a.txt @share:/b.txt`, `se search @label:/ "*.rs"`,
@@ -601,9 +622,42 @@ Peer automatisch; alternativ funktionieren sichtbarer Name/Endpunkt und
 `--shell COMMAND`. stdin/stdout/stderr werden binaer gestreamt, Exitcodes bleiben
 erhalten, `se share exec` zeigt aktive/letzte Jobs und kann sie abbrechen. Windows
 kapselt jeden Job in einem Kill-on-close Job Object, Linux in einer transienten
-systemd-cgroup; ohne diesen Plattformprovider startet kein Payload. Es gibt
-bewusst keine Command-, Pfad- oder Shell-Filter: die Freigabe ist volle
-Remote-Codeausfuehrung als der laufende Benutzer.
+systemd-cgroup; ohne diesen Plattformprovider startet kein Payload. Ohne weitere
+Optionen gibt es bewusst keine Command-, Pfad- oder Shell-Filter: die Freigabe ist volle
+Remote-Codeausfuehrung als der laufende Benutzer (der „Standardnutzer“, das Konto
+des Smart-Explorer-Workers). Jede bisher erteilte Freigabe bleibt genau so bestehen,
+mit unveränderter `enabled`-Angabe und unveränderter Revision.
+**Konto und Programmliste (umgesetzt am 2026-10-16; Suite und Release stehen aus):**
+`enable --run-as USER` führt die Befehle des Geräts auf einem Linux-Host, dessen
+Worker als root läuft, als dieses lokale Konto aus (`--run-as standard` kehrt zum
+Worker-Konto zurück; Windows, Android und Linux ohne root-Worker lehnen ein anderes
+Konto mit Begründung ab). `enable --allow-program PATH` (wiederholbar) erlaubt dem Gerät
+nur den Start genau dieser Programme im Argv-Modus, ohne Shell-Befehl und ohne
+Terminal; ein Programm wird nur über seinen absoluten Pfad oder den festen
+Systemsuchpfad des Hosts gefunden, nie über ein vom Gerät gesendetes `PATH`, und als
+Umgebungsvariablen nimmt der Job vom Gerät nur `LANG`, `LC_*` und `TERM` an
+(jede andere, etwa `PATH`, `LD_PRELOAD` oder `GIT_PAGER`, lehnt den Start ab);
+`--full` entfernt die Liste wieder. Die Programmliste ist keine Sandbox: Die Argumente
+bleiben frei, daher entsprechen Shells, `env`, Interpreter (`python`, `perl`, `node`) und
+Programme, die Befehle ausführen (`find`, `git`, `ssh`, `xargs`, `awk`, `sudo`), einer
+vollen Shell und gehören nicht in die Liste. Eine Änderung von Konto oder Liste beendet
+die laufenden Befehle dieses Geräts. Versionen bis 0.5.180 lesen ein so eingeschränktes
+Gerät als ausgeschaltet. `se share exec log [--lines N] [--json]` zeigt das dauerhafte
+Protokoll des Hosts: Starts, Enden und abgelehnte Starts autorisierter Geräte stehen in
+`exec-audit.log`, abgelehnte Anmeldungen und gesperrte Gegenstellen getrennt in
+`exec-audit-rejected.log` (je Datei 4 MiB, dazu eine Vorgängerdatei), nie der Text eines
+Shell-Befehls.
+**SFTP-Hostschlüssel (umgesetzt am 2026-10-16; Suite und Release stehen aus):** Ein
+unbekannter Hostschlüssel wird nie still gespeichert. Der Zugriff scheitert mit
+Schlüsseltyp und SHA-256-Fingerabdruck; im Terminal fragt `se` wie `ssh`, sonst
+bestätigt `se connections trust-host-key LABEL|HOST[:PORT] --fingerprint SHA256:…`
+den nach Vergleich mit dem Server geprüften Fingerabdruck (`--replace` ersetzt einen
+anderen gespeicherten Schlüssel, `se connections forget-host-key` entfernt den
+Eintrag); die Desktop-App bietet in der Statusleiste „Hostschlüssel prüfen …“, die
+Android-App einen Dialog. Die Hostschlüssel liegen in `known_hosts_sftp.txt`;
+OpenSSH-Dateien (`~/.ssh/known_hosts`, `ssh_known_hosts`) werden mitgelesen und nie
+geschrieben, und ein dortiger `@revoked`-Eintrag sperrt den Schlüssel auch dann, wenn
+Smart Explorer ihn gespeichert hat. Bereits gespeicherte Einträge gelten unverändert.
 Setup geht ebenfalls einseitig aus dem Terminal: `se connections add sftp --host
 example.com --user alice --root /srv --label prod --password-stdin`,
 `se connections add share --root \\server\share --label NAS --password-stdin`
@@ -997,7 +1051,7 @@ die private Share-Identität das Gerät nicht verlassen.
   Wiederherstellen und Löschung nach 30 Tagen (F11).
 - **Verbindungen:** SFTP, FTP/FTPS, WebDAV und SMB (SMB2/3, Freigabe als erste
   Stufe des Startordners) anlegen, testen, bearbeiten und löschen,
-  Hostschlüssel nach „Trust on first use“ (F12); Google Drive mit eigener
+  Hostschlüssel erst nach Bestätigung des Fingerabdrucks im Dialog (F12); Google Drive mit eigener
   OAuth-Client-ID (F13).
 - **Sync und Hintergrund:** Ordner einmalig spiegeln (F14); Sync-Jobs im
   Desktop-Format mit allen Richtungen, Regeln und Auslösern (F15); Konflikte

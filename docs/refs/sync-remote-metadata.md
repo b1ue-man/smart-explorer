@@ -180,6 +180,8 @@ Nicht-root = `blocks_avail * fragment_size` (PROTOCOL §4.4: `f_bavail` „free 
 
 ---
 
+> Hinweis 2026-10-16: Der native Lock nutzt seit dem Lücken-Stapel `suppaftp 10.0.2` (RUSTSEC-2026-0271). Die Zeilenangaben und API-Namen der suppaftp-Abschnitte unten beziehen sich auf 6.3.0; die Abbildung auf 10.x steht in `docs/plaene/2026-10-16-luecken-schliessen/plan.md` (D12) und `docs/TODO.md` (LUECKEN-SUPPAFTP).
+
 # suppaftp 6.3.0 (FTP/FTPS, synchron)
 Quelle: Crate `suppaftp-6.3.0` (`src/sync_ftp/{mod,data_stream}.rs`, `src/{types,status,command,regex,list}.rs`,
 `src/command/feat.rs`) · RFC 959 §4.2, RFC 2389 §3, RFC 3659 §2.3/3/4/7 (`rfc-editor.org/rfc/`) ·

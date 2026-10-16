@@ -6,11 +6,15 @@ available.
 
 Research date: **2026-07-12**. Local installed-Linux validation: **2026-07-13**.
 
-This plan enables unrestricted command execution over Smart Explorer Share. An
+This plan enables command execution over Smart Explorer Share. By default an
 explicitly authorized peer gets the same practical authority as the OS account
-running the Smart Explorer worker. There is deliberately no command allowlist,
-path allowlist, shell grammar filter, restricted token, seccomp profile, or
-application sandbox.
+running the Smart Explorer worker (the "Standardnutzer"). Since 2026-10-16 a
+grant can narrow that: on a Linux host whose worker runs as root it can name
+another local account (`run_as`), and on every host it can list the only
+programs the peer may start (`programs`; argv mode only, no shell, no
+terminal). There is still no path allowlist, shell grammar filter, restricted
+token, seccomp profile, or application sandbox. Plan and evidence of the
+2026-10-16 changes: `docs/plaene/2026-10-16-luecken-schliessen/plan.md`.
 
 That trust decision changes where the security boundary belongs. The command is
 trusted. The internet, LAN, signaling service, relay, unauthenticated Iroh
@@ -57,16 +61,38 @@ and unrelated user data. It can install persistence using facilities already
 available to that user. Revoking the grant prevents future commands and stops
 contained active commands; it cannot undo actions already performed.
 
-There is no privilege transition:
+For the Standardnutzer there is no privilege transition:
 
 - a normal user worker starts a normal user process;
 - an elevated Windows worker starts an elevated process;
 - a root Linux worker starts a root process.
 
+A grant with `run_as = account:<name>` on a Linux host whose worker runs as
+root starts the job's root process as that account: the root supervisor sets
+the account's supplementary groups, group and user before `exec`, enters the
+working directory with the account's rights, hands a terminal's PTY to the
+account (mode 0620) and gives the job a clean environment (HOME, USER,
+LOGNAME, SHELL, PATH, locale, plus the caller's values) instead of root's.
+Windows hosts (another account needs its password or a SYSTEM service),
+Android hosts (one app UID) and Linux hosts with a non-root worker refuse
+such a grant. A grant with `programs` admits only argv starts of the listed
+programs, found only through a fixed search path and with only locale and
+terminal variables from the caller (§6); shell commands and terminals are
+refused.
+
+The program list is not a sandbox. It names a program, not what that program
+does with its free arguments: a shell, `env`, an interpreter (`python`, `perl`,
+`node`) and any program that runs other commands (`find`, `git`, `ssh`,
+`xargs`, `awk`, `sudo`) equals a full shell and does not belong in the list.
+The CLI help of `se share grants exec enable` says so. What the list closes
+is the start itself: the caller can neither smuggle in another program through
+`PATH`, `LD_PRELOAD` or a program's own variables (`GIT_PAGER`, ...) nor start
+a shell or a terminal.
+
 The grant UI and CLI must say `FULL <user> CODE EXECUTION` and, when applicable,
 `REMOTE ADMINISTRATOR SHELL` or `REMOTE ROOT SHELL`. This warning happens once
-when changing the permission. Commands are not individually confirmed or
-filtered afterward.
+when changing the permission. Commands are not individually confirmed
+afterward; a program list filters them by program only.
 
 The containment contract covers processes normally created by the command and
 its descendants. Trusted code can intentionally ask an independent broker such
@@ -135,6 +161,34 @@ struct ExecGrant {
 covered by that grant is the complete tuple `(relation, device_id, public_key,
 fingerprint, node_id)`, not a display name or short selector.
 
+Since 2026-10-16 `ExecGrant` also carries `run_as` (`{"kind":"standard"}` or
+`{"kind":"account","name":…}`) and `programs` (absent = full shell). Profiles
+written before have neither field and read as the Standardnutzer with the
+full shell, so every existing grant keeps exactly its rights, its `enabled`
+state and its `policy_revision` (no running session is revoked by the
+update); the next profile write stores `run_as` explicitly. Changing the
+account or the program list is a policy change: it advances the revision and
+ends the device's running jobs like any revocation. Set with
+`se share grants exec enable [--run-as USER|standard] [--allow-program PATH …|--full]`
+or the account field of the desktop Share page (Linux root worker).
+
+Older versions (E8). Versions up to 0.5.180 read the profile of schema 8 with
+the five fields above and ignore unknown ones. A grant that is enabled and
+narrowed (program list or another account) is therefore stored with `enabled`
+false and the real switch in `restricted_enabled`
+(`share/core/exec_policy_wire.rs`), a field only this version reads, and
+read back as enabled only next to a real restriction. A version up to 0.5.180
+reads such a grant as switched off, never as the full shell of the worker's
+account; if it saves the profile, `run_as`, `programs` and `restricted_enabled`
+are lost and the grant stays off with the Standardnutzer (the narrowing is
+never replaced by wider rights). Unrestricted and switched-off grants are
+stored as before and the profile schema stays 8, so Share keeps working after
+a downgrade. The grant journal holds the same structure: a version up to
+0.5.180 finds an open entry of a restricted grant contradictory (`pending_apply`
+with `enabled` false, its `validate`) and refuses the recovery (fail closed);
+this only matters for a crash in the middle of a change followed by a
+downgrade.
+
 Migration rules are deliberately conservative:
 
 - every migrated device gets `enabled=false`;
@@ -197,21 +251,39 @@ accepted ALPN `smart-explorer/share-exec/2` only. Filesystem clients keep
 working across a rolling upgrade; Exec never falls back to the filesystem ALPN
 or the superseded Exec v1 protocol.
 
-The Exec connection uses a fresh challenge-response handshake:
+The Exec connection uses a fresh challenge-response handshake (as implemented
+in `share/core/exec_admission.rs` and `exec_auth.rs`, re-read 2026-10-16):
 
 1. Iroh completes mutually authenticated QUIC and exposes the remote
-   EndpointId.
-2. The server sends a cryptographically random challenge and protocol limits.
+   EndpointId. The TLS 1.3 key exchange prefers the hybrid post-quantum group
+   `X25519MLKEM768` (`share/core/pq_kx.rs`: ML-KEM-768 plus X25519 on rustls'
+   ring provider); a peer without it completes plain X25519 from the classical
+   share sent alongside, without an extra round trip.
+2. The server sends its identity (device id, public key, fingerprint,
+   EndpointId) and a 32-byte random challenge. It sends no protocol limits;
+   the frame limits are fixed constants of `exec_protocol.rs`.
 3. The client returns its relation/device identity, a fresh client nonce,
-   `exec_stream_v2`, and an HMAC over the complete transcript: ALPN, both
-   nonces, relation, both device IDs, both NodeIds, and both endpoint roles.
-4. The server checks the TLS EndpointId, identity pins, relation proof, current
-   base grant, and per-device Exec policy.
-5. The server returns the negotiated capability and current policy revision.
+   `exec_stream_v2`, and an HMAC-SHA256 under the relation secret over the
+   transcript `smart-explorer/share-exec/v2|challenge|client nonce|relation
+   kind|relation id|client device id|client public key|client fingerprint|
+   client EndpointId|server device id|server public key|server fingerprint|
+   server EndpointId|client-to-server|exec_stream_v2`. The fixed prefix binds
+   the protocol and version (the ALPN `smart-explorer/share-exec/2` itself is
+   not repeated), the literal `client-to-server` binds the direction.
+4. The server checks, in this order: protocol fields and that the claimed
+   EndpointId is the TLS EndpointId; that the claimed identity matches an
+   accepted grant (direct) or an admitted member (room); the HMAC; and only
+   then the device's Exec permission. A wrong proof is therefore always an
+   authentication failure, also for a device whose Exec is off, and only
+   authentication failures count towards the penalties of §9.
+5. The server returns the current policy revision, the provider status and
+   its features. After the client's start, the grant's program list and
+   run-as account are applied before any process exists.
 
-No 0-RTT data is accepted for Exec. Captured handshakes cannot be replayed
-because the server challenge is fresh. A signaling server can suppress address
-or presence data, but it cannot create an authenticated Exec session.
+The project sends no 0-RTT data for Exec (iroh's TLS layer permits early data,
+but no Share client uses it). Captured handshakes cannot be replayed because
+the server challenge is fresh. A signaling server can suppress address or
+presence data, but it cannot create an authenticated Exec session.
 
 ### 5.2 Stream protocol
 
@@ -278,12 +350,42 @@ The default working directory is the worker user's home. An explicit working
 directory may be any path accessible to that user; it is not restricted to
 Share export roots because arbitrary code could access the same paths anyway.
 
-The child inherits the user's normal worker environment. Process-private Smart
-Explorer handoff values, IPC bearer tokens, and temporary bootstrap secrets are
-removed to avoid accidental disclosure, while arbitrary caller-supplied
-environment overrides are allowed. Validation rejects only representations the
+For the Standardnutzer the child inherits the worker's environment minus every
+variable whose name starts with `SMART_EXPLORER_` (`exec_supervisor_protocol.rs::
+environment_for`); the daemon IPC token is read from its 0600 file, never from
+the environment. A job of another account starts with a clean environment
+(HOME, USER, LOGNAME, SHELL from the account, PATH
+`/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`, LANG, LC_ALL,
+LC_CTYPE and TZ of the worker). Arbitrary caller-supplied environment
+overrides are allowed in both cases. Validation rejects only representations the
 OS cannot accept (NUL, invalid Windows environment names, arithmetic/encoding
 overflow, or protocol-frame overflow).
+
+A grant with a program list tightens both inputs of the start
+(`share/core/exec_policy.rs::authorize_start`, `exec_program_path.rs`):
+
+- Environment: the job takes from the caller only `LANG`, `TERM` and
+  `LC_<A-Z0-9_>`, each with a value of at most 64 bytes from
+  `[A-Za-z0-9._@+-]` (no path, no separator: glibc and ncurses read a name
+  with `/` as a path). Any other variable, among them `PATH`, `LD_PRELOAD`,
+  `LD_LIBRARY_PATH` and `GIT_PAGER`, refuses the start; the refusal names the
+  variable, never its value. The rule follows sshd's `AcceptEnv LANG LC_*`.
+  The worker's own environment (minus `SMART_EXPLORER_*`) still reaches the job
+  as for the Standardnutzer. Grants without a program list keep the behaviour
+  described above.
+- Program resolution: a program is found only as an absolute path or in a
+  fixed search path of the host, never through the `PATH` the caller sends or
+  the worker's own. Linux: `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`
+  (`exec_supervisor_protocol.rs::ACCOUNT_PATH`); Android: `/system/bin`,
+  `/system/xbin`, `/vendor/bin`; Windows: `%SystemRoot%\System32`,
+  `%SystemRoot%` and `%SystemRoot%\System32\Wbem` with the suffixes `.exe` and
+  `.com` (never `.cmd` or `.bat`, which start a shell). A listed entry is
+  resolved the same way. A start is allowed when it resolves to the same file as
+  a listed entry (links followed) under the same file name, so a listed `ls`
+  does not open the other applets of a busybox or toybox binary. A relative
+  path with a separator is refused in the list and in the start. The job starts
+  with the resolved absolute path (the supervisor searches nothing itself), and
+  the audit entry `started` names it as `resolved_program`.
 
 There is no artificial runtime maximum and no default output truncation. A
 caller may opt into `--timeout` or `--max-output`; zero/unset means unlimited.
@@ -366,14 +468,20 @@ systemd service/cgroup per execution:
 2. Use systemd's D-Bus `StartTransientUnit` API through a target-specific Rust
    D-Bus adapter (prefer `zbus` without C dependencies). Do not execute a
    `systemd-run` found through `PATH`.
-3. Start the current verified Smart Explorer binary in a hidden Exec-supervisor
-   mode as the unit MainPID. Pass the launch spec only over an owner-only,
-   randomly authenticated local channel after the supervisor is live.
+3. Start the running Smart Explorer binary (`/proc/<worker pid>/exe`, the
+   same inode the worker executes; no separate hash check) in the hidden
+   `--share-exec-supervisor` mode as the unit MainPID. The launch spec travels
+   only over a Unix socket (mode 0600) in a 0700 runtime directory after the
+   supervisor connected; the worker accepts it only when `SO_PEERCRED` shows
+   the worker's own uid/gid and the unit's MainPID equals the peer's pid (no
+   random token).
 4. Configure `Type=exec`, `KillMode=control-group`, `KillSignal=SIGKILL`,
    `SendSIGKILL=yes`, `Restart=no`, `RemainAfterExit=no`, a short
    `TimeoutStopSec`, and `RuntimeMaxSec` when the caller supplied a timeout.
-5. The supervisor starts the payload, proxies stdio, watches the worker channel,
-   waits for the root pidfd/wait status, and exits on cancellation or HUP.
+5. The supervisor starts the payload (as the grant's run-as account where one
+   is set, see §2), proxies stdio, watches the worker channel, waits for the
+   root's status with `Child::try_wait` (no pidfd), and exits on cancellation
+   or HUP.
 6. On root exit, systemd stops the unit and kills remaining descendants. On
    supervisor crash, worker crash, cancellation, or timeout, the manager also
    stops the entire control group.
@@ -395,12 +503,54 @@ queued_local -> connecting -> authenticating -> authorized -> starting
 ```
 
 Every transition includes `exec_id`, peer identity, policy revision, monotonic
-time, and a reason. The target keeps a bounded history with command text
-redacted by default because shell strings commonly contain secrets. It may
-store executable name, command digest, cwd, start/end time, exit status,
-transferred byte counts, and truncation flags. Raw commands are shown only for
-active executions and are not persisted unless the user explicitly enables
-that audit option.
+time, and a reason. The target keeps a bounded in-memory history (128 entries,
+`exec_registry.rs`) with executable name (`<shell>` for shell and terminal
+starts), command digest, start/end time, exit status, transferred byte counts
+and truncation flags; host messages are removed from it. It holds no cwd and
+no command text. The initiating side's outgoing history (`daemon/os/shared/
+exec_state.rs`) keeps the host's messages, because they answer that user's
+own commands.
+
+Since 2026-10-16 the target also writes a persistent audit log (JSON lines,
+private files, `share/os/shared/exec_audit.rs`) in two classes, each with its
+own rotation at 4 MiB to exactly one predecessor file (`.1`):
+
+- `<App-Daten>/exec-audit.log`: what authorized devices did: refused starts,
+  starts (device, fingerprint, relation, mode, program or `<shell>`,
+  `resolved_program` for a program list, digest of the whole start, cwd,
+  timeout, account) and ends (result, exit code, signal, byte counts,
+  duration);
+- `<App-Daten>/exec-audit-rejected.log`: what strangers and refused devices
+  caused: refused authentications (TLS EndpointId, claimed device, reason; also
+  a verified device whose Exec is off) and penalty refusals.
+
+Both classes exist because a new EndpointId costs an attacker nothing: ten
+thousand rejections of unknown EndpointIds fill and rotate only the second
+class and can never push a `started` or `finished` entry out of the first
+(unit test `luecken_task_ten_thousand_rejections_never_evict_a_start_or_finish_entry`).
+Text supplied by the other side (device names, claimed ids, program names,
+working directories, refusal reasons) is cut to 256 characters, and control,
+C1 and direction-changing characters are replaced by `?`, so a crafted name
+cannot act on the terminal that shows the log. Shell command text is never
+logged, like OpenSSH, whose `auth.log` names logins but no commands. A write
+error never blocks an execution. `se share exec log [--lines N] [--json]` merges
+both classes by time (seconds; within one second the first class first) and
+works without the running worker.
+
+A device holder can still produce `start_refused` lines of its own class in
+bulk and so push older entries of that class out after about 8 MiB; every such
+line names the device. There is no per-device throttle.
+
+Updates (D11, unchanged by the 2026-10-16 work). A desktop or terminal update
+replaces the worker: the updater helper writes `daemon.stop` and waits for the
+processes to end (`bin/smart_explorer_updater/process.rs`), and a CLI or GUI
+call that meets a worker of another version replaces it
+(`daemon/os/shared/ipc_client.rs`, `worker_version_is_current`). Running Exec
+and terminal sessions of the old worker end with it (`se shell` exits with 125).
+The update neither ends anything beyond that nor keeps sessions across the
+switch: keeping them would need the supervisors handed over to the new worker
+(TODO `LUECKEN-UPDATE-SESSIONS`). Grants, `policy_revision`, pins, secrets and
+saved connections are not touched by the update itself.
 
 Required management surfaces:
 
@@ -429,7 +579,13 @@ confirmation. Once a grant exists, no per-command prompt is added.
 
 The Exec work includes hardening the entry path, not only process spawning:
 
-- cap concurrent pre-auth Iroh handshakes globally and per remote EndpointId;
+- cap concurrent pre-auth Iroh handshakes globally (64 TLS handshakes) and
+  share the application handshake slots fairly per remote EndpointId
+  (`fair_admission.rs`: unknown endpoints get their own pool of 8 slots and
+  3 s, known ones 64 slots and 20 s). There is deliberately no fixed cap per
+  EndpointId: the pool is work-conserving, fairness hands slots to other
+  waiting devices, and new EndpointIds cost an attacker nothing, so a
+  per-identity cap would only waste idle capacity;
 - require address validation/retry where supported before expensive work;
 - apply handshake, first-stream, and frame-read deadlines;
 - reauthorize a cached session before reading a potentially large operation
@@ -437,8 +593,19 @@ The Exec work includes hardening the entry path, not only process spawning:
 - use operation-specific frame sizes and bounded channels/queues;
 - cap concurrent authenticated executions by configurable global and principal
   budgets; admission limits are resource controls, not command filters;
-- rate-limit repeated authentication failures without letting an attacker fill
-  an unbounded identity map;
+- penalize repeated authentication failures per EndpointId without letting an
+  attacker fill an unbounded identity map (`auth_penalty.rs`, the defaults of
+  OpenSSH `PerSourcePenalties`: 5 s per failed authentication, 1 s per
+  connection that never authenticated, refused once 15 s accumulated and
+  until they ran out, at most 600 s, at most 65 536 tracked identities with
+  permissive overflow). Exec connections of a penalized EndpointId are always
+  refused; file sessions only for unknown endpoints, so automatic reconnects
+  of paired devices are never throttled. A device whose Exec is merely off is
+  not penalized. The ledger does not stop an attacker who mints new
+  EndpointIds, because every new one starts without a penalty; against that
+  only the fair admission above helps (unknown endpoints share 8 slots and 3 s).
+  There is deliberately no global limit for unknown endpoints, since it would
+  also lock out the pairing attempts of legitimate new devices;
 - bound signaling-server connection workers and writer queues;
 - keep WSS as the production signaling recommendation, while treating even a
   compromised signaling service only as an availability/metadata attacker;
@@ -517,6 +684,15 @@ New or extracted Rust files stay behavior-scoped and below the repository's
 - `share/os/windows/exec.rs` — Job Object and `CreateProcessW` adapter;
 - `share/os/linux_os/exec.rs` — systemd transient-unit adapter;
 - `share/os/linux_os/exec_supervisor.rs` — hidden supervisor mode;
+- 2026-10-16: `share/core/exec_policy_wire.rs` (stored form of a grant, older
+  readers see a narrowed grant as off), `share/core/exec_program_path.rs`
+  (program list lookup in a fixed search path), `share/os/*/exec*.rs`
+  `program_search()` per platform, `share/os/linux_os/exec_account.rs` and
+  `exec_supervisor_account.rs` (account resolution in the root worker,
+  group/user switch in the supervisor), `share/core/auth_penalty.rs`
+  (penalties per EndpointId), `share/os/shared/exec_audit.rs` with
+  `exec_audit_files.rs` (two classes, rotation, merged reading) and
+  `exec_audit_text.rs` (cutting and cleaning of text from the other side);
 - `daemon/os/shared/exec_ipc.rs` — full-duplex local Exec bridge;
 - `cli/exec.rs` — discoverable CLI, stdio, completion, and exit mapping;
 - focused app UI modules for grant confirmation and active/history rendering;

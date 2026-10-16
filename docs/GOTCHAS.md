@@ -43,7 +43,93 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   the broken vs last-working exe.
 - **`russh` crypto backend.** Its default is `aws-lc-rs` (needs NASM/CMake, breaks
   on GNU). Use `default-features = false` + `ring`. Still verify it compiles
-  before building on top of it — see REMOTE_LAYER_PLAN §5.
+  before building on top of it — see REMOTE_LAYER_PLAN §5. Since 0.63
+  `Handler::check_server_key` receives `PublicKeyOrCertificate`, and russh's
+  default host-key list still ends with `ssh-rsa` (SHA-1): `sftp/core/session.rs`
+  builds its own `Preferred` without it (2026-10-16).
+- **Post-quantum TLS without aws-lc.** rustls' ring provider has no
+  `X25519MLKEM768`; `rustls-post-quantum` and iroh's `tls-aws-lc-rs` both pull
+  aws-lc-sys. The Share endpoint therefore adds its own hybrid group
+  (`share/core/pq_kx.rs`: RustCrypto `ml-kem` 0.3, the API russh 0.64 compiles
+  against, plus ring's X25519 via rustls) through `Builder::crypto_provider`.
+  The hybrid must stay first in `kx_groups` and keep `hybrid_component`, or
+  old peers pay a HelloRetryRequest; ML-KEM first in share and secret
+  (RFC 10024, published August 2026, formerly draft-ietf-tls-ecdhe-mlkem; code
+  point 0x11EC), unlike the older Kyber draft. The all-zero X25519 secret and a
+  malformed ML-KEM encapsulation key (FIPS 203 §7.2 check, done by
+  `EncapsulationKey::new_from_slice`) end in `illegal_parameter`.
+- **Credential store needs its protector at runtime (Linux/Android).** Sealed
+  records open only with the data key named in `secrets-v1/keyring-v2`. With
+  `systemd-creds` the store is bound to the host secret
+  (`/var/lib/systemd/credential.secret`, user scope also to UID and
+  machine-id) like DPAPI on Windows; a reinstalled OS or a changed machine-id
+  leaves the records closed. Root uses the system scope only when
+  `/var/lib/systemd` is on the store's file system (container volumes).
+- **`app-key-file` is the weakest protector.** When neither the Android Keystore
+  nor `systemd-creds` can be used, the key file `secrets-v1.kek` lies beside
+  `secrets-v1/` in the same app data folder. It only keeps a copy of the store
+  directory alone closed; a backup or an offline copy of the whole data folder
+  holds both, and only disk encryption protects that. `se doctor` names the
+  protector and says so. The protector is chosen once and never changes by
+  itself: an Android store created while the Keystore failed stays on
+  `app-key-file` even after the Keystore works again (`SecretsKey.kt` retries
+  the Keystore three times at 250 ms intervals before giving up).
+- **A locked store is not an empty store.** With a descriptor `keyring-v2` that
+  names a protector the host cannot serve, sealed records stay closed: no new
+  key, no overwritten record, no new Share identity (the identity loader returns
+  the error instead of creating one). `se doctor` then reports the store as
+  locked (exit code 1) with `plaintext_records` unchanged. Seal-and-port runs at
+  worker start, Android `init` and `se doctor` without any secret access
+  (`creds::port_secret_store`); only a record an older version wrote later, or one
+  with wrong modes or an extra hard link (counted as `unreadable_records`), stays
+  plaintext until the next read or start. The doctor line has grown after
+  `plaintext_records=`: parse it as `key=value` pairs. The tests override the
+  effective UID through a `thread_local` in `linux_file_store_fs.rs` (test builds
+  only) instead of needing a second account.
+- **`@revoked` outranks an own pin.** `sftp/os/shared/known_hosts.rs` reads the
+  OpenSSH files first: a matching `@revoked` line refuses the key even when
+  `known_hosts_sftp.txt` pins it (OpenSSH: "never accepted"). Without a
+  revocation an existing pin decides alone, as before. Among several OpenSSH
+  files the order is revoked, trusted, changed, unknown, because OpenSSH
+  accepts when any matching line has the presented key. A revocation behind the
+  first 1 MiB of a file is not read. `@revoked` lines are host-bound (`@revoked *`
+  covers every host); `@cert-authority` lines are skipped.
+- **Host key type and the pin (D9, checked 2026-10-16).** A pin
+  (`host:port SHA256:…`) stores the fingerprint of the key the server presented,
+  not its type. The client offers Ed25519, ECDSA nistp256/384/521, RSA (SHA-512,
+  SHA-256) in that order and takes the first one the server knows; the list is
+  the same in russh 0.61.2 (0.5.180) and 0.64.1, so a server with several keys
+  presents the same type before and after the update and its 0.5.180 pin keeps
+  matching. Guard: unit test `luecken_task_host_key_algorithm_order_matches_0_5_180`.
+  `ssh-rsa` with SHA-1 comes only in a second attempt for already pinned hosts.
+  Unchanged since 0.5.180: a server that later adds a more preferred key type is
+  presented with that type and the pin counts as changed (OpenSSH avoids that by
+  preferring the algorithms of known keys; TODO `LUECKEN-SSH-KEYORDER`), and
+  `russh` runs with `default-features = false`, so the feature `rsa` is off and
+  neither lock contains the package `rsa`; whether RSA host keys can be
+  negotiated at all was not examined.
+- **A program list is not a sandbox, and the caller's `PATH` never counts.** A
+  grant with `--allow-program` allows only argv starts of the listed programs,
+  found by absolute path or in the fixed search path of the host (never in the
+  `PATH` the caller sends), with only `LANG`, `LC_*` and `TERM` taken from the
+  caller. Arguments stay free, so a listed shell, `env`, interpreter or command
+  runner (`find`, `git`, `ssh`, `xargs`, `awk`, `sudo`) is a full shell. The same
+  file name is required in addition to the same resolved file, because busybox
+  and toybox serve many programs from one binary.
+- **Older versions read a narrowed grant as switched off.** A grant with a program
+  list or another account is stored with `enabled` false plus `restricted_enabled`
+  (`share/core/exec_policy_wire.rs`); a version up to 0.5.180 ignores the second
+  field and loses the narrowing when it saves the profile, but never turns the
+  grant on. Its grant journal refuses an open entry of such a grant (`validate`
+  expects `enabled` true for `pending_apply`). Do not "simplify" the encoding to
+  plain fields: 0.5.180 would read them as the full shell of the worker's
+  account.
+- **Audit log classes.** `exec-audit.log` (starts, ends, refused starts) and
+  `exec-audit-rejected.log` (refused authentications, penalty refusals) rotate
+  separately so that rejections of invented EndpointIds can never push out what
+  authorized devices did. A test or script that looks for `auth_rejected` or
+  `penalty_refused` in `exec-audit.log` finds nothing; `se share exec log` shows
+  both.
 - **`smb2` pin and its lock side effect.** The SMB backend pins `smb2 = "=0.26.0"`
   (pure Rust, RustCrypto; the crate ships breaking minors quickly). Its
   `aes-gcm ^0.11.0` requirement lifted the shared `aes-gcm` from `0.11.0-rc.4` to
@@ -80,12 +166,34 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   `StartTransientUnit` directly; replacing it with `systemd-run` would trust a
   shell/PATH boundary, while moving `zbus` to shared dependencies would burden
   and risk the Windows GNU build.
-- **cargo-audit quick-xml advisories via plist.** `quick-xml 0.39.2` is currently
-  pinned by `plist 1.9.0` through `netdev`/`iroh` and by Wayland build tooling.
-  CI explicitly ignores only `RUSTSEC-2026-0194` and `RUSTSEC-2026-0195` on the
-  main native lockfile after attempting the available `iroh`/`netdev` updates.
-  Remove those ignores as soon as the transitive path can move to
+- **cargo-audit quick-xml advisories.** With iroh 1.3.0 `plist 1.10.1` uses
+  `quick-xml 0.42.0`, so plist is no longer the reason (checked in
+  `native/Cargo.lock`, 2026-10-16). `quick-xml 0.39.2` is now held by the direct
+  dependency `native/Cargo.toml` (`quick-xml = "0.39"`) and by `wayland-scanner`,
+  and `quick-xml 0.30.0` by `zbus_xml 4.0.0`. CI explicitly ignores only
+  `RUSTSEC-2026-0194` and `RUSTSEC-2026-0195` on the main native lockfile
+  (`.github/workflows/build.yml`, whose comment still names the old plist
+  path). Remove those ignores as soon as both paths can move to
   `quick-xml >=0.41.0`; do not broaden the audit suppression.
+- **suppaftp is pinned to `>= 10.0.2` because of RUSTSEC-2026-0271** (FTP
+  command injection through CR/LF in command arguments of `login`, `cwd`,
+  `mkdir`, `rmdir`, `rm`, `rename`, `retr`, `put_file`, `site` and
+  `custom_command`, fixed in 10.0.2; RustSec entry dated 2026-08-18, read
+  2026-10-16). Since 8.0.0 the TLS feature names its provider: use only
+  `rustls-ring` with `default-features = false`; `rustls-aws-lc-rs` would pull
+  aws-lc back in. Traps of the 6.3 → 10.x step, each handled in `ftp/core`:
+  `list::File::from_str` now also tries MLSx, and its MLSx parser accepts any
+  text as a file name, so LIST rows go through `ListParser::parse_posix` and
+  `parse_dos` only (unreadable rows stay errors and omissions); `abort` reads
+  one closing reply and a second only after 426, so after a transfer that had
+  already finished the server's reply to ABOR can still be queued, and
+  `FtpReader` hands the connection back healthy only after a PWD probe answers
+  257; every data stream must end through `finalize_retr_stream`,
+  `finalize_put_stream` or `abort`, otherwise the next data command fails with
+  `FtpError::DataConnectionAlreadyOpen`. suppaftp checks only CR and LF; NUL
+  and the server's own PWD reply (sent back in the restoring CWD) are checked by
+  `errors::command_path` / `errors::working_dir`. The lock entry was edited
+  without cargo (TODO `LUECKEN-SUPPAFTP`).
 
 ## egui / UI
 

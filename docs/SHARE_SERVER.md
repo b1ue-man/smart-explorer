@@ -402,9 +402,12 @@ than as an access-request decision.
 Adding a direct code does more than create a local contact. The requester first
 persists a signed request with a stable UUID, then asks the Share worker to
 deliver that exact envelope. The target persists and verifies it before showing
-it as received. A valid new request is then automatically accepted unless the
-exact identity or relation conflicts with local state or durable policy records
-an ignore, rejection, revocation, or deletion tombstone; those cases are
+it as received. A valid new request then waits for the target user's decision
+(default `DirectRequestPolicy::Ask`, `share/core/direct_relation.rs`); only with
+the opt-in "Anfragen mit meinem Code automatisch annehmen (unsicherer)"
+(`AutoAccept`) is it accepted automatically. In both modes a request whose
+exact identity or relation conflicts with local state, or for which durable
+policy records an ignore, rejection, revocation, or deletion tombstone, is
 automatically rejected and never overwritten. Accept, reject, and revoke remain
 signed, revisioned decisions, and the other endpoint returns a signed receipt.
 Pending envelopes remain in the endpoint's durable ledger and are retried after
@@ -628,3 +631,48 @@ It proves new-to-old retry and acceptance plus old-to-new durable inbox,
 context-free accept/reject/retry/revoke/delete, completion, and file access.
 Every selector used by that scenario is obtained from earlier CLI output in the
 same run.
+
+## Dependency state and advisories (2026-10-16)
+
+The server has its own lock, `share-server/Cargo.lock`, and a vendored,
+locally patched `iroh-relay` 1.0.0 (`vendor/iroh-relay-1.0.0`,
+`[patch.crates-io]` in `share-server/Cargo.toml`). Since the security batch of
+2026-10-16 the lock holds:
+
+| Package | Version | Before | Reason |
+|---|---|---|---|
+| `rustls` (ring provider, `std`, `tls12`) | 0.23.46 | 0.23.41 | GHSA-c8m5-c952-6cm4 / RUSTSEC-2026-0346 (medium), GHSA-w44r-93j7-qv28 / RUSTSEC-2026-0349 (low), GHSA-h2v8-394m-p7vv / RUSTSEC-2026-0348 (low; only the Cargo feature `brotli`, which this server does not enable), GHSA-2mjx-qc3c-rqvc / RUSTSEC-2026-0285 (medium, fixed from 0.23.45) |
+| `rustls-webpki` | 0.103.15 | 0.103.13 | rustls 0.23.46 requires `^0.103.14` |
+| `iroh-base` | 1.1.0 | 1.0.0 | GHSA-jx4g-cg2x-jc35 (medium, panic when deserializing a crafted `CustomAddr`; fixed from 1.1.0) |
+| `iroh-relay` | 1.0.0 (vendored) | 1.0.0 | unchanged, see below |
+
+Sources: GitHub repository advisories of `rustls/rustls` and `n0-computer/iroh`
+(REST API, retrieved 2026-10-16), RustSec pages for `rustls` and
+`rustls-webpki`. `iroh-base` is not listed by RustSec, so `cargo audit` does
+not report GHSA-jx4g; the version bump closes it nevertheless. In this server
+`CustomAddr` is not reachable anyway: neither `share-server/src` nor the
+vendored relay uses `CustomAddr`, `EndpointAddr` or `TransportAddr`, and the
+relay protocol carries only `EndpointId` and signatures. GHSA-7cq4-mhxw-xw78
+(high) and GHSA-vwh7-9883-83xj concern the package `iroh` (the client), which
+is not in this lock; the native clients got iroh 1.3.0 for them.
+`curve25519-dalek 5.0.0-rc.0` and `ed25519-dalek 3.0.0-rc.0` stay, because
+`iroh-base` 1.1.0 allows them (`>=5.0.0-rc.0, <6.0.0` and `>=3.0.0-rc.0, <4.0.0`).
+No `cargo audit --ignore` entry is needed for this lock.
+
+Exception with reason: the relay stays at the vendored 1.0.0. It carries local
+patches, and `iroh-base ^1.0.0` is all it needs. A native client with iroh 1.3.0
+talks to it with the same frames (checked 2026-10-16 against the published
+crates): `protos/common.rs`, `handshake.rs` and `streams.rs` are identical in
+1.0.0 and 1.3.0; `protos/relay.rs` differs only by the status code
+`RateLimited` (sent solely by a newer relay to V2 clients, read by 1.0.x clients
+as an unknown status) and one extra length check; `http.rs` differs only in a
+test-only attribute and the client code is identical.
+
+The lock was edited without `cargo` (checksums from the crates.io index). Its
+completeness is confirmed only by the remote runs: `cargo build --locked`,
+`cargo test` and `cargo audit --file ../share-server/Cargo.lock` of the suite
+stage `server` (`native/luecken-task-server.py`, workflow `luecken-task.yml`) and
+the audit step of `build.yml`. `rustls` 0.23.46 also changes `StreamOwned`
+(buffered plaintext is returned without I/O, `flush` loops over `write_tls`);
+`share-server/src/signal_stream.rs` uses it, and
+`signal_security_transport_tests.rs` (wss) covers that path.

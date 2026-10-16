@@ -41,6 +41,10 @@ JNI-Klasse `app.smartexplorer.android.core.NativeBridge` (Kotlin `object`), Bibl
 `appVersion` = `PackageInfo.versionName`; `bootMarker` = `Settings.Global.BOOT_COUNT` als Text (für
 „Beim Start“-Jobs); `updateFeedUrl` und `startDaemon=false` nur für Tests (Debug-Build liest
 `filesDir/test-overrides.json`; sonst eingebauter Feed aus `native/update_source.txt`).
+`secretsKey` (seit 2026-10-16) ist der 32-Byte-Datenschlüssel des Geheimnisspeichers als Hex-Text,
+von `SecretsKey.kt` mit einem nicht exportierbaren AES-Schlüssel des Android-Keystores aus
+`noBackupDir/secrets-key-v2.bin` entpackt; `null`, wenn der Keystore versagt (dann bleiben versiegelte
+Einträge zu, nichts wird neu erzeugt). Der Kern hält ihn nur im Speicher und nicht in den Einstellungen.
 `homeDir` muss, wenn gesetzt, ein absoluter Pfad ohne NUL sein (sonst `invalid`); ohne `homeDir`
 und ohne Volumes ist Home der leere Ordner `<filesDir>/home`, nie das private `filesDir` selbst.
 Neue Share-Profile und Räume haben keine Standardfreigabe. Home dient weiterhin als Arbeitsordner
@@ -226,7 +230,13 @@ ConnectionInput = Connection ohne id/location, plus password:String?, passphrase
 - `conn.save {input:ConnectionInput}` → `Connection` (leeres `password` bei Bearbeitung = unverändert)
 - `conn.delete {id}` → `{removedFavorites:Int, orphanedJobs:[String]}` (Jobs werden wie am Desktop nur
   gemeldet, nicht gelöscht)
-- `conn.forgetHostKey {id}` → `{}`
+- `conn.forgetHostKey {id}` → `{}` (der nächste Verbindungsversuch meldet den neuen Schlüssel zur
+  Bestätigung)
+- `conn.trustHostKey {message}` → `{host, port, algorithm, fingerprint}`: `message` ist der Text eines
+  Fehlers mit `kind:"host_key_unknown"` (unbekannter SFTP-Hostschlüssel mit Typ und SHA-256-
+  Fingerabdruck); der Kern verbindet neu und speichert den Schlüssel nur, wenn der Server genau diesen
+  Fingerabdruck zeigt. `conn.test`, `conn.save` und das Öffnen gespeicherter SFTP-Verbindungen melden
+  einen unbekannten Schlüssel mit diesem `kind`.
 - `gdrive.status {}` → `{clientConfigured:Boolean, signedIn:Boolean, clientId:String?}`
 - `gdrive.configure {clientId, clientSecret:String?}` → `{}`
 - `gdrive.signIn {}` → `{taskId}` (sendet `openUrl`; Task endet nach Rückmeldung oder 180 s)
