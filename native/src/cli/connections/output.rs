@@ -20,6 +20,10 @@ pub(super) fn print_connections(json: bool) -> Result<(), String> {
             clean(&connection.account()),
         );
     }
+    if gdrive_value().is_some() {
+        count += 1;
+        println!("Google Drive\tgdrive\tgdrive:///\t\tselector=gdrive");
+    }
     for line in share_text(&profiles) {
         count += 1;
         println!("{line}");
@@ -30,7 +34,8 @@ pub(super) fn print_connections(json: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// The rows of `se connections list --json`: saved remotes, then Share peers.
+/// The rows of `se connections list --json`: saved remotes, Google Drive while
+/// an account is signed in, then Share peers.
 pub(in crate::cli) fn connections_value() -> Result<serde_json::Value, String> {
     let (connections, profiles) = load()?;
     Ok(serde_json::Value::Array(rows(&connections, &profiles)))
@@ -58,11 +63,34 @@ fn rows(
     connections
         .iter()
         .map(saved_value)
+        .chain(gdrive_value())
         .chain(share_values(profiles))
         .collect()
 }
 
+/// Google Drive as the GUI sidebar lists it, while an account is signed in.
+fn gdrive_value() -> Option<serde_json::Value> {
+    crate::cloud::is_connected(crate::cloud::Provider::GDrive).then(|| {
+        serde_json::json!({
+            "selector": "gdrive",
+            "label": "Google Drive",
+            "account": "gdrive:///",
+            "endpoint": "gdrive:///",
+            "protocol": "gdrive",
+            "kind": "cloud",
+            "settings_command": "se connections gdrive status",
+            "remove_command": "se connections gdrive sign-out",
+        })
+    })
+}
+
 fn saved_value(connection: &crate::creds::SavedConnection) -> serde_json::Value {
+    // The login kind as the Android list shows it (`conn.list`: auth, keyPath).
+    let (auth, key_path) = match &connection.auth {
+        crate::creds::AuthKind::Password => ("password", None),
+        crate::creds::AuthKind::Key { path } => ("key", Some(path.as_str())),
+        crate::creds::AuthKind::SshAgent => ("ssh-agent", None),
+    };
     serde_json::json!({
         "selector": connection.account(),
         "label": connection.display(),
@@ -72,7 +100,10 @@ fn saved_value(connection: &crate::creds::SavedConnection) -> serde_json::Value 
         "port": connection.port,
         "user": connection.user,
         "root": connection.root,
+        "auth": auth,
+        "key_path": key_path,
         "use_agent": connection.use_agent,
+        "edit_command": format!("se connections edit {}", connection.account()),
         "remove_command": format!("se connections remove {}", connection.account()),
     })
 }

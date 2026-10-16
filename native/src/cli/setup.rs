@@ -61,7 +61,8 @@ pub(crate) fn add_remote(input: RemoteConnectionInput) -> Result<String, String>
     ))
 }
 
-pub(crate) fn remove_remote(selector: &str) -> Result<String, String> {
+/// The saved remote named by its exact label (display name) or account.
+pub(crate) fn find_saved_remote(selector: &str) -> Result<SavedConnection, String> {
     let selector = required_selector(selector)?;
     let mut matches = crate::creds::load_connections_checked()?
         .into_iter()
@@ -69,13 +70,64 @@ pub(crate) fn remove_remote(selector: &str) -> Result<String, String> {
         .collect::<Vec<_>>();
     matches.sort_by_key(|connection| connection.account());
     matches.dedup_by(|left, right| left.account() == right.account());
-    let connection = exact_match(matches, &selector, "saved connection", |connection| {
+    exact_match(matches, &selector, "saved connection", |connection| {
         connection.account()
-    })?;
+    })
+}
+
+/// The GUI removal (desktop sidebar, Android `conn.delete`): the entry and
+/// its secret, then favourites, folder preferences and drives of it; sync
+/// setups that use it are kept and named.
+pub(crate) fn remove_remote(selector: &str) -> Result<String, String> {
+    let connection = find_saved_remote(selector)?;
     let account = connection.account();
-    crate::creds::remove_connection(&account)
+    let current = crate::creds::load_connections_checked()?;
+    let removal = crate::share::removal::remove_saved_connection(&current, &account)
         .map_err(|error| format!("remove saved connection {account}: {error}"))?;
-    Ok(format!("Removed saved connection {account}"))
+    let cleanup = removal
+        .scope
+        .as_ref()
+        .map(crate::connect::cleanup_removed_endpoint_state)
+        .map(|report| report.summary_suffix())
+        .unwrap_or_default();
+    Ok(format!("Removed saved connection {account}{cleanup}"))
+}
+
+/// Saves a changed remote through the path the GUIs use: a moved entry takes
+/// its secret along, a password never becomes a key passphrase.
+pub(crate) fn edit_remote(
+    previous: &SavedConnection,
+    input: RemoteConnectionInput,
+) -> Result<String, String> {
+    super::os::validate_connection_protocol(input.protocol)?;
+    if input
+        .secret
+        .as_ref()
+        .is_some_and(|secret| secret.len() as u64 > MAX_STDIN_SECRET_BYTES)
+    {
+        return Err(format!(
+            "password exceeds the {MAX_STDIN_SECRET_BYTES}-byte limit"
+        ));
+    }
+    let conn = build_saved_connection(input)?;
+    let edit = crate::connect::save_edited_connection(
+        Some(previous),
+        conn.saved,
+        conn.pending_secret.as_deref(),
+    )
+    .map_err(|error| format!("connection speichern: {error}"))?;
+    let mut message = format!(
+        "Saved connection {}\t{}",
+        edit.saved.display(),
+        edit.saved.account()
+    );
+    if let Some(old) = &edit.moved_from {
+        message.push_str(&format!("\twas {old}"));
+    }
+    for warning in &edit.warnings {
+        message.push_str(&format!("; warning: {warning}"));
+    }
+    Ok(message)
 }
 
 pub(crate) fn remove_peer(selector: Option<&str>) -> Result<String, String> {
@@ -276,6 +328,9 @@ fn build_saved_connection(input: RemoteConnectionInput) -> Result<PendingSavedCo
         None => AuthKind::Password,
     };
     let root = normalize_root(input.protocol, &input.root)?;
+    if input.protocol == Protocol::Smb && !crate::smb::root_has_share(&root) {
+        return Err("smb root must start with the share: /<share>/<folder>".to_string());
+    }
     let host = match input.protocol {
         Protocol::Share => optional_trim(input.host)
             .or_else(|| unc_server(&root))

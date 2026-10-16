@@ -34,9 +34,12 @@ rejected. `etag` values from stat/read guard write/edit against lost updates. \
 Never ask the user for passwords in chat: saved credentials are used \
 automatically; new password logins are added by the user in a terminal \
 (`se connections add … --password-stdin`). Change Share trust (access requests, \
-Exec grants, discoverability) only when the user explicitly asks. The `se` tool \
+Exec grants and their program lists, device and room settings, discoverability) \
+only when the user explicitly asks. The `se` tool \
 runs any other Smart Explorer terminal command, for example \
-`[\"share\",\"status\",\"--json\"]`.";
+`[\"share\",\"status\",\"--json\"]`, and reaches every app setting: sync setups \
+(`sync`), background worker (`background`), remotes and Google Drive \
+(`connections`), updates (`update`).";
 
 /// Tools Claude Code loads upfront (`_meta["anthropic/alwaysLoad"]`), so the
 /// file workflow is visible without a tool search; the others stay deferred.
@@ -62,7 +65,7 @@ const MAX_BYTES: &str = "Payload budget of this answer in bytes (default 20000).
 pub(super) fn tools() -> Vec<Tool> {
     let tools = vec![
         tool("status", "Smart Explorer status",
-            "Version, installation and app-data paths, credential store, background worker, Share worker and connectivity state. Use it when a connection, peer or remote command does not work.",
+            "Version, installation and app-data paths, credential store, background worker (login start, pause, check interval, automatic pause), number of sync setups, Share worker and connectivity state. Use it when a connection, peer, sync or remote command does not work.",
             json!({}), &[], read_only(false)),
         tool("connections", "Saved remotes and Share peers",
             "Every saved remote and Share peer/room with the target prefix to use, its live status, and how commands run there: `exec: \"ssh\"` for saved SFTP remotes (the remote login shell), `exec: \"share\"` for Share peers (works once that device granted this one Exec).",
@@ -174,7 +177,7 @@ pub(super) fn tools() -> Vec<Tool> {
                 "wait_seconds": {"type": "integer", "minimum": 0, "description": WAIT}
             }), &["job_id"], changes(false, true)),
         tool("se", "Run an se command",
-            "Runs any other Smart Explorer terminal command as `se <args>` and returns its exit code and output, for example: [\"share\",\"status\",\"--json\"], [\"share\",\"request\",\"list\",\"--json\"], [\"share\",\"grants\",\"--json\"], [\"connections\",\"add\",\"sftp\",\"--host\",\"h\",\"--user\",\"u\",\"--key\",\"/home/u/.ssh/id_ed25519\",\"--label\",\"prod\"], [\"connections\",\"add-peer\",\"--code\",\"SE-D3-…\"], [\"drive\",\"mount\",\"@prod:/srv\",\"--letter\",\"M\"] (Windows), [\"update\",\"--check\",\"--json\"], [\"doctor\",\"--json\"]. `[\"--help\"]` or [\"<command>\",\"--help\"] explains every command. Prefer the dedicated tools for files and remote commands.",
+            "Runs any other Smart Explorer terminal command as `se <args>` and returns its exit code and output, for example: [\"share\",\"status\",\"--json\"], [\"share\",\"request\",\"list\",\"--json\"], [\"share\",\"grants\",\"--json\"], [\"share\",\"grants\",\"exec\",\"--json\"], [\"share\",\"exec\",\"log\",\"--json\"], [\"share\",\"device\",\"list\",\"--json\"], [\"share\",\"room\",\"list\",\"--json\"], [\"connections\",\"add\",\"sftp\",\"--host\",\"h\",\"--user\",\"u\",\"--key\",\"/home/u/.ssh/id_ed25519\",\"--label\",\"prod\"], [\"connections\",\"add-peer\",\"--code\",\"SE-D3-…\"], [\"drive\",\"mount\",\"@prod:/srv\",\"--letter\",\"M\"] (Windows), [\"update\",\"--check\",\"--json\"], [\"doctor\",\"--json\"], [\"sync\",\"list\",\"--json\"], [\"sync\",\"edit\",\"Docs\",\"--trigger\",\"realtime\"], [\"background\",\"status\",\"--json\"], [\"connections\",\"gdrive\",\"status\",\"--json\"]. `[\"--help\"]` or [\"<command>\",\"--help\"] explains every command. Prefer the dedicated tools for files and remote commands.",
             json!({
                 "args": {"type": "array", "items": {"type": "string"}, "minItems": 1, "description": "Arguments after `se`."},
                 "stdin": {"type": "string", "description": "Standard input (closed afterwards), e.g. for --pin-stdin."},

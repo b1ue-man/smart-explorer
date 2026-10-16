@@ -1,6 +1,7 @@
 //! `status` and `connections`: the same documents as `se doctor --json`,
-//! `se share status --json` and `se connections list --json`, condensed and
-//! annotated with the target to use and how commands run there.
+//! `se share status --json`, `se background status --json` and
+//! `se connections list --json`, condensed and annotated with the target to
+//! use and how commands run there.
 use super::response;
 use super::session::Session;
 use rmcp::model::CallToolResult;
@@ -30,7 +31,22 @@ pub(super) fn status(session: &Session) -> Result<CallToolResult, String> {
             "running_jobs": running,
         },
         "plugins": crate::cli::plugin::status_value(),
+        "background": crate::cli::background::status_value(),
+        "sync_setups": sync_summary(),
     })))
+}
+
+/// How many sync setups exist and how to read them; the settings themselves
+/// stay in `se sync list --json` (`se` tool).
+fn sync_summary() -> Value {
+    match crate::syncjobs::load_report() {
+        Ok(report) => json!({
+            "count": report.jobs.len(),
+            "broken": report.broken.len(),
+            "full_list": "se tool with [\"sync\",\"list\",\"--json\"]",
+        }),
+        Err(error) => json!({ "error": error.to_string() }),
+    }
 }
 
 /// The parts of `se share status --json` an agent needs; recent events and
@@ -63,7 +79,9 @@ pub(super) fn connections() -> Result<CallToolResult, String> {
 fn annotate(row: &mut Value) {
     let protocol = row["protocol"].as_str().unwrap_or_default().to_string();
     let kind = row["kind"].as_str().unwrap_or_default().to_string();
-    let (target, exec) = if protocol == "share" {
+    let (target, exec) = if protocol == "gdrive" {
+        ("gdrive:///".to_string(), None)
+    } else if protocol == "share" {
         let endpoint = row["endpoint"]
             .as_str()
             .or_else(|| row["account"].as_str())
@@ -84,8 +102,23 @@ fn annotate(row: &mut Value) {
 
 #[cfg(test)]
 mod tests {
-    use super::{annotate, share_summary};
+    use super::{annotate, share_summary, sync_summary};
     use serde_json::json;
+
+    #[test]
+    fn luecken_task_mcp_status_has_background_and_sync_setups() {
+        let background = crate::cli::background::status_value();
+        for key in [
+            "sync_at_login",
+            "paused",
+            "check_interval_seconds",
+            "autopause",
+        ] {
+            assert!(background.get(key).is_some(), "missing {key}");
+        }
+        let sync = sync_summary();
+        assert!(sync.get("count").is_some() || sync.get("error").is_some());
+    }
 
     #[test]
     fn mcp_task_connections_name_their_target_and_exec_kind() {
@@ -96,6 +129,10 @@ mod tests {
         let mut dav = json!({"protocol": "webdav", "label": "cloud"});
         annotate(&mut dav);
         assert_eq!(dav["exec"], json!(null));
+        let mut drive = json!({"protocol": "gdrive", "label": "Google Drive"});
+        annotate(&mut drive);
+        assert_eq!(drive["target"], "gdrive:///");
+        assert_eq!(drive["exec"], json!(null));
         let mut peer =
             json!({"protocol": "share", "kind": "direct", "endpoint": "share://direct/c1"});
         annotate(&mut peer);

@@ -37,11 +37,11 @@ fn exe_path() -> String {
 /// Command string for the registry: `"<exe>" "<arg>"` where arg is %1 (the
 /// clicked item) or %V (the folder's own path, for the Background context).
 fn command_for(arg: &str) -> String {
-    format!("\"{}\" \"{}\"", exe_path(), arg)
+    command_with(&exe_path(), arg)
 }
 
-fn icon_value() -> String {
-    format!("\"{}\",0", exe_path())
+fn command_with(exe: &str, arg: &str) -> String {
+    format!("\"{}\" \"{}\"", exe, arg)
 }
 
 fn backup_path() -> std::path::PathBuf {
@@ -59,17 +59,17 @@ fn is_not_found(e: &io::Error) -> bool {
 
 // ─── Context-menu verb (benign, additive) ───────────────────────────────────
 
-fn register_verb(class_path: &str, arg: &str) -> io::Result<()> {
+fn register_verb(class_path: &str, arg: &str, exe: &str) -> io::Result<()> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let (verb, _) =
         hkcu.create_subkey(format!(r"Software\Classes\{}\shell\{}", class_path, VERB))?;
     verb.set_value("MUIVerb", &LABEL)?;
-    verb.set_value("Icon", &icon_value())?;
+    verb.set_value("Icon", &format!("\"{}\",0", exe))?;
     let (cmd, _) = hkcu.create_subkey(format!(
         r"Software\Classes\{}\shell\{}\command",
         class_path, VERB
     ))?;
-    cmd.set_value("", &command_for(arg))?;
+    cmd.set_value("", &command_with(exe, arg))?;
     Ok(())
 }
 
@@ -85,10 +85,16 @@ fn unregister_verb(class_path: &str) -> io::Result<()> {
 /// Folders & drives use %1 (the clicked item); the Background context (empty
 /// space inside an open window) has no clicked item, so it uses %V.
 pub fn set_context_menu(on: bool) -> io::Result<()> {
+    set_context_menu_for(on, &exe_path())
+}
+
+/// The verb for an explicit app executable: `se integration context-menu`
+/// registers the installed app next to `se`, never `se` itself.
+pub fn set_context_menu_for(on: bool, exe: &str) -> io::Result<()> {
     if on {
-        register_verb("Directory", "%1")?;
-        register_verb("Drive", "%1")?;
-        register_verb(r"Directory\Background", "%V")?;
+        register_verb("Directory", "%1", exe)?;
+        register_verb("Drive", "%1", exe)?;
+        register_verb(r"Directory\Background", "%V", exe)?;
     } else {
         unregister_verb("Directory")?;
         unregister_verb("Drive")?;

@@ -28,6 +28,17 @@ pub(super) fn validate_connection_protocol(protocol: crate::creds::Protocol) -> 
     platform::validate_connection_protocol(protocol)
 }
 
+/// The Explorer context-menu entry "In Smart Explorer öffnen"; `None` where
+/// the platform has no such entry (it exists only on Windows).
+pub(super) fn context_menu_enabled() -> Option<bool> {
+    platform::context_menu_enabled()
+}
+
+/// Registers the entry for the app executable `app`, or removes it.
+pub(super) fn set_context_menu(on: bool, app: &std::path::Path) -> Result<(), String> {
+    platform::set_context_menu(on, app)
+}
+
 /// Prints `prompt` to stderr and reads one line from the terminal without
 /// echoing it. Ctrl+C restores the terminal and exits with status 130.
 pub(super) fn read_hidden_line(prompt: &str) -> Result<String, String> {

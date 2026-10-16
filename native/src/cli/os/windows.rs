@@ -74,6 +74,15 @@ fn file_key(file: &File) -> io::Result<(u32, u64)> {
     Ok((information.volume_serial_number, index))
 }
 
+pub(super) fn context_menu_enabled() -> Option<bool> {
+    Some(crate::shell_register::context_menu_enabled())
+}
+
+pub(super) fn set_context_menu(on: bool, app: &std::path::Path) -> Result<(), String> {
+    crate::shell_register::set_context_menu_for(on, &app.to_string_lossy().replace('/', "\\"))
+        .map_err(|error| format!("registry: {error}"))
+}
+
 pub(super) fn validate_connection_protocol(
     _protocol: crate::creds::Protocol,
 ) -> Result<(), String> {
