@@ -163,8 +163,13 @@ def source_test_names():
 
 def stage_unit(results, log_root):
     skips = [argument for name in UNIT_SKIPS for argument in ("--skip", name)]
+    # The filter `share::node` also selects share::node_sessions::windows_remote_task_*,
+    # which open two real loopback Iroh nodes through CopyPastePeerFixture; that
+    # fixture refuses unless SMART_EXPLORER_COPY_PASTE_TASK=1. Enabling it makes
+    # them check Share sessions over iroh 1.3.0 and the hybrid key exchange.
+    environment = dict(os.environ, SMART_EXPLORER_COPY_PASTE_TASK="1")
     completed = ai.run(["cargo", "test", "--locked", "--lib", "--", *UNIT_FILTERS, *skips],
-                       cwd=ai.NATIVE, log=log_root / "unit.log", timeout=5400)
+                       cwd=ai.NATIVE, env=environment, log=log_root / "unit.log", timeout=5400)
     output = (completed.stdout + completed.stderr).decode(errors="replace")
     summary = [line for line in output.splitlines() if line.startswith("test result:")]
     results.record("unit", "luecken_task_ + affected modules", completed.returncode == 0,
@@ -278,6 +283,15 @@ def start_openssh(log_root, public_key):
                       "-e", f"PUBLIC_KEY={public_key}",
                       "lscr.io/linuxserver/openssh-server:latest"], timeout=600, log=log_root / "docker.log")
     ensure(started.returncode == 0, started.stderr.decode())
+    wait_openssh(name)
+    if relax_source_penalties(name, log_root):
+        restarted = ai.run(["docker", "restart", name], timeout=180, log=log_root / "docker.log")
+        ensure(restarted.returncode == 0, restarted.stderr.decode())
+    return name, wait_openssh(name), user, password
+
+
+def wait_openssh(name):
+    """Host port of the container's sshd once it sends its banner."""
     mapped = ai.run(["docker", "port", name, "2222/tcp"]).stdout.decode().strip().splitlines()[0]
     port = int(mapped.rsplit(":", 1)[1])
     deadline = time.time() + 120
@@ -291,7 +305,25 @@ def start_openssh(log_root, public_key):
     else:
         raise AssertionError("OpenSSH container did not answer")
     time.sleep(2)
-    return name, port, user, password
+    return port
+
+
+def relax_source_penalties(name, log_root):
+    """The stage opens and deliberately aborts many handshakes (key scans,
+    refused and revoked keys). OpenSSH 9.8 and newer count those against the
+    source address (PerSourcePenalties) and then drop every new connection of
+    the runner, which se reports as "Disconnected". The fixture server turns
+    the penalties off when its sshd knows the option (`sshd -t` accepts it);
+    the client side under test is unchanged."""
+    config = 'f=/config/sshd/sshd_config; [ -f "$f" ] || f=/etc/ssh/sshd_config; '
+    check = (config + 'printf "\\nPerSourcePenalties no\\n" >> "$f"; '
+             'for s in /usr/sbin/sshd.pam /usr/sbin/sshd; do [ -x "$s" ] && exec "$s" -t -f "$f"; done; exit 1')
+    checked = ai.run(["docker", "exec", name, "sh", "-c", check], timeout=60, log=log_root / "docker.log")
+    if checked.returncode == 0:
+        return True
+    undo = config + 'sed -i "/^PerSourcePenalties no$/d" "$f"'
+    ai.run(["docker", "exec", name, "sh", "-c", undo], timeout=60, log=log_root / "docker.log")
+    return False
 
 
 def openssh_fingerprint(key_base64):
@@ -362,6 +394,8 @@ def stage_ssh(results, se_binary, work, log_root):
         agent_checks(results, se_binary, client, work, port, user, by_type, presented, log)
     finally:
         ai.stop_background_daemons(clients)
+        # sshd's own log (penalties, refused keys, disconnect reasons) as evidence.
+        ai.run(["docker", "logs", container], timeout=120, log=logs / "sshd.log")
         ai.run(["docker", "rm", "-f", container], timeout=120)
 
 
