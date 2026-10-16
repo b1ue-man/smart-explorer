@@ -1,5 +1,7 @@
 #[path = "share_connections_ui.rs"]
 mod connections_ui;
+#[path = "share_device_page_ui.rs"]
+mod device_page_ui;
 #[path = "share_diagnostics_ui.rs"]
 mod diagnostics_ui;
 #[path = "share_direct_ui.rs"]
@@ -8,10 +10,16 @@ mod direct_ui;
 mod exports_ui;
 #[path = "share_host_trash_ui.rs"]
 mod host_trash_ui;
+#[path = "share_pages_ui.rs"]
+mod pages_ui;
 #[path = "share_policy_ui.rs"]
 mod policy_ui;
+#[path = "share_room_page_ui.rs"]
+mod room_page_ui;
 #[path = "share_rooms_ui.rs"]
 mod rooms_ui;
+#[path = "share_this_device_ui.rs"]
+mod this_device_ui;
 #[path = "share_window_ui.rs"]
 mod window_ui;
 use super::prelude::*;

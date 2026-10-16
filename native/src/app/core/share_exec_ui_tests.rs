@@ -1,4 +1,5 @@
-use super::{activation_ready, exec_device_views, exec_warning};
+use super::programs_ui::{add_program, change, ProgramChange};
+use super::{activation_ready, activation_warning, exec_device_views, exec_warning, summary};
 use crate::share::{
     DirectContact, DirectGrant, DirectGrantState, ExecGrant, ExecProviderStatus, RoomMember,
     RoomProfile, ShareProfiles, ShareStatus,
@@ -197,4 +198,78 @@ fn inactive_base_authorization_remains_visible_but_cannot_be_enabled() {
     let views = exec_device_views(&profiles);
     assert_eq!(views.len(), 2);
     assert!(views.iter().all(|view| !view.base_authorized));
+}
+
+#[test]
+fn luecken_task_exec_programs_are_added_with_the_rules_of_the_cli() {
+    let mut draft = Vec::new();
+    add_program(&mut draft, "  uptime ").unwrap();
+    add_program(&mut draft, "/usr/bin/df").unwrap();
+    assert_eq!(draft, ["uptime", "/usr/bin/df"]);
+    // Duplicates, empty input, relative paths and NUL are refused; the
+    // draft stays as it was.
+    for refused in ["uptime", "   ", "bin/tool", "./tool", "to\0ol"] {
+        assert!(add_program(&mut draft, refused).is_err(), "{refused:?}");
+    }
+    assert_eq!(draft.len(), 2);
+}
+
+#[test]
+fn luecken_task_exec_program_changes_name_full_shell_and_lists() {
+    let none: Vec<String> = Vec::new();
+    let one = vec!["uptime".to_string()];
+    let two = vec!["uptime".to_string(), "df".to_string()];
+    assert_eq!(change(&one, &one), ProgramChange::Unchanged);
+    assert_eq!(change(&one, &none), ProgramChange::ToFullShell);
+    assert_eq!(change(&none, &one), ProgramChange::ToList);
+    assert_eq!(change(&one, &two), ProgramChange::ListChanged);
+}
+
+#[test]
+fn luecken_task_exec_activation_warning_names_programs_account_and_elevation() {
+    let root = ExecProviderStatus {
+        available: true,
+        provider: "systemd".into(),
+        detail: String::new(),
+        elevated: true,
+        user_label: "root".into(),
+    };
+    let full = activation_warning(&root, None, &[]);
+    assert_eq!(full.full_access, "FULL root CODE EXECUTION");
+    assert_eq!(full.elevated, Some("REMOTE ROOT SHELL"));
+    let listed = activation_warning(&root, Some(""), &["uptime".into(), "df".into()]);
+    assert_eq!(listed.full_access, "root EXECUTION OF uptime, df");
+    assert_eq!(listed.elevated, Some("REMOTE ROOT SHELL"));
+    let account = activation_warning(&root, Some("deploy"), &["uptime".into()]);
+    assert_eq!(account.full_access, "deploy EXECUTION OF uptime");
+    assert_eq!(account.elevated, None);
+}
+
+#[test]
+fn luecken_task_exec_summary_names_state_and_program_count() {
+    let mut profiles = ShareProfiles::default();
+    profiles.direct_contacts.push(contact());
+    let mut narrowed = grant();
+    narrowed.exec.programs = vec!["uptime".into(), "df".into()];
+    profiles.direct_grants.push(narrowed);
+    profiles.rooms.push(room());
+    let views = exec_device_views(&profiles);
+    let direct = views
+        .iter()
+        .find(|view| view.device_id == "device-a")
+        .unwrap();
+    assert_eq!(summary(direct), "2 Programme");
+    assert_eq!(
+        direct.target_key,
+        super::direct_target_key("device-a", "fp-a")
+    );
+    let member = views
+        .iter()
+        .find(|view| view.device_id == "device-b")
+        .unwrap();
+    assert_eq!(summary(member), "aus");
+    assert_eq!(
+        member.target_key,
+        super::room_target_key("room-wire", "device-b", "fp-b")
+    );
 }
