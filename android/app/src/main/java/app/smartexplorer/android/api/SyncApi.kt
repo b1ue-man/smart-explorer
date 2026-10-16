@@ -96,6 +96,19 @@ data class SyncJob(
     val versionsLocation: String = "auto",
     val crossMounts: Boolean = false,
     val useRecycleBin: Boolean = false,
+    /** "Bei Anschluss" pattern; Android offers no such trigger but keeps the stored value. */
+    val connectMatch: String = "",
+    val modifyWindowSec: Long = 0,
+    val filterMinSizeKb: Long = 0,
+    val filterMaxSizeKb: Long = 0,
+    val filterMaxAgeDays: Long = 0,
+    val filterMinAgeDays: Long = 0,
+    val bwlimitKbps: Long = 0,
+    val maxTransfers: Long = 0,
+    val atomicCopy: Boolean = true,
+    val verifyCopies: Boolean = false,
+    val retries: Long = 0,
+    val retryDelaySecs: Long = 2,
     val lastResult: SyncLastResult? = null,
     val schedule: String = "",
     val runningTask: String? = null,
@@ -375,6 +388,11 @@ object SyncApi {
 
     suspend fun resume() {
         Core.call("bg.resume")
+    }
+
+    /** The desktop "Prüfintervall": 2–3600 seconds between the worker's checks. */
+    suspend fun setCadence(seconds: Int) {
+        Core.call("bg.setCadence", buildJsonObject { put("seconds", seconds) })
     }
 
     suspend fun setAutopause(battery: Boolean, metered: Boolean) {

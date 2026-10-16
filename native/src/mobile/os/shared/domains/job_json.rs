@@ -1,6 +1,8 @@
 //! Sync-job JSON (api.md §4.7 `Job`) in both directions. Incoming drafts are
-//! laid over the desktop `JobEditor`, so fields the phone does not show keep
+//! laid over the desktop `JobEditor`, so fields a draft does not carry keep
 //! their stored values and the desktop validation and texts apply unchanged.
+//! Every `JobEditor` field has its key (the phone hides only `connectMatch`,
+//! because Android reports no drive arrivals).
 use std::collections::BTreeMap;
 
 use serde_json::{json, Map, Value};
@@ -65,6 +67,18 @@ pub(super) fn job_json(
         "versionsLocation": job.versions_location.as_str(),
         "crossMounts": job.cross_mounts,
         "useRecycleBin": job.use_recycle_bin,
+        "connectMatch": job.connect_match,
+        "modifyWindowSec": job.modify_window_sec,
+        "filterMinSizeKb": job.filter_min_size_kb,
+        "filterMaxSizeKb": job.filter_max_size_kb,
+        "filterMaxAgeDays": job.filter_max_age_days,
+        "filterMinAgeDays": job.filter_min_age_days,
+        "bwlimitKbps": job.bwlimit_kbps,
+        "maxTransfers": job.max_transfers,
+        "atomicCopy": job.atomic_copy,
+        "verifyCopies": job.verify,
+        "retries": job.retries,
+        "retryDelaySecs": job.retry_delay_secs,
         "lastResult": result.map(result_json),
         "schedule": schedule_text(job),
         "runningTask": running_task,
@@ -140,6 +154,7 @@ pub(super) fn apply_draft(editor: &mut JobEditor, draft: &Map<String, Value>) ->
     text("runBefore", &mut editor.run_before);
     text("runAfter", &mut editor.run_after);
     text("runCleanup", &mut editor.run_cleanup);
+    text("connectMatch", &mut editor.connect_match);
 
     let flag = |key: &str, slot: &mut bool| {
         if let Some(value) = draft.get(key).and_then(Value::as_bool) {
@@ -152,6 +167,8 @@ pub(super) fn apply_draft(editor: &mut JobEditor, draft: &Map<String, Value>) ->
     flag("moveFiles", &mut editor.move_files);
     flag("useRecycleBin", &mut editor.use_recycle_bin);
     flag("crossMounts", &mut editor.cross_mounts);
+    flag("atomicCopy", &mut editor.atomic_copy);
+    flag("verifyCopies", &mut editor.verify);
 
     let number = |key: &str, slot: &mut String| match draft.get(key) {
         Some(Value::Number(value)) => *slot = value.to_string(),
@@ -169,6 +186,15 @@ pub(super) fn apply_draft(editor: &mut JobEditor, draft: &Map<String, Value>) ->
     number("maxDelete", &mut editor.max_delete);
     number("maxDeletePct", &mut editor.max_delete_pct);
     number("maxDeleteMin", &mut editor.max_delete_min);
+    number("modifyWindowSec", &mut editor.modify_window);
+    number("filterMinSizeKb", &mut editor.filter_min_size_kb);
+    number("filterMaxSizeKb", &mut editor.filter_max_size_kb);
+    number("filterMaxAgeDays", &mut editor.filter_max_age_days);
+    number("filterMinAgeDays", &mut editor.filter_min_age_days);
+    number("bwlimitKbps", &mut editor.bwlimit_kbps);
+    number("maxTransfers", &mut editor.max_transfers);
+    number("retries", &mut editor.retries);
+    number("retryDelaySecs", &mut editor.retry_delay_secs);
     enum_field(
         draft,
         "versionsLocation",
@@ -324,7 +350,7 @@ fn apply_calendar(editor: &mut JobEditor, calendar: &Map<String, Value>, errors:
 /// Assigns the editor's single German error to the field it concerns.
 pub(super) fn field_for_message(message: &str) -> &'static str {
     // Order matters: the active-time messages also contain "Uhrzeit".
-    const RULES: [(&str, &str); 28] = [
+    const RULES: [(&str, &str); 29] = [
         ("Quelle und Ziel", "target"),
         ("Ignoriermuster", "ignore"),
         ("Spiegel-Löschungen", "deletePolicy"),
@@ -344,15 +370,16 @@ pub(super) fn field_for_message(message: &str) -> &'static str {
         ("Lösch-Schutz in Prozent", "maxDeletePct"),
         ("prozentuale Lösch-Schutz", "maxDeletePct"),
         ("Lösch-Schutz", "maxDelete"),
-        ("Zeit-Toleranz", "job"),
+        ("Zeit-Toleranz", "modifyWindowSec"),
         ("Versionen behalten", "retainCount"),
-        ("Mindestgröße", "job"),
-        ("Maximalgröße", "job"),
-        ("Mindestalter", "job"),
-        ("Maximales Alter", "job"),
-        ("Bandbreite", "job"),
-        ("Wiederholung", "job"),
-        ("Parallele Übertragungen", "job"),
+        ("Mindestgröße", "filterMinSizeKb"),
+        ("Maximalgröße", "filterMaxSizeKb"),
+        ("Mindestalter", "filterMinAgeDays"),
+        ("Maximales Alter", "filterMaxAgeDays"),
+        ("Bandbreite", "bwlimitKbps"),
+        ("Wiederholungspause", "retryDelaySecs"),
+        ("Wiederholung", "retries"),
+        ("Parallele Übertragungen", "maxTransfers"),
     ];
     RULES
         .iter()

@@ -143,6 +143,19 @@ pub(super) fn set_autopause(args: &Value) -> Result<Value, ApiError> {
     Ok(json!({}))
 }
 
+/// `{seconds}`: the desktop "Prüfintervall" (`se background cadence`),
+/// 2–3600 seconds between the worker's checks.
+pub(super) fn set_cadence(args: &Value) -> Result<Value, ApiError> {
+    let seconds = i64_arg(args, "seconds")?;
+    let seconds = u64::try_from(seconds)
+        .ok()
+        .filter(|seconds| (2..=3600).contains(seconds))
+        .ok_or_else(|| invalid("Das Prüfintervall muss zwischen 2 und 3600 Sekunden liegen."))?;
+    crate::daemon::set_cadence_secs(seconds)
+        .map_err(|error| io_error("Prüfintervall speichern", error))?;
+    Ok(json!({ "cadenceSecs": seconds }))
+}
+
 pub(super) fn log(args: &Value) -> Result<Value, ApiError> {
     let budget = opt_i64(args, "maxBytes")
         .unwrap_or(DEFAULT_LOG_BYTES)

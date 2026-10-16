@@ -58,6 +58,19 @@ internal class JobDraft(private val original: SyncJob, val options: SyncOptions)
     var runAfter by mutableStateOf(original.runAfter)
     var runCleanup by mutableStateOf(original.runCleanup)
 
+    // Filters and transfer settings of the desktop editor (pages "Filter", "Übertragung & Befehle").
+    var modifyWindowSec by mutableStateOf(original.modifyWindowSec.toString())
+    var filterMinSizeKb by mutableStateOf(original.filterMinSizeKb.toString())
+    var filterMaxSizeKb by mutableStateOf(original.filterMaxSizeKb.toString())
+    var filterMaxAgeDays by mutableStateOf(original.filterMaxAgeDays.toString())
+    var filterMinAgeDays by mutableStateOf(original.filterMinAgeDays.toString())
+    var bwlimitKbps by mutableStateOf(original.bwlimitKbps.toString())
+    var maxTransfers by mutableStateOf(original.maxTransfers.toString())
+    var atomicCopy by mutableStateOf(original.atomicCopy)
+    var verifyCopies by mutableStateOf(original.verifyCopies)
+    var retries by mutableStateOf(original.retries.toString())
+    var retryDelaySecs by mutableStateOf(original.retryDelaySecs.toString())
+
     /** [build] of the unedited draft (after every field it reads): defaults and normalisation are no edits. */
     private val initial = build()
 
@@ -87,6 +100,7 @@ internal class JobDraft(private val original: SyncJob, val options: SyncOptions)
         same(key, "calendar") -> trigger == SyncJob.TRIGGER_CALENDAR
         same(key, "rtDebounceSecs") -> trigger == SyncJob.TRIGGER_REALTIME
         same(key, "conflict") -> showAdvanced && direction == SyncJob.DIRECTION_BOTH
+        same(key, "modifyWindowSec") -> showAdvanced && compare == COMPARE_MTIME_SIZE
         ADVANCED_FIELDS.any { same(it, key) } -> showAdvanced
         else -> FIELDS.any { same(it, key) }
     }
@@ -148,6 +162,17 @@ internal class JobDraft(private val original: SyncJob, val options: SyncOptions)
             runBefore = runBefore.trim(),
             runAfter = runAfter.trim(),
             runCleanup = runCleanup.trim(),
+            modifyWindowSec = longNumber(modifyWindowSec, "modifyWindowSec", problems) ?: original.modifyWindowSec,
+            filterMinSizeKb = longNumber(filterMinSizeKb, "filterMinSizeKb", problems) ?: original.filterMinSizeKb,
+            filterMaxSizeKb = longNumber(filterMaxSizeKb, "filterMaxSizeKb", problems) ?: original.filterMaxSizeKb,
+            filterMaxAgeDays = longNumber(filterMaxAgeDays, "filterMaxAgeDays", problems) ?: original.filterMaxAgeDays,
+            filterMinAgeDays = longNumber(filterMinAgeDays, "filterMinAgeDays", problems) ?: original.filterMinAgeDays,
+            bwlimitKbps = longNumber(bwlimitKbps, "bwlimitKbps", problems) ?: original.bwlimitKbps,
+            maxTransfers = longNumber(maxTransfers, "maxTransfers", problems) ?: original.maxTransfers,
+            atomicCopy = atomicCopy,
+            verifyCopies = verifyCopies,
+            retries = longNumber(retries, "retries", problems) ?: original.retries,
+            retryDelaySecs = longNumber(retryDelaySecs, "retryDelaySecs", problems) ?: original.retryDelaySecs,
         )
         if (source.isBlank()) problems["source"] = "Seite A wählen"
         if (target.isBlank()) problems["target"] = "Seite B wählen"
@@ -208,11 +233,16 @@ internal class JobDraft(private val original: SyncJob, val options: SyncOptions)
         private const val MAX_DEBOUNCE_SECS = 24 * 60 * 60
         private const val MAX_RETAIN_DAYS = 36_500
 
+        /** `compare` value that uses the time tolerance (`modifyWindowSec`). */
+        const val COMPARE_MTIME_SIZE = "mtimesize"
+
         /** Fields inside the "Erweitert" section (api.md names). */
         private val ADVANCED_FIELDS = listOf(
             "conflict", "deletePolicy", "compare", "versioning", "retainDays", "ignore", "activeFromMin",
             "activeToMin", "maxDelete", "maxDeletePct", "maxDeleteMin", "runBefore", "runAfter", "runCleanup",
             "rtMaxLatencySecs", "rtPollSecs", "verifyIntervalSecs", "verifyTargetSecs", "retainCount", "versionsLocation", "crossMounts",
+            "modifyWindowSec", "filterMinSizeKb", "filterMaxSizeKb", "filterMaxAgeDays", "filterMinAgeDays", "bwlimitKbps",
+            "maxTransfers", "atomicCopy", "verifyCopies", "retries", "retryDelaySecs",
         )
 
         /** Every field the editor shows an error under (api.md names). */

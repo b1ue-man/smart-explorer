@@ -27,6 +27,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -48,6 +49,7 @@ import app.smartexplorer.android.ui.common.Snackbars
 import app.smartexplorer.android.ui.sync.BackgroundStatusBlock
 import app.smartexplorer.android.ui.sync.CatchUpBlock
 import app.smartexplorer.android.ui.sync.ErrorText
+import app.smartexplorer.android.ui.sync.FormTextField
 import app.smartexplorer.android.ui.sync.HintText
 import app.smartexplorer.android.ui.sync.RepeatWhileStarted
 import app.smartexplorer.android.ui.sync.SectionTitle
@@ -187,6 +189,9 @@ fun BackgroundSettingsSection(modifier: Modifier = Modifier) {
         SectionTitle("Pause")
         PauseControls(current, control)
 
+        SectionTitle("Prüfintervall")
+        CadenceRow(current, control)
+
         SectionTitle("Nachholen")
         CatchUpBlock(onChanged = { scope.launch { refresh() } })
 
@@ -205,6 +210,40 @@ fun BackgroundSettingsSection(modifier: Modifier = Modifier) {
     }
     if (showLog) WorkerLogDialog(onDismiss = { showLog = false })
 }
+
+/**
+ * The desktop "Prüfintervall" (`se background cadence`): how often the running worker looks for due
+ * jobs, changes and devices. It applies while the worker runs (Dauerbetrieb, open app).
+ */
+@Composable
+private fun CadenceRow(status: BgStatus?, control: (String, suspend () -> Unit) -> Unit) {
+    var text by rememberSaveable(status?.cadenceSecs) {
+        mutableStateOf(status?.cadenceSecs?.takeIf { it > 0 }?.toString().orEmpty())
+    }
+    val seconds = text.trim().toIntOrNull()
+    val valid = seconds != null && seconds in MIN_CADENCE_SECS..MAX_CADENCE_SECS
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FormTextField(
+            "Sekunden zwischen den Prüfungen",
+            text,
+            { text = it },
+            Modifier.weight(1f),
+            error = if (text.isNotBlank() && !valid) "$MIN_CADENCE_SECS bis $MAX_CADENCE_SECS Sekunden" else null,
+            number = true,
+        )
+        OutlinedButton(
+            onClick = {
+                val value = seconds
+                if (value != null) control("Nicht gespeichert") { SyncApi.setCadence(value) }
+            },
+            enabled = status != null && valid && seconds != status.cadenceSecs,
+        ) { Text("Speichern") }
+    }
+    HintText("Kürzer reagiert schneller auf Änderungen und braucht mehr Akku. Gilt, solange der Worker läuft.")
+}
+
+private const val MIN_CADENCE_SECS = 2
+private const val MAX_CADENCE_SECS = 3600
 
 private fun modeHint(mode: String): String = when (mode) {
     BackgroundController.MODE_OFF -> "Keine geplanten Jobs; „Jetzt“ auf der Sync-Seite geht weiterhin."

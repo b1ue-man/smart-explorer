@@ -22,6 +22,14 @@ mod host_keys;
 mod job_json;
 #[path = "locations.rs"]
 mod locations;
+#[cfg(test)]
+#[path = "settings_parity_tests.rs"]
+mod settings_parity_tests;
+#[path = "share_device_settings.rs"]
+mod share_device_settings;
+#[cfg(test)]
+#[path = "share_device_settings_tests.rs"]
+mod share_device_settings_tests;
 #[path = "share_exec.rs"]
 mod share_exec;
 #[cfg(test)]
@@ -135,6 +143,7 @@ fn background_method(rt: &Runtime, method: &str, args: &Value) -> Option<Result<
         "bg.pause" => background::pause(args),
         "bg.resume" => background::resume(),
         "bg.setAutopause" => background::set_autopause(args),
+        "bg.setCadence" => background::set_cadence(args),
         "bg.log" => background::log(args),
         "bg.catchUp" => background::catch_up(rt),
         _ => return None,
@@ -203,6 +212,16 @@ fn share_method(rt: &Runtime, method: &str, args: &Value) -> Option<Result<Value
         "share.setExec" => share_exec::set_exec(args),
         "share.execJobs" => share_exec::exec_jobs(),
         "share.cancelExecJob" => share_exec::cancel_exec_job(args),
+        "share.execLog" => share_exec::exec_log(args),
+        "share.setContactOptions" => share_device_settings::set_contact_options(rt, args),
+        "share.resetContactTrust" => share_device_settings::reset_contact_trust(rt, args),
+        "share.renameRoom" => share_device_settings::rename_room(rt, args),
+        "share.rejoinRoom" => share_device_settings::rejoin_room(rt, args),
+        "share.resetMemberTrust" => share_device_settings::reset_member_trust(rt, args),
+        "share.moveExport" => share_device_settings::move_export(rt, args),
+        "share.setDirectOnline" => share_device_settings::set_direct_online(args),
+        "share.setLanPresence" => share_device_settings::set_lan_presence(rt, args),
+        "share.renewCode" => share_device_settings::renew_code(rt),
         _ => return None,
     })
 }
