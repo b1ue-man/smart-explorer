@@ -12,11 +12,15 @@ path = "src/main.rs"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tungstenite = { version = "0.24", default-features = false, features = ["handshake"] }
-iroh-base = { version = "1.0.0", features = ["key"] }
+# 1.1.0 fixes GHSA-jx4g-cg2x-jc35 (panic when deserializing a crafted CustomAddr); the
+# vendored iroh-relay 1.0.0 requires `^1.0.0`, so 1.1.0 satisfies it unchanged.
+iroh-base = { version = "1.1.0", features = ["key"] }
 iroh-relay = { version = "1.0.0", default-features = false, features = ["server"] }
 # RV1: terminate TLS with the same ring provider used by the desktop clients;
 # no OpenSSL/aws-lc dependency is introduced for cross-platform releases.
-rustls = { version = "0.23.41", default-features = false, features = ["ring", "std", "tls12"] }
+# 0.23.46 fixes GHSA-c8m5-c952-6cm4, GHSA-h2v8-394m-p7vv, GHSA-w44r-93j7-qv28 and
+# GHSA-2mjx-qc3c-rqvc (RUSTSEC-2026-0346/-0348/-0349/-0285).
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 ring = "0.17"
 lru = "0.18"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "time", "macros"] }
