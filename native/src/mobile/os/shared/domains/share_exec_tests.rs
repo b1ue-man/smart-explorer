@@ -97,7 +97,7 @@ fn android_task_exec_targets_list_every_grant_and_member_with_state() {
             "targetKey": "direct/d-laptop/fp-d-laptop", "relation": "direct", "roomId": null,
             "roomName": null, "deviceId": "d-laptop", "name": "Laptop",
             "fingerprint": "fp-d-laptop", "enabled": true, "baseAuthorized": true,
-            "policyRevision": 7,
+            "policyRevision": 7, "runAs": "standard", "programs": [],
         })
     );
     let ignored = by_key(&targets, "direct/d-alt/fp-d-alt");
