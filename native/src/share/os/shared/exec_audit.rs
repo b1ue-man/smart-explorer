@@ -15,11 +15,14 @@ use serde_json::{json, Value};
 
 use super::exec_types::{ExecCommand, ExecJobView, ExecPrincipal, ExecStart};
 
+#[path = "exec_audit_view.rs"]
+mod audit_view;
 #[path = "exec_audit_files.rs"]
 mod files;
 #[path = "exec_audit_text.rs"]
 mod text;
 
+pub(crate) use self::audit_view::{ExecAuditEntry, MAX_VIEW_ENTRIES};
 use self::files::Class;
 use self::text::limited;
 
@@ -80,6 +83,17 @@ pub(crate) fn record(event: AuditEvent<'_>) {
 /// The last `lines` entries, oldest first, from every file of the log.
 pub(crate) fn tail(lines: usize) -> io::Result<Vec<String>> {
     files::tail_in(&crate::support_dirs::app_data_dir(), lines)
+}
+
+/// The last `lines` entries (at most `MAX_VIEW_ENTRIES`) as the GUIs show
+/// them: newest first, every field cut and cleaned.
+pub(crate) fn view(lines: usize) -> io::Result<Vec<ExecAuditEntry>> {
+    view_in(&crate::support_dirs::app_data_dir(), lines)
+}
+
+fn view_in(directory: &std::path::Path, lines: usize) -> io::Result<Vec<ExecAuditEntry>> {
+    let lines = lines.clamp(1, MAX_VIEW_ENTRIES);
+    Ok(audit_view::entries(files::tail_in(directory, lines)?))
 }
 
 fn line(event: &AuditEvent<'_>) -> Value {

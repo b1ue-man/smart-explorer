@@ -84,3 +84,50 @@ fn entry(
         retries: DirectRequestRetries::default(),
     }
 }
+
+#[test]
+fn luecken_task_grants_list_shows_exec_account_and_program_list() {
+    let grant = |device_id: &str, run_as, programs: Vec<String>| DirectGrant {
+        device_id: device_id.into(),
+        device_name: format!("Name {device_id}"),
+        public_key: format!("key-{device_id}"),
+        fingerprint: format!("fp-{device_id}"),
+        node_id: format!("node-{device_id}"),
+        state: DirectGrantState::Accepted,
+        updated_at: 1,
+        exec: crate::share::ExecGrant {
+            enabled: true,
+            policy_revision: 4,
+            run_as,
+            programs,
+            ..Default::default()
+        },
+        write: false,
+    };
+    let mut profiles = ShareProfiles::default();
+    profiles
+        .direct_grants
+        .push(grant("full", crate::share::ExecRunAs::Standard, Vec::new()));
+    profiles.direct_grants.push(grant(
+        "narrow",
+        crate::share::ExecRunAs::Account {
+            name: "deploy".into(),
+        },
+        vec!["uptime".into(), "/usr/bin/df".into()],
+    ));
+    let values = super::values(&profiles);
+    assert_eq!(values[0]["exec"]["run_as"], "standard");
+    assert_eq!(values[0]["exec"]["programs"], serde_json::json!([]));
+    assert_eq!(values[1]["exec"]["run_as"], "deploy");
+    assert_eq!(
+        values[1]["exec"]["programs"],
+        serde_json::json!(["uptime", "/usr/bin/df"])
+    );
+    // Existing keys keep their meaning for older scripts.
+    assert_eq!(values[1]["exec"]["enabled"], true);
+    assert_eq!(values[1]["exec"]["policy_revision"], 4);
+    let lines = super::text(&profiles);
+    assert!(lines[0].ends_with("\texec_run_as=standard\texec_programs=full-shell"));
+    assert!(lines[1].contains("\texec=enabled\texec_revision=4\t"));
+    assert!(lines[1].ends_with("\texec_run_as=deploy\texec_programs=uptime,/usr/bin/df"));
+}

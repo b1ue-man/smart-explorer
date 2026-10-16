@@ -279,3 +279,97 @@ fn luecken_task_audit_files_are_owner_only() {
         assert_eq!(mode & 0o777, 0o600, "{class:?}");
     }
 }
+
+#[test]
+fn luecken_task_audit_view_names_each_event_newest_first_and_cleans_every_field() {
+    let directory = tempfile::tempdir().unwrap();
+    let start = shell_start();
+    write(
+        directory.path(),
+        ROTATE_AT_BYTES,
+        &AuditEvent::Started {
+            principal: &principal(),
+            start: &start,
+            account: "standard (root)",
+            resolved_program: None,
+        },
+    );
+    write(
+        directory.path(),
+        ROTATE_AT_BYTES,
+        &AuditEvent::AuthRejected {
+            remote_node: "node-x",
+            claimed_device: "device-x",
+            reason: "authentication failed",
+        },
+    );
+    // Lines edited from outside: a raw C1 control and a direction mark in a
+    // field, and a line that is no JSON at all.
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(directory.path().join(Class::Executions.names().0))
+        .unwrap();
+    std::io::Write::write_all(
+        &mut file,
+        b"{\"event\":\"finished\",\"at\":\"2999-01-01T00:00:00Z\",\"device_name\":\"Evil\\u009b[2J\\u202e\",\"device_id\":\"device-a\",\"exit_code\":3}\nnot json \x1b[31m\n",
+    )
+    .unwrap();
+    drop(file);
+
+    let entries = view_in(directory.path(), 10).unwrap();
+    assert_eq!(entries.len(), 4);
+    // Newest first: the edited entry carries the latest time, the line
+    // without time sorts as the oldest.
+    assert_eq!(entries[0].event, "finished");
+    assert_eq!(entries[0].device, "Evil?[2J? (device-a)");
+    assert!(
+        entries[0].detail.contains("Exit: 3"),
+        "{}",
+        entries[0].detail
+    );
+    assert_eq!(entries[3].event, "unreadable");
+    assert_eq!(entries[3].title, "Unlesbare Zeile");
+    let started = entries
+        .iter()
+        .find(|entry| entry.event == "started")
+        .unwrap();
+    assert_eq!(started.title, "Gestartet");
+    assert_eq!(started.device, "Laptop (device-a)");
+    assert!(started.detail.contains("Konto: standard (root)"));
+    assert!(started.detail.contains("Shell-Befehl"));
+    assert!(!started.detail.contains("top-secret-token"));
+    let rejected = entries
+        .iter()
+        .find(|entry| entry.event == "auth_rejected")
+        .unwrap();
+    assert_eq!(rejected.title, "Anmeldung abgelehnt");
+    assert_eq!(rejected.device_id, "device-x");
+    assert!(rejected.detail.contains("EndpointId: node-x"));
+    for entry in &entries {
+        for text in [&entry.at, &entry.device, &entry.device_id, &entry.detail] {
+            assert!(
+                !text.chars().any(|c| c.is_control() || c == '\u{202e}'),
+                "{text:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn luecken_task_audit_view_reads_at_most_its_bound() {
+    let directory = tempfile::tempdir().unwrap();
+    for index in 0..(MAX_VIEW_ENTRIES + 5) {
+        append(
+            directory.path(),
+            Class::Executions,
+            &json!({ "event": "started", "at": format!("2026-10-16T10:{:02}:{:02}Z", index / 60 % 60, index % 60) }),
+        )
+        .unwrap();
+    }
+    assert_eq!(
+        view_in(directory.path(), usize::MAX).unwrap().len(),
+        MAX_VIEW_ENTRIES
+    );
+    assert_eq!(view_in(directory.path(), 0).unwrap().len(), 1);
+    assert_eq!(view_in(directory.path(), 7).unwrap().len(), 7);
+}
