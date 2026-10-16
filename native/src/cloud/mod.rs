@@ -19,6 +19,12 @@ mod os {
 
     pub use opener::set_url_opener;
 
+    /// The platform adapter alone, for a host opener that adds a step of its
+    /// own (the terminal prints the address before it opens the browser).
+    pub fn open_platform_url(url: &str) -> Result<(), String> {
+        platform::open_url(url)
+    }
+
     /// Opens `url` through the host opener when one is registered, otherwise
     /// through the platform adapter.
     pub fn open_url(url: &str) -> Result<(), String> {
@@ -30,4 +36,4 @@ mod os {
 }
 
 pub use core_impl::*;
-pub use os::set_url_opener;
+pub use os::{open_platform_url, set_url_opener};

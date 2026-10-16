@@ -46,7 +46,8 @@ this needs a graphical session.
 
   se update --check --json
   se update
-  se update --source https://github.com/OWNER/REPO";
+  se update --source https://github.com/OWNER/REPO
+  se update --startup-check false --check";
 
 #[derive(Args)]
 #[command(long_about = UPDATE_HELP)]
@@ -68,6 +69,12 @@ pub(super) struct UpdateArgs {
         help = "Save this update feed first (the setting behind the app's UPDATE field)"
     )]
     source: Option<String>,
+    #[arg(
+        long,
+        value_name = "true|false",
+        help = "Save whether the desktop app looks for updates when it starts (the app's \"Beim Start nach Updates suchen\"); combine with --check to change nothing else"
+    )]
+    startup_check: Option<bool>,
     #[arg(long, help = "Print machine-readable JSON")]
     json: bool,
     // Run by the previous `se` right after it replaced this file, with the
@@ -76,7 +83,7 @@ pub(super) struct UpdateArgs {
         long,
         hide = true,
         value_name = "VERSION",
-        conflicts_with_all = ["check", "reinstall", "source"]
+        conflicts_with_all = ["check", "reinstall", "source", "startup_check"]
     )]
     complete_install: Option<String>,
 }
@@ -104,6 +111,10 @@ struct Report<'a> {
 pub(super) fn run(args: UpdateArgs) -> Result<i32, String> {
     if let Some(expected) = &args.complete_install {
         return complete_install(expected);
+    }
+    if let Some(enabled) = args.startup_check {
+        crate::updater::set_startup_check(enabled)
+            .map_err(|error| format!("save the start-up update check: {error}"))?;
     }
     if let Some(source) = &args.source {
         // Only a feed that answers replaces the source the app uses too.
@@ -300,6 +311,9 @@ fn print(
             "installed": installed,
             "note": note,
             "previous_update_error": report.previous_error,
+            // The app's "Auto-Update pausiert (zurückgerollt auf v…)".
+            "auto_update_paused_at": crate::updater::pinned_version(),
+            "startup_check": crate::updater::startup_check_enabled(),
         });
         println!(
             "{}",
@@ -338,7 +352,24 @@ fn print(
     if let Some(error) = &report.previous_error {
         println!("previous_update_error\t{}", clean(error));
     }
+    if let Some(line) = paused_line(crate::updater::pinned_version().as_deref()) {
+        println!("{line}");
+    }
+    println!(
+        "startup_check\t{}",
+        if crate::updater::startup_check_enabled() {
+            "on"
+        } else {
+            "off"
+        }
+    );
     Ok(())
+}
+
+/// The app shows an automatic-update pause after a rollback; the terminal
+/// names it the same way.
+fn paused_line(pinned: Option<&str>) -> Option<String> {
+    pinned.map(|version| format!("auto_update\tpaused after a rollback to {}", clean(version)))
 }
 
 fn handoff_code(handoff: WorkerHandoff) -> &'static str {
@@ -357,7 +388,7 @@ fn clean(value: &str) -> String {
 mod tests {
     use clap::{CommandFactory, Parser};
 
-    use super::{validate_source, CompletedInstall};
+    use super::{paused_line, validate_source, CompletedInstall};
     use crate::cli::Cli;
     use crate::daemon::WorkerHandoff;
 
@@ -373,6 +404,7 @@ mod tests {
             "update --check --json",
             "update --reinstall --json",
             "update --source /srv/feed --check",
+            "update --startup-check false --check --json",
             "update --complete-install 1.2.3",
         ] {
             assert!(parses(accepted), "failed to parse {accepted:?}");
@@ -382,6 +414,8 @@ mod tests {
             "update --complete-install",
             "update --complete-install 1.2.3 --check",
             "update --complete-install 1.2.3 --source /srv/feed",
+            "update --complete-install 1.2.3 --startup-check true",
+            "update --startup-check maybe",
         ] {
             assert!(!parses(rejected), "unexpectedly parsed {rejected:?}");
         }
@@ -419,5 +453,14 @@ mod tests {
         assert!(validate_source("   ").is_err());
         assert!(validate_source("a\nb").is_err());
         assert!(validate_source(&"x".repeat(4097)).is_err());
+    }
+
+    #[test]
+    fn luecken_task_update_report_names_the_rollback_pause() {
+        assert_eq!(paused_line(None), None);
+        assert_eq!(
+            paused_line(Some("0.5.170")).as_deref(),
+            Some("auto_update\tpaused after a rollback to 0.5.170")
+        );
     }
 }

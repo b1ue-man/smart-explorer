@@ -3,6 +3,10 @@ use clap_complete::ArgValueCandidates;
 
 use super::setup;
 
+#[path = "connections/edit.rs"]
+mod edit;
+#[path = "connections/gdrive.rs"]
+mod gdrive;
 #[path = "connections/host_keys.rs"]
 mod host_keys;
 #[path = "connections/output.rs"]
@@ -18,6 +22,8 @@ Examples:
   se connections list
   se connections add sftp --host example.com --user alice --root /srv --label prod --password-stdin
   se connections add webdav --host cloud.example.com --user alice --root /remote.php/dav/files/alice --label cloud --password-stdin
+  se connections add smb --host nas.example --user 'WORK\\alice' --root /public/docs --label nas --password-stdin
+  se connections edit prod --host prod.example.com
   se connections add share --root \"\\\\server\\share\" --label nas  (Windows only)
   se connections add-peer --code SE-D3-... --name Laptop
   se connections add-room --code SE-R3-... --name Team
@@ -26,6 +32,7 @@ Examples:
   se connections remove-room Team
   se connections trust-host-key prod
   se connections forget-host-key nas.example:2222
+  se connections gdrive sign-in --client-id ID.apps.googleusercontent.com
 
 Peer setup is one-sided: it saves to Smart Explorer's normal profile store, then
 wakes the background Share worker. The other client confirms with `se share
@@ -72,16 +79,20 @@ enum Command {
         json: bool,
     },
     #[command(
-        about = "Save an SFTP/FTP/FTPS/WebDAV remote or Windows UNC share",
+        about = "Save an SFTP/FTP/FTPS/WebDAV/SMB remote or Windows UNC share",
         long_about = ADD_HELP
     )]
     Add(ConnectionAddArgs),
+    #[command(about = "Change a saved remote; options not given stay")]
+    Edit(edit::EditArgs),
     #[command(about = "Add or requeue a direct Smart Explorer peer", long_about = ADD_PEER_HELP)]
     AddPeer(PeerAddArgs),
     #[command(about = "Add a Smart Explorer share room", long_about = ADD_ROOM_HELP)]
     AddRoom(RoomAddArgs),
-    #[command(about = "Remove one saved remote by exact label or account")]
-    Remove(SelectorArgs),
+    #[command(
+        about = "Remove one saved remote by exact label or account, with its favourites, folder settings and drives"
+    )]
+    Remove(edit::RemoteSelectorArgs),
     #[command(about = "Remove a Share peer by a listed selector; auto-selects the only peer")]
     RemovePeer(PeerSelectorArgs),
     #[command(about = "Remove one Share room by exact name or id")]
@@ -92,6 +103,8 @@ enum Command {
     TrustHostKey(host_keys::TrustHostKeyArgs),
     #[command(about = "Forget the pinned SSH host key of a server (after a planned key change)")]
     ForgetHostKey(host_keys::ForgetHostKeyArgs),
+    #[command(about = "Google Drive: OAuth client, sign-in, sign-out and status")]
+    Gdrive(gdrive::GdriveArgs),
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -100,6 +113,7 @@ enum ConnectionProtocolArg {
     Ftp,
     Ftps,
     Webdav,
+    Smb,
     Share,
 }
 
@@ -110,6 +124,7 @@ impl ConnectionProtocolArg {
             Self::Ftp => crate::creds::Protocol::Ftp,
             Self::Ftps => crate::creds::Protocol::Ftps,
             Self::Webdav => crate::creds::Protocol::Webdav,
+            Self::Smb => crate::creds::Protocol::Smb,
             Self::Share => crate::creds::Protocol::Share,
         }
     }
@@ -117,7 +132,10 @@ impl ConnectionProtocolArg {
 
 #[derive(Args)]
 struct ConnectionAddArgs {
-    #[arg(value_enum, help = "Remote kind: sftp, ftp, ftps, webdav, or share")]
+    #[arg(
+        value_enum,
+        help = "Remote kind: sftp, ftp, ftps, webdav, smb, or share (Windows UNC)"
+    )]
     protocol: ConnectionProtocolArg,
     #[arg(
         long,
@@ -129,13 +147,13 @@ struct ConnectionAddArgs {
     #[arg(
         long,
         default_value = "",
-        help = "Login user or DOMAIN\\user for UNC shares"
+        help = "Login user, or DOMAIN\\user for SMB and UNC shares"
     )]
     user: String,
     #[arg(
         long,
         default_value = "/",
-        help = "Remote start path, WebDAV path, or UNC path for share"
+        help = "Remote start path, WebDAV path, /<share>/<folder> for smb, or UNC path for share"
     )]
     root: String,
     #[arg(
@@ -258,6 +276,10 @@ pub(super) fn run(args: ConnectionsArgs) -> Result<i32, String> {
             println!("{msg}");
             Ok(0)
         }
+        Some(Command::Edit(args)) => {
+            println!("{}", edit::run(args)?);
+            Ok(0)
+        }
         Some(Command::Remove(args)) => {
             println!("{}", setup::remove_remote(&args.selector)?);
             Ok(0)
@@ -272,6 +294,7 @@ pub(super) fn run(args: ConnectionsArgs) -> Result<i32, String> {
         }
         Some(Command::TrustHostKey(args)) => host_keys::trust(args).map(|()| 0),
         Some(Command::ForgetHostKey(args)) => host_keys::forget(args).map(|()| 0),
+        Some(Command::Gdrive(args)) => gdrive::run(args),
     }
 }
 

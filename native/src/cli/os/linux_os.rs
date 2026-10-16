@@ -15,6 +15,14 @@ pub(super) fn same_file(left: &str, right: &str) -> io::Result<bool> {
     Ok((left.dev(), left.ino()) == (right.dev(), right.ino()))
 }
 
+pub(super) fn context_menu_enabled() -> Option<bool> {
+    None
+}
+
+pub(super) fn set_context_menu(_on: bool, _app: &std::path::Path) -> Result<(), String> {
+    Err("the Explorer context-menu entry exists only on Windows".to_string())
+}
+
 pub(super) fn validate_connection_protocol(protocol: crate::creds::Protocol) -> Result<(), String> {
     if protocol == crate::creds::Protocol::Share {
         return Err(
