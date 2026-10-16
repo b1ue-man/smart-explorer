@@ -5,6 +5,9 @@ use super::export_config::{ExportAccess, ShareExportConfig, SharedConnection};
 use super::profiles::ShareProfiles;
 use super::types::DirectGrantState;
 
+#[path = "profile_settings.rs"]
+mod settings;
+
 impl ShareProfiles {
     pub fn export_config_mut(&mut self, scope: &str) -> Result<&mut ShareExportConfig, String> {
         if scope == "direct" {
