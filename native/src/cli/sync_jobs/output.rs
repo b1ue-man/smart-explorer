@@ -9,7 +9,8 @@ use crate::syncjobs::{JobState, SyncJob, Trigger};
 use super::options::WEEKDAYS;
 
 pub(super) fn job_value(job: &SyncJob, state: Option<&JobState>, now: i64) -> Value {
-    json!({
+    // Two halves: one `json!` with every key exceeds the macro recursion limit.
+    let mut value = json!({
         "id": job.id,
         "name": job.name,
         "source": job.source,
@@ -41,6 +42,8 @@ pub(super) fn job_value(job: &SyncJob, state: Option<&JobState>, now: i64) -> Va
         "rt_poll_secs": job.rt_poll_secs,
         "verify_interval_secs": job.verify_interval_secs,
         "verify_target_secs": job.verify_target_secs,
+    });
+    let rest = json!({
         "connect_match": job.connect_match,
         "active_from": min_to_hm(job.active_from_min),
         "active_to": min_to_hm(job.active_to_min),
@@ -65,7 +68,11 @@ pub(super) fn job_value(job: &SyncJob, state: Option<&JobState>, now: i64) -> Va
         "last_run": job.last_run,
         "config_version": job.config_version,
         "state": state.and_then(|state| serde_json::to_value(state).ok()),
-    })
+    });
+    if let (Value::Object(map), Value::Object(rest)) = (&mut value, rest) {
+        map.extend(rest);
+    }
+    value
 }
 
 /// One line of `se sync list`.
