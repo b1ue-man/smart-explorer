@@ -2,6 +2,8 @@ use clap::{Args, Subcommand};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+#[path = "share/devices.rs"]
+mod devices;
 #[path = "share/discoverable.rs"]
 mod discoverable;
 #[path = "share/discoverable_input.rs"]
@@ -13,6 +15,8 @@ mod exec_status;
 mod exports;
 #[path = "share/grants.rs"]
 mod grants;
+#[path = "share/host_trash.rs"]
+mod host_trash;
 #[path = "share/identity_command.rs"]
 mod identity_command;
 #[path = "share/lan.rs"]
@@ -27,8 +31,12 @@ mod requests;
 mod requests_inbox;
 #[path = "share/requests_legacy.rs"]
 mod requests_legacy;
+#[path = "share/requests_policy.rs"]
+mod requests_policy;
 #[path = "share/requests_support.rs"]
 mod requests_support;
+#[path = "share/rooms.rs"]
+mod rooms;
 #[path = "share/status.rs"]
 mod status;
 
@@ -66,14 +74,22 @@ enum Command {
         visible_alias = "exports"
     )]
     Export(exports::ExportArgs),
-    #[command(about = "Create a Share room and print its invite code")]
-    Room(RoomArgs),
+    #[command(
+        about = "Create, list, join, leave, rename and remove rooms; admit or block members"
+    )]
+    Room(rooms::RoomArgs),
+    #[command(
+        about = "List saved devices and change their settings (connect/open automatically, share back, reset trust)"
+    )]
+    Device(devices::DeviceArgs),
     #[command(about = "Make this device or a room discoverable by name and PIN for a few minutes")]
     Discoverable(discoverable::DiscoverableArgs),
     #[command(about = "Refresh or stop the headless Share worker")]
     Worker(WorkerArgs),
     #[command(about = "Local-network presence of paired devices and automatic internet sharing")]
     Lan(lan::LanArgs),
+    #[command(about = "List and restore the host trash of devices with write access (Windows)")]
+    Trash(host_trash::TrashArgs),
 }
 
 const SERVER_HELP: &str = "Server address: host[:port] or wss://host[:port]/path use TLS; \
@@ -114,20 +130,6 @@ enum ServerCommand {
 }
 
 #[derive(Args)]
-struct RoomArgs {
-    #[command(subcommand)]
-    command: RoomCommand,
-}
-
-#[derive(Subcommand)]
-enum RoomCommand {
-    Create {
-        #[arg(long, default_value = "", help = "Local room display name")]
-        name: String,
-    },
-}
-
-#[derive(Args)]
 struct WorkerArgs {
     #[command(subcommand)]
     command: WorkerCommand,
@@ -150,9 +152,9 @@ pub(super) fn run(args: ShareArgs) -> Result<i32, String> {
         Some(Command::Grants(args)) => grants::run(args)?,
         Some(Command::Exec(args)) => exec_status::run(args)?,
         Some(Command::Export(args)) => exports::run(args)?,
-        Some(Command::Room(args)) => match args.command {
-            RoomCommand::Create { name } => create_room(&name)?,
-        },
+        Some(Command::Room(args)) => rooms::run(args)?,
+        Some(Command::Device(args)) => devices::run(args)?,
+        Some(Command::Trash(args)) => host_trash::run(args)?,
         Some(Command::Discoverable(args)) => discoverable::run(args)?,
         Some(Command::Worker(args)) => worker(args.command)?,
         Some(Command::Lan(args)) => lan::run(args)?,
@@ -243,19 +245,6 @@ fn server(command: ServerCommand) -> Result<(), String> {
             println!("server\tnone{}", refresh_note());
         }
     }
-    Ok(())
-}
-
-fn create_room(name: &str) -> Result<(), String> {
-    let code = crate::share::ShareProfiles::new_room_code()?;
-    let (_profiles, id) = crate::share::ShareProfiles::add_room_from_code_persisted(
-        Some(default_home()),
-        &code,
-        name,
-    )?;
-    println!("room_id\t{id}");
-    println!("room_code\t{code}");
-    println!("worker\t{}", refresh_note().trim_start_matches("; "));
     Ok(())
 }
 

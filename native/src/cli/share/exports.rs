@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 
 #[path = "exports_connections.rs"]
 mod exports_connections;
+#[path = "exports_order.rs"]
+mod exports_order;
 #[path = "exports_policy.rs"]
 mod exports_policy;
 
@@ -21,6 +23,8 @@ enum ExportCommand {
     Connections(exports_connections::ConnectionsArgs),
     #[command(about = "Change write/admission rights of an existing room")]
     Policy(exports_policy::RoomPolicyArgs),
+    #[command(about = "Move one export a place up or down (the order peers see)")]
+    Move(exports_order::MoveArgs),
 }
 
 #[derive(Args)]
@@ -63,6 +67,7 @@ pub(super) fn run(args: ExportArgs) -> Result<(), String> {
         ExportCommand::Set(args) => exports_policy::set(args),
         ExportCommand::Connections(args) => exports_connections::run(args),
         ExportCommand::Policy(args) => exports_policy::room_policy(args),
+        ExportCommand::Move(args) => exports_order::run(args),
     }
 }
 
