@@ -28,6 +28,8 @@ mod restrictions;
 
 #[path = "node_idle.rs"]
 mod idle;
+#[path = "pq_kx.rs"]
+mod pq_kx;
 #[path = "node_wake.rs"]
 mod wake;
 
@@ -57,6 +59,7 @@ pub(crate) struct ShareIrohNode {
     connection_events: ConnectionEventReporter,
     exec_registry: Arc<ExecRegistry>,
     pub(super) handshake_slots: Arc<Semaphore>,
+    auth_penalties: super::auth_penalty::AuthPenalties,
     pub(super) direct_repair_slots: Arc<Semaphore>,
     pub(super) runtime_transition_slot: Arc<Semaphore>,
     pub(super) application_handshakes: HandshakeAdmission,
@@ -141,7 +144,10 @@ impl ShareIrohNode {
         } else {
             RelayMode::Disabled
         };
+        // The ring provider of `presets::Minimal` plus the hybrid
+        // post-quantum group X25519MLKEM768 in front (pq_kx.rs).
         let mut builder = Endpoint::builder(presets::Minimal)
+            .crypto_provider(pq_kx::share_crypto_provider())
             .secret_key(identity.iroh_secret.clone())
             .alpns(vec![
                 ALPN.to_vec(),
@@ -179,6 +185,7 @@ impl ShareIrohNode {
             connection_events: ConnectionEventReporter::default(),
             exec_registry: Arc::new(ExecRegistry::new(ExecRegistryLimits::default())),
             handshake_slots: Arc::new(Semaphore::new(MAX_PENDING_APPLICATION_HANDSHAKES)),
+            auth_penalties: super::auth_penalty::AuthPenalties::default(),
             direct_repair_slots: Arc::new(Semaphore::new(MAX_CONCURRENT_DIRECT_REPAIRS)),
             runtime_transition_slot: Arc::new(Semaphore::new(RUNTIME_TRANSITION_PERMITS as usize)),
             application_handshakes: HandshakeAdmission::new(MAX_PENDING_APPLICATION_HANDSHAKES),
@@ -195,6 +202,12 @@ impl ShareIrohNode {
         });
         node.spawn_accept_loop();
         Ok(node)
+    }
+
+    /// Failed-authentication penalties per remote EndpointId (OpenSSH
+    /// `PerSourcePenalties` defaults, `auth_penalty.rs`).
+    pub(super) fn auth_penalties(&self) -> &super::auth_penalty::AuthPenalties {
+        &self.auth_penalties
     }
 
     pub(crate) fn relay_url(&self) -> String {
