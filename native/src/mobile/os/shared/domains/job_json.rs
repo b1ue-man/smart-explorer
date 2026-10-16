@@ -25,7 +25,8 @@ pub(super) fn job_json(
     result: Option<&JobResult>,
     running_task: Option<&str>,
 ) -> Value {
-    json!({
+    // Two halves: one `json!` with every key exceeds the macro recursion limit.
+    let mut value = json!({
         "id": job.id,
         "name": job.name,
         "source": job.source,
@@ -49,6 +50,8 @@ pub(super) fn job_json(
         "rtPollSecs": job.rt_poll_secs,
         "verifyIntervalSecs": job.verify_interval_secs,
         "verifyTargetSecs": job.verify_target_secs,
+    });
+    let rest = json!({
         "includeHidden": job.include_hidden,
         "ignore": job.ignore,
         "enabled": job.enabled,
@@ -82,7 +85,11 @@ pub(super) fn job_json(
         "lastResult": result.map(result_json),
         "schedule": schedule_text(job),
         "runningTask": running_task,
-    })
+    });
+    if let (Value::Object(map), Value::Object(rest)) = (&mut value, rest) {
+        map.extend(rest);
+    }
+    value
 }
 
 pub(super) fn result_json(result: &JobResult) -> Value {
