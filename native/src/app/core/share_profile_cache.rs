@@ -19,7 +19,7 @@ pub(super) fn reload(app: &mut App) -> Result<(), String> {
         .any(|entry| entry.is_pending(crate::share::core_now_secs()))
     {
         app.show_share = true;
-        app.share_tab = 0;
+        app.share_tab = super::pages_ui::TAB_REQUESTS;
     }
     Ok(())
 }

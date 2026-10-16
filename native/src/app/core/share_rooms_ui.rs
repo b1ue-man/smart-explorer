@@ -11,13 +11,17 @@ impl App {
         }
     }
 
-    pub(super) fn ui_share_rooms(&mut self, ui: &mut egui::Ui) {
-        egui::CollapsingHeader::new("Räume entdecken")
+    /// Page „Raum erstellen oder beitreten“: discovery by PIN, a new room
+    /// with its code, joining by code.
+    pub(super) fn ui_share_room_forms(&mut self, ui: &mut egui::Ui) {
+        egui::CollapsingHeader::new("Räume entdecken und per PIN beitreten")
             .id_salt("share_discover_rooms_v2")
+            .default_open(true)
             .show(ui, |ui| self.ui_share_discovery_rooms(ui));
         ui.separator();
         egui::CollapsingHeader::new("Raum erstellen")
             .id_salt("share_create_room_v2")
+            .default_open(true)
             .show(ui, |ui| {
                 ui.label(
                     RichText::new("RAUM ERSTELLEN")
@@ -59,6 +63,7 @@ impl App {
         ui.separator();
         egui::CollapsingHeader::new("Raum per Code beitreten")
             .id_salt("share_join_room_v2")
+            .default_open(true)
             .show(ui, |ui| {
                 ui.label(
                     RichText::new("RAUM BEITRETEN")
@@ -104,145 +109,5 @@ impl App {
                     }
                 });
             });
-        ui.separator();
-        ui.label(
-            RichText::new("GESPEICHERTE RAEUME")
-                .small()
-                .color(theme::muted(ui)),
-        );
-        let mut remove_room: Option<String> = None;
-        let mut open_target: Option<crate::share::PeerOpenTarget> = None;
-        let mut pending_diag: Option<String> = None;
-        let mut leave_room: Option<String> = None;
-        let mut changed = false;
-        let previous_profiles = self.share_profiles.clone();
-        for room in &mut self.share_profiles.rooms {
-            ui.horizontal_wrapped(|ui| {
-                ui.add(
-                    egui::Label::new(format!(
-                        "{} [{}] Mitglieder: {}",
-                        room.name,
-                        room.status.label(),
-                        room.members.len()
-                    ))
-                    .wrap(),
-                );
-                if ui.button("Oeffnen").clicked() {
-                    room.status = crate::share::ShareStatus::Available;
-                }
-                if ui.button("Beitreten").clicked() {
-                    room.auto_join = true;
-                    changed = true;
-                }
-                if ui.button("Verlassen").clicked() {
-                    leave_room = Some(room.room_id.clone());
-                    room.auto_join = false;
-                    room.status = crate::share::ShareStatus::Offline;
-                    changed = true;
-                }
-                if ui.checkbox(&mut room.auto_join, "Auto").changed() {
-                    changed = true;
-                }
-                if ui.button("Freigaben").clicked() {
-                    self.share_export_scope = 2;
-                    self.share_export_target_id = room.id.clone();
-                    self.share_tab = 2;
-                }
-                if ui.button("Code kopieren").clicked() {
-                    match crate::share::ShareProfiles::room_code_checked(room) {
-                        Ok(Some(code)) => ui.ctx().copy_text(code),
-                        Ok(None) => self.error_msg = Some("Raum-Secret fehlt".into()),
-                        Err(error) => {
-                            self.error_msg = Some(format!("Raum-Code lesen: {error}"));
-                        }
-                    }
-                }
-                if ui.button("Umbenennen").clicked() {
-                    room.name = self.share_room_name_input.trim().to_string();
-                    changed = true;
-                }
-                if ui.button("Entfernen").clicked() {
-                    remove_room = Some(room.id.clone());
-                }
-            });
-            ui.horizontal_wrapped(|ui| {
-                changed |= ui
-                    .checkbox(
-                        &mut room.policy.members_may_write,
-                        "Mitglieder duerfen schreiben",
-                    )
-                    .changed();
-                changed |= ui
-                    .checkbox(
-                        &mut room.policy.confirm_new_members,
-                        "Neue Mitglieder bestaetigen",
-                    )
-                    .changed();
-                ui.label("Ein Raum-Code gibt allein keine Ordner frei.");
-            });
-            for member in &mut room.members {
-                ui.horizontal_wrapped(|ui| {
-                    ui.add(
-                        egui::Label::new(format!(
-                            "  {} [{}]",
-                            member.device_name,
-                            member.status.label()
-                        ))
-                        .wrap(),
-                    );
-                    if ui.button("Oeffnen").clicked() {
-                        open_target = Some(crate::share::PeerOpenTarget::RoomDevice {
-                            room_id: room.id.clone(),
-                            device_id: member.device_id.clone(),
-                        });
-                    }
-                    if ui.button("Diagnose").clicked() {
-                        let presence = member
-                            .presence
-                            .as_ref()
-                            .map(|p| {
-                                format!(
-                                    "candidates={:?}, expires_at={}",
-                                    p.candidates, p.expires_at
-                                )
-                            })
-                            .unwrap_or_else(|| "keine Presence".to_string());
-                        pending_diag = Some(format!(
-                            "Raum {} / {}: fp={}, status={}, {}\n",
-                            room.name,
-                            member.device_name,
-                            member.fingerprint,
-                            member.status.label(),
-                            presence
-                        ));
-                    }
-                    if ui.button("Fingerprint").clicked() {
-                        ui.ctx().copy_text(member.fingerprint.clone());
-                    }
-                    if ui.checkbox(&mut member.blocked, "Blockieren").changed() {
-                        changed = true;
-                    }
-                    if ui.button("Trust zuruecksetzen").clicked() {
-                        member.presence = None;
-                        member.status = crate::share::ShareStatus::Waiting;
-                        changed = true;
-                    }
-                });
-            }
-        }
-        if let Some(line) = pending_diag {
-            self.append_share_diag(line);
-            self.share_tab = 3;
-        }
-        let persisted = !changed || self.commit_share_profiles(previous_profiles);
-        if let Some(room_id) = leave_room.filter(|_| persisted) {
-            let _ = self.share_cmd(crate::share::ShareCmd::LeaveRoom { room_id });
-        }
-        if let Some(id) = remove_room.filter(|_| persisted) {
-            self.remove_room_completely(&id);
-        }
-        if let Some(target) = open_target {
-            self.open_share_target(target);
-        }
     }
 }

@@ -40,7 +40,9 @@ enum LifecycleAction {
     SelectExports,
 }
 
-pub(super) fn ui_lifecycle(app: &mut App, ui: &mut egui::Ui) {
+/// Page „Anfragen“: incoming requests to decide, their history, outgoing
+/// requests and the legacy ones.
+pub(super) fn ui_requests(app: &mut App, ui: &mut egui::Ui) {
     let now = crate::share::core_now_secs();
     let (incoming, outgoing) = request_views(&app.share_profiles, now);
     let pending_incoming = incoming
@@ -51,7 +53,6 @@ pub(super) fn ui_lifecycle(app: &mut App, ui: &mut egui::Ui) {
         .iter()
         .filter(|request| !request.can_decide)
         .collect::<Vec<_>>();
-    let authorized = authorized_device_views(&app.share_profiles);
     let mut action = None;
 
     section_heading(ui, "EINGEHENDE ANFRAGEN");
@@ -86,29 +87,32 @@ pub(super) fn ui_lifecycle(app: &mut App, ui: &mut egui::Ui) {
         }
     }
 
-    ui.separator();
-    section_heading(ui, "AUTORISIERTE GERAETE");
-    if authorized.is_empty() {
-        ui.label("Keine Geraete haben eine gespeicherte Autorisierung.");
-    } else {
-        for device in &authorized {
-            let can_allow_again = app
-                .share_profiles
-                .grant_for(&device.device_id)
-                .is_some_and(|grant| grant.state != crate::share::DirectGrantState::Accepted);
-            authorized_card(ui, device, can_allow_again, &mut action);
-        }
-    }
-
-    super::removed_devices_ui::ui(app, ui);
-
-    ui.separator();
-    crate::app::share_exec_ui::ui_exec_grants(app, ui);
     super::legacy_lifecycle_ui::ui(app, ui);
 
     if let Some(action) = action {
         actions::perform_action(app, action);
     }
+}
+
+/// The authorization card of one device (state, revoke, allow again,
+/// remove) on its device page; `false` when the device has none.
+pub(super) fn ui_authorized_device(app: &mut App, ui: &mut egui::Ui, device_id: &str) -> bool {
+    let Some(device) = authorized_device_views(&app.share_profiles)
+        .into_iter()
+        .find(|device| device.device_id == device_id)
+    else {
+        return false;
+    };
+    let can_allow_again = app
+        .share_profiles
+        .grant_for(&device.device_id)
+        .is_some_and(|grant| grant.state != crate::share::DirectGrantState::Accepted);
+    let mut action = None;
+    authorized_card(ui, &device, can_allow_again, &mut action);
+    if let Some(action) = action {
+        actions::perform_action(app, action);
+    }
+    true
 }
 
 pub(super) fn queue_contact(app: &mut App, contact_id: &str) -> bool {

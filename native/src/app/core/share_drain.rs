@@ -172,7 +172,7 @@ impl App {
             .any(|entry| entry.is_pending(crate::share::core_now_secs()))
         {
             self.show_share = true;
-            self.share_tab = 0;
+            self.share_tab = pages_ui::TAB_REQUESTS;
         }
         let events: Vec<crate::share::ShareEvent> = snapshot.events;
         let mut auto_open_target: Option<crate::share::PeerOpenTarget> = None;
@@ -211,7 +211,7 @@ impl App {
                             received_at,
                         } => {
                             self.show_share = true;
-                            self.share_tab = 0;
+                            self.share_tab = pages_ui::TAB_REQUESTS;
                             self.share_status = format!(
                                 "Getrackte Anfrage {} von {} empfangen",
                                 request.request_id, request.requester.device_name
@@ -233,7 +233,7 @@ impl App {
                             received_at,
                         } => {
                             self.show_share = true;
-                            self.share_tab = 0;
+                            self.share_tab = pages_ui::TAB_REQUESTS;
                             self.append_share_diag(format!(
                                 "Tracked decision received: id={}, decision={}, revision={}, at={received_at}",
                                 decision.request_id,
@@ -299,7 +299,7 @@ impl App {
                     presence,
                 } => {
                     self.show_share = true;
-                    self.share_tab = 0;
+                    self.share_tab = pages_ui::TAB_REQUESTS;
                     self.share_status = format!(
                         "Anfrage von {} fuer deinen Direkt-Code",
                         presence.device_name
