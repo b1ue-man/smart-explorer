@@ -112,7 +112,11 @@ internal class ConnectionsViewModel : ViewModel() {
             try {
                 val saved = ConnApi.save(input)
                 if (form === state) form = null
-                Snackbars.show("Gespeichert: ${saved.label.ifBlank { saved.host }}")
+                val name = saved.label.ifBlank { saved.host }
+                Snackbars.show(
+                    if (saved.warnings.isEmpty()) "Gespeichert: $name"
+                    else "Gespeichert: $name · ${saved.warnings.joinToString(" · ")}"
+                )
                 load()
             } catch (e: CoreException) {
                 askHostKey(e) { saveForm(state) }

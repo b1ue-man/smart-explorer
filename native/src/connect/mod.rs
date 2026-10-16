@@ -13,6 +13,8 @@
 mod cleanup;
 #[path = "os/shared/connection_edit.rs"]
 mod connection_edit;
+#[path = "os/shared/connection_edit_refs.rs"]
+mod connection_edit_refs;
 #[path = "os/shared/connector.rs"]
 mod connector;
 #[path = "core/endpoint.rs"]

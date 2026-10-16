@@ -30,6 +30,8 @@ data class Connection(
     val useAgent: Boolean = false,
     val https: Boolean = false,
     val location: String = "",
+    /** Only in the answer of `conn.save`: sync setups and drives an edit left on the old address. */
+    val warnings: List<String> = emptyList(),
 )
 
 /**

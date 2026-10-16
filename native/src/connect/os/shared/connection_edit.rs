@@ -7,7 +7,8 @@
 use crate::creds::{AuthKind, SavedConnection};
 
 /// What `save_edited_connection` did; `warnings` lists cleanup steps that
-/// failed after the changed entry was saved (shown, never fatal).
+/// failed after the changed entry was saved and, after a move, the sync setups
+/// and drives still on the old address (shown, never fatal).
 pub struct ConnectionEdit {
     pub saved: SavedConnection,
     /// The previous account key when the entry moved.
@@ -77,6 +78,11 @@ pub fn save_edited_connection(
     if let Some(old) = &plan.moved_from {
         if let Err(error) = crate::creds::remove_connection(old) {
             warnings.push(format!("Alte Verbindung nicht entfernt: {error}"));
+        }
+        if let Some(previous) = previous {
+            warnings.extend(super::connection_edit_refs::references_left_behind(
+                previous, &saved,
+            ));
         }
     }
     Ok(ConnectionEdit {
