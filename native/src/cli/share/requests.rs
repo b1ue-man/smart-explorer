@@ -39,6 +39,10 @@ enum RequestCommand {
     Retry(RetrySelectionArgs),
     #[command(about = "Delete a request locally, stop retries, and retain a replay tombstone")]
     Delete(DeleteSelectionArgs),
+    #[command(
+        about = "Show or set whether requests with this device's direct code are accepted automatically (ask | auto-accept)"
+    )]
+    Policy(super::requests_policy::PolicyArgs),
 }
 
 #[derive(Args)]
@@ -134,6 +138,7 @@ pub(super) fn run(args: RequestArgs) -> Result<(), String> {
         Some(RequestCommand::Delete(command)) => {
             delete_history(command.selector.as_deref(), args.json)
         }
+        Some(RequestCommand::Policy(command)) => super::requests_policy::run(command, args.json),
     }
 }
 
