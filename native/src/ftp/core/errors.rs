@@ -1,6 +1,6 @@
 //! FTP reply classes without pretending a 550 is proof of absence.
 use std::io;
-use suppaftp::FtpError;
+use suppaftp::{FtpError, RustlsFtpStream};
 
 pub(super) fn map(error: FtpError) -> io::Error {
     if let FtpError::ConnectionError(error) = error {
@@ -34,4 +34,13 @@ pub(super) fn command_path(path: &str) -> io::Result<()> {
         ));
     }
     Ok(())
+}
+
+/// The working directory from PWD, checked like every other command path.
+/// The reply text is the server's; it goes back in the restoring CWD, so a
+/// CR, LF or NUL in it fails here, before the folder is changed at all.
+pub(super) fn working_dir(stream: &mut RustlsFtpStream) -> io::Result<String> {
+    let directory = stream.pwd().map_err(map)?;
+    command_path(&directory)?;
+    Ok(directory)
 }

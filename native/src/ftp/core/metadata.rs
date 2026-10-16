@@ -1,7 +1,7 @@
 //! FEAT-negotiated MLSx, single-entry probes and a dot-complete LIST
 //! fallback. A command refusal is not a missing object.
 use super::core_impl::{basename, dir_meta, parent_dir, parse_list_line_unchecked};
-use super::errors::{command_path, map, reply_code};
+use super::errors::{command_path, map, reply_code, working_dir};
 use super::io_adapters::FtpConnection;
 use crate::vfs::{MtimePrecision, OmissionReason, VfsListing, VfsMeta, VfsOmission};
 use std::io;
@@ -158,7 +158,7 @@ fn list_mode(
         }
         // CWD prevents LIST option/glob interpretation of the directory
         // itself. Restore before releasing this control connection.
-        let original = stream.pwd().map_err(map)?;
+        let original = working_dir(stream)?;
         stream.cwd(folder).map_err(map)?;
         let listed = match stream.list(Some("-a")) {
             Err(error)

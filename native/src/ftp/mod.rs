@@ -23,6 +23,12 @@ mod writer;
 #[path = "core/delete_speed_task_tests.rs"]
 mod delete_speed_task_tests;
 #[cfg(test)]
+#[path = "core/luecken_task_ftp_fixture.rs"]
+mod luecken_task_ftp_fixture;
+#[cfg(test)]
+#[path = "core/luecken_task_ftp_tests.rs"]
+mod luecken_task_ftp_tests;
+#[cfg(test)]
 #[path = "core/transfer_engine_task_tests.rs"]
 mod transfer_engine_task_tests;
 

@@ -7,7 +7,7 @@ use super::data_finish::UploadData;
 use super::io_adapters::FtpConnection;
 use std::io::{self, Read, Write};
 use std::sync::Arc;
-use suppaftp::{FtpError, RustlsFtpStream};
+use suppaftp::{FtpError, RustlsFtpStream, Status};
 
 fn io_err<E: std::fmt::Display>(error: E) -> io::Error {
     io::Error::other(error.to_string())
@@ -104,16 +104,35 @@ impl FtpReader {
         let Some(mut control) = self.control.take() else {
             return Ok(());
         };
-        let result = match self.data.take() {
-            Some(data) if completed => control
-                .finalize_retr_stream(data)
-                .map_err(super::errors::map),
-            Some(data) => control.abort(data).map_err(super::errors::map),
-            None => Err(io_err("FTP-Datenstrom fehlt")),
+        let (result, in_step) = match self.data.take() {
+            Some(data) if completed => {
+                let result = control
+                    .finalize_retr_stream(data)
+                    .map_err(super::errors::map);
+                let in_step = result.is_ok();
+                (result, in_step)
+            }
+            Some(data) => abort(&mut control, data),
+            None => (Err(io_err("FTP-Datenstrom fehlt")), false),
         };
-        self.owner.return_stream(control, result.is_ok());
+        self.owner.return_stream(control, in_step);
         result
     }
+}
+
+/// ABOR of an unfinished RETR. suppaftp 10 reads one closing reply, and a
+/// second one only after 426 (6.3 always read two). When the transfer had
+/// already ended, the server's own answer to ABOR (225, or a second 226) can
+/// still be queued and would pass for the reply to the next command. PWD
+/// answers 257, which no ABOR reply is: only then is the connection handed
+/// back in step; otherwise it is reconnected before its next use.
+fn abort(control: &mut RustlsFtpStream, data: Box<dyn Read + Send>) -> (io::Result<()>, bool) {
+    let result = control.abort(data).map_err(super::errors::map);
+    let in_step = result.is_ok()
+        && control
+            .custom_command("PWD", &[Status::PathCreated])
+            .is_ok();
+    (result, in_step)
 }
 
 impl Read for FtpReader {

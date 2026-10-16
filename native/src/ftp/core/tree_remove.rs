@@ -13,7 +13,7 @@
 //! deleted as the link. A server that reports a link with its target's type
 //! is entered here just as by the generic walk, whose stat sees that type.
 use super::core_impl::{parse_list_line_unchecked, FtpBackend};
-use super::errors::{command_path, map, reply_code};
+use super::errors::{command_path, map, reply_code, working_dir};
 use super::io_adapters::FtpConnection;
 use super::metadata::parse_mlsx;
 use crate::vfs::{
@@ -116,7 +116,7 @@ fn list_types(connection: &FtpConnection, folder: &str) -> io::Result<Vec<VfsMet
         }
         // CWD keeps LIST from reading the folder name as options or a glob;
         // the previous folder is restored before the connection is shared.
-        let original = stream.pwd().map_err(map)?;
+        let original = working_dir(stream)?;
         stream.cwd(folder).map_err(map)?;
         let listed = match stream.list(Some("-a")) {
             Err(error) if matches!(reply_code(&error), Some(500 | 501 | 502 | 504 | 550)) => {
