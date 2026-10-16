@@ -13,7 +13,8 @@ import org.junit.runner.RunWith
 /**
  * G4 remote flows against the servers on the runner (10.0.2.2): SFTP files, uploads with the
  * protected trash omission, downloads, remote edits with conflict and forced overwrite over the
- * Remote-Agent, atomic replace on plain SFTP (posix-rename), host-key reset, FTP basics (upload,
+ * Remote-Agent, atomic replace on plain SFTP (posix-rename), host-key confirmation and reset (an
+ * unknown SSH host key is reported and pinned only after its fingerprint was compared), FTP basics (upload,
  * download, replace), SMB (Samba: upload, download, atomic replace, copy, delete), WebDAV validation (live WebDAV needs a publicly trusted HTTPS certificate,
  * explicit exception) and the cleanup cascade of `conn.delete`.
  */
@@ -21,6 +22,8 @@ import org.junit.runner.RunWith
 class RemoteTaskTest {
     @Test
     fun sftpUploadDownloadDeleteAndMaterialize() = coreTest {
+        // The core never stores an unknown host key silently: confirm the container's key first.
+        Servers.confirmHostKey(Servers.sftpInput())
         assertTrue(Api.obj("conn.test", args("input" to Servers.sftpInput())).text("message").isNotBlank())
         Api.failure("conn.test", args("input" to Servers.sftpInput(password = "falsches-passwort")), "auth")
         val connection = Servers.sftp()
@@ -61,13 +64,17 @@ class RemoteTaskTest {
         Api.runTask("fs.delete", args("locations" to listOf(doomed), "permanent" to true))
         assertFalse("behalten (2).txt" in Api.names(paket))
 
+        // After the reset the next attempt reports the key again and stores nothing until it is confirmed.
         Api.call("conn.forgetHostKey", args("id" to connection.text("id")))
+        val reported = Api.failure("conn.test", args("input" to Servers.sftpInput()), "host_key_unknown")
+        Servers.trustReportedHostKey(Servers.sftpInput(), reported)
         assertTrue(Api.obj("conn.test", args("input" to Servers.sftpInput())).text("message").isNotBlank())
     }
 
     /** Remote-Agent (desktop option): it replaces files, so a remote edit can conflict and be forced. */
     @Test
     fun remoteEditsConflictForceCopyAndDiscard() = coreTest {
+        Servers.confirmHostKey(Servers.agentSftpInput())
         assertTrue(Api.obj("conn.test", args("input" to Servers.agentSftpInput())).text("message").isNotBlank())
         val connection = Servers.agentSftp()
         assertTrue("Remote-Agent nicht gespeichert: $connection", connection.bool("useAgent"))

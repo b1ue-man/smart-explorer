@@ -4,6 +4,9 @@
 //! them in the environment:
 //!
 //! - `SE_TASK_SFTP`: `host:port:user:password:root` of an SFTP server.
+//! - `SE_TASK_SFTP_FINGERPRINTS`: the SHA256 host-key fingerprints of that
+//!   server from `ssh-keyscan`, separated by spaces and in the order the SSH
+//!   client prefers the key types.
 //! - `SE_TASK_FTP_URL`: `ftp://user:password@host:port/root`.
 #![allow(dead_code)]
 
@@ -15,7 +18,7 @@ use smart_explorer::vfs::{Backend, BackendHandle};
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub fn env(name: &str) -> String {
@@ -30,6 +33,33 @@ pub fn unique(name: &str) -> String {
     format!("{name}-{nanos}")
 }
 
+/// Confirms the host key of the suite's SFTP container once per process.
+///
+/// Smart Explorer never stores an unknown SSH host key silently, so the
+/// freshly started container's key is confirmed before the first connection.
+/// `trust_host_key` pins a fingerprint only when the server presents exactly
+/// that key, so a fingerprint of another key type is refused without storing
+/// anything and the next one is tried. A pin left by an earlier container on
+/// the same port is replaced: the fingerprints are those of the container the
+/// suite started just now.
+fn confirm_sftp_host_key(host: &str, port: u16) {
+    static CONFIRMED: OnceLock<()> = OnceLock::new();
+    CONFIRMED.get_or_init(|| {
+        let fingerprints = env("SE_TASK_SFTP_FINGERPRINTS");
+        let mut refused = Vec::new();
+        for fingerprint in fingerprints.split_whitespace() {
+            match smart_explorer::sftp::trust_host_key(host, port, fingerprint, true) {
+                Ok(_) => return,
+                Err(error) => refused.push(format!("{fingerprint}: {error}")),
+            }
+        }
+        panic!(
+            "no host key of {host}:{port} could be confirmed: {}",
+            refused.join("; ")
+        );
+    });
+}
+
 /// A connected SFTP backend and its writable root.
 pub fn sftp() -> (BackendHandle, String) {
     let spec = env("SE_TASK_SFTP");
@@ -39,6 +69,7 @@ pub fn sftp() -> (BackendHandle, String) {
         5,
         "SE_TASK_SFTP is host:port:user:password:root"
     );
+    confirm_sftp_host_key(parts[0], parts[1].parse().expect("SFTP port"));
     let config = smart_explorer::sftp::SftpConfig {
         host: parts[0].to_string(),
         port: parts[1].parse().expect("SFTP port"),
