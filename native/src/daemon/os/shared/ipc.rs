@@ -50,8 +50,11 @@ pub(super) fn handle_client(
             Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg }),
         },
         IpcRequest::MutateExecGrant {
-            target, enabled, ..
-        } => match host.mutate_exec_grant(target, enabled) {
+            target,
+            enabled,
+            settings,
+            ..
+        } => match host.mutate_exec_grant(target, enabled, settings) {
             Ok(result) => write_response(&mut stream, &IpcResponse::ExecGrantMutation { result }),
             Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg }),
         },

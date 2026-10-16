@@ -418,3 +418,6 @@ fn room_with_member(exec: ExecGrant) -> RoomProfile {
         policy: crate::share::RoomPolicy::new_room(),
     }
 }
+
+#[path = "exec_profile_compat_tests.rs"]
+mod exec_compat;

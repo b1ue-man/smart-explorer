@@ -263,6 +263,10 @@ pub(super) enum IpcRequest {
         token: String,
         target: crate::share::ExecGrantTarget,
         enabled: bool,
+        /// Run-as account and program list; absent keeps the grant's own
+        /// (clients that predate run-as send none).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        settings: Option<crate::share::ExecGrantSettings>,
     },
     DrainShareEvents {
         token: String,

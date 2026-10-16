@@ -89,6 +89,7 @@ impl Session {
         let start = SupervisorStart {
             request,
             environment,
+            account: None,
         };
         send_command(&mut commands, &SupervisorCommand::Start(start)).expect("send the start");
         Self {

@@ -163,6 +163,76 @@ fn review_task_online_extension_preserves_policy_after_offline_barrier() {
         .is_ok());
 }
 
+#[test]
+fn luecken_task_changing_the_program_list_revokes_that_devices_running_commands() {
+    let (auth, target) = direct_state();
+    let registry = ExecRegistry::new(ExecRegistryLimits::default());
+    let enabled = mutate(&auth, &registry, target.clone(), true, 10).unwrap();
+    let ExecAdmission::Prepared(reservation) = registry
+        .prepare(
+            enabled.principal.clone(),
+            authorization(&enabled, "before"),
+            &start(),
+            11,
+        )
+        .unwrap()
+    else {
+        panic!("launch was not reserved")
+    };
+    // The persisted change of settings arrives at the worker as the next
+    // revision of the same grant.
+    let mut narrowed = enabled.policy.clone();
+    narrowed.programs = vec!["uptime".into()];
+    narrowed.policy_revision = enabled.policy.policy_revision + 1;
+    let applied = apply_exact(
+        &auth,
+        &registry,
+        target,
+        enabled.principal.clone(),
+        narrowed.clone(),
+    )
+    .unwrap();
+    assert_eq!(applied.policy, narrowed);
+    assert_eq!(
+        reservation.cancellation.reason(),
+        Some(ExecCancelReason::Revoked)
+    );
+    assert_eq!(
+        auth.lock().unwrap().direct_grants[0].exec.programs,
+        vec!["uptime".to_string()]
+    );
+}
+
+#[test]
+fn luecken_task_seeding_an_unchanged_grant_ends_no_running_command() {
+    let (auth, target) = direct_state();
+    auth.lock().unwrap().direct_grants[0].exec.programs = vec!["uptime".into()];
+    let registry = ExecRegistry::new(ExecRegistryLimits::default());
+    let enabled = mutate(&auth, &registry, target, true, 10).unwrap();
+    let ExecAdmission::Prepared(reservation) = registry
+        .prepare(
+            enabled.principal.clone(),
+            authorization(&enabled, "running"),
+            &start(),
+            11,
+        )
+        .unwrap()
+    else {
+        panic!("launch was not reserved")
+    };
+    // What a restarting worker (or a profile reload) does with a grant whose
+    // revision and switch did not change: nothing is revoked and the revision
+    // stays what the profile holds.
+    seed_registry(&auth, &registry).unwrap();
+    assert_eq!(reservation.cancellation.reason(), None);
+    let state = auth.lock().unwrap();
+    assert_eq!(
+        state.direct_grants[0].exec.policy_revision,
+        enabled.policy.policy_revision
+    );
+    assert!(state.direct_grants[0].exec.enabled);
+}
+
 fn direct_state() -> (Arc<Mutex<ShareAuthState>>, ExecGrantTarget) {
     let (auth, peer) = base_state();
     let target = ExecGrantTarget::Direct {

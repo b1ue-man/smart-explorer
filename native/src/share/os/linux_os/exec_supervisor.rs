@@ -8,6 +8,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
+#[path = "exec_supervisor_account.rs"]
+mod account;
+
 use super::exec_pty;
 use crate::share::exec_supervisor_protocol::{
     recv_command, send_event, SupervisorCommand, SupervisorEvent, SupervisorExit, SupervisorStart,
@@ -280,6 +283,9 @@ fn spawn(start: &SupervisorStart, policy: &SpawnPolicy<'_>) -> io::Result<(Root,
     let master = match terminal {
         Some(request) => {
             let pty = exec_pty::open_pair(request.size)?;
+            if let Some(account) = &start.account {
+                account::hand_terminal(&pty.slave, account)?;
+            }
             exec_pty::attach_slave(&mut command, pty.slave, request)?;
             Some(pty.master)
         }
@@ -291,13 +297,14 @@ fn spawn(start: &SupervisorStart, policy: &SpawnPolicy<'_>) -> io::Result<(Root,
             None
         }
     };
-    if let Some(cwd) = start.request.cwd.as_deref().or_else(|| {
+    let cwd = start.request.cwd.as_deref().or_else(|| {
         start
             .environment
             .get("HOME")
             .filter(|home| !home.is_empty())
             .map(String::as_str)
-    }) {
+    });
+    if let Some(cwd) = cwd.filter(|_| start.account.is_none()) {
         command.current_dir(cwd);
     }
     let intermediate = match policy.intermediate {
@@ -315,6 +322,22 @@ fn spawn(start: &SupervisorStart, policy: &SpawnPolicy<'_>) -> io::Result<(Root,
             None
         }
     };
+    // Registered last: the switch runs after the session/terminal setup and
+    // enters the working directory with the account's own rights.
+    if let Some(account) = &start.account {
+        if intermediate.is_some() {
+            return Err(invalid("a run-as account needs the Linux systemd host"));
+        }
+        // As with sshd, an account whose home is missing starts in `/`; a
+        // working directory the device asked for has to exist.
+        let home_fallback = start.request.cwd.is_none();
+        account::switch_to(
+            &mut command,
+            account,
+            cwd.unwrap_or(account.home.as_str()),
+            home_fallback,
+        )?;
+    }
     let mut root = Root {
         child: command.spawn()?,
         intermediate,

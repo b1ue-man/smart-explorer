@@ -50,7 +50,7 @@ pub use self::discovery_signal_types::{
 };
 pub(crate) use self::exec_client::{ExecClientEvent, ExecClientInput};
 pub use self::exec_grant_runtime::ExecGrantMutation;
-pub use self::exec_policy::ExecGrant;
+pub use self::exec_policy::{ExecGrant, ExecGrantSettings, ExecRunAs};
 pub(crate) use self::exec_session::{ShareExecInput, ShareExecSession};
 pub use self::exec_targets::{
     exec_target_views, resolve_exec_target, ExecTargetRelation, ExecTargetView,
@@ -111,6 +111,17 @@ pub fn core_now_secs() -> i64 {
 
 pub(crate) fn exec_provider_status() -> ExecProviderStatus {
     exec_platform::provider_status()
+}
+
+/// The last `lines` entries of this host's Exec audit log, oldest first.
+pub(crate) fn exec_audit_tail(lines: usize) -> std::io::Result<Vec<String>> {
+    exec_audit::tail(lines)
+}
+
+/// Whether this host can run a granted device's commands as another local
+/// account than the worker's own (Linux with a root worker).
+pub(crate) fn exec_run_as_supported() -> bool {
+    exec_platform::run_as_supported()
 }
 
 /// Runs the exact hidden supervisor invocation before CLI or GUI parsing.

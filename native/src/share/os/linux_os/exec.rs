@@ -1,3 +1,7 @@
+#[path = "exec_account.rs"]
+mod exec_account;
+#[path = "exec_program_search.rs"]
+mod exec_program_search;
 #[path = "exec_pty.rs"]
 mod exec_pty;
 #[cfg(all(test, target_os = "linux"))]
@@ -294,6 +298,29 @@ pub(crate) fn provider_status() -> ExecProviderStatus {
 /// unit, which has no `PrivateDevices`, so `/dev/ptmx` is the same there.
 pub(crate) fn terminal_supported() -> bool {
     exec_pty::terminal_supported()
+}
+
+/// Only a worker running as root may start a job as another account.
+pub(crate) fn run_as_supported() -> bool {
+    let euid = unsafe { libc::geteuid() };
+    euid == 0
+}
+
+/// Lookup path of a grant with a program list: fixed, never the caller's.
+pub(crate) fn program_search() -> crate::share::exec_policy::program_path::ProgramSearch {
+    exec_program_search::fixed()
+}
+
+pub(crate) fn resolve_account(
+    name: &str,
+) -> io::Result<crate::share::exec_supervisor_protocol::RunAsAccount> {
+    if !run_as_supported() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "only a Smart Explorer worker running as root can run commands as another account",
+        ));
+    }
+    exec_account::resolve(name)
 }
 
 pub(crate) fn run_supervisor_if_requested(arguments: &[OsString]) -> Option<io::Result<()>> {

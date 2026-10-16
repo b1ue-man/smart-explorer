@@ -23,6 +23,7 @@ use std::ffi::{CStr, OsString};
 use std::io;
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, OnceLock};
 use std::time::{Duration, Instant};
@@ -311,6 +312,33 @@ pub(crate) fn provider_status() -> ExecProviderStatus {
 /// `/system/bin/sh` below the same subreaper, with `argv[0]` `-sh`.
 pub(crate) fn terminal_supported() -> bool {
     exec_pty::terminal_supported()
+}
+
+/// Lookup path of a grant with a program list: the system directories of
+/// Android, fixed, never the caller's `PATH`.
+pub(crate) fn program_search() -> crate::share::exec_policy::program_path::ProgramSearch {
+    crate::share::exec_policy::program_path::ProgramSearch {
+        directories: ["/system/bin", "/system/xbin", "/vendor/bin"]
+            .into_iter()
+            .map(PathBuf::from)
+            .collect(),
+        suffixes: &[],
+    }
+}
+
+/// Every Android app runs under its own UID; the app cannot start a process
+/// as another account.
+pub(crate) fn run_as_supported() -> bool {
+    false
+}
+
+pub(crate) fn resolve_account(
+    _name: &str,
+) -> io::Result<crate::share::exec_supervisor_protocol::RunAsAccount> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "Android hosts run commands only as the app",
+    ))
 }
 
 /// Android never runs as the hidden supervisor process: the supervisor is a

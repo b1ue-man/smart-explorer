@@ -87,7 +87,7 @@ pub(super) fn set_exec(args: &Value) -> Result<Value, ApiError> {
             ));
         }
     }
-    let result = crate::daemon::mutate_exec_grant(view.target, enabled)
+    let result = crate::daemon::mutate_exec_grant(view.target, enabled, None)
         .map_err(|error| ApiError::internal(format!("Befehlsfreigabe nicht geändert: {error}")))?;
     let answer = grant_answer(
         result.persisted,

@@ -1,5 +1,7 @@
 //! Authenticated Direct/Room Share over QUIC; untrusted rendezvous and relay.
 
+#[path = "core/auth_penalty.rs"]
+mod auth_penalty;
 #[path = "core/authorization_policy.rs"]
 mod authorization_policy;
 #[path = "core/backend.rs"]
@@ -125,6 +127,8 @@ mod discovery_wire;
 mod endpoint_routes;
 #[path = "core/exec.rs"]
 mod exec;
+#[path = "os/shared/exec_audit.rs"]
+mod exec_audit;
 #[path = "core/exec_auth.rs"]
 mod exec_auth;
 #[path = "core/exec_client.rs"]

@@ -1,16 +1,18 @@
 use std::io;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc;
 
 use super::core::{eio, now_secs};
+use super::exec_audit::{self, AuditEvent};
 use super::exec_platform::{ContainedExec, StopReason};
 use super::exec_protocol::ServerFrame;
 use super::exec_registry::{ExecCancelReason, ExecCancellation, ExecRegistry, ExecReservation};
-use super::exec_supervisor_protocol::{SupervisorEvent, SupervisorExit};
+use super::exec_supervisor_protocol::{RunAsAccount, SupervisorEvent, SupervisorExit};
 use super::exec_terminal::ExecTerminalSize;
-use super::exec_types::{ExecStart, ExecTerminal, ExecTerminalKind};
+use super::exec_types::{ExecJobView, ExecStart, ExecTerminal, ExecTerminalKind};
 
 const EVENT_POLL: Duration = Duration::from_millis(25);
 /// How soon input that the supervisor's full queue did not take is offered again.
@@ -44,20 +46,38 @@ impl StopOutcome {
     }
 }
 
+/// One admitted start with the host's decisions about it.
+pub(super) struct JobLaunch {
+    pub(super) start: ExecStart,
+    pub(super) reservation: ExecReservation,
+    /// The grant's run-as account; `None` is the Standardnutzer.
+    pub(super) account: Option<RunAsAccount>,
+    /// The account as the audit log names it.
+    pub(super) account_label: String,
+    /// The path a grant with a program list authorized for this start.
+    pub(super) program: Option<PathBuf>,
+}
+
 pub(super) fn run_contained_job(
     registry: Arc<ExecRegistry>,
-    start: ExecStart,
-    reservation: ExecReservation,
+    launch: JobLaunch,
     mut input: mpsc::Receiver<JobInput>,
     output: mpsc::Sender<ServerFrame>,
 ) -> io::Result<()> {
+    let JobLaunch {
+        start,
+        reservation,
+        account,
+        account_label,
+        program,
+    } = launch;
     let mut process = match ContainedExec::prepare(&start) {
         Ok(process) => process,
         Err(error) => return fail_preparation(&registry, &reservation, error, &output),
     };
     if let Err(error) = registry.commit_start(&reservation.lease, || {
         process
-            .commit(start.clone())
+            .commit(start.clone(), account.clone(), program.as_deref())
             .map_err(|error| error.to_string())
     }) {
         let _ = process.terminate_all(StopReason::ProtocolError);
@@ -73,6 +93,12 @@ pub(super) fn run_contained_job(
         );
     }
 
+    exec_audit::record(AuditEvent::Started {
+        principal: &reservation.lease.principal,
+        start: &start,
+        account: &account_label,
+        resolved_program: program.as_deref().and_then(|path| path.to_str()),
+    });
     let timeout_at = start
         .effective_timeout_ms()
         .and_then(|milliseconds| Instant::now().checked_add(Duration::from_millis(milliseconds)));
@@ -318,12 +344,20 @@ fn finish_job(
     let view = registry
         .record_terminal(&reservation.lease, terminal, containment_empty, now_secs())
         .map_err(eio)?;
+    audit_finished(reservation, &view);
     let terminal = view
         .terminal
         .ok_or_else(|| eio("Exec-Registry verlor Terminalstatus"))?;
     output
         .blocking_send(ServerFrame::Terminal(terminal))
         .map_err(eio)
+}
+
+fn audit_finished(reservation: &ExecReservation, view: &ExecJobView) {
+    exec_audit::record(AuditEvent::Finished {
+        principal: &reservation.lease.principal,
+        view,
+    });
 }
 
 fn fail_preparation(
@@ -335,6 +369,7 @@ fn fail_preparation(
     let view = registry
         .fail_preparation(&reservation.lease, error.to_string(), now_secs())
         .map_err(eio)?;
+    audit_finished(reservation, &view);
     output
         .blocking_send(ServerFrame::Terminal(
             view.terminal

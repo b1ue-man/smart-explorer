@@ -45,6 +45,8 @@ fn grant() -> DirectGrant {
             changed_at: 9,
             source_request_id: None,
             source_decision_revision: None,
+            run_as: Default::default(),
+            programs: Vec::new(),
         },
         write: false,
     }
