@@ -29,7 +29,13 @@ cut to 256 characters. The log survives restarts. It has two parts in the app da
 folder, each keeping between 4 and 8 MiB (the previous file ends in .1): exec-audit.log \
 holds refused starts, starts and ends of authorized devices; exec-audit-rejected.log \
 holds refused authentications, penalized EndpointIds and devices without Exec \
-permission, so strangers cannot push out what authorized devices did."
+permission, so strangers cannot push out what authorized devices did.\n\n\
+Access rights add to the entries of starts and ends: kind (exec, or screen for screen \
+sessions), capability, account_profile (own, remote, account) and approval \
+(not_required, once, always, denied, cancelled, unavailable). Confirmations and \
+ended grants are entries of their own in exec-audit.log: approval_requested, \
+approval_granted, approval_denied, approval_cancelled, approval_unavailable, \
+grant_expired, helper_refused."
     )]
     Log(LogArgs),
 }

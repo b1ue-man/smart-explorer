@@ -72,7 +72,9 @@ data class ExecJobs(
 /**
  * One entry of this phone's Exec audit log (`share.execLog`), newest first; every text field is
  * cut and cleaned by the core. [event] `auth_rejected`, `penalty_refused`, `start_refused`,
- * `started`, `finished` or `unreadable`.
+ * `started`, `finished`, an access event (`approval_requested`, `approval_granted`,
+ * `approval_denied`, `approval_cancelled`, `approval_unavailable`, `grant_expired`,
+ * `helper_refused`) or `unreadable`.
  */
 @Serializable
 data class ExecAuditEntry(
@@ -82,6 +84,15 @@ data class ExecAuditEntry(
     val device: String = "",
     val deviceId: String = "",
     val detail: String = "",
+    /** `exec`, or `screen` for screen sessions; empty for an unreadable line. */
+    val kind: String = "",
+    /** The account a start ran as; empty when the entry names none. */
+    val account: String = "",
+    /**
+     * How the start was confirmed: `not_required`, `once`, `always`, `denied`, `cancelled` or
+     * `unavailable`; empty when the entry has none.
+     */
+    val approval: String = "",
 )
 
 /** `share.execLog` */

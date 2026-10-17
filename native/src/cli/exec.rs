@@ -26,7 +26,12 @@ Examples:
 There is no default runtime or output limit. Use --timeout or --max-output only
 when you explicitly want one. Ctrl+C cancels the contained remote process tree;
 on SSH remotes it sends TERM, then KILL after 10 seconds, to the command's
-process group.";
+process group.
+
+When the peer asks its user to confirm the command first, a status line on
+stderr says so (with --json the event {\"event\":\"approval_pending\",...});
+Ctrl+C withdraws the request. --verbose names the account the command runs
+as on the peer.";
 
 #[derive(Args)]
 #[command(long_about = EXEC_HELP)]
@@ -72,6 +77,16 @@ pub(super) struct ExecArgs {
         help = "Program and literal arguments after --"
     )]
     pub(super) argv: Vec<String>,
+    #[arg(
+        long,
+        help = "Print the account the command runs as on the Share peer (stderr)"
+    )]
+    pub(super) verbose: bool,
+    #[arg(
+        long,
+        help = "Print status events such as approval_pending as JSON lines on stderr; stdout stays the command's output"
+    )]
+    pub(super) json: bool,
 }
 
 pub(super) fn run(args: ExecArgs) -> Result<i32, String> {
@@ -123,14 +138,86 @@ pub(super) fn run(args: ExecArgs) -> Result<i32, String> {
         terminal: None,
     };
     start.validate().map_err(|error| error.to_string())?;
-    execute(target, start)
+    let report = StatusReport {
+        verbose: args.verbose,
+        json: args.json,
+    };
+    execute(target, start, report)
+}
+
+/// Which status of a Share start goes to stderr.
+#[derive(Clone, Copy)]
+struct StatusReport {
+    /// The account line (`{device}: as {account}`).
+    verbose: bool,
+    /// JSON lines instead of text.
+    json: bool,
+}
+
+impl StatusReport {
+    /// The start waits for the peer's user (PRM-M3): once per request.
+    fn waiting(self, device: &str, approval: &crate::share::exec_access_view::ExecApprovalPending) {
+        let surface = approval.surface();
+        if self.json {
+            let event = crate::share::exec_client_messages::approval_pending_event(device, surface);
+            eprintln!("{event}");
+        } else {
+            let line = crate::share::exec_client_messages::approval_status_line(device, surface);
+            eprintln!("{line}");
+        }
+    }
+
+    /// The account line once the peer authorized the start.
+    fn account(self, exec_id: &crate::share::ExecId, label: &str, user_label: &str) {
+        if !self.verbose {
+            return;
+        }
+        let notice = crate::daemon::exec_notice(exec_id).ok().flatten();
+        let device = peer_name(notice.as_ref(), label);
+        let access = notice.as_ref().and_then(|notice| notice.access.as_ref());
+        let line = crate::share::exec_client_messages::account_line(&device, access, user_label);
+        if self.json {
+            let event = serde_json::json!({"event": "account", "device": device, "line": line});
+            eprintln!("{event}");
+        } else {
+            eprintln!("{line}");
+        }
+    }
+}
+
+/// The peer as the worker names it, else as the user selected it.
+fn peer_name(notice: Option<&crate::daemon::ExecNoticeView>, label: &str) -> String {
+    notice
+        .map(|notice| notice.device.clone())
+        .filter(|device| !device.trim().is_empty())
+        .unwrap_or_else(|| label.to_string())
 }
 
 fn execute(
     target: crate::share::PeerOpenTarget,
     start: crate::share::ExecStart,
+    report: StatusReport,
 ) -> Result<i32, String> {
+    let label = target.endpoint_prefix();
     let mut session = crate::daemon::connect_exec(target, start)?;
+    let exec_id = session.exec_id.clone();
+    // Until the start begins, its notice tells whether the peer's user is
+    // asked (W10: read through the worker's Access IPC).
+    let watch_label = label.clone();
+    let mut shown = None;
+    let mut notice = Some(crate::daemon::ExecNoticeWatch::start(
+        exec_id.clone(),
+        move |notice| {
+            let fresh = notice
+                .approval
+                .as_ref()
+                .filter(|now| shown.as_ref() != Some(*now));
+            if let Some(approval) = fresh {
+                report.waiting(&peer_name(Some(notice), &watch_label), approval);
+                shown = Some(approval.clone());
+            }
+        },
+    ));
     let stdin_input = session.take_input().map_err(|error| error.to_string())?;
     let cancel_input = stdin_input.clone();
     ctrlc::set_handler(move || {
@@ -150,8 +237,15 @@ fn execute(
                 return Ok(125);
             }
         };
+        if !matches!(event, crate::daemon::ExecIpcEvent::Authorized(_)) {
+            // Started, output or the end: nothing waits for the peer's user.
+            drop(notice.take());
+        }
         match event {
-            crate::daemon::ExecIpcEvent::Authorized(_) | crate::daemon::ExecIpcEvent::Started => {}
+            crate::daemon::ExecIpcEvent::Authorized(provider) => {
+                report.account(&exec_id, &label, &provider.user_label);
+            }
+            crate::daemon::ExecIpcEvent::Started => {}
             crate::daemon::ExecIpcEvent::Stdout(bytes) => write_all(std::io::stdout(), &bytes)?,
             crate::daemon::ExecIpcEvent::Stderr(bytes) => write_all(std::io::stderr(), &bytes)?,
             crate::daemon::ExecIpcEvent::Failed(error) => {

@@ -141,7 +141,9 @@ pub(super) fn program_settings(args: &Value) -> Result<Option<ExecGrantSettings>
 
 /// `share.execLog {lines?}` → `{entries, max}`: this host's audit log as the
 /// desktop shows it (newest first, every field cut and cleaned, at most
-/// `max` entries).
+/// `max` entries). Each entry is `{at, event, title, device, deviceId,
+/// detail, kind, account, approval}`; `kind`, `account` and `approval` came
+/// with the access rights (PRM-M4) and are empty where a line has none.
 pub(super) fn exec_log(args: &Value) -> Result<Value, ApiError> {
     let max = crate::share::MAX_EXEC_AUDIT_VIEW;
     let lines = opt_i64(args, "lines")
