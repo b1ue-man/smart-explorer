@@ -35,7 +35,9 @@ import kotlinx.coroutines.launch
  * ending here wakes the Share poller at once, which then sends one, so the notification follows
  * within one `share.execJobs` round trip (the poller's own cadence – up to 60 s in the background –
  * applies only if that wake-up is missed). While a notification is shown it is also re-checked
- * every [RECHECK_MS]. Runs for the whole process once [start]ed.
+ * every [RECHECK_MS]. Runs for the whole process once [start]ed. The same `share` events wake the
+ * [AccessApprovalNotifier], which shows the questions of other devices that wait for this phone's
+ * user (the core sends one when a question opens or ends).
  */
 object ExecHostNotifier {
     private const val TAG = "SmartExplorerExec"
@@ -57,7 +59,15 @@ object ExecHostNotifier {
     fun start(context: Context) {
         if (!started.compareAndSet(false, true)) return
         val app = context.applicationContext
-        scope.launch { Core.events.collect { if (it is CoreEvent.Share) requestRefresh() } }
+        AccessApprovalNotifier.start(app)
+        scope.launch {
+            Core.events.collect {
+                if (it is CoreEvent.Share) {
+                    requestRefresh()
+                    AccessApprovalNotifier.requestRefresh()
+                }
+            }
+        }
         // A StateFlow is conflated: a burst of events leads to at most one more load.
         scope.launch { refreshes.collect { refresh(app) } }
         scope.launch {

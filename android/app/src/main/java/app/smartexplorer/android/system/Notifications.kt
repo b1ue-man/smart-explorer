@@ -25,6 +25,12 @@ object Notifications {
     /** Ongoing notifications of commands other devices run on this phone (ExecHostNotifier). */
     const val CHANNEL_EXEC = "exec"
 
+    /**
+     * Questions of other devices that wait for this phone's user, e.g. „Laptop möchte Befehle
+     * ausführen“ (AccessApprovalNotifier): high importance, so they appear as heads-up.
+     */
+    const val CHANNEL_ACCESS_APPROVAL = "access_approval"
+
     // Notification ids used across the app (one place so services never collide).
     const val ID_TRANSFERS = 1001
     const val ID_BACKGROUND = 1002
@@ -35,6 +41,10 @@ object Notifications {
     /** One id per running command of another device, from [ID_EXEC_FIRST] on. */
     const val ID_EXEC_FIRST = 1100
     const val EXEC_ID_COUNT = 50
+
+    /** One id per open question of another device, from [ID_APPROVAL_FIRST] on (the host keeps at most 8 open). */
+    const val ID_APPROVAL_FIRST = 1300
+    const val APPROVAL_ID_COUNT = 16
 
     private const val TAG = "SmartExplorer"
 
@@ -50,6 +60,7 @@ object Notifications {
                 channel(context, CHANNEL_UPDATES, R.string.channel_updates, R.string.channel_updates_description, normal),
                 channel(context, CHANNEL_SHARE, R.string.channel_share, R.string.channel_share_description, normal),
                 execChannel(low),
+                approvalChannel(),
                 NotificationChannel(CHANNEL_SYNC_PROBLEMS, "Sync-Probleme", normal).apply {
                     description = "Angehaltene Jobs, fehlender Zugriff und wiederholte Sync-Fehler"
                 },
@@ -62,6 +73,15 @@ object Notifications {
         NotificationChannel(CHANNEL_EXEC, "Befehle anderer Geräte", importance).apply {
             description = "Solange ein anderes Gerät einen Befehl auf diesem Telefon ausführt, mit „Stopp“"
             setShowBadge(false)
+        }
+
+    // IMPORTANCE_HIGH: the other device waits until someone answers (plan 2026-10-17, C5). On the
+    // lock screen only the public version shows, without device, command or actions.
+    private fun approvalChannel() =
+        NotificationChannel(CHANNEL_ACCESS_APPROVAL, "Rückfragen anderer Geräte", NotificationManager.IMPORTANCE_HIGH).apply {
+            description = "Ein anderes Gerät möchte hier Befehle ausführen oder ein Terminal öffnen und wartet auf deine Bestätigung"
+            setShowBadge(true)
+            lockscreenVisibility = Notification.VISIBILITY_PRIVATE
         }
 
     /**

@@ -5,12 +5,16 @@
 //! host's audit log (`share.execLog`). Android runs commands only as the
 //! app's own account (Standardnutzer); a program list narrows a grant like
 //! `se share grants exec enable --allow-program`. Commands starting or ending
-//! on this phone wake the Share poller, which then sends `share`.
+//! on this phone wake the Share poller, which then sends `share`; so do
+//! confirmations that open or end here. The access rights themselves
+//! (`share.setAccess`, the confirmations, the app's notifier and the status
+//! fields `accountChoices`, `otherAccountsNote`, `elevated`, `capabilities`
+//! and `access`) are in `share_access.rs` (PRM-M10).
 use std::sync::OnceLock;
 
 use serde_json::{json, Value};
 
-use super::args::{bool_arg, invalid, opt_i64, str_arg, string_list};
+use super::args::{bool_arg, invalid, now_secs, opt_i64, str_arg, string_list};
 use super::share_state::{committed, default_home, wake};
 use crate::daemon::{ExecCancelTarget, ExecJobDirection, ExecJobsSnapshot};
 use crate::mobile::ApiError;
@@ -19,34 +23,52 @@ use crate::share::{
     ExecProviderStatus, ExecRunAs, ExecTargetRelation, ExecTargetView, ShareProfiles,
 };
 
+#[path = "share_access.rs"]
+pub(super) mod access;
+
+/// See `provider`.
+static PROVIDER: OnceLock<ExecProviderStatus> = OnceLock::new();
+
 /// The exec provider of this device; its first use also ends command trees
 /// a crashed app process left behind, so callers fetch it outside locks.
 pub(super) fn provider() -> &'static ExecProviderStatus {
-    static PROVIDER: OnceLock<ExecProviderStatus> = OnceLock::new();
     PROVIDER.get_or_init(crate::share::exec_provider_status)
 }
 
-/// `execProvider` of `share.status`.
+/// The app's account as `provider` named it; empty before its first use
+/// (every `share.status` fetches the provider before it builds the targets).
+fn own_label() -> &'static str {
+    PROVIDER
+        .get()
+        .map_or("", |status| status.user_label.as_str())
+}
+
+/// `execProvider` of `share.status`, plus the access fields of PRM-M10.
 pub(super) fn provider_json(status: &ExecProviderStatus) -> Value {
-    json!({
+    let mut value = json!({
         "available": status.available,
         "provider": status.provider,
         "detail": status.detail,
         // The account of the app, the Standardnutzer of every grant here.
         "userLabel": status.user_label,
         "runAsSupported": crate::share::exec_run_as_supported(),
-    })
+    });
+    if let Value::Object(fields) = &mut value {
+        fields.extend(access::provider_fields(status));
+    }
+    value
 }
 
 /// `execTargets` of `share.status`: every direct grant and room member.
 pub(super) fn targets_json(profiles: &ShareProfiles) -> Vec<Value> {
+    let now = now_secs();
     exec_target_views(profiles)
         .iter()
-        .map(target_json)
+        .map(|view| target_json(view, now))
         .collect()
 }
 
-fn target_json(view: &ExecTargetView) -> Value {
+fn target_json(view: &ExecTargetView, now: i64) -> Value {
     json!({
         "targetKey": view.target_key,
         "relation": match view.relation {
@@ -65,6 +87,8 @@ fn target_json(view: &ExecTargetView) -> Value {
         "runAs": view.run_as.account_name().unwrap_or("standard"),
         // Empty: the full shell; otherwise the only programs it may start.
         "programs": view.programs,
+        // Account, decision per capability and end of the right (D.2.4).
+        "access": access::access_json(&view.access, own_label(), now),
     })
 }
 
@@ -72,7 +96,8 @@ fn target_json(view: &ExecTargetView) -> Value {
 /// is resolved against the stored profiles, so a replaced identity is
 /// `not_found`. `programs` (the whole list; `[]` = full shell) is checked
 /// like the CLI's `--allow-program` before anything is stored; without it
-/// the grant keeps its list.
+/// the grant keeps its list. A new list keeps the account the grant runs as
+/// (B16: it used to fall back to the Standardnutzer).
 pub(super) fn set_exec(args: &Value) -> Result<Value, ApiError> {
     let key = str_arg(args, "targetKey")?;
     let enabled = bool_arg(args, "enabled")?;
@@ -101,6 +126,7 @@ pub(super) fn set_exec(args: &Value) -> Result<Value, ApiError> {
             ));
         }
     }
+    let settings = keep_account(settings, &view.run_as);
     let result = crate::daemon::mutate_exec_grant(view.target, enabled, settings)
         .map_err(|error| ApiError::internal(format!("Befehlsfreigabe nicht geändert: {error}")))?;
     let answer = grant_answer(
@@ -118,9 +144,10 @@ pub(super) fn set_exec(args: &Value) -> Result<Value, ApiError> {
     Ok(answer)
 }
 
-/// The optional `programs` of `share.setExec` as grant settings for this
-/// phone: always the Standardnutzer, every entry a bare name or an absolute
-/// path (`ExecGrantSettings::validate_for_this_host`).
+/// The optional `programs` of `share.setExec` and `share.setAccess`, checked
+/// as settings of the Standardnutzer: every entry a bare name or an absolute
+/// path (`ExecGrantSettings::validate_for_this_host`). `set_exec` then keeps
+/// the grant's own account (`keep_account`).
 pub(super) fn program_settings(args: &Value) -> Result<Option<ExecGrantSettings>, ApiError> {
     if args.get("programs").is_none_or(Value::is_null) {
         return Ok(None);
@@ -137,6 +164,21 @@ pub(super) fn program_settings(args: &Value) -> Result<Option<ExecGrantSettings>
         .validate_for_this_host()
         .map_err(|error| invalid(format!("Programmliste ungültig: {error}")))?;
     Ok(Some(settings))
+}
+
+/// The checked program list of `program_settings` with the account the
+/// grant runs as now (`run_as` mirrors its account profile; the host keeps
+/// `se-remote` as the remote-access profile), so changing the list never
+/// changes the account (B16). The host refuses another account than the
+/// app's own on Android instead of switching it silently.
+pub(super) fn keep_account(
+    settings: Option<ExecGrantSettings>,
+    run_as: &ExecRunAs,
+) -> Option<ExecGrantSettings> {
+    settings.map(|settings| ExecGrantSettings {
+        run_as: run_as.clone(),
+        ..settings
+    })
 }
 
 /// `share.execLog {lines?}` → `{entries, max}`: this host's audit log as the
@@ -240,23 +282,26 @@ pub(super) fn cancel_target(args: &Value) -> Result<ExecCancelTarget, ApiError> 
     })
 }
 
-/// Changes whenever a command of another device starts or ends here.
+/// Changes whenever a command of another device starts or ends here, or a
+/// confirmation opens or ends (`share_access.rs`).
 #[cfg(target_os = "android")]
 pub(super) fn host_activity() -> u64 {
-    crate::share::exec_host_activity()
+    crate::share::exec_host_activity().wrapping_add(access::activity())
 }
 
-/// The Linux host tests run no exec host.
+/// The Linux host tests run no exec host; only confirmations count.
 #[cfg(not(target_os = "android"))]
 pub(super) fn host_activity() -> u64 {
-    0
+    access::activity()
 }
 
 /// Lets a starting or ending command wake the Share poller at once, so the
-/// app's notification follows within one `share.execJobs` round trip.
+/// app's notification follows within one `share.execJobs` round trip; from
+/// now on this phone asks its user through the app (PRM-M10).
 #[cfg(target_os = "android")]
 pub(super) fn watch_host_activity() {
     crate::share::set_exec_host_listener(wake);
+    access::install_notifier();
 }
 
 #[cfg(not(target_os = "android"))]

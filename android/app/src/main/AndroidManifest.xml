@@ -117,6 +117,19 @@
             android:name=".service.ExecHostStopReceiver"
             android:exported="false" />
 
+        <!-- "Diesmal erlauben", "Immer erlauben", "Ablehnen" in the notification of another device's
+             question (explicit immutable PendingIntents of this app only) -->
+        <receiver
+            android:name=".service.AccessApprovalReceiver"
+            android:exported="false" />
+
+        <!-- The same question as a dialog while the app is visible; started only from the app itself -->
+        <activity
+            android:name=".ui.share.AccessApprovalActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
         <!-- Wake alarm of the background service (explicit PendingIntent only) -->
         <receiver
             android:name=".system.KeepAliveReceiver"
