@@ -3,6 +3,8 @@ use super::*;
 
 impl App {
     pub fn new(just_updated: bool, initial_path: Option<PathBuf>) -> Self {
+        // DSK-M2: baseline first, so only later update requests close it.
+        super::update_stop_ui::arm_window();
         Self::new_inner(just_updated, initial_path, true)
     }
 

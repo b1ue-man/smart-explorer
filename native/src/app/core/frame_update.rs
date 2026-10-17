@@ -11,6 +11,10 @@ impl eframe::App for App {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             return;
         }
+        // DSK-M2: a new update-stop request closes like the user would.
+        if super::update_stop_ui::close_requested(ctx) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
         self.update_background(ctx);
         if self.sync_exit_gate_frame(ctx) {
             self.update_repaint(ctx);
