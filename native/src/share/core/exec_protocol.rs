@@ -427,7 +427,7 @@ fn decode_data(payload: Vec<u8>) -> io::Result<(ExecId, Vec<u8>)> {
     Ok((ExecId::parse(id)?, payload[32..].to_vec()))
 }
 
-async fn write_payload<W: AsyncWrite + Unpin>(
+pub(crate) async fn write_payload<W: AsyncWrite + Unpin>(
     writer: &mut W,
     tag: u8,
     payload: &[u8],
@@ -439,7 +439,7 @@ async fn write_payload<W: AsyncWrite + Unpin>(
     writer.flush().await
 }
 
-async fn read_payload<R: AsyncRead + Unpin>(
+pub(crate) async fn read_payload<R: AsyncRead + Unpin>(
     reader: &mut R,
     limit: usize,
 ) -> io::Result<(u8, Vec<u8>)> {
