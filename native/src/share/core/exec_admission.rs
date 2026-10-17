@@ -1,10 +1,22 @@
-//! Connection authentication and job admission before Exec streaming.
+//! Connection authentication and job admission before Exec streaming. The
+//! handshake admits a device whose commands or terminal are not off; each
+//! start is then checked against the grant of that moment for the
+//! capability it needs (C1, D.2.2).
+use super::super::access_authorize::{capability_for, principal_grant, start_capability};
+use super::super::access_grant::{Capability, CapabilityDecision};
 use super::super::auth_penalty::PenaltyKind;
+use super::super::exec_access_view::{host_access_features, ExecAccessView, HelloOkWithAccess};
 use super::super::exec_audit::{self, AuditEvent};
 use super::super::exec_auth::AuthorizedExecPeer;
+use super::super::exec_client_messages::{
+    approval_unavailable, permission_denied, right_not_granted, APPROVAL_UNAVAILABLE,
+    PERMISSION_DENIED, RIGHT_NOT_GRANTED,
+};
+use super::super::exec_policy::ExecGrant;
 use super::super::exec_supervisor_protocol::RunAsAccount;
 use super::super::exec_terminal::{host_denial, host_features};
-use super::super::exec_types::{ExecProviderStatus, ExecStart};
+use super::super::exec_types::{ExecAuthorization, ExecProviderStatus, ExecStart};
+use super::super::relation_proof::ProvenPrincipal;
 use super::*;
 
 pub(in crate::share) async fn handle_connection(
@@ -29,6 +41,12 @@ pub(in crate::share) async fn handle_connection(
         .map_err(|_| eio("Share Exec authorization state is locked"))?
         .identity
         .clone();
+    // How refusals name this host to the connecting device.
+    let host = if identity.device_name.trim().is_empty() {
+        identity.device_id.clone()
+    } else {
+        identity.device_name.clone()
+    };
     let server_hello = ExecServerHello::new(
         random_token(32).map_err(eio)?,
         identity.device_id,
@@ -77,8 +95,8 @@ pub(in crate::share) async fn handle_connection(
                 });
                 let error = io::Error::from(rejection);
                 let denied = ExecWireError {
-                    code: "permission_denied".into(),
-                    message: "exec authentication failed".into(),
+                    code: PERMISSION_DENIED.into(),
+                    message: permission_denied(&host),
                 };
                 if io_deadline::run_until(
                     handshake_deadline,
@@ -119,15 +137,22 @@ pub(in crate::share) async fn handle_connection(
     .await
     .map_err(|_| timed_out("Exec-Providerpruefung Timeout"))?
     .map_err(eio)?;
+    let mut features = host_features(terminal_supported);
+    features.extend(host_access_features().map(String::from));
+    let hello_ok = ExecHelloOk {
+        authorization: authorized.authorization.clone(),
+        provider: provider.clone(),
+        features,
+    };
+    let access = ExecAccessView::of(&authorized.grant, &provider.user_label);
     io_deadline::run_until(
         handshake_deadline,
         "Exec-HelloOk Timeout",
         send_hello_ok(
             &mut send,
-            &ExecHelloOk {
-                authorization: authorized.authorization.clone(),
-                provider: provider.clone(),
-                features: host_features(terminal_supported),
+            &HelloOkWithAccess {
+                hello: &hello_ok,
+                access: Some(&access),
             },
         ),
     )
@@ -167,10 +192,17 @@ pub(in crate::share) async fn handle_connection(
         wait_result_ack(&mut recv, &mut protocol, &start.exec_id).await?;
         return acknowledge_result(&mut send, &start.exec_id, &connection).await;
     }
-    // The grant's program list and run-as account are host decisions made
-    // before any process exists; a refusal is answered like a denied admission.
-    let launch = match grant_launch(&authorized, &start, &provider).await {
-        Ok(launch) => launch,
+    // The capability the start needs, the grant's program list and its
+    // run-as account are host decisions made before any process exists; a
+    // refusal is answered like a denied admission.
+    let checked = match start_grant(&node.auth, &authorized, &start, &host, now_secs()) {
+        Ok(decided) => grant_launch(&decided.grant, &start, &provider)
+            .await
+            .map(|launch| (decided, launch)),
+        Err(denial) => Err(denial),
+    };
+    let (decided, launch) = match checked {
+        Ok(checked) => checked,
         Err(denial) => {
             exec_audit::record(AuditEvent::StartRefused {
                 principal: &authorized.principal,
@@ -183,9 +215,15 @@ pub(in crate::share) async fn handle_connection(
             return acknowledge_result(&mut send, &start.exec_id, &connection).await;
         }
     };
+    let grant_end = GrantEndWatch::new(
+        node.auth.clone(),
+        ProvenPrincipal::from(&authorized.principal),
+        decided.capability,
+        decided.end,
+    );
     match node.exec_registry().prepare(
         authorized.principal,
-        authorized.authorization,
+        decided.authorization,
         &start,
         now_secs(),
     ) {
@@ -200,9 +238,10 @@ pub(in crate::share) async fn handle_connection(
                     program: launch.program,
                 },
                 send,
-                recv,
+                ClientStream::new(exec_frame_reader::client_frames(recv)),
                 protocol,
                 connection.clone(),
+                grant_end,
             )
             .await
         }
@@ -244,6 +283,76 @@ pub(in crate::share) async fn handle_connection(
     }
 }
 
+/// The grant at the start and what it decides for the start's capability.
+pub(in crate::share) struct StartGrant {
+    pub(in crate::share) grant: ExecGrant,
+    /// The handshake's authorization at the grant's current revision: a
+    /// grant that only widened since keeps the connection's authorization;
+    /// a narrowing raised the registry's barrier above its epoch.
+    pub(in crate::share) authorization: ExecAuthorization,
+    pub(in crate::share) capability: Capability,
+    /// Unix seconds at which the grant ends.
+    pub(in crate::share) end: Option<i64>,
+}
+
+/// Checks the capability `start` needs against the grant at `now`: `allow`
+/// starts, `ask` needs the host user (PRM-M3; without its approval service
+/// the start is refused as unavailable), and `off` is `right_not_granted`
+/// while the grant still allows the other Exec capability, else (ended or
+/// withdrawn since the handshake) `permission_denied`.
+pub(in crate::share) fn start_grant(
+    auth: &std::sync::Mutex<super::super::types::ShareAuthState>,
+    authorized: &AuthorizedExecPeer,
+    start: &ExecStart,
+    host: &str,
+    now: i64,
+) -> Result<StartGrant, ExecWireError> {
+    let capability = start_capability(&start.command);
+    let proven = ProvenPrincipal::from(&authorized.principal);
+    let denied = || ExecWireError {
+        code: PERMISSION_DENIED.into(),
+        message: permission_denied(host),
+    };
+    let (decision, grant) = {
+        let state = auth.lock().map_err(|_| denied())?;
+        (
+            capability_for(&state, &proven, capability, now),
+            principal_grant(&state, &proven).cloned(),
+        )
+    };
+    let Some(grant) = grant else {
+        return Err(denied());
+    };
+    match decision.decision {
+        CapabilityDecision::Allow => Ok(StartGrant {
+            end: grant.valid_until(),
+            grant,
+            authorization: ExecAuthorization {
+                policy_revision: decision.policy_revision,
+                ..authorized.authorization.clone()
+            },
+            capability,
+        }),
+        CapabilityDecision::Ask => Err(ExecWireError {
+            code: APPROVAL_UNAVAILABLE.into(),
+            message: approval_unavailable(host),
+        }),
+        CapabilityDecision::Off => {
+            let other = Capability::EXEC
+                .into_iter()
+                .any(|other| other != capability && grant.decision_at(other, now).is_on());
+            if other {
+                Err(ExecWireError {
+                    code: RIGHT_NOT_GRANTED.into(),
+                    message: right_not_granted(host, capability),
+                })
+            } else {
+                Err(denied())
+            }
+        }
+    }
+}
+
 /// What the grant decided about one start.
 struct GrantLaunch {
     account: Option<RunAsAccount>,
@@ -258,19 +367,19 @@ struct GrantLaunch {
 /// account is resolved (user database lookups block as well). Both are host
 /// decisions made before any job process exists.
 async fn grant_launch(
-    authorized: &AuthorizedExecPeer,
+    grant: &ExecGrant,
     start: &ExecStart,
     provider: &ExecProviderStatus,
 ) -> Result<GrantLaunch, ExecWireError> {
-    let grant = authorized.grant.clone();
+    let checked_grant = grant.clone();
     let checked = start.clone();
     let program = tokio::task::spawn_blocking(move || {
-        grant.authorize_start(&checked, &super::super::exec_platform::program_search())
+        checked_grant.authorize_start(&checked, &super::super::exec_platform::program_search())
     })
     .await
     .map_err(|_| refused("the program check of this host did not complete"))?
     .map_err(refused)?;
-    let run_as = authorized.grant.run_as.clone();
+    let run_as = grant.run_as.clone();
     let name = run_as.account_name().unwrap_or("standard").to_string();
     let resolved =
         tokio::task::spawn_blocking(move || super::super::exec_platform::resolve_run_as(&run_as))

@@ -41,10 +41,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.smartexplorer.android.R
 import app.smartexplorer.android.api.ExecResult
 import app.smartexplorer.android.api.FilesApi
+import app.smartexplorer.android.core.Core
 import app.smartexplorer.android.core.CoreException
 import app.smartexplorer.android.core.TaskInfo
 import app.smartexplorer.android.ui.common.SeIcon
@@ -59,6 +61,32 @@ private val EXEC_TIMEOUTS = listOf(30, 60, 300, 900)
 private data class ExecOutcome(val result: ExecResult?, val failure: String?)
 
 /**
+ * Refusals of the other device by error code (`code: message`), as the texts of the access rights
+ * say them in German (plan 2026-10-17, C6); every other failure keeps the device's own text. This
+ * dialog starts commands, never a terminal, so a missing right is always the one for commands.
+ */
+private val EXEC_REFUSALS: Map<String, (String) -> String> = mapOf(
+    "permission_denied" to { device ->
+        "$device erlaubt diesem Gerät keine Befehle (nicht erlaubt, abgelaufen oder entzogen). " +
+            "Nächster Schritt: den Besitzer von $device um Freigabe bitten."
+    },
+    "right_not_granted" to { device ->
+        "$device erlaubt diesem Gerät keine Befehle (nur ein Terminal). " +
+            "Nächster Schritt: den Besitzer bitten, „Befehle“ zu erlauben."
+    },
+    "approval_denied" to { device -> "$device: Zugriff am Gerät abgelehnt." },
+    "approval_unavailable" to { device ->
+        "$device kann die Rückfrage nicht anzeigen: Benachrichtigungen für Smart Explorer sind aus."
+    },
+)
+
+/** The German refusal text for [text] of [device], or [text] itself. */
+private fun readableFailure(text: String, device: String): String {
+    val code = EXEC_REFUSALS.keys.firstOrNull { text.contains("$it:") } ?: return text
+    return EXEC_REFUSALS.getValue(code)(device)
+}
+
+/**
  * "Befehl ausführen" on a shared device (spec F18): command, shell or direct, time limit →
  * `share.exec` task → stdout/stderr and exit code, [Abbrechen] while it runs. The dialog leaving
  * the screen in any way (close, back, tab switch, recreation) cancels a running or starting command.
@@ -71,6 +99,7 @@ internal fun ExecDialog(
     vm: ShareViewModel = viewModel { ShareViewModel() },
 ) {
     val context = LocalContext.current
+    val tasks by Core.tasks.collectAsStateWithLifecycle()
     var command by rememberSaveable { mutableStateOf("") }
     var shell by rememberSaveable { mutableStateOf(true) }
     var timeout by rememberSaveable { mutableStateOf(60) }
@@ -80,13 +109,15 @@ internal fun ExecDialog(
     var starting by remember { mutableStateOf(false) }
     var cancelWanted by remember { mutableStateOf(false) }
     val running = starting || (taskId != null && outcome == null)
+    // What the running command reports meanwhile, e.g. that the device asks its user first.
+    val progress = taskId?.let { id -> tasks.firstOrNull { it.id == id }?.message }?.takeIf { it.isNotBlank() }
 
     LaunchedEffect(taskId) {
         val id = taskId ?: return@LaunchedEffect
         outcome = try {
-            outcomeOf(FilesApi.awaitTask(id))
+            outcomeOf(FilesApi.awaitTask(id), targetName)
         } catch (e: CoreException) {
-            ExecOutcome(null, e.message ?: e.kind)
+            ExecOutcome(null, readableFailure(e.message ?: e.kind, targetName))
         }
     }
 
@@ -112,7 +143,7 @@ internal fun ExecDialog(
             if (id != null) {
                 taskId = id
             } else {
-                outcome = ExecOutcome(null, failure)
+                outcome = ExecOutcome(null, failure?.let { readableFailure(it, targetName) })
             }
         }
     }
@@ -161,7 +192,12 @@ internal fun ExecDialog(
                             Button(onClick = { start() }, enabled = command.isNotBlank()) { Text("Ausführen") }
                         }
                     }
-                    if (running) LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp))
+                    if (running) {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp))
+                        progress?.let {
+                            Text(it, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(16.dp))
+                        }
+                    }
                     outcome?.let { ExecOutput(it, onCopy = { text -> TextActions.copy(context, "Ausgabe", text) }) }
                 }
             }
@@ -169,14 +205,17 @@ internal fun ExecDialog(
     }
 }
 
-private fun outcomeOf(task: TaskInfo): ExecOutcome = when (task.state) {
+private fun outcomeOf(task: TaskInfo, device: String): ExecOutcome = when (task.state) {
     "done" -> try {
         ExecOutcome(FilesApi.resultOf(task, ExecResult.serializer()) ?: ExecResult(), null)
     } catch (e: CoreException) {
-        ExecOutcome(null, e.message ?: e.kind)
+        ExecOutcome(null, readableFailure(e.message ?: e.kind, device))
     }
     "canceled" -> ExecOutcome(null, "Abgebrochen")
-    else -> ExecOutcome(null, task.message?.takeIf { it.isNotBlank() } ?: "Befehl nicht ausgeführt")
+    else -> ExecOutcome(
+        null,
+        task.message?.takeIf { it.isNotBlank() }?.let { readableFailure(it, device) } ?: "Befehl nicht ausgeführt",
+    )
 }
 
 @Composable

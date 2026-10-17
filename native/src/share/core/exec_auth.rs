@@ -1,20 +1,26 @@
 use std::io;
 use std::sync::{Arc, Mutex};
 
-use super::core::{eio, hmac_proof, random_token, verify_hmac};
+use super::access_authorize::{exec_connection_allowed, principal_grant};
+use super::core::{eio, hmac_proof, now_secs, random_token};
+use super::exec_access_view::client_features;
 use super::exec_policy::ExecGrant;
 use super::exec_protocol::{ExecClientHello, ExecServerHello};
 use super::exec_types::{ExecAuthorization, ExecPrincipal, EXEC_CAPABILITY, EXEC_PROTOCOL_VERSION};
 use super::identity::ShareIdentity;
-use super::profiles::{fingerprint_matches, ShareProfiles};
+use super::profiles::fingerprint_matches;
+use super::relation_proof::{
+    prove_relation, relation_transcript, ProvenPrincipal, RelationClientHello, RelationRejection,
+    RelationServerHello, EXEC_TRANSCRIPT_PREFIX,
+};
 use super::session::relation_kind_id;
-use super::types::{DirectGrantState, PeerEndpoint, ShareAuthState};
+use super::types::{PeerEndpoint, ShareAuthState};
 
 pub(crate) struct AuthorizedExecPeer {
     pub(crate) principal: ExecPrincipal,
     pub(crate) authorization: ExecAuthorization,
-    /// The grant as authorized: run-as account and program list apply to
-    /// this connection's start.
+    /// The grant at the handshake. The start is checked against the grant
+    /// of that moment (`exec_admission.rs`).
     pub(crate) grant: ExecGrant,
 }
 
@@ -51,6 +57,15 @@ impl From<ExecRejection> for io::Error {
     }
 }
 
+impl From<RelationRejection> for ExecRejection {
+    fn from(rejection: RelationRejection) -> Self {
+        match rejection {
+            RelationRejection::Authentication => Self::Authentication,
+            RelationRejection::NotAuthorized => Self::NotAuthorized,
+        }
+    }
+}
+
 pub(crate) fn build_client_hello(
     server: &ExecServerHello,
     endpoint: &PeerEndpoint,
@@ -71,6 +86,7 @@ pub(crate) fn build_client_hello(
         node_id: identity.node_id.clone(),
         client_nonce,
         proof: String::new(),
+        client_features: client_features(),
     };
     hello.proof = hmac_proof(&endpoint.relation_secret, &transcript(server, &hello));
     Ok(hello)
@@ -83,97 +99,42 @@ pub(crate) fn authorize_client_hello(
     auth: &Arc<Mutex<ShareAuthState>>,
 ) -> Result<AuthorizedExecPeer, ExecRejection> {
     let state = auth.lock().map_err(|_| ExecRejection::NotAuthorized)?;
-    authorize_client_hello_in(server, hello, remote_node, &state)
+    authorize_client_hello_in(server, hello, remote_node, &state, now_secs())
 }
 
 /// Order: protocol and pinned identity, then the relation proof (HMAC over
-/// the transcript), then the Exec permission of the proven device.
-fn authorize_client_hello_in(
+/// the transcript), then the Exec permission of the proven device at `now`:
+/// commands or terminal not off and the grant not ended.
+pub(super) fn authorize_client_hello_in(
     server: &ExecServerHello,
     hello: &ExecClientHello,
     remote_node: &str,
     state: &ShareAuthState,
+    now: i64,
 ) -> Result<AuthorizedExecPeer, ExecRejection> {
-    validate_common(server, hello, remote_node, state)?;
-    let grant = match hello.relation_kind.as_str() {
-        "direct" if hello.relation_id == state.identity.direct_lookup_id => {
-            if !state.direct_online {
-                return Err(ExecRejection::NotAuthorized);
-            }
-            let grant = state
-                .direct_grants
-                .iter()
-                .find(|grant| {
-                    grant.device_id == hello.device_id
-                        && grant.public_key == hello.public_key
-                        && grant.fingerprint == hello.fingerprint
-                        && grant.node_id == hello.node_id
-                        && grant.state == DirectGrantState::Accepted
-                })
-                .ok_or(ExecRejection::Authentication)?;
-            if !verify_hmac(
-                state.direct_secret.as_slice(),
-                &transcript(server, hello),
-                &hello.proof,
-            ) {
-                return Err(ExecRejection::Authentication);
-            }
-            if !fingerprint_matches(&grant.public_key, &grant.fingerprint) {
-                return Err(ExecRejection::NotAuthorized);
-            }
-            &grant.exec
-        }
-        "room" => {
-            let room = state
-                .rooms
-                .iter()
-                .find(|room| room.room_id == hello.relation_id && room.auto_join)
-                .ok_or(ExecRejection::Authentication)?;
-            let member = room
-                .members
-                .iter()
-                .find(|member| {
-                    member.device_id == hello.device_id
-                        && member.public_key == hello.public_key
-                        && member.fingerprint == hello.fingerprint
-                        && member.node_id == hello.node_id
-                        && member.is_admitted()
-                })
-                .ok_or(ExecRejection::Authentication)?;
-            let secret = ShareProfiles::room_secret_checked(room)
-                .map_err(|_| ExecRejection::NotAuthorized)?
-                .ok_or(ExecRejection::NotAuthorized)?;
-            if !verify_hmac(&secret, &transcript(server, hello), &hello.proof) {
-                return Err(ExecRejection::Authentication);
-            }
-            if !fingerprint_matches(&member.public_key, &member.fingerprint) {
-                return Err(ExecRejection::NotAuthorized);
-            }
-            &member.exec
-        }
-        _ => return Err(ExecRejection::Authentication),
-    };
-    if !grant.enabled {
+    if server.protocol_version != EXEC_PROTOCOL_VERSION || server.capability != EXEC_CAPABILITY {
+        return Err(ExecRejection::Authentication);
+    }
+    let proven = prove_relation(
+        &relation_server(server),
+        &relation_client(hello),
+        remote_node,
+        state,
+    )?;
+    let grant = principal_grant(state, &proven).ok_or(ExecRejection::NotAuthorized)?;
+    if !exec_connection_allowed(grant, now) {
         return Err(ExecRejection::NotAuthorized);
     }
-    authorized(state, hello, grant)
+    authorized(state, &proven, grant)
 }
 
 fn authorized(
     state: &ShareAuthState,
-    hello: &ExecClientHello,
+    proven: &ProvenPrincipal,
     grant: &ExecGrant,
 ) -> Result<AuthorizedExecPeer, ExecRejection> {
     Ok(AuthorizedExecPeer {
-        principal: ExecPrincipal {
-            relation_kind: hello.relation_kind.clone(),
-            relation_id: hello.relation_id.clone(),
-            device_id: hello.device_id.clone(),
-            device_name: hello.device_name.clone(),
-            public_key: hello.public_key.clone(),
-            fingerprint: hello.fingerprint.clone(),
-            node_id: hello.node_id.clone(),
-        },
+        principal: ExecPrincipal::from(proven),
         authorization: ExecAuthorization {
             policy_revision: grant.policy_revision,
             authorization_epoch: state.authorization_epoch,
@@ -181,6 +142,38 @@ fn authorized(
         },
         grant: grant.clone(),
     })
+}
+
+/// The Exec server hello as a relation handshake.
+pub(super) fn relation_server(server: &ExecServerHello) -> RelationServerHello {
+    RelationServerHello {
+        transcript_prefix: EXEC_TRANSCRIPT_PREFIX.into(),
+        protocol_version: server.protocol_version,
+        capability: server.capability.clone(),
+        challenge: server.challenge.clone(),
+        server_device_id: server.server_device_id.clone(),
+        server_public_key: server.server_public_key.clone(),
+        server_fingerprint: server.server_fingerprint.clone(),
+        server_node_id: server.server_node_id.clone(),
+    }
+}
+
+/// The Exec client hello as a relation handshake; `client_features` are not
+/// part of the proof.
+pub(super) fn relation_client(hello: &ExecClientHello) -> RelationClientHello {
+    RelationClientHello {
+        protocol_version: hello.protocol_version,
+        capability: hello.capability.clone(),
+        relation_kind: hello.relation_kind.clone(),
+        relation_id: hello.relation_id.clone(),
+        device_id: hello.device_id.clone(),
+        device_name: hello.device_name.clone(),
+        public_key: hello.public_key.clone(),
+        fingerprint: hello.fingerprint.clone(),
+        node_id: hello.node_id.clone(),
+        client_nonce: hello.client_nonce.clone(),
+        proof: hello.proof.clone(),
+    }
 }
 
 fn validate_server(server: &ExecServerHello, endpoint: &PeerEndpoint) -> io::Result<()> {
@@ -204,47 +197,10 @@ fn validate_server(server: &ExecServerHello, endpoint: &PeerEndpoint) -> io::Res
     Ok(())
 }
 
-fn validate_common(
-    server: &ExecServerHello,
-    hello: &ExecClientHello,
-    remote_node: &str,
-    state: &ShareAuthState,
-) -> Result<(), ExecRejection> {
-    if server.protocol_version != EXEC_PROTOCOL_VERSION
-        || server.capability != EXEC_CAPABILITY
-        || hello.protocol_version != EXEC_PROTOCOL_VERSION
-        || hello.capability != EXEC_CAPABILITY
-        || hello.node_id != remote_node
-        || server.server_device_id != state.identity.device_id
-        || server.server_public_key != state.identity.public_key
-        || server.server_fingerprint != state.identity.fingerprint
-        || server.server_node_id != state.identity.node_id
-        || server.challenge.len() < 24
-        || hello.client_nonce.len() < 24
-        || !fingerprint_matches(&hello.public_key, &hello.fingerprint)
-    {
-        return Err(ExecRejection::Authentication);
-    }
-    Ok(())
-}
-
+/// The text the client's proof is an HMAC over; the client checked the
+/// server's protocol version and capability before (`validate_server`).
 pub(crate) fn transcript(server: &ExecServerHello, client: &ExecClientHello) -> String {
-    format!(
-        "smart-explorer/share-exec/v2|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|client-to-server|{}",
-        server.challenge,
-        client.client_nonce,
-        client.relation_kind,
-        client.relation_id,
-        client.device_id,
-        client.public_key,
-        client.fingerprint,
-        client.node_id,
-        server.server_device_id,
-        server.server_public_key,
-        server.server_fingerprint,
-        server.server_node_id,
-        EXEC_CAPABILITY,
-    )
+    relation_transcript(&relation_server(server), &relation_client(client))
 }
 
 fn denied() -> io::Error {
@@ -257,9 +213,12 @@ fn denied() -> io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::share::core::public_fingerprint;
+    use crate::share::core::{public_fingerprint, verify_hmac};
     use crate::share::exec_policy::ExecGrant;
-    use crate::share::types::DirectGrant;
+    use crate::share::types::{DirectGrant, DirectGrantState};
+
+    /// Unix seconds of the checks; the grants of these tests have no end.
+    const NOW: i64 = 1_760_000_000;
 
     #[test]
     fn proof_is_bound_to_the_fresh_server_challenge() {
@@ -312,24 +271,24 @@ mod tests {
         };
         client.proof = hmac_proof(b"secret", &transcript(&server, &client));
         assert_eq!(
-            authorize_client_hello_in(&server, &client, &client.node_id, &state).err(),
+            authorize_client_hello_in(&server, &client, &client.node_id, &state, NOW).err(),
             Some(ExecRejection::NotAuthorized)
         );
         state.direct_grants[0].exec.enabled = true;
         state.direct_grants[0].exec.policy_revision = 3;
         let authorized =
-            authorize_client_hello_in(&server, &client, &client.node_id, &state).unwrap();
+            authorize_client_hello_in(&server, &client, &client.node_id, &state, NOW).unwrap();
         assert_eq!(authorized.authorization.policy_revision, 3);
         assert_eq!(authorized.grant, state.direct_grants[0].exec);
         let mut forged = client.clone();
         forged.proof = hmac_proof(b"wrong", &transcript(&server, &forged));
         assert_eq!(
-            authorize_client_hello_in(&server, &forged, &forged.node_id, &state).err(),
+            authorize_client_hello_in(&server, &forged, &forged.node_id, &state, NOW).err(),
             Some(ExecRejection::Authentication)
         );
         state.direct_grants[0].node_id = "changed".into();
         assert_eq!(
-            authorize_client_hello_in(&server, &client, &client.node_id, &state).err(),
+            authorize_client_hello_in(&server, &client, &client.node_id, &state, NOW).err(),
             Some(ExecRejection::Authentication)
         );
     }
@@ -366,11 +325,11 @@ mod tests {
         // probing never learns whether a grant exists.
         client.proof = hmac_proof(b"wrong", &transcript(&server, &client));
         assert_eq!(
-            authorize_client_hello_in(&server, &client, &client.node_id, &state).err(),
+            authorize_client_hello_in(&server, &client, &client.node_id, &state, NOW).err(),
             Some(ExecRejection::Authentication)
         );
         client.proof = hmac_proof(b"secret", &transcript(&server, &client));
-        let off = authorize_client_hello_in(&server, &client, &client.node_id, &state).err();
+        let off = authorize_client_hello_in(&server, &client, &client.node_id, &state, NOW).err();
         assert_eq!(off, Some(ExecRejection::NotAuthorized));
         // Identity and proof failures count against the penalty account;
         // a verified device with Exec off never does.
@@ -422,6 +381,7 @@ mod tests {
             node_id: identity.node_id,
             client_nonce: "client-nonce-012345678901".into(),
             proof: String::new(),
+            client_features: Vec::new(),
         }
     }
 }

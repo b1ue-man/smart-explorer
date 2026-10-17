@@ -4,6 +4,7 @@
 //! device and its fingerprint only; the resolved target repeats every
 //! cryptographic pin of the current profile, so a replaced identity fails
 //! closed instead of inheriting a grant.
+use super::access_grant::AccessGrant;
 use super::exec_policy::ExecRunAs;
 use super::types::{DirectGrantState, ExecGrantTarget};
 use super::ShareProfiles;
@@ -36,6 +37,8 @@ pub struct ExecTargetView {
     pub run_as: ExecRunAs,
     /// Empty: full shell; otherwise the only programs the device may start.
     pub programs: Vec<String>,
+    /// The access right: account, capability decisions and end (C1).
+    pub(crate) access: AccessGrant,
 }
 
 /// Every direct grant and room member, sorted by name, then key.
@@ -61,6 +64,7 @@ pub fn exec_target_views(profiles: &ShareProfiles) -> Vec<ExecTargetView> {
             base_authorized: grant.state == DirectGrantState::Accepted,
             run_as: grant.exec.run_as.clone(),
             programs: grant.exec.programs.clone(),
+            access: grant.exec.access_grant(),
         });
     }
     for room in &profiles.rooms {
@@ -88,6 +92,7 @@ pub fn exec_target_views(profiles: &ShareProfiles) -> Vec<ExecTargetView> {
                 base_authorized: room.auto_join && !member.blocked,
                 run_as: member.exec.run_as.clone(),
                 programs: member.exec.programs.clone(),
+                access: member.exec.access_grant(),
             });
         }
     }

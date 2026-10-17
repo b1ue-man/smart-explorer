@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
+use super::access_grant_runtime::keeps_exec_jobs;
 use super::core::eio;
 use super::exec_policy::ExecGrant;
 use super::exec_registry::ExecRegistry;
@@ -46,9 +47,7 @@ pub(super) fn mutate(
     // Registry mutation happens while new handshakes are excluded by the auth
     // lock. On disable this establishes the deny barrier and cancellation
     // before the authoritative auth snapshot is changed.
-    registry
-        .apply_authorization(&principal, next_policy.policy_revision, next_epoch, enabled)
-        .map_err(eio)?;
+    install(registry, &principal, policy, &next_policy, next_epoch)?;
     *policy = next_policy.clone();
     state.authorization_epoch = next_epoch;
     Ok(ExecGrantMutation {
@@ -95,20 +94,13 @@ pub(super) fn apply_exact(
         .ok_or_else(|| eio("Share authorization epoch exhausted"))?;
     let relation_id = state.identity.direct_lookup_id.clone();
     let (principal, current) =
-        resolve_exact_policy(&mut state, &target, &relation_id, policy.enabled)?;
+        resolve_exact_policy(&mut state, &target, &relation_id, policy.grants_any())?;
     if principal != expected_principal || policy.policy_revision < current.policy_revision {
         return Err(denied(
             "persisted Exec grant no longer matches the exact identity",
         ));
     }
-    registry
-        .apply_authorization(
-            &principal,
-            policy.policy_revision,
-            next_epoch,
-            policy.enabled,
-        )
-        .map_err(eio)?;
+    install(registry, &principal, current, &policy, next_epoch)?;
     *current = policy.clone();
     state.authorization_epoch = next_epoch;
     Ok(ExecGrantMutation {
@@ -117,6 +109,24 @@ pub(super) fn apply_exact(
         policy,
         authorization_epoch: next_epoch,
     })
+}
+
+/// Installs the next policy of one grant: a grant whose Exec capabilities
+/// only widened keeps the principal's running jobs (C5); any other change
+/// ends them.
+fn install(
+    registry: &ExecRegistry,
+    principal: &ExecPrincipal,
+    current: &ExecGrant,
+    next: &ExecGrant,
+    epoch: u64,
+) -> io::Result<()> {
+    if next.enabled && keeps_exec_jobs(current, next) {
+        registry.apply_widened_authorization(principal, next.policy_revision, epoch)
+    } else {
+        registry.apply_authorization(principal, next.policy_revision, epoch, next.enabled)
+    }
+    .map_err(eio)
 }
 
 /// Applies a complete configuration transition to the runtime registry before
@@ -149,11 +159,19 @@ pub(super) fn apply_configuration_transition(
             } else {
                 old_policy.revision
             };
-            updates.push((old_policy.principal.clone(), revision, false));
+            updates.push((old_policy.principal.clone(), revision, false, false));
         }
     }
-    for policy in new.values() {
-        updates.push((policy.principal.clone(), policy.revision, policy.enabled));
+    for (key, policy) in &new {
+        let keep_jobs = old
+            .get(key)
+            .is_some_and(|old_policy| keeps_exec_jobs(&old_policy.grant, &policy.grant));
+        updates.push((
+            policy.principal.clone(),
+            policy.revision,
+            policy.enabled,
+            keep_jobs,
+        ));
     }
     registry
         .apply_configuration_authorizations(
@@ -251,6 +269,7 @@ struct EffectivePolicy {
     principal: ExecPrincipal,
     revision: u64,
     enabled: bool,
+    grant: ExecGrant,
 }
 
 fn effective_policies(state: &ShareAuthState) -> Vec<EffectivePolicy> {
@@ -274,6 +293,7 @@ fn effective_policies(state: &ShareAuthState) -> Vec<EffectivePolicy> {
             // decision. Its epoch barrier cancels old work; returning online
             // must not look like re-enabling a revoked policy revision.
             enabled: grant.state == DirectGrantState::Accepted && grant.exec.enabled,
+            grant: grant.exec.clone(),
         });
     }
     for room in &state.rooms {
@@ -301,6 +321,7 @@ fn append_room_policies(room: &RoomProfile, policies: &mut Vec<EffectivePolicy>)
             },
             revision: member.exec.policy_revision,
             enabled: member.is_admitted() && member.exec.enabled,
+            grant: member.exec.clone(),
         });
     }
 }

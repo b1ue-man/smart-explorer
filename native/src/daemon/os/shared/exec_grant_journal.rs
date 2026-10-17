@@ -46,7 +46,8 @@ impl JournalEntry {
         getrandom::getrandom(&mut random)
             .map_err(|error| format!("Exec-Grant operation id: {error}"))?;
         let operation_id = random.iter().map(|byte| format!("{byte:02x}")).collect();
-        let phase = if mutation.policy.enabled {
+        // A grant that allows anything (Exec or screen) is persisted first.
+        let phase = if mutation.policy.grants_any() {
             JournalPhase::PendingApply
         } else {
             JournalPhase::PendingDeny
@@ -78,7 +79,7 @@ impl JournalEntry {
             return Err("invalid Exec-Grant journal operation id".into());
         }
         let phase_enabled = self.phase == JournalPhase::PendingApply;
-        if self.mutation.policy.enabled != phase_enabled {
+        if self.mutation.policy.grants_any() != phase_enabled {
             return Err("Exec-Grant journal phase contradicts desired policy".into());
         }
         self.mutation
@@ -255,6 +256,28 @@ impl ShareHost {
         if let Some(settings) = &settings {
             settings.validate_for_this_host()?;
         }
+        self.mutate_grant_with(|profiles, identity| {
+            crate::share::ExecGrantMutation::prepare_persisted(
+                profiles,
+                identity,
+                target,
+                enabled,
+                settings.as_ref(),
+                crate::share::core_now_secs(),
+            )
+        })
+    }
+
+    /// Journal, persistence and worker hand-off of one grant change;
+    /// `prepare` makes the change from the current profiles and returns it
+    /// with the revision it replaces.
+    pub(crate) fn mutate_grant_with<F>(&self, prepare: F) -> Result<ExecGrantPersistResult, String>
+    where
+        F: FnOnce(
+            &mut crate::share::ShareProfiles,
+            &crate::share::ShareIdentity,
+        ) -> Result<(crate::share::ExecGrantMutation, u64), String>,
+    {
         let _exclusive = self
             .exec_grant_lock
             .lock()
@@ -280,15 +303,7 @@ impl ShareHost {
                 .ok_or_else(|| "Share-Identitaet nicht verfuegbar".to_string())?;
             (identity, state.profiles.clone())
         };
-        let (mutation, expected_policy_revision) =
-            crate::share::ExecGrantMutation::prepare_persisted(
-                &mut profiles,
-                &identity,
-                target,
-                enabled,
-                settings.as_ref(),
-                crate::share::core_now_secs(),
-            )?;
+        let (mutation, expected_policy_revision) = prepare(&mut profiles, &identity)?;
         let entry = JournalEntry::new(mutation, expected_policy_revision)?;
         write_entry(&entry)?;
         let mut state = self

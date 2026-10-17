@@ -3,14 +3,35 @@
 //! [`SessionAuthorization`] is what one authorized filesystem stream may do;
 //! [`RestrictionSet`] names exactly whose rights a configuration change
 //! narrowed („Recht eingeschränkt für (Schlüssel, Beziehung)“), so only those
-//! sessions, leases, transfers, Exec jobs and repairs end (FA3).
+//! sessions, leases, transfers, Exec jobs and repairs end (FA3). A narrowed
+//! or ended access right (C5) ends only the sessions of its capabilities.
+use super::access_grant::Capability;
 use super::fs::ShareExportConfig;
 use super::profiles::ShareProfiles;
 use super::types::{DirectContact, DirectGrant, RoomProfile, ShareAuthState, ShareStatus};
 
 #[path = "relation_rights_diff.rs"]
 mod diff;
-pub(crate) use diff::authorization_restrictions;
+
+/// Only reductions of existing authority close work (FA3). Exec grants are
+/// compared capability by capability (C5): each narrowed capability is its
+/// own restriction, and a pure widening restricts nothing, so a running
+/// session survives „Immer erlauben“.
+pub(crate) fn authorization_restrictions(
+    current: &ShareAuthState,
+    candidate: &ShareAuthState,
+) -> RestrictionSet {
+    let mut restrictions = diff::authorization_restrictions(current, candidate);
+    restrictions
+        .items
+        .retain(|item| item.reason != RestrictionReason::ExecRevoked);
+    if restrictions.everything.is_none() {
+        restrictions.merge(super::access_grant_runtime::capability_restrictions(
+            current, candidate,
+        ));
+    }
+    restrictions
+}
 
 /// Result of authorizing one incoming filesystem stream.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -87,6 +108,28 @@ pub(crate) enum RestrictionReason {
     RelationInactive,
     /// Not attributable to a key and relation: close everything (pre-V5).
     Unattributed,
+    /// One capability of an access right narrowed (C5): its sessions end;
+    /// file sessions, leases and the other capabilities stay.
+    CapabilityNarrowed(Capability),
+    /// The access right ended (`valid_until`): the sessions of every
+    /// capability end; file sessions and leases stay.
+    GrantExpired,
+}
+
+impl RestrictionReason {
+    /// Whether the reason concerns access-right capabilities only (Exec
+    /// jobs, screen sessions), not the relation's file access.
+    pub(crate) fn capability_only(self) -> bool {
+        matches!(self, Self::CapabilityNarrowed(_) | Self::GrantExpired)
+    }
+
+    /// Whether the reason ends sessions of `capability`.
+    pub(crate) fn ends(self, capability: Capability) -> bool {
+        match self {
+            Self::CapabilityNarrowed(narrowed) => narrowed == capability,
+            _ => true,
+        }
+    }
 }
 
 /// Event „Recht eingeschränkt für (Schlüssel, Beziehung)“.
@@ -163,10 +206,11 @@ impl RestrictionSet {
         &self.items
     }
 
-    /// Whether a session, lease, transfer, Exec job or repair of this
-    /// principal is hit. `relation_kind` is `"direct"` or `"room"` as in
-    /// `PeerHello.relation_kind`; `relation_id` is the room id (ignored for
-    /// Direct).
+    /// Whether a session, lease, transfer or repair of this principal, or
+    /// its connection, is hit. `relation_kind` is `"direct"` or `"room"` as
+    /// in `PeerHello.relation_kind`; `relation_id` is the room id (ignored
+    /// for Direct). Restrictions of access-right capabilities alone leave
+    /// them alone; `affects_capability` covers those.
     pub(crate) fn affects(
         &self,
         relation_kind: &str,
@@ -175,10 +219,42 @@ impl RestrictionSet {
         node_id: &str,
     ) -> bool {
         self.everything.is_some()
-            || self
-                .items
-                .iter()
-                .any(|item| item.affects(relation_kind, relation_id, public_key, node_id))
+            || self.items.iter().any(|item| {
+                !item.reason.capability_only()
+                    && item.affects(relation_kind, relation_id, public_key, node_id)
+            })
+    }
+
+    /// Whether a session of `capability` of this principal (an Exec job, a
+    /// screen session) is hit: by any restriction of its relation and key,
+    /// except a narrowing of another capability.
+    pub(crate) fn affects_capability(
+        &self,
+        relation_kind: &str,
+        relation_id: &str,
+        public_key: &str,
+        node_id: &str,
+        capability: Capability,
+    ) -> bool {
+        self.everything.is_some()
+            || self.items.iter().any(|item| {
+                item.reason.ends(capability)
+                    && item.affects(relation_kind, relation_id, public_key, node_id)
+            })
+    }
+
+    /// Whether an Exec job of this principal is hit. A job's start kind is
+    /// not kept with it, so a narrowing of commands or terminal ends both.
+    pub(crate) fn affects_exec(
+        &self,
+        relation_kind: &str,
+        relation_id: &str,
+        public_key: &str,
+        node_id: &str,
+    ) -> bool {
+        Capability::EXEC.into_iter().any(|capability| {
+            self.affects_capability(relation_kind, relation_id, public_key, node_id, capability)
+        })
     }
 }
 

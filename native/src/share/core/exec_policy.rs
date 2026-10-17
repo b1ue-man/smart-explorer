@@ -2,6 +2,11 @@ use std::path::{is_separator, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use super::access_grant::{
+    valid_account_name, AccessGrant, AccessGrantChange, AccountProfile, Capability,
+    CapabilityDecision, REMOTE_ACCOUNT_NAME,
+};
+use super::access_grant_wire::{self, AccessRecord, KeptParts};
 use super::direct_protocol::DirectRequestId;
 use super::exec_types::{ExecCommand, ExecStart};
 use super::profiles::ShareProfiles;
@@ -13,9 +18,7 @@ mod wire;
 
 use self::program_path::ProgramSearch;
 
-/// Longest local account name (`LOGIN_NAME_MAX` is 256 on Linux; useradd
-/// accepts 32 by default) and longest allowed program path (`PATH_MAX`).
-const MAX_ACCOUNT_NAME_BYTES: usize = 256;
+/// Longest allowed program path (`PATH_MAX`).
 const MAX_PROGRAM_BYTES: usize = 4096;
 /// Longest locale or terminal name a program-list job takes over.
 const MAX_ENV_VALUE_BYTES: usize = 64;
@@ -57,13 +60,7 @@ pub struct ExecGrantSettings {
 impl ExecGrantSettings {
     pub fn validate(&self) -> Result<(), String> {
         if let ExecRunAs::Account { name } = &self.run_as {
-            let valid = !name.is_empty()
-                && name.len() <= MAX_ACCOUNT_NAME_BYTES
-                && !name.starts_with('-')
-                && name
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || b"._-$".contains(&byte));
-            if !valid {
+            if !valid_account_name(name) {
                 return Err(format!("invalid local account name {name:?}"));
             }
         }
@@ -105,7 +102,8 @@ impl ExecGrantSettings {
     }
 }
 
-/// Local full-code-execution policy for one exact pinned peer identity.
+/// Local access right (commands, terminal and, through S4, the screen) for
+/// one exact pinned peer identity.
 ///
 /// File access never implies execution access. New and migrated policies are
 /// disabled, and identity or base-authorization changes advance the local
@@ -113,8 +111,13 @@ impl ExecGrantSettings {
 /// narrow an enabled grant; profiles written before they existed read as the
 /// Standardnutzer with the full shell, exactly the rights they had.
 ///
-/// Stored through `wire::ExecGrantWire`: a narrowed grant is stored as
-/// switched off for versions that do not know the narrowing.
+/// The access right itself is `access_grant()`: the `access` object when the
+/// grant needs one (C1), else the fields above ported as before. `enabled`
+/// and `run_as` mirror it for every surface that predates it: `enabled` is
+/// true when an Exec capability is not off.
+///
+/// Stored through `wire::ExecGrantWire`: a grant that older versions cannot
+/// express is stored as switched off for them.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(from = "wire::ExecGrantWire", into = "wire::ExecGrantWire")]
 pub struct ExecGrant {
@@ -125,23 +128,168 @@ pub struct ExecGrant {
     pub source_decision_revision: Option<u64>,
     pub run_as: ExecRunAs,
     pub programs: Vec<String>,
+    /// The stored `access` object; `None` when the fields above express the
+    /// grant exactly.
+    pub(crate) access: Option<AccessRecord>,
 }
 
 impl ExecGrant {
+    /// The access right of this grant, without its end applied.
+    pub(crate) fn access_grant(&self) -> AccessGrant {
+        match &self.access {
+            None => access_grant_wire::ported(self.enabled, &self.run_as, &self.programs),
+            Some(AccessRecord::Known { grant, .. }) => {
+                let mut grant = grant.clone();
+                if !self.enabled {
+                    // `enabled` cleared on its own (a journal mask) keeps
+                    // every Exec capability off.
+                    for capability in Capability::EXEC {
+                        grant.set(capability, CapabilityDecision::Off);
+                    }
+                }
+                grant
+            }
+            Some(AccessRecord::Unknown(_)) => {
+                AccessGrant::new(AccountProfile::from_run_as(&self.run_as))
+            }
+        }
+    }
+
+    /// The decision for `capability` at `now` (Unix seconds, host clock).
+    pub(crate) fn decision_at(&self, capability: Capability, now: i64) -> CapabilityDecision {
+        self.access_grant().decision_at(capability, now)
+    }
+
+    /// Unix seconds from which every capability of the grant is off.
+    pub(crate) fn valid_until(&self) -> Option<i64> {
+        self.access_grant().valid_until
+    }
+
+    /// Whether any capability, Exec or screen, is on (the end not applied).
+    pub(crate) fn grants_any(&self) -> bool {
+        self.access_grant().grants_any()
+    }
+
+    /// The capabilities that `self` narrows against `old` (C5); empty for a
+    /// pure widening or no change.
+    pub(crate) fn narrowed_against(&self, old: &ExecGrant) -> Vec<Capability> {
+        self.access_grant()
+            .narrowing_against(&old.access_grant(), self.programs != old.programs)
+    }
+
+    /// Applies `change` in the next revision; a refused change leaves the
+    /// grant as it was.
+    pub(crate) fn apply_access_change(
+        &mut self,
+        change: &AccessGrantChange,
+        changed_at: i64,
+    ) -> Result<(), String> {
+        let mut grant = self.access_grant();
+        let mut programs = self.programs.clone();
+        grant.apply(change, &mut programs)?;
+        let kept = self.kept_parts();
+        self.advance(changed_at).map_err(str::to_string)?;
+        self.store(grant, programs, kept);
+        Ok(())
+    }
+
     /// Enables or disables and, when `settings` is given, replaces run-as
-    /// account and program list in the same revision step.
+    /// account and program list in the same revision step. Enabling allows
+    /// commands and, without a program list, the terminal; disabling turns
+    /// both off. The rest of the access right stays (D.2.3).
     pub(crate) fn set_runtime_policy(
         &mut self,
         enabled: bool,
         settings: Option<&ExecGrantSettings>,
         changed_at: i64,
     ) -> Result<(), &'static str> {
-        self.set_runtime_enabled(enabled, changed_at)?;
+        let mut grant = self.access_grant();
+        let mut programs = self.programs.clone();
         if let Some(settings) = settings {
-            self.run_as = settings.run_as.clone();
-            self.programs = settings.programs.clone();
+            let account = AccountProfile::from_run_as(&settings.run_as);
+            // Surfaces that predate the remote account repeat it by name.
+            let repeats_remote = grant.account == AccountProfile::Remote
+                && account.account_name() == Some(REMOTE_ACCOUNT_NAME);
+            if !repeats_remote {
+                grant.account = account;
+            }
+            programs = settings.programs.clone();
         }
+        let (commands, terminal) = match (enabled, programs.is_empty()) {
+            (false, _) => (CapabilityDecision::Off, CapabilityDecision::Off),
+            (true, true) => (CapabilityDecision::Allow, CapabilityDecision::Allow),
+            (true, false) => (CapabilityDecision::Allow, CapabilityDecision::Off),
+        };
+        grant.set(Capability::ExecCommands, commands);
+        grant.set(Capability::ExecTerminal, terminal);
+        let kept = self.kept_parts();
+        self.advance(changed_at)?;
+        self.store(grant, programs, kept);
         Ok(())
+    }
+
+    /// Every capability off without a new revision: what a pending journal
+    /// entry leaves of the grant until it is applied (fail closed).
+    pub(crate) fn mask_off(&mut self) {
+        self.enabled = false;
+        if let Some(AccessRecord::Known { grant, .. }) = &mut self.access {
+            for capability in Capability::ALL {
+                grant.set(capability, CapabilityDecision::Off);
+            }
+        }
+    }
+
+    fn advance(&mut self, changed_at: i64) -> Result<(), &'static str> {
+        self.policy_revision = self
+            .policy_revision
+            .checked_add(1)
+            .ok_or("Exec policy revision exhausted")?;
+        self.changed_at = changed_at;
+        self.source_request_id = None;
+        self.source_decision_revision = None;
+        Ok(())
+    }
+
+    fn kept_parts(&self) -> KeptParts {
+        match &self.access {
+            Some(AccessRecord::Known { kept, .. }) => kept.clone(),
+            _ => KeptParts::default(),
+        }
+    }
+
+    /// Keeps `grant` in the fields of readers up to 0.5.182 when they express
+    /// it exactly, else in the `access` object with mirrored fields.
+    fn store(&mut self, grant: AccessGrant, programs: Vec<String>, kept: KeptParts) {
+        self.programs = programs;
+        match access_grant_wire::legacy_form(&grant, &self.programs) {
+            Some((enabled, run_as)) if kept.is_empty() => {
+                self.enabled = enabled;
+                self.run_as = run_as;
+                self.access = None;
+            }
+            _ => {
+                self.enabled = grant.grants_exec();
+                self.run_as = grant.account.run_as();
+                self.access = Some(AccessRecord::Known { grant, kept });
+            }
+        }
+    }
+
+    /// After reading a stored `access` object or turning every capability
+    /// off: the mirrored fields, or the old fields alone when they express
+    /// the grant exactly. An unknown object stays as it is, switched off.
+    fn settle_stored_access(&mut self) {
+        match self.access.take() {
+            Some(AccessRecord::Known { grant, kept }) => {
+                let programs = std::mem::take(&mut self.programs);
+                self.store(grant, programs, kept);
+            }
+            Some(unknown) => {
+                self.enabled = false;
+                self.access = Some(unknown);
+            }
+            None => {}
+        }
     }
 
     /// True when this grant is narrowed: a program list or another account.
@@ -199,20 +347,13 @@ impl ExecGrant {
         program_path::authorize(program, &self.programs, search).map(Some)
     }
 
+    /// Enables or disables in the next revision; account and list stay.
     pub(crate) fn set_runtime_enabled(
         &mut self,
         enabled: bool,
         changed_at: i64,
     ) -> Result<(), &'static str> {
-        self.policy_revision = self
-            .policy_revision
-            .checked_add(1)
-            .ok_or("Exec policy revision exhausted")?;
-        self.enabled = enabled;
-        self.changed_at = changed_at;
-        self.source_request_id = None;
-        self.source_decision_revision = None;
-        Ok(())
+        self.set_runtime_policy(enabled, None, changed_at)
     }
 
     pub(crate) fn reset_for_identity_change(&mut self, changed_at: i64) {
@@ -232,17 +373,20 @@ impl ExecGrant {
         self.disable(changed_at, None, None);
     }
 
+    /// Every capability, Exec and screen, off in the next revision; account,
+    /// list and end stay.
     fn disable(
         &mut self,
         changed_at: i64,
         source_request_id: Option<DirectRequestId>,
         source_decision_revision: Option<u64>,
     ) {
-        self.enabled = false;
+        self.mask_off();
         self.policy_revision = self.policy_revision.saturating_add(1);
         self.changed_at = changed_at;
         self.source_request_id = source_request_id;
         self.source_decision_revision = source_decision_revision;
+        self.settle_stored_access();
     }
 }
 
