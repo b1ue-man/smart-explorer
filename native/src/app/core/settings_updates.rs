@@ -10,6 +10,7 @@ impl App {
             theme::muted(ui),
             format!("Version {}", env!("CARGO_PKG_VERSION")),
         );
+        super::licenses_ui::licenses_button(ui);
         if !self.show_update_dialog {
             if let Some(ReadyUpdate::Staged(bundle)) = self.update_ready.as_ref() {
                 let version = bundle.version().to_string();

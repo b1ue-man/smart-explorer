@@ -4,6 +4,8 @@ version = "0.5.182"
 edition = "2021"
 authors = ["Silas <weizenbein1@gmail.com>"]
 description = "Fast native file explorer with deep filtering"
+license = "MIT"
+publish = false
 
 # The Android JNI library shares this crate's Cargo.lock and profiles. The root
 # package stays the default member, so desktop commands run in `native/` are
@@ -142,7 +144,24 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 quick-xml = "0.39"
 socket2 = "0.6"
 icu_normalizer = { version = "2.2", default-features = false, features = ["compiled_data"] }
+# Cryptomator vault format 8 (native/src/cryptomator, VLT-M1): the RustCrypto
+# generation digest 0.11 / cipher 0.5 / aead 0.6 already in the lock (smb2,
+# ssh-cipher), renamed beside the 0.10 generation above. New packages: only
+# aes-siv and aes-kw. Pure Rust; zeroize wipes cipher key copies on drop.
+aes-siv = { version = "0.8.0", default-features = false, features = ["alloc", "zeroize"] }
+aes-kw = { version = "0.3.1", default-features = false }
+aes-gcm-011 = { package = "aes-gcm", version = "0.11.1", default-features = false, features = ["aes", "zeroize"] }
+aes-09 = { package = "aes", version = "0.9.1", default-features = false, features = ["zeroize"] }
+ctr-010 = { package = "ctr", version = "0.10.1", default-features = false, features = ["zeroize"] }
+hmac-013 = { package = "hmac", version = "0.13.0", default-features = false, features = ["zeroize"] }
+sha2-011 = { package = "sha2", version = "0.11.0", default-features = false }
+sha1-011 = { package = "sha1", version = "0.11.0", default-features = false }
+scrypt = { version = "0.12.0", default-features = false }
+data-encoding = { version = "2.11.0", default-features = false, features = ["alloc"] }
 flate2 = "1"
+# Lossless tile codec of the screen protocol (screen/core/tiles_codec.rs):
+# pure-Rust LZ4 block format, already in the lock through smb2.
+lz4_flex = "0.14"
 
 # rfd is per-target so the crate also builds on a non-Windows host (CI / local
 # `cargo test`): Windows uses the Win32 common-controls dialog; elsewhere the

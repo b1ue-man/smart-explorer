@@ -200,6 +200,7 @@ pub(super) fn handle_client(
             Ok(_) => write_response(&mut stream, &IpcResponse::Ok),
             Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg }),
         },
+        request @ IpcRequest::Access { .. } => host.serve_extension(stream, request),
     }
 }
 

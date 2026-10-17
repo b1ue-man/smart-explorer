@@ -20,6 +20,8 @@
 
 #[path = "os/shared/access_grant_journal.rs"]
 mod access_grant_journal;
+#[path = "os/shared/access_ipc.rs"]
+mod access_ipc;
 #[path = "os/shared/backend_batch.rs"]
 mod backend_batch;
 #[path = "os/shared/backend_budget.rs"]
@@ -192,6 +194,9 @@ mod state;
 #[path = "os/shared/update_stop.rs"]
 mod update_stop;
 
+pub(crate) use access_ipc::{
+    access_approvals, decide_access_approval, exec_notice, ExecNoticeWatch,
+};
 pub use catch_up::{CatchUpRecord, CatchUpSkip, CatchUpStatus};
 pub use embedded::ensure_embedded_daemon;
 pub use exec_ipc::{
@@ -214,6 +219,8 @@ pub use ipc::{
     send_share_command, share_command, share_worker_snapshot, ShareCommandReply,
     ShareWorkerSnapshot, WorkerHandoff,
 };
+pub use ipc_client::share_worker_peek;
+pub(crate) use ipc_protocol::ExecNoticeView;
 pub use live::{
     active_job, cancel_catch_up, catch_up_status, drain_share_events_in_process, last_catch_up,
     last_catch_up_ms, request_catch_up,

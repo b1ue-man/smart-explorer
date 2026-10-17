@@ -169,7 +169,7 @@ mod exec_proc;
 #[path = "os/android/exec_proc_tests.rs"]
 mod exec_proc_tests;
 #[path = "core/exec_protocol.rs"]
-mod exec_protocol;
+pub(crate) mod exec_protocol;
 #[path = "core/exec_registry.rs"]
 mod exec_registry;
 #[path = "core/exec_server.rs"]

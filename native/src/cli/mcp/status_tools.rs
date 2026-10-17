@@ -32,6 +32,7 @@ pub(super) fn status(session: &Session) -> Result<CallToolResult, String> {
         },
         "plugins": crate::cli::plugin::status_value(),
         "background": crate::cli::background::status_value(),
+        "desktop": crate::desktop::status_value(),
         "sync_setups": sync_summary(),
     })))
 }

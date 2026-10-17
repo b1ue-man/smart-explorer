@@ -73,6 +73,7 @@ impl App {
                         }
                     });
             });
+        super::licenses_ui::show_licenses_window(ctx);
         self.settings.open = open;
     }
 
