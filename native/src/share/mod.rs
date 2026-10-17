@@ -1,5 +1,8 @@
 //! Authenticated Direct/Room Share over QUIC; untrusted rendezvous and relay.
 
+#[path = "access_modules.rs"]
+mod access_modules;
+pub(crate) use access_modules::*;
 #[path = "core/auth_penalty.rs"]
 mod auth_penalty;
 #[path = "core/authorization_policy.rs"]
@@ -16,6 +19,8 @@ mod configuration_runtime;
 mod connection_events;
 #[path = "core/crypto.rs"]
 mod core;
+#[path = "core/device_view.rs"]
+pub(crate) mod device_view;
 #[path = "os/shared/direct_actions.rs"]
 mod direct_actions;
 #[cfg(test)]

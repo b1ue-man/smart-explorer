@@ -11,47 +11,11 @@ pub(super) use self::bounds::bound_snapshot_for_ipc;
 #[cfg(test)]
 use self::bounds::encoded_response_len;
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(super) enum MountBackendScheme {
-    Local,
-    Sftp,
-    Ftp,
-    Webdav,
-    /// Never mounted (`mount_source` refuses SMB); present so the mapping
-    /// stays total.
-    Smb,
-    GoogleDrive,
-    Peer,
-}
-
-impl From<crate::vfs::Scheme> for MountBackendScheme {
-    fn from(value: crate::vfs::Scheme) -> Self {
-        match value {
-            crate::vfs::Scheme::Local => Self::Local,
-            crate::vfs::Scheme::Sftp => Self::Sftp,
-            crate::vfs::Scheme::Ftp => Self::Ftp,
-            crate::vfs::Scheme::Webdav => Self::Webdav,
-            crate::vfs::Scheme::Smb => Self::Smb,
-            crate::vfs::Scheme::GDrive => Self::GoogleDrive,
-            crate::vfs::Scheme::Peer => Self::Peer,
-        }
-    }
-}
-
-impl From<MountBackendScheme> for crate::vfs::Scheme {
-    fn from(value: MountBackendScheme) -> Self {
-        match value {
-            MountBackendScheme::Local => Self::Local,
-            MountBackendScheme::Sftp => Self::Sftp,
-            MountBackendScheme::Ftp => Self::Ftp,
-            MountBackendScheme::Webdav => Self::Webdav,
-            MountBackendScheme::Smb => Self::Smb,
-            MountBackendScheme::GoogleDrive => Self::GDrive,
-            MountBackendScheme::Peer => Self::Peer,
-        }
-    }
-}
+// Drive-host wire types (plan 2026-10-17 B2, R1); re-exported unchanged.
+#[path = "ipc_protocol_mount.rs"]
+mod mount;
+pub(super) use self::mount::MountBackendScheme;
+pub use self::mount::MountHostConfig;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -149,49 +113,6 @@ impl From<MountPathCapabilitiesWire> for crate::vfs::MountPathCapabilities {
             } else {
                 crate::vfs::RootConfinement::Unverified
             },
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct MountHostConfig {
-    pub id: crate::mount::MountId,
-    pub drive: crate::mount::DriveSelection,
-    pub mode: crate::mount::MountMode,
-    #[serde(default)]
-    pub metadata: crate::mount::MountMetadataPolicy,
-    #[serde(default)]
-    pub cache: crate::mount::MountCachePolicy,
-    #[serde(default)]
-    pub runtime_preference: crate::mount::MountRuntimePreference,
-    pub label: String,
-}
-
-impl MountHostConfig {
-    pub fn with_cache_policy(mut self, cache: crate::mount::MountCachePolicy) -> Self {
-        self.cache = cache;
-        self
-    }
-
-    pub fn with_runtime_preference(
-        mut self,
-        preference: crate::mount::MountRuntimePreference,
-    ) -> Self {
-        self.runtime_preference = preference;
-        self
-    }
-}
-
-impl From<&crate::mount::MountConfig> for MountHostConfig {
-    fn from(config: &crate::mount::MountConfig) -> Self {
-        Self {
-            id: config.id.clone(),
-            drive: config.drive,
-            mode: config.mode,
-            metadata: config.metadata,
-            cache: config.cache,
-            runtime_preference: config.runtime_preference,
-            label: config.label.clone(),
         }
     }
 }

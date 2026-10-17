@@ -15,6 +15,8 @@ pub(super) mod direct_event_schedule;
 pub(super) mod direct_events;
 #[path = "exec_grant_journal.rs"]
 pub(super) mod exec_grant_journal;
+#[path = "ipc_host_ext.rs"]
+mod ext;
 #[path = "ipc_host_legacy_events.rs"]
 pub(super) mod legacy_events;
 #[path = "ipc_host_mount_probe.rs"]
