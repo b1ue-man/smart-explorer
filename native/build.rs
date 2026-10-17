@@ -1,11 +1,17 @@
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[path = "build_support/private_dokany.rs"]
 mod private_dokany;
 
+/// Directory and file of the Rust crate license notices (plan C4), relative
+/// to this package. `native/rust-licenses.ps1` generates the file.
+const CRATE_LICENSES_DIR: &str = "../third-party/rust-crates";
+const CRATE_LICENSES_FILE: &str = "../third-party/rust-crates/THIRD-PARTY-LICENSES.txt";
+
 fn main() {
+    embed_crate_licenses();
     println!("cargo:rerun-if-changed=app.manifest");
     println!("cargo:rerun-if-changed=app.rc");
     println!("cargo:rerun-if-changed=assets/smart-explorer-icon.ico");
@@ -14,9 +20,8 @@ fn main() {
     if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
     }
-    private_dokany::generate().unwrap_or_else(|error| {
-        panic!("private Dokany embedding contract failed: {error}")
-    });
+    private_dokany::generate()
+        .unwrap_or_else(|error| panic!("private Dokany embedding contract failed: {error}"));
     if env::var("CARGO_CFG_TARGET_ENV").as_deref() != Ok("gnu") {
         return;
     }
@@ -37,6 +42,28 @@ fn main() {
     }
 
     println!("cargo:rustc-link-arg-bins={}", obj.display());
+}
+
+/// `src/licenses/mod.rs` embeds the license file under the cfg
+/// `se_crate_licenses`, which is set only when the file exists. A development
+/// build without it (before the task suite generated it) still compiles and
+/// every surface shows the marked notice "Lizenzverzeichnis fehlt in diesem
+/// Entwicklungsbau"; the release wrapper refuses to build without the checked
+/// file.
+fn embed_crate_licenses() {
+    println!("cargo:rustc-check-cfg=cfg(se_crate_licenses)");
+    // The directory entry also notices the file when it appears later.
+    println!("cargo:rerun-if-changed={CRATE_LICENSES_DIR}");
+    if Path::new(CRATE_LICENSES_FILE).is_file() {
+        println!("cargo:rerun-if-changed={CRATE_LICENSES_FILE}");
+        println!("cargo:rustc-cfg=se_crate_licenses");
+    } else {
+        println!(
+            "cargo:warning=third-party/rust-crates/THIRD-PARTY-LICENSES.txt fehlt: dieser \
+             Entwicklungsbau enthält statt der Lizenztexte nur den Hinweis \
+             \"Lizenzverzeichnis fehlt in diesem Entwicklungsbau\""
+        );
+    }
 }
 
 fn find_windres() -> String {
