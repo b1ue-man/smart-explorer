@@ -2,13 +2,15 @@ use std::future::Future;
 use std::pin::Pin;
 
 use tokio::io::AsyncWrite;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio::time::{Instant, MissedTickBehavior};
 
+use super::exec_access_view::ExecClientNotice;
 use super::exec_client::{
-    classify_io, emit_or_cancel, emit_with_timeout, failure, protocol, write_frame_with_timeout,
-    ExecClientEvent, ExecClientFailure, ExecClientFailureKind, ExecClientInput,
+    emit_or_cancel, emit_with_timeout, write_frame_with_timeout, ExecClientEvent,
+    ExecClientFailure, ExecClientFailureKind, ExecClientInput,
 };
+use super::exec_client_messages::{classify_io, failure, protocol};
 use super::exec_frame_reader;
 use super::exec_heartbeat::ExecHeartbeatPolicy;
 use super::exec_protocol::{ClientFrame, ExecWireError, ServerFrame};
@@ -16,8 +18,41 @@ use super::exec_types::{ExecId, ExecTerminal};
 
 pub(super) type TransportClosed = Pin<Box<dyn Future<Output = ()> + Send>>;
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run<W, R>(
+    send: W,
+    recv: R,
+    input: mpsc::Receiver<ExecClientInput>,
+    events: mpsc::Sender<ExecClientEvent>,
+    exec_id: ExecId,
+    terminal_start: bool,
+    heartbeat_policy: ExecHeartbeatPolicy,
+    transport_closed: TransportClosed,
+) -> Result<ExecTerminal, ExecClientFailure>
+where
+    W: AsyncWrite + Unpin,
+    R: tokio::io::AsyncRead + Unpin + Send + 'static,
+{
+    let (notice, _) = watch::channel(ExecClientNotice::default());
+    run_with_notice(
+        send,
+        recv,
+        input,
+        events,
+        exec_id,
+        terminal_start,
+        heartbeat_policy,
+        transport_closed,
+        &notice,
+    )
+    .await
+}
+
+/// The active phase after `Start`. `APPROVAL_PENDING` of the host, before
+/// `Started`, goes to `notice` and keeps the start waiting (D.2.2).
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn run_with_notice<W, R>(
     mut send: W,
     recv: R,
     mut input: mpsc::Receiver<ExecClientInput>,
@@ -26,6 +61,7 @@ pub(super) async fn run<W, R>(
     terminal_start: bool,
     heartbeat_policy: ExecHeartbeatPolicy,
     mut transport_closed: TransportClosed,
+    notice: &watch::Sender<ExecClientNotice>,
 ) -> Result<ExecTerminal, ExecClientFailure>
 where
     W: AsyncWrite + Unpin,
@@ -73,6 +109,14 @@ where
                         }
                     }
                 }
+                if let ServerFrame::ApprovalPending(pending) = frame {
+                    if pending.exec_id != exec_id || server_state.started {
+                        let message = "approval notice for another or a started Exec";
+                        return Err(protocol(message, true, "approval_order"));
+                    }
+                    notice.send_modify(|notice| notice.approval = Some(pending));
+                    continue;
+                }
                 let event = match server_state.accept(frame, &exec_id, true) {
                     Ok(event) => event,
                     Err(error) if error.kind == ExecClientFailureKind::Remote => {
@@ -106,6 +150,9 @@ where
                         active_write_timeout(heartbeat_policy, peer_deadline)?,
                     ).await?;
                     return Ok(terminal.clone());
+                }
+                if event == ExecClientEvent::Started {
+                    notice.send_modify(|notice| notice.approval = None);
                 }
                 emit_or_cancel(
                     &events,

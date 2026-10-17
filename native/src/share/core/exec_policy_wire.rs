@@ -6,11 +6,17 @@
 //! to such a reader: it would become the full shell of the worker's account
 //! and lose the narrowing at its next save. The stored form keeps `enabled`
 //! false for such a grant and carries the real switch in `restricted_enabled`,
-//! which only this version reads. Unrestricted grants are stored exactly as
+//! which only 0.5.181 and later read. Unrestricted grants are stored as
 //! before, so a profile written by 0.5.180 reads unchanged and a downgrade
 //! reads a restricted grant as switched off (fail closed).
+//!
+//! A grant those fields cannot express (`ask`, an end, the remote account,
+//! screen capabilities) also carries the object `access` and is stored with
+//! `enabled` false and without `restricted_enabled`, so every reader up to
+//! 0.5.182 sees it switched off (`access_grant_wire.rs`).
 use serde::{Deserialize, Serialize};
 
+use super::super::access_grant_wire::{self, AccessRecord};
 use super::super::direct_protocol::DirectRequestId;
 use super::{ExecGrant, ExecRunAs};
 
@@ -34,6 +40,9 @@ pub(in crate::share) struct ExecGrantWire {
     /// `enabled` false so that older readers keep it off.
     #[serde(default, skip_serializing_if = "is_false")]
     restricted_enabled: bool,
+    /// The access right when the fields above cannot express it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    access: Option<serde_json::Value>,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -42,6 +51,21 @@ fn is_false(value: &bool) -> bool {
 
 impl From<ExecGrantWire> for ExecGrant {
     fn from(wire: ExecGrantWire) -> Self {
+        if let Some(access) = wire.access {
+            // `access` decides; `programs` and the revision fields stay.
+            let mut grant = Self {
+                enabled: false,
+                policy_revision: wire.policy_revision,
+                changed_at: wire.changed_at,
+                source_request_id: wire.source_request_id,
+                source_decision_revision: wire.source_decision_revision,
+                run_as: wire.run_as,
+                programs: wire.programs,
+                access: Some(access_grant_wire::parse(access)),
+            };
+            grant.settle_stored_access();
+            return grant;
+        }
         // `restricted_enabled` counts only next to a real restriction: a
         // stray flag on a full-shell grant never switches it on.
         let restricted = ExecGrant::restricts(&wire.run_as, &wire.programs);
@@ -53,12 +77,33 @@ impl From<ExecGrantWire> for ExecGrant {
             source_decision_revision: wire.source_decision_revision,
             run_as: wire.run_as,
             programs: wire.programs,
+            access: None,
         }
     }
 }
 
 impl From<ExecGrant> for ExecGrantWire {
     fn from(grant: ExecGrant) -> Self {
+        let access = match &grant.access {
+            None => None,
+            Some(AccessRecord::Unknown(value)) => Some(value.clone()),
+            Some(AccessRecord::Known { kept, .. }) => {
+                Some(access_grant_wire::known_value(&grant.access_grant(), kept))
+            }
+        };
+        if access.is_some() {
+            return Self {
+                enabled: false,
+                policy_revision: grant.policy_revision,
+                changed_at: grant.changed_at,
+                source_request_id: grant.source_request_id,
+                source_decision_revision: grant.source_decision_revision,
+                run_as: grant.run_as,
+                programs: grant.programs,
+                restricted_enabled: false,
+                access,
+            };
+        }
         let hidden = grant.enabled && grant.is_restricted();
         Self {
             enabled: grant.enabled && !hidden,
@@ -69,6 +114,7 @@ impl From<ExecGrant> for ExecGrantWire {
             run_as: grant.run_as,
             programs: grant.programs,
             restricted_enabled: hidden,
+            access: None,
         }
     }
 }

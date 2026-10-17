@@ -2,6 +2,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::io;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
+use super::exec_access_view::ExecApprovalPending;
 use super::exec_terminal::ExecTerminalSize;
 use super::exec_types::{
     ExecAuthorization, ExecId, ExecProviderStatus, ExecStart, ExecTerminal, EXEC_CAPABILITY,
@@ -31,6 +32,8 @@ const TERMINAL: u8 = 35;
 const EXEC_ERROR: u8 = 36;
 const PONG: u8 = 37;
 const RESULT_ACKNOWLEDGED: u8 = 38;
+/// Sent only to clients that announce `exec_approval_v1` (D.2.2).
+const APPROVAL_PENDING: u8 = 39;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct ExecServerHello {
@@ -76,6 +79,9 @@ pub(crate) struct ExecClientHello {
     pub node_id: String,
     pub client_nonce: String,
     pub proof: String,
+    /// Features of the client; not part of the proof, unknown to old hosts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub client_features: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -133,6 +139,7 @@ pub(crate) enum ServerFrame {
     Error(ExecWireError),
     Pong { exec_id: ExecId, sequence: u64 },
     ResultAcknowledged { exec_id: ExecId },
+    ApprovalPending(ExecApprovalPending),
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -231,9 +238,9 @@ pub(crate) async fn recv_client_hello<R: AsyncRead + Unpin>(
     recv_json(reader, CLIENT_HELLO, MAX_HANDSHAKE_BYTES).await
 }
 
-pub(crate) async fn send_hello_ok<W: AsyncWrite + Unpin>(
+pub(crate) async fn send_hello_ok<W: AsyncWrite + Unpin, T: Serialize>(
     writer: &mut W,
-    hello: &ExecHelloOk,
+    hello: &T,
 ) -> io::Result<()> {
     send_json(writer, HELLO_OK, hello, MAX_HANDSHAKE_BYTES).await
 }
@@ -245,9 +252,9 @@ pub(crate) async fn send_hello_error<W: AsyncWrite + Unpin>(
     send_json(writer, HELLO_ERROR, error, MAX_HANDSHAKE_BYTES).await
 }
 
-pub(crate) async fn recv_hello_result<R: AsyncRead + Unpin>(
+pub(crate) async fn recv_hello_result<R: AsyncRead + Unpin, T: DeserializeOwned>(
     reader: &mut R,
-) -> io::Result<Result<ExecHelloOk, ExecWireError>> {
+) -> io::Result<Result<T, ExecWireError>> {
     let (tag, payload) = read_payload(reader, MAX_HANDSHAKE_BYTES).await?;
     match tag {
         HELLO_OK => decode(&payload).map(Ok),
@@ -335,6 +342,9 @@ pub(crate) async fn send_server_frame<W: AsyncWrite + Unpin>(
         ServerFrame::ResultAcknowledged { exec_id } => {
             send_json(writer, RESULT_ACKNOWLEDGED, exec_id, 128).await
         }
+        ServerFrame::ApprovalPending(pending) => {
+            send_json(writer, APPROVAL_PENDING, pending, 256).await
+        }
     }
 }
 
@@ -364,6 +374,7 @@ pub(crate) async fn recv_server_frame<R: AsyncRead + Unpin>(
         RESULT_ACKNOWLEDGED => Ok(ServerFrame::ResultAcknowledged {
             exec_id: decode(&payload)?,
         }),
+        APPROVAL_PENDING => Ok(ServerFrame::ApprovalPending(decode(&payload)?)),
         _ => Err(invalid("unknown exec server frame")),
     }
 }

@@ -4,7 +4,8 @@ use std::io;
 
 use serde::{Deserialize, Serialize};
 
-use super::exec_client::{failure, ExecClientFailure, ExecClientFailureKind};
+use super::exec_client::{ExecClientFailure, ExecClientFailureKind};
+use super::exec_client_messages::failure;
 use super::exec_protocol::ExecWireError;
 use super::exec_types::ExecStart;
 

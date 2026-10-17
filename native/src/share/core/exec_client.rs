@@ -5,14 +5,20 @@ use std::time::Duration;
 
 use iroh::endpoint::{Connection, VarInt};
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
+use super::exec_access_view::{ExecClientNotice, ReceivedHelloOk};
 use super::exec_auth::build_client_hello;
 use super::exec_client_active::TransportClosed;
+use super::exec_client_messages::{
+    authentication, classify_io, client_failure_message, disconnected, failure, handshake_timeout,
+    peer_name, protocol,
+};
 use super::exec_heartbeat::{ExecHeartbeatPolicy, EXEC_HEARTBEAT_POLICY};
+#[cfg(test)]
+use super::exec_protocol::ExecHelloOk;
 use super::exec_protocol::{
     recv_hello_result, recv_server_hello, send_client_frame, send_client_hello, ClientFrame,
-    ExecHelloOk,
 };
 use super::exec_terminal::{require_host_terminal, ExecTerminalSize};
 use super::exec_types::{ExecAuthorization, ExecId, ExecProviderStatus, ExecStart, ExecTerminal};
@@ -79,6 +85,9 @@ pub(crate) struct ExecClientSession {
     pub(crate) input: mpsc::Sender<ExecClientInput>,
     pub(crate) events: mpsc::Receiver<ExecClientEvent>,
     pub(crate) task: tokio::task::JoinHandle<Result<ExecTerminal, ExecClientFailure>>,
+    /// The latest notice; the daemon's Exec forwarding does not read it yet.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) notice: watch::Receiver<ExecClientNotice>,
 }
 
 pub(crate) fn spawn_connected(
@@ -90,14 +99,16 @@ pub(crate) fn spawn_connected(
     let exec_id = start.exec_id.clone();
     let (input_tx, input_rx) = mpsc::channel(INPUT_CAPACITY);
     let (event_tx, event_rx) = mpsc::channel(EVENT_CAPACITY);
+    let (notice_tx, notice_rx) = watch::channel(ExecClientNotice::default());
     let task = tokio::spawn(run_connected(
-        connection, endpoint, identity, start, input_rx, event_tx,
+        connection, endpoint, identity, start, input_rx, event_tx, notice_tx,
     ));
     ExecClientSession {
         exec_id,
         input: input_tx,
         events: event_rx,
         task,
+        notice: notice_rx,
     }
 }
 
@@ -108,9 +119,18 @@ pub(crate) async fn run_connected(
     start: ExecStart,
     input: mpsc::Receiver<ExecClientInput>,
     events: mpsc::Sender<ExecClientEvent>,
+    notice: watch::Sender<ExecClientNotice>,
 ) -> Result<ExecTerminal, ExecClientFailure> {
-    let result =
-        run_connected_inner(connection, endpoint, identity, start, input, events.clone()).await;
+    let result = run_connected_inner(
+        connection,
+        endpoint,
+        identity,
+        start,
+        input,
+        events.clone(),
+        notice,
+    )
+    .await;
     if let Err(error) = &result {
         let _ = tokio::time::timeout(
             FAILURE_EVENT_TIMEOUT,
@@ -128,6 +148,7 @@ async fn run_connected_inner(
     start: ExecStart,
     input: mpsc::Receiver<ExecClientInput>,
     events: mpsc::Sender<ExecClientEvent>,
+    notice: watch::Sender<ExecClientNotice>,
 ) -> Result<ExecTerminal, ExecClientFailure> {
     let remote = connection.remote_id().to_string();
     if remote != endpoint.presence.node_id {
@@ -159,6 +180,7 @@ async fn run_connected_inner(
         Box::pin(async move {
             let _ = close_watch.closed().await;
         }),
+        &notice,
     )
     .await;
     connection.close(VarInt::from_u32(0x4558), b"Exec session completed");
@@ -208,6 +230,7 @@ where
     W: AsyncWrite + Unpin,
     R: AsyncRead + Unpin + Send + 'static,
 {
+    let (notice, _) = watch::channel(ExecClientNotice::default());
     run_stream_with_transport(
         send,
         recv,
@@ -218,12 +241,14 @@ where
         events,
         heartbeat_policy,
         Box::pin(std::future::pending()),
+        &notice,
     )
     .await
 }
 
+/// `notice` keeps what the host tells beside the events (D.2.2).
 #[allow(clippy::too_many_arguments)]
-async fn run_stream_with_transport<W, R>(
+pub(super) async fn run_stream_with_transport<W, R>(
     mut send: W,
     mut recv: R,
     endpoint: PeerEndpoint,
@@ -233,12 +258,15 @@ async fn run_stream_with_transport<W, R>(
     events: mpsc::Sender<ExecClientEvent>,
     heartbeat_policy: ExecHeartbeatPolicy,
     transport_closed: TransportClosed,
+    notice: &watch::Sender<ExecClientNotice>,
 ) -> Result<ExecTerminal, ExecClientFailure>
 where
     W: AsyncWrite + Unpin,
     R: AsyncRead + Unpin + Send + 'static,
 {
-    let hello = handshake(&mut send, &mut recv, &endpoint, &identity).await?;
+    let ReceivedHelloOk { hello, access } =
+        handshake(&mut send, &mut recv, &endpoint, &identity).await?;
+    notice.send_modify(|notice| notice.access = access);
     emit(
         &events,
         ExecClientEvent::Authorized {
@@ -273,7 +301,7 @@ where
         heartbeat_policy.write_timeout,
     )
     .await?;
-    super::exec_client_active::run(
+    super::exec_client_active::run_with_notice(
         send,
         recv,
         input,
@@ -282,6 +310,7 @@ where
         terminal,
         heartbeat_policy,
         transport_closed,
+        notice,
     )
     .await
 }
@@ -291,7 +320,7 @@ async fn handshake<W: AsyncWrite + Unpin, R: AsyncRead + Unpin>(
     recv: &mut R,
     endpoint: &PeerEndpoint,
     identity: &ShareIdentity,
-) -> Result<ExecHelloOk, ExecClientFailure> {
+) -> Result<ReceivedHelloOk, ExecClientFailure> {
     let deadline = tokio::time::Instant::now() + HANDSHAKE_TIMEOUT;
     let server = until(deadline, recv_server_hello(recv))
         .await
@@ -301,16 +330,16 @@ async fn handshake<W: AsyncWrite + Unpin, R: AsyncRead + Unpin>(
     until(deadline, send_client_hello(send, &client))
         .await
         .map_err(|error| classify_io(error, false, "client_hello"))?;
-    match until(deadline, recv_hello_result(recv))
+    match until(deadline, recv_hello_result::<_, ReceivedHelloOk>(recv))
         .await
         .map_err(|error| classify_io(error, false, "hello_result"))?
     {
-        Ok(hello) if !hello.authorization.session_id.trim().is_empty() => Ok(hello),
+        Ok(hello) if !hello.hello.authorization.session_id.trim().is_empty() => Ok(hello),
         Ok(_) => Err(protocol("empty Exec session id", false, "invalid_hello_ok")),
         Err(error) => Err(failure(
             ExecClientFailureKind::Authentication,
             &error.code,
-            &error.message,
+            &client_failure_message(&error.code, &error.message, &peer_name(endpoint)),
             false,
         )),
     }
@@ -415,70 +444,6 @@ async fn until<T>(
     tokio::time::timeout_at(deadline, future)
         .await
         .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "Exec handshake timed out"))?
-}
-
-fn authentication(error: impl fmt::Display, code: &str, start_sent: bool) -> ExecClientFailure {
-    failure(
-        ExecClientFailureKind::Authentication,
-        code,
-        &error.to_string(),
-        start_sent,
-    )
-}
-
-fn disconnected(error: impl fmt::Display, start_sent: bool) -> ExecClientFailure {
-    failure(
-        ExecClientFailureKind::Disconnected,
-        "disconnected",
-        &error.to_string(),
-        start_sent,
-    )
-}
-
-fn handshake_timeout(start_sent: bool) -> ExecClientFailure {
-    failure(
-        ExecClientFailureKind::Disconnected,
-        "handshake_timeout",
-        "Exec peer handshake timed out",
-        start_sent,
-    )
-}
-
-pub(super) fn protocol(
-    error: impl fmt::Display,
-    start_sent: bool,
-    code: &str,
-) -> ExecClientFailure {
-    failure(
-        ExecClientFailureKind::Protocol,
-        code,
-        &error.to_string(),
-        start_sent,
-    )
-}
-
-pub(super) fn classify_io(error: io::Error, start_sent: bool, code: &str) -> ExecClientFailure {
-    match error.kind() {
-        io::ErrorKind::InvalidData | io::ErrorKind::InvalidInput => {
-            protocol(error, start_sent, code)
-        }
-        io::ErrorKind::PermissionDenied => authentication(error, code, start_sent),
-        _ => disconnected(error, start_sent),
-    }
-}
-
-pub(super) fn failure(
-    kind: ExecClientFailureKind,
-    code: &str,
-    message: &str,
-    start_may_have_been_sent: bool,
-) -> ExecClientFailure {
-    ExecClientFailure {
-        kind,
-        code: code.to_string(),
-        message: message.to_string(),
-        start_may_have_been_sent,
-    }
 }
 
 #[cfg(test)]

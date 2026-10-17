@@ -1,3 +1,4 @@
+use super::super::access_grant::AccessGrantChange;
 use super::super::exec_policy::{ExecGrant, ExecGrantSettings};
 use super::super::exec_types::ExecPrincipal;
 use super::super::identity::ShareIdentity;
@@ -6,6 +7,41 @@ use super::super::types::{DirectGrantState, ExecGrantTarget};
 use super::ExecGrantMutation;
 
 impl ExecGrantMutation {
+    /// The persisted next revision of an access-right change (D.2.3).
+    /// `expected_revision` is the revision the caller showed; another one is
+    /// refused as a concurrent change. A change that allows anything needs
+    /// an active relation, like enabling did.
+    pub(crate) fn prepare_access(
+        profiles: &mut ShareProfiles,
+        identity: &ShareIdentity,
+        target: ExecGrantTarget,
+        change: &AccessGrantChange,
+        expected_revision: Option<u64>,
+        changed_at: i64,
+    ) -> Result<(Self, u64), String> {
+        let (principal, current) = resolve_profile_policy(profiles, identity, &target, false)?;
+        let current_revision = current.policy_revision;
+        if let Some(expected) = expected_revision.filter(|expected| *expected != current_revision) {
+            return Err(format!(
+                "Exec-Grant revision changed concurrently: expected {expected}, found {current_revision}"
+            ));
+        }
+        let mut policy = current.clone();
+        policy.apply_access_change(change, changed_at)?;
+        if policy.grants_any() {
+            resolve_profile_policy(profiles, identity, &target, true)?;
+        }
+        Ok((
+            Self {
+                target,
+                principal,
+                policy,
+                authorization_epoch: 0,
+            },
+            current_revision,
+        ))
+    }
+
     /// `settings` replaces run-as account and program list; `None` keeps
     /// them (every enable/disable before run-as existed).
     pub(crate) fn prepare_persisted(
@@ -44,7 +80,7 @@ impl ExecGrantMutation {
     ) -> Result<(), String> {
         self.validate_persisted_shape(expected_revision)?;
         let (principal, current) =
-            resolve_profile_policy(profiles, identity, &self.target, self.policy.enabled)?;
+            resolve_profile_policy(profiles, identity, &self.target, self.policy.grants_any())?;
         if principal != self.principal {
             return Err("Exec-Grant identity pins changed concurrently; reload and retry".into());
         }
@@ -80,17 +116,17 @@ impl ExecGrantMutation {
                 self.policy.policy_revision, current.policy_revision
             ));
         }
-        current.enabled = false;
+        current.mask_off();
         Ok(())
     }
 
     pub(crate) fn mask_all_policies(profiles: &mut ShareProfiles) {
         for grant in &mut profiles.direct_grants {
-            grant.exec.enabled = false;
+            grant.exec.mask_off();
         }
         for room in &mut profiles.rooms {
             for member in &mut room.members {
-                member.exec.enabled = false;
+                member.exec.mask_off();
             }
         }
     }
