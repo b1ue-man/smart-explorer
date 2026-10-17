@@ -126,11 +126,49 @@ pub(crate) fn exec_audit_entries(lines: usize) -> std::io::Result<Vec<ExecAuditE
     exec_audit::view(lines)
 }
 
-/// Whether this host can run a granted device's commands as another local
-/// account than the worker's own (Linux with a root worker).
+/// Whether a grant may name another local account than the worker's own:
+/// derived from the same host facts as `exec_account_choices` without asking
+/// the account service (Linux with a root worker, or with the account
+/// service set up for this worker's user).
 pub(crate) fn exec_run_as_supported() -> bool {
     exec_platform::run_as_supported()
 }
+
+/// "Ausführen als" of this host: the state of its account service and every
+/// account choice with availability, reason and next step (PRM-M6, D.2.4).
+/// Unlike `exec_run_as_supported` it may ask the account service once.
+#[allow(dead_code)] // IPC `Accounts`, `se share exec accounts`, the GUIs
+pub(crate) fn exec_account_choices() -> exec_helper_protocol::AccountChoices {
+    #[cfg(target_os = "linux")]
+    {
+        platform_exec::account_choices()
+    }
+    #[cfg(target_os = "android")]
+    {
+        exec_platform::own_account_choices(access_catalog::HelperStatus {
+            state: access_catalog::HelperState::Unavailable,
+            version: None,
+            detail: Some("Android runs commands only as the app".into()),
+        })
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    {
+        exec_platform::own_account_choices(access_catalog::HelperStatus {
+            state: access_catalog::HelperState::NotNeeded,
+            version: None,
+            detail: None,
+        })
+    }
+}
+
+// Setting up the Linux account service as administrator (`se share exec
+// accounts setup|allow|disallow|update|remove`, PRM-M6).
+#[cfg(target_os = "linux")]
+#[allow(unused_imports)] // `se share exec accounts` and the desktop accounts page
+pub(crate) use self::platform_exec::{
+    exec_accounts_apply, invoking_uid as exec_accounts_invoking_uid,
+    Elevation as ExecAccountsElevation, ExecAccountsAction, ExecAccountsOutcome,
+};
 
 /// Runs the exact hidden supervisor invocation before CLI or GUI parsing.
 /// Returning `Some` means the process was an internal supervisor and must exit.

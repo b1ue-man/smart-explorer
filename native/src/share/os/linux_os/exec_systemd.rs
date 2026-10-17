@@ -1,14 +1,31 @@
 use std::io;
+use std::os::fd::BorrowedFd;
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use zbus::blocking::{Connection, Proxy};
-use zbus::zvariant::{OwnedObjectPath, OwnedValue, Str, Value};
+use zbus::zvariant::{Fd, OwnedObjectPath, OwnedValue, Str, Value};
 
 const DESTINATION: &str = "org.freedesktop.systemd1";
 const MANAGER_PATH: &str = "/org/freedesktop/systemd1";
 const MANAGER_IFACE: &str = "org.freedesktop.systemd1.Manager";
 const INTERNAL_MODE: &str = "--share-exec-supervisor";
+
+/// One entry of `ListUnitsByPatterns`: name, description, load, active and
+/// sub state, follower, unit path, job id, job type, job path.
+type UnitListing = (
+    Text,
+    Text,
+    Text,
+    Text,
+    Text,
+    Text,
+    OwnedObjectPath,
+    u32,
+    Text,
+    OwnedObjectPath,
+);
+type Text = String;
 
 pub(super) fn start_unit(
     connection: &Connection,
@@ -41,6 +58,15 @@ fn start_unit_with_collect_mode(
     let executable = format!("/proc/{}/exe", std::process::id());
     let socket = socket.to_string_lossy().into_owned();
     let properties = unit_properties(executable, socket, runtime_usec, collect_mode)?;
+    start_transient_unit(connection, name, properties)
+}
+
+/// Starts the transient service `name` with `properties` (job mode `fail`).
+pub(super) fn start_transient_unit(
+    connection: &Connection,
+    name: &str,
+    properties: Vec<(&'static str, OwnedValue)>,
+) -> io::Result<()> {
     let auxiliary: Vec<(&str, Vec<(&str, OwnedValue)>)> = Vec::new();
     let _: OwnedObjectPath = manager_proxy(connection)?
         .call("StartTransientUnit", &(name, "fail", properties, auxiliary))
@@ -48,11 +74,8 @@ fn start_unit_with_collect_mode(
     Ok(())
 }
 
-/// Properties of the transient unit of one job. Every one of them exists in
-/// systemd 249 (Ubuntu 22.04), which refuses a unit with any property it
-/// does not know. `ExitType` is not sent: it exists only from systemd 250
-/// on, where its default `main` is what the unit needs.
-fn unit_properties(
+/// Properties of the transient unit of one job of the worker's own account.
+pub(super) fn unit_properties(
     executable: String,
     socket: String,
     runtime_usec: Option<u64>,
@@ -63,11 +86,27 @@ fn unit_properties(
         vec![executable, INTERNAL_MODE.into(), socket],
         false,
     )];
+    job_properties(
+        "Smart Explorer remote execution",
+        exec,
+        runtime_usec,
+        collect_mode,
+    )
+}
+
+/// Properties of the unit of every job, also of the account units
+/// (`exec_account_unit.rs`). Every one of them exists in systemd 249 (Ubuntu
+/// 22.04), which refuses a unit with any property it does not know.
+/// `ExitType` is not sent: it exists only from systemd 250 on, where its
+/// default `main` is what the unit needs.
+pub(super) fn job_properties(
+    description: &str,
+    exec: Vec<(String, Vec<String>, bool)>,
+    runtime_usec: Option<u64>,
+    collect_mode: &str,
+) -> io::Result<Vec<(&'static str, OwnedValue)>> {
     let mut properties = vec![
-        (
-            "Description",
-            string_value("Smart Explorer remote execution"),
-        ),
+        ("Description", string_value(description)),
         ("Type", string_value("exec")),
         ("ExecStart", complex_value(exec)?),
         ("KillMode", string_value("control-group")),
@@ -159,6 +198,101 @@ pub(super) fn unit_active_state(
         .map_err(eio)
 }
 
+/// The object path of a loaded unit; `None` when systemd has not loaded it
+/// (any more).
+pub(super) fn loaded_unit(
+    connection: &Connection,
+    name: &str,
+) -> io::Result<Option<OwnedObjectPath>> {
+    let result: zbus::Result<OwnedObjectPath> =
+        manager_proxy(connection)?.call("GetUnit", &(name,));
+    match result {
+        Ok(path) => Ok(Some(path)),
+        Err(error) if error.to_string().contains("not loaded") => Ok(None),
+        Err(error) => Err(eio(error)),
+    }
+}
+
+/// `MainPID` of a service unit; 0 while none runs.
+pub(super) fn unit_main_pid(connection: &Connection, path: &OwnedObjectPath) -> io::Result<u32> {
+    service_proxy(connection, path)?
+        .get_property("MainPID")
+        .map_err(eio)
+}
+
+/// Why a service unit ended: its `Result` and the exit status of its main
+/// process (`ExecMainStatus`, for example 224 when PAM refused the account).
+pub(super) fn unit_exit_status(
+    connection: &Connection,
+    path: &OwnedObjectPath,
+) -> io::Result<(String, i32)> {
+    let service = service_proxy(connection, path)?;
+    let result: String = service.get_property("Result").map_err(eio)?;
+    let status: i32 = service.get_property("ExecMainStatus").map_err(eio)?;
+    Ok((result, status))
+}
+
+/// Whether the unit has left its first inactive state, so an inactive unit
+/// has ended instead of waiting for its start job.
+pub(super) fn unit_was_started(
+    connection: &Connection,
+    path: &OwnedObjectPath,
+) -> io::Result<bool> {
+    let left: u64 = unit_proxy(connection, path)?
+        .get_property("InactiveExitTimestampMonotonic")
+        .map_err(eio)?;
+    Ok(left > 0)
+}
+
+/// `User=` of a service unit; empty for root.
+pub(super) fn unit_user(connection: &Connection, path: &OwnedObjectPath) -> io::Result<String> {
+    service_proxy(connection, path)?
+        .get_property("User")
+        .map_err(eio)
+}
+
+/// Names of the loaded units that match `pattern` (`ListUnitsByPatterns`).
+pub(super) fn unit_names(connection: &Connection, pattern: &str) -> io::Result<Vec<String>> {
+    let units: Vec<UnitListing> = manager_proxy(connection)?
+        .call("ListUnitsByPatterns", &(Vec::<&str>::new(), vec![pattern]))
+        .map_err(eio)?;
+    Ok(units.into_iter().map(|unit| unit.0).collect())
+}
+
+/// Reads the unit files again (`systemctl daemon-reload`).
+pub(super) fn reload_manager(connection: &Connection) -> io::Result<()> {
+    manager_proxy(connection)?
+        .call::<_, _, ()>("Reload", &())
+        .map_err(eio)
+}
+
+/// Enables the unit file `name` (its `[Install]` section).
+pub(super) fn enable_unit_file(connection: &Connection, name: &str) -> io::Result<()> {
+    let _: (bool, Vec<(String, String, String)>) = manager_proxy(connection)?
+        .call("EnableUnitFiles", &(vec![name], false, true))
+        .map_err(eio)?;
+    Ok(())
+}
+
+/// Disables the unit file `name`; a missing file is no error.
+pub(super) fn disable_unit_file(connection: &Connection, name: &str) -> io::Result<()> {
+    let result: zbus::Result<Vec<(String, String, String)>> =
+        manager_proxy(connection)?.call("DisableUnitFiles", &(vec![name], false));
+    match result {
+        Ok(_) => Ok(()),
+        Err(error) if error.to_string().contains("does not exist") => Ok(()),
+        Err(error) => Err(eio(error)),
+    }
+}
+
+/// Starts the unit `name` anew (stops it first if it runs).
+pub(super) fn restart_unit(connection: &Connection, name: &str) -> io::Result<()> {
+    let _: OwnedObjectPath = manager_proxy(connection)?
+        .call("RestartUnit", &(name, "replace"))
+        .map_err(eio)?;
+    Ok(())
+}
+
 #[cfg(debug_assertions)]
 pub(super) fn unit_runtime_max_usec(
     connection: &Connection,
@@ -176,7 +310,7 @@ pub(super) fn unit_result(connection: &Connection, path: &OwnedObjectPath) -> io
         .map_err(eio)
 }
 
-#[cfg(debug_assertions)]
+/// Unloads a failed unit; one that is not loaded is no error.
 pub(super) fn reset_failed_unit(connection: &Connection, name: &str) -> io::Result<()> {
     let result: zbus::Result<()> = manager_proxy(connection)?.call("ResetFailedUnit", &(name,));
     match result {
@@ -248,8 +382,14 @@ fn checked_cgroup_path(value: &str) -> io::Result<PathBuf> {
     Ok(Path::new("/sys/fs/cgroup").join(relative))
 }
 
-fn string_value(value: &str) -> OwnedValue {
+pub(super) fn string_value(value: &str) -> OwnedValue {
     OwnedValue::from(Str::from(value.to_owned()))
+}
+
+/// A descriptor property (`h`); the value owns a duplicate of `fd`, which
+/// D-Bus hands to systemd with the call.
+pub(super) fn fd_value(fd: BorrowedFd<'_>) -> io::Result<OwnedValue> {
+    OwnedValue::try_from(Value::from(Fd::from(fd))).map_err(eio)
 }
 
 fn complex_value<T>(value: T) -> io::Result<OwnedValue>
@@ -260,12 +400,20 @@ where
     OwnedValue::try_from(Value::from(value)).map_err(eio)
 }
 
-fn eio(error: impl std::fmt::Display) -> io::Error {
+pub(super) fn eio(error: impl std::fmt::Display) -> io::Error {
     io::Error::other(error.to_string())
 }
 
 #[cfg(test)]
 mod tests {
+    use std::os::fd::AsFd;
+    use std::path::Path;
+
+    use zbus::zvariant::OwnedValue;
+
+    use super::super::exec_account_unit::{
+        account_properties, account_unit_properties, working_directory,
+    };
     use super::unit_properties;
 
     /// Every unit property systemd 249 (Ubuntu 22.04) knows and this host may
@@ -293,6 +441,7 @@ mod tests {
 
     #[test]
     fn perm_task_systemd_unit_props_v249_compatible() {
+        let (_worker, supervisor) = std::os::unix::net::UnixStream::pair().unwrap();
         for runtime in [None, Some(5_000_000)] {
             for collect_mode in ["inactive-or-failed", "inactive"] {
                 let properties = unit_properties(
@@ -302,20 +451,37 @@ mod tests {
                     collect_mode,
                 )
                 .unwrap();
-                let names: Vec<&str> = properties.iter().map(|(name, _)| *name).collect();
-                for name in &names {
-                    assert!(
-                        SYSTEMD_249_PROPERTIES.contains(name),
-                        "systemd 249 does not know the unit property {name}"
-                    );
-                }
-                assert!(!names.contains(&"ExitType"));
-                assert_eq!(names.contains(&"RuntimeMaxUSec"), runtime.is_some());
-                let mut unique = names.clone();
-                unique.sort_unstable();
-                unique.dedup();
-                assert_eq!(unique.len(), names.len(), "a property is sent twice");
+                assert_v249_compatible(&properties, runtime.is_some());
+            }
+            // The account units (PRM-M5) send their own properties as well.
+            for cwd in [None, Some("/srv")] {
+                let account =
+                    account_properties("se-remote", &working_directory(cwd), supervisor.as_fd())
+                        .unwrap();
+                let properties = account_unit_properties(
+                    Path::new("/usr/local/sbin/smart-explorer-exec"),
+                    account,
+                    runtime,
+                )
+                .unwrap();
+                assert_v249_compatible(&properties, runtime.is_some());
             }
         }
+    }
+
+    fn assert_v249_compatible(properties: &[(&'static str, OwnedValue)], runtime: bool) {
+        let names: Vec<&str> = properties.iter().map(|(name, _)| *name).collect();
+        for name in &names {
+            assert!(
+                SYSTEMD_249_PROPERTIES.contains(name),
+                "systemd 249 does not know the unit property {name}"
+            );
+        }
+        assert!(!names.contains(&"ExitType"));
+        assert_eq!(names.contains(&"RuntimeMaxUSec"), runtime);
+        let mut unique = names.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), names.len(), "a property is sent twice");
     }
 }

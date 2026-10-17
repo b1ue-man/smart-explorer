@@ -71,7 +71,7 @@ pub(super) fn run_contained_job(
         account_label,
         program,
     } = launch;
-    let mut process = match ContainedExec::prepare(&start) {
+    let mut process = match ContainedExec::prepare_as(&start, account.as_ref()) {
         Ok(process) => process,
         Err(error) => return fail_preparation(&registry, &reservation, error, &output),
     };

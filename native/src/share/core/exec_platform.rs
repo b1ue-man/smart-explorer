@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::ffi::OsString;
 use std::io;
 use std::path::Path;
@@ -6,6 +7,8 @@ use std::time::Instant;
 #[cfg(debug_assertions)]
 use std::time::Duration;
 
+use super::access_catalog::HelperStatus;
+use super::exec_helper_protocol::{AccountChoice, AccountChoices};
 use super::exec_supervisor_protocol::{
     environment_for, environment_for_account, RunAsAccount, SupervisorCommand, SupervisorEvent,
     SupervisorStart,
@@ -26,16 +29,47 @@ pub(crate) enum StopReason {
     ProtocolError,
 }
 
+thread_local! {
+    /// The account of the start that `ContainedExec::prepare_as` prepares on
+    /// this thread; the platform's `prepare` reads it (`preparing_account`).
+    static PREPARING_ACCOUNT: RefCell<Option<RunAsAccount>> = const { RefCell::new(None) };
+}
+
 pub(crate) struct ContainedExec {
     inner: super::platform_exec::ContainedExec,
     committed: bool,
+    /// Name and uid of the account the platform prepared the start for;
+    /// `None` for the worker's own account.
+    prepared_for: Option<(String, u32)>,
 }
 
 impl ContainedExec {
+    /// Prepares a start of the worker's own account.
     pub(crate) fn prepare(request: &ExecStart) -> io::Result<Self> {
+        Self::prepare_as(request, None)
+    }
+
+    /// Prepares a start that runs as `account` (`None`: the worker's own
+    /// account). On Linux another account runs in its own unit, which has to
+    /// exist before the start is committed (PRM-M5, PRM-M6); `commit`
+    /// refuses any other account than this one.
+    pub(crate) fn prepare_as(
+        request: &ExecStart,
+        account: Option<&RunAsAccount>,
+    ) -> io::Result<Self> {
+        if account.is_some() && !run_as_supported() {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "this host runs commands only as the worker's own account",
+            ));
+        }
+        let slot = PreparingAccount::set(account);
+        let inner = super::platform_exec::ContainedExec::prepare(request);
+        drop(slot);
         Ok(Self {
-            inner: super::platform_exec::ContainedExec::prepare(request)?,
+            inner: inner?,
             committed: false,
+            prepared_for: account.map(|account| (account.name.clone(), account.uid)),
         })
     }
 
@@ -57,10 +91,14 @@ impl ContainedExec {
                 "execution already committed",
             ));
         }
-        if account.is_some() && !run_as_supported() {
+        // `prepare_as` checked that this host may run the account at all.
+        let requested = account
+            .as_ref()
+            .map(|account| (account.name.clone(), account.uid));
+        if requested != self.prepared_for {
             return Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "this host runs commands only as the worker's own account",
+                io::ErrorKind::PermissionDenied,
+                "this start was prepared for another account than its grant names",
             ));
         }
         if let Some(path) = program {
@@ -171,6 +209,50 @@ pub(crate) fn resolve_run_as(
 
 pub(super) fn run_supervisor_if_requested(arguments: &[OsString]) -> Option<io::Result<()>> {
     super::platform_exec::run_supervisor_if_requested(arguments)
+}
+
+/// Sets `PREPARING_ACCOUNT` for one `prepare` and clears it afterwards, also
+/// when the platform's `prepare` panics.
+struct PreparingAccount;
+
+impl PreparingAccount {
+    fn set(account: Option<&RunAsAccount>) -> Self {
+        PREPARING_ACCOUNT.with(|slot| *slot.borrow_mut() = account.cloned());
+        Self
+    }
+}
+
+impl Drop for PreparingAccount {
+    fn drop(&mut self) {
+        PREPARING_ACCOUNT.with(|slot| slot.borrow_mut().take());
+    }
+}
+
+/// The account of the start `ContainedExec::prepare_as` prepares on this
+/// thread; `None` for the worker's own account. Only the Linux platform
+/// starts another account's unit in `prepare`; on the others `prepare_as`
+/// refuses another account before.
+#[allow(dead_code)]
+pub(crate) fn preparing_account() -> Option<RunAsAccount> {
+    PREPARING_ACCOUNT.with(|slot| slot.borrow().clone())
+}
+
+/// The `ExecWireError.code` of a start this host refused for its account
+/// (`account_not_allowed`, `account_helper_unavailable`,
+/// `account_unavailable`); `None` for every other error.
+#[allow(dead_code)] // the Exec admission maps account refusals with it
+pub(crate) fn account_error_code(error: &io::Error) -> Option<&'static str> {
+    super::exec_helper_protocol::account_error_code(error)
+}
+
+/// The account choices of a host that runs commands only as the worker's
+/// own account.
+#[allow(dead_code)] // Windows and Android, until they have account services
+pub(crate) fn own_account_choices(helper: HelperStatus) -> AccountChoices {
+    AccountChoices {
+        helper,
+        choices: vec![AccountChoice::own(&provider_status().user_label)],
+    }
 }
 
 #[cfg(debug_assertions)]
