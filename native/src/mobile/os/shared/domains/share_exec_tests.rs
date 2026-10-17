@@ -91,15 +91,29 @@ fn android_task_exec_targets_list_every_grant_and_member_with_state() {
         .collect();
     assert_eq!(names, ["Altgerät", "Desktop", "Geraet 01234567", "Laptop"]);
 
+    // The fields before PRM-M10 unchanged; `access` (D.2.4) beside them. Its
+    // `accountLabel` is the app's account once the provider was read.
+    let mut laptop = by_key(&targets, "direct/d-laptop/fp-d-laptop").clone();
+    let access = laptop
+        .as_object_mut()
+        .and_then(|target| target.remove("access"))
+        .expect("access");
     assert_eq!(
-        by_key(&targets, "direct/d-laptop/fp-d-laptop"),
-        &json!({
+        laptop,
+        json!({
             "targetKey": "direct/d-laptop/fp-d-laptop", "relation": "direct", "roomId": null,
             "roomName": null, "deviceId": "d-laptop", "name": "Laptop",
             "fingerprint": "fp-d-laptop", "enabled": true, "baseAuthorized": true,
             "policyRevision": 7, "runAs": "standard", "programs": [],
         })
     );
+    assert_eq!(access["account"], json!({ "kind": "own" }));
+    assert_eq!(
+        access["capabilities"],
+        json!({ "execCommands": "allow", "execTerminal": "allow" })
+    );
+    assert_eq!(access["validUntil"], Value::Null);
+    assert_eq!(access["expired"], false);
     let ignored = by_key(&targets, "direct/d-alt/fp-d-alt");
     assert_eq!(ignored["baseAuthorized"], false);
     let desktop = by_key(&targets, "room/wire-team/d-desktop/fp-d-desktop");

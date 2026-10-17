@@ -53,12 +53,20 @@ import app.smartexplorer.android.ui.common.SeIcon
 import app.smartexplorer.android.ui.more.SectionHeader
 import app.smartexplorer.android.ui.more.TextActions
 import app.smartexplorer.android.ui.more.ToggleSetting
+import kotlinx.serialization.Serializable
 
 /** Timeouts offered for a remote command, in seconds. */
 private val EXEC_TIMEOUTS = listOf(30, 60, 300, 900)
 
-/** Finished run: the result on success, otherwise the reason. */
-private data class ExecOutcome(val result: ExecResult?, val failure: String?)
+/**
+ * Finished run: the result on success, otherwise the reason; [header] is the account line the
+ * device reported („Laptop: als se-remote, mit Rückfrage“), when it authorized the start.
+ */
+private data class ExecOutcome(val result: ExecResult?, val failure: String?, val header: String? = null)
+
+/** The account line beside the result of the `share.exec` task (also kept with a failure). */
+@Serializable
+private data class ExecHeader(val header: String? = null)
 
 /**
  * Refusals of the other device by error code (`code: message`), as the texts of the access rights
@@ -88,8 +96,10 @@ private fun readableFailure(text: String, device: String): String {
 
 /**
  * "Befehl ausführen" on a shared device (spec F18): command, shell or direct, time limit →
- * `share.exec` task → stdout/stderr and exit code, [Abbrechen] while it runs. The dialog leaving
- * the screen in any way (close, back, tab switch, recreation) cancels a running or starting command.
+ * `share.exec` task (the background worker's Exec stream) → stdout/stderr and exit code, [Abbrechen]
+ * while it runs. Meanwhile the task's message says whether the device asks its user first and, once
+ * it allowed the start, as which account it runs. The dialog leaving the screen in any way (close,
+ * back, tab switch, recreation) cancels a running or starting command.
  */
 @Composable
 internal fun ExecDialog(
@@ -205,21 +215,32 @@ internal fun ExecDialog(
     }
 }
 
-private fun outcomeOf(task: TaskInfo, device: String): ExecOutcome = when (task.state) {
-    "done" -> try {
-        ExecOutcome(FilesApi.resultOf(task, ExecResult.serializer()) ?: ExecResult(), null)
+private fun outcomeOf(task: TaskInfo, device: String): ExecOutcome {
+    val header = try {
+        FilesApi.resultOf(task, ExecHeader.serializer())?.header?.takeIf { it.isNotBlank() }
     } catch (e: CoreException) {
-        ExecOutcome(null, readableFailure(e.message ?: e.kind, device))
+        null
     }
-    "canceled" -> ExecOutcome(null, "Abgebrochen")
-    else -> ExecOutcome(
-        null,
-        task.message?.takeIf { it.isNotBlank() }?.let { readableFailure(it, device) } ?: "Befehl nicht ausgeführt",
-    )
+    return when (task.state) {
+        "done" -> try {
+            ExecOutcome(FilesApi.resultOf(task, ExecResult.serializer()) ?: ExecResult(), null, header)
+        } catch (e: CoreException) {
+            ExecOutcome(null, readableFailure(e.message ?: e.kind, device), header)
+        }
+        "canceled" -> ExecOutcome(null, "Abgebrochen", header)
+        else -> ExecOutcome(
+            null,
+            task.message?.takeIf { it.isNotBlank() }?.let { readableFailure(it, device) } ?: "Befehl nicht ausgeführt",
+            header,
+        )
+    }
 }
 
 @Composable
 private fun ExecOutput(outcome: ExecOutcome, onCopy: (String) -> Unit) {
+    outcome.header?.let { header ->
+        Text(header, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 16.dp))
+    }
     val result = outcome.result
     if (result == null) {
         Text(

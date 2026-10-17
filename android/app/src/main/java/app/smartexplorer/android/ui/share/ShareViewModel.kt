@@ -7,11 +7,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import app.smartexplorer.android.api.AccessChange
+import app.smartexplorer.android.api.AccessOverview
 import app.smartexplorer.android.api.EndpointRemoval
 import app.smartexplorer.android.api.ExecJob
 import app.smartexplorer.android.api.ExecJobs
 import app.smartexplorer.android.api.ExecTarget
 import app.smartexplorer.android.api.FilesApi
+import app.smartexplorer.android.api.ShareAccessApi
 import app.smartexplorer.android.api.ShareApi
 import app.smartexplorer.android.api.ShareExecApi
 import app.smartexplorer.android.api.ShareStatus
@@ -59,6 +62,10 @@ internal class ShareViewModel : ViewModel() {
 
     /** Commands in both directions (`share.execJobs`), loaded with the status while the worker runs. */
     var execJobs by mutableStateOf<ExecJobs?>(null)
+        private set
+
+    /** Access rights of this phone as exec host (PRM-M10), loaded with the status. */
+    var access by mutableStateOf<AccessOverview?>(null)
         private set
     private var running by mutableIntStateOf(0)
 
@@ -199,6 +206,12 @@ internal class ShareViewModel : ViewModel() {
         ) { ShareExecApi.setExec(target.targetKey, enabled) }
     }
 
+    /** Saves the access dialog of [target] (`share.setAccess`); a narrowing ends its running commands. */
+    fun setAccess(target: ExecTarget, change: AccessChange) {
+        val name = target.name.ifBlank { "Gerät" }
+        act("Zugriff nicht geändert", "Zugriff von $name gespeichert") { ShareAccessApi.setAccess(target.targetKey, change) }
+    }
+
     /** [Stopp] of a command another device runs on this phone. */
     fun stopExec(job: ExecJob) = act("Befehl nicht gestoppt") { ShareExecApi.cancel(job) }
 
@@ -213,6 +226,7 @@ internal class ShareViewModel : ViewModel() {
             loadPolicyAndSecurity(current)
             status = current
             loadError = null
+            access = loadAccess()
             execJobs = if (current.running) loadExecJobs() else null
         } catch (e: CoreException) {
             loadError = e.message ?: e.kind
@@ -240,6 +254,14 @@ internal class ShareViewModel : ViewModel() {
             pairingsKnown = pairingLoaded
             securityError = "Share-Sicherheit nicht geladen: ${e.message ?: e.kind}"
         }
+    }
+
+    /** The access fields of the same `share.status`; a failure only leaves them out. */
+    private suspend fun loadAccess(): AccessOverview? = try {
+        ShareAccessApi.overview()
+    } catch (e: CoreException) {
+        Log.w(TAG, "share.status (access) failed: ${e.kind}: ${e.message}")
+        null
     }
 
     /** A failed job list only leaves the commands out; the status itself loaded. */

@@ -1,14 +1,10 @@
 package app.smartexplorer.android.ui.share
 
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.toggleable
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -17,14 +13,23 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import app.smartexplorer.android.R
+import app.smartexplorer.android.api.AccessApproval
+import app.smartexplorer.android.api.AccessChange
+import app.smartexplorer.android.api.AccessOverview
+import app.smartexplorer.android.api.AccessView
 import app.smartexplorer.android.api.EXEC_INCOMING
 import app.smartexplorer.android.api.EXEC_RELATION_ROOM
 import app.smartexplorer.android.api.ExecJob
@@ -32,8 +37,11 @@ import app.smartexplorer.android.api.ExecJobs
 import app.smartexplorer.android.api.ExecProviderInfo
 import app.smartexplorer.android.api.ExecTarget
 import app.smartexplorer.android.api.ShareStatus
+import app.smartexplorer.android.service.AccessApprovalNotifier
+import app.smartexplorer.android.system.Permissions
 import app.smartexplorer.android.ui.common.Format
 import app.smartexplorer.android.ui.common.SeIcon
+import app.smartexplorer.android.ui.common.Snackbars
 import app.smartexplorer.android.ui.more.HintLine
 import app.smartexplorer.android.ui.more.SectionHeader
 
@@ -42,7 +50,7 @@ private const val RECENT_JOBS = 10
 
 /** Callbacks of the section "Befehle auf diesem Telefon". */
 internal class ExecHostActions(
-    /** Called after the warning was confirmed. */
+    /** `share.setExec` enabling; the access dialog ([setAccess]) replaced its warning, callers still pass it. */
     val allow: (ExecTarget) -> Unit,
     val revoke: (ExecTarget) -> Unit,
     val stop: (ExecJob) -> Unit,
@@ -50,22 +58,37 @@ internal class ExecHostActions(
     val programs: (ExecTarget) -> Unit,
     /** „Befehlsprotokoll“ of this phone. */
     val log: () -> Unit,
+    /** Saves the access dialog of one device; `null`: through the Share view model (`share.setAccess`). */
+    val setAccess: ((ExecTarget, AccessChange) -> Unit)? = null,
 )
 
 /**
- * Section "Befehle auf diesem Telefon" (spec G4 B): per Direct device and room member (no global
- * switch) [Erlauben…] → warning with the Android risks and "Ich habe verstanden" → [Aktivieren];
- * [Entziehen] without a question; ⋮ „Programme…“ narrows a device to a program list (as the CLI's
- * `--allow-program` and the desktop page „Befehle“). Each row names the account („Standardnutzer“:
- * Android runs commands only as the app) and the programs. Below, the running commands of other
- * devices with [Stopp], the last finished ones and [Befehlsprotokoll]. Without an exec provider the
- * reason is shown and allowing is disabled.
+ * Section "Befehle auf diesem Telefon" (spec G4 B, plan 2026-10-17 PRM-M10): per Direct device and
+ * room member (no global switch) [Erlauben…] opens the access dialog (commands and terminal each
+ * „Aus“, „Fragen“ or „Erlauben“, „Zeitraum“, programs, „Ausführen als: App-Konto“), ⋮ „Zugriff…“
+ * changes it, [Entziehen] turns both off without a question, ⋮ „Programme…“ narrows a device to a
+ * program list. Each row names its right, the account („Standardnutzer“: Android runs commands only
+ * as the app) and the programs. Open questions of other devices are listed with [Antworten…]; a
+ * right on „Fragen“ while notifications are off shows a warning with „Benachrichtigungen erlauben“.
+ * Below, the running commands of other devices with [Stopp], the last finished ones and
+ * [Befehlsprotokoll]. Without an exec provider the reason is shown and allowing is disabled.
+ * [access] defaults to the Share view model's access fields.
  */
 @Composable
-internal fun ExecHostSection(status: ShareStatus, jobs: ExecJobs?, actions: ExecHostActions) {
+internal fun ExecHostSection(
+    status: ShareStatus,
+    jobs: ExecJobs?,
+    actions: ExecHostActions,
+    access: AccessOverview? = null,
+) {
+    val vm: ShareViewModel? = if (access == null || actions.setAccess == null) viewModel { ShareViewModel() } else null
+    val overview = access ?: vm?.access
+    val saveAccess: (ExecTarget, AccessChange) -> Unit = actions.setAccess ?: { target, change -> vm?.setAccess(target, change) }
     val provider = status.execProvider
-    // The key, not the target: a lazy item keeps saveable state while scrolled away.
-    var confirmKey by rememberSaveable { mutableStateOf<String?>(null) }
+    val pending by AccessApprovalNotifier.pending.collectAsStateWithLifecycle()
+    // Keys, not targets: a lazy item keeps saveable state while scrolled away.
+    var accessKey by rememberSaveable { mutableStateOf<String?>(null) }
+    var answerId by rememberSaveable { mutableStateOf<String?>(null) }
     SectionHeader("Befehle auf diesem Telefon")
     HintLine("Andere Geräte dürfen hier nur nach deiner ausdrücklichen Erlaubnis Befehle ausführen – je Gerät bzw. Raummitglied.")
     if (!provider.available) {
@@ -76,12 +99,18 @@ internal fun ExecHostSection(status: ShareStatus, jobs: ExecJobs?, actions: Exec
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
         )
     }
+    if (overview?.execTargets.orEmpty().any { it.access.asks() }) NotificationWarning()
+    if (pending.isNotEmpty()) {
+        JobsTitle("Offene Rückfragen")
+        pending.forEach { approval -> ApprovalRow(approval, onAnswer = { answerId = approval.id }) }
+    }
     if (status.execTargets.isEmpty()) HintLine("Noch keine Direkt-Geräte oder Raummitglieder.")
     status.execTargets.forEach { target ->
         ExecTargetRow(
             target,
             provider,
-            onAllow = { confirmKey = target.targetKey },
+            overview?.accessOf(target.targetKey),
+            onAccess = { accessKey = target.targetKey },
             onRevoke = { actions.revoke(target) },
             onPrograms = { actions.programs(target) },
         )
@@ -98,17 +127,32 @@ internal fun ExecHostSection(status: ShareStatus, jobs: ExecJobs?, actions: Exec
         recent.forEach { job -> ExecJobRow(job, onStop = null) }
     }
 
-    val confirm = confirmKey?.let { key -> status.execTargets.firstOrNull { it.targetKey == key && !it.enabled } }
-    // The target vanished or was allowed meanwhile: forget the open question.
-    if (confirmKey != null && confirm == null) LaunchedEffect(confirmKey) { confirmKey = null }
-    confirm?.let { target ->
-        ExecGrantDialog(
+    val accessTarget = accessKey?.let { key -> status.execTargets.firstOrNull { it.targetKey == key } }
+    // The target vanished meanwhile: forget the open dialog.
+    if (accessKey != null && accessTarget == null) LaunchedEffect(accessKey) { accessKey = null }
+    accessTarget?.let { target ->
+        AccessDialog(
             target,
-            onConfirm = {
-                confirmKey = null
-                actions.allow(target)
+            overview?.accessOf(target.targetKey),
+            overview?.execProvider,
+            onConfirm = { change ->
+                accessKey = null
+                saveAccess(target, change)
             },
-            onDismiss = { confirmKey = null },
+            onDismiss = { accessKey = null },
+        )
+    }
+    val answer = answerId?.let { id -> pending.firstOrNull { it.id == id } }
+    // Answered elsewhere or withdrawn: nothing left to answer.
+    if (answerId != null && answer == null) LaunchedEffect(answerId) { answerId = null }
+    answer?.let { approval ->
+        AccessApprovalPrompt(
+            approval,
+            onDecide = { decision ->
+                answerId = null
+                AccessApprovalNotifier.decide(approval.id, decision)
+            },
+            onDismiss = { answerId = null },
         )
     }
 }
@@ -119,10 +163,21 @@ private fun JobsTitle(text: String) {
 }
 
 @Composable
-private fun ExecTargetRow(target: ExecTarget, provider: ExecProviderInfo, onAllow: () -> Unit, onRevoke: () -> Unit, onPrograms: () -> Unit) {
+private fun ExecTargetRow(
+    target: ExecTarget,
+    provider: ExecProviderInfo,
+    view: AccessView?,
+    onAccess: () -> Unit,
+    onRevoke: () -> Unit,
+    onPrograms: () -> Unit,
+) {
     val state = buildString {
         append(execRelationText(target))
-        append(if (target.enabled) " · Befehle erlaubt" else " · Keine Befehle")
+        when {
+            view != null -> append(" · ").append(accessSummary(view))
+            target.enabled -> append(" · Befehle erlaubt")
+            else -> append(" · Keine Befehle")
+        }
         if (!target.baseAuthorized) append(" · Freigabe inaktiv")
         append("\nAusführen als: ").append(execRunAsText(target, provider))
         append("\nProgramme: ").append(execProgramsText(target.programs))
@@ -142,12 +197,56 @@ private fun ExecTargetRow(target: ExecTarget, provider: ExecProviderInfo, onAllo
                 if (target.enabled) {
                     TextButton(onClick = onRevoke) { Text("Entziehen") }
                 } else {
-                    TextButton(onClick = onAllow, enabled = provider.available && target.baseAuthorized) { Text("Erlauben…") }
+                    TextButton(onClick = onAccess, enabled = provider.available && target.baseAuthorized) { Text("Erlauben…") }
                 }
-                RowMenu(listOf("Programme…" to onPrograms))
+                RowMenu(listOf("Zugriff…" to onAccess, "Programme…" to onPrograms))
             }
         },
     )
+}
+
+@Composable
+private fun ApprovalRow(approval: AccessApproval, onAnswer: () -> Unit) {
+    ListItem(
+        headlineContent = { Text(approvalTitle(approval), maxLines = 2, overflow = TextOverflow.Ellipsis) },
+        supportingContent = { Text(approvalLines(approval).joinToString("\n"), maxLines = 4, overflow = TextOverflow.Ellipsis) },
+        leadingContent = { SeIcon(R.drawable.ic_lock, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+        trailingContent = { TextButton(onClick = onAnswer) { Text("Antworten…") } },
+    )
+}
+
+/**
+ * A right on „Fragen“ while notifications are off (plan C5): a question can then only show while the
+ * app is open; otherwise the other device is refused with `approval_unavailable`.
+ */
+@Composable
+private fun NotificationWarning() {
+    val context = LocalContext.current
+    var allowed by remember { mutableStateOf(Permissions.canPostNotifications(context)) }
+    var asked by rememberSaveable { mutableStateOf(false) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { allowed = Permissions.canPostNotifications(context) }
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        allowed = Permissions.canPostNotifications(context)
+    }
+    if (allowed) return
+    Text(
+        "Benachrichtigungen sind aus: Rückfragen („Fragen“) erscheinen nur, solange die App geöffnet ist; " +
+            "sonst wird das andere Gerät abgewiesen.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.error,
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+    )
+    TextButton(
+        onClick = {
+            if (Permissions.notificationsNeedRuntimePermission() && !asked) {
+                asked = true
+                launcher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            } else if (!Permissions.openNotificationSettings(context)) {
+                Snackbars.show("Einstellung nicht verfügbar – bitte in den App-Einstellungen erlauben.")
+            }
+        },
+        modifier = Modifier.padding(start = 4.dp),
+    ) { Text("Benachrichtigungen erlauben") }
 }
 
 @Composable
@@ -160,51 +259,6 @@ private fun ExecJobRow(job: ExecJob, onStop: (() -> Unit)?) {
         } else {
             null
         },
-    )
-}
-
-/** The warning before a device may run commands here; [Aktivieren] only after "Ich habe verstanden". */
-@Composable
-private fun ExecGrantDialog(target: ExecTarget, onConfirm: () -> Unit, onDismiss: () -> Unit) {
-    var understood by rememberSaveable(target.targetKey) { mutableStateOf(false) }
-    val name = target.name.ifBlank { "Dieses Gerät" }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Befehle von „$name“ erlauben?") },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    if (target.programs.isEmpty()) {
-                        "„$name“ kann danach ohne weitere Rückfrage beliebige Shell-Befehle auf diesem Telefon starten."
-                    } else {
-                        "„$name“ kann danach ohne weitere Rückfrage diese Programme mit beliebigen Argumenten starten, " +
-                            "ohne Shell und Terminal: ${target.programs.joinToString(", ")}. Enthält die Liste eine Shell oder " +
-                            "einen Interpreter, ist das eine volle Shell."
-                    },
-                )
-                Text(
-                    "Die Befehle laufen mit den Rechten von Smart Explorer: Sie können die Daten der App lesen – " +
-                        "gespeicherte Verbindungspasswörter, die Share-Identität und Google-Drive-Tokens – und alle " +
-                        "Dateien, auf die die App zugreifen darf.",
-                    color = MaterialTheme.colorScheme.error,
-                )
-                Text("Android kann Befehle im Hintergrund beenden oder anhalten; mit der App enden auch laufende Befehle.")
-                Text(
-                    "Die Erlaubnis gilt nur für genau diese Geräte-Identität (${execRelationText(target)}, " +
-                        "Fingerabdruck ${target.fingerprint}) und lässt sich jederzeit entziehen.",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                Row(
-                    Modifier.toggleable(value = understood, role = Role.Checkbox, onValueChange = { understood = it }),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Checkbox(checked = understood, onCheckedChange = null)
-                    Text("Ich habe verstanden", modifier = Modifier.padding(start = 8.dp))
-                }
-            }
-        },
-        confirmButton = { TextButton(onClick = onConfirm, enabled = understood) { Text("Aktivieren") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Abbrechen") } },
     )
 }
 

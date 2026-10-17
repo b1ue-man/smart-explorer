@@ -1,21 +1,25 @@
-//! Direct access requests (desktop lifecycle actions) and the one-shot
-//! remote command (`daemon::exec_share`).
-use std::time::Duration;
+//! Direct access requests (desktop lifecycle actions) and the remote command
+//! `share.exec`, which runs over the background worker's Exec stream like
+//! `se exec` (`share_exec_stream.rs`).
+use std::collections::BTreeMap;
 
 use serde_json::{json, Value};
 
-use super::args::{bool_arg, canceled, i64_arg, invalid, opt_bool, opt_str, str_arg};
-use super::share_state::{default_home, identity, reconfigure};
-use crate::mobile::{ApiError, Runtime, TaskCtx};
+use super::args::{bool_arg, i64_arg, invalid, opt_bool, opt_str, str_arg};
+use super::share_state::{default_home, identity, reconfigure, with_state};
+use crate::mobile::{ApiError, Runtime};
 use crate::share::lifecycle_view::request_views;
 use crate::share::{
-    DirectDecisionKind, DirectRequestId, ExecRequest, PeerOpenTarget, ShareProfiles,
+    DirectDecisionKind, DirectRequestId, ExecCommand, ExecId, ExecStart, PeerOpenTarget,
+    ShareProfiles,
 };
+
+#[path = "share_exec_stream.rs"]
+mod exec_stream;
 
 /// Output limit of a remote command (api.md §5).
 const MAX_EXEC_OUTPUT: u64 = 1024 * 1024;
 const MAX_EXEC_TIMEOUT_SECS: i64 = 24 * 60 * 60;
-const EXEC_POLL: Duration = Duration::from_millis(250);
 
 fn request_id(args: &Value) -> Result<DirectRequestId, ApiError> {
     DirectRequestId::parse(str_arg(args, "requestId")?)
@@ -152,7 +156,28 @@ pub(super) fn split_command(command: &str) -> Result<Vec<String>, String> {
     Ok(args)
 }
 
+/// `share.exec {location, command, shell, timeoutSecs}` → `{taskId}`. The
+/// task runs the command over the background worker's Exec stream, the path
+/// of `se exec` (`share_exec_stream.rs`); the one-shot request it replaces
+/// (`daemon::exec_share`) is refused by every host. Result: `{stdout, stderr,
+/// exitCode, timedOut, truncated, signal, header}`.
 pub(super) fn exec(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
+    let (target, start, command) = exec_start(args)?;
+    let label = peer_label(&target);
+    let task = rt.spawn_task("exec", format!("Befehl: {command}"), move |ctx| {
+        exec_stream::run(ctx, target, start, &label)
+    });
+    Ok(json!({ "taskId": task }))
+}
+
+/// The checked arguments of `share.exec` as the Exec start of a command:
+/// `shell` runs the text through the device's shell, otherwise it is split
+/// into program and arguments (`split_command`). The location names the
+/// device itself: a folder in it would reach the host as a working directory
+/// of its own file system, which a Share path is not. Stdin stays empty, the
+/// output is limited to 1 MiB, and the device ends the command after
+/// `timeoutSecs`.
+pub(super) fn exec_start(args: &Value) -> Result<(PeerOpenTarget, ExecStart, String), ApiError> {
     let location = str_arg(args, "location")?;
     let command = str_arg(args, "command")?.trim().to_string();
     let shell = opt_bool(args, "shell", false);
@@ -167,66 +192,80 @@ pub(super) fn exec(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
     }
     let (target, path) = PeerOpenTarget::from_endpoint(location)
         .ok_or_else(|| invalid("Befehle lassen sich nur auf Share-Geräten ausführen."))?;
-    let argv = if shell {
-        vec![command.clone()]
+    if !path.trim_matches('/').is_empty() {
+        return Err(invalid(
+            "Befehle starten im Arbeitsordner des Geräts; bitte das Gerät selbst angeben, keinen Ordner darin.",
+        ));
+    }
+    let spec = if shell {
+        ExecCommand::Shell {
+            command: command.clone(),
+        }
     } else {
-        split_command(&command).map_err(invalid)?
+        let mut argv = split_command(&command).map_err(invalid)?;
+        if argv.first().is_none_or(|program| program.trim().is_empty()) {
+            return Err(invalid("Bitte einen Befehl eingeben."));
+        }
+        let program = argv.remove(0);
+        ExecCommand::Argv {
+            program,
+            args: argv,
+        }
     };
-    let request = ExecRequest {
-        argv,
-        cwd: (!path.trim_matches('/').is_empty()).then_some(path),
-        timeout_ms: (timeout as u64).saturating_mul(1000),
-        max_output_bytes: MAX_EXEC_OUTPUT,
-        shell,
+    let start = ExecStart {
+        exec_id: ExecId::generate()
+            .map_err(|error| ApiError::internal(format!("Befehls-ID nicht erzeugt: {error}")))?,
+        command: spec,
+        cwd: None,
+        env: BTreeMap::new(),
+        timeout_ms: Some((timeout as u64).saturating_mul(1000)),
+        max_output_bytes: Some(MAX_EXEC_OUTPUT),
+        terminal: None,
     };
-    let task = rt.spawn_task("exec", format!("Befehl: {command}"), move |ctx| {
-        exec_task(ctx, target, request)
-    });
-    Ok(json!({ "taskId": task }))
+    start
+        .validate()
+        .map_err(|error| invalid(format!("Befehl ungültig: {error}")))?;
+    Ok((target, start, command))
 }
 
-/// The remote call blocks until the command ends; it runs on a helper thread
-/// so a cancel ends the task at once (the peer still enforces its timeout).
-fn exec_task(
-    ctx: &TaskCtx,
-    target: PeerOpenTarget,
-    request: ExecRequest,
-) -> Result<Value, ApiError> {
-    ctx.message("Befehl läuft…");
-    let (tx, rx) = crossbeam_channel::bounded(1);
-    std::thread::Builder::new()
-        .name("share-exec".into())
-        .spawn(move || {
-            let _ = tx.send(crate::daemon::exec_share(target, request));
-        })
-        .map_err(|error| super::args::io_error("Befehl starten", error))?;
-    let result = loop {
-        if ctx.cancelled() {
-            return Err(canceled(
-                "Abgebrochen (das Gerät beendet den Befehl nach seiner Zeitbegrenzung)",
-            ));
-        }
-        match rx.recv_timeout(EXEC_POLL) {
-            Ok(result) => break result,
-            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
-            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
-                return Err(ApiError::new("internal", "Befehl ohne Ergebnis beendet."));
-            }
-        }
+/// How the task names the device until its host reports a name: the name
+/// this phone stored for the contact or room member, else „Gerät“.
+fn peer_label(target: &PeerOpenTarget) -> String {
+    with_state(|state| {
+        state
+            .profiles
+            .as_ref()
+            .and_then(|profiles| profile_name(profiles, target))
+    })
+    .unwrap_or_else(|| "Gerät".to_string())
+}
+
+pub(super) fn profile_name(profiles: &ShareProfiles, target: &PeerOpenTarget) -> Option<String> {
+    let name = match target {
+        PeerOpenTarget::Direct { contact_id } => profiles
+            .direct_contacts
+            .iter()
+            .find(|contact| &contact.id == contact_id)
+            .map(|contact| contact.display_name.clone()),
+        PeerOpenTarget::RoomDevice { room_id, device_id } => profiles
+            .rooms
+            .iter()
+            .find(|room| &room.id == room_id || &room.room_id == room_id)
+            .and_then(|room| {
+                room.members
+                    .iter()
+                    .find(|member| &member.device_id == device_id)
+                    .map(|member| member.device_name.clone())
+            }),
     };
-    let output = result.map_err(exec_error)?;
-    Ok(json!({
-        "stdout": String::from_utf8_lossy(&output.stdout),
-        "stderr": String::from_utf8_lossy(&output.stderr),
-        "exitCode": output.exit_code,
-        "timedOut": output.timed_out,
-        "truncated": output.stdout_truncated || output.stderr_truncated,
-    }))
+    name.filter(|name| !name.trim().is_empty())
 }
 
 /// A refused grant is reported as such; everything else verbatim. Only grant
 /// wording counts: a folder or file the device cannot access (an OS error,
-/// an export) is no refused grant.
+/// an export) is no refused grant. Used for the errors of starting the
+/// stream; the stream's own refusals carry their code
+/// (`share_exec_stream.rs`).
 pub(super) fn exec_error(error: String) -> ApiError {
     let lower = error.to_lowercase();
     const REFUSED: [&str; 3] = ["grant", "exec-freigabe", "befehlsfreigabe"];

@@ -18,10 +18,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
+import app.smartexplorer.android.api.ACCESS_OFF
+import app.smartexplorer.android.api.AccessChange
+import app.smartexplorer.android.api.AccessView
+import app.smartexplorer.android.api.CAP_COMMANDS
+import app.smartexplorer.android.api.CAP_TERMINAL
 import app.smartexplorer.android.api.EXEC_RUN_AS_STANDARD
 import app.smartexplorer.android.api.ExecProviderInfo
 import app.smartexplorer.android.api.ExecTarget
-import app.smartexplorer.android.api.ShareExecApi
+import app.smartexplorer.android.api.ShareAccessApi
 
 /** Longest program entry the core accepts (`PATH_MAX`, `ExecGrantSettings::validate`). */
 private const val MAX_PROGRAM_BYTES = 4096
@@ -61,9 +66,20 @@ internal fun execProgramsText(programs: List<String>): String =
     if (programs.isEmpty()) "volle Shell" else "nur ${programs.joinToString(", ")}"
 
 /**
+ * The `share.setAccess` change of a new program list: account and decisions stay (a list never
+ * turns „Fragen“ into „Erlauben“; B16). A list switches the terminal off (the core does that); an
+ * emptied list gives the terminal the decision of the commands again, as `share.setExec` did.
+ */
+internal fun programsChange(programs: List<String>, view: AccessView?): AccessChange {
+    val commands = view?.decision(CAP_COMMANDS) ?: ACCESS_OFF
+    val terminal = if (programs.isEmpty() && commands != ACCESS_OFF) mapOf(CAP_TERMINAL to commands) else null
+    return AccessChange(programs = programs, capabilities = terminal)
+}
+
+/**
  * „Programme…“ of a device in „Befehle auf diesem Telefon“: the list a device may start (empty = full
- * shell). For an allowed device every change needs „Ich habe verstanden“ and ends its running
- * commands, as `enable` in the CLI asks for YES.
+ * shell). For an allowed device every change needs „Ich habe verstanden“; a change that narrows its
+ * right ends its running commands, as `enable` in the CLI asks for YES.
  */
 @Composable
 internal fun ExecProgramsDialog(target: ExecTarget, vm: ShareViewModel, onDismiss: () -> Unit) {
@@ -90,7 +106,7 @@ internal fun ExecProgramsDialog(target: ExecTarget, vm: ShareViewModel, onDismis
         enabled = changed && (!target.enabled || understood),
         onConfirm = {
             action.submit(vm, "Programmliste nicht gespeichert", onDismiss) {
-                ShareExecApi.setExec(target.targetKey, target.enabled, draft)
+                ShareAccessApi.setAccess(target.targetKey, programsChange(draft, vm.access?.accessOf(target.targetKey)))
             }
         },
     ) {
@@ -134,7 +150,7 @@ internal fun ExecProgramsDialog(target: ExecTarget, vm: ShareViewModel, onDismis
                 },
                 color = MaterialTheme.colorScheme.error,
             )
-            Text("Laufende Befehle dieses Geräts enden.")
+            Text("Laufende Befehle dieses Geräts enden, wenn die Änderung Rechte einschränkt.")
             ShareChoice("Ich habe verstanden", understood) { understood = it }
         } else if (changed) {
             Text("Die Liste gilt, sobald du die Befehle dieses Geräts erlaubst.", style = MaterialTheme.typography.bodySmall)
