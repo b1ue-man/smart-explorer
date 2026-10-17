@@ -188,7 +188,7 @@ impl ApprovalService {
     }
 
     /// How this host asks from now on (the Android app sets its own).
-    #[allow(dead_code)] // Staged: U21 (PRM-M10) sets the Android notifier.
+    #[allow(dead_code)] // Only the Android app sets one (`mobile`, Android builds only).
     pub(crate) fn set_notifier(&self, notifier: Arc<dyn ConsentNotifier>) {
         *self
             .inner

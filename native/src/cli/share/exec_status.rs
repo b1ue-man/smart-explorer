@@ -38,6 +38,8 @@ approval_granted, approval_denied, approval_cancelled, approval_unavailable, \
 grant_expired, helper_refused."
     )]
     Log(LogArgs),
+    #[command(flatten)]
+    Approval(super::exec_approvals::ApprovalsCommand),
 }
 
 #[derive(Args)]
@@ -62,8 +64,16 @@ pub(super) fn run(args: ExecStatusArgs) -> Result<(), String> {
     if let Some(ExecStatusCommand::Log(log)) = &args.command {
         return print_audit_log(log.lines, args.json);
     }
+    // Confirmations come from a running worker only and never start one
+    // (`exec_jobs` would), so they are answered before the job snapshot.
+    let command = match args.command {
+        Some(ExecStatusCommand::Approval(command)) => {
+            return super::exec_approvals::run(command, args.json);
+        }
+        command => command,
+    };
     let snapshot = crate::daemon::exec_jobs()?;
-    match args.command {
+    match command {
         None | Some(ExecStatusCommand::List) => {
             print(active(&snapshot), args.json)?;
             if !args.json {
@@ -73,6 +83,7 @@ pub(super) fn run(args: ExecStatusArgs) -> Result<(), String> {
         }
         Some(ExecStatusCommand::History) => print(history(&snapshot), args.json),
         Some(ExecStatusCommand::Log(_)) => Ok(()),
+        Some(ExecStatusCommand::Approval(_)) => Ok(()),
         Some(ExecStatusCommand::Show(selector)) => {
             let all = active(&snapshot)
                 .into_iter()

@@ -198,8 +198,12 @@ mod state;
 mod update_stop;
 
 pub(crate) use access_ipc::{
-    access_approvals, decide_access_approval, exec_notice, ExecNoticeWatch,
+    access_accounts, access_approvals, decide_access_approval, exec_notice, mutate_access_grant,
+    ExecNoticeWatch,
 };
+// Only the Android facade calls it (`mobile`, compiled under the same cfg).
+#[cfg(any(target_os = "android", all(unix, test)))]
+pub(crate) use access_ipc::report_approval_undeliverable;
 pub use catch_up::{CatchUpRecord, CatchUpSkip, CatchUpStatus};
 pub use drive_modules::{is_drive_restore_invocation, note_daemon_start_args};
 pub use embedded::ensure_embedded_daemon;

@@ -59,6 +59,7 @@ pub mod syncjobs;
 pub mod transfer;
 pub mod types;
 pub mod updater;
+pub(crate) mod vault;
 pub mod vfs;
 #[cfg(windows)]
 pub mod virtual_clipboard;

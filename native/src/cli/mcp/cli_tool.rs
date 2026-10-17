@@ -35,6 +35,9 @@ pub(super) fn start(session: &Session, args: &Args<'_>) -> Result<Arc<Job>, Stri
     {
         return Err("`se mcp` is this server; it cannot run inside itself".into());
     }
+    if let Some(refusal) = crate::cli::share::exec_approvals::mcp_refusal(&arguments) {
+        return Err(refusal);
+    }
     let stdin = args.opt_string("stdin")?;
     let mut command = Command::new(&session.executable);
     command
