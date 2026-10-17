@@ -1,15 +1,19 @@
 //! Concurrent reporting: no new admission after a checkpoint or target stop.
+//! Plan rules of a job kind may run the actions in phases (`run_phases`).
 use super::apply::ApplyReport;
 use super::apply_actions::Actions;
+use super::apply_pool::PoolReport;
 use super::apply_retry::{run_with_retry, AttemptError};
 use super::checkpoint::ApplyScope;
-use super::completion::DirAction;
+use super::completion::{ApplySink, DirAction};
 use super::incremental::SyncEndpoints;
+use super::plan_rules::{PhasePlan, PlanRules, HELD_BACK};
 use super::run_types::RunStop;
 use super::sync_flows::PairFlows;
 use super::types::{Action, BisyncOptions, BisyncStats, PairSide, Throttle, Tree};
 use crate::transfer::engine::folders::FolderRegister;
 use crate::transfer::Side;
+use std::collections::HashMap;
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -293,8 +297,29 @@ pub(super) fn run(
         (0, shared) => shared.unwrap_or(0),
         (max, shared) => shared.map_or(max, |shared| shared.min(max)),
     };
-    let pooled =
-        super::apply_pool::run_actions_stoppable(actions, cap, cancel, &stop, &admit, &execute);
+    // Installed plan rules may split apply into phases (C5.4 R4); without
+    // rules, or with their single phase in plan order, the one pool call
+    // below is exactly the call every job kind made before.
+    let phased = super::plan_rules::current()
+        .and_then(|rules| super::plan_rules::phase_plan(&rules, actions).map(|plan| (rules, plan)));
+    let pooled = match &phased {
+        None => {
+            super::apply_pool::run_actions_stoppable(actions, cap, cancel, &stop, &admit, &execute)
+        }
+        Some((rules, plan)) => run_phases(
+            actions,
+            plan,
+            rules,
+            scope.sink,
+            &completed,
+            &|| cancel.load(Ordering::Acquire) || stop(),
+            &mut |phase| {
+                super::apply_pool::run_actions_stoppable(
+                    phase, cap, cancel, &stop, &admit, &execute,
+                )
+            },
+        ),
+    };
     merge(&mut report.stats, &pooled.stats);
     merge(
         &mut report.stats,
@@ -305,3 +330,102 @@ pub(super) fn run(
     directory_pass(false, &mut report, errors);
     report
 }
+
+/// The first failures kept across all phases (the bound of one pool run).
+const PHASE_ERRORS: usize = 100;
+
+/// Identity of an action for matching finished actions to planned ones.
+fn action_key(action: &Action) -> (u8, &str) {
+    let kind = match action {
+        Action::CopyAtoB(_) => 0,
+        Action::CopyBtoA(_) => 1,
+        Action::FinalizeMoveAtoB(_) => 2,
+        Action::FinalizeMoveBtoA(_) => 3,
+        Action::DeleteA(_) => 4,
+        Action::DeleteB(_) => 5,
+        Action::KeepBothAtoB(_) => 6,
+        Action::KeepBothBtoA(_) => 7,
+    };
+    (kind, super::core::action_rel(action))
+}
+
+/// Applies the phases one after another (C5.4 R4): a phase starts only after
+/// every action of the previous one completed or failed. Actions in no
+/// phase, and actions the rules hold back after an incomplete earlier
+/// action, are not started and are reported as deferred: nothing is
+/// committed for them and the next run plans them again. A stop or cancel
+/// ends the phases like it ends admission within one phase.
+fn run_phases(
+    actions: &[Action],
+    plan: &PhasePlan,
+    rules: &dyn PlanRules,
+    sink: &dyn ApplySink,
+    completed: &Mutex<Vec<Action>>,
+    halted: &dyn Fn() -> bool,
+    apply: &mut dyn FnMut(&[Action]) -> PoolReport,
+) -> PoolReport {
+    let mut report = PoolReport::default();
+    let mut incomplete: Vec<&Action> = Vec::new();
+    for &index in &plan.deferred {
+        let action = &actions[index];
+        sink.deferred(
+            super::core::action_rel(action),
+            &rules.deferral_reason(action),
+        );
+        incomplete.push(action);
+    }
+    for phase in &plan.phases {
+        if halted() {
+            break;
+        }
+        let coming: Vec<&Action> = phase.iter().map(|&index| &actions[index]).collect();
+        let mut held = vec![false; coming.len()];
+        if !incomplete.is_empty() {
+            for position in rules.held_back(&incomplete, &coming) {
+                if let Some(flag) = held.get_mut(position) {
+                    *flag = true;
+                }
+            }
+        }
+        let mut indices = Vec::with_capacity(phase.len());
+        for (&index, &hold) in phase.iter().zip(&held) {
+            if hold {
+                let action = &actions[index];
+                sink.deferred(super::core::action_rel(action), HELD_BACK);
+                incomplete.push(action);
+            } else {
+                indices.push(index);
+            }
+        }
+        if indices.is_empty() {
+            continue;
+        }
+        let run: Vec<Action> = indices
+            .iter()
+            .map(|&index| actions[index].clone())
+            .collect();
+        let before = completed.lock().unwrap_or_else(|e| e.into_inner()).len();
+        let pooled = apply(&run[..]);
+        merge(&mut report.stats, &pooled.stats);
+        let room = PHASE_ERRORS.saturating_sub(report.errors.len());
+        report.errors.extend(pooled.errors.into_iter().take(room));
+        report.completed.extend(pooled.completed);
+        let finished: Vec<Action> =
+            completed.lock().unwrap_or_else(|e| e.into_inner())[before..].to_vec();
+        let mut done: HashMap<(u8, &str), usize> = HashMap::new();
+        for action in &finished {
+            *done.entry(action_key(action)).or_default() += 1;
+        }
+        for &index in &indices {
+            match done.get_mut(&action_key(&actions[index])) {
+                Some(count) if *count > 0 => *count -= 1,
+                _ => incomplete.push(&actions[index]),
+            }
+        }
+    }
+    report
+}
+
+#[cfg(test)]
+#[path = "apply_phases_tests.rs"]
+mod phases_tests;

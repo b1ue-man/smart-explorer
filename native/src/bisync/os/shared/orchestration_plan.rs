@@ -1,4 +1,5 @@
-//! Planning against Backend facts, with cheap on-demand content comparison.
+//! Planning against Backend facts, with cheap on-demand content comparison,
+//! followed by the rule stage of the job kind (`plan_rules`).
 use std::io::{self, Read};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -59,6 +60,7 @@ pub(super) fn prepare_spelled(
 ) -> PairPlan {
     let mut plan = plan_pair_spelled(a, b, base, ctx, aliases);
     if plan.verify.is_empty() {
+        rule_stage(&mut plan);
         a.omissions.extend(plan.omissions.clone());
         b.omissions.extend(plan.omissions.clone());
         return plan;
@@ -98,11 +100,21 @@ pub(super) fn prepare_spelled(
     let mut final_plan = plan_pair_spelled(a, b, base, &final_ctx, aliases);
     final_plan.files_a = counts.0;
     final_plan.files_b = counts.1;
+    rule_stage(&mut final_plan);
     // The planner takes the omissions. Later guards and checkpoint observations
     // still need them to distinguish a protected entry from an empty volume.
     a.omissions.extend(final_plan.omissions.clone());
     b.omissions.extend(final_plan.omissions.clone());
     final_plan
+}
+
+/// The rule stage of the job kind installed on this thread (C5.4), after
+/// the planner and before guards, previews and apply see the plan. Without
+/// installed rules the plan stays exactly as planned.
+fn rule_stage(plan: &mut PairPlan) {
+    if let Some(rules) = super::plan_rules::current() {
+        rules.adjust(plan);
+    }
 }
 
 /// Stat guards bind the checksum to exactly the observation we planned.

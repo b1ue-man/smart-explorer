@@ -138,6 +138,8 @@ mod plan_filter;
 mod plan_index;
 #[path = "core/plan_pair.rs"]
 mod plan_pair;
+#[path = "core/plan_rules.rs"]
+pub(crate) mod plan_rules;
 #[path = "core/plan_types.rs"]
 mod plan_types;
 #[path = "os/shared/preview.rs"]
