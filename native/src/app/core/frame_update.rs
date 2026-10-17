@@ -134,6 +134,10 @@ impl App {
                 }
             }
         }
+        // S5 windows (`--open-location`, `--open-page`): once, in the first frame.
+        if let Some(request) = super::start_request::take_pending_window() {
+            self.open_start_request(request);
+        }
 
         // Throttled view rebuild while a scan streams entries in
         if self.view_dirty

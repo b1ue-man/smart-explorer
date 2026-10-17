@@ -1,4 +1,5 @@
 use super::prelude::*;
+use super::start_request::StartRequest;
 use super::*;
 
 impl App {
@@ -6,6 +7,12 @@ impl App {
         // DSK-M2: baseline first, so only later update requests close it.
         super::update_stop_ui::arm_window();
         Self::new_inner(just_updated, initial_path, true)
+    }
+
+    /// V9 window kinds of S5: the first frame opens the location or page.
+    pub(crate) fn new_with_start(just_updated: bool, request: StartRequest) -> Self {
+        super::start_request::set_pending_window(request);
+        Self::new(just_updated, None)
     }
 
     #[cfg(test)]

@@ -12,6 +12,9 @@ use super::ipc_storage::{read_ipc_addr, read_ipc_generation, read_token};
 #[path = "ipc_exec_grant_client.rs"]
 mod exec_grant_client;
 pub(crate) use exec_grant_client::mutate_exec_grant;
+#[path = "ipc_peek_client.rs"]
+mod peek_client;
+pub use peek_client::share_worker_peek;
 #[path = "ipc_share_client.rs"]
 mod share_client;
 pub use share_client::{hand_off_running_worker, share_command, WorkerHandoff};
