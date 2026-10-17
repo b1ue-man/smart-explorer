@@ -1,6 +1,10 @@
 use crate::creds::{Protocol, SavedConnection};
 use crate::vfs::BackendHandle;
 
+#[path = "target_vault.rs"]
+mod vault_keys;
+use vault_keys::vault_backend_keys;
+
 pub(crate) struct Target {
     pub(crate) backend: BackendHandle,
     pub(crate) path: String,
@@ -182,6 +186,9 @@ fn endpoint_backend_keys(spec: &str) -> (String, String) {
     }
     if spec.starts_with("gdrive://") {
         return ("gdrive".to_string(), "gdrive".to_string());
+    }
+    if let Some(keys) = vault_backend_keys(spec) {
+        return keys;
     }
     if let Some((saved, _)) = crate::connect::saved_and_path(spec) {
         return (saved_namespace_key(&saved), saved_rename_key(&saved));

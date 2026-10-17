@@ -25,6 +25,7 @@ pub(crate) fn root_label(loc: &Loc) -> String {
         LocKind::GDrive => "Google Drive".to_string(),
         LocKind::Share => "Share".to_string(),
         LocKind::Trash => "Papierkorb".to_string(),
+        LocKind::Vault => "Tresor".to_string(),
         LocKind::Zip => loc
             .zip_archive()
             .and_then(|archive| archive.rsplit('/').next())

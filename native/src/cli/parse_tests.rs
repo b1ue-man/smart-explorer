@@ -103,7 +103,7 @@ fn top_level_help_shows_targets_and_setup_examples() {
 #[test]
 fn help_exposes_exec_as_available_and_explains_context_free_discovery() {
     let top = Cli::command().render_long_help().to_string();
-    assert!(top.contains("Run an unrestricted command"));
+    assert!(top.contains("Run a command on another device within the access it granted"));
     assert!(!top
         .to_ascii_lowercase()
         .contains("remote execution is disabled"));

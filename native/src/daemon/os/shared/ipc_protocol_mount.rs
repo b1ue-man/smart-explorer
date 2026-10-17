@@ -5,8 +5,9 @@
 //! (plan 2026-10-17 „Rechte, se Desktop, Tresore“, B2, package R1);
 //! `ipc_protocol.rs` re-exports both, so every caller keeps its path. The
 //! fixtures in `ipc_protocol_mount_fixtures/` pin the form of v0.5.182
-//! (commit `da2646d2`); the only addition since then is
-//! `MountHostConfig::path_dialect`.
+//! (commit `da2646d2`); the additions since then are
+//! `MountHostConfig::path_dialect` and `MountBackendScheme::Vault` (wire
+//! name `vault`, appended to the scheme list).
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -21,6 +22,8 @@ pub(in crate::daemon) enum MountBackendScheme {
     Smb,
     GoogleDrive,
     Peer,
+    /// The cleartext view of a vault (`vault://`).
+    Vault,
 }
 
 impl From<crate::vfs::Scheme> for MountBackendScheme {
@@ -33,6 +36,7 @@ impl From<crate::vfs::Scheme> for MountBackendScheme {
             crate::vfs::Scheme::Smb => Self::Smb,
             crate::vfs::Scheme::GDrive => Self::GoogleDrive,
             crate::vfs::Scheme::Peer => Self::Peer,
+            crate::vfs::Scheme::Vault => Self::Vault,
         }
     }
 }
@@ -47,6 +51,7 @@ impl From<MountBackendScheme> for crate::vfs::Scheme {
             MountBackendScheme::Smb => Self::Smb,
             MountBackendScheme::GoogleDrive => Self::GDrive,
             MountBackendScheme::Peer => Self::Peer,
+            MountBackendScheme::Vault => Self::Vault,
         }
     }
 }

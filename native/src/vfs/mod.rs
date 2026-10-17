@@ -101,7 +101,7 @@ pub use self::extension_types::{
 pub use self::extensions::{BackendExtensions, VersionArchivePolicy};
 pub use self::local_extensions::{local_mount_boundary, local_volume_identity};
 pub use self::staging_names::is_staging_name;
-pub(crate) use self::staging_names::{fit_stage_name, is_unique_stage};
+pub(crate) use self::staging_names::{fit_stage_name, is_unique_stage, split_stage_name};
 pub use self::tree_remove_listed::{remove_tree_listed, TREE_LEAF_PORTION};
 pub use self::tree_remove_pipelined::remove_leaves_pipelined;
 pub use self::volume::{MountKind, VolumeIdentity};

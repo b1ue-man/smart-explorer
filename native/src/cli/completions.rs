@@ -77,6 +77,7 @@ pub(super) fn exec_grant_candidates() -> Vec<clap_complete::CompletionCandidate>
 fn exec_grant_candidates_from_profiles(
     profiles: &crate::share::ShareProfiles,
 ) -> Vec<clap_complete::CompletionCandidate> {
+    let now = crate::share::core_now_secs();
     let direct = profiles
         .direct_grants
         .iter()
@@ -87,7 +88,7 @@ fn exec_grant_candidates_from_profiles(
                 format!(
                     "{} · direct · {}",
                     grant.device_name,
-                    exec_state_label(&grant.exec)
+                    super::completions_access::access_state_label(&grant.exec, now)
                 ),
             )
         });
@@ -109,25 +110,12 @@ fn exec_grant_candidates_from_profiles(
                             "{} / {} · room · {}",
                             room.name,
                             member.device_name,
-                            exec_state_label(&member.exec)
+                            super::completions_access::access_state_label(&member.exec, now)
                         ),
                     )
                 })
         });
     direct.chain(rooms).collect()
-}
-
-/// `enabled`/`disabled`, plus the account and the program list of a
-/// narrowed grant (`enabled · as deploy · programs uptime,df`).
-fn exec_state_label(exec: &crate::share::ExecGrant) -> String {
-    let mut label = if exec.enabled { "enabled" } else { "disabled" }.to_string();
-    if let Some(account) = exec.run_as.account_name() {
-        label.push_str(&format!(" · as {account}"));
-    }
-    if !exec.programs.is_empty() {
-        label.push_str(&format!(" · programs {}", exec.programs.join(",")));
-    }
-    label
 }
 
 pub(super) fn peer_candidates() -> Vec<clap_complete::CompletionCandidate> {
@@ -397,17 +385,24 @@ mod tests {
 
     #[test]
     fn luecken_task_exec_grant_completion_names_account_and_programs() {
+        use super::super::completions_access::access_state_label;
         let mut exec = crate::share::ExecGrant::default();
-        assert_eq!(super::exec_state_label(&exec), "disabled");
+        assert_eq!(
+            access_state_label(&exec, 0),
+            "disabled · commands off · terminal off"
+        );
         exec.enabled = true;
-        assert_eq!(super::exec_state_label(&exec), "enabled");
+        assert_eq!(
+            access_state_label(&exec, 0),
+            "enabled · commands allow · terminal allow"
+        );
         exec.run_as = crate::share::ExecRunAs::Account {
             name: "deploy".into(),
         };
         exec.programs = vec!["uptime".into(), "/usr/bin/df".into()];
         assert_eq!(
-            super::exec_state_label(&exec),
-            "enabled · as deploy · programs uptime,/usr/bin/df"
+            access_state_label(&exec, 0),
+            "enabled · as deploy · commands allow · terminal off · programs uptime,/usr/bin/df"
         );
     }
 }

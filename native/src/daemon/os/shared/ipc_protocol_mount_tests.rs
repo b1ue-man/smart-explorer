@@ -6,10 +6,11 @@
 //! the type definitions of commit `da2646d2` produce: `MountBackendScheme`,
 //! two `MountHostConfig` values and the `MountHostReady` answer that carries
 //! both; `mount_host_config_without_defaults.json` is the older input without
-//! the defaulted policy fields. The only addition since that commit is
-//! `MountHostConfig::path_dialect`: input without it stays readable and means
+//! the defaulted policy fields. Two additions since that commit:
+//! `MountHostConfig::path_dialect` (input without it stays readable and means
 //! the Windows rules, and output appends it after `label` while every earlier
-//! byte stays as it was.
+//! byte stays as it was) and the scheme `vault`, appended to
+//! `mount_backend_schemes.json` after the seven names of that commit.
 use super::super::{IpcResponse, MountDeleteDisposition};
 use super::{MountBackendScheme, MountHostConfig};
 use crate::mount::{
@@ -64,6 +65,7 @@ fn backend_scheme_names_and_mapping() {
         (crate::vfs::Scheme::Smb, MountBackendScheme::Smb),
         (crate::vfs::Scheme::GDrive, MountBackendScheme::GoogleDrive),
         (crate::vfs::Scheme::Peer, MountBackendScheme::Peer),
+        (crate::vfs::Scheme::Vault, MountBackendScheme::Vault),
     ];
     let wire: Vec<MountBackendScheme> = table.iter().map(|(_, wire)| *wire).collect();
     assert_eq!(encode(&wire), fixture(SCHEMES));

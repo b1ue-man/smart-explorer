@@ -1,5 +1,6 @@
 mod background;
 mod completions;
+mod completions_access;
 mod completions_requests;
 mod connections;
 mod desktop;
@@ -158,7 +159,7 @@ enum Command {
     )]
     Search(SearchArgs),
     #[command(
-        about = "Run an unrestricted command on an explicitly authorized Share peer or saved SSH remote"
+        about = "Run a command on another device within the access it granted (commands/terminal: off, ask or allow)."
     )]
     Exec(exec::ExecArgs),
     #[command(

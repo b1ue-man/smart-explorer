@@ -221,7 +221,7 @@ pub(crate) fn decide_access_approval(
 }
 
 /// The app could not show the request `approval_id` (Android).
-#[allow(dead_code)] // Staged: the Android bridge (U21, PRM-M10) reports it.
+#[allow(dead_code)] // Only the Android facade (`mobile`) calls it; desktop builds lack it.
 pub(crate) fn report_approval_undeliverable(approval_id: &str) -> Result<(), String> {
     let approval_id = approval_id.to_string();
     match request(AccessIpcRequest::ReportUndeliverable { approval_id })? {
@@ -240,7 +240,6 @@ pub(crate) fn exec_notice(exec_id: &ExecId) -> Result<Option<ExecNoticeView>, St
 }
 
 /// Changes one access grant (starts the worker when needed).
-#[allow(dead_code)] // Staged: `se share grants access` (U07) and the bridge (U21).
 pub(crate) fn mutate_access_grant(
     target: ExecGrantTarget,
     change: AccessGrantChange,
@@ -258,7 +257,6 @@ pub(crate) fn mutate_access_grant(
 }
 
 /// The account helper and the accounts a grant can name here.
-#[allow(dead_code)] // Staged: `se share exec accounts` (U07, U24) and the bridge (U21).
 pub(crate) fn access_accounts() -> Result<(HelperStatus, Vec<AccountChoice>), String> {
     crate::daemon::ensure_worker_ready()?;
     match request(AccessIpcRequest::Accounts)? {

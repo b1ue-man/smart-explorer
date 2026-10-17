@@ -117,10 +117,27 @@ Modellbeleg (Transkripte, 2026-10-17 14:20): alle Bestandsleser antworten aussch
 | S2 | Entwurf und Strangplan | opus, Effort xhigh | `strang-laufwerke.md` | Entwurf fertig (10 Meilensteine DRV-M1–M10, Nachrecherche N1–N27) |
 | S2 | Nachrecherche N1–N27 und Revalidierung | opus, Effort medium | `nachrecherche-laufwerke.md` | fertig (16 geänderte Grundlagen; Bestandsfehler ERROR_INVALID_DATA → „Zugriff verweigert“) |
 | S2 | Endfassung Strangplan (Planverfasser fortgesetzt) | opus, Effort xhigh | `strang-laufwerke.md` | fertig (10 Meilensteine DRV-M1–M10; K7 vom Hauptagenten entschieden, P1–P3 an S3 übergeben) |
+| alle | Umsetzung Phase P1: U01 (S1-Kern), U03 (S5-Fundament), U02 (S2-Kern), dann R1 | opus, Standardaufwand der Sitzung (max) | Code laut D1 | fertig und gepusht: U03 5fc31eeb, U01 888af678, R1 2e3d07b1, U02 f45d9580 (`host_lifecycle.rs` verwaist und entfernt). R1 Teil B2 entfiel: U02 schrieb `drive_task_types_split_serde_unchanged`, der Hauptagent prüfte die `PathDialect`-Namen gegen die R1-Fixtures. Graphify-Aktualisierung gesammelt am Ende der Umsetzung, damit kein halbfertiger Stand laufender Pakete in den Graphen gelangt. |
+| S2 | Umsetzung U06 (DRV-M3, dazu Exit 75 in `mount_manager_state.rs` aus U02) | opus, Standardaufwand der Sitzung (max) | Code laut D1 | fertig (Commit a6107a70) |
+| alle | Registrierung R2, Teil Laufwerke: U06-Bedarf, `match`-Zweige für `MountedAt`/`Devices`/`Vault`, `ShareSnapshotPeek` | opus, Standardaufwand der Sitzung (max) | Hub-Dateien und vier Bestandsdateien | fertig (Commit 91d70957) |
+| alle | Umsetzung U39 (Suite Teil A, vorgezogen) | opus, Standardaufwand der Sitzung (max) | Workflow, `native/rdt_task/**` | läuft |
+| alle | Vorgezogene Pakete nach Nutzervorgabe 2026-10-17 (Limit erlaubt mehr Parallelität): U04, U09, U15, U33, U18 | opus, Standardaufwand der Sitzung (max) | Code laut D1 | U33 fertig (5367b5ab), U09 fertig (55efff3e), U04 fertig (e2271305), U15 fertig (45919dcf), U18 fertig (2e4c1c00; `exec_job.rs` ruft jetzt `prepare_as` mit dem Konto des Rechts, gesetzt vom Hauptagenten); Dateibereiche ohne Überschneidung geprüft |
+| S1 | Umsetzung U07 (PRM-M8, PRM-M9 ohne Konten, Übergaben aus U01/U04, Öffnen-Funktion für Detailseiten) | opus, Standardaufwand der Sitzung (max) | Code laut D1 | fertig (Commit 1a6706b1) |
+| S1 | Umsetzung U21 (PRM-M10 ohne Bildschirm-Aktionsziele, Bestandsfehler `share.exec` auf Android) | opus, Standardaufwand der Sitzung (max) | Code laut D1 | fertig (Commit 07914285) |
+| alle | Vorgezogene Registrierung für U04, U05, U09, U15, U18 und U33 | opus, Standardaufwand der Sitzung (max) | Hub-Dateien | fertig (Commit 5ec3531b, gepusht) |
+| S3 | Umsetzung U05 (Phase P2, vorgezogen; keine Dateiüberschneidung mit U02 und R1) | opus, Standardaufwand der Sitzung (max) | Code laut D1 | fertig (Commit 4e07b200); Quellen von aes-siv 0.8.0, aes-kw 0.3.1, siv-mode-Prüfvektoren (MIT) und zwei CryptoLib-2.3.0-Testdateien aus dem Netz gelesen, vom Hauptagenten als nötig für C1.2 bestätigt |
+| S3 | Umsetzung U08 (VLT-M2, VLT-M3) | opus, Standardaufwand der Sitzung (max) | Code laut D1 | fertig (Commit e1f1c819); Abweichung von C2.6: Stufen liegen immer im Inhaltsverzeichnis des Elternordners (deterministische Abbildung), vom Hauptagenten angenommen |
+
+Wochenlimit (Nutzer 2026-10-17): Vorerst gilt eine Obergrenze für das Wochenlimit. Ein neues Paket startet nur, wenn die Hochrechnung am Ende seines Laufs unter der Obergrenze bleibt. Ein bei Erreichen der Grenze laufender Agent wird nicht abgebrochen, danach startet nichts Neues.
 
 Sitzungslimit (Nutzer 2026-10-17): Ab der Nachricht zum nahenden Sitzungslimit laufen höchstens zwei Agenten gleichzeitig; jeder weitere Schritt startet erst, wenn ein laufender Agent fertig ist. Der Hauptagent fragt den Nutzungsstand alle 5 Minuten ab und setzt nach der Rücksetzung des Fensters einen Weckauftrag, falls die Sitzung am Limit abbricht.
 
 ## Entscheidungen des Hauptagenten zu offenen Strangpunkten
+
+**Statusbefehle gegen Desktop-Ansicht (aus U06):** `se share status`, `se share discoverable` und die Vorprüfung in `se exec` heben die Einschränkung eines Anmelde-Dienstes auf, die passive Ansicht des se Desktop nicht.
+- Dafür gibt es die neue IPC-Variante `ShareSnapshotPeek`, die nur `share_worker_peek` sendet.
+- `ShareSnapshot` bleibt auf der Leitung unverändert und gilt jetzt als Auslöser.
+- Ein älterer Dienst kennt die neue Variante nicht; der se Desktop zeigt dann „unbekannt“. Das ist akzeptiert, weil App und Dienst aus demselben Release stammen.
 
 **S2 K7 (Erreichbarkeit ab Anmeldung):** Ein Daemon, der nur für die Laufwerkswiederherstellung beim Anmelden startet (Startgrund `drive-restore`), startet weder den Share-Host noch den Exec-Host. Beide starten wie bisher beim ersten anderen Auslöser: App, CLI, MCP oder eingeschalteter Autostart. Damit schafft DRV-M6 keine neue Erreichbarkeit ab Anmeldung und hängt nicht an S1. Ob ein eingeschalteter se Desktop (S5) den Share-Host ab Anmeldung startet, legt der Integrationsplan fest.
 
@@ -150,6 +167,174 @@ Sitzungslimit (Nutzer 2026-10-17): Ab der Nachricht zum nahenden Sitzungslimit l
 - S1 CI-Umgebungen: Suite auf GitHub-Runnern `ubuntu-24.04` (root über sudo), `windows-2025` (Administrator), zusätzlich `ubuntu-22.04` für den `ExitType`-Fix, sofern das Image angeboten wird; Fedora-SELinux bleibt ungeprüft und wird so berichtet.
 - S1 Release-Text: nennt, dass Linux-Exec auf Ubuntu 22.04 bis zu diesem Stapel am Bestandsdefekt `ExitType=main` scheiterte, und dass der Linux-root-Worker abgelaufene Konten und erzwungenen Passwortwechsel jetzt ablehnt.
 - Eine einzige Task-Suite für den Stapel (AGENTS.md): Die in S2, S4 und S5 geplanten eigenen Suite-Workflows werden im Integrationsplan zu einem Workflow mit Stufen zusammengeführt.
+
+### Übergaben aus fertigen Paketen an spätere Pakete
+
+Die Briefe der genannten Pakete enthalten diese Punkte zusätzlich zu D1.
+
+- **An U04 (aus U01 B und E):**
+  - Die Rückfrage- und Zugriffsmeldungen aus `ExecClientSession.notice` (`exec_session.rs`) gehen über `ipc_host_ext.rs` nach außen (W10, `exec_ipc.rs` bleibt unverändert). Sie werden ausgewertet in:
+    - `cli/shell_session/transports.rs` und `cli/shell_session/terminal_transports.rs`: Statuszeile und Kopfzeile;
+    - `cli/exec.rs`: JSON-Ereignis `approval_pending`;
+    - `cli/mcp/exec_share_job.rs`: Zustand `waiting_for_approval`.
+  - Texte und Funktionen liegen in `exec_client_messages.rs`.
+  - Nach „Immer erlauben“ ruft der Host `start_grant` erneut auf.
+  - Das Fenster `--access-consent` ruft `app::update_stop_ui::arm_window()` beim Start und `close_requested(ctx)` in jedem Bild.
+- **An U07 (aus U01 Entscheidung 12):** Der C6-Hilfetext von `se exec` ändert sich zusammen mit der Prüfung in `cli/parse_tests.rs:112`.
+- **An U21 (aus U01 C, Bestandsfehler):**
+  - Die Android-Brücke führt `share.exec` über das alte `Ctrl::Exec`. Der Host lehnt das immer ab (`PreparedExec::run`, `share/core/exec.rs:95-98`). U21 stellt Android auf den Stream-Weg um; damit funktionieren Rückfrage und Kopfzeile.
+  - Die `write`-Regel steht doppelt, in `device_view::granted_write` und in `share_policy_status.rs::contact_write` (aus U03). Wo U21 `share_policy_status.rs` ändert, legt es beide zusammen.
+- **An die S4-Pakete U09, U13, U16, U19, U25 und U27 (aus U01 D):**
+  - `direct_relation.rs:238/308/364` und `room_relation_members.rs:124/145` prüfen `exec.enabled` als „irgendein Recht“; für reine Bildschirmrechte gehört dort `grants_any()` hin.
+  - Eine Verengung erreicht die Bildschirm-Registry über `ExecGrant::narrowed_against`.
+  - Der zentrale Ablauf-Zeitgeber für Bildschirmsitzungen nutzt `expired_restrictions` und `next_expiry`.
+- **An U10 und U25 (aus U03 offener Punkt 6):** Betrachter- und Indikatorfenster rufen `arm_window()` und `close_requested()`.
+- **An U17 (aus U03 offener Punkt 3):** `desktop::core::tiles::device_key` bildet `mount::device_key` (V4) nach, unter der Annahme Großbuchstaben-Hex für `%XX`. U17 gleicht das Format an oder ersetzt die Funktion durch den Aufruf.
+- **An U25 (aus U03 offener Punkt 4):**
+  - Bildschirmziel bei Direktgeräten: `device_id` = `remote_device_id`; fehlt sie, gibt es kein Ziel.
+  - Bei Räumen: `relation_id` = lokale Raumprofil-ID wie in `PeerOpenTarget`.
+- **An U12 (aus U02 offener Punkt 4):** `daemon/os/shared/rooted_backend*.rs` wendet Windows-Namensregeln auf jede Wurzel und Auflistung an; Linux-Mounts brauchen den Dialekt (`peer_names::*_in` stehen bereit). Die Linux-Module `cache_lease.rs` und `cache_space.rs` stehen vorläufig inline in `mount/os/mod.rs`; U12 verlegt sie nach `linux_os/mod.rs`.
+- **An U17 (aus U02 offener Punkt 3):** `mount/os/windows/handle_state.rs` und `handle_reservation.rs` verlangen `&MountEngine`; für den Gerätebaum brauchen sie `&dyn MountFilesystem`. Beide Dateien gehören zu U17.
+- **An U14 (aus U02 offener Punkt 5):** Die `detail`-Freitexte im Journal sind nicht versiegelt; DRV-M7 entscheidet.
+- **An U39 (aus U02):** Zusätzliche Tests in die erwartete Liste: `drive_task_path_sealer_reaches_every_journal_path_field`, `drive_task_host_session_update_stop_keeps_unpublished_changes`, `drive_task_change_pump_maps_backend_paths_per_dialect`. Die drei `#[ignore]`-Tests mit echtem Dokany laufen in `windows-core: drive-dokany-regression` mit `--include-ignored --exact`.
+- **An R2 (aus U05):**
+  - `native/src/lib.rs`: nach `pub mod creds;` die Zeile `pub(crate) mod cryptomator;`, ohne `cfg`.
+  - `native/Cargo.toml` `[dependencies]`: nach `icu_normalizer` die Zeilen für `aes-siv 0.8.0` (`alloc`, `zeroize`), `aes-kw 0.3.1`, `aes-gcm-011`, `aes-09`, `ctr-010`, `hmac-013`, `sha2-011`, `sha1-011`, `scrypt 0.12.0` und `data-encoding 2.11.0`, jeweils mit `default-features = false`, wörtlich aus dem U05-Bericht.
+  - Neu im Lock sind nur `aes-siv` und `aes-kw` (beide MIT/Apache-2.0); die übrigen gibt es schon im Lock.
+- **An U20 (aus U05):**
+  - `vault_task_sync_phases_content_before_node` steht schon in U05 (`bisync/os/shared/apply_phases_tests.rs`); U20 legt ihn nicht erneut an.
+  - Das Einzelanwenden aus der Vorschau (`apply_preview_action`) umgeht die Phasen; U20 sperrt es für Tresor-Jobs oder prüft die Reihenfolge.
+  - Der inkrementelle Weg umgeht `adjust`; R4a bleibt nötig.
+  - Planregeln wirken nur auf dem Thread, der `bisync::plan_rules::enter` aufgerufen hat.
+- **An U39 (aus U05):** Die Testpfade lauten `cryptomator::core::{vectors_tests,config_tests,names_tests,content_tests}::…` und `bisync::apply_reporting::phases_tests::…`. Der Filter `bisync::core::plan_rules` aus VLT-M14 trifft nicht.
+- **An U42 (aus U05):** In `docs/GOTCHAS.md` steht als bekannte Grenze: scrypt-Arbeitspuffer, CMAC-Teilschlüssel in aes-siv und entschlüsselte Namen als `String` werden nicht überschrieben.
+- **An R11 (aus U33):**
+  - `native/src/lib.rs`: `mod licenses;`.
+  - `native/src/cli/mod.rs`: `mod licenses;` und der Unterbefehl `Licenses` mit `--json`, der `licenses::run(json)` aufruft.
+  - `native/src/mobile/os/shared/domains/mod.rs`: `app_licenses` und das Präfix `"app" => app_licenses::handle(method)`.
+  - `native/src/app/mod.rs`: `licenses_ui`.
+  - Der Knopf kommt in `native/src/app/core/settings_updates.rs` nach der Versionsanzeige: `super::licenses_ui::licenses_button(ui);`.
+  - `show_licenses_window(ctx)` steht in `settings_ui.rs::ui_settings`.
+  - `license = "MIT"` und `publish = false` in `native/Cargo.toml`, `native/android-bridge/Cargo.toml`, `native/explorer-command/Cargo.toml` und `share-server/Cargo.toml`.
+  - Optional `.gitattributes` mit `eol=lf` für die Lizenzdatei.
+- **An U39 (aus U33):**
+  - Reihenfolge im Job `prepare`: `lock` → `audit` → `licenses` → `static`.
+  - Aufruf: `python native/licenses_task_checks.py --log-root "$RUNNER_TEMP/rdt-prepare/licenses" --place-generated`; installiert cargo-about 0.9.2 mit `--features cli`.
+  - Die erzeugte Datei kommt ins Artefakt `rdt-prepare`, und jeder spätere Job legt sie vor dem Bau in seinen Checkout.
+  - `native/rdt_task/licenses.py` ruft dieses Skript auf, statt es nachzubauen.
+- **An U36 (aus U33):** Der Windows-Installer legt `licenses\Rust-Crates\THIRD-PARTY-LICENSES.txt` ab (`licenses_task_installer_installs_file`).
+- **An U07 (aus U04):**
+  - CLI `se share exec approvals`, `approve` und `deny`, die Liste im Tab „Befehle“ und die MCP-Sperrliste.
+  - Behebung der doppelten Rückfrage bei `se shell -T`, wenn „Befehle“ auf „Fragen“ steht: Probe und Shell fragen heute je einmal. Die Probe löst keine Rückfrage aus; Dateien `cli/shell_session/transports.rs` und `terminal_transports.rs`.
+  - Der Aufruf `grant_expired` für laufende Sitzungen in `GrantEndWatch::expire` (`share/core/access_grant_runtime.rs`).
+  - Der veraltete Kommentar „does not read it yet“ am Feld `notice` in `exec_client.rs`.
+- **An U21 (aus U04):**
+  - die Bridge-Methoden `share.accessApprovals`, `share.decideAccessApproval` und `share.reportApprovalUndeliverable`;
+  - das UI-Ereignis `ShareEvent::AccessApprovalRequested { approval_id }` in `share/core/types.rs`;
+  - der Android-Notifier für Rückfragen; ohne ihn lehnt der Host mit `approval_unavailable` ab.
+- **An U24 (aus U18):**
+  - `grant_launch` in `exec_admission.rs` setzt `ExecWireError.code` aus `exec_platform::account_error_code(&error)`, mit Rückfall `account_unavailable`.
+  - Diese Ablehnungen kommen als `helper_refused` ins Protokoll.
+  - `AccessIpcRequest::Accounts` nutzt `crate::share::exec_account_choices()` in `spawn_blocking`.
+  - Windows-`prepare` liest `exec_platform::preparing_account()`.
+  - `exec_helper_protocol.rs` ist gemeinsam: `Start{pipe_in, pipe_out}` und `Probe{elevated, admin_group}`; eine gescheiterte S4U-Probe braucht eine neue `AccountReason`-Variante.
+  - Das `cfg_attr(…allow(dead_code))` in `exec_helper_protocol.rs` fällt weg, sobald Windows alles nutzt.
+  - Der Windows-Zweig von `exec_account_choices` in `api_exports.rs` wird ersetzt.
+  - CLI `se share exec accounts` mit genau den Wörtern von `cli_words`/`parse_words`; `--yes` gibt es nur bei setup.
+  - Die GUI nutzt `ExecAccountsElevation::PkexecGraphical` und zeigt bei `NeedsAdministrator { command, reason }` den Befehl zum Kopieren; die `AccountReason`-Codes bekommen deutsche Texte.
+- **An U39 (aus U18):** Die ignorierten Konto-Tests brauchen `--include-ignored`, `--test-threads=1` und `SMART_EXPLORER_PERM_SE_BIN` mit dem absoluten Pfad zum Debug-`se`. Die Schalter dazu:
+  - `SMART_EXPLORER_PERM_2204_TASK=1` (Ubuntu 22.04);
+  - `SMART_EXPLORER_PERM_ROOT_TASK=1` (mit `sudo -E` als root);
+  - `SMART_EXPLORER_PERM_HELPER_TASK=1` (ohne root, mit `sudo -n` und `python3`).
+- **An U04-Nachfolge und U24 (aus U04 und U18):** Die Kontoliste gibt es zweimal, als `AccountChoice` in `ipc_protocol_access.rs` (U04) und als `exec_account_choices()`/`AccountChoice` in `exec_helper_protocol.rs` (U18). U24 stellt `AccessIpcReply::AccountList` und `ShareHost::account_list()` auf den U18-Typ um und entfernt den U04-Typ.
+- **An U10 (aus U04 und U09):**
+  - `impl ConsentBroker for crate::share::access_approval::ApprovalBroker` in `screen/core/host_backend.rs`, wörtlich aus dem U04-Bericht. Den Broker liefert `crate::share::consent_launch::approvals().broker(node.exec_registry().clone())`. Erlaubt sind nur `Once` und `Always`, `ticket.cancel()` bricht ab. Protokolliert wird über `access_audit::record_access` mit `AccessKind::Screen { mode, event }`.
+  - Aus U09:
+    - `#[allow(dead_code)]` in `screen/mod.rs` entfernen, sobald der Kern genutzt wird.
+    - `transport_label` auf `PathKind::{Direct, Relay}` abbilden.
+    - Für ein `preview`-Hello bei `ScreenView = Ask` öffnet die Gruppenansicht Vorschauen nur bei `Allow` (Vorschlag U09).
+    - `SentFrame.sent_us` und `FrameAck.received_us` jeweils nach dem letzten Satz eines Bildes stempeln.
+    - `on_loss_counters` mit kumulativen Zählern aus `Connection::stats()` im Sekundentakt füttern; `Pacer::decide` mit `Connection::rtt()`.
+    - Nach jedem Stream-Reset und Sendefehler `Pacer::on_stream_reset` aufrufen.
+    - Die Darstellung von `static_psnr_db = ∞` (JSON `null`) in `se screen bench --json` festlegen.
+    - `ERROR`-Codes für Aufnahme- und Kodiererfehler festlegen.
+    - Die A1-Konstanten nach der ersten Remote-Messung prüfen.
+- **An U30 (aus U15):** `--open-page share-device:<id>` und `share-room:<id>` öffnen bisher nur den Reiter. U07 legt in `share_pages_ui.rs` eine Funktion zum Öffnen der Detailseite an; U30 ruft sie in `desktop_settings_ui.rs` auf. `jump_list.active` meldet bis DSK-M5 nur „Wächter läuft“.
+- **An U39 und U41 (aus U15):** Die Prozessprüfungen in `desktop/os/shared/process_task_tests.rs` sind `#[ignore]`. Sie brauchen:
+  - `SMART_EXPLORER_DESKTOP_TASK=1`, `--include-ignored` und einen Testthread;
+  - ein gebautes `smart_explorer` neben `target/debug/deps` oder seinen Pfad in `SE_DESKTOP_TASK_GUI`;
+  - `SE_DESKTOP_TEST_HEADLESS=1` für Flächen ohne Bildschirm.
+
+  Die Windows-Steuerungstests arbeiten auf dem echten HKCU des Runners und verweigern den Lauf, wenn dort schon eine se-Desktop-Spur liegt. `desktop_task_peek_does_not_start_share_host` prüft Annahme A41 (Startgrund `drive-restore`).
+- **Offen aus der vorgezogenen Registrierung (an die nächsten R-Pakete und U30):**
+  - `native/src/desktop/mod.rs`: Der Staged-Kommentar ist veraltet; prüfen, ob `#![allow(dead_code)]` entfallen kann.
+  - `start_request.rs`: Es fehlen noch `--screen-indicator` (R4), `--screen-host-worker` (R5) sowie `--screen-view` und `--screen-grid` (R9). Bis dahin enden diese Startarten mit Code 2 ohne Fenster.
+  - Das Lizenzfenster wird nur gezeichnet, solange die Einstellungen offen sind (`frame_layout.rs` Z. 67–69). Soll es unabhängig bleiben, gehört der Aufruf nach `frame_layout.rs`.
+  - `ipc.rs::require_request_auth` ruft `authorize_extension` erst mit der ersten Variante ohne Daemon-Token auf (R5, `MountHostExt`).
+  - Die Beschreibung des MCP-Werkzeugs `status` (`catalog.rs` Z. 68) nennt se Desktop noch nicht.
+- **An U12 (aus U06):**
+  - den Linux-Startpfad in `mount_manager_start.rs` bauen und dort `allow(dead_code)` an `fail_start` entfernen;
+  - in `mount_manager_host.rs` den Zweig `MountedAt` in `validate_host_status` (Pfadlänge ≤ `MAX_PATH_BYTES`) und `| MountStatus::MountedAt { .. }` in Z. 240–243;
+  - `pub use types::MountLocation` in `mount/mod.rs`;
+  - `--mount-point` auf `with_location_directory` abbilden;
+  - das Aufräumen nach FUSE-Abstürzen über `MountManager::tick`, weil der eingeschränkte Dienst `ShareHost::tick` nicht aufruft;
+  - den Linux-Anteil des Ende-zu-Ende-Signals liefern.
+- **An U14 (aus U06):**
+  - den Zweig `MountSource::Vault` in `daemon/os/shared/mount_source.rs`;
+  - `DriveIpcRequest::MountPathFor` in `ipc_protocol_drives.rs`, festgelegt für `promotes_daemon()`;
+  - entscheiden, ob ein beim Anmelden gesperrter Tresor zurückgestellt wird oder als Fehlstart erscheint;
+  - entscheiden, ob Sperren den Registry-Eintrag behält.
+- **An U17 (aus U06):**
+  - Der Gerätebaum-Eintrag liegt in `registry-2.json` und hält den Anmeldeeintrag aktiv.
+  - `DevicesStatus` und `DevicesWatch` gelten in `promotes_daemon()` als nicht auslösend.
+  - Kind-Engines rufen `open_share` erst nach `run_start_reason::share_allowed()` auf.
+  - `settings_devices_ui.rs` wird in `app/drive_modules.rs` deklariert.
+- **An U36 (aus U06, Bestandsfehler):** Der Deinstaller entfernt den Run-Wert `SmartExplorerSync` nicht (schon heute) und ebenso wenig den neuen Wert `SmartExplorerDrives`. U36 entfernt beide bei der Deinstallation.
+- **An U39 (aus U06):** Zusatzsignal `drive_task_update_stop_exit_clean_journal_counts_as_unmount` (`daemon::mount_manager::entry_state::update_stop_tests::…`) in die Inventarliste aufnehmen.
+- **An das nächste R-Paket (aus U08):**
+  - `native/src/lib.rs`: zwischen `pub mod updater;` und `pub mod vfs;` die Zeile `pub(crate) mod vault;`.
+  - `ipc_protocol_mount.rs`: `MountBackendScheme::Vault` (serde „vault“) und beide `From`-Zweige.
+  - `vfs/mod.rs`: Re-Export `split_stage_name` und `StageParts`.
+  - Nötige `match`-Zweige: `connect/core/local_endpoint.rs` (`Vault { .. } | VaultStore { .. } => Ok(None)`) und `mobile/core/crumbs.rs::root_label` (`LocKind::Vault => "Tresor"`).
+  - **Fehlweg vorbeugend beheben:** `cli/target.rs:176-187` (`endpoint_backend_keys`) gibt `vault://` den Namensraum `local`. Sonst würde `se mv vault://…/a /home/x` im Tresor umbenennen statt zu kopieren. Nötig ist der Namensraum `vault:<site-id>`; das muss vor U26 erledigt sein.
+- **An U29 (aus U08):**
+  - `app/core/prefs_tabs.rs:122-145` (`navigate_to_location`) schickt `vault://` in `start_scan`, eine lokale Pfad-API (Fehlweg).
+  - `cache_remote` hüllt jedes nicht lokale Backend in `CachingBackend`; für Tresore verhindern oder beim Sperren leeren.
+- **An U11 (aus U08):**
+  - In `vault/os/shared/open.rs::open_in` den IPC-Weg `daemon::open_vault_backend` für GUI- und CLI-Prozesse ohne eigene Sitzung einsetzen.
+  - Gepoolte Backends beim Sperren verwerfen.
+  - `VaultLocked` wird auf den Bridge-Code `vault_locked` abgebildet; heute wird es in `mobile/core/error.rs` „permission“.
+  - Die Sitzungstabelle (`publish_session`, `withdraw_session`, `unlocked_session`) steht in `open.rs`.
+- **An U20 (aus U08):** Tresor-Jobs brauchen einen eigenen Prüfweg, weil `validate_sync_endpoints` alle Tresororte ablehnt (`VAULT_SIDE_REFUSED`).
+- **An U43 (aus U08), `docs/TODO.md`:**
+  - ein eigenes Feld für Tresororte im `CleanupReport`; heute stehen sie unter `file_errors` und erscheinen als Fehler;
+  - Annahme A4: Das ordnerübergreifende `promote_staged` ist für FTP, WebDAV, SMB und Share-Peers ungeprüft.
+- **An das nächste R-Paket (aus U21):**
+  - `domains/mod.rs`, in `share_method` nach `"share.execLog"`: `share.setAccess`, `share.accessApprovals`, `share.decideAccessApproval` und `share.reportApprovalUndeliverable` auf `share_exec::access::{set_access, approvals, decide, report_undeliverable}`. Keine neue `mod`-Zeile, denn die Untermodule sind schon in `share_exec.rs` und `share_requests.rs` eingebunden.
+  - `daemon/mod.rs`: Re-Export um `mutate_access_grant` und `report_approval_undeliverable` erweitern.
+  - Danach sind diese `#[allow(dead_code)]` überflüssig und werden entfernt: an `mutate_access_grant` und `report_approval_undeliverable` in `access_ipc.rs` und an `set_notifier` in `access_approval.rs`.
+- **Entscheidung zu U04/U21:** `ShareEvent::AccessApprovalRequested` entfällt. Android weckt seinen Notifier über die Host-Aktivität; der Desktop öffnet sein Fenster über `consent_launch`. Eine neue `ShareEvent`-Variante würde außerdem ältere GUIs beim Lesen des Snapshots scheitern lassen.
+- **An U27 (aus U21):** Aktivitäts-Intents für Bildschirm-Rückfragen in `approvalNotification` (`AccessApprovalNotifier.kt`); den Filter in `share_access.rs::android_rows` aufheben; den Bildschirm-Zweig von `AccessApprovalPrompt` erweitern.
+- **An U39/U41 (aus U21):** `PermTaskTest` gehört in die Android-Gerätedurchläufe. Die Tests `perm_task_bridge_*`, auch die drei `perm_task_bridge_exec_stream_*`, gehören in die Linux-Unit-Tests.
+- **An U24 (aus U07):**
+  - `programs_ui::account_options` liest an `AccountChoice` die Felder profile, account, available, reason und next_step; mit dem Wechsel auf den U18-Typ zieht die Funktion mit.
+  - Für „Konten dieses Geräts“ kommt eine Aufrufzeile in `ui_exec_overview` hinter `log_ui::ui_exec_log(ui);`.
+  - Die Vervollständigung von `--as` bietet `remote` immer an; sie soll die Kontenliste des Workers lesen.
+  - **Alle Oberflächen:** `se share device list` und `se share room list` (`cli/share/devices.rs`, `rooms.rs`) zeigen noch keine Zugriffsfelder. Der Rücktitel „Befehle eines Geraets“ in `share_window_ui.rs` passt nicht mehr zum neuen Seitentitel „ZUGRIFF“.
+- **An U30 (aus U07):** Zum Öffnen der Detailseiten gibt es `App::open_share_contact_page(&mut self, contact_id: &str) -> bool` und `App::open_share_room_page(&mut self, room_id: &str) -> bool`; `false` öffnet die Tab-Übersicht. Die beiden `#[allow(dead_code)]` entfallen mit dem Aufruf aus `desktop_settings_ui.rs`.
+- **An das nächste Android-Paket (aus U07):** In Android fehlen noch der Satz nach C6 und der Text nach C5 für `ExecProgramsDialog.kt:137`.
+- **An U39/U41 (aus U07):**
+  - Tests ohne Stapelpräfix in die Namensliste aufnehmen: `shell_session_task_share_session_dialect_is_asked_inside_the_shell`, `shell_session_task_share_session_needs_one_start_line`, `grant_end_watch_logs_grant_expired`, `share_pages_open_detail_pages_from_outside`.
+  - Die vier GUI-Tests aus U07 laufen ohne Anzeige und ohne `#[ignore]`.
+  - Ungeprüft ist, wie `cmd.exe` die neue Startzeile von `se shell -T` liest. Vorschlag für windows-core: die Zeile mit `cmd /D /S /C` und der Eingabe `echo SE_DIALECT_x_$?` ausführen und `SE_DIALECT_x_True` erwarten.
+- **An R2 (aus R1 offener Punkt 1):** Die eigentliche IPC-Verteilung steht in `native/src/daemon/os/shared/ipc.rs` (`handle_client`, `match req`), nicht in `ipc_host.rs`; die Annahme in B2 war falsch. `ipc.rs` gehört ab jetzt zu den Hub-Dateien der R-Pakete. R2 setzt dort zwei Zeilen:
+  - letzter Zweig in `handle_client`: `req => host.serve_extension(stream, req),`;
+  - in `require_request_auth` wird `_ => Err(…)` zu `_ => host.authorize_extension(req),`.
+- **An U12 (aus R1 offener Punkt 3):** Der Linux-Host setzt `MountHostConfig.path_dialect = Posix`; `From<&MountConfig>` setzt weiter `Windows`.
+- **An U39 und U41 (aus U03 offener Punkt 1):**
+  - `desktop_task_updater_helper_unchanged` läuft in `linux-core: unit`, nicht in `prepare`.
+  - `desktop_task_online_rule_matches_bridge` und `desktop_task_share_status_device_shape_unchanged` gibt es nur in Linux-Testbauten.
+  - Die zwei GUI-Tests brauchen `SMART_EXPLORER_GUI_TASK=1`, isolierte Werte für `XDG_DATA_HOME`, `APPDATA` und `LOCALAPPDATA`, `--include-ignored` und einen Testthread.
 
 ## B — Zweitplan aus dem Bestand
 
@@ -228,7 +413,7 @@ Die Strangentscheidungen stehen in den Abschnitten C der Strangpläne und gelten
 | V8 | Gemeinsamer Stoppmerker-Helfer (DSK-M2) | S5 | S1, S2, S4, S5, Bestand `se mcp` | `N/daemon/os/shared/update_stop.rs`: `UpdateStopBaseline::{arm, requested}`, `is_new_request`, `spawn_update_stop_watch(poll, on_request)`, `EXIT_UPDATE_STOP = 75`; Abfrage jede Sekunde; ein beim Start vorhandener Merker wird ignoriert. GUI-Fenster nutzen `N/app/core/update_stop_ui.rs` und schließen über `ViewportCommand::Close` → `on_exit` → `prepare_for_exit(false)`. **Vollständige Liste der Nutzer:** `se mcp` (Bestand, nutzt danach `is_new_request` des Helfers); jedes GUI-Fenster einschließlich der Modi `--access-consent` (S1), `--screen-indicator`, `--screen-view`, `--screen-grid` (S4) und der Fenster aus `--open-location`/`--open-page` (S5); Wächter `--desktop-shell` und Flächen `--desktop-surface` (S5, Exit 75); Hostprozess `--screen-host-worker` (S4, beendet die Sitzung, Exit 75); Laufwerkshost `--mount-host` unter Windows und Linux (S2: veröffentlichen wie beim Aushängen ohne `--force`, Journal bleibt, Exit 75; Haken in `N/mount/os/shared/host_session.rs`); der Daemon (Bestand, unverändert). **Nicht betroffen**, weil der Updater das Abbild nicht ersetzt: `/usr/local/sbin/smart-explorer-exec` (Linux-Kontodienst und Konto-Einheiten) und die Kopie des Windows-Kontodienstes unter `%ProgramFiles%`. Der bestehende Supervisor `--share-exec-supervisor` bleibt unverändert | U03, U02, U12, U04, U10, U13, U15, U25 |
 | V9 | Gemeinsamer Startschalter-Parser (H8) | S5 | S1, S2, S4 | `N/app/core/start_request.rs`: `pub(crate) enum StartRequest` mit genau diesen Startarten: `AccessConsent { id }` (`--access-consent <ID>`), `ScreenIndicator` (`--screen-indicator`), `ScreenHostWorker` (`--screen-host-worker`, nur als einziges Argument), `ScreenView { target_json }` (`--screen-view <JSON>`), `ScreenGrid { room: Option<String> }` (`--screen-grid [--room <ID>]`), `DesktopShell` (`--desktop-shell`), `DesktopSurface { monitor \| gnome_monitor \| layer }` (`--desktop-surface --monitor <SCHLÜSSEL> \| --gnome-monitor <INDEX> \| --layer`), `DesktopJumplistClear` (`--desktop-jumplist-clear`), `OpenLocation { locator }` (`--open-location <LOCATOR>`), `OpenPage { page }` (`--open-page <SEITE>`), `Gui { start_path: Option<PathBuf> }` (Bestand). `--drive-restore` ist keine eigene Startart: Es ergänzt `--sync-daemon` (Startgrund, ausgewertet von S2 in `N/daemon/os/shared/run_start_reason.rs`) und gilt nie als Startpfad. Werte von Schaltern mit Wert gelten nie als Startpfad. Reihenfolge in `run_gui`: Bestandsprüfungen bis `--sync-daemon` unverändert; danach die Hintergrundarten `DesktopShell`, `DesktopSurface`, `DesktopJumplistClear`, `ScreenHostWorker`, `ScreenIndicator` vor der Update-Bestätigung; nach den Updater-Schritten die Fensterarten `AccessConsent`, `ScreenView`, `ScreenGrid`, `OpenLocation`, `OpenPage`, `Gui` | U03 (Parser), R2, R4, R5, R9 (Verdrahtung) |
 | V10 | Tresore in se Desktop und Launcher | S3 | S5 | S5-V1 bis S5-V6 aus `strang-tresore.md` Abschnitt E mit der Entscheidung H5. Desktop: `IpcRequest::Vault { token, req: VaultIpcRequest::Status }` über `request_if_running` im bestehenden 900-ms-Takt des Wächters. Android: Der Hauptprozess liest `vault.list` und reicht `{"site","label","state"}` über `LauncherBridgeService` weiter. Kein eigenes Passwortfeld in S5; S5 speichert keine Inhalte, Namen oder Vorschauen aus Tresoren | U11, U30, U40 |
-| V11 | Erreichbarkeit ab Anmeldung | Hauptagent (S2 K7, S5 H1) | S1, S2, S4, S5 | Der Startgrund `drive-restore` startet weder Share-Host noch Exec-Host. se Desktop und se Launcher starten den Hintergrunddienst nie selbst (V1 aus `strang-desktop.md` C10). `IpcRequest::ShareSnapshot` startet in einem laufenden Daemon keinen Share-Host (Annahme A41 aus S5, Signal `desktop_task_peek_does_not_start_share_host`). Ein Bildschirm-Host ist nur erreichbar, wenn der Share-Host aus einem bestehenden Anlass läuft | U06, U15, U30, U40 |
+| V11 | Erreichbarkeit ab Anmeldung | Hauptagent (S2 K7, S5 H1) | S1, S2, S4, S5 | Der Startgrund `drive-restore` startet weder Share-Host noch Exec-Host. se Desktop und se Launcher starten den Hintergrunddienst nie selbst (V1 aus `strang-desktop.md` C10). `IpcRequest::ShareSnapshotPeek` (nur `share_worker_peek`) startet in einem laufenden Daemon keinen Share-Host (Annahme A41 aus S5, Signal `desktop_task_peek_does_not_start_share_host`); `ShareSnapshot` aus Statusbefehlen hebt die Einschränkung eines Anmelde-Dienstes auf (Entscheidung des Hauptagenten, Signal `drive_task_status_command_promotes_restricted_daemon`). Ein Bildschirm-Host ist nur erreichbar, wenn der Share-Host aus einem bestehenden Anlass läuft | U06, U15, U30, U40 |
 | V12 | MCP-`INSTRUCTIONS` (H7) | Hauptagent | S2, S3, S4, S5 | Bestand 1 887 Byte, Grenze 2 048 Byte, erster Absatz unverändert (≤ 512). Genau drei Ergänzungen (+108 Byte → 1 995 Byte, 53 Byte Reserve): (1) Liste „Tools not loaded yet (…)“ um `, screen` vor `, se` (+8, R6 mit SCR-M4); (2) nach `` `gdrive:///path` `` der Text `` , `vault://<site>/path` (unlocked vault) `` (+40, R9 mit VLT-M9); (3) nach `` updates (`update`) `` der Text `` , drives (`drive`), vaults (`vault`), se Desktop (`desktop`) `` (+60; R4 setzt `` , drives (`drive`) ``, R5 setzt `` , se Desktop (`desktop`) ``, R9 setzt `` , vaults (`vault`) ``, jeweils an der Stelle, die die Endreihenfolge drives → vaults → se Desktop ergibt). S1 ändert die `INSTRUCTIONS` nicht | R4, R5, R6, R9 |
 | V13 | Lizenzverzeichnis aller Rust-Crates | Hauptagent (C4) | alle | Datei `third-party/rust-crates/THIRD-PARTY-LICENSES.txt`, eingebettet über `N/licenses/mod.rs`; CLI `se licenses [--json]`; Bridge `app.licenses`; Einzelheiten C4 | U33, U36 |
 | V14 | Einstellungsseite „Integration“ | S2, S5 | – | Reihenfolge der Abschnitte: Bestand, dann „Verbundene Geräte als Ordner“ (S2, `N/app/core/settings_devices_ui.rs`), dann „se Desktop“ (S5, `N/app/core/desktop_settings_ui.rs`) | U15, U17 |
