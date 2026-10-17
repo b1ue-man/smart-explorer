@@ -89,6 +89,7 @@ pub fn run_gui() -> eframe::Result<()> {
 
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--sync-daemon") {
+        daemon::note_daemon_start_args(&raw_args);
         daemon::run_daemon();
         return Ok(());
     }

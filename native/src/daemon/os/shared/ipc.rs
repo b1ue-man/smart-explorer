@@ -31,6 +31,7 @@ pub(super) fn handle_client(
     require_request_auth(token, &req, &host)?;
     drop(pre_auth);
     clear_pre_auth_deadline(&stream)?;
+    super::drive_modules::run_start_reason::admit_request(&host, &req);
     match req {
         IpcRequest::Ping { .. } => write_response(
             &mut stream,
@@ -67,7 +68,7 @@ pub(super) fn handle_client(
                 },
             )
         }
-        IpcRequest::ShareSnapshot { .. } => {
+        IpcRequest::ShareSnapshot { .. } | IpcRequest::ShareSnapshotPeek { .. } => {
             let snapshot = bound_snapshot_for_ipc(host.snapshot_for_client());
             write_response(
                 &mut stream,
@@ -201,6 +202,7 @@ pub(super) fn handle_client(
             Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg }),
         },
         request @ IpcRequest::Access { .. } => host.serve_extension(stream, request),
+        request @ IpcRequest::Drive { .. } => host.serve_extension(stream, request),
     }
 }
 

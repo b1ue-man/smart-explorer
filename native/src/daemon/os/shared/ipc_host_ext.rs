@@ -10,6 +10,8 @@
 //! daemon token is checked through `IpcRequest::daemon_token`; the fallback
 //! arm of `require_request_auth` asks [`ShareHost::authorize_extension`] for
 //! the others (`MountHostExt` checks the session token of its mount).
+//! `ShareSnapshotPeek` (R2) is the one later variant that `ipc.rs` answers
+//! itself: it shares the arm of `ShareSnapshot`, whose answer it repeats.
 use std::io;
 use std::net::TcpStream;
 
@@ -33,6 +35,9 @@ impl ShareHost {
         // R5 `IpcRequest::MountHostExt`; every other request stays unhandled.
         match req {
             IpcRequest::Access { request, .. } => self.serve_access(&mut stream, request),
+            IpcRequest::Drive { req, .. } => {
+                super::super::drive_modules::ipc_protocol_drives::serve(self, &mut stream, req)
+            }
             other => unhandled(&mut stream, &other),
         }
     }

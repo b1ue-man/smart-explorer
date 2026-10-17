@@ -48,6 +48,9 @@ mod backend_walk;
 mod boot_marker;
 #[path = "os/shared/catch_up.rs"]
 mod catch_up;
+#[path = "drive_modules.rs"]
+mod drive_modules;
+pub(crate) use drive_modules::*;
 #[path = "os/shared/embedded.rs"]
 mod embedded;
 #[path = "os/shared/exec_ipc.rs"]
@@ -198,6 +201,7 @@ pub(crate) use access_ipc::{
     access_approvals, decide_access_approval, exec_notice, ExecNoticeWatch,
 };
 pub use catch_up::{CatchUpRecord, CatchUpSkip, CatchUpStatus};
+pub use drive_modules::{is_drive_restore_invocation, note_daemon_start_args};
 pub use embedded::ensure_embedded_daemon;
 pub use exec_ipc::{
     connect as connect_exec, ExecIpcEvent, ExecIpcFailure, ExecIpcInput, ExecIpcSession,

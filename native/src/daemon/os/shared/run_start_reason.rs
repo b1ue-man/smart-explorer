@@ -173,13 +173,14 @@ fn sync_allowed(restricted: bool, sync_autostart: bool) -> bool {
     sync_autostart && !restricted
 }
 
-/// Requests of the app, `se` and `se mcp` promote. The reachability check
-/// (`Ping`), the read-only views of se Desktop (`ShareSnapshot`, V11) and the
-/// login entry itself (`Drive::Restore`) do not; neither does a drive host,
-/// which carries no daemon token.
+/// Requests of the app, `se` and `se mcp` promote, `ShareSnapshot` included
+/// (every caller of `share_worker_snapshot` sends it). The reachability
+/// check (`Ping`), the read-only view of se Desktop (`ShareSnapshotPeek`,
+/// V11) and the login entry itself (`Drive::Restore`) do not; neither does a
+/// drive host, which carries no daemon token.
 fn request_promotes(req: &IpcRequest) -> bool {
     match req {
-        IpcRequest::Ping { .. } | IpcRequest::ShareSnapshot { .. } => false,
+        IpcRequest::Ping { .. } | IpcRequest::ShareSnapshotPeek { .. } => false,
         IpcRequest::Drive { req, .. } => req.promotes_daemon(),
         other => other.daemon_token().is_some(),
     }
@@ -218,15 +219,15 @@ mod tests {
             reason_from(Some(OsStr::new("other"))),
             RunStartReason::Normal
         );
-        // The login entry and the read-only views never lift it; app, se and
-        // se mcp requests do; drive hosts carry no daemon token.
+        // The login entry and the read-only view of se Desktop never lift it;
+        // app, se and se mcp requests do; drive hosts carry no daemon token.
         let restore = IpcRequest::Drive {
             token: token(),
             req: DriveIpcRequest::Restore,
         };
         assert!(!request_promotes(&restore));
         assert!(!request_promotes(&IpcRequest::Ping { token: token() }));
-        assert!(!request_promotes(&IpcRequest::ShareSnapshot {
+        assert!(!request_promotes(&IpcRequest::ShareSnapshotPeek {
             token: token()
         }));
         assert!(request_promotes(&IpcRequest::ListMounts { token: token() }));
@@ -286,5 +287,39 @@ mod tests {
         let normal = restricted_at_start(RunStartReason::Normal, true, true);
         assert!(!normal);
         assert!(sync_allowed(normal, true));
+    }
+
+    #[test]
+    fn drive_task_status_command_promotes_restricted_daemon() {
+        // Every caller of `share_worker_snapshot` sends `ShareSnapshot`, for
+        // example `se share status`: it lifts the restriction of a worker
+        // started for the drive restore.
+        let status = IpcRequest::ShareSnapshot { token: token() };
+        assert!(request_promotes(&status));
+        // se Desktop probes with `Ping` and reads the same answer with
+        // `ShareSnapshotPeek` (`share_worker_peek`): neither starts Share
+        // (V11), and neither does the login entry itself.
+        let peek = IpcRequest::ShareSnapshotPeek { token: token() };
+        assert!(!request_promotes(&peek));
+        assert!(!request_promotes(&IpcRequest::Ping { token: token() }));
+        assert!(!request_promotes(&IpcRequest::Drive {
+            token: token(),
+            req: DriveIpcRequest::Restore,
+        }));
+        // Both snapshot requests pass the same daemon-token check.
+        assert_eq!(status.daemon_token(), Some("token"));
+        assert_eq!(peek.daemon_token(), Some("token"));
+        // `ShareSnapshot` keeps its wire form, so older and newer programs
+        // stay compatible; the new variant has a tag of its own.
+        let status_line = r#"{"t":"share_snapshot","token":"token"}"#;
+        let peek_line = r#"{"t":"share_snapshot_peek","token":"token"}"#;
+        assert_eq!(serde_json::to_string(&status).unwrap(), status_line);
+        assert_eq!(serde_json::to_string(&peek).unwrap(), peek_line);
+        let decoded: IpcRequest = serde_json::from_str(status_line).unwrap();
+        assert!(matches!(decoded, IpcRequest::ShareSnapshot { .. }));
+        assert!(request_promotes(&decoded));
+        let decoded: IpcRequest = serde_json::from_str(peek_line).unwrap();
+        assert!(matches!(decoded, IpcRequest::ShareSnapshotPeek { .. }));
+        assert!(!request_promotes(&decoded));
     }
 }

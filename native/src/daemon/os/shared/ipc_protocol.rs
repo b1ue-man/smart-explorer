@@ -199,6 +199,14 @@ pub(super) enum IpcRequest {
     ShareSnapshot {
         token: String,
     },
+    /// Same answer and authentication as `ShareSnapshot`, for the read-only
+    /// view of se Desktop (`share_worker_peek`). `ShareSnapshot`, which every
+    /// caller of `share_worker_snapshot` sends, lifts the restriction of a
+    /// worker started for the drive restore; this variant does not
+    /// (`run_start_reason.rs`). A daemon that predates it refuses it.
+    ShareSnapshotPeek {
+        token: String,
+    },
     AnalyzeShare {
         token: String,
         target: crate::share::PeerOpenTarget,
@@ -251,6 +259,10 @@ pub(super) enum IpcRequest {
         token: String,
         request: AccessIpcRequest,
     },
+    Drive {
+        token: String,
+        req: super::drive_modules::ipc_protocol_drives::DriveIpcRequest,
+    },
     MountHostAttach {
         id: crate::mount::MountId,
         launch_token: String,
@@ -283,6 +295,7 @@ impl IpcRequest {
             | Self::MutateExecGrant { token, .. }
             | Self::DrainShareEvents { token }
             | Self::ShareSnapshot { token }
+            | Self::ShareSnapshotPeek { token }
             | Self::OpenShare { token, .. }
             | Self::AnalyzeShare { token, .. }
             | Self::ProbeShareMount { token, .. }
@@ -294,7 +307,8 @@ impl IpcRequest {
             | Self::StopMount { token, .. }
             | Self::ListMounts { token }
             | Self::RetryMount { token, .. }
-            | Self::Access { token, .. } => Some(token),
+            | Self::Access { token, .. }
+            | Self::Drive { token, .. } => Some(token),
             Self::MountHostAttach { .. }
             | Self::MountHostBackend { .. }
             | Self::MountHostStatus { .. } => None,

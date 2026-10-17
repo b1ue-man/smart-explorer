@@ -312,13 +312,19 @@ fn host_transition_allowed(current: &MountStatus, next: &MountStatus) -> bool {
     match next {
         MountStatus::Unmounting => false,
         MountStatus::Mounting => matches!(current, MountStatus::Mounting),
-        MountStatus::Mounted { .. } => matches!(
+        MountStatus::Mounted { .. } | MountStatus::MountedAt { .. } => matches!(
             current,
-            MountStatus::Mounting | MountStatus::Mounted { .. } | MountStatus::Conflict { .. }
+            MountStatus::Mounting
+                | MountStatus::Mounted { .. }
+                | MountStatus::MountedAt { .. }
+                | MountStatus::Conflict { .. }
         ),
         MountStatus::Conflict { .. } => matches!(
             current,
-            MountStatus::Mounting | MountStatus::Mounted { .. } | MountStatus::Conflict { .. }
+            MountStatus::Mounting
+                | MountStatus::Mounted { .. }
+                | MountStatus::MountedAt { .. }
+                | MountStatus::Conflict { .. }
         ),
         MountStatus::RuntimeUnavailable { .. } => {
             !matches!(current, MountStatus::Unmounting | MountStatus::Unmounted)

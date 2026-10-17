@@ -20,6 +20,11 @@ fn main() {
         smart_explorer::daemon::run_guardian();
         return;
     }
+    if smart_explorer::daemon::is_drive_restore_invocation(&arguments) {
+        smart_explorer::daemon::note_daemon_start_args(&arguments);
+        smart_explorer::daemon::run_daemon();
+        return;
+    }
     if is_internal_invocation(&arguments, "--sync-daemon") {
         smart_explorer::daemon::run_daemon();
         return;

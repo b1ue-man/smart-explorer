@@ -26,10 +26,14 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(1);
 const SNAPSHOT_READ: Duration = Duration::from_secs(8);
 
 /// The Share state of a running worker without starting one and without
-/// consuming UI events (`IpcRequest::ShareSnapshot`). `Ok(None)`: no worker of
-/// this version runs.
+/// consuming UI events (`IpcRequest::ShareSnapshotPeek`: the answer of
+/// `ShareSnapshot`, but it never starts the Share host of a worker that was
+/// started for the drive restore). `Ok(None)`: no worker of this version runs.
 pub fn share_worker_peek() -> Result<Option<ShareWorkerSnapshot>, String> {
-    match request_if_running(|token| IpcRequest::ShareSnapshot { token }, SNAPSHOT_READ)? {
+    match request_if_running(
+        |token| IpcRequest::ShareSnapshotPeek { token },
+        SNAPSHOT_READ,
+    )? {
         None => Ok(None),
         Some(IpcResponse::ShareEvents { snapshot }) => Ok(Some(*snapshot)),
         Some(IpcResponse::Err { msg }) => Err(msg),
