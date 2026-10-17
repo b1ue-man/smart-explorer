@@ -232,6 +232,9 @@ fn default_manager_enabled() -> bool {
 pub fn unregister_all() {
     let _ = set_context_menu(false);
     let _ = disable_default_manager();
+    // se Desktop: every fixed trace again, the jump list from this GUI image
+    // (C8, Ä25), also when `se desktop remove` failed before.
+    crate::desktop::remove_system_traces();
 }
 
 /// Self-heal for the default-manager toggle that shipped in 0.3.4 but never

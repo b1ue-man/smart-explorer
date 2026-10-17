@@ -454,6 +454,20 @@ fn check_monitor_key(value: &str) -> Result<String, String> {
     Ok(value.to_string())
 }
 
+/// The window kind this process started with (`--open-location`,
+/// `--open-page`): `App::new_with_start` stores it, the first frame takes it.
+static PENDING_WINDOW: std::sync::Mutex<Option<StartRequest>> = std::sync::Mutex::new(None);
+
+pub(crate) fn set_pending_window(request: StartRequest) {
+    if let Ok(mut slot) = PENDING_WINDOW.lock() {
+        *slot = Some(request);
+    }
+}
+
+pub(crate) fn take_pending_window() -> Option<StartRequest> {
+    PENDING_WINDOW.lock().ok()?.take()
+}
+
 /// The S4 viewer target is read by S4 itself; here only its outer form.
 fn check_target_json(value: &str) -> Result<String, String> {
     if value.len() > MAX_TARGET_JSON {
