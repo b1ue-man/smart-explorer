@@ -3,6 +3,10 @@ use clap_complete::ArgValueCandidates;
 
 use super::lifecycle_output;
 
+#[path = "grants_access.rs"]
+mod grants_access;
+#[path = "grants_access_output.rs"]
+mod grants_access_output;
 #[path = "grants_exec.rs"]
 mod grants_exec;
 #[path = "grants_readmit.rs"]
@@ -41,8 +45,14 @@ enum GrantsCommand {
         about = "List removed devices, or lift a removed device's automatic re-pairing block"
     )]
     Removed(RemovedArgs),
-    #[command(about = "Inspect, enable, or disable unrestricted per-device Exec grants")]
+    #[command(
+        about = "Inspect and change what each device may do here: commands, terminal, the account they run as"
+    )]
     Exec(grants_exec::ExecGrantArgs),
+    #[command(
+        about = "Show or set one device's access (account, commands, terminal, confirmation, end), or every admitted room member's"
+    )]
+    Access(grants_access::AccessArgs),
 }
 
 #[derive(Args)]
@@ -86,10 +96,12 @@ pub(super) fn run(args: GrantsArgs) -> Result<(), String> {
         Some(GrantsCommand::Delete(command)) => grants_removed::delete(command, args.json),
         Some(GrantsCommand::Removed(command)) => grants_removed::removed(command, args.json),
         Some(GrantsCommand::Exec(command)) => grants_exec::run(command, args.json),
+        Some(GrantsCommand::Access(command)) => grants_access::run(command, args.json),
     }
 }
 
 pub(super) fn values(profiles: &crate::share::ShareProfiles) -> Vec<serde_json::Value> {
+    let now = crate::share::core_now_secs();
     profiles
         .direct_grants
         .iter()
@@ -119,11 +131,12 @@ pub(super) fn values(profiles: &crate::share::ShareProfiles) -> Vec<serde_json::
                     "active": grant.state == crate::share::DirectGrantState::Accepted,
                 },
                 "exec": {
-                    "enabled": grant.exec.enabled,
+                    "enabled": access_out::exec_enabled_now(&grant.exec, now),
                     "policy_revision": grant.exec.policy_revision,
                     "changed_at": grant.exec.changed_at,
                     "run_as": exec_run_as(&grant.exec),
                     "programs": grant.exec.programs,
+                    "access": access_out::access_value(&grant.exec, &access_out::own_label(), now),
                 },
                 "connectivity": {"state": "unknown", "label": "Not tracked per grant"},
                 "tracked": !requests.is_empty(),
@@ -135,6 +148,7 @@ pub(super) fn values(profiles: &crate::share::ShareProfiles) -> Vec<serde_json::
 }
 
 pub(super) fn text(profiles: &crate::share::ShareProfiles) -> Vec<String> {
+    let now = crate::share::core_now_secs();
     let mut lines = Vec::new();
     for grant in &profiles.direct_grants {
         let related = related_requests(profiles, grant).collect::<Vec<_>>();
@@ -148,7 +162,7 @@ pub(super) fn text(profiles: &crate::share::ShareProfiles) -> Vec<String> {
             .collect::<Vec<_>>()
             .join(",");
         lines.push(format!(
-            "grant\t{}\tdevice_name={}\tfingerprint={}\tstate={}\tupdated_at={}\tauthorization={}\twrite={}\texec={}\texec_revision={}\tconnectivity=unknown\trequest_ids={}\tlegacy_selectors={}\texec_run_as={}\texec_programs={}",
+            "grant\t{}\tdevice_name={}\tfingerprint={}\tstate={}\tupdated_at={}\tauthorization={}\twrite={}\texec={}\texec_revision={}\tconnectivity=unknown\trequest_ids={}\tlegacy_selectors={}\t{}\texec_run_as={}\texec_programs={}",
             clean(&grant.device_id),
             clean(&grant.device_name),
             clean(&grant.fingerprint),
@@ -160,10 +174,11 @@ pub(super) fn text(profiles: &crate::share::ShareProfiles) -> Vec<String> {
                 "inactive"
             },
             grant.write,
-            if grant.exec.enabled { "enabled" } else { "disabled" },
+            access_out::exec_state(&grant.exec, now),
             grant.exec.policy_revision,
             request_ids,
             legacy_selectors,
+            access_out::access_text_fields(&grant.exec, &access_out::own_label()),
             exec_run_as(&grant.exec),
             exec_programs_text(&grant.exec),
         ));
@@ -174,23 +189,10 @@ pub(super) fn text(profiles: &crate::share::ShareProfiles) -> Vec<String> {
     lines
 }
 
-/// `standard` (the worker's own account, "Standardnutzer") or the account.
-pub(super) fn exec_run_as(exec: &crate::share::ExecGrant) -> String {
-    exec.run_as.account_name().unwrap_or("standard").to_string()
-}
-
-/// `full-shell` for an empty program list, otherwise the programs.
-pub(super) fn exec_programs_text(exec: &crate::share::ExecGrant) -> String {
-    if exec.programs.is_empty() {
-        "full-shell".into()
-    } else {
-        exec.programs
-            .iter()
-            .map(|program| clean(program))
-            .collect::<Vec<_>>()
-            .join(",")
-    }
-}
+use grants_access_output as access_out;
+/// `exec_run_as` and `exec_programs` of this list, `se share device list`
+/// and `se share room list`.
+pub(super) use grants_access_output::{exec_programs_text, exec_run_as};
 
 fn list(json: bool) -> Result<(), String> {
     let profiles = super::checked_profiles()?;

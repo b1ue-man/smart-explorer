@@ -109,7 +109,8 @@ fn help_exposes_exec_as_available_and_explains_context_free_discovery() {
         .contains("remote execution is disabled"));
 
     let exec = nested_help(&["exec"]);
-    assert!(exec.contains("unrestricted shell authority"));
+    assert!(exec.contains("with the rights that peer chose"));
+    assert!(!exec.contains("unrestricted shell authority"));
     assert!(exec.contains("target may be omitted"));
     assert!(exec.contains("--shell"));
     assert!(exec.contains("--timeout"));

@@ -1,12 +1,30 @@
-//! Program list of an Exec grant in the desktop GUI, with the rules and
-//! warnings of `se share grants exec enable --allow-program/--full`.
-//!
-//! The draft lives in egui memory under the card's confirmation id (it
-//! includes the policy revision, so a stored change starts a fresh draft).
-//! An empty list is the full shell, exactly as the stored grant means it.
-use super::{activation_warning, confirmation_id, ExecAction, ExecDeviceView};
-use crate::app::theme;
+//! The controls of the access dialog (PRM-M9, C1): presets, „Mit
+//! Rückfrage“, „Ausführen als“, one row per capability of the catalog, the
+//! period and the program list with the rules of `se share grants access
+//! --allow-program/--full`. The draft they change and the one confirmation
+//! are in `share_access_dialog_ui.rs`. An empty program list is the full
+//! shell, exactly as the stored grant means it.
 use eframe::egui::{self, RichText};
+
+use super::access_dialog::{activation_warning, AccessDraft, AccountOption, Period, NARROWING};
+use super::ExecDeviceView;
+use crate::app::theme;
+use crate::share::access_catalog::{
+    capability_catalog, CapabilityEntry, HelperState, HelperStatus, HostFacts,
+};
+use crate::share::access_grant::{AccessPreset, AccountProfile, Capability, CapabilityDecision};
+use crate::share::ExecProviderStatus;
+
+use AccessPreset::{FullOwn, Programs, RemoteAccount};
+use CapabilityDecision::{Allow, Ask, Off};
+
+/// The periods the dialog offers, in hours.
+const PERIODS: [(i64, &str); 4] = [
+    (1, "1 Stunde"),
+    (8, "8 Stunden"),
+    (24, "1 Tag"),
+    (168, "7 Tage"),
+];
 
 /// The rules of the CLI help (`cli/share/grants_exec.rs`, ENABLE_HELP).
 const RULES: &str = "Ein Eintrag ist ein Programmname (gesucht nur im festen Systemsuchpfad dieses Hosts, nie im PATH des anderen Geraets) oder ein absoluter Pfad. Gestartet wird nur dieselbe Datei unter demselben Namen; ein Eintrag, den dieser Host nicht findet, erlaubt nichts. Das Geraet darf nur LANG, LC_* und TERM als Umgebung senden; jede andere Variable (zum Beispiel PATH, LD_PRELOAD oder GIT_PAGER) lehnt den Start ab. Die Argumente bleiben frei: Shells, env, Interpreter (zum Beispiel python, perl, node) und Programme, die Befehle ausfuehren (zum Beispiel find, git, ssh, xargs, awk, sudo), sind eine volle Shell und gehoeren nicht in die Liste. Keine Sandbox.";
@@ -52,23 +70,34 @@ pub(super) fn add_program(draft: &mut Vec<String>, input: &str) -> Result<(), St
     Ok(())
 }
 
-fn draft_id(view: &ExecDeviceView) -> egui::Id {
-    confirmation_id(view, "programs")
+/// What a program-list change means for the device (shown in the access
+/// dialog before the one confirmation).
+pub(super) fn change_text(kind: ProgramChange) -> Option<&'static str> {
+    match kind {
+        ProgramChange::Unchanged => None,
+        ProgramChange::ToFullShell => {
+            Some("Die leere Liste gibt diesem Gerät wieder die volle Shell.")
+        }
+        ProgramChange::ToList => Some(
+            "Das Gerät darf danach nur noch die gelisteten Programme starten, ohne Shell und Terminal.",
+        ),
+        ProgramChange::ListChanged => {
+            Some("Das Gerät darf danach genau die gelisteten Programme starten.")
+        }
+    }
 }
 
-/// The list editor: entries with „Entfernen“, a field with „Hinzufuegen“,
-/// „Volle Shell (Liste leeren)“ and the rules. Returns the current draft.
-pub(super) fn list_editor(ui: &mut egui::Ui, view: &ExecDeviceView) -> Vec<String> {
-    let id = draft_id(view);
-    let mut draft = ui.data_mut(|data| {
-        data.get_temp::<Vec<String>>(id)
-            .unwrap_or_else(|| view.programs.clone())
-    });
-    let input_id = confirmation_id(view, "program_input");
-    let mut input = ui.data_mut(|data| data.get_temp::<String>(input_id).unwrap_or_default());
-    let error_id = egui::Id::new(("share_exec_program_error", id));
+/// The list editor of the access dialog: entries with „Entfernen“, a field
+/// with „Hinzufügen“, „Volle Shell (Liste leeren)“ and the rules. `salt`
+/// keeps the widget ids of one dialog apart; returns whether the list changed.
+pub(super) fn list_editor(
+    ui: &mut egui::Ui,
+    salt: &str,
+    draft: &mut Vec<String>,
+    input: &mut String,
+    error: &mut Option<String>,
+) -> bool {
     let mut changed = false;
-    ui.label(RichText::new("Programmliste").strong());
     if draft.is_empty() {
         ui.label("Leer: volle Shell (beliebige Programme und Shell-Befehle, Terminal).");
     }
@@ -87,24 +116,19 @@ pub(super) fn list_editor(ui: &mut egui::Ui, view: &ExecDeviceView) -> Vec<Strin
     }
     ui.horizontal_wrapped(|ui| {
         let field = ui.add(
-            egui::TextEdit::singleline(&mut input)
+            egui::TextEdit::singleline(input)
                 .hint_text("uptime oder /usr/bin/df")
                 .desired_width(220.0),
         );
-        if field.changed() {
-            ui.data_mut(|data| data.insert_temp(input_id, input.clone()));
-        }
         let submitted = field.lost_focus() && ui.input(|state| state.key_pressed(egui::Key::Enter));
-        if ui.button("Hinzufuegen").clicked() || submitted {
-            match add_program(&mut draft, &input) {
+        if ui.button("Hinzufügen").clicked() || submitted {
+            match add_program(draft, input) {
                 Ok(()) => {
                     changed = true;
-                    ui.data_mut(|data| {
-                        data.remove::<String>(input_id);
-                        data.remove::<String>(error_id);
-                    });
+                    input.clear();
+                    *error = None;
                 }
-                Err(error) => ui.data_mut(|data| data.insert_temp(error_id, error)),
+                Err(message) => *error = Some(message),
             }
         }
         if !draft.is_empty() && ui.button("Volle Shell (Liste leeren)").clicked() {
@@ -112,94 +136,292 @@ pub(super) fn list_editor(ui: &mut egui::Ui, view: &ExecDeviceView) -> Vec<Strin
             changed = true;
         }
     });
-    if let Some(error) = ui.data_mut(|data| data.get_temp::<String>(error_id)) {
-        ui.colored_label(theme::danger(ui), error);
+    if let Some(message) = error.as_deref() {
+        ui.colored_label(theme::danger(ui), message);
     }
-    egui::CollapsingHeader::new("Regeln fuer Programmlisten")
-        .id_salt(("share_exec_program_rules", id))
+    egui::CollapsingHeader::new("Regeln für Programmlisten")
+        .id_salt(("share_access_program_rules", salt))
         .show(ui, |ui| {
             ui.add(egui::Label::new(RULES).wrap());
         });
-    if changed {
-        ui.data_mut(|data| data.insert_temp(id, draft.clone()));
-    }
-    draft
+    changed
 }
 
-/// Editing the list of an enabled grant: like `enable` in the CLI every
-/// change needs a confirmation, names the new reach and that the device's
-/// running commands end.
-pub(super) fn enabled_editor(
-    ui: &mut egui::Ui,
-    view: &ExecDeviceView,
-    provider: &crate::share::ExecProviderStatus,
-    action: &mut Option<ExecAction>,
-) {
-    egui::CollapsingHeader::new("Programmliste bearbeiten")
-        .id_salt(("share_exec_program_editor", &view.target_key))
-        .show(ui, |ui| {
-            let draft = list_editor(ui, view);
-            let kind = change(&view.programs, &draft);
-            if kind == ProgramChange::Unchanged {
-                return;
-            }
-            let warning = activation_warning(provider, view.run_as.account_name(), &draft);
-            ui.colored_label(
-                theme::danger(ui),
-                RichText::new(&warning.full_access).strong(),
-            );
-            if let Some(elevated) = warning.elevated {
-                ui.colored_label(theme::danger(ui), RichText::new(elevated).strong());
-            }
-            ui.label(match kind {
-                ProgramChange::ToFullShell => {
-                    "Die leere Liste gibt diesem Geraet wieder die volle Shell."
-                }
-                ProgramChange::ToList => {
-                    "Dieses Geraet darf danach nur noch die gelisteten Programme starten, ohne Shell und Terminal."
-                }
-                _ => "Dieses Geraet darf danach genau die gelisteten Programme starten.",
-            });
-            ui.label("Laufende Befehle dieses Geraets enden wie bei jedem Rechtewechsel.");
-            let settings = crate::share::ExecGrantSettings {
-                run_as: view.run_as.clone(),
-                programs: draft.clone(),
-            };
-            let invalid = settings.validate_for_this_host().err();
-            if let Some(error) = &invalid {
-                ui.colored_label(theme::danger(ui), error);
-            }
-            let confirm_id = confirmation_id(view, "programs_confirm");
-            let mut confirmed =
-                ui.data_mut(|data| data.get_temp::<bool>(confirm_id).unwrap_or_default());
-            if ui
-                .checkbox(&mut confirmed, "Ich bestaetige diese Aenderung bewusst")
-                .changed()
+/// What the change means for `subject` (C6): reach and account, an
+/// administrator account, a new program list, the end of running commands.
+pub(super) fn notes(
+    draft: &AccessDraft,
+    subject: &str,
+    provider: &ExecProviderStatus,
+    now: i64,
+) -> Vec<String> {
+    let Ok((grant, programs)) = draft.result(now) else {
+        return Vec::new();
+    };
+    let mut notes = Vec::new();
+    let account = grant.account.label(&provider.user_label);
+    let on = |capability| grant.decision(capability).is_on();
+    let what = match (on(Capability::ExecCommands), on(Capability::ExecTerminal)) {
+        (true, _) if !programs.is_empty() => {
+            format!("nur die Programme {}", programs.join(", "))
+        }
+        (true, true) => "Programme, Shell-Befehle und ein Terminal".into(),
+        (true, false) => "Programme und Shell-Befehle".into(),
+        (false, true) => "ein Terminal".into(),
+        (false, false) => String::new(),
+    };
+    if !what.is_empty() {
+        notes.push(format!(
+            "{subject} kann danach {what} mit den Rechten von {account} starten. Was \
+             {account} im Betriebssystem nicht darf, darf auch das Gerät nicht."
+        ));
+        let named = grant.account.account_name();
+        let warning = activation_warning(provider, named, &programs);
+        let admin = named.is_some_and(|name| {
+            name.eq_ignore_ascii_case("root") || name.eq_ignore_ascii_case("administrator")
+        });
+        if warning.elevated.is_some() || admin {
+            let marker = warning.elevated.unwrap_or("REMOTE ADMINISTRATOR SHELL");
+            notes.push(format!(
+                "Achtung: {account} hat Administratorrechte; das Gerät steuert damit diesen \
+                 Rechner vollständig ({}, {marker}).",
+                warning.full_access
+            ));
+        }
+    }
+    if let Some(text) = change_text(change(&draft.base_programs, &programs)) {
+        notes.push(text.to_string());
+    }
+    if !grant
+        .narrowing_against(&draft.base, programs != draft.base_programs)
+        .is_empty()
+    {
+        notes.push(NARROWING.to_string());
+    }
+    notes
+}
+
+/// „Ausführen als“ of this host: the worker's list (`Access::Accounts`);
+/// without the worker the own account and the accounts grants name.
+pub(super) fn account_options(views: &[ExecDeviceView]) -> (Vec<AccountOption>, HelperState) {
+    let available = |profile| AccountOption {
+        profile,
+        available: true,
+        reason: None,
+    };
+    let Ok((helper, choices)) = crate::daemon::access_accounts() else {
+        let mut options = vec![available(AccountProfile::Own)];
+        let named = views.iter().map(|view| &view.access.account);
+        for account in named.filter(|account| account.account_name().is_some()) {
+            if crate::share::exec_run_as_supported()
+                && options.iter().all(|o| &o.profile != account)
             {
-                ui.data_mut(|data| data.insert_temp(confirm_id, confirmed));
+                options.push(available(account.clone()));
             }
-            ui.horizontal_wrapped(|ui| {
-                if ui
-                    .add_enabled(
-                        confirmed && invalid.is_none(),
-                        egui::Button::new("Programmliste uebernehmen"),
-                    )
-                    .clicked()
-                {
-                    *action = Some((view.target.clone(), true, Some(settings.clone())));
-                    discard(ui, view);
+        }
+        return (options, HelperState::NotNeeded);
+    };
+    let options = choices.into_iter().filter_map(|choice| {
+        let profile = match (choice.profile.as_str(), choice.account) {
+            ("own", _) => AccountProfile::Own,
+            ("remote", _) => AccountProfile::Remote,
+            ("account", Some(name)) => AccountProfile::Account { name },
+            _ => return None,
+        };
+        let reason = match (choice.reason, choice.next_step) {
+            (Some(reason), Some(next)) => Some(format!("{reason} Nächster Schritt: {next}")),
+            (reason, next) => reason.or(next),
+        };
+        Some(AccountOption {
+            profile,
+            available: choice.available,
+            reason,
+        })
+    });
+    (options.collect(), helper.state)
+}
+
+/// The capability rows of this host (S4 adds its rows to the catalog).
+pub(super) fn catalog(helper: HelperState) -> Vec<CapabilityEntry> {
+    let account_helper = HelperStatus {
+        state: helper,
+        version: None,
+        detail: None,
+    };
+    capability_catalog(&HostFacts {
+        graphical_session: true,
+        account_helper,
+    })
+}
+
+/// Small grey heading of a part of a dialog (as on the share pages).
+pub(super) fn heading(ui: &mut egui::Ui, text: &str) {
+    ui.add_space(6.0);
+    ui.label(RichText::new(text).small().color(theme::muted(ui)));
+}
+
+fn account_name(profile: &AccountProfile, own_label: &str) -> String {
+    match profile {
+        AccountProfile::Own => format!("Mein Konto ({own_label})"),
+        AccountProfile::Remote => "Fernzugriffskonto se-remote".into(),
+        AccountProfile::Account { name } => format!("Konto {name}"),
+    }
+}
+
+/// Presets, „Mit Rückfrage“, „Ausführen als“, the rows, the period and the
+/// program list of `draft`.
+pub(super) fn controls(
+    ui: &mut egui::Ui,
+    draft: &mut AccessDraft,
+    own_label: &str,
+    other_accounts: bool,
+) {
+    heading(ui, "VOREINSTELLUNG");
+    let remote = draft
+        .accounts
+        .iter()
+        .find(|o| o.profile == AccountProfile::Remote)
+        .cloned();
+    let presets = [
+        (
+            FullOwn,
+            format!("Volle Rechte als mein Konto ({own_label})"),
+            true,
+        ),
+        (
+            RemoteAccount,
+            "Eingeschränktes Fernzugriffskonto se-remote".into(),
+            remote.as_ref().is_some_and(|o| o.available),
+        ),
+        (Programs, "Nur bestimmte Programme".into(), true),
+    ];
+    for (preset, label, enabled) in presets {
+        if preset == RemoteAccount && remote.is_none() {
+            continue;
+        }
+        let response = ui.add_enabled(
+            enabled,
+            egui::RadioButton::new(draft.preset == Some(preset), label),
+        );
+        if response.clicked() {
+            draft.select(preset);
+        }
+    }
+    if let Some(reason) = remote.and_then(|option| option.reason) {
+        ui.small(reason);
+    }
+    if draft.preset.is_none() {
+        ui.add_enabled(false, egui::RadioButton::new(true, "Eigene Auswahl"));
+    }
+    let mut ask = draft.ask;
+    if ui
+        .checkbox(
+            &mut ask,
+            "Mit Rückfrage: jeder Start wartet auf eine Bestätigung an diesem Gerät",
+        )
+        .changed()
+    {
+        draft.set_ask(ask);
+    }
+    heading(ui, "AUSFÜHREN ALS");
+    egui::ComboBox::from_id_salt(("share_access_account", &draft.key))
+        .selected_text(account_name(&draft.account, own_label))
+        .show_ui(ui, |ui| {
+            for option in draft.accounts.clone() {
+                let label = account_name(&option.profile, own_label);
+                let chosen = option.profile == draft.account;
+                let response =
+                    ui.add_enabled(option.available, egui::SelectableLabel::new(chosen, label));
+                if response.clicked() {
+                    draft.set_account(option.profile);
                 }
-                if ui.button("Verwerfen").clicked() {
-                    discard(ui, view);
+            }
+        });
+    if other_accounts {
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Anderes lokales Konto:");
+            ui.add(egui::TextEdit::singleline(&mut draft.account_input).desired_width(140.0));
+            if ui.button("Wählen").clicked() {
+                let account = AccountProfile::Account {
+                    name: draft.account_input.trim().into(),
+                };
+                draft.account_error = account.validate().err();
+                if draft.account_error.is_none() {
+                    draft.set_account(account);
                 }
-            });
+            }
+        });
+        if let Some(error) = &draft.account_error {
+            ui.colored_label(theme::danger(ui), error);
+        }
+    }
+    heading(ui, "RECHTE");
+    for entry in catalog(draft.helper) {
+        capability_row(ui, draft, &entry);
+    }
+    heading(ui, "GÜLTIG");
+    period_choice(ui, draft);
+    let title = format!("Programmliste ({})", draft.programs.len());
+    egui::CollapsingHeader::new(title)
+        .id_salt(("share_access_programs", &draft.key))
+        .default_open(draft.preset == Some(Programs))
+        .show(ui, |ui| {
+            let (mut list, mut input, mut error) = (
+                draft.programs.clone(),
+                std::mem::take(&mut draft.program_input),
+                draft.error.take(),
+            );
+            if list_editor(ui, &draft.key, &mut list, &mut input, &mut error) {
+                draft.set_programs(list);
+            }
+            (draft.program_input, draft.error) = (input, error);
         });
 }
 
-fn discard(ui: &mut egui::Ui, view: &ExecDeviceView) {
-    ui.data_mut(|data| {
-        data.remove::<Vec<String>>(draft_id(view));
-        data.remove::<bool>(confirmation_id(view, "programs_confirm"));
-        data.remove::<String>(confirmation_id(view, "program_input"));
+fn capability_row(ui: &mut egui::Ui, draft: &mut AccessDraft, entry: &CapabilityEntry) {
+    let listed = !draft.programs.is_empty() && entry.capability == Capability::ExecTerminal;
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new(entry.label).strong());
+        for (decision, label) in [(Off, "Aus"), (Ask, "Fragen"), (Allow, "Erlauben")] {
+            let selected = draft.decision(entry.capability) == decision;
+            let enabled = decision == Off || !listed;
+            if ui
+                .add_enabled(enabled, egui::RadioButton::new(selected, label))
+                .clicked()
+            {
+                draft.set_decision(entry.capability, decision);
+            }
+        }
     });
+    let text = if listed {
+        "Mit einer Programmliste gibt es kein Terminal."
+    } else {
+        entry.description
+    };
+    ui.label(RichText::new(text).small().color(theme::muted(ui)));
+}
+
+fn period_choice(ui: &mut egui::Ui, draft: &mut AccessDraft) {
+    // „Ende nicht ändern“ keeps each grant's own end (none stays none).
+    let keep = match draft.base.valid_until {
+        Some(end) => format!("Bisheriges Ende behalten ({})", super::end_text(end)),
+        None => "Ende nicht ändern".to_string(),
+    };
+    let label = |period: Period| match period {
+        Period::Keep => keep.clone(),
+        Period::Unlimited => "Unbegrenzt".to_string(),
+        Period::Hours(hours) => PERIODS
+            .iter()
+            .find(|(h, _)| *h == hours)
+            .map_or_else(|| format!("{hours} Stunden"), |(_, text)| text.to_string()),
+    };
+    let mut choices = vec![Period::Keep, Period::Unlimited];
+    choices.extend(PERIODS.iter().map(|(hours, _)| Period::Hours(*hours)));
+    egui::ComboBox::from_id_salt(("share_access_period", &draft.key))
+        .selected_text(label(draft.period))
+        .show_ui(ui, |ui| {
+            for period in choices {
+                ui.selectable_value(&mut draft.period, period, label(period));
+            }
+        });
 }

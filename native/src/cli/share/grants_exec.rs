@@ -1,14 +1,24 @@
+//! `se share grants exec` and its toggles `enable`/`disable` (aliases of the
+//! access right since PRM-M8: they keep every option, the IPC request
+//! `MutateExecGrant` and their output), and the device selection that `se
+//! share grants access` shares with them: accepted direct grants and members
+//! of joined rooms that are not blocked, one device by selector or every
+//! admitted member of a room.
 use clap::{Args, Subcommand};
 use clap_complete::ArgValueCandidates;
+
+use crate::share::{ExecGrant, ExecGrantTarget, RoomMember, RoomProfile, ShareProfiles};
+
+use super::grants_access_output::{self as output, confirm_enable, RoomFacts};
 
 #[derive(Args)]
 pub(super) struct ExecGrantArgs {
     #[command(subcommand)]
-    command: Option<ExecGrantCommand>,
+    pub(super) command: Option<ExecGrantCommand>,
 }
 
 #[derive(Subcommand)]
-enum ExecGrantCommand {
+pub(super) enum ExecGrantCommand {
     #[command(
         about = "Enable user-code execution for exactly one device",
         long_about = ENABLE_HELP
@@ -37,54 +47,59 @@ environment variables; every other variable (for example PATH, LD_PRELOAD or
 GIT_PAGER) refuses the start. Arguments stay free, so shells, env,
 interpreters (for example python, perl, node) and programs that run commands
 (for example find, git, ssh, xargs, awk, sudo) are equal to a full shell: do
-not list them.";
+not list them.
+
+`se share grants access` sets the same right with more choices: commands and
+terminal separately, a confirmation before each start, the account se-remote
+and an end.";
 
 #[derive(Args, Clone)]
-struct ExecToggleArgs {
+pub(super) struct ExecToggleArgs {
     #[arg(
         help = "Optional device/name/fingerprint/endpoint selector; omit when exactly one choice matches",
         add = ArgValueCandidates::new(crate::cli::completions::exec_grant_candidates)
     )]
-    selector: Option<String>,
-    #[arg(
-        long,
-        help = "Confirm the FULL USER CODE EXECUTION warning without a prompt"
-    )]
-    yes: bool,
+    pub(super) selector: Option<String>,
+    #[arg(long, help = "Confirm the access warning without a prompt")]
+    pub(super) yes: bool,
 }
 
 #[derive(Args)]
-struct ExecEnableArgs {
+pub(super) struct ExecEnableArgs {
     #[command(flatten)]
-    toggle: ExecToggleArgs,
+    pub(super) toggle: ExecToggleArgs,
     #[arg(
         long,
         value_name = "USER",
         help = "Run this device's commands as USER (Linux root worker); `standard` is the worker's own account"
     )]
-    run_as: Option<String>,
+    pub(super) run_as: Option<String>,
     #[arg(
         long = "allow-program",
         value_name = "PATH",
         help = "Allow only this program (repeatable): argv mode, no shell, no terminal; free arguments, so no shells, interpreters or command runners"
     )]
-    allow_program: Vec<String>,
+    pub(super) allow_program: Vec<String>,
     #[arg(
         long,
         conflicts_with = "allow_program",
         help = "Remove the program list again: full shell"
     )]
-    full: bool,
+    pub(super) full: bool,
 }
 
 impl ExecEnableArgs {
+    fn names_settings(&self) -> bool {
+        self.run_as.is_some() || !self.allow_program.is_empty() || self.full
+    }
+
     /// `Some` when an option names new settings; the rest is taken from
     /// the grant's current ones.
-    fn settings(
+    pub(super) fn settings(
         &self,
         current: &crate::share::ExecGrantSettings,
     ) -> Option<crate::share::ExecGrantSettings> {
-        if self.run_as.is_none() && self.allow_program.is_empty() && !self.full {
+        if !self.names_settings() {
             return None;
         }
         let run_as = match self.run_as.as_deref() {
@@ -103,34 +118,42 @@ impl ExecEnableArgs {
     }
 }
 
+/// The IPC request of a toggle (`MutateExecGrant`): enabled and the
+/// settings, unchanged by the access right (D.2.3).
+pub(super) fn toggle_request(
+    command: &ExecGrantCommand,
+    current: &ExecGrant,
+) -> (bool, Option<crate::share::ExecGrantSettings>) {
+    match command {
+        ExecGrantCommand::Enable(args) => (true, args.settings(&grant_settings(current))),
+        ExecGrantCommand::Disable(_) => (false, None),
+    }
+}
+
 pub(super) fn run(args: ExecGrantArgs, json: bool) -> Result<(), String> {
     let profiles = super::super::checked_profiles()?;
-    let choices = choices(&profiles);
+    let choices = targets(&profiles);
     let Some(command) = args.command else {
-        return print_choices(&choices, json);
+        return output::print_exec_choices(&choices, json);
     };
-    let (enabled, args, enable) = match command {
-        ExecGrantCommand::Enable(args) => (true, args.toggle.clone(), Some(args)),
-        ExecGrantCommand::Disable(args) => (false, args, None),
+    let (toggle, changes_settings) = match &command {
+        ExecGrantCommand::Enable(args) => (args.toggle.clone(), args.names_settings()),
+        ExecGrantCommand::Disable(args) => (args.clone(), false),
     };
-    // A settings change may address an already enabled grant.
-    let changes_settings = enable.as_ref().is_some_and(|enable| {
-        enable.run_as.is_some() || !enable.allow_program.is_empty() || enable.full
-    });
+    let enabling = matches!(command, ExecGrantCommand::Enable(_));
     let choice = select(
         &choices,
-        args.selector.as_deref(),
-        enabled,
+        toggle.selector.as_deref(),
+        enabling,
         changes_settings,
     )?;
-    let settings = enable
-        .as_ref()
-        .and_then(|enable| enable.settings(&choice.settings));
+    let (enabled, settings) = toggle_request(&command, &choice.exec);
     if let Some(settings) = &settings {
         settings.validate_for_this_host()?;
     }
-    if enabled && !args.yes {
-        confirm_enable(&choice.label, settings.as_ref().unwrap_or(&choice.settings))?;
+    if enabled && !toggle.yes {
+        let current = grant_settings(&choice.exec);
+        confirm_enable(&choice.label, settings.as_ref().unwrap_or(&current))?;
     }
     let result =
         crate::daemon::mutate_exec_grant(choice.target.clone(), enabled, settings.clone())?;
@@ -166,17 +189,7 @@ pub(super) fn run(args: ExecGrantArgs, json: bool) -> Result<(), String> {
     }
 }
 
-#[derive(Clone)]
-struct ExecChoice {
-    target: crate::share::ExecGrantTarget,
-    label: String,
-    device_id: String,
-    fingerprint: String,
-    enabled: bool,
-    settings: crate::share::ExecGrantSettings,
-}
-
-fn grant_settings(grant: &crate::share::ExecGrant) -> crate::share::ExecGrantSettings {
+pub(in crate::cli::share) fn grant_settings(grant: &ExecGrant) -> crate::share::ExecGrantSettings {
     crate::share::ExecGrantSettings {
         run_as: grant.run_as.clone(),
         programs: grant.programs.clone(),
@@ -186,14 +199,14 @@ fn grant_settings(grant: &crate::share::ExecGrant) -> crate::share::ExecGrantSet
 /// The worker that applied the change wrote the requested settings; a worker
 /// from before run-as would have ignored them and must not look successful.
 fn verify_settings(
-    target: &crate::share::ExecGrantTarget,
+    target: &ExecGrantTarget,
     requested: &crate::share::ExecGrantSettings,
 ) -> Result<(), String> {
     let profiles = super::super::checked_profiles()?;
-    let stored = choices(&profiles)
+    let stored = targets(&profiles)
         .into_iter()
         .find(|choice| &choice.target == target)
-        .map(|choice| choice.settings);
+        .map(|choice| grant_settings(&choice.exec));
     if stored.as_ref() == Some(requested) {
         Ok(())
     } else {
@@ -206,133 +219,144 @@ fn verify_settings(
     }
 }
 
-fn settings_text(settings: &crate::share::ExecGrantSettings, worker: &str) -> String {
-    let account = match settings.run_as.account_name() {
-        None => format!("standard({worker})"),
-        Some(name) => name.to_string(),
-    };
-    if settings.programs.is_empty() {
-        format!("run_as={account}\tprograms=full-shell")
-    } else {
-        let programs: Vec<String> = settings
-            .programs
-            .iter()
-            .map(|program| clean(program))
-            .collect();
-        format!("run_as={account}\tprograms={}", programs.join(","))
-    }
+/// One device whose rights this host sets: an accepted direct grant or a
+/// member of a joined room that is not blocked.
+#[derive(Clone, Debug)]
+pub(super) struct AccessTarget {
+    pub(super) target: ExecGrantTarget,
+    pub(super) label: String,
+    pub(super) device_id: String,
+    pub(super) fingerprint: String,
+    /// The room of a member.
+    pub(super) room: Option<RoomFacts>,
+    pub(super) exec: ExecGrant,
 }
 
-fn choices(profiles: &crate::share::ShareProfiles) -> Vec<ExecChoice> {
-    let mut choices = Vec::new();
-    for grant in profiles
-        .direct_grants
-        .iter()
-        .filter(|grant| grant.state == crate::share::DirectGrantState::Accepted)
-    {
-        let label = profiles
-            .direct_contacts
-            .iter()
-            .find(|contact| {
-                contact.remote_device_id.as_ref() == Some(&grant.device_id)
-                    && contact.remote_public_key.as_ref() == Some(&grant.public_key)
-            })
-            .map(|contact| contact.display_name.clone())
-            .unwrap_or_else(|| grant.device_name.clone());
-        choices.push(ExecChoice {
-            target: crate::share::ExecGrantTarget::Direct {
+/// Every device of `profiles` whose rights can be set, direct ones first.
+pub(super) fn targets(profiles: &ShareProfiles) -> Vec<AccessTarget> {
+    let mut all = Vec::new();
+    for grant in &profiles.direct_grants {
+        if grant.state != crate::share::DirectGrantState::Accepted {
+            continue;
+        }
+        let contact = profiles.direct_contacts.iter().find(|contact| {
+            contact.remote_device_id.as_ref() == Some(&grant.device_id)
+                && contact.remote_public_key.as_ref() == Some(&grant.public_key)
+        });
+        all.push(AccessTarget {
+            target: ExecGrantTarget::Direct {
                 device_id: grant.device_id.clone(),
                 public_key: grant.public_key.clone(),
                 fingerprint: grant.fingerprint.clone(),
                 node_id: grant.node_id.clone(),
             },
-            label,
+            label: contact.map_or_else(|| grant.device_name.clone(), |c| c.display_name.clone()),
             device_id: grant.device_id.clone(),
             fingerprint: grant.fingerprint.clone(),
-            enabled: grant.exec.enabled,
-            settings: grant_settings(&grant.exec),
+            room: None,
+            exec: grant.exec.clone(),
         });
     }
     for room in profiles.rooms.iter().filter(|room| room.auto_join) {
-        for member in room.members.iter().filter(|member| !member.blocked) {
-            choices.push(ExecChoice {
-                target: crate::share::ExecGrantTarget::RoomMember {
-                    room_id: room.room_id.clone(),
-                    device_id: member.device_id.clone(),
-                    public_key: member.public_key.clone(),
-                    fingerprint: member.fingerprint.clone(),
-                    node_id: member.node_id.clone(),
-                },
-                label: format!("{} / {}", room.name, member.device_name),
-                device_id: member.device_id.clone(),
-                fingerprint: member.fingerprint.clone(),
-                enabled: member.exec.enabled,
-                settings: grant_settings(&member.exec),
-            });
-        }
+        let members = room.members.iter().filter(|member| !member.blocked);
+        all.extend(members.map(|member| member_target(room, member)));
     }
-    choices
+    all
 }
 
-fn print_choices(choices: &[ExecChoice], json: bool) -> Result<(), String> {
-    let worker = crate::share::exec_provider_status().user_label;
-    if json {
-        let values = choices
-            .iter()
-            .map(|choice| {
-                serde_json::json!({
-                    "target": target_selector(&choice.target), "device_name": choice.label,
-                    "device_id": choice.device_id, "fingerprint": choice.fingerprint,
-                    "enabled": choice.enabled,
-                    "run_as": choice.settings.run_as.account_name().unwrap_or("standard"),
-                    "standard_user": worker,
-                    "programs": choice.settings.programs,
-                })
-            })
-            .collect::<Vec<_>>();
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&values).map_err(|e| e.to_string())?
-        );
-    } else if choices.is_empty() {
-        println!("exec_grants\t0\taccept a direct request or join a room first");
-    } else {
-        for choice in choices {
-            println!(
-                "exec_grant\t{}\tdevice_id={}\tfingerprint={}\tstate={}\t{}\ttarget={}",
-                clean(&choice.label),
-                choice.device_id,
-                choice.fingerprint,
-                if choice.enabled {
-                    "enabled"
-                } else {
-                    "disabled"
-                },
-                settings_text(&choice.settings, &worker),
-                target_selector(&choice.target),
-            );
-        }
+fn member_target(room: &RoomProfile, member: &RoomMember) -> AccessTarget {
+    AccessTarget {
+        target: ExecGrantTarget::RoomMember {
+            room_id: room.room_id.clone(),
+            device_id: member.device_id.clone(),
+            public_key: member.public_key.clone(),
+            fingerprint: member.fingerprint.clone(),
+            node_id: member.node_id.clone(),
+        },
+        label: format!("{} / {}", room.name, member.device_name),
+        device_id: member.device_id.clone(),
+        fingerprint: member.fingerprint.clone(),
+        room: Some(RoomFacts::of(room)),
+        exec: member.exec.clone(),
     }
-    Ok(())
 }
 
+/// Whether `selector` names `target`: its name, its id or fingerprint (or a
+/// prefix of at least four characters), or its `exec://` target.
+pub(super) fn names(target: &AccessTarget, selector: &str) -> bool {
+    let lower = selector.to_ascii_lowercase();
+    let prefix = |candidate: &str| {
+        candidate.eq_ignore_ascii_case(selector)
+            || (selector.len() >= 4 && candidate.to_ascii_lowercase().starts_with(&lower))
+    };
+    target.label.eq_ignore_ascii_case(selector)
+        || prefix(&target.device_id)
+        || prefix(&target.fingerprint)
+        || output::selector(&target.target) == selector
+}
+
+/// The one device `selector` names; without a selector the only device.
+pub(super) fn select_one<'a>(
+    all: &'a [AccessTarget],
+    selector: Option<&str>,
+) -> Result<&'a AccessTarget, String> {
+    let matches: Vec<&AccessTarget> = all
+        .iter()
+        .filter(|target| selector.is_none_or(|selector| names(target, selector)))
+        .collect();
+    match (matches.as_slice(), selector) {
+        ([target], _) => Ok(target),
+        ([], _) if all.is_empty() => {
+            Err("no device to set access for: accept a direct request or join a room first".into())
+        }
+        ([], Some(selector)) => Err(format!(
+            "no device matches {selector}; `se share grants access` lists the devices"
+        )),
+        _ => Err(format!(
+            "several devices match; name one of: {}",
+            matches
+                .iter()
+                .map(|target| output::selector(&target.target))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
+}
+
+/// The admitted members of the joined room `selector`, as they are now.
+pub(super) fn room_targets(
+    profiles: &ShareProfiles,
+    selector: &str,
+) -> Result<(RoomFacts, Vec<AccessTarget>), String> {
+    let room = super::super::rooms::find(profiles, selector)?;
+    if !room.auto_join {
+        return Err(format!(
+            "room {} was left; join it again first: se share room rejoin {}",
+            room.name, room.id
+        ));
+    }
+    let admitted = room.members.iter().filter(|member| member.is_admitted());
+    let members: Vec<AccessTarget> = admitted.map(|member| member_target(room, member)).collect();
+    if members.is_empty() {
+        return Err(format!(
+            "room {} has no admitted member; `se share room list` shows who waits",
+            room.name
+        ));
+    }
+    Ok((RoomFacts::of(room), members))
+}
+
+/// A toggle without a selector considers only the devices it changes.
 fn select<'a>(
-    choices: &'a [ExecChoice],
+    choices: &'a [AccessTarget],
     selector: Option<&str>,
     enabling: bool,
     changes_settings: bool,
-) -> Result<&'a ExecChoice, String> {
+) -> Result<&'a AccessTarget, String> {
     let matches = choices
         .iter()
-        .filter(|choice| choice.enabled != enabling || changes_settings)
-        .filter(|choice| {
-            selector.is_none_or(|selector| {
-                choice.label.eq_ignore_ascii_case(selector)
-                    || prefix(selector, &choice.device_id)
-                    || prefix(selector, &choice.fingerprint)
-                    || target_selector(&choice.target) == selector
-            })
-        })
+        .filter(|choice| choice.exec.enabled != enabling || changes_settings)
+        .filter(|choice| selector.is_none_or(|selector| names(choice, selector)))
         .collect::<Vec<_>>();
     match matches.as_slice() {
         [choice] => Ok(*choice),
@@ -341,71 +365,10 @@ fn select<'a>(
             "multiple Exec grants match; choose one: {}",
             matches
                 .iter()
-                .map(|choice| target_selector(&choice.target))
+                .map(|choice| output::selector(&choice.target))
                 .collect::<Vec<_>>()
                 .join(", ")
         )),
-    }
-}
-
-fn confirm_enable(label: &str, settings: &crate::share::ExecGrantSettings) -> Result<(), String> {
-    use std::io::Write;
-    let provider = crate::share::exec_provider_status();
-    let account = settings
-        .run_as
-        .account_name()
-        .map(str::to_string)
-        .unwrap_or_else(|| provider.user_label.clone());
-    if settings.programs.is_empty() {
-        eprintln!("WARNING: enabling FULL {account} CODE EXECUTION for {label}.");
-    } else {
-        eprintln!(
-            "WARNING: enabling {account} execution of {} for {label}.",
-            settings.programs.join(", ")
-        );
-    }
-    if provider.elevated && settings.run_as.account_name().is_none() {
-        eprintln!(
-            "This is a REMOTE {} SHELL with unrestricted authority.",
-            if cfg!(windows) {
-                "ADMINISTRATOR"
-            } else {
-                "ROOT"
-            }
-        );
-    }
-    eprint!("Type YES to enable: ");
-    std::io::stderr().flush().map_err(|e| e.to_string())?;
-    let mut answer = String::new();
-    std::io::stdin()
-        .read_line(&mut answer)
-        .map_err(|e| e.to_string())?;
-    (answer.trim() == "YES")
-        .then_some(())
-        .ok_or_else(|| "Exec grant was not enabled".into())
-}
-
-fn prefix(selector: &str, candidate: &str) -> bool {
-    candidate.eq_ignore_ascii_case(selector)
-        || (selector.len() >= 4
-            && candidate
-                .to_ascii_lowercase()
-                .starts_with(&selector.to_ascii_lowercase()))
-}
-
-fn target_selector(target: &crate::share::ExecGrantTarget) -> String {
-    match target {
-        crate::share::ExecGrantTarget::Direct {
-            device_id,
-            fingerprint,
-            ..
-        } => format!("exec://direct/{device_id}/{fingerprint}"),
-        crate::share::ExecGrantTarget::RoomMember {
-            room_id,
-            device_id,
-            fingerprint,
-            ..
-        } => format!("exec://room/{room_id}/{device_id}/{fingerprint}"),
     }
 }
 
@@ -467,9 +430,9 @@ mod tests {
         assert_eq!(listed.programs, vec!["/bin/date".to_string()]);
     }
 
-    fn choice(label: &str, enabled: bool) -> ExecChoice {
-        ExecChoice {
-            target: crate::share::ExecGrantTarget::Direct {
+    fn choice(label: &str, enabled: bool) -> AccessTarget {
+        AccessTarget {
+            target: ExecGrantTarget::Direct {
                 device_id: label.into(),
                 public_key: format!("{label}-key"),
                 fingerprint: format!("{label}-fingerprint"),
@@ -478,8 +441,11 @@ mod tests {
             label: label.into(),
             device_id: label.into(),
             fingerprint: format!("{label}-fingerprint"),
-            enabled,
-            settings: Default::default(),
+            room: None,
+            exec: ExecGrant {
+                enabled,
+                ..ExecGrant::default()
+            },
         }
     }
 }

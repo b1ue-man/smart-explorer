@@ -9,7 +9,9 @@
 //! A Share start can wait for the other device's user (PRM-M3): until it
 //! begins, its notice is read from the worker, the status line goes to
 //! stderr, and the start timers do not count the wait. The session's shell
-//! start names the account it runs as (`{device}: as {account}`).
+//! start names the account it runs as (`{device}: as {account}`). A Share
+//! session is one start: its shell is recognized inside that shell, so a
+//! peer that asks before every start asks once (`share_start_line`).
 use super::dialect;
 use super::terminal_transports::{print_account_line, PendingNotice};
 use super::types::{Dialect, TerminalSize};
@@ -22,7 +24,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 /// Longest wait for the login-shell probe; it only echoes.
-const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
+pub(super) const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 /// Probe output kept for the dialect decision.
 const MAX_PROBE_BYTES: usize = 64 * 1024;
 
@@ -137,12 +139,26 @@ pub(super) fn connect(
             Ok((dialect, Box::new(shell)))
         }
         TargetSpec::Share { peer, label } => {
-            let probe = share_start(peer, dialect::PROBE, Some(PROBE_TIMEOUT), label, false)?;
-            let dialect = dialect::classify(&run_probe(Box::new(probe))?);
-            let shell = share_start(peer, dialect::start_line(dialect), None, label, true)?;
+            let mut shell = share_start(peer, &share_start_line(), None, label, true)?;
+            let dialect = super::terminal_transports::probe_in_session(&mut shell)?;
             Ok((dialect, Box::new(shell)))
         }
     }
+}
+
+/// The command line of a Share session's one start. A Windows host runs it
+/// with `cmd.exe /D /S /C`, which does not quote with `'`: the first command
+/// fails with its error sent to NUL, `&` starts PowerShell on the session's
+/// input, and `rem` ignores the rest. Every other host runs it with a POSIX
+/// shell (`sh -c`, or the login shell with `-lc`): the single-quoted
+/// assignment hides the cmd part, then the POSIX session shell replaces the
+/// shell. Which of both runs, the session asks its shell afterwards.
+pub(super) fn share_start_line() -> String {
+    format!(
+        "SE_PS=' 2>NUL & {} & rem '; {}",
+        dialect::start_line(Dialect::PowerShell),
+        dialect::start_line(Dialect::Posix)
+    )
 }
 
 pub(super) fn run_probe(mut transport: Box<dyn Transport>) -> Result<String, String> {

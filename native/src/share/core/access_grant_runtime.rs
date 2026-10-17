@@ -2,11 +2,12 @@
 //! of a changed grant causes, whether the Exec registry keeps the running
 //! jobs of a changed grant (a pure widening binds them to the new revision),
 //! and the end (`valid_until`) of grants, which ends their sessions with
-//! `RestrictionReason::GrantExpired`.
+//! `RestrictionReason::GrantExpired` and the access-log event `grant_expired`.
 use std::sync::{Arc, Mutex};
 
+use crate::share::access_audit::{AccessEntry, AccessEvent, AccessKind};
 use crate::share::access_authorize::{capability_for, principal_grant};
-use crate::share::access_grant::Capability;
+use crate::share::access_grant::{AccountProfile, Capability};
 use crate::share::core::now_secs;
 use crate::share::exec_policy::ExecGrant;
 use crate::share::exec_registry::{ExecCancelReason, ExecRegistry};
@@ -139,13 +140,19 @@ pub(crate) fn next_expiry(state: &ShareAuthState, now: i64) -> Option<i64> {
 }
 
 /// The end of the grant behind one running Exec job. When it comes, the job
-/// ends as revoked (C5), unless the host moved or removed the end meanwhile.
+/// ends as revoked and the access log gets `grant_expired` (C5), unless the
+/// host moved or removed the end meanwhile.
 pub(crate) struct GrantEndWatch {
     auth: Arc<Mutex<ShareAuthState>>,
     principal: ProvenPrincipal,
     capability: Capability,
     end: i64,
+    /// Where the `grant_expired` entry goes: the access log; unit tests write
+    /// nothing unless they capture it (`with_audit`).
+    audit: fn(AccessEntry<'_>),
 }
+
+fn ignore_entry(_: AccessEntry<'_>) {}
 
 impl GrantEndWatch {
     pub(crate) fn new(
@@ -154,12 +161,23 @@ impl GrantEndWatch {
         capability: Capability,
         end: Option<i64>,
     ) -> Option<Self> {
+        let audit: fn(AccessEntry<'_>) = if cfg!(test) {
+            ignore_entry
+        } else {
+            crate::share::access_audit::record_access
+        };
         end.map(|end| Self {
             auth,
             principal,
             capability,
             end,
+            audit,
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_audit(self, audit: fn(AccessEntry<'_>)) -> Self {
+        Self { audit, ..self }
     }
 
     /// Unix seconds (host clock) at which the job is checked.
@@ -186,8 +204,22 @@ impl GrantEndWatch {
         }
         let restrictions = expired_restrictions(&state, self.end.saturating_sub(1), now);
         let _ = registry.restrict_authorization(state.authorization_epoch, &restrictions);
+        let account =
+            principal_grant(&state, &self.principal).map(|grant| grant.access_grant().account);
         drop(state);
         registry.cancel(exec_id, ExecCancelReason::Revoked);
+        let reason = format!("exec {exec_id} ended: the grant reached its end");
+        (self.audit)(AccessEntry {
+            kind: AccessKind::Exec { start: None },
+            principal: &self.principal,
+            outcome: Some(AccessEvent::GrantExpired),
+            capability: self.capability,
+            approval: None,
+            approval_id: None,
+            account_profile: account.as_ref().map(AccountProfile::key),
+            account: account.as_ref().and_then(AccountProfile::account_name),
+            reason: Some(&reason),
+        });
         None
     }
 }
@@ -245,4 +277,80 @@ fn same_member_identity(old: &RoomMember, new: &RoomMember) -> bool {
 /// the node of its key.
 fn node_preserved(old: &str, new: &str, public_key: &str) -> bool {
     old == new || (old.is_empty() && new == public_key)
+}
+
+#[cfg(test)]
+mod expiry_audit_tests {
+    use std::sync::{Arc, Mutex};
+
+    use super::GrantEndWatch;
+    use crate::share::access_audit::{access_line, AccessEntry};
+    use crate::share::access_grant::Capability;
+    use crate::share::exec_registry::{ExecRegistry, ExecRegistryLimits};
+    use crate::share::exec_types::ExecId;
+    use crate::share::identity::ShareIdentity;
+    use crate::share::relation_proof::ProvenPrincipal;
+    use crate::share::types::ShareAuthState;
+
+    static SEEN: Mutex<Vec<serde_json::Value>> = Mutex::new(Vec::new());
+
+    fn capture(entry: AccessEntry<'_>) {
+        SEEN.lock().unwrap().push(access_line(&entry));
+    }
+
+    #[test]
+    fn grant_end_watch_logs_grant_expired() {
+        let secret = iroh::SecretKey::from_bytes(&[7; 32]);
+        let node_id = secret.public().to_string();
+        let identity = ShareIdentity {
+            device_id: "host".into(),
+            device_name: "Host".into(),
+            direct_lookup_id: "lookup-host".into(),
+            public_key: node_id.clone(),
+            fingerprint: "fp-host".into(),
+            node_id,
+            iroh_secret: secret,
+            direct_secret: [7; 32],
+        };
+        // No grant allows anything any more: the end has come.
+        let state = ShareAuthState {
+            identity,
+            direct_secret: b"secret".to_vec(),
+            default_direct_exports: Default::default(),
+            direct_contacts: Vec::new(),
+            direct_grants: Vec::new(),
+            rooms: Vec::new(),
+            direct_requests: Vec::new(),
+            direct_request_tombstones: Vec::new(),
+            seen_nonces: Default::default(),
+            direct_online: true,
+            authorization_epoch: 1,
+        };
+        let principal = ProvenPrincipal {
+            relation_kind: "direct".into(),
+            relation_id: String::new(),
+            device_id: "client".into(),
+            device_name: "Client".into(),
+            public_key: "key-client".into(),
+            fingerprint: "fp-client".into(),
+            node_id: "key-client".into(),
+        };
+        let watch = GrantEndWatch::new(
+            Arc::new(Mutex::new(state)),
+            principal,
+            Capability::ExecTerminal,
+            Some(1),
+        )
+        .unwrap()
+        .with_audit(capture);
+        let registry = ExecRegistry::new(ExecRegistryLimits::default());
+        let exec_id = ExecId::parse("ab".repeat(16)).unwrap();
+        assert!(watch.expire(&registry, &exec_id).is_none());
+        let seen = SEEN.lock().unwrap();
+        let line = seen.last().expect("no access-log entry");
+        assert_eq!(line["event"], "grant_expired");
+        assert_eq!(line["kind"], "exec");
+        assert_eq!(line["capability"], "exec_terminal");
+        assert!(line["reason"].as_str().unwrap().contains(&"ab".repeat(16)));
+    }
 }

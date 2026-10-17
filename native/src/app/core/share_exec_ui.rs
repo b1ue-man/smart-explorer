@@ -1,11 +1,29 @@
+//! Tab „Befehle“ and the section „Zugriff“ of a device (PRM-M9): the open
+//! requests on top, one line per device with its access, „Ändern…“ and
+//! „Einstellungen“, then the jobs and this host's access log; the card of one
+//! device with its access, „Ändern…“ (the access dialog,
+//! `share_access_dialog_ui.rs`) and „Zugriff entziehen“. Every change goes
+//! to the worker through `Access::MutateGrant` at the revision shown.
 use super::App;
 use crate::app::theme;
+use crate::share::access_grant::{AccessGrant, AccessGrantChange, Capability, CapabilityDecision};
 use eframe::egui::{self, RichText};
 
+#[path = "share_access_dialog_ui.rs"]
+mod access_dialog;
+#[path = "share_access_room_ui.rs"]
+mod access_room;
+#[path = "share_access_approvals_ui.rs"]
+mod approvals_ui;
 #[path = "share_exec_log_ui.rs"]
 mod log_ui;
 #[path = "share_exec_programs_ui.rs"]
 mod programs_ui;
+
+#[cfg(test)]
+use access_dialog::{activation_ready, activation_warning, exec_warning};
+use access_dialog::{AccessDraft, DialogAction};
+pub(in crate::app) use access_room::ui_room_access;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ExecDeviceView {
@@ -18,35 +36,28 @@ struct ExecDeviceView {
     enabled: bool,
     policy_revision: u64,
     base_authorized: bool,
-    run_as: crate::share::ExecRunAs,
     programs: Vec<String>,
+    /// The access right: account, decisions and end (C1).
+    access: AccessGrant,
+    /// Wire room id of a room member.
+    room_id: Option<String>,
 }
 
-/// A grant change from the cards: target, enabled, and new run-as settings
-/// (`None` keeps the grant's own).
-type ExecAction = (
-    crate::share::ExecGrantTarget,
-    bool,
-    Option<crate::share::ExecGrantSettings>,
-);
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct ExecWarning {
-    full_access: String,
-    elevated: Option<&'static str>,
-}
-
-/// Page „Befehle“: one line per device with its Exec state, account and
-/// program list; „Einstellungen“ returns the target key whose card the
-/// caller opens. Below: the jobs and this host's audit log.
+/// Tab „Befehle“: the open requests, one line per device with its access,
+/// the jobs and the access log; „Einstellungen“ returns the target key whose
+/// card the caller opens.
 pub(in crate::app) fn ui_exec_overview(app: &mut App, ui: &mut egui::Ui) -> Option<String> {
+    approvals_ui::ui_pending(ui);
     let views = exec_device_views(&app.share_profiles);
     intro(ui);
     let provider = cached_provider_status(ui);
     provider_line(ui, &provider);
-    let mut open = None;
+    let now = crate::share::core_now_secs();
+    let (mut open, mut edit) = (None, None);
     if views.is_empty() {
-        ui.label("Keine exakten Direkt-Freigaben oder Raummitglieder vorhanden.");
+        ui.label(
+            "Noch kein gekoppeltes Gerät und kein Raummitglied, dem Zugriff gegeben werden kann.",
+        );
     }
     for view in &views {
         ui.horizontal_wrapped(|ui| {
@@ -56,16 +67,23 @@ pub(in crate::app) fn ui_exec_overview(app: &mut App, ui: &mut egui::Ui) -> Opti
                     .small()
                     .color(theme::muted(ui)),
             );
-            let (color, state) = state_line(ui, view);
-            ui.colored_label(color, state);
-            if view.enabled {
-                ui.label(format!("als {}", run_as_label(&view.run_as, &provider)));
+            let text = access_text(view, &provider.user_label, now);
+            ui.colored_label(state_color(ui, view, now), text);
+            if ui
+                .add_enabled(view.base_authorized, egui::Button::new("Ändern…"))
+                .clicked()
+            {
+                edit = Some(view.clone());
             }
             if ui.button("Einstellungen").clicked() {
                 open = Some(view.target_key.clone());
             }
         });
     }
+    if let Some(view) = edit {
+        open_dialog(ui.ctx(), &app.share_profiles, &view);
+    }
+    run_dialog(app, ui.ctx(), &views, &provider);
     ui.separator();
     crate::app::share_exec_jobs_ui::ui_exec_jobs(ui);
     ui.separator();
@@ -73,22 +91,78 @@ pub(in crate::app) fn ui_exec_overview(app: &mut App, ui: &mut egui::Ui) -> Opti
     open
 }
 
-/// The full card of one Exec target (status, account, program list,
-/// activation); `false` when the key names no current target.
+/// The access section of one device (device page and tab „Befehle“);
+/// `false` when the key names no current device.
 pub(in crate::app) fn ui_exec_target(app: &mut App, ui: &mut egui::Ui, target_key: &str) -> bool {
-    let Some(view) = exec_device_views(&app.share_profiles)
-        .into_iter()
+    let views = exec_device_views(&app.share_profiles);
+    let Some(view) = views
+        .iter()
         .find(|view| view.target_key == target_key)
+        .cloned()
     else {
         return false;
     };
     let provider = cached_provider_status(ui);
     provider_line(ui, &provider);
-    let mut action = None;
-    exec_device_card(ui, &view, &provider, &mut action);
-    if let Some((target, enabled, settings)) = action {
-        apply_exec_grant(app, target, enabled, settings);
+    let now = crate::share::core_now_secs();
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new(&view.device_name).strong());
+        ui.label(&view.relation);
+    });
+    ui.horizontal_wrapped(|ui| {
+        ui.label(format!("Geräte-ID: {}", view.device_id));
+        ui.label("Fingerabdruck:");
+        ui.monospace(&view.fingerprint);
+    });
+    for (capability, label) in [
+        (Capability::ExecCommands, "Befehle"),
+        (Capability::ExecTerminal, "Terminal"),
+    ] {
+        let decision = view.access.decision_at(capability, now);
+        ui.label(format!("{label}: {}", decision_word(decision)));
     }
+    let account = view.access.account.label(&provider.user_label);
+    ui.label(format!("Ausführen als: {account}"));
+    if !view.programs.is_empty() {
+        let programs = view.programs.join(", ");
+        ui.label(format!(
+            "Nur diese Programme (keine Shell, kein Terminal): {programs}"
+        ));
+    }
+    ui.label(match view.access.valid_until {
+        Some(end) if view.access.expired_at(now) => format!("Abgelaufen am {}", end_text(end)),
+        Some(end) => format!("Gültig bis {}", end_text(end)),
+        None => "Gültig: unbegrenzt".into(),
+    });
+    ui.small(format!("Revision {}", view.policy_revision));
+    if !view.base_authorized {
+        let text = "Die Freigabe dieses Geräts ist inaktiv; Zugriff kann erst nach der Freigabe eingestellt werden.";
+        ui.colored_label(theme::warning(ui), text);
+    }
+    let (mut edit, mut revoke) = (false, false);
+    ui.horizontal_wrapped(|ui| {
+        edit = ui
+            .add_enabled(view.base_authorized, egui::Button::new("Ändern…"))
+            .clicked();
+        if view.access.grants_any() {
+            revoke = ui
+                .button("Zugriff entziehen")
+                .on_hover_text(access_dialog::NARROWING)
+                .clicked();
+        }
+    });
+    if edit {
+        open_dialog(ui.ctx(), &app.share_profiles, &view);
+    }
+    if revoke {
+        let capabilities = Capability::ALL.map(|capability| (capability, CapabilityDecision::Off));
+        let change = AccessGrantChange {
+            capabilities: capabilities.into_iter().collect(),
+            ..AccessGrantChange::default()
+        };
+        apply_access(app, &view, change, view.policy_revision);
+    }
+    run_dialog(app, ui.ctx(), &views, &provider);
     true
 }
 
@@ -102,12 +176,18 @@ pub(in crate::app) fn room_target_key(room_id: &str, device_id: &str, fingerprin
     format!("room/{room_id}/{device_id}/{fingerprint}")
 }
 
-/// „aus“, „volle Shell“ or the program count of a target, for device pages.
-pub(in crate::app) fn exec_summary(app: &App, target_key: &str) -> Option<String> {
+/// The access of a target as one line, for device pages.
+pub(in crate::app) fn exec_summary(
+    app: &App,
+    ui: &mut egui::Ui,
+    target_key: &str,
+) -> Option<String> {
+    let own = cached_provider_status(ui).user_label;
+    let now = crate::share::core_now_secs();
     exec_device_views(&app.share_profiles)
         .into_iter()
         .find(|view| view.target_key == target_key)
-        .map(|view| summary(&view))
+        .map(|view| access_text(&view, &own, now))
 }
 
 fn summary(view: &ExecDeviceView) -> String {
@@ -119,247 +199,154 @@ fn summary(view: &ExecDeviceView) -> String {
     }
 }
 
-fn state_line(ui: &egui::Ui, view: &ExecDeviceView) -> (egui::Color32, String) {
-    let color = match (view.enabled, view.programs.is_empty()) {
-        (true, true) => theme::danger(ui),
-        (true, false) => theme::warning(ui),
-        (false, _) => theme::success(ui),
-    };
-    (color, format!("Befehle: {}", summary(view)))
+fn decision_word(decision: CapabilityDecision) -> &'static str {
+    match decision {
+        CapabilityDecision::Off => "aus",
+        CapabilityDecision::Ask => "mit Rückfrage",
+        CapabilityDecision::Allow => "erlaubt",
+    }
+}
+
+/// „Befehle: erlaubt · Terminal: erlaubt · als {Konto}“ (C6), or „aus“.
+fn access_text(view: &ExecDeviceView, own_label: &str, now: i64) -> String {
+    let access = &view.access;
+    if !access.grants_exec() || access.expired_at(now) {
+        let ended = access.grants_exec() && access.expired_at(now);
+        return if ended {
+            "aus (abgelaufen)".into()
+        } else {
+            "aus".into()
+        };
+    }
+    let mut commands = decision_word(access.decision(Capability::ExecCommands)).to_string();
+    if !view.programs.is_empty() && view.enabled {
+        commands = format!("{commands} ({})", summary(view));
+    }
+    let terminal = decision_word(access.decision(Capability::ExecTerminal));
+    let account = access.account.label(own_label);
+    let end = access
+        .valid_until
+        .map(|end| format!(" · bis {}", end_text(end)))
+        .unwrap_or_default();
+    format!("Befehle: {commands} · Terminal: {terminal} · als {account}{end}")
+}
+
+fn state_color(ui: &egui::Ui, view: &ExecDeviceView, now: i64) -> egui::Color32 {
+    let access = &view.access;
+    let on = |capability| access.decision_at(capability, now);
+    match (on(Capability::ExecCommands), on(Capability::ExecTerminal)) {
+        (CapabilityDecision::Off, CapabilityDecision::Off) => theme::success(ui),
+        (CapabilityDecision::Allow, _) | (_, CapabilityDecision::Allow)
+            if view.programs.is_empty() =>
+        {
+            theme::danger(ui)
+        }
+        _ => theme::warning(ui),
+    }
+}
+
+/// Local date and time of an end, e.g. `17.10.2026 18:00`.
+fn end_text(end: i64) -> String {
+    chrono::DateTime::<chrono::Utc>::from_timestamp(end, 0)
+        .map(|time| {
+            time.with_timezone(&chrono::Local)
+                .format("%d.%m.%Y %H:%M")
+                .to_string()
+        })
+        .unwrap_or_else(|| end.to_string())
 }
 
 fn intro(ui: &mut egui::Ui) {
     ui.label(
-        RichText::new("REMOTE-AUSFUEHRUNG PRO GERAET")
+        RichText::new("ZUGRIFF PRO GERÄT")
             .small()
             .color(theme::muted(ui)),
     );
     ui.small(
-        "Dateifreigaben erlauben niemals automatisch Codeausfuehrung. Exec gilt nur fuer die angezeigte, exakt gepinnte Geraeteidentitaet.",
+        "Dateifreigaben erlauben nie Befehle. Zugriff gilt nur für die angezeigte, exakt gepinnte Geräteidentität; Befehle laufen mit den Rechten des gewählten Kontos.",
     );
 }
 
 fn provider_line(ui: &mut egui::Ui, provider: &crate::share::ExecProviderStatus) {
     ui.horizontal_wrapped(|ui| {
-        ui.label(format!("Lokale Shell: {}", provider.user_label));
+        ui.label(format!("Mein Konto: {}", provider.user_label));
         ui.label(format!("Kapselung: {}", provider.provider));
         if !provider.available {
             ui.colored_label(
                 theme::danger(ui),
-                format!("nicht verfuegbar — {}", provider.detail),
+                format!("nicht verfügbar — {}", provider.detail),
             );
         }
     });
 }
 
-fn exec_device_card(
-    ui: &mut egui::Ui,
-    view: &ExecDeviceView,
+/// Opens the access dialog of `view` with the accounts this host offers.
+fn open_dialog(ctx: &egui::Context, profiles: &crate::share::ShareProfiles, view: &ExecDeviceView) {
+    let right = (view.access.clone(), view.programs.clone());
+    let accounts = programs_ui::account_options(&exec_device_views(profiles));
+    let draft = AccessDraft::of(
+        &view.target_key,
+        &view.device_name,
+        view.policy_revision,
+        right,
+        accounts,
+    );
+    access_dialog::open(ctx, draft);
+}
+
+fn run_dialog(
+    app: &mut App,
+    ctx: &egui::Context,
+    views: &[ExecDeviceView],
     provider: &crate::share::ExecProviderStatus,
-    action: &mut Option<ExecAction>,
 ) {
-    egui::Frame::group(ui.style()).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new(&view.device_name).strong());
-            ui.label(&view.relation);
-        });
-        ui.label(format!("Geraet-ID: {}", view.device_id));
-        ui.horizontal_wrapped(|ui| {
-            ui.label("Fingerprint:");
-            ui.monospace(&view.fingerprint);
-        });
-        let status = match (view.enabled, view.programs.is_empty()) {
-            (true, true) => "AKTIVIERT — volle Remote-Codeausfuehrung erlaubt",
-            (true, false) => "AKTIVIERT — nur die gelisteten Programme, ohne Shell und Terminal",
-            (false, _) => "DEAKTIVIERT — keine Remote-Codeausfuehrung",
-        };
-        let (color, _) = state_line(ui, view);
-        ui.colored_label(color, RichText::new(status).strong());
-        ui.small(format!("Exec-Policy-Revision: {}", view.policy_revision));
-        ui.label(format!(
-            "Ausfuehren als: {}",
-            run_as_label(&view.run_as, provider)
-        ));
-        if !view.programs.is_empty() {
-            ui.label(format!(
-                "Nur diese Programme (keine Shell, kein Terminal): {}",
-                view.programs.join(", ")
+    let now = crate::share::core_now_secs();
+    let Some(DialogAction::Apply {
+        key,
+        change,
+        revision,
+    }) = access_dialog::show(ctx, provider, views, now)
+    else {
+        return;
+    };
+    if let Some(view) = views.iter().find(|view| view.target_key == key) {
+        apply_access(app, view, change, revision);
+    }
+}
+
+/// One change at the revision the surface showed; the answer as notice or
+/// error with the next step (C6).
+fn apply_access(app: &mut App, view: &ExecDeviceView, change: AccessGrantChange, revision: u64) {
+    let name = &view.device_name;
+    match crate::daemon::mutate_access_grant(view.target.clone(), change, Some(revision)) {
+        Ok((result, _)) if result.persisted && result.applied && result.error.is_none() => {
+            let text = format!(
+                "Zugriff für {name} gespeichert (Revision {})",
+                result.revision
+            );
+            app.notice = Some((text, std::time::Instant::now()));
+        }
+        Ok((result, _)) => {
+            let detail = result
+                .error
+                .unwrap_or_else(|| "der Worker wendet sie noch an".into());
+            app.error_msg = Some(format!(
+                "Zugriff für {name} nicht vollständig übernommen (gespeichert={}, angewendet={}): {detail}",
+                result.persisted, result.applied
             ));
         }
-
-        if !view.base_authorized {
-            ui.colored_label(
-                theme::warning(ui),
-                "Basisfreigabe ist inaktiv; Exec kann nicht aktiviert werden.",
-            );
+        Err(error) => {
+            let next = if error.contains("changed concurrently") {
+                ". Nächster Schritt: „Ändern…“ erneut öffnen; der Dialog zeigt den aktuellen Stand."
+            } else if error.contains("another account") {
+                ". Nächster Schritt: „Mein Konto“ wählen."
+            } else {
+                ""
+            };
+            app.error_msg = Some(format!("Zugriff für {name} nicht geändert: {error}{next}"));
         }
-        if view.enabled {
-            if ui.button("Exec sofort deaktivieren").clicked() {
-                *action = Some((view.target.clone(), false, None));
-                clear_confirmation(ui, view);
-            }
-            if crate::share::exec_run_as_supported() {
-                account_controls(ui, view, action);
-            }
-            programs_ui::enabled_editor(ui, view, provider, action);
-        } else {
-            activation_controls(ui, view, provider, action);
-        }
-    });
-    ui.add_space(4.0);
-}
-
-/// "Standardnutzer" is the worker's own account, the account every grant
-/// made before run-as existed keeps.
-fn run_as_label(
-    run_as: &crate::share::ExecRunAs,
-    provider: &crate::share::ExecProviderStatus,
-) -> String {
-    match run_as.account_name() {
-        None => format!("Standardnutzer ({})", provider.user_label),
-        Some(name) => format!("Konto {name}"),
     }
-}
-
-/// Account field of a root Linux host: empty means the Standardnutzer.
-fn account_field(ui: &mut egui::Ui, view: &ExecDeviceView) -> String {
-    let id = confirmation_id(view, "account");
-    let mut account = ui.data_mut(|data| {
-        data.get_temp::<String>(id)
-            .unwrap_or_else(|| view.run_as.account_name().unwrap_or_default().to_string())
-    });
-    ui.horizontal_wrapped(|ui| {
-        ui.label("Konto (leer = Standardnutzer):");
-        if ui.text_edit_singleline(&mut account).changed() {
-            ui.data_mut(|data| data.insert_temp(id, account.clone()));
-        }
-    });
-    account.trim().to_string()
-}
-
-fn settings_for(account: &str, programs: &[String]) -> crate::share::ExecGrantSettings {
-    crate::share::ExecGrantSettings {
-        run_as: if account.is_empty() {
-            crate::share::ExecRunAs::Standard
-        } else {
-            crate::share::ExecRunAs::Account {
-                name: account.to_string(),
-            }
-        },
-        programs: programs.to_vec(),
-    }
-}
-
-fn account_controls(ui: &mut egui::Ui, view: &ExecDeviceView, action: &mut Option<ExecAction>) {
-    let account = account_field(ui, view);
-    let changed = account.as_str() != view.run_as.account_name().unwrap_or_default();
-    if ui
-        .add_enabled(changed, egui::Button::new("Konto uebernehmen"))
-        .on_hover_text("Laufende Befehle dieses Geraets enden wie bei jedem Rechtewechsel.")
-        .clicked()
-    {
-        *action = Some((
-            view.target.clone(),
-            true,
-            Some(settings_for(&account, &view.programs)),
-        ));
-        ui.data_mut(|data| data.remove::<String>(confirmation_id(view, "account")));
-    }
-}
-
-fn activation_controls(
-    ui: &mut egui::Ui,
-    view: &ExecDeviceView,
-    provider: &crate::share::ExecProviderStatus,
-    action: &mut Option<ExecAction>,
-) {
-    let armed_id = confirmation_id(view, "armed");
-    let armed = ui.data_mut(|data| data.get_temp::<bool>(armed_id).unwrap_or_default());
-    if !armed {
-        let can_prepare = view.base_authorized;
-        if ui
-            .add_enabled(
-                can_prepare,
-                egui::Button::new("Remote-Ausfuehrung aktivieren …"),
-            )
-            .clicked()
-        {
-            ui.data_mut(|data| data.insert_temp(armed_id, true));
-        }
-        return;
-    }
-
-    let programs = programs_ui::list_editor(ui, view);
-    let account = if crate::share::exec_run_as_supported() {
-        Some(account_field(ui, view))
-    } else {
-        None
-    };
-    let warning = activation_warning(provider, account.as_deref(), &programs);
-    ui.colored_label(
-        theme::danger(ui),
-        RichText::new(&warning.full_access).strong(),
-    );
-    if let Some(elevated) = warning.elevated {
-        ui.colored_label(theme::danger(ui), RichText::new(elevated).strong());
-    }
-    ui.label(if programs.is_empty() {
-        "Dieses Geraet kann danach ohne Befehlsfilter beliebige Programme und Shell-Befehle mit den Rechten des gewaehlten Kontos starten (Standardnutzer: das Konto des Smart-Explorer-Prozesses). Eine Programmliste oben beschraenkt es auf einzelne Programme."
-    } else {
-        "Dieses Geraet kann danach nur die gelisteten Programme mit freien Argumenten und den Rechten des gewaehlten Kontos starten, ohne Shell und Terminal; nur LANG, LC_* und TERM gelten als Umgebung. Enthaelt die Liste eine Shell, einen Interpreter oder ein Programm, das Befehle ausfuehrt, ist das eine volle Shell."
-    });
-
-    // Without an account field the grant keeps its own account; the
-    // settings are sent only when the list differs (as before: `None`).
-    let settings = match &account {
-        Some(account) => Some(settings_for(account, &programs)),
-        None if programs != view.programs => Some(crate::share::ExecGrantSettings {
-            run_as: view.run_as.clone(),
-            programs: programs.clone(),
-        }),
-        None => None,
-    };
-    let invalid = settings
-        .as_ref()
-        .and_then(|settings| settings.validate_for_this_host().err());
-    if let Some(error) = &invalid {
-        ui.colored_label(theme::danger(ui), error);
-    }
-
-    let understood_id = confirmation_id(view, "understood");
-    let mut understood =
-        ui.data_mut(|data| data.get_temp::<bool>(understood_id).unwrap_or_default());
-    let confirm_text = if programs.is_empty() {
-        "Ich bestaetige diese uneingeschraenkte Codeausfuehrung bewusst"
-    } else {
-        "Ich bestaetige diese Codeausfuehrung der gelisteten Programme bewusst"
-    };
-    if ui.checkbox(&mut understood, confirm_text).changed() {
-        ui.data_mut(|data| data.insert_temp(understood_id, understood));
-    }
-    ui.horizontal_wrapped(|ui| {
-        let can_enable =
-            activation_ready(understood, provider, view.base_authorized) && invalid.is_none();
-        if ui
-            .add_enabled(can_enable, egui::Button::new("Exec jetzt aktivieren"))
-            .clicked()
-        {
-            *action = Some((view.target.clone(), true, settings.clone()));
-            clear_confirmation(ui, view);
-        }
-        if ui.button("Abbrechen").clicked() {
-            clear_confirmation(ui, view);
-        }
-    });
-}
-
-fn activation_ready(
-    understood: bool,
-    provider: &crate::share::ExecProviderStatus,
-    base_authorized: bool,
-) -> bool {
-    understood && provider.available && base_authorized
+    app.share_next_poll_at = std::time::Instant::now();
 }
 
 fn cached_provider_status(ui: &mut egui::Ui) -> crate::share::ExecProviderStatus {
@@ -373,59 +360,6 @@ fn cached_provider_status(ui: &mut egui::Ui) -> crate::share::ExecProviderStatus
     status
 }
 
-fn confirmation_id(view: &ExecDeviceView, part: &'static str) -> egui::Id {
-    egui::Id::new((
-        "share_exec_confirmation",
-        &view.target_key,
-        view.policy_revision,
-        part,
-    ))
-}
-
-fn clear_confirmation(ui: &mut egui::Ui, view: &ExecDeviceView) {
-    for part in ["armed", "understood", "programs_confirm"] {
-        ui.data_mut(|data| data.remove::<bool>(confirmation_id(view, part)));
-    }
-    for part in ["account", "program_input"] {
-        ui.data_mut(|data| data.remove::<String>(confirmation_id(view, part)));
-    }
-    ui.data_mut(|data| data.remove::<Vec<String>>(confirmation_id(view, "programs")));
-}
-
-fn apply_exec_grant(
-    app: &mut App,
-    target: crate::share::ExecGrantTarget,
-    enabled: bool,
-    settings: Option<crate::share::ExecGrantSettings>,
-) {
-    match crate::daemon::mutate_exec_grant(target, enabled, settings) {
-        Ok(result) if result.persisted && result.applied && result.error.is_none() => {
-            let state = if enabled { "aktiviert" } else { "deaktiviert" };
-            app.notice = Some((
-                format!(
-                    "Exec {state}; Policy-Revision {} dauerhaft gespeichert und im Worker angewendet",
-                    result.revision
-                ),
-                std::time::Instant::now(),
-            ));
-            app.share_next_poll_at = std::time::Instant::now();
-        }
-        Ok(result) => {
-            let detail = result
-                .error
-                .unwrap_or_else(|| "Worker-Anwendung steht noch aus".into());
-            app.error_msg = Some(format!(
-                "Exec-Aenderung nicht vollstaendig (gespeichert={}, angewendet={}): {detail}",
-                result.persisted, result.applied
-            ));
-            app.share_next_poll_at = std::time::Instant::now();
-        }
-        Err(error) => {
-            app.error_msg = Some(format!("Exec-Aenderung fehlgeschlagen: {error}"));
-        }
-    }
-}
-
 fn exec_device_views(profiles: &crate::share::ShareProfiles) -> Vec<ExecDeviceView> {
     crate::share::exec_target_views(profiles)
         .into_iter()
@@ -435,7 +369,7 @@ fn exec_device_views(profiles: &crate::share::ShareProfiles) -> Vec<ExecDeviceVi
 
 fn device_view(view: crate::share::ExecTargetView) -> ExecDeviceView {
     let relation = match view.relation {
-        crate::share::ExecTargetRelation::Direct => "Direktgeraet".to_string(),
+        crate::share::ExecTargetRelation::Direct => "Direktgerät".to_string(),
         crate::share::ExecTargetRelation::Room => {
             format!("Raum: {}", view.room_name.as_deref().unwrap_or_default())
         }
@@ -450,45 +384,18 @@ fn device_view(view: crate::share::ExecTargetView) -> ExecDeviceView {
         enabled: view.enabled,
         policy_revision: view.policy_revision,
         base_authorized: view.base_authorized,
-        run_as: view.run_as,
         programs: view.programs,
+        access: view.access,
+        room_id: view.room_id,
     }
 }
 
-fn exec_warning(provider: &crate::share::ExecProviderStatus) -> ExecWarning {
-    ExecWarning {
-        full_access: format!("FULL {} CODE EXECUTION", provider.user_label),
-        elevated: provider.elevated.then_some(
-            if provider.user_label.eq_ignore_ascii_case("root") {
-                "REMOTE ROOT SHELL"
-            } else {
-                "REMOTE ADMINISTRATOR SHELL"
-            },
-        ),
-    }
-}
-
-/// The warning of `se share grants exec enable` for the chosen account and
-/// list: the full shell, or the listed programs; the elevated shell warning
-/// whenever the device runs as the (elevated) Standardnutzer.
-fn activation_warning(
-    provider: &crate::share::ExecProviderStatus,
-    account: Option<&str>,
-    programs: &[String],
-) -> ExecWarning {
-    let named = account.filter(|account| !account.is_empty());
-    let label = named.unwrap_or(provider.user_label.as_str());
-    let base = exec_warning(provider);
-    ExecWarning {
-        full_access: if programs.is_empty() {
-            format!("FULL {label} CODE EXECUTION")
-        } else {
-            format!("{label} EXECUTION OF {}", programs.join(", "))
-        },
-        elevated: if named.is_some() { None } else { base.elevated },
-    }
-}
-
+#[cfg(test)]
+#[path = "share_access_lists_tests.rs"]
+mod access_lists_tests;
+#[cfg(test)]
+#[path = "share_access_ui_tests.rs"]
+mod access_ui_tests;
 #[cfg(test)]
 #[path = "share_exec_ui_tests.rs"]
 mod tests;
