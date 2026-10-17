@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SPDX-License-Identifier: MIT
+  Interop harness of the task suite rechte-desktop-tresore-task (plan.md D3; strang-tresore.md VLT-M14).
+  Only the remote task suite builds it (job linux-core, stage vault-interop). CryptoFS 2.11.0 comes from
+  Maven Central at run time; no CryptoFS jar is committed, shipped, uploaded as artifact or cached.
+  CryptoFS 2.11.0 is compiled with maven.compiler.release 25, so the harness needs Java 25.
+  The suite passes -Drdt.build.directory=<folder outside the checkout's uploads> and
+  -Dmaven.repo.local=<temporary repository>.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>app.smartexplorer.task</groupId>
+  <artifactId>vault-task-interop</artifactId>
+  <version>0.0.0-task</version>
+  <packaging>jar</packaging>
+  <name>vault-task-interop</name>
+  <description>Reads, writes and checks Cryptomator vaults with CryptoFS for the task suite (never shipped).</description>
+
+  <licenses>
+    <license>
+      <name>MIT</name>
+      <url>https://opensource.org/licenses/MIT</url>
+    </license>
+  </licenses>
+
+  <properties>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <maven.compiler.release>25</maven.compiler.release>
+    <cryptofs.version>2.11.0</cryptofs.version>
+    <rdt.build.directory>${project.basedir}/target</rdt.build.directory>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.cryptomator</groupId>
+      <artifactId>cryptofs</artifactId>
+      <version>${cryptofs.version}</version>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <directory>${rdt.build.directory}</directory>
+    <sourceDirectory>${project.basedir}</sourceDirectory>
+    <finalName>vault-task-interop</finalName>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.14.0</version>
+        <configuration>
+          <includes>
+            <include>VaultTaskInterop.java</include>
+          </includes>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-dependency-plugin</artifactId>
+        <version>3.8.1</version>
+        <executions>
+          <execution>
+            <id>copy-runtime-dependencies</id>
+            <phase>package</phase>
+            <goals>
+              <goal>copy-dependencies</goal>
+            </goals>
+            <configuration>
+              <outputDirectory>${project.build.directory}/lib</outputDirectory>
+              <includeScope>runtime</includeScope>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <version>3.4.2</version>
+        <configuration>
+          <archive>
+            <manifest>
+              <mainClass>VaultTaskInterop</mainClass>
+              <addClasspath>true</addClasspath>
+              <classpathPrefix>lib/</classpathPrefix>
+            </manifest>
+          </archive>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>
