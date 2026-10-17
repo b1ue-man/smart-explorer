@@ -8,12 +8,10 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
-#[path = "exec_supervisor_account.rs"]
-mod account;
-
 use super::exec_pty;
 use crate::share::exec_supervisor_protocol::{
-    recv_command, send_event, SupervisorCommand, SupervisorEvent, SupervisorExit, SupervisorStart,
+    recv_command, send_event, RunAsAccount, SupervisorCommand, SupervisorEvent, SupervisorExit,
+    SupervisorStart,
 };
 use crate::share::exec_terminal::ExecTerminalSize;
 use crate::share::exec_types::ExecCommand;
@@ -259,6 +257,12 @@ fn start_streams(
 /// supervisor keeps no descriptor of the slave once this returns: the output
 /// ends when the job's processes have closed theirs.
 fn spawn(start: &SupervisorStart, policy: &SpawnPolicy<'_>) -> io::Result<(Root, Option<OwnedFd>)> {
+    if let Some(account) = &start.account {
+        if policy.intermediate.is_some() {
+            return Err(invalid("a run-as account needs the Linux systemd host"));
+        }
+        require_account_identity(account)?;
+    }
     let terminal = start.request.terminal.as_ref();
     let mut command = match (&start.request.command, terminal) {
         (ExecCommand::Argv { program, args }, None) => {
@@ -282,10 +286,9 @@ fn spawn(start: &SupervisorStart, policy: &SpawnPolicy<'_>) -> io::Result<(Root,
     command.env_clear().envs(&start.environment);
     let master = match terminal {
         Some(request) => {
+            // In an account unit this process is the account, so the
+            // terminal it opens belongs to the account already.
             let pty = exec_pty::open_pair(request.size)?;
-            if let Some(account) = &start.account {
-                account::hand_terminal(&pty.slave, account)?;
-            }
             exec_pty::attach_slave(&mut command, pty.slave, request)?;
             Some(pty.master)
         }
@@ -304,6 +307,9 @@ fn spawn(start: &SupervisorStart, policy: &SpawnPolicy<'_>) -> io::Result<(Root,
             .filter(|home| !home.is_empty())
             .map(String::as_str)
     });
+    // An account unit has entered the working directory already, with the
+    // account's own rights (`WorkingDirectory=`); a missing home leaves the
+    // job in `/`, as with sshd.
     if let Some(cwd) = cwd.filter(|_| start.account.is_none()) {
         command.current_dir(cwd);
     }
@@ -322,22 +328,6 @@ fn spawn(start: &SupervisorStart, policy: &SpawnPolicy<'_>) -> io::Result<(Root,
             None
         }
     };
-    // Registered last: the switch runs after the session/terminal setup and
-    // enters the working directory with the account's own rights.
-    if let Some(account) = &start.account {
-        if intermediate.is_some() {
-            return Err(invalid("a run-as account needs the Linux systemd host"));
-        }
-        // As with sshd, an account whose home is missing starts in `/`; a
-        // working directory the device asked for has to exist.
-        let home_fallback = start.request.cwd.is_none();
-        account::switch_to(
-            &mut command,
-            account,
-            cwd.unwrap_or(account.home.as_str()),
-            home_fallback,
-        )?;
-    }
     let mut root = Root {
         child: command.spawn()?,
         intermediate,
@@ -453,6 +443,32 @@ fn send_locked_event(
         .lock()
         .map_err(|_| io::Error::other("supervisor writer lock poisoned"))?;
     send_event(&mut *writer, &event)
+}
+
+/// A job of another account runs only in its account unit, where systemd
+/// made this supervisor the account (`User=`, PAM) before its first
+/// instruction (PRM-M5). The supervisor never switches accounts itself: it
+/// refuses a start whose account it is not, and root is never such an
+/// account.
+fn require_account_identity(account: &RunAsAccount) -> io::Result<()> {
+    // SAFETY: the four calls only read this process's ids.
+    let ids = unsafe {
+        (
+            libc::getuid(),
+            libc::geteuid(),
+            libc::getgid(),
+            libc::getegid(),
+        )
+    };
+    if account.uid != 0 && ids == (account.uid, account.uid, account.gid, account.gid) {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "this supervisor does not run as the job's account; another account's job runs \
+             only in its account unit",
+        ))
+    }
 }
 
 fn invalid(message: &'static str) -> io::Error {
