@@ -1,0 +1,153 @@
+use super::*;
+
+const FRAME_US: u64 = 33_333;
+const FRAME_BYTES: u64 = 25_000;
+
+/// Sends frame `index` of a 30 frames/s stream and acknowledges it; the
+/// viewer receives it `delay_us` after sending (both clocks equal here).
+fn frame(rate: &mut RateController, index: u64, delay_us: u64, keyframe: bool) -> DelaySignal {
+    let send_us = index * FRAME_US;
+    rate.on_frame_sent(FRAME_BYTES, send_us);
+    let sample = AckSample {
+        send_us,
+        recv_us: send_us + delay_us,
+        bytes: FRAME_BYTES,
+        keyframe,
+    };
+    rate.on_frame_acked(sample, send_us + delay_us + 10_000)
+}
+
+#[test]
+fn screen_task_rate_control_backs_off_on_delay_gradient() {
+    let mut rate = RateController::new(PathKind::Direct, 0);
+    assert_eq!(rate.target_bps(), START_DIRECT_BPS);
+    assert_eq!(
+        RateController::new(PathKind::Relay, 0).target_bps(),
+        START_RELAY_BPS
+    );
+
+    // Two seconds of 6 Mbit/s over a constant 20 ms path: no overuse, and
+    // the target grows (by 1.08 per second while the encoder uses it).
+    let signals: Vec<DelaySignal> = (0..60)
+        .map(|index| frame(&mut rate, index, 20_000, false))
+        .collect();
+    assert!(signals[..MIN_DELAY_POINTS - 1]
+        .iter()
+        .all(|signal| *signal == DelaySignal::Learning));
+    assert!(signals[MIN_DELAY_POINTS..]
+        .iter()
+        .all(|signal| *signal == DelaySignal::Increase));
+    let grown = rate.target_bps();
+    assert!(grown > START_DIRECT_BPS, "target grew to {grown}");
+    assert!(
+        grown < START_DIRECT_BPS * 12 / 10,
+        "at most 1.08 per second"
+    );
+
+    // A queue builds up: every frame arrives 6 ms later than the one
+    // before (slope 0.18). Once the window shows it, overuse holds the
+    // target twice, then lowers it to 0.85 × the receive rate.
+    let mut signals = Vec::new();
+    for step in 0..30 {
+        let signal = frame(&mut rate, 60 + step, 20_000 + (step + 1) * 6_000, false);
+        signals.push(signal);
+        if signal == DelaySignal::Decrease {
+            break;
+        }
+    }
+    assert_eq!(signals.last(), Some(&DelaySignal::Decrease));
+    let before = &signals[signals.len() - 3..signals.len() - 1];
+    assert_eq!(before, [DelaySignal::Hold, DelaySignal::Hold]);
+    let receive = rate.receive_rate_bps().unwrap();
+    let target = rate.target_bps();
+    assert_eq!(target, (DECREASE_FACTOR * receive as f64).round() as u64);
+    assert!(target < grown && receive < grown);
+
+    // The delay window starts over after a decrease and after a key frame,
+    // whose size shows as delay: neither lowers the target again at once.
+    assert_eq!(frame(&mut rate, 100, 400_000, false), DelaySignal::Learning);
+    assert_eq!(frame(&mut rate, 101, 900_000, true), DelaySignal::Learning);
+    assert_eq!(rate.target_bps(), target);
+
+    // A move onto the relay caps the target at the relay start value.
+    let mut moving = RateController::new(PathKind::Direct, 0);
+    moving.set_path(PathKind::Relay);
+    assert_eq!(moving.path(), PathKind::Relay);
+    assert_eq!(moving.target_bps(), START_RELAY_BPS);
+}
+
+#[test]
+fn screen_task_rate_control_loss_rules() {
+    let mut rate = RateController::new(PathKind::Direct, 0);
+    // The first reading only sets the baseline: counters are cumulative.
+    assert_eq!(rate.on_loss_counters(1_000, 0), None);
+    assert_eq!(rate.target_bps(), START_DIRECT_BPS);
+    // Above 10 %: × (1 − 0.5 p).
+    assert_eq!(rate.on_loss_counters(2_000, 200), Some(0.2));
+    assert_eq!(rate.target_bps(), 5_400_000);
+    // 2–10 %: hold.
+    assert_eq!(rate.on_loss_counters(3_000, 250), Some(0.05));
+    assert_eq!(rate.target_bps(), 5_400_000);
+    // Below 2 %: × 1.05.
+    assert_eq!(rate.on_loss_counters(4_000, 260), Some(0.01));
+    assert_eq!(rate.target_bps(), 5_670_000);
+    // Both boundaries hold: exactly 10 % and exactly 2 %.
+    assert_eq!(rate.on_loss_counters(5_000, 360), Some(0.1));
+    assert_eq!(rate.target_bps(), 5_670_000);
+    assert_eq!(rate.on_loss_counters(6_000, 380), Some(0.02));
+    assert_eq!(rate.target_bps(), 5_670_000);
+    // Growth from loss never passes the delay-based target.
+    for second in 0..10 {
+        rate.on_loss_counters(7_000 + second * 1_000, 380);
+    }
+    assert_eq!(rate.target_bps(), START_DIRECT_BPS);
+    // Counters that go backwards or do not move change nothing.
+    let before = rate.target_bps();
+    assert_eq!(rate.on_loss_counters(100, 0), None);
+    assert_eq!(rate.on_loss_counters(100, 0), None);
+    assert_eq!(rate.target_bps(), before);
+    // Total loss halves the target every second, down to 150 kbit/s.
+    for second in 1..=40 {
+        rate.on_loss_counters(100 + second * 1_000, second * 1_000);
+    }
+    assert_eq!(rate.target_bps(), MIN_BITRATE_BPS);
+    // More lost than sent counts as total loss.
+    assert_eq!(rate.on_loss_counters(50_000, 90_000), Some(1.0));
+}
+
+#[test]
+fn screen_task_rate_control_quality_ladder() {
+    let source = FrameSize::new(1920, 1080);
+    // 6 Mbit/s carries 1080p at the full 30 frames/s.
+    assert_eq!(
+        quality_for(6_000_000, source, 30),
+        Quality {
+            fps: 30,
+            size: source
+        }
+    );
+    // Lower targets lower the frame rate first, down to 10/s ...
+    assert_eq!(quality_for(2_000_000, source, 30).size, source);
+    assert_eq!(quality_for(2_000_000, source, 30).fps, 19);
+    // ... then the resolution by 0.75 per step, down to a long edge of 320.
+    let low = quality_for(500_000, source, 30);
+    assert_eq!(low.fps, MIN_LADDER_FPS);
+    assert_eq!(low.size, FrameSize::new(1080, 607));
+    assert_eq!(
+        quality_for(MIN_BITRATE_BPS, source, 30).size,
+        FrameSize::new(607, 341)
+    );
+    let bottom = quality_for(10_000, source, 30).size;
+    assert_eq!(bottom, FrameSize::new(341, 191));
+    assert!(bottom.width >= MIN_LONG_EDGE);
+    let small_source = FrameSize::new(300, 200);
+    assert_eq!(quality_for(10_000, small_source, 30).size, small_source);
+    // Up only with 25 % headroom, down at once.
+    let current = quality_for(2_000_000, source, 30);
+    assert_eq!(adjust_quality(current, 2_200_000, source, 30), current);
+    assert_eq!(adjust_quality(current, 2_600_000, source, 30).fps, 20);
+    assert_eq!(adjust_quality(current, 1_500_000, source, 30).fps, 14);
+    // A smaller source replaces a larger current size.
+    let small = FrameSize::new(1280, 720);
+    assert_eq!(adjust_quality(current, 2_000_000, small, 30).size, small);
+}
