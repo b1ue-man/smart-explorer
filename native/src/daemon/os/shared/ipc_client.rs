@@ -77,7 +77,7 @@ pub fn open_share_backend(
                         };
                         return Ok((label, Arc::new(agent), status));
                     }
-                    IpcResponse::Err { msg } => return Err(msg),
+                    IpcResponse::Err { msg, .. } => return Err(msg),
                     _ => return Err("Unerwartete Worker-Antwort".into()),
                 }
             }
@@ -108,7 +108,7 @@ pub fn exec_share(
         .map_err(|error| error.to_string())?;
     match read_response(&mut stream).map_err(|error| error.to_string())? {
         IpcResponse::ExecResult { result } => Ok(result),
-        IpcResponse::Err { msg } => Err(msg),
+        IpcResponse::Err { msg, .. } => Err(msg),
         _ => Err("Unerwartete Worker-Antwort".into()),
     }
 }
@@ -125,7 +125,7 @@ pub fn refresh_share_worker_checked() -> Result<bool, String> {
     match read_response(&mut stream).map_err(|error| error.to_string())? {
         IpcResponse::RefreshOk { running } => Ok(running),
         IpcResponse::Ok => Ok(true),
-        IpcResponse::Err { msg } => Err(msg),
+        IpcResponse::Err { msg, .. } => Err(msg),
         _ => Err("Unerwartete Worker-Antwort".into()),
     }
 }
@@ -176,7 +176,7 @@ fn share_snapshot_once(drain: bool) -> Result<ShareWorkerSnapshot, String> {
     write_request(&mut stream, &request).map_err(|error| error.to_string())?;
     match read_response(&mut stream).map_err(|error| error.to_string())? {
         IpcResponse::ShareEvents { snapshot } => Ok(*snapshot),
-        IpcResponse::Err { msg } => Err(msg),
+        IpcResponse::Err { msg, .. } => Err(msg),
         _ => Err("Unerwartete Worker-Antwort".into()),
     }
 }

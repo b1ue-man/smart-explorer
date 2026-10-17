@@ -30,7 +30,8 @@ pub(super) fn emit(sink: &Sink, id: u64, frame: &Frame) -> io::Result<()> {
 pub(super) fn error_text(error: &io::Error, credit: bool) -> String {
     match crate::vfs::congestion_of(error) {
         Some(congestion) if credit => busy_message(congestion.retry_after, &congestion.message),
-        _ => crate::agent_proto::transport_error_message(error),
+        _ => crate::vault::wire_error_text(error)
+            .unwrap_or_else(|| crate::agent_proto::transport_error_message(error)),
     }
 }
 

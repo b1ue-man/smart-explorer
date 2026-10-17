@@ -40,7 +40,7 @@ pub fn list_mounts() -> Result<Vec<MountSnapshot>, String> {
         .map_err(|error| format!("Laufwerk-IPC senden: {error}"))?;
     match read_response(&mut stream).map_err(|error| format!("Laufwerk-IPC lesen: {error}"))? {
         IpcResponse::Mounts { mounts } => Ok(mounts),
-        IpcResponse::Err { msg } => Err(msg),
+        IpcResponse::Err { msg, .. } => Err(msg),
         _ => Err("Unerwartete Laufwerk-IPC-Antwort".into()),
     }
 }
@@ -52,7 +52,7 @@ fn mount_request(request: impl FnOnce(String) -> IpcRequest) -> Result<MountSnap
         .map_err(|error| format!("Laufwerk-IPC senden: {error}"))?;
     match read_response(&mut stream).map_err(|error| format!("Laufwerk-IPC lesen: {error}"))? {
         IpcResponse::Mount { mount } => Ok(mount),
-        IpcResponse::Err { msg } => Err(msg),
+        IpcResponse::Err { msg, .. } => Err(msg),
         _ => Err("Unerwartete Laufwerk-IPC-Antwort".into()),
     }
 }
@@ -93,7 +93,7 @@ impl MountHostSession {
             .map_err(|error| format!("Laufwerk-Status lesen: {error}"))?
         {
             IpcResponse::Mount { .. } | IpcResponse::Ok => Ok(()),
-            IpcResponse::Err { msg } => Err(msg),
+            IpcResponse::Err { msg, .. } => Err(msg),
             _ => Err("Unerwartete Laufwerk-Statusantwort".into()),
         }
     }
@@ -137,7 +137,7 @@ pub fn connect_mount_host(id: MountId) -> Result<MountHostSession, String> {
                 session_token,
                 backend_token,
             } => (config, scheme, capabilities, session_token, backend_token),
-            IpcResponse::Err { msg } => return Err(msg),
+            IpcResponse::Err { msg, .. } => return Err(msg),
             _ => return Err("Unerwartete Laufwerk-Host-Antwort".into()),
         };
     if config.id != id {
@@ -190,7 +190,7 @@ fn connect_backend(
         .map_err(|error| format!("Laufwerk-Backend-Antwort lesen: {error}"))?
     {
         IpcResponse::Ok => {}
-        IpcResponse::Err { msg } => return Err(msg),
+        IpcResponse::Err { msg, .. } => return Err(msg),
         _ => return Err("Unerwartete Laufwerk-Backend-Antwort".into()),
     }
     set_stream_timeout(&stream, None);

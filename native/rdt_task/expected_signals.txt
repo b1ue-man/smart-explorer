@@ -256,6 +256,29 @@ vault_task_connection_edit_lists_vault_sites          linux-core:unit  quelle=T4
 vault_task_android_loc_vault_kind                     linux-core:unit  quelle=T468
 vault_task_cli_move_between_vault_and_local_copies    linux-core:unit,windows-core:vault-unit  pfad=cli::target::vault_keys::tests::vault_task_cli_move_between_vault_and_local_copies  quelle=Code-R3a,Hauptagent
 
+# ---- S3 VLT-M4 (U11): linux-core unit, linux-root vault-linux, windows-core vault-windows (T478) ----
+vault_task_session_unlock_once_all_clients        linux-core:unit  pfad=vault::os::session_tests::vault_task_session_unlock_once_all_clients  quelle=T478
+vault_task_session_lock_zeroizes_and_fails_open_handles  linux-core:unit  pfad=vault::os::session_tests::vault_task_session_lock_zeroizes_and_fails_open_handles  quelle=T478
+vault_task_lock_policy_triggers_and_defaults      linux-core:unit  pfad=vault::os::session_lock_tests::vault_task_lock_policy_triggers_and_defaults  quelle=T478
+vault_task_lock_participants_called_before_zeroize  linux-core:unit  pfad=vault::os::session_lock_tests::vault_task_lock_participants_called_before_zeroize  quelle=T478
+vault_task_mount_end_locks_only_without_consumers linux-core:unit  pfad=vault::os::session_lock_tests::vault_task_mount_end_locks_only_without_consumers  quelle=T478
+vault_task_vault_error_envelope_roundtrip_and_legacy_text  linux-core:unit  pfad=agent::agent_error::tests::vault_task_vault_error_envelope_roundtrip_and_legacy_text  quelle=T478,D3-Erhaltung-S3
+vault_task_ipc_err_code_backward_compatible       linux-core:unit  pfad=daemon::ipc_protocol::vault::tests::vault_task_ipc_err_code_backward_compatible  quelle=T478,D3-Erhaltung-S3
+vault_task_remember_password_account_and_forget   linux-core:unit  pfad=vault::os::manage_tests::vault_task_remember_password_account_and_forget  quelle=T478
+vault_task_ipc_vault_requests_token_required      linux-core:unit  pfad=daemon::ipc_protocol::vault::tests::vault_task_ipc_vault_requests_token_required  quelle=T478
+vault_task_seal_unseal_purposes_distinct          linux-core:unit  pfad=vault::os::session_tests::vault_task_seal_unseal_purposes_distinct  quelle=T478
+vault_task_linux_logind_sleep_and_locked_hint_lock  linux-root:vault-linux  ignored fixture=bus  pfad=vault::os::platform::logind_tests::vault_task_linux_logind_sleep_and_locked_hint_lock  quelle=T478
+vault_task_windows_wts_window_dispatch            windows-core:vault-windows  pfad=vault::os::platform::tests::vault_task_windows_wts_window_dispatch  quelle=T478
+
+# ---- S3 VLT-M5 (U11): linux-core unit und vault-interop (T486) ----
+vault_task_create_then_cryptofs_reads             linux-core:vault-interop  ignored fixture=interop  pfad=vault::os::interop_tests::vault_task_create_then_cryptofs_reads  quelle=T486
+vault_task_password_change_then_cryptofs_unlocks_new  linux-core:vault-interop  ignored fixture=interop  pfad=vault::os::interop_tests::vault_task_password_change_then_cryptofs_unlocks_new  quelle=T486
+vault_task_password_change_never_without_masterkey  linux-core:unit  pfad=vault::os::password_tests::vault_task_password_change_never_without_masterkey  quelle=T486
+vault_task_detect_hub_and_format7_messages        linux-core:unit  pfad=vault::os::manage_tests::vault_task_detect_hub_and_format7_messages  quelle=T486
+vault_task_remove_keeps_files_and_refuses_with_job  linux-core:unit  pfad=vault::os::manage_tests::vault_task_remove_keeps_files_and_refuses_with_job  quelle=T486
+vault_task_create_min_password_length_8           linux-core:unit  pfad=vault::os::manage_tests::vault_task_create_min_password_length_8  quelle=T486
+vault_task_recovery_key_reported_unsupported      linux-core:unit  pfad=vault::os::manage_tests::vault_task_recovery_key_reported_unsupported  quelle=T486
+
 # ---- S3 VLT-M7 (U05): schon in U05 umgesetzt (T506, Uebergabe U05) ----
 vault_task_plan_rules_default_single_phase   linux-core:vault-sync  pfad=bisync::apply_reporting::phases_tests::vault_task_plan_rules_default_single_phase  quelle=T506,D3-Erhaltung-S3,Uebergabe-U05
 vault_task_sync_phases_content_before_node   linux-core:vault-sync  pfad=bisync::apply_reporting::phases_tests::vault_task_sync_phases_content_before_node  quelle=T506,Uebergabe-U05
@@ -401,29 +424,6 @@ drive_task_android_mediastore_has_no_provider_files  android-device:drive-androi
 drive_task_stage_names_se_mount_prefix_unchanged  linux-core:unit,windows-core:drive-cli  paket=offen  quelle=L312,D3-Erhaltung-S2
 drive_task_mount_snapshot_json_unchanged          linux-core:unit,windows-core:drive-cli  paket=offen  quelle=L312,D3-Erhaltung-S2
 drive_task_cli_error_texts_unchanged              linux-core:unit,windows-core:drive-cli  paket=offen  quelle=L312,D3-Erhaltung-S2
-
-# ---- S3 VLT-M4 (U11): linux-core unit, linux-root vault-linux, windows-core vault-windows (T478) ----
-vault_task_session_unlock_once_all_clients        linux-core:unit  paket=U11  quelle=T478
-vault_task_session_lock_zeroizes_and_fails_open_handles  linux-core:unit  paket=U11  quelle=T478
-vault_task_lock_policy_triggers_and_defaults      linux-core:unit  paket=U11  quelle=T478
-vault_task_lock_participants_called_before_zeroize  linux-core:unit  paket=U11  quelle=T478
-vault_task_mount_end_locks_only_without_consumers linux-core:unit  paket=U11  quelle=T478
-vault_task_vault_error_envelope_roundtrip_and_legacy_text  linux-core:unit  paket=U11  quelle=T478,D3-Erhaltung-S3
-vault_task_ipc_err_code_backward_compatible       linux-core:unit  paket=U11  quelle=T478,D3-Erhaltung-S3
-vault_task_remember_password_account_and_forget   linux-core:unit  paket=U11  quelle=T478
-vault_task_ipc_vault_requests_token_required      linux-core:unit  paket=U11  quelle=T478
-vault_task_seal_unseal_purposes_distinct          linux-core:unit  paket=U11  quelle=T478
-vault_task_linux_logind_sleep_and_locked_hint_lock  linux-root:vault-linux  fixture=bus  paket=U11  quelle=T478
-vault_task_windows_wts_window_dispatch            windows-core:vault-windows  paket=U11  quelle=T478
-
-# ---- S3 VLT-M5 (U11): linux-core unit und vault-interop (T486) ----
-vault_task_create_then_cryptofs_reads             linux-core:vault-interop  fixture=interop  paket=U11  quelle=T486
-vault_task_password_change_then_cryptofs_unlocks_new  linux-core:vault-interop  fixture=interop  paket=U11  quelle=T486
-vault_task_password_change_never_without_masterkey  linux-core:unit  paket=U11  quelle=T486
-vault_task_detect_hub_and_format7_messages        linux-core:unit  paket=U11  quelle=T486
-vault_task_remove_keeps_files_and_refuses_with_job  linux-core:unit  paket=U11  quelle=T486
-vault_task_create_min_password_length_8           linux-core:unit  paket=U11  quelle=T486
-vault_task_recovery_key_reported_unsupported      linux-core:unit  paket=U11  quelle=T486
 
 # ---- S3 VLT-M6 (U20): linux-core unit und vault-klartext, linux-root vault-klartext-drive (T495, T564) ----
 vault_task_policy_every_sink_has_rule             linux-core:unit  paket=U20  quelle=T495

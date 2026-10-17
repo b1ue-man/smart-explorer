@@ -478,6 +478,7 @@ fn stop_daemon(supervisor: &mut JobSupervisor, share_host: &ShareHost, listener:
     for error in supervisor.cancel_and_join() {
         log(&error);
     }
+    crate::vault::lock_all_for_exit();
     clear_heartbeat();
 }
 

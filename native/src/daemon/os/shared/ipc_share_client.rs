@@ -23,7 +23,7 @@ pub fn share_command(cmd: crate::share::ShareCmd) -> Result<ShareCommandReply, S
     match read_response(&mut stream).map_err(|error| error.to_string())? {
         IpcResponse::Ok => Ok(ShareCommandReply::Applied),
         IpcResponse::ShareCommand { reply } => Ok(reply),
-        IpcResponse::Err { msg } => Err(msg),
+        IpcResponse::Err { msg, .. } => Err(msg),
         _ => Err("Unerwartete Worker-Antwort".into()),
     }
 }

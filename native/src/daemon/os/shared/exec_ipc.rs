@@ -140,7 +140,7 @@ pub fn connect(
     .map_err(|error| error.to_string())?;
     let exec_id = match read_response(&mut stream).map_err(|error| error.to_string())? {
         IpcResponse::ExecReady { exec_id } => exec_id,
-        IpcResponse::Err { msg } => return Err(msg),
+        IpcResponse::Err { msg, .. } => return Err(msg),
         _ => return Err("Unerwartete Worker-Antwort auf Exec-Start".into()),
     };
     set_stream_timeout(&stream, None);

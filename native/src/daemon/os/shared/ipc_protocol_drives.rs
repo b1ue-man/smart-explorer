@@ -55,14 +55,14 @@ pub(crate) fn serve(
         DriveIpcRequest::SetOptions { id, auto_remount } => {
             match host.mounts.set_options(&id, auto_remount) {
                 Ok(mount) => IpcResponse::Mount { mount },
-                Err(msg) => IpcResponse::Err { msg },
+                Err(msg) => IpcResponse::Err { msg, code: None },
             }
         }
         DriveIpcRequest::Restore => {
             super::run_start_reason::restore_drives(host);
             match host.mounts.list() {
                 Ok(mounts) => IpcResponse::Mounts { mounts },
-                Err(msg) => IpcResponse::Err { msg },
+                Err(msg) => IpcResponse::Err { msg, code: None },
             }
         }
     };
@@ -86,7 +86,7 @@ pub(crate) fn set_mount_options(id: MountId, auto_remount: bool) -> Result<Mount
         .map_err(|error| format!("Laufwerk-IPC senden: {error}"))?;
     match read_response(&mut stream).map_err(|error| format!("Laufwerk-IPC lesen: {error}"))? {
         IpcResponse::Mount { mount } => Ok(mount),
-        IpcResponse::Err { msg } => Err(msg),
+        IpcResponse::Err { msg, .. } => Err(msg),
         _ => Err("Unerwartete Laufwerk-IPC-Antwort".into()),
     }
 }

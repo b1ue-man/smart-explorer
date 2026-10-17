@@ -43,12 +43,12 @@ pub(super) fn handle_client(
         ),
         IpcRequest::RefreshShare { .. } => match host.refresh_now() {
             Ok(running) => write_response(&mut stream, &IpcResponse::RefreshOk { running }),
-            Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg }),
+            Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg, code: None }),
         },
         IpcRequest::ShareCommand { cmd, .. } => match host.send_command(cmd) {
             Ok(ShareCommandReply::Applied) => write_response(&mut stream, &IpcResponse::Ok),
             Ok(reply) => write_response(&mut stream, &IpcResponse::ShareCommand { reply }),
-            Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg }),
+            Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg, code: None }),
         },
         IpcRequest::MutateExecGrant {
             target,
@@ -57,7 +57,7 @@ pub(super) fn handle_client(
             ..
         } => match host.mutate_exec_grant(target, enabled, settings) {
             Ok(result) => write_response(&mut stream, &IpcResponse::ExecGrantMutation { result }),
-            Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg }),
+            Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg, code: None }),
         },
         IpcRequest::DrainShareEvents { .. } => {
             let snapshot = bound_snapshot_for_ipc(host.drain_for_ui());
@@ -93,7 +93,7 @@ pub(super) fn handle_client(
                 let read = stream.try_clone()?;
                 serve_backend(read, stream, backend)
             }
-            Err(error) => write_response(&mut stream, &IpcResponse::Err { msg: error }),
+            Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg, code: None }),
         },
         IpcRequest::ProbeShareMount { target, root, .. } => {
             match host.probe_share_mount_capabilities(target, &root) {
@@ -103,12 +103,12 @@ pub(super) fn handle_client(
                         capabilities: capabilities.into(),
                     },
                 ),
-                Err(error) => write_response(&mut stream, &IpcResponse::Err { msg: error }),
+                Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg, code: None }),
             }
         }
         IpcRequest::ExecShare { target, req, .. } => match host.exec_share(target, req) {
             Ok(result) => write_response(&mut stream, &IpcResponse::ExecResult { result }),
-            Err(error) => write_response(&mut stream, &IpcResponse::Err { msg: error }),
+            Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg, code: None }),
         },
         IpcRequest::ExecStream { target, start, .. } => {
             match super::exec_ipc::start_remote(&host, target, start) {
@@ -121,7 +121,7 @@ pub(super) fn handle_client(
                     )?;
                     super::exec_ipc::serve(stream, remote, host.exec_state.clone())
                 }
-                Err(error) => write_response(&mut stream, &IpcResponse::Err { msg: error }),
+                Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg, code: None }),
             }
         }
         IpcRequest::ExecJobs { .. } => write_response(
@@ -138,19 +138,19 @@ pub(super) fn handle_client(
         ),
         IpcRequest::StartMount { config, .. } => match host.mounts.start(config, &host) {
             Ok(mount) => write_response(&mut stream, &IpcResponse::Mount { mount }),
-            Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg }),
+            Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg, code: None }),
         },
         IpcRequest::StopMount { id, .. } => match host.mounts.stop(&id) {
             Ok(mount) => write_response(&mut stream, &IpcResponse::Mount { mount }),
-            Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg }),
+            Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg, code: None }),
         },
         IpcRequest::ListMounts { .. } => match host.mounts.list() {
             Ok(mounts) => write_response(&mut stream, &IpcResponse::Mounts { mounts }),
-            Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg }),
+            Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg, code: None }),
         },
         IpcRequest::RetryMount { id, .. } => match host.mounts.retry(&id, &host) {
             Ok(mount) => write_response(&mut stream, &IpcResponse::Mount { mount }),
-            Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg }),
+            Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg, code: None }),
         },
         IpcRequest::MountHostAttach {
             id, launch_token, ..
@@ -172,7 +172,7 @@ pub(super) fn handle_client(
                     .map_err(eio)?;
                 serve_mount_control(stream, host, id, stop)
             }
-            Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg }),
+            Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg, code: None }),
         },
         IpcRequest::MountHostBackend {
             id, backend_token, ..
@@ -183,7 +183,7 @@ pub(super) fn handle_client(
                 let read = stream.try_clone()?;
                 serve_backend(read, stream, backend)
             }
-            Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg }),
+            Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg, code: None }),
         },
         IpcRequest::MountHostStatus {
             id,
@@ -199,10 +199,11 @@ pub(super) fn handle_client(
             recovery.or_else(|| recovery_required.map(crate::mount::MountRecovery::from_required)),
         ) {
             Ok(_) => write_response(&mut stream, &IpcResponse::Ok),
-            Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg }),
+            Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg, code: None }),
         },
         request @ IpcRequest::Access { .. } => host.serve_extension(stream, request),
         request @ IpcRequest::Drive { .. } => host.serve_extension(stream, request),
+        request @ IpcRequest::Vault { .. } => host.serve_extension(stream, request),
     }
 }
 

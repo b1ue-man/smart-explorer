@@ -176,12 +176,14 @@ fn sync_allowed(restricted: bool, sync_autostart: bool) -> bool {
 /// Requests of the app, `se` and `se mcp` promote, `ShareSnapshot` included
 /// (every caller of `share_worker_snapshot` sends it). The reachability
 /// check (`Ping`), the read-only view of se Desktop (`ShareSnapshotPeek`,
-/// V11) and the login entry itself (`Drive::Restore`) do not; neither does a
-/// drive host, which carries no daemon token.
+/// V11), the vault status (`Vault::Status`, which se Desktop polls) and the
+/// login entry itself (`Drive::Restore`) do not; neither does a drive host,
+/// which carries no daemon token.
 fn request_promotes(req: &IpcRequest) -> bool {
     match req {
         IpcRequest::Ping { .. } | IpcRequest::ShareSnapshotPeek { .. } => false,
         IpcRequest::Drive { req, .. } => req.promotes_daemon(),
+        IpcRequest::Vault { req, .. } => req.promotes_daemon(),
         other => other.daemon_token().is_some(),
     }
 }
