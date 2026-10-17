@@ -40,6 +40,11 @@ pub fn resolve_endpoint(endpoint: &str) -> Result<(BackendHandle, String), Strin
             })?;
             super::connector::open_saved_at(connection, &path)
         }
+        // The cleartext view of an entered vault site; locked without an
+        // unlocked session (`vault_locked`). Never a local path.
+        EndpointSpec::Vault { site, path } => crate::vault::open_vault_location(&site, &path),
+        // The vault's own storage location, without a wrapper (C2.3).
+        EndpointSpec::VaultStore { site } => crate::vault::resolve_vault_store(&site),
     }
 }
 

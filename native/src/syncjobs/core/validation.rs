@@ -287,4 +287,32 @@ mod tests {
         job.target = "/source/backup".into();
         assert!(job.validate().unwrap_err().contains("non-nested"));
     }
+
+    #[test]
+    fn vault_task_generic_sync_rejects_vault_endpoint() {
+        let site = "0123456789abcdef0123456789abcdef";
+        let sides = [
+            format!("vault://{site}/Docs"),
+            format!("VAULT://{site}"),
+            "vault://Mein Tresor/Docs".to_string(),
+            format!("vault-store://{site}"),
+        ];
+        for side in &sides {
+            let mut job = valid_job();
+            job.source = side.clone();
+            let error = job.validate().unwrap_err();
+            assert!(error.contains("vault://"), "{side}: {error}");
+            let mut job = valid_job();
+            job.target = side.clone();
+            assert!(job.validate().is_err(), "{side}");
+        }
+        // Every other side keeps validating as before.
+        let mut job = valid_job();
+        job.target = "sftp://anna@nas:22/backup".into();
+        job.validate().unwrap();
+        job.target = "gdrive:///Backup".into();
+        job.validate().unwrap();
+        job.target = "share://direct/contact-a/Backup".into();
+        job.validate().unwrap();
+    }
 }

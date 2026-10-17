@@ -40,6 +40,52 @@ pub fn is_staging_name(name: &str) -> bool {
         || is_replacement_stage(name)
 }
 
+/// A stage name split around the user file name it belongs to:
+/// `lead + base + tail == name`. Forms without a file part (agent spools,
+/// private and replacement stages) have `base: None` and the whole name in
+/// `tail`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct StageParts<'a> {
+    /// `"."` for the dotted copy and move stages, empty otherwise.
+    pub(crate) lead: &'a str,
+    pub(crate) base: Option<&'a str>,
+    pub(crate) tail: &'a str,
+}
+
+/// The parts of every form `is_staging_name` accepts; `None` for any other
+/// name. Layers that store names in another form (the vault layer, C2.6 of
+/// the vault plan) map only `base` and keep `lead` and `tail`, so the mapped
+/// name is still a stage name of the same form.
+pub(crate) fn split_stage_name(name: &str) -> Option<StageParts<'_>> {
+    let with_base = |lead: &'static str, marker: usize| StageParts {
+        lead,
+        base: Some(&name[lead.len()..marker]),
+        tail: &name[marker..],
+    };
+    if is_unique_stage(name) {
+        let (head, _) = name.rsplit_once('-')?;
+        return Some(with_base("", head.rfind(UNIQUE_MARKER)?));
+    }
+    if is_dotted_stage(name) {
+        let body = name
+            .strip_suffix(".part")
+            .or_else(|| name.strip_suffix(".move"))?;
+        return Some(with_base(".", body.rfind(DOTTED_MARKER)?));
+    }
+    if is_part_stage(name) {
+        let body = name.strip_suffix(".part")?;
+        return Some(with_base("", body.rfind(UNIQUE_MARKER)?));
+    }
+    if is_agent_spool(name) || is_private_stage(name) || is_replacement_stage(name) {
+        return Some(StageParts {
+            lead: "",
+            base: None,
+            tail: name,
+        });
+    }
+    None
+}
+
 /// Recovery siblings are independent of the user's filename length.
 fn is_replacement_stage(name: &str) -> bool {
     name.strip_prefix(".se-replace-")
