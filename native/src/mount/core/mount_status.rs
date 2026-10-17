@@ -1,7 +1,9 @@
 //! Drive state and the outcomes of save and namespace operations. Moved out
 //! of `types.rs` without any change of the serde form (DRV-M1); `types.rs`
-//! re-exports every type, so every caller keeps its path.
+//! re-exports every type, so every caller keeps its path. DRV-M3 adds
+//! `MountedAt` for drives that appear at a folder.
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 use super::types::{DriveLetter, MountConflict};
 
@@ -11,6 +13,11 @@ pub enum MountStatus {
     Mounting,
     Mounted {
         drive: DriveLetter,
+    },
+    /// Mounted at a folder: Linux FUSE drives (DRV-M4) and vault drives
+    /// (contract V2, read through `list_mounts` for S3 K09/K11).
+    MountedAt {
+        path: PathBuf,
     },
     Unmounting,
     RuntimeUnavailable {

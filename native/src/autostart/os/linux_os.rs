@@ -2,6 +2,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 const DESKTOP_FILE: &str = "smart-explorer-sync-daemon.desktop";
+/// Login entry of the drive restore (DRV-M3, strand S2 C2).
+const DRIVES_DESKTOP_FILE: &str = "smart-explorer-drives.desktop";
 
 fn autostart_dir() -> PathBuf {
     std::env::var_os("XDG_CONFIG_HOME")
@@ -172,11 +174,64 @@ fn spawn_daemon(
 }
 
 pub fn disable() -> io::Result<()> {
-    match std::fs::remove_file(desktop_file_path()) {
+    remove_entry(&desktop_file_path())
+}
+
+fn remove_entry(path: &Path) -> io::Result<()> {
+    match std::fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e),
     }
+}
+
+/// The login entry of the drive restore exists (DRV-M3).
+pub fn drive_restore_registered() -> bool {
+    drives_file_path().exists()
+}
+
+/// Creates the login entry of the drive restore or brings its program path up
+/// to date. An entry the desktop switched off (`Hidden=true`,
+/// `X-GNOME-Autostart-enabled=false`) stays as it is.
+pub fn register_drive_restore() -> io::Result<()> {
+    let exe = daemon_exe()?;
+    if !exe.is_file() {
+        // An update replaced the running program; the worker of the new
+        // program writes the entry at its start.
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "the running program was replaced; the drive login entry stays unchanged",
+        ));
+    }
+    write_drive_entry(&drives_file_path(), &exe)
+}
+
+pub fn unregister_drive_restore() -> io::Result<()> {
+    remove_entry(&drives_file_path())
+}
+
+fn drives_file_path() -> PathBuf {
+    autostart_dir().join(DRIVES_DESKTOP_FILE)
+}
+
+fn drive_entry_contents(exe: &Path) -> io::Result<String> {
+    let exec = format!("{} --sync-daemon --drive-restore", quote_exec_path(exe)?);
+    Ok(format!(
+        "[Desktop Entry]\nType=Application\nName=Smart Explorer Drives\nComment=Mount Smart Explorer drives again at login\nExec={exec}\nTerminal=false\nX-GNOME-Autostart-enabled=true\n"
+    ))
+}
+
+fn write_drive_entry(path: &Path, exe: &Path) -> io::Result<()> {
+    let contents = drive_entry_contents(exe)?;
+    if let Ok(body) = std::fs::read_to_string(path) {
+        if body == contents || system_disabled(&body) {
+            return Ok(());
+        }
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, contents)
 }
 
 pub fn spawn_daemon_now() {
@@ -381,6 +436,44 @@ mod tests {
         let se = dir.join("se");
 
         super::refresh_enabled_entry(&entry, &se).unwrap();
+        assert!(!entry.exists());
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn drive_restore_entry_starts_the_restore_and_respects_the_desktop() {
+        let dir = std::env::temp_dir().join(format!(
+            "smart_explorer_autostart_drives_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let entry = dir.join("drives.desktop");
+        let executable = std::path::Path::new("/opt/Smart Explorer/se");
+
+        super::write_drive_entry(&entry, executable).unwrap();
+        assert_eq!(
+            std::fs::read(&entry).unwrap(),
+            concat!(
+                "[Desktop Entry]\n",
+                "Type=Application\n",
+                "Name=Smart Explorer Drives\n",
+                "Comment=Mount Smart Explorer drives again at login\n",
+                "Exec=\"/opt/Smart Explorer/se\" --sync-daemon --drive-restore\n",
+                "Terminal=false\n",
+                "X-GNOME-Autostart-enabled=true\n",
+            )
+            .as_bytes()
+        );
+        let stale = "[Desktop Entry]\nExec=/stale/se --sync-daemon --drive-restore\nHidden=true\n";
+        std::fs::write(&entry, stale).unwrap();
+        super::write_drive_entry(&entry, executable).unwrap();
+        assert_eq!(std::fs::read_to_string(&entry).unwrap(), stale);
+        super::remove_entry(&entry).unwrap();
+        super::remove_entry(&entry).unwrap();
         assert!(!entry.exists());
 
         std::fs::remove_dir_all(dir).ok();

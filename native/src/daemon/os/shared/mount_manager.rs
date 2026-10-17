@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::io;
 use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -11,13 +12,21 @@ use super::ipc_host::ShareHost;
 // A remote callback is allowed to run for five minutes. Eject must not kill a
 // host while Dokany is still legitimately completing that durable flush.
 pub(super) const STOP_GRACE: Duration = Duration::from_secs(330);
+/// Status of a registered drive after a worker start until its restore or a
+/// Retry (text of v0.5.182).
+const RESTART_DETAIL: &str =
+    "Laufwerk nach Daemon-Neustart zur Wiederherstellung bereit; bitte erneut versuchen";
 
 #[path = "mount_manager_state.rs"]
 mod entry_state;
 #[path = "mount_manager_host.rs"]
 mod host;
+#[path = "mount_restore.rs"]
+mod restore;
 #[path = "mount_manager_start_cache.rs"]
 mod start_cache;
+#[path = "mount_manager_start.rs"]
+mod start_path;
 #[path = "mount_manager_capabilities.rs"]
 mod write_capabilities;
 
@@ -30,6 +39,8 @@ pub(super) struct MountManager {
     state: Arc<Mutex<HashMap<String, MountEntry>>>,
     lifecycle: Arc<Mutex<()>>,
     registry_error: Arc<Mutex<Option<String>>>,
+    /// DRV-M3: registry records that survive a clean end (`mount_restore.rs`).
+    retention: Arc<Mutex<restore::Retention>>,
 }
 
 struct MountEntry {
@@ -55,9 +66,21 @@ struct MountEntry {
 
 impl Default for MountManager {
     fn default() -> Self {
-        let (entries, registry_error) = match super::mount_registry::load() {
+        Self::from_registry(super::mount_registry::load(), start_cache::audit_registered)
+    }
+}
+
+impl MountManager {
+    /// The drive table of a starting worker: every registered drive waits
+    /// for its restore (`mount_restore.rs`) or a Retry, with the recovery
+    /// state of the cache audit.
+    fn from_registry(
+        loaded: io::Result<Vec<MountConfig>>,
+        audit: impl FnOnce(&[MountConfig]) -> Vec<MountRecovery>,
+    ) -> Self {
+        let (entries, registry_error) = match loaded {
             Ok(configs) => {
-                let recovery = start_cache::audit_registered(&configs);
+                let recovery = audit(&configs);
                 let entries = configs
                     .into_iter()
                     .zip(recovery)
@@ -65,24 +88,7 @@ impl Default for MountManager {
                         let key = config.id.as_str().to_string();
                         (
                             key,
-                            MountEntry {
-                                config,
-                                status: MountStatus::Failed {
-                                    detail: "Laufwerk nach Daemon-Neustart zur Wiederherstellung bereit; bitte erneut versuchen".into(),
-                                },
-                                backend: None,
-                                capabilities: None,
-                                launch_token: None,
-                                session_token: None,
-                                backend_token: None,
-                                control: None,
-                                child: None,
-                                backend_stream_active: false,
-                                pending_host_failure: None,
-                                host_terminal_failure: false,
-                                registry_recorded: true,
-                                recovery,
-                            },
+                            registered_entry(config, recovery, RESTART_DETAIL.into()),
                         )
                     })
                     .collect();
@@ -98,11 +104,10 @@ impl Default for MountManager {
             state: Arc::new(Mutex::new(entries)),
             lifecycle: Arc::new(Mutex::new(())),
             registry_error: Arc::new(Mutex::new(registry_error)),
+            retention: Arc::new(Mutex::new(restore::Retention::default())),
         }
     }
-}
 
-impl MountManager {
     pub(super) fn start(
         &self,
         config: MountConfig,
@@ -115,114 +120,6 @@ impl MountManager {
         #[cfg(windows)]
         self.ensure_registry_ready()?;
         self.start_locked(config, host, false)
-    }
-
-    fn start_locked(
-        &self,
-        config: MountConfig,
-        host: &ShareHost,
-        registry_recorded: bool,
-    ) -> Result<MountSnapshot, String> {
-        let key = config.id.as_str().to_string();
-        start_cache::insert(self, &key, config.clone(), registry_recorded)?;
-
-        #[cfg(not(windows))]
-        {
-            let _ = host;
-            if let Ok(mut state) = self.state_guard() {
-                state.remove(&key);
-            }
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Unsupported,
-                "unsupported platform: Virtuelle Laufwerke werden nur unter Windows unterstuetzt",
-            )
-            .to_string());
-        }
-
-        #[cfg(windows)]
-        {
-            let cache_root = match start_cache::prepare(self, &key, &config.id) {
-                Ok(path) => path,
-                Err(error) => return self.fail_start(&key, error),
-            };
-            let backend = match super::mount_source::resolve(&config, host).and_then(|backend| {
-                super::rooted_backend::RootedBackend::new(
-                    backend,
-                    config.source.root(),
-                    config.mode,
-                    config.root_security,
-                )
-                .map_err(|error| format!("Laufwerk-Wurzel absichern: {error}"))
-            }) {
-                Ok(backend) => backend,
-                Err(error) => return self.fail_start(&key, error),
-            };
-            let capabilities =
-                super::ipc_protocol::MountBackendCapabilities::from_backend(&backend);
-            if config.mode == crate::mount::MountMode::ReadWrite {
-                let staged_write = capabilities.staged_write();
-                if !staged_write.supports_mounted_writes() {
-                    return self.fail_start(
-                        &key,
-                        write_capabilities::missing(backend.scheme(), staged_write),
-                    );
-                }
-            }
-            if !registry_recorded {
-                if let Err(error) = super::mount_registry::upsert(&config) {
-                    return self.fail_start(&key, format!("Laufwerk-Registry sichern: {error}"));
-                }
-                let mut state = self.state_guard()?;
-                let entry = state
-                    .get_mut(&key)
-                    .ok_or_else(|| "Laufwerk-Start wurde abgebrochen".to_string())?;
-                entry.registry_recorded = true;
-            }
-            let launch_token = match random_token() {
-                Ok(token) => token,
-                Err(error) => return self.fail_start(&key, error),
-            };
-            let Some(ipc_addr) = super::ipc_storage::read_ipc_addr() else {
-                return self.fail_start(&key, "Laufwerk-IPC-Adresse ist nicht verfuegbar".into());
-            };
-            if !ipc_addr.ip().is_loopback() {
-                return self.fail_start(&key, "Laufwerk-IPC-Adresse ist nicht lokal".into());
-            }
-            {
-                let mut state = self.state_guard()?;
-                let entry = state
-                    .get_mut(&key)
-                    .ok_or_else(|| "Laufwerk-Start wurde abgebrochen".to_string())?;
-                entry.backend = Some(backend);
-                entry.capabilities = Some(capabilities);
-                entry.launch_token = Some(launch_token.clone());
-            }
-            match super::mount_process::spawn(&config.id, &launch_token, ipc_addr, &cache_root) {
-                Ok(child) => {
-                    let mut state = self.state_guard()?;
-                    let entry = state
-                        .get_mut(&key)
-                        .ok_or_else(|| "Laufwerk-Start wurde abgebrochen".to_string())?;
-                    entry.child = Some(child);
-                    Ok(snapshot(entry))
-                }
-                Err(error) => self.fail_start(&key, format!("Laufwerk-Host starten: {error}")),
-            }
-        }
-    }
-
-    fn fail_start(&self, key: &str, detail: String) -> Result<MountSnapshot, String> {
-        let mut state = self.state_guard()?;
-        let entry = state
-            .get_mut(key)
-            .ok_or_else(|| "Laufwerk-Start wurde abgebrochen".to_string())?;
-        entry.backend = None;
-        entry.capabilities = None;
-        entry.launch_token = None;
-        entry.pending_host_failure = None;
-        entry.host_terminal_failure = false;
-        entry.status = MountStatus::Failed { detail };
-        Ok(snapshot(entry))
     }
 
     pub(super) fn list(&self) -> Result<Vec<MountSnapshot>, String> {
@@ -257,6 +154,11 @@ impl MountManager {
                     return Ok(snapshot(entry));
                 }
                 if entry.recovery.requires_retention() {
+                    return Ok(snapshot(entry));
+                }
+                if entry.registry_recorded && self.retention().keeps(entry) {
+                    // DRV-M3: a drive that restores at login stays registered
+                    // across a worker stop or an update stop.
                     return Ok(snapshot(entry));
                 }
                 if entry.registry_recorded {
@@ -305,21 +207,23 @@ impl MountManager {
         let entry = state
             .get_mut(key)
             .ok_or_else(|| "Das Laufwerk wird nicht verwaltet".to_string())?;
+        let mut retention = self.retention();
         let Some(child) = entry.child.as_mut() else {
             if entry.recovery.is_clean() {
-                finish_clean(entry);
+                let keep = retention.keeps(entry);
+                finish_clean(entry, keep);
             }
             return Ok(Some(snapshot(entry)));
         };
         let observation = child.try_wait();
         match observation {
             Ok(Some(exit)) => {
-                finish_exit(entry, exit);
+                finish_exit(entry, exit, &mut retention);
                 Ok(Some(snapshot(entry)))
             }
             Ok(None) => Ok(None),
             Err(error) => {
-                entry_state::terminate_after_observation_error(entry, &error);
+                entry_state::terminate_after_observation_error(entry, &error, &mut retention);
                 Ok(Some(snapshot(entry)))
             }
         }
@@ -341,7 +245,7 @@ impl MountManager {
                         let entry = state
                             .get_mut(key)
                             .ok_or_else(|| "Das Laufwerk wird nicht verwaltet".to_string())?;
-                        finish_exit(entry, exit);
+                        finish_exit(entry, exit, &mut self.retention());
                         return Ok(snapshot(entry));
                     }
                     Ok(None) => {}
@@ -378,7 +282,7 @@ impl MountManager {
             let entry = state
                 .get_mut(key)
                 .ok_or_else(|| "Das Laufwerk wird nicht verwaltet".to_string())?;
-            finish_exit(entry, exit);
+            finish_exit(entry, exit, &mut self.retention());
             return Ok(snapshot(entry));
         }
         let mut state = self.state_guard()?;
@@ -386,7 +290,8 @@ impl MountManager {
             .get_mut(key)
             .ok_or_else(|| "Das Laufwerk wird nicht verwaltet".to_string())?;
         if entry.recovery.is_clean() {
-            finish_clean(entry);
+            let keep = self.retention().keeps(entry);
+            finish_clean(entry, keep);
         }
         Ok(snapshot(entry))
     }
@@ -427,6 +332,7 @@ impl MountManager {
         let Ok(mut state) = self.state.lock() else {
             return;
         };
+        let mut retention = self.retention();
         for entry in state.values_mut() {
             let Some(child) = entry.child.as_mut() else {
                 continue;
@@ -434,11 +340,11 @@ impl MountManager {
             let observation = child.try_wait();
             match observation {
                 Ok(Some(exit)) => {
-                    finish_exit(entry, exit);
+                    finish_exit(entry, exit, &mut retention);
                 }
                 Ok(None) => {}
                 Err(error) => {
-                    entry_state::terminate_after_observation_error(entry, &error);
+                    entry_state::terminate_after_observation_error(entry, &error, &mut retention);
                 }
             }
         }
@@ -448,7 +354,8 @@ impl MountManager {
                 && entry.recovery.is_clean()
                 && matches!(entry.status, MountStatus::Unmounted)
             {
-                finish_clean(entry);
+                let keep = retention.keeps(entry);
+                finish_clean(entry, keep);
             }
         }
         // `Unmounted` is reported before the host process returns. Retain its
@@ -457,7 +364,10 @@ impl MountManager {
         state.retain(|_, entry| !removable(entry));
     }
 
+    /// Worker stop. DRV-M3: drives that restore at login keep their
+    /// registry record, so the next worker mounts them again.
     pub(super) fn stop_all(&self) {
+        self.retention().begin_shutdown();
         let ids: Vec<_> = self
             .state
             .lock()
@@ -485,6 +395,14 @@ impl MountManager {
             .map_err(|_| "Laufwerk-Lifecycle ist gesperrt".to_string())
     }
 
+    /// Lock order: `state` before `retention`. The book holds flags and ids
+    /// only, so a poisoned lock keeps its values.
+    fn retention(&self) -> MutexGuard<'_, restore::Retention> {
+        self.retention
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     fn ensure_registry_ready(&self) -> Result<(), String> {
         let error = self
             .registry_error
@@ -494,5 +412,25 @@ impl MountManager {
             Some(error) => Err(error.clone()),
             None => Ok(()),
         }
+    }
+}
+
+/// A registered drive that does not run.
+fn registered_entry(config: MountConfig, recovery: MountRecovery, detail: String) -> MountEntry {
+    MountEntry {
+        config,
+        status: MountStatus::Failed { detail },
+        backend: None,
+        capabilities: None,
+        launch_token: None,
+        session_token: None,
+        backend_token: None,
+        control: None,
+        child: None,
+        backend_stream_active: false,
+        pending_host_failure: None,
+        host_terminal_failure: false,
+        registry_recorded: true,
+        recovery,
     }
 }

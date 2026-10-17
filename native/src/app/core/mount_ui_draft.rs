@@ -1,19 +1,22 @@
-use crate::app::theme;
 use super::mount_peer_roots::{
     begin_peer_probe, discover_peer_mount, poll_peer_probe, PeerDraft, PeerMountDiscovery,
 };
 use super::mount_runtime_ui::install_controls;
 use super::mount_ui::MountUiResult;
 use super::mount_ui_cache_settings::render_cache_settings;
-use super::mount_ui_helpers::{bounded_label, drive_selection_label};
+use super::mount_ui_helpers::bounded_label;
+use super::mount_ui_location::{render_location, LocationDraft};
 use super::prelude::*;
 use super::*;
+use crate::app::theme;
 
 pub(super) struct MountDraft {
     pub(super) source: crate::mount::MountSource,
     source_label: String,
     volume_label: String,
-    drive: crate::mount::DriveSelection,
+    /// Drive letter or folder and „Beim Anmelden automatisch einbinden“
+    /// (DRV-M3, `mount_ui_location.rs`).
+    location: LocationDraft,
     metadata_depth: u8,
     cache_mib: u32,
     system_runtime: bool,
@@ -82,7 +85,7 @@ impl App {
             source,
             source_label: label,
             volume_label: "Smart Explorer".into(),
-            drive: crate::mount::DriveSelection::Automatic,
+            location: LocationDraft::default(),
             metadata_depth: crate::mount::DEFAULT_METADATA_PRELOAD_DEPTH,
             cache_mib: crate::mount::DEFAULT_MOUNT_CACHE_MIB,
             system_runtime: false,
@@ -108,7 +111,7 @@ impl App {
             },
             source_label: discovery.label,
             volume_label: "Smart Explorer".into(),
-            drive: crate::mount::DriveSelection::Automatic,
+            location: LocationDraft::default(),
             metadata_depth: crate::mount::DEFAULT_METADATA_PRELOAD_DEPTH,
             cache_mib: crate::mount::DEFAULT_MOUNT_CACHE_MIB,
             system_runtime: false,
@@ -145,7 +148,7 @@ impl App {
                 ui.label(RichText::new(&draft.source_label).strong());
                 render_root_choice(ui, &mut draft, ctx);
                 ui.add_space(6.0);
-                render_drive_choice(ui, &mut draft);
+                render_location(ui, &mut draft.location);
                 render_metadata_choice(ui, &mut draft);
                 render_cache_settings(ui, &mut draft.cache_mib, &mut draft.system_runtime);
                 ui.horizontal(|ui| {
@@ -237,7 +240,7 @@ impl App {
                     crate::mount::MountConfig::new(
                         id,
                         draft.source.clone(),
-                        draft.drive,
+                        draft.location.drive,
                         mode,
                         bounded_label(&draft.volume_label),
                     )
@@ -256,6 +259,7 @@ impl App {
                 })
             })
             .map(|config| config.with_root_security(root_security))
+            .and_then(|config| draft.location.apply(config))
             .map_err(|error| error.to_string());
         match config {
             Ok(config) => {
@@ -304,30 +308,6 @@ fn render_root_choice(ui: &mut egui::Ui, draft: &mut MountDraft, ctx: &egui::Con
         begin_peer_probe(peer, ctx);
     }
     ui.label(format!("Remote-Wurzel: {}", draft.source.root().as_str()));
-}
-
-fn render_drive_choice(ui: &mut egui::Ui, draft: &mut MountDraft) {
-    ui.horizontal(|ui| {
-        ui.label("Laufwerksbuchstabe:");
-        egui::ComboBox::from_id_salt("mount_drive_letter")
-            .selected_text(drive_selection_label(draft.drive))
-            .show_ui(ui, |ui| {
-                ui.selectable_value(
-                    &mut draft.drive,
-                    crate::mount::DriveSelection::Automatic,
-                    "Automatisch",
-                );
-                for letter in
-                    ('D'..='Z').filter_map(|letter| crate::mount::DriveLetter::parse(letter).ok())
-                {
-                    ui.selectable_value(
-                        &mut draft.drive,
-                        crate::mount::DriveSelection::Letter(letter),
-                        letter.to_string(),
-                    );
-                }
-            });
-    });
 }
 
 fn render_metadata_choice(ui: &mut egui::Ui, draft: &mut MountDraft) {
@@ -425,7 +405,7 @@ fn render_root_security(ui: &mut egui::Ui, draft: &mut MountDraft, ctx: &egui::C
 }
 
 fn draft_ready(draft: &MountDraft) -> bool {
-    if draft.volume_label.trim().is_empty() {
+    if draft.volume_label.trim().is_empty() || draft.location.problem().is_some() {
         return false;
     }
     let Some(safety) = peer_safety(draft) else {
