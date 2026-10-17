@@ -1,3 +1,4 @@
+use super::path_dialect::{posix_components, PathDialect};
 use super::types::BackendRoot;
 use std::io;
 
@@ -23,48 +24,41 @@ impl ProjectedPath {
 #[derive(Clone, Debug)]
 pub struct PathProjector {
     root: BackendRoot,
+    dialect: PathDialect,
 }
 
 impl PathProjector {
+    /// Windows callback paths, the rules of every release before DRV-M1.
     pub fn new(root: BackendRoot) -> Self {
-        Self { root }
+        Self::with_dialect(root, PathDialect::Windows)
+    }
+
+    pub fn with_dialect(root: BackendRoot, dialect: PathDialect) -> Self {
+        Self { root, dialect }
     }
 
     pub fn root(&self) -> &BackendRoot {
         &self.root
     }
 
-    /// Projects an untrusted Windows filesystem callback path below the exact
-    /// configured backend root. No Windows aliasing form is normalized.
+    pub fn dialect(&self) -> PathDialect {
+        self.dialect
+    }
+
+    /// Projects an untrusted filesystem callback path of this projector's
+    /// dialect below the exact configured backend root. No aliasing form is
+    /// normalized.
     pub fn project(&self, callback_path: &str) -> io::Result<ProjectedPath> {
-        if callback_path.contains('\0')
-            || callback_path.encode_utf16().count() > MAX_PATH_UTF16
-            || (!callback_path.is_empty()
-                && !callback_path.starts_with('\\')
-                && !callback_path.starts_with('/'))
-        {
-            return Err(invalid("callback path is not a rooted Windows path"));
-        }
-        if callback_path.is_empty() || matches!(callback_path, "\\" | "/") {
+        let relative = match self.dialect {
+            PathDialect::Windows => windows_relative(callback_path)?,
+            PathDialect::Posix => posix_components(callback_path)?.join("/"),
+        };
+        if relative.is_empty() {
             return Ok(ProjectedPath {
-                relative: String::new(),
+                relative,
                 backend: self.root.as_str().to_string(),
             });
         }
-        if callback_path.starts_with("\\\\")
-            || callback_path.starts_with("//")
-            || callback_path.ends_with('\\')
-            || callback_path.ends_with('/')
-        {
-            return Err(invalid("callback path contains an empty component"));
-        }
-
-        let mut components = Vec::new();
-        for component in callback_path[1..].split(['\\', '/']) {
-            validate_windows_component(component)?;
-            components.push(component);
-        }
-        let relative = components.join("/");
         let backend = join_backend(self.root.as_str(), &relative);
         if !within_root(self.root.as_str(), &backend) {
             return Err(invalid("projected path escapes its backend root"));
@@ -85,6 +79,35 @@ impl PathProjector {
         }
         ancestors
     }
+}
+
+/// The forward-slash relative path of a Windows callback path; empty for the
+/// root. Unchanged rules of every release before DRV-M1.
+fn windows_relative(callback_path: &str) -> io::Result<String> {
+    if callback_path.contains('\0')
+        || callback_path.encode_utf16().count() > MAX_PATH_UTF16
+        || (!callback_path.is_empty()
+            && !callback_path.starts_with('\\')
+            && !callback_path.starts_with('/'))
+    {
+        return Err(invalid("callback path is not a rooted Windows path"));
+    }
+    if callback_path.is_empty() || matches!(callback_path, "\\" | "/") {
+        return Ok(String::new());
+    }
+    if callback_path.starts_with("\\\\")
+        || callback_path.starts_with("//")
+        || callback_path.ends_with('\\')
+        || callback_path.ends_with('/')
+    {
+        return Err(invalid("callback path contains an empty component"));
+    }
+    let mut components = Vec::new();
+    for component in callback_path[1..].split(['\\', '/']) {
+        validate_windows_component(component)?;
+        components.push(component);
+    }
+    Ok(components.join("/"))
 }
 
 pub(crate) fn validate_windows_component(component: &str) -> io::Result<()> {

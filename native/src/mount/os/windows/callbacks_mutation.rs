@@ -74,7 +74,7 @@ pub(super) unsafe extern "system" fn move_file(
             }
             let replace_existing = replace_existing != 0;
             let rename = context.reserve_rename(key, &source, &destination, replace_existing)?;
-            let outcome = context.engine.rename_with_shared_destination(
+            let outcome = context.filesystem.rename_with_shared_destination(
                 &source,
                 &destination,
                 replace_existing,
@@ -173,7 +173,7 @@ pub(super) unsafe extern "system" fn close_file(
                 info.context = 0;
             }
             if let NodeHandle::File(handle) = snapshot.node {
-                if let Err(error) = context.engine.close(handle) {
+                if let Err(error) = context.filesystem.close(handle) {
                     failure.get_or_insert(error);
                 }
             }
@@ -190,7 +190,7 @@ fn flush_for_cleanup(context: &CallbackContext, snapshot: &HandleSnapshot) -> io
     let NodeHandle::File(handle) = snapshot.node else {
         return Ok(());
     };
-    match context.engine.flush(handle)? {
+    match context.filesystem.flush(handle)? {
         FlushOutcome::NoChanges | FlushOutcome::Committed => Ok(()),
         FlushOutcome::CommittedPendingVerification(conflict) | FlushOutcome::Conflict(conflict) => {
             let drive = context.selected_drive()?;

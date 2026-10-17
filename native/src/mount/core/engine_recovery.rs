@@ -1,16 +1,45 @@
-use super::engine::{invalid_data, lock, Entry, EntryState, MountEngine};
 use super::case_semantics::{identity_key, validate_backend_case_path};
+use super::engine::{invalid_data, lock, Entry, EntryState, MountEngine};
 use super::journal::{DeletePhase, PersistedDelete};
 use super::metadata_cache::MetadataCache;
 use super::metadata_point_cache::MetadataPointCache;
-use super::path::{validate_windows_component, PathProjector};
+use super::path::PathProjector;
+use super::path_dialect::PathDialect;
 use super::spool::{prepare_spool_root, WholeFileSpool};
+use super::spool_storage::MountStorage;
 use super::startup::validate_backend_root;
 use super::types::{BackendRoot, DeleteToken, EntryCondition, MountRuntimeConfig};
 use crate::vfs::BackendHandle;
-use std::{collections::{HashMap, HashSet}, io, path::Path, sync::{Arc, Mutex, RwLock, atomic::{AtomicU64, AtomicUsize}}};
+use std::{
+    collections::{HashMap, HashSet},
+    io,
+    path::Path,
+    sync::{
+        atomic::{AtomicU64, AtomicUsize},
+        Arc, Mutex, RwLock,
+    },
+};
 
 impl MountEngine {
+    /// `open_host_cache` with an explicit spool and journal storage (contract
+    /// V1): a vault drive passes its sealed storage, every other drive
+    /// `MountStorage::plain()`, which keeps the bytes of earlier releases.
+    pub fn open_host_cache_with(
+        config: MountRuntimeConfig,
+        backend: BackendHandle,
+        spool_root: impl AsRef<Path>,
+        storage: MountStorage,
+    ) -> io::Result<Self> {
+        Self::open_at_root_with(
+            config,
+            BackendRoot::parse("/")?,
+            backend,
+            spool_root.as_ref(),
+            (false, false),
+            storage,
+        )
+    }
+
     pub(super) fn open_at_root(
         config: MountRuntimeConfig,
         root: BackendRoot,
@@ -19,21 +48,48 @@ impl MountEngine {
         verify_backend_ancestors: bool,
         validate_remote: bool,
     ) -> io::Result<Self> {
+        Self::open_at_root_with(
+            config,
+            root,
+            backend,
+            spool_root,
+            (verify_backend_ancestors, validate_remote),
+            MountStorage::plain(),
+        )
+    }
+
+    /// `checks` = (verify backend ancestors on every projection, validate the
+    /// remote root and recover deletes now).
+    fn open_at_root_with(
+        config: MountRuntimeConfig,
+        root: BackendRoot,
+        backend: BackendHandle,
+        spool_root: &Path,
+        checks: (bool, bool),
+        storage: MountStorage,
+    ) -> io::Result<Self> {
+        let (verify_backend_ancestors, validate_remote) = checks;
         config.metadata.validate()?;
         config.cache.validate()?;
-        let projector = PathProjector::new(root);
+        let projector = PathProjector::with_dialect(root, config.path_dialect);
+        let dialect = projector.dialect();
         let case_sensitive_paths = backend.case_sensitive_paths(projector.root().as_str());
         if validate_remote {
             validate_backend_root(&*backend, projector.root().as_str())?;
         }
         let spool_root = prepare_spool_root(spool_root)?;
-        let (spool, recovered) = WholeFileSpool::open(&spool_root, &config.id)?;
+        let (spool, recovered) = WholeFileSpool::open_with(&spool_root, &config.id, storage)?;
         let spool = Arc::new(spool);
         let mut entries = super::entry_table::EntryTable::new();
         let retirements = Arc::new(super::retirement_queue::RetirementQueue::default());
         let mut spool_names = HashSet::new();
         for persisted in recovered.entries.into_values() {
-            validate_recovered_path(projector.root().as_str(), &persisted.remote_path, false)?;
+            validate_recovered_path(
+                dialect,
+                projector.root().as_str(),
+                &persisted.remote_path,
+                false,
+            )?;
             validate_backend_case_path(
                 case_sensitive_paths,
                 projector.root().as_str(),
@@ -74,7 +130,7 @@ impl MountEngine {
             .ok_or_else(|| invalid_data("delete token space exhausted"))?;
         let mut delete_targets = HashSet::new();
         for (token, delete) in &recovered.deletes {
-            validate_recovered_delete(projector.root().as_str(), *token, delete)?;
+            validate_recovered_delete(dialect, projector.root().as_str(), *token, delete)?;
             validate_backend_case_path(
                 case_sensitive_paths,
                 projector.root().as_str(),
@@ -101,7 +157,7 @@ impl MountEngine {
         let mut namespace_conflicts = HashMap::new();
         for intent in recovered.namespace_conflicts.into_values() {
             let conflict = &intent.conflict;
-            validate_recovered_path(projector.root().as_str(), &conflict.path, false)?;
+            validate_recovered_path(dialect, projector.root().as_str(), &conflict.path, false)?;
             validate_backend_case_path(
                 case_sensitive_paths,
                 projector.root().as_str(),
@@ -109,7 +165,7 @@ impl MountEngine {
             )?;
             let key = identity_key(case_sensitive_paths, &conflict.path);
             if let Some(source) = intent.source_path.as_deref() {
-                validate_recovered_path(projector.root().as_str(), source, false)?;
+                validate_recovered_path(dialect, projector.root().as_str(), source, false)?;
                 validate_backend_case_path(
                     case_sensitive_paths,
                     projector.root().as_str(),
@@ -165,7 +221,6 @@ impl MountEngine {
         }
         Ok(engine)
     }
-
 }
 fn require_below_root(root: &str, path: &str) -> io::Result<()> {
     let valid = path == root
@@ -181,7 +236,12 @@ fn require_below_root(root: &str, path: &str) -> io::Result<()> {
     Ok(())
 }
 
-fn validate_recovered_path(root: &str, path: &str, allow_root: bool) -> io::Result<()> {
+fn validate_recovered_path(
+    dialect: PathDialect,
+    root: &str,
+    path: &str,
+    allow_root: bool,
+) -> io::Result<()> {
     require_below_root(root, path)?;
     if path == root {
         return if allow_root {
@@ -195,23 +255,30 @@ fn validate_recovered_path(root: &str, path: &str, allow_root: bool) -> io::Resu
         .ok_or_else(|| invalid_data("journal path is outside the mount root"))?
         .trim_start_matches('/');
     for component in suffix.split('/') {
-        validate_windows_component(component).map_err(|error| invalid_data(error.to_string()))?;
+        dialect
+            .validate_component(component)
+            .map_err(|error| invalid_data(error.to_string()))?;
     }
     Ok(())
 }
 
-fn validate_recovered_delete(root: &str, token: u64, delete: &PersistedDelete) -> io::Result<()> {
+fn validate_recovered_delete(
+    dialect: PathDialect,
+    root: &str,
+    token: u64,
+    delete: &PersistedDelete,
+) -> io::Result<()> {
     if token == 0 || delete.token != token {
         return Err(invalid_data("delete journal token mismatch"));
     }
-    validate_recovered_path(root, &delete.original_path, false)?;
+    validate_recovered_path(dialect, root, &delete.original_path, false)?;
     if delete.phase == DeletePhase::LocalOnly {
         if delete.is_directory || !delete.quarantine_path.is_empty() {
             return Err(invalid_data("invalid local-only delete journal entry"));
         }
         return Ok(());
     }
-    validate_recovered_path(root, &delete.quarantine_path, false)?;
+    validate_recovered_path(dialect, root, &delete.quarantine_path, false)?;
     let suffix = delete
         .quarantine_path
         .strip_prefix(&delete.original_path)

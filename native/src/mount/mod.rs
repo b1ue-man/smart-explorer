@@ -1,31 +1,15 @@
 //! Remote-drive mounting boundaries.
 
+#[path = "core/baseline_match.rs"]
+mod baseline_match;
 #[path = "core/cache_policy.rs"]
 mod cache_policy;
 #[path = "core/cache_space.rs"]
 mod cache_space;
-#[path = "core/clean_cache.rs"]
-mod clean_cache;
-#[path = "core/entry_lifecycle.rs"]
-mod entry_lifecycle;
-#[path = "core/entry_table.rs"]
-mod entry_table;
-#[path = "core/retirement_queue.rs"]
-mod retirement_queue;
-#[path = "core/engine_recovery.rs"]
-mod engine_recovery;
-#[path = "core/file_commit.rs"]
-mod file_commit;
-#[path = "core/file_commit_stage.rs"]
-mod file_commit_stage;
-#[path = "core/baseline_match.rs"]
-mod baseline_match;
-#[path = "core/materialization.rs"]
-mod materialization;
 #[path = "core/case_semantics.rs"]
 mod case_semantics;
-#[path = "core/peer_names.rs"]
-pub(crate) mod peer_names;
+#[path = "core/clean_cache.rs"]
+mod clean_cache;
 #[path = "core/commit.rs"]
 mod commit;
 #[path = "core/delete.rs"]
@@ -34,27 +18,47 @@ mod delete;
 mod delete_recovery;
 #[path = "core/engine.rs"]
 mod engine;
+#[path = "core/engine_recovery.rs"]
+mod engine_recovery;
+#[path = "core/entry_lifecycle.rs"]
+mod entry_lifecycle;
+#[path = "core/entry_table.rs"]
+mod entry_table;
+#[path = "core/file_commit.rs"]
+mod file_commit;
+#[path = "core/file_commit_stage.rs"]
+mod file_commit_stage;
 #[path = "core/file_io.rs"]
 mod file_io;
-#[path = "core/range_read.rs"]
-mod range_read;
+#[path = "core/frontend.rs"]
+mod frontend;
+#[path = "core/frontend_engine.rs"]
+mod frontend_engine;
+#[cfg(test)]
+#[path = "core/frontend_tests.rs"]
+mod frontend_tests;
 #[path = "core/journal.rs"]
 mod journal;
+#[path = "core/journal_record.rs"]
+mod journal_record;
+#[path = "core/materialization.rs"]
+mod materialization;
 #[path = "core/metadata.rs"]
 mod metadata;
-#[path = "core/metadata_cache.rs"]
-mod metadata_cache;
 #[path = "core/metadata_batch.rs"]
 mod metadata_batch;
-#[cfg(test)]
-#[path = "core/vault_scheduler_task_tests.rs"]
-mod vault_scheduler_task_tests;
+#[path = "core/metadata_cache.rs"]
+mod metadata_cache;
 #[path = "core/metadata_loading.rs"]
 mod metadata_loading;
 #[path = "core/metadata_point_cache.rs"]
 mod metadata_point_cache;
 #[path = "core/metadata_policy.rs"]
 mod metadata_policy;
+#[path = "core/mount_source.rs"]
+mod mount_source;
+#[path = "core/mount_status.rs"]
+mod mount_status;
 #[path = "core/mutations.rs"]
 mod mutations;
 #[path = "core/namespace_recovery.rs"]
@@ -63,20 +67,44 @@ mod namespace_recovery;
 mod open_handle;
 #[path = "core/path.rs"]
 mod path;
+#[path = "core/path_dialect.rs"]
+mod path_dialect;
+#[cfg(test)]
+#[path = "core/path_dialect_tests.rs"]
+mod path_dialect_tests;
+#[path = "core/path_sealer.rs"]
+mod path_sealer;
+#[path = "core/peer_names.rs"]
+pub(crate) mod peer_names;
+#[path = "core/range_read.rs"]
+mod range_read;
 #[path = "core/recovery.rs"]
 mod recovery;
 #[path = "core/recovery_state.rs"]
 mod recovery_state;
 #[path = "core/replace.rs"]
 mod replace;
+#[path = "core/retirement_queue.rs"]
+mod retirement_queue;
 #[path = "core/spool.rs"]
 mod spool;
+#[path = "core/spool_storage.rs"]
+mod spool_storage;
+#[cfg(test)]
+#[path = "core/spool_storage_tests.rs"]
+mod spool_storage_tests;
 #[path = "core/stage_ledger.rs"]
 mod stage_ledger;
 #[path = "core/startup.rs"]
 mod startup;
 #[path = "core/types.rs"]
 mod types;
+#[cfg(test)]
+#[path = "core/types_split_tests.rs"]
+mod types_split_tests;
+#[cfg(test)]
+#[path = "core/vault_scheduler_task_tests.rs"]
+mod vault_scheduler_task_tests;
 #[path = "core/windows_access.rs"]
 mod windows_access;
 #[path = "core/windows_case.rs"]
@@ -101,39 +129,45 @@ mod remote_drive_task_tests;
 pub(crate) mod os;
 
 #[cfg(test)]
-#[path = "core/optimization_fixture.rs"]
-pub(crate) mod optimization_fixture;
+#[path = "core/mount_save_task_tests.rs"]
+mod mount_save_task_tests;
 #[cfg(test)]
 #[path = "core/optimization_cache_tests.rs"]
 mod optimization_cache_tests;
 #[cfg(test)]
-#[path = "core/mount_save_task_tests.rs"]
-mod mount_save_task_tests;
-#[cfg(test)]
-#[path = "core/optimization_policy_tests.rs"]
-mod optimization_policy_tests;
+#[path = "core/optimization_fixture.rs"]
+pub(crate) mod optimization_fixture;
 #[cfg(test)]
 #[path = "core/optimization_metadata_tests.rs"]
 mod optimization_metadata_tests;
-
 #[cfg(test)]
-#[path = "core/recovery_cache_task_tests.rs"]
-mod recovery_cache_task_tests;
+#[path = "core/optimization_policy_tests.rs"]
+mod optimization_policy_tests;
+
 #[cfg(test)]
 #[path = "core/range_read_task_tests.rs"]
 pub(crate) mod range_read_task_tests;
+#[cfg(test)]
+#[path = "core/recovery_cache_task_tests.rs"]
+mod recovery_cache_task_tests;
 
-pub use engine::MountEngine;
 pub use cache_policy::{
     MountCachePolicy, MountRuntimePreference, DEFAULT_MOUNT_CACHE_MIB, MAX_MOUNT_CACHE_MIB,
 };
 pub use cache_space::CacheSpaceProbe;
+pub use engine::MountEngine;
+pub use frontend::{
+    LockReadiness, MountFilesystem, PendingAttributes, PreloadProgress, StopProbe, VolumeFacts,
+};
 pub use metadata_policy::{
     MountMetadataPolicy, DEFAULT_METADATA_PRELOAD_DEPTH, MAX_METADATA_PRELOAD_DEPTH,
 };
 pub use path::{PathProjector, ProjectedPath};
+pub use path_dialect::PathDialect;
+pub use path_sealer::{PathSealer, PlainPathSealer};
 pub use recovery_state::{MountRecovery, MountSnapshot};
 pub use spool::prepare_spool_root;
+pub use spool_storage::{MountStorage, PlainSpoolStorage, SpoolFile, SpoolStorage};
 pub use types::{
     BackendRoot, Baseline, DeleteToken, DriveLetter, DriveSelection, EntryCondition, FlushOutcome,
     HandleId, MountConfig, MountConflict, MountId, MountMode, MountRootSecurity,
@@ -311,7 +345,9 @@ pub fn install_drive_runtime(
 
 /// Recognizes the exact private invocation used by the daemon to start the
 /// isolated Windows filesystem host. Authentication still requires the
-/// one-use capability environment created by the daemon.
+/// one-use capability environment created by the daemon. A host that ended on
+/// an update-stop request (contract V8) leaves the process here with
+/// `EXIT_UPDATE_STOP` (75), so no supervisor takes it for a crash.
 pub fn run_host_if_requested(arguments: &[std::ffi::OsString]) -> Option<Result<(), String>> {
     if arguments.len() != 2 || arguments[0] != std::ffi::OsStr::new("--mount-host") {
         return None;
@@ -321,7 +357,17 @@ pub fn run_host_if_requested(arguments: &[std::ffi::OsString]) -> Option<Result<
         .ok_or_else(|| "mount host id is not valid Unicode".to_string())
         .and_then(|value| MountId::parse(value).map_err(|error| error.to_string()));
     #[cfg(windows)]
-    return Some(id.and_then(os::windows::run_mount_host));
+    return Some(
+        id.and_then(os::windows::run_mount_host)
+            .map(exit_on_update_stop),
+    );
     #[cfg(not(windows))]
     Some(id.and_then(|_| Err("virtual drive hosts are supported only on Windows".to_string())))
+}
+
+#[cfg(windows)]
+fn exit_on_update_stop(exit: os::shared::host_session::HostExit) {
+    if exit == os::shared::host_session::HostExit::UpdateStop {
+        std::process::exit(exit.exit_code());
+    }
 }

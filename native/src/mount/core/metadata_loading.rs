@@ -1,8 +1,9 @@
 use super::engine::{not_found, read_lock, MountEngine};
-use super::metadata_cache::{Admission, DirectoryObservation, PreloadTicket,
-    MetadataChange, MetadataLookup, SnapshotPublication, DIRECTORY_TTL};
 use super::metadata_batch::run_metadata_batch_keyed;
-use super::path::validate_windows_component;
+use super::metadata_cache::{
+    Admission, DirectoryObservation, MetadataChange, MetadataLookup, PreloadTicket,
+    SnapshotPublication, DIRECTORY_TTL,
+};
 use crate::vfs::VfsMeta;
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -41,31 +42,50 @@ impl MountEngine {
         &self,
         stopped: impl Fn() -> bool + Sync,
     ) -> io::Result<usize> {
-        self.preload_metadata_progress_while(stopped).map(|progress| progress.loaded)
+        self.preload_metadata_progress_while(stopped)
+            .map(|progress| progress.loaded)
     }
 
     pub(crate) fn preload_metadata_progress_while(
-        &self, stopped: impl Fn() -> bool + Sync,
+        &self,
+        stopped: impl Fn() -> bool + Sync,
     ) -> io::Result<MetadataPreloadProgress> {
-        let batch = self.metadata_cache.select_preload(
-            self.config.metadata.preload_depth(), METADATA_PRELOAD_BATCH,
-        )?;
-        let targets = batch.tickets().iter()
-            .map(|ticket| (ticket.path.clone(), ticket.depth)).collect();
-        let loaded = run_metadata_batch_keyed(targets, self.metadata_background_width(), &stopped, &|path, _| {
-            let ticket = batch.tickets().iter().find(|ticket| ticket.path == path)
-                .ok_or_else(|| io::Error::other("preload selection lost its ownership ticket"))?;
-            match self.preload_directory(ticket) {
-                Ok(loaded) => Ok(loaded),
-                Err(_) => {
-                    let _ = self.metadata_cache.cool_down_preload(ticket);
-                    Ok(false)
+        let batch = self
+            .metadata_cache
+            .select_preload(self.config.metadata.preload_depth(), METADATA_PRELOAD_BATCH)?;
+        let targets = batch
+            .tickets()
+            .iter()
+            .map(|ticket| (ticket.path.clone(), ticket.depth))
+            .collect();
+        let loaded = run_metadata_batch_keyed(
+            targets,
+            self.metadata_background_width(),
+            &stopped,
+            &|path, _| {
+                let ticket = batch
+                    .tickets()
+                    .iter()
+                    .find(|ticket| ticket.path == path)
+                    .ok_or_else(|| {
+                        io::Error::other("preload selection lost its ownership ticket")
+                    })?;
+                match self.preload_directory(ticket) {
+                    Ok(loaded) => Ok(loaded),
+                    Err(_) => {
+                        let _ = self.metadata_cache.cool_down_preload(ticket);
+                        Ok(false)
+                    }
                 }
-            }
-        }, &|path| self.cache_key(path))?;
+            },
+            &|path| self.cache_key(path),
+        )?;
         // The batch helper joins all started workers before this finalization;
         // Drop performs the same release on errors or predicate/worker panic.
-        Ok(MetadataPreloadProgress { loaded, pending: batch.finish()? })
+        Ok(MetadataPreloadProgress {
+            loaded,
+            pending: batch.finish()?,
+        })
     }
 
     /// Refreshes a bounded rotating set. A failed or raced refresh leaves the
@@ -75,18 +95,29 @@ impl MountEngine {
     }
 
     pub(crate) fn refresh_metadata_while(
-        &self, stopped: impl Fn() -> bool + Sync,
+        &self,
+        stopped: impl Fn() -> bool + Sync,
     ) -> io::Result<()> {
         let selected = self.metadata_cache.refresh_targets_with_revisions(
             METADATA_REFRESH_BATCH,
             self.config.metadata.preload_depth() > 0,
         )?;
-        let revisions = selected.iter().map(|(path, _, revision)|
-            (self.cache_key(path), *revision)).collect::<HashMap<_, _>>();
-        let targets = selected.into_iter().map(|(path, depth, _)| (path, depth)).collect();
-        run_metadata_batch_keyed(targets, self.metadata_background_width(), &stopped, &|path, depth| {
-            self.refresh_directory(path, depth, revisions[&self.cache_key(path)])
-        }, &|path| self.cache_key(path)).map(|_| ())
+        let revisions = selected
+            .iter()
+            .map(|(path, _, revision)| (self.cache_key(path), *revision))
+            .collect::<HashMap<_, _>>();
+        let targets = selected
+            .into_iter()
+            .map(|(path, depth, _)| (path, depth))
+            .collect();
+        run_metadata_batch_keyed(
+            targets,
+            self.metadata_background_width(),
+            &stopped,
+            &|path, depth| self.refresh_directory(path, depth, revisions[&self.cache_key(path)]),
+            &|path| self.cache_key(path),
+        )
+        .map(|_| ())
     }
 
     fn metadata_background_width(&self) -> usize {
@@ -146,11 +177,19 @@ impl MountEngine {
         if slot.revision() != revision {
             return fetched;
         }
-        if fetched.as_ref().err().is_some_and(|error| error.kind() != io::ErrorKind::NotFound) {
+        if fetched
+            .as_ref()
+            .err()
+            .is_some_and(|error| error.kind() != io::ErrorKind::NotFound)
+        {
             return fetched;
         }
         let installed = self.metadata_cache.install_point_if_current(
-            path, &slot, revision, &self.metadata_points, fetched.as_ref().ok().cloned(),
+            path,
+            &slot,
+            revision,
+            &self.metadata_points,
+            fetched.as_ref().ok().cloned(),
         )?;
         match self.metadata_cache.stat(path)? {
             MetadataLookup::Found(snapshot) => {
@@ -163,7 +202,11 @@ impl MountEngine {
             }
             MetadataLookup::Uncached => {}
         }
-        let installed_revision = if installed { revision.wrapping_add(1) } else { revision };
+        let installed_revision = if installed {
+            revision.wrapping_add(1)
+        } else {
+            revision
+        };
         if slot.revision() != installed_revision {
             let _ = self.metadata_points.invalidate(path, false);
             return fetched;
@@ -204,7 +247,8 @@ impl MountEngine {
             return Ok(entries);
         }
         let revision = slot.revision();
-        let observation = match self.directory_metadata_hint(path)
+        let observation = match self
+            .directory_metadata_hint(path)
             .and_then(|hint| self.fetch_directory(path, hint))
         {
             Ok(observation) => observation,
@@ -227,7 +271,9 @@ impl MountEngine {
             // This path was demanded by a foreground callback, so prioritize
             // it for the next bounded refresh cycle.
             self.metadata_cache.mark_directory_access(path)?;
-        } else if publication.completed_revision.is_some() && self.metadata_cache.revision(path)?.is_none() {
+        } else if publication.completed_revision.is_some()
+            && self.metadata_cache.revision(path)?.is_none()
+        {
             self.metadata_cache.cool_down_snapshot(path)?;
         }
         // Every successful current observation advances once, retained or not.
@@ -240,7 +286,10 @@ impl MountEngine {
     }
 
     fn refresh_directory(
-        &self, path: &str, depth: u8, selected_revision: Option<u64>,
+        &self,
+        path: &str,
+        depth: u8,
+        selected_revision: Option<u64>,
     ) -> io::Result<bool> {
         let epoch = {
             let _namespace = read_lock(&self.namespace)?;
@@ -250,7 +299,10 @@ impl MountEngine {
         let load = slot.lock()?;
         // Preserve explicit refresh semantics for unchanged selections; only a
         // newer still-fresh snapshot satisfies work selected before its fetch.
-        if self.metadata_cache.refreshed_since(path, selected_revision)? {
+        if self
+            .metadata_cache
+            .refreshed_since(path, selected_revision)?
+        {
             return Ok(false);
         }
         let revision = slot.revision();
@@ -263,7 +315,12 @@ impl MountEngine {
             return Ok(false);
         }
         let publication = self.install_directory_snapshot(
-            path, observation, depth, &slot, revision, Admission::Refresh,
+            path,
+            observation,
+            depth,
+            &slot,
+            revision,
+            Admission::Refresh,
         )?;
         Ok(publication.retained)
     }
@@ -291,7 +348,11 @@ impl MountEngine {
             return Ok(false);
         }
         let installed = self.metadata_cache.install_preload_observation(
-            ticket, observation, &slot, revision, &self.metadata_points,
+            ticket,
+            observation,
+            &slot,
+            revision,
+            &self.metadata_points,
         )?;
         Ok(installed)
     }
@@ -306,7 +367,13 @@ impl MountEngine {
         intent: Admission,
     ) -> io::Result<SnapshotPublication> {
         self.metadata_cache.install_observation_publication(
-            path, observation, depth, slot, revision, intent, &self.metadata_points,
+            path,
+            observation,
+            depth,
+            slot,
+            revision,
+            intent,
+            &self.metadata_points,
         )
     }
 
@@ -334,18 +401,24 @@ impl MountEngine {
         }
         let listed = self.filter_listing(self.backend.list_dir(path)?)?;
         Ok(DirectoryObservation {
-            metadata: directory, metadata_expires_at,
-            entries: listed.into(), listing_expires_at: Instant::now() + DIRECTORY_TTL,
+            metadata: directory,
+            metadata_expires_at,
+            entries: listed.into(),
+            listing_expires_at: Instant::now() + DIRECTORY_TTL,
         })
     }
 
     fn filter_listing(&self, mut listed: Vec<VfsMeta>) -> io::Result<Vec<VfsMeta>> {
         self.metadata_cache.validate_listing(&listed)?;
+        // Names the frontend cannot represent stay hidden (DRV-M1): Windows
+        // keeps its rules, POSIX hides only empty, `.`, `..`, NUL, `/`, `\`
+        // and over-long names.
+        let dialect = self.projector.dialect();
         let mut names = HashSet::new();
         let mut duplicate = false;
         listed.retain(|metadata| {
             if is_reserved_mount_sibling(&metadata.name)
-                || validate_windows_component(&metadata.name).is_err()
+                || dialect.validate_component(&metadata.name).is_err()
                 || (!self.case_sensitive_paths()
                     && crate::mount::validate_windows_case_component(&metadata.name).is_err())
             {

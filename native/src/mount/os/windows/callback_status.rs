@@ -7,10 +7,12 @@ use std::{
 
 use windows_sys::Win32::Foundation::{
     ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, ERROR_DIRECTORY, ERROR_DIR_NOT_EMPTY,
-    ERROR_DISK_FULL, ERROR_FILE_NOT_FOUND, ERROR_GEN_FAILURE, ERROR_HANDLE_EOF, ERROR_INVALID_DATA,
-    ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER, ERROR_NOT_ENOUGH_MEMORY, ERROR_NOT_SUPPORTED,
-    ERROR_OPERATION_ABORTED, ERROR_SEM_TIMEOUT, ERROR_SHARING_VIOLATION, STATUS_BUFFER_OVERFLOW,
-    STATUS_INVALID_PARAMETER, STATUS_SUCCESS, STATUS_UNHANDLED_EXCEPTION,
+    ERROR_DISK_FULL, ERROR_FILE_NOT_FOUND, ERROR_GEN_FAILURE, ERROR_HANDLE_EOF,
+    ERROR_HOST_UNREACHABLE, ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER,
+    ERROR_NETWORK_UNREACHABLE, ERROR_NOT_ENOUGH_MEMORY, ERROR_NOT_SAME_DEVICE, ERROR_NOT_SUPPORTED,
+    ERROR_OPERATION_ABORTED, ERROR_SEM_TIMEOUT, ERROR_SHARING_VIOLATION, NO_ERROR,
+    STATUS_BUFFER_OVERFLOW, STATUS_INVALID_PARAMETER, STATUS_IO_DEVICE_ERROR, STATUS_SUCCESS,
+    STATUS_UNHANDLED_EXCEPTION,
 };
 
 use crate::mount::MountStatus;
@@ -19,6 +21,10 @@ use super::{
     callback_context::{context_from_file_info, CallbackContext},
     DokanFileInfo, NtStatus,
 };
+
+#[path = "dokany_status_table.rs"]
+pub(super) mod dokany_status_table;
+use dokany_status_table::dokany_maps_win32;
 
 pub(super) const CALLBACK_TIMEOUT_MS: u32 = 300_000;
 const SLOW_CALLBACK: Duration = Duration::from_millis(500);
@@ -111,7 +117,9 @@ where
     let status = match result {
         Ok(Ok(())) => STATUS_SUCCESS,
         Ok(Err(CallbackFailure::Io(error))) => io_status(context, &error),
-        Ok(Err(CallbackFailure::Win32(error))) => context.runtime.nt_status_from_win32(error),
+        Ok(Err(CallbackFailure::Win32(error))) => {
+            dokany_status(error, |code| context.runtime.nt_status_from_win32(code))
+        }
         Ok(Err(CallbackFailure::Nt(status))) => status,
         Err(_) => {
             context.report(MountStatus::Failed {
@@ -213,13 +221,44 @@ pub(super) fn insufficient_buffer() -> CallbackFailure {
 }
 
 fn io_status(context: &CallbackContext, error: &io::Error) -> NtStatus {
-    if let Some(raw) = error
+    nt_status_for_io(error, |code| context.runtime.nt_status_from_win32(code))
+}
+
+/// NTSTATUS of an engine error (decision C4). An OS error keeps its own
+/// Win32 code, every other error gets the code of its kind; a code goes to
+/// `DokanNtStatusFromWin32` only when Dokany has a row for it. Dokany turns
+/// every other code into STATUS_ACCESS_DENIED, which Explorer reports as
+/// "Access denied", so such errors, and kinds without a code, return
+/// STATUS_IO_DEVICE_ERROR ("I/O device error") directly. Before C4 the
+/// fallback ERROR_INVALID_DATA, which Dokany does not know, made every
+/// unmapped failure look like missing rights.
+pub(super) fn nt_status_for_io(error: &io::Error, translate: impl Fn(u32) -> NtStatus) -> NtStatus {
+    let code = error
         .raw_os_error()
         .and_then(|value| u32::try_from(value).ok())
-    {
-        return context.runtime.nt_status_from_win32(raw);
+        .or_else(|| win32_for_kind(error.kind()));
+    match code {
+        Some(code) => dokany_status(code, translate),
+        None => STATUS_IO_DEVICE_ERROR,
     }
-    let win32_error = match error.kind() {
+}
+
+/// A Win32 code through Dokany's table. An error never becomes success,
+/// even with the code 0 (`NO_ERROR`, which Dokany maps to STATUS_SUCCESS).
+fn dokany_status(code: u32, translate: impl Fn(u32) -> NtStatus) -> NtStatus {
+    if code != NO_ERROR && dokany_maps_win32(code) {
+        translate(code)
+    } else {
+        STATUS_IO_DEVICE_ERROR
+    }
+}
+
+/// The Win32 code of an error kind, `None` for kinds no code describes.
+/// Rows of v0.5.182 are unchanged except the three of C4: host and network
+/// unreachable ("The network location cannot be reached.") and crossing
+/// devices (moves between shares of the device tree).
+pub(super) fn win32_for_kind(kind: io::ErrorKind) -> Option<u32> {
+    let code = match kind {
         io::ErrorKind::NotFound => ERROR_FILE_NOT_FOUND,
         io::ErrorKind::NotADirectory | io::ErrorKind::IsADirectory => ERROR_DIRECTORY,
         io::ErrorKind::DirectoryNotEmpty => ERROR_DIR_NOT_EMPTY,
@@ -234,15 +273,16 @@ fn io_status(context: &CallbackContext, error: &io::Error) -> NtStatus {
         io::ErrorKind::WouldBlock => ERROR_SHARING_VIOLATION,
         io::ErrorKind::Interrupted => ERROR_OPERATION_ABORTED,
         io::ErrorKind::BrokenPipe | io::ErrorKind::ConnectionAborted => ERROR_INVALID_HANDLE,
+        io::ErrorKind::HostUnreachable => ERROR_HOST_UNREACHABLE,
+        io::ErrorKind::NetworkUnreachable => ERROR_NETWORK_UNREACHABLE,
+        io::ErrorKind::CrossesDevices => ERROR_NOT_SAME_DEVICE,
         io::ErrorKind::ConnectionRefused
         | io::ErrorKind::ConnectionReset
         | io::ErrorKind::NotConnected
         | io::ErrorKind::AddrInUse
         | io::ErrorKind::AddrNotAvailable
-        | io::ErrorKind::NetworkDown
-        | io::ErrorKind::NetworkUnreachable
-        | io::ErrorKind::HostUnreachable => ERROR_GEN_FAILURE,
-        _ => ERROR_INVALID_DATA,
+        | io::ErrorKind::NetworkDown => ERROR_GEN_FAILURE,
+        _ => return None,
     };
-    context.runtime.nt_status_from_win32(win32_error)
+    Some(code)
 }

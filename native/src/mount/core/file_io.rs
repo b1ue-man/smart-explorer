@@ -1,10 +1,14 @@
-use super::engine::{lock, read_lock, require_regular, write_lock, Entry, EntryState,
-    MountEngine, OpenHandle, OpenHandleKind};
+use super::engine::{
+    lock, read_lock, require_regular, write_lock, Entry, EntryState, MountEngine, OpenHandle,
+    OpenHandleKind,
+};
 use super::entry_lifecycle::EntryPin;
-use super::types::{EntryCondition, FlushOutcome, HandleId, MountMode, OpenDisposition, OpenFileOptions};
+use super::types::{
+    EntryCondition, FlushOutcome, HandleId, MountMode, OpenDisposition, OpenFileOptions,
+};
 use crate::vfs::VfsMeta;
 use std::io::{self, Read, Seek, SeekFrom, Write};
-use std::sync::{Arc, atomic::Ordering};
+use std::sync::{atomic::Ordering, Arc};
 
 impl MountEngine {
     pub fn open_file(&self, callback_path: &str, options: OpenFileOptions) -> io::Result<HandleId> {
@@ -22,7 +26,8 @@ impl MountEngine {
                 "mount is read-only",
             ));
         }
-        if !options.writable && options.disposition == OpenDisposition::OpenExisting
+        if !options.writable
+            && options.disposition == OpenDisposition::OpenExisting
             && self.config.mode == MountMode::ReadOnly
         {
             let meta = self.stat(callback_path)?;
@@ -103,8 +108,12 @@ impl MountEngine {
     pub fn read(&self, handle: HandleId, offset: u64, output: &mut [u8]) -> io::Result<usize> {
         let _reap = self.operation_reaper();
         let opened = self.handle(handle)?;
-        if output.is_empty() { return Ok(0); }
-        if let Some(read) = self.read_range(&opened, offset, output)? { return Ok(read); }
+        if output.is_empty() {
+            return Ok(0);
+        }
+        if let Some(read) = self.read_range(&opened, offset, output)? {
+            return Ok(read);
+        }
         let entry = self.materialize_opened(handle, opened)?;
         let state = lock(&entry.state)?;
         let mut file = self.spool.open_file(&state.spool_name, false)?;
@@ -136,7 +145,8 @@ impl MountEngine {
         let entry = self.materialize_opened(handle, opened)?;
         let mut state = lock(&entry.state)?;
         let mut file = self.spool.open_file(&state.spool_name, true)?;
-        let end = offset.checked_add(input.len() as u64)
+        let end = offset
+            .checked_add(input.len() as u64)
             .ok_or_else(|| io::Error::other("mounted write length overflow"))?;
         let _growth = self.reserve_growth(end.saturating_sub(file.metadata()?.len()))?;
         self.mark_dirty(&mut state)?;
@@ -245,7 +255,8 @@ impl MountEngine {
 
     fn truncate_entry(&self, entry: &Arc<Entry>, length: u64) -> io::Result<()> {
         let mut state = lock(&entry.state)?;
-        let file = self.spool.open_file(&state.spool_name, true)?;
+        // Every spool access goes through the drive's `SpoolStorage` (V1).
+        let mut file = self.spool.open_file(&state.spool_name, true)?;
         let _growth = self.reserve_growth(length.saturating_sub(file.metadata()?.len()))?;
         self.mark_dirty(&mut state)?;
         file.set_len(length)
@@ -263,7 +274,9 @@ impl MountEngine {
                 let persisted = state.with_condition(EntryCondition::Dirty);
                 if let Err(error) = self.spool.persist_entry(&persisted) {
                     state.condition = EntryCondition::Conflict(super::types::MountConflict {
-                        path: state.remote_path.clone(), baseline: state.baseline.clone(), current: None,
+                        path: state.remote_path.clone(),
+                        baseline: state.baseline.clone(),
+                        current: None,
                         detail: format!("dirty spool journal durability is uncertain: {error}"),
                     });
                     return Err(error);
@@ -278,5 +291,4 @@ impl MountEngine {
             )),
         }
     }
-
 }
