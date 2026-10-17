@@ -64,9 +64,9 @@ pub(super) unsafe extern "system" fn create_file(
                 context.read_only,
             );
             let existing = match if cache_safe {
-                context.engine.stat_cached(&path)
+                context.filesystem.stat_cached(&path)
             } else {
-                context.engine.stat(&path)
+                context.filesystem.stat(&path)
             } {
                 Ok(meta) => Some(meta),
                 Err(error) if error.kind() == io::ErrorKind::NotFound => None,
@@ -132,7 +132,7 @@ fn open_directory(
         (Some(true), _) => return Err(win32(ERROR_NOT_SUPPORTED)),
         (None, FILE_CREATE | FILE_OPEN_IF) => {
             validate_creation_attributes(file_attributes, true)?;
-            match context.engine.mkdir(&path)? {
+            match context.filesystem.mkdir(&path)? {
                 NamespaceOutcome::Complete => {}
                 NamespaceOutcome::CommittedPendingVerification { path, detail } => {
                     context.report(MountStatus::Failed {
@@ -186,9 +186,8 @@ fn open_regular_file(
     // data/metadata route are decided from what was actually granted.
     let reservation = context.reserve_handle(&path, false, desired_access, share_access)?;
     let granted_access = reservation.granted_access();
-    let writable = granted_access
-        & (FILE_WRITE_DATA | FILE_APPEND_DATA | GENERIC_WRITE | GENERIC_ALL)
-        != 0;
+    let writable =
+        granted_access & (FILE_WRITE_DATA | FILE_APPEND_DATA | GENERIC_WRITE | GENERIC_ALL) != 0;
     let requested_disposition = disposition;
     let disposition = disposition_for_file(requested_disposition, exists)?;
     if disposition != OpenDisposition::OpenExisting {
@@ -202,7 +201,7 @@ fn open_regular_file(
     // metadata-only shell traffic never occupies a backend transfer slot —
     // uniform across every remote protocol behind the VFS interface.
     let engine_handle = if disposition == OpenDisposition::OpenExisting {
-        context.engine.open_metadata_file(
+        context.filesystem.open_metadata_file(
             &path,
             existing
                 .cloned()
@@ -210,7 +209,7 @@ fn open_regular_file(
             writable,
         )?
     } else {
-        context.engine.open_file(
+        context.filesystem.open_file(
             &path,
             OpenFileOptions {
                 writable,
@@ -220,12 +219,12 @@ fn open_regular_file(
     };
     let delete_on_close = create_options & FILE_DELETE_ON_CLOSE != 0;
     if let Err(error) = reservation.bind(NodeHandle::File(engine_handle)) {
-        let _ = context.engine.close(engine_handle);
+        let _ = context.filesystem.close(engine_handle);
         return Err(error.into());
     }
     let key = reservation.key();
     if let Err(error) = unsafe { set_context_key(file_info, key, false) } {
-        let _ = context.engine.close(engine_handle);
+        let _ = context.filesystem.close(engine_handle);
         return Err(error.into());
     }
     if delete_on_close {
@@ -233,7 +232,7 @@ fn open_regular_file(
             Ok(_) => {}
             Err(error) => {
                 clear_context(file_info);
-                let _ = context.engine.close(engine_handle);
+                let _ = context.filesystem.close(engine_handle);
                 return Err(error.into());
             }
         }
@@ -277,7 +276,12 @@ const fn cache_safe_namespace_open(
 // without requiring a live Dokany driver in the task suite.
 const _: () = {
     let explorer_metadata = FILE_READ_ATTRIBUTES | SYNCHRONIZE;
-    assert!(cache_safe_namespace_open(explorer_metadata, FILE_OPEN, 0, false));
+    assert!(cache_safe_namespace_open(
+        explorer_metadata,
+        FILE_OPEN,
+        0,
+        false
+    ));
     assert!(!cache_safe_namespace_open(
         explorer_metadata,
         FILE_OPEN,
@@ -327,10 +331,7 @@ fn opened_existing(exists: bool, disposition: u32) -> CallbackResult {
     }
 }
 
-fn disposition_for_file(
-    value: u32,
-    exists: bool,
-) -> Result<OpenDisposition, CallbackFailure> {
+fn disposition_for_file(value: u32, exists: bool) -> Result<OpenDisposition, CallbackFailure> {
     match value {
         FILE_OPEN => Ok(OpenDisposition::OpenExisting),
         // An existing OPEN_IF ignores creation attributes even for a writable
@@ -392,7 +393,15 @@ fn mount_vault_task_no_follow_queries_preserve_link_and_id_boundaries() {
     }
     assert!(validate_create_options(FILE_OPEN_BY_FILE_ID | OPEN_REPARSE_POINT).is_err());
     assert!(validate_create_options(
-        FILE_DIRECTORY_FILE | FILE_NON_DIRECTORY_FILE | OPEN_REPARSE_POINT).is_err());
-    let link = crate::vfs::VfsMeta { is_symlink: true, ..Default::default() };
-    assert_eq!(reject_open_symlink(&link).unwrap_err().kind(), io::ErrorKind::Unsupported);
+        FILE_DIRECTORY_FILE | FILE_NON_DIRECTORY_FILE | OPEN_REPARSE_POINT
+    )
+    .is_err());
+    let link = crate::vfs::VfsMeta {
+        is_symlink: true,
+        ..Default::default()
+    };
+    assert_eq!(
+        reject_open_symlink(&link).unwrap_err().kind(),
+        io::ErrorKind::Unsupported
+    );
 }

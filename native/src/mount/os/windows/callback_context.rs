@@ -6,7 +6,7 @@ use std::{
     },
 };
 
-use crate::mount::{DriveLetter, MountEngine, MountStatus};
+use crate::mount::{DriveLetter, MountEngine, MountFilesystem, MountStatus};
 
 use super::{
     callback_reporter::CallbackReporter,
@@ -19,7 +19,12 @@ use super::{
 pub(super) use super::handle_types::{HandleSnapshot, NodeHandle};
 
 pub(super) struct CallbackContext {
+    /// The engine itself: the handle table's delete protocol
+    /// (`handle_state.rs`) and the volume harnesses take `&MountEngine`.
     pub(super) engine: Arc<MountEngine>,
+    /// Data, metadata and namespace callbacks run over the frontend
+    /// boundary (DRV-M2); for a drive it is the same engine.
+    pub(super) filesystem: Arc<dyn MountFilesystem>,
     pub(super) runtime: DokanyRuntime,
     pub(super) read_only: bool,
     pub(super) case_sensitive_paths: bool,
@@ -47,8 +52,10 @@ impl CallbackContext {
     ) -> io::Result<Self> {
         let case_sensitive_paths = engine.case_sensitive_paths();
         let timeouts = CallbackTimeoutSupervisor::start(runtime.clone())?;
+        let filesystem: Arc<dyn MountFilesystem> = Arc::clone(&engine);
         Ok(Self {
             engine,
+            filesystem,
             runtime,
             read_only,
             case_sensitive_paths,

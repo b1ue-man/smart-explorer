@@ -1,36 +1,47 @@
+//! The Windows drive host (`--mount-host`): Dokany as the platform of the
+//! shared host flow (`os/shared/host_session.rs`, DRV-M2). The order of the
+//! steps, the status reports and the teardown live there; this file owns the
+//! Dokany runtime, the callback state, the drive letter and the volume.
 use std::{
     io,
     os::windows::ffi::OsStrExt,
     path::Path,
     ptr::null,
     sync::{Arc, Mutex},
-    time::Duration,
 };
 
 use windows_sys::Win32::Storage::FileSystem::GetLogicalDrives;
 
 use crate::{
-    daemon::{connect_mount_host, MountHostSession},
+    daemon::{connect_mount_host, MountHostConfig},
     mount::{
-        prepare_spool_root, DriveLetter, DriveSelection, EntryCondition, MountEngine, MountId,
-        MountMode, MountRecovery, MountRuntimeConfig, MountStatus,
+        CacheSpaceProbe, DriveLetter, DriveSelection, MountEngine, MountId, MountMode, PathDialect,
     },
 };
 
+use super::super::shared::host_platform::{
+    HostLease, HostPlatform, HostStepError, VolumeLocation, VolumePoll,
+};
+use super::super::shared::host_session::{self, HostExit, HostInputs, UpdateStopCheck};
+use super::callback_reporter::CallbackReporter;
 use super::metadata_refresh::MetadataRefreshWorker;
+use super::notifications::HostNotifications;
+use super::runtime_selection::RuntimeSelection;
+use super::shutdown_watchdog::ShutdownWatchdog;
 use super::{
     cache_lease::CacheLease, callback_context::CallbackContext,
     callback_status::CALLBACK_TIMEOUT_MS, callbacks, wide::encode_mount_point, DokanOperations,
     DokanOptions, DokanyCreateError, DokanyFileSystem, DokanyPreflightError, DokanyRuntime,
-    DokanyRuntimeInfo, DokanyWaitOutcome, OPTION_CASE_SENSITIVE,
-    OPTION_CURRENT_SESSION, OPTION_MOUNT_MANAGER, OPTION_WRITE_PROTECT,
+    DokanyRuntimeInfo, DokanyWaitOutcome, OPTION_CASE_SENSITIVE, OPTION_CURRENT_SESSION,
+    OPTION_MOUNT_MANAGER, OPTION_WRITE_PROTECT,
 };
 
-const CONTROL_POLL: Duration = Duration::from_millis(250);
-
-#[path = "host_lifecycle.rs"]
-mod lifecycle;
-use lifecycle::{close_and_finalize, run_until_stopped};
+// Names the Dokany volume harnesses take from this module through
+// `use super::*` and production code here no longer uses.
+#[cfg(test)]
+use crate::mount::{prepare_spool_root, MountRuntimeConfig, MountStatus};
+#[cfg(test)]
+use std::time::Duration;
 
 #[cfg(test)]
 #[path = "mounted_volume_task_tests.rs"]
@@ -40,143 +51,211 @@ mod mount_batching_task;
 #[path = "optimization_volume_tests.rs"]
 mod optimization_task;
 
+#[cfg(test)]
+#[path = "host_session_windows_tests.rs"]
+mod host_session_windows;
+
 pub(crate) fn preflight_runtime() -> Result<DokanyRuntimeInfo, DokanyPreflightError> {
     DokanyRuntime::preflight().map(|runtime| runtime.info())
 }
 
-pub(crate) fn run_mount_host(id: MountId) -> Result<(), String> {
+pub(crate) fn run_mount_host(id: MountId) -> Result<HostExit, String> {
+    // V8: the update-stop baseline is the marker present when the process
+    // starts; a marker an earlier update left behind never stops this host.
+    let update_stop = UpdateStopCheck::arm();
     let session = Arc::new(connect_mount_host(id)?);
-    let config = session.config.clone();
-    let spool_root = prepare_spool_root(&session.cache_root).map_err(|_| {
-        report_failure(
-            &session,
-            "the isolated mount cache directory is unavailable",
-        )
-    })?;
-    let cache_lease = CacheLease::acquire(&spool_root, &config.id).map_err(|_| {
-        report_failure_with_recovery(
-            &session,
-            "the mounted-drive cache is already in use or its lease is unsafe",
-            MountRecovery::Unknown,
-        )
-    })?;
-    let space = super::cache_space::CacheDiskSpace::new(&spool_root)
-        .map_err(|error| report_failure(&session, &format!("cache space probe: {error}")))?;
-    let engine = MountEngine::open_host_cache(
-        MountRuntimeConfig::new(config.id.clone(), config.mode)
-            .with_metadata_policy(config.metadata)
-            .with_cache_policy(config.cache)
-            .with_runtime_preference(config.runtime_preference),
-        Arc::clone(&session.backend),
-        &spool_root,
-    )
-    .map_err(|_| {
-        report_failure_with_recovery(
-            &session,
-            "the mounted-drive cache could not be recovered safely",
-            MountRecovery::Unknown,
-        )
-    })?.with_cache_space_probe(Arc::new(space));
-    let local_recovery = inspect_recovery(&engine).map_err(|_| {
-        report_failure_with_recovery(
-            &session,
-            "the mounted-drive cache could not report its recovery state",
-            MountRecovery::Unknown,
-        )
-    })?;
-    session.report_status_with_recovery(MountStatus::Mounting, Some(local_recovery))?;
-    let selection = match super::runtime_selection::RuntimeSelection::select(
-        &spool_root, &config.id, config.runtime_preference,
-    ) {
-        Ok(selection) => selection,
-        Err(error) => {
-            let detail = error.to_string();
-            let _ = session.report_status(MountStatus::RuntimeUnavailable {
-                detail: detail.clone(),
-            });
-            return Err(detail);
+    let inputs = HostInputs::from_session(&session);
+    let mut platform = DokanyHost::new(CallbackReporter::from(Arc::clone(&session)));
+    host_session::run(inputs, &*session, &mut platform, &update_stop)
+}
+
+/// Dokany as platform of the shared host flow.
+pub(super) struct DokanyHost {
+    // Field order is drop order: the volume closes before the callback state
+    // it points into, and both end before the runtime DLL.
+    filesystem: Option<DokanyFileSystem>,
+    storage: Option<CallbackStorage>,
+    notifications: HostNotifications,
+    selection: Option<RuntimeSelection>,
+    reporter: Option<CallbackReporter>,
+    candidates: Vec<DriveLetter>,
+}
+
+impl DokanyHost {
+    pub(super) fn new(reporter: CallbackReporter) -> Self {
+        Self {
+            filesystem: None,
+            storage: None,
+            notifications: HostNotifications::default(),
+            selection: None,
+            reporter: Some(reporter),
+            candidates: Vec::new(),
         }
-    };
-    let runtime = &selection.runtime;
-    if let Err(error) = engine.prepare_host_remote() {
-        let detail = format!("mounted-drive remote root validation failed: {error}");
-        return Err(report_engine_failure(&session, &engine, &detail));
     }
-    if let Err(error) = engine.retry_pending_changes() {
-        let detail = format!(
-            "cached mounted-drive changes could not be retried safely: {error}; keep the cache and use Retry after connectivity is restored"
-        );
-        return Err(report_engine_failure(&session, &engine, &detail));
+
+    fn storage(&self) -> io::Result<&CallbackStorage> {
+        self.storage
+            .as_ref()
+            .ok_or_else(|| io::Error::other("the mounted volume was not prepared"))
     }
-    if let Err(error) = engine.preload_metadata() {
-        let detail = format!("mounted-drive root metadata preload failed: {error}");
-        return Err(report_engine_failure(&session, &engine, &detail));
+}
+
+impl HostPlatform for DokanyHost {
+    fn path_dialect(&self) -> PathDialect {
+        PathDialect::Windows
     }
-    let reconciled = inspect_recovery(&engine).map_err(|_| {
-        report_failure_with_recovery(
-            &session,
-            "the mounted-drive cache could not report its reconciled recovery state",
-            MountRecovery::Unknown,
-        )
-    })?;
-    session.report_status_with_recovery(MountStatus::Mounting, Some(reconciled))?;
-    let candidates =
-        drive_candidates(config.drive).map_err(|message| report_failure(&session, message))?;
-    let cache_root_wide = absolute_path_wide(&spool_root)
-        .map_err(|_| report_failure(&session, "the isolated mount cache path is invalid"))?;
-    let initial_drive = candidates
-        .first()
-        .copied()
-        .ok_or_else(|| report_failure(&session, "no Windows drive letter is available"))?;
-    let engine = Arc::new(engine);
-    let context = Box::new(
-        CallbackContext::new(
-            Arc::clone(&engine),
-            runtime.clone(),
-            Arc::clone(&session),
+
+    fn acquire_lease(&mut self, spool_root: &Path, id: &MountId) -> io::Result<HostLease> {
+        CacheLease::acquire(spool_root, id).map(|lease| Box::new(lease) as HostLease)
+    }
+
+    fn space_probe(&mut self, spool_root: &Path) -> io::Result<Arc<dyn CacheSpaceProbe>> {
+        super::cache_space::CacheDiskSpace::new(spool_root)
+            .map(|space| Arc::new(space) as Arc<dyn CacheSpaceProbe>)
+    }
+
+    fn select_runtime(
+        &mut self,
+        spool_root: &Path,
+        config: &MountHostConfig,
+    ) -> Result<(), String> {
+        let selection = RuntimeSelection::select(spool_root, &config.id, config.runtime_preference)
+            .map_err(|error| error.to_string())?;
+        self.selection = Some(selection);
+        Ok(())
+    }
+
+    fn prepare_volume(
+        &mut self,
+        engine: &Arc<MountEngine>,
+        config: &MountHostConfig,
+        spool_root: &Path,
+    ) -> Result<(), HostStepError> {
+        let runtime = self
+            .selection
+            .as_ref()
+            .map(|selection| selection.runtime.clone())
+            .ok_or_else(|| HostStepError::Plain("the Dokany runtime was not selected".into()))?;
+        let candidates = drive_candidates(config.drive)
+            .map_err(|message| HostStepError::Plain(message.into()))?;
+        let cache_root_wide = absolute_path_wide(spool_root)
+            .map_err(|_| HostStepError::Plain("the isolated mount cache path is invalid".into()))?;
+        let initial_drive = candidates
+            .first()
+            .copied()
+            .ok_or_else(|| HostStepError::Plain("no Windows drive letter is available".into()))?;
+        let reporter = self.reporter.take().ok_or_else(|| {
+            HostStepError::Plain("the mounted-drive status channel is unavailable".into())
+        })?;
+        let read_only = config.mode == MountMode::ReadOnly;
+        let context = CallbackContext::new(
+            Arc::clone(engine),
+            runtime,
+            reporter,
             initial_drive,
-            config.mode == MountMode::ReadOnly,
-            config.label,
+            read_only,
+            config.label.clone(),
             super::metadata::volume_serial(config.id.as_str()),
             cache_root_wide,
         )
         .map_err(|error| {
-            report_engine_failure(
-                &session,
-                &engine,
-                &format!("mounted-drive callback supervisor could not start: {error}"),
-            )
-        })?,
-    );
-    let mut storage = CallbackStorage::new(context, config.mode == MountMode::ReadOnly);
-    // Arm recovery ownership before Dokany may dispatch its first callback.
-    // If creation itself fails, the branch below disarms only after proving
-    // that the journal is still clean.
-    session.report_status_with_recovery(MountStatus::Mounting, Some(MountRecovery::Unknown))?;
-    let filesystem = match start_on_available_drive(runtime, &mut storage, &candidates) {
-        Ok(filesystem) => filesystem,
-        Err(error) => {
-            return Err(report_pre_mount_failure(
-                &session,
-                &storage.context.engine,
-                &format!("Dokany could not mount the drive: {error}"),
-            ));
+            HostStepError::Engine(format!(
+                "mounted-drive callback supervisor could not start: {error}"
+            ))
+        })?;
+        self.storage = Some(CallbackStorage::new(Box::new(context), read_only));
+        self.candidates = candidates;
+        Ok(())
+    }
+
+    fn start_volume(&mut self) -> Result<(), String> {
+        let (Some(selection), Some(storage)) = (self.selection.as_ref(), self.storage.as_mut())
+        else {
+            return Err("Dokany could not mount the drive: the volume was not prepared".into());
+        };
+        let filesystem = start_on_available_drive(&selection.runtime, storage, &self.candidates)
+            .map_err(|error| format!("Dokany could not mount the drive: {error}"))?;
+        self.filesystem = Some(filesystem);
+        Ok(())
+    }
+
+    fn start_background(&mut self) -> io::Result<()> {
+        self.storage()?.start_metadata_refresh()
+    }
+
+    fn location(&self) -> io::Result<VolumeLocation> {
+        self.storage()?
+            .context
+            .selected_drive()
+            .map(VolumeLocation::Drive)
+    }
+
+    fn stop_requested(&self) -> bool {
+        self.storage
+            .as_ref()
+            .is_some_and(|storage| storage.context.stop_requested())
+    }
+
+    fn poll_volume(&mut self) -> VolumePoll {
+        let Some(filesystem) = self.filesystem.as_ref() else {
+            return VolumePoll::Ended("the mounted drive closed without a requested unmount");
+        };
+        match filesystem.wait(0) {
+            DokanyWaitOutcome::Timeout if filesystem.is_running() => VolumePoll::Running,
+            DokanyWaitOutcome::Closed | DokanyWaitOutcome::Timeout => {
+                VolumePoll::Ended("the mounted drive closed without a requested unmount")
+            }
+            DokanyWaitOutcome::Failed { .. } | DokanyWaitOutcome::Unexpected(_) => {
+                VolumePoll::Ended("Dokany stopped the mounted drive unexpectedly")
+            }
         }
-    };
-    if let Err(error) = storage.start_metadata_refresh() {
-        let detail = format!("mounted-drive metadata refresh could not start: {error}");
-        return close_and_finalize(filesystem, &storage, &session, Some(&detail));
     }
-    let result = run_until_stopped(filesystem, &storage, &session);
-    // Make the host-lifetime ownership boundary explicit: dirty-entry
-    // inspection and engine teardown complete before another host may open it.
-    drop(storage);
-    drop(engine);
-    if result.is_ok() {
-        selection.complete();
+
+    fn deliver_changes(&mut self) -> io::Result<()> {
+        let (Some(storage), Some(filesystem)) = (self.storage.as_ref(), self.filesystem.as_ref())
+        else {
+            return Ok(());
+        };
+        let drive = storage.context.selected_drive()?;
+        self.notifications
+            .deliver_from(&*storage.context.filesystem, filesystem, drive)
     }
-    drop(cache_lease);
-    result
+
+    fn shutdown(&mut self) -> bool {
+        if let Some(storage) = self.storage.as_ref() {
+            storage.request_metadata_refresh_stop();
+        }
+        let watchdog = ShutdownWatchdog::start("dokan-close");
+        // DokanCloseHandle is the callback lifetime boundary. Only inspect the
+        // engine once Dokany can no longer mutate its retryable journal state.
+        if let Some(filesystem) = self.filesystem.take() {
+            filesystem.close();
+        }
+        // Closing Dokany first prevents a slow background target from keeping
+        // the drive visible. The worker observes cancellation between remote
+        // targets; join still owns its engine before recovery inspection.
+        if let Some(watchdog) = watchdog.as_ref() {
+            watchdog.set_phase("metadata-refresh");
+        }
+        if let Some(storage) = self.storage.as_ref() {
+            storage.join_metadata_refresh();
+        }
+        watchdog.is_none_or(ShutdownWatchdog::finish)
+    }
+
+    fn release_volume(&mut self) {
+        // The volume closes before the callback state it points into.
+        self.filesystem = None;
+        self.storage = None;
+    }
+
+    fn finish_runtime(&mut self, completed: bool) {
+        if let Some(selection) = self.selection.take() {
+            if completed {
+                selection.complete();
+            }
+        }
+    }
 }
 
 struct CallbackStorage {
@@ -219,7 +298,7 @@ impl CallbackStorage {
             .map_err(|_| io::Error::other("metadata refresh worker state is unavailable"))?;
         if worker.is_none() {
             *worker = Some(MetadataRefreshWorker::start(Arc::clone(
-                &self.context.engine,
+                &self.context.filesystem,
             ))?);
         }
         Ok(())
@@ -273,24 +352,6 @@ fn start_on_available_drive(
     Err(last_busy.unwrap_or(DokanyCreateError::InvalidDriveLetter))
 }
 
-
-fn recovery_detail(entries: &[(String, EntryCondition)]) -> String {
-    let dirty = entries
-        .iter()
-        .filter(|(_, condition)| matches!(condition, EntryCondition::Dirty))
-        .count();
-    let conflicts = entries
-        .iter()
-        .filter(|(_, condition)| matches!(condition, EntryCondition::Conflict(_)))
-        .count();
-    format!(
-        "{} cached change(s) remain after unmount ({} dirty, {} conflict); keep the mount and use Retry",
-        entries.len(),
-        dirty,
-        conflicts
-    )
-}
-
 fn drive_candidates(selection: DriveSelection) -> Result<Vec<DriveLetter>, &'static str> {
     if let DriveSelection::Letter(letter) = selection {
         let occupied = unsafe { GetLogicalDrives() } & (1u32 << (letter.get() as u8 - b'A')) != 0;
@@ -324,59 +385,6 @@ fn absolute_path_wide(path: &Path) -> io::Result<Vec<u16>> {
     }
     encoded.push(0);
     Ok(encoded)
-}
-
-fn report_failure(session: &MountHostSession, message: &str) -> String {
-    let _ = session.report_status(MountStatus::Failed {
-        detail: message.to_string(),
-    });
-    message.to_string()
-}
-
-fn report_failure_with_recovery(
-    session: &MountHostSession,
-    message: &str,
-    recovery: MountRecovery,
-) -> String {
-    let _ = session.report_status_with_recovery(
-        MountStatus::Failed {
-            detail: message.to_string(),
-        },
-        Some(recovery),
-    );
-    message.to_string()
-}
-
-fn report_pre_mount_failure(
-    session: &MountHostSession,
-    engine: &MountEngine,
-    message: &str,
-) -> String {
-    match engine.dirty_entries() {
-        Ok(entries) if entries.is_empty() => {
-            report_failure_with_recovery(session, message, MountRecovery::Clean)
-        }
-        Ok(_) => report_failure_with_recovery(session, message, MountRecovery::Required),
-        Err(_) => report_failure_with_recovery(session, message, MountRecovery::Unknown),
-    }
-}
-
-fn inspect_recovery(engine: &MountEngine) -> io::Result<MountRecovery> {
-    engine.dirty_entries().map(|entries| {
-        if entries.is_empty() {
-            MountRecovery::Clean
-        } else {
-            MountRecovery::Required
-        }
-    })
-}
-
-fn report_engine_failure(
-    session: &MountHostSession,
-    engine: &MountEngine,
-    message: &str,
-) -> String {
-    report_pre_mount_failure(session, engine, message)
 }
 
 #[cfg(test)]

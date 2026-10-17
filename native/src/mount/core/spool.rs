@@ -1,11 +1,12 @@
 use super::journal::{Journal, PersistedDelete, PersistedEntry, RecoveredJournal};
+use super::spool_storage::{MountStorage, SpoolHandle, SpoolStorage};
 use super::stage_ledger::StageLedger;
 use super::types::{MountId, NamespaceIntent};
 use std::collections::HashSet;
-use std::fs::{self, File, OpenOptions};
+use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 const ALLOCATION_ATTEMPTS: usize = 128;
 
@@ -14,11 +15,13 @@ mod recovery;
 
 pub(super) struct AllocatedSpool {
     pub name: String,
-    pub file: File,
+    pub file: SpoolHandle,
 }
 
 pub(super) struct WholeFileSpool {
     files: PathBuf,
+    /// Content storage of every spool file (contract V1); path checks stay here.
+    storage: Arc<dyn SpoolStorage>,
     journal: Mutex<Journal>,
     referenced: Mutex<HashSet<String>>,
     missing_recovery: HashSet<String>,
@@ -77,16 +80,27 @@ fn reject_link_ancestors(path: &Path) -> io::Result<()> {
 }
 
 impl WholeFileSpool {
+    /// The plain storage of every drive without a vault.
     pub fn open(base: &Path, mount_id: &MountId) -> io::Result<(Self, RecoveredJournal)> {
+        Self::open_with(base, mount_id, MountStorage::plain())
+    }
+
+    pub fn open_with(
+        base: &Path,
+        mount_id: &MountId,
+        storage: MountStorage,
+    ) -> io::Result<(Self, RecoveredJournal)> {
         ensure_directory(base)?;
         let root = base.join(mount_id.as_str());
         ensure_directory(&root)?;
         let files = root.join("files");
         ensure_directory(&files)?;
         recovery::require_journal_for_existing_files(&root, &files)?;
-        let (journal, mut recovered) = Journal::open(&root.join("journal.jsonl"))?;
+        let (journal, mut recovered) =
+            Journal::open(&root.join("journal.jsonl"), Arc::clone(&storage.paths))?;
         let mut spool = Self {
             files,
+            storage: storage.spool,
             journal: Mutex::new(journal),
             referenced: Mutex::new(
                 recovered
@@ -97,13 +111,15 @@ impl WholeFileSpool {
             ),
             missing_recovery: HashSet::new(),
             cleanup_ready: false,
-            stages: StageLedger::open(&root),
+            stages: StageLedger::open(&root, storage.paths),
         };
         let mut names = HashSet::new();
         for entry in recovered.entries.values_mut() {
             if !names.insert(entry.spool_name.clone()) {
-                return Err(io::Error::new(io::ErrorKind::InvalidData,
-                    "two recovery entries reference the same mount spool"));
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "two recovery entries reference the same mount spool",
+                ));
             }
             if recovery::validate_entry(&spool, entry)? {
                 spool.missing_recovery.insert(entry.spool_name.clone());
@@ -128,13 +144,13 @@ impl WholeFileSpool {
         for _ in 0..ALLOCATION_ATTEMPTS {
             let name = format!("{}.spool", random_hex()?);
             let path = self.files.join(&name);
-            match OpenOptions::new()
-                .create_new(true)
-                .read(true)
-                .write(true)
-                .open(&path)
-            {
-                Ok(file) => return Ok(AllocatedSpool { name, file }),
+            match self.storage.create_new(&path) {
+                Ok(file) => {
+                    return Ok(AllocatedSpool {
+                        name,
+                        file: SpoolHandle::new(file),
+                    })
+                }
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
                 Err(error) => return Err(error),
             }
@@ -145,18 +161,20 @@ impl WholeFileSpool {
         ))
     }
 
-    pub fn open_file(&self, name: &str, writable: bool) -> io::Result<File> {
+    pub fn open_file(&self, name: &str, writable: bool) -> io::Result<SpoolHandle> {
         validate_spool_name(name)?;
         let path = self.files.join(name);
-        let metadata = fs::symlink_metadata(&path)
-            .map_err(|error| recovery::file_error(&path, error))?;
+        let metadata =
+            fs::symlink_metadata(&path).map_err(|error| recovery::file_error(&path, error))?;
         if metadata.file_type().is_symlink() || !metadata.is_file() {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "mount spool entry is not a plain file",
             ));
         }
-        OpenOptions::new().read(true).write(writable).open(&path)
+        self.storage
+            .open(&path, writable)
+            .map(SpoolHandle::new)
             .map_err(|error| recovery::file_error(&path, error))
     }
 
@@ -227,7 +245,10 @@ impl WholeFileSpool {
         for child in fs::read_dir(&self.files)? {
             let child = match child {
                 Ok(child) => child,
-                Err(error) => { first_error.get_or_insert(error); continue; }
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                    continue;
+                }
             };
             let name = child.file_name();
             let Some(name) = name.to_str() else {
@@ -261,7 +282,9 @@ pub(super) fn audit_recovery(
 
 impl Drop for WholeFileSpool {
     fn drop(&mut self) {
-        if !self.cleanup_ready { return; }
+        if !self.cleanup_ready {
+            return;
+        }
         if let Ok(referenced) = self.referenced.lock() {
             let _ = self.remove_orphan_clean_files(&referenced);
         }

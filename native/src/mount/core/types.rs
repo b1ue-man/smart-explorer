@@ -4,8 +4,12 @@ use std::io;
 
 use super::cache_policy::{MountCachePolicy, MountRuntimePreference};
 use super::metadata_policy::MountMetadataPolicy;
+use super::path_dialect::PathDialect;
 
-const MAX_ID_LEN: usize = 256;
+// Moved without any change of the serde form (DRV-M1); re-exported so every
+// caller keeps the old path.
+pub use super::mount_source::{MountSource, PeerMountTarget};
+pub use super::mount_status::{FlushOutcome, MountStatus, NamespaceOutcome, RenameOutcome};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
 #[serde(transparent)]
@@ -110,64 +114,6 @@ impl<'de> Deserialize<'de> for BackendRoot {
     {
         let value = String::deserialize(deserializer)?;
         Self::parse(&value).map_err(de::Error::custom)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum PeerMountTarget {
-    Direct { contact_id: String },
-    RoomDevice { room_id: String, device_id: String },
-}
-
-impl PeerMountTarget {
-    pub fn validate(&self) -> io::Result<()> {
-        match self {
-            Self::Direct { contact_id } => validate_identity(contact_id, "contact id"),
-            Self::RoomDevice { room_id, device_id } => {
-                validate_identity(room_id, "room id")?;
-                validate_identity(device_id, "device id")
-            }
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum MountSource {
-    SavedRemote {
-        account: String,
-        root: BackendRoot,
-    },
-    GoogleDrive {
-        account: String,
-        root: BackendRoot,
-    },
-    Peer {
-        target: PeerMountTarget,
-        root: BackendRoot,
-    },
-}
-
-impl MountSource {
-    pub fn root(&self) -> &BackendRoot {
-        match self {
-            Self::SavedRemote { root, .. }
-            | Self::GoogleDrive { root, .. }
-            | Self::Peer { root, .. } => root,
-        }
-    }
-
-    pub fn validate(&self) -> io::Result<()> {
-        match self {
-            Self::SavedRemote { account, .. } => validate_identity(account, "saved account"),
-            Self::GoogleDrive { account, .. } => {
-                validate_identity(account, "Google Drive account")?;
-                if account != "cloud:gdrive" {
-                    return Err(invalid("unsupported Google Drive account identity"));
-                }
-                Ok(())
-            }
-            Self::Peer { target, .. } => target.validate(),
-        }
     }
 }
 
@@ -296,6 +242,7 @@ impl MountConfig {
             metadata: self.metadata,
             cache: self.cache,
             runtime_preference: self.runtime_preference,
+            path_dialect: PathDialect::Windows,
         }
     }
 
@@ -332,6 +279,11 @@ pub struct MountRuntimeConfig {
     pub cache: MountCachePolicy,
     #[serde(default)]
     pub runtime_preference: MountRuntimePreference,
+    /// Name rules of the serving frontend (DRV-M1). Absent means Windows, the
+    /// only rules before the field existed; the Windows value is not written,
+    /// so earlier bytes stay unchanged.
+    #[serde(default, skip_serializing_if = "PathDialect::is_windows")]
+    pub path_dialect: PathDialect,
 }
 
 impl MountRuntimeConfig {
@@ -342,7 +294,13 @@ impl MountRuntimeConfig {
             metadata: MountMetadataPolicy::default(),
             cache: MountCachePolicy::default(),
             runtime_preference: MountRuntimePreference::default(),
+            path_dialect: PathDialect::Windows,
         }
+    }
+
+    pub fn with_path_dialect(mut self, dialect: PathDialect) -> Self {
+        self.path_dialect = dialect;
+        self
     }
 
     pub fn with_metadata_policy(mut self, metadata: MountMetadataPolicy) -> Self {
@@ -359,27 +317,6 @@ impl MountRuntimeConfig {
         self.runtime_preference = preference;
         self
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum MountStatus {
-    Unmounted,
-    Mounting,
-    Mounted {
-        drive: DriveLetter,
-    },
-    Unmounting,
-    RuntimeUnavailable {
-        detail: String,
-    },
-    Conflict {
-        drive: DriveLetter,
-        path: String,
-        detail: String,
-    },
-    Failed {
-        detail: String,
-    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -448,51 +385,8 @@ pub enum EntryCondition {
     Conflict(MountConflict),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum FlushOutcome {
-    NoChanges,
-    Committed,
-    /// The backend acknowledged the atomic promotion, but the new metadata or
-    /// local journal could not be reconciled. Callers must return filesystem
-    /// success (the namespace already changed) and surface this recovery state.
-    CommittedPendingVerification(MountConflict),
-    Conflict(MountConflict),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum RenameOutcome {
-    Complete,
-    /// The namespace change is already committed. Filesystem callers must see
-    /// success while Smart Explorer surfaces the retained recovery state.
-    CommittedPendingVerification(MountConflict),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum NamespaceOutcome {
-    Complete,
-    /// A namespace mutation was dispatched or acknowledged, but its final
-    /// shape could not be verified. Windows must not replay it; the host stops
-    /// and remounts after surfacing the detail.
-    CommittedPendingVerification {
-        path: String,
-        detail: String,
-    },
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct DeleteToken(pub(crate) u64);
-
-fn validate_identity(value: &str, name: &str) -> io::Result<()> {
-    if value.is_empty()
-        || value.len() > MAX_ID_LEN
-        || value
-            .chars()
-            .any(|character| character == '\0' || character.is_control())
-    {
-        return Err(invalid(format!("invalid {name}")));
-    }
-    Ok(())
-}
 
 fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message.into())

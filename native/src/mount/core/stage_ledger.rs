@@ -4,13 +4,16 @@
 //! connection or an interrupted process is removed on the next save or
 //! mount instead of staying next to the user's file under the stage
 //! spelling. Losing the ledger loses only this cleanup, never user data:
-//! the spool keeps every unsaved change.
+//! the spool keeps every unsaved change. Stage paths pass the drive's
+//! `PathSealer` on their way to disk and back (contract V1); the plain
+//! sealer keeps the bytes of earlier releases.
+use super::path_sealer::PathSealer;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 const LEDGER_FILE: &str = "stages.json";
 
@@ -30,6 +33,7 @@ struct State {
 pub(super) struct StageLedger {
     path: PathBuf,
     state: Mutex<State>,
+    sealer: Arc<dyn PathSealer>,
 }
 
 /// Marks one stage as in use by a running save until dropped.
@@ -47,12 +51,14 @@ impl Drop for ActiveStage<'_> {
 }
 
 impl StageLedger {
-    pub(super) fn open(root: &Path) -> Self {
+    pub(super) fn open(root: &Path, sealer: Arc<dyn PathSealer>) -> Self {
         let path = root.join(LEDGER_FILE);
-        // An unreadable ledger only forgets cleanup work (see module docs).
+        // An unreadable ledger only forgets cleanup work (see module docs);
+        // so does one this sealer cannot open.
         let recorded = fs::read(&path)
             .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .and_then(|bytes| serde_json::from_slice::<Recorded>(&bytes).ok())
+            .and_then(|stored| stored.map_stages(|stage| sealer.unseal(stage)).ok())
             .unwrap_or_default();
         Self {
             path,
@@ -60,6 +66,7 @@ impl StageLedger {
                 recorded,
                 active: HashSet::new(),
             }),
+            sealer,
         }
     }
 
@@ -107,7 +114,8 @@ impl StageLedger {
     }
 
     fn write(&self, recorded: &Recorded) -> io::Result<()> {
-        let bytes = serde_json::to_vec(recorded).map_err(io::Error::other)?;
+        let sealed = recorded.map_stages(|stage| self.sealer.seal(stage))?;
+        let bytes = serde_json::to_vec(&sealed).map_err(io::Error::other)?;
         let next = self.path.with_extension("json.new");
         let mut file = fs::File::create(&next)?;
         file.write_all(&bytes)?;
@@ -117,9 +125,24 @@ impl StageLedger {
     }
 }
 
+impl Recorded {
+    /// The same ledger with every stage path mapped (sealed or unsealed).
+    fn map_stages(&self, map: impl Fn(&str) -> io::Result<String>) -> io::Result<Self> {
+        let mut stages = BTreeMap::new();
+        for (stage, max_len) in &self.stages {
+            stages.insert(map(stage)?, *max_len);
+        }
+        Ok(Self { stages })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn plain() -> Arc<dyn PathSealer> {
+        Arc::new(super::super::path_sealer::PlainPathSealer)
+    }
 
     fn directory() -> PathBuf {
         let path = std::env::temp_dir().join(format!(
@@ -137,7 +160,7 @@ mod tests {
     #[test]
     fn mount_save_task_stage_ledger_survives_restarts_and_skips_running_saves() {
         let root = directory();
-        let ledger = StageLedger::open(&root);
+        let ledger = StageLedger::open(&root, plain());
         let running = ledger.begin("/a.pdf.se-mount-0000000000000001", 10);
         drop(ledger.begin("/b.pdf.se-mount-0000000000000002", 20));
         assert_eq!(
@@ -146,16 +169,16 @@ mod tests {
             "a running save's stage is never an orphan"
         );
         drop(running);
-        let reopened = StageLedger::open(&root);
+        let reopened = StageLedger::open(&root, plain());
         assert_eq!(reopened.orphans().len(), 2);
         reopened.resolve("/a.pdf.se-mount-0000000000000001");
         reopened.resolve("/missing");
         assert_eq!(
-            StageLedger::open(&root).orphans(),
+            StageLedger::open(&root, plain()).orphans(),
             [("/b.pdf.se-mount-0000000000000002".to_string(), 20)]
         );
         fs::write(root.join(LEDGER_FILE), b"not json").unwrap();
-        assert!(StageLedger::open(&root).orphans().is_empty());
+        assert!(StageLedger::open(&root, plain()).orphans().is_empty());
         let _ = fs::remove_dir_all(&root);
     }
 }

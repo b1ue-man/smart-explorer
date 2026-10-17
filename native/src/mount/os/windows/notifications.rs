@@ -1,68 +1,84 @@
 //! DLL notifications are issued only by the filesystem-owning host loop.
-use std::{collections::VecDeque, io};
+//! Draining, invalidation and path mapping are the shared change pump
+//! (`os/shared/change_pump.rs`, DRV-M2); this sink turns a callback path
+//! into the `X:\…` form of `DokanNotify*`.
+use std::io;
 
-use crate::mount::{metadata_cache::MetadataChange, DriveLetter, MountEngine};
+use super::super::shared::change_pump::{ChangePump, ChangeSink};
 use super::DokanyFileSystem;
-
-const NOTIFICATION_BATCH: usize = 128;
+use crate::mount::{DriveLetter, MountFilesystem};
 
 #[derive(Default)]
 pub(super) struct HostNotifications {
-    pending: VecDeque<MetadataChange>,
+    pump: ChangePump,
 }
 
 impl HostNotifications {
+    /// The volume harnesses hold the engine itself.
+    #[cfg(test)]
     pub(super) fn deliver(
         &mut self,
-        engine: &MountEngine,
+        engine: &crate::mount::MountEngine,
         filesystem: &DokanyFileSystem,
         drive: DriveLetter,
     ) -> io::Result<()> {
-        if self.pending.is_empty() {
-            for change in engine.drain_metadata_changes(NOTIFICATION_BATCH)? {
-                let recursive = matches!(&change,
-                    MetadataChange::Deleted { is_directory: true, .. }
-                    | MetadataChange::Modified { .. });
-                engine.invalidate_content(change.path(), recursive);
-                self.pending.push_back(change);
-            }
-        }
-        for _ in 0..NOTIFICATION_BATCH {
-            let Some(change) = self.pending.front() else { break };
-            let path = mounted_path(engine, drive, change.path())?;
-            let delivered = match change {
-                MetadataChange::Created { is_directory, .. } => {
-                    filesystem.notify_create(&path, *is_directory)
-                }
-                MetadataChange::Deleted { is_directory, .. } => {
-                    filesystem.notify_delete(&path, *is_directory)
-                }
-                MetadataChange::Modified { .. } => filesystem.notify_update(&path),
-            };
-            if !delivered {
-                // Retain this bounded batch; a transient delivery failure must
-                // not turn an already drained change into a lost notification.
-                return Err(io::Error::other("Dokany remote-change notification was not accepted"));
-            }
-            self.pending.pop_front();
-        }
-        Ok(())
+        self.deliver_from(engine, filesystem, drive)
+    }
+
+    pub(super) fn deliver_from(
+        &mut self,
+        source: &dyn MountFilesystem,
+        filesystem: &DokanyFileSystem,
+        drive: DriveLetter,
+    ) -> io::Result<()> {
+        self.pump
+            .deliver(source, &mut DokanySink { filesystem, drive })
     }
 }
 
-fn mounted_path(engine: &MountEngine, drive: DriveLetter, backend: &str) -> io::Result<Vec<u16>> {
-    let root = engine.projector.root().as_str();
-    let suffix = backend.strip_prefix(root)
-        .filter(|suffix| root == "/" || suffix.is_empty() || suffix.starts_with('/'))
-        .ok_or_else(|| io::Error::new(io::ErrorKind::PermissionDenied,
-            "notification path escaped its mounted root"))?;
-    let callback = format!("\\{}", suffix.trim_start_matches('/').replace('/', "\\"));
-    if engine.projector.project(&callback)?.backend() != backend {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "notification path is not canonical"));
+struct DokanySink<'a> {
+    filesystem: &'a DokanyFileSystem,
+    drive: DriveLetter,
+}
+
+impl ChangeSink for DokanySink<'_> {
+    fn created(&mut self, callback_path: &str, is_directory: bool) -> io::Result<()> {
+        let path = mounted_path(self.drive, callback_path)?;
+        accepted(self.filesystem.notify_create(&path, is_directory))
     }
-    let mut path = format!("{}:{callback}", drive.get()).encode_utf16().collect::<Vec<_>>();
+
+    fn deleted(&mut self, callback_path: &str, is_directory: bool) -> io::Result<()> {
+        let path = mounted_path(self.drive, callback_path)?;
+        accepted(self.filesystem.notify_delete(&path, is_directory))
+    }
+
+    fn modified(&mut self, callback_path: &str) -> io::Result<()> {
+        let path = mounted_path(self.drive, callback_path)?;
+        accepted(self.filesystem.notify_update(&path))
+    }
+}
+
+fn accepted(delivered: bool) -> io::Result<()> {
+    if delivered {
+        Ok(())
+    } else {
+        // Retain this bounded batch; a transient delivery failure must not
+        // turn an already drained change into a lost notification.
+        Err(io::Error::other(
+            "Dokany remote-change notification was not accepted",
+        ))
+    }
+}
+
+fn mounted_path(drive: DriveLetter, callback: &str) -> io::Result<Vec<u16>> {
+    let mut path = format!("{}:{callback}", drive.get())
+        .encode_utf16()
+        .collect::<Vec<_>>();
     if path.len() >= 32_767 {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "notification pathname is too long"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "notification pathname is too long",
+        ));
     }
     path.push(0);
     Ok(path)

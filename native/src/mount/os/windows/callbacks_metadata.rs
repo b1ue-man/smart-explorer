@@ -34,8 +34,8 @@ pub(super) unsafe extern "system" fn get_file_information(
                 .and_then(|key| context.snapshot(key).ok())
                 .map(|snapshot| snapshot.node)
             {
-                Some(NodeHandle::File(handle)) => context.engine.stat_handle(handle)?,
-                _ => context.engine.stat_cached(&path)?,
+                Some(NodeHandle::File(handle)) => context.filesystem.stat_handle(handle)?,
+                _ => context.filesystem.stat_cached(&path)?,
             };
             let information =
                 file_information(&meta, &path, context.volume_serial, context.read_only)?;
@@ -208,8 +208,8 @@ fn find_entries(
     // Loading a missing directory snapshot also captures its own metadata;
     // ask for that first so a cold FindFiles callback does not issue a
     // separate point-stat immediately before the same directory fetch.
-    let entries = context.engine.list_dir_cached(path)?;
-    let directory = context.engine.stat_cached(path)?;
+    let entries = context.filesystem.list_dir_cached(path)?;
+    let directory = context.filesystem.stat_cached(path)?;
     reject_open_symlink(&directory)?;
     if !directory.is_dir {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "path is not a directory").into());

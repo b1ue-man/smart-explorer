@@ -32,7 +32,7 @@ pub(super) unsafe extern "system" fn read_file(
                 return Err(win32(ERROR_DIRECTORY));
             };
             let output = output_buffer(buffer, buffer_length)?;
-            let read = context.engine.read(handle, offset, output)?;
+            let read = context.filesystem.read(handle, offset, output)?;
             *read_length = u32::try_from(read).map_err(|_| win32(ERROR_INVALID_PARAMETER))?;
             Ok(())
         })
@@ -66,7 +66,7 @@ pub(super) unsafe extern "system" fn write_file(
                 return Ok(());
             }
             if append {
-                let written = context.engine.append(handle, input)?;
+                let written = context.filesystem.append(handle, input)?;
                 *written_length =
                     u32::try_from(written).map_err(|_| win32(ERROR_INVALID_PARAMETER))?;
                 return Ok(());
@@ -74,7 +74,7 @@ pub(super) unsafe extern "system" fn write_file(
             let write_offset = nonnegative_offset(offset)?;
             let mut allowed = input.len();
             if info.paging_io != 0 {
-                let current_len = context.engine.len(handle)?;
+                let current_len = context.filesystem.len(handle)?;
                 if write_offset >= current_len {
                     return Ok(());
                 }
@@ -82,7 +82,7 @@ pub(super) unsafe extern "system" fn write_file(
                     allowed.min(usize::try_from(current_len - write_offset).unwrap_or(usize::MAX));
             }
             let written = context
-                .engine
+                .filesystem
                 .write(handle, write_offset, &input[..allowed])?;
             *written_length = u32::try_from(written).map_err(|_| win32(ERROR_INVALID_PARAMETER))?;
             Ok(())
@@ -101,7 +101,7 @@ pub(super) unsafe extern "system" fn flush_file_buffers(
             let NodeHandle::File(handle) = snapshot.node else {
                 return Ok(());
             };
-            let outcome = match context.engine.flush(handle) {
+            let outcome = match context.filesystem.flush(handle) {
                 Ok(outcome) => outcome,
                 Err(error) => {
                     context.report(MountStatus::Failed {
@@ -156,7 +156,7 @@ pub(super) unsafe extern "system" fn set_end_of_file(
             let NodeHandle::File(handle) = snapshot.node else {
                 return Err(win32(ERROR_DIRECTORY));
             };
-            context.engine.truncate(handle, size)?;
+            context.filesystem.truncate(handle, size)?;
             Ok(())
         })
     }
@@ -175,8 +175,8 @@ pub(super) unsafe extern "system" fn set_allocation_size(
             let NodeHandle::File(handle) = snapshot.node else {
                 return Err(win32(ERROR_DIRECTORY));
             };
-            if size < context.engine.len(handle)? {
-                context.engine.truncate(handle, size)?;
+            if size < context.filesystem.len(handle)? {
+                context.filesystem.truncate(handle, size)?;
             }
             Ok(())
         })
