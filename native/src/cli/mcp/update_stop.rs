@@ -4,44 +4,37 @@
 //! an agent session must therefore end on that request. A request already
 //! present at start is ignored (a crashed update can leave it behind); a new
 //! or rewritten one ends the server. Version handoffs of `se update` are not
-//! affected: they never stop other `se` processes.
-use std::time::{Duration, SystemTime};
+//! affected: they never stop other `se` processes. The rule and the poll
+//! interval come from the shared helper `daemon::update_stop` (V8), which
+//! every other long-running process of the GUI and CLI images uses as well.
+use crate::daemon::{UpdateStopBaseline, UPDATE_STOP_POLL};
 
-/// Poll interval, well inside the helper's 30-second wait so jobs still get
-/// their cancellation path.
-const POLL: Duration = Duration::from_secs(1);
+#[cfg(test)]
+use crate::daemon::is_new_request;
 
 pub(super) struct UpdateStop {
-    baseline: Option<SystemTime>,
+    baseline: UpdateStopBaseline,
 }
 
 impl UpdateStop {
     pub(super) fn arm() -> Self {
         Self {
-            baseline: crate::daemon::update_stop_marker(),
+            baseline: UpdateStopBaseline::arm(),
         }
     }
 
     pub(super) fn requested(&self) -> bool {
-        is_new_request(self.baseline, crate::daemon::update_stop_marker())
+        self.baseline.requested()
     }
 
     /// Resolves once an update asks every `se` process to exit.
     pub(super) async fn wait(self) {
         loop {
-            tokio::time::sleep(POLL).await;
+            tokio::time::sleep(UPDATE_STOP_POLL).await;
             if self.requested() {
                 return;
             }
         }
-    }
-}
-
-fn is_new_request(baseline: Option<SystemTime>, current: Option<SystemTime>) -> bool {
-    match (baseline, current) {
-        (_, None) => false,
-        (None, Some(_)) => true,
-        (Some(before), Some(now)) => before != now,
     }
 }
 

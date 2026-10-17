@@ -8,13 +8,14 @@ use serde_json::{json, Value};
 mod policy_status;
 
 use super::share_exec::{provider_json, targets_json};
+use crate::share::device_view;
 use crate::share::discovery_state::{
     DiscoveryExchangeState, DiscoveryPublishTarget, DiscoveryUiKind, DiscoveryUiState,
 };
 use crate::share::lifecycle_view::{request_views, RequestView};
 use crate::share::{
     DirectContact, DirectDecisionState, ExecProviderStatus, PeerOpenTarget, ShareExportConfig,
-    ShareIdentity, ShareProfiles, ShareStatus,
+    ShareIdentity, ShareProfiles,
 };
 
 /// Worker facts of the last successful snapshot.
@@ -55,49 +56,19 @@ pub(super) struct StatusInput<'a> {
     pub exec_provider: &'a ExecProviderStatus,
 }
 
-pub(super) fn status_code(status: &ShareStatus) -> &'static str {
-    match status {
-        ShareStatus::Offline => "offline",
-        ShareStatus::Waiting => "waiting",
-        ShareStatus::WaitingForAccess => "waitingForAccess",
-        ShareStatus::Available => "available",
-        ShareStatus::Connecting => "connecting",
-        ShareStatus::Connected => "connected",
-        ShareStatus::ConnectedDirect => "connectedDirect",
-        ShareStatus::ConnectedRelay => "connectedRelay",
-        ShareStatus::Failed(_) => "failed",
-        ShareStatus::IdentityConflict => "identityConflict",
-    }
-}
-
-fn reachable(status: &ShareStatus) -> bool {
-    matches!(
-        status,
-        ShareStatus::Available
-            | ShareStatus::Connected
-            | ShareStatus::ConnectedDirect
-            | ShareStatus::ConnectedRelay
-    )
-}
-
-fn seen_on_lan(contact: &DirectContact, now_secs: i64) -> bool {
-    contact.lan_seen_at.is_some_and(|seen| {
-        now_secs.saturating_sub(seen) <= crate::share::LAN_PRESENCE_TTL_SECS
-            && !contact.lan_candidates.is_empty()
-    })
-}
-
+/// Status code and online rule come from `share::device_view`, shared with
+/// the se Desktop tiles; the JSON is unchanged since v0.5.182.
 fn device_json(profiles: &ShareProfiles, contact: &DirectContact, now_secs: i64) -> Value {
-    let lan = seen_on_lan(contact, now_secs);
+    let lan = device_view::seen_on_lan(contact, now_secs);
     let target = PeerOpenTarget::Direct {
         contact_id: contact.id.clone(),
     };
     json!({
         "contactId": contact.id,
         "name": contact.display_name,
-        "status": status_code(&contact.status),
+        "status": device_view::status_code(&contact.status),
         "statusText": contact.status.label(),
-        "online": reachable(&contact.status) || lan,
+        "online": device_view::online(contact, now_secs),
         "location": target.endpoint_prefix(),
         "lan": lan,
         "shareBack": contact.relation.share_back,
@@ -342,3 +313,7 @@ pub(super) fn open_incoming(profiles: &ShareProfiles, now_secs: i64) -> Vec<Stri
         .map(|view| view.request_id.as_str().to_string())
         .collect()
 }
+
+#[cfg(test)]
+#[path = "share_status_desktop_tests.rs"]
+mod desktop_tests;
