@@ -1,4 +1,5 @@
 use clap::{Args, Subcommand};
+use clap_complete::ArgValueCandidates;
 use std::{
     path::PathBuf,
     time::{Duration, Instant},
@@ -13,6 +14,8 @@ use crate::mount::{
 #[path = "drive_options.rs"]
 mod drive_options;
 use drive_options::MountArgs;
+#[path = "drive_set.rs"]
+mod drive_set;
 
 const START_TIMEOUT: Duration = Duration::from_secs(120);
 
@@ -36,6 +39,8 @@ enum DriveCommand {
     Unmount(SelectArgs),
     #[command(about = "Retry a failed managed drive")]
     Retry(SelectArgs),
+    #[command(about = "Change options of a managed drive, such as mounting it again at login")]
+    Set(drive_set::SetArgs),
 }
 
 #[derive(Args)]
@@ -54,7 +59,10 @@ struct OutputArgs {
 
 #[derive(Args)]
 struct SelectArgs {
-    #[arg(help = "Mount id from `se drive list`, or a mounted letter such as M:")]
+    #[arg(
+        help = "Mount id from `se drive list`, or a mounted letter such as M:",
+        add = ArgValueCandidates::new(drive_set::selector_candidates)
+    )]
     selector: String,
     #[arg(long, help = "Print machine-readable JSON")]
     json: bool,
@@ -68,6 +76,7 @@ pub(super) fn run(args: DriveArgs) -> Result<i32, String> {
         DriveCommand::List(args) => list(args),
         DriveCommand::Unmount(args) => unmount(args),
         DriveCommand::Retry(args) => retry(args),
+        DriveCommand::Set(args) => drive_set::set(args),
     }
 }
 
@@ -141,8 +150,13 @@ fn mount(args: MountArgs) -> Result<i32, String> {
         label,
     )
     .map(|config| config.with_metadata_policy(metadata))
-    .map(|config| config.with_cache_policy(cache).with_runtime_preference(runtime_preference))
+    .map(|config| {
+        config
+            .with_cache_policy(cache)
+            .with_runtime_preference(runtime_preference)
+    })
     .map(|config| config.with_root_security(root_security))
+    .map(|config| config.with_auto_remount(args.auto_remount))
     .map_err(|error| format!("invalid drive configuration: {error}"))?;
     let started = crate::daemon::start_mount(config)?;
     let snapshot = wait_until_started(started)?;
@@ -432,6 +446,7 @@ fn status_text(status: &MountStatus) -> String {
         MountStatus::Unmounted => "unmounted".into(),
         MountStatus::Mounting => "mounting".into(),
         MountStatus::Mounted { drive } => format!("mounted:{drive}"),
+        MountStatus::MountedAt { path } => format!("mounted:{}", clean(&path.to_string_lossy())),
         MountStatus::Unmounting => "unmounting".into(),
         MountStatus::RuntimeUnavailable { detail } => {
             format!("runtime-unavailable:{}", clean(detail))

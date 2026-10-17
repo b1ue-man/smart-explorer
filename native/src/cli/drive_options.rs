@@ -13,7 +13,10 @@ pub(super) struct MountArgs {
         help = "Choose a drive letter automatically or request one letter"
     )]
     pub(super) letter: String,
-    #[arg(long, help = "Enable writes; the default is read-only and safer for remote protocols")]
+    #[arg(
+        long,
+        help = "Enable writes; the default is read-only and safer for remote protocols"
+    )]
     pub(super) read_write: bool,
     #[arg(
         long,
@@ -42,6 +45,11 @@ pub(super) struct MountArgs {
     pub(super) system_runtime: bool,
     #[arg(long, value_name = "TEXT", help = "Windows volume label")]
     pub(super) label: Option<String>,
+    #[arg(
+        long,
+        help = "Mount this drive again at every login and after a background-worker restart"
+    )]
+    pub(super) auto_remount: bool,
     #[arg(long, help = "Print machine-readable JSON")]
     pub(super) json: bool,
 }
@@ -62,17 +70,24 @@ mod optimization_task {
         let defaults = Command::try_parse_from(["mount", "@fixture:/vault"]).unwrap();
         assert_eq!(defaults.mount.cache_mib, 500);
         assert!(!defaults.mount.system_runtime);
+        assert!(!defaults.mount.auto_remount);
         for value in ["0", "1", "500", "65536"] {
             let command = Command::try_parse_from([
-                "mount", "@fixture:/vault", "--cache-mib", value, "--system-runtime",
-            ]).unwrap();
+                "mount",
+                "@fixture:/vault",
+                "--cache-mib",
+                value,
+                "--system-runtime",
+            ])
+            .unwrap();
             assert_eq!(command.mount.cache_mib, value.parse::<u32>().unwrap());
             assert!(command.mount.system_runtime);
         }
         for value in ["-1", "65537", "4294967296", "many"] {
-            assert!(Command::try_parse_from([
-                "mount", "@fixture:/vault", "--cache-mib", value,
-            ]).is_err());
+            assert!(
+                Command::try_parse_from(["mount", "@fixture:/vault", "--cache-mib", value,])
+                    .is_err()
+            );
         }
     }
 }

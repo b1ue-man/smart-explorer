@@ -1,7 +1,10 @@
 use super::mount_peer_roots::PeerMountDiscovery;
 use super::mount_runtime_ui::{install_controls, present_install_outcome};
 use super::mount_ui_draft::MountDraft;
-use super::mount_ui_helpers::{has_mount_attention, mount_list_alert, mount_status_alert, recovery_label, status_label, upsert_mount};
+use super::mount_ui_helpers::{
+    has_mount_attention, mount_list_alert, mount_status_alert, recovery_label, status_label,
+    upsert_mount,
+};
 use super::prelude::*;
 use super::*;
 
@@ -22,6 +25,8 @@ pub(super) enum MountUiResult {
     Snapshot(crate::mount::MountSnapshot),
     List(Vec<crate::mount::MountSnapshot>),
     RuntimeInstalled(crate::mount::DriveRuntimeInstallOutcome),
+    /// DRV-M3: a changed option; the draft window stays as it is.
+    Options(crate::mount::MountSnapshot),
 }
 
 impl Default for MountUiState {
@@ -120,6 +125,21 @@ impl App {
                     MountUiResult::RuntimeInstalled(outcome) => {
                         present_install_outcome(self, outcome);
                     }
+                    MountUiResult::Options(snapshot) => {
+                        let state = if snapshot.config.auto_remount {
+                            "ein"
+                        } else {
+                            "aus"
+                        };
+                        self.notice = Some((
+                            format!(
+                                "Laufwerk „{}“: Beim Anmelden automatisch einbinden {state}",
+                                snapshot.config.label
+                            ),
+                            Instant::now(),
+                        ));
+                        upsert_mount(&mut self.mount_ui.mounts, snapshot);
+                    }
                 }
                 self.mount_ui.next_poll = Instant::now() + POLL_INTERVAL;
                 ctx.request_repaint();
@@ -163,6 +183,7 @@ impl App {
         }
         let mut open = true;
         let mut action: Option<(bool, crate::mount::MountId)> = None;
+        let mut options: Option<(crate::mount::MountId, bool)> = None;
         let mut install_runtime = false;
         egui::Window::new("Smart-Explorer-Laufwerke")
             .open(&mut open)
@@ -188,8 +209,26 @@ impl App {
                         egui::CollapsingHeader::new("Laufwerkdetails")
                             .id_salt(("mount_details", &mount.config.id)).show(ui, |ui| {
                                 ui.label(format!("ID: {}", mount.config.id));
+                                if let Some(folder) = mount.config.location_directory() {
+                                    ui.label(format!("Einhängeort: {}", folder.display()));
+                                }
                                 ui.label(recovery_label(mount.recovery));
                             });
+                        // DRV-M3: the option of a managed drive, as `se drive set`.
+                        let mut auto_remount = mount.config.auto_remount;
+                        if ui
+                            .add_enabled(
+                                self.mount_ui.action_rx.is_none(),
+                                egui::Checkbox::new(
+                                    &mut auto_remount,
+                                    "Beim Anmelden automatisch einbinden",
+                                ),
+                            )
+                            .on_hover_text("Bindet das Laufwerk nach jeder Anmeldung und nach einem Neustart des Hintergrunddienstes wieder ein. Auswerfen entfernt es samt dieser Einstellung.")
+                            .changed()
+                        {
+                            options = Some((mount.config.id.clone(), auto_remount));
+                        }
                         ui.horizontal(|ui| match &mount.status {
                             crate::mount::MountStatus::Failed { .. }
                             | crate::mount::MountStatus::RuntimeUnavailable { .. } => {
@@ -241,6 +280,10 @@ impl App {
         if install_runtime {
             self.spawn_mount_action("Dokany wird sicher installiert", || {
                 crate::mount::install_drive_runtime(None).map(MountUiResult::RuntimeInstalled)
+            });
+        } else if let Some((id, auto_remount)) = options {
+            self.spawn_mount_action("Einstellung wird gespeichert", move || {
+                crate::daemon::set_mount_options(id, auto_remount).map(MountUiResult::Options)
             });
         } else if let Some((retry, id)) = action {
             if retry {

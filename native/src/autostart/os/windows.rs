@@ -1,4 +1,6 @@
 const RUN_VALUE: &str = "SmartExplorerSync";
+/// Run value of the drive restore (DRV-M3, strand S2 C2).
+const DRIVES_RUN_VALUE: &str = "SmartExplorerDrives";
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 
 fn daemon_exe_for(exe: std::path::PathBuf) -> std::path::PathBuf {
@@ -23,6 +25,13 @@ fn logon_exe_for(exe: &std::path::Path) -> Option<std::path::PathBuf> {
 fn run_command_for(exe: &std::path::Path) -> String {
     format!(
         "\"{}\" --sync-daemon",
+        exe.to_string_lossy().replace('/', "\\")
+    )
+}
+
+fn drive_run_command_for(exe: &std::path::Path) -> String {
+    format!(
+        "\"{}\" --sync-daemon --drive-restore",
         exe.to_string_lossy().replace('/', "\\")
     )
 }
@@ -179,11 +188,15 @@ pub fn enable() -> std::io::Result<()> {
 /// Remove the autostart entry. A running Share session worker may remain alive,
 /// but the daemon observes this setting and cancels scheduled sync work.
 pub fn disable() -> std::io::Result<()> {
+    delete_run_value(RUN_VALUE)
+}
+
+fn delete_run_value(name: &str) -> std::io::Result<()> {
     use winreg::enums::HKEY_CURRENT_USER;
     use winreg::RegKey;
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     match hkcu.open_subkey_with_flags(RUN_KEY, winreg::enums::KEY_ALL_ACCESS) {
-        Ok(run) => match run.delete_value(RUN_VALUE) {
+        Ok(run) => match run.delete_value(name) {
             Ok(_) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(e) => Err(e),
@@ -191,6 +204,52 @@ pub fn disable() -> std::io::Result<()> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e),
     }
+}
+
+/// The Run value of the drive restore exists (DRV-M3).
+pub fn drive_restore_registered() -> bool {
+    use winreg::enums::HKEY_CURRENT_USER;
+    use winreg::RegKey;
+    RegKey::predef(HKEY_CURRENT_USER)
+        .open_subkey(RUN_KEY)
+        .and_then(|run| run.get_value::<String, _>(DRIVES_RUN_VALUE))
+        .map(|value| !value.is_empty())
+        .unwrap_or(false)
+}
+
+/// Creates the Run value of the drive restore or brings its program path up
+/// to date. Windows keeps its own switch apart (`StartupApproved\Run`), so a
+/// value switched off in the Task Manager stays off.
+pub fn register_drive_restore() -> std::io::Result<()> {
+    use winreg::enums::HKEY_CURRENT_USER;
+    use winreg::RegKey;
+    let exe = logon_exe_for(&daemon_exe()?).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "Windows logon autostart requires the GUI executable beside se.exe",
+        )
+    })?;
+    if !exe.is_file() {
+        // An update renamed the running program; the worker of the new
+        // program writes the value at its start.
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "the running program was replaced; the drive Run value stays unchanged",
+        ));
+    }
+    let command = drive_run_command_for(&exe);
+    let (run, _) = RegKey::predef(HKEY_CURRENT_USER).create_subkey(RUN_KEY)?;
+    if run
+        .get_value::<String, _>(DRIVES_RUN_VALUE)
+        .is_ok_and(|current| current == command)
+    {
+        return Ok(());
+    }
+    run.set_value(DRIVES_RUN_VALUE, &command)
+}
+
+pub fn unregister_drive_restore() -> std::io::Result<()> {
+    delete_run_value(DRIVES_RUN_VALUE)
 }
 
 /// Spawn the background daemon now (detached) so the user doesn't have to log
@@ -338,6 +397,16 @@ mod tests {
                 r"C:\Program Files\Smart Explorer\smart_explorer.exe"
             )),
             r#""C:\Program Files\Smart Explorer\smart_explorer.exe" --sync-daemon"#
+        );
+    }
+
+    #[test]
+    fn drive_run_entry_starts_the_restore_with_the_gui_executable() {
+        assert_eq!(
+            super::drive_run_command_for(std::path::Path::new(
+                r"C:\Program Files\Smart Explorer\Smart Explorer.exe"
+            )),
+            r#""C:\Program Files\Smart Explorer\Smart Explorer.exe" --sync-daemon --drive-restore"#
         );
     }
 }

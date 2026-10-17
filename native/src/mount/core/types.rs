@@ -1,6 +1,7 @@
 use serde::{de, Deserialize, Deserializer, Serialize};
 use std::fmt;
 use std::io;
+use std::path::{Path, PathBuf};
 
 use super::cache_policy::{MountCachePolicy, MountRuntimePreference};
 use super::metadata_policy::MountMetadataPolicy;
@@ -10,6 +11,13 @@ use super::path_dialect::PathDialect;
 // caller keeps the old path.
 pub use super::mount_source::{MountSource, PeerMountTarget};
 pub use super::mount_status::{FlushOutcome, MountStatus, NamespaceOutcome, RenameOutcome};
+
+// DRV-M3: the folder a drive appears at. Declared here because `mount/mod.rs`
+// belongs to the hub of the mount module; `MountConfig` offers the accessors
+// that callers outside `crate::mount` need.
+#[path = "mount_location.rs"]
+mod mount_location;
+pub use mount_location::MountLocation;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
 #[serde(transparent)]
@@ -105,6 +113,12 @@ impl BackendRoot {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// The root `/` of a source without a choosable root (`Devices`,
+    /// `Vault`).
+    pub(crate) fn top() -> Self {
+        Self("/".to_string())
+    }
 }
 
 impl<'de> Deserialize<'de> for BackendRoot {
@@ -195,6 +209,14 @@ pub struct MountConfig {
     #[serde(default)]
     pub runtime_preference: MountRuntimePreference,
     pub label: String,
+    /// DRV-M3: the folder the drive appears at; absent means the default of
+    /// the platform. Written only when set, so earlier entries keep their
+    /// bytes and older versions ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<MountLocation>,
+    /// DRV-M3: „Beim Anmelden automatisch einbinden“. Written only when on.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub auto_remount: bool,
 }
 
 impl MountConfig {
@@ -215,6 +237,8 @@ impl MountConfig {
             cache: MountCachePolicy::default(),
             runtime_preference: MountRuntimePreference::default(),
             label: label.into(),
+            location: None,
+            auto_remount: false,
         };
         config.validate()?;
         Ok(config)
@@ -224,6 +248,9 @@ impl MountConfig {
         self.source.validate()?;
         self.metadata.validate()?;
         self.cache.validate()?;
+        if let Some(location) = &self.location {
+            location.validate()?;
+        }
         if self.label.chars().count() > 128
             || self
                 .label
@@ -265,6 +292,39 @@ impl MountConfig {
         self.runtime_preference = preference;
         self
     }
+
+    pub fn with_auto_remount(mut self, auto_remount: bool) -> Self {
+        self.auto_remount = auto_remount;
+        self
+    }
+
+    /// Sets (`Some`) or clears (`None`) the folder the drive appears at.
+    pub fn with_location_directory(mut self, path: Option<PathBuf>) -> io::Result<Self> {
+        self.location = path.map(MountLocation::directory).transpose()?;
+        Ok(self)
+    }
+
+    /// The folder the user chose for the drive, if any.
+    pub fn location_directory(&self) -> Option<&Path> {
+        self.location.as_ref().map(MountLocation::path)
+    }
+
+    /// Whether `path` is acceptable as a drive folder (form only).
+    pub fn check_location_directory(path: &Path) -> io::Result<()> {
+        MountLocation::directory(path).map(|_| ())
+    }
+
+    /// Whether the drive is mounted again at login and after a worker
+    /// restart (DRV-M3): „Beim Anmelden automatisch einbinden“, or the device
+    /// tree „Verbundene Geräte als Ordner“, which stays on until switched off
+    /// (strand S2 C2 and C5).
+    pub fn restores_at_login(&self) -> bool {
+        self.auto_remount || self.source.is_device_tree()
+    }
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// Sanitized configuration passed to a filesystem host. The host receives an

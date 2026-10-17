@@ -1,16 +1,29 @@
 use crate::mount::{MountRecovery, MountSnapshot, MountStatus};
 
+use super::restore::Retention;
 use super::MountEntry;
 
 const MAX_DAEMON_STATUS_DETAIL_BYTES: usize = 16 * 1024;
+const UPDATE_STOP_PREFIX: &str = "Fuer ein Update beendet: ";
 
+/// Ends the bookkeeping of an exited host. A host that ended on an update
+/// stop (exit 75, contract V8) with a clean journal and without a failure
+/// report ended like an unmount; otherwise it stays `Failed` and says why.
 pub(super) fn finish_exit(
     entry: &mut MountEntry,
     exit: super::super::mount_host_process::MountHostExit,
+    retention: &mut Retention,
 ) {
     clear_host_runtime(entry);
-    if exit.status.success() && entry.recovery.is_clean() {
-        finish_clean(entry);
+    let update_stop = exit.status.code() == Some(super::super::update_stop::EXIT_UPDATE_STOP);
+    let ended_cleanly = exit.status.success() || (update_stop && !entry.host_terminal_failure);
+    if ended_cleanly && entry.recovery.is_clean() {
+        let keep = if update_stop {
+            retention.keep_after_update_stop(entry)
+        } else {
+            retention.keeps(entry)
+        };
+        finish_clean(entry, keep);
         return;
     }
     clear_backend_runtime(entry);
@@ -22,6 +35,11 @@ pub(super) fn finish_exit(
     if matches!(entry.status, MountStatus::RuntimeUnavailable { .. }) || entry.host_terminal_failure
     {
         entry.pending_host_failure = None;
+        if update_stop {
+            if let MountStatus::Failed { detail } = &mut entry.status {
+                *detail = bounded_detail(format!("{UPDATE_STOP_PREFIX}{detail}"));
+            }
+        }
         return;
     }
     let pending = entry.pending_host_failure.take();
@@ -38,8 +56,13 @@ pub(super) fn finish_exit(
         (Some(status), None) => Some(status),
         (None, process) => process,
     };
+    let detail = exit_detail(entry.recovery, &exit.status, cause.as_deref());
     entry.status = MountStatus::Failed {
-        detail: bounded_detail(exit_detail(entry.recovery, &exit.status, cause.as_deref())),
+        detail: bounded_detail(if update_stop {
+            format!("{UPDATE_STOP_PREFIX}{detail}")
+        } else {
+            detail
+        }),
     };
 }
 
@@ -65,7 +88,9 @@ fn exit_detail(
     }
 }
 
-pub(super) fn finish_clean(entry: &mut MountEntry) {
+/// A clean end. `keep_registration` (DRV-M3, `Retention`) keeps the registry
+/// record of a drive that restores at login.
+pub(super) fn finish_clean(entry: &mut MountEntry, keep_registration: bool) {
     clear_host_runtime(entry);
     entry.recovery = MountRecovery::Clean;
     entry.pending_host_failure = None;
@@ -75,7 +100,7 @@ pub(super) fn finish_clean(entry: &mut MountEntry) {
         return;
     }
     clear_backend_runtime(entry);
-    if entry.registry_recorded {
+    if entry.registry_recorded && !keep_registration {
         if let Err(error) = super::super::mount_registry::remove(&entry.config.id) {
             entry.status = MountStatus::Failed {
                 detail: format!("Laufwerk-Registry bereinigen: {error}"),
@@ -141,7 +166,11 @@ pub(super) fn fail_process_reap(entry: &mut MountEntry, error: &std::io::Error) 
     entry.host_terminal_failure = true;
 }
 
-pub(super) fn terminate_after_observation_error(entry: &mut MountEntry, error: &std::io::Error) {
+pub(super) fn terminate_after_observation_error(
+    entry: &mut MountEntry,
+    error: &std::io::Error,
+    retention: &mut Retention,
+) {
     let Some(mut child) = entry.child.take() else {
         fail_process_observation(entry, error, None);
         return;
@@ -154,7 +183,7 @@ pub(super) fn terminate_after_observation_error(entry: &mut MountEntry, error: &
         child.try_wait()
     };
     match exit {
-        Ok(Some(exit)) => finish_exit(entry, exit),
+        Ok(Some(exit)) => finish_exit(entry, exit, retention),
         Ok(None) => entry.child = Some(child),
         Err(wait_error) => {
             fail_process_reap(entry, &wait_error);
@@ -214,4 +243,170 @@ pub(super) fn random_token() -> Result<String, String> {
     let mut bytes = [0u8; 32];
     getrandom::getrandom(&mut bytes).map_err(|error| format!("Laufwerk-Token: {error}"))?;
     Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+#[cfg(test)]
+mod update_stop_tests {
+    use super::{finish_exit, MountEntry, Retention};
+    use crate::mount::{
+        BackendRoot, DriveSelection, MountConfig, MountId, MountMode, MountRecovery, MountSource,
+        MountStatus,
+    };
+
+    fn exit_status(code: i32) -> std::process::ExitStatus {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            std::process::ExitStatus::from_raw(code << 8)
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::ExitStatusExt;
+            std::process::ExitStatus::from_raw(code as u32)
+        }
+    }
+
+    fn exit(code: i32) -> super::super::super::mount_host_process::MountHostExit {
+        super::super::super::mount_host_process::MountHostExit {
+            status: exit_status(code),
+            detail: None,
+        }
+    }
+
+    /// A drive whose host reported `status` with `recovery` and exited.
+    fn entry(
+        id: &str,
+        auto_remount: bool,
+        status: MountStatus,
+        recovery: MountRecovery,
+        host_terminal_failure: bool,
+    ) -> MountEntry {
+        let config = MountConfig::new(
+            MountId::parse(id).unwrap(),
+            MountSource::SavedRemote {
+                account: "sftp:prod".into(),
+                root: BackendRoot::parse("/srv").unwrap(),
+            },
+            DriveSelection::Automatic,
+            MountMode::ReadWrite,
+            id,
+        )
+        .unwrap()
+        .with_auto_remount(auto_remount);
+        let mut entry = super::super::registered_entry(config, recovery, String::new());
+        entry.status = status;
+        // A record of an auto-remount drive stays; no other test entry
+        // touches the registry of this machine.
+        entry.registry_recorded = auto_remount;
+        entry.host_terminal_failure = host_terminal_failure;
+        entry
+    }
+
+    #[test]
+    fn drive_task_update_stop_exit_clean_journal_counts_as_unmount() {
+        let mut retention = Retention::default();
+        // Clean journal, exit 75: unmounted like exit 0, not a failure.
+        let mut plain = entry(
+            "plain",
+            false,
+            MountStatus::Unmounted,
+            MountRecovery::Clean,
+            false,
+        );
+        finish_exit(&mut plain, exit(75), &mut retention);
+        assert_eq!(plain.status, MountStatus::Unmounted);
+        assert!(plain.recovery.is_clean());
+        // Exit 0 keeps the behaviour of v0.5.182.
+        let mut stopped = entry(
+            "stopped",
+            false,
+            MountStatus::Unmounted,
+            MountRecovery::Clean,
+            false,
+        );
+        finish_exit(&mut stopped, exit(0), &mut retention);
+        assert_eq!(stopped.status, MountStatus::Unmounted);
+        // An auto-remount drive keeps its registry record for the next start.
+        let mut login = entry(
+            "login",
+            true,
+            MountStatus::Unmounted,
+            MountRecovery::Clean,
+            false,
+        );
+        finish_exit(&mut login, exit(75), &mut retention);
+        assert_eq!(login.status, MountStatus::Unmounted);
+        assert!(login.registry_recorded);
+        assert!(retention.keeps(&login));
+        // Changes left in the journal: `Failed` with the host's reason and
+        // the update as cause; the recovery evidence stays.
+        let mut pending = entry(
+            "pending",
+            false,
+            MountStatus::Failed {
+                detail: "1 change waits for Retry".into(),
+            },
+            MountRecovery::Required,
+            true,
+        );
+        finish_exit(&mut pending, exit(75), &mut retention);
+        match &pending.status {
+            MountStatus::Failed { detail } => {
+                assert!(detail.starts_with("Fuer ein Update beendet: "), "{detail}");
+                assert!(detail.contains("1 change waits for Retry"), "{detail}");
+            }
+            other => panic!("unexpected status {other:?}"),
+        }
+        assert_eq!(pending.recovery, MountRecovery::Required);
+        // A host that ended for the update before reporting its journal.
+        let mut unknown = entry(
+            "unknown",
+            false,
+            MountStatus::Mounting,
+            MountRecovery::Unknown,
+            false,
+        );
+        finish_exit(&mut unknown, exit(75), &mut retention);
+        match &unknown.status {
+            MountStatus::Failed { detail } => {
+                assert!(detail.starts_with("Fuer ein Update beendet: "), "{detail}");
+                assert!(detail.contains("Recovery-Status"), "{detail}");
+            }
+            other => panic!("unexpected status {other:?}"),
+        }
+        // A failure the host reported at the update stop (its shutdown
+        // watchdog) stays visible although the journal is clean.
+        let mut watchdog = entry(
+            "watchdog",
+            false,
+            MountStatus::Failed {
+                detail: "the mounted drive shutdown watchdog stopped".into(),
+            },
+            MountRecovery::Clean,
+            true,
+        );
+        finish_exit(&mut watchdog, exit(75), &mut retention);
+        match &watchdog.status {
+            MountStatus::Failed { detail } => {
+                assert!(detail.starts_with("Fuer ein Update beendet: "), "{detail}");
+                assert!(detail.contains("watchdog"), "{detail}");
+            }
+            other => panic!("unexpected status {other:?}"),
+        }
+        // Any other non-zero exit stays the failure of v0.5.182.
+        let mut crashed = entry(
+            "crashed",
+            false,
+            MountStatus::Mounting,
+            MountRecovery::Clean,
+            false,
+        );
+        finish_exit(&mut crashed, exit(3), &mut retention);
+        match &crashed.status {
+            MountStatus::Failed { detail } => {
+                assert!(!detail.contains("Update"), "{detail}");
+            }
+            other => panic!("unexpected status {other:?}"),
+        }
+    }
 }

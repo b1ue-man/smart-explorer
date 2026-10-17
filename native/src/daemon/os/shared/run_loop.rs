@@ -101,21 +101,21 @@ pub(crate) fn run_daemon_with(handoff: Option<Handoff>) {
     }
     // Publish the lightweight control plane before starting Iroh. A terminal
     // client can now observe the daemon immediately even when relay discovery
-    // makes the initial Share load take several seconds.
-    if let Err(error) = share_host.reload_now() {
-        log(&format!("share worker initial load failed: {error}"));
-    }
+    // makes the initial Share load take several seconds. DRV-M3/S2 K7: a
+    // worker started only for the drive restore defers Share.
+    super::run_start_reason::begin(&share_host);
     // Ping remains available during initialization, but clients only accept
     // this generation as ready after all synchronous identity/profile loading
     // has released the Share host state.
     share_host.mark_initialized();
     // In-process callers treat a published generation like a ready Ping.
     let _serving = live::serve(&share_host);
+    super::run_start_reason::restore_drives(&share_host);
     // The embedded worker beats once per tick; the desktop process keeps its
     // 2 s beat for the GUI status line.
     let embedded = live::is_embedded();
     let mut job_supervisor = JobSupervisor::new();
-    let mut sync_enabled = crate::autostart::is_enabled();
+    let mut sync_enabled = super::run_start_reason::sync_enabled();
 
     let mut realtime = super::realtime::Realtime::new();
     let mut connections = super::connect_triggers::Connections::new();
@@ -128,7 +128,7 @@ pub(crate) fn run_daemon_with(handoff: Option<Handoff>) {
             stop_daemon(&mut job_supervisor, &share_host, &listener);
             return;
         }
-        let enabled_now = crate::autostart::is_enabled();
+        let enabled_now = super::run_start_reason::sync_enabled();
         if enabled_now != sync_enabled {
             sync_enabled = enabled_now;
             connections = super::connect_triggers::Connections::new();
@@ -148,7 +148,7 @@ pub(crate) fn run_daemon_with(handoff: Option<Handoff>) {
                 log(&error);
             }
         }
-        share_host.tick();
+        super::run_start_reason::tick(&share_host);
         if stop_requested(share_host.generation()) {
             stop_daemon(&mut job_supervisor, &share_host, &listener);
             return;
@@ -238,7 +238,7 @@ pub(crate) fn run_daemon_with(handoff: Option<Handoff>) {
             if stop_requested(share_host.generation()) {
                 break;
             }
-            if crate::autostart::is_enabled() != sync_enabled {
+            if super::run_start_reason::sync_enabled() != sync_enabled {
                 break;
             }
             std::thread::sleep(Duration::from_secs(2));
@@ -247,7 +247,7 @@ pub(crate) fn run_daemon_with(handoff: Option<Handoff>) {
             }
             // A toggle during the sleep is applied by the outer loop first, so
             // a pending catch-up is never judged by the stale state.
-            if crate::autostart::is_enabled() != sync_enabled {
+            if super::run_start_reason::sync_enabled() != sync_enabled {
                 break;
             }
             let live_controls = scheduling_controls();
@@ -271,7 +271,7 @@ pub(crate) fn run_daemon_with(handoff: Option<Handoff>) {
                 sync_enabled,
                 live_controls.permit_mutation,
             );
-            share_host.tick();
+            super::run_start_reason::tick(&share_host);
             if !embedded {
                 write_heartbeat();
             }
