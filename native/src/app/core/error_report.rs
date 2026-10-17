@@ -59,6 +59,7 @@ impl App {
             Scheme::Smb => "SMB",
             Scheme::GDrive => "Google Drive",
             Scheme::Peer => "Gerätefreigabe",
+            Scheme::Vault => "Cryptomator-Tresor",
         };
         let root = if self.root_path.is_empty() {
             "Keine aktive Scan-Wurzel"

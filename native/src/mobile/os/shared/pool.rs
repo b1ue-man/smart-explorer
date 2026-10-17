@@ -1,6 +1,9 @@
 //! One live backend per connection, reused across calls like a desktop tab
 //! keeps its `RemoteState`. Remote backends are wrapped in `CachingBackend`
 //! (the desktop browsing cache); local paths share one `LocalBackend`.
+//! A vault (`vault://`) is pooled per site without the browsing cache, so no
+//! cleartext listing outlives a lock, and is reopened once its session is
+//! locked (the next unlock brings a new session).
 use super::error::ApiError;
 use super::location::{Loc, LocKind};
 use super::runtime::lock;
@@ -16,7 +19,17 @@ struct Pooled {
     backend: BackendHandle,
     /// Archive size and modification time a `ZipBackend` was opened with.
     zip_stamp: Option<(u64, Option<SystemTime>)>,
+    /// The session of a vault backend: stale once it is locked.
+    vault: Option<Arc<crate::vault::VaultSession>>,
     last_used: Instant,
+}
+
+impl Pooled {
+    fn stale(&self) -> bool {
+        self.vault
+            .as_ref()
+            .is_some_and(|session| session.is_locked())
+    }
 }
 
 pub(crate) struct BackendPool {
@@ -29,6 +42,8 @@ enum Plan {
     GDrive(String),
     Share(crate::share::PeerOpenTarget, String),
     Zip(String, String),
+    /// Site as written, cleartext path.
+    Vault(String, String),
 }
 
 impl BackendPool {
@@ -56,13 +71,13 @@ impl BackendPool {
             _ => None,
         };
         if let Some(pooled) = lock(&self.entries).get_mut(&key) {
-            if pooled.zip_stamp == zip_stamp {
+            if pooled.zip_stamp == zip_stamp && !pooled.stale() {
                 pooled.last_used = Instant::now();
                 return Ok((pooled.backend.clone(), plan.path().to_string()));
             }
         }
         // Connect without holding the pool lock; a concurrent winner is kept.
-        let (backend, path) = open(plan)?;
+        let (backend, path, vault) = open(plan)?;
         let mut entries = lock(&self.entries);
         if zip_stamp.is_some() && !entries.contains_key(&key) {
             make_room_for_zip(&mut entries);
@@ -70,15 +85,17 @@ impl BackendPool {
         let pooled = entries
             .entry(key)
             .and_modify(|pooled| {
-                if pooled.zip_stamp != zip_stamp {
+                if pooled.zip_stamp != zip_stamp || pooled.stale() {
                     pooled.backend = backend.clone();
                     pooled.zip_stamp = zip_stamp;
+                    pooled.vault = vault.clone();
                 }
                 pooled.last_used = Instant::now();
             })
             .or_insert_with(|| Pooled {
                 backend: backend.clone(),
                 zip_stamp,
+                vault,
                 last_used: Instant::now(),
             });
         Ok((pooled.backend.clone(), path))
@@ -128,6 +145,28 @@ impl BackendPool {
                     Plan::Zip(archive, loc.path.clone()),
                 )
             }
+            LocKind::Vault => {
+                let site = loc
+                    .prefix
+                    .split_once("://")
+                    .map(|(_, site)| site.to_string())
+                    .ok_or_else(|| ApiError::invalid("Ungültiger Tresorort"))?;
+                // Keyed by the site ID; other spellings are resolved once.
+                let id = if crate::vault::is_site_id(&site) {
+                    site.clone()
+                } else {
+                    crate::vault::RegistryStore::open_default()
+                        .resolve(&site)
+                        .map_err(ApiError::not_found)?
+                        .id
+                };
+                (
+                    crate::vault::vault_location(&id, "")
+                        .trim_end_matches('/')
+                        .to_string(),
+                    Plan::Vault(id, loc.path.clone()),
+                )
+            }
         }))
     }
 }
@@ -138,12 +177,20 @@ impl Plan {
             Plan::Saved(_, path)
             | Plan::GDrive(path)
             | Plan::Share(_, path)
-            | Plan::Zip(_, path) => path,
+            | Plan::Zip(_, path)
+            | Plan::Vault(_, path) => path,
         }
     }
 }
 
-fn open(plan: Plan) -> Result<(BackendHandle, String), ApiError> {
+/// The backend of a plan, its path and, for a vault, its session.
+type Opened = (
+    BackendHandle,
+    String,
+    Option<Arc<crate::vault::VaultSession>>,
+);
+
+fn open(plan: Plan) -> Result<Opened, ApiError> {
     let (backend, path) = match plan {
         Plan::Saved(connection, path) => {
             let (backend, _) =
@@ -163,7 +210,12 @@ fn open(plan: Plan) -> Result<(BackendHandle, String), ApiError> {
             let backend = crate::zipfs::ZipBackend::open(&archive)
                 .map_err(|error| ApiError::from(error).context("ZIP öffnen"))?;
             // The archive map is already in memory; no browsing cache needed.
-            return Ok((Arc::new(backend), path));
+            return Ok((Arc::new(backend), path, None));
+        }
+        Plan::Vault(site, path) => {
+            // No browsing cache: a cached listing would outlive the lock.
+            let opened = crate::vault::open_vault_backend(&site, &path).map_err(vault_error)?;
+            return Ok((opened.backend, opened.path, Some(opened.session)));
         }
     };
     let backend: BackendHandle = if backend.is_local() {
@@ -171,7 +223,19 @@ fn open(plan: Plan) -> Result<(BackendHandle, String), ApiError> {
     } else {
         Arc::new(CachingBackend::new(backend))
     };
-    Ok((backend, path))
+    Ok((backend, path, None))
+}
+
+/// A vault that did not open: locked (`vault_locked`, C7.5), not entered,
+/// or its storage location failed.
+fn vault_error(error: crate::vault::VaultOpenError) -> ApiError {
+    match error.code() {
+        Some(code) => ApiError::new(code, error.to_string()),
+        None => match error {
+            crate::vault::VaultOpenError::Unknown(message) => ApiError::not_found(message),
+            other => connect_error(other.to_string()),
+        },
+    }
 }
 
 /// A failed connect: a missing SMB share is `not_found` (named in the

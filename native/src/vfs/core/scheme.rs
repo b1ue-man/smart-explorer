@@ -9,4 +9,7 @@ pub enum Scheme {
     Smb,
     GDrive,
     Peer,
+    /// The cleartext view of an unlocked Cryptomator vault (`vault://`),
+    /// layered over the backend that stores the vault.
+    Vault,
 }

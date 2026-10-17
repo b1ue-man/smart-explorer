@@ -1,6 +1,7 @@
 //! Location strings (api.md §2): desktop endpoints plus the app-internal
 //! `zip://<archive>!/<inner>` and `trash://`. A location is `prefix + path`,
-//! where `path` is the backend path and `prefix` names the connection.
+//! where `path` is the backend path and `prefix` names the connection;
+//! for `vault://<SITE>/<path>` the prefix names the vault site.
 use super::error::ApiError;
 use crate::share::PeerOpenTarget;
 
@@ -19,6 +20,8 @@ pub(crate) enum LocKind {
     Share,
     Zip,
     Trash,
+    /// The cleartext view of an unlocked vault (`vault://<SITE>/…`).
+    Vault,
 }
 
 impl LocKind {
@@ -35,6 +38,7 @@ impl LocKind {
             LocKind::Share => "share",
             LocKind::Zip => "zip",
             LocKind::Trash => "trash",
+            LocKind::Vault => "vault",
         }
     }
 }
@@ -88,6 +92,17 @@ impl Loc {
                 let (target, path) = PeerOpenTarget::from_endpoint(location)
                     .ok_or_else(|| ApiError::invalid("Ungültige Share-Adresse"))?;
                 Self::with(LocKind::Share, target.endpoint_prefix(), &path)
+            }
+            crate::vault::VAULT_SCHEME => {
+                let locator =
+                    crate::vault::VaultLocator::parse(location).map_err(ApiError::invalid)?;
+                Self::with(
+                    LocKind::Vault,
+                    crate::vault::vault_location(&locator.site, "")
+                        .trim_end_matches('/')
+                        .to_string(),
+                    &locator.path,
+                )
             }
             scheme @ ("sftp" | "ftp" | "ftps" | "webdav" | "smb") => {
                 let kind = match scheme {
@@ -277,4 +292,50 @@ pub(crate) fn validate_name(name: &str) -> Result<&str, ApiError> {
         return Err(ApiError::invalid("Name ist zu lang"));
     }
     Ok(trimmed)
+}
+
+#[cfg(test)]
+mod vault_loc_tests {
+    use super::{Loc, LocKind};
+
+    const SITE: &str = "0123456789abcdef0123456789abcdef";
+
+    #[test]
+    fn vault_task_android_loc_vault_kind() {
+        let loc = Loc::parse(&format!("vault://{SITE}/Docs/a.txt")).unwrap();
+        assert_eq!(loc.kind, LocKind::Vault);
+        assert_eq!(loc.kind.as_str(), "vault");
+        assert_eq!(loc.prefix, format!("vault://{SITE}"));
+        assert_eq!(loc.path, "/Docs/a.txt");
+        assert_eq!(loc.location(), format!("vault://{SITE}/Docs/a.txt"));
+        assert_eq!(loc.parent(), Some(format!("vault://{SITE}/Docs")));
+        assert_eq!(loc.child("b"), format!("vault://{SITE}/Docs/a.txt/b"));
+        assert_eq!(loc.favorite_key(), format!("vault://{SITE}/Docs/a.txt"));
+        assert!(!loc.is_local());
+        assert!(!loc.is_app_internal());
+        let root = Loc::parse(&format!("VAULT://{SITE}")).unwrap();
+        assert_eq!((root.kind, root.path.as_str()), (LocKind::Vault, "/"));
+        assert_eq!(root.location(), format!("vault://{SITE}/"));
+        assert!(Loc::parse("vault:///Docs").is_err());
+        assert!(Loc::parse(&format!("vault://{SITE}/../x")).is_err());
+        // The storage view is no browsable location of the app.
+        assert!(Loc::parse(&format!("vault-store://{SITE}")).is_err());
+        // Every other kind parses as before.
+        let kinds = [
+            ("/storage/emulated/0/DCIM", LocKind::Local),
+            ("sftp://anna@nas:22/srv", LocKind::Sftp),
+            ("ftp://h/x", LocKind::Ftp),
+            ("ftps://h/x", LocKind::Ftps),
+            ("webdav://anna@cloud:443/dav", LocKind::Webdav),
+            ("smb://anna@nas/daten", LocKind::Smb),
+            ("gdrive:///Docs", LocKind::GDrive),
+            ("share://direct/contact-a/Gate", LocKind::Share),
+            ("zip:///storage/a.zip!/x", LocKind::Zip),
+            ("trash://", LocKind::Trash),
+        ];
+        for (location, kind) in kinds {
+            assert_eq!(Loc::parse(location).unwrap().kind, kind, "{location}");
+        }
+        assert!(Loc::parse("http://example.org/x").is_err());
+    }
 }

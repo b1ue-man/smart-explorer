@@ -1,6 +1,8 @@
 //! Headless cleanup after a connection, Direct peer or room was removed:
 //! favourites, per-folder preferences and mounts of the scope are removed,
-//! sync jobs are the user's own work and only reported as orphaned.
+//! sync jobs and vault sites are the user's own work and only reported.
+//! Vault sites whose vault lies on the removed endpoint stay entered (with
+//! their settings) and are named, since they no longer open (C2.7).
 use super::location_prefs::{favorites_path, load_dir_sort, save_dir_sort};
 use super::removal_scope::{
     filter_dir_sort, filter_favorites, job_references_scope, CleanupReport, MountScope,
@@ -28,6 +30,20 @@ pub fn cleanup_removed_endpoint_state(scope: &RemovedEndpointScope) -> CleanupRe
                 .push(format!("Ordner-Einstellungen bereinigen: {error}")),
         }
         report.orphaned_sync_jobs = orphaned_sync_jobs(scope);
+        match crate::vault::site_locations() {
+            Ok(sites) => {
+                let labels = vault_sites_on(&sites, scope);
+                if !labels.is_empty() {
+                    report.file_errors.push(format!(
+                        "Tresororte auf dem entfernten Ziel bleiben eingetragen und öffnen nicht mehr: {}",
+                        labels.join(", ")
+                    ));
+                }
+            }
+            Err(error) => report
+                .file_errors
+                .push(format!("Tresororte nicht geprüft: {error}")),
+        }
     }
     match stop_mounts(scope) {
         Ok(stopped) => report.mounts_stopped = stopped,
@@ -92,5 +108,18 @@ fn orphaned_sync_jobs(scope: &RemovedEndpointScope) -> Vec<String> {
     jobs.iter()
         .filter(|job| job_references_scope(job, scope))
         .map(|job| job.name.clone())
+        .collect()
+}
+
+/// Labels of the vault sites (`label`, `location`) whose vault lies inside
+/// the removed scope; UNC locations compare with forward slashes.
+pub(super) fn vault_sites_on(
+    sites: &[(String, String)],
+    scope: &RemovedEndpointScope,
+) -> Vec<String> {
+    sites
+        .iter()
+        .filter(|(_, location)| scope.matches_key(&location.replace('\\', "/")))
+        .map(|(label, _)| label.clone())
         .collect()
 }
