@@ -1,0 +1,1246 @@
+name: rechte-desktop-tresore-task
+run-name: Rechte, se Desktop, Tresore (Stapel 2026-10-17) ${{ inputs.candidate_sha }}
+
+# The one task-level suite of the batch "Rechte, se Desktop, Tresore"
+# (docs/plaene/2026-10-17-rechte-desktop-tresore/plan.md, D3). Dispatch it once for
+# the exact pushed candidate SHA; it never builds release artifacts or publishes.
+# Every job runs the one entrypoint native/test-rechte-desktop-tresore-task.py with
+# --job <JOB>; stages, expected test names and fixtures live in native/rdt_task/.
+#   prepare               lock (resolution without --locked), audit, licenses
+#                         (native/licenses_task_checks.py), static; artifact
+#                         rdt-prepare = native/Cargo.lock + license file (L1, L2)
+#   linux-core            unit, perm-pair, drive-cli, drive-devices, vault-*,
+#                         screen-pair (U41), docs-cli
+#   linux-root            root and account-service stages, FUSE, vault drives
+#   linux-2204            perm_task_exec_linux_ubuntu2204_starts on systemd 249;
+#                         without the image the overview job reports it as not run
+#   linux-desktop, linux-wayland, linux-gnome, windows-screen, windows-desktop
+#                         S4/S5 stages of suite part B (U41) plus the shared
+#                         gui-harness and drive-desktop stages
+#   windows-core          unit, perm-windows, Dokany regression, drive and vault stages
+#   desktop-bins          Linux se + share server (development profile) for device pairs
+#   android-build         debug and test APK (x86_64 emulator only), JVM/Robolectric tests
+#   android-device        emulator API 36 (fallback API 35), android-device-api30 API 30
+#   report                overview of every job's report.json
+# Each job writes report.json (every test: passed / failed / not_run with reason) and
+# a job summary; "not run" never counts as passed.
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Full 40-character pushed candidate SHA, matching the selected ref
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rechte-desktop-tresore-task-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      CARGO_INCREMENTAL: 0
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          # The stale search diffs the documentation against the batch base da2646d2.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind workflow and checkout to the requested candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
+          [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+          # Registry and installed tools (cargo-audit, cargo-about) only; a separate key keeps
+          # this almost empty target folder away from the build caches of the other jobs.
+          shared-key: rechte-desktop-tresore-prepare
+          cache-on-failure: true
+
+      - name: Run the one task entrypoint (lock, audit, licenses, static)
+        shell: bash
+        timeout-minutes: 55
+        run: >-
+          python native/test-rechte-desktop-tresore-task.py --job prepare
+          --log-root "$RUNNER_TEMP/rdt-prepare"
+          --out "$RUNNER_TEMP/rdt-prepare-out"
+
+      - name: Hand native/Cargo.lock and the license file to the later jobs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdt-prepare
+          path: ${{ runner.temp }}/rdt-prepare-out
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: true
+
+      - name: Hand the report to the overview job
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdt-report-prepare
+          path: ${{ runner.temp }}/rdt-prepare/report.json
+          if-no-files-found: warn
+          retention-days: 14
+          overwrite: true
+
+      - name: Preserve acceptance and failure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdt-prepare-evidence-${{ inputs.candidate_sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rdt-prepare
+          if-no-files-found: warn
+          retention-days: 14
+
+  linux-core:
+    needs: prepare
+    # prepare fails as planned in the first run (L1, L2); the other jobs still run.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Bind workflow and checkout to the requested candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
+          [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+
+      - name: Place native/Cargo.lock and the license file of the job prepare
+        uses: actions/download-artifact@v4
+        with:
+          name: rdt-prepare
+          path: ${{ github.workspace }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      # CryptoFS 2.11.0 (vault-interop) is compiled for Java 25. No cache: no CryptoFS
+      # jar may end up in an artifact or a cache (strang-tresore.md VLT-M14, NR G21).
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            native
+            share-server
+          shared-key: rechte-desktop-tresore
+          cache-on-failure: true
+
+      - name: Load sch_netem for the netem checks of screen-pair (U41)
+        continue-on-error: true
+        shell: bash
+        run: sudo -n modprobe sch_netem
+
+      - name: Run the one task entrypoint
+        shell: bash
+        timeout-minutes: 350
+        run: >-
+          python native/test-rechte-desktop-tresore-task.py --job linux-core
+          --log-root "$RUNNER_TEMP/rdt-linux-core"
+
+      - name: Hand the report to the overview job
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdt-report-linux-core
+          path: ${{ runner.temp }}/rdt-linux-core/report.json
+          if-no-files-found: warn
+          retention-days: 14
+          overwrite: true
+
+      - name: Preserve acceptance and failure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdt-linux-core-evidence-${{ inputs.candidate_sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rdt-linux-core
+          if-no-files-found: warn
+          retention-days: 14
+
+  linux-root:
+    needs: prepare
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Bind workflow and checkout to the requested candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
+          [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+
+      - name: Place native/Cargo.lock and the license file of the job prepare
+        uses: actions/download-artifact@v4
+        with:
+          name: rdt-prepare
+          path: ${{ github.workspace }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+          shared-key: rechte-desktop-tresore
+          cache-on-failure: true
+
+      # Missing fuse3 turns the FUSE entries into "not run" with the reason.
+      - name: Install fuse3 for the FUSE stages
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo -n apt-get update
+          sudo -n apt-get install -y fuse3
+
+      - name: Run the one task entrypoint
+        shell: bash
+        timeout-minutes: 230
+        run: >-
+          python native/test-rechte-desktop-tresore-task.py --job linux-root
+          --log-root "$RUNNER_TEMP/rdt-linux-root"
+
+      - name: Hand the report to the overview job
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdt-report-linux-root
+          path: ${{ runner.temp }}/rdt-linux-root/report.json
+          if-no-files-found: warn
+          retention-days: 14
+          overwrite: true
+
+      - name: Preserve acceptance and failure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdt-linux-root-evidence-${{ inputs.candidate_sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rdt-linux-root
+          if-no-files-found: warn
+          retention-days: 14
+
+  linux-2204:
+    needs: prepare
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    # D3/C2: only when GitHub still offers the image; a job without report.json is
+    # reported by the overview job as "not run" instead of failing the run.
+    continue-on-error: true
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Bind workflow and checkout to the requested candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
+          [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+
+      - name: Place native/Cargo.lock and the license file of the job prepare
+        uses: actions/download-artifact@v4
+        with:
+          name: rdt-prepare
+          path: ${{ github.workspace }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+          shared-key: rechte-desktop-tresore
+          cache-on-failure: true
+
+      - name: Run the one task entrypoint
+        shell: bash
+        timeout-minutes: 80
+        run: >-
+          python native/test-rechte-desktop-tresore-task.py --job linux-2204
+          --log-root "$RUNNER_TEMP/rdt-linux-2204"
+
+      - name: Hand the report to the overview job
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdt-report-linux-2204
+          path: ${{ runner.temp }}/rdt-linux-2204/report.json
+          if-no-files-found: warn
+          retention-days: 14
+          overwrite: true
+
+      - name: Preserve acceptance and failure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdt-linux-2204-evidence-${{ inputs.candidate_sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rdt-linux-2204
+          if-no-files-found: warn
+          retention-days: 14
+
+  linux-desktop:
+    needs: prepare
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Bind workflow and checkout to the requested candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
+          [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+
+      - name: Place native/Cargo.lock and the license file of the job prepare
+        uses: actions/download-artifact@v4
+        with:
+          name: rdt-prepare
+          path: ${{ github.workspace }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+          shared-key: rechte-desktop-tresore
+          cache-on-failure: true
+
+      - name: Install the X11 desktop tools (D3 linux-desktop)
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo -n apt-get update
+          sudo -n apt-get install -y xvfb xauth x11-utils openbox xfwm4 xfdesktop4 x11-xserver-utils xdotool ffmpeg fuse3
+
+      - name: Run the one task entrypoint
+        shell: bash
+        timeout-minutes: 290
+        run: >-
+          python native/test-rechte-desktop-tresore-task.py --job linux-desktop
+          --log-root "$RUNNER_TEMP/rdt-linux-desktop"
+
+      - name: Hand the report to the overview job
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdt-report-linux-desktop
+          path: ${{ runner.temp }}/rdt-linux-desktop/report.json
+          if-no-files-found: warn
+          retention-days: 14
+          overwrite: true
+
+      - name: Preserve acceptance and failure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdt-linux-desktop-evidence-${{ inputs.candidate_sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rdt-linux-desktop
+          if-no-files-found: warn
+          retention-days: 14
+
+  linux-wayland:
+    needs: prepare
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Bind workflow and checkout to the requested candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
+          [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+
+      - name: Place native/Cargo.lock and the license file of the job prepare
+        uses: actions/download-artifact@v4
+        with:
+          name: rdt-prepare
+          path: ${{ github.workspace }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+          shared-key: rechte-desktop-tresore
+          cache-on-failure: true
+
+      - name: Install sway and the wlroots portal (D3 linux-wayland)
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo -n apt-get update
+          sudo -n apt-get install -y sway grim pipewire wireplumber xdg-desktop-portal xdg-desktop-portal-wlr
+
+      - name: Try KWin Wayland and the KDE portal (S4 K3; not run when missing)
+        continue-on-error: true
+        shell: bash
+        run: sudo -n apt-get install -y kwin-wayland xdg-desktop-portal-kde
+
+      - name: Run the one task entrypoint
+        shell: bash
+        timeout-minutes: 230
+        run: >-
+          python native/test-rechte-desktop-tresore-task.py --job linux-wayland
+          --log-root "$RUNNER_TEMP/rdt-linux-wayland"
+
+      - name: Hand the report to the overview job
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdt-report-linux-wayland
+          path: ${{ runner.temp }}/rdt-linux-wayland/report.json
+          if-no-files-found: warn
+          retention-days: 14
+          overwrite: true
+
+      - name: Preserve acceptance and failure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdt-linux-wayland-evidence-${{ inputs.candidate_sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rdt-linux-wayland
+          if-no-files-found: warn
+          retention-days: 14
+
+  linux-gnome:
+    needs: prepare
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Bind workflow and checkout to the requested candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
+          [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+
+      - name: Place native/Cargo.lock and the license file of the job prepare
+        uses: actions/download-artifact@v4
+        with:
+          name: rdt-prepare
+          path: ${{ github.workspace }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+          shared-key: rechte-desktop-tresore
+          cache-on-failure: true
+
+      - name: Install GNOME Shell and DING (D3 linux-gnome; not run when the shell does not start)
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo -n apt-get update
+          sudo -n apt-get install -y gnome-shell gnome-shell-extension-desktop-icons-ng
+
+      - name: Run the one task entrypoint
+        shell: bash
+        timeout-minutes: 170
+        run: >-
+          python native/test-rechte-desktop-tresore-task.py --job linux-gnome
+          --log-root "$RUNNER_TEMP/rdt-linux-gnome"
+
+      - name: Hand the report to the overview job
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdt-report-linux-gnome
+          path: ${{ runner.temp }}/rdt-linux-gnome/report.json
+          if-no-files-found: warn
+          retention-days: 14
+          overwrite: true
+
+      - name: Preserve acceptance and failure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdt-linux-gnome-evidence-${{ inputs.candidate_sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rdt-linux-gnome
+          if-no-files-found: warn
+          retention-days: 14
+
+  windows-core:
+    needs: prepare
+    if: ${{ !cancelled() }}
+    runs-on: windows-2025
+    timeout-minutes: 360
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Bind workflow and checkout to the requested candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
+          [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+
+      - name: Place native/Cargo.lock and the license file of the job prepare
+        uses: actions/download-artifact@v4
+        with:
+          name: rdt-prepare
+          path: ${{ github.workspace }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            native
+            share-server
+          shared-key: rechte-desktop-tresore
+          cache-on-failure: true
+
+      # Dokany: the stages install it only from SE_TASK_DOKANY_MSI with a matching
+      # SE_TASK_DOKANY_MSI_SHA256; without both, the Dokany entries are "not run".
+      - name: Run the one task entrypoint
+        shell: bash
+        timeout-minutes: 350
+        run: >-
+          python native/test-rechte-desktop-tresore-task.py --job windows-core
+          --log-root "$RUNNER_TEMP/rdt-windows-core"
+
+      - name: Hand the report to the overview job
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdt-report-windows-core
+          path: ${{ runner.temp }}/rdt-windows-core/report.json
+          if-no-files-found: warn
+          retention-days: 14
+          overwrite: true
+
+      - name: Preserve acceptance and failure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdt-windows-core-evidence-${{ inputs.candidate_sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rdt-windows-core
+          if-no-files-found: warn
+          retention-days: 14
+
+  windows-screen:
+    needs: prepare
+    if: ${{ !cancelled() }}
+    runs-on: windows-2025
+    timeout-minutes: 240
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Bind workflow and checkout to the requested candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
+          [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+
+      - name: Place native/Cargo.lock and the license file of the job prepare
+        uses: actions/download-artifact@v4
+        with:
+          name: rdt-prepare
+          path: ${{ github.workspace }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            native
+            share-server
+          shared-key: rechte-desktop-tresore
+          cache-on-failure: true
+
+      - name: Enable Media Foundation without a restart (S4 K6; not run when it fails)
+        continue-on-error: true
+        shell: powershell
+        run: Install-WindowsFeature Server-Media-Foundation
+
+      - name: Run the one task entrypoint
+        shell: bash
+        timeout-minutes: 230
+        run: >-
+          python native/test-rechte-desktop-tresore-task.py --job windows-screen
+          --log-root "$RUNNER_TEMP/rdt-windows-screen"
+
+      - name: Hand the report to the overview job
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdt-report-windows-screen
+          path: ${{ runner.temp }}/rdt-windows-screen/report.json
+          if-no-files-found: warn
+          retention-days: 14
+          overwrite: true
+
+      - name: Preserve acceptance and failure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdt-windows-screen-evidence-${{ inputs.candidate_sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rdt-windows-screen
+          if-no-files-found: warn
+          retention-days: 14
+
+  windows-desktop:
+    needs: prepare
+    if: ${{ !cancelled() }}
+    runs-on: windows-2025
+    timeout-minutes: 240
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Bind workflow and checkout to the requested candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
+          [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+
+      - name: Place native/Cargo.lock and the license file of the job prepare
+        uses: actions/download-artifact@v4
+        with:
+          name: rdt-prepare
+          path: ${{ github.workspace }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+          shared-key: rechte-desktop-tresore
+          cache-on-failure: true
+
+      - name: Run the one task entrypoint
+        shell: bash
+        timeout-minutes: 230
+        run: >-
+          python native/test-rechte-desktop-tresore-task.py --job windows-desktop
+          --log-root "$RUNNER_TEMP/rdt-windows-desktop"
+
+      - name: Hand the report to the overview job
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdt-report-windows-desktop
+          path: ${{ runner.temp }}/rdt-windows-desktop/report.json
+          if-no-files-found: warn
+          retention-days: 14
+          overwrite: true
+
+      - name: Preserve acceptance and failure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdt-windows-desktop-evidence-${{ inputs.candidate_sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rdt-windows-desktop
+          if-no-files-found: warn
+          retention-days: 14
+
+  desktop-bins:
+    needs: prepare
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Bind workflow and checkout to the requested candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
+          [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+
+      - name: Place native/Cargo.lock and the license file of the job prepare
+        uses: actions/download-artifact@v4
+        with:
+          name: rdt-prepare
+          path: ${{ github.workspace }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            native
+            share-server
+          shared-key: rechte-desktop-tresore
+          cache-on-failure: true
+
+      - name: Run the one task entrypoint (Linux se and share server, development profile)
+        shell: bash
+        timeout-minutes: 80
+        run: >-
+          python native/test-rechte-desktop-tresore-task.py --job desktop-bins
+          --log-root "$RUNNER_TEMP/rdt-desktop-bins"
+          --out "$RUNNER_TEMP/rdt-desktop-bins-out"
+
+      - name: Hand the binaries to the device jobs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdt-desktop-bins
+          path: ${{ runner.temp }}/rdt-desktop-bins-out
+          if-no-files-found: warn
+          retention-days: 14
+          overwrite: true
+
+      - name: Hand the report to the overview job
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdt-report-desktop-bins
+          path: ${{ runner.temp }}/rdt-desktop-bins/report.json
+          if-no-files-found: warn
+          retention-days: 14
+          overwrite: true
+
+      - name: Preserve acceptance and failure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdt-desktop-bins-evidence-${{ inputs.candidate_sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rdt-desktop-bins
+          if-no-files-found: warn
+          retention-days: 14
+
+  android-build:
+    needs: prepare
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Bind workflow and checkout to the requested candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
+          [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+
+      - name: Place native/Cargo.lock and the license file of the job prepare
+        uses: actions/download-artifact@v4
+        with:
+          name: rdt-prepare
+          path: ${{ github.workspace }}
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      # D3 Bauregel: the Android library only for the emulator ABI.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-linux-android
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+          shared-key: rechte-desktop-tresore-android
+          cache-on-failure: true
+
+      - name: Run the one task entrypoint (APKs, JVM and Robolectric tests)
+        shell: bash
+        timeout-minutes: 170
+        run: >-
+          python native/test-rechte-desktop-tresore-task.py --job android-build
+          --log-root "$RUNNER_TEMP/rdt-android-build"
+          --out "$RUNNER_TEMP/rdt-apks"
+
+      - name: Hand the APKs to the device jobs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdt-apks
+          path: ${{ runner.temp }}/rdt-apks
+          if-no-files-found: warn
+          retention-days: 14
+          overwrite: true
+
+      - name: Hand the report to the overview job
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdt-report-android-build
+          path: ${{ runner.temp }}/rdt-android-build/report.json
+          if-no-files-found: warn
+          retention-days: 14
+          overwrite: true
+
+      - name: Preserve acceptance and failure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdt-android-build-evidence-${{ inputs.candidate_sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rdt-android-build
+          if-no-files-found: warn
+          retention-days: 14
+
+  android-device:
+    needs: [android-build, desktop-bins]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Bind workflow and checkout to the requested candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
+          [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      # Missing inputs make the device stages report "not run" with the reason.
+      - name: Download the debug and test APKs
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: rdt-apks
+          path: ${{ runner.temp }}/rdt-apks
+
+      - name: Download the desktop se and share server
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: rdt-desktop-bins
+          path: ${{ runner.temp }}/rdt-desktop-bins
+
+      - name: Enable KVM for the emulator
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo -n tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo -n udevadm control --reload-rules
+          sudo -n udevadm trigger --name-match=kvm
+
+      - name: Device stages on the emulator, API 36
+        id: emulator36
+        continue-on-error: true
+        uses: reactivecircus/android-emulator-runner@v2
+        timeout-minutes: 110
+        with:
+          api-level: 36
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          cores: 3
+          ram-size: 3072M
+          disk-size: 8G
+          sdcard-path-or-size: 512M
+          emulator-boot-timeout: 900
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          # The script input runs line by line in separate shells: exactly one command.
+          script: python native/test-rechte-desktop-tresore-task.py --job android-device --phase device --api-level 36 --log-root "$RUNNER_TEMP/rdt-android-device" --apks "$RUNNER_TEMP/rdt-apks" --bins "$RUNNER_TEMP/rdt-desktop-bins"
+
+      # D3 assumption: without an API 36 system image the instrumentation runs on API 35
+      # and the report names it. The marker file exists once the device phase started.
+      - name: Device stages on the emulator, fallback API 35
+        id: emulator35
+        if: ${{ !cancelled() && steps.emulator36.outcome == 'failure' && hashFiles('.rdt-emulator-started') == '' }}
+        continue-on-error: true
+        uses: reactivecircus/android-emulator-runner@v2
+        timeout-minutes: 110
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          cores: 3
+          ram-size: 3072M
+          disk-size: 8G
+          sdcard-path-or-size: 512M
+          emulator-boot-timeout: 900
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          script: python native/test-rechte-desktop-tresore-task.py --job android-device --phase device --api-level 36 --log-root "$RUNNER_TEMP/rdt-android-device" --apks "$RUNNER_TEMP/rdt-apks" --bins "$RUNNER_TEMP/rdt-desktop-bins"
+
+      - name: Inventory, summary and verdict of the device job
+        if: always()
+        shell: bash
+        timeout-minutes: 30
+        run: >-
+          python native/test-rechte-desktop-tresore-task.py --job android-device --phase verdict
+          --api-level 36 --log-root "$RUNNER_TEMP/rdt-android-device"
+
+      - name: Hand the report to the overview job
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdt-report-android-device
+          path: ${{ runner.temp }}/rdt-android-device/report.json
+          if-no-files-found: warn
+          retention-days: 14
+          overwrite: true
+
+      - name: Preserve acceptance and failure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdt-android-device-evidence-${{ inputs.candidate_sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rdt-android-device
+          if-no-files-found: warn
+          retention-days: 14
+
+  android-device-api30:
+    needs: [android-build, desktop-bins]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Bind workflow and checkout to the requested candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
+          [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Download the debug and test APKs
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: rdt-apks
+          path: ${{ runner.temp }}/rdt-apks
+
+      - name: Download the desktop se and share server
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: rdt-desktop-bins
+          path: ${{ runner.temp }}/rdt-desktop-bins
+
+      - name: Enable KVM for the emulator
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo -n tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo -n udevadm control --reload-rules
+          sudo -n udevadm trigger --name-match=kvm
+
+      - name: Device stages on the emulator, API 30
+        continue-on-error: true
+        uses: reactivecircus/android-emulator-runner@v2
+        timeout-minutes: 110
+        with:
+          api-level: 30
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          cores: 3
+          ram-size: 3072M
+          disk-size: 8G
+          sdcard-path-or-size: 512M
+          emulator-boot-timeout: 900
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          script: python native/test-rechte-desktop-tresore-task.py --job android-device-api30 --phase device --api-level 30 --log-root "$RUNNER_TEMP/rdt-android-device-api30" --apks "$RUNNER_TEMP/rdt-apks" --bins "$RUNNER_TEMP/rdt-desktop-bins"
+
+      - name: Inventory, summary and verdict of the device job
+        if: always()
+        shell: bash
+        timeout-minutes: 30
+        run: >-
+          python native/test-rechte-desktop-tresore-task.py --job android-device-api30 --phase verdict
+          --api-level 30 --log-root "$RUNNER_TEMP/rdt-android-device-api30"
+
+      - name: Hand the report to the overview job
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdt-report-android-device-api30
+          path: ${{ runner.temp }}/rdt-android-device-api30/report.json
+          if-no-files-found: warn
+          retention-days: 14
+          overwrite: true
+
+      - name: Preserve acceptance and failure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdt-android-device-api30-evidence-${{ inputs.candidate_sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rdt-android-device-api30
+          if-no-files-found: warn
+          retention-days: 14
+
+  report:
+    needs: [prepare, linux-core, linux-root, linux-2204, linux-desktop, linux-wayland, linux-gnome,
+            windows-core, windows-screen, windows-desktop, desktop-bins, android-build, android-device,
+            android-device-api30]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      RDT_NEEDS_JSON: ${{ toJSON(needs) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Bind workflow and checkout to the requested candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
+          [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Download every job report
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: rdt-report-*
+          path: ${{ runner.temp }}/rdt-reports
+
+      - name: Overview over every job
+        shell: bash
+        timeout-minutes: 30
+        run: >-
+          python native/test-rechte-desktop-tresore-task.py --job report
+          --log-root "$RUNNER_TEMP/rdt-report"
+          --reports "$RUNNER_TEMP/rdt-reports"
+
+      - name: Preserve the overview
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdt-overview-${{ inputs.candidate_sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rdt-report
+          if-no-files-found: warn
+          retention-days: 14

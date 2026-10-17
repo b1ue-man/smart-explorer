@@ -1,0 +1,541 @@
+# Erwartete Abnahmesignale der Stapel-Suite rechte-desktop-tresore-task (plan.md D3).
+#
+# Die Suite waehlt Tests nur ueber diese genauen Namen aus, nie ueber Praefixfilter
+# (D3, W14: mount_vault_task_* wird nie ausgewaehlt). Die Pruefung
+# rdt_suite_inventory_complete vergleicht diese Liste mit dem Code:
+#   - jeder Test mit einem Stapelpraefix (perm_task_, drive_task_, vault_task_,
+#     screen_task_, desktop_task_, launcher_task_, licenses_task_, rdt_suite_) im Code
+#     steht hier und laeuft je Job in genau einer Stufe;
+#   - jeder Eintrag im Abschnitt [umgesetzt] existiert im Code;
+#   - ein Eintrag im Abschnitt [noch nicht umgesetzt], der im Code fehlt, erscheint im
+#     Bericht als "nicht ausgefuehrt" mit dem Grund "nicht umgesetzt" und dem Paket.
+#     Das Paket, das den Test bringt, verschiebt die Zeile nach [umgesetzt] und setzt
+#     dabei Optionen und Stufe endgueltig.
+#
+# Zeilenformat (Felder durch Leerzeichen getrennt):
+#   <name> <job>:<stufe>[,<job>:<stufe>...] [option ...]
+# Ein Name darf in mehreren Zeilen stehen (zum Beispiel Windows umgesetzt, Linux offen),
+# aber je Job nur an genau einem Ort.
+#
+# Optionen:
+#   art=lib       Bibliothekstest des Crates smart_explorer (Standard); laeuft mit vollem
+#                 Testpfad und --exact
+#   art=modul     Bestandsharness: alle Tests, deren voller Pfad das Bruchstueck modul=
+#                 enthaelt
+#   art=check     Pruefung der Suite selbst (Python, Register CHECKS eines rdt_task-Moduls)
+#   art=skript    Pruefung eines fertigen Pruefskripts (skript=PFAD), das den Namen meldet
+#   art=junit     JVM-/Robolectric-Test der Android-App (Methode oder Klasse)
+#   art=instr     Instrumentierung auf dem Emulator (Methode oder Klasse)
+#   ignored       Test traegt #[ignore]: laeuft mit --include-ignored
+#   threads=N     --test-threads=N
+#   env=NAME=WERT Umgebungsvariable (mehrfach). Platzhalter: {se} absoluter Pfad des
+#                 Debug-se, {gui} absoluter Pfad des Debug-smart_explorer, {tmp} frischer
+#                 Ordner je Aufruf, {native}, {repo}, {work}
+#   root          Linux: der Test laeuft ueber sudo -E als root (Testprogramm direkt)
+#   pfad=a::b::n  erwarteter voller Testpfad (Inventur prueft ihn)
+#   modul=::a::b:: Pfadbruchstueck fuer art=modul
+#   fixture=a,b   Laeufer-Fixtures mit festem Umgebungsvertrag (rdt_task/common.py):
+#                 share, sftp, bus, xvfb, nodisplay, home, runtime-tmpfs, fuse,
+#                 fuse-timeout, dokany, sudo (common.py); interop, keep, marker (vault.py)
+#   skript=PFAD   Pruefskript fuer art=skript
+#   paket=Uxx     Paket, das den Test bringt (Pflicht in [noch nicht umgesetzt]);
+#                 "offen" = kein Paket benannt
+#   quelle=TEXT   Herkunft (R/L/T = Zeile in strang-rechte/-laufwerke/-tresore.md,
+#                 D3, Uebergabe-Uxx, C4, C5, Code)
+
+[umgesetzt]
+
+# ---- Pruefungen der Suite selbst (U39; D1-Eintrag U39, D3) ----
+rdt_suite_lock_committed_current      prepare:lock      art=check  quelle=D3,L1
+rdt_suite_cargo_audit                 prepare:audit     art=check  quelle=D3
+rdt_suite_workflow_static             prepare:static    art=check  quelle=D1-U39
+rdt_suite_docs_stale_search           prepare:static    art=check  quelle=D3,AGENTS,L308
+rdt_suite_inventory_complete          prepare:inventory,linux-core:inventory,linux-root:inventory,linux-2204:inventory,linux-desktop:inventory,linux-wayland:inventory,linux-gnome:inventory,windows-core:inventory,windows-screen:inventory,windows-desktop:inventory,desktop-bins:inventory,android-build:inventory,android-device:inventory,android-device-api30:inventory  art=check  quelle=D3
+rdt_suite_prepare_files_placed        linux-core:setup,linux-root:setup,linux-2204:setup,linux-desktop:setup,linux-wayland:setup,linux-gnome:setup,windows-core:setup,windows-screen:setup,windows-desktop:setup,desktop-bins:setup,android-build:setup  art=check  quelle=D3,L1,L2
+rdt_suite_desktop_bins_built          desktop-bins:desktop-bins  art=check  quelle=D3
+rdt_suite_android_apks_built          android-build:apk  art=check  quelle=D3
+rdt_suite_device_ready                android-device:device-setup,android-device-api30:device-setup  art=check  quelle=D3
+rdt_suite_interop_harness_selftest    linux-core:vault-interop  art=check  quelle=T564,VLT-M14
+
+# ---- S1 PRM-M1 (U01): linux-core unit, windows-core unit (R302) ----
+perm_task_port_full_shell_0_5_180             linux-core:unit,windows-core:unit  quelle=R302,D3-Erhaltung-S1
+perm_task_port_program_list_0_5_182           linux-core:unit,windows-core:unit  quelle=R302,D3-Erhaltung-S1
+perm_task_port_run_as_root_worker             linux-core:unit,windows-core:unit  quelle=R302,D3-Erhaltung-S1
+perm_task_port_disabled_keeps_settings        linux-core:unit,windows-core:unit  quelle=R302,D3-Erhaltung-S1
+perm_task_write_legacy_form_bytes_unchanged   linux-core:unit,windows-core:unit  quelle=R302,D3-Erhaltung-S1
+perm_task_old_reader_sees_new_grant_off       linux-core:unit,windows-core:unit  quelle=R302,D3-Erhaltung-S1
+perm_task_unknown_access_version_fail_closed  linux-core:unit,windows-core:unit  quelle=R302
+perm_task_relation_proof_matches_exec_auth    linux-core:unit,windows-core:unit  quelle=R302,D3-Erhaltung-S1
+perm_task_narrowing_matrix                    linux-core:unit,windows-core:unit  quelle=R302
+perm_task_expiry_ends_sessions                linux-core:unit,windows-core:unit  quelle=R302
+perm_task_allow_own_ls_runs                   linux-core:unit,windows-core:unit  quelle=R302
+perm_task_systemd_unit_props_v249_compatible  linux-core:unit  quelle=D3-PRM-M1,R348
+
+# ---- S1 PRM-M2 (U01): linux-core perm-pair; Erhaltungsfaelle zusaetzlich windows-core unit (R314) ----
+perm_task_hello_ok_access_view                linux-core:perm-pair  quelle=R314
+perm_task_old_client_no_pending_frame         linux-core:perm-pair,windows-core:unit  quelle=R314,D3-Erhaltung-S1
+perm_task_old_client_survives_long_approval   linux-core:perm-pair,windows-core:unit  quelle=R314,D3-Erhaltung-S1
+perm_task_new_client_old_host                 linux-core:perm-pair,windows-core:unit  quelle=R314,D3-Erhaltung-S1
+perm_task_error_texts_have_next_step          linux-core:perm-pair  quelle=R314
+perm_task_terminal_off_rejects_login          linux-core:perm-pair  quelle=R314
+
+# ---- S1 PRM-M3 (U04): linux-core perm-pair (R326) ----
+perm_task_ask_once_starts_and_logs                        linux-core:perm-pair  quelle=R326
+perm_task_ask_always_sets_allow_keeps_session             linux-core:perm-pair  quelle=R326
+perm_task_ask_deny_returns_approval_denied                linux-core:perm-pair  quelle=R326
+perm_task_ask_client_cancel_withdraws_prompt              linux-core:perm-pair  quelle=R326
+perm_task_ask_counts_against_peer_limit                   linux-core:perm-pair  quelle=R326
+perm_task_screen_approval_counts_against_exec_reservations  linux-core:perm-pair  quelle=R326
+perm_task_narrowing_withdraws_pending                     linux-core:perm-pair  quelle=R326
+perm_task_pending_surface_cli_only_without_display        linux-core:perm-pair  fixture=nodisplay  quelle=R326,D3
+
+# ---- S1 PRM-M4 (U04): linux-core perm-pair (R336) ----
+perm_task_audit_fields_exec          linux-core:perm-pair  quelle=R336
+perm_task_audit_no_shell_text        linux-core:perm-pair  quelle=R336
+perm_task_audit_rotation_unchanged   linux-core:perm-pair,windows-core:unit  quelle=R336,D3-Erhaltung-S1
+
+# ---- S1 PRM-M5 (U01, U18): linux-root perm-linux-root als root, linux-2204 (R348, Uebergabe U18) ----
+perm_task_remote_account_ls_runs_linux_root          linux-root:perm-linux-root  ignored threads=1 root env=SMART_EXPLORER_PERM_ROOT_TASK=1 env=SMART_EXPLORER_PERM_SE_BIN={se}  quelle=R348,Uebergabe-U18
+perm_task_linux_root_pam_session                     linux-root:perm-linux-root  ignored threads=1 root env=SMART_EXPLORER_PERM_ROOT_TASK=1 env=SMART_EXPLORER_PERM_SE_BIN={se}  quelle=R348,Uebergabe-U18
+perm_task_linux_root_expired_account_refused         linux-root:perm-linux-root  ignored threads=1 root env=SMART_EXPLORER_PERM_ROOT_TASK=1 env=SMART_EXPLORER_PERM_SE_BIN={se}  quelle=R348,Uebergabe-U18
+perm_task_linux_password_change_required_refused     linux-root:perm-linux-root  ignored threads=1 root env=SMART_EXPLORER_PERM_ROOT_TASK=1 env=SMART_EXPLORER_PERM_SE_BIN={se}  quelle=R348,Uebergabe-U18
+perm_task_linux_terminal_as_account                  linux-root:perm-linux-root  ignored threads=1 root env=SMART_EXPLORER_PERM_ROOT_TASK=1 env=SMART_EXPLORER_PERM_SE_BIN={se}  quelle=R348,Uebergabe-U18
+perm_task_linux_account_unit_contains_children       linux-root:perm-linux-root  ignored threads=1 root env=SMART_EXPLORER_PERM_ROOT_TASK=1 env=SMART_EXPLORER_PERM_SE_BIN={se}  quelle=R348,Uebergabe-U18
+perm_task_linux_cancel_contains_account_unit         linux-root:perm-linux-root  ignored threads=1 root env=SMART_EXPLORER_PERM_ROOT_TASK=1 env=SMART_EXPLORER_PERM_SE_BIN={se}  quelle=R348,Uebergabe-U18
+perm_task_remote_account_cannot_read_ipc_token_linux linux-root:perm-linux-root  ignored threads=1 root env=SMART_EXPLORER_PERM_ROOT_TASK=1 env=SMART_EXPLORER_PERM_SE_BIN={se}  quelle=R348,Uebergabe-U18
+perm_task_exec_linux_ubuntu2204_starts               linux-2204:perm-2204  ignored threads=1 env=SMART_EXPLORER_PERM_2204_TASK=1 env=SMART_EXPLORER_PERM_SE_BIN={se}  quelle=R348,D3,Uebergabe-U18
+perm_task_own_account_path_unchanged                 linux-core:unit  quelle=R348,D3-Erhaltung-S1
+
+# ---- S1 PRM-M6 (U18): linux-root perm-linux-helper ohne root, mit sudo -n und python3 (R359, Uebergabe U18) ----
+perm_task_linux_helper_setup_and_remote_account      linux-root:perm-linux-helper  ignored threads=1 fixture=sudo env=SMART_EXPLORER_PERM_HELPER_TASK=1 env=SMART_EXPLORER_PERM_SE_BIN={se}  quelle=R359,Uebergabe-U18
+perm_task_linux_helper_refuses_unlisted_account      linux-root:perm-linux-helper  ignored threads=1 fixture=sudo env=SMART_EXPLORER_PERM_HELPER_TASK=1 env=SMART_EXPLORER_PERM_SE_BIN={se}  quelle=R359,Uebergabe-U18
+perm_task_linux_helper_refuses_foreign_uid           linux-root:perm-linux-helper  ignored threads=1 fixture=sudo env=SMART_EXPLORER_PERM_HELPER_TASK=1 env=SMART_EXPLORER_PERM_SE_BIN={se}  quelle=R359,Uebergabe-U18
+perm_task_linux_helper_connection_close_stops_units  linux-root:perm-linux-helper  ignored threads=1 fixture=sudo env=SMART_EXPLORER_PERM_HELPER_TASK=1 env=SMART_EXPLORER_PERM_SE_BIN={se}  quelle=R359,Uebergabe-U18
+perm_task_linux_helper_hardened_unit_starts          linux-root:perm-linux-helper  ignored threads=1 fixture=sudo env=SMART_EXPLORER_PERM_HELPER_TASK=1 env=SMART_EXPLORER_PERM_SE_BIN={se}  quelle=R359,Uebergabe-U18
+perm_task_linux_helper_outdated_reported             linux-root:perm-linux-helper  ignored threads=1 fixture=sudo env=SMART_EXPLORER_PERM_HELPER_TASK=1 env=SMART_EXPLORER_PERM_SE_BIN={se}  quelle=R359,Uebergabe-U18
+perm_task_linux_helper_remove_cleans_units           linux-root:perm-linux-helper  ignored threads=1 fixture=sudo env=SMART_EXPLORER_PERM_HELPER_TASK=1 env=SMART_EXPLORER_PERM_SE_BIN={se}  quelle=R359,Uebergabe-U18
+perm_task_linux_helper_fedora_selinux                linux-root:perm-linux-helper  art=check  quelle=D3,S1-A5
+
+# ---- S1 PRM-M7: Windows-Konten, die kein Runner bietet (immer "nicht ausgefuehrt") ----
+perm_task_windows_home_and_microsoft_accounts        windows-core:perm-windows  art=check  quelle=D3,S1-A6,S1-A7
+
+# ---- S1 Windows: Startzeile von se shell -T unter cmd /D /S /C mit "echo SE_DIALECT_x_$?" (Vorschlag des Hauptagenten) ----
+perm_task_windows_cmd_start_line_answers_powershell_dialect  windows-core:perm-windows  art=check  quelle=Hauptagent-2026-10-17,Code-U07
+
+# ---- S1 PRM-M8 (U07): CLI und MCP (R381) ----
+perm_task_cli_grants_access_json_shape   linux-core:unit  quelle=R381
+perm_task_cli_enable_alias_unchanged     linux-core:unit,windows-core:unit  quelle=R381,D3-Erhaltung-S1
+perm_task_cli_room_all_members_snapshot  linux-core:unit  quelle=R381
+perm_task_cli_approvals_roundtrip        linux-core:unit  quelle=R381,Hauptagent-U07
+perm_task_completions_access             linux-core:unit  quelle=R381,Hauptagent-U07
+perm_task_mcp_blocks_approve_and_setup   linux-core:unit  quelle=R381,Hauptagent-U07
+perm_task_mcp_reads_approvals            linux-core:unit  quelle=R381,Hauptagent-U07
+
+# ---- S1 PRM-M9 (U07): Desktop, ohne Anzeige und ohne #[ignore] (R391; D3 linux-desktop gui-harness) ----
+perm_task_gui_access_dialog_presets      linux-desktop:gui-harness  quelle=R391,Hauptagent-U07
+perm_task_gui_access_dialog_one_confirm  linux-desktop:gui-harness  quelle=R391,Hauptagent-U07
+perm_task_gui_approvals_block            linux-desktop:gui-harness  quelle=R391,Hauptagent-U07
+perm_task_gui_room_all_members           linux-desktop:gui-harness  quelle=R391,Hauptagent-U07
+
+# ---- S1 PRM-M10 (U21): Bridge nur im Linux-Testbau (mobile/), App auf dem Emulator (R401) ----
+perm_task_bridge_set_access_absent_keeps          linux-core:unit  quelle=R401,Hauptagent-U21
+perm_task_bridge_status_account_choices_android   linux-core:unit  quelle=R401,Hauptagent-U21
+perm_task_bridge_program_list_keeps_profile       linux-core:unit  quelle=R401,Hauptagent-U21
+perm_task_bridge_approvals_roundtrip              linux-core:unit  quelle=R401,Hauptagent-U21
+perm_task_bridge_exec_stream_start_from_arguments linux-core:unit  quelle=Hauptagent-U21
+perm_task_bridge_exec_stream_results_and_refusals linux-core:unit  quelle=Hauptagent-U21
+perm_task_bridge_exec_stream_waiting_and_account_lines  linux-core:unit  quelle=Hauptagent-U21
+perm_task_android_approval_channel_high_importance  android-device:perm-android-device  art=instr  quelle=R401,D3,Hauptagent-U21
+perm_task_android_undeliverable_reports_unavailable android-device:perm-android-device  art=instr  quelle=R401,D3,Hauptagent-U21
+perm_task_android_access_dialog_two_actions         android-device:perm-android-device  art=instr  quelle=R401,D3,Hauptagent-U21
+
+# ---- S1 Tests ohne Stapelpraefix, die laufen muessen (Hauptagent; U04-, U07-Uebergaben) ----
+shell_session_task_share_session_dialect_is_asked_inside_the_shell  linux-core:unit,windows-core:unit  quelle=Hauptagent-U07
+shell_session_task_share_session_needs_one_start_line               linux-core:unit,windows-core:unit  quelle=Hauptagent-U07
+grant_end_watch_logs_grant_expired                                  linux-core:unit,windows-core:unit  quelle=Hauptagent-U07
+share_pages_open_detail_pages_from_outside                          linux-core:unit  quelle=Hauptagent-U07,Uebergabe-U15
+
+# ---- S1 PRM-M11 und Installer (U42, U36): statische Pruefungen der Suite (R409, C5) ----
+perm_task_inventory_paths_exist                      prepare:static  art=check  quelle=R409,D3
+perm_task_installer_uninstall_removes_service_static prepare:static  art=check  quelle=C5,D3-U36
+
+# ---- S2 DRV-M1 (U02): linux-core unit, windows-core unit (L233); Erhaltungsfaelle S2 ----
+drive_task_dialect_windows_table_unchanged               linux-core:unit,windows-core:unit  quelle=L233,D3-Erhaltung-S2
+drive_task_dialect_posix_accepts_colon_con_trailing_dot  linux-core:unit,windows-core:unit  quelle=L233
+drive_task_dialect_posix_rejects_nul_slash_backslash_dotdot  linux-core:unit,windows-core:unit  quelle=L233
+drive_task_dialect_posix_name_max_bytes                  linux-core:unit,windows-core:unit  quelle=L233
+drive_task_posix_listing_shows_windows_invalid_names     linux-core:unit,windows-core:unit  quelle=L233
+drive_task_posix_listing_hides_backslash_names           linux-core:unit,windows-core:unit  quelle=L233
+drive_task_types_split_serde_unchanged                   linux-core:unit,windows-core:unit  quelle=L233,D3-Erhaltung-S2
+drive_task_ipc_mount_types_serde_unchanged               linux-core:unit,windows-core:unit  quelle=D3-Erhaltung-S2,Code-R1
+
+# ---- S2 DRV-M2 (U02): linux-core unit, windows-core drive-dokany-regression (L243, Uebergabe U02) ----
+drive_task_boundary_delegates_every_operation             linux-core:unit,windows-core:drive-dokany-regression  quelle=L243
+drive_task_host_session_order_matches_windows_host        linux-core:unit,windows-core:drive-dokany-regression  quelle=L243
+drive_task_plain_spool_bytes_unchanged                    linux-core:unit,windows-core:drive-dokany-regression  quelle=L243,D3-Erhaltung-S2,T565
+drive_task_path_sealer_reaches_every_journal_path_field   linux-core:unit,windows-core:drive-dokany-regression  quelle=Uebergabe-U02
+drive_task_host_session_update_stop_keeps_unpublished_changes  linux-core:unit,windows-core:drive-dokany-regression  quelle=Uebergabe-U02
+drive_task_change_pump_maps_backend_paths_per_dialect     linux-core:unit,windows-core:drive-dokany-regression  quelle=Uebergabe-U02
+drive_task_unix_lease_excludes_second_host                linux-core:unit  quelle=L243
+drive_task_unix_lease_rejects_symlinked_cache             linux-core:unit  quelle=L243
+drive_task_windows_status_table_covers_emitted_codes      windows-core:drive-dokany-regression  quelle=L243
+drive_task_windows_unmapped_error_is_io_device_not_access_denied  windows-core:drive-dokany-regression  ignored threads=1 fixture=dokany  quelle=L243,Uebergabe-U02
+drive_task_windows_host_unreachable_maps_1232             windows-core:drive-dokany-regression  ignored threads=1 fixture=dokany  quelle=L243,Uebergabe-U02
+drive_task_host_session_update_stop_unmounts_and_exits    windows-core:drive-dokany-regression  ignored threads=1 fixture=dokany  quelle=D3-DRV-M2,Uebergabe-U02
+
+# ---- S2 Windows-Bestandsharnesses (DRV-M2, D3-Erhaltung S2): Dateiname -> Modulpfad ----
+mounted_volume_task_tests          windows-core:drive-dokany-regression  art=modul modul=::host::mount_batching_task:: fixture=dokany threads=1  quelle=L243,D3-Erhaltung-S2
+optimization_volume_tests          windows-core:drive-dokany-regression  art=modul modul=::host::optimization_task:: fixture=dokany threads=1  quelle=L243,D3-Erhaltung-S2
+windows_remote_volume_task_tests   windows-core:drive-dokany-regression  art=modul modul=::host::windows_remote_task:: fixture=dokany threads=1  quelle=L243,D3-Erhaltung-S2
+recovery_cache_task_tests          windows-core:drive-dokany-regression  art=modul modul=::recovery_cache_task_tests:: fixture=dokany threads=1  quelle=L243,D3-Erhaltung-S2
+mount_options_task_tests           windows-core:drive-dokany-regression  art=modul modul=::dokany_abi::mount_batching_task:: fixture=dokany threads=1  quelle=L243,D3-Erhaltung-S2
+
+# ---- S2 DRV-M3 (U06): linux-core unit, windows-core drive-cli (L253, Uebergabe U06) ----
+drive_task_registry_v0_5_182_fixture_roundtrip_identical  linux-core:unit,windows-core:drive-cli  quelle=L253,D3-Erhaltung-S2
+drive_task_registry_old_parser_ignores_new_fields         linux-core:unit,windows-core:drive-cli  quelle=L253,D3-Erhaltung-S2
+drive_task_registry_ext_kinds_never_in_v1_file            linux-core:unit,windows-core:drive-cli  quelle=L253
+drive_task_existing_drive_after_restart_unchanged         linux-core:unit,windows-core:drive-cli  quelle=L253,D3-Erhaltung-S2
+drive_task_auto_remount_after_daemon_restart              linux-core:unit,windows-core:drive-cli  quelle=L253
+drive_task_restore_runs_after_recovery_audit              linux-core:unit,windows-core:drive-cli  quelle=L253
+drive_task_drive_restore_no_jobs_without_sync_autostart   linux-core:unit,windows-core:drive-cli  quelle=L253
+drive_task_drive_restore_no_jobs_when_sync_entry_disabled_by_system  linux-core:unit,windows-core:drive-cli  quelle=L253
+drive_task_autostart_entry_follows_need                   linux-core:unit,windows-core:drive-cli  quelle=L253
+drive_task_cli_set_text_and_json                          linux-core:unit,windows-core:drive-cli  quelle=L253
+drive_task_update_stop_exit_clean_journal_counts_as_unmount  linux-core:unit  pfad=daemon::mount_manager::entry_state::update_stop_tests::drive_task_update_stop_exit_clean_journal_counts_as_unmount  quelle=Uebergabe-U06,Hauptagent
+drive_task_status_command_promotes_restricted_daemon      linux-core:unit  quelle=Code-U06,Hauptagent
+
+# ---- S2 DRV-M9 (U36, U42): statische Pruefungen der Suite (L308) ----
+drive_task_install_linux_dry_run_with_fuse   prepare:static  art=check  quelle=L308,C5
+drive_task_docs_surfaces_complete            prepare:static  art=check  quelle=L308,D3
+
+# ---- S3 VLT-M1 (U05): linux-core unit, windows-core vault-unit (T448, Uebergabe U05) ----
+vault_task_cryptolib_header_gcm_vector     linux-core:unit,windows-core:vault-unit  pfad=cryptomator::core::vectors_tests::vault_task_cryptolib_header_gcm_vector  quelle=T448
+vault_task_cryptolib_header_ctrmac_vector  linux-core:unit,windows-core:vault-unit  pfad=cryptomator::core::vectors_tests::vault_task_cryptolib_header_ctrmac_vector  quelle=T448
+vault_task_cryptolib_chunk_gcm_vector      linux-core:unit,windows-core:vault-unit  pfad=cryptomator::core::vectors_tests::vault_task_cryptolib_chunk_gcm_vector  quelle=T448
+vault_task_cryptolib_chunk_ctrmac_vector   linux-core:unit,windows-core:vault-unit  pfad=cryptomator::core::vectors_tests::vault_task_cryptolib_chunk_ctrmac_vector  quelle=T448
+vault_task_cryptolib_file_gcm_vector       linux-core:unit,windows-core:vault-unit  pfad=cryptomator::core::vectors_tests::vault_task_cryptolib_file_gcm_vector  quelle=T448
+vault_task_cryptolib_masterkey_file_vector linux-core:unit,windows-core:vault-unit  pfad=cryptomator::core::vectors_tests::vault_task_cryptolib_masterkey_file_vector  quelle=T448
+vault_task_siv_mode_512_cases              linux-core:unit,windows-core:vault-unit  pfad=cryptomator::core::vectors_tests::vault_task_siv_mode_512_cases  quelle=T448
+vault_task_scrypt_bounds_reference_formula linux-core:unit,windows-core:vault-unit  pfad=cryptomator::core::vectors_tests::vault_task_scrypt_bounds_reference_formula  quelle=T448
+vault_task_masterkey_file_over_64k_rejected  linux-core:unit,windows-core:vault-unit  pfad=cryptomator::core::vectors_tests::vault_task_masterkey_file_over_64k_rejected  quelle=T448
+vault_task_jwt_algs_and_tamper             linux-core:unit,windows-core:vault-unit  pfad=cryptomator::core::config_tests::vault_task_jwt_algs_and_tamper  quelle=T448
+vault_task_kid_only_fixed_masterkeyfile    linux-core:unit,windows-core:vault-unit  pfad=cryptomator::core::config_tests::vault_task_kid_only_fixed_masterkeyfile  quelle=T448
+vault_task_backup_suffix_uppercase         linux-core:unit,windows-core:vault-unit  pfad=cryptomator::core::config_tests::vault_task_backup_suffix_uppercase  quelle=T448
+vault_task_name_roundtrip_nfc_nfd          linux-core:unit,windows-core:vault-unit  pfad=cryptomator::core::names_tests::vault_task_name_roundtrip_nfc_nfd  quelle=T448
+vault_task_dir_hash_shape                  linux-core:unit,windows-core:vault-unit  pfad=cryptomator::core::names_tests::vault_task_dir_hash_shape  quelle=T448
+vault_task_shortened_name                  linux-core:unit,windows-core:vault-unit  pfad=cryptomator::core::names_tests::vault_task_shortened_name  quelle=T448
+vault_task_empty_file_both_forms           linux-core:unit,windows-core:vault-unit  pfad=cryptomator::core::content_tests::vault_task_empty_file_both_forms  quelle=T448
+vault_task_size_formulas_boundaries        linux-core:unit,windows-core:vault-unit  pfad=cryptomator::core::content_tests::vault_task_size_formulas_boundaries  quelle=T448
+vault_task_android_arm64_compile           android-build:apk  art=check  quelle=D3-Bauregel,T447
+
+# ---- S3 VLT-M2 (U08): linux-core unit; windows-core vault-unit fuer die NTFS-Pruefung des Strangplans (T458, T459) ----
+vault_task_backend_read_write_roundtrip_gcm          linux-core:unit,windows-core:vault-unit  quelle=T459
+vault_task_backend_read_write_roundtrip_ctrmac       linux-core:unit,windows-core:vault-unit  quelle=T459
+vault_task_backend_open_read_at_chunk_boundaries     linux-core:unit,windows-core:vault-unit  quelle=T459
+vault_task_backend_long_names_create_rename_replace  linux-core:unit,windows-core:vault-unit  quelle=T459
+vault_task_backend_mkdir_order_content_before_node   linux-core:unit,windows-core:vault-unit  quelle=T459
+vault_task_backend_rmdir_nonempty_refused            linux-core:unit,windows-core:vault-unit  quelle=T459
+vault_task_backend_symlink_listed_never_followed     linux-core:unit,windows-core:vault-unit  quelle=T459
+vault_task_backend_foreign_conflict_copy_alias_not_renamed  linux-core:unit,windows-core:vault-unit  quelle=T459
+vault_task_backend_undecryptable_reported_incomplete linux-core:unit,windows-core:vault-unit  quelle=T459
+vault_task_backend_every_stage_form_mapped_invisible linux-core:unit,windows-core:vault-unit  quelle=T459
+vault_task_backend_capabilities_never_exceed_inner   linux-core:unit,windows-core:vault-unit  quelle=T459
+vault_task_backend_locked_fails_and_publishes_nothing  linux-core:unit,windows-core:vault-unit  quelle=T459
+vault_task_backend_identity_distinct_from_inner_and_other_vaults  linux-core:unit,windows-core:vault-unit  quelle=T459
+
+# ---- S3 VLT-M3 (U08): linux-core unit (T468); Erhaltungsfaelle S3 ----
+vault_task_locator_parse_roundtrip                    linux-core:unit  quelle=T468
+vault_task_locator_never_reaches_local_backend        linux-core:unit  quelle=T468
+vault_task_existing_locators_unchanged                linux-core:unit  quelle=T468,D3-Erhaltung-S3
+vault_task_generic_sync_rejects_vault_endpoint        linux-core:unit  quelle=T468,D3-Erhaltung-S3
+vault_task_vault_store_resolves_to_inner_with_hash_and_signal  linux-core:unit  quelle=T468
+vault_task_vault_store_overlap_with_inner_rejected    linux-core:unit  quelle=T468
+vault_task_registry_roundtrip_unknown_keys_ignored    linux-core:unit  quelle=T468
+vault_task_registry_duplicate_location_rejected       linux-core:unit  quelle=T468
+vault_task_connection_edit_lists_vault_sites          linux-core:unit  quelle=T468
+vault_task_android_loc_vault_kind                     linux-core:unit  quelle=T468
+vault_task_cli_move_between_vault_and_local_copies    linux-core:unit,windows-core:vault-unit  pfad=cli::target::vault_keys::tests::vault_task_cli_move_between_vault_and_local_copies  quelle=Code-R3a,Hauptagent
+
+# ---- S3 VLT-M7 (U05): schon in U05 umgesetzt (T506, Uebergabe U05) ----
+vault_task_plan_rules_default_single_phase   linux-core:vault-sync  pfad=bisync::apply_reporting::phases_tests::vault_task_plan_rules_default_single_phase  quelle=T506,D3-Erhaltung-S3,Uebergabe-U05
+vault_task_sync_phases_content_before_node   linux-core:vault-sync  pfad=bisync::apply_reporting::phases_tests::vault_task_sync_phases_content_before_node  quelle=T506,Uebergabe-U05
+
+# ---- S3 Pruefungen der Suite (VLT-M7, VLT-M8, VLT-M13, VLT-M14; D3 "nie als bestanden") ----
+vault_task_interop_health_after_sync     linux-core:vault-interop  art=check  quelle=T506
+vault_task_interop_health_after_compare  linux-core:vault-interop  art=check  quelle=T515
+vault_task_klartext_marker_scan          linux-core:vault-klartext  art=check  quelle=T495,T564
+vault_task_klartext_marker_scan_drive    linux-root:vault-klartext-drive  art=check  quelle=D3,T564
+vault_task_docs_rows_t1_t22              prepare:static  art=check  quelle=T558,D3
+vault_task_screen_lock_delivery_by_os    linux-root:vault-linux,windows-core:vault-windows  art=check  quelle=D3,T478,S3-K13
+vault_task_backends_google_drive         linux-core:vault-backends  art=check  quelle=D3,T564
+
+# ---- C4 INT-LIC (U33): Pruefskript im Job prepare, Rust-Tests in linux-core unit, Installer statisch (Uebergabe U33) ----
+licenses_task_generated_file_current         prepare:licenses  art=skript skript=native/licenses_task_checks.py  quelle=C4,Uebergabe-U33
+licenses_task_every_shipped_crate_has_text   prepare:licenses  art=skript skript=native/licenses_task_checks.py  quelle=C4,Uebergabe-U33
+licenses_task_new_batch_crates_listed        prepare:licenses  art=skript skript=native/licenses_task_checks.py  quelle=C4,Uebergabe-U33
+licenses_task_winit_notice_included          prepare:licenses  art=skript skript=native/licenses_task_checks.py  quelle=C4,Uebergabe-U33
+licenses_task_release_wrapper_checks_licenses  prepare:licenses  art=skript skript=native/licenses_task_checks.py  quelle=C4,Uebergabe-U33
+licenses_task_embedded_text_matches_file     linux-core:unit  quelle=C4,D3
+licenses_task_cli_json_shape                 linux-core:unit  quelle=C4,D3
+licenses_task_bridge_app_licenses            linux-core:unit  quelle=C4,D3
+licenses_task_installer_installs_file        prepare:static  art=check  quelle=C4,C5,Uebergabe-U33
+
+# ---- Bestand (D3 "Erhaltungsfaelle", Bestand) ----
+mcp_task_catalog_is_complete_and_within_host_limits    linux-core:unit  quelle=D3-Bestand
+mcp_task_only_new_update_stop_requests_end_the_server  linux-core:unit  quelle=D3-Bestand
+UiTaskTest        android-device:android-bestand  art=instr  quelle=D3-Bestand
+IntentsTaskTest   android-device:android-bestand  art=instr  quelle=D3-Bestand
+
+[noch nicht umgesetzt]
+
+# ---- S1 PRM-M7 (U24): windows-core perm-windows (R370) ----
+perm_task_windows_helper_setup_remote_account        windows-core:perm-windows  paket=U24  quelle=R370
+perm_task_windows_terminal_as_remote_account         windows-core:perm-windows  paket=U24  quelle=R370
+perm_task_windows_helper_refuses_unlisted_account    windows-core:perm-windows  paket=U24  quelle=R370
+perm_task_windows_pipe_caller_impersonation          windows-core:perm-windows  paket=U24  quelle=R370
+perm_task_windows_cancel_kills_job_tree              windows-core:perm-windows  paket=U24  quelle=R370
+perm_task_windows_worker_disconnect_kills_jobs       windows-core:perm-windows  paket=U24  quelle=R370
+perm_task_windows_probe_reports_token_level          windows-core:perm-windows  paket=U24  quelle=R370
+perm_task_remote_account_cannot_read_ipc_token_windows  windows-core:perm-windows  paket=U24  quelle=R370
+perm_task_windows_own_account_path_unchanged         windows-core:perm-windows  paket=U24  quelle=R370,D3-Erhaltung-S1
+
+# ---- S1 PRM-M8 Konten (U24): CLI, Windows-Kontodienst (R381, D3) ----
+perm_task_cli_accounts_json           linux-core:unit,windows-core:perm-windows  paket=U24  quelle=R381,D3-PRM-M8
+
+# ---- S1 PRM-M9 Konten (U24): linux-desktop gui-harness (R391) ----
+perm_task_gui_accounts_page_states       linux-desktop:gui-harness  paket=U24  quelle=R391
+perm_task_gui_setup_without_pkexec_shows_sudo_command  linux-desktop:gui-harness  paket=U24  quelle=R391
+
+# ---- S1 PRM-M10 (U27): Bildschirm-Rueckfrage auf dem Emulator, API 36 und API 30 (R401, D3) ----
+perm_task_android_screen_approval_actions_are_activity_intents  android-device:perm-android-device,android-device-api30:perm-android-api30  art=instr  paket=U27  quelle=R401,D3
+
+# ---- S2 DRV-M2 Linux-Teil (U12): linux-root drive-fuse (D3) ----
+drive_task_host_session_update_stop_unmounts_and_exits  linux-root:drive-fuse  fixture=fuse  paket=U12  quelle=D3-linux-root
+drive_task_windows_realpath_native_on_dokany            windows-core:drive-dokany-regression  ignored threads=1 fixture=dokany  paket=offen  quelle=L350,S2-A3
+
+# ---- S2 DRV-M4 (U12): linux-root drive-fuse (L264) ----
+drive_task_fuse_mount_local_fixture_rw            linux-root:drive-fuse  fixture=fuse  paket=U12  quelle=L264
+drive_task_fuse_sftp_container_rw                 linux-root:drive-fuse  fixture=fuse,sftp  paket=U12  quelle=L264
+drive_task_fuse_editor_save_rename_over           linux-root:drive-fuse  fixture=fuse  paket=U12  quelle=L264
+drive_task_fuse_gio_replace_stays_atomic          linux-root:drive-fuse  fixture=fuse  paket=U12  quelle=L264
+drive_task_fuse_cp_a_exit_zero_and_times_applied_on_sftp  linux-root:drive-fuse  fixture=fuse,sftp  paket=U12  quelle=L264
+drive_task_fuse_rsync_a_exit_zero                 linux-root:drive-fuse  fixture=fuse  paket=U12  quelle=L264
+drive_task_fuse_chown_other_uid_eperm             linux-root:drive-fuse  fixture=fuse  paket=U12  quelle=L264
+drive_task_fuse_conflict_returns_ebusy_and_copy   linux-root:drive-fuse  fixture=fuse  paket=U12  quelle=L264
+drive_task_fuse_large_readonly_range_read         linux-root:drive-fuse  fixture=fuse  paket=U12  quelle=L264
+drive_task_fuse_names_colon_con_listed            linux-root:drive-fuse  fixture=fuse  paket=U12  quelle=L264
+drive_task_fuse_links_hidden                      linux-root:drive-fuse  fixture=fuse  paket=U12  quelle=L264
+drive_task_fuse_unmount_busy_then_force           linux-root:drive-fuse  fixture=fuse  paket=U12  quelle=L264
+drive_task_fuse_force_abort_frees_blocked_reader  linux-root:drive-fuse  fixture=fuse  paket=U12  quelle=L264,S2-A5
+drive_task_fuse_kernel_request_timeout_reported   linux-root:drive-fuse  fixture=fuse,fuse-timeout  paket=U12  quelle=L264
+drive_task_fuse_host_kill_daemon_cleans_mount     linux-root:drive-fuse  fixture=fuse  paket=U12  quelle=L264
+drive_task_fuse_stale_mount_cleaned_before_remount  linux-root:drive-fuse  fixture=fuse  paket=U12  quelle=L264
+drive_task_fuse_mountpoint_locked_after_unmount   linux-root:drive-fuse  fixture=fuse  paket=U12  quelle=L264
+drive_task_fuse_recovery_retries_pending_after_restart  linux-root:drive-fuse  fixture=fuse  paket=U12  quelle=L264
+drive_task_fuse_runtime_report_missing_fusermount linux-root:drive-fuse  paket=U12  quelle=L264
+drive_task_runtime_detects_sandbox_markers        linux-root:drive-fuse  paket=U12  quelle=L264,S2-A9
+drive_task_cli_linux_shapes                       linux-root:drive-fuse  paket=U12  quelle=L264
+drive_task_smb_mount_still_refused                linux-root:drive-fuse  paket=U12  quelle=L264,D3-Erhaltung-S2
+drive_task_windows_drive_ignores_pending_attributes  windows-core:drive-dokany-regression  paket=U12  quelle=L264,D3-Erhaltung-S2
+
+# ---- S2 DRV-M5 (U17): linux-desktop drive-desktop mit temporaerem HOME (L272, D3) ----
+drive_task_gtk_bookmark_only_outside_glib_rule    linux-desktop:drive-desktop  fixture=home  paket=U17  quelle=L272,D2-14
+drive_task_gtk_bookmark_removed_exactly           linux-desktop:drive-desktop  fixture=home  paket=U17  quelle=L272
+drive_task_kde_places_preserves_foreign_entries   linux-desktop:drive-desktop  fixture=home  paket=U17  quelle=L272
+drive_task_bookmarks_cleaned_after_host_crash     linux-desktop:drive-desktop  fixture=home  paket=U17  quelle=L272
+drive_task_glib_display_rule_path                 linux-desktop:drive-desktop  fixture=home  paket=U17  quelle=L272
+drive_task_cli_open_json                          linux-desktop:drive-desktop  fixture=home  paket=U17  quelle=L272
+desktop_task_disable_keeps_device_tree            linux-desktop:drive-desktop  fixture=home  paket=U34  quelle=D3-linux-desktop
+
+# ---- S2 DRV-M6 (U17): linux-core drive-devices bzw. unit, windows-core drive-cli (L283) ----
+drive_task_devices_folder_appears_without_manual_steps  linux-core:drive-devices,windows-core:drive-cli  fixture=share  paket=U17  quelle=L283
+drive_task_devices_offline_error_not_empty        linux-core:drive-devices,windows-core:drive-cli  fixture=share  paket=U17  quelle=L283
+drive_task_devices_online_retries_pending_upload  linux-core:drive-devices,windows-core:drive-cli  fixture=share  paket=U17  quelle=L283
+drive_task_devices_room_readonly                  linux-core:drive-devices,windows-core:drive-cli  fixture=share  paket=U17  quelle=L283
+drive_task_devices_cross_export_move_exdev        linux-core:drive-devices,windows-core:drive-cli  fixture=share  paket=U17  quelle=L283
+drive_task_devices_offline_closes_idle_children_only  linux-core:drive-devices,windows-core:drive-cli  fixture=share  paket=U17  quelle=L283
+drive_task_devices_offline_peer_does_not_block_host_start  linux-core:drive-devices,windows-core:drive-cli  fixture=share  paket=U17  quelle=L283
+drive_task_devices_switch_off_unmounts_and_removes_place  linux-core:drive-devices,windows-core:drive-cli  fixture=share  paket=U17  quelle=L283
+drive_task_devices_watch_returns_within_30s       linux-core:drive-devices,windows-core:drive-cli  fixture=share  paket=U17  quelle=L283
+drive_task_devices_names_collision_deterministic  linux-core:unit,windows-core:drive-cli  paket=U17  quelle=L283
+drive_task_devices_key_matches_s5_rule            linux-core:unit,windows-core:drive-cli  paket=U17  quelle=L283
+drive_task_devices_single_peer_mounts_unchanged   linux-core:unit,windows-core:drive-cli  paket=U17  quelle=L283,D3-Erhaltung-S2
+drive_task_cli_devices_shapes                     linux-core:unit,windows-core:drive-cli  paket=U17  quelle=L283
+drive_task_devices_windows_drive_lists_peer       windows-core:drive-cli  fixture=share,dokany  paket=U17  quelle=L283
+
+# ---- S2 DRV-M7 (U14): linux-root drive-vault, windows-core drive-vault (L292) ----
+drive_task_vault_spool_uses_sealed_storage        linux-root:drive-vault,windows-core:drive-vault  paket=U14  quelle=L292
+drive_task_vault_journal_path_fields_sealed       linux-root:drive-vault,windows-core:drive-vault  paket=U14  quelle=L292
+drive_task_vault_locked_start_fails_vault_locked  linux-root:drive-vault,windows-core:drive-vault  paket=U14  quelle=L292
+drive_task_vault_requires_unlock_after_crash      linux-root:drive-vault,windows-core:drive-vault  paket=U14  quelle=L292
+drive_task_vault_prepare_lock_flushes_evicts_unmounts  linux-root:drive-vault,windows-core:drive-vault  paket=U14  quelle=L292
+drive_task_vault_lock_deadline_keeps_sealed_and_aborts  linux-root:drive-vault,windows-core:drive-vault  paket=U14  quelle=L292
+drive_task_vault_unexpected_end_reported          linux-root:drive-vault,windows-core:drive-vault  paket=U14  quelle=L292
+drive_task_mount_path_for_maps_drive_paths        linux-root:drive-vault,windows-core:drive-vault  paket=U14  quelle=L292
+drive_task_vault_linux_mountpoint_tmpfs_sticky_locked  linux-root:drive-vault  fixture=runtime-tmpfs  paket=U14  quelle=L292
+drive_task_vault_linux_refuses_non_tmpfs          linux-root:drive-vault  paket=U14  quelle=L292
+drive_task_vault_drive_letter_rw                  windows-core:drive-vault  fixture=dokany  paket=U14  quelle=L292
+
+# ---- S2 DRV-M8 (U23): Robolectric in android-build, Emulator in android-device (L302) ----
+drive_task_android_roots_follow_settings          android-build:drive-android  art=junit  paket=U23  quelle=L302
+drive_task_android_locked_vault_has_no_root       android-build:drive-android  art=junit  paket=U23  quelle=L302
+drive_task_android_is_child_without_io            android-build:drive-android  art=junit  paket=U23  quelle=L302
+drive_task_android_children_loading_then_notify   android-build:drive-android  art=junit  paket=U23  quelle=L302
+drive_task_android_offline_device_extra_error     android-build:drive-android  art=junit  paket=U23  quelle=L302
+drive_task_android_mode_wt_truncates_w_not        android-build:drive-android  art=junit  paket=U23  quelle=L302
+drive_task_android_append_rejected                android-build:drive-android  art=junit  paket=U23  quelle=L302
+drive_task_android_ids_stable_after_device_rename android-build:drive-android  art=junit  paket=U23  quelle=L302
+drive_task_android_reader_sees_dirty_entry        android-build:drive-android  art=junit  paket=U23  quelle=L302,L368
+drive_task_android_local_only_flag_only_for_local_vaults  android-build:drive-android  art=junit  paket=U23  quelle=L302,L357
+drive_task_android_provider_init_before_application  android-build:drive-android  art=junit  paket=U23  quelle=L302,L401
+drive_task_android_commit_worker_has_foreground_info  android-build:drive-android  art=junit  paket=U23  quelle=L302,L405
+drive_task_android_open_read_seek_large_file_range  android-device:drive-android-device  art=instr fixture=sftp  paket=U23  quelle=L302
+drive_task_android_write_close_uploads            android-device:drive-android-device  art=instr fixture=sftp  paket=U23  quelle=L302
+drive_task_android_process_kill_retries_pending   android-device:drive-android-device  art=instr fixture=sftp  paket=U23  quelle=L302
+drive_task_android_tree_grant_persists_restart    android-device:drive-android-device  art=instr  paket=U23  quelle=L302
+drive_task_android_handler_thread_per_file        android-device:drive-android-device  art=instr fixture=sftp  paket=U23  quelle=L302
+drive_task_android_smb_root_rw                    android-device:drive-android-device  art=instr  paket=U23  quelle=L302
+drive_task_android_mediastore_has_no_provider_files  android-device:drive-android-device  art=instr  paket=U23  quelle=L302,L358
+
+# ---- S2 DRV-M10 Bestandsvertraege ohne Namen im Plan (Namen von U39 gesetzt; Kern-Lesung Abschnitt 5) ----
+drive_task_stage_names_se_mount_prefix_unchanged  linux-core:unit,windows-core:drive-cli  paket=offen  quelle=L312,D3-Erhaltung-S2
+drive_task_mount_snapshot_json_unchanged          linux-core:unit,windows-core:drive-cli  paket=offen  quelle=L312,D3-Erhaltung-S2
+drive_task_cli_error_texts_unchanged              linux-core:unit,windows-core:drive-cli  paket=offen  quelle=L312,D3-Erhaltung-S2
+
+# ---- S3 VLT-M4 (U11): linux-core unit, linux-root vault-linux, windows-core vault-windows (T478) ----
+vault_task_session_unlock_once_all_clients        linux-core:unit  paket=U11  quelle=T478
+vault_task_session_lock_zeroizes_and_fails_open_handles  linux-core:unit  paket=U11  quelle=T478
+vault_task_lock_policy_triggers_and_defaults      linux-core:unit  paket=U11  quelle=T478
+vault_task_lock_participants_called_before_zeroize  linux-core:unit  paket=U11  quelle=T478
+vault_task_mount_end_locks_only_without_consumers linux-core:unit  paket=U11  quelle=T478
+vault_task_vault_error_envelope_roundtrip_and_legacy_text  linux-core:unit  paket=U11  quelle=T478,D3-Erhaltung-S3
+vault_task_ipc_err_code_backward_compatible       linux-core:unit  paket=U11  quelle=T478,D3-Erhaltung-S3
+vault_task_remember_password_account_and_forget   linux-core:unit  paket=U11  quelle=T478
+vault_task_ipc_vault_requests_token_required      linux-core:unit  paket=U11  quelle=T478
+vault_task_seal_unseal_purposes_distinct          linux-core:unit  paket=U11  quelle=T478
+vault_task_linux_logind_sleep_and_locked_hint_lock  linux-root:vault-linux  fixture=bus  paket=U11  quelle=T478
+vault_task_windows_wts_window_dispatch            windows-core:vault-windows  paket=U11  quelle=T478
+
+# ---- S3 VLT-M5 (U11): linux-core unit und vault-interop (T486) ----
+vault_task_create_then_cryptofs_reads             linux-core:vault-interop  fixture=interop  paket=U11  quelle=T486
+vault_task_password_change_then_cryptofs_unlocks_new  linux-core:vault-interop  fixture=interop  paket=U11  quelle=T486
+vault_task_password_change_never_without_masterkey  linux-core:unit  paket=U11  quelle=T486
+vault_task_detect_hub_and_format7_messages        linux-core:unit  paket=U11  quelle=T486
+vault_task_remove_keeps_files_and_refuses_with_job  linux-core:unit  paket=U11  quelle=T486
+vault_task_create_min_password_length_8           linux-core:unit  paket=U11  quelle=T486
+vault_task_recovery_key_reported_unsupported      linux-core:unit  paket=U11  quelle=T486
+
+# ---- S3 VLT-M6 (U20): linux-core unit und vault-klartext, linux-root vault-klartext-drive (T495, T564) ----
+vault_task_policy_every_sink_has_rule             linux-core:unit  paket=U20  quelle=T495
+vault_task_copy_spool_sealed_when_vault_involved  linux-core:unit  paket=U20  quelle=T495
+vault_task_transfer_issue_path_sealed             linux-core:unit  paket=U20  quelle=T495
+vault_task_favorites_and_recent_inside_vault_sealed  linux-core:unit  paket=U20  quelle=T495
+vault_task_folder_index_skips_vault               linux-core:unit  paket=U20  quelle=T495
+vault_task_android_fetch_rejects_vault            linux-core:unit  paket=U20  quelle=T495
+vault_task_share_export_inside_vault_mount_rejected  linux-core:unit  paket=U20  quelle=T495
+vault_task_open_fallback_requires_consent         linux-core:unit  paket=U20  quelle=T495
+vault_task_provide_and_materialize_reject_vault_source  linux-core:unit  paket=U20  quelle=T495
+vault_task_klartext_actions_leave_no_marker       linux-core:vault-klartext  fixture=marker threads=1  paket=U20  quelle=T564
+vault_task_klartext_drive_actions_leave_no_marker linux-root:vault-klartext-drive  fixture=marker,fuse,runtime-tmpfs threads=1  paket=U20  quelle=D3,T564
+
+# ---- S3 VLT-M7 (U20): linux-core vault-sync (T506) ----
+vault_task_sync_seed_replica_then_seeding_false   linux-core:vault-sync  fixture=keep  paket=U20  quelle=T506
+vault_task_sync_one_sided_changes_both_directions linux-core:vault-sync  fixture=keep  paket=U20  quelle=T506
+vault_task_sync_both_changed_untouched_conflict   linux-core:vault-sync  fixture=keep  paket=U20  quelle=T506
+vault_task_sync_folder_created_both_sides         linux-core:vault-sync  fixture=keep  paket=U20  quelle=T506
+vault_task_sync_delete_vs_change_deferred         linux-core:vault-sync  fixture=keep  paket=U20  quelle=T506
+vault_task_sync_masterkey_both_changed_conflict   linux-core:vault-sync  fixture=keep  paket=U20  quelle=T506
+vault_task_sync_jti_mismatch_aborts               linux-core:vault-sync  fixture=keep  paket=U20  quelle=T506
+vault_task_sync_unreachable_side_no_deletes       linux-core:vault-sync  fixture=keep  paket=U20  quelle=T506
+vault_task_sync_phase1_failure_keeps_phase2_planned  linux-core:vault-sync  fixture=keep  paket=U20  quelle=T506
+vault_task_sync_never_incremental                 linux-core:vault-sync  fixture=keep  paket=U20  quelle=T506
+vault_task_sync_keepboth_actions_become_conflicts linux-core:vault-sync  fixture=keep  paket=U20  quelle=T506
+vault_task_sync_runs_locked                       linux-core:vault-sync  fixture=keep  paket=U20  quelle=T506
+vault_task_sync_hash_detects_same_size_same_second  linux-core:vault-sync  fixture=keep  paket=U20  quelle=T506
+vault_task_sync_log_contains_no_cleartext         linux-core:vault-sync  fixture=keep  paket=U20  quelle=T506
+vault_task_vault_jobs_dir_invisible_to_jobs_loader  linux-core:vault-sync  paket=U20  quelle=T506,D3-Erhaltung-S3
+vault_task_broken_vault_job_listed_not_fatal      linux-core:vault-sync  paket=U20  quelle=T506
+
+# ---- S3 VLT-M8 (U26): linux-core vault-compare (T515) ----
+vault_task_compare_groups_match_preview           linux-core:vault-compare  fixture=keep  paket=U26  quelle=T515
+vault_task_compare_keep_a_b_with_versions         linux-core:vault-compare  fixture=keep  paket=U26  quelle=T515
+vault_task_compare_keep_both_valid_cipher_name    linux-core:vault-compare  fixture=keep  paket=U26  quelle=T515
+vault_task_compare_keep_both_long_name_c9s        linux-core:vault-compare  fixture=keep  paket=U26  quelle=T515
+vault_task_compare_keep_both_baseline_recorded    linux-core:vault-compare  fixture=keep  paket=U26  quelle=T515
+vault_task_compare_merge_inputs_contain_only_ciphertext  linux-core:vault-compare  fixture=keep  paket=U26  quelle=T515
+vault_task_compare_folder_merge_reencrypts_names_only  linux-core:vault-compare  fixture=keep  paket=U26  quelle=T515
+vault_task_compare_deferred_confirm_and_restore   linux-core:vault-compare  fixture=keep  paket=U26  quelle=T515
+vault_task_compare_requires_unlock                linux-core:vault-compare  paket=U26  quelle=T515
+vault_task_check_maps_every_cryptofs_finding      linux-core:vault-compare  fixture=keep  paket=U26  quelle=T515
+vault_task_check_orphan_attached_under_lost_found linux-core:vault-compare  fixture=keep  paket=U26  quelle=T515
+vault_task_check_stage_leftover_removed           linux-core:vault-compare  fixture=keep  paket=U26  quelle=T515
+
+# ---- S3 VLT-M9 (U26): linux-core vault-cli, vault-mcp; Plan nennt keine Namen, Namen von U39 gesetzt (T524) ----
+vault_task_cli_every_command_json_keys            linux-core:vault-cli  env=SMART_EXPLORER_VAULT_SE_BIN={se}  paket=U26  quelle=T524
+vault_task_cli_completion                         linux-core:vault-cli  env=SMART_EXPLORER_VAULT_SE_BIN={se}  paket=U26  quelle=T524
+vault_task_cli_locked_vault_names_unlock          linux-core:vault-cli  env=SMART_EXPLORER_VAULT_SE_BIN={se}  paket=U26  quelle=T524
+vault_task_mcp_both_lifecycles                    linux-core:vault-mcp  env=SMART_EXPLORER_VAULT_SE_BIN={se}  paket=U26  quelle=T524
+vault_task_mcp_status_without_paths               linux-core:vault-mcp  env=SMART_EXPLORER_VAULT_SE_BIN={se}  paket=U26  quelle=T524
+
+# ---- S3 VLT-M10 (U29): linux-desktop gui-harness, Stufe vault_surfaces (T533). Zwei Muster im Bestand:
+# U07-GUI-Tests laufen ohne Anzeige und ohne #[ignore]; die GUI-Tests aus U03 brauchen ignored threads=1
+# env=SMART_EXPLORER_GUI_TASK=1 und isolierte XDG_DATA_HOME/APPDATA/LOCALAPPDATA ({tmp}), mit Anzeige fixture=xvfb.
+# U29 setzt die Optionen beim Verschieben. ----
+vault_task_gui_unlock_states                      linux-desktop:gui-harness  paket=U29  quelle=T533
+vault_task_gui_compare_rows_and_actions           linux-desktop:gui-harness  paket=U29  quelle=T533
+vault_task_gui_sync_editor_fixed_fields           linux-desktop:gui-harness  paket=U29  quelle=T533
+vault_task_gui_sidebar_lock_event_clears_tab      linux-desktop:gui-harness  paket=U29  quelle=T533
+vault_task_gui_recovery_page_text_only            linux-desktop:gui-harness  paket=U29  quelle=T533
+
+# ---- S3 VLT-M11 (U31): android-device (T542) ----
+VaultTaskTest                                     android-device:vault-android-device  art=instr  paket=U31  quelle=T542,D3
+
+# ---- S3 VLT-M12 (U14): linux-core unit, linux-root vault-mount, windows-core vault-mount (T551) ----
+vault_task_sealed_spool_random_access_roundtrip   linux-core:unit  paket=U14  quelle=T551
+vault_task_sealed_spool_detects_block_swap        linux-core:unit  paket=U14  quelle=T551
+vault_task_spool_key_wrap_unwrap_after_restart    linux-core:unit  paket=U14  quelle=T551
+vault_task_spool_key_stable_over_password_change  linux-core:unit  paket=U14  quelle=T551
+vault_task_spool_key_only_unlocked                linux-core:unit  paket=U14  quelle=T551
+vault_task_journal_text_key_derived_from_spool_key  linux-core:unit  paket=U14  quelle=T551
+vault_task_journal_sealer_roundtrip               linux-core:unit  paket=U14  quelle=T551
+vault_task_mount_requires_unlock                  linux-core:unit  paket=U14  quelle=T551
+vault_task_mount_end_reason_handling              linux-core:unit  paket=U14  quelle=T551
+vault_task_unlock_triggers_pending_retry          linux-core:unit  paket=U14  quelle=T551
+vault_task_lock_unmounts_before_zeroize           linux-core:unit  paket=U14  quelle=T551
+vault_task_linux_thumbnails_removed_by_uri_prefix linux-core:unit  paket=U14  quelle=T551
+vault_task_mount_linux_fuse_e2e                   linux-root:vault-mount  fixture=fuse,runtime-tmpfs threads=1  paket=U14  quelle=T551
+vault_task_mount_windows_dokany_e2e               windows-core:vault-mount  fixture=dokany threads=1  paket=U14  quelle=T551,D3
+
+# ---- S3 Stufe vault-backends (VLT-M14): Plan nennt keine Namen, Namen von U39 gesetzt (T564) ----
+vault_task_backends_provider_matrix               linux-core:vault-backends  paket=offen  quelle=T564,D3
+vault_task_backends_share_pair                    linux-core:vault-backends  fixture=share  paket=offen  quelle=T564,D3
+
+# ---- S4, S5, Launcher: Eintraege setzt U41 (D1 U41: rdt_suite_inventory_complete fuer diese Stufen) ----
+# Hinweise aus D3 und den Uebergaben an U39/U41, damit U41 nichts verliert (keine Eintraege):
+#   prepare:static            desktop_task_release_assets_unchanged, desktop_task_gnome_extension_static,
+#                             desktop_task_lock_only_expected_additions, desktop_task_docs_todo_entries_present,
+#                             screen_task_windows_interop_factories_only, screen_task_android_has_no_openh264,
+#                             desktop_task_installer_static, desktop_task_install_linux_static,
+#                             screen_task_installer_lists_screen_licenses, screen_task_install_linux_kde_interfaces_line
+#   linux-core:unit           desktop_task_updater_helper_unchanged (Uebergabe U03: nicht in prepare),
+#                             desktop_task_online_rule_matches_bridge, desktop_task_share_status_device_shape_unchanged
+#                             (nur Linux), screen_task_cisco_license_verbatim; die zwei GUI-Tests aus U03 brauchen
+#                             SMART_EXPLORER_GUI_TASK=1, XDG_DATA_HOME/APPDATA/LOCALAPPDATA isoliert, ignored, threads=1
+#   linux-core:docs-cli       screen_task_docs_inventory_lists_every_cli_command, desktop_task_docs_inventory_lists_every_cli_command
+#   linux-core:screen-pair    screen_task_fs_exec_unchanged, screen_task_old_peer_unsupported; netem not_run ohne sch_netem
+#   linux-desktop             desktop-linux-x11 endet mit desktop_task_no_hang_restart_during_suite
+#   linux-wayland:kde         screen_task_kde_window_list, screen_task_kde_remote_desktop_input, desktop_task_kwin_layer_namespace_desktop
+#   linux-gnome:desktop-gnome desktop_task_gnome_headless_variant_a, desktop_task_gnome_headless_variant_b
+#   windows-screen            screen_task_mf_encode_decode, zuletzt screen_task_windows_lock_reports_secure_desktop,
+#                             screen_task_fs_exec_unchanged
+#   windows-desktop           zuletzt desktop_task_no_hang_restart_during_suite
+#   android-build:launcher-jvm  LayoutModelTest, GridGeometryTest, LauncherSearchTest, WidgetPreviewTest,
+#                             launcher_task_widget_picker_preview_order, launcher_task_private_space_settings_entry_only_api36,
+#                             launcher_task_existing_nav_kinds_unchanged, launcher_task_main_activity_filters_unchanged
+#   android-device            ScreenTaskTest, LauncherTaskTest
+#   android-device-api30      launcher_task_widget_bind_config_resize, launcher_task_devices_widget_only_when_enabled,
+#                             launcher_task_devices_widget_click_opens_device, launcher_task_gestures_with_accessibility,
+#                             screen_task_android_consent_action_is_activity_intent
+#   Prozesspruefungen U15     desktop/os/shared/process_task_tests.rs: ignored, threads=1,
+#                             env=SMART_EXPLORER_DESKTOP_TASK=1, env=SE_DESKTOP_TASK_GUI={gui}, ohne Bildschirm
+#                             env=SE_DESKTOP_TEST_HEADLESS=1
