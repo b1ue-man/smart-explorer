@@ -1179,6 +1179,37 @@ function Test-CompleteReleaseCandidateAvailable([string]$Version) {
     }
 }
 
+function Assert-RustCrateLicenses {
+    # Every build embeds third-party/rust-crates/THIRD-PARTY-LICENSES.txt
+    # (docs/RELEASING.md). A missing or stale file stops the release before the
+    # first build; -EnsureTool installs the cargo-about version pinned in
+    # native/rust-licenses.ps1 when it is missing.
+    $cargoBin = if (Test-RunningOnLinux) {
+        Join-Path $HOME ".cargo/bin"
+    } else {
+        Join-Path $env:USERPROFILE ".cargo\bin"
+    }
+    if (-not (Get-Command cargo -ErrorAction SilentlyContinue) -and
+        (Test-Path -LiteralPath $cargoBin -PathType Container)) {
+        $env:PATH = $cargoBin + [System.IO.Path]::PathSeparator + $env:PATH
+    }
+    if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
+        throw "cargo is required for the Rust crate license check."
+    }
+    $pwsh = Get-Command pwsh -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $pwsh) {
+        throw "PowerShell 7 (pwsh) is required for native/rust-licenses.ps1."
+    }
+    & $pwsh.Source -NoProfile -NonInteractive -File (Join-Path $scriptRoot "rust-licenses.ps1") -Mode Check -EnsureTool
+    if ($LASTEXITCODE -ne 0) {
+        throw "Rust crate license notices are missing or stale (native/rust-licenses.ps1 -Mode Check); the task suite job prepare regenerates third-party/rust-crates/THIRD-PARTY-LICENSES.txt."
+    }
+}
+
+# Rust crate license notices are verified before any build path, including the
+# -SkipLinuxFeed diagnostic.
+Assert-RustCrateLicenses
+
 if ($SkipLinuxFeed) {
     if (Test-RunningOnLinux) {
         throw "-SkipLinuxFeed is a Windows-only non-publishable diagnostic."

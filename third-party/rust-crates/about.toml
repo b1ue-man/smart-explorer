@@ -1,0 +1,63 @@
+# cargo-about configuration of the Rust crate license notices (plan C4).
+# native/rust-licenses.ps1 pins the cargo-about version, runs it once per
+# shipped manifest with `--format json` and renders
+# third-party/rust-crates/THIRD-PARTY-LICENSES.txt from the merged results.
+# cargo-about reads every top-level key it does not know as a crate name, so
+# only its own keys stand here.
+
+# The five shipped targets: Windows (GNU release build, MSVC host builds),
+# Linux, Android arm64 and x86_64. The script prints this list in the header
+# of the generated file.
+targets = [
+    "aarch64-linux-android",
+    "x86_64-linux-android",
+    "x86_64-pc-windows-gnu",
+    "x86_64-pc-windows-msvc",
+    "x86_64-unknown-linux-gnu",
+]
+
+# Build-script helpers and test-only crates are not part of a shipped program.
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+
+# cargo-about reads every text file below a crate root. License files lie in
+# the root or one directory below it (LICENSES/, fonts/); a deeper scan only
+# costs minutes in the large binding crates (windows, windows-sys).
+max-depth = 2
+
+# Accepted licenses in priority order: for a choice such as
+# "MIT OR Apache-2.0" the first accepted entry is used. A crate whose license
+# expression none of these satisfies stops the generation.
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "MIT-0",
+    "BSL-1.0",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "CC0-1.0",
+    "Unlicense",
+    "MPL-2.0",
+    "OpenSSL",
+    "CDLA-Permissive-2.0",
+    "bzip2-1.0.6",
+    "OFL-1.1",
+    "LicenseRef-UFL-1.0",
+]
+
+# Only workarounds that read the crate's own files. The workarounds for
+# rustls, clap, rustix and linux-raw-sys fetch license files from git and
+# would make the generated file depend on network access to GitHub.
+workarounds = ["chrono", "ring", "unicode-ident"]
+
+# Unpublished crates (`publish = false`, our own workspace crates) carry no
+# third-party license. native/rust-licenses.ps1 also drops every workspace
+# member of the three manifests.
+[private]
+ignore = true
