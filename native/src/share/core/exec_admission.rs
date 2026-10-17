@@ -1,23 +1,31 @@
 //! Connection authentication and job admission before Exec streaming. The
 //! handshake admits a device whose commands or terminal are not off; each
 //! start is then checked against the grant of that moment for the
-//! capability it needs (C1, D.2.2).
-use super::super::access_authorize::{capability_for, principal_grant, start_capability};
-use super::super::access_grant::{Capability, CapabilityDecision};
+//! capability it needs (C1, D.2.2). A capability on `ask` waits for the host
+//! user first (PRM-M3, `access_approval_exec.rs`), and open confirmations
+//! count against the Exec limits with the running jobs (C5).
+use super::super::access_audit::{self, AccessEntry};
 use super::super::auth_penalty::PenaltyKind;
+use super::super::consent_launch;
 use super::super::exec_access_view::{host_access_features, ExecAccessView, HelloOkWithAccess};
-use super::super::exec_audit::{self, AuditEvent};
-use super::super::exec_auth::AuthorizedExecPeer;
-use super::super::exec_client_messages::{
-    approval_unavailable, permission_denied, right_not_granted, APPROVAL_UNAVAILABLE,
-    PERMISSION_DENIED, RIGHT_NOT_GRANTED,
-};
+use super::super::exec_audit::{self, AuditEvent, StartAccess};
+use super::super::exec_client_messages::{permission_denied, PERMISSION_DENIED};
 use super::super::exec_policy::ExecGrant;
 use super::super::exec_supervisor_protocol::RunAsAccount;
 use super::super::exec_terminal::{host_denial, host_features};
-use super::super::exec_types::{ExecAuthorization, ExecProviderStatus, ExecStart};
+use super::super::exec_types::{ExecProviderStatus, ExecStart};
 use super::super::relation_proof::ProvenPrincipal;
 use super::*;
+
+// The decision about one start, with the host user's answer on `ask`.
+#[path = "access_approval_exec.rs"]
+mod approval;
+#[cfg(test)]
+pub(in crate::share) use approval::start_grant;
+use approval::{decide_start, limit_error, Refusal, StartApproval};
+
+/// How often the grant is read again while the host user decides.
+const GRANT_POLL: Duration = Duration::from_secs(1);
 
 pub(in crate::share) async fn handle_connection(
     node: Arc<ShareIrohNode>,
@@ -192,44 +200,107 @@ pub(in crate::share) async fn handle_connection(
         wait_result_ack(&mut recv, &mut protocol, &start.exec_id).await?;
         return acknowledge_result(&mut send, &start.exec_id, &connection).await;
     }
-    // The capability the start needs, the grant's program list and its
-    // run-as account are host decisions made before any process exists; a
-    // refusal is answered like a denied admission.
-    let checked = match start_grant(&node.auth, &authorized, &start, &host, now_secs()) {
-        Ok(decided) => grant_launch(&decided.grant, &start, &provider)
-            .await
-            .map(|launch| (decided, launch)),
-        Err(denial) => Err(denial),
+    // From here the client stream has its reader: a start on `ask` waits for
+    // the host user while heartbeats, early input and a cancel arrive.
+    let mut stream = ClientStream::new(exec_frame_reader::client_frames(recv));
+    let approvals = consent_launch::approvals();
+    let registry = node.exec_registry().clone();
+    let record = |entry: AccessEntry<'_>| access_audit::record_access(entry);
+    let approval = StartApproval {
+        service: approvals,
+        gauge: registry.as_ref(),
+        auth: &node.auth,
+        authorized: &authorized,
+        start: &start,
+        host: &host,
+        client_features: &client_hello.client_features,
+        own_label: &provider.user_label,
+        audit: &record,
+        grant_poll: GRANT_POLL,
     };
-    let (decided, launch) = match checked {
+    // The capability the start needs (on `ask` with the host user's answer),
+    // the grant's program list and its run-as account are host decisions
+    // made before any process exists; a refusal is answered like a denied
+    // admission.
+    let decided = decide_start(
+        &approval,
+        &mut send,
+        &mut stream,
+        &mut protocol,
+        EXEC_HEARTBEAT_POLICY,
+    )
+    .await?;
+    let checked = match decided {
+        Ok(approved) => grant_launch(&approved.decided.grant, &start, &provider)
+            .await
+            .map(|launch| (approved, launch))
+            .map_err(Refusal::start),
+        Err(refusal) => Err(refusal),
+    };
+    let (approved, launch) = match checked {
         Ok(checked) => checked,
-        Err(denial) => {
-            exec_audit::record(AuditEvent::StartRefused {
-                principal: &authorized.principal,
-                start: &start,
-                reason: &denial.message,
-            });
-            protocol.terminal();
-            send_terminal_frame(&mut send, &ServerFrame::Error(denial)).await?;
-            wait_result_ack(&mut recv, &mut protocol, &start.exec_id).await?;
-            return acknowledge_result(&mut send, &start.exec_id, &connection).await;
+        Err(refusal) => {
+            // The host user's answers have entries of their own.
+            if refusal.start_refused {
+                exec_audit::record(AuditEvent::StartRefused {
+                    principal: &authorized.principal,
+                    start: &start,
+                    reason: &refusal.error.message,
+                });
+            }
+            let frame = ServerFrame::Error(refusal.error);
+            return answer_without_job(
+                &mut send,
+                &mut stream,
+                &mut protocol,
+                &start,
+                &connection,
+                frame,
+            )
+            .await;
         }
     };
+    // Open confirmations hold reservations as well (C5).
+    if let Err(limit) = approvals.admits(registry.as_ref(), &authorized.principal.device_id) {
+        let frame = ServerFrame::Error(limit_error(limit));
+        return answer_without_job(
+            &mut send,
+            &mut stream,
+            &mut protocol,
+            &start,
+            &connection,
+            frame,
+        )
+        .await;
+    }
+    let decided = approved.decided;
+    exec_audit::note_start(
+        &start.exec_id,
+        StartAccess {
+            capability: decided.capability,
+            account_profile: decided.grant.access_grant().account.key(),
+            approval: approved.approval.key(),
+        },
+    );
     let grant_end = GrantEndWatch::new(
         node.auth.clone(),
         ProvenPrincipal::from(&authorized.principal),
         decided.capability,
         decided.end,
     );
-    match node.exec_registry().prepare(
+    let admission = registry.prepare(
         authorized.principal,
         decided.authorization,
         &start,
         now_secs(),
-    ) {
+    );
+    if !matches!(admission, Ok(ExecAdmission::Prepared(_))) {
+        exec_audit::forget_start(&start.exec_id);
+    }
+    let frame = match admission {
         Ok(ExecAdmission::Prepared(reservation)) => {
-            serve_job(
-                node.exec_registry().clone(),
+            return serve_job(
+                registry,
                 JobLaunch {
                     start,
                     reservation,
@@ -238,119 +309,51 @@ pub(in crate::share) async fn handle_connection(
                     program: launch.program,
                 },
                 send,
-                ClientStream::new(exec_frame_reader::client_frames(recv)),
+                stream,
                 protocol,
                 connection.clone(),
                 grant_end,
             )
-            .await
+            .await;
         }
-        Ok(ExecAdmission::AlreadyRunning(view)) => {
-            protocol.terminal();
-            send_terminal_frame(
-                &mut send,
-                &ServerFrame::Error(ExecWireError {
-                    code: "already_running".into(),
-                    message: format!("execution {} is already running", view.exec_id),
-                }),
-            )
-            .await?;
-            wait_result_ack(&mut recv, &mut protocol, &start.exec_id).await?;
-            acknowledge_result(&mut send, &start.exec_id, &connection).await
-        }
-        Ok(ExecAdmission::CachedTerminal(view)) => {
-            let terminal = view
-                .terminal
-                .ok_or_else(|| eio("cached execution has no terminal result"))?;
-            protocol.terminal();
-            send_terminal_frame(&mut send, &ServerFrame::Terminal(terminal)).await?;
-            wait_result_ack(&mut recv, &mut protocol, &start.exec_id).await?;
-            acknowledge_result(&mut send, &start.exec_id, &connection).await
-        }
-        Err(error) => {
-            protocol.terminal();
-            send_terminal_frame(
-                &mut send,
-                &ServerFrame::Error(ExecWireError {
-                    code: "admission_denied".into(),
-                    message: error.to_string(),
-                }),
-            )
-            .await?;
-            wait_result_ack(&mut recv, &mut protocol, &start.exec_id).await?;
-            acknowledge_result(&mut send, &start.exec_id, &connection).await
-        }
-    }
+        Ok(ExecAdmission::AlreadyRunning(view)) => ServerFrame::Error(ExecWireError {
+            code: "already_running".into(),
+            message: format!("execution {} is already running", view.exec_id),
+        }),
+        Ok(ExecAdmission::CachedTerminal(view)) => ServerFrame::Terminal(
+            view.terminal
+                .ok_or_else(|| eio("cached execution has no terminal result"))?,
+        ),
+        Err(error) => ServerFrame::Error(ExecWireError {
+            code: "admission_denied".into(),
+            message: error.to_string(),
+        }),
+    };
+    answer_without_job(
+        &mut send,
+        &mut stream,
+        &mut protocol,
+        &start,
+        &connection,
+        frame,
+    )
+    .await
 }
 
-/// The grant at the start and what it decides for the start's capability.
-pub(in crate::share) struct StartGrant {
-    pub(in crate::share) grant: ExecGrant,
-    /// The handshake's authorization at the grant's current revision: a
-    /// grant that only widened since keeps the connection's authorization;
-    /// a narrowing raised the registry's barrier above its epoch.
-    pub(in crate::share) authorization: ExecAuthorization,
-    pub(in crate::share) capability: Capability,
-    /// Unix seconds at which the grant ends.
-    pub(in crate::share) end: Option<i64>,
-}
-
-/// Checks the capability `start` needs against the grant at `now`: `allow`
-/// starts, `ask` needs the host user (PRM-M3; without its approval service
-/// the start is refused as unavailable), and `off` is `right_not_granted`
-/// while the grant still allows the other Exec capability, else (ended or
-/// withdrawn since the handshake) `permission_denied`.
-pub(in crate::share) fn start_grant(
-    auth: &std::sync::Mutex<super::super::types::ShareAuthState>,
-    authorized: &AuthorizedExecPeer,
+/// Answers a start that gets no job (a refusal or a cached result) and
+/// completes the result handshake on the client stream's reader.
+async fn answer_without_job(
+    send: &mut iroh::endpoint::SendStream,
+    stream: &mut ClientStream,
+    protocol: &mut ServerProtocolState,
     start: &ExecStart,
-    host: &str,
-    now: i64,
-) -> Result<StartGrant, ExecWireError> {
-    let capability = start_capability(&start.command);
-    let proven = ProvenPrincipal::from(&authorized.principal);
-    let denied = || ExecWireError {
-        code: PERMISSION_DENIED.into(),
-        message: permission_denied(host),
-    };
-    let (decision, grant) = {
-        let state = auth.lock().map_err(|_| denied())?;
-        (
-            capability_for(&state, &proven, capability, now),
-            principal_grant(&state, &proven).cloned(),
-        )
-    };
-    let Some(grant) = grant else {
-        return Err(denied());
-    };
-    match decision.decision {
-        CapabilityDecision::Allow => Ok(StartGrant {
-            end: grant.valid_until(),
-            grant,
-            authorization: ExecAuthorization {
-                policy_revision: decision.policy_revision,
-                ..authorized.authorization.clone()
-            },
-            capability,
-        }),
-        CapabilityDecision::Ask => Err(ExecWireError {
-            code: APPROVAL_UNAVAILABLE.into(),
-            message: approval_unavailable(host),
-        }),
-        CapabilityDecision::Off => {
-            let other = Capability::EXEC
-                .into_iter()
-                .any(|other| other != capability && grant.decision_at(other, now).is_on());
-            if other {
-                Err(ExecWireError {
-                    code: RIGHT_NOT_GRANTED.into(),
-                    message: right_not_granted(host, capability),
-                })
-            } else {
-                Err(denied())
-            }
-        }
-    }
+    connection: &Connection,
+    frame: ServerFrame,
+) -> io::Result<()> {
+    protocol.terminal();
+    send_terminal_frame(send, &frame).await?;
+    wait_result_ack_from_reader(&mut stream.frames, protocol, &start.exec_id).await?;
+    acknowledge_result(send, &start.exec_id, connection).await
 }
 
 /// What the grant decided about one start.

@@ -9,11 +9,21 @@
 //! carries secrets; the digest matches the client's own record of the start.
 //! Text the other side supplies is cut and cleaned (`exec_audit_text.rs`).
 //! Writing is best effort: a full disk never blocks or fails an execution.
+//!
+//! Access rights (PRM-M4): the lines of refused starts, starts and ends add
+//! `kind` (`exec`) and the capability; starts and ends add the account
+//! profile and the confirmation that the admission noted (`note_start`).
+//! Confirmations and ended grants are lines of their own
+//! (`access_audit.rs`) in the file of authorized devices.
 use std::io;
+use std::path::Path;
+use std::sync::{Mutex, PoisonError};
 
 use serde_json::{json, Value};
 
-use super::exec_types::{ExecCommand, ExecJobView, ExecPrincipal, ExecStart};
+use super::access_authorize::start_capability;
+use super::access_grant::Capability;
+use super::exec_types::{ExecCommand, ExecId, ExecJobView, ExecPrincipal, ExecStart};
 
 #[path = "exec_audit_view.rs"]
 mod audit_view;
@@ -25,6 +35,23 @@ mod text;
 pub(crate) use self::audit_view::{ExecAuditEntry, MAX_VIEW_ENTRIES};
 use self::files::Class;
 use self::text::limited;
+
+/// Size at which a file of the log moves to `<name>.1` (4 MiB).
+pub(crate) const ROTATE_AT: u64 = files::ROTATE_AT_BYTES;
+/// Noted starts that no job entry claimed; beyond this the oldest goes.
+const MAX_NOTED_STARTS: usize = 64;
+
+/// What the access rights decided about one Exec start.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct StartAccess {
+    pub(crate) capability: Capability,
+    /// `own`, `remote` or `account`.
+    pub(crate) account_profile: &'static str,
+    /// `not_required`, `once` or `always`.
+    pub(crate) approval: &'static str,
+}
+
+static NOTED_STARTS: Mutex<Vec<(ExecId, StartAccess)>> = Mutex::new(Vec::new());
 
 /// One audit event.
 pub(crate) enum AuditEvent<'a> {
@@ -74,10 +101,73 @@ impl AuditEvent<'_> {
     }
 }
 
+/// Notes what the access rights decided about the start `exec_id` before
+/// its job runs; its `started` and `finished` entries carry it.
+pub(crate) fn note_start(exec_id: &ExecId, access: StartAccess) {
+    let mut noted = NOTED_STARTS.lock().unwrap_or_else(PoisonError::into_inner);
+    noted.retain(|(id, _)| id != exec_id);
+    noted.push((exec_id.clone(), access));
+    let overflow = noted.len().saturating_sub(MAX_NOTED_STARTS);
+    noted.drain(..overflow);
+}
+
+/// The start `exec_id` will not run (the registry refused it).
+pub(crate) fn forget_start(exec_id: &ExecId) {
+    NOTED_STARTS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .retain(|(id, _)| id != exec_id);
+}
+
+fn noted_start(exec_id: &ExecId, take: bool) -> Option<StartAccess> {
+    let mut noted = NOTED_STARTS.lock().unwrap_or_else(PoisonError::into_inner);
+    let index = noted.iter().position(|(id, _)| id == exec_id)?;
+    Some(if take {
+        noted.remove(index).1
+    } else {
+        noted[index].1.clone()
+    })
+}
+
 /// Appends `event` to the audit log of this installation.
 pub(crate) fn record(event: AuditEvent<'_>) {
+    let access = match &event {
+        AuditEvent::Started { start, .. } => noted_start(&start.exec_id, false),
+        AuditEvent::Finished { view, .. } => noted_start(&view.exec_id, true),
+        _ => None,
+    };
     let directory = crate::support_dirs::app_data_dir();
-    let _ = files::append(&directory, event.class(), &line(&event));
+    let _ = files::append(
+        &directory,
+        event.class(),
+        &line_with(&event, access.as_ref()),
+    );
+}
+
+/// Appends one access-log line (`access_audit.rs`) to the file of
+/// authorized devices; it rotates like every other line of that file.
+pub(crate) fn append_access(directory: &Path, value: &Value, rotate_at: u64) -> io::Result<()> {
+    files::append_rotating(directory, Class::Executions, value, rotate_at)
+}
+
+/// The `at` field of an entry written now.
+pub(crate) fn now_text() -> String {
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+/// Text of the other side as an audit line keeps it.
+pub(crate) fn clean(text: &str) -> String {
+    limited(text)
+}
+
+/// Mode, program, digest, working directory and time limit of `start`.
+pub(crate) fn exec_start_fields(start: &ExecStart) -> Value {
+    start_fields(start)
+}
+
+/// `value` with the device fields every authorized entry has.
+pub(crate) fn principal_fields(value: Value, principal: &ExecPrincipal) -> Value {
+    with_principal(value, principal)
 }
 
 /// The last `lines` entries, oldest first, from every file of the log.
@@ -96,8 +186,12 @@ fn view_in(directory: &std::path::Path, lines: usize) -> io::Result<Vec<ExecAudi
     Ok(audit_view::entries(files::tail_in(directory, lines)?))
 }
 
+#[cfg(test)]
 fn line(event: &AuditEvent<'_>) -> Value {
-    let at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    line_with(event, None)
+}
+
+fn line_with(event: &AuditEvent<'_>, access: Option<&StartAccess>) -> Value {
     let mut value = match event {
         AuditEvent::AuthRejected {
             remote_node,
@@ -127,6 +221,7 @@ fn line(event: &AuditEvent<'_>) -> Value {
             let mut value = start_fields(start);
             value["event"] = json!("start_refused");
             value["reason"] = json!(limited(reason));
+            exec_fields(&mut value, Some(start_capability(&start.command)), None);
             with_principal(value, principal)
         }
         AuditEvent::Started {
@@ -141,11 +236,12 @@ fn line(event: &AuditEvent<'_>) -> Value {
             if let Some(path) = resolved_program {
                 value["resolved_program"] = json!(limited(path));
             }
+            exec_fields(&mut value, Some(start_capability(&start.command)), access);
             with_principal(value, principal)
         }
         AuditEvent::Finished { principal, view } => {
             let terminal = view.terminal.as_ref();
-            let value = json!({
+            let mut value = json!({
                 "event": "finished",
                 "exec_id": view.exec_id.as_str(),
                 "program": limited(&view.program),
@@ -160,11 +256,25 @@ fn line(event: &AuditEvent<'_>) -> Value {
                     .zip(view.finished_at)
                     .map(|(started, finished)| finished.saturating_sub(started)),
             });
+            exec_fields(&mut value, access.map(|access| access.capability), access);
             with_principal(value, principal)
         }
     };
-    value["at"] = json!(at);
+    value["at"] = json!(now_text());
     value
+}
+
+/// PRM-M4: an entry about an Exec start names its kind and capability, and
+/// how the access rights let it run.
+fn exec_fields(value: &mut Value, capability: Option<Capability>, access: Option<&StartAccess>) {
+    value["kind"] = json!("exec");
+    if let Some(capability) = capability {
+        value["capability"] = json!(capability.key());
+    }
+    if let Some(access) = access {
+        value["account_profile"] = json!(access.account_profile);
+        value["approval"] = json!(access.approval);
+    }
 }
 
 fn start_fields(start: &ExecStart) -> Value {
@@ -191,6 +301,36 @@ fn with_principal(mut value: Value, principal: &ExecPrincipal) -> Value {
     value["fingerprint"] = json!(limited(&principal.fingerprint));
     value["node_id"] = json!(limited(&principal.node_id));
     value
+}
+
+/// What the PRM-M4 tests read of the log without the app data directory.
+#[cfg(test)]
+pub(crate) mod for_tests {
+    use super::*;
+
+    pub(crate) fn file_names() -> [(&'static str, &'static str); 2] {
+        [Class::Executions.names(), Class::Rejections.names()]
+    }
+
+    pub(crate) fn line_of(event: &AuditEvent<'_>, access: Option<&StartAccess>) -> Value {
+        line_with(event, access)
+    }
+
+    pub(crate) fn append_event(directory: &Path, event: &AuditEvent<'_>, rotate_at: u64) {
+        files::append_rotating(directory, event.class(), &line(event), rotate_at).unwrap();
+    }
+
+    pub(crate) fn tail(directory: &Path, lines: usize) -> Vec<String> {
+        files::tail_in(directory, lines).unwrap()
+    }
+
+    pub(crate) fn entries(directory: &Path, lines: usize) -> Vec<ExecAuditEntry> {
+        view_in(directory, lines).unwrap()
+    }
+
+    pub(crate) fn noted(exec_id: &ExecId, take: bool) -> Option<StartAccess> {
+        noted_start(exec_id, take)
+    }
 }
 
 #[cfg(test)]

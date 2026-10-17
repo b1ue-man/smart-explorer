@@ -39,14 +39,27 @@ internal fun execAuditTime(at: String): String = try {
     at.ifBlank { "–" }
 }
 
+/** Entries that stand out: refusals, and confirmations that ended without a yes. */
+private val EXEC_AUDIT_REFUSALS = setOf(
+    "auth_rejected",
+    "penalty_refused",
+    "start_refused",
+    "unreadable",
+    "approval_denied",
+    "approval_cancelled",
+    "approval_unavailable",
+    "grant_expired",
+    "helper_refused",
+)
+
 /** Refusals stand out from starts and ends. */
-internal fun execAuditIsRefusal(entry: ExecAuditEntry): Boolean =
-    entry.event in setOf("auth_rejected", "penalty_refused", "start_refused", "unreadable")
+internal fun execAuditIsRefusal(entry: ExecAuditEntry): Boolean = entry.event in EXEC_AUDIT_REFUSALS
 
 /**
  * „Befehlsprotokoll“ of this phone (`share.execLog`, as `se share exec log` and the desktop page
- * „Befehle“): refused logins and starts, starts and ends, newest first. Shell command text is never
- * recorded; text of the other device is cut and cleaned by the core.
+ * „Befehle“): refused logins and starts, starts and ends, confirmations and ended grants, newest
+ * first; each entry names kind, account and confirmation in its detail line. Shell command text is
+ * never recorded; text of the other device is cut and cleaned by the core.
  */
 @Composable
 internal fun ExecAuditDialog(onDismiss: () -> Unit) {
@@ -67,8 +80,8 @@ internal fun ExecAuditDialog(onDismiss: () -> Unit) {
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    "Abgelehnte Anmeldungen und Starts, Starts und Enden von Befehlen anderer Geräte auf diesem Telefon. " +
-                        "Shell-Befehle werden nie im Wortlaut gespeichert.",
+                    "Abgelehnte Anmeldungen und Starts, Starts und Enden von Befehlen anderer Geräte auf diesem Telefon, " +
+                        "Rückfragen mit ihrer Antwort und abgelaufene Rechte. Shell-Befehle werden nie im Wortlaut gespeichert.",
                     style = MaterialTheme.typography.bodySmall,
                 )
                 error?.let { Text("Protokoll nicht lesbar: $it", color = MaterialTheme.colorScheme.error) }

@@ -1,7 +1,9 @@
 //! „Exec-Protokoll“ of this host on the page „Befehle“: the entries of
 //! `exec-audit.log` and `exec-audit-rejected.log` as `se share exec log`
 //! shows them, read on request in a background thread, newest first, every
-//! field cut and cleaned (`crate::share::exec_audit_entries`).
+//! field cut and cleaned (`crate::share::exec_audit_entries`). Every entry
+//! names its kind (Befehle or Bildschirm), the account and the confirmation
+//! (PRM-M4); confirmations and ended grants are entries of their own.
 use crate::app::theme;
 use eframe::egui::{self, RichText};
 use std::sync::{Arc, Mutex};
@@ -9,6 +11,24 @@ use std::sync::{Arc, Mutex};
 /// Choices for the number of newest entries (the reader caps at
 /// `crate::share::MAX_EXEC_AUDIT_VIEW`).
 const LINE_CHOICES: [usize; 3] = [50, 200, crate::share::MAX_EXEC_AUDIT_VIEW];
+/// Entries that stand out: refusals and requests that ended without a yes.
+const REFUSALS: [&str; 9] = [
+    "auth_rejected",
+    "penalty_refused",
+    "start_refused",
+    "unreadable",
+    "approval_denied",
+    "approval_cancelled",
+    "approval_unavailable",
+    "grant_expired",
+    "helper_refused",
+];
+/// The kind filter: all entries, Exec entries, screen entries.
+const KINDS: [(Option<&str>, &str); 3] = [
+    (None, "Alle Arten"),
+    (Some("exec"), "Befehle"),
+    (Some("screen"), "Bildschirm"),
+];
 
 #[derive(Default)]
 struct LogState {
@@ -28,7 +48,7 @@ pub(super) fn ui_exec_log(ui: &mut egui::Ui) {
 fn body(ui: &mut egui::Ui) {
     ui.add(
         egui::Label::new(
-            "Abgelehnte Anmeldungen, abgelehnte Starts, Starts und Enden, mit Geraet, Fingerprint, Art, Programm, Konto und Ergebnis. Kein Text von Shell-Befehlen; Text des anderen Geraets ist auf 256 Zeichen gekuerzt. Dateien exec-audit.log und exec-audit-rejected.log im App-Datenordner (je 4 bis 8 MiB). Terminal: se share exec log.",
+            "Abgelehnte Anmeldungen, abgelehnte Starts, Starts und Enden, Rückfragen und ihre Antworten, abgelaufene Rechte, mit Geraet, Fingerprint, Art, Recht, Programm, Konto, Rückfrage und Ergebnis. Kein Text von Shell-Befehlen; Text des anderen Geraets ist auf 256 Zeichen gekuerzt. Dateien exec-audit.log und exec-audit-rejected.log im App-Datenordner (je 4 bis 8 MiB). Terminal: se share exec log.",
         )
         .wrap(),
     );
@@ -79,10 +99,13 @@ fn body(ui: &mut egui::Ui) {
             format!("Protokoll nicht lesbar: {error}"),
         );
     }
-    let filter = device_filter(ui, &entries);
+    let (filter, kind) = ui
+        .horizontal_wrapped(|ui| (device_filter(ui, &entries), kind_filter(ui)))
+        .inner;
     let shown: Vec<&crate::share::ExecAuditEntry> = entries
         .iter()
         .filter(|entry| filter.as_deref().is_none_or(|id| entry.device_id == id))
+        .filter(|entry| kind.is_none_or(|kind| entry.kind == kind))
         .collect();
     if loaded && shown.is_empty() {
         ui.label("Keine Eintraege auf diesem Host.");
@@ -98,9 +121,10 @@ fn body(ui: &mut egui::Ui) {
 }
 
 fn entry_row(ui: &mut egui::Ui, entry: &crate::share::ExecAuditEntry) {
-    let color = match entry.event.as_str() {
-        "auth_rejected" | "penalty_refused" | "start_refused" | "unreadable" => theme::warning(ui),
-        _ => theme::muted(ui),
+    let color = if REFUSALS.contains(&entry.event.as_str()) {
+        theme::warning(ui)
+    } else {
+        theme::muted(ui)
     };
     ui.horizontal_wrapped(|ui| {
         ui.monospace(local_time(&entry.at));
@@ -141,6 +165,22 @@ fn device_filter(ui: &mut egui::Ui, entries: &[crate::share::ExecAuditEntry]) ->
         });
     ui.data_mut(|data| data.insert_temp(id, selected.clone()));
     selected
+}
+
+/// „Alle Arten“, Befehle (`exec`) or Bildschirm (`screen`).
+fn kind_filter(ui: &mut egui::Ui) -> Option<&'static str> {
+    let id = egui::Id::new("share_exec_audit_kind");
+    let mut selected = ui.data_mut(|data| data.get_temp::<usize>(id).unwrap_or(0));
+    let (_, label) = KINDS[selected.min(KINDS.len() - 1)];
+    egui::ComboBox::from_id_salt("share_exec_audit_kind_choice")
+        .selected_text(label)
+        .show_ui(ui, |ui| {
+            for (index, (_, name)) in KINDS.iter().enumerate() {
+                ui.selectable_value(&mut selected, index, *name);
+            }
+        });
+    ui.data_mut(|data| data.insert_temp(id, selected));
+    KINDS[selected.min(KINDS.len() - 1)].0
 }
 
 fn local_time(at: &str) -> String {

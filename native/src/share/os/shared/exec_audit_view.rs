@@ -6,6 +6,10 @@
 //! through the same cut and character replacement as when it was written
 //! (`exec_audit_text::limited`), and a line that is no JSON object is shown as
 //! "unreadable" instead of being dropped.
+//!
+//! Access rights (PRM-M4): every entry also names its kind (`exec`, `screen`),
+//! the account and the confirmation; confirmations, ended grants and
+//! refusals of the account helper have titles of their own.
 use serde::Serialize;
 use serde_json::Value;
 
@@ -22,7 +26,10 @@ pub struct ExecAuditEntry {
     /// RFC 3339 time of the entry, empty when the line has none.
     pub at: String,
     /// `auth_rejected`, `penalty_refused`, `start_refused`, `started`,
-    /// `finished`, another recorded name, or `unreadable`.
+    /// `finished`, an access event (`approval_requested`,
+    /// `approval_granted`, `approval_denied`, `approval_cancelled`,
+    /// `approval_unavailable`, `grant_expired`, `helper_refused`), another
+    /// recorded name, or `unreadable`.
     pub event: String,
     /// German label of `event`.
     pub title: String,
@@ -34,6 +41,15 @@ pub struct ExecAuditEntry {
     pub device_id: String,
     /// One line with the remaining fields of the entry.
     pub detail: String,
+    /// `exec`, or `screen` for screen sessions; lines written before the
+    /// access rights are Exec lines; empty for an unreadable line.
+    pub kind: String,
+    /// The account a start ran as; empty when the line names none.
+    pub account: String,
+    /// How the start or session was confirmed: `not_required`, `once`,
+    /// `always`, `denied`, `cancelled`, `unavailable`; empty when the line
+    /// has none.
+    pub approval: String,
 }
 
 /// The entry of one stored line.
@@ -46,14 +62,21 @@ pub(super) fn entry(line: &str) -> ExecAuditEntry {
             device: String::new(),
             device_id: String::new(),
             detail: limited(line),
+            kind: String::new(),
+            account: String::new(),
+            approval: String::new(),
         };
     };
     let value = Value::Object(fields);
     let text = |key: &str| field(&value, key);
     let event = text("event");
+    let kind = match text("kind") {
+        kind if kind.is_empty() => "exec".to_string(),
+        kind => kind,
+    };
     let (title, device, device_id, detail) = match event.as_str() {
         "auth_rejected" => (
-            "Anmeldung abgelehnt",
+            "Anmeldung abgelehnt".to_string(),
             or_unknown(text("claimed_device")),
             text("claimed_device"),
             join(&[
@@ -62,7 +85,7 @@ pub(super) fn entry(line: &str) -> ExecAuditEntry {
             ]),
         ),
         "penalty_refused" => (
-            "Abgewiesen (Strafkonto)",
+            "Abgewiesen (Strafkonto)".to_string(),
             or_unknown(text("remote_node")),
             String::new(),
             join(&[
@@ -71,13 +94,17 @@ pub(super) fn entry(line: &str) -> ExecAuditEntry {
             ]),
         ),
         "start_refused" => (
-            "Start abgelehnt",
+            "Start abgelehnt".to_string(),
             principal(&value),
             text("device_id"),
-            join(&[start_summary(&value), labelled("Grund", text("reason"))]),
+            join(&[
+                start_summary(&value),
+                labelled("Grund", text("reason")),
+                access_summary(&value),
+            ]),
         ),
         "started" => (
-            "Gestartet",
+            "Gestartet".to_string(),
             principal(&value),
             text("device_id"),
             join(&[
@@ -85,20 +112,46 @@ pub(super) fn entry(line: &str) -> ExecAuditEntry {
                 labelled("Konto", text("account")),
                 labelled("Programmdatei", text("resolved_program")),
                 labelled("Verzeichnis", text("cwd")),
+                access_summary(&value),
             ]),
         ),
         "finished" => (
-            "Beendet",
+            "Beendet".to_string(),
             principal(&value),
             text("device_id"),
-            finished_summary(&value),
+            join(&[finished_summary(&value), access_summary(&value)]),
         ),
-        _ => (
-            "Eintrag",
-            principal(&value),
-            text("device_id"),
-            limited(line),
-        ),
+        other => match access_title(other) {
+            Some(title) => (
+                title.to_string(),
+                principal(&value),
+                text("device_id"),
+                join(&[
+                    access_summary(&value),
+                    labelled("Konto", text("account")),
+                    start_summary(&value),
+                    labelled("Grund", text("reason")),
+                ]),
+            ),
+            // A screen-session event of S4 is named by itself.
+            None if kind == "screen" && !other.is_empty() => (
+                other.to_string(),
+                principal(&value),
+                text("device_id"),
+                join(&[access_summary(&value), start_summary(&value)]),
+            ),
+            None => (
+                "Eintrag".to_string(),
+                principal(&value),
+                text("device_id"),
+                limited(line),
+            ),
+        },
+    };
+    let title = if kind == "screen" {
+        format!("Bildschirm: {title}")
+    } else {
+        title
     };
     ExecAuditEntry {
         at: text("at"),
@@ -107,16 +160,57 @@ pub(super) fn entry(line: &str) -> ExecAuditEntry {
         } else {
             event
         },
-        title: title.into(),
+        title,
         device,
         device_id,
         detail,
+        kind,
+        account: text("account"),
+        approval: text("approval"),
     }
 }
 
 /// Newest first: the log keeps the oldest first.
 pub(super) fn entries(lines: Vec<String>) -> Vec<ExecAuditEntry> {
     lines.iter().rev().map(|line| entry(line)).collect()
+}
+
+/// German title of an access event (C5).
+fn access_title(event: &str) -> Option<&'static str> {
+    Some(match event {
+        "approval_requested" => "Rückfrage gestellt",
+        "approval_granted" => "Rückfrage erlaubt",
+        "approval_denied" => "Rückfrage abgelehnt",
+        "approval_cancelled" => "Rückfrage abgebrochen",
+        "approval_unavailable" => "Rückfrage nicht möglich",
+        "grant_expired" => "Recht abgelaufen",
+        "helper_refused" => "Kontodienst lehnte ab",
+        _ => return None,
+    })
+}
+
+/// Capability and confirmation of an entry.
+fn access_summary(value: &Value) -> String {
+    let capability = match field(value, "capability").as_str() {
+        "exec_commands" => "Befehle".to_string(),
+        "exec_terminal" => "Terminal".to_string(),
+        "screen_view" => "Bildschirm ansehen".to_string(),
+        "screen_control" => "Bildschirm steuern".to_string(),
+        other => other.to_string(),
+    };
+    let approval = match field(value, "approval").as_str() {
+        "not_required" => "nicht nötig".to_string(),
+        "once" => "diesmal erlaubt".to_string(),
+        "always" => "immer erlaubt".to_string(),
+        "denied" => "abgelehnt".to_string(),
+        "cancelled" => "abgebrochen".to_string(),
+        "unavailable" => "nicht möglich".to_string(),
+        other => other.to_string(),
+    };
+    join(&[
+        labelled("Recht", capability),
+        labelled("Rückfrage", approval),
+    ])
 }
 
 /// A field as cleaned text: strings and numbers, empty when absent.
@@ -145,6 +239,8 @@ fn start_summary(value: &Value) -> String {
         "argv" => "Programm".to_string(),
         "shell" => "Shell-Befehl".to_string(),
         "terminal" => "Terminal".to_string(),
+        "view" => "Bildschirm ansehen".to_string(),
+        "control" => "Bildschirm steuern".to_string(),
         other => other.to_string(),
     };
     join(&[

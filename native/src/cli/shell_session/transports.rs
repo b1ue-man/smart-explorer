@@ -5,12 +5,19 @@
 //! same selectors as `se exec` choose the target. The terminal variants of
 //! both (a login shell in a PTY) live in `terminal_transports.rs` and reuse
 //! the event mapping here.
+//!
+//! A Share start can wait for the other device's user (PRM-M3): until it
+//! begins, its notice is read from the worker, the status line goes to
+//! stderr, and the start timers do not count the wait. The session's shell
+//! start names the account it runs as (`{device}: as {account}`).
 use super::dialect;
+use super::terminal_transports::{print_account_line, PendingNotice};
 use super::types::{Dialect, TerminalSize};
 use crate::creds::SavedConnection;
 use crate::daemon::{ExecIpcEvent, ExecIpcInput, ExecIpcSession};
 use crate::sftp::{SftpBackend, SshCommand, SshCommandControl, SshCommandEvent};
 use crate::share::{ExecCommand, ExecTerminal, ExecTerminalKind, PeerOpenTarget};
+use std::sync::mpsc::RecvTimeoutError;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -43,6 +50,11 @@ pub(super) trait TransportInput: Send + Sync {
     /// session have one.
     fn resize(&self, _size: TerminalSize) -> Result<(), String> {
         Err("no terminal".to_string())
+    }
+
+    /// The start waits for the other device's user (Share only).
+    fn waiting_for_approval(&self) -> bool {
+        false
     }
 }
 
@@ -124,10 +136,10 @@ pub(super) fn connect(
             let shell = ssh_start(&backend, dialect::start_line(dialect))?;
             Ok((dialect, Box::new(shell)))
         }
-        TargetSpec::Share { peer, .. } => {
-            let probe = share_start(peer, dialect::PROBE, Some(PROBE_TIMEOUT))?;
+        TargetSpec::Share { peer, label } => {
+            let probe = share_start(peer, dialect::PROBE, Some(PROBE_TIMEOUT), label, false)?;
             let dialect = dialect::classify(&run_probe(Box::new(probe))?);
-            let shell = share_start(peer, dialect::start_line(dialect), None)?;
+            let shell = share_start(peer, dialect::start_line(dialect), None, label, true)?;
             Ok((dialect, Box::new(shell)))
         }
     }
@@ -140,9 +152,15 @@ pub(super) fn run_probe(mut transport: Box<dyn Transport>) -> Result<String, Str
     let timer = input.clone();
     std::thread::Builder::new()
         .name("se-shell-probe".into())
-        .spawn(move || {
-            if finished.recv_timeout(PROBE_TIMEOUT).is_err() {
-                timer.cancel();
+        .spawn(move || loop {
+            match finished.recv_timeout(PROBE_TIMEOUT) {
+                // The other device's user deciding does not count.
+                Err(RecvTimeoutError::Timeout) if timer.waiting_for_approval() => {}
+                Ok(()) => return,
+                Err(_) => {
+                    timer.cancel();
+                    return;
+                }
             }
         })
         .map_err(|error| format!("cannot start the probe timer: {error}"))?;
@@ -244,31 +262,44 @@ pub(super) fn next_ssh_event(command: &mut SshCommand) -> TransportEvent {
     }
 }
 
-struct ShareInput(ExecIpcInput);
+struct ShareInput {
+    input: ExecIpcInput,
+    notice: PendingNotice,
+}
 
 impl TransportInput for ShareInput {
     fn stdin(&self, bytes: &[u8]) -> Result<(), String> {
-        self.0.stdin(bytes).map_err(|error| error.to_string())
+        self.input.stdin(bytes).map_err(|error| error.to_string())
     }
 
     fn eof(&self) -> Result<(), String> {
-        self.0.eof().map_err(|error| error.to_string())
+        self.input.eof().map_err(|error| error.to_string())
     }
 
     fn cancel(&self) {
-        let _ = self.0.cancel();
+        let _ = self.input.cancel();
+    }
+
+    fn waiting_for_approval(&self) -> bool {
+        self.notice.waiting()
     }
 }
 
 struct ShareTransport {
     session: ExecIpcSession,
     input: Arc<ShareInput>,
+    /// The peer as the user selected it.
+    label: String,
+    /// The session's account line is still to be shown.
+    header: bool,
 }
 
 fn share_start(
     peer: &PeerOpenTarget,
     line: &str,
     timeout: Option<Duration>,
+    label: &str,
+    header: bool,
 ) -> Result<ShareTransport, String> {
     let start = crate::share::ExecStart {
         exec_id: crate::share::ExecId::generate().map_err(|error| error.to_string())?,
@@ -283,15 +314,36 @@ fn share_start(
     };
     start.validate().map_err(|error| error.to_string())?;
     let session = crate::daemon::connect_exec(peer.clone(), start)?;
-    let input = Arc::new(ShareInput(
-        session.take_input().map_err(|error| error.to_string())?,
-    ));
-    Ok(ShareTransport { session, input })
+    let input = Arc::new(ShareInput {
+        input: session.take_input().map_err(|error| error.to_string())?,
+        notice: PendingNotice::follow(&session.exec_id, label),
+    });
+    Ok(ShareTransport {
+        session,
+        input,
+        label: label.to_string(),
+        header,
+    })
 }
 
 impl Transport for ShareTransport {
     fn next_event(&mut self) -> TransportEvent {
-        next_share_event(&mut self.session)
+        let Self {
+            session,
+            input,
+            label,
+            header,
+        } = self;
+        let pending_header = header.then(|| session.exec_id.clone());
+        next_share_event_seen(session, &mut |event| match event {
+            ExecIpcEvent::Authorized(provider) => {
+                if let Some(exec_id) = &pending_header {
+                    *header = false;
+                    print_account_line(exec_id, label, &provider.user_label);
+                }
+            }
+            _ => input.notice.stop(),
+        })
     }
 
     fn input(&self) -> Arc<dyn TransportInput> {
@@ -301,8 +353,20 @@ impl Transport for ShareTransport {
 
 /// The next event of a Share Exec stream as a session event; blocks.
 pub(super) fn next_share_event(session: &mut ExecIpcSession) -> TransportEvent {
+    next_share_event_seen(session, &mut |_| {})
+}
+
+/// `next_share_event`; `seen` sees every Exec event first.
+pub(super) fn next_share_event_seen(
+    session: &mut ExecIpcSession,
+    seen: &mut dyn FnMut(&ExecIpcEvent),
+) -> TransportEvent {
     loop {
-        match session.next_event() {
+        let event = session.next_event();
+        if let Ok(event) = &event {
+            seen(event);
+        }
+        match event {
             Ok(ExecIpcEvent::Authorized(_) | ExecIpcEvent::Started) => {}
             Ok(ExecIpcEvent::Stdout(bytes)) => return TransportEvent::Stdout(bytes),
             Ok(ExecIpcEvent::Stderr(bytes)) => return TransportEvent::Stderr(bytes),

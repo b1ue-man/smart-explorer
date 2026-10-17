@@ -3,20 +3,25 @@
 //! directory or environment must be set, `sftp/core/terminal.rs`) or of a
 //! Share peer (an Exec start of `ExecCommand::Login` with a terminal request)
 //! in a pseudo-terminal. Both carry the terminal's bytes unchanged and take
-//! size changes; the event mapping is that of the command transports.
+//! size changes; the event mapping is that of the command transports. A
+//! Share terminal that waits for the other device's user (PRM-M3) shows the
+//! status line and does not count the wait against its start time; once it
+//! runs, its account line goes to stderr before the terminal takes over. The
+//! notice helpers at the end serve the command transports as well.
 use super::dialect;
 use super::transports::{
     self, next_share_event, next_ssh_event, TargetSpec, Transport, TransportEvent, TransportInput,
 };
 use super::types::{Dialect, TerminalOptions, TerminalSize};
 use crate::creds::SavedConnection;
-use crate::daemon::{ExecIpcEvent, ExecIpcInput, ExecIpcSession};
+use crate::daemon::{ExecIpcEvent, ExecIpcInput, ExecIpcSession, ExecNoticeView, ExecNoticeWatch};
 use crate::sftp::{
     SftpBackend, SshCommand, SshCommandControl, SshTerminalError, SshTerminalRequest,
 };
+use crate::share::exec_client_messages::{account_line, approval_status_line};
 use crate::share::{ExecCommand, ExecId, ExecStart, ExecTerminalRequest, PeerOpenTarget};
 use std::sync::mpsc::RecvTimeoutError;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 /// Longest wait for a Share peer's shell to start; the connection setup alone
@@ -42,7 +47,7 @@ pub(super) fn connect_terminal(
 ) -> Result<TerminalConnect, String> {
     match target {
         TargetSpec::Ssh { connection, .. } => ssh_terminal(&ssh(connection)?, options),
-        TargetSpec::Share { peer, .. } => share_terminal(peer, options),
+        TargetSpec::Share { peer, label } => share_terminal(peer, label, options),
     }
 }
 
@@ -122,6 +127,7 @@ impl Transport for SshTerminal {
 
 fn share_terminal(
     peer: &PeerOpenTarget,
+    label: &str,
     options: &TerminalOptions,
 ) -> Result<TerminalConnect, String> {
     let start = ExecStart {
@@ -138,28 +144,39 @@ fn share_terminal(
     };
     start.validate().map_err(|error| error.to_string())?;
     let mut session = crate::daemon::connect_exec(peer.clone(), start)?;
+    let notice = PendingNotice::follow(&session.exec_id, label);
     let input = Arc::new(ShareTerminalInput(
         session.take_input().map_err(|error| error.to_string())?,
     ));
-    // A peer that never answers must not hold the caller forever.
+    // A peer that never answers must not hold the caller forever; the other
+    // device's user deciding does not count.
     let (started, waiting) = std::sync::mpsc::channel::<()>();
-    let timer = input.clone();
+    let (timer, deciding) = (input.clone(), notice.clone());
     std::thread::Builder::new()
         .name("se-term-start".into())
-        .spawn(move || {
-            if let Err(RecvTimeoutError::Timeout) = waiting.recv_timeout(START_TIMEOUT) {
-                timer.cancel();
+        .spawn(move || loop {
+            match waiting.recv_timeout(START_TIMEOUT) {
+                Err(RecvTimeoutError::Timeout) if deciding.waiting() => {}
+                Err(RecvTimeoutError::Timeout) => {
+                    timer.cancel();
+                    return;
+                }
+                _ => return,
             }
         })
         .map_err(|error| format!("cannot start the start timer: {error}"))?;
     let outcome = wait_started(&mut session);
+    notice.stop();
     drop(started);
     match outcome {
-        Ok(None) => Ok(TerminalConnect::Ready(
-            Box::new(ShareTerminal { session, input }),
-            None,
-        )),
-        Ok(Some(why)) => Ok(TerminalConnect::Unsupported(why)),
+        Ok(ShellStart::Running { user_label }) => {
+            print_account_line(&session.exec_id, label, &user_label);
+            Ok(TerminalConnect::Ready(
+                Box::new(ShareTerminal { session, input }),
+                None,
+            ))
+        }
+        Ok(ShellStart::Unsupported(why)) => Ok(TerminalConnect::Unsupported(why)),
         Err(error) => {
             input.cancel();
             Err(error)
@@ -167,18 +184,28 @@ fn share_terminal(
     }
 }
 
-/// Reads the Exec events up to the start of the shell. `Some(why)` is a peer
-/// without terminal support; any other failure before the start is an error.
-fn wait_started(session: &mut ExecIpcSession) -> Result<Option<String>, String> {
+/// How the start of a Share terminal ended.
+enum ShellStart {
+    /// The shell runs; `user_label` is the account hosts up to 0.5.182 name.
+    Running { user_label: String },
+    /// The peer has no terminal support.
+    Unsupported(String),
+}
+
+/// Reads the Exec events up to the start of the shell. A peer without
+/// terminal support is `Unsupported`; any other failure before the start is
+/// an error.
+fn wait_started(session: &mut ExecIpcSession) -> Result<ShellStart, String> {
+    let mut user_label = String::new();
     loop {
         let event = session
             .next_event()
             .map_err(|error| format!("remote execution transport: {error}"))?;
         match event {
-            ExecIpcEvent::Authorized(_) => {}
-            ExecIpcEvent::Started => return Ok(None),
+            ExecIpcEvent::Authorized(provider) => user_label = provider.user_label,
+            ExecIpcEvent::Started => return Ok(ShellStart::Running { user_label }),
             ExecIpcEvent::Failed(failure) if failure.code == TERMINAL_UNSUPPORTED => {
-                return Ok(Some(
+                return Ok(ShellStart::Unsupported(
                     "the peer runs a Smart Explorer version without terminal support".to_string(),
                 ))
             }
@@ -233,4 +260,61 @@ impl Transport for ShareTerminal {
     fn input(&self) -> Arc<dyn TransportInput> {
         self.input.clone()
     }
+}
+
+/// The notice of a Share start until it begins (D.2.2, PRM-M3).
+#[derive(Clone)]
+pub(super) struct PendingNotice(Arc<Mutex<Option<ExecNoticeWatch>>>);
+
+impl PendingNotice {
+    /// Follows the start `exec_id` on the peer the user named `label`; the
+    /// status line goes to stderr once per confirmation.
+    pub(super) fn follow(exec_id: &ExecId, label: &str) -> Self {
+        let label = label.to_string();
+        let mut shown = None;
+        let watch = ExecNoticeWatch::start(exec_id.clone(), move |notice| {
+            let Some(approval) = &notice.approval else {
+                return;
+            };
+            if shown.as_ref() != Some(approval) {
+                let device = device_of(notice, &label);
+                eprintln!("{}", approval_status_line(&device, approval.surface()));
+                shown = Some(approval.clone());
+            }
+        });
+        Self(Arc::new(Mutex::new(Some(watch))))
+    }
+
+    pub(super) fn waiting(&self) -> bool {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .is_some_and(ExecNoticeWatch::waiting)
+    }
+
+    /// The start began or ended: no more reading.
+    pub(super) fn stop(&self) {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner).take();
+    }
+}
+
+/// The peer as the worker names it, else as the user selected it.
+fn device_of(notice: &ExecNoticeView, label: &str) -> String {
+    if notice.device.trim().is_empty() {
+        label.to_string()
+    } else {
+        notice.device.clone()
+    }
+}
+
+/// The account line of a Share session on stderr; `user_label` names the
+/// account hosts up to 0.5.182 report.
+pub(super) fn print_account_line(exec_id: &ExecId, label: &str, user_label: &str) {
+    let notice = crate::daemon::exec_notice(exec_id).ok().flatten();
+    let device = notice
+        .as_ref()
+        .map_or_else(|| label.to_string(), |notice| device_of(notice, label));
+    let access = notice.as_ref().and_then(|notice| notice.access.as_ref());
+    eprintln!("{}", account_line(&device, access, user_label));
 }
