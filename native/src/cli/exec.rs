@@ -4,8 +4,9 @@ use std::collections::BTreeMap;
 use std::io::{Read, Write};
 
 const EXEC_HELP: &str = "\
-Run a command as the Smart Explorer user's unrestricted shell authority on one
-explicitly authorized Share peer. File access does not imply Exec access.
+Run a command on a Share peer that allowed this device commands; it runs as
+the account and with the rights that peer chose. File access does not imply
+Exec access.
 
 The target may be omitted when exactly one ready peer exists. Otherwise the
 command prints every valid target and an immediately usable example.

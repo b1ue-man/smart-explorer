@@ -2,7 +2,8 @@
 //! of devices without a contact) and the detail page of one device with all
 //! its settings: connection (automatisch verbinden/öffnen, Vertrauen
 //! zurücksetzen), my exports for it (Rückfreigabe, Schreibrecht,
-//! Autorisierung) and its commands (Exec). „Gerät hinzufügen“ (PIN or
+//! Autorisierung) and its access (Zugriff: commands, terminal, account, end;
+//! „Ändern…“ opens the access dialog). „Gerät hinzufügen“ (PIN or
 //! Direkt-Code) and „Entfernte Geräte“ are pages of their own.
 use super::pages_ui::{self, SharePage, TAB_DEVICES, TAB_REQUESTS};
 use super::*;
@@ -54,16 +55,16 @@ fn has_contact(profiles: &crate::share::ShareProfiles, grant: &crate::share::Dir
     })
 }
 
-/// „Schreibrecht · Befehle: volle Shell“ of an authorization.
-fn rights_line(app: &App, grant: &crate::share::DirectGrant) -> String {
+/// „Schreibrecht · Zugriff: Befehle: erlaubt · …“ of an authorization.
+fn rights_line(app: &App, ui: &mut egui::Ui, grant: &crate::share::DirectGrant) -> String {
     let mut parts = vec![if grant.write {
         "Schreibrecht".to_string()
     } else {
         "nur lesen".to_string()
     }];
     let key = crate::app::share_exec_ui::direct_target_key(&grant.device_id, &grant.fingerprint);
-    if let Some(exec) = crate::app::share_exec_ui::exec_summary(app, &key) {
-        parts.push(format!("Befehle: {exec}"));
+    if let Some(access) = crate::app::share_exec_ui::exec_summary(app, ui, &key) {
+        parts.push(format!("Zugriff: {access}"));
     }
     parts.join(" · ")
 }
@@ -109,7 +110,7 @@ fn overview(app: &mut App, ui: &mut egui::Ui) {
         );
     }
     for contact in &profiles.direct_contacts {
-        let rights = grant_of(profiles, contact).map(|grant| rights_line(app, grant));
+        let rights = grant_of(profiles, contact).map(|grant| rights_line(app, ui, grant));
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new(&contact.display_name).strong());
             ui.label(
@@ -135,7 +136,7 @@ fn overview(app: &mut App, ui: &mut egui::Ui) {
         });
     }
     for grant in unlinked {
-        let rights = rights_line(app, grant);
+        let rights = rights_line(app, ui, grant);
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new(&grant.device_name).strong());
             ui.label(
@@ -356,10 +357,10 @@ fn grant_section(app: &mut App, ui: &mut egui::Ui, grant: &crate::share::DirectG
     if !editable {
         ui.label("Freigabe inaktiv; zuerst ausdruecklich wieder erlauben.");
     }
-    pages_ui::heading(ui, "BEFEHLE (EXEC)");
+    pages_ui::heading(ui, "ZUGRIFF");
     let key = crate::app::share_exec_ui::direct_target_key(&grant.device_id, &grant.fingerprint);
     if !crate::app::share_exec_ui::ui_exec_target(app, ui, &key) {
-        ui.label("Fuer dieses Geraet ist keine Ausfuehrung einstellbar.");
+        ui.label("Für dieses Gerät ist kein Zugriff einstellbar.");
     }
 }
 

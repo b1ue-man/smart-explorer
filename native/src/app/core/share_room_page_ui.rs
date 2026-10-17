@@ -1,7 +1,8 @@
 //! Page „Räume“: one line per saved room and the detail page of one room
 //! with all its settings (beitreten/verlassen, Name, Code, Freigaben, Rechte,
-//! Mitglieder zulassen/sperren, Befehle eines Mitglieds). Creating, joining
-//! and discovering rooms is a page of its own.
+//! Mitglieder zulassen/sperren, Zugriff eines Mitglieds, „Zugriff für alle
+//! Mitglieder…“). Creating, joining and discovering rooms is a page of its
+//! own.
 use super::pages_ui::{self, SharePage, TAB_EXEC, TAB_ROOMS};
 use super::*;
 
@@ -147,6 +148,8 @@ fn room_page(app: &mut App, ui: &mut egui::Ui, profile_id: &str) {
     pages_ui::heading(ui, "MITGLIEDER");
     if room.members.is_empty() {
         ui.label("Noch keine Mitglieder gesehen.");
+    } else {
+        crate::app::share_exec_ui::ui_room_access(app, ui, &room);
     }
     for member in &room.members {
         member_row(app, ui, &room, member);
@@ -234,7 +237,7 @@ fn member_row(
             }
             diagnose = ui.button("Diagnose").clicked();
             reset = ui.button("Vertrauen zuruecksetzen").clicked();
-            exec = ui.button("Befehle …").clicked();
+            exec = ui.button("Zugriff …").clicked();
         });
     });
     if let Some(action) = action {

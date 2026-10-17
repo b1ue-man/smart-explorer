@@ -85,7 +85,9 @@ pub(crate) struct ExecClientSession {
     pub(crate) input: mpsc::Sender<ExecClientInput>,
     pub(crate) events: mpsc::Receiver<ExecClientEvent>,
     pub(crate) task: tokio::task::JoinHandle<Result<ExecTerminal, ExecClientFailure>>,
-    /// The latest notice; the daemon's Exec forwarding does not read it yet.
+    /// The latest notice (access view, pending confirmation); the daemon
+    /// keeps it by Exec id (`exec_session.rs`) and the CLI and MCP read it
+    /// through `AccessIpcRequest::ExecNotice`.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) notice: watch::Receiver<ExecClientNotice>,
 }

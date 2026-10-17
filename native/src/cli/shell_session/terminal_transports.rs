@@ -7,10 +7,12 @@
 //! Share terminal that waits for the other device's user (PRM-M3) shows the
 //! status line and does not count the wait against its start time; once it
 //! runs, its account line goes to stderr before the terminal takes over. The
-//! notice helpers at the end serve the command transports as well.
+//! notice helpers and the dialect question inside a running Share session
+//! (`probe_in_session`) serve the command transports as well.
 use super::dialect;
 use super::transports::{
     self, next_share_event, next_ssh_event, TargetSpec, Transport, TransportEvent, TransportInput,
+    PROBE_TIMEOUT,
 };
 use super::types::{Dialect, TerminalOptions, TerminalSize};
 use crate::creds::SavedConnection;
@@ -29,6 +31,8 @@ use std::time::Duration;
 const START_TIMEOUT: Duration = Duration::from_secs(60);
 /// `ExecIpcFailure::code` of a peer without terminal support.
 const TERMINAL_UNSUPPORTED: &str = "terminal_unsupported";
+/// Output of a session's shell kept while its dialect is asked.
+const MAX_SESSION_PROBE_BYTES: usize = 64 * 1024;
 
 pub(super) enum TerminalConnect {
     /// The terminal runs. The dialect is known only when the target was probed
@@ -317,4 +321,131 @@ pub(super) fn print_account_line(exec_id: &ExecId, label: &str, user_label: &str
         .map_or_else(|| label.to_string(), |notice| device_of(notice, label));
     let access = notice.as_ref().and_then(|notice| notice.access.as_ref());
     eprintln!("{}", account_line(&device, access, user_label));
+}
+
+/// Asks the shell of a running Share session which dialect it speaks
+/// (`transports::share_start_line` started PowerShell or a POSIX shell): it
+/// answers `echo SE_DIALECT_<nonce>_$?` with `True`/`False` (PowerShell) or
+/// an exit status (POSIX). Output before the answer is login noise. The wait
+/// for the other device's user does not count against the 30 seconds.
+pub(super) fn probe_in_session(transport: &mut dyn Transport) -> Result<Dialect, String> {
+    let nonce = ExecId::generate().map_err(|error| error.to_string())?;
+    let marker = format!("SE_DIALECT_{nonce}_");
+    let input = transport.input();
+    let (done, finished) = std::sync::mpsc::channel::<()>();
+    let timer = input.clone();
+    std::thread::Builder::new()
+        .name("se-shell-dialect".into())
+        .spawn(move || loop {
+            match finished.recv_timeout(PROBE_TIMEOUT) {
+                Err(RecvTimeoutError::Timeout) if timer.waiting_for_approval() => {}
+                Ok(()) => return,
+                Err(_) => {
+                    timer.cancel();
+                    return;
+                }
+            }
+        })
+        .map_err(|error| format!("cannot start the probe timer: {error}"))?;
+    let asked = input.stdin(format!("echo {marker}$?\n").as_bytes());
+    let mut stdout = Vec::new();
+    let answer = loop {
+        if let Err(error) = &asked {
+            break Err(format!("the remote shell takes no input: {error}"));
+        }
+        match transport.next_event() {
+            TransportEvent::Stdout(bytes) => {
+                stdout.extend_from_slice(&bytes);
+                let excess = stdout.len().saturating_sub(MAX_SESSION_PROBE_BYTES);
+                stdout.drain(..excess);
+                if let Some(dialect) = session_dialect(&String::from_utf8_lossy(&stdout), &marker) {
+                    break Ok(dialect);
+                }
+            }
+            TransportEvent::Stderr(_) => {}
+            TransportEvent::Ended(end) if end.cancelled => {
+                break Err(format!(
+                    "the remote shell did not answer within {} seconds",
+                    PROBE_TIMEOUT.as_secs()
+                ))
+            }
+            TransportEvent::Ended(end) => {
+                let why = end.error.unwrap_or_else(|| "it ended".to_string());
+                break Err(format!("the remote shell could not run commands: {why}"));
+            }
+        }
+    };
+    let _ = done.send(());
+    if answer.is_err() {
+        input.cancel();
+    }
+    answer
+}
+
+/// The dialect once the answer line to `marker` is complete: PowerShell
+/// answers `True` or `False`, a POSIX shell its exit status. A line that
+/// repeats the question (`$?`) is an echo of the input.
+pub(super) fn session_dialect(output: &str, marker: &str) -> Option<Dialect> {
+    let mut rest = output;
+    while let Some(at) = rest.find(marker) {
+        let after = &rest[at + marker.len()..];
+        let end = after.find('\n')?;
+        let value = after[..end].trim();
+        if value != "$?" {
+            let powershell =
+                value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("false");
+            return Some(if powershell {
+                Dialect::PowerShell
+            } else {
+                Dialect::Posix
+            });
+        }
+        rest = &after[end..];
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::session_dialect;
+    use crate::cli::shell_session::transports::share_start_line;
+    use crate::cli::shell_session::types::Dialect;
+
+    const MARKER: &str = "SE_DIALECT_00ff_";
+
+    #[test]
+    fn shell_session_task_share_session_dialect_is_asked_inside_the_shell() {
+        let posix = format!("motd\n{MARKER}0\n");
+        assert_eq!(session_dialect(&posix, MARKER), Some(Dialect::Posix));
+        let powershell = format!("PS C:\\Users\\a> {MARKER}True\r\nPS C:\\Users\\a> ");
+        assert_eq!(
+            session_dialect(&powershell, MARKER),
+            Some(Dialect::PowerShell)
+        );
+        let echoed = format!("echo {MARKER}$?\n{MARKER}False\r\n");
+        assert_eq!(session_dialect(&echoed, MARKER), Some(Dialect::PowerShell));
+        // The answer line is not complete yet.
+        assert_eq!(session_dialect(&format!("{MARKER}Tr"), MARKER), None);
+        assert_eq!(session_dialect("motd only\n", MARKER), None);
+    }
+
+    #[test]
+    fn shell_session_task_share_session_needs_one_start_line() {
+        let line = share_start_line();
+        // cmd.exe: a failing first command with its error sent to NUL, then
+        // PowerShell on the session's input, then `rem` for the rest.
+        let (cmd, posix) = line.split_once("'; ").unwrap();
+        assert_eq!(
+            cmd,
+            "SE_PS=' 2>NUL & powershell.exe -NoLogo -NoProfile -NonInteractive -Command - & rem "
+        );
+        // POSIX: the single-quoted part is one assignment; the session shell
+        // follows unchanged.
+        assert!(!cmd["SE_PS='".len()..].contains('\''));
+        assert!(!line.contains(['"', '%', '^', '!']));
+        assert_eq!(
+            posix,
+            "exec sh -c 'if command -v bash >/dev/null 2>&1; then exec bash -l; fi; exec sh -l'"
+        );
+    }
 }

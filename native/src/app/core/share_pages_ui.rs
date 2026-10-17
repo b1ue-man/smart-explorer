@@ -2,7 +2,12 @@
 //! page shown inside a tab. Tab numbers 0 to 5 keep their meaning for the
 //! callers that jump to a tab (sidebar, GUI design harness, share events);
 //! the pages added in 2026-10 take 6 to 8. The detail page lives in egui
-//! memory (per window, not saved), so the App state keeps its fields.
+//! memory (per window, not saved), so the App state keeps its fields. Other
+//! parts of the app open a device or room page with
+//! `App::open_share_contact_page` and `App::open_share_room_page` (se
+//! Desktop: `--open-page share-device:<id>`, `share-room:<id>`).
+use std::sync::Mutex;
+
 use super::*;
 
 pub(super) const TAB_DEVICES: usize = 0;
@@ -63,8 +68,56 @@ fn page_id() -> egui::Id {
     egui::Id::new("share_window_page")
 }
 
+/// A page opened from outside the window; the window takes it when it draws
+/// its next tab.
+static PENDING_PAGE: Mutex<Option<(usize, SharePage)>> = Mutex::new(None);
+
+fn set_pending(tab: usize, page: SharePage) {
+    if let Ok(mut slot) = PENDING_PAGE.lock() {
+        *slot = Some((tab, page));
+    }
+}
+
+impl App {
+    /// Shows the window „Geräte & Freigaben“ on the page of the saved direct
+    /// contact `contact_id` (local contact id). `false` when no such contact
+    /// is saved; the window then shows the overview of the tab „Geräte“.
+    #[allow(dead_code)] // Staged: se Desktop calls it for `--open-page` (desktop_settings_ui.rs).
+    pub(crate) fn open_share_contact_page(&mut self, contact_id: &str) -> bool {
+        let contacts = &self.share_profiles.direct_contacts;
+        let known = contacts.iter().any(|contact| contact.id == contact_id);
+        let page = known.then(|| SharePage::Contact(contact_id.to_string()));
+        self.open_share_page(TAB_DEVICES, page)
+    }
+
+    /// Shows the window „Geräte & Freigaben“ on the page of the saved room
+    /// `room_id` (local room profile id, or the room id). `false` when no such
+    /// room is saved; the window then shows the overview of the tab „Räume“.
+    #[allow(dead_code)] // Staged: se Desktop calls it for `--open-page` (desktop_settings_ui.rs).
+    pub(crate) fn open_share_room_page(&mut self, room_id: &str) -> bool {
+        let rooms = &self.share_profiles.rooms;
+        let room = rooms
+            .iter()
+            .find(|room| room.id == room_id || room.room_id == room_id);
+        let page = room.map(|room| SharePage::Room(room.id.clone()));
+        self.open_share_page(TAB_ROOMS, page)
+    }
+
+    fn open_share_page(&mut self, tab: usize, page: Option<SharePage>) -> bool {
+        self.show_share = true;
+        self.share_tab = tab;
+        let found = page.is_some();
+        set_pending(tab, page.unwrap_or(SharePage::Overview));
+        found
+    }
+}
+
 /// The page of `tab`; a page stored for another tab reads as its overview.
 pub(super) fn current(ui: &mut egui::Ui, tab: usize) -> SharePage {
+    let pending = PENDING_PAGE.lock().ok().and_then(|mut slot| slot.take());
+    if let Some(pending) = pending {
+        ui.data_mut(|data| data.insert_temp(page_id(), pending));
+    }
     ui.data_mut(|data| data.get_temp::<(usize, SharePage)>(page_id()))
         .filter(|(stored, _)| *stored == tab)
         .map(|(_, page)| page)
@@ -136,5 +189,25 @@ mod tests {
         labels.sort_unstable();
         labels.dedup();
         assert_eq!(labels.len(), TAB_ORDER.len());
+    }
+
+    fn frame(ctx: &egui::Context, seen: &mut Vec<(SharePage, SharePage)>) {
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                seen.push((current(ui, TAB_ROOMS), current(ui, TAB_DEVICES)));
+            });
+        });
+    }
+
+    #[test]
+    fn share_pages_open_detail_pages_from_outside() {
+        let ctx = egui::Context::default();
+        let mut seen = Vec::new();
+        set_pending(TAB_ROOMS, SharePage::Room("room-1".into()));
+        frame(&ctx, &mut seen);
+        // The page stays for its tab; the other tab shows its overview.
+        frame(&ctx, &mut seen);
+        let room = (SharePage::Room("room-1".into()), SharePage::Overview);
+        assert_eq!(seen, [room.clone(), room]);
     }
 }
