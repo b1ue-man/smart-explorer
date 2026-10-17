@@ -38,6 +38,7 @@ impl ShareHost {
             IpcRequest::Drive { req, .. } => {
                 super::super::drive_modules::ipc_protocol_drives::serve(self, &mut stream, req)
             }
+            IpcRequest::Vault { req, .. } => super::super::ipc_vault::serve(self, stream, req),
             other => unhandled(&mut stream, &other),
         }
     }
@@ -61,5 +62,5 @@ fn unhandled(stream: &mut TcpStream, req: &IpcRequest) -> io::Result<()> {
     // Indexing a missing key or a non-object yields `Null`, never a panic.
     let kind = value["t"].as_str().unwrap_or("unknown");
     let msg = format!("daemon IPC request `{kind}` has no handler in this daemon");
-    write_response(stream, &IpcResponse::Err { msg })
+    write_response(stream, &IpcResponse::Err { msg, code: None })
 }

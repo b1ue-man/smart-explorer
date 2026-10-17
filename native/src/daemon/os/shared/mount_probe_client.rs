@@ -34,7 +34,7 @@ pub fn probe_share_mount_capabilities(
         .map_err(|error| format!("Peer-Laufwerkspruefung lesen: {error}"))?
     {
         IpcResponse::MountPathCapabilities { capabilities } => Ok(capabilities.into()),
-        IpcResponse::Err { msg } => Err(msg),
+        IpcResponse::Err { msg, .. } => Err(msg),
         _ => Err("Unerwartete Antwort auf Peer-Laufwerkspruefung".into()),
     }
 }

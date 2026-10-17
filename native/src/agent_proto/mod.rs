@@ -77,6 +77,8 @@ mod transport_error;
 mod tree_remove;
 #[path = "core/types.rs"]
 mod types;
+#[path = "core/vault_error.rs"]
+mod vault_error;
 #[path = "os/shared/write_new.rs"]
 mod write_new;
 
@@ -117,4 +119,7 @@ pub use types::{
 pub use types::{
     WireChange, WireDuplicateGroup, WireDuplicateItem, WireDuplicateSummary, WireOmission,
     WireReclaimProgress, WireTargetLimits,
+};
+pub(crate) use vault_error::{
+    parse_vault_error, vault_error_message, VaultWireError, VAULT_LOCKED_WIRE,
 };

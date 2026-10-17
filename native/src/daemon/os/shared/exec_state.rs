@@ -228,7 +228,7 @@ pub fn load() -> Result<ExecJobsSnapshot, String> {
     request(super::ipc_protocol::IpcRequest::ExecJobs { token: token()? }).and_then(|response| {
         match response {
             super::ipc_protocol::IpcResponse::ExecJobs { snapshot } => Ok(snapshot),
-            super::ipc_protocol::IpcResponse::Err { msg } => Err(msg),
+            super::ipc_protocol::IpcResponse::Err { msg, .. } => Err(msg),
             _ => Err("Unerwartete Worker-Antwort auf Exec-Status".into()),
         }
     })
@@ -241,7 +241,7 @@ pub fn cancel_remote(target: ExecCancelTarget) -> Result<bool, String> {
     })
     .and_then(|response| match response {
         super::ipc_protocol::IpcResponse::ExecCancelled { found } => Ok(found),
-        super::ipc_protocol::IpcResponse::Err { msg } => Err(msg),
+        super::ipc_protocol::IpcResponse::Err { msg, .. } => Err(msg),
         _ => Err("Unerwartete Worker-Antwort auf Exec-Abbruch".into()),
     })
 }

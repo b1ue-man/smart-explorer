@@ -88,6 +88,10 @@ mod ipc_storage;
 #[cfg(windows)]
 #[path = "os/windows/ipc_storage.rs"]
 mod ipc_storage;
+#[path = "os/shared/ipc_vault.rs"]
+mod ipc_vault;
+#[path = "os/shared/ipc_vault_client.rs"]
+mod ipc_vault_client;
 #[path = "os/shared/job.rs"]
 mod job;
 #[path = "os/shared/job_supervisor.rs"]
@@ -229,6 +233,18 @@ pub use ipc::{
 };
 pub use ipc_client::share_worker_peek;
 pub(crate) use ipc_protocol::ExecNoticeView;
+#[allow(unused_imports)] // U26 (CLI/MCP), U29 (GUI), se Desktop
+pub(crate) use ipc_protocol::{
+    SealPurposeWire, SecretText, VaultEventView, VaultIpcReply, VaultIpcRequest, VaultSiteView,
+    VaultStatusView,
+};
+pub(crate) use ipc_vault::hosts_vault_register;
+pub(crate) use ipc_vault_client::{lock_vaults, open_vault_backend};
+#[allow(unused_imports)] // U26 (CLI/MCP), U29 (GUI), se Desktop
+pub(crate) use ipc_vault_client::{
+    seal_vault_items, unlock_vault, unlock_vault_saved, unseal_vault_items, vault_status,
+    VaultIpcError, WorkerUnlocked,
+};
 pub use live::{
     active_job, cancel_catch_up, catch_up_status, drain_share_events_in_process, last_catch_up,
     last_catch_up_ms, request_catch_up,

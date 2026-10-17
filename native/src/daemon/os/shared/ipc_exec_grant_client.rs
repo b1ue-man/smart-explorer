@@ -31,7 +31,7 @@ pub(crate) fn mutate_exec_grant(
     .map_err(|error| error.to_string())?;
     match read_response(&mut stream).map_err(|error| error.to_string())? {
         IpcResponse::ExecGrantMutation { result } => Ok(result),
-        IpcResponse::Err { msg } => Err(msg),
+        IpcResponse::Err { msg, .. } => Err(msg),
         _ => Err("Unerwartete Worker-Antwort".into()),
     }
 }

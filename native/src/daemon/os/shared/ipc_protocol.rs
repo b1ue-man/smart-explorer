@@ -19,6 +19,12 @@ pub use self::mount::MountHostConfig;
 #[path = "ipc_protocol_access.rs"]
 mod access;
 pub(crate) use self::access::{AccessIpcReply, AccessIpcRequest, AccountChoice, ExecNoticeView};
+#[path = "ipc_protocol_vault.rs"]
+mod vault;
+pub(crate) use self::vault::{
+    SealPurposeWire, SecretText, VaultEventView, VaultIpcReply, VaultIpcRequest, VaultSiteView,
+    VaultStatusView,
+};
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -263,6 +269,10 @@ pub(super) enum IpcRequest {
         token: String,
         req: super::drive_modules::ipc_protocol_drives::DriveIpcRequest,
     },
+    Vault {
+        token: String,
+        req: VaultIpcRequest,
+    },
     MountHostAttach {
         id: crate::mount::MountId,
         launch_token: String,
@@ -308,7 +318,8 @@ impl IpcRequest {
             | Self::ListMounts { token }
             | Self::RetryMount { token, .. }
             | Self::Access { token, .. }
-            | Self::Drive { token, .. } => Some(token),
+            | Self::Drive { token, .. }
+            | Self::Vault { token, .. } => Some(token),
             Self::MountHostAttach { .. }
             | Self::MountHostBackend { .. }
             | Self::MountHostStatus { .. } => None,
@@ -374,8 +385,12 @@ pub(super) enum IpcResponse {
     },
     MountHostStop,
     Access(AccessIpcReply),
+    Vault(VaultIpcReply),
     Err {
         msg: String,
+        /// Structured code of the failure (C3.2, C7.5); older readers ignore the field.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        code: Option<String>,
     },
 }
 
