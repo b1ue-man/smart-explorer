@@ -81,6 +81,9 @@ mod dialogs;
 mod drag_drop;
 #[path = "core/drains_connect.rs"]
 mod drains_connect;
+#[path = "drive_modules.rs"]
+mod drive_modules;
+pub(crate) use drive_modules::*;
 #[path = "os/shared/file_actions.rs"]
 mod file_actions;
 #[path = "core/filter_scope.rs"]

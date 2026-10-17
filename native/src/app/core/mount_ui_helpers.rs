@@ -50,10 +50,14 @@ pub(super) fn mount_status_alert(
 /// Keep its details visible in the manager and alert on later transitions or
 /// explicit actions through mount_status_alert as before.
 pub(super) fn has_mount_attention(mounts: &[crate::mount::MountSnapshot]) -> bool {
-    mounts.iter().any(|mount| matches!(mount.status,
-        crate::mount::MountStatus::Failed { .. }
-        | crate::mount::MountStatus::Conflict { .. }
-        | crate::mount::MountStatus::RuntimeUnavailable { .. }))
+    mounts.iter().any(|mount| {
+        matches!(
+            mount.status,
+            crate::mount::MountStatus::Failed { .. }
+                | crate::mount::MountStatus::Conflict { .. }
+                | crate::mount::MountStatus::RuntimeUnavailable { .. }
+        )
+    })
 }
 
 pub(super) fn mount_list_alert(
@@ -61,9 +65,13 @@ pub(super) fn mount_list_alert(
     mounts: &[crate::mount::MountSnapshot],
     initial: bool,
 ) -> Option<String> {
-    if initial { return None; }
+    if initial {
+        return None;
+    }
     mounts.iter().find_map(|mount| {
-        let known = previous.iter().find(|known| known.config.id == mount.config.id);
+        let known = previous
+            .iter()
+            .find(|known| known.config.id == mount.config.id);
         mount_status_alert(known.map(|known| &known.status), mount)
     })
 }
@@ -92,6 +100,9 @@ pub(super) fn status_label(status: &crate::mount::MountStatus) -> String {
         crate::mount::MountStatus::Unmounted => "Nicht eingebunden".into(),
         crate::mount::MountStatus::Mounting => "Wird eingebunden ...".into(),
         crate::mount::MountStatus::Mounted { drive } => format!("Eingebunden als {drive}"),
+        crate::mount::MountStatus::MountedAt { path } => {
+            format!("Eingebunden unter {}", path.display())
+        }
         crate::mount::MountStatus::Unmounting => "Wird ausgeworfen ...".into(),
         crate::mount::MountStatus::RuntimeUnavailable { detail } => {
             format!("Dokany fehlt: {detail}")

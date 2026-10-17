@@ -80,6 +80,7 @@ Examples:
   se drive runtime
   se drive install-runtime
   se drive mount @prod:/srv --letter M
+  se drive set <ID> --auto-remount on
   source <(se completions bash)";
 
 #[derive(Parser)]

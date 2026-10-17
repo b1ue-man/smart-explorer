@@ -48,5 +48,11 @@ pub(super) fn resolve(config: &MountConfig, host: &ShareHost) -> Result<BackendH
             // same process and would split transport fallback state in two.
             host.open_share(target).map(|(_, backend, _)| backend)
         }
+        MountSource::Devices => {
+            Err("Gerätebaum-Laufwerke bindet diese Version noch nicht ein".into())
+        }
+        MountSource::Vault { .. } => {
+            Err("Tresor-Laufwerke bindet diese Version noch nicht ein".into())
+        }
     }
 }

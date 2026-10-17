@@ -114,6 +114,9 @@ impl MountRoute {
                 crate::connect::open_saved_at(connection, &self.path)?.0
             }
             MountSource::GoogleDrive { .. } => crate::connect::open_gdrive(&self.path)?.0,
+            MountSource::Devices | MountSource::Vault { .. } => {
+                return Err("Dieses Laufwerk lässt sich nicht direkt analysieren".into())
+            }
         };
         // A full walk must not fill the browsing cache.
         Ok(crate::vfs::sync_backend(backend))
