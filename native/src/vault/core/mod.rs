@@ -1,19 +1,24 @@
 //! Platform-neutral parts of the vault layer: the error of a locked vault,
 //! the unlocked session every vault backend of a site shares, cleartext
 //! paths and stage names (C2.6), the listing and capability rules (C1.8,
-//! C1.9, C2.5), the locators (C2.2) and the records of the vault list
-//! (C2.1). No I/O of their own and no platform code.
+//! C1.9, C2.5), the locators (C2.2), the records of the vault list (C2.1),
+//! the lock decisions (C3.3) and the purpose keys of local sealing (C3.6).
+//! No I/O of their own and no platform code.
 use std::fmt;
 use std::io;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
+use std::time::{Duration, Instant};
 
 use crate::cryptomator::{ContentCryptor, FormatError, Masterkey, MasterkeyCell, VaultConfig};
 
 pub(crate) mod capabilities;
 pub(crate) mod listing;
 pub(crate) mod locator;
+pub(crate) mod lock_policy;
 pub(crate) mod path_map;
 pub(crate) mod registry_types;
+pub(crate) mod sealed;
 
 #[cfg(test)]
 mod locator_tests;
@@ -73,6 +78,11 @@ pub(crate) struct VaultSession {
     keys: Arc<MasterkeyCell>,
     config: VaultConfig,
     listeners: Mutex<Vec<Weak<dyn LockListener>>>,
+    /// When the session began; `last_use` counts from here.
+    started: Instant,
+    /// Nanoseconds after `started` of the last vault operation: the idle
+    /// lock measures from it (C3.3, VLT-M4).
+    last_use: AtomicU64,
 }
 
 impl VaultSession {
@@ -82,7 +92,23 @@ impl VaultSession {
             keys: MasterkeyCell::new(key),
             config,
             listeners: Mutex::new(Vec::new()),
+            started: Instant::now(),
+            last_use: AtomicU64::new(0),
         })
+    }
+
+    /// Records a vault operation now. Every operation and every read or
+    /// write of an open stream of a `VaultBackend` passes `check`, which
+    /// calls this; the session register calls it while files are open.
+    pub(crate) fn touch(&self) {
+        let elapsed = u64::try_from(self.started.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        self.last_use.fetch_max(elapsed, Ordering::Relaxed);
+    }
+
+    /// Time from the last vault operation to `now`.
+    pub(crate) fn idle_at(&self, now: Instant) -> Duration {
+        let last = self.started + Duration::from_nanos(self.last_use.load(Ordering::Relaxed));
+        now.saturating_duration_since(last)
     }
 
     pub(crate) fn site(&self) -> &str {
@@ -102,11 +128,13 @@ impl VaultSession {
         self.keys.is_wiped()
     }
 
-    /// `Err(VaultLocked)` once the vault is locked.
+    /// `Err(VaultLocked)` once the vault is locked; otherwise the operation
+    /// counts as activity (`touch`).
     pub(crate) fn check(&self) -> io::Result<()> {
         if self.is_locked() {
             Err(vault_locked(&self.site))
         } else {
+            self.touch();
             Ok(())
         }
     }

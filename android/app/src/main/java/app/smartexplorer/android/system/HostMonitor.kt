@@ -51,10 +51,11 @@ data class ShareSnapshot(
 
 /**
  * Host side of the core: reports the host state (`sys.hostState`: power saving, metered network,
- * Wi-Fi, charging, UI visible, scheduling deferred) so the daemon's auto-pause, the Share idle mode
- * and the scheduling gate work on real values; follows `share.status` for the background service
- * ([share], the persisted "Share eingerichtet" flag) and holds the Wi-Fi multicast lock only where
- * mDNS is needed (spec A3). Forwards default-network changes to [KeepAliveNetwork].
+ * Wi-Fi, charging, UI visible, scheduling deferred, screen on) so the daemon's auto-pause, the
+ * Share idle mode, the scheduling gate and the vault locks (screen off, background) work on real
+ * values; follows `share.status` for the background service ([share], the persisted "Share
+ * eingerichtet" flag) and holds the Wi-Fi multicast lock only where mDNS is needed (spec A3).
+ * Forwards default-network changes to [KeepAliveNetwork].
  * Started once per process by [BackgroundController].
  */
 object HostMonitor {
@@ -205,6 +206,8 @@ object HostMonitor {
             deferScheduling = workerRuns.get() > 0 || (!visible &&
                 (AppPrefs.bgMode.value != BackgroundController.MODE_PERSISTENT || !serviceAvailable)),
             storageAccess = Permissions.hasAllFilesAccess(),
+            // Interactive = screen on; the SCREEN_ON/OFF receiver above pushes every change.
+            screenOn = power?.isInteractive != false,
         )
     }
 
