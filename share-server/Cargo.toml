@@ -3,6 +3,8 @@ name = "smart-explorer-share-server"
 version = "0.1.0"
 edition = "2021"
 description = "Untrusted Smart Explorer signaling server with an optional Iroh encrypted-traffic relay."
+license = "MIT"
+publish = false
 
 [[bin]]
 name = "se-share-server"

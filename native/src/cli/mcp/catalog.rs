@@ -39,7 +39,7 @@ only when the user explicitly asks. The `se` tool \
 runs any other Smart Explorer terminal command, for example \
 `[\"share\",\"status\",\"--json\"]`, and reaches every app setting: sync setups \
 (`sync`), background worker (`background`), remotes and Google Drive \
-(`connections`), updates (`update`).";
+(`connections`), updates (`update`), se Desktop (`desktop`).";
 
 /// Tools Claude Code loads upfront (`_meta["anthropic/alwaysLoad"]`), so the
 /// file workflow is visible without a tool search; the others stay deferred.
@@ -177,7 +177,7 @@ pub(super) fn tools() -> Vec<Tool> {
                 "wait_seconds": {"type": "integer", "minimum": 0, "description": WAIT}
             }), &["job_id"], changes(false, true)),
         tool("se", "Run an se command",
-            "Runs any other Smart Explorer terminal command as `se <args>` and returns its exit code and output, for example: [\"share\",\"status\",\"--json\"], [\"share\",\"request\",\"list\",\"--json\"], [\"share\",\"grants\",\"--json\"], [\"share\",\"grants\",\"exec\",\"--json\"], [\"share\",\"exec\",\"log\",\"--json\"], [\"share\",\"device\",\"list\",\"--json\"], [\"share\",\"room\",\"list\",\"--json\"], [\"connections\",\"add\",\"sftp\",\"--host\",\"h\",\"--user\",\"u\",\"--key\",\"/home/u/.ssh/id_ed25519\",\"--label\",\"prod\"], [\"connections\",\"add-peer\",\"--code\",\"SE-D3-…\"], [\"drive\",\"mount\",\"@prod:/srv\",\"--letter\",\"M\"] (Windows), [\"update\",\"--check\",\"--json\"], [\"doctor\",\"--json\"], [\"sync\",\"list\",\"--json\"], [\"sync\",\"edit\",\"Docs\",\"--trigger\",\"realtime\"], [\"background\",\"status\",\"--json\"], [\"connections\",\"gdrive\",\"status\",\"--json\"]. `[\"--help\"]` or [\"<command>\",\"--help\"] explains every command. Prefer the dedicated tools for files and remote commands.",
+            "Runs any other Smart Explorer terminal command as `se <args>` and returns its exit code and output, for example: [\"share\",\"status\",\"--json\"], [\"share\",\"request\",\"list\",\"--json\"], [\"share\",\"grants\",\"--json\"], [\"share\",\"grants\",\"exec\",\"--json\"], [\"share\",\"exec\",\"log\",\"--json\"], [\"share\",\"device\",\"list\",\"--json\"], [\"share\",\"room\",\"list\",\"--json\"], [\"connections\",\"add\",\"sftp\",\"--host\",\"h\",\"--user\",\"u\",\"--key\",\"/home/u/.ssh/id_ed25519\",\"--label\",\"prod\"], [\"connections\",\"add-peer\",\"--code\",\"SE-D3-…\"], [\"drive\",\"mount\",\"@prod:/srv\",\"--letter\",\"M\"] (Windows), [\"update\",\"--check\",\"--json\"], [\"doctor\",\"--json\"], [\"sync\",\"list\",\"--json\"], [\"sync\",\"edit\",\"Docs\",\"--trigger\",\"realtime\"], [\"background\",\"status\",\"--json\"], [\"desktop\",\"status\",\"--json\"], [\"desktop\",\"enable\",\"--json\"], [\"connections\",\"gdrive\",\"status\",\"--json\"]. `[\"--help\"]` or [\"<command>\",\"--help\"] explains every command. Prefer the dedicated tools for files and remote commands.",
             json!({
                 "args": {"type": "array", "items": {"type": "string"}, "minItems": 1, "description": "Arguments after `se`."},
                 "stdin": {"type": "string", "description": "Standard input (closed afterwards), e.g. for --pin-stdin."},

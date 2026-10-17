@@ -2,6 +2,7 @@ mod background;
 mod completions;
 mod completions_requests;
 mod connections;
+mod desktop;
 mod doctor;
 mod drive;
 mod entry_kind;
@@ -9,6 +10,7 @@ mod exec;
 mod exec_ssh;
 mod host_key_prompt;
 mod integration;
+mod licenses;
 mod link_paths;
 #[cfg(test)]
 mod links_task_backends;
@@ -65,6 +67,7 @@ Examples:
   se sync list
   se sync edit Docs --trigger realtime
   se background status
+  se desktop status --json
   se ls @prod:/srv
   se get @prod:/srv/report.txt .\\report.txt
   se cp -r @prod:/exports share://direct/peer-id/Drop
@@ -108,6 +111,10 @@ enum Command {
     Background(background::BackgroundArgs),
     #[command(about = "Desktop integration settings (Windows Explorer context menu)")]
     Integration(integration::IntegrationArgs),
+    #[command(
+        about = "se Desktop: desktop surface with devices, rooms and vaults (Windows, Linux)"
+    )]
+    Desktop(desktop::DesktopArgs),
     #[command(about = "Generate live shell completion setup")]
     Completions(completions::CompletionsArgs),
     #[command(about = "Check the update feed and install a newer se (and app)")]
@@ -116,6 +123,10 @@ enum Command {
     Mcp(mcp::McpArgs),
     #[command(about = "Install the Smart Explorer plugin into AI agents (Claude Code, Codex)")]
     Plugin(plugin::PluginArgs),
+    #[command(
+        about = "Lizenztexte aller eingebetteten Rust-Crates ausgeben (--json: Übersicht mit SHA-256 und Crate-Liste)"
+    )]
+    Licenses(LicensesArgs),
     #[command(about = "List a directory")]
     Ls(PathArg),
     #[command(about = "Show file or directory metadata")]
@@ -221,6 +232,12 @@ struct SearchArgs {
     dirs: bool,
 }
 
+#[derive(Args)]
+struct LicensesArgs {
+    #[arg(long, help = "Print machine-readable JSON")]
+    json: bool,
+}
+
 pub fn run() -> i32 {
     // Completion registration and callbacks must run before argument parsing or
     // any other stdout output. The generated shell integration invokes this
@@ -246,10 +263,12 @@ fn run_inner(cli: Cli) -> Result<i32, String> {
         Command::Sync(args) => sync_jobs::run(args),
         Command::Background(args) => background::run(args),
         Command::Integration(args) => integration::run(args),
+        Command::Desktop(args) => desktop::run(args),
         Command::Completions(args) => completions::run(args),
         Command::Update(args) => update::run(args),
         Command::Mcp(args) => mcp::run(args),
         Command::Plugin(args) => plugin::run(args),
+        Command::Licenses(args) => Ok(licenses::run(args.json)),
         Command::Ls(args) => {
             let t = target::resolve(&args.target)?;
             ops::list(&t)?;

@@ -2,6 +2,10 @@
 //! „Rechte, se Desktop, Tresore“): `share/mod.rs` declares this file once
 //! and re-exports its modules (`pub(crate) use access_modules::*`), so the
 //! strand adds its modules here instead of in the hub.
+#[path = "core/access_approval.rs"]
+pub(crate) mod access_approval;
+#[path = "os/shared/access_audit.rs"]
+pub(crate) mod access_audit;
 #[path = "core/access_authorize.rs"]
 pub(crate) mod access_authorize;
 #[path = "core/access_catalog.rs"]
@@ -12,9 +16,13 @@ pub(crate) mod access_grant;
 pub(crate) mod access_grant_runtime;
 #[path = "core/access_grant_wire.rs"]
 pub(crate) mod access_grant_wire;
+#[path = "os/shared/consent_launch.rs"]
+pub(crate) mod consent_launch;
 #[path = "core/exec_access_view.rs"]
 pub(crate) mod exec_access_view;
 #[path = "core/exec_client_messages.rs"]
 pub(crate) mod exec_client_messages;
+#[path = "core/exec_helper_protocol.rs"]
+pub(crate) mod exec_helper_protocol;
 #[path = "core/relation_proof.rs"]
 pub(crate) mod relation_proof;

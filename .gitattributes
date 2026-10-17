@@ -11,3 +11,6 @@ release-native/update-feed/windows-build.manifest text eol=lf
 
 # Embedded AI agent skill: identical bytes on every platform (include_str!).
 /native/src/cli/plugin/assets/* text eol=lf
+
+# Embedded crate license texts (native/src/licenses, include_str!): LF everywhere.
+third-party/rust-crates/THIRD-PARTY-LICENSES.txt text eol=lf

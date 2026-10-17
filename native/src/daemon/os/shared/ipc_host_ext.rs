@@ -20,9 +20,6 @@ use super::ShareHost;
 /// capability; routing its fallback arm through here keeps the text.
 const NO_CAPABILITY: &str = "daemon IPC request has no authentication capability";
 
-// Staged: R2 adds the first later variant together with the two forwarding
-// arms in `ipc.rs`; until then nothing calls these entry points.
-#[allow(dead_code)]
 impl ShareHost {
     /// Serves one authenticated request of a variant added after v0.5.182.
     /// The arm owns `stream`, so a streaming variant can keep it open.
@@ -34,10 +31,16 @@ impl ShareHost {
         // One arm per later variant goes here: R2 `IpcRequest::Access` and
         // `IpcRequest::Drive`, R4 `IpcRequest::Vault` and `IpcRequest::Screen`,
         // R5 `IpcRequest::MountHostExt`; every other request stays unhandled.
-        unhandled(&mut stream, &req)
+        match req {
+            IpcRequest::Access { request, .. } => self.serve_access(&mut stream, request),
+            other => unhandled(&mut stream, &other),
+        }
     }
 
     /// Capability check of a later variant that carries no daemon token.
+    // Staged: R5 routes the fallback arm of `ipc.rs::require_request_auth`
+    // here (`MountHostExt`); until then nothing calls it.
+    #[allow(dead_code)]
     pub(in crate::daemon) fn authorize_extension(&self, req: &IpcRequest) -> Result<(), String> {
         // R5: `IpcRequest::MountHostExt { id, session_token, .. }` checks
         // `self.mounts.check_session_token(id, session_token)`.

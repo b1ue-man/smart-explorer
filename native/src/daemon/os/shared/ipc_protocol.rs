@@ -16,6 +16,9 @@ use self::bounds::encoded_response_len;
 mod mount;
 pub(super) use self::mount::MountBackendScheme;
 pub use self::mount::MountHostConfig;
+#[path = "ipc_protocol_access.rs"]
+mod access;
+pub(crate) use self::access::{AccessIpcReply, AccessIpcRequest, AccountChoice, ExecNoticeView};
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -244,6 +247,10 @@ pub(super) enum IpcRequest {
         token: String,
         id: crate::mount::MountId,
     },
+    Access {
+        token: String,
+        request: AccessIpcRequest,
+    },
     MountHostAttach {
         id: crate::mount::MountId,
         launch_token: String,
@@ -286,7 +293,8 @@ impl IpcRequest {
             | Self::StartMount { token, .. }
             | Self::StopMount { token, .. }
             | Self::ListMounts { token }
-            | Self::RetryMount { token, .. } => Some(token),
+            | Self::RetryMount { token, .. }
+            | Self::Access { token, .. } => Some(token),
             Self::MountHostAttach { .. }
             | Self::MountHostBackend { .. }
             | Self::MountHostStatus { .. } => None,
@@ -351,6 +359,7 @@ pub(super) enum IpcResponse {
         backend_token: String,
     },
     MountHostStop,
+    Access(AccessIpcReply),
     Err {
         msg: String,
     },

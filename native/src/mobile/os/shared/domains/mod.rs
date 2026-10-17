@@ -8,6 +8,8 @@ use crate::mobile::{ApiError, Runtime};
 
 #[path = "analyze.rs"]
 mod analyze;
+#[path = "app_licenses.rs"]
+mod app_licenses;
 #[path = "args.rs"]
 mod args;
 #[path = "background.rs"]
@@ -83,6 +85,7 @@ pub(crate) fn dispatch(
         "share" => share_method(rt, method, args),
         "analyze" | "reclaim" => analysis_method(rt, method, args),
         "update" => update_method(rt, method),
+        "app" => app_licenses::handle(method),
         _ => None,
     }
 }

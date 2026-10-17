@@ -19,6 +19,7 @@ pub mod cloud;
 pub mod connect;
 pub mod copy;
 pub mod creds;
+pub(crate) mod cryptomator;
 pub mod daemon;
 #[cfg(not(target_os = "android"))]
 pub mod desktop;
@@ -32,6 +33,7 @@ pub(crate) mod host_trash;
 #[cfg(not(target_os = "android"))]
 pub mod icons;
 pub mod keep_awake;
+mod licenses;
 pub mod linemerge;
 mod local_access;
 #[cfg(any(target_os = "android", all(unix, test)))]
@@ -41,6 +43,7 @@ pub mod net;
 pub mod quickshare;
 pub mod rscan;
 pub mod scanner;
+mod screen;
 pub mod sftp;
 pub mod share;
 #[cfg(windows)]
@@ -90,6 +93,11 @@ pub fn run_gui() -> eframe::Result<()> {
         return Ok(());
     }
 
+    // V9 background kinds of se Desktop, before the update confirmation.
+    if let Some(code) = desktop::run_if_requested(&raw_args) {
+        std::process::exit(code);
+    }
+
     let just_updated = args.iter().any(|a| a == "--updated");
     let startup_ack_pending =
         updater::capture_update_startup_ack(just_updated).unwrap_or_else(|error| panic!("{error}"));
@@ -104,14 +112,40 @@ pub fn run_gui() -> eframe::Result<()> {
         return Ok(());
     }
 
+    // V9 window kinds after the updater steps, first the S1 consent window.
+    if let Ok(app::start_request::StartRequest::AccessConsent { id }) =
+        app::start_request::parse(&raw_args)
+    {
+        return app::run_access_consent(id);
+    }
+
     #[cfg(windows)]
     shell_register::cleanup_stale_default_manager();
 
-    let initial_path = args
-        .iter()
-        .skip(1)
-        .find(|a| !a.starts_with("--"))
-        .map(std::path::PathBuf::from);
+    // The explorer window, optionally at a location or page (S5); the value of
+    // a switch never becomes the start path. Until their packages wire them
+    // (plan H8), the screen kinds of S4 start nothing, like a malformed switch.
+    use app::start_request::StartRequest;
+    let start = match app::start_request::parse(&raw_args) {
+        Ok(
+            start @ (StartRequest::Gui { .. }
+            | StartRequest::OpenLocation { .. }
+            | StartRequest::OpenPage { .. }),
+        ) => start,
+        Ok(other) => {
+            let switch = other.to_args().into_iter().next().unwrap_or_default();
+            eprintln!(
+                "smart_explorer: {} ist in diesem Programm nicht verfügbar",
+                switch.to_string_lossy()
+            );
+            std::process::exit(2);
+        }
+        Err(error) => {
+            eprintln!("smart_explorer: {error}");
+            std::process::exit(2);
+        }
+    };
+    desktop::resume_on_gui_start();
 
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
@@ -129,7 +163,10 @@ pub fn run_gui() -> eframe::Result<()> {
         "Smart Explorer",
         options,
         Box::new(|cc| {
-            let app = app::App::new(just_updated, initial_path);
+            let app = match start {
+                StartRequest::Gui { start_path } => app::App::new(just_updated, start_path),
+                request => app::App::new_with_start(just_updated, request),
+            };
             app.configure_appearance(&cc.egui_ctx);
             Ok(Box::new(app))
         }),

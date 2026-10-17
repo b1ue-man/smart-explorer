@@ -1,3 +1,6 @@
+#[path = "access_modules.rs"]
+mod access_modules;
+pub(crate) use access_modules::*;
 #[path = "core/agent_update_remote.rs"]
 mod agent_update_remote;
 #[path = "core/analytics_access.rs"]
@@ -109,6 +112,8 @@ mod job_editor_validation;
 mod landing;
 #[path = "core/landing_tiles.rs"]
 mod landing_tiles;
+#[path = "core/licenses_ui.rs"]
+mod licenses_ui;
 #[path = "core/location_labels.rs"]
 mod location_labels;
 #[cfg(any(windows, test))]

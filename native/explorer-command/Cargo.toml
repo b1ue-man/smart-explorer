@@ -3,6 +3,8 @@ name = "smart_explorer_command"
 version = "0.1.0"
 edition = "2021"
 description = "IExplorerCommand handler for the Smart Explorer Windows 11 modern context menu"
+license = "MIT"
+publish = false
 
 # A separate crate from the main app (which is a bin) so this builds an isolated
 # in-proc COM DLL. The app does not depend on it; it is packaged + signed
