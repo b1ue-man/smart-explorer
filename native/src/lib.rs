@@ -20,6 +20,8 @@ pub mod connect;
 pub mod copy;
 pub mod creds;
 pub mod daemon;
+#[cfg(not(target_os = "android"))]
+pub mod desktop;
 pub mod dragout;
 pub mod filter;
 pub mod folder_index;

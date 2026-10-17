@@ -18,6 +18,8 @@
 //! silently overwritten), changes are reversible. Unresolved conflicts are left
 //! for the user to settle in the GUI - the daemon never guesses.
 
+#[path = "os/shared/access_grant_journal.rs"]
+mod access_grant_journal;
 #[path = "os/shared/backend_batch.rs"]
 mod backend_batch;
 #[path = "os/shared/backend_budget.rs"]
@@ -187,6 +189,8 @@ mod rooted_backend_task_tests;
 mod schedule;
 #[path = "os/shared/state.rs"]
 mod state;
+#[path = "os/shared/update_stop.rs"]
+mod update_stop;
 
 pub use catch_up::{CatchUpRecord, CatchUpSkip, CatchUpStatus};
 pub use embedded::ensure_embedded_daemon;
@@ -228,6 +232,10 @@ pub use state::{
     autopause_flags, autopause_support, cadence_secs, is_running, last_heartbeat_age,
     pause_for_secs, pause_indefinite, pause_remaining, pause_until, read_log_tail, request_stop,
     resume, set_autopause_flags, set_cadence_secs, AutopauseSupport,
+};
+pub use update_stop::{
+    is_new_request, spawn_update_stop_watch, UpdateStopBaseline, UpdateStopSource, UpdateStopWatch,
+    EXIT_UPDATE_STOP, UPDATE_STOP_POLL,
 };
 
 #[cfg(test)]

@@ -69,6 +69,9 @@ mod delete_lifecycle;
 mod delete_status;
 #[path = "core/delete_worker.rs"]
 mod delete_worker;
+#[path = "desktop_modules.rs"]
+mod desktop_modules;
+pub(crate) use desktop_modules::*;
 #[path = "core/dialogs.rs"]
 mod dialogs;
 #[path = "os/shared/drag_drop.rs"]
