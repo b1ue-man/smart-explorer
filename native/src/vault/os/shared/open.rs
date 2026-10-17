@@ -10,9 +10,11 @@
 //!   storage's identity and overlap checks pass through unchanged.
 //!
 //! Unlocked sessions of this process are published here by the session
-//! register (VLT-M4: `publish_session` on unlock, `withdraw_session` and
-//! `VaultSession::lock` on lock). Processes without sessions of their own
-//! (desktop GUI and CLI beside the worker) get the IPC path of VLT-M4.
+//! register (`session.rs`: `publish_session` on unlock, `withdraw_session`
+//! and `VaultSession::lock` on lock). A process without the keys of the
+//! device (desktop GUI, CLI and MCP beside the worker) opens `vault://`
+//! through the worker: `IpcRequest::Vault { req: Open }` serves the worker's
+//! `VaultBackend` over the agent protocol (`daemon::open_vault_backend`).
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::fmt;
@@ -25,6 +27,7 @@ use crate::vfs::BackendHandle;
 
 use super::backend::VaultBackend;
 use super::registry_store::RegistryStore;
+use super::session::hosts_register;
 
 /// Vaults inside vaults open at most this deep; a site whose location leads
 /// back to itself ends here instead of looping.
@@ -36,6 +39,11 @@ thread_local! {
 
 /// Resolves the location of a site (`connect::resolve_endpoint`).
 pub(crate) type ResolveLocation<'a> = &'a dyn Fn(&str) -> Result<(BackendHandle, String), String>;
+
+/// Opens `vault://<site><path>` through the worker that holds the keys
+/// (desktop GUI, CLI and MCP; `daemon::open_vault_backend`).
+pub(crate) type WorkerOpen<'a> =
+    &'a dyn Fn(&SiteRecord, &str) -> Result<(BackendHandle, String), VaultOpenError>;
 
 struct Nesting;
 
@@ -144,17 +152,53 @@ pub(crate) fn unlocked_session(site: &str) -> Option<Arc<VaultSession>> {
     }
 }
 
-/// `vault://<SITE>/<path>` for `connect::resolve_endpoint`.
+/// `vault://<SITE>/<path>` for `connect::resolve_endpoint`: with the
+/// session of this process, else through the worker (VLT-M4).
 pub(crate) fn open_vault_location(
     site: &str,
     path: &str,
 ) -> Result<(BackendHandle, String), String> {
-    open_vault_backend(site, path)
-        .map(|opened| (opened.backend, opened.path))
+    let resolve = |location: &str| crate::connect::resolve_endpoint(location);
+    let worker: WorkerOpen<'_> = &worker_open;
+    // A unit test never starts a worker; the worker never asks itself.
+    let reach = (!cfg!(test) && !hosts_register()).then_some(worker);
+    open_location_in(&RegistryStore::open_default(), site, path, &resolve, reach)
         .map_err(|error| error.to_string())
 }
 
-/// `vault://<SITE>/<path>` with the structured error (Android pool).
+/// `open_vault_location` against a given vault list, resolver and worker:
+/// the session of this process first; without one the worker when given,
+/// else the site is locked.
+pub(crate) fn open_location_in(
+    store: &RegistryStore,
+    site: &str,
+    path: &str,
+    resolve: ResolveLocation<'_>,
+    worker: Option<WorkerOpen<'_>>,
+) -> Result<(BackendHandle, String), VaultOpenError> {
+    let record = store.resolve(site).map_err(VaultOpenError::Unknown)?;
+    if let Some(session) = unlocked_session(&record.id) {
+        return open_with(&record, session, path, resolve)
+            .map(|opened| (opened.backend, opened.path));
+    }
+    match worker {
+        Some(worker) => worker(&record, path),
+        None => Err(locked(&record)),
+    }
+}
+
+/// The worker's backend of `record`; its `vault_locked` keeps the code.
+fn worker_open(record: &SiteRecord, path: &str) -> Result<(BackendHandle, String), VaultOpenError> {
+    crate::daemon::open_vault_backend(&record.id, path).map_err(|error| {
+        match error.code.as_deref() {
+            Some(VAULT_LOCKED_CODE) => locked(record),
+            _ => VaultOpenError::Failed(error.message),
+        }
+    })
+}
+
+/// `vault://<SITE>/<path>` with the structured error, in the process that
+/// holds the keys (Android pool).
 pub(crate) fn open_vault_backend(site: &str, path: &str) -> Result<OpenedVault, VaultOpenError> {
     let resolve = |location: &str| crate::connect::resolve_endpoint(location);
     open_in(&RegistryStore::open_default(), site, path, &resolve)

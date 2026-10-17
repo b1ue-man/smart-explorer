@@ -71,6 +71,11 @@ impl std::fmt::Display for ApiError {
 
 impl From<io::Error> for ApiError {
     fn from(error: io::Error) -> Self {
+        // A locked vault keeps its structured code across the bridge
+        // (C3.2, C7.5): the app offers „Entsperren“ instead of a rights error.
+        if crate::vault::locked_site(&error).is_some() {
+            return Self::new(crate::vault::VAULT_LOCKED_CODE, error.to_string());
+        }
         let kind = io_kind(error.kind());
         // OS errors carry English system text; lead with a German label.
         let message = match (error.raw_os_error(), io_label(error.kind())) {

@@ -261,6 +261,8 @@ data class BgStatus(
  * `sys.hostState` arguments. [foreground] also switches the Share connection into its idle mode
  * while the UI is not visible; [deferScheduling] keeps the daemon from starting its own scheduled
  * jobs (start, interval, calendar, real-time, connect) – only `bg.catchUp` runs them then (spec A6).
+ * [screenOn] and [foreground] also reach the vault sessions: screen off and the time in the
+ * background lock vaults by their settings (VLT-M4).
  */
 data class HostStateArgs(
     val powerSave: Boolean,
@@ -270,6 +272,7 @@ data class HostStateArgs(
     val foreground: Boolean,
     val deferScheduling: Boolean,
     val storageAccess: Boolean = false,
+    val screenOn: Boolean = true,
 )
 
 object SyncApi {
@@ -416,6 +419,7 @@ object SyncApi {
             put("foreground", state.foreground)
             put("deferScheduling", state.deferScheduling)
             put("storageAccess", state.storageAccess)
+            put("screenOn", state.screenOn)
         })
     }
 

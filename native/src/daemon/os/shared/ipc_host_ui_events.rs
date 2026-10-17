@@ -1,6 +1,28 @@
 use crate::share::ShareEvent;
 
+use super::super::ipc_protocol::VaultEventView;
+
 pub(crate) const MAX_SHARE_HOST_UI_EVENTS: usize = 512;
+
+/// Vault events (`VaultEvent`, C7.4) for the clients that poll
+/// `Vault::Status` (GUI, se Desktop every 900 ms, S5 H5): the newest
+/// `crate::vault::EVENT_LOG` changes of the session register and the
+/// number of the last one. They stay out of `ShareEvent`, which older GUIs
+/// could not read. Site ID, state, reason and epoch only.
+pub(crate) fn vault_events() -> (u64, Vec<VaultEventView>) {
+    let (seq, events) = crate::vault::register().events();
+    let views = events
+        .into_iter()
+        .map(|event| VaultEventView {
+            seq: event.seq,
+            site: event.site,
+            state: event.state.as_str().to_string(),
+            reason: event.reason.map(|reason| reason.as_str().to_string()),
+            epoch: event.epoch,
+        })
+        .collect();
+    (seq, views)
+}
 
 pub(crate) fn push(events: &mut Vec<ShareEvent>, event: ShareEvent) {
     if matches!(

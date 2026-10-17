@@ -12,6 +12,13 @@ use std::io;
 /// (or a peer behind the service that asked to slow down) is congestion, so
 /// transfers back off instead of failing.
 pub(super) fn agent_error(message: String) -> io::Error {
+    // A vault the worker locked (`SE_VAULT_V1 locked <site> …`, C3.2): the
+    // typed error, so surfaces say „gesperrt“ and pools drop the backend.
+    if let Some(wire) = crate::agent_proto::parse_vault_error(&message) {
+        if wire.code == crate::agent_proto::VAULT_LOCKED_WIRE {
+            return crate::vault::vault_locked(wire.site);
+        }
+    }
     if let Some(error) = crate::agent_proto::parse_transport_error(&message) {
         return error;
     }
@@ -76,10 +83,21 @@ mod tests {
         let error = agent_error(crate::agent_proto::transport_error_message(&source));
         assert_eq!(error.kind(), source.kind());
         assert_eq!(error.to_string(), source.to_string());
-        assert_eq!(agent_error("SE_TRANSPORT_V1 future unknown".into()).kind(), io::ErrorKind::Other);
-        assert_eq!(agent_error("Permission denied (os error 13)".into()).kind(), io::ErrorKind::PermissionDenied);
-        assert!(crate::vfs::congestion_of(&agent_error(crate::agent_proto::busy_message(
-            Some(std::time::Duration::from_secs(1)), "busy"))).is_some());
+        assert_eq!(
+            agent_error("SE_TRANSPORT_V1 future unknown".into()).kind(),
+            io::ErrorKind::Other
+        );
+        assert_eq!(
+            agent_error("Permission denied (os error 13)".into()).kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert!(
+            crate::vfs::congestion_of(&agent_error(crate::agent_proto::busy_message(
+                Some(std::time::Duration::from_secs(1)),
+                "busy"
+            )))
+            .is_some()
+        );
     }
 
     #[test]
@@ -156,6 +174,53 @@ mod tests {
             assert_eq!(error.kind(), io::ErrorKind::Other, "{message}");
             assert_eq!(error.to_string(), message);
         }
+    }
+
+    #[test]
+    fn vault_task_vault_error_envelope_roundtrip_and_legacy_text() {
+        const SITE: &str = "0123456789abcdef0123456789abcdef";
+        let locked = crate::vault::vault_locked(SITE);
+        // The worker writes the envelope only for a locked vault.
+        let wire = crate::vault::wire_error_text(&locked).expect("envelope of VaultLocked");
+        assert_eq!(
+            wire,
+            format!("SE_VAULT_V1 locked {SITE} Tresor {SITE} ist gesperrt")
+        );
+        for other in [
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Permission denied (os error 13)",
+            ),
+            io::Error::new(io::ErrorKind::NotFound, "Tresor x ist gesperrt"),
+        ] {
+            assert_eq!(crate::vault::wire_error_text(&other), None, "{other}");
+        }
+        // A client of this version rebuilds the typed error.
+        let error = agent_error(wire.clone());
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(crate::vault::locked_site(&error), Some(SITE));
+        assert_eq!(error.to_string(), format!("Tresor {SITE} ist gesperrt"));
+        // An older client keeps the legacy meaning „error with a message“:
+        // its parsers do not know the prefix, the text stays readable.
+        assert!(crate::agent_proto::parse_transport_error(&wire).is_none());
+        assert_eq!(kind_from_message(&wire), io::ErrorKind::Other);
+        assert!(wire.ends_with("ist gesperrt"));
+        // Legacy texts and unknown codes keep their old meaning.
+        for legacy in [
+            format!("Tresor {SITE} ist gesperrt"),
+            format!("SE_VAULT_V1 unsealed {SITE} future code"),
+            "SE_VAULT_V1 locked not-a-site-id Tresor".to_string(),
+            "SE_VAULT_V1 locked".to_string(),
+        ] {
+            let error = agent_error(legacy.clone());
+            assert_eq!(crate::vault::locked_site(&error), None, "{legacy}");
+            assert_eq!(error.kind(), io::ErrorKind::Other, "{legacy}");
+            assert_eq!(error.to_string(), legacy);
+        }
+        // Transport errors decode as before.
+        let source = io::Error::new(io::ErrorKind::TimedOut, "connection lost");
+        let decoded = agent_error(crate::agent_proto::transport_error_message(&source));
+        assert_eq!(decoded.kind(), io::ErrorKind::TimedOut);
     }
 
     #[test]

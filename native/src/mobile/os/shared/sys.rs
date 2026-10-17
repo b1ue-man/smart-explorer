@@ -56,7 +56,9 @@ fn task_clear(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
 /// `deferScheduling` holds the daemon's scheduled jobs (the host's own worker
 /// runs them); visibility sets the Share poller's cadence and the Share
 /// client's low-power mode. `wifi`/`charging` are only used by the host's own
-/// scheduling. Missing flags read as false.
+/// scheduling. Missing flags read as false. Visibility and `screenOn` also
+/// reach the vault session register: screen off and the background lock
+/// vaults (C3.3, C3.4).
 fn host_state(args: &Value) -> Result<Value, ApiError> {
     let (state, foreground) = parse_host_state(args);
     crate::daemon::set_host_state(state);
@@ -64,7 +66,14 @@ fn host_state(args: &Value) -> Result<Value, ApiError> {
         crate::daemon::set_storage_access(granted);
     }
     super::domains::set_foreground(foreground);
+    crate::vault::host_visibility(foreground, screen_on(args));
     Ok(json!({}))
+}
+
+/// `screenOn`; an older app that does not send it reports a screen that is
+/// on, so nothing locks for a missing value.
+fn screen_on(args: &Value) -> bool {
+    bool_or(args, "screenOn", true)
 }
 
 fn parse_host_state(args: &Value) -> (crate::daemon::HostState, bool) {
