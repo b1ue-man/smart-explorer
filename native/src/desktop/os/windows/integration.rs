@@ -1,17 +1,15 @@
 //! Registrations of se Desktop on Windows (C1.4, C1.5, C5.7): the shell's
-//! Run value, the navigation pane root `{DESKTOP_NAV_CLSID}` (written by the
-//! shell with DSK-M5) and the jump list of the GUI image. Everything lives in
-//! HKCU or in the user's profile. Removal touches only this module's fixed
-//! names: the CLSID tree, the `Desktop\NameSpace` key and the one value under
-//! `HideDesktopIcons\NewStartPanel`; every sibling stays.
-use std::io;
+//! Run value, the navigation pane root `{DESKTOP_NAV_CLSID}` with the parent
+//! keys it created (written by the shell, `shell_parts`) and the jump list
+//! of the GUI image. Everything lives in HKCU or in the user's profile.
+//! Removal touches only this module's fixed names: the CLSID tree, the
+//! `Desktop\NameSpace` key, the one value under `HideDesktopIcons\
+//! NewStartPanel` and parent keys se created while they hold nothing else;
+//! every sibling stays.
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_SET_VALUE};
-use winreg::RegKey;
-
-use super::{autostart, is_gui_image, process};
+use super::{autostart, is_gui_image, jump_list, nav_pane, process};
 use crate::desktop::core::ledger::{
     LedgerEntry, Registration, Trace, DESKTOP_NAV_CLSID, RUN_VALUE_NAME,
 };
@@ -19,11 +17,6 @@ use crate::desktop::core::state::Platform;
 use crate::desktop::os::control::{AutostartState, Integration};
 use crate::desktop::os::store::unix_now;
 
-pub(crate) const CLSID_ROOT: &str = r"Software\Classes\CLSID";
-pub(crate) const NAMESPACE_ROOT: &str =
-    r"Software\Microsoft\Windows\CurrentVersion\Explorer\Desktop\NameSpace";
-pub(crate) const HIDE_ICONS: &str =
-    r"Software\Microsoft\Windows\CurrentVersion\Explorer\HideDesktopIcons\NewStartPanel";
 /// `--desktop-jumplist-clear` is one COM call; this bounds a hanging start.
 const JUMP_LIST_WAIT: Duration = Duration::from_secs(15);
 
@@ -57,7 +50,7 @@ impl WindowsIntegration {
     /// `--desktop-jumplist-clear` and waits for it.
     fn clear_jump_list(&self) -> Result<(), String> {
         if self.jump_list_here {
-            return clear_jump_list_here();
+            return jump_list::clear_here();
         }
         let gui = self
             .gui
@@ -126,7 +119,8 @@ impl Integration for WindowsIntegration {
     fn is_applied(&self, trace: &Trace) -> bool {
         match trace.kind {
             Registration::RunValue => trace.target == RUN_VALUE_NAME && autostart::present(),
-            Registration::NavPaneClsid => trace.target == DESKTOP_NAV_CLSID && nav_pane_present(),
+            Registration::NavPaneClsid if trace.target == DESKTOP_NAV_CLSID => nav_pane::present(),
+            Registration::NavPaneClsid => nav_pane::parent_left(&trace.target),
             // Not readable (Annahme A6): removed once `DeleteList` succeeded.
             _ => false,
         }
@@ -147,88 +141,12 @@ impl Integration for WindowsIntegration {
     }
 }
 
-/// Any of the three places of the navigation pane root (C1.4).
-fn nav_pane_present() -> bool {
-    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    hkcu.open_subkey(format!(r"{CLSID_ROOT}\{DESKTOP_NAV_CLSID}"))
-        .is_ok()
-        || hkcu
-            .open_subkey(format!(r"{NAMESPACE_ROOT}\{DESKTOP_NAV_CLSID}"))
-            .is_ok()
-        || hkcu
-            .open_subkey(HIDE_ICONS)
-            .and_then(|key| key.get_raw_value(DESKTOP_NAV_CLSID))
-            .is_ok()
-}
-
-fn not_found(error: &io::Error) -> bool {
-    error.kind() == io::ErrorKind::NotFound
-}
-
-/// Deletes the CLSID tree, the `NameSpace` key and the `HideDesktopIcons`
-/// value of this module's CLSID, then tells the shell (C1.4).
-fn remove_nav_pane(clsid: &str) -> Result<(), String> {
-    if clsid != DESKTOP_NAV_CLSID {
-        return Err(format!("fremde CLSID {clsid:?} wird nicht gelöscht"));
-    }
-    if !nav_pane_present() {
-        return Ok(());
-    }
-    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    for key in [
-        format!(r"{CLSID_ROOT}\{clsid}"),
-        format!(r"{NAMESPACE_ROOT}\{clsid}"),
-    ] {
-        match hkcu.delete_subkey_all(&key) {
-            Ok(()) => {}
-            Err(error) if not_found(&error) => {}
-            Err(error) => return Err(format!("{key}: {error}")),
-        }
-    }
-    match hkcu.open_subkey_with_flags(HIDE_ICONS, KEY_READ | KEY_SET_VALUE) {
-        Ok(icons) => match icons.delete_value(clsid) {
-            Ok(()) => {}
-            Err(error) if not_found(&error) => {}
-            Err(error) => return Err(format!("{HIDE_ICONS}: {error}")),
-        },
-        Err(error) if not_found(&error) => {}
-        Err(error) => return Err(format!("{HIDE_ICONS}: {error}")),
-    }
-    notify_assoc_changed();
-    Ok(())
-}
-
-fn notify_assoc_changed() {
-    use windows_sys::Win32::UI::Shell::{SHChangeNotify, SHCNE_ASSOCCHANGED, SHCNF_IDLIST};
-    unsafe {
-        SHChangeNotify(
-            SHCNE_ASSOCCHANGED as i32,
-            SHCNF_IDLIST,
-            std::ptr::null(),
-            std::ptr::null(),
-        );
-    }
-}
-
-/// `DeleteList(NULL)` for the jump list of this process's image
-/// (`--desktop-jumplist-clear`, `--unregister`).
-pub(crate) fn clear_jump_list_here() -> Result<(), String> {
-    use windows::Win32::System::Com::{
-        CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
-        COINIT_APARTMENTTHREADED,
-    };
-    use windows::Win32::UI::Shell::{DestinationList, ICustomDestinationList};
-    unsafe {
-        let initialized = CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok();
-        let result = CoCreateInstance::<_, ICustomDestinationList>(
-            &DestinationList,
-            None,
-            CLSCTX_INPROC_SERVER,
-        )
-        .and_then(|list| list.DeleteList(windows::core::PCWSTR::null()));
-        if initialized {
-            CoUninitialize();
-        }
-        result.map_err(|error| format!("Sprungliste löschen: {error}"))
+/// The root of this module's CLSID, or a parent key the root created;
+/// a foreign CLSID or key is refused.
+fn remove_nav_pane(target: &str) -> Result<(), String> {
+    if target == DESKTOP_NAV_CLSID {
+        nav_pane::remove()
+    } else {
+        nav_pane::remove_parent(target)
     }
 }

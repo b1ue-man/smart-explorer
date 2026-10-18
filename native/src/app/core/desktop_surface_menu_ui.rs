@@ -7,14 +7,22 @@
 //! Einfügen, Anordnen, Aktualisieren, Hintergrund ändern, se Desktop-
 //! Einstellungen, se Desktop neu starten). Double click and Enter run
 //! [`activate`], the keys of the grid the same handlings as the menus.
+//!
+//! Windows (DSK-M5): desktop files and the free surface also offer
+//! "Weitere Optionen anzeigen", Explorer's own menu with every shell
+//! extension; a Ctrl+V after a file copy in Explorer reaches [`paste`] as a
+//! paste without text (the host turns the native key into one), and the
+//! selection can be dragged out to other programs.
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use eframe::egui;
 
 use super::desktop_surface_actions::{DesktopOp, SurfaceActions};
 use super::desktop_surface_grid_ui::SurfaceState;
-use super::desktop_surface_host::{self as host_ui, SurfaceHost};
+use super::desktop_surface_host::{
+    self as host_ui, NativeWindow, ShellAction, ShellOutcome, SurfaceHost,
+};
 use super::desktop_surface_rename_ui::Rename;
 use super::desktop_surface_view_model::{ItemRef, ViewModel};
 use crate::desktop::core::items::{self, DesktopFile};
@@ -175,6 +183,65 @@ fn file_menu(ui: &mut egui::Ui, item: &ItemId, file: &DesktopFile, cx: &mut Cx<'
             ui.close_menu();
         }
     }
+    let paths: Vec<PathBuf> = selected_files(cx)
+        .into_iter()
+        .map(|file| file.path)
+        .collect();
+    more_options(ui, ShellAction::ItemMenu(&paths), cx);
+}
+
+/// Explorer actions need the surface's own Win32 window.
+fn explorer_on(cx: &Cx<'_>) -> bool {
+    matches!(cx.host.native_window(), Some(NativeWindow::Win32 { .. }))
+}
+
+/// One Explorer action; the surface keeps its heartbeat while the action's
+/// modal loop runs. A failure is shown in the status panel.
+fn run_shell_action(action: ShellAction<'_>, cx: &mut Cx<'_>) -> Option<ShellOutcome> {
+    let host = cx.host;
+    let view = &mut *cx.view;
+    match host.shell_action(action, &mut || view.heartbeat()) {
+        Ok(outcome) => Some(outcome),
+        Err(error) => {
+            cx.state.notice(format!("Explorer: {error}"));
+            None
+        }
+    }
+}
+
+/// "Weitere Optionen anzeigen" (Windows): Explorer's menu of `action`.
+fn more_options(ui: &mut egui::Ui, action: ShellAction<'_>, cx: &mut Cx<'_>) {
+    if !explorer_on(cx) {
+        return;
+    }
+    if ui.button("Weitere Optionen anzeigen").clicked() {
+        ui.close_menu();
+        run_shell_action(action, cx);
+    }
+}
+
+/// A desktop file dragged over another program's window: the selection
+/// goes out through the system's drag and drop (Windows); `true` when a
+/// drag out ran. The tile's own drag ends here, and the surface gets the
+/// button release the drag loop took.
+pub(crate) fn drag_out_selected(ctx: &egui::Context, item: &ItemId, cx: &mut Cx<'_>) -> bool {
+    if !explorer_on(cx) || !cx.host.pointer_outside() {
+        return false;
+    }
+    if !cx.state.selected.contains(item) {
+        cx.state.selected = BTreeSet::from([item.clone()]);
+    }
+    let paths: Vec<PathBuf> = selected_files(cx)
+        .into_iter()
+        .map(|file| file.path)
+        .collect();
+    if paths.is_empty() {
+        return false;
+    }
+    ctx.stop_dragging();
+    let outcome = run_shell_action(ShellAction::DragOut(&paths), cx);
+    cx.host.release_pointer();
+    outcome.is_some()
 }
 
 /// "Auf Bildschirm verschieben → <Monitor>" (C4.2).
@@ -196,13 +263,13 @@ fn move_menu(ui: &mut egui::Ui, item: &ItemId, cx: &mut Cx<'_>) {
 
 /// The context menu of the free surface.
 pub(crate) fn surface_menu(ui: &mut egui::Ui, cx: &mut Cx<'_>) {
-    let folder = cx.view.folder(false).map(|folder| folder.to_path_buf());
+    let folder = cx.view.folder(false).map(Path::to_path_buf);
     let has_folder = folder.is_some();
     if ui
         .add_enabled(has_folder, egui::Button::new("Neuer Ordner"))
         .clicked()
     {
-        if let Some(folder) = folder {
+        if let Some(folder) = folder.clone() {
             cx.actions.run(DesktopOp::NewFolder { folder });
         }
         ui.close_menu();
@@ -221,6 +288,9 @@ pub(crate) fn surface_menu(ui: &mut egui::Ui, cx: &mut Cx<'_>) {
     if ui.button("Aktualisieren").clicked() {
         cx.state.refresh(cx.view);
         ui.close_menu();
+    }
+    if let Some(folder) = &folder {
+        more_options(ui, ShellAction::FolderMenu(folder), cx);
     }
     ui.separator();
     for label in ["Hintergrund ändern …", "se Desktop-Einstellungen …"] {
@@ -307,7 +377,9 @@ pub(crate) fn clipboard_selected(ctx: &egui::Context, cut: bool, cx: &mut Cx<'_>
     cx.actions.set_clipboard(ctx, paths, cut);
 }
 
-/// Ctrl+V and "Einfügen": into the user's desktop folder.
+/// Ctrl+V and "Einfügen": into the user's desktop folder. `pasted` is the
+/// text of egui's paste event; it is empty for a Ctrl+V after a file copy
+/// in Explorer, whose files the system clipboard then holds.
 pub(crate) fn paste(pasted: Option<&str>, cx: &mut Cx<'_>) {
     let Some(folder) = cx.view.folder(false).map(|folder| folder.to_path_buf()) else {
         return;

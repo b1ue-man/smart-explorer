@@ -2,16 +2,21 @@
 //! system's in its fit mode (Füllen, Einpassen, Strecken, Kacheln,
 //! Zentrieren, Spannen), decoded in a thread and kept as one texture that
 //! repeats for "Kacheln"; around and instead of an image its color shows,
-//! `transparent` paints nothing where the session allows it. The system
-//! wallpaper arrives with DSK-M5 and DSK-M6; until then "System" shows the
-//! default color.
+//! `transparent` paints nothing where the session allows it. "System" is
+//! the platform's wallpaper of this monitor (DSK-M5 Windows, DSK-M6 Linux),
+//! read when the surface starts, after a change notice of the system, in a
+//! slideshow's own interval and on "Aktualisieren"; while the platform names
+//! none, the default color shows.
 use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::time::Instant;
 
 use eframe::egui::{self, Color32, Pos2, Rect};
 
 use super::desktop_surface_host::{self as host_ui, SurfaceHost};
-use crate::desktop::core::config::DesktopConfig;
-use crate::desktop::os::wallpaper_image::{self, Area, FitMode, Loaded, WallpaperSpec};
+use crate::desktop::core::config::{BackgroundKind, DesktopConfig};
+use crate::desktop::os::wallpaper_image::{
+    self, Area, FitMode, Loaded, SystemWallpaper, WallpaperSpec,
+};
 
 /// Longest side of a decoded wallpaper, within the texture limit.
 const MAX_IMAGE_SIDE: usize = 8_192;
@@ -21,6 +26,11 @@ pub(crate) struct Wallpaper {
     spec: Option<WallpaperSpec>,
     texture: Option<(egui::TextureHandle, (u32, u32))>,
     pending: Option<Receiver<Loaded>>,
+    /// The system wallpaper as last read (`Some(None)`: none known);
+    /// `None`: read again before the next frame.
+    system: Option<Option<SystemWallpaper>>,
+    /// A slideshow changes the image itself; then it is read again here.
+    read_again_at: Option<Instant>,
 }
 
 fn color([red, green, blue]: [u8; 3]) -> Color32 {
@@ -49,9 +59,41 @@ fn span_area(ctx: &egui::Context, screen: Rect, host: &dyn SurfaceHost) -> Optio
 }
 
 impl Wallpaper {
-    /// Reads the image again ("Aktualisieren", F5).
+    /// Reads the system wallpaper and the image again ("Aktualisieren", F5).
     pub(crate) fn reload(&mut self) {
         self.spec = None;
+        self.system = None;
+    }
+
+    /// The system wallpaper of this monitor while the background is
+    /// "System"; a change notice or the slideshow's interval reads it (and
+    /// its image, which may keep its path) again.
+    fn system_wallpaper(
+        &mut self,
+        host: &dyn SurfaceHost,
+        wanted: bool,
+    ) -> Option<SystemWallpaper> {
+        let changed = host.take_wallpaper_change();
+        let due = self.read_again_at.is_some_and(|at| Instant::now() >= at);
+        if changed || due {
+            self.system = None;
+            self.read_again_at = None;
+            if wanted {
+                self.spec = None;
+            }
+        }
+        if !wanted {
+            return None;
+        }
+        if self.system.is_none() {
+            let read = host.system_background().ok();
+            self.read_again_at = read
+                .as_ref()
+                .and_then(|background| background.refresh_every)
+                .map(|every| Instant::now() + every);
+            self.system = Some(read.map(|background| background.wallpaper));
+        }
+        self.system.clone().flatten()
     }
 
     /// Paints the background of `config` over `screen`; `transparent`: the
@@ -70,7 +112,8 @@ impl Wallpaper {
             Err(String::new())
         };
         let background = config.effective_background(&allowed);
-        let spec = wallpaper_image::spec_for(&background, None);
+        let system = self.system_wallpaper(host, background.kind == BackgroundKind::System);
+        let spec = wallpaper_image::spec_for(&background, system.as_ref());
         if self.spec.as_ref() != Some(&spec) {
             self.start(ui.ctx(), &spec);
             self.spec = Some(spec.clone());

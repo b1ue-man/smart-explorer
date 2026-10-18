@@ -82,3 +82,71 @@ pub(crate) fn monitors() -> Vec<Monitor> {
 pub(crate) fn clear_jump_list_here() -> Result<(), String> {
     Ok(())
 }
+
+// DSK-M5 (U32): the names the shared code and the surface host call on
+// every platform. Linux fills them with DSK-M6 (U34: X11 window, work area,
+// wallpaper, `XDG_DESKTOP_DIR`) and DSK-M7 (U37); until then the surface
+// has no window adapter, the whole monitor as work area, no monitor names,
+// no system wallpaper and no Explorer actions, and the shell has no parts
+// besides the surfaces.
+pub(crate) fn attach_surface(
+    _window: crate::app::desktop_surface_host::NativeWindow,
+    _monitor: &str,
+    _signals: std::sync::Arc<crate::app::desktop_surface_host::SurfaceSignals>,
+) -> Result<(), String> {
+    Ok(())
+}
+
+pub(crate) fn work_area(_monitor: &str) -> Option<[i32; 4]> {
+    None
+}
+
+pub(crate) fn monitor_names() -> Vec<(String, String)> {
+    Vec::new()
+}
+
+pub(crate) fn system_wallpaper(
+    _monitor: &str,
+) -> Result<crate::app::desktop_surface_host::SystemBackground, String> {
+    Err(crate::app::desktop_surface_host::NO_SYSTEM_BACKGROUND.into())
+}
+
+pub(crate) fn shell_action(
+    _action: crate::app::desktop_surface_host::ShellAction<'_>,
+    _heartbeat: &mut dyn FnMut(),
+) -> Result<crate::app::desktop_surface_host::ShellOutcome, String> {
+    Err("Explorer-Aktionen gibt es nur unter Windows".into())
+}
+
+pub(crate) fn pointer_outside(_window: crate::app::desktop_surface_host::NativeWindow) -> bool {
+    false
+}
+
+pub(crate) fn release_pointer(_window: crate::app::desktop_surface_host::NativeWindow) {}
+
+/// Only the suite switch names a desktop folder until DSK-M6.
+pub(crate) fn desktop_folders() -> Vec<super::feed_sources::DesktopFolder> {
+    Vec::new()
+}
+
+/// Linux hides by the leading dot (`feed_sources::scan_folders`).
+pub(crate) fn hidden_entry(_entry: &std::fs::DirEntry) -> bool {
+    false
+}
+
+/// Linux has no navigation pane and no jump list.
+pub(crate) struct ShellParts;
+
+impl ShellParts {
+    pub(crate) fn new(_dir: super::store::DesktopDir, _gui: std::path::PathBuf) -> ShellParts {
+        ShellParts
+    }
+
+    pub(crate) fn sync(
+        &mut self,
+        _state: &crate::desktop::core::state::ModuleState,
+        _tree: &super::feed_sources::DeviceTreeView,
+        _tiles: Option<&crate::desktop::core::tiles::TileModel>,
+    ) {
+    }
+}

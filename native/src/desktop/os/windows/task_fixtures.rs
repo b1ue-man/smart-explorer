@@ -8,7 +8,7 @@ use std::path::Path;
 use winreg::enums::{HKEY_CURRENT_USER, REG_BINARY};
 use winreg::{RegKey, RegValue};
 
-use super::integration::{CLSID_ROOT, HIDE_ICONS, NAMESPACE_ROOT};
+use super::nav_pane::{CLSID_ROOT, HIDE_ICONS, NAMESPACE_ROOT};
 use crate::desktop::core::ledger::{DESKTOP_NAV_CLSID, RUN_VALUE_NAME};
 
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";

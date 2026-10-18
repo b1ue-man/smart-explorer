@@ -228,6 +228,8 @@ windows = { version = "0.58", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
     "Win32_Security",
+    # se Desktop jump list: PKEY_Title for the device entries.
+    "Win32_Storage_EnhancedStorage",
     "Win32_Storage_FileSystem",
     "Win32_System_Com",
     # Remote virtual files: the drag hands the worker thread's data object to
@@ -244,6 +246,8 @@ windows = { version = "0.58", features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
     "Win32_UI_Shell_Common",
+    # se Desktop jump list: IPropertyStore on the device links.
+    "Win32_UI_Shell_PropertiesSystem",
     "Win32_UI_WindowsAndMessaging",
     "Networking_Connectivity",
     # Media launch with a neighboring-files query (Windows.System.Launcher)
