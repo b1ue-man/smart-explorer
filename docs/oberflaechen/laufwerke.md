@@ -65,7 +65,17 @@ Folgt mit DRV-M6 (U17): `se drive devices …`, Einstellungen → Integration, I
 
 ## 6 Tresor-Laufwerke
 
-Folgt mit DRV-M7 (U14): `se drive mount vault://<SITE>`, `requires-unlock`, Sperren. Vorbereitet in DRV-M3: die Quelle `MountSource::Vault { site_id }` (`N/mount/core/mount_source.rs:51-55`), gespeichert nur in `registry-2.json`, und `MountStatus::MountedAt { path }` für die Einhängepfade in `list_mounts` (V2).
+Stand DRV-M7 und VLT-M12 (U14), am Code nachgelesen, nicht gebaut.
+
+- **Einbinden:** `se drive mount vault://<SITE> [--read-write] [--label <NAME>] [--letter <X>|--mount-point <ORDNER>]`. `<SITE>` ist die ID, ein ID-Anfang mit mindestens 4 Zeichen oder die eindeutige Bezeichnung; gespeichert wird die Site-ID (`MountSource::Vault { site_id }`, nur in `registry-2.json`). Ohne `--label` trägt das Laufwerk die Bezeichnung des Tresors. Ein Unterpfad und `vault-store://` werden abgelehnt (`N/cli/drive.rs:396`). Desktop und Android binden über dieselbe Quelle ein (S3-Kontextmenü „Als Laufwerk einhängen“, U29/U31).
+- **Ort:** Windows ein Laufwerksbuchstabe (festes lokales Laufwerk, Abweichung P2: keine eigene Laufwerksart gegen Windows Search, Annahme A13); Linux `$XDG_RUNTIME_DIR/smart-explorer/Tresore/<Name>` auf tmpfs mit Sticky-Bit, außerhalb eines Mounts `1500`, gemountet `1700`. Ein Ordner außerhalb dieses Orts wird beim Start abgelehnt (`N/daemon/os/shared/mount_termination.rs:286`), ein Ort ohne tmpfs vom Host.
+- **Kein Klartext auf der Platte:** Spool-Dateien im Cryptomator-Inhaltsformat unter dem Spool-Schlüssel des Laufwerks, Pfadfelder und Konflikttexte in `journal.jsonl` und `stages.json` versiegelt. Der Spool-Schlüssel liegt mit `spool-wrap` gewickelt in `<AD>/mount-cache/<mount-id>/spool-key.wrapped`; der Laufwerkshost erhält ihn über `Vault::SpoolKey` (Sitzungstoken des Hosts), nie den Masterkey (`N/daemon/os/shared/mount_manager_host.rs:287`). Laufwerke ohne Tresor schreiben ihre Bytes wie bisher.
+- **Status:** Gesperrter Tresor beim Start: `failed:vault_locked` (JSON `status.Failed.detail` beginnt mit `vault_locked: `); mit versiegelten Änderungen `requires-unlock:<n>`, JSON `"recovery": {"requires_unlock": {"pending": <n>}}` (`N/cli/drive.rs:378`). Das Laufwerksfenster zeigt „Tresor gesperrt – wird nach dem Entsperren eingebunden“ ohne Fehlermeldung (`N/app/core/mount_ui_helpers.rs:66`, `:110`).
+- **Sperren:** Der Hintergrunddienst ist Sperrteilnehmer jedes Tresor-Laufwerks (Frist: Ruhezustand 4 s, ausdrücklich und Entfernen 60 s, sonst 15 s). Das Laufwerk veröffentlicht, entfernt saubere Cache-Einträge und hängt aus. `se vault lock` ohne `--keep-unsaved` wird abgelehnt, solange Änderungen nicht veröffentlicht sind (Laufwerk bleibt eingehängt); mit `--keep-unsaved` und bei jeder automatischen Sperre bleiben sie versiegelt. Antwortet ein Laufwerk nicht bis zur Frist, bricht der Dienst es ab (Linux `fusectl`, Windows Job-Objekt) und bestätigt erst danach (`N/daemon/os/shared/mount_lock_participant.rs:173`).
+- **Nach dem Entsperren:** Gesperrte Laufwerke behalten ihren Registry-Eintrag und werden bei jedem Entsperren wieder eingebunden; dabei werden ihre versiegelten Änderungen veröffentlicht (`N/daemon/os/shared/mount_termination.rs:244`). Ein beim Anmelden gesperrter Tresor stellt seine Laufwerke bis zum Entsperren zurück. `se drive unmount` vergisst das Laufwerk wie jedes andere.
+- **Laufwerksende:** Aushängen, Auswerfen außerhalb von se und Absturz des Hosts werden dem Tresor gemeldet; hält danach nichts mehr die Sitzung, sperrt der Tresor. Unter Linux werden die freedesktop-Miniaturbilder von Dateien im Laufwerksordner beim Laufwerksende und beim Sperren entfernt (`N/vault/os/linux_thumbnails.rs:44`); Windows-Miniaturbilder lassen sich nur global abschalten.
+- **Öffnen aus se:** `mount_path_for` liefert den Pfad eines Tresor-Orts auf einem eingehängten Laufwerk (`DriveIpcRequest::MountPathFor { location }`), `ensure_mounted_for` bindet den Tresor dafür bei Bedarf ein (`N/daemon/os/shared/mount_paths.rs:155`, `:189`).
+- **MCP:** über das Werkzeug `se` mit denselben Befehlen; kein eigenes Werkzeug.
 
 ## 7 Android-Dokumentanbieter
 
@@ -91,5 +101,6 @@ Folgt mit DRV-M8 (U23): `docs.*`, Einstellungen „Ordner für Apps bereitstelle
 ## 10 Offene Punkte
 
 - Zum Kompilieren nötig, außerhalb von U06: neue `match`-Zweige für `MountStatus::MountedAt` in `N/app/core/mount_ui_helpers.rs` (`status_label`) und `N/daemon/os/shared/mount_manager_host.rs` (`host_transition_allowed`, `validate_host_status`), für `MountSource::Devices`/`Vault` in `N/daemon/os/shared/mount_source.rs` (`resolve`) und `N/app/core/analytics_mounts.rs` (`open`).
-- Linux-Einhängen, `--mount-point`, `mounted:<Pfad>` in der Praxis: DRV-M4 (U12). Dateimanager: DRV-M5 (U17). Gerätebaum: DRV-M6 (U17). Tresore: DRV-M7 (U14). Android: DRV-M8 (U23).
+- Linux-Einhängen, `--mount-point`, `mounted:<Pfad>` in der Praxis: DRV-M4 (U12). Dateimanager: DRV-M5 (U17). Gerätebaum: DRV-M6 (U17). Android: DRV-M8 (U23).
+- Tresor-Laufwerke (U14): die IPC-Registrierungen von R5 (`MountHostExt`, Sitzungstoken für `Vault::SpoolKey`) und die E2E-Prüfungen über FUSE und Dokany stehen aus.
 - Ende-zu-Ende mit echtem Dokany und FUSE (`drive_task_auto_remount_after_daemon_restart`) läuft nur in der Stapel-Suite (Stufen `windows-core: drive-cli`, `linux-root: drive-fuse`).

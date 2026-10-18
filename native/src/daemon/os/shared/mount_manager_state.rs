@@ -9,20 +9,39 @@ const UPDATE_STOP_PREFIX: &str = "Fuer ein Update beendet: ";
 /// Ends the bookkeeping of an exited host. A host that ended on an update
 /// stop (exit 75, contract V8) with a clean journal and without a failure
 /// report ended like an unmount; otherwise it stays `Failed` and says why.
+/// DRV-M7: the end of a vault drive reaches the vault side, and a drive the
+/// lock of its vault ended stays registered for the next unlock.
 pub(super) fn finish_exit(
     entry: &mut MountEntry,
     exit: super::super::mount_host_process::MountHostExit,
     retention: &mut Retention,
 ) {
+    let end = super::termination::terminated(entry, exit.status.success());
+    let lock_end = end
+        .as_ref()
+        .is_some_and(|end| end.reason == super::termination::MountEndReason::Lock);
+    finish_host_exit(entry, exit, retention, lock_end);
+    if let Some(end) = end {
+        super::termination::after_exit(entry, end, super::termination::notify_vault);
+    }
+}
+
+fn finish_host_exit(
+    entry: &mut MountEntry,
+    exit: super::super::mount_host_process::MountHostExit,
+    retention: &mut Retention,
+    lock_end: bool,
+) {
     clear_host_runtime(entry);
     let update_stop = exit.status.code() == Some(super::super::update_stop::EXIT_UPDATE_STOP);
     let ended_cleanly = exit.status.success() || (update_stop && !entry.host_terminal_failure);
     if ended_cleanly && entry.recovery.is_clean() {
-        let keep = if update_stop {
-            retention.keep_after_update_stop(entry)
-        } else {
-            retention.keeps(entry)
-        };
+        let keep = lock_end
+            || if update_stop {
+                retention.keep_after_update_stop(entry)
+            } else {
+                retention.keeps(entry)
+            };
         finish_clean(entry, keep);
         return;
     }
@@ -85,6 +104,9 @@ fn exit_detail(
         MountRecovery::Unknown => {
             format!("Laufwerk-Host wurde beendet, bevor der lokale Recovery-Status verifiziert werden konnte ({exit}){cause}; der Cache bleibt bis zur erneuten Pruefung erhalten")
         }
+        MountRecovery::RequiresUnlock { pending } => {
+            format!("Laufwerk-Host wurde beendet ({exit}){cause}; {pending} versiegelte Aenderung(en) werden nach dem Entsperren des Tresors gespeichert")
+        }
     }
 }
 
@@ -137,7 +159,7 @@ pub(super) fn fail_process_observation(
         }
         entry.status = MountStatus::Failed {
             detail: bounded_detail(match entry.recovery {
-                MountRecovery::Required => {
+                MountRecovery::Required | MountRecovery::RequiresUnlock { .. } => {
                     format!("{cause}; lokale Aenderungen bleiben fuer Retry im Recovery-Cache")
                 }
                 MountRecovery::Clean => cause,

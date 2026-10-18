@@ -2,18 +2,30 @@ use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, RecvTimeoutError};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine as _;
+
+use crate::mount::os::shared::host_session::{LockAnswer, LockOrder, SpoolKeyAnswer};
 use crate::mount::{MountConfig, MountId, MountRecovery, MountSnapshot, MountStatus};
 use crate::vfs::{Backend, BackendHandle, Scheme, VfsMeta, VfsResult};
 
 use super::ipc_protocol::{
-    read_response, set_stream_timeout, write_request, IpcRequest, IpcResponse,
+    read_response, set_stream_timeout, write_request, IpcRequest, IpcResponse, VaultIpcReply,
+    VaultIpcRequest,
 };
 use super::ipc_storage::{read_ipc_addr, read_token};
+use super::mount_manager::lock_participant::HostLockWatch;
 
 pub use super::ipc_protocol::MountHostConfig;
+
+// DRV-M7: `mount_path_for`, `ensure_mounted_for` (contract V2, S2-V8).
+#[path = "mount_paths.rs"]
+mod paths;
+pub(in crate::daemon) use paths::mounts_for_location;
+pub(crate) use paths::{ensure_mounted_for, mount_path_for};
 
 // Stop/Retry may legitimately wait for one five-minute Dokany callback plus
 // manager cleanup. Keep a margin above the manager's fail-safe stop grace.
@@ -65,6 +77,10 @@ pub struct MountHostSession {
     ipc_addr: SocketAddr,
     session_token: String,
     stop: Mutex<mpsc::Receiver<()>>,
+    /// DRV-M7: the drive serves a vault (`MountBackendScheme::Vault`).
+    vault: bool,
+    /// DRV-M7: the lock channel of a vault drive, started with the loop.
+    lock_watch: OnceLock<Arc<HostLockWatch>>,
 }
 
 impl MountHostSession {
@@ -109,6 +125,64 @@ impl MountHostSession {
             Err(RecvTimeoutError::Timeout) => false,
         }
     }
+
+    /// DRV-M7: the spool key of this vault drive (`Vault::SpoolKey`, checked
+    /// with the session token). The masterkey never reaches the host.
+    pub(crate) fn request_spool_key(&self) -> SpoolKeyAnswer {
+        let answer = host_stream(self.ipc_addr, HOST_ATTACH_TIMEOUT).and_then(|mut stream| {
+            let request = IpcRequest::Vault {
+                token: self.session_token.clone(),
+                req: VaultIpcRequest::SpoolKey {
+                    mount_id: self.id.as_str().to_string(),
+                },
+            };
+            write_request(&mut stream, &request)
+                .map_err(|error| format!("Spool-Schlüssel anfragen: {error}"))?;
+            read_response(&mut stream).map_err(|error| format!("Spool-Schlüssel lesen: {error}"))
+        });
+        match answer {
+            Ok(IpcResponse::Vault(VaultIpcReply::SpoolKey { key })) => {
+                let decoded = URL_SAFE_NO_PAD
+                    .decode(key.expose().as_bytes())
+                    .map(zeroize::Zeroizing::new);
+                match decoded
+                    .ok()
+                    .map(|bytes| crate::vault::SpoolKey::from_bytes(&bytes))
+                {
+                    Some(Ok(key)) => SpoolKeyAnswer::Key(key),
+                    _ => SpoolKeyAnswer::Failed("Spool-Schlüssel ungültig".into()),
+                }
+            }
+            Ok(IpcResponse::Err { msg, code })
+                if code.as_deref() == Some(crate::vault::VAULT_LOCKED_CODE) =>
+            {
+                SpoolKeyAnswer::Locked(msg)
+            }
+            Ok(IpcResponse::Err { msg, .. }) => SpoolKeyAnswer::Failed(msg),
+            Ok(_) => SpoolKeyAnswer::Failed("Unerwartete Antwort auf Vault::SpoolKey".into()),
+            Err(error) => SpoolKeyAnswer::Failed(error),
+        }
+    }
+
+    /// DRV-M7: the next lock order of a vault drive; the first call starts
+    /// the lock channel. Other drives never get one.
+    pub(crate) fn next_lock_order(&self) -> Option<LockOrder> {
+        if !self.vault {
+            return None;
+        }
+        self.lock_watch
+            .get_or_init(|| {
+                HostLockWatch::start(self.ipc_addr, self.id.clone(), self.session_token.clone())
+            })
+            .take_order()
+    }
+
+    /// DRV-M7: the control loop's answer to the lock order it took.
+    pub(crate) fn send_lock_answer(&self, answer: LockAnswer) {
+        if let Some(watch) = self.lock_watch.get() {
+            watch.answer(answer);
+        }
+    }
 }
 
 pub fn connect_mount_host(id: MountId) -> Result<MountHostSession, String> {
@@ -145,7 +219,9 @@ pub fn connect_mount_host(id: MountId) -> Result<MountHostSession, String> {
     }
     set_stream_timeout(&control, None);
 
-    let backend = connect_backend(ipc_addr, scheme.into(), capabilities, &id, backend_token)?;
+    let scheme: Scheme = scheme.into();
+    let vault = scheme == Scheme::Vault;
+    let backend = connect_backend(ipc_addr, scheme, capabilities, &id, backend_token)?;
     let (stop_send, stop_receive) = mpsc::sync_channel(1);
     std::thread::Builder::new()
         .name(format!("mount-control-{}", id.as_str()))
@@ -165,6 +241,8 @@ pub fn connect_mount_host(id: MountId) -> Result<MountHostSession, String> {
         ipc_addr,
         session_token,
         stop: Mutex::new(stop_receive),
+        vault,
+        lock_watch: OnceLock::new(),
     })
 }
 

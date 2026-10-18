@@ -104,13 +104,18 @@ pub(crate) enum VaultIpcRequest {
         purpose: SealPurposeWire,
         items: Vec<String>,
     },
+    /// VLT-M12 (C3.6, contract V1): the spool key of a vault drive, asked by
+    /// its drive host with the host's session token instead of the daemon
+    /// token; never the masterkey.
+    SpoolKey { mount_id: String },
 }
 
 impl VaultIpcRequest {
     /// Whether the request lifts the restriction of a worker started for the
-    /// drive restore (S2 K7): the read-only status of se Desktop does not.
+    /// drive restore (S2 K7): the read-only status of se Desktop does not,
+    /// nor does the key request of a drive host the worker started itself.
     pub(crate) fn promotes_daemon(&self) -> bool {
-        !matches!(self, Self::Status)
+        !matches!(self, Self::Status | Self::SpoolKey { .. })
     }
 }
 
@@ -143,6 +148,10 @@ pub(crate) enum VaultIpcReply {
     },
     Unsealed {
         items: Vec<SecretText>,
+    },
+    /// The 32-byte spool key as Base64url without padding.
+    SpoolKey {
+        key: SecretText,
     },
 }
 

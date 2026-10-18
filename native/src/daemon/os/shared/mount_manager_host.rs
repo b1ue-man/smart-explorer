@@ -272,8 +272,58 @@ impl MountManager {
             entry.pending_host_failure = None;
         }
         entry.host_terminal_failure = terminal_failure;
+        // DRV-M7: a mounted vault drive reaches the plaintext boundary.
+        super::termination::reported(&entry.config, &status);
         entry.status = status;
         Ok(snapshot(entry))
+    }
+}
+
+impl MountManager {
+    /// DRV-M7 (C3.6, contract V1): the answer to `Vault::SpoolKey` of the
+    /// authenticated host of `mount_id` (`ipc_vault.rs`; the session token
+    /// was checked before). Only the spool key of a vault drive leaves the
+    /// worker, as Base64url; a locked vault answers `vault_locked`.
+    pub(in crate::daemon) fn spool_key_reply(
+        &self,
+        mount_id: &str,
+    ) -> super::super::ipc_protocol::IpcResponse {
+        use super::super::ipc_protocol::{IpcResponse, SecretText, VaultIpcReply};
+        use base64::Engine as _;
+        match self.vault_spool_key(mount_id) {
+            Ok(key) => IpcResponse::Vault(VaultIpcReply::SpoolKey {
+                key: SecretText::new(
+                    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key.expose()),
+                ),
+            }),
+            Err(error) => IpcResponse::Err {
+                code: crate::vault::locked_site(&error)
+                    .map(|_| crate::vault::VAULT_LOCKED_CODE.to_string()),
+                msg: error.to_string(),
+            },
+        }
+    }
+
+    fn vault_spool_key(&self, mount_id: &str) -> std::io::Result<crate::vault::SpoolKey> {
+        let id = MountId::parse(mount_id)?;
+        let site = {
+            let state = self.state_guard().map_err(std::io::Error::other)?;
+            let entry = state.get(id.as_str()).ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::NotFound, "Unbekannter Laufwerk-Host")
+            })?;
+            super::termination::vault_site(&entry.config)
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "Das Laufwerk ist kein Tresor-Laufwerk",
+                    )
+                })?
+        };
+        let cache_root = crate::mount::prepare_spool_root(
+            &crate::support_dirs::app_data_dir().join("mount-cache"),
+        )?;
+        crate::vault::vault_drive_bridge().spool_key(&site, &cache_root.join(id.as_str()))
     }
 }
 

@@ -1,3 +1,4 @@
+//! The backend behind a drive's source, resolved in the worker.
 use crate::mount::{MountConfig, MountSource, PeerMountTarget};
 use crate::vfs::BackendHandle;
 
@@ -51,8 +52,14 @@ pub(super) fn resolve(config: &MountConfig, host: &ShareHost) -> Result<BackendH
         MountSource::Devices => {
             Err("Gerätebaum-Laufwerke bindet diese Version noch nicht ein".into())
         }
-        MountSource::Vault { .. } => {
-            Err("Tresor-Laufwerke bindet diese Version noch nicht ein".into())
-        }
+        // DRV-M7 (contract V2, S2-V1): the cleartext view of the unlocked
+        // site in this worker; a locked site keeps its code, so the start
+        // path defers the drive until the unlock (`mount_termination.rs`).
+        MountSource::Vault { site_id } => crate::vault::vault_drive_bridge()
+            .open_backend(site_id)
+            .map_err(|error| match error.code() {
+                Some(code) => format!("{code}: {error}"),
+                None => error.to_string(),
+            }),
     }
 }

@@ -5,17 +5,45 @@ use super::types::{MountConfig, MountStatus};
 /// Daemon-owned knowledge about retryable local mounted-drive state.
 /// `Unknown` is deliberately retained until the isolated host can audit the
 /// journal under its exclusive cache lease.
+///
+/// `RequiresUnlock` (DRV-M7, contract V2): a vault drive keeps `pending`
+/// sealed changes, journal records and namespace intents that only the
+/// unlocked vault can open; they are published after the next unlock. Wire
+/// form `{"requires_unlock":{"pending":<n>}}`; the unit values keep theirs.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MountRecovery {
     Clean,
     Required,
     #[default]
     Unknown,
+    #[serde(rename = "requires_unlock")]
+    RequiresUnlock {
+        pending: u32,
+    },
 }
 
 impl MountRecovery {
     pub const fn is_clean(self) -> bool {
         matches!(self, Self::Clean)
+    }
+
+    /// A vault drive whose vault is locked, with `pending` journal records
+    /// (counted without the key): clean without records.
+    pub fn awaiting_unlock(pending: usize) -> Self {
+        match pending {
+            0 => Self::Clean,
+            count => Self::RequiresUnlock {
+                pending: u32::try_from(count).unwrap_or(u32::MAX),
+            },
+        }
+    }
+
+    /// Sealed changes that wait for the vault's unlock, if any.
+    pub const fn pending_unlock(self) -> Option<u32> {
+        match self {
+            Self::RequiresUnlock { pending } => Some(pending),
+            _ => None,
+        }
     }
 
     pub const fn requires_retention(self) -> bool {

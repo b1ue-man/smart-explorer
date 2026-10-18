@@ -2,7 +2,8 @@
 //! sessions of the desktop live in this process (`crate::vault::register`);
 //! the GUI, `se` and `se mcp` unlock, lock, open and seal through here.
 //! `ipc.rs` checked the daemon token before any request reaches this file
-//! (arm in `ipc_host_ext.rs`). Replies and logs carry site IDs, labels and
+//! (arm in `ipc_host_ext.rs`); `SpoolKey` carries the session token of a
+//! drive host instead (VLT-M12). Replies and logs carry site IDs, labels and
 //! states only: never a password, a path inside a vault or a cleartext name.
 use std::io;
 use std::net::TcpStream;
@@ -32,7 +33,7 @@ pub(crate) fn hosts_vault_register() -> bool {
 
 /// Serves one authenticated `IpcRequest::Vault`. `Open` keeps the stream.
 pub(in crate::daemon) fn serve(
-    _host: &ShareHost,
+    host: &ShareHost,
     mut stream: TcpStream,
     req: VaultIpcRequest,
 ) -> io::Result<()> {
@@ -56,6 +57,8 @@ pub(in crate::daemon) fn serve(
             purpose,
             items,
         } => unseal(&site, purpose, &items),
+        // VLT-M12: `ipc.rs` checked the session token of the drive host.
+        VaultIpcRequest::SpoolKey { mount_id } => host.mounts.spool_key_reply(&mount_id),
     };
     write_response(&mut stream, &response)
 }

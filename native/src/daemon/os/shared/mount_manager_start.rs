@@ -8,6 +8,11 @@
 //! drives share one; the backend is rooted with the POSIX name rules, and
 //! the FUSE host starts. Only Android starts no drive (it offers folders
 //! through its documents provider, DRV-M8).
+//!
+//! DRV-M7 adds vault drives (`MountSource::Vault`): the hooks into the vault
+//! side are installed at the first one; a locked vault defers the drive
+//! until its unlock (`mount_termination.rs`); a running drive holds the
+//! vault session; under Linux it appears only below the vault place.
 use crate::mount::{MountConfig, MountSnapshot, MountStatus};
 
 use super::super::ipc_host::ShareHost;
@@ -28,6 +33,10 @@ impl MountManager {
         let key = config.id.as_str().to_string();
         self.forget_update_stop(&config.id);
         start_cache::insert(self, &key, config.clone(), registry_recorded)?;
+        let vault_site = super::termination::vault_site(&config).map(str::to_string);
+        if vault_site.is_some() {
+            self.install_vault_hooks(host);
+        }
 
         #[cfg(not(any(windows, target_os = "linux")))]
         {
@@ -44,8 +53,8 @@ impl MountManager {
 
         #[cfg(any(windows, target_os = "linux"))]
         {
-            let cache_root = match start_cache::prepare(self, &key, &config.id) {
-                Ok(path) => path,
+            let (cache_root, pending) = match start_cache::prepare(self, &key, &config.id) {
+                Ok(prepared) => prepared,
                 Err(error) => return self.fail_start(&key, error),
             };
             #[cfg(windows)]
@@ -61,6 +70,9 @@ impl MountManager {
                         .map_err(|error| format!("Laufwerk-Wurzel absichern: {error}"))
                 }) {
                     Ok(backend) => backend,
+                    Err(error) if super::termination::is_vault_locked(&error) => {
+                        return self.defer_until_unlock(&key, error, pending)
+                    }
                     Err(error) => return self.fail_start(&key, error),
                 };
             let capabilities =
@@ -103,7 +115,20 @@ impl MountManager {
                 entry.capabilities = Some(capabilities);
                 entry.launch_token = Some(launch_token.clone());
             }
-            match spawn_host(&config, &launch_token, ipc_addr, &cache_root) {
+            // A running vault drive holds the session of its vault (C3.3).
+            if let Some(site) = &vault_site {
+                let place = config.location_directory().map(std::path::PathBuf::from);
+                if let Err(error) = crate::vault::vault_drive_bridge().started(site, &key, place) {
+                    let cause = format!("{}: {error}", crate::vault::VAULT_LOCKED_CODE);
+                    return self.defer_until_unlock(&key, cause, pending);
+                }
+            }
+            let spawned = spawn_host(&config, &launch_token, ipc_addr, &cache_root);
+            if let (Err(_), Some(site)) = (&spawned, &vault_site) {
+                // No host ran: the consumer goes without the lock rule.
+                crate::vault::vault_drive_bridge().ended(site, &key, None, true);
+            }
+            match spawned {
                 Ok(child) => {
                     let mut state = self.state_guard()?;
                     let entry = state
@@ -155,6 +180,9 @@ impl MountManager {
                     "Der Einhängeort {} gehört schon zu einem anderen Laufwerk",
                     folder.display()
                 ));
+            }
+            if let Some(refusal) = super::termination::vault_place_refusal(&config) {
+                return Err(refusal);
             }
             return Ok((config, false));
         }
