@@ -5,17 +5,19 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::creds::{Protocol, SavedConnection};
 use crate::mount::{
-    BackendRoot, DriveLetter, DriveSelection, MountConfig, MountId, MountMode, MountSnapshot,
-    MountSource, MountStatus, PeerMountTarget,
+    DriveLetter, DriveSelection, MountConfig, MountId, MountMode, MountSnapshot, MountStatus,
 };
 
 #[path = "drive_options.rs"]
 mod drive_options;
-use drive_options::MountArgs;
+use drive_options::{absolute_folder, source_from_spec, MountArgs, UnmountArgs};
 #[path = "drive_set.rs"]
 mod drive_set;
+// DRV-M4: runtime, install answer, folder column and unmount under Linux.
+#[cfg(target_os = "linux")]
+#[path = "drive_output_linux.rs"]
+mod drive_output_linux;
 
 const START_TIMEOUT: Duration = Duration::from_secs(120);
 
@@ -27,16 +29,20 @@ pub(super) struct DriveArgs {
 
 #[derive(Subcommand)]
 enum DriveCommand {
-    #[command(about = "Check the required Dokany runtime and driver")]
+    #[command(about = "Check the drive runtime (Windows: Dokany, Linux: FUSE)")]
     Runtime(OutputArgs),
-    #[command(about = "Install the pinned official Dokany runtime for Windows drives")]
+    #[command(
+        about = "Install the pinned official Dokany runtime (Windows); name the FUSE package (Linux)"
+    )]
     InstallRuntime(InstallRuntimeArgs),
-    #[command(about = "Mount a saved remote or Share peer as a Windows drive")]
+    #[command(
+        about = "Mount a saved remote or Share peer as a drive (Windows: letter, Linux: folder)"
+    )]
     Mount(MountArgs),
     #[command(about = "List drives managed by Smart Explorer")]
     List(OutputArgs),
-    #[command(about = "Unmount a managed drive by mount id or drive letter")]
-    Unmount(SelectArgs),
+    #[command(about = "Unmount a managed drive by mount id, drive letter or folder")]
+    Unmount(UnmountArgs),
     #[command(about = "Retry a failed managed drive")]
     Retry(SelectArgs),
     #[command(about = "Change options of a managed drive, such as mounting it again at login")]
@@ -80,6 +86,14 @@ pub(super) fn run(args: DriveArgs) -> Result<i32, String> {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn install_runtime(args: InstallRuntimeArgs) -> Result<i32, String> {
+    // se installs no system package under Linux; `--msi` is Windows only.
+    let _ = args.msi;
+    drive_output_linux::install_runtime(args.json)
+}
+
+#[cfg(not(target_os = "linux"))]
 fn install_runtime(args: InstallRuntimeArgs) -> Result<i32, String> {
     let outcome = crate::mount::install_drive_runtime(args.msi.as_deref())?;
     if args.json {
@@ -95,6 +109,12 @@ fn install_runtime(args: InstallRuntimeArgs) -> Result<i32, String> {
     Ok(outcome.exit_code())
 }
 
+#[cfg(target_os = "linux")]
+fn runtime(args: OutputArgs) -> Result<i32, String> {
+    drive_output_linux::runtime(args.json)
+}
+
+#[cfg(not(target_os = "linux"))]
 fn runtime(args: OutputArgs) -> Result<i32, String> {
     let info = crate::mount::drive_runtime_info()?;
     if args.json {
@@ -118,6 +138,23 @@ fn runtime(args: OutputArgs) -> Result<i32, String> {
 }
 
 fn mount(args: MountArgs) -> Result<i32, String> {
+    #[cfg(target_os = "linux")]
+    if let Some(refusal) =
+        drive_output_linux::refuse_windows_options(&args.letter, args.system_runtime)
+    {
+        eprintln!("se: {refusal}");
+        return Ok(2);
+    }
+    #[cfg(not(target_os = "linux"))]
+    if args.mount_point.is_some() {
+        eprintln!("se: Einhängeorte gibt es nur unter Linux; nutze --letter");
+        return Ok(2);
+    }
+    let folder = args
+        .mount_point
+        .as_deref()
+        .map(absolute_folder)
+        .transpose()?;
     let (source, _display_label) = source_from_spec(&args.target)?;
     let drive = parse_drive_selection(&args.letter)?;
     let mode = if args.read_write {
@@ -157,6 +194,7 @@ fn mount(args: MountArgs) -> Result<i32, String> {
     })
     .map(|config| config.with_root_security(root_security))
     .map(|config| config.with_auto_remount(args.auto_remount))
+    .and_then(|config| config.with_location_directory(folder))
     .map_err(|error| format!("invalid drive configuration: {error}"))?;
     let started = crate::daemon::start_mount(config)?;
     let snapshot = wait_until_started(started)?;
@@ -181,9 +219,21 @@ fn list(args: OutputArgs) -> Result<i32, String> {
     Ok(0)
 }
 
-fn unmount(args: SelectArgs) -> Result<i32, String> {
+fn unmount(args: UnmountArgs) -> Result<i32, String> {
     let id = resolve_selector(&args.selector)?;
-    let snapshot = crate::daemon::stop_mount(id)?;
+    // Linux: the folder is unmounted first, like a file manager's eject; a
+    // busy drive stays mounted unless --force (DRV-M4).
+    #[cfg(target_os = "linux")]
+    let before = drive_output_linux::release_before_stop(&id, args.force)?;
+    #[cfg(not(target_os = "linux"))]
+    let _ = args.force;
+    let snapshot = match crate::daemon::stop_mount(id) {
+        Ok(snapshot) => snapshot,
+        #[cfg(target_os = "linux")]
+        Err(error) => drive_output_linux::stopped_meanwhile(before, error)?,
+        #[cfg(not(target_os = "linux"))]
+        Err(error) => return Err(error),
+    };
     print_snapshot(&snapshot, args.json)?;
     Ok(exit_for_status(&snapshot.status))
 }
@@ -236,6 +286,10 @@ fn resolve_selector(selector: &str) -> Result<MountId, String> {
             })
             .ok_or_else(|| format!("no managed drive is mounted at {wanted}"));
     }
+    #[cfg(target_os = "linux")]
+    if let Some(id) = drive_output_linux::select_by_folder(trimmed)? {
+        return Ok(id);
+    }
     MountId::parse(trimmed).map_err(|error| error.to_string())
 }
 
@@ -255,149 +309,6 @@ fn parse_drive_selection(value: &str) -> Result<DriveSelection, String> {
     DriveLetter::parse(letter)
         .map(DriveSelection::Letter)
         .map_err(|error| error.to_string())
-}
-
-fn source_from_spec(spec: &str) -> Result<(MountSource, String), String> {
-    let spec = spec.trim();
-    if spec.is_empty() {
-        return Err("drive source is empty".into());
-    }
-    if let Some((connection, path)) = super::target::saved_shorthand(spec)? {
-        return saved_source(connection, &path);
-    }
-    if let Some((target, root)) = crate::share::PeerOpenTarget::from_endpoint(spec) {
-        let label = target.endpoint_prefix();
-        let target = match target {
-            crate::share::PeerOpenTarget::Direct { contact_id } => {
-                PeerMountTarget::Direct { contact_id }
-            }
-            crate::share::PeerOpenTarget::RoomDevice { room_id, device_id } => {
-                PeerMountTarget::RoomDevice { room_id, device_id }
-            }
-        };
-        return Ok((
-            MountSource::Peer {
-                target,
-                root: parse_root(&root)?,
-            },
-            label,
-        ));
-    }
-    if let Some(rest) = spec.strip_prefix("gdrive://") {
-        let root = format!("/{}", rest.trim_start_matches('/'));
-        return Ok((
-            MountSource::GoogleDrive {
-                account: "cloud:gdrive".into(),
-                root: parse_root(&root)?,
-            },
-            "Google Drive".into(),
-        ));
-    }
-    if crate::net::is_unc(spec) {
-        return saved_unc_source(spec);
-    }
-    if crate::connect::is_remote_url(spec) {
-        return saved_url_source(spec);
-    }
-    Err("only saved remotes, Google Drive, and Smart Explorer Share peers can be mounted".into())
-}
-
-fn saved_url_source(spec: &str) -> Result<(MountSource, String), String> {
-    let (protocol, user, host, port, path) = crate::connect::parse_remote_url(spec)
-        .ok_or_else(|| "invalid saved remote URL".to_string())?;
-    let connections = crate::creds::load_connections_checked()?;
-    let matches = connections.into_iter().filter(|connection| {
-        connection.protocol == protocol
-            && connection.user == user
-            && connection.host.eq_ignore_ascii_case(&host)
-            && connection.port == port
-            && remote_path_is_within(&path, &connection.root)
-    });
-    let connection = select_longest_root(matches, false)?.ok_or_else(|| {
-        "no saved connection authorizes that remote path; save the remote first".to_string()
-    })?;
-    saved_source(connection, &path)
-}
-
-fn saved_unc_source(spec: &str) -> Result<(MountSource, String), String> {
-    let path = spec.replace('\\', "/");
-    let connections = crate::creds::load_connections_checked()?;
-    let matches = connections.into_iter().filter(|connection| {
-        connection.protocol == Protocol::Share && unc_path_is_within(&path, &connection.root)
-    });
-    let connection = select_longest_root(matches, true)?.ok_or_else(|| {
-        "no saved network-share connection authorizes that UNC path; save it first".to_string()
-    })?;
-    saved_source(connection, &path)
-}
-
-fn saved_source(connection: SavedConnection, path: &str) -> Result<(MountSource, String), String> {
-    let label = connection.display();
-    Ok((
-        MountSource::SavedRemote {
-            account: connection.account(),
-            root: parse_root(path)?,
-        },
-        label,
-    ))
-}
-
-fn select_longest_root(
-    matches: impl Iterator<Item = SavedConnection>,
-    unc: bool,
-) -> Result<Option<SavedConnection>, String> {
-    let mut matches = matches.collect::<Vec<_>>();
-    matches.sort_by_key(|connection| std::cmp::Reverse(normalized(&connection.root).len()));
-    let Some(longest) = matches.first() else {
-        return Ok(None);
-    };
-    let length = normalized(&longest.root).len();
-    matches.retain(|connection| normalized(&connection.root).len() == length);
-    matches.dedup_by(|left, right| left.account() == right.account());
-    if matches.len() > 1 {
-        let accounts = matches
-            .iter()
-            .map(SavedConnection::account)
-            .collect::<Vec<_>>()
-            .join(", ");
-        let kind = if unc { "network share" } else { "remote URL" };
-        return Err(format!("ambiguous saved {kind}: {accounts}"));
-    }
-    Ok(matches.pop())
-}
-
-fn remote_path_is_within(path: &str, root: &str) -> bool {
-    path_is_within(&normalized(path), &normalized(root), false)
-}
-
-fn unc_path_is_within(path: &str, root: &str) -> bool {
-    path_is_within(&normalized(path), &normalized(root), true)
-}
-
-fn path_is_within(path: &str, root: &str, ignore_case: bool) -> bool {
-    let (path, root) = if ignore_case {
-        (path.to_lowercase(), root.to_lowercase())
-    } else {
-        (path.to_string(), root.to_string())
-    };
-    path == root
-        || root == "/"
-        || path
-            .strip_prefix(root.trim_end_matches('/'))
-            .is_some_and(|suffix| suffix.starts_with('/'))
-}
-
-fn normalized(path: &str) -> String {
-    let path = path.trim().replace('\\', "/");
-    if path == "/" || path == "//" {
-        path
-    } else {
-        path.trim_end_matches('/').to_string()
-    }
-}
-
-fn parse_root(path: &str) -> Result<BackendRoot, String> {
-    BackendRoot::parse(&normalized(path)).map_err(|error| error.to_string())
 }
 
 fn bounded_label(label: &str) -> String {
@@ -423,6 +334,15 @@ fn print_snapshot(snapshot: &MountSnapshot, json: bool) -> Result<(), String> {
 }
 
 fn print_snapshot_text(snapshot: &MountSnapshot) {
+    println!("{}", snapshot_line(snapshot));
+}
+
+/// `drive\t<id>\t<letter|auto>\t<mode>\t<status>\t<label>`; under Linux
+/// column 3 is the folder (DRV-M4).
+fn snapshot_line(snapshot: &MountSnapshot) -> String {
+    #[cfg(target_os = "linux")]
+    let requested = drive_output_linux::folder_column(snapshot);
+    #[cfg(not(target_os = "linux"))]
     let requested = match snapshot.config.drive {
         DriveSelection::Automatic => "auto".to_string(),
         DriveSelection::Letter(letter) => letter.to_string(),
@@ -431,14 +351,14 @@ fn print_snapshot_text(snapshot: &MountSnapshot) {
         MountMode::ReadOnly => "read-only",
         MountMode::ReadWrite => "read-write",
     };
-    println!(
+    format!(
         "drive\t{}\t{}\t{}\t{}\t{}",
         snapshot.config.id,
         requested,
         mode,
         status_text(&snapshot.status),
         clean(&snapshot.config.label),
-    );
+    )
 }
 
 fn status_text(status: &MountStatus) -> String {

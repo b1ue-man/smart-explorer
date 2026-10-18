@@ -183,6 +183,8 @@ impl App {
         }
         let mut open = true;
         let mut action: Option<(bool, crate::mount::MountId)> = None;
+        // DRV-M4: the folder an eject unmounts first (Linux).
+        let mut eject_folder: Option<std::path::PathBuf> = None;
         let mut options: Option<(crate::mount::MountId, bool)> = None;
         let mut install_runtime = false;
         egui::Window::new("Smart-Explorer-Laufwerke")
@@ -265,6 +267,7 @@ impl App {
                                     .clicked()
                                 {
                                     action = Some((false, mount.config.id.clone()));
+                                    eject_folder = mounted_folder(&mount.status);
                                 }
                             }
                         });
@@ -292,7 +295,7 @@ impl App {
                 });
             } else {
                 self.spawn_mount_action("Laufwerk wird ausgeworfen", move || {
-                    crate::daemon::stop_mount(id).map(MountUiResult::Snapshot)
+                    eject(id, eject_folder)
                 });
             }
         }
@@ -316,4 +319,43 @@ impl App {
             let _ = sender.send(result);
         });
     }
+}
+
+/// The folder a Linux drive is mounted at (DRV-M4); Windows ejects by letter.
+fn mounted_folder(status: &crate::mount::MountStatus) -> Option<std::path::PathBuf> {
+    match status {
+        crate::mount::MountStatus::MountedAt { path } if cfg!(target_os = "linux") => {
+            Some(path.clone())
+        }
+        _ => None,
+    }
+}
+
+/// „Auswerfen“. Linux (DRV-M4): the folder is unmounted first, like a file
+/// manager's eject; a busy drive stays mounted and says why. The host then
+/// ends like on an unmount request, possibly before the stop arrives.
+fn eject(
+    id: crate::mount::MountId,
+    folder: Option<std::path::PathBuf>,
+) -> Result<MountUiResult, String> {
+    #[cfg(target_os = "linux")]
+    if let Some(folder) = folder {
+        crate::mount::unmount_drive_folder(&folder, false).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::ResourceBusy {
+                format!(
+                    "Laufwerk wird noch benutzt: {} (offene Dateien oder Arbeitsverzeichnisse). Schließe sie und wirf erneut aus; im Terminal erzwingt `se drive unmount --force {id}` das Auswerfen.",
+                    folder.display()
+                )
+            } else {
+                format!("Laufwerk aushängen: {error}")
+            }
+        })?;
+        return match crate::daemon::stop_mount(id) {
+            Ok(snapshot) => Ok(MountUiResult::Snapshot(snapshot)),
+            Err(_) => crate::daemon::list_mounts().map(MountUiResult::List),
+        };
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = folder;
+    crate::daemon::stop_mount(id).map(MountUiResult::Snapshot)
 }

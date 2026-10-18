@@ -76,6 +76,8 @@ mod path_dialect_tests;
 mod path_sealer;
 #[path = "core/peer_names.rs"]
 pub(crate) mod peer_names;
+#[path = "core/pending_attributes.rs"]
+mod pending_attributes;
 #[path = "core/range_read.rs"]
 mod range_read;
 #[path = "core/recovery.rs"]
@@ -170,9 +172,16 @@ pub use spool::prepare_spool_root;
 pub use spool_storage::{MountStorage, PlainSpoolStorage, SpoolFile, SpoolStorage};
 pub use types::{
     BackendRoot, Baseline, DeleteToken, DriveLetter, DriveSelection, EntryCondition, FlushOutcome,
-    HandleId, MountConfig, MountConflict, MountId, MountMode, MountRootSecurity,
+    HandleId, MountConfig, MountConflict, MountId, MountLocation, MountMode, MountRootSecurity,
     MountRuntimeConfig, MountSource, MountStatus, NamespaceOutcome, OpenDisposition,
     OpenFileOptions, PeerMountTarget, RenameOutcome,
+};
+// DRV-M4: the Linux runtime report, its install answer and the unmount from
+// outside the host (`se drive`, the desktop window).
+#[cfg(target_os = "linux")]
+pub use os::linux_os::{
+    fuse_install_outcome, fuse_runtime_report, unmount_drive_folder, FuseInstallOutcome,
+    FuseRuntimeReport,
 };
 #[cfg_attr(not(windows), allow(unused_imports))]
 pub(crate) use windows_access::{
@@ -310,8 +319,10 @@ impl DriveRuntimeInstallOutcome {
     }
 }
 
+/// Windows mounts drives through Dokany, Linux through FUSE (DRV-M4);
+/// Android offers folders through its documents provider instead (DRV-M8).
 pub const fn drive_mount_supported() -> bool {
-    cfg!(windows)
+    cfg!(any(windows, target_os = "linux"))
 }
 
 pub fn drive_runtime_info() -> Result<DriveRuntimeInfo, String> {
@@ -344,10 +355,11 @@ pub fn install_drive_runtime(
 }
 
 /// Recognizes the exact private invocation used by the daemon to start the
-/// isolated Windows filesystem host. Authentication still requires the
-/// one-use capability environment created by the daemon. A host that ended on
-/// an update-stop request (contract V8) leaves the process here with
-/// `EXIT_UPDATE_STOP` (75), so no supervisor takes it for a crash.
+/// isolated filesystem host (Windows: Dokany, Linux: FUSE, DRV-M4).
+/// Authentication still requires the one-use capability environment created
+/// by the daemon. A host that ended on an update-stop request (contract V8)
+/// leaves the process here with `EXIT_UPDATE_STOP` (75), so no supervisor
+/// takes it for a crash.
 pub fn run_host_if_requested(arguments: &[std::ffi::OsString]) -> Option<Result<(), String>> {
     if arguments.len() != 2 || arguments[0] != std::ffi::OsStr::new("--mount-host") {
         return None;
@@ -361,11 +373,18 @@ pub fn run_host_if_requested(arguments: &[std::ffi::OsString]) -> Option<Result<
         id.and_then(os::windows::run_mount_host)
             .map(exit_on_update_stop),
     );
-    #[cfg(not(windows))]
-    Some(id.and_then(|_| Err("virtual drive hosts are supported only on Windows".to_string())))
+    #[cfg(target_os = "linux")]
+    return Some(
+        id.and_then(os::linux_os::run_mount_host)
+            .map(exit_on_update_stop),
+    );
+    #[cfg(not(any(windows, target_os = "linux")))]
+    Some(id.and_then(|_| {
+        Err("virtual drive hosts are supported only on Windows and Linux".to_string())
+    }))
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 fn exit_on_update_stop(exit: os::shared::host_session::HostExit) {
     if exit == os::shared::host_session::HostExit::UpdateStop {
         std::process::exit(exit.exit_code());

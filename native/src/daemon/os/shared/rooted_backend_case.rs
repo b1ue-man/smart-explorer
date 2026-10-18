@@ -1,3 +1,4 @@
+use crate::mount::PathDialect;
 use crate::vfs::{BackendHandle, CachingBackend, VfsMeta};
 use std::io;
 
@@ -13,11 +14,15 @@ pub(super) struct PathResolver<'a> {
     pub root_ancestors: &'a [String],
     pub case_sensitive: bool,
     pub project_peer_names: bool,
+    /// POSIX (Linux FUSE, DRV-M4): Share names match exactly and are never
+    /// aliased.
+    pub dialect: PathDialect,
 }
 
 impl PathResolver<'_> {
     pub fn resolve(&self, components: &[String], allow_missing: bool) -> io::Result<String> {
-        self.walk(components, allow_missing, None).map(|(path, _)| path)
+        self.walk(components, allow_missing, None)
+            .map(|(path, _)| path)
     }
 
     /// One fresh terminal observation supplies both link validation and the
@@ -27,10 +32,16 @@ impl PathResolver<'_> {
         metadata.ok_or_else(|| io::Error::other("resolved stat has no terminal metadata"))
     }
 
-    fn walk(&self, components: &[String], allow_missing: bool,
-        terminal: Option<&BackendHandle>) -> io::Result<(String, Option<VfsMeta>)> {
-        let root_metadata = self.root_validator
-            .map(|validator| validate_root(validator, self.root_ancestors)).transpose()?;
+    fn walk(
+        &self,
+        components: &[String],
+        allow_missing: bool,
+        terminal: Option<&BackendHandle>,
+    ) -> io::Result<(String, Option<VfsMeta>)> {
+        let root_metadata = self
+            .root_validator
+            .map(|validator| validate_root(validator, self.root_ancestors))
+            .transpose()?;
         let mut current = self.root.to_string();
         if components.is_empty() {
             let metadata = match terminal {
@@ -63,7 +74,10 @@ impl PathResolver<'_> {
                         Some((metadata, alias))
                     }
                     None if allow_missing => {
-                        if self.project_peer_names && crate::mount::peer_names::is_peer_alias(requested) {
+                        if self.project_peer_names
+                            && self.dialect == PathDialect::Windows
+                            && crate::mount::peer_names::is_peer_alias(requested)
+                        {
                             return Err(not_found());
                         }
                         missing = true;
@@ -111,7 +125,18 @@ impl PathResolver<'_> {
         Ok((current, None))
     }
 
-    fn child(&self, parent: &str, requested: &str) -> io::Result<Option<(VfsMeta, Option<String>)>> {
+    fn child(
+        &self,
+        parent: &str,
+        requested: &str,
+    ) -> io::Result<Option<(VfsMeta, Option<String>)>> {
+        if self.project_peer_names && self.dialect == PathDialect::Posix {
+            return crate::mount::peer_names::resolve_peer_child_in(
+                self.backend.list_dir(parent)?,
+                requested,
+                PathDialect::Posix,
+            );
+        }
         if self.project_peer_names {
             if !crate::mount::peer_names::is_peer_alias(requested) {
                 // Keep indexed normal navigation. Ambiguous original spellings
@@ -120,7 +145,8 @@ impl PathResolver<'_> {
                     .map(|child| child.map(|metadata| (metadata, None)));
             }
             return crate::mount::peer_names::resolve_peer_child(
-                self.backend.list_dir(parent)?, requested,
+                self.backend.list_dir(parent)?,
+                requested,
             );
         }
         unique_child(self.backend, self.case_cache, parent, requested)

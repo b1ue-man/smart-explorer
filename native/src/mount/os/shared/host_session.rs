@@ -309,8 +309,15 @@ fn run_until_stopped(
             let detail = "the mounted drive stopped after a callback or control failure";
             return finish(platform, control, engine, Some(detail), HostExit::Stopped);
         }
-        if let VolumePoll::Ended(detail) = platform.poll_volume() {
-            return finish(platform, control, engine, Some(detail), HostExit::Stopped);
+        match platform.poll_volume() {
+            VolumePoll::Running => {}
+            VolumePoll::Ended(detail) => {
+                return finish(platform, control, engine, Some(detail), HostExit::Stopped)
+            }
+            // Ejected outside the host (DRV-M4): like an unmount request.
+            VolumePoll::Unmounted => {
+                return finish(platform, control, engine, None, HostExit::Stopped)
+            }
         }
         match platform.deliver_changes() {
             Ok(()) => notification_error_reported = false,
@@ -350,10 +357,17 @@ fn close_and_finalize(
     let watchdog_ok = platform.shutdown();
     let prior_failure = prior_failure.or((!watchdog_ok)
         .then_some("the mounted drive shutdown watchdog stopped after an internal failure"));
+    // Only a frontend that knows the cause better than its poll text sets
+    // one (Linux kernel request timeout); every other report is unchanged.
+    let cause = platform.failure_cause();
+    let prior_failure = cause.as_deref().or(prior_failure);
     match engine.dirty_entries() {
         Ok(entries) if !entries.is_empty() => Err(report_failure_with_recovery(
             control,
-            &recovery_detail(&entries),
+            &match &cause {
+                Some(cause) => format!("{cause}; {}", recovery_detail(&entries)),
+                None => recovery_detail(&entries),
+            },
             MountRecovery::Required,
         )),
         Err(_) => Err(report_failure_with_recovery(
@@ -380,6 +394,7 @@ fn close_and_finalize(
 fn mounted_status(location: VolumeLocation) -> MountStatus {
     match location {
         VolumeLocation::Drive(drive) => MountStatus::Mounted { drive },
+        VolumeLocation::Directory(path) => MountStatus::MountedAt { path },
     }
 }
 
@@ -396,6 +411,9 @@ fn conflict_status(location: VolumeLocation, first: &(String, EntryCondition)) -
             path: path.clone(),
             detail,
         },
+        // `Conflict` names a drive letter; a folder drive reports where it
+        // is, and the journal keeps the conflict for the unmount report.
+        VolumeLocation::Directory(path) => MountStatus::MountedAt { path },
     }
 }
 

@@ -6,7 +6,7 @@
 //! host of v0.5.182.
 use std::any::Any;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::daemon::MountHostConfig;
@@ -17,9 +17,11 @@ use crate::mount::{CacheSpaceProbe, DriveLetter, MountEngine, MountId, PathDiale
 pub(crate) type HostLease = Box<dyn Any + Send>;
 
 /// Where the mounted volume is reachable.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum VolumeLocation {
     Drive(DriveLetter),
+    /// A folder (Linux FUSE, DRV-M4); reported as `MountStatus::MountedAt`.
+    Directory(PathBuf),
 }
 
 /// Failure of a platform step before the volume exists, with the status
@@ -39,6 +41,9 @@ pub(crate) enum VolumePoll {
     /// The volume ended without an unmount request; the text is the failure
     /// detail the host reports.
     Ended(&'static str),
+    /// The volume was unmounted outside the host (a file manager's eject,
+    /// `fusermount3 -u`); the host ends like on an unmount request.
+    Unmounted,
 }
 
 pub(crate) trait HostPlatform {
@@ -76,4 +81,10 @@ pub(crate) trait HostPlatform {
     /// Ends the runtime after the volume; `completed` only after a
     /// controlled teardown with a clean journal.
     fn finish_runtime(&mut self, completed: bool);
+    /// Why the volume ended on its own, when the frontend knows more than
+    /// the `VolumePoll::Ended` text (Linux: the kernel request timeout). The
+    /// final failure report leads with it.
+    fn failure_cause(&self) -> Option<String> {
+        None
+    }
 }

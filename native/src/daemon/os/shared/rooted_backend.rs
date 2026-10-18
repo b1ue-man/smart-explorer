@@ -1,7 +1,7 @@
 use std::io::{self, Read, Write};
 use std::sync::Arc;
 
-use crate::mount::{BackendRoot, MountMode, MountRootSecurity};
+use crate::mount::{BackendRoot, MountMode, MountRootSecurity, PathDialect};
 use crate::vfs::{
     Backend, BackendHandle, CachingBackend, DeleteDisposition, MountPathCapabilities,
     RootConfinement, Scheme, StagedWriteCapabilities, VfsMeta, VfsResult,
@@ -29,6 +29,9 @@ pub(super) struct RootedBackend {
     revalidate_root: bool,
     read_only: bool,
     windows_paths: bool,
+    /// Name rules of the frontend that serves the drive (DRV-M1/M4): a
+    /// Linux FUSE drive shows names Windows cannot hold.
+    dialect: PathDialect,
     staged_write: StagedWriteCapabilities,
     case_sensitive_paths: bool,
     project_peer_names: bool,
@@ -37,11 +40,27 @@ pub(super) struct RootedBackend {
 }
 
 impl RootedBackend {
+    /// A drive served with the Windows name rules (Dokany).
+    #[cfg_attr(not(any(windows, test)), allow(dead_code))]
     pub(super) fn new(
         raw_inner: BackendHandle,
         root: &BackendRoot,
         mode: MountMode,
         root_security: MountRootSecurity,
+    ) -> io::Result<BackendHandle> {
+        Self::new_in(raw_inner, root, mode, root_security, PathDialect::Windows)
+    }
+
+    /// A drive served with the name rules of `dialect`: the Windows rules
+    /// check every root and path component of a local Windows export; the
+    /// POSIX rules (Linux FUSE, DRV-M4) leave names as the backend has them
+    /// and never alias Share names.
+    pub(super) fn new_in(
+        raw_inner: BackendHandle,
+        root: &BackendRoot,
+        mode: MountMode,
+        root_security: MountRootSecurity,
+        dialect: PathDialect,
     ) -> io::Result<BackendHandle> {
         let mount_capabilities = raw_inner.mount_path_capabilities(root.as_str())?;
         let root_confinement = mount_capabilities.root_confinement;
@@ -59,7 +78,7 @@ impl RootedBackend {
         } else {
             root_ancestor_chain(root.as_str())?
         };
-        let windows_paths = raw_inner.is_local();
+        let windows_paths = dialect == PathDialect::Windows && raw_inner.is_local();
         if windows_paths {
             validate_windows_components(&components(root.as_str())?)?;
         }
@@ -84,7 +103,9 @@ impl RootedBackend {
         }
         let revalidate_root =
             root_security == MountRootSecurity::Trusted || !root_confinement.is_enforced();
-        let child_key = if case_sensitive_paths { None } else {
+        let child_key = if case_sensitive_paths {
+            None
+        } else {
             Some(crate::mount::windows_ordinal_key as fn(&str) -> String)
         };
         let case_cache = Arc::new(CachingBackend::for_mount(Arc::clone(&raw_inner), child_key));
@@ -98,6 +119,7 @@ impl RootedBackend {
             revalidate_root,
             read_only: mode == MountMode::ReadOnly,
             windows_paths,
+            dialect,
             staged_write,
             case_sensitive_paths,
             project_peer_names,
@@ -147,13 +169,18 @@ impl RootedBackend {
 
     fn resolver(&self, for_write: bool) -> super::rooted_backend_case::PathResolver<'_> {
         super::rooted_backend_case::PathResolver {
-            backend: if for_write { &self.raw_inner } else { &self.inner },
+            backend: if for_write {
+                &self.raw_inner
+            } else {
+                &self.inner
+            },
             case_cache: (!for_write).then_some(self.case_cache.as_ref()),
             root_validator: self.revalidate_root.then_some(&self.raw_inner),
             root: &self.root,
             root_ancestors: &self.root_ancestors,
             case_sensitive: self.case_sensitive_paths,
             project_peer_names: self.project_peer_names,
+            dialect: self.dialect,
         }
     }
 
@@ -187,13 +214,27 @@ impl Backend for RootedBackend {
         "authorized-mount-root".into()
     }
 
+    /// Only `finish_stage` (DRV-M4); every other extension keeps its
+    /// default (`rooted_backend_extensions.rs`).
+    fn extensions(&self) -> Option<&dyn crate::vfs::BackendExtensions> {
+        Some(self)
+    }
+
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
         let _operation = self.operation.read()?;
         self.case_cache
             .refresh_directory(&self.checked_existing(path)?)
             .and_then(|entries| {
                 if self.project_peer_names {
-                    crate::mount::peer_names::project_peer_listing(entries)
+                    match self.dialect {
+                        PathDialect::Windows => {
+                            crate::mount::peer_names::project_peer_listing(entries)
+                        }
+                        PathDialect::Posix => crate::mount::peer_names::project_peer_listing_in(
+                            entries,
+                            PathDialect::Posix,
+                        ),
+                    }
                 } else {
                     Ok(entries)
                 }
@@ -239,14 +280,20 @@ impl Backend for RootedBackend {
         Ok(Box::new(SanitizedReader { inner: reader }))
     }
 
-    fn open_read_at(&self, path: &str, _id: Option<&str>, offset: u64)
-        -> VfsResult<Option<Box<dyn Read + Send>>>
-    {
+    fn open_read_at(
+        &self,
+        path: &str,
+        _id: Option<&str>,
+        offset: u64,
+    ) -> VfsResult<Option<Box<dyn Read + Send>>> {
         let _operation = self.operation.read()?;
         // Resolve the exact authorized root and ignore caller-supplied provider
         // IDs just like open_read. IDs must never bypass path authorization.
-        self.inner.open_read_at(&self.checked_existing(path)?, None, offset)
-            .map(|reader| reader.map(|inner| Box::new(SanitizedReader { inner }) as Box<dyn Read + Send>))
+        self.inner
+            .open_read_at(&self.checked_existing(path)?, None, offset)
+            .map(|reader| {
+                reader.map(|inner| Box::new(SanitizedReader { inner }) as Box<dyn Read + Send>)
+            })
             .map_err(sanitize_error)
     }
 
@@ -420,3 +467,6 @@ impl Backend for RootedBackend {
         self.inner.invalidate_cache();
     }
 }
+
+#[path = "rooted_backend_extensions.rs"]
+mod extensions;
