@@ -135,11 +135,12 @@ pub(crate) fn exec_run_as_supported() -> bool {
 }
 
 /// "Ausführen als" of this host: the state of its account service and every
-/// account choice with availability, reason and next step (PRM-M6, D.2.4).
-/// Unlike `exec_run_as_supported` it may ask the account service once.
-#[allow(dead_code)] // IPC `Accounts`, `se share exec accounts`, the GUIs
+/// account choice with availability, reason and next step (PRM-M6, PRM-M7,
+/// D.2.4). Unlike `exec_run_as_supported` it may ask the account service
+/// (Windows: one logon probe per listed account), so callers on a UI thread
+/// run it in the background.
 pub(crate) fn exec_account_choices() -> exec_helper_protocol::AccountChoices {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", windows))]
     {
         platform_exec::account_choices()
     }
@@ -151,7 +152,7 @@ pub(crate) fn exec_account_choices() -> exec_helper_protocol::AccountChoices {
             detail: Some("Android runs commands only as the app".into()),
         })
     }
-    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    #[cfg(not(any(target_os = "linux", target_os = "android", windows)))]
     {
         exec_platform::own_account_choices(access_catalog::HelperStatus {
             state: access_catalog::HelperState::NotNeeded,
@@ -161,13 +162,25 @@ pub(crate) fn exec_account_choices() -> exec_helper_protocol::AccountChoices {
     }
 }
 
-// Setting up the Linux account service as administrator (`se share exec
-// accounts setup|allow|disallow|update|remove`, PRM-M6).
+/// Sessions of another account on this host have no network credentials
+/// (no network drives, no EFS files) and no visible windows: true on
+/// Windows, where the account service logs on without password (S4U) and
+/// runs in session 0 (C2). The GUIs show the hint of C2 then.
+pub(crate) fn exec_account_session_limits() -> bool {
+    cfg!(windows)
+}
+
+// Setting up the account service as administrator (`se share exec accounts
+// setup|allow|disallow|update|remove`, PRM-M6 on Linux, PRM-M7 on Windows):
+// both platforms offer the same types. On Windows the elevations
+// `PkexecGraphical` and `PkexecTerminal` ask through UAC.
 #[cfg(target_os = "linux")]
-#[allow(unused_imports)] // `se share exec accounts` and the desktop accounts page
+#[allow(unused_imports)] // keeps the Linux re-export of the invoking user in use
+pub(crate) use self::platform_exec::invoking_uid as exec_accounts_invoking_uid;
+#[cfg(any(target_os = "linux", windows))]
 pub(crate) use self::platform_exec::{
-    exec_accounts_apply, invoking_uid as exec_accounts_invoking_uid,
-    Elevation as ExecAccountsElevation, ExecAccountsAction, ExecAccountsOutcome,
+    exec_accounts_apply, Elevation as ExecAccountsElevation, ExecAccountsAction,
+    ExecAccountsOutcome,
 };
 
 /// Runs the exact hidden supervisor invocation before CLI or GUI parsing.

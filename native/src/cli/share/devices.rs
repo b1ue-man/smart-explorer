@@ -2,10 +2,13 @@
 //! and the Android device menu – connect and open automatically, open my
 //! exports for the device as well (Rückfreigabe), and reset its pinned
 //! identity. Devices are the saved direct contacts; their authorization,
-//! write right and Exec grant are listed with them.
+//! write right and access (account, commands, terminal, end; D.2.4, the
+//! same fields as `se share grants`) are listed with them.
 use clap::{Args, Subcommand};
+use serde_json::Value;
 
-use crate::share::{DirectContact, DirectGrant, ShareProfiles};
+use crate::share::access_grant::{AccessGrantView, Capability};
+use crate::share::{DirectContact, DirectGrant, ExecGrant, ShareProfiles};
 
 #[derive(Args)]
 pub(super) struct DeviceArgs {
@@ -95,11 +98,12 @@ pub(super) fn run(args: DeviceArgs) -> Result<(), String> {
 
 fn list(json: bool) -> Result<(), String> {
     let profiles = super::checked_profiles()?;
+    let access = AccessFields::now();
     if json {
         let devices = profiles
             .direct_contacts
             .iter()
-            .map(|contact| value(&profiles, contact))
+            .map(|contact| value(&profiles, contact, &access))
             .collect::<Vec<_>>();
         println!(
             "{}",
@@ -115,9 +119,76 @@ fn list(json: bool) -> Result<(), String> {
         println!("devices\t0\tadd one with `se connections add-peer --code …` or `se share discoverable`");
     }
     for contact in &profiles.direct_contacts {
-        println!("{}", text(&profiles, contact));
+        println!("{}", text(&profiles, contact, &access));
     }
     Ok(())
+}
+
+/// The access of a grant as `se share grants` shows it (D.2.4): `exec.enabled`
+/// means commands or terminal are on and the grant has not ended;
+/// `exec.access` is the account with its label, the decisions and the end.
+/// Shared with `se share room list`.
+pub(super) struct AccessFields {
+    /// The account the worker runs as: the label of the profile `own`.
+    own: String,
+    now: i64,
+}
+
+impl AccessFields {
+    pub(super) fn now() -> Self {
+        Self {
+            own: crate::share::exec_provider_status().user_label,
+            now: crate::share::core_now_secs(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn fixed(own: &str, now: i64) -> Self {
+        Self {
+            own: own.into(),
+            now,
+        }
+    }
+
+    pub(super) fn enabled(&self, exec: &ExecGrant) -> bool {
+        let access = exec.access_grant();
+        Capability::EXEC
+            .into_iter()
+            .any(|capability| access.decision_at(capability, self.now).is_on())
+    }
+
+    pub(super) fn state(&self, exec: &ExecGrant) -> &'static str {
+        if self.enabled(exec) {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    }
+
+    pub(super) fn value(&self, exec: &ExecGrant) -> Value {
+        let view = AccessGrantView::new(&exec.access_grant(), &self.own, self.now);
+        serde_json::to_value(view).unwrap_or(Value::Null)
+    }
+
+    /// `exec_as=…\texec_commands=…\texec_terminal=…\texec_until=…`.
+    pub(super) fn text(&self, exec: &ExecGrant) -> String {
+        let access = exec.access_grant();
+        let until = match access.valid_until {
+            None => "none".to_string(),
+            Some(end) => chrono::DateTime::<chrono::Utc>::from_timestamp(end, 0)
+                .map(|time| {
+                    time.with_timezone(&chrono::Local)
+                        .to_rfc3339_opts(chrono::SecondsFormat::Secs, false)
+                })
+                .unwrap_or_else(|| end.to_string()),
+        };
+        format!(
+            "exec_as={}\texec_commands={}\texec_terminal={}\texec_until={until}",
+            clean(&access.account.label(&self.own)),
+            access.decision(Capability::ExecCommands).key(),
+            access.decision(Capability::ExecTerminal).key(),
+        )
+    }
 }
 
 /// The authorization of a contact: the grant of its pinned remote device.
@@ -132,7 +203,11 @@ fn grant_of<'a>(profiles: &'a ShareProfiles, contact: &DirectContact) -> Option<
     })
 }
 
-fn value(profiles: &ShareProfiles, contact: &DirectContact) -> serde_json::Value {
+fn value(
+    profiles: &ShareProfiles,
+    contact: &DirectContact,
+    access: &AccessFields,
+) -> serde_json::Value {
     let grant = grant_of(profiles, contact);
     serde_json::json!({
         "id": contact.id,
@@ -148,34 +223,32 @@ fn value(profiles: &ShareProfiles, contact: &DirectContact) -> serde_json::Value
             "active": grant.state == crate::share::DirectGrantState::Accepted,
             "write": grant.write,
             "exec": {
-                "enabled": grant.exec.enabled,
+                "enabled": access.enabled(&grant.exec),
                 "policy_revision": grant.exec.policy_revision,
                 "run_as": super::grants::exec_run_as(&grant.exec),
                 "programs": grant.exec.programs,
+                "access": access.value(&grant.exec),
             },
         })),
     })
 }
 
-fn text(profiles: &ShareProfiles, contact: &DirectContact) -> String {
+fn text(profiles: &ShareProfiles, contact: &DirectContact, access: &AccessFields) -> String {
     let grant = grant_of(profiles, contact);
     let authorization = match grant {
         None => "none".to_string(),
         Some(grant) => format!(
-            "{}\twrite={}\texec={}\texec_run_as={}\texec_programs={}",
+            "{}\twrite={}\texec={}\texec_run_as={}\texec_programs={}\t{}",
             if grant.state == crate::share::DirectGrantState::Accepted {
                 "active"
             } else {
                 "inactive"
             },
             grant.write,
-            if grant.exec.enabled {
-                "enabled"
-            } else {
-                "disabled"
-            },
+            access.state(&grant.exec),
             super::grants::exec_run_as(&grant.exec),
             super::grants::exec_programs_text(&grant.exec),
+            access.text(&grant.exec),
         ),
     };
     format!(
@@ -334,14 +407,23 @@ mod tests {
             exec: Default::default(),
             write: true,
         });
-        let line = text(&profiles, &profiles.direct_contacts[0]);
+        let access = AccessFields::fixed("alice", 1);
+        let line = text(&profiles, &profiles.direct_contacts[0], &access);
         assert!(line.contains("\tauto_connect=true\tauto_open=false\tshare_back=false\t"));
-        assert!(line.ends_with(
-            "authorization=active\twrite=true\texec=disabled\texec_run_as=standard\texec_programs=full-shell"
+        assert!(line.contains(
+            "authorization=active\twrite=true\texec=disabled\texec_run_as=standard\texec_programs=full-shell\t"
         ));
-        assert!(text(&profiles, &profiles.direct_contacts[1]).ends_with("authorization=none"));
-        let json = value(&profiles, &profiles.direct_contacts[0]);
+        assert!(line
+            .ends_with("\texec_as=alice\texec_commands=off\texec_terminal=off\texec_until=none"));
+        let other = text(&profiles, &profiles.direct_contacts[1], &access);
+        assert!(other.ends_with("authorization=none"));
+        let json = value(&profiles, &profiles.direct_contacts[0], &access);
         assert_eq!(json["authorization"]["write"], true);
+        assert_eq!(json["authorization"]["exec"]["enabled"], false);
+        assert_eq!(
+            json["authorization"]["exec"]["access"]["account_label"],
+            "alice"
+        );
         assert_eq!(json["share_back"], false);
         assert_eq!(select(&profiles, Some("laptop")).unwrap().id, "a");
         assert_eq!(select(&profiles, Some("device-b")).unwrap().id, "b");

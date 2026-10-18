@@ -13,6 +13,7 @@ use crate::share::access_catalog::{
     capability_catalog, CapabilityEntry, HelperState, HelperStatus, HostFacts,
 };
 use crate::share::access_grant::{AccessPreset, AccountProfile, Capability, CapabilityDecision};
+use crate::share::exec_helper_protocol::AccountChoiceProfile;
 use crate::share::ExecProviderStatus;
 
 use AccessPreset::{FullOwn, Programs, RemoteAccount};
@@ -201,8 +202,9 @@ pub(super) fn notes(
     notes
 }
 
-/// „Ausführen als“ of this host: the worker's list (`Access::Accounts`);
-/// without the worker the own account and the accounts grants name.
+/// „Ausführen als“ of this host: the worker's list (`Access::Accounts`)
+/// with the German reasons and next steps of C6; without a running worker
+/// the own account and the accounts grants name.
 pub(super) fn account_options(views: &[ExecDeviceView]) -> (Vec<AccountOption>, HelperState) {
     let available = |profile| AccountOption {
         profile,
@@ -222,15 +224,12 @@ pub(super) fn account_options(views: &[ExecDeviceView]) -> (Vec<AccountOption>, 
         return (options, HelperState::NotNeeded);
     };
     let options = choices.into_iter().filter_map(|choice| {
-        let profile = match (choice.profile.as_str(), choice.account) {
-            ("own", _) => AccountProfile::Own,
-            ("remote", _) => AccountProfile::Remote,
-            ("account", Some(name)) => AccountProfile::Account { name },
-            _ => return None,
-        };
-        let reason = match (choice.reason, choice.next_step) {
-            (Some(reason), Some(next)) => Some(format!("{reason} Nächster Schritt: {next}")),
-            (reason, next) => reason.or(next),
+        let reason = super::accounts_ui::option_reason(&choice);
+        let profile = match (choice.profile, choice.account) {
+            (AccountChoiceProfile::Own, _) => AccountProfile::Own,
+            (AccountChoiceProfile::Remote, _) => AccountProfile::Remote,
+            (AccountChoiceProfile::Account, Some(name)) => AccountProfile::Account { name },
+            (AccountChoiceProfile::Account, None) => return None,
         };
         Some(AccountOption {
             profile,

@@ -2,11 +2,14 @@
 //! state (`enabled · as se-remote · commands allow · terminal ask · until
 //! 2026-10-17 18:00`), rooms, the values of `--as` and the ids of open
 //! requests for `se share exec approve|deny`. Completion never starts the
-//! background worker: open requests come from a running worker only.
+//! background worker: open requests and the account list of `--as` come
+//! from a running worker only; without one `--as` offers the own account,
+//! `remote` and the accounts the grants name.
 use clap_complete::CompletionCandidate;
 
 use crate::share::access_approval::ApprovalView;
 use crate::share::access_grant::{Capability, REMOTE_ACCOUNT_NAME};
+use crate::share::exec_helper_protocol::{AccountChoice, AccountChoiceProfile};
 use crate::share::{ExecGrant, ShareProfiles};
 
 /// The state of a grant as completion shows it.
@@ -111,10 +114,47 @@ pub(super) fn room_candidates_from(profiles: &ShareProfiles) -> Vec<CompletionCa
         .collect()
 }
 
-/// Values of `--as`: the own account, `se-remote` and every account a grant
-/// of this host names already.
+/// Values of `--as`: the account list of the running worker ("Ausführen
+/// als", D.2.4); without a worker the own account, `se-remote` and every
+/// account a grant of this host names already.
 pub(super) fn account_candidates() -> Vec<CompletionCandidate> {
-    account_candidates_from(&profiles().unwrap_or_default())
+    match crate::daemon::access_accounts() {
+        Ok((_, choices)) => account_candidates_from_choices(&choices),
+        Err(_) => account_candidates_from(&profiles().unwrap_or_default()),
+    }
+}
+
+/// The worker's choices as values of `--as`, each with its account and,
+/// where it cannot be chosen, the reason.
+pub(super) fn account_candidates_from_choices(
+    choices: &[AccountChoice],
+) -> Vec<CompletionCandidate> {
+    choices
+        .iter()
+        .map(|choice| {
+            let (value, mut help) = match (choice.profile, &choice.account) {
+                (AccountChoiceProfile::Own, _) => {
+                    ("own".to_string(), format!("my account ({})", choice.label))
+                }
+                (AccountChoiceProfile::Remote, _) => (
+                    "remote".to_string(),
+                    format!("the restricted account {REMOTE_ACCOUNT_NAME}"),
+                ),
+                (AccountChoiceProfile::Account, account) => {
+                    let name = account.as_deref().unwrap_or(&choice.label);
+                    (
+                        format!("account:{name}"),
+                        format!("the local account {name}"),
+                    )
+                }
+            };
+            if !choice.available {
+                let reason = choice.reason.as_deref().unwrap_or("not available");
+                help.push_str(&format!(" · not available: {reason}"));
+            }
+            candidate(&value, help)
+        })
+        .collect()
 }
 
 pub(super) fn account_candidates_from(profiles: &ShareProfiles) -> Vec<CompletionCandidate> {

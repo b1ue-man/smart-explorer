@@ -6,6 +6,7 @@
 //! refresh.
 use clap::{Args, Subcommand, ValueEnum};
 
+use super::devices::AccessFields;
 use crate::share::{RoomMember, RoomMemberAdmission, RoomProfile, ShareProfiles};
 
 #[derive(Args)]
@@ -210,8 +211,13 @@ fn action_name(action: MemberAction) -> &'static str {
 
 fn list(json: bool) -> Result<(), String> {
     let profiles = super::checked_profiles()?;
+    let access = AccessFields::now();
     if json {
-        let rooms = profiles.rooms.iter().map(room_value).collect::<Vec<_>>();
+        let rooms = profiles
+            .rooms
+            .iter()
+            .map(|room| room_value(room, &access))
+            .collect::<Vec<_>>();
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
@@ -225,13 +231,13 @@ fn list(json: bool) -> Result<(), String> {
     if profiles.rooms.is_empty() {
         println!("rooms\t0");
     }
-    for line in text(&profiles) {
+    for line in text(&profiles, &access) {
         println!("{line}");
     }
     Ok(())
 }
 
-pub(super) fn room_value(room: &RoomProfile) -> serde_json::Value {
+pub(super) fn room_value(room: &RoomProfile, access: &AccessFields) -> serde_json::Value {
     serde_json::json!({
         "id": room.id,
         "room_id": room.room_id,
@@ -242,11 +248,15 @@ pub(super) fn room_value(room: &RoomProfile) -> serde_json::Value {
             "members_may_write": room.policy.members_may_write,
             "confirm_new_members": room.policy.confirm_new_members,
         },
-        "members": room.members.iter().map(member_value).collect::<Vec<_>>(),
+        "members": room
+            .members
+            .iter()
+            .map(|member| member_value(member, access))
+            .collect::<Vec<_>>(),
     })
 }
 
-fn member_value(member: &RoomMember) -> serde_json::Value {
+fn member_value(member: &RoomMember, access: &AccessFields) -> serde_json::Value {
     serde_json::json!({
         "device_id": member.device_id,
         "device_name": member.device_name,
@@ -255,15 +265,16 @@ fn member_value(member: &RoomMember) -> serde_json::Value {
         "blocked": member.blocked,
         "status": member.status.label(),
         "exec": {
-            "enabled": member.exec.enabled,
+            "enabled": access.enabled(&member.exec),
             "policy_revision": member.exec.policy_revision,
             "run_as": super::grants::exec_run_as(&member.exec),
             "programs": member.exec.programs,
+            "access": access.value(&member.exec),
         },
     })
 }
 
-pub(super) fn text(profiles: &ShareProfiles) -> Vec<String> {
+pub(super) fn text(profiles: &ShareProfiles, access: &AccessFields) -> Vec<String> {
     let mut lines = Vec::new();
     for room in &profiles.rooms {
         lines.push(format!(
@@ -279,7 +290,7 @@ pub(super) fn text(profiles: &ShareProfiles) -> Vec<String> {
         ));
         for member in &room.members {
             lines.push(format!(
-                "member\t{}\t{}\tdevice_id={}\tfingerprint={}\tadmission={}\tblocked={}\tstatus={}\texec={}\texec_run_as={}\texec_programs={}",
+                "member\t{}\t{}\tdevice_id={}\tfingerprint={}\tadmission={}\tblocked={}\tstatus={}\texec={}\texec_run_as={}\texec_programs={}\t{}",
                 clean(&room.name),
                 clean(&member.device_name),
                 member.device_id,
@@ -287,9 +298,10 @@ pub(super) fn text(profiles: &ShareProfiles) -> Vec<String> {
                 admission(member),
                 member.blocked,
                 clean(&member.status.label()),
-                if member.exec.enabled { "enabled" } else { "disabled" },
+                access.state(&member.exec),
                 super::grants::exec_run_as(&member.exec),
                 super::grants::exec_programs_text(&member.exec),
+                access.text(&member.exec),
             ));
         }
     }
@@ -441,11 +453,18 @@ mod tests {
         member.exec.programs = vec!["uptime".into()];
         room.members.push(member);
         profiles.rooms.push(room);
-        let lines = text(&profiles);
+        let access = AccessFields::fixed("alice", 1);
+        let lines = text(&profiles, &access);
         assert!(lines[0].starts_with("room\tTeam\tid=profile-1\troom_id=wire-1\tjoined=false\t"));
         assert!(lines[1].contains("\tadmission=pending\tblocked=true\t"));
-        assert!(lines[1].ends_with("\texec=disabled\texec_run_as=standard\texec_programs=uptime"));
-        let value = room_value(&profiles.rooms[0]);
+        assert!(lines[1].contains("\texec=disabled\texec_run_as=standard\texec_programs=uptime\t"));
+        assert!(lines[1]
+            .ends_with("\texec_as=alice\texec_commands=off\texec_terminal=off\texec_until=none"));
+        let value = room_value(&profiles.rooms[0], &access);
+        assert_eq!(
+            value["members"][0]["exec"]["access"]["account_label"],
+            "alice"
+        );
         assert_eq!(value["auto_join"], false);
         assert_eq!(value["members"][0]["admission"], "pending");
         assert_eq!(value["members"][0]["exec"]["programs"][0], "uptime");

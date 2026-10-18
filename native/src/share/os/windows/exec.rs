@@ -1,12 +1,56 @@
+// The account service of PRM-M7: worker side, service, setup.
+#[path = "exec_account_choices.rs"]
+mod exec_account_choices;
+#[path = "exec_account_client.rs"]
+mod exec_account_client;
+#[path = "exec_account_config.rs"]
+mod exec_account_config;
+#[path = "exec_account_connection.rs"]
+mod exec_account_connection;
+#[path = "exec_account_files.rs"]
+mod exec_account_files;
+#[path = "exec_account_install.rs"]
+mod exec_account_install;
+#[cfg(test)]
+#[path = "exec_account_job_tests.rs"]
+mod exec_account_job_tests;
+#[path = "exec_account_pipes.rs"]
+mod exec_account_pipes;
+#[path = "exec_account_s4u.rs"]
+mod exec_account_s4u;
+#[path = "exec_account_scm.rs"]
+mod exec_account_scm;
+#[path = "exec_account_security.rs"]
+mod exec_account_security;
+#[path = "exec_account_service.rs"]
+mod exec_account_service;
+#[path = "exec_account_setup.rs"]
+mod exec_account_setup;
+#[path = "exec_account_spawn.rs"]
+mod exec_account_spawn;
+#[cfg(test)]
+#[path = "exec_account_tests.rs"]
+mod exec_account_tests;
+#[cfg(test)]
+#[path = "exec_account_unit_tests.rs"]
+mod exec_account_unit_tests;
 #[path = "exec_conpty.rs"]
 mod exec_conpty;
 #[path = "exec_handles.rs"]
 mod exec_handles;
+#[path = "exec_job_object.rs"]
+mod exec_job_object;
 #[cfg(debug_assertions)]
 #[path = "exec_self_test.rs"]
 mod exec_self_test;
 #[path = "exec_supervisor.rs"]
 mod exec_supervisor;
+
+pub(crate) use self::exec_account_choices::account_choices;
+pub(crate) use self::exec_account_client::{resolve_account, run_as_supported};
+pub(crate) use self::exec_account_setup::{
+    exec_accounts_apply, Elevation, ExecAccountsAction, ExecAccountsOutcome,
+};
 
 use std::ffi::OsString;
 use std::io;
@@ -15,17 +59,11 @@ use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::FromRawHandle;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Mutex};
+use std::sync::{mpsc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{SetHandleInformation, HANDLE, HANDLE_FLAG_INHERIT};
 use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
-use windows_sys::Win32::System::JobObjects::{
-    CreateJobObjectW, JobObjectBasicAccountingInformation, JobObjectExtendedLimitInformation,
-    QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
-    JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-};
 use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::{
     CreateProcessW, ResumeThread, CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT,
@@ -33,7 +71,10 @@ use windows_sys::Win32::System::Threading::{
     PROC_THREAD_ATTRIBUTE_JOB_LIST, STARTF_USESTDHANDLES, STARTUPINFOEXW,
 };
 
+use self::exec_account_client::AccountSession;
+use self::exec_account_security::process_is_elevated;
 use self::exec_handles::{AttributeList, OwnedHandle};
+use self::exec_job_object::{active_processes, create_job, terminate_job};
 use crate::share::exec_platform::StopReason;
 use crate::share::exec_supervisor_protocol::{
     recv_event, send_command, SupervisorCommand, SupervisorEvent,
@@ -47,8 +88,18 @@ pub(crate) struct ContainedExec {
     events: mpsc::Receiver<io::Result<SupervisorEvent>>,
 }
 
+/// Where a job's supervisor runs, and how it is ended and checked.
+enum Containment {
+    /// The worker's own account: the worker's kill-on-close Job, exactly as
+    /// before PRM-M7.
+    Own(OwnedHandle),
+    /// Another account (PRM-M7): a session of the account service, whose
+    /// Job in session 0 holds the relay and its children.
+    Account(Mutex<AccountSession>),
+}
+
 struct Control {
-    job: OwnedHandle,
+    containment: Containment,
     outbound: mpsc::SyncSender<SupervisorCommand>,
     launch: Mutex<LaunchState>,
     stopped: AtomicBool,
@@ -61,11 +112,41 @@ struct LaunchState {
 }
 
 impl ContainedExec {
-    pub(crate) fn prepare(_request: &ExecStart) -> io::Result<Self> {
+    /// Prepares the supervisor of `request`: as the worker's own account,
+    /// or as the account `exec_platform` prepares the start for on this
+    /// thread (`ContainedExec::prepare_as`) through the account service.
+    pub(crate) fn prepare(request: &ExecStart) -> io::Result<Self> {
+        if let Some(account) = crate::share::exec_platform::preparing_account() {
+            let (session, writer, reader) = AccountSession::start(request, &account)?;
+            // The service starts the relay running; it waits for its start.
+            let launch = LaunchState {
+                process: None,
+                thread: None,
+                resumed: true,
+            };
+            let containment = Containment::Account(Mutex::new(session));
+            return Self::connected(containment, writer, reader, launch);
+        }
         let job = create_job()?;
         let (child_stdin, writer) = pipe_pair(false)?;
-        let (child_stdout, mut reader) = pipe_pair(true)?;
+        let (child_stdout, reader) = pipe_pair(true)?;
         let launched = launch_supervisor(job.raw(), child_stdin.raw(), child_stdout.raw())?;
+        let launch = LaunchState {
+            process: Some(launched.process),
+            thread: Some(launched.thread),
+            resumed: false,
+        };
+        Self::connected(Containment::Own(job), writer, reader, launch)
+    }
+
+    /// Starts the two threads between the worker and the supervisor: one
+    /// writes the commands, one reads the events.
+    fn connected(
+        containment: Containment,
+        writer: std::fs::File,
+        mut reader: std::fs::File,
+        launch: LaunchState,
+    ) -> io::Result<Self> {
         let (event_tx, events) = mpsc::sync_channel(32);
         let (outbound, outbound_rx) = mpsc::sync_channel::<SupervisorCommand>(16);
         let writer_errors = event_tx.clone();
@@ -90,13 +171,9 @@ impl ContainedExec {
                 }
             })?;
         let control = Control {
-            job,
+            containment,
             outbound,
-            launch: Mutex::new(LaunchState {
-                process: Some(launched.process),
-                thread: Some(launched.thread),
-                resumed: false,
-            }),
+            launch: Mutex::new(launch),
             stopped: AtomicBool::new(false),
         };
         Ok(Self { control, events })
@@ -134,11 +211,15 @@ impl ContainedExec {
     }
 
     pub(crate) fn confirm_empty(&mut self, deadline: Instant) -> io::Result<()> {
+        let poll = match self.control.containment {
+            Containment::Own(_) => Duration::from_millis(10),
+            Containment::Account(_) => Duration::from_millis(50),
+        };
         while Instant::now() < deadline {
-            if active_processes(self.control.job.raw())? == 0 {
+            if self.control.empty()? {
                 return Ok(());
             }
-            std::thread::sleep(Duration::from_millis(10));
+            std::thread::sleep(poll);
         }
         Err(io::Error::new(
             io::ErrorKind::TimedOut,
@@ -186,14 +267,25 @@ impl Control {
         if self.stopped.swap(true, Ordering::AcqRel) {
             return Ok(());
         }
-        if unsafe { TerminateJobObject(self.job.raw(), 1) } == 0 {
-            let error = io::Error::last_os_error();
-            if active_processes(self.job.raw()).unwrap_or(1) != 0 {
-                return Err(error);
-            }
+        match &self.containment {
+            Containment::Own(job) => terminate_job(job.raw()),
+            Containment::Account(session) => lock_session(session)?.stop(),
         }
-        Ok(())
     }
+
+    /// No process of the job is left.
+    fn empty(&self) -> io::Result<bool> {
+        match &self.containment {
+            Containment::Own(job) => Ok(active_processes(job.raw())? == 0),
+            Containment::Account(session) => lock_session(session)?.finished(),
+        }
+    }
+}
+
+fn lock_session(session: &Mutex<AccountSession>) -> io::Result<MutexGuard<'_, AccountSession>> {
+    session
+        .lock()
+        .map_err(|_| io::Error::other("the account service session lock is poisoned"))
 }
 
 impl Drop for ContainedExec {
@@ -241,27 +333,17 @@ pub(crate) fn program_search() -> crate::share::exec_policy::program_path::Progr
     }
 }
 
-/// A Windows host runs Exec only as the worker's account: another account
-/// would need that account's password (`CreateProcessWithLogonW`) or a
-/// SYSTEM service with `SeTcbPrivilege` (S4U logon), neither of which the
-/// per-user worker has.
-pub(crate) fn run_as_supported() -> bool {
-    false
-}
-
-pub(crate) fn resolve_account(
-    _name: &str,
-) -> io::Result<crate::share::exec_supervisor_protocol::RunAsAccount> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "Windows hosts run commands only as the Smart Explorer user",
-    ))
-}
-
+/// The hidden modes of this program on Windows: the supervisor of a job,
+/// and the account service and its elevated setup (PRM-M7).
 pub(crate) fn run_supervisor_if_requested(arguments: &[OsString]) -> Option<io::Result<()>> {
     #[cfg(debug_assertions)]
     if let Some(result) = exec_self_test::run_helper_if_requested(arguments) {
         return Some(result);
+    }
+    let hidden = exec_account_service::run_if_requested(arguments)
+        .or_else(|| exec_account_setup::run_if_requested(arguments));
+    if hidden.is_some() {
+        return hidden;
     }
     if arguments.len() == 1 && arguments[0] == INTERNAL_MODE {
         Some(exec_supervisor::run())
@@ -278,24 +360,6 @@ pub(crate) fn run_extended_self_test() -> io::Result<()> {
 struct LaunchedProcess {
     process: OwnedHandle,
     thread: OwnedHandle,
-}
-
-fn create_job() -> io::Result<OwnedHandle> {
-    let job = OwnedHandle::new(unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) })?;
-    let mut information: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { zeroed() };
-    information.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-    let changed = unsafe {
-        SetInformationJobObject(
-            job.raw(),
-            JobObjectExtendedLimitInformation,
-            (&information as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
-            size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-        )
-    };
-    if changed == 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(job)
 }
 
 /// Returns `(child_end, parent_file)`. `parent_reads` chooses pipe direction.
@@ -387,51 +451,6 @@ fn launch_supervisor(
         process: OwnedHandle::new(process.hProcess)?,
         thread: OwnedHandle::new(process.hThread)?,
     })
-}
-
-fn active_processes(job: HANDLE) -> io::Result<u32> {
-    let mut information: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = unsafe { zeroed() };
-    let queried = unsafe {
-        QueryInformationJobObject(
-            job,
-            JobObjectBasicAccountingInformation,
-            (&mut information as *mut JOBOBJECT_BASIC_ACCOUNTING_INFORMATION).cast(),
-            size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32,
-            std::ptr::null_mut(),
-        )
-    };
-    if queried == 0 {
-        Err(io::Error::last_os_error())
-    } else {
-        Ok(information.ActiveProcesses)
-    }
-}
-
-fn process_is_elevated() -> bool {
-    use windows_sys::Win32::Security::{
-        GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
-    };
-    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
-    let mut token = std::ptr::null_mut();
-    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
-        return false;
-    }
-    let token = match OwnedHandle::new(token) {
-        Ok(token) => token,
-        Err(_) => return false,
-    };
-    let mut elevation: TOKEN_ELEVATION = unsafe { zeroed() };
-    let mut returned = 0;
-    let ok = unsafe {
-        GetTokenInformation(
-            token.raw(),
-            TokenElevation,
-            (&mut elevation as *mut TOKEN_ELEVATION).cast(),
-            size_of::<TOKEN_ELEVATION>() as u32,
-            &mut returned,
-        )
-    };
-    ok != 0 && elevation.TokenIsElevated != 0
 }
 
 #[cfg(test)]

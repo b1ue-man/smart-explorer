@@ -13,6 +13,11 @@ use crate::share::access_grant::{AccessGrantChange, AccessGrantView};
 use crate::share::exec_access_view::{ExecAccessView, ExecApprovalPending};
 use crate::share::{ExecGrantTarget, ExecId};
 
+// One account a grant can name is the type of the account helpers
+// (`exec_helper_protocol.rs`), so `se share exec accounts --json`, this reply
+// and the bridge show the same choices (D.2.4).
+pub(crate) use crate::share::exec_helper_protocol::AccountChoice;
+
 /// One request of the access rights.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -54,6 +59,7 @@ pub(crate) enum AccessIpcReply {
         pending: Vec<ApprovalView>,
     },
     Decided,
+    /// `crate::share::exec_account_choices()` of the worker.
     AccountList {
         helper: HelperStatus,
         choices: Vec<AccountChoice>,
@@ -61,54 +67,6 @@ pub(crate) enum AccessIpcReply {
     ExecNotice {
         notice: Option<ExecNoticeView>,
     },
-}
-
-/// One account a grant can name (D.2.4 `se share exec accounts --json`).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct AccountChoice {
-    /// `own`, `remote` or `account`.
-    pub(crate) profile: String,
-    /// How surfaces name the own account (the worker's).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) label: Option<String>,
-    /// The local account of `remote` and `account`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) account: Option<String>,
-    pub(crate) available: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) reason: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) next_step: Option<String>,
-    #[serde(default)]
-    pub(crate) elevated: bool,
-    #[serde(default)]
-    pub(crate) admin_group: bool,
-}
-
-impl AccountChoice {
-    /// The worker's own account.
-    pub(crate) fn own(label: &str) -> Self {
-        Self {
-            profile: "own".into(),
-            label: Some(label.to_string()),
-            account: None,
-            available: true,
-            reason: None,
-            next_step: None,
-            elevated: false,
-            admin_group: false,
-        }
-    }
-
-    /// An account a grant of this host already names.
-    pub(crate) fn account(name: &str) -> Self {
-        Self {
-            profile: "account".into(),
-            label: None,
-            account: Some(name.to_string()),
-            ..Self::own(name)
-        }
-    }
 }
 
 /// The notice of one outgoing start (D.2.2): the host's access view and a
