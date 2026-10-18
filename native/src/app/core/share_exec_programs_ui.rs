@@ -248,7 +248,7 @@ pub(super) fn catalog(helper: HelperState) -> Vec<CapabilityEntry> {
         detail: None,
     };
     capability_catalog(&HostFacts {
-        graphical_session: true,
+        graphical_session: crate::screen::graphical_session(),
         account_helper,
     })
 }

@@ -182,7 +182,13 @@ impl App {
                 );
                 render_root_security(ui, &mut draft, ctx);
                 ui.separator();
-                ui.label("Voraussetzung: offizielle Dokany-2.3.1-Laufzeit (kein Entwicklermodus).");
+                // Dokany is the Windows runtime; under Linux `install_controls`
+                // shows whether FUSE is ready instead.
+                if !cfg!(target_os = "linux") {
+                    ui.label(
+                        "Voraussetzung: offizielle Dokany-2.3.1-Laufzeit (kein Entwicklermodus).",
+                    );
+                }
                 let enabled = self.mount_ui.action_rx.is_none();
                 ui.horizontal(|ui| {
                     install_runtime = install_controls(ui, enabled, "Manueller Download");

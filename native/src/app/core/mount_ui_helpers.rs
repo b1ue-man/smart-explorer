@@ -104,6 +104,10 @@ pub(super) fn status_label(status: &crate::mount::MountStatus) -> String {
             format!("Eingebunden unter {}", path.display())
         }
         crate::mount::MountStatus::Unmounting => "Wird ausgeworfen ...".into(),
+        // The runtime of a Linux drive is FUSE (`mount_runtime_ui.rs`).
+        crate::mount::MountStatus::RuntimeUnavailable { detail } if cfg!(target_os = "linux") => {
+            format!("FUSE nicht bereit: {detail}")
+        }
         crate::mount::MountStatus::RuntimeUnavailable { detail } => {
             format!("Dokany fehlt: {detail}")
         }

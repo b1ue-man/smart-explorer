@@ -245,8 +245,7 @@ fn config(args: &ConfigArgs) -> Result<i32, String> {
         let context = ConfigContext {
             platform: platform::PLATFORM,
             transparent: session.transparent,
-            // The S2 device tree joins with DSK-M4 (`DevicesStatus`).
-            device_tree_mounted: false,
+            device_tree_mounted: crate::desktop::os::feed_sources::device_tree_now().mounted(),
         };
         control.configure(&change, &context)
     })

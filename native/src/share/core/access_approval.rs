@@ -198,7 +198,6 @@ impl ApprovalService {
     }
 
     /// The broker S4 asks; its requests count against `gauge`.
-    #[allow(dead_code)] // Staged: U10 (SCR-M2) asks through the broker.
     pub(crate) fn broker(&self, gauge: Arc<dyn ReservationGauge>) -> ApprovalBroker {
         ApprovalBroker {
             service: self.clone(),
@@ -384,14 +383,12 @@ impl Drop for ApprovalTicket {
 }
 
 /// The service as the screen strand asks it (V7: `ConsentBroker`).
-#[allow(dead_code)] // Staged: U10 implements `ConsentBroker` for it.
 #[derive(Clone)]
 pub(crate) struct ApprovalBroker {
     service: ApprovalService,
     gauge: Arc<dyn ReservationGauge>,
 }
 
-#[allow(dead_code)] // Staged: U10 implements `ConsentBroker` for it.
 impl ApprovalBroker {
     /// `ConsentBroker::request(principal, capability, summary) -> ApprovalTicket`.
     pub(crate) fn request(

@@ -292,6 +292,8 @@ mod mount_lease_client;
 mod node;
 #[path = "core/node_accept.rs"]
 mod node_accept;
+#[path = "core/node_screen.rs"]
+pub(crate) mod node_screen;
 #[path = "core/node_sessions.rs"]
 mod node_sessions;
 #[path = "core/peer_endpoint_source.rs"]

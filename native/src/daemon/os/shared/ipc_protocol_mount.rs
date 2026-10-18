@@ -6,8 +6,9 @@
 //! `ipc_protocol.rs` re-exports both, so every caller keeps its path. The
 //! fixtures in `ipc_protocol_mount_fixtures/` pin the form of v0.5.182
 //! (commit `da2646d2`); the additions since then are
-//! `MountHostConfig::path_dialect` and `MountBackendScheme::Vault` (wire
-//! name `vault`, appended to the scheme list).
+//! `MountHostConfig::path_dialect`, `MountHostConfig::location` (written
+//! only when set) and `MountBackendScheme::Vault` (wire name `vault`,
+//! appended to the scheme list).
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -73,6 +74,13 @@ pub struct MountHostConfig {
     /// rules before the field existed.
     #[serde(default)]
     pub path_dialect: crate::mount::PathDialect,
+    /// The folder the drive appears at (DRV-M3, DRV-M4), taken from the
+    /// daemon's entry of the drive (a Linux start resolves it first);
+    /// absent means the default of the host platform. Written only when
+    /// set, so a configuration without it keeps its bytes and an older host
+    /// ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<crate::mount::MountLocation>,
 }
 
 impl MountHostConfig {
@@ -104,6 +112,7 @@ impl From<&crate::mount::MountConfig> for MountHostConfig {
             // platform. Default = the Windows rules of every earlier version;
             // a host platform with other rules sets the public field.
             path_dialect: crate::mount::PathDialect::default(),
+            location: config.location.clone(),
         }
     }
 }

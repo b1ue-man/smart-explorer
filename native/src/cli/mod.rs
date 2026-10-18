@@ -2,6 +2,7 @@ mod background;
 mod completions;
 mod completions_access;
 mod completions_requests;
+mod completions_screen;
 mod connections;
 mod desktop;
 mod doctor;
@@ -28,6 +29,7 @@ mod ops_transfer_tests;
 mod os;
 mod plugin;
 mod private_file;
+mod screen;
 mod search;
 mod setup;
 mod share;
@@ -81,6 +83,7 @@ Examples:
   se drive runtime
   se drive install-runtime
   se drive mount @prod:/srv --letter M
+  se drive mount @prod:/srv --mount-point ~/SmartExplorer/prod
   se drive set <ID> --auto-remount on
   source <(se completions bash)";
 
@@ -103,7 +106,9 @@ enum Command {
     Doctor(doctor::DoctorArgs),
     #[command(about = "Configure and manage headless Smart Explorer Share")]
     Share(share::ShareArgs),
-    #[command(about = "Mount selected remotes as Windows drive letters")]
+    #[command(
+        about = "Mount selected remotes as drives (Windows drive letters, Linux folders over FUSE)"
+    )]
     Drive(drive::DriveArgs),
     #[command(about = "Manage saved remotes and Share contacts")]
     Connections(connections::ConnectionsArgs),
@@ -117,6 +122,8 @@ enum Command {
         about = "se Desktop: desktop surface with devices, rooms and vaults (Windows, Linux)"
     )]
     Desktop(desktop::DesktopArgs),
+    #[command(about = "Screen of paired devices: devices, probe, measurement, sessions")]
+    Screen(screen::ScreenArgs),
     #[command(about = "Generate live shell completion setup")]
     Completions(completions::CompletionsArgs),
     #[command(about = "Check the update feed and install a newer se (and app)")]
@@ -266,6 +273,7 @@ fn run_inner(cli: Cli) -> Result<i32, String> {
         Command::Background(args) => background::run(args),
         Command::Integration(args) => integration::run(args),
         Command::Desktop(args) => desktop::run(args),
+        Command::Screen(args) => screen::run(args),
         Command::Completions(args) => completions::run(args),
         Command::Update(args) => update::run(args),
         Command::Mcp(args) => mcp::run(args),

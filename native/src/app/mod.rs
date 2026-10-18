@@ -230,6 +230,9 @@ mod remote_helpers;
 mod remote_open;
 #[path = "core/scanning.rs"]
 mod scanning;
+#[path = "screen_modules.rs"]
+mod screen_modules;
+pub(crate) use screen_modules::*;
 #[path = "core/share.rs"]
 mod share;
 #[path = "core/share_discovery_events.rs"]

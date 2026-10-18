@@ -67,7 +67,6 @@ pub(crate) fn session_row(session: &SessionView) -> String {
 }
 
 /// Draws the tab (called from `share_window_ui.rs` for `TAB_SCREEN`).
-#[allow(dead_code)] // Staged: the dispatch arm of `TAB_SCREEN` in `share_window_ui.rs` (U24's file).
 pub(crate) fn ui(ui: &mut egui::Ui) {
     let shared = state().clone();
     {

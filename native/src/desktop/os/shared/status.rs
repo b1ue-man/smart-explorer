@@ -5,6 +5,7 @@
 use serde_json::{json, Map, Value};
 
 use super::control::{AutostartState, Integration};
+use super::feed_sources::{device_tree_now, DeviceTreeView};
 use super::platform;
 use super::store::{DesktopDir, ShellRuntime};
 use super::Session;
@@ -299,10 +300,17 @@ impl StatusReport {
         );
         put("registrations", Value::Array(registrations));
         put("residue", Value::Array(residue));
-        // The S2 device tree joins with DSK-M4 (`DevicesStatus`, V4).
+        // The S2 device tree (`DevicesStatus`, V4), read from a running
+        // worker without starting one.
+        let tree = device_tree_now();
+        let available = matches!(&tree, DeviceTreeView::Known(status) if status.enabled);
         put(
             "devices_folder",
-            json!({ "available": false, "mounted": false, "root_path": null }),
+            json!({
+                "available": available,
+                "mounted": tree.mounted(),
+                "root_path": tree.root_path(),
+            }),
         );
         put("layout_saved", json!(self.layout_saved));
         put(
