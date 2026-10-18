@@ -1,10 +1,11 @@
 //! Sources of the shell's model besides the Share profiles (DSK-M4, C4.4):
 //! the S2 device tree (`Drive::DevicesStatus` once, then the long poll
 //! `DevicesWatch { since }`, V4), the S3 vault sites (`Vault::Status` of
-//! VLT-M4 in the feed's 900-ms tick, V10, H5) and the desktop folders (top
-//! level watched through `crate::watch`, read again after a notice). Every
-//! daemon read goes through the reads without service start
-//! (`request_if_running`, V11).
+//! VLT-M4 in the feed's 900-ms tick, V10, H5) and the platform's desktop
+//! folders (DSK-M5 Windows `FOLDERID_Desktop` and `FOLDERID_PublicDesktop`;
+//! top level watched through `crate::watch`, read again after a notice;
+//! hidden and system entries never shown). Every daemon read goes through
+//! the reads without service start (`request_if_running`, V11).
 //!
 //! Annahme until DRV-M6 (U17) delivers its variants: the device tree is the
 //! V4 object, as the answer itself or as one field of it. A worker without
@@ -296,20 +297,18 @@ pub(crate) struct DesktopFolder {
     pub(crate) launchers: bool,
 }
 
-/// The desktop folders of this user. DSK-M5 (Windows `FOLDERID_Desktop`,
-/// `FOLDERID_PublicDesktop`) and DSK-M6 (Linux `XDG_DESKTOP_DIR`) return the
-/// platform's folders here; until then only the suite switch names one.
+/// The desktop folders of this user: the suite switch's folder when it is
+/// set, else the platform's (Windows `FOLDERID_Desktop` and
+/// `FOLDERID_PublicDesktop`, DSK-M5; Linux `XDG_DESKTOP_DIR`, DSK-M6).
 pub(crate) fn desktop_folders() -> Vec<DesktopFolder> {
-    std::env::var_os(TEST_DESKTOP_DIR)
-        .filter(|value| !value.is_empty())
-        .map(|value| {
-            vec![DesktopFolder {
-                path: PathBuf::from(value),
-                public: false,
-                launchers: false,
-            }]
-        })
-        .unwrap_or_default()
+    match std::env::var_os(TEST_DESKTOP_DIR).filter(|value| !value.is_empty()) {
+        Some(value) => vec![DesktopFolder {
+            path: PathBuf::from(value),
+            public: false,
+            launchers: false,
+        }],
+        None => super::platform::desktop_folders(),
+    }
 }
 
 /// The entries of the desktop folders as the model carries them.
@@ -326,8 +325,12 @@ pub(crate) fn scan_folders(folders: &[DesktopFolder]) -> Vec<DesktopFile> {
             };
             let is_dir = std::fs::metadata(entry.path()).is_ok_and(|meta| meta.is_dir());
             let lower = name.to_lowercase();
+            // Windows: the attributes "Versteckt" and "System" (DSK-M5).
+            let hidden = name.starts_with('.')
+                || ALWAYS_HIDDEN.contains(&lower.as_str())
+                || super::platform::hidden_entry(&entry);
             files.push(DesktopFile {
-                hidden: name.starts_with('.') || ALWAYS_HIDDEN.contains(&lower.as_str()),
+                hidden,
                 launcher: folder.launchers && !is_dir && lower.ends_with(".desktop"),
                 public: folder.public,
                 is_dir,

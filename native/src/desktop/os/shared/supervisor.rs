@@ -4,6 +4,9 @@
 //! (`crash_rule`), follows `state.json` (disabled or removed: end within a
 //! second), `shell.stop` (restart) and the update stop marker (V8: stop the
 //! surfaces, end with 75). It never starts the background service (V11).
+//! Once a second it also looks at the monitors and keeps the platform's
+//! other parts current (DSK-M5 Windows: navigation pane and jump list,
+//! `supervisor_upkeep.rs`).
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -11,7 +14,7 @@ use std::time::{Duration, Instant};
 use super::crash_rule::{CrashRule, CrashVerdict};
 use super::layout_store::{self, LayoutStore};
 use super::model_feed::{FeedSources, ModelFeed};
-use super::store::{DesktopDir, ShellRuntime, SurfaceRuntime};
+use super::store::{DesktopDir, ShellRuntime};
 use super::supervisor_surface::{Surface, SurfaceSpawn};
 use super::surface_link::LinkEvent;
 use super::{platform, Monitor};
@@ -21,8 +24,10 @@ use crate::desktop::core::layout::DesktopLayout;
 use crate::desktop::core::mechanism::{self, Mechanism};
 use crate::desktop::core::protocol::EXIT_CHANNEL_END;
 use crate::desktop::core::protocol::{check_hello, ShellMessage, StopReason, SurfaceMessage};
-use crate::desktop::core::state::State;
-use crate::desktop::core::tiles::ShareState;
+use crate::desktop::core::state::{ModuleState, State};
+
+#[path = "supervisor_upkeep.rs"]
+mod upkeep;
 
 /// A surface without `alive` for this long hangs (C5.5, Annahme A45).
 pub(crate) const ALIVE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -73,6 +78,8 @@ pub(crate) fn run_shell() -> i32 {
     let (events_tx, events) = mpsc::channel();
     let (layouts, layout) = LayoutStore::open(dir.clone());
     let mut shell = Shell {
+        parts: platform::ShellParts::new(dir.clone(), gui.clone()),
+        seen: None,
         spawn: SurfaceSpawn::new(gui, events_tx),
         dir,
         surfaces: Vec::new(),
@@ -115,6 +122,10 @@ struct Shell {
     /// Decided at the start and again on a monitor or configuration change.
     mechanism: Mechanism,
     surface_on: bool,
+    /// `state.json` as read in the last round.
+    seen: Option<ModuleState>,
+    /// The platform's parts besides the surfaces (DSK-M5).
+    parts: platform::ShellParts,
     model_rev: u64,
     feed_rev: u64,
     runtime: Option<ShellRuntime>,
@@ -153,6 +164,7 @@ impl Shell {
                     return self.end(StopReason::Disable, 0, reason);
                 }
                 self.reload_config();
+                self.upkeep();
             }
             if let Some(code) = self.reap() {
                 return code;
@@ -172,6 +184,7 @@ impl Shell {
         match self.dir.read_state() {
             Ok(Some(state)) if state.state == State::Enabled && state.parts.any() => {
                 self.surface_on = state.parts.surface;
+                self.seen = Some(state);
                 Watch::Continue
             }
             Ok(Some(_)) => Watch::End("disabled"),
@@ -320,7 +333,7 @@ impl Shell {
                     self.model_rev += 1;
                 }
             }
-            SurfaceMessage::MonitorsChanged => self.refresh_monitors(),
+            SurfaceMessage::MonitorsChanged => self.poll_monitors(),
             // The wallpaper is read again by DSK-M4/DSK-M5.
             SurfaceMessage::WallpaperChanged => self.model_rev += 1,
             SurfaceMessage::Connect => self.feed.connect(),
@@ -449,35 +462,6 @@ impl Shell {
             }) {
                 surface.sent_rev = Some(rev);
             }
-        }
-    }
-
-    fn write_runtime(&mut self) {
-        let (share_state, reason) = match self.feed.latest().map(|feed| feed.tiles.share_state) {
-            Some(ShareState::Live) => ("live", None),
-            Some(ShareState::Profiles { reason }) => ("profiles", Some(reason)),
-            None => ("profiles", Some(super::model_feed::NO_SERVICE.to_string())),
-        };
-        let runtime = ShellRuntime {
-            shell_pid: std::process::id(),
-            exe: self.spawn.gui().to_string_lossy().into_owned(),
-            surfaces: self
-                .surfaces
-                .iter()
-                .map(|surface| SurfaceRuntime {
-                    monitor: surface.monitor.clone(),
-                    pid: surface.pid,
-                })
-                .collect(),
-            monitors: self.wanted_monitors().len(),
-            share_state: share_state.into(),
-            share_state_reason: reason,
-        };
-        if self.runtime.as_ref() != Some(&runtime) {
-            if let Err(error) = self.dir.write_shell(&runtime) {
-                self.dir.log("runtime_unwritable", &error);
-            }
-            self.runtime = Some(runtime);
         }
     }
 

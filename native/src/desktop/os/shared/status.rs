@@ -206,8 +206,18 @@ fn part_statuses(
                     kind: Registration::NavPaneClsid,
                     target: crate::desktop::core::ledger::DESKTOP_NAV_CLSID.into(),
                 }),
-                // DSK-M5 lets the running shell write the list.
-                Part::JumpList => enabled && enabled_module && running,
+                // DSK-M5: active once the running shell has written the list.
+                Part::JumpList => {
+                    enabled
+                        && enabled_module
+                        && running
+                        && module.is_some_and(|module| {
+                            module
+                                .ledger
+                                .iter()
+                                .any(|entry| entry.kind == Registration::JumpList)
+                        })
+                }
             };
             let reason = match (missing, active, enabled) {
                 (Some((_, reason)), _, _) => Some(reason.clone()),

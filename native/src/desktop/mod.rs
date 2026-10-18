@@ -9,10 +9,9 @@
 //! (`--desktop-surface`), the read without service start, the status and
 //! the start switches. Inventory: `docs/oberflaechen/desktop-launcher.md`.
 // The start switches (`run_gui`), `se desktop`, MCP `status` and Windows
-// `--unregister` reach this module. Staged until DSK-M5 (U32, Windows) and
-// DSK-M6 (U34, Linux): `FitMode::from_windows` and `FitMode::from_gnome` of
-// the system wallpaper have no caller yet; a build without this allow names
-// every other part without one.
+// `--unregister` reach this module. Staged until DSK-M6 (U34, Linux):
+// `FitMode::from_gnome` of the system wallpaper has no caller yet; a build
+// without this allow names every other part without one.
 #![allow(dead_code)]
 
 pub(crate) mod core;

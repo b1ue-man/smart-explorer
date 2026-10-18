@@ -189,6 +189,7 @@ fn item_tile(ui: &mut egui::Ui, item: &ItemId, rect: Rect, area: Rect, now: i64,
     };
     let look = tile_ui::look(found, now);
     let is_room = matches!(found, ItemRef::Room(_));
+    let is_file = matches!(found, ItemRef::File(_));
     let id = egui::Id::new(("se-desktop-item", item.encode()));
     let mut response = ui.interact(rect, id, Sense::click_and_drag());
     let state = TileState {
@@ -219,6 +220,11 @@ fn item_tile(ui: &mut egui::Ui, item: &ItemId, rect: Rect, area: Rect, now: i64,
         select(cx.state, item, false);
     }
     if response.dragged() {
+        // DSK-M5: over another program's window the selection goes out
+        // through the system's drag and drop (Windows).
+        if is_file && menu::drag_out_selected(ui.ctx(), item, cx) {
+            return;
+        }
         if let Some(pointer) = ui.ctx().pointer_latest_pos() {
             let ghost = Rect::from_center_size(pointer, CELL);
             let ghost_state = TileState {

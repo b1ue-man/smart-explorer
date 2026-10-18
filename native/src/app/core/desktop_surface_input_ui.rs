@@ -135,11 +135,21 @@ pub(crate) fn dropped_files(ctx: &egui::Context, cx: &mut Cx<'_>) {
         return;
     }
     match cx.view.folder(false).map(Path::to_path_buf) {
-        Some(folder) => cx.actions.run(DesktopOp::Transfer {
-            sources,
-            folder,
-            cut,
-        }),
+        Some(folder) => {
+            // A file of the desktop folder dropped on its own surface (a
+            // drag out that came back) stays where it is.
+            let sources: Vec<PathBuf> = sources
+                .into_iter()
+                .filter(|source| source.parent() != Some(folder.as_path()))
+                .collect();
+            if !sources.is_empty() {
+                cx.actions.run(DesktopOp::Transfer {
+                    sources,
+                    folder,
+                    cut,
+                });
+            }
+        }
         None => cx
             .state
             .notice("Kein Desktop-Ordner bekannt: Ablegen nicht möglich".to_string()),
