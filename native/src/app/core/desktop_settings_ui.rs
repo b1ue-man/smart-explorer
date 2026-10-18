@@ -8,6 +8,7 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
+use super::desktop_surface_settings_ui::ui_desktop_appearance;
 use crate::app::prelude::*;
 use crate::app::settings_ui::SettingsPage;
 use crate::app::start_request::{StartPage, StartRequest};
@@ -209,6 +210,8 @@ impl App {
         self.ui_desktop_state(ui, &shared, &report, busy, confirm);
         if report.state != State::Absent {
             ui_desktop_parts(ui, &shared, &report, busy);
+            // DSK-M4: background, groups and "Geräte öffnen mit".
+            ui_desktop_appearance(ui, &report);
         }
         ui_desktop_facts(ui, &report);
         if !report.daemon_autostart {
@@ -329,18 +332,25 @@ impl App {
 
     /// V9 window kinds of S5, once in the first frame. Tab numbers 0
     /// (Geräte) and 1 (Räume) keep their meaning for outside callers
-    /// (`share_pages_ui.rs`).
+    /// (`share_pages_ui.rs`). A device or room page opens through the page
+    /// functions of `share_pages_ui.rs`; an unknown ID shows its tab.
     pub(in crate::app) fn open_start_request(&mut self, request: StartRequest) {
         match request {
             StartRequest::OpenLocation { locator } => self.navigate_to_location(&locator),
             StartRequest::OpenPage { page } => match page {
-                StartPage::ShareDevices | StartPage::ShareDevice { .. } => {
+                StartPage::ShareDevices => {
                     self.show_share = true;
                     self.share_tab = 0;
                 }
-                StartPage::ShareRooms | StartPage::ShareRoom { .. } => {
+                StartPage::ShareDevice { contact_id } => {
+                    self.open_share_contact_page(&contact_id);
+                }
+                StartPage::ShareRooms => {
                     self.show_share = true;
                     self.share_tab = 1;
+                }
+                StartPage::ShareRoom { room_id } => {
+                    self.open_share_room_page(&room_id);
                 }
                 StartPage::SettingsIntegration => self.open_settings(SettingsPage::Integration),
             },

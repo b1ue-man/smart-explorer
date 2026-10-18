@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::crash_rule::{CrashRule, CrashVerdict};
+use super::layout_store::{self, LayoutStore};
 use super::model_feed::{FeedSources, ModelFeed};
 use super::store::{DesktopDir, ShellRuntime, SurfaceRuntime};
 use super::supervisor_surface::{Surface, SurfaceSpawn};
@@ -70,6 +71,7 @@ pub(crate) fn run_shell() -> i32 {
         }
     };
     let (events_tx, events) = mpsc::channel();
+    let (layouts, layout) = LayoutStore::open(dir.clone());
     let mut shell = Shell {
         spawn: SurfaceSpawn::new(gui, events_tx),
         dir,
@@ -78,7 +80,8 @@ pub(crate) fn run_shell() -> i32 {
         crashes: CrashRule::default(),
         events,
         feed,
-        layout: DesktopLayout::default(),
+        layout,
+        layouts,
         config: None,
         monitors: Vec::new(),
         mechanism: Mechanism::Unavailable(mechanism::Reason::NoGraphicalSession),
@@ -105,6 +108,8 @@ struct Shell {
     events: Receiver<(u64, LinkEvent<SurfaceMessage>)>,
     feed: ModelFeed,
     layout: DesktopLayout,
+    /// The only writer of `layout/*.json` (DSK-M4).
+    layouts: LayoutStore,
     config: Option<DesktopConfig>,
     monitors: Vec<Monitor>,
     /// Decided at the start and again on a monitor or configuration change.
@@ -156,6 +161,9 @@ impl Shell {
                 return code;
             }
             self.push_models();
+            if let Err(error) = self.layouts.save_at(&self.layout, self.model_rev) {
+                self.dir.log("layout_unwritable", &error);
+            }
             self.write_runtime();
         }
     }
@@ -196,6 +204,11 @@ impl Shell {
         self.monitors = platform::monitors();
         self.mechanism = self.decide_mechanism();
         self.model_rev += 1;
+        // C5.5: the primary monitor keeps the items of a monitor that left.
+        if let Some(primary) = self.primary_monitor() {
+            let present = self.wanted_monitors();
+            let _ = self.layout.adopt_removed_monitors(&primary, &present);
+        }
     }
 
     fn decide_mechanism(&self) -> Mechanism {
@@ -395,6 +408,7 @@ impl Shell {
         if feed.rev != self.feed_rev {
             self.feed_rev = feed.rev;
             self.model_rev += 1;
+            layout_store::forget_missing_files(&mut self.layout, &feed.files);
         }
         let config = self
             .config
@@ -403,7 +417,7 @@ impl Shell {
         let items = crate::desktop::core::items::surface_items(
             platform::PLATFORM,
             &config,
-            &[],
+            &feed.files,
             &feed.tiles,
         );
         if let Some(primary) = self.primary_monitor() {
@@ -422,6 +436,7 @@ impl Shell {
             }
             let Some(model) = super::supervisor_surface::surface_model(
                 &feed.tiles,
+                &feed.files,
                 &config,
                 &mut self.layout,
                 &surface.monitor,

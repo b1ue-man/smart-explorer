@@ -10,10 +10,20 @@ pub(crate) mod control;
 pub(crate) mod control_types;
 #[path = "shared/crash_rule.rs"]
 pub(crate) mod crash_rule;
+// DSK-M4: file actions, sources of the model, the arrangement's only
+// writer, opening from the surface and the wallpaper image.
+#[path = "shared/desktop_ops.rs"]
+pub(crate) mod desktop_ops;
+#[path = "shared/feed_sources.rs"]
+pub(crate) mod feed_sources;
 #[path = "shared/launch.rs"]
 pub(crate) mod launch;
+#[path = "shared/layout_store.rs"]
+pub(crate) mod layout_store;
 #[path = "shared/model_feed.rs"]
 pub(crate) mod model_feed;
+#[path = "shared/open_target.rs"]
+pub(crate) mod open_target;
 #[path = "shared/status.rs"]
 pub(crate) mod status;
 #[path = "shared/store.rs"]
@@ -24,6 +34,8 @@ pub(crate) mod supervisor;
 pub(crate) mod supervisor_surface;
 #[path = "shared/surface_link.rs"]
 pub(crate) mod surface_link;
+#[path = "shared/wallpaper_image.rs"]
+pub(crate) mod wallpaper_image;
 
 #[cfg(target_os = "linux")]
 #[path = "linux_os/mod.rs"]
