@@ -25,6 +25,9 @@ pub(super) fn mount_status_alert(
     }
     let label = &mount.config.label;
     match &mount.status {
+        // DRV-M7: a vault drive that waits for its vault's unlock is no
+        // failure; the drive list says so calmly.
+        crate::mount::MountStatus::Failed { detail } if waits_for_vault(detail) => None,
         crate::mount::MountStatus::Conflict { path, detail, .. } => Some(format!(
             "Laufwerk \"{label}\": Die Wiederherstellung der Aenderung an {path} ist noch offen: {detail}. Vorhandene Recovery-Daten und das Journal bleiben erhalten; Details stehen im Laufwerksmanager."
         )),
@@ -50,14 +53,20 @@ pub(super) fn mount_status_alert(
 /// Keep its details visible in the manager and alert on later transitions or
 /// explicit actions through mount_status_alert as before.
 pub(super) fn has_mount_attention(mounts: &[crate::mount::MountSnapshot]) -> bool {
-    mounts.iter().any(|mount| {
-        matches!(
-            mount.status,
-            crate::mount::MountStatus::Failed { .. }
-                | crate::mount::MountStatus::Conflict { .. }
-                | crate::mount::MountStatus::RuntimeUnavailable { .. }
-        )
+    mounts.iter().any(|mount| match &mount.status {
+        crate::mount::MountStatus::Failed { detail } => !waits_for_vault(detail),
+        crate::mount::MountStatus::Conflict { .. }
+        | crate::mount::MountStatus::RuntimeUnavailable { .. } => true,
+        _ => false,
     })
+}
+
+/// DRV-M7: the status of a vault drive whose vault is locked carries the
+/// code `vault_locked` (`daemon/os/shared/mount_termination.rs`).
+pub(super) fn waits_for_vault(detail: &str) -> bool {
+    detail
+        .strip_prefix(crate::vault::VAULT_LOCKED_CODE)
+        .is_some_and(|rest| rest.starts_with(": "))
 }
 
 pub(super) fn mount_list_alert(
@@ -85,6 +94,9 @@ pub(super) fn recovery_label(recovery: crate::mount::MountRecovery) -> &'static 
         crate::mount::MountRecovery::Clean => "Recovery: sauber",
         crate::mount::MountRecovery::Required => "Recovery: Aenderungen oder Konflikte offen",
         crate::mount::MountRecovery::Unknown => "Recovery: noch nicht verifiziert",
+        crate::mount::MountRecovery::RequiresUnlock { .. } => {
+            "Recovery: versiegelte Aenderungen warten auf das Entsperren des Tresors"
+        }
     }
 }
 
@@ -113,6 +125,9 @@ pub(super) fn status_label(status: &crate::mount::MountStatus) -> String {
         }
         crate::mount::MountStatus::Conflict { path, detail, .. } => {
             format!("Pruefung offen bei {path}: {detail}")
+        }
+        crate::mount::MountStatus::Failed { detail } if waits_for_vault(detail) => {
+            "Tresor gesperrt – wird nach dem Entsperren eingebunden".into()
         }
         crate::mount::MountStatus::Failed { detail } => format!("Fehler: {detail}"),
     }

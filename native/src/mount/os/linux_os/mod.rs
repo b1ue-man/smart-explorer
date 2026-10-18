@@ -37,8 +37,11 @@ pub(crate) mod fuse_runtime;
 mod fuse_workers;
 #[cfg(target_os = "linux")]
 pub(crate) mod mount_point;
+// VLT-M12: end-to-end signal of vault drives over FUSE.
+#[cfg(all(test, target_os = "linux"))]
+mod vault_fuse_task_tests;
 
-pub(crate) use cache_lease::audit_recovery;
+pub(crate) use cache_lease::{audit_pending, audit_recovery};
 #[cfg(target_os = "linux")]
 pub(crate) use fuse_host::run_mount_host;
 #[cfg(target_os = "linux")]

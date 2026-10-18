@@ -269,15 +269,19 @@ pub(super) fn audit_recovery(
     base: &Path,
     mount_id: &MountId,
 ) -> io::Result<super::recovery_state::MountRecovery> {
-    let (_spool, recovered) = WholeFileSpool::open(base, mount_id)?;
-    if recovered.entries.is_empty()
-        && recovered.deletes.is_empty()
-        && recovered.namespace_conflicts.is_empty()
-    {
+    if audit_pending(base, mount_id)? == 0 {
         Ok(super::recovery_state::MountRecovery::Clean)
     } else {
         Ok(super::recovery_state::MountRecovery::Required)
     }
+}
+
+/// Journal records (changes, deletes, namespace intents) a drive still
+/// owns. Needs no key: a vault drive's journal replays with its path fields
+/// still sealed, which only names records (DRV-M7, `RequiresUnlock`).
+pub(super) fn audit_pending(base: &Path, mount_id: &MountId) -> io::Result<usize> {
+    let (_spool, recovered) = WholeFileSpool::open(base, mount_id)?;
+    Ok(recovered.entries.len() + recovered.deletes.len() + recovered.namespace_conflicts.len())
 }
 
 impl Drop for WholeFileSpool {

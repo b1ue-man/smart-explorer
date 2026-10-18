@@ -6,7 +6,8 @@ use std::{
 };
 
 use crate::mount::{
-    DriveLetter, DriveSelection, MountConfig, MountId, MountMode, MountSnapshot, MountStatus,
+    DriveLetter, DriveSelection, MountConfig, MountId, MountMode, MountSnapshot, MountSource,
+    MountStatus,
 };
 
 #[path = "drive_options.rs"]
@@ -36,7 +37,7 @@ enum DriveCommand {
     )]
     InstallRuntime(InstallRuntimeArgs),
     #[command(
-        about = "Mount a saved remote or Share peer as a drive (Windows: letter, Linux: folder)"
+        about = "Mount a saved remote, Share peer or unlocked vault (vault://<SITE>) as a drive (Windows: letter, Linux: folder)"
     )]
     Mount(MountArgs),
     #[command(about = "List drives managed by Smart Explorer")]
@@ -155,7 +156,13 @@ fn mount(args: MountArgs) -> Result<i32, String> {
         .as_deref()
         .map(absolute_folder)
         .transpose()?;
-    let (source, _display_label) = source_from_spec(&args.target)?;
+    // DRV-M7 (P3): a vault mounts as `vault://<SITE>`; its label is the
+    // vault's label unless `--label` names another.
+    let vault = vault_source(&args.target)?;
+    let (source, _display_label) = match &vault {
+        Some((source, label)) => (source.clone(), label.clone()),
+        None => source_from_spec(&args.target)?,
+    };
     let drive = parse_drive_selection(&args.letter)?;
     let mode = if args.read_write {
         MountMode::ReadWrite
@@ -163,8 +170,12 @@ fn mount(args: MountArgs) -> Result<i32, String> {
         MountMode::ReadOnly
     };
     // A Windows volume label is visible outside Smart Explorer. Endpoint and
-    // account display text therefore requires an explicit --label opt-in.
-    let label = bounded_label(args.label.as_deref().unwrap_or("Smart Explorer"));
+    // account display text therefore requires an explicit --label opt-in;
+    // a vault's own label is the name the user gave it.
+    let default_label = vault
+        .as_ref()
+        .map_or("Smart Explorer", |(_, label)| label.as_str());
+    let label = bounded_label(args.label.as_deref().unwrap_or(default_label));
     let root_security = if args.trust_remote_root {
         crate::mount::MountRootSecurity::Trusted
     } else {
@@ -356,9 +367,46 @@ fn snapshot_line(snapshot: &MountSnapshot) -> String {
         snapshot.config.id,
         requested,
         mode,
-        status_text(&snapshot.status),
+        status_column(snapshot),
         clean(&snapshot.config.label),
     )
+}
+
+/// DRV-M7: a vault drive whose vault is locked shows `requires-unlock:<n>`
+/// with sealed changes and `failed:vault_locked` without; JSON keeps the
+/// full status and `recovery`.
+fn status_column(snapshot: &MountSnapshot) -> String {
+    if let Some(pending) = snapshot.recovery.pending_unlock() {
+        return format!("requires-unlock:{pending}");
+    }
+    match &snapshot.status {
+        MountStatus::Failed { detail } if is_vault_locked(detail) => "failed:vault_locked".into(),
+        status => status_text(status),
+    }
+}
+
+fn is_vault_locked(detail: &str) -> bool {
+    detail
+        .strip_prefix(crate::vault::VAULT_LOCKED_CODE)
+        .is_some_and(|rest| rest.starts_with(": "))
+}
+
+/// `vault://<SITE>` as a drive source: the site ID of the vault list and
+/// the vault's label. A vault drive always shows the whole vault.
+fn vault_source(target: &str) -> Result<Option<(MountSource, String)>, String> {
+    let target = target.trim();
+    if !crate::vault::is_vault_locator(target) {
+        return Ok(None);
+    }
+    let locator = crate::vault::VaultLocator::parse(target).map_err(|_| {
+        "vault-store:// lässt sich nicht einbinden; nutze vault://<SITE>".to_string()
+    })?;
+    if locator.path.trim_matches('/') != "" {
+        return Err("Ein Tresor-Laufwerk zeigt immer den ganzen Tresor: vault://<SITE>".into());
+    }
+    let record = crate::vault::RegistryStore::open_default().resolve(&locator.site)?;
+    let label = record.display_label().to_string();
+    Ok(Some((MountSource::Vault { site_id: record.id }, label)))
 }
 
 fn status_text(status: &MountStatus) -> String {
@@ -393,4 +441,55 @@ fn exit_for_status(status: &MountStatus) -> i32 {
 
 fn clean(value: &str) -> String {
     value.replace(['\t', '\r', '\n'], " ")
+}
+
+#[cfg(test)]
+mod vault_status_tests {
+    use super::{snapshot_line, status_column};
+    use crate::mount::{
+        DriveSelection, MountConfig, MountId, MountMode, MountRecovery, MountSnapshot, MountSource,
+        MountStatus,
+    };
+
+    fn vault_drive(status: MountStatus, recovery: MountRecovery) -> MountSnapshot {
+        let config = MountConfig::new(
+            MountId::parse("vault-drive").unwrap(),
+            MountSource::Vault {
+                site_id: "0123456789abcdef0123456789abcdef".into(),
+            },
+            DriveSelection::Automatic,
+            MountMode::ReadWrite,
+            "Privat",
+        )
+        .unwrap();
+        MountSnapshot {
+            config,
+            status,
+            recovery,
+            recovery_required_compat: recovery.requires_retention(),
+        }
+    }
+
+    #[test]
+    fn vault_drive_cli_status_columns() {
+        let locked = MountStatus::Failed {
+            detail: "vault_locked: Tresor Privat ist gesperrt: se vault unlock 0123".into(),
+        };
+        let clean = vault_drive(locked.clone(), MountRecovery::Clean);
+        assert_eq!(status_column(&clean), "failed:vault_locked");
+        assert!(snapshot_line(&clean).contains("\tfailed:vault_locked\t"));
+        let pending = vault_drive(locked, MountRecovery::RequiresUnlock { pending: 3 });
+        assert_eq!(status_column(&pending), "requires-unlock:3");
+        let json = serde_json::to_value(&pending).unwrap();
+        assert_eq!(json["recovery"]["requires_unlock"]["pending"], 3);
+        assert_eq!(json["recovery_required"], true);
+        // Other failures keep their text.
+        let other = vault_drive(
+            MountStatus::Failed {
+                detail: "vault_lockedness".into(),
+            },
+            MountRecovery::Clean,
+        );
+        assert_eq!(status_column(&other), "failed:vault_lockedness");
+    }
 }

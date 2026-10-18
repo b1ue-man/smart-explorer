@@ -21,12 +21,18 @@ const RESTART_DETAIL: &str =
 mod entry_state;
 #[path = "mount_manager_host.rs"]
 mod host;
+// DRV-M7: the lock participant of vault drives and its channel.
+#[path = "mount_lock_participant.rs"]
+pub(in crate::daemon) mod lock_participant;
 #[path = "mount_restore.rs"]
 mod restore;
 #[path = "mount_manager_start_cache.rs"]
 mod start_cache;
 #[path = "mount_manager_start.rs"]
 mod start_path;
+// DRV-M7: the end of vault drives and their return after an unlock.
+#[path = "mount_termination.rs"]
+pub(in crate::daemon) mod termination;
 #[path = "mount_manager_capabilities.rs"]
 mod write_capabilities;
 
@@ -41,6 +47,8 @@ pub(super) struct MountManager {
     registry_error: Arc<Mutex<Option<String>>>,
     /// DRV-M3: registry records that survive a clean end (`mount_restore.rs`).
     retention: Arc<Mutex<restore::Retention>>,
+    /// DRV-M7: lock orders and hooks of vault drives (`mount_termination.rs`).
+    vault: Arc<termination::VaultDrives>,
 }
 
 struct MountEntry {
@@ -62,6 +70,12 @@ struct MountEntry {
     host_terminal_failure: bool,
     registry_recorded: bool,
     recovery: MountRecovery,
+    /// DRV-M7: the host ends for a lock of its vault, with this many
+    /// unpublished changes once it answered.
+    lock_end: bool,
+    lock_pending: Option<u32>,
+    /// DRV-M7: the daemon asked the host to stop (`MountTerminated`).
+    stop_requested: bool,
 }
 
 impl Default for MountManager {
@@ -105,6 +119,7 @@ impl MountManager {
             lifecycle: Arc::new(Mutex::new(())),
             registry_error: Arc::new(Mutex::new(registry_error)),
             retention: Arc::new(Mutex::new(restore::Retention::default())),
+            vault: Arc::new(termination::VaultDrives::default()),
         }
     }
 
@@ -185,6 +200,7 @@ impl MountManager {
             ) {
                 entry.status = MountStatus::Unmounting;
             }
+            entry.stop_requested = true;
             entry.control.clone()
         };
         if let Some(control) = control {
@@ -434,5 +450,8 @@ fn registered_entry(config: MountConfig, recovery: MountRecovery, detail: String
         host_terminal_failure: false,
         registry_recorded: true,
         recovery,
+        lock_end: false,
+        lock_pending: None,
+        stop_requested: false,
     }
 }

@@ -71,6 +71,18 @@ pub(crate) fn audit_recovery(
     crate::mount::spool::audit_recovery(cache_root, mount_id)
 }
 
+/// Journal records a drive whose host is not running still owns, read
+/// under the lease (DRV-M7: the count of `RequiresUnlock`).
+pub(crate) fn audit_pending(cache_root: &Path, mount_id: &MountId) -> io::Result<usize> {
+    match fs::symlink_metadata(cache_root.join(mount_id.as_str())) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(error),
+        Ok(_) => {}
+    }
+    let _lease = CacheLease::acquire(cache_root, mount_id)?;
+    crate::mount::spool::audit_pending(cache_root, mount_id)
+}
+
 pub(super) fn prepare_plain_directory(path: &Path) -> io::Result<File> {
     match fs::create_dir(path) {
         Ok(()) => {}

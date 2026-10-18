@@ -55,6 +55,11 @@ mod optimization_task;
 #[path = "host_session_windows_tests.rs"]
 mod host_session_windows;
 
+// DRV-M7, VLT-M12: vault drives over Dokany.
+#[cfg(test)]
+#[path = "vault_drive_task_tests.rs"]
+mod vault_drive_task;
+
 pub(crate) fn preflight_runtime() -> Result<DokanyRuntimeInfo, DokanyPreflightError> {
     DokanyRuntime::preflight().map(|runtime| runtime.info())
 }

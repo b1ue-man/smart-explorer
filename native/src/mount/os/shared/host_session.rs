@@ -11,6 +11,10 @@
 //! what the frontend can publish is published, everything else stays in
 //! the journal for Retry — and the host ends with `EXIT_UPDATE_STOP` (75),
 //! so no supervisor restarts it and the updater can replace the image.
+//!
+//! Vault drives (DRV-M7, `host_storage.rs`): a drive over the cleartext view
+//! of a vault opens its engine with the sealed storage of its spool key, and
+//! the control loop takes the lock orders of its vault.
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -20,12 +24,22 @@ use crate::daemon::{
     MountHostConfig, MountHostSession, UpdateStopBaseline, EXIT_UPDATE_STOP, UPDATE_STOP_POLL,
 };
 use crate::mount::{
-    prepare_spool_root, EntryCondition, MountEngine, MountRecovery, MountRuntimeConfig,
-    MountStatus, MountStorage,
+    prepare_spool_root, MountEngine, MountRecovery, MountRuntimeConfig, MountStatus,
 };
-use crate::vfs::BackendHandle;
+use crate::vfs::{BackendHandle, Scheme};
 
-use super::host_platform::{HostPlatform, HostStepError, VolumeLocation, VolumePoll};
+use super::host_platform::{HostPlatform, HostStepError, VolumePoll};
+
+#[path = "host_storage.rs"]
+mod host_storage;
+#[path = "host_session_reports.rs"]
+mod reports;
+
+pub(crate) use host_storage::{LockAnswer, LockOrder, SpoolKeyAnswer};
+use reports::{
+    conflict_status, inspect_recovery, mounted_status, recovery_detail, report_engine_failure,
+    report_failure, report_failure_with_recovery,
+};
 
 /// One control wait between two loop turns (value of v0.5.182).
 pub(crate) const CONTROL_POLL: Duration = Duration::from_millis(250);
@@ -35,6 +49,17 @@ pub(crate) trait HostControl {
     fn report(&self, status: MountStatus, recovery: Option<MountRecovery>) -> Result<(), String>;
     /// `true` for an unmount request and for a lost daemon connection.
     fn wait_for_stop(&self, timeout: Duration) -> bool;
+    /// Vault drives (DRV-M7): the drive's spool key (`Vault::SpoolKey`).
+    fn spool_key(&self) -> SpoolKeyAnswer {
+        SpoolKeyAnswer::Failed("this drive host has no key path".into())
+    }
+    /// Vault drives (DRV-M7): a lock order of the vault, asked once per
+    /// turn of the control loop.
+    fn lock_order(&self) -> Option<LockOrder> {
+        None
+    }
+    /// The answer to the last lock order.
+    fn answer_lock(&self, _answer: LockAnswer) {}
 }
 
 impl HostControl for MountHostSession {
@@ -44,6 +69,18 @@ impl HostControl for MountHostSession {
 
     fn wait_for_stop(&self, timeout: Duration) -> bool {
         self.wait_for_stop_timeout(timeout)
+    }
+
+    fn spool_key(&self) -> SpoolKeyAnswer {
+        self.request_spool_key()
+    }
+
+    fn lock_order(&self) -> Option<LockOrder> {
+        self.next_lock_order()
+    }
+
+    fn answer_lock(&self, answer: LockAnswer) {
+        self.send_lock_answer(answer)
     }
 }
 
@@ -189,13 +226,13 @@ fn run_leased(
         .with_cache_policy(config.cache)
         .with_runtime_preference(config.runtime_preference)
         .with_path_dialect(dialect);
-    // A vault drive (DRV-M7) passes its sealed storage here.
-    let engine = match MountEngine::open_host_cache_with(
-        runtime,
-        backend,
-        spool_root,
-        MountStorage::plain(),
-    ) {
+    // A vault drive (DRV-M7) opens with the sealed storage of its spool key.
+    let vault = backend.scheme() == Scheme::Vault;
+    let storage = match host_storage::storage_for(control, vault, spool_root, &config.id) {
+        Ok(storage) => storage,
+        Err(detail) => return Ended::failed(detail),
+    };
+    let engine = match MountEngine::open_host_cache_with(runtime, backend, spool_root, storage) {
         Ok(engine) => engine.with_cache_space_probe(space),
         Err(_) => {
             return Ended::failed(report_failure_with_recovery(
@@ -299,6 +336,9 @@ fn run_until_stopped(
         if control.wait_for_stop(CONTROL_POLL) {
             return finish(platform, control, engine, None, HostExit::Stopped);
         }
+        if let Some(ended) = host_storage::lock_turn(platform, control, engine) {
+            return ended;
+        }
         if update_checked.elapsed() >= update_stop.interval {
             update_checked = Instant::now();
             if update_stop.baseline.requested() {
@@ -389,94 +429,6 @@ fn close_and_finalize(
                 }),
         },
     }
-}
-
-fn mounted_status(location: VolumeLocation) -> MountStatus {
-    match location {
-        VolumeLocation::Drive(drive) => MountStatus::Mounted { drive },
-        VolumeLocation::Directory(path) => MountStatus::MountedAt { path },
-    }
-}
-
-fn conflict_status(location: VolumeLocation, first: &(String, EntryCondition)) -> MountStatus {
-    let (path, condition) = first;
-    let detail = match condition {
-        EntryCondition::Conflict(conflict) => conflict.detail.clone(),
-        EntryCondition::Dirty => "a cached change still requires safe remote recovery".into(),
-        EntryCondition::Clean => "mounted-drive recovery is incomplete".into(),
-    };
-    match location {
-        VolumeLocation::Drive(drive) => MountStatus::Conflict {
-            drive,
-            path: path.clone(),
-            detail,
-        },
-        // `Conflict` names a drive letter; a folder drive reports where it
-        // is, and the journal keeps the conflict for the unmount report.
-        VolumeLocation::Directory(path) => MountStatus::MountedAt { path },
-    }
-}
-
-fn recovery_detail(entries: &[(String, EntryCondition)]) -> String {
-    let dirty = entries
-        .iter()
-        .filter(|(_, condition)| matches!(condition, EntryCondition::Dirty))
-        .count();
-    let conflicts = entries
-        .iter()
-        .filter(|(_, condition)| matches!(condition, EntryCondition::Conflict(_)))
-        .count();
-    format!(
-        "{} cached change(s) remain after unmount ({} dirty, {} conflict); keep the mount and use Retry",
-        entries.len(),
-        dirty,
-        conflicts
-    )
-}
-
-fn report_failure(control: &dyn HostControl, message: &str) -> String {
-    let _ = control.report(
-        MountStatus::Failed {
-            detail: message.to_string(),
-        },
-        None,
-    );
-    message.to_string()
-}
-
-fn report_failure_with_recovery(
-    control: &dyn HostControl,
-    message: &str,
-    recovery: MountRecovery,
-) -> String {
-    let _ = control.report(
-        MountStatus::Failed {
-            detail: message.to_string(),
-        },
-        Some(recovery),
-    );
-    message.to_string()
-}
-
-/// A failure before the volume exists: the recovery value says whether the
-/// journal still owns changes.
-fn report_engine_failure(control: &dyn HostControl, engine: &MountEngine, message: &str) -> String {
-    let recovery = match engine.dirty_entries() {
-        Ok(entries) if entries.is_empty() => MountRecovery::Clean,
-        Ok(_) => MountRecovery::Required,
-        Err(_) => MountRecovery::Unknown,
-    };
-    report_failure_with_recovery(control, message, recovery)
-}
-
-fn inspect_recovery(engine: &MountEngine) -> io::Result<MountRecovery> {
-    engine.dirty_entries().map(|entries| {
-        if entries.is_empty() {
-            MountRecovery::Clean
-        } else {
-            MountRecovery::Required
-        }
-    })
 }
 
 #[cfg(test)]

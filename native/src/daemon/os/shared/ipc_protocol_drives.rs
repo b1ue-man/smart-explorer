@@ -2,7 +2,7 @@
 //! carry the daemon token (DRV-M3; plan 2026-10-17 C1 V2, V4 and C2 S1
 //! Punkt 3). DRV-M3 adds the drive options and the restore; DRV-M6 adds the
 //! device tree (`DevicesStatus`, `DevicesEnable`, `DevicesDisable`,
-//! `DevicesWatch`) and DRV-M7 `MountPathFor` here. The answers reuse
+//! `DevicesWatch`) and DRV-M7 `MountPathFor` (`mount_paths.rs`) here. The answers reuse
 //! `IpcResponse::Mount` and `IpcResponse::Mounts`, so the hub enum of
 //! answers does not grow.
 use serde::{Deserialize, Serialize};
@@ -33,6 +33,9 @@ pub(crate) enum DriveIpcRequest {
     /// The login entry: mount every registered drive that restores at login
     /// and is not mounted.
     Restore,
+    /// DRV-M7 (S2-V8): the mounted drive that serves `location`, answered
+    /// as `IpcResponse::Mounts` with at most one drive.
+    MountPathFor { location: String },
 }
 
 impl DriveIpcRequest {
@@ -40,8 +43,10 @@ impl DriveIpcRequest {
     /// drive restore (S2 K7, `run_start_reason.rs`): requests of the app and
     /// of `se` do, the login entry does not. DRV-M6 adds the read-only views
     /// of se Desktop (`DevicesStatus`, `DevicesWatch`) as non-promoting.
+    /// `MountPathFor` comes only from opening a file in the app, `se` or
+    /// `se mcp`, so it promotes like every other request of theirs.
     pub(crate) fn promotes_daemon(&self) -> bool {
-        matches!(self, Self::SetOptions { .. })
+        matches!(self, Self::SetOptions { .. } | Self::MountPathFor { .. })
     }
 }
 
@@ -61,6 +66,14 @@ pub(crate) fn serve(
         DriveIpcRequest::Restore => {
             super::run_start_reason::restore_drives(host);
             match host.mounts.list() {
+                Ok(mounts) => IpcResponse::Mounts { mounts },
+                Err(msg) => IpcResponse::Err { msg, code: None },
+            }
+        }
+        DriveIpcRequest::MountPathFor { location } => {
+            match host.mounts.list().and_then(|mounts| {
+                super::super::mount_client::mounts_for_location(mounts, &location)
+            }) {
                 Ok(mounts) => IpcResponse::Mounts { mounts },
                 Err(msg) => IpcResponse::Err { msg, code: None },
             }
@@ -137,5 +150,14 @@ mod tests {
             serde_json::to_string(&DriveIpcRequest::Restore).unwrap(),
             r#"{"op":"restore"}"#
         );
+        let path_for = DriveIpcRequest::MountPathFor {
+            location: "vault://Privat/a.txt".into(),
+        };
+        assert_eq!(
+            serde_json::to_string(&path_for).unwrap(),
+            r#"{"op":"mount_path_for","location":"vault://Privat/a.txt"}"#
+        );
+        assert!(path_for.promotes_daemon());
+        assert!(!DriveIpcRequest::Restore.promotes_daemon());
     }
 }
