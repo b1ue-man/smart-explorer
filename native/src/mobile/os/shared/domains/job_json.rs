@@ -88,6 +88,11 @@ pub(super) fn job_json(
     });
     if let (Value::Object(map), Value::Object(rest)) = (&mut value, rest) {
         map.extend(rest);
+        // Vault sync jobs (C5.8): kind and sites; their fixed fields stay
+        // fixed when a draft is saved (the job validation refuses changes).
+        map.insert("kind".into(), json!(job.kind.as_str()));
+        map.insert("vaultSiteA".into(), json!(job.vault_site_a));
+        map.insert("vaultSiteB".into(), json!(job.vault_site_b));
     }
     value
 }
@@ -357,7 +362,8 @@ fn apply_calendar(editor: &mut JobEditor, calendar: &Map<String, Value>, errors:
 /// Assigns the editor's single German error to the field it concerns.
 pub(super) fn field_for_message(message: &str) -> &'static str {
     // Order matters: the active-time messages also contain "Uhrzeit".
-    const RULES: [(&str, &str); 29] = [
+    const RULES: [(&str, &str); 30] = [
+        ("Tresor-Job", "kind"),
         ("Quelle und Ziel", "target"),
         ("Ignoriermuster", "ignore"),
         ("Spiegel-Löschungen", "deletePolicy"),

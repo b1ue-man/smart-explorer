@@ -6,8 +6,16 @@ impl App {
         theme::install(ctx, self.appearance.mode);
     }
 
+    /// `recent.txt` keeps places inside a vault only as its root (K14 of the
+    /// vault plan); the places inside are sealed per vault.
     fn save_recent(recent: &[String]) -> std::io::Result<()> {
-        std::fs::write(settings_path(), recent.join("\n"))
+        let global = crate::vault::store_places(
+            &crate::vault::LocalStore::open_default(),
+            &crate::vault::ProcessSealing,
+            crate::vault::PlaceList::Recent,
+            recent,
+        );
+        std::fs::write(settings_path(), global.join("\n"))
     }
 
     pub(in crate::app) fn add_recent(&mut self, p: &str) {
@@ -125,6 +133,12 @@ impl App {
         // through the Share worker, never through a saved-connection lookup.
         if let Some((target, path)) = crate::share::PeerOpenTarget::from_endpoint(loc) {
             self.open_share_target_at(target, Some(path));
+            return;
+        }
+        // A vault location is never a local path: it opens through the
+        // vault layer (unlocked) or names the locked vault.
+        if crate::vault::is_vault_locator(loc) {
+            self.open_vault_location(loc);
             return;
         }
         if crate::connect::is_remote_url(loc) {

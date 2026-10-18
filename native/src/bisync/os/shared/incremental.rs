@@ -77,6 +77,12 @@ pub(super) fn mirror_source<'a>(
 }
 
 pub(super) fn try_incremental_run(state: &RunState<'_>) -> Option<Outcome> {
+    // R4a of the vault plan (C5.4): a job kind with plan rules on this thread
+    // (vault sync jobs) always runs the full scan; the incremental mirror
+    // plans without the rule stage and applies without the phases.
+    if super::plan_rules::current().is_some() {
+        return None;
+    }
     match super::orchestration_plan::pending_paths(state.lock, state.key, state.endpoints) {
         Ok(pending) if pending.is_empty() => {}
         Ok(_) => return None,

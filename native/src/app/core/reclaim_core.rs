@@ -390,6 +390,13 @@ fn append_reclaim_journal(
         "errors": &outcome.errors,
         "suppressed_errors": outcome.suppressed_errors,
     });
+    let mut value = value;
+    // K21 of the vault plan: a run in a vault drive keeps no cleartext path.
+    if let Some(site) = crate::vault::vault_mount_of(std::path::Path::new(root)) {
+        seal_journal_paths(&mut value, site.as_deref(), &|site, items| {
+            crate::vault::seal_log_fields(site, items)
+        });
+    }
     let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -398,3 +405,64 @@ fn append_reclaim_journal(
     writeln!(file, "{value}")?;
     file.flush()
 }
+
+/// The path fields of a reclaim journal line (`errors` holds pairs of path
+/// and message).
+const JOURNAL_PATH_FIELDS: [&str; 8] = [
+    "root",
+    "selected",
+    "delete_paths",
+    "verified_duplicate_paths",
+    "skipped_paths",
+    "risky_paths",
+    "succeeded_paths",
+    "errors",
+];
+
+type Sealer<'a> = &'a dyn Fn(&str, &[&str]) -> Result<Vec<String>, String>;
+
+/// Seals every text of the path fields with the vault's key `log-fields`
+/// (K21); without a known vault or when sealing fails the texts are
+/// withheld (empty) and `withheld` says so.
+fn seal_journal_paths(value: &mut serde_json::Value, site: Option<&str>, seal: Sealer<'_>) {
+    fn texts<'v>(value: &'v mut serde_json::Value, out: &mut Vec<&'v mut String>) {
+        match value {
+            serde_json::Value::String(text) => out.push(text),
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    texts(item, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+    let mut slots: Vec<&mut String> = Vec::new();
+    for (key, field) in object.iter_mut() {
+        if JOURNAL_PATH_FIELDS.contains(&key.as_str()) {
+            texts(field, &mut slots);
+        }
+    }
+    let plain: Vec<String> = slots.iter().map(|slot| slot.to_string()).collect();
+    let items: Vec<&str> = plain.iter().map(String::as_str).collect();
+    let sealed = site
+        .ok_or_else(|| "unbekannter Tresor".to_string())
+        .and_then(|site| seal(site, &items))
+        .ok()
+        .filter(|sealed| sealed.len() == items.len());
+    let withheld = sealed.is_none();
+    for (index, slot) in slots.into_iter().enumerate() {
+        *slot = sealed
+            .as_ref()
+            .map(|sealed| sealed[index].clone())
+            .unwrap_or_default();
+    }
+    object.insert("vault".into(), serde_json::json!(site.unwrap_or_default()));
+    object.insert("withheld".into(), serde_json::json!(withheld));
+}
+
+#[cfg(test)]
+#[path = "reclaim_core_vault_tests.rs"]
+mod vault_journal_tests;

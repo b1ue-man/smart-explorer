@@ -1,4 +1,5 @@
 use super::types::{SyncJob, Trigger};
+use super::vault_job::JobKind;
 use crate::bisync::{
     CompareMode, ConflictMode, DeletePolicy, Direction, VersioningScheme, VersionsLocation,
 };
@@ -13,7 +14,19 @@ pub(super) fn san(s: &str) -> String {
 pub(super) fn serialize_kv(j: &SyncJob) -> String {
     let mut s = serialize_kv_core(j);
     push_rv1_keys(&mut s, j);
+    push_vault_keys(&mut s, j);
     s
+}
+
+/// Keys of vault jobs (C5.8), written only for them: a general job keeps
+/// exactly the bytes of earlier versions.
+fn push_vault_keys(s: &mut String, j: &SyncJob) {
+    if j.kind == JobKind::General {
+        return;
+    }
+    s.push_str(&format!("kind={}\n", j.kind.as_str()));
+    s.push_str(&format!("vault_site_a={}\n", san(&j.vault_site_a)));
+    s.push_str(&format!("vault_site_b={}\n", san(&j.vault_site_b)));
 }
 
 /// Keys RV1 added after the original ones (older versions ignore them).
@@ -201,6 +214,9 @@ pub(super) fn parse_kv_checked(body: &str) -> Result<SyncJob, String> {
                 job.versions_location = parse_enum(key, value, VersionsLocation::parse)?
             }
             "cross_mounts" => job.cross_mounts = parse_bool(key, value)?,
+            "kind" => job.kind = parse_enum(key, value, JobKind::parse)?,
+            "vault_site_a" => job.vault_site_a = value.to_string(),
+            "vault_site_b" => job.vault_site_b = value.to_string(),
             _ => {}
         }
     }

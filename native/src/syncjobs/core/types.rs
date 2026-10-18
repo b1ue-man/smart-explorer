@@ -163,6 +163,14 @@ pub struct SyncJob {
     /// Command run after a canceled or failed run (cleanup), like
     /// `run_after`; empty = none.
     pub run_cleanup: String,
+
+    // Vault sync jobs (vault plan C5.8)
+    /// `General` for the jobs of `jobs/`, `Vault` for those of `vault-jobs/`.
+    pub kind: super::vault_job::JobKind,
+    /// Vault jobs: the site IDs of side A and side B; their sides are
+    /// `vault-store://<site>`. Empty for general jobs.
+    pub vault_site_a: String,
+    pub vault_site_b: String,
 }
 
 fn gen_id() -> String {
@@ -231,6 +239,9 @@ impl SyncJob {
             run_before: String::new(),
             run_after: String::new(),
             run_cleanup: String::new(),
+            kind: super::vault_job::JobKind::General,
+            vault_site_a: String::new(),
+            vault_site_b: String::new(),
         }
     }
 
@@ -286,7 +297,30 @@ impl SyncJob {
             })
     }
 
+    /// Engine options of a general job. A vault job is refused: only the
+    /// vault sync runs it, with its rules (`checked_vault_opts`), so a runner
+    /// that does not know vault jobs fails safely instead of syncing the
+    /// encrypted storage without them.
     pub fn checked_opts(&self, dry_run: bool) -> Result<crate::bisync::BisyncOptions, String> {
+        if self.is_vault() {
+            return Err(super::vault_job::VAULT_JOB_NEEDS_VAULT_SYNC.into());
+        }
+        self.engine_opts(dry_run)
+    }
+
+    /// Engine options of a vault job for the vault sync (VLT-M7); a general
+    /// job is refused.
+    pub fn checked_vault_opts(
+        &self,
+        dry_run: bool,
+    ) -> Result<crate::bisync::BisyncOptions, String> {
+        if !self.is_vault() {
+            return Err("Kein Tresor-Job".into());
+        }
+        self.engine_opts(dry_run)
+    }
+
+    fn engine_opts(&self, dry_run: bool) -> Result<crate::bisync::BisyncOptions, String> {
         self.validate()?;
         Ok(crate::bisync::BisyncOptions {
             direction: self.direction,

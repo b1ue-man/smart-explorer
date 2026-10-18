@@ -60,7 +60,9 @@ fn validate_identity(job: &SyncJob) -> Result<(), String> {
     validate_text("run_after", &job.run_after, MAX_ENDPOINT_LEN, true)?;
     validate_text("run_cleanup", &job.run_cleanup, MAX_ENDPOINT_LEN, true)?;
 
-    crate::connect::validate_sync_endpoints(&job.source, &job.target)
+    // General jobs: the shared endpoint check (it refuses every vault
+    // location); vault jobs: their own sides and fixed values (C5.6).
+    super::vault_job::validate_kind(job)
 }
 
 fn validate_text(field: &str, value: &str, max: usize, allow_empty: bool) -> Result<(), String> {

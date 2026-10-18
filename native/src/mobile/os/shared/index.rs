@@ -1,5 +1,6 @@
 //! `index.*` (api.md §4.4): the desktop folder index over the storage
 //! volumes, persisted in `<data>/folder_index.txt`, with fuzzy search.
+//! Vault places are never indexed or found (K12 of the vault plan).
 use super::args::{str_arg, u64_or};
 use super::error::ApiError;
 use super::runtime::{lock, Runtime, TaskCtx};
@@ -84,9 +85,12 @@ fn build(rt: &Runtime) -> Result<Value, ApiError> {
     if let Some(id) = running_build(rt, &mut state) {
         return Ok(json!({ "taskId": id }));
     }
+    // K12 of the vault plan: no vault place is ever a root of the index.
+    let vault = crate::vault::VaultPlaces::now();
     let roots: Vec<PathBuf> = rt
         .volumes()
         .iter()
+        .filter(|volume| !vault.shows_vault(&volume.path))
         .map(|volume| PathBuf::from(&volume.path))
         .filter(|path| path.is_dir())
         .collect();
@@ -145,9 +149,11 @@ fn search(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
     }
     let scored = index.search_scored(&query, limit.saturating_mul(3));
     let ranked = crate::folder_index::stat_and_rank(scored, limit);
+    let vault = crate::vault::VaultPlaces::now();
     Ok(Value::Array(
         ranked
             .into_iter()
+            .filter(|(path, _)| !vault.shows_vault(path))
             .map(|(path, score)| {
                 let name = path.rsplit('/').next().unwrap_or(&path).to_string();
                 json!({ "name": name, "path": path, "location": path, "score": score })

@@ -249,7 +249,11 @@ pub(crate) fn add_site(
 }
 
 /// The IDs of sync jobs whose file names the site (`vault_site_a`,
-/// `vault_site_b`, `vault-store://<id>`, `vault://<id>`), in `dirs`.
+/// `vault_site_b`, `vault-store://<id>`, `vault://<id>`, also as
+/// `source_json`/`target_json`), in `dirs`: the vault jobs of `vault-jobs/`
+/// (C5.8, VLT-M7) name both sites in all three forms; a general job of
+/// `jobs/` never names a vault side (refused by its validation), so a hit
+/// there is a hand-edited or broken file and keeps the site as well.
 pub(crate) fn jobs_using(site: &str, dirs: &[PathBuf]) -> Result<Vec<String>, String> {
     let needles = [format!("vault-store://{site}"), format!("vault://{site}")];
     let mut jobs = Vec::new();
@@ -288,7 +292,8 @@ fn job_uses(path: &Path, site: &str, needles: &[String]) -> Result<bool, String>
         let (key, value) = line
             .split_once('=')
             .map_or(("", ""), |(key, value)| (key.trim(), value.trim()));
-        let named = matches!(key, "vault_site_a" | "vault_site_b") && value == site;
+        let named =
+            matches!(key, "vault_site_a" | "vault_site_b") && value.eq_ignore_ascii_case(site);
         let lower = line.to_ascii_lowercase();
         named || needles.iter().any(|needle| lower.contains(needle.as_str()))
     }))
