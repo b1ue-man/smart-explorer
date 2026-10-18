@@ -31,11 +31,30 @@ pub(in crate::app) fn reveal_path_in_file_manager(path: &str) {
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new(path));
-    let _ = std::process::Command::new("xdg-open").arg(target).spawn();
+    spawn_xdg_open(target);
 }
 
 pub(in crate::app) fn open_local_path(path: &str, _mode: OpenMode) {
-    let _ = std::process::Command::new("xdg-open").arg(path).spawn();
+    spawn_xdg_open(Path::new(path));
+}
+
+/// Starts `xdg-open` without inheriting this process's stdio (the se Desktop
+/// surface uses stdin/stdout as its channel to the supervisor) and reaps it on
+/// a short-lived thread, so no zombie process stays behind.
+fn spawn_xdg_open(target: &Path) {
+    let spawned = std::process::Command::new("xdg-open")
+        .arg(target)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    if let Ok(mut child) = spawned {
+        let _ = std::thread::Builder::new()
+            .name("xdg-open-reaper".into())
+            .spawn(move || {
+                let _ = child.wait();
+            });
+    }
 }
 
 pub(in crate::app) struct EditProcess;
