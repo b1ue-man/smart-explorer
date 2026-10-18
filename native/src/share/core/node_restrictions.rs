@@ -116,6 +116,9 @@ impl ShareIrohNode {
             .exec_registry()
             .restrict_authorization(epoch, restrictions)
             .map_err(eio);
+        // Screen sessions of a narrowed or ended right end (V7, S4).
+        self.screen_registry()
+            .restrict_authorization(epoch, restrictions);
         for connection in connections {
             connection.close(VarInt::from_u32(0x5345), b"authorization changed");
         }

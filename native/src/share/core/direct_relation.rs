@@ -235,7 +235,7 @@ impl ShareProfiles {
         for grant in &mut self.direct_grants {
             if (!peer.public_key.is_empty() && grant.public_key == peer.public_key
                 || !peer.node_id.is_empty() && grant.node_id == peer.node_id)
-                && (grant.state != DirectGrantState::Ignored || grant.exec.enabled)
+                && (grant.state != DirectGrantState::Ignored || grant.exec.grants_any())
             {
                 grant.state = DirectGrantState::Ignored;
                 grant.exec.disable_without_decision(now);
@@ -305,7 +305,9 @@ impl ShareProfiles {
             return Ok(false);
         }
         for alias in &mut self.direct_grants {
-            if matches(alias) && (alias.state != DirectGrantState::Accepted || alias.exec.enabled) {
+            if matches(alias)
+                && (alias.state != DirectGrantState::Accepted || alias.exec.grants_any())
+            {
                 alias.state = DirectGrantState::Accepted;
                 alias.exec.disable_without_decision(now);
                 alias.updated_at = now;
@@ -361,7 +363,7 @@ impl ShareProfiles {
             Some(grant) if grant.state == DirectGrantState::Accepted => {}
             Some(grant) => {
                 grant.state = DirectGrantState::Accepted;
-                if grant.exec.enabled {
+                if grant.exec.grants_any() {
                     grant.exec.disable_without_decision(now);
                 }
                 grant.updated_at = now;

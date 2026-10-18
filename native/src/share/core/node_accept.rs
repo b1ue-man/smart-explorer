@@ -9,6 +9,7 @@ use super::core::eio;
 use super::exec_protocol::EXEC_ALPN;
 use super::handshake_limits::ApplicationHandshakePermit;
 use super::node::{ShareIrohNode, ALPN};
+use crate::screen::core::wire::SCREEN_ALPN;
 
 impl ShareIrohNode {
     pub(super) fn spawn_accept_loop(self: &Arc<Self>) {
@@ -45,16 +46,22 @@ impl ShareIrohNode {
                     }
                     let remote = connection.remote_id().to_string();
                     let known = node.known_endpoint(&remote);
-                    // Penalized after failed authentication: Exec always,
-                    // file sessions only for unknown endpoints, so automatic
-                    // reconnects of paired devices are never throttled.
+                    // Penalized after failed authentication: Exec and screen
+                    // always, file sessions only for unknown endpoints, so
+                    // automatic reconnects of paired devices are never throttled.
                     let exec = connection.alpn() == EXEC_ALPN;
-                    if super::auth_penalty::refusal_applies(exec, known) {
+                    let screen = connection.alpn() == SCREEN_ALPN;
+                    if super::auth_penalty::refusal_applies(exec || screen, known) {
                         let now = std::time::Instant::now();
                         if let Some(remaining) = node.auth_penalties().refusal(&remote, now) {
+                            let protocol = match (exec, screen) {
+                                (true, _) => "exec",
+                                (_, true) => "screen",
+                                _ => "fs",
+                            };
                             super::exec_audit::record(super::exec_audit::AuditEvent::PenaltyRefused {
                                 remote_node: &remote,
-                                protocol: if exec { "exec" } else { "fs" },
+                                protocol,
                                 remaining_secs: remaining.as_secs(),
                             });
                             refuse(&connection);
@@ -72,6 +79,8 @@ impl ShareIrohNode {
                         _ => { refuse(&connection); return; }
                     };
                     let (permit, completion) = ApplicationHandshakePermit::admitted(admitted);
+                    // Screen sessions report as accept errors: the reporter keeps
+                    // a fixed set of kinds (connection_events.rs).
                     let error_kind = match connection.alpn() {
                         ALPN => ConnectionErrorKind::FsConnection,
                         EXEC_ALPN => ConnectionErrorKind::ExecConnection,
@@ -142,6 +151,7 @@ async fn dispatch_connection(
     match connection.alpn() {
         ALPN => super::server::handle_connection(node, connection, permit).await,
         EXEC_ALPN => super::exec_server::handle_connection(node, connection, permit).await,
+        SCREEN_ALPN => node.handle_screen_connection(connection, permit).await,
         _ => Err(eio("Unbekanntes Share-Protokoll")),
     }
 }

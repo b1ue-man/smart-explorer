@@ -58,6 +58,8 @@ pub(crate) struct ShareIrohNode {
     next_incoming_session: AtomicU64,
     connection_events: ConnectionEventReporter,
     exec_registry: Arc<ExecRegistry>,
+    /// Screen sessions of this host (S4, `node_screen.rs`).
+    pub(super) screen: super::node_screen::NodeScreen,
     pub(super) handshake_slots: Arc<Semaphore>,
     auth_penalties: super::auth_penalty::AuthPenalties,
     pub(super) direct_repair_slots: Arc<Semaphore>,
@@ -153,6 +155,7 @@ impl ShareIrohNode {
                 ALPN.to_vec(),
                 EXEC_ALPN.to_vec(),
                 super::lan_link_wire::LAN_LINK_ALPN.to_vec(),
+                crate::screen::core::wire::SCREEN_ALPN.to_vec(),
             ])
             .relay_mode(relay_mode)
             .transport_config(iroh_transport_config());
@@ -166,6 +169,8 @@ impl ShareIrohNode {
         let routes = EndpointRoutes::start(&rt, &endpoint, relay_configured);
         let wake = wake::NodeWake::new();
         wake.watch(&rt, &endpoint);
+        let exec_registry = Arc::new(ExecRegistry::new(ExecRegistryLimits::default()));
+        let screen = super::node_screen::NodeScreen::new(&exec_registry);
         let node = Arc::new(Self {
             rt,
             endpoint,
@@ -183,7 +188,8 @@ impl ShareIrohNode {
             incoming_sessions: Mutex::new(HashMap::new()),
             next_incoming_session: AtomicU64::new(0),
             connection_events: ConnectionEventReporter::default(),
-            exec_registry: Arc::new(ExecRegistry::new(ExecRegistryLimits::default())),
+            exec_registry,
+            screen,
             handshake_slots: Arc::new(Semaphore::new(MAX_PENDING_APPLICATION_HANDSHAKES)),
             auth_penalties: super::auth_penalty::AuthPenalties::default(),
             direct_repair_slots: Arc::new(Semaphore::new(MAX_CONCURRENT_DIRECT_REPAIRS)),
@@ -340,6 +346,7 @@ impl ShareIrohNode {
         self.exec_registry
             .as_ref()
             .cancel_all(ExecCancelReason::WorkerStopping);
+        super::node_screen::stop_all(&self.screen);
         self.lan_links.disable();
         let invalidation = self.invalidate_sessions().map(|_| ());
         self.block_on(self.endpoint.close());
