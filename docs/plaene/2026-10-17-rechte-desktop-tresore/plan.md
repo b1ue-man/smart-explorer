@@ -120,7 +120,15 @@ Modellbeleg (Transkripte, 2026-10-17 14:20): alle Bestandsleser antworten aussch
 | alle | Umsetzung Phase P1: U01 (S1-Kern), U03 (S5-Fundament), U02 (S2-Kern), dann R1 | opus, Standardaufwand der Sitzung (max) | Code laut D1 | fertig und gepusht: U03 5fc31eeb, U01 888af678, R1 2e3d07b1, U02 f45d9580 (`host_lifecycle.rs` verwaist und entfernt). R1 Teil B2 entfiel: U02 schrieb `drive_task_types_split_serde_unchanged`, der Hauptagent prüfte die `PathDialect`-Namen gegen die R1-Fixtures. Graphify-Aktualisierung gesammelt am Ende der Umsetzung, damit kein halbfertiger Stand laufender Pakete in den Graphen gelangt. |
 | S2 | Umsetzung U06 (DRV-M3, dazu Exit 75 in `mount_manager_state.rs` aus U02) | opus, Standardaufwand der Sitzung (max) | Code laut D1 | fertig (Commit a6107a70) |
 | alle | Registrierung R2, Teil Laufwerke: U06-Bedarf, `match`-Zweige für `MountedAt`/`Devices`/`Vault`, `ShareSnapshotPeek` | opus, Standardaufwand der Sitzung (max) | Hub-Dateien und vier Bestandsdateien | fertig (Commit 91d70957) |
-| alle | Umsetzung U39 (Suite Teil A, vorgezogen) | opus, Standardaufwand der Sitzung (max) | Workflow, `native/rdt_task/**` | läuft |
+| alle | Umsetzung U39 (Suite Teil A, vorgezogen) | opus, Standardaufwand der Sitzung (max) | Workflow, `native/rdt_task/**` | fertig (Commit b8816cdb; 15 Jobs, Inventur `expected_signals.txt` mit 189 vorhandenen und 177 kommenden Signalen) |
+| S2 | Umsetzung U12 (DRV-M4 Linux-FUSE) | opus, Standardaufwand der Sitzung (max) | Code laut D1 | fertig (Commit fc59b6f3) |
+| S3 | Umsetzung U11 (VLT-M4, VLT-M5) | opus, Standardaufwand der Sitzung (max) | Code laut D1 | fertig (Commit ac21926f) |
+| alle | Registrierung R4a für U11 (IPC `Vault`, `Err.code`, Fehlerumschlag, Inventur) | opus, Standardaufwand der Sitzung (max) | Hub-Dateien und `Err`-Stellen | fertig (Commit 55d0fb13) |
+| S4 | Umsetzung U10 (SCR-M2) | opus, Standardaufwand der Sitzung (max) | Code laut D1 | fertig (Commit c4b2583b; Stand `stand/U10.md`) |
+| alle | Registrierung R5x für U10, U12, U24, U30 samt Mitbehebungen (Dokany-Hinweise unter Linux, Registry-Vorbereitung unter Linux, fest gesetzte `graphical_session`) | opus, Standardaufwand der Sitzung (max) | Hub-Dateien und genannte Dateien | fertig (Commit 9456b8ad; doppelter Testname `drive_task_auto_remount_after_daemon_restart` durch `_fuse` aufgelöst, `se drive`-Hilfe nennt Linux) |
+| alle | Graphify-Aktualisierung | Hauptagent | `graphify-out/` | fertig (Commit 6370b5c6: 44 952 Knoten, 118 351 Kanten, 1 492 Gemeinschaften) |
+| S1 | Umsetzung U24 (PRM-M7 und Konten-Oberflächen, Übergaben aus U04, U07, U18) | opus, Standardaufwand der Sitzung (max) | Code laut D1 | fertig (Commit b7068a61; Stand `stand/U24.md`) |
+| S5 | Umsetzung U30 (DSK-M4) | opus, Standardaufwand der Sitzung (max) | Code laut D1 | fertig (Commit 546b5bb7; Wächter-Patch vom Hauptagenten angewendet; Bestandsfehler `xdg-open` mit geerbter Standardein-/ausgabe und Zombie-Prozess behoben in 0a7bb9c0) |
 | alle | Vorgezogene Pakete nach Nutzervorgabe 2026-10-17 (Limit erlaubt mehr Parallelität): U04, U09, U15, U33, U18 | opus, Standardaufwand der Sitzung (max) | Code laut D1 | U33 fertig (5367b5ab), U09 fertig (55efff3e), U04 fertig (e2271305), U15 fertig (45919dcf), U18 fertig (2e4c1c00; `exec_job.rs` ruft jetzt `prepare_as` mit dem Konto des Rechts, gesetzt vom Hauptagenten); Dateibereiche ohne Überschneidung geprüft |
 | S1 | Umsetzung U07 (PRM-M8, PRM-M9 ohne Konten, Übergaben aus U01/U04, Öffnen-Funktion für Detailseiten) | opus, Standardaufwand der Sitzung (max) | Code laut D1 | fertig (Commit 1a6706b1) |
 | S1 | Umsetzung U21 (PRM-M10 ohne Bildschirm-Aktionsziele, Bestandsfehler `share.exec` auf Android) | opus, Standardaufwand der Sitzung (max) | Code laut D1 | fertig (Commit 07914285) |
@@ -131,6 +139,26 @@ Modellbeleg (Transkripte, 2026-10-17 14:20): alle Bestandsleser antworten aussch
 Wochenlimit (Nutzer 2026-10-17): Vorerst gilt eine Obergrenze für das Wochenlimit. Ein neues Paket startet nur, wenn die Hochrechnung am Ende seines Laufs unter der Obergrenze bleibt. Ein bei Erreichen der Grenze laufender Agent wird nicht abgebrochen, danach startet nichts Neues.
 
 Sitzungslimit (Nutzer 2026-10-17): Ab der Nachricht zum nahenden Sitzungslimit laufen höchstens zwei Agenten gleichzeitig; jeder weitere Schritt startet erst, wenn ein laufender Agent fertig ist. Der Hauptagent fragt den Nutzungsstand alle 5 Minuten ab und setzt nach der Rücksetzung des Fensters einen Weckauftrag, falls die Sitzung am Limit abbricht.
+
+**Stand bei der Pause (2026-10-18 01:05 UTC, Obergrenze des Wochenlimits nach Nutzervorgabe erreicht):**
+- **Fertig, committet und gepusht** (bis 6370b5c6):
+  - 19 Umsetzungspakete: U01–U12, U15, U18, U21, U24, U30, U33, U39;
+  - alle Registrierungen dazu;
+  - der Graphify-Graph.
+- **Offen, 24 Pakete:**
+  - S2: U14, U17, U23;
+  - S3: U20, U26, U29, U31;
+  - S4: U13, U16, U19, U22, U25, U27, U28;
+  - S5: U32, U34, U35, U37, U38, U40;
+  - Integration: U36, U41, U42, U43.
+
+  Danach folgen die Registrierungen, die eine Remote-Suite (`rechte-desktop-tresore-task.yml`) mit Fehlerkorrektur und die eine Release-Transaktion.
+- **Nächste Reihenfolge nach der Wochenrücksetzung:**
+  1. U13, U14, U17 und U20 parallel, weil sie ohne gemeinsame Dateien sind;
+  2. danach U16, U19, U26, U29, U32 und U34;
+  3. dann U22, U23, U25, U27, U28, U31, U35, U37, U38 und U40;
+  4. zuletzt U36, U41, U42 und U43;
+  5. dann die Suite.
 
 ## Entscheidungen des Hauptagenten zu offenen Strangpunkten
 
@@ -327,6 +355,98 @@ Die Briefe der genannten Pakete enthalten diese Punkte zusätzlich zu D1.
   - Tests ohne Stapelpräfix in die Namensliste aufnehmen: `shell_session_task_share_session_dialect_is_asked_inside_the_shell`, `shell_session_task_share_session_needs_one_start_line`, `grant_end_watch_logs_grant_expired`, `share_pages_open_detail_pages_from_outside`.
   - Die vier GUI-Tests aus U07 laufen ohne Anzeige und ohne `#[ignore]`.
   - Ungeprüft ist, wie `cmd.exe` die neue Startzeile von `se shell -T` liest. Vorschlag für windows-core: die Zeile mit `cmd /D /S /C` und der Eingabe `echo SE_DIALECT_x_$?` ausführen und `SE_DIALECT_x_True` erwarten.
+- **An U41 und den ersten Suite-Lauf (aus U39):**
+  - **Dokany:** `SE_TASK_DOKANY_MSI` und `SE_TASK_DOKANY_MSI_SHA256` sind nicht gesetzt, daher melden alle Dokany-Tests „nicht ausgeführt“. Die Suite übernimmt die festgelegte Dokany-Quelle mit Hash aus dem bestehenden Release-Weg (`docs/RELEASING.md`, „Pinned Dokany installer dependency“).
+  - Die Testserver-Matrix aus `native/sync-reliability-providers.py` (SFTP, Agent, FTP/FTPS, SMB, WebDAV) für vault-backends ist noch nicht angebunden.
+  - Ebenso fehlt das Gerätepaar Emulator ↔ Runner nach `native/review-task-device.py`.
+  - Annahme zu `android/test-android-task.sh android-build`: Verlangt das Skript neben x86_64 weitere Ziele, scheitert der Bau.
+  - Annahme: Ein Job auf `ubuntu-22.04` scheitert sofort, wenn das Abbild fehlt, statt in der Warteschlange zu hängen.
+  - `drive_task_fuse_kernel_request_timeout_reported` meldet „nicht ausgeführt“, weil `fs.fuse.default_request_timeout` erst ab Linux 6.14 existiert.
+- **An U11, U12, U14, U20, U26, U36 und U42 (Verträge aus U39):**
+  - Umgebungsvariablen: `SE_TASK_SHARE_*`, `SE_TASK_SFTP_*`, `DBUS_SYSTEM_BUS_ADDRESS`, `SE_VAULT_INTEROP_JAVA/JAR`, `SE_VAULT_TASK_KEEP_VAULTS/<test>/<fall>/vault`, `SE_VAULT_TASK_MARKER/ROOT` (mit `input/` und `allowed-marker-paths.txt`).
+  - U36: `install-linux.sh --dry-run --with-fuse` endet mit 0, nennt `fuse3` und schreibt nichts nach HOME.
+  - Ein neues Abnahmesignal wandert in `native/rdt_task/expected_signals.txt` vom Abschnitt „noch nicht umgesetzt“ nach „umgesetzt“; das erledigt das Paket, das den Test bringt.
+- **An U14 (aus U11):**
+  - `Vault::SpoolKey { mount_id }` wird mit dem Sitzungstoken geprüft; den Wickelschlüssel liefert `register().with_spool_wrap_key(site, |key| …)`.
+  - Je Laufwerk gibt es einen `LockParticipant::prepare_lock` mit `MountHostRequest::PrepareLock { deadline_ms }`. Fristen: Ruhezustand 4 s, manuelles Sperren und Entfernen 60 s, sonst 15 s. Bei ungespeicherten Änderungen liefert er `Err`.
+  - Beim Einhängen `consume(site, ConsumerKind::Drive(mount_id))`, beim Aushängen `mount_ended(…)`, außerdem `subscribe` für das Aufräumen der Miniaturbilder (K45).
+- **An U20 (aus U11):**
+  - Versiegeln läuft im Worker über `register().seal_texts`/`unseal_texts` und außerhalb über `daemon::{seal_vault_items, unseal_vault_items}`.
+  - Die Ortsdatei heißt `<VAULTS_DIR>/<site-id>.local`.
+  - `jobs_using` erkennt `*.conf` mit `vault_site_a`/`vault_site_b`; andere Formen ergänzt U20.
+  - Die Ersatzkopie läuft über `ConsumerKind::FallbackCopy`.
+- **An U26 (aus U11):**
+  - CLI und MCP nutzen `daemon::{unlock_vault, unlock_vault_saved, lock_vaults, vault_status, seal_vault_items, unseal_vault_items, open_vault_backend}`; die Verwaltung läuft über `vault::{create_site, add_site, detect_location, remove_entered, change_site_password, update_settings, recovery_key_info}`. Danach entfallen die beiden `allow(unused_imports)` in `daemon/mod.rs`.
+  - `Compare`, `CompareText`, `Resolve`, `MergeApply` und `Check` kommen in `VaultIpcRequest`/`VaultIpcReply`, in `ipc_vault.rs::serve` und in `promotes_daemon`.
+  - MCP verwirft zwischengespeicherte Backends bei `vault::locked_site(&error)`.
+  - Die acht Codes brauchen Texte: `vault_locked`, `vault_wrong_password`, `vault_unsupported_format`, `vault_hub`, `vault_memory`, `vault_no_saved_password`, `vault_unsaved_changes` und `vault_not_atomic`.
+- **An U29 (aus U11):**
+  - Status über `vault_status()` (`event_seq`, `events`).
+  - `screen_lock_note` neben dem Schalter für die Bildschirmsperre.
+  - Bei `VaultLocked` gepoolte und IPC-Backends verwerfen, ohne Zwischenspeicher über Tresoren.
+  - Ein Dialog für `vault_unsaved_changes` (dann `lock_vaults(site, true)`), Prüfung über `check_new_password` und die Texte zum Wiederherstellungsschlüssel.
+- **An U31 (aus U11):**
+  - Die `vault.*`-Bridge nutzt das Register im Prozess.
+  - `vault.unlock` übergibt `memAvail − memThreshold` als `UnlockOptions.available`.
+  - Das Bridge-Ereignis `vault` kommt über `register().subscribe`.
+- **An U42/U43 (aus U11):** Der Doku-Bedarf steht im U11-Bericht: neue Datei `tresore.md` mit Sperrauslösern, Codes, IPC-Weg und Grenzen; Einträge in `GOTCHAS.md`; TODO-Einträge `VAULT-SCREENLOCK-VERIFY` und `VAULT-RECOVERY-KEY`; in `api.md` `sys.hostState.screenOn`.
+- **An das nächste R-Paket (aus R4a):** `daemon/mod.rs` exportiert `vault_status_peek` (U30, `ipc_peek_client.rs`) noch nicht; `desktop/os/shared/feed_sources.rs` und `feed_task_tests.rs` rufen es als `crate::daemon::vault_status_peek` auf.
+- **An das nächste R-Paket (aus U12):**
+  - `native/Cargo.toml`, Linux-Ziel: `fuser = { version = "=0.18.0", default-features = false }` (MIT); neu im Lock sind `fuser` und `page_size 0.6.0`.
+  - `ipc_protocol_mount.rs` (Pflicht): `MountHostConfig.location: Option<crate::mount::MountLocation>` mit `#[serde(default, skip_serializing_if = "Option::is_none")]`, gesetzt in `From<&MountConfig>`.
+  - `catalog.rs`: das Linux-Beispiel `drive mount … --mount-point`; die INSTRUCTIONS nennen Laufwerke für Windows und Linux.
+  - Die 25 Inventurzeilen aus dem U12-Bericht.
+  - **Mitbeheben (Hauptagent):** In `mount_manager.rs::start` gilt `ensure_registry_ready()` nur unter `#[cfg(windows)]` und muss auch für Linux gelten. Außerdem zeigen unter Linux `mount_ui_draft.rs` den Dokany-Hinweis und `mount_ui_cache_settings.rs` die Dokany-DLL-Option, und `mount_ui_helpers.rs` meldet „Dokany fehlt“. Diese Texte und Optionen gehören nur unter Windows.
+- **An U14 (aus U12):** Der Zweig `MountSource::Vault` in `mount_source::resolve`; die versiegelte Ablage an der Stelle `MountStorage::plain()` in `host_session.rs`; `MountHostConfig` trägt keine Quelle, ein Tresor wird über `mount_point::place_kind` erkannt; für die Sperrfrist steht `fuse_abort::abort_connection(connection_at(..))` bereit; `MountedAt` für Tresorpfade auswerten.
+- **An U17 (aus U12):** Die Haken für GTK-Lesezeichen, KDE-Orte und Öffnen im Dateimanager fehlen in `FuseHost::start_volume`/`shutdown`. `FuseShared` arbeitet über `dyn MountFilesystem` und nimmt den Gerätebaum als Frontend auf; `CrossesDevices` ist bereits auf `EXDEV` abgebildet.
+- **An U36 (aus U12):** `install-linux.sh --with-fuse`:
+  - prüft `command -v fusermount3`, das setuid-Bit und den Zugriff auf `/dev/fuse`;
+  - installiert `fuse3` nur mit dem Schalter, über `sudo` mit `apt-get`, `dnf`, `pacman -S` oder `zypper`;
+  - lässt `/etc/fuse.conf` unverändert, und die Deinstallation entfernt `fuse3` nicht;
+  - `--dry-run --with-fuse` endet mit 0 und schreibt nichts nach HOME.
+- **An das nächste R-Paket (aus U24):**
+  - `cli/share.rs`: `mod exec_accounts;`.
+  - `cli/share/exec_status.rs`: die Variante `Accounts(super::exec_accounts::AccountsArgs)` und die zwei Zweige, wörtlich aus dem U24-Bericht.
+  - `native/Cargo.toml`, windows-sys-Features: `Win32_NetworkManagement_NetManagement`, `Win32_Security_Authentication_Identity`, `Win32_System_Environment`, `Win32_System_Services`.
+  - `catalog.rs`: das Beispiel `["share","exec","accounts","--json"]`.
+  - Inventur: Die Zeilen von U24 wandern nach „umgesetzt“. Dafür gelten `env=SMART_EXPLORER_PERM_WINDOWS_TASK=1 env=SMART_EXPLORER_PERM_SE_BIN={se}`, `ignored` und `threads=1`.
+  - Danach entfallen die `#[allow(dead_code)]` an `preparing_account` und `account_error_code` (`exec_platform.rs`) und an `HelperRefused` (`access_audit.rs`).
+- **An U36 (aus U24):** Die Deinstallation entfernt den Kontodienst mit `ExecWait '"$INSTDIR\se.exe" share exec accounts remove…'`, mit Rückfrage zum Löschen von `se-remote` (Vorauswahl Nein). Die NSIS-Vorlage steht in `stand/U24.md`, Abschnitt 4. Bedingungen von `perm_task_installer_uninstall_removes_service_static`:
+  - wörtlich `se.exe` in der Aufrufzeile;
+  - ein Kommentar mit `UAC` oder `runas` höchstens 12 Zeilen davor;
+  - ein `DetailPrint` höchstens 24 Zeilen danach.
+- **An das nächste R-Paket (aus U30):**
+  - `native/Cargo.toml` (R10, H6): `image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }` nach `trash = "5"`.
+  - Re-Exporte in `ipc_client.rs` und `daemon/mod.rs`: `drive_devices_peek`, `drive_devices_watch_peek` und `share_worker_peek` öffentlich, `vault_status_peek` als `pub(crate)`.
+  - `cli/desktop.rs:248-249`: `device_tree_mounted` aus `feed_sources::device_tree_now().mounted()`.
+  - `desktop/os/shared/status.rs:302-306`: `devices_folder` aus `device_tree_now()`.
+  - Die 14 Inventurzeilen aus dem U30-Bericht, mit den Stufen `linux-core:unit` und `linux-desktop:gui-harness`.
+  - Der Staged-Kommentar in `desktop/mod.rs:11-13` ist veraltet; das `#![allow(dead_code)]` dort bleibt bis U32/U34.
+  - Sobald U10 fertig ist, entfallen die beiden `#[allow(dead_code)]` in `share_pages_ui.rs:89/100`.
+- **An U17 (aus U30):** `DevicesStatus` und `DevicesWatch { since: u64 }` in `ipc_protocol_drives.rs` (serde `devices_status`/`devices_watch`, lösen die Einschränkung nicht auf, Antwort ist das V4-Objekt, Geräteschlüssel `%XX` in Großbuchstaben); danach stellt `ipc_peek_client.rs:70-87` auf typisierte Anfragen um.
+- **An U32 (aus U30):**
+  - `desktop_folders` mit `FOLDERID_Desktop`/`FOLDERID_PublicDesktop`, Versteckt- und System-Attribute in `scan_folders`;
+  - Systemhintergrund je Monitor über `FitMode::from_windows`;
+  - `EframeHost::work_area` auf `rcWork`;
+  - `NativeWindow::Win32` für die Unterklasse, danach entfallen die zwei `allow` in `desktop_surface_host.rs`;
+  - Strg+V nach einer Explorer-Kopie;
+  - Dateien aus der Fläche herausziehen;
+  - Monitornamen.
+- **An U34 (aus U30):**
+  - `XDG_DESKTOP_DIR` mit Starter-Vertrauen nach C2.7;
+  - „Öffnen mit“ über das OpenURI-Portal;
+  - Systemhintergrund über `FitMode::from_gnome`;
+  - `_NET_WORKAREA` und die X11-Fenster-ID;
+  - Ziehen zwischen Monitoren;
+  - Datei-Zwischenablage mit anderen Programmen.
+- **An U37 (aus U30):** `SurfaceHost` für das Layer-Backend (`NativeWindow::Wayland`), je Ausgabe `show_surface`, eine eigene `Outbox`, Tastatur über `wl_keyboard`. Unter Wayland gibt es kein Ablegen von Dateien und ohne `inner_rect` kein Ziehen zwischen Monitoren.
+- **An U13 (aus U10):** `open_encoder` für H.264; `CodecOffer::h264` und `with_max` nutzen; `BenchOptions::decoders()` lehnt H.264 noch ab (`screen/core/bench.rs:66`); `pixel_convert` und `RELAY_QUEUE_BYTES`/`Pacer::frames_in_flight` nutzen; `--screen-host-worker`.
+- **An U16 (aus U10):** In `NodeScreen::new` das Plattform-Backend statt `SyntheticBackend`; Monitore, `LIST_WINDOWS`, Standbild; `SourceFrame::Unchanged`/`Paused` sind vorbereitet; MCP-Werkzeug `screen` (R6).
+- **An U19 (aus U10):** X11- und Wayland-Backends. Prüfen, ob der Portal-Dialog erst beim Öffnen der Quelle nach der Zustimmung erscheinen darf (`host_server.rs`, `open_source` nach `confirm`). Dazu `LIMIT_CONSENT_EACH_SESSION`; ein root-Worker meldet `no_display`.
+- **An U25 (aus U10):** `screen_stream`, `ScreenStream`, `StreamEvent` und `StreamRequest` nutzen (vorbereitet in `screen_ipc_client.rs`), dazu die Eingabehilfen aus `input_model`. Eine Vorschau unter „Fragen“ braucht für das Vollbild eine neue Verbindung im Modus `view`.
+- **An U41 (aus U10 und U30):** Die S4- und S5-Inventurzeilen trägt U41 ein. Die Pfade aus U10 und U30 stehen in `stand/U10.md` und `stand/U30.md`, die U09-Pfade im U09-Commit. Stufen:
+  - Bildschirm: `linux-core:screen-pair` mit zwei Iroh-Knoten auf Loopback und `linux-core:unit`; `screen_task_relay_only_bench` braucht `SE_TASK_SHARE_SIGNAL` und `SE_SHARE_RELAY_ONLY=1`; `screen_task_netem_recovery` braucht `tc netem` und `SE_SCREEN_TASK_NETEM=1`.
+  - Desktop: `linux-core:unit` und `linux-desktop:gui-harness`.
 - **An R2 (aus R1 offener Punkt 1):** Die eigentliche IPC-Verteilung steht in `native/src/daemon/os/shared/ipc.rs` (`handle_client`, `match req`), nicht in `ipc_host.rs`; die Annahme in B2 war falsch. `ipc.rs` gehört ab jetzt zu den Hub-Dateien der R-Pakete. R2 setzt dort zwei Zeilen:
   - letzter Zweig in `handle_client`: `req => host.serve_extension(stream, req),`;
   - in `require_request_auth` wird `_ => Err(…)` zu `_ => host.authorize_extension(req),`.
