@@ -215,6 +215,7 @@ impl MountEngine {
             cache_space: Arc::new(super::cache_space::CacheSpace::default()),
             detached: Mutex::new(HashMap::new()),
             retirements,
+            pending_attributes: Default::default(),
         };
         if validate_remote {
             engine.recover_pending_deletes()?;

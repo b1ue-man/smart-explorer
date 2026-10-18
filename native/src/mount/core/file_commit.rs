@@ -12,6 +12,7 @@ impl MountEngine {
             // A handle that survived FILE_SHARE_DELETE refers to the detached
             // pre-replace object. Its spool remains usable until last close,
             // but it must never overwrite the new namespace occupant.
+            self.pending_attributes.forget(&state.spool_name);
             self.spool.open_file(&state.spool_name, true)?.sync_data()?;
             return Ok(FlushOutcome::NoChanges);
         }
@@ -93,6 +94,13 @@ impl MountEngine {
                 self.discard_own_stage(&staged, spool_len);
                 return Err(error);
             }
+        }
+        // DRV-M4 (decision C2): times and mode a POSIX frontend set on this
+        // file reach the stage before it takes the user's name. Without
+        // pending values (every Windows drive) nothing is called.
+        if let Err(error) = self.finish_pending_stage(&state.spool_name, &staged) {
+            self.discard_own_stage(&staged, spool_len);
+            return Err(error);
         }
         let promotion = match &state.baseline {
             Baseline::Missing => self
@@ -191,6 +199,7 @@ impl MountEngine {
         state.baseline = committed_baseline;
         state.condition = EntryCondition::Clean;
         state.clean_since = std::time::Instant::now();
+        self.pending_attributes.forget(&state.spool_name);
         entry.schedule_retirement();
         Ok(FlushOutcome::Committed)
     }

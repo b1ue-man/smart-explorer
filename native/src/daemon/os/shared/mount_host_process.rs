@@ -10,7 +10,7 @@ use super::mount_job::{MountHostChild, MountHostJob};
 #[cfg(not(windows))]
 use std::process::Child as MountHostChild;
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 pub(super) const MOUNT_HOST_STDERR_LIMIT: usize = 16 * 1024;
 const MOUNT_HOST_DETAIL_LIMIT: usize = 12 * 1024;
 const STDERR_DRAIN_GRACE: Duration = Duration::from_millis(100);
@@ -26,6 +26,11 @@ pub(super) struct MountHostProcess {
     _job: MountHostJob,
     stderr_capture: Arc<Mutex<CapturedStderr>>,
     stderr_done: Receiver<()>,
+    /// Linux (DRV-M4): the folder of the drive; a FUSE mount the ended host
+    /// left there is removed when its exit is observed (`MountManager::tick`
+    /// and every stop path observe it through `try_wait`/`wait`).
+    #[cfg(target_os = "linux")]
+    mount_point: Option<std::path::PathBuf>,
 }
 
 pub(super) struct MountHostExit {
@@ -62,6 +67,38 @@ impl MountHostProcess {
         })
     }
 
+    /// The Linux host (DRV-M4): stderr is captured like on Windows; there is
+    /// no job object, the host dies with the daemon (`PR_SET_PDEATHSIG`).
+    #[cfg(target_os = "linux")]
+    pub(super) fn capture_linux(
+        mut child: MountHostChild,
+        mount_point: std::path::PathBuf,
+    ) -> io::Result<Self> {
+        let Some(stderr) = child.stderr.take() else {
+            terminate_incomplete_child(&mut child);
+            return Err(io::Error::other("mount host stderr was not captured"));
+        };
+        let stderr_capture = Arc::new(Mutex::new(CapturedStderr::default()));
+        let thread_capture = Arc::clone(&stderr_capture);
+        let (done_send, stderr_done) = std::sync::mpsc::sync_channel(1);
+        let reader = std::thread::Builder::new()
+            .name("mount-host-stderr".into())
+            .spawn(move || {
+                drain_stderr(stderr, &thread_capture);
+                let _ = done_send.send(());
+            });
+        if let Err(error) = reader {
+            terminate_incomplete_child(&mut child);
+            return Err(error);
+        }
+        Ok(Self {
+            child,
+            stderr_capture,
+            stderr_done,
+            mount_point: Some(mount_point),
+        })
+    }
+
     pub(super) fn try_wait(&mut self) -> io::Result<Option<MountHostExit>> {
         match self.child.try_wait()? {
             Some(status) => Ok(Some(self.complete_exit(status))),
@@ -79,6 +116,10 @@ impl MountHostProcess {
     }
 
     fn complete_exit(&mut self, status: ExitStatus) -> MountHostExit {
+        #[cfg(target_os = "linux")]
+        if let Some(mount_point) = self.mount_point.take() {
+            super::mount_process::clean_after_host(&mount_point);
+        }
         // A descendant can accidentally inherit stderr. Never join its reader
         // while the manager lock is held; use the bytes available after a
         // short bounded drain grace and let the detached reader finish later.
@@ -102,7 +143,7 @@ struct CapturedStderr {
 }
 
 impl CapturedStderr {
-    #[cfg(any(windows, test))]
+    #[cfg(any(windows, target_os = "linux", test))]
     fn push_tail(&mut self, bytes: &[u8]) {
         if bytes.len() >= MOUNT_HOST_STDERR_LIMIT {
             self.bytes.clear();
@@ -124,8 +165,8 @@ impl CapturedStderr {
     }
 }
 
-#[cfg(windows)]
-fn drain_stderr(mut stderr: std::fs::File, capture: &Arc<Mutex<CapturedStderr>>) {
+#[cfg(any(windows, target_os = "linux"))]
+fn drain_stderr(mut stderr: impl std::io::Read, capture: &Arc<Mutex<CapturedStderr>>) {
     use std::io::Read;
 
     let mut chunk = [0u8; 4096];
@@ -196,7 +237,7 @@ fn retain_utf8_tail(value: &mut String, limit: usize) {
     value.drain(..boundary);
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 fn terminate_incomplete_child(child: &mut MountHostChild) {
     let _ = child.kill();
     let _ = child.wait();

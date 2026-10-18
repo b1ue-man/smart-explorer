@@ -1,14 +1,14 @@
-#[cfg(windows)]
-use std::path::PathBuf;
+#[cfg(any(windows, target_os = "linux"))]
+use std::path::{Path, PathBuf};
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 use crate::mount::MountId;
 use crate::mount::{MountConfig, MountRecovery, MountStatus};
 
 use super::{MountEntry, MountManager};
 
 pub(super) fn audit_registered(configs: &[MountConfig]) -> Vec<MountRecovery> {
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     {
         let cache_root = match crate::mount::prepare_spool_root(
             &crate::support_dirs::app_data_dir().join("mount-cache"),
@@ -23,21 +23,19 @@ pub(super) fn audit_registered(configs: &[MountConfig]) -> Vec<MountRecovery> {
         };
         return configs
             .iter()
-            .map(|config| {
-                match crate::mount::os::windows::audit_recovery(&cache_root, &config.id) {
-                    Ok(recovery) => recovery,
-                    Err(error) => {
-                        super::super::state::log(&format!(
-                            "registered mount {} recovery audit failed: {error}",
-                            config.id
-                        ));
-                        MountRecovery::Unknown
-                    }
+            .map(|config| match audit(&cache_root, &config.id) {
+                Ok(recovery) => recovery,
+                Err(error) => {
+                    super::super::state::log(&format!(
+                        "registered mount {} recovery audit failed: {error}",
+                        config.id
+                    ));
+                    MountRecovery::Unknown
                 }
             })
             .collect();
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "linux")))]
     vec![MountRecovery::Unknown; configs.len()]
 }
 
@@ -73,12 +71,12 @@ pub(super) fn insert(
     Ok(())
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 pub(super) fn prepare(manager: &MountManager, key: &str, id: &MountId) -> Result<PathBuf, String> {
     let cache_root =
         crate::mount::prepare_spool_root(&crate::support_dirs::app_data_dir().join("mount-cache"))
             .map_err(|error| format!("Laufwerk-Cache absichern: {error}"))?;
-    let recovery = match crate::mount::os::windows::audit_recovery(&cache_root, id) {
+    let recovery = match audit(&cache_root, id) {
         Ok(recovery) => recovery,
         Err(error) => {
             record(manager, key, MountRecovery::Unknown)?;
@@ -89,7 +87,19 @@ pub(super) fn prepare(manager: &MountManager, key: &str, id: &MountId) -> Result
     Ok(cache_root)
 }
 
+/// The recovery state of a drive whose host does not run, read under the
+/// cache lease of the platform (DRV-M2; Linux since DRV-M4).
 #[cfg(windows)]
+fn audit(cache_root: &Path, id: &MountId) -> std::io::Result<MountRecovery> {
+    crate::mount::os::windows::audit_recovery(cache_root, id)
+}
+
+#[cfg(target_os = "linux")]
+fn audit(cache_root: &Path, id: &MountId) -> std::io::Result<MountRecovery> {
+    crate::mount::os::linux_os::audit_recovery(cache_root, id)
+}
+
+#[cfg(any(windows, target_os = "linux"))]
 fn record(manager: &MountManager, key: &str, recovery: MountRecovery) -> Result<(), String> {
     let mut state = manager.state_guard()?;
     let entry = state

@@ -74,13 +74,21 @@ impl Backend for MountProxy {
         }))
     }
 
-    fn open_read_at(&self, path: &str, _id: Option<&str>, offset: u64)
-        -> VfsResult<Option<Box<dyn Read + Send>>>
-    {
+    fn open_read_at(
+        &self,
+        path: &str,
+        _id: Option<&str>,
+        offset: u64,
+    ) -> VfsResult<Option<Box<dyn Read + Send>>> {
         let permit = self.gate.enter()?;
-        Ok(decode(self.inner.open_read_at(path, None, offset))?.map(|inner| {
-            Box::new(DecodedReader { inner, _permit: permit }) as Box<dyn Read + Send>
-        }))
+        Ok(
+            decode(self.inner.open_read_at(path, None, offset))?.map(|inner| {
+                Box::new(DecodedReader {
+                    inner,
+                    _permit: permit,
+                }) as Box<dyn Read + Send>
+            }),
+        )
     }
 
     fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
@@ -184,6 +192,11 @@ impl Backend for MountProxy {
     fn invalidate_cache(&self) {
         self.inner.invalidate_cache();
     }
+
+    /// Only `finish_stage` (DRV-M4, `mount_proxy_extensions.rs`).
+    fn extensions(&self) -> Option<&dyn crate::vfs::BackendExtensions> {
+        Some(self)
+    }
 }
 
 struct DecodedReader {
@@ -215,3 +228,6 @@ impl Write for DecodedWriter {
 fn decode<T>(result: io::Result<T>) -> io::Result<T> {
     result.map_err(super::mount_error::decode)
 }
+
+#[path = "mount_proxy_extensions.rs"]
+mod extensions;

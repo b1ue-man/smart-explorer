@@ -58,8 +58,16 @@ impl MountManager {
         entry.launch_token = None;
         entry.session_token = Some(session_token.clone());
         entry.backend_token = Some(backend_token.clone());
+        #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
+        let mut config: super::super::ipc_protocol::MountHostConfig = (&entry.config).into();
+        // R1/DRV-M4: the Linux FUSE host serves POSIX names; a saved drive
+        // carries no dialect, the platform of the host decides.
+        #[cfg(target_os = "linux")]
+        {
+            config.path_dialect = crate::mount::PathDialect::Posix;
+        }
         Ok(HostGrant {
-            config: (&entry.config).into(),
+            config,
             scheme,
             capabilities,
             session_token,
@@ -237,9 +245,19 @@ impl MountManager {
                 return Err("Laufwerk-Host meldete einen anderen Laufwerksbuchstaben".into());
             }
         }
+        // DRV-M4: a folder drive appears exactly at its stored folder.
+        if let (MountStatus::MountedAt { path }, Some(expected)) =
+            (&status, entry.config.location_directory())
+        {
+            if path.as_path() != expected {
+                return Err("Laufwerk-Host meldete einen anderen Einhängeort".into());
+            }
+        }
         if matches!(
             &status,
-            MountStatus::Mounted { .. } | MountStatus::Conflict { .. }
+            MountStatus::Mounted { .. }
+                | MountStatus::MountedAt { .. }
+                | MountStatus::Conflict { .. }
         ) {
             // A running filesystem may have accepted a write immediately
             // after Dokany mounted it. Preserve its cache until a closed host
@@ -293,6 +311,7 @@ fn validate_host_status(status: &MountStatus) -> Result<(), String> {
     const MAX_PATH_BYTES: usize = 8 * 1024;
     match status {
         MountStatus::Mounted { .. } | MountStatus::Unmounted | MountStatus::Mounting => Ok(()),
+        MountStatus::MountedAt { path } if path.as_os_str().len() <= MAX_PATH_BYTES => Ok(()),
         MountStatus::RuntimeUnavailable { detail } | MountStatus::Failed { detail }
             if detail.len() <= MAX_DETAIL_BYTES =>
         {

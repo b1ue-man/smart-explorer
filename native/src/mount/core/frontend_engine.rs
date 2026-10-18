@@ -75,15 +75,13 @@ impl MountFilesystem for MountEngine {
 
     fn set_pending_attributes(
         &self,
-        _handle: HandleId,
-        _attributes: PendingAttributes,
+        handle: HandleId,
+        attributes: PendingAttributes,
     ) -> io::Result<()> {
         // Windows never sets times or modes (`set_file_time` answers
-        // ERROR_NOT_SUPPORTED); storing them belongs to the POSIX host.
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "this drive does not store times or modes of pending files",
-        ))
+        // ERROR_NOT_SUPPORTED); a drive of the Windows dialect refuses them,
+        // a POSIX drive keeps them for the next publication (DRV-M4).
+        MountEngine::set_pending_attributes(self, handle, attributes)
     }
 
     fn stat(&self, callback_path: &str) -> io::Result<VfsMeta> {

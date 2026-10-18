@@ -23,7 +23,8 @@ pub struct MountEngine {
     pub(super) projector: PathProjector,
     pub(super) spool: Arc<WholeFileSpool>,
     pub(super) namespace: RwLock<()>,
-    pub(super) materializations: Mutex<HashMap<String, Weak<super::materialization::MaterializationSlot>>>,
+    pub(super) materializations:
+        Mutex<HashMap<String, Weak<super::materialization::MaterializationSlot>>>,
     pub(super) entries: Mutex<super::entry_table::EntryTable>,
     pub(super) handles: Mutex<HashMap<HandleId, OpenHandle>>,
     pub(super) deletes: Mutex<HashMap<DeleteToken, PersistedDelete>>,
@@ -37,6 +38,8 @@ pub struct MountEngine {
     pub(super) cache_space: Arc<super::cache_space::CacheSpace>,
     pub(super) detached: Mutex<HashMap<String, Arc<Entry>>>,
     pub(super) retirements: Arc<super::retirement_queue::RetirementQueue>,
+    /// Times and modes of dirty files on a POSIX drive (DRV-M4).
+    pub(super) pending_attributes: super::pending_attributes::PendingAttributeTable,
 }
 
 pub(super) struct Entry {
@@ -161,8 +164,6 @@ impl MountEngine {
         }
         Ok(entry)
     }
-
-
 }
 
 impl EntryState {
