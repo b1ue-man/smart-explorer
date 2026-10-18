@@ -136,7 +136,7 @@ Modellbeleg (Transkripte, 2026-10-17 14:20): alle Bestandsleser antworten aussch
 | S3 | Umsetzung U05 (Phase P2, vorgezogen; keine Dateiüberschneidung mit U02 und R1) | opus, Standardaufwand der Sitzung (max) | Code laut D1 | fertig (Commit 4e07b200); Quellen von aes-siv 0.8.0, aes-kw 0.3.1, siv-mode-Prüfvektoren (MIT) und zwei CryptoLib-2.3.0-Testdateien aus dem Netz gelesen, vom Hauptagenten als nötig für C1.2 bestätigt |
 | S3 | Umsetzung U08 (VLT-M2, VLT-M3) | opus, Standardaufwand der Sitzung (max) | Code laut D1 | fertig (Commit e1f1c819); Abweichung von C2.6: Stufen liegen immer im Inhaltsverzeichnis des Elternordners (deterministische Abbildung), vom Hauptagenten angenommen |
 | S5 | Umsetzung U32 (DSK-M5) | opus, Standardaufwand der Sitzung | Code laut D1 | fertig (Commit 6e1c4602); Linux-Platzhalter, Herausziehen und Registrierungen (zwei `windows`-Features, `jump_list.active`) vom Hauptagenten angewandt; Abweichung „bei Monitorwechsel alle Flächen neu starten“ angenommen |
-| S3+S2 | Umsetzung U14 (VLT-M12, DRV-M7) | opus, Standardaufwand der Sitzung | Code laut D1 | Zwischenstand am Wochenlimit, kontrolliert angehalten; `stand/U14.md` |
+| S3+S2 | Umsetzung U14 (VLT-M12, DRV-M7) | opus, Standardaufwand der Sitzung | Code laut D1 | fertig (Commits ee4a5761 VLT-M12, 5267e500 DRV-M7) nach kontrolliertem Halt und Fortsetzung; Entscheidungen zu „Tresor beim Anmelden gesperrt“ (zurückstellen, nach Entsperren einbinden) und „Sperren behält den Registry-Eintrag“ angenommen |
 | S3 | Umsetzung U20 (VLT-M6, VLT-M7) | opus, Standardaufwand der Sitzung | Code laut D1 | fertig (Commit 1879e509) nach kontrolliertem Halt und Fortsetzung mit freigewordenem Budget; Abweichung Replikat-Ort und selbst festgelegte feste Felder vom Hauptagenten angenommen |
 | S4 | Umsetzung U13 (SCR-M3) | opus, Standardaufwand der Sitzung | Code laut D1 | fertig (Commit 9e1448e2) nach kontrolliertem Halt und Fortsetzung; Registrierungen 1–10 vom Hauptagenten gesetzt; Abweichung „keine IPC-Varianten `Codecs`/`OpenH264`, CLI und GUI lokal“ angenommen |
 
@@ -163,6 +163,15 @@ Sitzungslimit (Nutzer 2026-10-17): Ab der Nachricht zum nahenden Sitzungslimit l
   3. dann U22, U23, U25, U27, U28, U31, U35, U37, U38 und U40;
   4. zuletzt U36, U41, U42 und U43;
   5. dann die Suite.
+
+**Stand bei der zweiten Pause (2026-10-18 08:45 UTC, Startgrenze des Wochenlimits erreicht, alle laufenden Pakete fertig):**
+- Fertig, committet und gepusht: zusätzlich U13 (9e1448e2), U14 (ee4a5761, 5267e500), U20 (1879e509), U32 (6e1c4602). Damit 23 von 43 Umsetzungspaketen.
+- Registrierungen von U13 (Punkte 1–10) und U32 hat der Hauptagent gesetzt; offen für das nächste R-Paket: U14 (Hub-Dateien), U20 (`app/mod.rs`, `daemon/mod.rs`), U13 (MCP-Katalogbeispiel).
+- Nach der Wochenrücksetzung in dieser Reihenfolge:
+  1. R-Paket für U13, U14 und U20 zusammen mit der Weitergabe der Tresor-Jobs an `vault::run_vault_job` in den vier Läufern;
+  2. parallel ohne gemeinsame Dateien: U16 und U19 (S4, nach U13), U17 (S2, nach U14), U26 (S3, nach U20), U37 (S5) sowie eines der zwei Android-Pakete U27 oder U35;
+  3. danach U22, U23, U25, U28, U29, U31, U34, U35 bzw. U27, U38, U40;
+  4. zuletzt U36, U41, U42, U43, dann die Suite.
 
 **Wiederaufnahme (2026-10-18 07:33 UTC, nach der Berichtigung der Obergrenze durch den Nutzer):**
 - Laufend: U13, U14, U20 und U32 (opus, Standardaufwand, Modell aus den Transkripten belegt). Die Dateibereiche stehen im Arbeitsverzeichnis des Hauptagenten (`running-areas.md`); jeder Agent führt `stand/<Paket>.md` fortlaufend.
@@ -473,7 +482,11 @@ Die Briefe der genannten Pakete enthalten diese Punkte zusätzlich zu D1.
 - **An U36 (aus U32):** keine neue Installer-Zeile. `--unregister` muss aus `Smart Explorer.exe` laufen, weil nur das GUI-Abbild die Sprungliste löscht; `se desktop remove` vor `--unregister` bleibt.
 - **An U41 (aus U32):** Inventurzeilen der zehn `desktop_task_windows_*`-Signale und des Zusatztests `jump_list_plan_follows_tiles` mit Pfad, Stufe und Optionen stehen in `stand/U32.md` (Testpfade unter `desktop::os::platform::…`).
 - **An U42 und U43 (aus U32):** Doku-Fundstellen für `desktop-launcher.md`, fünf GOTCHAS-Punkte, TODO-Stand (`DESKTOP-WIN-CTRLV-FILES` und `DESKTOP-WIN-DRAGOUT` erledigt; Handtests A1, A2, A4, A5, A8, A10 offen) und der README-Punkt zur Windows-Tiefe stehen in `stand/U32.md`, Abschnitt Doku-Bedarf.
-- **Fortsetzung U14 (Zwischenstand, `stand/U14.md`):** U14 setzt nach der Rücksetzung fort und erhält zusätzlich `ipc_protocol_vault.rs` und `ipc_vault.rs` (U11, frei): `VaultIpcRequest::SpoolKey { mount_id }`, `VaultIpcReply::SpoolKey`, Auslöseregel in `promotes_daemon`, Arm in `serve`. Registrierungsbedarf für das nächste R-Paket steht im Stand (Abschnitt 4).
+- **U14 fertig (Commits ee4a5761, 5267e500), Folgearbeit:**
+  - Registrierung im nächsten R-Paket, wörtlich in `stand/U14.md`, Abschnitt 4: `daemon/drive_modules.rs` (`ipc_protocol_mount_host`); `ipc_protocol.rs` (`IpcRequest::MountHostExt { id, session_token, req }`, `IpcResponse::MountHostExt(MountHostReply)`, `daemon_token()` = `None` für `MountHostExt` und `Vault { req: SpoolKey }`); `ipc.rs` (Weiterleitung an `serve_extension`, Rückfallzweig von `require_request_auth` ruft `authorize_extension`); `ipc_host_ext.rs` (Arm `serve_host_ext`, Prüfung mit Sitzungstoken für `MountHostExt` und `SpoolKey`, `allow(dead_code)` an `authorize_extension` entfällt); `daemon/mod.rs` (Re-Export `mount_path_for`, `ensure_mounted_for`).
+  - An U17: `PrepareLock` und der Kanal `MountHostExt` stehen (W3); `ChildBackend`/`DeviceWatch` bauen darauf auf.
+  - An U41: 25 Inventurzeilen mit Stufen `linux-core: unit`, `linux-root: drive-vault`, `windows-core: drive-vault`, `linux-root: vault-mount`, `windows-core: vault-mount` in `stand/U14.md`, Abschnitt 4; `drive_task_vault_lock_deadline_keeps_sealed_and_aborts` prüft den Host-Abbruch nicht selbst, das tun nur die FUSE- und Dokany-Stufen.
+  - An U42: GOTCHAS (Kürzen eines versiegelten Spools an einer Blockgrenze unerkennbar; Windows Search und Miniaturbilder nur global steuerbar, A13/A14); `tresore.md` (Tresor als Laufwerk, Sperren mit und ohne `--keep-unsaved`, `requires-unlock:<n>`, Rückkehr nach dem Entsperren, Miniaturbild-Bereinigung unter Linux).
 - **U13 fertig (Commit 9e1448e2), Folgearbeit:**
   - An U16: Das Windows-Backend ersetzt `platform_backend()` in `screen/os/mod.rs`; der GPU-Eingang für Media Foundation (Device-Manager, `MF_SA_D3D11_AWARE`) ist offen; `inject` läuft noch im Daemon, C5 verlangt SendInput im Hostprozess, dafür braucht `worker_wire` eine Nachricht `INPUT`.
   - An U19: Das Linux-Backend kommt ebenfalls in `platform_backend()`; die Frist von 120 s zum Öffnen der Quelle reicht für den Portal-Dialog möglicherweise nicht; während des Öffnens meldet der Hostprozess keinen Zwischenstand (`WaitingForPortal`).
