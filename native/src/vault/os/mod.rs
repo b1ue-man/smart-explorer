@@ -2,9 +2,14 @@
 //! backend, its directory cache, the vault list on disk and the opening of
 //! `vault://` and `vault-store://` locations (VLT-M2, VLT-M3); the session
 //! register, unlocking, remembered passwords, management and password
-//! change (VLT-M4, VLT-M5). The shared parts are portable (`shared/`); the
-//! lock signals and the memory reading of each platform live in
-//! `windows.rs`, `linux_os.rs` and `android.rs`.
+//! change (VLT-M4, VLT-M5); the vault side of vault drives: sealed spool,
+//! spool keys, sealed journal fields and the bridge to the drive manager
+//! (VLT-M12). The shared parts are portable (`shared/`); the lock signals
+//! and the memory reading of each platform live in `windows.rs`,
+//! `linux_os.rs` and `android.rs`, the thumbnail cleanup of vault drives in
+//! `linux_thumbnails.rs` (Linux only).
+use std::path::Path;
+
 use crate::vault::core::lock_policy::LockPlatform;
 use crate::vault::core::registry_types::LockSettings;
 
@@ -28,8 +33,17 @@ mod backend_rename;
 mod backend_write;
 #[path = "shared/dir_cache.rs"]
 mod dir_cache;
+// U20 (VLT-M6, VLT-M7): memory spool, places, replicas and vault sync jobs.
+#[path = "shared/ephemeral_spool.rs"]
+mod ephemeral_spool;
+#[path = "shared/journal_sealer.rs"]
+mod journal_sealer;
+#[path = "shared/local_store.rs"]
+mod local_store;
 #[path = "shared/manage.rs"]
 mod manage;
+#[path = "shared/mount_bridge.rs"]
+mod mount_bridge;
 #[path = "shared/open.rs"]
 mod open;
 #[path = "shared/password.rs"]
@@ -38,8 +52,16 @@ mod password;
 mod registry_store;
 #[path = "shared/remember.rs"]
 mod remember;
+#[path = "shared/replica.rs"]
+mod replica;
+#[path = "shared/sealed_spool.rs"]
+mod sealed_spool;
 #[path = "shared/session.rs"]
 mod session;
+#[path = "shared/spool_key.rs"]
+mod spool_key;
+#[path = "shared/sync_job.rs"]
+mod sync_job;
 #[path = "shared/unlock.rs"]
 mod unlock;
 
@@ -54,11 +76,26 @@ mod platform;
 #[path = "windows.rs"]
 mod platform;
 
+// Thumbnails of vault drive folders (K45, VLT-M12): freedesktop cache.
+#[cfg(target_os = "linux")]
+#[path = "linux_thumbnails.rs"]
+mod thumbnails;
+
 pub(crate) use backend::VaultBackend;
+pub(crate) use ephemeral_spool::EphemeralSpool;
+pub(crate) use journal_sealer::{sealed_mount_storage, JournalPathSealer};
+pub(crate) use local_store::{
+    expand_dir_sort, expand_places, note_vault_backend, publish_vault_mount, seal_log_fields,
+    shows_vault, store_dir_sort, store_places, vault_mount_of, vault_mount_roots, vault_site_of,
+    withdraw_vault_mount, LocalStore, PlaceList, ProcessSealing, SiteSealing, VaultPlaces,
+};
 pub(crate) use manage::{
     add_site, create_site, create_vault, detect_location, detect_storage, jobs_using,
     recovery_key_info, remove_entered, remove_site, update_settings, Detection, ManageError,
     RecoveryKeyInfo, SettingsChange, CREATE_RECOVERY_HINT, RECOVERY_KEY_NOTE,
+};
+pub(crate) use mount_bridge::{
+    vault_drive_bridge, MountVaultError, Resolver, UnlockHook, VaultDriveBridge,
 };
 pub(crate) use open::{
     canonical_vault_location, open_in, open_location_in, open_vault_backend, open_vault_location,
@@ -71,10 +108,19 @@ pub(crate) use password::{
 };
 pub(crate) use registry_store::{resolve_in, RegistryLoad, RegistryStore, VAULTS_DIR};
 pub(crate) use remember::{account, OsSecretStore, SecretStore, ACCOUNT_PREFIX};
+pub(crate) use replica::{
+    create_vault_job, default_replicas_root, CopyTarget, JobPlace, VaultJobCreated,
+};
+pub(crate) use sealed_spool::{SealedSpoolFile, SealedSpoolStorage};
 pub(crate) use session::{
     host_visibility, hosts_register, lock_all_for_exit, register, wire_error_text, ConsumerGuard,
     ConsumerKind, Installed, LockError, LockParticipant, LockRequest, RegisterEvent,
     RegisterOptions, SessionRegister, SiteState, SiteStatus, EVENT_LOG,
+};
+pub(crate) use spool_key::{SpoolKey, SPOOL_KEY_FILE};
+pub(crate) use sync_job::{
+    apply_vault_preview_action, preview_vault_job_in, run_vault_job, run_vault_job_in,
+    VaultPreview, VaultRunOutcome, VaultRunRequest,
 };
 pub(crate) use unlock::{
     read_key_files, unlock_entered, unlock_saved, unlock_storage, KeyFiles, UnlockError,
@@ -95,6 +141,22 @@ pub(crate) const SCREEN_LOCK_NOTE: Option<&str> = platform::SCREEN_LOCK_NOTE;
 /// then only the fixed limits apply.
 pub(crate) fn available_memory() -> Option<u64> {
     platform::available_memory()
+}
+
+/// Removes the freedesktop thumbnails of files inside the drive folder
+/// `place` (K45, S2-V7); `root` stands for the user's thumbnail cache. Only
+/// Linux keeps such a cache; elsewhere nothing is removed. Returns how many.
+pub(crate) fn remove_drive_thumbnails(root: Option<&Path>, place: &Path) -> usize {
+    #[cfg(target_os = "linux")]
+    {
+        let root = root.map(Path::to_path_buf).or_else(thumbnails::cache_root);
+        root.map_or(0, |root| thumbnails::remove_for_place(&root, place))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (root, place);
+        0
+    }
 }
 
 /// Lock defaults of sites on this platform (C3.3).
@@ -128,11 +190,17 @@ mod interop_tests;
 #[path = "shared/manage_tests.rs"]
 mod manage_tests;
 #[cfg(test)]
+#[path = "shared/mount_bridge_tests.rs"]
+mod mount_bridge_tests;
+#[cfg(test)]
 #[path = "shared/password_tests.rs"]
 mod password_tests;
 #[cfg(test)]
 #[path = "shared/registry_tests.rs"]
 mod registry_tests;
+#[cfg(test)]
+#[path = "shared/sealed_spool_tests.rs"]
+mod sealed_spool_tests;
 #[cfg(test)]
 #[path = "shared/session_lock_tests.rs"]
 mod session_lock_tests;
@@ -142,3 +210,6 @@ mod session_test_support;
 #[cfg(test)]
 #[path = "shared/session_tests.rs"]
 mod session_tests;
+#[cfg(test)]
+#[path = "shared/spool_key_tests.rs"]
+mod spool_key_tests;

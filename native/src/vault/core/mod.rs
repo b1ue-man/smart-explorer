@@ -13,12 +13,15 @@ use std::time::{Duration, Instant};
 use crate::cryptomator::{ContentCryptor, FormatError, Masterkey, MasterkeyCell, VaultConfig};
 
 pub(crate) mod capabilities;
+// U20 (VLT-M6, VLT-M7): the plaintext boundary and the vault sync rules.
+pub(crate) mod klartext_policy;
 pub(crate) mod listing;
 pub(crate) mod locator;
 pub(crate) mod lock_policy;
 pub(crate) mod path_map;
 pub(crate) mod registry_types;
 pub(crate) mod sealed;
+pub(crate) mod sync_rules;
 
 #[cfg(test)]
 mod locator_tests;
