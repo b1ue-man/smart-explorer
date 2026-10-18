@@ -1,6 +1,8 @@
-//! Capture and encoding of the host pipeline (SCR-M2, decisions C3, C6),
-//! run on the blocking pool: one frame of the source scaled to the size of
-//! the picture group and encoded, and `SNAPSHOT`, one lossless still
+//! Capture and encoding of the host pipeline (SCR-M2, SCR-M3, decisions C3,
+//! C6), run on the blocking pool: one frame of the source scaled to the size
+//! of the picture group and encoded, either here with the backend's encoder
+//! (opened on first use) or in the host process when the source was opened
+//! there (`ScreenSource::host_stage`); and `SNAPSHOT`, one lossless still
 //! picture as tiles on its own picture stream of the kind `snapshot`.
 use std::io;
 use std::time::Duration;
@@ -10,8 +12,9 @@ use iroh::endpoint::Connection;
 use super::{Pipeline, PipelineError};
 use crate::screen::core::gop_stream::{now_us, GopWriter};
 use crate::screen::core::host_backend::{
-    EncodedFrame, ScreenEncoder, ScreenSource, SourceFrame, TilesScreenEncoder,
+    EncodedFrame, ScreenEncoder, ScreenHostBackend, ScreenSource, SourceFrame, TilesScreenEncoder,
 };
+use crate::screen::core::host_stage::{StageEncoder, StageFrame, StageRequest};
 use crate::screen::core::negotiate::CodecKind;
 use crate::screen::core::pacing::STALE_STREAM_US;
 use crate::screen::core::pixel_convert::{downscale_bgra, FrameSize};
@@ -26,8 +29,11 @@ pub(super) struct Stage {
 
 /// What capture and encoding of one frame gave.
 pub(super) enum Captured {
-    /// The records and the capture time (µs).
-    Encoded(EncodedFrame, u64),
+    Encoded {
+        frame: EncodedFrame,
+        capture_ts_us: u64,
+        encoder: StageEncoder,
+    },
     Unchanged,
     Paused(SessionState),
 }
@@ -108,35 +114,74 @@ fn still_tiles(
     Ok((frame.records, size, capture_ts_us))
 }
 
-/// Captures the picture of `frame_id`, scales it to `size` and encodes it.
-pub(super) fn capture_and_encode(
+/// One frame as `request` says: in the host process when the source runs
+/// there, else here with the backend's encoder, opened on first use.
+pub(super) fn produce(
     stage: &mut Stage,
-    size: FrameSize,
-    frame_id: u64,
-    keyframe: bool,
-    target_bps: u64,
+    backend: &dyn ScreenHostBackend,
+    request: &StageRequest,
+) -> Result<Captured, PipelineError> {
+    if let Some(host) = stage.source.host_stage() {
+        return Ok(match host.produce(request)? {
+            StageFrame::Encoded {
+                records,
+                keyframe,
+                capture_ts_us,
+                encoder,
+                ..
+            } => Captured::Encoded {
+                frame: EncodedFrame { records, keyframe },
+                capture_ts_us,
+                encoder,
+            },
+            StageFrame::Unchanged { .. } => Captured::Unchanged,
+            StageFrame::Paused(state) => Captured::Paused(state),
+        });
+    }
+    if stage.encoder.is_none() {
+        let encoder = backend
+            .open_encoder(&request.choice, request.size)
+            .map_err(PipelineError::encoder)?;
+        stage.encoder = Some(encoder);
+    }
+    capture_and_encode(stage, request)
+}
+
+/// Captures the picture of the request's frame, scales it to the request's
+/// size and encodes it with the stage's encoder.
+fn capture_and_encode(
+    stage: &mut Stage,
+    request: &StageRequest,
 ) -> Result<Captured, PipelineError> {
     let capture_ts_us = now_us();
     let captured = stage
         .source
-        .capture(frame_id, keyframe)
+        .capture(request.frame_id, request.keyframe)
         .map_err(PipelineError::capture)?;
     let image = match captured {
         SourceFrame::Frame(image) => image,
         SourceFrame::Unchanged => return Ok(Captured::Unchanged),
         SourceFrame::Paused(state) => return Ok(Captured::Paused(state)),
     };
-    let image = if image.size() == size {
+    let image = if image.size() == request.size {
         image
     } else {
-        downscale_bgra(&image.view(), size).map_err(PipelineError::capture)?
+        downscale_bgra(&image.view(), request.size).map_err(PipelineError::capture)?
     };
     let encoder = stage
         .encoder
         .as_mut()
         .ok_or_else(|| PipelineError::encoder(io::Error::other("no screen encoder")))?;
     let frame = encoder
-        .encode(&image, keyframe, target_bps)
+        .encode(&image, request.keyframe, request.target_bps)
         .map_err(PipelineError::encoder)?;
-    Ok(Captured::Encoded(frame, capture_ts_us))
+    let encoder = StageEncoder {
+        name: encoder.name(),
+        hardware: request.choice.encoder_hardware,
+    };
+    Ok(Captured::Encoded {
+        frame,
+        capture_ts_us,
+        encoder,
+    })
 }

@@ -32,6 +32,9 @@ use fixture::{screen_grant, ScreenPair};
 #[path = "node_screen_rights_tests.rs"]
 mod rights;
 
+#[path = "node_screen_codec_tests.rs"]
+mod codec;
+
 static AUDIT: Mutex<Vec<Value>> = Mutex::new(Vec::new());
 
 fn capture(entry: crate::share::access_audit::AccessEntry<'_>) {
@@ -83,7 +86,11 @@ fn bench_on(pair: &ScreenPair, seconds: u32) -> BenchReport {
     let session = pair.open(&test_picture(SessionMode::View), |_| {}).unwrap();
     pair.viewer
         .0
-        .block_on(bench::run(session, options(seconds)))
+        .block_on(bench::run(
+            session,
+            options(seconds),
+            &crate::screen::core::codec_registry::CodecRegistry::builtin(),
+        ))
         .unwrap()
 }
 

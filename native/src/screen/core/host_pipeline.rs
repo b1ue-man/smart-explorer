@@ -3,13 +3,17 @@
 //! capture and encoding whether a frame fits the queue guard (`Pacer::decide`
 //! with the path and round trip of the connection), resets a stale picture
 //! stream and asks for key frames; capture and encoding run on the blocking
-//! pool; the records go to the picture stream of the current picture group,
-//! stamped after the last one (`SentFrame.sent_us`). `FRAME_ACK` feeds pacer
-//! and rate control, the cumulative loss counters arrive once a second. A
-//! picture stream that does not take a frame within the stale time, or fails,
-//! is reset and the next frame is a key frame on a new stream
-//! (`Pacer::on_stream_reset`). Previews (C6) travel one at a time: the next
-//! one only after `PREVIEW_ACK` and the chosen interval.
+//! pool, in the host process when the source was opened there (SCR-M3,
+//! `ScreenSource::host_stage`); the records go to the picture stream of the
+//! current picture group, stamped after the last one (`SentFrame.sent_us`).
+//! `FRAME_ACK` feeds pacer and rate control, the cumulative loss counters
+//! arrive once a second. A picture stream that does not take a frame within
+//! the stale time, or fails, is reset and the next frame is a key frame on a
+//! new stream (`Pacer::on_stream_reset`). An H.264 encoder that fails gives
+//! way to the lossless tile codec, the last fallback every viewer decodes.
+//! On the relay path a key frame above the relay's queue per destination
+//! makes the following picture groups smaller. Previews (C6) travel one at a
+//! time: the next one only after `PREVIEW_ACK` and the chosen interval.
 use std::io;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
@@ -17,20 +21,23 @@ use std::time::Duration;
 
 use iroh::endpoint::Connection;
 
-use super::gop_stream::{loss_counters, now_us, path_of, GopWriter};
+use super::gop_stream::{now_us, path_of, GopWriter};
 use super::host_backend::{EncodedFrame, ScreenHostBackend, ScreenSource};
+use super::host_stage::{StageEncoder, StageError, StageRequest};
 use super::negotiate::{CodecChoice, CodecKind};
 use super::pacing::{FrameClock, PaceDecision, Pacer, SentFrame, STALE_STREAM_US};
 use super::pixel_convert::FrameSize;
-use super::rate_control::{adjust_quality, AckSample, Quality, RateController};
+use super::rate_control::{Quality, RateController};
 use super::session_state::SessionState;
 use super::wire_binary::{GopHeader, StreamKind};
-use super::wire_control::{FrameAck, HostStats, StreamInfo};
+use super::wire_control::StreamInfo;
 use super::wire_hello::ScreenErrorCode;
 
 #[path = "host_capture.rs"]
 mod capture;
-use capture::{capture_and_encode, Captured, Stage};
+use capture::{produce, Captured, Stage};
+#[path = "host_mode.rs"]
+mod mode;
 
 /// Long edge of a tile preview unless the group view asks for more (C6).
 pub(crate) const PREVIEW_EDGE: u32 = 320;
@@ -76,6 +83,15 @@ impl PipelineError {
     }
 }
 
+impl From<StageError> for PipelineError {
+    fn from(failure: StageError) -> Self {
+        Self {
+            code: failure.code,
+            error: failure.error,
+        }
+    }
+}
+
 /// Counters of one session for the statistics and the access log.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Totals {
@@ -109,6 +125,14 @@ pub(crate) struct Pipeline {
     second_frames: u32,
     /// Test hook: picture streams to reset after the next frames.
     inject_resets: Arc<AtomicU32>,
+    /// Counts the encoders started; a host process opens a new one with it.
+    encoder_epoch: u64,
+    /// The running encoder and its picture size.
+    running: Option<(StageEncoder, FrameSize)>,
+    /// Bytes of the last key frame, for the relay guard.
+    last_key_bytes: u64,
+    /// Size limit after an oversized key frame on the relay path.
+    relay_limit: Option<FrameSize>,
 }
 
 impl Pipeline {
@@ -151,6 +175,10 @@ impl Pipeline {
             second_bytes: 0,
             second_frames: 0,
             inject_resets,
+            encoder_epoch: 0,
+            running: None,
+            last_key_bytes: 0,
+            relay_limit: None,
         };
         pipeline.quality.size = pipeline.fitted_size();
         pipeline.resize();
@@ -163,13 +191,13 @@ impl Pipeline {
 
     /// What `STATE` reports of the running picture stream.
     pub(crate) fn stream_info(&self) -> Option<StreamInfo> {
-        let encoder = self.stage.as_ref()?.encoder.as_ref()?;
+        let (encoder, size) = self.running.as_ref()?;
         Some(StreamInfo {
             codec: self.choice.codec,
             profile: self.choice.profile,
-            size: encoder.size(),
-            encoder: encoder.name(),
-            hardware: self.choice.encoder_hardware,
+            size: *size,
+            encoder: encoder.name.clone(),
+            hardware: encoder.hardware,
         })
     }
 
@@ -187,128 +215,61 @@ impl Pipeline {
     }
 
     /// The size of the next picture group: tiles keep the fitted source,
-    /// H.264 takes the step of the quality ladder with even sides.
+    /// H.264 takes the step of the quality ladder (and of the relay guard)
+    /// with even sides.
     fn target_size(&self) -> FrameSize {
         let fitted = self.fitted_size();
         match self.choice.codec {
             CodecKind::Tiles => fitted,
-            CodecKind::H264 => self.quality.size.fit_within(fitted).even(),
+            CodecKind::H264 => {
+                let size = self.quality.size.fit_within(fitted);
+                let size = self
+                    .relay_limit
+                    .map_or(size, |limit| size.fit_within(limit));
+                size.even()
+            }
         }
+    }
+
+    /// Ends the current picture group and its encoder; the next frame is a
+    /// key frame of a new encoder.
+    fn drop_encoder(&mut self) {
+        if let Some(stage) = &mut self.stage {
+            stage.encoder = None;
+        }
+        self.running = None;
+        self.encoder_epoch += 1;
+        if let Some(gop) = self.gop.take() {
+            gop.finish();
+        }
+        self.pacer.request_keyframe();
     }
 
     /// Starts a new picture group when the target size changed.
     fn resize(&mut self) {
         let size = self.target_size();
-        let Some(stage) = &mut self.stage else {
-            return;
-        };
-        if stage
-            .encoder
+        let same = self
+            .running
             .as_ref()
-            .is_some_and(|encoder| encoder.size() == size)
-        {
-            return;
+            .is_some_and(|(_, running)| *running == size);
+        if !same {
+            self.drop_encoder();
         }
-        stage.encoder = None;
-        if let Some(gop) = self.gop.take() {
-            gop.finish();
-        }
-        self.pacer.request_keyframe();
     }
 
-    /// Ends the current picture group; the next frame is a key frame.
-    fn restart(&mut self) {
-        if let Some(stage) = &mut self.stage {
-            stage.encoder = None;
-        }
-        if let Some(gop) = self.gop.take() {
-            gop.finish();
-        }
-        self.pacer.request_keyframe();
-    }
-
-    /// `SET_MODE`: the stream kind, the size the viewer wants and the rate.
-    pub(crate) fn set_mode(&mut self, kind: StreamKind, size: Option<FrameSize>, fps: Option<u16>) {
-        if kind != self.kind {
-            self.kind = kind;
-            self.preview_in_flight = None;
-            self.restart();
-        }
-        self.bounds = match (kind, size) {
-            (_, Some(size)) => size,
-            (StreamKind::Preview, None) => FrameSize::new(PREVIEW_EDGE, PREVIEW_EDGE),
-            _ => self.display,
+    /// The lossless tile codec after an H.264 encoder failed: every viewer
+    /// decodes it, so the session goes on with a key frame on a new stream.
+    fn fall_back_to_tiles(&mut self) {
+        self.choice = CodecChoice {
+            codec: CodecKind::Tiles,
+            profile: None,
+            encoder_hardware: false,
+            decoder_hardware: false,
+            max_size: FrameSize::MAX,
         };
-        if let Some(fps) = fps {
-            let fps = u32::from(fps).max(1);
-            if kind == StreamKind::Preview {
-                self.preview_interval_us = 1_000_000 / u64::from(fps);
-            } else {
-                self.max_fps = fps;
-                self.quality.fps = self.quality.fps.min(fps);
-                self.clock.set_fps(self.quality.fps);
-            }
-        }
+        self.relay_limit = None;
         self.quality.size = self.fitted_size();
-        self.resize();
-    }
-
-    /// Replaces the source (`SET_MODE` with another source).
-    pub(crate) fn set_source(&mut self, source: Box<dyn ScreenSource>) {
-        self.stage = Some(Stage {
-            source,
-            encoder: None,
-        });
-        self.quality.size = self.fitted_size();
-        self.restart();
-    }
-
-    pub(crate) fn request_keyframe(&mut self) {
-        self.pacer.request_keyframe();
-    }
-
-    /// `FRAME_ACK` or `PREVIEW_ACK`.
-    pub(crate) fn on_ack(&mut self, ack: FrameAck) {
-        if self.preview_in_flight == Some(ack.frame_id) {
-            self.preview_in_flight = None;
-        }
-        if let Some(sent) = self.pacer.on_ack(ack.gop_id, ack.frame_id) {
-            let sample = AckSample {
-                send_us: sent.sent_us,
-                recv_us: ack.received_us,
-                bytes: sent.bytes,
-                keyframe: sent.keyframe,
-            };
-            self.rate.on_frame_acked(sample, now_us());
-        }
-    }
-
-    /// Once a second: loss counters, quality ladder and the statistics.
-    pub(crate) fn second(&mut self, connection: &Connection) -> HostStats {
-        let (sent, lost) = loss_counters(connection);
-        let _ = self.rate.on_loss_counters(sent, lost);
-        let (path, _) = path_of(connection);
-        self.rate.set_path(path);
-        let fitted = self.fitted_size();
-        let next = adjust_quality(self.quality, self.rate.target_bps(), fitted, self.max_fps);
-        if next.fps != self.quality.fps {
-            self.clock.set_fps(next.fps);
-        }
-        self.quality = next;
-        self.resize();
-        let stats = HostStats {
-            target_kbps: self.rate.target_bps() / 1000,
-            sent_kbps: self.second_bytes * 8 / 1000,
-            fps: self.second_frames,
-            path,
-            keyframes: self.totals.keyframes,
-            dropped_before_encode: self.pacer.dropped_before_encode(),
-            stream_resets: self.pacer.resets(),
-            unacked_bytes: self.pacer.unacked_bytes(),
-        };
-        self.second_bytes = 0;
-        self.second_frames = 0;
-        stats
+        self.drop_encoder();
     }
 
     /// Gives the current picture stream up; the next frame is a key frame.
@@ -352,31 +313,45 @@ impl Pipeline {
             .stage
             .take()
             .ok_or_else(|| PipelineError::capture(io::Error::other("no screen source")))?;
-        if stage.encoder.is_none() {
-            match self.backend.open_encoder(&self.choice, size) {
-                Ok(encoder) => stage.encoder = Some(encoder),
-                Err(error) => {
-                    self.stage = Some(stage);
-                    return Err(PipelineError::encoder(error));
-                }
-            }
-        }
-        let frame_id = self.next_frame_id;
+        let request = StageRequest {
+            frame_id: self.next_frame_id,
+            keyframe,
+            target_bps: target,
+            size,
+            choice: self.choice,
+            encoder_epoch: self.encoder_epoch,
+            fps: self.quality.fps.max(1),
+        };
+        let backend = self.backend.clone();
         let joined = tokio::task::spawn_blocking(move || {
-            let captured = capture_and_encode(&mut stage, size, frame_id, keyframe, target);
-            (stage, captured)
+            let produced = produce(&mut stage, backend.as_ref(), &request);
+            (stage, produced)
         })
         .await;
-        let (stage, captured) =
+        let (stage, produced) =
             joined.map_err(|error| PipelineError::capture(io::Error::other(error)))?;
         self.stage = Some(stage);
-        match captured? {
-            Captured::Unchanged => Ok(Produced::Idle),
-            Captured::Paused(state) => Ok(Produced::Paused(state)),
-            Captured::Encoded(frame, capture_ts_us) => {
+        match produced {
+            Ok(Captured::Unchanged) => Ok(Produced::Idle),
+            Ok(Captured::Paused(state)) => Ok(Produced::Paused(state)),
+            Ok(Captured::Encoded {
+                frame,
+                capture_ts_us,
+                encoder,
+            }) => {
+                self.running = Some((encoder, size));
+                let frame_id = request.frame_id;
                 self.send(connection, frame, frame_id, capture_ts_us, size)
                     .await
             }
+            Err(failure)
+                if failure.code == ScreenErrorCode::EncoderFailed
+                    && self.choice.codec != CodecKind::Tiles =>
+            {
+                self.fall_back_to_tiles();
+                Ok(Produced::Reset)
+            }
+            Err(failure) => Err(failure),
         }
     }
 
@@ -442,6 +417,9 @@ impl Pipeline {
         self.totals.bytes += bytes;
         self.totals.frames += 1;
         self.totals.keyframes += u64::from(frame.keyframe);
+        if frame.keyframe {
+            self.last_key_bytes = bytes;
+        }
         self.second_bytes += bytes;
         self.second_frames += 1;
         if self.kind == StreamKind::Preview {

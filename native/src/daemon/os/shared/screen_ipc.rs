@@ -217,7 +217,8 @@ impl ShareHost {
             seconds: request.seconds,
         };
         options.validate()?;
-        let decoders = options.decoders()?;
+        let codecs = crate::screen::os::codec_inventory::registry();
+        let decoders = options.decoders(&codecs)?;
         let (service, link) = self.screen_link(target)?;
         let source = Some(crate::screen::core::window_list::SourceId::Synthetic);
         let mut viewer = viewer_request(SessionMode::View, source, decoders);
@@ -232,7 +233,7 @@ impl ShareHost {
                 let _ = write_response(&mut pending, &reply);
             };
             let session = handshake(connection, build, announce).await?;
-            bench::run(session, options).await
+            bench::run(session, options, &codecs).await
         });
         measured.map_err(Failure::from)
     }

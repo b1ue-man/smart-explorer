@@ -12,6 +12,7 @@ use clap_complete::ArgValueCandidates;
 use crate::share::{PeerOpenTarget, ShareProfiles};
 
 mod bench;
+mod codec;
 mod output;
 mod sessions;
 #[cfg(test)]
@@ -33,6 +34,8 @@ Examples:
   se screen probe Laptop --json
   se screen bench Laptop --seconds 20 --json
   se screen bench --local --size 1920x1080
+  se screen codec --json
+  se screen codec openh264 enable
   se screen sessions --json
   se screen stop --all";
 
@@ -65,6 +68,8 @@ enum ScreenCommand {
     },
     #[command(about = "Measure the screen path with the test picture")]
     Bench(bench::BenchArgs),
+    #[command(about = "Show the screen codecs; switch OpenH264 on, off or remove it")]
+    Codec(codec::CodecArgs),
     #[command(about = "Show the screen sessions this device hosts")]
     Sessions {
         #[arg(long, help = "Print machine-readable JSON")]
@@ -92,6 +97,7 @@ pub(super) fn run(args: ScreenArgs) -> Result<i32, String> {
             Ok(0)
         }
         ScreenCommand::Bench(args) => bench::run(args),
+        ScreenCommand::Codec(args) => codec::run(args),
         ScreenCommand::Sessions { json } => sessions::list(json),
         ScreenCommand::Stop { session, all, json } => sessions::stop(session, all, json),
     }

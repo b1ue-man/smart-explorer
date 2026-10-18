@@ -44,6 +44,7 @@ pub mod quickshare;
 pub mod rscan;
 pub mod scanner;
 mod screen;
+pub use screen::os::host_worker_main::run_screen_host_worker_if_requested;
 pub mod sftp;
 pub mod share;
 #[cfg(windows)]
@@ -106,6 +107,10 @@ pub fn run_gui() -> eframe::Result<()> {
     {
         return app::run_screen_indicator();
     }
+    // SCR-M3: the screen host process of one session (`--screen-host-worker`).
+    if let Some(code) = run_screen_host_worker_if_requested(&raw_args) {
+        std::process::exit(code);
+    }
 
     let just_updated = args.iter().any(|a| a == "--updated");
     let startup_ack_pending =
@@ -133,8 +138,8 @@ pub fn run_gui() -> eframe::Result<()> {
 
     // The explorer window, optionally at a location or page (S5); the value of
     // a switch never becomes the start path. Until their packages wire them
-    // (plan H8), `--screen-host-worker`, `--screen-view` and `--screen-grid`
-    // start nothing, like a malformed switch.
+    // (plan H8), `--screen-view` and `--screen-grid` start nothing, like a
+    // malformed switch.
     use app::start_request::StartRequest;
     let start = match app::start_request::parse(&raw_args) {
         Ok(

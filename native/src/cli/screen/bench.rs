@@ -81,7 +81,7 @@ impl BenchArgs {
             seconds: self.seconds,
         };
         options.validate()?;
-        options.decoders()?;
+        options.decoders(&crate::screen::os::codec_inventory::registry())?;
         Ok(options)
     }
 }
@@ -89,7 +89,8 @@ impl BenchArgs {
 pub(super) fn run(args: BenchArgs) -> Result<i32, String> {
     let options = args.options()?;
     let report = match args.device.as_deref() {
-        None => run_local(options).map_err(|error| error.to_string())?,
+        None => run_local(options, &crate::screen::os::codec_inventory::registry())
+            .map_err(|error| error.to_string())?,
         Some(device) => {
             let choice = super::select_device(device)?;
             let name = choice.name.clone();

@@ -37,6 +37,9 @@ fn main() {
     if is_internal_invocation(&arguments, "--uninstall-cli-path") {
         exit_internal(se_path_windows::unregister());
     }
+    if let Some(code) = smart_explorer::run_screen_host_worker_if_requested(&arguments) {
+        std::process::exit(code);
+    }
     std::process::exit(smart_explorer::cli::run());
 }
 
