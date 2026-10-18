@@ -1,8 +1,9 @@
 //! Record types of the drive journal `journal.jsonl`, moved out of
 //! `journal.rs` without any change of their serde form (DRV-M2), and the
 //! path-sealing hook of contract V1 (S2-V3): every path field passes the
-//! drive's `PathSealer` on its way to disk and back. The in-memory state is
-//! always plain; the plain sealer keeps the bytes of earlier releases.
+//! drive's `PathSealer` on its way to disk and back, the conflict texts
+//! (`detail`) its text hook (VLT-M12). The in-memory state is always plain;
+//! the plain sealer keeps the bytes of earlier releases.
 use super::path_sealer::PathSealer;
 use super::types::{Baseline, EntryCondition, MountConflict, NamespaceIntent};
 use serde::{Deserialize, Serialize};
@@ -78,29 +79,31 @@ pub(super) enum Action {
 type PathMap<'a> = &'a dyn Fn(&str) -> io::Result<String>;
 
 impl Action {
-    /// The persisted form: every path field sealed.
+    /// The persisted form: every path field and conflict text sealed.
     pub(super) fn sealed(self, sealer: &dyn PathSealer) -> io::Result<Self> {
-        self.map_paths(&|path| sealer.seal(path))
+        self.map_paths(&|path| sealer.seal(path), &|text| sealer.seal_detail(text))
     }
 
     /// The in-memory form of a persisted action.
     pub(super) fn unsealed(self, sealer: &dyn PathSealer) -> io::Result<Self> {
-        self.map_paths(&|path| sealer.unseal(path))
+        self.map_paths(&|path| sealer.unseal(path), &|text| {
+            sealer.unseal_detail(text)
+        })
     }
 
-    fn map_paths(self, map: PathMap<'_>) -> io::Result<Self> {
+    fn map_paths(self, map: PathMap<'_>, text: PathMap<'_>) -> io::Result<Self> {
         Ok(match self {
-            Self::UpsertEntry(entry) => Self::UpsertEntry(entry.map_paths(map)?),
+            Self::UpsertEntry(entry) => Self::UpsertEntry(entry.map_paths(map, text)?),
             Self::MoveEntry { old_path, entry } => Self::MoveEntry {
                 old_path: map(old_path.as_str())?,
-                entry: entry.map_paths(map)?,
+                entry: entry.map_paths(map, text)?,
             },
             Self::ForgetEntry { remote_path } => Self::ForgetEntry {
                 remote_path: map(remote_path.as_str())?,
             },
             Self::UpsertDelete(delete) => Self::UpsertDelete(delete.map_paths(map)?),
             Self::UpsertNamespaceConflict(intent) => {
-                Self::UpsertNamespaceConflict(map_intent(intent, map)?)
+                Self::UpsertNamespaceConflict(map_intent(intent, map, text)?)
             }
             Self::ForgetNamespaceConflict { path } => Self::ForgetNamespaceConflict {
                 path: map(path.as_str())?,
@@ -111,10 +114,10 @@ impl Action {
 }
 
 impl PersistedEntry {
-    fn map_paths(mut self, map: PathMap<'_>) -> io::Result<Self> {
+    fn map_paths(mut self, map: PathMap<'_>, text: PathMap<'_>) -> io::Result<Self> {
         self.remote_path = map(self.remote_path.as_str())?;
         if let EntryCondition::Conflict(conflict) = self.condition {
-            self.condition = EntryCondition::Conflict(map_conflict(conflict, map)?);
+            self.condition = EntryCondition::Conflict(map_conflict(conflict, map, text)?);
         }
         Ok(self)
     }
@@ -128,13 +131,22 @@ impl PersistedDelete {
     }
 }
 
-fn map_conflict(mut conflict: MountConflict, map: PathMap<'_>) -> io::Result<MountConflict> {
+fn map_conflict(
+    mut conflict: MountConflict,
+    map: PathMap<'_>,
+    text: PathMap<'_>,
+) -> io::Result<MountConflict> {
     conflict.path = map(conflict.path.as_str())?;
+    conflict.detail = text(conflict.detail.as_str())?;
     Ok(conflict)
 }
 
-fn map_intent(mut intent: NamespaceIntent, map: PathMap<'_>) -> io::Result<NamespaceIntent> {
-    intent.conflict = map_conflict(intent.conflict, map)?;
+fn map_intent(
+    mut intent: NamespaceIntent,
+    map: PathMap<'_>,
+    text: PathMap<'_>,
+) -> io::Result<NamespaceIntent> {
+    intent.conflict = map_conflict(intent.conflict, map, text)?;
     intent.source_path = intent
         .source_path
         .map(|path| map(path.as_str()))
