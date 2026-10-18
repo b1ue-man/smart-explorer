@@ -52,6 +52,11 @@ mod schedule;
 mod types;
 #[path = "core/validation.rs"]
 mod validation;
+// Vault sync jobs (vault plan C5.8, VLT-M7): kind, fixed values, folder.
+#[path = "core/vault_job.rs"]
+mod vault_job;
+#[path = "os/shared/vault_jobs_dir.rs"]
+mod vault_jobs_dir;
 
 pub use job_state::{
     AttemptOutcome, AttemptReport, BlockKind, Blocked, ChangeDetection, ConnectMark, FailureKind,
@@ -72,6 +77,10 @@ pub use results::{load_results, mark_run, record_result, JobResult};
 #[allow(unused_imports)]
 pub use schedule::within_window;
 pub use types::{SyncJob, Trigger, CURRENT_CONFIG_VERSION};
+#[allow(unused_imports)] // vault sync (VLT-M7) and its surfaces (U26, U29, U31)
+pub use vault_job::{vault_store_side, JobKind, VAULT_JOB_NEEDS_VAULT_SYNC};
+#[allow(unused_imports)] // vault sync (VLT-M7) and its surfaces (U26, U29, U31)
+pub use vault_jobs_dir::{job_id_taken, load_vault_job, vault_jobs_dir, VAULT_JOBS_DIR};
 
 pub(crate) use job_state_lock::StateLock as RuntimeFileLock;
 

@@ -26,6 +26,15 @@ impl App {
             ));
             return;
         }
+        // K05 (2) of the vault plan: no cleartext copy of vault contents.
+        if self
+            .remote
+            .as_ref()
+            .is_some_and(|remote| provide_refused(remote.backend.as_ref()))
+        {
+            self.error_msg = Some(crate::vault::PROVIDE_REFUSED.to_string());
+            return;
+        }
         let view = match self.view_selection(false) {
             Ok(view) => view,
             Err(SelectionIssue::Empty(hint)) => {
@@ -146,6 +155,12 @@ impl App {
             Err(error) => self.error_msg = Some(format!("Zwischenablage: {error}")),
         }
     }
+}
+
+/// Whether a selection of `backend` may not be provided as files (K05 (2)):
+/// the cleartext view of a vault.
+pub(in crate::app) fn provide_refused(backend: &dyn crate::vfs::Backend) -> bool {
+    backend.scheme() == crate::vfs::Scheme::Vault
 }
 
 /// The entries of the provide folder as Windows file-clipboard paths.

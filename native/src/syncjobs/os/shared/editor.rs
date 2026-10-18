@@ -173,7 +173,12 @@ impl JobEditor {
         }
         let source = self.source.as_str();
         let target = self.target.as_str();
-        validate_endpoints(source, target)?;
+        // A vault job keeps its sides `vault-store://<site>` (C5.6); its own
+        // checks run in `validate` below, the general endpoint check would
+        // refuse every vault location.
+        if !existing.is_some_and(crate::syncjobs::SyncJob::is_vault) {
+            validate_endpoints(source, target)?;
+        }
         validate_ignore_patterns(&self.ignore)?;
         if self.direction == crate::bisync::Direction::Both
             && self.delete_policy == crate::bisync::DeletePolicy::Mirror

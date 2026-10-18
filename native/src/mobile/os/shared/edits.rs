@@ -30,8 +30,21 @@ pub(crate) fn handle(rt: &Runtime, method: &str, args: &Value) -> Option<Result<
     })
 }
 
+/// K44 of the vault plan: vault files never get a cleartext copy below
+/// `<cache>/open/`; other apps open them through the document provider.
+fn reject_vault(loc: &Loc) -> Result<(), ApiError> {
+    if loc.kind == super::location::LocKind::Vault {
+        return Err(ApiError::new(
+            crate::vault::USE_PROVIDER_CODE,
+            crate::vault::USE_PROVIDER_TEXT,
+        ));
+    }
+    Ok(())
+}
+
 fn open(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
     let loc = Loc::parse(str_arg(args, "location")?)?;
+    reject_vault(&loc)?;
     if !loc.is_local() {
         return Err(ApiError::unsupported(
             "Remote-Dateien werden vor dem Öffnen geladen (fs.fetch)",
@@ -48,6 +61,7 @@ fn open(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
 
 fn fetch(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
     let loc = Loc::parse(str_arg(args, "location")?)?;
+    reject_vault(&loc)?;
     reject_trash(&loc)?;
     if loc.is_local() {
         return Err(ApiError::invalid("Lokale Dateien direkt öffnen (fs.open)"));
@@ -176,6 +190,7 @@ fn materialize(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
     let mut locations = Vec::new();
     for location in nonempty_list(args, "locations")? {
         let loc = Loc::parse(&location)?;
+        reject_vault(&loc)?;
         reject_trash(&loc)?;
         locations.push(loc);
     }
@@ -395,3 +410,7 @@ fn discard_edit(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
     }
     Ok(json!({}))
 }
+
+#[cfg(test)]
+#[path = "edits_vault_tests.rs"]
+mod vault_tests;

@@ -236,7 +236,13 @@ impl<'a> Engine<'a> {
             fatal: Mutex::new(None),
             queue: WorkQueue::new(),
             stats: Stats::new(),
-            issues: issues::IssueLog::new(job_id, issues::log_dir()),
+            // K20 of the vault plan: fields of a vault side are sealed.
+            issues: issues::IssueLog::for_sides(
+                job_id,
+                issues::log_dir(),
+                view.source,
+                view.target,
+            ),
             folders,
             source_flow,
             op_flows,

@@ -249,8 +249,28 @@ fn recent_path(rt: &Runtime) -> PathBuf {
     rt.config().mobile_dir().join("recent.json")
 }
 
+/// „Zuletzt“ for display: places inside a vault are stored only as its
+/// root (K14 of the vault plan) and come back while it is unlocked.
 fn load_recent(rt: &Runtime) -> Vec<String> {
-    read_json::<Vec<String>>(&recent_path(rt)).unwrap_or_default()
+    let global = read_json::<Vec<String>>(&recent_path(rt)).unwrap_or_default();
+    crate::vault::expand_places(
+        &crate::vault::LocalStore::open_default(),
+        &crate::vault::ProcessSealing,
+        crate::vault::PlaceList::Recent,
+        &global,
+    )
+}
+
+/// Writes „Zuletzt“: places inside a vault only as its root, the places
+/// inside sealed per vault (K14).
+fn save_recent(rt: &Runtime, recent: &[String]) -> std::io::Result<()> {
+    let global = crate::vault::store_places(
+        &crate::vault::LocalStore::open_default(),
+        &crate::vault::ProcessSealing,
+        crate::vault::PlaceList::Recent,
+        recent,
+    );
+    write_json(&recent_path(rt), &global)
 }
 
 /// Puts a visited location at the top of „Zuletzt“ (app-internal ones never).
@@ -267,7 +287,7 @@ pub(crate) fn add_recent(rt: &Runtime, loc: &Loc) {
     recent.retain(|item| *item != location);
     recent.insert(0, location);
     recent.truncate(MAX_RECENT);
-    if let Err(error) = write_json(&recent_path(rt), &recent) {
+    if let Err(error) = save_recent(rt, &recent) {
         rt.record_error("Zuletzt besuchte Orte speichern", &error.to_string());
     }
 }
@@ -284,7 +304,7 @@ impl Runtime {
         recent.retain(|location| !matches(location));
         let removed = before - recent.len();
         if removed > 0 {
-            if let Err(error) = write_json(&recent_path(self), &recent) {
+            if let Err(error) = save_recent(self, &recent) {
                 self.record_error("Zuletzt besuchte Orte speichern", &error.to_string());
             }
         }

@@ -74,6 +74,8 @@ impl FolderIndex {
         let mut reader = BufReader::new(file);
         let mut line = String::new();
         let mut line_count = 0usize;
+        // An index written before a vault drive appeared never shows it.
+        let vault = crate::vault::VaultPlaces::now();
         loop {
             line.clear();
             if reader.read_line(&mut line)? == 0 {
@@ -93,7 +95,7 @@ impl FolderIndex {
             }
             let path = line.strip_suffix('\n').unwrap_or(&line);
             let path = path.strip_suffix('\r').unwrap_or(path);
-            if path.is_empty() || path_has_skipped_segment(path) {
+            if path.is_empty() || path_has_skipped_segment(path) || vault.shows_vault(path) {
                 continue;
             }
             index.try_insert(path.to_string())?;
@@ -115,9 +117,15 @@ where
     let mut writer = BufWriter::with_capacity(64 * 1024, file);
     let mut path_count = 0usize;
     let mut text_bytes = 0usize;
+    // K11/K12 of the vault plan: vault locations and vault drives are never
+    // written to the index file.
+    let vault = crate::vault::VaultPlaces::now();
     for path in index.iter() {
         if canceled() {
             return Ok(SaveOutcome::Canceled);
+        }
+        if vault.shows_vault(path) {
+            continue;
         }
         validate_path(path)?;
         path_count = path_count.checked_add(1).ok_or_else(|| {
@@ -180,4 +188,39 @@ fn create_temp_file(target: &Path) -> io::Result<(PathBuf, File)> {
         io::ErrorKind::AlreadyExists,
         "could not allocate a unique folder-index temp file",
     ))
+}
+
+#[cfg(test)]
+mod vault_tests {
+    use super::*;
+
+    #[test]
+    fn vault_task_folder_index_skips_vault() {
+        // Index paths without hidden or random segments (load skips those).
+        let dir = tempfile::tempdir().unwrap();
+        let drive = std::path::PathBuf::from("/srv/se-task-tresor-laufwerk");
+        let site = "0123456789abcdef0123456789abcdef";
+        let plain = "/home/anna/Dokumente".to_string();
+        let inside = "/srv/se-task-tresor-laufwerk/Geheimprojekt".to_string();
+        let located = format!("vault://{site}/Geheimprojekt");
+        let mut index = FolderIndex::new();
+        for path in [&plain, &inside, &located] {
+            index.try_insert(path.clone()).unwrap();
+        }
+        crate::vault::publish_vault_mount(site, &drive);
+        let file = dir.path().join("folder_index.txt");
+        index.save(&file).unwrap();
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(text.contains(&plain), "{text}");
+        assert!(!text.contains("Geheimprojekt"), "{text}");
+        // An older index file with vault paths: loading leaves them out.
+        std::fs::write(&file, format!("{plain}\n{inside}\n{located}\n")).unwrap();
+        let loaded = FolderIndex::load(&file).unwrap();
+        let paths: Vec<&String> = loaded.iter().collect();
+        assert_eq!(paths, [&plain]);
+        crate::vault::withdraw_vault_mount(site, &drive);
+        // Without the drive its folder is an ordinary path again.
+        let loaded = FolderIndex::load(&file).unwrap();
+        assert_eq!(loaded.len(), 2, "only the vault location stays out");
+    }
 }

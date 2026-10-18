@@ -2,12 +2,19 @@
 //! to a log file (one JSON object per line) under the app data folder, so a
 //! transfer with thousands of problems stays fully traceable; the first ones
 //! also travel with the terminal message for the transfer list.
+//!
+//! Vault contents never reach the log file in cleartext (K20 of the vault
+//! plan): when a vault takes part, path and message are sealed with the
+//! vault's purpose key `log-fields` (shown again only while it is
+//! unlocked), and withheld when that is not possible. The issues of the
+//! transfer list stay in memory as they are.
 use super::super::types::TransferIssue;
+use super::Side;
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// Issues carried in `TransferMsg::Done` (plan: the first 100); the log file
@@ -28,12 +35,28 @@ enum LogFile {
     Unavailable,
 }
 
+/// Seals the texts of a vault site (`vault::seal_log_fields`).
+pub(crate) type FieldSealer =
+    Arc<dyn Fn(&str, &[&str]) -> Result<Vec<String>, String> + Send + Sync>;
+
+/// Whether a vault takes part in the transfer (K20).
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Fields {
+    /// No vault side: path and message as they are, except paths in a
+    /// vault drive (checked per issue).
+    Plain,
+    /// A vault side; `None` when its site is not known here.
+    Vault(Option<String>),
+}
+
 pub(crate) struct IssueLog {
     job_id: u64,
     dir: PathBuf,
     total: AtomicU64,
     shown: Mutex<Vec<TransferIssue>>,
     file: Mutex<LogFile>,
+    fields: Fields,
+    seal: FieldSealer,
 }
 
 /// Where transfer logs live.
@@ -41,14 +64,94 @@ pub(crate) fn log_dir() -> PathBuf {
     crate::support_dirs::app_data_dir().join("transfer-logs")
 }
 
+/// The sealer of this process: the worker's register or its IPC.
+fn process_sealer() -> FieldSealer {
+    Arc::new(|site: &str, items: &[&str]| crate::vault::seal_log_fields(site, items))
+}
+
+/// The vault side among `sides`: `Some(site)` for a vault backend opened
+/// here, `Some(None)` for one of unknown site.
+fn vault_side(sides: [Side<'_>; 2]) -> Fields {
+    let mut fields = Fields::Plain;
+    for side in sides {
+        if let Side::Remote(backend) = side {
+            match crate::vault::vault_site_of(backend) {
+                Some(Some(site)) => return Fields::Vault(Some(site)),
+                Some(None) => fields = Fields::Vault(None),
+                None => {}
+            }
+        }
+    }
+    fields
+}
+
 impl IssueLog {
+    /// A log without a vault side (tests; transfers use `for_sides`).
+    #[cfg(test)]
     pub(crate) fn new(job_id: u64, dir: PathBuf) -> Self {
+        Self::with_fields(job_id, dir, Fields::Plain, process_sealer())
+    }
+
+    /// The log of a transfer between `source` and `target`: fields of a
+    /// vault side are sealed (K20).
+    pub(crate) fn for_sides(job_id: u64, dir: PathBuf, source: Side<'_>, target: Side<'_>) -> Self {
+        Self::for_sides_with(job_id, dir, source, target, process_sealer())
+    }
+
+    fn for_sides_with(
+        job_id: u64,
+        dir: PathBuf,
+        source: Side<'_>,
+        target: Side<'_>,
+        seal: FieldSealer,
+    ) -> Self {
+        Self::with_fields(job_id, dir, vault_side([source, target]), seal)
+    }
+
+    fn with_fields(job_id: u64, dir: PathBuf, fields: Fields, seal: FieldSealer) -> Self {
         Self {
             job_id,
             dir,
             total: AtomicU64::new(0),
             shown: Mutex::new(Vec::new()),
             file: Mutex::new(LogFile::NotYet),
+            fields,
+            seal,
+        }
+    }
+
+    /// The vault an issue of `path` belongs to: the vault side of the
+    /// transfer, or the vault drive a local path lies in.
+    fn vault_of(&self, path: &str) -> Option<Option<String>> {
+        match &self.fields {
+            Fields::Vault(site) => Some(site.clone()),
+            Fields::Plain if path.is_empty() => None,
+            Fields::Plain => crate::vault::vault_mount_of(Path::new(path)),
+        }
+    }
+
+    /// The JSON line of one issue as the log file keeps it.
+    fn line(&self, path: &str, message: &str) -> serde_json::Value {
+        let Some(site) = self.vault_of(path) else {
+            return serde_json::json!({ "path": path, "message": message });
+        };
+        let withheld = |site: Option<&str>| {
+            serde_json::json!({
+                "vault": site.unwrap_or_default(),
+                "path": "",
+                "message": crate::vault::FIELDS_WITHHELD,
+            })
+        };
+        let Some(site) = site else {
+            return withheld(None);
+        };
+        match (self.seal)(&site, &[path, message]) {
+            Ok(sealed) if sealed.len() == 2 => serde_json::json!({
+                "vault": site,
+                "path_sealed": sealed[0],
+                "message_sealed": sealed[1],
+            }),
+            _ => withheld(Some(&site)),
         }
     }
 
@@ -123,7 +226,7 @@ impl IssueLog {
             };
         }
         if let LogFile::Open { file: opened, .. } = &mut *file {
-            let mut line = serde_json::json!({ "path": path, "message": message }).to_string();
+            let mut line = self.line(path, message).to_string();
             line.push('\n');
             if opened.write_all(line.as_bytes()).is_err() {
                 // The list in the transfer entry stays complete for the first
@@ -246,3 +349,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "issues_vault_tests.rs"]
+mod vault_tests;

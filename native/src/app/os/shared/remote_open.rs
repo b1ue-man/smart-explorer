@@ -30,7 +30,9 @@ fn save_remote_edit(
         }
         Ok(metadata) => metadata.mtime_ms,
         Err(error) if known != 0 => {
-            return SaveResult::Failed(format!("Remote-Änderungen konnten nicht geprüft werden: {error}"));
+            return SaveResult::Failed(format!(
+                "Remote-Änderungen konnten nicht geprüft werden: {error}"
+            ));
         }
         // Preserve providers that could never supply a revision at download.
         Err(_) => 0,
@@ -41,8 +43,14 @@ fn save_remote_edit(
     match upload_file(backend, temp, remote) {
         // Publication was acknowledged. An unavailable follow-up stat must
         // neither replay that upload nor erase an established conflict guard.
-        Ok(()) => SaveResult::Ok(backend.stat(remote).ok()
-            .map(|meta| meta.mtime_ms).filter(|mtime| *mtime != 0).unwrap_or(known)),
+        Ok(()) => SaveResult::Ok(
+            backend
+                .stat(remote)
+                .ok()
+                .map(|meta| meta.mtime_ms)
+                .filter(|mtime| *mtime != 0)
+                .unwrap_or(known),
+        ),
         Err(error) => SaveResult::Failed(error),
     }
 }
@@ -78,6 +86,22 @@ impl App {
             }
         };
         let backend = rs.backend.clone();
+        // A vault file opens in its drive; a cleartext copy only after the
+        // user agreed (vault plan C7.2, K05 (1)).
+        let vault_prefix =
+            (backend.scheme() == crate::vfs::Scheme::Vault).then(|| rs.endpoint_prefix.clone());
+        if let Some(prefix) = vault_prefix {
+            let Some(prefix) = prefix else {
+                self.error_msg = Some("Tresorort dieser Datei ist unbekannt".to_string());
+                return;
+            };
+            let location = format!("{prefix}{path}");
+            if self.open_vault_file(&location, mode)
+                != crate::app::vault_open::VaultFileOpen::CopyAgreed
+            {
+                return;
+            }
+        }
 
         // Download to a local temp copy, watch it for saves, and launch the OS
         // default editor. `download_name` gives Google-Docs files the right

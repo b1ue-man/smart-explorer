@@ -145,11 +145,19 @@ fn overlaps(parent: &Root, child: &Root) -> bool {
     }
 }
 
+/// Host storage no Share tree may reach: the app data and cache folders,
+/// and every place where a vault drive shows cleartext (K09 of the vault
+/// plan: no listing, analysis spool or hash walk of vault contents).
 pub(in crate::share) fn excluded() -> Vec<PathBuf> {
     let mut paths = vec![crate::support_dirs::app_data_dir()];
     if let Some(host) = crate::support_dirs::host() {
         paths.push(host.cache_dir.clone());
     }
+    paths.extend(
+        crate::vault::vault_mount_roots()
+            .into_iter()
+            .map(|(_, root)| root),
+    );
     paths
         .into_iter()
         .map(|p| std::fs::canonicalize(&p).unwrap_or(p))
@@ -206,4 +214,27 @@ pub(in crate::share) fn open_local(
         fs::ensure_local_share_handle_allowed(&directory)?;
     }
     Ok(directory)
+}
+
+#[cfg(test)]
+mod vault_tests {
+    use super::*;
+
+    #[test]
+    fn vault_task_share_export_inside_vault_mount_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let drive = dir.path().join("tresor");
+        std::fs::create_dir_all(drive.join("Geheim")).unwrap();
+        let drive = std::fs::canonicalize(&drive).unwrap();
+        let site = "fedcba9876543210fedcba9876543210";
+        assert!(!is_private(&drive.join("Geheim")));
+        crate::vault::publish_vault_mount(site, &drive);
+        // The drive and everything below it are no Share export.
+        assert!(is_private(&drive));
+        assert!(is_private(&drive.join("Geheim")));
+        assert!(excluded().iter().any(|path| path == &drive));
+        assert!(!is_private(dir.path()), "the folder around the drive stays");
+        crate::vault::withdraw_vault_mount(site, &drive);
+        assert!(!is_private(&drive.join("Geheim")));
+    }
 }
