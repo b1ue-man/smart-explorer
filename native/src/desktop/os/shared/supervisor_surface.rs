@@ -13,7 +13,7 @@ use super::supervisor::TEST_MONITORS;
 use super::surface_link::{self, FrameSender, LinkEvent};
 use crate::daemon::{UpdateStopBaseline, EXIT_UPDATE_STOP};
 use crate::desktop::core::config::DesktopConfig;
-use crate::desktop::core::items::SystemItem;
+use crate::desktop::core::items::{DesktopFile, SystemItem};
 use crate::desktop::core::layout::DesktopLayout;
 use crate::desktop::core::protocol::{
     ShellMessage, StopReason, SurfaceMessage, SurfaceModel, PROTOCOL_VERSION,
@@ -224,6 +224,7 @@ fn write_halt(dir: &DesktopDir, version: &str) {
 /// does not accept.
 pub(crate) fn surface_model(
     tiles: &TileModel,
+    files: &[DesktopFile],
     config: &DesktopConfig,
     layout: &mut DesktopLayout,
     monitor: &str,
@@ -243,7 +244,7 @@ pub(crate) fn surface_model(
     let layout = layout.monitor_mut(monitor).ok()?.clone();
     Some(SurfaceModel {
         tiles: tiles.clone(),
-        files: Vec::new(),
+        files: files.to_vec(),
         system_items,
         screens: config.groups.screens,
         layout,
