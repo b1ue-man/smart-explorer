@@ -14,7 +14,8 @@ mod exec_grant_client;
 pub(crate) use exec_grant_client::mutate_exec_grant;
 #[path = "ipc_peek_client.rs"]
 mod peek_client;
-pub use peek_client::share_worker_peek;
+pub(crate) use peek_client::vault_status_peek;
+pub use peek_client::{drive_devices_peek, drive_devices_watch_peek, share_worker_peek};
 #[path = "ipc_share_client.rs"]
 mod share_client;
 pub use share_client::{hand_off_running_worker, share_command, WorkerHandoff};

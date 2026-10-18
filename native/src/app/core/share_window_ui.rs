@@ -63,6 +63,7 @@ impl App {
                             lifecycle_ui::ui_requests(self, ui);
                         }
                         pages_ui::TAB_EXEC => exec_page(self, ui),
+                        pages_ui::TAB_SCREEN => crate::app::share_screen_tab_ui::ui(ui),
                         pages_ui::TAB_THIS_DEVICE => this_device_ui::ui(self, ui),
                         _ => self.ui_share_diagnostics(ui),
                     });

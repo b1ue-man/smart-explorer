@@ -40,6 +40,8 @@ grant_expired, helper_refused."
     Log(LogArgs),
     #[command(flatten)]
     Approval(super::exec_approvals::ApprovalsCommand),
+    #[command(about = "Show this host's run-as accounts and set up its account service")]
+    Accounts(super::exec_accounts::AccountsArgs),
 }
 
 #[derive(Args)]
@@ -70,6 +72,9 @@ pub(super) fn run(args: ExecStatusArgs) -> Result<(), String> {
         Some(ExecStatusCommand::Approval(command)) => {
             return super::exec_approvals::run(command, args.json);
         }
+        Some(ExecStatusCommand::Accounts(accounts)) => {
+            return super::exec_accounts::run(accounts, args.json);
+        }
         command => command,
     };
     let snapshot = crate::daemon::exec_jobs()?;
@@ -84,6 +89,7 @@ pub(super) fn run(args: ExecStatusArgs) -> Result<(), String> {
         Some(ExecStatusCommand::History) => print(history(&snapshot), args.json),
         Some(ExecStatusCommand::Log(_)) => Ok(()),
         Some(ExecStatusCommand::Approval(_)) => Ok(()),
+        Some(ExecStatusCommand::Accounts(_)) => Ok(()),
         Some(ExecStatusCommand::Show(selector)) => {
             let all = active(&snapshot)
                 .into_iter()

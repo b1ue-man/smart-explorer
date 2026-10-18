@@ -25,6 +25,8 @@ pub(crate) use self::vault::{
     SealPurposeWire, SecretText, VaultEventView, VaultIpcReply, VaultIpcRequest, VaultSiteView,
     VaultStatusView,
 };
+#[path = "ipc_protocol_screen.rs"]
+pub(super) mod screen;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -273,6 +275,10 @@ pub(super) enum IpcRequest {
         token: String,
         req: VaultIpcRequest,
     },
+    Screen {
+        token: String,
+        req: screen::ScreenIpcRequest,
+    },
     MountHostAttach {
         id: crate::mount::MountId,
         launch_token: String,
@@ -319,7 +325,8 @@ impl IpcRequest {
             | Self::RetryMount { token, .. }
             | Self::Access { token, .. }
             | Self::Drive { token, .. }
-            | Self::Vault { token, .. } => Some(token),
+            | Self::Vault { token, .. }
+            | Self::Screen { token, .. } => Some(token),
             Self::MountHostAttach { .. }
             | Self::MountHostBackend { .. }
             | Self::MountHostStatus { .. } => None,
@@ -386,6 +393,7 @@ pub(super) enum IpcResponse {
     MountHostStop,
     Access(AccessIpcReply),
     Vault(VaultIpcReply),
+    Screen(screen::ScreenIpcReply),
     Err {
         msg: String,
         /// Structured code of the failure (C3.2, C7.5); older readers ignore the field.

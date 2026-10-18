@@ -22,7 +22,6 @@ pub(crate) enum AccessKind<'a> {
     Exec { start: Option<&'a ExecStart> },
     /// A screen session of S4: `mode` (`view`, `control`) and, for an
     /// entry without `outcome`, the name of the session event.
-    #[allow(dead_code)] // Staged: U10 (SCR-M2) logs screen sessions.
     Screen { mode: &'a str, event: &'a str },
 }
 
@@ -44,7 +43,6 @@ pub(crate) enum AccessEvent {
     ApprovalCancelled,
     ApprovalUnavailable,
     GrantExpired,
-    #[allow(dead_code)] // Staged: the account helper (U18, U24) logs its refusals.
     HelperRefused,
 }
 

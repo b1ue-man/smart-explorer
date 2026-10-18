@@ -72,7 +72,7 @@ fn capability_of(key: &str) -> Option<Capability> {
 /// screen rows until SCR-M8 adds a screen host and its consent activity (W1).
 pub(super) fn android_rows() -> Vec<CapabilityEntry> {
     let facts = HostFacts {
-        graphical_session: true,
+        graphical_session: crate::screen::graphical_session(),
         account_helper: HelperStatus {
             state: HelperState::Unavailable,
             version: None,

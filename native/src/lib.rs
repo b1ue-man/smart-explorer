@@ -99,6 +99,13 @@ pub fn run_gui() -> eframe::Result<()> {
     if let Some(code) = desktop::run_if_requested(&raw_args) {
         std::process::exit(code);
     }
+    // V9 background kind of S4, also before the update confirmation: the
+    // indicator window of running screen sessions, started by the worker.
+    if let Ok(app::start_request::StartRequest::ScreenIndicator) =
+        app::start_request::parse(&raw_args)
+    {
+        return app::run_screen_indicator();
+    }
 
     let just_updated = args.iter().any(|a| a == "--updated");
     let startup_ack_pending =
@@ -126,7 +133,8 @@ pub fn run_gui() -> eframe::Result<()> {
 
     // The explorer window, optionally at a location or page (S5); the value of
     // a switch never becomes the start path. Until their packages wire them
-    // (plan H8), the screen kinds of S4 start nothing, like a malformed switch.
+    // (plan H8), `--screen-host-worker`, `--screen-view` and `--screen-grid`
+    // start nothing, like a malformed switch.
     use app::start_request::StartRequest;
     let start = match app::start_request::parse(&raw_args) {
         Ok(

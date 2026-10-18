@@ -14,11 +14,19 @@ pub(super) fn render_cache_settings(
                 .range(0..=crate::mount::MAX_MOUNT_CACHE_MIB)
                 .suffix(" MiB"),
         )
-        .on_hover_text("Wert anklicken und eingeben. 0 deaktiviert die Aufbewahrung nach dem Schliessen.");
+        .on_hover_text(
+            "Wert anklicken und eingeben. 0 deaktiviert die Aufbewahrung nach dem Schliessen.",
+        );
     });
     ui.label("Nur geschlossene, unveraenderte Dateien zaehlen zum Limit.");
-    ui.label("Offene Dateien und ungespeicherte/noch nicht uebertragene Aenderungen sind ausgenommen.");
+    ui.label(
+        "Offene Dateien und ungespeicherte/noch nicht uebertragene Aenderungen sind ausgenommen.",
+    );
     ui.label("Bei knappem Speicher wird entbehrlicher Cache automatisch freigegeben.");
-    ui.checkbox(system_runtime, "Kompatibilitaetsmodus: offizielle System-Dokany-DLL")
-        .on_hover_text("Umgeht die optimierte private Laufzeit. Der offizielle Treiber und die Systeminstallation bleiben unveraendert.");
+    // The private and the system Dokany DLL exist only under Windows; a
+    // Linux drive runs on FUSE, so the choice stays at its default there.
+    if !cfg!(target_os = "linux") {
+        ui.checkbox(system_runtime, "Kompatibilitaetsmodus: offizielle System-Dokany-DLL")
+            .on_hover_text("Umgeht die optimierte private Laufzeit. Der offizielle Treiber und die Systeminstallation bleiben unveraendert.");
+    }
 }

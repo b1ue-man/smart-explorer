@@ -1,7 +1,7 @@
 //! Linux drives in the daemon (stage `linux-root: drive-fuse`, fixture
 //! `home` for a fresh HOME): SMB stays refused as a drive source (D3,
 //! preservation of S2), and the Linux FUSE part of
-//! `drive_task_auto_remount_after_daemon_restart` (DRV-M3): a worker of the
+//! `drive_task_auto_remount_after_daemon_restart_fuse` (DRV-M3): a worker of the
 //! built `se` (`SMART_EXPLORER_DRIVE_SE_BIN`) mounts a saved SFTP drive with
 //! `--auto-remount`; after that worker stopped, the start of the login
 //! entry (`se --sync-daemon --drive-restore`) mounts it again at the same
@@ -120,7 +120,7 @@ fn end_child(child: &mut Child) {
 
 #[test]
 #[ignore = "FUSE task stage linux-root: drive-fuse with se, sftp and home (SMART_EXPLORER_FUSE_TASK=1)"]
-fn drive_task_auto_remount_after_daemon_restart() -> io::Result<()> {
+fn drive_task_auto_remount_after_daemon_restart_fuse() -> io::Result<()> {
     require_task_stage();
     require_isolated_home();
     let se = std::env::var_os(SE_BIN)

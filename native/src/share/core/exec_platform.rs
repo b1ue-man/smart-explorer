@@ -229,10 +229,9 @@ impl Drop for PreparingAccount {
 }
 
 /// The account of the start `ContainedExec::prepare_as` prepares on this
-/// thread; `None` for the worker's own account. Only the Linux platform
-/// starts another account's unit in `prepare`; on the others `prepare_as`
-/// refuses another account before.
-#[allow(dead_code)]
+/// thread; `None` for the worker's own account. Linux starts another
+/// account's unit in `prepare`, Windows its session through the account
+/// service; on the others `prepare_as` refuses another account before.
 pub(crate) fn preparing_account() -> Option<RunAsAccount> {
     PREPARING_ACCOUNT.with(|slot| slot.borrow().clone())
 }
@@ -240,14 +239,13 @@ pub(crate) fn preparing_account() -> Option<RunAsAccount> {
 /// The `ExecWireError.code` of a start this host refused for its account
 /// (`account_not_allowed`, `account_helper_unavailable`,
 /// `account_unavailable`); `None` for every other error.
-#[allow(dead_code)] // the Exec admission maps account refusals with it
 pub(crate) fn account_error_code(error: &io::Error) -> Option<&'static str> {
     super::exec_helper_protocol::account_error_code(error)
 }
 
 /// The account choices of a host that runs commands only as the worker's
 /// own account.
-#[allow(dead_code)] // Windows and Android, until they have account services
+#[allow(dead_code)] // Android and hosts without an account service (neither Linux nor Windows)
 pub(crate) fn own_account_choices(helper: HelperStatus) -> AccountChoices {
     AccountChoices {
         helper,

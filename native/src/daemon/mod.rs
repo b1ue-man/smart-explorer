@@ -196,6 +196,10 @@ pub(crate) use vault_task_backend::{VaultTaskBridge, VaultTaskCounters};
 mod rooted_backend_task_tests;
 #[path = "os/shared/schedule.rs"]
 mod schedule;
+#[path = "os/shared/screen_ipc.rs"]
+mod screen_ipc;
+#[path = "os/shared/screen_ipc_client.rs"]
+mod screen_ipc_client;
 #[path = "os/shared/state.rs"]
 mod state;
 #[path = "os/shared/update_stop.rs"]
@@ -231,7 +235,8 @@ pub use ipc::{
     send_share_command, share_command, share_worker_snapshot, ShareCommandReply,
     ShareWorkerSnapshot, WorkerHandoff,
 };
-pub use ipc_client::share_worker_peek;
+pub(crate) use ipc_client::vault_status_peek;
+pub use ipc_client::{drive_devices_peek, drive_devices_watch_peek, share_worker_peek};
 pub(crate) use ipc_protocol::ExecNoticeView;
 #[allow(unused_imports)] // U26 (CLI/MCP), U29 (GUI), se Desktop
 pub(crate) use ipc_protocol::{
@@ -258,6 +263,9 @@ pub use mount_probe_client::probe_share_mount_capabilities;
 pub use platform::DriveInfo;
 pub use problem_notify::set_problem_notifier;
 pub use schedule::{next_scheduled_run, run_daemon};
+pub(crate) use screen_ipc_client::{
+    screen_bench, screen_probe, screen_sessions, screen_stop, screen_watch, ScreenProbeReport,
+};
 #[allow(unused_imports)]
 pub use state::{
     autopause_flags, autopause_support, cadence_secs, is_running, last_heartbeat_age,

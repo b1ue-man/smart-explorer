@@ -39,6 +39,7 @@ impl ShareHost {
                 super::super::drive_modules::ipc_protocol_drives::serve(self, &mut stream, req)
             }
             IpcRequest::Vault { req, .. } => super::super::ipc_vault::serve(self, stream, req),
+            IpcRequest::Screen { req, .. } => self.serve_screen(stream, req),
             other => unhandled(&mut stream, &other),
         }
     }

@@ -91,7 +91,8 @@ pub(super) struct AccessArgs {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct CapabilityOptions(pub(super) BTreeMap<Capability, CapabilityDecision>);
 
-/// Every row this version can offer; the host decides when it applies.
+/// The rows this host offers: the screen rows (`--screen-view`,
+/// `--screen-control`) only in a graphical session (C7).
 fn offered() -> Vec<crate::share::access_catalog::CapabilityEntry> {
     let account_helper = HelperStatus {
         state: HelperState::NotNeeded,
@@ -99,7 +100,7 @@ fn offered() -> Vec<crate::share::access_catalog::CapabilityEntry> {
         detail: None,
     };
     capability_catalog(&HostFacts {
-        graphical_session: true,
+        graphical_session: crate::screen::graphical_session(),
         account_helper,
     })
 }

@@ -204,6 +204,7 @@ pub(super) fn handle_client(
         request @ IpcRequest::Access { .. } => host.serve_extension(stream, request),
         request @ IpcRequest::Drive { .. } => host.serve_extension(stream, request),
         request @ IpcRequest::Vault { .. } => host.serve_extension(stream, request),
+        request @ IpcRequest::Screen { .. } => host.serve_extension(stream, request),
     }
 }
 

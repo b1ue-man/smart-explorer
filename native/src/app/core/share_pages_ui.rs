@@ -86,7 +86,6 @@ impl App {
     /// Shows the window „Geräte & Freigaben“ on the page of the saved direct
     /// contact `contact_id` (local contact id). `false` when no such contact
     /// is saved; the window then shows the overview of the tab „Geräte“.
-    #[allow(dead_code)] // Staged: se Desktop calls it for `--open-page` (desktop_settings_ui.rs).
     pub(crate) fn open_share_contact_page(&mut self, contact_id: &str) -> bool {
         let contacts = &self.share_profiles.direct_contacts;
         let known = contacts.iter().any(|contact| contact.id == contact_id);
@@ -97,7 +96,6 @@ impl App {
     /// Shows the window „Geräte & Freigaben“ on the page of the saved room
     /// `room_id` (local room profile id, or the room id). `false` when no such
     /// room is saved; the window then shows the overview of the tab „Räume“.
-    #[allow(dead_code)] // Staged: se Desktop calls it for `--open-page` (desktop_settings_ui.rs).
     pub(crate) fn open_share_room_page(&mut self, room_id: &str) -> bool {
         let rooms = &self.share_profiles.rooms;
         let room = rooms

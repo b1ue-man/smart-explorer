@@ -13,10 +13,8 @@ pub(crate) mod core;
 pub(crate) mod os;
 
 /// Whether this process can show its screen to others (catalog rows, C7).
-// Staged: the callers of `capability_catalog` pass `true` until their
-// packages pass this (`share_exec_programs_ui.rs`, `grants_access.rs`,
-// `mobile/os/shared/domains/share_access.rs`).
-#[allow(dead_code)]
+/// The callers of `capability_catalog` pass it: `share_exec_programs_ui.rs`,
+/// `grants_access.rs` and `mobile/os/shared/domains/share_access.rs`.
 pub(crate) fn graphical_session() -> bool {
     os::synthetic_backend::graphical_session()
 }

@@ -117,7 +117,9 @@ impl MountManager {
             .validate()
             .map_err(|error| format!("Ungueltige Laufwerk-Konfiguration: {error}"))?;
         let _lifecycle = self.lifecycle_guard()?;
-        #[cfg(windows)]
+        // Windows and Linux record the drive in the registry; a registry
+        // that failed to load is never written over.
+        #[cfg(any(windows, target_os = "linux"))]
         self.ensure_registry_ready()?;
         self.start_locked(config, host, false)
     }

@@ -10,6 +10,8 @@ mod discoverable;
 mod discoverable_input;
 #[path = "share/discoverable_output.rs"]
 mod discoverable_output;
+#[path = "share/exec_accounts.rs"]
+mod exec_accounts;
 #[path = "share/exec_approvals.rs"]
 pub(super) mod exec_approvals;
 #[path = "share/exec_status.rs"]

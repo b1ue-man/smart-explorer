@@ -7,7 +7,14 @@
 #     screen_task_, desktop_task_, launcher_task_, licenses_task_, rdt_suite_) im Code
 #     steht hier und laeuft je Job in genau einer Stufe;
 #   - jeder Eintrag im Abschnitt [umgesetzt] existiert im Code;
-#   - ein Eintrag im Abschnitt [noch nicht umgesetzt], der im Code fehlt, erscheint im
+#   - ein Eintrag im Abschnitt # ---- Zusatztests U24 ohne Stapelpraefix (Hauptagent, nach R5x) ----
+windows_account_config_reads_only_valid_files  windows-core:unit  pfad=share::platform_exec::exec_account_unit_tests::windows_account_config_reads_only_valid_files  quelle=Uebergabe-U24
+windows_account_setup_words_round_trip  windows-core:unit  pfad=share::platform_exec::exec_account_unit_tests::windows_account_setup_words_round_trip  quelle=Uebergabe-U24
+windows_account_job_pipes_are_exact  windows-core:unit  pfad=share::platform_exec::exec_account_unit_tests::windows_account_job_pipes_are_exact  quelle=Uebergabe-U24
+windows_account_access_lists  windows-core:unit  pfad=share::platform_exec::exec_account_unit_tests::windows_account_access_lists  quelle=Uebergabe-U24
+completions_access_as_reads_the_worker_accounts  linux-core:unit  pfad=cli::completions_access::tests::completions_access_as_reads_the_worker_accounts  quelle=Uebergabe-U24
+
+[noch nicht umgesetzt], der im Code fehlt, erscheint im
 #     Bericht als "nicht ausgefuehrt" mit dem Grund "nicht umgesetzt" und dem Paket.
 #     Das Paket, das den Test bringt, verschiebt die Zeile nach [umgesetzt] und setzt
 #     dabei Optionen und Stufe endgueltig.
@@ -116,6 +123,17 @@ perm_task_linux_helper_outdated_reported             linux-root:perm-linux-helpe
 perm_task_linux_helper_remove_cleans_units           linux-root:perm-linux-helper  ignored threads=1 fixture=sudo env=SMART_EXPLORER_PERM_HELPER_TASK=1 env=SMART_EXPLORER_PERM_SE_BIN={se}  quelle=R359,Uebergabe-U18
 perm_task_linux_helper_fedora_selinux                linux-root:perm-linux-helper  art=check  quelle=D3,S1-A5
 
+# ---- S1 PRM-M7 (U24): windows-core perm-windows, Runner mit Administratorrechten (R370, A12) ----
+perm_task_windows_helper_setup_remote_account        windows-core:perm-windows  ignored threads=1 env=SMART_EXPLORER_PERM_WINDOWS_TASK=1 env=SMART_EXPLORER_PERM_SE_BIN={se}  pfad=share::platform_exec::exec_account_tests::perm_task_windows_helper_setup_remote_account  quelle=R370,Uebergabe-U24
+perm_task_windows_terminal_as_remote_account         windows-core:perm-windows  ignored threads=1 env=SMART_EXPLORER_PERM_WINDOWS_TASK=1 env=SMART_EXPLORER_PERM_SE_BIN={se}  pfad=share::platform_exec::exec_account_job_tests::perm_task_windows_terminal_as_remote_account  quelle=R370,Uebergabe-U24
+perm_task_windows_helper_refuses_unlisted_account    windows-core:perm-windows  ignored threads=1 env=SMART_EXPLORER_PERM_WINDOWS_TASK=1 env=SMART_EXPLORER_PERM_SE_BIN={se}  pfad=share::platform_exec::exec_account_tests::perm_task_windows_helper_refuses_unlisted_account  quelle=R370,Uebergabe-U24
+perm_task_windows_pipe_caller_impersonation          windows-core:perm-windows  ignored threads=1 env=SMART_EXPLORER_PERM_WINDOWS_TASK=1 env=SMART_EXPLORER_PERM_SE_BIN={se}  pfad=share::platform_exec::exec_account_tests::perm_task_windows_pipe_caller_impersonation  quelle=R370,Uebergabe-U24
+perm_task_windows_cancel_kills_job_tree              windows-core:perm-windows  ignored threads=1 env=SMART_EXPLORER_PERM_WINDOWS_TASK=1 env=SMART_EXPLORER_PERM_SE_BIN={se}  pfad=share::platform_exec::exec_account_job_tests::perm_task_windows_cancel_kills_job_tree  quelle=R370,Uebergabe-U24
+perm_task_windows_worker_disconnect_kills_jobs       windows-core:perm-windows  ignored threads=1 env=SMART_EXPLORER_PERM_WINDOWS_TASK=1 env=SMART_EXPLORER_PERM_SE_BIN={se}  pfad=share::platform_exec::exec_account_job_tests::perm_task_windows_worker_disconnect_kills_jobs  quelle=R370,Uebergabe-U24
+perm_task_windows_probe_reports_token_level          windows-core:perm-windows  ignored threads=1 env=SMART_EXPLORER_PERM_WINDOWS_TASK=1 env=SMART_EXPLORER_PERM_SE_BIN={se}  pfad=share::platform_exec::exec_account_tests::perm_task_windows_probe_reports_token_level  quelle=R370,Uebergabe-U24
+perm_task_remote_account_cannot_read_ipc_token_windows  windows-core:perm-windows  ignored threads=1 env=SMART_EXPLORER_PERM_WINDOWS_TASK=1 env=SMART_EXPLORER_PERM_SE_BIN={se}  pfad=share::platform_exec::exec_account_job_tests::perm_task_remote_account_cannot_read_ipc_token_windows  quelle=R370,Uebergabe-U24
+perm_task_windows_own_account_path_unchanged         windows-core:perm-windows  ignored threads=1 env=SMART_EXPLORER_PERM_WINDOWS_TASK=1 env=SMART_EXPLORER_PERM_SE_BIN={se}  pfad=share::platform_exec::exec_account_tests::perm_task_windows_own_account_path_unchanged  quelle=R370,D3-Erhaltung-S1,Uebergabe-U24
+
 # ---- S1 PRM-M7: Windows-Konten, die kein Runner bietet (immer "nicht ausgefuehrt") ----
 perm_task_windows_home_and_microsoft_accounts        windows-core:perm-windows  art=check  quelle=D3,S1-A6,S1-A7
 
@@ -131,11 +149,18 @@ perm_task_completions_access             linux-core:unit  quelle=R381,Hauptagent
 perm_task_mcp_blocks_approve_and_setup   linux-core:unit  quelle=R381,Hauptagent-U07
 perm_task_mcp_reads_approvals            linux-core:unit  quelle=R381,Hauptagent-U07
 
+# ---- S1 PRM-M8 Konten (U24): CLI, Windows-Kontodienst (R381, D3) ----
+perm_task_cli_accounts_json           linux-core:unit,windows-core:perm-windows  pfad=cli::share::exec_accounts::tests::perm_task_cli_accounts_json  quelle=R381,D3-PRM-M8,Uebergabe-U24
+
 # ---- S1 PRM-M9 (U07): Desktop, ohne Anzeige und ohne #[ignore] (R391; D3 linux-desktop gui-harness) ----
 perm_task_gui_access_dialog_presets      linux-desktop:gui-harness  quelle=R391,Hauptagent-U07
 perm_task_gui_access_dialog_one_confirm  linux-desktop:gui-harness  quelle=R391,Hauptagent-U07
 perm_task_gui_approvals_block            linux-desktop:gui-harness  quelle=R391,Hauptagent-U07
 perm_task_gui_room_all_members           linux-desktop:gui-harness  quelle=R391,Hauptagent-U07
+
+# ---- S1 PRM-M9 Konten (U24): linux-desktop gui-harness, ohne Anzeige und ohne #[ignore] (R391) ----
+perm_task_gui_accounts_page_states       linux-desktop:gui-harness  pfad=app::share_exec_ui::accounts_ui_tests::perm_task_gui_accounts_page_states  quelle=R391,Uebergabe-U24
+perm_task_gui_setup_without_pkexec_shows_sudo_command  linux-desktop:gui-harness  pfad=app::share_exec_ui::accounts_ui_tests::perm_task_gui_setup_without_pkexec_shows_sudo_command  quelle=R391,Uebergabe-U24
 
 # ---- S1 PRM-M10 (U21): Bridge nur im Linux-Testbau (mobile/), App auf dem Emulator (R401) ----
 perm_task_bridge_set_access_absent_keeps          linux-core:unit  quelle=R401,Hauptagent-U21
@@ -181,7 +206,7 @@ drive_task_unix_lease_rejects_symlinked_cache             linux-core:unit  quell
 drive_task_windows_status_table_covers_emitted_codes      windows-core:drive-dokany-regression  quelle=L243
 drive_task_windows_unmapped_error_is_io_device_not_access_denied  windows-core:drive-dokany-regression  ignored threads=1 fixture=dokany  quelle=L243,Uebergabe-U02
 drive_task_windows_host_unreachable_maps_1232             windows-core:drive-dokany-regression  ignored threads=1 fixture=dokany  quelle=L243,Uebergabe-U02
-drive_task_host_session_update_stop_unmounts_and_exits    windows-core:drive-dokany-regression  ignored threads=1 fixture=dokany  quelle=D3-DRV-M2,Uebergabe-U02
+drive_task_host_session_update_stop_unmounts_and_exits    windows-core:drive-dokany-regression  ignored threads=1 fixture=dokany  pfad=mount::os::windows::host::host_session_windows::drive_task_host_session_update_stop_unmounts_and_exits  quelle=D3-DRV-M2,Uebergabe-U02
 
 # ---- S2 Windows-Bestandsharnesses (DRV-M2, D3-Erhaltung S2): Dateiname -> Modulpfad ----
 mounted_volume_task_tests          windows-core:drive-dokany-regression  art=modul modul=::host::mount_batching_task:: fixture=dokany threads=1  quelle=L243,D3-Erhaltung-S2
@@ -195,7 +220,7 @@ drive_task_registry_v0_5_182_fixture_roundtrip_identical  linux-core:unit,window
 drive_task_registry_old_parser_ignores_new_fields         linux-core:unit,windows-core:drive-cli  quelle=L253,D3-Erhaltung-S2
 drive_task_registry_ext_kinds_never_in_v1_file            linux-core:unit,windows-core:drive-cli  quelle=L253
 drive_task_existing_drive_after_restart_unchanged         linux-core:unit,windows-core:drive-cli  quelle=L253,D3-Erhaltung-S2
-drive_task_auto_remount_after_daemon_restart              linux-core:unit,windows-core:drive-cli  quelle=L253
+drive_task_auto_remount_after_daemon_restart              linux-core:unit,windows-core:drive-cli  pfad=daemon::mount_manager::restore::tests::drive_task_auto_remount_after_daemon_restart  quelle=L253
 drive_task_restore_runs_after_recovery_audit              linux-core:unit,windows-core:drive-cli  quelle=L253
 drive_task_drive_restore_no_jobs_without_sync_autostart   linux-core:unit,windows-core:drive-cli  quelle=L253
 drive_task_drive_restore_no_jobs_when_sync_entry_disabled_by_system  linux-core:unit,windows-core:drive-cli  quelle=L253
@@ -203,6 +228,46 @@ drive_task_autostart_entry_follows_need                   linux-core:unit,window
 drive_task_cli_set_text_and_json                          linux-core:unit,windows-core:drive-cli  quelle=L253
 drive_task_update_stop_exit_clean_journal_counts_as_unmount  linux-core:unit  pfad=daemon::mount_manager::entry_state::update_stop_tests::drive_task_update_stop_exit_clean_journal_counts_as_unmount  quelle=Uebergabe-U06,Hauptagent
 drive_task_status_command_promotes_restricted_daemon      linux-core:unit  quelle=Code-U06,Hauptagent
+
+# ---- S2 DRV-M2 Linux-Teil und DRV-M4 (U12): linux-root drive-fuse, windows-core drive-dokany-regression (D3, L264) ----
+# Zwei Namen gibt es zweimal im Code; pfad= nennt je Zeile den gemeinten Test (Hinweis U12).
+drive_task_host_session_update_stop_unmounts_and_exits  linux-root:drive-fuse  ignored threads=1 fixture=fuse env=SMART_EXPLORER_FUSE_TASK=1 pfad=daemon::mount_process::fuse_task_life_tests::drive_task_host_session_update_stop_unmounts_and_exits  quelle=D3-linux-root
+drive_task_fuse_mount_local_fixture_rw            linux-root:drive-fuse  ignored threads=1 fixture=fuse env=SMART_EXPLORER_FUSE_TASK=1 pfad=daemon::mount_process::fuse_task_tests::drive_task_fuse_mount_local_fixture_rw  quelle=L264
+drive_task_fuse_sftp_container_rw                 linux-root:drive-fuse  ignored threads=1 fixture=fuse,sftp,home env=SMART_EXPLORER_FUSE_TASK=1 pfad=daemon::mount_process::fuse_task_tests::drive_task_fuse_sftp_container_rw  quelle=L264
+drive_task_fuse_editor_save_rename_over           linux-root:drive-fuse  ignored threads=1 fixture=fuse env=SMART_EXPLORER_FUSE_TASK=1 pfad=daemon::mount_process::fuse_task_tests::drive_task_fuse_editor_save_rename_over  quelle=L264
+drive_task_fuse_gio_replace_stays_atomic          linux-root:drive-fuse  ignored threads=1 fixture=fuse env=SMART_EXPLORER_FUSE_TASK=1 pfad=daemon::mount_process::fuse_task_tests::drive_task_fuse_gio_replace_stays_atomic  quelle=L264
+drive_task_fuse_cp_a_exit_zero_and_times_applied_on_sftp  linux-root:drive-fuse  ignored threads=1 fixture=fuse,sftp,home env=SMART_EXPLORER_FUSE_TASK=1 pfad=daemon::mount_process::fuse_task_tests::drive_task_fuse_cp_a_exit_zero_and_times_applied_on_sftp  quelle=L264
+drive_task_fuse_rsync_a_exit_zero                 linux-root:drive-fuse  ignored threads=1 fixture=fuse env=SMART_EXPLORER_FUSE_TASK=1 pfad=daemon::mount_process::fuse_task_tests::drive_task_fuse_rsync_a_exit_zero  quelle=L264
+drive_task_fuse_chown_other_uid_eperm             linux-root:drive-fuse  ignored threads=1 fixture=fuse env=SMART_EXPLORER_FUSE_TASK=1 pfad=daemon::mount_process::fuse_task_rules_tests::drive_task_fuse_chown_other_uid_eperm  quelle=L264
+drive_task_fuse_conflict_returns_ebusy_and_copy   linux-root:drive-fuse  ignored threads=1 fixture=fuse env=SMART_EXPLORER_FUSE_TASK=1 pfad=daemon::mount_process::fuse_task_rules_tests::drive_task_fuse_conflict_returns_ebusy_and_copy  quelle=L264
+drive_task_fuse_large_readonly_range_read         linux-root:drive-fuse  ignored threads=1 fixture=fuse env=SMART_EXPLORER_FUSE_TASK=1 pfad=daemon::mount_process::fuse_task_rules_tests::drive_task_fuse_large_readonly_range_read  quelle=L264
+drive_task_fuse_names_colon_con_listed            linux-root:drive-fuse  ignored threads=1 fixture=fuse env=SMART_EXPLORER_FUSE_TASK=1 pfad=daemon::mount_process::fuse_task_rules_tests::drive_task_fuse_names_colon_con_listed  quelle=L264
+drive_task_fuse_links_hidden                      linux-root:drive-fuse  ignored threads=1 fixture=fuse env=SMART_EXPLORER_FUSE_TASK=1 pfad=daemon::mount_process::fuse_task_rules_tests::drive_task_fuse_links_hidden  quelle=L264
+drive_task_fuse_unmount_busy_then_force           linux-root:drive-fuse  ignored threads=1 fixture=fuse env=SMART_EXPLORER_FUSE_TASK=1 pfad=daemon::mount_process::fuse_task_life_tests::drive_task_fuse_unmount_busy_then_force  quelle=L264
+drive_task_fuse_force_abort_frees_blocked_reader  linux-root:drive-fuse  ignored threads=1 fixture=fuse env=SMART_EXPLORER_FUSE_TASK=1 pfad=daemon::mount_process::fuse_task_life_tests::drive_task_fuse_force_abort_frees_blocked_reader  quelle=L264,S2-A5
+drive_task_fuse_kernel_request_timeout_reported   linux-root:drive-fuse  ignored threads=1 fixture=fuse,fuse-timeout env=SMART_EXPLORER_FUSE_TASK=1 pfad=daemon::mount_process::fuse_task_life_tests::drive_task_fuse_kernel_request_timeout_reported  quelle=L264
+drive_task_fuse_host_kill_daemon_cleans_mount     linux-root:drive-fuse  ignored threads=1 fixture=fuse env=SMART_EXPLORER_FUSE_TASK=1 pfad=daemon::mount_process::fuse_task_life_tests::drive_task_fuse_host_kill_daemon_cleans_mount  quelle=L264
+drive_task_fuse_stale_mount_cleaned_before_remount  linux-root:drive-fuse  ignored threads=1 fixture=fuse env=SMART_EXPLORER_FUSE_TASK=1 pfad=daemon::mount_process::fuse_task_life_tests::drive_task_fuse_stale_mount_cleaned_before_remount  quelle=L264
+drive_task_fuse_mountpoint_locked_after_unmount   linux-root:drive-fuse  ignored threads=1 fixture=fuse env=SMART_EXPLORER_FUSE_TASK=1 pfad=daemon::mount_process::fuse_task_life_tests::drive_task_fuse_mountpoint_locked_after_unmount  quelle=L264
+drive_task_fuse_recovery_retries_pending_after_restart  linux-root:drive-fuse  ignored threads=1 fixture=fuse env=SMART_EXPLORER_FUSE_TASK=1 pfad=daemon::mount_process::fuse_task_life_tests::drive_task_fuse_recovery_retries_pending_after_restart  quelle=L264
+drive_task_fuse_runtime_report_missing_fusermount linux-root:drive-fuse  pfad=mount::os::linux_os::fuse_runtime::tests::drive_task_fuse_runtime_report_missing_fusermount  quelle=L264
+drive_task_runtime_detects_sandbox_markers        linux-root:drive-fuse  pfad=mount::os::linux_os::fuse_runtime::tests::drive_task_runtime_detects_sandbox_markers  quelle=L264,S2-A9
+drive_task_cli_linux_shapes                       linux-root:drive-fuse  pfad=cli::drive::drive_output_linux::tests::drive_task_cli_linux_shapes  quelle=L264
+drive_task_smb_mount_still_refused                linux-root:drive-fuse  ignored threads=1 fixture=home env=SMART_EXPLORER_FUSE_TASK=1 pfad=daemon::mount_process::fuse_task_daemon_tests::drive_task_smb_mount_still_refused  quelle=L264,D3-Erhaltung-S2
+drive_task_windows_drive_ignores_pending_attributes  windows-core:drive-dokany-regression  pfad=mount::pending_attributes::tests::drive_task_windows_drive_ignores_pending_attributes  quelle=L264,D3-Erhaltung-S2
+drive_task_auto_remount_after_daemon_restart_fuse  linux-root:drive-fuse  ignored threads=1 fixture=fuse,sftp,home env=SMART_EXPLORER_FUSE_TASK=1 env=SMART_EXPLORER_DRIVE_SE_BIN={se} pfad=daemon::mount_process::fuse_task_daemon_tests::drive_task_auto_remount_after_daemon_restart_fuse  quelle=L253,Uebergabe-U06
+
+# ---- S2 DRV-M4 (U12): Tests ohne Stapelpraefix, die laufen muessen (Hinweis U12) ----
+# daemon::mount_process::fuse_task_life_tests::fuse_task_child_host_serves_until_killed ist ein
+# Kindprozess-Hilfstest und wird nie selbst ausgewaehlt (kein Eintrag).
+pending_attributes_reach_exactly_the_next_publication      linux-core:unit  pfad=mount::pending_attributes::tests::pending_attributes_reach_exactly_the_next_publication  quelle=Uebergabe-U12
+fuse_inodes_count_lookups_and_never_reuse_numbers          linux-core:unit  pfad=mount::os::linux_os::fuse_inodes::tests::fuse_inodes_count_lookups_and_never_reuse_numbers  quelle=Uebergabe-U12
+fuse_inodes_rename_moves_descendants_and_unlinks_replaced  linux-core:unit  pfad=mount::os::linux_os::fuse_inodes::tests::fuse_inodes_rename_moves_descendants_and_unlinks_replaced  quelle=Uebergabe-U12
+fuse_inodes_listing_numbers_create_no_nodes                linux-core:unit  pfad=mount::os::linux_os::fuse_inodes::tests::fuse_inodes_listing_numbers_create_no_nodes  quelle=Uebergabe-U12
+mount_point_folder_names_and_default_places                linux-core:unit  pfad=mount::os::linux_os::mount_point::tests::mount_point_folder_names_and_default_places  quelle=Uebergabe-U12
+mount_point_prepare_locks_opens_and_refuses                linux-core:unit  pfad=mount::os::linux_os::mount_point::tests::mount_point_prepare_locks_opens_and_refuses  quelle=Uebergabe-U12
+fuse_abort_reads_mountinfo_fields_and_escapes              linux-core:unit  pfad=mount::os::linux_os::mount_point::tests::fuse_abort_reads_mountinfo_fields_and_escapes  quelle=Uebergabe-U12
+fuse_errno_table_of_strand_c4                              linux-core:unit  pfad=mount::os::linux_os::fuse_errno::tests::fuse_errno_table_of_strand_c4  quelle=Uebergabe-U12
 
 # ---- S2 DRV-M9 (U36, U42): statische Pruefungen der Suite (L308) ----
 drive_task_install_linux_dry_run_with_fuse   prepare:static  art=check  quelle=L308,C5
@@ -311,55 +376,11 @@ IntentsTaskTest   android-device:android-bestand  art=instr  quelle=D3-Bestand
 
 [noch nicht umgesetzt]
 
-# ---- S1 PRM-M7 (U24): windows-core perm-windows (R370) ----
-perm_task_windows_helper_setup_remote_account        windows-core:perm-windows  paket=U24  quelle=R370
-perm_task_windows_terminal_as_remote_account         windows-core:perm-windows  paket=U24  quelle=R370
-perm_task_windows_helper_refuses_unlisted_account    windows-core:perm-windows  paket=U24  quelle=R370
-perm_task_windows_pipe_caller_impersonation          windows-core:perm-windows  paket=U24  quelle=R370
-perm_task_windows_cancel_kills_job_tree              windows-core:perm-windows  paket=U24  quelle=R370
-perm_task_windows_worker_disconnect_kills_jobs       windows-core:perm-windows  paket=U24  quelle=R370
-perm_task_windows_probe_reports_token_level          windows-core:perm-windows  paket=U24  quelle=R370
-perm_task_remote_account_cannot_read_ipc_token_windows  windows-core:perm-windows  paket=U24  quelle=R370
-perm_task_windows_own_account_path_unchanged         windows-core:perm-windows  paket=U24  quelle=R370,D3-Erhaltung-S1
-
-# ---- S1 PRM-M8 Konten (U24): CLI, Windows-Kontodienst (R381, D3) ----
-perm_task_cli_accounts_json           linux-core:unit,windows-core:perm-windows  paket=U24  quelle=R381,D3-PRM-M8
-
-# ---- S1 PRM-M9 Konten (U24): linux-desktop gui-harness (R391) ----
-perm_task_gui_accounts_page_states       linux-desktop:gui-harness  paket=U24  quelle=R391
-perm_task_gui_setup_without_pkexec_shows_sudo_command  linux-desktop:gui-harness  paket=U24  quelle=R391
-
 # ---- S1 PRM-M10 (U27): Bildschirm-Rueckfrage auf dem Emulator, API 36 und API 30 (R401, D3) ----
 perm_task_android_screen_approval_actions_are_activity_intents  android-device:perm-android-device,android-device-api30:perm-android-api30  art=instr  paket=U27  quelle=R401,D3
 
-# ---- S2 DRV-M2 Linux-Teil (U12): linux-root drive-fuse (D3) ----
-drive_task_host_session_update_stop_unmounts_and_exits  linux-root:drive-fuse  fixture=fuse  paket=U12  quelle=D3-linux-root
+# ---- S2 DRV-M2 Windows (kein Paket benannt): windows-core drive-dokany-regression (L350, S2-A3) ----
 drive_task_windows_realpath_native_on_dokany            windows-core:drive-dokany-regression  ignored threads=1 fixture=dokany  paket=offen  quelle=L350,S2-A3
-
-# ---- S2 DRV-M4 (U12): linux-root drive-fuse (L264) ----
-drive_task_fuse_mount_local_fixture_rw            linux-root:drive-fuse  fixture=fuse  paket=U12  quelle=L264
-drive_task_fuse_sftp_container_rw                 linux-root:drive-fuse  fixture=fuse,sftp  paket=U12  quelle=L264
-drive_task_fuse_editor_save_rename_over           linux-root:drive-fuse  fixture=fuse  paket=U12  quelle=L264
-drive_task_fuse_gio_replace_stays_atomic          linux-root:drive-fuse  fixture=fuse  paket=U12  quelle=L264
-drive_task_fuse_cp_a_exit_zero_and_times_applied_on_sftp  linux-root:drive-fuse  fixture=fuse,sftp  paket=U12  quelle=L264
-drive_task_fuse_rsync_a_exit_zero                 linux-root:drive-fuse  fixture=fuse  paket=U12  quelle=L264
-drive_task_fuse_chown_other_uid_eperm             linux-root:drive-fuse  fixture=fuse  paket=U12  quelle=L264
-drive_task_fuse_conflict_returns_ebusy_and_copy   linux-root:drive-fuse  fixture=fuse  paket=U12  quelle=L264
-drive_task_fuse_large_readonly_range_read         linux-root:drive-fuse  fixture=fuse  paket=U12  quelle=L264
-drive_task_fuse_names_colon_con_listed            linux-root:drive-fuse  fixture=fuse  paket=U12  quelle=L264
-drive_task_fuse_links_hidden                      linux-root:drive-fuse  fixture=fuse  paket=U12  quelle=L264
-drive_task_fuse_unmount_busy_then_force           linux-root:drive-fuse  fixture=fuse  paket=U12  quelle=L264
-drive_task_fuse_force_abort_frees_blocked_reader  linux-root:drive-fuse  fixture=fuse  paket=U12  quelle=L264,S2-A5
-drive_task_fuse_kernel_request_timeout_reported   linux-root:drive-fuse  fixture=fuse,fuse-timeout  paket=U12  quelle=L264
-drive_task_fuse_host_kill_daemon_cleans_mount     linux-root:drive-fuse  fixture=fuse  paket=U12  quelle=L264
-drive_task_fuse_stale_mount_cleaned_before_remount  linux-root:drive-fuse  fixture=fuse  paket=U12  quelle=L264
-drive_task_fuse_mountpoint_locked_after_unmount   linux-root:drive-fuse  fixture=fuse  paket=U12  quelle=L264
-drive_task_fuse_recovery_retries_pending_after_restart  linux-root:drive-fuse  fixture=fuse  paket=U12  quelle=L264
-drive_task_fuse_runtime_report_missing_fusermount linux-root:drive-fuse  paket=U12  quelle=L264
-drive_task_runtime_detects_sandbox_markers        linux-root:drive-fuse  paket=U12  quelle=L264,S2-A9
-drive_task_cli_linux_shapes                       linux-root:drive-fuse  paket=U12  quelle=L264
-drive_task_smb_mount_still_refused                linux-root:drive-fuse  paket=U12  quelle=L264,D3-Erhaltung-S2
-drive_task_windows_drive_ignores_pending_attributes  windows-core:drive-dokany-regression  paket=U12  quelle=L264,D3-Erhaltung-S2
 
 # ---- S2 DRV-M5 (U17): linux-desktop drive-desktop mit temporaerem HOME (L272, D3) ----
 drive_task_gtk_bookmark_only_outside_glib_rule    linux-desktop:drive-desktop  fixture=home  paket=U17  quelle=L272,D2-14
