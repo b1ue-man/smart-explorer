@@ -135,6 +135,10 @@ Modellbeleg (Transkripte, 2026-10-17 14:20): alle Bestandsleser antworten aussch
 | alle | Vorgezogene Registrierung für U04, U05, U09, U15, U18 und U33 | opus, Standardaufwand der Sitzung (max) | Hub-Dateien | fertig (Commit 5ec3531b, gepusht) |
 | S3 | Umsetzung U05 (Phase P2, vorgezogen; keine Dateiüberschneidung mit U02 und R1) | opus, Standardaufwand der Sitzung (max) | Code laut D1 | fertig (Commit 4e07b200); Quellen von aes-siv 0.8.0, aes-kw 0.3.1, siv-mode-Prüfvektoren (MIT) und zwei CryptoLib-2.3.0-Testdateien aus dem Netz gelesen, vom Hauptagenten als nötig für C1.2 bestätigt |
 | S3 | Umsetzung U08 (VLT-M2, VLT-M3) | opus, Standardaufwand der Sitzung (max) | Code laut D1 | fertig (Commit e1f1c819); Abweichung von C2.6: Stufen liegen immer im Inhaltsverzeichnis des Elternordners (deterministische Abbildung), vom Hauptagenten angenommen |
+| S5 | Umsetzung U32 (DSK-M5) | opus, Standardaufwand der Sitzung | Code laut D1 | fertig (Commit 6e1c4602); Linux-Platzhalter, Herausziehen und Registrierungen (zwei `windows`-Features, `jump_list.active`) vom Hauptagenten angewandt; Abweichung „bei Monitorwechsel alle Flächen neu starten“ angenommen |
+| S3+S2 | Umsetzung U14 (VLT-M12, DRV-M7) | opus, Standardaufwand der Sitzung | Code laut D1 | Zwischenstand am Wochenlimit, kontrolliert angehalten; `stand/U14.md` |
+| S3 | Umsetzung U20 (VLT-M6, VLT-M7) | opus, Standardaufwand der Sitzung | Code laut D1 | Zwischenstand am Wochenlimit, kontrolliert angehalten; `stand/U20.md` |
+| S4 | Umsetzung U13 (SCR-M3) | opus, Standardaufwand der Sitzung | Code laut D1 | läuft mit Zeitgrenze, danach Zwischenstand in `stand/U13.md` |
 
 Wochenlimit (Nutzer 2026-10-17, berichtigt 2026-10-18): Vorerst gilt eine Obergrenze für das Wochenlimit. Sie ist eine Startgrenze: Bis zu ihrem Erreichen starten weitere Pakete, ohne Vorabstopp wegen einer Hochrechnung. Ab Erreichen startet nichts Neues; ein dann laufender Agent wird nicht abgebrochen. Vor der harten Grenze des Kontos erhalten laufende Agenten einen Dokumentationsauftrag (`stand/<Paket>.md`), weil ein Abbruch durch das Konto Verlauf kosten kann.
 
@@ -460,6 +464,17 @@ Die Briefe der genannten Pakete enthalten diese Punkte zusätzlich zu D1.
   - `desktop_task_updater_helper_unchanged` läuft in `linux-core: unit`, nicht in `prepare`.
   - `desktop_task_online_rule_matches_bridge` und `desktop_task_share_status_device_shape_unchanged` gibt es nur in Linux-Testbauten.
   - Die zwei GUI-Tests brauchen `SMART_EXPLORER_GUI_TASK=1`, isolierte Werte für `XDG_DATA_HOME`, `APPDATA` und `LOCALAPPDATA`, `--include-ignored` und einen Testthread.
+- **An U34 (aus U32):**
+  - Die Linux-Platzhalter in `desktop/os/linux_os/mod.rs` ersetzen: X11-Fenster und Signale, `_NET_WORKAREA`, RandR-Namen, `FitMode::from_gnome`, `XDG_DESKTOP_DIR`.
+  - Danach die drei `cfg_attr(not(windows), allow(dead_code))` in `desktop_surface_host.rs` und das `allow(dead_code)` in `desktop/mod.rs` entfernen.
+  - Monitorabfrage jede Sekunde und Neustart aller Flächen greifen unter X11 über `platform::monitors()`.
+  - Offen aus C1.2: der Hinweis „Hintergrundbild kann nicht angezeigt werden: <Grund>“ in `desktop_surface_settings_ui.rs` (Bausteine `platform::system_wallpaper(<Schlüssel>)` und `wallpaper_image::load`).
+- **An U37 (aus U32):** Das Layer-Backend setzt `SurfaceHost` um; die neuen Trait-Methoden haben Vorgabewerte. Unter Wayland gibt es kein Einfügen von Dateien anderer Programme, kein Herausziehen und keine Explorer-Aktionen.
+- **An U36 (aus U32):** keine neue Installer-Zeile. `--unregister` muss aus `Smart Explorer.exe` laufen, weil nur das GUI-Abbild die Sprungliste löscht; `se desktop remove` vor `--unregister` bleibt.
+- **An U41 (aus U32):** Inventurzeilen der zehn `desktop_task_windows_*`-Signale und des Zusatztests `jump_list_plan_follows_tiles` mit Pfad, Stufe und Optionen stehen in `stand/U32.md` (Testpfade unter `desktop::os::platform::…`).
+- **An U42 und U43 (aus U32):** Doku-Fundstellen für `desktop-launcher.md`, fünf GOTCHAS-Punkte, TODO-Stand (`DESKTOP-WIN-CTRLV-FILES` und `DESKTOP-WIN-DRAGOUT` erledigt; Handtests A1, A2, A4, A5, A8, A10 offen) und der README-Punkt zur Windows-Tiefe stehen in `stand/U32.md`, Abschnitt Doku-Bedarf.
+- **Fortsetzung U14 (Zwischenstand, `stand/U14.md`):** U14 setzt nach der Rücksetzung fort und erhält zusätzlich `ipc_protocol_vault.rs` und `ipc_vault.rs` (U11, frei): `VaultIpcRequest::SpoolKey { mount_id }`, `VaultIpcReply::SpoolKey`, Auslöseregel in `promotes_daemon`, Arm in `serve`. Registrierungsbedarf für das nächste R-Paket steht im Stand (Abschnitt 4).
+- **Fortsetzung U20 (Zwischenstand, `stand/U20.md`):** U20 setzt nach der Rücksetzung mit K20 und K21 fort und erhält zusätzlich die Übergabe von Tresor-Jobs an `vault::run_vault_job` in den vier Läufern `daemon/os/shared/job.rs`, `app/core/sync_core.rs`, `app/os/shared/sync_manual_run.rs` und `mobile/os/shared/domains/sync_run.rs` sowie `IssueLog::for_sides` in `transfer/os/shared/engine/mod.rs`, soweit kein laufendes Paket diese Dateien hält. Der Hauptagent prüft vor dem Commit die Abweichung beim Replikat-Ort (`<data_home>/smart_explorer-vault-replicas/` statt `<AD>/vault-replicas/`, Grund: die Sync-Engine lässt `<AD>` als eigene Dateien aus).
 
 ## B — Zweitplan aus dem Bestand
 
