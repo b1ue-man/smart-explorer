@@ -42,6 +42,11 @@ pub(crate) trait ScreenSource: Send {
     /// the id into its barcode). With `keyframe` a source delivers its last
     /// picture even when nothing changed, so a key frame always has one.
     fn capture(&mut self, frame_id: u64, keyframe: bool) -> io::Result<SourceFrame>;
+    /// The stage of a source whose capture and encoding run in the host
+    /// process (SCR-M3, `os::host_worker_client`); `None` keeps both here.
+    fn host_stage(&mut self) -> Option<&mut dyn super::host_stage::HostStage> {
+        None
+    }
 }
 
 /// The records of one encoded picture.

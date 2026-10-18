@@ -1,6 +1,8 @@
 //! `se screen bench` (decision C9): measures a picture path with the test
 //! picture `synthetic`, either over a session with another device or only
-//! encoder and decoder on this one (`--local`). Each shown frame's barcode
+//! encoder and decoder on this one (`--local`). Encoders and decoders come
+//! from the codec register of this process (SCR-M3: H.264 through Media
+//! Foundation or OpenH264, the lossless tiles always). Each shown frame's barcode
 //! must carry its frame id (else it counts as corrupt); latency is display
 //! (decode done) minus capture, corrected by the clock offset of
 //! `PING`/`PONG`; a broken picture stream counts as a disruption until the
@@ -12,15 +14,19 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
+use super::codec_registry::CodecRegistry;
 use super::gop_stream::{now_us, path_of, PictureEvent};
-use super::host_backend::{ScreenDecoder, ScreenEncoder, TilesScreenDecoder, TilesScreenEncoder};
+use super::host_backend::ScreenDecoder;
 use super::metrics::{psnr_db, ClockSync, LatencySamples, RateMeter, RecoveryTracker};
-use super::negotiate::{CodecKind, CodecOffer, CodecPreference};
+use super::negotiate::{negotiate, CodecKind, CodecOffer, CodecPreference};
 use super::pixel_convert::{downscale_bgra, BgraImage, FrameSize, Rect};
+use super::rate_control::PathKind;
 use super::session_state::{KeyframeRequester, SessionState};
 use super::synthetic::{read_barcode, render, static_block, BarcodeRead, MIN_SYNTHETIC_SIZE};
 use super::viewer_client::{ViewerError, ViewerSession};
-use super::wire_binary::{FrameRecord, GopHeader, FLAG_KEYFRAME, FLAG_MORE, RECORD_HEADER_BYTES};
+use super::wire_binary::{
+    FrameRecord, GopHeader, StreamKind, FLAG_KEYFRAME, FLAG_MORE, RECORD_HEADER_BYTES,
+};
 use super::wire_control::{HostFrame, KeyframeReason, KeyframeRequest, ViewerFrame};
 
 pub(crate) const DEFAULT_SIZE: FrameSize = FrameSize::new(1280, 720);
@@ -30,6 +36,9 @@ pub(crate) const DEFAULT_SECONDS: u32 = 10;
 pub(crate) const MAX_SECONDS: u32 = 3600;
 /// Interval of the PSNR samples (a reference picture costs a render).
 const PSNR_EVERY: Duration = Duration::from_secs(1);
+/// `--codec h264` on a device without an H.264 codec.
+const NO_H264: &str = "this device has no H.264 codec; `se screen codec openh264 enable` loads \
+     OpenH264, or use --codec tiles";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct BenchOptions {
@@ -57,13 +66,23 @@ impl BenchOptions {
         Ok(())
     }
 
-    /// The decoders this build offers for the chosen codec: the lossless
-    /// tiles; H.264 decoders follow with SCR-M3.
-    pub(crate) fn decoders(&self) -> Result<Vec<CodecOffer>, String> {
+    /// The decoders of `codecs` for the chosen codec: every one for `auto`,
+    /// the H.264 ones for `h264` (an error without any), only `tiles` for
+    /// `tiles`.
+    pub(crate) fn decoders(&self, codecs: &CodecRegistry) -> Result<Vec<CodecOffer>, String> {
+        let offers = codecs.decoder_offers();
         match self.codec {
-            CodecPreference::Auto | CodecPreference::Tiles => Ok(vec![CodecOffer::tiles()]),
+            CodecPreference::Auto => Ok(offers),
+            CodecPreference::Tiles => Ok(vec![CodecOffer::tiles()]),
             CodecPreference::H264 => {
-                Err("this version has no H.264 decoder yet; use --codec tiles".into())
+                let h264: Vec<CodecOffer> = offers
+                    .into_iter()
+                    .filter(|offer| offer.codec == CodecKind::H264)
+                    .collect();
+                if h264.is_empty() {
+                    return Err(NO_H264.into());
+                }
+                Ok(h264)
             }
         }
     }
@@ -241,12 +260,14 @@ fn static_psnr(picture: &BgraImage, frame_id: u64, source: FrameSize) -> Option<
 }
 
 /// The current picture group and its decoder.
-type Decoding = Option<(GopHeader, TilesScreenDecoder)>;
+type Decoding = Option<(GopHeader, Box<dyn ScreenDecoder>)>;
 
-/// Measures a running session of the test picture for `options.seconds`.
+/// Measures a running session of the test picture for `options.seconds`
+/// with the decoders of `codecs`.
 pub(crate) async fn run(
     mut session: ViewerSession,
     options: BenchOptions,
+    codecs: &CodecRegistry,
 ) -> Result<BenchReport, ViewerError> {
     let mut measure = Measure::new(options.size);
     let mut decoding: Decoding = None;
@@ -279,7 +300,7 @@ pub(crate) async fn run(
                 let Some(event) = event else {
                     return Err(ViewerError::Io(io::Error::other("the picture streams ended")));
                 };
-                let wanted = picture(&mut measure, &mut decoding, event, false);
+                let wanted = picture(&mut measure, &mut decoding, codecs, event);
                 if std::mem::take(&mut measure.fresh_keyframe) {
                     requester.on_keyframe();
                 }
@@ -303,8 +324,8 @@ pub(crate) async fn run(
 fn picture(
     measure: &mut Measure,
     decoding: &mut Decoding,
+    codecs: &CodecRegistry,
     event: PictureEvent,
-    local: bool,
 ) -> Option<KeyframeReason> {
     let (header, record, received_us) = match event {
         PictureEvent::Record {
@@ -329,10 +350,15 @@ fn picture(
         .as_ref()
         .is_none_or(|(current, _)| current.gop_id < header.gop_id);
     if fresh {
-        if header.codec != CodecKind::Tiles || !record.is_keyframe() {
+        if !record.is_keyframe() {
             return Some(KeyframeReason::Join);
         }
-        let next = TilesScreenDecoder::new(header.size).ok()?;
+        let Ok(next) = codecs.open_decoder(&header) else {
+            // No decoder for this stream: nothing of it can be shown.
+            *decoding = None;
+            measure.recovery.on_disruption(now_us());
+            return None;
+        };
         *decoding = Some((header, next));
         measure.codec = Some(header.codec);
     }
@@ -344,7 +370,7 @@ fn picture(
         Ok(true) => {
             measure.decoder = active.name();
             let shown_us = now_us();
-            measure.shown(active.picture(), &record, shown_us, local);
+            measure.shown(active.picture(), &record, shown_us, false);
             None
         }
         Ok(false) => None,
@@ -356,22 +382,49 @@ fn picture(
     }
 }
 
-/// `--local`: encoder and decoder of this device only, at the wanted rate.
-pub(crate) fn run_local(options: BenchOptions) -> io::Result<BenchReport> {
-    let mut measure = Measure::new(options.size);
-    let mut encoder = TilesScreenEncoder::new(options.size)?;
-    let mut decoder = TilesScreenDecoder::new(options.size)?;
-    let mut image = BgraImage::new(options.size)?;
-    let interval = Duration::from_micros(1_000_000 / u64::from(options.fps.max(1)));
+/// `--local`: encoder and decoder of `codecs` on this device only, at the
+/// wanted rate; the codec is the first of the negotiation with itself.
+pub(crate) fn run_local(options: BenchOptions, codecs: &CodecRegistry) -> io::Result<BenchReport> {
+    let choices = negotiate(
+        &codecs.encoder_offers(),
+        &codecs.decoder_offers(),
+        options.codec,
+    );
+    let choice = choices
+        .first()
+        .copied()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::Unsupported, NO_H264))?;
+    let size = options.size.fit_within(choice.max_size);
+    let size = match choice.codec {
+        CodecKind::H264 => size.even(),
+        CodecKind::Tiles => size,
+    };
+    let mut measure = Measure::new(size);
+    let fps = u32::from(options.fps.max(1));
+    let opened = codecs.open_encoder(&choice, size, fps)?;
+    let mut encoder = opened.encoder;
+    let header = GopHeader {
+        gop_id: 1,
+        kind: StreamKind::Video,
+        codec: choice.codec,
+        profile: choice.profile,
+        size,
+    };
+    let mut decoder = codecs.open_decoder(&header)?;
+    measure.decoder = decoder.name();
+    // The start rate of a direct path (C3); `tiles` ignores it.
+    let target_bps = PathKind::Direct.start_bps();
+    let mut image = BgraImage::new(size)?;
+    let interval = Duration::from_micros(1_000_000 / u64::from(fps));
     let end = Instant::now() + Duration::from_secs(u64::from(options.seconds));
     let mut frame_id = 0u64;
     let mut next = Instant::now();
-    measure.codec = Some(CodecKind::Tiles);
+    measure.codec = Some(choice.codec);
     while Instant::now() < end {
         frame_id += 1;
         let capture_ts_us = now_us();
         render(frame_id, &mut image)?;
-        let encoded = encoder.encode(&image, frame_id == 1, 0)?;
+        let encoded = encoder.encode(&image, frame_id == 1, target_bps)?;
         let count = encoded.records.len();
         for (index, payload) in encoded.records.into_iter().enumerate() {
             let mut flags = if encoded.keyframe { FLAG_KEYFRAME } else { 0 };

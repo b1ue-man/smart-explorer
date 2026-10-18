@@ -226,7 +226,14 @@ winreg = "0.52"
 windows = { version = "0.58", features = [
     "implement",
     "Win32_Foundation",
+    # Screen host (SCR-M3): Media Foundation H.264 encoder and decoder,
+    # loaded at run time; D3D11/DXGI types appear in its MFT attributes.
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",
+    "Win32_Media_MediaFoundation",
     "Win32_Security",
     # se Desktop jump list: PKEY_Title for the device entries.
     "Win32_Storage_EnhancedStorage",
@@ -243,6 +250,8 @@ windows = { version = "0.58", features = [
     "Win32_System_SystemServices",
     # Remote virtual files: COM-safe event waits and the worker's thread id.
     "Win32_System_Threading",
+    # Screen host (SCR-M3): PROPVARIANT values of the Media Foundation codecs.
+    "Win32_System_Variant",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
     "Win32_UI_Shell_Common",
@@ -258,6 +267,15 @@ windows = { version = "0.58", features = [
     "Storage_Search",
     "System",
 ] }
+
+# SCR-M3: OpenH264 as the user's Cisco download (BSD-2-Clause; with
+# `libloading` no C code; pulls openh264-sys2 BSD-2-Clause and wide), the
+# .bz2 unpacker (MIT OR Apache-2.0, pure-Rust libbz2-rs-sys: bzip2-1.0.6)
+# and run-time loading of mfplat.dll (libloading, ISC). Rust >= 1.85.
+[target.'cfg(any(windows, target_os = "linux"))'.dependencies]
+openh264 = { version = "0.9.9", default-features = false, features = ["libloading"] }
+bzip2 = "0.6"
+libloading = "0.8"
 
 # Desktop GUI and OS recycle bin. Android builds only the core library behind
 # the Kotlin UI: egui/winit have no place in a Compose app, and `trash` 5 has no

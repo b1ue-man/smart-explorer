@@ -85,7 +85,11 @@ impl NodeScreen {
             (DesktopIndicator::new(&registry), record)
         };
         Self {
-            backend: RwLock::new(Arc::new(SyntheticBackend)),
+            backend: RwLock::new(if cfg!(test) {
+                Arc::new(SyntheticBackend) as Arc<dyn ScreenHostBackend>
+            } else {
+                crate::screen::os::host_backend()
+            }),
             indicator: RwLock::new(Arc::new(indicator)),
             broker: RwLock::new(Arc::new(broker)),
             audit: RwLock::new(audit),

@@ -10,3 +10,6 @@ pub(crate) use screen_indicator_ui::run_screen_indicator;
 // SCR-M2: tab 9 „Bildschirm“ of „Geräte & Freigaben“.
 #[path = "core/share_screen_tab_ui.rs"]
 pub(crate) mod share_screen_tab_ui;
+// SCR-M3: section „Kodierung“ of the screen tab (codec list, OpenH264).
+#[path = "core/share_screen_codec_ui.rs"]
+pub(crate) mod share_screen_codec_ui;
