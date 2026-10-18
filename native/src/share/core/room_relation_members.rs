@@ -121,7 +121,7 @@ impl RoomProfile {
             }
             if member.blocked != blocked
                 || member.relation.admission != RoomMemberAdmission::Admitted
-                || member.exec.enabled && blocked
+                || member.exec.grants_any() && blocked
             {
                 member.blocked = blocked;
                 member.relation.admission = RoomMemberAdmission::Admitted;
@@ -142,7 +142,7 @@ impl RoomProfile {
         };
         member.blocked = false;
         member.relation.admission = RoomMemberAdmission::Admitted;
-        if member.exec.enabled {
+        if member.exec.grants_any() {
             member.exec.disable_without_decision(member.exec.changed_at);
         }
         true

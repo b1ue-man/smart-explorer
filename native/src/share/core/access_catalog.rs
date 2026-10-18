@@ -59,9 +59,10 @@ pub struct CapabilityEntry {
     pub uses_account: bool,
 }
 
-/// The rows of this host, Exec first.
-pub fn capability_catalog(_facts: &HostFacts) -> Vec<CapabilityEntry> {
-    vec![
+/// The rows of this host, Exec first, then the screen rows of S4 (only with
+/// a graphical session).
+pub fn capability_catalog(facts: &HostFacts) -> Vec<CapabilityEntry> {
+    let mut entries = vec![
         CapabilityEntry {
             capability: Capability::ExecCommands,
             label: "Befehle",
@@ -78,5 +79,7 @@ pub fn capability_catalog(_facts: &HostFacts) -> Vec<CapabilityEntry> {
             bridge_key: "execTerminal",
             uses_account: true,
         },
-    ]
+    ];
+    crate::screen::core::catalog_entries::register_screen_entries(&mut entries, facts);
+    entries
 }

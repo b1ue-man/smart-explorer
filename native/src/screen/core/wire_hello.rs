@@ -31,8 +31,11 @@ pub(crate) const SCREEN_CAPABILITY: &str = "screen";
 pub(crate) const MAX_DISPLAY_SIDE: u32 = 16_384;
 
 /// Limits a host names in `HELLO_OK` (SCR-M8).
+#[allow(dead_code)] // Staged: the Android host of SCR-M8 names them.
 pub(crate) const LIMIT_CONSENT_EACH_SESSION: &str = "consent_each_session";
+#[allow(dead_code)] // Staged: the Android host of SCR-M8 names them.
 pub(crate) const LIMIT_NO_KEY_EVENTS: &str = "no_key_events";
+#[allow(dead_code)] // Staged: the Android host of SCR-M8 names them.
 pub(crate) const LIMIT_STILL_MAX_3_PER_SECOND: &str = "still_max_3_per_second";
 
 /// What the viewer asks for; decides the capabilities the host checks.
@@ -255,12 +258,21 @@ pub(crate) enum ScreenErrorCode {
     ControlBusy,
     ControlUnavailable,
     HostShutdown,
-    /// Viewer side only: the device does not know the screen ALPN.
+    /// The device does not know the screen ALPN (viewer side, `0x178`), or a
+    /// hello names a protocol version the other side does not speak.
     ScreenUnsupported,
+    /// Nobody on the host can be asked, or no reservation is free (S1 C5).
+    ApprovalUnavailable,
+    /// The host's capture failed during the session (`ERROR`).
+    CaptureFailed,
+    /// The host's encoder failed or none fits (`ERROR`, `HELLO_ERROR`).
+    EncoderFailed,
+    /// The host runs its most sessions (8, of one device 4).
+    SessionLimit,
 }
 
 impl ScreenErrorCode {
-    pub(crate) const ALL: [Self; 10] = [
+    pub(crate) const ALL: [Self; 14] = [
         Self::PermissionDenied,
         Self::RightNotGranted,
         Self::ApprovalDenied,
@@ -271,6 +283,10 @@ impl ScreenErrorCode {
         Self::ControlUnavailable,
         Self::HostShutdown,
         Self::ScreenUnsupported,
+        Self::ApprovalUnavailable,
+        Self::CaptureFailed,
+        Self::EncoderFailed,
+        Self::SessionLimit,
     ];
 
     pub(crate) fn key(self) -> &'static str {
@@ -285,6 +301,10 @@ impl ScreenErrorCode {
             Self::ControlUnavailable => "control_unavailable",
             Self::HostShutdown => "host_shutdown",
             Self::ScreenUnsupported => "screen_unsupported",
+            Self::ApprovalUnavailable => "approval_unavailable",
+            Self::CaptureFailed => "capture_failed",
+            Self::EncoderFailed => "encoder_failed",
+            Self::SessionLimit => "session_limit",
         }
     }
 
@@ -305,6 +325,7 @@ impl ScreenHelloError {
         }
     }
 
+    #[allow(dead_code)] // Staged: the desktop viewer of SCR-M7 shows known codes.
     pub(crate) fn known_code(&self) -> Option<ScreenErrorCode> {
         ScreenErrorCode::from_key(&self.code)
     }
@@ -345,6 +366,10 @@ pub(crate) async fn send_client_hello<W: AsyncWrite + Unpin>(
     send_json(writer, CLIENT_HELLO, hello).await
 }
 
+// The host reads the hello with `recv_json` (`share/core/node_screen.rs`), so
+// that an unknown version gets `screen_unsupported` before the field checks;
+// the wire tests use this one.
+#[allow(dead_code)]
 pub(crate) async fn recv_client_hello<R: AsyncRead + Unpin>(
     reader: &mut R,
 ) -> io::Result<ScreenClientHello> {

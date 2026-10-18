@@ -1,7 +1,7 @@
 //! Pages of the window „Geräte & Freigaben“: the tab order and the detail
 //! page shown inside a tab. Tab numbers 0 to 5 keep their meaning for the
 //! callers that jump to a tab (sidebar, GUI design harness, share events);
-//! the pages added in 2026-10 take 6 to 8. The detail page lives in egui
+//! the pages added in 2026-10 take 6 to 8, the screen sessions (S4) 9. The detail page lives in egui
 //! memory (per window, not saved), so the App state keeps its fields. Other
 //! parts of the app open a device or room page with
 //! `App::open_share_contact_page` and `App::open_share_room_page` (se
@@ -19,14 +19,17 @@ pub(super) const TAB_TRASH: usize = 5;
 pub(super) const TAB_REQUESTS: usize = 6;
 pub(super) const TAB_EXEC: usize = 7;
 pub(super) const TAB_THIS_DEVICE: usize = 8;
+/// The screen sessions this device hosts (`share_screen_tab_ui.rs`).
+pub(super) const TAB_SCREEN: usize = 9;
 
 /// Display order: what is used most first, maintenance last.
-pub(super) const TAB_ORDER: [usize; 9] = [
+pub(super) const TAB_ORDER: [usize; 10] = [
     TAB_DEVICES,
     TAB_REQUESTS,
     TAB_ROOMS,
     TAB_EXPORTS,
     TAB_EXEC,
+    TAB_SCREEN,
     TAB_THIS_DEVICE,
     TAB_NETWORK,
     TAB_DIAGNOSTICS,
@@ -43,6 +46,7 @@ pub(super) fn tab_label(tab: usize) -> &'static str {
         TAB_REQUESTS => "Anfragen",
         TAB_EXEC => "Befehle",
         TAB_THIS_DEVICE => "Dieses Gerät",
+        TAB_SCREEN => "Bildschirm",
         _ => "Diagnose",
     }
 }
@@ -179,9 +183,10 @@ mod tests {
         assert_eq!(tab_label(3), "Diagnose");
         assert_eq!(tab_label(4), "Netzwerk");
         assert_eq!(tab_label(5), "Papierkorb");
+        assert_eq!(tab_label(TAB_SCREEN), "Bildschirm");
         let mut tabs = TAB_ORDER.to_vec();
         tabs.sort_unstable();
-        assert_eq!(tabs, (0..9).collect::<Vec<_>>());
+        assert_eq!(tabs, (0..10).collect::<Vec<_>>());
         let mut labels = TAB_ORDER
             .iter()
             .map(|tab| tab_label(*tab))
