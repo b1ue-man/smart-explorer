@@ -373,8 +373,13 @@ fn require_owned_supervisor_job(process: &ContainedExec) -> io::Result<()> {
         .process
         .as_ref()
         .ok_or_else(|| io::Error::other("suspended exec supervisor handle is missing"))?;
+    let super::Containment::Own(job) = &process.control.containment else {
+        return Err(io::Error::other(
+            "the self-test supervisor runs as the worker's own account",
+        ));
+    };
     let mut assigned = 0;
-    if unsafe { IsProcessInJob(supervisor.raw(), process.control.job.raw(), &mut assigned) } == 0 {
+    if unsafe { IsProcessInJob(supervisor.raw(), job.raw(), &mut assigned) } == 0 {
         let error = io::Error::last_os_error();
         return Err(terminate_process_after_error(
             supervisor,

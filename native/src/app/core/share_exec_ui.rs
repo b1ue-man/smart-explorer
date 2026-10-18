@@ -1,7 +1,8 @@
 //! Tab „Befehle“ and the section „Zugriff“ of a device (PRM-M9): the open
 //! requests on top, one line per device with its access, „Ändern…“ and
-//! „Einstellungen“, then the jobs and this host's access log; the card of one
-//! device with its access, „Ändern…“ (the access dialog,
+//! „Einstellungen“, then the jobs, this host's access log and „Konten
+//! dieses Geräts“ (`share_access_accounts_ui.rs`); the card of one device
+//! with its access, „Ändern…“ (the access dialog,
 //! `share_access_dialog_ui.rs`) and „Zugriff entziehen“. Every change goes
 //! to the worker through `Access::MutateGrant` at the revision shown.
 use super::App;
@@ -13,6 +14,8 @@ use eframe::egui::{self, RichText};
 mod access_dialog;
 #[path = "share_access_room_ui.rs"]
 mod access_room;
+#[path = "share_access_accounts_ui.rs"]
+mod accounts_ui;
 #[path = "share_access_approvals_ui.rs"]
 mod approvals_ui;
 #[path = "share_exec_log_ui.rs"]
@@ -88,6 +91,8 @@ pub(in crate::app) fn ui_exec_overview(app: &mut App, ui: &mut egui::Ui) -> Opti
     crate::app::share_exec_jobs_ui::ui_exec_jobs(ui);
     ui.separator();
     log_ui::ui_exec_log(ui);
+    ui.separator();
+    accounts_ui::ui_accounts(ui);
     open
 }
 
@@ -396,6 +401,9 @@ mod access_lists_tests;
 #[cfg(test)]
 #[path = "share_access_ui_tests.rs"]
 mod access_ui_tests;
+#[cfg(test)]
+#[path = "share_access_accounts_ui_tests.rs"]
+mod accounts_ui_tests;
 #[cfg(test)]
 #[path = "share_exec_ui_tests.rs"]
 mod tests;

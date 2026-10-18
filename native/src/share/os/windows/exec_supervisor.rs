@@ -8,10 +8,12 @@ use std::time::Duration;
 
 use windows_sys::Win32::Foundation::{BOOL, FALSE, TRUE};
 use windows_sys::Win32::System::Console::{SetConsoleCtrlHandler, CTRL_BREAK_EVENT, CTRL_C_EVENT};
+use windows_sys::Win32::System::WindowsProgramming::GetUserNameW;
 
 use super::exec_conpty::{self, Conpty, Program};
 use crate::share::exec_supervisor_protocol::{
-    recv_command, send_event, SupervisorCommand, SupervisorEvent, SupervisorExit, SupervisorStart,
+    environment_for, recv_command, send_event, SupervisorCommand, SupervisorEvent, SupervisorExit,
+    SupervisorStart,
 };
 use crate::share::exec_types::ExecCommand;
 
@@ -26,6 +28,13 @@ pub(super) fn run() -> io::Result<()> {
     };
     start.request.validate()?;
     let output = Arc::new(Mutex::new(std::io::stdout()));
+    let start = match for_account(start) {
+        Ok(start) => start,
+        Err(error) => {
+            let _ = send_locked(&output, SupervisorEvent::Error(error.to_string()));
+            return Ok(());
+        }
+    };
     if start.request.terminal.is_some() {
         return run_terminal(&start, input, output);
     }
@@ -100,6 +109,42 @@ pub(super) fn run() -> io::Result<()> {
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
     }
+}
+
+/// A start for another account (PRM-M7) reaches the supervisor as the
+/// relay of the account service, which runs it as that account with the
+/// account's own environment (`CreateEnvironmentBlock`): the job gets this
+/// environment with the caller's variables, not the worker's. A relay of
+/// another account than the start names refuses the start. A start of the
+/// worker's own account is unchanged.
+fn for_account(mut start: SupervisorStart) -> io::Result<SupervisorStart> {
+    let Some(account) = &start.account else {
+        return Ok(start);
+    };
+    let running = user_name()?;
+    if !running.eq_ignore_ascii_case(&account.name) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "this relay runs as {running}, not as the job's account {}",
+                account.name
+            ),
+        ));
+    }
+    start.environment = environment_for(&start.request);
+    Ok(start)
+}
+
+/// The account this process runs as.
+fn user_name() -> io::Result<String> {
+    let mut buffer = [0u16; 257];
+    let mut size = buffer.len() as u32;
+    if unsafe { GetUserNameW(buffer.as_mut_ptr(), &mut size) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // `size` counts the terminating NUL.
+    let length = (size as usize).saturating_sub(1).min(buffer.len());
+    Ok(String::from_utf16_lossy(&buffer[..length]))
 }
 
 /// Terminal start: the login shell runs in a pseudoconsole (ConPTY). Its

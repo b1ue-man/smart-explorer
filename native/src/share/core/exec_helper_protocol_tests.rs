@@ -43,6 +43,21 @@ fn helper_protocol_frames_follow_contract_d27() {
         },
         json!({"start": {"account": "se-remote", "cwd": null}}),
     );
+    // Windows names the worker's two pipes instead of passing a descriptor.
+    round_trip(
+        &HelperRequest::Start {
+            account: "se-remote".into(),
+            cwd: None,
+            pipe_in: Some(r"\\.\pipe\SmartExplorerExec-0a-in".into()),
+            pipe_out: Some(r"\\.\pipe\SmartExplorerExec-0a-out".into()),
+        },
+        json!({"start": {
+            "account": "se-remote",
+            "cwd": null,
+            "pipe_in": r"\\.\pipe\SmartExplorerExec-0a-in",
+            "pipe_out": r"\\.\pipe\SmartExplorerExec-0a-out",
+        }}),
+    );
     round_trip(
         &HelperRequest::Stop {
             session: "smart-explorer-exec-0a.service".into(),
@@ -81,6 +96,11 @@ fn helper_protocol_frames_follow_contract_d27() {
     };
     assert_eq!(code, HelperErrorCode::Other);
     assert_eq!(code.wire_code(), ACCOUNT_UNAVAILABLE);
+    // The reason of a failed S4U probe (Windows) has its own code.
+    assert_eq!(
+        serde_json::to_value(AccountReason::LogonRefused).unwrap(),
+        json!("logon_refused")
+    );
 }
 
 #[test]

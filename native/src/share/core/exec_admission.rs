@@ -3,13 +3,20 @@
 //! start is then checked against the grant of that moment for the
 //! capability it needs (C1, D.2.2). A capability on `ask` waits for the host
 //! user first (PRM-M3, `access_approval_exec.rs`), and open confirmations
-//! count against the Exec limits with the running jobs (C5).
-use super::super::access_audit::{self, AccessEntry};
+//! count against the Exec limits with the running jobs (C5). A run-as
+//! account the host refuses is answered with the code the platform gave the
+//! refusal (D.2.2) and logged as `helper_refused`.
+use super::super::access_audit::{self, AccessEntry, AccessEvent, AccessKind};
 use super::super::auth_penalty::PenaltyKind;
 use super::super::consent_launch;
 use super::super::exec_access_view::{host_access_features, ExecAccessView, HelloOkWithAccess};
 use super::super::exec_audit::{self, AuditEvent, StartAccess};
-use super::super::exec_client_messages::{permission_denied, PERMISSION_DENIED};
+use super::super::exec_auth::AuthorizedExecPeer;
+use super::super::exec_client_messages::{
+    account_helper_unavailable, account_not_allowed, permission_denied, ACCOUNT_HELPER_UNAVAILABLE,
+    ACCOUNT_NOT_ALLOWED, PERMISSION_DENIED,
+};
+use super::super::exec_helper_protocol::ACCOUNT_UNAVAILABLE;
 use super::super::exec_policy::ExecGrant;
 use super::super::exec_supervisor_protocol::RunAsAccount;
 use super::super::exec_terminal::{host_denial, host_features};
@@ -22,7 +29,7 @@ use super::*;
 mod approval;
 #[cfg(test)]
 pub(in crate::share) use approval::start_grant;
-use approval::{decide_start, limit_error, Refusal, StartApproval};
+use approval::{decide_start, limit_error, ApprovedStart, Refusal, StartApproval};
 
 /// How often the grant is read again while the host user decides.
 const GRANT_POLL: Duration = Duration::from_secs(1);
@@ -231,10 +238,16 @@ pub(in crate::share) async fn handle_connection(
     )
     .await?;
     let checked = match decided {
-        Ok(approved) => grant_launch(&approved.decided.grant, &start, &provider)
-            .await
-            .map(|launch| (approved, launch))
-            .map_err(Refusal::start),
+        Ok(approved) => match grant_launch(&approved.decided.grant, &start, &provider, &host).await
+        {
+            Ok(launch) => Ok((approved, launch)),
+            Err(refusal) => {
+                if refusal.account {
+                    record_helper_refusal(&authorized, &approved, &start, &refusal.error.message);
+                }
+                Err(Refusal::start(refusal.error))
+            }
+        },
         Err(refusal) => Err(refusal),
     };
     let (approved, launch) = match checked {
@@ -365,15 +378,24 @@ struct GrantLaunch {
     program: Option<std::path::PathBuf>,
 }
 
+/// Why the grant refused a start before any job process exists.
+struct LaunchRefusal {
+    error: ExecWireError,
+    /// This host refused the grant's run-as account (`helper_refused`).
+    account: bool,
+}
+
 /// Applies the grant to `start`: its program list and environment rule may
 /// refuse it (file system lookups, so on the blocking pool), and its run-as
-/// account is resolved (user database lookups block as well). Both are host
-/// decisions made before any job process exists.
+/// account is resolved (user database lookups and the account service block
+/// as well). Both are host decisions made before any job process exists.
+/// `host` names this device in the refusal texts (C6).
 async fn grant_launch(
     grant: &ExecGrant,
     start: &ExecStart,
     provider: &ExecProviderStatus,
-) -> Result<GrantLaunch, ExecWireError> {
+    host: &str,
+) -> Result<GrantLaunch, LaunchRefusal> {
     let checked_grant = grant.clone();
     let checked = start.clone();
     let program = tokio::task::spawn_blocking(move || {
@@ -387,9 +409,12 @@ async fn grant_launch(
     let resolved =
         tokio::task::spawn_blocking(move || super::super::exec_platform::resolve_run_as(&run_as))
             .await
-            .map_err(|error| ExecWireError {
-                code: "account_unavailable".into(),
-                message: error.to_string(),
+            .map_err(|error| LaunchRefusal {
+                error: ExecWireError {
+                    code: ACCOUNT_UNAVAILABLE.into(),
+                    message: error.to_string(),
+                },
+                account: false,
             })?;
     match resolved {
         Ok(Some(account)) => Ok(GrantLaunch {
@@ -402,16 +427,58 @@ async fn grant_launch(
             account_label: format!("standard ({})", provider.user_label),
             program,
         }),
-        Err(error) => Err(ExecWireError {
-            code: "account_unavailable".into(),
-            message: format!("run-as account {name:?} of this device: {error}"),
+        Err(error) => Err(LaunchRefusal {
+            error: account_refusal(&error, &name, host),
+            account: true,
         }),
     }
 }
 
-fn refused(message: impl Into<String>) -> ExecWireError {
+/// The refusal of a run-as account: the code the platform gave it
+/// (`account_not_allowed`, `account_helper_unavailable`, otherwise
+/// `account_unavailable`) with the text and next step of C6.
+fn account_refusal(error: &io::Error, name: &str, host: &str) -> ExecWireError {
+    let code =
+        super::super::exec_platform::account_error_code(error).unwrap_or(ACCOUNT_UNAVAILABLE);
+    let message = match code {
+        ACCOUNT_NOT_ALLOWED => account_not_allowed(host, name),
+        ACCOUNT_HELPER_UNAVAILABLE => account_helper_unavailable(host, name, &error.to_string()),
+        _ => format!("run-as account {name:?} of this device: {error}"),
+    };
     ExecWireError {
-        code: "program_not_permitted".into(),
-        message: message.into(),
+        code: code.into(),
+        message,
+    }
+}
+
+/// `helper_refused` (C5): this host refused the run-as account of a start.
+fn record_helper_refusal(
+    authorized: &AuthorizedExecPeer,
+    approved: &ApprovedStart,
+    start: &ExecStart,
+    reason: &str,
+) {
+    let access = approved.decided.grant.access_grant();
+    let principal = ProvenPrincipal::from(&authorized.principal);
+    access_audit::record_access(AccessEntry {
+        kind: AccessKind::Exec { start: Some(start) },
+        principal: &principal,
+        outcome: Some(AccessEvent::HelperRefused),
+        capability: approved.decided.capability,
+        approval: Some(approved.approval),
+        approval_id: None,
+        account_profile: Some(access.account.key()),
+        account: access.account.account_name(),
+        reason: Some(reason),
+    });
+}
+
+fn refused(message: impl Into<String>) -> LaunchRefusal {
+    LaunchRefusal {
+        error: ExecWireError {
+            code: "program_not_permitted".into(),
+            message: message.into(),
+        },
+        account: false,
     }
 }

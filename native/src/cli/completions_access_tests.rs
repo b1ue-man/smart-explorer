@@ -7,8 +7,8 @@ use clap::CommandFactory;
 use clap_complete::CompletionCandidate;
 
 use super::{
-    access_state_label, account_candidates_from, approval_candidates_from, room_candidates_from,
-    target_candidates,
+    access_state_label, account_candidates_from, account_candidates_from_choices,
+    approval_candidates_from, room_candidates_from, target_candidates,
 };
 use crate::share::access_approval::{ApprovalId, ApprovalView};
 use crate::share::access_grant::{
@@ -197,4 +197,26 @@ fn perm_task_completions_access() {
             "{option}: {options:?}"
         );
     }
+}
+
+/// With a running worker `--as` offers exactly the worker's account list
+/// (U24 handover from U07), with the reason of an account that cannot be
+/// chosen.
+#[test]
+fn completions_access_as_reads_the_worker_accounts() {
+    use crate::share::exec_helper_protocol::{AccountChoice, AccountChoiceProfile, AccountReason};
+    let mut remote = AccountChoice::other(AccountChoiceProfile::Remote, "se-remote");
+    remote.refuse(
+        AccountReason::HelperNotInstalled,
+        "the account service is not set up on this PC".into(),
+        None,
+    );
+    let deploy = AccountChoice::other(AccountChoiceProfile::Account, "deploy");
+    let choices = [AccountChoice::own("alice"), remote, deploy];
+    let accounts = account_candidates_from_choices(&choices);
+    assert_eq!(values(&accounts), ["own", "remote", "account:deploy"]);
+    let helps = helps(&accounts);
+    assert_eq!(helps[0], "my account (alice)");
+    assert!(helps[1].ends_with("not available: the account service is not set up on this PC"));
+    assert_eq!(helps[2], "the local account deploy");
 }

@@ -11,9 +11,10 @@
 //! `se share exec accounts --json`, IPC `Accounts`, bridge
 //! `accountChoices`) and the error a refused account start hands to the
 //! Exec admission.
-// Only the Linux helper reads every item until the Windows service (PRM-M7)
-// uses the protocol too; the lint stays active on Linux.
-#![cfg_attr(not(target_os = "linux"), allow(dead_code))]
+// Android has no account helper (C4) and reads only the account choices and
+// the refusal codes; the lint stays active on Linux and Windows, whose
+// helpers (PRM-M6, PRM-M7) use every item.
+#![cfg_attr(target_os = "android", allow(dead_code))]
 
 use std::fmt;
 use std::io::{self, Read, Write};
@@ -205,7 +206,8 @@ pub enum AccountChoiceProfile {
 pub enum AccountReason {
     /// There is no such local account.
     NotFound,
-    /// Remote commands never run as root through another account.
+    /// Remote commands never run as root (Linux), nor as an administrator
+    /// or system account (Windows), through another account.
     Root,
     /// The account service does not list the account for this user.
     NotAllowed,
@@ -217,6 +219,9 @@ pub enum AccountReason {
     Expired,
     /// Warning only: the account's login shell runs no commands.
     NoLoginShell,
+    /// Windows refused the logon without password (S4U) of the account's
+    /// probe; `reason` names the Windows error (C2, C6).
+    LogonRefused,
 }
 
 /// One entry of "Ausführen als" (D.2.4).

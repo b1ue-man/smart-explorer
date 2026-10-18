@@ -6,7 +6,7 @@
 //! waiting start is released; any failure leaves the request open. The
 //! notice of an outgoing start (D.2.2) goes out here too: the CLI and MCP read
 //! it while their start waits for the other device's user.
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::io;
 use std::net::TcpStream;
 use std::sync::{Arc, Mutex, PoisonError, Weak};
@@ -19,8 +19,9 @@ use crate::daemon::ipc_protocol::{
     AccessIpcRequest, AccountChoice, ExecNoticeView, IpcRequest, IpcResponse,
 };
 use crate::share::access_approval::{ApprovalDecision, ApprovalId, ApprovalService, ApprovalView};
-use crate::share::access_catalog::{HelperState, HelperStatus};
+use crate::share::access_catalog::HelperStatus;
 use crate::share::access_grant::{AccessGrantChange, AccessGrantView, CapabilityDecision};
+use crate::share::exec_helper_protocol::AccountChoices;
 use crate::share::{ExecGrantTarget, ExecId};
 
 /// How long a client waits for an answer (`always` writes the journal).
@@ -40,7 +41,7 @@ impl ShareHost {
     ) -> io::Result<()> {
         let response = match self.access_reply(request) {
             Ok(reply) => IpcResponse::Access(reply),
-            Err(msg) => IpcResponse::Err { msg },
+            Err(msg) => IpcResponse::Err { msg, code: None },
         };
         write_response(stream, &response)
     }
@@ -123,37 +124,13 @@ impl ShareHost {
         Ok(())
     }
 
-    /// Z1: the own account and, on a host that switches accounts (Linux
-    /// root worker), the accounts its grants name; the account helper of
-    /// PRM-M6/M7 adds the rest.
+    /// "Ausführen als" of this worker (PRM-M6, PRM-M7, D.2.4): the state of
+    /// its account helper and every account choice. The IPC client has a
+    /// thread of its own (`ipc_listener.rs`), so asking the account helper
+    /// here blocks no other request and no runtime.
     fn account_list(&self) -> AccessIpcReply {
-        let provider = crate::share::exec_provider_status();
-        let mut choices = vec![AccountChoice::own(&provider.user_label)];
-        if crate::share::exec_run_as_supported() {
-            let named = self.granted_accounts();
-            choices.extend(named.iter().map(String::as_str).map(AccountChoice::account));
-        }
-        let state = if cfg!(target_os = "android") {
-            HelperState::Unavailable
-        } else {
-            HelperState::NotNeeded
-        };
-        let helper = HelperStatus {
-            state,
-            version: None,
-            detail: None,
-        };
+        let AccountChoices { helper, choices } = crate::share::exec_account_choices();
         AccessIpcReply::AccountList { helper, choices }
-    }
-
-    fn granted_accounts(&self) -> BTreeSet<String> {
-        let Ok(state) = self.state.lock() else {
-            return BTreeSet::new();
-        };
-        crate::share::exec_target_views(&state.profiles)
-            .iter()
-            .filter_map(|view| view.run_as.account_name().map(str::to_string))
-            .collect()
     }
 
     fn exec_notice(&self, exec_id: &ExecId) -> Option<ExecNoticeView> {
@@ -185,7 +162,7 @@ fn request(request: AccessIpcRequest) -> Result<AccessIpcReply, String> {
         .map_err(|error| error.to_string())?;
     match read_response(&mut stream).map_err(|error| error.to_string())? {
         IpcResponse::Access(reply) => Ok(reply),
-        IpcResponse::Err { msg } => Err(msg),
+        IpcResponse::Err { msg, .. } => Err(msg),
         _ => Err(unexpected()),
     }
 }
@@ -256,9 +233,14 @@ pub(crate) fn mutate_access_grant(
     }
 }
 
-/// The account helper and the accounts a grant can name here.
+/// The account helper and the accounts a grant can name here, as the
+/// running background worker sees them; never starts one. Without a worker
+/// the caller asks `crate::share::exec_account_choices()` itself or shows
+/// what it knows (completion, the access dialog).
 pub(crate) fn access_accounts() -> Result<(HelperStatus, Vec<AccountChoice>), String> {
-    crate::daemon::ensure_worker_ready()?;
+    if crate::daemon::ipc_storage::read_ipc_addr().is_none() {
+        return Err("Background-Worker läuft nicht".into());
+    }
     match request(AccessIpcRequest::Accounts)? {
         AccessIpcReply::AccountList { helper, choices } => Ok((helper, choices)),
         _ => Err(unexpected()),

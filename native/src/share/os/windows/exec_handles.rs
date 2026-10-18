@@ -72,6 +72,10 @@ impl Drop for AttributeList {
 
 pub(super) struct OwnedHandle(HANDLE);
 
+// SAFETY: a kernel handle belongs to the process, not to a thread; the
+// account service hands pipe and Job handles to the thread that serves them.
+unsafe impl Send for OwnedHandle {}
+
 impl OwnedHandle {
     pub(super) fn new(handle: HANDLE) -> io::Result<Self> {
         if handle.is_null() {

@@ -96,15 +96,16 @@ impl App {
     }
 }
 
-/// Page „Befehle“: the overview of every Exec target, or one target's card.
+/// Page „Befehle“: the overview of every Exec target, or one target's card
+/// „Zugriff eines Geräts“ (the section „ZUGRIFF“ of the device page).
 fn exec_page(app: &mut App, ui: &mut egui::Ui) {
     if let pages_ui::SharePage::ExecTarget(key) = pages_ui::current(ui, pages_ui::TAB_EXEC) {
-        if pages_ui::back_row(ui, "Befehle eines Geraets") {
+        if pages_ui::back_row(ui, "Zugriff eines Geräts") {
             pages_ui::back(ui);
             return;
         }
         if !crate::app::share_exec_ui::ui_exec_target(app, ui, &key) {
-            ui.label("Dieses Geraet ist nicht mehr freigegeben oder hat eine neue Identitaet.");
+            ui.label("Dieses Gerät ist nicht mehr freigegeben oder hat eine neue Identität.");
         }
         return;
     }
