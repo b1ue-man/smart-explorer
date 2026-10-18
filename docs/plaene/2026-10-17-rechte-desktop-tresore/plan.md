@@ -136,7 +136,7 @@ Modellbeleg (Transkripte, 2026-10-17 14:20): alle Bestandsleser antworten aussch
 | S3 | Umsetzung U05 (Phase P2, vorgezogen; keine Dateiüberschneidung mit U02 und R1) | opus, Standardaufwand der Sitzung (max) | Code laut D1 | fertig (Commit 4e07b200); Quellen von aes-siv 0.8.0, aes-kw 0.3.1, siv-mode-Prüfvektoren (MIT) und zwei CryptoLib-2.3.0-Testdateien aus dem Netz gelesen, vom Hauptagenten als nötig für C1.2 bestätigt |
 | S3 | Umsetzung U08 (VLT-M2, VLT-M3) | opus, Standardaufwand der Sitzung (max) | Code laut D1 | fertig (Commit e1f1c819); Abweichung von C2.6: Stufen liegen immer im Inhaltsverzeichnis des Elternordners (deterministische Abbildung), vom Hauptagenten angenommen |
 
-Wochenlimit (Nutzer 2026-10-17): Vorerst gilt eine Obergrenze für das Wochenlimit. Ein neues Paket startet nur, wenn die Hochrechnung am Ende seines Laufs unter der Obergrenze bleibt. Ein bei Erreichen der Grenze laufender Agent wird nicht abgebrochen, danach startet nichts Neues.
+Wochenlimit (Nutzer 2026-10-17, berichtigt 2026-10-18): Vorerst gilt eine Obergrenze für das Wochenlimit. Sie ist eine Startgrenze: Bis zu ihrem Erreichen starten weitere Pakete, ohne Vorabstopp wegen einer Hochrechnung. Ab Erreichen startet nichts Neues; ein dann laufender Agent wird nicht abgebrochen. Vor der harten Grenze des Kontos erhalten laufende Agenten einen Dokumentationsauftrag (`stand/<Paket>.md`), weil ein Abbruch durch das Konto Verlauf kosten kann.
 
 Sitzungslimit (Nutzer 2026-10-17): Ab der Nachricht zum nahenden Sitzungslimit laufen höchstens zwei Agenten gleichzeitig; jeder weitere Schritt startet erst, wenn ein laufender Agent fertig ist. Der Hauptagent fragt den Nutzungsstand alle 5 Minuten ab und setzt nach der Rücksetzung des Fensters einen Weckauftrag, falls die Sitzung am Limit abbricht.
 
@@ -159,6 +159,11 @@ Sitzungslimit (Nutzer 2026-10-17): Ab der Nachricht zum nahenden Sitzungslimit l
   3. dann U22, U23, U25, U27, U28, U31, U35, U37, U38 und U40;
   4. zuletzt U36, U41, U42 und U43;
   5. dann die Suite.
+
+**Wiederaufnahme (2026-10-18 07:33 UTC, nach der Berichtigung der Obergrenze durch den Nutzer):**
+- Laufend: U13, U14, U20 und U32 (opus, Standardaufwand, Modell aus den Transkripten belegt). Die Dateibereiche stehen im Arbeitsverzeichnis des Hauptagenten (`running-areas.md`); jeder Agent führt `stand/<Paket>.md` fortlaufend.
+- U17 wartet auf U14: gemeinsame Dateien unter `mount/` und `daemon/os/shared/mount_*` sowie Zwangsreihenfolge W3 (`PrepareLock` vor `ChildBackend`/`DeviceWatch`). U32 ersetzt in der Startreihenfolge U17.
+- Danach startbar nach den Strangabhängigkeiten: U16 (nach U13), U17 (nach U14), U26 (nach U20), U34 (nach U17 und U32), U27, U35 und U37 (Abhängigkeiten erfüllt; U27 und U35 teilen die Android-Hub-Dateien aus D2.3 und laufen deshalb nicht gleichzeitig).
 
 ## Entscheidungen des Hauptagenten zu offenen Strangpunkten
 
