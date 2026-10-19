@@ -261,7 +261,7 @@ pub(crate) enum ScreenErrorCode {
     /// The device does not know the screen ALPN (viewer side, `0x178`), or a
     /// hello names a protocol version the other side does not speak.
     ScreenUnsupported,
-    /// Nobody on the host can be asked, or no reservation is free (S1 C5).
+    /// Nobody on the host can be asked (S1 C5).
     ApprovalUnavailable,
     /// The host's capture failed during the session (`ERROR`).
     CaptureFailed,

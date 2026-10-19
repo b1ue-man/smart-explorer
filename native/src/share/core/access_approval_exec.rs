@@ -218,9 +218,7 @@ async fn ask<W: AsyncWrite + Unpin>(
     let capability = asked.capability;
     let view = ExecAccessView::of(&asked.grant, approval.own_label);
     let summary = summary(approval, &principal, &asked, &view);
-    let mut ticket = approval
-        .service
-        .open_request(&principal, capability, summary);
+    let mut ticket = approval.service.request(&principal, capability, summary);
     let log = Log {
         approval,
         principal: &principal,

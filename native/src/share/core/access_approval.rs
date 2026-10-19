@@ -4,9 +4,9 @@
 //! „Diesmal erlauben“ (`once`), „Immer erlauben“ (`always`) or „Ablehnen“
 //! (`deny`), or until the requester withdraws it. There is no time limit
 //! (C5, R-c). A request nobody can be shown, a withdrawn or narrowed grant and
-//! a lost requester end it as refused, never as allowed. Open requests hold
-//! no reservation and are not counted: neither a device nor the host is
-//! limited in how many requests are open or Exec jobs run at once (R15).
+//! a lost requester end it as refused, never as allowed. Neither a device
+//! nor the host is limited in how many requests are open or Exec jobs run
+//! at once (R15).
 //!
 //! How the host user is asked is the platform's `ConsentNotifier`
 //! (`consent_launch.rs`); this file has no platform code. S4 asks through
@@ -19,7 +19,6 @@ use tokio::sync::oneshot;
 
 use crate::share::access_grant::Capability;
 use crate::share::exec_access_view::ApprovalSurface;
-use crate::share::exec_registry::ExecRegistry;
 use crate::share::relation_proof::ProvenPrincipal;
 use crate::share::ExecGrantTarget;
 
@@ -49,27 +48,6 @@ impl ConsentNotifier for NoConsent {
     }
 }
 
-/// The running Exec jobs of a host. Since R15 nothing limits open requests or
-/// jobs, so no request consults it any more; the trait stays only as the
-/// parameter type of `ApprovalService::broker`/`request` until its callers
-/// outside the share core drop the argument.
-#[allow(dead_code)] // R15: kept for the callers' signatures, never consulted.
-pub(crate) trait ReservationGauge: Send + Sync {
-    /// Running jobs of the device `device_id`, and of all devices.
-    fn active(&self, device_id: &str) -> (usize, usize);
-}
-
-impl ReservationGauge for ExecRegistry {
-    fn active(&self, device_id: &str) -> (usize, usize) {
-        let views = self.active_views();
-        let device = views
-            .iter()
-            .filter(|view| view.peer_device_id == device_id)
-            .count();
-        (device, views.len())
-    }
-}
-
 /// How a request ended for the side that waits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ApprovalOutcome {
@@ -83,13 +61,6 @@ pub(crate) enum ApprovalOutcome {
     Unavailable,
     /// The host app cannot show it: notifications are off (Android).
     Undeliverable,
-    /// Never produced since R15 (no reservation limit); kept only because
-    /// `screen/core/authorize.rs` still names it in a match arm.
-    #[allow(dead_code)]
-    DeviceLimit,
-    /// Never produced since R15; see `DeviceLimit`.
-    #[allow(dead_code)]
-    HostLimit,
     /// Ended without an answer: the request was withdrawn on this host.
     Withdrawn,
 }
@@ -198,29 +169,16 @@ impl ApprovalService {
             .unwrap_or_else(PoisonError::into_inner) = notifier;
     }
 
-    /// The broker S4 asks. `_gauge` is no longer consulted (R15).
-    pub(crate) fn broker(&self, _gauge: Arc<dyn ReservationGauge>) -> ApprovalBroker {
+    /// The broker S4 asks.
+    pub(crate) fn broker(&self) -> ApprovalBroker {
         ApprovalBroker {
             service: self.clone(),
         }
     }
 
-    /// The former form of `open_request` with a gauge, kept for the tests of
-    /// the CLI and the bridge; `_gauge` is no longer consulted (R15).
-    #[cfg(test)]
-    pub(crate) fn request(
-        &self,
-        _gauge: &dyn ReservationGauge,
-        principal: &ProvenPrincipal,
-        capability: Capability,
-        summary: ApprovalSummary,
-    ) -> ApprovalTicket {
-        self.open_request(principal, capability, summary)
-    }
-
     /// Opens a request and shows it. The ticket is answered at once when
     /// nobody can be asked. There is no limit on open requests (R15).
-    pub(crate) fn open_request(
+    pub(crate) fn request(
         &self,
         principal: &ProvenPrincipal,
         capability: Capability,
@@ -370,6 +328,6 @@ impl ApprovalBroker {
         capability: Capability,
         summary: ApprovalSummary,
     ) -> ApprovalTicket {
-        self.service.open_request(principal, capability, summary)
+        self.service.request(principal, capability, summary)
     }
 }
