@@ -329,11 +329,19 @@ fuser = { version = "=0.18.0", default-features = false }
 # MIT) and the ScreenCast/RemoteDesktop portal (ashpd, MIT). PipeWire itself is
 # loaded at run time, so no system library is needed at build time.
 x11rb = { version = "0.13", default-features = false, features = ["allow-unsafe-code", "shm", "xfixes", "randr", "composite", "xtest"] }
-wayland-client = "0.31"
+wayland-client = { version = "=0.31.14", features = ["dlopen", "system"] }
 wayland-protocols = { version = "0.32", features = ["client", "staging"] }
-wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+wayland-protocols-wlr = { version = "=0.3.12", features = ["client"] }
 wayland-protocols-plasma = { version = "0.3", features = ["client"] }
 ashpd = { version = "0.13", default-features = false, features = ["tokio", "screencast", "remote_desktop"] }
+# DSK-M7: wlr-layer-shell host of the se Desktop surface (smithay-client-toolkit
+# MIT, calloop MIT, xkbcommon-dl MIT, egui-wgpu MIT OR Apache-2.0). wayland-client
+# loads libwayland at run time (dlopen) through the system backend.
+smithay-client-toolkit = { version = "=0.19.2", default-features = false, features = ["calloop"] }
+calloop = "=0.13.0"
+calloop-wayland-source = "0.3"
+xkbcommon-dl = "=0.4.2"
+egui-wgpu = "=0.29.1"
 
 [build-dependencies]
 # Pure-Rust verification of prepared DLL bytes; never compile/download Dokany
