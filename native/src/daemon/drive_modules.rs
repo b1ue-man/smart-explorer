@@ -15,6 +15,18 @@ pub(crate) mod ipc_protocol_drives;
 // DRV-M7 (R5): `IpcRequest::MountHostExt { id, session_token, req }`.
 #[path = "os/shared/ipc_protocol_mount_host.rs"]
 pub(crate) mod ipc_protocol_mount_host;
+// DRV-M6: the device tree drive `se-devices` (status/enable/disable, the
+// host's child backends and watch, the placeholder backend of the worker).
+#[path = "os/shared/devices_host.rs"]
+mod devices_host;
+#[path = "os/shared/devices_ipc.rs"]
+pub(crate) mod devices_ipc;
+#[path = "os/shared/devices_mount.rs"]
+pub(crate) mod devices_mount;
+// DRV-M6: serves `IpcRequest::MountHostExt` (lock preparation and the
+// device requests of the tree).
+#[path = "os/shared/mount_host_ext_serve.rs"]
+pub(crate) mod mount_host_ext_serve;
 // DRV-M3, decision S2 K7: why this worker started.
 #[path = "os/shared/run_start_reason.rs"]
 pub(crate) mod run_start_reason;

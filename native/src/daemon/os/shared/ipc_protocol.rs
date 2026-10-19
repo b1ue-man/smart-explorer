@@ -410,6 +410,9 @@ pub(super) enum IpcResponse {
     Vault(VaultIpcReply),
     Screen(screen::ScreenIpcReply),
     MountHostExt(super::drive_modules::ipc_protocol_mount_host::MountHostReply),
+    Devices {
+        status: super::drive_modules::devices_ipc::DevicesStatus,
+    },
     Err {
         msg: String,
         /// Structured code of the failure (C3.2, C7.5); older readers ignore the field.

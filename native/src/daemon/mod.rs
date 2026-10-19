@@ -200,6 +200,8 @@ mod schedule;
 mod screen_ipc;
 #[path = "os/shared/screen_ipc_client.rs"]
 mod screen_ipc_client;
+#[path = "os/shared/screen_ipc_still.rs"]
+mod screen_ipc_still;
 #[path = "os/shared/state.rs"]
 mod state;
 #[path = "os/shared/update_stop.rs"]
@@ -213,6 +215,10 @@ pub(crate) use access_ipc::{
 #[cfg(any(target_os = "android", all(unix, test)))]
 pub(crate) use access_ipc::report_approval_undeliverable;
 pub use catch_up::{CatchUpRecord, CatchUpSkip, CatchUpStatus};
+pub use drive_modules::devices_ipc::{
+    devices_disable, devices_enable, devices_hint_done, devices_hint_due, devices_status,
+    devices_watch, DeviceStatusRow, DevicesStatus,
+};
 pub use drive_modules::{is_drive_restore_invocation, note_daemon_start_args};
 pub use embedded::ensure_embedded_daemon;
 pub use exec_ipc::{
@@ -266,6 +272,9 @@ pub use problem_notify::set_problem_notifier;
 pub use schedule::{next_scheduled_run, run_daemon};
 pub(crate) use screen_ipc_client::{
     screen_bench, screen_probe, screen_sessions, screen_stop, screen_watch, ScreenProbeReport,
+};
+pub(crate) use screen_ipc_still::{
+    screen_snapshot, screen_snapshot_within, screen_windows, screen_windows_within, StillImage,
 };
 #[allow(unused_imports)]
 pub use state::{

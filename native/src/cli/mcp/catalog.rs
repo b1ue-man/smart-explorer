@@ -8,6 +8,8 @@
 use rmcp::model::{JsonObject, MetaObject, Tool, ToolAnnotations};
 use serde_json::{json, Value};
 
+use super::screen_tool;
+
 /// Server instructions. Codex asks to keep the first 512 characters
 /// self-contained; Claude Code shows at most 2 048.
 pub(super) const INSTRUCTIONS: &str = "\
@@ -24,7 +26,7 @@ with `session` a persistent shell keeps working directory, environment and \
 shell state between calls, and `sessions` joins the user's `se shell -T \
 --attachable` command shells. Start with `connections` to see targets. Long work \
 returns a job_id: follow it with job_status. Tools not loaded yet (exec, \
-job_input, job_cancel, sessions, status, se) are found by a tool search for \
+job_input, job_cancel, sessions, status, screen, se) are found by a tool search for \
 `smart-explorer`.
 
 Targets: absolute local paths, `@label:/path` (saved remote, path below its \
@@ -178,7 +180,7 @@ pub(super) fn tools() -> Vec<Tool> {
                 "wait_seconds": {"type": "integer", "minimum": 0, "description": WAIT}
             }), &["job_id"], changes(false, true)),
         tool("se", "Run an se command",
-            "Runs any other Smart Explorer terminal command as `se <args>` and returns its exit code and output, for example: [\"share\",\"status\",\"--json\"], [\"share\",\"request\",\"list\",\"--json\"], [\"share\",\"grants\",\"--json\"], [\"share\",\"grants\",\"exec\",\"--json\"], [\"share\",\"exec\",\"log\",\"--json\"], [\"share\",\"exec\",\"approvals\",\"--json\"], [\"share\",\"exec\",\"accounts\",\"--json\"], [\"share\",\"device\",\"list\",\"--json\"], [\"share\",\"room\",\"list\",\"--json\"], [\"screen\",\"bench\",\"<device>\",\"--json\"], [\"screen\",\"codec\",\"--json\"], [\"connections\",\"add\",\"sftp\",\"--host\",\"h\",\"--user\",\"u\",\"--key\",\"/home/u/.ssh/id_ed25519\",\"--label\",\"prod\"], [\"connections\",\"add-peer\",\"--code\",\"SE-D3-…\"], [\"drive\",\"mount\",\"@prod:/srv\",\"--letter\",\"M\"] (Windows), [\"drive\",\"mount\",\"@prod:/srv\",\"--mount-point\",\"/home/u/SmartExplorer/prod\"] (Linux), [\"update\",\"--check\",\"--json\"], [\"doctor\",\"--json\"], [\"sync\",\"list\",\"--json\"], [\"sync\",\"edit\",\"Docs\",\"--trigger\",\"realtime\"], [\"background\",\"status\",\"--json\"], [\"desktop\",\"status\",\"--json\"], [\"desktop\",\"enable\",\"--json\"], [\"connections\",\"gdrive\",\"status\",\"--json\"]. `[\"--help\"]` or [\"<command>\",\"--help\"] explains every command. Prefer the dedicated tools for files and remote commands.",
+            "Runs any other Smart Explorer terminal command as `se <args>` and returns its exit code and output, for example: [\"share\",\"status\",\"--json\"], [\"share\",\"request\",\"list\",\"--json\"], [\"share\",\"grants\",\"--json\"], [\"share\",\"grants\",\"exec\",\"--json\"], [\"share\",\"exec\",\"log\",\"--json\"], [\"share\",\"exec\",\"approvals\",\"--json\"], [\"share\",\"exec\",\"accounts\",\"--json\"], [\"share\",\"device\",\"list\",\"--json\"], [\"share\",\"room\",\"list\",\"--json\"], [\"screen\",\"bench\",\"<device>\",\"--json\"], [\"screen\",\"codec\",\"--json\"], [\"screen\",\"windows\",\"<device>\",\"--json\"], [\"connections\",\"add\",\"sftp\",\"--host\",\"h\",\"--user\",\"u\",\"--key\",\"/home/u/.ssh/id_ed25519\",\"--label\",\"prod\"], [\"connections\",\"add-peer\",\"--code\",\"SE-D3-…\"], [\"drive\",\"mount\",\"@prod:/srv\",\"--letter\",\"M\"] (Windows), [\"drive\",\"mount\",\"@prod:/srv\",\"--mount-point\",\"/home/u/SmartExplorer/prod\"] (Linux), [\"drive\",\"devices\",\"status\",\"--json\"], [\"drive\",\"open\",\"<id>\"], [\"update\",\"--check\",\"--json\"], [\"doctor\",\"--json\"], [\"sync\",\"list\",\"--json\"], [\"sync\",\"edit\",\"Docs\",\"--trigger\",\"realtime\"], [\"background\",\"status\",\"--json\"], [\"desktop\",\"status\",\"--json\"], [\"desktop\",\"enable\",\"--json\"], [\"connections\",\"gdrive\",\"status\",\"--json\"]. `[\"--help\"]` or [\"<command>\",\"--help\"] explains every command. Prefer the dedicated tools for files and remote commands.",
             json!({
                 "args": {"type": "array", "items": {"type": "string"}, "minItems": 1, "description": "Arguments after `se`."},
                 "stdin": {"type": "string", "description": "Standard input (closed afterwards), e.g. for --pin-stdin."},
@@ -191,6 +193,7 @@ pub(super) fn tools() -> Vec<Tool> {
                 "action": {"type": "string", "enum": ["list", "attach", "activity", "close"], "description": "list (default), attach, activity or close."},
                 "session": {"type": "string", "description": "Session name or id; needed for attach, activity and close."}
             }), &[], changes(false, true)),
+        tool("screen", "Screen of paired devices", screen_tool::DESCRIPTION, screen_tool::properties(), &["action"], read_only(true)),
     ];
     tools.into_iter().map(upfront).collect()
 }
@@ -305,7 +308,8 @@ mod tests {
                 "job_input",
                 "job_cancel",
                 "se",
-                "sessions"
+                "sessions",
+                "screen"
             ]
         );
         assert!(INSTRUCTIONS.len() <= 2_048, "{}", INSTRUCTIONS.len());
@@ -322,7 +326,14 @@ mod tests {
                 read_only,
                 matches!(
                     tool.name.as_ref(),
-                    "status" | "connections" | "list" | "stat" | "read" | "search" | "job_status"
+                    "status"
+                        | "connections"
+                        | "list"
+                        | "stat"
+                        | "read"
+                        | "search"
+                        | "job_status"
+                        | "screen"
                 ),
                 "{}",
                 tool.name
@@ -335,7 +346,7 @@ mod tests {
                 .cloned();
             let file_tool = !matches!(
                 tool.name.as_ref(),
-                "exec" | "job_input" | "job_cancel" | "status" | "se" | "sessions"
+                "exec" | "job_input" | "job_cancel" | "status" | "se" | "sessions" | "screen"
             );
             assert_eq!(
                 upfront,
