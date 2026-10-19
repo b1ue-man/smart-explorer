@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use super::{mcp_refusal, run_with, ApprovalSource, ApprovalsCommand, ApproveArgs, DenyArgs};
 use crate::share::access_approval::{
     ApprovalCommand, ApprovalDecision, ApprovalId, ApprovalOutcome, ApprovalService,
-    ApprovalSummary, ApprovalTicket, ApprovalView, ConsentNotifier, ReservationGauge,
+    ApprovalSummary, ApprovalTicket, ApprovalView, ConsentNotifier,
 };
 use crate::share::access_grant::Capability;
 use crate::share::exec_access_view::ApprovalSurface;
@@ -19,14 +19,6 @@ struct CliOnly;
 impl ConsentNotifier for CliOnly {
     fn show(&self, _request: &ApprovalView) -> Option<ApprovalSurface> {
         Some(ApprovalSurface::CliOnly)
-    }
-}
-
-struct NoJobs;
-
-impl ReservationGauge for NoJobs {
-    fn active(&self, _device_id: &str) -> (usize, usize) {
-        (0, 0)
     }
 }
 
@@ -59,7 +51,7 @@ fn ask(service: &ApprovalService, device: &str, command: &str) -> ApprovalTicket
         policy_revision: 3,
         ..ApprovalSummary::default()
     };
-    service.request(&NoJobs, &principal, Capability::ExecCommands, summary)
+    service.request(&principal, Capability::ExecCommands, summary)
 }
 
 fn outcome(ticket: &mut ApprovalTicket) -> ApprovalOutcome {

@@ -1,36 +1,27 @@
-//! PRM-M3, second part: open requests (Exec and screen) hold no reservation
-//! and neither a device nor the host is limited in open requests or running
-//! jobs (R15); a grant narrowed while its request is open; the `cli_only`
+//! PRM-M3, second part: neither a device nor the host is limited in open
+//! requests (Exec and screen) or running jobs (R15); a grant narrowed while its request is open; the `cli_only`
 //! surface of a host without a graphical session. The host fixture is in
 //! `access_approval_tests.rs`.
 use std::io;
 use std::path::Path;
 
 use super::*;
-use crate::share::access_approval::ReservationGauge;
 use crate::share::access_grant::CapabilityDecision::Off;
 use crate::share::consent_launch::{gui_program, DesktopConsent, SessionFacts};
 use crate::share::exec_client_messages::{approval_status_line, client_failure_message};
 
 #[test]
 fn perm_task_open_requests_have_no_device_or_host_limit() {
-    struct Busy;
-    impl ReservationGauge for Busy {
-        fn active(&self, _device_id: &str) -> (usize, usize) {
-            (100, 100)
-        }
-    }
     let host = Host::new(&[(Capability::ExecCommands, Ask)]);
     let device = |id: &str| ProvenPrincipal {
         device_id: id.into(),
         ..ProvenPrincipal::from(&host.authorized.principal)
     };
     let service = &host.service;
-    // One device: five open requests, though the gauge reports 100 jobs.
+    // One device: five open requests.
     let mut tickets = Vec::new();
     for _ in 0..5 {
         let ticket = service.request(
-            &Busy,
             &device("x"),
             Capability::ExecCommands,
             ApprovalSummary::default(),
@@ -40,7 +31,7 @@ fn perm_task_open_requests_have_no_device_or_host_limit() {
     }
     // The host: twelve open requests in total, more than the former eight.
     for index in 0..7 {
-        let ticket = service.open_request(
+        let ticket = service.request(
             &device(&format!("other-{index}")),
             Capability::ExecTerminal,
             ApprovalSummary::default(),
@@ -84,7 +75,7 @@ fn perm_task_screen_request_beside_running_jobs() {
     host.running(&shell("f0", "sleep 60"));
     host.running(&shell("f1", "sleep 60"));
     // S4 asks through the broker: `request(principal, capability, summary)`.
-    let broker = host.service.broker(host.registry.clone());
+    let broker = host.service.broker();
     let principal = ProvenPrincipal::from(&host.authorized.principal);
     let summary = ApprovalSummary {
         device_name: Some("Testgerät".into()),

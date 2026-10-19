@@ -1,7 +1,7 @@
 //! PRM-M3: a start on „Fragen“ waits for the host user and starts only on
 //! „Diesmal erlauben“ or „Immer erlauben“; „Ablehnen“, a cancel of the
 //! requesting device and a narrowed grant refuse it; open requests (Exec and
-//! screen requests of S4) hold no reservation and are not limited (R15,
+//! screen requests of S4) are not limited (R15,
 //! `access_approval_limits_tests.rs`); without a graphical session the
 //! request is shown nowhere but `cli_only`.
 use std::sync::{Arc, Mutex};

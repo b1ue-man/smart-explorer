@@ -308,12 +308,6 @@ fn refused(
             Some("notifications for Smart Explorer are off"),
             ScreenErrorCode::ApprovalUnavailable,
         ),
-        ApprovalOutcome::DeviceLimit | ApprovalOutcome::HostLimit => (
-            AccessEvent::ApprovalUnavailable,
-            ApprovalResult::Unavailable,
-            Some("no reservation is free"),
-            ScreenErrorCode::ApprovalUnavailable,
-        ),
         // `Unavailable`; an answer that allows never reaches here.
         _ => (
             AccessEvent::ApprovalUnavailable,

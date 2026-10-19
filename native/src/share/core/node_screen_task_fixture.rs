@@ -12,9 +12,7 @@ use std::time::{Duration, Instant};
 
 use crate::screen::core::host_backend::ConsentBroker;
 use crate::screen::core::viewer_client::{handshake, ViewerError, ViewerRequest, ViewerSession};
-use crate::share::access_approval::{
-    ApprovalService, ApprovalView, ConsentNotifier, ReservationGauge,
-};
+use crate::share::access_approval::{ApprovalService, ApprovalView, ConsentNotifier};
 use crate::share::access_grant::{AccessGrantChange, Capability, CapabilityDecision, Expiry};
 use crate::share::core::{now_secs, public_fingerprint, random_bytes, random_uuid_v4};
 use crate::share::exec_access_view::ApprovalSurface;
@@ -35,15 +33,6 @@ struct Shown;
 impl ConsentNotifier for Shown {
     fn show(&self, _request: &ApprovalView) -> Option<ApprovalSurface> {
         Some(ApprovalSurface::Window)
-    }
-}
-
-/// No Exec job holds a reservation.
-struct NoJobs;
-
-impl ReservationGauge for NoJobs {
-    fn active(&self, _device_id: &str) -> (usize, usize) {
-        (0, 0)
     }
 }
 
@@ -132,7 +121,7 @@ impl ScreenPair {
             host_events,
         )?);
         let approvals = ApprovalService::new(Arc::new(Shown));
-        let broker: Arc<dyn ConsentBroker> = Arc::new(approvals.broker(Arc::new(NoJobs)));
+        let broker: Arc<dyn ConsentBroker> = Arc::new(approvals.broker());
         *host_node.0.screen.broker.write().unwrap() = broker;
         let (relay_url, candidates) = routes(&host_node.0, server == NO_RELAY)?;
         let presence = PeerPresence {

@@ -4,17 +4,9 @@ use std::time::Duration;
 
 use super::*;
 use crate::share::access_approval::{
-    ApprovalDecision, ApprovalService, ApprovalView, ConsentNotifier, NoConsent, ReservationGauge,
+    ApprovalDecision, ApprovalService, ApprovalView, ConsentNotifier, NoConsent,
 };
 use crate::share::exec_access_view::ApprovalSurface;
-
-struct Idle;
-
-impl ReservationGauge for Idle {
-    fn active(&self, _device_id: &str) -> (usize, usize) {
-        (0, 0)
-    }
-}
 
 struct Window;
 
@@ -93,7 +85,7 @@ fn asked(
     gone: bool,
     answer: impl FnOnce(&ApprovalService) + Send + 'static,
 ) -> Approval {
-    let broker: Arc<dyn ConsentBroker> = Arc::new(service.broker(Arc::new(Idle)));
+    let broker: Arc<dyn ConsentBroker> = Arc::new(service.broker());
     let waiter = service.clone();
     let done = Arc::new(AtomicBool::new(false));
     let finished = done.clone();
@@ -238,7 +230,7 @@ fn screen_task_authorize_stop_ends_the_wait() {
         decision: Mutex::new(CapabilityDecision::Ask),
     };
     let service = ApprovalService::new(Arc::new(Window));
-    let broker: Arc<dyn ConsentBroker> = Arc::new(service.broker(Arc::new(Idle)));
+    let broker: Arc<dyn ConsentBroker> = Arc::new(service.broker());
     let principal = principal();
     let (stop, signal) = watch::channel(None);
     stop.send_replace(Some(EndReason::CapabilityNarrowed));

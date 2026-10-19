@@ -13,7 +13,7 @@ use super::{
 };
 use crate::share::access_approval::{
     ApprovalCommand, ApprovalDecision, ApprovalOutcome, ApprovalService, ApprovalSummary,
-    ApprovalTicket, ReservationGauge,
+    ApprovalTicket,
 };
 use crate::share::access_grant::{
     AccessGrant, AccessGrantChange, AccountProfile, Capability, CapabilityDecision, Expiry,
@@ -126,11 +126,6 @@ fn perm_task_bridge_set_access_absent_keeps() {
             "invalid",
         ),
         (json!({ "capabilities": { "bogus": "allow" } }), "invalid"),
-        // No screen rows before SCR-M8 (W1).
-        (
-            json!({ "capabilities": { "screenView": "allow" } }),
-            "unsupported",
-        ),
         (json!({ "capabilities": ["execCommands"] }), "invalid"),
         (json!({ "programs": ["bin/tool"] }), "invalid"),
         (json!({ "validUntil": NOW }), "invalid"),
@@ -175,14 +170,22 @@ fn perm_task_bridge_status_account_choices_android() {
     ] {
         assert!(note.contains(part), "{part}");
     }
-    // The dialog rows: commands and terminal, no screen rows (W1).
+    // The dialog rows: commands, terminal and, with SCR-M8, the screen.
     let rows: Vec<&str> = status["capabilities"]
         .as_array()
         .expect("rows")
         .iter()
         .map(|row| row["key"].as_str().unwrap_or_default())
         .collect();
-    assert_eq!(rows, ["execCommands", "execTerminal"]);
+    assert_eq!(
+        rows,
+        [
+            "execCommands",
+            "execTerminal",
+            "screenView",
+            "screenControl"
+        ]
+    );
 
     // Each target carries its access right.
     let mut exec = ExecGrant::default();
@@ -275,15 +278,6 @@ fn perm_task_bridge_program_list_keeps_profile() {
     assert_eq!(keep_account(None, &remote), None);
 }
 
-/// No running Exec jobs: only open requests count against the limits.
-struct NoJobs;
-
-impl ReservationGauge for NoJobs {
-    fn active(&self, _device_id: &str) -> (usize, usize) {
-        (0, 0)
-    }
-}
-
 fn laptop() -> ProvenPrincipal {
     ProvenPrincipal {
         relation_kind: "direct".into(),
@@ -315,12 +309,7 @@ fn perm_task_bridge_approvals_roundtrip() {
         ..ApprovalSummary::default()
     };
     let before = activity();
-    let mut ticket = service.request(
-        &NoJobs,
-        &laptop(),
-        Capability::ExecCommands,
-        summary.clone(),
-    );
+    let mut ticket = service.request(&laptop(), Capability::ExecCommands, summary.clone());
     // The app's notifier takes it and wakes the poller (its `share` event).
     assert_eq!(ticket.surface(), Some(ApprovalSurface::Notification));
     assert!(activity() > before, "an open request wakes the app");
@@ -358,7 +347,7 @@ fn perm_task_bridge_approvals_roundtrip() {
     assert!(service.decide(&id, ApprovalDecision::Deny).is_err());
 
     // A request the app can show nowhere ends refused, never allowed.
-    let mut hidden = service.request(&NoJobs, &laptop(), Capability::ExecTerminal, summary);
+    let mut hidden = service.request(&laptop(), Capability::ExecTerminal, summary);
     let hidden_id = hidden.id().clone();
     service.report_undeliverable(&hidden_id).expect("reported");
     assert_eq!(outcome(&mut hidden), ApprovalOutcome::Undeliverable);
