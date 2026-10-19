@@ -309,6 +309,16 @@ zbus = { version = "5.16", default-features = false, features = ["tokio", "block
 # DRV-M4: FUSE host of Linux drives; pure-Rust mount through the setuid
 # fusermount3 (no libfuse, no pkg-config run on Linux). MIT. Rust >= 1.85.
 fuser = { version = "=0.18.0", default-features = false }
+# SCR-M5: Linux screen host. X11 capture (x11rb, MIT OR Apache-2.0, pulls
+# gethostname Apache-2.0), Wayland toplevel and KDE window lists (wayland-*,
+# MIT) and the ScreenCast/RemoteDesktop portal (ashpd, MIT). PipeWire itself is
+# loaded at run time, so no system library is needed at build time.
+x11rb = { version = "0.13", default-features = false, features = ["allow-unsafe-code", "shm", "xfixes", "randr", "composite", "xtest"] }
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+wayland-protocols-plasma = { version = "0.3", features = ["client"] }
+ashpd = { version = "0.13", default-features = false, features = ["tokio", "screencast", "remote_desktop"] }
 
 [build-dependencies]
 # Pure-Rust verification of prepared DLL bytes; never compile/download Dokany
