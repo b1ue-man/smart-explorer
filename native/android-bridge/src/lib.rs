@@ -16,6 +16,9 @@ use std::ffi::{c_char, c_int, CString};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
+// SCR-M8: pictures and control messages of this phone as screen host.
+mod screen_jni;
+
 const LOG_TAG: &str = "SmartExplorer";
 const ANDROID_LOG_ERROR: c_int = 6;
 

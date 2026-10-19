@@ -53,7 +53,7 @@ import org.junit.runner.RunWith
  * the question channel with its actions, the report of a question the app can show nowhere, and the
  * access dialog that allows a device with two actions. The bridge signals are Rust host tests
  * (`share_access_tests.rs`); `perm_task_android_screen_approval_actions_are_activity_intents`
- * follows with SCR-M8 (U27). No second device takes part: the question itself is built here.
+ * of SCR-M8 (U27) runs in `ScreenTaskTest`. No second device takes part: the question itself is built here.
  */
 @RunWith(AndroidJUnit4::class)
 class PermTaskTest {
@@ -98,9 +98,18 @@ class PermTaskTest {
         assertNotNull("Sperrbildschirm braucht die öffentliche Fassung", exec.publicVersion)
         assertTrue("Sperrbildschirm zeigt Aktionen", exec.publicVersion.actions.isNullOrEmpty())
 
-        // Screen question before SCR-M8 (W1): only „Ablehnen“.
+        // Screen question since SCR-M8 (W1): both allowing answers open the consent activity (on
+        // every API level, each needs an unlocked device), „Ablehnen“ stays the broadcast; that
+        // they are activity intents checks `perm_task_android_screen_approval_actions_are_activity_intents`.
         val screen = approvalNotification(appContext, question.copy(capability = CAP_SCREEN_VIEW), Notifications.ID_APPROVAL_FIRST + 1)
-        assertEquals(listOf("Ablehnen"), screen.actions.orEmpty().map { it.title.toString() })
+        assertEquals(listOf("Diesmal erlauben", "Immer erlauben", "Ablehnen"), screen.actions.orEmpty().map { it.title.toString() })
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            assertTrue(screen.actions[0].isAuthenticationRequired)
+            assertTrue(screen.actions[1].isAuthenticationRequired)
+            assertTrue(screen.actions[0].actionIntent.isActivity)
+            assertTrue(screen.actions[1].actionIntent.isActivity)
+            assertTrue(screen.actions[2].actionIntent.isBroadcast)
+        }
 
         // Every action names exactly its question and answer.
         for (decision in listOf(DECISION_ONCE, DECISION_ALWAYS, DECISION_DENY)) {
