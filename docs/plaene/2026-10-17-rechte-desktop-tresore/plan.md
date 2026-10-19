@@ -194,6 +194,20 @@ Sitzungslimit (Nutzer 2026-10-17): Ab der Nachricht zum nahenden Sitzungslimit l
 
 Befund zum Werkzeug: Es ordnet die Pareto-Front zuerst nach Aufgabenqualität. Für alle Paare fehlt eine Messung des Aboverbrauchs (`unmeasured`), deshalb empfiehlt es auf jeder Stufe `claude-opus-5-5` mit `xhigh`; die Stufe setzt nur die Mindestqualität. Die Spalte „Alternative“ ist eine eigene Folgerung aus der Front des Werkzeugs, keine Empfehlung des Werkzeugs. Ob sie wegen Vorgabe 1 („der verbrauch ist zu heftig“) gilt, entscheidet der Nutzer bei der Freigabe.
 
+**Freigegebene Modellzuordnung (Nutzer 2026-10-19: „gut, nimm die modelle so und arbeite dann weiter. strárte ab 10% der wochennutzung keine neuen aufträge mehr.“):** zweiter Lauf derselben Eingaben mit `modellwahl` 3.2.0, die je Lauf nur noch ein Profil annimmt (Design `repository`, Suite `workflow`, Doku `evidence`). Diese Zuordnung gilt; die Tabelle oben ist der erste Lauf mit Version 3.1.0.
+
+| Bündel | Modell | Effort | Qualität laut Werkzeug |
+|---|---|---|---|
+| Design | `claude-sonnet-5-5` | `high` | 49,68 |
+| Sicherheit | `claude-opus-5-5` | `medium` | 54,29 |
+| Umsetzung, eindeutig | `claude-sonnet-5-5` | `high` | 49,68 |
+| Umsetzung, Plattformkern | `claude-sonnet-5-5` | `high` | 49,68 |
+| Suite Teil B | `claude-opus-5-5` | `low` | 47,85 |
+| Doku | `claude-haiku-5-5` | `high` | 38 |
+| Lesen | `claude-haiku-5-5` | `medium` | 34 |
+
+Startgrenze: Ab der vom Nutzer genannten Wochennutzung startet kein neuer Auftrag; laufende Agenten arbeiten zu Ende. Festlegungen des Design-Agenten stehen in `festlegungen.md` (je Paket ein Abschnitt); ein Umsetzungsagent startet erst, wenn der Abschnitt seines Pakets dort steht.
+
 **Zuordnung der Restarbeit:**
 
 | Teil | Bündel | Grund der Zuordnung | Start | Zuerst nötig |
