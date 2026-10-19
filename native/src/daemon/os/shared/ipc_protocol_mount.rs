@@ -81,6 +81,11 @@ pub struct MountHostConfig {
     /// ignores it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub location: Option<crate::mount::MountLocation>,
+    /// The drive is the device tree `se-devices` (DRV-M6): the host serves
+    /// the tree instead of one engine. Written only when set, so every other
+    /// configuration keeps its bytes and an older host ignores it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub device_tree: bool,
 }
 
 impl MountHostConfig {
@@ -113,6 +118,7 @@ impl From<&crate::mount::MountConfig> for MountHostConfig {
             // a host platform with other rules sets the public field.
             path_dialect: crate::mount::PathDialect::default(),
             location: config.location.clone(),
+            device_tree: config.source.is_device_tree(),
         }
     }
 }

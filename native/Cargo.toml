@@ -16,6 +16,8 @@ exclude = ["explorer-command"]
 
 [dependencies]
 rayon = "1.10"
+# Screen still pictures (SCR-M4): PNG encoder and decoder of `screen::core::snapshot`.
+png = "0.18"
 crossbeam-channel = "0.5"
 ctrlc = "3.5"
 # The conflict editor uses deadline-aware Myers line diffs (linear auxiliary
@@ -230,6 +232,19 @@ windows = { version = "0.58", features = [
     # loaded at run time; D3D11/DXGI types appear in its MFT attributes.
     "Win32_Graphics_Direct3D",
     "Win32_Graphics_Direct3D11",
+    # Screen host (SCR-M4): Windows Graphics Capture of monitors and windows
+    # (WGC interop factories, `IDirect3DDevice` from the DXGI device), DWM
+    # window attributes, per-monitor DPI and the secure-desktop check.
+    "Graphics",
+    "Graphics_Capture",
+    "Graphics_DirectX",
+    "Graphics_DirectX_Direct3D11",
+    "Win32_Graphics_Dwm",
+    "Win32_System_StationsAndDesktops",
+    "Win32_System_WinRT",
+    "Win32_System_WinRT_Direct3D11",
+    "Win32_System_WinRT_Graphics_Capture",
+    "Win32_UI_HiDpi",
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",
