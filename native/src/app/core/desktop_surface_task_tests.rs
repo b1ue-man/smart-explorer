@@ -45,7 +45,7 @@ impl Sent {
             .borrow()
             .iter()
             .filter_map(|message| match message {
-                SurfaceMessage::Layout { op } => Some(op.clone()),
+                SurfaceMessage::Layout { op, .. } => Some(op.clone()),
                 _ => None,
             })
             .collect()
@@ -318,6 +318,7 @@ fn in_process_view() {
     let mut view = ViewModel::new(MONITOR, Box::new(sent.clone()), true, config(), folders);
     view.absorb(ShellMessage::Model {
         rev: 1,
+        monitor: None,
         model: Box::new(model()),
     });
     let monitors = vec![

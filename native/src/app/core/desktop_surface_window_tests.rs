@@ -68,6 +68,7 @@ pub(super) fn windowed_process() {
     write_frame(&mut input, &ShellMessage::Config { config: config() }).unwrap();
     let shell_model = ShellMessage::Model {
         rev: 1,
+        monitor: None,
         model: Box::new(model()),
     };
     write_frame(&mut input, &shell_model).unwrap();

@@ -14,6 +14,11 @@
 //! ordinary window (GUI harness); `SE_DESKTOP_TEST_NO_ALIVE=1` sends no
 //! heartbeat; `SE_DESKTOP_TEST_SURFACE_EXIT=<code>` ends with that code right
 //! after the greeting; `SE_DESKTOP_TEST_CONNECT=1` presses "Verbinden" once.
+//!
+//! `--layer` (DSK-M7, Wayland) is one process for every output of the
+//! session with its own egui host (`desktop::os::linux_os::layer_shell`);
+//! the greeting, the test switches, the heartbeat, the update stop and the
+//! channel are those of this function, only the window and the loop differ.
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -31,6 +36,10 @@ use crate::desktop::core::protocol::{ShellMessage, SurfaceMessage, PROTOCOL_VERS
 use crate::desktop::os::store::DesktopDir;
 use crate::desktop::os::surface_link::{self, FrameSender};
 use crate::desktop::os::{feed_sources, platform, Session};
+
+/// Wakes the layer backend's event loop when the channel delivered a message
+/// (the loop installs its ping once it exists).
+pub(crate) type LayerWake = Arc<Mutex<Option<Box<dyn Fn() + Send>>>>;
 
 /// Lets the greeting leave before a test exit.
 const TEST_EXIT_DELAY: Duration = Duration::from_millis(200);
@@ -65,10 +74,17 @@ pub(crate) fn run(target: &SurfaceTarget) -> i32 {
     };
     let waker: Arc<Mutex<Option<egui::Context>>> = Arc::new(Mutex::new(None));
     let wake_slot = waker.clone();
+    let layer_wake: LayerWake = Arc::new(Mutex::new(None));
+    let layer_slot = layer_wake.clone();
     let wake = move || {
         if let Ok(slot) = wake_slot.lock() {
             if let Some(ctx) = slot.as_ref() {
                 ctx.request_repaint();
+            }
+        }
+        if let Ok(slot) = layer_slot.lock() {
+            if let Some(ping) = slot.as_ref() {
+                ping();
             }
         }
     };
@@ -99,6 +115,9 @@ pub(crate) fn run(target: &SurfaceTarget) -> i32 {
     let send_alive = !switch("SE_DESKTOP_TEST_NO_ALIVE");
     if switch("SE_DESKTOP_TEST_HEADLESS") {
         run_headless(&sender, &inbox, send_alive, watch);
+    }
+    if matches!(target, SurfaceTarget::Layer) {
+        return start_layer_backend(sender, inbox, send_alive, layer_wake, watch);
     }
     let windowed = switch("SE_DESKTOP_TEST_WINDOWED");
     // The stored configuration until the shell sends its own; it also says
@@ -142,6 +161,42 @@ pub(crate) fn run(target: &SurfaceTarget) -> i32 {
             1
         }
     }
+}
+
+/// The layer backend: the stored configuration until the shell sends its
+/// own, then the loop of `layer_shell` for every output; its exit code.
+#[cfg(target_os = "linux")]
+fn start_layer_backend(
+    sender: FrameSender<SurfaceMessage>,
+    inbox: Receiver<ShellMessage>,
+    send_alive: bool,
+    wake: LayerWake,
+    watch: UpdateStopWatch,
+) -> i32 {
+    use crate::desktop::os::platform::layer_shell::{run_layer, LayerArgs};
+    let stored = DesktopDir::production().read_config().ok().flatten();
+    let config = stored.unwrap_or_else(|| DesktopConfig::initial(platform::initial_system_items()));
+    run_layer(LayerArgs {
+        sender,
+        inbox,
+        send_alive,
+        config,
+        folders: feed_sources::desktop_folders(),
+        wake,
+        watch,
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn start_layer_backend(
+    _sender: FrameSender<SurfaceMessage>,
+    _inbox: Receiver<ShellMessage>,
+    _send_alive: bool,
+    _wake: LayerWake,
+    _watch: UpdateStopWatch,
+) -> i32 {
+    eprintln!("se Desktop: Layer-Backend: gibt es nur unter Linux (Wayland)");
+    1
 }
 
 /// The suite's surface without a window: the reader thread ends the process

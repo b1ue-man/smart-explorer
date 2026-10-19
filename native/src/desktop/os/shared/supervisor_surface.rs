@@ -11,10 +11,12 @@ use super::platform;
 use super::store::{unix_now, DesktopDir};
 use super::supervisor::TEST_MONITORS;
 use super::surface_link::{self, FrameSender, LinkEvent};
+use super::Monitor;
 use crate::daemon::{UpdateStopBaseline, EXIT_UPDATE_STOP};
 use crate::desktop::core::config::DesktopConfig;
 use crate::desktop::core::items::{DesktopFile, SystemItem};
 use crate::desktop::core::layout::DesktopLayout;
+use crate::desktop::core::mechanism::Mechanism;
 use crate::desktop::core::protocol::{
     ShellMessage, StopReason, SurfaceMessage, SurfaceModel, PROTOCOL_VERSION,
 };
@@ -25,6 +27,10 @@ use crate::desktop::core::tiles::TileModel;
 pub(crate) const STOP_GRACE: Duration = Duration::from_secs(5);
 const SURFACE_SWITCH: &str = "--desktop-surface";
 const MONITOR_SWITCH: &str = "--monitor";
+const LAYER_SWITCH: &str = "--layer";
+/// The key of the one layer process (DSK-M7): it serves every output of the
+/// session, so the shell counts it as one surface (`Surface::monitor`).
+pub(crate) const LAYER_KEY: &str = "layer";
 
 /// One running surface process.
 pub(crate) struct Surface {
@@ -95,7 +101,18 @@ impl SurfaceSpawn {
     /// `"<GUI>" --desktop-surface --monitor <key>` with its channel.
     pub(crate) fn start(&mut self, monitor: &str) -> Result<Surface, String> {
         let args = [SURFACE_SWITCH, MONITOR_SWITCH, monitor].map(str::to_string);
-        let mut child = platform::process::spawn_piped(&self.gui, &args)
+        self.start_with(monitor, &args)
+    }
+
+    /// `"<GUI>" --desktop-surface --layer` with its channel: one process for
+    /// every output of the session (DSK-M7); its greeting names `layer`.
+    pub(crate) fn start_layer(&mut self) -> Result<Surface, String> {
+        let args = [SURFACE_SWITCH, LAYER_SWITCH].map(str::to_string);
+        self.start_with(LAYER_KEY, &args)
+    }
+
+    fn start_with(&mut self, monitor: &str, args: &[String]) -> Result<Surface, String> {
+        let mut child = platform::process::spawn_piped(&self.gui, args)
             .map_err(|error| format!("{}: {error}", self.gui.display()))?;
         let id = self.next_id;
         self.next_id += 1;
@@ -120,6 +137,79 @@ impl SurfaceSpawn {
             stopping: None,
             killed: false,
         })
+    }
+}
+
+/// Surfaces that get a process now: one per monitor (Windows, X11, the
+/// suite's monitor keys), a single layer process for the whole session under
+/// the layer backend, none under the GNOME extension (which starts its own).
+pub(crate) fn wanted_surfaces(
+    mechanism: &Mechanism,
+    surface_on: bool,
+    monitors: &[Monitor],
+    test_monitors: Option<&[String]>,
+) -> Vec<String> {
+    if !surface_on {
+        return Vec::new();
+    }
+    if let Some(keys) = test_monitors {
+        return keys.to_vec();
+    }
+    match mechanism {
+        Mechanism::WindowsBottom | Mechanism::X11DesktopType | Mechanism::X11Below => {
+            monitors.iter().map(|monitor| monitor.key.clone()).collect()
+        }
+        Mechanism::LayerShell { .. } => vec![LAYER_KEY.to_string()],
+        Mechanism::GnomeExtension { .. } | Mechanism::Unavailable(_) => Vec::new(),
+    }
+}
+
+/// Sends the model to every greeted surface that has not seen revision
+/// `rev`. A layer process gets one message per output, each with that
+/// output's key and arrangement (DSK-M7); without outputs it gets nothing. A
+/// surface whose sending fails keeps its old `sent_rev` and is served again.
+pub(crate) fn send_models(
+    surfaces: &mut [Surface],
+    monitors: &[Monitor],
+    rev: u64,
+    feed: (&TileModel, &[DesktopFile], &DesktopConfig),
+    layout: &mut DesktopLayout,
+) {
+    let (tiles, files, config) = feed;
+    for surface in surfaces.iter_mut().filter(|surface| surface.greeted) {
+        if surface.sent_rev == Some(rev) {
+            continue;
+        }
+        if surface.monitor == LAYER_KEY {
+            if monitors.is_empty() {
+                continue;
+            }
+            let mut all_sent = true;
+            for monitor in monitors {
+                let Some(model) = surface_model(tiles, files, config, layout, &monitor.key) else {
+                    continue;
+                };
+                all_sent &= surface.send(ShellMessage::Model {
+                    rev,
+                    monitor: Some(monitor.key.clone()),
+                    model: Box::new(model),
+                });
+            }
+            if all_sent {
+                surface.sent_rev = Some(rev);
+            }
+            continue;
+        }
+        let Some(model) = surface_model(tiles, files, config, layout, &surface.monitor) else {
+            continue;
+        };
+        if surface.send(ShellMessage::Model {
+            rev,
+            monitor: None,
+            model: Box::new(model),
+        }) {
+            surface.sent_rev = Some(rev);
+        }
     }
 }
 
@@ -271,3 +361,7 @@ pub(crate) fn test_monitors() -> Option<Vec<String>> {
         .collect();
     (!keys.is_empty()).then_some(keys)
 }
+
+#[cfg(all(test, unix))]
+#[path = "supervisor_surface_tests.rs"]
+mod tests;

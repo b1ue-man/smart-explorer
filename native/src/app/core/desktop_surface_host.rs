@@ -20,6 +20,7 @@ use std::time::Duration;
 use eframe::egui;
 use eframe::wgpu::rwh::{HasWindowHandle, RawWindowHandle};
 
+use super::desktop_surface_clipboard::FileClipboard;
 use crate::desktop::os::wallpaper_image::SystemWallpaper;
 use crate::desktop::os::{platform, Monitor};
 
@@ -134,7 +135,8 @@ pub(crate) enum ShellOutcome {
 pub(crate) trait SurfaceHost {
     /// Key of this surface's monitor (`layout/<key>.json`).
     fn monitor_key(&self) -> &str;
-    /// Every monitor of the session (`rect` in physical pixels).
+    /// Every monitor of the session (`rect` in physical pixels; in a layer
+    /// session, DSK-M7, in the compositor's logical coordinates).
     fn monitors(&self) -> &[Monitor];
     /// The monitor without task bars and panels, physical pixels.
     fn work_area(&self) -> Option<[i32; 4]>;
@@ -166,6 +168,21 @@ pub(crate) trait SurfaceHost {
     /// The pointer is over another program's window (a drag may go out).
     fn pointer_outside(&self) -> bool {
         false
+    }
+    /// The point of the virtual desktop, in the coordinates of
+    /// [`Monitor::rect`], under `pointer` (points of this surface, also
+    /// outside it while a button is held). `None` lets the view work it out
+    /// from the window's `inner_rect` (Windows, X11); the layer backend has
+    /// no such rectangle and answers itself (DSK-M7).
+    fn global_point(&self, _pointer: [f32; 2]) -> Option<[i32; 2]> {
+        None
+    }
+    /// The file clipboard this host reads and writes through, when it has
+    /// one of its own. The actions reach the same provider through
+    /// `desktop_surface_clipboard::installed()`.
+    #[allow(dead_code)]
+    fn file_clipboard(&self) -> Option<Arc<dyn FileClipboard>> {
+        None
     }
     /// Hands the surface the button release a drag loop took.
     fn release_pointer(&self) {}

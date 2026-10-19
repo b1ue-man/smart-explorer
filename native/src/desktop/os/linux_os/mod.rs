@@ -13,6 +13,9 @@ pub(crate) mod gnome_settings;
 pub(crate) mod instance;
 #[path = "integration.rs"]
 pub(crate) mod integration;
+// DSK-M7: the own egui host on `wlr-layer-shell` (one process, every output).
+#[path = "layer_shell/mod.rs"]
+pub(crate) mod layer_shell;
 #[path = "process.rs"]
 pub(crate) mod process;
 #[cfg(test)]
@@ -72,10 +75,28 @@ pub(crate) fn initial_system_items() -> SystemItems {
     SystemItems::initial(None, None)
 }
 
-/// Monitors with their own surface process; X11 RandR monitors follow with
-/// DSK-M6, the layer backend serves every output from one process (DSK-M7).
+/// The monitors of the session: X11 RandR monitors (DSK-M6, each with its own
+/// surface process) or the Wayland outputs (DSK-M7; the layer backend serves
+/// all of them from one process). No display server, no monitors.
 pub(crate) fn monitors() -> Vec<Monitor> {
+    match session_facts().display {
+        DisplayServer::X11 => x11_monitors(),
+        DisplayServer::Wayland => wayland_monitors(),
+        DisplayServer::Windows | DisplayServer::Headless => Vec::new(),
+    }
+}
+
+/// RandR monitors; follows with DSK-M6 (U34).
+fn x11_monitors() -> Vec<Monitor> {
     Vec::new()
+}
+
+/// The outputs the compositor announces, in its logical coordinates (DSK-M7,
+/// `layer_shell::registry`); none when the compositor cannot be asked.
+fn wayland_monitors() -> Vec<Monitor> {
+    layer_shell::registry::probe_outputs()
+        .map(|outputs| outputs.into_iter().map(Monitor::from).collect())
+        .unwrap_or_default()
 }
 
 /// Linux has no jump list.

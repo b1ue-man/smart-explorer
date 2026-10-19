@@ -256,14 +256,21 @@ pub(crate) fn select(state: &mut SurfaceState, item: &ItemId, toggle: bool) {
 }
 
 /// A tile let go: its cell here, or the monitor under the pointer when it
-/// left the window (Windows, X11).
+/// left the window (Windows, X11, layer backend).
 fn drop_item(ctx: &egui::Context, item: &ItemId, pointer: Pos2, area: Rect, cx: &mut Cx<'_>) {
     if !ctx.screen_rect().contains(pointer) {
-        let Some(inner) = ctx.input(|input| input.viewport().inner_rect) else {
-            return;
+        // The host knows the point itself (layer backend, logical
+        // coordinates); else it follows from the window's rectangle.
+        let point = match cx.host.global_point([pointer.x, pointer.y]) {
+            Some(point) => point,
+            None => {
+                let Some(inner) = ctx.input(|input| input.viewport().inner_rect) else {
+                    return;
+                };
+                let global = (inner.min.to_vec2() + pointer.to_vec2()) * ctx.pixels_per_point();
+                [global.x.round() as i32, global.y.round() as i32]
+            }
         };
-        let global = (inner.min.to_vec2() + pointer.to_vec2()) * ctx.pixels_per_point();
-        let point = [global.x.round() as i32, global.y.round() as i32];
         if let Some(monitor) = host_ui::monitor_at(cx.host, point) {
             if monitor != cx.view.monitor() {
                 let item = item.clone();
