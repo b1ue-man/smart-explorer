@@ -49,9 +49,9 @@ pub(super) fn resolve(config: &MountConfig, host: &ShareHost) -> Result<BackendH
             // same process and would split transport fallback state in two.
             host.open_share(target).map(|(_, backend, _)| backend)
         }
-        MountSource::Devices => {
-            Err("Gerätebaum-Laufwerke bindet diese Version noch nicht ein".into())
-        }
+        // DRV-M6: the device tree reaches its devices through the host and
+        // starts without a backend (`devices_mount.rs`); never asked for.
+        MountSource::Devices => Err("Der Gerätebaum hat kein eigenes Backend".into()),
         // DRV-M7 (contract V2, S2-V1): the cleartext view of the unlocked
         // site in this worker; a locked site keeps its code, so the start
         // path defers the drive until the unlock (`mount_termination.rs`).

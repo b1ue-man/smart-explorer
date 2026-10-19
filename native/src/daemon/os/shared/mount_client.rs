@@ -9,7 +9,10 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 
 use crate::mount::os::shared::host_session::{LockAnswer, LockOrder, SpoolKeyAnswer};
-use crate::mount::{MountConfig, MountId, MountRecovery, MountSnapshot, MountStatus};
+use crate::mount::{
+    BackendRoot, ChildRoot, DeviceRow, MountConfig, MountId, MountRecovery, MountSnapshot,
+    MountStatus, PeerMountTarget,
+};
 use crate::vfs::{Backend, BackendHandle, Scheme, VfsMeta, VfsResult};
 
 use super::ipc_protocol::{
@@ -26,6 +29,11 @@ pub use super::ipc_protocol::MountHostConfig;
 mod paths;
 pub(in crate::daemon) use paths::mounts_for_location;
 pub(crate) use paths::{ensure_mounted_for, mount_path_for};
+
+// DRV-M6: the requests of the device-tree host (`child_backend`,
+// `child_roots`, `device_watch`).
+#[path = "mount_client_devices.rs"]
+mod devices;
 
 // Stop/Retry may legitimately wait for one five-minute Dokany callback plus
 // manager cleanup. Keep a margin above the manager's fail-safe stop grace.
@@ -162,6 +170,27 @@ impl MountHostSession {
             Ok(_) => SpoolKeyAnswer::Failed("Unerwartete Antwort auf Vault::SpoolKey".into()),
             Err(error) => SpoolKeyAnswer::Failed(error),
         }
+    }
+
+    /// DRV-M6: a new connection to the shared folder `root` of a device
+    /// through the daemon, and whether the device lets this contact write.
+    pub(crate) fn child_backend(
+        &self,
+        target: &PeerMountTarget,
+        root: &BackendRoot,
+    ) -> Result<(BackendHandle, bool), String> {
+        devices::child_backend(self, target, root)
+    }
+
+    /// DRV-M6: the shared folders and connections of a device.
+    pub(crate) fn child_roots(&self, target: &PeerMountTarget) -> Result<Vec<ChildRoot>, String> {
+        devices::child_roots(self, target)
+    }
+
+    /// DRV-M6: waits at most 30 s for a change of the device list since
+    /// `since` and returns its revision with the list.
+    pub(crate) fn device_watch(&self, since: u64) -> Result<(u64, Vec<DeviceRow>), String> {
+        devices::device_watch(self, since)
     }
 
     /// DRV-M7: the next lock order of a vault drive; the first call starts

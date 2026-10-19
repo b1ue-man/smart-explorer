@@ -7,10 +7,10 @@ use std::{
     },
 };
 
-use crate::mount::{DeleteToken, MountEngine};
+use crate::mount::{DeleteToken, MountFilesystem};
 
-mod validation;
 mod share_index;
+mod validation;
 
 #[cfg(test)]
 mod bulk_handle_task_tests;
@@ -19,8 +19,7 @@ use self::validation::{
     check_share_compatibility, matching_delete_type, snapshot_record, validate_record,
 };
 use super::handle_access::{
-    callback_path_key, invalid_handle, require_delete_access, same_or_descendant,
-    sharing_violation,
+    callback_path_key, invalid_handle, require_delete_access, same_or_descendant, sharing_violation,
 };
 use super::handle_reservation::{reserved_handle_missing, HandleReservation, RenameReservation};
 use super::handle_types::{HandleSnapshot, NodeHandle};
@@ -163,18 +162,18 @@ impl HandleTable {
 
     pub(super) fn request_delete(
         &self,
-        engine: &MountEngine,
+        filesystem: &dyn MountFilesystem,
         key: u64,
         path: &str,
         is_directory: bool,
     ) -> io::Result<()> {
         let _transition = self.lock_transition()?;
-        self.request_delete_locked(engine, key, path, is_directory)
+        self.request_delete_locked(filesystem, key, path, is_directory)
     }
 
     pub(super) fn cancel_delete(
         &self,
-        engine: &MountEngine,
+        filesystem: &dyn MountFilesystem,
         key: u64,
         path: &str,
         is_directory: bool,
@@ -200,7 +199,7 @@ impl HandleTable {
             }
             delete.token
         };
-        engine.cancel_delete(token)?;
+        filesystem.cancel_delete(token)?;
         let mut state = self.lock_state()?;
         state.pending_deletes.remove(&path);
         if let Some(record) = state.handles.get_mut(&key) {
@@ -211,7 +210,7 @@ impl HandleTable {
 
     pub(super) fn commit_delete(
         &self,
-        engine: &MountEngine,
+        filesystem: &dyn MountFilesystem,
         key: u64,
         path: &str,
         is_directory: bool,
@@ -236,7 +235,7 @@ impl HandleTable {
             }
             delete.token
         };
-        engine.commit_delete(token)?;
+        filesystem.commit_delete(token)?;
         let mut state = self.lock_state()?;
         let requesters = state
             .pending_deletes
@@ -306,7 +305,7 @@ impl HandleTable {
 
     pub(super) fn request_delete_locked(
         &self,
-        engine: &MountEngine,
+        filesystem: &dyn MountFilesystem,
         key: u64,
         path: &str,
         is_directory: bool,
@@ -335,7 +334,7 @@ impl HandleTable {
                 return Ok(());
             }
         }
-        let token = engine.begin_delete(&path, is_directory)?;
+        let token = filesystem.begin_delete(&path, is_directory)?;
         let mut state = self.lock_state()?;
         validate_record(&state, key, &path, is_directory)?;
         state.pending_deletes.insert(
@@ -418,6 +417,7 @@ impl HandleTable {
         destination: &str,
         replace_existing: bool,
     ) -> io::Result<()> {
-        self.lock_state()?.rename_attached(source, destination, replace_existing)
+        self.lock_state()?
+            .rename_attached(source, destination, replace_existing)
     }
 }

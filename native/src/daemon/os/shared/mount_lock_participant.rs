@@ -254,15 +254,14 @@ impl MountManager {
         let _ = self.force_stop(key);
     }
 
-    /// `IpcRequest::MountHostExt` of the host of `id`, after its session
-    /// token was checked (`ipc_host_ext.rs`).
-    pub(in crate::daemon) fn serve_host_ext(
+    /// `MountHostRequest::PrepareLock` of the host of `id`, after its session
+    /// token was checked (`mount_host_ext_serve.rs`, DRV-M6).
+    pub(in crate::daemon) fn serve_prepare_lock(
         &self,
         mut stream: TcpStream,
         id: &MountId,
-        req: MountHostRequest,
+        deadline_ms: u64,
     ) -> io::Result<()> {
-        let MountHostRequest::PrepareLock { deadline_ms } = req;
         let is_vault = self
             .state_guard()
             .ok()

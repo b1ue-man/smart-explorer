@@ -10,11 +10,17 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::daemon::MountHostConfig;
-use crate::mount::{CacheSpaceProbe, DriveLetter, MountEngine, MountId, PathDialect};
+use crate::mount::{
+    CacheSpaceProbe, DriveLetter, MountEngine, MountFilesystem, MountId, PathDialect,
+};
 
 /// Exclusive ownership of one drive cache; released only after the engine
 /// and every frontend reference to it have ended.
 pub(crate) type HostLease = Box<dyn Any + Send>;
+
+/// Takes the lease of a cache without a platform value, so the device tree
+/// can open the caches of its children from any thread (DRV-M6).
+pub(crate) type LeaseFn = Arc<dyn Fn(&Path, &MountId) -> io::Result<HostLease> + Send + Sync>;
 
 /// Where the mounted volume is reachable.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -50,6 +56,11 @@ pub(crate) trait HostPlatform {
     /// Name rules of this frontend.
     fn path_dialect(&self) -> PathDialect;
     fn acquire_lease(&mut self, spool_root: &Path, id: &MountId) -> io::Result<HostLease>;
+    /// The lease function for the caches of the device tree's children;
+    /// `None` for a platform that cannot serve the tree.
+    fn lease_fn(&self) -> Option<LeaseFn> {
+        None
+    }
     fn space_probe(&mut self, spool_root: &Path) -> io::Result<Arc<dyn CacheSpaceProbe>>;
     /// Loads the filesystem runtime; the error text becomes
     /// `RuntimeUnavailable`.
@@ -62,6 +73,20 @@ pub(crate) trait HostPlatform {
         config: &MountHostConfig,
         spool_root: &Path,
     ) -> Result<(), HostStepError>;
+    /// `prepare_volume` for a frontend over any `MountFilesystem`: the device
+    /// tree (DRV-M6) is no engine. A platform that serves only engines
+    /// refuses it.
+    fn prepare_filesystem(
+        &mut self,
+        filesystem: Arc<dyn MountFilesystem>,
+        config: &MountHostConfig,
+        spool_root: &Path,
+    ) -> Result<(), HostStepError> {
+        let _ = (filesystem, config, spool_root);
+        Err(HostStepError::Plain(
+            "this drive host cannot serve the device tree".into(),
+        ))
+    }
     /// Makes the volume visible; from here on callbacks may arrive.
     fn start_volume(&mut self) -> Result<(), String>;
     /// Starts the background metadata refresh of the volume.

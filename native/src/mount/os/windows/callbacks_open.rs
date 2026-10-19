@@ -156,7 +156,7 @@ fn open_directory(
         return Err(error.into());
     }
     if delete_on_close {
-        match reservation.request_delete_and_commit(&context.engine, true) {
+        match reservation.request_delete_and_commit(&*context.filesystem, true) {
             Ok(_) => {}
             Err(error) => {
                 clear_context(file_info);
@@ -228,7 +228,7 @@ fn open_regular_file(
         return Err(error.into());
     }
     if delete_on_close {
-        match reservation.request_delete_and_commit(&context.engine, false) {
+        match reservation.request_delete_and_commit(&*context.filesystem, false) {
             Ok(_) => {}
             Err(error) => {
                 clear_context(file_info);

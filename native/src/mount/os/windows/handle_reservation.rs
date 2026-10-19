@@ -1,6 +1,6 @@
 use std::{io, sync::MutexGuard};
 
-use crate::mount::MountEngine;
+use crate::mount::MountFilesystem;
 
 use super::{handle_access::invalid_handle, handle_state::HandleTable, handle_types::NodeHandle};
 
@@ -42,12 +42,12 @@ impl<'a> HandleReservation<'a> {
 
     pub(super) fn request_delete_and_commit(
         mut self,
-        engine: &MountEngine,
+        filesystem: &dyn MountFilesystem,
         is_directory: bool,
     ) -> io::Result<u64> {
         let path = self.table.reserved_path(self.key)?;
         self.table
-            .request_delete(engine, self.key, &path, is_directory)?;
+            .request_delete(filesystem, self.key, &path, is_directory)?;
         Ok(self.finish())
     }
 

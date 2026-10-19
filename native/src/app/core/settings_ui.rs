@@ -68,7 +68,7 @@ impl App {
                             self.ui_settings_integration(ui);
                             self.ui_settings_ai_plugin(ui);
                             self.ui_settings_background(ui);
-                            // V14: S2 inserts its section before this one.
+                            self.ui_settings_devices(ui);
                             self.ui_desktop_settings(ui);
                         }
                     });

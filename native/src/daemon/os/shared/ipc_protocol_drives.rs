@@ -29,13 +29,33 @@ const RESTORE_REPLY: Duration = Duration::from_secs(5);
 #[serde(tag = "op", rename_all = "snake_case")]
 pub(crate) enum DriveIpcRequest {
     /// `se drive set`, the drive window: the options of a managed drive.
-    SetOptions { id: MountId, auto_remount: bool },
+    SetOptions {
+        id: MountId,
+        auto_remount: bool,
+    },
     /// The login entry: mount every registered drive that restores at login
     /// and is not mounted.
     Restore,
     /// DRV-M7 (S2-V8): the mounted drive that serves `location`, answered
     /// as `IpcResponse::Mounts` with at most one drive.
-    MountPathFor { location: String },
+    MountPathFor {
+        location: String,
+    },
+    /// DRV-M6 (V4): the device tree „Verbundene Geräte als Ordner“, answered
+    /// as `IpcResponse::Devices`.
+    DevicesStatus,
+    /// Switches it on; `letter` (Windows) or `mount_point` (Linux) choose
+    /// where it appears, `null` takes the default.
+    DevicesEnable {
+        letter: Option<String>,
+        mount_point: Option<String>,
+    },
+    DevicesDisable,
+    /// The status after a change of the revision `since`, at the latest
+    /// after 30 s.
+    DevicesWatch {
+        since: u64,
+    },
 }
 
 impl DriveIpcRequest {
@@ -44,9 +64,16 @@ impl DriveIpcRequest {
     /// of `se` do, the login entry does not. DRV-M6 adds the read-only views
     /// of se Desktop (`DevicesStatus`, `DevicesWatch`) as non-promoting.
     /// `MountPathFor` comes only from opening a file in the app, `se` or
-    /// `se mcp`, so it promotes like every other request of theirs.
+    /// `se mcp`, so it promotes like every other request of theirs; so do
+    /// switching the device tree on and off, which are acts of the user.
     pub(crate) fn promotes_daemon(&self) -> bool {
-        matches!(self, Self::SetOptions { .. } | Self::MountPathFor { .. })
+        matches!(
+            self,
+            Self::SetOptions { .. }
+                | Self::MountPathFor { .. }
+                | Self::DevicesEnable { .. }
+                | Self::DevicesDisable
+        )
     }
 }
 
@@ -78,8 +105,26 @@ pub(crate) fn serve(
                 Err(msg) => IpcResponse::Err { msg, code: None },
             }
         }
+        DriveIpcRequest::DevicesStatus => IpcResponse::Devices {
+            status: super::devices_mount::status(host),
+        },
+        DriveIpcRequest::DevicesWatch { since } => IpcResponse::Devices {
+            status: super::devices_host::watch_status(host, since),
+        },
+        DriveIpcRequest::DevicesEnable {
+            letter,
+            mount_point,
+        } => devices_answer(super::devices_mount::enable(host, letter, mount_point)),
+        DriveIpcRequest::DevicesDisable => devices_answer(super::devices_mount::disable(host)),
     };
     write_response(stream, &response)
+}
+
+fn devices_answer(result: Result<super::devices_ipc::DevicesStatus, String>) -> IpcResponse {
+    match result {
+        Ok(status) => IpcResponse::Devices { status },
+        Err(msg) => IpcResponse::Err { msg, code: None },
+    }
 }
 
 /// `se drive set` and the drive window: switches „Beim Anmelden automatisch
@@ -159,5 +204,55 @@ mod tests {
         );
         assert!(path_for.promotes_daemon());
         assert!(!DriveIpcRequest::Restore.promotes_daemon());
+    }
+
+    #[test]
+    fn devices_wire_requests_keep_their_form() {
+        let lines = [
+            (DriveIpcRequest::DevicesStatus, r#"{"op":"devices_status"}"#),
+            (
+                DriveIpcRequest::DevicesEnable {
+                    letter: Some("X".into()),
+                    mount_point: None,
+                },
+                r#"{"op":"devices_enable","letter":"X","mount_point":null}"#,
+            ),
+            (
+                DriveIpcRequest::DevicesEnable {
+                    letter: None,
+                    mount_point: Some("/home/u/Geräte".into()),
+                },
+                r#"{"op":"devices_enable","letter":null,"mount_point":"/home/u/Geräte"}"#,
+            ),
+            (
+                DriveIpcRequest::DevicesDisable,
+                r#"{"op":"devices_disable"}"#,
+            ),
+            (
+                DriveIpcRequest::DevicesWatch { since: 12 },
+                r#"{"op":"devices_watch","since":12}"#,
+            ),
+        ];
+        for (request, line) in lines {
+            assert_eq!(serde_json::to_string(&request).unwrap(), line);
+            assert_eq!(
+                serde_json::from_str::<DriveIpcRequest>(line).unwrap(),
+                request
+            );
+        }
+    }
+
+    /// The read-only views of se Desktop never lift the restriction of a
+    /// worker started for the drive restore (V11); switching the tree does.
+    #[test]
+    fn drive_task_devices_watch_not_promoting() {
+        assert!(!DriveIpcRequest::DevicesStatus.promotes_daemon());
+        assert!(!DriveIpcRequest::DevicesWatch { since: 0 }.promotes_daemon());
+        assert!(DriveIpcRequest::DevicesDisable.promotes_daemon());
+        assert!(DriveIpcRequest::DevicesEnable {
+            letter: None,
+            mount_point: None
+        }
+        .promotes_daemon());
     }
 }

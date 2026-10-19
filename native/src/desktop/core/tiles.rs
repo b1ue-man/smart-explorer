@@ -198,29 +198,10 @@ pub(crate) struct TileInput<'a> {
 
 /// Key of a device as `mount::device_key` builds it (V4): `direct~<contact_id>`
 /// or `room~<room_id>~<device_id>`, every byte outside `[A-Za-z0-9._-]` as
-/// `%XX`. DRV-M6 (U17) replaces this body by a call of `mount::device_key`.
+/// `%XX`. Since DRV-M6 this is the function of the device tree itself, so the
+/// tiles of se Desktop and the folders of the tree can never differ.
 pub(crate) fn device_key(target: &PeerOpenTarget) -> String {
-    match target {
-        PeerOpenTarget::Direct { contact_id } => format!("direct~{}", escape_key(contact_id)),
-        PeerOpenTarget::RoomDevice { room_id, device_id } => {
-            format!("room~{}~{}", escape_key(room_id), escape_key(device_id))
-        }
-    }
-}
-
-fn escape_key(value: &str) -> String {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    let mut escaped = String::with_capacity(value.len());
-    for byte in value.bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-') {
-            escaped.push(char::from(byte));
-        } else {
-            escaped.push('%');
-            escaped.push(char::from(HEX[usize::from(byte >> 4)]));
-            escaped.push(char::from(HEX[usize::from(byte & 0x0F)]));
-        }
-    }
-    escaped
+    crate::mount::device_key(target)
 }
 
 /// Live: the code of the status. Profiles only: `unknown`, except a stored

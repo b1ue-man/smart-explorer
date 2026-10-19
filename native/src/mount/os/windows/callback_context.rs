@@ -18,12 +18,28 @@ use super::{
 
 pub(super) use super::handle_types::{HandleSnapshot, NodeHandle};
 
+/// The engine behind a drive of one engine. Only the volume harnesses of
+/// the tests inspect it; the callbacks and the delete protocol run over
+/// `CallbackContext::filesystem`. A drive over the device tree (DRV-M6)
+/// has no engine.
+pub(super) struct EngineRef(Option<Arc<MountEngine>>);
+
+impl std::ops::Deref for EngineRef {
+    type Target = MountEngine;
+
+    fn deref(&self) -> &MountEngine {
+        self.0.as_deref().expect(
+            "only a drive of one engine has a mount engine to inspect; the device tree has none",
+        )
+    }
+}
+
 pub(super) struct CallbackContext {
-    /// The engine itself: the handle table's delete protocol
-    /// (`handle_state.rs`) and the volume harnesses take `&MountEngine`.
-    pub(super) engine: Arc<MountEngine>,
-    /// Data, metadata and namespace callbacks run over the frontend
-    /// boundary (DRV-M2); for a drive it is the same engine.
+    /// See `EngineRef`.
+    pub(super) engine: EngineRef,
+    /// Data, metadata and namespace callbacks and the delete protocol of the
+    /// handle table run over the frontend boundary (DRV-M2): the engine of
+    /// a drive, or the device tree.
     pub(super) filesystem: Arc<dyn MountFilesystem>,
     pub(super) runtime: DokanyRuntime,
     pub(super) read_only: bool,
@@ -50,11 +66,37 @@ impl CallbackContext {
         volume_serial: u32,
         cache_root_wide: Vec<u16>,
     ) -> io::Result<Self> {
-        let case_sensitive_paths = engine.case_sensitive_paths();
-        let timeouts = CallbackTimeoutSupervisor::start(runtime.clone())?;
         let filesystem: Arc<dyn MountFilesystem> = Arc::clone(&engine);
+        let mut context = Self::for_filesystem(
+            filesystem,
+            runtime,
+            reporter,
+            selected_drive,
+            read_only,
+            label,
+            volume_serial,
+            cache_root_wide,
+        )?;
+        context.engine = EngineRef(Some(engine));
+        Ok(context)
+    }
+
+    /// A context over any frontend, the device tree among them.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn for_filesystem(
+        filesystem: Arc<dyn MountFilesystem>,
+        runtime: DokanyRuntime,
+        reporter: impl Into<CallbackReporter>,
+        selected_drive: DriveLetter,
+        read_only: bool,
+        label: String,
+        volume_serial: u32,
+        cache_root_wide: Vec<u16>,
+    ) -> io::Result<Self> {
+        let case_sensitive_paths = filesystem.volume_facts().case_sensitive;
+        let timeouts = CallbackTimeoutSupervisor::start(runtime.clone())?;
         Ok(Self {
-            engine,
+            engine: EngineRef(None),
             filesystem,
             runtime,
             read_only,
@@ -101,17 +143,17 @@ impl CallbackContext {
         is_directory: bool,
     ) -> io::Result<()> {
         self.handles
-            .request_delete(&self.engine, key, path, is_directory)
+            .request_delete(&*self.filesystem, key, path, is_directory)
     }
 
     pub(super) fn cancel_delete(&self, key: u64, path: &str, is_directory: bool) -> io::Result<()> {
         self.handles
-            .cancel_delete(&self.engine, key, path, is_directory)
+            .cancel_delete(&*self.filesystem, key, path, is_directory)
     }
 
     pub(super) fn commit_delete(&self, key: u64, path: &str, is_directory: bool) -> io::Result<()> {
         self.handles
-            .commit_delete(&self.engine, key, path, is_directory)
+            .commit_delete(&*self.filesystem, key, path, is_directory)
     }
 
     pub(super) fn path_matches(&self, left: &str, right: &str) -> bool {

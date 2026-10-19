@@ -1,7 +1,13 @@
 use super::prelude::*;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-const PEER_CONNECTIONS_ROOT: &str = "/Verbindungen";
+// U17: the roots of a device are read by `crate::mount::peer_roots`, the
+// same code the device tree of the host uses.
+pub(super) use crate::mount::PeerRootChoice;
+use crate::mount::{list_peer_roots, peer_root_choices};
+#[cfg(test)]
+use crate::mount::{PeerRootListing, PEER_CONNECTIONS_ROOT};
+
 static PEER_CAPABILITY_PROBE_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 pub(super) struct PeerMountDiscovery {
@@ -19,12 +25,6 @@ pub(super) struct PeerDraft {
     pub(super) selected: usize,
     pub(super) safety: Option<Result<crate::vfs::MountPathCapabilities, String>>,
     pub(super) probe_rx: Option<Receiver<PeerSafetyProbe>>,
-}
-
-#[derive(Clone)]
-pub(super) struct PeerRootChoice {
-    pub(super) root: crate::mount::BackendRoot,
-    pub(super) label: String,
 }
 
 pub(super) struct PeerSafetyProbe {
@@ -142,87 +142,9 @@ pub(super) fn poll_peer_probe(draft: &mut super::mount_ui_draft::MountDraft, ctx
 }
 
 fn peer_roots(backend: &crate::vfs::BackendHandle) -> Result<Vec<PeerRootChoice>, String> {
-    let mut listings = Vec::new();
-    for entry in backend.list_dir("/").map_err(|error| error.to_string())? {
-        if !entry.is_dir || entry.is_symlink {
-            continue;
-        }
-        if entry.name == PEER_CONNECTIONS_ROOT.trim_start_matches('/') {
-            let Ok(connections) = backend.list_dir(PEER_CONNECTIONS_ROOT) else {
-                // Older peers could accidentally advertise a colliding local
-                // label here. Do not let one unusable reserved entry hide all
-                // other concrete mount roots during discovery.
-                continue;
-            };
-            let connections = connections
-                .into_iter()
-                .filter(|connection| connection.is_dir && !connection.is_symlink)
-                .map(|connection| connection.name)
-                .collect();
-            listings.push(PeerRootListing {
-                name: entry.name,
-                connections: Some(connections),
-            });
-        } else {
-            listings.push(PeerRootListing {
-                name: entry.name,
-                connections: None,
-            });
-        }
-    }
-    Ok(build_peer_roots(listings))
-}
-
-struct PeerRootListing {
-    name: String,
-    connections: Option<Vec<String>>,
-}
-
-fn build_peer_roots(listings: Vec<PeerRootListing>) -> Vec<PeerRootChoice> {
-    let mut roots = Vec::new();
-    for listing in listings {
-        if !safe_virtual_segment(&listing.name) {
-            continue;
-        }
-        if let Some(connections) = listing.connections {
-            for connection in connections {
-                if safe_virtual_segment(&connection) {
-                    push_root(
-                        &mut roots,
-                        &format!("{PEER_CONNECTIONS_ROOT}/{connection}"),
-                        format!("Verbindung: {connection}"),
-                    );
-                }
-            }
-        } else {
-            push_root(&mut roots, &format!("/{}", listing.name), listing.name);
-        }
-    }
-    push_root(
-        &mut roots,
-        "/",
-        "Alle freigegebenen Bereiche (nur Lesen)".into(),
-    );
-    roots
-}
-
-fn push_root(roots: &mut Vec<PeerRootChoice>, path: &str, label: String) {
-    let Ok(root) = crate::mount::BackendRoot::parse(path) else {
-        return;
-    };
-    if roots.iter().any(|choice| choice.root == root) {
-        return;
-    }
-    roots.push(PeerRootChoice { root, label });
-}
-
-fn safe_virtual_segment(value: &str) -> bool {
-    !value.is_empty()
-        && value.encode_utf16().count() <= 255
-        && !matches!(value, "." | "..")
-        && !value
-            .chars()
-            .any(|character| character.is_control() || matches!(character, '/' | '\\'))
+    list_peer_roots(&**backend)
+        .map(peer_root_choices)
+        .map_err(|error| error.to_string())
 }
 
 fn peer_mount_target(target: &crate::share::PeerOpenTarget) -> crate::mount::PeerMountTarget {
@@ -243,7 +165,7 @@ fn peer_mount_target(target: &crate::share::PeerOpenTarget) -> crate::mount::Pee
 
 #[cfg(test)]
 pub(super) fn peer_root_paths_for_test(entries: &[(&str, &[&str])]) -> Vec<String> {
-    build_peer_roots(
+    peer_root_choices(
         entries
             .iter()
             .map(|(name, children)| PeerRootListing {

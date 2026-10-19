@@ -30,9 +30,10 @@ use fuser::{Config, MountOption, Notifier, Session, SessionACL, SessionUnmounter
 
 use super::super::shared::change_pump::ChangePump;
 use super::super::shared::host_platform::{
-    HostLease, HostPlatform, HostStepError, VolumeLocation, VolumePoll,
+    HostLease, HostPlatform, HostStepError, LeaseFn, VolumeLocation, VolumePoll,
 };
 use super::super::shared::host_session::{self, HostExit, HostInputs, UpdateStopCheck};
+use super::bookmarks::{self, BookmarkEntry};
 use super::cache_lease::CacheLease;
 use super::cache_space::CacheDiskSpace;
 use super::fuse_fs::{FuseFs, FuseShared, SessionEnd};
@@ -41,9 +42,7 @@ use super::fuse_runtime::RuntimeProbe;
 use super::fuse_workers::RefreshWorker;
 use super::mount_point::{self, PlaceKind};
 use crate::daemon::{connect_mount_host, MountHostConfig};
-use crate::mount::{
-    CacheSpaceProbe, MountEngine, MountFilesystem, MountId, MountMode, PathDialect,
-};
+use crate::mount::{CacheSpaceProbe, MountEngine, MountFilesystem, MountId, PathDialect};
 
 /// Read loops of `fuser` (decision C2).
 const READ_LOOPS: usize = 2;
@@ -69,6 +68,10 @@ pub(crate) fn run_mount_host(id: MountId) -> Result<HostExit, String> {
     let session = Arc::new(connect_mount_host(id)?);
     let inputs = HostInputs::from_session(&session);
     let mut platform = FuseHost::default();
+    // DRV-M6: the device tree has its own host flow over the same platform.
+    if session.config.device_tree {
+        return host_session::devices::run(inputs, &session, &mut platform, &update_stop);
+    }
     host_session::run(inputs, &*session, &mut platform, &update_stop)
 }
 
@@ -89,6 +92,9 @@ struct Place {
     /// The folder as `mountinfo` lists it.
     canonical: PathBuf,
     kind: PlaceKind,
+    /// The places of the file managers (DRV-M5) name the drive.
+    id: MountId,
+    label: String,
 }
 
 struct Running {
@@ -106,6 +112,12 @@ impl HostPlatform for FuseHost {
 
     fn acquire_lease(&mut self, spool_root: &Path, id: &MountId) -> io::Result<HostLease> {
         CacheLease::acquire(spool_root, id).map(|lease| Box::new(lease) as HostLease)
+    }
+
+    fn lease_fn(&self) -> Option<LeaseFn> {
+        Some(Arc::new(|spool_root: &Path, id: &MountId| {
+            CacheLease::acquire(spool_root, id).map(|lease| Box::new(lease) as HostLease)
+        }))
     }
 
     fn space_probe(&mut self, spool_root: &Path) -> io::Result<Arc<dyn CacheSpaceProbe>> {
@@ -131,6 +143,16 @@ impl HostPlatform for FuseHost {
         config: &MountHostConfig,
         spool_root: &Path,
     ) -> Result<(), HostStepError> {
+        let filesystem: Arc<dyn MountFilesystem> = engine.clone();
+        self.prepare_filesystem(filesystem, config, spool_root)
+    }
+
+    fn prepare_filesystem(
+        &mut self,
+        filesystem: Arc<dyn MountFilesystem>,
+        config: &MountHostConfig,
+        spool_root: &Path,
+    ) -> Result<(), HostStepError> {
         let configured = location_of(config).map_err(|error| {
             HostStepError::Plain(format!("the drive has no mount folder: {error}"))
         })?;
@@ -138,10 +160,10 @@ impl HostPlatform for FuseHost {
         let canonical = mount_point::prepare(&configured, kind)
             .and_then(|()| mount_point::canonical(&configured))
             .map_err(|error| HostStepError::Plain(format!("mount folder: {error}")))?;
-        let filesystem: Arc<dyn MountFilesystem> = engine.clone();
+        let read_only = filesystem.volume_facts().read_only;
         self.shared = Some(FuseShared::new(
             filesystem,
-            config.mode == MountMode::ReadOnly,
+            read_only,
             spool_root.to_path_buf(),
             canonical.clone(),
         ));
@@ -149,6 +171,8 @@ impl HostPlatform for FuseHost {
             configured,
             canonical,
             kind,
+            id: config.id.clone(),
+            label: config.label.clone(),
         });
         Ok(())
     }
@@ -196,6 +220,14 @@ impl HostPlatform for FuseHost {
             unmounter,
             connection,
         });
+        // DRV-M5: a failed entry never fails the mount.
+        if let Err(error) = bookmarks::add(&BookmarkEntry {
+            id: place.id.to_string(),
+            folder: place.configured.clone(),
+            label: place.label.clone(),
+        }) {
+            eprintln!("Dateimanager-Eintrag: {error}");
+        }
         Ok(())
     }
 
@@ -290,6 +322,11 @@ impl HostPlatform for FuseHost {
             refresh.join();
         }
         if let Some(place) = self.place.as_ref() {
+            // DRV-M5: the places go right after the unmount, before the
+            // folder is locked.
+            if let Err(error) = bookmarks::remove(&place.configured) {
+                eprintln!("Dateimanager-Eintrag: {error}");
+            }
             let _ = mount_point::lock(&place.configured, place.kind);
         }
         ended
