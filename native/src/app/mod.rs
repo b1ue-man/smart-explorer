@@ -339,6 +339,9 @@ mod transfer_window;
 mod treemap;
 #[path = "core/ui_preferences.rs"]
 mod ui_preferences;
+#[path = "vault_modules.rs"]
+mod vault_modules;
+pub(crate) use vault_modules::*;
 #[path = "core/view_selection.rs"]
 mod view_selection;
 #[path = "os/shared/watchers.rs"]

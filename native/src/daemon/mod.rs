@@ -258,6 +258,7 @@ pub use mount_client::{
     connect_mount_host, list_mounts, retry_mount, start_mount, stop_mount, MountHostConfig,
     MountHostSession,
 };
+pub(crate) use mount_client::{ensure_mounted_for, mount_path_for};
 pub use mount_probe_client::probe_share_mount_capabilities;
 #[allow(unused_imports)]
 pub use platform::DriveInfo;

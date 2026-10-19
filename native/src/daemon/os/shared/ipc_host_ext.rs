@@ -15,7 +15,7 @@
 use std::io;
 use std::net::TcpStream;
 
-use super::super::ipc_protocol::{write_response, IpcRequest, IpcResponse};
+use super::super::ipc_protocol::{write_response, IpcRequest, IpcResponse, VaultIpcRequest};
 use super::ShareHost;
 
 /// Refusal of `ipc.rs::require_request_auth` for a request without any
@@ -40,19 +40,30 @@ impl ShareHost {
             }
             IpcRequest::Vault { req, .. } => super::super::ipc_vault::serve(self, stream, req),
             IpcRequest::Screen { req, .. } => self.serve_screen(stream, req),
+            IpcRequest::MountHostExt { id, req, .. } => {
+                self.mounts.serve_host_ext(stream, &id, req)
+            }
             other => unhandled(&mut stream, &other),
         }
     }
 
-    /// Capability check of a later variant that carries no daemon token.
-    // Staged: R5 routes the fallback arm of `ipc.rs::require_request_auth`
-    // here (`MountHostExt`); until then nothing calls it.
-    #[allow(dead_code)]
+    /// Capability check of a later variant that carries no daemon token
+    /// (fallback arm of `ipc.rs::require_request_auth`). `MountHostExt` and
+    /// `Vault::SpoolKey` pass only with the session token of exactly the
+    /// mount they name; every other request is refused.
     pub(in crate::daemon) fn authorize_extension(&self, req: &IpcRequest) -> Result<(), String> {
-        // R5: `IpcRequest::MountHostExt { id, session_token, .. }` checks
-        // `self.mounts.check_session_token(id, session_token)`.
-        let _ = req;
-        Err(NO_CAPABILITY.into())
+        match req {
+            IpcRequest::MountHostExt {
+                id, session_token, ..
+            } => self.mounts.check_session_token(id, session_token),
+            IpcRequest::Vault {
+                token,
+                req: VaultIpcRequest::SpoolKey { mount_id },
+            } => crate::mount::MountId::parse(mount_id)
+                .map_err(|error| error.to_string())
+                .and_then(|id| self.mounts.check_session_token(&id, token)),
+            _ => Err(NO_CAPABILITY.into()),
+        }
     }
 }
 
