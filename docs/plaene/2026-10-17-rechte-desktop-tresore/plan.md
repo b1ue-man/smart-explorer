@@ -23,6 +23,7 @@ Quelle aller Ergebnisse: Nutzernachricht vom 2026-10-17 (Arbeitsweise-Auftrag `9
 | E9 | Eigener Tresor-Sync-Job ohne Ordnereinrichtung, synchronisiert zuverlässig die neuesten Änderungen; bei Änderungen auf beiden Seiten keine automatische Konfliktauflösung, sondern ein Tresor-Vergleichsmodus nach dem Öffnen des Tresors | „another idea would be a inividual vault syncjob that does not require folder setup and syncs reliably the latest changes and on changes on both sides does not resolve conflicts automatically, but gives the user a vault comparison mode where he can after opening the vault compare the differences“ |
 | E10 | Untersuchen, wie Cryptomator Tresore ins System einhängt, ob davon etwas „donkey“ ersetzen und Zuverlässigkeit bringen kann oder nicht; entscheiden, wie unter Linux Laufwerke eingehängt werden | „you can also be inspired by how cryptomator plugs it's vault into the system and see if any of these could replace donkey and add reliability or not and how you wanna do it for linux with plugging stuff in as drive“ |
 | E11 | Zuerst planen, wie viele Hauptstränge nötig sind, jeden einzeln planen; nach der Planung direkt ausführen | „you will need to first plan how many main threads you will need to plan their stuff individually. execute directly once finished with planning“; „dig in and research and research more and plan and reresearch and plan and rerevalidate every component“ |
+| E12 | Exec-Gleichzeitigkeitsgrenzen („PrincipalLimit“, „GlobalLimit“) vollständig entfernen, ohne Ersatzgrenze (Anforderung R15, 2026-10-19) | „ergänzung, wo kommt der BS her? raus damit komplett, kein limit.“ |
 
 Eigene Folgerungen (nicht Nutzeraussage):
 - „donkey“ bezeichnet nach dem Wortlaut das Windows-Laufwerks-Backend; Annahme bis zur Bestandslektüre: Dokany. (Bestand bestätigt: `native/src/mount/os/windows/dokany_abi.rs`.)
@@ -163,6 +164,70 @@ Sitzungslimit (Nutzer 2026-10-17): Ab der Nachricht zum nahenden Sitzungslimit l
   3. dann U22, U23, U25, U27, U28, U31, U35, U37, U38 und U40;
   4. zuletzt U36, U41, U42 und U43;
   5. dann die Suite.
+
+### Neuverteilung nach Modellen (Nutzer 2026-10-19)
+
+**Nutzervorgaben (wörtlich, 2026-10-19):**
+1. „mach den cron mal weg der verbrauch ist zu heftig. bzw. lass den cron da, aber redistribute die arbeit. sonnet für implementierungen die keine interpretation mehr zulassen, opus nut für sicherheitsrelevantes einer und design n anderer, gebatched die beiden also. der rest wenn möglich via sonnet. aber das machst erst mit dem cron das neu aufteilen, dann stoppst du und machst nicht die umsetzung.“
+2. „ergänzung, wo kommt der BS her? raus damit komplett, kein limit.“ (zu „PrincipalLimit“, E12)
+3. „bis dahin gibt es potentiell eine neue arbeitsweise zu welche models für was genommen werden. Das kann dann übernommen werden.“
+4. „dauert potentiell noch n bissl, wenn die arbeitsweise existiert dann mach weiter, ansonsten setze dir n entsprechenden cron nach 15 min oder so, wenn es ne stunde nach der rücksetzung noch fehlt, mach ohne weiter.“
+
+**Quelle der Modellregel:** Arbeitsweise `modellwahl` (Katalogeintrag vom 2026-10-19, 21:52 UTC; Adapter 3.1.0, Auswahl über `adapter.mjs model-select`, Richtlinie `selectionmap` vom 2026-10-19). Sie ersetzt nach Vorgabe 3 die Modellaufteilung aus Vorgabe 1. Die Bündelung aus Vorgabe 1 (genau ein Agent für alles Sicherheitsrelevante, genau einer für alles Design) bleibt bestehen.
+
+**Eingaben der Auswahl:**
+- Ausführungshost: der Host des Hauptagenten. Das Werkzeug schließt jedes Modell ohne dort vorhandenes Programm (`executable_missing_on_execution_host`) und jedes ohne Kontingentbeleg (`quota_pool_missing`) aus.
+- Kontingent: nur für den Claude-Pool belegt (Abfrage des angemeldeten Kontos zum Zeitpunkt der Wahl). Übrig bleiben deshalb nur Claude-5.5-Modelle.
+- Je Bündel sechs Achsen mit Begründung; die Eingabedateien liegen im Arbeitsverzeichnis des Hauptagenten (`mw/*.json`).
+
+**Ergebnis je Bündel:**
+
+| Bündel | Stufe (1–10) | Profil | Umfang | Empfehlung des Werkzeugs | Zulässige Alternative mit geringerem Verbrauch (Pareto-Front, Mindestqualität erfüllt) |
+|---|---|---|---|---|---|
+| Design | 7 | repository 0,6 · evidence 0,4 | large | `claude-opus-5-5`, Effort `xhigh` | `claude-sonnet-5-5` `high` (52,21 ≥ 49) |
+| Sicherheit | 8 | repository | multi_step_campaign | `claude-opus-5-5`, Effort `xhigh` | keine: `claude-sonnet-5-5` `high` erreicht 49,68 < 51 |
+| Umsetzung, eindeutig festgelegt | 6 | repository | large | `claude-opus-5-5`, Effort `xhigh` | `claude-sonnet-5-5` `high` (49,68 ≥ 46) |
+| Umsetzung, Plattformkern | 7 | repository | large | `claude-opus-5-5`, Effort `xhigh` | `claude-sonnet-5-5` `high` (49,68 ≥ 49) |
+| Suite Teil B | 6 | workflow 0,5 · repository 0,5 | large | `claude-opus-5-5`, Effort `xhigh` | `claude-sonnet-5-5` `high` (51,13 ≥ 46) |
+| Doku | 4 | evidence 0,5 · repository 0,5 | medium | `claude-opus-5-5`, Effort `xhigh` | `claude-sonnet-5-5` `high` (52,84) oder `medium` (46,09 ≥ 38) |
+| Lesen (Bestandsaufnahme) | 2 | repository | bounded_inventory_subtask | `claude-opus-5-5`, Effort `xhigh` | `claude-sonnet-5-5` `high` (49,68) oder `medium` (43,34 ≥ 31) |
+
+Befund zum Werkzeug: Es ordnet die Pareto-Front zuerst nach Aufgabenqualität. Für alle Paare fehlt eine Messung des Aboverbrauchs (`unmeasured`), deshalb empfiehlt es auf jeder Stufe `claude-opus-5-5` mit `xhigh`; die Stufe setzt nur die Mindestqualität. Die Spalte „Alternative“ ist eine eigene Folgerung aus der Front des Werkzeugs, keine Empfehlung des Werkzeugs. Ob sie wegen Vorgabe 1 („der verbrauch ist zu heftig“) gilt, entscheidet der Nutzer bei der Freigabe.
+
+**Zuordnung der Restarbeit:**
+
+| Teil | Bündel | Grund der Zuordnung | Start | Zuerst nötig |
+|---|---|---|---|---|
+| R15: `ExecRegistryLimits` (`principal_active`, `global_active`), `DEVICE_RESERVATIONS`, `HOST_RESERVATIONS`, `limit_error`, Fehlervarianten `PrincipalLimit`/`GlobalLimit` samt Draht-, Android-, CLI-, MCP- und Doku-Spiegeln entfernen; `history`/`terminal_cache` bleiben (keine Nutzungsgrenze, Annahme) | Sicherheit, Punkt 1 | Exec-Zulassung (Rechte) | Welle A | – |
+| Registrierung U13/U14/U20 (Hub-Dateien) | Sicherheit, Punkt 2 | IPC-Authentifizierung `MountHostExt` und `SpoolKey` (Sitzungstoken, `authorize_extension`) | Welle A | wörtliche Zeilen in `stand/U14.md` und `stand/U20.md` (Abschnitt 4); MCP-Beispiel aus `stand/U13.md` |
+| Tresor-Jobs an `vault::run_vault_job` in den vier Läufern, `note_vault_backend`, Versiegelung des Wiederherstellungsmanifests (K07) | Sicherheit, Punkt 3 | Klartextgrenze der Tresore | Welle A, nach Punkt 2 | – |
+| U27 (Android als Bildschirm-Host, W1) | Sicherheit, Punkt 4 | Bildschirmfreigabe, Eingabe über die Bedienungshilfe, Freigabeaktionen | Welle A, nach Punkt 3 | – (Abhängigkeiten erfüllt) |
+| U22 (Eingabe auf Desktop-Hosts, Lizenzdatei) | Sicherheit, Punkt 5 | Eingabeinjektion mit `ScreenControl`-Recht | nach U16 und U19 | Design: Eingabe im Hostprozess (`worker_wire` `INPUT`) |
+| U23 (Android-Dokumentanbieter) | Sicherheit, Punkt 6 | gibt Dateien und Tresor-Roots an fremde Apps | nach U17 und U28 (Android-Hub-Reihenfolge) | – |
+| U31 (Tresore auf Android) | Sicherheit, Punkt 7 | Entsperren, Schlüssel, Klartext auf dem Gerät | nach U26 und U23 | Design: Bildschirme U31 |
+| U36 (Installer, Linux-Skript) | Sicherheit, Punkt 8 | Installer- und Dienstrechte, Deinstallation | zuletzt vor U41 | Installer-Bedarf aller Pakete (Übergaben) |
+| Offene Entwurfspunkte aller übrigen Pakete | Design (ein Agent) | legt fest, was noch Interpretation zulässt; schreibt je Paket „Festlegungen“ in diesen Plan, bevor die Umsetzung startet | Welle A | Reihenfolge der Prüfung: U17, U16, U19, U26, U37, U34, U25, U29, U28, U35, U38, U40, dann U22-Eingabeort und U31-Bildschirme für den Sicherheitsagenten |
+| U17 (Dateimanager, Gerätebaum) | Umsetzung, eindeutig | Plan L 269–283 mit Dateien und Signalen | Welle A, sobald Design U17 freigibt | Design U17 |
+| U16 (Windows-Host) | Umsetzung, Plattformkern | DXGI/WGC, Media Foundation | Welle B | Design U16 (GPU-Eingang `MF_SA_D3D11_AWARE`, Ort von `inject`) |
+| U19 (Linux-Host) | Umsetzung, Plattformkern | X11, Portal, PipeWire | Welle B | Design U19 (Frist 120 s, Zwischenstand `WaitingForPortal`) |
+| U26 (Vergleichsmodus, Prüfung, CLI) | Umsetzung, eindeutig | Plan T 512–524 | Welle B | Design U26 („Löschung übernehmen“, „Wiederherstellen“) |
+| U37 (Wayland-Layer) | Umsetzung, Plattformkern | eigener Layer-Host für `SurfaceHost` | Welle B | Design U37 |
+| U34 (Linux-X11, GNOME) | Umsetzung, Plattformkern | X11-Adapter, GNOME-Erweiterung | nach U17 | Design U34 |
+| U25 (Desktop-Betrachter) | Umsetzung, eindeutig | Plan B 372–378 | nach U16, U19 und U22 | Design U25 |
+| U29 (Tresor-GUI) | Umsetzung, eindeutig | Plan T 530–533 | nach U26 | Design U29 (Zwischenspeicher bei Tresoren, „Beim Öffnen einhängen“) |
+| U28 (Android-Betrachter) | Umsetzung, eindeutig | Plan B 397–403 | nach U25 und U27 | Design U28 |
+| U35 (Launcher-Rahmen) | Umsetzung, eindeutig | Plan D 628–646 | nach U31 (H4) | Design U35 |
+| U38 (Widgets, Badges, Profile) | Umsetzung, eindeutig | Plan D 652–670 | nach U35 | Design U38 |
+| U40 (se-Inhalte im Launcher, Gesten) | Umsetzung, eindeutig | Plan D 676–682 | nach U28, U31, U23 und U38 | Design U40 |
+| U41 (Suite Teil B) | Suite | D3 | nach allen S4-, S5- und Launcher-Paketen | Inventurzeilen aus den Übergaben |
+| U42, U43 (Doku) | Doku | gemeldeter Doku-Bedarf | zuletzt | – |
+| Remote-Suite mit Korrekturschleife, Release | Hauptagent | AGENTS.md | nach allem | – |
+
+**Startreihenfolge und Grenzen:**
+- Welle A beginnt nach der Freigabe durch den Nutzer: Design, Sicherheit (Punkte 1–4) und U17. Welle B folgt, sobald das Design das jeweilige Paket festgelegt hat: U16, U19, U26, U37. Danach jedes Paket, sobald seine Abhängigkeiten aus dieser Tabelle und aus D2.4 erfüllt sind.
+- Höchstens sieben Kindagenten gleichzeitig (AGENTS.md); Design und Sicherheit sind je ein durchgehender Agent, der über Stand-Dateien fortgesetzt wird.
+- Android-Hub-Dateien (D2.3) hält immer nur ein Android-Paket: U27 → U28 → U23 → U31 → U35 → U38 → U40; das erfüllt H4 (U28 → U31 → U35 → U40).
+- Kein Agent startet vor der Freigabe dieses Abschnitts durch den Nutzer (Vorgabe 1).
 
 **Stand bei der zweiten Pause (2026-10-18 08:45 UTC, Startgrenze des Wochenlimits erreicht, alle laufenden Pakete fertig):**
 - Fertig, committet und gepusht: zusätzlich U13 (9e1448e2), U14 (ee4a5761, 5267e500), U20 (1879e509), U32 (6e1c4602). Damit 23 von 43 Umsetzungspaketen.
