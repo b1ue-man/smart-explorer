@@ -7,8 +7,9 @@
 //! reports `WaitingForPortal`. Neither the dialog nor the wait has a time
 //! limit of its own: the user's answer, the end of the session (dropping the
 //! handle) or a failure of the portal ends it. The state lives in the
-//! session, not in the capture, because U22 adds `RemoteDesktop` to the same
-//! portal session.
+//! session, not in the capture: a session that may control
+//! (`PortalOptions::remote_desktop`, SCR-M6) runs as a `RemoteDesktop`
+//! session with the screen cast in it (`portal_input`).
 //!
 //! Assumption: the `ashpd` 0.13 names and option types are those of its
 //! documentation (docs.rs, 2026-10-19); they could not be built here.
@@ -70,18 +71,21 @@ impl PortalSession {
     /// Starts the portal negotiation on a thread of its own and returns at
     /// once.
     pub(crate) fn start(options: PortalOptions) -> io::Result<PortalHandle> {
-        if options.remote_desktop {
-            return Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "input through the RemoteDesktop portal follows with U22",
-            ));
-        }
         let state = Arc::new(Mutex::new(PortalState::Waiting));
         let (stop, stopped) = tokio::sync::oneshot::channel();
         let shared = state.clone();
-        std::thread::Builder::new()
-            .name("portal-session".into())
-            .spawn(move || thread_main(&shared, stopped, options))?;
+        if options.remote_desktop {
+            let inputs = super::portal_input::open_channel();
+            std::thread::Builder::new()
+                .name("portal-session".into())
+                .spawn(move || {
+                    super::portal_input::thread_main(&shared, stopped, options, inputs)
+                })?;
+        } else {
+            std::thread::Builder::new()
+                .name("portal-session".into())
+                .spawn(move || thread_main(&shared, stopped, options))?;
+        }
         Ok(PortalHandle {
             state,
             _stop: Some(stop),
@@ -104,7 +108,7 @@ impl PortalHandle {
     }
 }
 
-fn set(state: &Mutex<PortalState>, next: PortalState) {
+pub(super) fn set(state: &Mutex<PortalState>, next: PortalState) {
     *state.lock().unwrap_or_else(PoisonError::into_inner) = next;
 }
 
@@ -126,12 +130,12 @@ fn thread_main(
 }
 
 /// Why the negotiation did not produce a stream.
-enum Refusal {
+pub(super) enum Refusal {
     Denied(String),
     Failed(String),
 }
 
-fn refusal(error: ashpd::Error) -> Refusal {
+pub(super) fn refusal(error: ashpd::Error) -> Refusal {
     match error {
         ashpd::Error::Response(response) => Refusal::Denied(response.to_string()),
         other => Refusal::Failed(format!("portal: {other}")),
@@ -264,7 +268,7 @@ async fn negotiate(
 /// Registers the program with the portal once per process; a portal before
 /// 1.19.4 or an application id without a dot fails, which changes nothing
 /// for the screen cast (A10).
-async fn register_host_app_once() {
+pub(super) async fn register_host_app_once() {
     static TRIED: AtomicBool = AtomicBool::new(false);
     if TRIED.swap(true, Ordering::SeqCst) {
         return;

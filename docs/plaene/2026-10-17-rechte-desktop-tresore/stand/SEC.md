@@ -2,61 +2,32 @@
 
 Stand: 2026-10-19.
 
-- Punkte 1–3 sind committet: df15feb5, e6b4c24a, 25e08110.
-- Punkt 1b und Punkt 4 (U27) sind im Quelltext fertig, aber nicht gebaut, nicht getestet und nicht committet.
+- Committet sind Punkt 1–3, 1b und 4 (df15feb5, e6b4c24a, 25e08110, e2233d85, c87bd083).
+- Punkt 4b und Punkt 5 (U22) sind im Quelltext fertig, aber nicht gebaut, nicht getestet und nicht committet.
 - Jede geänderte Rust-Datei ist mit `rustfmt --check` geprüft und hat weniger als 500 Zeilen.
 
-## Punkt 1b: R15 restlos
+## Punkt 4b
 
-**Entfernt** (alles außerhalb von `exec_client_messages.rs` und seinem Test):
+- `screen/os/mod.rs`: Android-Module eingetragen; `platform_backend()` hat je einen Arm für Windows, Linux, Android und alle übrigen Plattformen; `host_backend()` nutzt auf Android `BridgeBackend` ohne `WorkerBackend`; `host_indicator()` ist neu.
+- R9-Zeilen gesetzt in `mobile/os/shared/domains/mod.rs`, `mobile/mod.rs` und `android-bridge/src/lib.rs`.
+- `PermTaskTest.kt` prüft die drei Aktionen der Bildschirm-Rückfrage.
+- In `screen/core/host_backend.rs` ist der Kommentar zu den Reservierungen gestrichen.
 
-- `ReservationGauge` mit allen Implementierungen;
-- die Parameter von `broker(gauge)` und `request(gauge, …)`; `request(principal, capability, summary)` ist jetzt der einzige Weg;
-- `ApprovalOutcome::{DeviceLimit, HostLimit}` und der Arm in `screen/core/authorize.rs`;
-- der Kommentar in `wire_hello.rs`;
-- der Parameter von `NodeScreen::new`.
+## Punkt 5: U22
 
-**Bleibt mit Absicht:** `PrincipalLimit` und `GlobalLimit` nur noch in der Übersetzung für alte Hosts (`exec_client_messages.rs`) und deren Test (`access_approval_limits_tests.rs`).
+**Entscheidung zum Ort der Eingabe (Frage aus U16-4):** Die Eingabe läuft im Hostprozess über `worker_wire` `INPUT` → `INPUT_DONE`. Der Daemon-`WorkerBackend` leitet sie an den jüngsten Hostprozess einer Sitzung im Modus `control` weiter. Ob eine Sitzung steuern darf, liest `WorkerBackend` beim Öffnen aus dem Register. Das Register bekommt er über `host_indicator`.
 
-**Offen:**
+**Umgesetzt:**
+- Windows: `input_send.rs`, `input_integrity.rs` und Tests.
+- Linux: `x11_input.rs`, `x11_keymap.rs` und `portal_input.rs` (RemoteDesktop-Sitzung mit ScreenCast).
+- Gemeinsam: `os/shared/input_keys.rs`.
+- CLI: `cli/screen/input.rs`.
+- MCP: eigenes Werkzeug `screen_input` in `cli/mcp/screen_tool.rs`.
+- Lizenz: `third-party/openh264/BINARY_LICENSE.txt` und `screen/core/licenses.rs`.
+- `se screen codec licenses` und das Fenster „Lizenzen“ in der Desktop-App.
 
-- `share/core/node.rs:173` muss `NodeScreen::new()` statt `NodeScreen::new(&exec_registry)` aufrufen. Die Datei liegt außerhalb des SEC-Bereichs.
-- Die Doku von `ConsentBroker::request` in `screen/core/host_backend.rs:132–133` nennt noch „reservation“. Die Datei gehört U16.
-
-## Punkt 4: U27 (Android als Bildschirm-Host)
-
-**Neue Rust-Dateien:**
-
-- `screen/os/android/bridge_channels.rs`
-- `screen/os/android/bridge_backend.rs`
-- `screen/os/android/bridge_source.rs`
-- `screen/os/android/bridge_tests.rs`
-- `mobile/os/shared/domains/screen_host.rs`
-- `mobile/os/shared/domains/screen_host_tests.rs`
-- `android-bridge/src/screen_jni.rs`
-
-**Neue Kotlin-Dateien:**
-
-- unter `A/screen/`: ScreenHostControl, ScreenHostService, ScreenConsentActivity, ScreenEncoder, ScreenControlService, GestureMapper, RunningApps, ScreenStillSource, SyntheticSurfaceSource, ScreenHostNotifier;
-- `A/ui/screen/ScreenHostSection.kt`;
-- `A/api/ScreenApi.kt`;
-- `res/xml/screen_control_service.xml`;
-- `androidTest/.../ScreenTaskTest.kt`.
-
-**Geänderte Dateien:**
-
-- `NativeBridge.kt`, `CoreEvents.kt`, `AndroidManifest.xml`, `strings.xml`, `ShareScreen.kt`;
-- `AccessApprovalNotifier.kt` (Aktionsziele aus W1);
-- `AccessDialog.kt` (Übergabe U21: Rechtezeilen und Bildschirm-Zweig der Rückfrage);
-- `mobile/.../share_access.rs` mit Tests (Filter der Bildschirmzeilen aufgehoben);
-- `share/core/node_screen.rs` (`host_indicator`).
-
-**Registrierungsbedarf:** siehe Abschlussbericht vom 2026-10-19 (Lauf Punkt 1b/4). Betroffen sind `screen/os/mod.rs` (U16), `domains/mod.rs` und `mobile/mod.rs` (R9) sowie `android-bridge/src/lib.rs`.
-
-**Offen:**
-
-- `PermTaskTest.kt` (U21) erwartet für Bildschirm-Rückfragen nur „Ablehnen“. Seit U27 gibt es dort drei Aktionen; die Zeilen sind anzupassen.
+**Registrierungsbedarf:** siehe Abschlussbericht vom 2026-10-19 (Lauf 4b/5). Betroffen sind `screen/core/mod.rs`, `cli/screen.rs`, `daemon/mod.rs`, `cli/mcp/catalog.rs`, `cli/mcp/server.rs`, `.gitattributes` und `installer.nsi` (U36).
 
 ## Nächster Schritt
 
-Auf Punkt 5 warten.
+Auf Punkt 6 warten.

@@ -8,8 +8,11 @@
 //! running OpenH264 encoder once the user switched OpenH264 off (that
 //! unloads the library). It ends on `CLOSE`, at the end of its input (the
 //! daemon went), on a new update-stop request (exit 75, V8) and on Linux
-//! with the daemon (parent-death signal).
+//! with the daemon (parent-death signal). A source opened for a controlling
+//! viewer (SCR-M6) takes `INPUT` and injects it with the platform backend;
+//! any other session refuses input with `control_unavailable`.
 use std::io;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -34,6 +37,17 @@ const OPENH264: &str = "openh264";
 #[cfg(debug_assertions)]
 pub(crate) const CRASH_AFTER_ENV: &str = "SE_SCREEN_WORKER_CRASH_AFTER";
 
+/// This process serves a session that may control (`OPEN` with `control`);
+/// one process serves one session, so the flag is the process's.
+static CONTROL: AtomicBool = AtomicBool::new(false);
+
+/// Whether the session of this host process may control (the Wayland
+/// backend asks the portal for `RemoteDesktop` then).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(crate) fn session_controls() -> bool {
+    CONTROL.load(Ordering::SeqCst)
+}
+
 /// The running encoder and what it was opened for.
 struct Running {
     encoder: Box<dyn ScreenEncoder>,
@@ -51,6 +65,8 @@ struct Worker {
     refused: Vec<String>,
     produced: u64,
     checked: Instant,
+    /// The session may control (`OPEN` with `control`).
+    control: bool,
 }
 
 fn failed(code: ScreenErrorCode, error: impl ToString) -> WorkerReply {
@@ -106,6 +122,7 @@ pub(crate) fn run_host_worker() -> i32 {
         refused: Vec::new(),
         produced: 0,
         checked: Instant::now(),
+        control: false,
     };
     let mut input = io::stdin().lock();
     let mut output = io::stdout().lock();
@@ -139,9 +156,12 @@ impl Worker {
         match request {
             WorkerRequest::Open(open) => {
                 self.encoder = None;
+                CONTROL.store(open.control, Ordering::SeqCst);
+                self.control = open.control;
                 match self.backend.open_source(&open.source, open.wanted) {
                     Ok(source) => {
                         let size = source.size();
+                        super::note_input_target(&open.source);
                         self.source = Some(source);
                         WorkerReply::Opened { size }
                     }
@@ -152,6 +172,14 @@ impl Worker {
             }
             WorkerRequest::Produce(request) => self.produce(&request),
             WorkerRequest::Capture { frame_id } => self.raw(frame_id),
+            WorkerRequest::Input(events) => {
+                let blocked = if !self.control || self.source.is_none() {
+                    Some(crate::screen::core::wire_control::ControlBlock::ControlUnavailable)
+                } else {
+                    self.backend.inject(&events).err()
+                };
+                WorkerReply::InputDone { blocked }
+            }
             WorkerRequest::Close => failed(ScreenErrorCode::CaptureFailed, "closed"),
         }
     }

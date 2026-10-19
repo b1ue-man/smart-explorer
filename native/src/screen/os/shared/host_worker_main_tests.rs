@@ -86,6 +86,7 @@ fn worker(kind: io::ErrorKind) -> Worker {
         refused: Vec::new(),
         produced: 0,
         checked: Instant::now(),
+        control: false,
     }
 }
 
@@ -118,6 +119,7 @@ fn open(worker: &mut Worker) {
     let opened = worker.handle(WorkerRequest::Open(OpenRequest {
         source: SourceId::Monitor("portal".into()),
         wanted: None,
+        control: false,
     }));
     assert!(matches!(opened, WorkerReply::Opened { .. }));
 }
@@ -139,4 +141,44 @@ fn screen_task_worker_keeps_other_capture_errors_as_capture_failed() {
     open(&mut worker);
     let produced = worker.handle(WorkerRequest::Produce(request(FrameSize::new(320, 180))));
     assert_eq!(code_of(produced), ScreenErrorCode::CaptureFailed);
+}
+
+/// Input reaches the platform backend only in a session opened for control
+/// (SCR-M6); the frames survive the wire unchanged.
+#[test]
+fn screen_task_worker_input_needs_control_session() {
+    use crate::screen::core::worker_wire::{WorkerReply as Reply, WorkerRequest as Request};
+    let events = vec![InputEvent::Text { text: "x".into() }];
+    let mut viewing = worker(io::ErrorKind::BrokenPipe);
+    open(&mut viewing);
+    assert_eq!(
+        viewing.handle(Request::Input(events.clone())),
+        Reply::InputDone {
+            blocked: Some(ControlBlock::ControlUnavailable)
+        }
+    );
+    let mut controlling = worker(io::ErrorKind::BrokenPipe);
+    let opened = controlling.handle(Request::Open(OpenRequest {
+        source: SourceId::Monitor("portal".into()),
+        wanted: None,
+        control: true,
+    }));
+    assert!(matches!(opened, Reply::Opened { .. }));
+    // The test backend refuses input: its reason travels back.
+    assert_eq!(
+        controlling.handle(Request::Input(events.clone())),
+        Reply::InputDone {
+            blocked: Some(ControlBlock::UnsupportedOnHost)
+        }
+    );
+    let (tag, payload) = Request::Input(events.clone()).encode().unwrap();
+    assert_eq!(
+        Request::decode(tag, &payload).unwrap(),
+        Request::Input(events)
+    );
+    let done = Reply::InputDone {
+        blocked: Some(ControlBlock::ElevatedWindow),
+    };
+    let (tag, payload) = done.encode().unwrap();
+    assert_eq!(Reply::decode(tag, &payload).unwrap(), done);
 }

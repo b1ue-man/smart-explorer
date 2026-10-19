@@ -118,3 +118,36 @@ fn mcp_task_screen_refuses_unnamed_devices_and_unknown_actions() {
     let error = call(json!({"action": "snapshot", "device": "x", "source": "screen"}));
     assert!(error.is_err());
 }
+
+/// The tool `screen_input` (SCR-M6): one input per call, every input kind
+/// in the schema, the refusal of none or two inputs before any device is
+/// asked.
+#[test]
+fn screen_task_mcp_screen_input_shape() {
+    let properties = input_properties();
+    for name in [
+        "device", "source", "text", "key", "click", "move", "scroll", "action", "wait",
+    ] {
+        assert!(properties.get(name).is_some(), "{name}");
+    }
+    assert_eq!(properties["action"]["enum"][1], "home");
+    assert!(INPUT_DESCRIPTION.len() <= 2_048);
+    for fact in [
+        "screen control",
+        "approval_pending",
+        "Ctrl+Alt+Delete",
+        "elevated_window",
+    ] {
+        assert!(INPUT_DESCRIPTION.contains(fact), "{fact}");
+    }
+    let input = |value: Value| {
+        let map = value.as_object().unwrap().clone();
+        screen_input(&Args::new(Some(&map)))
+    };
+    let none = input(json!({"device": "laptop"})).unwrap_err();
+    assert!(none.contains("exactly one"), "{none}");
+    let two = input(json!({"device": "laptop", "text": "a", "key": "enter"})).unwrap_err();
+    assert!(two.contains("exactly one"), "{two}");
+    let bad = input(json!({"device": "laptop", "key": "hyper"})).unwrap_err();
+    assert!(bad.contains("unknown key"), "{bad}");
+}

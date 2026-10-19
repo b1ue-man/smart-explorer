@@ -14,7 +14,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use crate::screen::core::host_backend::{ScreenSource, SourceFrame, SourceRefusal};
@@ -28,7 +28,7 @@ use crate::screen::core::worker_wire::{
 
 #[path = "host_worker_backend.rs"]
 mod backend;
-pub(crate) use backend::{WorkerBackend, WorkerProgram};
+pub(crate) use backend::{watch_registry, WorkerBackend, WorkerProgram};
 
 /// The V9 start switch of the host process (`StartRequest::ScreenHostWorker`).
 pub(crate) const SCREEN_HOST_WORKER_SWITCH: &str = "--screen-host-worker";
@@ -38,6 +38,9 @@ pub(crate) const PARENT_ENV: &str = "SE_SCREEN_WORKER_PARENT";
 const OPEN_TIMEOUT: Duration = Duration::from_secs(120);
 /// Time for one picture (the first one starts the encoder).
 const FRAME_TIMEOUT: Duration = Duration::from_secs(10);
+/// Time for one input batch (SCR-M6), the wait for a running picture
+/// request included.
+pub(super) const INPUT_TIMEOUT: Duration = Duration::from_secs(2);
 /// Time a closed host process gets to exit before it is killed.
 const EXIT_WAIT: Duration = Duration::from_secs(2);
 
@@ -105,7 +108,7 @@ fn wait_for(child: &mut Child, limit: Duration) -> Option<ExitStatus> {
 }
 
 /// One running host process.
-struct WorkerLink {
+pub(super) struct WorkerLink {
     child: Child,
     input: ChildStdin,
     answers: Receiver<Answer>,
@@ -160,7 +163,11 @@ impl WorkerLink {
     }
 
     /// Sends `request` and waits up to `limit` for the answer.
-    fn ask(&mut self, request: &WorkerRequest, limit: Duration) -> Result<WorkerReply, StageError> {
+    pub(super) fn ask(
+        &mut self,
+        request: &WorkerRequest,
+        limit: Duration,
+    ) -> Result<WorkerReply, StageError> {
         if let Err(error) = send_request(&mut self.input, request) {
             return Err(self.lost(error));
         }
@@ -228,37 +235,48 @@ impl Drop for WorkerLink {
     }
 }
 
+/// The link of a source, shared with the input path of its backend
+/// (SCR-M6): input waits for a running picture request and goes next.
+pub(super) type SharedLink = Arc<Mutex<WorkerLink>>;
+
 /// A source captured and encoded in its host process.
 pub(crate) struct WorkerSource {
-    link: WorkerLink,
+    link: SharedLink,
     size: FrameSize,
 }
 
 impl WorkerSource {
     /// Starts a host process with `program` (and `env` beside the daemon's
     /// environment) and opens `source` there.
+    /// `control`: the session may control, so the process prepares input.
     pub(crate) fn open(
         program: &Path,
         env: &[(String, String)],
         source: &SourceId,
         wanted: Option<FrameSize>,
+        control: bool,
     ) -> Result<Self, SourceRefusal> {
         let refusal = |error: io::Error| SourceRefusal::new(&format!("host_process: {error}"));
         let link = WorkerLink::start(program, env).map_err(refusal)?;
-        Self::opened(link, source, wanted)
+        Self::opened(link, source, wanted, control)
     }
 
     fn opened(
         mut link: WorkerLink,
         source: &SourceId,
         wanted: Option<FrameSize>,
+        control: bool,
     ) -> Result<Self, SourceRefusal> {
         let request = WorkerRequest::Open(OpenRequest {
             source: source.clone(),
             wanted,
+            control,
         });
         match link.ask(&request, OPEN_TIMEOUT) {
-            Ok(WorkerReply::Opened { size }) => Ok(Self { link, size }),
+            Ok(WorkerReply::Opened { size }) => Ok(Self {
+                link: Arc::new(Mutex::new(link)),
+                size,
+            }),
             Ok(WorkerReply::Refused { reason }) => Err(SourceRefusal::new(&reason)),
             Ok(_) => Err(SourceRefusal::new(
                 "host_process: unexpected answer to OPEN",
@@ -270,8 +288,17 @@ impl WorkerSource {
         }
     }
 
+    /// The link, for the input path of the backend.
+    pub(super) fn shared_link(&self) -> SharedLink {
+        self.link.clone()
+    }
+
+    fn link(&self) -> MutexGuard<'_, WorkerLink> {
+        self.link.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     fn unexpected(&mut self, what: &str) -> StageError {
-        self.link.kill();
+        self.link().kill();
         StageError::new(
             ScreenErrorCode::CaptureFailed,
             io::Error::other(format!(
@@ -288,10 +315,10 @@ impl ScreenSource for WorkerSource {
 
     /// One raw picture (still images); video goes through `host_stage`.
     fn capture(&mut self, frame_id: u64, _keyframe: bool) -> io::Result<SourceFrame> {
-        match self
-            .link
-            .ask(&WorkerRequest::Capture { frame_id }, FRAME_TIMEOUT)
-        {
+        let answer = self
+            .link()
+            .ask(&WorkerRequest::Capture { frame_id }, FRAME_TIMEOUT);
+        match answer {
             Ok(WorkerReply::Raw(image)) => Ok(SourceFrame::Frame(image)),
             Ok(WorkerReply::Frame(StageFrame::Paused(state))) => Ok(SourceFrame::Paused(state)),
             Ok(WorkerReply::Failed { message, .. }) => Err(io::Error::other(message)),
@@ -307,10 +334,10 @@ impl ScreenSource for WorkerSource {
 
 impl HostStage for WorkerSource {
     fn produce(&mut self, request: &StageRequest) -> Result<StageFrame, StageError> {
-        match self
-            .link
-            .ask(&WorkerRequest::Produce(*request), FRAME_TIMEOUT)?
-        {
+        let answer = self
+            .link()
+            .ask(&WorkerRequest::Produce(*request), FRAME_TIMEOUT)?;
+        match answer {
             WorkerReply::Frame(frame) => {
                 match &frame {
                     StageFrame::Encoded { source_size, .. }

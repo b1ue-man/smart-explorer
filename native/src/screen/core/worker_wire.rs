@@ -6,18 +6,24 @@
 //! daemon opens the source (`OPEN` → `OPENED` or `REFUSED`), then asks for
 //! one encoded picture per frame (`PRODUCE` → `ENCODED`, `UNCHANGED`,
 //! `PAUSED` or `FAILED`) and for raw pictures of still images (`CAPTURE` →
-//! `RAW`); `CLOSE` or the end of the input ends the process.
+//! `RAW`); `CLOSE` or the end of the input ends the process. With SCR-M6 a
+//! source opened for a controlling viewer (`OPEN` with `control`) takes the
+//! viewer's input (`INPUT` → `INPUT_DONE` with the reason of a block); the
+//! process injects it, because on Wayland only the portal session of the
+//! capture carries the input (C5). Input events are never logged.
 use std::io::{self, Read, Write};
 
 use serde::{Deserialize, Serialize};
 
 use super::host_stage::{StageEncoder, StageFrame, StageRequest};
+use super::input_model::InputEvent;
 use super::negotiate::{CodecChoice, CodecKind, H264Profile};
 use super::pixel_convert::{BgraImage, FrameSize};
 use super::session_state::SessionState;
 use super::window_list::SourceId;
 use super::wire::{from_json, invalid, to_json, BeReader, MAX_CONTROL_BYTES};
 use super::wire_binary::MAX_RECORD_BYTES;
+use super::wire_control::ControlBlock;
 use super::wire_hello::ScreenErrorCode;
 
 // Daemon to host process.
@@ -25,6 +31,7 @@ pub(crate) const OPEN: u8 = 1;
 pub(crate) const PRODUCE: u8 = 2;
 pub(crate) const CAPTURE: u8 = 3;
 pub(crate) const CLOSE: u8 = 4;
+pub(crate) const INPUT: u8 = 5;
 // Host process to daemon.
 pub(crate) const OPENED: u8 = 16;
 pub(crate) const REFUSED: u8 = 17;
@@ -33,6 +40,7 @@ pub(crate) const UNCHANGED: u8 = 19;
 pub(crate) const PAUSED: u8 = 20;
 pub(crate) const FAILED: u8 = 21;
 pub(crate) const RAW: u8 = 22;
+pub(crate) const INPUT_DONE: u8 = 23;
 
 /// Largest `ENCODED`: the records of a 4096 × 2304 tile key frame (37.7 MB
 /// raw) with room for LZ4's worst case and the record heads.
@@ -47,7 +55,9 @@ const MAX_NAME_BYTES: usize = 256;
 /// The payload limit of `tag`; `None` for a tag this version does not know.
 pub(crate) fn tag_limit(tag: u8) -> Option<usize> {
     match tag {
-        OPEN | PRODUCE | CAPTURE | OPENED | REFUSED | PAUSED | FAILED => Some(MAX_CONTROL_BYTES),
+        OPEN | PRODUCE | CAPTURE | INPUT | OPENED | REFUSED | PAUSED | FAILED | INPUT_DONE => {
+            Some(MAX_CONTROL_BYTES)
+        }
         CLOSE => Some(0),
         UNCHANGED => Some(8),
         ENCODED => Some(MAX_ENCODED_BYTES),
@@ -101,6 +111,21 @@ pub(crate) struct OpenRequest {
     pub source: SourceId,
     #[serde(default)]
     pub wanted: Option<FrameSize>,
+    /// The session may control (SCR-M6): a Wayland host asks the portal for
+    /// `RemoteDesktop` in the same session; older processes ignore it.
+    #[serde(default)]
+    pub control: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+struct InputWire {
+    events: Vec<InputEvent>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct InputDoneWire {
+    #[serde(default)]
+    blocked: Option<ControlBlock>,
 }
 
 /// `PRODUCE` as JSON (`CodecChoice` has no serde form of its own).
@@ -151,7 +176,11 @@ struct FailedWire {
 pub(crate) enum WorkerRequest {
     Open(OpenRequest),
     Produce(StageRequest),
-    Capture { frame_id: u64 },
+    Capture {
+        frame_id: u64,
+    },
+    /// The controlling viewer's input (SCR-M6).
+    Input(Vec<InputEvent>),
     Close,
 }
 
@@ -179,6 +208,12 @@ impl WorkerRequest {
                 CAPTURE,
                 to_json(&CaptureWire {
                     frame_id: *frame_id,
+                })?,
+            ),
+            Self::Input(events) => (
+                INPUT,
+                to_json(&InputWire {
+                    events: events.clone(),
                 })?,
             ),
             Self::Close => (CLOSE, Vec::new()),
@@ -213,6 +248,10 @@ impl WorkerRequest {
                     frame_id: wire.frame_id,
                 })
             }
+            INPUT => {
+                let wire: InputWire = from_json(payload)?;
+                Ok(Self::Input(wire.events))
+            }
             CLOSE if payload.is_empty() => Ok(Self::Close),
             _ => Err(invalid("unexpected host process request")),
         }
@@ -234,6 +273,10 @@ pub(crate) enum WorkerReply {
         message: String,
     },
     Raw(BgraImage),
+    /// `INPUT` was injected (`None`) or blocked with this reason.
+    InputDone {
+        blocked: Option<ControlBlock>,
+    },
 }
 
 fn push_size(out: &mut Vec<u8>, size: FrameSize) {
@@ -348,6 +391,9 @@ impl WorkerReply {
                 out.extend_from_slice(image.data());
                 Ok((RAW, out))
             }
+            Self::InputDone { blocked } => {
+                Ok((INPUT_DONE, to_json(&InputDoneWire { blocked: *blocked })?))
+            }
         }
     }
 
@@ -391,6 +437,12 @@ impl WorkerReply {
                 size.check_frame()?;
                 let data = reader.bytes(reader.remaining())?.to_vec();
                 Ok(Self::Raw(BgraImage::from_vec(size, data)?))
+            }
+            INPUT_DONE => {
+                let wire: InputDoneWire = from_json(payload)?;
+                Ok(Self::InputDone {
+                    blocked: wire.blocked,
+                })
             }
             _ => Err(invalid("unexpected host process answer")),
         }

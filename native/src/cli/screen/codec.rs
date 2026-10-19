@@ -5,7 +5,12 @@
 //! terminal and refuses without one. Switching names „OpenH264 Video Codec
 //! provided by Cisco Systems, Inc.“ (Cisco condition 3). The state lives in
 //! this user's app data, so the background worker sees a change within a
-//! second without a request. Exit codes: 0 success, 1 error with text.
+//! second without a request. `se screen codec licenses [NAME] [--json]`
+//! prints the embedded license texts of the screen strand (SCR-M10, W6):
+//! without a name the list (key, component, license), with a name the full
+//! text; JSON `[{"key","component","license"}]` or
+//! `{"key","component","license","text"}`. Exit codes: 0 success, 1 error
+//! with text.
 use std::io::{IsTerminal, Write};
 
 use clap::{Args, Subcommand};
@@ -30,6 +35,11 @@ enum CodecCommand {
         #[command(subcommand)]
         action: OpenH264Command,
     },
+    #[command(about = "License texts of the screen codecs (the full text with a name)")]
+    Licenses {
+        /// The license to print in full, e.g. openh264
+        name: Option<String>,
+    },
 }
 
 #[derive(Debug, PartialEq, Eq, Subcommand)]
@@ -47,6 +57,10 @@ enum OpenH264Command {
 }
 
 pub(super) fn run(args: CodecArgs) -> Result<i32, String> {
+    if let Some(CodecCommand::Licenses { name }) = &args.command {
+        print!("{}", licenses(name.as_deref(), args.json)?);
+        return Ok(0);
+    }
     if let Some(CodecCommand::Openh264 { action }) = &args.command {
         let action = match action {
             OpenH264Command::Enable { yes } => OpenH264Action::Enable {
@@ -96,6 +110,47 @@ fn accept(yes: bool, json: bool) -> Result<String, String> {
     }
 }
 
+/// The output of `se screen codec licenses [NAME]`.
+pub(super) fn licenses(name: Option<&str>, json: bool) -> Result<String, String> {
+    use crate::screen::core::licenses::{license, screen_licenses};
+    let out = match name {
+        None if json => {
+            let list: Vec<serde_json::Value> = screen_licenses()
+                .iter()
+                .map(|entry| {
+                    serde_json::json!({
+                        "key": entry.key,
+                        "component": entry.component,
+                        "license": entry.license,
+                    })
+                })
+                .collect();
+            serde_json::to_string_pretty(&list).map_err(|error| error.to_string())? + "\n"
+        }
+        None => screen_licenses()
+            .iter()
+            .map(|entry| format!("{}\t{}\t{}\n", entry.key, entry.license, entry.component))
+            .collect(),
+        Some(name) => {
+            let entry = license(name).ok_or_else(|| {
+                format!("unknown license {name:?}; `se screen codec licenses` lists them")
+            })?;
+            if json {
+                let value = serde_json::json!({
+                    "key": entry.key,
+                    "component": entry.component,
+                    "license": entry.license,
+                    "text": entry.text,
+                });
+                serde_json::to_string_pretty(&value).map_err(|error| error.to_string())? + "\n"
+            } else {
+                entry.text.to_string()
+            }
+        }
+    };
+    Ok(out)
+}
+
 fn row(entry: &CodecEntry) -> String {
     let profiles: Vec<&str> = entry.profiles.iter().map(|profile| profile.key()).collect();
     let codec = if profiles.is_empty() {
@@ -137,4 +192,30 @@ pub(super) fn text(report: &CodecReport) -> String {
     out.push_str(OPENH264_NOTICE);
     out.push('\n');
     out
+}
+
+#[cfg(test)]
+mod licenses_tests {
+    use super::licenses;
+    use crate::screen::core::licenses::CISCO_BINARY_LICENSE;
+
+    #[test]
+    fn screen_task_codec_licenses_lists_and_prints() {
+        let list = licenses(None, false).unwrap();
+        assert!(
+            list.starts_with("openh264\tCisco binary license v1.0\t"),
+            "{list}"
+        );
+        let json: serde_json::Value = serde_json::from_str(&licenses(None, true).unwrap()).unwrap();
+        assert_eq!(json[0]["key"], "openh264");
+        assert!(json[0].get("text").is_none());
+        assert_eq!(
+            licenses(Some("openh264"), false).unwrap(),
+            CISCO_BINARY_LICENSE
+        );
+        let full: serde_json::Value =
+            serde_json::from_str(&licenses(Some("openh264"), true).unwrap()).unwrap();
+        assert_eq!(full["text"], CISCO_BINARY_LICENSE);
+        assert!(licenses(Some("x264"), false).is_err());
+    }
 }

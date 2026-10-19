@@ -201,14 +201,28 @@ fn portal_source_maps_the_portal_states() {
     assert!(source.capture(6, false).is_err());
 }
 
+/// A session that may control without PipeWire fails before any dialog
+/// (nothing to cast), and input stays refused (SCR-M6).
 #[test]
-fn portal_for_remote_desktop_waits_for_u22() {
+fn screen_task_wayland_remote_session_without_pipewire_asks_nothing() {
     let options = PortalOptions {
         remote_desktop: true,
-        ..PortalOptions::default()
+        pipewire_library: "libpipewire-0.3-missing-for-test.so",
     };
-    let error = PortalSession::start(options).err().unwrap();
-    assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+    let handle = PortalSession::start(options).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        if matches!(&*handle.lock(), PortalState::Failed(text) if text == PIPEWIRE_MISSING) {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "no pipewire_missing");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let text = [crate::screen::core::input_model::InputEvent::Text { text: "x".into() }];
+    assert_eq!(
+        super::super::portal_input::inject(&text),
+        Err(crate::screen::core::wire_control::ControlBlock::ControlUnavailable)
+    );
 }
 
 fn wayland_stage() -> bool {
@@ -299,4 +313,40 @@ fn screen_task_wayland_token_replaced_after_start() {
         "portal token changed by the second start: {}",
         two.token != one.token
     );
+}
+
+/// KWin without a display, its portal and a permission store that allows
+/// remote control (`SE_SCREEN_TASK_KDE=1`, K3): the session that may control
+/// streams and takes a click and text; without that runner it is not run.
+#[test]
+#[ignore = "needs headless KWin, xdg-desktop-portal-kde, a permission store entry and PipeWire (SE_SCREEN_TASK_KDE=1)"]
+fn screen_task_kde_remote_desktop_input() {
+    if std::env::var("SE_SCREEN_TASK_KDE").ok().as_deref() != Some("1") {
+        eprintln!("not run: no headless KWin with RemoteDesktop permission");
+        return;
+    }
+    use crate::screen::core::input_model::{InputEvent, PointerButton};
+    let _home = private_data_home();
+    let options = PortalOptions {
+        remote_desktop: true,
+        ..PortalOptions::default()
+    };
+    let mut source = PortalSource::with_handle(PortalSession::start(options).unwrap());
+    let _ = first_frame(&mut source, Duration::from_secs(60));
+    let events = [
+        InputEvent::PointerAbs {
+            x: 32_768,
+            y: 32_768,
+        },
+        InputEvent::Button {
+            button: PointerButton::Left,
+            down: true,
+        },
+        InputEvent::Button {
+            button: PointerButton::Left,
+            down: false,
+        },
+        InputEvent::Text { text: "se".into() },
+    ];
+    assert_eq!(super::super::portal_input::inject(&events), Ok(()));
 }

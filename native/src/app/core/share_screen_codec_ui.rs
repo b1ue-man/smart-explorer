@@ -21,6 +21,8 @@ struct CodecState {
     busy: Option<&'static str>,
     error: Option<String>,
     license_open: bool,
+    /// Bildschirm → Kodierung → Lizenzen (SCR-M10).
+    licenses_open: bool,
 }
 
 fn state() -> &'static Arc<Mutex<CodecState>> {
@@ -176,6 +178,9 @@ pub(crate) fn ui(ui: &mut egui::Ui) {
         if ui.button("Lizenz anzeigen").clicked() {
             lock(&shared).license_open = true;
         }
+        if ui.button("Lizenzen").clicked() {
+            lock(&shared).licenses_open = true;
+        }
         let removable = openh264.state != OpenH264State::Absent && busy.is_none();
         if ui
             .add_enabled(removable, egui::Button::new("Entfernen"))
@@ -193,6 +198,32 @@ pub(crate) fn ui(ui: &mut egui::Ui) {
     }
     if license_open {
         license_window(ui.ctx(), &shared, openh264.state, busy.is_none());
+    }
+    if lock(&shared).licenses_open {
+        licenses_window(ui.ctx(), &shared);
+    }
+}
+
+/// Every embedded license text of the screen codecs, readable without a
+/// download (`se screen codec licenses` shows the same).
+fn licenses_window(ctx: &egui::Context, shared: &Arc<Mutex<CodecState>>) {
+    let mut open = true;
+    egui::Window::new("Bildschirm – Lizenzen")
+        .open(&mut open)
+        .default_size([680.0, 520.0])
+        .max_size(theme::window_content_limit(ctx))
+        .show(ctx, |ui| {
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                for entry in crate::screen::core::licenses::screen_licenses() {
+                    ui.heading(entry.component);
+                    ui.label(RichText::new(entry.license).strong());
+                    ui.label(RichText::new(entry.text).monospace().small());
+                    ui.separator();
+                }
+            });
+        });
+    if !open {
+        lock(shared).licenses_open = false;
     }
 }
 
