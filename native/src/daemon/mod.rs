@@ -243,6 +243,7 @@ pub use ipc::{
 };
 pub(crate) use ipc_client::vault_status_peek;
 pub use ipc_client::{drive_devices_peek, drive_devices_watch_peek, share_worker_peek};
+pub(crate) use ipc_protocol::screen::StreamRequest;
 pub(crate) use ipc_protocol::ExecNoticeView;
 #[allow(unused_imports)] // U26 (CLI/MCP), U29 (GUI), se Desktop
 pub(crate) use ipc_protocol::{
@@ -271,7 +272,8 @@ pub use platform::DriveInfo;
 pub use problem_notify::set_problem_notifier;
 pub use schedule::{next_scheduled_run, run_daemon};
 pub(crate) use screen_ipc_client::{
-    screen_bench, screen_probe, screen_sessions, screen_stop, screen_watch, ScreenProbeReport,
+    screen_bench, screen_probe, screen_sessions, screen_stop, screen_stream, screen_watch,
+    ScreenProbeReport, StreamEvent,
 };
 pub(crate) use screen_ipc_still::{
     screen_snapshot, screen_snapshot_within, screen_windows, screen_windows_within, StillImage,

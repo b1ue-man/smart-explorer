@@ -14,3 +14,6 @@ release-native/update-feed/windows-build.manifest text eol=lf
 
 # Embedded crate license texts (native/src/licenses, include_str!): LF everywhere.
 third-party/rust-crates/THIRD-PARTY-LICENSES.txt text eol=lf
+
+# Cisco OpenH264 binary license: word for word, no line-end conversion (SHA-256 pinned in screen/core/licenses.rs).
+/third-party/openh264/BINARY_LICENSE.txt -text

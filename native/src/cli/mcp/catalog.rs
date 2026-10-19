@@ -26,8 +26,8 @@ with `session` a persistent shell keeps working directory, environment and \
 shell state between calls, and `sessions` joins the user's `se shell -T \
 --attachable` command shells. Start with `connections` to see targets. Long work \
 returns a job_id: follow it with job_status. Tools not loaded yet (exec, \
-job_input, job_cancel, sessions, status, screen, se) are found by a tool search for \
-`smart-explorer`.
+job_input, job_cancel, sessions, status, screen, screen_input, se) are found by \
+a tool search for `smart-explorer`.
 
 Targets: absolute local paths, `@label:/path` (saved remote, path below its \
 root), saved `sftp://user@host:port/path` endpoints, `share://direct/<id>/path`, \
@@ -194,6 +194,7 @@ pub(super) fn tools() -> Vec<Tool> {
                 "session": {"type": "string", "description": "Session name or id; needed for attach, activity and close."}
             }), &[], changes(false, true)),
         tool("screen", "Screen of paired devices", screen_tool::DESCRIPTION, screen_tool::properties(), &["action"], read_only(true)),
+        tool("screen_input", "Input on the screen of a paired device", screen_tool::INPUT_DESCRIPTION, screen_tool::input_properties(), &["device"], changes(true, false)),
     ];
     tools.into_iter().map(upfront).collect()
 }
@@ -309,7 +310,8 @@ mod tests {
                 "job_cancel",
                 "se",
                 "sessions",
-                "screen"
+                "screen",
+                "screen_input"
             ]
         );
         assert!(INSTRUCTIONS.len() <= 2_048, "{}", INSTRUCTIONS.len());
@@ -346,7 +348,14 @@ mod tests {
                 .cloned();
             let file_tool = !matches!(
                 tool.name.as_ref(),
-                "exec" | "job_input" | "job_cancel" | "status" | "se" | "sessions" | "screen"
+                "exec"
+                    | "job_input"
+                    | "job_cancel"
+                    | "status"
+                    | "se"
+                    | "sessions"
+                    | "screen"
+                    | "screen_input"
             );
             assert_eq!(
                 upfront,
