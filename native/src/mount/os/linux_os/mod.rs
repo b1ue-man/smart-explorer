@@ -11,6 +11,17 @@
 pub(crate) mod cache_lease;
 pub(crate) mod cache_space;
 
+// DRV-M5: the places of the file managers and „Im Dateimanager öffnen“.
+#[cfg(target_os = "linux")]
+pub(crate) mod bookmarks;
+#[cfg(target_os = "linux")]
+mod bookmarks_gtk;
+#[cfg(target_os = "linux")]
+mod bookmarks_kde;
+#[cfg(all(test, target_os = "linux"))]
+mod bookmarks_tests;
+#[cfg(target_os = "linux")]
+mod file_manager_open;
 #[cfg(target_os = "linux")]
 pub(crate) mod fuse_abort;
 #[cfg(target_os = "linux")]
@@ -42,6 +53,8 @@ pub(crate) mod mount_point;
 mod vault_fuse_task_tests;
 
 pub(crate) use cache_lease::{audit_pending, audit_recovery};
+#[cfg(target_os = "linux")]
+pub(crate) use file_manager_open::{show_folders, OpenMethod};
 #[cfg(target_os = "linux")]
 pub(crate) use fuse_host::run_mount_host;
 #[cfg(target_os = "linux")]

@@ -11,3 +11,10 @@ pub(crate) mod mount_ui_location;
 /// letter (strand S2 C1); every other desktop platform places a drive at a
 /// folder (S2 C2, DRV-M4). Kept out of `core/` (AGENTS.md).
 pub(crate) const DRIVES_USE_LETTERS: bool = cfg!(windows);
+
+// DRV-M5: „Im Dateimanager öffnen“ and the one-time hint of the device tree.
+#[path = "core/mount_ui_open.rs"]
+pub(crate) mod mount_ui_open;
+// DRV-M6: Einstellungen → Integration → „Verbundene Geräte als Ordner“.
+#[path = "core/settings_devices_ui.rs"]
+pub(crate) mod settings_devices_ui;

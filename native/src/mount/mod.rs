@@ -16,6 +16,27 @@ mod commit;
 mod delete;
 #[path = "core/delete_recovery.rs"]
 mod delete_recovery;
+// DRV-M6: the device tree „Verbundene Geräte als Ordner“.
+#[path = "core/device_tree.rs"]
+mod device_tree;
+#[path = "core/device_tree_backend.rs"]
+mod device_tree_backend;
+#[path = "core/device_tree_children.rs"]
+mod device_tree_children;
+#[path = "core/device_tree_fs.rs"]
+mod device_tree_fs;
+#[path = "core/device_tree_names.rs"]
+mod device_tree_names;
+#[cfg(test)]
+#[path = "core/device_tree_names_tests.rs"]
+mod device_tree_names_tests;
+#[path = "core/device_tree_routing.rs"]
+mod device_tree_routing;
+#[path = "core/device_tree_types.rs"]
+mod device_tree_types;
+// DRV-M6: `PeerOpenTarget` to `PeerMountTarget` and the key of a device.
+#[path = "os/shared/device_key.rs"]
+mod device_key;
 #[path = "core/engine.rs"]
 mod engine;
 #[path = "core/engine_recovery.rs"]
@@ -76,6 +97,8 @@ mod path_dialect_tests;
 mod path_sealer;
 #[path = "core/peer_names.rs"]
 pub(crate) mod peer_names;
+#[path = "core/peer_roots.rs"]
+mod peer_roots;
 #[path = "core/pending_attributes.rs"]
 mod pending_attributes;
 #[path = "core/range_read.rs"]
@@ -157,6 +180,16 @@ pub use cache_policy::{
     MountCachePolicy, MountRuntimePreference, DEFAULT_MOUNT_CACHE_MIB, MAX_MOUNT_CACHE_MIB,
 };
 pub use cache_space::CacheSpaceProbe;
+pub use device_key::{device_key, mount_target_of, open_target_of};
+pub use device_tree::DeviceTree;
+pub use device_tree_children::pending_devices;
+pub use device_tree_names::{
+    device_key_of, folder_names, layout, room_folder_names, same_name, Entry as DeviceEntry,
+    Layout as DeviceLayout, RoomFolder, DEVICES_MOUNT_ID, ROOMS_FOLDER,
+};
+pub use device_tree_types::{
+    ChildConnection, ChildLink, ChildRoot, DeviceKind, DeviceRow, RoomRef, TreeConfig,
+};
 pub use engine::MountEngine;
 pub use frontend::{
     LockReadiness, MountFilesystem, PendingAttributes, PreloadProgress, StopProbe, VolumeFacts,
@@ -167,6 +200,10 @@ pub use metadata_policy::{
 pub use path::{PathProjector, ProjectedPath};
 pub use path_dialect::PathDialect;
 pub use path_sealer::{PathSealer, PlainPathSealer};
+pub use peer_roots::{
+    list_peer_roots, peer_root_choices, safe_virtual_segment, PeerRootChoice, PeerRootListing,
+    PEER_CONNECTIONS_ROOT,
+};
 pub use recovery_state::{MountRecovery, MountSnapshot};
 pub use spool::prepare_spool_root;
 pub use spool_storage::{MountStorage, PlainSpoolStorage, SpoolFile, SpoolStorage};
@@ -323,6 +360,28 @@ impl DriveRuntimeInstallOutcome {
 /// Android offers folders through its documents provider instead (DRV-M8).
 pub const fn drive_mount_supported() -> bool {
     cfg!(any(windows, target_os = "linux"))
+}
+
+/// The name of the device-tree drive (DRV-M6): Windows shows it as a volume
+/// label (at most 32 characters), Linux as the folder `~/SmartExplorer/Geräte`.
+pub fn devices_label() -> &'static str {
+    if cfg!(windows) {
+        "Smart Explorer Geräte"
+    } else {
+        "Geräte"
+    }
+}
+
+/// Whether the filesystem runtime is installed and usable now (Dokany on
+/// Windows, FUSE on Linux); the device tree is switched on by default only
+/// then. Nothing is installed or asked for here.
+pub fn drive_runtime_ready() -> bool {
+    #[cfg(windows)]
+    return drive_runtime_info().is_ok();
+    #[cfg(target_os = "linux")]
+    return os::linux_os::fuse_runtime_report(false).ready;
+    #[cfg(not(any(windows, target_os = "linux")))]
+    false
 }
 
 pub fn drive_runtime_info() -> Result<DriveRuntimeInfo, String> {

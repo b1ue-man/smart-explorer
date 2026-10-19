@@ -6,14 +6,22 @@
 //! `MountManager::tick` or any stop path, a dead se mount still listed at
 //! the drive's folder is unmounted lazily (`fusermount3 -u -z`), and the
 //! folder is locked again (`0500`). A live mount there belongs to another
-//! host and is never touched. The restricted worker of a login restore runs
-//! only `MountManager::tick` and cleans up the same way.
+//! host and is never touched. The places of the file managers (DRV-M5) go
+//! first, unconditionally: a host that crashed never removed them. The
+//! restricted worker of a login restore runs only `MountManager::tick` and
+//! cleans up the same way.
 use std::path::Path;
 
-use crate::mount::os::linux_os::mount_point;
+use crate::mount::os::linux_os::{bookmarks, mount_point};
 
 /// After the host of the drive at `folder` ended.
 pub(in crate::daemon) fn clean_after_host(folder: &Path) {
+    if let Err(error) = bookmarks::remove(folder) {
+        super::super::state::log(&format!(
+            "Dateimanager-Eintrag für {} entfernen: {error}",
+            folder.display()
+        ));
+    }
     if mount_point::dead_mount(folder) {
         let target = mount_point::canonical(folder).unwrap_or_else(|_| folder.to_path_buf());
         if let Err(error) = mount_point::unmount(&target, true) {

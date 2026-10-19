@@ -13,6 +13,15 @@ use crate::mount::{
 #[path = "drive_options.rs"]
 mod drive_options;
 use drive_options::{absolute_folder, source_from_spec, MountArgs, UnmountArgs};
+#[path = "drive_devices.rs"]
+mod drive_devices;
+#[path = "drive_open.rs"]
+mod drive_open;
+#[path = "drive_print.rs"]
+mod drive_print;
+use drive_print::{exit_for_status, print_snapshot, print_snapshot_text};
+#[cfg(test)]
+use drive_print::{snapshot_line, status_column};
 #[path = "drive_set.rs"]
 mod drive_set;
 // DRV-M4: runtime, install answer, folder column and unmount under Linux.
@@ -48,6 +57,10 @@ enum DriveCommand {
     Retry(SelectArgs),
     #[command(about = "Change options of a managed drive, such as mounting it again at login")]
     Set(drive_set::SetArgs),
+    #[command(about = "Open a mounted drive in the file manager")]
+    Open(drive_open::OpenArgs),
+    #[command(about = "Show or switch the device tree (connected devices as folders)")]
+    Devices(drive_devices::DevicesArgs),
 }
 
 #[derive(Args)]
@@ -84,6 +97,8 @@ pub(super) fn run(args: DriveArgs) -> Result<i32, String> {
         DriveCommand::Unmount(args) => unmount(args),
         DriveCommand::Retry(args) => retry(args),
         DriveCommand::Set(args) => drive_set::set(args),
+        DriveCommand::Open(args) => drive_open::open(args),
+        DriveCommand::Devices(args) => drive_devices::run(args),
     }
 }
 
@@ -232,6 +247,11 @@ fn list(args: OutputArgs) -> Result<i32, String> {
 
 fn unmount(args: UnmountArgs) -> Result<i32, String> {
     let id = resolve_selector(&args.selector)?;
+    // DRV-M6: the device tree is switched off; that also forgets it when
+    // unsaved changes of devices remain (their journals stay).
+    if id.as_str() == crate::mount::DEVICES_MOUNT_ID {
+        return drive_devices::print_status(&crate::daemon::devices_disable()?, args.json);
+    }
     // Linux: the folder is unmounted first, like a file manager's eject; a
     // busy drive stays mounted unless --force (DRV-M4).
     #[cfg(target_os = "linux")]
@@ -297,6 +317,14 @@ fn resolve_selector(selector: &str) -> Result<MountId, String> {
             })
             .ok_or_else(|| format!("no managed drive is mounted at {wanted}"));
     }
+    // DRV-M6: `devices` names the device tree when it is switched on.
+    if trimmed == "devices"
+        && crate::daemon::list_mounts()?
+            .iter()
+            .any(|mount| mount.config.source.is_device_tree())
+    {
+        return MountId::parse(crate::mount::DEVICES_MOUNT_ID).map_err(|error| error.to_string());
+    }
     #[cfg(target_os = "linux")]
     if let Some(id) = drive_output_linux::select_by_folder(trimmed)? {
         return Ok(id);
@@ -332,65 +360,6 @@ fn bounded_label(label: &str) -> String {
     label.chars().take(128).collect()
 }
 
-fn print_snapshot(snapshot: &MountSnapshot, json: bool) -> Result<(), String> {
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(snapshot).map_err(|error| error.to_string())?
-        );
-    } else {
-        print_snapshot_text(snapshot);
-    }
-    Ok(())
-}
-
-fn print_snapshot_text(snapshot: &MountSnapshot) {
-    println!("{}", snapshot_line(snapshot));
-}
-
-/// `drive\t<id>\t<letter|auto>\t<mode>\t<status>\t<label>`; under Linux
-/// column 3 is the folder (DRV-M4).
-fn snapshot_line(snapshot: &MountSnapshot) -> String {
-    #[cfg(target_os = "linux")]
-    let requested = drive_output_linux::folder_column(snapshot);
-    #[cfg(not(target_os = "linux"))]
-    let requested = match snapshot.config.drive {
-        DriveSelection::Automatic => "auto".to_string(),
-        DriveSelection::Letter(letter) => letter.to_string(),
-    };
-    let mode = match snapshot.config.mode {
-        MountMode::ReadOnly => "read-only",
-        MountMode::ReadWrite => "read-write",
-    };
-    format!(
-        "drive\t{}\t{}\t{}\t{}\t{}",
-        snapshot.config.id,
-        requested,
-        mode,
-        status_column(snapshot),
-        clean(&snapshot.config.label),
-    )
-}
-
-/// DRV-M7: a vault drive whose vault is locked shows `requires-unlock:<n>`
-/// with sealed changes and `failed:vault_locked` without; JSON keeps the
-/// full status and `recovery`.
-fn status_column(snapshot: &MountSnapshot) -> String {
-    if let Some(pending) = snapshot.recovery.pending_unlock() {
-        return format!("requires-unlock:{pending}");
-    }
-    match &snapshot.status {
-        MountStatus::Failed { detail } if is_vault_locked(detail) => "failed:vault_locked".into(),
-        status => status_text(status),
-    }
-}
-
-fn is_vault_locked(detail: &str) -> bool {
-    detail
-        .strip_prefix(crate::vault::VAULT_LOCKED_CODE)
-        .is_some_and(|rest| rest.starts_with(": "))
-}
-
 /// `vault://<SITE>` as a drive source: the site ID of the vault list and
 /// the vault's label. A vault drive always shows the whole vault.
 fn vault_source(target: &str) -> Result<Option<(MountSource, String)>, String> {
@@ -407,40 +376,6 @@ fn vault_source(target: &str) -> Result<Option<(MountSource, String)>, String> {
     let record = crate::vault::RegistryStore::open_default().resolve(&locator.site)?;
     let label = record.display_label().to_string();
     Ok(Some((MountSource::Vault { site_id: record.id }, label)))
-}
-
-fn status_text(status: &MountStatus) -> String {
-    match status {
-        MountStatus::Unmounted => "unmounted".into(),
-        MountStatus::Mounting => "mounting".into(),
-        MountStatus::Mounted { drive } => format!("mounted:{drive}"),
-        MountStatus::MountedAt { path } => format!("mounted:{}", clean(&path.to_string_lossy())),
-        MountStatus::Unmounting => "unmounting".into(),
-        MountStatus::RuntimeUnavailable { detail } => {
-            format!("runtime-unavailable:{}", clean(detail))
-        }
-        MountStatus::Conflict { path, detail, .. } => {
-            format!("conflict:{}:{}", clean(path), clean(detail))
-        }
-        MountStatus::Failed { detail } => format!("failed:{}", clean(detail)),
-    }
-}
-
-fn exit_for_status(status: &MountStatus) -> i32 {
-    if matches!(
-        status,
-        MountStatus::Conflict { .. }
-            | MountStatus::Failed { .. }
-            | MountStatus::RuntimeUnavailable { .. }
-    ) {
-        1
-    } else {
-        0
-    }
-}
-
-fn clean(value: &str) -> String {
-    value.replace(['\t', '\r', '\n'], " ")
 }
 
 #[cfg(test)]

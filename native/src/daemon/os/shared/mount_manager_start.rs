@@ -64,20 +64,19 @@ impl MountManager {
                 Ok(placed) => placed,
                 Err(error) => return self.fail_start(&key, error),
             };
-            let backend =
-                match super::super::mount_source::resolve(&config, host).and_then(|backend| {
-                    rooted(backend, &config)
-                        .map_err(|error| format!("Laufwerk-Wurzel absichern: {error}"))
-                }) {
-                    Ok(backend) => backend,
-                    Err(error) if super::termination::is_vault_locked(&error) => {
-                        return self.defer_until_unlock(&key, error, pending)
-                    }
-                    Err(error) => return self.fail_start(&key, error),
-                };
+            let backend = match backend_of(&config, host) {
+                Ok(backend) => backend,
+                Err(error) if super::termination::is_vault_locked(&error) => {
+                    return self.defer_until_unlock(&key, error, pending)
+                }
+                Err(error) => return self.fail_start(&key, error),
+            };
             let capabilities =
                 super::super::ipc_protocol::MountBackendCapabilities::from_backend(&backend);
-            if config.mode == crate::mount::MountMode::ReadWrite {
+            // The device tree opens its devices one by one (DRV-M6): their
+            // write guarantees are checked per device, not here.
+            if config.mode == crate::mount::MountMode::ReadWrite && !config.source.is_device_tree()
+            {
                 let staged_write = capabilities.staged_write();
                 if !staged_write.supports_mounted_writes() {
                     return self.fail_start(
@@ -205,6 +204,18 @@ impl MountManager {
         entry.config = config.clone();
         Ok((config, true))
     }
+}
+
+/// The backend the host is handed: the rooted backend of the source, or for
+/// the device tree the placeholder of the handshake.
+#[cfg(any(windows, target_os = "linux"))]
+fn backend_of(config: &MountConfig, host: &ShareHost) -> Result<crate::vfs::BackendHandle, String> {
+    if config.source.is_device_tree() {
+        return Ok(super::super::drive_modules::devices_mount::placeholder_backend());
+    }
+    super::super::mount_source::resolve(config, host).and_then(|backend| {
+        rooted(backend, config).map_err(|error| format!("Laufwerk-Wurzel absichern: {error}"))
+    })
 }
 
 #[cfg(windows)]

@@ -58,8 +58,9 @@ impl MountManager {
         entry.launch_token = None;
         entry.session_token = Some(session_token.clone());
         entry.backend_token = Some(backend_token.clone());
-        #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
         let mut config: super::super::ipc_protocol::MountHostConfig = (&entry.config).into();
+        // DRV-M6: the host of the device tree runs its own flow.
+        config.device_tree = entry.config.source.is_device_tree();
         // R1/DRV-M4: the Linux FUSE host serves POSIX names; a saved drive
         // carries no dialect, the platform of the host decides.
         #[cfg(target_os = "linux")]
@@ -73,6 +74,20 @@ impl MountManager {
             session_token,
             backend_token,
         })
+    }
+
+    /// DRV-M6: drops the table entry of a drive whose host is gone, so the
+    /// device tree can be switched on again after it was switched off while
+    /// changes of devices were still unsaved (the entry stays otherwise).
+    pub(in crate::daemon) fn forget_idle(&self, id: &MountId) {
+        if let Ok(mut state) = self.state_guard() {
+            if state
+                .get(id.as_str())
+                .is_some_and(|entry| entry.child.is_none() && !entry.backend_stream_active)
+            {
+                state.remove(id.as_str());
+            }
+        }
     }
 
     pub(in crate::daemon) fn check_launch_token(

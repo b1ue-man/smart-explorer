@@ -27,6 +27,8 @@ pub(super) enum MountUiResult {
     RuntimeInstalled(crate::mount::DriveRuntimeInstallOutcome),
     /// DRV-M3: a changed option; the draft window stays as it is.
     Options(crate::mount::MountSnapshot),
+    /// DRV-M5: the drive was shown in the file manager; nothing changes.
+    Opened,
 }
 
 impl Default for MountUiState {
@@ -117,6 +119,11 @@ impl App {
                         mounts.retain(|mount| {
                             !matches!(&mount.status, crate::mount::MountStatus::Unmounted)
                         });
+                        // DRV-M6, C5: the one-time hint after the device tree
+                        // came up by itself.
+                        if let Some(hint) = super::mount_ui_open::devices_hint(&mounts) {
+                            self.notice = Some((hint, Instant::now()));
+                        }
                         self.mount_ui.mounts = mounts;
                         if let Some(alert) = alert {
                             self.error_msg = Some(alert);
@@ -125,6 +132,7 @@ impl App {
                     MountUiResult::RuntimeInstalled(outcome) => {
                         present_install_outcome(self, outcome);
                     }
+                    MountUiResult::Opened => {}
                     MountUiResult::Options(snapshot) => {
                         let state = if snapshot.config.auto_remount {
                             "ein"
@@ -186,6 +194,8 @@ impl App {
         // DRV-M4: the folder an eject unmounts first (Linux).
         let mut eject_folder: Option<std::path::PathBuf> = None;
         let mut options: Option<(crate::mount::MountId, bool)> = None;
+        // DRV-M5: „Im Dateimanager öffnen“.
+        let mut open_folder: Option<std::path::PathBuf> = None;
         let mut install_runtime = false;
         egui::Window::new("Smart-Explorer-Laufwerke")
             .open(&mut open)
@@ -259,6 +269,21 @@ impl App {
                             }
                             crate::mount::MountStatus::Unmounted => {}
                             _ => {
+                                if let Some(location) =
+                                    super::mount_ui_open::mounted_location(&mount.status)
+                                {
+                                    if ui
+                                        .add_enabled(
+                                            self.mount_ui.action_rx.is_none(),
+                                            egui::Button::new(
+                                                super::mount_ui_open::open_button_label(),
+                                            ),
+                                        )
+                                        .clicked()
+                                    {
+                                        open_folder = Some(location);
+                                    }
+                                }
                                 if ui
                                     .add_enabled(
                                         self.mount_ui.action_rx.is_none(),
@@ -284,6 +309,8 @@ impl App {
             self.spawn_mount_action("Dokany wird sicher installiert", || {
                 crate::mount::install_drive_runtime(None).map(MountUiResult::RuntimeInstalled)
             });
+        } else if let Some(location) = open_folder {
+            self.open_in_file_manager(location);
         } else if let Some((id, auto_remount)) = options {
             self.spawn_mount_action("Einstellung wird gespeichert", move || {
                 crate::daemon::set_mount_options(id, auto_remount).map(MountUiResult::Options)
@@ -338,6 +365,12 @@ fn eject(
     id: crate::mount::MountId,
     folder: Option<std::path::PathBuf>,
 ) -> Result<MountUiResult, String> {
+    // DRV-M6: ejecting the device tree switches it off, which also forgets
+    // it when unsaved changes of devices remain (their journals stay).
+    if id.as_str() == crate::mount::DEVICES_MOUNT_ID {
+        crate::daemon::devices_disable()?;
+        return crate::daemon::list_mounts().map(MountUiResult::List);
+    }
     #[cfg(target_os = "linux")]
     if let Some(folder) = folder {
         crate::mount::unmount_drive_folder(&folder, false).map_err(|error| {

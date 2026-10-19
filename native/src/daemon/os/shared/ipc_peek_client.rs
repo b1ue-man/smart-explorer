@@ -14,20 +14,19 @@
 //!
 //! The vault read of DSK-M4 is `VaultIpcRequest::Status` of VLT-M4 (U11),
 //! which never starts the worker and never lifts the restriction of a
-//! drive-restore start. The drive reads go out in their wire form, because
-//! their variants arrive with DRV-M6 (`DriveIpcRequest::DevicesStatus`,
-//! `DevicesWatch { since }`). Annahme until then: the serde form of the
-//! contract V4, `{"t":"drive","token","req":{"op":"devices_status"}}` and
-//! `{"op":"devices_watch","since":<n>}`. A worker that does not know a request
-//! closes the connection without an answer ([`PEEK_UNSUPPORTED`]); the desktop
-//! then shows the state as unknown. The worker must count both drive reads as
-//! not lifting the restriction of a drive-restore start (V11).
+//! drive-restore start. The drive reads are typed since DRV-M6
+//! (`DriveIpcRequest::DevicesStatus`, `DevicesWatch { since }`, answered as
+//! `IpcResponse::Devices`); both count as not lifting the restriction of a
+//! drive-restore start (V11, `promotes_daemon`). A worker that does not know
+//! a request closes the connection without an answer ([`PEEK_UNSUPPORTED`]);
+//! the desktop then shows the state as unknown.
 use std::io::Write;
 use std::net::TcpStream;
 use std::time::Duration;
 
-use serde_json::{json, Value};
+use serde_json::Value;
 
+use super::super::drive_modules::ipc_protocol_drives::DriveIpcRequest;
 use super::super::ipc_protocol::{
     read_response, set_stream_timeout, write_request, IpcRequest, IpcResponse, ShareWorkerSnapshot,
     VaultIpcReply, VaultIpcRequest, VaultStatusView,
@@ -68,19 +67,43 @@ pub fn share_worker_peek() -> Result<Option<ShareWorkerSnapshot>, String> {
 /// The S2 device tree of a running worker (V4): the answer of
 /// `DriveIpcRequest::DevicesStatus`. `Ok(None)`: no worker of this version.
 pub fn drive_devices_peek() -> Result<Option<Value>, String> {
-    raw_request_if_running(
-        |token| json!({"t": "drive", "token": token, "req": {"op": "devices_status"}}),
-        STATUS_READ,
-    )
+    devices_request_if_running(DriveIpcRequest::DevicesStatus, STATUS_READ)
 }
 
 /// `DriveIpcRequest::DevicesWatch { since }` of a running worker: the device
 /// tree after a change of `since`, or after 30 s unchanged (V4).
 pub fn drive_devices_watch_peek(since: u64) -> Result<Option<Value>, String> {
-    raw_request_if_running(
-        |token| json!({"t": "drive", "token": token, "req": {"op": "devices_watch", "since": since}}),
-        WATCH_READ,
-    )
+    devices_request_if_running(DriveIpcRequest::DevicesWatch { since }, WATCH_READ)
+}
+
+/// One typed drive request to a ready worker; the status comes back as JSON
+/// (`feed_sources.rs` reads it as such). A worker without the request closes
+/// the connection: [`PEEK_UNSUPPORTED`].
+fn devices_request_if_running(
+    req: DriveIpcRequest,
+    read_timeout: Duration,
+) -> Result<Option<Value>, String> {
+    let Some((mut stream, token)) = connect_if_running(read_timeout)? else {
+        return Ok(None);
+    };
+    write_request(&mut stream, &IpcRequest::Drive { token, req })
+        .map_err(|error| error.to_string())?;
+    match read_response(&mut stream) {
+        Ok(IpcResponse::Devices { status }) => serde_json::to_value(&status)
+            .map(Some)
+            .map_err(|error| error.to_string()),
+        Ok(IpcResponse::Err { msg, .. }) => Err(msg),
+        Ok(_) => Err("Unerwartete Worker-Antwort".into()),
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+            ) =>
+        {
+            Err(error.to_string())
+        }
+        Err(_) => Err(PEEK_UNSUPPORTED.into()),
+    }
 }
 
 /// The vault sites of a running worker (`VaultIpcRequest::Status`, V10,
@@ -119,7 +142,9 @@ pub(in crate::daemon) fn request_if_running(
 
 /// Like [`request_if_running`] for a request in its wire form; the answer
 /// comes back as JSON. An error answer (`{"t":"err","msg"}`) is `Err(msg)`,
-/// no answer at all is [`PEEK_UNSUPPORTED`].
+/// no answer at all is [`PEEK_UNSUPPORTED`]. Kept for a read whose variant
+/// a worker of another version may lack; no caller needs it at the moment.
+#[allow(dead_code)]
 fn raw_request_if_running(
     request: impl FnOnce(&str) -> Value,
     read_timeout: Duration,

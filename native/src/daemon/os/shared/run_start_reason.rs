@@ -127,6 +127,11 @@ pub(crate) fn restore_drives(host: &ShareHost) {
         .spawn(move || {
             super::drive_autostart::reconcile_registered();
             host.mounts.restore(&host, share);
+            // DRV-M6, V11: the device tree is switched on by default only by
+            // a worker that may use Share.
+            if share {
+                super::devices_mount::apply_default(&host);
+            }
         });
     if let Err(error) = spawned {
         log(&format!("drive restore not started: {error}"));

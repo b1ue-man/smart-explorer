@@ -15,12 +15,13 @@ use windows_sys::Win32::Storage::FileSystem::GetLogicalDrives;
 use crate::{
     daemon::{connect_mount_host, MountHostConfig},
     mount::{
-        CacheSpaceProbe, DriveLetter, DriveSelection, MountEngine, MountId, MountMode, PathDialect,
+        CacheSpaceProbe, DriveLetter, DriveSelection, MountEngine, MountFilesystem, MountId,
+        MountMode, PathDialect,
     },
 };
 
 use super::super::shared::host_platform::{
-    HostLease, HostPlatform, HostStepError, VolumeLocation, VolumePoll,
+    HostLease, HostPlatform, HostStepError, LeaseFn, VolumeLocation, VolumePoll,
 };
 use super::super::shared::host_session::{self, HostExit, HostInputs, UpdateStopCheck};
 use super::callback_reporter::CallbackReporter;
@@ -55,6 +56,11 @@ mod optimization_task;
 #[path = "host_session_windows_tests.rs"]
 mod host_session_windows;
 
+// DRV-M6: the device tree over Dokany.
+#[cfg(test)]
+#[path = "devices_drive_task_tests.rs"]
+mod devices_drive_task;
+
 // DRV-M7, VLT-M12: vault drives over Dokany.
 #[cfg(test)]
 #[path = "vault_drive_task_tests.rs"]
@@ -71,6 +77,10 @@ pub(crate) fn run_mount_host(id: MountId) -> Result<HostExit, String> {
     let session = Arc::new(connect_mount_host(id)?);
     let inputs = HostInputs::from_session(&session);
     let mut platform = DokanyHost::new(CallbackReporter::from(Arc::clone(&session)));
+    // DRV-M6: the device tree has its own host flow over the same platform.
+    if session.config.device_tree {
+        return host_session::devices::run(inputs, &session, &mut platform, &update_stop);
+    }
     host_session::run(inputs, &*session, &mut platform, &update_stop)
 }
 
@@ -103,6 +113,59 @@ impl DokanyHost {
             .as_ref()
             .ok_or_else(|| io::Error::other("the mounted volume was not prepared"))
     }
+
+    /// The callback state of a volume; `build` makes the context over the
+    /// engine of a drive (`prepare_volume`) or over the device tree
+    /// (`prepare_filesystem`).
+    fn prepare(
+        &mut self,
+        config: &MountHostConfig,
+        spool_root: &Path,
+        build: impl FnOnce(
+            DokanyRuntime,
+            CallbackReporter,
+            DriveLetter,
+            bool,
+            String,
+            u32,
+            Vec<u16>,
+        ) -> io::Result<CallbackContext>,
+    ) -> Result<(), HostStepError> {
+        let runtime = self
+            .selection
+            .as_ref()
+            .map(|selection| selection.runtime.clone())
+            .ok_or_else(|| HostStepError::Plain("the Dokany runtime was not selected".into()))?;
+        let candidates = drive_candidates(config.drive)
+            .map_err(|message| HostStepError::Plain(message.into()))?;
+        let cache_root_wide = absolute_path_wide(spool_root)
+            .map_err(|_| HostStepError::Plain("the isolated mount cache path is invalid".into()))?;
+        let initial_drive = candidates
+            .first()
+            .copied()
+            .ok_or_else(|| HostStepError::Plain("no Windows drive letter is available".into()))?;
+        let reporter = self.reporter.take().ok_or_else(|| {
+            HostStepError::Plain("the mounted-drive status channel is unavailable".into())
+        })?;
+        let read_only = config.mode == MountMode::ReadOnly;
+        let context = build(
+            runtime,
+            reporter,
+            initial_drive,
+            read_only,
+            config.label.clone(),
+            super::metadata::volume_serial(config.id.as_str()),
+            cache_root_wide,
+        )
+        .map_err(|error| {
+            HostStepError::Engine(format!(
+                "mounted-drive callback supervisor could not start: {error}"
+            ))
+        })?;
+        self.storage = Some(CallbackStorage::new(Box::new(context), read_only));
+        self.candidates = candidates;
+        Ok(())
+    }
 }
 
 impl HostPlatform for DokanyHost {
@@ -130,47 +193,45 @@ impl HostPlatform for DokanyHost {
         Ok(())
     }
 
+    fn lease_fn(&self) -> Option<LeaseFn> {
+        Some(Arc::new(|spool_root: &Path, id: &MountId| {
+            CacheLease::acquire(spool_root, id).map(|lease| Box::new(lease) as HostLease)
+        }))
+    }
+
     fn prepare_volume(
         &mut self,
         engine: &Arc<MountEngine>,
         config: &MountHostConfig,
         spool_root: &Path,
     ) -> Result<(), HostStepError> {
-        let runtime = self
-            .selection
-            .as_ref()
-            .map(|selection| selection.runtime.clone())
-            .ok_or_else(|| HostStepError::Plain("the Dokany runtime was not selected".into()))?;
-        let candidates = drive_candidates(config.drive)
-            .map_err(|message| HostStepError::Plain(message.into()))?;
-        let cache_root_wide = absolute_path_wide(spool_root)
-            .map_err(|_| HostStepError::Plain("the isolated mount cache path is invalid".into()))?;
-        let initial_drive = candidates
-            .first()
-            .copied()
-            .ok_or_else(|| HostStepError::Plain("no Windows drive letter is available".into()))?;
-        let reporter = self.reporter.take().ok_or_else(|| {
-            HostStepError::Plain("the mounted-drive status channel is unavailable".into())
-        })?;
-        let read_only = config.mode == MountMode::ReadOnly;
-        let context = CallbackContext::new(
-            Arc::clone(engine),
-            runtime,
-            reporter,
-            initial_drive,
-            read_only,
-            config.label.clone(),
-            super::metadata::volume_serial(config.id.as_str()),
-            cache_root_wide,
+        let engine = Arc::clone(engine);
+        self.prepare(
+            config,
+            spool_root,
+            move |runtime, reporter, drive, read_only, label, serial, cache| {
+                CallbackContext::new(
+                    engine, runtime, reporter, drive, read_only, label, serial, cache,
+                )
+            },
         )
-        .map_err(|error| {
-            HostStepError::Engine(format!(
-                "mounted-drive callback supervisor could not start: {error}"
-            ))
-        })?;
-        self.storage = Some(CallbackStorage::new(Box::new(context), read_only));
-        self.candidates = candidates;
-        Ok(())
+    }
+
+    fn prepare_filesystem(
+        &mut self,
+        filesystem: Arc<dyn MountFilesystem>,
+        config: &MountHostConfig,
+        spool_root: &Path,
+    ) -> Result<(), HostStepError> {
+        self.prepare(
+            config,
+            spool_root,
+            move |runtime, reporter, drive, read_only, label, serial, cache| {
+                CallbackContext::for_filesystem(
+                    filesystem, runtime, reporter, drive, read_only, label, serial, cache,
+                )
+            },
+        )
     }
 
     fn start_volume(&mut self) -> Result<(), String> {

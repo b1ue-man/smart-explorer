@@ -21,9 +21,7 @@
 use std::path::Path;
 use std::time::Instant;
 
-use crate::mount::{
-    LockReadiness, MountEngine, MountFilesystem, MountId, MountRecovery, MountStorage,
-};
+use crate::mount::{LockReadiness, MountFilesystem, MountId, MountRecovery, MountStorage};
 use crate::vault::{SpoolKey, VAULT_LOCKED_CODE};
 
 use super::super::host_platform::HostPlatform;
@@ -93,8 +91,11 @@ pub(super) fn storage_for(
 
 /// Publishes and drops clean content for a lock: what remains, and
 /// whether the drive unmounts.
-pub(crate) fn prepare_for_lock(engine: &MountEngine, order: &LockOrder) -> (LockReadiness, bool) {
-    let readiness = MountFilesystem::prepare_lock(engine).unwrap_or_else(|error| LockReadiness {
+pub(crate) fn prepare_for_lock(
+    engine: &dyn MountFilesystem,
+    order: &LockOrder,
+) -> (LockReadiness, bool) {
+    let readiness = engine.prepare_lock().unwrap_or_else(|error| LockReadiness {
         pending: engine
             .dirty_entries()
             .map_or(1, |entries| entries.len().max(1)),
@@ -109,7 +110,7 @@ pub(crate) fn prepare_for_lock(engine: &MountEngine, order: &LockOrder) -> (Lock
 pub(super) fn lock_turn(
     platform: &mut dyn HostPlatform,
     control: &dyn HostControl,
-    engine: &MountEngine,
+    engine: &dyn MountFilesystem,
 ) -> Option<Ended> {
     let order = control.lock_order()?;
     let (readiness, unmount) = prepare_for_lock(engine, &order);

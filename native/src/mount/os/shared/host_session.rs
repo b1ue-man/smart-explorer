@@ -24,12 +24,16 @@ use crate::daemon::{
     MountHostConfig, MountHostSession, UpdateStopBaseline, EXIT_UPDATE_STOP, UPDATE_STOP_POLL,
 };
 use crate::mount::{
-    prepare_spool_root, MountEngine, MountRecovery, MountRuntimeConfig, MountStatus,
+    prepare_spool_root, MountEngine, MountFilesystem, MountRecovery, MountRuntimeConfig,
+    MountStatus,
 };
 use crate::vfs::{BackendHandle, Scheme};
 
 use super::host_platform::{HostPlatform, HostStepError, VolumePoll};
 
+// DRV-M6: the device tree runs the same flow over its own set-up.
+#[path = "host_devices.rs"]
+pub(crate) mod devices;
 #[path = "host_storage.rs"]
 mod host_storage;
 #[path = "host_session_reports.rs"]
@@ -303,15 +307,21 @@ fn run_leased(
     }
     if let Err(error) = platform.start_background() {
         let detail = format!("mounted-drive metadata refresh could not start: {error}");
-        return finish(platform, control, &engine, Some(&detail), HostExit::Stopped);
+        return finish(
+            platform,
+            control,
+            &*engine,
+            Some(&detail),
+            HostExit::Stopped,
+        );
     }
-    run_until_stopped(platform, control, &engine, update_stop)
+    run_until_stopped(platform, control, &*engine, update_stop)
 }
 
 fn run_until_stopped(
     platform: &mut dyn HostPlatform,
     control: &dyn HostControl,
-    engine: &MountEngine,
+    engine: &dyn MountFilesystem,
     update_stop: &UpdateStopCheck,
 ) -> Ended {
     let Ok(location) = platform.location() else {
@@ -376,7 +386,7 @@ fn run_until_stopped(
 fn finish(
     platform: &mut dyn HostPlatform,
     control: &dyn HostControl,
-    engine: &MountEngine,
+    engine: &dyn MountFilesystem,
     prior_failure: Option<&str>,
     exit: HostExit,
 ) -> Ended {
@@ -391,7 +401,7 @@ fn finish(
 fn close_and_finalize(
     platform: &mut dyn HostPlatform,
     control: &dyn HostControl,
-    engine: &MountEngine,
+    engine: &dyn MountFilesystem,
     prior_failure: Option<&str>,
 ) -> Result<(), String> {
     let watchdog_ok = platform.shutdown();
