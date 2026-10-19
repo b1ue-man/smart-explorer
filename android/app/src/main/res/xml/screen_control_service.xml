@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The se accessibility service (SCR-M8, C3): gestures, global actions, text into the focused
+     field and stills of the display; window list for „Was läuft“. No event types are read. -->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowsChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagRetrieveInteractiveWindows"
+    android:canPerformGestures="true"
+    android:canRetrieveWindowContent="true"
+    android:canTakeScreenshot="true"
+    android:description="@string/screen_control_description"
+    android:notificationTimeout="1000" />

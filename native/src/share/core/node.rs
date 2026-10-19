@@ -170,7 +170,7 @@ impl ShareIrohNode {
         let wake = wake::NodeWake::new();
         wake.watch(&rt, &endpoint);
         let exec_registry = Arc::new(ExecRegistry::new(ExecRegistryLimits::default()));
-        let screen = super::node_screen::NodeScreen::new(&exec_registry);
+        let screen = super::node_screen::NodeScreen::new();
         let node = Arc::new(Self {
             rt,
             endpoint,

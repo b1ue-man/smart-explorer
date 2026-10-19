@@ -44,6 +44,7 @@ import app.smartexplorer.android.ui.connections.RemovalReportDialog
 import app.smartexplorer.android.ui.more.HintLine
 import app.smartexplorer.android.ui.more.SubPageScaffold
 import app.smartexplorer.android.ui.more.TextActions
+import app.smartexplorer.android.ui.screen.ScreenHostSection
 import app.smartexplorer.android.ui.transfers.TransfersSheet
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -53,7 +54,7 @@ import kotlinx.coroutines.isActive
  * Blocks of the page in spec order (C: device card → devices → rooms → requests → exports), then
  * the commands other devices may run on this phone (G4).
  */
-private enum class ShareBlock { Problems, Device, Policy, Pairings, Devices, Rooms, Buttons, Requests, Rights, Exports, ExecHost, Removed, DirectCode }
+private enum class ShareBlock { Problems, Device, Policy, Pairings, Devices, Rooms, Buttons, Requests, Rights, Exports, ExecHost, ScreenHost, Removed, DirectCode }
 
 /**
  * Tab "Teilen" (spec F18). While visible the core polls the Share worker fast (`share.watch`);
@@ -161,6 +162,7 @@ private fun blocksOf(status: ShareStatus): List<ShareBlock> = buildList {
     add(ShareBlock.Rights)
     add(ShareBlock.Exports)
     add(ShareBlock.ExecHost)
+    add(ShareBlock.ScreenHost)
     if (status.removedDevices.isNotEmpty()) add(ShareBlock.Removed)
     add(ShareBlock.DirectCode)
 }
@@ -279,6 +281,7 @@ private fun ShareBlockContent(block: ShareBlock, vm: ShareViewModel, status: Sha
                 ),
             )
         }
+        ShareBlock.ScreenHost -> ScreenHostSection()
         ShareBlock.Removed -> RemovedDevicesSection(status?.removedDevices.orEmpty()) { device ->
             open(ShareDialog.Readmit(device))
         }

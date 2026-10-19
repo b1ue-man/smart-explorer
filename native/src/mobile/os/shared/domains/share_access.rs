@@ -68,11 +68,12 @@ fn capability_of(key: &str) -> Option<Capability> {
         .find(|capability| bridge_key(*capability) == key)
 }
 
-/// The rows this phone offers: the catalog of an Android host, without the
-/// screen rows until SCR-M8 adds a screen host and its consent activity (W1).
+/// The rows this phone offers: the catalog of an Android host. The app is
+/// the phone's graphical session, so the screen rows are always there
+/// (SCR-M8: the app hosts the screen and asks for each session).
 pub(super) fn android_rows() -> Vec<CapabilityEntry> {
     let facts = HostFacts {
-        graphical_session: crate::screen::graphical_session(),
+        graphical_session: true,
         account_helper: HelperStatus {
             state: HelperState::Unavailable,
             version: None,
@@ -80,9 +81,6 @@ pub(super) fn android_rows() -> Vec<CapabilityEntry> {
         },
     };
     capability_catalog(&facts)
-        .into_iter()
-        .filter(|entry| entry.capability.is_exec())
-        .collect()
 }
 
 /// The fields PRM-M10 adds to `execProvider` of `share.status`: the one

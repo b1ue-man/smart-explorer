@@ -41,6 +41,8 @@ import app.smartexplorer.android.api.AccessChange
 import app.smartexplorer.android.api.AccessProviderInfo
 import app.smartexplorer.android.api.AccessView
 import app.smartexplorer.android.api.CAP_COMMANDS
+import app.smartexplorer.android.api.CAP_SCREEN_CONTROL
+import app.smartexplorer.android.api.CAP_SCREEN_VIEW
 import app.smartexplorer.android.api.CAP_TERMINAL
 import app.smartexplorer.android.api.CapabilityRow
 import app.smartexplorer.android.api.DECISION_ALWAYS
@@ -72,28 +74,42 @@ private val UNTIL_LENGTHS = listOf(
     UntilChoice("7d", "1 Woche", 7 * 86_400L),
 )
 
-/** What the access dialog shows and saves: a decision per Exec capability, the list and the end. */
+/**
+ * What the access dialog shows and saves: a decision per capability (commands, terminal and, since
+ * SCR-M8, watching and controlling the screen), the list and the end.
+ */
 internal data class AccessDraft(
     val commands: String,
     val terminal: String,
     val programs: List<String>,
     val until: String,
+    val screenView: String = ACCESS_OFF,
+    val screenControl: String = ACCESS_OFF,
 ) {
     fun decision(key: String): String = when (key) {
         CAP_COMMANDS -> commands
         CAP_TERMINAL -> if (programs.isEmpty()) terminal else ACCESS_OFF
+        CAP_SCREEN_VIEW -> screenView
+        CAP_SCREEN_CONTROL -> screenControl
         else -> ACCESS_OFF
     }
 
+    /** Controlling needs watching (C7): control on raises watching, watching off ends control. */
     fun with(key: String, decision: String): AccessDraft = when (key) {
         CAP_COMMANDS -> copy(commands = decision)
         CAP_TERMINAL -> copy(terminal = decision)
+        CAP_SCREEN_VIEW -> copy(screenView = decision, screenControl = if (decision == ACCESS_OFF) ACCESS_OFF else screenControl)
+        CAP_SCREEN_CONTROL -> copy(screenControl = decision, screenView = if (decision != ACCESS_OFF && screenView == ACCESS_OFF) decision else screenView)
         else -> this
     }
 
-    /** Some capability is on (`ask` or `allow`). */
+    /** Some Exec capability is on (`ask` or `allow`). */
     val grants: Boolean
         get() = decision(CAP_COMMANDS) != ACCESS_OFF || decision(CAP_TERMINAL) != ACCESS_OFF
+
+    /** Watching or controlling the screen is on. */
+    val screenGrants: Boolean
+        get() = screenView != ACCESS_OFF || screenControl != ACCESS_OFF
 }
 
 /**
@@ -109,13 +125,19 @@ internal fun initialDraft(target: ExecTarget, view: AccessView?): AccessDraft {
         terminal = active?.decision(CAP_TERMINAL) ?: if (target.programs.isEmpty()) ACCESS_ALLOW else ACCESS_OFF,
         programs = target.programs,
         until = if (keepsEnd) UNTIL_KEEP else UNTIL_NONE,
+        // The screen starts off: watching this phone is never on without a choice.
+        screenView = active?.decision(CAP_SCREEN_VIEW) ?: ACCESS_OFF,
+        screenControl = active?.decision(CAP_SCREEN_CONTROL) ?: ACCESS_OFF,
     )
 }
 
-/** The `share.setAccess` change of a confirmed [draft]; Android runs commands only as the app. */
-internal fun accessChangeOf(draft: AccessDraft, nowSeconds: Long): AccessChange = AccessChange(
+/**
+ * The `share.setAccess` change of a confirmed [draft] for the capabilities [keys] the dialog shows;
+ * Android runs commands only as the app.
+ */
+internal fun accessChangeOf(draft: AccessDraft, nowSeconds: Long, keys: List<String> = listOf(CAP_COMMANDS, CAP_TERMINAL)): AccessChange = AccessChange(
     account = AccessAccount("own"),
-    capabilities = mapOf(CAP_COMMANDS to draft.decision(CAP_COMMANDS), CAP_TERMINAL to draft.decision(CAP_TERMINAL)),
+    capabilities = keys.associateWith { draft.decision(it) },
     programs = draft.programs,
     validUntil = when (draft.until) {
         UNTIL_KEEP -> null
@@ -142,6 +164,8 @@ internal fun accessSummary(view: AccessView): String = buildList {
     }
     add("Befehle: ${word(view.decision(CAP_COMMANDS))}")
     add("Terminal: ${word(view.decision(CAP_TERMINAL))}")
+    if (view.decision(CAP_SCREEN_VIEW) != ACCESS_OFF) add("Bildschirm ansehen: ${word(view.decision(CAP_SCREEN_VIEW))}")
+    if (view.decision(CAP_SCREEN_CONTROL) != ACCESS_OFF) add("Bildschirm steuern: ${word(view.decision(CAP_SCREEN_CONTROL))}")
     view.validUntil?.let { add(if (view.expired) "abgelaufen" else "bis ${Format.dateTime(it * 1000)}") }
 }.joinToString(" · ")
 
@@ -167,7 +191,7 @@ internal fun approvalLines(approval: AccessApproval): List<String> = buildList {
         }
     }
     if (approval.olderClientTerminal) add("Älteres Smart Explorer auf $device: das Terminal wartet dort höchstens 60 Sekunden.")
-    if (approval.screen) add("Bildschirmfreigaben lassen sich auf diesem Telefon noch nicht bestätigen.")
+    if (approval.screen) add("Nach dem Erlauben fragt Android, ob der Bildschirm geteilt werden darf.")
 }
 
 private fun shortFingerprint(fingerprint: String): String = if (fingerprint.length > 16) fingerprint.take(16) + "…" else fingerprint
@@ -175,8 +199,9 @@ private fun shortFingerprint(fingerprint: String): String = if (fingerprint.leng
 /**
  * A question of another device as a dialog in the app: „Diesmal erlauben“, „Immer erlauben“,
  * „Ablehnen“. Back answers „Ablehnen“ unless [onDismiss] says otherwise (the list on the page
- * „Teilen“ only closes it, the question stays listed); it never allows. Screen questions get only
- * „Ablehnen“ until SCR-M8 brings their consent activity (W1).
+ * „Teilen“ only closes it, the question stays listed); it never allows. For a screen question the
+ * allowing answers open the consent activity (SCR-M8): [AccessApprovalNotifier.decide] routes them
+ * there, and the system dialog „Bildschirm teilen“ follows.
  */
 @Composable
 internal fun AccessApprovalPrompt(
@@ -198,20 +223,20 @@ internal fun AccessApprovalPrompt(
                         fontFamily = if (monospace) FontFamily.Monospace else null,
                     )
                 }
-                if (!approval.screen) {
-                    Text(
-                        "„Immer erlauben“ stellt dieses Recht für das Gerät auf „Erlauben“; spätere Starts fragen nicht mehr.",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
+                Text(
+                    if (approval.screen) {
+                        "„Immer erlauben“ stellt dieses Recht für das Gerät auf „Erlauben“; Android fragt trotzdem bei jeder Sitzung."
+                    } else {
+                        "„Immer erlauben“ stellt dieses Recht für das Gerät auf „Erlauben“; spätere Starts fragen nicht mehr."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
         },
         confirmButton = {
-            if (!approval.screen) {
-                Row {
-                    TextButton(onClick = { onDecide(DECISION_ONCE) }) { Text("Diesmal erlauben") }
-                    TextButton(onClick = { onDecide(DECISION_ALWAYS) }) { Text("Immer erlauben") }
-                }
+            Row {
+                TextButton(onClick = { onDecide(DECISION_ONCE) }) { Text("Diesmal erlauben") }
+                TextButton(onClick = { onDecide(DECISION_ALWAYS) }) { Text("Immer erlauben") }
             }
         },
         dismissButton = { TextButton(onClick = { onDecide(DECISION_DENY) }) { Text("Ablehnen") } },
@@ -360,6 +385,14 @@ internal fun AccessDialog(
                         color = MaterialTheme.colorScheme.error,
                     )
                 }
+                if (draft.screenGrants) {
+                    Text(
+                        "„$name“ kann danach den Bildschirm " +
+                            (if (draft.screenControl != ACCESS_OFF) "ansehen und über die Bedienungshilfe steuern" else "ansehen") +
+                            ". Android fragt bei jeder Sitzung „Bildschirm teilen“.",
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
                 Text(
                     "Android kann Befehle im Hintergrund beenden oder anhalten; mit der App enden auch laufende Befehle. " +
                         "Der Zugriff gilt nur für genau diese Geräte-Identität und lässt sich jederzeit entziehen.",
@@ -371,8 +404,14 @@ internal fun AccessDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = { onConfirm(accessChangeOf(draft, System.currentTimeMillis() / 1000)) }) {
-                Text(if (draft.grants) "Als App-Konto erlauben" else "Zugriff ausschalten")
+            TextButton(onClick = { onConfirm(accessChangeOf(draft, System.currentTimeMillis() / 1000, rows.map { it.key })) }) {
+                Text(
+                    when {
+                        draft.grants -> "Als App-Konto erlauben"
+                        draft.screenGrants -> "Bildschirmzugriff erlauben"
+                        else -> "Zugriff ausschalten"
+                    },
+                )
             }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Abbrechen") } },

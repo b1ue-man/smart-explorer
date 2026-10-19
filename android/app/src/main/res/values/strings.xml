@@ -11,4 +11,8 @@
     <string name="channel_updates_description">Neue App-Versionen</string>
     <string name="channel_share">Teilen</string>
     <string name="channel_share_description">Anfragen anderer Geräte</string>
+
+    <!-- This phone as screen host (SCR-M8): the se accessibility service -->
+    <string name="screen_control_label">Smart Explorer: Bildschirm steuern</string>
+    <string name="screen_control_description">Lässt ein Gerät, dem du in Smart Explorer „Bildschirm steuern“ erlaubt hast, während einer Bildschirmfreigabe tippen, wischen, Text eingeben und Systemtasten (Zurück, Startbildschirm, Übersicht) nutzen, und liefert Vorschaubilder ohne die Android-Abfrage. Ohne laufende Freigabe tut der Dienst nichts; er liest keine Bildschirminhalte mit und speichert nichts.</string>
 </resources>

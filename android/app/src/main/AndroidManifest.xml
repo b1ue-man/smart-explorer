@@ -6,6 +6,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- This phone as screen host (SCR-M8): capture after the system dialog „Bildschirm teilen“ -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
 
     <!-- Notifications (runtime permission on API 33+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -130,6 +132,34 @@
             android:launchMode="singleTop"
             android:theme="@android:style/Theme.Translucent.NoTitleBar" />
 
+        <!-- This phone as screen host (SCR-M8). The consent activity answers a screen question and
+             asks the system dialog; only intents of this app start it (activity PendingIntents of
+             the question and the session notification). -->
+        <activity
+            android:name=".screen.ScreenConsentActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+        <!-- Captures only with the token of the system dialog; its notification and the status bar
+             chip show that the screen is watched -->
+        <service
+            android:name=".screen.ScreenHostService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
+        <!-- Switched on only by the user in the Android settings; the system alone may bind it -->
+        <service
+            android:name=".screen.ScreenControlService"
+            android:exported="true"
+            android:label="@string/screen_control_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/screen_control_service" />
+        </service>
         <!-- Wake alarm of the background service (explicit PendingIntent only) -->
         <receiver
             android:name=".system.KeepAliveReceiver"
