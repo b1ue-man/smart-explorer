@@ -24,6 +24,8 @@ mod host_keys;
 mod job_json;
 #[path = "locations.rs"]
 mod locations;
+#[path = "screen_host.rs"]
+mod screen_host;
 #[cfg(test)]
 #[path = "settings_parity_tests.rs"]
 mod settings_parity_tests;
@@ -71,6 +73,9 @@ mod tests;
 #[path = "update.rs"]
 mod update;
 
+// SCR-M8: the binary calls of the JNI bridge (`screen_jni.rs`).
+pub use screen_host::{screen_control, screen_push};
+
 /// Handles a domain method; `None` = not a domain method.
 pub(crate) fn dispatch(
     rt: &Runtime,
@@ -86,6 +91,7 @@ pub(crate) fn dispatch(
         "analyze" | "reclaim" => analysis_method(rt, method, args),
         "update" => update_method(rt, method),
         "app" => app_licenses::handle(method),
+        "screen" => screen_host::handle(method, args),
         _ => None,
     }
 }
