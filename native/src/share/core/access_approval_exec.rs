@@ -18,7 +18,7 @@ use tokio::io::AsyncWrite;
 
 use super::super::{wait_for_approval, ApprovalWait, ClientStream};
 use crate::share::access_approval::{
-    ApprovalCommand, ApprovalOutcome, ApprovalService, ApprovalSummary, ReservationGauge,
+    ApprovalCommand, ApprovalOutcome, ApprovalService, ApprovalSummary,
 };
 use crate::share::access_audit::{AccessEntry, AccessEvent, ApprovalResult};
 use crate::share::access_authorize::{capability_for, principal_grant, start_capability};
@@ -31,7 +31,6 @@ use crate::share::exec_client_messages::{
 };
 use crate::share::exec_heartbeat::ExecHeartbeatPolicy;
 use crate::share::exec_protocol::{ExecWireError, ServerProtocolState};
-use crate::share::exec_registry::ExecRegistryError;
 use crate::share::exec_types::ExecAuthorization;
 use crate::share::relation_proof::ProvenPrincipal;
 use crate::share::types::ShareAuthState;
@@ -132,7 +131,6 @@ pub(in crate::share) fn check_start(
 /// Everything the decision about one start needs.
 pub(in crate::share) struct StartApproval<'a> {
     pub(in crate::share) service: &'a ApprovalService,
-    pub(in crate::share) gauge: &'a dyn ReservationGauge,
     pub(in crate::share) auth: &'a Mutex<ShareAuthState>,
     pub(in crate::share) authorized: &'a AuthorizedExecPeer,
     pub(in crate::share) start: &'a ExecStart,
@@ -175,16 +173,6 @@ impl Refusal {
             start_refused: false,
         }
     }
-}
-
-/// The refusal of a start for which no reservation is free; the same as the
-/// registry's own refusal at its limits.
-pub(in crate::share) fn limit_error(outcome: ApprovalOutcome) -> ExecWireError {
-    let limit = match outcome {
-        ApprovalOutcome::HostLimit => ExecRegistryError::GlobalLimit,
-        _ => ExecRegistryError::PrincipalLimit,
-    };
-    wire("admission_denied", limit.to_string())
 }
 
 /// The decision about one start: `allow` at once, `ask` with the host user.
@@ -232,7 +220,7 @@ async fn ask<W: AsyncWrite + Unpin>(
     let summary = summary(approval, &principal, &asked, &view);
     let mut ticket = approval
         .service
-        .request(approval.gauge, &principal, capability, summary);
+        .open_request(&principal, capability, summary);
     let log = Log {
         approval,
         principal: &principal,

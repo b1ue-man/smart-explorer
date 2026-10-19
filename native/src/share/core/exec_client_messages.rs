@@ -32,6 +32,8 @@ pub(crate) const ACCOUNT_NOT_ALLOWED: &str = "account_not_allowed";
 pub(crate) const ACCOUNT_HELPER_UNAVAILABLE: &str = "account_helper_unavailable";
 /// `permission_denied` text of hosts up to 0.5.182.
 pub(crate) const OLD_PERMISSION_DENIED_MESSAGE: &str = "exec authentication failed";
+/// Refusal code of the registry (`exec_admission.rs`).
+const ADMISSION_DENIED: &str = "admission_denied";
 
 /// `permission_denied`: `device` is the host.
 pub(crate) fn permission_denied(device: &str) -> String {
@@ -110,12 +112,23 @@ pub(crate) fn peer_name(endpoint: &PeerEndpoint) -> String {
 }
 
 /// The text a client of this version shows for a refusal from `device`:
-/// the host's own text, except the bare text of hosts up to 0.5.182.
+/// the host's own text, except the bare texts of older hosts: the
+/// `permission_denied` text up to 0.5.182 and the concurrency limits that
+/// hosts before R15 still enforce (`PrincipalLimit`, `GlobalLimit`).
 pub(crate) fn client_failure_message(code: &str, message: &str, device: &str) -> String {
-    if code == PERMISSION_DENIED && message == OLD_PERMISSION_DENIED_MESSAGE {
-        permission_denied(device)
-    } else {
-        message.to_string()
+    match (code, message) {
+        (PERMISSION_DENIED, OLD_PERMISSION_DENIED_MESSAGE) => permission_denied(device),
+        (ADMISSION_DENIED, "PrincipalLimit") => format!(
+            "{device} refused the start: it runs at most two jobs of this device at once \
+             (older Smart Explorer version). Next step: wait for a running job to end, \
+             or update Smart Explorer on {device}."
+        ),
+        (ADMISSION_DENIED, "GlobalLimit") => format!(
+            "{device} refused the start: it runs at most eight jobs at once (older Smart \
+             Explorer version). Next step: wait for a running job to end, or update Smart \
+             Explorer on {device}."
+        ),
+        _ => message.to_string(),
     }
 }
 

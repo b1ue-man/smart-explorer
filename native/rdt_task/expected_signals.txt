@@ -91,8 +91,6 @@ perm_task_ask_once_starts_and_logs                        linux-core:perm-pair  
 perm_task_ask_always_sets_allow_keeps_session             linux-core:perm-pair  quelle=R326
 perm_task_ask_deny_returns_approval_denied                linux-core:perm-pair  quelle=R326
 perm_task_ask_client_cancel_withdraws_prompt              linux-core:perm-pair  quelle=R326
-perm_task_ask_counts_against_peer_limit                   linux-core:perm-pair  quelle=R326
-perm_task_screen_approval_counts_against_exec_reservations  linux-core:perm-pair  quelle=R326
 perm_task_narrowing_withdraws_pending                     linux-core:perm-pair  quelle=R326
 perm_task_pending_surface_cli_only_without_display        linux-core:perm-pair  fixture=nodisplay  quelle=R326,D3
 
@@ -373,6 +371,22 @@ mcp_task_catalog_is_complete_and_within_host_limits    linux-core:unit  quelle=D
 mcp_task_only_new_update_stop_requests_end_the_server  linux-core:unit  quelle=D3-Bestand
 UiTaskTest        android-device:android-bestand  art=instr  quelle=D3-Bestand
 IntentsTaskTest   android-device:android-bestand  art=instr  quelle=D3-Bestand
+
+# ---- R15 (E12) und SEC-Punkte 2-3 (2026-10-19): Exec ohne Gleichzeitigkeitsgrenze, Hub-Registrierung, Tresor-Laeufer ----
+perm_task_same_principal_starts_three_and_more_concurrent_jobs  linux-core:unit,windows-core:unit  pfad=share::exec_registry::tests::perm_task_same_principal_starts_three_and_more_concurrent_jobs  quelle=R15,E12
+perm_task_host_starts_more_than_eight_concurrent_jobs  linux-core:unit,windows-core:unit  pfad=share::exec_registry::tests::perm_task_host_starts_more_than_eight_concurrent_jobs  quelle=R15,E12
+perm_task_open_requests_have_no_device_or_host_limit  linux-core:perm-pair  pfad=share::exec_server::admission::approval::tests::limits::perm_task_open_requests_have_no_device_or_host_limit  quelle=R15,E12
+perm_task_ask_start_beside_three_running_jobs_of_the_device  linux-core:perm-pair  pfad=share::exec_server::admission::approval::tests::limits::perm_task_ask_start_beside_three_running_jobs_of_the_device  quelle=R15,E12
+perm_task_screen_request_beside_running_jobs  linux-core:perm-pair  pfad=share::exec_server::admission::approval::tests::limits::perm_task_screen_request_beside_running_jobs  quelle=R15,E12
+perm_task_old_host_limit_refusal_stays_readable  linux-core:perm-pair  pfad=share::exec_server::admission::approval::tests::limits::perm_task_old_host_limit_refusal_stays_readable  quelle=R15,E12
+vault_task_spool_key_refuses_daemon_token_and_unknown_mount  linux-core:unit,windows-core:unit  pfad=daemon::ipc::tests::vault_task_spool_key_refuses_daemon_token_and_unknown_mount  quelle=R5
+drive_task_mount_host_ext_requires_session_token_of_its_mount  linux-core:unit,windows-core:unit  pfad=daemon::ipc::tests::drive_task_mount_host_ext_requires_session_token_of_its_mount  quelle=R5
+vault_task_daemon_runs_vault_job_through_vault_sync  linux-core:unit  pfad=daemon::job::tests::vault_task_daemon_runs_vault_job_through_vault_sync  quelle=U20-Uebergabe
+vault_task_desktop_runs_vault_job_through_vault_sync  linux-core:unit,windows-core:unit  pfad=app::sync_manual_run::vault_tests::vault_task_desktop_runs_vault_job_through_vault_sync  quelle=U20-Uebergabe
+vault_task_android_runs_vault_job_through_vault_sync  linux-core:unit  pfad=mobile::domains::sync_run::vault_tests::vault_task_android_runs_vault_job_through_vault_sync  quelle=U20-Uebergabe
+vault_task_android_unavailable_vault_run_changes_nothing  linux-core:unit  pfad=mobile::domains::sync_run::vault_tests::vault_task_android_unavailable_vault_run_changes_nothing  quelle=U20-Uebergabe
+vault_task_recovery_manifest_seals_path_fields_of_vault_copies  linux-core:unit,windows-core:unit  pfad=app::remote_helpers::recovery_manifest::task_tests::vault_fields::vault_task_recovery_manifest_seals_path_fields_of_vault_copies  quelle=K07
+vault_task_recovery_manifest_plain_entries_unchanged  linux-core:unit,windows-core:unit  pfad=app::remote_helpers::recovery_manifest::task_tests::vault_fields::vault_task_recovery_manifest_plain_entries_unchanged  quelle=K07
 
 [noch nicht umgesetzt]
 

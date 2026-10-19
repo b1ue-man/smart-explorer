@@ -67,8 +67,6 @@ pub(crate) enum ExecRegistryError {
     NotAuthorized,
     StaleAuthorization,
     DuplicateMismatch,
-    GlobalLimit,
-    PrincipalLimit,
     UnknownExecution,
     NotPreparing,
     ContainmentNotConfirmed,
@@ -82,10 +80,10 @@ impl std::fmt::Display for ExecRegistryError {
     }
 }
 
+/// Retention of finished jobs. There is no concurrency limit: neither one
+/// principal nor the host as a whole is capped in how many jobs run at once.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ExecRegistryLimits {
-    pub(crate) global_active: usize,
-    pub(crate) principal_active: usize,
     pub(crate) history: usize,
     pub(crate) terminal_cache: usize,
 }
@@ -93,8 +91,6 @@ pub(crate) struct ExecRegistryLimits {
 impl Default for ExecRegistryLimits {
     fn default() -> Self {
         Self {
-            global_active: 8,
-            principal_active: 2,
             history: 128,
             terminal_cache: 128,
         }
@@ -200,17 +196,6 @@ impl ExecRegistry {
                 return Err(ExecRegistryError::DuplicateMismatch);
             }
             return Ok(ExecAdmission::CachedTerminal(entry.view.clone()));
-        }
-        if state.active.len() >= self.limits.global_active {
-            return Err(ExecRegistryError::GlobalLimit);
-        }
-        let peer_active = state
-            .active
-            .values()
-            .filter(|job| PrincipalIdentity::from(&job.lease.principal) == identity)
-            .count();
-        if peer_active >= self.limits.principal_active {
-            return Err(ExecRegistryError::PrincipalLimit);
         }
         let cancellation = ExecCancellation(Arc::new(Mutex::new(None)));
         let lease = ExecAuthorizationLease {
