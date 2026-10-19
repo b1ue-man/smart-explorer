@@ -231,6 +231,32 @@ impl ScreenStream {
 
     /// Sends a control frame to the host (`SET_MODE`, `INPUT`, …).
     pub(crate) fn send(&self, frame: &ViewerFrame) -> io::Result<()> {
+        self.control().send(frame)
+    }
+
+    /// Ends the session.
+    pub(crate) fn close(&self) -> io::Result<()> {
+        self.control().close()
+    }
+
+    /// The sending half, for another thread while `next_event` waits here
+    /// (a call that gives up waiting for the other device's user, SCR-M4).
+    pub(crate) fn control(&self) -> StreamControl {
+        StreamControl {
+            input: self.input.clone(),
+        }
+    }
+}
+
+/// Sends control frames of a relayed viewer session and ends it; it works
+/// while another thread waits in `ScreenStream::next_event`.
+#[derive(Clone)]
+pub(crate) struct StreamControl {
+    input: Arc<Mutex<TcpStream>>,
+}
+
+impl StreamControl {
+    pub(crate) fn send(&self, frame: &ViewerFrame) -> io::Result<()> {
         let (tag, payload) = encode_viewer_frame(frame)?;
         let mut body = Vec::with_capacity(payload.len() + 1);
         body.push(tag);
@@ -239,7 +265,6 @@ impl ScreenStream {
         write_relay(&mut *input, RELAY_VIEWER, &body)
     }
 
-    /// Ends the session.
     pub(crate) fn close(&self) -> io::Result<()> {
         let mut input = self.input.lock().unwrap_or_else(PoisonError::into_inner);
         write_relay(&mut *input, RELAY_CLOSE, &[])

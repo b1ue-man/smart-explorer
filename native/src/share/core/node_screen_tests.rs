@@ -35,6 +35,9 @@ mod rights;
 #[path = "node_screen_codec_tests.rs"]
 mod codec;
 
+#[path = "node_screen_still_tests.rs"]
+mod still;
+
 static AUDIT: Mutex<Vec<Value>> = Mutex::new(Vec::new());
 
 fn capture(entry: crate::share::access_audit::AccessEntry<'_>) {

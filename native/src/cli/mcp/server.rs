@@ -7,8 +7,8 @@ use super::jobs::{Job, JobKind};
 use super::session::Session;
 use super::update_stop::UpdateStop;
 use super::{
-    catalog, cli_tool, exec_tool, file_tools, file_write, job_view, response, search_tool,
-    sessions_tool, status_tools, transfer_tools,
+    catalog, cli_tool, exec_tool, file_tools, file_write, job_view, response, screen_tool,
+    search_tool, sessions_tool, status_tools, transfer_tools,
 };
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, Implementation, ListToolsResult,
@@ -123,6 +123,7 @@ async fn dispatch(
                     .await?;
             job_view::started_job_answer(&job, &args, context).await
         }
+        "screen" => blocking(move || screen_tool::screen(&Args::new(owned.as_ref()))).await,
         "se" => {
             let job = start(move || cli_tool::start(&session_for_work, &Args::new(owned.as_ref())))
                 .await?;
