@@ -173,8 +173,15 @@ fn checked_settings(
 ) -> Result<(crate::bisync::BisyncOptions, Bounds, globset::GlobSet), ApiError> {
     let settings = (|| {
         job.validate()?;
+        // A vault job has its own engine options (C5.6); it runs only
+        // through `run_vault_job` (`run_bisync_with`).
+        let opts = if job.is_vault() {
+            job.checked_vault_opts(dry_run)?
+        } else {
+            job.checked_opts(dry_run)?
+        };
         Ok::<_, String>((
-            job.checked_opts(dry_run)?,
+            opts,
             job.checked_filter_bounds(super::args::now_secs())?,
             job.checked_glob_set()?,
         ))
@@ -241,6 +248,16 @@ fn run_bisync_with(
     dry_run: bool,
     settings: crate::bisync::RunSettings,
 ) -> Result<crate::bisync::Outcome, ApiError> {
+    if job.is_vault() {
+        let cancel = ctx.cancel_flag();
+        return run_vault(
+            job,
+            dry_run,
+            &cancel,
+            settings,
+            &crate::vault::run_vault_job,
+        );
+    }
     let (opts, bounds, _) = checked_settings(job, dry_run)?;
     let ignore = job
         .checked_glob_set_for(
@@ -272,6 +289,38 @@ fn run_bisync_with(
         settings,
         observer: Some(&observer),
     }))
+}
+
+/// The vault sync (`vault::run_vault_job`; tests pass their own).
+type VaultRunner<'a> =
+    &'a dyn Fn(crate::vault::VaultRunRequest<'_>) -> crate::vault::VaultRunOutcome;
+
+/// A vault job (`vault-jobs/`, C5.8) runs only through the vault sync with
+/// its rules R1–R11, strict conflicts and no automatic resolution. Its
+/// conflicts are reported without the run's state, so the general
+/// resolution and merge (`sync_conflicts::resolve`) never touch the
+/// encrypted storage.
+fn run_vault(
+    job: &SyncJob,
+    dry_run: bool,
+    cancel: &std::sync::atomic::AtomicBool,
+    settings: crate::bisync::RunSettings,
+    run_vault: VaultRunner<'_>,
+) -> Result<crate::bisync::Outcome, ApiError> {
+    let run = run_vault(crate::vault::VaultRunRequest {
+        job,
+        dry_run,
+        cancel,
+        settings,
+        observer: None,
+    });
+    if let Some(reason) = run.unavailable {
+        // R7/R1: the run did not start; nothing changed on either side.
+        return Err(ApiError::new("network", reason));
+    }
+    let mut out = run.outcome;
+    out.state = None;
+    Ok(out)
 }
 
 pub(super) fn run(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
@@ -440,3 +489,7 @@ fn mirror_task(ctx: &TaskCtx, source: &str, target: &str) -> Result<Value, ApiEr
         "omitted": omitted,
     }))
 }
+
+#[cfg(test)]
+#[path = "sync_run_vault_tests.rs"]
+mod vault_tests;

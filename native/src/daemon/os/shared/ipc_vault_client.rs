@@ -243,14 +243,17 @@ pub(crate) fn open_vault_backend(
         .try_clone()
         .map_err(|error| VaultIpcError::plain(format!("Tresor-IPC: {error}")))?;
     let identity = Arc::new(WorkerVault {
-        site,
+        site: site.clone(),
         state_identity,
         namespace_identity,
     });
     let agent =
         crate::agent::AgentBackend::from_streams(Box::new(read), Box::new(stream), identity)
             .map_err(|error| VaultIpcError::plain(format!("Tresor-Verbindung: {error}")))?;
-    Ok((Arc::new(agent), path.to_string()))
+    let backend: crate::vfs::BackendHandle = Arc::new(agent);
+    // K20/K21: logs about this backend seal their fields with the site's key.
+    crate::vault::note_vault_backend(backend.as_ref(), &site);
+    Ok((backend, path.to_string()))
 }
 
 /// Scheme and identity of a vault the worker serves; the agent protocol

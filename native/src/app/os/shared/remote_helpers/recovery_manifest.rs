@@ -35,6 +35,50 @@ struct RecoveryManifestEntry {
     remote: String,
     dirty: bool,
     uploading: bool,
+    /// K07: the vault site of a fallback copy (`vault://`); its path fields
+    /// are sealed with the site's key `log-fields`. Absent for every other
+    /// copy, so their entries stay as before.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    vault: String,
+    /// K07: the path fields of a vault copy are withheld (empty) because
+    /// the site is unknown here or sealing failed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    withheld: bool,
+}
+
+/// Seals the texts of a vault site (`vault::seal_log_fields`).
+type FieldSealer<'a> = &'a dyn Fn(&str, &[&str]) -> Result<Vec<String>, String>;
+
+/// K07 (vault plan C4): the path fields of a fallback copy of a vault file
+/// never reach the manifest in cleartext. `site` is `None` when the vault of
+/// the backend is not known here; then the fields are withheld.
+fn seal_vault_fields(entry: &mut RecoveryManifestEntry, site: Option<&str>, seal: FieldSealer<'_>) {
+    let sealed = site
+        .ok_or_else(|| "unbekannter Tresor".to_string())
+        .and_then(|site| {
+            let items = [
+                entry.name.as_str(),
+                entry.local.as_str(),
+                entry.remote.as_str(),
+            ];
+            seal(site, &items)
+        })
+        .ok()
+        .filter(|sealed| sealed.len() == 3);
+    match sealed {
+        Some(mut sealed) => {
+            entry.remote = sealed.pop().unwrap_or_default();
+            entry.local = sealed.pop().unwrap_or_default();
+            entry.name = sealed.pop().unwrap_or_default();
+        }
+        None => {
+            entry.name.clear();
+            entry.local.clear();
+            entry.remote.clear();
+            entry.withheld = true;
+        }
+    }
+    entry.vault = site.unwrap_or_default().to_string();
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -251,13 +295,21 @@ fn recovery_manifest_entry(edit: &RemoteEdit) -> io::Result<Option<RecoveryManif
     let allow_missing = edit.phase == RemoteEditPhase::Editing;
     validate_edit_path(parent, true, allow_missing)?;
     validate_edit_path(&edit.temp, false, allow_missing)?;
-    Ok(Some(RecoveryManifestEntry {
+    let mut entry = RecoveryManifestEntry {
         name: edit.name.clone(),
         local: edit.temp.to_string_lossy().into_owned(),
         remote: edit.remote_path.clone(),
         dirty: edit.dirty,
         uploading: edit.uploading,
-    }))
+        vault: String::new(),
+        withheld: false,
+    };
+    if let Some(site) = crate::vault::vault_site_of(edit.backend.as_ref()) {
+        seal_vault_fields(&mut entry, site.as_deref(), &|site, items| {
+            crate::vault::seal_log_fields(site, items)
+        });
+    }
+    Ok(Some(entry))
 }
 
 fn validate_edit_path(path: &Path, directory: bool, allow_missing: bool) -> io::Result<()> {

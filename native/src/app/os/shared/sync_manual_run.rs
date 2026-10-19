@@ -258,6 +258,9 @@ fn execute(
             if cancel.load(Ordering::Acquire) {
                 return Err("Sync abgebrochen".into());
             }
+            if job.is_vault() {
+                return run_vault(&job, cancel, settings, &crate::vault::run_vault_job);
+            }
             let (a, root_a) = crate::connect::resolve_endpoint(&job.source)?;
             let (b, root_b) = crate::connect::resolve_endpoint(&job.target)?;
             // Retargeting during a slow connection never applies an old queued setup.
@@ -334,6 +337,36 @@ fn execute(
         }
         Err(error) => failure("Sync nicht gestartet", error),
     }
+}
+
+/// The vault sync (`vault::run_vault_job`; tests pass their own).
+type VaultRunner<'a> =
+    &'a dyn Fn(crate::vault::VaultRunRequest<'_>) -> crate::vault::VaultRunOutcome;
+
+/// A vault job (`vault-jobs/`, C5.8) runs only through the vault sync with
+/// its rules R1–R11, strict conflicts and no automatic resolution. The run
+/// leaves no pair context and no state, so the general conflict resolution
+/// and merge of the desktop stay closed for its conflicts.
+fn run_vault(
+    job: &SyncJob,
+    cancel: &AtomicBool,
+    settings: crate::bisync::RunSettings,
+    run_vault: VaultRunner<'_>,
+) -> Result<crate::bisync::Outcome, String> {
+    let run = run_vault(crate::vault::VaultRunRequest {
+        job,
+        dry_run: false,
+        cancel,
+        settings,
+        observer: None,
+    });
+    if let Some(reason) = run.unavailable {
+        // R7/R1: the run did not start; nothing changed on either side.
+        return Err(reason);
+    }
+    let mut out = run.outcome;
+    out.state = None;
+    Ok(out)
 }
 
 fn remember_preparation_error(mailbox: &Arc<Mutex<RunMailbox>>, message: &str) {
@@ -444,3 +477,7 @@ impl Drop for Heartbeat {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "sync_manual_run_vault_tests.rs"]
+mod vault_tests;
