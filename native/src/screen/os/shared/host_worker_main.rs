@@ -60,6 +60,19 @@ fn failed(code: ScreenErrorCode, error: impl ToString) -> WorkerReply {
     }
 }
 
+/// A capture error as the viewer sees it: a source the user declined
+/// (`PermissionDenied`, the portal dialog of Linux hosts, SCR-M5) is
+/// `no_display` with the reason in the text; everything else is
+/// `capture_failed`.
+fn capture_failed(error: &io::Error) -> WorkerReply {
+    let code = if error.kind() == io::ErrorKind::PermissionDenied {
+        ScreenErrorCode::NoDisplay
+    } else {
+        ScreenErrorCode::CaptureFailed
+    };
+    failed(code, error)
+}
+
 /// `--screen-host-worker` as the only argument (V9) runs the host process;
 /// the result is its exit code. The entry of both programs
 /// (`smart_explorer` in `run_gui`, `se` in its `main`).
@@ -154,7 +167,7 @@ impl Worker {
             Ok(SourceFrame::Unchanged) => {
                 failed(ScreenErrorCode::CaptureFailed, "the source has no picture")
             }
-            Err(error) => failed(ScreenErrorCode::CaptureFailed, error),
+            Err(error) => capture_failed(&error),
         }
     }
 
@@ -177,7 +190,7 @@ impl Worker {
                 return WorkerReply::Frame(StageFrame::Unchanged { source_size });
             }
             Ok(SourceFrame::Paused(state)) => return WorkerReply::Frame(StageFrame::Paused(state)),
-            Err(error) => return failed(ScreenErrorCode::CaptureFailed, error),
+            Err(error) => return capture_failed(&error),
         };
         let source_size = image.size();
         let image = if image.size() == request.size {
@@ -292,3 +305,7 @@ impl Worker {
         self.produced += 1;
     }
 }
+
+#[cfg(test)]
+#[path = "host_worker_main_tests.rs"]
+mod tests;
