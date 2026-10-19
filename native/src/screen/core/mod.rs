@@ -44,6 +44,7 @@ pub(crate) mod host_stage;
 // (input of SCR-M6 and the viewer of SCR-M7).
 #[allow(dead_code)]
 pub(crate) mod input_model;
+pub(crate) mod licenses;
 // Not yet used by SCR-M2: `LatencySamples::count`.
 #[allow(dead_code)]
 pub(crate) mod metrics;
