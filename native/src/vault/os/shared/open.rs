@@ -238,9 +238,11 @@ pub(crate) fn open_with(
     }
     let _nesting = Nesting::enter()?;
     let (inner, root) = resolve(&site.location).map_err(VaultOpenError::Failed)?;
-    let backend = VaultBackend::new(inner, &root, Arc::clone(&session));
+    let backend: BackendHandle = Arc::new(VaultBackend::new(inner, &root, Arc::clone(&session)));
+    // K20/K21: logs about this backend seal their fields with the site's key.
+    super::local_store::note_vault_backend(backend.as_ref(), &site.id);
     Ok(OpenedVault {
-        backend: Arc::new(backend),
+        backend,
         path: path.to_string(),
         site: site.id.clone(),
         session,
