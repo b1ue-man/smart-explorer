@@ -2,12 +2,24 @@
 //! opens in a host process of its own (`WorkerSource`), so capture and
 //! encoding run there; the encoders this host offers come from the codec
 //! inventory of the user (Media Foundation, OpenH264, tiles); platform,
-//! monitors, windows, limits and input stay with the platform backend.
+//! monitors, windows, limits and the input capabilities stay with the
+//! platform backend.
+//!
+//! Input (SCR-M6, decision of SEC on U16-4): the host process injects it,
+//! the same process that captures (C5: `SendInput` at the user's integrity
+//! level; on Wayland only the capture's portal session carries input). A
+//! source opened for a session in the mode `control` is opened with
+//! `control`; `inject` hands the batch to the newest such host process that
+//! still runs. The session core calls `inject` only for the viewer that
+//! holds control with the `ScreenControl` right. The mode of a session is
+//! read from the share node's registry (`watch_registry`), because
+//! `open_source` carries only the source.
 use std::io;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock, PoisonError, Weak};
+use std::time::Instant;
 
-use super::{desktop_program, program_for, WorkerSource};
+use super::{desktop_program, program_for, SharedLink, WorkerSource, INPUT_TIMEOUT};
 use crate::screen::core::codec_registry::CodecRegistry;
 use crate::screen::core::host_backend::{
     ScreenEncoder, ScreenHostBackend, ScreenSource, SourceRefusal,
@@ -15,12 +27,53 @@ use crate::screen::core::host_backend::{
 use crate::screen::core::input_model::{InputCapabilities, InputEvent};
 use crate::screen::core::negotiate::{CodecChoice, CodecOffer};
 use crate::screen::core::pixel_convert::FrameSize;
+use crate::screen::core::registry::ScreenRegistry;
+use crate::screen::core::session_state::SessionState;
 use crate::screen::core::window_list::{MonitorInfo, SourceId, WindowList};
 use crate::screen::core::wire_control::ControlBlock;
 use crate::screen::core::wire_hello::HostPlatform;
+use crate::screen::core::wire_hello::SessionMode;
+use crate::screen::core::worker_wire::{WorkerReply, WorkerRequest};
 
 /// Frame rate of an encoder opened without one (`open_encoder`).
 const DEFAULT_FPS: u32 = 30;
+
+fn registry_slot() -> &'static Mutex<Weak<ScreenRegistry>> {
+    static SLOT: OnceLock<Mutex<Weak<ScreenRegistry>>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(Weak::new()))
+}
+
+/// The share node's registry, whose sessions name their mode.
+pub(crate) fn watch_registry(registry: &Arc<ScreenRegistry>) {
+    *registry_slot()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Arc::downgrade(registry);
+}
+
+/// Whether the session that is about to open `source` may control: the
+/// newest registered session of this source that is starting or asked.
+fn opens_for_control(source: &SourceId) -> bool {
+    let registry = registry_slot()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .upgrade();
+    let Some(registry) = registry else {
+        return false;
+    };
+    let key = source.to_string();
+    let (_, sessions) = registry.sessions();
+    sessions
+        .into_iter()
+        .filter(|session| {
+            session.source == key
+                && matches!(
+                    session.state,
+                    SessionState::Starting | SessionState::WaitingForApproval
+                )
+        })
+        .max_by_key(|session| session.started_at)
+        .is_some_and(|session| session.mode == SessionMode::Control)
+}
 
 /// Where the host processes come from.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -56,6 +109,8 @@ pub(crate) struct WorkerBackend {
     program: WorkerProgram,
     /// OpenH264 store of the codecs; `None` is this user's.
     openh264_dir: Option<PathBuf>,
+    /// The host processes of sessions that may control, newest last.
+    controls: Mutex<Vec<Weak<Mutex<super::WorkerLink>>>>,
 }
 
 impl WorkerBackend {
@@ -72,6 +127,7 @@ impl WorkerBackend {
             inner,
             program,
             openh264_dir,
+            controls: Mutex::new(Vec::new()),
         }
     }
 
@@ -128,7 +184,13 @@ impl ScreenHostBackend for WorkerBackend {
                 "host_process: the desktop program is not installed next to this program",
             ));
         };
-        let opened = WorkerSource::open(program, env, source, wanted)?;
+        let control = opens_for_control(source);
+        let opened = WorkerSource::open(program, env, source, wanted, control)?;
+        if control {
+            let mut controls = self.controls.lock().unwrap_or_else(PoisonError::into_inner);
+            controls.retain(|link| link.strong_count() > 0);
+            controls.push(Arc::downgrade(&opened.shared_link()));
+        }
         Ok(Box::new(opened))
     }
 
@@ -144,6 +206,45 @@ impl ScreenHostBackend for WorkerBackend {
     }
 
     fn inject(&self, events: &[InputEvent]) -> Result<(), ControlBlock> {
-        self.inner.inject(events)
+        #[cfg(test)]
+        if self.program == WorkerProgram::InProcess {
+            return self.inner.inject(events);
+        }
+        let link: Option<SharedLink> = self
+            .controls
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .rev()
+            .find_map(Weak::upgrade);
+        let link = link.ok_or(ControlBlock::ControlUnavailable)?;
+        send_input(&link, events)
+    }
+}
+
+/// One input batch to a host process: waits at most `INPUT_TIMEOUT` for a
+/// running picture request, then at most as long for the answer (a host
+/// process that does not answer is ended, like for a picture). Nothing of
+/// the batch is logged.
+fn send_input(link: &SharedLink, events: &[InputEvent]) -> Result<(), ControlBlock> {
+    let deadline = Instant::now() + INPUT_TIMEOUT;
+    let mut guard = loop {
+        match link.try_lock() {
+            Ok(guard) => break guard,
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => break poisoned.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) if Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            Err(std::sync::TryLockError::WouldBlock) => {
+                return Err(ControlBlock::ControlUnavailable)
+            }
+        }
+    };
+    match guard.ask(&WorkerRequest::Input(events.to_vec()), INPUT_TIMEOUT) {
+        Ok(WorkerReply::InputDone { blocked: None }) => Ok(()),
+        Ok(WorkerReply::InputDone {
+            blocked: Some(blocked),
+        }) => Err(blocked),
+        _ => Err(ControlBlock::ControlUnavailable),
     }
 }

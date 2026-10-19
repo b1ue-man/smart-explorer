@@ -8,25 +8,36 @@
 //! SCR-M4 adds the Windows host (`windows/`): monitors, the window list, the
 //! secure desktop, and capture with Graphics Capture or the DXGI duplication.
 //! SCR-M5 adds the Linux host (`linux_os/`): X11, the Wayland portal with
-//! PipeWire, window and app lists per desktop. Capture and input of Android
-//! follow under `android/` (SCR-M8). The functions below select the platform's
-//! parts with `#[cfg(...)]` so the shared modules stay free of it.
+//! PipeWire, window and app lists per desktop. SCR-M8 adds the Android host
+//! (`android/`): the bridge to the app, which captures, encodes and injects.
+//! The functions below select the platform's parts with `#[cfg(...)]` so the
+//! shared modules stay free of it.
 use std::path::Path;
 use std::sync::Arc;
 
 use crate::screen::core::codec_registry::{DecoderFactory, EncoderFactory, OpenH264Report};
-use crate::screen::core::host_backend::ScreenHostBackend;
+use crate::screen::core::host_backend::{ScreenHostBackend, SessionIndicator};
+use crate::screen::core::registry::ScreenRegistry;
 
 #[path = "shared/codec_inventory.rs"]
 pub(crate) mod codec_inventory;
+// Android has no host process (the app captures): the client stays unused there.
+#[cfg_attr(target_os = "android", allow(dead_code))]
 #[path = "shared/host_worker_client.rs"]
 pub(crate) mod host_worker_client;
 #[path = "shared/host_worker_main.rs"]
 pub(crate) mod host_worker_main;
+// Android shows sessions in the app (`bridge_backend::BridgeIndicator`); the
+// desktop window is built only in share-node tests there.
+#[cfg_attr(target_os = "android", allow(dead_code))]
 #[path = "shared/indicator.rs"]
 pub(crate) mod indicator;
 #[path = "shared/synthetic_backend.rs"]
 pub(crate) mod synthetic_backend;
+// SCR-M6: key codes of the desktop hosts' input (plain tables).
+#[cfg_attr(not(any(windows, target_os = "linux")), allow(dead_code))]
+#[path = "shared/input_keys.rs"]
+pub(crate) mod input_keys;
 
 #[cfg(target_os = "linux")]
 #[path = "linux_os/worker_death.rs"]
@@ -79,6 +90,12 @@ mod host_backend;
 #[cfg(windows)]
 #[path = "windows/host_backend.rs"]
 mod host_backend;
+#[cfg(windows)]
+#[path = "windows/input_integrity.rs"]
+mod input_integrity;
+#[cfg(windows)]
+#[path = "windows/input_send.rs"]
+mod input_send;
 #[cfg(target_os = "linux")]
 #[path = "linux_os/kde_window_management.rs"]
 mod kde_window_management;
@@ -107,6 +124,9 @@ mod pipewire_abi;
 #[path = "linux_os/pipewire_stream.rs"]
 mod pipewire_stream;
 #[cfg(target_os = "linux")]
+#[path = "linux_os/portal_input.rs"]
+mod portal_input;
+#[cfg(target_os = "linux")]
 #[path = "linux_os/portal_session.rs"]
 mod portal_session;
 #[cfg(target_os = "linux")]
@@ -134,6 +154,12 @@ mod x11_capture;
 #[path = "linux_os/x11_cursor.rs"]
 mod x11_cursor;
 #[cfg(target_os = "linux")]
+#[path = "linux_os/x11_input.rs"]
+mod x11_input;
+#[cfg(target_os = "linux")]
+#[path = "linux_os/x11_keymap.rs"]
+mod x11_keymap;
+#[cfg(target_os = "linux")]
 #[path = "linux_os/x11_monitors.rs"]
 mod x11_monitors;
 #[cfg(target_os = "linux")]
@@ -150,11 +176,29 @@ mod capture_tests;
 #[path = "shared/windows_static_tests.rs"]
 mod windows_static_tests;
 
+// SCR-M8 (U27): Android as host. The app captures and encodes; these files
+// keep the session and the bridge to it. Plain Rust, so the host tests of
+// every platform check them too.
+#[cfg(any(target_os = "android", test))]
+#[path = "android/bridge_backend.rs"]
+pub(crate) mod bridge_backend;
+#[cfg(any(target_os = "android", test))]
+#[path = "android/bridge_channels.rs"]
+pub(crate) mod bridge_channels;
+#[cfg(any(target_os = "android", test))]
+#[path = "android/bridge_source.rs"]
+mod bridge_source;
+#[cfg(test)]
+#[path = "android/bridge_tests.rs"]
+mod bridge_tests;
+
 /// Encoder and decoder factories of one kind of codec.
 type Factories = (Vec<Arc<dyn EncoderFactory>>, Vec<Arc<dyn DecoderFactory>>);
 
-/// The backend that captures on this platform (in the host process): Windows
-/// (SCR-M4), Linux (SCR-M5); the test picture elsewhere.
+/// The backend that captures on this platform: Windows (SCR-M4) and Linux
+/// (SCR-M5) in the host process, Android (SCR-M8) in the app; the test
+/// picture on every other platform. Share-node tests take the test picture
+/// themselves (`share::node_screen`).
 #[cfg(target_os = "linux")]
 fn platform_backend() -> Arc<dyn ScreenHostBackend> {
     Arc::new(host_backend::LinuxBackend::new())
@@ -165,15 +209,58 @@ fn platform_backend() -> Arc<dyn ScreenHostBackend> {
     Arc::new(host_backend::WindowsBackend::new())
 }
 
-#[cfg(not(any(windows, target_os = "linux")))]
+#[cfg(target_os = "android")]
+fn platform_backend() -> Arc<dyn ScreenHostBackend> {
+    Arc::new(bridge_backend::BridgeBackend)
+}
+
+#[cfg(not(any(windows, target_os = "linux", target_os = "android")))]
 fn platform_backend() -> Arc<dyn ScreenHostBackend> {
     Arc::new(synthetic_backend::SyntheticBackend)
 }
 
-/// The backend of the share host: capture and encoding in the host process,
-/// everything else answered by the platform backend.
+/// The backend of the share host: on desktops capture and encoding in the
+/// host process, everything else answered by the platform backend.
+#[cfg(not(target_os = "android"))]
 pub(crate) fn host_backend() -> Arc<dyn ScreenHostBackend> {
     Arc::new(host_worker_client::WorkerBackend::new(platform_backend()))
+}
+
+/// The backend of the share host on Android: the app is the capture process,
+/// so there is no host process.
+#[cfg(target_os = "android")]
+pub(crate) fn host_backend() -> Arc<dyn ScreenHostBackend> {
+    platform_backend()
+}
+
+/// The host user's sign of running sessions (C7): the indicator window on
+/// desktops, the app's notification and status bar chip on Android. On
+/// desktops the host backend also learns the registry there, whose sessions
+/// name the mode a host process opens for (input, SCR-M6).
+#[cfg(not(target_os = "android"))]
+pub(crate) fn host_indicator(registry: &Arc<ScreenRegistry>) -> Arc<dyn SessionIndicator> {
+    host_worker_client::watch_registry(registry);
+    Arc::new(indicator::DesktopIndicator::new(registry))
+}
+
+/// The source a host process opened, where its input points (SCR-M6); the
+/// Wayland portal session keeps its own.
+#[cfg(windows)]
+fn note_input_target(source: &crate::screen::core::window_list::SourceId) {
+    input_send::set_target(source);
+}
+
+#[cfg(target_os = "linux")]
+fn note_input_target(source: &crate::screen::core::window_list::SourceId) {
+    x11_input::set_target(source);
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+fn note_input_target(_source: &crate::screen::core::window_list::SourceId) {}
+
+#[cfg(target_os = "android")]
+pub(crate) fn host_indicator(registry: &Arc<ScreenRegistry>) -> Arc<dyn SessionIndicator> {
+    Arc::new(bridge_backend::BridgeIndicator::new(registry))
 }
 
 /// The Media Foundation transforms of this host (Windows); none elsewhere.

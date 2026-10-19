@@ -56,7 +56,7 @@ fn screen_task_host_worker_exits_on_update_stop() {
     super::super::worker_lifetime::prepare(&mut command);
     let link = WorkerLink::with_command(command).unwrap();
     let size = FrameSize::new(320, 180);
-    let mut source = match WorkerSource::opened(link, &SourceId::Synthetic, Some(size)) {
+    let mut source = match WorkerSource::opened(link, &SourceId::Synthetic, Some(size), false) {
         Ok(source) => source,
         Err(refusal) => panic!("host process refused the test picture: {}", refusal.reason),
     };
@@ -79,7 +79,7 @@ fn screen_task_host_worker_exits_on_update_stop() {
     std::fs::write(sync.join("daemon.stop"), "stop").unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     let status = loop {
-        if let Some(status) = source.link.child.try_wait().unwrap() {
+        if let Some(status) = source.link().child.try_wait().unwrap() {
             break status;
         }
         assert!(

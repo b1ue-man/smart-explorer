@@ -3,8 +3,11 @@
 //! (`portal_session`); the window lists come from the session's own
 //! interfaces (`x11_windows`, `wayland_toplevels`, `kde_window_management`,
 //! `app_units`). The backend works in the daemon (monitors, windows, limits)
-//! and in the host process (sources). Input (XTest, the RemoteDesktop portal)
-//! follows with U22: until then `input()` offers nothing and `inject` refuses.
+//! and in the host process (sources and input, SCR-M6): X11 takes input
+//! through XTest (`x11_input`), Wayland through the RemoteDesktop portal in
+//! the capture's own portal session (`portal_input`), which a session that
+//! may control asks for; wlroots desktops have no RemoteDesktop portal, so
+//! there input is `control_unavailable`.
 //! The test picture `synthetic` is delegated unchanged. A process without a
 //! display, without PipeWire or without a window-list interface starts and
 //! says so in its limits.
@@ -175,7 +178,8 @@ impl ScreenHostBackend for LinuxBackend {
     }
 
     fn input(&self) -> InputCapabilities {
-        InputCapabilities::default()
+        let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
+        input_for(self.session, &desktop)
     }
 
     fn limits(&self) -> Vec<String> {
@@ -237,8 +241,10 @@ impl ScreenHostBackend for LinuxBackend {
                 .map(|opened| Box::new(opened) as Box<dyn ScreenSource>),
             SessionKind::Wayland => match source {
                 SourceId::Monitor(id) if id == PORTAL_MONITOR_ID => {
+                    let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
                     let options = PortalOptions {
-                        remote_desktop: false,
+                        remote_desktop: crate::screen::os::host_worker_main::session_controls()
+                            && remote_desktop_portal(&desktop),
                         pipewire_library: self.pipewire_library,
                     };
                     PortalSource::open(options)
@@ -258,8 +264,36 @@ impl ScreenHostBackend for LinuxBackend {
         SyntheticBackend.open_encoder(choice, size)
     }
 
-    fn inject(&self, _events: &[InputEvent]) -> Result<(), ControlBlock> {
-        Err(ControlBlock::UnsupportedOnHost)
+    fn inject(&self, events: &[InputEvent]) -> Result<(), ControlBlock> {
+        match self.session {
+            SessionKind::X11 => super::x11_input::inject(events),
+            SessionKind::Wayland => super::portal_input::inject(events),
+            SessionKind::None => Err(ControlBlock::UnsupportedOnHost),
+        }
+    }
+}
+
+/// Whether `desktop` (`XDG_CURRENT_DESKTOP`) has a RemoteDesktop portal:
+/// GNOME and KDE do, wlroots desktops (Sway, Hyprland, river, Wayfire,
+/// phosh) do not (NR N11).
+pub(crate) fn remote_desktop_portal(desktop: &str) -> bool {
+    !session_detect::is_wlroots_desktop(desktop)
+}
+
+/// The input this host offers in `session` on `desktop` (C5).
+pub(crate) fn input_for(session: SessionKind, desktop: &str) -> InputCapabilities {
+    let full = |touch: bool| InputCapabilities {
+        pointer: true,
+        keyboard: true,
+        text: true,
+        touch,
+        actions: Vec::new(),
+        toolbar_keys: crate::screen::os::input_keys::toolbar_keys(),
+    };
+    match session {
+        SessionKind::X11 => full(true),
+        SessionKind::Wayland if remote_desktop_portal(desktop) => full(true),
+        SessionKind::Wayland | SessionKind::None => InputCapabilities::default(),
     }
 }
 

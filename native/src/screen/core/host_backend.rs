@@ -127,8 +127,8 @@ pub(crate) trait SessionIndicator: Send + Sync {
 
 /// The screen strand's view of the S1 confirmation service (V7).
 pub(crate) trait ConsentBroker: Send + Sync {
-    /// Opens a request for `capability`; the ticket answers at once when no
-    /// reservation is free or nobody can be asked.
+    /// Opens a request for `capability`; the ticket answers at once when
+    /// nobody can be asked.
     fn request(
         &self,
         principal: &ProvenPrincipal,

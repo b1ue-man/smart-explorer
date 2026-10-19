@@ -279,3 +279,21 @@ fn screen_task_app_units_parse() {
         ]
     );
 }
+
+/// Sway (wlroots) has no RemoteDesktop portal: the host offers no input
+/// and refuses it with `control_unavailable` (SCR-M6, NR N11); GNOME and KDE
+/// offer pointer, keys and text.
+#[test]
+fn screen_task_wayland_control_unavailable_reported() {
+    let none = input_for(SessionKind::Wayland, "sway");
+    assert_eq!(none, InputCapabilities::default());
+    assert!(!remote_desktop_portal("sway:wlroots"));
+    let gnome = input_for(SessionKind::Wayland, "ubuntu:GNOME");
+    assert!(gnome.pointer && gnome.keyboard && gnome.text);
+    assert!(input_for(SessionKind::X11, "").keyboard);
+    let backend = LinuxBackend::with(SessionKind::Wayland, "libpipewire-0.3-missing.so", None);
+    let tap = [InputEvent::Text { text: "x".into() }];
+    assert_eq!(backend.inject(&tap), Err(ControlBlock::ControlUnavailable));
+    let headless = LinuxBackend::with(SessionKind::None, "libpipewire-0.3-missing.so", None);
+    assert_eq!(headless.inject(&tap), Err(ControlBlock::UnsupportedOnHost));
+}

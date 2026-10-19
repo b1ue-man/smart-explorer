@@ -2,8 +2,9 @@
 //! windows and limits are answered here, in the daemon; the source with its
 //! capture opens in the host process (`os::host_worker_client`), which asks
 //! this backend for it too. The test picture `synthetic` stays available
-//! through the backend of SCR-M2. Input follows with SCR-M6: `inject` is the
-//! one place in the daemon that will carry it and refuses until then.
+//! through the backend of SCR-M2. Input (SCR-M6): `inject` runs in the host
+//! process that captures (`input_send`, decision of SEC on U16-4); the
+//! daemon's `WorkerBackend` hands it there.
 use std::io;
 
 use super::capture_source::WindowsSource;
@@ -32,7 +33,12 @@ pub(super) const LIMIT_NO_CURSOR_CAPTURE: &str = "no_cursor_capture";
 
 /// The limits of this host for `wgc` (Graphics Capture available or not).
 pub(super) fn limits_for(wgc: bool) -> Vec<String> {
-    let mut limits = vec![LIMIT_SECURE_DESKTOP_PAUSED, LIMIT_ONE_MONITOR_PER_SESSION];
+    let mut limits = vec![
+        LIMIT_SECURE_DESKTOP_PAUSED,
+        LIMIT_ONE_MONITOR_PER_SESSION,
+        super::input_send::LIMIT_NO_CTRL_ALT_DEL,
+        super::input_send::LIMIT_ELEVATED_WINDOWS_BLOCKED,
+    ];
     if wgc {
         limits.push(LIMIT_CAPTURE_BORDER);
     } else {
@@ -70,7 +76,14 @@ impl ScreenHostBackend for WindowsBackend {
     }
 
     fn input(&self) -> InputCapabilities {
-        InputCapabilities::default()
+        InputCapabilities {
+            pointer: true,
+            keyboard: true,
+            text: true,
+            touch: true,
+            actions: Vec::new(),
+            toolbar_keys: crate::screen::os::input_keys::toolbar_keys(),
+        }
     }
 
     fn limits(&self) -> Vec<String> {
@@ -107,8 +120,8 @@ impl ScreenHostBackend for WindowsBackend {
         SyntheticBackend.open_encoder(choice, size)
     }
 
-    fn inject(&self, _events: &[InputEvent]) -> Result<(), ControlBlock> {
-        Err(ControlBlock::UnsupportedOnHost)
+    fn inject(&self, events: &[InputEvent]) -> Result<(), ControlBlock> {
+        super::input_send::inject(events)
     }
 }
 
@@ -123,6 +136,8 @@ mod tests {
             [
                 "secure_desktop_paused",
                 "one_monitor_per_session",
+                "no_ctrl_alt_del",
+                "elevated_windows_blocked",
                 "capture_border"
             ]
         );
@@ -131,6 +146,8 @@ mod tests {
             [
                 "secure_desktop_paused",
                 "one_monitor_per_session",
+                "no_ctrl_alt_del",
+                "elevated_windows_blocked",
                 "window_capture_unsupported",
                 "no_cursor_capture"
             ]
