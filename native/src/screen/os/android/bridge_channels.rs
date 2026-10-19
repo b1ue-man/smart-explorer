@@ -1,0 +1,399 @@
+//! The channels between the Android app and the screen host of this process
+//! (SCR-M8, C1 Android, C2): the app captures with MediaProjection or the
+//! accessibility service and encodes with MediaCodec; Rust keeps the session
+//! and its picture streams. Per host session one channel: control messages
+//! from Rust to the app (`screenControl`, JSON) and pictures from the app to
+//! Rust (`screenPush`). Channel 0 carries the input of the controlling
+//! viewer to the accessibility service. Starts and ends reach the app as the
+//! bridge events `screenHostStart` and `screenSession`.
+//!
+//! A pushed picture carries `flags`: bit 0 key frame, bit 1 a still picture
+//! (8 bytes width and height, little endian, then RGBA rows), bits 16–31 the
+//! low 16 bits of the encoder epoch it belongs to (`configure`). Nothing of a
+//! picture is ever logged; events carry sizes, names and states only.
+use std::collections::{BTreeMap, VecDeque};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
+use std::time::{Duration, Instant};
+
+use serde_json::{json, Value};
+
+use crate::screen::core::registry::ScreenRegistry;
+use crate::screen::core::wire_binary::MAX_RECORD_BYTES;
+
+pub(crate) const FLAG_KEYFRAME: u32 = 0x1;
+pub(crate) const FLAG_STILL: u32 = 0x2;
+pub(crate) const EPOCH_SHIFT: u32 = 16;
+/// The channel of the accessibility input (`screenControl(0, …)`).
+pub(crate) const INPUT_CHANNEL: u64 = 0;
+/// `screenPush` answers.
+pub(crate) const PUSH_OK: i32 = 0;
+pub(crate) const PUSH_UNKNOWN: i32 = -1;
+pub(crate) const PUSH_INVALID: i32 = -2;
+/// Pictures kept per session; a full queue drops its oldest delta picture.
+const MAX_QUEUED: usize = 8;
+/// Control messages kept per channel (the app polls at least once a second).
+const MAX_CONTROL: usize = 64;
+
+/// A session start as the app needs it (`screenHostStart`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct HostStart {
+    /// `monitor:0`, `window:<package>` or `synthetic`.
+    pub source: String,
+    /// Stills through the accessibility service only (tile previews).
+    pub still: bool,
+    pub viewer_device_id: String,
+    pub viewer_name: String,
+    pub max_width: u32,
+    pub max_height: u32,
+}
+
+/// One picture of the app.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Picture {
+    pub data: Vec<u8>,
+    pub flags: u32,
+}
+
+impl Picture {
+    pub(crate) fn keyframe(&self) -> bool {
+        self.flags & FLAG_KEYFRAME != 0
+    }
+
+    pub(crate) fn still(&self) -> bool {
+        self.flags & FLAG_STILL != 0
+    }
+
+    pub(crate) fn epoch(&self) -> u32 {
+        self.flags >> EPOCH_SHIFT
+    }
+}
+
+/// Where a session stands for the app.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Phase {
+    /// The app asks its user (system dialog „Bildschirm teilen“) or prepares.
+    Consent,
+    Ready {
+        width: u32,
+        height: u32,
+        encoder: String,
+        hardware: bool,
+        /// MediaProjection runs (granted in the system dialog).
+        projection: bool,
+    },
+    /// Ended by the app or the host; the text is the reason key.
+    Ended(String),
+}
+
+#[derive(Default)]
+struct Queues {
+    control: VecDeque<String>,
+    pictures: VecDeque<Picture>,
+}
+
+/// One host session as the app sees it.
+pub(crate) struct Channel {
+    pub(crate) id: u64,
+    pub(crate) start: HostStart,
+    state: Mutex<(Phase, Queues)>,
+    changed: Condvar,
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+impl Channel {
+    fn new(id: u64, start: HostStart) -> Self {
+        Self {
+            id,
+            start,
+            state: Mutex::new((Phase::Consent, Queues::default())),
+            changed: Condvar::new(),
+        }
+    }
+
+    pub(crate) fn phase(&self) -> Phase {
+        lock(&self.state).0.clone()
+    }
+
+    /// Queues `message` for the app.
+    pub(crate) fn send(&self, message: Value) {
+        let mut state = lock(&self.state);
+        if state.1.control.len() >= MAX_CONTROL {
+            state.1.control.pop_front();
+        }
+        state.1.control.push_back(message.to_string());
+        self.changed.notify_all();
+    }
+
+    /// Drops every queued picture (a new encoder epoch begins).
+    pub(crate) fn clear_pictures(&self) {
+        lock(&self.state).1.pictures.clear();
+    }
+
+    /// The next picture that `accept` takes, waiting at most `timeout`;
+    /// pictures it refuses are dropped. `Err` with the reason once ended.
+    pub(crate) fn next_picture(
+        &self,
+        timeout: Duration,
+        accept: impl Fn(&Picture) -> bool,
+    ) -> Result<Option<Picture>, String> {
+        let deadline = Instant::now() + timeout;
+        let mut state = lock(&self.state);
+        loop {
+            if let Phase::Ended(reason) = &state.0 {
+                return Err(reason.clone());
+            }
+            while let Some(picture) = state.1.pictures.pop_front() {
+                if accept(&picture) {
+                    return Ok(Some(picture));
+                }
+            }
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Ok(None);
+            }
+            state = self
+                .changed
+                .wait_timeout(state, left)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+        }
+    }
+
+    /// Waits at most `timeout` for a phase other than `Consent`.
+    pub(crate) fn wait_started(&self, timeout: Duration) -> Phase {
+        let state = lock(&self.state);
+        let (state, _) = self
+            .changed
+            .wait_timeout_while(state, timeout, |state| state.0 == Phase::Consent)
+            .unwrap_or_else(PoisonError::into_inner);
+        state.0.clone()
+    }
+
+    fn set_phase(&self, phase: Phase) {
+        lock(&self.state).0 = phase;
+        self.changed.notify_all();
+    }
+
+    fn push(&self, picture: Picture) -> i32 {
+        let mut state = lock(&self.state);
+        if matches!(state.0, Phase::Ended(_)) {
+            return PUSH_UNKNOWN;
+        }
+        if state.1.pictures.len() >= MAX_QUEUED {
+            // A delta picture is worth less than the newest one; a key frame stays.
+            let drop = state.1.pictures.iter().position(|old| !old.keyframe());
+            state.1.pictures.remove(drop.unwrap_or(0));
+        }
+        state.1.pictures.push_back(picture);
+        self.changed.notify_all();
+        PUSH_OK
+    }
+
+    fn take_control(&self, timeout: Duration) -> Option<String> {
+        let state = lock(&self.state);
+        let (mut state, _) = self
+            .changed
+            .wait_timeout_while(state, timeout, |state| {
+                state.1.control.is_empty() && !matches!(state.0, Phase::Ended(_))
+            })
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(message) = state.1.control.pop_front() {
+            return Some(message);
+        }
+        match &state.0 {
+            Phase::Ended(reason) => Some(json!({"op": "stop", "reason": reason}).to_string()),
+            _ => None,
+        }
+    }
+}
+
+/// How the app reports its prerequisites (`screen.hostPrereqs`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Prereqs {
+    /// The app registered as screen host in this process.
+    pub registered: bool,
+    /// `on`, `off` or `restricted` („Eingeschränkte Einstellungen“).
+    pub accessibility: String,
+    pub usage_access: bool,
+    pub app_window_capture: bool,
+    pub display: Option<(u32, u32)>,
+    /// MediaCodec H.264 encoders: (`cb` or `high`, hardware).
+    pub encoders: Vec<(String, bool)>,
+    /// Running apps: (package, label).
+    pub apps: Vec<(String, String)>,
+}
+
+impl Prereqs {
+    pub(crate) fn accessibility_on(&self) -> bool {
+        self.accessibility == "on"
+    }
+}
+
+/// Where the bridge events go (the mobile event hub).
+pub(crate) type EventSink = fn(Value);
+
+#[derive(Default)]
+struct Register {
+    next_id: u64,
+    channels: BTreeMap<u64, Arc<Channel>>,
+    prereqs: Prereqs,
+    sink: Option<EventSink>,
+    registry: Weak<ScreenRegistry>,
+}
+
+static REGISTER: Mutex<Option<Register>> = Mutex::new(None);
+static INPUT: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
+static INPUT_READY: Condvar = Condvar::new();
+
+fn with<R>(apply: impl FnOnce(&mut Register) -> R) -> R {
+    let mut register = lock(&REGISTER);
+    apply(register.get_or_insert_with(Register::default))
+}
+
+fn emit(event: Value) {
+    if let Some(sink) = with(|register| register.sink) {
+        sink(event);
+    }
+}
+
+fn session_event(id: u64, state: &str, reason: Option<&str>) {
+    emit(json!({"type": "screenSession", "session": id, "state": state, "reason": reason}));
+}
+
+pub(crate) fn set_event_sink(sink: EventSink) {
+    with(|register| register.sink = Some(sink));
+}
+
+/// The screen registry of this process's share node (from its indicator).
+pub(crate) fn set_registry(registry: &Arc<ScreenRegistry>) {
+    with(|register| register.registry = Arc::downgrade(registry));
+}
+
+pub(crate) fn registry() -> Option<Arc<ScreenRegistry>> {
+    with(|register| register.registry.upgrade())
+}
+
+pub(crate) fn prereqs() -> Prereqs {
+    with(|register| register.prereqs.clone())
+}
+
+pub(crate) fn set_prereqs(change: impl FnOnce(&mut Prereqs)) -> Prereqs {
+    with(|register| {
+        change(&mut register.prereqs);
+        register.prereqs.clone()
+    })
+}
+
+/// Opens the channel of a new host session and tells the app.
+pub(crate) fn open(start: HostStart) -> Arc<Channel> {
+    let channel = with(|register| {
+        register.next_id += 1;
+        let channel = Arc::new(Channel::new(register.next_id, start));
+        register.channels.insert(channel.id, channel.clone());
+        channel
+    });
+    let start = &channel.start;
+    emit(json!({
+        "type": "screenHostStart",
+        "session": channel.id,
+        "source": start.source,
+        "still": start.still,
+        "maxWidth": start.max_width,
+        "maxHeight": start.max_height,
+        "viewerName": start.viewer_name,
+        "viewerDeviceId": start.viewer_device_id,
+    }));
+    session_event(channel.id, "consent", None);
+    channel
+}
+
+/// The source ended on the host side: the app stops on its next poll.
+pub(crate) fn close(id: u64, reason: &str) {
+    if let Some(channel) = with(|register| register.channels.remove(&id)) {
+        if !matches!(channel.phase(), Phase::Ended(_)) {
+            channel.set_phase(Phase::Ended(reason.into()));
+            session_event(id, "ended", Some(reason));
+        }
+    }
+}
+
+pub(crate) fn channel(id: u64) -> Option<Arc<Channel>> {
+    with(|register| register.channels.get(&id).cloned())
+}
+
+pub(crate) fn channels() -> Vec<Arc<Channel>> {
+    with(|register| register.channels.values().cloned().collect())
+}
+
+/// `screenPush`: one picture of session `id`. The app's presentation time
+/// paces only its own encoder; the stream takes the time of arrival.
+pub(crate) fn push(id: u64, data: &[u8], flags: u32) -> i32 {
+    if data.is_empty() || data.len() > MAX_RECORD_BYTES {
+        return PUSH_INVALID;
+    }
+    let Some(channel) = channel(id) else {
+        return PUSH_UNKNOWN;
+    };
+    channel.push(Picture {
+        data: data.to_vec(),
+        flags,
+    })
+}
+
+/// `screenControl`: the next message for session `id` (channel 0: input),
+/// waiting at most `timeout`; an unknown session answers `stop`.
+pub(crate) fn control(id: u64, timeout: Duration) -> Option<String> {
+    if id == INPUT_CHANNEL {
+        let queue = lock(&INPUT);
+        let (mut queue, _) = INPUT_READY
+            .wait_timeout_while(queue, timeout, |queue| queue.is_empty())
+            .unwrap_or_else(PoisonError::into_inner);
+        return queue.pop_front();
+    }
+    match channel(id) {
+        Some(channel) => channel.take_control(timeout),
+        None => Some(json!({"op": "stop", "reason": "unknown_session"}).to_string()),
+    }
+}
+
+/// Queues the input of the controlling viewer for the accessibility service.
+pub(crate) fn send_input(message: Value) {
+    let mut queue = lock(&INPUT);
+    if queue.len() >= MAX_CONTROL {
+        queue.pop_front();
+    }
+    queue.push_back(message.to_string());
+    INPUT_READY.notify_all();
+}
+
+/// `screen.hostReady`: the app captures (after the system dialog) or serves
+/// stills.
+pub(crate) fn ready(id: u64, phase: Phase) -> Result<(), String> {
+    let channel = channel(id).ok_or_else(|| format!("Keine Bildschirmsitzung {id}"))?;
+    channel.set_phase(phase);
+    session_event(id, "streaming", None);
+    Ok(())
+}
+
+/// `screen.hostEnded`: the app ended the session (system dialog refused,
+/// device locked, „Beenden“ in its notification).
+pub(crate) fn ended(id: u64, reason: &str) -> Result<(), String> {
+    let channel = channel(id).ok_or_else(|| format!("Keine Bildschirmsitzung {id}"))?;
+    channel.set_phase(Phase::Ended(reason.into()));
+    session_event(id, "ended", Some(reason));
+    Ok(())
+}
+
+/// Serializes the tests that use the process-wide register.
+#[cfg(test)]
+pub(crate) static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+/// A fresh register for one test (hold `TEST_LOCK`).
+#[cfg(test)]
+pub(crate) fn reset_for_tests() {
+    *lock(&REGISTER) = None;
+    lock(&INPUT).clear();
+}

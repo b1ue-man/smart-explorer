@@ -21,7 +21,6 @@ use super::access_grant_runtime::{expired_restrictions, next_expiry};
 use super::auth_penalty::PenaltyKind;
 use super::core::{eio, now_secs, random_token};
 use super::exec_audit::{self, AuditEvent};
-use super::exec_registry::ExecRegistry;
 use super::handshake_limits::ApplicationHandshakePermit;
 use super::io_deadline;
 use super::node::ShareIrohNode;
@@ -72,17 +71,19 @@ fn read<T: Clone>(slot: &RwLock<T>) -> T {
 }
 
 impl NodeScreen {
-    /// The test-picture host with the desktop indicator; open confirmations
-    /// count against the Exec reservations of `exec_registry` (V7).
-    pub(super) fn new(exec_registry: &Arc<ExecRegistry>) -> Self {
+    /// The host of this platform with its indicator (the desktop window,
+    /// the Android app's notification); tests use the test picture without
+    /// an indicator. It asks the host user through the shared approval
+    /// service (V7).
+    pub(super) fn new() -> Self {
         let registry = Arc::new(ScreenRegistry::default());
-        let gauge = exec_registry.clone();
-        let broker = crate::share::consent_launch::approvals().broker(gauge);
-        let (indicator, audit): (DesktopIndicator, AuditSink) = if cfg!(test) {
-            (DesktopIndicator::with(None, false, &registry), ignore_entry)
+        let broker = crate::share::consent_launch::approvals().broker();
+        let (indicator, audit): (Arc<dyn SessionIndicator>, AuditSink) = if cfg!(test) {
+            let none = DesktopIndicator::with(None, false, &registry);
+            (Arc::new(none), ignore_entry)
         } else {
             let record: AuditSink = crate::share::access_audit::record_access;
-            (DesktopIndicator::new(&registry), record)
+            (crate::screen::os::host_indicator(&registry), record)
         };
         Self {
             backend: RwLock::new(if cfg!(test) {
@@ -90,7 +91,7 @@ impl NodeScreen {
             } else {
                 crate::screen::os::host_backend()
             }),
-            indicator: RwLock::new(Arc::new(indicator)),
+            indicator: RwLock::new(indicator),
             broker: RwLock::new(Arc::new(broker)),
             audit: RwLock::new(audit),
             inject_resets: Arc::new(AtomicU32::new(0)),

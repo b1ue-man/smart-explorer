@@ -19,6 +19,8 @@ import app.smartexplorer.android.api.DECISION_DENY
 import app.smartexplorer.android.api.DECISION_ONCE
 import app.smartexplorer.android.api.ShareAccessApi
 import app.smartexplorer.android.core.CoreException
+import app.smartexplorer.android.screen.ScreenConsentActivity
+import app.smartexplorer.android.screen.ScreenHostControl
 import app.smartexplorer.android.system.Notifications
 import app.smartexplorer.android.ui.AppNav
 import app.smartexplorer.android.ui.MainTab
@@ -81,9 +83,12 @@ internal suspend fun deliverApproval(
  * app, where the question shows as a dialog. Exec questions carry „Diesmal erlauben“, „Immer
  * erlauben“ and „Ablehnen“ as broadcasts to the non-exported [AccessApprovalReceiver]; both allowing
  * actions need an unlocked device (API 31+, `setAuthenticationRequired`). Android 11 cannot demand
- * that for an action, so there they are left out and only the dialog in the app allows. Screen
- * questions get only „Ablehnen“ until SCR-M8 adds the consent activity (W1). Swiping it away answers
- * „Ablehnen“. On the lock screen only a public version without device, command or actions shows.
+ * that for an action, so there they are left out and only the dialog in the app allows. The allowing
+ * actions of a screen question are activity intents to [ScreenConsentActivity] (SCR-M8, W1): it
+ * answers the question and then asks the system dialog „Bildschirm teilen“, so allowing the screen
+ * never happens silently; on API 34+ their creator grants the start from the background. Swiping it
+ * away answers „Ablehnen“. On the lock screen only a public version without device, command or
+ * actions shows.
  */
 internal fun approvalNotification(context: Context, approval: AccessApproval, id: Int): Notification {
     val open = PendingIntent.getActivity(
@@ -109,12 +114,27 @@ internal fun approvalNotification(context: Context, approval: AccessApproval, id
         .setPublicVersion(hidden)
         .setContentIntent(open)
         .setDeleteIntent(answerIntent(context, approval.id, DECISION_DENY))
-    if (!approval.screen && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+    if (approval.screen) {
+        builder.addAction(screenAction(context, approval, DECISION_ONCE, id, "Diesmal erlauben"))
+        builder.addAction(screenAction(context, approval, DECISION_ALWAYS, id, "Immer erlauben"))
+    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         builder.addAction(answerAction(context, approval.id, DECISION_ONCE, R.drawable.ic_check, "Diesmal erlauben", unlocked = true))
         builder.addAction(answerAction(context, approval.id, DECISION_ALWAYS, R.drawable.ic_check, "Immer erlauben", unlocked = true))
     }
     builder.addAction(answerAction(context, approval.id, DECISION_DENY, R.drawable.ic_close, "Ablehnen", unlocked = false))
     return builder.build()
+}
+
+/**
+ * An allowing answer to the screen question [approval]: an activity intent to
+ * [ScreenConsentActivity] (never a broadcast), which needs an unlocked device.
+ */
+internal fun screenAction(context: Context, approval: AccessApproval, decision: String, id: Int, label: String): NotificationCompat.Action {
+    val code = id * 4 + if (decision == DECISION_ALWAYS) 1 else 0
+    val intent = ScreenConsentActivity.pendingIntent(context, code, ScreenConsentActivity.approvalIntent(context, approval, decision))
+    return NotificationCompat.Action.Builder(R.drawable.ic_check, label, intent)
+        .setAuthenticationRequired(true)
+        .build()
 }
 
 /** One answer to exactly [approvalId]: its own data URI keeps it apart from every other question. */
@@ -185,6 +205,7 @@ object AccessApprovalNotifier {
         if (!started.compareAndSet(false, true)) return
         val app = context.applicationContext as Application
         app.registerActivityLifecycleCallbacks(Visibility)
+        ScreenHostControl.start(app)
         // A StateFlow is conflated: a burst of events leads to at most one more load.
         scope.launch { refreshes.collect { refresh(app) } }
         scope.launch {
@@ -199,11 +220,47 @@ object AccessApprovalNotifier {
         refreshes.update { it + 1 }
     }
 
+    /** The visible activity of the app, `null` while the app is hidden. */
+    internal fun foregroundActivity(): Activity? = resumed.get()
+
     /**
      * Answers exactly [approvalId] with [decision] (`once`, `always`, `deny`); [done] ends the
-     * broadcast of a notification action. A question that is no longer open stays unanswered.
+     * broadcast of a notification action. A question that is no longer open stays unanswered. A
+     * screen question is allowed only through [ScreenConsentActivity] (system dialog afterwards):
+     * from the visible app it opens there; without a visible app nothing is allowed.
      */
     internal fun decide(approvalId: String, decision: String, done: () -> Unit = {}) {
+        val screen = pendingFlow.value.firstOrNull { it.id == approvalId }?.takeIf { it.screen }
+        if (screen != null && decision != DECISION_DENY) {
+            val activity = resumed.get()
+            try {
+                activity?.startActivity(ScreenConsentActivity.approvalIntent(activity, screen, decision))
+                    ?: Log.w(TAG, "Bildschirmfreigabe nur aus der sichtbaren App")
+            } catch (e: RuntimeException) {
+                Log.w(TAG, "Zustimmung nicht geöffnet", e)
+            }
+            done()
+            return
+        }
+        answer(approvalId, decision, done)
+    }
+
+    /** The answer of [ScreenConsentActivity] to a screen question (it asks the system dialog next). */
+    internal suspend fun decideScreen(approvalId: String, decision: String) {
+        answering += approvalId
+        pendingFlow.update { list -> list.filterNot { it.id == approvalId } }
+        try {
+            ShareAccessApi.decide(approvalId, decision)
+        } catch (e: CoreException) {
+            Log.w(TAG, "share.decideAccessApproval failed: ${e.kind}: ${e.message}")
+            if (e.kind != "not_found") Snackbars.show("Antwort nicht übernommen: ${e.message ?: e.kind}")
+        } finally {
+            answering -= approvalId
+            requestRefresh()
+        }
+    }
+
+    private fun answer(approvalId: String, decision: String, done: () -> Unit) {
         scope.launch {
             answering += approvalId
             pendingFlow.update { list -> list.filterNot { it.id == approvalId } }

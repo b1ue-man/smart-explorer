@@ -45,6 +45,20 @@ internal object CoreEvents {
                 "error" -> CoreEvent.Error(event.text("action").orEmpty(), event.text("message").orEmpty())
                 "volumes" -> CoreEvent.Volumes
                 "wake" -> (event["ms"] as? JsonPrimitive)?.longOrNull?.takeIf { it > 0 }?.let { CoreEvent.Wake(it) }
+                "screenHostStart" -> (event["session"] as? JsonPrimitive)?.longOrNull?.let { session ->
+                    ScreenHostStart(
+                        session = session,
+                        source = event.text("source").orEmpty(),
+                        still = (event["still"] as? JsonPrimitive)?.contentOrNull == "true",
+                        maxWidth = (event["maxWidth"] as? JsonPrimitive)?.intOrNull ?: 0,
+                        maxHeight = (event["maxHeight"] as? JsonPrimitive)?.intOrNull ?: 0,
+                        viewerName = event.text("viewerName").orEmpty(),
+                        viewerDeviceId = event.text("viewerDeviceId").orEmpty(),
+                    )
+                }
+                "screenSession" -> (event["session"] as? JsonPrimitive)?.longOrNull?.let { session ->
+                    ScreenSessionChanged(session, event.text("state").orEmpty(), event.text("reason"))
+                }
                 else -> null
             }
         } catch (e: IllegalArgumentException) {
@@ -56,3 +70,21 @@ internal object CoreEvents {
 
     private fun JsonObject.text(key: String): String? = (this[key] as? JsonPrimitive)?.contentOrNull
 }
+
+/**
+ * The core starts a screen session of this phone as host (SCR-M8): the app asks its user (system
+ * dialog „Bildschirm teilen“, except for [still] previews and the test picture `synthetic`) and
+ * then captures [source] for the viewer [viewerName].
+ */
+data class ScreenHostStart(
+    val session: Long,
+    val source: String,
+    val still: Boolean,
+    val maxWidth: Int,
+    val maxHeight: Int,
+    val viewerName: String,
+    val viewerDeviceId: String,
+) : CoreEvent
+
+/** A host session changed: `consent`, `streaming` or `ended` (with its [reason]). */
+data class ScreenSessionChanged(val session: Long, val state: String, val reason: String?) : CoreEvent
