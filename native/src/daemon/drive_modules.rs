@@ -12,6 +12,9 @@ pub(crate) mod drive_autostart;
 // DRV-M3: `IpcRequest::Drive { token, req }`.
 #[path = "os/shared/ipc_protocol_drives.rs"]
 pub(crate) mod ipc_protocol_drives;
+// DRV-M7 (R5): `IpcRequest::MountHostExt { id, session_token, req }`.
+#[path = "os/shared/ipc_protocol_mount_host.rs"]
+pub(crate) mod ipc_protocol_mount_host;
 // DRV-M3, decision S2 K7: why this worker started.
 #[path = "os/shared/run_start_reason.rs"]
 pub(crate) mod run_start_reason;

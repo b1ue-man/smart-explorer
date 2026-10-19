@@ -279,6 +279,13 @@ pub(super) enum IpcRequest {
         token: String,
         req: screen::ScreenIpcRequest,
     },
+    /// A drive host's request beyond attach, backend and status (R5); the
+    /// session token of its mount authorizes it, never the daemon token.
+    MountHostExt {
+        id: crate::mount::MountId,
+        session_token: String,
+        req: super::drive_modules::ipc_protocol_mount_host::MountHostRequest,
+    },
     MountHostAttach {
         id: crate::mount::MountId,
         launch_token: String,
@@ -305,6 +312,13 @@ pub(super) enum IpcRequest {
 impl IpcRequest {
     pub(super) fn daemon_token(&self) -> Option<&str> {
         match self {
+            // `SpoolKey` carries the session token of its drive host: only
+            // that host may fetch the key (`ipc_host_ext.rs`), so the daemon
+            // token of the GUI or the CLI must not reach it.
+            Self::Vault {
+                req: VaultIpcRequest::SpoolKey { .. },
+                ..
+            } => None,
             Self::Ping { token }
             | Self::RefreshShare { token }
             | Self::ShareCommand { token, .. }
@@ -329,7 +343,8 @@ impl IpcRequest {
             | Self::Screen { token, .. } => Some(token),
             Self::MountHostAttach { .. }
             | Self::MountHostBackend { .. }
-            | Self::MountHostStatus { .. } => None,
+            | Self::MountHostStatus { .. }
+            | Self::MountHostExt { .. } => None,
         }
     }
 }
@@ -394,6 +409,7 @@ pub(super) enum IpcResponse {
     Access(AccessIpcReply),
     Vault(VaultIpcReply),
     Screen(screen::ScreenIpcReply),
+    MountHostExt(super::drive_modules::ipc_protocol_mount_host::MountHostReply),
     Err {
         msg: String,
         /// Structured code of the failure (C3.2, C7.5); older readers ignore the field.
