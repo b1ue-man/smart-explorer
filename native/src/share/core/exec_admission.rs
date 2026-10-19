@@ -29,7 +29,7 @@ use super::*;
 mod approval;
 #[cfg(test)]
 pub(in crate::share) use approval::start_grant;
-use approval::{decide_start, limit_error, ApprovedStart, Refusal, StartApproval};
+use approval::{decide_start, ApprovedStart, Refusal, StartApproval};
 
 /// How often the grant is read again while the host user decides.
 const GRANT_POLL: Duration = Duration::from_secs(1);
@@ -215,7 +215,6 @@ pub(in crate::share) async fn handle_connection(
     let record = |entry: AccessEntry<'_>| access_audit::record_access(entry);
     let approval = StartApproval {
         service: approvals,
-        gauge: registry.as_ref(),
         auth: &node.auth,
         authorized: &authorized,
         start: &start,
@@ -273,19 +272,6 @@ pub(in crate::share) async fn handle_connection(
             .await;
         }
     };
-    // Open confirmations hold reservations as well (C5).
-    if let Err(limit) = approvals.admits(registry.as_ref(), &authorized.principal.device_id) {
-        let frame = ServerFrame::Error(limit_error(limit));
-        return answer_without_job(
-            &mut send,
-            &mut stream,
-            &mut protocol,
-            &start,
-            &connection,
-            frame,
-        )
-        .await;
-    }
     let decided = approved.decided;
     exec_audit::note_start(
         &start.exec_id,

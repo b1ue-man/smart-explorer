@@ -9,7 +9,7 @@
 use std::sync::Mutex;
 use std::time::Duration;
 
-use super::{check_start, limit_error, start_grant, wire, ApprovedStart, Refusal};
+use super::{check_start, start_grant, wire, ApprovedStart, Refusal};
 use super::{StartApproval, StartCheck};
 use crate::share::access_approval::{ApprovalId, ApprovalOutcome};
 use crate::share::access_audit::{AccessEntry, AccessEvent, AccessKind, ApprovalResult};
@@ -219,12 +219,6 @@ impl Log<'_, '_> {
                     APPROVAL_UNAVAILABLE,
                     approval_unavailable_notifications(host),
                 ),
-            ),
-            ApprovalOutcome::DeviceLimit | ApprovalOutcome::HostLimit => (
-                AccessEvent::ApprovalUnavailable,
-                ApprovalResult::Unavailable,
-                Some("no reservation is free"),
-                limit_error(outcome),
             ),
             // `Unavailable`; an answer that allows never reaches here.
             _ => (

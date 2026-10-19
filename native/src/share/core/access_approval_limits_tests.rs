@@ -1,22 +1,23 @@
-//! PRM-M3, second part: the reservations of open requests (Exec and screen),
-//! a grant narrowed while its request is open, and the `cli_only` surface of
-//! a host without a graphical session. The host fixture is in
+//! PRM-M3, second part: open requests (Exec and screen) hold no reservation
+//! and neither a device nor the host is limited in open requests or running
+//! jobs (R15); a grant narrowed while its request is open; the `cli_only`
+//! surface of a host without a graphical session. The host fixture is in
 //! `access_approval_tests.rs`.
 use std::io;
 use std::path::Path;
 
 use super::*;
-use crate::share::access_approval::DEVICE_RESERVATIONS;
+use crate::share::access_approval::ReservationGauge;
 use crate::share::access_grant::CapabilityDecision::Off;
 use crate::share::consent_launch::{gui_program, DesktopConsent, SessionFacts};
-use crate::share::exec_client_messages::approval_status_line;
+use crate::share::exec_client_messages::{approval_status_line, client_failure_message};
 
 #[test]
-fn perm_task_ask_counts_against_peer_limit() {
-    struct Jobs(usize, usize);
-    impl ReservationGauge for Jobs {
+fn perm_task_open_requests_have_no_device_or_host_limit() {
+    struct Busy;
+    impl ReservationGauge for Busy {
         fn active(&self, _device_id: &str) -> (usize, usize) {
-            (self.0, self.1)
+            (100, 100)
         }
     }
     let host = Host::new(&[(Capability::ExecCommands, Ask)]);
@@ -25,108 +26,63 @@ fn perm_task_ask_counts_against_peer_limit() {
         ..ProvenPrincipal::from(&host.authorized.principal)
     };
     let service = &host.service;
-    let summary = ApprovalSummary::default;
-    let first = service.request(
-        &Jobs(0, 0),
-        &device("x"),
-        Capability::ExecCommands,
-        summary(),
-    );
-    let second = service.request(
-        &Jobs(0, 0),
-        &device("x"),
-        Capability::ExecTerminal,
-        summary(),
-    );
-    assert!(first.surface().is_some() && second.surface().is_some());
-    assert_eq!(DEVICE_RESERVATIONS, 2);
-    let mut third = service.request(
-        &Jobs(0, 0),
-        &device("x"),
-        Capability::ExecCommands,
-        summary(),
-    );
-    assert_eq!(run(third.outcome()), ApprovalOutcome::DeviceLimit);
-    // An allowed start of the device does not fit either; another device does.
-    assert_eq!(
-        service.admits(&Jobs(0, 0), "x"),
-        Err(ApprovalOutcome::DeviceLimit)
-    );
-    assert!(service.admits(&Jobs(0, 0), "y").is_ok());
-    let error = limit_error(ApprovalOutcome::DeviceLimit);
-    assert_eq!(
-        (error.code.as_str(), error.message.as_str()),
-        ("admission_denied", "PrincipalLimit")
-    );
-    // One open request and one running job are two reservations as well.
-    assert!(first.cancel());
-    assert_eq!(
-        service.admits(&Jobs(1, 1), "x"),
-        Err(ApprovalOutcome::DeviceLimit)
-    );
-    assert!(service.admits(&Jobs(0, 1), "x").is_ok());
-    // All eight of the host: one open request and seven jobs elsewhere.
-    let mut late = service.request(
-        &Jobs(0, 7),
-        &device("z"),
-        Capability::ExecCommands,
-        summary(),
-    );
-    assert_eq!(run(late.outcome()), ApprovalOutcome::HostLimit);
-    assert_eq!(
-        limit_error(ApprovalOutcome::HostLimit).message,
-        "GlobalLimit"
-    );
-    drop(second);
-    assert!(host.service.pending().is_empty());
-    // End to end: a running session and an open request of the device leave
-    // no room for a start that asks.
-    host.running(&shell("e0", "sleep 60"));
-    let held = service.request(
-        host.registry.as_ref(),
-        &device(host.device()),
-        Capability::ExecCommands,
-        summary(),
-    );
-    assert!(held.surface().is_some());
-    let decided = run(async {
-        let (_client, server) = tokio::io::duplex(64 * 1024);
-        let (server_read, mut server_write) = tokio::io::split(server);
-        let mut stream = ClientStream::new(client_frames(server_read));
-        let start = shell("e1", "ls");
-        let mut protocol = ServerProtocolState::default();
-        let sink = |entry: AccessEntry<'_>| host.log.lock().unwrap().push(access_line(&entry));
-        let approval = StartApproval {
-            service,
-            gauge: host.registry.as_ref(),
-            auth: &host.auth,
-            authorized: &host.authorized,
-            start: &start,
-            host: "Host",
-            client_features: &[],
-            own_label: "alice",
-            audit: &sink,
-            grant_poll: Duration::from_millis(50),
-        };
-        decide_start(
-            &approval,
-            &mut server_write,
-            &mut stream,
-            &mut protocol,
-            POLICY,
-        )
-        .await
-        .unwrap()
-    });
-    let refusal = refused(decided);
-    assert_eq!(refusal.error.message, "PrincipalLimit");
-    assert_eq!(host.events(), ["approval_unavailable"]);
+    // One device: five open requests, though the gauge reports 100 jobs.
+    let mut tickets = Vec::new();
+    for _ in 0..5 {
+        let ticket = service.request(
+            &Busy,
+            &device("x"),
+            Capability::ExecCommands,
+            ApprovalSummary::default(),
+        );
+        assert_eq!(ticket.surface(), Some(ApprovalSurface::Window));
+        tickets.push(ticket);
+    }
+    // The host: twelve open requests in total, more than the former eight.
+    for index in 0..7 {
+        let ticket = service.open_request(
+            &device(&format!("other-{index}")),
+            Capability::ExecTerminal,
+            ApprovalSummary::default(),
+        );
+        assert_eq!(ticket.surface(), Some(ApprovalSurface::Window));
+        tickets.push(ticket);
+    }
+    assert_eq!(service.pending().len(), 12);
+    drop(tickets);
+    assert!(service.pending().is_empty());
 }
 
 #[test]
-fn perm_task_screen_approval_counts_against_exec_reservations() {
+fn perm_task_ask_start_beside_three_running_jobs_of_the_device() {
+    let host = Host::new(&[(Capability::ExecCommands, Ask)]);
+    let _running: Vec<_> = ["e0", "e1", "e2"]
+        .iter()
+        .map(|byte| host.running(&shell(byte, "sleep 60")))
+        .collect();
+    let start = shell("e3", "ls");
+    let (decided, _, _) = drive(
+        &host,
+        &start,
+        &client_features(),
+        Act::Answer(ApprovalDecision::Once),
+    );
+    approved(decided);
+    let admission = host.registry.prepare(
+        host.authorized.principal.clone(),
+        host.authorized.authorization.clone(),
+        &start,
+        NOW,
+    );
+    assert!(matches!(admission, Ok(ExecAdmission::Prepared(_))));
+    assert_eq!(host.registry.active_views().len(), 4);
+}
+
+#[test]
+fn perm_task_screen_request_beside_running_jobs() {
     let host = Host::new(&[(Capability::ExecCommands, Allow)]);
     host.running(&shell("f0", "sleep 60"));
+    host.running(&shell("f1", "sleep 60"));
     // S4 asks through the broker: `request(principal, capability, summary)`.
     let broker = host.service.broker(host.registry.clone());
     let principal = ProvenPrincipal::from(&host.authorized.principal);
@@ -136,31 +92,37 @@ fn perm_task_screen_approval_counts_against_exec_reservations() {
     };
     let mut screen = broker.request(&principal, Capability::ScreenView, summary.clone());
     assert_eq!(screen.surface(), Some(ApprovalSurface::Window));
+    let more = broker.request(&principal, Capability::ScreenControl, summary);
+    assert_eq!(more.surface(), Some(ApprovalSurface::Window));
     let open = host.service.pending();
-    assert_eq!(
-        (open[0].capability, open[0].command.is_none()),
-        (Capability::ScreenView, true)
-    );
-    // The running session and the screen request take both reservations.
-    let full = host.service.admits(host.registry.as_ref(), host.device());
-    assert_eq!(full, Err(ApprovalOutcome::DeviceLimit));
-    let mut more = broker.request(&principal, Capability::ScreenControl, summary);
-    assert_eq!(run(more.outcome()), ApprovalOutcome::DeviceLimit);
-    // The answer frees the screen reservation; an Exec start fits again.
+    assert_eq!(open.len(), 2);
+    assert!(open.iter().all(|view| view.command.is_none()));
     let id = screen.id().clone();
     host.service.decide(&id, ApprovalDecision::Once).unwrap();
     assert_eq!(run(screen.outcome()), ApprovalOutcome::Once);
-    assert!(host
-        .service
-        .admits(host.registry.as_ref(), host.device())
-        .is_ok());
     let admission = host.registry.prepare(
         host.authorized.principal.clone(),
         host.authorized.authorization.clone(),
-        &shell("f1", "ls"),
+        &shell("f2", "ls"),
         NOW,
     );
     assert!(matches!(admission, Ok(ExecAdmission::Prepared(_))));
+}
+
+#[test]
+fn perm_task_old_host_limit_refusal_stays_readable() {
+    // Hosts before R15 refuse with `admission_denied` and the bare variant.
+    for (old, scope) in [("PrincipalLimit", "this device"), ("GlobalLimit", "Host")] {
+        let text = client_failure_message("admission_denied", old, "Host");
+        assert!(text.starts_with("Host refused the start:"), "{text}");
+        assert!(text.contains(scope), "{text}");
+        assert!(text.contains("Next step"), "{text}");
+    }
+    // Every other refusal keeps the host's own text.
+    assert_eq!(
+        client_failure_message("admission_denied", "DuplicateMismatch", "Host"),
+        "DuplicateMismatch"
+    );
 }
 
 #[test]

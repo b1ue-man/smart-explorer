@@ -122,10 +122,7 @@ fn runtime_revision_exhaustion_is_fail_closed() {
 #[test]
 fn review_task_online_extension_preserves_policy_after_offline_barrier() {
     let (auth, target) = direct_state();
-    let registry = ExecRegistry::new(ExecRegistryLimits {
-        principal_active: 2,
-        ..ExecRegistryLimits::default()
-    });
+    let registry = ExecRegistry::new(ExecRegistryLimits::default());
     let enabled = mutate(&auth, &registry, target, true, 10).unwrap();
     let ExecAdmission::Prepared(reservation) = registry
         .prepare(

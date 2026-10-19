@@ -4,10 +4,9 @@
 //! „Diesmal erlauben“ (`once`), „Immer erlauben“ (`always`) or „Ablehnen“
 //! (`deny`), or until the requester withdraws it. There is no time limit
 //! (C5, R-c). A request nobody can be shown, a withdrawn or narrowed grant and
-//! a lost requester end it as refused, never as allowed. Every open request
-//! holds one reservation against the Exec limits of `exec_registry.rs`
-//! (2 per device, 8 in total): open requests and running Exec jobs count
-//! together; a screen request frees its reservation with the decision.
+//! a lost requester end it as refused, never as allowed. Open requests hold
+//! no reservation and are not counted: neither a device nor the host is
+//! limited in how many requests are open or Exec jobs run at once (R15).
 //!
 //! How the host user is asked is the platform's `ConsentNotifier`
 //! (`consent_launch.rs`); this file has no platform code. S4 asks through
@@ -30,11 +29,6 @@ pub(crate) use view::{
     ApprovalCommand, ApprovalDecision, ApprovalId, ApprovalSummary, ApprovalView,
 };
 
-/// Reservations of one device: open requests plus running Exec jobs
-/// (`ExecRegistryLimits::default().principal_active`).
-pub(crate) const DEVICE_RESERVATIONS: usize = 2;
-/// Reservations of this host (`ExecRegistryLimits::default().global_active`).
-pub(crate) const HOST_RESERVATIONS: usize = 8;
 const NOT_OPEN: &str = "the request is no longer open";
 
 /// How this host shows a request to its user.
@@ -55,7 +49,11 @@ impl ConsentNotifier for NoConsent {
     }
 }
 
-/// The running Exec jobs that share the reservations with open requests.
+/// The running Exec jobs of a host. Since R15 nothing limits open requests or
+/// jobs, so no request consults it any more; the trait stays only as the
+/// parameter type of `ApprovalService::broker`/`request` until its callers
+/// outside the share core drop the argument.
+#[allow(dead_code)] // R15: kept for the callers' signatures, never consulted.
 pub(crate) trait ReservationGauge: Send + Sync {
     /// Running jobs of the device `device_id`, and of all devices.
     fn active(&self, device_id: &str) -> (usize, usize);
@@ -85,9 +83,12 @@ pub(crate) enum ApprovalOutcome {
     Unavailable,
     /// The host app cannot show it: notifications are off (Android).
     Undeliverable,
-    /// The device holds both of its reservations already.
+    /// Never produced since R15 (no reservation limit); kept only because
+    /// `screen/core/authorize.rs` still names it in a match arm.
+    #[allow(dead_code)]
     DeviceLimit,
-    /// All reservations of this host are taken.
+    /// Never produced since R15; see `DeviceLimit`.
+    #[allow(dead_code)]
     HostLimit,
     /// Ended without an answer: the request was withdrawn on this host.
     Withdrawn,
@@ -197,19 +198,30 @@ impl ApprovalService {
             .unwrap_or_else(PoisonError::into_inner) = notifier;
     }
 
-    /// The broker S4 asks; its requests count against `gauge`.
-    pub(crate) fn broker(&self, gauge: Arc<dyn ReservationGauge>) -> ApprovalBroker {
+    /// The broker S4 asks. `_gauge` is no longer consulted (R15).
+    pub(crate) fn broker(&self, _gauge: Arc<dyn ReservationGauge>) -> ApprovalBroker {
         ApprovalBroker {
             service: self.clone(),
-            gauge,
         }
     }
 
-    /// Opens a request and shows it. The ticket is answered at once when no
-    /// reservation is free or nobody can be asked.
+    /// The former form of `open_request` with a gauge, kept for the tests of
+    /// the CLI and the bridge; `_gauge` is no longer consulted (R15).
+    #[cfg(test)]
     pub(crate) fn request(
         &self,
-        gauge: &dyn ReservationGauge,
+        _gauge: &dyn ReservationGauge,
+        principal: &ProvenPrincipal,
+        capability: Capability,
+        summary: ApprovalSummary,
+    ) -> ApprovalTicket {
+        self.open_request(principal, capability, summary)
+    }
+
+    /// Opens a request and shows it. The ticket is answered at once when
+    /// nobody can be asked. There is no limit on open requests (R15).
+    pub(crate) fn open_request(
+        &self,
         principal: &ProvenPrincipal,
         capability: Capability,
         summary: ApprovalSummary,
@@ -220,19 +232,15 @@ impl ApprovalService {
         let now = crate::share::core::now_secs();
         let view = ApprovalView::new(&id, principal, capability, &summary, now);
         let (answer, receiver) = oneshot::channel();
-        {
-            let mut pending = self.inner.lock();
-            if let Err(limit) = room_for(&pending, gauge, &principal.device_id) {
-                return self.answered(id, limit);
-            }
-            let open = OpenApproval {
-                view: view.clone(),
-                principal: principal.clone(),
-                capability,
-                policy_revision: summary.policy_revision,
-            };
-            pending.insert(id.clone(), Pending { open, answer });
-        }
+        let open = OpenApproval {
+            view: view.clone(),
+            principal: principal.clone(),
+            capability,
+            policy_revision: summary.policy_revision,
+        };
+        self.inner
+            .lock()
+            .insert(id.clone(), Pending { open, answer });
         // Outside the lock: showing may start the consent window.
         let Some(surface) = self.inner.notifier().show(&view) else {
             self.inner.lock().remove(&id);
@@ -247,20 +255,6 @@ impl ApprovalService {
             state: TicketState::Waiting(receiver),
             inner: self.inner.clone(),
         }
-    }
-
-    /// Whether one more Exec start of `device_id` fits beside the open
-    /// requests. Without open requests the registry alone decides, as before.
-    pub(crate) fn admits(
-        &self,
-        gauge: &dyn ReservationGauge,
-        device_id: &str,
-    ) -> Result<(), ApprovalOutcome> {
-        let pending = self.inner.lock();
-        if pending.is_empty() {
-            return Ok(());
-        }
-        room_for(&pending, gauge, device_id)
     }
 
     /// The open requests, oldest first.
@@ -307,26 +301,6 @@ impl ApprovalService {
             inner: self.inner.clone(),
         }
     }
-}
-
-/// The free reservations for one more request or start of `device_id`.
-fn room_for(
-    pending: &BTreeMap<ApprovalId, Pending>,
-    gauge: &dyn ReservationGauge,
-    device_id: &str,
-) -> Result<(), ApprovalOutcome> {
-    let (device_jobs, all_jobs) = gauge.active(device_id);
-    let device_open = pending
-        .values()
-        .filter(|entry| entry.open.principal.device_id == device_id)
-        .count();
-    if device_open + device_jobs >= DEVICE_RESERVATIONS {
-        return Err(ApprovalOutcome::DeviceLimit);
-    }
-    if pending.len() + all_jobs >= HOST_RESERVATIONS {
-        return Err(ApprovalOutcome::HostLimit);
-    }
-    Ok(())
 }
 
 enum TicketState {
@@ -386,7 +360,6 @@ impl Drop for ApprovalTicket {
 #[derive(Clone)]
 pub(crate) struct ApprovalBroker {
     service: ApprovalService,
-    gauge: Arc<dyn ReservationGauge>,
 }
 
 impl ApprovalBroker {
@@ -397,7 +370,6 @@ impl ApprovalBroker {
         capability: Capability,
         summary: ApprovalSummary,
     ) -> ApprovalTicket {
-        self.service
-            .request(self.gauge.as_ref(), principal, capability, summary)
+        self.service.open_request(principal, capability, summary)
     }
 }

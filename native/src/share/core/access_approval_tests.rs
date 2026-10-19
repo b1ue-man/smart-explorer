@@ -1,8 +1,8 @@
 //! PRM-M3: a start on „Fragen“ waits for the host user and starts only on
 //! „Diesmal erlauben“ or „Immer erlauben“; „Ablehnen“, a cancel of the
-//! requesting device and a narrowed grant refuse it; open requests hold
-//! reservations against the Exec limits, screen requests of S4 too
-//! (`access_approval_limits_tests.rs`); without a graphical session the
+//! requesting device and a narrowed grant refuse it; open requests (Exec and
+//! screen requests of S4) hold no reservation and are not limited (R15,
+//! `access_approval_limits_tests.rs`); without a graphical session the
 //! request is shown nowhere but `cli_only`.
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -239,7 +239,6 @@ fn drive(
         let sink = |entry: AccessEntry<'_>| host.log.lock().unwrap().push(access_line(&entry));
         let approval = StartApproval {
             service: &host.service,
-            gauge: host.registry.as_ref(),
             auth: &host.auth,
             authorized: &host.authorized,
             start,

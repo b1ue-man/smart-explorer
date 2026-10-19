@@ -39,10 +39,8 @@ fn auth(revision: u64, epoch: u64, session: &str) -> ExecAuthorization {
     }
 }
 
-fn limits(global: usize, peer: usize, history: usize, cache: usize) -> ExecRegistryLimits {
+fn limits(history: usize, cache: usize) -> ExecRegistryLimits {
     ExecRegistryLimits {
-        global_active: global,
-        principal_active: peer,
         history,
         terminal_cache: cache,
     }
@@ -78,8 +76,8 @@ fn assert_error<T: std::fmt::Debug>(result: Result<T, ExecRegistryError>, want: 
 }
 
 #[test]
-fn model_enforces_exact_authorization_deduplication_and_admission_limits() {
-    let registry = ExecRegistry::new(limits(2, 1, 8, 8));
+fn model_enforces_exact_authorization_and_deduplication_without_concurrency_limits() {
+    let registry = ExecRegistry::new(limits(8, 8));
     let alice = principal("Alice", "node-a");
     let bob = principal("Bob", "node-b");
     let reduced = principal("Reduced", "node-r");
@@ -129,14 +127,11 @@ fn model_enforces_exact_authorization_deduplication_and_admission_limits() {
         registry.prepare(bob.clone(), auth(2, 2, "session-b"), &first, 11),
         ExecRegistryError::DuplicateMismatch,
     );
-    assert_error(
-        registry.prepare(
-            alice.clone(),
-            auth(4, 2, "session-a"),
-            &start("02", "two"),
-            11,
-        ),
-        ExecRegistryError::PrincipalLimit,
+    reserve(
+        &registry,
+        alice.clone(),
+        &start("02", "two"),
+        auth(4, 2, "session-a"),
     );
     reserve(
         &registry,
@@ -146,10 +141,13 @@ fn model_enforces_exact_authorization_deduplication_and_admission_limits() {
     );
     let carol = principal("Carol", "node-c");
     registry.apply_authorization(&carol, 1, 3, true).unwrap();
-    assert_error(
-        registry.prepare(carol, auth(1, 3, "session-c"), &start("04", "four"), 11),
-        ExecRegistryError::GlobalLimit,
+    reserve(
+        &registry,
+        carol,
+        &start("04", "four"),
+        auth(1, 3, "session-c"),
     );
+    assert_eq!(registry.active_views().len(), 4);
     let changed_identity = principal("Alice", "node-replaced");
     assert_error(
         registry.prepare(
@@ -178,7 +176,7 @@ fn every_stop_reason_is_signalled_and_requires_matching_terminal_after_empty() {
         ),
     ];
     for (index, (reason, kind)) in cases.into_iter().enumerate() {
-        let registry = ExecRegistry::new(limits(2, 2, 4, 4));
+        let registry = ExecRegistry::new(limits(4, 4));
         let peer = principal("Peer", "node");
         registry.apply_authorization(&peer, 1, 1, true).unwrap();
         let request = start(&format!("{index:02x}"), "secret shell text");
@@ -225,7 +223,7 @@ fn every_stop_reason_is_signalled_and_requires_matching_terminal_after_empty() {
 
 #[test]
 fn history_and_terminal_cache_are_bounded_and_persisted_views_are_redacted() {
-    let registry = ExecRegistry::new(limits(1, 1, 2, 1));
+    let registry = ExecRegistry::new(limits(2, 1));
     let peer = principal("Peer", "node");
     registry.apply_authorization(&peer, 1, 1, true).unwrap();
     let mut requests = Vec::new();
@@ -269,7 +267,7 @@ fn history_and_terminal_cache_are_bounded_and_persisted_views_are_redacted() {
 #[test]
 fn revoke_and_launch_commit_have_two_atomic_orderings() {
     let peer = principal("Peer", "node");
-    let before = ExecRegistry::new(limits(1, 1, 2, 2));
+    let before = ExecRegistry::new(limits(2, 2));
     before.apply_authorization(&peer, 1, 1, true).unwrap();
     let request = start("20", "never starts");
     let reservation = reserve(&before, peer.clone(), &request, auth(1, 1, "session"));
@@ -288,7 +286,7 @@ fn revoke_and_launch_commit_have_two_atomic_orderings() {
         Some(ExecCancelReason::Revoked)
     );
 
-    let after = Arc::new(ExecRegistry::new(limits(1, 1, 2, 2)));
+    let after = Arc::new(ExecRegistry::new(limits(2, 2)));
     after.apply_authorization(&peer, 1, 1, true).unwrap();
     let reservation = reserve(
         &after,
@@ -325,7 +323,7 @@ fn revoke_and_launch_commit_have_two_atomic_orderings() {
 
 #[test]
 fn failed_platform_prepare_or_launch_releases_the_slot_without_running() {
-    let registry = ExecRegistry::new(limits(1, 1, 4, 4));
+    let registry = ExecRegistry::new(limits(4, 4));
     let peer = principal("Peer", "node");
     registry.apply_authorization(&peer, 1, 1, true).unwrap();
     let first = start("30", "first");
@@ -354,7 +352,7 @@ fn review_task_restriction_keeps_other_principal_launch_and_blocks_old_token() {
     use crate::share::relation_rights::{
         PrincipalKey, RelationScope, RestrictionReason, RestrictionSet, RightsRestriction,
     };
-    let registry = ExecRegistry::new(limits(4, 2, 4, 4));
+    let registry = ExecRegistry::new(limits(4, 4));
     let alice = principal("Alice", "node-a");
     let mut bob = principal("Bob", "node-b");
     bob.public_key = "public-b".into();
@@ -391,4 +389,44 @@ fn review_task_restriction_keeps_other_principal_launch_and_blocks_old_token() {
         registry.apply_authorization(&bob, 1, 1, true),
         ExecRegistryError::StaleAuthorization,
     );
+}
+
+#[test]
+fn perm_task_same_principal_starts_three_and_more_concurrent_jobs() {
+    let registry = ExecRegistry::new(ExecRegistryLimits::default());
+    let peer = principal("Peer", "node");
+    registry.apply_authorization(&peer, 1, 1, true).unwrap();
+    let mut leases = Vec::new();
+    for index in 0..5u8 {
+        let request = start(&format!("{:02x}", 0x50 + index), "sleep 60");
+        let reservation = reserve(&registry, peer.clone(), &request, auth(1, 1, "session"));
+        registry
+            .commit_start(&reservation.lease, || Ok(()))
+            .unwrap();
+        leases.push(reservation.lease);
+    }
+    let active = registry.active_views();
+    assert_eq!(active.len(), 5);
+    assert!(active
+        .iter()
+        .all(|job| job.state == ExecLifecycleState::Running));
+}
+
+#[test]
+fn perm_task_host_starts_more_than_eight_concurrent_jobs() {
+    let registry = ExecRegistry::new(ExecRegistryLimits::default());
+    let mut started = 0;
+    for index in 0..12u8 {
+        let mut peer = principal("Peer", &format!("node-{index}"));
+        peer.public_key = format!("public-{index}");
+        registry.apply_authorization(&peer, 1, 1, true).unwrap();
+        let request = start(&format!("{:02x}", 0x60 + index), "sleep 60");
+        let reservation = reserve(&registry, peer, &request, auth(1, 1, "session"));
+        registry
+            .commit_start(&reservation.lease, || Ok(()))
+            .unwrap();
+        started += 1;
+    }
+    assert_eq!(started, 12);
+    assert_eq!(registry.active_views().len(), 12);
 }
