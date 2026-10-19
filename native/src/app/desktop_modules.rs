@@ -13,6 +13,10 @@ pub(crate) mod desktop_surface_app;
 // layer host in DSK-M7), its handlings and the section „Darstellung“.
 #[path = "core/desktop_surface_actions.rs"]
 pub(crate) mod desktop_surface_actions;
+// DSK-M7: the file clipboard a surface process installs (Wayland
+// `wl_data_device`; X11 follows with DSK-M6).
+#[path = "core/desktop_surface_clipboard.rs"]
+pub(crate) mod desktop_surface_clipboard;
 #[path = "core/desktop_surface_grid_ui.rs"]
 pub(crate) mod desktop_surface_grid_ui;
 #[path = "core/desktop_surface_host.rs"]

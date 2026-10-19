@@ -102,6 +102,7 @@ fn desktop_task_config_reload() {
     let model = model(ShareState::Live, Some(locked_vault()));
     assert!(view.absorb(ShellMessage::Model {
         rev: 1,
+        monitor: None,
         model: Box::new(model),
     }));
     assert_eq!(shown(&view).len(), 3);
@@ -180,6 +181,7 @@ fn desktop_task_vault_group_without_daemon_hidden() {
     let mut view = view();
     view.absorb(ShellMessage::Model {
         rev: 1,
+        monitor: None,
         model: Box::new(model(state.tiles.share_state.clone(), None)),
     });
     assert!(!shown(&view).contains(&ItemId::Vault { site: SITE.into() }));
@@ -199,6 +201,7 @@ fn desktop_task_vault_group_without_daemon_hidden() {
     let mut view_live = self::view();
     view_live.absorb(ShellMessage::Model {
         rev: 2,
+        monitor: None,
         model: Box::new(model(ShareState::Live, None)),
     });
     assert_eq!(
@@ -210,6 +213,7 @@ fn desktop_task_vault_group_without_daemon_hidden() {
     let mut with_vaults = self::view();
     with_vaults.absorb(ShellMessage::Model {
         rev: 3,
+        monitor: None,
         model: Box::new(model(ShareState::Live, Some(locked_vault()))),
     });
     assert!(shown(&with_vaults).contains(&ItemId::Vault { site: SITE.into() }));

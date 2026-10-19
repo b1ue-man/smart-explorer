@@ -46,10 +46,24 @@ pub(crate) struct SurfaceModel {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum ShellMessage {
-    Hello { protocol: u32, monitor: String },
-    Model { rev: u64, model: Box<SurfaceModel> },
-    Config { config: DesktopConfig },
-    Stop { reason: StopReason },
+    Hello {
+        protocol: u32,
+        monitor: String,
+    },
+    /// `monitor` names the output a layer process (DSK-M7) draws the model
+    /// on; a surface of one monitor gets `None`, which stays off the wire.
+    Model {
+        rev: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        monitor: Option<String>,
+        model: Box<SurfaceModel>,
+    },
+    Config {
+        config: DesktopConfig,
+    },
+    Stop {
+        reason: StopReason,
+    },
 }
 
 /// Surface → shell.
@@ -65,8 +79,13 @@ pub(crate) enum SurfaceMessage {
     },
     /// At most once per second after a drawn frame (heartbeat).
     Alive,
+    /// `monitor` names the output of a layer process (DSK-M7) the change
+    /// came from; the operations carry their monitor themselves, so the
+    /// shell ignores it. A surface of one monitor sends `None`.
     Layout {
         op: LayoutOp,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        monitor: Option<String>,
     },
     MonitorsChanged,
     WallpaperChanged,

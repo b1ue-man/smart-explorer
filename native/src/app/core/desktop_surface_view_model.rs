@@ -131,7 +131,8 @@ impl ViewModel {
                 }
             }
         }
-        self.outbox.send(SurfaceMessage::Layout { op });
+        self.outbox
+            .send(SurfaceMessage::Layout { op, monitor: None });
     }
 
     /// "Verbinden" (C10): the shell starts the service.

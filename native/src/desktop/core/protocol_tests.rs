@@ -49,6 +49,7 @@ fn shell_messages() -> Vec<ShellMessage> {
         },
         ShellMessage::Model {
             rev: 7,
+            monitor: None,
             model: Box::new(model),
         },
         ShellMessage::Config {
@@ -78,6 +79,7 @@ fn surface_messages() -> Vec<SurfaceMessage> {
                 col: 2,
                 row: 3,
             },
+            monitor: None,
         },
         SurfaceMessage::MonitorsChanged,
         SurfaceMessage::WallpaperChanged,
@@ -276,4 +278,82 @@ fn contact_profiles() -> ShareProfiles {
         direct_contacts: vec![contact],
         ..ShareProfiles::default()
     }
+}
+
+/// DSK-M7 (U37-3): a layer process serves every output of the session over
+/// one channel, so the model and the layout change carry the output's key.
+/// The field stays off the wire when it is `None`, so the frames of a
+/// surface of one monitor are the bytes they were, and an old line reads on.
+#[test]
+fn desktop_task_layer_protocol_model_per_monitor() {
+    let model = shell_messages()
+        .into_iter()
+        .find_map(|message| match message {
+            ShellMessage::Model { model, .. } => Some(model),
+            _ => None,
+        })
+        .unwrap();
+    let json = |message: &ShellMessage| serde_json::to_value(message).unwrap();
+
+    let plain = ShellMessage::Model {
+        rev: 7,
+        monitor: None,
+        model: model.clone(),
+    };
+    assert!(json(&plain).get("monitor").is_none());
+    let per_monitor = ShellMessage::Model {
+        rev: 7,
+        monitor: Some("DP-1".into()),
+        model: model.clone(),
+    };
+    assert_eq!(json(&per_monitor)["monitor"], "DP-1");
+    assert_eq!(json(&per_monitor)["type"], "model");
+
+    // Both read back from frames; a line of the earlier protocol (without the
+    // field) reads as `None`.
+    let (decoded, rest) = decode_frames::<ShellMessage>(
+        &[
+            encode_frame(&plain).unwrap(),
+            encode_frame(&per_monitor).unwrap(),
+        ]
+        .concat(),
+    )
+    .unwrap();
+    assert_eq!(decoded, vec![plain.clone(), per_monitor]);
+    assert_eq!(rest, 0);
+    let old_line = json(&plain).to_string();
+    assert_eq!(
+        serde_json::from_str::<ShellMessage>(&old_line).unwrap(),
+        plain
+    );
+
+    let op = LayoutOp::MoveToMonitor {
+        item: ItemId::AllScreens,
+        monitor: "HDMI-A-1".into(),
+    };
+    let from_layer = SurfaceMessage::Layout {
+        op: op.clone(),
+        monitor: Some("DP-1".into()),
+    };
+    let from_surface = SurfaceMessage::Layout {
+        op: op.clone(),
+        monitor: None,
+    };
+    let value = serde_json::to_value(&from_layer).unwrap();
+    assert_eq!(value["monitor"], "DP-1");
+    assert!(serde_json::to_value(&from_surface)
+        .unwrap()
+        .get("monitor")
+        .is_none());
+    assert_eq!(
+        serde_json::from_value::<SurfaceMessage>(value).unwrap(),
+        from_layer
+    );
+    let old_layout = serde_json::to_string(&from_surface).unwrap();
+    assert_eq!(
+        serde_json::from_str::<SurfaceMessage>(&old_layout).unwrap(),
+        from_surface
+    );
+    // The version stays 1: nothing a surface of one monitor writes changed.
+    assert_eq!(PROTOCOL_VERSION, 1);
 }

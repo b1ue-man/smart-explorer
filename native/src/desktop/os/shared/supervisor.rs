@@ -219,7 +219,7 @@ impl Shell {
         self.model_rev += 1;
         // C5.5: the primary monitor keeps the items of a monitor that left.
         if let Some(primary) = self.primary_monitor() {
-            let present = self.wanted_monitors();
+            let present = self.shown_monitors();
             let _ = self.layout.adopt_removed_monitors(&primary, &present);
         }
     }
@@ -232,36 +232,40 @@ impl Shell {
         mechanism::decide(&platform::session_facts(), icons)
     }
 
-    /// Monitors that get a surface process now (`--monitor <key>`).
+    /// Surfaces that get a process now (`--monitor <key>` each, or the one
+    /// `--layer` process, DSK-M7).
     fn wanted_monitors(&self) -> Vec<String> {
-        if !self.surface_on {
-            return Vec::new();
-        }
-        if let Some(keys) = &self.test_monitors {
-            return keys.clone();
-        }
-        match &self.mechanism {
-            // One process per monitor (Windows, X11).
-            Mechanism::WindowsBottom | Mechanism::X11DesktopType | Mechanism::X11Below => self
-                .monitors
+        super::supervisor_surface::wanted_surfaces(
+            &self.mechanism,
+            self.surface_on,
+            &self.monitors,
+            self.test_monitors.as_deref(),
+        )
+    }
+
+    /// Monitors whose arrangement is shown: the layer process serves every
+    /// output of the session, so there it is the session's monitor list.
+    fn shown_monitors(&self) -> Vec<String> {
+        let layer = self.surface_on
+            && self.test_monitors.is_none()
+            && matches!(self.mechanism, Mechanism::LayerShell { .. });
+        if layer {
+            self.monitors
                 .iter()
                 .map(|monitor| monitor.key.clone())
-                .collect(),
-            // The layer backend (DSK-M7) and the GNOME extension (DSK-M8)
-            // start their surfaces themselves; nothing here is unavailable.
-            Mechanism::LayerShell { .. }
-            | Mechanism::GnomeExtension { .. }
-            | Mechanism::Unavailable(_) => Vec::new(),
+                .collect()
+        } else {
+            self.wanted_monitors()
         }
     }
 
     fn primary_monitor(&self) -> Option<String> {
-        let wanted = self.wanted_monitors();
+        let shown = self.shown_monitors();
         self.monitors
             .iter()
-            .find(|monitor| monitor.primary && wanted.contains(&monitor.key))
+            .find(|monitor| monitor.primary && shown.contains(&monitor.key))
             .map(|monitor| monitor.key.clone())
-            .or_else(|| wanted.first().cloned())
+            .or_else(|| shown.first().cloned())
     }
 
     /// Starts the missing surfaces; `Some(code)` when start failures halted
@@ -284,7 +288,12 @@ impl Shell {
             if running || waiting {
                 continue;
             }
-            match self.spawn.start(&monitor) {
+            let started = if monitor == super::supervisor_surface::LAYER_KEY {
+                self.spawn.start_layer()
+            } else {
+                self.spawn.start(&monitor)
+            };
+            match started {
                 Ok(surface) => {
                     self.dir
                         .log("surface_start", &format!("{monitor} {}", surface.pid));
@@ -328,7 +337,9 @@ impl Shell {
                 }
             }
             SurfaceMessage::Alive => self.surfaces[index].last_alive = Instant::now(),
-            SurfaceMessage::Layout { op } => {
+            // The operations carry their monitor; the frame's own `monitor`
+            // (a layer process, DSK-M7) is only the origin.
+            SurfaceMessage::Layout { op, .. } => {
                 if self.layout.apply(&op).is_ok() {
                     self.model_rev += 1;
                 }
@@ -442,27 +453,13 @@ impl Shell {
                 self.model_rev += 1;
             }
         }
-        let rev = self.model_rev;
-        for surface in self.surfaces.iter_mut().filter(|surface| surface.greeted) {
-            if surface.sent_rev == Some(rev) {
-                continue;
-            }
-            let Some(model) = super::supervisor_surface::surface_model(
-                &feed.tiles,
-                &feed.files,
-                &config,
-                &mut self.layout,
-                &surface.monitor,
-            ) else {
-                continue;
-            };
-            if surface.send(ShellMessage::Model {
-                rev,
-                model: Box::new(model),
-            }) {
-                surface.sent_rev = Some(rev);
-            }
-        }
+        super::supervisor_surface::send_models(
+            &mut self.surfaces,
+            &self.monitors,
+            self.model_rev,
+            (&feed.tiles, &feed.files, &config),
+            &mut self.layout,
+        );
     }
 
     fn end_for_update(&mut self) -> i32 {

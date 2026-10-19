@@ -109,11 +109,18 @@ pub(in crate::app) fn set_context_menu_enabled(_on: bool) -> std::io::Result<()>
 
 pub(in crate::app) fn show_properties_for_path(_path: &str) {}
 
+/// A surface process of se Desktop installs a provider (DSK-M7: Wayland
+/// `wl_data_device`); every other process has none and keeps the answer
+/// "not available".
 pub(in crate::app) fn write_clipboard_files(
-    _paths: &[String],
-    _effect: ClipboardEffect,
+    paths: &[String],
+    effect: ClipboardEffect,
 ) -> Result<(), String> {
-    Err("Datei-Zwischenablage ist auf dieser Plattform nicht verfuegbar".to_string())
+    let Some(provider) = super::desktop_surface_clipboard::installed() else {
+        return Err("Datei-Zwischenablage ist auf dieser Plattform nicht verfuegbar".to_string());
+    };
+    let files: Vec<std::path::PathBuf> = paths.iter().map(std::path::PathBuf::from).collect();
+    provider.write(&files, matches!(effect, ClipboardEffect::Move))
 }
 
 pub(in crate::app) fn write_clipboard_files_if_sequence(
@@ -125,7 +132,16 @@ pub(in crate::app) fn write_clipboard_files_if_sequence(
 }
 
 pub(in crate::app) fn read_clipboard_files() -> Result<Option<(Vec<String>, bool)>, String> {
-    Err("Datei-Zwischenablage ist auf dieser Plattform nicht verfuegbar".to_string())
+    let Some(provider) = super::desktop_surface_clipboard::installed() else {
+        return Err("Datei-Zwischenablage ist auf dieser Plattform nicht verfuegbar".to_string());
+    };
+    Ok(provider.read()?.map(|(files, cut)| {
+        let paths = files
+            .into_iter()
+            .map(|file| file.to_string_lossy().into_owned())
+            .collect();
+        (paths, cut)
+    }))
 }
 
 pub(in crate::app) fn set_virtual_clipboard_if_sequence(
@@ -140,7 +156,7 @@ pub(in crate::app) fn virtual_clipboard_sequence() -> Option<u32> {
 }
 
 pub(in crate::app) fn clipboard_file_ops_supported() -> bool {
-    false
+    super::desktop_surface_clipboard::installed().is_some()
 }
 
 /// No desktop file-clipboard protocol is spoken here; the app keeps its own.
