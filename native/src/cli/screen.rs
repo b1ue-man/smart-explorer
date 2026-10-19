@@ -1,7 +1,8 @@
 //! `se screen` (SCR-M2, strand S4): devices whose screen this device can
 //! open, their screen rights and facts (`probe`), a measurement with the test
-//! picture (`bench`), and the sessions this device hosts (`sessions`,
-//! `stop`). Each command has `--json`. Exit codes: 0 success, 1 error with
+//! picture (`bench`), the windows of a device (`windows`) and a still picture
+//! of its screen (`snapshot`, SCR-M4), and the sessions this device hosts
+//! (`sessions`, `stop`). Each command has `--json` (`snapshot` too). Exit codes: 0 success, 1 error with
 //! text (a refusal names its code), 2 call error (clap). Who may watch or
 //! control this device is set with `se share grants access … --screen-view
 //! --screen-control`; confirmations are answered with `se share exec
@@ -9,22 +10,34 @@
 use clap::{Args, Subcommand};
 use clap_complete::ArgValueCandidates;
 
+use crate::share::access_grant::Capability;
 use crate::share::{PeerOpenTarget, ShareProfiles};
 
 mod bench;
 mod codec;
 mod output;
+#[cfg(target_os = "linux")]
+mod portal;
 mod sessions;
+mod snapshot;
+#[cfg(test)]
+mod still_tests;
 #[cfg(test)]
 mod tests;
+mod windows;
+
+/// `se screen windows DEVICE --json` (MCP tool `screen`).
+pub(crate) use self::windows::windows_value;
 
 const SCREEN_HELP: &str = "\
 Watch the screen of another device and see who watches this one. A device
 shows its screen only to devices it allows „Bildschirm ansehen“ (off, ask or
 allow) with `se share grants access DEVICE --screen-view ask`; on ask its user
 confirms every session. A device without the desktop app shows only the test
-picture. This version measures the path with the test picture; viewing a
-desktop follows with the desktop viewer.
+picture. `windows` lists the windows of a device and `snapshot` saves a still
+picture of its screen or of one window as a PNG file; both ask for the same
+„Bildschirm ansehen“. Live viewing follows with the desktop viewer. On Linux with Wayland,
+`se screen portal forget` deletes the stored screen grant; the next share asks in the system dialog again.
 
 Devices are named like `se exec` does: share://direct/<contact-id>,
 share://room/<room-id>/<device-id>, a name, an id or a fingerprint prefix.
@@ -32,10 +45,14 @@ share://room/<room-id>/<device-id>, a name, an id or a fingerprint prefix.
 Examples:
   se screen devices --probe --json
   se screen probe Laptop --json
+  se screen windows Laptop --json
+  se screen snapshot Laptop --out screen.png
+  se screen snapshot Laptop --source window:4242 --out window.png --max-size 1568x1568
   se screen bench Laptop --seconds 20 --json
   se screen bench --local --size 1920x1080
   se screen codec --json
   se screen codec openh264 enable
+  se screen portal forget --json
   se screen sessions --json
   se screen stop --all";
 
@@ -66,10 +83,17 @@ enum ScreenCommand {
         #[arg(long, help = "Print machine-readable JSON")]
         json: bool,
     },
+    #[command(about = "List the windows of a device that can be shown as a source")]
+    Windows(windows::WindowsArgs),
+    #[command(about = "Save a lossless still picture of a device's screen or window as a PNG")]
+    Snapshot(snapshot::SnapshotArgs),
     #[command(about = "Measure the screen path with the test picture")]
     Bench(bench::BenchArgs),
     #[command(about = "Show the screen codecs; switch OpenH264 on, off or remove it")]
     Codec(codec::CodecArgs),
+    #[cfg(target_os = "linux")]
+    #[command(about = "Forget the stored Wayland screen grant (Linux)")]
+    Portal(portal::PortalArgs),
     #[command(about = "Show the screen sessions this device hosts")]
     Sessions {
         #[arg(long, help = "Print machine-readable JSON")]
@@ -96,8 +120,12 @@ pub(super) fn run(args: ScreenArgs) -> Result<i32, String> {
             output::print(json, &report, || output::probe_text(&report));
             Ok(0)
         }
+        ScreenCommand::Windows(args) => windows::run(args),
+        ScreenCommand::Snapshot(args) => snapshot::run(args),
         ScreenCommand::Bench(args) => bench::run(args),
         ScreenCommand::Codec(args) => codec::run(args),
+        #[cfg(target_os = "linux")]
+        ScreenCommand::Portal(args) => portal::run(args),
         ScreenCommand::Sessions { json } => sessions::list(json),
         ScreenCommand::Stop { session, all, json } => sessions::stop(session, all, json),
     }
@@ -234,6 +262,43 @@ fn select_device(selector: &str) -> Result<DeviceChoice, String> {
     let snapshot = crate::daemon::share_worker_snapshot()?;
     let choices = device_choices(&snapshot.profiles, crate::share::core_now_secs());
     select_from(&choices, selector)
+}
+
+/// The notice a command prints while the other device's user is asked.
+pub(super) fn pending_notice(name: String) -> impl FnMut(Capability) {
+    move |capability| {
+        let what = match capability {
+            Capability::ScreenControl => "steuern",
+            _ => "ansehen",
+        };
+        eprintln!("Warte auf Bestätigung an {name}: Bildschirm {what} …");
+    }
+}
+
+/// The target and the name of the device `selector` names (MCP tool `screen`).
+pub(crate) fn device_target(selector: &str) -> Result<(PeerOpenTarget, String), String> {
+    let choice = select_device(selector)?;
+    Ok((choice.target, choice.name))
+}
+
+/// `se screen devices --json` without a room filter (MCP tool `screen`).
+pub(crate) fn devices_value(probe: bool) -> Result<serde_json::Value, String> {
+    let snapshot = crate::daemon::share_worker_snapshot()?;
+    let choices = device_choices(&snapshot.profiles, crate::share::core_now_secs());
+    let probes: Vec<Option<Result<crate::daemon::ScreenProbeReport, String>>> = choices
+        .iter()
+        .map(|choice| {
+            (probe && choice.online).then(|| crate::daemon::screen_probe(choice.target.clone()))
+        })
+        .collect();
+    Ok(output::devices_json(&choices, &probes))
+}
+
+/// `se screen probe DEVICE --json` (MCP tool `screen`).
+pub(crate) fn probe_value(selector: &str) -> Result<serde_json::Value, String> {
+    let (target, _) = device_target(selector)?;
+    let report = crate::daemon::screen_probe(target)?;
+    serde_json::to_value(&report).map_err(|error| error.to_string())
 }
 
 fn devices(room: Option<&str>, probe: bool, json: bool) -> Result<i32, String> {

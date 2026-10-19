@@ -26,10 +26,8 @@ use crate::share::relation_proof::ProvenPrincipal;
 pub(crate) enum SourceFrame {
     Frame(BgraImage),
     /// Nothing changed since the last picture.
-    #[allow(dead_code)] // Staged: the capture backends of SCR-M4 and SCR-M5.
     Unchanged,
     /// The source exists but shows nothing usable for now (C1).
-    #[allow(dead_code)] // Staged: the capture backends of SCR-M4 and SCR-M5.
     Paused(SessionState),
 }
 

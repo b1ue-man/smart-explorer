@@ -24,6 +24,9 @@
 //! view of it) and `worker_wire` (the frames between daemon and host
 //! process).
 //!
+//! SCR-M4 brings `snapshot` (the still picture: PNG, fitting a long edge and a
+//! byte budget, and the picture of a `snapshot` stream).
+//!
 //! Parts of SCR-M1 that SCR-M2 and SCR-M3 do not use yet keep
 //! `allow(dead_code)` on their module; each such declaration names them.
 
@@ -62,6 +65,7 @@ pub(crate) mod registry;
 // `SessionState::is_terminal` and `KeyframeRequester::is_open`.
 #[allow(dead_code)]
 pub(crate) mod session_state;
+pub(crate) mod snapshot;
 pub(crate) mod synthetic;
 pub(crate) mod tiles_codec;
 pub(crate) mod viewer_client;

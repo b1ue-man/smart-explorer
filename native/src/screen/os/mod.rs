@@ -5,9 +5,12 @@
 //! its main loop, its lifetime per OS: a job object on Windows, the
 //! parent-death signal on Linux), Media Foundation on Windows (loaded at run
 //! time) and OpenH264 on Windows and Linux (`native_ffi`, not on Android).
-//! Capture and input of each platform follow under `windows/`, `linux_os/`
-//! and `android/` (SCR-M4 to SCR-M8). The functions below select the
-//! platform's parts with `#[cfg(...)]` so the shared modules stay free of it.
+//! SCR-M4 adds the Windows host (`windows/`): monitors, the window list, the
+//! secure desktop, and capture with Graphics Capture or the DXGI duplication.
+//! SCR-M5 adds the Linux host (`linux_os/`): X11, the Wayland portal with
+//! PipeWire, window and app lists per desktop. Capture and input of Android
+//! follow under `android/` (SCR-M8). The functions below select the platform's
+//! parts with `#[cfg(...)]` so the shared modules stay free of it.
 use std::path::Path;
 use std::sync::Arc;
 
@@ -55,6 +58,30 @@ pub(crate) mod openh264_install;
 #[path = "native_ffi/openh264_pins.rs"]
 pub(crate) mod openh264_pins;
 
+#[cfg(target_os = "linux")]
+#[path = "linux_os/app_units.rs"]
+mod app_units;
+#[cfg(windows)]
+#[path = "windows/capture_dxgi.rs"]
+mod capture_dxgi;
+#[cfg(windows)]
+#[path = "windows/capture_source.rs"]
+mod capture_source;
+#[cfg(windows)]
+#[path = "windows/capture_wgc.rs"]
+mod capture_wgc;
+#[cfg(windows)]
+#[path = "windows/d3d_device.rs"]
+mod d3d_device;
+#[cfg(target_os = "linux")]
+#[path = "linux_os/host_backend.rs"]
+mod host_backend;
+#[cfg(windows)]
+#[path = "windows/host_backend.rs"]
+mod host_backend;
+#[cfg(target_os = "linux")]
+#[path = "linux_os/kde_window_management.rs"]
+mod kde_window_management;
 #[cfg(windows)]
 #[path = "windows/mf_common.rs"]
 mod mf_common;
@@ -70,12 +97,75 @@ mod mf_encoder_sync;
 #[cfg(windows)]
 #[path = "windows/mf_media.rs"]
 mod mf_media;
+#[cfg(windows)]
+#[path = "windows/monitors.rs"]
+mod monitors;
+#[cfg(target_os = "linux")]
+#[path = "linux_os/pipewire_abi.rs"]
+mod pipewire_abi;
+#[cfg(target_os = "linux")]
+#[path = "linux_os/pipewire_stream.rs"]
+mod pipewire_stream;
+#[cfg(target_os = "linux")]
+#[path = "linux_os/portal_session.rs"]
+mod portal_session;
+#[cfg(target_os = "linux")]
+#[path = "linux_os/portal_tokens.rs"]
+pub(crate) mod portal_tokens;
+#[cfg(windows)]
+#[path = "windows/secure_desktop.rs"]
+mod secure_desktop;
+#[cfg(target_os = "linux")]
+#[path = "linux_os/session_detect.rs"]
+pub(crate) mod session_detect;
+#[cfg(target_os = "linux")]
+#[path = "linux_os/spa_pod.rs"]
+mod spa_pod;
+#[cfg(target_os = "linux")]
+#[path = "linux_os/wayland_toplevels.rs"]
+mod wayland_toplevels;
+#[cfg(windows)]
+#[path = "windows/window_list.rs"]
+mod window_list;
+#[cfg(target_os = "linux")]
+#[path = "linux_os/x11_capture.rs"]
+mod x11_capture;
+#[cfg(target_os = "linux")]
+#[path = "linux_os/x11_cursor.rs"]
+mod x11_cursor;
+#[cfg(target_os = "linux")]
+#[path = "linux_os/x11_monitors.rs"]
+mod x11_monitors;
+#[cfg(target_os = "linux")]
+#[path = "linux_os/x11_windows.rs"]
+mod x11_windows;
+
+/// Task tests of the Windows host with real windows and monitors (stage
+/// `windows-screen`).
+#[cfg(all(windows, test))]
+#[path = "windows/capture_tests.rs"]
+mod capture_tests;
+/// Static checks of the Windows sources, run on every platform.
+#[cfg(test)]
+#[path = "shared/windows_static_tests.rs"]
+mod windows_static_tests;
 
 /// Encoder and decoder factories of one kind of codec.
 type Factories = (Vec<Arc<dyn EncoderFactory>>, Vec<Arc<dyn DecoderFactory>>);
 
-/// The backend that captures on this platform (in the host process). The
-/// platform backends of SCR-M4 and SCR-M5 replace the test picture here.
+/// The backend that captures on this platform (in the host process): Windows
+/// (SCR-M4), Linux (SCR-M5); the test picture elsewhere.
+#[cfg(target_os = "linux")]
+fn platform_backend() -> Arc<dyn ScreenHostBackend> {
+    Arc::new(host_backend::LinuxBackend::new())
+}
+
+#[cfg(windows)]
+fn platform_backend() -> Arc<dyn ScreenHostBackend> {
+    Arc::new(host_backend::WindowsBackend::new())
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 fn platform_backend() -> Arc<dyn ScreenHostBackend> {
     Arc::new(synthetic_backend::SyntheticBackend)
 }

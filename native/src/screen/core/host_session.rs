@@ -216,6 +216,10 @@ impl<'a> Session<'a> {
                 }
             },
             ViewerFrame::Snapshot(request) => {
+                // The source is the session's own (hello or `SET_MODE`); the
+                // frame's `source` stays on the wire for later viewers and is
+                // not used here (SCR-M4, `se screen snapshot` names its source
+                // in the session request).
                 let shot = self.pipeline.snapshot(self.connection, request.max_size);
                 match shot.await {
                     Ok(()) => Ok(()),
