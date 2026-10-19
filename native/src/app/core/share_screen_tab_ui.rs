@@ -122,6 +122,8 @@ pub(crate) fn ui(ui: &mut egui::Ui) {
         });
     }
     crate::app::share_screen_codec_ui::ui(ui);
+    #[cfg(target_os = "linux")]
+    crate::app::share_screen_portal_ui::ui(ui);
     theme::section(ui, "Laufende Sitzungen");
     if !loaded {
         ui.horizontal(|ui| {
