@@ -33,8 +33,6 @@ use super::exec_pam_service;
 use super::exec_systemd::eio;
 
 pub(super) const HELPER_MODE: &str = "--exec-account-helper";
-/// One job per connection; a few more leave room for a worker's retries.
-const MAX_SESSIONS: usize = 8;
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(10);
 /// How often a waiting read looks whether systemd asked the service to stop.
 const STOP_POLL: Duration = Duration::from_secs(1);
@@ -232,12 +230,6 @@ impl Service {
         let descriptor = descriptor
             .ok_or_else(|| bad_request("a start needs the supervisor's end of its connection"))?;
         stream_socket(&descriptor).map_err(|error| bad_request(&error.to_string()))?;
-        if self.sessions.len() >= MAX_SESSIONS {
-            return Err((
-                HelperErrorCode::StartFailed,
-                format!("this connection has {MAX_SESSIONS} sessions already"),
-            ));
-        }
         exec_account::check_account(account)
             .map_err(|refusal| (refusal.helper_code(), refusal.detail(account)))?;
         exec_pam_service::verify_installed().map_err(outdated)?;

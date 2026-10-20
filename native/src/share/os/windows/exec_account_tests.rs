@@ -466,3 +466,30 @@ fn perm_task_windows_own_account_path_unchanged() {
         std::env::var("USERNAME").unwrap_or_else(|_| "Windows user".into())
     );
 }
+
+/// R15c: one user runs more account jobs at once than the former 8 per
+/// connection of the account service.
+#[test]
+#[ignore = "needs an elevated runner and the account service: windows-core job (perm-windows)"]
+fn perm_task_windows_helper_many_jobs_at_once() {
+    let task = task();
+    set_up(&task);
+    let account = remote_account();
+    let jobs: Vec<_> = (0..10)
+        .map(|_| {
+            let account = account.clone();
+            std::thread::spawn(move || {
+                run_job(
+                    request(shell("ping -n 3 127.0.0.1 >nul && echo MANY-OK"), false),
+                    &account,
+                    b"",
+                )
+            })
+        })
+        .collect();
+    for job in jobs {
+        let job = job.join().expect("job thread");
+        assert_eq!(job.exit, Some(0), "{:?} {}", job.error, job.stdout);
+        assert!(job.stdout.contains("MANY-OK"), "{}", job.stdout);
+    }
+}

@@ -32,8 +32,6 @@ const LOCKED: u32 = 0o500;
 const OPEN: u32 = 0o700;
 const STICKY: u32 = 0o1000;
 const TMPFS_MAGIC: i128 = 0x0102_1994;
-/// Highest suffix tried for a default folder name (`Name (2)` …).
-const MAX_SUFFIX: usize = 999;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PlaceKind {
@@ -101,27 +99,38 @@ pub(crate) fn folder_name(label: &str) -> String {
 }
 
 /// `<root>/<name>`, or `<name> (2)`, `<name> (3)` … while `taken` says the
-/// folder is in use.
+/// folder is in use. There is no highest suffix (R15c): the search goes on
+/// until a name is free; only a real error reading a candidate (anything but
+/// „not found“, e.g. an unreadable or non-folder root or a name too long for
+/// the file system) ends it.
 pub(crate) fn default_location(
     root: &Path,
     label: &str,
     taken: impl Fn(&Path) -> bool,
 ) -> io::Result<PathBuf> {
     let name = folder_name(label);
-    for index in 1..=MAX_SUFFIX {
+    let mut index: u64 = 1;
+    loop {
         let candidate = if index == 1 {
             root.join(&name)
         } else {
             root.join(format!("{name} ({index})"))
         };
+        match fs::symlink_metadata(&candidate) {
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
         if !taken(&candidate) {
             return Ok(candidate);
         }
+        index = index.checked_add(1).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "kein freier Einhängeort für dieses Laufwerk",
+            )
+        })?;
     }
-    Err(io::Error::new(
-        io::ErrorKind::AlreadyExists,
-        "kein freier Einhängeort für dieses Laufwerk",
-    ))
 }
 
 /// A folder another drive could use now: absent, or an empty plain folder

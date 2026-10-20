@@ -406,3 +406,33 @@ fn linux_helper_setup_modes_round_trip_and_sudo_command() {
     assert!(service_unit_text().contains("CapabilityBoundingSet=\n"));
     assert!(service_unit_text().contains(&format!("ExecStart={PROGRAM_COPY} {HELPER_MODE}\n")));
 }
+
+/// R15c: one user starts more account sessions at once than the former 8
+/// per connection; each runs until its connection ends.
+#[test]
+#[ignore = "needs the account service: linux-root job (perm-linux-helper)"]
+fn perm_task_linux_helper_many_sessions_at_once() {
+    let task = helper_task();
+    set_up(&task);
+    let connection = Connection::system().expect("system bus");
+    let mut held = Vec::new();
+    for _ in 0..10 {
+        let (_worker, supervisor) = UnixStream::pair().expect("socket pair");
+        let helper = session(&supervisor);
+        held.push((helper, supervisor, _worker));
+    }
+    let units: Vec<String> = held
+        .iter()
+        .map(|(helper, ..)| helper.name().to_string())
+        .collect();
+    for unit in &units {
+        assert!(unit_active(&connection, unit), "{unit} does not run");
+    }
+    drop(held);
+    for unit in &units {
+        assert!(
+            wait_inactive(&connection, unit),
+            "{unit} outlived its connection"
+        );
+    }
+}

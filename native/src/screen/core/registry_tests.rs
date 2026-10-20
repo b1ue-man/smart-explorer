@@ -46,26 +46,19 @@ impl SessionRestrictions for Narrowed {
 }
 
 #[test]
-fn screen_task_registry_limits_control_and_stop() {
+fn screen_task_registry_control_and_stop() {
     let registry = Arc::new(ScreenRegistry::default());
     let (revision, empty) = registry.sessions();
     assert!(empty.is_empty());
 
-    // One device holds at most four sessions, the host at most eight.
     let mut handles = Vec::new();
-    for _ in 0..MAX_DEVICE_SESSIONS {
+    for _ in 0..4 {
         handles.push(
             registry
                 .register(session("a", SessionMode::Preview, false))
                 .unwrap(),
         );
     }
-    assert_eq!(
-        registry
-            .register(session("a", SessionMode::View, true))
-            .err(),
-        Some(RegistryRefusal::SessionLimit)
-    );
     for device in ["b", "c", "d", "e"] {
         handles.push(
             registry
@@ -73,23 +66,15 @@ fn screen_task_registry_limits_control_and_stop() {
                 .unwrap(),
         );
     }
-    assert_eq!(
-        registry
-            .register(session("f", SessionMode::View, true))
-            .err(),
-        Some(RegistryRefusal::SessionLimit)
-    );
     let (later, views) = registry.sessions();
     assert_ne!(later, revision);
-    assert_eq!(views.len(), MAX_SESSIONS);
+    assert_eq!(views.len(), 8);
     assert_eq!(views[0].relation, "direct");
     assert_eq!(views[0].room_id, None);
     assert_eq!(registry.screen_content_sessions(), 4);
 
     // Control is exclusive: the second session sees the holder, and the
     // holder's release or end frees it.
-    let first = registry.register(session("g", SessionMode::Control, true));
-    assert_eq!(first.err(), Some(RegistryRefusal::SessionLimit));
     handles.truncate(4);
     let first = registry
         .register(session("g", SessionMode::Control, true))
@@ -207,4 +192,36 @@ fn screen_task_registry_session_view_json_shape() {
     assert_eq!(json["state"], "streaming");
     assert_eq!(json["relation"], "room");
     assert_eq!(json["room_id"], "relation-laptop");
+}
+
+/// R15c: no number of sessions is refused, neither of one device (formerly
+/// 4) nor of the host (formerly 8); exclusive control stays.
+#[test]
+fn screen_task_registry_has_no_session_limit() {
+    let registry = Arc::new(ScreenRegistry::default());
+    let mut handles = Vec::new();
+    for _ in 0..6 {
+        handles.push(
+            registry
+                .register(session("a", SessionMode::Preview, false))
+                .unwrap(),
+        );
+    }
+    for device in ["b", "c", "d", "e", "f", "g", "h"] {
+        handles.push(
+            registry
+                .register(session(device, SessionMode::View, true))
+                .unwrap(),
+        );
+    }
+    assert_eq!(registry.sessions().1.len(), 13);
+    let one = registry
+        .register(session("i", SessionMode::Control, true))
+        .unwrap();
+    let two = registry
+        .register(session("j", SessionMode::Control, true))
+        .unwrap();
+    one.take_control().unwrap();
+    assert_eq!(two.take_control().unwrap_err().device_id, "i");
+    assert_eq!(registry.sessions().1.len(), 15);
 }

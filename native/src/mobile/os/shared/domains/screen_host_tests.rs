@@ -138,3 +138,19 @@ fn screen_task_android_bridge_shapes() {
     );
     assert_eq!(call("screen.hostStop", json!({})), Err("invalid".into()));
 }
+
+/// R15c: the app reports every running app; nothing past a fixed count is
+/// cut off (the bridge call is a JNI string, the viewer's list is bounded by
+/// its own frame size in `window_list`).
+#[test]
+fn screen_task_android_app_list_has_no_count_limit() {
+    let _guard = channels::TEST_LOCK
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    channels::reset_for_tests();
+    let apps: Vec<Value> = (0..300)
+        .map(|index| json!({"package": format!("org.example.app{index}"), "label": format!("App {index}")}))
+        .collect();
+    call("screen.hostPrereqs", json!({ "apps": apps })).unwrap();
+    assert_eq!(channels::prereqs().apps.len(), 300);
+}
