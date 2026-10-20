@@ -10,6 +10,7 @@ impl App {
             ui.visuals_mut().widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
             ui.visuals_mut().widgets.inactive.bg_stroke = egui::Stroke::NONE;
             self.ui_sidebar_connections(ui);
+            self.ui_sidebar_vaults(ui);
         });
     }
 

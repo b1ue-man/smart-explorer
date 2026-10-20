@@ -74,10 +74,19 @@ pub(super) fn render_job_editor_page(
     ed: &mut JobEditor,
     pick: &mut Option<(PickerPurpose, String)>,
 ) {
+    // A vault job (U29-9) has the pages „Tresor“ (the first one) and
+    // „Zeitplan“; its other values are fixed (C5.6) and only named.
+    let vault = crate::app::vault_modules::vault_sync_editor_ui::is_vault_draft(ed);
     egui::Grid::new(("job_editor_grid", page as u8))
         .num_columns(2)
         .spacing([10.0, 8.0])
         .show(ui, |ui| match page {
+            JobEditorPage::General if vault => {
+                crate::app::vault_modules::vault_sync_editor_ui::tresor_page(ui, ed)
+            }
+            JobEditorPage::Versions | JobEditorPage::Filter | JobEditorPage::Transfer if vault => {
+                crate::app::vault_modules::vault_sync_editor_ui::fixed_page(ui)
+            }
             JobEditorPage::General => general(ui, ed, pick),
             JobEditorPage::Schedule => schedule(ui, ed),
             JobEditorPage::Versions => versions(ui, ed),

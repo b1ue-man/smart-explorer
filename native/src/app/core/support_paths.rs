@@ -359,9 +359,11 @@ pub(in crate::app) fn squarify_sorted(scaled: &[f64], mut rect: egui::Rect) -> V
 }
 
 /// Wrap a REMOTE backend with the interactive browsing cache; local backends
-/// pass through (their `std::fs` listing is already instant).
+/// pass through (their `std::fs` listing is already instant). A vault backend
+/// is never wrapped either (U29-3): the vault keeps its own directory map,
+/// and a second cache would hold cleartext names past the lock (K24).
 pub(in crate::app) fn cache_remote(b: crate::vfs::BackendHandle) -> crate::vfs::BackendHandle {
-    if b.is_local() {
+    if b.is_local() || b.scheme() == crate::vfs::Scheme::Vault {
         b
     } else {
         Arc::new(crate::vfs::CachingBackend::new(b))
