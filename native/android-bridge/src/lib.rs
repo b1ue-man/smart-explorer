@@ -18,6 +18,8 @@ use std::time::Duration;
 
 // SCR-M8: pictures and control messages of this phone as screen host.
 mod screen_jni;
+// DRV-M8: proxy file descriptors of the documents provider.
+mod io;
 
 const LOG_TAG: &str = "SmartExplorer";
 const ANDROID_LOG_ERROR: c_int = 6;
