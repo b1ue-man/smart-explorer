@@ -243,6 +243,26 @@ Startgrenze: Ab der vom Nutzer genannten Wochennutzung startet kein neuer Auftra
 - Android-Hub-Dateien (D2.3) hält immer nur ein Android-Paket: U27 → U28 → U23 → U31 → U35 → U38 → U40; das erfüllt H4 (U28 → U31 → U35 → U40).
 - Kein Agent startet vor der Freigabe dieses Abschnitts durch den Nutzer (Vorgabe 1).
 
+**Stand bei der dritten Pause (2026-10-20 00:50 UTC, Startgrenze der Wochennutzung nach Nutzervorgabe vom 2026-10-19 erreicht, alle laufenden Agenten fertig):**
+- **Fertig, committet und gepusht bis 29b6884d:**
+  - Pakete: U16, U17, U19, U22, U23, U25, U26, U27, U29, U34, U37 sowie R15 (E12), R15c und die Hub-Registrierungen von U13, U14, U16, U17, U19, U20, U22, U23, U25, U26 und U27.
+  - Festlegungen des Design-Agenten für alle übrigen Pakete in `festlegungen.md`.
+  - Damit 34 von 43 Umsetzungspaketen.
+- **Korrigierter Fehler:** U26 hatte `VaultStatusView`, `VaultSiteView` und `VaultEventView` aus `ipc_protocol_vault.rs` entfernt; wiederhergestellt in 8ff20823.
+- **Offene Pakete** in dieser Reihenfolge, Android-Pakete nacheinander (Hub-Dateien D2.3):
+  1. U28 (Android-Betrachter);
+  2. U31 (Tresore auf Android, Sicherheitsagent; vorher seine Antworten auf S1–S8 aus `festlegungen.md` § U31);
+  3. U35, U38, U40 (Launcher);
+  4. U36 (Installer, Sicherheitsagent);
+  5. U41 (Suite Teil B);
+  6. U42, U43 (Doku);
+  7. ein Inventurlauf: alle Testzeilen aus den Stand-Dateien nach `native/rdt_task/expected_signals.txt`;
+  8. die eine Remote-Suite mit Korrekturschleife (dabei `Cargo.lock` und die Lizenzdatei aus dem Artefakt `rdt-prepare`), danach das eine Release.
+- **Offene Einzelpunkte:**
+  - Sicherheitsagent: `SessionLimit`-Zweig und -Variante in `screen/os/shared/host_server.rs`; `MAX_LIST_ENTRIES` in `screen/core/window_list.rs`; auf 128 Zeichen gekürzte App-Namen in `mobile/os/shared/domains/screen_host.rs`; `MAX_ISSUES` und `MAX_VIEW_LIMIT` (500) in `mobile/os/shared/scan.rs`; dort verdrängt eine neue Scan-Sitzung eine noch laufende statt zuerst eine beendete (Fehler).
+  - U25: die vorläufigen `allow(dead_code)` in `daemon/os/shared/screen_ipc_client.rs` und `screen/core/mod.rs` entfernen.
+  - Modellzuordnung: siehe „Freigegebene Modellzuordnung“; Startgrenze der Wochennutzung nach Nutzervorgabe.
+
 **Stand bei der zweiten Pause (2026-10-18 08:45 UTC, Startgrenze des Wochenlimits erreicht, alle laufenden Pakete fertig):**
 - Fertig, committet und gepusht: zusätzlich U13 (9e1448e2), U14 (ee4a5761, 5267e500), U20 (1879e509), U32 (6e1c4602). Damit 23 von 43 Umsetzungspaketen.
 - Registrierungen von U13 (Punkte 1–10) und U32 hat der Hauptagent gesetzt; offen für das nächste R-Paket: U14 (Hub-Dateien), U20 (`app/mod.rs`, `daemon/mod.rs`), U13 (MCP-Katalogbeispiel).
