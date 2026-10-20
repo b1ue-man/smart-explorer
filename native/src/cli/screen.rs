@@ -15,6 +15,7 @@ use crate::share::{PeerOpenTarget, ShareProfiles};
 
 mod bench;
 mod codec;
+pub(crate) mod input;
 mod output;
 #[cfg(target_os = "linux")]
 mod portal;
@@ -24,6 +25,7 @@ mod snapshot;
 mod still_tests;
 #[cfg(test)]
 mod tests;
+mod view;
 mod windows;
 
 /// `se screen windows DEVICE --json` (MCP tool `screen`).
@@ -36,7 +38,10 @@ allow) with `se share grants access DEVICE --screen-view ask`; on ask its user
 confirms every session. A device without the desktop app shows only the test
 picture. `windows` lists the windows of a device and `snapshot` saves a still
 picture of its screen or of one window as a PNG file; both ask for the same
-„Bildschirm ansehen“. Live viewing follows with the desktop viewer. On Linux with Wayland,
+„Bildschirm ansehen“. `view` opens the desktop viewer window for one device
+(live picture, `--control` to steer it) and `grid` the group view of all
+devices or of one room; both start the window of the desktop app and return.
+`input` sends one click, key or text to a device. On Linux with Wayland,
 `se screen portal forget` deletes the stored screen grant; the next share asks in the system dialog again.
 
 Devices are named like `se exec` does: share://direct/<contact-id>,
@@ -48,6 +53,9 @@ Examples:
   se screen windows Laptop --json
   se screen snapshot Laptop --out screen.png
   se screen snapshot Laptop --source window:4242 --out window.png --max-size 1568x1568
+  se screen view Laptop --control
+  se screen view Laptop --source window:4242 --fullscreen --json
+  se screen grid --room Ops
   se screen bench Laptop --seconds 20 --json
   se screen bench --local --size 1920x1080
   se screen codec --json
@@ -87,6 +95,12 @@ enum ScreenCommand {
     Windows(windows::WindowsArgs),
     #[command(about = "Save a lossless still picture of a device's screen or window as a PNG")]
     Snapshot(snapshot::SnapshotArgs),
+    #[command(about = "Click, move, scroll, type or press a key on a device's screen")]
+    Input(input::InputArgs),
+    #[command(about = "Open the desktop viewer for a device's screen")]
+    View(view::ViewArgs),
+    #[command(about = "Open the group view of the screens of all devices or of a room")]
+    Grid(view::GridArgs),
     #[command(about = "Measure the screen path with the test picture")]
     Bench(bench::BenchArgs),
     #[command(about = "Show the screen codecs; switch OpenH264 on, off or remove it")]
@@ -122,6 +136,9 @@ pub(super) fn run(args: ScreenArgs) -> Result<i32, String> {
         }
         ScreenCommand::Windows(args) => windows::run(args),
         ScreenCommand::Snapshot(args) => snapshot::run(args),
+        ScreenCommand::Input(args) => input::run(args),
+        ScreenCommand::View(args) => view::run_view(args),
+        ScreenCommand::Grid(args) => view::run_grid(args),
         ScreenCommand::Bench(args) => bench::run(args),
         ScreenCommand::Codec(args) => codec::run(args),
         #[cfg(target_os = "linux")]

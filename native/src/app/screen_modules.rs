@@ -17,3 +17,56 @@ pub(crate) mod share_screen_codec_ui;
 #[cfg(target_os = "linux")]
 #[path = "core/share_screen_portal_ui.rs"]
 pub(crate) mod share_screen_portal_ui;
+
+// SCR-M7: the desktop viewer and the group view (`--screen-view`,
+// `--screen-grid`, V5); the pages of „Geräte & Freigaben“ start it through
+// `screen_launch`.
+#[path = "core/screen_decode_thread.rs"]
+mod screen_decode_thread;
+#[path = "core/screen_devices.rs"]
+mod screen_devices;
+#[path = "core/screen_input_keys.rs"]
+mod screen_input_keys;
+#[path = "core/screen_input_map.rs"]
+mod screen_input_map;
+#[path = "core/screen_launch.rs"]
+pub(crate) mod screen_launch;
+pub(crate) use screen_launch::{run_screen_grid, run_screen_view};
+#[path = "core/screen_pool.rs"]
+mod screen_pool;
+#[path = "core/screen_prefs.rs"]
+mod screen_prefs;
+#[path = "core/screen_session.rs"]
+mod screen_session;
+#[path = "core/screen_stats_overlay.rs"]
+mod screen_stats_overlay;
+#[path = "core/screen_target.rs"]
+pub(crate) mod screen_target;
+#[path = "core/screen_texts.rs"]
+mod screen_texts;
+#[path = "core/screen_texture_cpu.rs"]
+mod screen_texture_cpu;
+#[path = "core/screen_tile_face.rs"]
+mod screen_tile_face;
+#[path = "core/screen_tile_grid.rs"]
+mod screen_tile_grid;
+#[path = "core/screen_toolbar_ui.rs"]
+mod screen_toolbar_ui;
+#[path = "core/screen_view_widget.rs"]
+mod screen_view_widget;
+#[path = "core/screen_viewer_app.rs"]
+mod screen_viewer_app;
+#[path = "core/screen_viewer_view.rs"]
+mod screen_viewer_view;
+#[path = "core/screen_wgpu_yuv.rs"]
+mod screen_wgpu_yuv;
+
+#[cfg(test)]
+#[path = "core/screen_viewer_fake.rs"]
+mod screen_viewer_fake;
+#[cfg(test)]
+#[path = "core/screen_viewer_misc_tests.rs"]
+mod screen_viewer_misc_tests;
+#[cfg(test)]
+#[path = "core/screen_viewer_tests.rs"]
+mod screen_viewer_tests;

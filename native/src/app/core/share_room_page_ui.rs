@@ -123,6 +123,14 @@ fn room_page(app: &mut App, ui: &mut egui::Ui, profile_id: &str) {
             app.share_export_target_id = room.id.clone();
             app.share_tab = pages_ui::TAB_EXPORTS;
         }
+        if crate::app::screen_launch::show_button(
+            ui,
+            &crate::app::screen_launch::room_button(room.auto_join),
+        ) {
+            if let Err(error) = crate::app::screen_launch::open_grid(Some(&room.id)) {
+                app.error_msg = Some(error);
+            }
+        }
         remove = ui.button("Raum entfernen").clicked();
     });
     rename_row(app, ui, &room);

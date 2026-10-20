@@ -9,7 +9,8 @@
 //! gives one Annex B access unit per frame: Constrained Baseline without B
 //! frames, an IDR on request, the bit rate set at run time through the raw
 //! encoder option (`ENCODER_OPTION_BITRATE`). The decoder turns I420 back to
-//! BGRA. OpenH264 encodes at most 3840 × 2160 (`openh264` 0.9.9,
+//! BGRA, or after `prefer_yuv(true)` (SCR-M7, the viewer's GPU path) keeps
+//! the I420 planes and skips that conversion. OpenH264 encodes at most 3840 × 2160 (`openh264` 0.9.9,
 //! `encoder.rs`).
 use std::io;
 use std::os::raw::{c_int, c_void};
@@ -28,7 +29,9 @@ use super::openh264_install::OpenH264Store;
 use crate::screen::core::codec_registry::{
     DecoderFactory, EncoderFactory, OpenH264Report, OpenH264State,
 };
-use crate::screen::core::host_backend::{EncodedFrame, ScreenDecoder, ScreenEncoder};
+use crate::screen::core::host_backend::{
+    Chroma, EncodedFrame, ScreenDecoder, ScreenEncoder, YuvPicture,
+};
 use crate::screen::core::negotiate::{CodecChoice, CodecOffer, H264Profile};
 use crate::screen::core::pixel_convert::{
     bgra_to_i420, i420_to_bgra, BgraImage, FrameSize, I420Image, YuvMatrix,
@@ -307,6 +310,8 @@ impl DecoderFactory for OpenH264DecoderFactory {
                 v: Vec::new(),
             },
             picture: BgraImage::new(header.size)?,
+            yuv: false,
+            yuv_out: None,
         }))
     }
 }
@@ -317,6 +322,9 @@ struct OpenH264Decoder {
     size: FrameSize,
     planes: I420Image,
     picture: BgraImage,
+    /// `prefer_yuv(true)`: hand the planes out instead of converting.
+    yuv: bool,
+    yuv_out: Option<YuvPicture>,
 }
 
 /// Copies `rows` rows of `width` bytes at `stride` from `source`.
@@ -377,12 +385,46 @@ impl ScreenDecoder for OpenH264Decoder {
             };
             copy_picture(&yuv, size, &mut self.planes)?;
         }
+        if self.yuv {
+            // The copied planes become the output; the output's old buffers
+            // serve the next copy.
+            let out = self.yuv_out.get_or_insert_with(|| YuvPicture {
+                y: Vec::new(),
+                y_stride: 0,
+                uv: Vec::new(),
+                uv_stride: 0,
+                chroma: Chroma::I420 {
+                    u: Vec::new(),
+                    v: Vec::new(),
+                },
+                matrix: YuvMatrix::Bt709,
+            });
+            out.y_stride = size.width as usize;
+            out.uv_stride = size.chroma().width as usize;
+            std::mem::swap(&mut out.y, &mut self.planes.y);
+            if let Chroma::I420 { u, v } = &mut out.chroma {
+                std::mem::swap(u, &mut self.planes.u);
+                std::mem::swap(v, &mut self.planes.v);
+            }
+            return Ok(true);
+        }
         i420_to_bgra(&self.planes, YuvMatrix::Bt709, &mut self.picture)?;
         Ok(true)
     }
 
     fn picture(&self) -> &BgraImage {
         &self.picture
+    }
+
+    fn prefer_yuv(&mut self, on: bool) {
+        self.yuv = on;
+        if !on {
+            self.yuv_out = None;
+        }
+    }
+
+    fn yuv_picture(&self) -> Option<YuvPicture> {
+        self.yuv_out.clone().filter(|_| self.yuv)
     }
 }
 
@@ -394,3 +436,6 @@ pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 #[cfg(test)]
 #[path = "openh264_codec_tests.rs"]
 pub(crate) mod tests;
+#[cfg(test)]
+#[path = "openh264_yuv_tests.rs"]
+mod yuv_tests;

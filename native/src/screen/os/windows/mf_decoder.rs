@@ -1,7 +1,8 @@
 //! The H.264 decoder of Media Foundation (a synchronous MFT; SCR-M3,
 //! decision C2): Annex B access units in, NV12 out (the first NV12 type the
-//! decoder offers), converted to BGRA with `nv12_to_bgra` (BT.709). The
-//! decoder's buffer may be taller than the picture (rows padded to 16); its
+//! decoder offers), converted to BGRA with `nv12_to_bgra` (BT.709) or, after
+//! `prefer_yuv(true)` (SCR-M7, the viewer's GPU path), kept as planes without
+//! the conversion. The decoder's buffer may be taller than the picture (rows padded to 16); its
 //! row pitch follows from the buffer length, and only the picture's area is
 //! converted. A changed stream (`MF_E_TRANSFORM_STREAM_CHANGE`) selects NV12
 //! again. Low latency through `MF_LOW_LATENCY`.
@@ -16,7 +17,7 @@ use windows::Win32::Media::MediaFoundation::{
 use super::mf_common::ensure_com;
 use super::mf_encoder_sync::{stop, UNITS_PER_SECOND};
 use super::mf_media::{input_sample, process_output, sample_bytes, video_type, Output};
-use crate::screen::core::host_backend::ScreenDecoder;
+use crate::screen::core::host_backend::{Chroma, ScreenDecoder, YuvPicture};
 use crate::screen::core::pixel_convert::{nv12_to_bgra, BgraImage, FrameSize, Nv12View, YuvMatrix};
 use crate::screen::core::wire_binary::{FrameRecord, GopHeader};
 
@@ -34,6 +35,9 @@ pub(super) struct MfDecoder {
     allocated: FrameSize,
     picture: BgraImage,
     frames: i64,
+    /// `prefer_yuv(true)`: keep the planes in `planes`, do not convert.
+    yuv: bool,
+    planes: Option<YuvPicture>,
 }
 
 // SAFETY: one thread at a time (the decoder is borrowed mutably); the
@@ -62,6 +66,8 @@ impl MfDecoder {
             allocated: header.size,
             picture: BgraImage::new(header.size)?,
             frames: 0,
+            yuv: false,
+            planes: None,
         };
         decoder.select_nv12()?;
         // SAFETY: notifications on the configured transform.
@@ -116,6 +122,23 @@ impl MfDecoder {
             ));
         }
         let view = Nv12View::new(self.size, &bytes[..luma], pitch, &bytes[luma..], pitch)?;
+        if self.yuv {
+            let planes = self.planes.get_or_insert_with(|| YuvPicture {
+                y: Vec::new(),
+                y_stride: pitch,
+                uv: Vec::new(),
+                uv_stride: pitch,
+                chroma: Chroma::Nv12,
+                matrix: YuvMatrix::Bt709,
+            });
+            planes.y.clear();
+            planes.y.extend_from_slice(&bytes[..luma]);
+            planes.uv.clear();
+            planes.uv.extend_from_slice(&bytes[luma..]);
+            planes.y_stride = pitch;
+            planes.uv_stride = pitch;
+            return Ok(());
+        }
         nv12_to_bgra(&view, YuvMatrix::Bt709, &mut self.picture)
     }
 
@@ -160,6 +183,17 @@ impl ScreenDecoder for MfDecoder {
 
     fn picture(&self) -> &BgraImage {
         &self.picture
+    }
+
+    fn prefer_yuv(&mut self, on: bool) {
+        self.yuv = on;
+        if !on {
+            self.planes = None;
+        }
+    }
+
+    fn yuv_picture(&self) -> Option<YuvPicture> {
+        self.planes.clone().filter(|_| self.yuv)
     }
 }
 

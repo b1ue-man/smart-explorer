@@ -1,6 +1,6 @@
 # Oberflächen der Bildschirmverbindung
 
-Stand: 2026-10-19, Pakete U10 (SCR-M2) und U16 (SCR-M4, Windows als Host) des Strangs S4 im Plan `docs/plaene/2026-10-17-rechte-desktop-tresore/plan.md`. Belege als `Datei:Zeile` am Stand dieses Pakets. Abkürzung: `N/` = `native/src/`. Pflege: jede Änderung an einer Bildschirmfähigkeit aktualisiert diese Datei im selben Commit (Regel in `docs/oberflaechen/INDEX.md`).
+Stand: 2026-10-20, Pakete U10 (SCR-M2), U16 (SCR-M4, Windows als Host) und U25 (SCR-M7, Desktop-Betrachter) des Strangs S4 im Plan `docs/plaene/2026-10-17-rechte-desktop-tresore/plan.md`. Belege als `Datei:Zeile` am Stand dieses Pakets. Abkürzung: `N/` = `native/src/`. Pflege: jede Änderung an einer Bildschirmfähigkeit aktualisiert diese Datei im selben Commit (Regel in `docs/oberflaechen/INDEX.md`).
 
 Erreichbarkeit: CLI, IPC, Anzeigefenster und Tab 9 sind erst erreichbar, wenn das Registrierungspaket R4 die Module einträgt (`N/share/mod.rs`, `N/daemon/mod.rs`, `N/daemon/os/shared/ipc_protocol.rs`, `N/daemon/os/shared/ipc.rs`, `N/daemon/os/shared/ipc_host_ext.rs`, `N/cli/mod.rs`, `N/app/mod.rs`, `N/lib.rs`). Tab 9 zeigt bis zur Verteilerzeile in `N/app/core/share_window_ui.rs` die Diagnose.
 
@@ -9,7 +9,9 @@ Erreichbarkeit: CLI, IPC, Anzeigefenster und Tab 9 sind erst erreichbar, wenn da
 | Kürzel | Oberfläche | Einstieg |
 |---|---|---|
 | CLI | `se screen devices`, `se screen probe`, `se screen windows`, `se screen snapshot`, `se screen bench`, `se screen sessions`, `se screen stop` | `N/cli/screen.rs`, `N/cli/screen/windows.rs`, `N/cli/screen/snapshot.rs`, `N/cli/screen/bench.rs`, `N/cli/screen/sessions.rs`, `N/cli/screen/output.rs`; Vervollständigung `N/cli/completions_screen.rs` (Geräte für `probe`, `windows`, `snapshot`, `bench`) |
-| Desktop | Fenster „Geräte & Freigaben“, Tab 9 „Bildschirm“ | `N/app/core/share_pages_ui.rs` (`TAB_SCREEN`), `N/app/core/share_screen_tab_ui.rs:71-148` |
+| CLI (Betrachter) | `se screen view GERÄT [--source QUELLE] [--control] [--fullscreen] [--json]`, `se screen grid [--room RAUM] [--json]`: starten das Betrachterfenster der Desktop-App losgelöst und geben `launched\t<pid>` bzw. `{"launched":true,"pid":<n>}` aus; ohne Desktop-App neben `se` endet der Befehl mit „Desktop-App nicht installiert“ (Exit 1) | `N/cli/screen/view.rs` |
+| Betrachter | Fenster `smart_explorer --screen-view <ziel-json>` (ein Gerät) und `--screen-grid [--room <id>]` (Gruppenansicht); beide Ansichten wechseln im selben Fenster | `N/app/core/screen_launch.rs` (Start, `arm_window`, `close_requested`), `screen_viewer_app.rs`, `screen_viewer_view.rs`, `screen_tile_grid.rs`; Abschnitt 8 |
+| Desktop | Fenster „Geräte & Freigaben“, Tab 9 „Bildschirm“ (Knopf „Alle Geräte“), Geräteseite (Knöpfe „Bildschirm öffnen“, „Bildschirm steuern“), Raumseite (Knopf „Bildschirme des Raums“) | `N/app/core/share_pages_ui.rs` (`TAB_SCREEN`), `N/app/core/share_screen_tab_ui.rs:71-148` |
 | Anzeigefenster | `smart_explorer --screen-indicator`, immer im Vordergrund, solange eine Sitzung Bildschirminhalt zeigt | `N/app/core/screen_indicator_ui.rs:26-35`; Start durch den Host `N/screen/os/shared/indicator.rs:82` |
 | IPC | `IpcRequest::Screen` mit `ScreenIpcRequest::{Probe, Stream, Bench, HostSessions, HostStop, HostWatch}` | `N/daemon/os/shared/ipc_protocol_screen.rs:64-87`, Antworten ab `:108`; Host `N/daemon/os/shared/screen_ipc.rs:78-118`; Client `N/daemon/os/shared/screen_ipc_client.rs` |
 | MCP | Werkzeug `screen` (Aktionen `devices`, `probe`, `windows`, `snapshot`; nur lesend), daneben `se` für jeden CLI-Befehl | `N/cli/mcp/screen_tool.rs`, `N/cli/mcp/server.rs`; Eintrag im Katalog trägt R6 ein (`N/cli/mcp/catalog.rs`) |
@@ -117,7 +119,17 @@ Folgt mit SCR-M6. Stand SCR-M2: `INPUT` wirkt nur in der Sitzung, die steuert (`
 
 ## 8. Betrachter und Gruppenansicht
 
-Folgt mit SCR-M7 und SCR-M9. Stand SCR-M2: Der Worker kann einen Bildstrom für ein anderes Programm durchreichen (`ScreenIpcRequest::Stream`, `N/daemon/os/shared/screen_ipc.rs:241`); der Client dafür (`screen_stream` in `N/daemon/os/shared/screen_ipc_client.rs`) ist vorbereitet und noch ohne Aufrufer. Ein Betrachterfenster gibt es noch nicht. Der Modus `preview` für Kachelvorschauen besteht im Protokoll (C6).
+Stand SCR-M7 (U25), Desktop (Windows und Linux). Der Betrachter ist ein eigener Prozess der Desktop-App: `smart_explorer --screen-view '{"relation","relation_id","device_id","source","control"}'` (Vertrag V5; optional `"fullscreen":true`, das `se screen view --fullscreen` setzt) und `smart_explorer --screen-grid [--room <lokale Raumprofil-ID>]`. Die Gerätekennung eines Direktgeräts muss die aktuelle `remote_device_id` des Kontakts sein; hat sie sich geändert, öffnet der Betrachter nichts und zeigt „Das Gerät hat sich geändert. Bitte die Verbindung zum Gerät prüfen.“
+
+**Ansicht.** Werkzeugleiste: „Gerät:“ (alle Direkt- und Raumgeräte), „Alle Geräte“ (zur Gruppenansicht), „Quelle:“ („Ganzer Bildschirm“, jeder Monitor, jedes Fenster aus der Fensterliste des Geräts; unter Wayland steht dort „Das Fenster wählt der Nutzer am Gerät im Systemdialog.“), „Steuern“ (nur wenn das Gerät Steuern nicht ausgeschaltet hat und Eingaben annimmt; ist ein anderes Gerät der Steuernde, steht dort „Gesteuert von …“), „Einpassen“/„1:1“, „Vollbild“ (F11), „Schärfe vor Flüssigkeit“, „Verlustfrei“, „Niedrigste Latenz (Bildrisse möglich)“, „Statistik“ (Strg+Umschalt+S), das Menü „Tasten“ (nur Tasten, die das Gerät anbietet: Windows-Taste, Menütaste, Druck, Pause, Rollen, Feststelltaste, NumLock, Wiedergabe/Pause, Lauter, Leiser, Stumm; bei einem Android-Gerät auch Zurück, Start, Übersicht, Benachrichtigungen, Schnelleinstellungen, Sperren, Ausschalten-Dialog). Strg+Umschalt+K schaltet „Steuern“. Eine Statuszeile nennt den Zustand der Sitzung auf Deutsch (`N/app/core/screen_texts.rs`) und bietet nach einem Ende „Erneut verbinden“ und „Schließen“. Die Einstellungen stehen in `<App-Daten>/screen/viewer.json`; „Niedrigste Latenz“ wirkt erst beim nächsten Start des Betrachters (wgpu liest `present_mode` beim Öffnen der Fläche; Standard ist `AutoVsync` mit einem Bild Latenz, `Mailbox` wird nie gesetzt).
+
+**Darstellung.** Der Dekodierthread jeder Sitzung liest den Strom des Workers, dekodiert und legt nur das jüngste Bild in einen Platz; der GUI-Thread blockiert weder auf dem Dekodieren noch auf dem Socket (Eingaben gehen über eine Warteschlange und einen Sendethread). Mit wgpu geht die YUV-Ebene des Dekoders (NV12 oder I420) unverändert zur Grafikkarte und ein Shader rechnet in RGB um (±2 gegen die CPU-Umrechnung); ohne wgpu, bei einem Bild im Kachelcodec und in der Gruppenansicht wird BGRA als egui-Textur gezeichnet.
+
+**Eingabe.** Nur bei „Steuern“ an und Fenster im Fokus. Zeiger nur auf dem Bild (0–65535 über die Quelle), Rad in 1/120-Rasten, Tasten als HID-Verwendungen. Buchstaben, Ziffern und Satzzeichen ohne Strg/Alt gehen als `Text` (das Gerät bestimmt das Zeichen), mit Strg/Alt als Taste; eine IME-Eingabe geht als `Text` aus `Commit`. Beim Ausschalten von „Steuern“, bei Fokusverlust und beim Ende der Sitzung werden alle gedrückten Tasten, Knöpfe und Berührungen gelöst. Grenzen: nur die **linken** Modifikatoren (egui meldet keine rechten), AltGr-Zeichen unter Windows kommen von egui nicht als Text (Strg+Alt gilt als Tastenkombination), Nummernblocktasten kommen als Haupttasten an, F25–F35 haben keine Verwendung, keine Zwischenablage und kein Ton, Strg+Alt+Entf wird nicht angeboten.
+
+**Gruppenansicht.** Eine Kachel je Gerät (Direktgeräte, dann Räume mit Überschrift). Je Gerät eine Anfrage (`probe`): „Erlauben“ zeigt die Vorschau (lange Kante 320 Pixel, größere Kacheln fordern in Schritten von 160 Pixeln mehr), „Fragen“ zeigt „Ansehen anfragen“ ohne Bild, „Aus“ „Bildschirm nicht freigegeben“, ein Gerät ohne Bildschirmfreigabe „Keine Bildschirmfreigabe (ältere Version)“, ein nicht erreichbares „Offline“ (keine Verbindung). „Aktualisierung“ (0,5/1/2/5 s): das Gerät kennt nur ganze Bilder je Sekunde, 2 s und 5 s zeigt der Betrachter selbst, indem er nur jedes n-te Bild zeigt (alle werden dekodiert). Ein Klick auf eine Kachel mit „Erlauben“ stellt dieselbe Verbindung per `SET_MODE` auf das Vollbild; bei „Fragen“ oder für „Bildschirm steuern“ öffnet er eine neue Sitzung, bei der das Gerät fragt. Der Rückweg macht aus der Sitzung wieder die Vorschau ihrer Kachel (bei „Erlauben“) oder beendet sie. Es gibt keine feste Obergrenze der Kacheln; sagt ein Gerät `session_limit`, bleibt seine Kachel zu, bis sie angeklickt wird.
+
+**Geräte- und Raumseite.** Die Geräteseite eines Direktgeräts hat „Bildschirm öffnen“ und „Bildschirm steuern“ (aktiv, wenn die Gerätekennung bekannt ist und das Gerät den Zugriff angenommen hat; ob es seinen Bildschirm zeigt, sagt der Betrachter), die Raumseite „Bildschirme des Raums“, der Tab „Bildschirm“ „Alle Geräte“. Alle starten den Betrachter als eigenen Prozess (`N/app/core/screen_launch.rs`).
 
 ## 9. Android als Host
 
@@ -128,7 +140,8 @@ Folgt mit SCR-M8. Unter Android meldet `graphical_session()` immer „nein“ (`
 | Oberfläche | Fehlt | Grund |
 |---|---|---|
 | MCP | Antwort auf Rückfragen | gesperrt durch S1 (C7): eine Zustimmung gibt nur der Mensch am Gerät |
-| MCP | Live-Video, Eingabe | `screen` liefert nur Standbilder; ein laufender Bildstrom und Eingabe haben keinen Platz in einer Antwort von höchstens 10 000 Token |
+| MCP | Live-Video (Betrachter, Gruppenansicht) | MCP überträgt Werkzeugantworten, keine Videoströme; `screen` liefert Standbilder (`snapshot`) |
+| MCP | Eingabe über `screen` | Eingabe hat ein eigenes Werkzeug `screen_input` (U22) |
 | Windows | Aufnahme auf dem sicheren Desktop (UAC-Abfrage, Sperrbildschirm) | Windows sperrt sie für Benutzerprozesse; die Aufnahme pausiert mit `secure_desktop` |
 | Windows | Fenster vor Windows 10 1903 | Graphics Capture fehlt; nur Monitore über die DXGI-Duplikation, ohne Zeiger (`no_cursor_capture`) |
 | Windows | gelber Rahmen um das Aufgenommene | Graphics Capture zeichnet ihn (`capture_border`); dieses Paket schaltet ihn nicht ab (`IsBorderRequired` bleibt unverändert) |
@@ -139,7 +152,10 @@ Folgt mit SCR-M8. Unter Android meldet `graphical_session()` immer „nein“ (`
 | Linux | Steuern unter wlroots | folgt mit SCR-M6 (U22) |
 | Linux | Fensterwahl unter Wayland aus der Ferne | das Portal lässt nur den Nutzer am Gerät wählen |
 | Android | Bildschirmzeilen, Sitzungen, Tab | Android ist erst ab SCR-M8 Host |
-| Desktop | Betrachterfenster, Gruppenansicht | kommen mit SCR-M7 und SCR-M9 |
+| Desktop | rechte Modifikatoren, Zwischenablage, Ton | egui meldet nur `Modifiers` ohne Seite; Zwischenablage und Ton gehören nicht zu diesem Strang |
+| Desktop | AltGr-Zeichen unter Windows | egui-winit liefert unter Strg keinen Text; AltGr gilt als Strg+Alt |
+| Desktop | Umlaufzeit im Statistikfeld | der Worker meldet nur den Uhrversatz; das Feld zeigt „–“ |
+| Android | Betrachter, Gruppenansicht | folgen mit SCR-M9 (U28) |
 | CLI | Rückfragen beantworten unter `se screen` | Rückfragen beantworten die Oberflächen von S1 für alle Rechte gemeinsam |
 
 ## 11. Offene Punkte
