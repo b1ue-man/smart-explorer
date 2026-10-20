@@ -142,7 +142,9 @@ pub(super) fn run(args: SyncArgs) -> Result<i32, String> {
             refuse_while_running(&existing)?;
             let mut editor = JobEditor::from_job(&existing);
             args.options.apply(&mut editor)?;
-            let job = editor.build_sync_job(Some(&existing))?;
+            let job = editor
+                .build_sync_job(Some(&existing))
+                .map_err(|error| fixed_field_error(&existing, error))?;
             save(&job)?;
             print_saved("Saved sync setup", &job, args.json)
         }
@@ -171,11 +173,7 @@ fn list(json: bool) -> Result<i32, String> {
             .iter()
             .map(|job| output::job_value(job, states.get(&job.id), now))
             .collect();
-        rows.extend(
-            report.broken.iter().map(
-                |broken| serde_json::json!({ "id": broken.id, "broken_config": broken.error }),
-            ),
-        );
+        rows.extend(report.broken.iter().map(output::broken_value));
         println!("{}", pretty(&serde_json::Value::Array(rows))?);
         return Ok(0);
     }
@@ -184,9 +182,14 @@ fn list(json: bool) -> Result<i32, String> {
     }
     for broken in &report.broken {
         println!(
-            "{}\tbroken\t{}",
+            "{}\tbroken\t{}{}",
             broken.id,
-            broken.error.replace(['\r', '\n'], " ")
+            broken.error.replace(['\r', '\n'], " "),
+            if output::is_vault_broken(broken) {
+                "\tvault"
+            } else {
+                ""
+            }
         );
     }
     if report.jobs.is_empty() && report.broken.is_empty() {
@@ -286,6 +289,16 @@ fn refuse_while_running(job: &SyncJob) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// A vault job keeps the values the vault plan fixes (C5.6); the editor's
+/// own check names the rule, this puts the reason first.
+fn fixed_field_error(existing: &SyncJob, error: String) -> String {
+    if existing.is_vault() && error.contains("Tresor-Job") {
+        format!("Dieses Feld ist bei Tresor-Jobs fest. {error}")
+    } else {
+        error
+    }
 }
 
 fn find_job(selector: &str) -> Result<SyncJob, String> {

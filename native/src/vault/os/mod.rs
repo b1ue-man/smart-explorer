@@ -31,11 +31,36 @@ mod backend_nodes;
 mod backend_rename;
 #[path = "shared/backend_write.rs"]
 mod backend_write;
+// U26 (VLT-M8): the comparison mode of vault sync jobs and „Tresor prüfen“.
+#[path = "shared/compare.rs"]
+mod compare;
+#[path = "shared/compare_actions.rs"]
+mod compare_actions;
+#[path = "shared/compare_cache.rs"]
+mod compare_cache;
+#[path = "shared/compare_engine.rs"]
+mod compare_engine;
+#[path = "shared/compare_files.rs"]
+mod compare_files;
+#[path = "shared/compare_folders.rs"]
+mod compare_folders;
+#[path = "shared/compare_items.rs"]
+mod compare_items;
+#[path = "shared/compare_keep_both.rs"]
+mod compare_keep_both;
+#[path = "shared/compare_merge.rs"]
+mod compare_merge;
 #[path = "shared/dir_cache.rs"]
 mod dir_cache;
+#[path = "shared/dir_map.rs"]
+mod dir_map;
 // U20 (VLT-M6, VLT-M7): memory spool, places, replicas and vault sync jobs.
 #[path = "shared/ephemeral_spool.rs"]
 mod ephemeral_spool;
+#[path = "shared/health.rs"]
+mod health;
+#[path = "shared/health_fixes.rs"]
+mod health_fixes;
 #[path = "shared/journal_sealer.rs"]
 mod journal_sealer;
 #[path = "shared/local_store.rs"]
@@ -82,7 +107,14 @@ mod platform;
 mod thumbnails;
 
 pub(crate) use backend::VaultBackend;
+pub(crate) use compare::{compare_job, compare_job_in, compare_snapshot, find_vault_job};
+pub(crate) use compare_actions::{
+    resolve_item, resolve_item_in, ActionEnv, ResolveReport, ResolveRequest,
+};
+pub(crate) use compare_cache::{is_stale as is_compare_stale, stale as compare_stale};
+pub(crate) use compare_merge::{compare_text_job, merge_apply_item, MERGE_MAX_BYTES};
 pub(crate) use ephemeral_spool::EphemeralSpool;
+pub(crate) use health::{check_site, check_site_in, CheckResult};
 pub(crate) use journal_sealer::{sealed_mount_storage, JournalPathSealer};
 pub(crate) use local_store::{
     expand_dir_sort, expand_places, note_vault_backend, publish_vault_mount, seal_log_fields,
@@ -174,6 +206,7 @@ pub(crate) fn platform_lock_defaults() -> LockSettings {
 #[cfg(test)]
 #[path = "shared/backend_dirs_tests.rs"]
 mod backend_dirs_tests;
+// U26 (VLT-M8): the comparison mode, its actions and the check.
 #[cfg(test)]
 #[path = "shared/backend_test_support.rs"]
 mod backend_test_support;
@@ -183,6 +216,24 @@ mod backend_tests;
 #[cfg(test)]
 #[path = "shared/backend_write_tests.rs"]
 mod backend_write_tests;
+#[cfg(test)]
+#[path = "shared/compare_actions_tests.rs"]
+mod compare_actions_tests;
+#[cfg(test)]
+#[path = "shared/compare_folders_tests.rs"]
+mod compare_folders_tests;
+#[cfg(test)]
+#[path = "shared/compare_test_support.rs"]
+mod compare_test_support;
+#[cfg(test)]
+#[path = "shared/compare_tests.rs"]
+mod compare_tests;
+#[cfg(test)]
+#[path = "shared/dir_map_tests.rs"]
+mod dir_map_tests;
+#[cfg(test)]
+#[path = "shared/health_tests.rs"]
+mod health_tests;
 #[cfg(test)]
 #[path = "shared/interop_tests.rs"]
 mod interop_tests;

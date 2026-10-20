@@ -55,11 +55,11 @@ pub(crate) struct VaultRunOutcome {
 }
 
 /// Both checked sides of a vault job.
-struct Sides {
-    a: (BackendHandle, String),
-    b: (BackendHandle, String),
-    records: [SiteRecord; 2],
-    seeding: Option<PairSide>,
+pub(super) struct Sides {
+    pub(super) a: (BackendHandle, String),
+    pub(super) b: (BackendHandle, String),
+    pub(super) records: [SiteRecord; 2],
+    pub(super) seeding: Option<PairSide>,
 }
 
 fn unavailable(stage: &str, reason: String) -> VaultRunOutcome {
@@ -117,7 +117,7 @@ fn observe(inner: &dyn Backend, root: &str, record: &SiteRecord) -> Result<Obser
 }
 
 /// Resolves and checks both sides (R7, R1, seeding).
-fn prepare(
+pub(super) fn prepare(
     store: &RegistryStore,
     resolve: ResolveLocation<'_>,
     job: &SyncJob,

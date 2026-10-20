@@ -13,6 +13,12 @@ use std::time::{Duration, Instant};
 use crate::cryptomator::{ContentCryptor, FormatError, Masterkey, MasterkeyCell, VaultConfig};
 
 pub(crate) mod capabilities;
+// U26 (VLT-M8): the comparison mode, conflict names, findings of the check
+// and the display texts of the structured codes.
+pub(crate) mod compare_model;
+pub(crate) mod conflict_names;
+pub(crate) mod error_texts;
+pub(crate) mod health_model;
 // U20 (VLT-M6, VLT-M7): the plaintext boundary and the vault sync rules.
 pub(crate) mod klartext_policy;
 pub(crate) mod listing;
