@@ -81,13 +81,18 @@ impl App {
                         theme::muted(ui),
                         "Noch keine Setups. „＋ Neues Setup“ anlegen oder im Split-View zwei Ordner per Rechtsklick verbinden.",
                     );
+                    for text in super::vault_modules::vault_sync_editor_ui::broken_lines() {
+                        ui.colored_label(theme::warning(ui), text);
+                    }
                     return;
                 }
                 egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                     for j in &jobs {
+                        // Vault jobs (U29-9): „(Tresor)“, their own runner and comparison.
+                        let vault_row = super::vault_modules::vault_models_sync::job_row(j);
                         ui.group(|ui| {
                             ui.horizontal_wrapped(|ui| {
-                                ui.label(RichText::new(if j.name.is_empty() { "(ohne Name)" } else { &j.name }).strong());
+                                ui.label(RichText::new(&vault_row.title).strong());
                                 if !j.enabled {
                                     ui.colored_label(theme::muted(ui), "⏸ deaktiviert");
                                 }
@@ -106,14 +111,18 @@ impl App {
                                     if ui.small_button(enable_label).on_hover_text("Zeitplan aktivieren/deaktivieren").clicked() {
                                         toggle_id = Some(j.id.clone());
                                     }
-                                    if ui.small_button("Versionen").clicked() { versions_id = Some(j.id.clone()); }
+                                    if vault_row.has_versions && ui.small_button("Versionen").clicked() { versions_id = Some(j.id.clone()); }
                                     if ui.small_button("📜 Protokoll").on_hover_text("Live-Protokoll dieses Syncs: jeder gelesene Ordner, jeder Vergleich, jede Aktion").clicked() {
                                         let name = if j.name.trim().is_empty() { j.id.clone() } else { j.name.clone() };
                                         super::sync_job_log_ui::open(ctx, &j.id, &name);
                                     }
+                                    let run_hint = match vault_row.run {
+                                        super::vault_modules::vault_models_sync::RunKind::Vault => "Diesen Tresor-Sync jetzt ausführen (Konflikte bleiben offen, der Vergleich löst sie)",
+                                        super::vault_modules::vault_models_sync::RunKind::General => "Diesen Sync jetzt ausführen",
+                                    };
                                     if !self.bisync_running
                                         && states.get(&j.id).is_some_and(|state| state.blocked.is_none() && state.load_error.is_none() && state.running_now(now_secs_i64()).is_none())
-                                        && ui.button("▶ Jetzt").on_hover_text("Diesen Sync jetzt ausführen").clicked()
+                                        && ui.button("▶ Jetzt").on_hover_text(run_hint).clicked()
                                     {
                                         run_id = Some(j.id.clone());
                                     }
@@ -124,11 +133,12 @@ impl App {
                                     }
                                 });
                             });
-                            ui.label(
-                                RichText::new(format!("{}  →  {}", j.source, j.target))
-                                    .small()
-                                    .color(theme::muted(ui)),
-                            );
+                            let sides = if vault_row.vault_editor {
+                                super::vault_modules::vault_sync_editor_ui::job_sides_text(j)
+                            } else {
+                                format!("{}  →  {}", j.source, j.target)
+                            };
+                            ui.label(RichText::new(sides).small().color(theme::muted(ui)));
                             let sched = match j.trigger {
                                 crate::syncjobs::Trigger::Manual => "manuell".to_string(),
                                 crate::syncjobs::Trigger::Interval => {
@@ -173,6 +183,10 @@ impl App {
                             }
 
                         });
+                    }
+                    // Vault jobs that cannot be read are listed, not hidden.
+                    for text in super::vault_modules::vault_sync_editor_ui::broken_lines() {
+                        ui.colored_label(theme::warning(ui), text);
                     }
                 });
             });
@@ -230,7 +244,14 @@ impl App {
         }
         if let Some(id) = compare_id {
             if let Some(j) = self.sync_jobs.iter().find(|j| j.id == id).cloned() {
-                self.launch_preview(&j);
+                match super::vault_modules::vault_models_sync::job_row(&j).compare {
+                    super::vault_modules::vault_models_sync::CompareKind::VaultCompare => {
+                        super::vault_modules::vault_compare_ui::open(ctx, &j.id, &j.name);
+                    }
+                    super::vault_modules::vault_models_sync::CompareKind::Preview => {
+                        self.launch_preview(&j);
+                    }
+                }
             }
         }
     }

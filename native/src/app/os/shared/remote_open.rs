@@ -96,16 +96,37 @@ impl App {
                 return;
             };
             let location = format!("{prefix}{path}");
-            if self.open_vault_file(&location, mode)
+            let copy = crate::app::vault_open::OpenCopy::Ready {
+                backend: backend.clone(),
+                path: path.clone(),
+                name: name.clone(),
+                id: id.clone(),
+            };
+            // `Pending`: the drive is being mounted; the answer comes later
+            // (`drain_vault_mount`) and continues with the copy only if the
+            // user agrees to one.
+            if self.open_vault_file(&location, mode, &copy)
                 != crate::app::vault_open::VaultFileOpen::CopyAgreed
             {
                 return;
             }
         }
+        self.open_remote_file_copy(backend, path, name, id, mode);
+    }
 
-        // Download to a local temp copy, watch it for saves, and launch the OS
-        // default editor. `download_name` gives Google-Docs files the right
-        // extension (.docx/…) so the editor opens them correctly.
+    /// Download to a local temp copy, watch it for saves, and launch the OS
+    /// default editor (the known remote edit). `download_name` gives
+    /// Google-Docs files the right extension (.docx/…) so the editor opens
+    /// them correctly. A vault file reaches this only after the user agreed
+    /// to a cleartext copy (vault plan C7.2, K05 (1)).
+    pub(in crate::app) fn open_remote_file_copy(
+        &mut self,
+        backend: crate::vfs::BackendHandle,
+        path: String,
+        name: String,
+        id: Option<String>,
+        mode: OpenMode,
+    ) {
         let local_name = backend.download_name(&path, &name);
         if self.remote_edits.len() >= 50 {
             self.error_msg = Some(
