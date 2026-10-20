@@ -100,6 +100,7 @@ pub(crate) fn ui(ui: &mut egui::Ui) {
         .small()
         .color(theme::muted(ui)),
     );
+    open_all_devices(ui);
     if let Some(error) = &error {
         ui.colored_label(theme::danger(ui), format!("Nicht lesbar: {error}"));
     }
@@ -146,6 +147,22 @@ pub(crate) fn ui(ui: &mut egui::Ui) {
     }
     if sessions.len() > 1 && ui.button("Alle beenden").clicked() {
         stop(None);
+    }
+}
+
+/// „Alle Geräte“ (SCR-M7): the group view of every device in its own window.
+fn open_all_devices(ui: &mut egui::Ui) {
+    let id = egui::Id::new("screen_tab_launch_error");
+    let button = crate::app::screen_launch::all_devices_button();
+    if crate::app::screen_launch::show_button(ui, &button) {
+        let result = crate::app::screen_launch::open_grid(None);
+        ui.data_mut(|data| match result {
+            Ok(()) => data.remove::<String>(id),
+            Err(error) => data.insert_temp(id, error),
+        });
+    }
+    if let Some(error) = ui.data(|data| data.get_temp::<String>(id)) {
+        ui.colored_label(theme::danger(ui), error);
     }
 }
 

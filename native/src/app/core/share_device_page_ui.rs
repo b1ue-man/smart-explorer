@@ -177,6 +177,7 @@ fn contact_page(app: &mut App, ui: &mut egui::Ui, contact_id: &str) {
         return;
     }
     connection_section(app, ui, &contact);
+    screen_section(app, ui, &contact);
     pages_ui::heading(ui, "MEINE FREIGABEN FUER DIESES GERAET");
     let mut share_back = contact.relation.share_back;
     if ui
@@ -304,6 +305,28 @@ fn connection_section(app: &mut App, ui: &mut egui::Ui, contact: &crate::share::
         app.open_share_target(crate::share::PeerOpenTarget::Direct {
             contact_id: contact.id.clone(),
         });
+    }
+}
+
+/// „Bildschirm öffnen“ and „Bildschirm steuern“ (SCR-M7): the viewer window.
+fn screen_section(app: &mut App, ui: &mut egui::Ui, contact: &crate::share::DirectContact) {
+    pages_ui::heading(ui, "BILDSCHIRM");
+    let accepted = contact.access_state == crate::share::DirectAccessState::Accepted;
+    let device_id = contact.remote_device_id.as_deref();
+    let mut launch = None;
+    ui.horizontal_wrapped(|ui| {
+        for button in crate::app::screen_launch::device_buttons(device_id, accepted) {
+            if crate::app::screen_launch::show_button(ui, &button) {
+                launch = Some(button.control);
+            }
+        }
+    });
+    if let Some(control) = launch {
+        let mut target = crate::app::screen_target::ScreenTarget::direct(&contact.id, device_id);
+        target.control = control;
+        if let Err(error) = crate::app::screen_launch::open_view(&target) {
+            app.error_msg = Some(error);
+        }
     }
 }
 

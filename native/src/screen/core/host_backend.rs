@@ -11,7 +11,7 @@ use std::io;
 
 use super::input_model::{InputCapabilities, InputEvent};
 use super::negotiate::{CodecChoice, CodecOffer};
-use super::pixel_convert::{BgraImage, FrameSize};
+use super::pixel_convert::{BgraImage, FrameSize, YuvMatrix};
 use super::session_state::SessionState;
 use super::tiles_codec::{TileDecoder, TileEncoder, MAX_TILES_RECORD_BYTES};
 use super::window_list::{MonitorInfo, SourceId, WindowList};
@@ -66,12 +66,45 @@ pub(crate) trait ScreenEncoder: Send {
     ) -> io::Result<EncodedFrame>;
 }
 
+/// How the chroma planes of a decoded picture are stored.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Chroma {
+    /// One plane with interleaved U and V samples (`YuvPicture::uv`).
+    Nv12,
+    /// Separate planes of the same row pitch (`YuvPicture::uv_stride`);
+    /// `YuvPicture::uv` stays empty.
+    I420 { u: Vec<u8>, v: Vec<u8> },
+}
+
+/// The planes of a decoded picture in limited range, as the decoder made
+/// them (SCR-M7, decision C4: the viewer converts them to RGB on the GPU).
+/// Rows are `y_stride` and `uv_stride` bytes apart; the picture's size is
+/// the one of its picture stream.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct YuvPicture {
+    pub y: Vec<u8>,
+    pub y_stride: usize,
+    pub uv: Vec<u8>,
+    pub uv_stride: usize,
+    pub chroma: Chroma,
+    pub matrix: YuvMatrix,
+}
+
 pub(crate) trait ScreenDecoder: Send {
     fn name(&self) -> String;
     /// Applies one record; `true` when it completed a picture.
     fn decode(&mut self, record: &FrameRecord) -> io::Result<bool>;
     /// The last completed picture.
     fn picture(&self) -> &BgraImage;
+    /// Asks to keep the decoded planes (`yuv_picture`) and to skip the
+    /// conversion to BGRA; `picture()` then stays the last converted one
+    /// (black if there never was one) and is not to be read. Only the H.264
+    /// decoders honour it; the tile decoder always makes BGRA.
+    fn prefer_yuv(&mut self, _on: bool) {}
+    /// The planes of the last completed picture after `prefer_yuv(true)`.
+    fn yuv_picture(&self) -> Option<YuvPicture> {
+        None
+    }
 }
 
 /// Why a source cannot be opened; the key is the reason of `no_display`.
