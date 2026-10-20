@@ -29,8 +29,6 @@ use super::exec_account_service::{lock, Shared};
 use super::exec_account_spawn::Session;
 use super::exec_handles::OwnedHandle;
 
-/// One job per connection; a few more leave room for a worker's retries.
-const MAX_SESSIONS: usize = 8;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Serves the connected pipe until the worker closes it, then ends every
@@ -168,10 +166,6 @@ impl Connection {
     ) -> HelperReply {
         if !config.allows(&self.caller, account) {
             return self.refused(account, not_allowed(account, &self.caller));
-        }
-        if self.sessions.len() >= MAX_SESSIONS {
-            let detail = format!("this connection has {MAX_SESSIONS} sessions already");
-            return self.refused(account, (HelperErrorCode::StartFailed, detail));
         }
         let checked = match check_account(account) {
             Ok(checked) => checked,

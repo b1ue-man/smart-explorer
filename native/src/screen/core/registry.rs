@@ -20,12 +20,6 @@ use super::wire_hello::SessionMode;
 use crate::share::access_grant::Capability;
 use crate::share::relation_proof::ProvenPrincipal;
 
-/// Sessions this host runs at once: each costs a capture and an encoder.
-pub(crate) const MAX_SESSIONS: usize = 8;
-/// Sessions of one device at once: a full view plus previews of its group
-/// views.
-pub(crate) const MAX_DEVICE_SESSIONS: usize = 4;
-
 /// One session as every surface shows it (`se screen sessions --json`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct SessionView {
@@ -64,10 +58,14 @@ pub(crate) struct NewSession {
     pub screen_content: bool,
 }
 
-/// Why a session could not be registered.
+/// Why a session could not be registered. Since R15c a host runs any
+/// number of sessions, of one device or of all (no limit without a
+/// technical cause); the variant stays only because `host_server.rs` still
+/// names it, and `session_limit` remains a code older hosts send.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RegistryRefusal {
-    /// `MAX_SESSIONS` or `MAX_DEVICE_SESSIONS` reached.
+    /// Never produced since R15c.
+    #[allow(dead_code)]
     SessionLimit,
 }
 
@@ -152,15 +150,6 @@ impl ScreenRegistry {
         new: NewSession,
     ) -> Result<SessionHandle, RegistryRefusal> {
         let mut inner = self.lock();
-        let device = |entry: &Entry| entry.view.device_id == new.principal.device_id;
-        let of_device = inner
-            .sessions
-            .values()
-            .filter(|entry| device(entry))
-            .count();
-        if inner.sessions.len() >= MAX_SESSIONS || of_device >= MAX_DEVICE_SESSIONS {
-            return Err(RegistryRefusal::SessionLimit);
-        }
         inner.next_id = inner.next_id.wrapping_add(1);
         let id = inner.next_id;
         let room = new.principal.relation_kind == "room";

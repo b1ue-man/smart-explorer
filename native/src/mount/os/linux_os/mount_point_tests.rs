@@ -30,7 +30,6 @@ fn mount_point_folder_names_and_default_places() {
     let taken = [root.join("prod"), root.join("prod (2)")];
     let third = default_location(root, "prod", |path| taken.iter().any(|t| t == path)).unwrap();
     assert_eq!(third, root.join("prod (3)"));
-    assert!(default_location(root, "prod", |_| true).is_err());
     assert!(vaults_root_in(None).is_err());
     assert!(vaults_root_in(Some(PathBuf::from("relative"))).is_err());
     assert_eq!(
@@ -122,4 +121,29 @@ broken line without separator
         fs::read(connections.path().join("53").join("abort")).unwrap(),
         b"1"
     );
+}
+
+/// R15c: past the former 999 suffixes the search goes on to a free name;
+/// only a real error (a root that is a file) ends it.
+#[test]
+fn drive_task_mount_point_name_search_has_no_limit() {
+    let root = Path::new("/home/u/SmartExplorer");
+    let taken = |path: &Path| {
+        let name = path.file_name().unwrap().to_string_lossy();
+        name == "prod"
+            || name
+                .strip_prefix("prod (")
+                .and_then(|rest| rest.strip_suffix(')'))
+                .and_then(|number| number.parse::<u32>().ok())
+                .is_some_and(|number| number <= 1500)
+    };
+    assert_eq!(
+        default_location(root, "prod", taken).unwrap(),
+        root.join("prod (1501)")
+    );
+    let base = tempfile::tempdir().unwrap();
+    let file = base.path().join("not-a-folder");
+    fs::write(&file, b"x").unwrap();
+    let error = default_location(&file, "prod", |_| true).unwrap_err();
+    assert_ne!(error.kind(), std::io::ErrorKind::NotFound);
 }

@@ -26,8 +26,6 @@ use crate::screen::os::bridge_channels::{self as channels, Phase, Prereqs};
 
 /// Longest wait of one `screenControl`.
 const MAX_CONTROL_WAIT: Duration = Duration::from_secs(5);
-/// Most running apps the app may report.
-const MAX_APPS: usize = 256;
 /// Longest reason key of `screen.hostEnded`.
 const MAX_REASON: usize = 64;
 
@@ -106,7 +104,6 @@ fn prereqs(args: &Value) -> Result<Value, ApiError> {
     };
     let apps = args.get("apps").and_then(Value::as_array).map(|list| {
         list.iter()
-            .take(MAX_APPS)
             .filter_map(|app| {
                 let package = app.get("package").and_then(Value::as_str)?;
                 let label = app.get("label").and_then(Value::as_str).unwrap_or(package);
