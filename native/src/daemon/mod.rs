@@ -92,6 +92,10 @@ mod ipc_storage;
 mod ipc_vault;
 #[path = "os/shared/ipc_vault_client.rs"]
 mod ipc_vault_client;
+#[path = "os/shared/ipc_vault_compare.rs"]
+mod ipc_vault_compare;
+#[path = "os/shared/ipc_vault_compare_client.rs"]
+mod ipc_vault_compare_client;
 #[path = "os/shared/job.rs"]
 mod job;
 #[path = "os/shared/job_supervisor.rs"]
@@ -245,6 +249,8 @@ pub(crate) use ipc_client::vault_status_peek;
 pub use ipc_client::{drive_devices_peek, drive_devices_watch_peek, share_worker_peek};
 pub(crate) use ipc_protocol::screen::StreamRequest;
 pub(crate) use ipc_protocol::ExecNoticeView;
+#[allow(unused_imports)] // U26 (CLI), U29 (GUI), U31 (Android)
+pub(crate) use ipc_protocol::{CompareHead, CompareItemWire, CompareSideWire, ResolveFailure};
 #[allow(unused_imports)] // U26 (CLI/MCP), U29 (GUI), se Desktop
 pub(crate) use ipc_protocol::{
     SealPurposeWire, SecretText, VaultEventView, VaultIpcReply, VaultIpcRequest, VaultSiteView,
@@ -256,6 +262,11 @@ pub(crate) use ipc_vault_client::{lock_vaults, open_vault_backend};
 pub(crate) use ipc_vault_client::{
     seal_vault_items, unlock_vault, unlock_vault_saved, unseal_vault_items, vault_status,
     VaultIpcError, WorkerUnlocked,
+};
+#[allow(unused_imports)] // U26 (CLI), U29 (GUI), U31 (Android)
+pub(crate) use ipc_vault_compare_client::{
+    vault_check, vault_compare, vault_compare_text, vault_merge_apply, vault_resolve,
+    CompareViewFull, ResolveResult,
 };
 pub use live::{
     active_job, cancel_catch_up, catch_up_status, drain_share_events_in_process, last_catch_up,

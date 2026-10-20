@@ -49,6 +49,7 @@ mod tree_preflight_tests;
 mod tree_remove;
 mod tree_spool;
 mod update;
+mod vault;
 
 use clap::{Args, CommandFactory, Parser, Subcommand};
 use std::io::{self, Write};
@@ -85,6 +86,11 @@ Examples:
   se drive mount @prod:/srv --letter M
   se drive mount @prod:/srv --mount-point ~/SmartExplorer/prod
   se drive set <ID> --auto-remount on
+  se drive devices status --json
+  se vault list --json
+  se vault unlock <SITE> --password-stdin
+  se vault compare <JOB> --json
+  se screen windows <DEVICE> --json
   source <(se completions bash)";
 
 #[derive(Parser)]
@@ -124,6 +130,8 @@ enum Command {
     Desktop(desktop::DesktopArgs),
     #[command(about = "Screen of paired devices: devices, probe, measurement, sessions")]
     Screen(screen::ScreenArgs),
+    #[command(about = "Cryptomator vaults: list, unlock, lock, create, sync, compare")]
+    Vault(vault::VaultArgs),
     #[command(about = "Generate live shell completion setup")]
     Completions(completions::CompletionsArgs),
     #[command(about = "Check the update feed and install a newer se (and app)")]
@@ -274,6 +282,7 @@ fn run_inner(cli: Cli) -> Result<i32, String> {
         Command::Integration(args) => integration::run(args),
         Command::Desktop(args) => desktop::run(args),
         Command::Screen(args) => screen::run(args),
+        Command::Vault(args) => vault::run(args),
         Command::Completions(args) => completions::run(args),
         Command::Update(args) => update::run(args),
         Command::Mcp(args) => mcp::run(args),

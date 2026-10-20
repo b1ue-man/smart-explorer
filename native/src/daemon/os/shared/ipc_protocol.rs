@@ -22,8 +22,8 @@ pub(crate) use self::access::{AccessIpcReply, AccessIpcRequest, AccountChoice, E
 #[path = "ipc_protocol_vault.rs"]
 mod vault;
 pub(crate) use self::vault::{
-    SealPurposeWire, SecretText, VaultEventView, VaultIpcReply, VaultIpcRequest, VaultSiteView,
-    VaultStatusView,
+    CompareHead, CompareItemWire, CompareSideWire, ResolveFailure, SealPurposeWire, SecretText,
+    VaultEventView, VaultIpcReply, VaultIpcRequest, VaultSiteView, VaultStatusView,
 };
 #[path = "ipc_protocol_screen.rs"]
 pub(super) mod screen;
