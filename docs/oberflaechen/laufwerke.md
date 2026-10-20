@@ -10,8 +10,8 @@ Abkürzungen: `N/` = `native/src/`, `A/` = `android/app/src/main/java/app/smarte
 |---|---|---|
 | CLI | `se drive runtime`, `install-runtime`, `mount`, `list`, `unmount`, `retry`, `set`, `open` (DRV-M5), `devices status\|watch\|on\|off` (DRV-M6) | `N/cli/drive.rs`, Optionen `N/cli/drive_options.rs`, `N/cli/drive_set.rs`, `N/cli/drive_open.rs`, `N/cli/drive_devices.rs`, Ausgabe `N/cli/drive_print.rs` |
 | Desktop | Fenster „Remote als Laufwerk“ und „Smart-Explorer-Laufwerke“ (egui); Abschnitt „Verbundene Geräte als Ordner“ in Einstellungen → Integration (DRV-M6) | `N/app/core/mount_ui_draft.rs:130-224`, `N/app/core/mount_ui_location.rs`, `N/app/core/mount_ui.rs`, `N/app/core/mount_ui_open.rs`, `N/app/core/settings_devices_ui.rs` |
-| Android | keine Laufwerke; der Dokumentanbieter folgt mit DRV-M8 (Abschnitt 7) | – |
-| Bridge | – (DRV-M8: `docs.*`) | – |
+| Android | keine Laufwerke; Dokumentanbieter „Ordner für Apps bereitstellen“ (DRV-M8, Abschnitt 7): Einstellungen → „Ordner für Apps bereitstellen“ | `A/system/documents/SeDocumentsProvider.kt`, `A/ui/settings/DocumentsProviderSection.kt` |
+| Bridge | `docs.roots`, `docs.document`, `docs.children`, `docs.create`, `docs.rename`, `docs.delete`, `docs.settings.get`, `docs.settings.set`, `docs.pending`, `docs.retryPending`; Ereignis `docs.changed`; JNI `docOpen`, `docRead`, `docWrite`, `docSize`, `docFsync`, `docRelease` (DRV-M8) | `N/mobile/os/shared/domains/docs.rs`, `docs_io.rs`, `native/android-bridge/src/io.rs` |
 | IPC | Loopback-IPC GUI/CLI ↔ Hintergrunddienst: `StartMount`, `StopMount`, `ListMounts`, `RetryMount` (Bestand) und `Drive { token, req }` mit `DriveIpcRequest` (DRV-M3; DRV-M6: `DevicesStatus`, `DevicesEnable`, `DevicesDisable`, `DevicesWatch`, Antwort `IpcResponse::Devices`) | `N/daemon/os/shared/ipc_protocol.rs` (`IpcRequest`), `N/daemon/os/shared/ipc_protocol_drives.rs:28-36`; Bedienung `ipc_protocol_drives.rs:48-70` |
 | MCP | Werkzeug `se` führt jeden `se drive`-Befehl aus | `N/cli/mcp/catalog.rs` (Beispiel `["drive","mount","@prod:/srv","--letter","M"]`) |
 | Anmeldung | Anmeldeeintrag der Wiederherstellung `<Programm> --sync-daemon --drive-restore` | `N/daemon/os/shared/drive_autostart.rs`, `N/autostart/os/linux_os.rs:188-235`, `N/autostart/os/windows.rs:209-253` |
@@ -112,7 +112,19 @@ Stand DRV-M7 und VLT-M12 (U14), am Code nachgelesen, nicht gebaut.
 
 ## 7 Android-Dokumentanbieter
 
-Folgt mit DRV-M8 (U23): `docs.*`, Einstellungen „Ordner für Apps bereitstellen“.
+Stand U23 (DRV-M8), nicht gebaut und nicht ausgeführt.
+
+**Einschalten.** Einstellungen → „Ordner für Apps bereitstellen“: Hauptschalter „Für andere Apps bereitstellen“, darunter „Verbundene Geräte“, je gespeicherte Verbindung (SFTP, FTP, FTPS, WebDAV, SMB), „Google Drive“ (nur angemeldet) und je Tresor. Ab Werk ist nichts freigegeben. Der Hauptschalter schaltet die Komponente `SeDocumentsProvider` selbst ein oder aus (`COMPONENT_ENABLED_STATE_*`, im Manifest `android:enabled="false"`); ausgeschaltet kann keine andere App den Anbieter fragen. Ablage: `<AD>/docs-provider.json` (`{"provider","devices","connections":[Kontoschlüssel|"gdrive"],"vaults":[Site-ID]}`).
+
+**Roots** (Systemauswahl, App „Dateien“): „Smart Explorer – Geräte“ (`devices`), je freigegebene Verbindung (`conn:<Kontoschlüssel als Hex>`), „Google Drive“ (`gdrive`), je freigegebener **entsperrter** Tresor „<Bezeichnung> (Tresor)“ (`vault:<Site-ID>`). Dokument-IDs: Root-ID, `/`, Pfad unter dem Root; Geräte über ihren Schlüssel (`devices/direct~<Kontakt>/…`, `devices/room~<Raum>~<Gerät>/…`), daher bleiben erteilte URIs nach einer Umbenennung gültig. Flags: `FLAG_SUPPORTS_IS_CHILD` immer, `FLAG_SUPPORTS_CREATE` bei schreibbarem Root, `FLAG_LOCAL_ONLY` nur für Tresore im Speicher des Telefons (Annahme A10).
+
+**Rechte.** Nur das System (`MANAGE_DOCUMENTS`) bindet den Anbieter; andere Apps bekommen nur die URIs, die die Person auswählt. Jeder Aufruf prüft, ob der Root freigegeben ist; eine erratene ID eines anderen Roots ist „nicht gefunden“. Geschrieben wird nur, wo das Gerät es zulässt: Räume nur lesend, Kontakte nach der Freigabe dieses Telefons (Regel des Desktop-Gerätebaums), Verbindungen und Tresore nur bei sicheren Staged Writes des Backends. Ein Root, der seine Freigabe verliert, verliert sofort seine offenen Deskriptoren (`EACCES`) und seine Engine.
+
+**Tresore.** Ein Tresor-Root besteht nur, solange der Tresor in der App entsperrt ist. Der Anbieter ist Sperrteilnehmer: Er veröffentlicht vorher, was offen ist; ein ausdrückliches Sperren ohne „Änderungen verschlüsselt aufbewahren“ stoppt, wenn danach Änderungen offen blieben („<n> Änderungen aus anderen Apps“). Sonst enden alle Deskriptoren (`EACCES`), Engine und zwischengespeicherte Listen, und der Root verschwindet sofort (`notifyChange` der Roots). Inhalte stehen nur versiegelt im Spool (Spool-Schlüssel wie DRV-M7); große Dateien liest „r“ bereichsweise über `open_read_at`.
+
+**Ablauf.** Je Root eine Mount-Engine im App-Prozess (`<AD>/docs-cache/<docs-…>`, Cache-Lease, Posix-Namensregeln, `RangeReadPolicy::ReadOnlyHandles`). `docs.roots` braucht kein Netz. Eine kalte Liste antwortet mit `EXTRA_LOADING`, `docs.changed` folgt; ein Offline-Gerät antwortet mit `EXTRA_ERROR` „Gerät nicht erreichbar“. Öffnen: `r`, `w`, `wt`, `rw`, `rwt` („t“ kürzt), `wa`/`rwa` abgelehnt. Je Datei ein `HandlerThread`; `onGetSize` ohne Netz; `onFsync` meldet Fehler; `onRelease` blockiert nie: Hochladen im Hintergrund, dazu der WorkManager-Auftrag `DocsCommitWorker` (beschleunigt, `getForegroundInfo()` dataSync), der nach einem Prozessende `docs.retryPending` ausführt; scheitert es sechsmal, meldet eine Benachrichtigung „Hochladen fehlgeschlagen“, die Änderungen bleiben im Journal.
+
+**Grenzen** (auch im Einstellungsabschnitt): Apps, die nur Dateipfade kennen, sehen nichts; MediaStore indiziert Anbieterinhalte nicht (Annahme A11); kein Kürzen offener Dateien; zufälliges Schreiben lädt die ganze Datei neu; Hochladen erst nach dem Schließen; Offline-Fehler.
 
 ## 8 Laufzeit
 
@@ -134,7 +146,8 @@ Folgt mit DRV-M8 (U23): `docs.*`, Einstellungen „Ordner für Apps bereitstelle
 ## 10 Offene Punkte
 
 - Zum Kompilieren nötig, außerhalb von U06: neue `match`-Zweige für `MountStatus::MountedAt` in `N/app/core/mount_ui_helpers.rs` (`status_label`) und `N/daemon/os/shared/mount_manager_host.rs` (`host_transition_allowed`, `validate_host_status`), für `MountSource::Devices`/`Vault` in `N/daemon/os/shared/mount_source.rs` (`resolve`) und `N/app/core/analytics_mounts.rs` (`open`).
-- Linux-Einhängen, `--mount-point`, `mounted:<Pfad>` in der Praxis: DRV-M4 (U12). Android: DRV-M8 (U23).
+- Linux-Einhängen, `--mount-point`, `mounted:<Pfad>` in der Praxis: DRV-M4 (U12).
+- DRV-M8 (U23), nicht gebaut und nicht ausgeführt: Die R8-Registrierungen (`docs`-Module und Arm `"docs"` in `N/mobile/os/shared/domains/mod.rs`, Ausfuhr der `doc_*`-Funktionen in `N/mobile/mod.rs`, `mod io;` in `native/android-bridge/src/lib.rs`) stehen aus. Der Gerätebaum läuft auf Android mit einer Engine je Gerät über dessen ganzes Share-Backend, nicht über `DeviceTree`: `RootedBackend` ist im Dienst privat. Ein echtes Prozessende prüft die Emulatorstufe nicht (Instrumentierung läuft im App-Prozess); `drive_task_android_process_kill_retries_pending` prüft den Journalweg von `docs.retryPending`.
 - Tresor-Laufwerke (U14): die IPC-Registrierungen von R5 (`MountHostExt`, Sitzungstoken für `Vault::SpoolKey`) und die E2E-Prüfungen über FUSE und Dokany stehen aus.
 - Ende-zu-Ende mit echtem Dokany und FUSE (`drive_task_auto_remount_after_daemon_restart`) läuft nur in der Stapel-Suite (Stufen `windows-core: drive-cli`, `linux-root: drive-fuse`).
 - DRV-M5, DRV-M6 (U17), nicht gebaut und nicht ausgeführt: Die Registrierungen von R6 (`MountHostConfig.device_tree`, `IpcResponse::Devices`, der Arm `MountHostExt` in `ipc_host_ext.rs`, die Modulzeilen in `daemon/drive_modules.rs`, die Ausfuhren in `daemon/mod.rs`, die Beispiele in `cli/mcp/catalog.rs`) stehen aus; ohne sie übersetzt die Arbeit nicht.

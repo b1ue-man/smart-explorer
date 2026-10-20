@@ -1,14 +1,56 @@
 //! Large read-only files need no whole-file working copy on the local disk.
-use super::engine::{baseline_from_meta, read_lock, require_regular, MountEngine, OpenHandle, OpenHandleKind};
-use super::types::MountMode;
+//!
+//! DRV-M8: the Android documents provider reads every read-only handle by
+//! ranges (`RangeReadPolicy::ReadOnlyHandles`), also on a writable root, and
+//! opens an engine at the root of a saved connection with its own name rules
+//! (`open_rooted`).
+use super::engine::{
+    baseline_from_meta, read_lock, require_regular, MountEngine, OpenHandle, OpenHandleKind,
+};
+use super::types::{BackendRoot, MountMode, MountRuntimeConfig};
+use crate::vfs::BackendHandle;
+use serde::{Deserialize, Serialize};
 use std::io::{self, Read};
+use std::path::Path;
+
+/// Which handles read large files by ranges instead of a whole-file copy.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RangeReadPolicy {
+    /// Read-only drives only (every drive before DRV-M8).
+    #[default]
+    ReadOnlyMount,
+    /// Every handle opened without write access (Android, DRV-M8). A dirty
+    /// or conflicted local copy still wins over the remote.
+    ReadOnlyHandles,
+}
+
+impl RangeReadPolicy {
+    pub fn is_default(&self) -> bool {
+        *self == Self::ReadOnlyMount
+    }
+}
 
 impl MountEngine {
+    /// An engine at `root` of `backend` (backend paths are absolute), with
+    /// the plain spool, checking the root and every ancestor on the remote.
+    /// The Android documents provider opens saved connections with it.
+    pub fn open_rooted(
+        config: MountRuntimeConfig,
+        root: BackendRoot,
+        backend: BackendHandle,
+        spool_root: &Path,
+    ) -> io::Result<Self> {
+        Self::open_at_root(config, root, backend, spool_root, true, true)
+    }
+
     pub(super) fn uses_range_reads(&self, size: u64) -> bool {
         // RW handles retain the established pinned whole-file snapshot, including
-        // paging writes and old handles surviving a delete-sharing replacement.
-        self.config.mode == MountMode::ReadOnly
-            && size > self.config.cache.retained_bytes().max(1024 * 1024)
+        // paging writes and old handles surviving a delete-sharing replacement;
+        // `read_range` never takes a writable handle.
+        let policy = self.config.mode == MountMode::ReadOnly
+            || self.config.range_reads == RangeReadPolicy::ReadOnlyHandles;
+        policy && size > self.config.cache.retained_bytes().max(1024 * 1024)
     }
 
     pub(super) fn read_range(
@@ -17,10 +59,16 @@ impl MountEngine {
         offset: u64,
         output: &mut [u8],
     ) -> io::Result<Option<usize>> {
-        let OpenHandleKind::Metadata { callback_path, meta } = &opened.kind else {
+        let OpenHandleKind::Metadata {
+            callback_path,
+            meta,
+        } = &opened.kind
+        else {
             return Ok(None);
         };
-        if opened.writable || !self.uses_range_reads(meta.size) { return Ok(None); }
+        if opened.writable || !self.uses_range_reads(meta.size) {
+            return Ok(None);
+        }
         let _namespace = read_lock(&self.namespace)?;
         let path = self.project_checked(callback_path)?;
         if self.entry_for_path(path.backend())?.is_some() {
@@ -31,10 +79,17 @@ impl MountEngine {
         let current = self.backend.stat(path.backend())?;
         require_regular(&current)?;
         let expected = baseline_from_meta(meta);
-        if baseline_from_meta(&current) != expected { return Err(changed()); }
+        if baseline_from_meta(&current) != expected {
+            return Err(changed());
+        }
         let length = current.size.saturating_sub(offset).min(output.len() as u64) as usize;
-        if length == 0 { return Ok(Some(0)); }
-        let Some(mut reader) = self.backend.open_read_at(path.backend(), current.id.as_deref(), offset)? else {
+        if length == 0 {
+            return Ok(Some(0));
+        }
+        let Some(mut reader) =
+            self.backend
+                .open_read_at(path.backend(), current.id.as_deref(), offset)?
+        else {
             // Preserve support for backends that cannot address a byte offset.
             return Ok(None);
         };
@@ -44,12 +99,16 @@ impl MountEngine {
         drop(reader); // Cancel unread frames and release the request gate before stat.
         let after = self.backend.stat(path.backend())?;
         require_regular(&after)?;
-        if baseline_from_meta(&after) != expected { return Err(changed()); }
+        if baseline_from_meta(&after) != expected {
+            return Err(changed());
+        }
         Ok(Some(length))
     }
 }
 
 fn changed() -> io::Error {
-    io::Error::new(io::ErrorKind::WouldBlock,
-        "remote file changed during mounted range read; reopen it before continuing")
+    io::Error::new(
+        io::ErrorKind::WouldBlock,
+        "remote file changed during mounted range read; reopen it before continuing",
+    )
 }

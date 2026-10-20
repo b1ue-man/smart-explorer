@@ -15,4 +15,10 @@
     <!-- This phone as screen host (SCR-M8): the se accessibility service -->
     <string name="screen_control_label">Smart Explorer: Bildschirm steuern</string>
     <string name="screen_control_description">Lässt ein Gerät, dem du in Smart Explorer „Bildschirm steuern“ erlaubt hast, während einer Bildschirmfreigabe tippen, wischen, Text eingeben und Systemtasten (Zurück, Startbildschirm, Übersicht) nutzen, und liefert Vorschaubilder ohne die Android-Abfrage. Ohne laufende Freigabe tut der Dienst nichts; er liest keine Bildschirminhalte mit und speichert nichts.</string>
+
+    <!-- Documents provider „Ordner für Apps bereitstellen“ (DRV-M8): uploads of other apps' changes -->
+    <string name="docs_commit_title">Änderungen aus anderen Apps</string>
+    <string name="docs_commit_text">Gespeicherte Dateien werden hochgeladen …</string>
+    <string name="docs_commit_failed_title">Hochladen fehlgeschlagen</string>
+    <string name="docs_commit_failed_text">Änderungen, die andere Apps in Smart-Explorer-Ordnern gespeichert haben, konnten noch nicht hochgeladen werden. Sie bleiben auf diesem Telefon und werden erneut versucht, sobald das Ziel erreichbar ist.</string>
 </resources>

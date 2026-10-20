@@ -183,6 +183,21 @@
             android:exported="false"
             android:grantUriPermissions="true" />
 
+        <!-- „Ordner für Apps bereitstellen“ (DRV-M8): devices, released connections and unlocked
+             vaults in the system picker. Off until the person switches it on (component state);
+             only the system (MANAGE_DOCUMENTS) binds it, other apps get the single URIs picked. -->
+        <provider
+            android:name=".system.documents.SeDocumentsProvider"
+            android:authorities="${applicationId}.documents"
+            android:enabled="false"
+            android:exported="true"
+            android:grantUriPermissions="true"
+            android:permission="android.permission.MANAGE_DOCUMENTS">
+            <intent-filter>
+                <action android:name="android.content.action.DOCUMENTS_PROVIDER" />
+            </intent-filter>
+        </provider>
+
         <!-- Cache copies only (remote files to open/share, downloaded update APK) -->
         <provider
             android:name="androidx.core.content.FileProvider"
