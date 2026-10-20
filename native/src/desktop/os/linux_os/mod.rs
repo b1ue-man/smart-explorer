@@ -1,26 +1,97 @@
-//! Linux adapter of se Desktop (DSK-M3): login start, single instance,
-//! processes, registrations and the facts the core decides on. The session
-//! probes (`_NET_SUPPORTED`, layer-shell, GNOME version, RandR monitors)
-//! follow with DSK-M6 in `session_facts.rs`; until then only the
-//! environment is known, so the core reports the surface as unavailable.
+//! Linux adapter of se Desktop (DSK-M3, DSK-M6 to DSK-M8): login start, single
+//! instance, processes, registrations and the facts the core decides on
+//! (`session_facts`), the X11 surface (`x11_surface`, `x11_monitors`,
+//! `x11_clipboard`), the system wallpaper (`wallpaper*`), the desktop folder
+//! and its starters (`desktop_folder`, `desktop_entry_trust`,
+//! `open_with_portal`), the Wayland layer backend (`layer_shell`) and the
+//! GNOME Shell extension (`gnome_*`).
 use std::path::Path;
 
 #[path = "autostart.rs"]
 mod autostart;
+#[path = "clipboard_formats.rs"]
+mod clipboard_formats;
+#[path = "desktop_entry_trust.rs"]
+mod desktop_entry_trust;
+#[path = "desktop_folder.rs"]
+mod desktop_folder;
+#[path = "gnome_channel.rs"]
+pub(crate) mod gnome_channel;
+#[path = "gnome_control.rs"]
+pub(crate) mod gnome_control;
+#[path = "gnome_dbus.rs"]
+pub(crate) mod gnome_dbus;
+#[path = "gnome_extension.rs"]
+pub(crate) mod gnome_extension;
 #[path = "gnome_settings.rs"]
 pub(crate) mod gnome_settings;
+#[path = "gnome_steward.rs"]
+pub(crate) mod gnome_steward;
 #[path = "instance.rs"]
 pub(crate) mod instance;
 #[path = "integration.rs"]
 pub(crate) mod integration;
 // DSK-M7: the own egui host on `wlr-layer-shell` (one process, every output).
+#[cfg(test)]
+#[path = "gnome_bus_tests.rs"]
+mod gnome_bus_tests;
+#[cfg(test)]
+#[path = "gnome_extension_tests.rs"]
+mod gnome_extension_tests;
+#[cfg(test)]
+#[path = "gnome_headless_tests.rs"]
+mod gnome_headless_tests;
+#[cfg(test)]
+#[path = "gnome_steward_tests.rs"]
+mod gnome_steward_tests;
+#[cfg(test)]
+#[path = "gnome_task_tests.rs"]
+mod gnome_task_tests;
+#[cfg(test)]
+#[path = "gnome_test_support.rs"]
+mod gnome_test_support;
 #[path = "layer_shell/mod.rs"]
 pub(crate) mod layer_shell;
+#[path = "monitor_keys.rs"]
+mod monitor_keys;
+#[path = "open_with_portal.rs"]
+mod open_with_portal;
+#[path = "probe_timeout.rs"]
+mod probe_timeout;
 #[path = "process.rs"]
 pub(crate) mod process;
+#[path = "session_facts.rs"]
+pub(crate) mod session_facts;
 #[cfg(test)]
 #[path = "task_fixtures.rs"]
 pub(crate) mod task_fixtures;
+#[cfg(test)]
+#[path = "trust_tests.rs"]
+mod trust_tests;
+#[path = "wallpaper.rs"]
+mod wallpaper;
+#[path = "wallpaper_kde.rs"]
+mod wallpaper_kde;
+#[path = "wallpaper_root.rs"]
+mod wallpaper_root;
+#[path = "wallpaper_system.rs"]
+mod wallpaper_system;
+#[path = "wallpaper_watch.rs"]
+mod wallpaper_watch;
+#[path = "x11_clipboard.rs"]
+mod x11_clipboard;
+#[path = "x11_facts.rs"]
+mod x11_facts;
+#[path = "x11_monitors.rs"]
+mod x11_monitors;
+#[path = "x11_surface.rs"]
+mod x11_surface;
+#[cfg(test)]
+#[path = "x11_task_env.rs"]
+mod x11_task_env;
+#[cfg(test)]
+#[path = "x11_task_surface.rs"]
+mod x11_task_surface;
 
 pub(crate) use integration::LinuxIntegration as PlatformIntegration;
 
@@ -40,34 +111,16 @@ pub(crate) fn is_gui_image(exe: &Path) -> bool {
     exe.file_name().is_some_and(|name| name == GUI_IMAGE)
 }
 
-fn env_set(name: &str) -> bool {
-    std::env::var_os(name).is_some_and(|value| !value.is_empty())
+/// What the session offers (C2.2 inputs, `session_facts`): the display
+/// server, the window manager's atoms on X11, the layer protocol on Wayland,
+/// the GNOME Shell. Every probe runs under a limit of two seconds.
+pub(crate) fn session_facts() -> SessionFacts {
+    session_facts::probe(&session_facts::SystemProbe)
 }
 
-/// What the environment tells about the session (C2.2 inputs). The window
-/// manager and compositor probes are DSK-M6.
-pub(crate) fn session_facts() -> SessionFacts {
-    let display = if env_set("WAYLAND_DISPLAY") {
-        DisplayServer::Wayland
-    } else if env_set("DISPLAY") {
-        DisplayServer::X11
-    } else {
-        DisplayServer::Headless
-    };
-    let current_desktop = std::env::var("XDG_CURRENT_DESKTOP")
-        .map(|value| {
-            value
-                .split(':')
-                .filter(|part| !part.is_empty())
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default();
-    SessionFacts {
-        display,
-        current_desktop,
-        ..SessionFacts::default()
-    }
+/// The display server from the environment alone (no probe).
+fn display_server() -> DisplayServer {
+    session_facts::display_server(&session_facts::SystemProbe)
 }
 
 /// Linux has no "Papierkorb"/"Dieser PC" items; the se defaults are stored.
@@ -76,24 +129,69 @@ pub(crate) fn initial_system_items() -> SystemItems {
 }
 
 /// The monitors of the session: X11 RandR monitors (DSK-M6, each with its own
-/// surface process) or the Wayland outputs (DSK-M7; the layer backend serves
-/// all of them from one process). No display server, no monitors.
+/// surface process), the logical monitors of Mutter under GNOME (DSK-M8, the
+/// extension starts one surface per monitor) or the Wayland outputs (DSK-M7;
+/// the layer backend serves all of them from one process). No display server,
+/// no monitors.
 pub(crate) fn monitors() -> Vec<Monitor> {
-    match session_facts().display {
-        DisplayServer::X11 => x11_monitors(),
+    match display_server() {
+        DisplayServer::X11 => x11_monitors::monitors(),
         DisplayServer::Wayland => wayland_monitors(),
         DisplayServer::Windows | DisplayServer::Headless => Vec::new(),
     }
 }
 
-/// RandR monitors; follows with DSK-M6 (U34).
-fn x11_monitors() -> Vec<Monitor> {
-    Vec::new()
+fn gnome_session() -> bool {
+    std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|value| {
+        value
+            .split(':')
+            .any(|part| part.trim().eq_ignore_ascii_case("GNOME"))
+    })
+}
+
+/// The last list Mutter gave; a question that fails for a moment (the bus is
+/// busy) must not look like a change of the monitors, which would restart
+/// every surface.
+static LAST_GNOME: std::sync::Mutex<Option<Vec<Monitor>>> = std::sync::Mutex::new(None);
+
+/// The logical monitors of Mutter in the order of its call; one monitor
+/// `gnome-0` when it names none or cannot be asked and nothing is known yet
+/// (U34-14).
+fn gnome_monitors() -> Vec<Monitor> {
+    let mut last = LAST_GNOME
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let fallback = || {
+        vec![Monitor {
+            key: "gnome-0".into(),
+            primary: true,
+            rect: None,
+        }]
+    };
+    match gnome_dbus::display_monitors() {
+        Some(list) if !list.is_empty() => {
+            let monitors: Vec<Monitor> = list
+                .into_iter()
+                .map(|monitor| Monitor {
+                    key: monitor.key,
+                    primary: monitor.primary,
+                    rect: Some(monitor.rect),
+                })
+                .collect();
+            *last = Some(monitors.clone());
+            monitors
+        }
+        Some(_) => fallback(),
+        None => last.clone().unwrap_or_else(fallback),
+    }
 }
 
 /// The outputs the compositor announces, in its logical coordinates (DSK-M7,
 /// `layer_shell::registry`); none when the compositor cannot be asked.
 fn wayland_monitors() -> Vec<Monitor> {
+    if gnome_session() {
+        return gnome_monitors();
+    }
     layer_shell::registry::probe_outputs()
         .map(|outputs| outputs.into_iter().map(Monitor::from).collect())
         .unwrap_or_default()
@@ -104,32 +202,54 @@ pub(crate) fn clear_jump_list_here() -> Result<(), String> {
     Ok(())
 }
 
-// DSK-M5 (U32): the names the shared code and the surface host call on
-// every platform. Linux fills them with DSK-M6 (U34: X11 window, work area,
-// wallpaper, `XDG_DESKTOP_DIR`) and DSK-M7 (U37); until then the surface
-// has no window adapter, the whole monitor as work area, no monitor names,
-// no system wallpaper and no Explorer actions, and the shell has no parts
-// besides the surfaces.
+/// Puts the surface window under the others (X11, `x11_surface`); other
+/// windows are left as they are.
 pub(crate) fn attach_surface(
-    _window: crate::app::desktop_surface_host::NativeWindow,
-    _monitor: &str,
-    _signals: std::sync::Arc<crate::app::desktop_surface_host::SurfaceSignals>,
+    window: crate::app::desktop_surface_host::NativeWindow,
+    monitor: &str,
+    signals: std::sync::Arc<crate::app::desktop_surface_host::SurfaceSignals>,
 ) -> Result<(), String> {
-    Ok(())
+    x11_surface::attach_surface(window, monitor, signals)
 }
 
-pub(crate) fn work_area(_monitor: &str) -> Option<[i32; 4]> {
-    None
+/// The monitor without panels and docks (X11 `_NET_WORKAREA`); the whole
+/// monitor elsewhere (a layer surface leaves the panels alone itself).
+pub(crate) fn work_area(monitor: &str) -> Option<[i32; 4]> {
+    (display_server() == DisplayServer::X11)
+        .then(|| x11_surface::work_area(monitor))
+        .flatten()
 }
 
+/// `(key, label)` of every monitor for the menu "Auf Bildschirm verschieben".
 pub(crate) fn monitor_names() -> Vec<(String, String)> {
-    Vec::new()
+    if display_server() == DisplayServer::X11 {
+        return x11_monitors::monitor_names();
+    }
+    monitors()
+        .into_iter()
+        .map(|monitor| (monitor.key.clone(), monitor.key))
+        .collect()
 }
 
+/// The system wallpaper of a monitor (`wallpaper`, C2.6).
 pub(crate) fn system_wallpaper(
-    _monitor: &str,
+    monitor: &str,
 ) -> Result<crate::app::desktop_surface_host::SystemBackground, String> {
-    Err(crate::app::desktop_surface_host::NO_SYSTEM_BACKGROUND.into())
+    wallpaper_system::system_wallpaper(monitor)
+}
+
+/// The path of the system wallpaper and why it does not show as an image,
+/// for the settings hint (`wallpaper_system::for_hint`).
+pub(crate) fn system_wallpaper_for_hint(
+    monitor: &str,
+) -> Result<(Option<std::path::PathBuf>, Option<String>), String> {
+    wallpaper_system::for_hint(monitor)
+}
+
+/// The system wallpaper of `monitor` changed since the last call (a poll of
+/// the source every five seconds).
+pub(crate) fn wallpaper_changed(monitor: &str) -> bool {
+    wallpaper_watch::changed(monitor)
 }
 
 pub(crate) fn shell_action(
@@ -145,14 +265,29 @@ pub(crate) fn pointer_outside(_window: crate::app::desktop_surface_host::NativeW
 
 pub(crate) fn release_pointer(_window: crate::app::desktop_surface_host::NativeWindow) {}
 
-/// Only the suite switch names a desktop folder until DSK-M6.
+/// The desktop folder of `XDG_DESKTOP_DIR` (`desktop_folder`).
 pub(crate) fn desktop_folders() -> Vec<super::feed_sources::DesktopFolder> {
-    Vec::new()
+    desktop_folder::desktop_folders()
+}
+
+/// The note while the desktop folder is switched off.
+pub(crate) fn desktop_folder_notice() -> Option<&'static str> {
+    desktop_folder::folder_notice()
 }
 
 /// Linux hides by the leading dot (`feed_sources::scan_folders`).
 pub(crate) fn hidden_entry(_entry: &std::fs::DirEntry) -> bool {
     false
+}
+
+/// "Öffnen mit …" and starters (`open_with_portal`); `true` when handled.
+pub(crate) fn open_desktop_path(path: &Path, choose: bool) -> bool {
+    open_with_portal::open_desktop_path(path, choose)
+}
+
+/// The `extension_state` of the status (`gnome_extension`).
+pub(crate) fn extension_state(facts: &SessionFacts) -> Option<&'static str> {
+    gnome_extension::current_state(facts)
 }
 
 /// Linux has no navigation pane and no jump list.

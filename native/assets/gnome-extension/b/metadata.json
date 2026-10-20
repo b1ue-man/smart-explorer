@@ -1,0 +1,7 @@
+{
+  "uuid": "se-desktop@smartexplorer.app",
+  "name": "se Desktop",
+  "description": "Zeigt die se-Desktopfläche unter allen Fenstern",
+  "shell-version": ["49", "50", "51"],
+  "version": 1
+}

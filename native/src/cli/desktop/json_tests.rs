@@ -54,6 +54,7 @@ fn sample_report() -> StatusReport {
             ),
         ],
         mechanism: Mechanism::Unavailable(Reason::NoGraphicalSession),
+        extension_state: None,
         shell_pid: Some(41),
         surfaces: vec![("task-a".into(), 42)],
         monitors: 2,

@@ -1,7 +1,10 @@
 //! The shell's surfaces (C5.5): one process per monitor with its channel,
 //! the stop with five seconds of grace before the forced end, the halt after
 //! a crash loop and the model a surface draws. The shell ends its own child
-//! processes through their handles, never through a bare PID.
+//! processes through their handles, never through a bare PID. Under GNOME
+//! (DSK-M8) the extension starts the surfaces: such a surface is no child,
+//! its channel is a socket, and the shell ends it by PID only after the
+//! image of the process was checked against the GUI program.
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::sync::mpsc::Sender;
@@ -10,7 +13,7 @@ use std::time::{Duration, Instant};
 use super::platform;
 use super::store::{unix_now, DesktopDir};
 use super::supervisor::TEST_MONITORS;
-use super::surface_link::{self, FrameSender, LinkEvent};
+use super::surface_link::{self, FrameSender, LinkEvent, RemoteEnd};
 use super::Monitor;
 use crate::daemon::{UpdateStopBaseline, EXIT_UPDATE_STOP};
 use crate::desktop::core::config::DesktopConfig;
@@ -37,8 +40,15 @@ pub(crate) struct Surface {
     pub(crate) id: u64,
     pub(crate) monitor: String,
     pub(crate) pid: u32,
-    child: Child,
+    /// `None` for a surface the GNOME extension started.
+    child: Option<Child>,
+    /// The GUI program a surface of the extension must run as (`kill`).
+    remote: Option<PathBuf>,
+    /// The reader of a remote surface saw the end of its connection.
+    link_closed: bool,
     link: FrameSender<ShellMessage>,
+    /// Since when this process runs (the wait after an end of its channel).
+    pub(crate) started: Instant,
     pub(crate) last_alive: Instant,
     pub(crate) greeted: bool,
     pub(crate) sent_rev: Option<u64>,
@@ -62,19 +72,44 @@ impl Surface {
             .is_some_and(|since| now.saturating_duration_since(since) >= STOP_GRACE)
     }
 
+    /// A surface the GNOME extension started: the shell counts no crash for
+    /// it, the extension restarts it (U34-15).
+    pub(crate) fn is_remote(&self) -> bool {
+        self.remote.is_some()
+    }
+
+    pub(crate) fn mark_link_closed(&mut self) {
+        self.link_closed = true;
+    }
+
     pub(crate) fn kill(&mut self) {
         self.killed = true;
-        let _ = self.child.kill();
+        match (&mut self.child, &self.remote) {
+            (Some(child), _) => {
+                let _ = child.kill();
+            }
+            // Only a process that still runs the GUI image (the PID may be
+            // reused once the surface is gone).
+            (None, Some(exe)) => {
+                let _ = platform::process::terminate_checked(self.pid, exe);
+            }
+            (None, None) => {}
+        }
     }
 
     /// `Some(code)` once the process ended; the inner `None` is an end by a
-    /// signal.
+    /// signal, or the end of the connection of a remote surface.
     pub(crate) fn exited(&mut self) -> Option<Option<i32>> {
-        self.child
-            .try_wait()
-            .ok()
-            .flatten()
-            .map(|status| status.code())
+        match &mut self.child {
+            Some(child) => child.try_wait().ok().flatten().map(|status| status.code()),
+            None => self.link_closed.then_some(None),
+        }
+    }
+
+    fn wait_if_child(&mut self) {
+        if let Some(child) = &mut self.child {
+            let _ = child.wait();
+        }
     }
 }
 
@@ -129,10 +164,40 @@ impl SurfaceSpawn {
             id,
             monitor: monitor.to_string(),
             pid: child.id(),
-            child,
+            child: Some(child),
+            remote: None,
+            link_closed: false,
             link,
+            started: Instant::now(),
             last_alive: Instant::now(),
             greeted: false,
+            sent_rev: None,
+            stopping: None,
+            killed: false,
+        })
+    }
+
+    /// A surface of the GNOME extension that passed the greeting on the
+    /// socket (`gnome_channel`): `key` is its monitor's key. The shell sends
+    /// its greeting and the surface counts as greeted.
+    pub(crate) fn adopt_remote(&mut self, key: &str, end: RemoteEnd) -> Result<Surface, String> {
+        let id = self.next_id;
+        self.next_id += 1;
+        let pid = end.pid;
+        let link = surface_link::shell_side_remote(end, id, self.events.clone())
+            .map_err(|error| error.to_string())?;
+        link.send(hello_for(key));
+        Ok(Surface {
+            id,
+            monitor: key.to_string(),
+            pid,
+            child: None,
+            remote: Some(self.gui.clone()),
+            link_closed: false,
+            link,
+            started: Instant::now(),
+            last_alive: Instant::now(),
+            greeted: true,
             sent_rev: None,
             stopping: None,
             killed: false,
@@ -246,7 +311,7 @@ pub(crate) fn stop_all(dir: &DesktopDir, surfaces: &mut Vec<Surface>, reason: St
             &format!("{} {}", surface.monitor, surface.pid),
         );
         surface.kill();
-        let _ = surface.child.wait();
+        surface.wait_if_child();
     }
     surfaces.clear();
 }

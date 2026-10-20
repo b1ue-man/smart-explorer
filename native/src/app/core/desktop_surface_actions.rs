@@ -1,6 +1,7 @@
 //! What the surface's handlings start (DSK-M4): windows and pages through
 //! `open_target` (detached processes of the GUI program), files and folders
-//! through the app's `open_local_path`, file actions of the desktop folder
+//! through the app's `open_local_path` (Linux: "Öffnen mit …" and starters
+//! through the portal, `platform::open_desktop_path`), file actions of the desktop folder
 //! through `desktop_ops` in a thread of their own, and the file clipboard.
 //! Windows: the system's file clipboard (Explorer reads it). Elsewhere the
 //! paths go as text with a marker onto the clipboard, so a Ctrl+V on another
@@ -113,6 +114,13 @@ impl SystemActions {
 }
 
 fn open_path(path: &Path, choose: bool) {
+    // Linux (U34-6, U34-7): "Öffnen mit …" and a starter go through the
+    // OpenURI portal or `gio launch` by the rule of the desktop; everything
+    // else stays with `xdg-open`.
+    #[cfg(target_os = "linux")]
+    if crate::desktop::os::platform::open_desktop_path(path, choose) {
+        return;
+    }
     let mode = if choose {
         OpenMode::With
     } else {

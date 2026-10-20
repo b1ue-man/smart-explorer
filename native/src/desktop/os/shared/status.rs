@@ -37,6 +37,11 @@ pub(crate) struct StatusReport {
     pub(crate) state_error: Option<String>,
     pub(crate) parts: Vec<PartStatus>,
     pub(crate) mechanism: Mechanism,
+    /// GNOME extension (DSK-M8, U34-18): `not_installed`, `installed`,
+    /// `installed_needs_relogin`, `running`, `disabled_by_user`,
+    /// `user_extensions_disabled`, `unsupported_shell_version`, `halted`;
+    /// `None` outside GNOME on Wayland.
+    pub(crate) extension_state: Option<&'static str>,
     pub(crate) shell_pid: Option<u32>,
     pub(crate) surfaces: Vec<(String, u32)>,
     pub(crate) monitors: usize,
@@ -152,6 +157,7 @@ pub(crate) fn gather(dir: &DesktopDir, integration: &dyn Integration) -> StatusR
         state_error,
         parts,
         foreign_desktop: foreign_desktop(&session.facts, config.as_ref(), module.as_ref()),
+        extension_state: super::supervisor::gnome::extension_state(&session.facts),
         mechanism: session.mechanism,
         shell_pid: shell.as_ref().map(|shell| shell.shell_pid),
         surfaces: shell
@@ -284,8 +290,7 @@ impl StatusReport {
         put("parts", Value::Object(parts));
         put("mechanism", json!(self.mechanism.key()));
         put("mechanism_reason", json!(mechanism_reason));
-        // GNOME extension states join with DSK-M8.
-        put("extension_state", Value::Null);
+        put("extension_state", json!(self.extension_state));
         put(
             "processes",
             json!({ "shell_pid": self.shell_pid, "surfaces": surfaces }),

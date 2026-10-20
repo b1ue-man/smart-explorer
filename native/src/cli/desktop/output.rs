@@ -33,8 +33,9 @@ fn on_off(on: bool) -> &'static str {
     }
 }
 
-/// `state …`, one `part …` line per part, then `mechanism`, `surfaces`,
-/// `share_state`, `autostart`, `halted`, `foreign_desktop` and `residue`.
+/// `state …`, one `part …` line per part, then `mechanism`, under GNOME on
+/// Wayland `extension_state`, `surfaces`, `share_state`, `autostart`,
+/// `halted`, `foreign_desktop` and `residue`.
 pub(super) fn status_text(report: &StatusReport) -> String {
     let mut lines = vec![format!("state\t{}", report.state.key())];
     for part in &report.parts {
@@ -54,6 +55,9 @@ pub(super) fn status_text(report: &StatusReport) -> String {
         mechanism => mechanism.key().to_string(),
     };
     lines.push(format!("mechanism\t{mechanism}"));
+    if let Some(state) = report.extension_state {
+        lines.push(format!("extension_state\t{state}"));
+    }
     lines.push(format!(
         "surfaces\t{}/{}",
         report.surfaces.len(),

@@ -35,6 +35,14 @@ impl GnomeSettings {
         GnomeSettings { program: None }
     }
 
+    /// A settings program of another name or place (the suite's stand-in).
+    #[cfg(test)]
+    pub(crate) fn with_program(program: PathBuf) -> GnomeSettings {
+        GnomeSettings {
+            program: Some(program),
+        }
+    }
+
     /// The list under `key`; `None` without `gsettings` or schema.
     pub(crate) fn read(&self, key: &str) -> Option<Vec<String>> {
         parse_string_array(&self.run(&["get", SCHEMA, key])?)
@@ -48,37 +56,51 @@ impl GnomeSettings {
     }
 
     fn run(&self, args: &[&str]) -> Option<String> {
-        let program = self.program.as_ref()?;
-        let mut child = Command::new(program)
-            .args(args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .ok()?;
-        let mut stdout = child.stdout.take()?;
-        let reader = std::thread::spawn(move || {
-            let mut text = String::new();
-            let _ = stdout.read_to_string(&mut text);
-            text
-        });
-        let deadline = Instant::now() + TIMEOUT;
-        let status = loop {
-            match child.try_wait() {
-                Ok(Some(status)) => break status,
-                Ok(None) if Instant::now() < deadline => {
-                    std::thread::sleep(Duration::from_millis(20));
-                }
-                _ => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return None;
-                }
-            }
-        };
-        let text = reader.join().ok()?;
-        status.success().then_some(text)
+        run_command(self.program.as_ref()?, args)
     }
+
+    /// The bool under `key`, as `gsettings get` prints it (`true`/`false`).
+    pub(crate) fn read_bool(&self, key: &str) -> Option<bool> {
+        match self.run(&["get", SCHEMA, key])?.trim() {
+            "true" => Some(true),
+            "false" => Some(false),
+            _ => None,
+        }
+    }
+}
+
+/// Runs `program` with `args` without any standard stream of ours and
+/// returns what it printed when it ended with success within five seconds.
+pub(crate) fn run_command(program: &Path, args: &[&str]) -> Option<String> {
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let mut stdout = child.stdout.take()?;
+    let reader = std::thread::spawn(move || {
+        let mut text = String::new();
+        let _ = stdout.read_to_string(&mut text);
+        text
+    });
+    let deadline = Instant::now() + TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    };
+    let text = reader.join().ok()?;
+    status.success().then_some(text)
 }
 
 /// A GVariant string array as `gsettings get` prints it: `['a', 'b']` or

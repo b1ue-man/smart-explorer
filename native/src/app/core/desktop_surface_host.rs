@@ -89,8 +89,7 @@ impl SurfaceSignals {
         }
     }
 
-    /// Only the Windows window procedure raises until DSK-M6.
-    #[cfg_attr(not(windows), allow(dead_code))]
+    /// The Windows window procedure and the X11 watch thread raise.
     pub(crate) fn raise(&self, signal: SurfaceSignal) {
         self.flag(signal).store(true, Ordering::Release);
         (self.wake)();
@@ -103,7 +102,6 @@ impl SurfaceSignals {
 }
 
 /// The system wallpaper of one monitor (DSK-M5; Linux with DSK-M6).
-#[cfg_attr(not(windows), allow(dead_code))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SystemBackground {
     pub(crate) wallpaper: SystemWallpaper,
@@ -122,7 +120,8 @@ pub(crate) enum ShellAction<'a> {
     DragOut(&'a [PathBuf]),
 }
 
-/// How an Explorer action ended (Windows).
+/// How an Explorer action ended (Windows). Staged on Linux, which has no
+/// Explorer actions and never builds a value (`platform::shell_action`).
 #[cfg_attr(not(windows), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ShellOutcome {
@@ -152,9 +151,10 @@ pub(crate) trait SurfaceHost {
     fn system_background(&self) -> Result<SystemBackground, String> {
         Err(NO_SYSTEM_BACKGROUND.into())
     }
-    /// Whether the system's wallpaper changed since the last call.
+    /// Whether the system's wallpaper changed since the last call. Linux:
+    /// the poll of the wallpaper source (a layer host asks it too, DSK-M7).
     fn take_wallpaper_change(&self) -> bool {
-        false
+        polled_wallpaper_change(self.monitor_key())
     }
     /// Runs an Explorer action; `heartbeat` keeps the surface alive while
     /// the action's modal loop runs.
@@ -186,6 +186,20 @@ pub(crate) trait SurfaceHost {
     }
     /// Hands the surface the button release a drag loop took.
     fn release_pointer(&self) {}
+}
+
+/// The poll of the Linux wallpaper source (`platform::wallpaper_changed`);
+/// Windows tells by signal.
+fn polled_wallpaper_change(monitor: &str) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        platform::wallpaper_changed(monitor)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = monitor;
+        false
+    }
 }
 
 /// This surface's monitor `[left, top, right, bottom]` in physical pixels.
@@ -368,7 +382,7 @@ impl SurfaceHost for EframeHost {
     }
 
     fn take_wallpaper_change(&self) -> bool {
-        self.signals.take(SurfaceSignal::Wallpaper)
+        self.signals.take(SurfaceSignal::Wallpaper) | polled_wallpaper_change(&self.monitor)
     }
 
     fn shell_action(
