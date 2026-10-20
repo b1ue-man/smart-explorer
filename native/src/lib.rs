@@ -133,13 +133,22 @@ pub fn run_gui() -> eframe::Result<()> {
         return app::run_access_consent(id);
     }
 
+    // SCR-M7: the screen viewer of one device and the group view of a room.
+    match app::start_request::parse(&raw_args) {
+        Ok(app::start_request::StartRequest::ScreenView { target_json }) => {
+            std::process::exit(app::run_screen_view(&target_json));
+        }
+        Ok(app::start_request::StartRequest::ScreenGrid { room }) => {
+            std::process::exit(app::run_screen_grid(room.as_deref()));
+        }
+        _ => {}
+    }
+
     #[cfg(windows)]
     shell_register::cleanup_stale_default_manager();
 
     // The explorer window, optionally at a location or page (S5); the value of
-    // a switch never becomes the start path. Until their packages wire them
-    // (plan H8), `--screen-view` and `--screen-grid` start nothing, like a
-    // malformed switch.
+    // a switch never becomes the start path.
     use app::start_request::StartRequest;
     let start = match app::start_request::parse(&raw_args) {
         Ok(
