@@ -19,6 +19,7 @@ use super::ipc_protocol::{
     write_response, IpcResponse, SealPurposeWire, SecretText, VaultIpcReply, VaultIpcRequest,
     VaultSiteView, VaultStatusView,
 };
+use super::ipc_vault_compare as compare;
 
 /// Most items one `Seal`/`Unseal` takes, and the cleartext of all of them:
 /// the reply must fit the IPC line (`MAX_IPC_LINE`, 2 MiB) with Base64url.
@@ -39,6 +40,30 @@ pub(in crate::daemon) fn serve(
 ) -> io::Result<()> {
     let response = match req {
         VaultIpcRequest::Open { site } => return serve_open(stream, &site),
+        // VLT-M8 (U26): the comparison mode runs where the keys are; these
+        // arms answer on the stream themselves (the work watches it).
+        VaultIpcRequest::Compare { job, groups } => {
+            return compare::serve_compare(stream, &job, &groups)
+        }
+        VaultIpcRequest::Items {
+            list,
+            revision,
+            offset,
+        } => return compare::serve_items(stream, &list, revision, offset),
+        VaultIpcRequest::CompareText { job, item } => {
+            return compare::serve_compare_text(stream, &job, &item)
+        }
+        VaultIpcRequest::Resolve {
+            job,
+            item,
+            action,
+            all,
+            confirmed,
+        } => return compare::serve_resolve(stream, &job, item.as_deref(), &action, all, confirmed),
+        VaultIpcRequest::MergeApply { job, item, content } => {
+            return compare::serve_merge_apply(stream, &job, &item, &content)
+        }
+        VaultIpcRequest::Check { site } => return compare::serve_check(stream, &site),
         VaultIpcRequest::Status => status(),
         VaultIpcRequest::Unlock {
             site,
@@ -82,6 +107,8 @@ fn resolve(location: &str) -> Result<(crate::vfs::BackendHandle, String), String
 
 fn site_view(status: SiteStatus) -> VaultSiteView {
     let record = status.record;
+    let shortening_threshold = crate::vault::unlocked_session(&record.id)
+        .map(|session| session.config().shortening_threshold);
     VaultSiteView {
         label: record.display_label().to_string(),
         site: record.id,
@@ -94,6 +121,7 @@ fn site_view(status: SiteStatus) -> VaultSiteView {
         lock_on_screen_lock: record.lock.lock_on_screen_lock,
         lock_on_background_min: record.lock.lock_on_background_min,
         reason: None,
+        shortening_threshold,
     }
 }
 
@@ -124,6 +152,7 @@ fn status() -> IpcResponse {
             lock_on_screen_lock: false,
             lock_on_background_min: None,
             reason: Some(reason),
+            shortening_threshold: None,
         });
     }
     let (event_seq, events) = super::ipc_host::ui_events::vault_events();

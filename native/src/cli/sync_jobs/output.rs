@@ -72,13 +72,38 @@ pub(super) fn job_value(job: &SyncJob, state: Option<&JobState>, now: i64) -> Va
     if let (Value::Object(map), Value::Object(rest)) = (&mut value, rest) {
         map.extend(rest);
     }
+    // Only vault jobs carry the kind, so the JSON of every other job stays
+    // as it was.
+    if let (true, Value::Object(map)) = (job.is_vault(), &mut value) {
+        map.insert("kind".into(), json!("vault"));
+    }
     value
+}
+
+/// Whether a job file that cannot be read lies in `vault-jobs/`.
+pub(super) fn is_vault_broken(broken: &crate::syncjobs::BrokenJob) -> bool {
+    broken.path.starts_with(crate::syncjobs::vault_jobs_dir())
+}
+
+/// A job that cannot be read, as `se sync list --json` lists it; a vault
+/// job says so and is marked `broken`.
+pub(super) fn broken_value(broken: &crate::syncjobs::BrokenJob) -> Value {
+    if is_vault_broken(broken) {
+        json!({
+            "id": broken.id,
+            "kind": "vault",
+            "broken": true,
+            "broken_config": broken.error,
+        })
+    } else {
+        json!({ "id": broken.id, "broken_config": broken.error })
+    }
 }
 
 /// One line of `se sync list`.
 pub(super) fn list_line(job: &SyncJob, state: Option<&JobState>, now: i64) -> String {
     clean(&format!(
-        "{}\t{}\t{}\t{}\t{} -> {}\t{}",
+        "{}\t{}\t{}\t{}\t{} -> {}\t{}{}",
         job.id,
         job.name,
         if job.enabled { "on" } else { "off" },
@@ -86,6 +111,7 @@ pub(super) fn list_line(job: &SyncJob, state: Option<&JobState>, now: i64) -> St
         job.source,
         job.target,
         state.map_or_else(|| "never run".to_string(), |state| status_text(state, now)),
+        if job.is_vault() { "\tvault" } else { "" },
     ))
 }
 
@@ -253,5 +279,38 @@ mod tests {
         assert_eq!(schedule_text(&job), "monthly on day 3 at 09:00");
         job.trigger = Trigger::OnConnect;
         assert_eq!(schedule_text(&job), "on any removable drive");
+    }
+
+    #[test]
+    fn vault_task_cli_sync_list_marks_vault_jobs() {
+        const A: &str = "0123456789abcdef0123456789abcdef";
+        const B: &str = "fedcba9876543210fedcba9876543210";
+        // The JSON and the rows of general jobs stay as they were.
+        let general = SyncJob::new("Docs".into(), "/a".into(), "/b".into());
+        assert!(job_value(&general, None, 0).get("kind").is_none());
+        assert!(!list_line(&general, None, 0).ends_with("\tvault"));
+        // A vault job says so, in the row and in the JSON.
+        let vault = SyncJob::new_vault("Tresor".into(), A, B);
+        assert_eq!(job_value(&vault, None, 0)["kind"], "vault");
+        assert!(list_line(&vault, None, 0).ends_with("\tvault"));
+        // A vault job that cannot be read is marked broken, with its reason;
+        // a general one is listed as before.
+        let broken_vault = crate::syncjobs::BrokenJob {
+            id: "kaputt".into(),
+            path: crate::syncjobs::vault_jobs_dir().join("kaputt.conf"),
+            error: "Zeile 3".into(),
+        };
+        let value = broken_value(&broken_vault);
+        assert_eq!(value["broken"], true);
+        assert_eq!(value["kind"], "vault");
+        assert_eq!(value["broken_config"], "Zeile 3");
+        let broken_general = crate::syncjobs::BrokenJob {
+            id: "alt".into(),
+            path: crate::syncjobs::jobs_dir().join("alt.conf"),
+            error: "Zeile 1".into(),
+        };
+        let value = broken_value(&broken_general);
+        assert!(value.get("broken").is_none() && value.get("kind").is_none());
+        assert_eq!(value["broken_config"], "Zeile 1");
     }
 }

@@ -30,6 +30,14 @@
 mod core;
 mod os;
 
+pub(crate) use self::core::compare_model::{
+    action_title, group_title, CompareGroup, CompareItem, CompareView, ItemAction, ItemKind,
+    SideState,
+};
+pub(crate) use self::core::error_texts::{
+    error_text_for_code, COMPARE_STALE_CODE, COMPARE_TOO_LARGE_CODE,
+};
+pub(crate) use self::core::health_model::FindingKind;
 pub(crate) use self::core::klartext_policy::{
     root_place, split_place, FIELDS_WITHHELD, PROVIDE_REFUSED, USE_PROVIDER_CODE, USE_PROVIDER_TEXT,
 };
@@ -49,24 +57,27 @@ pub(crate) use self::core::{
 };
 pub(crate) use self::os::{
     account, add_site, apply_vault_preview_action, available_memory, canonical_vault_location,
-    change_password, change_site_password, check_new_password, create_site, create_vault,
-    create_vault_job, default_replicas_root, detect_location, detect_storage, expand_dir_sort,
-    expand_places, host_visibility, hosts_register, jobs_using, lock_all_for_exit,
-    note_vault_backend, open_in, open_location_in, open_vault_backend, open_vault_location,
-    open_with, platform_lock_defaults, preview_vault_job_in, publish_session, publish_vault_mount,
-    recovery_key_info, register, remove_drive_thumbnails, remove_entered, remove_site, resolve_in,
-    resolve_store_in, resolve_vault_store, run_vault_job, run_vault_job_in, seal_log_fields,
-    sealed_mount_storage, shows_vault, site_locations, store_dir_sort, store_places,
-    unlock_entered, unlock_saved, unlock_storage, unlocked_session, update_settings,
+    change_password, change_site_password, check_new_password, check_site, check_site_in,
+    compare_job, compare_job_in, compare_snapshot, compare_stale, compare_text_job, create_site,
+    create_vault, create_vault_job, default_replicas_root, detect_location, detect_storage,
+    expand_dir_sort, expand_places, find_vault_job, host_visibility, hosts_register,
+    is_compare_stale, jobs_using, lock_all_for_exit, merge_apply_item, note_vault_backend, open_in,
+    open_location_in, open_vault_backend, open_vault_location, open_with, platform_lock_defaults,
+    preview_vault_job_in, publish_session, publish_vault_mount, recovery_key_info, register,
+    remove_drive_thumbnails, remove_entered, remove_site, resolve_in, resolve_item,
+    resolve_item_in, resolve_store_in, resolve_vault_store, run_vault_job, run_vault_job_in,
+    seal_log_fields, sealed_mount_storage, shows_vault, site_locations, store_dir_sort,
+    store_places, unlock_entered, unlock_saved, unlock_storage, unlocked_session, update_settings,
     vault_drive_bridge, vault_mount_of, vault_mount_roots, vault_site_of, wire_error_text,
-    withdraw_session, withdraw_vault_mount, ConsumerGuard, ConsumerKind, CopyTarget, Detection,
-    EphemeralSpool, Installed, JobPlace, JournalPathSealer, LocalStore, LockError, LockParticipant,
-    LockRequest, ManageError, MountVaultError, OpenedVault, OsSecretStore, PasswordChanged,
-    PasswordError, PlaceList, ProcessSealing, RecoveryKeyInfo, RegisterEvent, RegistryLoad,
-    RegistryStore, ResolveLocation, Resolver, SealedSpoolFile, SealedSpoolStorage, SecretStore,
-    SessionRegister, SettingsChange, SiteSealing, SiteState, SiteStatus, SpoolKey, UnlockError,
-    UnlockHook, UnlockOptions, Unlocked, VaultBackend, VaultDriveBridge, VaultJobCreated,
-    VaultOpenError, VaultPlaces, VaultPreview, VaultRunOutcome, VaultRunRequest, WorkerOpen,
-    ACCOUNT_PREFIX, CREATE_RECOVERY_HINT, EVENT_LOG, LOCK_PLATFORM, MIN_PASSWORD_CHARS,
-    RECOVERY_KEY_NOTE, SCREEN_LOCK_NOTE, SPOOL_KEY_FILE, VAULTS_DIR,
+    withdraw_session, withdraw_vault_mount, ActionEnv, CheckResult, ConsumerGuard, ConsumerKind,
+    CopyTarget, Detection, EphemeralSpool, Installed, JobPlace, JournalPathSealer, LocalStore,
+    LockError, LockParticipant, LockRequest, ManageError, MountVaultError, OpenedVault,
+    OsSecretStore, PasswordChanged, PasswordError, PlaceList, ProcessSealing, RecoveryKeyInfo,
+    RegisterEvent, RegistryLoad, RegistryStore, ResolveLocation, ResolveReport, ResolveRequest,
+    Resolver, SealedSpoolFile, SealedSpoolStorage, SecretStore, SessionRegister, SettingsChange,
+    SiteSealing, SiteState, SiteStatus, SpoolKey, UnlockError, UnlockHook, UnlockOptions, Unlocked,
+    VaultBackend, VaultDriveBridge, VaultJobCreated, VaultOpenError, VaultPlaces, VaultPreview,
+    VaultRunOutcome, VaultRunRequest, WorkerOpen, ACCOUNT_PREFIX, CREATE_RECOVERY_HINT, EVENT_LOG,
+    LOCK_PLATFORM, MERGE_MAX_BYTES, MIN_PASSWORD_CHARS, RECOVERY_KEY_NOTE, SCREEN_LOCK_NOTE,
+    SPOOL_KEY_FILE, VAULTS_DIR,
 };
