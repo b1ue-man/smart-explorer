@@ -78,6 +78,7 @@ mod facade_tests;
 pub(crate) use config::HostSettings;
 /// This phone as screen host (SCR-M8): `screenPush` and `screenControl` of
 /// the JNI bridge.
+pub use domains::{doc_fsync, doc_open, doc_read, doc_release, doc_size, doc_write};
 pub use domains::{screen_control, screen_push};
 pub(crate) use error::ApiError;
 pub(crate) use runtime::{Runtime, TaskCtx};
