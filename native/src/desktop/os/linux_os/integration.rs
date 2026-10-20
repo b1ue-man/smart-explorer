@@ -8,6 +8,8 @@
 use std::path::{Path, PathBuf};
 
 use super::autostart;
+use super::gnome_dbus::{SessionBus, ShellBus};
+use super::gnome_extension;
 use super::gnome_settings::{extension_installed, valid_uuid, GnomeSettings, DISABLED, ENABLED};
 use crate::desktop::core::ledger::{
     LedgerEntry, Registration, Trace, AUTOSTART_FILE_NAME, GNOME_EXTENSION_UUID,
@@ -58,21 +60,35 @@ impl LinuxPaths {
 pub(crate) struct LinuxIntegration {
     paths: LinuxPaths,
     gnome: GnomeSettings,
+    /// The running Shell (`EnableExtension`, `DisableExtension`).
+    bus: Box<dyn ShellBus>,
 }
 
 impl LinuxIntegration {
     pub(crate) fn new(_gui: Option<PathBuf>) -> LinuxIntegration {
-        LinuxIntegration::with(LinuxPaths::from_env(), GnomeSettings::system())
+        LinuxIntegration::with(
+            LinuxPaths::from_env(),
+            GnomeSettings::system(),
+            Box::new(SessionBus),
+        )
     }
 
-    pub(crate) fn with(paths: LinuxPaths, gnome: GnomeSettings) -> LinuxIntegration {
-        LinuxIntegration { paths, gnome }
+    pub(crate) fn with(
+        paths: LinuxPaths,
+        gnome: GnomeSettings,
+        bus: Box<dyn ShellBus>,
+    ) -> LinuxIntegration {
+        LinuxIntegration { paths, gnome, bus }
     }
 
-    /// Task tests: every folder below `root`, no GNOME settings.
+    /// Task tests: every folder below `root`, no GNOME settings, no Shell.
     #[cfg(test)]
     pub(crate) fn for_task(root: &Path) -> LinuxIntegration {
-        LinuxIntegration::with(super::task_fixtures::paths(root), GnomeSettings::none())
+        LinuxIntegration::with(
+            super::task_fixtures::paths(root),
+            GnomeSettings::none(),
+            Box::new(super::gnome_dbus::NoShellBus),
+        )
     }
 
     fn extension_dir(&self) -> PathBuf {
@@ -95,16 +111,9 @@ impl LinuxIntegration {
                 .is_some_and(|list| !list.iter().any(|item| item == uuid))
     }
 
+    /// The Shell is told, then the UUID leaves both lists.
     fn remove_own_uuid(&self) -> Result<(), String> {
-        let Some(mut list) = self.gnome.read(ENABLED) else {
-            return Ok(());
-        };
-        let before = list.len();
-        list.retain(|uuid| uuid != GNOME_EXTENSION_UUID);
-        if list.len() == before {
-            return Ok(());
-        }
-        self.gnome.write(ENABLED, &list)
+        gnome_extension::remove_enabled(&self.gnome, &*self.bus)
     }
 
     /// C2.5: switched on again only when it is still off; a user who
@@ -116,9 +125,14 @@ impl LinuxIntegration {
         if !self.foreign_still_disabled(uuid) {
             return Ok(());
         }
+        // The running Shell first (it also updates the lists); the settings
+        // stay the fallback when the bus does not answer.
+        let _ = self.bus.set_extension(uuid, true);
         let mut enabled = self.gnome.read(ENABLED).unwrap_or_default();
-        enabled.push(uuid.to_string());
-        self.gnome.write(ENABLED, &enabled)?;
+        if !enabled.iter().any(|item| item == uuid) {
+            enabled.push(uuid.to_string());
+            self.gnome.write(ENABLED, &enabled)?;
+        }
         if let Some(mut disabled) = self.gnome.read(DISABLED) {
             let before = disabled.len();
             disabled.retain(|item| item != uuid);
@@ -130,15 +144,8 @@ impl LinuxIntegration {
     }
 
     fn remove_extension_dir(&self) -> Result<(), String> {
-        let dir = self.extension_dir();
-        let result = match std::fs::symlink_metadata(&dir) {
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error),
-            Ok(meta) if meta.is_dir() => std::fs::remove_dir_all(&dir),
-            // A link or file under the fixed name: removed as itself.
-            Ok(_) => std::fs::remove_file(&dir),
-        };
-        result.map_err(|error| format!("{}: {error}", dir.display()))
+        // A link or file under the fixed name is removed as itself.
+        gnome_extension::remove_files(&self.extension_dir())
     }
 }
 

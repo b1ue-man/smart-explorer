@@ -6,6 +6,7 @@
 //! a running shell sends the new configuration to its surfaces within a
 //! second (C5.5). What the choices depend on (alpha channel of the session,
 //! mounted device tree) is read in a thread as well.
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use eframe::egui::{self, RichText};
@@ -18,17 +19,114 @@ use crate::desktop::core::config::{
 use crate::desktop::core::state::Platform;
 use crate::desktop::os::launch::with_control;
 use crate::desktop::os::status::StatusReport;
-use crate::desktop::os::wallpaper_image::{format_color, parse_color, DEFAULT_COLOR};
+use crate::desktop::os::wallpaper_image::{self, format_color, parse_color, Loaded, DEFAULT_COLOR};
 use crate::desktop::os::{feed_sources, platform, Session};
 
 /// Image types the wallpaper decoder reads (H6).
 const IMAGE_TYPES: [&str; 6] = ["png", "jpg", "jpeg", "gif", "webp", "bmp"];
+
+/// The longest side the hint's test decode needs; only whether the image
+/// decodes matters.
+const HINT_SIDE: u32 = 64;
 
 /// What the choices depend on.
 #[derive(Clone, Debug, Default)]
 struct Facts {
     transparent: Option<Result<(), String>>,
     device_tree_mounted: bool,
+    /// Why the background image cannot be shown (C1.2), if it cannot.
+    wallpaper_note: Option<String>,
+    /// Linux: the desktop folder is switched off (`XDG_DESKTOP_DIR` = home).
+    folder_note: Option<&'static str>,
+}
+
+/// The line under the choice of the background.
+pub(in crate::app) fn wallpaper_hint_text(reason: &str) -> String {
+    format!("Hintergrundbild kann nicht angezeigt werden: {reason}")
+}
+
+/// The monitor whose wallpaper is checked: the main one, else the first.
+fn hint_monitor() -> Option<String> {
+    let monitors = platform::monitors();
+    monitors
+        .iter()
+        .find(|monitor| monitor.primary)
+        .or_else(|| monitors.first())
+        .map(|monitor| monitor.key.clone())
+}
+
+/// The image file of the system background, or why it cannot be read. No
+/// monitor, no system image to check: only the path of a configured image.
+#[cfg(target_os = "linux")]
+fn system_image() -> Result<Option<PathBuf>, String> {
+    let Some(key) = hint_monitor() else {
+        return Ok(None);
+    };
+    let (path, note) = platform::system_wallpaper_for_hint(&key)?;
+    match note {
+        Some(note) => Err(note),
+        None => Ok(path),
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn system_image() -> Result<Option<PathBuf>, String> {
+    let Some(key) = hint_monitor() else {
+        return Ok(None);
+    };
+    platform::system_wallpaper(&key).map(|background| background.wallpaper.path)
+}
+
+/// Why the image at `path` cannot be shown: it is missing, unreadable or
+/// no decodable image.
+fn image_reason(path: &std::path::Path) -> Option<String> {
+    match std::fs::metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Some(format!("{} gibt es nicht", path.display()));
+        }
+        Err(error) => {
+            return Some(format!("{} ist nicht lesbar ({error})", path.display()));
+        }
+        Ok(meta) if meta.is_dir() => {
+            return Some(format!("{} ist ein Ordner", path.display()));
+        }
+        Ok(_) => {}
+    }
+    match wallpaper_image::load(Some(path), HINT_SIDE) {
+        Loaded::Image(_) => None,
+        Loaded::Color(reason) => Some(format!("kein lesbares Bild ({reason})")),
+    }
+}
+
+/// The reason for the hint (C1.2): `system` whose source cannot be read, or
+/// `system` and `image` with a file that does not decode.
+fn wallpaper_reason(config: &DesktopConfig) -> Option<String> {
+    let path = match config.background.kind {
+        BackgroundKind::Image => config
+            .background
+            .value
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from),
+        BackgroundKind::System => match system_image() {
+            Ok(path) => path,
+            Err(reason) => return Some(reason),
+        },
+        BackgroundKind::Color | BackgroundKind::Transparent => None,
+    }?;
+    image_reason(&path)
+}
+
+/// The note for the group "Desktop-Dateien" on Linux.
+fn folder_note() -> Option<&'static str> {
+    #[cfg(target_os = "linux")]
+    {
+        platform::desktop_folder_notice()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
 }
 
 #[derive(Default)]
@@ -55,6 +153,8 @@ fn read_facts(config: &DesktopConfig) -> Facts {
     Facts {
         transparent: Some(Session::probe(Some(config)).transparent),
         device_tree_mounted: feed_sources::device_tree_now().mounted(),
+        wallpaper_note: wallpaper_reason(config),
+        folder_note: folder_note(),
     }
 }
 
@@ -168,7 +268,7 @@ pub(in crate::app) fn ui_desktop_appearance(ui: &mut egui::Ui, report: &StatusRe
     let mut change = ConfigChange::default();
     ui.add_enabled_ui(!busy, |ui| {
         background_ui(ui, &config, &facts, color, &shared, &mut change);
-        groups_ui(ui, &config, report.platform, &mut change);
+        groups_ui(ui, &config, report.platform, &facts, &mut change);
         open_with_ui(ui, &config, &facts, &mut change);
         if report.platform == Platform::Linux {
             icons_ui(ui, &config, &mut change);
@@ -261,6 +361,9 @@ fn background_ui(
     if let Some(Err(reason)) = &facts.transparent {
         hint(ui, &format!("Durchsichtig nicht möglich: {reason}"));
     }
+    if let Some(reason) = &facts.wallpaper_note {
+        hint(ui, &wallpaper_hint_text(reason));
+    }
 }
 
 fn flag(ui: &mut egui::Ui, label: &str, current: bool, change: &mut Option<bool>) {
@@ -270,7 +373,13 @@ fn flag(ui: &mut egui::Ui, label: &str, current: bool, change: &mut Option<bool>
     }
 }
 
-fn groups_ui(ui: &mut egui::Ui, config: &DesktopConfig, on: Platform, change: &mut ConfigChange) {
+fn groups_ui(
+    ui: &mut egui::Ui,
+    config: &DesktopConfig,
+    on: Platform,
+    facts: &Facts,
+    change: &mut ConfigChange,
+) {
     let groups = config.groups;
     ui.horizontal_wrapped(|ui| {
         ui.label("Zeigen:");
@@ -290,6 +399,9 @@ fn groups_ui(ui: &mut egui::Ui, config: &DesktopConfig, on: Platform, change: &m
             flag(ui, "Dieser PC", items.this_pc, &mut change.this_pc);
         }
     });
+    if let Some(note) = facts.folder_note {
+        hint(ui, note);
+    }
 }
 
 fn open_with_ui(
@@ -335,3 +447,7 @@ fn icons_ui(ui: &mut egui::Ui, config: &DesktopConfig, change: &mut ConfigChange
          Desktop läuft; Deaktivieren und Entfernen geben sie zurück.",
     );
 }
+
+#[cfg(test)]
+#[path = "desktop_surface_settings_ui_tests.rs"]
+mod tests;

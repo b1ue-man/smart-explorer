@@ -8,6 +8,7 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
+use super::desktop_settings_gnome_ui as gnome_ui;
 use super::desktop_surface_settings_ui::ui_desktop_appearance;
 use crate::app::prelude::*;
 use crate::app::settings_ui::SettingsPage;
@@ -31,6 +32,8 @@ enum Action {
     Remove,
     Restart,
     Part(Part, bool),
+    /// GNOME: let se Desktop take over the desktop icons of DING (U34-17).
+    TakeOver,
 }
 
 #[derive(Default)]
@@ -118,6 +121,7 @@ fn perform(action: Action) -> Result<String, String> {
             .set_part(part, on)
             .map_err(|error| error.to_string())
             .and_then(|outcome| outcome_text("Teil geändert", &outcome)),
+        Action::TakeOver => gnome_ui::take_over(control),
     })
 }
 
@@ -387,6 +391,9 @@ fn ui_desktop_parts(
                 format!("nicht verfügbar: {reason}")
             };
             ui.label(RichText::new(shown).small().color(theme::muted(ui)));
+        }
+        if part.part == Part::Surface && gnome_ui::ui_gnome(ui, report, part, busy.is_none()) {
+            start(shared, ui.ctx(), Action::TakeOver);
         }
     }
 }

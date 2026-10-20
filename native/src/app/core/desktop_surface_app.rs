@@ -19,6 +19,12 @@
 //! session with its own egui host (`desktop::os::linux_os::layer_shell`);
 //! the greeting, the test switches, the heartbeat, the update stop and the
 //! channel are those of this function, only the window and the loop differ.
+//!
+//! `--gnome-monitor <index>` (DSK-M8) is started by the GNOME Shell
+//! extension, not by the shell: it connects to the socket of
+//! `desktop-gnome.json`, greets with the token of `desktop.token` as monitor
+//! `gnome-<index>` and then works under the key that file names for the
+//! index. The extension places its window; the view is the eframe one.
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -32,6 +38,7 @@ use super::desktop_surface_view_model::{ViewModel, ALIVE_EVERY};
 use crate::app::start_request::SurfaceTarget;
 use crate::daemon::{spawn_update_stop_watch, UpdateStopWatch, EXIT_UPDATE_STOP, UPDATE_STOP_POLL};
 use crate::desktop::core::config::DesktopConfig;
+use crate::desktop::core::mechanism::Mechanism;
 use crate::desktop::core::protocol::{ShellMessage, SurfaceMessage, PROTOCOL_VERSION};
 use crate::desktop::os::store::DesktopDir;
 use crate::desktop::os::surface_link::{self, FrameSender};
@@ -52,12 +59,65 @@ fn switch(name: &str) -> bool {
     std::env::var(name).is_ok_and(|value| value == "1")
 }
 
+/// The name in the greeting.
 fn monitor_name(target: &SurfaceTarget) -> String {
     match target {
         SurfaceTarget::Monitor { key } => key.clone(),
         SurfaceTarget::GnomeMonitor { index } => format!("gnome-{index}"),
         SurfaceTarget::Layer => "layer".into(),
     }
+}
+
+/// What a surface connects with: its channel, the token of a GNOME socket
+/// and the key of its monitor (`layout/<key>.json`).
+struct Link {
+    sender: FrameSender<SurfaceMessage>,
+    inbox: Receiver<ShellMessage>,
+    token: Option<String>,
+    key: String,
+}
+
+/// The surface of the GNOME extension: the socket and the token of the
+/// shell, the monitor key of its index.
+#[cfg(target_os = "linux")]
+fn gnome_link(index: u32, wake: impl Fn() + Send + 'static) -> Result<Link, String> {
+    use crate::desktop::os::platform::gnome_channel::surface_socket;
+    use crate::desktop::os::platform::gnome_control::RuntimeFiles;
+    let files = RuntimeFiles::from_env().ok_or("XDG_RUNTIME_DIR fehlt")?;
+    let (socket, token) = files.surface_side()?;
+    let key = files
+        .read_control()
+        .and_then(|control| {
+            control
+                .monitors
+                .into_iter()
+                .find(|monitor| monitor.index == index)
+        })
+        .map(|monitor| monitor.key)
+        .ok_or_else(|| format!("Monitor {index} steht nicht in desktop-gnome.json"))?;
+    let (sender, inbox) =
+        surface_socket(&socket, &token, wake).map_err(|error| format!("Wächter: {error}"))?;
+    Ok(Link {
+        sender,
+        inbox,
+        token: Some(token),
+        key,
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn gnome_link(_index: u32, _wake: impl Fn() + Send + 'static) -> Result<Link, String> {
+    Err("die GNOME-Erweiterung gibt es nur unter Linux".into())
+}
+
+fn stdio_link(target: &SurfaceTarget, wake: impl Fn() + Send + 'static) -> Result<Link, String> {
+    let (sender, inbox) = surface_link::surface_stdio(wake).map_err(|error| error.to_string())?;
+    Ok(Link {
+        sender,
+        inbox,
+        token: None,
+        key: monitor_name(target),
+    })
 }
 
 /// `--desktop-surface …`: the exit code of the process.
@@ -88,19 +148,27 @@ pub(crate) fn run(target: &SurfaceTarget) -> i32 {
             }
         }
     };
-    let (sender, inbox) = match surface_link::surface_stdio(wake) {
-        Ok(channel) => channel,
+    let linked = match target {
+        SurfaceTarget::GnomeMonitor { index } => gnome_link(*index, wake),
+        _ => stdio_link(target, wake),
+    };
+    let Link {
+        sender,
+        inbox,
+        token,
+        key: monitor,
+    } = match linked {
+        Ok(link) => link,
         Err(error) => {
             eprintln!("se Desktop: Kanal: {error}");
             return 1;
         }
     };
-    let monitor = monitor_name(target);
     sender.send(SurfaceMessage::Hello {
         protocol: PROTOCOL_VERSION,
-        monitor: monitor.clone(),
+        monitor: monitor_name(target),
         pid: std::process::id(),
-        token: None,
+        token,
     });
     if let Some(code) = std::env::var("SE_DESKTOP_TEST_SURFACE_EXIT")
         .ok()
@@ -123,7 +191,14 @@ pub(crate) fn run(target: &SurfaceTarget) -> i32 {
     // The stored configuration until the shell sends its own; it also says
     // whether the window needs an alpha channel.
     let stored = DesktopDir::production().read_config().ok().flatten();
-    let transparent = !windowed && Session::probe(stored.as_ref()).transparent.is_ok();
+    let session = (!windowed).then(|| Session::probe(stored.as_ref()));
+    let transparent = session
+        .as_ref()
+        .is_some_and(|session| session.transparent.is_ok());
+    // X11: the window type DESKTOP is set before the window is shown.
+    let desktop_type = session
+        .as_ref()
+        .is_some_and(|session| session.mechanism == Mechanism::X11DesktopType);
     let config = stored.unwrap_or_else(|| DesktopConfig::initial(platform::initial_system_items()));
     let view = ViewModel::new(
         &monitor,
@@ -133,7 +208,7 @@ pub(crate) fn run(target: &SurfaceTarget) -> i32 {
         feed_sources::desktop_folders(),
     );
     let options = eframe::NativeOptions {
-        viewport: viewport_for(target, windowed, transparent),
+        viewport: viewport_for(target, windowed, transparent, desktop_type),
         ..Default::default()
     };
     let result = eframe::run_native(
@@ -218,11 +293,13 @@ fn run_headless(
 
 /// C1.2 window shape. The position is the monitor's rectangle as the
 /// platform reports it; DSK-M5 sets the exact physical rectangle after
-/// creation. The GUI harness shows an ordinary window instead.
+/// creation. `desktop_type`: X11 with the window type DESKTOP (L1). The GUI
+/// harness shows an ordinary window instead.
 fn viewport_for(
     target: &SurfaceTarget,
     windowed: bool,
     transparent: bool,
+    desktop_type: bool,
 ) -> egui::ViewportBuilder {
     if windowed {
         return egui::ViewportBuilder::default()
@@ -239,6 +316,9 @@ fn viewport_for(
         .with_maximize_button(false)
         .with_transparent(transparent)
         .with_window_level(egui::WindowLevel::AlwaysOnBottom);
+    if desktop_type {
+        builder = builder.with_window_type(egui::X11WindowType::Desktop);
+    }
     if let SurfaceTarget::Monitor { key } = target {
         let rect = platform::monitors()
             .into_iter()

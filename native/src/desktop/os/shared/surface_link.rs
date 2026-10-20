@@ -4,7 +4,8 @@
 //! of their own, so neither the shell nor a surface's UI thread ever blocks
 //! on the other side. On the surface the end of the stream ends the process
 //! with exit code 76 from the reader thread, independent of the UI thread; a
-//! `stop` ends it with 75 (update) or 0.
+//! `stop` ends it with 75 (update) or 0. Under GNOME the streams are the
+//! surface's connection to `desktop.sock` instead (`RemoteEnd`, DSK-M8).
 use std::io::{self, Read, Write};
 use std::process::Child;
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
@@ -110,18 +111,44 @@ pub(crate) fn stop_exit_code(reason: StopReason) -> i32 {
     }
 }
 
-/// The surface's end on its own stdin/stdout. `wake` runs after each
+/// The far end of a surface that connected over a socket instead of being
+/// started by the shell (the GNOME extension starts its surfaces): where it
+/// reads and writes frames, and the process behind it.
+pub(crate) struct RemoteEnd {
+    pub(crate) reader: Box<dyn Read + Send>,
+    pub(crate) writer: Box<dyn Write + Send>,
+    pub(crate) pid: u32,
+}
+
+/// The shell's end for a surface that connected: events arrive tagged `id`.
+pub(crate) fn shell_side_remote(
+    end: RemoteEnd,
+    id: u64,
+    events: Sender<(u64, LinkEvent<SurfaceMessage>)>,
+) -> io::Result<FrameSender<ShellMessage>> {
+    let sender = FrameSender::spawn(end.writer, "se-desktop-to-remote")?;
+    spawn_reader(end.reader, "se-desktop-from-remote", move |event| {
+        let _ = events.send((id, event));
+    })?;
+    Ok(sender)
+}
+
+/// The surface's end on any pair of streams. `wake` runs after each
 /// delivered message (the UI asks for a frame); `stop` and the end of the
 /// stream end the process here.
-pub(crate) fn surface_stdio<W>(
-    wake: W,
+pub(crate) fn surface_streams<R, W, F>(
+    reader: R,
+    writer: W,
+    wake: F,
 ) -> io::Result<(FrameSender<SurfaceMessage>, Receiver<ShellMessage>)>
 where
-    W: Fn() + Send + 'static,
+    R: Read + Send + 'static,
+    W: Write + Send + 'static,
+    F: Fn() + Send + 'static,
 {
-    let sender = FrameSender::spawn(io::stdout(), "se-desktop-out")?;
+    let sender = FrameSender::spawn(writer, "se-desktop-out")?;
     let (forward, inbox) = mpsc::channel();
-    spawn_reader(io::stdin(), "se-desktop-in", move |event| match event {
+    spawn_reader(reader, "se-desktop-in", move |event| match event {
         LinkEvent::Message(ShellMessage::Stop { reason }) => {
             std::process::exit(stop_exit_code(reason))
         }
@@ -132,4 +159,14 @@ where
         LinkEvent::Ended(_) => std::process::exit(EXIT_CHANNEL_END),
     })?;
     Ok((sender, inbox))
+}
+
+/// The surface's end on its own stdin/stdout.
+pub(crate) fn surface_stdio<W>(
+    wake: W,
+) -> io::Result<(FrameSender<SurfaceMessage>, Receiver<ShellMessage>)>
+where
+    W: Fn() + Send + 'static,
+{
+    surface_streams(io::stdin(), io::stdout(), wake)
 }

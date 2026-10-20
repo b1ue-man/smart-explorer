@@ -4,6 +4,8 @@
 
 // DSK-M3: Einstellungen → Integration → „se Desktop“ and the start pages of
 // `--open-location`/`--open-page`.
+#[path = "core/desktop_settings_gnome_ui.rs"]
+mod desktop_settings_gnome_ui;
 #[path = "core/desktop_settings_ui.rs"]
 mod desktop_settings_ui;
 // DSK-M3: the surface process `--desktop-surface` (view: DSK-M4).
@@ -14,7 +16,7 @@ pub(crate) mod desktop_surface_app;
 #[path = "core/desktop_surface_actions.rs"]
 pub(crate) mod desktop_surface_actions;
 // DSK-M7: the file clipboard a surface process installs (Wayland
-// `wl_data_device`; X11 follows with DSK-M6).
+// `wl_data_device`, X11 selection `CLIPBOARD` with DSK-M6).
 #[path = "core/desktop_surface_clipboard.rs"]
 pub(crate) mod desktop_surface_clipboard;
 #[path = "core/desktop_surface_grid_ui.rs"]

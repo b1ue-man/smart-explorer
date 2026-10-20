@@ -6,7 +6,10 @@
 //! surfaces, end with 75). It never starts the background service (V11).
 //! Once a second it also looks at the monitors and keeps the platform's
 //! other parts current (DSK-M5 Windows: navigation pane and jump list,
-//! `supervisor_upkeep.rs`).
+//! `supervisor_upkeep.rs`). Under GNOME the extension starts the surfaces;
+//! the shell takes those that connect over the socket (`supervisor_gnome.rs`,
+//! DSK-M8). A layer surface refused by the compositor is started again after
+//! a growing wait (`supervisor_backoff.rs`).
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -26,6 +29,10 @@ use crate::desktop::core::protocol::EXIT_CHANNEL_END;
 use crate::desktop::core::protocol::{check_hello, ShellMessage, StopReason, SurfaceMessage};
 use crate::desktop::core::state::{ModuleState, State};
 
+#[path = "supervisor_backoff.rs"]
+mod backoff;
+#[path = "supervisor_gnome.rs"]
+pub(crate) mod gnome;
 #[path = "supervisor_upkeep.rs"]
 mod upkeep;
 
@@ -79,6 +86,10 @@ pub(crate) fn run_shell() -> i32 {
     let (layouts, layout) = LayoutStore::open(dir.clone());
     let mut shell = Shell {
         parts: platform::ShellParts::new(dir.clone(), gui.clone()),
+        gnome: gnome::Bridge::new(dir.clone(), gui.clone()),
+        backoffs: backoff::Backoffs::default(),
+        decided_at: Instant::now(),
+        recheck_at: None,
         seen: None,
         spawn: SurfaceSpawn::new(gui, events_tx),
         dir,
@@ -101,6 +112,8 @@ pub(crate) fn run_shell() -> i32 {
         test_monitors: super::supervisor_surface::test_monitors(),
     };
     let code = shell.run();
+    // Every way out: no control file, token or socket of the GNOME channel.
+    shell.gnome.finish();
     drop(instance);
     code
 }
@@ -126,6 +139,13 @@ struct Shell {
     seen: Option<ModuleState>,
     /// The platform's parts besides the surfaces (DSK-M5).
     parts: platform::ShellParts,
+    /// The GNOME extension's side of the shell (DSK-M8).
+    gnome: gnome::Bridge,
+    /// The waits after the end of a surface's channel.
+    backoffs: backoff::Backoffs,
+    /// When the mechanism was decided last, and when to decide it again.
+    decided_at: Instant,
+    recheck_at: Option<Instant>,
     model_rev: u64,
     feed_rev: u64,
     runtime: Option<ShellRuntime>,
@@ -152,6 +172,7 @@ impl Shell {
             while let Ok((id, event)) = self.events.try_recv() {
                 self.on_event(id, event);
             }
+            self.adopt_remote();
             if last_watch.elapsed() >= WATCH_INTERVAL {
                 last_watch = Instant::now();
                 if self.update.requested() {
@@ -202,7 +223,7 @@ impl Shell {
         if config != self.config {
             self.config = config;
             self.model_rev += 1;
-            self.mechanism = self.decide_mechanism();
+            self.decide_now();
             if let Some(config) = &self.config {
                 for surface in self.surfaces.iter().filter(|surface| surface.greeted) {
                     surface.send(ShellMessage::Config {
@@ -213,67 +234,14 @@ impl Shell {
         }
     }
 
-    fn refresh_monitors(&mut self) {
-        self.monitors = platform::monitors();
-        self.mechanism = self.decide_mechanism();
-        self.model_rev += 1;
-        // C5.5: the primary monitor keeps the items of a monitor that left.
-        if let Some(primary) = self.primary_monitor() {
-            let present = self.shown_monitors();
-            let _ = self.layout.adopt_removed_monitors(&primary, &present);
-        }
-    }
-
-    fn decide_mechanism(&self) -> Mechanism {
-        let icons = self.config.as_ref().map_or(
-            crate::desktop::core::config::ForeignDesktopIcons::Keep,
-            |config| config.foreign_desktop_icons,
-        );
-        mechanism::decide(&platform::session_facts(), icons)
-    }
-
-    /// Surfaces that get a process now (`--monitor <key>` each, or the one
-    /// `--layer` process, DSK-M7).
-    fn wanted_monitors(&self) -> Vec<String> {
-        super::supervisor_surface::wanted_surfaces(
-            &self.mechanism,
-            self.surface_on,
-            &self.monitors,
-            self.test_monitors.as_deref(),
-        )
-    }
-
-    /// Monitors whose arrangement is shown: the layer process serves every
-    /// output of the session, so there it is the session's monitor list.
-    fn shown_monitors(&self) -> Vec<String> {
-        let layer = self.surface_on
-            && self.test_monitors.is_none()
-            && matches!(self.mechanism, Mechanism::LayerShell { .. });
-        if layer {
-            self.monitors
-                .iter()
-                .map(|monitor| monitor.key.clone())
-                .collect()
-        } else {
-            self.wanted_monitors()
-        }
-    }
-
-    fn primary_monitor(&self) -> Option<String> {
-        let shown = self.shown_monitors();
-        self.monitors
-            .iter()
-            .find(|monitor| monitor.primary && shown.contains(&monitor.key))
-            .map(|monitor| monitor.key.clone())
-            .or_else(|| shown.first().cloned())
-    }
-
     /// Starts the missing surfaces; `Some(code)` when start failures halted
     /// the shell.
     fn ensure_surfaces(&mut self) -> Option<i32> {
         let wanted = self.wanted_monitors();
         for surface in &mut self.surfaces {
-            if !wanted.contains(&surface.monitor) && surface.stopping.is_none() {
+            // A surface of the GNOME extension is not started by the shell.
+            let ours = !surface.is_remote();
+            if ours && !wanted.contains(&surface.monitor) && surface.stopping.is_none() {
                 surface.stop(StopReason::Disable);
             }
         }
@@ -315,26 +283,24 @@ impl Shell {
         let Some(index) = self.surfaces.iter().position(|surface| surface.id == id) else {
             return;
         };
-        let LinkEvent::Message(message) = event else {
-            // The end is handled when the process is reaped.
-            return;
+        let message = match event {
+            LinkEvent::Message(message) => message,
+            LinkEvent::Ended(_) => {
+                // A process is reaped; a surface of the GNOME extension has
+                // no process of ours, its connection tells.
+                self.surfaces[index].mark_link_closed();
+                return;
+            }
         };
         match message {
             hello @ SurfaceMessage::Hello { .. } => {
-                let surface = &mut self.surfaces[index];
-                if let Err(error) = check_hello(&hello, Some(surface.monitor.as_str()), None) {
+                let expected = self.surfaces[index].monitor.clone();
+                if let Err(error) = check_hello(&hello, Some(expected.as_str()), None) {
                     self.dir.log("surface_hello_rejected", &error.to_string());
-                    surface.kill();
+                    self.surfaces[index].kill();
                     return;
                 }
-                surface.greeted = true;
-                surface.last_alive = Instant::now();
-                surface.sent_rev = None;
-                if let Some(config) = &self.config {
-                    surface.send(ShellMessage::Config {
-                        config: config.clone(),
-                    });
-                }
+                self.greet(index);
             }
             SurfaceMessage::Alive => self.surfaces[index].last_alive = Instant::now(),
             // The operations carry their monitor; the frame's own `monitor`
@@ -348,6 +314,20 @@ impl Shell {
             // The wallpaper is read again by DSK-M4/DSK-M5.
             SurfaceMessage::WallpaperChanged => self.model_rev += 1,
             SurfaceMessage::Connect => self.feed.connect(),
+        }
+    }
+
+    /// A surface that greeted (or connected over the GNOME socket): it gets
+    /// the configuration and, with the next round, the model.
+    fn greet(&mut self, index: usize) {
+        let surface = &mut self.surfaces[index];
+        surface.greeted = true;
+        surface.last_alive = Instant::now();
+        surface.sent_rev = None;
+        if let Some(config) = &self.config {
+            surface.send(ShellMessage::Config {
+                config: config.clone(),
+            });
         }
     }
 
@@ -380,15 +360,31 @@ impl Shell {
                 &format!("{} {} {shown}", surface.monitor, surface.pid),
             );
             self.model_rev += 1;
-            if surface.stopping.is_some() {
+            // The extension restarts its own surfaces and counts their
+            // crashes (U34-15).
+            if surface.stopping.is_some() || surface.is_remote() {
                 continue;
             }
             match code {
-                // Not crashes (C5.5): restart without counting; on an update
-                // the shell sees the marker within a second and ends first.
-                Some(EXIT_UPDATE_STOP) | Some(EXIT_CHANNEL_END) => {
+                // Not a crash (C5.5): on an update the shell sees the marker
+                // within a second and ends first.
+                Some(EXIT_UPDATE_STOP) => {
                     self.restart_at
                         .push((surface.monitor.clone(), now + Duration::from_secs(1)));
+                }
+                // Not a crash either, but a compositor that refuses the
+                // surface for good ends it with 76 again and again: the wait
+                // grows (1, 2, 4, 8, 16, 32, then 60 seconds) and starts
+                // over once a surface ran again.
+                Some(EXIT_CHANNEL_END) => {
+                    let wait = self
+                        .backoffs
+                        .next(&surface.monitor, surface.started.elapsed());
+                    self.dir.log(
+                        "surface_restart",
+                        &format!("{} in {} s (Kanalende)", surface.monitor, wait.as_secs()),
+                    );
+                    self.restart_at.push((surface.monitor.clone(), now + wait));
                 }
                 _ => {
                     if let Some(code) = self.crashed(&surface.monitor) {

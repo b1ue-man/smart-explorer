@@ -9,9 +9,14 @@
 //! (`--desktop-surface`), the read without service start, the status and
 //! the start switches. Inventory: `docs/oberflaechen/desktop-launcher.md`.
 // The start switches (`run_gui`), `se desktop`, MCP `status` and Windows
-// `--unregister` reach this module. Staged until DSK-M6 (U34, Linux):
-// `FitMode::from_gnome` of the system wallpaper has no caller yet; a build
-// without this allow names every other part without one.
+// `--unregister` reach this module. The blanket allow stays, because each
+// platform leaves the code of the other one unused (DSK-M6 removed the
+// staging of the Linux names `FitMode::from_gnome`, `SystemBackground` and
+// `SurfaceSignals::raise`; their allows in `desktop_surface_host.rs` are
+// gone). Unused on Linux: `FitMode::from_windows`, the Windows parts and
+// registrations, `ShellOutcome` (the Explorer actions). Unused on Windows:
+// `FitMode::from_gnome`, the X11, layer and GNOME values of `Mechanism` and
+// `Reason`, `DisplayServer::{X11, Wayland}`, the Linux ledger kinds.
 #![allow(dead_code)]
 
 pub(crate) mod core;
