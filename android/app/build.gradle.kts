@@ -143,6 +143,8 @@ android {
 
     testOptions {
         animationsDisabled = true
+        // Robolectric (DRV-M8 provider tests) reads the merged manifest and resources.
+        unitTests.isIncludeAndroidResources = true
     }
 
     lint {
@@ -180,6 +182,10 @@ dependencies {
     debugImplementation(libs.compose.ui.test.manifest)
 
     testImplementation(libs.junit4)
+    // DRV-M8: the documents provider and its commit worker on the JVM (android-build stage).
+    testImplementation("org.robolectric:robolectric:4.14.1")
+    testImplementation(libs.androidx.test.core)
+    testImplementation(libs.androidx.work.testing)
 
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.androidx.test.espresso.core)

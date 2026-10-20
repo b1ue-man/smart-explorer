@@ -7,6 +7,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.longOrNull
@@ -59,6 +60,13 @@ internal object CoreEvents {
                 "screenSession" -> (event["session"] as? JsonPrimitive)?.longOrNull?.let { session ->
                     ScreenSessionChanged(session, event.text("state").orEmpty(), event.text("reason"))
                 }
+                "docs.changed" -> DocsChanged(
+                    roots = (event["roots"] as? JsonPrimitive)?.booleanOrNull ?: false,
+                    documents = (event["documents"] as? JsonArray)
+                        ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+                        .orEmpty(),
+                    commitFailed = (event["commitFailed"] as? JsonPrimitive)?.booleanOrNull ?: false,
+                )
                 else -> null
             }
         } catch (e: IllegalArgumentException) {
@@ -88,3 +96,9 @@ data class ScreenHostStart(
 
 /** A host session changed: `consent`, `streaming` or `ended` (with its [reason]). */
 data class ScreenSessionChanged(val session: Long, val state: String, val reason: String?) : CoreEvent
+
+/**
+ * Documents provider (DRV-M8): [roots] came or went, the listings of [documents] changed, or a
+ * change other apps saved could not be uploaded ([commitFailed]; it stays queued).
+ */
+data class DocsChanged(val roots: Boolean, val documents: List<String>, val commitFailed: Boolean) : CoreEvent

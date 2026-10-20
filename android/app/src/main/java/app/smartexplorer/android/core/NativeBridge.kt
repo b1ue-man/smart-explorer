@@ -31,6 +31,29 @@ object NativeBridge {
      */
     external fun screenControl(session: Long, timeoutMs: Int): String?
 
+    /*
+     * Documents provider (DRV-M8): the proxy descriptors other apps hold. Each call returns a
+     * negated errno on failure (SeDocumentsProvider throws ErrnoException with it).
+     */
+
+    /** Opens [documentId] in [mode] (`r`, `w`, `wt`, `rw`, `rwt`): handle ≥ 1 or −errno. */
+    external fun docOpen(documentId: String, mode: String): Long
+
+    /** Reads up to [size] bytes at [offset] into [data]: bytes read (0 at the end) or −errno. */
+    external fun docRead(handle: Long, offset: Long, size: Int, data: ByteArray): Int
+
+    /** Writes [size] bytes of [data] at [offset]: bytes written or −errno. */
+    external fun docWrite(handle: Long, offset: Long, size: Int, data: ByteArray): Int
+
+    /** The size from the handle, never over the network: bytes or −errno. */
+    external fun docSize(handle: Long): Long
+
+    /** Publishes the content now: 0 or −errno. */
+    external fun docFsync(handle: Long): Int
+
+    /** Ends the handle without blocking; publishing continues in the background: 0 or −errno. */
+    external fun docRelease(handle: Long): Int
+
     /** Error envelope for a missing answer (see class comment). */
     fun orError(raw: String?): String =
         raw ?: "{\"err\":{\"kind\":\"internal\",\"message\":\"Der Kern lieferte keine Antwort\"}}"

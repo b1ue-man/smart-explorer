@@ -49,13 +49,13 @@ import app.smartexplorer.android.update.UpdateState
 enum class SettingsFocus { Background, Updates }
 
 /** Sections in display order (spec F21); the index is the lazy-list item index. */
-private enum class SettingsItem { Appearance, FileList, Background, ShareServer, Drive, Storage, Updates, ErrorLog, About }
+private enum class SettingsItem { Appearance, FileList, Background, ShareServer, Drive, Documents, Storage, Updates, ErrorLog, About }
 
 private val THEMES = listOf("system" to "System", "light" to "Hell", "dark" to "Dunkel")
 
 /**
  * "Mehr → Einstellungen" (spec F21): Darstellung · Dateiliste · Hintergrund · Share-Server ·
- * Google Drive · Speicherzugriff · Updates · Fehlerprotokoll · Über. [focus] scrolls to a section
+ * Google Drive · Ordner für Apps bereitstellen · Speicherzugriff · Updates · Fehlerprotokoll · Über. [focus] scrolls to a section
  * once and is then reported via [onFocusHandled].
  */
 @Composable
@@ -97,6 +97,8 @@ fun SettingsScreen(
                                 SectionHeader("Google Drive")
                                 GoogleDriveSection(Modifier.padding(horizontal = 16.dp))
                             }
+                            // DRV-M8: the documents provider for other apps.
+                            SettingsItem.Documents -> DocumentsProviderSection()
                             SettingsItem.Storage -> StorageAccessSettings()
                             SettingsItem.Updates -> UpdateSettings()
                             SettingsItem.ErrorLog -> LinkRow("Fehlerprotokoll", "App-Fehler und Absturzprotokoll", R.drawable.ic_warning, onOpenErrorLog)

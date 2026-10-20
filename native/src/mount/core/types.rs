@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use super::cache_policy::{MountCachePolicy, MountRuntimePreference};
 use super::metadata_policy::MountMetadataPolicy;
 use super::path_dialect::PathDialect;
+use super::range_read::RangeReadPolicy;
 
 // Moved without any change of the serde form (DRV-M1); re-exported so every
 // caller keeps the old path.
@@ -270,6 +271,7 @@ impl MountConfig {
             cache: self.cache,
             runtime_preference: self.runtime_preference,
             path_dialect: PathDialect::Windows,
+            range_reads: RangeReadPolicy::default(),
         }
     }
 
@@ -344,6 +346,10 @@ pub struct MountRuntimeConfig {
     /// so earlier bytes stay unchanged.
     #[serde(default, skip_serializing_if = "PathDialect::is_windows")]
     pub path_dialect: PathDialect,
+    /// Which handles read byte ranges without a whole-file copy (DRV-M8).
+    /// Absent means read-only drives only; that value is not written.
+    #[serde(default, skip_serializing_if = "RangeReadPolicy::is_default")]
+    pub range_reads: RangeReadPolicy,
 }
 
 impl MountRuntimeConfig {
@@ -355,7 +361,15 @@ impl MountRuntimeConfig {
             cache: MountCachePolicy::default(),
             runtime_preference: MountRuntimePreference::default(),
             path_dialect: PathDialect::Windows,
+            range_reads: RangeReadPolicy::default(),
         }
+    }
+
+    /// The Android documents provider (DRV-M8): every read-only handle of a
+    /// writable root reads large files by ranges.
+    pub fn with_range_reads_on_read_only_handles(mut self) -> Self {
+        self.range_reads = RangeReadPolicy::ReadOnlyHandles;
+        self
     }
 
     pub fn with_path_dialect(mut self, dialect: PathDialect) -> Self {
