@@ -223,6 +223,66 @@ pub(crate) enum VaultIpcReply {
     },
 }
 
+/// `Vault::Status` (C7.3 `se vault list` keys, S5-V1).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct VaultStatusView {
+    pub(crate) sites: Vec<VaultSiteView>,
+    /// Number of the newest event; a poller remembers it.
+    #[serde(default)]
+    pub(crate) event_seq: u64,
+    /// The newest events, oldest first (at most 64).
+    #[serde(default)]
+    pub(crate) events: Vec<VaultEventView>,
+    /// Which lock signals the worker receives on this system.
+    #[serde(default)]
+    pub(crate) sleep_lock: bool,
+    #[serde(default)]
+    pub(crate) screen_lock: bool,
+    /// What surfaces say next to the screen lock switch (Linux).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) screen_lock_note: Option<String>,
+}
+
+/// One entered site (never a path inside the vault).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct VaultSiteView {
+    pub(crate) site: String,
+    pub(crate) label: String,
+    /// `locked`, `unlocked`, `locking`, `unavailable`.
+    pub(crate) state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) epoch: Option<u64>,
+    #[serde(default)]
+    pub(crate) consumers: u32,
+    #[serde(default)]
+    pub(crate) remember_password: bool,
+    #[serde(default)]
+    pub(crate) auto_lock_idle_min: Option<u32>,
+    #[serde(default)]
+    pub(crate) lock_on_sleep: bool,
+    #[serde(default)]
+    pub(crate) lock_on_screen_lock: bool,
+    #[serde(default)]
+    pub(crate) lock_on_background_min: Option<u32>,
+    /// Why an entry is `unavailable`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) reason: Option<String>,
+    /// Name shortening threshold of an unlocked vault (`se vault show`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) shortening_threshold: Option<u32>,
+}
+
+/// One change of a site (`VaultEvent`, C7.4): site ID, state, reason.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct VaultEventView {
+    pub(crate) seq: u64,
+    pub(crate) site: String,
+    pub(crate) state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) reason: Option<String>,
+    pub(crate) epoch: u64,
+}
+
 /// What one side holds of an entry (`a` and `b` of the CLI JSON).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct CompareSideWire {
