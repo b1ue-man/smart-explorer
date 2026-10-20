@@ -31,8 +31,9 @@ a tool search for `smart-explorer`.
 
 Targets: absolute local paths, `@label:/path` (saved remote, path below its \
 root), saved `sftp://user@host:port/path` endpoints, `share://direct/<id>/path`, \
-`share://room/<room>/<device>/path`, `gdrive:///path`. Relative local paths are \
-rejected. `etag` values from stat/read guard write/edit against lost updates. \
+`share://room/<room>/<device>/path`, `gdrive:///path`, `vault://<site>/path` \
+(unlocked vault). Relative local paths are rejected. `etag` values from \
+stat/read guard write/edit against lost updates. \
 Never ask the user for passwords in chat: saved credentials are used \
 automatically; new password logins are added by the user in a terminal \
 (`se connections add … --password-stdin`). Change Share trust (access requests, \
@@ -41,8 +42,8 @@ only when the user explicitly asks. The `se` tool \
 runs any other Smart Explorer terminal command, for example \
 `[\"share\",\"status\",\"--json\"]`, and reaches every app setting: sync setups \
 (`sync`), background worker (`background`), remotes and Google Drive \
-(`connections`), updates (`update`), Windows and Linux drives (`drive`), se \
-Desktop (`desktop`).";
+(`connections`), updates (`update`), Windows and Linux drives (`drive`), vaults \
+(`vault`), se Desktop (`desktop`).";
 
 /// Tools Claude Code loads upfront (`_meta["anthropic/alwaysLoad"]`), so the
 /// file workflow is visible without a tool search; the others stay deferred.
@@ -180,7 +181,7 @@ pub(super) fn tools() -> Vec<Tool> {
                 "wait_seconds": {"type": "integer", "minimum": 0, "description": WAIT}
             }), &["job_id"], changes(false, true)),
         tool("se", "Run an se command",
-            "Runs any other Smart Explorer terminal command as `se <args>` and returns its exit code and output, for example: [\"share\",\"status\",\"--json\"], [\"share\",\"request\",\"list\",\"--json\"], [\"share\",\"grants\",\"--json\"], [\"share\",\"grants\",\"exec\",\"--json\"], [\"share\",\"exec\",\"log\",\"--json\"], [\"share\",\"exec\",\"approvals\",\"--json\"], [\"share\",\"exec\",\"accounts\",\"--json\"], [\"share\",\"device\",\"list\",\"--json\"], [\"share\",\"room\",\"list\",\"--json\"], [\"screen\",\"bench\",\"<device>\",\"--json\"], [\"screen\",\"codec\",\"--json\"], [\"screen\",\"windows\",\"<device>\",\"--json\"], [\"connections\",\"add\",\"sftp\",\"--host\",\"h\",\"--user\",\"u\",\"--key\",\"/home/u/.ssh/id_ed25519\",\"--label\",\"prod\"], [\"connections\",\"add-peer\",\"--code\",\"SE-D3-…\"], [\"drive\",\"mount\",\"@prod:/srv\",\"--letter\",\"M\"] (Windows), [\"drive\",\"mount\",\"@prod:/srv\",\"--mount-point\",\"/home/u/SmartExplorer/prod\"] (Linux), [\"drive\",\"devices\",\"status\",\"--json\"], [\"drive\",\"open\",\"<id>\"], [\"update\",\"--check\",\"--json\"], [\"doctor\",\"--json\"], [\"sync\",\"list\",\"--json\"], [\"sync\",\"edit\",\"Docs\",\"--trigger\",\"realtime\"], [\"background\",\"status\",\"--json\"], [\"desktop\",\"status\",\"--json\"], [\"desktop\",\"enable\",\"--json\"], [\"connections\",\"gdrive\",\"status\",\"--json\"]. `[\"--help\"]` or [\"<command>\",\"--help\"] explains every command. Prefer the dedicated tools for files and remote commands.",
+            "Runs any other Smart Explorer terminal command as `se <args>` and returns its exit code and output, for example: [\"share\",\"status\",\"--json\"], [\"share\",\"request\",\"list\",\"--json\"], [\"share\",\"grants\",\"--json\"], [\"share\",\"grants\",\"exec\",\"--json\"], [\"share\",\"exec\",\"log\",\"--json\"], [\"share\",\"exec\",\"approvals\",\"--json\"], [\"share\",\"exec\",\"accounts\",\"--json\"], [\"share\",\"device\",\"list\",\"--json\"], [\"share\",\"room\",\"list\",\"--json\"], [\"screen\",\"bench\",\"<device>\",\"--json\"], [\"screen\",\"codec\",\"--json\"], [\"screen\",\"windows\",\"<device>\",\"--json\"], [\"connections\",\"add\",\"sftp\",\"--host\",\"h\",\"--user\",\"u\",\"--key\",\"/home/u/.ssh/id_ed25519\",\"--label\",\"prod\"], [\"connections\",\"add-peer\",\"--code\",\"SE-D3-…\"], [\"drive\",\"mount\",\"@prod:/srv\",\"--letter\",\"M\"] (Windows), [\"drive\",\"mount\",\"@prod:/srv\",\"--mount-point\",\"/home/u/SmartExplorer/prod\"] (Linux), [\"drive\",\"devices\",\"status\",\"--json\"], [\"drive\",\"open\",\"<id>\"], [\"update\",\"--check\",\"--json\"], [\"doctor\",\"--json\"], [\"sync\",\"list\",\"--json\"], [\"sync\",\"edit\",\"Docs\",\"--trigger\",\"realtime\"], [\"background\",\"status\",\"--json\"], [\"desktop\",\"status\",\"--json\"], [\"desktop\",\"enable\",\"--json\"], [\"vault\",\"list\",\"--json\"], [\"connections\",\"gdrive\",\"status\",\"--json\"]. `[\"--help\"]` or [\"<command>\",\"--help\"] explains every command. Prefer the dedicated tools for files and remote commands.",
             json!({
                 "args": {"type": "array", "items": {"type": "string"}, "minItems": 1, "description": "Arguments after `se`."},
                 "stdin": {"type": "string", "description": "Standard input (closed afterwards), e.g. for --pin-stdin."},
