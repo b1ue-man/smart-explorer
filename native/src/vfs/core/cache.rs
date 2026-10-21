@@ -1,7 +1,6 @@
-use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
-use std::sync::{Arc, Mutex, Weak};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use super::{
     Backend, BackendHandle, BatchGet, BatchLimits, BatchPut, BatchPutOutcome, BatchSink,
@@ -20,13 +19,15 @@ mod cache_load;
 mod cache_paths;
 #[path = "cache_retirement.rs"]
 mod cache_retirement;
+#[path = "cache_state.rs"]
+mod cache_state;
 #[path = "cache_support.rs"]
 mod cache_support;
 #[path = "cache_writer.rs"]
 mod cache_writer;
 use cache_index::ChildKey;
 use cache_limits::CacheLimits;
-use cache_load::{DirectoryLoad, DirectorySnapshot};
+use cache_state::{CacheState, CachedDirectory};
 use cache_writer::InvalidatingWriter;
 
 #[cfg(test)]
@@ -41,54 +42,11 @@ mod vault_cache_task_tests;
 /// would only add staleness with no hit benefit.
 const CACHE_TTL: Duration = Duration::from_secs(20);
 
-struct CachedDirectory {
-    snapshot: DirectorySnapshot,
-    entry_count: usize,
-    byte_count: usize,
-    last_touch: u64,
-}
-
-#[derive(Default)]
-pub(super) struct CacheState {
-    directories: BTreeMap<String, CachedDirectory>,
-    recency: BTreeSet<(u64, String)>,
-    expiry: BTreeSet<(Instant, String)>,
-    loads: BTreeMap<String, Weak<DirectoryLoad>>,
-    entries: usize,
-    bytes: usize,
-    clock: u64,
-    // Only explicit whole-cache invalidation advances this epoch. Ordinary
-    // mutations fence the affected live DirectoryLoad revisions instead.
-    generation: u64,
-}
-
 pub struct CachingBackend {
     inner: BackendHandle,
     cache: Arc<Mutex<CacheState>>,
     child_key: ChildKey,
     limits: CacheLimits,
-}
-
-impl CachingBackend {
-    pub fn new(inner: BackendHandle) -> Self {
-        Self::with_child_key(inner, cache_index::exact_child_key)
-    }
-
-    pub(crate) fn with_child_key(inner: BackendHandle, child_key: fn(&str) -> String) -> Self {
-        Self {
-            inner,
-            cache: Arc::new(Mutex::new(CacheState::default())),
-            child_key,
-            limits: CacheLimits::BROWSING,
-        }
-    }
-
-    pub(crate) fn for_mount(inner: BackendHandle, child_key: Option<fn(&str) -> String>) -> Self {
-        let mut cache =
-            Self::with_child_key(inner, child_key.unwrap_or(cache_index::exact_child_key));
-        cache.limits = CacheLimits::MOUNT;
-        cache
-    }
 }
 
 impl Backend for CachingBackend {
