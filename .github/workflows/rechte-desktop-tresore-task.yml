@@ -481,7 +481,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           sudo -n apt-get update
-          sudo -n apt-get install -y sway grim pipewire wireplumber xdg-desktop-portal xdg-desktop-portal-wlr mesa-vulkan-drivers wtype wl-clipboard
+          sudo -n apt-get install -y sway grim pipewire wireplumber xdg-desktop-portal xdg-desktop-portal-wlr mesa-vulkan-drivers wtype wl-clipboard libegl1 libgl1 libgl1-mesa-dri libegl-mesa0
 
       - name: Try KWin Wayland and the KDE portal (S4 K3; not run when missing)
         continue-on-error: true
