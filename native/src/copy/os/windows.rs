@@ -202,6 +202,20 @@ fn copy_to_fresh(
     Ok(Some((length, file)))
 }
 
+/// Windows copies files through `CopyFile2` in one call and has no ranges to
+/// measure: the measured copy of other platforms is a plain `copy_handles`
+/// here, and the caller never learns a verdict.
+pub(super) fn copy_probed(
+    reader: &File,
+    writer: &mut File,
+    cancel: &std::sync::atomic::AtomicBool,
+    progress: &mut dyn FnMut(u64),
+    _threads: usize,
+    _report: &dyn Fn(bool),
+) -> io::Result<Option<u64>> {
+    copy_handles(reader, writer, cancel, progress, 1)
+}
+
 /// Copies through the opened handles (sources readable only through
 /// `local_access`, durable moves and replacements): a reading thread runs
 /// ahead of the writing caller (`pipe_copy`). `None` when canceled. The

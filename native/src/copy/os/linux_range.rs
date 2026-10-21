@@ -1,8 +1,9 @@
 //! A large file copied by several threads, each a contiguous range of it
-//! with `copy_file_range` at explicit offsets (Linux and Android). Only for
-//! non-rotating drives and only with permits the engine's flow handed out;
-//! the caller sizes the stage first (`set_len`), so the ranges land in a
-//! sparse file that is complete once every range is.
+//! with `copy_file_range` at explicit offsets (Linux and Android). Only with
+//! permits the engine's flow handed out, on drives known to be flash or
+//! measured to gain from it (`linux_probe`); the caller sizes the stage first
+//! (`set_len`), so the ranges land in a sparse file that is complete once
+//! every range is.
 use std::fs::File;
 use std::io;
 use std::os::unix::fs::FileExt;
@@ -68,7 +69,27 @@ pub(super) fn copy_ranges_with(
     progress: &mut dyn FnMut(u64),
     hooks: &Hooks,
 ) -> io::Result<Option<u64>> {
-    let ranges = split(size, threads);
+    copy_span_with(reader, writer, 0, size, threads, cancel, progress, hooks)
+}
+
+/// Copies the bytes `[start, end)` of `reader` to the same offsets of
+/// `writer` with `threads` threads; `None` when canceled. The measured probe
+/// (`linux_probe`) copies a file in spans, each with its own thread count;
+/// `progress` is called by the calling thread only and counts the span's
+/// bytes once.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn copy_span_with(
+    reader: &File,
+    writer: &File,
+    start: u64,
+    end: u64,
+    threads: usize,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(u64),
+    hooks: &Hooks,
+) -> io::Result<Option<u64>> {
+    let size = end.saturating_sub(start);
+    let ranges = split_span(start, end, threads);
     let shared = Shared {
         reader,
         writer,
@@ -140,6 +161,14 @@ pub(super) fn copy_ranges_with(
         ));
     }
     Ok(Some(total))
+}
+
+/// `split` of the span `[start, end)`: the same borders, shifted by `start`.
+fn split_span(start: u64, end: u64, threads: usize) -> Vec<(u64, u64)> {
+    split(end.saturating_sub(start), threads)
+        .into_iter()
+        .map(|(from, to)| (start + from, start + to))
+        .collect()
 }
 
 /// Border pairs `[start, end)`: `threads` contiguous ranges, borders on
