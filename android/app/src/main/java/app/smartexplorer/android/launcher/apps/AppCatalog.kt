@@ -37,8 +37,9 @@ data class AppEntry(
 
 /**
  * All launchable apps of all profiles of this process (U35-24). [reload] reads `LauncherApps`; the
- * activity calls it at start and from the `LauncherApps.Callback`, which tells which package changed.
- * Apps of the private space are listed with [ProfileKind.Private] and left out of [visible] until U38.
+ * activity calls it at start and from the `LauncherApps.Callback` and the profile broadcasts. A locked private
+ * space (a paused [ProfileKind.Private] profile) has **no** apps here (U38-14); an unlocked one is listed with its
+ * kind and shows in the list and the search only while [showPrivateSpace] is on.
  */
 class AppCatalog private constructor(private val context: Context) {
     private val launcherApps = context.getSystemService(LauncherApps::class.java)
@@ -56,11 +57,19 @@ class AppCatalog private constructor(private val context: Context) {
     var usableProfiles: Set<Long> = emptySet()
         private set
 
-    /** Apps shown in the list and found by the search: not those of the private space (U38). */
-    val visible: List<AppEntry> get() = appsState.value.filter { it.kind != ProfileKind.Private }
+    /** The switch „Privaten Bereich in der App-Liste zeigen“ (U38-14); the view model keeps it in step with `layout.json`. */
+    @Volatile
+    var showPrivateSpace: Boolean = true
 
-    /** Profiles whose widgets the picker offers, the owner's first (U38-10); the private space is left out until DSK-M12. */
-    fun profilesForPicker(): List<ProfileInfo> = profilesState.value.filter { it.kind != ProfileKind.Private }.sortedBy { !it.isPersonal }
+    /** Apps shown in the list and found by the search (U38-14): those of the private space only while it is unlocked and shown. */
+    val visible: List<AppEntry> get() = shown(appsState.value, showPrivateSpace)
+
+    /**
+     * Profiles whose widgets the picker offers, the owner's first (U38-10). A locked private space is left out, an
+     * unlocked one only while the person lets it show.
+     */
+    fun profilesForPicker(): List<ProfileInfo> =
+        profilesState.value.filter { PrivateSpace.appVisible(it.kind, it.isQuiet, showPrivateSpace) }.sortedBy { !it.isPersonal }
 
     fun find(component: String, userSerial: Long): AppEntry? =
         appsState.value.firstOrNull { it.componentString == component && it.userSerial == userSerial }
@@ -74,6 +83,8 @@ class AppCatalog private constructor(private val context: Context) {
         for (profile in profiles) {
             val usable = isUsable(profile.user)
             if (usable) usableNow.add(profile.userSerial)
+            // A locked private space lists nothing: not in the app list, the search or the placement (U38-14).
+            if (profile.isHidden) continue
             val activities = try {
                 launcherApps.getActivityList(null, profile.user)
             } catch (_: SecurityException) {
@@ -110,6 +121,10 @@ class AppCatalog private constructor(private val context: Context) {
     }
 
     companion object {
+        /** The entries of [apps] that the list and the search show (U38-14). */
+        fun shown(apps: List<AppEntry>, showPrivate: Boolean): List<AppEntry> =
+            apps.filter { PrivateSpace.appVisible(it.kind, quiet = false, showSetting = showPrivate) }
+
         @Volatile
         private var instance: AppCatalog? = null
 

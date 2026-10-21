@@ -1,8 +1,10 @@
 package app.smartexplorer.android.ui.settings
 
 import android.content.ActivityNotFoundException
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -25,6 +27,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.core.app.NotificationManagerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import app.smartexplorer.android.launcher.EnableResult
@@ -34,6 +37,7 @@ import app.smartexplorer.android.launcher.HomeRules
 import app.smartexplorer.android.launcher.LauncherParts
 import app.smartexplorer.android.launcher.LauncherState
 import app.smartexplorer.android.launcher.LauncherSwitch
+import app.smartexplorer.android.launcher.apps.PrivateSpace
 import app.smartexplorer.android.ui.common.Snackbars
 import app.smartexplorer.android.ui.more.HintLine
 import app.smartexplorer.android.ui.more.SectionHeader
@@ -49,6 +53,10 @@ private data class CardData(
     val previousName: String?,
     val widgetOn: Boolean,
     val recovered: Boolean,
+    /** `ACCESS_HIDDEN_PROFILES` is granted (it can be withdrawn by hand only, U38-15). */
+    val hiddenProfilesGranted: Boolean,
+    /** The person allowed the notification listener of the dots (U38-12). */
+    val badgesOn: Boolean,
 )
 
 private fun readCard(context: Context): CardData {
@@ -64,8 +72,31 @@ private fun readCard(context: Context): CardData {
         previousName = state.previousHome?.let { LauncherSwitch.previousHomeLabel(context, it) },
         widgetOn = state.parts.widget,
         recovered = LauncherState.recoveredFile(context).exists(),
+        hiddenProfilesGranted = context.checkSelfPermission(PrivateSpace.PERMISSION) == PackageManager.PERMISSION_GRANTED,
+        badgesOn = NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName),
     )
 }
+
+/** The system page for the notification access of the dots; the list of all listeners when the detail page is missing. */
+private fun openBadgeAccess(context: Context) {
+    val listener = ComponentName(context, BADGE_SERVICE).flattenToString()
+    try {
+        context.startActivity(
+            Intent(Settings.ACTION_NOTIFICATION_LISTENER_DETAIL_SETTINGS)
+                .putExtra(Settings.EXTRA_NOTIFICATION_LISTENER_COMPONENT_NAME, listener)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
+    } catch (_: ActivityNotFoundException) {
+        try {
+            context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (_: ActivityNotFoundException) {
+            Snackbars.show("Einstellung nicht verfügbar – bitte in den Systemeinstellungen den Benachrichtigungszugriff erlauben.")
+        }
+    }
+}
+
+/** Class name of the listener; a string so the main process loads no launcher class (U35-2). */
+private const val BADGE_SERVICE = "app.smartexplorer.android.launcher.badges.BadgeListenerService"
 
 private fun openHomeSettings(context: Context) {
     try {
@@ -137,6 +168,7 @@ fun LauncherSettings(modifier: Modifier = Modifier) {
             }
         }
         PrivateSpaceLine(card)
+        if (card.enabled) BadgeLine(card, context)
         if (LauncherParts.widget.isNotEmpty()) {
             ToggleSetting("Geräte-Widget für fremde Launcher", card.widgetOn, { on ->
                 try {
@@ -221,10 +253,20 @@ private fun DisabledStatement(notice: HomeNotice, previousName: String?, context
 
 @Composable
 private fun PrivateSpaceLine(card: CardData) {
-    val text = when {
-        Build.VERSION.SDK_INT < Build.VERSION_CODES.VANILLA_ICE_CREAM -> "Privater Bereich: nicht verfügbar (Android 15 oder neuer nötig)"
-        card.roleHeld -> "Privater Bereich: verfügbar"
-        else -> "Privater Bereich: erst als Standard-Startbildschirm verfügbar"
-    }
+    val text = PrivateSpace.statusLine(Build.VERSION.SDK_INT, card.roleHeld, card.hiddenProfilesGranted)
     Text(text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+}
+
+/** „Benachrichtigungspunkte: an“ or „… aus (Zugriff fehlt)“ with the button to the system page (U38-12, U38-15). */
+@Composable
+private fun BadgeLine(card: CardData, context: Context) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            if (card.badgesOn) "Benachrichtigungspunkte: an" else "Benachrichtigungspunkte: aus (Zugriff fehlt)",
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        if (!card.badgesOn) {
+            OutlinedButton(onClick = { openBadgeAccess(context) }, modifier = Modifier.fillMaxWidth()) { Text("Zugriff erlauben") }
+        }
+    }
 }

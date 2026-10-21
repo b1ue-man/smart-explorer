@@ -66,7 +66,8 @@ fun FolderPopup(
             editing = false
         }
     }
-    val columns = ceil(sqrt(max(1, folder.children.size).toDouble())).toInt().coerceIn(2, max(2, maxColumns))
+    val children = context.visibleChildren(folder)
+    val columns = ceil(sqrt(max(1, children.size).toDouble())).toInt().coerceIn(2, max(2, maxColumns))
 
     BoxWithConstraints(
         Modifier.fillMaxSize()
@@ -104,7 +105,7 @@ fun FolderPopup(
                     columns = GridCells.Fixed(columns),
                     modifier = Modifier.fillMaxWidth().heightIn(max = maxHeight * 0.7f).padding(top = 8.dp),
                 ) {
-                    items(folder.children, key = { it.id }) { child ->
+                    items(children, key = { it.id }) { child ->
                         ChildTile(
                             child,
                             context,

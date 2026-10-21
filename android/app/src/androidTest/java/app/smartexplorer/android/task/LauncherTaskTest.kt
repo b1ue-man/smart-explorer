@@ -55,7 +55,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * DSK-M9, DSK-M10 and DSK-M11 on the device (U35-34, U38-17): the launcher module as a whole. The tests run in the app
+ * DSK-M9, DSK-M10, DSK-M11 and DSK-M12 on the device (U35-34, U38-17): the launcher module as a whole. The tests run in the app
  * process (the instrumentation shares it) and look at the launcher process `:launcher` from outside:
  * the component state, `ps`, `/proc/<pid>/maps`, `dumpsys`, the role holders. The device is the suite's,
  * never the user's. `add-role-holder` stands for the person's choice in the system dialog (A32).
@@ -677,6 +677,175 @@ class LauncherTaskTest {
         shell("am start -n $pkg/.launcher.pin.PinRequestActivity -a android.content.pm.action.CONFIRM_PIN_APPWIDGET")
         assertTrue("the activity stays after a forged widget intent", waitFor(15_000) { !shell("dumpsys activity activities").contains("PinRequestActivity") })
         assertFalse(device.hasObject(By.text("Widget hinzufügen")))
+    }
+
+    // ---- DSK-M12: notification dots, work profile, private space (U38-17) -----------------------------------
+
+    private val badgeListener = "$pkg/app.smartexplorer.android.launcher.badges.BadgeListenerService"
+    private val ownActivity = "$pkg/app.smartexplorer.android.MainActivity"
+
+    /** The id of the user a `pm create-user` command printed, or `null` when it refused. */
+    private fun createdUserId(output: String): Int? = Regex("""id\s+(\d+)""").find(output)?.groupValues?.get(1)?.toIntOrNull()
+
+    /** True while `dumpsys user` marks the profile [id] as paused (quiet mode); a locked private space is paused as well. */
+    private fun isQuiet(id: Int): Boolean {
+        val text = shell("dumpsys user")
+        val start = text.indexOf("UserInfo{$id:")
+        if (start < 0) return false
+        return text.substring(start, minOf(text.length, start + 900)).contains("QUIET_MODE")
+    }
+
+    /** A layout with the own app on page 1, so there is a tile to carry the dot. */
+    private fun layoutWithOwnApp(userSerial: Long): String {
+        val item = HomeItem(
+            id = "iown",
+            kind = "app",
+            attrs = kotlinx.serialization.json.JsonObject(
+                mapOf(
+                    "component" to kotlinx.serialization.json.JsonPrimitive(ownActivity),
+                    "user" to kotlinx.serialization.json.JsonPrimitive(userSerial),
+                ),
+            ),
+        )
+        val layout = HomeLayout(app.smartexplorer.android.launcher.model.GridSpec(4, 5, 56), listOf(listOf(item)), emptyList())
+        return LayoutJson.encode(layout)
+    }
+
+    @Test
+    fun launcher_task_badge_from_test_notification() {
+        // The test APK has no launcher icon, so the notification comes from the app under test (the instrumentation shares it).
+        launcherDir().mkdirs()
+        File(launcherDir(), "layout.json").writeText(layoutWithOwnApp(0))
+        shell("pm grant $pkg android.permission.POST_NOTIFICATIONS")
+        startLauncher()
+        shell("cmd notification allow_listener $badgeListener")
+        val manager = appContext.getSystemService(android.app.NotificationManager::class.java)
+        val channel = android.app.NotificationChannel("launcher-task-badge", "Launcher task", android.app.NotificationManager.IMPORTANCE_DEFAULT)
+        channel.setShowBadge(true)
+        manager.createNotificationChannel(channel)
+        try {
+            val label = "Smart Explorer"
+            assertTrue("no tile for the own app", device.wait(Until.hasObject(By.desc(label)), 10_000))
+            assertFalse("a dot before any notification", device.hasObject(By.descContains("Benachrichtigung")))
+            val notification = android.app.Notification.Builder(appContext, channel.id)
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setContentTitle("Launcher task")
+                .build()
+            manager.notify(7381, notification)
+            assertTrue("no dot appeared on the icon", device.wait(Until.hasObject(By.desc("$label, Benachrichtigung")), 20_000))
+            manager.cancel(7381)
+            assertTrue("the dot stays after the notification is gone", device.wait(Until.gone(By.descContains("Benachrichtigung")), 20_000))
+        } finally {
+            manager.cancel(7381)
+            manager.deleteNotificationChannel(channel.id)
+            shell("cmd notification disallow_listener $badgeListener")
+        }
+    }
+
+    @Test
+    fun launcher_task_quiet_mode_toggle() {
+        val created = shell("pm create-user --profileOf 0 --managed Arbeit")
+        val id = createdUserId(created)
+        assumeTrue("nicht ausgeführt: Arbeitsprofil nicht anlegbar (DN17): $created", id != null)
+        try {
+            shell("am start-user $id")
+            startLauncher()
+            val button = device.wait(Until.findObject(By.desc("Alle Apps")), 10_000)
+            assertNotNull(button)
+            button.click()
+            val tab = device.wait(Until.findObject(By.text("Arbeit")), 15_000)
+            assertNotNull("no tab „Arbeit“ with a work profile", tab)
+            tab.click()
+            assertTrue("no row „Arbeitsprofil pausieren“", device.wait(Until.hasObject(By.text("Arbeitsprofil pausieren")), 10_000))
+            val toggle = device.wait(Until.findObject(By.clazz("android.widget.Switch")), 10_000)
+            assertNotNull("no switch for the work profile", toggle)
+            assertFalse("the profile starts paused", isQuiet(id!!))
+            toggle.click()
+            assertTrue("dumpsys user shows no quiet mode after „Arbeitsprofil pausieren“", waitFor(20_000) { isQuiet(id) })
+            assertTrue("no banner while paused", device.wait(Until.hasObject(By.text("Arbeits-Apps sind pausiert.")), 20_000))
+            device.findObject(By.text("Fortsetzen")).click()
+            assertTrue("the profile stays paused after „Fortsetzen“", waitFor(20_000) { !isQuiet(id) })
+            assertTrue("the banner stays", device.wait(Until.gone(By.text("Arbeits-Apps sind pausiert.")), 20_000))
+        } finally {
+            shell("pm remove-user $id")
+        }
+    }
+
+    /**
+     * Creates a private space profile and installs the app into it, so that the private space has an app whose name is
+     * known (A34: on a device without the private space, `pm create-user` refuses and the test is skipped).
+     */
+    private fun withPrivateSpace(body: (id: Int, serial: Long) -> Unit) {
+        assumeTrue("nicht ausgeführt: Privater Bereich braucht Android 15 oder neuer", android.os.Build.VERSION.SDK_INT >= 35)
+        val created = shell("pm create-user --profileOf 0 --user-type android.os.usertype.profile.PRIVATE Privat")
+        val id = createdUserId(created)
+        assumeTrue("nicht ausgeführt: Privater Bereich nicht anlegbar (A34): $created", id != null)
+        try {
+            shell("am start-user $id")
+            shell("pm install-existing --user $id $pkg")
+            val serial = appContext.getSystemService(android.os.UserManager::class.java).getSerialNumberForUser(UserHandle.of(id!!))
+            body(id, serial)
+        } finally {
+            shell("pm remove-user $id")
+        }
+    }
+
+    /** Opens the app list and waits for the section of the private space. */
+    private fun openDrawerWithPrivateSection() {
+        val button = device.wait(Until.findObject(By.desc("Alle Apps")), 10_000)
+        assertNotNull(button)
+        button.click()
+        assertTrue("no section „Privater Bereich“", device.wait(Until.hasObject(By.text("Privater Bereich")), 15_000))
+    }
+
+    @Test
+    fun launcher_task_private_space_hidden_when_locked() {
+        withPrivateSpace { id, serial ->
+            // The private copy of the app sits on the home screen before the space is locked.
+            launcherDir().mkdirs()
+            File(launcherDir(), "layout.json").writeText(layoutWithOwnApp(serial))
+            startLauncher()
+            val catalog = AppCatalog.get(appContext)
+            assertTrue("the private space has no apps while unlocked", waitFor { catalog.reload(); catalog.visible.any { it.kind == app.smartexplorer.android.launcher.apps.ProfileKind.Private } })
+            assertTrue("the tile of the private app is missing while unlocked", device.wait(Until.hasObject(By.desc("Smart Explorer")), 10_000))
+            openDrawerWithPrivateSection()
+            assertTrue("no button „Sperren“", device.wait(Until.hasObject(By.text("Sperren")), 10_000))
+            device.findObject(By.text("Sperren")).click()
+            assertTrue("dumpsys user shows the private space still unlocked after „Sperren“", waitFor(20_000) { isQuiet(id) })
+            assertTrue("no line „Privater Bereich ist gesperrt.“", device.wait(Until.hasObject(By.text("Privater Bereich ist gesperrt.")), 20_000))
+            assertTrue(
+                "the locked private space still lists apps",
+                waitFor { catalog.reload(); catalog.apps.value.none { it.kind == app.smartexplorer.android.launcher.apps.ProfileKind.Private } },
+            )
+            // The icon on the home screen is gone, its cell stays in the arrangement.
+            device.pressHome()
+            assertTrue("the tile of the locked private space is still drawn", device.wait(Until.gone(By.desc("Smart Explorer")), 15_000))
+            assertTrue("the item left layout.json", readLayout()?.pages?.flatten()?.any { it.id == "iown" } == true)
+        }
+    }
+
+    @Test
+    fun launcher_task_private_space_not_in_search_when_locked() {
+        withPrivateSpace { id, _ ->
+            launcherDir().mkdirs()
+            File(launcherDir(), "layout.json").writeText(emptyLayout)
+            startLauncher()
+            openDrawerWithPrivateSection()
+            val field = device.wait(Until.findObject(By.text("Apps suchen")), 10_000)
+            assertNotNull(field)
+            // The query is shorter than the name, so the field itself never matches the exact text of a hit.
+            field.text = "Smart Explor"
+            // Unlocked: the personal and the private app answer.
+            assertTrue("fewer than two hits while unlocked", waitFor { device.findObjects(By.text("Smart Explorer")).size >= 2 })
+            field.text = ""
+            device.wait(Until.findObject(By.text("Sperren")), 10_000)?.click()
+            assertTrue("the private space did not lock", waitFor(20_000) { isQuiet(id) })
+            val again = device.wait(Until.findObject(By.text("Apps suchen")), 10_000)
+            assertNotNull(again)
+            again.text = "Smart Explor"
+            assertTrue("no hit for the personal app", waitFor { device.findObjects(By.text("Smart Explorer")).isNotEmpty() })
+            assertTrue("the locked private space answers the search", waitFor { device.findObjects(By.text("Smart Explorer")).size == 1 })
+        }
     }
 
     private fun render(drawable: Drawable, size: Int = 192): Bitmap {

@@ -149,7 +149,7 @@ private fun AppRow(entry: AppEntry, context: ItemContext, host: DragHost, source
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        AppIcon(entry, context, 40)
+        WithDot(context.hasDot(entry)) { AppIcon(entry, context, 40) }
         Text(
             entry.label,
             style = MaterialTheme.typography.bodyLarge,

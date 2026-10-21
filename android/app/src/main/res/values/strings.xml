@@ -6,6 +6,8 @@
     <string name="launcher_label">Smart Explorer Startbildschirm</string>
     <!-- DSK-M11 (U38): the confirmation of a pin request -->
     <string name="launcher_pin_label">Zum Startbildschirm hinzufügen</string>
+    <!-- DSK-M12 (U38): the notification listener of the dots, as the system settings list it -->
+    <string name="launcher_badges_label">Benachrichtigungspunkte des se Launchers</string>
 
     <!-- Notification channels (ids: transfers, background, updates, share) -->
     <string name="channel_transfers">Übertragungen</string>
