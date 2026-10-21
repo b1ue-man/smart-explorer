@@ -374,3 +374,14 @@ panic = "unwind"
 
 [profile.dev]
 opt-level = 1
+
+[profile.speed]
+# The throughput stages of the task suite (`speed_task`, E13) measure the
+# release optimization: an opt-level 1 build measured QUIC, SSH, LZ4 and
+# signing code several times slower than what ships. Debug assertions stay on
+# because the stages switch LZ4 off and collect transfer statistics only in
+# builds with them (`SE_TEST_NO_LZ4`, `share-quic-stats.jsonl`); symbols stay
+# for the backtraces of failing cases.
+inherits = "release"
+debug-assertions = true
+strip = "none"

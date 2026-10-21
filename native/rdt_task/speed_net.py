@@ -38,6 +38,12 @@ PROFILE_KEYS = ("HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "XDG_DATA_HOME
                 "XDG_RUNTIME_DIR", "SMART_EXPLORER_E2E_TEST_NAMESPACE")
 
 
+# Local TCP ports whose traffic bypasses the link (``ctx.state[UNSHAPED]``): the IPC of the Share daemon that the
+# test program talks to. That hop is part of the product on one machine, not of the link between two devices; with
+# one netem rule on ``lo`` it crossed the shaped link a second time and halved every Share rate (run 2, P2).
+UNSHAPED = "speed_unshaped_ports"
+
+
 class Unavailable(RuntimeError):
     """A server or link that could not be set up; the message becomes the reason of the cases."""
 
@@ -84,7 +90,7 @@ def link(ctx: common.JobContext, stage: str, profile: str):
     if reason:
         raise Unavailable(f"Strecke {profile}: {reason}")
     sudo(ctx, stage, "tc", "qdisc", "del", "dev", "lo", "root")
-    added = sudo(ctx, stage, "tc", "qdisc", "add", "dev", "lo", "root", "netem", *arguments.split())
+    added = shape(ctx, stage, arguments)
     shown = ctx.run(["tc", "qdisc", "show", "dev", "lo"], stage=stage, timeout=30).output.lower()
     values = [token for token in arguments.lower().split() if token not in ("delay", "rate", "limit", "loss")]
     missing = [token for token in values if token not in shown]
@@ -96,6 +102,39 @@ def link(ctx: common.JobContext, stage: str, profile: str):
         yield env
     finally:
         sudo(ctx, stage, "tc", "qdisc", "del", "dev", "lo", "root")
+
+
+def shape(ctx: common.JobContext, stage: str, arguments: str) -> common.Completed:
+    """The netem rule on ``lo``. With ports in ``ctx.state[UNSHAPED]`` a two-band ``prio`` root sends everything to
+    netem (band 1:1) except those ports, which u32 filters move to the unshaped band 1:2."""
+    ports = sorted(ctx.state.get(UNSHAPED, ()))
+    if not ports:
+        return sudo(ctx, stage, "tc", "qdisc", "add", "dev", "lo", "root", "netem", *arguments.split())
+    steps = [["tc", "qdisc", "add", "dev", "lo", "root", "handle", "1:", "prio", "bands", "2", "priomap", *["0"] * 16],
+             ["tc", "qdisc", "add", "dev", "lo", "parent", "1:1", "handle", "10:", "netem", *arguments.split()]]
+    for port in ports:
+        for field in ("dport", "sport"):
+            steps.append(["tc", "filter", "add", "dev", "lo", "parent", "1:", "protocol", "ip", "prio", "1", "u32",
+                          "match", "ip", field, str(port), "0xffff", "flowid", "1:2"])
+    done = None
+    for step in steps:
+        done = sudo(ctx, stage, *step)
+        if not done.ok:
+            return done
+    return done
+
+
+def daemon_ipc_port(profile_root: Path) -> int | None:
+    """The TCP port in ``daemon.ipc`` (``127.0.0.1:<port>``) of the daemon whose profile lies below ``profile_root``."""
+    for path in sorted(profile_root.rglob("daemon.ipc")):
+        try:
+            text = path.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        host, _, port = text.rpartition(":")
+        if host and port.isdigit():
+            return int(port)
+    return None
 
 
 def banner(port: int, prefix: bytes | None, timeout: float = 180) -> bool:
@@ -311,11 +350,12 @@ class Servers:
         """Two devices of the Share (main = the profile of the test program, remote = the host that exports a
         folder). No relay-only switch: the path between them is what the platform chooses on the loopback."""
         ctx = self.ctx
-        handed = Path(ctx.args.bins) / "se" if ctx.args.bins else None
-        se = handed if handed and handed.is_file() else ctx.cargo.bin_path("se")
+        # Both devices run the speed profile (release optimization): the daemons carry the QUIC side of every case.
+        se = ctx.cargo.bin_path("se", common.SPEED_PROFILE)
         server = ctx.cargo.share_server()
         if se is None or server is None:
-            raise Unavailable(f"se oder se-share-server fehlt: {ctx.cargo.bin_errors.get('se') or ctx.cargo.server_error}")
+            built = ctx.cargo.bin_errors.get(f"se@{common.SPEED_PROFILE}")
+            raise Unavailable(f"se oder se-share-server fehlt: {built or ctx.cargo.server_error}")
         providers = load_sync_module("sync-reliability-providers.py", "speed_sync_providers")
         pair = load_sync_module("sync-reliability-share-fixture.py", "speed_sync_share")
         root = self.fx.make_dir("share")
@@ -366,6 +406,13 @@ class Servers:
         remote.call("share", "worker", "refresh")
         endpoint = direct["endpoint"] + "/DirectSpeed"
         main.wait(lambda: main.call("ls", endpoint, check=False).returncode == 0, "freigegebener Export")
+        port = daemon_ipc_port(root / "share-main")
+        if port is None:
+            raise Unavailable("IPC-Port des Dienstes von main nicht lesbar (daemon.ipc): ohne ihn liefe der Hop "
+                              "Messprogramm-Dienst durch die geformte Strecke")
+        ctx.state.setdefault(UNSHAPED, set()).add(port)
+        # Once the pair is gone the port is free again and may carry traffic that the link has to shape.
+        self.fx.add_cleanup(lambda: ctx.state.get(UNSHAPED, set()).discard(port))
         # The test program talks to the daemon of "main": it runs in that profile.
         self.env.update({key: main_env[key] for key in PROFILE_KEYS + tuple(shared)})
         self.env.update({"SE_SPEED_SHARE_ENDPOINT": endpoint, "SE_SPEED_SHARE_DIR": str(export)})

@@ -230,7 +230,7 @@ mod tests {
     }
 
     #[test]
-    fn speed_task_share_stats_reader_takes_complete_burst_lines_after_the_mark() {
+    fn share_stats_reader_takes_complete_burst_lines_after_the_mark() {
         let first = format!("{}\n", burst_line(1));
         let second = format!("{}\n", burst_line(2));
         let mut text = format!("{first}{second}").into_bytes();
@@ -257,7 +257,7 @@ mod tests {
     }
 
     #[test]
-    fn speed_task_share_stats_summary_names_rate_window_loss_and_waiting() {
+    fn share_stats_summary_names_rate_window_loss_and_waiting() {
         let line: Value = serde_json::from_str(&burst_line(7)).expect("a line");
         let text = summary("remote", &line);
         for expected in [

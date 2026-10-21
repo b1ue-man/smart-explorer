@@ -1448,6 +1448,41 @@ speed_task_android_progress_line_appends_the_limiter_text_while_running  android
 speed_task_android_progress_line_without_limiter_is_unchanged  android-build:speed-jvm  art=junit  quelle=U54
 speed_task_android_mirror_dialog_text_appends_the_limiter_text  android-build:speed-jvm  art=junit  quelle=U54
 TransferTasksLimiterTest                                      android-build:speed-jvm  art=junit  quelle=U54
+speed_task_sftp_seat_idle_channel_first_then_open_then_share   linux-core:unit  pfad=sftp::link_tests::speed_task_sftp_seat_idle_channel_first_then_open_then_share  quelle=E13,Code
+speed_task_sftp_seat_range_never_goes_to_the_main_session_while_a_channel_exists linux-core:unit  pfad=sftp::link_tests::speed_task_sftp_seat_range_never_goes_to_the_main_session_while_a_channel_exists  quelle=E13,Code
+speed_task_sftp_seat_waits_when_every_channel_holds_its_handles linux-core:unit  pfad=sftp::link_tests::speed_task_sftp_seat_waits_when_every_channel_holds_its_handles  quelle=E13,Code
+speed_task_sftp_handles_per_channel_are_min_of_server_limit_and_64 linux-core:unit  pfad=sftp::link_tests::speed_task_sftp_handles_per_channel_are_min_of_server_limit_and_64  quelle=E13,Code
+speed_task_sftp_refusal_counts_channels_still_in_setup         linux-core:unit  pfad=sftp::link_tests::speed_task_sftp_refusal_counts_channels_still_in_setup  quelle=E13,Code
+speed_task_sftp_growth_opens_one_at_a_time_while_throughput_rises linux-core:unit  pfad=sftp::link_tests::speed_task_sftp_growth_opens_one_at_a_time_while_throughput_rises  quelle=E13,Code
+speed_task_sftp_growth_needs_ten_percent_not_less              linux-core:unit  pfad=sftp::link_tests::speed_task_sftp_growth_needs_ten_percent_not_less  quelle=E13,Code
+speed_task_sftp_growth_failure_stops_and_a_cancelled_attempt_may_retry linux-core:unit  pfad=sftp::link_tests::speed_task_sftp_growth_failure_stops_and_a_cancelled_attempt_may_retry  quelle=E13,Code
+speed_task_sftp_other_host_key_means_no_extra_connection_and_a_block linux-core:unit  pfad=sftp::link_tests::speed_task_sftp_other_host_key_means_no_extra_connection_and_a_block  quelle=E13,Code
+speed_task_sftp_block_lasts_fifteen_minutes_per_host_port_and_user linux-core:unit  pfad=sftp::link_tests::speed_task_sftp_block_lasts_fifteen_minutes_per_host_port_and_user  quelle=E13,Code
+speed_task_sftp_one_unauthenticated_connection_per_server_at_a_time linux-core:unit  pfad=sftp::link_tests::speed_task_sftp_one_unauthenticated_connection_per_server_at_a_time  quelle=E13,Code
+speed_task_sftp_extra_login_only_for_stored_password_or_key_never_agent linux-core:unit  pfad=sftp::link_tests::speed_task_sftp_extra_login_only_for_stored_password_or_key_never_agent  quelle=E13,Code
+speed_task_sftp_hint_names_connections_and_the_block           linux-core:unit  pfad=sftp::link_tests::speed_task_sftp_hint_names_connections_and_the_block  quelle=E13,Code
+speed_task_sftp_log_line_has_the_facts_and_no_line_breaks      linux-core:unit  pfad=sftp::link_tests::speed_task_sftp_log_line_has_the_facts_and_no_line_breaks  quelle=E13,Code
+speed_task_share_stats_keepalives_and_listings_are_no_burst    linux-core:unit  pfad=share::quic_stats_tests::speed_task_share_stats_keepalives_and_listings_are_no_burst  quelle=E13,Code
+speed_task_share_stats_threshold_is_per_tick_and_inclusive     linux-core:unit  pfad=share::quic_stats_tests::speed_task_share_stats_threshold_is_per_tick_and_inclusive  quelle=E13,Code
+speed_task_share_stats_burst_reports_differences_and_extremes  linux-core:unit  pfad=share::quic_stats_tests::speed_task_share_stats_burst_reports_differences_and_extremes  quelle=E13,Code
+speed_task_share_stats_report_names_every_diagnostic_value     linux-core:unit  pfad=share::quic_stats_tests::speed_task_share_stats_report_names_every_diagnostic_value  quelle=E13,Code
+speed_task_share_stats_short_traffic_is_not_reported           linux-core:unit  pfad=share::quic_stats_tests::speed_task_share_stats_short_traffic_is_not_reported  quelle=E13,Code
+speed_task_share_stats_a_gap_below_the_idle_limit_keeps_one_burst linux-core:unit  pfad=share::quic_stats_tests::speed_task_share_stats_a_gap_below_the_idle_limit_keeps_one_burst  quelle=E13,Code
+speed_task_share_stats_second_burst_does_not_count_the_first   linux-core:unit  pfad=share::quic_stats_tests::speed_task_share_stats_second_burst_does_not_count_the_first  quelle=E13,Code
+speed_task_share_stats_counters_that_fall_never_underflow      linux-core:unit  pfad=share::quic_stats_tests::speed_task_share_stats_counters_that_fall_never_underflow  quelle=E13,Code
+speed_task_share_stats_sample_reads_the_noq_counters           linux-core:unit  pfad=share::quic_stats_tests::speed_task_share_stats_sample_reads_the_noq_counters  quelle=E13,Code
+speed_task_share_meter_adds_phases_and_differences_snapshots   linux-core:unit  pfad=share::quic_stats_tests::speed_task_share_meter_adds_phases_and_differences_snapshots  quelle=E13,Code
+speed_task_share_stats_kernel_udp_counters_parse_by_column_name linux-core:unit  pfad=share::quic_stats_tests::speed_task_share_stats_kernel_udp_counters_parse_by_column_name  quelle=E13,Code
+speed_task_share_stats_cpu_time_reads_names_with_spaces_and_brackets linux-core:unit  pfad=share::quic_stats_tests::speed_task_share_stats_cpu_time_reads_names_with_spaces_and_brackets  quelle=E13,Code
+speed_task_share_stats_busiest_threads_are_ranked_by_cpu_since_the_start linux-core:unit  pfad=share::quic_stats_tests::speed_task_share_stats_busiest_threads_are_ranked_by_cpu_since_the_start  quelle=E13,Code
+speed_task_share_stats_file_makes_room_before_it_exceeds_the_limit linux-core:unit  pfad=share::quic_stats_tests::speed_task_share_stats_file_makes_room_before_it_exceeds_the_limit  quelle=E13,Code
+speed_task_ftp_kinds_listing_skips_the_per_file_probes         linux-core:unit  pfad=ftp::speed_task_ftp_tests::speed_task_ftp_kinds_listing_skips_the_per_file_probes  quelle=E13,Code
+speed_task_ftp_exact_listing_keeps_the_per_file_probes         linux-core:unit  pfad=ftp::speed_task_ftp_tests::speed_task_ftp_exact_listing_keeps_the_per_file_probes  quelle=E13,Code
+speed_task_ftp_new_connection_takes_over_the_feat_answer       linux-core:unit  pfad=ftp::speed_task_ftp_tests::speed_task_ftp_new_connection_takes_over_the_feat_answer  quelle=E13,Code
+speed_task_ftp_inherited_feat_answer_saves_the_request         linux-core:unit  pfad=ftp::speed_task_ftp_tests::speed_task_ftp_inherited_feat_answer_saves_the_request  quelle=E13,Code
+speed_task_ftp_publish_without_mlst_probes_no_other_file       linux-core:unit  pfad=ftp::speed_task_ftp_tests::speed_task_ftp_publish_without_mlst_probes_no_other_file  quelle=E13,Code
+speed_task_ftp_publish_without_mlst_still_refuses_an_existing_destination linux-core:unit  pfad=ftp::speed_task_ftp_tests::speed_task_ftp_publish_without_mlst_still_refuses_an_existing_destination  quelle=E13,Code
+speed_task_sftp_engine_range_follows_offset_read_after_the_first_part linux-core:unit  pfad=transfer::engine::segments_upload_tests::copy_tests::speed_task_sftp_engine_range_follows_offset_read_after_the_first_part  quelle=E13,Code
 
 [noch nicht umgesetzt]
 

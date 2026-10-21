@@ -31,10 +31,11 @@ def ways_of(name: str) -> list[str]:
 
 
 def build(ctx: common.JobContext) -> str | None:
-    """``cargo test --test speed_task --no-run`` (development profile) and the list of its ignored tests."""
-    done = ctx.run(["cargo", "test", "--locked", "--test", "speed_task", "--no-run", "--manifest-path",
-                    common.Cargo.manifest(), "--message-format=json-render-diagnostics"], stage="build-speed",
-                   cwd=common.REPO, env=ctx.base_env(), timeout=common.BUILD_TIMEOUT_S)
+    """``cargo test --profile speed --test speed_task --no-run`` and the list of its ignored tests. Throughput is
+    measured on release optimization (``common.SPEED_PROFILE``), never on the development profile."""
+    done = ctx.run(["cargo", "test", "--locked", "--profile", common.SPEED_PROFILE, "--test", "speed_task", "--no-run",
+                    "--manifest-path", common.Cargo.manifest(), "--message-format=json-render-diagnostics"],
+                   stage="build-speed", cwd=common.REPO, env=ctx.base_env(), timeout=common.BUILD_TIMEOUT_S)
     exe = None
     for message in common.json_lines(done.output):
         target = message.get("target") or {}
@@ -129,8 +130,8 @@ def run_group(ctx: common.JobContext, stage: str, names: list[str], env: dict, w
     limit = int(env.get("SE_SPEED_CASE_TIMEOUT_S", "600"))
     for part in common.chunks(known):
         parser = common.LibtestParser(time.monotonic())
-        command = [*wrap, "cargo", "test", "--locked", "--test", "speed_task", "--manifest-path",
-                   common.Cargo.manifest(), "--", "--ignored", "--test-threads=1", "--exact", *part]
+        command = [*wrap, "cargo", "test", "--locked", "--profile", common.SPEED_PROFILE, "--test", "speed_task",
+                   "--manifest-path", common.Cargo.manifest(), "--", "--ignored", "--test-threads=1", "--exact", *part]
         done = ctx.run(command, stage=stage, cwd=common.REPO, env=env, timeout=limit * len(part) + 600,
                        on_line=parser.feed)
         blocks = {match.group(1): match.group(2).strip() for match in common.FAILURE_BLOCK.finditer(done.output)}

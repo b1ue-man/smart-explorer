@@ -22,7 +22,10 @@ GitHub job per call (``--job``). Everything a stage needs lives here:
     Development profile only (D3 Bauregel): the library tests of
     ``smart_explorer`` once per job, ``se`` and ``smart_explorer`` on demand, the
     share server only for stages with a device pair. No ``--workspace``,
-    ``--all-targets``, ``--release``, installer or feed build.
+    ``--all-targets``, ``--release``, installer or feed build. One exception:
+    the throughput stages build ``speed_task`` and their ``se`` in the profile
+    ``speed`` (``SPEED_PROFILE``, release optimization with debug assertions),
+    since speed measured on opt-level 1 is not the speed that ships.
 ``StageFixtures``
     Runner-side fixtures that expected entries request with ``fixture=``. Each
     has a fixed environment contract (see ``FIXTURE_CONTRACT``); a fixture the
@@ -85,6 +88,9 @@ EMULATOR_HOST = "10.0.2.2"  # the emulator's alias of the runner's loopback inte
 FUSE_REQUEST_TIMEOUT_S = 15
 LIB_TIMEOUT_S = 90 * 60
 BUILD_TIMEOUT_S = 150 * 60
+# Cargo profile of the throughput stages (``[profile.speed]`` in native/Cargo.toml): release optimization with
+# debug assertions. Speed is measured on the optimization that ships, not on the development profile (D3 exception).
+SPEED_PROFILE = "speed"
 MAX_ARGS_CHARS = 12000  # far below the 32 767 characters of a Windows command line
 SFTP_IMAGE = "lscr.io/linuxserver/openssh-server:latest"
 ANDROID_TEST_PACKAGE_ROOTS = ("android/app/src/androidTest",)
@@ -719,11 +725,14 @@ class Cargo:
                                    time.monotonic() - started)
         return self.lib_ok
 
-    def bin_path(self, name: str) -> Path | None:
-        """``cargo build --bin <name>`` (development profile) on first use."""
-        if name in self.bins:
-            return self.bins[name]
-        completed = self.ctx.run(["cargo", "build", "--locked", "--bin", name, "--manifest-path",
+    def bin_path(self, name: str, profile: str | None = None) -> Path | None:
+        """``cargo build --bin <name>`` on first use: the development profile, or ``profile`` (the speed stages).
+        Errors are kept under the same key: ``name`` or ``name@profile``."""
+        key = name if profile is None else f"{name}@{profile}"
+        if key in self.bins:
+            return self.bins[key]
+        chosen = [] if profile is None else ["--profile", profile]
+        completed = self.ctx.run(["cargo", "build", "--locked", *chosen, "--bin", name, "--manifest-path",
                                   self.manifest(), "--message-format=json-render-diagnostics"],
                                  stage="build-bins", cwd=REPO, env=self.ctx.base_env(),
                                  timeout=BUILD_TIMEOUT_S)
@@ -734,11 +743,11 @@ class Cargo:
                     and target.get("name") == name and message.get("executable")):
                 path = Path(message["executable"])
         if completed.ok and path and path.is_file():
-            self.bins[name] = path.resolve()
+            self.bins[key] = path.resolve()
         else:
-            self.bins[name] = None
-            self.bin_errors[name] = f"cargo build --bin {name}: {completed.describe()}"
-        return self.bins[name]
+            self.bins[key] = None
+            self.bin_errors[key] = f"cargo build {' '.join(chosen)} --bin {name}: {completed.describe()}".replace("  ", " ")
+        return self.bins[key]
 
     def share_server(self) -> Path | None:
         """The candidate share server: from the desktop-bins artifact when present, else built
