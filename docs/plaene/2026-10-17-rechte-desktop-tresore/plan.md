@@ -264,6 +264,10 @@ Startgrenze: Ab der vom Nutzer genannten Wochennutzung startet kein neuer Auftra
   - U25: die vorläufigen `allow(dead_code)` in `daemon/os/shared/screen_ipc_client.rs` und `screen/core/mod.rs` entfernen.
   - Modellzuordnung: siehe „Freigegebene Modellzuordnung“; Startgrenze der Wochennutzung nach Nutzervorgabe.
 
+**Wiederaufnahme (2026-10-21 10:03 UTC):** Nutzervorgabe „gut, arbeite weiter, bis 40% dann starte keine weiteren aufgaben“; Startgrenze damit 40 % der Wochennutzung (Annahme: je Wochenfenster).
+- Laufend: U28 (sonnet, high; hält die Android-Hub-Dateien und setzt seine R10-Zeilen selbst), U44 (sonnet, high; E13-Festlegung, einziger Schreiber von `festlegungen.md`) und ein neuer Sicherheitsagent (opus, medium).
+- Der Sicherheitsagent übernimmt mit `stand/SEC.md` die Punkte 8 (Antworten auf S1–S8 aus § U31, stehen in `stand/SEC.md`), 9 (offene Einzelpunkte oben), 10 (U36) und 11 (U31 nach U28).
+
 **Stand bei der zweiten Pause (2026-10-18 08:45 UTC, Startgrenze des Wochenlimits erreicht, alle laufenden Pakete fertig):**
 - Fertig, committet und gepusht: zusätzlich U13 (9e1448e2), U14 (ee4a5761, 5267e500), U20 (1879e509), U32 (6e1c4602). Damit 23 von 43 Umsetzungspaketen.
 - Registrierungen von U13 (Punkte 1–10) und U32 hat der Hauptagent gesetzt; offen für das nächste R-Paket: U14 (Hub-Dateien), U20 (`app/mod.rs`, `daemon/mod.rs`), U13 (MCP-Katalogbeispiel).
@@ -299,6 +303,7 @@ Wortlaut: Tabelle „Beauftragte Ergebnisse“, Zeile E13.
 - Share (Iroh/QUIC): bis 60 Übertragungen je Gegenstelle, Fenster 16 MiB je Strom und 16–64 MiB je Verbindung, Pakete bis 256 Dateien bzw. 16 MiB.
 - SSH-Agent: 64 MiB Budget je Verbindung, Fenster bis 8 MiB je Strom.
 - Drive: neue Datei bis 5 MB in einem Aufruf, größere als Resumable-Upload mit wachsenden Blöcken; Google begrenzt etwa 3 neue Dateien/s je Konto.
+- Messwerte des letzten TE1-Suite-Laufs (Remote-Runner Linux, Lauf 36523120834 vom 2026-09-29, Stand 0646063; Loopback über netem mit 50 ms Verzögerung und 100 Mbit/s, also höchstens etwa 12,5 MB/s; kleine Dateien: 2000 zu je 4096 Bytes): FTP großer Download 9,15 MB/s; FTP viele kleine Uploads 93 Dateien/s (0,38 MB/s); SFTP großer Download 1,17 MB/s (vor `b4955815`); SFTP großer Upload 9,78 MB/s; SFTP viele kleine Uploads 201 Dateien/s (0,82 MB/s). Bis zur Leitungsgrenze wären bei kleinen Dateien etwa 3000 Dateien/s möglich.
 - Offen in `docs/TODO.md`: TE2 (von drei parallelen Raum-Downloads scheiterte einer mit EAGAIN, Ursache unbekannt; die SFTP-READ-Größenkorrektur `b495581` ist ungemessen) und CLI3 (`se cp`, `se get`, `se put` laufen nicht über die Engine).
 
 **Prüfpunkte für U44.** Hypothesen aus dem Vorwissen des Hauptagenten, ungeprüft. U44 bestätigt oder verwirft jede am Code und mit einer Messung aus dem Messplan:
