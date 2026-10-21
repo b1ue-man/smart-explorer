@@ -131,7 +131,11 @@ fn drive_task_vault_spool_uses_sealed_storage() {
     assert_eq!(backend.bytes("/note"), MARKER);
     drop(engine);
 
-    // A drive without a vault keeps the plain spool of every release.
+    // A drive without a vault keeps the plain spool of every release. The
+    // save above left MARKER in the file and the handle opens it without
+    // truncating, so a shorter write would keep the rest of MARKER: start
+    // from the three bytes of the first drive.
+    backend.put("/note", b"old");
     let plain_id = MountId::parse("plain-spool").unwrap();
     let control = KeyControl::new(SpoolKeyAnswer::Failed("never asked".into()));
     let plain = storage_for(&control, false, directory.path(), &plain_id).unwrap();

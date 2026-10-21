@@ -130,10 +130,13 @@ fn drive_task_fuse_force_abort_frees_blocked_reader() -> io::Result<()> {
         .recv_timeout(Duration::from_secs(10))
         .map_err(|_| io::Error::other("the blocked reader was not freed"))?;
     let error = freed.expect_err("an aborted read fails");
+    // `read(2)` goes through the page cache: the kernel ends the aborted
+    // request with ECONNABORTED, but reports a page that stayed unread as EIO
+    // (observed on the runner's kernel 7.0); a later call sees ENOTCONN.
     assert!(
         matches!(
             error.raw_os_error(),
-            Some(libc::ECONNABORTED) | Some(libc::ENOTCONN)
+            Some(libc::ECONNABORTED) | Some(libc::ENOTCONN) | Some(libc::EIO)
         ),
         "{error}"
     );

@@ -94,9 +94,37 @@ fn stop_workers() -> io::Result<()> {
         }
         None => Err(io::Error::new(
             io::ErrorKind::TimedOut,
-            "the background worker did not stop",
+            format!(
+                "the background worker did not stop\nprocesses:\n{}\nworker log:\n{}",
+                worker_processes(),
+                crate::daemon::read_log_tail(40)
+            ),
         )),
     }
+}
+
+/// The processes of the worker, its drive hosts and the FUSE helper, for the
+/// failure message of a worker that does not stop.
+fn worker_processes() -> String {
+    let table = Command::new("ps")
+        .args(["-eo", "pid,ppid,etimes,stat,wchan:20,args"])
+        .output()
+        .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+        .unwrap_or_else(|error| format!("ps: {error}"));
+    table
+        .lines()
+        .filter(|line| {
+            [
+                "--sync-daemon",
+                "--sync-guardian",
+                "--mount-host",
+                "fusermount",
+            ]
+            .iter()
+            .any(|marker| line.contains(marker))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// `se drive list` (text), for the failure messages.
