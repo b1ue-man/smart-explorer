@@ -99,9 +99,59 @@ fn is_device_name(name: &str) -> bool {
             && stem.as_bytes()[3] != b'0')
 }
 
+/// Writes all of `buf` at `offset` (`seek_write` in a loop; it moves the file
+/// pointer on Windows, so a later single stream seeks first), so several
+/// writers can fill different ranges of one file at once.
+pub(crate) fn write_all_at(
+    file: &std::fs::File,
+    mut buf: &[u8],
+    mut offset: u64,
+) -> std::io::Result<()> {
+    use std::os::windows::fs::FileExt;
+    while !buf.is_empty() {
+        match file.seek_write(buf, offset) {
+            Ok(0) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::WriteZero,
+                    "failed to write whole buffer",
+                ))
+            }
+            Ok(written) => {
+                buf = &buf[written..];
+                offset += written as u64;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::plain_form;
+    use super::{plain_form, write_all_at};
+    use std::io::Read;
+
+    #[test]
+    fn speed_task_write_all_at_positions_data() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("ranges.bin");
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .expect("create");
+        file.set_len(10).expect("length");
+        write_all_at(&file, b"abc", 4).expect("later range first");
+        write_all_at(&file, b"xy", 0).expect("earlier range second");
+        drop(file);
+        let mut content = Vec::new();
+        std::fs::File::open(&path)
+            .expect("open")
+            .read_to_end(&mut content)
+            .expect("read");
+        assert_eq!(content, b"xy\0\0abc\0\0\0");
+    }
 
     #[test]
     fn transfer_engine_task_canonical_folders_drop_the_verbatim_prefix_only_when_safe() {

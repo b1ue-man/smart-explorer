@@ -312,6 +312,29 @@ impl Backend for CachingBackend {
     ) -> VfsResult<Option<Box<dyn Read + Send>>> {
         self.inner.open_read_at(path, id, offset)
     }
+    fn supports_range_reads(&self, path: &str) -> bool {
+        self.inner.supports_range_reads(path)
+    }
+    fn open_read_range(
+        &self,
+        path: &str,
+        id: Option<&str>,
+        offset: u64,
+        len: u64,
+    ) -> VfsResult<Option<Box<dyn Read + Send>>> {
+        self.inner.open_read_range(path, id, offset, len)
+    }
+    fn open_segmented_stage(
+        &self,
+        stage: &str,
+        size: u64,
+    ) -> VfsResult<Option<Box<dyn super::ranges::SegmentedStage>>> {
+        self.invalidate(stage);
+        self.inner.open_segmented_stage(stage, size)
+    }
+    fn flow_identity(&self, path: &str) -> String {
+        self.inner.flow_identity(path)
+    }
     fn transfer_hint(&self) -> Option<String> {
         self.inner.transfer_hint()
     }

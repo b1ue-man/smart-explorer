@@ -78,6 +78,12 @@ pub(crate) enum Work {
         source: String,
     },
     File(FileWork),
+    /// A ticket for one more helper of a split large file (`segments`): it
+    /// asks a worker to take parts of the file `job` is transferring. Lives
+    /// in the files lane; packets never take it.
+    Segment {
+        job: u64,
+    },
 }
 
 impl Work {
@@ -85,6 +91,7 @@ impl Work {
         match self {
             Work::Dir { rel, source } => rel.len() + source.len() + ENTRY_OVERHEAD,
             Work::File(file) => file.bytes(),
+            Work::Segment { .. } => ENTRY_OVERHEAD,
         }
     }
 }
@@ -105,7 +112,7 @@ impl State {
     fn lane(&mut self, work: &Work) -> &mut VecDeque<Work> {
         match work {
             Work::Dir { .. } => &mut self.dirs,
-            Work::File(_) => &mut self.items,
+            Work::File(_) | Work::Segment { .. } => &mut self.items,
         }
     }
 }

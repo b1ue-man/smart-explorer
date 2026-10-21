@@ -61,6 +61,23 @@ pub(super) struct Counters {
     pub batched: Mutex<Vec<String>>,
 }
 
+/// Range reads of the fake: what it offers and what was asked of it.
+#[derive(Default)]
+pub(super) struct Ranges {
+    pub supported: bool,
+    /// Claims to read ranges but answers every request with `Ok(None)` (a
+    /// server that ignores `Range`).
+    pub ignored: bool,
+    /// The range starting here fails once, after that many bytes.
+    pub fail_once: Mutex<Option<(u64, usize, io::ErrorKind)>>,
+    /// Every answer ends this many bytes early (the source shrank).
+    pub short_by: u64,
+    /// `(offset, len)` of every request, in arrival order.
+    pub requests: Mutex<Vec<(u64, u64)>>,
+    /// Requests answered with `Ok(None)`.
+    pub refused: AtomicUsize,
+}
+
 struct Guard {
     counters: Arc<Counters>,
     reading: bool,
@@ -175,6 +192,7 @@ pub(super) struct Fake {
     pub extra: Option<Vec<u8>>,
     pub counters: Arc<Counters>,
     pub faults: Faults,
+    pub ranges: Ranges,
 }
 
 impl Fake {
@@ -198,6 +216,7 @@ impl Fake {
             extra: None,
             counters: Arc::new(Counters::default()),
             faults: Faults::default(),
+            ranges: Ranges::default(),
         }
     }
 
@@ -208,12 +227,21 @@ impl Fake {
     }
 
     fn reader(&self, path: &str, inner: Box<dyn Read + Send>) -> Box<dyn Read + Send> {
+        let fault = self.read_faults.lock().expect("fixture lock").pop_front();
+        self.reader_with(path, inner, fault)
+    }
+
+    fn reader_with(
+        &self,
+        path: &str,
+        inner: Box<dyn Read + Send>,
+        fault: Option<ReadFault>,
+    ) -> Box<dyn Read + Send> {
         self.counters
             .opened
             .lock()
             .expect("fixture lock")
             .push(path.to_string());
-        let fault = self.read_faults.lock().expect("fixture lock").pop_front();
         Box::new(FakeReader {
             inner,
             fault,
@@ -277,6 +305,43 @@ impl Backend for Fake {
             .inner
             .open_read_at(path, id, offset)?
             .map(|inner| self.reader(path, inner)))
+    }
+    fn supports_range_reads(&self, _path: &str) -> bool {
+        self.ranges.supported
+    }
+    fn open_read_range(
+        &self,
+        path: &str,
+        id: Option<&str>,
+        offset: u64,
+        len: u64,
+    ) -> VfsResult<Option<Box<dyn Read + Send>>> {
+        if !self.ranges.supported || self.ranges.ignored {
+            self.ranges.refused.fetch_add(1, Ordering::SeqCst);
+            return Ok(None);
+        }
+        self.ranges
+            .requests
+            .lock()
+            .expect("fixture lock")
+            .push((offset, len));
+        let shortened = len.saturating_sub(self.ranges.short_by);
+        let inner = self
+            .inner
+            .open_read_range(path, id, offset, shortened)?
+            .ok_or_else(|| io::Error::other("fixture: the local backend reads ranges"))?;
+        let mut pending = self.ranges.fail_once.lock().expect("fixture lock");
+        let fault = match *pending {
+            Some((at, after, kind)) if at == offset => {
+                *pending = None;
+                Some(ReadFault {
+                    after: Some(after),
+                    kind,
+                })
+            }
+            _ => None,
+        };
+        Ok(Some(self.reader_with(path, inner, fault)))
     }
     fn open_write(&self, _path: &str) -> VfsResult<Box<dyn Write + Send>> {
         Err(io::Error::other(

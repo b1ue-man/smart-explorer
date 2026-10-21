@@ -16,11 +16,14 @@ use crate::vfs::Backend;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-/// A private partial download; removed unless it was published.
+/// A private partial download; removed unless it was published. Its file is
+/// shared (`Arc`) so the parts of a split download can write into it at
+/// once (`segments_download`); the single stream owns the only handle.
 pub(crate) struct Part {
     path: PathBuf,
-    file: Option<File>,
+    file: Option<Arc<File>>,
     written: u64,
     published: bool,
 }
@@ -30,16 +33,16 @@ impl Part {
         let (path, file) = create_download_part(destination).map_err(OpError::target)?;
         Ok(Self {
             path,
-            file: Some(file),
+            file: Some(Arc::new(file)),
             written: 0,
             published: false,
         })
     }
 
     pub(crate) fn write(&mut self, bytes: &[u8]) -> Result<(), OpError> {
-        let file = self
+        let mut file: &File = self
             .file
-            .as_mut()
+            .as_deref()
             .ok_or_else(|| OpError::target(io::Error::other("Teildatei ist geschlossen")))?;
         file.write_all(bytes).map_err(OpError::target)?;
         self.written += bytes.len() as u64;
@@ -50,9 +53,45 @@ impl Part {
         self.written
     }
 
+    /// Where the part lives (a second handle reads it back to hash it).
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// The file for writers that fill ranges of it at once.
+    pub(crate) fn shared_file(&self) -> Option<Arc<File>> {
+        self.file.clone()
+    }
+
+    /// Gives the part its final length once, so ranges can be written in
+    /// any order (the file is sparse until they are all in).
+    pub(crate) fn prepare_segments(&mut self, size: u64) -> Result<(), OpError> {
+        let file = self
+            .file
+            .as_deref()
+            .ok_or_else(|| OpError::target(io::Error::other("Teildatei ist geschlossen")))?;
+        file.set_len(size).map_err(OpError::target)
+    }
+
+    /// The bytes before `bytes` are written (the safe start of a range
+    /// attempt, or the whole file once every range is in).
+    pub(crate) fn set_written(&mut self, bytes: u64) {
+        self.written = bytes;
+    }
+
+    /// Puts the file pointer on `written` for a single stream that follows a
+    /// range attempt (offset writes can move the pointer on Windows).
+    pub(crate) fn seek_to_written(&mut self) -> Result<(), OpError> {
+        if let Some(mut file) = self.file.as_deref() {
+            file.seek(SeekFrom::Start(self.written))
+                .map_err(OpError::target)?;
+        }
+        Ok(())
+    }
+
     /// Starts over from byte 0 (the provider cannot continue mid-file).
     fn restart(&mut self) -> Result<(), OpError> {
-        if let Some(file) = self.file.as_mut() {
+        if let Some(mut file) = self.file.as_deref() {
             file.set_len(0).map_err(OpError::target)?;
             file.seek(SeekFrom::Start(0)).map_err(OpError::target)?;
         }
@@ -79,9 +118,9 @@ impl Drop for Part {
     }
 }
 
-pub(super) fn download(
-    engine: &Engine<'_>,
-    source: &dyn Backend,
+pub(super) fn download<'e>(
+    engine: &Engine<'e>,
+    source: &'e dyn Backend,
     file: &FileWork,
     carry: &mut Carry,
     meter: &Meter<'_>,
@@ -104,6 +143,20 @@ pub(super) fn download(
         }
     };
     let mut check = RemoteCheck::new(file, expected);
+    match super::segments_download::try_split(
+        engine, source, file, &mut part, &mut check, expected, meter, buffer,
+    ) {
+        Ok(true) => {
+            let size = part.written();
+            check.finish(source, file, size)?;
+            return publish_local(engine, part, &destination, file);
+        }
+        Ok(false) => {}
+        Err(error) => {
+            carry.part = Some(part);
+            return Err(error);
+        }
+    }
     let mut reader = match open_reader(source, file, &mut part, &mut check, buffer) {
         Ok(reader) => reader,
         Err(error) => {

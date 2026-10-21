@@ -62,6 +62,8 @@ mod local_stage;
 mod meta;
 #[path = "core/promotion.rs"]
 mod promotion;
+#[path = "core/ranges.rs"]
+mod ranges;
 #[path = "os/shared/remote_util.rs"]
 pub mod remote_util;
 #[path = "core/scheme.rs"]
@@ -77,6 +79,8 @@ mod trait_defaults;
 mod tree_remove_listed;
 #[path = "core/tree_remove_pipelined.rs"]
 mod tree_remove_pipelined;
+#[path = "core/unpublished.rs"]
+mod unpublished;
 #[cfg(windows)]
 #[path = "os/windows/verbatim.rs"]
 mod verbatim;
@@ -127,6 +131,8 @@ pub(crate) use self::local_platform::rename_no_replace as promote_local_copy;
 pub(crate) use self::local_platform::replace_file as replace_local_file;
 pub use self::promotion::{promote_staged_create, promote_staged_replace, unique_staging_path};
 pub(crate) use self::promotion::{promote_staged_no_replace_with, promote_staged_with};
+pub use self::ranges::SegmentedStage;
+pub use self::unpublished::{unpublished_error, unpublished_of};
 
 #[cfg(test)]
 #[path = "os/shared/copy_paste_task_tests.rs"]
