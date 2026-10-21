@@ -6724,6 +6724,7 @@ dependencies = [
  "data-encoding",
  "eframe",
  "egui-wgpu",
+ "egui-winit",
  "egui_extras",
  "flate2",
  "fuser",

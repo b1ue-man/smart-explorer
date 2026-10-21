@@ -352,6 +352,12 @@ calloop = "=0.13.0"
 calloop-wayland-source = "0.3"
 xkbcommon-dl = "=0.4.2"
 egui-wgpu = "=0.29.1"
+# The window features of egui-winit (eframe's window layer) on Linux. Without
+# them egui-winit compiles neither `with_name` (app id, WM_CLASS) nor
+# `with_x11_window_type`: windows got argv[0] as their class and no desktop
+# window type (suite run 3, desktop_task_x11_*). winit's x11 and wayland
+# backends were already built; no further crate joins the lock.
+egui-winit = { version = "=0.29.1", default-features = false, features = ["x11", "wayland"] }
 
 [build-dependencies]
 # Pure-Rust verification of prepared DLL bytes; never compile/download Dokany
