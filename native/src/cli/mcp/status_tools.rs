@@ -102,6 +102,15 @@ fn annotate(row: &mut Value) {
     }
 }
 
+// Stage tests of the vault functions of `se mcp` (VLT-M9): Linux only, and
+// `#[ignore]`d until their stage gives them `SMART_EXPLORER_VAULT_SE_BIN`.
+#[cfg(all(test, target_os = "linux"))]
+#[path = "vault_task_client.rs"]
+mod vault_task_client;
+#[cfg(all(test, target_os = "linux"))]
+#[path = "vault_task_tests.rs"]
+mod vault_task_tests;
+
 #[cfg(test)]
 mod tests {
     use super::{annotate, share_summary, sync_summary};

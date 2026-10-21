@@ -1528,21 +1528,22 @@ drive_task_cli_error_texts_unchanged              linux-core:unit,windows-core:d
 desktop_task_disable_keeps_device_tree            linux-desktop:drive-desktop  fixture=home  pfad=desktop::os::platform::device_tree_task_tests::desktop_task_disable_keeps_device_tree  quelle=D3-linux-desktop
 drive_task_windows_realpath_native_on_dokany      windows-core:drive-dokany-regression  ignored threads=1 fixture=dokany,home env=SMART_EXPLORER_DRIVE_SE_BIN={se}  pfad=cli::drive::drive_realpath_task_tests::drive_task_windows_realpath_native_on_dokany  quelle=L350,S2-A3
 
+# ---- S3 aus [noch nicht umgesetzt] verschoben (2026-10-21): VLT-M9 CLI und MCP (U26, T524), VLT-M6/VLT-M14 Klartext
+# (U20, T564). Die Tests rufen das gebaute se in einer isolierten Umgebung auf ----
+vault_task_cli_every_command_json_keys            linux-core:vault-cli  ignored threads=1 env=SMART_EXPLORER_VAULT_SE_BIN={se}  pfad=cli::vault::task_json_tests::vault_task_cli_every_command_json_keys  quelle=T524
+vault_task_cli_completion                         linux-core:vault-cli  ignored threads=1 env=SMART_EXPLORER_VAULT_SE_BIN={se}  pfad=cli::vault::task_cli_tests::vault_task_cli_completion  quelle=T524
+vault_task_cli_locked_vault_names_unlock          linux-core:vault-cli  ignored threads=1 env=SMART_EXPLORER_VAULT_SE_BIN={se}  pfad=cli::vault::task_cli_tests::vault_task_cli_locked_vault_names_unlock  quelle=T524
+vault_task_mcp_both_lifecycles                    linux-core:vault-mcp  ignored threads=1 env=SMART_EXPLORER_VAULT_SE_BIN={se}  pfad=cli::mcp::status_tools::vault_task_tests::vault_task_mcp_both_lifecycles  quelle=T524
+vault_task_mcp_status_without_paths               linux-core:vault-mcp  ignored threads=1 env=SMART_EXPLORER_VAULT_SE_BIN={se}  pfad=cli::mcp::status_tools::vault_task_tests::vault_task_mcp_status_without_paths  quelle=T524
+vault_task_klartext_actions_leave_no_marker       linux-core:vault-klartext  ignored threads=1 fixture=marker env=SMART_EXPLORER_VAULT_SE_BIN={se}  pfad=cli::vault::task_klartext_tests::vault_task_klartext_actions_leave_no_marker  quelle=T564
+vault_task_klartext_drive_actions_leave_no_marker linux-root:vault-klartext-drive  ignored threads=1 fixture=marker,fuse,runtime-tmpfs env=SMART_EXPLORER_VAULT_SE_BIN={se}  pfad=cli::vault::task_klartext_tests::vault_task_klartext_drive_actions_leave_no_marker  quelle=D3,T564
+
 [noch nicht umgesetzt]
 
 
 
 
-# ---- S3 VLT-M6 (U20): linux-core unit und vault-klartext, linux-root vault-klartext-drive (T495, T564) ----
-vault_task_klartext_actions_leave_no_marker       linux-core:vault-klartext  fixture=marker threads=1  paket=U20  quelle=T564
-vault_task_klartext_drive_actions_leave_no_marker linux-root:vault-klartext-drive  fixture=marker,fuse,runtime-tmpfs threads=1  paket=U20  quelle=D3,T564
 
-# ---- S3 VLT-M9 (U26): linux-core vault-cli, vault-mcp; Plan nennt keine Namen, Namen von U39 gesetzt (T524) ----
-vault_task_cli_every_command_json_keys            linux-core:vault-cli  env=SMART_EXPLORER_VAULT_SE_BIN={se}  paket=U26  quelle=T524
-vault_task_cli_completion                         linux-core:vault-cli  env=SMART_EXPLORER_VAULT_SE_BIN={se}  paket=U26  quelle=T524
-vault_task_cli_locked_vault_names_unlock          linux-core:vault-cli  env=SMART_EXPLORER_VAULT_SE_BIN={se}  paket=U26  quelle=T524
-vault_task_mcp_both_lifecycles                    linux-core:vault-mcp  env=SMART_EXPLORER_VAULT_SE_BIN={se}  paket=U26  quelle=T524
-vault_task_mcp_status_without_paths               linux-core:vault-mcp  env=SMART_EXPLORER_VAULT_SE_BIN={se}  paket=U26  quelle=T524
 
 # ---- S3 VLT-M10 (U29): linux-desktop gui-harness, Stufe vault_surfaces (T533). Zwei Muster im Bestand:
 # U07-GUI-Tests laufen ohne Anzeige und ohne #[ignore]; die GUI-Tests aus U03 brauchen ignored threads=1
