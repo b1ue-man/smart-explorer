@@ -145,7 +145,6 @@ export default class SeDesktop extends Extension {
 
     _adopt(window) {
         for (const entry of this._entries) {
-            // Mutter 45 to 48: meta_wayland_client_owns_window.
             if (entry.windows.includes(window) || !entry.client.owns_window(window))
                 continue;
             entry.handled = true;
