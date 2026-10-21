@@ -2,6 +2,7 @@
 //! (the Android facade): into an existing folder, never replacing a file,
 //! zip-slip safe like `extract_all`. Per-entry failures are reported and the
 //! remaining entries are still extracted.
+use super::names::enclosed_name;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -47,6 +48,8 @@ fn native(path: &str) -> PathBuf {
 
 /// Extracts every regular file of `zip_path` below `dest` (which must exist).
 /// Existing files are never replaced; links inside the archive are skipped.
+/// Unix modes of the archive are never read or applied: a new file gets the
+/// process default, so no SUID/SGID bit can arrive from an entry.
 pub fn extract_all_controlled(
     zip_path: &str,
     dest: &Path,
@@ -68,7 +71,7 @@ pub fn extract_all_controlled(
         let Ok(entry) = archive.by_index_raw(index) else {
             continue;
         };
-        if entry.is_file() && !entry.is_symlink() && entry.enclosed_name().is_some() {
+        if entry.is_file() && !entry.is_symlink() && enclosed_name(&entry).is_some() {
             state.files_total += 1;
             state.bytes_total = state.bytes_total.saturating_add(entry.size());
         }
@@ -82,8 +85,11 @@ pub fn extract_all_controlled(
         }
         let (name, counted) = match archive.by_index_raw(index) {
             Ok(raw) => (
-                raw.name().to_string(),
-                raw.is_file() && !raw.is_symlink() && raw.enclosed_name().is_some(),
+                raw.name().map_or_else(
+                    |_| format!("Eintrag {}", index + 1),
+                    |name| name.into_owned(),
+                ),
+                raw.is_file() && !raw.is_symlink() && enclosed_name(&raw).is_some(),
             ),
             Err(error) => {
                 let name = format!("Eintrag {}", index + 1);
@@ -104,7 +110,7 @@ pub fn extract_all_controlled(
                 continue;
             }
         };
-        let Some(relative) = entry.enclosed_name() else {
+        let Some(relative) = enclosed_name(&entry) else {
             report
                 .skipped
                 .push((name, "unsicherer Pfad im Archiv".to_string()));

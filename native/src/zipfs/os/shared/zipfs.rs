@@ -9,6 +9,7 @@
 //! demand (entry.rs). Mutations are unsupported (read-only) — extract to edit.
 
 use super::entry::{self, Archive, ArchiveFile};
+use super::names::enclosed_name;
 use crate::vfs::{Backend, Scheme, VfsMeta, VfsResult};
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
@@ -129,7 +130,7 @@ impl ZipBackend {
         dirs.entry(String::new()).or_default(); // root always exists
         for i in 0..ar.len() {
             let e = ar.by_index(i).map_err(zip_err)?;
-            let Some(enclosed) = e.enclosed_name() else {
+            let Some(enclosed) = enclosed_name(&e) else {
                 continue;
             };
             let Some(raw) = archive_key(&enclosed.to_string_lossy().replace('\\', "/")) else {
@@ -263,7 +264,7 @@ pub fn extract_all(zip_path: &str, dest: &Path) -> io::Result<usize> {
     let mut count = 0usize;
     for i in 0..ar.len() {
         let mut e = ar.by_index(i).map_err(zip_err)?;
-        let rel = match e.enclosed_name() {
+        let rel = match enclosed_name(&e) {
             Some(p) => p,
             None => continue, // unsafe / absolute path — skip
         };
@@ -304,6 +305,10 @@ mod tests {
         let opt = zip::write::SimpleFileOptions::default();
         w.start_file("../evil.txt", opt).unwrap();
         w.write_all(b"nope").unwrap();
+        w.start_file("/abs.txt", opt).unwrap();
+        w.write_all(b"abs").unwrap();
+        w.start_file("C:\\drive.txt", opt).unwrap();
+        w.write_all(b"drive").unwrap();
         w.start_file("safe.txt", opt).unwrap();
         w.write_all(b"ok").unwrap();
         w.finish().unwrap();
@@ -365,6 +370,9 @@ mod tests {
         let root = be.list_dir("/").unwrap();
         assert!(root.iter().any(|m| m.name == "safe.txt"));
         assert!(!root.iter().any(|m| m.name == ".."));
+        assert!(!root
+            .iter()
+            .any(|m| m.name == "abs.txt" || m.name == "drive.txt"));
         assert!(be.open_read("/../evil.txt").is_err());
 
         let out = base.join("out");
@@ -372,6 +380,7 @@ mod tests {
         assert_eq!(n, 1);
         assert_eq!(std::fs::read(out.join("safe.txt")).unwrap(), b"ok");
         assert!(!base.join("evil.txt").exists());
+        assert!(!out.join("abs.txt").exists() && !out.join("drive.txt").exists());
 
         let _ = std::fs::remove_dir_all(&base);
     }
