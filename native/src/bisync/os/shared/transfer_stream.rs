@@ -1,6 +1,7 @@
 //! The digest and size belong to the bytes read by this transfer.
 use super::apply_guard::drift;
 use super::snapshot_hash::md5_to_u64;
+use super::stream_hash::StreamHasher;
 use super::types::Throttle;
 use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -30,7 +31,7 @@ pub(super) fn stream(
     expected_hash: u64,
     mut progress: impl FnMut(u64),
 ) -> io::Result<Streamed> {
-    let mut context = md5::Context::new();
+    let mut hasher = StreamHasher::new();
     let mut buffer = vec![0u8; 256 * 1024];
     let mut bytes = 0u64;
     loop {
@@ -40,7 +41,7 @@ pub(super) fn stream(
             break;
         }
         writer.write_all(&buffer[..read])?;
-        context.consume(&buffer[..read]);
+        hasher.update(&buffer[..read]);
         bytes = bytes
             .checked_add(read as u64)
             .ok_or_else(|| drift("transfer size overflow"))?;
@@ -51,7 +52,7 @@ pub(super) fn stream(
     }
     let result = Streamed {
         bytes,
-        digest: context.compute().0,
+        digest: hasher.finish()?,
     };
     if expected_hash != 0 && expected_hash != result.hash() {
         return Err(drift("file content changed since planning"));
