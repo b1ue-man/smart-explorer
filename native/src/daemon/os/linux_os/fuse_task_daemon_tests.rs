@@ -161,14 +161,17 @@ fn drive_task_auto_remount_after_daemon_restart_fuse() -> io::Result<()> {
 }
 
 fn remount_round_trip(se: &Path, folder: &Path) -> io::Result<()> {
-    // First worker, started by `se drive mount`.
+    // First worker, started by `se drive mount`. Read-only, as the daemon
+    // mounts an SFTP drive: that backend guarantees no safe replace of an
+    // existing file, so a read-write SFTP drive is refused by design
+    // (`mount_manager_capabilities.rs`); the round trip only reads.
     let (code, output) = program(
         Command::new(se)
             .args(["drive", "mount"])
             .arg(format!("@{LABEL}:/"))
             .arg("--mount-point")
             .arg(folder)
-            .args(["--read-write", "--trust-remote-root", "--auto-remount"]),
+            .args(["--trust-remote-root", "--auto-remount"]),
     )?;
     assert_eq!(code, 0, "se drive mount: {output}");
     assert!(
