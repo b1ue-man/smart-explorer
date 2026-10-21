@@ -1251,6 +1251,7 @@ class Device:
         return (owners[0], name) if owners else None
 
     def run_class(self, fqn: str, args: list[tuple[str, str]], timeout: float = 45 * 60):
+        """``fqn`` is a class (``a.B``, all its methods) or one method (``a.B#m``)."""
         command = ["shell", "am", "instrument", "-w", "-r"]
         for key, value in args:
             command += ["-e", key, value]
@@ -1588,9 +1589,11 @@ class JobContext:
                 self.record(entry.name, stage, NOT_RUN, why)
                 continue
             args = self.fixtures.args_for(entry.fixtures)
-            key = (target[0], tuple(args))
+            # A class entry starts the whole class; a method entry starts only that method (a.B#m).
+            spec = target[0] if entry.is_class else f"{target[0]}#{entry.name}"
+            key = (spec, tuple(args))
             if key not in runs:
-                runs[key] = self.device.run_class(target[0], args)
+                runs[key] = self.device.run_class(spec, args)
             parsed, completed, duration = runs[key]
             if entry.is_class:
                 items = [(f"{cls}#{method}", status, detail, 0.0) for (cls, method), (status, detail)
