@@ -31,6 +31,12 @@ on:
         description: Full 40-character pushed candidate SHA, matching the selected ref
         required: true
         type: string
+      speed_scope:
+        description: all = every measurement; local = only linux-speed-local measures, linux-speed-net and windows-speed report not run
+        required: false
+        default: all
+        type: choice
+        options: [all, local]
 
 permissions:
   contents: read
@@ -1215,6 +1221,7 @@ jobs:
     timeout-minutes: 300
     env:
       CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      RDT_SKIP_JOB_REASON: ${{ inputs.speed_scope == 'local' && 'Effizienzvergleiche fuer diesen Kandidaten ausgesetzt (Nutzerentscheidung 2026-10-21, nur Funktionstests und die lokale Messung)' || '' }}
       CARGO_BUILD_JOBS: 2
       CARGO_INCREMENTAL: 0
       CARGO_PROFILE_DEV_DEBUG: 0
@@ -1377,6 +1384,7 @@ jobs:
     timeout-minutes: 120
     env:
       CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      RDT_SKIP_JOB_REASON: ${{ inputs.speed_scope == 'local' && 'Effizienzvergleiche fuer diesen Kandidaten ausgesetzt (Nutzerentscheidung 2026-10-21, nur Funktionstests und die lokale Messung)' || '' }}
       CARGO_BUILD_JOBS: 2
       CARGO_INCREMENTAL: 0
       CARGO_PROFILE_DEV_DEBUG: 0

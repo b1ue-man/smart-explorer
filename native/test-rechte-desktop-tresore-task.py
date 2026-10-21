@@ -289,7 +289,13 @@ def main() -> int:
         for stage, owners in stages:
             execute_stage(ctx, stage, owners)
         return 0
-    if args.phase == "verdict":
+    # A job the dispatch left out (input speed_scope): every entry is "nicht ausgeführt" with the reason.
+    skip = (os.environ.get("RDT_SKIP_JOB_REASON") or "").strip()
+    if skip and args.job != "prepare":
+        for stage, _ in stages:
+            ctx.not_run_all(stage, skip)
+            ctx.report.stage_done(stage, common.NOT_RUN, skip, 0.0)
+    elif args.phase == "verdict":
         if not any(stage["name"] == "device-setup" for stage in ctx.report.stages):
             reason = (f"Emulator startete nicht (reactivecircus/android-emulator-runner, API {args.api_level}"
                       + (" und Rückfall API 35" if args.job == "android-device" else "") + ")")
