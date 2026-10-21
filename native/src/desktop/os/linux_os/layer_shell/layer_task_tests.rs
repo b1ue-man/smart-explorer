@@ -66,6 +66,27 @@ fn expect_color(sway: &Sway, surface: &mut SurfaceProcess, output: &str) {
     );
 }
 
+/// The windows of `swaymsg -t get_tree` as `app_id/name` pairs: what a missing
+/// test window looks like (another `app_id`, an empty tree).
+fn tree_windows(sway: &Sway) -> String {
+    fn walk(node: &serde_json::Value, found: &mut Vec<String>) {
+        let name = node["name"].as_str().unwrap_or_default();
+        if node["pid"].as_i64().is_some() || node["app_id"].is_string() {
+            found.push(format!("{:?}/{name:?}", node["app_id"].as_str()));
+        }
+        for key in ["nodes", "floating_nodes"] {
+            for child in node[key].as_array().into_iter().flatten() {
+                walk(child, found);
+            }
+        }
+    }
+    let tree: serde_json::Value =
+        serde_json::from_str(&sway.msg(&["-t", "get_tree", "-r"])).unwrap_or_default();
+    let mut found = Vec::new();
+    walk(&tree, &mut found);
+    format!("[{}]", found.join(", "))
+}
+
 #[test]
 #[ignore = "needs sway, grim and a GPU adapter (suite stage linux-wayland: layer)"]
 fn desktop_task_layer_shell_bottom_surface() {
@@ -95,8 +116,10 @@ fn desktop_task_layer_shell_bottom_surface() {
         // Ended or silent: what the process says is the reason.
         let status = window.stop();
         panic!(
-            "das Testfenster fehlt in `swaymsg -t get_tree` (Prozess {status:?}): {}",
-            window.stderr_text().trim()
+            "das Testfenster fehlt in `swaymsg -t get_tree` (Prozess {status:?}): {}; \
+             Fenster im Baum (app_id/name): {}",
+            window.stderr_text().trim(),
+            tree_windows(&sway)
         );
     }
     let covered = wait_for(LONG, || {
@@ -254,7 +277,29 @@ fn desktop_task_layer_clipboard_roundtrip_files() {
             .unwrap_or_default();
         copied.contains("Ziel.md")
     });
-    assert!(got, "text/uri-list der Fläche fehlt: {copied:?}");
+    if !got {
+        // What the compositor's selection offers now tells a missing
+        // selection (another program's or none) from a missing type.
+        let types = sway
+            .command(&wl_paste)
+            .arg("--list-types")
+            .output()
+            .map(|out| {
+                format!(
+                    "{} {}",
+                    String::from_utf8_lossy(&out.stdout).replace('\n', ","),
+                    String::from_utf8_lossy(&out.stderr).trim()
+                )
+            })
+            .unwrap_or_default();
+        let running = surface.running();
+        let ended = surface.stop();
+        panic!(
+            "text/uri-list der Fläche fehlt: {copied:?}; Auswahl bietet: {types}; \
+             Fläche lief noch: {running} ({ended:?}); Stderr der Fläche: {}",
+            surface.stderr_text().trim()
+        );
+    }
     assert_eq!(
         copied.trim_end(),
         super::clipboard_uri::file_uri(&desktop.join("Ziel.md"))

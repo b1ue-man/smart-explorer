@@ -21,6 +21,10 @@ use super::pipewire_abi::{
 use super::spa_pod::{enum_format_pod, parse_video_format, VideoFormat};
 use crate::screen::core::pixel_convert::{BgraImage, FrameSize};
 
+#[path = "pipewire_trace.rs"]
+mod trace;
+use trace::Trace;
+
 /// What `take` found.
 pub(crate) enum Taken {
     Frame(BgraImage),
@@ -42,6 +46,7 @@ struct LatestInner {
 #[derive(Default)]
 pub(crate) struct LatestFrame {
     inner: Mutex<LatestInner>,
+    trace: Trace,
 }
 
 impl LatestFrame {
@@ -53,6 +58,13 @@ impl LatestFrame {
         let mut inner = self.lock();
         inner.seq += 1;
         inner.image = Some(image);
+    }
+
+    /// What the stream did so far (the failure text of a silent stream).
+    #[cfg(test)]
+    pub(crate) fn describe(&self) -> String {
+        let pictures = self.lock().seq;
+        format!("{pictures} pictures; {}", self.trace.describe())
     }
 
     pub(crate) fn fail(&self, reason: String) {
@@ -134,6 +146,7 @@ unsafe extern "C" fn on_state_changed(
     error: *const c_char,
 ) {
     guarded(data, |data| {
+        data.latest.trace.state(new);
         if new == PW_STREAM_STATE_ERROR {
             let text = if error.is_null() {
                 "unknown".to_string()
@@ -164,11 +177,15 @@ unsafe extern "C" fn on_param_changed(data: *mut c_void, id: u32, param: *const 
             parse_video_format(bytes)
         };
         if param.is_null() {
+            data.latest.trace.format("none");
             *lock_format(data) = None;
             return;
         }
         match negotiated {
             Some((format, size)) if size.is_valid_frame() => {
+                data.latest
+                    .trace
+                    .format(&format!("{format:?} {}x{}", size.width, size.height));
                 *lock_format(data) = Some((format, size));
             }
             Some((_, size)) => data.latest.fail(format!(
@@ -187,6 +204,7 @@ fn lock_format(data: &CallbackData) -> MutexGuard<'_, Option<(VideoFormat, Frame
 unsafe extern "C" fn on_process(data: *mut c_void) {
     guarded(data, |data| {
         let stream = data.stream.load(Ordering::Acquire);
+        data.latest.trace.process();
         let mut last: *mut PwBuffer = null_mut();
         // SAFETY: called on the loop's thread with the stream alive; each
         // dequeued buffer goes back with `queue_buffer` exactly once.
@@ -219,17 +237,25 @@ unsafe extern "C" fn on_process(data: *mut c_void) {
 /// # Safety
 /// `buffer` is a buffer just dequeued from the stream.
 unsafe fn copy_picture(data: &CallbackData, buffer: *mut PwBuffer) -> Option<BgraImage> {
-    let (format, size) = (*lock_format(data))?;
+    let skip = |reason: &str| data.latest.trace.skip(reason);
+    let Some((format, size)) = *lock_format(data) else {
+        skip("no format negotiated yet");
+        return None;
+    };
     let spa = (*buffer).buffer;
     if spa.is_null() || (*spa).n_datas == 0 || (*spa).datas.is_null() {
+        skip("buffer without data blocks");
         return None;
     }
     let block = &*(*spa).datas;
     if block.data.is_null() || block.chunk.is_null() {
+        // 3 is `SPA_DATA_DmaBuf`: not mapped, only a descriptor.
+        skip(&format!("block of type {} is not mapped", block.type_));
         return None;
     }
     let chunk = &*block.chunk;
     if chunk.size == 0 {
+        skip("chunk of size 0 (a buffer without damage)");
         return None;
     }
     let row = size.width as usize * 4;

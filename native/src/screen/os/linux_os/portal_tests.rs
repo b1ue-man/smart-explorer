@@ -268,13 +268,35 @@ fn private_data_home() -> tempfile::TempDir {
 }
 
 fn first_frame(source: &mut PortalSource, within: Duration) -> BgraImage {
+    first_frame_nudged(source, within, || {})
+}
+
+/// Waits for the first picture; `nudge` runs every 250 ms meanwhile. A
+/// compositor records a picture when the screen changes (KWin's virtual
+/// output may send none for a screen that never changes), so a check that
+/// can change the screen does so here; the picture still has to arrive.
+/// The failure text names where the session stands (`describe`).
+fn first_frame_nudged(
+    source: &mut PortalSource,
+    within: Duration,
+    mut nudge: impl FnMut(),
+) -> BgraImage {
     let started = Instant::now();
+    let mut next_nudge = started;
     loop {
         match source.capture(1, true).expect("the portal source works") {
             SourceFrame::Frame(image) => return image,
             SourceFrame::Paused(_) | SourceFrame::Unchanged => {}
         }
-        assert!(started.elapsed() < within, "no picture from the portal");
+        assert!(
+            started.elapsed() < within,
+            "no picture from the portal; {}",
+            source.describe()
+        );
+        if Instant::now() >= next_nudge {
+            nudge();
+            next_nudge = Instant::now() + Duration::from_millis(250);
+        }
         std::thread::sleep(Duration::from_millis(50));
     }
 }
@@ -362,7 +384,15 @@ fn screen_task_kde_remote_desktop_input() {
         ..PortalOptions::default()
     };
     let mut source = PortalSource::with_handle(PortalSession::start(options).unwrap());
-    let _ = first_frame(&mut source, Duration::from_secs(60));
+    // The pointer moves while the picture is awaited: with the cursor in the
+    // picture (`CursorMode::Embedded`) that is a change of the screen, and
+    // the session only takes input once the stream runs.
+    let mut step = 0u32;
+    let _ = first_frame_nudged(&mut source, Duration::from_secs(60), || {
+        step += 1;
+        let at: u16 = 16_384 + (step % 2) as u16 * 32_768;
+        let _ = super::super::portal_input::inject(&[InputEvent::PointerAbs { x: at, y: at }]);
+    });
     let events = [
         InputEvent::PointerAbs {
             x: 32_768,
