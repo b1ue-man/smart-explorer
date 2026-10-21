@@ -31,7 +31,7 @@ pub(super) fn download_file_progress(
     super::cancel::check_optional(cancel)?;
     let (part, mut output) = create_download_part(dest).map_err(|e| e.to_string())?;
     let mut copied = 0u64;
-    let mut buf = [0u8; 64 * 1024];
+    let mut buf = vec![0u8; super::read_pipeline::STREAM_BLOCK];
     loop {
         if let Err(error) = super::cancel::check_optional(cancel) {
             drop(output);

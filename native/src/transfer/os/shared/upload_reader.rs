@@ -100,7 +100,7 @@ fn copy_stream(
     cancel: &AtomicBool,
     mut progress: impl FnMut(u64),
 ) -> Result<(), String> {
-    let mut buffer = [0u8; 64 * 1024];
+    let mut buffer = vec![0u8; super::read_pipeline::STREAM_BLOCK];
     loop {
         super::cancel::check(cancel)?;
         let read = match reader.read(&mut buffer) {

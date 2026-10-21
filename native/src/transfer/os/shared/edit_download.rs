@@ -61,8 +61,8 @@ pub(crate) fn download_for_edit(
                 }
                 // The window starts on failure, not at download start: a large
                 // healthy file may take longer than the reconnection window.
-                let deadline = *retry_deadline
-                    .get_or_insert_with(|| Instant::now() + RECONNECT_WINDOW);
+                let deadline =
+                    *retry_deadline.get_or_insert_with(|| Instant::now() + RECONNECT_WINDOW);
                 let delay = Duration::from_secs((attempt + 1) as u64);
                 if Instant::now() + delay >= deadline {
                     return Err(failure.message());
@@ -110,15 +110,20 @@ fn download_once(
     let mut reader = backend
         .open_read_id(path, id)
         .map_err(DownloadFailure::Remote)?;
-    let (part, mut output) = create_download_part(dest)
-        .map_err(|error| DownloadFailure::Local(error.to_string()))?;
+    let (part, mut output) =
+        create_download_part(dest).map_err(|error| DownloadFailure::Local(error.to_string()))?;
     let result = copy_checked(&mut *reader, &mut output, read_size).and_then(|()| {
-        output.flush().and_then(|()| output.sync_all())
+        output
+            .flush()
+            .and_then(|()| output.sync_all())
             .map_err(|error| DownloadFailure::Local(error.to_string()))?;
         if peer && metadata.is_some() {
             backend.invalidate_cache();
             let current = backend.stat(path).map_err(DownloadFailure::Remote)?;
-            if !metadata.as_ref().is_some_and(|before| same_revision(before, &current)) {
+            if !metadata
+                .as_ref()
+                .is_some_and(|before| same_revision(before, &current))
+            {
                 return Err(DownloadFailure::Local(
                     "Remote-Datei wurde während des Öffnens geändert; bitte erneut öffnen".into(),
                 ));
@@ -137,12 +142,16 @@ fn download_once(
         cleanup_partial(&part);
         return Err(DownloadFailure::Local(error.to_string()));
     }
-    Ok((dest.to_string_lossy().into_owned(),
-        metadata.map(|meta| meta.mtime_ms).unwrap_or(0)))
+    Ok((
+        dest.to_string_lossy().into_owned(),
+        metadata.map(|meta| meta.mtime_ms).unwrap_or(0),
+    ))
 }
 
 fn same_revision(before: &VfsMeta, after: &VfsMeta) -> bool {
-    !after.is_dir && before.size == after.size && before.mtime_ms == after.mtime_ms
+    !after.is_dir
+        && before.size == after.size
+        && before.mtime_ms == after.mtime_ms
         && before.id == after.id
 }
 
@@ -152,11 +161,15 @@ fn copy_checked(
     expected: Option<u64>,
 ) -> Result<(), DownloadFailure> {
     let mut copied = 0u64;
-    let mut buffer = [0u8; 64 * 1024];
+    let mut buffer = vec![0u8; super::read_pipeline::STREAM_BLOCK];
     loop {
-        let limit = expected.map(|size| {
-            size.saturating_sub(copied).saturating_add(1).min(buffer.len() as u64) as usize
-        }).unwrap_or(buffer.len());
+        let limit = expected
+            .map(|size| {
+                size.saturating_sub(copied)
+                    .saturating_add(1)
+                    .min(buffer.len() as u64) as usize
+            })
+            .unwrap_or(buffer.len());
         let count = match reader.read(&mut buffer[..limit]) {
             Ok(count) => count,
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
@@ -166,16 +179,20 @@ fn copy_checked(
             break;
         }
         if expected.is_some_and(|size| count as u64 > size.saturating_sub(copied)) {
-            return Err(DownloadFailure::Local("Download-Quelle ist während der Übertragung gewachsen".into()));
+            return Err(DownloadFailure::Local(
+                "Download-Quelle ist während der Übertragung gewachsen".into(),
+            ));
         }
-        output.write_all(&buffer[..count])
+        output
+            .write_all(&buffer[..count])
             .map_err(|error| DownloadFailure::Local(error.to_string()))?;
         copied = copied.saturating_add(count as u64);
     }
     if let Some(expected) = expected {
         if copied != expected {
             return Err(DownloadFailure::Local(format!(
-                "Download unvollstaendig: {copied} von {expected} Bytes")));
+                "Download unvollstaendig: {copied} von {expected} Bytes"
+            )));
         }
     }
     Ok(())

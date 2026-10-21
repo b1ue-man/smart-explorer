@@ -12,6 +12,8 @@
 pub(crate) mod access;
 #[path = "os/shared/cancel.rs"]
 mod cancel;
+#[path = "os/shared/clipboard_parallel.rs"]
+mod clipboard_parallel;
 #[path = "core/compress_policy.rs"]
 pub(crate) mod compress_policy;
 #[path = "os/shared/copy_commit.rs"]
@@ -98,6 +100,9 @@ pub(crate) mod walk_listers;
 #[cfg(test)]
 #[path = "os/shared/cancel_tests.rs"]
 mod cancel_tests;
+#[cfg(test)]
+#[path = "os/shared/clipboard_parallel_tests.rs"]
+mod clipboard_parallel_tests;
 #[cfg(test)]
 #[path = "core/compress_policy_tests.rs"]
 mod compress_policy_tests;
