@@ -32,6 +32,22 @@ pub(crate) enum LocalFailure {
     Publish(io::Error),
 }
 
+/// Lets platform copy code that knows which side failed carry the verdict
+/// inside an `io::Error` (`io::Error::other(LocalFailure::Target(..))`): the
+/// unbuffered Linux copy reads and writes itself, so a read error is the
+/// source's and a write error the target's (`side_of` unwraps it).
+impl std::fmt::Display for LocalFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LocalFailure::Source(error) => write!(f, "source: {error}"),
+            LocalFailure::Target(error) => write!(f, "target: {error}"),
+            LocalFailure::Publish(error) => write!(f, "publish: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for LocalFailure {}
+
 impl LocalFailure {
     pub(crate) fn into_error(self) -> io::Error {
         match self {
@@ -245,6 +261,12 @@ pub(super) fn unchanged_state(
 /// cause belong to the target (a full or read-only volume ends the job), the
 /// rest to the source (a refused read may still be granted).
 fn side_of(error: io::Error) -> LocalFailure {
+    if error
+        .get_ref()
+        .is_some_and(|inner| inner.is::<LocalFailure>())
+    {
+        return untagged(error);
+    }
     match error.kind() {
         io::ErrorKind::StorageFull
         | io::ErrorKind::QuotaExceeded
@@ -252,6 +274,17 @@ fn side_of(error: io::Error) -> LocalFailure {
         | io::ErrorKind::FileTooLarge
         | io::ErrorKind::WriteZero => LocalFailure::Target(error),
         _ => LocalFailure::Source(error),
+    }
+}
+
+/// The failure a platform copy tagged with its side (see `side_of`).
+fn untagged(error: io::Error) -> LocalFailure {
+    match error.into_inner() {
+        Some(inner) => match inner.downcast::<LocalFailure>() {
+            Ok(failure) => *failure,
+            Err(inner) => LocalFailure::Source(io::Error::other(inner)),
+        },
+        None => LocalFailure::Source(io::Error::other("copy failed")),
     }
 }
 
@@ -299,4 +332,43 @@ fn random_suffix(target: &Path, attempt: u32) -> u64 {
         .as_nanos()
         .hash(&mut hasher);
     hasher.finish()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn speed_task_local_staging_side_follows_the_tag_before_the_kind() {
+        // Plain errors are sorted by their kind: only what a destination can
+        // cause belongs to the target.
+        let plain = |kind| side_of(io::Error::new(kind, "x"));
+        assert!(matches!(
+            plain(io::ErrorKind::StorageFull),
+            LocalFailure::Target(_)
+        ));
+        assert!(matches!(
+            plain(io::ErrorKind::Other),
+            LocalFailure::Source(_)
+        ));
+        // A platform copy that knows the side says so, whatever the kind: a
+        // write error with an ordinary kind is the target's, a read error that
+        // looks like a full disk is the source's, and the error inside stays
+        // intact.
+        let write = io::Error::other(LocalFailure::Target(io::Error::from_raw_os_error(5)));
+        match side_of(write) {
+            LocalFailure::Target(error) => assert_eq!(error.raw_os_error(), Some(5)),
+            other => panic!("{other:?}"),
+        }
+        let read = io::Error::other(LocalFailure::Source(io::Error::from(
+            io::ErrorKind::StorageFull,
+        )));
+        match side_of(read) {
+            LocalFailure::Source(error) => assert_eq!(error.kind(), io::ErrorKind::StorageFull),
+            other => panic!("{other:?}"),
+        }
+        // A foreign payload is no tag.
+        let foreign = io::Error::other("something else");
+        assert!(matches!(side_of(foreign), LocalFailure::Source(_)));
+    }
 }

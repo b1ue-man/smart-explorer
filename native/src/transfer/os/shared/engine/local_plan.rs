@@ -1,7 +1,8 @@
 //! What one local copy of a large file asks for beyond its own thread: more
 //! threads at once when the drive is flash, a measurement first when it is
-//! not known to be, and what the process remembers of that measurement. Pure
-//! decisions; `local.rs` takes the permits and hands the result to the copy.
+//! not known to be (only for a file that is copied around the page cache),
+//! and what the process remembers of that measurement. Pure decisions;
+//! `local.rs` takes the permits and hands the result to the copy.
 use crate::transfer::segments::{MIN_SEGMENT, SPLIT_FROM};
 use std::collections::BTreeMap;
 use std::sync::Mutex;
@@ -9,6 +10,25 @@ use std::sync::Mutex;
 /// Smallest file that is measured: the copy cuts two probe sections of
 /// 32 MiB each out of it (`copy::linux_probe`), at most half of the file.
 pub(super) const PROBE_FROM: u64 = 16 * MIN_SEGMENT;
+
+/// A file at least this part of the available memory is copied around the
+/// page cache on Linux (`copy::linux_direct`, the rule of Windows'
+/// `COPY_FILE_NO_BUFFERING`, `copy_flags::NO_BUFFERING_DIVISOR`; both sides
+/// decide with the same divisor).
+pub(super) const UNBUFFERED_DIVISOR: u64 = 4;
+
+/// Extra threads of a file that is copied directly: the copy runs 4 threads
+/// in all (`copy::linux_direct_plan::THREADS`: 4 requests of 4 MiB in flight,
+/// the depth of the 16 × 1 MiB that `fio` needed to reach the drive's
+/// capacity), so it asks for three permits beyond its own, never for one per
+/// 8 MiB part that it could not use. The flow hands out only what is free.
+pub(super) const UNBUFFERED_EXTRAS: usize = 3;
+
+/// Whether a file of `size` bytes is copied around the page cache: at least
+/// a quarter of the available memory (unknown memory: never).
+pub(super) fn unbuffered(size: u64, available_memory: Option<u64>) -> bool {
+    size > 0 && available_memory.is_some_and(|memory| size >= memory / UNBUFFERED_DIVISOR)
+}
 
 /// The two devices a copy runs on (`st_dev` of source and target; the same
 /// number twice on one device). Copying A to B and B to A are two keys.
@@ -74,24 +94,36 @@ pub(super) fn extras_wanted(size: u64, is_move: bool, queued: usize) -> usize {
 }
 
 /// The plan of one file. A drive that is flash copies in ranges at once.
-/// Any other drive is not trusted either way: a rotating one loses to the
-/// head jumps of side-by-side ranges, but the flag also says "rotating" for
-/// virtual and network-attached flash, so a file of `PROBE_FROM` or more
-/// measures it once per device pair and the process keeps the answer. The
-/// drive and the memory are asked only when the file qualifies.
+/// A file that is copied around the page cache (`unbuffered`) on any other
+/// drive is not trusted either way: a rotating one loses to the head jumps of
+/// side-by-side requests, but the flag also says "rotating" for virtual and
+/// network-attached flash, so a file of `PROBE_FROM` or more measures it once
+/// per device pair with direct requests (no cache hides the drive, no sync
+/// is needed) and the process keeps the answer. A buffered copy on such a
+/// drive stays on one thread: its writes are issued by the kernel's writeback
+/// with a deep queue whatever the number of copying threads, so ranges do not
+/// help it and the probe's syncs cost seconds (suite run 4: 3 s of 32 s for no
+/// gain). The drive and the memory are asked only when the file qualifies.
 pub(super) fn plan(
     size: u64,
     is_move: bool,
     queued: usize,
+    unbuffered: bool,
     drive: impl FnOnce() -> Drive,
     memory: impl FnOnce() -> Memory,
 ) -> Plan {
-    let extras = extras_wanted(size, is_move, queued);
+    let mut extras = extras_wanted(size, is_move, queued);
+    if unbuffered {
+        extras = extras.min(UNBUFFERED_EXTRAS);
+    }
     if extras == 0 {
         return Plan::Single;
     }
     if drive() == Drive::Flash {
         return Plan::Ranges(extras);
+    }
+    if !unbuffered {
+        return Plan::Single;
     }
     match memory() {
         Memory::Helps => Plan::Ranges(extras),
