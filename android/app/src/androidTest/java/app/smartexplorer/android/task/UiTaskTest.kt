@@ -53,6 +53,18 @@ class UiTaskTest {
         }
     }
 
+    /** Scrolls the lazy list tagged [list] until a node of [matcher] is composed (the list may still be loading). */
+    private fun scrollToNode(list: String, matcher: SemanticsMatcher, what: String, timeoutMs: Long = 30_000) {
+        try {
+            compose.waitUntil(timeoutMillis = timeoutMs) {
+                runCatching { compose.onNode(hasTestTag(list)).performScrollToNode(matcher) }.isSuccess
+            }
+        } catch (e: Throwable) {
+            screenshot("fehler-" + what.replace(Regex("[^A-Za-z0-9]+"), "-"))
+            throw AssertionError("Element fehlt nach ${timeoutMs / 1000} s: $what", e)
+        }
+    }
+
     private fun tab(label: String): SemanticsMatcher = hasText(label) and isSelectable()
 
     private fun screenshot(name: String) {
@@ -83,6 +95,9 @@ class UiTaskTest {
         screenshot("03-sync")
 
         compose.onNode(tab("Teilen")).performClick()
+        // The buttons stand below the card of this device, the request policy and the lists of devices and rooms;
+        // the list composes only what is on screen, so it is scrolled to them as a person would.
+        scrollToNode("share-list", hasText("Raum erstellen"), "Teilen: Raum erstellen")
         waitForNode(hasText("Raum erstellen"), "Teilen: Raum erstellen")
         waitForNode(hasText("Raum beitreten"), "Teilen: Raum beitreten")
         waitForNode(hasText("Gerät verbinden"), "Teilen: Gerät verbinden")

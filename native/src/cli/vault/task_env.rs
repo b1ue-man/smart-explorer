@@ -341,9 +341,15 @@ impl TaskEnv {
     }
 
     /// `se vault create` of a new vault at `relative` below the root; the
-    /// JSON the command printed.
+    /// JSON the command printed. The folder that holds the new vault folder
+    /// exists first, as with every surface: `create_vault` makes only the
+    /// vault folder itself (one level, `manage_create.rs`), the pickers of
+    /// the desktop and of Android hand over existing folders.
     pub(crate) fn create_json(&self, relative: &str, label: &str) -> Value {
         let location = self.path(relative);
+        if let Some(parent) = location.parent() {
+            std::fs::create_dir_all(parent).expect("Ordner über dem Tresorort");
+        }
         self.se_in(
             &[
                 "vault",

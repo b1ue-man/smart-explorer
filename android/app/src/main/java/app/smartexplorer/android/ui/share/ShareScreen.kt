@@ -23,6 +23,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
@@ -170,7 +171,7 @@ fun ShareScreen() {
         Column(Modifier.fillMaxSize().padding(padding)) {
             // Reloads follow every share event; only the first load and actions show the bar.
             LoadingBar(vm.busy || (vm.loading && status == null))
-            LazyColumn(Modifier.fillMaxSize(), state = listState) {
+            LazyColumn(Modifier.fillMaxSize().testTag("share-list"), state = listState) {
                 items(blocks, key = { it.name }) { block ->
                     Column { ShareBlockContent(block, vm, status, nowMs, screenLinks, open = { dialog = it }) }
                 }
