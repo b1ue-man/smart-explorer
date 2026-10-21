@@ -59,6 +59,11 @@ pub(crate) struct TaskRecord {
     total_items: u64,
     rate_bps: u64,
     message: Option<String>,
+    /// Who limits the transfer (`Limiter::code()` of the engine); "none"
+    /// until the engine names a resource.
+    limiter: String,
+    /// The German text of that verdict (E13), never a file or folder name.
+    limiter_text: Option<String>,
     errors: Vec<(String, String)>,
     errors_total: u64,
     result: Option<Value>,
@@ -77,6 +82,19 @@ impl TaskRecord {
     pub(crate) fn set_private(&mut self) {
         self.private = true;
         self.message = None;
+        self.limiter_text = None;
+        self.dirty = true;
+    }
+
+    /// The bottleneck of a running transfer (code and text from the engine);
+    /// marks the task dirty only when something changed.
+    pub(crate) fn set_limiter(&mut self, code: &str, text: Option<&str>) {
+        let text = text.filter(|text| !text.is_empty());
+        if self.limiter == code && self.limiter_text.as_deref() == text {
+            return;
+        }
+        self.limiter = code.to_string();
+        self.limiter_text = text.map(str::to_string);
         self.dirty = true;
     }
 
@@ -188,6 +206,8 @@ impl TaskRecord {
             "totalItems": self.total_items,
             "rateBps": self.rate_bps,
             "message": self.message,
+            "limiter": self.limiter,
+            "limiterText": self.limiter_text,
             "errors": errors,
             "result": self.result,
             "startedMs": self.started_ms,
@@ -233,6 +253,8 @@ impl TaskTable {
             total_items: 0,
             rate_bps: 0,
             message: None,
+            limiter: "none".to_string(),
+            limiter_text: None,
             errors: Vec::new(),
             errors_total: 0,
             result: None,

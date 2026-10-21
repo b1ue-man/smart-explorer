@@ -402,13 +402,18 @@ impl TaskCtx {
         self.update(|record| record.set_message(text));
     }
 
+    /// The bottleneck of the running transfer (code and text of the engine).
+    pub(crate) fn limiter(&self, code: &str, text: Option<&str>) {
+        self.update(|record| record.set_limiter(code, text));
+    }
+
     /// U31 S2: the task touches a vault; its notification, messages, error
     /// entries and error log entry name no file from inside it.
     pub(crate) fn keep_names_private(&self) {
         self.update(|record| record.set_private());
     }
 
-    fn names_private(&self) -> bool {
+    pub(crate) fn names_private(&self) -> bool {
         self.hub.with(|state| {
             state
                 .tasks
