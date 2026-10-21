@@ -4,6 +4,8 @@
 use std::io::Read;
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver};
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use super::x11_task_env::{gui_binary, not_run, XServer};
@@ -21,7 +23,11 @@ pub(super) struct SurfaceProc {
     child: Child,
     stdin: Option<ChildStdin>,
     frames: Receiver<SurfaceMessage>,
-    stderr: Option<std::process::ChildStderr>,
+    /// Everything the process wrote on stderr so far (a thread drains the
+    /// pipe, so a chatty process never blocks on a full pipe and a running
+    /// one can be asked what it said).
+    stderr: Arc<Mutex<Vec<u8>>>,
+    stderr_reader: Option<JoinHandle<()>>,
     _data: tempfile::TempDir,
 }
 
@@ -58,9 +64,25 @@ impl SurfaceProc {
                 }
             }
         });
+        let stderr = Arc::new(Mutex::new(Vec::new()));
+        let stderr_reader = child.stderr.take().map(|mut pipe| {
+            let sink = stderr.clone();
+            std::thread::spawn(move || {
+                let mut chunk = [0u8; 4096];
+                while let Ok(read) = pipe.read(&mut chunk) {
+                    if read == 0 {
+                        return;
+                    }
+                    if let Ok(mut text) = sink.lock() {
+                        text.extend_from_slice(&chunk[..read]);
+                    }
+                }
+            })
+        });
         SurfaceProc {
             stdin: child.stdin.take(),
-            stderr: child.stderr.take(),
+            stderr,
+            stderr_reader,
             child,
             frames,
             _data: data,
@@ -107,13 +129,33 @@ impl SurfaceProc {
         matches!(self.child.try_wait(), Ok(None))
     }
 
-    /// What the process wrote on stderr (read after it ended).
+    /// What the process wrote on stderr so far; one that ended is read to
+    /// its end first.
     pub(super) fn stderr_text(&mut self) -> String {
-        let mut text = String::new();
-        if let Some(stderr) = self.stderr.as_mut() {
-            let _ = stderr.read_to_string(&mut text);
+        if !self.running() {
+            if let Some(reader) = self.stderr_reader.take() {
+                let _ = reader.join();
+            }
         }
-        text
+        self.stderr
+            .lock()
+            .map(|text| String::from_utf8_lossy(&text).into_owned())
+            .unwrap_or_default()
+    }
+
+    /// For the message of a failed check: whether the process runs or how it
+    /// ended, and its stderr.
+    pub(super) fn describe(&mut self) -> String {
+        let state = match self.child.try_wait() {
+            Ok(None) => "läuft".to_string(),
+            Ok(Some(status)) => format!("beendet ({status})"),
+            Err(error) => format!("Zustand unbekannt ({error})"),
+        };
+        format!(
+            "Fläche pid {} {state}; stderr: {:?}",
+            self.child.id(),
+            self.stderr_text()
+        )
     }
 
     /// Greeting, colour and an empty model for `monitor`; the process ending
