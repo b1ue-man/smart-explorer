@@ -5,4 +5,16 @@
     <style name="Theme.SmartExplorer" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:windowBackground">@color/window_background_light</item>
     </style>
+
+    <!-- The se launcher (DSK-M9): the wallpaper shows through, Compose draws everything else. -->
+    <style name="Theme.SmartExplorer.Launcher" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowShowWallpaper">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:colorBackgroundCacheHint">@null</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowTranslucentStatus">false</item>
+        <item name="android:enforceNavigationBarContrast">false</item>
+        <item name="android:enforceStatusBarContrast">false</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+    </style>
 </resources>

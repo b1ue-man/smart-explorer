@@ -36,6 +36,9 @@ sealed interface NavRequest {
 
     /** Opens the comparison of the vault sync job [jobId] (VLT-M11, U31-8), under „Mehr → Tresore“. */
     data class OpenVaultCompare(val jobId: String) : NavRequest
+
+    /** Opens „Mehr → Einstellungen“ at the card „Startbildschirm“ of the launcher (DSK-M9). */
+    data object ShowLauncherSettings : NavRequest
 }
 
 /**
@@ -87,13 +90,19 @@ object AppNav {
     }
 
     /** Explicit intent for [MainActivity], e.g. for a notification `PendingIntent`. */
-    fun intentFor(context: Context, request: NavRequest): Intent {
+    fun intentFor(context: Context, request: NavRequest): Intent = intentFor(context, request, token(context))
+
+    /**
+     * The same with a [token] the caller already holds. The launcher process (`:launcher`) never reads the
+     * token store of the main process; it gets the token from the main process and passes it here (U35-14).
+     */
+    fun intentFor(context: Context, request: NavRequest, token: String): Intent {
         val (kind, value) = encode(request)
         return Intent(context, MainActivity::class.java).apply {
             action = ACTION_NAVIGATE
             putExtra(EXTRA_KIND, kind)
             if (value != null) putExtra(EXTRA_VALUE, value)
-            putExtra(EXTRA_TOKEN, token(context))
+            putExtra(EXTRA_TOKEN, token)
             // Distinct identity per request so PendingIntents for different targets never merge.
             identifier = "nav:$kind:${value.orEmpty()}"
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
@@ -107,27 +116,30 @@ object AppNav {
     fun fromIntent(context: Context, intent: Intent?): NavRequest? {
         if (intent?.action != ACTION_NAVIGATE) return null
         if (intent.getStringExtra(EXTRA_TOKEN) != token(context)) return null
-        val value = intent.getStringExtra(EXTRA_VALUE)
-        return when (intent.getStringExtra(EXTRA_KIND)) {
-            "openLocation" -> value?.let { NavRequest.OpenLocation(it) }
-            "selectTab" -> MainTab.entries.firstOrNull { it.name == value }?.let { NavRequest.SelectTab(it) }
-            "showTransfers" -> NavRequest.ShowTransfers
-            // Conflicts of a vault sync job come as `vault:<job>` (U31-13): its comparison.
-            "openJobConflicts" -> value?.let { job ->
-                if (job.startsWith(VAULT_JOB_PREFIX)) {
-                    NavRequest.OpenVaultCompare(job.removePrefix(VAULT_JOB_PREFIX))
-                } else {
-                    NavRequest.OpenJobConflicts(job)
-                }
+        return decode(intent.getStringExtra(EXTRA_KIND), intent.getStringExtra(EXTRA_VALUE))
+    }
+
+    /** Request of a [kind] and [value] as [encode] writes them, or `null` for an unknown kind or a missing value. */
+    internal fun decode(kind: String?, value: String?): NavRequest? = when (kind) {
+        "openLocation" -> value?.let { NavRequest.OpenLocation(it) }
+        "selectTab" -> MainTab.entries.firstOrNull { it.name == value }?.let { NavRequest.SelectTab(it) }
+        "showTransfers" -> NavRequest.ShowTransfers
+        // Conflicts of a vault sync job come as `vault:<job>` (U31-13): its comparison.
+        "openJobConflicts" -> value?.let { job ->
+            if (job.startsWith(VAULT_JOB_PREFIX)) {
+                NavRequest.OpenVaultCompare(job.removePrefix(VAULT_JOB_PREFIX))
+            } else {
+                NavRequest.OpenJobConflicts(job)
             }
-            "showShareRequests" -> NavRequest.ShowShareRequests
-            "showUpdate" -> NavRequest.ShowUpdate
-            "showBackgroundSettings" -> NavRequest.ShowBackgroundSettings
-            "openScreen" -> value?.takeIf { it.isNotBlank() }?.let { NavRequest.OpenScreen(it) }
-            "showScreenGrid" -> NavRequest.ShowScreenGrid(value?.takeIf { it.isNotBlank() })
-            "openVaultCompare" -> value?.takeIf { it.isNotBlank() }?.let { NavRequest.OpenVaultCompare(it) }
-            else -> null
         }
+        "showShareRequests" -> NavRequest.ShowShareRequests
+        "showUpdate" -> NavRequest.ShowUpdate
+        "showBackgroundSettings" -> NavRequest.ShowBackgroundSettings
+        "openScreen" -> value?.takeIf { it.isNotBlank() }?.let { NavRequest.OpenScreen(it) }
+        "showScreenGrid" -> NavRequest.ShowScreenGrid(value?.takeIf { it.isNotBlank() })
+        "openVaultCompare" -> value?.takeIf { it.isNotBlank() }?.let { NavRequest.OpenVaultCompare(it) }
+        "showLauncherSettings" -> NavRequest.ShowLauncherSettings
+        else -> null
     }
 
     /** Tab that shows the target of [request]. */
@@ -136,10 +148,11 @@ object AppNav {
         is NavRequest.SelectTab -> request.tab
         is NavRequest.OpenJobConflicts -> MainTab.Sync
         NavRequest.ShowShareRequests, is NavRequest.OpenScreen, is NavRequest.ShowScreenGrid -> MainTab.Share
-        NavRequest.ShowUpdate, NavRequest.ShowBackgroundSettings, is NavRequest.OpenVaultCompare -> MainTab.More
+        NavRequest.ShowUpdate, NavRequest.ShowBackgroundSettings, is NavRequest.OpenVaultCompare,
+        NavRequest.ShowLauncherSettings -> MainTab.More
     }
 
-    private fun encode(request: NavRequest): Pair<String, String?> = when (request) {
+    internal fun encode(request: NavRequest): Pair<String, String?> = when (request) {
         is NavRequest.OpenLocation -> "openLocation" to request.location
         is NavRequest.SelectTab -> "selectTab" to request.tab.name
         NavRequest.ShowTransfers -> "showTransfers" to null
@@ -150,6 +163,7 @@ object AppNav {
         is NavRequest.OpenScreen -> "openScreen" to request.target
         is NavRequest.ShowScreenGrid -> "showScreenGrid" to (request.roomId ?: "")
         is NavRequest.OpenVaultCompare -> "openVaultCompare" to request.jobId
+        NavRequest.ShowLauncherSettings -> "showLauncherSettings" to null
     }
 
     /** Random per-installation secret in app-private preferences. */

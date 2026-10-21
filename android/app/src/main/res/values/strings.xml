@@ -2,6 +2,9 @@
 <resources>
     <string name="app_name">Smart Explorer</string>
 
+    <!-- The se launcher (DSK-M9): the name in the system's list of home screens -->
+    <string name="launcher_label">Smart Explorer Startbildschirm</string>
+
     <!-- Notification channels (ids: transfers, background, updates, share) -->
     <string name="channel_transfers">Übertragungen</string>
     <string name="channel_transfers_description">Fortschritt laufender Kopier-, Sync- und Upload-Vorgänge</string>

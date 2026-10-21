@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- DSK-M9 (U35-33): a second home screen in the test APK, so the system has two launchers once the se
+         launcher is off again (`launcher_task_disable_with_two_launchers_shows_chooser_hint`). Off until
+         the test switches it on and off again; the package name comes from Gradle. -->
+    <application>
+        <activity
+            android:name="app.smartexplorer.android.task.TestHomeActivity"
+            android:enabled="false"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
