@@ -150,8 +150,9 @@ fn service(loaded: &Arc<Mutex<Vec<(String, f64)>>>) -> zbus::Result<zbus::blocki
         .name("org.gnome.Shell")?
         .name("org.gnome.Mutter.DisplayConfig")?
         .serve_at("/org/gnome/Shell", Shell)?
+        // As the real Shell: both interfaces on the one object.
         .serve_at(
-            "/org/gnome/Shell/Extensions",
+            "/org/gnome/Shell",
             Extensions {
                 loaded: loaded.clone(),
             },
