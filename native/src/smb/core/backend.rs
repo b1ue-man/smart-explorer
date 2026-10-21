@@ -14,7 +14,8 @@ use crate::vfs::{
 use smb2::ErrorKind;
 use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 #[derive(Clone)]
 pub struct SmbBackend {
@@ -29,6 +30,9 @@ pub struct SmbBackend {
     /// The server answered COPYCHUNK as unsupported once: later copies
     /// stream without asking again.
     copy_refused: Arc<AtomicBool>,
+    /// Until then this connection offers no ranges to a segmented stage
+    /// (segmented_stage.rs).
+    pub(super) no_ranges_until: Arc<Mutex<Option<Instant>>>,
 }
 
 fn name_of(path: &str) -> String {
@@ -63,10 +67,11 @@ impl SmbBackend {
             url,
             namespace,
             copy_refused: Arc::new(AtomicBool::new(false)),
+            no_ranges_until: Arc::new(Mutex::new(None)),
         })
     }
 
-    pub(super) fn write_file(
+    fn write_file(
         &self,
         path: &str,
         exclusive: bool,
@@ -304,9 +309,9 @@ impl Backend for SmbBackend {
             .map(Some)
     }
 
-    /// Ranges of an upload through `create_file_writer_at`; off until the
-    /// security question about reopening a stage by path is answered for SMB
-    /// (segmented_stage.rs).
+    /// Ranges of an upload through handles of their own, each checked
+    /// against the identity of the stage (security answer S14,
+    /// segmented_stage.rs).
     fn open_segmented_stage(
         &self,
         stage: &str,
