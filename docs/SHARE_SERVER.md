@@ -637,6 +637,27 @@ context-free accept/reject/retry/revoke/delete, completion, and file access.
 Every selector used by that scenario is obtained from earlier CLI output in the
 same run.
 
+## Screen relay limits (0.5.183)
+
+Screen sessions use the ALPN `smart-explorer/share-screen/1` (`native/src/screen/core/wire.rs:17`)
+on the same Iroh connections as the other peer traffic, so they use the relay when no direct
+path exists. The relay routes ciphertext, as for every other protocol here.
+
+- **The relay drops, it does not queue without bound.** A client's send queue holds at
+  most 512 packets (`vendor/iroh-relay-1.0.0/src/protos/relay.rs:40`) and 1 MiB of
+  payload per client (`vendor/iroh-relay-1.0.0/src/server/queue_budget.rs:8`); the
+  budget for all clients together is 64 MiB (`queue_budget.rs:10`). A packet that does
+  not fit is dropped. On the TCP leg the relay retransmits; a drop on the relay itself
+  is real loss for the QUIC layer.
+- **The host guards the relay path.** The host limits the unacknowledged bytes on a relay
+  path to 768 KiB (`RELAY_GUARD_BYTES`, `native/src/screen/core/pacing.rs:17`, `:31-37`), so
+  one burst stays below the relay's 1 MiB budget. Direct paths are not limited by this guard
+  (`native/src/screen/core/host_mode.rs:82`, `:109`).
+- **No loss repair for pictures.** The plan decided against forward error correction; QUIC resends lost packets, and the viewer asks for a key frame after a
+  broken picture group (see `docs/oberflaechen/bildschirm.md`, section 5).
+- **The signaling server has no screen state.** `share-server` does not parse screen
+  frames; the limits above are enforced by the transport relay and by the screen host.
+
 ## Dependency state and advisories (2026-10-16)
 
 The server has its own lock, `share-server/Cargo.lock`, and a vendored,

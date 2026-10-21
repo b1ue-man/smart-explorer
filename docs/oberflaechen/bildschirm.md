@@ -1,22 +1,22 @@
 # Oberflächen der Bildschirmverbindung
 
-Stand: 2026-10-20, Pakete U10 (SCR-M2), U16 (SCR-M4, Windows als Host) und U25 (SCR-M7, Desktop-Betrachter) des Strangs S4 im Plan `docs/plaene/2026-10-17-rechte-desktop-tresore/plan.md`. Belege als `Datei:Zeile` am Stand dieses Pakets. Abkürzung: `N/` = `native/src/`. Pflege: jede Änderung an einer Bildschirmfähigkeit aktualisiert diese Datei im selben Commit (Regel in `docs/oberflaechen/INDEX.md`).
+Stand: 2026-10-21, Lauf 2 des Doku-Laufs U42 (SCR-M11). Alle Pakete des Strangs S4 sind im Quelltext committet: U09, U10, U13, U16, U19, U22, U25, U27 und U28 sowie R15c. Gebaut und ausgeführt ist davon in diesem Lauf nichts; das prüft die Stapel-Suite. Belege als `Datei:Zeile` am Stand dieses Dokuments. Abkürzung: `N/` = `native/src/`, `A/` = `android/app/src/main/java/app/smartexplorer/android/`. Pflege: jede Änderung an einer Bildschirmfähigkeit aktualisiert diese Datei im selben Commit (Regel in `docs/oberflaechen/INDEX.md`).
 
-Erreichbarkeit: CLI, IPC, Anzeigefenster und Tab 9 sind erst erreichbar, wenn das Registrierungspaket R4 die Module einträgt (`N/share/mod.rs`, `N/daemon/mod.rs`, `N/daemon/os/shared/ipc_protocol.rs`, `N/daemon/os/shared/ipc.rs`, `N/daemon/os/shared/ipc_host_ext.rs`, `N/cli/mod.rs`, `N/app/mod.rs`, `N/lib.rs`). Tab 9 zeigt bis zur Verteilerzeile in `N/app/core/share_window_ui.rs` die Diagnose.
+Erreichbarkeit: CLI, IPC, Betrachter, Anzeigefenster und Tab 9 sind verdrahtet. Tab 9 (`TAB_SCREEN`) steht in `N/app/core/share_window_ui.rs:66`. Die Registrierungen der Module stehen in den Commits `9456b8ad` (U10), `f4599a0e` (U19), `f83d1d94` (U16), `ecca6583` (U22), `1dc11011` (U25) und `33744c73` (U27).
 
 ## 1. Oberflächen
 
 | Kürzel | Oberfläche | Einstieg |
 |---|---|---|
-| CLI | `se screen devices`, `se screen probe`, `se screen windows`, `se screen snapshot`, `se screen bench`, `se screen sessions`, `se screen stop` | `N/cli/screen.rs`, `N/cli/screen/windows.rs`, `N/cli/screen/snapshot.rs`, `N/cli/screen/bench.rs`, `N/cli/screen/sessions.rs`, `N/cli/screen/output.rs`; Vervollständigung `N/cli/completions_screen.rs` (Geräte für `probe`, `windows`, `snapshot`, `bench`) |
+| CLI | `se screen devices`, `probe`, `windows`, `snapshot`, `input`, `bench`, `codec` (mit `openh264 enable|disable|remove` und `licenses`), `portal forget`, `sessions`, `stop` | `N/cli/screen.rs:77-120` (Befehle), `N/cli/screen/windows.rs`, `N/cli/screen/snapshot.rs`, `N/cli/screen/input.rs`, `N/cli/screen/bench.rs`, `N/cli/screen/codec.rs`, `N/cli/screen/portal.rs`, `N/cli/screen/sessions.rs`, `N/cli/screen/output.rs`; Vervollständigung `N/cli/completions_screen.rs` (Geräte für `probe`, `windows`, `snapshot`, `bench`) |
 | CLI (Betrachter) | `se screen view GERÄT [--source QUELLE] [--control] [--fullscreen] [--json]`, `se screen grid [--room RAUM] [--json]`: starten das Betrachterfenster der Desktop-App losgelöst und geben `launched\t<pid>` bzw. `{"launched":true,"pid":<n>}` aus; ohne Desktop-App neben `se` endet der Befehl mit „Desktop-App nicht installiert“ (Exit 1) | `N/cli/screen/view.rs` |
 | Betrachter | Fenster `smart_explorer --screen-view <ziel-json>` (ein Gerät) und `--screen-grid [--room <id>]` (Gruppenansicht); beide Ansichten wechseln im selben Fenster | `N/app/core/screen_launch.rs` (Start, `arm_window`, `close_requested`), `screen_viewer_app.rs`, `screen_viewer_view.rs`, `screen_tile_grid.rs`; Abschnitt 8 |
 | Desktop | Fenster „Geräte & Freigaben“, Tab 9 „Bildschirm“ (Knopf „Alle Geräte“), Geräteseite (Knöpfe „Bildschirm öffnen“, „Bildschirm steuern“), Raumseite (Knopf „Bildschirme des Raums“) | `N/app/core/share_pages_ui.rs` (`TAB_SCREEN`), `N/app/core/share_screen_tab_ui.rs:71-148` |
 | Anzeigefenster | `smart_explorer --screen-indicator`, immer im Vordergrund, solange eine Sitzung Bildschirminhalt zeigt | `N/app/core/screen_indicator_ui.rs:26-35`; Start durch den Host `N/screen/os/shared/indicator.rs:82` |
 | IPC | `IpcRequest::Screen` mit `ScreenIpcRequest::{Probe, Stream, Bench, HostSessions, HostStop, HostWatch}` | `N/daemon/os/shared/ipc_protocol_screen.rs:64-87`, Antworten ab `:108`; Host `N/daemon/os/shared/screen_ipc.rs:78-118`; Client `N/daemon/os/shared/screen_ipc_client.rs` |
-| MCP | Werkzeug `screen` (Aktionen `devices`, `probe`, `windows`, `snapshot`; nur lesend), daneben `se` für jeden CLI-Befehl | `N/cli/mcp/screen_tool.rs`, `N/cli/mcp/server.rs`; Eintrag im Katalog trägt R6 ein (`N/cli/mcp/catalog.rs`) |
+| MCP | Werkzeug `screen` (Aktionen `devices`, `probe`, `windows`, `snapshot`; nur lesend) und Werkzeug `screen_input` (eine Eingabe je Aufruf, Abschnitt 7), daneben `se` für jeden CLI-Befehl | `N/cli/mcp/screen_tool.rs:151` (`screen_input`), `N/cli/mcp/catalog.rs:198` |
 | Netz | ALPN `smart-explorer/share-screen/1` neben FS, Exec und LAN-Link | `N/screen/core/wire.rs:17`; Annahme `N/share/core/node_accept.rs:154`; Host `N/share/core/node_screen.rs:234-341`; Betrachter `N/share/core/node_screen_link.rs:25-58` |
-| Android | keine Bildschirmzeilen und keine Sitzungen | Abschnitt 9 |
+| Android | Host (Abschnitt 9) und Betrachter mit Gruppenansicht (Abschnitt 8); Bridge-Methoden `screen.hostPrereqs`, `screen.hostSessions`, `screen.hostStop`, `screen.hostReady`, `screen.hostEnded` (`N/mobile/os/shared/domains/screen_host.rs:56-60`); Bildabruf über JNI `screenPull` (`native/android-bridge/src/screen_jni.rs`) | Abschnitte 8 und 9 |
 
 ## 2. Rechte
 
@@ -67,7 +67,7 @@ Geräteauswahl: `share://`-Endpunkt, Name, Geräte-ID oder Präfix des Fingerabd
 Regeln des Hosts:
 - Bildschirminhalt nur mit grafischer Sitzung (`no_display`, `N/screen/core/host_server.rs:209-213`) und mit Anzeigefenster (`indicator_unavailable`, `:215-218`, `:282-288`). Das Testbild `synthetic` braucht keines.
 - Steuern ist exklusiv: ein zweites Steuern erhält `control_busy` (`N/screen/core/host_server.rs:220-221`, `:272-273`, `N/screen/core/registry.rs:294-310`).
-- Höchstens 8 Sitzungen je Host und 4 je Gerät, sonst `session_limit` (`N/screen/core/registry.rs:24-27`, `:161`).
+- Keine Anzahlgrenze für Sitzungen je Host oder je Gerät (R15c). Den Code `session_limit` sendet der Host nicht mehr; der Betrachter kennt ihn noch für ältere Geräte (`N/screen/core/wire_hello.rs:273`, `N/screen/core/viewer_client.rs:113`). Die Gruppenansicht lässt die Kachel bei diesem Code geschlossen, bis sie angeklickt wird (`N/app/core/screen_tile_grid.rs:9`, `:302`).
 - Das Anzeigefenster schließt sich 3 Sekunden nach der letzten Sitzung (`N/app/core/screen_indicator_ui.rs:21`, `:159`). Endet sein Prozess mit dem Code des Update-Stopps, enden die Sitzungen mit Bildschirminhalt als `update_stop`; endet er nach weniger als 2 Sekunden oder scheitert der Neustart, als `host_stopped` (`N/screen/os/shared/indicator.rs:122-133`).
 
 Quellen auf Linux (SCR-M5, `N/screen/os/linux_os/`): unter X11 `monitor:<Ausgabename>` und `window:<XID dezimal>`; unter Wayland gibt es genau einen Eintrag `monitor:portal` mit Breite und Höhe 0 („unbekannt bis zur Auswahl“), die Auswahl trifft der Nutzer im Systemdialog; jede andere Quelle antwortet mit `portal_selects_source`. Während der Dialog offen ist, steht die Sitzung im Zustand `waiting_for_portal`; ohne PipeWire erscheint er nicht (`pipewire_missing`).
@@ -91,19 +91,27 @@ Ablehnungscodes und ihre Texte beim Betrachter (`N/screen/core/viewer_client.rs:
 | `screen_unsupported` | Gerät kennt die Bildschirmfreigabe nicht (ältere Version) |
 | `capture_failed` | Die Aufnahme auf dem Gerät ist fehlgeschlagen |
 | `encoder_failed` | Der Kodierer auf dem Gerät ist fehlgeschlagen |
-| `session_limit` | Das Gerät zeigt schon die höchste Zahl an Sitzungen |
+| `session_limit` | Ältere Gerät-Version: Das Gerät hat seine Sitzungsgrenze erreicht. Neuere Versionen senden diesen Code nicht |
 
 Ein älteres Gerät ohne das Bildschirm-ALPN lehnt mit TLS-Alarm 120 ab (QUIC-Transportcode `0x178`); der Betrachter meldet `screen_unsupported` (`N/screen/core/viewer_client.rs:231-252`, `N/share/core/node_screen_link.rs:44`).
 
 ## 5. Kodierung und OpenH264
 
-Folgt mit SCR-M3 und SCR-M10. Stand SCR-M2: nur der verlustfreie Kachelcodec `tiles` (`N/screen/core/host_backend.rs`, `TilesScreenEncoder`, `TilesScreenDecoder`). `se screen bench --codec h264` endet mit „this version has no H.264 decoder yet; use --codec tiles“ (`N/screen/core/bench.rs:66`). Bildgruppen laufen als eigene Uni-Streams; ein Betrachter nimmt höchstens 4 gleichzeitig an und stoppt einen zurückgesetzten Strom sofort (`N/screen/core/gop_stream.rs:24-27`, `:162`).
+Codecs: `tiles` ist immer verfügbar und verlustfrei (`N/screen/core/codec_registry.rs:133`). H.264 bieten die Plattform-Kodierer an: Windows über Media Foundation mit den Profilen High und ConstrainedBaseline (`N/screen/os/windows/mf_common.rs:292-293`, `:340-341`), Android über MediaCodec mit den Profilen `cb` und `high` (`N/screen/os/android/bridge_backend.rs:56-59`, `:92`). Welcher H.264-Weg auf Linux angeboten wird, belegt dieser Abschnitt nicht. Hardware-Kodierer über VA-API und NVENC sind nicht umgesetzt; ihre Offenen Punkte stehen im Plan `docs/plaene/2026-10-17-rechte-desktop-tresore/strang-bildschirm.md` (SCR-M11).
+
+OpenH264 (Cisco, verlustbehaftet, nicht im Programm enthalten): `se screen codec openh264 enable` zeigt die Cisco-Lizenz v1.0, fragt nach der Annahme (Vorgabe Nein; `--yes` überspringt die Frage; ohne Terminal und ohne `--yes` bricht der Befehl ab, `N/cli/screen/codec.rs:92-99`) und lädt OpenH264 2.6.0 von `ciscobinary.openh264.org` (`N/cli/screen/codec.rs:101`, `N/screen/os/native_ffi/openh264_pins.rs:26-47`). Der Download ist auf Größe und SHA-256 festgelegt; Cisco veröffentlicht nur MD5-Summen (`openh264_pins.rs:1-7`). `disable` schaltet aus und lässt die Datei; `remove` löscht die Bibliothek dieses Nutzers (`N/cli/screen/codec.rs:32-50`).
+
+Lizenztexte: `se screen codec licenses [NAME]` zeigt sie vollständig. Die Quelle ist `third-party/openh264/BINARY_LICENSE.txt`; `N/screen/core/licenses.rs` bindet sie mit `include_str!` ein, die Anzeige steht unter Bildschirm → Kodierung → Lizenzen. Der Installer legt die Datei unter `licenses\OpenH264\BINARY_LICENSE.txt` ab (`native/installer.nsi:143-144`).
+
+Bildgruppen laufen als eigene Uni-Streams. Ein Betrachter nimmt höchstens 4 gleichzeitig an (je eine laufende und eine neue Gruppe für `video` und `preview`, `N/screen/core/gop_stream.rs:24-27`); einen zurückgesetzten Strom stoppt er sofort (`:162`).
 
 ## 6. Fenster und Standbild
 
 Quellen: `monitor:<id>`, `window:<id>` und `synthetic`. Auf Windows (SCR-M4) ist die Monitor-ID der GDI-Name ohne `\\.\\`, zum Beispiel `monitor:DISPLAY1`, die Fenster-ID der Fenstergriff als Dezimalzahl (`window:123456`); `MonitorInfo.id` und `WindowEntry.id` tragen nur den Teil nach dem Doppelpunkt. Monitore nennen Lage und Größe in physischen Pixeln des virtuellen Bildschirms (`N/screen/os/windows/monitors.rs`), sortiert nach `y`, dann `x`.
 
 `LIST_WINDOWS` liefert unter Windows die Fenster, die Alt+Tab zeigt: sichtbar, mit Titel, nicht verborgen (`DWMWA_CLOAKED`), nicht das Shell-Fenster, ohne Besitzer oder mit `WS_EX_APPWINDOW`, kein Werkzeugfenster ohne `WS_EX_APPWINDOW`; `list_source` ist `enum_windows`, `apps` bleibt leer (`N/screen/os/windows/window_list.rs`). Die Grenzen (`limits`) sind `secure_desktop_paused` und `one_monitor_per_session` immer, `capture_border` mit Graphics Capture, sonst `window_capture_unsupported` und `no_cursor_capture` (`N/screen/os/windows/host_backend.rs`). Ein Gerät ohne Windows-Aufnahme (Linux bis SCR-M5, Testbild) liefert eine leere Liste mit `list_source: unknown` (`N/screen/os/shared/synthetic_backend.rs`).
+
+Fensterliste (alle Plattformen): Die Liste hat keine Eintragszahl. Ihre Grenze ist der 1-MiB-Rahmen von Protokoll v1 (`MAX_WINDOWS_BYTES`, `N/screen/core/wire.rs:54`). `WindowList::bounded` nimmt die Teile in der Reihenfolge Grenzen, Fenster, Apps auf und lässt jeden Eintrag weg, der nicht mehr hineinpasst; ein Eintrag wird nie abgeschnitten (`N/screen/core/window_list.rs:171-190`). Titel und Namen bleiben unverkürzt. Fenster ohne gültige Kennung fallen weg; eine ungültige Monitor-Kennung wird leer (`window_list.rs:172-176`).
 
 Aufnahme (Windows): Graphics Capture ab Windows 10 1903 für Monitore und Fenster, für einen Monitor ohne Graphics Capture die DXGI-Duplikation (`N/screen/os/windows/capture_wgc.rs`, `capture_dxgi.rs`); jedes Bild wird auf die CPU zurückgelesen (`d3d_device.rs`, 8,3 MB je Bild bei 1920 × 1080), Alpha ist 255. Aufnahmezustände vor jedem Bild in dieser Reihenfolge: `session_inactive`, `secure_desktop`, bei einem Fenster „Fenster existiert nicht mehr“ (die Sitzung endet mit `capture_failed`) und `window_minimized` (`N/screen/os/windows/capture_source.rs`). Eine Quelle, die nicht öffnet, nennt `monitor_not_found`, `window_not_found`, `session_inactive`, `window_capture_unsupported` oder `capture_unavailable` als Grund von `no_display`. Ein Monitor über 4096 × 2304 Pixel wird auf diese Größe verkleinert.
 
@@ -115,7 +123,22 @@ MCP `screen`: `devices` (wie `se screen devices --json`, mit `probe`), `probe` (
 
 ## 7. Eingabe
 
-Folgt mit SCR-M6. Stand SCR-M2: `INPUT` wirkt nur in der Sitzung, die steuert (`N/screen/core/host_session.rs:266-286`); beim Loslassen des Steuerns werden gedrückte Tasten und Knöpfe gelöst (`:327-343`). Das Testbild-Backend lehnt jede Eingabe mit `unsupported_on_host` ab (`N/screen/os/shared/synthetic_backend.rs:111-113`).
+`se screen input GERÄT [--source QUELLE] (--text TEXT | --key TASTE | --click X,Y | --move X,Y | --scroll DX,DY | --action NAME) [--json]` (`N/cli/screen/input.rs:1-2`, Optionen `:38-65`). Das MCP-Werkzeug `screen_input` nimmt dieselben Angaben, genau eine je Aufruf (`N/cli/mcp/screen_tool.rs:151-175`); Tastenkombinationen heißen zum Beispiel `ctrl_left+c` (`:133`). Die Sitzung läuft im Modus `control` und braucht „Bildschirm steuern“ (Abschnitt 2). Die Eingabe wirkt nur in der Sitzung, die steuert (`N/screen/core/host_session.rs:266-286`); beim Loslassen werden gedrückte Tasten und Knöpfe gelöst (`:327-343`).
+
+Was ein Host anbietet (`input_for` und die Hostadapter):
+
+| Host | Zeiger | Text | Taste | Berührung | Systemaktion |
+|---|---|---|---|---|---|
+| Windows | ja | ja | ja | ja (`N/screen/os/windows/host_backend.rs:79-86`) | nein |
+| Linux, X11 | ja | ja | ja | ja (`N/screen/os/linux_os/host_backend.rs:283-294`, Eingabe `x11_input.rs`) | nein |
+| Linux, Wayland mit RemoteDesktop-Portal | ja | ja | ja | ja (`portal_input.rs`) | nein |
+| Linux, Wayland ohne RemoteDesktop-Portal (zum Beispiel wlroots) | nein | nein | nein | nein (`N/screen/os/linux_os/host_backend.rs:283-294`) | nein |
+| Android, Bedienungshilfe an | ja | ja | nein (`keyboard: false`, `N/screen/os/android/bridge_backend.rs:103-106`) | ja | ja (`bridge_backend.rs:107-115`) |
+| Android, Bedienungshilfe aus | nein (`bridge_backend.rs:98-100`) | nein | nein | nein | nein |
+
+Systemaktionen (Android): `back`, `home`, `recents`, `notifications`, `quick_settings`, `lock_screen`, `power_dialog` (`N/screen/core/input_model.rs:52-60`, `N/cli/screen/input.rs:62-65`).
+
+Tasten, Zeiger und Text am Desktop-Betrachter: Abschnitt 8. Strg+Alt+Entf wird nicht angeboten.
 
 ## 8. Betrachter und Gruppenansicht
 
@@ -131,9 +154,20 @@ Stand SCR-M7 (U25), Desktop (Windows und Linux). Der Betrachter ist ein eigener 
 
 **Geräte- und Raumseite.** Die Geräteseite eines Direktgeräts hat „Bildschirm öffnen“ und „Bildschirm steuern“ (aktiv, wenn die Gerätekennung bekannt ist und das Gerät den Zugriff angenommen hat; ob es seinen Bildschirm zeigt, sagt der Betrachter), die Raumseite „Bildschirme des Raums“, der Tab „Bildschirm“ „Alle Geräte“. Alle starten den Betrachter als eigenen Prozess (`N/app/core/screen_launch.rs`).
 
+### Android-Betrachter (SCR-M9, U28)
+
+- Sitzungen: `N/mobile/os/shared/domains/screen_view_run.rs` führt die laufenden Betrachtersitzungen (Tabelle, Sitzungsfaden, Ereignisse und Warteschlange der Bilder). Eine Sitzung endet einmal: beim Ereignis `ended`, bei geschlossener Warteschlange (`screenPull` liefert −2) oder beim Entfernen aus der Tabelle.
+- Bildabruf: `screenPull(session, dst, timeoutMs)` schreibt das nächste Bild in den direkten Puffer `dst` (`native/android-bridge/src/screen_jni.rs:131-134`). Rückgaben: Anzahl geschriebener Bytes; −1 Zeitüberschreitung; −2 Sitzung beendet; −3 `dst` zu klein, Bytes 12 bis 15 nennen die Länge der Nutzlast, es wird nichts kopiert; −4 Puffer nicht direkt (`N/screen/os/android/viewer_sink.rs:36-39`, `:152-157`).
+- Kopf eines Bildes, Little-Endian (`viewer_sink.rs:1-19`): Bytes 0 bis 7 `pts_us` (Aufnahmezeit des Hosts), 8 bis 11 `flags` (Bit 0 Schlüsselbild; Bit 1 fertiges Kachelbild in RGBA; Bit 2 erstes Bild einer neuen Bildgruppe; Bit 3 Zugriffseinheit vollständig; Bits 16 bis 31 die Gruppennummer), 12 bis 15 `len`, danach `len` Bytes Nutzlast. Die Nutzlast beginnt bei Offset 16.
+- H.264: Die Zugriffseinheiten gehen im Annex-B-Format unverändert an die App; SPS und PPS stehen vor jedem IDR (`viewer_sink.rs:1-8`). Der Dekoder (MediaCodec) liest über `pullLarger`, wenn ein Bild nicht in den Eingangspuffer passt (`A/ui/screen/ScreenDecoder.kt:104-114`).
+- Kacheln: Der Kern setzt die Kachelbilder zu einem fertigen Bild in der Bytefolge R, G, B, A zusammen (`viewer_sink.rs:3-4`, `:310`, `bgra_to_rgba` in `:341`). Die App zeichnet sie als Bitmap (`ScreenDecoder.kt:33-34`).
+- Stau: Ist das älteste Bild der Warteschlange älter als `STALL_US`, leert der Kern die Warteschlange und fordert ein Schlüsselbild an (`viewer_sink.rs:6-9`).
+- Eingabe (`A/ui/screen/ScreenInputMapper.kt:14-22`): Am Desktop-Host gilt: Tippen ist ein Linksklick, Halten ohne Bewegung ein Rechtsklick, Ziehen mit einem Finger zieht mit der linken Taste, zwei Finger bewegt als Rad (nach oben scrollt nach unten), Kneifen zoomt ohne Eingabe. Am Android-Host ist jeder Finger (höchstens 10, `ScreenInputMapper.kt:271`) ein Berührungsereignis. Tastenereignisse an Android-Hosts gibt es nicht (Abschnitt 7).
+- Gruppenansicht: `A/ui/screen/ScreenTilesScreen.kt` mit den Vorschaukacheln `ScreenPreviewTile.kt`.
+
 ## 9. Android als Host
 
-Folgt mit SCR-M8. Unter Android meldet `graphical_session()` immer „nein“ (`N/screen/os/shared/synthetic_backend.rs:30-32`), daher entstehen dort keine Katalogzeilen, sobald die Aufrufer den Wert übergeben (Abschnitt 11). Bridge-Methoden für den Bildschirm gibt es nicht.
+Stand SCR-M8 (U27). Der Host läuft im Dienst `A/screen/ScreenHostService.kt`. Die Aufnahme beginnt nach dem Systemdialog „Bildschirm teilen“ und kodiert mit einem MediaCodec-Kodierer (`A/screen/ScreenEncoder.kt`). Die Rückfrage an den Telefonbesitzer beantwortet die Aktivität `A/screen/ScreenConsentActivity.kt` (Aktionen „Diesmal erlauben“, „Immer erlauben“ und „Ablehnen“, Abschnitt 2). Vorbedingungen meldet der Kern mit `screen.hostPrereqs` (`N/mobile/os/shared/domains/screen_host.rs:56`). Eingabe und Standbilder setzen den Bedienungshilfe-Dienst voraus (`N/screen/os/android/bridge_backend.rs:98-100`); ohne ihn bietet der Host keine Eingabe (Tabelle in Abschnitt 7).
 
 ## 10. Ausnahmen mit Grund
 
@@ -141,23 +175,29 @@ Folgt mit SCR-M8. Unter Android meldet `graphical_session()` immer „nein“ (`
 |---|---|---|
 | MCP | Antwort auf Rückfragen | gesperrt durch S1 (C7): eine Zustimmung gibt nur der Mensch am Gerät |
 | MCP | Live-Video (Betrachter, Gruppenansicht) | MCP überträgt Werkzeugantworten, keine Videoströme; `screen` liefert Standbilder (`snapshot`) |
-| MCP | Eingabe über `screen` | Eingabe hat ein eigenes Werkzeug `screen_input` (U22) |
-| Windows | Aufnahme auf dem sicheren Desktop (UAC-Abfrage, Sperrbildschirm) | Windows sperrt sie für Benutzerprozesse; die Aufnahme pausiert mit `secure_desktop` |
-| Windows | Fenster vor Windows 10 1903 | Graphics Capture fehlt; nur Monitore über die DXGI-Duplikation, ohne Zeiger (`no_cursor_capture`) |
-| Windows | gelber Rahmen um das Aufgenommene | Graphics Capture zeichnet ihn (`capture_border`); dieses Paket schaltet ihn nicht ab (`IsBorderRequired` bleibt unverändert) |
-| Windows | mehrere Monitore in einer Sitzung | je Sitzung ein Monitor oder ein Fenster (`one_monitor_per_session`): zwei 4K-Monitore ergäben mehr Makroblöcke, als H.264 Level 5.1 erlaubt |
-| Windows | Eingabe und Strg+Alt+Entf | folgen mit SCR-M6 (U22); `inject` lehnt bis dahin mit `unsupported_on_host` ab |
+| MCP | Rückfrage-Entscheidung über `screen` | derselbe Grund wie die Antwort auf Rückfragen |
 | MCP | `se screen portal forget` | löscht lokal eine Freigabe des Nutzers; kein Werkzeug für Agenten |
-| Linux | Fensterliste unter GNOME | GNOME bietet Programmen keine Fensterliste an; nur Apps |
-| Linux | Steuern unter wlroots | folgt mit SCR-M6 (U22) |
+| Windows | Aufnahme auf dem sicheren Desktop (UAC-Abfrage, Sperrbildschirm) | Windows sperrt sie für Benutzerprozesse; die Aufnahme pausiert mit `secure_desktop` |
+| Windows | Strg+Alt+Entf | wird nicht angeboten; der Grund ist im Quelltext nicht belegt |
+| Windows | Fenster vor Windows 10 1903 | Graphics Capture fehlt; nur Monitore über die DXGI-Duplikation, ohne Zeiger (`no_cursor_capture`) |
+| Windows | gelber Rahmen um das Aufgenommene | Graphics Capture zeichnet ihn (`capture_border`); das Programm schaltet ihn nicht ab (`IsBorderRequired` bleibt unverändert) |
+| Windows | mehrere Monitore in einer Sitzung | je Sitzung ein Monitor oder ein Fenster (`one_monitor_per_session`): zwei 4K-Monitore ergäben mehr Makroblöcke, als H.264 Level 5.1 erlaubt |
+| Linux | Fensterliste unter GNOME | GNOME bietet Programmen keine Fensterliste an; nur Apps (`no_window_list`) |
+| Linux | Steuern unter wlroots | ohne RemoteDesktop-Portal gibt es keine Eingabe (Abschnitt 7) |
 | Linux | Fensterwahl unter Wayland aus der Ferne | das Portal lässt nur den Nutzer am Gerät wählen |
-| Android | Bildschirmzeilen, Sitzungen, Tab | Android ist erst ab SCR-M8 Host |
+| Android | Eingabe mit Tasten am Android-Host | der Host meldet `keyboard: false` (`N/screen/os/android/bridge_backend.rs:103-106`); Systemaktionen bleiben |
+| Android | Eingabe ohne Bedienungshilfe | ohne den Bedienungshilfe-Dienst meldet der Host keine Eingabe (`bridge_backend.rs:98-100`) |
 | Desktop | rechte Modifikatoren, Zwischenablage, Ton | egui meldet nur `Modifiers` ohne Seite; Zwischenablage und Ton gehören nicht zu diesem Strang |
 | Desktop | AltGr-Zeichen unter Windows | egui-winit liefert unter Strg keinen Text; AltGr gilt als Strg+Alt |
 | Desktop | Umlaufzeit im Statistikfeld | der Worker meldet nur den Uhrversatz; das Feld zeigt „–“ |
-| Android | Betrachter, Gruppenansicht | folgen mit SCR-M9 (U28) |
 | CLI | Rückfragen beantworten unter `se screen` | Rückfragen beantworten die Oberflächen von S1 für alle Rechte gemeinsam |
 
+## 11. Offene Punkte
+
+- Die Bildschirmzeilen des Zugriffsrechts übergibt `N/mobile/os/shared/domains/share_access.rs:76` fest als grafische Sitzung (`graphical_session: true`). Das ist beabsichtigt, weil die App die grafische Sitzung des Telefons ist (`share_access.rs:72-73`). Die Aufrufer aus dem Stand U10 übergeben den Wert nicht mehr fest.
+- `endpoint_for_screen` (`N/share/core/node_screen_link.rs:151`) kopiert das private `endpoint_for_target` (`N/share/core/service.rs:230`). Wird jene Funktion für das Modul sichtbar, entfällt die Kopie.
+- Die Annahmen zur iroh-Schnittstelle (`Path::rtt`, `Connection::stats`, `TransportErrorCode::crypto`) sind ohne Build nicht geprüft; die Stapel-Suite prüft sie.
+- Hardware-Kodierer über VA-API (`SCREEN-VAAPI`) und NVENC: nicht umgesetzt (Plan `strang-bildschirm.md`, SCR-M11).
 ## 11. Offene Punkte
 
 - Drei Aufrufer von `capability_catalog` übergeben fest `graphical_session: true`: `N/app/core/share_exec_programs_ui.rs:251`, `N/cli/share/grants_access.rs:102`, `N/mobile/os/shared/domains/share_access.rs:75`. Sie sollen `crate::screen::graphical_session()` übergeben; bis dahin zeigen sie die Bildschirmzeilen auch ohne grafische Sitzung und unter Android.
