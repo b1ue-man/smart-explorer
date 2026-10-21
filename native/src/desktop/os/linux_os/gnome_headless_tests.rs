@@ -265,7 +265,12 @@ fn headless(variant: GnomeVariant, majors: std::ops::RangeInclusive<u32>) {
             .is_some_and(|report| report.handles_a_window())
     });
     let report = files.read_extension();
-    assert!(placed, "kein behandeltes Fenster: {report:?}; {}", tail());
+    assert!(
+        placed,
+        "kein behandeltes Fenster: {report:?}; Shell-Meldungen zu Erweiterungen: {}; {}",
+        extension_lines(&log),
+        tail()
+    );
     let report = report.unwrap();
     assert_eq!(
         report.variant,

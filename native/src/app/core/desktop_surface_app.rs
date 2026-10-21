@@ -120,6 +120,26 @@ fn stdio_link(target: &SurfaceTarget, wake: impl Fn() + Send + 'static) -> Resul
     })
 }
 
+/// The session of this surface. A surface of the GNOME extension owns one
+/// Wayland connection, the socket `WAYLAND_SOCKET`, which the first
+/// connection made from the environment takes; its probe therefore must not
+/// connect to the compositor before the window system does (otherwise the
+/// window comes over a client the extension does not own and is never placed).
+fn probe_session(target: &SurfaceTarget, stored: Option<&DesktopConfig>) -> Session {
+    #[cfg(target_os = "linux")]
+    {
+        if matches!(target, SurfaceTarget::GnomeMonitor { .. }) {
+            return Session::from_facts(
+                platform::PLATFORM,
+                crate::desktop::os::platform::gnome_control::surface_session_facts(),
+                stored,
+            );
+        }
+    }
+    let _ = target;
+    Session::probe(stored)
+}
+
 /// `--desktop-surface …`: the exit code of the process.
 pub(crate) fn run(target: &SurfaceTarget) -> i32 {
     // V8 first: a new update stop ends the surface with 75.
@@ -191,7 +211,7 @@ pub(crate) fn run(target: &SurfaceTarget) -> i32 {
     // The stored configuration until the shell sends its own; it also says
     // whether the window needs an alpha channel.
     let stored = DesktopDir::production().read_config().ok().flatten();
-    let session = (!windowed).then(|| Session::probe(stored.as_ref()));
+    let session = (!windowed).then(|| probe_session(target, stored.as_ref()));
     let transparent = session
         .as_ref()
         .is_some_and(|session| session.transparent.is_ok());
