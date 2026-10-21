@@ -95,5 +95,48 @@ fn progress_value(observer: &TreeObserver) -> Value {
         "bytes_read": progress.bytes_read,
         "files_written": progress.files_written,
         "bytes_written": progress.bytes_written,
+        // Engine copies only; `none`/0/`null` on the older path. The text
+        // names drives and rates, never a file or folder.
+        "rate_bps": progress.rate_bps,
+        "limiter": progress.limiter,
+        "limiter_text": progress.limiter_text,
+        "segments": progress.segments,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::progress_value;
+    use crate::cli::tree_observer::{TreeObserver, TreePhase};
+
+    #[test]
+    fn speed_task_mcp_copy_progress_has_rate_and_limiter() {
+        let observer = TreeObserver::default();
+        // Before any verdict: the fields exist with neutral values.
+        let idle = progress_value(&observer);
+        assert_eq!(idle["rate_bps"], 0);
+        assert_eq!(idle["limiter"], "none");
+        assert!(idle["limiter_text"].is_null());
+        assert_eq!(idle["segments"], 0);
+
+        observer.begin_engine();
+        observer.set_phase(TreePhase::Writing);
+        observer.set_engine_totals(3, 0, 3_000);
+        observer.set_engine_done(2, 2_000);
+        observer.set_engine_stats(1_000_000, "target", Some("Ziellaufwerk sda".to_string()), 2);
+        let value = progress_value(&observer);
+        assert_eq!(value["rate_bps"], 1_000_000);
+        assert_eq!(value["limiter"], "target");
+        assert_eq!(value["limiter_text"], "Ziellaufwerk sda");
+        assert_eq!(value["segments"], 2);
+        // The fields of the older progress stay as they were.
+        assert_eq!(value["phase"], "writing");
+        assert_eq!(value["files_total"], 3);
+        assert_eq!(value["directories_total"], 0);
+        assert_eq!(value["bytes_total"], 3_000);
+        assert_eq!(value["files_read"], 2);
+        assert_eq!(value["bytes_read"], 2_000);
+        assert_eq!(value["files_written"], 2);
+        assert_eq!(value["bytes_written"], 2_000);
+    }
 }

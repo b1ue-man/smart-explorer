@@ -19,7 +19,37 @@ use std::time::Duration;
 
 const MAX_WALK_DEPTH: usize = 512;
 const LINK_REFUSED: &str = "Links, Reparse-Punkte und Spezialdateien werden nicht übertragen";
+/// The message of `walk_listers` for a FIFO, socket or device (the same text
+/// there; kept here so `omission_kind` names both reasons in one place).
+const SPECIAL_REFUSED: &str = "Spezialdatei wird nicht übertragen";
 const COORDINATOR_SLICE: Duration = Duration::from_millis(50);
+
+/// Why an entry was left out, read from the message of a `WalkEvent::Problem`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OmissionKind {
+    /// A link or reparse point: never followed, never recreated.
+    Link,
+    /// A FIFO, socket or device: no content to transfer.
+    Special,
+    /// The refusal text appears inside another message (an entry that
+    /// changed its type during the run): a failure, not an omission.
+    Other,
+}
+
+/// Classifies the message of a problem: `Some(Link)` and `Some(Special)` are
+/// the protected omissions of a tree copy, `Some(Other)` a message that only
+/// quotes a refusal, `None` any other problem (a real failure).
+pub(crate) fn omission_kind(message: &str) -> Option<OmissionKind> {
+    if message == LINK_REFUSED {
+        Some(OmissionKind::Link)
+    } else if message == SPECIAL_REFUSED {
+        Some(OmissionKind::Special)
+    } else if message.contains(LINK_REFUSED) || message.contains(SPECIAL_REFUSED) {
+        Some(OmissionKind::Other)
+    } else {
+        None
+    }
+}
 
 /// A selected entry and its path relative to the target folder.
 #[derive(Clone, Debug, PartialEq, Eq)]
