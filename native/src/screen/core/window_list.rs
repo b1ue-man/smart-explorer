@@ -1,8 +1,11 @@
 //! What runs on the host (decision C5) and what a session can show: the
 //! source ids `monitor:<id>`, `window:<id>` and `synthetic`, the monitors of
 //! `HELLO_OK`, and the windows and apps of the `WINDOWS` frame with the list
-//! source that produced them. `WINDOWS` carries at most 4096 entries of at
-//! most 256 bytes; `bounded` cuts longer lists and texts on the host.
+//! source that produced them. The only bound of a `WINDOWS` list is its
+//! frame: the payload may take `MAX_WINDOWS_BYTES` (1 MiB), the size every
+//! viewer of protocol version 1 reads at most, so a foreign peer cannot make
+//! a viewer allocate more. There is no count of entries (R15c); `bounded`
+//! keeps as many entries as fit into the frame.
 use std::fmt;
 use std::io;
 
@@ -10,8 +13,6 @@ use serde::{Deserialize, Serialize};
 
 use super::wire::{invalid, MAX_WINDOWS_BYTES};
 
-/// Windows plus apps of one `WINDOWS` frame.
-pub(crate) const MAX_LIST_ENTRIES: usize = 4096;
 /// Longest id of a source, window or monitor: native ids (HWND, X11 window,
 /// Wayland handle, KDE UUID) are at most 36 characters.
 pub(crate) const MAX_ID_BYTES: usize = 64;
@@ -173,15 +174,12 @@ fn fit<T: Serialize>(entries: &mut Vec<T>, budget: &mut usize) {
 }
 
 impl WindowList {
-    /// Cuts texts and lists so the `WINDOWS` frame stays within 1 MiB:
-    /// windows first, then apps, together at most 4096 entries, and as many
-    /// as fit once escaped as JSON. Entries with an id that is no valid
-    /// source id are dropped.
+    /// Cuts texts and lists so the `WINDOWS` frame stays within
+    /// `MAX_WINDOWS_BYTES`: windows first, then apps, as many as fit once
+    /// escaped as JSON, whatever their number. Entries with an id that is no
+    /// valid source id are dropped.
     pub(crate) fn bounded(mut self) -> Self {
         self.windows.retain(|window| valid_id(&window.id));
-        self.windows.truncate(MAX_LIST_ENTRIES);
-        self.apps
-            .truncate(MAX_LIST_ENTRIES.saturating_sub(self.windows.len()));
         for window in &mut self.windows {
             cut(&mut window.title, MAX_TITLE_BYTES);
             cut(&mut window.app, MAX_NAME_BYTES);
@@ -205,12 +203,17 @@ impl WindowList {
         self
     }
 
-    /// The receiving side's check of the entry counts.
+    /// The check of both sides beyond the frame size, which `read_frame`
+    /// and `write_frame` already hold to `MAX_WINDOWS_BYTES`: any number of
+    /// windows and apps, at most 16 limit notes.
     pub(crate) fn validate(&self) -> io::Result<()> {
-        if self.windows.len() + self.apps.len() > MAX_LIST_ENTRIES || self.limits.len() > MAX_LIMITS
-        {
-            return Err(invalid("screen window list exceeds 4096 entries"));
+        if self.limits.len() > MAX_LIMITS {
+            return Err(invalid("screen window list has more than 16 limit notes"));
         }
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "window_list_tests.rs"]
+mod tests;

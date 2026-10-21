@@ -166,9 +166,6 @@ data class PurgeResult(val removed: Int = 0)
 
 /** Suspending wrappers for api.md §4.2–§4.5 plus the task calls of §3; all throw [CoreException]. */
 object FilesApi {
-    /** Largest `scan.view` window the core accepts. */
-    const val MAX_WINDOW = 500
-
     /** How often [awaitTask] double-checks with `task.get` in case a task event was lost. */
     private const val TASK_RECHECK_MS = 3_000L
 
@@ -332,7 +329,8 @@ object FilesApi {
             put("sort", sortJson(sort))
             put("collapsed", strings(collapsed))
             put("offset", offset)
-            put("limit", limit.coerceIn(1, MAX_WINDOW))
+            // The core returns as many rows as asked for (no cap since R15c).
+            put("limit", limit.coerceAtLeast(1))
             put("sinceRevision", sinceRevision)
         },
     )

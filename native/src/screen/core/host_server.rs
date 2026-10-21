@@ -22,7 +22,7 @@ use super::gop_stream::path_of;
 use super::host_backend::{ConsentBroker, ScreenHostBackend, SessionIndicator};
 use super::host_pipeline::Pipeline;
 use super::negotiate::{negotiate, CodecPreference};
-use super::registry::{NewSession, RegistryRefusal, ScreenRegistry, SessionHandle};
+use super::registry::{NewSession, ScreenRegistry, SessionHandle};
 use super::session_state::{EndReason, SessionState};
 use super::window_list::SourceId;
 use super::wire_binary::StreamKind;
@@ -113,7 +113,7 @@ impl Start<'_> {
 
     /// Registers under the current rights; `None` when they no longer allow
     /// the session.
-    fn register(&self, new: NewSession) -> Option<Result<SessionHandle, RegistryRefusal>> {
+    fn register(&self, new: NewSession) -> Option<SessionHandle> {
         let (mut new, mut registered) = (Some(new), None);
         let now = crate::share::core_now_secs();
         let needs = self.mode.capabilities();
@@ -122,7 +122,10 @@ impl Start<'_> {
             .authority
             .admit(self.principal, needs, now, &mut || {
                 if let Some(new) = new.take() {
-                    registered = Some(self.context.registry.register(new));
+                    registered = match self.context.registry.register(new) {
+                        Ok(handle) => Some(handle),
+                        Err(never) => match never {},
+                    };
                 }
             });
         admitted.then_some(registered).flatten()
@@ -233,12 +236,8 @@ pub(crate) async fn serve(context: HostContext, viewer: ProvenViewer) -> io::Res
         },
         screen_content,
     };
-    let handle = match start.register(new) {
-        Some(Ok(handle)) => handle,
-        Some(Err(RegistryRefusal::SessionLimit)) => {
-            return start.refuse(ScreenErrorCode::SessionLimit, false).await;
-        }
-        None => return start.refuse(ScreenErrorCode::PermissionDenied, false).await,
+    let Some(handle) = start.register(new) else {
+        return start.refuse(ScreenErrorCode::PermissionDenied, false).await;
     };
     let approval = match asked {
         None => ApprovalKind::NotRequired,

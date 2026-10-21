@@ -146,15 +146,10 @@ internal class ScanWindow(
         val id = taskId ?: return emptyList()
         if (!expanded && total > max) return null
         val folded = if (expanded) emptySet<String>() else collapsed()
-        val rows = ArrayList<Entry>(minOf(total, max))
-        var offset = 0
-        while (true) {
-            val view = FilesApi.scanView(id, sort(), folded, offset, FilesApi.MAX_WINDOW, null)
-            rows += view.entries
-            offset += view.entries.size
-            if (view.entries.isEmpty() || offset >= view.visibleTotal) return rows
-            if (offset > max) return null
-        }
+        // One window of max + 1 rows: the core has no window cap (R15c), and one answer is one
+        // consistent revision; the extra row tells "more than max" apart from "exactly max".
+        val view = FilesApi.scanView(id, sort(), folded, 0, max + 1, null)
+        return if (view.visibleTotal > max || view.entries.size > max) null else view.entries
     }
 
     private suspend fun loop(id: String) {

@@ -8,6 +8,7 @@
 //! change through a revision (`wait_change`), so the GUI needs no tight
 //! polling.
 use std::collections::BTreeMap;
+use std::convert::Infallible;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -56,17 +57,6 @@ pub(crate) struct NewSession {
     pub started_at: i64,
     pub state: SessionState,
     pub screen_content: bool,
-}
-
-/// Why a session could not be registered. Since R15c a host runs any
-/// number of sessions, of one device or of all (no limit without a
-/// technical cause); the variant stays only because `host_server.rs` still
-/// names it, and `session_limit` remains a code older hosts send.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum RegistryRefusal {
-    /// Never produced since R15c.
-    #[allow(dead_code)]
-    SessionLimit,
 }
 
 /// Which sessions `stop` ends.
@@ -144,11 +134,13 @@ impl ScreenRegistry {
         self.wake.notify_waiters();
     }
 
-    /// Registers a session; it stays until the handle goes.
-    pub(crate) fn register(
-        self: &Arc<Self>,
-        new: NewSession,
-    ) -> Result<SessionHandle, RegistryRefusal> {
+    /// Registers a session; it stays until the handle goes. Since R15c a
+    /// host runs any number of sessions, of one device or of all (no limit
+    /// without a technical cause), so registering cannot fail; the
+    /// `Infallible` error keeps the callers that unwrap the result as they
+    /// are. `session_limit` stays only as a wire code older hosts send
+    /// (`wire_hello.rs`).
+    pub(crate) fn register(self: &Arc<Self>, new: NewSession) -> Result<SessionHandle, Infallible> {
         let mut inner = self.lock();
         inner.next_id = inner.next_id.wrapping_add(1);
         let id = inner.next_id;

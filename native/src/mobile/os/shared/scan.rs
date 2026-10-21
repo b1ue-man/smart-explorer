@@ -15,14 +15,14 @@ use crate::types::{FileEntry, FilterDef};
 use crossbeam_channel::RecvTimeoutError;
 use serde_json::{json, Value};
 use std::collections::HashSet;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-const MAX_VIEW_LIMIT: u64 = 500;
-/// Scan results kept in memory; the oldest session goes first.
+/// Finished scan results kept in memory. A new scan drops the oldest
+/// finished session while there are more than this many; a running scan is
+/// never dropped, so with every session running all of them stay.
 const MAX_SESSIONS: usize = 6;
-const MAX_ISSUES: usize = 500;
 
 #[derive(Default)]
 pub(crate) struct ScanRegistry {
@@ -34,8 +34,10 @@ impl ScanRegistry {
         let mut sessions = lock(&self.sessions);
         sessions.push((id, session));
         while sessions.len() > MAX_SESSIONS {
-            let (_, dropped) = sessions.remove(0);
-            dropped.stop();
+            let Some(oldest) = sessions.iter().position(|(_, s)| s.finished()) else {
+                break;
+            };
+            sessions.remove(oldest);
         }
     }
 
@@ -52,7 +54,17 @@ struct ScanSession {
     base: Loc,
     filter: FilterDef,
     data: Mutex<ScanData>,
-    cancel: Arc<std::sync::atomic::AtomicBool>,
+    /// Set when the scan task ended, however it ended.
+    finished: AtomicBool,
+}
+
+/// Marks the session finished when the scan task returns or unwinds.
+struct FinishOnDrop<'a>(&'a ScanSession);
+
+impl Drop for FinishOnDrop<'_> {
+    fn drop(&mut self) {
+        self.0.finished.store(true, Ordering::Release);
+    }
 }
 
 #[derive(Default)]
@@ -63,13 +75,15 @@ struct ScanData {
     scanned: u64,
     truncated: bool,
     issues: Vec<(String, String)>,
+    /// The issues already listed, so each one appears once.
+    issue_keys: HashSet<(String, String)>,
     tree: Option<(u64, SortSpec, TreeRows)>,
     last_view: Option<(u64, String)>,
 }
 
 impl ScanSession {
-    fn stop(&self) {
-        self.cancel.store(true, Ordering::Release);
+    fn finished(&self) -> bool {
+        self.finished.load(Ordering::Acquire)
     }
 }
 
@@ -102,11 +116,12 @@ fn start(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
         base,
         filter,
         data: Mutex::new(ScanData::default()),
-        cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        finished: AtomicBool::new(false),
     });
     let runtime = rt.clone();
     let worker_session = session.clone();
     let id = rt.spawn_task("scan", title, move |ctx| {
+        let _finish = FinishOnDrop(&worker_session);
         run_scan(&runtime, ctx, &worker_session)
     });
     rt.inner.scans.insert(id.clone(), session);
@@ -139,7 +154,7 @@ fn run_scan(rt: &Runtime, ctx: &TaskCtx, session: &ScanSession) -> Result<Value,
     };
     let compiled = CompiledFilter::compile(&session.filter);
     loop {
-        if ctx.cancelled() || session.cancel.load(Ordering::Acquire) {
+        if ctx.cancelled() {
             handle.cancel.store(true, Ordering::Relaxed);
         }
         let message = match rx.recv_timeout(Duration::from_millis(200)) {
@@ -193,10 +208,24 @@ fn run_scan(rt: &Runtime, ctx: &TaskCtx, session: &ScanSession) -> Result<Value,
     }))
 }
 
+/// Lists every distinct issue (R15c: no count; the former 500 dropped
+/// findings without a technical cause).
 fn push_issue(data: &mut ScanData, path: String, detail: String) {
-    if data.issues.len() < MAX_ISSUES && !data.issues.contains(&(path.clone(), detail.clone())) {
-        data.issues.push((path, detail));
+    let issue = (path, detail);
+    if data.issue_keys.insert(issue.clone()) {
+        data.issues.push(issue);
     }
+}
+
+/// The rows a `scan.view` call asked for. The answer is one JNI string in
+/// the app's own process, without a Binder or message size, so the caller's
+/// amount holds; without `limit` every row from `offset` on.
+fn view_limit(args: &Value) -> usize {
+    args.get("limit")
+        .and_then(Value::as_u64)
+        .map_or(usize::MAX, |limit| {
+            usize::try_from(limit).unwrap_or(usize::MAX)
+        })
 }
 
 fn view(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
@@ -214,7 +243,7 @@ fn view(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
         })
         .unwrap_or_default();
     let offset = u64_or(args, "offset", 0) as usize;
-    let limit = u64_or(args, "limit", MAX_VIEW_LIMIT).min(MAX_VIEW_LIMIT) as usize;
+    let limit = view_limit(args);
     let since = opt_i64(args, "sinceRevision");
     let view_key = format!("{sort:?}|{offset}|{limit}|{:?}", sorted(&collapsed));
     let mut data = lock(&session.data);
@@ -290,3 +319,7 @@ fn issues(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
         .join("\n");
     Ok(json!({ "text": text }))
 }
+
+#[cfg(test)]
+#[path = "scan_tests.rs"]
+mod tests;

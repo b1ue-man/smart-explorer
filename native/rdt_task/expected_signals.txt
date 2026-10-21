@@ -387,6 +387,18 @@ vault_task_android_runs_vault_job_through_vault_sync  linux-core:unit  pfad=mobi
 vault_task_android_unavailable_vault_run_changes_nothing  linux-core:unit  pfad=mobile::domains::sync_run::vault_tests::vault_task_android_unavailable_vault_run_changes_nothing  quelle=U20-Uebergabe
 vault_task_recovery_manifest_seals_path_fields_of_vault_copies  linux-core:unit,windows-core:unit  pfad=app::remote_helpers::recovery_manifest::task_tests::vault_fields::vault_task_recovery_manifest_seals_path_fields_of_vault_copies  quelle=K07
 vault_task_recovery_manifest_plain_entries_unchanged  linux-core:unit,windows-core:unit  pfad=app::remote_helpers::recovery_manifest::task_tests::vault_fields::vault_task_recovery_manifest_plain_entries_unchanged  quelle=K07
+# ---- R15c-Reste und Scan-Verdrängung (SEC Lauf 6 und Punkt 9, 2026-10-21) ----
+screen_task_registry_has_no_session_limit  linux-core:unit  pfad=screen::core::registry::tests::screen_task_registry_has_no_session_limit  quelle=R15c
+screen_task_android_app_list_has_no_count_limit  linux-core:unit  pfad=mobile::domains::screen_host::tests::screen_task_android_app_list_has_no_count_limit  quelle=R15c
+screen_task_old_host_session_limit_refusal_stays_readable  linux-core:unit  pfad=screen::core::registry::tests::screen_task_old_host_session_limit_refusal_stays_readable  quelle=R15c,SEC-P9
+screen_task_window_list_keeps_more_than_4096_entries  linux-core:unit  pfad=screen::core::window_list::tests::screen_task_window_list_keeps_more_than_4096_entries  quelle=R15c,SEC-P9
+screen_task_window_list_frame_bytes_bound_the_list  linux-core:unit  pfad=screen::core::window_list::tests::screen_task_window_list_frame_bytes_bound_the_list  quelle=R15c,SEC-P9
+screen_task_android_app_names_are_not_cut  linux-core:unit  pfad=mobile::domains::screen_host::tests::screen_task_android_app_names_are_not_cut  quelle=R15c,SEC-P9
+drive_task_scan_keeps_more_than_500_issues  linux-core:unit  pfad=mobile::scan::tests::drive_task_scan_keeps_more_than_500_issues  quelle=R15c,SEC-P9
+drive_task_scan_view_returns_the_requested_amount  linux-core:unit  pfad=mobile::scan::tests::drive_task_scan_view_returns_the_requested_amount  quelle=R15c,SEC-P9
+drive_task_scan_new_session_drops_oldest_finished_not_running  linux-core:unit  pfad=mobile::scan::tests::drive_task_scan_new_session_drops_oldest_finished_not_running  quelle=SEC-P9
+drive_task_scan_running_sessions_all_stay  linux-core:unit  pfad=mobile::scan::tests::drive_task_scan_running_sessions_all_stay  quelle=SEC-P9
+drive_task_scan_task_end_marks_session_finished  linux-core:unit  pfad=mobile::scan::tests::drive_task_scan_task_end_marks_session_finished  quelle=SEC-P9
 
 [noch nicht umgesetzt]
 
