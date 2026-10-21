@@ -405,7 +405,7 @@ fn install_files() -> io::Result<Vec<String>> {
     ])
 }
 
-/// Writes both unit files, reloads, enables and (re)starts the socket.
+/// Writes both unit files, reloads, enables and restarts the listening socket.
 fn install_units() -> io::Result<Vec<String>> {
     exec_binary_copy::write_root_file(
         Path::new(SOCKET_UNIT_FILE),
@@ -420,7 +420,7 @@ fn install_units() -> io::Result<Vec<String>> {
     let manager = manager()?;
     exec_systemd::reload_manager(&manager)?;
     exec_systemd::enable_unit_file(&manager, SOCKET_UNIT)?;
-    exec_systemd::restart_unit(&manager, SOCKET_UNIT)?;
+    socket_restart::restart_listening(&manager)?;
     Ok(vec![
         format!("wrote {SOCKET_UNIT_FILE} and {SERVICE_UNIT_FILE}"),
         format!("the account service listens at {HELPER_SOCKET}"),
@@ -429,7 +429,7 @@ fn install_units() -> io::Result<Vec<String>> {
 
 fn remove(delete_remote_account: bool) -> io::Result<Vec<String>> {
     let manager = manager()?;
-    exec_systemd::stop_unit(&manager, SOCKET_UNIT)?;
+    socket_restart::stop_inactive(&manager)?;
     exec_systemd::disable_unit_file(&manager, SOCKET_UNIT)?;
     // Each instance stops the account units of its connection on SIGTERM.
     for instance in exec_systemd::unit_names(&manager, SERVICE_INSTANCES)? {
@@ -491,6 +491,8 @@ fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message.into())
 }
 
+#[path = "exec_helper_socket.rs"]
+mod socket_restart;
 #[cfg(test)]
 #[path = "exec_helper_tests.rs"]
 mod tests;
