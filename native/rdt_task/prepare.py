@@ -149,7 +149,7 @@ def step_text(step: dict) -> str:
 
 def check_workflow_static(ctx: common.JobContext) -> tuple[str, str]:
     """D1 U39: every job has timeout-minutes >= 30 (and at least the D3 value), the workflow has the
-    required input candidate_sha and at most the optional choice speed_scope (all | local, default all),
+    required input candidate_sha and at most the optional choice speed_scope (all | local | none, default all),
     and every job binds its checkout to that SHA."""
     if not WORKFLOW.is_file():
         return FAILED, f"{WORKFLOW.relative_to(REPO)} fehlt"
@@ -169,8 +169,8 @@ def check_workflow_static(ctx: common.JobContext) -> tuple[str, str]:
                 problems.append("candidate_sha muss required: true und type: string sein")
             scope = inputs.get("speed_scope")
             if scope is not None and (scope.get("required") is True or scope.get("default") != "all"
-                                      or scope.get("options") != ["all", "local"]):
-                problems.append("speed_scope muss optional sein, Vorgabe all, Auswahl all und local")
+                                      or scope.get("options") != ["all", "local", "none"]):
+                problems.append("speed_scope muss optional sein, Vorgabe all, Auswahl all, local und none")
     if document.get("permissions") != {"contents": "read"}:
         problems.append(f"permissions = {document.get('permissions')}, erwartet contents: read")
     concurrency = document.get("concurrency") or {}
