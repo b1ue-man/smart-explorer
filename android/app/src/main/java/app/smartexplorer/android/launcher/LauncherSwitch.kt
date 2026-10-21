@@ -9,6 +9,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Process
 import android.util.Log
+import app.smartexplorer.android.widget.DevicesWidgetFeed
 import java.io.File
 import java.io.IOException
 
@@ -26,7 +27,10 @@ internal object LauncherParts {
         "app.smartexplorer.android.launcher.badges.BadgeListenerService",
         "app.smartexplorer.android.service.LauncherBridgeService",
     )
-    val widget: List<String> = emptyList()
+    val widget: List<String> = listOf(
+        "app.smartexplorer.android.widget.DevicesWidgetProvider",
+        "app.smartexplorer.android.widget.DevicesWidgetService",
+    )
 }
 
 sealed interface EnableResult {
@@ -155,12 +159,14 @@ object LauncherSwitch {
         context.getSystemService(RoleManager::class.java)?.isRoleHeld(RoleManager.ROLE_HOME) == true
 
     /**
-     * Switches the widget part „Geräte-Widget für fremde Launcher“ (U35-13); with an empty [LauncherParts.widget] only the file changes.
-     * Returns the new state.
+     * Switches the widget part „Geräte-Widget für fremde Launcher“ (U35-13, U40-17): on switches the provider and its list
+     * service on, writes `parts.widget` and starts the feed that fills the widget; off stops the feed, switches the components
+     * off, writes the state and deletes `<filesDir>/widget/`. Returns the new state.
      */
     fun setWidgetPart(context: Context, on: Boolean): LauncherStateData {
         val app = context.applicationContext
         val target = if (on) PackageManager.COMPONENT_ENABLED_STATE_ENABLED else PackageManager.COMPONENT_ENABLED_STATE_DISABLED
+        if (!on) DevicesWidgetFeed.stop()
         LauncherParts.widget.forEach { setComponent(app, it, target) }
         val stored = LauncherState.read(app)
         val next = stored.copy(
@@ -168,6 +174,7 @@ object LauncherSwitch {
             changedAt = System.currentTimeMillis(),
         )
         LauncherState.write(app, next)
+        if (on) DevicesWidgetFeed.start(app) else DevicesWidgetFeed.deleteCache(app)
         return next
     }
 
@@ -178,6 +185,8 @@ object LauncherSwitch {
     fun disable(context: Context): DisableResult {
         val app = context.applicationContext
         var error: String? = null
+        // The widget part goes off with the launcher: no feed, no cache file (U40-17).
+        DevicesWidgetFeed.stop()
         for (name in LauncherParts.launcher + LauncherParts.widget) {
             try {
                 setComponent(app, name, PackageManager.COMPONENT_ENABLED_STATE_DISABLED)
@@ -188,6 +197,7 @@ object LauncherSwitch {
         }
         releaseWidgetHost(app)
         killLauncherProcess(app)
+        DevicesWidgetFeed.deleteCache(app)
         val stored = LauncherState.read(app)
         try {
             LauncherState.write(

@@ -18,6 +18,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import app.smartexplorer.android.launcher.apps.ProfileReceivers
+import app.smartexplorer.android.launcher.search.LauncherSearch
+import app.smartexplorer.android.launcher.se.SeSearchSource
 import app.smartexplorer.android.launcher.theme.LauncherTheme
 import app.smartexplorer.android.launcher.ui.HomeScreen
 import app.smartexplorer.android.launcher.widgets.REQ_WIDGET_BIND
@@ -33,6 +35,8 @@ import kotlinx.coroutines.launch
  *
  * The Home key arrives in `onNewIntent` (`singleTask`) and sets the screen back (P22). „Zurück“ closes the topmost
  * layer — folder, app list, edit sheet, menu, search — and otherwise does nothing: a home screen never finishes.
+ *
+ * The bridge to the main process is bound between `onStart` and `onStop`, and only by rule C3.3 (U40-7).
  *
  * The widget host listens between `onStart` and `onStop` (U38-4). The system dialogs of a widget — the bind approval and
  * the provider's configuration — start from here, and their results arrive in [onActivityResult] (U38-7).
@@ -58,6 +62,9 @@ class LauncherActivity : ComponentActivity() {
             SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT),
         )
         onBackPressedDispatcher.addCallback(this, back)
+        // The section „Smart Explorer“ of the app search (U40-15), registered once per process.
+        SeSearchSource.controller = viewModel.se
+        if (SeSearchSource !in LauncherSearch.sources) LauncherSearch.sources += SeSearchSource
         lifecycleScope.launch {
             snapshotFlow { viewModel.hasOpenLayer }.collect { back.isEnabled = it }
         }
@@ -107,18 +114,22 @@ class LauncherActivity : ComponentActivity() {
         launcherApps.registerCallback(viewModel.callback, Handler(mainLooper))
         viewModel.widgetHost.listen()
         profileReceivers.register()
+        viewModel.se.onStart()
         viewModel.onStart()
     }
 
     override fun onResume() {
         super.onResume()
         viewModel.onResume()
+        // The binding rule C3.3 (a) is checked on every resume (U40-7).
+        viewModel.se.onResume()
     }
 
     override fun onStop() {
         launcherApps.unregisterCallback(viewModel.callback)
         viewModel.widgetHost.unlisten()
         profileReceivers.unregister()
+        viewModel.se.onStop()
         viewModel.onStop()
         super.onStop()
     }

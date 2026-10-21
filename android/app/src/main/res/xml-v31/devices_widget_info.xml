@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DSK-M13 (U40-3), API 31 and later: the same values plus the size in cells and the preview. -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="180dp"
+    android:minHeight="110dp"
+    android:minResizeWidth="110dp"
+    android:minResizeHeight="110dp"
+    android:targetCellWidth="3"
+    android:targetCellHeight="2"
+    android:updatePeriodMillis="0"
+    android:initialLayout="@layout/devices_widget"
+    android:previewLayout="@layout/devices_widget"
+    android:resizeMode="horizontal|vertical"
+    android:widgetCategory="home_screen"
+    android:description="@string/devices_widget_description" />

@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -97,7 +98,8 @@ fun SearchResults(
         }
         extra.forEach { (source, hits) ->
             item(key = "h-$source") { Heading(source) }
-            items(hits, key = { "x-$source-${it.title}" }) { hit ->
+            // Two hits of one section can have the same title (equal device names in two rooms), so the index is part of the key.
+            itemsIndexed(hits, key = { index, hit -> "x-$source-$index-${hit.title}" }) { _, hit ->
                 TextRow(hit.title, hit.subtitle) { hit.onClick() }
             }
         }

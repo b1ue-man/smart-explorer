@@ -33,6 +33,7 @@ import app.smartexplorer.android.launcher.MenuTarget
 import app.smartexplorer.android.launcher.apps.AppEntry
 import app.smartexplorer.android.launcher.model.HomeItem
 import app.smartexplorer.android.launcher.model.Kinds
+import app.smartexplorer.android.launcher.se.seMenuRows
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlin.math.roundToInt
@@ -65,7 +66,7 @@ fun uninstall(context: Context, entry: AppEntry) {
 
 /**
  * Rows of the menu for [item] by its kind (U35-27, U35-31): U38 added „Größe ändern“ and „Neu einrichten“ for a
- * widget in the same `when`, the se kinds of U40 get their own branch.
+ * widget in the same `when`, the se kinds of U40 (`launcher/se/SeMenu.kt`) have their own branch.
  */
 fun menuRows(item: HomeItem, context: MenuContext): List<MenuRow> {
     val vm = context.vm
@@ -81,6 +82,7 @@ fun menuRows(item: HomeItem, context: MenuContext): List<MenuRow> {
             MenuRow("Entfernen") { vm.dissolveFolder(item.id) },
         )
         Kinds.WIDGET -> widgetRows(item, context)
+        Kinds.SE_DEVICE, Kinds.SE_ROOM, Kinds.SE_VAULT, Kinds.SE_SCREENS -> seMenuRows(item, context)
         else -> listOf(MenuRow("Entfernen") { vm.removeItem(item.id) })
     }
 }

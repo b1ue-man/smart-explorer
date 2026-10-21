@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DSK-M13 (U40-3, U40-16): title line „Geräte“, the list of devices and the text for an empty list. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_background"
+    android:orientation="vertical"
+    android:padding="8dp">
+
+    <TextView
+        android:id="@+id/devices_title"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingBottom="4dp"
+        android:text="@string/devices_widget_title"
+        android:textColor="@android:color/white"
+        android:textSize="14sp"
+        android:textStyle="bold" />
+
+    <ListView
+        android:id="@+id/devices_list"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:divider="@null"
+        android:dividerHeight="0dp" />
+
+    <TextView
+        android:id="@+id/devices_empty"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:gravity="center"
+        android:text="@string/devices_widget_no_data"
+        android:textColor="@android:color/white"
+        android:textSize="13sp"
+        android:visibility="gone" />
+</LinearLayout>

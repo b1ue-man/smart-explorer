@@ -34,6 +34,7 @@ import app.smartexplorer.android.launcher.model.LayoutOps
 import app.smartexplorer.android.launcher.model.LayoutRepository
 import app.smartexplorer.android.launcher.model.Location
 import app.smartexplorer.android.launcher.model.Span
+import app.smartexplorer.android.launcher.se.SeController
 import app.smartexplorer.android.launcher.shortcuts.Shortcuts
 import app.smartexplorer.android.launcher.widgets.LauncherWidgetHost
 import app.smartexplorer.android.launcher.widgets.PendingWidget
@@ -75,6 +76,9 @@ class LauncherViewModel(application: Application, private val state: SavedStateH
     val catalog: AppCatalog = AppCatalog.get(application)
     val icons: IconLoader = IconLoader.get(application)
     val shortcuts: Shortcuts = Shortcuts(application)
+
+    /** The se elements: devices, rooms, vaults, the bridge to the main process (DSK-M13). The logic lives in `launcher/se/`. */
+    val se: SeController = SeController.get(application)
     private val launcherApps: LauncherApps = application.getSystemService(LauncherApps::class.java)
     private val users: UserManager = application.getSystemService(UserManager::class.java)
 
@@ -117,6 +121,13 @@ class LauncherViewModel(application: Application, private val state: SavedStateH
     var widgetPicker by mutableStateOf(false)
         private set
 
+    /** Profile id of the room whose popup is open (DSK-M13, U40-9), or `null`. */
+    var openRoomId by mutableStateOf<String?>(null)
+
+    /** The sheet „se-Elemente“ is open (DSK-M13, U40-10). */
+    var seSheet by mutableStateOf(false)
+        private set
+
     /** The widget whose size is being changed (handles shown, U38-9). */
     var resizeId by mutableStateOf<String?>(null)
         private set
@@ -150,7 +161,8 @@ class LauncherViewModel(application: Application, private val state: SavedStateH
 
     /** True while a layer is open that "Zurück" closes (U35-17). */
     val hasOpenLayer: Boolean
-        get() = menu != null || moveTarget != null || widgetPicker || resizeId != null || openFolderId != null || editSheet || drawerOpen || query.isNotEmpty()
+        get() = menu != null || moveTarget != null || widgetPicker || seSheet || resizeId != null || openRoomId != null || openFolderId != null ||
+            editSheet || drawerOpen || query.isNotEmpty()
 
     fun setGrid(columns: Int, rows: Int) {
         gridSize.value = columns to rows
@@ -202,6 +214,15 @@ class LauncherViewModel(application: Application, private val state: SavedStateH
         widgetPicker = false
     }
 
+    fun openSeSheet() {
+        if (editSheet) closeEditSheet()
+        seSheet = true
+    }
+
+    fun closeSeSheet() {
+        seSheet = false
+    }
+
     fun startResize(item: HomeItem) {
         resizeId = item.id
     }
@@ -223,6 +244,8 @@ class LauncherViewModel(application: Application, private val state: SavedStateH
         menu = null
         moveTarget = null
         widgetPicker = false
+        seSheet = false
+        openRoomId = null
         resizeId = null
         if (editSheet) closeEditSheet()
         homeTick++
@@ -234,7 +257,9 @@ class LauncherViewModel(application: Application, private val state: SavedStateH
             menu != null -> menu = null
             moveTarget != null -> moveTarget = null
             widgetPicker -> widgetPicker = false
+            seSheet -> seSheet = false
             resizeId != null -> resizeId = null
+            openRoomId != null -> openRoomId = null
             openFolderId != null -> openFolderId = null
             editSheet -> closeEditSheet()
             query.isNotEmpty() -> query = ""

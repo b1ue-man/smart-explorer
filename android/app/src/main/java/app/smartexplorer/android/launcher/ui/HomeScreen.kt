@@ -47,6 +47,11 @@ import app.smartexplorer.android.launcher.model.GridGeometry
 import app.smartexplorer.android.launcher.model.HomeItem
 import app.smartexplorer.android.launcher.model.LayoutOps
 import app.smartexplorer.android.launcher.model.Location
+import app.smartexplorer.android.launcher.se.SeRoomPopup
+import app.smartexplorer.android.launcher.se.SeSeeder
+import app.smartexplorer.android.launcher.se.SeSheet
+import app.smartexplorer.android.launcher.se.SeStatusLine
+import app.smartexplorer.android.launcher.se.SeVirtual
 import app.smartexplorer.android.launcher.wallpaper.Wallpaper
 import app.smartexplorer.android.launcher.widgets.WidgetPicker
 import app.smartexplorer.android.launcher.widgets.WidgetResizeOverlay
@@ -72,6 +77,7 @@ fun HomeScreen(vm: LauncherViewModel) {
     val shortcutInfos by vm.shortcutInfos.collectAsStateWithLifecycle()
     val dots by Badges.dots.collectAsStateWithLifecycle()
     val showPrivate by vm.showPrivateSpace.collectAsStateWithLifecycle()
+    val seUi by vm.se.ui.collectAsStateWithLifecycle()
     // A locked private space draws nothing and keeps its cells (U38-14).
     val hiddenUsers = remember(profiles) { profiles.filter { it.isHidden }.map { it.userSerial }.toSet() }
     val drag = remember { DragState() }
@@ -115,6 +121,16 @@ fun HomeScreen(vm: LauncherViewModel) {
         val dragging = drag.active && drag.moved
         val showNewPage = dragging || vm.editSheet
         val pagerState = rememberPagerState(pageCount = { display.pages.size + if (showNewPage) 1 else 0 })
+        // The binding rule C3.3 (a): is a se element on the visible page or in the dock? (U40-7)
+        val visibleHasSe = (display.pages.getOrNull(pagerState.currentPage).orEmpty() + display.dock).any { it.isSe }
+        LaunchedEffect(visibleHasSe, pagerState.currentPage) { vm.se.setVisibleHasSe(visibleHasSe) }
+        LaunchedEffect(Unit) { vm.se.messages.collect { vm.showToast(it) } }
+        // „Gerät hinzufügen“ and „Raum beitreten“ stand on page 1 while the lists are empty; they are computed, not stored (U40-9).
+        val pagesShown = if (SeVirtual.wanted(seUi.data, seUi.fresh, SeSeeder.isSeeded(display))) {
+            SeVirtual.inject(display.pages, geometry.columns, geometry.rows)
+        } else {
+            display.pages
+        }
         val itemContext = remember(vm, iconDp, apps, shortcutInfos, dots, hiddenUsers) {
             ItemContext(vm, iconDp, apps.associateBy { it.key }, shortcutInfos, dots, hiddenUsers)
         }
@@ -285,7 +301,7 @@ fun HomeScreen(vm: LauncherViewModel) {
         ) {
             val excluded = if (drag.origin == DragOrigin.Home) drag.item?.id else null
             Box(Modifier.offset(left, top).size(areaW, areaH)) {
-                HomePager(pagerState, display.pages, showNewPage, metrics, itemContext, excluded, !drag.active)
+                HomePager(pagerState, pagesShown, showNewPage, metrics, itemContext, excluded, !drag.active)
                 // The handles of the widget chosen with „Größe ändern“ (U38-9), on its page.
                 val resizing = vm.resizeId?.let { id -> LayoutOps.find(display, id) }
                 LaunchedEffect(vm.resizeId, resizing == null) { if (vm.resizeId != null && resizing == null) vm.endResize() }
@@ -319,9 +335,19 @@ fun HomeScreen(vm: LauncherViewModel) {
         openFolder?.let { folder ->
             FolderPopup(folder, itemContext, host, metrics.columns, hiddenDrag && drag.origin == DragOrigin.Folder) { vm.closeFolder() }
         }
+        // The room popup closes when its room left the data (like a folder that was emptied).
+        val openRoom = vm.openRoomId
+        LaunchedEffect(openRoom, seUi.data) {
+            if (openRoom != null && seUi.data?.rooms?.none { it.profileId == openRoom } == true) vm.openRoomId = null
+        }
+        if (openRoom != null) SeRoomPopup(vm, openRoom, metrics.columns) { vm.openRoomId = null }
         if (vm.editSheet) {
             EditSheet(vm, iconDp, Modifier.align(Alignment.BottomCenter).padding(bottom = bottom, start = left, end = right))
         }
+        if (vm.seSheet) {
+            SeSheet(vm, onClose = { vm.closeSeSheet() }, modifier = Modifier.padding(bottom = bottom))
+        }
+        SeStatusLine(vm, visibleHasSe && !vm.hasOpenLayer, Modifier.align(Alignment.BottomCenter).padding(bottom = bottom + dockHeight + indicator + 8.dp, start = 24.dp, end = 24.dp))
         if (vm.widgetPicker) {
             WidgetPicker(vm, onClose = { vm.closeWidgetPicker() }, modifier = Modifier.padding(bottom = bottom))
         }
