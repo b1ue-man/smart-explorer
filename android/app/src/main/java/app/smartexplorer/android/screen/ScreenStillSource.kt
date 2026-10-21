@@ -24,9 +24,9 @@ internal class ScreenStillSource(private val sink: (ByteBuffer, Int) -> Int) {
     private var lastAt = 0L
     private var buffer: ByteBuffer = ByteBuffer.allocateDirect(0)
 
-    /** Milliseconds until the next still may be taken. */
+    /** Milliseconds until the next still may be taken: [MIN_INTERVAL_MS] and [MARGIN_MS] after the last request. */
     fun waitMs(now: Long = SystemClock.uptimeMillis()): Long =
-        if (lastAt == 0L) 0 else (MIN_INTERVAL_MS - (now - lastAt)).coerceAtLeast(0)
+        if (lastAt == 0L) 0 else (MIN_INTERVAL_MS + MARGIN_MS - (now - lastAt)).coerceAtLeast(0)
 
     /**
      * Takes one still through [service] and pushes it; [done] gets the push code, or `null` when
@@ -60,7 +60,16 @@ internal class ScreenStillSource(private val sink: (ByteBuffer, Int) -> Int) {
     }
 
     companion object {
+        /** The interval Android demands between two stills (`ACCESSIBILITY_TAKE_SCREENSHOT_REQUEST_INTERVAL_TIMES_MS`). */
         const val MIN_INTERVAL_MS = 333L
+
+        /**
+         * Android refuses a request when at most [MIN_INTERVAL_MS] passed since the previous one
+         * (`AbstractAccessibilityServiceConnection.takeScreenshot`, `<=`), counted from the time each
+         * request reaches the system process. The binder call of the second request can be faster
+         * than that of the first, so the next request waits this much longer than the interval.
+         */
+        const val MARGIN_MS = 50L
         const val HEADER = 8
     }
 }

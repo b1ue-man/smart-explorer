@@ -2,6 +2,7 @@ package app.smartexplorer.android.task
 
 import android.app.Activity
 import android.app.PendingIntent
+import android.app.UiAutomation
 import android.graphics.Bitmap
 import android.graphics.ImageFormat
 import android.graphics.PixelFormat
@@ -118,22 +119,68 @@ class ScreenTaskTest {
         surface = "notification",
     )
 
+    /**
+     * The suite's UiAutomation. `Instrumentation.getUiAutomation()` is `getUiAutomation(0)`, and a
+     * UiAutomation without `FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES` makes the system unbind every
+     * other accessibility service and bind none for as long as it is connected
+     * (`UiAutomationManager.suppressingAccessibilityServicesLocked`). A call with other flags
+     * reconnects the same instance with those flags: every shell command of this class goes through
+     * here and never through `uiAutomation`.
+     */
+    private fun automation(): UiAutomation =
+        InstrumentationRegistry.getInstrumentation().getUiAutomation(UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES)
+
     private fun shell(command: String): String {
-        val output = InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(command)
+        val output = automation().executeShellCommand(command)
         return android.os.ParcelFileDescriptor.AutoCloseInputStream(output).bufferedReader().readText()
     }
 
-    /** Switches the se accessibility service on (the suite's device, never the user's). */
+    /** The lines of `dumpsys accessibility` that list services: enabled, bound, binding, crashed. */
+    private fun accessibilityLines(): List<String> {
+        val lists = listOf("Enabled services:", "Bound services:", "Binding services:", "Crashed services:")
+        return shell("dumpsys accessibility").lineSequence()
+            .map { it.trim() }
+            .filter { line -> lists.any { line.startsWith(it) } }
+            .toList()
+    }
+
+    /** Whether the system still lists the se service as enabled or as crashed. */
+    private fun systemListsService(): Boolean = accessibilityLines().any { line ->
+        (line.startsWith("Enabled services:") || line.startsWith("Crashed services:")) &&
+            line.contains(ScreenControlService::class.java.simpleName)
+    }
+
+    /** The connected se service: waits up to [timeoutMs] for it and gives `null` when there is none. */
+    private fun connectedService(timeoutMs: Long): ScreenControlService? {
+        val deadline = SystemClock.uptimeMillis() + timeoutMs
+        do {
+            ScreenControlService.current()?.let { return it }
+            SystemClock.sleep(100)
+        } while (SystemClock.uptimeMillis() < deadline)
+        return ScreenControlService.current()
+    }
+
+    /**
+     * Switches the se accessibility service on and returns the connected service (the suite's
+     * device, never the user's). In an instrumentation run two things of the system keep it away.
+     * First, a UiAutomation without flags suppresses it ([automation]). Second, `am instrument`
+     * force-stops the app when it starts and when it ends: the dead binding puts the service on the
+     * system's crashed list, `AccessibilityManagerService.updateServicesLocked` skips crashed
+     * services, and only a service that left the enabled list is taken off that list again („users
+     * may toggle the on/off switch to retry“). Writing the same value again changes nothing, so
+     * the setting is deleted, the system's answer is awaited, and then the service is put back.
+     */
     private fun accessibilityOn(): ScreenControlService {
+        automation()
+        connectedService(1_500)?.let { return it }
         val name = "${appContext.packageName}/${ScreenControlService::class.java.name}"
+        shell("settings delete secure enabled_accessibility_services")
+        val deadline = SystemClock.uptimeMillis() + 10_000
+        while (systemListsService() && SystemClock.uptimeMillis() < deadline) SystemClock.sleep(200)
         shell("settings put secure enabled_accessibility_services $name")
         shell("settings put secure accessibility_enabled 1")
-        val deadline = SystemClock.uptimeMillis() + 15_000
-        while (SystemClock.uptimeMillis() < deadline) {
-            ScreenControlService.current()?.let { return it }
-            SystemClock.sleep(200)
-        }
-        throw AssertionError("Bedienungshilfe nicht verbunden")
+        return connectedService(15_000)
+            ?: throw AssertionError("Bedienungshilfe nicht verbunden: ${accessibilityLines()}")
     }
 
     /** One still of the accessibility service, after the 333 ms interval. */
@@ -263,24 +310,26 @@ class ScreenTaskTest {
     @Test
     fun screen_task_android_still_interval_respected() {
         val service = accessibilityOn()
-        val times = mutableListOf<Long>()
-        val stills = ScreenStillSource { _, length ->
-            synchronized(times) { times += SystemClock.uptimeMillis() }
-            if (length > ScreenStillSource.HEADER) 0 else -2
-        }
-        repeat(4) {
+        // The connection may have answered a still of an earlier test a moment ago.
+        SystemClock.sleep(2 * ScreenStillSource.MIN_INTERVAL_MS)
+        val requested = mutableListOf<Long>()
+        val stills = ScreenStillSource { _, length -> if (length > ScreenStillSource.HEADER) 0 else -2 }
+        repeat(4) { round ->
             val done = CountDownLatch(1)
             var code: Int? = null
             stills.capture(service) {
                 code = it
                 done.countDown()
             }
-            assertTrue("Standbild ohne Antwort", done.await(5, TimeUnit.SECONDS))
-            assertEquals(0, code)
+            // `capture` has waited out the interval and asked Android by now. The answers come after
+            // a latency that differs from still to still: the requests are what is timed.
+            requested += SystemClock.uptimeMillis()
+            assertTrue("Standbild ${round + 1} ohne Antwort", done.await(5, TimeUnit.SECONDS))
+            assertEquals("Standbild ${round + 1}: Android lieferte keins (Anfragen $requested)", 0, code)
         }
-        val gaps = times.zipWithNext { a, b -> b - a }
+        val gaps = requested.zipWithNext { a, b -> b - a }
         TaskReport.note("screen.host.still", "gaps=$gaps")
-        assertTrue("Abstand unter 333 ms: $gaps", gaps.all { it >= ScreenStillSource.MIN_INTERVAL_MS - 5 })
+        assertTrue("Abstand unter 333 ms: $gaps", gaps.all { it >= ScreenStillSource.MIN_INTERVAL_MS })
     }
 
     @Test
@@ -574,14 +623,15 @@ class ScreenTaskTest {
         compose.waitUntil(10_000) { backend.calls.any { it.startsWith("setMode:7:preview") } }
         compose.onNodeWithText("Laptop").performClick()
         compose.waitUntil(10_000) { backend.calls.contains("setMode:7:full") }
-        assertEquals("a second connection was opened", 1, backend.calls.count { it.startsWith("open:") })
+        // The calls in the message: the run shows which one is the second `open`.
+        assertEquals("a second connection was opened: ${backend.calls}", 1, backend.calls.count { it.startsWith("open:") })
         compose.onNodeWithTag("screen_view_close").performClick()
         compose.waitUntil(10_000) { backend.calls.lastIndexOf("setMode:7:preview") > backend.calls.indexOf("setMode:7:full") }
-        assertFalse("the preview session ended with the full view", backend.calls.contains("close:7"))
+        assertFalse("the preview session ended with the full view: ${backend.calls}", backend.calls.contains("close:7"))
         compose.onNodeWithTag("screen_grid_close").performClick()
         compose.waitUntil(10_000) { backend.calls.contains("close:7") }
-        assertEquals(1, backend.calls.count { it == "close:7" })
-        assertEquals(1, backend.calls.count { it.startsWith("open:") })
+        assertEquals("the session was closed more than once: ${backend.calls}", 1, backend.calls.count { it == "close:7" })
+        assertEquals("a second connection was opened: ${backend.calls}", 1, backend.calls.count { it.startsWith("open:") })
         TaskReport.note("screen.grid.switch", backend.calls.joinToString(" "))
     }
 }
