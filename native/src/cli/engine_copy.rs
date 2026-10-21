@@ -362,6 +362,7 @@ fn publish(observer: &TreeObserver, progress: &TransferProgress) {
         progress.limiter_text.clone(),
         progress.segments,
     );
+    observer.set_engine_note(progress.note.clone());
 }
 
 /// The result of a finished run in the terms of `se cp` (U49-4 point 5).
