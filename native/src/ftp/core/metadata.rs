@@ -3,6 +3,7 @@
 use super::core_impl::{basename, dir_meta, parent_dir, parse_list_line_unchecked};
 use super::errors::{command_path, map, reply_code, working_dir};
 use super::io_adapters::FtpConnection;
+use super::listing_detail::Detail;
 use crate::vfs::{MtimePrecision, OmissionReason, VfsListing, VfsMeta, VfsOmission};
 use std::io;
 use suppaftp::{RustlsFtpStream, Status};
@@ -132,19 +133,29 @@ pub(super) fn parse_mlsx(line: &str, queried: Option<&str>) -> io::Result<Option
 }
 
 pub(super) fn list(connection: &FtpConnection, folder: &str) -> io::Result<VfsListing> {
-    list_mode(connection, folder, false)
+    list_mode(connection, folder, false, Detail::Exact)
+}
+
+/// Names and kinds of the children, nothing more: for the promotion of a
+/// stage, which needs to know whether a name exists and what it is, and must
+/// not pay two round trips (SIZE, MDTM) for every other file of the folder.
+/// Sizes and times of a LIST row stay as the row gives them, and the
+/// connection's observed time precision is left alone.
+pub(super) fn list_kinds(connection: &FtpConnection, folder: &str) -> io::Result<VfsListing> {
+    list_mode(connection, folder, false, Detail::Kinds)
 }
 
 /// Old servers may refuse LIST -a. Browsing retains plain LIST support;
 /// sync and absence proofs require the stronger enumeration above.
 pub(super) fn list_browse(connection: &FtpConnection, folder: &str) -> io::Result<VfsListing> {
-    list_mode(connection, folder, true)
+    list_mode(connection, folder, true, Detail::Exact)
 }
 
 fn list_mode(
     connection: &FtpConnection,
     folder: &str,
     allow_plain: bool,
+    detail: Detail,
 ) -> io::Result<VfsListing> {
     command_path(folder)?;
     let features = connection.features()?;
@@ -228,39 +239,43 @@ fn list_mode(
         } else {
             if !mlsx && !entry.is_dir && !entry.is_symlink && !entry.special {
                 regular_files += 1;
-                let path = format!("{}/{}", folder.trim_end_matches('/'), entry.name);
-                match connection.with_stream_read(|stream| {
-                    super::metadata_probe::regular_file(stream, &path, &entry.name)
-                }) {
-                    Ok(Some(exact)) => {
-                        entry.size = exact.size;
-                        entry.mtime_ms = exact.mtime_ms;
-                    }
-                    Ok(None) => all_regular_exact = false,
-                    Err(error) => {
-                        all_regular_exact = false;
-                        out.omitted.push(VfsOmission {
-                            rel: entry.name,
-                            reason: OmissionReason::Unreadable,
-                            detail: error.to_string(),
-                        });
-                        continue;
+                if detail.refines_list_rows() {
+                    let path = format!("{}/{}", folder.trim_end_matches('/'), entry.name);
+                    match connection.with_stream_read(|stream| {
+                        super::metadata_probe::regular_file(stream, &path, &entry.name)
+                    }) {
+                        Ok(Some(exact)) => {
+                            entry.size = exact.size;
+                            entry.mtime_ms = exact.mtime_ms;
+                        }
+                        Ok(None) => all_regular_exact = false,
+                        Err(error) => {
+                            all_regular_exact = false;
+                            out.omitted.push(VfsOmission {
+                                rel: entry.name,
+                                reason: OmissionReason::Unreadable,
+                                detail: error.to_string(),
+                            });
+                            continue;
+                        }
                     }
                 }
             }
             out.entries.push(entry);
         }
     }
-    if let Ok(mut precision) = connection.precision.lock() {
-        *precision = if mlsx && out.entries.iter().all(|entry| entry.mtime_ms != 0) {
-            MtimePrecision::Seconds
-        } else if mlsx {
-            MtimePrecision::Unknown
-        } else if regular_files > 0 && all_regular_exact {
-            MtimePrecision::Seconds
-        } else {
-            MtimePrecision::Days
-        };
+    if detail.records_precision() {
+        if let Ok(mut precision) = connection.precision.lock() {
+            *precision = if mlsx && out.entries.iter().all(|entry| entry.mtime_ms != 0) {
+                MtimePrecision::Seconds
+            } else if mlsx {
+                MtimePrecision::Unknown
+            } else if regular_files > 0 && all_regular_exact {
+                MtimePrecision::Seconds
+            } else {
+                MtimePrecision::Days
+            };
+        }
     }
     if !mlsx {
         if let Ok(mut cached) = connection.features.lock() {

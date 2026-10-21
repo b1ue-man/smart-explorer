@@ -78,6 +78,19 @@ impl FtpConnection {
         Ok(connection)
     }
 
+    /// Takes over the server facts that do not depend on the connection (the
+    /// FEAT answer) from `other`, a connection of the same account on the same
+    /// server, unless this one has asked already: a new pooled connection then
+    /// does not spend a round trip on FEAT before its first publication.
+    pub(super) fn inherit_server_facts(&self, other: &FtpConnection) {
+        let Some(from) = other.features.lock().ok().map(|features| *features) else {
+            return;
+        };
+        if let Ok(mut own) = self.features.lock() {
+            *own = super::listing_detail::inherited_features(*own, from);
+        }
+    }
+
     fn wait_for_stream(&self) -> io::Result<MutexGuard<'_, ControlState>> {
         let mut state = self
             .state

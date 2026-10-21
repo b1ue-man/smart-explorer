@@ -179,6 +179,7 @@ impl FtpPool {
             state.opening = state.opening.saturating_sub(1);
             match connected {
                 Ok(connection) => {
+                    connection.inherit_server_facts(&self.primary);
                     state.busy += 1;
                     return Ok(self.leased(connection, true));
                 }

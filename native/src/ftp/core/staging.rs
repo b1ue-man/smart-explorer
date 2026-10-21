@@ -91,7 +91,9 @@ pub(super) fn require_stage_free(connection: &FtpConnection, path: &str) -> io::
 }
 
 fn listing(connection: &FtpConnection, folder: &str) -> io::Result<Vec<VfsMeta>> {
-    let listing = super::metadata::list(connection, folder)?;
+    // Names and kinds are all a promotion looks at: no SIZE and MDTM for every
+    // other file of the folder (`listing_detail::Detail::Kinds`).
+    let listing = super::metadata::list_kinds(connection, folder)?;
     if !listing.omitted.is_empty() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
