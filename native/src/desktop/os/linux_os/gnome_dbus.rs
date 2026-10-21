@@ -17,7 +17,12 @@ use super::probe_timeout::{timed, timed_gated};
 
 const SHELL: &str = "org.gnome.Shell";
 const SHELL_PATH: &str = "/org/gnome/Shell";
-const EXTENSIONS_PATH: &str = "/org/gnome/Shell/Extensions";
+/// The Shell exports `org.gnome.Shell.Extensions` on `/org/gnome/Shell`, the
+/// object of `org.gnome.Shell` itself (`GnomeShellExtensions` in
+/// `js/ui/shellDBus.js`, `export(Gio.DBus.session, '/org/gnome/Shell')`, the
+/// same in the Shells 45 to 50). `/org/gnome/Shell/Extensions` is no object
+/// of a running Shell: a call there fails with `UnknownObject`.
+const EXTENSIONS_PATH: &str = SHELL_PATH;
 const EXTENSIONS: &str = "org.gnome.Shell.Extensions";
 const MUTTER: &str = "org.gnome.Mutter.DisplayConfig";
 const MUTTER_PATH: &str = "/org/gnome/Mutter/DisplayConfig";
