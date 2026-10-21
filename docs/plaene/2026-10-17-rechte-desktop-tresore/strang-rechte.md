@@ -483,7 +483,7 @@ Siehe Abschnitt E.
 
 #### D.2.6 Linux-Konto-Einheit
 
-Eigenschaften: `Description`, `Type=exec`, `ExecStart=<root-eigene se-Datei> --share-exec-supervisor-stdio`, `KillMode=control-group`, `KillSignal=SIGKILL`, `SendSIGKILL=true`, `Restart=no`, `OOMPolicy=stop`, `TimeoutStartUSec=15 s`, `TimeoutStopUSec=2 s`, `CollectMode`, optional `RuntimeMaxUSec`, `User=<Konto>`, `PAMName=smart-explorer-exec`, `WorkingDirectory=-~` (bzw. gewünschter Ordner ohne `-`), `StandardInputFileDescriptor=<h>`, `StandardOutputFileDescriptor=<h>`. `ExitType` wird nicht gesendet (auch nicht in der bestehenden Einheit, B26). Einheitsname `smart-explorer-exec-<exec_id>.service`.
+Eigenschaften: `Description`, `Type=notify` (Suite-Lauf 2: mit `PAMName=` hält der PAM-Sitzungsprozess von systemd 249 und 255 den `execve()`-Melder offen, `Type=exec` endete nach `TimeoutStartUSec`; der Supervisor meldet `READY=1`, sobald er seine Verbindung hält), `ExecStart=<root-eigene se-Datei> --share-exec-supervisor-stdio`, `KillMode=control-group`, `KillSignal=SIGKILL`, `SendSIGKILL=true`, `Restart=no`, `OOMPolicy=stop`, `TimeoutStartUSec=15 s`, `TimeoutStopUSec=2 s`, `CollectMode`, optional `RuntimeMaxUSec`, `User=<Konto>`, `PAMName=smart-explorer-exec`, `WorkingDirectory=-~` (bzw. gewünschter Ordner ohne `-`), `StandardInputFileDescriptor=<h>`, `StandardOutputFileDescriptor=<h>`. `ExitType` wird nicht gesendet (auch nicht in der bestehenden Einheit, B26). Einheitsname `smart-explorer-exec-<exec_id>.service`.
 
 #### D.2.7 Kontodienst-Protokoll (Linux und Windows, `N/share/core/exec_helper_protocol.rs`)
 

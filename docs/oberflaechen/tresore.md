@@ -129,9 +129,9 @@ Se zeigt und akzeptiert keinen Wiederherstellungsschlüssel. Der Hinweis lautet:
 
 ## 11 Offene Punkte
 
-- Annahme A1 (Windows): ob Windows die Sperrnachricht an das verborgene Fenster liefert, ist ohne Handtest offen (Kennung `VAULT-SCREENLOCK-VERIFY` laut Plan; in `docs/TODO.md` noch nicht eingetragen).
+- Annahme A1 (Windows): ob Windows die Sperrnachricht an das verborgene Fenster liefert, ist ohne Handtest offen (`VAULT-SCREENLOCK-VERIFY` in `docs/TODO.md`).
 - Annahme A2 (GNOME Shell und KDE Plasma setzen `LockedHint`): ohne Handtest offen (`VAULT-SCREENLOCK-VERIFY`).
-- Wiederherstellungsschlüssel: Nutzerentscheidung OE1 offen (`VAULT-RECOVERY-KEY`; in `docs/TODO.md` noch nicht eingetragen).
-- Bildvergleich (`VAULT-COMPARE-IMAGE`): nicht umgesetzt; in `docs/TODO.md` noch nicht eingetragen. `VAULT-COMPLETE-DRIVE-TARGET` (Lesestand U26): Inhalt im Stand nicht beschrieben; in `docs/TODO.md` ebenfalls nicht eingetragen.
+- Wiederherstellungsschlüssel: Nutzerentscheidung OE1 offen (`VAULT-RECOVERY-KEY` in `docs/TODO.md`).
+- Bildvergleich (`VAULT-COMPARE-IMAGE` in `docs/TODO.md`): auf dem Desktop nicht umgesetzt. `VAULT-COMPLETE-DRIVE-TARGET` (`docs/TODO.md`, Zustand later): Vervollständigung des Ziels `vault://<SITE>/` bei `se drive mount`.
 - Restlücken aus der Nachrecherche (Plan G) bleiben offen; Tresor-Jobs laufen auf Android nur über `vault.syncCreate`.
-- Tresor-Sync (Lesestand U20): Replikat-Ort mit Grund, feste und wählbare Felder der Jobs, Seeding-Regel, R2-Zurückstellung; K20 und K21 bleiben ohne bekannte Site zurückgehalten; eine Datei gleicher Größe in derselben Sekunde ohne Serverhash ist eine bekannte Lücke (Test belegt). Tresor-Jobs laufen über `vault::run_vault_job`.
+- Tresor-Sync (Lesestand U20): Replikat-Ort mit Grund, feste und wählbare Felder der Jobs, Seeding-Regel, R2-Zurückstellung, R12 (kein leerer Knotenordner: die Regelstufe legt keinen an und entfernt einen geleerten auf der löschenden Seite, `N/vault/core/sync_rules_dirs.rs`); K20 und K21 bleiben ohne bekannte Site zurückgehalten; eine Datei gleicher Größe in derselben Sekunde ohne Serverhash ist eine bekannte Lücke (Test belegt). Tresor-Jobs laufen über `vault::run_vault_job`.
