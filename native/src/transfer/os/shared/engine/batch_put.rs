@@ -240,7 +240,7 @@ impl Read for PacketData<'_, '_> {
 }
 
 #[cfg(test)]
-mod speed_tests {
+pub(super) mod speed_tests {
     use super::super::test_backend::{job, run, write, Fake};
     use crate::transfer::Endpoint;
     use crate::vfs::{
@@ -257,6 +257,8 @@ mod speed_tests {
             $(fn $name(&self, $($arg: $ty),*) -> $ret { self.0.$name($($arg),*) })*
         };
     }
+
+    pub(in super::super) use forward;
 
     /// A packet peer whose first packet refuses its first member before
     /// publishing anything; the rest of the fake behaves as usual.

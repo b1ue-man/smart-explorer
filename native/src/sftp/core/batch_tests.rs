@@ -179,6 +179,31 @@ fn speed_task_sftp_batch_put_lost_rename_reply_is_not_unpublished() {
 }
 
 #[test]
+fn speed_task_sftp_batch_put_lost_reply_before_rename_is_unpublished() {
+    let sim = Rc::new(Sim::default());
+    let wire = FakeWire::new(&sim);
+    wire.fail(Op::Write, "d/a.txt", Fault::LostAfterEffect);
+    let (list, data) = named(&["d/a.txt", "d/b.txt"], 10);
+    let outcomes = put(&sim, &wire, &list, data);
+    let error = failed(&outcomes[0]);
+    assert!(
+        unpublished_of(error),
+        "no RENAME was sent: nothing is published"
+    );
+    assert!(error.to_string().contains(".se-upload-"), "{error}");
+    assert_eq!(published(&outcomes[1]), "d/b.txt");
+    assert_eq!(wire.content("d/a.txt"), None);
+    let renames = wire
+        .fs
+        .borrow()
+        .requests
+        .iter()
+        .filter(|(op, path)| *op == Op::Rename && path.starts_with("d/a.txt"))
+        .count();
+    assert_eq!(renames, 0);
+}
+
+#[test]
 fn speed_task_sftp_batch_put_destination_is_directory_is_not_replaced() {
     let sim = Rc::new(Sim::default());
     let wire = FakeWire::new(&sim).dir("d/a.txt");

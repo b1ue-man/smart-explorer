@@ -4,7 +4,8 @@
 //! name when the name is taken), and the chains of up to `open-handles`
 //! members overlap, so a packet costs about four round trips instead of
 //! four per file. Nothing is published before the stage is written and
-//! closed; a result that is unknown is never labeled as "unpublished".
+//! closed; only a RENAME without reply has an unknown result, which is never
+//! labeled as "unpublished".
 use super::backend::SftpBackend;
 use super::batch_ops::{
     channel_or_unsupported, stage_name, window, BatchWire, ChannelWire, WireError, BATCH_BYTES,
@@ -216,7 +217,7 @@ async fn publish(wire: &dyn BatchWire, stage: &str, destination: &str) -> BatchP
             Err(failure) => failure,
         };
         if !failure.answered {
-            return BatchPutOutcome::Failed(judged(failure, stage));
+            return BatchPutOutcome::Failed(unknown(failure, stage));
         }
         if wire.exists(&candidate).await.unwrap_or(false) {
             continue;
@@ -231,10 +232,10 @@ async fn publish(wire: &dyn BatchWire, stage: &str, destination: &str) -> BatchP
     ))
 }
 
-/// The error of a failed step. A refusal as congestion stays one (the file
-/// waits for the server). A status reply before the rename changed nothing:
-/// "unpublished". Without a reply the stage may exist and the result is
-/// unknown; the text names the stage.
+/// The error of a step before the rename. Nothing but the rename writes the
+/// destination, so nothing is published: "unpublished", also without a
+/// status reply (the stage may be left behind; the text then names it). A
+/// refusal as congestion stays one (the file waits for the server).
 fn judged(failure: WireError, stage: &str) -> io::Error {
     let WireError { error, answered } = failure;
     if congestion_of(&error).is_some() {
@@ -243,6 +244,16 @@ fn judged(failure: WireError, stage: &str) -> io::Error {
     if answered {
         return unpublished_error(error.kind(), error.to_string());
     }
+    unpublished_error(
+        error.kind(),
+        format!("{error}; mögliche Upload-Stufe „{stage}“ bleibt erhalten"),
+    )
+}
+
+/// The RENAME got no reply: it may have published. The result is unknown and
+/// never labeled; the text names the stage.
+fn unknown(failure: WireError, stage: &str) -> io::Error {
+    let error = failure.error;
     io::Error::new(
         error.kind(),
         format!("{error}; mögliche Upload-Stufe „{stage}“ bleibt erhalten"),
