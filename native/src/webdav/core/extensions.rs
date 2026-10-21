@@ -7,7 +7,7 @@ use crate::connect::{poll_subscription, PollNotice};
 use crate::vfs::{
     Backend, BackendExtensions, ChangeNotice, ChangeSignalMode, ChangeSubscription, MtimePrecision,
     RecursiveDeleteFailure, RecursiveDeleteProgress, RecursiveDeleteReport, StageFinish,
-    StageFinished, TargetLimits, VfsListing, VfsResult,
+    StageFinished, TargetLimits, VfsListing, VfsMeta, VfsResult,
 };
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -58,7 +58,7 @@ impl BackendExtensions for WebdavBackend {
             return Ok(StageFinished::default());
         };
         let seconds = ms.div_euclid(1_000);
-        let metadata = self.stat(stage)?;
+        let (metadata, etag) = self.observe_stage(stage)?;
         if metadata.is_dir || metadata.is_symlink || metadata.special {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -66,6 +66,9 @@ impl BackendExtensions for WebdavBackend {
             ));
         }
         let mut applied = metadata.mtime_ms.div_euclid(1_000) == seconds && metadata.mtime_ms != 0;
+        // The last answer the server gave about the stage; the time the
+        // `MOVE` later asserts is remembered from it, without a new request.
+        let mut observed = (metadata.mtime_ms, etag);
         if !applied && seconds > 86_400 {
             // Nextcloud uses DAV:lastmodified, not the protected
             // getlastmodified. Generic DAV may store a dead property, so
@@ -87,10 +90,12 @@ impl BackendExtensions for WebdavBackend {
                 Ok(_) | Err(ureq::Error::Status(403 | 405 | 409 | 501, _)) => {}
                 Err(error) => return Err(request_err(error)),
             }
-            applied = self.stat(stage)?.mtime_ms.div_euclid(1_000) == seconds;
+            let (after, etag) = self.observe_stage(stage)?;
+            applied = after.mtime_ms.div_euclid(1_000) == seconds;
+            observed = (after.mtime_ms, etag);
         }
         if applied {
-            self.remember_stage_time(stage, ms)?;
+            self.remember_stage_time(stage, ms, observed.0, observed.1)?;
         }
         Ok(StageFinished {
             mtime_applied: applied,
@@ -145,6 +150,15 @@ impl BackendExtensions for WebdavBackend {
 }
 
 impl WebdavBackend {
+    /// `stat` of a stage together with the ETag of the same answer.
+    fn observe_stage(&self, path: &str) -> VfsResult<(VfsMeta, Option<String>)> {
+        let (meta, etag) = super::metadata::parse(&self.propfind(path, "0")?, path)?;
+        if meta.content_md5.is_some() {
+            self.hashes_observed.store(true, Ordering::Relaxed);
+        }
+        Ok((meta, etag))
+    }
+
     fn root_etag(&self, root: &str) -> VfsResult<Option<String>> {
         let xml = self.propfind(root, "0")?;
         super::metadata::parse(&xml, root).map(|(_, etag)| etag)
