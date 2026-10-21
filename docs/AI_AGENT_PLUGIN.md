@@ -117,7 +117,10 @@ FTPS- und WebDAV-Verbindung eine Anmeldung wiederverwendet.
   hinaus (Claude Code setzt damit seine 30-min-Leerlauffrist zurück).
 - Ausgaben werden vollständig in Dateien der Sitzung geschrieben
   (`<App-Daten>/smart_explorer/mcp/sessions/<pid>-<zeit>/`); es gibt wie bei `se exec` keine
-  Standardgrenze für Laufzeit oder Ausgabe. Beim Sitzungsende werden laufende Jobs abgebrochen
+  Standardgrenze für Laufzeit oder Ausgabe. Die Dateien enthalten nur Chiffrat: jeder angehängte
+  Block ist ein AES-256-GCM-Datensatz unter einem Schlüssel, der nur im Speicher dieses Jobs liegt
+  (`native/src/cli/mcp/spool.rs`). So bleibt auch die Ausgabe von `se cat vault://…` aus einem
+  entsperrten Tresor nie im Klartext auf der Platte (Ort K49 der Klartextgrenze). Beim Sitzungsende werden laufende Jobs abgebrochen
   und der Ordner gelöscht; Ordner abgestürzter Sitzungen (Sperrdatei frei) entfernt der nächste
   Start.
 - Jede Antwort enthält standardmäßig höchstens 20 000 Byte Nutzinhalt (`max_bytes` hebt das an):

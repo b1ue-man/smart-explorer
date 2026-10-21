@@ -1,5 +1,5 @@
 //! The plaintext boundary of vaults (vault plan C4, VLT-M6): for every place
-//! where se keeps data (K01–K48) the rule for the contents of an unlocked
+//! where se keeps data (K01–K49) the rule for the contents of an unlocked
 //! vault, and the pure decisions the places share. No I/O and no platform
 //! code; the hooks live at the places themselves and in
 //! `vault/os/shared/local_store.rs`, `ephemeral_spool.rs` and
@@ -59,8 +59,8 @@ const fn sink(
     }
 }
 
-/// Every place K01–K48 of C4, one entry each.
-pub(crate) const SINKS: [SinkRule; 48] = [
+/// Every place K01–K49 of C4, one entry each.
+pub(crate) const SINKS: [SinkRule; 49] = [
     sink(
         "K01",
         "Laufwerks-Spool",
@@ -294,9 +294,17 @@ pub(crate) const SINKS: [SinkRule; 48] = [
         "Sperren beim Ruhezustand",
     ),
     sink("K48", "IPC-Loopback", Rule::MemoryOnly, "Token"),
+    // Added after suite run 7: the output of `se cat vault://…` through the
+    // MCP tool `se` was kept in the clear in the session folder.
+    sink(
+        "K49",
+        "MCP-Sitzungsordner (Job-Ausgaben)",
+        Rule::Encrypted,
+        "cli/mcp/spool.rs (Schlüssel je Spool nur im Speicher)",
+    ),
 ];
 
-/// The rule of place `id` (`"K01"` … `"K48"`).
+/// The rule of place `id` (`"K01"` … `"K49"`).
 pub(crate) fn rule_for(id: &str) -> Option<&'static SinkRule> {
     SINKS.iter().find(|sink| sink.id == id)
 }
@@ -350,16 +358,16 @@ mod tests {
 
     #[test]
     fn vault_task_policy_every_sink_has_rule() {
-        // Every place K01–K48 of C4 has exactly one rule and a named place
+        // Every place K01–K49 of C4 has exactly one rule and a named place
         // that enforces it.
-        for number in 1..=48 {
+        for number in 1..=49 {
             let id = format!("K{number:02}");
             let matches = SINKS.iter().filter(|sink| sink.id == id).count();
             assert_eq!(matches, 1, "{id}");
             let sink = rule_for(&id).expect("rule");
             assert!(!sink.place.is_empty() && !sink.enforced.is_empty(), "{id}");
         }
-        assert!(rule_for("K49").is_none());
+        assert!(rule_for("K50").is_none());
         // The places this package enforces carry the rules of C4.
         for (id, rule) in [
             ("K05", Rule::ConsentOnly),

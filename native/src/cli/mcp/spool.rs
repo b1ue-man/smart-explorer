@@ -1,38 +1,113 @@
 //! Append-only output files of one MCP session's jobs (command output, search
 //! hits). Output is never capped in memory: a job appends everything, and
 //! callers read pages from any offset.
+//!
+//! The files hold only ciphertext. Output can be the contents of an unlocked
+//! vault (`se cat vault://…`, place K49 of the vault plaintext boundary), and
+//! the session folder stays on disk until the session ends, or after a crash.
+//! Every append is one AES-256-GCM record under a key that exists only in
+//! memory for this one spool; an index in memory maps output offsets to the
+//! records.
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
+
+use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM, NONCE_LEN};
+use ring::rand::{SecureRandom, SystemRandom};
+
+/// One sealed append: output bytes `start..start + len`, stored at file
+/// offset `at` with the tag after them.
+#[derive(Clone, Copy)]
+struct Record {
+    start: u64,
+    len: u64,
+    at: u64,
+}
+
+struct Writer {
+    file: File,
+    records: Vec<Record>,
+    /// Bytes of the file that belong to records (ciphertext and tags).
+    written: u64,
+}
 
 pub(super) struct Spool {
     path: PathBuf,
-    writer: Mutex<File>,
+    key: LessSafeKey,
+    writer: Mutex<Writer>,
     len: AtomicU64,
+}
+
+/// The key of one spool: random and only in memory.
+fn new_key() -> io::Result<LessSafeKey> {
+    let mut bytes = [0u8; 32];
+    SystemRandom::new()
+        .fill(&mut bytes)
+        .map_err(|_| io::Error::other("no random key for the job output"))?;
+    let key = UnboundKey::new(&AES_256_GCM, &bytes);
+    bytes.fill(0);
+    key.map(LessSafeKey::new)
+        .map_err(|_| io::Error::other("the job output key was refused"))
+}
+
+/// Record `number` as the nonce (unique: one key per spool) and as the
+/// associated data, so no record can stand in for another.
+fn nonce(number: u64) -> Nonce {
+    let mut bytes = [0u8; NONCE_LEN];
+    bytes[..8].copy_from_slice(&number.to_le_bytes());
+    Nonce::assume_unique_for_key(bytes)
 }
 
 impl Spool {
     pub(super) fn create(path: PathBuf) -> io::Result<Self> {
-        let writer = OpenOptions::new()
+        let file = OpenOptions::new()
             .create_new(true)
             .write(true)
             .open(&path)?;
         Ok(Self {
             path,
-            writer: Mutex::new(writer),
+            key: new_key()?,
+            writer: Mutex::new(Writer {
+                file,
+                records: Vec::new(),
+                written: 0,
+            }),
             len: AtomicU64::new(0),
         })
     }
 
-    pub(super) fn append(&self, bytes: &[u8]) -> io::Result<()> {
-        let mut writer = self
-            .writer
+    fn lock(&self) -> io::Result<MutexGuard<'_, Writer>> {
+        self.writer
             .lock()
-            .map_err(|_| io::Error::other("job output writer is poisoned"))?;
-        writer.write_all(bytes)?;
-        writer.flush()?;
+            .map_err(|_| io::Error::other("job output writer is poisoned"))
+    }
+
+    pub(super) fn append(&self, bytes: &[u8]) -> io::Result<()> {
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        let mut writer = self.lock()?;
+        let number = writer.records.len() as u64;
+        let mut sealed = bytes.to_vec();
+        self.key
+            .seal_in_place_append_tag(nonce(number), Aad::from(number.to_le_bytes()), &mut sealed)
+            .map_err(|_| io::Error::other("the job output could not be sealed"))?;
+        // After a failed write the next record starts where this one did.
+        let at = writer.written;
+        writer.file.seek(SeekFrom::Start(at))?;
+        writer.file.write_all(&sealed)?;
+        writer.file.flush()?;
+        let start = self.len();
+        writer.records.push(Record {
+            start,
+            len: bytes.len() as u64,
+            at,
+        });
+        writer.written = at + sealed.len() as u64;
+        // Published under the lock: a reader that sees the new length finds
+        // the record.
         self.len.fetch_add(bytes.len() as u64, Ordering::SeqCst);
         Ok(())
     }
@@ -45,13 +120,38 @@ impl Spool {
     pub(super) fn read(&self, offset: u64, max: usize) -> io::Result<Vec<u8>> {
         let available = self.len().saturating_sub(offset);
         let wanted = usize::try_from(available).unwrap_or(usize::MAX).min(max);
-        let mut bytes = vec![0u8; wanted];
+        let mut bytes = Vec::with_capacity(wanted);
         if wanted == 0 {
             return Ok(bytes);
         }
+        let end = offset + wanted as u64;
+        let records: Vec<(u64, Record)> = {
+            let writer = self.lock()?;
+            let first = writer
+                .records
+                .partition_point(|record| record.start + record.len <= offset);
+            writer.records[first..]
+                .iter()
+                .take_while(|record| record.start < end)
+                .enumerate()
+                .map(|(index, record)| ((first + index) as u64, *record))
+                .collect()
+        };
         let mut file = File::open(&self.path)?;
-        file.seek(SeekFrom::Start(offset))?;
-        file.read_exact(&mut bytes)?;
+        for (number, record) in records {
+            let len = usize::try_from(record.len)
+                .map_err(|_| io::Error::other("job output record too large"))?;
+            let mut sealed = vec![0u8; len + AES_256_GCM.tag_len()];
+            file.seek(SeekFrom::Start(record.at))?;
+            file.read_exact(&mut sealed)?;
+            let plain = self
+                .key
+                .open_in_place(nonce(number), Aad::from(number.to_le_bytes()), &mut sealed)
+                .map_err(|_| io::Error::other("a job output record did not authenticate"))?;
+            let from = offset.saturating_sub(record.start);
+            let to = end.min(record.start + record.len) - record.start;
+            bytes.extend_from_slice(&plain[from as usize..to as usize]);
+        }
         Ok(bytes)
     }
 }
@@ -136,5 +236,36 @@ mod tests {
         assert_eq!(spool.read(6, 100).unwrap(), b"world");
         assert_eq!(spool.read(0, 5).unwrap(), b"hello");
         assert!(spool.read(11, 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn mcp_task_spool_file_holds_no_plaintext() {
+        // Output of an unlocked vault (`se cat vault://…`) must not reach the
+        // session folder in the clear (place K49): the file holds sealed
+        // records only, and pages across records still read back.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("out");
+        let spool = Spool::create(path.clone()).unwrap();
+        let marker = b"tresor-klartext-markierung";
+        spool.append(b"vor ").unwrap();
+        spool.append(marker).unwrap();
+        spool.append(b" nach").unwrap();
+        let stored = std::fs::read(&path).unwrap();
+        assert!(!stored.windows(marker.len()).any(|window| window == marker));
+        assert!(!stored.windows(4).any(|window| window == b"vor "));
+        let total = 4 + marker.len() + 5;
+        assert_eq!(spool.len(), total as u64);
+        let mut whole = b"vor ".to_vec();
+        whole.extend_from_slice(marker);
+        whole.extend_from_slice(b" nach");
+        assert_eq!(spool.read(0, total).unwrap(), whole);
+        assert_eq!(spool.read(2, 6).unwrap(), &whole[2..8]);
+        assert_eq!(spool.read(total as u64 - 3, 10).unwrap(), b"ach");
+        // A second spool of the same session has its own key: the same
+        // output gives other bytes.
+        let other_path = dir.path().join("other");
+        let other = Spool::create(other_path.clone()).unwrap();
+        other.append(b"vor ").unwrap();
+        assert_ne!(std::fs::read(&other_path).unwrap(), stored[..20].to_vec());
     }
 }

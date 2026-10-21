@@ -1538,6 +1538,11 @@ vault_task_mcp_status_without_paths               linux-core:vault-mcp  ignored 
 vault_task_klartext_actions_leave_no_marker       linux-core:vault-klartext  ignored threads=1 fixture=marker env=SMART_EXPLORER_VAULT_SE_BIN={se}  pfad=cli::vault::task_klartext_tests::vault_task_klartext_actions_leave_no_marker  quelle=T564
 vault_task_klartext_drive_actions_leave_no_marker linux-root:vault-klartext-drive  ignored threads=1 fixture=marker,fuse,runtime-tmpfs env=SMART_EXPLORER_VAULT_SE_BIN={se}  pfad=cli::vault::task_klartext_tests::vault_task_klartext_drive_actions_leave_no_marker  quelle=D3,T564
 
+# ---- Klartextgrenze der MCP-Sitzung (K49, nach Suite-Lauf 7): die Job-Ausgaben liegen nur verschlüsselt im
+# Sitzungsordner ----
+mcp_task_spool_file_holds_no_plaintext  linux-core:unit,windows-core:unit  pfad=cli::mcp::spool::tests::mcp_task_spool_file_holds_no_plaintext  quelle=Code,K49
+mcp_task_spool_reads_pages_from_any_offset  linux-core:unit,windows-core:unit  pfad=cli::mcp::spool::tests::mcp_task_spool_reads_pages_from_any_offset  quelle=Code,K49
+
 [noch nicht umgesetzt]
 
 
