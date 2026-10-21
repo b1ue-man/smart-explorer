@@ -57,6 +57,9 @@ pub(super) struct PoolChannel {
     packet_len: u64,
     read_len: u64,
     write_len: Option<u64>,
+    /// Files the server lets one channel hold open (`limits@openssh.com`);
+    /// `None` when it names none or 0.
+    open_handles: Option<u64>,
     /// `fsync@openssh.com` offered: flushes sync like `File::flush`.
     pub(super) fsync: bool,
     /// `posix-rename@openssh.com` offered: an atomic replace needs no extra
@@ -87,6 +90,7 @@ impl PoolChannel {
             packet_len,
             read_len,
             write_len: setup.limits.and_then(|limits| limits.write_len),
+            open_handles: setup.limits.and_then(|limits| limits.open_handles),
             fsync: setup.fsync,
             posix_rename: setup.posix_rename,
             copy_data: setup.copy_data,
@@ -100,6 +104,11 @@ impl PoolChannel {
     /// what one packet carries (as `File::poll_read`).
     pub(super) fn read_chunk(&self) -> u32 {
         u32::try_from(self.read_len).unwrap_or(u32::MAX)
+    }
+
+    /// Files the server lets this channel hold open at once, if it said so.
+    pub(super) fn open_handles(&self) -> Option<u64> {
+        self.open_handles
     }
 
     /// Bytes per WRITE for a handle of `handle_len` bytes.
@@ -203,6 +212,13 @@ pub(super) fn pick(loads: &[usize], opening: usize, limit: Option<usize>) -> Pic
         None if !may_open => Pick::MainSession,
         _ => Pick::Open,
     }
+}
+
+/// Whether the pool can serve a transfer: it is not switched off for the
+/// current connection and has not learned that no channel fits next to the
+/// main session (`pick` would answer `MainSession`).
+pub(super) fn pool_usable(disabled: bool, channels: usize, limit: Option<usize>) -> bool {
+    !disabled && !(channels == 0 && limit == Some(0))
 }
 
 #[derive(Default)]
@@ -322,6 +338,29 @@ impl ChannelPool {
     /// without waiting for the next transfer.
     pub(super) fn retire_idle(&self) {
         lock(&self.state).retire_idle(Instant::now());
+    }
+
+    /// Whether `lease` can hand out a channel for the current connection
+    /// generation (without opening one).
+    pub(super) fn available(&self, backend: &SftpBackend) -> bool {
+        let Ok(generation) = backend.connection.current() else {
+            return false;
+        };
+        let mut state = lock(&self.state);
+        state.prune(&generation, Instant::now());
+        pool_usable(
+            state.disabled_for(&generation),
+            state.channels.len(),
+            state.limit,
+        )
+    }
+
+    /// The open-handle limit of the first pool channel that reported one.
+    pub(super) fn known_open_handles(&self) -> Option<u64> {
+        lock(&self.state)
+            .channels
+            .iter()
+            .find_map(|channel| channel.open_handles())
     }
 
     /// A channel for one file transfer; `None`: use the main session.

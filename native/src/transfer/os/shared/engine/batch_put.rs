@@ -101,7 +101,13 @@ pub(super) fn upload(
             }
             Some(BatchPutOutcome::Failed(error)) => {
                 engine.stats.unmoved(delivery.served[index]);
-                let (failure, attempt) = delivery.judge(index, OpError::target(error));
+                let (failure, mut attempt) = delivery.judge(index, OpError::target(error));
+                // The peer says it published nothing for this file: it may
+                // go again once, like a file whose bytes were refused.
+                if attempt == Attempt::MaybePublished && crate::vfs::unpublished_of(&failure.error)
+                {
+                    attempt = Attempt::NotPublished;
+                }
                 failures.member(file, failure, attempt);
             }
             None => {
@@ -230,5 +236,105 @@ impl Read for PacketData<'_, '_> {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod speed_tests {
+    use super::super::test_backend::{job, run, write, Fake};
+    use crate::transfer::Endpoint;
+    use crate::vfs::{
+        unpublished_error, Backend, BackendHandle, BatchLimits, BatchPut, BatchPutOutcome, Scheme,
+        VfsMeta, VfsResult,
+    };
+    use std::io::{self, Read, Write};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    /// Forwards the listed methods to the wrapped fake remote.
+    macro_rules! forward {
+        ($($name:ident($($arg:ident: $ty:ty),*) -> $ret:ty;)*) => {
+            $(fn $name(&self, $($arg: $ty),*) -> $ret { self.0.$name($($arg),*) })*
+        };
+    }
+
+    /// A packet peer whose first packet refuses its first member before
+    /// publishing anything; the rest of the fake behaves as usual.
+    struct Refusing(Arc<Fake>, AtomicBool);
+
+    impl Backend for Refusing {
+        forward! {
+            scheme() -> Scheme; root_display() -> String; namespace_identity() -> String;
+            list_dir(path: &str) -> VfsResult<Vec<VfsMeta>>; stat(path: &str) -> VfsResult<VfsMeta>;
+            open_read(path: &str) -> VfsResult<Box<dyn Read + Send>>;
+            open_write(path: &str) -> VfsResult<Box<dyn Write + Send>>;
+            open_write_new(path: &str) -> VfsResult<Box<dyn Write + Send>>;
+            open_write_fresh(path: &str, size: u64) -> VfsResult<Option<Box<dyn Write + Send>>>;
+            promote_copy_stage(stage: &str, destination: &str) -> VfsResult<()>;
+            rename(src: &str, dst: &str) -> VfsResult<()>;
+            rename_no_replace(src: &str, dst: &str) -> VfsResult<()>;
+            remove_file(path: &str) -> VfsResult<()>; remove_dir(path: &str) -> VfsResult<()>;
+            mkdir_all(path: &str) -> VfsResult<()>; create_dir(path: &str) -> VfsResult<()>;
+            create_dir_new(path: &str) -> VfsResult<()>;
+            discard_copy_stage(stage: &str) -> VfsResult<()>;
+            case_sensitive_paths(root: &str) -> bool; flow_key(path: &str) -> String;
+            concurrent_read_write() -> bool; batch_limits(dir: &str) -> Option<BatchLimits>;
+        }
+
+        fn put_batch(
+            &self,
+            entries: &[BatchPut],
+            data: &mut dyn Read,
+        ) -> VfsResult<Vec<BatchPutOutcome>> {
+            let Some((first, rest)) = entries.split_first() else {
+                return Ok(Vec::new());
+            };
+            if self.1.swap(true, Ordering::SeqCst) {
+                return self.0.put_batch(entries, data);
+            }
+            data.read_exact(&mut vec![0u8; first.size as usize])?;
+            let refused = unpublished_error(io::ErrorKind::ConnectionReset, "fixture: refused");
+            let mut outcomes = vec![BatchPutOutcome::Failed(refused)];
+            outcomes.extend(self.0.put_batch(rest, data)?);
+            Ok(outcomes)
+        }
+    }
+
+    #[test]
+    fn speed_task_batch_unpublished_failure_is_retried_once() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let local = root.path().join("local/Vault");
+        for index in 0..4 {
+            write(
+                &local.join(format!("f{index}.txt")),
+                format!("file {index}").as_bytes(),
+            );
+        }
+        let remote = root.path().join("remote");
+        std::fs::create_dir(&remote).expect("remote");
+        let mut fake = Fake::new("unpublished-retry");
+        fake.batch = Some(BatchLimits {
+            max_files: 64,
+            max_bytes: 1024 * 1024,
+        });
+        let (fake, _) = fake.handle();
+        let handle: BackendHandle = Arc::new(Refusing(fake.clone(), AtomicBool::new(false)));
+        let finished = run(job(
+            Endpoint::Local,
+            Endpoint::Remote(handle),
+            &remote,
+            &[&local],
+        ));
+        assert!(finished.issues.is_empty(), "{:?}", finished.issues);
+        assert_eq!(finished.progress.files_done, 4);
+        for index in 0..4 {
+            let published = remote.join(format!("Vault/f{index}.txt"));
+            assert_eq!(
+                std::fs::read(&published).expect("published"),
+                format!("file {index}").as_bytes()
+            );
+        }
+        // Exactly one single upload: the refused member, sent once more.
+        assert_eq!(fake.counters.stages.load(Ordering::SeqCst), 1);
     }
 }

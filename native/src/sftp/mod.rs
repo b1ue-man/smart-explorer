@@ -23,6 +23,8 @@
 //! (pipelined_read.rs, pool_writer.rs); listing and metadata stay on the
 //! main session, which also serves transfers when no extra channel opens.
 //! Copies inside one server run on the server (`copy-data`, copy_data.rs).
+//! Many small files move as packets on one pool channel, their requests
+//! overlapping (batch_ops.rs, batch_put.rs, batch_get.rs).
 //! A folder is deleted with one READDIR per folder and many REMOVEs in
 //! flight on the main session (tree_remove.rs).
 //! An interactive terminal (pty-req, then shell or exec) opens as one more
@@ -30,6 +32,12 @@
 
 #[path = "core/backend.rs"]
 mod backend;
+#[path = "core/batch_get.rs"]
+mod batch_get;
+#[path = "core/batch_ops.rs"]
+mod batch_ops;
+#[path = "core/batch_put.rs"]
+mod batch_put;
 #[path = "core/channel_pool.rs"]
 mod channel_pool;
 #[path = "core/command.rs"]
@@ -83,6 +91,12 @@ mod tree_remove;
 #[path = "core/url.rs"]
 mod url;
 
+#[cfg(test)]
+#[path = "core/batch_fake.rs"]
+mod batch_fake;
+#[cfg(test)]
+#[path = "core/batch_tests.rs"]
+mod batch_tests;
 #[cfg(test)]
 #[path = "core/delete_speed_task_tests.rs"]
 mod delete_speed_task_tests;

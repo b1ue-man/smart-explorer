@@ -5,7 +5,10 @@ use super::io_adapters::{seek_start, Commit, SftpReader, SftpWriter};
 use super::io_err;
 use super::metadata::{basename, to_vfs};
 use super::pool_writer::SizedWriter;
-use crate::vfs::{Backend, Scheme, VfsMeta, VfsResult};
+use crate::vfs::{
+    Backend, BatchGet, BatchLimits, BatchPut, BatchPutOutcome, BatchSink, Scheme, VfsMeta,
+    VfsResult,
+};
 use russh_sftp::client::error::Error as SftpError;
 use russh_sftp::protocol::OpenFlags;
 use std::io::{self, Read, Write};
@@ -187,7 +190,7 @@ fn create_flags() -> OpenFlags {
 }
 
 /// Exclusive create: the protocol's own O_EXCL.
-fn create_new_flags() -> OpenFlags {
+pub(super) fn create_new_flags() -> OpenFlags {
     OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::EXCLUDE
 }
 
@@ -379,6 +382,25 @@ impl Backend for SftpBackend {
     /// client's until it is published.
     fn discard_copy_stage(&self, stage: &str) -> VfsResult<()> {
         self.discard_stage(stage)
+    }
+
+    /// Packets of small files on one pool channel (batch_ops.rs); `None`
+    /// while no pool channel can serve.
+    fn batch_limits(&self, dir: &str) -> Option<BatchLimits> {
+        let _ = dir;
+        super::batch_ops::advertised(self)
+    }
+
+    fn put_batch(
+        &self,
+        entries: &[BatchPut],
+        data: &mut dyn Read,
+    ) -> VfsResult<Vec<BatchPutOutcome>> {
+        super::batch_put::run(self, entries, data)
+    }
+
+    fn get_batch(&self, items: &[BatchGet], sink: &mut dyn BatchSink) -> VfsResult<()> {
+        super::batch_get::run(self, items, sink)
     }
 
     fn parallelism(&self) -> usize {
