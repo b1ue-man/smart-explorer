@@ -1,43 +1,13 @@
 //! SFTP packets against the scripted channel of `batch_fake.rs`.
-use super::batch_fake::{drive, FakeWire, Fault, Op, Sim, RTT};
-use super::batch_get::get_all;
+use super::batch_fake::{
+    drive, entries, get, items, named, payload, FakeWire, Fault, Op, RecSink, Sim, RTT,
+};
 use super::batch_ops::{channel_or_unsupported, limits};
 use super::batch_put::put_all;
 use super::channel_pool::pool_usable;
-use crate::vfs::{is_unique_stage, unpublished_of, BatchGet, BatchPut, BatchPutOutcome, BatchSink};
-use std::collections::BTreeMap;
+use crate::vfs::{congestion_of, is_unique_stage, unpublished_of, BatchPut, BatchPutOutcome};
 use std::io::{self, Cursor, Read};
 use std::rc::Rc;
-
-fn payload(index: usize, size: usize) -> Vec<u8> {
-    (0..size).map(|byte| (byte + index * 7) as u8).collect()
-}
-
-/// `count` entries "d/f00.txt" … of `size` bytes and their bytes back to back.
-fn entries(count: usize, size: usize) -> (Vec<BatchPut>, Vec<u8>) {
-    let list = (0..count)
-        .map(|index| BatchPut {
-            path: format!("d/f{index:02}.txt"),
-            size: size as u64,
-        })
-        .collect();
-    let data = (0..count).flat_map(|index| payload(index, size)).collect();
-    (list, data)
-}
-
-fn named(paths: &[&str], size: usize) -> (Vec<BatchPut>, Vec<u8>) {
-    let list = paths
-        .iter()
-        .map(|path| BatchPut {
-            path: path.to_string(),
-            size: size as u64,
-        })
-        .collect();
-    let data = (0..paths.len())
-        .flat_map(|index| payload(index, size))
-        .collect();
-    (list, data)
-}
 
 fn put(sim: &Rc<Sim>, wire: &FakeWire, list: &[BatchPut], data: Vec<u8>) -> Vec<BatchPutOutcome> {
     drive(sim, put_all(wire, list, &mut Cursor::new(data)))
@@ -234,6 +204,12 @@ fn speed_task_sftp_batch_put_window_follows_open_handles() {
         8,
         "as many as allowed, never more"
     );
+    // A server that allows more than 64 still gets at most 64 at once.
+    let mut wide = FakeWire::new(&sim);
+    wide.open_handles = Some(1000);
+    let (list, data) = entries(100, 100);
+    put(&sim, &wide, &list, data);
+    assert_eq!(wide.fs.borrow().open_max, 64);
 }
 
 /// `data` for `good` entries of 100 bytes, then the stream fails with `kind`.
@@ -300,60 +276,6 @@ fn speed_task_sftp_batch_put_empty_file_sends_no_write() {
     assert_eq!(published(&outcomes[0]), "d/empty.txt");
     assert_eq!(wire.content("d/empty.txt"), Some(Vec::new()));
     assert_eq!(wire.count(Op::Write), 1, "only the file with bytes writes");
-}
-
-/// Items "d/f0" … with `files` as content, listed with `sizes`.
-fn items(sizes: &[u64]) -> Vec<BatchGet> {
-    sizes
-        .iter()
-        .enumerate()
-        .map(|(index, size)| BatchGet {
-            path: format!("d/f{index}"),
-            id: None,
-            size: *size,
-        })
-        .collect()
-}
-
-#[derive(Default)]
-struct RecSink {
-    events: Vec<String>,
-    data: BTreeMap<usize, Vec<u8>>,
-    ends: BTreeMap<usize, Option<io::ErrorKind>>,
-    failed: BTreeMap<usize, io::ErrorKind>,
-    fail_begin_at: Option<usize>,
-}
-
-impl BatchSink for RecSink {
-    fn begin(&mut self, index: usize, _size: u64) -> io::Result<()> {
-        self.events.push(format!("begin {index}"));
-        match self.fail_begin_at {
-            Some(at) if at == index => Err(io::Error::other("fixture: sink is full")),
-            _ => Ok(()),
-        }
-    }
-
-    fn data(&mut self, index: usize, bytes: &[u8]) -> io::Result<()> {
-        self.data.entry(index).or_default().extend_from_slice(bytes);
-        Ok(())
-    }
-
-    fn end(&mut self, index: usize, result: io::Result<()>) -> io::Result<()> {
-        self.events.push(format!("end {index}"));
-        self.ends
-            .insert(index, result.err().map(|error| error.kind()));
-        Ok(())
-    }
-
-    fn failed(&mut self, index: usize, error: io::Error) -> io::Result<()> {
-        self.events.push(format!("failed {index}"));
-        self.failed.insert(index, error.kind());
-        Ok(())
-    }
-}
-
-fn get(sim: &Rc<Sim>, wire: &FakeWire, list: &[BatchGet], sink: &mut RecSink) -> io::Result<()> {
-    drive(sim, get_all(wire, list, sink))
 }
 
 #[test]
@@ -456,7 +378,8 @@ fn speed_task_sftp_batch_get_rereads_answers_the_server_cut() {
 fn speed_task_sftp_batch_limits_from_open_handles() {
     assert_eq!(limits(None).max_files, 64);
     assert_eq!(limits(Some(8)).max_files, 8);
-    assert_eq!(limits(Some(1000)).max_files, 256);
+    assert_eq!(limits(Some(1000)).max_files, 64);
+    assert_eq!(limits(Some(64)).max_files, 64);
     assert_eq!(limits(Some(0)).max_files, 64);
     assert_eq!(limits(Some(8)).max_bytes, 16 * 1024 * 1024);
 }
@@ -475,4 +398,64 @@ fn speed_task_sftp_batch_unavailable_pool_is_unsupported() {
         "the server left no room for a channel"
     );
     assert!(pool_usable(false, 0, None) && pool_usable(false, 1, Some(0)));
+}
+
+#[test]
+fn speed_task_sftp_batch_open_failure_is_congestion() {
+    let sim = Rc::new(Sim::default());
+    let wire = FakeWire::new(&sim);
+    // A plain failure status (no taken name behind it), a lost reply, and a
+    // specific status: only the specific one stays a failure of the file.
+    wire.fail(Op::Open, "d/a.txt", Fault::Status(io::ErrorKind::Other));
+    wire.fail(Op::Open, "d/b.txt", Fault::LostAfterEffect);
+    wire.fail(
+        Op::Open,
+        "d/c.txt",
+        Fault::Status(io::ErrorKind::PermissionDenied),
+    );
+    let (list, data) = named(&["d/a.txt", "d/b.txt", "d/c.txt", "d/d.txt"], 10);
+    let outcomes = put(&sim, &wire, &list, data);
+    for outcome in &outcomes[..2] {
+        let error = failed(outcome);
+        assert!(congestion_of(error).is_some(), "{error}");
+        assert!(!unpublished_of(error));
+    }
+    let denied = failed(&outcomes[2]);
+    assert!(congestion_of(denied).is_none() && unpublished_of(denied));
+    assert_eq!(published(&outcomes[3]), "d/d.txt");
+    // The same on a read: overload, but a missing file is its own failure.
+    let read = FakeWire::new(&sim).file("d/f1", &payload(1, 10));
+    read.fail(Op::OpenRead, "d/f0", Fault::Status(io::ErrorKind::Other));
+    let mut sink = RecSink::default();
+    get(&sim, &read, &items(&[10, 10, 10]), &mut sink).expect("packet");
+    assert_eq!(sink.congested, [0]);
+    assert_eq!(sink.failed[&2], io::ErrorKind::NotFound);
+}
+
+#[test]
+fn speed_task_sftp_batch_closes_every_handle_on_cancel() {
+    // A canceled stream: every handle opened is closed.
+    let (_, wire, _) = put_then_fail(io::ErrorKind::Interrupted, 3);
+    assert_eq!(wire.count(Op::Open), wire.count(Op::Close));
+    assert_eq!(wire.fs.borrow().open_now, 0);
+    // A failed write: its handle is closed as well.
+    let sim = Rc::new(Sim::default());
+    let wire = FakeWire::new(&sim);
+    wire.fail(Op::Write, "d/b.txt", Fault::Status(io::ErrorKind::Other));
+    let (list, data) = named(&["d/a.txt", "d/b.txt"], 10);
+    put(&sim, &wire, &list, data);
+    assert_eq!(wire.count(Op::Open), wire.count(Op::Close));
+    // A sink that stops the download: nothing stays open.
+    let mut read = FakeWire::new(&sim);
+    read.open_handles = Some(2);
+    for index in 0..6 {
+        read = read.file(&format!("d/f{index}"), &payload(index, 10));
+    }
+    let mut sink = RecSink {
+        fail_begin_at: Some(1),
+        ..RecSink::default()
+    };
+    get(&sim, &read, &items(&[10; 6]), &mut sink).expect_err("sink refused");
+    assert_eq!(read.count(Op::OpenRead), read.count(Op::Close));
+    assert_eq!(read.fs.borrow().open_now, 0);
 }

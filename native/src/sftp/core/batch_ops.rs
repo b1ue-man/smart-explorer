@@ -45,13 +45,11 @@ pub(super) trait BatchWire {
     fn open_handles(&self) -> Option<u64>;
 }
 
-/// Files held open at once when the server names no limit: a typical `sshd`
-/// child allows 1024 open files, shared by at most `MaxSessions` (10) pool
-/// channels, so about 100 each; 64 stays below that.
-pub(super) const UNKNOWN_OPEN_HANDLES: usize = 64;
-/// Files per packet at most: `BATCH_MAX_FILES` of every packet protocol
-/// (`share/core/batch_wire.rs`).
-pub(super) const FILES_CEILING: usize = 256;
+/// Files held open at once on one channel, at most: also the value when the
+/// server names no limit. A typical `sshd` child allows 1024 open files,
+/// shared by at most `MaxSessions` (10) pool channels, so about 100 each; 64
+/// stays below that (security answer E13-S13).
+pub(super) const OPEN_HANDLES: usize = 64;
 /// Bytes per packet: the memory reserved for it and the work repeated when
 /// it is lost, about 250 ms at the measured rate (as the Share packets).
 pub(super) const BATCH_BYTES: u64 = 16 * 1024 * 1024;
@@ -59,18 +57,39 @@ pub(super) const BATCH_BYTES: u64 = 16 * 1024 * 1024;
 /// The packet limits for a server that allows `known_open_handles` files
 /// open per channel (`None`: it named none).
 pub(super) fn limits(known_open_handles: Option<u64>) -> BatchLimits {
-    let max_files = known_open_handles
-        .map(|handles| {
-            usize::try_from(handles)
-                .unwrap_or(usize::MAX)
-                .min(FILES_CEILING)
-        })
-        .filter(|files| *files >= 1)
-        .unwrap_or(UNKNOWN_OPEN_HANDLES);
     BatchLimits {
-        max_files,
+        max_files: allowed_handles(known_open_handles),
         max_bytes: BATCH_BYTES,
     }
+}
+
+/// `min(server limit, OPEN_HANDLES)`; `OPEN_HANDLES` when the server named
+/// none or 0.
+fn allowed_handles(known_open_handles: Option<u64>) -> usize {
+    known_open_handles
+        .filter(|handles| *handles >= 1)
+        .map_or(OPEN_HANDLES, |handles| {
+            usize::try_from(handles)
+                .unwrap_or(usize::MAX)
+                .min(OPEN_HANDLES)
+        })
+}
+
+/// A failed OPEN and whether it counts as overload. A refusal with a plain
+/// failure status, or without any reply, is the server running out of files
+/// or channels: congestion, so the flow halves and the file waits, not a
+/// failure of the file. A specific status (no such file, permission denied)
+/// stays what it is.
+pub(super) fn open_failure(failure: WireError) -> (io::Error, bool) {
+    let WireError { error, answered } = failure;
+    if crate::vfs::congestion_of(&error).is_some() {
+        return (error, true);
+    }
+    if answered && error.kind() != io::ErrorKind::Other {
+        return (error, false);
+    }
+    let refused = format!("SFTP-OPEN abgelehnt: {error}");
+    (crate::vfs::congestion_error(refused, None), true)
 }
 
 /// The packet limits of `backend`, or `None` while no pool channel can serve
@@ -266,11 +285,8 @@ impl BatchWire for ChannelWire {
     }
 }
 
-/// Members in flight at once: as many as the server lets one channel hold
-/// open, never more than the packet has.
+/// Members in flight at once: as many files as one channel may hold open,
+/// never more than the packet has.
 pub(super) fn window(wire: &dyn BatchWire, members: usize) -> usize {
-    let allowed = wire.open_handles().map_or(UNKNOWN_OPEN_HANDLES, |handles| {
-        usize::try_from(handles).unwrap_or(usize::MAX)
-    });
-    members.min(allowed).max(1)
+    members.min(allowed_handles(wire.open_handles())).max(1)
 }
