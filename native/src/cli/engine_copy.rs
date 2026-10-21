@@ -10,13 +10,15 @@
 //! error), links and special files inside a tree are reported as omissions,
 //! and cancellation stops the run. One difference is deliberate: the engine
 //! does not stop at the first failing file (see `docs/GOTCHAS.md`).
+#[path = "engine_copy_issues.rs"]
+mod issues;
 #[path = "engine_copy_stats.rs"]
 mod stats;
 
 use super::entry_kind::EntryKind;
 use super::ops::{join, parent_of};
 use super::target::Target;
-use super::tree_guard::validate_same_source;
+use super::tree_guard::{validate_listed_names, validate_same_source};
 use super::tree_observer::{TreeObserver, TreePhase, TRANSFER_CANCELLED};
 use super::tree_ops::{Omission, TreeOutcome};
 use crate::transfer::engine_names::{base_name, validate_pair_rels};
@@ -30,14 +32,45 @@ use crate::vfs::VfsMeta;
 use std::io;
 use std::sync::Mutex;
 
+use issues::all_issues;
+#[cfg(test)]
+pub(super) use issues::parse_log;
 use stats::average_rate;
 pub(super) use stats::print_stats;
 #[cfg(test)]
 pub(super) use stats::stats_line;
 
-/// Switch of the engine path. Stays `false` until the security answer E13-S8
-/// is in place; the only line to change is this one.
-pub(super) const CLI_ENGINE_PATH: bool = false;
+/// Switch of the engine path (security answer E13-S8 is in place).
+pub(super) const CLI_ENGINE_PATH: bool = true;
+
+#[cfg(test)]
+thread_local! {
+    static LEGACY_ONLY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Tests of the older path's own checks run the closure with the engine path
+/// off (this thread only).
+#[cfg(test)]
+pub(super) fn with_legacy_path<T>(run: impl FnOnce() -> T) -> T {
+    struct Reset(bool);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            LEGACY_ONLY.with(|flag| flag.set(self.0));
+        }
+    }
+    let _reset = Reset(LEGACY_ONLY.with(|flag| flag.replace(true)));
+    run()
+}
+
+#[cfg(test)]
+fn enabled_now() -> bool {
+    CLI_ENGINE_PATH && !LEGACY_ONLY.with(|flag| flag.get())
+}
+
+#[cfg(not(test))]
+fn enabled_now() -> bool {
+    CLI_ENGINE_PATH
+}
 
 /// Failing files listed in the error text before it points at the log.
 const SHOWN_FAILURES: usize = 5;
@@ -55,6 +88,9 @@ pub(super) struct Eligibility {
     pub(super) disjoint: bool,
     /// The destination name is one the engine creates as typed.
     pub(super) name_ok: bool,
+    /// The engine would ask the user for read access to a protected local
+    /// source (`AccessGate`); a terminal or the MCP service must not ask.
+    pub(super) access_prompt_possible: bool,
 }
 
 /// The pure rule of the engine path (U49-2).
@@ -64,6 +100,7 @@ pub(super) fn eligible(facts: &Eligibility) -> bool {
         && facts.parent_is_plain_dir
         && facts.disjoint
         && facts.name_ok
+        && !facts.access_prompt_possible
         && match facts.source {
             EntryKind::File => true,
             EntryKind::Dir => facts.recursive,
@@ -90,7 +127,7 @@ pub(super) fn try_copy(
     observer: &TreeObserver,
 ) -> Result<Option<TreeOutcome>, String> {
     try_copy_with(
-        CLI_ENGINE_PATH,
+        enabled_now(),
         src,
         src_meta,
         source_snapshot,
@@ -128,7 +165,9 @@ pub(super) fn try_copy_with(
     let fresh = src.backend.stat(&src.path).map_err(|e| e.to_string())?;
     validate_same_source(source_snapshot, &fresh, &src.path)?;
     let (items, target_dir) = if fresh.is_dir {
-        let children = child_paths(src, dst_path)?;
+        let Some(children) = child_paths(src, dst_path)? else {
+            return Ok(None);
+        };
         match dst.backend.create_dir_new(dst_path) {
             Ok(()) => {}
             // Nothing was created: the older path can still decide.
@@ -201,7 +240,25 @@ fn probe(
         parent_is_plain_dir,
         disjoint,
         name_ok: validate_pair_rels([last_name(dst_path)], false).is_ok(),
+        access_prompt_possible: src.backend.is_local() && access_prompt_possible(src, src_meta),
     }
+}
+
+/// Whether the engine's read-access request could be asked for this source:
+/// the same folder and the same test as `AccessGate::request`. Where it is
+/// true (Windows, local drive, no grant, no backup privilege) the older path
+/// reports a refused read as an error instead.
+fn access_prompt_possible(src: &Target, src_meta: &VfsMeta) -> bool {
+    let root = if src_meta.is_dir {
+        Some(src.path.clone())
+    } else {
+        parent_of(&src.path)
+    };
+    let Some(root) = root else {
+        return false;
+    };
+    let native = std::path::PathBuf::from(root.replace('/', std::path::MAIN_SEPARATOR_STR));
+    crate::local_access::can_request_access(&crate::local_access::display_path(&native))
 }
 
 fn last_name(path: &str) -> &str {
@@ -209,17 +266,25 @@ fn last_name(path: &str) -> &str {
 }
 
 /// The entries of the source folder, each a root of the job. The folder that
-/// is about to be created is never one of them.
-fn child_paths(src: &Target, dst_path: &str) -> Result<Vec<String>, String> {
+/// is about to be created is never one of them. `None` when a name in the
+/// listing is unsafe or listed twice: the older path checks the whole tree
+/// before it writes anything and reports that case with its own message (the
+/// engine refuses such entries too, but only after it started writing).
+fn child_paths(src: &Target, dst_path: &str) -> Result<Option<Vec<String>>, String> {
     let listed = src
         .backend
         .list_dir(&src.path)
         .map_err(|error| format!("cannot list {}: {error}", src.path))?;
-    Ok(listed
-        .into_iter()
-        .map(|child| join(&src.path, &child.name))
-        .filter(|path| path != dst_path)
-        .collect())
+    if validate_listed_names(&src.path, &listed).is_err() {
+        return Ok(None);
+    }
+    Ok(Some(
+        listed
+            .into_iter()
+            .map(|child| join(&src.path, &child.name))
+            .filter(|path| path != dst_path)
+            .collect(),
+    ))
 }
 
 fn side_of(target: &Target) -> Side<'_> {
@@ -371,58 +436,4 @@ fn failure_text(failed: u64, shown: &[&TransferIssue], log: Option<&str>) -> Str
         }
     }
     text
-}
-
-/// Every issue of the run: the engine carries the first hundred, the log file
-/// all of them.
-struct Issues {
-    items: Vec<TransferIssue>,
-    /// Issues counted but neither shown nor readable from the log.
-    unseen: u64,
-}
-
-fn all_issues(finished: &Finished) -> Issues {
-    let total = finished.progress.errors;
-    let shown = finished.issues.len() as u64;
-    if total > shown {
-        let logged = finished
-            .progress
-            .log_path
-            .as_deref()
-            .and_then(|path| std::fs::read_to_string(path).ok())
-            .map(|text| parse_log(&text))
-            .unwrap_or_default();
-        if logged.len() as u64 >= total {
-            return Issues {
-                items: logged,
-                unseen: 0,
-            };
-        }
-        return Issues {
-            items: finished.issues.clone(),
-            unseen: total - shown,
-        };
-    }
-    Issues {
-        items: finished.issues.clone(),
-        unseen: 0,
-    }
-}
-
-/// The issue log: one JSON object per line. A sealed line (vault) has no
-/// readable fields and counts as a failure with a fixed text.
-pub(super) fn parse_log(text: &str) -> Vec<TransferIssue> {
-    text.lines()
-        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-        .map(|value| {
-            let field = |name: &str| value.get(name).and_then(|v| v.as_str()).map(str::to_string);
-            match (field("path"), field("message")) {
-                (Some(path), Some(message)) => TransferIssue { path, message },
-                _ => TransferIssue {
-                    path: String::new(),
-                    message: "details of a vault entry are sealed in the log".to_string(),
-                },
-            }
-        })
-        .collect()
 }

@@ -7,6 +7,9 @@ mod connections;
 mod desktop;
 mod doctor;
 mod drive;
+mod engine_copy;
+#[cfg(test)]
+mod engine_copy_tests;
 mod entry_kind;
 mod exec;
 mod exec_ssh;
@@ -156,7 +159,7 @@ enum Command {
     Put(CopyArgs),
     #[command(
         about = "Copy between local, saved, endpoint, or Share targets",
-        long_about = "Copy between local, saved, endpoint, or Share targets. A link named as source or destination is followed (directory links only on local paths); links and special files inside a copied directory are skipped and listed on stderr."
+        long_about = "Copy between local, saved, endpoint, or Share targets. A link named as source or destination is followed (directory links only on local paths); links and special files inside a copied directory are skipped and listed on stderr. `--stats` prints one stderr line with the rate and the resource that limited the copy."
     )]
     Cp(CopyArgs),
     #[command(
@@ -199,6 +202,8 @@ struct CopyArgs {
     recursive: bool,
     #[arg(short, long, help = "Allow overwriting an existing destination")]
     force: bool,
+    #[arg(long, help = "Print rate and limiting resource to stderr when done")]
+    stats: bool,
 }
 
 #[derive(Args)]
@@ -306,7 +311,7 @@ fn run_inner(cli: Cli) -> Result<i32, String> {
         Command::Get(args) | Command::Put(args) | Command::Cp(args) => {
             let src = target::resolve(&args.src)?;
             let dst = target::resolve(&args.dst)?;
-            ops::copy(&src, &dst, args.recursive, args.force)?;
+            ops::copy_with_stats(&src, &dst, args.recursive, args.force, args.stats)?;
             Ok(0)
         }
         Command::Mv(args) => {
