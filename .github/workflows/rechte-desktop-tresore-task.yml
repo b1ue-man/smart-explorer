@@ -32,11 +32,11 @@ on:
         required: true
         type: string
       speed_scope:
-        description: all = every measurement; local = only linux-speed-local measures, linux-speed-net and windows-speed report not run
+        description: all = every measurement; local = only linux-speed-local measures; none = no measurement (functional tests only), the speed jobs report not run
         required: false
         default: all
         type: choice
-        options: [all, local]
+        options: [all, local, none]
 
 permissions:
   contents: read
@@ -1221,7 +1221,7 @@ jobs:
     timeout-minutes: 300
     env:
       CANDIDATE_SHA: ${{ inputs.candidate_sha }}
-      RDT_SKIP_JOB_REASON: ${{ inputs.speed_scope == 'local' && 'Effizienzvergleiche fuer diesen Kandidaten ausgesetzt (Nutzerentscheidung 2026-10-21, nur Funktionstests und die lokale Messung)' || '' }}
+      RDT_SKIP_JOB_REASON: ${{ inputs.speed_scope != 'all' && 'Effizienzvergleiche fuer diesen Kandidaten ausgesetzt (Nutzerentscheidung 2026-10-21, Funktionstests ohne Messungen)' || '' }}
       CARGO_BUILD_JOBS: 2
       CARGO_INCREMENTAL: 0
       CARGO_PROFILE_DEV_DEBUG: 0
@@ -1307,6 +1307,7 @@ jobs:
     timeout-minutes: 120
     env:
       CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      RDT_SKIP_JOB_REASON: ${{ inputs.speed_scope == 'none' && 'Effizienzvergleiche fuer diesen Kandidaten ausgesetzt (Nutzerentscheidung 2026-10-21, Funktionstests ohne Messungen)' || '' }}
       CARGO_BUILD_JOBS: 2
       CARGO_INCREMENTAL: 0
       CARGO_PROFILE_DEV_DEBUG: 0
@@ -1384,7 +1385,7 @@ jobs:
     timeout-minutes: 120
     env:
       CANDIDATE_SHA: ${{ inputs.candidate_sha }}
-      RDT_SKIP_JOB_REASON: ${{ inputs.speed_scope == 'local' && 'Effizienzvergleiche fuer diesen Kandidaten ausgesetzt (Nutzerentscheidung 2026-10-21, nur Funktionstests und die lokale Messung)' || '' }}
+      RDT_SKIP_JOB_REASON: ${{ inputs.speed_scope != 'all' && 'Effizienzvergleiche fuer diesen Kandidaten ausgesetzt (Nutzerentscheidung 2026-10-21, Funktionstests ohne Messungen)' || '' }}
       CARGO_BUILD_JOBS: 2
       CARGO_INCREMENTAL: 0
       CARGO_PROFILE_DEV_DEBUG: 0
