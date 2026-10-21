@@ -1,6 +1,6 @@
 # Stand SEC (Sicherheitsagent)
 
-Stand: 2026-10-21 (Lauf 5: Punkt 14 E13-S14; Lauf 4 davor).
+Stand: 2026-10-21 (Punkt 15 E13-S15; davor Lauf 5 mit Punkt 14).
 
 - Committet sind Punkt 1–3, 1b, 4, 4b und 5 (df15feb5, e6b4c24a, 25e08110, e2233d85, c87bd083, 33744c73, 99cf1d63).
 - Punkt 6 (R15c) und Punkt 7 (U23) sind im Quelltext fertig, aber nicht gebaut, nicht getestet und nicht committet.
@@ -265,6 +265,54 @@ Grundlage: `native/src/smb/core/segmented_stage.rs` (Stand 611fb4c2), `stand/U48
 8. **Tests** (in-process mit dem SMB-Testserver der Suite): `speed_task_smb_segment_refuses_swapped_stage` (Stufe zwischen Erzeugen und Bereich gegen eine andere Datei getauscht → kein Byte in der anderen Datei, ein Strom), `speed_task_smb_segment_never_creates_missing_stage` (Stufe gelöscht → kein neuer Name bleibt zurück), `speed_task_smb_segment_without_file_id_streams`, `speed_task_smb_segments_end_to_end`.
 9. **Bericht:** Der Umsetzer nennt die smb2-Funktionen mit Datei und Zeile, die Kennung, Disposition bzw. `CreateAction` liefern. Fehlt eine davon, bleibt `SMB_SEGMENTED_WRITE = false`, und der Bericht nennt die fehlende Funktion.
 
+## Punkt 15: Antwort E13-S15 (mehrere SSH-Verbindungen je SFTP-Backend)
+
+Grundlage: Nachricht des Hauptagenten mit den Messwerten aus Suite-Lauf 2 (Strecke `fat`, 200 ms, 500 Mbit/s: ein TCP-Strom 10,5 MB/s, acht Ströme 40,8 MB/s, SFTP 8,5 MB/s), `festlegungen.md` Zeile 1929; Code gelesen: `sftp/core/{session_auth.rs:1–240, host_key_handler.rs:1–130, host_key_ops.rs:25–70, reconnect_gate.rs:1–25}`. Ersetzt in E13-S12 den Satz „SFTP-Bereiche öffnen nur Kanäle der einen Verbindung“ für SFTP; für FTP gilt Frage 5 unten.
+
+**Grundentscheidung: übernommen.** Ursache: Die Puffergrenze des Kernels gilt je TCP-Verbindung; Kanäle einer SSH-Verbindung teilen diese eine Verbindung, mehr Kanäle helfen auf langen Strecken nicht. Mehrere Verbindungen sind der einzige Weg zur geforderten Kapazität (rclone, lftp `pget -n`, aria2 `-x` arbeiten ebenso).
+
+### Frage 1: Bedingungen (i) bis (vi)
+
+**(i) Anmeldung ohne Nutzer: geändert.**
+- Erlaubt: (a) gespeichertes Passwort aus dem versiegelten Speicher über `password`, und über `keyboard-interactive` nur mit den Regeln aus `session_auth.rs` (genau eine verdeckte Passwortabfrage, sichtbare oder fremde Abfragen werden abgelehnt, feste Rundenzahl). Ursache: Server mit `PasswordAuthentication no` und PAM melden sich nur so an, ohne Nutzer. Eine OTP- oder zweite Abfrage führt zur Ablehnung und damit zu (iii). (b) Schlüsseldatei, deren entschlüsseltes Schlüsselmaterial das Backend aus der Hauptanmeldung im Speicher hält (`Zeroizing`); keine erneute Passphrase-Abfrage, kein erneutes Lesen einer Passphrase vom Nutzer.
+- Nur, wenn die Hauptverbindung genau mit dieser Methode und denselben Zugangsdaten ohne Nutzereingabe angemeldet wurde. Hat der Nutzer bei der Hauptanmeldung etwas eingegeben (Passwort ohne Speichern, Passphrase, OTP), gibt es keine Zusatzverbindungen.
+- Das Passwort wird je Anmeldung aus dem versiegelten Speicher gelesen und nach der Anmeldung verworfen; keine Klartextkopie im Pool.
+
+**(ii) Host-Schlüssel: geändert (siehe Frage 4).** Jede Zusatzverbindung durchläuft die normale Prüfung gegen den Vertrauensspeicher im Modus `Verify` (kein Anheften, keine Rückfrage, kein Vertrauen beim ersten Kontakt) **und** muss denselben Algorithmus und Fingerabdruck zeigen wie die Hauptverbindung. Scheitert eins von beiden, wird vor der Anmeldung geschlossen und für diesen Host (iii) gesperrt.
+
+**(iii) Fehler: geändert (Geltungsbereich).** Jede Ablehnung, Zeitüberschreitung, Anmeldeablehnung oder ein Abbruch vor der fertigen Anmeldung sperrt Zusatzverbindungen für 15 Minuten für **Host, Port und Benutzer im ganzen Prozess**, nicht nur für dieses Backend. Ursache: fail2ban und Anmelderaten zählen je Quell-IP und Konto, nicht je Backend-Objekt. Ein Abbruch einer bereits angemeldeten, arbeitenden Zusatzverbindung (z. B. Netzausfall) sperrt nicht, sie wird nur nicht ersetzt, bis ihr Bereich über die Hauptverbindung oder eine andere Zusatzverbindung neu läuft. Keine Wiederholungsschleife.
+
+**(iv) Anzahl und Lebensdauer: geändert.**
+- Keine feste Zahl 8. Ursache: Die Messung zeigt, dass acht Ströme auf `fat` erst 0,65 der Kapazität erreichen; eine feste 8 hätte keine technische Ursache und würde das Ziel verfehlen.
+- Grenzen mit Ursache: (1) Öffnen nur einzeln und nur, solange die vorige Zusatzverbindung den Durchsatz um mindestens 10 % erhöht hat (Regel des Reglers U50); bleibt der Zuwachs aus, wird keine weitere geöffnet, und die zuletzt geöffnete schließt nach 60 s Leerlauf. (2) Speicherbudget von U50: jede Verbindung kostet ihre Fenster und Puffer. (3) Höchstens **eine** unangemeldete Verbindung gleichzeitig je Host und Port im Prozess. Ursache: `MaxStartups` (Vorgabe 10:30:100) verwirft ab 10 gleichzeitigen unangemeldeten Verbindungen des ganzen Servers zufällig.
+- Lebensdauer: Schließen nach 60 s ohne Übertragung und mit dem Backend.
+
+**(v) S7, S13, S14: geändert.** S7 und S13 gelten je Verbindung (`open-handles` gilt je `sftp-server`-Prozess, also je Verbindung). Das Ergebnis der S7-Ordnerkette darf zwischen den Verbindungen eines Backends geteilt werden, weil es eine Tatsache des Servers für dasselbe Konto ist. S14 gilt nicht: es betrifft SMB.
+
+**(vi) Nur Übertragungs-Engine: übernommen, ergänzt.** Zusatzverbindungen öffnen nur das Subsystem `sftp`: kein `exec`, keine Shell, kein PTY, keine Port- oder Agent-Weiterleitung. Listing, Metadaten, Exec, Terminal und der SSH-Agent-Bündelweg bleiben auf der Hauptverbindung.
+
+### Frage 2: SSH-Agent: ganz ausschließen.
+Ursache: Ein Client kann nicht prüfen, ob ein Agent-Schlüssel eine Bestätigung je Signatur verlangt (`ssh-add -c`); FIDO-/sk-Schlüssel verlangen eine Berührung je Anmeldung. Eine stille Folge von Bestätigungsabfragen gewöhnt den Nutzer an blindes Bestätigen. Eine prüfbare Bedingung gibt es dafür nicht. Hat sich die Hauptverbindung über den Agent angemeldet, gibt es keine Zusatzverbindungen; die Datei läuft über Kanäle der einen Verbindung.
+
+### Frage 3: Sichtbarkeit: ja, im Verbindungsprotokoll und in der Übertragungsanzeige, ohne Rückfrage.
+- Protokoll: jede Zusatzanmeldung, ihr Schließen und jede Sperre nach (iii) mit Zeit, Host, Port, Benutzer, Anmeldemethode, Anzahl offener Verbindungen und Grund; nie Passwort, Passphrase oder Schlüsselmaterial.
+- Übertragungsanzeige (U50/U54, Engpassanzeige; auch MCP-Fortschritt): „<n> Verbindungen zu <Host>“; bei einer Sperre „Weitere Verbindungen zu <Host> 15 Minuten gesperrt: <Grund>“.
+- Keine Rückfrage, keine Einstellung. Ursache: Der Server sieht jede Anmeldung ohnehin in seinem Anmeldeprotokoll; der Nutzer muss erkennen können, warum ein Server se meldet oder sperrt.
+
+### Frage 4: Host-Schlüssel: beides.
+Der Vergleich mit der Hauptverbindung allein reicht nicht: Zwischen Haupt- und Zusatzanmeldung kann der Schlüssel im Vertrauensspeicher widerrufen oder ersetzt worden sein, und ein widerrufener Schlüssel darf nie angenommen werden (`host_key_handler.rs`). Die Prüfung gegen den Speicher kostet keine Rundreise. Daher (ii): Prüfung im Modus `Verify` **und** Gleichheit mit der Hauptverbindung; nie `Trust`, nie `Probe`.
+
+### Frage 5: FTP und Share/QUIC: getrennt entschieden.
+
+**FTP: übernommen für FTPS, abgelehnt für FTP ohne TLS.**
+- Ohne TLS sendet jede zusätzliche Anmeldung das Passwort erneut im Klartext; das bleibt ausgeschlossen (E13-S12 unverändert: keine neue Anmeldung).
+- Mit FTPS (explizit oder implizit) gelten (i) mit gespeichertem Passwort, (iii) mit 421/530 als Ablehnung (15 Minuten je Host, Port, Benutzer im Prozess), (iv) einzeln mit 10-%-Regel, Speicherbudget und einer unangemeldeten Verbindung zugleich, Sichtbarkeit wie Frage 3. Statt des Host-Schlüssels muss jede Zusatzverbindung dieselbe Zertifikatsprüfung wie die Hauptverbindung bestehen **und** dasselbe Serverzertifikat (SHA-256 des Endzertifikats) zeigen.
+- Zusatzverbindungen nur für Datenbereiche der Engine; Listing und Metadaten bleiben auf der Hauptverbindung.
+
+**Share/QUIC: abgelehnt.**
+- Ursache: Die Grenze, die SFTP bremst, gilt für QUIC nicht in derselben Form. Eine QUIC-Verbindung hat eigene Fenster (16 MiB je Strom, 64 MiB je Verbindung, `keepalive.rs`); 64 MiB bei 200 ms erlauben etwa 335 MB/s, mehr als die 62,5 MB/s der Strecke `fat`. Die Ströme einer Verbindung nutzen das schon. Mehrere QUIC-Verbindungen zum selben Gerät würden die Überlastregelung umgehen (unfair gegenüber anderem Verkehr) und die Zulassung des Wirts (`admission` je Verbindung) vervielfachen.
+- Bleibt Share auf `fat` unter 0,90, ist zuerst der Regler (E13-S5, `bbr3`) und die Messung der Fenster zu prüfen; mehrere Verbindungen nur nach einer neuen Sicherheitsfrage mit Messwerten.
+
 ## Nächster Schritt
 
-Kurzbericht zu Punkt 14; danach auf den nächsten Auftrag warten.
+Kurzbericht zu Punkt 15; danach auf den nächsten Auftrag warten.
