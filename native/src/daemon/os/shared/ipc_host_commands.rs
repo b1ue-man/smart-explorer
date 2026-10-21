@@ -96,11 +96,17 @@ impl ShareHost {
     }
 
     fn snapshot(&self, drain: bool) -> ShareWorkerSnapshot {
-        let should_reload = self
-            .state
-            .lock()
-            .map(|state| state.last_reload.elapsed() >= Duration::from_secs(5))
-            .unwrap_or(false);
+        // A worker started only for the drive restore (V11) never starts the
+        // Share host for a read: the read-only snapshot of se Desktop
+        // (`ShareSnapshotPeek`) is the one request that reaches it still
+        // restricted, and its `last_reload` is the start value of a worker
+        // that has not loaded Share yet.
+        let should_reload = super::drive_modules::run_start_reason::share_allowed()
+            && self
+                .state
+                .lock()
+                .map(|state| state.last_reload.elapsed() >= Duration::from_secs(5))
+                .unwrap_or(false);
         if should_reload {
             if let Err(error) = self.reload_now() {
                 if let Ok(mut state) = self.state.lock() {
