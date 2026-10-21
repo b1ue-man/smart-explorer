@@ -137,14 +137,14 @@ class DriveTaskProviderTest {
         val provider = provider()
         val parent = "gdrive/Ordner"
         fake.listing = DocsChildren(loading = true)
-        provider.queryChildDocuments(parent, null, null).use { cursor ->
+        provider.queryChildDocuments(parent, null, null as String?).use { cursor ->
             assertTrue(cursor.extras.getBoolean(DocumentsContract.EXTRA_LOADING))
             assertEquals(DocumentsContract.buildChildDocumentsUri(DocumentIds.authority(context), parent), cursor.notificationUri)
         }
         fake.listing = DocsChildren(children = listOf(DocsItem("$parent/a.txt", "a.txt", size = 3)))
         provider.onDocsChanged(context, DocsChanged(roots = false, documents = listOf(parent), commitFailed = false))
         assertTrue(DocumentsContract.buildChildDocumentsUri(DocumentIds.authority(context), parent) in notified())
-        provider.queryChildDocuments(parent, null, null).use { cursor ->
+        provider.queryChildDocuments(parent, null, null as String?).use { cursor ->
             assertFalse(cursor.extras.getBoolean(DocumentsContract.EXTRA_LOADING))
             assertEquals(1, cursor.count)
         }
@@ -154,7 +154,7 @@ class DriveTaskProviderTest {
     fun drive_task_android_offline_device_extra_error() {
         val provider = provider()
         fake.listing = DocsChildren(error = "Gerät nicht erreichbar")
-        provider.queryChildDocuments(DEVICE, null, null).use { cursor ->
+        provider.queryChildDocuments(DEVICE, null, null as String?).use { cursor ->
             assertEquals("Gerät nicht erreichbar", cursor.extras.getString(DocumentsContract.EXTRA_ERROR))
             assertEquals(0, cursor.count)
         }
@@ -197,9 +197,9 @@ class DriveTaskProviderTest {
     fun drive_task_android_ids_stable_after_device_rename() {
         val provider = provider()
         fake.listing = DocsChildren(children = listOf(DocsItem(DEVICE, "Laptop", dir = true)))
-        val before = provider.queryChildDocuments("devices", null, null).use { it.moveToFirst(); it.getString(0) }
+        val before = provider.queryChildDocuments("devices", null, null as String?).use { it.moveToFirst(); it.getString(0) }
         fake.listing = DocsChildren(children = listOf(DocsItem(DEVICE, "Laptop von Anna", dir = true)))
-        val (after, name) = provider.queryChildDocuments("devices", null, null).use {
+        val (after, name) = provider.queryChildDocuments("devices", null, null as String?).use {
             it.moveToFirst()
             it.getString(0) to it.getString(it.getColumnIndexOrThrow(Document.COLUMN_DISPLAY_NAME))
         }

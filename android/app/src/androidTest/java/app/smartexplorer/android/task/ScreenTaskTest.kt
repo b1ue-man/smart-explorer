@@ -251,7 +251,7 @@ class ScreenTaskTest {
         val bitmap = Bitmap.createBitmap(plane.rowStride / plane.pixelStride, height, Bitmap.Config.ARGB_8888)
         bitmap.copyPixelsFromBuffer(plane.buffer)
         image.close()
-        display.release()
+        display?.release()
         running.stop()
         reader.close()
         ScreenHostControl.probe = null
@@ -515,7 +515,7 @@ class ScreenTaskTest {
         override fun offers() = listOf(DecoderOffer(codec = "tiles"))
 
         override fun pictures(session: Long) = PictureSource { _, timeoutMs ->
-            SystemClock.sleep(minOf(timeoutMs, 50))
+            SystemClock.sleep(minOf(timeoutMs, 50).toLong())
             -1
         }
 
