@@ -8,6 +8,7 @@
 //! (`Connection::credit_capacity_for`); READs beyond that would only wait
 //! for credits. The size seen at open bounds the READs; a short answer means
 //! the file shrank since, so the stream ends there instead of skipping bytes.
+//! A range (`end`) is read the same way: the READs stay within `[start, end)`.
 use super::errors;
 use super::session::Generation;
 use crate::transfer::read_pipeline::Pipeline;
@@ -34,6 +35,18 @@ struct InflightRead {
     task: ReadTask,
 }
 
+/// The length the READs are bounded by: the size seen at open, cut at the end
+/// of a range.
+pub(super) fn bounded_size(file_size: u64, end: Option<u64>) -> u64 {
+    end.map_or(file_size, |end| end.min(file_size))
+}
+
+/// The next READ from `next` for a file bounded at `size`: at most `chunk`
+/// bytes, never beyond `size`; `None` once everything is asked for.
+pub(super) fn next_read(next: u64, size: u64, chunk: u64) -> Option<(u64, u64)> {
+    (next < size).then(|| (next, chunk.min(size - next)))
+}
+
 pub(super) struct SmbReader {
     reader: Option<Arc<FileReader>>,
     size: u64,
@@ -52,10 +65,12 @@ pub(super) struct SmbReader {
 }
 
 impl SmbReader {
-    /// A reader from byte `start` (a resumed download starts mid-file).
+    /// A reader from byte `start` (a resumed download starts mid-file) up to
+    /// `end` (a range; `None`: the whole rest of the file).
     pub(super) fn new(
         reader: FileReader,
         start: u64,
+        end: Option<u64>,
         path: &str,
         generation: Arc<Generation>,
         rt: Arc<Runtime>,
@@ -68,7 +83,7 @@ impl SmbReader {
         let chunk = u64::from(READ_CHUNK.min(max_read));
         let cap = conn.credit_capacity_for(chunk);
         Self {
-            size: reader.size(),
+            size: bounded_size(reader.size(), end),
             reader: Some(Arc::new(reader)),
             next: start,
             chunk,
@@ -88,9 +103,10 @@ impl SmbReader {
         let Some(reader) = self.reader.clone() else {
             return;
         };
-        while !self.ended && self.next < self.size && self.inflight.len() < self.pipeline.depth() {
-            let offset = self.next;
-            let len = self.chunk.min(self.size - offset);
+        while !self.ended && self.inflight.len() < self.pipeline.depth() {
+            let Some((offset, len)) = next_read(self.next, self.size, self.chunk) else {
+                break;
+            };
             let reader = reader.clone();
             let task = self.rt.spawn(async move {
                 let result = reader.read_at(offset, len).await;

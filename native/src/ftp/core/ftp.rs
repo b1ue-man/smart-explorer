@@ -25,7 +25,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::connection::{connect_stream, parse_ftp_url, refusal_code};
 use super::io_adapters::{FtpConnection, FtpReconnect};
-use super::pool::{FtpPool, Leased};
+use super::pool::{pool_full, FtpPool, Leased};
+use super::streams::{range_refused, BoundedFtpReader};
 use super::writer::FtpWriter;
 use suppaftp::list::ListParser;
 use suppaftp::FtpError;
@@ -269,6 +270,47 @@ impl Backend for FtpBackend {
             .open_reader_at(path, offset)
             .map_err(transfer_err)?;
         Ok(reader.map(|reader| Box::new(Leased::new(reader, lease)) as Box<dyn Read + Send>))
+    }
+
+    /// Ranges need two connections that are logged in and free (never a new
+    /// login for a range, security answer S12) and a server that has not
+    /// turned one down lately.
+    fn supports_range_reads(&self, path: &str) -> bool {
+        let _ = path;
+        self.pool.ranges_ready()
+    }
+
+    /// REST + RETR of `len` bytes on a free pooled connection, cut with ABOR
+    /// after them. `None`: the server has no REST, or it answered 421 or 530
+    /// (the file then goes as one stream, and ranges stay off for 15 minutes).
+    /// A connection that is no longer free is the pool's congestion: the
+    /// file waits, then decides again.
+    fn open_read_range(
+        &self,
+        path: &str,
+        id: Option<&str>,
+        offset: u64,
+        len: u64,
+    ) -> VfsResult<Option<Box<dyn Read + Send>>> {
+        let _ = id;
+        if len == 0 {
+            return Ok(Some(Box::new(io::empty())));
+        }
+        let Some(lease) = self.pool.lease_idle() else {
+            return Err(pool_full());
+        };
+        match lease.connection().open_reader_range(path, offset) {
+            Ok(Some(reader)) => Ok(Some(Box::new(Leased::new(
+                BoundedFtpReader::new(reader, len),
+                lease,
+            )))),
+            Ok(None) => Ok(None),
+            Err(error) if range_refused(&error) => {
+                self.pool.refuse_ranges();
+                Ok(None)
+            }
+            Err(error) => Err(transfer_err(error)),
+        }
     }
 
     fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {

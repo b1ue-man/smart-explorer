@@ -35,6 +35,8 @@ mod listing;
 mod reader;
 #[path = "core/replace.rs"]
 mod replace;
+#[path = "core/segmented_stage.rs"]
+mod segmented_stage;
 #[path = "core/server_copy.rs"]
 mod server_copy;
 #[path = "core/session.rs"]
@@ -59,6 +61,9 @@ mod batch_tests;
 #[cfg(test)]
 #[path = "core/delete_speed_task_tests.rs"]
 mod delete_speed_task_tests;
+#[cfg(test)]
+#[path = "core/range_tests.rs"]
+mod range_tests;
 #[cfg(test)]
 #[path = "core/server_copy_task_tests.rs"]
 mod server_copy_task_tests;

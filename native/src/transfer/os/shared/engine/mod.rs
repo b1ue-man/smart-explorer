@@ -35,8 +35,12 @@ mod remote_copy;
 mod roots;
 #[path = "segments.rs"]
 mod segments;
+#[path = "segments_copy.rs"]
+mod segments_copy;
 #[path = "segments_download.rs"]
 mod segments_download;
+#[path = "segments_upload.rs"]
+mod segments_upload;
 #[path = "source.rs"]
 mod source;
 #[path = "stats.rs"]
@@ -445,6 +449,9 @@ fn gate_root(items: &JobItems) -> String {
 #[cfg(test)]
 #[path = "segments_tests.rs"]
 mod segments_tests;
+#[cfg(test)]
+#[path = "segments_upload_tests.rs"]
+mod segments_upload_tests;
 #[cfg(test)]
 #[path = "test_backend.rs"]
 mod test_backend;

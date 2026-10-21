@@ -11,6 +11,7 @@ use super::channel_pool::{note_failure, open_failed, ChannelLease, PoolChannel};
 use super::connection::SftpConnection;
 use super::io_adapters::Commit;
 use super::io_err;
+use super::segmented_stage::HandleCheck;
 use super::session::SSH_WINDOW;
 use crate::transfer::read_pipeline::Pipeline;
 use russh_sftp::client::error::Error as SftpError;
@@ -284,6 +285,23 @@ impl SftpBackend {
         expected: Option<u64>,
         commit: Commit,
     ) -> io::Result<Option<PoolWriter>> {
+        self.open_pool_writer_at(path, flags, 0, expected, commit, None)
+    }
+
+    /// Like `open_pool_writer`, but the first WRITE goes to byte `offset`:
+    /// one range of a file several writers fill (`segmented_stage.rs`). The
+    /// flags then name neither `CREATE` nor `TRUNCATE`. With a `check` the
+    /// handle is looked at with `fstat` before anything is written to it; a
+    /// file that fails it is closed untouched.
+    pub(super) fn open_pool_writer_at(
+        &self,
+        path: &str,
+        flags: OpenFlags,
+        offset: u64,
+        expected: Option<u64>,
+        commit: Commit,
+        check: Option<HandleCheck>,
+    ) -> io::Result<Option<PoolWriter>> {
         let Some(lease) = self.pool.lease(self)? else {
             return Ok(None);
         };
@@ -298,6 +316,24 @@ impl SftpBackend {
                 return Err(open_failed(error));
             }
         };
+        if let Some(check) = check {
+            let attrs = self.rt.block_on(channel.session.fstat(handle.clone()));
+            let verdict = match attrs {
+                Ok(attrs) => check.verify(&attrs.attrs),
+                Err(error) => {
+                    note_failure(&self.connection, &channel, &error);
+                    Err(io_err(error))
+                }
+            };
+            if let Err(error) = verdict {
+                let session = channel.session.clone();
+                let closing = handle.clone();
+                drop(self.rt.spawn(async move {
+                    let _ = session.close(closing).await;
+                }));
+                return Err(error);
+            }
+        }
         let chunk = channel.write_chunk(handle.len());
         let cap = usize::try_from(u64::from(SSH_WINDOW) / chunk.max(1) as u64)
             .unwrap_or(usize::MAX)
@@ -311,7 +347,7 @@ impl SftpBackend {
             handle_open: true,
             chunk,
             buffer: Vec::with_capacity(chunk),
-            offset: 0,
+            offset,
             inflight: VecDeque::new(),
             pipeline: Pipeline::new(chunk as u64, cap),
             expected,

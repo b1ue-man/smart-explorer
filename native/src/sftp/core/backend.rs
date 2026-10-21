@@ -11,8 +11,10 @@ use crate::vfs::{
 };
 use russh_sftp::client::error::Error as SftpError;
 use russh_sftp::protocol::OpenFlags;
+use std::collections::HashMap;
 use std::io::{self, Read, Write};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use tokio::runtime::Runtime;
 
 #[derive(Clone)]
@@ -21,6 +23,8 @@ pub struct SftpBackend {
     pub(super) connection: Arc<SftpConnection>,
     /// Extra SFTP channels for file transfers (channel_pool.rs).
     pub(super) pool: Arc<ChannelPool>,
+    /// Verdicts on the folder chain of stages for ranges (segmented_stage.rs).
+    pub(super) stage_folders: Arc<Mutex<HashMap<String, (bool, Instant)>>>,
     root: String,
     /// Read by `url()` (UI display), consumed in the connect-UI step.
     #[allow(dead_code)]
@@ -37,6 +41,7 @@ impl SftpBackend {
             rt,
             connection,
             pool: Arc::new(ChannelPool::default()),
+            stage_folders: Arc::new(Mutex::new(HashMap::new())),
             root,
             url,
         })
@@ -263,6 +268,39 @@ impl Backend for SftpBackend {
     ) -> VfsResult<Option<Box<dyn Read + Send>>> {
         let _ = id;
         self.reader(path, offset).map(Some)
+    }
+
+    /// Ranges of one file go over several pool channels, each with its own
+    /// server window; true while the pool can hand out a channel.
+    fn supports_range_reads(&self, path: &str) -> bool {
+        let _ = path;
+        self.pool.available(self)
+    }
+
+    /// `[offset, offset + len)` on a pool channel of its own. No fallback to
+    /// the main session: several ranges must not share the one session.
+    fn open_read_range(
+        &self,
+        path: &str,
+        id: Option<&str>,
+        offset: u64,
+        len: u64,
+    ) -> VfsResult<Option<Box<dyn Read + Send>>> {
+        let _ = id;
+        Ok(self
+            .open_pool_reader_range(path, offset, len)?
+            .map(|reader| Box::new(reader) as Box<dyn Read + Send>))
+    }
+
+    /// Ranges of an upload over several pool channels, only where the
+    /// folders of the stage cannot be swapped by another account (security
+    /// answer S7, segmented_stage.rs).
+    fn open_segmented_stage(
+        &self,
+        stage: &str,
+        size: u64,
+    ) -> VfsResult<Option<Box<dyn crate::vfs::SegmentedStage>>> {
+        self.segmented_stage(stage, size)
     }
 
     fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {

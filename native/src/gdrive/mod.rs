@@ -98,6 +98,9 @@ mod trash;
 #[path = "core/mutation_reconcile_tests.rs"]
 mod mutation_reconcile_tests;
 #[cfg(test)]
+#[path = "core/range_tests.rs"]
+mod range_tests;
+#[cfg(test)]
 #[path = "core/read_retry_tests.rs"]
 mod read_retry_tests;
 #[cfg(test)]

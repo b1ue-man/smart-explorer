@@ -93,7 +93,7 @@ impl WebdavBackend {
         if offset == 0 {
             return self.open_read(path).map(Some);
         }
-        let response = self.get_from(path, offset)?;
+        let response = self.get_range(path, offset, None)?;
         let starts_at = if response.status() == 206 {
             response.header("Content-Range").and_then(range_start)
         } else {
@@ -103,6 +103,46 @@ impl WebdavBackend {
             return Ok(None);
         }
         Ok(Some(Box::new(response.into_reader())))
+    }
+
+    /// Exactly `[offset, offset + len)` by `Range: bytes=a-b`. `Ok(None)`: the
+    /// server ignores `Range` (200, the whole file; the connection is not
+    /// reused because the body is not read). A 416 or a `Content-Range`
+    /// that does not start at `offset` is `InvalidData`: the bytes would be
+    /// the wrong ones.
+    pub(super) fn read_range(
+        &self,
+        path: &str,
+        offset: u64,
+        len: u64,
+    ) -> VfsResult<Option<Box<dyn Read + Send>>> {
+        if len == 0 {
+            return Ok(Some(Box::new(io::empty())));
+        }
+        let response = self.get_range(path, offset, Some(len))?;
+        match response.status() {
+            200 => return Ok(None),
+            206 => {}
+            other => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("WebDAV GET mit Range: unerwarteter HTTP-Status {other}"),
+                ))
+            }
+        }
+        match response.header("Content-Range").and_then(range_start) {
+            Some(start) if start == offset => {}
+            other => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "WebDAV GET mit Range: Antwort beginnt bei {other:?} statt bei {offset}"
+                    ),
+                ))
+            }
+        }
+        // A server that sends more than asked is cut at `len`.
+        Ok(Some(Box::new(response.into_reader().take(len))))
     }
 
     /// The streaming PUT of a sized stage; an empty one goes over the

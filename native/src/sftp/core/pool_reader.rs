@@ -81,6 +81,8 @@ pub(super) struct PoolReader {
     backend: SftpBackend,
     path: String,
     start: u64,
+    /// Absolute end of a range read (`None`: to the end of the file).
+    end: Option<u64>,
     inner: PipelinedRead<ChannelFile>,
     retried: bool,
 }
@@ -96,7 +98,10 @@ impl Read for PoolReader {
                 return Err(error);
             }
             self.retried = true;
-            match self.backend.open_pipelined(&self.path, self.start)? {
+            match self
+                .backend
+                .open_pipelined(&self.path, self.start, self.end)?
+            {
                 Some(inner) => self.inner = inner,
                 None => return Err(error),
             }
@@ -119,13 +124,36 @@ impl SftpBackend {
         path: &str,
         offset: u64,
     ) -> io::Result<Option<PoolReader>> {
-        let Some(inner) = self.open_pipelined(path, offset)? else {
+        self.open_pool_reader_until(path, offset, None)
+    }
+
+    /// A pipelined read of exactly `[offset, offset + len)` (fewer only at
+    /// the end of the file) on its own pool channel; `None` when no pool
+    /// channel is available. The main session is no fallback: several
+    /// ranges must not share the one session.
+    pub(super) fn open_pool_reader_range(
+        &self,
+        path: &str,
+        offset: u64,
+        len: u64,
+    ) -> io::Result<Option<PoolReader>> {
+        self.open_pool_reader_until(path, offset, Some(offset.saturating_add(len)))
+    }
+
+    fn open_pool_reader_until(
+        &self,
+        path: &str,
+        offset: u64,
+        end: Option<u64>,
+    ) -> io::Result<Option<PoolReader>> {
+        let Some(inner) = self.open_pipelined(path, offset, end)? else {
             return Ok(None);
         };
         Ok(Some(PoolReader {
             backend: self.clone(),
             path: path.to_string(),
             start: offset,
+            end,
             inner,
             retried: false,
         }))
@@ -135,6 +163,7 @@ impl SftpBackend {
         &self,
         path: &str,
         offset: u64,
+        end: Option<u64>,
     ) -> io::Result<Option<PipelinedRead<ChannelFile>>> {
         let mut retried = false;
         loop {
@@ -169,7 +198,11 @@ impl SftpBackend {
                 handle,
                 retry_safe: false,
             };
-            return Ok(Some(PipelinedRead::new(source, offset, chunk, pipeline)));
+            let read = PipelinedRead::new(source, offset, chunk, pipeline);
+            return Ok(Some(match end {
+                Some(end) => read.with_end(end),
+                None => read,
+            }));
         }
     }
 }

@@ -34,13 +34,32 @@ impl FtpConnection {
         path: &str,
         offset: u64,
     ) -> io::Result<Option<FtpReader>> {
+        self.open_reader_from(path, offset, true)
+    }
+
+    /// `open_reader_at` for one range: a start that fails is never repeated
+    /// on a new login (ranges never log in; answer to the question S12).
+    pub(super) fn open_reader_range(
+        self: &Arc<Self>,
+        path: &str,
+        offset: u64,
+    ) -> io::Result<Option<FtpReader>> {
+        self.open_reader_from(path, offset, false)
+    }
+
+    fn open_reader_from(
+        self: &Arc<Self>,
+        path: &str,
+        offset: u64,
+        replay: bool,
+    ) -> io::Result<Option<FtpReader>> {
         super::errors::command_path(path)?;
         let rest = match (offset, usize::try_from(offset)) {
             (0, _) => None,
             (_, Ok(rest)) => Some(rest),
             (_, Err(_)) => return Ok(None),
         };
-        let (control, data) = self.checkout(true, |stream| {
+        let (control, data) = self.checkout(replay, |stream| {
             if let Some(rest) = rest {
                 match stream.resume_transfer(rest) {
                     Ok(()) => {}
@@ -105,6 +124,18 @@ impl FtpConnection {
             state: StoreState::Open,
         })
     }
+}
+
+/// Whether `error` is the server turning a transfer down with 421 (service
+/// not available) or 530 (not logged in): the answer to a range that ends
+/// ranges on this connection for a while.
+pub(super) fn range_refused(error: &io::Error) -> bool {
+    super::connection::refusal_code(error).is_some()
+        || error
+            .get_ref()
+            .and_then(|source| source.downcast_ref::<FtpError>())
+            .and_then(super::errors::reply_code)
+            .is_some_and(|code| matches!(code, 421 | 530))
 }
 
 /// A STOR whose `150` never came because the data connection or the answer
@@ -184,6 +215,68 @@ impl Read for FtpReader {
             Err(error) => {
                 let _ = self.close(false);
                 Err(error)
+            }
+        }
+    }
+}
+
+/// `len` bytes of a RETR that goes on beyond them: after the last byte the
+/// transfer is cut with ABOR (the connection is handed back only when it is
+/// in step again, `abort`). When the file ends exactly there, the transfer
+/// is finished normally instead. The reader reports 0 after `len` bytes, or
+/// earlier at the end of the file.
+pub(super) struct BoundedFtpReader {
+    inner: FtpReader,
+    remaining: u64,
+    ended: bool,
+}
+
+impl BoundedFtpReader {
+    pub(super) fn new(inner: FtpReader, len: u64) -> Self {
+        Self {
+            inner,
+            remaining: len,
+            ended: false,
+        }
+    }
+
+    /// The range is read: one more byte tells whether the file goes on.
+    fn end_of_range(&mut self) -> io::Result<usize> {
+        if self.ended {
+            return Ok(0);
+        }
+        self.ended = true;
+        let mut probe = [0u8; 1];
+        match self.inner.read(&mut probe) {
+            // The transfer ended with the range and was finished normally.
+            Ok(0) => Ok(0),
+            // More follows: cut the transfer here.
+            Ok(_) => self.inner.close(false).map(|()| 0),
+            Err(error) => Err(error),
+        }
+    }
+}
+
+impl Read for BoundedFtpReader {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if buffer.is_empty() {
+            return Ok(0);
+        }
+        if self.remaining == 0 {
+            return self.end_of_range();
+        }
+        let wanted =
+            usize::try_from(self.remaining).map_or(buffer.len(), |left| left.min(buffer.len()));
+        match self.inner.read(&mut buffer[..wanted])? {
+            0 => {
+                // The file ended inside the range.
+                self.remaining = 0;
+                self.ended = true;
+                Ok(0)
+            }
+            read => {
+                self.remaining -= read as u64;
+                Ok(read)
             }
         }
     }

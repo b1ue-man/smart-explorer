@@ -35,6 +35,9 @@ mod luecken_task_ftp_fixture;
 #[path = "core/luecken_task_ftp_tests.rs"]
 mod luecken_task_ftp_tests;
 #[cfg(test)]
+#[path = "core/range_tests.rs"]
+mod range_tests;
+#[cfg(test)]
 #[path = "core/transfer_engine_task_tests.rs"]
 mod transfer_engine_task_tests;
 

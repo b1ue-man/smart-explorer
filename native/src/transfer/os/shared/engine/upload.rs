@@ -24,6 +24,12 @@ pub(super) fn upload(
             return Ok(outcome);
         }
     }
+    // A target with a segmented stage takes a large file in parts.
+    if let Some(outcome) =
+        super::segments_upload::try_split(engine, target, file, &source, meter, buffer)?
+    {
+        return Ok(outcome);
+    }
     let mut destination = publish::open(engine, target, file, Some(size), parent_created)?;
     let mut copied = 0u64;
     loop {

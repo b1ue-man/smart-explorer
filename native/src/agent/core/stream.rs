@@ -189,8 +189,19 @@ impl AgentBackend {
         path: &str,
         offset: u64,
     ) -> io::Result<Box<dyn Read + Send>> {
+        self.agent_open_read_len(path, offset, 0)
+    }
+
+    /// The same for `[offset, offset + len)`: the agent sends `len` bytes
+    /// (fewer only at the end of the file); `len` 0 means to the end.
+    pub(super) fn agent_open_read_len(
+        &self,
+        path: &str,
+        offset: u64,
+        len: u64,
+    ) -> io::Result<Box<dyn Read + Send>> {
         let lease = self.pool.lease();
-        let opened = lease.retry_safe(|mux| open_read_once(mux, path, offset))?;
+        let opened = lease.retry_safe(|mux| open_read_once(mux, path, offset, len))?;
         let (buf, done) = match opened.first {
             Frame::Data(d) if d.len() <= CHUNK => (d, false),
             Frame::End => (Vec::new(), true),
@@ -282,14 +293,14 @@ struct ReadOpening {
     first: Frame,
 }
 
-fn open_read_once(mux: &Arc<Mux>, path: &str, offset: u64) -> io::Result<ReadOpening> {
+fn open_read_once(mux: &Arc<Mux>, path: &str, offset: u64, len: u64) -> io::Result<ReadOpening> {
     let (id, rx) = mux.register();
     if let Err(error) = mux.send(
         id,
         Frame::Read {
             path: path.to_string(),
             offset,
-            len: 0,
+            len,
         },
     ) {
         mux.unregister(id);

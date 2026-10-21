@@ -24,7 +24,11 @@
 //! main session, which also serves transfers when no extra channel opens.
 //! Copies inside one server run on the server (`copy-data`, copy_data.rs).
 //! Many small files move as packets on one pool channel, their requests
-//! overlapping (batch_ops.rs, batch_put.rs, batch_get.rs).
+//! overlapping (batch_ops.rs, batch_put.rs, batch_get.rs). A large file is
+//! read in ranges, each over a pool channel of its own with its own server
+//! window (pipelined_read.rs `with_end`); a large upload is written in ranges
+//! only where no other account can swap an entry of the stage's folders
+//! (security answer S7, segmented_stage.rs).
 //! A folder is deleted with one READDIR per folder and many REMOVEs in
 //! flight on the main session (tree_remove.rs).
 //! An interactive terminal (pty-req, then shell or exec) opens as one more
@@ -74,6 +78,8 @@ mod pool_writer;
 mod posix_rename;
 #[path = "core/reversible_replace.rs"]
 mod reversible_replace;
+#[path = "core/segmented_stage.rs"]
+mod segmented_stage;
 #[path = "core/session.rs"]
 mod session;
 #[cfg(unix)]
@@ -101,8 +107,14 @@ mod batch_tests;
 #[path = "core/delete_speed_task_tests.rs"]
 mod delete_speed_task_tests;
 #[cfg(test)]
+#[path = "core/range_tests.rs"]
+mod range_tests;
+#[cfg(test)]
 #[path = "core/remote_drive_task_tests.rs"]
 mod remote_drive_task_tests;
+#[cfg(test)]
+#[path = "core/segmented_stage_tests.rs"]
+mod segmented_stage_tests;
 #[cfg(test)]
 #[path = "core/stage_copy_task_tests.rs"]
 mod stage_copy_task_tests;

@@ -22,9 +22,9 @@ pub(crate) struct Pair<'a> {
 /// are tried when one is taken.
 const SERVER_STAGE_ATTEMPTS: usize = 8;
 
-pub(super) fn copy(
-    engine: &Engine<'_>,
-    pair: Pair<'_>,
+pub(super) fn copy<'e>(
+    engine: &Engine<'e>,
+    pair: Pair<'e>,
     file: &FileWork,
     parent_created: bool,
     meter: &Meter<'_>,
@@ -46,10 +46,14 @@ pub(super) fn copy(
     let same_connection = std::ptr::addr_eq(pair.source, pair.target)
         || pair.source.flow_key(&file.source) == pair.target.flow_key(engine.view.target_dir);
     if same_connection && !pair.target.concurrent_read_write() {
-        bridge(engine, pair, file, parent_created, meter, expected)
-    } else {
-        stream(engine, pair, file, parent_created, meter, expected)
+        return bridge(engine, pair, file, parent_created, meter, expected);
     }
+    // A large file goes in parts when the source reads ranges and the target
+    // takes them (after the server-side copy, which is cheaper still).
+    if let Some(outcome) = super::segments_copy::try_split(engine, pair, file, meter, expected)? {
+        return Ok(outcome);
+    }
+    stream(engine, pair, file, parent_created, meter, expected)
 }
 
 /// `Ok(None)` when the target cannot copy on the server (stream instead).
