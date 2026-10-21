@@ -506,6 +506,13 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   with `account` checks of the distribution, `pam_limits`, `pam_loginuid` and
   `pam_keyinit`, but no `pam_systemd`; otherwise processes of a job would leave their
   unit (`native/src/share/os/linux_os/exec_pam_service.rs:1-10`, `:76-89`).
+- **Account units are `Type=notify`, not `Type=exec`.** With `PAMName=` the PAM session
+  process that systemd 249 and 255 fork keeps the descriptor that reports the `execve()`
+  open (closed only from systemd 256), so a `Type=exec` unit never leaves "activating" and
+  is killed after `TimeoutStartUSec` ("timeout, exit status 9"). The supervisor sends
+  `READY=1` to `NOTIFY_SOCKET` once it holds its connection; a PAM refusal still ends the
+  unit before that with its exit status. The worker's own units stay `Type=exec`
+  (`native/src/share/os/linux_os/exec_account_unit.rs`, `exec_supervisor_stdio.rs`).
 - **`ExitType=` is not sent.** systemd 249 (Ubuntu 22.04) refuses a unit with an unknown
   property; `ExitType` exists only from systemd 250, where its default `main` is what
   the unit needs (`native/src/share/os/linux_os/exec_systemd.rs:100-103`).
