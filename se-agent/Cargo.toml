@@ -1,6 +1,6 @@
 # Standalone minimal build of the SSH remote agent (`se-agent`), kept OUT of the
-# app crate so it pulls only rayon plus the tiny libc syscall bindings — no
-# ring/TLS/GUI — and therefore
+# app crate so it pulls only rayon, the tiny libc syscall bindings, getrandom and
+# the pure-Rust LZ4 block codec — no ring/TLS/GUI — and therefore
 # cross-compiles to static musl for arbitrary Linux servers without a musl C
 # toolchain. It shares the protocol/walk source with the app via #[path] include
 # of native/src/agent_proto.rs, so there is one definition. See
@@ -18,6 +18,12 @@ path = "src/main.rs"
 
 [dependencies]
 rayon = "1.10"
+# The shared protocol names its range stages and journals with random bytes
+# (agent_proto range_stage.rs, range_journal.rs).
+getrandom = "0.2"
+# File content travels as LZ4 blocks (agent_proto lz4_frames.rs, E13): the block
+# codec only, without the frame format and its checksum crate.
+lz4_flex = { version = "0.14", default-features = false, features = ["std", "safe-encode", "safe-decode"] }
 
 [target.'cfg(unix)'.dependencies]
 # Atomic no-replace promotion uses renameat2(RENAME_NOREPLACE) on Linux.

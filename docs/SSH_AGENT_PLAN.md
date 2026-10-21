@@ -62,7 +62,7 @@ Researched against how VS Code Remote-SSH, JetBrains Gateway, `rclone`, and
   Ordinary browsing retains plain SFTP on an error; the "⚡ Agent" badge appears
   only after success. A later strict drive request still requires that success.
 - ✅ **Phase 5 — cross-compile + bundle.** A standalone minimal crate
-  (`/se-agent`, rayon-only — no ring/TLS) cross-compiles to **static musl**
+  (`/se-agent`: rayon, libc, getrandom and the pure-Rust LZ4 block codec — no ring/TLS) cross-compiles to **static musl**
   without a musl C toolchain (rust-lld for aarch64). Built binaries are committed
   under `native/agent-bin/se-agent-{x86_64,aarch64}-linux-musl` (~0.5/0.4 MB,
   static, stripped) and embedded via `include_bytes!` in `artifact_for`. The
