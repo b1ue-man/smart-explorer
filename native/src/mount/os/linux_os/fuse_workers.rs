@@ -26,6 +26,8 @@ const CORE_WORKERS: usize = 2;
 /// How long a surplus worker waits for more work before it ends.
 const LINGER: Duration = Duration::from_secs(2);
 const REFRESH_INTERVAL: Duration = Duration::from_secs(20);
+/// How long the end of a drive waits for a refresh that is inside a backend call.
+const REFRESH_JOIN_GRACE: Duration = Duration::from_secs(5);
 
 pub(crate) type Job = Box<dyn FnOnce() + Send + 'static>;
 
@@ -211,9 +213,20 @@ impl RefreshWorker {
         }
     }
 
+    /// Asks the refresh to stop and waits for it at most `REFRESH_JOIN_GRACE`.
+    /// A refresh blocked in a backend call is left behind: the host process
+    /// ends right after, and a drive that cannot be stopped because its
+    /// backend hangs would keep its worker and its mount alive.
     pub(crate) fn join(&mut self) {
         self.request_stop();
-        if let Some(thread) = self.thread.take() {
+        let Some(thread) = self.thread.take() else {
+            return;
+        };
+        let deadline = Instant::now() + REFRESH_JOIN_GRACE;
+        while !thread.is_finished() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        if thread.is_finished() {
             let _ = thread.join();
         }
     }
