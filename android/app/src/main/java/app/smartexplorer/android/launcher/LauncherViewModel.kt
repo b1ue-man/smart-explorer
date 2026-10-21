@@ -21,6 +21,8 @@ import androidx.lifecycle.viewModelScope
 import app.smartexplorer.android.launcher.apps.AppCatalog
 import app.smartexplorer.android.launcher.apps.AppEntry
 import app.smartexplorer.android.launcher.apps.IconLoader
+import app.smartexplorer.android.launcher.apps.ProfileInfo
+import app.smartexplorer.android.launcher.badges.Badges
 import app.smartexplorer.android.launcher.model.Cell
 import app.smartexplorer.android.launcher.model.DropOutcome
 import app.smartexplorer.android.launcher.model.DropPlanner
@@ -51,6 +53,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
@@ -92,6 +95,10 @@ class LauncherViewModel(application: Application, private val state: SavedStateH
     val display: StateFlow<HomeLayout> = combine(repository.layout, gridSize) { stored, size ->
         if (size.first <= 0 || size.second <= 0) stored else GridGeometry.placeLayout(stored, size.first, size.second)
     }.stateIn(viewModelScope, SharingStarted.Eagerly, repository.layout.value)
+
+    /** The switch „Privaten Bereich in der App-Liste zeigen“ from `layout.json` (U38-14); the catalog follows it. */
+    val showPrivateSpace: StateFlow<Boolean> = repository.layout.map { LayoutOps.showPrivateSpace(it) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, LayoutOps.showPrivateSpace(repository.layout.value))
 
     /** Pinned shortcuts by `<package>#<id>#<user serial>`, for the labels and icons of shortcut items. */
     val shortcutInfos = MutableStateFlow<Map<String, ShortcutInfo>>(emptyMap())
@@ -308,6 +315,40 @@ class LauncherViewModel(application: Application, private val state: SavedStateH
     }
 
     fun setIconDp(iconDp: Int) = edit { it.copy(grid = it.grid.copy(iconDp = iconDp)) }
+
+    // ---- profiles and the private space (U38-13, U38-14) ---------------------------------------------
+
+    /** The switch of the settings sheet; stored in `layout.json` without touching any cell. */
+    fun setShowPrivateSpace(on: Boolean) {
+        viewModelScope.launch { repository.update { LayoutOps.withShowPrivateSpace(it, on) } }
+    }
+
+    /**
+     * Pauses or resumes the work profile, locks or unlocks the private space (`requestQuietModeEnabled`, API 28). It works
+     * only for the default home app in the foreground (R60); a refusal is told. The result arrives with the profile broadcasts.
+     */
+    fun setQuiet(profile: ProfileInfo, quiet: Boolean) {
+        val accepted = try {
+            users.requestQuietModeEnabled(quiet, profile.user)
+        } catch (_: SecurityException) {
+            false
+        }
+        if (!accepted) {
+            showToast(
+                when {
+                    profile.isPrivate && quiet -> "Der private Bereich konnte nicht gesperrt werden."
+                    profile.isPrivate -> "Der private Bereich konnte nicht entsperrt werden."
+                    else -> "Das Arbeitsprofil konnte nicht umgeschaltet werden."
+                },
+            )
+        }
+    }
+
+    /** A profile broadcast arrived (`ProfileReceivers`): read the apps and the paused states again. */
+    fun onProfileChanged() = reloadCatalog()
+
+    /** Fallback when a device sends no profile broadcast (A35): the state is read on every resume. */
+    fun onResume() = reloadCatalog()
 
     // ---- widgets (U38) ----------------------------------------------------------------------------
 
@@ -656,7 +697,17 @@ class LauncherViewModel(application: Application, private val state: SavedStateH
     }
 
     init {
+        catalog.showPrivateSpace = showPrivateSpace.value
         viewModelScope.launch(Dispatchers.Default) { releaseRemovedWidgets() }
+        viewModelScope.launch(Dispatchers.Default) {
+            showPrivateSpace.collect {
+                catalog.showPrivateSpace = it
+            }
+        }
+        // A locked private space shows no dot (U38-14).
+        viewModelScope.launch(Dispatchers.Default) {
+            catalog.profiles.collect { profiles -> Badges.setHiddenUsers(profiles.filter { it.isHidden }.map { it.userSerial }.toSet()) }
+        }
     }
 
     companion object {

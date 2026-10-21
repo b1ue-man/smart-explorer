@@ -17,6 +17,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import app.smartexplorer.android.launcher.apps.ProfileReceivers
 import app.smartexplorer.android.launcher.theme.LauncherTheme
 import app.smartexplorer.android.launcher.ui.HomeScreen
 import app.smartexplorer.android.launcher.widgets.REQ_WIDGET_BIND
@@ -46,6 +47,9 @@ class LauncherActivity : ComponentActivity() {
     }
 
     private val launcherApps: LauncherApps by lazy { getSystemService(LauncherApps::class.java) }
+
+    /** The profile broadcasts (work profile paused or resumed, private space locked or unlocked, U38-13, U38-14). */
+    private val profileReceivers by lazy { ProfileReceivers(applicationContext) { viewModel.onProfileChanged() } }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -102,12 +106,19 @@ class LauncherActivity : ComponentActivity() {
         super.onStart()
         launcherApps.registerCallback(viewModel.callback, Handler(mainLooper))
         viewModel.widgetHost.listen()
+        profileReceivers.register()
         viewModel.onStart()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        viewModel.onResume()
     }
 
     override fun onStop() {
         launcherApps.unregisterCallback(viewModel.callback)
         viewModel.widgetHost.unlisten()
+        profileReceivers.unregister()
         viewModel.onStop()
         super.onStop()
     }

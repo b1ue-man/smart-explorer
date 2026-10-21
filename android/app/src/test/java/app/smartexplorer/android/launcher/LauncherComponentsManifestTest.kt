@@ -57,4 +57,19 @@ class LauncherComponentsManifestTest {
         )
         assertTrue("the switch must turn it on and off with the launcher", "app.smartexplorer.android.launcher.pin.PinRequestActivity" in LauncherParts.launcher)
     }
+
+    @Test
+    fun theBadgeListenerIsOffInTheLauncherProcessAndBoundOnlyBySystem() {
+        val service = component("service", ".launcher.badges.BadgeListenerService")
+        assertEquals("false", service.getAttributeNS(androidNs, "enabled"))
+        assertEquals("true", service.getAttributeNS(androidNs, "exported"))
+        assertEquals(":launcher", service.getAttributeNS(androidNs, "process"))
+        assertEquals("android.permission.BIND_NOTIFICATION_LISTENER_SERVICE", service.getAttributeNS(androidNs, "permission"))
+        assertEquals("@string/launcher_badges_label", service.getAttributeNS(androidNs, "label"))
+        val list = service.getElementsByTagName("action")
+        assertEquals(1, list.length)
+        assertEquals("android.service.notification.NotificationListenerService", (list.item(0) as Element).getAttributeNS(androidNs, "name"))
+        assertTrue("the switch must turn it on and off with the launcher", "app.smartexplorer.android.launcher.badges.BadgeListenerService" in LauncherParts.launcher)
+        assertTrue("the widget part stays empty until U40", LauncherParts.widget.isEmpty())
+    }
 }

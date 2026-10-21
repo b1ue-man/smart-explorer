@@ -147,6 +147,21 @@
             </intent-filter>
         </activity>
 
+        <!-- DSK-M12 (U38): notification dots on the home screen. Off and on with the launcher (LauncherParts) and
+             effective only after the person allowed it in the system settings ("Benachrichtigungszugriff"). It
+             reads package, profile and ranking flags of the notifications, never their content. -->
+        <service
+            android:name=".launcher.badges.BadgeListenerService"
+            android:enabled="false"
+            android:exported="true"
+            android:label="@string/launcher_badges_label"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+            android:process=":launcher">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
         <!-- Transfers, "run now" sync runs and the Google sign-in while the UI was left -->
         <service
             android:name=".service.TaskForegroundService"

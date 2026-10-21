@@ -23,6 +23,7 @@ internal object LauncherParts {
     val launcher: List<String> = listOf(
         "app.smartexplorer.android.launcher.LauncherActivity",
         "app.smartexplorer.android.launcher.pin.PinRequestActivity",
+        "app.smartexplorer.android.launcher.badges.BadgeListenerService",
     )
     val widget: List<String> = emptyList()
 }

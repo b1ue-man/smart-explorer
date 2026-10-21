@@ -39,7 +39,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.smartexplorer.android.launcher.LauncherViewModel
 import app.smartexplorer.android.launcher.MenuSource
 import app.smartexplorer.android.launcher.MenuTarget
-import app.smartexplorer.android.launcher.apps.ProfileKind
+import app.smartexplorer.android.launcher.apps.AppCatalog
+import app.smartexplorer.android.launcher.badges.Badges
 import app.smartexplorer.android.launcher.gestures.homeGestures
 import app.smartexplorer.android.launcher.model.Cell
 import app.smartexplorer.android.launcher.model.GridGeometry
@@ -69,6 +70,10 @@ fun HomeScreen(vm: LauncherViewModel) {
     val apps by vm.catalog.apps.collectAsStateWithLifecycle()
     val profiles by vm.catalog.profiles.collectAsStateWithLifecycle()
     val shortcutInfos by vm.shortcutInfos.collectAsStateWithLifecycle()
+    val dots by Badges.dots.collectAsStateWithLifecycle()
+    val showPrivate by vm.showPrivateSpace.collectAsStateWithLifecycle()
+    // A locked private space draws nothing and keeps its cells (U38-14).
+    val hiddenUsers = remember(profiles) { profiles.filter { it.isHidden }.map { it.userSerial }.toSet() }
     val drag = remember { DragState() }
     val insets = WindowInsets.systemBars.union(WindowInsets.displayCutout).asPaddingValues()
     val slop = remember(context) { ViewConfiguration.get(context).scaledTouchSlop.toFloat() }
@@ -110,8 +115,8 @@ fun HomeScreen(vm: LauncherViewModel) {
         val dragging = drag.active && drag.moved
         val showNewPage = dragging || vm.editSheet
         val pagerState = rememberPagerState(pageCount = { display.pages.size + if (showNewPage) 1 else 0 })
-        val itemContext = remember(vm, iconDp, apps, shortcutInfos) {
-            ItemContext(vm, iconDp, apps.associateBy { it.key }, shortcutInfos)
+        val itemContext = remember(vm, iconDp, apps, shortcutInfos, dots, hiddenUsers) {
+            ItemContext(vm, iconDp, apps.associateBy { it.key }, shortcutInfos, dots, hiddenUsers)
         }
         val metricsNow by rememberUpdatedState(metrics)
         val displayNow by rememberUpdatedState(display)
@@ -128,6 +133,9 @@ fun HomeScreen(vm: LauncherViewModel) {
         // A widget follows the finger with its middle, so the cell under the finger is the middle of its area (U38-9).
         fun anchorCell(item: HomeItem, under: Cell): Cell =
             if (item.isWidget) Cell(under.x - (item.span.w - 1) / 2, under.y - (item.span.h - 1) / 2) else under
+
+        // Nothing is folded into an item that is hidden: its cell only looks empty (U38-14).
+        fun hiddenOccupant(id: String?): Boolean = id != null && LayoutOps.find(displayNow, id)?.item?.let { itemContext.isHidden(it) } == true
 
         fun onWidget(at: Offset): Boolean {
             val m = metricsNow
@@ -185,8 +193,8 @@ fun HomeScreen(vm: LauncherViewModel) {
 
                 private fun drop(item: HomeItem, origin: DragOrigin, hover: Hover, merge: Boolean, at: Offset) {
                     when (hover) {
-                        is Hover.OnCell -> vm.dropOnPage(item, hover.page, anchorCell(item, hover.cell), merge && hover.inner)
-                        is Hover.OnDock -> vm.dropOnDock(item, hover.index, merge && hover.inner)
+                        is Hover.OnCell -> vm.dropOnPage(item, hover.page, anchorCell(item, hover.cell), merge && hover.inner && !hiddenOccupant(hover.occupantId))
+                        is Hover.OnDock -> vm.dropOnDock(item, hover.index, merge && hover.inner && !hiddenOccupant(hover.occupantId))
                         is Hover.OnNewPage -> vm.dropOnPage(item, hover.page, anchorCell(item, metricsNow.cellAt(at)), merge = false)
                         Hover.Remove -> if (origin == DragOrigin.Home || origin == DragOrigin.Folder) vm.removeItem(item.id)
                         Hover.Uninstall -> vm.entryFor(item)?.let { uninstall(context, it) }
@@ -250,7 +258,10 @@ fun HomeScreen(vm: LauncherViewModel) {
                                     m.contains(local) -> displayNow.pages.getOrNull(page)?.let { LayoutOps.itemAt(it, m.cellAt(local)) }
                                     else -> null
                                 }
-                                if (found != null) {
+                                if (found != null && itemContext.isHidden(found)) {
+                                    // The reserved cell of a locked private space is neither an item nor an empty cell.
+                                    false
+                                } else if (found != null) {
                                     host.begin(found, local, DragOrigin.Home, MenuSource.Home, anchorOf(found, onDock))
                                     true
                                 } else {
@@ -294,13 +305,14 @@ fun HomeScreen(vm: LauncherViewModel) {
         // ---- layers ------------------------------------------------------------------------------------
         if (vm.drawerOpen) {
             AppDrawer(
-                apps = apps.filter { it.kind != ProfileKind.Private },
+                apps = AppCatalog.shown(apps, showPrivate),
                 profiles = profiles,
                 context = itemContext,
                 host = host,
                 iconDp = iconDp,
                 insets = insets,
                 hidden = hiddenDrag && drag.origin == DragOrigin.Drawer,
+                showPrivate = showPrivate,
                 onClose = { vm.closeDrawer() },
             )
         }

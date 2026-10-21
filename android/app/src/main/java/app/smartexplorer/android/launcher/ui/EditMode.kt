@@ -15,6 +15,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -27,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.smartexplorer.android.launcher.LauncherViewModel
 import app.smartexplorer.android.launcher.wallpaper.Wallpaper
 
@@ -47,6 +49,8 @@ private val ICON_SIZES = listOf("Klein" to 48, "Mittel" to 56, "Groß" to 64)
 @Composable
 fun EditSheet(vm: LauncherViewModel, iconDp: Int, modifier: Modifier = Modifier) {
     val context = LocalContext.current
+    val profiles by vm.catalog.profiles.collectAsStateWithLifecycle()
+    val showPrivate by vm.showPrivateSpace.collectAsStateWithLifecycle()
     Surface(
         modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.extraLarge,
@@ -72,6 +76,13 @@ fun EditSheet(vm: LauncherViewModel, iconDp: Int, modifier: Modifier = Modifier)
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("Hintergrund ändern") }
             OutlinedButton(onClick = { vm.openWidgetPicker() }, modifier = Modifier.fillMaxWidth()) { Text("Widgets") }
+            // Only a device that has a private space needs the switch (U38-14).
+            if (profiles.any { it.isPrivate }) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Privaten Bereich in der App-Liste zeigen", Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
+                    Switch(checked = showPrivate, onCheckedChange = { vm.setShowPrivateSpace(it) })
+                }
+            }
             EditSheetExtras.rows.forEach { it() }
             TextButton(onClick = { vm.closeEditSheet() }, modifier = Modifier.align(Alignment.End)) { Text("Fertig") }
         }

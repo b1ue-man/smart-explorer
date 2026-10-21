@@ -3,6 +3,7 @@ package app.smartexplorer.android.launcher.ui
 import android.content.pm.ShortcutInfo
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -28,6 +29,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
@@ -38,6 +40,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.smartexplorer.android.launcher.LauncherViewModel
 import app.smartexplorer.android.launcher.apps.AppEntry
+import app.smartexplorer.android.launcher.badges.BadgeKey
 import app.smartexplorer.android.launcher.model.HomeItem
 import app.smartexplorer.android.launcher.model.Kinds
 import app.smartexplorer.android.launcher.widgets.WidgetView
@@ -53,6 +56,10 @@ class ItemContext(
     val iconDp: Int,
     val apps: Map<String, AppEntry>,
     val shortcutInfos: Map<String, ShortcutInfo>,
+    /** Apps (with profile) that have a counting notification: the dots (U38-12). */
+    val dots: Set<BadgeKey> = emptySet(),
+    /** Serial numbers of the profiles that show nothing: a locked private space (U38-14). */
+    val hiddenUsers: Set<Long> = emptySet(),
 ) {
     /** The drag of the home screen, set by it; a widget view reports its long press and moves here (U38-4). */
     var dragHost: DragHost? = null
@@ -63,6 +70,29 @@ class ItemContext(
     fun entry(item: HomeItem): AppEntry? = item.component?.let { apps["$it#${item.userSerial}"] }
 
     fun shortcut(item: HomeItem): ShortcutInfo? = shortcutInfos[vm.shortcutKey(item)]
+
+    /**
+     * True for an item of a locked private space (U38-14): it is not drawn, but its cell stays reserved and empty so
+     * unlocking does not change the arrangement. A folder is hidden when all its children are.
+     */
+    fun isHidden(item: HomeItem): Boolean = when {
+        item.isFolder -> item.children.isNotEmpty() && item.children.all { it.userSerial in hiddenUsers }
+        item.isApp || item.isShortcut || item.isWidget -> item.userSerial in hiddenUsers
+        else -> false
+    }
+
+    /** The children of a folder that are drawn. */
+    fun visibleChildren(folder: HomeItem): List<HomeItem> = folder.children.filterNot { isHidden(it) }
+
+    /** True when [entry] (a row or cell of the app list) has a counting notification. */
+    fun hasDot(entry: AppEntry): Boolean = BadgeKey(entry.packageName, entry.userSerial) in dots
+
+    /** True when a dot belongs on [item]: an app or shortcut with a counting notification, a folder if any child has one. */
+    fun hasDot(item: HomeItem): Boolean = when {
+        item.isApp || item.isShortcut -> !isHidden(item) && item.packageName?.let { BadgeKey(it, item.userSerial) in dots } == true
+        item.isFolder -> visibleChildren(item).any { hasDot(it) }
+        else -> false
+    }
 
     /** Name shown under the tile and read by the accessibility service. */
     fun label(item: HomeItem): String = when (item.kind) {
@@ -84,6 +114,11 @@ private val LabelShadow = Shadow(color = Color(0xCC000000), offset = androidx.co
  */
 @Composable
 fun ItemContent(item: HomeItem, context: ItemContext) {
+    if (context.isHidden(item)) {
+        // A locked private space leaves its cells empty and silent (U38-14).
+        Box(Modifier.fillMaxSize())
+        return
+    }
     when (item.kind) {
         Kinds.APP -> AppTile(item, context)
         Kinds.SHORTCUT -> ShortcutTile(item, context)
@@ -102,7 +137,7 @@ private fun UnknownItem(item: HomeItem) {
 /** Semantics of a cell: name and the actions of U35-32 (move, remove, app info for apps). */
 @Composable
 internal fun Modifier.cellSemantics(item: HomeItem, context: ItemContext): Modifier {
-    val label = context.label(item)
+    val label = if (context.hasDot(item)) "${context.label(item)}, Benachrichtigung" else context.label(item)
     val vm = context.vm
     return semantics {
         contentDescription = label
@@ -138,6 +173,24 @@ private fun Label(text: String, modifier: Modifier = Modifier) {
         overflow = TextOverflow.Ellipsis,
         textAlign = TextAlign.Center,
     )
+}
+
+/** The dot of a notification (U38-12): 8 dp, accent colour, at the top right of the icon. It tells that, never what. */
+@Composable
+internal fun BadgeDot(modifier: Modifier = Modifier) {
+    Box(
+        modifier.size(8.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary).border(1.dp, Color.White, CircleShape)
+            .clearAndSetSemantics { },
+    )
+}
+
+/** [content] with the dot of [dot] at its top right corner. */
+@Composable
+internal fun WithDot(dot: Boolean, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+    Box(modifier) {
+        content()
+        if (dot) BadgeDot(Modifier.align(Alignment.TopEnd))
+    }
 }
 
 @Composable
@@ -186,7 +239,7 @@ private fun AppTile(item: HomeItem, context: ItemContext) {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        AppIcon(entry, context, context.iconDp)
+        WithDot(context.hasDot(item)) { AppIcon(entry, context, context.iconDp) }
         Label(context.label(item), Modifier.padding(top = 2.dp))
     }
 }
@@ -202,7 +255,7 @@ private fun ShortcutTile(item: HomeItem, context: ItemContext) {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        ShortcutIcon(item, info, context, context.iconDp)
+        WithDot(context.hasDot(item)) { ShortcutIcon(item, info, context, context.iconDp) }
         Label(context.label(item), Modifier.padding(top = 2.dp))
     }
 }
@@ -219,11 +272,13 @@ private fun FolderTile(item: HomeItem, context: ItemContext) {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Box(
-            Modifier.size(context.iconDp.dp).clip(RoundedCornerShape(context.iconDp.dp / 3)).background(Color.White.copy(alpha = 0.3f)).padding(3.dp),
-        ) {
-            item.children.take(4).forEachIndexed { index, child ->
-                Box(Modifier.offset(x = inner.dp * (index % 2), y = inner.dp * (index / 2))) { ChildIcon(child, context, inner) }
+        WithDot(context.hasDot(item)) {
+            Box(
+                Modifier.size(context.iconDp.dp).clip(RoundedCornerShape(context.iconDp.dp / 3)).background(Color.White.copy(alpha = 0.3f)).padding(3.dp),
+            ) {
+                context.visibleChildren(item).take(4).forEachIndexed { index, child ->
+                    Box(Modifier.offset(x = inner.dp * (index % 2), y = inner.dp * (index / 2))) { ChildIcon(child, context, inner) }
+                }
             }
         }
         Label(context.label(item), Modifier.padding(top = 2.dp))
@@ -243,7 +298,7 @@ internal fun ChildTile(child: HomeItem, context: ItemContext, modifier: Modifier
         modifier.cellSemantics(child, context).padding(4.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        ChildIcon(child, context, context.iconDp)
+        WithDot(context.hasDot(child)) { ChildIcon(child, context, context.iconDp) }
         Text(
             context.label(child),
             style = MaterialTheme.typography.labelSmall,
