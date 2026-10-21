@@ -101,6 +101,9 @@ fn progress_value(observer: &TreeObserver) -> Value {
         "limiter": progress.limiter,
         "limiter_text": progress.limiter_text,
         "segments": progress.segments,
+        // A hint about the connection, such as the number of SSH
+        // connections or why no further one opens; `null` without one.
+        "note": progress.note,
     })
 }
 
@@ -118,6 +121,7 @@ mod tests {
         assert_eq!(idle["limiter"], "none");
         assert!(idle["limiter_text"].is_null());
         assert_eq!(idle["segments"], 0);
+        assert!(idle["note"].is_null());
 
         observer.begin_engine();
         observer.set_phase(TreePhase::Writing);
@@ -129,6 +133,11 @@ mod tests {
         assert_eq!(value["limiter"], "target");
         assert_eq!(value["limiter_text"], "Ziellaufwerk sda");
         assert_eq!(value["segments"], 2);
+        observer.set_engine_note(Some("2 Verbindungen zu files.example".to_string()));
+        assert_eq!(
+            progress_value(&observer)["note"],
+            "2 Verbindungen zu files.example"
+        );
         // The fields of the older progress stay as they were.
         assert_eq!(value["phase"], "writing");
         assert_eq!(value["files_total"], 3);

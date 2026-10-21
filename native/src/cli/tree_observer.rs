@@ -70,6 +70,7 @@ pub(super) struct TreeObserver {
 struct EngineVerdict {
     limiter: String,
     limiter_text: Option<String>,
+    note: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -94,6 +95,10 @@ pub(super) struct TreeProgress {
     pub(super) limiter_text: Option<String>,
     /// Ranges of large files transferred right now (engine only).
     pub(super) segments: u32,
+    /// The engine's hint about the connection right now (for example how
+    /// many SSH connections the copy uses, or why no further one opens);
+    /// `None` without one.
+    pub(super) note: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -200,8 +205,16 @@ impl TreeObserver {
         verdict.limiter_text = limiter_text;
     }
 
+    /// The engine's latest hint about the connection (`TransferProgress::note`).
+    pub(super) fn set_engine_note(&self, note: Option<String>) {
+        self.engine_verdict
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .note = note;
+    }
+
     pub(super) fn progress(&self) -> TreeProgress {
-        let (limiter, limiter_text) = {
+        let (limiter, limiter_text, note) = {
             let verdict = self
                 .engine_verdict
                 .lock()
@@ -211,7 +224,7 @@ impl TreeObserver {
             } else {
                 verdict.limiter.clone()
             };
-            (code, verdict.limiter_text.clone())
+            (code, verdict.limiter_text.clone(), verdict.note.clone())
         };
         TreeProgress {
             phase: TreePhase::from_u8(self.phase.load(Ordering::SeqCst)),
@@ -228,6 +241,7 @@ impl TreeObserver {
             limiter,
             limiter_text,
             segments: self.engine_segments.load(Ordering::SeqCst),
+            note,
         }
     }
 
@@ -290,6 +304,7 @@ mod tests {
         assert!(!idle.engine);
         assert_eq!(idle.limiter, "none");
         assert_eq!(idle.limiter_text, None);
+        assert_eq!(idle.note, None);
         assert_eq!((idle.rate_bps, idle.segments, idle.elapsed_ms), (0, 0, 0));
 
         observer.begin_engine();
@@ -321,6 +336,11 @@ mod tests {
             Some("Gegenstelle (SFTP-Server)")
         );
         assert_eq!(progress.segments, 4);
+        observer.set_engine_note(Some("3 Verbindungen zu files.example".to_string()));
+        assert_eq!(
+            observer.progress().note.as_deref(),
+            Some("3 Verbindungen zu files.example")
+        );
 
         // The engine watches the flag that `cancel` sets.
         assert!(!observer.cancel_flag().load(Ordering::SeqCst));
