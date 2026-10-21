@@ -120,9 +120,19 @@ pub(super) fn compare_json(view: &CompareViewFull) -> serde_json::Value {
     })
 }
 
+/// The words of a refused request about the vault job `job`. A locked vault
+/// is named by its site, because that is what `se vault unlock` takes: side
+/// A of the job, the first side the comparison asks for. The words for the
+/// job itself would send the user to a call that does not know it.
+fn job_error(error: &crate::daemon::VaultIpcError, job: &str) -> String {
+    let site = crate::vault::find_vault_job(job)
+        .map_or_else(|_| job.to_string(), |found| found.vault_site_a);
+    vault_error(error, &site)
+}
+
 pub(super) fn compare(args: CompareArgs) -> Result<i32, String> {
     let view = crate::daemon::vault_compare(&args.job, &groups_of(&args.group))
-        .map_err(|error| vault_error(&error, &args.job))?;
+        .map_err(|error| job_error(&error, &args.job))?;
     if let Some(reason) = &view.head.unavailable {
         eprintln!("se: {}", clean(reason));
     }
@@ -166,7 +176,7 @@ pub(super) fn with_hint(message: String, confirmed: bool) -> String {
 }
 
 pub(super) fn resolve(args: ResolveArgs) -> Result<i32, String> {
-    let shown = |error: &crate::daemon::VaultIpcError| vault_error(error, &args.job);
+    let shown = |error: &crate::daemon::VaultIpcError| job_error(error, &args.job);
     if args.all {
         if !matches!(args.action.as_str(), "keep-a" | "keep-b") {
             return Err("--all kennt nur --action keep-a oder keep-b".into());

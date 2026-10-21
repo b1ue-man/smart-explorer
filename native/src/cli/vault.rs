@@ -105,6 +105,26 @@ pub(super) fn run(args: VaultArgs) -> Result<i32, String> {
     }
 }
 
+// Stage tests that run the built `se` (VLT-M9, VLT-M14): Linux only, and
+// `#[ignore]`d until their stage gives them `SMART_EXPLORER_VAULT_SE_BIN`.
+#[cfg(all(test, target_os = "linux"))]
+#[path = "vault/task_cli_tests.rs"]
+mod task_cli_tests;
+#[cfg(all(test, target_os = "linux"))]
+#[path = "vault/task_env.rs"]
+pub(crate) mod task_env;
+#[cfg(all(test, target_os = "linux"))]
+#[path = "vault/task_flow.rs"]
+mod task_flow;
+#[cfg(all(test, target_os = "linux"))]
+#[path = "vault/task_json_tests.rs"]
+mod task_json_tests;
+#[cfg(all(test, target_os = "linux"))]
+#[path = "vault/task_klartext_tests.rs"]
+mod task_klartext_tests;
+#[cfg(all(test, target_os = "linux"))]
+#[path = "vault/task_scan.rs"]
+mod task_scan;
 #[cfg(test)]
 #[path = "vault/tests.rs"]
 mod tests;
