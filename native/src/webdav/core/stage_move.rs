@@ -15,9 +15,16 @@ fn accepts_mtime(response: &ureq::Response) -> bool {
 }
 
 impl WebdavBackend {
-    pub(super) fn remember_stage_time(&self, path: &str, ms: i64) -> VfsResult<()> {
-        let (actual, etag) = super::metadata::parse(&self.propfind(path, "0")?, path)?;
-        if actual.mtime_ms.div_euclid(1_000) != ms.div_euclid(1_000) {
+    /// Remembers the time the `MOVE` asserts, from the answer the caller just
+    /// read about the stage (`observed_mtime_ms`, `etag`): no request here.
+    pub(super) fn remember_stage_time(
+        &self,
+        path: &str,
+        ms: i64,
+        observed_mtime_ms: i64,
+        etag: Option<String>,
+    ) -> VfsResult<()> {
+        if observed_mtime_ms.div_euclid(1_000) != ms.div_euclid(1_000) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "WebDAV stage time changed before confirmation",

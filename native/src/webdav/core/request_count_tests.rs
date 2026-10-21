@@ -153,3 +153,41 @@ fn speed_task_webdav_confirmation_skipped_only_when_response_proves_it() {
     renamed.expect("accepted");
     assert_eq!(confirmations, 0);
 }
+
+#[test]
+fn speed_task_webdav_sync_finish_stage_uses_one_propfind() {
+    let server = Server::start();
+    let backend = server.backend();
+    let mut writer = open_write_copy_stage_timed(&backend, "/s1", 4, MTIME * 1_000).expect("stage");
+    writer.write_all(b"data").expect("write");
+    writer.flush().expect("PUT");
+    drop(writer);
+    let stage_propfinds = || {
+        server
+            .dav
+            .requests("PROPFIND")
+            .iter()
+            .filter(|(path, _)| path == "/s1")
+            .count()
+    };
+    let before = stage_propfinds();
+    let finish = StageFinish {
+        mtime_ms: Some(MTIME * 1_000),
+        ..StageFinish::default()
+    };
+    assert!(
+        finish_stage(&backend, "/s1", finish)
+            .expect("finish")
+            .mtime_applied
+    );
+    // One answer serves the check and the remembered time.
+    assert_eq!(stage_propfinds() - before, 1);
+    // The remembered time and ETag still go out with the no-replace MOVE.
+    backend.rename_no_replace("/s1", "/d1").expect("renamed");
+    let (_, headers) = server.dav.requests("MOVE").remove(0);
+    assert_eq!(
+        headers.get("x-oc-mtime").map(String::as_str),
+        Some("1700000000")
+    );
+    assert!(headers.contains_key("if-match"));
+}
