@@ -284,3 +284,10 @@ mod optimization_task {
         }
     }
 }
+
+// DRV-M10: the error texts of the drive commands. A child of this module,
+// because it calls `select_longest_root` and, through `super::super`, the
+// private helpers of `drive.rs`.
+#[cfg(test)]
+#[path = "drive_error_texts_tests.rs"]
+mod error_texts_tests;
