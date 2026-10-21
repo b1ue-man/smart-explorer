@@ -14,6 +14,7 @@ use std::ptr::null_mut;
 
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Security::{RevertToSelf, TOKEN_QUERY};
+use windows_sys::Win32::Storage::FileSystem::FlushFileBuffers;
 use windows_sys::Win32::System::Pipes::{DisconnectNamedPipe, ImpersonateNamedPipeClient};
 use windows_sys::Win32::System::Threading::{GetCurrentThread, OpenThreadToken};
 
@@ -53,7 +54,15 @@ pub(super) fn serve_connection(pipe: OwnedHandle, shared: &Shared) {
             ));
         }
     }
-    unsafe { DisconnectNamedPipe(raw) };
+    // `DisconnectNamedPipe` discards what the client has not read yet, and
+    // `File::flush` does nothing: without `FlushFileBuffers` (it returns once
+    // the client has read everything, or at once when the client is gone) a
+    // refusal written just before would reach the worker as error 233
+    // ("no process on the other end of the pipe") instead of as its reply.
+    unsafe {
+        FlushFileBuffers(raw);
+        DisconnectNamedPipe(raw);
+    }
 }
 
 struct Connection {
