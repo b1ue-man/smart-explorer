@@ -204,6 +204,8 @@ mod state_store;
 mod state_types;
 #[path = "os/shared/state_validation.rs"]
 mod state_validation;
+#[path = "os/shared/stream_hash.rs"]
+mod stream_hash;
 #[path = "os/shared/sync_flows.rs"]
 pub(crate) mod sync_flows;
 #[path = "os/shared/sync_observation.rs"]
@@ -296,6 +298,9 @@ mod plan_review_tests;
 #[cfg(test)]
 #[path = "os/shared/replica_review_tests.rs"]
 mod replica_review_tests;
+#[cfg(test)]
+#[path = "os/shared/stream_hash_tests.rs"]
+mod stream_hash_tests;
 #[cfg(test)]
 #[path = "os/shared/test_remote.rs"]
 pub(crate) mod test_remote;
