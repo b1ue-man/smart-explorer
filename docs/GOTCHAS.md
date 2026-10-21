@@ -535,6 +535,46 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   connection and are published without the user's action when the device returns
   (`docs/oberflaechen/laufwerke.md`, section 5).
 
+## Screen streaming (0.5.183)
+
+- **Pull buffers start with a 16-byte head.** `screenPull` writes the head (time, flags,
+  length) at offsets 0 to 15 and the payload from offset 16 (`native/src/screen/os/android/viewer_sink.rs`,
+  `HEADER_BYTES`). The decoder's input buffer must leave those 16 bytes free.
+- **Return −3 copies nothing.** When the destination is too small, `pull_into` writes only the
+  payload length into bytes 12 to 15 and returns −3; the app then pulls again into a larger
+  buffer (`viewer_sink.rs`, `pull_into`; `A/ui/screen/ScreenDecoder.kt`, `pullLarger`).
+- **`KEY_LOW_LATENCY` is a hint.** The decoder sets it on every configuration; a setter that
+  throws `IllegalArgumentException` is ignored (`ScreenDecoder.kt`, `configure`). The app's
+  minimum API level is 30 (`android/app/build.gradle.kts`), where the key exists.
+- **A stalled viewer queue is emptied, not played back.** A picture older than `STALL_US`
+  clears the queue and requests a key frame; until that key frame arrives, the app receives
+  nothing (`viewer_sink.rs` module header).
+- **Tile pictures are converted from BGRA to RGBA** in the core (`viewer_sink.rs`,
+  `bgra_to_rgba`), so the app draws them without a byte-order step.
+- **The Android host has no keyboard events.** Its input capabilities are pointer, text,
+  touch and seven system actions, and `keyboard` is false (`native/src/screen/os/android/bridge_backend.rs:103-115`).
+  Without the accessibility service the host offers no input at all (`bridge_backend.rs:98-100`).
+- **Window lists are bounded by bytes, not entries.** `MAX_WINDOWS_BYTES` (1 MiB, protocol
+  v1) limits the list; `WindowList::bounded` drops whole entries, never truncates titles
+  (`native/src/screen/core/wire.rs:54`, `window_list.rs:171-190`).
+- **The relay drops at 512 packets or 1 MiB per client.** The vendored relay's send queue
+  is `PER_CLIENT_SEND_QUEUE_DEPTH` = 512 (`vendor/iroh-relay-1.0.0/src/protos/relay.rs:40`)
+  with a 1 MiB per-client byte budget (`vendor/iroh-relay-1.0.0/src/server/queue_budget.rs:8`).
+  The host keeps a relay path below 768 KiB (`native/src/screen/core/pacing.rs:17`).
+- **A viewer reads at most four picture streams at once.** One running and one new picture group
+  for each kind (`video`, `preview`); a stream that is reset is stopped (`native/src/screen/core/gop_stream.rs:24-27`).
+- **Windows Graphics Capture is asked once per process.** The interop factory check runs once,
+  without a version check (`native/src/screen/os/windows/capture_wgc.rs:54-63`).
+- **PipeWire is loaded at run time.** `libpipewire-0.3.so.0` is opened with `libloading`
+  (`native/src/screen/os/linux_os/pipewire_abi.rs:2`, `:163`); a missing library ends the
+  portal path with `pipewire_missing`.
+- **OpenH264 is pinned, not verified against Cisco's checksums.** Cisco publishes only MD5 sums,
+  so the integrity rests on the pins of version 2.6.0 for win64 and linux64 (size and SHA-256 of the
+  compressed file, SHA-256 of the library) in `native/src/screen/os/native_ffi/openh264_pins.rs:1-7`.
+  The license is shown before every download.
+- **Old peers close with `session_limit`.** The host sends no session-count refusal any more
+  (R15c); the viewer still maps `session_limit` for older hosts (`native/src/screen/core/wire_hello.rs:273`).
+
 ## Share / local network
 
 - Google Drive allows several same-name siblings. `GDriveBackend::list_dir`

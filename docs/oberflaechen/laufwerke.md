@@ -146,7 +146,7 @@ Stand U23 (DRV-M8); im Quelltext committet (`94240017`, Registrierung `c9b0bed8`
 ## 10 Offene Punkte
 
 - Die Abnahme aller Laufwerksoberflächen läuft in der Stapel-Suite (Plan D3, Stufen des Strangs DRV-M10); diese Fassung ist nicht ausgeführt.
-- Installer: `install-linux.sh` kennt `--with-fuse` noch nicht (Paket U36; `install-linux.sh` hat keine Optionszeile dafür). Ohne diese Option installiert das Skript `fuse3` nicht; `se drive runtime` nennt den Befehl.
+- Installer: `install-linux.sh --with-fuse` installiert `fuse3` aus den Paketquellen der Distribution (Funktion `install_fuse3`, `install-linux.sh`). Ohne den Schalter installiert das Skript nichts; es nennt den Paketbefehl (`fuse_package_command`) und prüft danach `fusermount3` (setuid root) und `/dev/fuse` (`check_fuse`). `se drive runtime` nennt den Befehl ebenfalls.
 - Desktop-Anzeige der FUSE-Bereitschaft unter Linux: nicht belegt.
 - Registrierungen der Laufwerks-Pakete stehen in den Commits `91d70957` (U06), `9456b8ad` (U12), `f83d1d94` (U17) und `c9b0bed8` (U23). Ob alle Zeilen vollständig sind, prüft die Stapel-Suite.
 - Tresor-Laufwerke (U14): E2E-Prüfungen über FUSE und Dokany stehen laut Lesestand U14 aus.

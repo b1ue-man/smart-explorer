@@ -216,8 +216,8 @@ die Sitzung, `se drive unmount --force` löst auch ein belegtes Laufwerk, dessen
 Dateien dann die Verbindung verlieren. Hängt eine Anfrage länger als das Kernel-Zeitlimit
 `fs.fuse.default_request_timeout`, bricht der Kernel das Laufwerk ab; `se drive runtime`
 nennt den Wert. Der Dateimanager bekommt einen Ort: ein GTK-Lesezeichen außerhalb von
-Home, einen KDE-Ort in `user-places.xbel`. Der Installer `install-linux.sh` installiert
-`fuse3` derzeit nicht; den Befehl nennt `se drive runtime`.
+Home, einen KDE-Ort in `user-places.xbel`. Mit `install-linux.sh --with-fuse` installiert das Skript `fuse3` (siehe
+„Installieren“); ohne den Schalter nennt es den Paketbefehl, und `se drive runtime` nennt ihn ebenfalls.
 
 **Verbundene Geräte als Ordner (ab 0.5.183):** `se drive devices on` zeigt jedes gekoppelte
 Gerät als Ordner: Unter Windows liegt der Baum als Laufwerk „Smart Explorer Geräte“, unter
@@ -248,6 +248,27 @@ Wiedervorlage ist `WINFSP-AB` in `docs/TODO.md`. Seit 0.5.183 bildet das Laufwer
 gezielter ab: Ein Fehler ohne eigene Zuordnung erscheint als „E/A-Gerätefehler“ statt als
 „Zugriff verweigert“, ein nicht erreichbarer Netzort als „Netzwerkort nicht erreichbar“
 (Windows-Fehler 1232).
+
+**Bildschirmverbindung (ab 0.5.183):** Ein gekoppeltes Gerät sieht den Bildschirm eines anderen
+nur, wenn der Nutzer am Gerät das Recht „Bildschirm ansehen“ erlaubt; „Bildschirm steuern“ ist
+ein eigenes Recht (Abschnitt **Zugriffsrechte**). `se screen view GERÄT` öffnet den Betrachter
+der Desktop-App, `se screen grid` die Gruppenansicht, `se screen snapshot` speichert ein
+verlustfreies Standbild als PNG. Die übrigen Befehle sind `devices`, `probe`, `windows`,
+`input`, `bench`, `codec`, `portal forget`, `sessions` und `stop`. Eingaben (`se screen input`)
+gehen an den Windows-Host, unter X11, unter Wayland mit RemoteDesktop-Portal und an
+Android-Hosts mit eingeschalteter Bedienungshilfe. Ein Android-Host nimmt keine Tastenereignisse
+an; die Systemtasten Zurück, Home, Übersicht, Benachrichtigungen, Schnelleinstellungen, Sperren
+und Ausschaltmenü gehen. Ohne grafische Sitzung auf dem Gerät gibt es kein Bild
+(`no_display`). Der Relay-Server verwirft Pakete, wenn die Warteschlange eines Ziels voll ist
+(512 Pakete oder 1 MiB); Smart Explorer begrenzt Bildpakete über den Relay-Pfad auf 768 KiB
+(Einzelheiten in [`docs/SHARE_SERVER.md`](docs/SHARE_SERVER.md)).
+
+**OpenH264 (ab 0.5.183):** H.264 über OpenH264 gehört nicht zum Programm.
+`se screen codec openh264 enable` zeigt die Cisco-Lizenz (Binary License v1.0), fragt nach der
+Annahme und lädt OpenH264 2.6.0 von `ciscobinary.openh264.org`; Größe und SHA-256 sind festgelegt.
+`disable` schaltet es aus, `remove` löscht die Bibliothek dieses Nutzers. Den vollständigen
+Lizenztext zeigt `se screen codec licenses`; die Quelle ist `third-party/openh264/BINARY_LICENSE.txt`,
+der Installer legt sie unter `licenses\OpenH264\` ab.
 
 
 **Verifikation des Quellstands (2026-09-08):** Der Kandidat
@@ -1021,6 +1042,15 @@ Die Desktop-App ist für GNU/Linux mit glibc 2.17+ gebaut und nutzt die übliche
 X11-/Wayland-Clientbibliotheken der Desktop-Distribution. Der Release-Build
 startet genau diese Payload vor der Veröffentlichung unter Xvfb.
 
+**Optionen von `install-linux.sh` (ab 0.5.183):** `--with-fuse` installiert `fuse3` aus den
+Paketquellen der Distribution (apt, dnf, pacman oder zypper; die Rechte holt das Skript mit
+`sudo` oder `doas`). Ohne diesen Schalter installiert das Skript nichts und nennt nur den
+Paketbefehl. Danach prüft es `fusermount3` (setuid root) und `/dev/fuse` (lesbar und
+schreibbar) und meldet Abweichungen als Warnung. `--with-desktop` schaltet se Desktop ein
+(`se desktop enable`). Jede Installation der Desktop-App startet se Desktop neu, außer mit
+`--cli-only`; `--cli-only` und `--with-desktop` schließen sich aus. `--dry-run` zeigt die
+Schritte, ohne sie auszuführen; `--help` zeigt die Optionen.
+
 **Linux nur Terminal (ohne Desktop-/X11-Abhängigkeiten):**
 
 ```bash
@@ -1048,7 +1078,11 @@ Remote-Laufwerke kann eine Administratorbestätigung anfordern. Zwei Wege:
    Die offline eingebettete Dokany-2.3.1.1000-Komponente ist im normalen Setup
    standardmäßig ausgewählt; nur dieser MSI-Schritt löst UAC aus. Ein stilles
    Setup installiert Dokany dagegen nur mit `/S /INSTALLDOKANY=1`. Smart Explorer
-   entfernt eine installierte Dokany-Runtime beim Uninstall nicht.
+   entfernt eine installierte Dokany-Runtime beim Uninstall nicht. Die Komponente
+   **se Desktop (optional)** ist standardmäßig nicht ausgewählt; ein stilles Setup wählt sie mit
+   `/S /DESKTOP=1` aus. Ausgewählt führt der Installer `se desktop enable --json` aus; schlägt
+   das fehl, bleibt die Installation bestehen und der Installer nennt `se desktop enable`.
+   Nach dem Hauptprogramm startet der Installer se Desktop neu (`se desktop restart`).
 2. **Portable:** [`Smart Explorer.exe`](release-native/Smart%20Explorer.exe)
    herunterladen und direkt starten (keine Installation). Für Auto-Update einmalig
    die Update-Quelle setzen (siehe unten). Das portable Terminal-Binary liegt als
