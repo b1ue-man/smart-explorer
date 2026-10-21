@@ -5,6 +5,9 @@ import android.appwidget.AppWidgetProviderInfo
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ApplicationInfo
+import android.content.pm.LauncherApps
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.os.UserHandle
@@ -111,6 +114,7 @@ class WidgetFlow(context: Context, val host: LauncherWidgetHost) {
     private val app = context.applicationContext
     val manager: AppWidgetManager = AppWidgetManager.getInstance(app)
     private val users = app.getSystemService(UserManager::class.java)
+    private val launcherApps = app.getSystemService(LauncherApps::class.java)
 
     fun userFor(serial: Long): UserHandle? = users.getUserForSerialNumber(serial)
 
@@ -249,10 +253,22 @@ class WidgetFlow(context: Context, val host: LauncherWidgetHost) {
         return Restored.Rebound(id, configured = info == null || !needsConfiguration(info))
     }
 
+    /**
+     * The app of [info] in the profile of the provider. `AppWidgetProviderInfo.providerInfo` is hidden and
+     * `getActivityInfo()` exists from API 31 only, so `LauncherApps` (API 26) answers for every profile.
+     */
+    fun applicationOf(info: AppWidgetProviderInfo): ApplicationInfo? = try {
+        launcherApps.getApplicationInfo(info.provider.packageName, 0, info.profile)
+    } catch (_: PackageManager.NameNotFoundException) {
+        null
+    } catch (_: SecurityException) {
+        null
+    }
+
     /** Name of the app a widget item belongs to, for the cells that wait for the person (U38-6). */
     fun appLabel(item: HomeItem): String {
         val info = item.provider?.let { findProvider(it, item.userSerial) }
-        val label = info?.providerInfo?.applicationInfo?.loadLabel(app.packageManager)?.toString()
+        val label = info?.let { applicationOf(it) }?.loadLabel(app.packageManager)?.toString()
         return label?.takeIf { it.isNotEmpty() } ?: item.providerPackage ?: "Widget"
     }
 
