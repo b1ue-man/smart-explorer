@@ -306,12 +306,17 @@ fn screen_task_old_peer_unsupported() {
         })
         .unwrap();
     // Like the node's accept loop: the handshake (and with it the ALPN
-    // refusal) only runs for a connection that is accepted and awaited.
+    // refusal) only runs for a connection that is accepted and awaited. A
+    // connection that completes (the viewer's file-session probe, when the
+    // refusal of the screen ALPN is lost) stays open until the viewer closes
+    // it.
     let acceptor = old.clone();
     runtime.spawn(async move {
         while let Some(incoming) = acceptor.accept().await {
             tokio::spawn(async move {
-                let _ = incoming.await;
+                if let Ok(connection) = incoming.await {
+                    connection.closed().await;
+                }
             });
         }
     });
