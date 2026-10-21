@@ -41,7 +41,7 @@ pub(super) fn send(
         || target.password().is_some()
         || target.query().is_some()
         || target.fragment().is_some()
-        || target.path() != format!("{}/", current.path())
+        || !appends_slash(current.path(), target.path())
     {
         return Err(ureq::Error::Status(response.status(), response));
     }
@@ -59,4 +59,42 @@ pub(super) fn send(
         return Err(ureq::Error::Status(response.status(), response));
     }
     Ok(response)
+}
+
+/// Whether `target` is `current` with one `/` appended. Servers spell the
+/// redirect in their own percent-encoding (Apache leaves `=` and `+` as they
+/// are, `encode_path` escapes them), so both paths are compared segment by
+/// segment after decoding; a `%2F` stays inside its segment and never
+/// matches a real separator.
+fn appends_slash(current: &str, target: &str) -> bool {
+    let Some(stem) = target.strip_suffix('/') else {
+        return false;
+    };
+    !current.ends_with('/')
+        && stem.split('/').count() == current.split('/').count()
+        && stem
+            .split('/')
+            .zip(current.split('/'))
+            .all(|(left, right)| decoded(left) == decoded(right))
+}
+
+/// The bytes of one percent-encoded path segment.
+fn decoded(segment: &str) -> Vec<u8> {
+    let bytes = segment.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            let high = char::from(bytes[index + 1]).to_digit(16);
+            let low = char::from(bytes[index + 2]).to_digit(16);
+            if let (Some(high), Some(low)) = (high, low) {
+                out.push((high * 16 + low) as u8);
+                index += 3;
+                continue;
+            }
+        }
+        out.push(bytes[index]);
+        index += 1;
+    }
+    out
 }
