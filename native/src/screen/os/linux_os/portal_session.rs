@@ -297,6 +297,21 @@ impl PortalSource {
             had_frame: false,
         }
     }
+
+    /// Where the session stands, for the failure text of a source that
+    /// shows no picture: the portal still waiting (dialog, portal service),
+    /// a failure, or the stream and what it did.
+    #[cfg(test)]
+    pub(crate) fn describe(&self) -> String {
+        match &*self.handle.lock() {
+            PortalState::Waiting => {
+                "portal: no answer to Start yet (dialog or portal service)".into()
+            }
+            PortalState::Streaming(latest) => format!("portal: streaming; {}", latest.describe()),
+            PortalState::Denied(text) => format!("portal: denied: {text}"),
+            PortalState::Failed(text) => format!("portal: failed: {text}"),
+        }
+    }
 }
 
 impl ScreenSource for PortalSource {

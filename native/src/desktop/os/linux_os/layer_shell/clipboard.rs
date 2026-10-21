@@ -282,10 +282,16 @@ fn wait_readable(fd: i32, deadline: Instant) -> Result<bool, String> {
 
 impl FileClipboard for LayerClipboard {
     fn write(&self, files: &[PathBuf], cut: bool) -> Result<(), String> {
-        self.set_selection(Content::Files {
+        let result = self.set_selection(Content::Files {
             files: files.to_vec(),
             cut,
-        })
+        });
+        // The view shows the error as a notice; the log keeps it for the
+        // suite and for support.
+        if let Err(error) = &result {
+            eprintln!("se Desktop: Zwischenablage: {error}");
+        }
+        result
     }
 
     fn read(&self) -> Result<Option<(Vec<PathBuf>, bool)>, String> {
