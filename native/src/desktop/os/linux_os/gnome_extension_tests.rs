@@ -109,8 +109,15 @@ fn desktop_task_gnome_extension_static() {
         }
         match variant {
             GnomeVariant::A => {
+                // Mutter 45 to 48 names the check `owns_window`;
+                // `query_window_belongs_to` is a wrapper of the DING
+                // extension, not Mutter API (suite run 7: "is not a function").
+                assert!(
+                    !script.contains("query_window_belongs_to"),
+                    "a: no Mutter API"
+                );
                 for needed in [
-                    "query_window_belongs_to",
+                    "owns_window",
                     "hide_from_window_list",
                     "window.lower()",
                     "window.stick()",
