@@ -45,6 +45,11 @@ Jobs and stages (D3; owner module in ``native/rdt_task``; ``inventory`` closes e
 The Android device jobs call this script twice: ``--phase device`` inside the emulator action,
 then ``--phase verdict`` (inventory, summary, exit code) in a step that always runs.
 
+Environment of the workflow input ``speed_scope`` (all | local | none): ``RDT_SKIP_JOB_REASON`` leaves a whole
+speed job out (every entry "nicht ausgeführt" with that reason); ``RDT_SPEED_SCOPE`` is read by the stage
+``speed-android-device`` of the job android-device (rdt_task/speed.py): it measures only for ``all``, otherwise its
+entries are "nicht ausgeführt" with the reason of the user decision.
+
 Each job writes ``report.json`` = ``{"job", "candidate_sha", "tests": [{"name", "stage", "status",
 "reason", "duration_s"}], "stages": [...]}``, ``summary.md`` and the GitHub job summary. Statuses:
 bestanden (passed), gescheitert (failed), nicht ausgeführt (not_run, always with a reason, never

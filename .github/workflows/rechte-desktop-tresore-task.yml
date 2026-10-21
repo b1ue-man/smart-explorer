@@ -1012,6 +1012,9 @@ jobs:
     timeout-minutes: 240
     env:
       CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      # The stage speed-android-device measures only when speed_scope is all (rdt_task/speed.py, stage_android);
+      # otherwise its entries are not run, with the reason of the user decision.
+      RDT_SPEED_SCOPE: ${{ inputs.speed_scope }}
     steps:
       - uses: actions/checkout@v7
         with:
