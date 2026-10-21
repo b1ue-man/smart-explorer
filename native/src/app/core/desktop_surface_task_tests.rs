@@ -268,6 +268,11 @@ impl Driver {
     }
 
     fn click(&mut self, cell: Cell) {
+        // egui 0.29 counts a click as a double (triple) click from the time
+        // alone: a release less than 0.3 s (0.6 s) after the one before it,
+        // wherever the pointer is. A pause keeps this click from being
+        // counted together with the previous one on another cell.
+        self.time += 1.0;
         let pos = Driver::center(cell);
         self.frame(vec![egui::Event::PointerMoved(pos)]);
         self.frame(vec![Driver::button(pos, true)]);

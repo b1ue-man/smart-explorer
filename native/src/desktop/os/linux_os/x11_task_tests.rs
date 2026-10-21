@@ -324,6 +324,14 @@ fn two_monitors(x: &XServer) -> String {
     output
 }
 
+/// The server's own list of monitors, for the message of a failed check.
+fn server_monitors(x: &XServer) -> String {
+    format!(
+        "; xrandr --listmonitors:\n{}",
+        x.output("xrandr", &["--listmonitors"])
+    )
+}
+
 #[test]
 #[ignore = "braucht Xvfb, openbox und xrandr (Stufe linux-desktop: x11)"]
 fn desktop_task_x11_monitors_two_screens() {
@@ -331,7 +339,7 @@ fn desktop_task_x11_monitors_two_screens() {
     let mut x = XServer::start("1600x600x24");
     let output = two_monitors(&x);
     let listed = monitors();
-    assert_eq!(listed.len(), 2, "{listed:?}");
+    assert_eq!(listed.len(), 2, "{listed:?}{}", server_monitors(&x));
     assert_eq!(listed[0].rect, Some([0, 0, 800, 600]));
     assert_eq!(listed[1].rect, Some([800, 0, 1600, 600]));
     assert_eq!(listed[0].key, output, "the name of the first output");
@@ -382,7 +390,7 @@ fn desktop_task_cross_monitor_drag() {
     let mut x = XServer::start("1600x600x24");
     two_monitors(&x);
     let listed = monitors();
-    assert_eq!(listed.len(), 2, "{listed:?}");
+    assert_eq!(listed.len(), 2, "{listed:?}{}", server_monitors(&x));
     x.start_window_manager("openbox", &["--sm-disable"]);
     let mut left = SurfaceProc::start(&x, &["--desktop-surface", "--monitor", &listed[0].key], &[]);
     left.greet(&listed[0].key, &["a.txt"]);
