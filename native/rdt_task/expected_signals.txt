@@ -7,14 +7,7 @@
 #     screen_task_, desktop_task_, launcher_task_, licenses_task_, rdt_suite_) im Code
 #     steht hier und laeuft je Job in genau einer Stufe;
 #   - jeder Eintrag im Abschnitt [umgesetzt] existiert im Code;
-#   - ein Eintrag im Abschnitt # ---- Zusatztests U24 ohne Stapelpraefix (Hauptagent, nach R5x) ----
-windows_account_config_reads_only_valid_files  windows-core:unit  pfad=share::platform_exec::exec_account_unit_tests::windows_account_config_reads_only_valid_files  quelle=Uebergabe-U24
-windows_account_setup_words_round_trip  windows-core:unit  pfad=share::platform_exec::exec_account_unit_tests::windows_account_setup_words_round_trip  quelle=Uebergabe-U24
-windows_account_job_pipes_are_exact  windows-core:unit  pfad=share::platform_exec::exec_account_unit_tests::windows_account_job_pipes_are_exact  quelle=Uebergabe-U24
-windows_account_access_lists  windows-core:unit  pfad=share::platform_exec::exec_account_unit_tests::windows_account_access_lists  quelle=Uebergabe-U24
-completions_access_as_reads_the_worker_accounts  linux-core:unit  pfad=cli::completions_access::tests::completions_access_as_reads_the_worker_accounts  quelle=Uebergabe-U24
-
-[noch nicht umgesetzt], der im Code fehlt, erscheint im
+#   - ein Eintrag im Abschnitt [noch nicht umgesetzt], der im Code fehlt, erscheint im
 #     Bericht als "nicht ausgefuehrt" mit dem Grund "nicht umgesetzt" und dem Paket.
 #     Das Paket, das den Test bringt, verschiebt die Zeile nach [umgesetzt] und setzt
 #     dabei Optionen und Stufe endgueltig.
@@ -426,6 +419,12 @@ vault_task_android_task_title_shows_vault_label  linux-core:unit  pfad=mobile::c
 drive_task_remote_scan_delivers_every_failed_path_once  linux-core:unit  pfad=rscan::imp::walk_state::tests::drive_task_remote_scan_delivers_every_failed_path_once  quelle=R15c,SEC-P11b
 drive_task_remote_scan_keeps_long_diagnostics_whole  linux-core:unit  pfad=rscan::imp::walk_state::tests::drive_task_remote_scan_keeps_long_diagnostics_whole  quelle=R15c,SEC-P11b
 vault_task_android_background_waits_for_open_file  linux-core:unit  pfad=vault::os::session::timer::open_file_tests::vault_task_android_background_waits_for_open_file  quelle=U31-S8,SEC-P13
+# ---- Zusatztests U24 ohne Stapelpraefix (Hauptagent, nach R5x) ----
+windows_account_config_reads_only_valid_files  windows-core:unit  pfad=share::platform_exec::exec_account_unit_tests::windows_account_config_reads_only_valid_files  quelle=Uebergabe-U24
+windows_account_setup_words_round_trip  windows-core:unit  pfad=share::platform_exec::exec_account_unit_tests::windows_account_setup_words_round_trip  quelle=Uebergabe-U24
+windows_account_job_pipes_are_exact  windows-core:unit  pfad=share::platform_exec::exec_account_unit_tests::windows_account_job_pipes_are_exact  quelle=Uebergabe-U24
+windows_account_access_lists  windows-core:unit  pfad=share::platform_exec::exec_account_unit_tests::windows_account_access_lists  quelle=Uebergabe-U24
+completions_access_as_reads_the_worker_accounts  linux-core:unit  pfad=cli::completions_access::tests::completions_access_as_reads_the_worker_accounts  quelle=Uebergabe-U24
 
 [noch nicht umgesetzt]
 
