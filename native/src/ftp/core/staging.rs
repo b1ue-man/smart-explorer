@@ -21,6 +21,19 @@ use std::io;
 use super::core_impl::{basename, parent_dir};
 use super::io_adapters::FtpConnection;
 use crate::vfs::{Backend, VfsMeta};
+use suppaftp::{RustlsFtpStream, Status};
+
+/// Whether a stage's random name is probed before STOR (`require_stage_free`).
+/// A 64-bit random name only collides with a foreign file of that exact name,
+/// so the probe is caution, and it costs the round trips of a complete stat.
+/// Stays `true` until the security question S6 is answered (plan U46-6).
+const FTP_PROBE_STAGE_NAME: bool = true;
+
+/// Whether `publish` looks at the stage (MLST or a listing) before RNFR. When
+/// `false`, the 550 of RNFR is the answer for a missing stage (`NotFound`, as
+/// before); the destination is still looked at, it is the check against
+/// replacing. Stays `true` until S6 is answered (plan U46-6).
+const FTP_VERIFY_STAGE_BEFORE_RENAME: bool = true;
 
 fn already_exists(path: &str) -> io::Error {
     io::Error::new(
@@ -41,6 +54,9 @@ pub(super) fn require_absent<B: Backend + ?Sized>(backend: &B, path: &str) -> io
 /// Fails with `AlreadyExists` when a file named `path` (a stage's random
 /// name) exists: SIZE where the server has it, else a listing of the parent.
 pub(super) fn require_stage_free(connection: &FtpConnection, path: &str) -> io::Result<()> {
+    if !FTP_PROBE_STAGE_NAME {
+        return Ok(());
+    }
     let taken = entry(connection, path)?.is_some();
     if taken {
         return Err(already_exists(path));
@@ -76,7 +92,27 @@ pub(super) fn publish(
     destination: &str,
     replace: bool,
 ) -> io::Result<()> {
-    let (stage, existing) = if connection.features()?.mlst {
+    publish_with(
+        FTP_VERIFY_STAGE_BEFORE_RENAME,
+        connection,
+        staged,
+        destination,
+        replace,
+    )
+}
+
+/// `publish` with the stage look-up (`verify`) chosen by the caller, so both
+/// branches of `FTP_VERIFY_STAGE_BEFORE_RENAME` can be exercised.
+pub(super) fn publish_with(
+    verify: bool,
+    connection: &FtpConnection,
+    staged: &str,
+    destination: &str,
+    replace: bool,
+) -> io::Result<()> {
+    let (stage, existing) = if !verify {
+        (None, entry(connection, destination)?)
+    } else if connection.features()?.mlst {
         // Existing objects need one MLST each, not a data connection and
         // full parent listing for every promotion. Ambiguous 550 still uses
         // the metadata module's complete-listing absence proof.
@@ -91,14 +127,14 @@ pub(super) fn publish(
     } else {
         (entry(connection, staged)?, entry(connection, destination)?)
     };
-    let stage = stage.ok_or_else(|| {
-        io::Error::new(io::ErrorKind::NotFound, format!("{staged} nicht gefunden"))
-    })?;
-    if stage.is_dir || stage.is_symlink || stage.special {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "staged promotion source must be a regular file",
-        ));
+    if verify {
+        let stage = stage.ok_or_else(|| not_found(staged))?;
+        if stage.is_dir || stage.is_symlink || stage.special {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "staged promotion source must be a regular file",
+            ));
+        }
     }
     match existing {
         None => {}
@@ -114,8 +150,38 @@ pub(super) fn publish(
     super::errors::command_path(staged)?;
     super::errors::command_path(destination)?;
     connection.with_stream_mutation(|stream| {
-        stream
-            .rename(staged, destination)
-            .map_err(super::errors::map)
+        if verify {
+            stream
+                .rename(staged, destination)
+                .map_err(super::errors::map)
+        } else {
+            rename_unverified(stream, staged, destination)
+        }
     })
+}
+
+fn not_found(path: &str) -> io::Error {
+    io::Error::new(io::ErrorKind::NotFound, format!("{path} nicht gefunden"))
+}
+
+/// RNFR and RNTO as `rename` sends them, but told apart: the 550 of RNFR
+/// means the stage is missing (`NotFound`), whatever RNTO answers is a
+/// failure of the target.
+fn rename_unverified(
+    stream: &mut RustlsFtpStream,
+    staged: &str,
+    destination: &str,
+) -> io::Result<()> {
+    match stream.custom_command(format!("RNFR {staged}"), &[Status::RequestFilePending]) {
+        Ok(_) => {}
+        Err(error) if super::errors::reply_code(&error) == Some(550) => {
+            return Err(not_found(staged))
+        }
+        Err(error) => return Err(super::errors::map(error)),
+    }
+    let expected = [Status::RequestedFileActionOk, Status::CommandOk];
+    stream
+        .custom_command(format!("RNTO {destination}"), &expected)
+        .map(|_| ())
+        .map_err(super::errors::map)
 }

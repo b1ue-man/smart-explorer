@@ -20,6 +20,12 @@ mod tree_remove;
 mod writer;
 
 #[cfg(test)]
+#[path = "core/data_overlap_server.rs"]
+mod data_overlap_server;
+#[cfg(test)]
+#[path = "core/data_overlap_tests.rs"]
+mod data_overlap_tests;
+#[cfg(test)]
 #[path = "core/delete_speed_task_tests.rs"]
 mod delete_speed_task_tests;
 #[cfg(test)]

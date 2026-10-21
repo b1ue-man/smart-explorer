@@ -104,6 +104,12 @@ impl SmbSession {
         Ok(session)
     }
 
+    /// Whether the current generation still carries a live connection. Unlike
+    /// `current` this never dials, so planning a batch costs no round trip.
+    pub(super) fn is_live(&self) -> bool {
+        lock(&self.current).is_ok_and(|current| current.as_ref().is_some_and(|g| g.alive()))
+    }
+
     pub(super) fn runtime(&self) -> Arc<Runtime> {
         self.rt.clone()
     }

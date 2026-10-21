@@ -21,6 +21,10 @@
 
 #[path = "core/backend.rs"]
 mod backend;
+#[path = "core/batch.rs"]
+mod batch;
+#[path = "core/batch_wire.rs"]
+mod batch_wire;
 #[path = "core/errors.rs"]
 mod errors;
 #[path = "core/extensions.rs"]
@@ -46,6 +50,12 @@ mod url;
 #[path = "core/wire.rs"]
 mod wire;
 
+#[cfg(test)]
+#[path = "core/batch_fake.rs"]
+mod batch_fake;
+#[cfg(test)]
+#[path = "core/batch_tests.rs"]
+mod batch_tests;
 #[cfg(test)]
 #[path = "core/delete_speed_task_tests.rs"]
 mod delete_speed_task_tests;
