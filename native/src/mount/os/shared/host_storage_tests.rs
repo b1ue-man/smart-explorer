@@ -125,6 +125,8 @@ fn drive_task_vault_spool_uses_sealed_storage() {
     let sealed = fs::read(&spools[0]).unwrap();
     assert!(!contains(&sealed, MARKER), "cleartext reached the spool");
     assert!(sealed.len() > MARKER.len());
+    // The save publishes on flush; closing only releases the handle.
+    engine.flush(handle).unwrap();
     engine.close(handle).unwrap();
     assert_eq!(backend.bytes("/note"), MARKER);
     drop(engine);

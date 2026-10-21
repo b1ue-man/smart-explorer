@@ -220,6 +220,8 @@ fn vault_task_compare_merge_inputs_contain_only_ciphertext() {
         "/text.txt",
         format!("A {marker}\ngemeinsam\n").as_bytes(),
     );
+    // Equal sizes: the sync tells the sides apart by their times.
+    tick();
     fx.write(
         &fx.root_b,
         "/text.txt",
