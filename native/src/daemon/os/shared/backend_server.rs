@@ -65,6 +65,28 @@ fn service_version(backend: &BackendHandle) -> String {
     format!("{} worker", agent_proto::server_version_with(batch, slots))
 }
 
+/// The legacy text of the busy reply when no thread can be started; "too
+/// many concurrent" is what older clients classify as overload.
+const THREAD_LIMIT_TEXT: &str = "too many concurrent backend requests (thread limit)";
+
+/// How a request whose worker thread could not start is answered.
+#[derive(Debug, PartialEq, Eq)]
+enum SpawnFailureReply {
+    /// "Busy" (overload), the answer to a refused thread (`EAGAIN`).
+    Busy,
+    Failed(String),
+}
+
+/// A refused thread (`WouldBlock`, `EAGAIN`) is overload; every other reason
+/// stays an error of the request.
+fn spawn_failure_reply(error: &io::Error) -> SpawnFailureReply {
+    if error.kind() == io::ErrorKind::WouldBlock {
+        SpawnFailureReply::Busy
+    } else {
+        SpawnFailureReply::Failed(format!("backend worker could not start: {error}"))
+    }
+}
+
 pub(crate) fn serve_backend(
     mut r: impl Read,
     w: impl Write + Send + 'static,
@@ -162,11 +184,12 @@ pub(crate) fn serve_backend(
             Ok(worker) => workers.push(worker),
             Err(error) => {
                 session.discard(id);
-                emit(
-                    session.sink(),
-                    id,
-                    &Frame::Err(format!("backend worker could not start: {error}")),
-                )?;
+                match spawn_failure_reply(&error) {
+                    // A process at its thread limit is overloaded, like one
+                    // with too many requests: the client waits and retries.
+                    SpawnFailureReply::Busy => session.reject_busy(id, THREAD_LIMIT_TEXT)?,
+                    SpawnFailureReply::Failed(text) => emit(session.sink(), id, &Frame::Err(text))?,
+                }
             }
         }
     }
@@ -334,3 +357,37 @@ fn dispatch_backend(
 #[cfg(test)]
 #[path = "backend_server_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod spawn_reply_tests {
+    use super::*;
+
+    #[test]
+    fn speed_task_service_thread_refusal_replies_busy() {
+        // `Builder::spawn` reports EAGAIN as WouldBlock
+        let refused = io::Error::from_raw_os_error(libc_eagain());
+        assert_eq!(refused.kind(), io::ErrorKind::WouldBlock);
+        assert_eq!(spawn_failure_reply(&refused), SpawnFailureReply::Busy);
+        assert_eq!(
+            spawn_failure_reply(&io::Error::from(io::ErrorKind::WouldBlock)),
+            SpawnFailureReply::Busy
+        );
+        // the busy text is one that older clients take as overload
+        assert!(THREAD_LIMIT_TEXT.contains("too many concurrent"));
+        // every other reason stays an error of the request
+        let other = io::Error::new(io::ErrorKind::OutOfMemory, "no stack");
+        assert_eq!(
+            spawn_failure_reply(&other),
+            SpawnFailureReply::Failed("backend worker could not start: no stack".to_string())
+        );
+    }
+
+    /// `EAGAIN` on Linux and Android, `WSAEWOULDBLOCK` on Windows.
+    fn libc_eagain() -> i32 {
+        if cfg!(windows) {
+            10035
+        } else {
+            11
+        }
+    }
+}

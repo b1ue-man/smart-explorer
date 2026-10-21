@@ -2,12 +2,14 @@
 //! worker took: the shared result and error types, the byte meter, the state a
 //! retry continues from, and the dispatch per endpoint combination.
 use super::super::flow::PermitPair;
+use super::super::limiter::OpAccounts;
 use super::queue::FileWork;
-use super::stats::Stats;
+use super::stats::{RunningSegment, Stats};
 use super::view::Side;
 use super::Engine;
 use std::cell::Cell;
 use std::io;
+use std::time::{Duration, Instant};
 
 /// Copy buffer per running operation: the largest chunk any backend moves
 /// per call (agent `CHUNK` 256 KiB, SFTP READ/WRITE ≈ 255 KiB); a bigger
@@ -86,11 +88,39 @@ pub(crate) fn relabeled(error: &io::Error, prefix: &str) -> io::Error {
     }
 }
 
-/// Counts streamed bytes for the flow controller and the progress.
+/// Counts streamed bytes for the flow controller and the progress, and the
+/// time the operation spends by account (source, target, computing, waiting):
+/// the verdict "who limits" (`core/limiter.rs`) is made from these. Every
+/// charge also goes to the job's totals at once, so an operation that runs
+/// for a minute already shows in the verdict of the next second.
 pub(crate) struct Meter<'m> {
     permits: &'m PermitPair,
     stats: &'m Stats,
     moved: Cell<u64>,
+    accounts: Cell<OpAccounts>,
+}
+
+/// The error of a thread the process refused to start: back-pressure like a
+/// busy peer (`WouldBlock` counts as overload), so the file waits and the
+/// flow halves instead of the file failing.
+pub(crate) fn thread_refusal(error: io::Error) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::WouldBlock,
+        format!("Der Prozess kann keinen weiteren Thread starten: {error}"),
+    )
+}
+
+/// Nanoseconds of a duration, saturating.
+pub(crate) fn nanos(elapsed: Duration) -> u64 {
+    u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX)
+}
+
+/// The account a measured stretch of time belongs to.
+#[derive(Clone, Copy)]
+enum Account {
+    Source,
+    Target,
+    Cpu,
 }
 
 impl<'m> Meter<'m> {
@@ -99,7 +129,76 @@ impl<'m> Meter<'m> {
             permits,
             stats,
             moved: Cell::new(0),
+            accounts: Cell::new(OpAccounts::default()),
         }
+    }
+
+    fn timed<T>(&self, account: Account, f: impl FnOnce() -> T) -> T {
+        let started = Instant::now();
+        let result = f();
+        self.charge(account, nanos(started.elapsed()));
+        result
+    }
+
+    fn charge(&self, account: Account, ns: u64) {
+        let delta = match account {
+            Account::Source => OpAccounts {
+                source_ns: ns,
+                ..OpAccounts::default()
+            },
+            Account::Target => OpAccounts {
+                target_ns: ns,
+                ..OpAccounts::default()
+            },
+            Account::Cpu => OpAccounts {
+                cpu_ns: ns,
+                ..OpAccounts::default()
+            },
+        };
+        self.accounts.set(self.accounts.get().plus(delta));
+        self.stats.book(delta);
+    }
+
+    /// Runs a read call of the source and books its time to the source.
+    pub(crate) fn timed_source<T>(&self, f: impl FnOnce() -> T) -> T {
+        self.timed(Account::Source, f)
+    }
+
+    /// Runs a write call of the target and books its time to the target.
+    pub(crate) fn timed_target<T>(&self, f: impl FnOnce() -> T) -> T {
+        self.timed(Account::Target, f)
+    }
+
+    /// Runs a hash, compression or encryption step of this thread.
+    pub(crate) fn timed_cpu<T>(&self, f: impl FnOnce() -> T) -> T {
+        self.timed(Account::Cpu, f)
+    }
+
+    /// Source time spent on another thread of this operation (the reader of
+    /// a remote-to-remote stream).
+    pub(crate) fn add_source_ns(&self, ns: u64) {
+        self.charge(Account::Source, ns);
+    }
+
+    /// Time the thread waited for permit, memory or a folder before it began
+    /// (or between two attempts).
+    pub(crate) fn add_wait(&self, ns: u64) {
+        let delta = OpAccounts {
+            wait_ns: ns,
+            ..OpAccounts::default()
+        };
+        self.accounts.set(self.accounts.get().plus(delta));
+        self.stats.book(delta);
+    }
+
+    /// What this operation spent so far, by account.
+    pub(crate) fn accounts(&self) -> OpAccounts {
+        self.accounts.get()
+    }
+
+    /// Counts a range of a large file as running while the guard lives.
+    pub(crate) fn segment(&self) -> RunningSegment<'m> {
+        self.stats.begin_segment()
     }
 
     pub(crate) fn add(&self, bytes: u64) {

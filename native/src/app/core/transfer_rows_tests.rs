@@ -145,3 +145,63 @@ fn transfer_engine_task_rows_title_prefers_the_engine_labels() {
     reported.target = "C:/Ziel".to_string();
     assert_eq!(transfer_title(&reported, None), "Server: /docs → C:/Ziel");
 }
+
+#[test]
+fn speed_task_transfer_rows_limiter_line_texts() {
+    let mut running = progress((10, 100), (1000, 5000));
+    assert_eq!(limiter_line(&running), None, "no verdict yet");
+    assert_eq!(limiter_hint(&running), None, "nothing measured");
+    running.limiter = Limiter::Source;
+    running.limiter_text = Some("Begrenzt durch das Laufwerk (sda1)".to_string());
+    running.limiter_shares = [70, 20, 5, 5];
+    running.elapsed_ms = 60_000;
+    assert_eq!(
+        limiter_line(&running).as_deref(),
+        Some("Begrenzt durch das Laufwerk (sda1)")
+    );
+    assert_eq!(
+        limiter_hint(&running).as_deref(),
+        Some("Quelle 70 %, Ziel 20 %, Rechenzeit 5 %, Warten 5 %")
+    );
+    running.limiter = Limiter::Link;
+    running.limiter_text = Some("Begrenzt durch die Leitung (11.9 MB/s von 12.5 MB/s)".to_string());
+    assert_eq!(
+        limiter_line(&running).as_deref(),
+        Some("Begrenzt durch die Leitung (11.9 MB/s von 12.5 MB/s)")
+    );
+    // a verdict without text, or with a blank one, shows nothing
+    running.limiter_text = None;
+    assert_eq!(limiter_line(&running), None);
+    running.limiter_text = Some("  ".to_string());
+    assert_eq!(limiter_line(&running), None);
+    // a finished transfer keeps its last verdict in the list
+    let mut done = progress((100, 100), (5000, 5000));
+    done.done = true;
+    done.limiter = Limiter::Remote;
+    done.limiter_text = Some("Begrenzt durch Leitung oder Server (SFTP-Server)".to_string());
+    assert_eq!(
+        finished(done).progress.limiter_text.as_deref(),
+        Some("Begrenzt durch Leitung oder Server (SFTP-Server)")
+    );
+}
+
+#[test]
+fn speed_task_transfer_rows_limiter_hidden_while_ramping() {
+    let mut ramping = progress((1, 100), (10, 5000));
+    ramping.limiter = Limiter::Ramp;
+    ramping.limiter_text = Some("Läuft an …".to_string());
+    ramping.elapsed_ms = 3_000;
+    assert_eq!(limiter_line(&ramping).as_deref(), Some("Läuft an …"));
+    ramping.elapsed_ms = 4_999;
+    assert_eq!(limiter_line(&ramping).as_deref(), Some("Läuft an …"));
+    // after five seconds the ramp has nothing to say
+    ramping.elapsed_ms = 5_000;
+    assert_eq!(limiter_line(&ramping), None);
+    ramping.elapsed_ms = 60_000;
+    assert_eq!(limiter_line(&ramping), None);
+    // "waits for supply" is a verdict at any time
+    ramping.limiter = Limiter::Idle;
+    ramping.limiter_text =
+        Some("Wartet auf Nachschub (Quelle liefert nicht schnell genug)".to_string());
+    assert!(limiter_line(&ramping).is_some());
+}

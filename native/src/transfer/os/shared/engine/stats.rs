@@ -1,6 +1,7 @@
 //! Live numbers of one job, updated by discovery and workers without locks on
 //! the hot path, and turned into a `TransferProgress` by the dispatcher.
 use super::super::engine_policy::RateWindow;
+use super::super::limiter::OpAccounts;
 use super::super::types::{TransferKind, TransferProgress};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -29,6 +30,53 @@ pub(crate) struct Stats {
     next_token: AtomicU64,
     active: Mutex<Vec<(u64, String)>>,
     rate: Mutex<RateWindow>,
+    /// Time of all operations of the job by account (nanoseconds), booked
+    /// as it is spent.
+    source_ns: AtomicU64,
+    target_ns: AtomicU64,
+    cpu_ns: AtomicU64,
+    wait_ns: AtomicU64,
+    /// The part of `wait_ns` spent waiting for the memory budget.
+    memory_wait_ns: AtomicU64,
+    /// Ranges of large files running right now.
+    segments_running: AtomicU64,
+}
+
+/// The job's totals at one moment; the verdict works on the difference of two.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Totals {
+    pub accounts: OpAccounts,
+    pub memory_wait_ns: u64,
+    /// Every byte moved, retried ones included.
+    pub moved: u64,
+}
+
+impl Totals {
+    /// What happened since `earlier`.
+    pub(crate) fn since(self, earlier: Totals) -> Totals {
+        let minus = |now: u64, then: u64| now.saturating_sub(then);
+        Totals {
+            accounts: OpAccounts {
+                source_ns: minus(self.accounts.source_ns, earlier.accounts.source_ns),
+                target_ns: minus(self.accounts.target_ns, earlier.accounts.target_ns),
+                cpu_ns: minus(self.accounts.cpu_ns, earlier.accounts.cpu_ns),
+                wait_ns: minus(self.accounts.wait_ns, earlier.accounts.wait_ns),
+            },
+            memory_wait_ns: minus(self.memory_wait_ns, earlier.memory_wait_ns),
+            moved: minus(self.moved, earlier.moved),
+        }
+    }
+}
+
+/// A range of a large file; counted as running while this lives.
+pub(crate) struct RunningSegment<'a> {
+    stats: &'a Stats,
+}
+
+impl Drop for RunningSegment<'_> {
+    fn drop(&mut self) {
+        self.stats.segments_running.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 /// A running file; its name leaves the list when this is dropped.
@@ -66,6 +114,45 @@ impl Stats {
             next_token: AtomicU64::new(1),
             active: Mutex::new(Vec::new()),
             rate: Mutex::new(RateWindow::default()),
+            source_ns: AtomicU64::new(0),
+            target_ns: AtomicU64::new(0),
+            cpu_ns: AtomicU64::new(0),
+            wait_ns: AtomicU64::new(0),
+            memory_wait_ns: AtomicU64::new(0),
+            segments_running: AtomicU64::new(0),
+        }
+    }
+
+    /// Books time spent by account.
+    pub(crate) fn book(&self, delta: OpAccounts) {
+        self.source_ns.fetch_add(delta.source_ns, Ordering::AcqRel);
+        self.target_ns.fetch_add(delta.target_ns, Ordering::AcqRel);
+        self.cpu_ns.fetch_add(delta.cpu_ns, Ordering::AcqRel);
+        self.wait_ns.fetch_add(delta.wait_ns, Ordering::AcqRel);
+    }
+
+    /// Books time waited for the memory budget (it counts as waiting too,
+    /// through `Meter::add_wait`; this only marks the memory part).
+    pub(crate) fn book_memory_wait(&self, ns: u64) {
+        self.memory_wait_ns.fetch_add(ns, Ordering::AcqRel);
+    }
+
+    /// A range of a large file starts running.
+    pub(crate) fn begin_segment(&self) -> RunningSegment<'_> {
+        self.segments_running.fetch_add(1, Ordering::AcqRel);
+        RunningSegment { stats: self }
+    }
+
+    pub(crate) fn totals(&self) -> Totals {
+        Totals {
+            accounts: OpAccounts {
+                source_ns: self.source_ns.load(Ordering::Acquire),
+                target_ns: self.target_ns.load(Ordering::Acquire),
+                cpu_ns: self.cpu_ns.load(Ordering::Acquire),
+                wait_ns: self.wait_ns.load(Ordering::Acquire),
+            },
+            memory_wait_ns: self.memory_wait_ns.load(Ordering::Acquire),
+            moved: self.bytes_moved.load(Ordering::Acquire),
         }
     }
 
@@ -177,14 +264,21 @@ impl Stats {
             rate.record(elapsed_ms, self.bytes_moved.load(Ordering::Acquire));
             rate.rate()
         };
-        let active = self
+        // Helpers of a large file run under its name: it is listed once.
+        let mut active: Vec<String> = Vec::new();
+        for (_, name) in self
             .active
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .iter()
-            .take(ACTIVE_SHOWN)
-            .map(|(_, name)| name.clone())
-            .collect::<Vec<_>>();
+        {
+            if active.len() == ACTIVE_SHOWN {
+                break;
+            }
+            if !active.contains(name) {
+                active.push(name.clone());
+            }
+        }
         let mut progress = TransferProgress::new(
             kind,
             kind.label(),
@@ -205,6 +299,10 @@ impl Stats {
             .running
             .load(Ordering::Acquire)
             .min(u64::from(u32::MAX)) as u32;
+        progress.segments = self
+            .segments_running
+            .load(Ordering::Acquire)
+            .min(u64::from(u32::MAX)) as u32;
         progress
     }
 }
@@ -223,6 +321,48 @@ mod tests {
         assert_eq!(progress.bytes_done, 0, "saturates instead of wrapping");
         stats.resized(100, 40);
         assert_eq!(stats.snapshot(TransferKind::Upload, 0).bytes_total, 40);
+    }
+
+    #[test]
+    fn speed_task_stats_list_a_split_file_once() {
+        let stats = Stats::new();
+        let owner = stats.begin("big.iso");
+        let helper_one = stats.begin("big.iso");
+        let helper_two = stats.begin("big.iso");
+        let other = stats.begin("small.txt");
+        let progress = stats.snapshot(TransferKind::Download, 0);
+        assert_eq!(progress.active, vec!["big.iso", "small.txt"]);
+        assert_eq!(progress.current, "big.iso");
+        assert_eq!(progress.parallel, 4, "every running operation counts");
+        drop((owner, helper_one, helper_two, other));
+        assert_eq!(stats.snapshot(TransferKind::Download, 0).parallel, 0);
+    }
+
+    #[test]
+    fn speed_task_stats_totals_and_running_ranges() {
+        let stats = Stats::new();
+        let before = stats.totals();
+        stats.book(OpAccounts {
+            source_ns: 3,
+            target_ns: 5,
+            cpu_ns: 7,
+            wait_ns: 11,
+        });
+        stats.book_memory_wait(2);
+        stats.moved(100);
+        let delta = stats.totals().since(before);
+        assert_eq!(delta.accounts.source_ns, 3);
+        assert_eq!(delta.accounts.wait_ns, 11);
+        assert_eq!((delta.memory_wait_ns, delta.moved), (2, 100));
+        // a counter that did not move gives zero, never a wrapped number
+        assert_eq!(before.since(stats.totals()), Totals::default());
+        let first = stats.begin_segment();
+        let second = stats.begin_segment();
+        assert_eq!(stats.snapshot(TransferKind::Download, 0).segments, 2);
+        drop(first);
+        assert_eq!(stats.snapshot(TransferKind::Download, 0).segments, 1);
+        drop(second);
+        assert_eq!(stats.snapshot(TransferKind::Download, 0).segments, 0);
     }
 
     #[test]

@@ -75,7 +75,7 @@ impl SegmentIo for DownloadIo<'_> {
                 return Err(SegmentError::Failed(OpError::canceled()));
             }
             let wanted = (len - done).min(buffer.len() as u64) as usize;
-            let read = match reader.read(&mut buffer[..wanted]) {
+            let read = match meter.timed_source(|| reader.read(&mut buffer[..wanted])) {
                 Ok(read) => read,
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
                 Err(error) => return Err(SegmentError::Failed(OpError::source(error))),
@@ -84,7 +84,10 @@ impl SegmentIo for DownloadIo<'_> {
                 return Err(SegmentError::Failed(self.changed()));
             }
             first_byte_ms.get_or_insert_with(|| elapsed_ms(began));
-            super::super::write_all_at(&self.file, &buffer[..read], start + done)
+            meter
+                .timed_target(|| {
+                    super::super::write_all_at(&self.file, &buffer[..read], start + done)
+                })
                 .map_err(|error| SegmentError::Failed(OpError::target(error)))?;
             meter.add(read as u64);
             done += read as u64;
@@ -203,7 +206,7 @@ pub(super) fn try_split<'e>(
             // not hashed: a fallback to one stream hashes them itself.
             let prefix = shared.prefix();
             if hashing && prefix > resume_at {
-                if let Err(error) = hasher.advance(part, prefix, check, file) {
+                if let Err(error) = meter.timed_cpu(|| hasher.advance(part, prefix, check, file)) {
                     shared.fail(error);
                 }
             }

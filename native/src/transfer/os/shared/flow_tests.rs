@@ -162,3 +162,103 @@ fn transfer_engine_task_flow_pair_does_not_hoard_the_first_permit() {
     blocker.finish(OpOutcome::Done);
     assert!(waiter.join().expect("pair thread").is_some());
 }
+
+#[test]
+fn speed_task_flow_snapshot_reports_saturated_and_plateau() {
+    let flow = flow(key("facts"), Some(1));
+    let idle = flow.snapshot();
+    assert!(!idle.saturated);
+    // a flow at its bound cannot grow
+    assert!(idle.plateau);
+    let held = flow.try_acquire().expect("permit");
+    std::thread::sleep(std::time::Duration::from_millis(350));
+    let busy = flow.snapshot();
+    assert!(busy.saturated, "the only permit was in use all the time");
+    assert_eq!(busy.in_flight, 1);
+    held.finish(OpOutcome::Done);
+    std::thread::sleep(std::time::Duration::from_millis(350));
+    assert!(!flow.snapshot().saturated, "nothing was running");
+    // a flow that can still grow is ramping, not at a plateau
+    let growing = flow_with_identity(key("growing"), None, Some(64));
+    assert!(!growing.snapshot().plateau);
+}
+
+#[test]
+fn speed_task_flow_start_limit_comes_from_the_hint() {
+    let hinted = Flow::new("k".into(), Some("identity".into()), Some(8), 64);
+    assert_eq!(hinted.snapshot().limit, 8);
+    let plain = Flow::new("k".into(), Some("identity".into()), None, 64);
+    assert_eq!(plain.snapshot().limit, 2);
+    let bounded = Flow::new("k".into(), None, Some(8), 4);
+    assert_eq!(bounded.snapshot().limit, 4, "the bound wins");
+}
+
+#[test]
+fn speed_task_flow_thread_refusal_bound_survives_lookups() {
+    let name = key("refusal");
+    let first = flow(name.clone(), Some(64));
+    assert_eq!(first.snapshot().ceiling, 64);
+    first.learn_ceiling(3);
+    let learned = first.snapshot();
+    assert_eq!(learned.ceiling, 3, "the bound is what ran");
+    assert!(learned.limit <= 3);
+    // the backend announces its own bound again at every lookup: the lower
+    // bound that was taught stays
+    let again = flow(name.clone(), Some(64));
+    assert!(Arc::ptr_eq(&first, &again));
+    assert_eq!(again.snapshot().ceiling, 3);
+    // a lower bound of the backend still wins
+    assert_eq!(flow(name.clone(), Some(2)).snapshot().ceiling, 2);
+    // and at least one operation may run
+    first.learn_ceiling(0);
+    assert_eq!(first.snapshot().ceiling, 1);
+}
+
+#[test]
+fn speed_task_flow_finish_with_books_the_accounts_on_both_flows() {
+    let one = flow(key("books-one"), Some(2));
+    let other = flow(key("books-other"), Some(2));
+    let cancel = AtomicBool::new(false);
+    let pair = acquire_pair(&one, Some(&other), 1, &cancel).expect("two permits");
+    let accounts = OpAccounts {
+        source_ns: 5,
+        target_ns: 7,
+        cpu_ns: 11,
+        wait_ns: 13,
+    };
+    pair.finish_with(OpOutcome::Done, accounts);
+    assert_eq!(one.snapshot().accounts, accounts);
+    assert_eq!(other.snapshot().accounts, accounts);
+    // `finish` books nothing
+    let plain = acquire_pair(&one, Some(&other), 1, &cancel).expect("two permits");
+    plain.finish(OpOutcome::Done);
+    assert_eq!(one.snapshot().accounts, accounts);
+    // an abandoned pair feeds neither controller and books nothing
+    let unused = acquire_pair(&one, Some(&other), 1, &cancel).expect("two permits");
+    unused.abandon();
+    assert_eq!(one.snapshot().accounts, accounts);
+    assert_eq!(one.snapshot().in_flight, 0);
+    assert_eq!(other.snapshot().in_flight, 0);
+}
+
+#[test]
+fn speed_task_flow_waited_time_is_counted_per_flow() {
+    let flow = flow(key("waited"), Some(1));
+    let held = flow.try_acquire().expect("permit");
+    let waiter = {
+        let flow = flow.clone();
+        std::thread::spawn(move || {
+            let cancel = AtomicBool::new(false);
+            flow.acquire(&cancel)
+                .map(|permit| permit.finish(OpOutcome::Done))
+        })
+    };
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    held.finish(OpOutcome::Done);
+    assert!(waiter.join().expect("waiter thread").is_some());
+    assert!(
+        flow.snapshot().waited_ms >= 150,
+        "{}",
+        flow.snapshot().waited_ms
+    );
+}

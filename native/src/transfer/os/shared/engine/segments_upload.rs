@@ -73,7 +73,7 @@ impl SegmentIo for UploadIo {
                 return Err(SegmentError::Failed(OpError::canceled()));
             }
             let wanted = (len - done).min(buffer.len() as u64) as usize;
-            let read = match file.read(&mut buffer[..wanted]) {
+            let read = match meter.timed_source(|| file.read(&mut buffer[..wanted])) {
                 Ok(read) => read,
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
                 Err(error) => return Err(SegmentError::Failed(OpError::source(error))),
@@ -82,14 +82,14 @@ impl SegmentIo for UploadIo {
                 // The file is shorter than when it was opened.
                 return Err(SegmentError::Failed(self.source.changed()));
             }
-            writer
-                .write_all(&buffer[..read])
+            meter
+                .timed_target(|| writer.write_all(&buffer[..read]))
                 .map_err(|error| SegmentError::Failed(OpError::target(error)))?;
             meter.add(read as u64);
             done += read as u64;
         }
-        writer
-            .flush()
+        meter
+            .timed_target(|| writer.flush())
             .map_err(|error| SegmentError::Failed(OpError::target(error)))?;
         Ok(SegmentTiming {
             first_byte_ms: ready_ms,

@@ -9,9 +9,10 @@
 //! `SegmentIo`; this module knows neither.
 use super::super::flow::{acquire_pair, classify_error};
 use super::super::flow_control::OpOutcome;
+use super::super::limiter::OpAccounts;
 use super::super::memory::reserve_memory;
 use super::super::segments::{Ledger, SegmentSizer};
-use super::ops::{self, Meter, OpError};
+use super::ops::{self, nanos, Meter, OpError};
 use super::queue::Work;
 use super::{lock, Engine};
 use crate::vfs::Backend;
@@ -140,6 +141,7 @@ impl<'e> Shared<'e> {
         buffer: &mut [u8],
         meter: &Meter<'_>,
     ) -> Option<OpOutcome> {
+        let _running = meter.segment();
         let outcome = match self.io.run(start, len, buffer, meter, &self.abort) {
             Ok(timing) => {
                 lock(&self.sizer).record(len, timing.first_byte_ms, timing.total_ms);
@@ -314,10 +316,14 @@ pub(super) fn help(engine: &Engine<'_>, job: u64, buffer: &mut [u8]) {
         {
             return;
         }
+        let memory_asked = Instant::now();
         let Some(_reservation) = reserve_memory(ops::reservation(engine), &abort) else {
             return;
         };
+        let memory_wait = nanos(memory_asked.elapsed());
+        engine.stats.book_memory_wait(memory_wait);
         trace("memory");
+        let permit_asked = Instant::now();
         let Some(permits) = acquire_pair(
             &engine.op_flows.0,
             engine.op_flows.1.as_ref(),
@@ -326,22 +332,30 @@ pub(super) fn help(engine: &Engine<'_>, job: u64, buffer: &mut [u8]) {
         ) else {
             return;
         };
+        let waited = memory_wait.saturating_add(nanos(permit_asked.elapsed()));
         trace("permit");
         let claimed = engine
             .segments
             .get(job)
             .and_then(|shared| shared.claim().map(|part| (shared, part)));
         let Some((shared, (start, len))) = claimed else {
-            permits.finish(OpOutcome::Failed);
+            // Nothing was begun: the permits go back unused.
+            permits.abandon();
+            engine.stats.book(OpAccounts {
+                wait_ns: waited,
+                ..OpAccounts::default()
+            });
             return;
         };
         offer_ticket(engine, &shared);
         let active = engine.stats.begin(&shared.name);
         engine.queue.notify();
         let meter = Meter::new(&permits, &engine.stats);
+        meter.add_wait(waited);
         let outcome = shared.run_range(start, len, buffer, &meter);
         shared.moved.fetch_add(meter.moved(), Ordering::AcqRel);
-        permits.finish(outcome.unwrap_or(OpOutcome::Failed));
+        let accounts = meter.accounts();
+        permits.finish_with(outcome.unwrap_or(OpOutcome::Failed), accounts);
         trace("done");
         drop(active);
     }

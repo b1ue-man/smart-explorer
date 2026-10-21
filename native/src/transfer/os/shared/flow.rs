@@ -7,17 +7,24 @@
 //! Permits go round-robin between jobs, so a small paste next to a large
 //! transfer is not starved, and listings get one extra reserved slot so
 //! discovery never waits behind long file transfers.
-use super::flow_control::{FlowControl, OpOutcome, RESOURCE_CEILING};
+//!
+//! A flow that knows its connection's identity starts at half of the limit it
+//! learned last time (`hints.rs`) and records what it learns again. A refused
+//! thread (`learn_ceiling`) lowers the bound of the flow for as long as the
+//! flow lives, whatever the backend announces.
+use super::flow_control::{FlowControl, OpOutcome};
+use super::limiter::OpAccounts;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-/// Flows unused for this long are forgotten (their connection is gone or idle).
-const FLOW_RETENTION: Duration = Duration::from_secs(15 * 60);
 const WAIT_SLICE: Duration = Duration::from_millis(100);
 /// Job id of callers that do not identify a job.
 pub const ANONYMOUS_JOB: u64 = 0;
+
+/// Learned limits are recorded for the next start after this long.
+const RECORD_INTERVAL_MS: u64 = 60_000;
 
 struct FlowState {
     control: FlowControl,
@@ -25,6 +32,16 @@ struct FlowState {
     meta_in_flight: usize,
     waiting: HashMap<u64, usize>,
     last_job: Option<u64>,
+    /// The bound a refused thread taught (the backend's own bound still
+    /// applies on top).
+    learned_ceiling: Option<usize>,
+    /// Milliseconds callers waited for a permit, in all.
+    waited_ms: u64,
+    /// Time of the operations that finished here, in all.
+    accounts: OpAccounts,
+    /// The limit last recorded in the hint file and when.
+    recorded_limit: usize,
+    recorded_ms: u64,
 }
 
 impl FlowState {
@@ -59,6 +76,8 @@ impl FlowState {
 /// One adaptive limiter.
 pub struct Flow {
     key: String,
+    /// The connection's identity across restarts (`Backend::flow_identity`).
+    identity: Option<String>,
     epoch: Instant,
     state: Mutex<FlowState>,
     changed: Condvar,
@@ -68,20 +87,49 @@ pub struct Flow {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FlowSnapshot {
     pub limit: usize,
+    /// The bound the limit may not pass (the backend's, or a lower one a
+    /// refused thread taught).
+    pub ceiling: usize,
     pub in_flight: usize,
+    /// Demand filled the limit during the last stretch observed.
+    pub saturated: bool,
+    /// The concurrency has stopped growing (see `FlowFacts::plateau`).
+    pub plateau: bool,
+    /// Milliseconds callers waited for a permit of this flow, in all.
+    pub waited_ms: u64,
+    /// The time accounts of the operations that finished here, in all.
+    pub accounts: OpAccounts,
 }
 
 impl Flow {
-    fn new(key: String, ceiling: usize) -> Self {
+    /// A flow; `start` is the limit it begins at (half of what its
+    /// connection learned last time), if one is known.
+    pub(super) fn new(
+        key: String,
+        identity: Option<String>,
+        start: Option<usize>,
+        ceiling: usize,
+    ) -> Self {
+        let control = match start {
+            Some(start) => FlowControl::with_start(ceiling, 0, start),
+            None => FlowControl::new(ceiling, 0),
+        };
+        let recorded_limit = control.limit();
         Self {
             key,
+            identity,
             epoch: Instant::now(),
             state: Mutex::new(FlowState {
-                control: FlowControl::new(ceiling, 0),
+                control,
                 in_flight: 0,
                 meta_in_flight: 0,
                 waiting: HashMap::new(),
                 last_job: None,
+                learned_ceiling: None,
+                waited_ms: 0,
+                accounts: OpAccounts::default(),
+                recorded_limit,
+                recorded_ms: 0,
             }),
             changed: Condvar::new(),
         }
@@ -125,6 +173,7 @@ impl Flow {
         let mut state = self.lock();
         self.tick(&mut state);
         *state.waiting.entry(job).or_insert(0) += 1;
+        let began = Instant::now();
         loop {
             if cancel.load(Ordering::Acquire) {
                 state.stop_waiting(job);
@@ -137,6 +186,9 @@ impl Flow {
             }
             state = self.wait(state);
         }
+        state.waited_ms = state
+            .waited_ms
+            .saturating_add(began.elapsed().as_millis() as u64);
         state.stop_waiting(job);
         state.in_flight += 1;
         state.last_job = Some(job);
@@ -195,20 +247,72 @@ impl Flow {
     }
 
     pub fn snapshot(&self) -> FlowSnapshot {
-        let state = self.lock();
+        let mut state = self.lock();
+        self.tick(&mut state);
+        let facts = state.control.take_facts();
         FlowSnapshot {
             limit: state.control.limit(),
+            ceiling: state.control.ceiling(),
             in_flight: state.in_flight + state.meta_in_flight,
+            saturated: facts.saturated,
+            plateau: facts.plateau,
+            waited_ms: state.waited_ms,
+            accounts: state.accounts,
         }
     }
 
-    fn set_ceiling(&self, ceiling: usize) {
+    /// The bound the backend announces; a bound a refused thread taught
+    /// stays below it.
+    pub(super) fn set_ceiling(&self, ceiling: usize) {
         let mut state = self.lock();
+        let ceiling = state
+            .learned_ceiling
+            .map_or(ceiling, |bound| bound.min(ceiling));
         if state.control.ceiling() != ceiling {
             state.control.set_ceiling(ceiling);
             drop(state);
             self.changed.notify_all();
         }
+    }
+
+    /// The process refused to start a thread while `running` operations ran
+    /// on this flow: overload. The limit halves and the bound drops to what
+    /// ran (at least one), for as long as the flow lives.
+    pub(crate) fn learn_ceiling(&self, running: usize) {
+        let now = self.now_ms();
+        let mut state = self.lock();
+        state.control.thread_refused(running, now);
+        let bound = state.control.ceiling();
+        state.learned_ceiling = Some(
+            state
+                .learned_ceiling
+                .map_or(bound, |known| known.min(bound)),
+        );
+        drop(state);
+        self.changed.notify_all();
+    }
+
+    /// Writes the limit this flow settled at to the hint file when it
+    /// changed since the last time.
+    pub(crate) fn record_hint(&self) {
+        let Some(identity) = self.identity.as_deref() else {
+            return;
+        };
+        let mut state = self.lock();
+        let settled = state.control.settled_limit();
+        if settled == state.recorded_limit {
+            return;
+        }
+        state.recorded_limit = settled;
+        state.recorded_ms = self.now_ms();
+        drop(state);
+        super::hints::record(identity, settled);
+    }
+}
+
+impl Drop for Flow {
+    fn drop(&mut self) {
+        self.record_hint();
     }
 }
 
@@ -241,15 +345,20 @@ impl FlowPermit {
     }
 
     pub fn finish(mut self, outcome: OpOutcome) {
-        self.release(Some(outcome));
+        self.release(Some(outcome), OpAccounts::default());
+    }
+
+    /// Like `finish`, with the time the operation spent by account.
+    pub fn finish_with(mut self, outcome: OpOutcome, accounts: OpAccounts) {
+        self.release(Some(outcome), accounts);
     }
 
     /// Returns the permit without feeding the controller (nothing was done).
     pub fn abandon(mut self) {
-        self.release(None);
+        self.release(None, OpAccounts::default());
     }
 
-    fn release(&mut self, outcome: Option<OpOutcome>) {
+    fn release(&mut self, outcome: Option<OpOutcome>, accounts: OpAccounts) {
         if self.finished {
             return;
         }
@@ -261,19 +370,32 @@ impl FlowPermit {
         } else {
             state.in_flight = state.in_flight.saturating_sub(1);
         }
+        let mut record = None;
         if let Some(outcome) = outcome {
             let now = self.flow.now_ms();
             let latency = self.started.elapsed().as_millis() as u64;
             state.control.finish(outcome, latency, now);
+            state.accounts = state.accounts.plus(accounts);
+            let settled = state.control.settled_limit();
+            if settled != state.recorded_limit
+                && now.saturating_sub(state.recorded_ms) >= RECORD_INTERVAL_MS
+            {
+                state.recorded_limit = settled;
+                state.recorded_ms = now;
+                record = Some(settled);
+            }
         }
         drop(state);
         self.flow.changed.notify_all();
+        if let (Some(limit), Some(identity)) = (record, self.flow.identity.as_deref()) {
+            super::hints::record(identity, limit);
+        }
     }
 }
 
 impl Drop for FlowPermit {
     fn drop(&mut self) {
-        self.release(Some(OpOutcome::Failed));
+        self.release(Some(OpOutcome::Failed), OpAccounts::default());
     }
 }
 
@@ -295,10 +417,26 @@ impl PermitPair {
     }
 
     pub fn finish(self, outcome: OpOutcome) {
+        self.finish_with(outcome, OpAccounts::default());
+    }
+
+    /// Like `finish`, with the time the operation spent by account; both
+    /// flows of a copy between two connections book it.
+    pub fn finish_with(self, outcome: OpOutcome, accounts: OpAccounts) {
         let Self { first, second } = self;
-        first.finish(outcome);
+        first.finish_with(outcome, accounts);
         if let Some(second) = second {
-            second.finish(outcome);
+            second.finish_with(outcome, accounts);
+        }
+    }
+
+    /// Returns the permits without feeding the controllers: the operation
+    /// found nothing to do (a part another worker took first).
+    pub fn abandon(self) {
+        let Self { first, second } = self;
+        first.abandon();
+        if let Some(second) = second {
+            second.abandon();
         }
     }
 }
@@ -335,74 +473,7 @@ pub fn acquire_pair(
     }
 }
 
-struct Registry {
-    flows: HashMap<String, (Arc<Flow>, Instant)>,
-}
-
-fn registry() -> &'static Mutex<Registry> {
-    static REGISTRY: OnceLock<Mutex<Registry>> = OnceLock::new();
-    REGISTRY.get_or_init(|| {
-        Mutex::new(Registry {
-            flows: HashMap::new(),
-        })
-    })
-}
-
-/// The flow for `key`, created on first use. `ceiling` is the backend's hard
-/// protocol bound (`None` = only the resource guard applies).
-pub fn flow(key: String, ceiling: Option<usize>) -> Arc<Flow> {
-    let ceiling = ceiling
-        .unwrap_or(RESOURCE_CEILING)
-        .clamp(1, RESOURCE_CEILING);
-    let mut registry = registry()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let now = Instant::now();
-    registry.flows.retain(|_, (flow, used)| {
-        Arc::strong_count(flow) > 1 || now.duration_since(*used) < FLOW_RETENTION
-    });
-    if let Some((flow, used)) = registry.flows.get_mut(&key) {
-        *used = now;
-        let flow = flow.clone();
-        drop(registry);
-        flow.set_ceiling(ceiling);
-        return flow;
-    }
-    let flow = Arc::new(Flow::new(key.clone(), ceiling));
-    registry.flows.insert(key, (flow.clone(), now));
-    flow
-}
-
-/// The flow of the connection serving `path` on `backend`.
-pub fn flow_for(backend: &dyn crate::vfs::Backend, path: &str) -> Arc<Flow> {
-    flow(backend.flow_key(path), backend.transfer_ceiling(path))
-}
-
-/// The flow of the local volume holding `path`.
-pub fn local_flow(path: &str) -> Arc<Flow> {
-    flow_for(&crate::vfs::LocalBackend::new("/"), path)
-}
-
-/// Congestion (the peer asks to slow down) or an ordinary failure. Backends
-/// report rate limits and "too many requests/connections" as
-/// `vfs::congestion_error`; timeouts count as congestion too. A full disk or
-/// an exhausted storage quota (`StorageFull`, `QuotaExceeded`) is permanent,
-/// not congestion. The text check covers older services and agents that only
-/// send their message.
-pub fn classify_error(error: &std::io::Error) -> OpOutcome {
-    use std::io::ErrorKind;
-    if crate::vfs::congestion_of(error).is_some()
-        || matches!(error.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock)
-        || error
-            .to_string()
-            .to_ascii_lowercase()
-            .contains("too many concurrent")
-    {
-        OpOutcome::Overload
-    } else {
-        OpOutcome::Failed
-    }
-}
+pub use super::flow_registry::{classify_error, flow, flow_for, flow_with_identity, local_flow};
 
 #[cfg(test)]
 #[path = "flow_tests.rs"]

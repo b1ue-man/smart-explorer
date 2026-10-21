@@ -11,8 +11,12 @@ mod batch;
 mod batch_get;
 #[path = "batch_put.rs"]
 mod batch_put;
+#[path = "bottleneck.rs"]
+mod bottleneck;
 #[path = "discovery.rs"]
 mod discovery;
+#[path = "dispatch.rs"]
+mod dispatch;
 #[path = "download.rs"]
 mod download;
 #[path = "folders.rs"]
@@ -71,7 +75,7 @@ use queue::WorkQueue;
 use stats::Stats;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Progress goes out this often (plan: ~150 ms, smooth for the eye without
 /// flooding the GUI channel).
@@ -205,6 +209,8 @@ pub(crate) struct Engine<'a> {
     /// Source folders of a per-file move whose target folder exists (source
     /// path, target rel); removed at the end when empty.
     moved_dirs: Mutex<Vec<(String, String)>>,
+    /// Who limits the job (`bottleneck.rs`).
+    judgement: Mutex<bottleneck::Judgement>,
     report: &'a (dyn Fn(TransferMsg) + Sync),
 }
 
@@ -264,11 +270,14 @@ impl<'a> Engine<'a> {
             segments: segments::Registry::new(),
             resume: view.resume.is_some(),
             moved_dirs: Mutex::new(Vec::new()),
+            judgement: Mutex::new(bottleneck::Judgement::new()),
             report,
         };
         for _ in 0..plan.omitted {
             engine.stats.omitted();
         }
+        // The sensors start reading with the first job.
+        let _ = super::sensors::latest();
         engine
     }
 
@@ -335,47 +344,13 @@ impl<'a> Engine<'a> {
         lock(&self.breaker).failure(running)
     }
 
-    fn run(&self, plan: &roots::RootPlan) {
-        std::thread::scope(|scope| {
-            scope.spawn(|| discovery::discover(self, plan));
-            let mut last_report: Option<Instant> = None;
-            loop {
-                if self.user_cancel.load(Ordering::Acquire) && !self.stop.load(Ordering::Acquire) {
-                    self.halt();
-                }
-                let queued = self.queue.view();
-                let drained = queued.queued == 0 || self.stopped();
-                if !queued.producing && drained && queued.workers == 0 {
-                    break;
-                }
-                let busy = self.stats.running() >= queued.workers;
-                let spawn = queued.queued > 0
-                    && queued.idle == 0
-                    && !self.stopped()
-                    && (queued.workers == 0 || (busy && self.flows_have_spare()));
-                if spawn {
-                    let slot = self.queue.add_worker();
-                    scope.spawn(move || worker::run(self, slot));
-                    continue;
-                }
-                let due = last_report.is_none_or(|at| at.elapsed() >= PROGRESS_INTERVAL);
-                if due {
-                    (self.report)(TransferMsg::Progress(self.progress(queued.queued)));
-                    last_report = Some(Instant::now());
-                }
-                let waited = last_report.map_or(Duration::ZERO, |at| at.elapsed());
-                self.queue
-                    .wait_changed(PROGRESS_INTERVAL.saturating_sub(waited).max(MIN_WAIT));
-            }
-        });
-    }
-
     fn progress(&self, queued: usize) -> TransferProgress {
         let mut progress = self.stats.snapshot(self.kind, self.issues.total());
         progress.source = self.view.source_label.to_string();
         progress.target = self.view.target_label.to_string();
         progress.log_path = self.issues.log_path();
         progress.note = self.note(queued);
+        self.judge_into(&mut progress, false);
         progress
     }
 
@@ -412,6 +387,10 @@ impl<'a> Engine<'a> {
         progress.note = None;
         progress.errors = self.issues.total();
         progress.log_path = self.issues.log_path();
+        // The queue ran empty at the end: the last verdict that named a
+        // resource is the one worth keeping.
+        self.judge_into(&mut progress, true);
+        self.remember_limits();
         let (issues, errors) = self.issues.shown();
         (self.report)(TransferMsg::Done {
             progress,
@@ -420,6 +399,15 @@ impl<'a> Engine<'a> {
             issues,
             roots: roots::resolved(plan, &self.folders),
         });
+    }
+
+    /// What the job's flows learned goes to the hint file for the next start.
+    fn remember_limits(&self) {
+        self.op_flows.0.record_hint();
+        if let Some(flow) = &self.op_flows.1 {
+            flow.record_hint();
+        }
+        super::hints::flush();
     }
 
     /// Whether downloaded names get the extension of an exported format.
@@ -446,6 +434,9 @@ fn gate_root(items: &JobItems) -> String {
     }
 }
 
+#[cfg(test)]
+#[path = "limiter_tests.rs"]
+mod limiter_tests;
 #[cfg(test)]
 #[path = "segments_tests.rs"]
 mod segments_tests;

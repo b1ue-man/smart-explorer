@@ -37,7 +37,7 @@ pub(super) fn upload(
             publish::abandon(engine, target, destination);
             return Err(OpError::canceled());
         }
-        let read = match source.read_bounded(buffer, copied) {
+        let read = match meter.timed_source(|| source.read_bounded(buffer, copied)) {
             Ok(read) => read,
             Err(error) => {
                 publish::abandon(engine, target, destination);
@@ -47,7 +47,7 @@ pub(super) fn upload(
         if read == 0 {
             break;
         }
-        if let Err(error) = destination.writer().write_all(&buffer[..read]) {
+        if let Err(error) = meter.timed_target(|| destination.writer().write_all(&buffer[..read])) {
             publish::abandon(engine, target, destination);
             return Err(OpError::target(error));
         }

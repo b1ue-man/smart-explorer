@@ -1,4 +1,8 @@
-//! Windows filesystem facts for transfers.
+//! Windows filesystem facts for transfers, the system sensors and the thread
+//! priority. A value that cannot be read is `None`; the disk queue is `None`
+//! until the PDH counter names of `PhysicalDisk` are confirmed on a runner
+//! (suite case `speed_task_windows_pdh_physicaldisk_counters_exist`).
+use super::sensor_parse::{CpuTicks, RawSample};
 use std::path::{Path, PathBuf};
 
 /// Redirecting links are walk boundaries. Data reparse points (cloud,
@@ -58,6 +62,158 @@ pub(crate) fn physical_memory() -> Option<u64> {
     // SAFETY: `status` is a valid, writable MEMORYSTATUSEX with dwLength set.
     let ok = unsafe { GlobalMemoryStatusEx(&mut status) };
     (ok != 0).then_some(status.ullTotalPhys)
+}
+
+/// Lowers the priority of the calling thread to "below normal", never raising
+/// one that is lower already (idle, lowest). Errors are ignored.
+pub(crate) fn lower_thread_priority() {
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentThread, GetThreadPriority, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
+    };
+    // `GetThreadPriority` answers this value on failure.
+    const ERROR_RETURN: i32 = 0x7fff_ffff;
+    // SAFETY: the pseudo handle of the calling thread is always valid.
+    unsafe {
+        let thread = GetCurrentThread();
+        let current = GetThreadPriority(thread);
+        if current != ERROR_RETURN && current > THREAD_PRIORITY_BELOW_NORMAL {
+            let _ = SetThreadPriority(thread, THREAD_PRIORITY_BELOW_NORMAL);
+        }
+    }
+}
+
+/// One reading of everything the sensors look at. Threads and disks have no
+/// source here (`None`, empty).
+pub(crate) fn read_raw(_watch: &[String]) -> RawSample {
+    RawSample {
+        cpu: system_times(),
+        process_ns: process_ns(),
+        cores: active_cores(),
+        mem_available: available_memory(),
+        threads_free: None,
+        link_bps: link_bps(),
+        disks: Vec::new(),
+    }
+}
+
+/// No block device is read on Windows yet.
+pub(crate) fn device_id_of(_path: &Path) -> Option<String> {
+    None
+}
+
+pub(crate) fn device_name_of(_id: &str) -> Option<String> {
+    None
+}
+
+fn filetime_ticks(time: &windows_sys::Win32::Foundation::FILETIME) -> u64 {
+    (u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime)
+}
+
+fn zero_filetime() -> windows_sys::Win32::Foundation::FILETIME {
+    windows_sys::Win32::Foundation::FILETIME {
+        dwLowDateTime: 0,
+        dwHighDateTime: 0,
+    }
+}
+
+/// `GetSystemTimes`: the kernel time includes the idle time.
+fn system_times() -> Option<CpuTicks> {
+    use windows_sys::Win32::System::Threading::GetSystemTimes;
+    let (mut idle, mut kernel, mut user) = (zero_filetime(), zero_filetime(), zero_filetime());
+    // SAFETY: three valid, writable FILETIME values.
+    let ok = unsafe { GetSystemTimes(&mut idle, &mut kernel, &mut user) };
+    if ok == 0 {
+        return None;
+    }
+    let total = filetime_ticks(&kernel).saturating_add(filetime_ticks(&user));
+    Some(CpuTicks {
+        busy: total.saturating_sub(filetime_ticks(&idle)),
+        total,
+    })
+}
+
+/// `GetProcessTimes`: kernel plus user time of this process in nanoseconds
+/// (the API counts 100 ns steps).
+fn process_ns() -> Option<u64> {
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
+    let (mut created, mut exited) = (zero_filetime(), zero_filetime());
+    let (mut kernel, mut user) = (zero_filetime(), zero_filetime());
+    // SAFETY: the pseudo handle of this process and four writable FILETIMEs.
+    let ok = unsafe {
+        GetProcessTimes(
+            GetCurrentProcess(),
+            &mut created,
+            &mut exited,
+            &mut kernel,
+            &mut user,
+        )
+    };
+    (ok != 0).then(|| {
+        filetime_ticks(&kernel)
+            .saturating_add(filetime_ticks(&user))
+            .saturating_mul(100)
+    })
+}
+
+/// Logical processors of all processor groups.
+fn active_cores() -> Option<f64> {
+    use windows_sys::Win32::System::SystemInformation::GetActiveProcessorCount;
+    const ALL_PROCESSOR_GROUPS: u16 = 0xffff;
+    // SAFETY: only reads a system constant.
+    let count = unsafe { GetActiveProcessorCount(ALL_PROCESSOR_GROUPS) };
+    (count > 0).then_some(f64::from(count))
+}
+
+/// Transmit link speed (bytes per second) of the up adapter with a gateway
+/// and the lowest IPv4 metric: the one the default route uses.
+fn link_bps() -> Option<u64> {
+    use windows_sys::Win32::NetworkManagement::IpHelper::{
+        GetAdaptersAddresses, IP_ADAPTER_ADDRESSES_LH,
+    };
+    use windows_sys::Win32::NetworkManagement::Ndis::IfOperStatusUp;
+    const AF_UNSPEC: u32 = 0;
+    const SKIP_ANYCAST_MULTICAST_DNS: u32 = 0x0002 | 0x0004 | 0x0008;
+    const INCLUDE_GATEWAYS: u32 = 0x0080;
+    const ERROR_BUFFER_OVERFLOW: u32 = 111;
+    const IF_TYPE_SOFTWARE_LOOPBACK: u32 = 24;
+    let mut size: u32 = 16 * 1024;
+    for _ in 0..4 {
+        let mut buffer = vec![0u8; size as usize];
+        // SAFETY: the buffer is `size` bytes; the call updates `size` when it
+        // needs more room and the pointer stays valid for the whole call.
+        let result = unsafe {
+            GetAdaptersAddresses(
+                AF_UNSPEC,
+                SKIP_ANYCAST_MULTICAST_DNS | INCLUDE_GATEWAYS,
+                std::ptr::null(),
+                buffer.as_mut_ptr() as *mut IP_ADAPTER_ADDRESSES_LH,
+                &mut size,
+            )
+        };
+        if result == ERROR_BUFFER_OVERFLOW {
+            continue;
+        }
+        if result != 0 {
+            return None;
+        }
+        let mut best: Option<(u32, u64)> = None;
+        let mut adapter = buffer.as_ptr() as *const IP_ADAPTER_ADDRESSES_LH;
+        // SAFETY: on success the buffer holds a linked list of adapter
+        // records written by the API within `size` bytes.
+        while let Some(record) = unsafe { adapter.as_ref() } {
+            let usable = record.OperStatus == IfOperStatusUp
+                && record.IfType != IF_TYPE_SOFTWARE_LOOPBACK
+                && !record.FirstGatewayAddress.is_null();
+            let speed = record.TransmitLinkSpeed;
+            let known = speed != 0 && speed != u64::MAX;
+            if usable && known && best.is_none_or(|(metric, _)| record.Ipv4Metric < metric) {
+                best = Some((record.Ipv4Metric, speed));
+            }
+            adapter = record.Next;
+        }
+        return best.map(|(_, bits)| bits / 8);
+    }
+    None
 }
 
 /// The folder `path` resolves to, links and junctions on the way followed,

@@ -13,6 +13,16 @@
 //! optimum in either direction (simulated with ±10 % noise: ≥ 93 % of the
 //! optimal goodput at ≤ 1.11× the needed concurrency). Overload signals halve
 //! the limit at once. Pure logic; the caller supplies the clock.
+//!
+//! A window ends after twice the smoothed operation latency (at least 100 ms,
+//! at most 5 s) once eight operations finished in it, or after one second;
+//! eight completions bound the noise of the estimate. Slow start ends only
+//! after two windows in a row without +10 %. A queue that builds up (the mean
+//! operation takes more than twice its minimum while goodput does not rise)
+//! withdraws a running upward probe. A flow may start at a limit learned
+//! earlier (`with_start`).
+use super::flow_window::{FlowFacts, LatencyWindow};
+use std::collections::VecDeque;
 
 /// Work credited per finished operation so pure small-file load is measurable.
 pub(crate) const OP_WEIGHT_BYTES: u64 = 64 * 1024;
@@ -20,9 +30,23 @@ pub(crate) const OP_WEIGHT_BYTES: u64 = 64 * 1024;
 /// beyond this many concurrent operations a connection cannot gain; each one
 /// holds a worker thread and up to about a mebibyte of buffers.
 pub(crate) const RESOURCE_CEILING: usize = 256;
-const START_LIMIT: usize = 2;
-const MIN_WINDOW_MS: u64 = 1_000;
+pub(super) const START_LIMIT: usize = 2;
+/// Floor of a window: below it a measurement is dominated by the timer.
+const MIN_WINDOW_MS: u64 = 100;
+/// A window without enough completions ends after this long.
+const FALLBACK_WINDOW_MS: u64 = 1_000;
+/// Completions that bound the noise of a window's goodput.
+const MIN_COMPLETIONS: u32 = 8;
 const MAX_WINDOW_MS: u64 = 5_000;
+/// Windows in a row without +10 % that end slow start.
+const RAMP_MISS_WINDOWS: u32 = 2;
+/// Mean operation time over this multiple of the minimum: a queue formed.
+const QUEUE_LATENCY_FACTOR: f64 = 2.0;
+/// Windows whose shortest operation forms the latency minimum.
+const LATENCY_MIN_WINDOWS: usize = 8;
+/// Observed time that makes a reading of `take_facts` (shorter ones repeat
+/// the last).
+const MIN_FACT_SPAN_MS: u64 = 250;
 const SLOW_START_GAIN: f64 = 1.10;
 const PROBE_GAIN: f64 = 1.05;
 const PROBE_KEEP_LOWER: f64 = 0.97;
@@ -79,13 +103,33 @@ pub(crate) struct FlowControl {
     idle_windows: u32,
     probe_up_next: bool,
     last_decrease_window: Option<u64>,
+    /// Operations that finished in the current window.
+    completions: u32,
+    /// Slow-start windows in a row without +10 %.
+    ramp_misses: u32,
+    /// Growth has stopped (see `FlowFacts::plateau`).
+    plateau: bool,
+    window_latency: LatencyWindow,
+    /// Shortest operation of each of the last windows.
+    latency_minima: VecDeque<u64>,
+    /// A queue formed in the last window; no upward probe starts in it.
+    limit_inflated: bool,
+    facts_saturated_ms: u64,
+    facts_span_ms: u64,
+    last_facts: FlowFacts,
 }
 
 impl FlowControl {
     pub(crate) fn new(ceiling: usize, now_ms: u64) -> Self {
+        Self::with_start(ceiling, now_ms, START_LIMIT)
+    }
+
+    /// A flow that starts at `start_limit` (a limit learned earlier, see
+    /// `start_from_learned`) instead of the general start.
+    pub(crate) fn with_start(ceiling: usize, now_ms: u64, start_limit: usize) -> Self {
         let ceiling = ceiling.clamp(1, RESOURCE_CEILING);
         Self {
-            limit: START_LIMIT.min(ceiling),
+            limit: start_limit.clamp(1, ceiling),
             ceiling,
             phase: Phase::SlowStart,
             probe: None,
@@ -100,11 +144,44 @@ impl FlowControl {
             idle_windows: 0,
             probe_up_next: true,
             last_decrease_window: None,
+            completions: 0,
+            ramp_misses: 0,
+            plateau: false,
+            window_latency: LatencyWindow::default(),
+            latency_minima: VecDeque::new(),
+            limit_inflated: false,
+            facts_saturated_ms: 0,
+            facts_span_ms: 0,
+            last_facts: FlowFacts::default(),
         }
     }
 
     pub(crate) fn limit(&self) -> usize {
         self.limit
+    }
+
+    /// The limit without a running probe's step: what this flow has learned.
+    pub(crate) fn settled_limit(&self) -> usize {
+        self.probe.map_or(self.limit, |probe| probe.from)
+    }
+
+    /// A queue formed in the last window (the latency brake acted).
+    #[cfg(test)]
+    pub(crate) fn limit_inflated(&self) -> bool {
+        self.limit_inflated
+    }
+
+    /// What the last stretch of at least a quarter second showed; shorter
+    /// stretches repeat it.
+    pub(crate) fn take_facts(&mut self) -> FlowFacts {
+        if self.facts_span_ms >= MIN_FACT_SPAN_MS {
+            self.last_facts.saturated =
+                self.facts_saturated_ms as f64 >= self.facts_span_ms as f64 * SATURATED_FRACTION;
+            self.facts_span_ms = 0;
+            self.facts_saturated_ms = 0;
+        }
+        self.last_facts.plateau = self.plateau || self.limit >= self.ceiling;
+        self.last_facts
     }
 
     pub(crate) fn ceiling(&self) -> usize {
@@ -118,15 +195,25 @@ impl FlowControl {
         self.limit = self.limit.min(self.ceiling);
     }
 
+    /// The process refused to start another thread: overload (the limit
+    /// halves once per window) that also names the bound, the operations
+    /// running right now.
+    pub(crate) fn thread_refused(&mut self, running: usize, now_ms: u64) {
+        self.decrease(now_ms);
+        self.set_ceiling(running.max(1));
+    }
+
     /// Accounts the time since the previous tick; `saturated` says whether
     /// demand filled the limit during that time.
     pub(crate) fn tick(&mut self, now_ms: u64, saturated: bool) {
         let elapsed = now_ms.saturating_sub(self.last_tick_ms);
         if saturated {
             self.saturated_ms = self.saturated_ms.saturating_add(elapsed);
+            self.facts_saturated_ms = self.facts_saturated_ms.saturating_add(elapsed);
         }
+        self.facts_span_ms = self.facts_span_ms.saturating_add(elapsed);
         self.last_tick_ms = self.last_tick_ms.max(now_ms);
-        if now_ms.saturating_sub(self.window_start_ms) >= self.window_len() {
+        if self.window_due(now_ms) {
             self.evaluate(now_ms);
         }
     }
@@ -143,7 +230,11 @@ impl FlowControl {
             self.latency_ewma_ms * 0.8 + latency * 0.2
         };
         match outcome {
-            OpOutcome::Done => self.work = self.work.saturating_add(OP_WEIGHT_BYTES),
+            OpOutcome::Done => {
+                self.work = self.work.saturating_add(OP_WEIGHT_BYTES);
+                self.completions = self.completions.saturating_add(1);
+                self.window_latency.record(latency_ms);
+            }
             OpOutcome::Failed => {}
             OpOutcome::Overload => self.decrease(now_ms),
         }
@@ -151,6 +242,15 @@ impl FlowControl {
 
     fn window_len(&self) -> u64 {
         ((self.latency_ewma_ms * 2.0) as u64).clamp(MIN_WINDOW_MS, MAX_WINDOW_MS)
+    }
+
+    /// The window ends once it is as long as two operations (at least
+    /// 100 ms) and either enough operations finished in it or a second
+    /// passed.
+    fn window_due(&self, now_ms: u64) -> bool {
+        let elapsed = now_ms.saturating_sub(self.window_start_ms);
+        elapsed >= self.window_len()
+            && (self.completions >= MIN_COMPLETIONS || elapsed >= FALLBACK_WINDOW_MS)
     }
 
     /// One decrease per window: a burst of simultaneous overload replies is
@@ -167,6 +267,8 @@ impl FlowControl {
         self.hold = OVERLOAD_HOLD_WINDOWS;
         self.idle_windows = 0;
         self.probe_up_next = true;
+        self.plateau = true;
+        self.ramp_misses = 0;
         self.reset_window(now_ms);
         self.last_decrease_window = Some(self.window_start_ms);
     }
@@ -176,15 +278,22 @@ impl FlowControl {
         self.last_tick_ms = now_ms;
         self.work = 0;
         self.saturated_ms = 0;
+        self.completions = 0;
     }
 
     fn evaluate(&mut self, now_ms: u64) {
         let span = now_ms.saturating_sub(self.window_start_ms).max(1);
         let rate = self.work as f64 * 1000.0 / span as f64;
         let saturated = self.saturated_ms as f64 >= span as f64 * SATURATED_FRACTION;
+        let latency = std::mem::take(&mut self.window_latency);
         self.reset_window(now_ms);
+        self.note_latency_minimum(&latency);
+        self.limit_inflated = false;
         if self.hold > 0 {
             self.hold -= 1;
+            return;
+        }
+        if self.queue_formed(&latency, rate) {
             return;
         }
         if !saturated || rate <= 0.0 {
@@ -209,9 +318,17 @@ impl FlowControl {
         match self.previous {
             Some((previous_limit, previous_rate)) if previous_limit < self.limit => {
                 if rate >= previous_rate * SLOW_START_GAIN {
+                    self.ramp_misses = 0;
+                    self.plateau = false;
                     self.previous = Some((self.limit, rate));
                     self.limit = (self.limit * 2).min(self.ceiling);
                 } else {
+                    // One window without +10 % may be noise: measure the same
+                    // limit once more; the second one ends slow start.
+                    self.ramp_misses += 1;
+                    if self.ramp_misses < RAMP_MISS_WINDOWS {
+                        return;
+                    }
                     self.limit = previous_limit;
                     self.enter_steady();
                     return;
@@ -231,7 +348,41 @@ impl FlowControl {
         }
     }
 
+    /// Remembers the shortest operation of the window (the latency without
+    /// queueing) for the last few windows.
+    fn note_latency_minimum(&mut self, latency: &LatencyWindow) {
+        if let Some(min) = latency.min_ms {
+            if self.latency_minima.len() == LATENCY_MIN_WINDOWS {
+                self.latency_minima.pop_front();
+            }
+            self.latency_minima.push_back(min);
+        }
+    }
+
+    /// A queue formed: operations take more than twice their minimum while
+    /// the goodput did not rise. A running upward probe is withdrawn and no
+    /// new one starts in this window.
+    fn queue_formed(&mut self, latency: &LatencyWindow, rate: f64) -> bool {
+        let (Some(mean), Some(min)) = (latency.mean(), self.latency_minima.iter().min()) else {
+            return false;
+        };
+        let Some(probe) = self.probe.filter(|probe| probe.upward) else {
+            return false;
+        };
+        if mean <= *min as f64 * QUEUE_LATENCY_FACTOR || rate >= probe.baseline * PROBE_GAIN {
+            return false;
+        }
+        self.limit = probe.from;
+        self.probe = None;
+        self.probe_up_next = false;
+        self.plateau = true;
+        self.limit_inflated = true;
+        true
+    }
+
     fn enter_steady(&mut self) {
+        self.plateau = true;
+        self.ramp_misses = 0;
         self.phase = Phase::Steady;
         self.previous = None;
         self.probe = None;
@@ -256,9 +407,11 @@ impl FlowControl {
                     self.baseline = Some(mean);
                     self.idle_windows = PROBE_INTERVAL_WINDOWS;
                     self.probe_up_next = true;
+                    self.plateau = false;
                 } else {
                     self.limit = probe.from;
                     self.probe_up_next = false;
+                    self.plateau = true;
                 }
             } else {
                 if mean >= probe.baseline * PROBE_KEEP_LOWER {
@@ -281,6 +434,9 @@ impl FlowControl {
             return;
         }
         self.idle_windows = 0;
+        if self.limit_inflated && self.probe_up_next {
+            return;
+        }
         let baseline = self.baseline.unwrap_or(rate);
         let step = (self.limit / PROBE_STEP_DIVISOR).max(1);
         if self.probe_up_next && self.limit < self.ceiling {

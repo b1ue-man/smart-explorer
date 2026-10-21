@@ -3,7 +3,7 @@
 //! window.
 use super::transfer_center::{ExternalEntry, FinishedEntry};
 use crate::format::format_bytes;
-use crate::transfer::{ExternalSnapshot, TransferJob, TransferKind, TransferProgress};
+use crate::transfer::{ExternalSnapshot, Limiter, TransferJob, TransferKind, TransferProgress};
 
 pub(in crate::app) fn kind_icon(kind: TransferKind) -> &'static str {
     match kind {
@@ -100,6 +100,39 @@ pub(in crate::app) fn rate_line(progress: &TransferProgress) -> Option<String> {
         Some(secs) => format!("{rate} · noch {}", format_duration(secs)),
         None => rate,
     })
+}
+
+/// While the concurrency grows the first seconds, "Läuft an …" is shown; a
+/// transfer that is still ramping after that has nothing to say.
+const RAMP_SHOWN_MS: u64 = 5_000;
+
+/// Who limits the transfer, in the engine's words ("Begrenzt durch das
+/// Laufwerk (sda1)", "Begrenzt durch die Leitung (11.9 MB/s von 12.5 MB/s)").
+/// Nothing while there is no verdict, and no ramp text after the first
+/// seconds. A finished transfer keeps the last verdict that named a resource.
+pub(in crate::app) fn limiter_line(progress: &TransferProgress) -> Option<String> {
+    match progress.limiter {
+        Limiter::None => return None,
+        Limiter::Ramp if progress.elapsed_ms >= RAMP_SHOWN_MS => return None,
+        _ => {}
+    }
+    progress
+        .limiter_text
+        .as_ref()
+        .filter(|text| !text.trim().is_empty())
+        .cloned()
+}
+
+/// Where the time of the last window went: "Quelle 70 %, Ziel 20 %,
+/// Rechenzeit 5 %, Warten 5 %"; nothing while no time was measured.
+pub(in crate::app) fn limiter_hint(progress: &TransferProgress) -> Option<String> {
+    let [source, target, cpu, wait] = progress.limiter_shares;
+    if source == 0 && target == 0 && cpu == 0 && wait == 0 {
+        return None;
+    }
+    Some(format!(
+        "Quelle {source} %, Ziel {target} %, Rechenzeit {cpu} %, Warten {wait} %"
+    ))
 }
 
 /// "läuft: a.txt, b.txt · 8 parallel"

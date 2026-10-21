@@ -12,6 +12,8 @@
 pub(crate) mod access;
 #[path = "os/shared/cancel.rs"]
 mod cancel;
+#[path = "core/compress_policy.rs"]
+pub(crate) mod compress_policy;
 #[path = "os/shared/copy_commit.rs"]
 mod copy_commit;
 #[path = "os/shared/download_file.rs"]
@@ -34,10 +36,18 @@ mod external;
 pub(crate) mod flow;
 #[path = "core/flow_control.rs"]
 mod flow_control;
+#[path = "os/shared/flow_registry.rs"]
+mod flow_registry;
+#[path = "core/flow_window.rs"]
+mod flow_window;
+#[path = "os/shared/hints.rs"]
+mod hints;
 #[path = "core/job.rs"]
 mod job;
 #[path = "os/shared/lane.rs"]
 mod lane;
+#[path = "core/limiter.rs"]
+pub(crate) mod limiter;
 #[path = "os/shared/local_stage.rs"]
 mod local_stage;
 #[path = "os/shared/memory.rs"]
@@ -58,6 +68,10 @@ mod remote_copy;
 pub(crate) mod segments;
 #[path = "os/shared/selection.rs"]
 mod selection;
+#[path = "core/sensor_parse.rs"]
+pub(crate) mod sensor_parse;
+#[path = "os/shared/sensors.rs"]
+pub(crate) mod sensors;
 #[path = "os/shared/snapshot_download.rs"]
 mod snapshot_download;
 #[path = "os/shared/temp.rs"]
@@ -85,14 +99,23 @@ pub(crate) mod walk_listers;
 #[path = "os/shared/cancel_tests.rs"]
 mod cancel_tests;
 #[cfg(test)]
+#[path = "core/compress_policy_tests.rs"]
+mod compress_policy_tests;
+#[cfg(test)]
 #[path = "os/shared/copy_paste_task_backend.rs"]
 mod copy_paste_task_backend;
 #[cfg(test)]
 #[path = "os/shared/copy_paste_task_tests.rs"]
 mod copy_paste_task_tests;
 #[cfg(test)]
+#[path = "core/limiter_tests.rs"]
+mod limiter_tests;
+#[cfg(test)]
 #[path = "core/segments_tests.rs"]
 mod segments_tests;
+#[cfg(test)]
+#[path = "core/sensor_parse_tests.rs"]
+mod sensor_parse_tests;
 #[cfg(test)]
 #[path = "os/shared/tests.rs"]
 mod tests;
@@ -106,8 +129,8 @@ pub(crate) use engine::{run_view, JobView, Side};
 pub(crate) use engine_names::parent_path;
 pub use external::{external_snapshots, register_external, ExternalSnapshot, ExternalTransfer};
 pub use flow::{
-    acquire_pair, classify_error, flow, flow_for, local_flow, Flow, FlowPermit, FlowSnapshot,
-    PermitPair, ANONYMOUS_JOB,
+    acquire_pair, classify_error, flow, flow_for, flow_with_identity, local_flow, Flow, FlowPermit,
+    FlowSnapshot, PermitPair, ANONYMOUS_JOB,
 };
 pub use flow_control::OpOutcome;
 pub use job::{path_within, Endpoint, JobItems, Layout, PairItem, TransferJob};
@@ -115,10 +138,12 @@ pub use lane::{
     launch_transfer, ActiveTransfer, FinishedTransfer, LaunchTransfer, TransferLane,
     TransferRequest,
 };
+pub use limiter::Limiter;
 pub use local_stage::download_to_id;
 pub use memory::{memory_budget, reserve_memory, try_reserve_memory, MemoryReservation};
 pub(crate) use platform::{
-    canonical_folder, physical_memory, replace_file_atomic, upload_is_link_like, write_all_at,
+    canonical_folder, lower_thread_priority, physical_memory, replace_file_atomic,
+    upload_is_link_like, write_all_at,
 };
 pub use remote_copy::copy_remote_paths_progress;
 pub use selection::{ListedEntry, SelectionListing, SelectionSource};
