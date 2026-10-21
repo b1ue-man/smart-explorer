@@ -8,7 +8,8 @@
 //! labeled as "unpublished".
 use super::backend::SftpBackend;
 use super::batch_ops::{
-    channel_or_unsupported, stage_name, window, BatchWire, ChannelWire, WireError, BATCH_BYTES,
+    channel_or_unsupported, open_failure, stage_name, window, BatchWire, ChannelWire, WireError,
+    BATCH_BYTES,
 };
 use crate::transfer::engine_names::next_numbered;
 use crate::vfs::{congestion_of, unpublished_error, BatchPut, BatchPutOutcome, VfsResult};
@@ -162,9 +163,18 @@ async fn open_stage(wire: &dyn BatchWire, destination: &str) -> io::Result<(Stri
         match wire.open_new(&stage).await {
             Ok(handle) => return Ok((stage, handle)),
             Err(failure) => {
-                if !taken(wire, &failure, &stage).await {
-                    return Err(judged(failure, &stage));
+                if taken(wire, &failure, &stage).await {
+                    continue;
                 }
+                let (error, overload) = open_failure(failure);
+                if overload {
+                    return Err(error);
+                }
+                let answered = WireError {
+                    error,
+                    answered: true,
+                };
+                return Err(judged(answered, &stage));
             }
         }
     }

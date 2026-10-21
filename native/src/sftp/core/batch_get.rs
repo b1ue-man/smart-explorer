@@ -5,7 +5,9 @@
 //! to the sink strictly in request order, a later one that is ready first
 //! waits in memory (the engine reserved the packet's bytes).
 use super::backend::SftpBackend;
-use super::batch_ops::{channel_or_unsupported, window, BatchWire, ChannelWire, BATCH_BYTES};
+use super::batch_ops::{
+    channel_or_unsupported, open_failure, window, BatchWire, ChannelWire, BATCH_BYTES,
+};
 use crate::vfs::{BatchGet, BatchSink, VfsResult};
 use futures_util::future::{join, join_all, FutureExt, LocalBoxFuture};
 use futures_util::stream::{FuturesUnordered, StreamExt};
@@ -98,7 +100,7 @@ pub(super) async fn get_all(
 async fn member(wire: &dyn BatchWire, index: usize, item: &BatchGet) -> (usize, Fetched) {
     let handle = match wire.open_read(&item.path).await {
         Ok(handle) => handle,
-        Err(failure) => return (index, Fetched::Failed(failure.error)),
+        Err(failure) => return (index, Fetched::Failed(open_failure(failure).0)),
     };
     let fetched = read_all(wire, &handle, item.size).await;
     // The handle counts against the server's limit until it is closed.

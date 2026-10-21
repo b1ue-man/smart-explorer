@@ -1,7 +1,9 @@
 //! The scripted channel under the SFTP packet tests: an in-memory file
 //! system and a virtual clock on which every request takes one round trip
 //! and any number of requests overlap. No server, no real time.
+use super::batch_get::get_all;
 use super::batch_ops::{BatchWire, WireError, WireFuture};
+use crate::vfs::{BatchGet, BatchPut, BatchSink};
 use futures_util::task::noop_waker;
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap};
@@ -368,4 +370,97 @@ impl BatchWire for FakeWire {
     fn open_handles(&self) -> Option<u64> {
         self.open_handles
     }
+}
+
+pub(super) fn payload(index: usize, size: usize) -> Vec<u8> {
+    (0..size).map(|byte| (byte + index * 7) as u8).collect()
+}
+
+/// `count` entries "d/f00.txt" … of `size` bytes and their bytes back to back.
+pub(super) fn entries(count: usize, size: usize) -> (Vec<BatchPut>, Vec<u8>) {
+    let list = (0..count)
+        .map(|index| BatchPut {
+            path: format!("d/f{index:02}.txt"),
+            size: size as u64,
+        })
+        .collect();
+    let data = (0..count).flat_map(|index| payload(index, size)).collect();
+    (list, data)
+}
+
+pub(super) fn named(paths: &[&str], size: usize) -> (Vec<BatchPut>, Vec<u8>) {
+    let list = paths
+        .iter()
+        .map(|path| BatchPut {
+            path: path.to_string(),
+            size: size as u64,
+        })
+        .collect();
+    let data = (0..paths.len())
+        .flat_map(|index| payload(index, size))
+        .collect();
+    (list, data)
+}
+
+/// Items "d/f0" … with `files` as content, listed with `sizes`.
+pub(super) fn items(sizes: &[u64]) -> Vec<BatchGet> {
+    sizes
+        .iter()
+        .enumerate()
+        .map(|(index, size)| BatchGet {
+            path: format!("d/f{index}"),
+            id: None,
+            size: *size,
+        })
+        .collect()
+}
+
+#[derive(Default)]
+pub(super) struct RecSink {
+    pub(super) events: Vec<String>,
+    pub(super) data: BTreeMap<usize, Vec<u8>>,
+    pub(super) ends: BTreeMap<usize, Option<io::ErrorKind>>,
+    pub(super) failed: BTreeMap<usize, io::ErrorKind>,
+    pub(super) fail_begin_at: Option<usize>,
+    pub(super) congested: Vec<usize>,
+}
+
+impl BatchSink for RecSink {
+    fn begin(&mut self, index: usize, _size: u64) -> io::Result<()> {
+        self.events.push(format!("begin {index}"));
+        match self.fail_begin_at {
+            Some(at) if at == index => Err(io::Error::other("fixture: sink is full")),
+            _ => Ok(()),
+        }
+    }
+
+    fn data(&mut self, index: usize, bytes: &[u8]) -> io::Result<()> {
+        self.data.entry(index).or_default().extend_from_slice(bytes);
+        Ok(())
+    }
+
+    fn end(&mut self, index: usize, result: io::Result<()>) -> io::Result<()> {
+        self.events.push(format!("end {index}"));
+        self.ends
+            .insert(index, result.err().map(|error| error.kind()));
+        Ok(())
+    }
+
+    fn failed(&mut self, index: usize, error: io::Error) -> io::Result<()> {
+        self.events.push(format!("failed {index}"));
+        if crate::vfs::congestion_of(&error).is_some() {
+            self.congested.push(index);
+        }
+        self.failed.insert(index, error.kind());
+        Ok(())
+    }
+}
+
+pub(super) fn get(
+    sim: &Rc<Sim>,
+    wire: &FakeWire,
+    list: &[BatchGet],
+    sink: &mut RecSink,
+) -> io::Result<()> {
+    drive(sim, get_all(wire, list, sink))
 }
