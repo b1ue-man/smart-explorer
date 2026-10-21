@@ -6,6 +6,7 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
@@ -239,7 +240,11 @@ class VaultTaskTest {
     fun vault_task_android_lock_returns_to_list() {
         val site = runBlocking { coreTestValue { vault("Rückkehr") }.text("site") }
         compose.setContent { VaultsHost(onBack = {}, compareJob = null, onCompareOpened = {}) }
-        compose.waitUntil(30_000) { compose.onAllNodes(hasTestTag("vault-site-$site")).fetchSemanticsNodes().isNotEmpty() }
+        // The list holds the vaults of every earlier test of this class, oldest first (`registry_store.rs`), and the
+        // LazyColumn composes only the rows on screen: the new row is scrolled to, as the person would scroll.
+        compose.waitUntil(30_000) {
+            runCatching { compose.onNodeWithTag("vault-list").performScrollToNode(hasTestTag("vault-site-$site")) }.isSuccess
+        }
         compose.onNode(hasContentDescription("Weitere Aktionen") and hasAnyAncestor(hasTestTag("vault-site-$site")), useUnmergedTree = true).performClick()
         compose.onNodeWithText("Tresor prüfen").performClick()
         compose.waitUntil(30_000) { compose.onAllNodes(hasTestTag("vault-list")).fetchSemanticsNodes().isEmpty() }
