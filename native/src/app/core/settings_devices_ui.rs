@@ -51,14 +51,14 @@ fn refresh(shared: &Shared, ctx: &egui::Context) {
         }
         panel.loading = true;
     }
-    let shared = shared.clone();
+    let worker = shared.clone();
     let ctx = ctx.clone();
     let spawned = std::thread::Builder::new()
         .name("devices-settings".into())
         .spawn(move || {
             let status = crate::daemon::devices_status();
             let runtime = runtime_problem();
-            let mut panel = lock(&shared);
+            let mut panel = lock(&worker);
             match status {
                 Ok(status) => {
                     panel.status = Some(status);
@@ -99,7 +99,7 @@ fn runtime_problem() -> Option<String> {
 /// Switches the tree on or off on a thread.
 fn switch(shared: &Shared, ctx: &egui::Context, on: bool, place: String) {
     lock(shared).busy = true;
-    let shared = shared.clone();
+    let worker = shared.clone();
     let ctx = ctx.clone();
     let spawned = std::thread::Builder::new()
         .name("devices-switch".into())
@@ -115,7 +115,7 @@ fn switch(shared: &Shared, ctx: &egui::Context, on: bool, place: String) {
             } else {
                 crate::daemon::devices_disable()
             };
-            let mut panel = lock(&shared);
+            let mut panel = lock(&worker);
             match result {
                 Ok(status) => {
                     panel.status = Some(status);

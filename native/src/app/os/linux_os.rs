@@ -6,7 +6,6 @@ pub(in crate::app) use shared_platform_helpers::*;
 use super::prelude::*;
 use super::support_paths::OpenMode;
 use super::*;
-use shared_platform_helpers::{ClipboardEffect, ClipboardVirtualFile};
 
 pub(in crate::app) fn confirm_yes_no(title: &str, msg: &str) -> bool {
     rfd::MessageDialog::new()

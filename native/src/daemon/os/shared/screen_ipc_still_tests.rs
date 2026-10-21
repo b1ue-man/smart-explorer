@@ -182,7 +182,7 @@ fn picture() -> BgraImage {
     let mut image = BgraImage::new(size).unwrap();
     for y in 0..size.height {
         for (x, pixel) in image.row_mut(y).chunks_exact_mut(4).enumerate() {
-            pixel.copy_from_slice(&[x as u8, y as u8, (x + y) as u8, 255]);
+            pixel.copy_from_slice(&[x as u8, y as u8, (x as u32 + y) as u8, 255]);
         }
     }
     image
