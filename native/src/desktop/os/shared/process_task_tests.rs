@@ -47,6 +47,30 @@ fn wait_for(limit: Duration, what: &str, mut ready: impl FnMut() -> bool) {
     }
 }
 
+/// What a failed wait for the background service shows: whether its process
+/// still runs, what the worker answers, the files of the sync folder and the
+/// tail of the worker log (the service has no output of its own).
+fn service_report(child: &mut Child) -> String {
+    let process = match child.try_wait() {
+        Ok(Some(status)) => format!("beendet mit {status}"),
+        Ok(None) => "läuft".to_string(),
+        Err(error) => format!("Zustand unbekannt: {error}"),
+    };
+    let answer = crate::daemon::share_worker_peek().map(|snapshot| snapshot.map(|_| "Antwort"));
+    let files: Vec<String> = std::fs::read_dir(crate::support_dirs::sync_data_dir())
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    format!(
+        "Dienstprozess {process}; Abfrage {answer:?}; Ordner {files:?}; Protokoll:\n{}",
+        crate::daemon::read_log_tail(60)
+    )
+}
+
 fn wait_exit(child: &mut Child, limit: Duration) -> Option<ExitStatus> {
     let deadline = Instant::now() + limit;
     loop {
@@ -400,9 +424,16 @@ fn desktop_task_feed_never_starts_worker() {
 fn desktop_task_peek_does_not_start_share_host() {
     let mut env = TaskEnv::new(&[]);
     let daemon = env.spawn(&["--sync-daemon", "--drive-restore"]);
-    wait_for(Duration::from_secs(40), "Hintergrunddienst bereit", || {
-        matches!(crate::daemon::share_worker_peek(), Ok(Some(_)))
-    });
+    let ready = || matches!(crate::daemon::share_worker_peek(), Ok(Some(_)));
+    let deadline = Instant::now() + Duration::from_secs(40);
+    while !ready() {
+        assert!(
+            Instant::now() < deadline,
+            "Hintergrunddienst bereit: nach 40s nicht erreicht; {}",
+            service_report(env.child(daemon))
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
     // Longer than the snapshot's five-second reload (Annahme A41).
     let until = Instant::now() + Duration::from_secs(7);
     while Instant::now() < until {
@@ -423,11 +454,17 @@ fn desktop_task_connect_starts_worker() {
     env.enable_surface();
     assert!(matches!(crate::daemon::share_worker_peek(), Ok(None)));
     let shell = env.spawn(&["--desktop-shell"]);
-    wait_for(
-        Duration::from_secs(60),
-        "Verbinden startet den Dienst",
-        || matches!(crate::daemon::share_worker_peek(), Ok(Some(_))),
-    );
+    let ready = || matches!(crate::daemon::share_worker_peek(), Ok(Some(_)));
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !ready() {
+        assert!(
+            Instant::now() < deadline,
+            "Verbinden startet den Dienst: nach 60s nicht erreicht; Wächterprotokoll {:?}; {}",
+            env.log(),
+            service_report(env.child(shell))
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
     wait_for(Duration::from_secs(10), "Protokoll", || {
         !env.events("connect").is_empty()
     });

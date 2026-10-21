@@ -33,17 +33,6 @@ fn gui_binary() -> PathBuf {
     gui
 }
 
-fn wait_for(limit: Duration, what: &str, mut ready: impl FnMut() -> bool) {
-    let deadline = Instant::now() + limit;
-    while !ready() {
-        assert!(
-            Instant::now() < deadline,
-            "{what}: nach {limit:?} nicht erreicht"
-        );
-        std::thread::sleep(Duration::from_millis(100));
-    }
-}
-
 /// An isolated user: own app data, configuration and runtime folders.
 struct Isolated {
     saved: Vec<(String, Option<OsString>)>,
@@ -99,9 +88,32 @@ impl Isolated {
             .spawn()
             .unwrap();
         self.service = Some(child);
-        wait_for(Duration::from_secs(40), "Hintergrunddienst bereit", || {
-            matches!(crate::daemon::share_worker_peek(), Ok(Some(_)))
-        });
+        let deadline = Instant::now() + Duration::from_secs(40);
+        while !matches!(crate::daemon::share_worker_peek(), Ok(Some(_))) {
+            assert!(
+                Instant::now() < deadline,
+                "Hintergrunddienst bereit: nach 40s nicht erreicht; {}",
+                self.report()
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    /// What a failed wait shows: whether the process still runs, what the
+    /// worker answers and the tail of the worker log (the service has no
+    /// output of its own).
+    fn report(&mut self) -> String {
+        let process = match self.service.as_mut().map(Child::try_wait) {
+            Some(Ok(Some(status))) => format!("beendet mit {status}"),
+            Some(Ok(None)) => "läuft".to_string(),
+            Some(Err(error)) => format!("Zustand unbekannt: {error}"),
+            None => "nicht gestartet".to_string(),
+        };
+        let answer = crate::daemon::share_worker_peek().map(|snapshot| snapshot.map(|_| "Antwort"));
+        format!(
+            "Dienstprozess {process}; Abfrage {answer:?}; Protokoll:\n{}",
+            crate::daemon::read_log_tail(60)
+        )
     }
 }
 

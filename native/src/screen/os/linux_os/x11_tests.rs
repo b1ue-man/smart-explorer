@@ -185,8 +185,21 @@ fn show_window(
     window
 }
 
+/// Connects to the server of `DISPLAY`. The stage's fixture waits for the
+/// socket of Xvfb, not for an accepted connection, and a server that has just
+/// served a capture loop may reset one setup: the connection is tried again
+/// for ten seconds before the check calls the server missing.
 fn connect() -> (RustConnection, Window, usize) {
-    let (conn, screen) = RustConnection::connect(None).expect("an X server on DISPLAY");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let (conn, screen) = loop {
+        match RustConnection::connect(None) {
+            Ok(connected) => break connected,
+            Err(error) if Instant::now() >= deadline => {
+                panic!("an X server on DISPLAY: {error:?}")
+            }
+            Err(_) => std::thread::sleep(Duration::from_millis(100)),
+        }
+    };
     let root = conn.setup().roots[screen].root;
     (conn, root, screen)
 }

@@ -175,6 +175,17 @@ impl XServer {
             .success()
     }
 
+    /// What a short-lived tool wrote on its standard output (for the message
+    /// of a failed check); a tool that cannot run reads as its error.
+    pub(super) fn output(&self, program: &str, args: &[&str]) -> String {
+        let mut command = self.command(program);
+        command.args(args).stdout(Stdio::piped());
+        match command.output() {
+            Ok(output) => String::from_utf8_lossy(&output.stdout).into_owned(),
+            Err(error) => format!("{program}: {error}"),
+        }
+    }
+
     /// A window manager that announces `_NET_SUPPORTED` within ten seconds.
     pub(super) fn start_window_manager(&mut self, program: &str, args: &[&str]) {
         self.spawn(program, args);
