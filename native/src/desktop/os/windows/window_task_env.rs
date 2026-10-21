@@ -37,6 +37,9 @@ use crate::desktop::core::protocol::{read_frame, SurfaceMessage};
 use crate::desktop::core::state::{ModuleState, Part, PartSet, State, STATE_SCHEMA};
 use crate::desktop::os::store::DesktopDir;
 
+/// What the surface writes on stderr when wgpu finds no adapter.
+const NO_ADAPTER: &str = "Failed to create wgpu adapter";
+
 pub(super) fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(std::iter::once(0)).collect()
 }
@@ -406,11 +409,16 @@ impl WinTaskEnv {
                 return hwnd;
             }
             let ended = !matches!(self.children[index].try_wait(), Ok(None));
-            assert!(
-                !ended,
-                "Flächenfenster: die Fläche endete vor ihrem Fenster; {}",
-                self.report(index)
-            );
+            if ended {
+                let report = self.report(index);
+                // The surface draws with wgpu only; a machine without any
+                // adapter (not even WARP) cannot show it, which is no
+                // verdict on the window handling.
+                if report.contains(NO_ADAPTER) {
+                    panic!("nicht ausgeführt: kein Grafikadapter für wgpu auf diesem Rechner; {report}");
+                }
+                panic!("Flächenfenster: die Fläche endete vor ihrem Fenster; {report}");
+            }
             assert!(
                 Instant::now() < deadline,
                 "Flächenfenster: nach {SURFACE_WINDOW_WAIT:?} nicht erreicht; {}; {}",
