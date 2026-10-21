@@ -146,7 +146,6 @@ pub use lane::{
 pub use limiter::Limiter;
 pub use local_stage::download_to_id;
 pub use memory::{memory_budget, reserve_memory, try_reserve_memory, MemoryReservation};
-#[cfg(windows)]
 pub(crate) use platform::available_memory;
 pub(crate) use platform::{
     canonical_folder, lower_thread_priority, physical_memory, replace_file_atomic,
