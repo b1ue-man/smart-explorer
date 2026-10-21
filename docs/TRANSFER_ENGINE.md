@@ -238,9 +238,17 @@ verfügbaren Speichers groß ist; ist der verfügbare Speicher unbekannt, nie
 (`native/src/copy/os/shared/copy_flags.rs:25`, `:47-58`). `REQUEST_COMPRESSED_TRAFFIC` ist aus
 (`copy_flags.rs:19`). Unter Linux und Android laufen parallele Bereiche mit `copy_file_range` an
 festen Offsets, die Bereichsgrenzen liegen auf ganzen MiB (`native/src/copy/os/linux_range.rs:17`).
-Sie laufen nur auf Laufwerken, die nicht rotieren, nur mit Erlaubnissen aus dem Flow und nur bei
-leerer Warteschlange; bei unbekannter Rotation (btrfs, Netz, `/sys` nicht lesbar) nie parallel
-(Stand U51). Windows hat in diesem Stapel keine parallelen Bereiche.
+Sie laufen nur mit Erlaubnissen aus dem Flow und nur bei leerer Warteschlange. Auf einem Laufwerk,
+das als nicht rotierend bekannt ist (`queue/rotational = 0`), laufen sie sofort. Meldet das
+Laufwerk „rotierend“ oder nichts, misst se einmal je Gerätepaar (`st_dev` von Quelle und Ziel, beide
+Blockgeräte) an einer Datei ab 128 MiB: einen Abschnitt mit einem Faden, einen gleich großen mit
+zwei Fäden (je `clamp(Größe/8, 32 MiB, 64 MiB)`, gemessen bis zu `fdatasync`). Der Rest läuft
+parallel, wenn zwei Fäden mindestens 10 % mehr schafften, sonst mit einem Faden; das Urteil gilt
+für den Prozess (`native/src/copy/os/linux_probe.rs`, `native/src/transfer/os/shared/engine/local_plan.rs`).
+Ursache: virtuelle Platten (Cloud-VMs, Loop-Geräte) melden oft „rotierend“, obwohl parallele
+Bereiche dort helfen (Suite-Lauf 3: se 146 MB/s wie `cp`, fio gemischt 371 MB/s). Netz-, FUSE- und
+virtuelle Dateisysteme ohne Blockgerät bleiben bei einem Faden. Windows hat in diesem Stapel keine
+parallelen Bereiche.
 
 **Terminal.** `se cp` läuft über die Engine (`CLI_ENGINE_PATH = true`,
 `native/src/cli/engine_copy.rs:44`). `se cp --stats` schreibt nach den Hinweisen eine Zeile mit

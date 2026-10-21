@@ -1483,6 +1483,18 @@ speed_task_ftp_inherited_feat_answer_saves_the_request         linux-core:unit  
 speed_task_ftp_publish_without_mlst_probes_no_other_file       linux-core:unit  pfad=ftp::speed_task_ftp_tests::speed_task_ftp_publish_without_mlst_probes_no_other_file  quelle=E13,Code
 speed_task_ftp_publish_without_mlst_still_refuses_an_existing_destination linux-core:unit  pfad=ftp::speed_task_ftp_tests::speed_task_ftp_publish_without_mlst_still_refuses_an_existing_destination  quelle=E13,Code
 speed_task_sftp_engine_range_follows_offset_read_after_the_first_part linux-core:unit  pfad=transfer::engine::segments_upload_tests::copy_tests::speed_task_sftp_engine_range_follows_offset_read_after_the_first_part  quelle=E13,Code
+speed_task_local_probe_section_len_scales_and_needs_room       linux-core:unit  pfad=copy::platform::linux_probe::tests::speed_task_local_probe_section_len_scales_and_needs_room  quelle=E13,Code
+speed_task_local_probe_parallel_needs_ten_percent_more_throughput linux-core:unit  pfad=copy::platform::linux_probe::tests::speed_task_local_probe_parallel_needs_ten_percent_more_throughput  quelle=E13,Code
+speed_task_local_probe_sections_and_rest_land_at_their_offsets_when_parallel_helps linux-core:unit  pfad=copy::platform::linux_probe::tests::speed_task_local_probe_sections_and_rest_land_at_their_offsets_when_parallel_helps  quelle=E13,Code
+speed_task_local_probe_rest_is_sequential_when_parallel_does_not_help linux-core:unit  pfad=copy::platform::linux_probe::tests::speed_task_local_probe_rest_is_sequential_when_parallel_does_not_help  quelle=E13,Code
+speed_task_local_probe_cancel_in_a_section_gives_no_verdict_and_starts_no_rest linux-core:unit  pfad=copy::platform::linux_probe::tests::speed_task_local_probe_cancel_in_a_section_gives_no_verdict_and_starts_no_rest  quelle=E13,Code
+speed_task_local_probe_short_source_is_an_error_after_the_verdict linux-core:unit  pfad=copy::platform::linux_probe::tests::speed_task_local_probe_short_source_is_an_error_after_the_verdict  quelle=E13,Code
+speed_task_local_probe_system_sections_copy_a_real_file_identically linux-core:unit  pfad=copy::platform::linux_probe::tests::speed_task_local_probe_system_sections_copy_a_real_file_identically  quelle=E13,Code
+speed_task_local_probe_one_thread_or_a_short_file_copies_plainly linux-core:unit  pfad=copy::platform::linux_probe::tests::speed_task_local_probe_one_thread_or_a_short_file_copies_plainly  quelle=E13,Code
+speed_task_local_probe_is_planned_only_for_a_drive_that_is_not_known_flash linux-core:unit  pfad=transfer::engine::local::extras_tests::speed_task_local_probe_is_planned_only_for_a_drive_that_is_not_known_flash  quelle=E13,Code
+speed_task_local_probe_verdict_is_remembered_per_device_pair   linux-core:unit  pfad=transfer::engine::local::extras_tests::speed_task_local_probe_verdict_is_remembered_per_device_pair  quelle=E13,Code
+speed_task_local_engine_measures_a_drive_that_says_rotating_once_per_device_pair linux-core:unit  pfad=transfer::engine::local::extras_tests::speed_task_local_engine_measures_a_drive_that_says_rotating_once_per_device_pair  quelle=E13,Code
+speed_task_local_device_pair_is_a_pair_of_block_devices_or_nothing linux-core:unit  pfad=transfer::platform::tests::speed_task_local_device_pair_is_a_pair_of_block_devices_or_nothing  quelle=E13,Code
 
 [noch nicht umgesetzt]
 
