@@ -1,35 +1,42 @@
-//! The measured probe of a large local copy onto a drive that is not known to
-//! be flash (it reports "rotating" or nothing at all). Whether side-by-side
-//! ranges help such a drive cannot be read from `queue/rotational` (virtual
-//! disks and loop images say "rotating" while being flash), so the copy
-//! measures it with its own bytes: the first section of the file is copied by
-//! one thread, the next section of the same length by two, both timed, and the
-//! rest by the full thread count only when two threads were at least 10 % faster
-//! (the 10 % rule of U50). Every byte lands
-//! once at its own offset of the same stage, probe sections included; the
-//! verdict goes to the caller, which keeps it for the device.
+//! The measured probe of an unbuffered local copy (`linux_direct`) onto a
+//! drive that is not known to be flash (it reports "rotating" or nothing at
+//! all). Whether side-by-side requests help such a drive cannot be read from
+//! `queue/rotational` (virtual disks and loop images say "rotating" while
+//! being flash), so the copy measures it with its own bytes: after the first
+//! chunk, the first section of the file is copied by one thread, the next
+//! section of the same length by two, both timed, and the rest by the full
+//! thread count only when two threads were at least 10 % faster (the 10 % rule
+//! of U50). A drive that does not gain (a spinning disk would only seek
+//! between the ranges) gets the rest in one buffered stream, the way it was
+//! copied before. Every byte lands once at its own offset of the same stage,
+//! probe sections included; the verdict goes to the caller, which keeps it for
+//! the device.
 //!
-//! Size of a section: the time it takes must dwarf the noise of the clock, the
-//! thread start and the disk sync that ends it (about 5 ms together), so that
-//! two sections differing by 10 % are told apart. At 150 MB/s a section of
-//! 32 MiB lasts 0.22 s (noise 2 %), one of 64 MiB 0.45 s (1 %); at 400 MB/s
-//! 0.08 s (6 %) and 0.17 s (3 %), which is why a section never shrinks below
-//! 32 MiB and grows to 64 MiB for larger files (one eighth of the file).
-//! Two sections of at most half the file leave a rest that is worth the
-//! decision, and a file below 128 MiB is not probed at all.
+//! Direct I/O is on the drive when the call returns, so the sections need no
+//! `fdatasync` and no cache hides the drive. The earlier probe of buffered
+//! copies ended each section with one: it cost 3 s of a 32 s copy (suite run
+//! 4: two `fdatasync` on a loop device that flushes its backing file) and found
+//! no gain, for a reason that is no accident: a buffered copy's writes are
+//! issued by the kernel's writeback with a deep queue whatever the number of
+//! copying threads, so a second thread does not deepen the drive's queue;
+//! what holds a buffered copy back are the dirty limits and the readahead,
+//! which a section of 64 MiB (far below them) cannot show. Buffered copies are
+//! therefore no longer probed: only a drive known to be flash gets ranges.
 //!
-//! The page cache would hide the drive: a section is written into memory first
-//! and a probe that stopped there would time memory. Each section therefore
-//! ends with `fdatasync` of the stage, inside its measured time, so the
-//! drive's own writing is part of the number; the sync of the first section
-//! also leaves no dirty pages behind that would slow the second one. Reading
-//! ahead of the source helps both sections alike (both start cold at their
-//! offset), so it does not tilt the comparison.
+//! Size of a section: the time it takes must dwarf the noise of the clock and
+//! the thread start (about 5 ms), so that two sections differing by 10 % are
+//! told apart. At 150 MB/s a section of 32 MiB lasts 0.22 s (noise 2 %), one
+//! of 64 MiB 0.45 s (1 %); at 400 MB/s 0.08 s (6 %) and 0.17 s (3 %), which is
+//! why a section never shrinks below 32 MiB and grows to 64 MiB for larger
+//! files (one eighth of the file). Two sections of at most half the file
+//! leave a rest that is worth the decision, and a file below 128 MiB is not
+//! probed at all.
 use std::fs::File;
 use std::io;
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
+use super::linux_direct::{release_buffer, Direct, Start};
 use super::linux_range::{copy_span_with, Hooks};
 use crate::transfer::segments::MIN_SEGMENT;
 
@@ -52,31 +59,13 @@ pub(super) enum Phase {
     Parallel,
 }
 
-/// What tests replace: the range copy, the sync that ends a section and the
-/// time that is measured.
-#[derive(Clone, Copy)]
-pub(super) struct ProbeHooks {
-    pub ranges: Hooks,
-    pub settle: fn(&File),
-    pub elapsed: fn(Phase, Duration) -> Duration,
-}
-
-impl ProbeHooks {
-    pub(super) const SYSTEM: ProbeHooks = ProbeHooks {
-        ranges: Hooks::SYSTEM,
-        settle: settle_system,
-        elapsed: real_time,
-    };
-}
-
-fn settle_system(stage: &File) {
-    // Only the timing needs the data on its way to the drive; a file system
-    // that refuses is measured without it.
-    let _ = stage.sync_data();
-}
-
-fn real_time(_: Phase, took: Duration) -> Duration {
-    took
+/// The two ways the probe copies a span `[from, to)` of the file with up to
+/// `threads` threads (`None` = canceled). Tests replace both.
+pub(super) trait Spans {
+    /// With direct I/O: the sections and, when two threads helped, the rest.
+    fn direct(&mut self, from: u64, to: u64, threads: usize) -> io::Result<Option<u64>>;
+    /// Through the page cache with one stream: the rest when they did not.
+    fn buffered(&mut self, from: u64, to: u64, threads: usize) -> io::Result<Option<u64>>;
 }
 
 /// Length of one probe section of a file of `size` bytes; `None` when the
@@ -96,11 +85,14 @@ pub(super) fn parallel_helps(sequential: (u64, Duration), parallel: (u64, Durati
     u128::from(par_bytes) * seq_ns * 100 >= (100 + GAIN_PERCENT) * u128::from(seq_bytes) * par_ns
 }
 
-/// Copies the whole `size` bytes of `reader` into the stage `writer` (already
-/// sized to `size`): a section with one thread, a section with two, then the
-/// rest by up to `threads` threads when two were faster. `report(helps)` is
-/// called once, from the calling thread, as soon as both are measured. Files
-/// too short for the probe and a single permitted thread copy plainly.
+/// Copies the whole `size` bytes of `reader` into the stage `writer`: with
+/// O_DIRECT, a first chunk, a section with one thread, a section with two,
+/// then the rest by up to `threads` threads when two were faster, else in one
+/// buffered stream; the short unaligned end through the normal handles.
+/// `report(helps)` is called once, from the calling thread, as soon as both
+/// sections are measured. A file too short for the probe, a single permitted
+/// thread, and a file that cannot be copied directly are copied plainly
+/// (`copy_handles`, one thread, no verdict).
 pub(in crate::copy) fn copy_probed(
     reader: &File,
     writer: &mut File,
@@ -113,84 +105,132 @@ pub(in crate::copy) fn copy_probed(
     let Some(section) = section_len(size).filter(|_| threads >= PROBE_THREADS) else {
         return super::copy_handles(reader, writer, cancel, progress, 1);
     };
+    let Some(direct) = Direct::open(reader, writer, size) else {
+        return super::copy_handles(reader, writer, cancel, progress, 1);
+    };
     // Sparse until the sections are in; a short source is an error.
     writer.set_len(size)?;
+    let first = match direct.start(cancel, progress) {
+        Ok(Start::Copied(first)) => first,
+        Ok(Start::Canceled) => return Ok(None),
+        Ok(Start::Unsupported) => {
+            release_buffer();
+            writer.set_len(0)?;
+            return super::copy_handles(reader, writer, cancel, progress, 1);
+        }
+        Err(error) => {
+            release_buffer();
+            return Err(error);
+        }
+    };
     let sections = Sections {
-        size,
+        from: first,
+        end: direct.main(),
         section,
         threads,
     };
-    let hooks = &ProbeHooks::SYSTEM;
-    copy_probed_with(reader, writer, &sections, cancel, progress, report, hooks)
+    let (reader, writer) = (&*reader, &*writer);
+    let body = {
+        let mut spans = System {
+            direct: &direct,
+            reader,
+            writer,
+            cancel,
+            progress: &mut *progress,
+        };
+        probe_sections(&sections, &mut spans, report, real_time)
+    };
+    release_buffer();
+    let Some(body) = body? else {
+        return Ok(None);
+    };
+    let Some(rest) = direct.tail(reader, writer, cancel, progress)? else {
+        return Ok(None);
+    };
+    Ok(Some(first + body + rest))
 }
 
-/// How a file is cut: `size` bytes, probe sections of `section` bytes, at most
-/// `threads` threads for the rest.
+fn real_time(_: Phase, took: Duration) -> Duration {
+    took
+}
+
+/// The spans of a real copy.
+struct System<'a> {
+    direct: &'a Direct,
+    reader: &'a File,
+    writer: &'a File,
+    cancel: &'a AtomicBool,
+    progress: &'a mut dyn FnMut(u64),
+}
+
+impl Spans for System<'_> {
+    fn direct(&mut self, from: u64, to: u64, threads: usize) -> io::Result<Option<u64>> {
+        self.direct
+            .span(from, to, threads, self.cancel, &mut *self.progress)
+    }
+
+    fn buffered(&mut self, from: u64, to: u64, threads: usize) -> io::Result<Option<u64>> {
+        copy_span_with(
+            self.reader,
+            self.writer,
+            from,
+            to,
+            threads,
+            self.cancel,
+            &mut *self.progress,
+            &Hooks::SYSTEM,
+        )
+    }
+}
+
+/// How a file is cut: the direct part is `[from, end)` (`from` is where the
+/// first chunk ended), probe sections of `section` bytes, at most `threads`
+/// threads for the rest.
 pub(super) struct Sections {
-    pub size: u64,
+    pub from: u64,
+    pub end: u64,
     pub section: u64,
     pub threads: usize,
 }
 
-pub(super) fn copy_probed_with(
-    reader: &File,
-    writer: &File,
+/// The two measured sections and the rest of `[from, end)`; the bytes copied,
+/// `None` when canceled. `elapsed` turns the measured time into the compared
+/// one (tests make it up).
+pub(super) fn probe_sections(
     sections: &Sections,
-    cancel: &AtomicBool,
-    progress: &mut dyn FnMut(u64),
+    spans: &mut dyn Spans,
     report: &dyn Fn(bool),
-    hooks: &ProbeHooks,
+    elapsed: fn(Phase, Duration) -> Duration,
 ) -> io::Result<Option<u64>> {
     let Sections {
-        size,
+        from,
+        end,
         section,
         threads,
     } = *sections;
-    // One span of the file with `count` threads: the bytes copied and, for a
-    // measured phase, the time they took including the sync; `None` = canceled.
-    let mut span = |phase: Option<Phase>,
-                    start: u64,
-                    end: u64,
-                    count: usize|
-     -> io::Result<Option<(u64, Duration)>> {
+    let mut timed = |phase: Phase, start: u64, stop: u64, count: usize| {
         let began = Instant::now();
-        let copied = copy_span_with(
-            reader,
-            writer,
-            start,
-            end,
-            count,
-            cancel,
-            progress,
-            &hooks.ranges,
-        )?;
-        let Some(copied) = copied else {
-            return Ok(None);
-        };
-        let Some(phase) = phase else {
-            return Ok(Some((copied, Duration::ZERO)));
-        };
-        (hooks.settle)(writer);
-        Ok(Some((copied, (hooks.elapsed)(phase, began.elapsed()))))
+        let copied = spans.direct(start, stop, count)?;
+        Ok::<_, io::Error>(copied.map(|bytes| (bytes, elapsed(phase, began.elapsed()))))
     };
-    let Some(sequential) = span(Some(Phase::Sequential), 0, section, 1)? else {
+    let Some(sequential) = timed(Phase::Sequential, from, section, 1)? else {
         return Ok(None);
     };
-    let Some(parallel) = span(Some(Phase::Parallel), section, 2 * section, PROBE_THREADS)? else {
+    let Some(parallel) = timed(Phase::Parallel, section, 2 * section, PROBE_THREADS)? else {
         return Ok(None);
     };
     let helps = parallel_helps(sequential, parallel);
     // The verdict is about the drive: it stands even when the rest fails.
     report(helps);
     let rest_from = 2 * section;
-    let rest_parts =
-        usize::try_from(size.saturating_sub(rest_from) / MIN_SEGMENT).unwrap_or(usize::MAX);
-    let rest_threads = if helps {
-        threads.min(rest_parts).max(1)
+    let rest = if helps {
+        let parts =
+            usize::try_from(end.saturating_sub(rest_from) / MIN_SEGMENT).unwrap_or(usize::MAX);
+        spans.direct(rest_from, end, threads.min(parts).max(1))?
     } else {
-        1
+        spans.buffered(rest_from, end, 1)?
     };
-    let Some((rest, _)) = span(None, rest_from, size, rest_threads)? else {
+    let Some(rest) = rest else {
         return Ok(None);
     };
     Ok(Some(sequential.0 + parallel.0 + rest))

@@ -21,7 +21,9 @@ use std::sync::Arc;
 mod plan;
 use plan::{DeviceKey, Drive, Memory, Plan, Ticket, Verdicts};
 
-/// What this process measured about the device pairs it copied between.
+/// What this process measured about the device pairs it copied between with
+/// direct requests (files that go around the page cache). Buffered copies
+/// are not measured (`plan::plan`).
 static VERDICTS: Verdicts = Verdicts::new();
 
 pub(super) fn copy_file(engine: &Engine<'_>, file: &FileWork, meter: &Meter<'_>) -> OpResult {
@@ -88,6 +90,19 @@ fn run_transfer(
     #[cfg(test)]
     extras_tests::record(request);
     transfer_local(request, progress)
+}
+
+/// Whether a file of `size` bytes is copied around the page cache: at least a
+/// quarter of the available memory (`plan::unbuffered`). Only the Linux and
+/// Android copy goes by it; the Windows copy has no ranges and decides by
+/// itself in `CopyFile2`, so the answer changes nothing there.
+fn unbuffered_of(size: u64, target: &Path) -> bool {
+    #[cfg(test)]
+    if let Some(forced) = extras_tests::forced_unbuffered(target) {
+        return forced;
+    }
+    let _ = target;
+    plan::unbuffered(size, crate::transfer::available_memory())
 }
 
 /// Whether the drive under `target` is flash, rotating or cannot be told
@@ -184,6 +199,7 @@ fn take_extras(
         size,
         engine.is_move(),
         engine.queue.view().queued,
+        unbuffered_of(size, target),
         || drive_of(target),
         memory,
     );

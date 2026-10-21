@@ -5,13 +5,18 @@ use std::path::Path;
 
 pub(super) type FileIdentity = (u64, u64);
 
+#[path = "linux_direct.rs"]
+mod linux_direct;
+#[path = "linux_direct_plan.rs"]
+mod linux_direct_plan;
 #[path = "linux_probe.rs"]
 mod linux_probe;
 #[path = "linux_range.rs"]
 mod linux_range;
 
-/// A large copy onto a drive not known to be flash: measured ranges
-/// (`linux_probe`) instead of `copy_handles`' fixed thread count.
+/// A large copy around the page cache onto a drive not known to be flash:
+/// measured direct requests (`linux_probe`) instead of `copy_handles`' fixed
+/// thread count.
 pub(super) use linux_probe::copy_probed;
 
 /// Which file `path` names, from its metadata: no read access needed (an
@@ -160,7 +165,12 @@ pub(super) fn copy_by_path(
 /// many threads each copy one contiguous range at explicit offsets
 /// (`linux_range`); the engine asks for it with permits to spare on a drive
 /// known to be flash, or after a measured probe on the same device pair found
-/// that two threads help (`copy_probed`). `None` when canceled.
+/// that two threads help (`copy_probed`). A file of at least a quarter of the
+/// available memory on block devices goes around the page cache first
+/// (`linux_direct`: O_DIRECT, at most 4 threads); a file system that takes no
+/// direct I/O falls back to the ranges below before a byte has moved. Callers
+/// with `parallel == 1` (moves, replacements, server copies) never copy
+/// directly. `None` when canceled.
 pub(super) fn copy_handles(
     reader: &File,
     writer: &mut File,
@@ -175,6 +185,11 @@ pub(super) fn copy_handles(
         if size >= crate::transfer::segments::SPLIT_FROM {
             // Sparse until the ranges are in; a short source is an error.
             writer.set_len(size)?;
+            match linux_direct::copy_whole(reader, writer, size, parallel, cancel, progress)? {
+                linux_direct::Whole::Done(copied) => return Ok(Some(copied)),
+                linux_direct::Whole::Canceled => return Ok(None),
+                linux_direct::Whole::Unavailable => {}
+            }
             return linux_range::copy_ranges(reader, writer, size, parallel, cancel, progress);
         }
     }

@@ -1,7 +1,8 @@
 //! The extra permits of a large local copy and what the engine hands the
-//! copy: rules, never waiting, giving back, the measured start on a drive
-//! that is not known to be flash, and the request that arrives.
-use super::plan::{extras_wanted, plan, PROBE_FROM};
+//! copy: rules, never waiting, giving back, the measured start of a copy
+//! around the page cache on a drive that is not known to be flash, and the
+//! request that arrives.
+use super::plan::{extras_wanted, plan, unbuffered, PROBE_FROM, UNBUFFERED_EXTRAS};
 use super::*;
 use crate::transfer::flow;
 use crate::transfer::segments::MIN_SEGMENT;
@@ -18,6 +19,9 @@ struct Entry {
     /// The device pair the folder's copies are told to run on (`None`: a
     /// side without block device).
     key: Option<DeviceKey>,
+    /// Whether the folder's copies count as going around the page cache
+    /// (what the memory of the host would say otherwise).
+    unbuffered: bool,
     seen: Vec<usize>,
     probed: Vec<bool>,
 }
@@ -49,6 +53,16 @@ pub(super) fn forced_rotation(target: &Path) -> Option<Option<bool>> {
     Some(entry.rotation)
 }
 
+/// Whether a test makes the copies into a registered folder go around the
+/// page cache.
+pub(super) fn forced_unbuffered(target: &Path) -> Option<bool> {
+    let entries = entries();
+    let entry = entries
+        .iter()
+        .find(|entry| entry.prefixes.iter().any(|p| target.starts_with(p)))?;
+    Some(entry.unbuffered)
+}
+
 /// The device pair a test forces for a copy into a registered folder.
 pub(super) fn forced_key(target: &Path) -> Option<Option<DeviceKey>> {
     let entries = entries();
@@ -72,10 +86,21 @@ impl Registered {
             prefixes,
             rotation,
             key,
+            unbuffered: false,
             seen: Vec::new(),
             probed: Vec::new(),
         });
         Self(folder.to_path_buf())
+    }
+
+    /// Makes the folder's copies count as going around the page cache.
+    fn unbuffered(self) -> Self {
+        for entry in entries().iter_mut() {
+            if entry.prefixes.contains(&self.0) {
+                entry.unbuffered = true;
+            }
+        }
+        self
     }
 
     fn probed(&self) -> Vec<bool> {
@@ -129,12 +154,12 @@ fn speed_task_local_extra_permits_only_when_the_queue_is_empty() {
         Drive::Flash
     };
     assert_eq!(
-        plan(size, false, 3, flash, || Memory::Untested),
+        plan(size, false, 3, false, flash, || Memory::Untested),
         Plan::Single
     );
     assert!(!asked.get(), "the drive is not probed while work waits");
     assert_eq!(
-        plan(size, false, 0, flash, || Memory::Untested),
+        plan(size, false, 0, false, flash, || Memory::Untested),
         Plan::Ranges(7)
     );
     assert!(asked.get());
@@ -213,6 +238,7 @@ fn speed_task_local_no_extras_for_small_files_or_moves() {
             size,
             is_move,
             0,
+            true,
             || unreachable!("the drive is not asked"),
             || unreachable!("the memory is not asked"),
         );
@@ -232,28 +258,61 @@ fn speed_task_local_no_extras_for_small_files_or_moves() {
 }
 
 #[test]
-fn speed_task_local_probe_is_planned_only_for_a_drive_that_is_not_known_flash() {
+fn speed_task_local_unbuffered_rule_is_a_quarter_of_the_available_memory() {
+    let memory = Some(16 * 1024 * MIB);
+    assert!(unbuffered(4 * 1024 * MIB, memory), "exactly a quarter");
+    assert!(!unbuffered(4 * 1024 * MIB - 1, memory), "one byte below");
+    assert!(!unbuffered(100 * 1024 * MIB, None), "unknown memory: never");
+}
+
+#[test]
+fn speed_task_local_probe_is_planned_only_for_a_direct_copy_on_a_drive_not_known_flash() {
     let size = 256 * MIB;
-    // A drive known to be flash needs no measurement and no memory.
+    // A drive known to be flash needs no measurement and no memory. A buffered
+    // copy gets every thread its parts allow; a copy around the page cache
+    // runs 4 threads in all (three beyond its own), however large the file.
     let planned = plan(
         size,
         false,
         0,
+        false,
         || Drive::Flash,
         || unreachable!("not asked"),
     );
     assert_eq!(planned, Plan::Ranges(31));
-    // Spinning or unknown without a verdict: measure, with the same permits.
+    let planned = plan(
+        size,
+        false,
+        0,
+        true,
+        || Drive::Flash,
+        || unreachable!("not asked"),
+    );
+    assert_eq!(planned, Plan::Ranges(UNBUFFERED_EXTRAS));
+    // Spinning or unknown: a buffered copy stays on one thread whatever the
+    // memory says (its writes are queued deep by the kernel anyway, and the
+    // probe's syncs cost seconds); a direct copy without a verdict measures,
+    // with the same permits.
     for drive in [Drive::Spinning, Drive::Unknown] {
+        for memory in [
+            Memory::Untested,
+            Memory::Probing,
+            Memory::Hurts,
+            Memory::Unavailable,
+            Memory::Helps,
+        ] {
+            let planned = plan(size, false, 0, false, || drive, || memory);
+            assert_eq!(planned, Plan::Single, "buffered {drive:?} {memory:?}");
+        }
         let table = [
-            (Memory::Untested, Plan::Probe(31)),
+            (Memory::Untested, Plan::Probe(3)),
             (Memory::Probing, Plan::Single),
             (Memory::Hurts, Plan::Single),
             (Memory::Unavailable, Plan::Single),
-            (Memory::Helps, Plan::Ranges(31)),
+            (Memory::Helps, Plan::Ranges(3)),
         ];
         for (memory, expected) in table {
-            let planned = plan(size, false, 0, || drive, || memory);
+            let planned = plan(size, false, 0, true, || drive, || memory);
             assert_eq!(planned, expected, "{drive:?} {memory:?}");
         }
     }
@@ -261,24 +320,26 @@ fn speed_task_local_probe_is_planned_only_for_a_drive_that_is_not_known_flash() 
     // most half of it); a smaller one stays on one thread, a known verdict
     // still applies to it.
     let spinning = || Drive::Spinning;
-    let spinning_untested = |size| plan(size, false, 0, spinning, || Memory::Untested);
+    let spinning_untested = |size| plan(size, false, 0, true, spinning, || Memory::Untested);
     assert_eq!(spinning_untested(PROBE_FROM - 1), Plan::Single);
-    assert_eq!(spinning_untested(PROBE_FROM), Plan::Probe(15));
+    assert_eq!(spinning_untested(PROBE_FROM), Plan::Probe(3));
     assert_eq!(
-        plan(PROBE_FROM - 1, false, 0, spinning, || Memory::Helps),
-        Plan::Ranges(14)
+        plan(PROBE_FROM - 1, false, 0, true, spinning, || Memory::Helps),
+        Plan::Ranges(3)
     );
     // Work waiting, a move and a file below two parts never measure.
     assert_eq!(
-        plan(size, false, 1, spinning, || Memory::Untested),
+        plan(size, false, 1, true, spinning, || Memory::Untested),
         Plan::Single
     );
     assert_eq!(
-        plan(size, true, 0, spinning, || Memory::Untested),
+        plan(size, true, 0, true, spinning, || Memory::Untested),
         Plan::Single
     );
     assert_eq!(
-        plan(SPLIT_FROM - 1, false, 0, spinning, || Memory::Untested),
+        plan(SPLIT_FROM - 1, false, 0, true, spinning, || {
+            Memory::Untested
+        }),
         Plan::Single
     );
 }
@@ -317,13 +378,14 @@ fn speed_task_local_probe_verdict_is_remembered_per_device_pair() {
             256 * MIB,
             false,
             0,
+            true,
             || Drive::Spinning,
             || verdicts.memory(key),
         )
     };
-    assert_eq!(planned(one), Plan::Ranges(31));
+    assert_eq!(planned(one), Plan::Ranges(3));
     assert_eq!(planned(other), Plan::Single);
-    assert_eq!(planned((3, 3)), Plan::Probe(31));
+    assert_eq!(planned((3, 3)), Plan::Probe(3));
 }
 
 #[test]
@@ -386,13 +448,14 @@ fn speed_task_local_every_small_file_runs_on_one_thread() {
     }
 }
 
-/// A file that is probe-sized, on a drive that says "rotating", with both
-/// sides on block devices: the first copy of the pair is measured (when the
-/// flow had a permit to spare), its verdict is kept, and the second copy
-/// between the same devices is not measured again. Whatever the verdict, the
-/// bytes are the same and are counted once.
+/// A probe-sized file on a drive that says "rotating", both sides on block
+/// devices, copied around the page cache: the first copy of the pair is
+/// measured when the flow had a permit to spare. Whether a verdict comes out
+/// depends on the host (the copy decides again whether it can go direct, else
+/// it copies plainly and leaves the pair untested); a verdict is kept and not
+/// measured again; the bytes are the same and counted once.
 #[test]
-fn speed_task_local_engine_measures_a_drive_that_says_rotating_once_per_device_pair() {
+fn speed_task_local_engine_measures_a_direct_copy_on_a_drive_that_says_rotating() {
     use super::super::test_backend::{job, run, write};
     use crate::transfer::Endpoint;
     let root = tempfile::tempdir().expect("temp dir");
@@ -407,35 +470,30 @@ fn speed_task_local_engine_measures_a_drive_that_says_rotating_once_per_device_p
     for name in ["first", "second"] {
         let dest = root.path().join(name);
         std::fs::create_dir_all(&dest).expect("dest");
-        let registered = Registered::on(&dest, Some(true), Some(key));
+        let registered = Registered::on(&dest, Some(true), Some(key)).unbuffered();
         let finished = run(job(Endpoint::Local, Endpoint::Local, &dest, &[&source]));
         assert!(finished.issues.is_empty(), "{:?}", finished.issues);
         assert!(std::fs::read(dest.join("big.bin")).expect("copy") == content);
         assert_eq!(finished.progress.bytes_done, content.len() as u64);
         let (seen, probed) = (registered.seen(), registered.probed());
         assert_eq!((seen.len(), probed.len()), (1, 1), "{name}");
+        let memory = VERDICTS.memory(key);
         if name == "first" {
-            // With a permit to spare the copy measured; otherwise it ran on
-            // one thread and left the pair untested.
+            // With a permit to spare the copy was asked to measure; otherwise
+            // it ran on one thread and left the pair untested.
             assert_eq!(probed[0], seen[0] > 1, "{seen:?}");
-            let memory = VERDICTS.memory(key);
-            if probed[0] {
-                assert!(
-                    matches!(memory, Memory::Helps | Memory::Hurts),
-                    "{memory:?}"
-                );
-            } else {
+            if !probed[0] {
                 assert_eq!(memory, Memory::Untested);
             }
             first = Some((probed[0], memory));
-        } else if let Some((true, memory)) = first {
+        } else if let Some((true, Memory::Helps | Memory::Hurts)) = first {
             assert_eq!(probed, [false], "a verdict is not measured again");
             match memory {
                 // Ranges again when the flow has permits to spare.
                 Memory::Helps => assert!(seen[0] >= 1, "{seen:?}"),
                 _ => assert_eq!(seen, [1], "does not help: one thread"),
             }
-            assert_eq!(VERDICTS.memory(key), memory, "the verdict is fixed");
+            assert_eq!(Some(memory), first.map(|(_, memory)| memory), "fixed");
         }
     }
 }
