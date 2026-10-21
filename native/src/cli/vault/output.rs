@@ -207,7 +207,7 @@ pub(crate) fn key_lines(value: &Value) -> Vec<String> {
                     .join(","),
                 other => other.to_string(),
             };
-            clean(&format!("{key}\t{text}"))
+            format!("{}\t{}", clean(key), clean(&text))
         })
         .collect()
 }
