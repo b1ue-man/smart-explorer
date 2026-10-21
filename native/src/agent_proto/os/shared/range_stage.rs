@@ -332,6 +332,15 @@ impl RangeStages {
     }
 }
 
+impl Drop for RangeStages {
+    /// A table that goes without `close()` (a handler that panicked or left
+    /// early) still gives up its stages and their reserved space. `close()`
+    /// has emptied the table, so nothing is released twice.
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
 /// A stage that is being created; dropping it undoes the reservation.
 pub(crate) struct Pending {
     table: Arc<RangeStages>,

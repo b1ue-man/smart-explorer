@@ -218,6 +218,35 @@ fn speed_task_range_stage_sums_the_space_of_all_open_stages() {
 }
 
 #[test]
+fn speed_task_range_stage_drop_releases_the_space() {
+    let _serial = super::super::range_space::space_test_lock();
+    let dir = tempfile::tempdir().expect("temp dir");
+    let available = super::local_platform::available_space(dir.path()).expect("free space");
+    assert!(available > 64 * MIB, "the test needs some free space");
+    let size = available / 10 * 6;
+    let first = table(8);
+    let path = open(&first, dir.path(), "a.se-upload-0000000000000001", size).expect("fits");
+    let second = table(8);
+    open(&second, dir.path(), "b.se-upload-0000000000000002", size)
+        .expect_err("the first table still holds the space");
+    // A handler that ends without `close()` (a panic, an early return).
+    drop(first);
+    assert!(!path.exists(), "the unfinished stage went with its table");
+    open(&second, dir.path(), "b.se-upload-0000000000000002", size).expect("space is back");
+    // `close()` and the drop that follows release the space once, not twice.
+    second.close();
+    let third = table(8);
+    open(&third, dir.path(), "c.se-upload-0000000000000003", size).expect("fits again");
+    let fourth = table(8);
+    open(&fourth, dir.path(), "d.se-upload-0000000000000004", size)
+        .expect_err("a double release would have made room");
+    drop(second);
+    open(&fourth, dir.path(), "d.se-upload-0000000000000004", size)
+        .expect_err("dropping a closed table releases nothing");
+    third.close();
+}
+
+#[test]
 fn speed_task_range_stage_expires_without_progress() {
     let dir = tempfile::tempdir().expect("temp dir");
     let table = RangeStages::new(8, Duration::ZERO, None);
