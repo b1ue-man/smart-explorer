@@ -4,6 +4,10 @@
 
 #[path = "../../native/src/agent_proto/mod.rs"]
 mod agent_proto;
+// What the shared protocol code takes from the app crate by path
+// (`crate::transfer`, `crate::vfs`); without it this crate does not build.
+mod transfer;
+mod vfs;
 
 use std::io::Write;
 
