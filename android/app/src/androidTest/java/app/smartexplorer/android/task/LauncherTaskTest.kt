@@ -43,6 +43,7 @@ import app.smartexplorer.android.launcher.model.LayoutReadResult
 import app.smartexplorer.android.launcher.search.LauncherSearch
 import app.smartexplorer.android.launcher.search.SearchHit
 import app.smartexplorer.android.launcher.search.SearchSource
+import app.smartexplorer.android.screen.ScreenControlService
 import app.smartexplorer.android.launcher.se.OpenInFiles
 import app.smartexplorer.android.launcher.se.SeActions
 import app.smartexplorer.android.ui.AppNav
@@ -1126,6 +1127,83 @@ class LauncherTaskTest {
                 "none",
                 InstrumentationRegistry.getArguments().getString("launcherWidgetMainPidAfterUpdate"),
             )
+        }
+    }
+
+
+    // ---- the two gestures (U40-18, U40-21) -----------------------------------------------------------------
+
+    private val accessibilitySetting = "enabled_accessibility_services"
+    private val controlService = "$pkg/app.smartexplorer.android.screen.ScreenControlService"
+
+    /** Runs [body] with the accessibility setting [value] (`null` = unset) and puts the earlier value back afterwards. */
+    private fun withAccessibilityServices(value: String?, body: () -> Unit) {
+        val before = shell("settings get secure $accessibilitySetting").trim()
+        fun put(text: String?) {
+            if (text == null || text == "null" || text.isEmpty()) {
+                shell("settings delete secure $accessibilitySetting")
+            } else {
+                shell("settings put secure $accessibilitySetting $text")
+            }
+        }
+        put(value)
+        try {
+            body()
+        } finally {
+            put(before)
+        }
+    }
+
+    private fun swipeDownOnEmptyPage() {
+        val x = device.displayWidth / 2
+        device.swipe(x, device.displayHeight / 3, x, device.displayHeight * 2 / 3, 12)
+    }
+
+    private fun doubleTapOnEmptyPage() {
+        val x = device.displayWidth / 2
+        val y = device.displayHeight / 2
+        device.click(x, y)
+        SystemClock.sleep(80)
+        device.click(x, y)
+    }
+
+    @Test
+    fun launcher_task_gestures_off_without_accessibility() {
+        withAccessibilityServices(null) {
+            startEmptyLauncher()
+            assertFalse("the service must be off", ScreenControlService.enabled(appContext))
+            swipeDownOnEmptyPage()
+            // The gesture does nothing but say why, once.
+            assertTrue("no explanation for the swipe", device.wait(Until.hasObject(By.textContains("Gesten sind aus")), 10_000))
+            assertEquals("the swipe opened the notification shade", pkg, device.currentPackageName)
+            doubleTapOnEmptyPage()
+            SystemClock.sleep(3_000)
+            assertTrue("the double tap locked the screen", device.isScreenOn)
+            assertEquals(pkg, device.currentPackageName)
+            // The settings card names the reason and offers the system page (U40-19).
+            compose.setContent { SmartExplorerTheme { LauncherSettings() } }
+            compose.onNodeWithText("Gesten sind aus: Die Bedienungshilfe", substring = true).assertExists()
+            compose.onNodeWithText("Bedienungshilfe öffnen").assertExists()
+        }
+    }
+
+    @Test
+    fun launcher_task_gestures_with_accessibility() {
+        withAccessibilityServices(controlService) {
+            assertTrue("the accessibility service did not start", waitFor(30_000) { ScreenControlService.current() != null })
+            startEmptyLauncher()
+            swipeDownOnEmptyPage()
+            assertTrue("the notification shade did not open", device.wait(Until.hasObject(By.pkg("com.android.systemui")), 10_000))
+            device.pressBack()
+            assertLauncherOnTop()
+
+            doubleTapOnEmptyPage()
+            val asleep = waitFor(20_000) { shell("dumpsys power").lineSequence().any { "mWakefulness=Asleep" in it || "mWakefulness=Dozing" in it } }
+            shell("input keyevent KEYCODE_WAKEUP")
+            shell("wm dismiss-keyguard")
+            assertTrue("the double tap did not lock the screen", asleep)
+            compose.setContent { SmartExplorerTheme { LauncherSettings() } }
+            compose.onNodeWithText("Wischen nach unten öffnet die Benachrichtigungen, Doppeltippen sperrt den Bildschirm.").assertExists()
         }
     }
 

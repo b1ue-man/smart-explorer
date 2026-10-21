@@ -16,8 +16,10 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 
 /**
- * A gesture another package adds to the home screen: [apply] returns the modifier with its detector.
- * U40 adds „Wischen nach unten“ and „Doppeltippen“ here; U35 passes an empty list (U35-29).
+ * A gesture another package adds to the home screen: [apply] returns the modifier with its detector. U40 adds
+ * „Doppeltippen“ here (`SeGestures.doubleTap`); U35 passes an empty list (U35-29). A detector that reads vertical drags does
+ * not belong here: two vertical-drag detectors on one node cannot both see the drag, because the first consumes the
+ * movement. „Wischen nach unten“ therefore shares the detector of „Wischen nach oben“ ([homeGestures] `onSwipeDown`).
  */
 fun interface GestureHandler {
     fun apply(modifier: Modifier): Modifier
@@ -27,21 +29,24 @@ fun interface GestureHandler {
 private const val SWIPE_UP_DP = 48
 
 /**
- * Gestures of the home screen: swipe up opens the app list (U35-29). The swipe counts at the end of the
- * gesture, when the upward travel reached 48 dp or the speed reached four times the system's minimum fling
- * speed. [enabled] is false in edit mode and while a layer is open; a gesture that begins where [blockedAt] says
- * „widget“ (position local to this node) never counts (U38-4): the widget gets its touches whole.
+ * Gestures of the home screen: swipe up opens the app list (U35-29), swipe down calls [onSwipeDown] (U40-18, the
+ * notification shade; `null` leaves the gesture off). A swipe counts at the end of the gesture, when the travel in its
+ * direction reached 48 dp or the speed reached four times the system's minimum fling speed. [enabled] is false in edit
+ * mode and while a layer is open; a gesture that begins where [blockedAt] says „widget“ (position local to this node) never
+ * counts (U38-4): the widget gets its touches whole.
  */
 @Composable
 fun Modifier.homeGestures(
     enabled: Boolean,
     onSwipeUp: () -> Unit,
+    onSwipeDown: (() -> Unit)? = null,
     extra: List<GestureHandler> = emptyList(),
     blockedAt: (Offset) -> Boolean = { false },
 ): Modifier {
     val density = LocalDensity.current
     val context = LocalContext.current
     val swipe = rememberUpdatedState(onSwipeUp)
+    val swipeDown = rememberUpdatedState(onSwipeDown)
     val blocked = rememberUpdatedState(blockedAt)
     val blockedGesture = remember { BooleanArray(1) }
     val distancePx = with(density) { SWIPE_UP_DP.dp.toPx() }
@@ -67,8 +72,15 @@ fun Modifier.homeGestures(
                     tracker.resetTracking()
                 },
                 onDragEnd = {
-                    val speedUp = -tracker.calculateVelocity().y
-                    if (!blockedGesture[0] && (-travel >= distancePx || speedUp >= speedPx)) swipe.value()
+                    val velocity = tracker.calculateVelocity().y
+                    val speedUp = -velocity
+                    if (!blockedGesture[0]) {
+                        if (-travel >= distancePx || speedUp >= speedPx) {
+                            swipe.value()
+                        } else if (travel >= distancePx || velocity >= speedPx) {
+                            swipeDown.value?.invoke()
+                        }
+                    }
                 },
                 onDragCancel = { travel = 0f },
                 onVerticalDrag = { change, amount ->
