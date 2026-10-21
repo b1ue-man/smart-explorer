@@ -41,6 +41,7 @@ import app.smartexplorer.android.launcher.MenuSource
 import app.smartexplorer.android.launcher.MenuTarget
 import app.smartexplorer.android.launcher.apps.AppCatalog
 import app.smartexplorer.android.launcher.badges.Badges
+import app.smartexplorer.android.launcher.gestures.SeGestures
 import app.smartexplorer.android.launcher.gestures.homeGestures
 import app.smartexplorer.android.launcher.model.Cell
 import app.smartexplorer.android.launcher.model.GridGeometry
@@ -131,6 +132,8 @@ fun HomeScreen(vm: LauncherViewModel) {
         } else {
             display.pages
         }
+        val pagesShownNow by rememberUpdatedState(pagesShown)
+        val gestures = remember(vm) { SeGestures(vm.se) }
         val itemContext = remember(vm, iconDp, apps, shortcutInfos, dots, hiddenUsers) {
             ItemContext(vm, iconDp, apps.associateBy { it.key }, shortcutInfos, dots, hiddenUsers)
         }
@@ -152,6 +155,14 @@ fun HomeScreen(vm: LauncherViewModel) {
 
         // Nothing is folded into an item that is hidden: its cell only looks empty (U38-14).
         fun hiddenOccupant(id: String?): Boolean = id != null && LayoutOps.find(displayNow, id)?.item?.let { itemContext.isHidden(it) } == true
+
+        // Bare background for „Doppeltippen“ (U40-18): inside the page area, not in the dock, on a cell with no item (a widget is an item).
+        fun onEmptyBackground(at: Offset): Boolean {
+            val m = metricsNow
+            if (!m.contains(at) || m.inDock(at)) return false
+            val items = pagesShownNow.getOrNull(pagerState.currentPage) ?: return false
+            return LayoutOps.itemAt(items, m.cellAt(at)) == null
+        }
 
         fun onWidget(at: Offset): Boolean {
             val m = metricsNow
@@ -296,6 +307,8 @@ fun HomeScreen(vm: LauncherViewModel) {
                 .homeGestures(
                     enabled = !vm.hasOpenLayer && !drag.active,
                     onSwipeUp = { vm.openDrawer() },
+                    onSwipeDown = { gestures.swipeDown(context) },
+                    extra = listOf(gestures.doubleTap(context) { onEmptyBackground(it) }),
                     blockedAt = { onWidget(it) },
                 ),
         ) {

@@ -37,7 +37,9 @@ import app.smartexplorer.android.launcher.HomeRules
 import app.smartexplorer.android.launcher.LauncherParts
 import app.smartexplorer.android.launcher.LauncherState
 import app.smartexplorer.android.launcher.LauncherSwitch
+import app.smartexplorer.android.R
 import app.smartexplorer.android.launcher.apps.PrivateSpace
+import app.smartexplorer.android.screen.ScreenControlService
 import app.smartexplorer.android.ui.common.Snackbars
 import app.smartexplorer.android.ui.more.HintLine
 import app.smartexplorer.android.ui.more.SectionHeader
@@ -57,6 +59,8 @@ private data class CardData(
     val hiddenProfilesGranted: Boolean,
     /** The person allowed the notification listener of the dots (U38-12). */
     val badgesOn: Boolean,
+    /** The app's accessibility service is switched on, so „Wischen nach unten“ and „Doppeltippen“ work (U40-19). */
+    val gesturesOn: Boolean,
 )
 
 private fun readCard(context: Context): CardData {
@@ -74,6 +78,7 @@ private fun readCard(context: Context): CardData {
         recovered = LauncherState.recoveredFile(context).exists(),
         hiddenProfilesGranted = context.checkSelfPermission(PrivateSpace.PERMISSION) == PackageManager.PERMISSION_GRANTED,
         badgesOn = NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName),
+        gesturesOn = ScreenControlService.enabled(context),
     )
 }
 
@@ -169,6 +174,7 @@ fun LauncherSettings(modifier: Modifier = Modifier) {
         }
         PrivateSpaceLine(card)
         if (card.enabled) BadgeLine(card, context)
+        if (card.enabled) GesturesLine(card, context)
         // DSK-M13 (U40-19): what the home screen shows of Smart Explorer and where more of it is added.
         if (card.enabled) {
             HintLine(
@@ -262,6 +268,36 @@ private fun DisabledStatement(notice: HomeNotice, previousName: String?, context
 private fun PrivateSpaceLine(card: CardData) {
     val text = PrivateSpace.statusLine(Build.VERSION.SDK_INT, card.roleHeld, card.hiddenProfilesGranted)
     Text(text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+}
+
+/**
+ * „Gesten“ (U40-19): „Wischen nach unten“ and „Doppeltippen“ need the app's accessibility service. On, the line says what the
+ * gestures do; off, it says why they do nothing and offers the system page. Read on every `ON_RESUME` with the card.
+ */
+@Composable
+private fun GesturesLine(card: CardData, context: Context) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Gesten", style = MaterialTheme.typography.titleSmall)
+        Text(
+            if (card.gesturesOn) {
+                "Wischen nach unten öffnet die Benachrichtigungen, Doppeltippen sperrt den Bildschirm."
+            } else {
+                "Gesten sind aus: Die Bedienungshilfe „${context.getString(R.string.screen_control_label)}“ ist nicht eingeschaltet."
+            },
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        if (!card.gesturesOn) {
+            OutlinedButton(onClick = { openAccessibilitySettings(context) }, modifier = Modifier.fillMaxWidth()) { Text("Bedienungshilfe öffnen") }
+        }
+    }
+}
+
+private fun openAccessibilitySettings(context: Context) {
+    try {
+        context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    } catch (_: ActivityNotFoundException) {
+        Snackbars.show("Einstellung nicht verfügbar – bitte in den Systemeinstellungen die Bedienungshilfe einschalten.")
+    }
 }
 
 /** „Benachrichtigungspunkte: an“ or „… aus (Zugriff fehlt)“ with the button to the system page (U38-12, U38-15). */
