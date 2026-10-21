@@ -69,10 +69,13 @@ fn copy_by_handles(
     progress: &mut dyn FnMut(u64),
 ) -> io::Result<(u64, File)> {
     let mut writer = crate::vfs::create_local_copy_stage(stage)?;
-    let copied = platform::copy_handles(reader, &mut writer, cancel, progress).and_then(|copied| {
-        platform::copy_permissions(&writer, &reader.metadata()?, None)?;
-        copied.ok_or_else(|| io::Error::new(io::ErrorKind::Interrupted, "Serverkopie abgebrochen"))
-    });
+    let copied =
+        platform::copy_handles(reader, &mut writer, cancel, progress, 1).and_then(|copied| {
+            platform::copy_permissions(&writer, &reader.metadata()?, None)?;
+            copied.ok_or_else(|| {
+                io::Error::new(io::ErrorKind::Interrupted, "Serverkopie abgebrochen")
+            })
+        });
     match copied {
         Ok(bytes) => Ok((bytes, writer)),
         Err(error) => {
