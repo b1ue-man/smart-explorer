@@ -141,9 +141,14 @@ tungstenite = { version = "0.24", default-features = false, features = ["handsha
 # socket2), cross-compiles clean.
 mdns-sd = "0.11"
 if-addrs = "0.13"
-# ZIP archive browse + extract (zipfs.rs): pure-Rust deflate via flate2/miniz_oxide
-# (already in the tree through russh), so no new C deps for the windows-gnu build.
-zip = { version = "2", default-features = false, features = ["deflate"] }
+# ZIP archive browse + extract (zipfs.rs). zip 9 (not 2.4.2): RUSTSEC-2026-0367
+# (SUID/SGID bits on extraction), RUSTSEC-2026-0368 and RUSTSEC-2026-0369 (Unix
+# permissions through links) are fixed from 9.0.0. Feature `deflate-flate2` (not
+# `deflate`, which in zip 9 also pulls the Zopfli encoder and `zlib-rs`): deflate
+# through flate2 with its pure-Rust miniz_oxide backend, which the direct `flate2`
+# dependency below enables (zip itself builds flate2 without a backend), so no new
+# C deps for the windows-gnu build.
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 # RV1 (all already in the lock through other crates): streaming WebDAV
 # multistatus parsing, TCP keepalive on FTP sockets, NFC planning keys for
 # sync pairs, deflate for remote analysis trees.

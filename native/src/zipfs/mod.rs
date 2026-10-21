@@ -4,6 +4,8 @@ mod entry;
 mod extract;
 #[path = "os/shared/zipfs.rs"]
 mod imp;
+#[path = "os/shared/names.rs"]
+mod names;
 
 #[cfg(test)]
 #[path = "os/shared/transfer_engine_task_tests.rs"]
