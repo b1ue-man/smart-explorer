@@ -35,6 +35,8 @@ mod listing;
 mod reader;
 #[path = "core/replace.rs"]
 mod replace;
+#[path = "core/segment_wire.rs"]
+mod segment_wire;
 #[path = "core/segmented_stage.rs"]
 mod segmented_stage;
 #[path = "core/server_copy.rs"]
@@ -64,6 +66,12 @@ mod delete_speed_task_tests;
 #[cfg(test)]
 #[path = "core/range_tests.rs"]
 mod range_tests;
+#[cfg(test)]
+#[path = "core/segmented_stage_fake.rs"]
+mod segmented_stage_fake;
+#[cfg(test)]
+#[path = "core/segmented_stage_tests.rs"]
+mod segmented_stage_tests;
 #[cfg(test)]
 #[path = "core/server_copy_task_tests.rs"]
 mod server_copy_task_tests;

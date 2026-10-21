@@ -1,9 +1,8 @@
 //! Ranges over SMB (E13, U48-7): the READs of a range stay within it, and the
-//! writer of ranges is off until its security question is answered. The
+//! writer of ranges is in segmented_stage_tests.rs. The
 //! reader itself needs a server (smb2's `FileReader` cannot be built here),
 //! so the bounds are checked where they are decided.
 use super::reader::{bounded_size, next_read};
-use super::segmented_stage::SMB_SEGMENTED_WRITE;
 
 #[test]
 fn speed_task_smb_range_reader_stops_at_end() {
@@ -45,13 +44,4 @@ fn speed_task_smb_range_reader_pipeline_stays_within_range() {
     // Two neighbouring ranges ask for disjoint bytes.
     let second_size = bounded_size(file, Some(9_000));
     assert_eq!(next_read(end, second_size, chunk), Some((end, chunk)));
-}
-
-#[test]
-fn speed_task_smb_segmented_write_is_off_until_answered() {
-    let switch = std::hint::black_box(SMB_SEGMENTED_WRITE);
-    assert!(
-        !switch,
-        "reopening a stage by path is not yet judged for SMB"
-    );
 }
