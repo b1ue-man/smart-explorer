@@ -18,6 +18,8 @@ a missing emulator, a missing APK or a missing fixture is "nicht ausgeführt" wi
 """
 from __future__ import annotations
 
+import re
+import shlex
 import time
 from pathlib import Path
 
@@ -35,13 +37,17 @@ def tool():
 
 def instrument(ctx: common.JobContext, stage: str, targets: list[str], args: list[tuple[str, str]],
                timeout: float) -> tuple[dict, common.Completed, float]:
-    """One ``am instrument -w -r`` over ``targets`` (``a.B`` or ``a.B#method``)."""
+    """One ``am instrument -w -r`` over ``targets`` (``a.B`` or ``a.B#method``).
+
+    ``adb shell`` joins its words with spaces and the device's shell parses the result again, so every word is quoted: a phase value
+    like ``(kein Text)`` is a syntax error for ``/system/bin/sh`` otherwise (suite run 7, ``launcher_task_no_bind_when_main_process_absent``).
+    """
     device = ctx.device
     assert device is not None and device.component
     command = ["shell", "am", "instrument", "-w", "-r"]
     for key, value in args:
-        command += ["-e", key, value]
-    command += ["-e", "class", ",".join(targets), device.component]
+        command += ["-e", shlex.quote(key), shlex.quote(value)]
+    command += ["-e", "class", shlex.quote(",".join(targets)), shlex.quote(device.component)]
     started = time.monotonic()
     completed = ctx.run([device.adb, *command], stage=stage, timeout=timeout)
     return common.parse_instrumentation(completed.output), completed, time.monotonic() - started
@@ -71,6 +77,19 @@ def resolve(ctx: common.JobContext, entry) -> tuple[str | None, str | None]:
     return (owners[0], entry.name) if owners else (None, None)
 
 
+def ui_dump(device) -> str:
+    """The UI hierarchy of the screen. ``uiautomator dump`` answers "null root node returned by UiTestAutomationBridge" while no window
+    is ready to be read (right after the Home key, with the launcher starting cold), so it is asked again a few times."""
+    last = ""
+    for _ in range(6):
+        dump = device.adb_run("exec-out", "uiautomator", "dump", "/dev/tty", timeout=120)
+        last = dump.output
+        if "<hierarchy" in last:
+            return last
+        time.sleep(3)
+    return last
+
+
 def observe(ctx: common.JobContext, kind: str) -> tuple[bool, str, dict]:
     """Host steps between two phases; returns (ok, note, observations)."""
     device = ctx.device
@@ -89,8 +108,7 @@ def observe(ctx: common.JobContext, kind: str) -> tuple[bool, str, dict]:
     if kind == "kill-home-observe":
         device.adb_run("shell", "input", "keyevent", "KEYCODE_HOME", timeout=60)
         time.sleep(5)
-        dump = device.adb_run("exec-out", "uiautomator", "dump", "/dev/tty", timeout=120)
-        observed["tile"] = tool().tile_text(dump.output)
+        observed["tile"] = tool().tile_text(ui_dump(device))
     elif kind == "kill-widget-update":
         widget = device.adb_run("shell", "run-as", PACKAGE, "cat", tool().WIDGET_ID_FILE, timeout=60)
         widget_id = widget.output.strip().splitlines()[-1].strip() if widget.ok and widget.output.strip() else ""
@@ -258,12 +276,36 @@ def stage_launcher_device(ctx: common.JobContext, stage: str) -> None:
         restore_home(ctx, stage)
 
 
+def holder_from_dumpsys(text: str) -> str | None:
+    """The holder of the HOME role from ``dumpsys role``. Android 11 has no ``cmd role get-role-holders`` (it answers "Unknown command";
+    ``RoleManagerShellCommand`` knows only add-role-holder, remove-role-holder and clear-role-holders); the dump lists the roles as
+    ``name=<role>`` followed by ``holders=<package>`` (one holder) or ``holders=[`` and the packages (several)."""
+    lines = [line.strip() for line in text.splitlines()]
+    for index, line in enumerate(lines):
+        if line != "name=android.app.role.HOME":
+            continue
+        for offset, follow in enumerate(lines[index + 1:], start=index + 1):
+            if follow.startswith("}") or follow.startswith("name="):
+                return None
+            single = re.fullmatch(r"holders=([A-Za-z0-9_.]+)", follow)
+            if single:
+                return single.group(1)
+            if follow == "holders=[":
+                first = lines[offset + 1] if offset + 1 < len(lines) else ""
+                return first if re.fullmatch(r"[A-Za-z0-9_.]+", first) else None
+    return None
+
+
 def device_setup(ctx: common.JobContext, device) -> None:
     holders = device.adb_run(*tool().home_holder_args(), timeout=120)
     holder = tool().parse_holder(holders.output) if holders.ok else None
+    how = holders.describe()
+    if holder is None and not holders.ok:
+        dumped = device.adb_run("shell", "dumpsys", "role", timeout=120)
+        holder = holder_from_dumpsys(dumped.output) if dumped.ok else None
+        how = f"{holders.describe()}; dumpsys role: {dumped.describe()}"
     ctx.state["launcher_home_holder"] = holder
-    ctx.log_line("device-setup", f"launcher: HOME-Rolle vor den Launcher-Tests: {holder or 'unbekannt'} "
-                                 f"({holders.describe()})")
+    ctx.log_line("device-setup", f"launcher: HOME-Rolle vor den Launcher-Tests: {holder or 'unbekannt'} ({how})")
 
 
 STAGES = {
