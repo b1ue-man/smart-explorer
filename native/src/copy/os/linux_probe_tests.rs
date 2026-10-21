@@ -1,5 +1,5 @@
 use super::*;
-use std::collections::BTreeSet;
+use std::collections::HashSet;
 use std::os::unix::fs::FileExt;
 use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -162,7 +162,7 @@ fn threads_in(calls: &[(ThreadId, u64, usize)], from: u64, to: u64) -> usize {
         .iter()
         .filter(|&&(_, at, _)| at >= from && at < to)
         .map(|&(thread, _, _)| thread)
-        .collect::<BTreeSet<_>>()
+        .collect::<HashSet<_>>()
         .len()
 }
 
