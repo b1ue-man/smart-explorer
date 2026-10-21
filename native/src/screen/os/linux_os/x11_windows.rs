@@ -147,7 +147,7 @@ pub(crate) fn title<C: Connection>(conn: &C, atoms: &Atoms, window: Window) -> i
     if !utf8.is_empty() {
         return Ok(String::from_utf8_lossy(&utf8).into_owned());
     }
-    let legacy = property(conn, window, AtomEnum::WM_NAME, AtomEnum::ANY)?;
+    let legacy = property(conn, window, AtomEnum::WM_NAME.into(), AtomEnum::ANY)?;
     Ok(String::from_utf8_lossy(&legacy).into_owned())
 }
 

@@ -401,7 +401,3 @@ impl Drop for RangeWriter {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "stage_ranges_tests.rs"]
-mod tests;

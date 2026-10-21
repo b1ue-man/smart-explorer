@@ -21,6 +21,7 @@ use x11rb::protocol::xproto::{
 };
 use x11rb::protocol::Event;
 use x11rb::rust_connection::RustConnection;
+use x11rb::wrapper::ConnectionExt as _;
 
 use super::probe_timeout::timed;
 use super::session_facts::{self, SystemProbe};

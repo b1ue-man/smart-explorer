@@ -23,6 +23,7 @@ use x11rb::protocol::xproto::{
 };
 use x11rb::protocol::Event;
 use x11rb::rust_connection::RustConnection;
+use x11rb::wrapper::ConnectionExt as _;
 use x11rb::NONE;
 
 use super::clipboard_formats::{bytes_for, parse_file_list, FILE_TARGETS, GNOME_COPIED, URI_LIST};

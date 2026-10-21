@@ -20,7 +20,7 @@ const MAX_NEW_FOLDER_TRIES: u32 = 1_000;
 const COPY_POLL: Duration = Duration::from_secs(1);
 
 /// Moves one path to the recycle bin.
-pub(crate) type RecycleFn = dyn Fn(&Path) -> Result<(), String> + Send + Sync;
+pub(crate) type RecycleFn<'a> = dyn Fn(&Path) -> Result<(), String> + Send + Sync + 'a;
 
 /// The system recycle bin (Windows `IFileOperation`, Linux XDG trash).
 pub(crate) fn system_recycle(path: &Path) -> Result<(), String> {
@@ -87,7 +87,7 @@ pub(crate) fn new_folder(folder: &Path) -> Result<PathBuf, String> {
 pub(crate) fn recycle(
     folder: &Path,
     names: &[String],
-    recycle: &RecycleFn,
+    recycle: &RecycleFn<'_>,
 ) -> Vec<(String, String)> {
     let mut failed = Vec::new();
     for name in names {

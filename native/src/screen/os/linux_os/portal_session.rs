@@ -170,8 +170,7 @@ async fn run(
             return;
         }
     };
-    let options = ashpd::desktop::screencast::CreateSessionOptions::default();
-    let session = match screencast.create_session(options).await {
+    let session = match screencast.create_session(Default::default()).await {
         Ok(session) => session,
         Err(error) => {
             set(state, PortalState::Failed(format!("portal: {error}")));

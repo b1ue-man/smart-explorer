@@ -9,6 +9,7 @@ use x11rb::protocol::xproto::{
     AtomEnum, ConnectionExt as _, CreateWindowAux, PropMode, Window, WindowClass,
 };
 use x11rb::rust_connection::RustConnection;
+use x11rb::wrapper::ConnectionExt as _;
 
 use super::*;
 use crate::screen::core::host_backend::{ScreenEncoder, TilesScreenEncoder};

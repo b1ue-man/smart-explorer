@@ -12,7 +12,6 @@ use crate::share::io_deadline;
 use crate::share::wire::{
     Ctrl, FsRequest, FsResponse, FsSegmentedFinish, FsSegmentedOpen, FsStageWrite,
 };
-use crate::vfs::Backend;
 
 const MIB: usize = 1024 * 1024;
 

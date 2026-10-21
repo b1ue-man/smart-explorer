@@ -8,7 +8,7 @@
 use std::io;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use x11rb::connection::Connection;
+use x11rb::connection::{Connection, RequestConnection};
 use x11rb::protocol::xproto::{ConnectionExt as _, Window};
 use x11rb::protocol::xtest::ConnectionExt as _;
 use x11rb::rust_connection::RustConnection;

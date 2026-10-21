@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
-use super::super::super::shared::host_devices::{run_with, DeviceFeed};
+use super::super::super::shared::host_session::devices::{run_with, DeviceFeed};
 use super::super::super::shared::host_session::{
     HostControl, HostExit, HostInputs, UpdateStopCheck,
 };
