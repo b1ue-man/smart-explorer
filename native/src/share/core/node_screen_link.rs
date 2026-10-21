@@ -1,10 +1,12 @@
 //! The viewer side of the screen protocol on the share node (SCR-M2): the
 //! endpoint of a direct device or a room member as the share service
 //! resolves it, the connection with the screen ALPN (an older device
-//! refuses it with `0x178`, `screen_unsupported`) and the client hello,
-//! signed with the relation secret after the host's identity matched the
-//! pinned one.
+//! refuses it with `0x178`, `screen_unsupported`; when its refusal never
+//! reaches the viewer, the file-session ALPN tells a reachable older device
+//! from an unreachable one) and the client hello, signed with the relation
+//! secret after the host's identity matched the pinned one.
 use std::io;
+use std::time::Duration;
 
 use iroh::endpoint::{Connection, VarInt};
 
@@ -13,14 +15,54 @@ use crate::screen::core::wire::{SCREEN_ALPN, SCREEN_PROTOCOL_VERSION};
 use crate::screen::core::wire_hello::{screen_transcript, ScreenClientHello, ScreenServerHello};
 use crate::share::core::{eio, hmac_proof, now_secs, random_token};
 use crate::share::io_deadline;
-use crate::share::node::ShareIrohNode;
+use crate::share::node::{ShareIrohNode, ALPN};
 use crate::share::profiles::{fingerprint_matches, ShareProfiles};
 use crate::share::service::ShareService;
 use crate::share::session::{endpoint_addr, relation_kind_id, PeerPrincipal};
 use crate::share::types::{PeerEndpoint, PeerOpenTarget, ShareAuthState, ShareScope};
 use crate::share::ShareIdentity;
 
+/// How long the file-session probe after a silent screen handshake may take.
+const SCREEN_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Whether a connect error is the QUIC idle timeout of a handshake that the
+/// peer never answered (`ConnectionError::TimedOut`, displayed "timed out").
+fn is_handshake_timeout(error: &(dyn std::error::Error + 'static)) -> bool {
+    let mut current = Some(error);
+    while let Some(error) = current {
+        if matches!(
+            error.downcast_ref::<iroh::endpoint::ConnectionError>(),
+            Some(iroh::endpoint::ConnectionError::TimedOut)
+        ) || error.to_string() == "timed out"
+        {
+            return true;
+        }
+        current = error.source();
+    }
+    false
+}
+
 impl ShareIrohNode {
+    /// Whether the device at `addr` completes a handshake with the file
+    /// session ALPN, which every Share device speaks. After a screen
+    /// handshake that nobody answered, a yes means the device is reachable
+    /// and just does not know the screen ALPN: its refusal (TLS alert 120,
+    /// QUIC `0x178`) is lost when the server finds the ALPN mismatch only in
+    /// the second Initial packet of the post-quantum ClientHello, because
+    /// noq-proto 1.3 then sends no CONNECTION_CLOSE to a client whose address
+    /// it has not validated (`connection/mod.rs`, the close after a packet
+    /// while closed requires `validated`; only a refusal on the first Initial
+    /// is answered by `Endpoint::accept`).
+    async fn answers_file_alpn(&self, addr: iroh::EndpointAddr) -> bool {
+        match tokio::time::timeout(SCREEN_PROBE_TIMEOUT, self.endpoint.connect(addr, ALPN)).await {
+            Ok(Ok(connection)) => {
+                connection.close(VarInt::from_u32(0), b"screen capability probe");
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Viewer side: a connection with the screen ALPN to `endpoint`.
     pub(in crate::share) async fn connect_screen(
         &self,
@@ -37,11 +79,18 @@ impl ShareIrohNode {
         let generation = self
             .policy
             .snapshot(PeerPrincipal::from_endpoint(endpoint))?;
-        let connecting = self.endpoint.connect(addr, SCREEN_ALPN);
+        let connecting = self.endpoint.connect(addr.clone(), SCREEN_ALPN);
         let connection = match tokio::time::timeout(io_deadline::PEER_OP_TIMEOUT, connecting).await
         {
             Ok(Ok(connection)) => connection,
             Ok(Err(error)) if is_unsupported_alpn(&error) => return Err(ViewerError::Unsupported),
+            Ok(Err(error)) if is_handshake_timeout(&error) => {
+                return if self.answers_file_alpn(addr).await {
+                    Err(ViewerError::Unsupported)
+                } else {
+                    Err(io_deadline::disconnected(error).into())
+                };
+            }
             Ok(Err(error)) => return Err(io_deadline::disconnected(error).into()),
             Err(_) => {
                 let error =
