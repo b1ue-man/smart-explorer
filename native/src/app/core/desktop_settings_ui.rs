@@ -63,13 +63,13 @@ fn refresh(shared: &Shared, ctx: &egui::Context) {
         }
         panel.loading = true;
     }
-    let shared = shared.clone();
+    let worker = shared.clone();
     let ctx = ctx.clone();
     let spawned = std::thread::Builder::new()
         .name("se-desktop-status".into())
         .spawn(move || {
             let report = crate::desktop::os::status_report();
-            let mut panel = lock(&shared);
+            let mut panel = lock(&worker);
             panel.report = Some(report);
             panel.loading = false;
             panel.loaded_at = Some(Instant::now());
@@ -135,13 +135,13 @@ fn start(shared: &Shared, ctx: &egui::Context, action: Action) {
         panel.message = None;
         panel.confirm_remove = false;
     }
-    let shared = shared.clone();
+    let worker = shared.clone();
     let ctx = ctx.clone();
     let spawned = std::thread::Builder::new()
         .name("se-desktop-action".into())
         .spawn(move || {
             let result = perform(action);
-            let mut panel = lock(&shared);
+            let mut panel = lock(&worker);
             panel.busy = None;
             panel.message = Some(result);
             panel.loaded_at = None;

@@ -11,7 +11,7 @@ use crate::screen::core::negotiate::{CodecKind, H264Profile};
 use crate::screen::core::pixel_convert::{BgraImage, FrameSize};
 use crate::screen::core::session_state::KeyframeRequester;
 use crate::screen::core::wire_binary::{
-    FrameRecord, GopHeader, StreamKind, FLAG_KEYFRAME, FLAG_MORE,
+    FrameRecord, GopHeader, StreamKind, FLAG_KEYFRAME as WIRE_FLAG_KEYFRAME, FLAG_MORE,
 };
 use crate::screen::core::wire_control::{KeyframeReason, KeyframeRequest};
 
@@ -29,7 +29,7 @@ fn record(frame_id: u64, ts: u64, key: bool, payload: &[u8]) -> FrameRecord {
     FrameRecord {
         frame_id,
         capture_ts_us: ts,
-        flags: if key { FLAG_KEYFRAME } else { 0 },
+        flags: if key { WIRE_FLAG_KEYFRAME } else { 0 },
         payload: payload.to_vec(),
     }
 }
@@ -172,7 +172,7 @@ fn screen_task_android_sink_groups_and_tiles() {
         let count = encoded.records.len();
         let mut out = Vec::new();
         for (index, bytes) in encoded.records.iter().enumerate() {
-            let mut flags = if key { FLAG_KEYFRAME } else { 0 };
+            let mut flags = if key { WIRE_FLAG_KEYFRAME } else { 0 };
             if index + 1 < count {
                 flags |= FLAG_MORE;
             }

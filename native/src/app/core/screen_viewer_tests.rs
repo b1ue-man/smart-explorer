@@ -310,7 +310,7 @@ fn screen_task_viewer_releases_all_on_disable() {
     });
     let common = Common {
         backend,
-        devices: Devices::fixed(ShareProfiles::default()),
+        devices: Devices::fixed(crate::share::ShareProfiles::default()),
         prefs: ViewerPrefs::default(),
         gpu: false,
         stats_on: false,
