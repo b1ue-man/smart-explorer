@@ -83,6 +83,40 @@ fn label_for(form: &ConnectForm, port: u16) -> String {
     }
 }
 
+/// How the SFTP login of `form` gets its secret (security answer E13-S15 (i)).
+/// Only a password or key passphrase taken from the credential store without
+/// input, or a key without passphrase, lets transfers open extra SSH
+/// connections; the SSH agent and anything typed into the form never do. The
+/// stored password is read again from the store for every extra login.
+fn sftp_login_origin(
+    form: &ConnectForm,
+    stored: bool,
+    account: String,
+) -> crate::sftp::SftpLoginOrigin {
+    use crate::sftp::SftpLoginOrigin;
+    if form.use_ssh_agent {
+        return SftpLoginOrigin::Interactive;
+    }
+    if form.use_key {
+        return if form.passphrase.is_empty() {
+            SftpLoginOrigin::StoredKey
+        } else {
+            SftpLoginOrigin::Interactive
+        };
+    }
+    if !stored || !form.password.is_empty() {
+        return SftpLoginOrigin::Interactive;
+    }
+    SftpLoginOrigin::StoredPassword(Arc::new(move || {
+        crate::creds::get_secret_checked(&account)
+            .map_err(std::io::Error::other)?
+            .map(zeroize::Zeroizing::new)
+            .ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::NotFound, "gespeichertes Passwort fehlt")
+            })
+    }))
+}
+
 fn do_connect(form: ConnectForm, secret: Option<String>) -> ConnectResult {
     do_connect_with_agent_fallback(form, secret, AgentFallback::Allow)
 }
@@ -135,6 +169,7 @@ fn connect_sftp(
         crate::sftp::SftpAuth::Password(password.clone())
     };
     let root = norm_root(&form.root);
+    let origin = sftp_login_origin(&form, secret.is_some(), build_saved(&form, port).account());
     let cfg = crate::sftp::SftpConfig {
         host: form.host.trim().to_string(),
         port,
@@ -142,7 +177,7 @@ fn connect_sftp(
         auth,
         root: root.clone(),
     };
-    match crate::sftp::SftpBackend::connect(cfg) {
+    match crate::sftp::SftpBackend::connect_with_origin(cfg, origin) {
         Ok(be) => {
             let s = if form.use_key {
                 passphrase
