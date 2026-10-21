@@ -35,8 +35,9 @@ object TransferTasks {
     }
 
     /**
-     * "12 von 40 Dateien · 1,2 GB · 8 MB/s" (parts only when known). A running task's message comes
-     * first ("Suche Dateien… 120 gefunden" while folders are still being walked, a waiting connection).
+     * "12 von 40 Dateien · 1,2 GB · 8 MB/s · Begrenzt durch das Laufwerk" (parts only when known). A
+     * running task's message comes first ("Suche Dateien… 120 gefunden" while folders are still being
+     * walked, a waiting connection); a running task's limiter text comes last.
      */
     fun progressLine(task: TaskInfo): String {
         if (task.state == "queued") return "In Warteschlange"
@@ -51,8 +52,13 @@ object TransferTasks {
             task.doneBytes > 0 -> parts += Format.size(task.doneBytes)
         }
         if (task.rateBps > 0) parts += Format.rate(task.rateBps)
+        limiterPart(task)?.let { parts += it }
         return parts.joinToString(" · ").ifEmpty { task.message?.takeIf { it.isNotBlank() } ?: "Läuft…" }
     }
+
+    /** The core's text of who limits a running transfer (E13), `null` when there is none or the task is not running. */
+    fun limiterPart(task: TaskInfo): String? =
+        task.limiterText?.takeIf { it.isNotBlank() && task.state == "running" }
 
     /** Outcome line of a finished task. */
     fun outcomeLine(task: TaskInfo): String = when (task.state) {

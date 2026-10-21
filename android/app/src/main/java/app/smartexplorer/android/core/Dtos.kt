@@ -83,6 +83,13 @@ data class TaskInfo(
     val totalItems: Long = 0,
     val rateBps: Long = 0,
     val message: String? = null,
+    /**
+     * Who limits a transfer: `none|ramp|idle|source|target|remote|link|se_cpu|se_thread|memory`.
+     * Missing in older cores (`null`).
+     */
+    val limiter: String? = null,
+    /** German text of [limiter] ("Begrenzt durch das Laufwerk"); never a file name. `null` if unknown. */
+    val limiterText: String? = null,
     val errors: List<TaskError> = emptyList(),
     val result: JsonElement? = null,
     val startedMs: Long = 0,
