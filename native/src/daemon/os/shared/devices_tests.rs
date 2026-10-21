@@ -54,6 +54,16 @@ fn member(room: &str, room_name: &str, device: &str, name: &str) -> DeviceRow {
     }
 }
 
+/// The folder of the device tree: an absolute path of the running platform
+/// (a location without a drive letter is not absolute on Windows).
+fn tree_location() -> PathBuf {
+    if cfg!(windows) {
+        PathBuf::from(r"C:\Users\u\SmartExplorer\Geräte")
+    } else {
+        PathBuf::from("/home/u/SmartExplorer/Geräte")
+    }
+}
+
 fn tree_snapshot(status: MountStatus) -> MountSnapshot {
     let config = MountConfig::new(
         MountId::parse(DEVICES_MOUNT_ID).unwrap(),
@@ -63,7 +73,7 @@ fn tree_snapshot(status: MountStatus) -> MountSnapshot {
         crate::mount::devices_label(),
     )
     .unwrap()
-    .with_location_directory(Some(PathBuf::from("/home/u/SmartExplorer/Geräte")))
+    .with_location_directory(Some(tree_location()))
     .unwrap();
     MountSnapshot {
         config,
