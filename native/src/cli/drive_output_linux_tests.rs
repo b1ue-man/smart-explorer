@@ -2,7 +2,8 @@
 //! of `se drive runtime`, `install-runtime`, `list` and `mount` under Linux,
 //! the refusal of Windows-only options, and the new arguments.
 use super::super::drive_options::MountArgs;
-use super::super::{snapshot_line, status_text, UnmountArgs};
+use super::super::drive_print::status_text;
+use super::super::{snapshot_line, UnmountArgs};
 use super::{
     folder_column, install_text, refuse_windows_options, runtime_text, LETTERS_ONLY_ON_WINDOWS,
 };

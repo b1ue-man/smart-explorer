@@ -276,7 +276,8 @@ fn vault_task_cli_small_rules() {
     assert_eq!(manage::minutes("30", "x").unwrap(), Some(30));
     assert!(manage::minutes("bald", "x").unwrap_err().contains("x"));
     // `all` is every group, none given is left to the worker (no structure).
-    let all = compare::groups_of(&["all".to_string()]);
+    let all_group = ["all".to_string()];
+    let all = compare::groups_of(&all_group);
     assert_eq!(all.len(), 9);
     assert!(all.contains(&"structure"));
     assert!(compare::groups_of(&[]).is_empty());
