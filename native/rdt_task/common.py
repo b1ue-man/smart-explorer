@@ -53,6 +53,7 @@ import os
 import platform
 import re
 import secrets
+import shlex
 import shutil
 import signal
 import socket
@@ -95,6 +96,19 @@ MAX_ARGS_CHARS = 12000  # far below the 32 767 characters of a Windows command l
 SFTP_IMAGE = "lscr.io/linuxserver/openssh-server:latest"
 ANDROID_TEST_PACKAGE_ROOTS = ("android/app/src/androidTest",)
 ANDROID_UNIT_PACKAGE_ROOTS = ("android/app/src/test",)
+APP_PACKAGE = "app.smartexplorer.android"
+# The test servers (SFTP, SSH, FTP, SMB as Docker containers) are defined only here; android/test-android-task.sh
+# sources the same file, so the suite and the existing Android script run the same servers.
+ANDROID_SERVERS_SCRIPT = "android/test-servers/servers.sh"
+# Settings of the app's first start. android/test-android-task.sh (emulator-run) writes them into the app's data before
+# the first launch: the onboarding counts as done and no automatic update check runs.
+APP_PREFS_FILE = "shared_prefs/app_prefs.xml"
+APP_PREFS_XML = """<?xml version='1.0' encoding='utf-8' standalone='yes' ?>
+<map>
+    <boolean name="onboarding_done" value="true" />
+    <boolean name="auto_update_check" value="false" />
+</map>
+"""
 
 # The environment each built-in fixture provides (documented contract for test authors).
 FIXTURE_CONTRACT = {
@@ -103,6 +117,14 @@ FIXTURE_CONTRACT = {
     "sftp": "SE_TASK_SFTP_HOST, SE_TASK_SFTP_PORT, SE_TASK_SFTP_USER, SE_TASK_SFTP_PASSWORD, SE_TASK_SFTP_ROOT, "
             "SE_TASK_SFTP_KNOWN_HOSTS; instrumentation: rdt_sftp_host (10.0.2.2), rdt_sftp_port, rdt_sftp_user, "
             "rdt_sftp_password, rdt_sftp_root",
+    "android-servers": "SFTP (atmoz/sftp), SSH with exec (linuxserver/openssh-server), FTP and SMB servers as Docker "
+                       "containers, started by servers_up and stopped by servers_down of android/test-servers/servers.sh "
+                       "(images, ports and users are defined only there); instrumentation: exactly the arguments of "
+                       "servers_instrumentation_args (seServerHost=10.0.2.2, seSftp*, seSsh*, seFtp*, seSmb*); a server "
+                       "that does not start makes the entry not run, with the output of servers_up as the reason",
+    "android-servers-optional": "android-servers for entries that read no server argument (UiTaskTest, IntentsTaskTest): "
+                                "the entry gets the same arguments, and runs without them when a server does not start "
+                                "(the reason is logged)",
     "bus": "DBUS_SYSTEM_BUS_ADDRESS of a private system bus anyone may own names on, SE_TASK_PRIVATE_SYSTEM_BUS=1",
     "xvfb": "DISPLAY of a fresh Xvfb (1920x1080x24), WAYLAND_DISPLAY removed",
     "nodisplay": "DISPLAY and WAYLAND_DISPLAY removed",
@@ -1114,11 +1136,82 @@ def fixture_own_suite(fixtures: StageFixtures, name: str) -> tuple[bool, str]:
                    "nicht nachgebildet")
 
 
+# The functions of servers.sh expect the shell of android/test-android-task.sh (set -Eeuo pipefail, inherit_errexit).
+ANDROID_SERVERS_UP = ('set -Eeuo pipefail; shopt -s inherit_errexit; source "$1"; servers_up; '
+                      'servers_instrumentation_args >"$2"')
+ANDROID_SERVERS_DOWN = 'set +e; source "$1"; servers_down "$2"'
+
+
+def read_instrumentation_args(text: str) -> list[tuple[str, str]]:
+    """The output of ``servers_instrumentation_args``: ``-e``, name and value, one line each, repeated."""
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()  # the line break after the last value (an empty last value stays as an empty line)
+    if not lines or len(lines) % 3:
+        raise ValueError(f"{len(lines)} Zeilen sind kein Vielfaches von drei (-e, Name, Wert)")
+    pairs = []
+    for index in range(0, len(lines), 3):
+        flag, key, value = lines[index:index + 3]
+        if flag != "-e" or not NAME_RE.fullmatch(key):
+            raise ValueError(f"Zeile {index + 1}: erwartet '-e <Name>', gefunden {flag!r} {key!r}")
+        pairs.append((key, value))
+    return pairs
+
+
+def fixture_android_servers(fixtures: StageFixtures, name: str) -> tuple[bool, str]:
+    """The test servers of the Android task suite through the functions of android/test-servers/servers.sh (the
+    containers, ports and users of android/test-android-task.sh; nothing of that is repeated here): servers_up
+    starts them, servers_instrumentation_args gives the ``-e`` arguments the instrumented tests read (``seSftp*``,
+    ``seSsh*``, ``seFtp*``, ``seSmb*``, ``seServerHost``), servers_down stops them when the stage ends and writes the
+    container logs below logs/android-servers-<stage>."""
+    ctx = fixtures.ctx
+    script = REPO / ANDROID_SERVERS_SCRIPT
+    if not LINUX:
+        return False, "die Android-Testserver laufen als Docker-Container nur auf Linux-Runnern"
+    missing = [tool for tool in ("bash", "docker", "ssh-keyscan", "ssh-keygen") if not shutil.which(tool)]
+    if missing:
+        return False, f"{', '.join(missing)} fehlt (servers.sh verlangt docker, ssh-keyscan und ssh-keygen)"
+    if not script.is_file():
+        return False, f"{ANDROID_SERVERS_SCRIPT} fehlt im Checkout"
+    logs = ctx.logs / f"android-servers-{fixtures.stage}"
+    args_file = fixtures.make_dir("android-servers") / "instrumentation-args.txt"
+    # Registered before the start: a servers_up that fails half way has started containers already.
+    fixtures.add_cleanup(lambda: ctx.run(["bash", "-c", ANDROID_SERVERS_DOWN, "servers-down", script, logs],
+                                         stage=fixtures.stage, timeout=600))
+    started = ctx.run(["bash", "-c", ANDROID_SERVERS_UP, "servers-up", script, args_file], stage=fixtures.stage,
+                      timeout=30 * 60)
+    if not started.ok:
+        return False, f"servers_up ({ANDROID_SERVERS_SCRIPT}): {started.describe()}: {excerpt(started.output, 900)}"
+    try:
+        pairs = read_instrumentation_args(args_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        return False, f"die Instrumentierungsargumente von servers.sh sind nicht lesbar: {error}"
+    blank = [key for key, value in pairs if not value.strip()]
+    if blank:
+        return False, "servers.sh liefert leere Instrumentierungsargumente: " + ", ".join(blank)
+    fixtures.provide(name, args=pairs)
+    return True, (f"{len(pairs)} Instrumentierungsargumente; SFTP, SSH, FTP und SMB als Container, "
+                  f"vom Emulator erreichbar als {EMULATOR_HOST}")
+
+
+def fixture_android_servers_optional(fixtures: StageFixtures, name: str) -> tuple[bool, str]:
+    """For entries that read no server argument: they get the arguments of ``android-servers`` (the same call as in
+    android/test-android-task.sh), and run without them when a server does not start. The servers are started once
+    per stage, also when both fixtures are named in it."""
+    ready, reason = fixtures.ensure(("android-servers",))
+    if ready:
+        fixtures.provide(name, args=fixtures.args.get("android-servers", []))
+        return True, "Argumente von android-servers übernommen"
+    fixtures.provide(name)
+    return True, "läuft ohne Serverargumente weiter (die Einträge lesen keine): " + reason
+
+
 BUILTIN_FIXTURES: dict[str, Callable[[StageFixtures, str], tuple[bool, str]]] = {
     "share": fixture_share, "sftp": fixture_sftp, "bus": fixture_bus, "xvfb": fixture_xvfb,
     "nodisplay": fixture_nodisplay, "home": fixture_home, "runtime-tmpfs": fixture_runtime_tmpfs,
     "fuse": fixture_fuse, "fuse-timeout": fixture_fuse_timeout, "dokany": fixture_dokany, "sudo": fixture_sudo,
-    "own-suite": fixture_own_suite,
+    "own-suite": fixture_own_suite, "android-servers": fixture_android_servers,
+    "android-servers-optional": fixture_android_servers_optional,
 }
 
 
@@ -1222,7 +1315,8 @@ def parse_instrumentation(text: str) -> dict[tuple[str, str], tuple[str, str]]:
 
 
 class Device:
-    """The emulator of an Android device job: APK install and instrumentation runs."""
+    """The emulator of an Android device job: APK install, the app's preparation (``prepare_app``) and
+    instrumentation runs."""
 
     def __init__(self, ctx: "JobContext", apks_dir: Path | None, expected_api: int):
         self.ctx = ctx
@@ -1236,15 +1330,23 @@ class Device:
         self.missing_inputs = False  # the APKs of android-build are absent: not run here, failed there
         self.index = kotlin_index(ANDROID_TEST_PACKAGE_ROOTS)
 
-    def adb_run(self, *args, timeout: float = 600) -> Completed:
-        return self.ctx.run([self.adb, *args], stage="device", timeout=timeout)
+    def adb_run(self, *args, timeout: float = 600, input_text: str | None = None) -> Completed:
+        return self.ctx.run([self.adb, *args], stage="device", timeout=timeout, input_text=input_text)
+
+    def shell(self, *args, timeout: float = 600, input_text: str | None = None) -> Completed:
+        """``adb shell`` with every argument quoted for the device's shell. adb joins the arguments with blanks and
+        the device's ``/system/bin/sh`` parses that string again: a value with blanks or parentheses (for example
+        ``-e speed_dd_note "Seitencache nicht geleert (kein root)"``) would split or end in ``syntax error:
+        unexpected '('``, and ``sh -c "echo 3 > file"`` would redirect on the device's outer shell."""
+        return self.adb_run("shell", *(shlex.quote(str(argument)) for argument in args), timeout=timeout,
+                            input_text=input_text)
 
     def setup(self) -> tuple[bool, str]:
         if not self.adb.exists():
             return False, "adb fehlt"
         if not self.adb_run("wait-for-device", timeout=900).ok:
             return False, "adb wait-for-device gescheitert"
-        level = self.adb_run("shell", "getprop", "ro.build.version.sdk", timeout=120).output.strip()
+        level = self.shell("getprop", "ro.build.version.sdk", timeout=120).output.strip()
         self.api = int(level) if level.isdigit() else None
         apks = sorted(self.apks_dir.rglob("*.apk")) if self.apks_dir and self.apks_dir.is_dir() else []
         tests = [apk for apk in apks if "androidtest" in apk.name.lower()]
@@ -1259,7 +1361,7 @@ class Device:
             installed = self.adb_run("install", "-r", "-t", "-g", apk, timeout=900)
             if not installed.ok or "Success" not in installed.output:
                 return False, f"adb install {apk.name}: {installed.describe()}: {excerpt(installed.output, 600)}"
-        listed = self.adb_run("shell", "pm", "list", "instrumentation", timeout=120)
+        listed = self.shell("pm", "list", "instrumentation", timeout=120)
         components = re.findall(r"^instrumentation:(\S+) \(target=(\S+)\)", listed.output, re.M)
         candidates = [component for component, target in components
                       if component.split("/", 1)[0].startswith(target)] or [c for c, _ in components]
@@ -1271,6 +1373,53 @@ class Device:
             reason += f"; Rückfall: API {self.api} statt {self.expected_api} (Annahme D3)"
         return True, reason
 
+    def app_write(self, target: str, content: str) -> bool:
+        """``app_write`` of android/test-android-task.sh: ``content`` into the app's own data through ``run-as`` (the
+        debug build is debuggable), then read back; ``target`` is relative to the app's data folder."""
+        script = f"mkdir -p $(dirname {target}) && cat > {target}"
+        written = self.shell("run-as", APP_PACKAGE, "sh", "-c", script, timeout=120, input_text=content)
+        read = self.shell("run-as", APP_PACKAGE, "cat", target, timeout=120)
+        return written.ok and read.ok and read.output.strip() == content.strip()
+
+    def prepare_app(self) -> tuple[bool, str]:
+        """The state of the installed app that ``emulator-run`` of android/test-android-task.sh creates before its
+        instrumentation runs: access to all files (the tests create their folders below
+        /storage/*/SmartExplorerTask), usage access, the notification permission, the app stopped and its first-start
+        settings written into its data. A fresh install lacks all of it: every test that creates a fixture folder ends
+        in "Ordner nicht angelegt: /storage/emulated/0/SmartExplorerTask/...", and the first start shows the
+        onboarding. Returns (all steps done, one line per step)."""
+        level = self.api or self.expected_api
+        # (label, arguments of adb shell, first API level on which the operation or permission exists)
+        steps = (
+            ("Zugriff auf alle Dateien",
+             ("appops", "set", "--uid", APP_PACKAGE, "MANAGE_EXTERNAL_STORAGE", "allow"), 30),
+            ("Nutzungszugriff", ("appops", "set", APP_PACKAGE, "GET_USAGE_STATS", "allow"), 0),
+            ("Benachrichtigungen", ("pm", "grant", APP_PACKAGE, "android.permission.POST_NOTIFICATIONS"), 33),
+            ("App beendet", ("am", "force-stop", APP_PACKAGE), 0),
+        )
+        parts: list[str] = []
+        ok = True
+        for label, command, since in steps:
+            if level < since:
+                parts.append(f"{label}: entfällt, gibt es erst ab API {since}")
+                continue
+            done = self.shell(*command, timeout=120)
+            # appops and pm name an unknown operation or permission in their output.
+            if done.ok and not re.search(r"\b(?:Exception|Error)\b", done.output):
+                parts.append(f"{label}: {done.describe()}")
+            else:
+                ok = False
+                parts.append(f"{label} GESCHEITERT: {done.describe()}: {excerpt(done.output, 200)}")
+        if self.app_write(APP_PREFS_FILE, APP_PREFS_XML):
+            parts.append("Erststart-Einstellungen: geschrieben (onboarding_done, auto_update_check=false)")
+        else:
+            ok = False
+            parts.append(f"Erststart-Einstellungen GESCHEITERT: {APP_PREFS_FILE} ließ sich über run-as nicht schreiben "
+                         "oder nicht zurücklesen")
+        summary = "; ".join(parts)
+        self.ctx.log_line("device-setup", "app: " + summary)
+        return ok, ("App vorbereitet wie in android/test-android-task.sh: " if ok else "Vorbereitung der App: ") + summary
+
     def resolve(self, name: str) -> tuple[str, str | None] | None:
         if name[:1].isupper():
             fqn = self.index.classes.get(name)
@@ -1279,13 +1428,14 @@ class Device:
         return (owners[0], name) if owners else None
 
     def run_class(self, fqn: str, args: list[tuple[str, str]], timeout: float = 45 * 60):
-        """``fqn`` is a class (``a.B``, all its methods) or one method (``a.B#m``)."""
-        command = ["shell", "am", "instrument", "-w", "-r"]
+        """``fqn`` is a class (``a.B``, all its methods) or one method (``a.B#m``). Every argument is quoted for the
+        device's shell (``shell``): the values of the ``-e`` arguments may hold blanks and parentheses."""
+        command = ["am", "instrument", "-w", "-r"]
         for key, value in args:
             command += ["-e", key, value]
         command += ["-e", "class", fqn, self.component]
         started = time.monotonic()
-        completed = self.adb_run(*command, timeout=timeout)
+        completed = self.shell(*command, timeout=timeout)
         return parse_instrumentation(completed.output), completed, time.monotonic() - started
 
 
@@ -1770,11 +1920,21 @@ def stage_device_setup(ctx: JobContext, stage: str) -> None:
         ready, reason = device.setup()
     except Exception as error:  # noqa: BLE001
         ready, reason = False, f"{type(error).__name__}: {error}"
+    usable = ready
+    if usable:
+        # The app's state of android/test-android-task.sh (storage access, notifications, first-start settings). A
+        # failed step does not stop the stages: rdt_suite_device_ready fails with the step named, and every test
+        # that needs it fails with its own message.
+        ctx.device = device
+        try:
+            prepared, note = device.prepare_app()
+        except Exception as error:  # noqa: BLE001
+            prepared, note = False, f"Vorbereitung der App: {type(error).__name__}: {error}"
+        ready, reason = prepared, f"{reason}; {note}"
     ctx.state["device_ready"] = (ready, reason)
     ctx.state["device_reason"] = reason
     ctx.state["device_missing_inputs"] = device.missing_inputs
-    if ready:
-        ctx.device = device
+    if usable:
         for module in ctx.present_modules():
             hook = getattr(module, "DEVICE_SETUP", None)
             if hook:

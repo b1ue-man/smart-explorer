@@ -74,6 +74,9 @@ GDRIVE = "speed_task_gdrive_not_run"
 SMB_LIB = "speed_task_smb_segments_end_to_end"
 ANDROID = ["speed_task_android_local_large", "speed_task_android_local_small",
            "speed_task_android_content_vs_file_read"]
+# Reason of every measuring entry of the Android stage when the workflow input speed_scope is not ``all``.
+SPEED_SUSPENDED = ("Effizienzvergleiche für diesen Kandidaten ausgesetzt (Nutzerentscheidung 2026-10-21, "
+                   "Funktionstests ohne Messungen)")
 
 
 # --------------------------------------------------------------------------- the stages of linux-speed-net
@@ -366,26 +369,39 @@ def fixture_dd(fixtures: common.StageFixtures, name: str) -> tuple[bool, str]:
     ctx = fixtures.ctx
     if ctx.device is None:
         return False, "Emulator nicht bereit: " + ctx.state.get("device_reason", "")
-    adb = ctx.device.adb_run
-    dropped = adb("shell", "su", "0", "sh", "-c", "echo 3 > /proc/sys/vm/drop_caches").ok
+    # Device.shell quotes every argument for the device's shell: the redirection of `echo 3 > .../drop_caches`
+    # belongs to the shell that su starts (not to the device's outer shell, which has no right to write there).
+    adb = ctx.device.shell
+    dropped = adb("su", "0", "sh", "-c", "echo 3 > /proc/sys/vm/drop_caches").ok
     rates = {}
     for key, command in (("write", ["dd", "if=/dev/zero", "of=/sdcard/Download/speed.bin", "bs=1M", "count=2048", "conv=fsync"]),
                          ("read", ["dd", "if=/sdcard/Download/speed.bin", "of=/dev/null", "bs=1M"])):
-        done = adb("shell", *command, timeout=1800)
+        done = adb(*command, timeout=1800)
         found = DD.search(done.output)
         seconds = float(found.group(2)) if found else done.duration_s
         if not done.ok or seconds <= 0:
             return False, f"dd ({key}) auf dem Emulator scheitert: {excerpt(done.output, 300)}"
         rates[key] = (int(found.group(1)) if found else 2048 * 1024 * 1024) / seconds
-    adb("shell", "rm", "-f", "/sdcard/Download/speed.bin")
+    adb("rm", "-f", "/sdcard/Download/speed.bin")
     note = "Seitencache geleert" if dropped else "Seitencache nicht geleert (kein root)"
     fixtures.provide(name, args=[("speed_dd_write_bps", str(int(rates["write"]))),
                                  ("speed_dd_read_bps", str(int(rates["read"]))), ("speed_dd_note", note)])
     return True, f"dd schreiben {rates['write'] / 1e6:.0f} MB/s, lesen {rates['read'] / 1e6:.0f} MB/s; {note}"
 
 
+def speed_scope() -> str:
+    """``speed_scope`` of the workflow dispatch (environment RDT_SPEED_SCOPE of the job): all, local or none."""
+    return (os.environ.get("RDT_SPEED_SCOPE") or "all").strip().lower() or "all"
+
+
 def stage_android(ctx: common.JobContext, stage: str) -> None:
+    """The three measuring tests on the emulator. They measure only when the workflow input speed_scope is ``all``;
+    otherwise no measurement starts (also not the dd of the fixture) and every entry is not run, with the reason."""
     speed_report.attach_summary(ctx)
+    if speed_scope() != "all":
+        ctx.not_run_all(stage, SPEED_SUSPENDED)
+        speed_report.write_json(ctx)
+        return
     ctx.run_default(stage)
     if ctx.device is not None:
         logged = ctx.device.adb_run("logcat", "-d", "-s", "SpeedTask:I", timeout=300).output

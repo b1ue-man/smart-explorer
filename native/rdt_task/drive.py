@@ -15,7 +15,10 @@ linux-root:drive-fuse                   DRV-M4 with fuse3 (``fuse``), an OpenSSH
 linux-root:drive-vault, windows-core:drive-vault   DRV-M7
 linux-desktop:drive-desktop             DRV-M5 with a temporary HOME (``home``)
 android-build:drive-android             DRV-M8 Robolectric results (JUnit reports of the Android build)
-android-device:drive-android-device     DRV-M8 on the emulator; SFTP container reachable as 10.0.2.2 (``sftp``)
+android-device:drive-android-device     DRV-M8 on the emulator; the test servers of android/test-servers/servers.sh
+                                        (SFTP, SSH, FTP, SMB as containers, reachable as 10.0.2.2) with its
+                                        instrumentation arguments (``android-servers``); a server that does not
+                                        start makes the affected entries ``not_run`` with the output of servers_up
 
 Suite checks (prepare:static): ``drive_task_docs_surfaces_complete`` (DRV-M9, C6) and
 ``drive_task_install_linux_dry_run_with_fuse`` (DRV-M9, C5).
