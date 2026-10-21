@@ -148,8 +148,9 @@ def step_text(step: dict) -> str:
 
 
 def check_workflow_static(ctx: common.JobContext) -> tuple[str, str]:
-    """D1 U39: every job has timeout-minutes >= 30 (and at least the D3 value), the workflow has
-    exactly one input candidate_sha, and every job binds its checkout to that SHA."""
+    """D1 U39: every job has timeout-minutes >= 30 (and at least the D3 value), the workflow has the
+    required input candidate_sha and at most the optional choice speed_scope (all | local, default all),
+    and every job binds its checkout to that SHA."""
     if not WORKFLOW.is_file():
         return FAILED, f"{WORKFLOW.relative_to(REPO)} fehlt"
     document = load_yaml(ctx, WORKFLOW)
@@ -160,12 +161,16 @@ def check_workflow_static(ctx: common.JobContext) -> tuple[str, str]:
                         "erwartet nur workflow_dispatch")
     else:
         inputs = (triggers["workflow_dispatch"] or {}).get("inputs") or {}
-        if set(inputs) != {"candidate_sha"}:
-            problems.append(f"Eingänge {sorted(inputs)}, erwartet genau candidate_sha")
+        if "candidate_sha" not in inputs or not set(inputs) <= {"candidate_sha", "speed_scope"}:
+            problems.append(f"Eingänge {sorted(inputs)}, erwartet candidate_sha und höchstens speed_scope")
         else:
             definition = inputs["candidate_sha"] or {}
             if definition.get("required") is not True or definition.get("type") != "string":
                 problems.append("candidate_sha muss required: true und type: string sein")
+            scope = inputs.get("speed_scope")
+            if scope is not None and (scope.get("required") is True or scope.get("default") != "all"
+                                      or scope.get("options") != ["all", "local"]):
+                problems.append("speed_scope muss optional sein, Vorgabe all, Auswahl all und local")
     if document.get("permissions") != {"contents": "read"}:
         problems.append(f"permissions = {document.get('permissions')}, erwartet contents: read")
     concurrency = document.get("concurrency") or {}
@@ -230,7 +235,7 @@ def check_workflow_static(ctx: common.JobContext) -> tuple[str, str]:
             problems.append(prefix + "kein Belegschritt mit if: always() und retention-days: 14")
     if problems:
         return FAILED, f"{len(problems)} Befunde:\n" + "\n".join(problems)
-    return PASSED, (f"{len(jobs)} Jobs mit Zeitlimit >= 30 min (D3-Werte), ein Eingang candidate_sha, "
+    return PASSED, (f"{len(jobs)} Jobs mit Zeitlimit >= 30 min (D3-Werte), Eingang candidate_sha (dazu speed_scope), "
                     "Bindungsschritt und Belege in jedem Job")
 
 
