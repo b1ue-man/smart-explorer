@@ -281,6 +281,7 @@ Sperrteilnehmer mit Frist vor dem Vernichten (Laufwerke, Rückfallkopien, Vergle
 | R9 | se-Stufennamen | ausgeschlossen (`is_staging_name`) |
 | R10 | Engine-Keep-Both | `KeepBothAtoB`/`KeepBothBtoA` können bei `strict` nicht entstehen; die Regelstufe wandelt sie dennoch in Konflikte um (Schutz gegen ungültige Chiffratnamen, [NR] G26) |
 | R11 | `Thumbs.db` unter Windows (NR: G15) | gewöhnliche Datei im Tresor; keine Sonderbehandlung |
+| R12 | leere Knotenordner (Suite-Lauf 2, `vault_task_interop_health_after_sync`: CryptoFS meldet `UnknownType`) | die Regelstufe legt keinen Knotenordner (`d/XX/YYYY…/<name>.c9r` oder `.c9s`) leer an: ein Knotenordner entsteht nur durch das Kopieren seiner Dateien (der Ordner-Durchgang der Engine kennt Ordner ohne Verlauf nur einseitig und würde ihn auf der löschenden Seite leer anlegen). Löscht der Lauf Dateien eines Knotenordners (nicht zurückgestellt nach R2), plant die Regelstufe das Entfernen des Ordners auf dieser Seite, außer der Lauf schreibt auf dieser Seite in denselben Knotenordner (Link durch gleichnamigen Ordner ersetzt); die Engine entfernt ihn nur, solange er leer ist (sonst bleibt er für den nächsten Lauf). Umsetzung `vault/core/sync_rules_dirs.rs` |
 
 Verworfen für R4: (a) Kanten zwischen beliebigen Pfaden in `action_groups` (allgemeiner, ändert die Gruppenbildung aller Jobs); (b) R4 weglassen (Health-Reparatur `MissingContentDir` von CryptoFS während eines Laufs erzeugte ein zweites `dirid.c9r` und damit Konflikte).
 

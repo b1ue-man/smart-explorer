@@ -219,3 +219,83 @@ fn a_copy_being_seeded_only_receives() {
     );
     assert!(plan.dirs.is_empty());
 }
+
+#[test]
+fn node_folders_are_never_created_empty_and_emptied_ones_are_removed() {
+    let rules = VaultRules::new(None);
+    let gone = format!("{ROOT}/YWx0.c9r");
+    let long = format!("{ROOT}/bGFuZw.c9s");
+    // B's folder `gone` and B's long-named file lost their files on A.
+    let mut plan = plan_of(vec![
+        Action::DeleteB(format!("{gone}/dir.c9r")),
+        Action::DeleteB(format!("{long}/contents.c9r")),
+        Action::DeleteB(format!("{long}/name.c9s")),
+        Action::DeleteB(format!("{ROOT}/frei.c9r")),
+    ]);
+    let create = |rel: &str| DirAction::Create {
+        side: PairSide::A,
+        rel: rel.to_string(),
+    };
+    plan.dirs.push(create(&gone));
+    plan.dirs.push(create(ROOT));
+    plan.dirs.push(DirAction::Remove {
+        side: PairSide::B,
+        rel: ROOT.to_string(),
+    });
+    rules.adjust(&mut plan);
+    assert!(
+        !plan.dirs.contains(&create(&gone)),
+        "no empty node folder on the side that deleted it"
+    );
+    assert!(
+        plan.dirs.contains(&create(ROOT)),
+        "content folders keep the engine's folder plan"
+    );
+    let remove = |side, rel: &str| DirAction::Remove {
+        side,
+        rel: rel.to_string(),
+    };
+    let removals: Vec<DirAction> = plan
+        .dirs
+        .iter()
+        .filter(|dir| matches!(dir, DirAction::Remove { .. }))
+        .cloned()
+        .collect();
+    assert_eq!(
+        removals,
+        [
+            remove(PairSide::B, &gone),
+            remove(PairSide::B, &long),
+            remove(PairSide::B, ROOT)
+        ],
+        "each emptied node folder once, before the folder around them"
+    );
+}
+
+#[test]
+fn node_folders_of_a_held_back_deletion_are_not_removed() {
+    let rules = VaultRules::new(None);
+    let node = format!("{ROOT}/YWx0.c9r");
+    // R2: A deleted the folder SUB, B changed it; the node deletion waits.
+    let mut plan = plan_of(vec![
+        Action::DeleteB(format!("{SUB}/dirid.c9r")),
+        Action::CopyBtoA(format!("{SUB}/neu.c9r")),
+        Action::DeleteB(format!("{node}/dir.c9r")),
+    ]);
+    rules.adjust(&mut plan);
+    assert!(plan.dirs.is_empty(), "{:?}", plan.dirs);
+}
+
+#[test]
+fn node_folder_that_receives_a_new_type_file_stays() {
+    let rules = VaultRules::new(None);
+    let node = format!("{ROOT}/YWx0.c9r");
+    // A replaced the link with a folder of the same name: B's node folder
+    // loses `symlink.c9r` and receives `dir.c9r` in the same run.
+    let mut plan = plan_of(vec![
+        Action::DeleteB(format!("{node}/symlink.c9r")),
+        Action::CopyAtoB(format!("{node}/dir.c9r")),
+    ]);
+    rules.adjust(&mut plan);
+    assert!(plan.dirs.is_empty(), "{:?}", plan.dirs);
+}

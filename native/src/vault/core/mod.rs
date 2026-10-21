@@ -28,6 +28,7 @@ pub(crate) mod path_map;
 pub(crate) mod registry_types;
 pub(crate) mod sealed;
 pub(crate) mod sync_rules;
+mod sync_rules_dirs;
 
 #[cfg(test)]
 mod locator_tests;

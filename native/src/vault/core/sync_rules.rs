@@ -11,7 +11,8 @@
 //!   wait; R9 stage names of se never travel; R10 keep-both actions become
 //!   conflicts (they cannot arise under the fixed strict mode, the stage
 //!   protects the cipher names anyway); a copy still being seeded only
-//!   receives (C5.9).
+//!   receives (C5.9); R12 no node folder is created empty, and one whose
+//!   files a run deleted is removed (`sync_rules_dirs.rs`).
 //! - Apply phases (R4): phase 1 creates and changes every entry that is no
 //!   node file and deletes node files; phase 2 creates and changes node
 //!   files and deletes entries below `d/`. Without the masterkey a content
@@ -348,6 +349,19 @@ impl PlanRules for VaultRules {
                     dir.rel() == content || dir.rel().starts_with(&format!("{content}/"))
                 })
         });
+        // R12: node folders are never created empty, and emptied ones go.
+        let deletions: Vec<(PairSide, String)> = plan
+            .actions
+            .iter()
+            .filter(|action| !deferred.iter().any(|(key, _)| *key == key_of(action)))
+            .filter_map(|action| Some((deleted_on(action)?, action_rel(action).to_string())))
+            .collect();
+        let writes: Vec<(PairSide, String)> = plan
+            .actions
+            .iter()
+            .filter_map(|action| Some((copied_to(action)?, action_rel(action).to_string())))
+            .collect();
+        super::sync_rules_dirs::node_folders(&mut plan.dirs, &deletions, &writes);
         *self.deferred() = deferred;
     }
 
