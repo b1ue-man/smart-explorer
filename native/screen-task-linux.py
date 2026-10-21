@@ -18,7 +18,8 @@ Environments:
                    output_name of the headless output, XDPW_PERSIST_MODE=permanent) on a private
                    session bus (SCR-M5 Wayland, U19).
   kwin             headless KWin (``kwin_wayland --virtual``) on a private session bus, with a desktop
-                   file that grants the test program org_kde_plasma_window_management (S4 K3).
+                   file that grants the test program org_kde_plasma_window_management (S4 K3) and one
+                   ordinary window titled ``KDE_WINDOW_TITLE`` (``foot``) for the window list.
   kde-portal       xdg-desktop-portal-kde, PipeWire and a permission store entry for RemoteDesktop on
                    the bus of ``kwin`` (SCR-M6 KDE).
   netem            ``tc qdisc ... netem loss 2% delay 12.5ms`` on ``lo`` (S4 A17).
@@ -36,9 +37,10 @@ from pathlib import Path
 
 NETEM_RULE = ["netem", "loss", "2%", "delay", "12.5ms"]
 HEADLESS_OUTPUT = "HEADLESS-1"
+KDE_WINDOW_TITLE = "se task window"
 LIBEXEC = ("/usr/libexec", "/usr/lib/x86_64-linux-gnu/libexec", "/usr/lib")
 TOOLS = ("Xvfb", "openbox", "ffmpeg", "tc", "modprobe", "sway", "grim", "pipewire", "wireplumber",
-         "dbus-daemon", "dbus-send", "kwin_wayland")
+         "dbus-daemon", "dbus-send", "kwin_wayland", "swaymsg", "foot")
 
 
 class Session:
@@ -84,6 +86,11 @@ def tail(path: Path, limit: int = 600) -> str:
     except OSError:
         return ""
     return " ".join(text[-limit:].split())
+
+
+def exit_text(process: subprocess.Popen) -> str:
+    code = process.poll()
+    return "läuft" if code is None else f"beendet mit {code}"
 
 
 def end_all(processes: list) -> None:
@@ -213,6 +220,22 @@ def start_pipewire(root: Path, env: dict) -> Session:
 
 # --------------------------------------------------------------------------- Sway + portal
 
+def sway_answers(runtime: Path, env: dict) -> bool:
+    """Sway answers ``get_version`` on its IPC socket; without ``swaymsg`` only the process state counts."""
+    swaymsg = which("swaymsg")
+    if not swaymsg:
+        return True
+    ipc = sorted(runtime.glob("sway-ipc.*.sock"))
+    if not ipc:
+        return False
+    try:
+        probe = subprocess.run([swaymsg, "-s", str(ipc[0]), "-t", "get_version"], env=env, capture_output=True,
+                               text=True, check=False, timeout=10)
+    except subprocess.TimeoutExpired:
+        return False
+    return probe.returncode == 0
+
+
 def start_wayland_portal(root: Path, base_env: dict) -> Session:
     sway = which("sway")
     xdpw = which("xdg-desktop-portal-wlr")
@@ -233,14 +256,21 @@ def start_wayland_portal(root: Path, base_env: dict) -> Session:
     config = root / "sway.conf"
     config.write_text(f"output {HEADLESS_OUTPUT} resolution 1920x1080\n", encoding="utf-8")
     processes.append(spawn([sway, "-c", config], env, root / "sway.log"))
+    compositor = processes[-1]
     runtime = Path(env["XDG_RUNTIME_DIR"])
 
     def sockets() -> list[Path]:
         return sorted(path for path in runtime.glob("wayland-*") if not path.name.endswith(".lock"))
-    if not wait_for(lambda: bool(sockets()), 30, processes[-1]):
+    if not wait_for(lambda: bool(sockets()), 30, compositor):
         end_all(processes)
         return Session(False, f"Sway startete kopflos nicht: {tail(root / 'sway.log')}")
     env["WAYLAND_DISPLAY"] = sockets()[0].name
+    # A socket file alone is no running Sway (an abnormal end leaves it behind); Sway answers on its IPC
+    # socket only once its event loop runs.
+    if not wait_for(lambda: sway_answers(runtime, env), 30, compositor) or compositor.poll() is not None:
+        reason = f"Sway läuft nicht ({exit_text(compositor)}): {tail(root / 'sway.log')}"
+        end_all(processes)
+        return Session(False, reason)
     sound = start_pipewire(root, env)
     if not sound.ok:
         end_all(processes)
@@ -255,8 +285,10 @@ def start_wayland_portal(root: Path, base_env: dict) -> Session:
         "org.freedesktop.impl.portal.Screenshot=wlr\n", encoding="utf-8")
     processes.append(spawn([xdpw, "-c", xdpw_config], dict(env, XDPW_PERSIST_MODE="permanent"), root / "xdpw.log"))
     if not wait_for(lambda: bus_name_present(env, "org.freedesktop.impl.portal.desktop.wlr"), 30, processes[-1]):
+        reason = (f"xdg-desktop-portal-wlr meldete sich nicht am Bus: {tail(root / 'xdpw.log')}; "
+                  f"Sway {exit_text(compositor)} auf {env['WAYLAND_DISPLAY']}: {tail(root / 'sway.log', 300)}")
         end_all(processes)
-        return Session(False, f"xdg-desktop-portal-wlr meldete sich nicht am Bus: {tail(root / 'xdpw.log')}")
+        return Session(False, reason)
     processes.append(spawn([portal], env, root / "xdg-desktop-portal.log"))
     if not wait_for(lambda: bus_name_present(env, "org.freedesktop.portal.Desktop"), 30, processes[-1]):
         end_all(processes)
@@ -296,7 +328,20 @@ def start_kwin(root: Path, base_env: dict, test_program: str | None) -> Session:
     env["WAYLAND_DISPLAY"] = socket_name
     keep = {key: env[key] for key in ("WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS",
                                       "XDG_CURRENT_DESKTOP", "XDG_SESSION_TYPE", "XDG_DATA_HOME", "XDG_CONFIG_HOME")}
-    return Session(True, f"KWin kopflos auf {socket_name}", keep, processes)
+    # The window list (screen_task_kde_window_list) needs one ordinary window with a known title; foot keeps
+    # the title it is given while its command prints nothing.
+    terminal = which("foot")
+    window = "kein Testfenster (foot fehlt)"
+    if terminal:
+        processes.append(spawn([terminal, "--title", KDE_WINDOW_TITLE, "--app-id", "se-task-window", "sleep",
+                                "infinity"], env, root / "foot.log"))
+        time.sleep(2)
+        if processes[-1].poll() is None:
+            window = f"Testfenster „{KDE_WINDOW_TITLE}“"
+            keep["SE_SCREEN_TASK_KDE_TITLE"] = KDE_WINDOW_TITLE
+        else:
+            window = f"Testfenster endete sofort ({exit_text(processes[-1])}): {tail(root / 'foot.log')}"
+    return Session(True, f"KWin kopflos auf {socket_name}; {window}", keep, processes)
 
 
 def start_kde_portal(root: Path, base_env: dict, kwin_env: dict) -> Session:
