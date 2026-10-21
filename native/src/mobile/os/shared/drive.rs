@@ -6,8 +6,8 @@ use super::error::ApiError;
 use super::runtime::TaskCtx;
 use crate::copy::{CopyHandle, CopyMsg};
 use crate::transfer::{
-    ActiveTransfer, Endpoint, JobItems, Layout, TransferJob, TransferMsg, TransferProgress,
-    TransferRequest,
+    ActiveTransfer, Endpoint, JobItems, Layout, Limiter, TransferJob, TransferMsg,
+    TransferProgress, TransferRequest,
 };
 use crate::types::{Conflict, CopyMode};
 use crossbeam_channel::{Receiver, RecvTimeoutError};
@@ -107,7 +107,46 @@ pub(crate) fn task_message(progress: &TransferProgress) -> Option<String> {
         .cloned()
 }
 
-fn report_transfer(ctx: &TaskCtx, progress: &TransferProgress, shown: &mut Option<String>) {
+/// The stable code of a verdict for the task field `limiter`.
+pub(crate) fn limiter_code(limiter: Limiter) -> &'static str {
+    limiter.code()
+}
+
+/// What a task that touches a vault shows for a drive or line verdict: the
+/// kind of limiter only, never the drive or endpoint name (U31 S2, E13-S10).
+const PRIVATE_DRIVE_TEXT: &str = "Begrenzt durch das Laufwerk";
+const PRIVATE_REMOTE_TEXT: &str = "Begrenzt durch Leitung oder Server";
+
+/// The engine's limiter text for the task field `limiterText`. A private
+/// task gets `Source`/`Target`/`Remote` without the parenthesised name; all
+/// other texts are unchanged.
+pub(crate) fn limiter_text_for(ctx: &TaskCtx, progress: &TransferProgress) -> Option<String> {
+    limiter_text_with(ctx.names_private(), progress)
+}
+
+pub(crate) fn limiter_text_with(private: bool, progress: &TransferProgress) -> Option<String> {
+    let text = progress
+        .limiter_text
+        .as_deref()
+        .filter(|text| !text.trim().is_empty())?;
+    if !private {
+        return Some(text.to_string());
+    }
+    Some(
+        match progress.limiter {
+            Limiter::Source | Limiter::Target => PRIVATE_DRIVE_TEXT,
+            Limiter::Remote => PRIVATE_REMOTE_TEXT,
+            _ => text,
+        }
+        .to_string(),
+    )
+}
+
+pub(crate) fn report_transfer(
+    ctx: &TaskCtx,
+    progress: &TransferProgress,
+    shown: &mut Option<String>,
+) {
     ctx.progress(
         progress.bytes_done,
         progress.bytes_total,
@@ -119,6 +158,10 @@ fn report_transfer(ctx: &TaskCtx, progress: &TransferProgress, shown: &mut Optio
         ctx.message(message.as_deref().unwrap_or_default());
         *shown = message;
     }
+    ctx.limiter(
+        limiter_code(progress.limiter),
+        limiter_text_for(ctx, progress).as_deref(),
+    );
 }
 
 pub(crate) fn drain_transfer(ctx: &TaskCtx, mut active: ActiveTransfer) -> Outcome {
