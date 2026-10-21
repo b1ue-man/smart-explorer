@@ -107,11 +107,13 @@ impl TaskEnv {
         );
         let gui = gui_binary();
         let root = tempfile::tempdir().unwrap();
-        // tempfile creates owner-only folders, as the daemon's lock needs.
         let runtime = tempfile::Builder::new()
             .prefix("run")
             .tempdir_in(root.path())
             .unwrap();
+        // tempfile creates folders with 0777 minus the umask; the daemon's
+        // single-instance lock needs an owner-only runtime folder (run 3).
+        crate::support_dirs::ensure_private_dir(runtime.path()).expect("private runtime folder");
         let mut vars: Vec<(String, OsString)> = vec![
             ("XDG_DATA_HOME".into(), root.path().join("data").into()),
             ("XDG_CONFIG_HOME".into(), root.path().join("config").into()),

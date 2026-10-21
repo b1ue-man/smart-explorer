@@ -53,6 +53,9 @@ impl Isolated {
             .prefix("run")
             .tempdir_in(root.path())
             .unwrap();
+        // tempfile creates folders with 0777 minus the umask; the daemon's
+        // single-instance lock needs an owner-only runtime folder (run 3).
+        crate::support_dirs::ensure_private_dir(runtime.path()).expect("private runtime folder");
         let vars: [(&str, OsString); 6] = [
             ("XDG_DATA_HOME", root.path().join("data").into()),
             ("XDG_CONFIG_HOME", root.path().join("config").into()),
