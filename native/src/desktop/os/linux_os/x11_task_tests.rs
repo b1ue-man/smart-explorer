@@ -16,8 +16,8 @@ use x11rb::protocol::xproto::Window;
 use super::super::x11_facts;
 use super::super::x11_monitors::monitors;
 use super::super::x11_task_env::{
-    client_windows, require_task, root_position, surface_windows, wait_for, window_info,
-    WindowInfo, XServer,
+    self as x11_task_env, client_windows, require_task, root_position, surface_windows, wait_for,
+    window_info, WindowInfo, XServer,
 };
 use super::super::x11_task_surface::SurfaceProc;
 use super::*;
@@ -112,10 +112,14 @@ fn surface_windows_up(
         found = surface_windows(&conn, root);
         found.len() >= count
     });
-    assert!(
-        seen,
-        "{count} Fensterklasse(n) der Fläche fehlen: {found:?}"
-    );
+    if !seen {
+        let processes: Vec<String> = processes.iter_mut().map(|p| p.describe()).collect();
+        panic!(
+            "{count} Fensterklasse(n) der Fläche fehlen: {found:?}; Fenster auf dem Server: {}; {}",
+            x11_task_env::describe_windows(&conn, root),
+            processes.join(" / ")
+        );
+    }
     found
 }
 

@@ -80,6 +80,13 @@ impl XServer {
         let runtime = tempfile::Builder::new().prefix("x11run").tempdir().unwrap();
         let mut server = Command::new(tool("Xvfb"))
             .args([
+                // Without `-noreset` the server resets when its last client
+                // leaves (dix/dispatch.c `CloseDownClient` sets
+                // `dispatchExceptionAtReset`, default `DE_RESET`) and drops
+                // what clients set: `RRMonitorClose` (randr/randr.c
+                // `RRCloseScreen`) deletes the monitors of `xrandr
+                // --setmonitor` as soon as that `xrandr` has ended.
+                "-noreset",
                 "-displayfd",
                 "1",
                 "-screen",
@@ -309,6 +316,27 @@ pub(super) fn surface_windows(conn: &RustConnection, root: Window) -> Vec<(Windo
         .filter(|window| class_of(conn, *window).contains(OWN_CLASS))
         .map(|window| (window, title_of(conn, window)))
         .collect()
+}
+
+/// For the message of a failed check: every window the checks look at with
+/// its `WM_CLASS` and title (`surface_windows` keeps only those of the
+/// surfaces).
+pub(super) fn describe_windows(conn: &RustConnection, root: Window) -> String {
+    let mut candidates = client_windows(conn, root, false);
+    below(conn, root, 2, &mut candidates);
+    candidates.sort_unstable();
+    candidates.dedup();
+    let rows: Vec<String> = candidates
+        .into_iter()
+        .map(|window| {
+            let class = class_of(conn, window).replace('\0', "|");
+            format!(
+                "{window:#x} class {class:?} title {:?}",
+                title_of(conn, window)
+            )
+        })
+        .collect();
+    format!("[{}]", rows.join("; "))
 }
 
 /// The root position of a client window.
