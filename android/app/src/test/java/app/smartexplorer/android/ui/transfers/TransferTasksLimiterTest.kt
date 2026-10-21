@@ -30,7 +30,7 @@ class TransferTasksLimiterTest {
     private val base = "1 von 3 Dateien · ${Format.size(2048)} von ${Format.size(4096)} · ${Format.rate(1024)}"
 
     @Test
-    fun `speed_task_android_progress_line_appends_the_limiter_text_while_running`() {
+    fun speed_task_android_progress_line_appends_the_limiter_text_while_running() {
         assertEquals("$base · $text", TransferTasks.progressLine(task()))
         // A message still comes first, the limiter text last.
         assertEquals("Wartet · $base · $text", TransferTasks.progressLine(task().copy(message = "Wartet")))
@@ -41,7 +41,7 @@ class TransferTasksLimiterTest {
     }
 
     @Test
-    fun `speed_task_android_progress_line_without_limiter_is_unchanged`() {
+    fun speed_task_android_progress_line_without_limiter_is_unchanged() {
         assertEquals(base, TransferTasks.progressLine(task(limiterText = null)))
         // A core without the keys: the JSON decodes with both fields null.
         val old = Core.json.decodeFromString(
@@ -60,7 +60,7 @@ class TransferTasksLimiterTest {
     }
 
     @Test
-    fun `speed_task_android_mirror_dialog_text_appends_the_limiter_text`() {
+    fun speed_task_android_mirror_dialog_text_appends_the_limiter_text() {
         assertEquals("$base · $text", progressText(task()))
         assertEquals(base, progressText(task(limiterText = null)))
         assertEquals("Startet…", progressText(null))
