@@ -34,6 +34,7 @@ import app.smartexplorer.android.ui.common.Format
 import app.smartexplorer.android.ui.common.Snackbars
 import app.smartexplorer.android.ui.more.rememberSavedTaskId
 import app.smartexplorer.android.ui.picker.LocationPickerDialog
+import app.smartexplorer.android.ui.transfers.TransferTasks
 import kotlinx.coroutines.launch
 
 /**
@@ -159,12 +160,14 @@ private fun MirrorProgress(task: TaskInfo?, onCancel: () -> Unit, onSaveAsJob: (
     )
 }
 
-private fun progressText(task: TaskInfo?): String {
+/** "3 von 9 Dateien · 1,2 MB von 4 MB · 2 MB/s · Begrenzt durch das Laufwerk" (parts only when known). */
+internal fun progressText(task: TaskInfo?): String {
     if (task == null) return "Startet…"
     val parts = mutableListOf<String>()
     if (task.totalItems > 0) parts += "${task.doneItems} von ${task.totalItems} Dateien"
     if (task.totalBytes > 0) parts += "${Format.size(task.doneBytes)} von ${Format.size(task.totalBytes)}"
     if (task.rateBps > 0) parts += Format.rate(task.rateBps)
+    TransferTasks.limiterPart(task)?.let { parts += it }
     return parts.joinToString(" · ").ifEmpty { task.message?.ifBlank { null } ?: "Läuft…" }
 }
 
