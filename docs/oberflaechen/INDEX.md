@@ -1,6 +1,6 @@
 # Oberflächen von Smart Explorer
 
-Stand: 2026-10-21 (Lauf U42, v0.5.183).
+Stand: 2026-10-21 (Lauf U42, v0.5.183; Lauf 3: `tresore.md` ergänzt).
 
 Zweck: Dieses Verzeichnis hält fest, welche Oberflächen das Projekt hat und über welche Oberfläche jede Fähigkeit und jede Einstellung erreichbar ist. Eine Fähigkeit ist erst fertig, wenn jede Oberfläche, die ihren Gegenstand zeigt oder steuert, sie gleichwertig zeigt und steuert. Ausnahmen (zum Beispiel die Terminal-Verbindung selbst, eine Plattform ohne die nötige Betriebssystemfunktion) stehen mit Grund im Teildokument.
 
@@ -24,7 +24,7 @@ Zweck: Dieses Verzeichnis hält fest, welche Oberflächen das Projekt hat und ü
 | Share (Geräte, Anfragen, Räume, Freigaben, Auffindbarkeit, Netzwerk) und Exec (Grants, Konto, Programmliste, Jobs, Protokoll) | [share-exec.md](share-exec.md) |
 | Alle übrigen Einstellungen der App | [einstellungen.md](einstellungen.md) |
 | Laufwerke (Einhängen unter Windows und Linux, Optionen, Gerätebaum „Verbundene Geräte als Ordner“, Tresor-Laufwerke, Android-Dokumentanbieter, Laufzeit) | [laufwerke.md](laufwerke.md) |
-| Tresore (Cryptomator-Tresore, Sperren, Tresor-Sync) | noch nicht angelegt; das Teildokument `tresore.md` entsteht im Lauf VLT-M13 |
+| Tresore (Cryptomator-Tresore, Sperren, Tresor-Sync, Tresor-Laufwerke) | [tresore.md](tresore.md) |
 | Bildschirm (Geräte, Sitzungen, Kodierung, Eingabe, Betrachter) | [bildschirm.md](bildschirm.md) |
 | se Desktop und se Launcher | [desktop-launcher.md](desktop-launcher.md) |
 

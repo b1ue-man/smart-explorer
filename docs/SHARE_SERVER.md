@@ -637,6 +637,25 @@ context-free accept/reject/retry/revoke/delete, completion, and file access.
 Every selector used by that scenario is obtained from earlier CLI output in the
 same run.
 
+## File transfer ranges and LZ4 (0.5.183)
+
+Two peers that both announce a capability use it; a peer that does not announce it gets the
+classic requests.
+
+- **Capabilities.** `ranges_v1` (`native/src/share/core/batch_wire.rs:58`) enables ranges;
+  `lz4_v1` (`batch_wire.rs:63`) enables LZ4 content blocks. The SSH agent announces the same
+  ideas with the labels `range-v1` and `lz4-v1` (`native/src/agent_proto/core/features.rs:17`, `:20`).
+- **Range read: `ReadAt`.** The request carries `path`, `offset` and `len`. `len` is left out
+  when it is zero. The flag `lz4` is left out unless it is true; with `lz4_v1` the host may then send
+  content blocks with the tag `TAG_DATA_LZ4` (`native/src/share/core/fs_request.rs:251-262`,
+  `native/src/share/core/framing.rs:18`).
+- **Range write: three requests.** `SegmentedStageOpen` creates the exclusive stage of a file; the
+  host picks the name and keeps the handle and answers `SegmentedStageReady`. `StageWriteAt` writes
+  one range of an open stage; the client then sends exactly `len` bytes and ends its stream.
+  `SegmentedStageFinish` says that every range has arrived (`fs_request.rs:265-270`).
+- **Admission.** Every range request is checked against the grant at the time of the request, and
+  a withdrawn right ends the stage (Sicherheitsantwort S1 und S2, Stand U53).
+
 ## Screen relay limits (0.5.183)
 
 Screen sessions use the ALPN `smart-explorer/share-screen/1` (`native/src/screen/core/wire.rs:17`)

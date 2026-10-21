@@ -1,10 +1,6 @@
 # Übertragungs-Engine
 
-Stand: 2026-09-29 (Batch „Übertragungs-Engine“, Plan
-`docs/superpowers/plans/2026-09-28-transfer-engine/`). Beschreibt, wie Kopieren, Einfügen,
-Ziehen, „Kopieren/Herunterladen nach…“ und Downloads zwischen lokalen Ordnern, Remotes
-(SFTP, FTP/FTPS, WebDAV, SMB, Google Drive, ZIP), Direct-/Raum-Shares und dem SSH-Agent
-laufen, welche Grenzen jedes Protokoll setzt und woher jede Zahl kommt.
+Stand: 2026-10-21 (Lauf 3 des Doku-Laufs U42, E13-Doku). Grundlage: der Batch „Übertragungs-Engine“ (TE1, 2026-09-29, Plan `docs/superpowers/plans/2026-09-28-transfer-engine/`) und die E13-Pakete U45 bis U53 (Festlegung `docs/plaene/2026-10-17-rechte-desktop-tresore/festlegungen.md`, Abschnitt U44). Beschreibt, wie Kopieren, Einfügen, Ziehen, „Kopieren/Herunterladen nach…“ und Downloads zwischen lokalen Ordnern, Remotes (SFTP, FTP/FTPS, WebDAV, SMB, Google Drive, ZIP), Direct-/Raum-Shares und dem SSH-Agent laufen, welche Grenzen jedes Protokoll setzt und woher jede Zahl kommt. Nicht beschrieben: die Messstufe `speed` (U55) und die Anzeige auf Android (U54); beide sind noch nicht ausgeführt.
 
 ## Was der Nutzer sieht
 
@@ -61,44 +57,166 @@ App/Android ── TransferRequest::Job(TransferJob) ──► Lane (ein Worker 
 - `native/src/transfer/os/shared/lane.rs`: Lane ohne feste Grenze; fertige Übertragungen liefern
   Job, erste Fehler und aufgelöste Zielwurzeln für „Fehlende übertragen“.
 
-## Parallelität: Flows statt fester Grenzen
+## Parallelität: Fenster, Startwert und Speicherbudget
 
 Die richtige Zahl gleichzeitiger Operationen hängt von Bandbreite × Latenz, Dateigrößen,
 Serverleistung und Speichermedium ab – nichts davon ist vorher bekannt. Jede Verbindung (bzw.
 jedes lokale Volume) hat deshalb **einen** Flow, den alle Übertragungen, Explorer-Übergaben und
 Sync-Läufe dieses Prozesses teilen; er misst die Nutzleistung (Bytes plus 64 KiB je fertiger
-Operation, damit reine Kleinstdatei-Last messbar ist) und regelt die Grenze:
+Operation, `OP_WEIGHT_BYTES`, damit reine Kleinstdatei-Last messbar ist) und regelt die Grenze
+(`native/src/transfer/core/flow_control.rs`):
 
 | Parameter | Wert | Grund |
 |---|---|---|
-| Startgrenze | 2 | eine Operation in Arbeit, eine im Anlauf |
-| Messfenster | 2 × geglättete Latenz, 1–5 s | lang genug gegen Rauschen, kurz genug zum Reagieren |
-| Slow Start | verdoppeln, solange ≥ +10 % | findet große Grenzen in wenigen Fenstern |
-| Proben | Schritt Grenze/8, über 2 Fenster | symmetrische Schritte halten die Grenze unter Rauschen am Optimum (Simulation mit ±10 %: ≥ 93 % der Bestleistung bei ≤ 1,11-facher Parallelität) |
-| Behalten | aufwärts ≥ +5 %, abwärts ≥ 97 % | nur Änderungen, die sich lohnen |
-| Überlast | Grenze halbieren, einmal je Fenster | Ratenlimits, „busy“, Timeouts (typisiert als `vfs::congestion_error`) |
-| Obergrenze | 256 bzw. Protokollgrenze (`transfer_ceiling`) | Threads/Puffer je Operation; echte Grenzen kommen vom Protokoll |
-| Merken | 15 min nach letzter Nutzung | das nächste Einfügen beginnt, wo das letzte endete |
+| Startgrenze | 2 (`START_LIMIT`); gelernt: die halbe zuletzt eingestellte Grenze, mindestens 2 (`start_from_learned`, `native/src/transfer/core/flow_window.rs:19-21`) | eine Operation in Arbeit, eine im Anlauf; ein bekannter Server startet nicht bei null |
+| Fenster | Abschluss, wenn mindestens 100 ms (`MIN_WINDOW_MS`) und 8 Operationen (`MIN_COMPLETIONS`) vergangen sind; ohne Messung 1 s (`FALLBACK_WINDOW_MS`), höchstens 5 s (`MAX_WINDOW_MS`) | kurz genug zum Reagieren, lang genug gegen Rauschen |
+| Slow Start | verdoppeln, solange jede Messung um ≥ 10 % zulegt (`SLOW_START_GAIN` = 1,10; `flow_control.rs:7-8`, `:317-320`) | findet große Grenzen in wenigen Fenstern |
+| Proben | Schritt Grenze/8 (`PROBE_STEP_DIVISOR`), über 2 Fenster (`PROBE_WINDOWS`), alle 4 Fenster im Leerlauf (`PROBE_INTERVAL_WINDOWS`) | symmetrische Schritte halten die Grenze unter Rauschen am Optimum (Simulation mit ±10 %: ≥ 93 % der Bestleistung bei ≤ 1,11-facher Parallelität) |
+| Behalten | aufwärts ≥ +5 % (`PROBE_GAIN`), abwärts ≥ 97 % (`PROBE_KEEP_LOWER`) | nur Änderungen, die sich lohnen |
+| Überlast | Grenze halbieren; danach halten 3 Fenster die Grenze (`OVERLOAD_HOLD_WINDOWS`, `flow_control.rs:267`) | Ratenlimits, „busy“, Timeouts (typisiert als `vfs::congestion_error`) |
+| Obergrenze | 256 (`RESOURCE_CEILING`) und die Protokollgrenze (`transfer_ceiling`) | Threads und Puffer je Operation; echte Grenzen kommen vom Protokoll |
+| Merken | 15 min nach letzter Nutzung (`FLOW_RETENTION`, `native/src/transfer/os/shared/flow_registry.rs:12`) | das nächste Einfügen beginnt, wo das letzte endete |
+
+**Startwert aus `transfer-hints.json`.** Der Flow lernt die Grenze, bei der eine Verbindung
+oder ein Volume sich eingependelt hat, und schreibt sie in `<app data>/transfer-hints.json`
+(`native/src/transfer/os/shared/hints.rs`, Datei `transfer-hints.json`, `:23`). Ein Eintrag ist
+nur ein Startwert; die erste Messung ersetzt ihn. Die Datei enthält keinen Rechnernamen, kein
+Konto, keinen Pfad und keinen Namen: Schlüssel ist der SHA-256 eines zufälligen 32-Byte-Salzes
+dieser Installation mit der Identität der Verbindung (`hints.rs:1-12`). Höchstens 512 Einträge
+(`MAX_ENTRIES`), die Datei wird höchstens alle 60 s geschrieben (`WRITE_INTERVAL_MS`) und hat
+höchstens 256 KiB (`MAX_FILE_BYTES`). Ungültige Einträge, Grenzen außerhalb von 1 bis zur
+Obergrenze und Zeiten in der Zukunft verwirft das Lesen.
+
+**Dynamisches Speicherbudget.** Gepufferte Bytes aller Übertragungen eines Prozesses
+teilen sich ein Budget. Es ist ein Viertel des verfügbaren Speichers, begrenzt auf 64 MiB bis
+2 GiB (`MIN_BUDGET`, `MAX_BUDGET`); der verfügbare Speicher wird höchstens alle 2 s neu gelesen
+(`REFRESH_INTERVAL`). Ist er unbekannt, gilt 256 MiB (`FALLBACK_BUDGET`), wie in
+`native/src/transfer/os/shared/memory.rs:14-35`. Das Budget widerruft nie einen Puffer, den schon
+eine Operation hält.
 
 Regeln: Erlaubnisse gehen reihum zwischen Übertragungen (ein kleines Einfügen neben einem
 großen Job kriecht nicht); Auflistungen haben einen reservierten Platz; Lokal↔Remote regelt nur
 der Remote-Flow; nie mit gehaltener Erlaubnis auf etwas warten, das selbst Erlaubnis, Speicher
 oder einen Kanal braucht; Speicher wird vor der Erlaubnis reserviert. Flows sind prozesslokal:
-Sync-Jobs im Hintergrund-Dienst regeln getrennt von der GUI.
+Sync-Jobs im Hintergrund-Dienst regeln getrennt von der GUI. Die QUIC-Fenster der Share-Verbindung
+(16 bis 64 MiB, `share/core/keepalive.rs`) bleiben unverändert; das Speicherbudget erhöht sie nicht.
+
+## Teilbereiche großer Dateien
+
+- **Wann.** Eine Datei ab 16 MiB (`SPLIT_FROM` = zwei kürzeste Teile) wird in Teile zerlegt
+  (`native/src/transfer/core/segments.rs:11`, `:13`, `splits` in `:23`). Kleinere Dateien laufen als ein Strom.
+- **Wie lang.** Ein Teil ist mindestens 8 MiB (`MIN_SEGMENT`). Der Teil gibt höchstens ein Zehntel
+  seiner Zeit für den Aufbau aus (`SETUP_SHARE`) und dauert höchstens 30 s als ein Strom
+  (`MAX_SEGMENT_SECONDS`). Die Länge des nächsten Teils ergibt sich aus der gemessenen Anlaufzeit
+  und Streamrate der fertigen Teile dieser Verbindung (`SegmentSizer`, `segments.rs:23-60`).
+- **Ablage.** Die Stufe wird vor dem ersten Teil auf die Länge der Datei gesetzt (`set_len`,
+  `native/src/transfer/os/shared/engine/download.rs:73`); die Teile landen als dünn besetzte Datei,
+  die fertig ist, wenn alle Teile fertig sind. Ein Abbruch behält die fertige Präfixlänge
+  (`prefix()`), und das Fortsetzen beginnt dort (`segments.rs:126`).
+- **Wo.** Die Engine führt Teile in `segments_download`, `segments_upload` und `segments_copy` aus
+  (`native/src/transfer/os/shared/engine/`), unter den Erlaubnissen des Flows. Welches Protokoll
+  wie teilt, steht in der Tabelle „Je Protokoll“.
+
+## Wer begrenzt
+
+Jede Operation bucht die Zeit ihres Fadens: Lesen von der Quelle, Schreiben zum Ziel, Rechnen
+(Hash, Kompression, Verschlüsselung) und Warten auf Erlaubnis, Speicher oder Ordner. Eine Sekunde
+lang ergibt die Summe ein **Urteil** über den Engpass (`native/src/transfer/core/limiter.rs`,
+Fenster in `os/shared/engine/bottleneck.rs`, `WINDOW` = 1 s).
+
+Urteile und ihre Texte (`limiter.rs:12-40`, Texte `limiter.rs:277-291`; Code für MCP und Bridge):
+
+| Urteil | Code | Text |
+|---|---|---|
+| kein Urteil | `none` | – |
+| Anlauf: die Parallelität wächst noch | `ramp` | „Läuft an …“ |
+| Nachschub: die Quelle liefert nicht schnell genug | `idle` | „Wartet auf Nachschub (Quelle liefert nicht schnell genug)“ |
+| lokale Quelle | `source` | „Begrenzt durch das Laufwerk <Name>“ |
+| lokales Ziel | `target` | „Begrenzt durch das Laufwerk <Name>“ |
+| Leitung oder Server der Gegenseite | `remote` | „Begrenzt durch Leitung oder Server <Name>“ |
+| Leitung selbst (Rate nahe der Linkrate) | `link` | „Begrenzt durch die Leitung (<Rate> von <Linkrate>)“ |
+| Rechenzeit von Smart Explorer (alle Kerne belegt) | `se_cpu` | „Begrenzt durch Smart Explorer (Rechenzeit)“ |
+| Rechnen auf einem Faden, weitere Kerne frei | `se_thread` | „Smart Explorer rechnet mit einem Faden; weitere Kerne sind frei“ |
+| Warten auf Arbeitsspeicher (Puffer) | `memory` | „Wartet auf Arbeitsspeicher (Puffer)“ |
+
+Die Regeln in dieser Reihenfolge (`judge`, `limiter.rs:121`): Nachfrage füllt die Grenze nicht →
+`idle`; Parallelität wächst noch → `ramp`; meist Wartezeit auf Speicher → `memory`; eine Seite mit
+mehr als der Hälfte der Arbeitszeit → diese Seite; sonst `remote`. Leitung: die Rate erreicht
+9/10 der Linkrate (`LINK_SHARE`, `limiter.rs:109`); eigene Rechenzeit: alle Kerne zu mindestens
+90 % belegt (`CPU_SHARE`, `limiter.rs:111`).
+
+- **Drei Fenster.** Ein Urteil wird erst angezeigt, wenn drei Fenster hintereinander dasselbe
+  Urteil ergeben (`CONFIRM_WINDOWS` = 3, `limiter.rs:114`). Ein einzelnes Fenster kippt die
+  Anzeige nicht.
+- **Abschlusswert.** Die letzte Meldung trägt das letzte Urteil, das einen Engpass benannt hat
+  (`bottleneck.rs:1-8`). So zeigen `--stats` und die fertige Liste den Engpass, auch wenn die
+  Warteschlange am Ende leer war.
+- **Wo es erscheint.** Die Fortschrittsmeldung trägt das Urteil (`limiter`), den Text
+  (`limiter_text`), die Rate (`rate_bps`) und die Teile (`segments`); das Übertragungsfenster
+  zeigt die Zeile unter der Rate, `se cp --stats` und das MCP-Werkzeug geben dieselben Felder aus.
+- **Namen.** Die Texte nennen Laufwerke, Geräte und Arten von Endpunkten, nie eine Datei oder einen
+  Ordner (`bottleneck.rs:9-12`).
 
 ## Je Protokoll
 
 | Protokoll | Was es erlaubt | Was die Engine nutzt | Grenzen und Zahlen |
 |---|---|---|---|
-| Lokal, UNC | Kernel-Kopie, Server-Offload | Kopie über die exklusiv erzeugte Stufe (Linux `copy_file_range` zwischen Handles, Windows `CopyFile2` „nicht ersetzen“ + Identitätsprüfung); innerhalb einer UNC-Freigabe kopiert so der SMB-Server selbst (Offload/COPYCHUNK); kein fsync bei neuen Kopien, Verschieben auf demselben Volume als eine Umbenennung | fsync nur bei Verschieben und Überschreiben; Abbrechen wirkt zwischen den Kopierblöcken |
-| Direct/Raum-Share (Iroh/QUIC) | viele Ströme je Verbindung | `fs_transfer_v1`: Pakete für kleine Dateien (Statusabfrage bei verlorener Antwort), Lesen ab Offset, exklusive Ordner, serverseitige Kopie; alte Hosts: bisheriger Weg | 64 Ströme − 4 fürs Blättern = 60 Übertragungen je Gegenstelle (Host-Zulassung), davon nutzt der Flow höchstens 56, 4 bleiben für Vordergrund-Lesen; Host gesamt 256 (halbe Tokio-Blocking-Threads); alte Hosts 32; Paket ≤ 256 Dateien/16 MiB, Kopf ≤ 256 KiB; Fenster 16 MiB je Strom (1 Gbit/s × 100 ms), Verbindung 16–64 MiB je nach Speicher; voller Host antwortet „busy“ statt heimlich zu warten, alte Clients warten höchstens 45 s (ihre Frist ist 60 s) |
-| SSH-Agent / Hintergrund-Dienst | Anfragen mit IDs über einen Kanal | Kredit je Anfrage (`+credit-v1`: ein langsamer Download blockiert kein Blättern), Pakete (`+batch-v1`), Stufen-Frames, Pool zusätzlicher Exec-Kanäle | 64 MiB Budget je Verbindung, 1 MiB Anfangskredit, Fenster bis 8 MiB je Strom; Kanal-Pool bis MaxSessions − 2 |
-| SFTP | gepipelinete Anfragen, mehrere Kanäle | viele gleichzeitige READs mit wachsender Tiefe, gebündelte WRITEs, Kanal-Pool, Kopien ohne fsync, serverseitige Kopie per `copy-data` wo angeboten (in Bereichen von ~10 s, lehnt der Server ab, wird gestreamt) | Tiefe ≤ Fenster/Block = 64, SSH-Fenster 16 MiB, Paket 32 KiB; Pool bis zur Ablehnung, 2 Kanäle Reserve |
-| FTP/FTPS | eine Übertragung je Steuerverbindung | Verbindungs-Pool, Größen-Stufe mit streamendem STOR, Fortsetzen per REST; Prüfen und Veröffentlichen auf der Verbindung der Übertragung (SIZE für den zufälligen Stufennamen, eine Auflistung des Ordners für Stufe und Ziel, dann RNFR/RNTO), ohne freie Verbindung auf der Blätter-Verbindung | Grenze lernt der Pool aus 421/530 nach erfolgreicher Anmeldung; eine Verbindung bleibt fürs Blättern |
-| WebDAV | viele HTTP-Verbindungen, COPY | gepoolte Mutationen, gestreamtes PUT mit Länge und `If-None-Match: *`, serverseitiges COPY, Range | 429/503 → Überlast mit `Retry-After`; DELETE und leeres PUT ungepoolt (ureq würde sie wiederholen) |
-| Google Drive | parallele Verbindungen, `generateIds` | gepoolte Verbindungen, neue Datei ≤ 5 MB mit einem Aufruf, Resumable mit wachsenden Blöcken, ID-Vorrat, Cache im Hintergrund, Sperren je Name, `files.copy` | Google begrenzt dauerhaft ~3 neue Dateien/s je Konto (Hinweis in der Zeile); Ratenlimits sofort als Überlast |
-| SMB | Credits, COPYCHUNK | mehrere Lese-Blöcke gleichzeitig, serverseitige Kopie wo angeboten, neue Kopien ohne FLUSH | Block ≤ 512 KiB bzw. MaxReadSize, Tiefe nach Credits; eine Serverkopie sieht Abbrechen erst an ihrem Ende |
+| Lokal, UNC | Kernel-Kopie, Server-Offload | Kopie über die exklusiv erzeugte Stufe (Linux `copy_file_range` zwischen Handles, Windows `CopyFile2` „nicht ersetzen“ + Identitätsprüfung); innerhalb einer UNC-Freigabe kopiert der SMB-Server selbst (Offload/COPYCHUNK); kein fsync bei neuen Kopien, Verschieben auf demselben Volume als eine Umbenennung; Ring und Bereiche: siehe „Lokal, UNC“ unten | fsync nur bei Verschieben und Überschreiben; Abbrechen wirkt zwischen den Kopierblöcken |
+| Direct/Raum-Share (Iroh/QUIC) | viele Ströme je Verbindung | `fs_transfer_v1`: Pakete für kleine Dateien (Statusabfrage bei verlorener Antwort), Lesen ab Offset, exklusive Ordner, serverseitige Kopie; Bereiche mit der Capability `ranges_v1` (`native/src/share/core/batch_wire.rs:58`), LZ4 mit `lz4_v1` (`batch_wire.rs:63`, Abschnitt „Kompression“); alte Hosts: bisheriger Weg | 64 Ströme − 4 fürs Blättern = 60 Übertragungen je Gegenstelle (Host-Zulassung), davon nutzt der Flow höchstens 56, 4 bleiben für Vordergrund-Lesen; Host gesamt 256 (halbe Tokio-Blocking-Threads); alte Hosts 32; Paket ≤ 256 Dateien/16 MiB, Kopf ≤ 256 KiB; Fenster 16 MiB je Strom (1 Gbit/s × 100 ms), Verbindung 16–64 MiB je nach Speicher; voller Host antwortet „busy“ statt heimlich zu warten, alte Clients warten höchstens 45 s (ihre Frist ist 60 s). Stufen-Bereiche nur bei lokalen Exporten; für nicht lokale Exporte fehlt eine Handle-Schnittstelle in `vfs` (Stand U53). Unfertige Bereichsstufen des Wirts werden beim Verbindungsende, nach 300 s ohne Fortschritt und beim nächsten Start entfernt (Stand U53) |
+| SSH-Agent / Hintergrund-Dienst | Anfragen mit IDs über einen Kanal | Kredit je Anfrage (`+credit-v1`: ein langsamer Download blockiert kein Blättern), Pakete (`+batch-v1`), Stufen-Frames, Pool zusätzlicher Exec-Kanäle; Bereiche mit `Read {offset, len}`, Label `range-v1` (`native/src/agent_proto/core/features.rs:17`); die Bereichsstufe bleibt auf dem Kanal, der sie geöffnet hat (Stand U53) | 64 MiB Budget je Verbindung, 1 MiB Anfangskredit, Fenster bis 8 MiB je Strom; Kanal-Pool bis MaxSessions − 2; |
+| SFTP | gepipelinete Anfragen, mehrere Kanäle | viele gleichzeitige READs mit wachsender Tiefe, gebündelte WRITEs (Pakete, 16 MiB je Paket, `BATCH_BYTES`), Kanal-Pool, Kopien ohne fsync, serverseitige Kopie per `copy-data` wo angeboten (in Bereichen von ~10 s, lehnt der Server ab, wird gestreamt). Bereiche über mehrere Pool-Kanäle; jeder Kanal hat sein eigenes Serverfenster (OpenSSH 2 MiB). Schreiben von Bereichen nur, wenn die Ordnerkette bis `/` dem Konto oder root gehört und für Gruppe und andere gesperrt ist (oder Sticky-Bit und root; Sicherheitsantwort S7). Dateien mit gelistetem MD5 bleiben ein Strom | Dateien je Kanal gleichzeitig offen: höchstens `min(open-handles, 64)` (`OPEN_HANDLES`, `native/src/sftp/core/batch_ops.rs:52`; ohne Angabe des Servers 64); ein OPEN mit einfachem Fehlerstatus oder ohne Antwort ist Überlast, ein bestimmter Status (nicht gefunden, Zugriff verweigert) ein Dateifehler (`open_failure`); jede Datei hat vier Wartezeiten (OPEN, WRITE, CLOSE, RENAME), die sich über bis zu `open-handles` Dateien überlappen; Pool bis zur Ablehnung, 2 Kanäle Reserve |
+| FTP/FTPS | eine Übertragung je Steuerverbindung | Verbindungs-Pool, Größen-Stufe mit streamendem STOR, Fortsetzen per REST; Prüfen und Veröffentlichen auf der Verbindung der Übertragung (SIZE für den zufälligen Stufennamen, eine Auflistung des Ordners für Stufe und Ziel, dann RNFR/RNTO), ohne freie Verbindung auf der Blätter-Verbindung. Bereiche über `REST` und je eine bereits angemeldete freie Verbindung, Abbruch mit `ABOR`; nie eine neue Anmeldung für Bereiche (Sicherheitsantwort S12) | STOR und RETR gehen vor dem TCP-Aufbau der Datenverbindung hinaus (suppaftp); es gibt kein Befehls-Pipelining: das nächste Kommando geht erst nach der Antwort auf das vorige (Testserver `native/src/ftp/core/data_overlap_server.rs`). Grenze lernt der Pool aus 421/530 nach erfolgreicher Anmeldung; 421/530 auf REST/RETR: 15 Minuten keine Bereiche; eine Verbindung bleibt fürs Blättern; Stufenprobe entfällt nur für Namen `.se-upload-<16 Hex>` (`FTP_PROBE_STAGE_NAME`, S6) |
+| WebDAV | viele HTTP-Verbindungen, COPY | gepoolte Mutationen, gestreamtes PUT mit Länge und `If-None-Match: *`, serverseitiges COPY, Range. Engine-Weg: PUT, PROPFIND (Stufe prüfen), MOVE. Sync-Weg: die Bestätigung der Zeit nach MOVE entfällt, wenn die MOVE-Antwort `X-OC-Mtime: accepted` trägt (`native/src/webdav/core/stage_move.rs:4-10`); ein PROPFIND je Sync-Upload weniger. Bereiche über `Range: bytes=a-b`; antwortet der Server mit 200, läuft die Datei als ein Strom | 429/503 → Überlast mit `Retry-After`; DELETE und leeres PUT ungepoolt (ureq würde sie wiederholen) |
+| Google Drive | parallele Verbindungen, `generateIds` | gepoolte Verbindungen, neue Datei ≤ 5 MB mit einem Aufruf, Resumable mit wachsenden Blöcken, ID-Vorrat, Cache im Hintergrund, Sperren je Name, `files.copy`; Bereiche über `Range: bytes=a-b`, antwortet der Server mit 200, läuft die Datei als ein Strom | Google begrenzt dauerhaft ~3 neue Dateien/s je Konto (Hinweis in der Zeile); Ratenlimits sofort als Überlast |
+| SMB | Credits, COPYCHUNK | Pakete über Compounds: CREATE, WRITE und CLOSE je Datei und das Umbenennen in zwei Rundreisen; Reparse-Punkte werden nie über `read_file_compound*` gelesen (eigene Anfragen, damit Links nicht gefolgt werden); mehrere Lese-Blöcke gleichzeitig, serverseitige Kopie wo angeboten, neue Kopien ohne FLUSH; Bereiche über `read_at`; Schreiben in Bereichen über eigene Handles, die vor dem ersten Byte gegen die Kennung der Stufe geprüft werden (S14) | Block ≤ 512 KiB bzw. MaxReadSize, Tiefe nach Credits; eine Serverkopie sieht Abbrechen erst an ihrem Ende |
 | ZIP (Quelle) | – | ein Parse je Archiv, Einträge gestreamt | Parallelität = Kernzahl (Entpacken ist CPU-gebunden) |
+
+**Lokal, UNC.** Auf Windows kopieren geschützte Quellen, Verschieben und Ersetzen über die
+Handle-Kopie; zwischen Lesen und Schreiben liegt ein Ring aus 4 Blöcken zu je 1 MiB
+(`HANDLE_COPY_BUFFER`, `HANDLE_COPY_DEPTH` in `native/src/copy/os/windows.rs:148-151`). Die
+Kernel-Kopie (`CopyFile2`) setzt `NO_BUFFERING`, sobald die Datei mindestens ein Viertel des
+verfügbaren Speichers groß ist; ist der verfügbare Speicher unbekannt, nie
+(`native/src/copy/os/shared/copy_flags.rs:25`, `:47-58`). `REQUEST_COMPRESSED_TRAFFIC` ist aus
+(`copy_flags.rs:19`). Unter Linux und Android laufen parallele Bereiche mit `copy_file_range` an
+festen Offsets, die Bereichsgrenzen liegen auf ganzen MiB (`native/src/copy/os/linux_range.rs:17`).
+Sie laufen nur auf Laufwerken, die nicht rotieren, nur mit Erlaubnissen aus dem Flow und nur bei
+leerer Warteschlange; bei unbekannter Rotation (btrfs, Netz, `/sys` nicht lesbar) nie parallel
+(Stand U51). Windows hat in diesem Stapel keine parallelen Bereiche.
+
+**Terminal.** `se cp` läuft über die Engine (`CLI_ENGINE_PATH = true`,
+`native/src/cli/engine_copy.rs:44`). `se cp --stats` schreibt nach den Hinweisen eine Zeile mit
+Rate und Engpass auf die Fehlerausgabe (`native/src/cli/mod.rs`, `CopyArgs`; Stand U49). Fehler einzelner Dateien
+beenden den Lauf nicht; der Exitcode ist dann 1. Eine Zugriffsfrage stellt die Engine im Terminal
+und im MCP-Dienst nicht: Eine lokale Quelle, für die der Zugriffsschutz nach Leserechten fragt
+(nur Windows), bleibt im Bestandsweg (`access_prompt_possible`, Stand U49). Vom Bestandsweg
+offen (U49): `--stats` zeigt beim Kopieren eines Verknüpfungsziels auf einem Remote 0 Bytes.
+
+## Kompression
+
+- **Wo.** LZ4 nur für Dateiinhalte der Share-Ströme und für `Data`-Rahmen des SSH-Agenten
+  (`native/src/transfer/core/compress_policy.rs`, Modul-Kopf). Dateilisten und Pakete werden nicht
+  komprimiert (TODO: LZ4 in den Paketströmen des Share fehlt; Grund: Pakete zählen Bytes je Eintrag,
+  kaum Gewinn unter 2 MiB; Stand U53).
+- **Wann.** Vier Bedingungen müssen zugleich gelten: (1) der Schreiber wartet in mehr als der Hälfte
+  des letzten Fensters auf die Leitung; (2) ein Kern komprimiert mindestens 1,3-mal so schnell, wie
+  die Leitung trägt; (3) das Verhältnis gepackt ÷ roh liegt bei höchstens 0,85; (4) ein Kern bleibt
+  frei. Eine Entscheidung gilt für 8 Blöcke; das Verhältnis wird aus den ersten 64 KiB jeder Datei
+  und danach aus jedem 8. Mebibyte gemessen.
+- **Format.** Jeder Block ist für sich entpackbar; die Rohlänge ist höchstens 256 KiB
+  (`CHUNK`, `native/src/agent_proto/core/types.rs:25`). Ein Block mit Rohlänge null oder über dem
+  Maximum wird vor dem Entpacken abgelehnt (`native/src/agent_proto/core/lz4_frames.rs:45`, `:68`).
+  Der Share-Rahmen trägt den Tag `TAG_DATA_LZ4` = 2 (`native/src/share/core/framing.rs:18`). Entpackt
+  wird in einen Puffer genau dieser Länge.
+- **Kredit.** Die Anfrage wird nach der Rohlänge berechnet, nicht nach der gepackten Länge
+  (`credit_cost`, `encoded_cost`, Tag 67 in `CHARGED_TAGS`, `native/src/agent_proto/core/credit.rs`).
+- **Aushandlung.** Nur in der authentisierten Sitzung, mit der Fähigkeit `lz4_v1` im Share
+  (`batch_wire.rs:63`) und dem Label `lz4-v1` im Agenten (`features.rs:20`). Ohne das Label sendet der
+  Client keine LZ4-Rahmen (Stand U53).
+- **Schalter.** `SE_TEST_NO_LZ4` schaltet LZ4 für Messungen ab; `SE_SHARE_QUIC_CC` wählt die
+  Staukontrolle, nur `bbr3` wählt BBRv3, sonst Cubic (`native/src/share/core/keepalive.rs:105`).
+  Beide sind Messschalter, keine Einstellungen (Stand U53).
+- **Windows.** `REQUEST_COMPRESSED_TRAFFIC` für Kopien mit einer Freigabe ist aus
+  (`native/src/copy/os/shared/copy_flags.rs:19`).
 
 ## Überlast, Fehler und Wiederholung
 
@@ -146,6 +264,9 @@ blinde Wiederholung mehrdeutiger Mutationen, Links werden nie gefolgt, der App-P
 ausgelassen, geschützte lokale Ordner werden genau einmal angefragt. Sync, Laufwerks-Mounts und
 Ersetzen behalten ihre dauerhaften Schreibwege.
 
+Im Sync rechnet der MD5 ab dem ersten Mebibyte in einem eigenen Faden mit (`StreamHasher`, ein
+Faden je Kopie ab 1 MiB; Erzeugungsfehler bleiben inline; Stand U52).
+
 ## Nachweis
 
 Die Task-Suite `native/test-transfer-engine-task.sh` (Workflow `transfer-engine-task.yml`):
@@ -155,3 +276,5 @@ auf 50 ms/100 Mbit/s geformte Loopback-Leitung (`native/tests/transfer_throughpu
 Share-Raum Ende-zu-Ende mit echten Binaries, Windows-Meilensteine (OLE-Rundreise) und die
 Android-Gerätesuite. Nicht gemessen: echte Netze der Nutzer, das UI-Verhalten des Explorers
 beim Überfahren mit großen Auswahlen (siehe `docs/refs/windows-virtual-files.md` §9).
+
+E13-Tests laufen mit dem Präfix `speed_task_` in der Suite (Teil B, U41). Diese Fassung ist nicht gebaut und nicht ausgeführt.
