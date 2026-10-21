@@ -12,6 +12,8 @@ use super::platform;
 
 #[path = "bridge.rs"]
 mod bridge;
+#[path = "copy_flags.rs"]
+pub(super) mod copy_flags;
 #[path = "durability.rs"]
 mod durability;
 #[path = "move_guard.rs"]
@@ -20,6 +22,8 @@ mod move_guard;
 mod pairs;
 #[path = "path_guard.rs"]
 mod path_guard;
+#[path = "pipe_copy.rs"]
+pub(super) mod pipe_copy;
 #[path = "planning.rs"]
 mod planning;
 #[path = "prune.rs"]

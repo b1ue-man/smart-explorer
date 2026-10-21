@@ -58,13 +58,16 @@ impl Staged {
 }
 
 /// Copies `source` into a new stage next to `target`; `None` when canceled.
-/// `durable` (moves, replacements) syncs the stage to disk.
+/// `durable` (moves, replacements) syncs the stage to disk. `parallel` is
+/// how many threads may copy ranges of the file at once on platforms that
+/// can (`copy_handles`); callers pass 1 for durable copies.
 pub(super) fn stage_copy(
     source: &Path,
     target: &Path,
     cancel: &AtomicBool,
     durable: bool,
     preserve_destination_mode: bool,
+    parallel: usize,
     progress: &mut dyn FnMut(u64),
 ) -> Result<Option<Staged>, LocalFailure> {
     let (reader, before) = open_source(source)?;
@@ -74,7 +77,7 @@ pub(super) fn stage_copy(
         }
     }
     let (temp, mut writer) = create_temp_sibling(target).map_err(LocalFailure::Target)?;
-    let copied = match platform::copy_handles(&reader, &mut writer, cancel, progress) {
+    let copied = match platform::copy_handles(&reader, &mut writer, cancel, progress, parallel) {
         Ok(Some(copied)) => copied,
         Ok(None) => {
             discard(temp, writer);

@@ -5,6 +5,9 @@ use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::AsRawHandle;
 use std::path::Path;
 
+use super::imp::copy_flags::{is_unc, windows_copy_flags, WINDOWS_REQUEST_COMPRESSED_TRAFFIC};
+use super::imp::pipe_copy::{pipe_copy, PipeError, PipeSide};
+
 pub(super) type FileIdentity = (u32, u64);
 
 #[repr(C)]
@@ -140,9 +143,12 @@ pub(super) fn is_cross_device(error: &io::Error) -> bool {
     error.kind() == io::ErrorKind::CrossesDevices || error.raw_os_error() == Some(17)
 }
 
-/// Buffer of the handle copy (protected sources, moves, replacements): the
+/// Block of the handle copy (protected sources, moves, replacements): the
 /// size the older copy loop used, large enough for sequential disk speed.
 const HANDLE_COPY_BUFFER: usize = 1024 * 1024;
+/// Blocks circulating between the reading thread and the writing caller: a
+/// slow read and a slow write overlap (the older loop alternated).
+const HANDLE_COPY_DEPTH: usize = 4;
 
 /// New copies go through `CopyFile2` onto the fresh stage name.
 pub(super) fn copy_by_path(
@@ -182,41 +188,47 @@ fn copy_to_fresh(
 }
 
 /// Copies through the opened handles (sources readable only through
-/// `local_access`, durable moves and replacements). `None` when canceled.
+/// `local_access`, durable moves and replacements): a reading thread runs
+/// ahead of the writing caller (`pipe_copy`). `None` when canceled. The
+/// error keeps the side the staging code sorts it by.
 pub(super) fn copy_handles(
     reader: &File,
     writer: &mut File,
     cancel: &std::sync::atomic::AtomicBool,
     progress: &mut dyn FnMut(u64),
+    _parallel: usize,
 ) -> io::Result<Option<u64>> {
-    use std::io::{Read, Write};
     let mut reader = reader;
-    let mut buffer = vec![0u8; HANDLE_COPY_BUFFER];
-    let mut copied = 0u64;
-    loop {
-        if cancel.load(std::sync::atomic::Ordering::Acquire) {
-            return Ok(None);
-        }
-        let read = match reader.read(&mut buffer) {
-            Ok(read) => read,
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-            Err(error) => return Err(error),
-        };
-        if read == 0 {
-            return Ok(Some(copied));
-        }
-        writer.write_all(&buffer[..read])?;
-        copied = copied.saturating_add(read as u64);
-        progress(read as u64);
-    }
+    pipe_copy(
+        &mut reader,
+        writer,
+        cancel,
+        progress,
+        HANDLE_COPY_BUFFER,
+        HANDLE_COPY_DEPTH,
+    )
+    .map_err(side_error)
 }
 
-/// `COPY_FILE_FAIL_IF_EXISTS` (WinBase.h; windows-sys 0.59 lists it under
-/// `Win32::System::WindowsProgramming`, value 1): never replace the stage name.
-const COPY_FILE_FAIL_IF_EXISTS: u32 = 1;
-/// `COPY_FILE_COPY_SYMLINK` (value 0x800): a source swapped for a link is
-/// copied as a link, which the reparse check of the stage then refuses.
-const COPY_FILE_COPY_SYMLINK: u32 = 0x800;
+/// Staging sorts errors by kind: the ones only a destination can cause are
+/// the target's, the rest the source's. A read error must not look like a
+/// target error, so such a kind becomes a plain one.
+fn side_error(failure: PipeError) -> io::Error {
+    let PipeError { side, error } = failure;
+    let target_only = matches!(
+        error.kind(),
+        io::ErrorKind::StorageFull
+            | io::ErrorKind::QuotaExceeded
+            | io::ErrorKind::ReadOnlyFilesystem
+            | io::ErrorKind::FileTooLarge
+            | io::ErrorKind::WriteZero
+    );
+    if side == PipeSide::Read && target_only {
+        io::Error::other(error)
+    } else {
+        error
+    }
+}
 
 struct CopyContext<'a> {
     cancel: &'a std::sync::atomic::AtomicBool,
@@ -271,6 +283,7 @@ fn kernel_copy_file(
     use windows_sys::Win32::Storage::FileSystem::{CopyFile2, COPYFILE2_EXTENDED_PARAMETERS};
     let source_wide = wide(&crate::local_access::normalize_scan_root(source));
     let stage_wide = wide(&crate::local_access::normalize_scan_root(stage));
+    let flags = copy_flags(source, stage);
     let mut context = CopyContext {
         cancel,
         progress,
@@ -282,7 +295,7 @@ fn kernel_copy_file(
     ) -> windows_sys::Win32::Storage::FileSystem::COPYFILE2_MESSAGE_ACTION = copy_progress;
     let parameters = COPYFILE2_EXTENDED_PARAMETERS {
         dwSize: std::mem::size_of::<COPYFILE2_EXTENDED_PARAMETERS>() as u32,
-        dwCopyFlags: COPY_FILE_FAIL_IF_EXISTS | COPY_FILE_COPY_SYMLINK,
+        dwCopyFlags: flags,
         pfCancel: std::ptr::null_mut(),
         pProgressRoutine: Some(routine),
         pvCallbackContext: &mut context as *mut CopyContext<'_> as *mut c_void,
@@ -303,6 +316,21 @@ fn kernel_copy_file(
         return Ok(None);
     }
     Err(error)
+}
+
+/// The flags of one copy (`copy_flags.rs`): the size of the source, the
+/// memory the system has to spare and whether a share is on either end.
+fn copy_flags(source: &Path, stage: &Path) -> u32 {
+    let size = std::fs::metadata(crate::local_access::normalize_scan_root(source))
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    let on_share = |path: &Path| path.to_str().is_some_and(is_unc);
+    windows_copy_flags(
+        size,
+        crate::transfer::available_memory(),
+        on_share(source) || on_share(stage),
+        WINDOWS_REQUEST_COMPRESSED_TRAFFIC,
+    )
 }
 
 fn wide(path: &Path) -> Vec<u16> {

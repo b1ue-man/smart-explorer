@@ -5,6 +5,9 @@ use std::path::Path;
 
 pub(super) type FileIdentity = (u64, u64);
 
+#[path = "linux_range.rs"]
+mod linux_range;
+
 /// Which file `path` names, from its metadata: no read access needed (an
 /// unreadable destination can still be compared and replaced).
 pub(super) fn path_identity(path: &Path) -> io::Result<FileIdentity> {
@@ -113,15 +116,28 @@ pub(super) fn copy_by_path(
 
 /// Copies `reader` to the end into the exclusively created stage `writer`
 /// in the kernel (`std::io::copy` between two files uses copy_file_range,
-/// which reflinks on btrfs/xfs and copies server-side on NFS). `None` when
-/// canceled.
+/// which reflinks on btrfs/xfs and copies server-side on NFS). With
+/// `parallel > 1` and a file of at least two shortest transfer parts, that
+/// many threads each copy one contiguous range at explicit offsets
+/// (`linux_range`); the engine only asks for it on a non-rotating drive with
+/// permits to spare. `None` when canceled.
 pub(super) fn copy_handles(
     reader: &File,
     writer: &mut File,
     cancel: &std::sync::atomic::AtomicBool,
     progress: &mut dyn FnMut(u64),
+    parallel: usize,
 ) -> io::Result<Option<u64>> {
     use std::io::Read;
+    if parallel > 1 {
+        // Every thread needs at least one transfer part of its own.
+        let size = reader.metadata()?.len();
+        if size >= crate::transfer::segments::SPLIT_FROM {
+            // Sparse until the ranges are in; a short source is an error.
+            writer.set_len(size)?;
+            return linux_range::copy_ranges(reader, writer, size, parallel, cancel, progress);
+        }
+    }
     let mut copied = 0u64;
     loop {
         if cancel.load(std::sync::atomic::Ordering::Acquire) {

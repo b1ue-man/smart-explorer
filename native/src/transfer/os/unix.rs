@@ -166,6 +166,32 @@ pub(crate) fn device_id_of(path: &Path) -> Option<String> {
     (major != 0).then(|| format!("{major}:{minor}"))
 }
 
+/// Whether the drive under `path` spins (`Some(true)`), is flash
+/// (`Some(false)`) or cannot be told (`None`: no block device behind it,
+/// such as a network or virtual file system, or `/sys` is not readable).
+/// A file that does not exist yet is looked up through its folder.
+pub(crate) fn volume_is_rotational(path: &Path) -> Option<bool> {
+    let id = device_id_of(path).or_else(|| device_id_of(path.parent()?))?;
+    rotational_in(Path::new("/sys/dev/block"), &id)
+}
+
+/// `queue/rotational` of the block device `id` (`major:minor`) below the
+/// device directory `root`; a partition has none of its own, so the one of
+/// its parent device counts.
+pub(crate) fn rotational_in(root: &Path, id: &str) -> Option<bool> {
+    let device = root.join(id);
+    let queue = if device.join("partition").exists() {
+        device.join("../queue/rotational")
+    } else {
+        device.join("queue/rotational")
+    };
+    match std::fs::read_to_string(queue).ok()?.trim() {
+        "0" => Some(false),
+        "1" => Some(true),
+        _ => None,
+    }
+}
+
 /// The kernel's name of a device (`sda1`), for the texts.
 pub(crate) fn device_name_of(id: &str) -> Option<String> {
     find_disk(&read_text("/proc/diskstats")?, id).map(|(name, _)| name)
@@ -207,6 +233,36 @@ mod tests {
         }
         assert!(super::device_id_of(std::path::Path::new("/nonexistent/x")).is_none());
         assert!(super::device_name_of("999999:999999").is_none());
+    }
+
+    #[test]
+    fn speed_task_local_rotational_unknown_is_not_parallel() {
+        // What the kernel does not tell is `None`, which the engine treats
+        // as "not flash": no parallel ranges (`local::parallel_allowed`).
+        let root = tempfile::tempdir().expect("temp dir");
+        assert_eq!(super::rotational_in(root.path(), "8:0"), None, "no device");
+        let disk = root.path().join("8:0/queue");
+        std::fs::create_dir_all(&disk).expect("device folder");
+        std::fs::write(disk.join("rotational"), "garbage\n").expect("write");
+        assert_eq!(super::rotational_in(root.path(), "8:0"), None, "bad value");
+        std::fs::write(disk.join("rotational"), "0\n").expect("write");
+        assert_eq!(super::rotational_in(root.path(), "8:0"), Some(false));
+        std::fs::write(disk.join("rotational"), "1\n").expect("write");
+        assert_eq!(super::rotational_in(root.path(), "8:0"), Some(true));
+        // A partition reads its parent device's file (`<id>/../queue`).
+        let parent = root.path().join("parent");
+        std::fs::create_dir_all(parent.join("queue")).expect("parent");
+        std::fs::write(parent.join("queue/rotational"), "0\n").expect("write");
+        std::fs::create_dir_all(parent.join("sda1")).expect("partition");
+        std::fs::write(parent.join("sda1/partition"), "1\n").expect("write");
+        let link = root.path().join("8:1");
+        std::os::unix::fs::symlink(parent.join("sda1"), &link).expect("symlink");
+        assert_eq!(super::rotational_in(root.path(), "8:1"), Some(false));
+        // No block device behind the path (or a missing one): unknown.
+        assert_eq!(
+            super::volume_is_rotational(std::path::Path::new("/nonexistent/dir/x")),
+            None
+        );
     }
 
     #[test]

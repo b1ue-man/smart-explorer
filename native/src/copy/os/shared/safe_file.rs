@@ -30,6 +30,9 @@ pub(crate) struct LocalRequest<'a> {
     pub conflict: Conflict,
     pub mode: CopyMode,
     pub cancel: &'a AtomicBool,
+    /// Threads that may copy this one file's byte ranges at once (1 = one).
+    /// Only a new copy uses more: moves and replacements stay at one.
+    pub parallel: usize,
 }
 
 #[derive(Debug)]
@@ -167,6 +170,7 @@ pub(crate) fn transfer_local(
         request.cancel,
         durable,
         request.conflict == Conflict::Overwrite,
+        if durable { 1 } else { request.parallel.max(1) },
         progress,
     ) {
         Ok(Some(staged)) => staged,
@@ -397,6 +401,7 @@ pub(super) fn transfer_file(
         conflict,
         mode,
         cancel,
+        parallel: 1,
     };
     match transfer_local(&request, &mut |_| {}) {
         Ok(LocalOutcome::Completed { .. }) => Ok(TransferResult::Completed),
