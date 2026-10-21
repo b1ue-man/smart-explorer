@@ -1,8 +1,9 @@
 use super::channel_pool::{note_failure, ChannelPool};
-use super::config::SftpConfig;
+use super::config::{SftpConfig, SftpLoginOrigin};
 use super::connection::{SftpConnection, SftpGeneration};
-use super::io_adapters::{seek_start, Commit, SftpReader, SftpWriter};
+use super::io_adapters::Commit;
 use super::io_err;
+use super::link_rules::plan;
 use super::metadata::{basename, to_vfs};
 use super::pool_writer::SizedWriter;
 use crate::vfs::{
@@ -32,15 +33,31 @@ pub struct SftpBackend {
 }
 
 impl SftpBackend {
+    /// A connection whose login a person may have typed into: no extra SSH
+    /// connections for transfers (`connect_with_origin`).
     pub fn connect(cfg: SftpConfig) -> io::Result<SftpBackend> {
+        Self::connect_with_origin(cfg, SftpLoginOrigin::Interactive)
+    }
+
+    /// Like `connect`, with how the credentials of `cfg` were obtained. When
+    /// the main login needed no input (`SftpLoginOrigin`), transfers may add
+    /// extra SSH connections of the same account, one at a time while the
+    /// throughput still rises (security answer E13-S15).
+    pub fn connect_with_origin(
+        cfg: SftpConfig,
+        origin: SftpLoginOrigin,
+    ) -> io::Result<SftpBackend> {
         let url = format!("sftp://{}@{}:{}{}", cfg.user, cfg.host, cfg.port, cfg.root);
         let root = cfg.root.clone();
+        let (host, port, user) = (cfg.host.clone(), cfg.port, cfg.user.clone());
+        let login = plan(&cfg.auth, origin);
         let connection = SftpConnection::connect(cfg)?;
         let rt = connection.runtime();
+        let pool = ChannelPool::create(&connection, &host, port, &user, login);
         Ok(SftpBackend {
             rt,
             connection,
-            pool: Arc::new(ChannelPool::default()),
+            pool,
             stage_folders: Arc::new(Mutex::new(HashMap::new())),
             root,
             url,
@@ -113,47 +130,6 @@ impl SftpBackend {
         operation(&generation).map_err(|error| {
             self.connection.note_sftp_error(&generation, &error);
             io_err(error)
-        })
-    }
-
-    /// The main-session reader: used when no pool channel is available.
-    fn open_main_reader(&self, path: &str, start: u64) -> io::Result<SftpReader> {
-        let (generation, mut file) = self.safe_sftp_on(|generation| {
-            self.rt.block_on(generation.sftp().open(path.to_string()))
-        })?;
-        self.rt.block_on(seek_start(&mut file, start))?;
-        Ok(SftpReader {
-            rt: self.rt.clone(),
-            connection: self.connection.clone(),
-            generation,
-            path: path.to_string(),
-            file,
-            start,
-            delivered: 0,
-            retried: false,
-        })
-    }
-
-    fn open_main_writer(
-        &self,
-        path: &str,
-        flags: OpenFlags,
-        commit: Commit,
-    ) -> io::Result<SftpWriter> {
-        let generation = self.connection.current()?;
-        let file = self
-            .rt
-            .block_on(generation.sftp().open_with_flags(path.to_string(), flags))
-            .map_err(|error| {
-                self.connection.note_sftp_error(&generation, &error);
-                io_err(error)
-            })?;
-        Ok(SftpWriter {
-            rt: self.rt.clone(),
-            connection: self.connection.clone(),
-            generation,
-            file: Some(file),
-            commit,
         })
     }
 
@@ -270,15 +246,17 @@ impl Backend for SftpBackend {
         self.reader(path, offset).map(Some)
     }
 
-    /// Ranges of one file go over several pool channels, each with its own
-    /// server window; true while the pool can hand out a channel.
+    /// Ranges of one file go over several pool channels (and extra SSH
+    /// connections), each with its own server window; true while the pool
+    /// can hand out a channel.
     fn supports_range_reads(&self, path: &str) -> bool {
         let _ = path;
         self.pool.available(self)
     }
 
-    /// `[offset, offset + len)` on a pool channel of its own. No fallback to
-    /// the main session: several ranges must not share the one session.
+    /// `[offset, offset + len)` on a pool channel of its own, a shared one or,
+    /// only when the pool can hold no channel, over the main session: a
+    /// range never fails for lack of a channel (main_range.rs).
     fn open_read_range(
         &self,
         path: &str,
@@ -287,9 +265,7 @@ impl Backend for SftpBackend {
         len: u64,
     ) -> VfsResult<Option<Box<dyn Read + Send>>> {
         let _ = id;
-        Ok(self
-            .open_pool_reader_range(path, offset, len)?
-            .map(|reader| Box::new(reader) as Box<dyn Read + Send>))
+        self.read_range(path, offset, len).map(Some)
     }
 
     /// Ranges of an upload over several pool channels, only where the
@@ -439,6 +415,19 @@ impl Backend for SftpBackend {
 
     fn get_batch(&self, items: &[BatchGet], sink: &mut dyn BatchSink) -> VfsResult<()> {
         super::batch_get::run(self, items, sink)
+    }
+
+    /// The connections in use, or the 15-minute block of extra connections
+    /// (E13-S15); `None` with one connection and no block.
+    fn transfer_hint(&self) -> Option<String> {
+        self.pool.hint()
+    }
+
+    /// Transfers the channels carry at once once the server's session limit
+    /// is known, so the flow control does not climb into refusals.
+    fn transfer_ceiling(&self, path: &str) -> Option<usize> {
+        let _ = path;
+        self.pool.capacity()
     }
 
     fn parallelism(&self) -> usize {

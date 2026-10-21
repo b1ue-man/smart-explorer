@@ -42,7 +42,10 @@ impl ReadSource for ChannelFile {
 
     fn wait(&mut self, pending: Self::Pending) -> (io::Result<Reply>, Instant) {
         match self.rt.block_on(pending) {
-            Ok((Ok(data), arrived)) => (Ok(Reply::Data(data.data)), arrived),
+            Ok((Ok(data), arrived)) => {
+                self.channel.moved(data.data.len() as u64);
+                (Ok(Reply::Data(data.data)), arrived)
+            }
             Ok((Err(SftpError::Status(status)), arrived))
                 if status.status_code == StatusCode::Eof =>
             {
@@ -128,9 +131,11 @@ impl SftpBackend {
     }
 
     /// A pipelined read of exactly `[offset, offset + len)` (fewer only at
-    /// the end of the file) on its own pool channel; `None` when no pool
-    /// channel is available. The main session is no fallback: several
-    /// ranges must not share the one session.
+    /// the end of the file) on a pool channel: an own one while the pool can
+    /// open one, else a shared one or, after a wait, the first that frees up
+    /// (`ChannelPool::lease_range`). `None` only when the pool can hold no
+    /// channel at all; the caller then reads the range over the main session
+    /// (main_range.rs).
     pub(super) fn open_pool_reader_range(
         &self,
         path: &str,
@@ -167,7 +172,11 @@ impl SftpBackend {
     ) -> io::Result<Option<PipelinedRead<ChannelFile>>> {
         let mut retried = false;
         loop {
-            let Some(lease) = self.pool.lease(self)? else {
+            let leased = match end {
+                Some(_) => self.pool.lease_range(self)?,
+                None => self.pool.lease(self)?,
+            };
+            let Some(lease) = leased else {
                 return Ok(None);
             };
             let channel = lease.channel().clone();

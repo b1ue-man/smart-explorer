@@ -53,10 +53,15 @@ impl SegmentIo for DownloadIo<'_> {
         stop: &AtomicBool,
     ) -> Result<SegmentTiming, SegmentError> {
         let began = Instant::now();
-        let opened = self
-            .source
-            .open_read_range(&self.path, self.id.as_deref(), start, len)
-            .map_err(|error| SegmentError::Failed(OpError::source(error)))?;
+        let opened = segments::open_range(
+            self.source,
+            &self.path,
+            self.id.as_deref(),
+            start,
+            len,
+            &self.opened,
+        )
+        .map_err(|error| SegmentError::Failed(OpError::source(error)))?;
         let Some(mut reader) = opened else {
             return Err(if self.opened.load(Ordering::Acquire) {
                 SegmentError::Failed(OpError::source(io::Error::new(

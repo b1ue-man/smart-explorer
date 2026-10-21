@@ -21,6 +21,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 
 use super::super::config::{SftpAuth, SftpConfig};
 use super::super::io_err;
+use super::super::link_rules::ExtraLogin;
 use super::super::ssh_agent;
 use super::Client;
 
@@ -29,7 +30,9 @@ pub(super) async fn authenticate(
     cfg: &SftpConfig,
 ) -> io::Result<bool> {
     match &cfg.auth {
-        SftpAuth::Password(secret) => password_login(session, &cfg.user, secret).await,
+        SftpAuth::Password(secret) => {
+            Ok(password_login(session, &cfg.user, secret).await?.is_some())
+        }
         SftpAuth::Key { path, passphrase } => {
             key_file_login(session, &cfg.user, path, passphrase.as_deref()).await
         }
@@ -37,23 +40,51 @@ pub(super) async fn authenticate(
     }
 }
 
-async fn password_login(
-    session: &mut client::Handle<Client>,
+/// The method that logged in (`password`, or `keyboard-interactive` for a
+/// PAM server that refuses `password`), `None` when the server refused.
+async fn password_login<H: client::Handler>(
+    session: &mut client::Handle<H>,
     user: &str,
     password: &str,
-) -> io::Result<bool> {
+) -> io::Result<Option<&'static str>> {
     match session
         .authenticate_password(user, password)
         .await
         .map_err(io_err)?
     {
-        AuthResult::Success => Ok(true),
+        AuthResult::Success => Ok(Some("password")),
         AuthResult::Failure {
             remaining_methods, ..
         } if remaining_methods.contains(&MethodKind::KeyboardInteractive) => {
-            keyboard_interactive(session, user, password).await
+            Ok(keyboard_interactive(session, user, password)
+                .await?
+                .then_some("keyboard-interactive"))
         }
-        AuthResult::Failure { .. } => Ok(false),
+        AuthResult::Failure { .. } => Ok(None),
+    }
+}
+
+/// The login of an extra connection (security answer E13-S15 (i)): the
+/// password is read from the sealed store for this login and dropped right
+/// after it (`password`, or `keyboard-interactive` under the rules below:
+/// one hidden password prompt, a fixed number of rounds; any other question
+/// is a refusal); a key file uses the decrypted key of the main login. No
+/// prompt for the person, never the SSH agent. `None`: the server refused.
+pub(in crate::sftp) async fn login_extra<H: client::Handler>(
+    session: &mut client::Handle<H>,
+    user: &str,
+    login: &ExtraLogin,
+) -> io::Result<Option<&'static str>> {
+    match login {
+        ExtraLogin::Password(source) => {
+            let secret = source()?;
+            let method = password_login(session, user, &secret).await;
+            drop(secret);
+            method
+        }
+        ExtraLogin::Key { path, key } => Ok(key_login(session, user, path, key.clone())
+            .await?
+            .then_some("publickey")),
     }
 }
 
@@ -100,8 +131,8 @@ impl KeyboardInteractiveAnswers {
 /// Answers prompts that ask for the password (no echo, "password" in the
 /// prompt text) with the stored password of this connection, at most once;
 /// any other question ends the attempt (`KeyboardInteractiveAnswers`).
-async fn keyboard_interactive(
-    session: &mut client::Handle<Client>,
+async fn keyboard_interactive<H: client::Handler>(
+    session: &mut client::Handle<H>,
     user: &str,
     password: &str,
 ) -> io::Result<bool> {
@@ -148,6 +179,17 @@ async fn key_file_login(
     passphrase: Option<&str>,
 ) -> io::Result<bool> {
     let key = Arc::new(russh::keys::load_secret_key(path, passphrase).map_err(io_err)?);
+    key_login(session, user, path, key).await
+}
+
+/// Login with an already decrypted key and, when `<path>-cert.pub` exists,
+/// its OpenSSH user certificate first.
+async fn key_login<H: client::Handler>(
+    session: &mut client::Handle<H>,
+    user: &str,
+    path: &str,
+    key: Arc<russh::keys::PrivateKey>,
+) -> io::Result<bool> {
     if let Ok(certificate) = russh::keys::load_openssh_certificate(format!("{path}-cert.pub")) {
         if session
             .authenticate_openssh_cert(user, key.clone(), certificate)
@@ -166,7 +208,7 @@ async fn key_file_login(
         .success())
 }
 
-async fn rsa_hash(session: &client::Handle<Client>) -> io::Result<Option<HashAlg>> {
+async fn rsa_hash<H: client::Handler>(session: &client::Handle<H>) -> io::Result<Option<HashAlg>> {
     Ok(session
         .best_supported_rsa_hash()
         .await

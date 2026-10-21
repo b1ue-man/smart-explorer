@@ -28,6 +28,8 @@ type WriteTask = JoinHandle<(Result<Status, SftpError>, Instant)>;
 struct InflightWrite {
     sent: Instant,
     full: bool,
+    /// Bytes of the WRITE, counted once it is acknowledged.
+    bytes: u64,
     task: WriteTask,
 }
 
@@ -98,6 +100,7 @@ impl PoolWriter {
         self.inflight.push_back(InflightWrite {
             sent: Instant::now(),
             full,
+            bytes: length,
             task,
         });
         self.offset = offset.saturating_add(length);
@@ -115,6 +118,7 @@ impl PoolWriter {
             Ok((Ok(_), arrived)) => {
                 self.pipeline
                     .answered(arrived.saturating_duration_since(write.sent), write.full);
+                self.channel.moved(write.bytes);
                 Ok(())
             }
             Ok((Err(error), _)) => {
@@ -302,7 +306,13 @@ impl SftpBackend {
         commit: Commit,
         check: Option<HandleCheck>,
     ) -> io::Result<Option<PoolWriter>> {
-        let Some(lease) = self.pool.lease(self)? else {
+        // A range (it comes with the handle check) never fails for lack of a
+        // channel; a stream without one goes over the main session.
+        let leased = match check {
+            Some(_) => self.pool.lease_range(self)?,
+            None => self.pool.lease(self)?,
+        };
+        let Some(lease) = leased else {
             return Ok(None);
         };
         let channel = lease.channel().clone();

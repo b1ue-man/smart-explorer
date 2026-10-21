@@ -1,4 +1,5 @@
 use super::config::SftpConfig;
+use super::host_key::UnknownHostKey;
 use super::session::{connect_async, Client};
 #[path = "reconnect_gate.rs"]
 mod reconnect_gate;
@@ -25,6 +26,9 @@ pub(super) type SftpMetadataFuture<'a, T> =
 pub(super) struct SftpTransport {
     session: client::Handle<Client>,
     sftp: Arc<SftpSession>,
+    /// The host key this connection showed and the trust store accepted;
+    /// extra connections must show the same one.
+    host_key: Option<UnknownHostKey>,
 }
 
 pub(super) type SftpGeneration = Generation<SftpTransport>;
@@ -36,6 +40,11 @@ impl SftpGeneration {
 
     pub(super) fn sftp(&self) -> &SftpSession {
         &self.value().sftp
+    }
+
+    /// The accepted host key of this connection (algorithm and fingerprint).
+    pub(super) fn host_key(&self) -> Option<&UnknownHostKey> {
+        self.value().host_key.as_ref()
     }
 }
 
@@ -176,10 +185,12 @@ fn runtime_workers() -> usize {
 }
 
 fn connect_transport(runtime: &Runtime, config: &SftpConfig) -> io::Result<SftpTransport> {
-    let (session, sftp) = block_on_connect(runtime, SFTP_CONNECT_DEADLINE, connect_async(config))?;
+    let (session, sftp, host_key) =
+        block_on_connect(runtime, SFTP_CONNECT_DEADLINE, connect_async(config))?;
     Ok(SftpTransport {
         session,
         sftp: Arc::new(sftp),
+        host_key,
     })
 }
 
@@ -188,7 +199,7 @@ fn connect_transport_until(
     config: &SftpConfig,
     deadline: AbsoluteDeadline,
 ) -> io::Result<SftpTransport> {
-    let (session, sftp) = block_on_absolute(
+    let (session, sftp, host_key) = block_on_absolute(
         runtime,
         deadline,
         "transport reconnect",
@@ -197,6 +208,7 @@ fn connect_transport_until(
     Ok(SftpTransport {
         session,
         sftp: Arc::new(sftp),
+        host_key,
     })
 }
 

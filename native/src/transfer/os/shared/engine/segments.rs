@@ -17,7 +17,7 @@ use super::queue::Work;
 use super::{lock, Engine};
 use crate::vfs::Backend;
 use std::collections::HashMap;
-use std::io;
+use std::io::{self, Read};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -39,6 +39,31 @@ pub(super) enum SegmentError {
     /// ranges, the file goes as one stream.
     Fallback,
     Failed(OpError),
+}
+
+/// Opens `[start, start + len)` of a source for one part. A source that
+/// answers `None` after an earlier part of the file was served (its range
+/// reading is busy or gone for now) still reads from an offset: the part goes
+/// that way and is cut after `len` bytes, instead of failing the file.
+/// `None` only when the source cannot read from an offset either; before the
+/// first part that means "go as one stream" (the caller decides, `opened`).
+pub(super) fn open_range(
+    source: &dyn Backend,
+    path: &str,
+    id: Option<&str>,
+    start: u64,
+    len: u64,
+    opened: &AtomicBool,
+) -> io::Result<Option<Box<dyn Read + Send>>> {
+    if let Some(reader) = source.open_read_range(path, id, start, len)? {
+        return Ok(Some(reader));
+    }
+    if !opened.load(Ordering::Acquire) {
+        return Ok(None);
+    }
+    Ok(source
+        .open_read_at(path, id, start)?
+        .map(|reader| Box::new(reader.take(len)) as Box<dyn Read + Send>))
 }
 
 /// Moves one part between the endpoints.

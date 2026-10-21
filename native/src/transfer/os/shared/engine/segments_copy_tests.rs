@@ -96,3 +96,84 @@ fn speed_task_segments_copy_prefers_server_copy() {
         pattern(SIZE)
     );
 }
+
+/// A source whose range reading answers `None` (every channel busy, or the
+/// pool gone for now) but that reads from an offset, as SFTP does.
+struct ReadsAtOffset;
+
+const MEMORY: &[u8] = b"0123456789abcdef";
+
+impl crate::vfs::Backend for ReadsAtOffset {
+    fn scheme(&self) -> crate::vfs::Scheme {
+        crate::vfs::Scheme::Local
+    }
+    fn root_display(&self) -> String {
+        "/".into()
+    }
+    fn list_dir(&self, _path: &str) -> crate::vfs::VfsResult<Vec<crate::vfs::VfsMeta>> {
+        Ok(Vec::new())
+    }
+    fn stat(&self, _path: &str) -> crate::vfs::VfsResult<crate::vfs::VfsMeta> {
+        Err(std::io::ErrorKind::NotFound.into())
+    }
+    fn open_read(&self, _path: &str) -> crate::vfs::VfsResult<Box<dyn std::io::Read + Send>> {
+        Ok(Box::new(std::io::Cursor::new(MEMORY)))
+    }
+    fn open_write(&self, _path: &str) -> crate::vfs::VfsResult<Box<dyn std::io::Write + Send>> {
+        Ok(Box::new(std::io::sink()))
+    }
+    fn rename(&self, _src: &str, _dst: &str) -> crate::vfs::VfsResult<()> {
+        Ok(())
+    }
+    fn remove_file(&self, _path: &str) -> crate::vfs::VfsResult<()> {
+        Ok(())
+    }
+    fn remove_dir(&self, _path: &str) -> crate::vfs::VfsResult<()> {
+        Ok(())
+    }
+    fn mkdir_all(&self, _path: &str) -> crate::vfs::VfsResult<()> {
+        Ok(())
+    }
+    fn open_read_at(
+        &self,
+        _path: &str,
+        _id: Option<&str>,
+        offset: u64,
+    ) -> crate::vfs::VfsResult<Option<Box<dyn std::io::Read + Send>>> {
+        let mut cursor = std::io::Cursor::new(MEMORY);
+        cursor.set_position(offset);
+        Ok(Some(Box::new(cursor)))
+    }
+    fn open_read_range(
+        &self,
+        _path: &str,
+        _id: Option<&str>,
+        _offset: u64,
+        _len: u64,
+    ) -> crate::vfs::VfsResult<Option<Box<dyn std::io::Read + Send>>> {
+        Ok(None)
+    }
+}
+
+#[test]
+fn speed_task_sftp_engine_range_follows_offset_read_after_the_first_part() {
+    use std::io::Read;
+    let source = ReadsAtOffset;
+    let opened = std::sync::atomic::AtomicBool::new(false);
+    // Before any part was served the source "cannot read ranges": the file
+    // goes as one stream (the caller's fallback).
+    assert!(
+        super::super::segments::open_range(&source, "f", None, 4, 5, &opened)
+            .expect("no error")
+            .is_none()
+    );
+    // Afterwards a part never fails the file for it: it reads from its offset
+    // and stops after `len` bytes.
+    opened.store(true, Ordering::SeqCst);
+    let mut reader = super::super::segments::open_range(&source, "f", None, 4, 5, &opened)
+        .expect("no error")
+        .expect("a reader from the offset");
+    let mut bytes = Vec::new();
+    reader.read_to_end(&mut bytes).expect("read");
+    assert_eq!(bytes, b"45678");
+}

@@ -119,8 +119,9 @@ pub(super) trait StageWire: Clone + Send + Sync + 'static {
     fn verdict(&self, parent: &str) -> Option<bool>;
     fn remember(&self, parent: &str, safe: bool);
     /// Writer for exactly `[offset, offset + len)` of the existing `stage`,
-    /// on a channel of its own, after the handle passed `check`: `flush`
-    /// fails unless `len` bytes came.
+    /// on a pool channel (own or shared; the main session only when the pool
+    /// can hold none) after the handle passed `check`: `flush` fails unless
+    /// `len` bytes came.
     fn range_writer(
         &self,
         stage: &str,
@@ -341,10 +342,14 @@ impl StageWire for SftpBackend {
             .map_err(|error| self.target_error(stage, error))?;
         match opened {
             Some(writer) => Ok(self.target_writer(stage, Box::new(writer))),
-            None => Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "Kein SFTP-Übertragungskanal für einen Bereich verfügbar",
-            )),
+            // Only when the pool can hold no channel at all (it shares or
+            // waits otherwise): the range goes over the main session.
+            None => {
+                let writer = self
+                    .main_range_writer(stage, offset, len, check)
+                    .map_err(|error| self.target_error(stage, error))?;
+                Ok(self.target_writer(stage, writer))
+            }
         }
     }
 
