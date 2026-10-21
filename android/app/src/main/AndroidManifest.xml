@@ -162,6 +162,14 @@
             </intent-filter>
         </service>
 
+        <!-- DSK-M13 (U40): the main process's end of the launcher bridge. Bound by the launcher process (`:launcher`) over a
+             Messenger, for the devices of the tiles and the two global actions of the gestures. Not exported (only this
+             app's processes bind it), off and on with the launcher (LauncherParts), in the main process (no android:process). -->
+        <service
+            android:name=".service.LauncherBridgeService"
+            android:enabled="false"
+            android:exported="false" />
+
         <!-- Transfers, "run now" sync runs and the Google sign-in while the UI was left -->
         <service
             android:name=".service.TaskForegroundService"

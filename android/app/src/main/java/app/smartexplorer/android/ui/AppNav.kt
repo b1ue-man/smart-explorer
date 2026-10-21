@@ -166,6 +166,12 @@ object AppNav {
         NavRequest.ShowLauncherSettings -> "showLauncherSettings" to null
     }
 
+    /**
+     * The token of this installation for the service that hands it to the launcher process (`LauncherBridgeService`,
+     * U40-12). Main process only: the process `:launcher` never calls it (U35-16); it gets the token from the `DEVICES` message.
+     */
+    internal fun tokenFor(context: Context): String = token(context)
+
     /** Random per-installation secret in app-private preferences. */
     private fun token(context: Context): String = synchronized(lock) {
         val prefs = context.applicationContext.getSharedPreferences(TOKEN_PREFS, Context.MODE_PRIVATE)
