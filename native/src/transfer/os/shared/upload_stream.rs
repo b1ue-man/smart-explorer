@@ -82,7 +82,7 @@ impl UploadSource {
     ) -> Result<(), String> {
         let expected = self.before.length;
         let mut copied = 0u64;
-        let mut buffer = [0u8; 64 * 1024];
+        let mut buffer = vec![0u8; super::read_pipeline::STREAM_BLOCK];
         loop {
             super::cancel::check_optional(cancel)?;
             // At most one byte beyond the opened length: a growing file cannot

@@ -18,7 +18,7 @@ struct RemoteDownloadRoot {
     omitted: u64,
 }
 
-fn download_collected_file(
+pub(super) fn download_collected_file(
     be: &dyn crate::vfs::Backend,
     file: &super::entries::RemoteFileEntry,
     dest: &Path,
@@ -128,11 +128,7 @@ fn download_remote_dir_for_clipboard(
         std::fs::create_dir_all(local_dir.join(dir.replace('/', std::path::MAIN_SEPARATOR_STR)))
             .map_err(|e| e.to_string())?;
     }
-    for file in &root.files {
-        let dest = local_dir.join(file.rel.replace('/', std::path::MAIN_SEPARATOR_STR));
-        download_collected_file(be, file, &dest)?;
-    }
-    Ok(())
+    super::clipboard_parallel::download_files_parallel(be, &root.files, local_dir)
 }
 
 pub fn download_remote_clipboard_items(
