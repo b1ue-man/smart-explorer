@@ -36,7 +36,7 @@
 #   modul=::a::b:: Pfadbruchstueck fuer art=modul
 #   fixture=a,b   Laeufer-Fixtures mit festem Umgebungsvertrag (rdt_task/common.py):
 #                 share, sftp, bus, xvfb, nodisplay, home, runtime-tmpfs, fuse,
-#                 fuse-timeout, dokany, node, sudo (common.py); interop, keep, marker (vault.py)
+#                 fuse-timeout, dokany, own-suite, sudo (common.py); interop, keep, marker (vault.py)
 #   skript=PFAD   Pruefskript fuer art=skript
 #   paket=Uxx     Paket, das den Test bringt (Pflicht in [noch nicht umgesetzt]);
 #                 "offen" = kein Paket benannt
@@ -200,9 +200,9 @@ drive_task_windows_host_unreachable_maps_1232             windows-core:drive-dok
 drive_task_host_session_update_stop_unmounts_and_exits    windows-core:drive-dokany-regression  ignored threads=1 fixture=dokany  pfad=mount::os::windows::host::host_session_windows::drive_task_host_session_update_stop_unmounts_and_exits  quelle=D3-DRV-M2,Uebergabe-U02
 
 # ---- S2 Windows-Bestandsharnesses (DRV-M2, D3-Erhaltung S2): Dateiname -> Modulpfad ----
-mounted_volume_task_tests          windows-core:drive-dokany-regression  art=modul modul=::host::mount_batching_task:: fixture=dokany threads=1 env=SMART_EXPLORER_MOUNT_TASK_LOG_ROOT={tmp} env=SMART_EXPLORER_MOUNT_CHECKER={native}/verify-mount-windows.ps1  quelle=L243,D3-Erhaltung-S2
-optimization_volume_tests          windows-core:drive-dokany-regression  art=modul modul=::host::optimization_task:: fixture=dokany,node threads=1 env=SMART_EXPLORER_MOUNT_TASK_LOG_ROOT={tmp} env=SMART_EXPLORER_MOUNT_CHECKER={native}/verify-mount-windows.ps1 env=SMART_EXPLORER_MOUNT_VAULT_NODE_SCRIPT={native}/mount-vault-node.cjs  quelle=L243,D3-Erhaltung-S2
-windows_remote_volume_task_tests   windows-core:drive-dokany-regression  art=modul modul=::host::windows_remote_task:: fixture=dokany,home threads=1 env=SMART_EXPLORER_WINDOWS_REMOTE_TASK=1  quelle=L243,D3-Erhaltung-S2
+mounted_volume_task_tests          windows-core:drive-dokany-regression  art=modul modul=::host::mount_batching_task:: fixture=dokany,own-suite threads=1  quelle=L243,D3-Erhaltung-S2
+optimization_volume_tests          windows-core:drive-dokany-regression  art=modul modul=::host::optimization_task:: fixture=dokany,own-suite threads=1  quelle=L243,D3-Erhaltung-S2
+windows_remote_volume_task_tests   windows-core:drive-dokany-regression  art=modul modul=::host::windows_remote_task:: fixture=dokany,own-suite threads=1  quelle=L243,D3-Erhaltung-S2
 recovery_cache_task_tests          windows-core:drive-dokany-regression  art=modul modul=::recovery_cache_task_tests:: fixture=dokany threads=1  quelle=L243,D3-Erhaltung-S2
 mount_options_task_tests           windows-core:drive-dokany-regression  art=modul modul=::dokany_abi::mount_batching_task:: fixture=dokany threads=1  quelle=L243,D3-Erhaltung-S2
 
