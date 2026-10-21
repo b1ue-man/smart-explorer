@@ -42,13 +42,19 @@ fn next_event(listener: &GnomeListener) -> Option<ListenerEvent> {
     None
 }
 
-/// The connection is closed by the listener (end of stream).
+/// The connection is closed by the listener: the end of the stream, or the
+/// reset the kernel reports when the listener closed it with a frame it never
+/// read (a refusal before the greeting is read, as for another user). A read
+/// that merely times out, or that returns data, is not a closed connection.
 fn closed(stream: &mut UnixStream) -> bool {
     stream
         .set_read_timeout(Some(Duration::from_secs(2)))
         .unwrap();
     let mut byte = [0u8; 1];
-    matches!(stream.read(&mut byte), Ok(0))
+    match stream.read(&mut byte) {
+        Ok(read) => read == 0,
+        Err(error) => error.kind() == std::io::ErrorKind::ConnectionReset,
+    }
 }
 
 #[test]

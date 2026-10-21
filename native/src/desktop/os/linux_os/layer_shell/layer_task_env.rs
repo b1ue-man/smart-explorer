@@ -130,7 +130,13 @@ impl Sway {
             .tempdir()
             .unwrap();
         let config = runtime.path().join("config");
-        std::fs::write(&config, "default_border none\n").unwrap();
+        // The test window floats at its own size, so the layer surface stays
+        // visible around it (a tiled window would fill the whole output).
+        std::fs::write(
+            &config,
+            "default_border none\nfor_window [app_id=\"app.smartexplorer.desktop\"] floating enable\n",
+        )
+        .unwrap();
         let child = Command::new(sway)
             .arg("-c")
             .arg(&config)
@@ -337,6 +343,12 @@ impl SurfaceProcess {
 
     pub(super) fn running(&mut self) -> bool {
         matches!(self.child.try_wait(), Ok(None))
+    }
+
+    /// Ends the process (if it still runs) and gives its exit status.
+    pub(super) fn stop(&mut self) -> Option<ExitStatus> {
+        let _ = self.child.kill();
+        self.child.wait().ok()
     }
 
     /// What the process wrote on stderr (read after it ended).
