@@ -96,6 +96,7 @@ fn facts(source: EntryKind) -> Eligibility {
         parent_is_plain_dir: true,
         disjoint: true,
         name_ok: true,
+        access_prompt_possible: false,
     }
 }
 
@@ -118,6 +119,8 @@ fn finished(issues: Vec<TransferIssue>) -> Finished {
     }
 }
 
+#[path = "engine_copy_guard_tests.rs"]
+mod guard;
 #[path = "engine_copy_settle_tests.rs"]
 mod settle;
 

@@ -1,3 +1,4 @@
+use super::engine_copy::with_legacy_path;
 use super::ops::{copy, move_path};
 use super::target::Target;
 use crate::vfs::{Backend, BackendHandle, LocalBackend, Scheme, VfsMeta, VfsResult};
@@ -27,9 +28,11 @@ fn late_source_stat_failure_leaves_destination_untouched() {
 
     let error = copy_between(&source, &destination, false).unwrap_err();
 
+    // On the engine the file whose metadata cannot be confirmed is reported
+    // and never published; the other files of the tree stay (U49-4).
     assert!(error.contains("synthetic late stat failure"), "{error}");
-    assert!(!fs::exists(&destination).unwrap());
-    assert_eq!(source.reads.load(Ordering::Relaxed), 0);
+    assert!(error.contains("1 files failed"), "{error}");
+    assert!(!fs::exists(format!("{destination}/late.txt")).unwrap());
 }
 
 #[test]
@@ -51,7 +54,10 @@ fn over_depth_tree_fails_before_destination_mutation() {
     let destination = temp.path("destination");
     let source = Arc::new(TreeSource::new(Fault::TooDeep));
 
-    let error = copy_between(&source, &destination, false).unwrap_err();
+    // The engine stops at the same depth (`MAX_WALK_DEPTH` = 512, `walk.rs`),
+    // but it would create 512 nested folders first; this test keeps checking
+    // the older path's preflight, which refuses before anything is created.
+    let error = with_legacy_path(|| copy_between(&source, &destination, false)).unwrap_err();
 
     assert!(error.contains("exceeds 512 levels"), "{error}");
     assert!(!fs::exists(&destination).unwrap());
@@ -88,8 +94,14 @@ fn source_drift_during_spooling_leaves_destination_untouched() {
 
     let error = copy_between(&source, &destination, false).unwrap_err();
 
-    assert!(error.contains("type, identity, or size changed"), "{error}");
-    assert!(!fs::exists(&destination).unwrap());
+    // On the engine the file that changed while it was read is checked
+    // against its listing before publication (`unchanged_since_listing`) and
+    // is never published; the unchanged files of the tree stay (U49-4).
+    assert!(
+        error.contains("Quelle wurde während der Übertragung geändert"),
+        "{error}"
+    );
+    assert!(!fs::exists(format!("{destination}/late.txt")).unwrap());
 }
 
 #[test]
