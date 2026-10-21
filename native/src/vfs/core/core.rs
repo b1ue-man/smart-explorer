@@ -12,6 +12,11 @@ pub use super::meta::{
 };
 pub use super::scheme::Scheme;
 
+/// A byte stream a backend hands out for reading.
+pub type ReadStream = Box<dyn Read + Send>;
+/// A byte sink a backend hands out for writing.
+pub type WriteStream = Box<dyn Write + Send>;
+
 /// The storage interface. One implementation per protocol. `Send + Sync` so a
 /// single handle can be shared across rayon workers / scan + copy threads.
 pub trait Backend: Send + Sync {
@@ -66,27 +71,25 @@ pub trait Backend: Send + Sync {
     /// Stable backend identity for `path`, when the provider has one. Local
     /// filesystems normally return None; Drive returns the file id.
     fn item_id(&self, path: &str) -> VfsResult<Option<String>> {
-        let _ = path;
-        Ok(None)
+        super::backend_defaults::item_id(path)
     }
 
-    fn open_read(&self, path: &str) -> VfsResult<Box<dyn Read + Send>>;
-    fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>>;
+    fn open_read(&self, path: &str) -> VfsResult<ReadStream>;
+    fn open_write(&self, path: &str) -> VfsResult<WriteStream>;
 
     /// Open a new regular file without replacing, truncating, or adopting an
     /// existing namespace entry. Mounted writes use this for their private
     /// upload staging object so a probe/create race cannot target another
     /// actor's file. Backends must use one protocol/OS exclusive-create call.
-    fn open_write_new(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
-        let _ = path;
-        super::meta::unsupported("backend has no atomic exclusive-create writer")
+    fn open_write_new(&self, path: &str) -> VfsResult<WriteStream> {
+        super::backend_defaults::open_write_new(path)
     }
 
     /// Private copy stage that updates no existing identity: exclusive creation
     /// by default; ID providers may reserve their own ID and verify an
     /// unambiguous path on flush (not a mounted exclusive-create API). Neither
     /// opening nor failure authorizes path cleanup.
-    fn open_write_copy_stage(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
+    fn open_write_copy_stage(&self, path: &str) -> VfsResult<WriteStream> {
         self.open_write_new(path)
     }
 
@@ -98,24 +101,15 @@ pub trait Backend: Send + Sync {
 
     /// Private copy stage of known final length, so spooling providers can
     /// stream; such a writer fails on `flush` unless exactly `size` bytes came.
-    fn open_write_copy_stage_sized(
-        &self,
-        path: &str,
-        size: u64,
-    ) -> VfsResult<Box<dyn Write + Send>> {
-        let _ = size;
-        self.open_write_copy_stage(path)
+    fn open_write_copy_stage_sized(&self, path: &str, size: u64) -> VfsResult<WriteStream> {
+        super::backend_defaults::open_write_copy_stage_sized(self, path, size)
     }
 
     /// Stage for a copy whose source stays (paste, drag, download to a
     /// remote): published by `promote_copy_stage` like any stage, but not
     /// forced to stable storage first (Explorer/cp semantics, spec decision
     /// 1). Sync, mounts and replacements keep `open_write_copy_stage_sized`.
-    fn open_write_copy_stage_unsynced(
-        &self,
-        path: &str,
-        size: u64,
-    ) -> VfsResult<Box<dyn Write + Send>> {
+    fn open_write_copy_stage_unsynced(&self, path: &str, size: u64) -> VfsResult<WriteStream> {
         self.open_write_copy_stage_sized(path, size)
     }
 
@@ -129,16 +123,14 @@ pub trait Backend: Send + Sync {
         size: u64,
         cancel: &std::sync::atomic::AtomicBool,
     ) -> VfsResult<Option<u64>> {
-        let _ = (src, stage, size, cancel);
-        Ok(None)
+        super::backend_defaults::server_copy_to_stage(src, stage, size, cancel)
     }
 
     /// New file inside a folder this transfer created itself, for providers
     /// whose objects appear only complete and never replace (Drive): no stage,
     /// no promotion, exactly `size` bytes. `Ok(None)` = use a copy stage.
-    fn open_write_fresh(&self, path: &str, size: u64) -> VfsResult<Option<Box<dyn Write + Send>>> {
-        let _ = (path, size);
-        Ok(None)
+    fn open_write_fresh(&self, path: &str, size: u64) -> VfsResult<Option<WriteStream>> {
+        super::backend_defaults::open_write_fresh(path, size)
     }
 
     /// Read from byte `offset` to resume an interrupted download; `Ok(None)`
@@ -148,15 +140,13 @@ pub trait Backend: Send + Sync {
         path: &str,
         id: Option<&str>,
         offset: u64,
-    ) -> VfsResult<Option<Box<dyn Read + Send>>> {
-        let _ = (path, id, offset);
-        Ok(None)
+    ) -> VfsResult<Option<ReadStream>> {
+        super::backend_defaults::open_read_at(path, id, offset)
     }
 
     /// Can this path be read in ranges `(offset, len)`? Default: no.
     fn supports_range_reads(&self, path: &str) -> bool {
-        let _ = path;
-        false
+        super::backend_defaults::supports_range_reads(path)
     }
 
     /// Reads exactly `[offset, offset + len)` (fewer only at the end of the
@@ -167,7 +157,7 @@ pub trait Backend: Send + Sync {
         id: Option<&str>,
         offset: u64,
         len: u64,
-    ) -> VfsResult<Option<Box<dyn Read + Send>>> {
+    ) -> VfsResult<Option<ReadStream>> {
         super::ranges::default_open_read_range(self, path, id, offset, len)
     }
 
@@ -178,8 +168,7 @@ pub trait Backend: Send + Sync {
         stage: &str,
         size: u64,
     ) -> VfsResult<Option<Box<dyn super::ranges::SegmentedStage>>> {
-        let _ = (stage, size);
-        Ok(None)
+        super::backend_defaults::open_segmented_stage(stage, size)
     }
 
     /// A fixed limit of this provider worth showing next to a transfer (for
@@ -213,8 +202,7 @@ pub trait Backend: Send + Sync {
     /// not satisfy it because another writer can create `dst` between calls.
     /// Backends without a protocol/OS no-replace primitive stay unsupported.
     fn rename_no_replace(&self, src: &str, dst: &str) -> VfsResult<()> {
-        let _ = (src, dst);
-        super::meta::unsupported("backend has no atomic no-replace rename")
+        super::backend_defaults::rename_no_replace(src, dst)
     }
 
     /// Commit a complete staged file without exposing partial content or
@@ -259,8 +247,7 @@ pub trait Backend: Send + Sync {
     /// Remove a copy stage this client created and never published (abort);
     /// `Unsupported` where ownership of the name cannot be proven.
     fn discard_copy_stage(&self, stage: &str) -> VfsResult<()> {
-        let _ = stage;
-        super::meta::unsupported("stage cleanup unsupported")
+        super::backend_defaults::discard_copy_stage(stage)
     }
 
     /// Semantics of `remove_*`: permanent for most protocols, recoverable for
@@ -277,22 +264,19 @@ pub trait Backend: Send + Sync {
     /// Key of the connection (or local volume) serving `path`; users of one
     /// key share one adaptive concurrency controller. Wrappers forward it.
     fn flow_key(&self, path: &str) -> String {
-        let _ = path;
-        format!("{:?}@{:p}", self.scheme(), self as *const Self as *const ())
+        super::backend_defaults::flow_key(self, path)
     }
 
     /// Stable key of this connection across process restarts (no pointer
     /// addresses): scheme and namespace identity by default.
     fn flow_identity(&self, path: &str) -> String {
-        let _ = path;
-        format!("{:?}|{}", self.scheme(), self.namespace_identity())
+        super::backend_defaults::flow_identity(self, path)
     }
 
     /// Hard bound of concurrent transfer operations the protocol or peer
     /// imposes on this connection; `None` = adaptive control only.
     fn transfer_ceiling(&self, path: &str) -> Option<usize> {
-        let _ = path;
-        None
+        super::backend_defaults::transfer_ceiling(path)
     }
 
     /// Whether a reader and a writer may be open at once; false (FTP) makes
@@ -342,19 +326,13 @@ pub trait Backend: Send + Sync {
 
     /// Open by backend-unique `id` when known (one item among duplicate names);
     /// the default opens by path.
-    fn open_read_id(
-        &self,
-        path: &str,
-        id: Option<&str>,
-    ) -> VfsResult<Box<dyn std::io::Read + Send>> {
-        let _ = id;
-        self.open_read(path)
+    fn open_read_id(&self, path: &str, id: Option<&str>) -> VfsResult<ReadStream> {
+        super::backend_defaults::open_read_id(self, path, id)
     }
 
     /// Delete by backend-unique `id` when known; the default deletes by path.
     fn remove_file_id(&self, path: &str, id: Option<&str>) -> VfsResult<()> {
-        let _ = id;
-        self.remove_file(path)
+        super::backend_defaults::remove_file_id(self, path, id)
     }
 
     /// Plan (without mutating) the exact duplicates a mirror cleanup would
@@ -364,8 +342,7 @@ pub trait Backend: Send + Sync {
         root: &str,
         keep: &dyn Fn(&str) -> bool,
     ) -> VfsResult<Vec<DedupeCandidate>> {
-        let _ = (root, keep);
-        Ok(Vec::new())
+        super::backend_defaults::plan_dedupe_recursive(root, keep)
     }
 
     /// Apply a previously preflighted cleanup plan. ID-addressed backends must
@@ -378,8 +355,7 @@ pub trait Backend: Send + Sync {
     /// each name with several files below `root`, keep only the newest if `keep`
     /// accepts its path, else remove all; singletons untouched. Returns removals.
     fn dedupe_recursive(&self, root: &str, keep: &dyn Fn(&str) -> bool) -> VfsResult<usize> {
-        let plan = self.plan_dedupe_recursive(root, keep)?;
-        self.apply_dedupe_plan(&plan)
+        super::backend_defaults::dedupe_recursive(self, root, keep)
     }
 
     /// Local filesystem (hashing a file is cheap, no network)?
@@ -399,24 +375,18 @@ pub trait Backend: Send + Sync {
 
     /// Stable identity of a sync root, so a saved cursor is trusted only there.
     fn change_root_id(&self, root: &str) -> VfsResult<Option<String>> {
-        let _ = root;
-        Ok(None)
+        super::backend_defaults::change_root_id(root)
     }
 
     /// Cursor for future changes, taken before a bootstrap walk so changes
     /// during the walk replay on the next incremental run.
     fn current_change_cursor(&self, root: &str) -> VfsResult<Option<String>> {
-        let _ = root;
-        Ok(None)
+        super::backend_defaults::current_change_cursor(root)
     }
 
     /// Changes since `cursor`; `reset` = invalid cursor, rebuild from a snapshot.
     fn changes_since(&self, root: &str, cursor: &str) -> VfsResult<VfsChangeBatch> {
-        let _ = (root, cursor);
-        Ok(VfsChangeBatch {
-            reset: true,
-            ..Default::default()
-        })
+        super::backend_defaults::changes_since(root, cursor)
     }
 
     /// Drop any listing cache (explicit refresh; only `CachingBackend` has one).
@@ -453,22 +423,19 @@ pub trait Backend: Send + Sync {
     /// Download the contents of `root` into local `dst` in one session;
     /// returns the number of files written.
     fn get_tree(&self, root: &str, dst: &std::path::Path) -> VfsResult<u64> {
-        let _ = (root, dst);
-        super::meta::unsupported("bulk tree transfer not supported")
+        super::backend_defaults::get_tree(root, dst)
     }
 
     /// Upload the contents of local `src` into `root` in one session; returns
     /// the number of files sent.
     fn put_tree(&self, src: &std::path::Path, root: &str) -> VfsResult<u64> {
-        let _ = (src, root);
-        super::meta::unsupported("bulk tree transfer not supported")
+        super::backend_defaults::put_tree(src, root)
     }
 
     /// Batch limits when this backend (and its peer) move many small whole
     /// files in one round trip for paths below `dir`; `None` = unsupported.
     fn batch_limits(&self, dir: &str) -> Option<BatchLimits> {
-        let _ = dir;
-        None
+        super::backend_defaults::batch_limits(dir)
     }
 
     /// Create every entry as a new file (private stage, no-replace publish,
@@ -479,14 +446,12 @@ pub trait Backend: Send + Sync {
         entries: &[BatchPut],
         data: &mut dyn Read,
     ) -> VfsResult<Vec<BatchPutOutcome>> {
-        let _ = (entries, data);
-        super::meta::unsupported("batch upload not supported")
+        super::backend_defaults::put_batch(entries, data)
     }
 
     /// Read every item and hand it to `sink` in request order.
     fn get_batch(&self, items: &[BatchGet], sink: &mut dyn BatchSink) -> VfsResult<()> {
-        let _ = (items, sink);
-        super::meta::unsupported("batch download not supported")
+        super::backend_defaults::get_batch(items, sink)
     }
 
     /// Recursive search on the server (the agent's `Search`), streaming matches?
@@ -504,8 +469,7 @@ pub trait Backend: Send + Sync {
         tx: crossbeam_channel::Sender<SearchHit>,
         cancel: &std::sync::atomic::AtomicBool,
     ) -> VfsResult<bool> {
-        let _ = (root, spec, tx, cancel);
-        Ok(false)
+        super::backend_defaults::search(root, spec, tx, cancel)
     }
 
     /// Sync signatures (size, mtime, MD5 on demand) in one server-side walk
@@ -524,8 +488,7 @@ pub trait Backend: Send + Sync {
         tx: crossbeam_channel::Sender<HashHit>,
         cancel: &std::sync::atomic::AtomicBool,
     ) -> VfsResult<bool> {
-        let _ = (root, want_hash, tx, cancel);
-        Ok(false)
+        super::backend_defaults::walk_hashed(root, want_hash, tx, cancel)
     }
 }
 

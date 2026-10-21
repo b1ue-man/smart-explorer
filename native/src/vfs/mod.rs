@@ -16,6 +16,8 @@
 //!    the hot local walk. The local fast path stays exactly as it is.
 #![allow(dead_code)] // staged interface: wired in by the SFTP/FTP/connect steps.
 
+#[path = "core/backend_defaults.rs"]
+mod backend_defaults;
 #[path = "core/batch.rs"]
 mod batch;
 #[path = "core/cache.rs"]
