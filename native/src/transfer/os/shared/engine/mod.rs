@@ -33,6 +33,10 @@ mod queue;
 mod remote_copy;
 #[path = "roots.rs"]
 mod roots;
+#[path = "segments.rs"]
+mod segments;
+#[path = "segments_download.rs"]
+mod segments_download;
 #[path = "source.rs"]
 mod source;
 #[path = "stats.rs"]
@@ -189,6 +193,9 @@ pub(crate) struct Engine<'a> {
     breaker: Mutex<Breaker>,
     batch: Option<BatchLimits>,
     sizer: Mutex<BatchSizer>,
+    /// Large files being transferred in parts, by id (helper workers find
+    /// their file here).
+    segments: segments::Registry<'a>,
     /// "Transfer missing files": existing destinations are kept (K8).
     resume: bool,
     /// Source folders of a per-file move whose target folder exists (source
@@ -250,6 +257,7 @@ impl<'a> Engine<'a> {
             breaker: Mutex::new(Breaker::default()),
             batch,
             sizer: Mutex::new(BatchSizer::default()),
+            segments: segments::Registry::new(),
             resume: view.resume.is_some(),
             moved_dirs: Mutex::new(Vec::new()),
             report,
@@ -272,6 +280,7 @@ impl<'a> Engine<'a> {
 
     pub(crate) fn halt(&self) {
         self.stop.store(true, Ordering::Release);
+        self.segments.abort_all();
         self.queue.clear();
     }
 
@@ -433,6 +442,9 @@ fn gate_root(items: &JobItems) -> String {
     }
 }
 
+#[cfg(test)]
+#[path = "segments_tests.rs"]
+mod segments_tests;
 #[cfg(test)]
 #[path = "test_backend.rs"]
 mod test_backend;

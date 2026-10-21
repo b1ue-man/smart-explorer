@@ -355,7 +355,74 @@ impl Backend for LocalBackend {
         file.seek(SeekFrom::Start(offset))?;
         Ok(Some(Box::new(file)))
     }
+    fn supports_range_reads(&self, _path: &str) -> bool {
+        true
+    }
+    fn open_read_range(
+        &self,
+        path: &str,
+        _id: Option<&str>,
+        offset: u64,
+        len: u64,
+    ) -> VfsResult<Option<Box<dyn Read + Send>>> {
+        use std::io::{Seek, SeekFrom};
+        let mut file = self.open_regular(path)?;
+        file.seek(SeekFrom::Start(offset))?;
+        Ok(Some(Box::new(file.take(len))))
+    }
+    fn flow_identity(&self, path: &str) -> String {
+        self.flow_key(path)
+    }
     fn flow_key(&self, path: &str) -> String {
         local_platform::volume_key(path)
+    }
+}
+
+#[cfg(test)]
+mod range_tests {
+    use super::*;
+    use crate::vfs::{BackendHandle, CachingBackend};
+    use std::sync::Arc;
+
+    fn fixture() -> (tempfile::TempDir, String) {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("window.bin");
+        std::fs::write(&path, b"0123456789abcdef").expect("fixture");
+        let text = path.to_string_lossy().replace('\\', "/");
+        (dir, text)
+    }
+
+    fn read_all(mut reader: Box<dyn Read + Send>) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes).expect("read");
+        bytes
+    }
+
+    #[test]
+    fn speed_task_local_open_read_range_reads_exact_window() {
+        let (_dir, path) = fixture();
+        let local = LocalBackend::new("/");
+        assert!(local.supports_range_reads(&path));
+        let window = local.open_read_range(&path, None, 4, 5).expect("open");
+        assert_eq!(read_all(window.expect("local reads ranges")), b"45678");
+        let tail = local.open_read_range(&path, None, 12, 99).expect("open");
+        assert_eq!(read_all(tail.expect("range")), b"cdef", "fewer at the end");
+        assert_eq!(local.flow_identity(&path), local.flow_key(&path));
+    }
+
+    #[test]
+    fn speed_task_vfs_cache_forwards_range_capabilities() {
+        let (_dir, path) = fixture();
+        let inner: BackendHandle = Arc::new(LocalBackend::new("/"));
+        let cached = CachingBackend::new(inner.clone());
+        assert!(
+            cached.supports_range_reads(&path),
+            "the wrapper does not hide the capability"
+        );
+        let window = cached.open_read_range(&path, None, 2, 3).expect("open");
+        assert_eq!(read_all(window.expect("forwarded")), b"234");
+        assert_eq!(cached.flow_identity(&path), inner.flow_identity(&path));
+        let stage = cached.open_segmented_stage("stage", 16).expect("asked");
+        assert!(stage.is_none(), "no backend writes ranges yet");
     }
 }

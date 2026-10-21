@@ -54,6 +54,8 @@ mod progress;
 pub(crate) mod read_pipeline;
 #[path = "os/shared/remote_copy.rs"]
 mod remote_copy;
+#[path = "core/segments.rs"]
+pub(crate) mod segments;
 #[path = "os/shared/selection.rs"]
 mod selection;
 #[path = "os/shared/snapshot_download.rs"]
@@ -89,6 +91,9 @@ mod copy_paste_task_backend;
 #[path = "os/shared/copy_paste_task_tests.rs"]
 mod copy_paste_task_tests;
 #[cfg(test)]
+#[path = "core/segments_tests.rs"]
+mod segments_tests;
+#[cfg(test)]
 #[path = "os/shared/tests.rs"]
 mod tests;
 
@@ -113,7 +118,7 @@ pub use lane::{
 pub use local_stage::download_to_id;
 pub use memory::{memory_budget, reserve_memory, try_reserve_memory, MemoryReservation};
 pub(crate) use platform::{
-    canonical_folder, physical_memory, replace_file_atomic, upload_is_link_like,
+    canonical_folder, physical_memory, replace_file_atomic, upload_is_link_like, write_all_at,
 };
 pub use remote_copy::copy_remote_paths_progress;
 pub use selection::{ListedEntry, SelectionListing, SelectionSource};

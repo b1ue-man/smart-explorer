@@ -121,6 +121,20 @@ impl<'m> Meter<'m> {
         self.moved.set(self.moved.get().saturating_add(bytes));
     }
 
+    /// Takes back a `credit` the attempt will not keep (a download that
+    /// began in parts and went on as one stream credits the same bytes again).
+    pub(crate) fn uncredit(&self, bytes: u64) {
+        self.stats.unmoved(bytes);
+        self.moved.set(self.moved.get().saturating_sub(bytes));
+    }
+
+    /// Bytes helper workers of a split download already reported (progress
+    /// and flow saw them there): counted here only so that a failed attempt
+    /// gives back everything the file counted.
+    pub(crate) fn absorb(&self, bytes: u64) {
+        self.moved.set(self.moved.get().saturating_add(bytes));
+    }
+
     /// Work the flow sees that is not file progress (the first leg of a
     /// bridged copy).
     pub(crate) fn add_hidden(&self, bytes: u64) {
@@ -140,8 +154,8 @@ pub(crate) struct Carry {
 }
 
 /// Runs one file operation for `file` on the job's endpoints.
-pub(crate) fn transfer(
-    engine: &Engine<'_>,
+pub(crate) fn transfer<'e>(
+    engine: &Engine<'e>,
     file: &FileWork,
     parent_created: bool,
     carry: &mut Carry,

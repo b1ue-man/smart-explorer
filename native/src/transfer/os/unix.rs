@@ -45,3 +45,36 @@ pub(crate) fn physical_memory() -> Option<u64> {
     let kib: u64 = line.split_whitespace().nth(1)?.parse().ok()?;
     kib.checked_mul(1024)
 }
+
+/// Writes all of `buf` at `offset` without moving the file pointer, so
+/// several writers can fill different ranges of one file at once.
+pub(crate) fn write_all_at(file: &std::fs::File, buf: &[u8], offset: u64) -> std::io::Result<()> {
+    std::os::unix::fs::FileExt::write_all_at(file, buf, offset)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::write_all_at;
+    use std::io::Read;
+
+    #[test]
+    fn speed_task_write_all_at_positions_data() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("ranges.bin");
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .expect("create");
+        file.set_len(10).expect("length");
+        write_all_at(&file, b"abc", 4).expect("later range first");
+        write_all_at(&file, b"xy", 0).expect("earlier range second");
+        drop(file);
+        let mut content = Vec::new();
+        std::fs::File::open(&path)
+            .expect("open")
+            .read_to_end(&mut content)
+            .expect("read");
+        assert_eq!(content, b"xy\0\0abc\0\0\0");
+    }
+}

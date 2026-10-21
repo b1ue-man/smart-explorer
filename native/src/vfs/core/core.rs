@@ -153,6 +153,35 @@ pub trait Backend: Send + Sync {
         Ok(None)
     }
 
+    /// Can this path be read in ranges `(offset, len)`? Default: no.
+    fn supports_range_reads(&self, path: &str) -> bool {
+        let _ = path;
+        false
+    }
+
+    /// Reads exactly `[offset, offset + len)` (fewer only at the end of the
+    /// file). `Ok(None)`: not possible, the caller transfers one stream.
+    fn open_read_range(
+        &self,
+        path: &str,
+        id: Option<&str>,
+        offset: u64,
+        len: u64,
+    ) -> VfsResult<Option<Box<dyn Read + Send>>> {
+        super::ranges::default_open_read_range(self, path, id, offset, len)
+    }
+
+    /// A stage several writers fill at once, one range each; `Ok(None)`:
+    /// not possible. Default: no backend, until it writes at an offset.
+    fn open_segmented_stage(
+        &self,
+        stage: &str,
+        size: u64,
+    ) -> VfsResult<Option<Box<dyn super::ranges::SegmentedStage>>> {
+        let _ = (stage, size);
+        Ok(None)
+    }
+
     /// A fixed limit of this provider worth showing next to a transfer (for
     /// example a documented write rate).
     fn transfer_hint(&self) -> Option<String> {
@@ -250,6 +279,13 @@ pub trait Backend: Send + Sync {
     fn flow_key(&self, path: &str) -> String {
         let _ = path;
         format!("{:?}@{:p}", self.scheme(), self as *const Self as *const ())
+    }
+
+    /// Stable key of this connection across process restarts (no pointer
+    /// addresses): scheme and namespace identity by default.
+    fn flow_identity(&self, path: &str) -> String {
+        let _ = path;
+        format!("{:?}|{}", self.scheme(), self.namespace_identity())
     }
 
     /// Hard bound of concurrent transfer operations the protocol or peer

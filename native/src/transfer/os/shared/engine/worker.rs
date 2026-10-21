@@ -35,6 +35,7 @@ pub(super) fn run(engine: &Engine<'_>, _slot: WorkerSlot<'_>) {
                 Some(members) => super::batch::run(engine, file, members, &mut buffer),
                 None => run_file(engine, file, &mut buffer),
             },
+            Work::Segment { job } => super::segments::help(engine, job, &mut buffer),
         }
     }
 }
