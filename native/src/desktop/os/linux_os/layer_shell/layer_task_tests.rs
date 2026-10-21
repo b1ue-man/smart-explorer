@@ -17,6 +17,14 @@ use crate::desktop::core::protocol::SurfaceMessage;
 
 const LONG: Duration = Duration::from_secs(30);
 
+/// The headless Sway has no input device, so its seat offers no keyboard
+/// (`seat_update_capabilities`) until `wtype` adds its virtual one, and the
+/// layer process binds `wl_keyboard` only when that capability appears. A key
+/// that `wtype` sends right after creating the device would arrive before the
+/// process has its keyboard; `-s` keeps the device without a key for a second
+/// first (`wtype` creates the device, then runs its arguments in order).
+const KEY_DELAY: [&str; 2] = ["-s", "1000"];
+
 /// The layer process on `sway`, greeted, with the test colour and one model
 /// for each output; ends the check as "not run" when it cannot draw at all.
 fn start_surface(sway: &Sway, extra: &[(&str, String)], files: &[&str]) -> SurfaceProcess {
@@ -68,16 +76,29 @@ fn desktop_task_layer_shell_bottom_surface() {
     expect_color(&sway, &mut surface, &output);
 
     // An ordinary window (the GUI program's windowed surface) lies above.
-    let _window = SurfaceProcess::start(
+    // The headless Sway has no GPU: Mesa's OpenGL (the window's renderer)
+    // must draw in software, as lavapipe does for the layer process.
+    let mut window = SurfaceProcess::start(
         &sway.env(),
         &["--desktop-surface", "--monitor", "task-window"],
-        &[("SE_DESKTOP_TEST_WINDOWED", "1".to_string())],
+        &[
+            ("SE_DESKTOP_TEST_WINDOWED", "1".to_string()),
+            ("LIBGL_ALWAYS_SOFTWARE", "1".to_string()),
+        ],
     );
-    let found = wait_for(LONG, || {
+    let listed = |sway: &Sway| {
         sway.msg(&["-t", "get_tree", "-r"])
             .contains("app.smartexplorer.desktop")
-    });
-    assert!(found, "das Testfenster fehlt in `swaymsg -t get_tree`");
+    };
+    let found = wait_for(LONG, || !window.running() || listed(&sway));
+    if !found || !listed(&sway) {
+        // Ended or silent: what the process says is the reason.
+        let status = window.stop();
+        panic!(
+            "das Testfenster fehlt in `swaymsg -t get_tree` (Prozess {status:?}): {}",
+            window.stderr_text().trim()
+        );
+    }
     let covered = wait_for(LONG, || {
         sway.screenshot(&output).is_some_and(|shot| {
             let (x, y) = (shot.width / 2, shot.height / 2);
@@ -128,7 +149,7 @@ fn desktop_task_layer_keyboard_on_demand() {
     // the key reaches it; its test log names the keysym (0x61 is `a`).
     let typed = wait_for(LONG, || {
         sway.click(300, 300);
-        let _ = sway.command(&wtype).arg("a").status();
+        let _ = sway.command(&wtype).args(KEY_DELAY).arg("a").status();
         std::fs::read_to_string(&log).is_ok_and(|text| text.contains("press 0x61"))
     });
     assert!(typed, "der Tastendruck erreicht die Fläche nicht: {log:?}");
@@ -163,6 +184,7 @@ fn desktop_task_layer_clipboard_roundtrip_files() {
         sway.click(600, 600);
         let _ = sway
             .command(&wtype)
+            .args(KEY_DELAY)
             .args(["-M", "ctrl", "v", "-m", "ctrl"])
             .status();
     };
@@ -221,6 +243,7 @@ fn desktop_task_layer_clipboard_roundtrip_files() {
         sway.click(42, 42);
         let _ = sway
             .command(&wtype)
+            .args(KEY_DELAY)
             .args(["-M", "ctrl", "c", "-m", "ctrl"])
             .status();
         copied = sway

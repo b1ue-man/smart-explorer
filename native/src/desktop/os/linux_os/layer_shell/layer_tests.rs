@@ -93,9 +93,14 @@ fn desktop_task_layer_output_keys() {
         raw(1, Some(&long), "", "", [0, 0]),
         raw(2, Some(&long), "", "", [1, 0]),
     ]);
+    // The result is sorted by key and `-` sorts before `n`: the second
+    // output (global name 2) with its suffix comes first.
     assert_eq!(outputs[0].key.len(), 64);
     assert_eq!(outputs[1].key.len(), 64);
-    assert!(outputs[1].key.ends_with("-2"));
+    let first = outputs.iter().find(|o| o.global_name == 1).unwrap();
+    let second = outputs.iter().find(|o| o.global_name == 2).unwrap();
+    assert_eq!(first.key, long);
+    assert!(second.key.ends_with("-2"), "{}", second.key);
 
     // The primary output is the one at the top left by (y, x).
     let outputs = build_outputs(vec![

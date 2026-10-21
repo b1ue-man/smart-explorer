@@ -78,6 +78,21 @@ fn shell_major() -> u32 {
         .unwrap_or_else(|| not_run("gnome-shell nennt seine Version nicht"))
 }
 
+/// The lines of the Shell's log that name extensions or errors (the tail of
+/// the log holds the X server's key map warnings after the start).
+fn extension_lines(log: &std::path::Path) -> String {
+    let text = std::fs::read_to_string(log).unwrap_or_default();
+    let lines: Vec<&str> = text
+        .lines()
+        .filter(|line| {
+            let line = line.to_ascii_lowercase();
+            line.contains("extension") || line.contains("js error") || line.contains("critical")
+        })
+        .take(20)
+        .collect();
+    lines.join(" | ")
+}
+
 fn headless(variant: GnomeVariant, majors: std::ops::RangeInclusive<u32>) {
     if std::env::var("SE_DESKTOP_TASK_GNOME").as_deref() != Ok("1") {
         not_run("SE_DESKTOP_TASK_GNOME=1 fehlt (Stufe desktop-gnome)");
@@ -160,10 +175,14 @@ fn headless(variant: GnomeVariant, majors: std::ops::RangeInclusive<u32>) {
                 .any(|(uuid, state)| uuid == GNOME_EXTENSION_UUID && *state == STATE_ENABLED)
         })
     });
-    let listed = SessionBus.list_extensions().unwrap_or_default();
+    let answer = SessionBus.list_extensions();
+    let listed = answer.clone().unwrap_or_default();
     assert!(
         enabled,
-        "die Erweiterung ist nach dem Start der Shell nicht aktiv: {listed:?}; {}",
+        "die Erweiterung ist nach dem Start der Shell nicht aktiv: {listed:?} \
+         (Antwort der Shell: {}); Shell-Meldungen zu Erweiterungen: {}; {}",
+        if answer.is_some() { "ja" } else { "keine" },
+        extension_lines(&log),
         tail()
     );
     // The names of the desktop-icons extensions (A20), where the package is
