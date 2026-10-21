@@ -426,10 +426,481 @@ windows_account_job_pipes_are_exact  windows-core:unit  pfad=share::platform_exe
 windows_account_access_lists  windows-core:unit  pfad=share::platform_exec::exec_account_unit_tests::windows_account_access_lists  quelle=Uebergabe-U24
 completions_access_as_reads_the_worker_accounts  linux-core:unit  pfad=cli::completions_access::tests::completions_access_as_reads_the_worker_accounts  quelle=Uebergabe-U24
 
-[noch nicht umgesetzt]
+# ---- S4 Bildschirm (U41; SCR-M1 bis SCR-M10 nach den Uebergaben U10, U13, U16, U19, U25, U28, SEC-P5) ----
+screen_task_gui_indicator_lines                               linux-core:unit  pfad=app::screen_modules::screen_indicator_ui::tests::screen_task_gui_indicator_lines  quelle=B318,U10
+screen_task_viewer_input_batches_are_bounded                  linux-core:unit  pfad=app::screen_modules::screen_input_map::batch_tests::screen_task_viewer_input_batches_are_bounded  quelle=B378,SCR-M7
+screen_task_viewer_input_touch_replaces_the_pointer           linux-core:unit  pfad=app::screen_modules::screen_input_map::batch_tests::screen_task_viewer_input_touch_replaces_the_pointer  quelle=B378,SCR-M7
+screen_task_ime_commit_sends_text                             linux-core:unit  pfad=app::screen_modules::screen_input_map::tests::screen_task_ime_commit_sends_text  quelle=B378,SCR-M7
+screen_task_input_map_table                                   linux-core:unit  pfad=app::screen_modules::screen_input_map::tests::screen_task_input_map_table  quelle=B378,SCR-M7
+screen_task_viewer_input_pointer_wheel_and_buttons            linux-core:unit  pfad=app::screen_modules::screen_input_map::tests::screen_task_viewer_input_pointer_wheel_and_buttons  quelle=B378,SCR-M7
+screen_task_viewer_input_releases_everything_held             linux-core:unit  pfad=app::screen_modules::screen_input_map::tests::screen_task_viewer_input_releases_everything_held  quelle=B378,SCR-M7
+screen_task_viewer_input_text_keys_and_shortcuts              linux-core:unit  pfad=app::screen_modules::screen_input_map::tests::screen_task_viewer_input_text_keys_and_shortcuts  quelle=B378,SCR-M7
+screen_task_viewer_state_texts_complete                       linux-core:unit  pfad=app::screen_modules::screen_texts::tests::screen_task_viewer_state_texts_complete  quelle=B378,SCR-M7
+screen_task_viewer_device_changed_refuses                     linux-core:unit  pfad=app::screen_modules::screen_viewer_misc_tests::screen_task_viewer_device_changed_refuses  quelle=B378,SCR-M7
+screen_task_viewer_launch_buttons                             linux-core:unit  pfad=app::screen_modules::screen_viewer_misc_tests::screen_task_viewer_launch_buttons  quelle=B378,SCR-M7
+screen_task_viewer_prefs_roundtrip                            linux-core:unit  pfad=app::screen_modules::screen_viewer_misc_tests::screen_task_viewer_prefs_roundtrip  quelle=B378,SCR-M7
+screen_task_viewer_target_parse                               linux-core:unit  pfad=app::screen_modules::screen_viewer_misc_tests::screen_task_viewer_target_parse  quelle=B378,SCR-M7
+screen_task_viewer_toolbar_labels                             linux-core:unit  pfad=app::screen_modules::screen_viewer_misc_tests::screen_task_viewer_toolbar_labels  quelle=B378,SCR-M7
+screen_task_viewer_wgpu_config                                linux-core:unit  pfad=app::screen_modules::screen_viewer_misc_tests::screen_task_viewer_wgpu_config  quelle=B378,SCR-M7
+screen_task_grid_switch_reuses_connection                     linux-core:unit  pfad=app::screen_modules::screen_viewer_tests::screen_task_grid_switch_reuses_connection  quelle=B378,SCR-M7
+screen_task_viewer_ask_tile_has_no_preview                    linux-core:unit  pfad=app::screen_modules::screen_viewer_tests::screen_task_viewer_ask_tile_has_no_preview  quelle=B378,SCR-M7
+screen_task_viewer_decode_gop_switch                          linux-core:unit  pfad=app::screen_modules::screen_viewer_tests::screen_task_viewer_decode_gop_switch  quelle=B378,SCR-M7
+screen_task_viewer_releases_all_on_disable                    linux-core:unit  pfad=app::screen_modules::screen_viewer_tests::screen_task_viewer_releases_all_on_disable  quelle=B378,SCR-M7
+screen_task_viewer_yuv_shader_matches_cpu                     linux-desktop:screen-x11  fixture=gpu-adapter  pfad=app::screen_modules::screen_wgpu_yuv::tests::screen_task_viewer_yuv_shader_matches_cpu  quelle=B378,SCR-M7
+screen_task_gui_tab_rows                                      linux-core:unit  pfad=app::screen_modules::share_screen_tab_ui::tests::screen_task_gui_tab_rows  quelle=B318,U10
+screen_task_completions_screen                                linux-core:unit  pfad=cli::completions_screen::tests::screen_task_completions_screen  quelle=B318,U10
+screen_task_mcp_screen_input_shape                            linux-core:unit  pfad=cli::mcp::screen_tool::tests::screen_task_mcp_screen_input_shape  quelle=B342,U16
+screen_task_mcp_screen_tool_schema                            linux-core:unit  pfad=cli::mcp::screen_tool::tests::screen_task_mcp_screen_tool_schema  quelle=B342,U16
+screen_task_mcp_snapshot_image_content                        linux-core:unit  pfad=cli::mcp::screen_tool::tests::screen_task_mcp_snapshot_image_content  quelle=B342,U16
+screen_task_codec_licenses_lists_and_prints                   linux-core:unit  pfad=cli::screen::codec::licenses_tests::screen_task_codec_licenses_lists_and_prints  quelle=B406,SEC-P5
+screen_task_cli_input_events                                  linux-core:unit  pfad=cli::screen::input::tests::screen_task_cli_input_events  quelle=B366,SEC-P5
+screen_task_cli_portal_forget_json                            linux-core:unit  pfad=cli::screen::portal::tests::screen_task_cli_portal_forget_json  quelle=B354,U19
+screen_task_cli_snapshot_output_shapes                        linux-core:unit  pfad=cli::screen::still_tests::screen_task_cli_snapshot_output_shapes  quelle=B342,U16
+screen_task_cli_snapshot_refuses_existing_file                linux-core:unit  pfad=cli::screen::still_tests::screen_task_cli_snapshot_refuses_existing_file  quelle=B342,U16
+screen_task_cli_windows_and_snapshot_parse                    linux-core:unit  pfad=cli::screen::still_tests::screen_task_cli_windows_and_snapshot_parse  quelle=B342,U16
+screen_task_cli_windows_json_shape                            linux-core:unit  pfad=cli::screen::still_tests::screen_task_cli_windows_json_shape  quelle=B342,U16
+screen_task_cli_device_selection_and_options                  linux-core:unit  pfad=cli::screen::tests::screen_task_cli_device_selection_and_options  quelle=B318,U10
+screen_task_cli_json_shapes                                   linux-core:unit  pfad=cli::screen::tests::screen_task_cli_json_shapes  quelle=B318,U10
+screen_task_viewer_launch_args                                linux-core:unit  pfad=cli::screen::view::tests::screen_task_viewer_launch_args  quelle=B378,SCR-M7
+screen_task_ipc_screen_wire_shapes                            linux-core:unit  pfad=daemon::ipc_protocol::screen::tests::screen_task_ipc_screen_wire_shapes  quelle=B318,U10
+screen_task_ipc_stream_events_decode                          linux-core:unit  pfad=daemon::screen_ipc_client::tests::screen_task_ipc_stream_events_decode  quelle=B318,U10
+screen_task_ipc_still_client_assembles_the_snapshot_stream    linux-core:unit  pfad=daemon::screen_ipc_still::tests::screen_task_ipc_still_client_assembles_the_snapshot_stream  quelle=B342,U16
+screen_task_ipc_still_client_ends_a_silent_host_after_the_read_limit  linux-core:unit  pfad=daemon::screen_ipc_still::tests::screen_task_ipc_still_client_ends_a_silent_host_after_the_read_limit  quelle=B342,U16
+screen_task_ipc_still_client_gives_up_waiting_for_the_user    linux-core:unit  pfad=daemon::screen_ipc_still::tests::screen_task_ipc_still_client_gives_up_waiting_for_the_user  quelle=B342,U16
+screen_task_ipc_still_client_lists_windows_and_ends_the_session  linux-core:unit  pfad=daemon::screen_ipc_still::tests::screen_task_ipc_still_client_lists_windows_and_ends_the_session  quelle=B342,U16
+screen_task_ipc_still_client_names_refusals_by_code           linux-core:unit  pfad=daemon::screen_ipc_still::tests::screen_task_ipc_still_client_names_refusals_by_code  quelle=B342,U16
+screen_task_ipc_still_client_reports_a_paused_source          linux-core:unit  pfad=daemon::screen_ipc_still::tests::screen_task_ipc_still_client_reports_a_paused_source  quelle=B342,U16
+screen_task_android_bridge_shapes                             linux-core:unit  pfad=mobile::domains::screen_host::tests::screen_task_android_bridge_shapes  quelle=B391,U27
+screen_task_authorize_decide_and_ask                          linux-core:unit,windows-core:unit  pfad=screen::core::authorize::tests::screen_task_authorize_decide_and_ask  quelle=B306,SCR-M1-Code
+screen_task_authorize_stop_ends_the_wait                      linux-core:unit,windows-core:unit  pfad=screen::core::authorize::tests::screen_task_authorize_stop_ends_the_wait  quelle=B306,SCR-M1-Code
+screen_task_catalog_rows_only_with_graphical_session          linux-core:unit,windows-core:unit  pfad=screen::core::catalog_entries::tests::screen_task_catalog_rows_only_with_graphical_session  quelle=B306,SCR-M1-Code
+screen_task_input_key_names_and_pointer_positions             linux-core:unit,windows-core:unit  pfad=screen::core::input_model::tests::screen_task_input_key_names_and_pointer_positions  quelle=B306,SCR-M1-Code
+screen_task_input_release_on_end                              linux-core:unit,windows-core:unit  pfad=screen::core::input_model::tests::screen_task_input_release_on_end  quelle=B306,SCR-M1-Code
+screen_task_android_has_no_openh264                           linux-core:unit,windows-core:unit  pfad=screen::core::licenses::tests::screen_task_android_has_no_openh264  quelle=B306,SCR-M1-Code
+screen_task_cisco_license_verbatim                            linux-core:unit,windows-core:unit  pfad=screen::core::licenses::tests::screen_task_cisco_license_verbatim  quelle=B306,SCR-M1-Code
+screen_task_metrics_latency_rates_and_clock                   linux-core:unit,windows-core:unit  pfad=screen::core::metrics::tests::screen_task_metrics_latency_rates_and_clock  quelle=B306,SCR-M1-Code
+screen_task_metrics_static_psnr                               linux-core:unit,windows-core:unit  pfad=screen::core::metrics::tests::screen_task_metrics_static_psnr  quelle=B306,SCR-M1-Code
+screen_task_negotiate_matrix                                  linux-core:unit,windows-core:unit  pfad=screen::core::negotiate::tests::screen_task_negotiate_matrix  quelle=B306,SCR-M1-Code
+screen_task_pacing_drops_before_encode                        linux-core:unit,windows-core:unit  pfad=screen::core::pacing::tests::screen_task_pacing_drops_before_encode  quelle=B306,SCR-M1-Code
+screen_task_pacing_frame_clock_cadence                        linux-core:unit,windows-core:unit  pfad=screen::core::pacing::tests::screen_task_pacing_frame_clock_cadence  quelle=B306,SCR-M1-Code
+screen_task_pacing_relay_guard_below_relay_budget             linux-core:unit,windows-core:unit  pfad=screen::core::pacing::tests::screen_task_pacing_relay_guard_below_relay_budget  quelle=B306,SCR-M1-Code
+screen_task_pacing_resets_stale_gop                           linux-core:unit,windows-core:unit  pfad=screen::core::pacing::tests::screen_task_pacing_resets_stale_gop  quelle=B306,SCR-M1-Code
+screen_task_pixel_convert_downscale_and_sizes                 linux-core:unit,windows-core:unit  pfad=screen::core::pixel_convert::tests::screen_task_pixel_convert_downscale_and_sizes  quelle=B306,SCR-M1-Code
+screen_task_pixel_convert_yuv_round_trip                      linux-core:unit,windows-core:unit  pfad=screen::core::pixel_convert::tests::screen_task_pixel_convert_yuv_round_trip  quelle=B306,SCR-M1-Code
+screen_task_rate_control_backs_off_on_delay_gradient          linux-core:unit,windows-core:unit  pfad=screen::core::rate_control::tests::screen_task_rate_control_backs_off_on_delay_gradient  quelle=B306,SCR-M1-Code
+screen_task_rate_control_loss_rules                           linux-core:unit,windows-core:unit  pfad=screen::core::rate_control::tests::screen_task_rate_control_loss_rules  quelle=B306,SCR-M1-Code
+screen_task_rate_control_quality_ladder                       linux-core:unit,windows-core:unit  pfad=screen::core::rate_control::tests::screen_task_rate_control_quality_ladder  quelle=B306,SCR-M1-Code
+screen_task_registry_control_and_stop                         linux-core:unit,windows-core:unit  pfad=screen::core::registry::tests::screen_task_registry_control_and_stop  quelle=B306,SCR-M1-Code
+screen_task_registry_session_view_json_shape                  linux-core:unit,windows-core:unit  pfad=screen::core::registry::tests::screen_task_registry_session_view_json_shape  quelle=B306,SCR-M1-Code
+screen_task_session_state_moves_and_keyframe_requests         linux-core:unit,windows-core:unit  pfad=screen::core::session_state::tests::screen_task_session_state_moves_and_keyframe_requests  quelle=B306,SCR-M1-Code
+screen_task_snapshot_fit_respects_max_bytes                   linux-core:unit,windows-core:unit  pfad=screen::core::snapshot::tests::screen_task_snapshot_fit_respects_max_bytes  quelle=B306,SCR-M1-Code
+screen_task_snapshot_png_roundtrip                            linux-core:unit,windows-core:unit  pfad=screen::core::snapshot::tests::screen_task_snapshot_png_roundtrip  quelle=B306,SCR-M1-Code
+screen_task_barcode_detects_corruption                        linux-core:unit,windows-core:unit  pfad=screen::core::synthetic::tests::screen_task_barcode_detects_corruption  quelle=B306,SCR-M1-Code
+screen_task_tiles_lossless_roundtrip                          linux-core:unit,windows-core:unit  pfad=screen::core::tiles_codec::tests::screen_task_tiles_lossless_roundtrip  quelle=B306,SCR-M1-Code
+screen_task_frame_limits_reject_oversize                      linux-core:unit,windows-core:unit  pfad=screen::core::wire::tests::screen_task_frame_limits_reject_oversize  quelle=B306,SCR-M1-Code
+screen_task_wire_roundtrip_all_tags                           linux-core:unit,windows-core:unit  pfad=screen::core::wire::tests::screen_task_wire_roundtrip_all_tags  quelle=B306,SCR-M1-Code
+screen_task_wire_picture_stream_roundtrip                     linux-core:unit,windows-core:unit  pfad=screen::core::wire_binary::tests::screen_task_wire_picture_stream_roundtrip  quelle=B306,SCR-M1-Code
+screen_task_hello_maps_onto_relation_proof                    linux-core:unit,windows-core:unit  pfad=screen::core::wire_hello::tests::screen_task_hello_maps_onto_relation_proof  quelle=B306,SCR-M1-Code
+screen_task_android_input_needs_accessibility_and_stream      linux-core:unit  pfad=screen::os::bridge_tests::screen_task_android_input_needs_accessibility_and_stream  quelle=B391,U27
+screen_task_android_stage_configures_and_takes_key_frames     linux-core:unit  pfad=screen::os::bridge_tests::screen_task_android_stage_configures_and_takes_key_frames  quelle=B391,U27
+screen_task_android_stage_waits_for_consent_and_ends_on_refusal  linux-core:unit  pfad=screen::os::bridge_tests::screen_task_android_stage_waits_for_consent_and_ends_on_refusal  quelle=B391,U27
+screen_task_android_still_decodes_and_tiles                   linux-core:unit  pfad=screen::os::bridge_tests::screen_task_android_still_decodes_and_tiles  quelle=B391,U27
+screen_task_windows_session_state_order                       windows-screen:screen-windows  pfad=screen::os::capture_source::tests::screen_task_windows_session_state_order  quelle=B342,U16
+screen_task_windows_bench_real_capture                        windows-screen:screen-windows  ignored threads=1 fixture=interactive-desktop  pfad=screen::os::capture_tests::screen_task_windows_bench_real_capture  quelle=B342,U16
+screen_task_windows_dxgi_fallback_captures_monitor            windows-screen:screen-windows  ignored threads=1 fixture=interactive-desktop env=SE_SCREEN_TASK_DXGI=1  pfad=screen::os::capture_tests::screen_task_windows_dxgi_fallback_captures_monitor  quelle=B342,U16
+screen_task_windows_lock_reports_secure_desktop               windows-screen:screen-windows  ignored threads=1 fixture=interactive-desktop  pfad=screen::os::capture_tests::screen_task_windows_lock_reports_secure_desktop  quelle=B342,U16
+screen_task_windows_minimized_state                           windows-screen:screen-windows  ignored threads=1 fixture=interactive-desktop  pfad=screen::os::capture_tests::screen_task_windows_minimized_state  quelle=B342,U16
+screen_task_windows_monitor_ids_stable                        windows-screen:screen-windows  pfad=screen::os::capture_tests::screen_task_windows_monitor_ids_stable  quelle=B342,U16
+screen_task_windows_synthetic_source_still_works              windows-screen:screen-windows  pfad=screen::os::capture_tests::screen_task_windows_synthetic_source_still_works  quelle=B342,U16
+screen_task_windows_wgc_snapshot_matches                      windows-screen:screen-windows  ignored threads=1 fixture=interactive-desktop  pfad=screen::os::capture_tests::screen_task_windows_wgc_snapshot_matches  quelle=B342,U16
+screen_task_windows_window_list_has_test_window               windows-screen:screen-windows  ignored threads=1 fixture=interactive-desktop  pfad=screen::os::capture_tests::screen_task_windows_window_list_has_test_window  quelle=B342,U16
+screen_task_codec_inventory_without_mf                        linux-core:unit,windows-screen:screen-windows  pfad=screen::os::codec_inventory::tests::screen_task_codec_inventory_without_mf  quelle=B330,U13
+screen_task_negotiate_cb_high_for_openh264_viewer             linux-core:unit  pfad=screen::os::codec_inventory::tests::screen_task_negotiate_cb_high_for_openh264_viewer  quelle=B330,U13
+screen_task_app_units_parse                                   linux-core:unit  pfad=screen::os::host_backend::tests::screen_task_app_units_parse  quelle=B354,U19
+screen_task_limits_consent_each_session_without_token         linux-core:unit  pfad=screen::os::host_backend::tests::screen_task_limits_consent_each_session_without_token  quelle=B354,U19
+screen_task_linux_without_pipewire_starts                     linux-core:unit  pfad=screen::os::host_backend::tests::screen_task_linux_without_pipewire_starts  quelle=B354,U19
+screen_task_portal_tokens_roundtrip_and_forget                linux-core:unit  pfad=screen::os::host_backend::tests::screen_task_portal_tokens_roundtrip_and_forget  quelle=B354,U19
+screen_task_session_detect_table                              linux-core:unit  pfad=screen::os::host_backend::tests::screen_task_session_detect_table  quelle=B354,U19
+screen_task_wayland_control_unavailable_reported              linux-core:unit  pfad=screen::os::host_backend::tests::screen_task_wayland_control_unavailable_reported  quelle=B366,SEC-P5
+screen_task_wayland_monitors_single_portal_entry              linux-core:unit  pfad=screen::os::host_backend::tests::screen_task_wayland_monitors_single_portal_entry  quelle=B354,U19
+screen_task_host_worker_exits_on_update_stop                  linux-core:unit,windows-screen:screen-windows  ignored threads=1 env=SE_SCREEN_TASK_WORKER={se}  pfad=screen::os::host_worker_client::tests::screen_task_host_worker_exits_on_update_stop  quelle=B330,U13
+screen_task_worker_input_needs_control_session                linux-core:unit  pfad=screen::os::host_worker_main::tests::screen_task_worker_input_needs_control_session  quelle=B354,U19
+screen_task_worker_keeps_other_capture_errors_as_capture_failed  linux-core:unit  pfad=screen::os::host_worker_main::tests::screen_task_worker_keeps_other_capture_errors_as_capture_failed  quelle=B354,U19
+screen_task_worker_maps_permission_denied_to_no_display       linux-core:unit  pfad=screen::os::host_worker_main::tests::screen_task_worker_maps_permission_denied_to_no_display  quelle=B354,U19
+screen_task_indicator_needs_the_desktop_app                   linux-core:unit  pfad=screen::os::indicator::tests::screen_task_indicator_needs_the_desktop_app  quelle=B318,U10
+screen_task_windows_integrity_query_failure_blocks            windows-screen:screen-windows  pfad=screen::os::input_integrity::tests::screen_task_windows_integrity_query_failure_blocks  quelle=B366,SEC-P5
+screen_task_control_exclusive                                 linux-core:unit  pfad=screen::os::input_keys::tests::screen_task_control_exclusive  quelle=B366,SEC-P5
+screen_task_input_keys_tables_and_no_ctrl_alt_del             linux-core:unit  pfad=screen::os::input_keys::tests::screen_task_input_keys_tables_and_no_ctrl_alt_del  quelle=B366,SEC-P5
+screen_task_keys_released_on_disconnect                       linux-core:unit  pfad=screen::os::input_keys::tests::screen_task_keys_released_on_disconnect  quelle=B366,SEC-P5
+screen_task_windows_elevated_blocked_reported                 windows-screen:screen-windows  ignored threads=1 fixture=interactive-desktop,elevated-window  pfad=screen::os::input_send::tests::screen_task_windows_elevated_blocked_reported  quelle=B366,SEC-P5,NR-N7
+screen_task_windows_input_records_map_positions_keys_text     windows-screen:screen-windows  pfad=screen::os::input_send::tests::screen_task_windows_input_records_map_positions_keys_text  quelle=B366,SEC-P5
+screen_task_windows_sendinput_text_reaches_window             windows-screen:screen-windows  ignored threads=1 fixture=interactive-desktop  pfad=screen::os::input_send::tests::screen_task_windows_sendinput_text_reaches_window  quelle=B366,SEC-P5
+screen_task_kde_window_list                                   linux-wayland:kde  ignored threads=1 fixture=kwin  pfad=screen::os::kde_window_management::tests::screen_task_kde_window_list  quelle=B354,U19,S4-K3
+screen_task_mf_encode_decode                                  windows-screen:screen-windows  ignored threads=1 fixture=media-foundation  pfad=screen::os::mf_decoder::tests::screen_task_mf_encode_decode  quelle=B330,U13,S4-K6
+screen_task_local_bench_h264_openh264                         linux-desktop:screen-x11,windows-screen:screen-windows  ignored threads=1 fixture=openh264  pfad=screen::os::openh264_codec::tests::screen_task_local_bench_h264_openh264  quelle=B330,U13
+screen_task_openh264_decodes_constrained_high                 linux-desktop:screen-x11  ignored threads=1 fixture=openh264,h264-high  pfad=screen::os::openh264_codec::tests::screen_task_openh264_decodes_constrained_high  quelle=B330,U13
+screen_task_openh264_disable_unloads                          linux-desktop:screen-x11,windows-screen:screen-windows  ignored threads=1 fixture=openh264  pfad=screen::os::openh264_codec::tests::screen_task_openh264_disable_unloads  quelle=B330,U13
+screen_task_decoder_prefer_yuv_skips_bgra                     linux-desktop:screen-x11,windows-screen:screen-windows  ignored threads=1 fixture=openh264  pfad=screen::os::openh264_codec::yuv_tests::screen_task_decoder_prefer_yuv_skips_bgra  quelle=B330,U13
+screen_task_openh264_pin_mismatch_refuses                     linux-core:unit,windows-screen:screen-windows  pfad=screen::os::openh264_install::tests::screen_task_openh264_pin_mismatch_refuses  quelle=B330,U13
+screen_task_wayland_stream_points_and_no_input_before_consent  linux-core:unit  pfad=screen::os::portal_input::tests::screen_task_wayland_stream_points_and_no_input_before_consent  quelle=B366,SEC-P5
+screen_task_kde_remote_desktop_input                          linux-wayland:kde  ignored threads=1 fixture=kwin,kde-portal  pfad=screen::os::portal_session::tests::screen_task_kde_remote_desktop_input  quelle=B366,SEC-P5,S4-K3
+screen_task_spa_pod_enum_format_bytes                         linux-core:unit  pfad=screen::os::portal_session::tests::screen_task_spa_pod_enum_format_bytes  quelle=B354,U19
+screen_task_wayland_portal_bench                              linux-wayland:screen-wayland  ignored threads=1 fixture=wayland-portal  pfad=screen::os::portal_session::tests::screen_task_wayland_portal_bench  quelle=B354,U19
+screen_task_wayland_remote_session_without_pipewire_asks_nothing  linux-core:unit  pfad=screen::os::portal_session::tests::screen_task_wayland_remote_session_without_pipewire_asks_nothing  quelle=B354,U19
+screen_task_wayland_token_replaced_after_start                linux-wayland:screen-wayland  ignored threads=1 fixture=wayland-portal  pfad=screen::os::portal_session::tests::screen_task_wayland_token_replaced_after_start  quelle=B354,U19
+screen_task_windows_window_filter_alt_tab_rule                windows-screen:screen-windows  pfad=screen::os::window_list::tests::screen_task_windows_window_filter_alt_tab_rule  quelle=B342,U16
+screen_task_windows_interop_factories_only                    linux-core:unit,windows-screen:screen-windows  pfad=screen::os::windows_static_tests::screen_task_windows_interop_factories_only  quelle=B342,U16,D3-prepare-static
+screen_task_x11_bench_real_capture                            linux-desktop:screen-x11  ignored threads=1 fixture=xvfb env=SE_SCREEN_TASK_X11=1  pfad=screen::os::x11_capture::tests::screen_task_x11_bench_real_capture  quelle=B354,U19
+screen_task_x11_snapshot_matches                              linux-desktop:screen-x11  ignored threads=1 fixture=xvfb env=SE_SCREEN_TASK_X11=1  pfad=screen::os::x11_capture::tests::screen_task_x11_snapshot_matches  quelle=B354,U19
+screen_task_x11_window_list_ewmh_and_querytree                linux-desktop:screen-x11  ignored threads=1 fixture=xvfb env=SE_SCREEN_TASK_X11=1  pfad=screen::os::x11_capture::tests::screen_task_x11_window_list_ewmh_and_querytree  quelle=B354,U19
+screen_task_x11_root_points_cover_the_source                  linux-core:unit  pfad=screen::os::x11_input::tests::screen_task_x11_root_points_cover_the_source  quelle=B366,SEC-P5
+screen_task_x11_unmapped_char_via_spare_keycode               linux-desktop:screen-x11  ignored threads=1 fixture=xvfb env=SE_SCREEN_TASK_X11=1  pfad=screen::os::x11_input::tests::screen_task_x11_unmapped_char_via_spare_keycode  quelle=B366,SEC-P5
+screen_task_x11_xtest_text_and_click                          linux-desktop:screen-x11  ignored threads=1 fixture=xvfb env=SE_SCREEN_TASK_X11=1  pfad=screen::os::x11_input::tests::screen_task_x11_xtest_text_and_click  quelle=B366,SEC-P5
+screen_task_x11_keysym_and_keymap_lookup                      linux-core:unit  pfad=screen::os::x11_keymap::tests::screen_task_x11_keysym_and_keymap_lookup  quelle=B366,SEC-P5
+screen_task_pair_bench_h264                                   linux-desktop:screen-x11,windows-screen:screen-windows  ignored threads=1 fixture=openh264  pfad=share::node_screen::tests::codec::screen_task_pair_bench_h264  quelle=B330,U13
+screen_task_worker_crash_keeps_daemon                         linux-core:screen-pair  ignored threads=1 env=SE_SCREEN_TASK_WORKER={se}  pfad=share::node_screen::tests::codec::screen_task_worker_crash_keeps_daemon  quelle=B330,U13
+screen_task_ask_always_sets_allow                             linux-core:screen-pair  pfad=share::node_screen::tests::rights::screen_task_ask_always_sets_allow  quelle=B318,U10
+screen_task_ask_deny_approval_denied                          linux-core:screen-pair  pfad=share::node_screen::tests::rights::screen_task_ask_deny_approval_denied  quelle=B318,U10
+screen_task_ask_once_session                                  linux-core:screen-pair  pfad=share::node_screen::tests::rights::screen_task_ask_once_session  quelle=B318,U10
+screen_task_audit_screen_entries                              linux-core:screen-pair  pfad=share::node_screen::tests::rights::screen_task_audit_screen_entries  quelle=B318,U10
+screen_task_grant_expired_closes_session                      linux-core:screen-pair  pfad=share::node_screen::tests::rights::screen_task_grant_expired_closes_session  quelle=B318,U10
+screen_task_narrowing_closes_session                          linux-core:screen-pair  pfad=share::node_screen::tests::rights::screen_task_narrowing_closes_session  quelle=B318,U10
+screen_task_permission_denied_without_right                   linux-core:screen-pair  pfad=share::node_screen::tests::rights::screen_task_permission_denied_without_right  quelle=B318,U10
+screen_task_view_only_control_right_not_granted               linux-core:screen-pair  pfad=share::node_screen::tests::rights::screen_task_view_only_control_right_not_granted  quelle=B318,U10
+screen_task_viewer_cancel_withdraws_approval                  linux-core:screen-pair  pfad=share::node_screen::tests::rights::screen_task_viewer_cancel_withdraws_approval  quelle=B318,U10
+screen_task_fs_exec_unchanged                                 linux-core:screen-pair,windows-screen:screen-windows  pfad=share::node_screen::tests::screen_task_fs_exec_unchanged  quelle=B318,D3-Erhaltung-S4
+screen_task_indicator_unavailable_refuses                     linux-core:screen-pair  pfad=share::node_screen::tests::screen_task_indicator_unavailable_refuses  quelle=B318,U10
+screen_task_netem_recovery                                    linux-core:screen-pair  ignored threads=1 fixture=netem env=SE_SCREEN_TASK_NETEM=1  pfad=share::node_screen::tests::screen_task_netem_recovery  quelle=B318,U10,S4-A17
+screen_task_old_peer_unsupported                              linux-core:screen-pair  pfad=share::node_screen::tests::screen_task_old_peer_unsupported  quelle=B318,D3-Erhaltung-S4
+screen_task_pair_bench_tiles                                  linux-core:screen-pair  pfad=share::node_screen::tests::screen_task_pair_bench_tiles  quelle=B318,U10
+screen_task_recovery_after_injected_reset                     linux-core:screen-pair  pfad=share::node_screen::tests::screen_task_recovery_after_injected_reset  quelle=B318,U10
+screen_task_relay_only_bench                                  linux-core:screen-pair  ignored threads=1 fixture=share env=SE_SHARE_RELAY_ONLY=1  pfad=share::node_screen::tests::screen_task_relay_only_bench  quelle=B318,U10
+screen_task_reset_streams_free_slots                          linux-core:screen-pair  pfad=share::node_screen::tests::screen_task_reset_streams_free_slots  quelle=B318,U10
+screen_task_ipc_still_snapshot_roundtrip                      linux-core:screen-pair  pfad=share::node_screen::tests::still::screen_task_ipc_still_snapshot_roundtrip  quelle=B342,U16
+screen_task_ipc_still_windows_roundtrip                       linux-core:screen-pair  pfad=share::node_screen::tests::still::screen_task_ipc_still_windows_roundtrip  quelle=B342,U16
 
-# ---- S1 PRM-M10 (U27): Bildschirm-Rueckfrage auf dem Emulator, API 36 und API 30 (R401, D3) ----
-perm_task_android_screen_approval_actions_are_activity_intents  android-device:perm-android-device,android-device-api30:perm-android-api30  art=instr  paket=U27  quelle=R401,D3
+# ---- S5 se Desktop Rust (U41; DSK-M1 bis DSK-M8, DSK-M13 nach den Uebergaben U03, U15, U30, U32, U34, U37) ----
+desktop_task_absent_starts_nothing                            linux-desktop:gui-harness,windows-desktop:desktop-gui-harness  ignored threads=1 fixture=home env=SMART_EXPLORER_GUI_TASK=1  pfad=app::desktop_modules::desktop_settings_ui::tests::desktop_task_absent_starts_nothing  quelle=D562,F13
+desktop_task_wallpaper_hint_text                              linux-core:unit,windows-core:unit  pfad=app::desktop_modules::desktop_surface_settings_ui::tests::desktop_task_wallpaper_hint_text  quelle=D598,U34
+desktop_task_surface_windowed_gui_harness                     linux-desktop:gui-harness  ignored threads=1 fixture=xvfb,home env=SMART_EXPLORER_GUI_TASK=1 env=SE_DESKTOP_TASK_GUI={gui}  pfad=app::desktop_modules::desktop_surface_view_model::task_tests::desktop_task_surface_windowed_gui_harness  quelle=D574,U30
+desktop_task_surface_windowed_gui_harness                     windows-desktop:desktop-gui-harness  ignored threads=1 fixture=home env=SMART_EXPLORER_GUI_TASK=1 env=SE_DESKTOP_TASK_GUI={gui}  pfad=app::desktop_modules::desktop_surface_view_model::task_tests::desktop_task_surface_windowed_gui_harness  quelle=D574,U30
+desktop_task_config_reload                                    linux-core:unit,windows-core:unit  pfad=app::desktop_modules::desktop_surface_view_model::tests::desktop_task_config_reload  quelle=D574,U30
+desktop_task_vault_group_without_daemon_hidden                linux-core:unit,windows-core:unit  pfad=app::desktop_modules::desktop_surface_view_model::tests::desktop_task_vault_group_without_daemon_hidden  quelle=D574,U30
+desktop_task_gui_start_order_unchanged                        linux-core:unit,windows-core:unit  pfad=app::desktop_modules::start_request::tests::desktop_task_gui_start_order_unchanged  quelle=D562,F4
+desktop_task_open_location_args                               linux-core:unit,windows-core:unit  pfad=app::desktop_modules::start_request::tests::desktop_task_open_location_args  quelle=D562,F4
+desktop_task_gui_window_exits_on_update_stop                  linux-desktop:gui-harness,windows-desktop:desktop-gui-harness  ignored threads=1 fixture=home env=SMART_EXPLORER_GUI_TASK=1  pfad=app::desktop_modules::update_stop_ui::tests::desktop_task_gui_window_exits_on_update_stop  quelle=D544,U03
+desktop_task_stale_stop_marker_ignored_at_start               linux-desktop:gui-harness,windows-desktop:desktop-gui-harness  ignored threads=1 fixture=home env=SMART_EXPLORER_GUI_TASK=1  pfad=app::desktop_modules::update_stop_ui::tests::desktop_task_stale_stop_marker_ignored_at_start  quelle=D544,U03
+desktop_task_cli_json_shapes                                  linux-core:unit,windows-core:unit  pfad=cli::desktop::json_tests::desktop_task_cli_json_shapes  quelle=D562,U15
+desktop_task_cli_completion_lists_desktop                     linux-core:unit,windows-core:unit  pfad=cli::desktop::tests::desktop_task_cli_completion_lists_desktop  quelle=D562,U15
+desktop_task_cli_parse                                        linux-core:unit,windows-core:unit  pfad=cli::desktop::tests::desktop_task_cli_parse  quelle=D562,U15
+desktop_task_mcp_instructions_within_limit                    linux-core:unit,windows-core:unit  pfad=cli::desktop::tests::desktop_task_mcp_instructions_within_limit  quelle=D562,U15
+desktop_task_mcp_status_has_desktop                           linux-core:unit,windows-core:unit  pfad=cli::desktop::tests::desktop_task_mcp_status_has_desktop  quelle=D562,U15
+desktop_task_update_stop_rule_matches_mcp                     linux-core:unit,windows-core:unit  pfad=daemon::update_stop::tests::desktop_task_update_stop_rule_matches_mcp  quelle=D544,U03,F1-F2
+desktop_task_updater_helper_unchanged                         linux-core:unit,windows-core:unit  pfad=daemon::update_stop::tests::desktop_task_updater_helper_unchanged  quelle=D544,U03,F1-F2
+desktop_task_layout_has_no_vault_paths                        linux-core:unit,windows-core:unit  pfad=desktop::core::layout_tests::desktop_task_layout_has_no_vault_paths  quelle=D532,DSK-M1
+desktop_task_layout_monitor_removed_adopted_by_primary        linux-core:unit,windows-core:unit  pfad=desktop::core::layout_tests::desktop_task_layout_monitor_removed_adopted_by_primary  quelle=D532,DSK-M1
+desktop_task_layout_per_monitor_new_items_on_primary          linux-core:unit,windows-core:unit  pfad=desktop::core::layout_tests::desktop_task_layout_per_monitor_new_items_on_primary  quelle=D532,DSK-M1
+desktop_task_background_policy                                linux-core:unit,windows-core:unit  pfad=desktop::core::mechanism_tests::desktop_task_background_policy  quelle=D532,DSK-M1
+desktop_task_config_validation                                linux-core:unit,windows-core:unit  pfad=desktop::core::mechanism_tests::desktop_task_config_validation  quelle=D532,DSK-M1
+desktop_task_mechanism_matrix                                 linux-core:unit,windows-core:unit  pfad=desktop::core::mechanism_tests::desktop_task_mechanism_matrix  quelle=D532,DSK-M1
+desktop_task_layer_protocol_model_per_monitor                 linux-core:unit,windows-core:unit  pfad=desktop::core::protocol_tests::desktop_task_layer_protocol_model_per_monitor  quelle=D610,U37
+desktop_task_protocol_frames_roundtrip                        linux-core:unit,windows-core:unit  pfad=desktop::core::protocol_tests::desktop_task_protocol_frames_roundtrip  quelle=D532,DSK-M1
+desktop_task_screen_target_json                               linux-core:unit,windows-core:unit  pfad=desktop::core::protocol_tests::desktop_task_screen_target_json  quelle=D532,DSK-M1
+desktop_task_ledger_foreign_extension_only_with_entry         linux-core:unit,windows-core:unit  pfad=desktop::core::state_tests::desktop_task_ledger_foreign_extension_only_with_entry  quelle=D532,DSK-M1
+desktop_task_ledger_plans_known_traces_without_ledger         linux-core:unit,windows-core:unit  pfad=desktop::core::state_tests::desktop_task_ledger_plans_known_traces_without_ledger  quelle=D532,DSK-M1
+desktop_task_state_schema_roundtrip                           linux-core:unit,windows-core:unit  pfad=desktop::core::state_tests::desktop_task_state_schema_roundtrip  quelle=D532,DSK-M1
+desktop_task_state_transitions                                linux-core:unit,windows-core:unit  pfad=desktop::core::state_tests::desktop_task_state_transitions  quelle=D532,DSK-M1
+desktop_task_tiles_empty_profiles                             linux-core:unit,windows-core:unit  pfad=desktop::core::tiles_tests::desktop_task_tiles_empty_profiles  quelle=D532,DSK-M1
+desktop_task_tiles_every_status_code                          linux-core:unit,windows-core:unit  pfad=desktop::core::tiles_tests::desktop_task_tiles_every_status_code  quelle=D532,DSK-M1
+desktop_task_tiles_profiles_only_unknown                      linux-core:unit,windows-core:unit  pfad=desktop::core::tiles_tests::desktop_task_tiles_profiles_only_unknown  quelle=D532,DSK-M1
+desktop_task_enable_disable_leaves_no_trace                   linux-core:unit,windows-desktop:desktop-windows  threads=1  pfad=desktop::os::control_tests::desktop_task_enable_disable_leaves_no_trace  quelle=D562,U15,F12
+desktop_task_foreign_values_untouched                         linux-core:unit,windows-desktop:desktop-windows  threads=1  pfad=desktop::os::control_tests::desktop_task_foreign_values_untouched  quelle=D562,U15,F12
+desktop_task_halt_survives_gui_start_until_version_change     linux-core:unit,windows-desktop:desktop-windows  threads=1  pfad=desktop::os::control_tests::desktop_task_halt_survives_gui_start_until_version_change  quelle=D562,U15,F12
+desktop_task_remove_without_ledger                            linux-core:unit,windows-desktop:desktop-windows  threads=1  pfad=desktop::os::control_tests::desktop_task_remove_without_ledger  quelle=D562,U15,F12
+desktop_task_resume_on_gui_start                              linux-core:unit,windows-desktop:desktop-windows  threads=1  pfad=desktop::os::control_tests::desktop_task_resume_on_gui_start  quelle=D562,U15,F12
+desktop_task_user_disabled_autostart_respected                linux-core:unit,windows-desktop:desktop-windows  threads=1  pfad=desktop::os::control_tests::desktop_task_user_disabled_autostart_respected  quelle=D562,U15,F12
+desktop_task_desktop_ops_rename_trash_copy                    linux-core:unit,windows-core:unit  pfad=desktop::os::desktop_ops::tests::desktop_task_desktop_ops_rename_trash_copy  quelle=D574,U30
+desktop_task_feed_reads_keep_drive_restore_restricted         linux-desktop:gui-harness,windows-desktop:desktop-gui-harness  ignored threads=1 env=SMART_EXPLORER_DESKTOP_TASK=1 env=SE_DESKTOP_TASK_GUI={gui}  pfad=desktop::os::feed_sources::task_tests::desktop_task_feed_reads_keep_drive_restore_restricted  quelle=D574,U30
+desktop_task_share_events_not_drained                         linux-desktop:gui-harness,windows-desktop:desktop-gui-harness  ignored threads=1 env=SMART_EXPLORER_DESKTOP_TASK=1 env=SE_DESKTOP_TASK_GUI={gui}  pfad=desktop::os::feed_sources::task_tests::desktop_task_share_events_not_drained  quelle=D574,U30
+desktop_task_layout_single_writer                             linux-core:unit,windows-core:unit  pfad=desktop::os::layout_store::tests::desktop_task_layout_single_writer  quelle=D574,U30
+desktop_task_identity_conflict_opens_device_page              linux-core:unit,windows-core:unit  pfad=desktop::os::open_target::tests::desktop_task_identity_conflict_opens_device_page  quelle=D574,U30
+desktop_task_open_device_file_manager_path                    linux-core:unit,windows-core:unit  pfad=desktop::os::open_target::tests::desktop_task_open_device_file_manager_path  quelle=D574,U30
+desktop_task_open_device_spawns_gui_location                  linux-core:unit,windows-core:unit  pfad=desktop::os::open_target::tests::desktop_task_open_device_spawns_gui_location  quelle=D574,U30
+desktop_task_open_vault_location_args                         linux-core:unit,windows-core:unit  pfad=desktop::os::open_target::tests::desktop_task_open_vault_location_args  quelle=D574,U30
+desktop_task_screen_view_args_parse_in_s4                     linux-core:unit,windows-core:unit  pfad=desktop::os::open_target::tests::desktop_task_screen_view_args_parse_in_s4  quelle=D574,U30
+desktop_task_windows_wallpaper_per_monitor                    windows-desktop:desktop-windows  threads=1  pfad=desktop::os::platform::adapter_tests::desktop_task_windows_wallpaper_per_monitor  quelle=D586,U32
+desktop_task_gnome_ding_takeover_and_restore                  linux-core:unit  pfad=desktop::os::platform::gnome_extension_tests::desktop_task_gnome_ding_takeover_and_restore  quelle=D622,U34
+desktop_task_gnome_extension_install_remove                   linux-core:unit  pfad=desktop::os::platform::gnome_extension_tests::desktop_task_gnome_extension_install_remove  quelle=D622,U34
+desktop_task_gnome_extension_static                           linux-core:unit  pfad=desktop::os::platform::gnome_extension_tests::desktop_task_gnome_extension_static  quelle=D622,U34
+desktop_task_gnome_status_states                              linux-core:unit  pfad=desktop::os::platform::gnome_extension_tests::desktop_task_gnome_status_states  quelle=D622,U34
+desktop_task_gnome_headless_variant_a                         linux-gnome:desktop-gnome  ignored threads=1 env=SE_DESKTOP_TASK_GNOME=1 env=SE_DESKTOP_TASK_GUI={gui}  pfad=desktop::os::platform::gnome_headless_tests::desktop_task_gnome_headless_variant_a  quelle=D622,U34,S5-A19
+desktop_task_gnome_headless_variant_b                         linux-gnome:desktop-gnome  ignored threads=1 env=SE_DESKTOP_TASK_GNOME=1 env=SE_DESKTOP_TASK_GUI={gui}  pfad=desktop::os::platform::gnome_headless_tests::desktop_task_gnome_headless_variant_b  quelle=D622,U34,S5-A19
+desktop_task_linux_disable_leaves_no_files                    linux-core:unit  pfad=desktop::os::platform::gnome_steward_tests::desktop_task_linux_disable_leaves_no_files  quelle=D622,U34
+desktop_task_gnome_channel_rejects_wrong_uid_and_token        linux-core:unit  pfad=desktop::os::platform::gnome_task_tests::desktop_task_gnome_channel_rejects_wrong_uid_and_token  quelle=D622,U34
+desktop_task_gnome_control_files_atomic                       linux-core:unit  pfad=desktop::os::platform::gnome_task_tests::desktop_task_gnome_control_files_atomic  quelle=D622,U34
+desktop_task_layer_clipboard_uri_parsing                      linux-core:unit  pfad=desktop::os::platform::layer_shell::layer_clipboard_tests::desktop_task_layer_clipboard_uri_parsing  quelle=D610,U37
+desktop_task_kwin_layer_namespace_desktop                     linux-wayland:kde  ignored threads=1 fixture=kwin env=SE_DESKTOP_TASK_GUI={gui}  pfad=desktop::os::platform::layer_shell::layer_task_tests::desktop_task_kwin_layer_namespace_desktop  quelle=D610,U37,S5-A14
+desktop_task_layer_clipboard_roundtrip_files                  linux-wayland:desktop-linux-wayland  ignored threads=1 env=SE_DESKTOP_TASK_WAYLAND=1 env=SE_DESKTOP_TASK_GUI={gui}  pfad=desktop::os::platform::layer_shell::layer_task_tests::desktop_task_layer_clipboard_roundtrip_files  quelle=D610,U37
+desktop_task_layer_keyboard_on_demand                         linux-wayland:desktop-linux-wayland  ignored threads=1 env=SE_DESKTOP_TASK_WAYLAND=1 env=SE_DESKTOP_TASK_GUI={gui}  pfad=desktop::os::platform::layer_shell::layer_task_tests::desktop_task_layer_keyboard_on_demand  quelle=D610,U37
+desktop_task_layer_no_buildtime_wayland_link                  linux-wayland:desktop-linux-wayland  ignored threads=1 env=SE_DESKTOP_TASK_WAYLAND=1 env=SE_DESKTOP_TASK_GUI={gui}  pfad=desktop::os::platform::layer_shell::layer_task_tests::desktop_task_layer_no_buildtime_wayland_link  quelle=D610,U37
+desktop_task_layer_no_gpu_exits_one                           linux-wayland:desktop-linux-wayland  ignored threads=1 env=SE_DESKTOP_TASK_WAYLAND=1 env=SE_DESKTOP_TASK_GUI={gui}  pfad=desktop::os::platform::layer_shell::layer_task_tests::desktop_task_layer_no_gpu_exits_one  quelle=D610,U37
+desktop_task_layer_shell_bottom_surface                       linux-wayland:desktop-linux-wayland  ignored threads=1 env=SE_DESKTOP_TASK_WAYLAND=1 env=SE_DESKTOP_TASK_GUI={gui}  pfad=desktop::os::platform::layer_shell::layer_task_tests::desktop_task_layer_shell_bottom_surface  quelle=D610,U37
+desktop_task_layer_shell_two_outputs                          linux-wayland:desktop-linux-wayland  ignored threads=1 env=SE_DESKTOP_TASK_WAYLAND=1 env=SE_DESKTOP_TASK_GUI={gui}  pfad=desktop::os::platform::layer_shell::layer_task_tests::desktop_task_layer_shell_two_outputs  quelle=D610,U37
+desktop_task_lock_only_expected_additions                     linux-wayland:desktop-linux-wayland  ignored threads=1 env=SE_DESKTOP_TASK_WAYLAND=1 env=SE_DESKTOP_TASK_GUI={gui}  pfad=desktop::os::platform::layer_shell::layer_task_tests::desktop_task_lock_only_expected_additions  quelle=D610,U37
+desktop_task_layer_cross_output_drop_uses_global_point        linux-core:unit  pfad=desktop::os::platform::layer_shell::layer_tests::desktop_task_layer_cross_output_drop_uses_global_point  quelle=D610,U37
+desktop_task_layer_keysym_table                               linux-core:unit  pfad=desktop::os::platform::layer_shell::layer_tests::desktop_task_layer_keysym_table  quelle=D610,U37
+desktop_task_layer_namespace_by_desktop                       linux-core:unit  pfad=desktop::os::platform::layer_shell::layer_tests::desktop_task_layer_namespace_by_desktop  quelle=D610,U37
+desktop_task_layer_output_keys                                linux-core:unit  pfad=desktop::os::platform::layer_shell::layer_tests::desktop_task_layer_output_keys  quelle=D610,U37
+desktop_task_windows_nav_pane_follows_device_root             windows-desktop:desktop-windows  ignored threads=1 env=SMART_EXPLORER_DESKTOP_TASK=1  pfad=desktop::os::platform::registry_task_tests::desktop_task_windows_nav_pane_follows_device_root  quelle=D586,U32
+desktop_task_windows_nav_pane_keys_match_spec                 windows-desktop:desktop-windows  ignored threads=1 env=SMART_EXPLORER_DESKTOP_TASK=1  pfad=desktop::os::platform::registry_task_tests::desktop_task_windows_nav_pane_keys_match_spec  quelle=D586,U32
+desktop_task_windows_system_items_initial_value               windows-desktop:desktop-windows  threads=1  pfad=desktop::os::platform::registry_task_tests::desktop_task_windows_system_items_initial_value  quelle=D586,U32
+desktop_task_linux_gnome_version_parse                        linux-core:unit  pfad=desktop::os::platform::session_facts::tests::desktop_task_linux_gnome_version_parse  quelle=D622,U34
+desktop_task_linux_session_facts_table                        linux-core:unit  pfad=desktop::os::platform::session_facts::tests::desktop_task_linux_session_facts_table  quelle=D598,U34
+desktop_task_linux_desktop_dir_home_disables_files            linux-core:unit  pfad=desktop::os::platform::trust_tests::desktop_task_linux_desktop_dir_home_disables_files  quelle=D598,U34
+desktop_task_linux_desktop_entry_trust_rules                  linux-core:unit  pfad=desktop::os::platform::trust_tests::desktop_task_linux_desktop_entry_trust_rules  quelle=D598,U34
+desktop_task_linux_launch_decision_table                      linux-core:unit  pfad=desktop::os::platform::trust_tests::desktop_task_linux_launch_decision_table  quelle=D598,U34
+desktop_task_linux_wallpaper_file_urls                        linux-core:unit  pfad=desktop::os::platform::wallpaper::tests::desktop_task_linux_wallpaper_file_urls  quelle=D598,U34
+desktop_task_linux_wallpaper_sources                          linux-core:unit  pfad=desktop::os::platform::wallpaper::tests::desktop_task_linux_wallpaper_sources  quelle=D598,U34
+desktop_task_x11_root_pixmap_background                       linux-desktop:desktop-linux-x11  ignored threads=1 env=SE_DESKTOP_TASK_X11=1 env=SE_DESKTOP_TASK_GUI={gui} env=TMPDIR={tmp} env=TMP={tmp} env=TEMP={tmp}  pfad=desktop::os::platform::wallpaper_root::tests::desktop_task_x11_root_pixmap_background  quelle=D598,U34
+desktop_task_windows_jump_list_removed_from_gui_image         windows-desktop:desktop-windows  ignored threads=1 env=SMART_EXPLORER_DESKTOP_TASK=1 env=SE_DESKTOP_TASK_GUI={gui} env=TMPDIR={tmp} env=TMP={tmp} env=TEMP={tmp}  pfad=desktop::os::platform::window_task_tests::desktop_task_windows_jump_list_removed_from_gui_image  quelle=D586,U32
+desktop_task_windows_show_desktop_keeps_surface               windows-desktop:desktop-windows  ignored threads=1 env=SMART_EXPLORER_DESKTOP_TASK=1 env=SE_DESKTOP_TASK_GUI={gui} env=TMPDIR={tmp} env=TMP={tmp} env=TEMP={tmp}  pfad=desktop::os::platform::window_task_tests::desktop_task_windows_show_desktop_keeps_surface  quelle=D586,U32
+desktop_task_windows_style_enforced_after_change              windows-desktop:desktop-windows  ignored threads=1 env=SMART_EXPLORER_DESKTOP_TASK=1 env=SE_DESKTOP_TASK_GUI={gui} env=TMPDIR={tmp} env=TMP={tmp} env=TEMP={tmp}  pfad=desktop::os::platform::window_task_tests::desktop_task_windows_style_enforced_after_change  quelle=D586,U32
+desktop_task_windows_surface_bottom_toolwindow                windows-desktop:desktop-windows  ignored threads=1 env=SMART_EXPLORER_DESKTOP_TASK=1 env=SE_DESKTOP_TASK_GUI={gui} env=TMPDIR={tmp} env=TMP={tmp} env=TEMP={tmp}  pfad=desktop::os::platform::window_task_tests::desktop_task_windows_surface_bottom_toolwindow  quelle=D586,U32
+desktop_task_windows_surface_stays_bottom_after_click         windows-desktop:desktop-windows  ignored threads=1 env=SMART_EXPLORER_DESKTOP_TASK=1 env=SE_DESKTOP_TASK_GUI={gui} env=TMPDIR={tmp} env=TMP={tmp} env=TEMP={tmp}  pfad=desktop::os::platform::window_task_tests::desktop_task_windows_surface_stays_bottom_after_click  quelle=D586,U32
+desktop_task_windows_update_restarts_surface                  windows-desktop:desktop-windows  ignored threads=1 env=SMART_EXPLORER_DESKTOP_TASK=1 env=SE_DESKTOP_TASK_GUI={gui} env=TMPDIR={tmp} env=TMP={tmp} env=TEMP={tmp}  pfad=desktop::os::platform::window_task_tests::desktop_task_windows_update_restarts_surface  quelle=D586,U32
+desktop_task_x11_clipboard_roundtrip_files                    linux-desktop:desktop-linux-x11  ignored threads=1 env=SE_DESKTOP_TASK_X11=1 env=SE_DESKTOP_TASK_GUI={gui} env=TMPDIR={tmp} env=TMP={tmp} env=TEMP={tmp}  pfad=desktop::os::platform::x11_clipboard::tests::desktop_task_x11_clipboard_roundtrip_files  quelle=D598,U34
+desktop_task_x11_clipboard_too_large_refused                  linux-desktop:desktop-linux-x11  ignored threads=1 env=SE_DESKTOP_TASK_X11=1 env=SE_DESKTOP_TASK_GUI={gui} env=TMPDIR={tmp} env=TMP={tmp} env=TEMP={tmp}  pfad=desktop::os::platform::x11_clipboard::tests::desktop_task_x11_clipboard_too_large_refused  quelle=D598,U34
+desktop_task_cross_monitor_drag                               linux-desktop:desktop-linux-x11  ignored threads=1 env=SE_DESKTOP_TASK_X11=1 env=SE_DESKTOP_TASK_GUI={gui} env=TMPDIR={tmp} env=TMP={tmp} env=TEMP={tmp}  pfad=desktop::os::platform::x11_surface::tests::desktop_task_cross_monitor_drag  quelle=D598,U34
+desktop_task_linux_work_area_intersection                     linux-core:unit  pfad=desktop::os::platform::x11_surface::tests::desktop_task_linux_work_area_intersection  quelle=D598,U34
+desktop_task_x11_below_with_foreign_desktop                   linux-desktop:desktop-linux-x11  ignored threads=1 env=SE_DESKTOP_TASK_X11=1 env=SE_DESKTOP_TASK_GUI={gui} env=TMPDIR={tmp} env=TMP={tmp} env=TEMP={tmp}  pfad=desktop::os::platform::x11_surface::tests::desktop_task_x11_below_with_foreign_desktop  quelle=D598,U34
+desktop_task_x11_monitors_two_screens                         linux-desktop:desktop-linux-x11  ignored threads=1 env=SE_DESKTOP_TASK_X11=1 env=SE_DESKTOP_TASK_GUI={gui} env=TMPDIR={tmp} env=TMP={tmp} env=TEMP={tmp}  pfad=desktop::os::platform::x11_surface::tests::desktop_task_x11_monitors_two_screens  quelle=D598,U34
+desktop_task_x11_no_ewmh_unavailable                          linux-desktop:desktop-linux-x11  ignored threads=1 env=SE_DESKTOP_TASK_X11=1 env=SE_DESKTOP_TASK_GUI={gui} env=TMPDIR={tmp} env=TMP={tmp} env=TEMP={tmp}  pfad=desktop::os::platform::x11_surface::tests::desktop_task_x11_no_ewmh_unavailable  quelle=D598,U34
+desktop_task_x11_window_type_desktop                          linux-desktop:desktop-linux-x11  ignored threads=1 env=SE_DESKTOP_TASK_X11=1 env=SE_DESKTOP_TASK_GUI={gui} env=TMPDIR={tmp} env=TMP={tmp} env=TEMP={tmp}  pfad=desktop::os::platform::x11_surface::tests::desktop_task_x11_window_type_desktop  quelle=D598,U34
+desktop_task_context_menu_unchanged                           linux-core:unit,windows-core:unit  pfad=desktop::os::preserve_tests::desktop_task_context_menu_unchanged  quelle=D562,U15,F4-F11
+desktop_task_release_assets_unchanged                         linux-core:unit,windows-core:unit  pfad=desktop::os::preserve_tests::desktop_task_release_assets_unchanged  quelle=D562,U15,F4-F11
+desktop_task_share_navigation_unchanged                       linux-core:unit,windows-core:unit  pfad=desktop::os::preserve_tests::desktop_task_share_navigation_unchanged  quelle=D562,U15,F4-F11
+desktop_task_sync_autostart_untouched                         linux-core:unit,windows-core:unit  pfad=desktop::os::preserve_tests::desktop_task_sync_autostart_untouched  quelle=D562,U15,F4-F11
+desktop_task_connect_starts_worker                            linux-desktop:desktop-linux-x11,windows-desktop:desktop-windows  ignored threads=1 env=SMART_EXPLORER_DESKTOP_TASK=1 env=SE_DESKTOP_TASK_GUI={gui} env=SE_DESKTOP_TEST_HEADLESS=1 env=TMPDIR={tmp} env=TMP={tmp} env=TEMP={tmp}  pfad=desktop::os::process_task_tests::desktop_task_connect_starts_worker  quelle=D562,U15
+desktop_task_feed_never_starts_worker                         linux-desktop:desktop-linux-x11,windows-desktop:desktop-windows  ignored threads=1 env=SMART_EXPLORER_DESKTOP_TASK=1 env=SE_DESKTOP_TASK_GUI={gui} env=SE_DESKTOP_TEST_HEADLESS=1 env=TMPDIR={tmp} env=TMP={tmp} env=TEMP={tmp}  pfad=desktop::os::process_task_tests::desktop_task_feed_never_starts_worker  quelle=D562,U15
+desktop_task_peek_does_not_start_share_host                   linux-desktop:desktop-linux-x11,windows-desktop:desktop-windows  ignored threads=1 env=SMART_EXPLORER_DESKTOP_TASK=1 env=SE_DESKTOP_TASK_GUI={gui} env=SE_DESKTOP_TEST_HEADLESS=1 env=TMPDIR={tmp} env=TMP={tmp} env=TEMP={tmp}  pfad=desktop::os::process_task_tests::desktop_task_peek_does_not_start_share_host  quelle=D562,U15
+desktop_task_supervisor_kills_hung_surface                    linux-desktop:desktop-linux-x11,windows-desktop:desktop-windows  ignored threads=1 env=SMART_EXPLORER_DESKTOP_TASK=1 env=SE_DESKTOP_TASK_GUI={gui} env=SE_DESKTOP_TEST_HEADLESS=1  pfad=desktop::os::process_task_tests::desktop_task_supervisor_kills_hung_surface  quelle=D562,U15,A45
+desktop_task_supervisor_restarts_after_crash                  linux-desktop:desktop-linux-x11,windows-desktop:desktop-windows  ignored threads=1 env=SMART_EXPLORER_DESKTOP_TASK=1 env=SE_DESKTOP_TASK_GUI={gui} env=SE_DESKTOP_TEST_HEADLESS=1 env=TMPDIR={tmp} env=TMP={tmp} env=TEMP={tmp}  pfad=desktop::os::process_task_tests::desktop_task_supervisor_restarts_after_crash  quelle=D562,U15
+desktop_task_surface_exits_on_channel_end                     linux-desktop:desktop-linux-x11,windows-desktop:desktop-windows  ignored threads=1 env=SMART_EXPLORER_DESKTOP_TASK=1 env=SE_DESKTOP_TASK_GUI={gui} env=SE_DESKTOP_TEST_HEADLESS=1 env=TMPDIR={tmp} env=TMP={tmp} env=TEMP={tmp}  pfad=desktop::os::process_task_tests::desktop_task_surface_exits_on_channel_end  quelle=D562,U15
+desktop_task_update_stop_ends_shell_and_surfaces              linux-desktop:desktop-linux-x11,windows-desktop:desktop-windows  ignored threads=1 env=SMART_EXPLORER_DESKTOP_TASK=1 env=SE_DESKTOP_TASK_GUI={gui} env=SE_DESKTOP_TEST_HEADLESS=1 env=TMPDIR={tmp} env=TMP={tmp} env=TEMP={tmp}  pfad=desktop::os::process_task_tests::desktop_task_update_stop_ends_shell_and_surfaces  quelle=D562,U15
+desktop_task_surface_restart_backoff_grows                    linux-core:unit,windows-core:unit  pfad=desktop::os::supervisor::backoff::tests::desktop_task_surface_restart_backoff_grows  quelle=U34-Zusatz
+desktop_task_layer_supervisor_starts_one_layer_process        linux-core:unit  pfad=desktop::os::supervisor_surface::tests::desktop_task_layer_supervisor_starts_one_layer_process  quelle=D610,U37
+desktop_task_wallpaper_fallback_color                         linux-core:unit,windows-core:unit  pfad=desktop::os::wallpaper_image::tests::desktop_task_wallpaper_fallback_color  quelle=D574,U30
+desktop_task_wallpaper_modes                                  linux-core:unit,windows-core:unit  pfad=desktop::os::wallpaper_image::tests::desktop_task_wallpaper_modes  quelle=D574,U30
+desktop_task_online_rule_matches_bridge                       linux-core:unit  pfad=mobile::domains::share_status::desktop_tests::desktop_task_online_rule_matches_bridge  quelle=D532,D682,F18
+desktop_task_share_status_device_shape_unchanged              linux-core:unit  pfad=mobile::domains::share_status::desktop_tests::desktop_task_share_status_device_shape_unchanged  quelle=D532,D682,F18
+
+# ---- S4/S5 Zusatztests ohne Stapelpraefix aus den Uebergaben (U41) ----
+mcp_task_screen_refuses_unnamed_devices_and_unknown_actions   linux-core:unit  pfad=cli::mcp::screen_tool::tests::mcp_task_screen_refuses_unnamed_devices_and_unknown_actions  quelle=U16-Zusatz
+layer_wanted_surfaces_by_mechanism                            linux-core:unit  pfad=desktop::os::supervisor_surface::tests::layer_wanted_surfaces_by_mechanism  quelle=U37-Zusatz
+layer_models_of_a_monitor_surface_carry_no_output_key         linux-core:unit  pfad=desktop::os::supervisor_surface::tests::layer_models_of_a_monitor_surface_carry_no_output_key  quelle=U37-Zusatz
+display_state_gives_logical_monitors                          linux-core:unit  pfad=desktop::os::platform::gnome_dbus::tests::display_state_gives_logical_monitors  quelle=U34-Zusatz
+gnome_dbus_calls_against_a_test_service                       linux-gnome:desktop-gnome  ignored threads=1 fixture=session-bus  pfad=desktop::os::platform::gnome_bus_tests::gnome_dbus_calls_against_a_test_service  quelle=U34-Zusatz
+gnome_steward_publishes_the_control_file_and_takes_surfaces   linux-core:unit  pfad=desktop::os::platform::gnome_steward_tests::gnome_steward_publishes_the_control_file_and_takes_surfaces  quelle=U34-Zusatz
+gnome_steward_takes_over_icons_only_with_consent_and_gives_them_back  linux-core:unit  pfad=desktop::os::platform::gnome_steward_tests::gnome_steward_takes_over_icons_only_with_consent_and_gives_them_back  quelle=U34-Zusatz
+layer_clipboard_formats_roundtrip                             linux-core:unit  pfad=desktop::os::platform::layer_shell::layer_clipboard_tests::layer_clipboard_formats_roundtrip  quelle=U37-Zusatz
+layer_scale_and_pointer_mapping                               linux-core:unit  pfad=desktop::os::platform::layer_shell::layer_tests::layer_scale_and_pointer_mapping  quelle=U37-Zusatz
+keys_are_file_names_and_unique                                linux-core:unit  pfad=desktop::os::platform::monitor_keys::tests::keys_are_file_names_and_unique  quelle=U34-Zusatz
+root_pixmap_pixels_become_rgb                                 linux-core:unit  pfad=desktop::os::platform::wallpaper::tests::root_pixmap_pixels_become_rgb  quelle=U34-Zusatz
+an_unwatched_monitor_never_changes                            linux-core:unit  pfad=desktop::os::platform::wallpaper_watch::tests::an_unwatched_monitor_never_changes  quelle=U34-Zusatz
+x11_clipboard_formats_roundtrip                               linux-core:unit  pfad=desktop::os::platform::x11_clipboard::tests::x11_clipboard_formats_roundtrip  quelle=U34-Zusatz
+jump_list_plan_follows_tiles                                  windows-core:unit  pfad=desktop::os::platform::adapter_tests::jump_list_plan_follows_tiles  quelle=U32-Zusatz
+windows_capture_starts_anew_after_the_secure_desktop          windows-screen:screen-windows  pfad=screen::os::capture_source::tests::windows_capture_starts_anew_after_the_secure_desktop  quelle=U16-Zusatz
+windows_limits_follow_graphics_capture                        windows-screen:screen-windows  pfad=screen::os::host_backend::tests::windows_limits_follow_graphics_capture  quelle=U16-Zusatz
+windows_monitor_names_follow_the_device_number                windows-screen:screen-windows  pfad=screen::os::monitors::tests::windows_monitor_names_follow_the_device_number  quelle=U16-Zusatz
+windows_desktop_names_compare_without_case                    windows-screen:screen-windows  pfad=screen::os::secure_desktop::tests::windows_desktop_names_compare_without_case  quelle=U16-Zusatz
+windows_app_names_are_file_names_without_extension            windows-screen:screen-windows  pfad=screen::os::window_list::tests::windows_app_names_are_file_names_without_extension  quelle=U16-Zusatz
+spa_pod_negotiated_format_is_read_and_garbage_is_not          linux-core:unit  pfad=screen::os::portal_session::tests::spa_pod_negotiated_format_is_read_and_garbage_is_not  quelle=U19-Zusatz
+pipewire_rows_become_opaque_bgra                              linux-core:unit  pfad=screen::os::portal_session::tests::pipewire_rows_become_opaque_bgra  quelle=U19-Zusatz
+portal_source_maps_the_portal_states                          linux-core:unit  pfad=screen::os::portal_session::tests::portal_source_maps_the_portal_states  quelle=U19-Zusatz
+x11_picture_hash_follows_fnv1a_over_words                     linux-core:unit  pfad=screen::os::x11_capture::tests::x11_picture_hash_follows_fnv1a_over_words  quelle=U19-Zusatz
+x11_pointer_is_blended_premultiplied_and_clipped              linux-core:unit  pfad=screen::os::x11_capture::tests::x11_pointer_is_blended_premultiplied_and_clipped  quelle=U19-Zusatz
+x11_ids_and_classes                                           linux-core:unit  pfad=screen::os::x11_capture::tests::x11_ids_and_classes  quelle=U19-Zusatz
+linux_probe_timeout_tests                                     linux-core:unit  art=modul  modul=::desktop::os::platform::probe_timeout::tests::  quelle=U34-Zusatz
+# ---- S4/S5 Pruefungen der Suite (U41; C5, SCR-M10, SCR-M11, DSK-M3, DSK-M5, DSK-M14, S5-A45) ----
+screen_task_installer_lists_screen_licenses                   prepare:static  art=check  quelle=C5,SCR-M10,W6
+screen_task_install_linux_kde_interfaces_line                 prepare:static  art=check  quelle=C5,SCR-M5
+desktop_task_installer_static                                 prepare:static  art=check  quelle=C5,D562,F5
+desktop_task_install_linux_static                             prepare:static  art=check  quelle=C5,D562
+desktop_task_docs_todo_entries_present                        prepare:static  art=check  quelle=D690,C7
+screen_task_docs_inventory_lists_every_cli_command            linux-core:docs-cli  art=check  quelle=B422,SCR-M11
+desktop_task_docs_inventory_lists_every_cli_command           linux-core:docs-cli  art=check  quelle=D690,DSK-M14
+desktop_task_windows_progman_precheck                         windows-desktop:desktop-windows  art=check  quelle=D586,S5-A7
+desktop_task_no_hang_restart_during_suite                     linux-desktop:desktop-linux-x11,windows-desktop:desktop-windows  art=check  quelle=D562,S5-A45
+
+# ---- S4 SCR-M8, SCR-M9 (U27, U28): JVM in android-build screen-jvm, Instrumentierung ScreenTaskTest je Methode ----
+screen_task_android_input_touch_to_pointer                    android-build:screen-jvm  art=junit  quelle=B403,U28
+screen_task_android_input_touch_goes_to_android_host_as_touch android-build:screen-jvm  art=junit  quelle=B403,U28
+screen_task_android_input_releases_on_pause                   android-build:screen-jvm  art=junit  quelle=B403,U28
+screen_task_android_texts_match_desktop                       android-build:screen-jvm  art=junit  quelle=B403,U28
+screen_task_android_decoder_offers_include_tiles              android-build:screen-jvm  art=junit  quelle=B403,U28
+ScreenInputMapperTest                                         android-build:screen-jvm  art=junit  quelle=B403,U28
+ScreenTextsTest                                               android-build:screen-jvm  art=junit  quelle=B403,U28
+ScreenSessionStateTest                                        android-build:screen-jvm  art=junit  quelle=B403,U28
+screen_task_android_host_bench_synthetic                      android-device:screen-android-device  art=instr  quelle=B391,U27
+screen_task_android_host_snapshot_nonblack                    android-device:screen-android-device  art=instr  quelle=B391,U27
+screen_task_android_still_interval_respected                  android-device:screen-android-device  art=instr  quelle=B391,U27
+screen_task_android_still_secure_window_black                 android-device:screen-android-device  art=instr  quelle=B391,U27,S4-A12
+screen_task_android_gesture_tap_lands                         android-device:screen-android-device  art=instr  quelle=B391,U27
+screen_task_android_text_set                                  android-device:screen-android-device  art=instr  quelle=B391,U27
+screen_task_android_consent_action_is_activity_intent         android-device:screen-android-device,android-device-api30:screen-android-api30  art=instr  quelle=B391,U27,D3
+screen_task_android_viewer_decodes_barcode                    android-device:screen-android-device  art=instr  quelle=B403,U28
+screen_task_android_grid_switch                               android-device:screen-android-device  art=instr  quelle=B403,U28
+
+# ---- S5 Launcher DSK-M9 bis DSK-M12 (U35, U38): JVM in android-build launcher-jvm ----
+launcher_task_launcher_package_imports_isolated               android-build:launcher-jvm  art=junit  quelle=D634,U35
+launcher_task_existing_nav_kinds_unchanged                    android-build:launcher-jvm  art=junit  quelle=F16,U35
+launcher_task_main_activity_filters_unchanged                 android-build:launcher-jvm  art=junit  quelle=F17,U35
+launcher_task_widget_picker_preview_order                     android-build:launcher-jvm  art=junit  quelle=D658,U38
+launcher_task_private_space_settings_entry_only_api36         android-build:launcher-jvm  art=junit  quelle=D670,U38
+LauncherFrameTest                                             android-build:launcher-jvm  art=junit  quelle=D634,U35
+LauncherSwitchRulesTest                                       android-build:launcher-jvm  art=junit  quelle=D634,U35
+LayoutModelTest                                               android-build:launcher-jvm  art=junit  quelle=D646,U35
+GridGeometryTest                                              android-build:launcher-jvm  art=junit  quelle=D646,U35
+LauncherSearchTest                                            android-build:launcher-jvm  art=junit  quelle=D646,U35
+WidgetPreviewTest                                             android-build:launcher-jvm  art=junit  quelle=D658,U38
+WidgetSizingTest                                              android-build:launcher-jvm  art=junit  quelle=D658,U38
+WidgetFlowTest                                                android-build:launcher-jvm  art=junit  quelle=D658,U38
+BadgeRulesTest                                                android-build:launcher-jvm  art=junit  quelle=D670,U38
+PrivateSpaceTest                                              android-build:launcher-jvm  art=junit  quelle=D670,U38
+LauncherComponentsManifestTest                                android-build:launcher-jvm  art=junit  quelle=D634,U38
+
+# ---- S5 Launcher DSK-M9 bis DSK-M12 (U35, U38): Instrumentierung LauncherTaskTest je Methode; DSK-M11 auch API 30 ----
+launcher_task_components_disabled_by_default                  android-device:launcher-android-device  art=instr  quelle=D634,U35
+launcher_task_enable_requests_role                            android-device:launcher-android-device  art=instr  quelle=D634,U35,S5-A32
+launcher_task_disable_returns_home                            android-device:launcher-android-device  art=instr  quelle=D634,U35
+launcher_task_disable_with_two_launchers_shows_chooser_hint   android-device:launcher-android-device  art=instr  quelle=D634,U35
+launcher_task_remove_deletes_files                            android-device:launcher-android-device  art=instr  quelle=D634,U35
+launcher_task_process_has_no_core                             android-device:launcher-android-device  art=instr  quelle=D634,U35,F15
+launcher_task_main_process_unchanged                          android-device:launcher-android-device  art=instr  quelle=D634,U35,F15
+launcher_task_survives_package_replace                        android-device:launcher-android-device  art=instr  quelle=D634,U35,S5-A30
+launcher_task_nav_token_from_main_only                        android-device:launcher-android-device  art=instr  quelle=D634,U35,F16
+launcher_task_app_list_matches_launcherapps                   android-device:launcher-android-device  art=instr  quelle=D646,U35
+launcher_task_search_finds_app_and_device                     android-device:launcher-android-device  art=instr  quelle=D646,U35
+launcher_task_folder_by_drag                                  android-device:launcher-android-device  art=instr  quelle=D646,U35
+launcher_task_uninstall_intent_resolves                       android-device:launcher-android-device  art=instr  quelle=D646,U35
+launcher_task_app_info_opens                                  android-device:launcher-android-device  art=instr  quelle=D646,U35
+launcher_task_home_key_resets                                 android-device:launcher-android-device  art=instr  quelle=D646,U35
+launcher_task_package_removed_clears_items                    android-device:launcher-android-device  art=instr  quelle=D646,U35
+launcher_task_work_profile_badged                             android-device:launcher-android-device  art=instr  quelle=D646,U35
+launcher_task_widget_bind_config_resize                       android-device:launcher-android-device,android-device-api30:launcher-android-api30  art=instr  quelle=D658,U38
+launcher_task_widget_reconfigure                              android-device:launcher-android-device,android-device-api30:launcher-android-api30  art=instr  quelle=D658,U38
+launcher_task_widgets_restored_after_reenable                 android-device:launcher-android-device,android-device-api30:launcher-android-api30  art=instr  quelle=D658,U38
+launcher_task_pin_shortcut_request                            android-device:launcher-android-device,android-device-api30:launcher-android-api30  art=instr  quelle=D658,U38
+launcher_task_pin_widget_request                              android-device:launcher-android-device,android-device-api30:launcher-android-api30  art=instr  quelle=D658,U38
+launcher_task_pin_activity_rejects_forged_intent              android-device:launcher-android-device,android-device-api30:launcher-android-api30  art=instr  quelle=D658,U38
+launcher_task_badge_from_test_notification                    android-device:launcher-android-device  art=instr  quelle=D670,U38
+launcher_task_quiet_mode_toggle                               android-device:launcher-android-device  art=instr  quelle=D670,U38
+launcher_task_private_space_hidden_when_locked                android-device:launcher-android-device  art=instr  quelle=D670,U38,S5-A34
+launcher_task_private_space_not_in_search_when_locked         android-device:launcher-android-device  art=instr  quelle=D670,U38,S5-A34
+
+# ---- aus [noch nicht umgesetzt] nach [umgesetzt] (im Code vorhanden): U27 (SEC-P4b), U31 (SEC-P11) ----
+perm_task_android_screen_approval_actions_are_activity_intents  android-device:perm-android-device,android-device-api30:perm-android-api30  art=instr  quelle=R401,D3,SEC-P4b
+vault_task_android_texts_cover_codes  android-build:vault-android  art=junit  quelle=U31-15,U31-16
+vault_task_android_merge_assembles_choices  android-build:vault-android  art=junit  quelle=U31-9
+vault_task_android_create_unlock_memory_write_read  android-device:vault-android-device  art=instr  quelle=T542,U31-16
+vault_task_android_screen_off_locks  android-device:vault-android-device  art=instr  quelle=T542,U31-16
+vault_task_android_background_one_minute_locks  android-device:vault-android-device  art=instr  quelle=T542,U31-16
+vault_task_android_sync_conflict_compare_keep_both  android-device:vault-android-device  art=instr  quelle=T542,U31-16
+vault_task_android_every_bridge_method_once  android-device:vault-android-device  art=instr  quelle=T542,U31-16
+vault_task_android_notification_has_no_names  android-device:vault-android-device  art=instr  quelle=T542,U31-16
+vault_task_android_password_not_saved_state  android-device:vault-android-device  art=instr  quelle=T542,U31-16
+vault_task_android_unlock_wrong_password_clears_field  android-device:vault-android-device  art=instr  quelle=T542,U31-16
+vault_task_android_lock_returns_to_list  android-device:vault-android-device  art=instr  quelle=T542,U31-16
+vault_task_android_job_card_has_compare  android-device:vault-android-device  art=instr  quelle=T542,U31-16
+
+# ---- S1, S2, S3 Tests ohne Inventurzeile (U41 Inventurlauf Teil 1; Pfade aus dem Modulbaum, Stufe nach Plattform) ----
+vault_task_gui_compare_actions_by_group                       linux-core:unit  pfad=app::vault_modules::vault_compare_tests::vault_task_gui_compare_actions_by_group  quelle=Code,U41-Inventurlauf
+vault_task_gui_group_filter_excludes_structure_by_default     linux-core:unit  pfad=app::vault_modules::vault_compare_tests::vault_task_gui_group_filter_excludes_structure_by_default  quelle=Code,U41-Inventurlauf
+vault_task_gui_merge_model_follows_the_choices                linux-core:unit  pfad=app::vault_modules::vault_compare_tests::vault_task_gui_merge_model_follows_the_choices  quelle=Code,U41-Inventurlauf
+vault_task_gui_render_sidebar_unlock_compare                  linux-core:unit  pfad=app::vault_modules::vault_gui_tests::vault_task_gui_render_sidebar_unlock_compare  quelle=Code,U41-Inventurlauf
+vault_task_gui_vault_backend_not_cached                       linux-core:unit  pfad=app::vault_modules::vault_gui_tests::vault_task_gui_vault_backend_not_cached  quelle=Code,U41-Inventurlauf
+vault_task_gui_create_wizard_validation                       linux-core:unit  pfad=app::vault_modules::vault_manage_tests::vault_task_gui_create_wizard_validation  quelle=Code,U41-Inventurlauf
+vault_task_gui_mount_on_open_is_async                         linux-core:unit  pfad=app::vault_modules::vault_manage_tests::vault_task_gui_mount_on_open_is_async  quelle=Code,U41-Inventurlauf
+vault_task_gui_ui_settings_roundtrip                          linux-core:unit  pfad=app::vault_modules::vault_manage_tests::vault_task_gui_ui_settings_roundtrip  quelle=Code,U41-Inventurlauf
+vault_task_gui_rows_follow_the_list_and_the_service           linux-core:unit  pfad=app::vault_modules::vault_models_tests::vault_task_gui_rows_follow_the_list_and_the_service  quelle=Code,U41-Inventurlauf
+vault_task_gui_unsaved_changes_dialog_lock_keep               linux-core:unit  pfad=app::vault_modules::vault_models_tests::vault_task_gui_unsaved_changes_dialog_lock_keep  quelle=Code,U41-Inventurlauf
+vault_task_gui_sync_create_draft_needs_its_second_side        linux-core:unit  pfad=app::vault_modules::vault_sync_tests::vault_task_gui_sync_create_draft_needs_its_second_side  quelle=Code,U41-Inventurlauf
+vault_task_gui_sync_run_uses_vault_runner                     linux-core:unit  pfad=app::vault_modules::vault_sync_tests::vault_task_gui_sync_run_uses_vault_runner  quelle=Code,U41-Inventurlauf
+vault_task_cli_sync_list_marks_vault_jobs                     linux-core:unit  pfad=cli::sync_jobs::output::tests::vault_task_cli_sync_list_marks_vault_jobs  quelle=Code,U41-Inventurlauf
+vault_task_cli_completion_offers_sites_and_jobs               linux-core:unit  pfad=cli::vault::tests::vault_task_cli_completion_offers_sites_and_jobs  quelle=Code,U41-Inventurlauf
+vault_task_cli_json_keys_exact                                linux-core:unit  pfad=cli::vault::tests::vault_task_cli_json_keys_exact  quelle=Code,U41-Inventurlauf
+vault_task_cli_parses_every_command                           linux-core:unit  pfad=cli::vault::tests::vault_task_cli_parses_every_command  quelle=Code,U41-Inventurlauf
+vault_task_cli_small_rules                                    linux-core:unit  pfad=cli::vault::tests::vault_task_cli_small_rules  quelle=Code,U41-Inventurlauf
+vault_task_mcp_locked_vault_names_the_unlock_command          linux-core:unit  pfad=cli::vault::tests::vault_task_mcp_locked_vault_names_the_unlock_command  quelle=Code,U41-Inventurlauf
+drive_task_devices_child_waits_for_share_allowed              linux-core:unit  pfad=daemon::drive_modules::devices_ipc::tests::drive_task_devices_child_waits_for_share_allowed  quelle=Code,U41-Inventurlauf
+drive_task_devices_disable_keeps_child_journals               linux-core:unit  pfad=daemon::drive_modules::devices_ipc::tests::drive_task_devices_disable_keeps_child_journals  quelle=Code,U41-Inventurlauf
+drive_task_devices_enable_default_applies_once                linux-core:unit  pfad=daemon::drive_modules::devices_ipc::tests::drive_task_devices_enable_default_applies_once  quelle=Code,U41-Inventurlauf
+drive_task_devices_status_json_shape                          linux-core:unit  pfad=daemon::drive_modules::devices_ipc::tests::drive_task_devices_status_json_shape  quelle=Code,U41-Inventurlauf
+drive_task_devices_watch_not_promoting                        linux-core:unit  pfad=daemon::drive_modules::ipc_protocol_drives::tests::drive_task_devices_watch_not_promoting  quelle=Code,U41-Inventurlauf
+vault_task_ipc_compare_replies_round_trip                     linux-core:unit  pfad=daemon::ipc_protocol::vault::tests::vault_task_ipc_compare_replies_round_trip  quelle=Code,U41-Inventurlauf
+vault_task_ipc_compare_wire_forms                             linux-core:unit  pfad=daemon::ipc_protocol::vault::tests::vault_task_ipc_compare_wire_forms  quelle=Code,U41-Inventurlauf
+vault_task_compare_pages_fit_ipc_line                         linux-core:unit  pfad=daemon::ipc_vault_compare::tests::vault_task_compare_pages_fit_ipc_line  quelle=Code,U41-Inventurlauf
+vault_task_compare_text_too_large_refused                     linux-core:unit  pfad=daemon::ipc_vault_compare::tests::vault_task_compare_text_too_large_refused  quelle=Code,U41-Inventurlauf
+drive_task_docs_device_ids_keep_the_key                       linux-core:unit  pfad=mobile::domains::docs_ids::tests::drive_task_docs_device_ids_keep_the_key  quelle=Code,U41-Inventurlauf
+drive_task_docs_ids_reject_escapes                            linux-core:unit  pfad=mobile::domains::docs_ids::tests::drive_task_docs_ids_reject_escapes  quelle=Code,U41-Inventurlauf
+drive_task_docs_ids_round_trip_every_root                     linux-core:unit  pfad=mobile::domains::docs_ids::tests::drive_task_docs_ids_round_trip_every_root  quelle=Code,U41-Inventurlauf
+drive_task_docs_is_child_without_io                           linux-core:unit  pfad=mobile::domains::docs_ids::tests::drive_task_docs_is_child_without_io  quelle=Code,U41-Inventurlauf
+drive_task_docs_errno_follows_the_c4_table                    linux-core:unit  pfad=mobile::domains::docs_io::tests::drive_task_docs_errno_follows_the_c4_table  quelle=Code,U41-Inventurlauf
+drive_task_docs_modes_truncate_only_with_t_and_refuse_append  linux-core:unit  pfad=mobile::domains::docs_io::tests::drive_task_docs_modes_truncate_only_with_t_and_refuse_append  quelle=Code,U41-Inventurlauf
+drive_task_docs_unknown_descriptor_is_ebadf                   linux-core:unit  pfad=mobile::domains::docs_io::tests::drive_task_docs_unknown_descriptor_is_ebadf  quelle=Code,U41-Inventurlauf
+drive_task_docs_nothing_released_by_default                   linux-core:unit  pfad=mobile::domains::docs_vault::tests::drive_task_docs_nothing_released_by_default  quelle=Code,U41-Inventurlauf
+drive_task_docs_withdrawn_roots_lose_their_release            linux-core:unit  pfad=mobile::domains::docs_vault::tests::drive_task_docs_withdrawn_roots_lose_their_release  quelle=Code,U41-Inventurlauf
+drive_task_devices_child_mode_rules                           linux-core:unit  pfad=mount::device_tree::tests::drive_task_devices_child_mode_rules  quelle=Code,U41-Inventurlauf
+drive_task_devices_virtual_layers_read_only                   linux-core:unit  pfad=mount::device_tree::tests::drive_task_devices_virtual_layers_read_only  quelle=Code,U41-Inventurlauf
+drive_task_devices_names_reserved_rooms                       linux-core:unit  pfad=mount::device_tree_names_tests::drive_task_devices_names_reserved_rooms  quelle=Code,U41-Inventurlauf
+drive_task_kde_places_removed_exactly                         linux-core:unit  pfad=mount::os::linux_os::bookmarks_tests::drive_task_kde_places_removed_exactly  quelle=Code,U41-Inventurlauf
+drive_task_mount_point_name_search_has_no_limit               linux-core:unit  pfad=mount::os::linux_os::mount_point::tests::drive_task_mount_point_name_search_has_no_limit  quelle=Code,U41-Inventurlauf
+perm_task_windows_helper_many_jobs_at_once                    windows-core:perm-windows  ignored threads=1 env=SMART_EXPLORER_PERM_WINDOWS_TASK=1 env=SMART_EXPLORER_PERM_SE_BIN={se}  pfad=share::platform_exec::exec_account_tests::perm_task_windows_helper_many_jobs_at_once  quelle=Code,U41-Inventurlauf
+perm_task_linux_helper_many_sessions_at_once                  linux-root:perm-linux-helper  ignored threads=1 fixture=sudo env=SMART_EXPLORER_PERM_HELPER_TASK=1 env=SMART_EXPLORER_PERM_SE_BIN={se}  pfad=share::platform_exec::exec_helper_setup::tests::perm_task_linux_helper_many_sessions_at_once  quelle=Code,U41-Inventurlauf
+vault_task_compare_model_keys_round_trip                      linux-core:unit  pfad=vault::core::compare_model::tests::vault_task_compare_model_keys_round_trip  quelle=Code,U41-Inventurlauf
+vault_task_compare_model_view_counts_every_group              linux-core:unit  pfad=vault::core::compare_model::tests::vault_task_compare_model_view_counts_every_group  quelle=Code,U41-Inventurlauf
+vault_task_conflict_name_keeps_extension_and_counts_up        linux-core:unit  pfad=vault::core::conflict_names::tests::vault_task_conflict_name_keeps_extension_and_counts_up  quelle=Code,U41-Inventurlauf
+vault_task_conflict_name_without_extension_and_with_separators  linux-core:unit  pfad=vault::core::conflict_names::tests::vault_task_conflict_name_without_extension_and_with_separators  quelle=Code,U41-Inventurlauf
+vault_task_error_texts_cover_every_code                       linux-core:unit  pfad=vault::core::error_texts::tests::vault_task_error_texts_cover_every_code  quelle=Code,U41-Inventurlauf
+vault_task_health_model_names_and_actions                     linux-core:unit  pfad=vault::core::health_model::tests::vault_task_health_model_names_and_actions  quelle=Code,U41-Inventurlauf
+vault_task_compare_actions_check_the_entry                    linux-core:unit  pfad=vault::os::compare_actions_tests::vault_task_compare_actions_check_the_entry  quelle=Code,U41-Inventurlauf
+vault_task_compare_keep_a_b_collective_action                 linux-core:unit  pfad=vault::os::compare_actions_tests::vault_task_compare_keep_a_b_collective_action  quelle=Code,U41-Inventurlauf
+vault_task_compare_transfer_records_baseline                  linux-core:unit  pfad=vault::os::compare_actions_tests::vault_task_compare_transfer_records_baseline  quelle=Code,U41-Inventurlauf
+vault_task_compare_confirm_delete_bypasses_deferral_keeps_order  linux-core:unit  pfad=vault::os::compare_folders_tests::vault_task_compare_confirm_delete_bypasses_deferral_keeps_order  quelle=Code,U41-Inventurlauf
+vault_task_compare_folders_keep_both_renames_node_of_b        linux-core:unit  pfad=vault::os::compare_folders_tests::vault_task_compare_folders_keep_both_renames_node_of_b  quelle=Code,U41-Inventurlauf
+vault_task_compare_restore_copies_back                        linux-core:unit  pfad=vault::os::compare_folders_tests::vault_task_compare_restore_copies_back  quelle=Code,U41-Inventurlauf
+vault_task_compare_groups_from_actions                        linux-core:unit  pfad=vault::os::compare_tests::vault_task_compare_groups_from_actions  quelle=Code,U41-Inventurlauf
+vault_task_compare_item_ids_stable                            linux-core:unit  pfad=vault::os::compare_tests::vault_task_compare_item_ids_stable  quelle=Code,U41-Inventurlauf
+vault_task_compare_merge_limit_refused                        linux-core:unit  pfad=vault::os::compare_tests::vault_task_compare_merge_limit_refused  quelle=Code,U41-Inventurlauf
+vault_task_compare_size_is_cleartext                          linux-core:unit  pfad=vault::os::compare_tests::vault_task_compare_size_is_cleartext  quelle=Code,U41-Inventurlauf
+vault_task_compare_stale_after_new_compare                    linux-core:unit  pfad=vault::os::compare_tests::vault_task_compare_stale_after_new_compare  quelle=Code,U41-Inventurlauf
+vault_task_compare_technical_files_fold_into_item             linux-core:unit  pfad=vault::os::compare_tests::vault_task_compare_technical_files_fold_into_item  quelle=Code,U41-Inventurlauf
+vault_task_compare_uses_other_side_key                        linux-core:unit  pfad=vault::os::compare_tests::vault_task_compare_uses_other_side_key  quelle=Code,U41-Inventurlauf
+vault_task_dir_map_maps_paths_shapes_and_long_names           linux-core:unit  pfad=vault::os::dir_map_tests::vault_task_dir_map_maps_paths_shapes_and_long_names  quelle=Code,U41-Inventurlauf
+vault_task_dir_map_walk_ends_with_cancel_or_lock              linux-core:unit  pfad=vault::os::dir_map_tests::vault_task_dir_map_walk_ends_with_cancel_or_lock  quelle=Code,U41-Inventurlauf
+
+# ---- S2 DRV-M8 (U23): aus [noch nicht umgesetzt] verschoben, im Code vorhanden (L302) ----
+drive_task_android_roots_follow_settings          android-build:drive-android  art=junit  quelle=L302
+drive_task_android_locked_vault_has_no_root       android-build:drive-android  art=junit  quelle=L302
+drive_task_android_is_child_without_io            android-build:drive-android  art=junit  quelle=L302
+drive_task_android_children_loading_then_notify   android-build:drive-android  art=junit  quelle=L302
+drive_task_android_offline_device_extra_error     android-build:drive-android  art=junit  quelle=L302
+drive_task_android_mode_wt_truncates_w_not        android-build:drive-android  art=junit  quelle=L302
+drive_task_android_append_rejected                android-build:drive-android  art=junit  quelle=L302
+drive_task_android_ids_stable_after_device_rename android-build:drive-android  art=junit  quelle=L302
+drive_task_android_reader_sees_dirty_entry        android-build:drive-android  art=junit  quelle=L302,L368
+drive_task_android_local_only_flag_only_for_local_vaults  android-build:drive-android  art=junit  quelle=L302,L357
+drive_task_android_provider_init_before_application  android-build:drive-android  art=junit  quelle=L302,L401
+drive_task_android_commit_worker_has_foreground_info  android-build:drive-android  art=junit  quelle=L302,L405
+drive_task_android_open_read_seek_large_file_range  android-device:drive-android-device  art=instr fixture=sftp  quelle=L302
+drive_task_android_write_close_uploads            android-device:drive-android-device  art=instr fixture=sftp  quelle=L302
+drive_task_android_process_kill_retries_pending   android-device:drive-android-device  art=instr fixture=sftp  quelle=L302
+drive_task_android_tree_grant_persists_restart    android-device:drive-android-device  art=instr  quelle=L302
+drive_task_android_handler_thread_per_file        android-device:drive-android-device  art=instr fixture=sftp  quelle=L302
+drive_task_android_smb_root_rw                    android-device:drive-android-device  art=instr  quelle=L302
+drive_task_android_mediastore_has_no_provider_files  android-device:drive-android-device  art=instr  quelle=L302,L358
+
+[noch nicht umgesetzt]
 
 # ---- S2 DRV-M2 Windows (kein Paket benannt): windows-core drive-dokany-regression (L350, S2-A3) ----
 drive_task_windows_realpath_native_on_dokany            windows-core:drive-dokany-regression  ignored threads=1 fixture=dokany  paket=offen  quelle=L350,S2-A3
@@ -471,27 +942,6 @@ drive_task_mount_path_for_maps_drive_paths        linux-root:drive-vault,windows
 drive_task_vault_linux_mountpoint_tmpfs_sticky_locked  linux-root:drive-vault  fixture=runtime-tmpfs  paket=U14  quelle=L292
 drive_task_vault_linux_refuses_non_tmpfs          linux-root:drive-vault  paket=U14  quelle=L292
 drive_task_vault_drive_letter_rw                  windows-core:drive-vault  fixture=dokany  paket=U14  quelle=L292
-
-# ---- S2 DRV-M8 (U23): Robolectric in android-build, Emulator in android-device (L302) ----
-drive_task_android_roots_follow_settings          android-build:drive-android  art=junit  paket=U23  quelle=L302
-drive_task_android_locked_vault_has_no_root       android-build:drive-android  art=junit  paket=U23  quelle=L302
-drive_task_android_is_child_without_io            android-build:drive-android  art=junit  paket=U23  quelle=L302
-drive_task_android_children_loading_then_notify   android-build:drive-android  art=junit  paket=U23  quelle=L302
-drive_task_android_offline_device_extra_error     android-build:drive-android  art=junit  paket=U23  quelle=L302
-drive_task_android_mode_wt_truncates_w_not        android-build:drive-android  art=junit  paket=U23  quelle=L302
-drive_task_android_append_rejected                android-build:drive-android  art=junit  paket=U23  quelle=L302
-drive_task_android_ids_stable_after_device_rename android-build:drive-android  art=junit  paket=U23  quelle=L302
-drive_task_android_reader_sees_dirty_entry        android-build:drive-android  art=junit  paket=U23  quelle=L302,L368
-drive_task_android_local_only_flag_only_for_local_vaults  android-build:drive-android  art=junit  paket=U23  quelle=L302,L357
-drive_task_android_provider_init_before_application  android-build:drive-android  art=junit  paket=U23  quelle=L302,L401
-drive_task_android_commit_worker_has_foreground_info  android-build:drive-android  art=junit  paket=U23  quelle=L302,L405
-drive_task_android_open_read_seek_large_file_range  android-device:drive-android-device  art=instr fixture=sftp  paket=U23  quelle=L302
-drive_task_android_write_close_uploads            android-device:drive-android-device  art=instr fixture=sftp  paket=U23  quelle=L302
-drive_task_android_process_kill_retries_pending   android-device:drive-android-device  art=instr fixture=sftp  paket=U23  quelle=L302
-drive_task_android_tree_grant_persists_restart    android-device:drive-android-device  art=instr  paket=U23  quelle=L302
-drive_task_android_handler_thread_per_file        android-device:drive-android-device  art=instr fixture=sftp  paket=U23  quelle=L302
-drive_task_android_smb_root_rw                    android-device:drive-android-device  art=instr  paket=U23  quelle=L302
-drive_task_android_mediastore_has_no_provider_files  android-device:drive-android-device  art=instr  paket=U23  quelle=L302,L358
 
 # ---- S2 DRV-M10 Bestandsvertraege ohne Namen im Plan (Namen von U39 gesetzt; Kern-Lesung Abschnitt 5) ----
 drive_task_stage_names_se_mount_prefix_unchanged  linux-core:unit,windows-core:drive-cli  paket=offen  quelle=L312,D3-Erhaltung-S2
@@ -560,20 +1010,6 @@ vault_task_gui_sync_editor_fixed_fields           linux-desktop:gui-harness  pak
 vault_task_gui_sidebar_lock_event_clears_tab      linux-desktop:gui-harness  paket=U29  quelle=T533
 vault_task_gui_recovery_page_text_only            linux-desktop:gui-harness  paket=U29  quelle=T533
 
-# ---- S3 VLT-M11 (U31): android-device (T542) ----
-vault_task_android_texts_cover_codes  android-build:vault-android  art=junit  paket=U31  quelle=U31-15,U31-16
-vault_task_android_merge_assembles_choices  android-build:vault-android  art=junit  paket=U31  quelle=U31-9
-vault_task_android_create_unlock_memory_write_read  android-device:vault-android-device  art=instr  paket=U31  quelle=T542,U31-16
-vault_task_android_screen_off_locks  android-device:vault-android-device  art=instr  paket=U31  quelle=T542,U31-16
-vault_task_android_background_one_minute_locks  android-device:vault-android-device  art=instr  paket=U31  quelle=T542,U31-16
-vault_task_android_sync_conflict_compare_keep_both  android-device:vault-android-device  art=instr  paket=U31  quelle=T542,U31-16
-vault_task_android_every_bridge_method_once  android-device:vault-android-device  art=instr  paket=U31  quelle=T542,U31-16
-vault_task_android_notification_has_no_names  android-device:vault-android-device  art=instr  paket=U31  quelle=T542,U31-16
-vault_task_android_password_not_saved_state  android-device:vault-android-device  art=instr  paket=U31  quelle=T542,U31-16
-vault_task_android_unlock_wrong_password_clears_field  android-device:vault-android-device  art=instr  paket=U31  quelle=T542,U31-16
-vault_task_android_lock_returns_to_list  android-device:vault-android-device  art=instr  paket=U31  quelle=T542,U31-16
-vault_task_android_job_card_has_compare  android-device:vault-android-device  art=instr  paket=U31  quelle=T542,U31-16
-
 # ---- S3 VLT-M12 (U14): linux-core unit, linux-root vault-mount, windows-core vault-mount (T551) ----
 vault_task_sealed_spool_random_access_roundtrip   linux-core:unit  paket=U14  quelle=T551
 vault_task_sealed_spool_detects_block_swap        linux-core:unit  paket=U14  quelle=T551
@@ -594,32 +1030,3 @@ vault_task_mount_windows_dokany_e2e               windows-core:vault-mount  fixt
 vault_task_backends_provider_matrix               linux-core:vault-backends  paket=offen  quelle=T564,D3
 vault_task_backends_share_pair                    linux-core:vault-backends  fixture=share  paket=offen  quelle=T564,D3
 
-# ---- S4, S5, Launcher: Eintraege setzt U41 (D1 U41: rdt_suite_inventory_complete fuer diese Stufen) ----
-# Hinweise aus D3 und den Uebergaben an U39/U41, damit U41 nichts verliert (keine Eintraege):
-#   prepare:static            desktop_task_release_assets_unchanged, desktop_task_gnome_extension_static,
-#                             desktop_task_lock_only_expected_additions, desktop_task_docs_todo_entries_present,
-#                             screen_task_windows_interop_factories_only, screen_task_android_has_no_openh264,
-#                             desktop_task_installer_static, desktop_task_install_linux_static,
-#                             screen_task_installer_lists_screen_licenses, screen_task_install_linux_kde_interfaces_line
-#   linux-core:unit           desktop_task_updater_helper_unchanged (Uebergabe U03: nicht in prepare),
-#                             desktop_task_online_rule_matches_bridge, desktop_task_share_status_device_shape_unchanged
-#                             (nur Linux), screen_task_cisco_license_verbatim; die zwei GUI-Tests aus U03 brauchen
-#                             SMART_EXPLORER_GUI_TASK=1, XDG_DATA_HOME/APPDATA/LOCALAPPDATA isoliert, ignored, threads=1
-#   linux-core:docs-cli       screen_task_docs_inventory_lists_every_cli_command, desktop_task_docs_inventory_lists_every_cli_command
-#   linux-core:screen-pair    screen_task_fs_exec_unchanged, screen_task_old_peer_unsupported; netem not_run ohne sch_netem
-#   linux-desktop             desktop-linux-x11 endet mit desktop_task_no_hang_restart_during_suite
-#   linux-wayland:kde         screen_task_kde_window_list, screen_task_kde_remote_desktop_input, desktop_task_kwin_layer_namespace_desktop
-#   linux-gnome:desktop-gnome desktop_task_gnome_headless_variant_a, desktop_task_gnome_headless_variant_b
-#   windows-screen            screen_task_mf_encode_decode, zuletzt screen_task_windows_lock_reports_secure_desktop,
-#                             screen_task_fs_exec_unchanged
-#   windows-desktop           zuletzt desktop_task_no_hang_restart_during_suite
-#   android-build:launcher-jvm  LayoutModelTest, GridGeometryTest, LauncherSearchTest, WidgetPreviewTest,
-#                             launcher_task_widget_picker_preview_order, launcher_task_private_space_settings_entry_only_api36,
-#                             launcher_task_existing_nav_kinds_unchanged, launcher_task_main_activity_filters_unchanged
-#   android-device            ScreenTaskTest, LauncherTaskTest
-#   android-device-api30      launcher_task_widget_bind_config_resize, launcher_task_devices_widget_only_when_enabled,
-#                             launcher_task_devices_widget_click_opens_device, launcher_task_gestures_with_accessibility,
-#                             screen_task_android_consent_action_is_activity_intent
-#   Prozesspruefungen U15     desktop/os/shared/process_task_tests.rs: ignored, threads=1,
-#                             env=SMART_EXPLORER_DESKTOP_TASK=1, env=SE_DESKTOP_TASK_GUI={gui}, ohne Bildschirm
-#                             env=SE_DESKTOP_TEST_HEADLESS=1

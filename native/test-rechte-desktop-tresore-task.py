@@ -29,7 +29,8 @@ Jobs and stages (D3; owner module in ``native/rdt_task``; ``inventory`` closes e
   windows-screen        setup, screen-windows                                     (U41)
   windows-desktop       setup, desktop-gui-harness, desktop-windows               (U41)
   desktop-bins          setup, desktop-bins                    (artifact rdt-desktop-bins)
-  android-build         setup, apk, drive-android, launcher-jvm (U41)  (artifact rdt-apks)
+  android-build         setup, apk, drive-android, vault-android, screen-jvm (U41), launcher-jvm (U41)
+                        (artifact rdt-apks)
   android-device        device-setup, perm-android-device, drive-android-device,
                         vault-android-device, screen-android-device (U41),
                         launcher-android-device (U41), android-bestand
@@ -90,8 +91,8 @@ JOBS: dict[str, list[tuple[str, tuple[str, ...]]]] = {
     "windows-desktop": [("setup", C), ("desktop-gui-harness", DESKTOP), ("desktop-windows", DESKTOP),
                         INVENTORY_STAGE],
     "desktop-bins": [("setup", C), ("desktop-bins", C), INVENTORY_STAGE],
-    "android-build": [("setup", C), ("apk", C), ("drive-android", DRIVE), ("launcher-jvm", LAUNCHER),
-                      INVENTORY_STAGE],
+    "android-build": [("setup", C), ("apk", C), ("drive-android", DRIVE), ("vault-android", VAULT),
+                      ("screen-jvm", SCREEN), ("launcher-jvm", LAUNCHER), INVENTORY_STAGE],
     "android-device": [("device-setup", C), ("perm-android-device", PERM), ("drive-android-device", DRIVE),
                        ("vault-android-device", VAULT), ("screen-android-device", SCREEN),
                        ("launcher-android-device", LAUNCHER), ("android-bestand", C), INVENTORY_STAGE],
