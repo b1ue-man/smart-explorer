@@ -235,7 +235,16 @@ mod tests {
         for root in roots {
             let text = root.to_string();
             assert_eq!(RootId::parse(&text), Some(root.clone()), "{text}");
-            let doc = DocId::root_of(root).child("a b.txt").unwrap();
+            // Directly below `devices` only device keys are valid names, so
+            // that root is tested one level deeper.
+            let base = DocId::root_of(root.clone());
+            let base = if root == RootId::Devices {
+                assert_eq!(base.child("a b.txt"), None);
+                base.child("laptop-1.key").unwrap()
+            } else {
+                base
+            };
+            let doc = base.child("a b.txt").unwrap();
             assert_eq!(DocId::parse(&doc.to_string()), Some(doc.clone()));
         }
         assert_eq!(

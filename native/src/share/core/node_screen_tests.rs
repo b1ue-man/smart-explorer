@@ -305,6 +305,16 @@ fn screen_task_old_peer_unsupported() {
                 .await
         })
         .unwrap();
+    // Like the node's accept loop: the handshake (and with it the ALPN
+    // refusal) only runs for a connection that is accepted and awaited.
+    let acceptor = old.clone();
+    runtime.spawn(async move {
+        while let Some(incoming) = acceptor.accept().await {
+            tokio::spawn(async move {
+                let _ = incoming.await;
+            });
+        }
+    });
     let port = old
         .bound_sockets()
         .into_iter()

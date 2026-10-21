@@ -20,6 +20,7 @@ use crate::share::fs::{ShareExportConfig, SharedRoot};
 use crate::share::identity::ShareIdentity;
 use crate::share::node::ShareIrohNode;
 use crate::share::node_screen::ScreenLink;
+use crate::share::signal_connector::{spawn_connect, NegotiatedSignal};
 use crate::share::types::{
     DirectGrant, DirectGrantState, PeerEndpoint, PeerPresence, ShareAuthState, ShareScope,
 };
@@ -73,6 +74,8 @@ pub(super) struct ScreenPair {
     // Fields drop in order: both nodes stop before the exported root goes.
     pub(super) viewer: NodeGuard,
     pub(super) host: NodeGuard,
+    /// The signaling sessions that admit both nodes at the server's relay.
+    _signals: Vec<NegotiatedSignal>,
     _root: tempfile::TempDir,
 }
 
@@ -95,6 +98,15 @@ impl ScreenPair {
         std::fs::write(docs.join("note.txt"), b"screen task")?;
         let viewer = identity("screen viewer")?;
         let host = identity("screen host")?;
+        // The share server's relay admits only endpoints that are signed in
+        // at its signaling (`relay_access.rs`); a bare Iroh node never is,
+        // so both sign in before their nodes dial the relay.
+        let mut signals = Vec::new();
+        if server != NO_RELAY {
+            for identity in [&host, &viewer] {
+                signals.push(sign_in(server, identity)?);
+            }
+        }
         let mut host_state = auth_state(&host);
         let path = docs.to_string_lossy().replace('\\', "/");
         host_state.default_direct_exports = ShareExportConfig {
@@ -161,6 +173,7 @@ impl ScreenPair {
             approvals,
             viewer: viewer_node,
             host: host_node,
+            _signals: signals,
             _root: root,
         })
     }
@@ -219,6 +232,14 @@ impl ScreenPair {
             false
         })
     }
+}
+
+/// A signaling session of `identity` with key login on `server`.
+fn sign_in(server: &str, identity: &ShareIdentity) -> std::io::Result<NegotiatedSignal> {
+    let connecting = spawn_connect(server.to_string(), identity.clone())?;
+    connecting
+        .recv_timeout(Duration::from_secs(20))
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "signaling sign-in"))?
 }
 
 fn identity(name: &str) -> std::io::Result<ShareIdentity> {

@@ -15,7 +15,13 @@ struct Fixture {
 }
 
 fn fixture() -> Fixture {
-    let root = tempfile::tempdir().expect("temporary folder");
+    // `tempfile::tempdir()` names its folder `.tmpXXXX`; GLib's rule rejects
+    // any `/.` in the whole mount path, so the home below it must not start
+    // with a dot.
+    let root = tempfile::Builder::new()
+        .prefix("se-bookmarks-")
+        .tempdir()
+        .expect("temporary folder");
     let home = root.path().join("home");
     fs::create_dir_all(home.join("SmartExplorer")).expect("home");
     let targets = Targets::resolve(

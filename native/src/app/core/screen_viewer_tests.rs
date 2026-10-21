@@ -155,7 +155,12 @@ fn screen_task_viewer_ask_tile_has_no_preview() {
     let allow = Fake::new(CapabilityDecision::Allow);
     let mut grid = ScreenTileGrid::new(GridScope::AllDevices, allow.backend(), devices);
     assert!(matches!(settle(&mut grid), Face::Waiting(_)));
-    wait_for("the preview session", || allow.opens() == 1);
+    // The tile opens its session in the frame after the probe answered, so
+    // frames keep running while the test waits.
+    wait_for("the preview session", || {
+        frame(&ctx, &mut grid);
+        allow.opens() == 1
+    });
     let request = allow.inner.requests.lock().unwrap()[0].clone();
     assert_eq!(request.mode, SessionMode::Preview);
     assert_eq!(request.max_fps, 1);
