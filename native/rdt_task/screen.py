@@ -240,6 +240,16 @@ def add_session(fixtures: common.StageFixtures, session) -> None:
         fixtures.add_process(process)
 
 
+def keep_logs(fixtures: common.StageFixtures, folder: Path) -> Path:
+    """The logs of a fixture's programs (compositor, portals, PipeWire, bus) go into the job's evidence when the
+    stage ends, after its processes ended (``StageFixtures.close``)."""
+    def copy() -> None:
+        for path in sorted(folder.glob("*.log")):
+            shutil.copyfile(path, fixtures.ctx.logs / f"fixture-{folder.name}-{path.name}")
+    fixtures.add_cleanup(copy)
+    return folder
+
+
 def fixture_netem(fixtures: common.StageFixtures, name: str) -> tuple[bool, str]:
     if not LINUX:
         return False, "netem nur unter Linux"
@@ -289,7 +299,8 @@ def fixture_gpu_adapter(fixtures: common.StageFixtures, name: str) -> tuple[bool
 def fixture_wayland_portal(fixtures: common.StageFixtures, name: str) -> tuple[bool, str]:
     if not LINUX:
         return False, "nur unter Linux"
-    session = helper("screen-task-linux").start_wayland_portal(fixtures.make_dir("wayland"), fixtures.ctx.base_env())
+    folder = keep_logs(fixtures, fixtures.make_dir("wayland"))
+    session = helper("screen-task-linux").start_wayland_portal(folder, fixtures.ctx.base_env())
     add_session(fixtures, session)
     if session.ok:
         fixtures.provide(name, env=dict(session.env, SE_SCREEN_TASK_WAYLAND="1"), remove=("DISPLAY",))
@@ -301,7 +312,8 @@ def fixture_kwin(fixtures: common.StageFixtures, name: str) -> tuple[bool, str]:
         return False, "nur unter Linux"
     ctx = fixtures.ctx
     program = str(ctx.cargo.test_exe) if ctx.cargo.build_lib() and ctx.cargo.test_exe else None
-    session = helper("screen-task-linux").start_kwin(fixtures.make_dir("kwin"), ctx.base_env(), program)
+    session = helper("screen-task-linux").start_kwin(keep_logs(fixtures, fixtures.make_dir("kwin")), ctx.base_env(),
+                                                     program)
     add_session(fixtures, session)
     if session.ok:
         fixtures.provide(name, env=dict(session.env, SE_SCREEN_TASK_KDE="1", SE_DESKTOP_TASK_KWIN="1"),
@@ -313,8 +325,8 @@ def fixture_kde_portal(fixtures: common.StageFixtures, name: str) -> tuple[bool,
     kwin = fixtures.state.get("kwin")
     if not kwin or not kwin[0]:
         return False, "KWin läuft nicht (Fixture kwin)"
-    session = helper("screen-task-linux").start_kde_portal(fixtures.make_dir("kde-portal"), fixtures.ctx.base_env(),
-                                                           fixtures.envs.get("kwin", {}))
+    session = helper("screen-task-linux").start_kde_portal(keep_logs(fixtures, fixtures.make_dir("kde-portal")),
+                                                           fixtures.ctx.base_env(), fixtures.envs.get("kwin", {}))
     add_session(fixtures, session)
     if session.ok:
         fixtures.provide(name)

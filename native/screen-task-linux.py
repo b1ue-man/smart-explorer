@@ -168,7 +168,10 @@ def start_session_bus(root: Path, env: dict) -> Session:
     daemon = which("dbus-daemon")
     if not daemon:
         return Session(False, "dbus-daemon fehlt")
-    socket = root / "session_bus_socket"
+    # Unix socket paths end at 108 bytes; below the runner's stage folder the socket did not fit (run 3:
+    # "Socket name too long"), so it lives in a short folder of the system's temporary directory.
+    socket = Path(tempfile.mkdtemp(prefix="se-bus-")) / "bus"
+    root.mkdir(parents=True, exist_ok=True)
     process = spawn([daemon, "--session", "--nofork", "--nopidfile", f"--address=unix:path={socket}"], env,
                     root / "dbus-session.log")
     if not wait_for(socket.exists, 20, process):
