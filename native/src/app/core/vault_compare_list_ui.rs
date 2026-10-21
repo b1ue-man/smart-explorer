@@ -84,11 +84,14 @@ pub(super) fn content(
     let height = (ui.ctx().screen_rect().height() * 0.55).clamp(220.0, 560.0);
     let width = ui.available_width();
     ui.horizontal_top(|ui| {
-        ui.allocate_ui(egui::vec2(width * 0.46, height), |ui| {
+        // Both columns stack their content: `allocate_ui` would take the
+        // left-to-right layout of this row and lay the detail out sideways.
+        let column = egui::Layout::top_down(egui::Align::Min);
+        ui.allocate_ui_with_layout(egui::vec2(width * 0.46, height), column, |ui| {
             list_ui(ui, window, &view, height);
         });
         ui.separator();
-        ui.allocate_ui(egui::vec2(width * 0.5, height), |ui| {
+        ui.allocate_ui_with_layout(egui::vec2(width * 0.5, height), column, |ui| {
             detail_ui(ui, window, &view, rows, &names, effects);
         });
     });

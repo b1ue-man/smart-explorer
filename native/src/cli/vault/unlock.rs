@@ -29,6 +29,10 @@ pub(super) struct UnlockArgs {
         long,
         value_name = "true|false",
         requires = "password_stdin",
+        // Remembering a password needs a password given now: with the stored
+        // one the option is refused at parsing (the run of 2026-10-21 let
+        // `--saved-password --remember true` pass with `requires` alone).
+        conflicts_with = "saved_password",
         help = "Remember (true) or forget (false) the password after a successful unlock"
     )]
     remember: Option<bool>,
