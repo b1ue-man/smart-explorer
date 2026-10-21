@@ -1,6 +1,6 @@
 # Übertragungs-Engine
 
-Stand: 2026-10-21 (Lauf 3 des Doku-Laufs U42, E13-Doku). Grundlage: der Batch „Übertragungs-Engine“ (TE1, 2026-09-29, Plan `docs/superpowers/plans/2026-09-28-transfer-engine/`) und die E13-Pakete U45 bis U53 (Festlegung `docs/plaene/2026-10-17-rechte-desktop-tresore/festlegungen.md`, Abschnitt U44). Beschreibt, wie Kopieren, Einfügen, Ziehen, „Kopieren/Herunterladen nach…“ und Downloads zwischen lokalen Ordnern, Remotes (SFTP, FTP/FTPS, WebDAV, SMB, Google Drive, ZIP), Direct-/Raum-Shares und dem SSH-Agent laufen, welche Grenzen jedes Protokoll setzt und woher jede Zahl kommt. Nicht beschrieben: die Messstufe `speed` (U55) und die Anzeige auf Android (U54); beide sind noch nicht ausgeführt.
+Stand: 2026-10-21 (Lauf 3 des Doku-Laufs U42, E13-Doku). Grundlage: der Batch „Übertragungs-Engine“ (TE1, 2026-09-29, Plan `docs/superpowers/plans/2026-09-28-transfer-engine/`) und die E13-Pakete U45 bis U53 (Festlegung `docs/plaene/2026-10-17-rechte-desktop-tresore/festlegungen.md`, Abschnitt U44). Beschreibt, wie Kopieren, Einfügen, Ziehen, „Kopieren/Herunterladen nach…“ und Downloads zwischen lokalen Ordnern, Remotes (SFTP, FTP/FTPS, WebDAV, SMB, Google Drive, ZIP), Direct-/Raum-Shares und dem SSH-Agent laufen, welche Grenzen jedes Protokoll setzt und woher jede Zahl kommt. Ergänzt um die SFTP-Zusatzverbindungen (Sicherheitsantwort E13-S15, `docs/plaene/2026-10-17-rechte-desktop-tresore/stand/SEC.md`, Punkt 15), den Hinweis `note` und die Messstufe `speed` (Abschnitt „Nachweis“). Nicht beschrieben: die Anzeige auf Android (U54); Android zeigt den Hinweis `note` derzeit nicht (Abschnitt „Wo es erscheint“). Die Messläufe der Stufe `speed` sind noch nicht ausgeführt.
 
 ## Was der Nutzer sieht
 
@@ -152,8 +152,15 @@ mehr als der Hälfte der Arbeitszeit → diese Seite; sonst `remote`. Leitung: d
   (`bottleneck.rs:1-8`). So zeigen `--stats` und die fertige Liste den Engpass, auch wenn die
   Warteschlange am Ende leer war.
 - **Wo es erscheint.** Die Fortschrittsmeldung trägt das Urteil (`limiter`), den Text
-  (`limiter_text`), die Rate (`rate_bps`) und die Teile (`segments`); das Übertragungsfenster
-  zeigt die Zeile unter der Rate, `se cp --stats` und das MCP-Werkzeug geben dieselben Felder aus.
+  (`limiter_text`), die Rate (`rate_bps`), die Teile (`segments`) und den Hinweis der Verbindung
+  (`note`, `native/src/transfer/core/types.rs:58`; Vorrang hat „wartet auf <Verbindung>“,
+  `engine/mod.rs:359-366`, sonst der Hinweis des Ziels, dann der der Quelle, `engine/mod.rs:367-376`).
+  Der Hinweis ist z. B. „2 Verbindungen zu <Host>“ (SFTP, siehe unten). Das Übertragungsfenster
+  zeigt den Hinweis unter der Aktivitätszeile (`native/src/app/core/transfer_window.rs:240-241`).
+  Das MCP-Werkzeug `copy` gibt ihn im Feld `progress.note` aus (`native/src/cli/mcp/transfer_tools.rs:104-106`).
+  Android zeigt ihn als Meldung der Aufgabe neben den Zahlen (`native/src/mobile/os/shared/drive.rs:99`,
+  `task_message`; während der Suche steht dort „Suche Dateien…“).
+  `se cp --stats` gibt ihn nicht aus (keine Lesung in `native/src/cli/`); es gibt dort die Zeile mit Rate und Engpass.
 - **Namen.** Die Texte nennen Laufwerke, Geräte und Arten von Endpunkten, nie eine Datei oder einen
   Ordner (`bottleneck.rs:9-12`).
 
@@ -164,12 +171,64 @@ mehr als der Hälfte der Arbeitszeit → diese Seite; sonst `remote`. Leitung: d
 | Lokal, UNC | Kernel-Kopie, Server-Offload | Kopie über die exklusiv erzeugte Stufe (Linux `copy_file_range` zwischen Handles, Windows `CopyFile2` „nicht ersetzen“ + Identitätsprüfung); innerhalb einer UNC-Freigabe kopiert der SMB-Server selbst (Offload/COPYCHUNK); kein fsync bei neuen Kopien, Verschieben auf demselben Volume als eine Umbenennung; Ring und Bereiche: siehe „Lokal, UNC“ unten | fsync nur bei Verschieben und Überschreiben; Abbrechen wirkt zwischen den Kopierblöcken |
 | Direct/Raum-Share (Iroh/QUIC) | viele Ströme je Verbindung | `fs_transfer_v1`: Pakete für kleine Dateien (Statusabfrage bei verlorener Antwort), Lesen ab Offset, exklusive Ordner, serverseitige Kopie; Bereiche mit der Capability `ranges_v1` (`native/src/share/core/batch_wire.rs:58`), LZ4 mit `lz4_v1` (`batch_wire.rs:63`, Abschnitt „Kompression“); alte Hosts: bisheriger Weg | 64 Ströme − 4 fürs Blättern = 60 Übertragungen je Gegenstelle (Host-Zulassung), davon nutzt der Flow höchstens 56, 4 bleiben für Vordergrund-Lesen; Host gesamt 256 (halbe Tokio-Blocking-Threads); alte Hosts 32; Paket ≤ 256 Dateien/16 MiB, Kopf ≤ 256 KiB; Fenster 16 MiB je Strom (1 Gbit/s × 100 ms), Verbindung 16–64 MiB je nach Speicher; voller Host antwortet „busy“ statt heimlich zu warten, alte Clients warten höchstens 45 s (ihre Frist ist 60 s). Stufen-Bereiche nur bei lokalen Exporten; für nicht lokale Exporte fehlt eine Handle-Schnittstelle in `vfs` (Stand U53). Unfertige Bereichsstufen des Wirts werden beim Verbindungsende, nach 300 s ohne Fortschritt und beim nächsten Start entfernt (Stand U53) |
 | SSH-Agent / Hintergrund-Dienst | Anfragen mit IDs über einen Kanal | Kredit je Anfrage (`+credit-v1`: ein langsamer Download blockiert kein Blättern), Pakete (`+batch-v1`), Stufen-Frames, Pool zusätzlicher Exec-Kanäle; Bereiche mit `Read {offset, len}`, Label `range-v1` (`native/src/agent_proto/core/features.rs:17`); die Bereichsstufe bleibt auf dem Kanal, der sie geöffnet hat (Stand U53) | 64 MiB Budget je Verbindung, 1 MiB Anfangskredit, Fenster bis 8 MiB je Strom; Kanal-Pool bis MaxSessions − 2; |
-| SFTP | gepipelinete Anfragen, mehrere Kanäle | viele gleichzeitige READs mit wachsender Tiefe, gebündelte WRITEs (Pakete, 16 MiB je Paket, `BATCH_BYTES`), Kanal-Pool, Kopien ohne fsync, serverseitige Kopie per `copy-data` wo angeboten (in Bereichen von ~10 s, lehnt der Server ab, wird gestreamt). Bereiche über mehrere Pool-Kanäle; jeder Kanal hat sein eigenes Serverfenster (OpenSSH 2 MiB). Schreiben von Bereichen nur, wenn die Ordnerkette bis `/` dem Konto oder root gehört und für Gruppe und andere gesperrt ist (oder Sticky-Bit und root; Sicherheitsantwort S7). Dateien mit gelistetem MD5 bleiben ein Strom | Dateien je Kanal gleichzeitig offen: höchstens `min(open-handles, 64)` (`OPEN_HANDLES`, `native/src/sftp/core/batch_ops.rs:52`; ohne Angabe des Servers 64); ein OPEN mit einfachem Fehlerstatus oder ohne Antwort ist Überlast, ein bestimmter Status (nicht gefunden, Zugriff verweigert) ein Dateifehler (`open_failure`); jede Datei hat vier Wartezeiten (OPEN, WRITE, CLOSE, RENAME), die sich über bis zu `open-handles` Dateien überlappen; Pool bis zur Ablehnung, 2 Kanäle Reserve |
+| SFTP | gepipelinete Anfragen, mehrere Kanäle | viele gleichzeitige READs mit wachsender Tiefe, gebündelte WRITEs (Pakete, 16 MiB je Paket, `BATCH_BYTES`), Kanal-Pool, Kopien ohne fsync, serverseitige Kopie per `copy-data` wo angeboten (in Bereichen von ~10 s, lehnt der Server ab, wird gestreamt). Bereiche über Pool-Kanäle, die sich Handles teilen, und über Zusatzverbindungen (Regeln unter „SFTP-Kanäle und -Zusatzverbindungen“); jeder Kanal hat sein eigenes Serverfenster (OpenSSH 2 MiB). Schreiben von Bereichen nur, wenn die Ordnerkette bis `/` dem Konto oder root gehört und für Gruppe und andere gesperrt ist (oder Sticky-Bit und root; Sicherheitsantwort S7). Dateien mit gelistetem MD5 bleiben ein Strom | Dateien je Kanal gleichzeitig offen: höchstens `min(open-handles, 64)` (`OPEN_HANDLES`, `native/src/sftp/core/batch_ops.rs:52`; ohne Angabe des Servers 64); ein OPEN mit einfachem Fehlerstatus oder ohne Antwort ist Überlast, ein bestimmter Status (nicht gefunden, Zugriff verweigert) ein Dateifehler (`open_failure`); jede Datei hat vier Wartezeiten (OPEN, WRITE, CLOSE, RENAME), die sich über bis zu `open-handles` Dateien überlappen; Pool bis zur Ablehnung, 2 Kanäle Reserve; Kanäle in Einrichtung zählen bei der gelernten Grenze mit (`channel_pool.rs:57-59`, `:168-170`, `:357`); Obergrenze des Flows `transfer_ceiling` = Kanäle × Handles je Kanal (`backend.rs:428-430`, `channel_pool.rs:288-301`) |
 | FTP/FTPS | eine Übertragung je Steuerverbindung | Verbindungs-Pool, Größen-Stufe mit streamendem STOR, Fortsetzen per REST; Prüfen und Veröffentlichen auf der Verbindung der Übertragung (SIZE für den zufälligen Stufennamen, eine Auflistung des Ordners für Stufe und Ziel, dann RNFR/RNTO), ohne freie Verbindung auf der Blätter-Verbindung. Bereiche über `REST` und je eine bereits angemeldete freie Verbindung, Abbruch mit `ABOR`; nie eine neue Anmeldung für Bereiche (Sicherheitsantwort S12) | STOR und RETR gehen vor dem TCP-Aufbau der Datenverbindung hinaus (suppaftp); es gibt kein Befehls-Pipelining: das nächste Kommando geht erst nach der Antwort auf das vorige (Testserver `native/src/ftp/core/data_overlap_server.rs`). Grenze lernt der Pool aus 421/530 nach erfolgreicher Anmeldung; 421/530 auf REST/RETR: 15 Minuten keine Bereiche; eine Verbindung bleibt fürs Blättern; Stufenprobe entfällt nur für Namen `.se-upload-<16 Hex>` (`FTP_PROBE_STAGE_NAME`, S6) |
 | WebDAV | viele HTTP-Verbindungen, COPY | gepoolte Mutationen, gestreamtes PUT mit Länge und `If-None-Match: *`, serverseitiges COPY, Range. Engine-Weg: PUT, PROPFIND (Stufe prüfen), MOVE. Sync-Weg: die Bestätigung der Zeit nach MOVE entfällt, wenn die MOVE-Antwort `X-OC-Mtime: accepted` trägt (`native/src/webdav/core/stage_move.rs:4-10`); ein PROPFIND je Sync-Upload weniger. Bereiche über `Range: bytes=a-b`; antwortet der Server mit 200, läuft die Datei als ein Strom | 429/503 → Überlast mit `Retry-After`; DELETE und leeres PUT ungepoolt (ureq würde sie wiederholen) |
 | Google Drive | parallele Verbindungen, `generateIds` | gepoolte Verbindungen, neue Datei ≤ 5 MB mit einem Aufruf, Resumable mit wachsenden Blöcken, ID-Vorrat, Cache im Hintergrund, Sperren je Name, `files.copy`; Bereiche über `Range: bytes=a-b`, antwortet der Server mit 200, läuft die Datei als ein Strom | Google begrenzt dauerhaft ~3 neue Dateien/s je Konto (Hinweis in der Zeile); Ratenlimits sofort als Überlast |
 | SMB | Credits, COPYCHUNK | Pakete über Compounds: CREATE, WRITE und CLOSE je Datei und das Umbenennen in zwei Rundreisen; Reparse-Punkte werden nie über `read_file_compound*` gelesen (eigene Anfragen, damit Links nicht gefolgt werden); mehrere Lese-Blöcke gleichzeitig, serverseitige Kopie wo angeboten, neue Kopien ohne FLUSH; Bereiche über `read_at`; Schreiben in Bereichen über eigene Handles, die vor dem ersten Byte gegen die Kennung der Stufe geprüft werden (S14) | Block ≤ 512 KiB bzw. MaxReadSize, Tiefe nach Credits; eine Serverkopie sieht Abbrechen erst an ihrem Ende |
 | ZIP (Quelle) | – | ein Parse je Archiv, Einträge gestreamt | Parallelität = Kernzahl (Entpacken ist CPU-gebunden) |
+
+**SFTP-Kanäle und -Zusatzverbindungen.** Ein Bereich nimmt einen leeren Kanal. Gibt es keinen, öffnet er
+einen neuen, solange die gelernte Grenze es erlaubt; sonst teilt er den am wenigsten belasteten
+Kanal mit anderen Bereichen, sofern dort noch Handles frei sind (`native/src/sftp/core/link_rules.rs:272-284`,
+`:351-359`). Sind alle Kanäle an ihrer Handle-Grenze, wartet ein Bereich höchstens 30 s auf ein Ende
+(`channel_pool.rs:50`, `:318`, `:331`), danach nutzt er die Hauptsitzung. Eine ganze Datei wartet
+nicht: Sind alle Kanäle voll, nutzt sie sofort die Hauptsitzung (`channel_pool.rs:331`). Kanäle, deren Einrichtung noch
+läuft, zählen bei der gelernten Grenze mit (`channel_pool.rs:57-59`, `:168-170`).
+
+Zusatzverbindungen sind eigene SSH-Verbindungen mit je einem Kanal im Subsystem `sftp`
+(`native/src/sftp/core/pool_channel.rs:284`). Sie öffnen nur Übertragungen; Auflistung, Metadaten,
+Befehle und der SSH-Agent bleiben auf der Hauptverbindung (Sicherheitsantwort E13-S15,
+`docs/plaene/2026-10-17-rechte-desktop-tresore/stand/SEC.md`, Punkt 15, Frage 1 (vi)). Sie gelten
+nur unter diesen Bedingungen:
+
+- **Anmeldung ohne Eingabe:** gespeichertes Passwort oder Schlüssel, nie der SSH-Agent
+  (`link_rules.rs:41-55`). Ein Schlüssel hat diese Herkunft, wenn das Formular keine Passphrase
+  enthält (`native/src/connect/os/shared/connector.rs:100-102`); lässt sich der Schlüssel dann nicht
+  laden, entsteht keine Zusatzverbindung (`link_rules.rs:46-47`). Die Herkunft wird nur über
+  `SftpBackend::connect_with_origin` übergeben; `SftpBackend::connect` bleibt interaktiv
+  (`native/src/sftp/core/backend.rs:38-41`, `:46-50`).
+- **Einzeln, bei Zuwachs:** Eine neue Verbindung öffnet sich erst, wenn die vorige den Durchsatz
+  um mindestens 10 % angehoben hat (`link_rules.rs:18`, `:107-131`). Gemessen wird in Fenstern von
+  1 s (`link_rules.rs:20`) nach 2 s Einrichtung (`link_rules.rs:23`). Ein Versuch läuft nur, wenn
+  mindestens zwei Ströme je offener Verbindung laufen (`pool_growth.rs:93`, `:109-111`). Bleibt der Zuwachs aus,
+  folgt keine weitere Verbindung, bis ein Fenster ohne Übertragung die Regel zurücksetzt
+  (`link_rules.rs:123-128`, `:157-161`). Scheitert der Aufbau, gilt die Sperre unten
+  (`link_rules.rs:144-146`).
+- **Eine Anmeldung je Host und Port:** Während eine unangemeldete Verbindung zu Host und Port
+  aufgebaut wird, beginnt keine zweite; der Versuch wird verschoben, nicht gesperrt
+  (`link_rules.rs:236-240`, `pool_extra.rs:99-102`).
+- **Host-Schlüssel:** Der Schlüssel muss im Vertrauensspeicher im Modus `Verify` stehen und in
+  Algorithmus und Fingerabdruck dem der Hauptverbindung gleichen; unbekannte, geänderte oder
+  widerrufene Schlüssel werden abgelehnt, und Zertifikate werden nicht anerkannt
+  (`native/src/sftp/core/extra_link.rs:37-46`, `:58-60`; `link_rules.rs:306-329`).
+- **Zeitgrenze:** Von der TCP-Verbindung bis zur geöffneten Sitzung höchstens 30 s
+  (`extra_link.rs:24`, `:309-311`).
+- **Sperre:** Scheitert ein Aufbau, sind Zusatzverbindungen für Benutzer, Host und Port 15 Minuten
+  gesperrt, für den ganzen Prozess (`link_rules.rs:15`, `:169-186`, `:219-222`;
+  `pool_extra.rs:148`). Ein Abbruch einer schon arbeitenden Zusatzverbindung sperrt nicht; sie wird
+  nur nicht ersetzt (Sicherheitsantwort E13-S15 (iii)).
+- **Leerlauf:** Eine Zusatzverbindung ohne Übertragung schließt nach 60 s (`channel_pool.rs:46`,
+  `:108-109`); eine Wache prüft alle 5 s (`pool_extra.rs:20`, `:166-190`).
+- **Dienstprotokoll:** Jede Anmeldung („geöffnet“), jedes Schließen („geschlossen“) und jede Sperre
+  („gesperrt für 15 Minuten“) steht mit Zeit, Host, Port, Benutzer, Methode, offenen Verbindungen
+  und Grund in `daemon.log` (`native/src/sftp/core/link_log.rs:1-4`, `:17-27`;
+  `pool_extra.rs:138-160`; `extra_link.rs:204-209`). Passwörter, Passphrasen und Schlüsselmaterial
+  stehen nie darin.
+- **Hinweistext:** Neben der Übertragung steht „<n> Verbindungen zu <Host>“, sobald mehr als eine
+  Verbindung offen ist, und während einer Sperre „Weitere Verbindungen zu <Host> 15 Minuten
+  gesperrt: <Grund>“; beide Teile trennt „; “ (`link_rules.rs:288-299`, `pool_extra.rs:57-66`).
+  Der Text läuft über das Feld `note` (Abschnitt „Wo es erscheint“).
 
 **Lokal, UNC.** Auf Windows kopieren geschützte Quellen, Verschieben und Ersetzen über die
 Handle-Kopie; zwischen Lesen und Schreiben liegt ein Ring aus 4 Blöcken zu je 1 MiB
@@ -278,3 +337,45 @@ Android-Gerätesuite. Nicht gemessen: echte Netze der Nutzer, das UI-Verhalten d
 beim Überfahren mit großen Auswahlen (siehe `docs/refs/windows-virtual-files.md` §9).
 
 E13-Tests laufen mit dem Präfix `speed_task_` in der Suite (Teil B, U41). Diese Fassung ist nicht gebaut und nicht ausgeführt.
+
+**Messstufe `speed`.** Die Messfälle laufen im Cargo-Profil `speed` (`native/Cargo.toml:378-387`).
+Es erbt `release` und schaltet Debug-Assertions ein, weil `SE_TEST_NO_LZ4` und die Share-Statistik
+nur in solchen Builds wirken (`native/src/share/core/transfer_meter.rs:23-27`). Der Messdienst und
+das Messprogramm sprechen über den IPC-Port des Dienstes (`daemon.ipc`); diese Verbindung bleibt von
+der netem-Regel auf `lo` ausgenommen. Dann ist die Wurzel ein `prio` mit zwei Bändern: netem liegt auf Band
+1:1, die IPC-Ports des Dienstes gehen per u32-Filter auf das ungeformte Band 1:2
+(`native/rdt_task/speed_net.py:44`, `:107-124`, `:127-137`).
+
+**Share-Statistik (`share-quic-stats.jsonl`).** Jede Share-Verbindung schreibt je Übertragungsstoß
+eine Zeile in `share-quic-stats.jsonl` im App-Datenordner (`native/src/share/core/quic_stats_hub.rs:36`,
+`:300-310`). Ein Stoß beginnt mit einem Takt von 500 ms (`quic_stats.rs:19-20`), in dem mindestens 256 KiB
+UDP-Nutzlast in beide Richtungen zusammen fließen; er endet nach zwei ruhigen Takten, und gemeldet
+wird er erst ab zwei belegten Takten (`quic_stats.rs:6-10`, `:19-27`). Beide Enden schreiben, mit
+`side` `client` oder `host`. Die Datei dreht bei 4 MiB auf `<name>.1` (`quic_stats_hub.rs:39`). Die
+Statistik gibt es nur in Entwicklungsbuilds, nicht in Release-Builds und nicht unter
+`SE_TEST_NO_SHARE_STATS` (`transfer_meter.rs:23-27`, `quic_stats_hub.rs:103`).
+
+Die Messstufe übernimmt die Zeilen in `speed_report.json` (`native/rdt_task/speed_report.py:133`).
+Jeder Fall in `cases[]` trägt dort, wenn Zeilen vorliegen, die Liste `share_quic` und die Textzeilen
+`share_quic_summary` (`native/tests/speed_task/support.rs:198-200`). Eine Zeile von `share_quic`
+enthält `kind`, `ts_ms`, `pid`, `side`, `conn`, `seq`, `cc`, `windows` (`stream_bytes`,
+`connection_bytes`, `send_bytes`), `socket_buffers` (`rmem_max`, `wmem_max`), `busiest_threads`
+(je `name`, `tid`, `cpu_ms`), `burst` und `device` (vom Sammler ergänzt,
+`native/tests/speed_task/share_stats.rs:213-216`; Aufbau `quic_stats_hub.rs:247-266`).
+
+Lesehilfe für `burst` (`native/src/share/core/quic_stats.rs:205-245`, Ableitung in
+`into_report`, `quic_stats.rs:304-355`): `rtt_ms`, `cwnd_bytes`, `mtu`, `path_kind` und `paths_open`
+stehen für den letzten belegten Takt. `rtt_ms_min` und `rtt_ms_max` sowie `cwnd_bytes_min`,
+`cwnd_bytes_max` und `cwnd_bytes_mean` sind Extremwerte und Mittel über die belegten Takte. Alle
+übrigen Zähler sind Differenzen zum Takt vor dem Stoß: `congestion_events`,
+`spurious_congestion_events`, `lost_packets`, `lost_bytes`, `udp_tx_datagrams`, `udp_tx_bytes`,
+`udp_rx_datagrams`, `udp_rx_bytes`, `plpmtud_probes_sent`, `plpmtud_probes_lost`,
+`black_holes_detected`, `frames_tx`, `frames_rx`, `streams`, `meter`, `process_cpu_ms` und
+`kernel_udp`. `udp_tx_mb_per_s` und `udp_rx_mb_per_s` teilen die Bytes durch `duration_ms`.
+`meter` (`MeterReport`, `quic_stats.rs:166-179`) enthält `raw_bytes`, `wire_bytes`, `lz4_blocks`,
+`lz4_ms`, `disk_read_ms`, `stage_write_ms`, `stage_wait_ms`, `net_wait_ms` und `disk_wait_ms`; die
+Zeitfelder sind Millisekunden. `kernel_udp` (`rcvbuf_errors`: Datagramme, die ein voller
+Empfangspuffer verworfen hat) ist die Differenz der systemweiten UDP-Zähler. Die Rahmenzähler
+`frames_tx` und `frames_rx` haben die Felder `stream`, `acks`, `ack_frequency`, `immediate_ack`,
+`ping`, `data_blocked`, `stream_data_blocked`, `streams_blocked_bidi`, `max_data` und
+`max_stream_data` (`quic_stats.rs:41-52`).

@@ -692,6 +692,30 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
 - **SFTP open files per channel are capped at 64.** The window of a batch uses
   `min(open-handles, 64)`; an OPEN with a plain failure status counts as congestion, a specific
   status as a file error (Sicherheitsantwort E13-S13, `native/src/sftp/core/batch_ops.rs:52`).
+- **One TCP stream per SSH connection limits long, wide links.** Channels of one SSH connection
+  share its TCP stream and kernel buffer, so more channels do not raise the rate there; only extra
+  SSH connections do (Sicherheitsantwort E13-S15, Punkt 15; `native/src/sftp/core/channel_pool.rs:20-24`).
+- **Extra SSH connections need the stored origin.** They exist only through
+  `SftpBackend::connect_with_origin` with a stored password or key; `SftpBackend::connect` assumes
+  an interactive login and never opens one (`native/src/sftp/core/backend.rs:38-41`,
+  `link_rules.rs:41-55`, `native/src/connect/os/shared/connector.rs:91-107`).
+- **The channel limit counts channels in setup.** A refusal learns the limit from the ready and the
+  in-setup channels (`native/src/sftp/core/channel_pool.rs:57-59`, `:168-170`, `:355`).
+- **`Detail::Kinds` applies to FTP LIST rows only.** Publishing a stage lists names and kinds; LIST
+  rows are then not refined with SIZE and MDTM; the refinement at `metadata.rs:242` is guarded by `!mlsx`, so MLST/MLSD rows never take it
+  (`native/src/ftp/core/listing_detail.rs:13-21`, `native/src/ftp/core/metadata.rs:144-146`, `:242`,
+  `native/src/ftp/core/staging.rs:96`).
+- **Measurement statistics exist only in debug-assertion builds.** `SE_TEST_NO_SHARE_STATS` and
+  `share-quic-stats.jsonl` work where debug assertions are on (development builds and the `speed`
+  profile), never in release builds or unit tests (`native/src/share/core/transfer_meter.rs:23-27`,
+  `native/src/share/core/quic_stats_hub.rs:103`).
+- **A netem root rule on `lo` also shapes local IPC.** The test program's TCP hop to the Share
+  daemon crosses the same rule; the speed stage keeps the daemon's ports out of it with a two-band
+  `prio` root (`native/rdt_task/speed_net.py:41-44`, `:107-124`).
+- **`net.core.rmem_max` caps the 7 MiB receive buffer request.** netwatch 0.19.3 (`native/Cargo.lock:4401-4402`)
+  asks for `SOCKET_BUFFER_SIZE = 7 << 20` on its UDP socket (crate source on docs.rs, line number not
+  determined). Linux limits `SO_RCVBUF` of unprivileged processes to `net.core.rmem_max` (socket(7);
+  not verified in this repository). The reporter reads that ceiling (`native/src/share/core/quic_stats_proc.rs:150-168`).
 
 ## Share / local network
 
