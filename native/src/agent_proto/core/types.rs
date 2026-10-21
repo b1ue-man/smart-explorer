@@ -313,7 +313,9 @@ pub enum Frame {
         path: String,
         size: u64,
     },
-    /// The stage `SegStageOpen` created: `stage` is its path.
+    /// The stage `SegStageOpen` created: `stage` is its path. An empty `stage`
+    /// from the background service says that its backend cannot write ranges
+    /// here: the client sends the file as one stream.
     SegStageReady {
         stage: String,
     },

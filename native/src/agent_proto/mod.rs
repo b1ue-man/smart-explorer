@@ -116,8 +116,10 @@ pub use ops_types::{digest, omission, query, UNSUPPORTED_EXTENSION};
 pub(crate) use promotion::validate_destination_root;
 pub(crate) use put_tree::{BufferedTree, BufferedTreeReceiver, TreeManifestValidator};
 pub(crate) use range_journal::Journal;
+pub(crate) use range_ops::Lz4Inbound;
 #[cfg(test)]
 pub(crate) use range_space::space_test_lock;
+pub(crate) use range_space::{merge_in, overlaps};
 pub(crate) use range_stage::{random_stage_name, Claim, Pending, RangeStages};
 pub use relative_path::ValidatedRelativePath;
 #[cfg(target_os = "linux")]
