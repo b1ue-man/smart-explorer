@@ -204,6 +204,52 @@ Windows-Check `native/verify-mount-windows.ps1` prüft echte Laufwerkszugriffe
 mit Zeitlimit. Mit `&` in einer bereits geöffneten, nicht erhöhten PowerShell
 aufrufen; Details und Grenzen stehen in [MOUNT_BATCHING.md](docs/MOUNT_BATCHING.md).
 
+**Laufwerke unter Linux (ab 0.5.183):** `se drive mount` hängt auf Linux über FUSE ein.
+Gespeicherte Verbindungen, Share-Geräte, Google Drive und entsperrte Tresore
+(`vault://SITE`) erscheinen unter `~/SmartExplorer/<Name>`; `--mount-point PFAD` wählt
+einen leeren Ordner. Unter Linux gibt es keinen Laufwerksbuchstaben: `--letter` ist dort
+ein Fehler. Ohne `--read-write` ist das Laufwerk nur lesbar. Voraussetzung ist das
+Paket `fuse3` (`fusermount3` mit setuid root). `se drive runtime` prüft die Bereitschaft,
+Kernel-Zeitlimit und Paketbefehl je Distribution; `se drive install-runtime` installiert
+kein Paket. Das Laufwerk hat kein `auto_unmount`: Ein Auswerfen im Dateimanager beendet
+die Sitzung, `se drive unmount --force` löst auch ein belegtes Laufwerk, dessen offene
+Dateien dann die Verbindung verlieren. Hängt eine Anfrage länger als das Kernel-Zeitlimit
+`fs.fuse.default_request_timeout`, bricht der Kernel das Laufwerk ab; `se drive runtime`
+nennt den Wert. Der Dateimanager bekommt einen Ort: ein GTK-Lesezeichen außerhalb von
+Home, einen KDE-Ort in `user-places.xbel`. Der Installer `install-linux.sh` installiert
+`fuse3` derzeit nicht; den Befehl nennt `se drive runtime`.
+
+**Verbundene Geräte als Ordner (ab 0.5.183):** `se drive devices on` zeigt jedes gekoppelte
+Gerät als Ordner: Unter Windows liegt der Baum als Laufwerk „Smart Explorer Geräte“, unter
+Linux als `~/SmartExplorer/Geräte`. Je Direktkontakt gibt es einen Ordner, Räume erscheinen
+unter `Räume` mit ihren Geräten; im Geräteordner liegen je Freigabe ein Ordner und
+`Verbindungen`. Diese Ebenen sind nur lesbar. Ein Gerät bleibt sichtbar, wenn es offline
+ist; sein Inhalt meldet „Gerät nicht erreichbar“. Der Baum ist beim ersten Start eines nicht
+eingeschränkten Dienstes eingeschaltet, sobald Laufwerke unterstützt werden, die Laufzeit
+bereit ist und mindestens ein Gerät gekoppelt ist; `se drive devices off` schaltet ihn ab.
+`se drive devices status` und `se drive devices watch` zeigen den Zustand.
+
+**Android-Dokumentanbieter (ab 0.5.183):** Android hat keine Laufwerke. Die App stellt Ordner
+über den Systemdienst „Dateien“ bereit. Unter Einstellungen → „Ordner für Apps bereitstellen“
+gibt man den Hauptschalter frei, dann je Verbindung, Google Drive oder entsperrtem Tresor.
+Ab Werk ist nichts freigegeben; andere Apps sehen nur, was die Person auswählt. Ein Tresor
+erscheint nur, solange er in der App entsperrt ist. Apps, die nur Dateipfade kennen, sehen
+den Anbieter nicht; Änderungen werden nach dem Schließen der Datei hochgeladen.
+
+**Windows-Einhängeweg (ab 0.5.183): Dokany bleibt.** Für Windows bleibt Dokany 2.3.1.1000
+der einzige Einhängeweg. WinFsp, Cloud Files API, ProjFS und ein WebDAV-Miniredirector
+wurden geprüft und nicht übernommen. Die Gründe stammen aus der Recherche vom 2026-10-17
+(`docs/refs/windows-dateisystem-frontends-2026-10-17.md`; am 2026-10-21 nicht erneut
+geprüft): Es gibt keine Messung von WinFsp 2.x gegen Dokany 2.x; die einzige stabile
+WinFsp-Version hat zwei offene Rechteausweitungs-Schwachstellen, deren Korrekturen nur in
+Betas stehen; WinFsp ändert Fehlerklassen, zum Beispiel scheitert `GetFinalPathNameByHandleW`
+ohne Administratorrechte; die offenen Probleme liegen in Engine und Backends. Die
+Wiedervorlage ist `WINFSP-AB` in `docs/TODO.md`. Seit 0.5.183 bildet das Laufwerk Fehler
+gezielter ab: Ein Fehler ohne eigene Zuordnung erscheint als „E/A-Gerätefehler“ statt als
+„Zugriff verweigert“, ein nicht erreichbarer Netzort als „Netzwerkort nicht erreichbar“
+(Windows-Fehler 1232).
+
+
 **Verifikation des Quellstands (2026-09-08):** Der Kandidat
 `0bfdc0665ba746493304030dc18e89bde11e36d6` wurde in der
 [Remote-Task-Suite](https://github.com/b1ue-man/smart-explorer/actions/runs/34218461978)
@@ -627,12 +673,13 @@ systemd-cgroup; ohne diesen Plattformprovider startet kein Payload. Ohne weitere
 Optionen gibt es bewusst keine Command-, Pfad- oder Shell-Filter: die Freigabe ist volle
 Remote-Codeausfuehrung als der laufende Benutzer (der „Standardnutzer“, das Konto
 des Smart-Explorer-Workers). Jede bisher erteilte Freigabe bleibt genau so bestehen,
-mit unveränderter `enabled`-Angabe und unveränderter Revision.
+mit unveränderter `enabled`-Angabe und unveränderter Revision. Seit 0.5.183 gilt der Absatz
+**Zugriffsrechte (ab 0.5.183)**; die Aussage „volle Remote-Codeausfuehrung“ beschreibt nur den Stand bis 0.5.182.
 **Konto und Programmliste (ab 0.5.181):**
 `enable --run-as USER` führt die Befehle des Geräts auf einem Linux-Host, dessen
 Worker als root läuft, als dieses lokale Konto aus (`--run-as standard` kehrt zum
-Worker-Konto zurück; Windows, Android und Linux ohne root-Worker lehnen ein anderes
-Konto mit Begründung ab). `enable --allow-program PATH` (wiederholbar) erlaubt dem Gerät
+Worker-Konto zurück; Android lehnt ein anderes Konto ab; Linux ohne root-Worker und Windows ohne Kontodienst
+lehnen es mit Begründung ab). `enable --allow-program PATH` (wiederholbar) erlaubt dem Gerät
 nur den Start genau dieser Programme im Argv-Modus, ohne Shell-Befehl und ohne
 Terminal; ein Programm wird nur über seinen absoluten Pfad oder den festen
 Systemsuchpfad des Hosts gefunden, nie über ein vom Gerät gesendetes `PATH`, und als
@@ -658,7 +705,7 @@ Shell (Liste leeren)“, dieselben Regeln und Warnungen wie `--allow-program`; j
 Befehle) und darunter die Jobs sowie **Exec-Protokoll dieses Hosts** (neueste 50, 200
 oder 1000 Einträge, nach Gerät filterbar, jedes Feld gekürzt und von Steuerzeichen
 bereinigt). Die Android-App zeigt unter **Teilen → Befehle auf diesem Telefon** je
-Gerät „Ausführen als: Standardnutzer“ (Android kann kein anderes Konto) und die
+Gerät „Ausführen als: App-Konto“ (Android kann kein anderes Konto; bis 0.5.182 hieß die Zeile „Standardnutzer“) und die
 Programme, ⋮ **Programme…** bearbeitet die Liste, **Befehlsprotokoll anzeigen** zeigt
 das Protokoll des Telefons.
 **Share-Einstellungen auf jeder Oberfläche (ab 0.5.182):** Das Desktop-Fenster **Geräte & Freigaben** zeigt je Bereich eine knappe
@@ -680,6 +727,36 @@ zusätzlich `exec_run_as`/`exec_programs`. Die Android-App ergänzt im Geräteme
 **Vertrauen zurücksetzen**, je Freigabe **Nach oben/unten** und in der Gerätekarte die
 LAN-Erkennung, die Erreichbarkeit des Direct-Codes und **Code erneuern…**. Welche
 Einstellung wo erreichbar ist, führt `docs/oberflaechen/share-exec.md`.
+
+**Zugriffsrechte (ab 0.5.183):** Ein Gerät bekommt je Befehlsart und Terminal eine
+Entscheidung: **aus**, **mit Rückfrage** (jeder Start wartet auf eine Bestätigung am
+Gerät) oder **erlaubt**. Dazu kommen das Konto, unter dem die Befehle laufen (`own`:
+das eigene Konto; `remote`: das Konto `se-remote`; `account:NAME`: ein lokales Konto,
+das dieser Host für Fernzugriff freigegeben hat), das Ende des Rechts (`--for 8h`,
+`--until ZEIT`, `--no-expiry`) und die Programmliste. `se share grants access GERÄT
+--yes` gibt dem Gerät Befehle und Terminal unter dem eigenen Konto, `--off` entzieht
+sie. Eine Änderung, die ein Recht einschränkt, beendet die laufenden Befehle, die es
+nicht mehr erlaubt. `se share grants access --room RAUM --all-members --ask --for 8h
+--yes` schreibt das Recht jedem zugelassenen Mitglied eines Raums; später zugelassene
+Mitglieder bekommen keines. Rückfragen entscheidet eine Person am Gerät: in der
+Desktop-App im Tab **Befehle** unter „OFFENE RÜCKFRAGEN“ (Diesmal erlauben, Immer erlauben,
+Ablehnen), auf Android als Dialog oder Benachrichtigung, im Terminal mit `se share exec
+approvals`, `se share exec approve ID [--always]` und `se share exec deny ID`.
+Konten richtet ein Administrator mit `se share exec accounts setup` ein; `allow`,
+`disallow`, `update` und `remove` folgen. Unter Linux ist das der Kontodienst
+`smart-explorer-exec` mit einem eigenen PAM-Dienst, unter Windows ein Dienst, der
+Konten ohne Passwort anmeldet (Programmkopie unter `%ProgramFiles%\Smart Explorer\exec-accounts`).
+Die Seite **Konten dieses Geräts** bietet die Schritte an (Kontodienst einrichten, aktualisieren oder entfernen; Konto freigeben oder entziehen). Grenzen: Auf Android
+laufen Befehle nur unter dem App-Konto. Das Werkzeug `se` im MCP-Server lehnt
+`share exec approve`, `share exec deny` und `share exec accounts setup|allow|disallow|update|remove`
+ab, weil diese Entscheidungen eine Person am Gerät trifft. Der Windows-Kontodienst hat
+keine Netzanmeldedaten: Netzlaufwerke und EFS-Dateien sind im Konto nicht verfügbar,
+Befehle laufen in Sitzung 0 ohne Fenster. Der Linux-Worker als root lehnt abgelaufene
+Konten und Konten mit erzwungenem Passwortwechsel ab. Befehle haben keine
+Gleichzeitigkeitsgrenze mehr, weder je Gerät noch je Host. `se share exec log` nennt zu
+jedem Eintrag die Art (Befehl oder Bildschirm), das Recht, das Konto, die Rückfrage und
+das Ergebnis. Details und Belege: `docs/oberflaechen/share-exec.md`.
+
 **SFTP-Hostschlüssel (ab 0.5.181):** Ein
 unbekannter Hostschlüssel wird nie still gespeichert. Der Zugriff scheitert mit
 Schlüsseltyp und SHA-256-Fingerabdruck; im Terminal fragt `se` wie `ssh`, sonst

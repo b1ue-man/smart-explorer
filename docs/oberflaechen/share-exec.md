@@ -1,6 +1,6 @@
 # Oberflächen von Share und Exec
 
-Stand: 2026-10-16. Lesestand des Abschnitts „Bestand vor dem Stapel“: `7e7203c9` (v0.5.181), am Code nachgelesen, Belege als `Datei:Zeile`. Der Abschnitt „Stand nach dem Stapel“ nennt, wo jede Fähigkeit seit dem Stapel „GUI-Parität Share/Exec“ (Plan: `docs/plaene/2026-10-16-luecken-schliessen/plan.md`, Abschnitt I) erreichbar ist. Pflege: jede Änderung an einer Share-/Exec-Einstellung aktualisiert diese Datei im selben Commit (Regel in `docs/oberflaechen/INDEX.md`).
+Stand: 2026-10-21 (Lauf U42, v0.5.183). Die Desktop-Belege des Abschnitts „Bestand vor dem Stapel“ sind auf den Code nach v0.5.182 nachgezogen, wo Dateien umbenannt oder verschoben wurden; der übrige Bestand bleibt wie dokumentiert. Der Abschnitt „Stand nach dem Stapel Rechte (v0.5.183)“ steht am Ende. Lesestand des Abschnitts „Bestand vor dem Stapel“: `7e7203c9` (v0.5.181), am Code nachgelesen, Belege als `Datei:Zeile`. Der Abschnitt „Stand nach dem Stapel“ nennt, wo jede Fähigkeit seit dem Stapel „GUI-Parität Share/Exec“ (Plan: `docs/plaene/2026-10-16-luecken-schliessen/plan.md`, Abschnitt I) erreichbar ist. Pflege: jede Änderung an einer Share-/Exec-Einstellung aktualisiert diese Datei im selben Commit (Regel in `docs/oberflaechen/INDEX.md`).
 
 Abkürzungen: `N/` = `native/src/`, `A/` = `android/app/src/main/java/app/smartexplorer/android/`.
 
@@ -40,8 +40,8 @@ Abkürzungen: `N/` = `native/src/`, `A/` = `android/app/src/main/java/app/smarte
 | Verbinden/Trennen (gespeichertes `auto_connect`) | `se share worker refresh/stop` (`N/cli/share.rs:262-280`) | „Verbinden“/„Trennen“ (`share_window_ui.rs:64-71`, `N/app/core/share.rs:139-178`) | „Online“-Schalter (`A/ui/share/ShareScreen.kt:200`, `share_settings.rs:144-173`) | – |
 | Gerätename | nur `se share configure --device-name` mit Pflicht-`--server` (`N/cli/share.rs:82-91`) | „Name aendern“ (`N/app/core/share_direct_ui.rs:73-90`) | „Umbenennen“ (`ShareScreen.kt:199`, `share_settings.rs:175-187`) | Lücke: CLI ohne eigenen Befehl |
 | Direkt-Code anzeigen, kopieren | `se share identity` (`N/cli/share/identity_command.rs:17-43`) | `share_direct_ui.rs:35-60` | Gerätekarte (`A/ui/share/ShareDeviceCard.kt`) | – |
-| Direkt-Code erreichbar/unerreichbar (Laufzeit, `ShareCmd::SetDirectOnline`, `N/share/core/signal_commands_local.rs:59`) | – | „Online/Offline schalten“ (`share_direct_ui.rs:91-97`) | – | Lücke: CLI, Android |
-| Direkt-Code neu erzeugen | nur als Reparatur (`identity_command.rs:60-80`) | „Code neu generieren“ (`share_direct_ui.rs:98-115`, `N/app/core/share_identity_rotation.rs:9-37`) | – | Lücke: CLI, Android |
+| Direkt-Code erreichbar/unerreichbar (Laufzeit, `ShareCmd::SetDirectOnline`, `N/share/core/signal_commands_local.rs:59`) | – | „Online/Offline schalten“ (`share_this_device_ui.rs:21-27`) | – | Lücke: CLI, Android |
+| Direkt-Code neu erzeugen | nur als Reparatur (`identity_command.rs:60-80`) | „Code neu generieren“ (`share_this_device_ui.rs:32`, `N/app/core/share_identity_rotation.rs:9-37`) | – | Lücke: CLI, Android |
 | Identität reparieren | `se share identity --repair` (`identity_command.rs:9-13`) | – | – | Ausnahme: Reparatur fehlender Geheimnisse ist ein Wartungsweg der CLI (`se doctor` zeigt den Zustand) |
 | Diagnose | `se share status`, `se doctor` | Tab „Diagnose“ (`N/app/core/share_diagnostics_ui.rs:4-86`) | Fehlerkarten (`ShareScreen.kt:181-196`) | Ausnahme: Diagnose-Log ist Sitzungszustand der Desktop-GUI |
 
@@ -51,13 +51,13 @@ Abkürzungen: `N/` = `native/src/`, `A/` = `android/app/src/main/java/app/smarte
 |---|---|---|---|---|
 | Anfragen auflisten/annehmen/ablehnen/erneut/löschen | `se share request …` (`N/cli/share/requests.rs:31-41`) | `N/app/core/share_lifecycle_ui.rs:45-110` | `RequestsSection` (`ShareScreen.kt:235-243`) | – |
 | Anfrageregel (fragen / automatisch annehmen) | nur Anzeige in `se share export list` (`N/cli/share/exports.rs:83-106`) | nur Anzeige (`N/app/core/share_policy_ui.rs:6-21`) | ändern (`ShareScreen.kt:211-220`, `share.setPolicy` `N/mobile/os/shared/domains/share_policy.rs:283-292`) | Lücke: CLI, Desktop |
-| Zugriff anfragen | `se connections add-peer` (Anfrage), `se share request retry` | „Zugriff anfragen“ (`share_direct_ui.rs:209-216`) | `SharePeers.kt:86` | – |
+| Zugriff anfragen | `se connections add-peer` (Anfrage), `se share request retry` | „Zugriff anfragen“ (`share_device_page_ui.rs:243`) | `SharePeers.kt:86` | – |
 | Unbestätigte Kopplungen | – | `N/app/core/share_discovery_publish_ui.rs:166-196` | `ShareConfirmationDialogs.kt` | Ausnahme: Sitzungszustand der GUI, die gekoppelt hat (`share_settings.rs:322-384`); die CLI meldet ihr Ergebnis sofort im Terminal |
-| Gerät per Direkt-Code hinzufügen | `se connections add-peer` (`N/cli/connections.rs:79-80`) | `share_direct_ui.rs:117-182` | `ShareDialogHost.kt:134` | – |
-| Rückfreigabe je Kontakt | – | Menü „Verwalten“ (`share_direct_ui.rs:219-228`) | „Eigene Freigaben…“ (`SharePeers.kt:87`) | Lücke: CLI |
-| Automatisch verbinden / öffnen je Kontakt | – | `share_direct_ui.rs:229-240` | – | Lücke: CLI, Android |
-| Vertrauen zurücksetzen je Kontakt | – | `share_direct_ui.rs:264-270` | – | Lücke: CLI, Android |
-| Gerät entfernen | `se connections remove-peer`, `se share grants delete` | `share_direct_ui.rs:271`, `share_lifecycle_ui.rs:319-333` | `SharePeers.kt:88` | – |
+| Gerät per Direkt-Code hinzufügen | `se connections add-peer` (`N/cli/connections.rs:79-80`) | `share_direct_ui.rs:6` | `ShareDialogHost.kt:134` | – |
+| Rückfreigabe je Kontakt | – | Geräteseite, Rückfreigabe (`share_device_page_ui.rs:4`) | „Eigene Freigaben…“ (`SharePeers.kt:87`) | Lücke: CLI |
+| Automatisch verbinden / öffnen je Kontakt | – | `share_device_page_ui.rs:251-256` | – | Lücke: CLI, Android |
+| Vertrauen zurücksetzen je Kontakt | – | `share_device_page_ui.rs:269` | – | Lücke: CLI, Android |
+| Gerät entfernen | `se connections remove-peer`, `se share grants delete` | `share_device_page_ui.rs:209`, `share_lifecycle_ui.rs:319-333` | `SharePeers.kt:88` | – |
 | Schreibrecht je Gerät | `se share grants set` (`N/cli/share/grants.rs:31`) | `share_policy_ui.rs:22-44` | `ShareRightsDialogs.kt` | – |
 | Autorisierung widerrufen / wieder erlauben | `se share grants revoke/allow` | `share_lifecycle_ui.rs:280-317` | `SharePolicySections.kt:37`, `ShareConfirmationDialogs.kt` | – |
 | Entfernte Geräte, erneut zulassen | `se share grants removed` | `N/app/core/share_removed_devices_ui.rs` | `ShareScreen.kt` Block `Removed` | – |
@@ -68,14 +68,14 @@ Abkürzungen: `N/` = `native/src/`, `A/` = `android/app/src/main/java/app/smarte
 |---|---|---|---|---|
 | Raum erstellen | `se share room create` (`N/cli/share.rs:124-127`) | `N/app/core/share_rooms_ui.rs:19-58` | `ShareScreen.kt:232` | – |
 | Raum per Code beitreten | `se connections add-room` (`N/cli/connections.rs:82`) | `share_rooms_ui.rs:60-105` | `ShareScreen.kt:233` | – |
-| Räume mit Mitgliedern auflisten | nur Anzahl in `se share status` (`N/cli/share/status.rs:68-80`) | `share_rooms_ui.rs:117-231` | `SharePeers.kt:96-182` | Lücke: CLI ohne Mitgliederliste |
-| Verlassen / wieder beitreten (`auto_join`) | – | „Verlassen“, „Beitreten“, „Auto“ (`share_rooms_ui.rs:133-145`) | nur „Verlassen“ (`SharePeers.kt:137`) | Lücke: CLI; Android ohne Wiederbeitritt |
-| Umbenennen | – | „Umbenennen“ nimmt das Namensfeld des Beitreten-Abschnitts (`share_rooms_ui.rs:160-163`) | – | Lücke: CLI, Android; Desktop mit eigenem Feld |
-| Raum-Code anzeigen | – | „Code kopieren“ (`share_rooms_ui.rs:151-159`) | „Code anzeigen“ (`SharePeers.kt:135`) | Lücke: CLI |
-| Raum entfernen | `se connections remove-room` | `share_rooms_ui.rs:164` | `SharePeers.kt:138` | – |
-| Raumrechte (Mitglieder schreiben, neue bestätigen) | `se share export policy` (`N/cli/share/exports_policy.rs:35-133`) | `share_rooms_ui.rs:168-182` | „Rechte und Bestätigung…“ (`SharePeers.kt:136`) | – |
-| Mitglied zulassen / sperren / wieder zulassen | – | nur Häkchen „Blockieren“ ohne Zulassen eines wartenden Mitglieds (`share_rooms_ui.rs:222-224`) | `SharePeers.kt:175-179`, `share.setRoomMember` (`share_policy.rs:201-240`) | Lücke: CLI; Desktop ohne „Zulassen“ |
-| Mitglied: Vertrauen zurücksetzen | – | `share_rooms_ui.rs:225-229` | – | Lücke: CLI, Android |
+| Räume mit Mitgliedern auflisten | nur Anzahl in `se share status` (`N/cli/share/status.rs:68-80`) | `share_room_page_ui.rs:51` | `SharePeers.kt:96-182` | Lücke: CLI ohne Mitgliederliste |
+| Verlassen / wieder beitreten (`auto_join`) | – | „Verlassen“, „Wieder beitreten“ (`share_room_page_ui.rs:101`, `:109`) | nur „Verlassen“ (`SharePeers.kt:137`) | Lücke: CLI; Android ohne Wiederbeitritt |
+| Umbenennen | – | „Umbenennen“ nimmt das Namensfeld des Beitreten-Abschnitts (`share_room_page_ui.rs:185`) | – | Lücke: CLI, Android; Desktop mit eigenem Feld |
+| Raum-Code anzeigen | – | „Code kopieren“ (`share_room_page_ui.rs:114`) | „Code anzeigen“ (`SharePeers.kt:135`) | Lücke: CLI |
+| Raum entfernen | `se connections remove-room` | `share_room_page_ui.rs:134` | `SharePeers.kt:138` | – |
+| Raumrechte (Mitglieder schreiben, neue bestätigen) | `se share export policy` (`N/cli/share/exports_policy.rs:35-133`) | `share_room_page_ui.rs:141-144` | „Rechte und Bestätigung…“ (`SharePeers.kt:136`) | – |
+| Mitglied zulassen / sperren / wieder zulassen | – | nur Häkchen „Blockieren“ ohne Zulassen eines wartenden Mitglieds (`share_room_page_ui.rs:233`) | `SharePeers.kt:175-179`, `share.setRoomMember` (`share_policy.rs:201-240`) | Lücke: CLI; Desktop ohne „Zulassen“ |
+| Mitglied: Vertrauen zurücksetzen | – | `share_room_page_ui.rs:247` | – | Lücke: CLI, Android |
 
 ### Freigaben, Auffindbarkeit, Netzwerk, Papierkorb
 
@@ -155,3 +155,60 @@ Verbleibende Ausnahmen (unverändert begründet oben): Terminal-Verbindung, Iden
 | Anfrageregel ändern | nicht möglich (nur Anzeige) | Tab **Anfragen** |
 
 Tabnummern 0 bis 5 (Geräte, Räume, Freigaben, Diagnose, Netzwerk, Papierkorb) behalten ihre Bedeutung für Seitenleiste, GUI-Harness und Ereignisse; eingehende Anfragen und Entscheidungen öffnen jetzt **Anfragen** (6). Der Raum-Knopf „Oeffnen“ der alten Liste setzte nur die angezeigte Statusbeschriftung (ohne Speicherung, ohne Verbindung) und entfällt; Mitglieder werden einzeln geöffnet. Das Häkchen „Blockieren“ ist durch Knöpfe je Zustand ersetzt (Zulassen, Sperren, Wieder zulassen) mit derselben Kernfunktion (`set_member_blocked`/`admit_member`) und Identitätsprüfung wie Android.
+
+## Stand nach dem Stapel Rechte (v0.5.183)
+
+Stand 2026-10-21 (Lauf U42, PRM-M11). Belege am Code nachgelesen; die Stapel-Suite ist für diese Fassung nicht ausgeführt. Ein **Zugriffsrecht** gilt je Gerät (oder je Raummitglied) und umfasst: Befehle (`aus`, `mit Rückfrage`, `erlaubt`), Terminal (ebenso), das Konto, unter dem Befehle und Terminal laufen (`own`, `remote`, `account:NAME`), das Ende (`--for`, `--until`, `--no-expiry`) und die Programmliste (`--allow-program`, `--full`). Das Konto `remote` ist `se-remote` (`N/share/core/access_grant.rs:14`).
+
+### Oberflächen des Zugriffsrechts
+
+| Fähigkeit | CLI | Desktop | Android (Bridge → App) | MCP |
+|---|---|---|---|---|
+| Zugriffsrecht anzeigen | `se share grants access [GERÄT]` ohne Änderungsoption (`N/cli/share/grants_access.rs:47`) | Tab **Befehle**: je Gerät eine Zeile „Befehle: … · Terminal: … · als KONTO“ (`N/app/core/share_exec_ui.rs:52`, Text `:216`, Konto nur im aktiven Zustand `:236`); Geräteseite (`N/app/core/share_exec_ui.rs:101`); Tab-Name `N/app/core/share_pages_ui.rs:47` | Zeile „Ausführen als: …“ im Abschnitt „Befehle auf diesem Telefon“ (`A/ui/share/ExecHostSection.kt:182`); Felder des Anbieters in `share.status` (`N/mobile/os/shared/domains/share_access.rs:86`) | `se` mit denselben Argumenten |
+| Zugriffsrecht ändern | `se share grants access GERÄT` mit `--commands`, `--terminal`, `--as`, `--ask`, `--for`, `--until`, `--no-expiry`, `--allow-program`, `--full`, `--off`, `--yes` (`N/cli/share/grants_access.rs:59-85`); mit nur `--yes`: Befehle und Terminal als eigenes Konto | Knopf „Ändern…“ (`N/app/core/share_exec_ui.rs:52`), Dialog „Zugriff für …“ (`N/app/core/share_access_dialog_ui.rs:353`), Knopf „Als … erlauben“ (`:205`), „Zugriff entziehen“ (`:207`) | ⋮ „Zugriff…“ (`A/ui/share/ExecHostSection.kt:202`), Dialog „Zugriff für „…“ (`A/ui/share/AccessDialog.kt:306`); Bridge `share.setAccess` (`N/mobile/os/shared/domains/mod.rs:54`) | nicht gesperrt (`N/cli/share/exec_approvals.rs:210-238` nennt nur die übrigen Befehle); der Katalog verlangt die Änderung nur auf ausdrückliche Bitte (`N/cli/mcp/catalog.rs:39-41`) |
+| Ausführen als | `--as own` (eigenes Konto), `--as remote` (`se-remote`), `--as account:NAME` (ein lokales Konto, das dieser Host für Fernzugriff freigegeben hat; sonst Ablehnung `N/app/core/share_access_accounts_ui.rs:74`) (`N/cli/share/grants_access.rs:59`) | Auswahl und Freitext des Kontos im Dialog (`N/app/core/share_access_dialog_ui.rs:60-68`) | nur „App-Konto“; jede andere Angabe wird abgelehnt (`N/mobile/os/shared/domains/share_access.rs:245-254`) | wie CLI |
+| Rückfrage entscheiden | `se share exec approvals` (Liste), `se share exec approve ID [--always]`, `se share exec deny ID` (`N/cli/share/exec_approvals.rs:25-34`) | Abschnitt „OFFENE RÜCKFRAGEN (n)“ mit „Diesmal erlauben“, „Immer erlauben“, „Ablehnen“ (`N/app/core/share_access_approvals_ui.rs:87`, `:104-106`) | Dialog oder Benachrichtigung mit denselben drei Knöpfen (`A/ui/share/AccessDialog.kt:238-239`, `A/service/AccessApprovalNotifier.kt:118-124`); Bridge `share.accessApprovals`, `share.decideAccessApproval` (`N/mobile/os/shared/domains/mod.rs:55-56`), `share.reportApprovalUndeliverable` (`:241`) | gesperrt: `approve` und `deny` (`N/cli/share/exec_approvals.rs:210-238`) |
+| Gültig bis | `--for 30m, 8h, 2d oder 1d12h`, `--until ZEIT` (RFC 3339), `--no-expiry` (`N/cli/share/grants_access.rs:67-73`) | „Gültig bis …“ oder „Abgelaufen am …“ (`N/app/core/share_exec_ui.rs:139`) | „Zeitraum“ im Dialog (`A/ui/share/AccessDialog.kt:327`) | wie CLI |
+| Konten dieses Geräts | `se share exec accounts` (Anzeige); `setup [--remote-account] [--allow NAME] [--yes]`, `allow NAME`, `disallow NAME`, `update`, `remove [--delete-remote-account]`, jeweils als Administrator (`N/cli/share/exec_accounts.rs:29-50`); Kontodienst-Anzeige unter `se share exec accounts` (`N/cli/share/exec_status.rs:43`) | Abschnitt „KONTEN DIESES GERÄTS“ mit „Konto freigeben“ (`N/app/core/share_access_accounts_ui.rs:139`, `:178`), „Kontodienst einrichten…“ (`:218`), „Kontodienst entfernen…“ (`:240`) | keine: Android hat kein anderes Konto (Ausnahme unten) | gesperrt: `setup`, `allow`, `disallow`, `update`, `remove` (`N/cli/share/exec_approvals.rs:210-238`) |
+| Raum-Sammelaktion | `se share grants access --room RAUM --all-members [...]` (`N/cli/share/grants_access.rs:53-56`): jedes zugelassene Mitglied bekommt ein eigenes Recht; später zugelassene Mitglieder bekommen keines | Raumseite, Knopf „Zugriff …“ (`N/app/core/share_room_page_ui.rs:248`); Dialog „Zugriff für alle Mitglieder…“ (`N/app/core/share_access_room_ui.rs:83`), Hinweis zur Bedingung (`:85`), Knopf „Für {n} Mitglieder erlauben“ (`:144`) | nicht belegt (Offene Punkte) | wie CLI |
+| Protokoll mit Art | `se share exec log [--lines N] [--json]` (`N/cli/share/exec_status.rs:22`, Standard 50 Einträge `:49`); Einträge tragen Art, Recht, Konto, Rückfrage und Ergebnis; Rückfragen und abgelaufene Rechte sind eigene Einträge | Befehle → Exec-Protokoll mit Filter nach Art (`N/app/core/share_exec_log_ui.rs:29`, Beschreibung `:51`) | „Befehlsprotokoll anzeigen“ (`A/ui/share/ExecHostSection.kt:118`); Bridge `share.execLog` (`N/mobile/os/shared/domains/mod.rs:53`) | `se` mit `["share","exec","log","--json"]` (`N/cli/mcp/catalog.rs:184`) |
+
+### Konten je Betriebssystem
+
+- **Linux mit root-Worker:** Befehle laufen als das gewählte Konto; die Prüfung vor dem Start lehnt einen unbekannten, abgelaufenen oder gesperrten Konto ab und verlangt bei erzwungenem Passwortwechsel einen Wechsel vorher (`N/share/os/linux_os/exec_account.rs:1-12`, `:145-146`). PAM entscheidet ein zweites Mal in der Konto-Einheit (`N/share/os/linux_os/exec_pam_service.rs:17-18`, Dienst `smart-explorer-exec`).
+- **Linux mit Kontodienst:** Der Dienst liegt als `/usr/local/sbin/smart-explorer-exec` (`N/share/os/linux_os/exec_binary_copy.rs:21`), spricht über `/run/smart-explorer/exec-helper.sock` (`N/share/os/linux_os/exec_helper_client.rs:28`) und liest `/etc/smart-explorer/exec-accounts.toml` (`N/share/os/linux_os/exec_helper_config.rs:24`). Das Konto `se-remote` hat das Home `/var/lib/smart-explorer/se-remote` (`N/share/os/linux_os/exec_remote_account.rs:31`).
+- **Windows mit Kontodienst:** Die Anmeldung ohne Passwort (S4U) setzt keine Netzanmeldedaten; Netzlaufwerke und EFS-Dateien sind im Job nicht verfügbar (`N/share/os/windows/exec_account_s4u.rs:1-3`). Der Job läuft in Sitzung 0 ohne Fenster; das Startfenster hat einen leeren Desktop-Namen (`N/share/os/windows/exec_account_spawn.rs:44-50`, `:318-326`). Die Konfiguration liegt unter `%ProgramData%\Smart Explorer\exec-accounts.json` (`N/share/os/windows/exec_account_config.rs:1-2`, `:204`), die Programmkopie unter `%ProgramFiles%\Smart Explorer\exec-accounts` (`N/share/os/windows/exec_account_config.rs:217-223`).
+- **Android:** Befehle laufen nur unter dem App-Konto (`N/mobile/os/shared/domains/share_access.rs:245-254`: „Auf Android laufen Befehle nur unter dem App-Konto von Smart Explorer.“). Die Oberfläche zeigt „Ausführen als: App-Konto“ (`A/ui/share/AccessDialog.kt:373`).
+
+### Gleichzeitigkeit der Befehle (R15)
+
+Befehle haben keine Gleichzeitigkeitsgrenze mehr, weder je Gerät noch je Host. `ExecRegistryLimits` nennt nur noch `history` und `terminal_cache`, beide ohne Nutzungsgrenze (`N/share/core/exec_registry.rs:84-90`). Die Fehlervarianten `PrincipalLimit` und `GlobalLimit` gibt es im Quelltext unter `native/` und `android/` nicht mehr. Ältere Hosts können diese Fehler noch senden; wie ein Client einen solchen Fehler anzeigt, ist nicht belegt.
+
+### Ausnahmen mit Grund
+
+- **MCP:** Der Werkzeug-Aufruf `se` nimmt keine Rückfrage an (`approve`, `deny`) und richtet keine Konten ein (`setup`, `allow`, `disallow`, `update`, `remove`); das ist eine Entscheidung einer Person am Gerät (`N/cli/share/exec_approvals.rs:210-238`). Das Lesen bleibt offen. Rechteänderungen über `share grants access` führt `se` aus, wenn die Person es ausdrücklich verlangt (`N/cli/mcp/catalog.rs:39-41`).
+- **Android:** kein anderes Konto und keine Kontodienst-Einrichtung (`N/mobile/os/shared/domains/share_access.rs:245-254`). Die Raum-Sammelaktion ist im geprüften Stand nicht belegt.
+- **Terminal-Verbindung:** Nutzerausnahme wie vor dem Stapel.
+
+### Korrekturen der Inventur (A1 bis A10)
+
+Die Abweichungen stammen aus `docs/lesungen/2026-10-17-exec-rechte-oberflaechen.md`, Abschnitt „Abweichungen der Inventur“. „Behoben“ heißt: die Angabe ist jetzt belegt oder richtig gestellt.
+
+| Nr. | Stelle im Bestand | Befund | Stand | Beleg (Stand v0.5.183) |
+|---|---|---|---|---|
+| A1 | Zeile „IPC“ | `ShareCommand` stand nicht im genannten Bereich | behoben | Anfragevariante `N/daemon/os/shared/ipc_protocol.rs:190`; die Anfragen `ShareCommand` bis `CancelExec` liegen in `:190-247` |
+| A2 | Zeile „IPC“, Antworten | `ExecCancelled` stand außerhalb des Bereichs | behoben | Antworten `N/daemon/os/shared/ipc_protocol.rs:374-392` (`ShareEvents` `:374`, `ExecJobs` `:389`, `ExecCancelled` `:392`) |
+| A3 | Zeile „MCP“ | falsche Zeilen für das Werkzeug `se` | behoben | `N/cli/mcp/catalog.rs:183` |
+| A4 | Zeile „MCP-Werkzeuge“ | nur 5 von 18 Werkzeugen genannt | behoben | Der Katalog hat 20 Werkzeuge (`N/cli/mcp/catalog.rs:71-198`): status, connections, list, stat, read, write, edit, mkdir, remove, copy, move, search, exec, job_status, job_input, job_cancel, se, sessions, screen, screen_input |
+| A5 | Zeile „MCP-Einstellungen“ | Aussage galt nur für Einstellbefehle | behoben (präzisiert) | Beispiele nennen nur Lesebefehle (`N/cli/mcp/catalog.rs:184`); kein Beispiel nennt `enable`, `disable` oder `grants access` |
+| A6 | Desktop „Befehle“ | Konto nur bei aktiven Geräten | belegt | `N/app/core/share_exec_ui.rs:216-223` („aus“ oder „aus (abgelaufen)“), Konto im aktiven Text `:236` |
+| A7 | Desktop „Befehle“, Funktion | Funktion endete bei Zeile 74 | behoben | `ui_exec_overview` in `N/app/core/share_exec_ui.rs:52-97` |
+| A8 | Desktop-Programmliste | `mutate_exec_grant` steht nicht in den genannten Zeilen | behoben | Die Oberfläche ruft `mutate_exec_grant` nicht mehr auf (keine Stelle unter `N/app/`); Änderungen laufen über `apply_access` (`N/app/core/share_exec_ui.rs:324`) |
+| A9 | Desktop-Protokoll | Lesefunktion unterschiedlich zur CLI | offen | CLI: `exec_audit_tail` (`N/cli/share/exec_status.rs:125`); Desktop: `exec_audit_entries` (`N/app/core/share_exec_log_ui.rs:218`); Android: `N/mobile/os/shared/domains/share_exec.rs:194`. Ob beide dieselbe Ausgabe liefern, ist nicht belegt (Lücke 20 der Lesung) |
+| A10 | Desktop-Programmliste, „Regeln wie die CLI-Hilfe“ | Desktop-Text hat den Satz „Keine Sandbox.“ | präzisiert | Der Satz steht in `N/app/core/share_exec_programs_ui.rs:31`; die CLI-Hilfe (`N/cli/share/grants_exec.rs`) enthält ihn nicht |
+
+### Offene Punkte nach dem Stapel Rechte
+
+- Raum-Sammelaktion auf Android: nicht belegt.
+- A9: Gleichheit der Protokollausgabe von CLI, Desktop und Android ist nicht belegt.
+- Die Stapel-Suite für PRM-M1 bis PRM-M11 ist für diesen Stand nicht ausgeführt; Verhalten auf Windows-Konten, Fedora-SELinux und Windows 11 Home ist nicht geprüft (Annahmen A5 bis A7 in `docs/plaene/2026-10-17-rechte-desktop-tresore/strang-rechte.md`).

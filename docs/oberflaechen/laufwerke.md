@@ -1,6 +1,6 @@
 # Oberflächen der Laufwerke
 
-Stand: 2026-10-19. Lesestand: Commit `f0ca4507` mit den Änderungen der Pakete U06 (DRV-M3) und U17 (DRV-M5, DRV-M6) des Plans `docs/plaene/2026-10-17-rechte-desktop-tresore/plan.md`, am Code nachgelesen, Belege als `Datei:Zeile`. Angelegt von U06 (C6, W4); gepflegt von U12, U14, U17 und U23 im Commit ihrer Oberflächenänderung; vervollständigt von DRV-M9 (U42). Nichts davon ist gebaut oder ausgeführt; das prüft die eine Stapel-Suite.
+Stand: 2026-10-21 (Lauf U42, DRV-M9). Lesestand: Stand `946b9205` mit den Änderungen der Pakete U06 (`a6107a70`), U12 (`fc59b6f3`), U14 (`5267e500`), U17 (`0b11d3e6`) und U23 (`94240017`) des Plans `docs/plaene/2026-10-17-rechte-desktop-tresore/plan.md`, am Code nachgelesen, Belege als `Datei:Zeile`. Angelegt von U06 (C6, W4); gepflegt von U12, U14, U17 und U23 im Commit ihrer Oberflächenänderung; vervollständigt von DRV-M9 (U42). Diese Fassung ist nicht gebaut und nicht ausgeführt; das prüft die eine Stapel-Suite.
 
 Abkürzungen: `N/` = `native/src/`, `A/` = `android/app/src/main/java/app/smartexplorer/android/`, `<AD>` = Datenordner der App (`support_dirs::app_data_dir()`).
 
@@ -25,11 +25,11 @@ Abkürzungen: `N/` = `native/src/`, `A/` = `android/app/src/main/java/app/smarte
 |---|---|---|---|---|---|
 | Einhängen mit Ziel, Buchstabe, Schreibzugriff, Wurzelvertrauen, Metadatentiefe, Cache, Systemlaufzeit, Name | `se drive mount <TARGET>` (`N/cli/drive.rs:120-165`, Optionen `N/cli/drive_options.rs:5-55`); Text `drive\t<id>\t<auto\|X:>\t<Modus>\t<Status>\t<Name>` (`drive.rs:425-442`); `--json` = `MountSnapshot` | „Remote als Laufwerk“ → „Einbinden“ (`N/app/core/mount_ui_draft.rs:139`, `:199`, `:226-276`) | Ausnahme | `StartMount` | `se` |
 | Liste | `se drive list [--json]` (`drive.rs:167-182`); leer: `drives\t0` | „Smart-Explorer-Laufwerke“ (`N/app/core/mount_ui.rs:188`, Abfrage alle 2 s `:162-169`) | Ausnahme | `ListMounts` | `se` |
-| Aushängen | `se drive unmount <SELEKTOR>` (`drive.rs:184-189`); Selektor-Vervollständigung aus der Registry (`drive.rs:60-66`, `N/cli/drive_set.rs:64-80`) | „Auswerfen“, „Entfernen“ (`mount_ui.rs:263`, `:248`) | Ausnahme | `StopMount` | `se` |
+| Aushängen | `se drive unmount <SELEKTOR> [--force]` (`drive.rs:184-189`; `--force` nur unter Linux: auch belegte oder hängende Laufwerke, offene Dateien verlieren ihre Verbindung, `N/cli/drive_options.rs:78-88`); Selektor-Vervollständigung aus der Registry (`drive.rs:60-66`, `N/cli/drive_set.rs:64-80`) | „Auswerfen“, „Entfernen“ (`mount_ui.rs:263`, `:248`) | Ausnahme | `StopMount` | `se` |
 | Erneut versuchen | `se drive retry <SELEKTOR>` (`drive.rs:191-197`), Vervollständigung wie oben | „Erneut versuchen“ (`mount_ui.rs:238`) | Ausnahme | `RetryMount` | `se` |
-| Status | `unmounted`, `mounting`, `mounted:<X:>`, `mounted:<Pfad>` (Ordner-Laufwerke, `MountStatus::MountedAt`), `unmounting`, `runtime-unavailable:…`, `conflict:…`, `failed:…` (`drive.rs:444-458`, `N/mount/core/mount_status.rs:17-21`); Exitcodes unverändert (`drive.rs:461-472`) | Statustext je Laufwerk; `MountedAt` braucht die Folgezeile in `N/app/core/mount_ui_helpers.rs` (Abschnitt 10) | Ausnahme | `ListMounts`, `MountSnapshot` | `se` |
+| Status | `unmounted`, `mounting`, `mounted:<X:>`, `mounted:<Pfad>` (Ordner-Laufwerke, `MountStatus::MountedAt`), `unmounting`, `runtime-unavailable:…`, `conflict:…`, `failed:…` (`N/cli/drive_print.rs:66-80`, `N/mount/core/mount_status.rs:17-21`) | Statustext je Laufwerk; `MountedAt` braucht die Folgezeile in `N/app/core/mount_ui_helpers.rs` (Abschnitt 10) | Ausnahme | `ListMounts`, `MountSnapshot` | `se` |
 
-Plattformen: Windows über Dokany (Bestand). Linux bindet ab DRV-M4 (U12) ein; bis dahin meldet `drive_mount_supported()` unter Linux `false` (`N/mount/mod.rs:313-315`).
+Plattformen: Windows über Dokany 2.3.1.1000 und Linux über FUSE. `drive_mount_supported()` ist unter Windows und Linux `true` (`N/mount/mod.rs:361-364`). Linux nutzt `fuser =0.18.0` (`native/Cargo.toml:326`), Einhängeort ist standardmäßig `~/SmartExplorer/<Name>` (`N/cli/drive_options.rs:24`).
 
 ## 3 Optionen und „Beim Anmelden automatisch einbinden“
 
@@ -56,7 +56,7 @@ Ablage (Strang S2 C4):
 | Fähigkeit | CLI | Desktop | Android | IPC | MCP |
 |---|---|---|---|---|---|
 | Laufwerksbuchstabe (Windows) | `--letter auto\|X` (`N/cli/drive_options.rs:9-15`) | Auswahl „Laufwerksbuchstabe“ `D`–`Z` (`N/app/core/mount_ui_location.rs:73-96`, unverändert aus `mount_ui_draft.rs` ausgegliedert) | Ausnahme | `StartMount` (`config.drive`) | `se` |
-| Ordner als Einhängeort (Linux) | `--mount-point` folgt mit DRV-M4 (U12) | Feld „Einhängeort“: „Standard (~/SmartExplorer)“ oder „Eigener Ordner“ mit Formprüfung (`mount_ui_location.rs:98-116`, `:33-56`); Anzeige in „Laufwerkdetails“ (`N/app/core/mount_ui.rs:212-214`); erreichbar, sobald DRV-M4 Linux-Laufwerke einhängt | Ausnahme | `StartMount` (`config.location` = `MountLocation::Directory { path }`, `N/mount/core/mount_location.rs:18-22`, Prüfung `:38-70`) | `se` |
+| Ordner als Einhängeort (Linux) | `--mount-point PFAD` (`N/cli/drive_options.rs:24`; unter Windows Exitcode 2 mit „Einhängeorte gibt es nur unter Linux; nutze --letter“, `N/cli/drive.rs:165-167`) | Feld „Einhängeort“: „Standard (~/SmartExplorer)“ oder „Eigener Ordner“ mit Formprüfung (`mount_ui_location.rs:98-116`, `:33-56`); Anzeige in „Laufwerkdetails“ (`N/app/core/mount_ui.rs:212-214`) | Ausnahme | `StartMount` (`config.location` = `MountLocation::Directory { path }`, `N/mount/core/mount_location.rs:18-22`, Prüfung `:38-70`) | `se` |
 | GTK-Lesezeichen (Linux, `$XDG_CONFIG_HOME/gtk-3.0/bookmarks`) | – (der Host legt sie beim Einhängen an und entfernt sie beim Aushängen; der Dienst entfernt sie nach einem Hostabsturz) | – | Ausnahme | – | – |
 | KDE-Orte (Linux, `$XDG_DATA_HOME/user-places.xbel`) | – (wie oben) | – | Ausnahme | – | – |
 | „Im Dateimanager öffnen“ | `se drive open <SELEKTOR> [--json]`: Text `opened\t<Pfad>\t<Methode>`, JSON `{"opened":"<Pfad>","method":"filemanager1\|xdg-open\|explorer"}`; Selektor wie bei `unmount` (zusätzlich das Wort `devices`), Vervollständigung wie bei `retry`; ein Laufwerk, das nicht eingehängt ist, meldet `se: Das Laufwerk ist nicht eingehängt` mit Exitcode 1 (`N/cli/drive_open.rs`) | Knopf „Im Dateimanager öffnen“ („Im Explorer öffnen“ unter Windows) neben „Auswerfen“ je eingehängter Zeile (`N/app/core/mount_ui.rs`, `mount_ui_open.rs`) und im Abschnitt „Verbundene Geräte als Ordner“ | Ausnahme | – | `se` |
@@ -71,7 +71,7 @@ Dateimanager-Einbindung unter Linux (DRV-M5, Dateien `N/mount/os/linux_os/bookma
 
 ## 5 Gerätebaum „Verbundene Geräte als Ordner“
 
-Stand DRV-M6 (U17), am Code nachgelesen, nicht gebaut. Ein Laufwerk, `se-devices`, zeigt jedes gekoppelte Gerät als Ordner: Windows als Laufwerk „Smart Explorer Geräte“, Linux unter `~/SmartExplorer/Geräte`.
+Stand DRV-M6 (U17), am Code nachgelesen; im Quelltext committet (`0b11d3e6`, Registrierung `f83d1d94`), nicht ausgeführt. Ein Laufwerk, `se-devices`, zeigt jedes gekoppelte Gerät als Ordner: Windows als Laufwerk „Smart Explorer Geräte“, Linux unter `~/SmartExplorer/Geräte`.
 
 | Fähigkeit | CLI (Text / JSON / Vervollständigung) | Desktop | Android | IPC | MCP |
 |---|---|---|---|---|---|
@@ -98,7 +98,7 @@ Dateien: Kern `N/mount/core/device_tree*.rs`, `peer_roots.rs`; Host `N/mount/os/
 
 ## 6 Tresor-Laufwerke
 
-Stand DRV-M7 und VLT-M12 (U14), am Code nachgelesen, nicht gebaut.
+Stand DRV-M7 und VLT-M12 (U14), am Code nachgelesen; im Quelltext committet (`ee4a5761`, `5267e500`), nicht ausgeführt.
 
 - **Einbinden:** `se drive mount vault://<SITE> [--read-write] [--label <NAME>] [--letter <X>|--mount-point <ORDNER>]`. `<SITE>` ist die ID, ein ID-Anfang mit mindestens 4 Zeichen oder die eindeutige Bezeichnung; gespeichert wird die Site-ID (`MountSource::Vault { site_id }`, nur in `registry-2.json`). Ohne `--label` trägt das Laufwerk die Bezeichnung des Tresors. Ein Unterpfad und `vault-store://` werden abgelehnt (`N/cli/drive.rs:396`). Desktop und Android binden über dieselbe Quelle ein (S3-Kontextmenü „Als Laufwerk einhängen“, U29/U31).
 - **Ort:** Windows ein Laufwerksbuchstabe (festes lokales Laufwerk, Abweichung P2: keine eigene Laufwerksart gegen Windows Search, Annahme A13); Linux `$XDG_RUNTIME_DIR/smart-explorer/Tresore/<Name>` auf tmpfs mit Sticky-Bit, außerhalb eines Mounts `1500`, gemountet `1700`. Ein Ordner außerhalb dieses Orts wird beim Start abgelehnt (`N/daemon/os/shared/mount_termination.rs:286`), ein Ort ohne tmpfs vom Host.
@@ -112,7 +112,7 @@ Stand DRV-M7 und VLT-M12 (U14), am Code nachgelesen, nicht gebaut.
 
 ## 7 Android-Dokumentanbieter
 
-Stand U23 (DRV-M8), nicht gebaut und nicht ausgeführt.
+Stand U23 (DRV-M8); im Quelltext committet (`94240017`, Registrierung `c9b0bed8`), nicht ausgeführt.
 
 **Einschalten.** Einstellungen → „Ordner für Apps bereitstellen“: Hauptschalter „Für andere Apps bereitstellen“, darunter „Verbundene Geräte“, je gespeicherte Verbindung (SFTP, FTP, FTPS, WebDAV, SMB), „Google Drive“ (nur angemeldet) und je Tresor. Ab Werk ist nichts freigegeben. Der Hauptschalter schaltet die Komponente `SeDocumentsProvider` selbst ein oder aus (`COMPONENT_ENABLED_STATE_*`, im Manifest `android:enabled="false"`); ausgeschaltet kann keine andere App den Anbieter fragen. Ablage: `<AD>/docs-provider.json` (`{"provider","devices","connections":[Kontoschlüssel|"gdrive"],"vaults":[Site-ID]}`).
 
@@ -130,9 +130,9 @@ Stand U23 (DRV-M8), nicht gebaut und nicht ausgeführt.
 
 | Fähigkeit | CLI | Desktop | Android | IPC | MCP |
 |---|---|---|---|---|---|
-| Laufzeit prüfen | `se drive runtime [--json]` (`N/cli/drive.rs:31`, `:98-118`), Windows/Dokany | „Dokany-Laufzeit / Hilfe“ (`N/app/core/mount_ui.rs:276`) | Ausnahme | – | `se` |
-| Laufzeit installieren | `se drive install-runtime [--json]` (`drive.rs:33`, `:83-96`) | Schaltfläche in „Dokany-Laufzeit / Hilfe“ (`N/app/core/mount_runtime_ui.rs`) | Ausnahme | – | `se` |
-| FUSE-Laufzeit, Kernel-Zeitlimit | folgt mit DRV-M4 (U12) | folgt mit DRV-M4 (U12) | Ausnahme | – | – |
+| Laufzeit prüfen | `se drive runtime [--json]` (`N/cli/drive.rs:31`, `:98-118`); Windows: Dokany, Linux: FUSE | „Dokany-Laufzeit / Hilfe“ (`N/app/core/mount_ui.rs:276`) | Ausnahme | – | `se` |
+| Laufzeit installieren | `se drive install-runtime [--json]` (`drive.rs:33`, `:83-96`); unter Linux installiert se kein Paket, es nennt den Befehl der Distribution (`N/cli/drive_output_linux.rs:79-90`, `N/cli/drive.rs:106-110`) | Schaltfläche in „Dokany-Laufzeit / Hilfe“ (`N/app/core/mount_runtime_ui.rs`) | Ausnahme | – | `se` |
+| FUSE-Bereitschaft, Kernel-Zeitlimit | `se drive runtime` unter Linux: `/dev/fuse` lesbar und schreibbar, ein setuid `fusermount3`, Kernel-Zeitlimit `fs.fuse.default_request_timeout` und Paketbefehl je Distribution (`N/mount/os/linux_os/fuse_runtime.rs:1-12`, `:220-234`) | keine eigene Anzeige belegt (Offene Punkte) | Ausnahme | – | `se` |
 
 ## 9 Ausnahmen mit Grund
 
@@ -145,12 +145,14 @@ Stand U23 (DRV-M8), nicht gebaut und nicht ausgeführt.
 
 ## 10 Offene Punkte
 
-- Zum Kompilieren nötig, außerhalb von U06: neue `match`-Zweige für `MountStatus::MountedAt` in `N/app/core/mount_ui_helpers.rs` (`status_label`) und `N/daemon/os/shared/mount_manager_host.rs` (`host_transition_allowed`, `validate_host_status`), für `MountSource::Devices`/`Vault` in `N/daemon/os/shared/mount_source.rs` (`resolve`) und `N/app/core/analytics_mounts.rs` (`open`).
-- Linux-Einhängen, `--mount-point`, `mounted:<Pfad>` in der Praxis: DRV-M4 (U12).
-- DRV-M8 (U23), nicht gebaut und nicht ausgeführt: Die R8-Registrierungen (`docs`-Module und Arm `"docs"` in `N/mobile/os/shared/domains/mod.rs`, Ausfuhr der `doc_*`-Funktionen in `N/mobile/mod.rs`, `mod io;` in `native/android-bridge/src/lib.rs`) stehen aus. Der Gerätebaum läuft auf Android mit einer Engine je Gerät über dessen ganzes Share-Backend, nicht über `DeviceTree`: `RootedBackend` ist im Dienst privat. Ein echtes Prozessende prüft die Emulatorstufe nicht (Instrumentierung läuft im App-Prozess); `drive_task_android_process_kill_retries_pending` prüft den Journalweg von `docs.retryPending`.
-- Tresor-Laufwerke (U14): die IPC-Registrierungen von R5 (`MountHostExt`, Sitzungstoken für `Vault::SpoolKey`) und die E2E-Prüfungen über FUSE und Dokany stehen aus.
+- Die Abnahme aller Laufwerksoberflächen läuft in der Stapel-Suite (Plan D3, Stufen des Strangs DRV-M10); diese Fassung ist nicht ausgeführt.
+- Installer: `install-linux.sh` kennt `--with-fuse` noch nicht (Paket U36; `install-linux.sh` hat keine Optionszeile dafür). Ohne diese Option installiert das Skript `fuse3` nicht; `se drive runtime` nennt den Befehl.
+- Desktop-Anzeige der FUSE-Bereitschaft unter Linux: nicht belegt.
+- Registrierungen der Laufwerks-Pakete stehen in den Commits `91d70957` (U06), `9456b8ad` (U12), `f83d1d94` (U17) und `c9b0bed8` (U23). Ob alle Zeilen vollständig sind, prüft die Stapel-Suite.
+- Tresor-Laufwerke (U14): E2E-Prüfungen über FUSE und Dokany stehen laut Lesestand U14 aus.
 - Ende-zu-Ende mit echtem Dokany und FUSE (`drive_task_auto_remount_after_daemon_restart`) läuft nur in der Stapel-Suite (Stufen `windows-core: drive-cli`, `linux-root: drive-fuse`).
-- DRV-M5, DRV-M6 (U17), nicht gebaut und nicht ausgeführt: Die Registrierungen von R6 (`MountHostConfig.device_tree`, `IpcResponse::Devices`, der Arm `MountHostExt` in `ipc_host_ext.rs`, die Modulzeilen in `daemon/drive_modules.rs`, die Ausfuhren in `daemon/mod.rs`, die Beispiele in `cli/mcp/catalog.rs`) stehen aus; ohne sie übersetzt die Arbeit nicht.
+- DRV-M8 (U23): Der Gerätebaum läuft auf Android mit einer Engine je Gerät über dessen ganzes Share-Backend, nicht über `DeviceTree`; `RootedBackend` ist im Dienst privat (Lesestand U23). Ein echtes Prozessende prüft die Emulatorstufe nicht; `drive_task_android_process_kill_retries_pending` prüft den Journalweg von `docs.retryPending`.
+- DRV-M5, DRV-M6 (U17): Die Tests des Gerätebaums laufen über Ordner statt über echte Geräte (`ChildLink`); `drive_task_devices_*` mit `fixture=share` sind als Kerntests geschrieben, die Ende-zu-Ende-Fassung mit zwei Prozessen steht aus. Der Windows-Test `drive_task_devices_windows_drive_lists_peer` ist `#[ignore]` und braucht Dokany.
 - Handtests (U43): Dolphin zeigt den KDE-Ort mit Symbol (Annahme zu `ID` und `folder-remote`) und nicht doppelt (Annahme A8); Nautilus, Nemo und Thunar zeigen das Lesezeichen außerhalb von Home; der Gerätebaum unter Windows mit mehreren Geräten und einem Raum.
-- Die Tests des Gerätebaums laufen über Ordner statt über echte Geräte (`ChildLink`); `drive_task_devices_*` mit der Prüfgröße `fixture=share` (echter Share-Server) sind als Kerntests geschrieben, die Ende-zu-Ende-Fassung mit zwei Prozessen steht aus. Der Windows-Test `drive_task_devices_windows_drive_lists_peer` ist `#[ignore]` und braucht Dokany.
-- Linux zeigt die virtuellen Ordner des Gerätebaums mit den Rechten der FUSE-Attributabbildung (`fuse_ops_attr.rs`, nicht Teil von U17); der Plan nennt `0555`. Schreiben bleibt in jedem Fall mit `PermissionDenied` verweigert.
+- Linux zeigt die virtuellen Ordner des Gerätebaums mit den Rechten der FUSE-Attributabbildung (`fuse_ops_attr.rs`); der Plan nennt `0555`. Schreiben bleibt in jedem Fall mit `PermissionDenied` verweigert.
+- Dokany: Wiedervorlage `WINFSP-AB` und `DOKANY-WATCH` stehen in `docs/TODO.md` (außerhalb dieses Dokuments; Abschnitt „Dokany bleibt“ in `README.md`).

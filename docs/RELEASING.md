@@ -112,6 +112,32 @@ on 2026-07-22. If the supported ABI, driver protocol, or MSI changes, review and
 manifest, Rust validation, fetchers, installer, license notices and user/native
 documentation together.
 
+## Linux FUSE runtime (fuse3)
+
+Linux drives (`se drive mount`, from 0.5.183) use FUSE through the Rust crate `fuser`
+(`native/Cargo.toml`, pinned `=0.18.0`). The crate is statically linked; the system
+needs the `fuse3` package at run time. `/dev/fuse` must be readable and writable for the
+user, and `fusermount3` must be setuid root (`native/src/mount/os/linux_os/fuse_runtime.rs`,
+module header). `se drive install-runtime` installs no package on Linux; it prints the
+distribution's command (`native/src/cli/drive_output_linux.rs`). `install-linux.sh` does
+not install `fuse3` yet: the `--with-fuse` option is still open (see
+`docs/oberflaechen/laufwerke.md`, section 10). Until then, a Linux user installs `fuse3`
+with the distribution's package manager.
+
+## Exec account service is not part of the update feed
+
+The Exec account service (`se share exec accounts setup`, administrator) is installed
+outside the update feed in `release-native/update-feed/`; the updater code has no reference
+to its files (`native/src/updater/`). Its program copy keeps the version it was installed with until an administrator runs
+`se share exec accounts update` after an update of Smart Explorer:
+
+- Linux: `/usr/local/sbin/smart-explorer-exec` (`native/src/share/os/linux_os/exec_binary_copy.rs`).
+- Windows: `%ProgramFiles%\Smart Explorer\exec-accounts\se.exe` (`native/src/share/os/windows/exec_account_config.rs`).
+
+The app reports the service as outdated when its helper protocol number differs from
+`HELPER_PROTOCOL` (Linux: `native/src/share/os/linux_os/exec_helper_client.rs`; Windows:
+`native/src/share/os/windows/exec_account_client.rs`).
+
 ## Private-DLL dependency: approve once, reuse exact bytes
 
 The mount runtime includes a modified user-mode DLL with corrected batching; the

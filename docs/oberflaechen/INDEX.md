@@ -1,6 +1,6 @@
 # Oberflächen von Smart Explorer
 
-Stand: 2026-10-16.
+Stand: 2026-10-21 (Lauf U42, v0.5.183).
 
 Zweck: Dieses Verzeichnis hält fest, welche Oberflächen das Projekt hat und über welche Oberfläche jede Fähigkeit und jede Einstellung erreichbar ist. Eine Fähigkeit ist erst fertig, wenn jede Oberfläche, die ihren Gegenstand zeigt oder steuert, sie gleichwertig zeigt und steuert. Ausnahmen (zum Beispiel die Terminal-Verbindung selbst, eine Plattform ohne die nötige Betriebssystemfunktion) stehen mit Grund im Teildokument.
 
@@ -23,6 +23,24 @@ Zweck: Dieses Verzeichnis hält fest, welche Oberflächen das Projekt hat und ü
 |---|---|
 | Share (Geräte, Anfragen, Räume, Freigaben, Auffindbarkeit, Netzwerk) und Exec (Grants, Konto, Programmliste, Jobs, Protokoll) | [share-exec.md](share-exec.md) |
 | Alle übrigen Einstellungen der App | [einstellungen.md](einstellungen.md) |
+| Laufwerke (Einhängen unter Windows und Linux, Optionen, Gerätebaum „Verbundene Geräte als Ordner“, Tresor-Laufwerke, Android-Dokumentanbieter, Laufzeit) | [laufwerke.md](laufwerke.md) |
+| Tresore (Cryptomator-Tresore, Sperren, Tresor-Sync) | noch nicht angelegt; das Teildokument `tresore.md` entsteht im Lauf VLT-M13 |
+| Bildschirm (Geräte, Sitzungen, Kodierung, Eingabe, Betrachter) | [bildschirm.md](bildschirm.md) |
+| se Desktop und se Launcher | [desktop-launcher.md](desktop-launcher.md) |
+
+## Kostenklassen
+
+Die Teildokumente beschreiben den Aufwand einer Aufgabe in Handlungen. Die Klassen gelten für alle Oberflächen gleich:
+
+| Klasse | Bedeutung |
+|---|---|
+| C0 | keine Handlung (Anzeige oder Standard ohne Zutun) |
+| C1 | genau eine Handlung (ein Befehl, ein Klick, ein Tipp) an der Stelle, an der die Person schon ist |
+| C2 | zwei oder drei Handlungen in einem Dialog oder auf einer Seite; Texteingabe nur als Auswahl aus einer Liste |
+| C3 | Navigation zu einer anderen Seite plus Handlungen, zusammen vier bis sechs; oder Freitext je Eintrag (Programm- oder Kontoname) |
+| C4 | Handlung oder Wissen außerhalb von se (Konto im Betriebssystem anlegen, Systemdatei bearbeiten, Administratorbestätigung) oder mehr als sechs Handlungen oder eine Eingabe je erlaubtem Programm |
+
+Quelle der Definition: `docs/plaene/2026-10-17-rechte-desktop-tresore/strang-rechte.md`, Abschnitt C6 („Bedienwege“, Kostenklassen; Lücke B23).
 
 ## Pflege
 
