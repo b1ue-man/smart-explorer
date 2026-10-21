@@ -10,6 +10,10 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+/// What `connect` finds when it looks at the root: a collection. Without a
+/// valid answer to its `PROPFIND` no backend is built.
+const COLLECTION: &str = r#"<?xml version="1.0"?><d:multistatus xmlns:d="DAV:"><d:response><d:href>/</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>"#;
+
 /// What the server answers to one GET.
 struct Reply {
     status: u16,
@@ -20,7 +24,8 @@ struct Reply {
 struct Server {
     address: SocketAddr,
     stop: Arc<AtomicBool>,
-    /// The `Range` header of every GET, in arrival order.
+    /// The `Range` header of every GET (the connect `PROPFIND` is answered
+    /// apart and not recorded), in arrival order.
     ranges: Arc<Mutex<Vec<Option<String>>>>,
 }
 
@@ -98,7 +103,9 @@ fn serve(
         if reader.read_line(&mut start).unwrap_or(0) == 0 {
             return;
         }
+        let propfind = start.starts_with("PROPFIND ");
         let mut range = None;
+        let mut body_len = 0usize;
         loop {
             let mut line = String::new();
             if reader.read_line(&mut line).unwrap_or(0) == 0 {
@@ -112,12 +119,28 @@ fn serve(
                 if name.trim().eq_ignore_ascii_case("range") {
                     range = Some(value.trim().to_string());
                 }
+                if name.trim().eq_ignore_ascii_case("content-length") {
+                    body_len = value.trim().parse().unwrap_or(0);
+                }
             }
         }
-        seen.lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .push(range.clone());
-        let reply = route(range.as_deref());
+        // The request body (a PROPFIND carries one) belongs to this request.
+        let mut body = vec![0u8; body_len];
+        if reader.read_exact(&mut body).is_err() {
+            return;
+        }
+        let reply = if propfind {
+            Reply {
+                status: 207,
+                content_range: None,
+                body: COLLECTION.as_bytes().to_vec(),
+            }
+        } else {
+            seen.lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(range.clone());
+            route(range.as_deref())
+        };
         let mut head = format!(
             "HTTP/1.1 {} Scripted\r\nContent-Length: {}\r\nConnection: keep-alive\r\n",
             reply.status,

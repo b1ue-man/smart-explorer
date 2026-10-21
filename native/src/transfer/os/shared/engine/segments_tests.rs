@@ -335,15 +335,24 @@ fn speed_task_segments_publish_waits_for_all_ranges() {
     let watcher = {
         let (finished, data) = (finished.clone(), fixture.data.clone());
         std::thread::spawn(move || {
-            let mut seen = None;
-            while !finished.load(Ordering::Acquire) {
-                if target.exists() {
-                    seen = Some(fs::read(&target).map(|content| content == data));
-                    break;
+            let look = || {
+                target
+                    .exists()
+                    .then(|| fs::read(&target).map(|content| content == data))
+            };
+            // The name is published last, so on a fast disk the job can be
+            // over between two looks: read the finished state once more
+            // after the flag, taking the flag before that last look.
+            loop {
+                let over = finished.load(Ordering::Acquire);
+                if let Some(seen) = look() {
+                    break Some(seen);
                 }
-                std::thread::sleep(Duration::from_millis(1));
+                if over {
+                    break None;
+                }
+                std::thread::sleep(Duration::from_micros(200));
             }
-            seen
         })
     };
     let result = run_within(fixture.job(&handle), LIMIT);
