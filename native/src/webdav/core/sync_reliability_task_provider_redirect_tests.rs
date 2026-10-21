@@ -226,3 +226,26 @@ fn sync_reliability_task_provider_dav_collection_redirect_rejects_authority_and_
     assert!(http.connect("/root").is_err());
     assert_eq!(http.requests().len(), 1);
 }
+
+#[test]
+fn sync_reliability_task_provider_dav_collection_redirect_accepts_the_servers_own_escaping() {
+    // Apache spells the slash redirect of a collection with `=` as it is,
+    // while `encode_path` sends `%3D`: the base64url names of a vault end so
+    // (suite run 8, vault-backends on WebDAV).
+    let http = Http::start(|request| match request.method.as_str() {
+        "PROPFIND" if !request.path.ends_with('/') => (
+            301,
+            Some(format!("{}/", request.path.replace("%3D", "="))),
+            String::new(),
+        ),
+        "PROPFIND" => (207, None, collection(&request.path)),
+        _ => panic!("unexpected request: {request:?}"),
+    });
+    let root = "/tresor/AB==.c9r";
+    let backend = http.connect(root).unwrap();
+    assert!(backend.list_dir(root).unwrap().is_empty());
+    let requests = http.requests();
+    assert_eq!(requests.len(), 4);
+    assert_eq!(requests[0].path, "/tresor/AB%3D%3D.c9r");
+    assert_eq!(requests[1].path, "/tresor/AB==.c9r/");
+}
