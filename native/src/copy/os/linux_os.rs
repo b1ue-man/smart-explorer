@@ -5,8 +5,14 @@ use std::path::Path;
 
 pub(super) type FileIdentity = (u64, u64);
 
+#[path = "linux_probe.rs"]
+mod linux_probe;
 #[path = "linux_range.rs"]
 mod linux_range;
+
+/// A large copy onto a drive not known to be flash: measured ranges
+/// (`linux_probe`) instead of `copy_handles`' fixed thread count.
+pub(super) use linux_probe::copy_probed;
 
 /// Which file `path` names, from its metadata: no read access needed (an
 /// unreadable destination can still be compared and replaced).
@@ -152,8 +158,9 @@ pub(super) fn copy_by_path(
 /// which reflinks on btrfs/xfs and copies server-side on NFS). With
 /// `parallel > 1` and a file of at least two shortest transfer parts, that
 /// many threads each copy one contiguous range at explicit offsets
-/// (`linux_range`); the engine only asks for it on a non-rotating drive with
-/// permits to spare. `None` when canceled.
+/// (`linux_range`); the engine asks for it with permits to spare on a drive
+/// known to be flash, or after a measured probe on the same device pair found
+/// that two threads help (`copy_probed`). `None` when canceled.
 pub(super) fn copy_handles(
     reader: &File,
     writer: &mut File,

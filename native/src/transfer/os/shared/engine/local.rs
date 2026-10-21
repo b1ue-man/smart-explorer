@@ -12,10 +12,17 @@ use super::queue::FileWork;
 use super::roots::RootPlan;
 use super::Engine;
 use crate::copy::{transfer_local, LocalFailure, LocalOutcome, LocalRequest};
-use crate::transfer::segments::{MIN_SEGMENT, SPLIT_FROM};
+use crate::transfer::segments::SPLIT_FROM;
 use crate::types::Conflict;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+#[path = "local_plan.rs"]
+mod plan;
+use plan::{DeviceKey, Drive, Memory, Plan, Ticket, Verdicts};
+
+/// What this process measured about the device pairs it copied between.
+static VERDICTS: Verdicts = Verdicts::new();
 
 pub(super) fn copy_file(engine: &Engine<'_>, file: &FileWork, meter: &Meter<'_>) -> OpResult {
     let source = native(&file.source);
@@ -30,8 +37,15 @@ pub(super) fn copy_file(engine: &Engine<'_>, file: &FileWork, meter: &Meter<'_>)
         engine.view.conflict
     };
     // Permits the flows have to spare turn into threads of this one copy
-    // (large file, nothing else waiting, flash drive); never waited for.
-    let extras = take_extras(engine, file.size, &target);
+    // (large file, nothing else waiting, a drive that is flash or measured to
+    // gain from it); never waited for.
+    let (extras, ticket) = take_extras(engine, file.size, &source, &target);
+    // The verdict of the measured start of this copy, kept for its devices.
+    let record = |helps: bool| {
+        if let Some(ticket) = &ticket {
+            ticket.record(helps);
+        }
+    };
     let request = LocalRequest {
         source: &source,
         target: &target,
@@ -39,6 +53,7 @@ pub(super) fn copy_file(engine: &Engine<'_>, file: &FileWork, meter: &Meter<'_>)
         mode: engine.view.mode,
         cancel: engine.stop_flag(),
         parallel: 1 + extras.count(),
+        probe: ticket.as_ref().map(|_| &record as &dyn Fn(bool)),
     };
     let mut progress = |bytes: u64| meter.add(bytes);
     // One kernel call moves the bytes: source and target cannot be told
@@ -75,35 +90,41 @@ fn run_transfer(
     transfer_local(request, progress)
 }
 
-/// How many threads beyond the one that holds the operation's permit may
-/// copy ranges of a file: none unless it is a copy (a move stays one
-/// rename or one durable copy) of at least two shortest transfer parts,
-/// nothing else waits in the queue (another file would use the permit
-/// better) and the drive is known to be flash; at most one per part beyond
-/// the first, because every thread needs a part of at least `MIN_SEGMENT`.
-fn extras_wanted(size: u64, is_move: bool, queued: usize, flash: impl FnOnce() -> bool) -> usize {
-    if is_move || queued > 0 || size < SPLIT_FROM || !flash() {
-        return 0;
-    }
-    usize::try_from(size / MIN_SEGMENT - 1).unwrap_or(usize::MAX)
-}
-
-/// Whether the drive under `target` is flash. Unknown is not flash: a
-/// rotating drive loses to the head jumps of side-by-side ranges (windows
-/// builds copy through `CopyFile2`, one call, so never).
-fn drive_is_flash(target: &Path) -> bool {
+/// Whether the drive under `target` is flash, rotating or cannot be told
+/// (windows builds copy through `CopyFile2`, one call, so never in ranges).
+fn drive_of(target: &Path) -> Drive {
     #[cfg(test)]
     if let Some(forced) = extras_tests::forced_rotation(target) {
-        return forced == Some(false);
+        return Drive::of(forced);
     }
     #[cfg(not(windows))]
     {
-        crate::transfer::platform::volume_is_rotational(target) == Some(false)
+        Drive::of(crate::transfer::platform::volume_is_rotational(target))
     }
     #[cfg(windows)]
     {
         let _ = target;
-        false
+        Drive::Unknown
+    }
+}
+
+/// The device pair of a copy, when it can be measured: both sides on block
+/// devices (never network, FUSE or other virtual file systems, whose writes at
+/// scattered offsets keep the older one-thread copy) and a platform whose copy
+/// takes ranges.
+fn device_key(source: &Path, target: &Path) -> Option<DeviceKey> {
+    #[cfg(test)]
+    if let Some(forced) = extras_tests::forced_key(target) {
+        return forced;
+    }
+    #[cfg(not(windows))]
+    {
+        crate::transfer::platform::copy_device_pair(source, target)
+    }
+    #[cfg(windows)]
+    {
+        let _ = (source, target);
+        None
     }
 }
 
@@ -140,18 +161,49 @@ impl Extras {
     }
 }
 
-fn take_extras(engine: &Engine<'_>, size: u64, target: &Path) -> Extras {
+/// The permits for the threads of one copy and, when the drive has to be
+/// measured first, the right to measure it (given back when the copy ends
+/// without a verdict).
+fn take_extras(
+    engine: &Engine<'_>,
+    size: u64,
+    source: &Path,
+    target: &Path,
+) -> (Extras, Option<Ticket<'static>>) {
+    let none = || Extras {
+        permits: Vec::new(),
+    };
     // The common small file or move asks for nothing: no look into the queue
     // (a lock every worker shares) and no permit taking.
     if engine.is_move() || size < SPLIT_FROM {
-        return Extras {
-            permits: Vec::new(),
-        };
+        return (none(), None);
     }
-    let wanted = extras_wanted(size, engine.is_move(), engine.queue.view().queued, || {
-        drive_is_flash(target)
-    });
-    take_permits(&engine.op_flows.0, engine.op_flows.1.as_ref(), wanted)
+    let key = device_key(source, target);
+    let memory = || key.map_or(Memory::Unavailable, |key| VERDICTS.memory(key));
+    let planned = plan::plan(
+        size,
+        engine.is_move(),
+        engine.queue.view().queued,
+        || drive_of(target),
+        memory,
+    );
+    let (flow, other) = (&engine.op_flows.0, engine.op_flows.1.as_ref());
+    match planned {
+        Plan::Single => (none(), None),
+        Plan::Ranges(wanted) => (take_permits(flow, other, wanted), None),
+        Plan::Probe(wanted) => {
+            let Some(ticket) = key.and_then(|key| VERDICTS.claim(key)) else {
+                return (none(), None);
+            };
+            let extras = take_permits(flow, other, wanted);
+            // A measurement needs a second thread; without one the claim goes
+            // back to the next copy.
+            if extras.count() == 0 {
+                return (extras, None);
+            }
+            (extras, Some(ticket))
+        }
+    }
 }
 
 /// Up to `wanted` permits that are free right now on the first flow and, when

@@ -17,7 +17,7 @@ use super::move_guard::{
 };
 #[cfg(test)]
 use super::path_guard::prepare_target_parent;
-use super::staging::{stage_copy, LocalFailure};
+use super::staging::{stage_copy, LocalFailure, Parallel};
 
 /// Numbered names tried for one file when others keep taking them.
 const MAX_RENAME_RACE_RETRIES: usize = 1000;
@@ -33,6 +33,10 @@ pub(crate) struct LocalRequest<'a> {
     /// Threads that may copy this one file's byte ranges at once (1 = one).
     /// Only a new copy uses more: moves and replacements stay at one.
     pub parallel: usize,
+    /// Set (with `parallel` > 1) for a drive not known to be flash: the copy
+    /// measures whether ranges help and reports the verdict here; the rest of
+    /// the file is copied accordingly. Ignored by moves and replacements.
+    pub probe: Option<&'a dyn Fn(bool)>,
 }
 
 #[derive(Debug)]
@@ -164,13 +168,24 @@ pub(crate) fn transfer_local(
     }
 
     let durable = request.mode == CopyMode::Move || request.conflict == Conflict::Overwrite;
+    let parallel = if durable {
+        Parallel {
+            threads: 1,
+            probe: None,
+        }
+    } else {
+        Parallel {
+            threads: request.parallel.max(1),
+            probe: request.probe,
+        }
+    };
     let staged = match stage_copy(
         &source_path,
         &target,
         request.cancel,
         durable,
         request.conflict == Conflict::Overwrite,
-        if durable { 1 } else { request.parallel.max(1) },
+        &parallel,
         progress,
     ) {
         Ok(Some(staged)) => staged,
@@ -402,6 +417,7 @@ pub(super) fn transfer_file(
         mode,
         cancel,
         parallel: 1,
+        probe: None,
     };
     match transfer_local(&request, &mut |_| {}) {
         Ok(LocalOutcome::Completed { .. }) => Ok(TransferResult::Completed),

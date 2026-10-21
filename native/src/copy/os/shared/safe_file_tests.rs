@@ -322,6 +322,7 @@ fn copy_new(source: &Path, target: &Path, calls: &mut Vec<u64>) -> LocalOutcome 
         mode: CopyMode::Copy,
         cancel: &cancel,
         parallel: 1,
+        probe: None,
     };
     transfer_local(&request, &mut |bytes| calls.push(bytes)).unwrap()
 }

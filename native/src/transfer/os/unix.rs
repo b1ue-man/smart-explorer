@@ -161,9 +161,37 @@ fn disks(watch: &[String]) -> Vec<(String, super::sensor_parse::DiskTicks)> {
 /// has no device behind it (network and virtual file systems).
 pub(crate) fn device_id_of(path: &Path) -> Option<String> {
     let dev = std::os::unix::fs::MetadataExt::dev(&std::fs::metadata(path).ok()?);
-    let major = ((dev >> 8) & 0xfff) | ((dev >> 32) & 0xffff_f000);
-    let minor = (dev & 0xff) | ((dev >> 12) & 0xffff_ff00);
+    let (major, minor) = major_minor(dev);
     (major != 0).then(|| format!("{major}:{minor}"))
+}
+
+/// Major and minor number of a `st_dev` (the glibc encoding).
+fn major_minor(dev: u64) -> (u64, u64) {
+    (
+        ((dev >> 8) & 0xfff) | ((dev >> 32) & 0xffff_f000),
+        (dev & 0xff) | ((dev >> 12) & 0xffff_ff00),
+    )
+}
+
+/// The `st_dev` of the block device under `path` (a file that does not exist
+/// yet is looked up through its folder); `None` where no block device is
+/// behind it, as on network, FUSE and other virtual file systems.
+fn block_device_number(path: &Path) -> Option<u64> {
+    let dev_of = |path: &Path| {
+        let dev = std::os::unix::fs::MetadataExt::dev(&std::fs::metadata(path).ok()?);
+        (major_minor(dev).0 != 0).then_some(dev)
+    };
+    dev_of(path).or_else(|| dev_of(path.parent()?))
+}
+
+/// Which pair of devices a local copy from `source` to `target` runs on:
+/// the `st_dev` of each side (the same number twice on one device). `None`
+/// when either side has no block device behind it; a copy measured for a pair
+/// (`engine::local`) is only ever one between real devices, never a network or
+/// virtual file system whose writes at scattered offsets may not be allowed or
+/// may cost more than they gain.
+pub(crate) fn copy_device_pair(source: &Path, target: &Path) -> Option<(u64, u64)> {
+    Some((block_device_number(source)?, block_device_number(target)?))
 }
 
 /// Whether the drive under `path` spins (`Some(true)`), is flash
@@ -261,6 +289,37 @@ mod tests {
         // No block device behind the path (or a missing one): unknown.
         assert_eq!(
             super::volume_is_rotational(std::path::Path::new("/nonexistent/dir/x")),
+            None
+        );
+    }
+
+    #[test]
+    fn speed_task_local_device_pair_is_a_pair_of_block_devices_or_nothing() {
+        // The glibc encoding: major 8, minor 1 is 0x801; a major above 4095
+        // (bit 44 up) and a minor above 255 (bit 20 up) spill into the upper bits.
+        assert_eq!(super::major_minor(0x801), (8, 1));
+        assert_eq!(super::major_minor((259 << 8) | 3), (259, 3));
+        assert_eq!(
+            super::major_minor((1 << 44) | (0x12 << 8)),
+            (4096 + 0x12, 0)
+        );
+        assert_eq!(super::major_minor((1 << 20) | 3), (0, 0x103));
+        let dir = tempfile::tempdir().expect("temp dir");
+        let file = dir.path().join("a.bin");
+        std::fs::write(&file, b"x").expect("file");
+        // Whatever holds the temp folder, both sides of one folder agree, a
+        // file that does not exist yet is looked up through its folder, and a
+        // missing folder has no device.
+        let pair = super::copy_device_pair(&file, &dir.path().join("new.bin"));
+        if let Some((one, other)) = pair {
+            assert_eq!(one, other, "one folder is one device");
+        }
+        assert_eq!(
+            super::copy_device_pair(&file, &dir.path().join("new.bin")),
+            super::copy_device_pair(&file, &file)
+        );
+        assert_eq!(
+            super::copy_device_pair(&file, std::path::Path::new("/nonexistent/dir/x")),
             None
         );
     }

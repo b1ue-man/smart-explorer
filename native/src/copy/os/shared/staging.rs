@@ -57,17 +57,27 @@ impl Staged {
     }
 }
 
+/// How many threads may copy ranges of one file at once, on platforms that
+/// can (`copy_handles`), and whether the drive is measured first.
+pub(super) struct Parallel<'a> {
+    pub threads: usize,
+    /// Set for a drive not known to be flash: the copy times one section with
+    /// one thread and one with two and calls this with whether two helped; the
+    /// rest then uses all `threads` or one (`copy_probed`; Windows has no
+    /// ranges and copies plainly).
+    pub probe: Option<&'a dyn Fn(bool)>,
+}
+
 /// Copies `source` into a new stage next to `target`; `None` when canceled.
 /// `durable` (moves, replacements) syncs the stage to disk. `parallel` is
-/// how many threads may copy ranges of the file at once on platforms that
-/// can (`copy_handles`); callers pass 1 for durable copies.
+/// what the copy may use; durable copies get one thread and no measurement.
 pub(super) fn stage_copy(
     source: &Path,
     target: &Path,
     cancel: &AtomicBool,
     durable: bool,
     preserve_destination_mode: bool,
-    parallel: usize,
+    parallel: &Parallel<'_>,
     progress: &mut dyn FnMut(u64),
 ) -> Result<Option<Staged>, LocalFailure> {
     // `transfer_local` looked at the path a moment ago; the open below checks
@@ -79,7 +89,7 @@ pub(super) fn stage_copy(
         }
     }
     let (temp, mut writer) = create_temp_sibling(target).map_err(LocalFailure::Target)?;
-    let copied = match platform::copy_handles(&reader, &mut writer, cancel, progress, parallel) {
+    let copied = match copy_into(&reader, &mut writer, cancel, progress, parallel) {
         Ok(Some(copied)) => copied,
         Ok(None) => {
             discard(temp, writer);
@@ -116,6 +126,21 @@ pub(super) fn stage_copy(
         bytes: copied,
         snapshot: before,
     }))
+}
+
+/// The bytes of the source into the stage: measured ranges on a drive that is
+/// not known to be flash (platforms with ranges only), else `copy_handles`.
+fn copy_into(
+    reader: &File,
+    writer: &mut File,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(u64),
+    parallel: &Parallel<'_>,
+) -> io::Result<Option<u64>> {
+    if let (Some(report), true) = (parallel.probe, parallel.threads > 1) {
+        return platform::copy_probed(reader, writer, cancel, progress, parallel.threads, report);
+    }
+    platform::copy_handles(reader, writer, cancel, progress, parallel.threads)
 }
 
 /// Opens the source of a copy: a regular file (never a link, junction or
