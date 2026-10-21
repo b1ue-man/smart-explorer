@@ -225,3 +225,26 @@ fn screen_task_registry_has_no_session_limit() {
     assert_eq!(two.take_control().unwrap_err().device_id, "i");
     assert_eq!(registry.sessions().1.len(), 15);
 }
+
+/// R15c: the registry no longer refuses for a session count, but an older
+/// host still answers `HELLO_ERROR` with `session_limit`. The viewer must
+/// keep reading that code as a known refusal with its German text.
+#[test]
+fn screen_task_old_host_session_limit_refusal_stays_readable() {
+    use crate::screen::core::viewer_client::refusal_text;
+    use crate::screen::core::wire_hello::{ScreenErrorCode, ScreenHelloError};
+
+    let from_old_host: ScreenHelloError =
+        serde_json::from_str(r#"{"code":"session_limit"}"#).unwrap();
+    assert_eq!(
+        from_old_host.known_code(),
+        Some(ScreenErrorCode::SessionLimit)
+    );
+    assert_eq!(
+        ScreenHelloError::new(ScreenErrorCode::SessionLimit).code,
+        "session_limit"
+    );
+    let text = refusal_text(&from_old_host.code);
+    assert_eq!(text, "Das Gerät zeigt schon die höchste Zahl an Sitzungen");
+    assert_ne!(text, "session_limit");
+}

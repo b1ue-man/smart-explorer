@@ -107,10 +107,9 @@ fn prereqs(args: &Value) -> Result<Value, ApiError> {
             .filter_map(|app| {
                 let package = app.get("package").and_then(Value::as_str)?;
                 let label = app.get("label").and_then(Value::as_str).unwrap_or(package);
-                Some((
-                    package.chars().take(128).collect(),
-                    label.chars().take(128).collect(),
-                ))
+                // Whole names (R15c): the JNI string has no length bound,
+                // and the `WINDOWS` frame bounds itself (`window_list`).
+                Some((package.to_string(), label.to_string()))
             })
             .collect::<Vec<(String, String)>>()
     });

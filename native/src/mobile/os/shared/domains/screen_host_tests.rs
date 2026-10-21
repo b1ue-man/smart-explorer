@@ -154,3 +154,21 @@ fn screen_task_android_app_list_has_no_count_limit() {
     call("screen.hostPrereqs", json!({ "apps": apps })).unwrap();
     assert_eq!(channels::prereqs().apps.len(), 300);
 }
+
+/// R15c: package names and labels arrive whole; the former cut at 128
+/// characters had no technical cause.
+#[test]
+fn screen_task_android_app_names_are_not_cut() {
+    let _guard = channels::TEST_LOCK
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    channels::reset_for_tests();
+    let package = format!("org.example.{}", "p".repeat(300));
+    let label = "Ä".repeat(300);
+    call(
+        "screen.hostPrereqs",
+        json!({ "apps": [{"package": package, "label": label}] }),
+    )
+    .unwrap();
+    assert_eq!(channels::prereqs().apps, vec![(package, label)]);
+}
