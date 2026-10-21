@@ -1,6 +1,8 @@
 //! Task tests of the Windows screen host (SCR-M4, stage `windows-screen`)
 //! with real windows and monitors, in this process: a test window of 1280 ×
-//! 720 pixels that a timer repaints every 16 ms (a moving rectangle on a
+//! 720 pixels (smaller where the primary monitor is: a part of a window that
+//! lies outside the desktop is never painted, so the window must fit on it)
+//! that a timer repaints every 16 ms (a moving rectangle on a
 //! known background), the window list, the state of a minimized window,
 //! capture through the backend with the tile encoder, the DXGI fallback
 //! and the lock screen. Tests that need a desktop are `#[ignore]` and run
@@ -11,6 +13,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc;
+use std::sync::OnceLock;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -33,12 +36,49 @@ use crate::screen::core::pixel_convert::{BgraImage, FrameSize};
 use crate::screen::core::session_state::SessionState;
 use crate::screen::core::window_list::{ListSource, SourceId};
 
-const WIDTH: i32 = 1280;
-const HEIGHT: i32 = 720;
+/// Largest size of the test window; `window_size` shrinks it to the primary
+/// monitor.
+const MAX_WIDTH: i32 = 1280;
+const MAX_HEIGHT: i32 = 720;
 /// Background of the test window as BGR bytes.
 const BACKGROUND: [u8; 3] = [0x80, 0x40, 0x20];
 
 static FRAME: AtomicU32 = AtomicU32::new(0);
+
+/// Size of the primary monitor in pixels as the process sees it.
+fn screen_size() -> (i32, i32) {
+    // SAFETY: plain metric queries.
+    unsafe {
+        (
+            windows_sys::Win32::UI::WindowsAndMessaging::GetSystemMetrics(
+                windows_sys::Win32::UI::WindowsAndMessaging::SM_CXSCREEN,
+            ),
+            windows_sys::Win32::UI::WindowsAndMessaging::GetSystemMetrics(
+                windows_sys::Win32::UI::WindowsAndMessaging::SM_CYSCREEN,
+            ),
+        )
+    }
+}
+
+/// The size of the test window: 1280 × 720, or the primary monitor's size
+/// where that is smaller. The window sits at the desktop's origin; a hosted
+/// runner has a display of 1024 × 768, where a window of 1280 × 720 at
+/// (50, 50) would reach beyond the desktop and GDI never paints that part
+/// (the capture then shows black there).
+fn window_size() -> (i32, i32) {
+    static SIZE: OnceLock<(i32, i32)> = OnceLock::new();
+    *SIZE.get_or_init(|| {
+        let (screen_width, screen_height) = screen_size();
+        let fit = |wanted: i32, screen: i32| {
+            if screen > 0 {
+                wanted.min(screen)
+            } else {
+                wanted
+            }
+        };
+        (fit(MAX_WIDTH, screen_width), fit(MAX_HEIGHT, screen_height))
+    })
+}
 
 /// Whether the task suite runs the tests with real windows here.
 fn desktop_tests() -> bool {
@@ -55,12 +95,13 @@ fn colorref(blue: u8, green: u8, red: u8) -> COLORREF {
 
 fn paint(hwnd: HWND) {
     let frame = FRAME.fetch_add(1, Ordering::SeqCst);
+    let (width, height) = window_size();
     let left = 100 + (frame as i32 * 9) % 1000;
     let background = RECT {
         left: 0,
         top: 0,
-        right: WIDTH,
-        bottom: HEIGHT,
+        right: width,
+        bottom: height,
     };
     let moving = RECT {
         left,
@@ -120,6 +161,7 @@ impl TestWindow {
                 let module =
                     windows_sys::Win32::System::LibraryLoader::GetModuleHandleW(std::ptr::null());
                 let instance = HINSTANCE(module);
+                let (width, height) = window_size();
                 let class = WNDCLASSW {
                     lpfnWndProc: Some(window_proc),
                     hInstance: instance,
@@ -133,10 +175,10 @@ impl TestWindow {
                     w!("SmartExplorerScreenTask"),
                     PCWSTR(title.as_ptr()),
                     WS_POPUP | WS_VISIBLE,
-                    50,
-                    50,
-                    WIDTH,
-                    HEIGHT,
+                    0,
+                    0,
+                    width,
+                    height,
                     HWND(std::ptr::null_mut()),
                     windows::Win32::UI::WindowsAndMessaging::HMENU(std::ptr::null_mut()),
                     instance,
@@ -230,13 +272,21 @@ fn screen_task_windows_wgc_snapshot_matches() {
     let mut source = WindowsBackend::new()
         .open_source(&window.source_id(), None)
         .expect("the test window opens");
-    assert_eq!(source.size(), FrameSize::new(WIDTH as u32, HEIGHT as u32));
+    let (width, height) = window_size();
+    let (width, height) = (width as u32, height as u32);
+    let size = FrameSize::new(width, height);
+    assert_eq!(source.size(), size, "screen {:?}", screen_size());
     let image = next_picture(source.as_mut(), Duration::from_secs(5));
-    assert_eq!(image.size(), FrameSize::new(WIDTH as u32, HEIGHT as u32));
+    assert_eq!(image.size(), size, "screen {:?}", screen_size());
     // The corners lie outside the moving rectangle: they show what the
     // window drew, and the alpha channel is opaque.
-    for (x, y) in [(5, 5), (WIDTH as u32 - 5, 5), (5, HEIGHT as u32 - 5)] {
-        assert_eq!(pixel(&image, x, y), BACKGROUND, "pixel {x},{y}");
+    for (x, y) in [(5, 5), (width - 5, 5), (5, height - 5)] {
+        assert_eq!(
+            pixel(&image, x, y),
+            BACKGROUND,
+            "pixel {x},{y} of {width}x{height}, screen {:?}",
+            screen_size()
+        );
     }
     assert!(image.data().chunks_exact(4).all(|pixel| pixel[3] == 255));
     // The still picture of it is a PNG of the same size.
