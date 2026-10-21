@@ -441,6 +441,100 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   Never fabricate durable remote semantics for metadata the backend cannot
   preserve.
 
+### Dokany error mapping (0.5.183)
+
+- **Only Dokany's own table reaches Explorer.** Dokany 2.3.1.1000 turns a Win32
+  code into an NTSTATUS only for the codes in `dokan/ntstatus.i`; every other code
+  becomes `STATUS_ACCESS_DENIED`, which Explorer shows as "Access denied" for an
+  error that has nothing to do with rights. `dokany_status` passes only the listed
+  codes and returns `STATUS_IO_DEVICE_ERROR` for everything else
+  (`native/src/mount/os/windows/callback_status.rs:232-252`,
+  `native/src/mount/os/windows/dokany_status_table.rs:1-12`). An error kind without
+  any Win32 code also ends as `STATUS_IO_DEVICE_ERROR` (`callback_status.rs:242`).
+- **Host and network unreachable have their own codes.** `HostUnreachable` maps to
+  `ERROR_HOST_UNREACHABLE` (1232, "The network location cannot be reached."),
+  `NetworkUnreachable` to `ERROR_NETWORK_UNREACHABLE`, and a move between two
+  shares or devices of the device tree to `ERROR_NOT_SAME_DEVICE`
+  (`callback_status.rs:264-285`).
+
+## Linux FUSE drives (0.5.183)
+
+- **No `auto_unmount`.** The host opens the session with `Config::default()`,
+  two read loops, owner-only access (`SessionACL::Owner`, so `user_allow_other` is
+  not needed) and `nodev,nosuid,noatime`; it does not set `auto_unmount`
+  (`native/src/mount/os/linux_os/fuse_host.rs:1-10`). A crashed host leaves a mount
+  that the daemon removes (`native/src/daemon/os/linux_os/mount_cleanup.rs`).
+- **Three ways a session ends.** An unmount by the host, an unmount outside the host
+  (file manager eject, `fusermount3 -u`, `se drive unmount`), and an abort while still
+  mounted (kernel request timeout or `fusectl`). Only the last is a failure; its
+  reason names the kernel timeout when one is set (`fuse_host.rs:12-18`).
+- **The kernel request timeout is a hard limit.** A value above 0 in
+  `fs.fuse.default_request_timeout` lets the kernel abort a drive whose request takes
+  longer. Se does not work around it; `se drive runtime` reports the value
+  (`native/src/mount/os/linux_os/fuse_runtime.rs:6-9`, `:201-203`).
+- **Open descriptors can keep a host alive.** After a short grace period the host
+  cuts such connections through `fusectl`; their files are then published as after a
+  Dokany unmount (`fuse_host.rs:19-21`). Without `fusectl` mounted, only the delayed
+  unmount remains (`native/src/mount/os/linux_os/fuse_abort.rs:75`).
+- **`setattr` covers only truncate, chmod, chown and utimensat**
+  (`native/src/mount/os/linux_os/fuse_ops_attr.rs:1-2`). The filesystem implements
+  `lookup`, `getattr`, `mkdir`, `unlink`, `rmdir`, `rename`, `mknod`, `open`, `read`,
+  `write`, `flush`, `release`, `fsync`, `opendir`, `readdir`, `releasedir`, `statfs`
+  and `create` (`native/src/mount/os/linux_os/fuse_fs.rs:245-476`). Symbolic links,
+  hard links, extended attributes and file locks have no handler in that file; what
+  the `fuser` library answers for them is not verified here.
+- **A FUSE drive needs `fusermount3` with setuid root** and `/dev/fuse` for the
+  user (`fuse_runtime.rs:1-12`). The runtime report names the package command per
+  distribution; sandboxes (Flatpak, Snap) and WSL are reported separately.
+
+## Exec account service (0.5.183)
+
+- **Windows accounts logged on without a password have no network credentials.**
+  The service (LocalSystem with `SeTcbPrivilege`) logs a local account on with
+  `MsV1_0S4ULogon` and logon type `Network`
+  (`native/src/share/os/windows/exec_account_s4u.rs:1-6`). Network drives and EFS
+  files are therefore not available to a command that runs as that account.
+- **Windows commands run in session 0 without a window.** The relay runs in session 0
+  inside a job object of the service; `PI_NOUI` suppresses message boxes
+  (`native/src/share/os/windows/exec_account_spawn.rs:1-4`, `:44-50`). The startup
+  info gives the relay an empty desktop name, so it connects to a window station of its
+  own logon session (`exec_account_spawn.rs:318-326`).
+- **The token probe depends on two policies.** The probe treats an administrator as
+  elevated only when `EnableLUA` is on and `LocalAccountTokenFilterPolicy` is not 1
+  (`native/src/share/os/windows/exec_account_tests.rs:431-441`).
+- **The PAM service has no `pam_systemd`.** Account units use `PAMName=smart-explorer-exec`
+  with `account` checks of the distribution, `pam_limits`, `pam_loginuid` and
+  `pam_keyinit`, but no `pam_systemd`; otherwise processes of a job would leave their
+  unit (`native/src/share/os/linux_os/exec_pam_service.rs:1-10`, `:76-89`).
+- **`ExitType=` is not sent.** systemd 249 (Ubuntu 22.04) refuses a unit with an unknown
+  property; `ExitType` exists only from systemd 250, where its default `main` is what
+  the unit needs (`native/src/share/os/linux_os/exec_systemd.rs:100-103`).
+- **The root worker refuses expired accounts and forced password changes.** Before a
+  unit starts, the account's shadow entry is read, and an expired account or one that
+  waits for a password change is refused (`native/src/share/os/linux_os/exec_account.rs:1-12`).
+- **Program copies are not updated by the updater.** The Linux copy lives at
+  `/usr/local/sbin/smart-explorer-exec`; the Windows copy at
+  `%ProgramFiles%\Smart Explorer\exec-accounts\se.exe`. Run
+  `se share exec accounts update` after an update (see `docs/RELEASING.md`).
+
+## Device tree drives (0.5.183)
+
+- **GTK and KDE bookmark files have no lock.** Both files are read once and replaced
+  through a temporary file in the same folder. A change another program writes between
+  the read and the replace is lost (`docs/oberflaechen/laufwerke.md`, section 4;
+  `native/src/mount/os/linux_os/bookmarks_gtk.rs`, `bookmarks_kde.rs`).
+- **Device folder names follow fixed rules.** Characters are replaced per dialect,
+  the length limit is 255, and an empty name becomes `Gerät`. Two devices whose names
+  compare equal (Windows ignores case) both get ` (<6 hex>)` from the SHA-256 of their
+  key; a device named `Räume` becomes `Räume (Gerät)` so it cannot collide with the room
+  folder (`native/src/mount/core/device_tree_names.rs`).
+- **A taken drive letter has no fallback.** On Windows the device tree needs its letter
+  free; no other letter is chosen automatically (stated in the DRV-M6 reading; not verified in this run).
+- **Child journals survive switching the tree off.** `off` unmounts the tree and keeps
+  the caches of the device folders and `children.json`; unsaved changes wait for a
+  connection and are published without the user's action when the device returns
+  (`docs/oberflaechen/laufwerke.md`, section 5).
+
 ## Share / local network
 
 - Google Drive allows several same-name siblings. `GDriveBackend::list_dir`

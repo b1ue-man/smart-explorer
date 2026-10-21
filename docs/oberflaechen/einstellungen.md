@@ -1,6 +1,6 @@
 # Oberflächen aller übrigen Einstellungen
 
-Stand: 2026-10-16. Gilt für alle Einstellungen der App außer Share und Exec (die stehen in [share-exec.md](share-exec.md)). Lesestand des Abschnitts „Bestand vor dem Stapel“: `7e7203c9` (v0.5.181), am Code nachgelesen, Belege als `Datei:Zeile`. Der Abschnitt „Stand nach dem Stapel“ nennt, wo jede Einstellung seit dem Stapel „Parität aller Einstellungen“ (Plan: `docs/plaene/2026-10-16-paritaet-einstellungen/plan.md`) erreichbar ist. Pflege: jede Änderung an einer dieser Einstellungen aktualisiert diese Datei im selben Commit (Regel in [INDEX.md](INDEX.md)).
+Stand: 2026-10-21 (Lauf U42: Ausnahme „Laufwerke“ und Gerätebaum in „Integration“ neu gefasst; übrige Zeilen unverändert). Gilt für alle Einstellungen der App außer Share und Exec (die stehen in [share-exec.md](share-exec.md)). Lesestand des Abschnitts „Bestand vor dem Stapel“: `7e7203c9` (v0.5.181), am Code nachgelesen, Belege als `Datei:Zeile`. Der Abschnitt „Stand nach dem Stapel“ nennt, wo jede Einstellung seit dem Stapel „Parität aller Einstellungen“ (Plan: `docs/plaene/2026-10-16-paritaet-einstellungen/plan.md`) erreichbar ist. Pflege: jede Änderung an einer dieser Einstellungen aktualisiert diese Datei im selben Commit (Regel in [INDEX.md](INDEX.md)).
 
 Abkürzungen: `N/` = `native/src/`, `A/` = `android/app/src/main/java/app/smartexplorer/android/`. „–“ = nicht erreichbar.
 
@@ -23,7 +23,7 @@ Abkürzungen: `N/` = `native/src/`, `A/` = `android/app/src/main/java/app/smarte
 | Darstellung der GUI (Farbschema, kompakte Zeilen, Zusatzspalten, Filterleiste/Zusammenfassung ein, versteckte Dateien, Ordner zuerst, Bildvorschau, Medienbetrachter) | Desktop-GUI bzw. Android-GUI | Gegenstück zur Terminal-Verbindung: wirkt nur auf die Darstellung der jeweiligen GUI. Die CLI hat keine Dateiliste, deren Darstellung sie einstellen könnte. Desktop und Android haben verschiedene Darstellungsmodelle: Desktop „Ordner zuerst“ je Ort (`N/app/core/state.rs:71-72`), versteckte Dateien als Filter der Filterleiste (`N/app/core/filterbar.rs:238`); Android global (`A/prefs/AppPrefs.kt:25-30`) |
 | Terminal-Bedienung (`se completions`, `se shell`, Escape-Zeichen) | CLI | Terminal-Verbindung selbst (Nutzerausnahme) |
 | `se mcp` (Server für KI-Agenten) | CLI | Wird vom Agenten als Kindprozess gestartet; Einrichtung über `se plugin`, die nach dem Stapel auch die Desktop-GUI bietet |
-| Laufwerke als Windows-Laufwerksbuchstaben | CLI und Desktop unter Windows | Betriebssystemfunktion (Dokany) gibt es nur unter Windows (`N/cli/mod.rs:95-96`); Android und Linux ohne |
+| Laufwerke: Windows und Linux; Android: Dokumentanbieter (Plattformgrund) | CLI und Desktop unter Windows und Linux; Android nur über den Dokumentanbieter | Windows-Laufwerksbuchstaben (`--letter`) gibt es nur unter Windows, Einhängeorte (`--mount-point`) nur unter Linux (`N/cli/drive.rs:159-167`); Android hat keine Laufwerke und keine CLI (`N/lib.rs`) und stellt Ordner über den Dokumentanbieter bereit (`docs/oberflaechen/laufwerke.md`, Abschnitt 7) |
 | Kontextmenü „In Smart Explorer öffnen“ | CLI und Desktop unter Windows | Registry-Eintrag des Explorers (`N/app/os/windows/platform.rs:185-191`); unter Linux meldet die App „nicht verfügbar“ (`N/app/os/linux_os.rs:74-80`) |
 | Speicherzugriff „Alle Dateien“, genaue Alarme, Akku-Optimierung, Benachrichtigungen | Android | Android-Berechtigungen (`A/ui/settings/SettingsScreen.kt:151-175`, `A/ui/settings/BackgroundSettings.kt:217-360`) |
 | Android-Hintergrundmodus (Aus/Periodisch/Dauerbetrieb), Abstand, nur WLAN, nur beim Laden, Akku nicht niedrig | Android | WorkManager- und Vordergrunddienst-Bedingungen (`A/prefs/AppPrefs.kt:32-36`); Desktop-Gegenstück ist „Beim Anmelden im Hintergrund synchronisieren“ plus Prüfintervall |
@@ -109,6 +109,7 @@ CLI und MCP hatten keinen Befehl für Sync-Setups. Desktop-Editor: `N/app/core/j
 | Kontextmenü (Windows) | – | `N/app/core/menus_settings.rs:126-172` | – (Ausnahme) | CLI unter Windows |
 | KI-Agenten-Plugin (Claude Code, Codex): Status, Installieren, Entfernen, Konfiguration für andere Clients | `se plugin` (`N/cli/plugin.rs:48-62`) | – | – (kein `se` auf Android) | Desktop |
 | Laufwerke: Laufzeit, Einbinden mit Buchstabe, Schreiben, Wurzel vertrauen, Metadaten-Tiefe, Cache, Systemlaufzeit, Name; Liste, Trennen, Wiederholen | `se drive` (`N/cli/drive.rs:25-38`, `N/cli/drive_options.rs:5-46`) | `N/app/core/mount_ui_draft.rs:127-260`, `mount_ui.rs:155-276` | – (Ausnahme) | – |
+| Verbundene Geräte als Ordner (Gerätebaum): Schalter, Buchstabe bzw. Einhängeort, Zustand, Öffnen im Dateimanager | `se drive devices status`, `watch`, `on`, `off` (`N/cli/drive_devices.rs`) | Abschnitt „Verbundene Geräte als Ordner“ in Einstellungen → Integration (`N/app/core/settings_devices_ui.rs`) | – (Ausnahme: Dokumentanbieter, `docs/oberflaechen/laufwerke.md` Abschnitt 5 und 7) | – |
 
 ## Stand nach dem Stapel
 
