@@ -83,8 +83,8 @@ object MoreRequests {
 /**
  * Tab "Mehr" (spec C): Speicheranalyse · Duplikate finden · Verbindungen · Papierkorb ·
  * Übertragungen · Einstellungen · Fehlerprotokoll · Über, each a page with a back arrow. Handles
- * [NavRequest.ShowUpdate] and [NavRequest.ShowBackgroundSettings] (settings, scrolled to the
- * section) and [MoreRequests].
+ * [NavRequest.ShowUpdate], [NavRequest.ShowBackgroundSettings] and [NavRequest.ShowLauncherSettings]
+ * (settings, scrolled to the section) and [MoreRequests].
  */
 @Composable
 fun MoreScreen() {
@@ -110,6 +110,8 @@ fun MoreScreen() {
         val focus = when (request) {
             NavRequest.ShowUpdate -> SettingsFocus.Updates
             NavRequest.ShowBackgroundSettings -> SettingsFocus.Background
+            // DSK-M9 (U35-14): the card „Startbildschirm“ of the launcher.
+            NavRequest.ShowLauncherSettings -> SettingsFocus.Launcher
             else -> return@LaunchedEffect
         }
         settingsFocus = focus

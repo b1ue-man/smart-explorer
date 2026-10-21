@@ -46,16 +46,16 @@ import app.smartexplorer.android.update.UpdateChecker
 import app.smartexplorer.android.update.UpdateState
 
 /** Section to scroll to when the settings open (notification targets). */
-enum class SettingsFocus { Background, Updates }
+enum class SettingsFocus { Background, Launcher, Updates }
 
 /** Sections in display order (spec F21); the index is the lazy-list item index. */
-private enum class SettingsItem { Appearance, FileList, Background, ShareServer, Drive, Documents, Storage, Updates, ErrorLog, About }
+private enum class SettingsItem { Appearance, FileList, Background, ShareServer, Drive, Documents, Storage, Launcher, Updates, ErrorLog, About }
 
 private val THEMES = listOf("system" to "System", "light" to "Hell", "dark" to "Dunkel")
 
 /**
  * "Mehr → Einstellungen" (spec F21): Darstellung · Dateiliste · Hintergrund · Share-Server ·
- * Google Drive · Ordner für Apps bereitstellen · Speicherzugriff · Updates · Fehlerprotokoll · Über. [focus] scrolls to a section
+ * Google Drive · Ordner für Apps bereitstellen · Speicherzugriff · Startbildschirm · Updates · Fehlerprotokoll · Über. [focus] scrolls to a section
  * once and is then reported via [onFocusHandled].
  */
 @Composable
@@ -71,6 +71,7 @@ fun SettingsScreen(
     LaunchedEffect(focus) {
         val target = when (focus ?: return@LaunchedEffect) {
             SettingsFocus.Background -> SettingsItem.Background
+            SettingsFocus.Launcher -> SettingsItem.Launcher
             SettingsFocus.Updates -> {
                 // Opened from the update notification after a process restart: show the current state.
                 if (UpdateChecker.state.value == UpdateState.Idle) UpdateChecker.checkNow(context)
@@ -100,6 +101,8 @@ fun SettingsScreen(
                             // DRV-M8: the documents provider for other apps.
                             SettingsItem.Documents -> DocumentsProviderSection()
                             SettingsItem.Storage -> StorageAccessSettings()
+                            // DSK-M9: the se launcher (U35-13).
+                            SettingsItem.Launcher -> LauncherSettings()
                             SettingsItem.Updates -> UpdateSettings()
                             SettingsItem.ErrorLog -> LinkRow("Fehlerprotokoll", "App-Fehler und Absturzprotokoll", R.drawable.ic_warning, onOpenErrorLog)
                             SettingsItem.About -> LinkRow("Über", "Version, Lizenz, Grenzen", R.drawable.ic_info, onOpenAbout)

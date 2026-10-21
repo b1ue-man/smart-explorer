@@ -49,6 +49,11 @@
     <!-- VLT-M11 (U31, S1): the remembered vault password opens only after the device lock
          confirms it (android.hardware.biometrics.BiometricPrompt, biometrics or PIN). -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+    <!-- DSK-M10 (U35): the launcher's „Deinstallieren“ starts ACTION_DELETE (from targetSdk 28 on, the
+         system uninstaller refuses callers without this normal permission). -->
+    <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
+    <!-- DSK-M9 (U35): the private space (API 35+) is only visible to the default home app that holds this normal permission. -->
+    <uses-permission android:name="android.permission.ACCESS_HIDDEN_PROFILES" />
 
     <!-- Connections, jobs and the share identity never leave the device (cloud backup and
          device transfer are both disabled / fully excluded). -->
@@ -91,6 +96,31 @@
                 <data android:mimeType="vnd.android.document/directory" />
                 <data android:mimeType="resource/folder" />
                 <data android:mimeType="inode/directory" />
+            </intent-filter>
+        </activity>
+
+        <!-- The se launcher (DSK-M9, U35): off until the person switches it on in the settings (component
+             state), runs in its own process without the Rust core. Exactly one filter, so it is offered
+             in the system's list of home screens only while enabled. -->
+        <activity
+            android:name=".launcher.LauncherActivity"
+            android:clearTaskOnLaunch="true"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|keyboard|keyboardHidden|navigation|layoutDirection|locale|colorMode"
+            android:enabled="false"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:label="@string/launcher_label"
+            android:launchMode="singleTask"
+            android:process=":launcher"
+            android:resumeWhilePausing="true"
+            android:stateNotNeeded="true"
+            android:taskAffinity=""
+            android:theme="@style/Theme.SmartExplorer.Launcher"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
 
