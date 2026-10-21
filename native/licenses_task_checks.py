@@ -11,7 +11,7 @@ checked-in license file:
   and the "Generated:" date line excluded).
 - licenses_task_every_shipped_crate_has_text: every crate that a shipped
   program builds as a normal dependency for one of the targets of
-  ``about.toml`` (``cargo metadata --filter-platform``) is listed under its
+  ``about.toml`` (``cargo tree -e normal --target``, no build or dev edges) is listed under its
   manifest, and the license texts attached to each listed crate satisfy its
   license expression.
 - licenses_task_new_batch_crates_listed: the crates this batch adds (plan C4
@@ -378,39 +378,70 @@ def cargo_metadata(manifest: str, target: str | None) -> dict[str, Any]:
     return json.loads(completed.stdout)
 
 
-def shipped_crates(metadata: dict[str, Any], first_party: set[str]) -> set[tuple[str, str]]:
-    """Packages reachable from the workspace members over normal dependencies."""
-    nodes = {node["id"]: node for node in metadata["resolve"]["nodes"]}
-    packages = {package["id"]: package for package in metadata["packages"]}
-    stack = list(metadata["workspace_members"])
-    seen = set(stack)
-    while stack:
-        node = nodes.get(stack.pop())
-        if node is None:
-            continue
-        for dependency in node.get("deps", []):
-            kinds = dependency.get("dep_kinds") or [{"kind": None}]
-            if not any(kind.get("kind") is None for kind in kinds):
-                continue
-            if dependency["pkg"] not in seen:
-                seen.add(dependency["pkg"])
-                stack.append(dependency["pkg"])
+TREE_LINE = re.compile(r"^(?P<name>\S+) v(?P<version>\S+)")
+
+
+def cargo_tree(manifest: str, target: str) -> str:
+    """Normal-edge package list of one manifest for one target, as ``cargo tree`` resolves it.
+
+    ``cargo metadata`` unifies the features of build scripts, proc-macro hosts and dev
+    dependencies into its single resolve graph, so a ``dep_kinds == normal`` edge in its JSON
+    can exist only because a build or dev unit enabled an optional dependency (des,
+    password-hash, phc, embedded-io, time-macros, ...). ``cargo tree`` applies the feature
+    resolver 2 rules per edge kind, which is also what cargo-about ships (it ignores build
+    and dev dependencies, about.toml), so the shipped set comes from ``cargo tree -e normal``.
+    """
+    command = [
+        "cargo", "tree", "--locked", "--manifest-path", str(REPO_ROOT / manifest), "--workspace",
+        "--target", target, "--edges", "normal", "--prefix", "none", "--format", "{p}",
+    ]
+    completed = subprocess.run(
+        command,
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=METADATA_TIMEOUT_S,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise CheckError(f"{' '.join(command[1:])} endete mit {completed.returncode}: {tail(completed.stderr)}")
+    return completed.stdout
+
+
+def shipped_crates(tree_output: str, first_party: set[tuple[str, str]]) -> set[tuple[str, str]]:
+    """Third-party ``(name, version)`` pairs in ``cargo tree -e normal --prefix none`` output.
+
+    Every package occurs once with its full subtree; repeated subtrees carry a ``(*)`` marker
+    and proc-macro crates a ``(proc-macro)`` suffix, which the pattern ignores. Proc-macro
+    crates and their normal dependencies (syn, quote) are shipped notices in cargo-about too.
+    """
     result: set[tuple[str, str]] = set()
-    for package_id in seen:
-        package = packages.get(package_id)
-        if package is not None and path_key(package["manifest_path"]) not in first_party:
-            result.add((package["name"], package["version"]))
+    seen_any = False
+    for line in tree_output.splitlines():
+        match = TREE_LINE.match(line.strip())
+        if match is None:
+            continue
+        seen_any = True
+        key = (match.group("name"), match.group("version"))
+        if key not in first_party:
+            result.add(key)
+    if not seen_any:
+        raise CheckError("cargo tree lieferte keine Paketzeile (Ausgabeformat geändert?)")
     return result
 
 
 def load_graph(targets: list[str]) -> Graph:
     unfiltered = {manifest: cargo_metadata(manifest, None) for manifest in MANIFESTS}
     first_party: set[str] = set()
+    first_party_ids: set[tuple[str, str]] = set()
     for metadata in unfiltered.values():
         members = set(metadata["workspace_members"])
         for package in metadata["packages"]:
             if package["id"] in members:
                 first_party.add(path_key(package["manifest_path"]))
+                first_party_ids.add((package["name"], package["version"]))
     packages: dict[tuple[str, str], dict[str, Any]] = {}
     by_name: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for metadata in unfiltered.values():
@@ -424,7 +455,7 @@ def load_graph(targets: list[str]) -> Graph:
     for manifest in MANIFESTS:
         reachable: set[tuple[str, str]] = set()
         for target in targets:
-            reachable |= shipped_crates(cargo_metadata(manifest, target), first_party)
+            reachable |= shipped_crates(cargo_tree(manifest, target), first_party_ids)
         shipped[manifest] = reachable
     return Graph(first_party, shipped, packages, dict(by_name))
 
