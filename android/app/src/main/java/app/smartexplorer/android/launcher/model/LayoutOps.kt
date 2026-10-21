@@ -2,6 +2,7 @@ package app.smartexplorer.android.launcher.model
 
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 
 /** Where an item sits in a layout. */
 sealed interface Location {
@@ -71,9 +72,32 @@ object LayoutOps {
 
     fun remove(layout: HomeLayout, id: String): HomeLayout = removeWhere(layout) { it.id == id }
 
-    /** Removes the apps and shortcuts of [packageName] in the profile [userSerial] (U35-29, `onPackageRemoved`). */
-    fun removePackage(layout: HomeLayout, packageName: String, userSerial: Long): HomeLayout =
-        removeWhere(layout) { (it.isApp || it.isShortcut) && it.packageName == packageName && it.userSerial == userSerial }
+    /**
+     * Removes the apps and shortcuts of [packageName] in the profile [userSerial] (U35-29, `onPackageRemoved`) and
+     * the widgets whose provider belongs to it (U38-6).
+     */
+    fun removePackage(layout: HomeLayout, packageName: String, userSerial: Long): HomeLayout = removeWhere(layout) {
+        ((it.isApp || it.isShortcut) && it.packageName == packageName && it.userSerial == userSerial) ||
+            (it.isWidget && it.providerPackage == packageName && it.userSerial == userSerial)
+    }
+
+    /** Key in [HomeLayout.extra] of the switch „Privaten Bereich in der App-Liste zeigen“ (U38-14). */
+    const val SHOW_PRIVATE_SPACE = "showPrivateSpace"
+
+    /** True unless the person switched it off; a missing or foreign value means on. */
+    fun showPrivateSpace(layout: HomeLayout): Boolean = (layout.extra[SHOW_PRIVATE_SPACE] as? JsonPrimitive)?.booleanOrNull ?: true
+
+    fun withShowPrivateSpace(layout: HomeLayout, on: Boolean): HomeLayout =
+        layout.copy(extra = JsonObject(layout.extra + (SHOW_PRIVATE_SPACE to JsonPrimitive(on))))
+
+    /** The widget ids of all widget items of [layout] (U38-6); the host frees the ones that disappear. */
+    fun widgetIds(layout: HomeLayout): Set<Int> = allItems(layout).filter { it.isWidget }.mapNotNull { it.widgetId }.toSet()
+
+    /** Replaces the item [id] by `transform(item)` wherever it is, without touching any cell. */
+    fun updateItem(layout: HomeLayout, id: String, transform: (HomeItem) -> HomeItem): HomeLayout = replaceItem(layout, id, transform)
+
+    /** Moves and resizes the item [id] on its page (U38-9); the caller has checked that the area is free. */
+    fun setArea(layout: HomeLayout, id: String, cell: Cell, span: Span): HomeLayout = replaceItem(layout, id) { it.copy(cell = cell, span = span) }
 
     private fun replaceItem(layout: HomeLayout, id: String, transform: (HomeItem) -> HomeItem): HomeLayout = mapAll(layout) { items ->
         items.map { if (it.id == id) transform(it) else it }

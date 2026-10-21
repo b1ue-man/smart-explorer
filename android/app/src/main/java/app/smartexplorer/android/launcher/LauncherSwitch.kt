@@ -15,12 +15,15 @@ import java.io.IOException
 /**
  * Complete class names of the launcher module's components, as strings so the main process never
  * loads a launcher class (U35-2). `setComponentEnabledSetting` on a class that does not exist
- * throws, so every package lists only what it creates itself: U38 appends `PinRequestActivity` and
- * `BadgeListenerService` to [launcher]; U40 appends `LauncherBridgeService` to [launcher] and
+ * throws, so every package lists only what it creates itself: U38 appended `PinRequestActivity` (DSK-M11) and
+ * `BadgeListenerService` (DSK-M12) to [launcher]; U40 appends `LauncherBridgeService` to [launcher] and
  * `DevicesWidgetProvider` and `DevicesWidgetService` to [widget].
  */
 internal object LauncherParts {
-    val launcher: List<String> = listOf("app.smartexplorer.android.launcher.LauncherActivity")
+    val launcher: List<String> = listOf(
+        "app.smartexplorer.android.launcher.LauncherActivity",
+        "app.smartexplorer.android.launcher.pin.PinRequestActivity",
+    )
     val widget: List<String> = emptyList()
 }
 

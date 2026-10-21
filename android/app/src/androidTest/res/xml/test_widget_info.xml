@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DSK-M11 (U38-16): the widget of the test APK. 110 dp x 110 dp start size, resizable down to 40 dp, with a
+     configuration activity that may be run again (reconfigurable). -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:configure="app.smartexplorer.android.task.TestWidgetConfigActivity"
+    android:initialLayout="@layout/test_widget"
+    android:minHeight="110dp"
+    android:minResizeHeight="40dp"
+    android:minResizeWidth="40dp"
+    android:minWidth="110dp"
+    android:resizeMode="horizontal|vertical"
+    android:updatePeriodMillis="0"
+    android:widgetCategory="home_screen"
+    android:widgetFeatures="reconfigurable" />

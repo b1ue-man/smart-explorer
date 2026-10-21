@@ -6,9 +6,13 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -32,6 +36,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.unit.IntSize
@@ -300,14 +305,23 @@ fun DragPreview(drag: DragState, metrics: HomeMetrics, context: ItemContext) {
     val item = drag.item ?: return
     if (!drag.moved) return
     val density = LocalDensity.current
-    val width = with(density) { metrics.cellW.toDp() }
-    val height = with(density) { metrics.cellH.toDp() }
+    // A widget is shown as a plate of its span (a second live view of it would be heavy and cut to one cell).
+    val spanW = if (item.isWidget) item.span.w else 1
+    val spanH = if (item.isWidget) item.span.h else 1
+    val width = with(density) { (metrics.cellW * spanW).toDp() }
+    val height = with(density) { (metrics.cellH * spanH).toDp() }
     Box(
         Modifier
-            .offset { IntOffset((drag.pointer.x - metrics.cellW / 2).roundToInt(), (drag.pointer.y - metrics.cellH / 2).roundToInt()) }
+            .offset { IntOffset((drag.pointer.x - width.toPx() / 2).roundToInt(), (drag.pointer.y - height.toPx() / 2).roundToInt()) }
             .size(width, height)
             .alpha(0.6f),
-    ) { ItemContent(item, context) }
+    ) {
+        if (item.isWidget) {
+            Box(Modifier.fillMaxSize().padding(2.dp).clip(RoundedCornerShape(16.dp)).background(Color.White.copy(alpha = 0.35f)))
+        } else {
+            ItemContent(item, context)
+        }
+    }
 }
 
 /**

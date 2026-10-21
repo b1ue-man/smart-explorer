@@ -31,8 +31,8 @@ import app.smartexplorer.android.launcher.LauncherViewModel
 import app.smartexplorer.android.launcher.wallpaper.Wallpaper
 
 /**
- * Rows other packages add to the settings sheet of the launcher (U35-30): U38 appends „Privaten Bereich in
- * der App-Liste zeigen“ and the widget picker. U35 itself adds nothing here.
+ * Rows other packages add to the settings sheet of the launcher (U35-30). U38 puts „Widgets“ (and, with the
+ * private space, its switch) into the sheet itself; this list stays for U40.
  */
 object EditSheetExtras {
     val rows: MutableList<@Composable () -> Unit> = mutableListOf()
@@ -71,6 +71,7 @@ fun EditSheet(vm: LauncherViewModel, iconDp: Int, modifier: Modifier = Modifier)
                 },
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("Hintergrund ändern") }
+            OutlinedButton(onClick = { vm.openWidgetPicker() }, modifier = Modifier.fillMaxWidth()) { Text("Widgets") }
             EditSheetExtras.rows.forEach { it() }
             TextButton(onClick = { vm.closeEditSheet() }, modifier = Modifier.align(Alignment.End)) { Text("Fertig") }
         }

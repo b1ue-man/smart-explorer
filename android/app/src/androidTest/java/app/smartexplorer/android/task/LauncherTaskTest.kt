@@ -55,7 +55,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * DSK-M9 and DSK-M10 on the device (U35-34): the launcher module as a whole. The tests run in the app
+ * DSK-M9, DSK-M10 and DSK-M11 on the device (U35-34, U38-17): the launcher module as a whole. The tests run in the app
  * process (the instrumentation shares it) and look at the launcher process `:launcher` from outside:
  * the component state, `ps`, `/proc/<pid>/maps`, `dumpsys`, the role holders. The device is the suite's,
  * never the user's. `add-role-holder` stands for the person's choice in the system dialog (A32).
@@ -126,6 +126,7 @@ class LauncherTaskTest {
 
     private fun resetDevice() {
         runCatching { LauncherSwitch.remove(appContext) }
+        shell("cmd appwidget revokebind --package $pkg")
         shell("cmd role remove-role-holder $homeRole $pkg")
         runCatching { setTestHome(false) }
     }
@@ -495,6 +496,187 @@ class LauncherTaskTest {
         } finally {
             shell("pm remove-user $id")
         }
+    }
+
+    // ---- DSK-M11: widgets and pin requests (U38-17) ------------------------------------------------------
+
+    private val testPackage = "app.smartexplorer.android.test"
+    private val pinRequester = "$testPackage/app.smartexplorer.android.task.TestPinRequesterActivity"
+
+    /** The one-time approval „Immer erlauben“ for this app (DN18), so binding needs no dialog. */
+    private fun grantBind() = shell("cmd appwidget grantbind --package $pkg")
+
+    /** A report line file of the test widget, read from the test package's data with `run-as`; empty when there is none. */
+    private fun report(name: String): List<List<String>> {
+        val text = shell("run-as $testPackage cat files/task-report/$name")
+        if ("No such file" in text || text.startsWith("run-as:")) return emptyList()
+        return text.lines().filter { it.isNotBlank() }.map { it.split('\t') }
+    }
+
+    private fun clearReports() {
+        shell("run-as $testPackage rm -rf files/task-report")
+    }
+
+    private fun testWidgets(): List<HomeItem> =
+        readLayout()?.pages?.flatten().orEmpty().filter { it.isWidget && it.provider?.startsWith("$testPackage/") == true }
+
+    /** Writes an empty first page, so the middle of the screen is an empty cell, then shows the launcher. */
+    private fun startEmptyLauncher() {
+        launcherDir().mkdirs()
+        File(launcherDir(), "layout.json").writeText(emptyLayout)
+        startLauncher()
+        assertTrue("the empty page is not shown", device.wait(Until.hasObject(By.desc("Seite 1 von 1")), 10_000))
+    }
+
+    /** Long press on the empty middle of the page: the settings sheet, then „Widgets“, the search for the test widget. */
+    private fun openPickerForTestWidget() {
+        device.swipe(device.displayWidth / 2, device.displayHeight / 2, device.displayWidth / 2, device.displayHeight / 2, 250)
+        val sheet = device.wait(Until.findObject(By.text("Widgets")), 10_000)
+        assertNotNull("the settings sheet has no entry „Widgets“", sheet)
+        sheet.click()
+        val field = device.wait(Until.findObject(By.text("Widgets suchen")), 10_000)
+        assertNotNull("the sheet „Widgets“ did not open", field)
+        field.text = "Test-Widget"
+    }
+
+    /** Adds the test widget through the sheet and waits until the configuration ran and the widget is in the layout. */
+    private fun addTestWidget() {
+        grantBind()
+        clearReports()
+        openPickerForTestWidget()
+        val add = device.wait(Until.findObject(By.text("Hinzufügen")), 15_000)
+        assertNotNull("no „Hinzufügen“ for the test widget (group of the test APK)", add)
+        add.click()
+        assertTrue("the configuration activity did not run", waitFor(20_000) { report("widget-config.tsv").isNotEmpty() })
+        assertTrue("the widget is not in layout.json", waitFor(20_000) { testWidgets().isNotEmpty() })
+    }
+
+    @Test
+    fun launcher_task_widget_bind_config_resize() {
+        startEmptyLauncher()
+        addTestWidget()
+        val placed = testWidgets().single()
+        assertEquals("the widget is on page 1", 1, readLayout()!!.pages.indexOfFirst { page -> page.any { it.id == placed.id } } + 1)
+        assertTrue("the widget was set up by its configuration", placed.configured)
+        assertNotNull("the widget id is missing", placed.widgetId)
+
+        // The size messages reached the provider, in dp of the span's area.
+        assertTrue("no size message reached the provider", waitFor(20_000) { report("widget-options.tsv").isNotEmpty() })
+        val density = appContext.resources.displayMetrics.density
+        val screenWidthDp = appContext.resources.displayMetrics.widthPixels / density
+        val screenHeightDp = appContext.resources.displayMetrics.heightPixels / density
+        fun checkSizes(line: List<String>, span: app.smartexplorer.android.launcher.model.Span) {
+            val minWidth = line[2].toInt()
+            val minHeight = line[3].toInt()
+            val maxWidth = line[4].toInt()
+            val maxHeight = line[5].toInt()
+            assertTrue("OPTION_APPWIDGET_MIN_WIDTH $minWidth outside the span ${span.w}", minWidth in (span.w * 72 - 1)..(span.w * maxOf(screenWidthDp, screenHeightDp)).toInt() + 1)
+            assertTrue("OPTION_APPWIDGET_MAX_HEIGHT $maxHeight outside the span ${span.h}", maxHeight in (span.h * 92 - 1)..(span.h * maxOf(screenWidthDp, screenHeightDp)).toInt() + 1)
+            assertTrue("sizes $minWidth..$maxWidth x $minHeight..$maxHeight", minWidth > 0 && minHeight > 0 && maxWidth > 0 && maxHeight > 0)
+        }
+        val first = report("widget-options.tsv").last()
+        checkSizes(first, placed.span)
+
+        // Pull the right handle by one cell (menu „Größe ändern“); the widget gets wider and the provider is told again.
+        val before = report("widget-options.tsv").size
+        val tile = device.wait(Until.findObject(By.desc("se Test-Widget")), 10_000)
+        assertNotNull("the widget cell has no description", tile)
+        dragAndHold(tile.visibleCenter, tile.visibleCenter, restMs = 0)
+        val resize = device.wait(Until.findObject(By.text("Größe ändern")), 10_000)
+        assertNotNull("menu without „Größe ändern“", resize)
+        resize.click()
+        val handle = device.wait(Until.findObject(By.desc("Griff rechts")), 10_000)
+        assertNotNull("no handle on the right side", handle)
+        val columns = readLayout()!!.grid.columns.coerceAtLeast(1)
+        val cellPx = device.displayWidth / columns
+        val from = handle.visibleCenter
+        handle.drag(Point(from.x + cellPx, from.y))
+        assertTrue(
+            "the span did not grow by one column",
+            waitFor { testWidgets().singleOrNull()?.span?.w == placed.span.w + 1 },
+        )
+        assertTrue("the provider was not told the new size", waitFor(20_000) { report("widget-options.tsv").size > before })
+        val last = report("widget-options.tsv").last()
+        checkSizes(last, testWidgets().single().span)
+        assertTrue("minimum width did not grow: ${first[2]} -> ${last[2]}", last[2].toInt() > first[2].toInt())
+    }
+
+    @Test
+    fun launcher_task_widget_reconfigure() {
+        startEmptyLauncher()
+        addTestWidget()
+        val runs = report("widget-config.tsv").size
+        val tile = device.wait(Until.findObject(By.desc("se Test-Widget")), 10_000)
+        assertNotNull("the widget cell has no description", tile)
+        dragAndHold(tile.visibleCenter, tile.visibleCenter, restMs = 0)
+        val row = device.wait(Until.findObject(By.text("Neu einrichten")), 10_000)
+        assertNotNull("menu without „Neu einrichten“ for a reconfigurable widget", row)
+        row.click()
+        assertTrue("the configuration activity did not run again", waitFor(20_000) { report("widget-config.tsv").size > runs })
+        assertTrue("the widget left the layout", testWidgets().isNotEmpty())
+    }
+
+    @Test
+    fun launcher_task_widgets_restored_after_reenable() {
+        startEmptyLauncher()
+        addTestWidget()
+        val before = testWidgets().single()
+        val result = LauncherSwitch.disable(appContext)
+        assertEquals(null, result.error)
+        assertTrue("process $pkg:launcher still runs", waitFor { launcherProcessPid() == null })
+        assertEquals("the item stays while the launcher is off", before.id, testWidgets().single().id)
+
+        startLauncher()
+        // No bind dialog: the approval stands; the provider has a configuration, so the cell asks to set it up.
+        assertTrue("the widget cell is not back", device.wait(Until.hasObject(By.text("Einrichten")), 20_000))
+        assertEquals("a dialog covers the launcher", pkg, device.currentPackageName)
+        val after = testWidgets().single()
+        assertEquals(before.id, after.id)
+        assertTrue("the widget still has its old id ${before.widgetId}", waitFor { testWidgets().single().widgetId != before.widgetId })
+        assertFalse("configured must be false after the rebind", testWidgets().single().configured)
+    }
+
+    private fun startRequester(kind: String) {
+        shell("am start -n $pinRequester --es kind $kind")
+    }
+
+    @Test
+    fun launcher_task_pin_shortcut_request() {
+        startEmptyLauncher()
+        startRequester("shortcut")
+        assertTrue("no dialog „Verknüpfung hinzufügen“", device.wait(Until.hasObject(By.text("Verknüpfung hinzufügen")), 15_000))
+        assertNotNull(device.findObject(By.text("se Test-Verknüpfung")))
+        device.findObject(By.text("Hinzufügen")).click()
+        assertTrue(
+            "the shortcut is not on page 1",
+            waitFor {
+                readLayout()?.pages?.firstOrNull()?.any { it.isShortcut && it.attr("shortcutId") == "se-test-pin" && it.component?.startsWith("$testPackage/") == true } == true
+            },
+        )
+    }
+
+    @Test
+    fun launcher_task_pin_widget_request() {
+        grantBind()
+        clearReports()
+        startEmptyLauncher()
+        startRequester("widget")
+        assertTrue("no dialog „Widget hinzufügen“", device.wait(Until.hasObject(By.text("Widget hinzufügen")), 15_000))
+        device.findObject(By.text("Hinzufügen")).click()
+        assertTrue("the configuration activity did not run", waitFor(20_000) { report("widget-config.tsv").isNotEmpty() })
+        assertTrue("the pinned widget is not on page 1", waitFor(20_000) { readLayout()?.pages?.firstOrNull()?.any { it in testWidgets() } == true })
+    }
+
+    @Test
+    fun launcher_task_pin_activity_rejects_forged_intent() {
+        assertEquals(EnableResult.Done, LauncherSwitch.enable(appContext))
+        shell("am start -n $pkg/.launcher.pin.PinRequestActivity -a android.content.pm.action.CONFIRM_PIN_SHORTCUT")
+        assertTrue("the activity stays after a forged intent", waitFor(15_000) { !shell("dumpsys activity activities").contains("PinRequestActivity") })
+        assertFalse(device.hasObject(By.text("Verknüpfung hinzufügen")))
+        assertFalse(device.hasObject(By.text("Widget hinzufügen")))
+        shell("am start -n $pkg/.launcher.pin.PinRequestActivity -a android.content.pm.action.CONFIRM_PIN_APPWIDGET")
+        assertTrue("the activity stays after a forged widget intent", waitFor(15_000) { !shell("dumpsys activity activities").contains("PinRequestActivity") })
+        assertFalse(device.hasObject(By.text("Widget hinzufügen")))
     }
 
     private fun render(drawable: Drawable, size: Int = 192): Bitmap {

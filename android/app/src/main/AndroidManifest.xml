@@ -124,6 +124,29 @@
             </intent-filter>
         </activity>
 
+        <!-- DSK-M11 (U38): the confirmation of a pin request (an app asks the launcher for a shortcut or widget on
+             the home screen). Off and on with the launcher (LauncherParts); the system sends it only to the home
+             app. The activity answers only requests the system made (getPinItemRequest). -->
+        <activity
+            android:name=".launcher.pin.PinRequestActivity"
+            android:enabled="false"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:label="@string/launcher_pin_label"
+            android:launchMode="singleTask"
+            android:process=":launcher"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.content.pm.action.CONFIRM_PIN_SHORTCUT" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.content.pm.action.CONFIRM_PIN_APPWIDGET" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
         <!-- Transfers, "run now" sync runs and the Google sign-in while the UI was left -->
         <service
             android:name=".service.TaskForegroundService"

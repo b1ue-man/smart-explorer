@@ -64,7 +64,7 @@ fun uninstall(context: Context, entry: AppEntry) {
 }
 
 /**
- * Rows of the menu for [item] by its kind (U35-27, U35-31): U38 adds „Größe ändern“ and „Neu einrichten“ for a
+ * Rows of the menu for [item] by its kind (U35-27, U35-31): U38 added „Größe ändern“ and „Neu einrichten“ for a
  * widget in the same `when`, the se kinds of U40 get their own branch.
  */
 fun menuRows(item: HomeItem, context: MenuContext): List<MenuRow> {
@@ -80,8 +80,20 @@ fun menuRows(item: HomeItem, context: MenuContext): List<MenuRow> {
             MenuRow("Ordner auflösen") { vm.dissolveFolder(item.id) },
             MenuRow("Entfernen") { vm.dissolveFolder(item.id) },
         )
+        Kinds.WIDGET -> widgetRows(item, context)
         else -> listOf(MenuRow("Entfernen") { vm.removeItem(item.id) })
     }
+}
+
+/** „Größe ändern“ where the provider allows it, „Neu einrichten“ where it is reconfigurable, always „Entfernen“ (U38-8, U38-9). */
+private fun widgetRows(item: HomeItem, context: MenuContext): List<MenuRow> {
+    val vm = context.vm
+    val info = item.widgetId?.let { vm.widgets.manager.getAppWidgetInfo(it) }
+    val rows = ArrayList<MenuRow>()
+    if (info != null && vm.canResize(item)) rows += MenuRow("Größe ändern") { vm.startResize(item) }
+    if (info != null && vm.widgets.canReconfigure(info)) rows += MenuRow("Neu einrichten") { vm.setUpWidget(item) }
+    rows += MenuRow("Entfernen") { vm.removeItem(item.id) }
+    return rows
 }
 
 private fun appRows(item: HomeItem, context: MenuContext): List<MenuRow> {

@@ -45,7 +45,10 @@ import app.smartexplorer.android.launcher.model.Cell
 import app.smartexplorer.android.launcher.model.GridGeometry
 import app.smartexplorer.android.launcher.model.HomeItem
 import app.smartexplorer.android.launcher.model.LayoutOps
+import app.smartexplorer.android.launcher.model.Location
 import app.smartexplorer.android.launcher.wallpaper.Wallpaper
+import app.smartexplorer.android.launcher.widgets.WidgetPicker
+import app.smartexplorer.android.launcher.widgets.WidgetResizeOverlay
 import kotlinx.coroutines.delay
 
 /**
@@ -83,6 +86,7 @@ fun HomeScreen(vm: LauncherViewModel) {
         val areaH = (maxHeight - top - bottom - dockHeight - indicator).coerceAtLeast(1.dp)
         val geometry = GridGeometry.geometry(areaW.value, areaH.value, iconDp)
         LaunchedEffect(geometry.columns, geometry.rows) { vm.setGrid(geometry.columns, geometry.rows) }
+        LaunchedEffect(areaW.value, areaH.value, iconDp) { vm.setGeometry(areaW.value, areaH.value, iconDp) }
         val metrics = with(density) {
             val cellW = areaW.toPx() / geometry.columns
             HomeMetrics(
@@ -119,6 +123,17 @@ fun HomeScreen(vm: LauncherViewModel) {
             val item = drag.item
             val entry = if (item != null && item.isApp) vm.entryFor(item) else null
             return resolveHover(at, metricsNow, pagerState.currentPage, displayNow, isUninstallable(entry), if (showNewNow) displayNow.pages.size else null)
+        }
+
+        // A widget follows the finger with its middle, so the cell under the finger is the middle of its area (U38-9).
+        fun anchorCell(item: HomeItem, under: Cell): Cell =
+            if (item.isWidget) Cell(under.x - (item.span.w - 1) / 2, under.y - (item.span.h - 1) / 2) else under
+
+        fun onWidget(at: Offset): Boolean {
+            val m = metricsNow
+            if (!m.contains(at)) return false
+            val items = displayNow.pages.getOrNull(pagerState.currentPage) ?: return false
+            return LayoutOps.itemAt(items, m.cellAt(at))?.isWidget == true
         }
 
         fun anchorOf(item: HomeItem, onDock: Boolean): Offset {
@@ -170,9 +185,9 @@ fun HomeScreen(vm: LauncherViewModel) {
 
                 private fun drop(item: HomeItem, origin: DragOrigin, hover: Hover, merge: Boolean, at: Offset) {
                     when (hover) {
-                        is Hover.OnCell -> vm.dropOnPage(item, hover.page, hover.cell, merge && hover.inner)
+                        is Hover.OnCell -> vm.dropOnPage(item, hover.page, anchorCell(item, hover.cell), merge && hover.inner)
                         is Hover.OnDock -> vm.dropOnDock(item, hover.index, merge && hover.inner)
-                        is Hover.OnNewPage -> vm.dropOnPage(item, hover.page, metricsNow.cellAt(at), merge = false)
+                        is Hover.OnNewPage -> vm.dropOnPage(item, hover.page, anchorCell(item, metricsNow.cellAt(at)), merge = false)
                         Hover.Remove -> if (origin == DragOrigin.Home || origin == DragOrigin.Folder) vm.removeItem(item.id)
                         Hover.Uninstall -> vm.entryFor(item)?.let { uninstall(context, it) }
                         Hover.None -> Unit
@@ -180,6 +195,9 @@ fun HomeScreen(vm: LauncherViewModel) {
                 }
             }
         }
+
+        itemContext.dragHost = host
+        itemContext.isDragActive = { drag.active }
 
         // The finger rests on a target's inner area: after the dwell time a drop makes or fills a folder.
         val mergeKey = when (val hover = drag.hover) {
@@ -251,11 +269,19 @@ fun HomeScreen(vm: LauncherViewModel) {
                 .homeGestures(
                     enabled = !vm.hasOpenLayer && !drag.active,
                     onSwipeUp = { vm.openDrawer() },
+                    blockedAt = { onWidget(it) },
                 ),
         ) {
             val excluded = if (drag.origin == DragOrigin.Home) drag.item?.id else null
             Box(Modifier.offset(left, top).size(areaW, areaH)) {
                 HomePager(pagerState, display.pages, showNewPage, metrics, itemContext, excluded, !drag.active)
+                // The handles of the widget chosen with „Größe ändern“ (U38-9), on its page.
+                val resizing = vm.resizeId?.let { id -> LayoutOps.find(display, id) }
+                LaunchedEffect(vm.resizeId, resizing == null) { if (vm.resizeId != null && resizing == null) vm.endResize() }
+                val resizeLocation = resizing?.location
+                if (resizing != null && resizeLocation is Location.Page && resizeLocation.index == pagerState.currentPage) {
+                    WidgetResizeOverlay(resizing.item, display.pages[resizeLocation.index], metrics, itemContext) { vm.endResize() }
+                }
             }
             Box(Modifier.offset(left, top + areaH).size(areaW, indicator)) {
                 PageIndicator(pagerState.currentPage.coerceAtMost(display.pages.size - 1), display.pages.size, { vm.openDrawer() })
@@ -283,6 +309,9 @@ fun HomeScreen(vm: LauncherViewModel) {
         }
         if (vm.editSheet) {
             EditSheet(vm, iconDp, Modifier.align(Alignment.BottomCenter).padding(bottom = bottom, start = left, end = right))
+        }
+        if (vm.widgetPicker) {
+            WidgetPicker(vm, onClose = { vm.closeWidgetPicker() }, modifier = Modifier.padding(bottom = bottom))
         }
         vm.menu?.let { target ->
             Box(Modifier.fillMaxSize().alpha(if (hiddenDrag && drag.origin == DragOrigin.Menu) 0f else 1f)) {
