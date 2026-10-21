@@ -108,7 +108,21 @@ fn table() -> &'static Mutex<Table> {
 }
 
 pub(super) fn cache_root() -> io::Result<PathBuf> {
-    crate::mount::prepare_spool_root(&crate::support_dirs::app_data_dir().join(CACHE_DIR))
+    crate::mount::prepare_spool_root(&app_data_resolved()?.join(CACHE_DIR))
+}
+
+/// The app's data folder with the folder the system handed over resolved.
+/// Android gives `filesDir` below `/data/user/<user>`, and for user 0 the
+/// system itself makes that a link to `/data/data`; `prepare_spool_root`
+/// refuses every link on the path. Only the given folder is resolved: the
+/// folders below it (`smart_explorer`, the cache and every drive) are still
+/// refused when they are links.
+fn app_data_resolved() -> io::Result<PathBuf> {
+    let data = crate::support_dirs::app_data_dir();
+    match (data.parent(), data.file_name()) {
+        (Some(given), Some(name)) => Ok(std::fs::canonicalize(given)?.join(name)),
+        _ => Ok(data),
+    }
 }
 
 /// The open engine of `key`, opening it first (blocks on the network).
