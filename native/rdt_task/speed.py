@@ -328,10 +328,10 @@ def stage_cli(ctx: common.JobContext, stage: str) -> None:
     if error:
         return not_run_failed(ctx, stage, CLI, error)
     servers = Servers(ctx, stage)
-    handed = Path(ctx.args.bins) / "se" if ctx.args.bins else None
-    binary = handed if handed and handed.is_file() else ctx.cargo.bin_path("se")
+    # The CLI is measured on the speed profile like the engine, not on the development build of desktop-bins.
+    binary = ctx.cargo.bin_path("se", common.SPEED_PROFILE)
     if not servers.start("sftp") or binary is None:
-        reason = servers.failed.get("sftp") or ctx.cargo.bin_errors.get("se", "se fehlt")
+        reason = servers.failed.get("sftp") or ctx.cargo.bin_errors.get(f"se@{common.SPEED_PROFILE}", "se fehlt")
         return not_run(ctx, stage, CLI, "SFTP-Server oder se fehlt: " + reason)
     root = ctx.fixtures.make_dir("cli-client")
     envs = {"SE_SPEED_CLI_ROOT": str(root), "SE_SPEED_CLI_LABEL": "speed", "SE_SPEED_SE_BIN": str(binary)}

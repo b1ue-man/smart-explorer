@@ -208,23 +208,18 @@ pub fn connect_sftp_vars(
         server.port,
         &need(fingerprint_var, "Host-Schlüssel des Servers")?,
     )?;
-    let config = smart_explorer::sftp::SftpConfig {
-        host: server.host.clone(),
-        port: server.port,
-        user: server.user.clone(),
-        auth: smart_explorer::sftp::SftpAuth::Password(server.password.clone()),
-        root: server.root.clone(),
-    };
-    let backend = smart_explorer::sftp::SftpBackend::connect(config).map_err(|error| {
+    // The saved connection with its stored password, opened like the app does:
+    // that login needs no input, so transfers may add SSH connections (E13-S15).
+    let (backend, root) = open_saved(Protocol::Sftp, &server, false).map_err(|error| {
         format!(
-            "SFTP {}:{} verbindet nicht: {error:?}",
+            "SFTP {}:{} verbindet nicht: {error}",
             server.host, server.port
         )
     })?;
     Ok(Remote {
         way: Way::Sftp,
-        backend: Arc::new(backend),
-        root: server.root.clone(),
+        backend,
+        root,
         seed: container_seed(container_var),
         server: Some(server),
     })

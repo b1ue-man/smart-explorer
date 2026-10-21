@@ -31,6 +31,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 import sys
 import time
 from pathlib import Path
@@ -187,9 +188,12 @@ def bus_name_present(env: dict, name: str) -> bool:
 
 
 def private_runtime(root: Path, base_env: dict) -> dict:
-    runtime = root / "runtime"
-    runtime.mkdir(parents=True, exist_ok=True)
+    # A short folder in the system's temporary directory: Unix socket paths end at 108 bytes, and Sway's IPC socket
+    # (sway-ipc.<uid>.<pid>.sock) below the stage folder of the runner did not fit (run 3: Sway ended with -11).
+    runtime = Path(tempfile.mkdtemp(prefix="se-rt-"))
     runtime.chmod(0o700)
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "runtime-path").write_text(str(runtime), encoding="utf-8")
     env = dict(base_env)
     for key in ("DISPLAY", "WAYLAND_DISPLAY", "DBUS_SESSION_BUS_ADDRESS"):
         env.pop(key, None)
