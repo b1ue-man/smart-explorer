@@ -28,7 +28,9 @@ fn quoted_after(text: &str, marker: &str) -> Vec<String> {
 #[test]
 fn desktop_task_release_assets_unchanged() {
     let publication = include_str!("../../../../release-publication.ps1");
-    let assets = quoted_after(publication, "PublishedName = \"");
+    // The leading space excludes `InstallerPublishedName = "..."` (the map
+    // result field, not an asset entry).
+    let assets = quoted_after(publication, " PublishedName = \"");
     assert_eq!(
         assets,
         [

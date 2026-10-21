@@ -77,6 +77,9 @@ fn perm_task_gui_approvals_block() {
         });
         answer
     };
+    // The delay has passed: the next frames enable the allowing answers
+    // (egui hit-tests a click against the widgets of the previous frame).
+    h.settle(&mut draw);
     assert_eq!(
         h.click("Immer erlauben", 1, &mut draw),
         Some((second, ApprovalDecision::Always))
