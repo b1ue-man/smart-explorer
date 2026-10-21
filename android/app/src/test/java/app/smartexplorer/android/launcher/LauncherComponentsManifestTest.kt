@@ -72,4 +72,19 @@ class LauncherComponentsManifestTest {
         assertTrue("the switch must turn it on and off with the launcher", "app.smartexplorer.android.launcher.badges.BadgeListenerService" in LauncherParts.launcher)
         assertTrue("the widget part stays empty until U40", LauncherParts.widget.isEmpty())
     }
+
+    @Test
+    fun theBridgeServiceIsOffInTheMainProcessAndNotExported() {
+        val service = component("service", ".service.LauncherBridgeService")
+        assertEquals("false", service.getAttributeNS(androidNs, "enabled"))
+        assertEquals("false", service.getAttributeNS(androidNs, "exported"))
+        // No android:process: the service runs in the main process, where the core lives (U40-3).
+        assertEquals("", service.getAttributeNS(androidNs, "process"))
+        assertEquals(0, service.getElementsByTagName("intent-filter").length)
+        assertTrue("the switch must turn it on and off with the launcher", "app.smartexplorer.android.service.LauncherBridgeService" in LauncherParts.launcher)
+        assertEquals(
+            "app.smartexplorer.android.service.LauncherBridgeService",
+            app.smartexplorer.android.launcher.bridge.BridgeProtocol.SERVICE_CLASS,
+        )
+    }
 }
