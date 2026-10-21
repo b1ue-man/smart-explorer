@@ -20,6 +20,39 @@ pub(super) fn file_identity(file: &File) -> io::Result<FileIdentity> {
     Ok((metadata.dev(), metadata.ino()))
 }
 
+/// An open file's identity together with the metadata it was read from: one
+/// `fstat` for both (the snapshot, the permissions to copy).
+pub(super) fn file_state(file: &File) -> io::Result<(FileIdentity, std::fs::Metadata)> {
+    let metadata = file.metadata()?;
+    Ok(((metadata.dev(), metadata.ino()), metadata))
+}
+
+/// Identity, length and modification time of what `path` names now, from one
+/// `lstat`: a link, folder or special file at the path is refused (and cannot
+/// equal an opened regular file's identity anyway). Compared with the
+/// snapshot of the handle after a copy; no second open is needed.
+pub(super) fn path_state(
+    path: &Path,
+) -> io::Result<(FileIdentity, u64, Option<std::time::SystemTime>)> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    let kind = metadata.file_type();
+    if !kind.is_file() {
+        let refusal = if kind.is_symlink() {
+            crate::local_access::NotRegular::Link
+        } else if kind.is_dir() {
+            crate::local_access::NotRegular::Directory
+        } else {
+            crate::local_access::NotRegular::Special
+        };
+        return Err(refusal.error());
+    }
+    Ok((
+        (metadata.dev(), metadata.ino()),
+        metadata.len(),
+        metadata.modified().ok(),
+    ))
+}
+
 pub(super) fn path_matches_identity(path: &Path, expected: FileIdentity) -> io::Result<bool> {
     let actual = match path_identity(path) {
         Ok(identity) => identity,
@@ -150,6 +183,12 @@ pub(super) fn copy_handles(
         }
         copied = copied.saturating_add(moved);
         progress(moved);
+        // `io::copy` only returns early at the end of the source: a short
+        // chunk is the last one, so the file needs no second round of
+        // `fstat`s and a zero-length probe call.
+        if moved < KERNEL_CHUNK {
+            return Ok(Some(copied));
+        }
     }
 }
 

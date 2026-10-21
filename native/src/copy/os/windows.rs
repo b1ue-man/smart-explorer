@@ -68,6 +68,21 @@ pub(super) fn file_identity(file: &File) -> io::Result<FileIdentity> {
     Ok((information.volume_serial_number, index))
 }
 
+/// An open file's identity together with its metadata.
+pub(super) fn file_state(file: &File) -> io::Result<(FileIdentity, std::fs::Metadata)> {
+    Ok((file_identity(file)?, file.metadata()?))
+}
+
+/// Identity, length and modification time of the regular file `path` names
+/// now, read through a handle that refuses links and special files.
+pub(super) fn path_state(
+    path: &Path,
+) -> io::Result<(FileIdentity, u64, Option<std::time::SystemTime>)> {
+    let file = crate::local_access::open_regular(path, crate::local_access::FinalLink::Refuse)?;
+    let (identity, metadata) = file_state(&file)?;
+    Ok((identity, metadata.len(), metadata.modified().ok()))
+}
+
 pub(super) fn path_matches_identity(path: &Path, expected: FileIdentity) -> io::Result<bool> {
     let actual = match path_identity(path) {
         Ok(identity) => identity,

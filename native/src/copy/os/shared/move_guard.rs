@@ -26,11 +26,30 @@ pub(super) fn source_snapshot_path(path: &Path) -> io::Result<SourceSnapshot> {
 }
 
 pub(super) fn source_snapshot_file(file: &File) -> io::Result<SourceSnapshot> {
-    let metadata = file.metadata()?;
-    Ok(SourceSnapshot {
-        identity: platform::file_identity(file)?,
+    file_state(file).map(|(snapshot, _)| snapshot)
+}
+
+/// The snapshot of an open file and the metadata it was taken from: one
+/// `fstat` serves both.
+pub(super) fn file_state(file: &File) -> io::Result<(SourceSnapshot, std::fs::Metadata)> {
+    let (identity, metadata) = platform::file_state(file)?;
+    let snapshot = SourceSnapshot {
+        identity,
         len: metadata.len(),
         modified: metadata.modified().ok(),
+    };
+    Ok((snapshot, metadata))
+}
+
+/// What the entry at `path` is now, to be compared with the snapshot of the
+/// file opened there: one `lstat` on Unix instead of opening the path again.
+/// A link or special file at the path is refused.
+pub(super) fn source_snapshot_entry(path: &Path) -> io::Result<SourceSnapshot> {
+    let (identity, len, modified) = platform::path_state(path)?;
+    Ok(SourceSnapshot {
+        identity,
+        len,
+        modified,
     })
 }
 

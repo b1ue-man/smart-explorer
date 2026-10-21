@@ -217,3 +217,30 @@ fn speed_task_local_engine_passes_the_granted_threads_to_the_copy() {
     assert_eq!(finished.progress.bytes_done, content.len() as u64);
     assert_eq!(std::fs::read(&source).expect("source").len(), content.len());
 }
+
+/// Small files never ask for extra threads, not even on flash with nothing
+/// else queued: every copy gets exactly its own permit's thread.
+#[test]
+fn speed_task_local_every_small_file_runs_on_one_thread() {
+    use super::super::test_backend::{job, run, write};
+    use crate::transfer::Endpoint;
+    let root = tempfile::tempdir().expect("temp dir");
+    let sources: Vec<PathBuf> = (0..40)
+        .map(|index| {
+            let path = root.path().join(format!("src/small-{index}.bin"));
+            write(&path, &vec![index as u8; 1024]);
+            path
+        })
+        .collect();
+    let dest = root.path().join("flash");
+    std::fs::create_dir_all(&dest).expect("dest");
+    let registered = Registered::new(&dest, Some(false));
+    let refs: Vec<&Path> = sources.iter().map(PathBuf::as_path).collect();
+    let finished = run(job(Endpoint::Local, Endpoint::Local, &dest, &refs));
+    assert!(finished.issues.is_empty(), "{:?}", finished.issues);
+    assert_eq!(registered.seen(), vec![1; 40]);
+    for index in 0..40 {
+        let copy = std::fs::read(dest.join(format!("small-{index}.bin"))).expect("copy");
+        assert_eq!(copy, vec![index as u8; 1024]);
+    }
+}

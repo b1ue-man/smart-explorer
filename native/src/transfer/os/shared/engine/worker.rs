@@ -98,7 +98,12 @@ pub(super) fn run_file(engine: &Engine<'_>, mut file: FileWork, buffer: &mut [u8
             .saturating_add(memory_wait)
             .saturating_add(nanos(permit_asked.elapsed()));
         let active = engine.stats.begin(&file.rel);
-        engine.queue.notify();
+        // The dispatcher starts another worker only while the flows have a
+        // free permit; with every permit taken the wake-up would be a futex
+        // call and a dispatcher loop for nothing (every file pays it).
+        if engine.flows_have_spare() {
+            engine.queue.notify();
+        }
         let meter = Meter::new(&permits, &engine.stats);
         meter.add_wait(std::mem::take(&mut waited));
         let result = ops::transfer(engine, &file, parent_created, &mut carry, &meter, buffer);

@@ -141,6 +141,13 @@ impl Extras {
 }
 
 fn take_extras(engine: &Engine<'_>, size: u64, target: &Path) -> Extras {
+    // The common small file or move asks for nothing: no look into the queue
+    // (a lock every worker shares) and no permit taking.
+    if engine.is_move() || size < SPLIT_FROM {
+        return Extras {
+            permits: Vec::new(),
+        };
+    }
     let wanted = extras_wanted(size, engine.is_move(), engine.queue.view().queued, || {
         drive_is_flash(target)
     });
