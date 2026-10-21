@@ -320,6 +320,9 @@ fn run_vault(
     }
     let mut out = run.outcome;
     out.state = None;
+    if !dry_run {
+        super::vaults::notify_conflicts(job, out.conflicts.len());
+    }
     Ok(out)
 }
 

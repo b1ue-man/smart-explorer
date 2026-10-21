@@ -1,5 +1,5 @@
 use super::budget::ScanBudget;
-use super::{ext_of, join, BATCH, MAX_ERRORS_TRACKED, PROGRESS_MS};
+use super::{ext_of, join, BATCH, PROGRESS_MS};
 use crate::scanner::{Lineage, RetentionHandle, ScanMessage};
 use crate::types::{FileEntry, ScanProgress};
 use crate::vfs::VfsMeta;
@@ -42,6 +42,8 @@ pub(super) struct WalkState {
     budget: ScanBudget,
     batch: Vec<FileEntry>,
     failed: Vec<(String, String)>,
+    /// The paths already in `failed`: every finding is delivered once.
+    failed_seen: HashSet<String>,
     scanned: u64,
     bytes: u64,
     errors: u64,
@@ -66,6 +68,7 @@ impl WalkState {
             budget: ScanBudget::default(),
             batch: Vec::with_capacity(BATCH),
             failed: Vec::new(),
+            failed_seen: HashSet::new(),
             scanned: 0,
             bytes: 0,
             errors: 0,
@@ -278,10 +281,11 @@ impl WalkState {
         }
     }
 
+    /// Records every failed path once, with its first message (R15c: no
+    /// count; the former 500 dropped findings without a technical cause).
     fn record_failure(&mut self, path: &str, detail: String) {
-        if self.failed.len() < MAX_ERRORS_TRACKED {
-            self.failed
-                .push((bounded_text(path), bounded_text(&detail)));
+        if self.failed_seen.insert(path.to_string()) {
+            self.failed.push((path.to_string(), detail));
         }
     }
 }
@@ -317,16 +321,12 @@ pub(super) fn diagnostic_preview(text: &str) -> String {
     format!("{:?}", bounded_text(text))
 }
 
+/// A diagnostic text as it is. R15c: the former cut at 4096 bytes had no
+/// technical cause; the texts stay in this process (scan messages to the
+/// GUI, the CLI and the Android bridge) and cross no frame. The name stays
+/// for the callers in `search.rs`.
 pub(super) fn bounded_text(text: &str) -> String {
-    const MAX_DIAGNOSTIC_BYTES: usize = 4096;
-    if text.len() <= MAX_DIAGNOSTIC_BYTES {
-        return text.to_string();
-    }
-    let mut end = MAX_DIAGNOSTIC_BYTES;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}…", &text[..end])
+    text.to_string()
 }
 
 pub(super) fn retained_text_bytes(parent: &str, path: &str, name: &str, extension: &str) -> usize {
@@ -395,5 +395,59 @@ mod tests {
         assert!(!state.send_root(root));
         assert!(cancel.load(Ordering::Relaxed));
         assert!(state.stopped());
+    }
+
+    fn failed_paths_of(
+        state: WalkState,
+        rx: &crossbeam_channel::Receiver<ScanMessage>,
+    ) -> Vec<(String, String)> {
+        state.finish();
+        rx.try_iter()
+            .find_map(|message| match message {
+                ScanMessage::FailedPaths(failed) => Some(failed),
+                _ => None,
+            })
+            .unwrap_or_default()
+    }
+
+    /// R15c: more than the former 500 findings arrive, each path once.
+    #[test]
+    fn drive_task_remote_scan_delivers_every_failed_path_once() {
+        let (tx, rx) = unbounded();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let truncated = Arc::new(AtomicBool::new(false));
+        let mut state = WalkState::new(tx, cancel, truncated, None, Instant::now());
+        for index in 0..1200 {
+            state.listing_failed(&format!("/dir{index}"), "permission denied");
+        }
+        state.listing_failed("/dir7", "second message");
+        let failed = failed_paths_of(state, &rx);
+        assert_eq!(failed.len(), 1200);
+        assert_eq!(
+            failed[7],
+            (
+                "/dir7".to_string(),
+                "list_dir: permission denied".to_string()
+            )
+        );
+        assert_eq!(failed[1199].0, "/dir1199");
+    }
+
+    /// R15c: a diagnostic text longer than the former 4096 bytes stays whole.
+    #[test]
+    fn drive_task_remote_scan_keeps_long_diagnostics_whole() {
+        let (tx, rx) = unbounded();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let truncated = Arc::new(AtomicBool::new(false));
+        let mut state = WalkState::new(tx, cancel, truncated, None, Instant::now());
+        let long_path = format!("/{}", "ä".repeat(5000));
+        let long_error = "e".repeat(10_000);
+        state.listing_failed(&long_path, &long_error);
+        let failed = failed_paths_of(state, &rx);
+        assert_eq!(
+            failed,
+            vec![(long_path.clone(), format!("list_dir: {long_error}"))]
+        );
+        assert_eq!(diagnostic_preview(&long_path), format!("{long_path:?}"));
     }
 }

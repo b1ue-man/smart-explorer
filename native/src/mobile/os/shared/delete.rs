@@ -69,7 +69,13 @@ pub(crate) fn delete(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
     } else {
         format!("In den Papierkorb: {} Element(e)", jobs.len())
     };
-    let id = rt.spawn_task("delete", title, move |ctx| run_delete(ctx, jobs));
+    let private = jobs.iter().any(|(loc, _, _)| loc.is_vault());
+    let id = rt.spawn_task("delete", title, move |ctx| {
+        if private {
+            ctx.keep_names_private();
+        }
+        run_delete(ctx, jobs)
+    });
     Ok(json!({ "taskId": id }))
 }
 
@@ -165,12 +171,20 @@ pub(crate) fn properties(rt: &Runtime, args: &Value) -> Result<Value, ApiError> 
         reject_trash(&loc)?;
         locations.push(loc);
     }
+    let private = locations.iter().any(Loc::is_vault);
     let title = match locations.as_slice() {
+        [single] if private => format!(
+            "Eigenschaften: {}",
+            super::crumbs::task_title(single, &[], &super::domains::vault_label)
+        ),
         [single] => format!("Eigenschaften: {}", single.name()),
         many => format!("Eigenschaften: {} Elemente", many.len()),
     };
     let runtime = rt.clone();
     let id = rt.spawn_task("properties", title, move |ctx| {
+        if private {
+            ctx.keep_names_private();
+        }
         run_properties(&runtime, ctx, locations)
     });
     Ok(json!({ "taskId": id }))

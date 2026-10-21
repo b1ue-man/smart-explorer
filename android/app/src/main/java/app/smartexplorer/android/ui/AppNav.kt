@@ -33,6 +33,9 @@ sealed interface NavRequest {
 
     /** Opens the group view of the screens (SCR-M9) of a room, or of all devices with `null`. */
     data class ShowScreenGrid(val roomId: String?) : NavRequest
+
+    /** Opens the comparison of the vault sync job [jobId] (VLT-M11, U31-8), under „Mehr → Tresore“. */
+    data class OpenVaultCompare(val jobId: String) : NavRequest
 }
 
 /**
@@ -50,6 +53,7 @@ object AppNav {
     private const val EXTRA_TOKEN = "app.smartexplorer.android.extra.NAV_TOKEN"
     private const val TOKEN_PREFS = "nav"
     private const val TOKEN_KEY = "token"
+    private const val VAULT_JOB_PREFIX = "vault:"
 
     private val lock = Any()
     private val queued = ArrayDeque<NavRequest>()
@@ -108,12 +112,20 @@ object AppNav {
             "openLocation" -> value?.let { NavRequest.OpenLocation(it) }
             "selectTab" -> MainTab.entries.firstOrNull { it.name == value }?.let { NavRequest.SelectTab(it) }
             "showTransfers" -> NavRequest.ShowTransfers
-            "openJobConflicts" -> value?.let { NavRequest.OpenJobConflicts(it) }
+            // Conflicts of a vault sync job come as `vault:<job>` (U31-13): its comparison.
+            "openJobConflicts" -> value?.let { job ->
+                if (job.startsWith(VAULT_JOB_PREFIX)) {
+                    NavRequest.OpenVaultCompare(job.removePrefix(VAULT_JOB_PREFIX))
+                } else {
+                    NavRequest.OpenJobConflicts(job)
+                }
+            }
             "showShareRequests" -> NavRequest.ShowShareRequests
             "showUpdate" -> NavRequest.ShowUpdate
             "showBackgroundSettings" -> NavRequest.ShowBackgroundSettings
             "openScreen" -> value?.takeIf { it.isNotBlank() }?.let { NavRequest.OpenScreen(it) }
             "showScreenGrid" -> NavRequest.ShowScreenGrid(value?.takeIf { it.isNotBlank() })
+            "openVaultCompare" -> value?.takeIf { it.isNotBlank() }?.let { NavRequest.OpenVaultCompare(it) }
             else -> null
         }
     }
@@ -124,7 +136,7 @@ object AppNav {
         is NavRequest.SelectTab -> request.tab
         is NavRequest.OpenJobConflicts -> MainTab.Sync
         NavRequest.ShowShareRequests, is NavRequest.OpenScreen, is NavRequest.ShowScreenGrid -> MainTab.Share
-        NavRequest.ShowUpdate, NavRequest.ShowBackgroundSettings -> MainTab.More
+        NavRequest.ShowUpdate, NavRequest.ShowBackgroundSettings, is NavRequest.OpenVaultCompare -> MainTab.More
     }
 
     private fun encode(request: NavRequest): Pair<String, String?> = when (request) {
@@ -137,6 +149,7 @@ object AppNav {
         NavRequest.ShowBackgroundSettings -> "showBackgroundSettings" to null
         is NavRequest.OpenScreen -> "openScreen" to request.target
         is NavRequest.ShowScreenGrid -> "showScreenGrid" to (request.roomId ?: "")
+        is NavRequest.OpenVaultCompare -> "openVaultCompare" to request.jobId
     }
 
     /** Random per-installation secret in app-private preferences. */

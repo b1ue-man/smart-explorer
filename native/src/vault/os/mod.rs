@@ -155,8 +155,8 @@ pub(crate) use sync_job::{
     VaultPreview, VaultRunOutcome, VaultRunRequest,
 };
 pub(crate) use unlock::{
-    read_key_files, unlock_entered, unlock_saved, unlock_storage, KeyFiles, UnlockError,
-    UnlockOptions, Unlocked,
+    read_key_files, unlock_entered, unlock_entered_cancellable, unlock_saved, unlock_storage,
+    KeyFiles, UnlockError, UnlockOptions, UnlockTarget, Unlocked,
 };
 
 /// The lock triggers of this platform (C3.3, C7.1).

@@ -161,6 +161,11 @@ impl Loc {
         self.path == "/"
     }
 
+    /// The cleartext view of a vault (`vault://<SITE>/…`).
+    pub(crate) fn is_vault(&self) -> bool {
+        self.kind == LocKind::Vault
+    }
+
     pub(crate) fn is_local(&self) -> bool {
         self.kind == LocKind::Local
     }

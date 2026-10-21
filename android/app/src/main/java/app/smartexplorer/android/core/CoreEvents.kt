@@ -61,6 +61,7 @@ internal object CoreEvents {
                     ScreenSessionChanged(session, event.text("state").orEmpty(), event.text("reason"))
                 }
                 "screenView" -> decodeScreenView(event)
+                "vault" -> event.text("site")?.let { VaultChanged(it, event.text("state").orEmpty(), event.text("reason")) }
                 "docs.changed" -> DocsChanged(
                     roots = (event["roots"] as? JsonPrimitive)?.booleanOrNull ?: false,
                     documents = (event["documents"] as? JsonArray)
@@ -131,6 +132,12 @@ data class ScreenHostStart(
 
 /** A host session changed: `consent`, `streaming` or `ended` (with its [reason]). */
 data class ScreenSessionChanged(val session: Long, val state: String, val reason: String?) : CoreEvent
+
+/**
+ * A vault site changed (VLT-M11, U31-17): [state] `locked`, `unlocked` or `locking`; [reason] for a
+ * lock `screen_off`, `background`, `idle`, `manual`, `process_end` or `null`.
+ */
+data class VaultChanged(val site: String, val state: String, val reason: String?) : CoreEvent
 
 /**
  * Documents provider (DRV-M8): [roots] came or went, the listings of [documents] changed, or a

@@ -26,7 +26,6 @@ use walk_state::{PendingRemoteDir, WalkState};
 
 const BATCH: usize = 256;
 const PROGRESS_MS: u128 = 150;
-const MAX_ERRORS_TRACKED: usize = 500;
 
 fn ext_of(name: &str, is_dir: bool) -> String {
     if is_dir {

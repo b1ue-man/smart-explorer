@@ -37,10 +37,14 @@ pub(crate) fn transfer(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
     let title = format!(
         "{verb}: {} Element(e) → {}",
         plan.sources.len(),
-        crumbs::title(&plan.target, &rt.volumes())
+        crumbs::task_title(&plan.target, &rt.volumes(), &super::domains::vault_label)
     );
+    let private = plan.target.is_vault() || plan.sources.iter().any(Loc::is_vault);
     let runtime = rt.clone();
     let id = rt.spawn_task("transfer", title, move |ctx| {
+        if private {
+            ctx.keep_names_private();
+        }
         run(&runtime, ctx, &plan)?.into_result(ctx)
     });
     Ok(json!({ "taskId": id }))
@@ -139,9 +143,10 @@ fn run(rt: &Runtime, ctx: &TaskCtx, plan: &Plan) -> Result<Outcome, ApiError> {
     let source = endpoint(rt, &plan.sources[0])?;
     let target = endpoint(rt, &plan.target)?;
     let volumes = rt.volumes();
+    let label = &super::domains::vault_label;
     let labels = (
-        crumbs::title(&plan.sources[0], &volumes),
-        crumbs::title(&plan.target, &volumes),
+        crumbs::task_title(&plan.sources[0], &volumes, label),
+        crumbs::task_title(&plan.target, &volumes, label),
     );
     run_job(ctx, plan_job(plan, paths, source, target, labels))
 }

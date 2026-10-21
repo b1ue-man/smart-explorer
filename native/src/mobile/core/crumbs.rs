@@ -60,6 +60,21 @@ pub(crate) fn title(loc: &Loc, volumes: &[VolumeInfo]) -> String {
     loc.name().to_string()
 }
 
+/// U31 S2: the name of a location in a task title. A vault shows only
+/// „Tresor <label>“ (`vault_label` gets its site ID), never a cleartext
+/// folder name: the title reaches the notification and the error log.
+pub(crate) fn task_title(
+    loc: &Loc,
+    volumes: &[VolumeInfo],
+    vault_label: &dyn Fn(&str) -> String,
+) -> String {
+    if loc.kind == LocKind::Vault {
+        let site = loc.prefix.strip_prefix("vault://").unwrap_or(&loc.prefix);
+        return format!("Tresor {}", vault_label(site));
+    }
+    title(loc, volumes)
+}
+
 fn volume_label(volume: &VolumeInfo) -> String {
     if volume.label.trim().is_empty() {
         volume.path.clone()
@@ -96,4 +111,26 @@ pub(crate) fn crumbs(loc: &Loc, volumes: &[VolumeInfo]) -> Vec<Value> {
         crumbs.push(json!({ "label": segment, "location": loc.at(&current) }));
     }
     crumbs
+}
+
+#[cfg(test)]
+mod task_title_tests {
+    use super::*;
+
+    /// U31 S2: a vault location shows only its label in a task title.
+    #[test]
+    fn vault_task_android_task_title_shows_vault_label() {
+        let site = "0123456789abcdef0123456789abcdef";
+        let inside = Loc::parse(&format!("vault://{site}/Ordner/Geheim")).unwrap();
+        let label = |id: &str| {
+            if id == site {
+                "Privat".to_string()
+            } else {
+                id.to_string()
+            }
+        };
+        assert_eq!(task_title(&inside, &[], &label), "Tresor Privat");
+        let local = Loc::parse("/storage/emulated/0/Download").unwrap();
+        assert_eq!(task_title(&local, &[], &label), "Download");
+    }
 }

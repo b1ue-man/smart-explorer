@@ -13,6 +13,12 @@ const MAX_TASK_ERRORS: usize = 100;
 /// Finished tasks kept until `task.clear`; older ones are dropped first.
 const MAX_FINISHED_TASKS: usize = 200;
 const RATE_SAMPLE: Duration = Duration::from_secs(1);
+/// The final text of a failed task that touches a vault (U31 S2): the
+/// title and this text reach the notification and the error log, never a
+/// cleartext name from inside the vault.
+pub(crate) const PRIVATE_FAILED: &str = "Die Aktion im Tresor ist fehlgeschlagen.";
+/// An error entry of such a task (path and text withheld).
+const PRIVATE_ERROR: &str = "Ein Element im Tresor wurde nicht bearbeitet.";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TaskState {
@@ -62,9 +68,22 @@ pub(crate) struct TaskRecord {
     dirty: bool,
     last_emit: Option<Instant>,
     rate_sample: Option<(Instant, u64)>,
+    /// Touches a vault: no message, no error path, a fixed failure text.
+    private: bool,
 }
 
 impl TaskRecord {
+    /// U31 S2: from now on the task shows no cleartext name.
+    pub(crate) fn set_private(&mut self) {
+        self.private = true;
+        self.message = None;
+        self.dirty = true;
+    }
+
+    pub(crate) fn is_private(&self) -> bool {
+        self.private
+    }
+
     pub(crate) fn set_running(&mut self) {
         if self.state == TaskState::Queued {
             self.state = TaskState::Running;
@@ -102,6 +121,9 @@ impl TaskRecord {
     }
 
     pub(crate) fn set_message(&mut self, text: &str) {
+        if self.private {
+            return;
+        }
         self.message = (!text.is_empty()).then(|| text.to_string());
         self.dirty = true;
     }
@@ -109,7 +131,11 @@ impl TaskRecord {
     pub(crate) fn push_error(&mut self, path: &str, message: &str) {
         self.errors_total = self.errors_total.saturating_add(1);
         if self.errors.len() < MAX_TASK_ERRORS {
-            self.errors.push((path.to_string(), message.to_string()));
+            if self.private {
+                self.errors.push((String::new(), PRIVATE_ERROR.to_string()));
+            } else {
+                self.errors.push((path.to_string(), message.to_string()));
+            }
         }
         self.dirty = true;
     }
@@ -126,7 +152,13 @@ impl TaskRecord {
             return;
         }
         self.state = state;
-        if message.is_some() {
+        if self.private {
+            self.message = match state {
+                TaskState::Failed => Some(PRIVATE_FAILED.to_string()),
+                TaskState::Canceled => Some("Abgebrochen".to_string()),
+                _ => None,
+            };
+        } else if message.is_some() {
             self.message = message;
         }
         self.result = result;
@@ -210,6 +242,7 @@ impl TaskTable {
             dirty: true,
             last_emit: None,
             rate_sample: None,
+            private: false,
         });
         self.trim_finished();
         id
@@ -295,5 +328,50 @@ impl TaskTable {
                 true
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod private_tests {
+    use super::*;
+
+    /// U31 S2: a task that touches a vault names no file in its message,
+    /// its error entries or its failure text.
+    #[test]
+    fn vault_task_android_private_task_shows_no_names() {
+        let mut table = TaskTable::new(1);
+        let id = table.create(
+            "transfer",
+            "Kopieren → Tresor Privat".into(),
+            Arc::default(),
+            0,
+        );
+        let record = table.get_mut(&id).unwrap();
+        record.set_message("Geheim.txt");
+        record.set_private();
+        record.set_message("Bericht 2026.pdf");
+        record.push_error(
+            "/Ordner/Bericht 2026.pdf",
+            "Bericht 2026.pdf: Zugriff verweigert",
+        );
+        record.finish(
+            TaskState::Failed,
+            Some("Bericht 2026.pdf existiert".into()),
+            None,
+            5,
+        );
+        let text = record.snapshot().to_string();
+        assert!(
+            !text.contains("Bericht") && !text.contains("Geheim"),
+            "{text}"
+        );
+        assert_eq!(record.snapshot()["message"], PRIVATE_FAILED);
+        assert_eq!(record.snapshot()["errors"][0]["message"], PRIVATE_ERROR);
+        assert_eq!(record.snapshot()["title"], "Kopieren → Tresor Privat");
+        // Other tasks keep their texts.
+        let other = table.create("transfer", "Kopieren".into(), Arc::default(), 0);
+        let record = table.get_mut(&other).unwrap();
+        record.set_message("Urlaub.jpg");
+        assert_eq!(record.snapshot()["message"], "Urlaub.jpg");
     }
 }

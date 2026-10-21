@@ -338,7 +338,11 @@ impl Runtime {
                 (TaskState::Canceled, Some(error.message), stash)
             }
             Err(error) => {
-                self.record_error(action, &error.message);
+                if ctx.names_private() {
+                    self.record_error(action, super::tasks::PRIVATE_FAILED);
+                } else {
+                    self.record_error(action, &error.message);
+                }
                 (TaskState::Failed, Some(error.message), stash)
             }
         };
@@ -396,6 +400,21 @@ impl TaskCtx {
 
     pub(crate) fn message(&self, text: &str) {
         self.update(|record| record.set_message(text));
+    }
+
+    /// U31 S2: the task touches a vault; its notification, messages, error
+    /// entries and error log entry name no file from inside it.
+    pub(crate) fn keep_names_private(&self) {
+        self.update(|record| record.set_private());
+    }
+
+    fn names_private(&self) -> bool {
+        self.hub.with(|state| {
+            state
+                .tasks
+                .get(&self.id)
+                .is_some_and(|record| record.is_private())
+        })
     }
 
     pub(crate) fn error(&self, path: &str, message: &str) {

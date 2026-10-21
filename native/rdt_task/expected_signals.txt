@@ -414,6 +414,17 @@ screen_task_android_pull_layout  linux-core:unit  pfad=screen::os::viewer_sink_t
 screen_task_android_viewer_pull_buffer_too_small  linux-core:unit  pfad=screen::os::viewer_sink_tests::screen_task_android_viewer_pull_buffer_too_small  quelle=U28
 screen_task_android_pull_stall_resets  linux-core:unit  pfad=screen::os::viewer_sink_tests::screen_task_android_pull_stall_resets  quelle=U28
 screen_task_android_sink_groups_and_tiles  linux-core:unit  pfad=screen::os::viewer_sink_tests::screen_task_android_sink_groups_and_tiles  quelle=U28
+# ---- U31 (VLT-M11, Tresore auf Android) Rust-Teil und Fern-Scanner (SEC Punkt 11, 11b) ----
+vault_task_android_unlock_cancel_discards_key  linux-core:unit  pfad=vault::os::unlock::cancel_tests::vault_task_android_unlock_cancel_discards_key  quelle=U31-S4
+vault_task_android_compare_items_pages_by_group  linux-core:unit  pfad=mobile::domains::vault_compare::tests::vault_task_android_compare_items_pages_by_group  quelle=U31-17
+vault_task_android_failed_task_text_has_no_names  linux-core:unit  pfad=mobile::domains::vault_compare::tests::vault_task_android_failed_task_text_has_no_names  quelle=U31-S2
+vault_task_android_vault_event_shape  linux-core:unit  pfad=mobile::domains::vault_compare::tests::vault_task_android_vault_event_shape  quelle=U31-17
+vault_task_android_no_plaintext_password_stored  linux-core:unit  pfad=mobile::domains::vault_keys::tests::vault_task_android_no_plaintext_password_stored  quelle=U31-S1
+vault_task_android_unlock_memory_from_app  linux-core:unit  pfad=mobile::domains::vault_keys::tests::vault_task_android_unlock_memory_from_app  quelle=U31-4,C1.3
+vault_task_android_private_task_shows_no_names  linux-core:unit  pfad=mobile::tasks::private_tests::vault_task_android_private_task_shows_no_names  quelle=U31-S2
+vault_task_android_task_title_shows_vault_label  linux-core:unit  pfad=mobile::crumbs::task_title_tests::vault_task_android_task_title_shows_vault_label  quelle=U31-S2
+drive_task_remote_scan_delivers_every_failed_path_once  linux-core:unit  pfad=rscan::imp::walk_state::tests::drive_task_remote_scan_delivers_every_failed_path_once  quelle=R15c,SEC-P11b
+drive_task_remote_scan_keeps_long_diagnostics_whole  linux-core:unit  pfad=rscan::imp::walk_state::tests::drive_task_remote_scan_keeps_long_diagnostics_whole  quelle=R15c,SEC-P11b
 
 [noch nicht umgesetzt]
 
@@ -550,7 +561,18 @@ vault_task_gui_sidebar_lock_event_clears_tab      linux-desktop:gui-harness  pak
 vault_task_gui_recovery_page_text_only            linux-desktop:gui-harness  paket=U29  quelle=T533
 
 # ---- S3 VLT-M11 (U31): android-device (T542) ----
-VaultTaskTest                                     android-device:vault-android-device  art=instr  paket=U31  quelle=T542,D3
+vault_task_android_texts_cover_codes  android-build:vault-android  art=junit  paket=U31  quelle=U31-15,U31-16
+vault_task_android_merge_assembles_choices  android-build:vault-android  art=junit  paket=U31  quelle=U31-9
+vault_task_android_create_unlock_memory_write_read  android-device:vault-android-device  art=instr  paket=U31  quelle=T542,U31-16
+vault_task_android_screen_off_locks  android-device:vault-android-device  art=instr  paket=U31  quelle=T542,U31-16
+vault_task_android_background_one_minute_locks  android-device:vault-android-device  art=instr  paket=U31  quelle=T542,U31-16
+vault_task_android_sync_conflict_compare_keep_both  android-device:vault-android-device  art=instr  paket=U31  quelle=T542,U31-16
+vault_task_android_every_bridge_method_once  android-device:vault-android-device  art=instr  paket=U31  quelle=T542,U31-16
+vault_task_android_notification_has_no_names  android-device:vault-android-device  art=instr  paket=U31  quelle=T542,U31-16
+vault_task_android_password_not_saved_state  android-device:vault-android-device  art=instr  paket=U31  quelle=T542,U31-16
+vault_task_android_unlock_wrong_password_clears_field  android-device:vault-android-device  art=instr  paket=U31  quelle=T542,U31-16
+vault_task_android_lock_returns_to_list  android-device:vault-android-device  art=instr  paket=U31  quelle=T542,U31-16
+vault_task_android_job_card_has_compare  android-device:vault-android-device  art=instr  paket=U31  quelle=T542,U31-16
 
 # ---- S3 VLT-M12 (U14): linux-core unit, linux-root vault-mount, windows-core vault-mount (T551) ----
 vault_task_sealed_spool_random_access_roundtrip   linux-core:unit  paket=U14  quelle=T551

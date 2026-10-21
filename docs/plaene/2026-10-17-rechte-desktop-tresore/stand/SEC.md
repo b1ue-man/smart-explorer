@@ -1,6 +1,6 @@
 # Stand SEC (Sicherheitsagent)
 
-Stand: 2026-10-21 (Lauf 2: Punkt 9b und 10; Punkt 8 und 9 in 27a4e153).
+Stand: 2026-10-21 (Lauf 3: Punkt 11 U31 und 11b; Lauf 2 in 35138e48 und a109515b).
 
 - Committet sind Punkt 1–3, 1b, 4, 4b und 5 (df15feb5, e6b4c24a, 25e08110, e2233d85, c87bd083, 33744c73, 99cf1d63).
 - Punkt 6 (R15c) und Punkt 7 (U23) sind im Quelltext fertig, aber nicht gebaut, nicht getestet und nicht committet.
@@ -128,6 +128,39 @@ Stand: im Quelltext fertig, nicht gebaut, nicht ausgeführt, nicht committet. `s
 - `native/installer.nsi`: Lizenzen `licenses\Rust-Crates\THIRD-PARTY-LICENSES.txt` und `licenses\OpenH264\BINARY_LICENSE.txt` mit `Delete`/`RMDir` vor `RMDir licenses`; Ende `SEC_MAIN` `se.exe desktop restart`; `Section /o "se Desktop (optional)" SEC_DESKTOP` (`desktop enable --json`, Fehler: `DetailPrint`, Meldung nur interaktiv); `/DESKTOP=1` in `.onInit` vor dem Dokany-Sprung; Deinstallation: `se.exe desktop remove` nach `taskkill` vor `--unregister`; Kontodienst nach Vorlage U24 nur, wenn `sc.exe query SmartExplorerExecAccounts` ihn findet, Rückfrage `se-remote` Vorauswahl Nein, stille Deinstallation ohne UAC (nur `DetailPrint` mit Befehl); `DeleteRegValue` für `SmartExplorerSync`, `SmartExplorerDrives` und als Rückfall `SmartExplorerDesktop`.
 - `install-linux.sh`: `umask 022`; Usage `usage: $0 [--dry-run] [--cli-only] [--with-fuse] [--with-desktop]`, `-h|--help` mit Exit 0; `--with-desktop` mit `--cli-only` → Exit 2 „se Desktop braucht die Desktop-App“; `X-KDE-Wayland-Interfaces=org_kde_plasma_window_management` im Heredoc; Reihenfolge nach H9: Programme und `.desktop` → `check_fuse` (fusermount3, setuid, `/dev/fuse`; `fuse3` nur mit `--with-fuse` über `as_root` aus den Paketquellen; jede Zeile beginnt mit `fuse3:`) → `desktop enable` (nur `--with-desktop`) → `desktop restart` (jede Installation der Desktop-App). `/etc/fuse.conf` bleibt unverändert; es gibt keine Deinstallation im Skript, also auch kein Entfernen von `fuse3`.
 
+## Punkt 11b: Fern-Scanner
+
+- `rscan/os/shared/rscan.rs`: `MAX_ERRORS_TRACKED` (500) entfernt. `walk_state.rs`: `record_failure` liefert jeden Pfad einmal (Menge `failed_seen`, erste Meldung gewinnt).
+- `walk_state.rs`: `bounded_text` kürzt nicht mehr (4096 Byte ohne Ursache: die Texte bleiben im Prozess, kein Rahmen). Der Name bleibt wegen der Aufrufer in `search.rs` (nicht meine Datei).
+- Tests im Modul `walk_state::tests`: `drive_task_remote_scan_delivers_every_failed_path_once`, `drive_task_remote_scan_keeps_long_diagnostics_whole`.
+
+## Punkt 11: U31 (VLT-M11)
+
+Stand: im Quelltext fertig, nicht gebaut, nicht getestet, nicht committet. Rust mit `rustfmt --check` leer, jede Datei unter 500 Zeilen.
+
+**Rust:**
+- `mobile/os/shared/domains/vaults.rs` (list, show, lock, lockAll, setSettings, forgetPassword, Ereignis `vault`, Konfliktmeldung), `vault_keys.rs` (detect, add, remove, unlock, create, changePassword, rememberSaved, savedSecret, syncCreate), `vault_compare.rs` (compare, check, compareItems, compareText, resolve, resolveAll, mergeApply); Registrierung in `domains/mod.rs` (Domäne `vault`, `on_init` → `install_events`).
+- `vault/os/shared/unlock.rs`: `unlock_entered_cancellable` mit `UnlockTarget` und `UnlockError::Cancelled` (Code `canceled`); `unlock_entered` ruft sie mit nie gesetztem Flag. Export in `vault/os/mod.rs`, `vault/mod.rs`.
+- S2 umgesetzt als „private Aufgabe“ statt `vault_redact`: `TaskRecord::set_private` (`mobile/core/tasks.rs`) unterdrückt Meldungen, ersetzt Fehlerpfade und den Fehlertext; `TaskCtx::keep_names_private`, Fehlerprotokoll mit `PRIVATE_FAILED` (`runtime.rs`); Titel über `crumbs::task_title` („Tresor <Bezeichnung>“) in `transfer.rs`, `import.rs`, `delete.rs`, `scan.rs`; `Loc::is_vault`. Vergleichsaufgaben: voller Text nur im Aufgabenergebnis, öffentlich „Die Aktion im Tresor ist fehlgeschlagen.“ Grund der Abweichung: ein Ersetzen bekannter Namen erfasst nicht jeden Namen.
+- `sync_run.rs::run_vault` → `vaults::notify_conflicts`: `syncProblem` mit `jobId` `vault:<job>`, Titel „Tresor-Sync: Konflikte“, Text „<n> Konflikte in <Bezeichnung>.“
+
+**Kotlin:** `api/VaultApi.kt`; `ui/vaults/{VaultsScreen (Host, Liste, Eintragen, Austragen, Frage ungespeicherte Änderungen), VaultUnlockSheet, VaultCreateScreen, VaultSettingsScreen (mit Passwortblatt), VaultCheckScreen, VaultCompareScreen, VaultCompareDetail, VaultMerge, VaultSyncSheet, VaultTexts, VaultViewModel, SecureWindow (+ NoAutofill), VaultSavedPassword}.kt`; geändert `ui/more/MoreScreen.kt` (Zeile „Tresore“), `ui/AppNav.kt` (`OpenVaultCompare`, `openJobConflicts` mit `vault:`), `core/CoreEvents.kt` (`VaultChanged`), `ui/sync/JobCards.kt` („Vergleichen“), `ui/files/FilesScreen.kt` (`SecureWindow` unter `vault://`), `AndroidManifest.xml` (`USE_BIOMETRIC`).
+
+**Abweichungen von § U31 (mit Grund):**
+1. 22 Bridge-Methoden: C7.5 (19, mit `vault.show`), `vault.compareItems` (U31-17), `vault.rememberSaved`, `vault.savedSecret` (S1).
+2. `vault.compareItems {list, revision, group?, offset?, limit?}` → `{items, nextOffset, total}` statt `{job, group, offset}`: die Revision erkennt einen veralteten Vergleich, `list` deckt auch die Prüfung ab (`check:<site>`); ohne `limit` alle Einträge (keine Grenze ohne Ursache). `vault.check` liefert `list` und `revision`.
+3. `vault.compareText` liefert zusätzlich `rows` (aus `crate::linemerge`, mit dessen Frist), `crlf`, `finalNewline`; die App rechnet keinen Unterschied selbst.
+4. Zusammenführen nicht über `MergeScreen`, sondern `VaultMerge.kt` (Zeilen A/B wählen): `MergeScreen` arbeitet auf `sync.mergeRows` allgemeiner Jobs und darf den Tresor nicht berühren. S7 ist damit ohne Textfeld erfüllt (kein auswählbarer Klartext).
+5. Tresor-Sync anlegen über `VaultSyncSheet` (Kopie, Ordner, anderer Ort desselben Tresors; Richtung) statt einer Ortsart „Tresor“ im Job-Editor: Tresor-Jobs haben feste Werte (C5) und laufen nur über `vault.syncCreate`.
+6. `OpenVaultCompare` öffnet im Reiter „Mehr“ (nicht „Sync“): `SyncScreen.kt` liegt nicht in meinem Bereich, die Tresor-Seiten liegen unter „Mehr → Tresore“.
+7. Benachrichtigung (U31-13) über den bestehenden Weg `syncProblem` → `Notifications.syncProblem` mit Job-ID `vault:<job>`; `AppNav` leitet sie auf den Vergleich. `Notifications.kt`/`HostMonitor.kt` bleiben unverändert (nicht mein Bereich).
+8. Nicht umgesetzt, weil der Kern die Angabe nicht liefert: Prüfsummen-Kürzel im Detail (`SideState` ohne Hash), „<n> zurückgestellt“ auf der Jobkarte (`SyncJob` ohne Zählung), Name des Sicherungsordners (Zeile zeigt „Sicherung: vault-removed“), Sperren der Prüfaktion bei belegter Paarsperre.
+9. Bildvorschau und „Öffnen (A)/(B)“ über Provider-URIs `vault:<site>/<pfad>`: nur, wenn der Tresor unter „Ordner für Apps bereitstellen“ freigegeben und entsperrt ist; sonst „Keine Vorschau“ bzw. Hinweis.
+10. `VaultsScreen.kt` hat 382 Zeilen (Vorgabe ≤ 350), weil Host, Eintragen, Austragen und die C3.3-Frage dort liegen.
+11. S4 ohne Feld `UnlockOptions.cancel`: `daemon/os/shared/ipc_vault.rs` baut `UnlockOptions` mit Feldliteral und liegt nicht in meinem Bereich; daher die zusätzliche Funktion.
+12. S8 (offene Datei hält die Hintergrundsperre auf) nicht umgesetzt: braucht `vault/core/lock_policy.rs` (`SiteClock.open_files`, `due`) und `vault/os/shared/session_timer.rs`; mein Bereich in `N/vault/**` umfasst nur den Abbruch.
+13. Fehlerart für S1-Ablehnungen `invalid` (statt `invalid_argument`).
+
 ## Nächster Schritt
 
-Bericht zu Punkt 9b und 10; danach U31 (Punkt 11) nach U28 per Nachricht.
+Bericht zu Punkt 11 und 11b; danach auf den nächsten Auftrag warten.
