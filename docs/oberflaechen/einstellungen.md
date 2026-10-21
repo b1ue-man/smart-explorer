@@ -21,6 +21,7 @@ Abkürzungen: `N/` = `native/src/`, `A/` = `android/app/src/main/java/app/smarte
 | Gegenstand | Nur in | Grund |
 |---|---|---|
 | Darstellung der GUI (Farbschema, kompakte Zeilen, Zusatzspalten, Filterleiste/Zusammenfassung ein, versteckte Dateien, Ordner zuerst, Bildvorschau, Medienbetrachter) | Desktop-GUI bzw. Android-GUI | Gegenstück zur Terminal-Verbindung: wirkt nur auf die Darstellung der jeweiligen GUI. Die CLI hat keine Dateiliste, deren Darstellung sie einstellen könnte. Desktop und Android haben verschiedene Darstellungsmodelle: Desktop „Ordner zuerst“ je Ort (`N/app/core/state.rs:71-72`), versteckte Dateien als Filter der Filterleiste (`N/app/core/filterbar.rs:238`); Android global (`A/prefs/AppPrefs.kt:25-30`) |
+| Tempo, Parallelität und Engpass einer Übertragung (`se cp`, Übertragungsfenster, MCP-Felder `rate_bps`, `limiter`, `limiter_text`, `segments`) | alle Oberflächen | keine Einstellung für Tempo, Parallelität oder Engpass; gemessen geregelt (E13, `docs/TRANSFER_ENGINE.md`) |
 | Terminal-Bedienung (`se completions`, `se shell`, Escape-Zeichen) | CLI | Terminal-Verbindung selbst (Nutzerausnahme) |
 | `se mcp` (Server für KI-Agenten) | CLI | Wird vom Agenten als Kindprozess gestartet; Einrichtung über `se plugin`, die nach dem Stapel auch die Desktop-GUI bietet |
 | Laufwerke: Windows und Linux; Android: Dokumentanbieter (Plattformgrund) | CLI und Desktop unter Windows und Linux; Android nur über den Dokumentanbieter | Windows-Laufwerksbuchstaben (`--letter`) gibt es nur unter Windows, Einhängeorte (`--mount-point`) nur unter Linux (`N/cli/drive.rs:159-167`); Android hat keine Laufwerke und keine CLI (`N/lib.rs`) und stellt Ordner über den Dokumentanbieter bereit (`docs/oberflaechen/laufwerke.md`, Abschnitt 7) |
@@ -178,6 +179,22 @@ Ausgeliefert in v0.5.182 am 2026-10-16 (Nachweis: Suite `luecken-task.yml`, Lauf
 |---|---|---|---|---|
 | Kontextmenü (Windows) | `se integration context-menu [on\|off] [--json]`; registriert die App neben `se`, nie `se` selbst (`N/cli/integration.rs:53-75`, `N/shell_register/os/windows.rs` `set_context_menu_for`, Adapter `N/cli/os/{windows,linux_os}.rs`) | = | Ausnahme | geschlossen |
 | KI-Agenten-Plugin | = (`se plugin`) | neu: „Einstellungen → Integration → KI-Agenten“ mit Status je Host, Installieren (alle/Claude Code/Codex), Entfernen, Konfiguration für andere Clients; führt das installierte `se` aus (`N/app/core/settings_ai_plugin.rs:93-113`, `:189-266`, Pfad `N/updater/mod.rs` `installed_cli_path`) | Ausnahme (kein `se` auf Android) | geschlossen |
+
+### Tresore (ab 0.5.183)
+
+Die Tresor-Einstellungen gehören zu jedem Tresor. Vollständige Matrix und Belege: `docs/oberflaechen/tresore.md`.
+
+| Einstellung | CLI | Desktop | Android | Beleg |
+|---|---|---|---|---|
+| Name (Bezeichnung) | `se vault settings SITE --label NAME` | Eigenschaften → Allgemein | Tresor-Einstellungen | `N/cli/vault.rs:76`; `N/mobile/os/shared/domains/vaults.rs:28`; `A/ui/vaults/VaultSettingsScreen.kt:69` |
+| Leerlauf-Sperre | `--auto-lock-idle-min N\|off` | Eigenschaften → Sperren | Tresor-Einstellungen | `N/cli/vault/manage.rs:100`; `N/vault/core/lock_policy.rs:10-13` (Vorgabe 30 Minuten, wenn eingeschaltet) |
+| Sperre bei Ruhezustand | `--lock-on-sleep` | Eigenschaften → Sperren (Windows und Linux) | Ausnahme: Android meldet keinen Ruhezustand | `N/cli/vault/manage.rs:102`; `N/vault/os/android.rs:20-26` |
+| Sperre bei Bildschirmsperre | `--lock-on-screen-lock` | Eigenschaften → Sperren (Windows und Linux) | Tresor-Einstellungen (Bildschirm aus) | `N/cli/vault/output.rs:183`; `N/vault/os/windows.rs:9-18`; `N/vault/os/linux_os.rs:38-39` |
+| Sperre im Hintergrund | `--lock-on-background-min 0\|1\|2\|5\|10\|off` (0 = sofort) | Ausnahme: Desktop kennt keinen Hintergrund | Tresor-Einstellungen | `N/vault/core/lock_policy.rs:14-19`; `N/cli/vault/output.rs:184` |
+| Passwort merken | `--remember-password` (nur aus; Merken geschieht mit `unlock --remember true`) | Kontrollkästchen „Passwort merken“; Eigenschaften | Schalter; nur mit Displaysperre | `N/cli/vault/manage.rs:113`; `A/ui/vaults/VaultSavedPassword.kt:158` |
+| Beim Öffnen einhängen | Ausnahme: keine CLI-Option belegt | Eigenschaften → Laufwerk, Kontrollkästchen „Beim Öffnen einhängen“ | Ausnahme: kein Laufwerk auf Android | `N/app/core/vault_settings_pages_ui.rs:219`; `N/app/core/vault_ui_settings.rs:1-4` (Datei `<app data>/vaults/ui.json`) |
+| Tresor-Sync (Ziel, Zeitplan, Übertragung) | `se vault sync add` (`--with`, `--name`) | „Synchronisieren…“ | „Synchronisieren“ | `N/cli/vault.rs:80`; `N/cli/vault/sync.rs:66`; `N/app/core/vault_sync_editor_ui.rs:41`; `A/ui/vaults/VaultSyncSheet.kt:43` |
+| Wiederherstellungsschlüssel | nicht angeboten | Informationstext | Informationstext | `N/vault/os/shared/manage.rs:27` |
 
 ### Offene Punkte nach dem Stapel
 

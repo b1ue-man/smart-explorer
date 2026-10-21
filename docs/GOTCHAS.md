@@ -575,6 +575,117 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
 - **Old peers close with `session_limit`.** The host sends no session-count refusal any more
   (R15c); the viewer still maps `session_limit` for older hosts (`native/src/screen/core/wire_hello.rs:273`).
 
+## Cryptomator vaults (0.5.183)
+
+- **Vault comparison lives in memory, in the service only.** One entry per vault job and
+  per checked site; it is never written to disk (`native/src/vault/os/shared/compare_cache.rs:2`).
+  A restarted service answers `compare_stale`.
+- **Merge limits.** A text merge is offered only up to 512 KiB (`native/src/vault/os/shared/compare_merge.rs:26`);
+  one line of the service carries at most 2 MiB after JSON escaping (`compare_merge.rs:23`).
+- **Removed cipher files stay in a backup folder.** Repairs and removals first move the
+  cipher files to `<app data>/vault-removed/` (`native/src/vault/os/shared/health_fixes.rs:4`,
+  `compare_files.rs:6`).
+- **Vault folder listings are cached for 20 seconds** (`native/src/vault/os/shared/dir_cache.rs:7`).
+  Vault backends are not wrapped in `CachingBackend`: that wrapper appears only for remote backends (`native/src/mobile/os/shared/pool.rs:2`); the vault path uses its own listing cache (Stand U29).
+- **The window setting is a separate file.** „Beim Öffnen einhängen“ is stored for all
+  sites in `<app data>/vaults/ui.json` as `{"schema":1,"mount_on_open":true}`; a missing or
+  unreadable file means `true` (`native/src/app/core/vault_ui_settings.rs:1-4`).
+- **Sleep and screen-lock signals depend on the platform.** Linux locks on the screen-lock
+  signal only when the desktop environment reports the session lock (`native/src/vault/os/linux_os.rs:38-39`).
+  Windows listens with a hidden window; assumption A1 (the message reaches that window)
+  is not verified (`native/src/vault/os/windows.rs:9-18`).
+- **An open file holds the background lock.** While a vault file is open, the background
+  delay does not lock that site; closing the last file lets the next tick lock it
+  (`native/src/vault/os/shared/session_timer.rs:59-72`).
+- **Freedesktop thumbnails are removed on Linux.** At the end of a drive and on lock, the
+  worker removes thumbnails of files in the drive folder (`native/src/vault/os/linux_thumbnails.rs:44`).
+  Windows thumbnails can only be switched off globally (Stand U14).
+- **The Android saved password is an envelope.** The core stores `android-kw1:` followed by
+  Base64url of IV, ciphertext and tag, bound to the site with AAD; a changed lock screen
+  invalidates it (`native/src/mobile/os/shared/domains/vault_keys.rs:26`;
+  `android/app/src/main/java/app/smartexplorer/android/ui/vaults/VaultSavedPassword.kt:158-161`).
+- **Cancelling key derivation discards the key.** The unlock returns `canceled` and does
+  not register the vault (`native/src/vault/os/shared/unlock.rs:59`).
+- **Android vault screens are protected by a flag and by the input method.** `FLAG_SECURE`
+  is set per window through `SecureWindow` and on the sheets with `SecureOn`
+  (`android/app/src/main/java/app/smartexplorer/android/ui/vaults/SecureWindow.kt:16`); the password
+  fields exclude autofill (`NoAutofill`, `VaultUnlockSheet.kt:163`).
+- **Preview images need an open provider path.** The comparison detail decodes with `inSampleSize`
+  from the content URI of the own provider (`VaultCompareDetail.kt:66-70`). A preview is offered only
+  while the vault is unlocked and shared under „Ordner für Apps bereitstellen“; otherwise it shows
+  „Keine Vorschau“ (Abweichung 9 of U31, Stand SEC point 11).
+- **Password minimum is 8 characters** (`native/src/vault/os/shared/password.rs:29`).
+- **Recovery keys are not supported.** The core shows the note instead of a word list
+  (`native/src/vault/os/shared/manage.rs:27`).
+- **Vault sync jobs have fixed and selectable fields.** A replica is placed next to the vault
+  for a stated reason; the seeding rule is one rule; K20 and K21 stay withheld without a known
+  site; a file of the same size in the same second without a server hash is a known gap, covered
+  by a test (Stand U20).
+- **Fallback copies are sealed.** The recovery manifest of fallback copies seals its field texts
+  with the site's log key (`native/src/app/os/shared/remote_helpers/recovery_manifest.rs:49-56`).
+- **Carried over from U05 (not re-verified in this run):** the scrypt work buffer, the
+  CMAC subkeys in AES-SIV and decrypted names held as `String` are not overwritten after use
+  (plan hand-over from U05). `zeroize` is used in `cryptomator/core/keys.rs` and `kdf.rs`.
+
+## Transfer engine tempo (0.5.183)
+
+- **Single files do not stop a run.** A failed file is reported and the run continues; the
+  exit code is 1 when any file failed (Stand U49, `native/src/cli/engine_copy.rs`).
+- **Numbering at a remote target is an error.** The engine reports it instead of renaming
+  (Stand U49).
+- **Windows access prompts are not asked by the engine.** A local source for which the
+  access gate would ask for read rights stays on the legacy path (`access_prompt_possible`);
+  the engine never asks in the terminal or in the MCP service (Stand U49).
+- **Sensors fail quietly.** Each read error of a system sensor is `None`; Android does not read
+  `/proc/stat` (assumption, Stand U50, `native/src/transfer/os/shared/sensors.rs`).
+- **The hints file holds only hashes.** `transfer-hints.json` keeps the SHA-256 of a random salt
+  and the connection identity, never a host, account, path or name; it is `0600` in a `0700`
+  folder (`native/src/transfer/os/shared/hints.rs:1-12`).
+- **Packages are not in the time accounts yet.** Packets do not book their time (Stand U50).
+- **The memory budget never revokes.** A buffer held by an operation stays reserved when the
+  budget shrinks (`native/src/transfer/os/shared/memory.rs`).
+- **`NO_BUFFERING` needs a known memory figure.** Without the available memory the flag is
+  never set; with it, a file of at least a quarter of that memory is copied without the system
+  cache (`native/src/copy/os/shared/copy_flags.rs:25`, `:47-58`).
+- **Windows compressed traffic stays off.** `REQUEST_COMPRESSED_TRAFFIC` is switched off
+  (`native/src/copy/os/shared/copy_flags.rs:19`, E13-S11).
+- **Parallel ranges need a quiet, known drive.** They run only with permits the flow handed out,
+  an empty queue and a drive known not to rotate; an unknown rotation (btrfs, network, `/sys`
+  unreadable) never runs them in parallel (Stand U51, `native/src/copy/os/linux_range.rs`).
+- **Clipboard copies run in parallel.** Providing remote files for other programs loads folder
+  files under the job id `CLIPBOARD_JOB` (`native/src/transfer/os/shared/clipboard_parallel.rs:19`).
+- **MD5 runs in its own thread per copy.** The sync hash starts one thread per copy from 1 MiB;
+  creation errors stay inline (Stand U52, `StreamHasher`).
+- **WebDAV sync uploads save one PROPFIND.** The stage time is not asked again after the stage
+  has been checked (`native/src/webdav/core/extensions.rs`, Stand U52).
+- **SMB compounds must not follow reparse points.** `read_file_compound*` follows them, so the
+  engine sends its own requests; a data reparse point (dedup) is read through the single path
+  (Stand U46).
+- **FTP has no command pipelining.** STOR and RETR leave before the TCP connection of the data
+  channel is set up (suppaftp); the next command waits for the reply to the previous one, as
+  RFC 959 requires (`native/src/ftp/core/data_overlap_server.rs`).
+- **Packet streams read with their own loop.** `read_exact` retries `Interrupted`; packet
+  readers therefore use their own loop (Stand U46).
+- **Parts are sparse files.** A part sets the file length first (`set_len`) and seeks to the
+  written position on resume (`native/src/transfer/os/shared/engine/download.rs:73`, `:84`).
+- **SFTP encryption order.** AES-GCM comes first only when the CPU offers AES instructions
+  through `ring`; otherwise ChaCha20 stays first (`native/src/sftp/core/session.rs:341-342`).
+- **SFTP range writes need a safe folder chain.** The folder chain from the stage to `/` must
+  belong to the account or to root and be closed to group and others (or sticky and root);
+  `is_regular()` of `russh-sftp` tests a single bit and takes links for regular files, so the
+  engine checks the file type itself (Sicherheitsantwort S7, Stand U48).
+- **FTP stage probe is skipped only for random names.** It is skipped only for names
+  `.se-upload-<16 hex>` made by `getrandom`; the fallback value of `random_hex` starts with `w`,
+  which is not a hex digit and so never looks random (`native/src/transfer/os/shared/engine/util.rs:28-36`).
+- **The Share host removes unfinished range stages** at the end of the connection, after 300 s
+  without progress and at the next start; an agent range stage stays on the channel that opened it
+  (Stand U53).
+- **`SE_SHARE_QUIC_CC` and `SE_TEST_NO_LZ4` are measuring switches**, not settings
+  (`native/src/share/core/keepalive.rs:105`).
+- **SFTP open files per channel are capped at 64.** The window of a batch uses
+  `min(open-handles, 64)`; an OPEN with a plain failure status counts as congestion, a specific
+  status as a file error (Sicherheitsantwort E13-S13, `native/src/sftp/core/batch_ops.rs:52`).
+
 ## Share / local network
 
 - Google Drive allows several same-name siblings. `GDriveBackend::list_dir`

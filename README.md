@@ -270,6 +270,25 @@ Annahme und lädt OpenH264 2.6.0 von `ciscobinary.openh264.org`; Größe und SHA
 Lizenztext zeigt `se screen codec licenses`; die Quelle ist `third-party/openh264/BINARY_LICENSE.txt`,
 der Installer legt sie unter `licenses\OpenH264\` ab.
 
+**Cryptomator-Tresore (ab 0.5.183):** Smart Explorer öffnet Cryptomator-Tresore im Format 8
+und legt neue an. `se vault add` trägt einen vorhandenen Tresor ein, `se vault create` legt
+einen an (Passwort mit mindestens 8 Zeichen), `se vault unlock` und `se vault lock` entsperren
+und sperren; `lock --all` sperrt alle. Der Zugriff auf Dateien läuft über `vault://<SITE>/<pfad>`
+in `ls`, `cat`, `cp`, `mv` und den übrigen Befehlen; in der Desktop-App öffnet sich eine Tresordatei
+in ihrem Laufwerk; ist es nicht eingehängt, bindet die App es ein, wenn „Beim Öffnen einhängen“
+an ist (Standard). Ein Tresor sperrt sich ausdrücklich, bei Leerlauf (einschaltbar; eingeschaltet
+sind 30 Minuten Vorgabe), bei Ruhezustand und
+Bildschirmsperre (Windows und Linux, unter Linux nur wenn die Desktopumgebung die Sperre meldet)
+sowie auf dem Telefon bei ausgeschaltetem Bildschirm und nach einer einstellbaren Zeit im
+Hintergrund; eine offene Datei hält die Hintergrundsperre auf. Wiederherstellungsschlüssel
+zeigt und akzeptiert Smart Explorer nicht (die Wortliste ist nicht frei lizenziert); dafür
+bleibt der Tresor mit Cryptomator Desktop vollständig kompatibel. Tresor-Sync richten
+`se vault sync add` und `se vault sync run` ein; `se vault compare` und `se vault resolve` zeigen
+und lösen Unterschiede, `se vault check` prüft die Struktur. Klartextnamen erscheinen nicht in
+Fehlerprotokollen und Benachrichtigungen. Auf dem Telefon sind die Tresorbildschirme gegen
+Bildschirmfotos geschützt, und ein gespeichertes Passwort gibt es nur mit Displaysperre. Die
+Oberflächen und Belege stehen in [`docs/oberflaechen/tresore.md`](docs/oberflaechen/tresore.md).
+
 
 **Verifikation des Quellstands (2026-09-08):** Der Kandidat
 `0bfdc0665ba746493304030dc18e89bde11e36d6` wurde in der
@@ -602,6 +621,18 @@ verhindert automatische Bereinigung; die Löschlimits gelten auch für Duplikate
 Drive-Paare benötigen dafür derzeit einen vollständigen Vergleich, was zusätzliche
 Ordnerabfragen verursacht. Abnahme und Veröffentlichungsstand:
 [Sync-Duplikate](docs/DRIVE_SYNC_DUPLICATES_REPAIR.md).
+
+**Übertragungstempo (ab 0.5.183):** Die Übertragungs-Engine misst jede Verbindung und regelt
+die Zahl gleichzeitiger Operationen selbst; eine Einstellung dafür gibt es nicht. Die Grenze wird
+schrittweise erhöht, solange sie sich lohnt, und halbiert, sobald der Server oder die Leitung
+Überlast meldet. Die Startgrenze ist die halbe zuletzt gelernte Grenze, mindestens 2; sie steht
+in `transfer-hints.json` und enthält keine Namen. Dateien ab 16 MiB laufen in Teilen ab 8 MiB;
+Share und SSH-Agent komprimieren Dateiinhalte mit LZ4, wenn die Leitung der Engpass ist. Lokale
+Kopien unter Windows nutzen für große Dateien `NO_BUFFERING`, sobald die Datei mindestens ein
+Viertel des verfügbaren Speichers groß ist. `se cp --stats` schreibt nach dem Lauf Rate und
+Engpass auf die Fehlerausgabe; der Engpass heißt zum Beispiel „Begrenzt durch das Laufwerk
+<Name>“, „Begrenzt durch Leitung oder Server <Name>“ oder „Begrenzt durch Smart Explorer
+(Rechenzeit)“. Die Regeln und Zahlen stehen in [`docs/TRANSFER_ENGINE.md`](docs/TRANSFER_ENGINE.md).
 
 **Lokale Windows-Speicheranalyse (ab 0.5.153):**
 Geschützte Ordner werden bei vorhandenen Sicherungsleserechten über einen
