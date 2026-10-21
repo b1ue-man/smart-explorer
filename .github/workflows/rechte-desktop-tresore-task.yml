@@ -638,6 +638,19 @@ jobs:
 
       # Dokany: the stages install it only from SE_TASK_DOKANY_MSI with a matching
       # SE_TASK_DOKANY_MSI_SHA256; without both, the Dokany entries are "not run".
+      # The pin is the installer's (native/dokany-runtime.nsh); the stage checks the hash.
+      - name: Fetch the pinned Dokany MSI
+        shell: bash
+        run: |
+          pin() { tr -d '\r' < native/dokany-runtime.nsh | sed -n "s/^!define $1 \"\(.*\)\"$/\1/p"; }
+          url=$(pin DOKANY_MSI_URL); sha=$(pin DOKANY_MSI_SHA256); msi="$RUNNER_TEMP/$(pin DOKANY_MSI_FILENAME)"
+          if [ -n "$url" ] && [ -n "$sha" ] && curl -fsSL --retry 3 -o "$msi" "$url"; then
+            echo "SE_TASK_DOKANY_MSI=$msi" >> "$GITHUB_ENV"
+            echo "SE_TASK_DOKANY_MSI_SHA256=$sha" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Dokany MSI not fetched; the Dokany entries stay not run"
+          fi
+
       - name: Run the one task entrypoint
         shell: bash
         timeout-minutes: 350
