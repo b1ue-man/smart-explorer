@@ -204,7 +204,13 @@ impl MountManager {
             entry.control.clone()
         };
         if let Some(control) = control {
-            let _ = control.send(());
+            // Never wait here. The channel holds one stop, and a full channel
+            // already carries it. Its reader is the control thread of the
+            // host, which can be the caller itself (`ipc.rs`,
+            // `serve_mount_control` stops the drive when the host closes the
+            // connection): a blocking send would wait for a thread that is
+            // not reading, with the lifecycle lock held.
+            let _ = control.try_send(());
         }
 
         let deadline = Instant::now() + STOP_GRACE;
@@ -397,7 +403,12 @@ impl MountManager {
             })
             .unwrap_or_default();
         for id in ids {
-            let _ = self.stop(&id);
+            // The worker log names the drive a stop waits for, and why one
+            // did not end cleanly.
+            super::state::log(&format!("daemon stop: ending drive {id}"));
+            if let Err(error) = self.stop(&id) {
+                super::state::log(&format!("daemon stop: drive {id} did not end: {error}"));
+            }
         }
     }
 

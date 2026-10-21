@@ -1,4 +1,5 @@
 use crate::mount::{MountRecovery, MountSnapshot, MountStatus};
+use crate::vfs::BackendHandle;
 
 use super::restore::Retention;
 use super::MountEntry;
@@ -241,8 +242,23 @@ pub(super) fn clear_backend_runtime(entry: &mut MountEntry) {
     if entry.backend_stream_active {
         return;
     }
-    entry.backend = None;
+    retire_backend(entry.backend.take());
     entry.capabilities = None;
+}
+
+/// Ends the last reference of a drive's backend away from the drive table.
+/// Closing a remote session can wait for the network or for a thread of its
+/// own, and every drive operation of the worker and its IPC admission lock the
+/// table: one backend that cannot close must not stop them all. A thread that
+/// cannot start leaves the drop to the caller. The thread is named, so a
+/// backend that does not close shows in a thread listing.
+fn retire_backend(backend: Option<BackendHandle>) {
+    let Some(backend) = backend else {
+        return;
+    };
+    let _ = std::thread::Builder::new()
+        .name("backend-retire".into())
+        .spawn(move || drop(backend));
 }
 
 pub(super) fn removable(entry: &MountEntry) -> bool {
