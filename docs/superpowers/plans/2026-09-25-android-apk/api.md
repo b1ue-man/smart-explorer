@@ -99,10 +99,25 @@ Filter    {text, mode:"substring|glob|regex", extensions:String, sizeMin:Long?, 
 Sort      {key:"name|size|mtime|type", desc:Boolean, dirsFirst:Boolean}
 Task      {id, kind, title, state:"queued|running|done|failed|canceled", doneBytes:Long,
            totalBytes:Long, doneItems:Long, totalItems:Long, rateBps:Long, message:String?,
-           errors:[{path, message}], result:Json?, startedMs:Long, finishedMs:Long?}
+           errors:[{path, message}], result:Json?, startedMs:Long, finishedMs:Long?,
+           limiter:String, limiterText:String?}
 ```
 `Task.kind` ∈ `transfer, delete, scan, properties, open, upload, materialize, extract, index,
 sync, mirror, analyze, reclaim, trash, oauth, share, exec, update`.
+
+`limiter` nennt den Engpass einer Übertragung (Quelle `native/src/transfer/core/limiter.rs`, Feld in
+`native/src/mobile/core/tasks.rs`, geschrieben aus `native/src/mobile/os/shared/drive.rs`): `none` (noch kein
+Urteil oder nichts gemessen), `ramp` (die Parallelität wächst noch), `idle` (der Bedarf füllt die Grenze nicht: die
+Quelle liefert zu langsam), `source` und `target` (lokales Laufwerk), `remote` (Verbindung oder Server der
+Gegenseite), `link` (die Leitung ist voll), `se_cpu` (alle Kerne belegt durch Smart Explorer), `se_thread` (ein
+Faden rechnet, freie Kerne vorhanden), `memory` (wartet auf das Speicherbudget). Aufgaben ohne Übertragung
+bleiben bei `none`. `limiterText` ist der Text dazu; `null`, wenn kein Text vorliegt. Bei einer privaten Aufgabe auf `vault://` (§4.13) ersetzt der Kern den Text: `source` und `target` heißen
+„Begrenzt durch das Laufwerk“, `remote` heißt „Begrenzt durch Leitung oder Server“; ohne Namen des Laufwerks oder der
+Gegenstelle. Andere Engpässe behalten den Text des Motors (`drive.rs`, `limiter_text_with`). Die Android-App liest
+beide Felder in `core/Dtos.kt` (Klasse `TaskInfo`) und zeigt den Text in der Übertragungsleiste (`ui/transfers/TransfersBar.kt`).
+
+Gesetzt wird der Wert bei jedem Fortschrittsbericht einer Übertragung (`drive.rs`, `report_transfer`); der Kern setzt ihn
+beim Ende nicht zurück (im Quelltext nicht gefunden: nur `report_transfer` ruft `ctx.limiter` auf).
 
 ## 3 Tasks und Ereignisse
 
@@ -151,10 +166,18 @@ den Vergleich des Tresors statt der Jobkonflikte (`AppNav`, `NavRequest.OpenVaul
 Navigationsarten (Android-Intent `ACTION_NAVIGATE` mit Extras `kind`, `value`, `token`; kein Aufruf der
 Brücke; Kotlin `ui/AppNav.kt`, Funktion `decode`): `openLocation`, `selectTab`, `showTransfers`,
 `openJobConflicts` (Wert `vault:<job>` → Tresor-Vergleich), `showShareRequests`, `showUpdate`,
-`showBackgroundSettings`, `openScreen`, `showScreenGrid`, `openVaultCompare`, `showLauncherSettings` (ohne
-Wert; öffnet im Reiter „Mehr“ die Einstellungen des Launchers, `MoreScreen.kt`). Unbekannte Art oder fehlender
-Wert, wo einer nötig ist: keine Navigation. Der Intent trägt nur dann eine Anfrage, wenn sein Token dem der
-Installation entspricht (`fromIntent`).
+`showBackgroundSettings`, `openScreen`, `showScreenGrid`, `openVaultCompare`, `showLauncherSettings`.
+Unbekannte Art oder fehlender Wert, wo einer nötig ist: keine Navigation. Der Intent trägt nur dann eine Anfrage,
+wenn sein Token dem der Installation entspricht (`fromIntent`).
+- `openLocation` (Wert: ein Ort in der Form von §2 `location`) öffnet den Reiter „Dateien“ an diesem Ort.
+- `openScreen` (Wert: Ziel-JSON `{"relation":"direct|room","relation_id","device_id","source","control"}`; bei
+  `room` ist `device_id` Pflicht) öffnet den Reiter „Teilen“ mit dem Bildschirm. Das Ziel prüft
+  `ScreenTargetJson.parse` (`ui/screen/ScreenTarget.kt`); ein ungültiger Wert wird nicht geöffnet. Der Schlüssel
+  heißt `relation_id` und `device_id` (snake_case), nicht camelCase.
+- `showScreenGrid` (Wert: Raum-ID oder leer) öffnet den Reiter „Teilen“ mit der Bildschirmübersicht, für einen Raum
+  nur mit dessen Kennung.
+- `showLauncherSettings` (ohne Wert) öffnet den Reiter „Mehr“ mit dem Abschnitt Launcher (`MoreScreen.kt`,
+  `SettingsFocus.Launcher`).
 
 ## 4 Methoden
 
