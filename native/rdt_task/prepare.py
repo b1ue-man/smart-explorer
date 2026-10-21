@@ -61,7 +61,10 @@ STALE_PATTERNS = (
     (re.compile(r"needs release", re.I), "needs release"),
     (re.compile(r"prefetch next", re.I), "prefetch next"),
     (re.compile(r"Current release"), "Current release"),
-    (re.compile(r"nur unter Windows", re.I), "nur unter Windows (DRV-M9)"),
+    # DRV-M9: the stale claim is that drives exist only on Windows. Lines without drives (Explorer
+    # functions quoted from the program) and drive letters, which are Windows-only, are not that claim.
+    (re.compile(r"^(?=.*Laufwerk)(?!.*(?:Laufwerksbuchstabe|--letter)).*nur unter Windows", re.I),
+     "nur unter Windows (DRV-M9)"),
 )
 STALE_EXCLUDED = ("docs/plaene/", "docs/lesungen/", "docs/refs/", "docs/cfapi_review/", "docs/sync_research/",
                   "docs/vfs_research/", "docs/SESSION_STATE.md")
