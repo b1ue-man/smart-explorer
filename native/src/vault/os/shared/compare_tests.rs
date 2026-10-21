@@ -300,10 +300,14 @@ fn vault_task_compare_merge_limit_refused() {
     let fx = Fx::new();
     let big_a = vec![b'a'; 600 * 1024];
     let big_b = vec![b'b'; 600 * 1024];
+    // Equal sizes: the sync tells the sides apart by their times, so a
+    // pause separates every pair of writes.
     tick();
     fx.write(&fx.root_a, "/gross.txt", &big_a);
+    tick();
     fx.write(&fx.root_b, "/gross.txt", &big_b);
     fx.write(&fx.root_a, "/klein.txt", b"von A");
+    tick();
     fx.write(&fx.root_b, "/klein.txt", b"von B");
     let view = fx.compare(&[CompareGroup::Conflict]);
     let large = item(&view, "/gross.txt");

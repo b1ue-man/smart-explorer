@@ -36,8 +36,8 @@ fn vault_task_copy_spool_sealed_when_vault_involved() {
     // Copies between backends: a vault side seals the spool, others do not.
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().to_string_lossy().replace('\\', "/");
-    std::fs::create_dir_all(dir.path().join("data")).unwrap();
-    std::fs::write(dir.path().join("data/quelle.txt"), &content).unwrap();
+    // `/data` of a fake remote is the folder it is made on.
+    std::fs::write(dir.path().join("quelle.txt"), &content).unwrap();
     let vault_view = FakeRemote::new(dir.path(), "tresor").with_scheme(Scheme::Vault);
     let local = LocalBackend::new("/");
     let before = sealed_spools();
