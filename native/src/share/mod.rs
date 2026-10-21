@@ -493,3 +493,14 @@ mod peer_watch;
 mod storage_duplicate_host;
 #[path = "os/shared/storage_roots.rs"]
 mod storage_roots;
+#[path = "core/quic_stats.rs"]
+mod quic_stats;
+#[path = "core/quic_stats_hub.rs"]
+mod quic_stats_hub;
+#[path = "core/quic_stats_proc.rs"]
+mod quic_stats_proc;
+#[cfg(test)]
+#[path = "core/quic_stats_tests.rs"]
+mod quic_stats_tests;
+#[path = "core/transfer_meter.rs"]
+mod transfer_meter;

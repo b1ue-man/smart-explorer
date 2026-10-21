@@ -8,6 +8,8 @@ use super::core::eio;
 use super::framing::lz4_stream::{classify, Content};
 use super::framing::{recv_content_frame, TAG_DATA_LZ4};
 use super::io_deadline;
+use super::quic_stats_hub::track_client;
+use super::transfer_meter as stats;
 
 const PEER_ABORT_CODE: VarInt = VarInt::from_u32(1);
 
@@ -20,6 +22,8 @@ pub(super) fn reader(
     session_key: String,
     generation: usize,
 ) -> Box<dyn Read + Send> {
+    track_client(&node, &session_key);
+    stats::stream_started();
     Box::new(PeerReader {
         node,
         recv,
@@ -60,10 +64,13 @@ impl Read for PeerReader {
             return Ok(0);
         }
         while self.pos >= self.buf.len() {
+            // Waiting for the next frame is waiting for the network.
+            let waiting = stats::Timer::start();
             let frame = self.node.block_on(io_deadline::run(
                 "peer read data",
                 recv_content_frame(&mut self.recv, self.lz4),
             ));
+            waiting.stop(stats::Phase::NetWait);
             let (tag, payload) = match frame {
                 Ok(frame) => frame,
                 Err(error) => {

@@ -26,6 +26,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
+#[path = "share_stats.rs"]
+pub mod share_stats;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Way {
     Sftp,
@@ -255,6 +258,8 @@ fn connect_agent() -> Result<Remote, String> {
 fn connect_share(endpoint_var: &str, dir_var: &str) -> Result<Remote, String> {
     let endpoint = need(endpoint_var, "Share-Gerätepaar der Stufe")?;
     let dir = need(dir_var, "Exportordner des Wirts")?;
+    // What the two devices write from here on belongs to this case.
+    share_stats::mark();
     let (backend, root) = smart_explorer::connect::resolve_endpoint(&endpoint)?;
     Ok(Remote {
         way: Way::Share,

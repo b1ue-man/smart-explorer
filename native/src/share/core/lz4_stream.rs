@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 use crate::agent_proto::{lz4_switched_off, unpack, BlockSender};
 
 use super::{TAG_DATA, TAG_DATA_LZ4};
+use crate::share::transfer_meter as stats;
 
 /// Whether this side serves (or uses) LZ4 content for a request that asked
 /// for it. The suite can switch it off in a development build.
@@ -66,7 +67,13 @@ impl Lz4Stream {
         let mut state = self.state();
         let offset = state.offset;
         state.offset = offset.saturating_add(chunk.len() as u64);
-        state.sender.try_pack(chunk, offset)
+        let timer = stats::Timer::start();
+        let packed = state.sender.try_pack(chunk, offset);
+        timer.stop(stats::Phase::Lz4);
+        if packed.is_some() {
+            stats::lz4_block();
+        }
+        packed
     }
 
     /// `bytes` of raw content went to the wire and the writer waited
@@ -82,10 +89,13 @@ pub(in crate::share) fn frame_for<'a>(
     stream: Option<&Lz4Stream>,
     chunk: &'a [u8],
 ) -> (u8, std::borrow::Cow<'a, [u8]>) {
-    match stream.and_then(|stream| stream.pack(chunk)) {
+    let frame: (u8, std::borrow::Cow<'a, [u8]>) = match stream.and_then(|stream| stream.pack(chunk))
+    {
         Some(block) => (TAG_DATA_LZ4, block.into()),
         None => (TAG_DATA, chunk.into()),
-    }
+    };
+    stats::bytes(chunk.len(), frame.1.len());
+    frame
 }
 
 /// What a received frame of a content stream is.
@@ -101,8 +111,19 @@ pub(in crate::share) enum Content {
 /// a stream that did not negotiate LZ4 is `InvalidData`, as is any bad block.
 pub(in crate::share) fn classify(tag: u8, payload: Vec<u8>, lz4: bool) -> io::Result<Content> {
     match tag {
-        TAG_DATA => Ok(Content::Bytes(payload)),
-        TAG_DATA_LZ4 if lz4 => unpack(&payload).map(Content::Bytes),
+        TAG_DATA => {
+            stats::bytes(payload.len(), payload.len());
+            Ok(Content::Bytes(payload))
+        }
+        TAG_DATA_LZ4 if lz4 => {
+            let timer = stats::Timer::start();
+            let raw = unpack(&payload);
+            timer.stop(stats::Phase::Lz4);
+            if let Ok(raw) = &raw {
+                stats::bytes(raw.len(), payload.len());
+            }
+            raw.map(Content::Bytes)
+        }
         TAG_DATA_LZ4 => Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "Peer sendet LZ4-Daten, die nicht ausgehandelt wurden",

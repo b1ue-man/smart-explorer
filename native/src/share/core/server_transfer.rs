@@ -13,6 +13,7 @@ use super::framing::{recv_content_frame, reply, reply_err};
 use super::fs_access::FsAccess;
 use super::io_deadline;
 use super::mount_lease::{run_authorized, MountLeaseAuthorization};
+use super::transfer_meter as stats;
 use super::wire::{Ctrl, FsRequest, FsResponse};
 
 #[path = "server_read.rs"]
@@ -91,6 +92,7 @@ pub(super) async fn write_file<G: Send + 'static>(
                 .unwrap_err_or_worker_exit("Share staged write"))
         }
     }
+    stats::stream_started();
 
     let mut done_rx = Some(done_rx);
     let mut worker = Some(worker);
@@ -100,7 +102,11 @@ pub(super) async fn write_file<G: Send + 'static>(
             stall,
             recv_content_frame(&mut recv, lz4),
         );
-        let (tag, payload) = match frame.await {
+        // Waiting for the next frame is waiting for the network.
+        let waiting = stats::Timer::start();
+        let frame = frame.await;
+        waiting.stop(stats::Phase::NetWait);
+        let (tag, payload) = match frame {
             Ok(frame) => frame,
             Err(error) => {
                 drop(command_tx);
@@ -110,7 +116,11 @@ pub(super) async fn write_file<G: Send + 'static>(
         };
         let control = match classify(tag, payload, lz4) {
             Ok(Content::Bytes(bytes)) => {
-                if command_tx.send(WriteCommand::Data(bytes)).await.is_err() {
+                // A full queue is the writer being slower than the network.
+                let queued = stats::Timer::start();
+                let sent = command_tx.send(WriteCommand::Data(bytes)).await;
+                queued.stop(stats::Phase::StageWait);
+                if sent.is_err() {
                     let error = await_write_error(&mut done_rx, &mut worker).await;
                     return reply_err(&mut send, error).await;
                 }
@@ -253,7 +263,10 @@ fn write_worker(
                 let Some(output) = writer.as_mut() else {
                     break Err(eio("Schreibkanal ist geschlossen"));
                 };
-                if let Err(error) = output.write_all(&payload) {
+                let writing = stats::Timer::start();
+                let written = output.write_all(&payload);
+                writing.stop(stats::Phase::StageWrite);
+                if let Err(error) = written {
                     break Err(error);
                 }
             }

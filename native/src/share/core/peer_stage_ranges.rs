@@ -18,6 +18,8 @@ use crate::share::identity::ShareIdentity;
 use crate::share::io_deadline;
 use crate::share::node::ShareIrohNode;
 use crate::share::peer_request::CONTROL_ATTEMPT_TIMEOUT;
+use crate::share::quic_stats_hub::track_client;
+use crate::share::transfer_meter as stats;
 use crate::share::types::PeerEndpoint;
 use crate::share::wire::{
     Ctrl, FsRequest, FsResponse, FsSegmentedFinish, FsSegmentedOpen, FsStageWrite,
@@ -228,6 +230,8 @@ impl SegmentedStage for PeerSegmentedStage {
                 return Err(error);
             }
         }
+        track_client(&self.node, &opened.session_key);
+        stats::stream_started();
         Ok(Box::new(RangeWriter {
             node: self.node.clone(),
             opened: Some(opened),
@@ -376,6 +380,9 @@ impl Write for RangeWriter {
                 "peer stage range data",
                 send_tagged(&mut opened.send, tag, &bytes),
             ));
+            if stats::enabled() {
+                stats::meter().add(stats::Phase::NetWait, started.elapsed());
+            }
             if let Err(error) = result {
                 return Err(self.fail(error));
             }
