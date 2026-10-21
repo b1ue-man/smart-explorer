@@ -213,6 +213,8 @@ fn speed_task_range_stage_sums_the_space_of_all_open_stages() {
         .err()
         .expect("more than the disk");
     assert_eq!(huge.kind(), io::ErrorKind::StorageFull);
+    // The reservation is per process: give it back before the next test.
+    second.close();
 }
 
 #[test]

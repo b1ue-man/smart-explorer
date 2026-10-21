@@ -201,8 +201,19 @@ fn speed_task_agent_stage_open_creates_an_exclusive_sparse_stage() {
         assert_eq!(mode & 0o777, 0o600, "a private stage");
     }
 
+    // Like `WriteNew`, the stage makes the missing plain folders of its
+    // destination (a tree copy writes into folders that do not exist yet).
     let missing = destination(&dir, "no/such/folder/file.bin");
-    assert!(remote.open(&missing, 1).is_err(), "the folder must exist");
+    let made = remote.open(&missing, 1).expect("missing folders are made");
+    assert!(made.starts_with(&format!("{missing}.se-upload-")), "{made}");
+    assert!(std::path::Path::new(&made).is_file(), "{made}");
+    // A file in the way is no folder.
+    std::fs::write(dir.path().join("plain.txt"), b"x").expect("file");
+    let below_file = destination(&dir, "plain.txt/file.bin");
+    assert!(
+        remote.open(&below_file, 1).is_err(),
+        "the folder of a stage is never a file"
+    );
     #[cfg(unix)]
     {
         let real = dir.path().join("real");
