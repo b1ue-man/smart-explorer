@@ -3,6 +3,7 @@
 //! and the sync daemon's login start stay as they were.
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
 
 use super::control::{Control, ShellProcesses, StopReport};
 use super::platform::{self, task_fixtures, PlatformIntegration};
@@ -12,6 +13,19 @@ use crate::desktop::core::config::SystemItems;
 use crate::desktop::core::ledger::removal_plan;
 use crate::desktop::core::state::{Part, PartSet};
 use crate::share::PeerOpenTarget;
+
+/// The Windows traces (Run value, navigation pane keys, jump list, context
+/// menu) live in the one HKCU of the account, so two transitions at once
+/// see each other's registrations (run 3: `disable` left residue). Tests of
+/// this file that change them run one after the other; the Linux fixtures
+/// have a folder per test and are not affected.
+static ACCOUNT_TRACES: Mutex<()> = Mutex::new(());
+
+fn one_at_a_time() -> MutexGuard<'static, ()> {
+    ACCOUNT_TRACES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 /// Values between `marker"` and the next `"` in `text`.
 fn quoted_after(text: &str, marker: &str) -> Vec<String> {
@@ -203,6 +217,7 @@ fn run_every_transition(root: &Path, gui: &Path) {
 /// none) survives every transition and the uninstaller's removal.
 #[test]
 fn desktop_task_context_menu_unchanged() {
+    let _serial = one_at_a_time();
     let Some(before) = task_fixtures::context_menu_probe() else {
         return;
     };
@@ -224,6 +239,7 @@ fn desktop_task_context_menu_unchanged() {
 /// `smart-explorer-sync-daemon.desktop`) stays byte-identical.
 #[test]
 fn desktop_task_sync_autostart_untouched() {
+    let _serial = one_at_a_time();
     let root = tempfile::tempdir().unwrap();
     let gui = root.path().join("app").join("smart_explorer");
     task_fixtures::plant_foreign(root.path());

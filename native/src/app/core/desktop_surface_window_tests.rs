@@ -36,13 +36,15 @@ fn gui_binary() -> PathBuf {
 pub(super) fn windowed_process() {
     let desktop = tempfile::tempdir().unwrap();
     std::fs::write(desktop.path().join("notiz.txt"), b"x").unwrap();
+    // The surface's own words when it ends early (graphics start, for example).
+    let error_file = desktop.path().join("surface.err");
     let mut surface = Command::new(gui_binary())
         .args(["--desktop-surface", "--monitor", MONITOR])
         .env("SE_DESKTOP_TEST_WINDOWED", "1")
         .env(TEST_DESKTOP_DIR, desktop.path())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::from(std::fs::File::create(&error_file).unwrap()))
         .spawn()
         .unwrap();
     let mut output = surface.stdout.take().unwrap();
@@ -81,7 +83,13 @@ pub(super) fn windowed_process() {
         match messages.recv_timeout(left) {
             Ok(SurfaceMessage::Alive) => alive += 1,
             Ok(_) => {}
-            Err(error) => panic!("kein Bild der Fläche im Fenstermodus: {error}"),
+            Err(error) => {
+                let status = surface.try_wait();
+                let errors = std::fs::read_to_string(&error_file).unwrap_or_default();
+                panic!(
+                    "kein Bild der Fläche im Fenstermodus: {error}; Prozess {status:?}; Stderr: {errors}"
+                )
+            }
         }
     }
     let stop = ShellMessage::Stop {

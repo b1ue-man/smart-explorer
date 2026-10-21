@@ -7,7 +7,9 @@
 //! runner's), surfaces and shells of the real GUI program, the windows of a
 //! process, input through `SendInput`, a plain window of this process with
 //! its message pump, and the Explorer precheck `FindWindowW("Progman")`
-//! (Annahme A7).
+//! (Annahme A7). Every child writes its standard error to a file of the
+//! temporary root; a failed wait names exit status and standard error
+//! (`window_task_report`).
 use std::ffi::OsString;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -30,6 +32,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     SW_SHOWNOACTIVATE, WNDCLASSW, WS_EX_TOOLWINDOW, WS_OVERLAPPEDWINDOW,
 };
 
+use super::window_task_report::{child_report, windows_report};
 use crate::desktop::core::protocol::{read_frame, SurfaceMessage};
 use crate::desktop::core::state::{ModuleState, Part, PartSet, State, STATE_SCHEMA};
 use crate::desktop::os::store::DesktopDir;
@@ -120,17 +123,14 @@ pub(super) fn rect(hwnd: HWND) -> [i32; 4] {
     [rect.left, rect.top, rect.right, rect.bottom]
 }
 
-/// The surface window of `pid` once it is a tool window.
-pub(super) fn surface_window(pid: u32) -> HWND {
-    let mut found = std::ptr::null_mut();
-    wait_for(Duration::from_secs(30), "Flächenfenster", || {
-        found = windows_of(pid)
-            .into_iter()
-            .find(|hwnd| ex_style(*hwnd) & WS_EX_TOOLWINDOW != 0)
-            .unwrap_or(std::ptr::null_mut());
-        !found.is_null()
-    });
-    found
+/// How long a surface may take to show its window.
+const SURFACE_WINDOW_WAIT: Duration = Duration::from_secs(30);
+
+/// The surface window of `pid` when it is a tool window.
+fn find_surface(pid: u32) -> Option<HWND> {
+    windows_of(pid)
+        .into_iter()
+        .find(|hwnd| ex_style(*hwnd) & WS_EX_TOOLWINDOW != 0)
 }
 
 /// Whether `lower` comes after `upper` in the z-order.
@@ -283,6 +283,8 @@ pub(super) struct WinTaskEnv {
     pub(super) gui: PathBuf,
     saved: Vec<(String, Option<OsString>)>,
     children: Vec<Child>,
+    /// Standard-error file of each child, by the child's index.
+    errors: Vec<PathBuf>,
     _root: tempfile::TempDir,
 }
 
@@ -312,6 +314,7 @@ impl WinTaskEnv {
             gui,
             saved,
             children: Vec::new(),
+            errors: Vec::new(),
             _root: root,
         }
     }
@@ -335,40 +338,87 @@ impl WinTaskEnv {
         .unwrap();
     }
 
+    /// The file the next child writes its standard error to.
+    fn error_file(&self) -> (Stdio, PathBuf) {
+        let path = self
+            ._root
+            .path()
+            .join(format!("child-{}.err", self.children.len()));
+        let file = std::fs::File::create(&path).unwrap();
+        (Stdio::from(file), path)
+    }
+
     pub(super) fn spawn(&mut self, args: &[&str]) -> usize {
+        let (stderr, path) = self.error_file();
         let child = Command::new(&self.gui)
             .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(stderr)
             .spawn()
             .unwrap();
         self.children.push(child);
+        self.errors.push(path);
         self.children.len() - 1
     }
 
     /// A surface on `monitor` whose channel stays open; its output is read
     /// and dropped in a thread.
     pub(super) fn surface(&mut self, monitor: &str) -> usize {
+        let (stderr, path) = self.error_file();
         let mut child = Command::new(&self.gui)
             .args(["--desktop-surface", "--monitor", monitor])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(stderr)
             .spawn()
             .unwrap();
         let mut output = child.stdout.take().unwrap();
-        let hello: Option<SurfaceMessage> = read_frame(&mut output).unwrap();
+        self.children.push(child);
+        self.errors.push(path);
+        let index = self.children.len() - 1;
+        let hello = read_frame::<_, SurfaceMessage>(&mut output);
         assert!(
-            matches!(&hello, Some(SurfaceMessage::Hello { monitor: seen, .. }) if seen == monitor),
-            "{hello:?}"
+            matches!(&hello, Ok(Some(SurfaceMessage::Hello { monitor: seen, .. })) if seen == monitor),
+            "Gruß der Fläche: {hello:?}; {}",
+            self.report(index)
         );
         std::thread::spawn(move || {
             let mut sink = [0u8; 4096];
             while output.read(&mut sink).is_ok_and(|read| read > 0) {}
         });
-        self.children.push(child);
-        self.children.len() - 1
+        index
+    }
+
+    /// State, exit status and standard error of child `index`.
+    pub(super) fn report(&mut self, index: usize) -> String {
+        child_report(&mut self.children[index], &self.errors[index])
+    }
+
+    /// The window of surface `index` once it is a tool window. A surface that
+    /// ends first, or shows none within [`SURFACE_WINDOW_WAIT`], fails with
+    /// its exit status, standard error and the windows it owns.
+    pub(super) fn surface_window(&mut self, index: usize) -> HWND {
+        let pid = self.children[index].id();
+        let deadline = Instant::now() + SURFACE_WINDOW_WAIT;
+        loop {
+            if let Some(hwnd) = find_surface(pid) {
+                return hwnd;
+            }
+            let ended = !matches!(self.children[index].try_wait(), Ok(None));
+            assert!(
+                !ended,
+                "Flächenfenster: die Fläche endete vor ihrem Fenster; {}",
+                self.report(index)
+            );
+            assert!(
+                Instant::now() < deadline,
+                "Flächenfenster: nach {SURFACE_WINDOW_WAIT:?} nicht erreicht; {}; {}",
+                self.report(index),
+                windows_report(pid)
+            );
+            pump(Duration::from_millis(50));
+        }
     }
 
     pub(super) fn child(&mut self, index: usize) -> &mut Child {

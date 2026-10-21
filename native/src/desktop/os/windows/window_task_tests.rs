@@ -20,8 +20,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 use super::desktop_folder::known_folder;
 use super::monitors::{self, MonitorInfo};
 use super::window_task_env::{
-    below, chord, click, ex_style, progman_present, pump, rect, root_at, style, surface_window,
-    wait_for, PlainWindow, WinTaskEnv,
+    below, chord, click, ex_style, progman_present, pump, rect, root_at, style, wait_for,
+    PlainWindow, WinTaskEnv,
 };
 use super::PlatformIntegration;
 use crate::desktop::core::config::SystemItems;
@@ -64,7 +64,7 @@ fn desktop_task_windows_surface_bottom_toolwindow() {
     let mut env = WinTaskEnv::new();
     let monitor = primary();
     let surface = env.surface(&monitor.key);
-    let hwnd = surface_window(env.child(surface).id());
+    let hwnd = env.surface_window(surface);
     pump(Duration::from_millis(500));
     assert_ne!(ex_style(hwnd) & WS_EX_TOOLWINDOW, 0, "WS_EX_TOOLWINDOW");
     assert_eq!(ex_style(hwnd) & WS_EX_APPWINDOW, 0, "WS_EX_APPWINDOW");
@@ -78,7 +78,7 @@ fn desktop_task_windows_surface_stays_bottom_after_click() {
     let mut env = WinTaskEnv::new();
     let monitor = primary();
     let surface = env.surface(&monitor.key);
-    let hwnd = surface_window(env.child(surface).id());
+    let hwnd = env.surface_window(surface);
     let [left, top, _, _] = monitor.work;
     let program = PlainWindow::new([left + 40, top + 40, left + 440, top + 340]);
     assert!(
@@ -106,7 +106,7 @@ fn desktop_task_windows_style_enforced_after_change() {
     let mut env = WinTaskEnv::new();
     let monitor = primary();
     let surface = env.surface(&monitor.key);
-    let hwnd = surface_window(env.child(surface).id());
+    let hwnd = env.surface_window(surface);
     // A foreign change, as winit makes when it re-applies its styles.
     let foreign = (ex_style(hwnd) | WS_EX_APPWINDOW) & !WS_EX_TOOLWINDOW;
     unsafe { SetWindowLongPtrW(hwnd, GWL_EXSTYLE, foreign as isize) };
@@ -127,7 +127,7 @@ fn desktop_task_windows_show_desktop_keeps_surface() {
     let mut env = WinTaskEnv::new();
     let monitor = primary();
     let surface = env.surface(&monitor.key);
-    let hwnd = surface_window(env.child(surface).id());
+    let hwnd = env.surface_window(surface);
     chord(&[VK_LWIN, VK_D]);
     pump(Duration::from_millis(1500));
     let iconic = unsafe { IsIconic(hwnd) } != 0;
