@@ -17,6 +17,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use super::session_facts::{self, Probe, SystemProbe, X11Facts};
+use crate::desktop::core::mechanism::SessionFacts;
+
 pub(crate) const CONTROL_FILE: &str = "desktop-gnome.json";
 pub(crate) const TOKEN_FILE: &str = "desktop.token";
 pub(crate) const SOCKET_FILE: &str = "desktop.sock";
@@ -179,4 +182,50 @@ impl RuntimeFiles {
             let _ = std::fs::remove_file(path);
         }
     }
+}
+
+/// What the session probe of a surface the extension started may ask. The
+/// extension's `Meta.WaylandClient` gives the surface one Wayland connection,
+/// the socket named by `WAYLAND_SOCKET`, and the Shell counts a window as the
+/// extension's only when it arrives over that connection. The first
+/// connection a process makes from the environment takes the socket, so the
+/// probe of `layer_shell_version` (a connection, two round trips, closed
+/// again) left the window system's own connection to `WAYLAND_DISPLAY`, a
+/// client the extension does not own: the window was never placed and
+/// `handled` stayed false (suite run 6,
+/// `desktop_task_gnome_headless_variant_a`). The extension starts surfaces
+/// only where the session has no layer shell (C2.2 decides the layer shell
+/// first), so this probe does not ask for it and touches no Wayland
+/// connection; everything else is read as everywhere.
+struct SurfaceProbe;
+
+impl Probe for SurfaceProbe {
+    fn env(&self, name: &str) -> Option<String> {
+        SystemProbe.env(name)
+    }
+
+    fn x11_root_atoms(&self) -> Option<X11Facts> {
+        SystemProbe.x11_root_atoms()
+    }
+
+    fn wayland_layer_shell_version(&self) -> Option<u32> {
+        None
+    }
+
+    fn gnome_shell_version(&self) -> Option<String> {
+        SystemProbe.gnome_shell_version()
+    }
+
+    fn gnome_active_extensions(&self) -> Vec<String> {
+        SystemProbe.gnome_active_extensions()
+    }
+
+    fn process_running(&self, comm: &str) -> bool {
+        SystemProbe.process_running(comm)
+    }
+}
+
+/// The facts of the session for a surface the extension started.
+pub(crate) fn surface_session_facts() -> SessionFacts {
+    session_facts::probe(&SurfaceProbe)
 }

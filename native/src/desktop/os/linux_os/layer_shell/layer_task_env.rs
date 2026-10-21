@@ -251,6 +251,27 @@ impl Drop for Sway {
     }
 }
 
+/// The windows of `swaymsg -t get_tree` as `app_id/name` pairs: what a missing
+/// test window looks like (another `app_id`, an empty tree).
+pub(super) fn tree_windows(sway: &Sway) -> String {
+    fn walk(node: &serde_json::Value, found: &mut Vec<String>) {
+        let name = node["name"].as_str().unwrap_or_default();
+        if node["pid"].as_i64().is_some() || node["app_id"].is_string() {
+            found.push(format!("{:?}/{name:?}", node["app_id"].as_str()));
+        }
+        for key in ["nodes", "floating_nodes"] {
+            for child in node[key].as_array().into_iter().flatten() {
+                walk(child, found);
+            }
+        }
+    }
+    let tree: serde_json::Value =
+        serde_json::from_str(&sway.msg(&["-t", "get_tree", "-r"])).unwrap_or_default();
+    let mut found = Vec::new();
+    walk(&tree, &mut found);
+    format!("[{}]", found.join(", "))
+}
+
 /// The GUI program as a surface process; the check plays the shell.
 pub(super) struct SurfaceProcess {
     child: Child,

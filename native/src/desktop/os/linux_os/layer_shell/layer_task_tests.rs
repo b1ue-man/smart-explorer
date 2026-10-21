@@ -9,7 +9,7 @@ use std::process::Command;
 use std::time::Duration;
 
 use super::layer_task_env::{
-    config_with, gui_binary, hello, model_for, not_run, require_task, tool, wait_for,
+    config_with, gui_binary, hello, model_for, not_run, require_task, tool, tree_windows, wait_for,
     SurfaceProcess, Sway, MAGENTA,
 };
 use super::render::TEST_NO_ADAPTER;
@@ -64,27 +64,6 @@ fn expect_color(sway: &Sway, surface: &mut SurfaceProcess, output: &str) {
         seen,
         "{output}: die Testfarbe erscheint nicht im Bildschirmfoto"
     );
-}
-
-/// The windows of `swaymsg -t get_tree` as `app_id/name` pairs: what a missing
-/// test window looks like (another `app_id`, an empty tree).
-fn tree_windows(sway: &Sway) -> String {
-    fn walk(node: &serde_json::Value, found: &mut Vec<String>) {
-        let name = node["name"].as_str().unwrap_or_default();
-        if node["pid"].as_i64().is_some() || node["app_id"].is_string() {
-            found.push(format!("{:?}/{name:?}", node["app_id"].as_str()));
-        }
-        for key in ["nodes", "floating_nodes"] {
-            for child in node[key].as_array().into_iter().flatten() {
-                walk(child, found);
-            }
-        }
-    }
-    let tree: serde_json::Value =
-        serde_json::from_str(&sway.msg(&["-t", "get_tree", "-r"])).unwrap_or_default();
-    let mut found = Vec::new();
-    walk(&tree, &mut found);
-    format!("[{}]", found.join(", "))
 }
 
 #[test]
@@ -260,13 +239,21 @@ fn desktop_task_layer_clipboard_roundtrip_files() {
     );
 
     // The other direction: the surface copies its tile, another program
-    // reads the file list in both formats.
+    // reads the file list in both formats. The headless seat has no pointer
+    // (`WLR_LIBINPUT_NO_DEVICES`; `wtype` adds a keyboard only), so a click
+    // never reaches the surface as a pointer event and selects nothing: the
+    // tile is selected by the arrow keys. Down picks the first tile when
+    // nothing has focus; the Up after it comes back to that tile when an
+    // earlier round already focused it (Down then went to the tile below), so
+    // every round copies `Ziel.md`. The pauses let each frame run before the
+    // next key.
     let mut copied = String::new();
     let got = wait_for(LONG, || {
         sway.click(42, 42);
         let _ = sway
             .command(&wtype)
             .args(KEY_DELAY)
+            .args(["-k", "Down", "-s", "500", "-k", "Up", "-s", "500"])
             .args(["-M", "ctrl", "c", "-m", "ctrl"])
             .status();
         copied = sway
@@ -296,7 +283,8 @@ fn desktop_task_layer_clipboard_roundtrip_files() {
         let ended = surface.stop();
         panic!(
             "text/uri-list der Fläche fehlt: {copied:?}; Auswahl bietet: {types}; \
-             Fläche lief noch: {running} ({ended:?}); Stderr der Fläche: {}",
+             Fläche lief noch: {running} ({ended:?}); Sitz: {}; Stderr der Fläche: {}",
+            sway.msg(&["-t", "get_seats", "-r"]).replace('\n', ""),
             surface.stderr_text().trim()
         );
     }
