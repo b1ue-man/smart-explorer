@@ -1,3 +1,4 @@
+use super::engine_copy;
 use super::entry_kind::EntryKind;
 use super::link_paths::{
     copy_remote_link, link_move_refused, resolve_destination, source_root, SourceRoot,
@@ -10,6 +11,7 @@ use super::tree_ops::{
 };
 use std::io::{self, Write};
 use std::path::PathBuf;
+use std::time::Instant;
 
 pub(crate) fn list(target: &Target) -> Result<(), String> {
     for entry in target
@@ -69,10 +71,30 @@ pub(super) fn explain_read_error(target: &Target, error: io::Error) -> String {
     }
 }
 
-/// `se cp`: prints one stderr line per skipped link or special file.
+/// `se cp` without `--stats` (the existing tests call it this way).
+#[cfg(test)]
 pub(crate) fn copy(src: &Target, dst: &Target, recursive: bool, force: bool) -> Result<(), String> {
-    let outcome = copy_observed(src, dst, recursive, force, &TreeObserver::default())?;
+    copy_with_stats(src, dst, recursive, force, false)
+}
+
+/// `se cp`, `se get`, `se put`: prints one stderr line per skipped link or
+/// special file, and with `stats` one line with the rate and the limiting
+/// resource after a successful copy.
+pub(crate) fn copy_with_stats(
+    src: &Target,
+    dst: &Target,
+    recursive: bool,
+    force: bool,
+    stats: bool,
+) -> Result<(), String> {
+    let observer = TreeObserver::default();
+    let started = Instant::now();
+    let outcome = copy_observed(src, dst, recursive, force, &observer)?;
     print_notices(&outcome);
+    if stats {
+        let wall_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        engine_copy::print_stats(&observer, wall_ms);
+    }
     Ok(())
 }
 
@@ -96,8 +118,24 @@ pub(super) fn copy_observed(
             return copy_remote_link(src, dst, &dst_path, force, observer);
         }
     };
+    let plain_source = resolved_src.is_none();
     let src = resolved_src.as_ref().unwrap_or(src);
     let (source_snapshot, dst_path) = transfer_plan_as(src, dst, name.as_deref())?;
+    // A plain source copied to a new name runs on the transfer engine; a
+    // resolved link, an existing destination or any doubt stays on this path.
+    if plain_source {
+        if let Some(outcome) = engine_copy::try_copy(
+            src,
+            &meta,
+            &source_snapshot,
+            dst,
+            &dst_path,
+            recursive,
+            observer,
+        )? {
+            return Ok(outcome);
+        }
+    }
     let receipt = copy_entry_with(
         &*src.backend,
         &src.path,
