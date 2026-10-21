@@ -702,10 +702,14 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
 - **The channel limit counts channels in setup.** A refusal learns the limit from the ready and the
   in-setup channels (`native/src/sftp/core/channel_pool.rs:57-59`, `:168-170`, `:355`).
 - **`queue/rotational` is not the truth on virtual disks.** Cloud VM disks and loop devices often
-  report 1 although parallel ranges help there. Local copies on a drive that says rotating or
-  nothing therefore measure once per device pair (one section with one thread, one with two,
-  each timed up to `fdatasync`) instead of trusting the flag; `fdatasync` there serves the
-  measurement, not durability (`native/src/copy/os/linux_probe.rs`).
+  report 1. A buffered copy does not gain from parallel ranges there (writeback sets the depth),
+  so only the unbuffered path for very large files probes one thread against two, once per device
+  pair, without `fdatasync` (direct requests are done at the device when they return;
+  `native/src/copy/os/linux_probe.rs`).
+- **`statx` goes through its syscall number.** The `statx` symbol needs glibc 2.28; the release
+  baseline is 2.17, so `STATX_DIOALIGN` is read via `libc::syscall` (`native/src/copy/os/linux_direct.rs`).
+  `O_DIRECT` through `/proc/self/fd` may be refused on Android (f2fs with fscrypt, restricted /proc):
+  every refusal before the first byte falls back to the buffered path.
 - **`Detail::Kinds` applies to FTP LIST rows only.** Publishing a stage lists names and kinds; LIST
   rows are then not refined with SIZE and MDTM; the refinement at `metadata.rs:242` is guarded by `!mlsx`, so MLST/MLSD rows never take it
   (`native/src/ftp/core/listing_detail.rs:13-21`, `native/src/ftp/core/metadata.rs:144-146`, `:242`,
