@@ -48,11 +48,12 @@ def stage_drive_fuse(ctx: common.JobContext, stage: str) -> None:
 
 
 def stage_drive_dokany_regression(ctx: common.JobContext, stage: str) -> None:
+    ctx.run_default(stage)
+    # After the run: the fixture ``dokany`` installs the driver from the pinned MSI during it.
     installed = WINDOWS and common.dokany_installed()
     ctx.state.setdefault("stage_notes", {})[stage] = (
         "Dokany-Treiber installiert" if installed else
         "Dokany nicht installiert: #[ignore]-Tests mit echtem Dokany laufen nicht")
-    ctx.run_default(stage)
 
 
 # --------------------------------------------------------------------------- static checks
