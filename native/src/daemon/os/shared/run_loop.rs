@@ -474,11 +474,16 @@ fn stop_daemon(supervisor: &mut JobSupervisor, share_host: &ShareHost, listener:
     // No new IPC client is admitted while the worker winds down.
     listener.shutdown();
     share_host.shutdown_lan();
+    // Each step is logged, so a stop that hangs shows where in the worker log.
+    log("daemon stop: IPC listener closed, LAN presence withdrawn");
     share_host.stop_mounts();
+    log("daemon stop: drives ended");
     for error in supervisor.cancel_and_join() {
         log(&error);
     }
+    log("daemon stop: sync jobs ended");
     crate::vault::lock_all_for_exit();
+    log("daemon stop: vaults locked");
     clear_heartbeat();
 }
 
