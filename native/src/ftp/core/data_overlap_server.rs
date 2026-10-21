@@ -21,6 +21,9 @@ pub(super) struct State {
     pub(super) transfers: (Mutex<usize>, Condvar),
     pub(super) pipelined: AtomicBool,
     pub(super) stop: AtomicBool,
+    /// Answers FEAT without MLST and lists with LIST (vsftpd), counting SIZE
+    /// and MDTM: a server whose folders are only read through LIST rows.
+    pub(super) no_mlst: AtomicBool,
 }
 
 pub(super) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -124,6 +127,26 @@ impl State {
                 ("PASS", _) => reply(&mut control, "230 in")?,
                 ("TYPE", _) => reply(&mut control, "200 binary")?,
                 ("PWD", _) => reply(&mut control, "257 \"/\" is current directory")?,
+                ("FEAT", _) if self.no_mlst.load(Ordering::SeqCst) => {
+                    reply(&mut control, "211-Features:\r\n SIZE\r\n211 End")?
+                }
+                ("CWD", _) if self.no_mlst.load(Ordering::SeqCst) => {
+                    reply(&mut control, "250 directory changed")?
+                }
+                ("MDTM", Some(_)) if self.no_mlst.load(Ordering::SeqCst) => {
+                    reply(&mut control, "213 20260101000000")?
+                }
+                ("LIST", _) if self.no_mlst.load(Ordering::SeqCst) => {
+                    self.transfer(&mut control, passive.take(), |data| {
+                        for (name, bytes) in lock(&self.files).iter() {
+                            let base = name.rsplit('/').next().unwrap_or(name);
+                            let row =
+                                format!("-rw-r--r-- 1 0 1 {} Nov 5 2018 {base}\r\n", bytes.len());
+                            data.write_all(row.as_bytes())?;
+                        }
+                        Ok(())
+                    })?
+                }
                 ("FEAT", _) => reply(
                     &mut control,
                     "211-Features:\r\n MLST size*;type*;\r\n211 End",

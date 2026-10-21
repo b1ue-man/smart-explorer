@@ -6,6 +6,8 @@ mod core_impl;
 mod data_finish;
 #[path = "core/io_adapters.rs"]
 mod io_adapters;
+#[path = "core/listing_detail.rs"]
+mod listing_detail;
 #[path = "core/pool.rs"]
 mod pool;
 #[path = "core/resolver.rs"]
@@ -37,6 +39,9 @@ mod luecken_task_ftp_tests;
 #[cfg(test)]
 #[path = "core/range_tests.rs"]
 mod range_tests;
+#[cfg(test)]
+#[path = "core/speed_task_ftp_tests.rs"]
+mod speed_task_ftp_tests;
 #[cfg(test)]
 #[path = "core/transfer_engine_task_tests.rs"]
 mod transfer_engine_task_tests;
