@@ -19,6 +19,7 @@ const TYPE_CHOICE: u32 = 19;
 const OBJECT_FORMAT: u32 = 0x40003;
 /// `SPA_PARAM_EnumFormat` as the object id.
 const PARAM_ENUM_FORMAT: u32 = 3;
+const CHOICE_NONE: u32 = 0;
 const CHOICE_RANGE: u32 = 1;
 const CHOICE_ENUM: u32 = 3;
 const KEY_MEDIA_TYPE: u32 = 1;
@@ -151,9 +152,30 @@ fn read_u32(bytes: &[u8], at: usize) -> Option<u32> {
     Some(u32::from_le_bytes(slice.try_into().ok()?))
 }
 
+/// The value of a property: a plain value, or a choice of the kind `None`
+/// (`spa_pod_fixate` turns every choice of the negotiated format into that
+/// kind and leaves the values in place; the first one is the value). A
+/// choice with alternatives (`Range`, `Enum`, ...) is an offer, no value.
+fn plain_value(value_type: u32, value: &[u8]) -> Option<(u32, &[u8])> {
+    if value_type != TYPE_CHOICE {
+        return Some((value_type, value));
+    }
+    // choice kind, flags, size and type of the child, then the values.
+    let (kind, child_size, child_type) = (
+        read_u32(value, 0)?,
+        read_u32(value, 8)? as usize,
+        read_u32(value, 12)?,
+    );
+    if kind != CHOICE_NONE || child_type == TYPE_CHOICE {
+        return None;
+    }
+    let first = value.get(16..16usize.checked_add(child_size)?)?;
+    Some((child_type, first))
+}
+
 /// Reads `VIDEO_format` and `VIDEO_size` from a negotiated `Format` object
-/// pod (plain values, no choices); all other properties are skipped by their
-/// own sizes. `None` when the bytes are no such object or lack either value
+/// pod (plain values or fixated choices); all other properties are skipped
+/// by their own sizes. `None` when the bytes are no such object or lack either value
 /// or hold a format this reader does not know.
 pub(crate) fn parse_video_format(bytes: &[u8]) -> Option<(VideoFormat, FrameSize)> {
     let size = read_u32(bytes, 0)? as usize;
@@ -168,12 +190,20 @@ pub(crate) fn parse_video_format(bytes: &[u8]) -> Option<(VideoFormat, FrameSize
         let value_size = read_u32(body, at + 8)? as usize;
         let value_type = read_u32(body, at + 12)?;
         let value = body.get(at + 16..at.checked_add(16)?.checked_add(value_size)?)?;
-        match (key, value_type) {
-            (KEY_VIDEO_FORMAT, TYPE_ID) => {
-                format = VideoFormat::from_id(read_u32(value, 0)?);
+        let plain = if matches!(key, KEY_VIDEO_FORMAT | KEY_VIDEO_SIZE) {
+            plain_value(value_type, value)
+        } else {
+            None
+        };
+        match (key, plain) {
+            (KEY_VIDEO_FORMAT, Some((TYPE_ID, id))) => {
+                format = VideoFormat::from_id(read_u32(id, 0)?);
             }
-            (KEY_VIDEO_SIZE, TYPE_RECTANGLE) => {
-                frame = Some(FrameSize::new(read_u32(value, 0)?, read_u32(value, 4)?));
+            (KEY_VIDEO_SIZE, Some((TYPE_RECTANGLE, rectangle))) => {
+                frame = Some(FrameSize::new(
+                    read_u32(rectangle, 0)?,
+                    read_u32(rectangle, 4)?,
+                ));
             }
             _ => {}
         }

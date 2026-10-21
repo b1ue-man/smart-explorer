@@ -120,6 +120,36 @@ fn spa_pod_negotiated_format_is_read_and_garbage_is_not() {
     assert_eq!(parse_video_format(&[]), None);
 }
 
+/// `spa_pod_fixate` turns the choices of the negotiated format into choices
+/// of the kind `None` that keep their values; the first one is the value
+/// (KWin through the KDE portal). A choice that still offers alternatives is
+/// no negotiated format.
+#[test]
+fn spa_pod_negotiated_format_reads_fixated_choices() {
+    let object = |format_kind: u32, size_kind: u32| {
+        let mut body = Vec::new();
+        word(&mut body, 0x40003);
+        word(&mut body, 4); // SPA_PARAM_Format
+        word(&mut body, 0x20001);
+        word(&mut body, 0);
+        choice_pod(&mut body, format_kind, 4, 3, &[8, 12, 11]); // BGRx first
+        word(&mut body, 0x20003);
+        word(&mut body, 0);
+        choice_pod(&mut body, size_kind, 8, 10, &[1280, 800, 1, 1, 4096, 4096]);
+        let mut pod = Vec::new();
+        word(&mut pod, body.len() as u32);
+        word(&mut pod, 15);
+        pod.extend_from_slice(&body);
+        pod
+    };
+    assert_eq!(
+        parse_video_format(&object(0, 0)),
+        Some((VideoFormat::Bgrx, FrameSize::new(1280, 800)))
+    );
+    assert_eq!(parse_video_format(&object(3, 0)), None);
+    assert_eq!(parse_video_format(&object(0, 1)), None);
+}
+
 #[test]
 fn pipewire_rows_become_opaque_bgra() {
     let size = FrameSize::new(2, 2);
