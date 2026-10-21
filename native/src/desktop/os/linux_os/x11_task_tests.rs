@@ -158,21 +158,24 @@ fn desktop_task_x11_window_type_desktop() {
     let key = monitors().first().expect("a monitor").key.clone();
     let mut surface = start_surface(&x, &key, &[]);
     let windows = surface_windows_up(&x, &mut [&mut surface], 1);
+    // The surface asks for STICKY; a window manager may answer it by placing
+    // the window on all workspaces without listing the state (Openbox, run
+    // 6). On all workspaces is what the surface needs.
+    let sticky = |info: &WindowInfo| {
+        info.state.iter().any(|name| name == "_NET_WM_STATE_STICKY")
+            || info.desktop == Some(ALL_DESKTOPS)
+    };
     let info = settled(&x, windows[0].0, |info| {
-        info.types.iter().any(|name| name == DESKTOP)
-            && info.state.iter().any(|name| name == "_NET_WM_STATE_STICKY")
+        info.types.iter().any(|name| name == DESKTOP) && sticky(info)
     });
     assert!(info.types.iter().any(|name| name == DESKTOP), "{info:?}");
-    for state in [
-        "_NET_WM_STATE_SKIP_TASKBAR",
-        "_NET_WM_STATE_SKIP_PAGER",
-        "_NET_WM_STATE_STICKY",
-    ] {
+    for state in ["_NET_WM_STATE_SKIP_TASKBAR", "_NET_WM_STATE_SKIP_PAGER"] {
         assert!(
             info.state.iter().any(|name| name == state),
             "{state}: {info:?}"
         );
     }
+    assert!(sticky(&info), "_NET_WM_STATE_STICKY: {info:?}");
     assert_eq!(info.desktop, Some(ALL_DESKTOPS), "all workspaces: {info:?}");
 }
 
