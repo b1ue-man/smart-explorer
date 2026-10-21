@@ -251,8 +251,9 @@ fn speed_task_local_direct_empty_and_short_files_have_no_direct_part() {
     // Nothing to copy directly: no handles are opened for it.
     let pair = pair(0);
     assert!(Direct::reopen(&pair.reader, &pair.writer, 0, plain_call).is_none());
-    let pair = self::pair(4095);
-    assert!(Direct::reopen(&pair.reader, &pair.writer, 4095, plain_call).is_none());
+    // Below the smallest direct-I/O unit (512 bytes on the suite's runner).
+    let pair = self::pair(511);
+    assert!(Direct::reopen(&pair.reader, &pair.writer, 511, plain_call).is_none());
     // The older path takes them, empty file included, at any thread count.
     let never = AtomicBool::new(false);
     for size in [0u64, 1, 4095] {
