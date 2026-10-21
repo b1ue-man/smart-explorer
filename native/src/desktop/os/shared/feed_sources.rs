@@ -235,7 +235,14 @@ impl DeviceTreeFeed {
         let (thread_latest, thread_stop) = (latest.clone(), stop.clone());
         std::thread::Builder::new()
             .name("se-desktop-devices".into())
-            .spawn(move || device_loop(&status, &watch, &thread_latest, &thread_stop))?;
+            .spawn(move || {
+                device_loop(
+                    status.as_ref(),
+                    watch.as_ref(),
+                    &thread_latest,
+                    &thread_stop,
+                )
+            })?;
         Ok(DeviceTreeFeed { latest, stop })
     }
 

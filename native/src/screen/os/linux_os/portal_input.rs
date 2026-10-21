@@ -93,6 +93,13 @@ struct Granted {
     fd: std::os::fd::OwnedFd,
 }
 
+/// The part of the grant the input calls keep using after the pipe went to
+/// the stream.
+struct Target {
+    node_id: u32,
+    size: (f64, f64),
+}
+
 async fn run(
     state: &Arc<Mutex<PortalState>>,
     stopped: tokio::sync::oneshot::Receiver<()>,
@@ -129,7 +136,9 @@ async fn run(
     match select(flow, stop.as_mut()).await {
         Either::Left((Ok(granted), _)) => {
             let latest = Arc::new(LatestFrame::default());
-            match PwStream::start(api, granted.fd, granted.node_id, latest.clone()) {
+            let Granted { node_id, size, fd } = granted;
+            let target = Target { node_id, size };
+            match PwStream::start(api, fd, node_id, latest.clone()) {
                 Ok(stream) => {
                     set(state, PortalState::Streaming(latest.clone()));
                     READY.store(true, Ordering::SeqCst);
@@ -139,7 +148,7 @@ async fn run(
                         let next = Box::pin(inputs.recv());
                         match select(next, select(closed.as_mut(), stop.as_mut())).await {
                             Either::Left((Some(batch), _)) => {
-                                apply(&remote, &session, &granted, &batch, &mut sas).await
+                                apply(&remote, &session, &target, &batch, &mut sas).await
                             }
                             Either::Left((None, _)) => break,
                             Either::Right((Either::Left(_), _)) => {
@@ -261,7 +270,7 @@ pub(super) fn stream_point(size: (f64, f64), x: u16, y: u16) -> (f64, f64) {
 async fn apply(
     remote: &RemoteDesktop,
     session: &Session<RemoteDesktop>,
-    granted: &Granted,
+    granted: &Target,
     batch: &[InputEvent],
     sas: &mut SasGuard,
 ) {

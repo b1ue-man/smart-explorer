@@ -35,9 +35,9 @@ pub(crate) enum OpenRequest {
 }
 
 /// Starts a process: program and arguments (production: detached).
-pub(crate) type SpawnFn = dyn Fn(&Path, &[String]) -> Result<(), String>;
+pub(crate) type SpawnFn<'a> = dyn Fn(&Path, &[String]) -> Result<(), String> + 'a;
 /// Opens a path with its standard program; `true`: let the user choose.
-pub(crate) type OpenPathFn = dyn Fn(&Path, bool);
+pub(crate) type OpenPathFn<'a> = dyn Fn(&Path, bool) + 'a;
 
 fn window(request: StartRequest) -> OpenRequest {
     OpenRequest::Window(request)
@@ -182,8 +182,8 @@ pub(crate) fn cli_beside(gui: &Path) -> PathBuf {
 pub(crate) fn launch(
     request: &OpenRequest,
     gui: &Path,
-    spawn: &SpawnFn,
-    open_path: &OpenPathFn,
+    spawn: &SpawnFn<'_>,
+    open_path: &OpenPathFn<'_>,
 ) -> Result<(), String> {
     match request {
         OpenRequest::Window(start) => spawn(gui, &window_args(start)),

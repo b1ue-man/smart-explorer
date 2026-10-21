@@ -10,7 +10,6 @@ use super::CopyPastePeerFixture;
 use crate::share::framing::{recv_resp_wire, send_ctrl};
 use crate::share::io_deadline;
 use crate::share::wire::{FsRequest, FsResponse};
-use crate::vfs::Backend;
 
 const MIB: usize = 1024 * 1024;
 
@@ -77,7 +76,7 @@ fn speed_task_share_read_at_len_beyond_the_end_is_clamped() -> io::Result<()> {
     assert_eq!(read_all(tail)?, &body[MIB - 1000..]);
     let behind = fixture
         .backend
-        .open_read_range("/A/data.bin", None, MIB as u64 + 1, 10)?;
+        .open_read_range("/A/data.bin", None, MIB as u64 + 1, 10);
     assert!(behind.is_err(), "a start behind the end is an error");
     // The announced length is what is left, not what was asked for.
     let request = FsRequest::ReadAt {

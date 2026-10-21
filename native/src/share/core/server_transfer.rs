@@ -196,6 +196,8 @@ fn write_worker(
                 path,
                 mode,
                 authorization: lease_authorization,
+                // Unpacking the blocks happens before the worker (`write_file`).
+                lz4: _,
             },
         access,
         abandoned,

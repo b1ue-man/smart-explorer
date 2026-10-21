@@ -4,6 +4,7 @@
 //! Xvfb (suite stage `linux-desktop: x11`, `SE_DESKTOP_TASK_X11=1`).
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{AtomEnum, ConnectionExt as _, CreateGCAux, PropMode, Rectangle};
+use x11rb::wrapper::ConnectionExt as _;
 
 use super::super::wallpaper::{read, RootImage, SettingsSource, NO_ROOT_PIXMAP};
 use super::super::wallpaper_system::SystemSource;

@@ -157,7 +157,7 @@ fn process_ns() -> Option<u64> {
 
 /// Logical processors of all processor groups.
 fn active_cores() -> Option<f64> {
-    use windows_sys::Win32::System::SystemInformation::GetActiveProcessorCount;
+    use windows_sys::Win32::System::Threading::GetActiveProcessorCount;
     const ALL_PROCESSOR_GROUPS: u16 = 0xffff;
     // SAFETY: only reads a system constant.
     let count = unsafe { GetActiveProcessorCount(ALL_PROCESSOR_GROUPS) };

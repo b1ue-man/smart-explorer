@@ -278,8 +278,8 @@ fn speed_task_limiter_text_covers_every_variant() {
         ),
         (Limiter::Memory, Some("Wartet auf Arbeitsspeicher (Puffer)")),
     ];
-    for (limiter, text) in expected {
-        assert_eq!(text(limiter, &ctx).as_deref(), text);
+    for (limiter, wanted) in expected {
+        assert_eq!(text(limiter, &ctx).as_deref(), wanted);
     }
     // an unknown name leaves the brackets out instead of showing empty ones
     let nameless = TextContext::default();
