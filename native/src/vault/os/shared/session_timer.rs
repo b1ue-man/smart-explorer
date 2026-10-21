@@ -56,12 +56,20 @@ impl SessionRegister {
                 // An open file is no idle time (C3.3): its stream holds the
                 // key cell of the session. The idle time starts again when
                 // the last one closes.
-                let idle = if Arc::strong_count(entry.session.keys()) > 1 {
+                let open_files = Arc::strong_count(entry.session.keys()) > 1;
+                let idle = if open_files {
                     entry.session.touch();
                     Duration::ZERO
                 } else {
                     entry.session.idle_at(now)
                 };
+                // U31 S8: an open file (also a descriptor of the documents
+                // provider for another app) holds the background lock off;
+                // once the last one closes, an elapsed background time
+                // locks at the next tick. Screen off is a signal of its own
+                // and locks regardless (`set_host`). Only Android counts
+                // the background (`lock_policy::due`).
+                let background = if open_files { None } else { background };
                 let clock = SiteClock { idle, background };
                 match lock_policy::due(&entry.settings, clock, platform) {
                     Some(reason) => due.push((site.clone(), reason)),
@@ -152,5 +160,57 @@ impl SignalSink for SessionRegister {
         self.lock_where(reason, |settings| {
             lock_policy::locks_on(settings, signal, platform)
         });
+    }
+}
+
+#[cfg(test)]
+mod open_file_tests {
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    use crate::vault::core::lock_policy::LockPlatform;
+    use crate::vault::os::session_test_support::{settings, test_register, unlocked_site};
+
+    /// U31 S8: an open file holds the background lock off; closing it locks
+    /// at once when the background time is up; screen off locks anyway; a
+    /// desktop register never counts the background.
+    #[test]
+    fn vault_task_android_background_waits_for_open_file() {
+        let phone = test_register(LockPlatform::Android);
+        let (site, session) = unlocked_site(&phone, settings(None, false, true, Some(1)));
+        let open = Arc::clone(session.keys());
+        let hidden = Instant::now();
+        phone.set_host(false, true, hidden);
+        phone.tick(hidden + Duration::from_secs(10 * 60));
+        assert!(
+            phone.session(&site).is_some(),
+            "open file keeps it unlocked"
+        );
+        drop(open);
+        phone.tick(hidden + Duration::from_secs(10 * 60 + 1));
+        assert!(
+            phone.session(&site).is_none(),
+            "closed file: background locks"
+        );
+
+        let (screen, screen_session) = unlocked_site(&phone, settings(None, false, true, Some(1)));
+        let held = Arc::clone(screen_session.keys());
+        phone.set_host(true, true, Instant::now());
+        phone.set_host(false, false, Instant::now());
+        assert!(
+            phone.session(&screen).is_none(),
+            "screen off locks with an open file"
+        );
+        drop(held);
+
+        let desktop = test_register(LockPlatform::Desktop);
+        let (kept, _) = unlocked_site(&desktop, settings(None, false, false, Some(1)));
+        let since = Instant::now();
+        desktop.set_host(false, true, since);
+        desktop.tick(since + Duration::from_secs(10 * 60));
+        assert!(
+            desktop.session(&kept).is_some(),
+            "desktop has no background lock"
+        );
     }
 }

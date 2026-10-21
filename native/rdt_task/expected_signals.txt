@@ -425,6 +425,7 @@ vault_task_android_private_task_shows_no_names  linux-core:unit  pfad=mobile::ta
 vault_task_android_task_title_shows_vault_label  linux-core:unit  pfad=mobile::crumbs::task_title_tests::vault_task_android_task_title_shows_vault_label  quelle=U31-S2
 drive_task_remote_scan_delivers_every_failed_path_once  linux-core:unit  pfad=rscan::imp::walk_state::tests::drive_task_remote_scan_delivers_every_failed_path_once  quelle=R15c,SEC-P11b
 drive_task_remote_scan_keeps_long_diagnostics_whole  linux-core:unit  pfad=rscan::imp::walk_state::tests::drive_task_remote_scan_keeps_long_diagnostics_whole  quelle=R15c,SEC-P11b
+vault_task_android_background_waits_for_open_file  linux-core:unit  pfad=vault::os::session::timer::open_file_tests::vault_task_android_background_waits_for_open_file  quelle=U31-S8,SEC-P13
 
 [noch nicht umgesetzt]
 

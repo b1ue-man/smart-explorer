@@ -126,7 +126,8 @@ pub(crate) struct SiteClock {
     /// Time since the last vault operation; zero while a file is open.
     pub(crate) idle: Duration,
     /// Time the app has spent in the background (Android); `None` while it
-    /// is visible.
+    /// is visible and while a file of the site is open (U31 S8: the register
+    /// leaves it out then, so `due` and `wake_in` never count it).
     pub(crate) background: Option<Duration>,
 }
 
