@@ -27,6 +27,7 @@ pub(crate) struct Trace {
     format_events: AtomicU64,
     process_calls: AtomicU64,
     skipped: AtomicU64,
+    empty_chunks: AtomicU64,
     format: Mutex<String>,
     last_skip: Mutex<String>,
 }
@@ -59,17 +60,35 @@ impl Trace {
         *locked(&self.last_skip) = reason.to_string();
     }
 
+    /// A buffer was an empty or corrupted chunk (a cursor-only buffer).
+    pub(crate) fn empty_chunk(&self) {
+        self.empty_chunks.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The stream streams with a negotiated format, and all of its buffers
+    /// without picture (at least one) were empty or corrupted chunks.
+    #[cfg(test)]
+    pub(crate) fn only_empty_chunks(&self) -> bool {
+        let skipped = self.skipped.load(Ordering::Relaxed);
+        self.state.load(Ordering::Relaxed) == 3
+            && self.format_events.load(Ordering::Relaxed) > 0
+            && skipped > 0
+            && skipped == self.empty_chunks.load(Ordering::Relaxed)
+    }
+
     #[cfg(test)]
     pub(crate) fn describe(&self) -> String {
         format!(
             "stream {} after {} state changes; format {:?} after {} format events; \
-             process callback {} times, {} buffers without picture (last: {:?})",
+             process callback {} times, {} buffers without picture, {} of them empty or \
+             corrupted chunks (last: {:?})",
             state_name(self.state.load(Ordering::Relaxed)),
             self.state_changes.load(Ordering::Relaxed),
             locked(&self.format).as_str(),
             self.format_events.load(Ordering::Relaxed),
             self.process_calls.load(Ordering::Relaxed),
             self.skipped.load(Ordering::Relaxed),
+            self.empty_chunks.load(Ordering::Relaxed),
             locked(&self.last_skip).as_str(),
         )
     }

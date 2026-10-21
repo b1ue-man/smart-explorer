@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use super::pipewire_abi::{
     PipewireApi, PwBuffer, PwStreamEvents, SpaHook, SpaPod, PW_DIRECTION_INPUT,
     PW_STREAM_FLAG_AUTOCONNECT, PW_STREAM_FLAG_MAP_BUFFERS, PW_STREAM_STATE_ERROR,
-    PW_VERSION_STREAM_EVENTS, SPA_PARAM_FORMAT,
+    PW_VERSION_STREAM_EVENTS, SPA_CHUNK_FLAG_CORRUPTED, SPA_PARAM_FORMAT,
 };
 use super::spa_pod::{enum_format_pod, parse_video_format, VideoFormat};
 use crate::screen::core::pixel_convert::{BgraImage, FrameSize};
@@ -65,6 +65,14 @@ impl LatestFrame {
     pub(crate) fn describe(&self) -> String {
         let pictures = self.lock().seq;
         format!("{pictures} pictures; {}", self.trace.describe())
+    }
+
+    /// The stream runs, but every buffer it sent so far was an empty or
+    /// corrupted chunk: it only reports cursor moves, no screen change (the
+    /// source sends a picture only when the screen changes).
+    #[cfg(test)]
+    pub(crate) fn only_empty_chunks(&self) -> bool {
+        self.lock().seq == 0 && self.trace.only_empty_chunks()
     }
 
     pub(crate) fn fail(&self, reason: String) {
@@ -254,8 +262,12 @@ unsafe fn copy_picture(data: &CallbackData, buffer: *mut PwBuffer) -> Option<Bgr
         return None;
     }
     let chunk = &*block.chunk;
-    if chunk.size == 0 {
-        skip("chunk of size 0 (a buffer without damage)");
+    // A corrupted chunk ("do not look at the data") or one of size 0 carries
+    // no picture: KWin sends both kinds, a size-0 chunk flagged corrupted, for
+    // a move of the cursor in a stream with cursor metadata.
+    if chunk.flags & SPA_CHUNK_FLAG_CORRUPTED != 0 || chunk.size == 0 {
+        data.latest.trace.empty_chunk();
+        skip("chunk without picture (size 0 or corrupted: a buffer without damage)");
         return None;
     }
     let row = size.width as usize * 4;

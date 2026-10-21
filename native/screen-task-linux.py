@@ -290,7 +290,10 @@ def start_wayland_portal(root: Path, base_env: dict) -> Session:
     (portals / "sway-portals.conf").write_text(
         "[preferred]\ndefault=wlr\norg.freedesktop.impl.portal.ScreenCast=wlr\n"
         "org.freedesktop.impl.portal.Screenshot=wlr\n", encoding="utf-8")
-    processes.append(spawn([xdpw, "-c", xdpw_config], dict(env, XDPW_PERSIST_MODE="permanent"), root / "xdpw.log"))
+    # INFO names why a cast does not start ("unable to receive a valid format
+    # from wlr_screencopy"); the default level logs errors only.
+    processes.append(spawn([xdpw, "-c", xdpw_config, "-l", "INFO"], dict(env, XDPW_PERSIST_MODE="permanent"),
+                           root / "xdpw.log"))
     if not wait_for(lambda: bus_name_present(env, "org.freedesktop.impl.portal.desktop.wlr"), 30, processes[-1]):
         reason = (f"xdg-desktop-portal-wlr meldete sich nicht am Bus: {tail(root / 'xdpw.log')}; "
                   f"Sway {exit_text(compositor)} auf {env['WAYLAND_DISPLAY']}: {tail(root / 'sway.log', 300)}")
