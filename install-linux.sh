@@ -1,5 +1,8 @@
 #!/usr/bin/env sh
 set -eu
+# Files and folders this script creates are never writable by other users,
+# whatever umask the caller has.
+umask 022
 
 REPO="${SMART_EXPLORER_REPO:-b1ue-man/smart-explorer}"
 REF="${SMART_EXPLORER_REF:-main}"
@@ -47,20 +50,33 @@ TMP_DIR=""
 INSTALL_TEMP=""
 DRY_RUN=0
 CLI_ONLY=0
+WITH_FUSE=0
+WITH_DESKTOP=0
 if SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" 2>/dev/null && pwd -P)"; then
   :
 else
   SCRIPT_DIR="$(pwd -P)"
 fi
 
+usage() {
+  echo "usage: $0 [--dry-run] [--cli-only] [--with-fuse] [--with-desktop]"
+}
+
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN=1 ;;
     --cli-only) CLI_ONLY=1 ;;
-    *) echo "usage: $0 [--dry-run] [--cli-only]" >&2; exit 2 ;;
+    --with-fuse) WITH_FUSE=1 ;;
+    --with-desktop) WITH_DESKTOP=1 ;;
+    -h|--help) usage; exit 0 ;;
+    *) usage >&2; exit 2 ;;
   esac
   shift
 done
+if [ "$WITH_DESKTOP" = 1 ] && [ "$CLI_ONLY" = 1 ]; then
+  echo "smart-explorer install: se Desktop braucht die Desktop-App (--with-desktop geht nicht zusammen mit --cli-only)" >&2
+  exit 2
+fi
 
 cleanup() {
   if [ -n "$INSTALL_TEMP" ]; then
@@ -399,12 +415,103 @@ Icon=smart-explorer
 Terminal=false
 Categories=Utility;FileManager;
 StartupNotify=true
+X-KDE-Wayland-Interfaces=org_kde_plasma_window_management
 DESKTOP
     chmod +x "$APP_DIR/smart-explorer.desktop"
   fi
 
   if command -v update-desktop-database >/dev/null 2>&1; then
     run update-desktop-database "$APP_DIR" >/dev/null 2>&1 || true
+  fi
+}
+
+# The package command for fuse3 on this system (printed, never run here).
+fuse_package_command() {
+  if have_cmd apt-get; then
+    printf '%s\n' "sudo apt-get install fuse3"
+  elif have_cmd dnf; then
+    printf '%s\n' "sudo dnf install fuse3"
+  elif have_cmd pacman; then
+    printf '%s\n' "sudo pacman -S fuse3"
+  elif have_cmd zypper; then
+    printf '%s\n' "sudo zypper install fuse3"
+  else
+    printf '%s\n' "install the package fuse3 with the package manager of this system"
+  fi
+}
+
+# Installs fuse3 from the distribution's signed repositories (root only for
+# this step). /etc/fuse.conf stays as it is.
+install_fuse3() {
+  if have_cmd apt-get; then
+    as_root apt-get update && as_root apt-get install -y --no-install-recommends fuse3
+  elif have_cmd dnf; then
+    as_root dnf install -y fuse3
+  elif have_cmd pacman; then
+    as_root pacman -S --needed --noconfirm fuse3
+  elif have_cmd zypper; then
+    as_root zypper --non-interactive install fuse3
+  else
+    return 1
+  fi
+}
+
+# Linux drives (se drive mount) need fusermount3 from fuse3: setuid root and
+# /dev/fuse readable and writable for this user. Only --with-fuse installs
+# the package; without it the script names the command.
+check_fuse() {
+  fusermount="$(command -v fusermount3 2>/dev/null || true)"
+  if [ -z "$fusermount" ]; then
+    if [ "$WITH_FUSE" != 1 ]; then
+      log "fuse3: fusermount3 is missing; Linux drives (se drive mount) need the package fuse3: $(fuse_package_command) (or re-run with --with-fuse)"
+      return 0
+    fi
+    log "fuse3: fusermount3 is missing; installing the package fuse3 (needs root for this step) ..."
+    if ! install_fuse3; then
+      echo "smart-explorer install: fuse3 could not be installed; Smart Explorer itself is installed. Install it with: $(fuse_package_command)" >&2
+      exit 1
+    fi
+    if [ "$DRY_RUN" = 1 ]; then
+      return 0
+    fi
+    fusermount="$(command -v fusermount3 2>/dev/null || true)"
+    if [ -z "$fusermount" ]; then
+      echo "smart-explorer install: fusermount3 is still missing after installing fuse3" >&2
+      exit 1
+    fi
+  fi
+  fuse_ok=1
+  if [ ! -u "$fusermount" ]; then
+    log "fuse3: WARNING: $fusermount is not setuid root; Linux drives cannot mount until the package fuse3 is repaired."
+    fuse_ok=0
+  fi
+  if [ ! -r /dev/fuse ] || [ ! -w /dev/fuse ]; then
+    log "fuse3: WARNING: /dev/fuse is not readable and writable for this user; Linux drives cannot mount here."
+    fuse_ok=0
+  fi
+  if [ "$fuse_ok" = 1 ]; then
+    log "fuse3: $fusermount is ready for Linux drives."
+  fi
+}
+
+# se Desktop (only with the desktop app): --with-desktop enables it, and every
+# installation of the desktop app restarts it, so a running se Desktop runs
+# the freshly installed programs. A failure is reported; the install stays.
+desktop_steps() {
+  if [ "$CLI_ONLY" = 1 ]; then
+    return 0
+  fi
+  if [ "$WITH_DESKTOP" = 1 ]; then
+    if [ "$DRY_RUN" = 1 ]; then
+      log "dry-run: \"$CLI_BIN\" desktop enable"
+    elif ! "$CLI_BIN" desktop enable; then
+      log "WARNING: se Desktop could not be enabled; enable it later with: se desktop enable"
+    fi
+  fi
+  if [ "$DRY_RUN" = 1 ]; then
+    log "dry-run: \"$CLI_BIN\" desktop restart"
+  elif ! "$CLI_BIN" desktop restart; then
+    log "WARNING: se Desktop could not be restarted; restart it with: se desktop restart"
   fi
 }
 
@@ -440,6 +547,11 @@ else
   build_dir="$(prepare_source_build)"
   install_files "$build_dir"
 fi
+
+# Order (H9): programs and smart-explorer.desktop above, then the FUSE runtime
+# check, then se Desktop.
+check_fuse
+desktop_steps
 
 if [ "$DRY_RUN" = 1 ]; then
   if [ "$CLI_ONLY" = 1 ]; then

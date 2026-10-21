@@ -9,6 +9,7 @@
 ;   makensis -DVERSION=x.y.z "-DCLI_SRC=target\release\se.exe" installer.nsi
 ; Silent install:  "Smart Explorer Setup x.y.z.exe" /S
 ; Silent install with Dokany: ... /S /INSTALLDOKANY=1
+; Silent install with se Desktop: ... /S /DESKTOP=1
 ;
 ; What it sets up so the app "just works":
 ;   * installs Smart Explorer.exe (per-user, %LOCALAPPDATA%\Programs)
@@ -137,6 +138,10 @@ Section "Smart Explorer (erforderlich)" SEC_MAIN
   File "/oname=LICENSE-GPL-3.0.txt" "${__FILEDIR__}\..\third-party\dokany\LICENSE-GPL-3.0.txt"
   File "/oname=LICENSE-LGPL-3.0.txt" "${__FILEDIR__}\..\third-party\dokany\LICENSE-LGPL-3.0.txt"
   File "/oname=LICENSE-MIT.txt" "${__FILEDIR__}\..\third-party\dokany\LICENSE-MIT.txt"
+  SetOutPath "$INSTDIR\licenses\Rust-Crates"
+  File "${__FILEDIR__}\..\third-party\rust-crates\THIRD-PARTY-LICENSES.txt"
+  SetOutPath "$INSTDIR\licenses\OpenH264"
+  File "${__FILEDIR__}\..\third-party\openh264\BINARY_LICENSE.txt"
   SetOutPath "$INSTDIR"
 
   ; Best-effort Windows Defender Firewall rule for direct Share peer listeners.
@@ -183,6 +188,20 @@ Section "Smart Explorer (erforderlich)" SEC_MAIN
   WriteRegStr HKCU "${UNINST_KEY}" "QuietUninstallString" '"$INSTDIR\Uninstall.exe" /S'
   WriteRegDWORD HKCU "${UNINST_KEY}" "NoModify" 1
   WriteRegDWORD HKCU "${UNINST_KEY}" "NoRepair" 1
+
+  ; A running se Desktop restarts on the freshly installed programs; without
+  ; an enabled se Desktop the command does nothing.
+  ExecWait '"$INSTDIR\se.exe" desktop restart'
+SectionEnd
+
+; S5 C8: optional, off by default; silent installs select it with /DESKTOP=1.
+Section /o "se Desktop (optional)" SEC_DESKTOP
+  ExecWait '"$INSTDIR\se.exe" desktop enable --json' $0
+  IntCmp $0 0 desktop_enable_done
+    DetailPrint "se Desktop konnte nicht eingeschaltet werden (Exitcode $0); später: se desktop enable"
+    IfSilent desktop_enable_done 0
+    MessageBox MB_OK|MB_ICONEXCLAMATION "se Desktop konnte nicht eingeschaltet werden (Exitcode $0).$\r$\nSmart Explorer wurde installiert; se Desktop lässt sich später mit 'se desktop enable' oder in den Einstellungen einschalten."
+  desktop_enable_done:
 SectionEnd
 
 Section "Dokany ${DOKANY_VERSION} / DLL-API ${DOKANY_API_VERSION} / Treiberprotokoll ${DOKANY_DRIVER_PROTOCOL_VERSION} für Remote-Laufwerke (UAC erforderlich)" SEC_DOKANY
@@ -258,6 +277,13 @@ FunctionEnd
 
 Function .onInit
   StrCpy $DokanyNeedsReboot "0"
+  ; /DESKTOP=1 selects the optional se Desktop section (pattern of /INSTALLDOKANY=1).
+  ${GetParameters} $0
+  StrCpy $1 ""
+  ${GetOptions} $0 "/DESKTOP=" $1
+  StrCmp $1 "1" 0 desktop_option_done
+    !insertmacro SelectSection ${SEC_DESKTOP}
+  desktop_option_done:
   Call CheckDokanyRuntime
   StrCmp $DokanyRuntimeReady "1" dokany_already_ready
 
@@ -294,6 +320,13 @@ Section "Uninstall"
   nsExec::Exec 'taskkill /F /T /IM "se.exe"'
   Sleep 1000
 
+  ; S5 C8: se Desktop removes its own traces (autostart, navigation pane,
+  ; jump list entries) before --unregister; a failure is reported, not fatal.
+  ExecWait '"$INSTDIR\se.exe" desktop remove' $1
+  IntCmp $1 0 desktop_removed
+    DetailPrint "se desktop remove endete mit Exitcode $1; die Autostart-Werte werden unten direkt entfernt."
+  desktop_removed:
+
   ; Undo shell integration via the app's own (reversible) restore BEFORE the
   ; exe is deleted, so folder-opening can't be left pointing at a missing file.
   nsExec::ExecToStack '"$INSTDIR\${EXE_NAME}" --unregister'
@@ -312,6 +345,33 @@ Section "Uninstall"
     MessageBox MB_OK|MB_ICONSTOP "Der Smart-Explorer-Eintrag konnte nicht sicher aus dem Benutzer-PATH entfernt werden. Die Deinstallation wurde beendet, bevor se.exe gelöscht wurde.$\r$\nBitte erneut versuchen oder ausführen: $INSTDIR\${CLI_EXE_NAME} --uninstall-cli-path" /SD IDOK
     Abort
   cli_path_removed:
+  ; PRM-M7: remove the Windows account service and its program copy while se.exe
+  ; still exists; se.exe asks for administrator rights itself (UAC, runas). Only a
+  ; machine with the service is asked; a silent uninstall never raises a hidden
+  ; UAC prompt and only names the command.
+  nsExec::ExecToStack 'sc.exe query SmartExplorerExecAccounts'
+  Pop $0
+  Pop $2
+  StrCmp $0 "0" 0 exec_accounts_done
+  IfSilent exec_accounts_silent 0
+  StrCpy $3 ""
+  MessageBox MB_YESNO|MB_DEFBUTTON2|MB_ICONQUESTION "Auch das Fernzugriffskonto se-remote mit seinem Profilordner löschen?" /SD IDNO IDNO exec_accounts_remove
+    StrCpy $3 " --delete-remote-account"
+  exec_accounts_remove:
+  ExecWait '"$INSTDIR\se.exe" share exec accounts remove$3' $1
+  IntCmp $1 0 exec_accounts_done
+    DetailPrint "Kontodienst SmartExplorerExecAccounts und Ordner $PROGRAMFILES64\Smart Explorer\exec-accounts wurden nicht entfernt. Als Administrator ausführen: se share exec accounts remove"
+    Goto exec_accounts_done
+  exec_accounts_silent:
+    DetailPrint "Kontodienst SmartExplorerExecAccounts bleibt (stille Deinstallation ohne UAC-Abfrage). Als Administrator ausführen: se share exec accounts remove"
+  exec_accounts_done:
+
+  ; Login starts this installation created through the app (U06): the sync
+  ; daemon, the drives and se Desktop. The names are this app's own.
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "SmartExplorerSync"
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "SmartExplorerDrives"
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "SmartExplorerDesktop"
+
   ; Fallback: remove our uniquely-named context-menu verb keys directly (always
   ; safe — we fully own these).
   DeleteRegKey HKCU "Software\Classes\Directory\shell\${VERB}"
@@ -328,6 +388,10 @@ Section "Uninstall"
   Delete "$INSTDIR\licenses\Dokany\LICENSE-LGPL-3.0.txt"
   Delete "$INSTDIR\licenses\Dokany\LICENSE-MIT.txt"
   RMDir "$INSTDIR\licenses\Dokany"
+  Delete "$INSTDIR\licenses\Rust-Crates\THIRD-PARTY-LICENSES.txt"
+  RMDir "$INSTDIR\licenses\Rust-Crates"
+  Delete "$INSTDIR\licenses\OpenH264\BINARY_LICENSE.txt"
+  RMDir "$INSTDIR\licenses\OpenH264"
   RMDir "$INSTDIR\licenses"
   Delete "$INSTDIR\Smart Explorer_old.exe"
   Delete "$INSTDIR\Smart Explorer_update_pending.exe"
