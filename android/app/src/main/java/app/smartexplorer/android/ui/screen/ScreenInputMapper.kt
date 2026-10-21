@@ -258,9 +258,11 @@ class ScreenInputMapper(
 
     /** What waits plus the counterpart of all that is pressed (button up, key up, touch cancel). */
     fun releaseAll(): List<JsonObject> {
-        heldButtons.reversed().forEach { add(ev("button", "button" to it, "down" to false)) }
+        // `toList().asReversed()`, not `reversed()`: compiled against JDK 21, `reversed()` on a
+        // LinkedHashSet binds to SequencedSet.reversed(), which Android has only from API 35.
+        heldButtons.toList().asReversed().forEach { add(ev("button", "button" to it, "down" to false)) }
         heldButtons.clear()
-        heldKeys.reversed().forEach { add(ev("key", "key" to it, "down" to false)) }
+        heldKeys.toList().asReversed().forEach { add(ev("key", "key" to it, "down" to false)) }
         heldKeys.clear()
         cancelTouches()
         mode = Mode.IDLE
