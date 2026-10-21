@@ -149,7 +149,11 @@ async fn dispatch_connection(
     permit: ApplicationHandshakePermit,
 ) -> io::Result<()> {
     match connection.alpn() {
-        ALPN => super::server::handle_connection(node, connection, permit).await,
+        ALPN => {
+            node.quic_stats
+                .track(&connection, super::quic_stats_hub::Side::Host);
+            super::server::handle_connection(node, connection, permit).await
+        }
         EXEC_ALPN => super::exec_server::handle_connection(node, connection, permit).await,
         SCREEN_ALPN => node.handle_screen_connection(connection, permit).await,
         _ => Err(eio("Unbekanntes Share-Protokoll")),

@@ -71,6 +71,8 @@ pub(crate) struct ShareIrohNode {
     power: Arc<PowerHub>,
     wake: wake::NodeWake,
     idle: idle::NodeIdle,
+    /// QUIC statistics of transfer bursts (development builds only).
+    pub(super) quic_stats: super::quic_stats_hub::QuicStatsHub,
     /// Tests pose this host as one before transfer v1.
     #[cfg(test)]
     legacy_transfer_host: AtomicBool,
@@ -169,6 +171,7 @@ impl ShareIrohNode {
         let routes = EndpointRoutes::start(&rt, &endpoint, relay_configured);
         let wake = wake::NodeWake::new();
         wake.watch(&rt, &endpoint);
+        let quic_stats = super::quic_stats_hub::QuicStatsHub::start(&rt);
         let exec_registry = Arc::new(ExecRegistry::new(ExecRegistryLimits::default()));
         let screen = super::node_screen::NodeScreen::new();
         let node = Arc::new(Self {
@@ -201,6 +204,7 @@ impl ShareIrohNode {
             power,
             wake,
             idle: idle::NodeIdle::default(),
+            quic_stats,
             #[cfg(test)]
             legacy_transfer_host: AtomicBool::new(false),
             #[cfg(test)]

@@ -15,6 +15,7 @@ use crate::share::framing::{reply, reply_err, send_tagged, TAG_DATA, TAG_DATA_LZ
 use crate::share::fs;
 use crate::share::fs_access::FsAccess;
 use crate::share::io_deadline;
+use crate::share::transfer_meter as stats;
 use crate::share::wire::FsResponse;
 use crate::vfs::{Backend, VfsMeta};
 
@@ -91,17 +92,30 @@ pub(in crate::share) async fn read_file<G: Send + 'static>(
         Err(_) => return Err(worker_exit(worker.join().await)),
     };
     live.check_read()?;
+    stats::stream_started();
     let header = reply(&mut send, FsResponse::Data { size });
     io_deadline::run_for("Share read data", stall, header).await?;
-    while let Some(chunk) = data_rx.recv().await {
+    loop {
+        // Waiting here is waiting for the reader worker (the disk).
+        let waiting = stats::Timer::start();
+        let next = data_rx.recv().await;
+        waiting.stop(stats::Phase::DiskWait);
+        let Some(chunk) = next else {
+            break;
+        };
         let chunk = chunk?;
         live.check_read()?;
         let started = Instant::now();
         let sent = send_tagged(&mut send, chunk.tag, &chunk.bytes);
         // Returning drops the channel: the worker stops and frees the slot.
         io_deadline::run_for("Share read data", stall, sent).await?;
+        let blocked = started.elapsed();
+        if stats::enabled() {
+            stats::meter().add(stats::Phase::NetWait, blocked);
+            stats::bytes(chunk.raw, chunk.bytes.len());
+        }
         if let Some(lz4) = &lz4 {
-            lz4.record_send(chunk.raw, started.elapsed(), Instant::now());
+            lz4.record_send(chunk.raw, blocked, Instant::now());
         }
     }
     live.check_read()?;
@@ -134,7 +148,10 @@ fn read_worker(
     }
     loop {
         let mut buffer = vec![0u8; fs::CHUNK];
-        let read = match reader.read(&mut buffer) {
+        let reading = stats::Timer::start();
+        let read = reader.read(&mut buffer);
+        reading.stop(stats::Phase::DiskRead);
+        let read = match read {
             Ok(read) => read,
             Err(error) => {
                 let _ = chunks.blocking_send(Err(error));

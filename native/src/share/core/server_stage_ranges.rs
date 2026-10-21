@@ -33,6 +33,7 @@ use crate::share::io_deadline;
 use crate::share::mount_lease::{run_authorized, MountLeaseAuthorization};
 use crate::share::server_transfer::STREAM_BUFFER_CHUNKS;
 use crate::share::session::PeerPrincipal;
+use crate::share::transfer_meter as stats;
 use crate::share::wire::{FsRequest, FsResponse, FsSegmentedFinish, FsSegmentedOpen, FsStageWrite};
 
 use super::control_operations::control;
@@ -240,6 +241,7 @@ pub(super) async fn write_at(stream: FsStream, request: FsStageWrite) -> io::Res
         Err(error) => return reply_err(&mut send, error).await,
     };
     reply(&mut send, FsResponse::Ready).await?;
+    stats::stream_started();
 
     let lz4 = lz4_stream::negotiated(request.lz4);
     let stall = context.stall();
@@ -304,12 +306,16 @@ async fn receive_range(
 ) -> io::Result<()> {
     let mut received = 0u64;
     loop {
+        // Waiting for the next frame is waiting for the network.
+        let waiting = stats::Timer::start();
         let frame = io_deadline::run_for(
             "Share stage write data",
             stall,
             recv_content_frame_or_end(recv, lz4),
         )
-        .await?;
+        .await;
+        waiting.stop(stats::Phase::NetWait);
+        let frame = frame?;
         let Some((tag, payload)) = frame else {
             if received == len {
                 return Ok(());
@@ -335,7 +341,11 @@ async fn receive_range(
                 format!("Mehr als die angekündigten {len} Bytes für den Bereich"),
             ));
         }
-        if tx.send(Command::Data(bytes)).await.is_err() {
+        // A full queue is the stage writer being slower than the network.
+        let queued = stats::Timer::start();
+        let sent = tx.send(Command::Data(bytes)).await;
+        queued.stop(stats::Phase::StageWait);
+        if sent.is_err() {
             return Err(io::Error::new(
                 io::ErrorKind::BrokenPipe,
                 "Der Bereichsschreiber ist beendet",
@@ -356,7 +366,10 @@ fn write_range(
         match command {
             Command::Data(bytes) => {
                 access.check_write()?;
-                claim.write(&bytes)?;
+                let writing = stats::Timer::start();
+                let written = claim.write(&bytes);
+                writing.stop(stats::Phase::StageWrite);
+                written?;
             }
             Command::Complete => {
                 access.check_write()?;

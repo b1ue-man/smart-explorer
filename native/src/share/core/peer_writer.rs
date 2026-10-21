@@ -9,6 +9,8 @@ use super::framing::lz4_stream::{frame_for, Lz4Stream};
 use super::framing::{decode_resp, recv_resp_wire, send_ctrl, send_tagged};
 use super::fs;
 use super::node::ShareIrohNode;
+use super::quic_stats_hub::track_client;
+use super::transfer_meter as stats;
 use super::wire::{Ctrl, FsRequest, FsResponse};
 
 /// A successful WriteDone acknowledgement, rather than Ready or the filename,
@@ -101,6 +103,8 @@ pub(super) fn writer(
     session_key: String,
     generation: usize,
 ) -> Box<dyn Write + Send> {
+    track_client(&node, &session_key);
+    stats::stream_started();
     Box::new(PeerWriter {
         node,
         send: Some(send),
@@ -235,6 +239,9 @@ impl Write for PeerWriter {
                     send_tagged(send, tag, &bytes),
                 ))
             };
+            if stats::enabled() {
+                stats::meter().add(stats::Phase::NetWait, started.elapsed());
+            }
             if let Err(error) = result {
                 return Err(self.fail_open_stream(error));
             }

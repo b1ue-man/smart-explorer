@@ -154,6 +154,11 @@ pub struct ReportLine {
     /// Requirements that could not run (tool missing); the case then counts
     /// as "nicht ausgeführt" although the other requirements held.
     pub skipped: Vec<String>,
+    /// The QUIC statistics both Share devices wrote during the case (one
+    /// object per transfer burst and device, `remote.rs` `share_stats`), and
+    /// one short text per object.
+    pub share_quic: Vec<Value>,
+    pub share_quic_summary: Vec<String>,
 }
 
 impl ReportLine {
@@ -181,7 +186,7 @@ impl ReportLine {
     }
 
     pub fn to_json(&self) -> Value {
-        json!({
+        let mut value = json!({
             "name": self.name, "status": "measured", "way": self.way,
             "direction": self.direction, "profile": self.profile,
             "size_bytes": self.size_bytes, "files": self.files, "unit": self.unit,
@@ -189,7 +194,12 @@ impl ReportLine {
             "required": self.required, "requirement": self.requirement,
             "reference_tool": self.reference_tool, "reference_rate": self.reference_rate,
             "limiter": self.limiter, "notes": self.notes, "skipped": self.skipped,
-        })
+        });
+        if !self.share_quic.is_empty() {
+            value["share_quic"] = json!(self.share_quic);
+            value["share_quic_summary"] = json!(self.share_quic_summary);
+        }
+        value
     }
 
     pub fn summary(&self) -> String {
@@ -205,6 +215,19 @@ impl ReportLine {
 /// Appends the line; panics with `failure` when a requirement was missed;
 /// announces the requirements that could not run.
 pub fn finish(line: &ReportLine, failure: Option<&str>) {
+    let mut line = line.clone();
+    // Only a transfer of some size forms a burst the devices report.
+    if line.way.contains("share") && line.size_bytes >= 64 * MIB {
+        // What both Share devices measured of the QUIC connection (E13).
+        let collected = crate::remote::share_stats::collect();
+        for (summary, burst) in collected.summaries.iter().zip(&collected.lines) {
+            println!("SHARE_QUIC {} {}", line.name, burst);
+            println!("SHARE_QUIC_SUMMARY {} {}", line.name, summary);
+        }
+        line.share_quic = collected.lines;
+        line.share_quic_summary = collected.summaries;
+    }
+    let line = &line;
     append_report(&line.to_json());
     println!("SPEED {}", line.to_json());
     if let Some(message) = failure {
