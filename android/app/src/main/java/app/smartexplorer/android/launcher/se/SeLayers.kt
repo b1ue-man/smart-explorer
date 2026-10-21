@@ -71,7 +71,7 @@ fun SeRoomPopup(vm: LauncherViewModel, profileId: String, maxColumns: Int, onClo
                 }
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(columns),
-                    modifier = Modifier.fillMaxWidth().heightIn(max = maxHeight * 0.7f).padding(top = 8.dp),
+                    modifier = Modifier.fillMaxWidth().heightIn(max = this@BoxWithConstraints.maxHeight * 0.7f).padding(top = 8.dp),
                 ) {
                     items(room.members, key = { it.deviceId }) { member ->
                         SeMemberTile(

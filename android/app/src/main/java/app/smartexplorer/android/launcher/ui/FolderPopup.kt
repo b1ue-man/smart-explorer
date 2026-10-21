@@ -103,7 +103,7 @@ fun FolderPopup(
                 }
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(columns),
-                    modifier = Modifier.fillMaxWidth().heightIn(max = maxHeight * 0.7f).padding(top = 8.dp),
+                    modifier = Modifier.fillMaxWidth().heightIn(max = this@BoxWithConstraints.maxHeight * 0.7f).padding(top = 8.dp),
                 ) {
                     items(children, key = { it.id }) { child ->
                         ChildTile(

@@ -118,9 +118,11 @@ internal object VaultSavedPassword {
 
                     override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
                         if (!continuation.isActive) return
+                        // The framework class has no BIOMETRIC_ERROR_NEGATIVE_BUTTON (that constant is androidx.biometric's)
+                        // and the prompt has no negative button with DEVICE_CREDENTIAL allowed: the person leaving it
+                        // (back, outside, "Cancel" of the system dialog) arrives as BIOMETRIC_ERROR_USER_CANCELED.
                         val dismissed = errorCode == BiometricPrompt.BIOMETRIC_ERROR_USER_CANCELED ||
-                            errorCode == BiometricPrompt.BIOMETRIC_ERROR_CANCELED ||
-                            errorCode == BiometricPrompt.BIOMETRIC_ERROR_NEGATIVE_BUTTON
+                            errorCode == BiometricPrompt.BIOMETRIC_ERROR_CANCELED
                         continuation.resume(if (dismissed) Confirmed.Dismissed else Confirmed.Failed("Bestätigung fehlgeschlagen: $errString"))
                     }
                 },

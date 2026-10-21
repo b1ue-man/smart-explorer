@@ -31,9 +31,9 @@ class IconLoader private constructor(private val context: Context) {
     /** The icon already in memory, if any. */
     fun peek(key: String): Bitmap? = memory.get(key)
 
-    /** Key of an app icon: `<package>~<class hash>~<user serial>~<version>~<pixels>` (U35-24). */
+    /** Key of an app icon: `<package>~<class hash>~<user serial>~<revision>~<pixels>` (U35-24). */
     fun appKey(entry: AppEntry, px: Int): String =
-        "${entry.packageName}~${hash8(entry.component.className)}~${entry.userSerial}~${entry.versionCode}~$px"
+        "${entry.packageName}~${hash8(entry.component.className)}~${entry.userSerial}~${entry.revision}~$px"
 
     /** Key of a shortcut icon; memory only, since shortcut icons change without a new version. */
     fun shortcutKey(packageName: String, shortcutId: String, userSerial: Long, px: Int): String =

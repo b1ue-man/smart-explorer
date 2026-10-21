@@ -101,8 +101,8 @@ suspend fun loadPickerGroups(vm: LauncherViewModel): List<PickerGroup> = withCon
     val result = ArrayList<PickerGroup>()
     for (profile in vm.catalog.profilesForPicker()) {
         val groups = vm.widgets.providersOf(profile.user).groupBy { it.provider.packageName }.mapNotNull { (pkg, infos) ->
-            val application = infos.first().providerInfo.applicationInfo
-            val appLabel = pm.getUserBadgedLabel(application.loadLabel(pm), profile.user).toString()
+            val application = vm.widgets.applicationOf(infos.first())
+            val appLabel = application?.let { pm.getUserBadgedLabel(it.loadLabel(pm), profile.user).toString() } ?: pkg
             val entries = infos.map { info ->
                 val span = WidgetSizes.initialSpan(
                     targetCellWidth = if (android.os.Build.VERSION.SDK_INT >= 31) info.targetCellWidth else 0,
@@ -114,7 +114,7 @@ suspend fun loadPickerGroups(vm: LauncherViewModel): List<PickerGroup> = withCon
                 )
                 PickerEntry(info, info.loadLabel(pm).ifEmpty { pkg }, span)
             }.sortedWith { a, b -> collator.compare(a.label, b.label) }
-            PickerGroup("$pkg#${profile.userSerial}", appLabel, profile.user, profile.userSerial, runCatching { application.loadIcon(pm) }.getOrNull(), entries)
+            PickerGroup("$pkg#${profile.userSerial}", appLabel, profile.user, profile.userSerial, runCatching<Drawable?> { application?.loadIcon(pm) }.getOrNull(), entries)
         }.sortedWith { a, b -> collator.compare(a.label, b.label) }
         result += groups
     }

@@ -7,6 +7,7 @@ import android.content.pm.LauncherActivityInfo
 import android.content.pm.LauncherApps
 import android.os.UserHandle
 import android.os.UserManager
+import java.io.File
 import java.text.Collator
 import java.util.Locale
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -25,7 +26,11 @@ data class AppEntry(
     val kind: ProfileKind,
     val available: Boolean,
     val info: LauncherActivityInfo,
-    val versionCode: Long,
+    /**
+     * Stamp of the installed package, in the key of the icon file: the modification time of its base APK. The
+     * platform gives no version code for the apps of another profile (`ApplicationInfo` has no `longVersionCode`).
+     */
+    val revision: Long,
 ) {
     val packageName: String get() = component.packageName
 
@@ -104,7 +109,7 @@ class AppCatalog private constructor(private val context: Context) {
                     kind = profile.kind,
                     available = available,
                     info = info,
-                    versionCode = application.longVersionCode,
+                    revision = File(application.sourceDir.orEmpty()).lastModified(),
                 )
             }
         }
