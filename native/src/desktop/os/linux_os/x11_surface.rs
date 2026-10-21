@@ -244,13 +244,18 @@ fn watch(window: Window, signals: &SurfaceSignals) -> Result<(), String> {
         workarea: need("_NET_WORKAREA")?,
         current: need("_NET_CURRENT_DESKTOP")?,
     };
+    // The MapNotify of the window is selected before its map state is read:
+    // a window mapped between the two would otherwise bring no MapNotify,
+    // get no messages and keep only what the window manager read when it
+    // mapped it (`_NET_WM_STATE_BELOW` was missing under xfwm4 in suite run
+    // 7 while the other states were there).
+    let own = ChangeWindowAttributesAux::new().event_mask(EventMask::STRUCTURE_NOTIFY);
+    let _ = conn.change_window_attributes(window, &own);
     let shown = conn
         .get_window_attributes(window)
         .ok()
         .and_then(|cookie| cookie.reply().ok())
         .is_some_and(|reply| reply.map_state == MapState::VIEWABLE);
-    let own = ChangeWindowAttributesAux::new().event_mask(EventMask::STRUCTURE_NOTIFY);
-    let _ = conn.change_window_attributes(window, &own);
     let desktop = ChangeWindowAttributesAux::new().event_mask(EventMask::PROPERTY_CHANGE);
     let _ = conn.change_window_attributes(root, &desktop);
     let _ = conn.randr_select_input(
