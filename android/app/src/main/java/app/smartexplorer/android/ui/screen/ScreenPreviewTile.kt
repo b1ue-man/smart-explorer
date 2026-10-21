@@ -100,6 +100,12 @@ fun ScreenPreviewTile(
     }
     LaunchedEffect(gate) {
         if (gate != TileGate.Allow) return@LaunchedEffect
+        // One connection per tile: a probe that answers `allow` again (the device list follows the
+        // Share status) keeps the running session; only an ended one is closed and replaced.
+        val running = session
+        if (running != null && running.state.value.ended == null) return@LaunchedEffect
+        running?.close()
+        session = null
         val opened = ScreenSession(target, backend)
         try {
             opened.open("preview", null, PREVIEW_EDGE, PREVIEW_EDGE, if (intervalMs <= 500) 2 else 1, listOf(DecoderOffer(codec = "tiles")))

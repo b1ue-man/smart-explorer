@@ -60,7 +60,7 @@ class ScreenControlService : AccessibilityService() {
 
     /** Appends [text] to the focused input field (`ACTION_SET_TEXT`); `false` without one. */
     fun appendText(text: String): Boolean {
-        val node = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: return false
+        val node = focusedInput() ?: return false
         val current = if (node.isShowingHintText) "" else node.text?.toString().orEmpty()
         val arguments = Bundle().apply {
             putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, current + text)
@@ -70,8 +70,31 @@ class ScreenControlService : AccessibilityService() {
 
     /** „Enter“ in the focused input field (`ACTION_IME_ENTER`, API 30). */
     fun imeEnter(): Boolean {
-        val node = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: return false
+        val node = focusedInput() ?: return false
         return node.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id)
+    }
+
+    /**
+     * The input field that has the focus. `findFocus(FOCUS_INPUT)` asks the focused view's node
+     * provider, and a Compose view answers it with its own node until its accessibility state
+     * caught up with the focus (`AccessibilityInteractionController` then falls back to the view,
+     * which takes no text). Then the window is searched for the focused editable node; without one
+     * the answer of `findFocus` stays.
+     */
+    private fun focusedInput(): AccessibilityNodeInfo? {
+        val root = rootInActiveWindow ?: return null
+        val found = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+        if (found != null && found.isEditable) return found
+        val pending = ArrayDeque<AccessibilityNodeInfo>()
+        pending.add(root)
+        var visited = 0
+        while (pending.isNotEmpty() && visited < MAX_FOCUS_SEARCH_NODES) {
+            val node = pending.removeAt(0)
+            visited++
+            if (node.isFocused && node.isEditable) return node
+            for (index in 0 until node.childCount) node.getChild(index)?.let { pending.add(it) }
+        }
+        return found
     }
 
     /**
@@ -103,6 +126,9 @@ class ScreenControlService : AccessibilityService() {
         .distinctBy { it.first }
 
     companion object {
+        /** Nodes the search for the focused field looks at, at most (a window rarely has more). */
+        private const val MAX_FOCUS_SEARCH_NODES = 2_000
+
         @Volatile
         private var instance: ScreenControlService? = null
 
