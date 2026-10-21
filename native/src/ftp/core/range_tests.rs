@@ -159,7 +159,16 @@ fn serve(
                 reply(&mut control, &format!("350 Restarting at {rest}"))?
             }
             "RETR" if rules.refuse.load(Ordering::SeqCst) => {
-                return reply(&mut control, "421 Service not available");
+                // The client sends RETR before it connects to the data port
+                // (suppaftp `data_command`). A server that closes the port
+                // first resets that connect, and the client never reads the
+                // 421. A real server has the port open: take the connection,
+                // then refuse, and end the control stream with a FIN.
+                let data = accept_data(passive.take())?;
+                reply(&mut control, "421 Service not available")?;
+                control.shutdown(std::net::Shutdown::Write)?;
+                drop(data);
+                return Ok(());
             }
             "RETR" if argument == "/f" => {
                 let offset = std::mem::take(&mut rest).min(FILE);
@@ -181,6 +190,22 @@ fn serve(
     }
 }
 
+/// The client's data connection on the passive port opened by PASV.
+fn accept_data(passive: Option<TcpListener>) -> io::Result<TcpStream> {
+    let listener = passive.ok_or_else(|| io::Error::other("no PASV"))?;
+    listener.set_nonblocking(true)?;
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let data = loop {
+        match listener.accept() {
+            Ok((data, _)) => break data,
+            Err(_) if Instant::now() < deadline => thread::sleep(Duration::from_millis(2)),
+            Err(error) => return Err(error),
+        }
+    };
+    data.set_nonblocking(false)?;
+    Ok(data)
+}
+
 /// 150, the bytes from `offset`, then 226; with `hold` the data connection
 /// stays open until the client's ABOR, answered 426 and 226.
 fn retrieve(
@@ -191,17 +216,7 @@ fn retrieve(
     offset: usize,
     hold: bool,
 ) -> io::Result<()> {
-    let listener = passive.ok_or_else(|| io::Error::other("no PASV"))?;
-    listener.set_nonblocking(true)?;
-    let deadline = Instant::now() + Duration::from_secs(3);
-    let mut data = loop {
-        match listener.accept() {
-            Ok((data, _)) => break data,
-            Err(_) if Instant::now() < deadline => thread::sleep(Duration::from_millis(2)),
-            Err(error) => return Err(error),
-        }
-    };
-    data.set_nonblocking(false)?;
+    let mut data = accept_data(passive)?;
     reply(control, "150 opening data connection")?;
     data.write_all(&content()[offset..])?;
     if !hold {
