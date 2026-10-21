@@ -7,6 +7,7 @@
 //! is remembered only after it unlocked the vault.
 use std::fmt;
 use std::io::{self, Read};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crate::cryptomator::{
@@ -41,6 +42,9 @@ pub(crate) enum UnlockError {
     OtherVault,
     /// `--saved-password` without a remembered password.
     NoSavedPassword,
+    /// The caller withdrew the unlock while the key was derived (U31 S4):
+    /// the derived key was dropped before any session existed.
+    Cancelled,
 }
 
 impl UnlockError {
@@ -52,6 +56,7 @@ impl UnlockError {
             Self::Format(FormatError::HubVault) => Some("vault_hub"),
             Self::Format(FormatError::KdfMemory { .. }) => Some("vault_memory"),
             Self::NoSavedPassword => Some("vault_no_saved_password"),
+            Self::Cancelled => Some("canceled"),
             _ => None,
         }
     }
@@ -68,6 +73,7 @@ impl fmt::Display for UnlockError {
                 f.write_str("Am Speicherort liegt ein anderer Tresor als eingetragen")
             }
             Self::NoSavedPassword => f.write_str("Für diesen Tresor ist kein Passwort gemerkt"),
+            Self::Cancelled => f.write_str("Entsperren abgebrochen"),
         }
     }
 }
@@ -199,6 +205,42 @@ pub(crate) fn unlock_entered(
     options: UnlockOptions,
     resolve: ResolveLocation<'_>,
 ) -> Result<Unlocked, UnlockError> {
+    let never = AtomicBool::new(false);
+    let target = UnlockTarget {
+        register,
+        store,
+        secrets,
+        query,
+    };
+    unlock_entered_cancellable(target, password, options, resolve, &never)
+}
+
+/// Where `unlock_entered_cancellable` unlocks.
+pub(crate) struct UnlockTarget<'a> {
+    pub(crate) register: &'a SessionRegister,
+    pub(crate) store: &'a RegistryStore,
+    pub(crate) secrets: &'a dyn SecretStore,
+    pub(crate) query: &'a str,
+}
+
+/// `unlock_entered` that a caller can withdraw (U31 S4): scrypt runs in one
+/// piece and cannot stop, so `cancel` is read once the key is derived and
+/// before the session goes into the register. When it is set the key is
+/// dropped (zeroized), nothing is remembered and `UnlockError::Cancelled`
+/// comes back; the vault never was unlocked.
+pub(crate) fn unlock_entered_cancellable(
+    target: UnlockTarget<'_>,
+    password: &str,
+    options: UnlockOptions,
+    resolve: ResolveLocation<'_>,
+    cancel: &AtomicBool,
+) -> Result<Unlocked, UnlockError> {
+    let UnlockTarget {
+        register,
+        store,
+        secrets,
+        query,
+    } = target;
     let record = store.resolve(query).map_err(UnlockError::Unknown)?;
     if let Some((session, epoch)) = register.session(&record.id) {
         if options.remember == Some(true) {
@@ -220,6 +262,10 @@ pub(crate) fn unlock_entered(
     }
     let (inner, root) = resolve(&record.location).map_err(UnlockError::Unreachable)?;
     let (key, config) = unlock_storage(inner.as_ref(), &root, password, options.available)?;
+    if cancel.load(Ordering::Acquire) {
+        // `key` goes out of scope here and is zeroized with it.
+        return Err(UnlockError::Cancelled);
+    }
     if !record.vault_id.is_empty() && config.jti != record.vault_id {
         return Err(UnlockError::OtherVault);
     }
@@ -278,3 +324,7 @@ pub(crate) fn session_for(
     let (key, config) = unlock_storage(inner, root, password, None)?;
     Ok(VaultSession::new(site, key, config))
 }
+
+#[cfg(test)]
+#[path = "unlock_cancel_tests.rs"]
+mod cancel_tests;

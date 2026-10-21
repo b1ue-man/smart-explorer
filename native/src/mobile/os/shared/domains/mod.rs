@@ -86,11 +86,20 @@ mod sync_versions;
 mod tests;
 #[path = "update.rs"]
 mod update;
+// VLT-M11 (U31): vaults on Android.
+#[path = "vault_compare.rs"]
+mod vault_compare;
+#[path = "vault_keys.rs"]
+mod vault_keys;
+#[path = "vaults.rs"]
+mod vaults;
 
 // SCR-M8: the binary calls of the JNI bridge (`screen_jni.rs`).
 pub use docs_io::{doc_fsync, doc_open, doc_read, doc_release, doc_size, doc_write};
 pub use screen_host::{screen_control, screen_push};
 pub use screen_view::screen_pull;
+// U31 S2: the label of a vault for task titles outside this module.
+pub(crate) use vaults::label_of as vault_label;
 
 /// Handles a domain method; `None` = not a domain method.
 pub(crate) fn dispatch(
@@ -109,6 +118,7 @@ pub(crate) fn dispatch(
         "app" => app_licenses::handle(method),
         "screen" => screen_host::handle(method, args).or_else(|| screen_view::handle(method, args)),
         "docs" => docs::handle(rt, method, args),
+        "vault" => vaults::handle(rt, method, args),
         _ => None,
     }
 }
@@ -116,6 +126,7 @@ pub(crate) fn dispatch(
 /// Starts the Share poller (it idles until the embedded worker runs).
 pub(crate) fn on_init(rt: &'static Runtime) {
     share_state::start_poller(rt);
+    vaults::install_events(rt);
 }
 
 /// Before the embedded worker starts: Share CPU-hold requests become `wake`

@@ -61,10 +61,13 @@ pub(crate) fn import(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
     let title = format!(
         "Empfangen: {} Datei(en) → {}",
         incoming.len(),
-        crumbs::title(&target, &rt.volumes())
+        crumbs::task_title(&target, &rt.volumes(), &super::domains::vault_label)
     );
     let runtime = rt.clone();
     let id = rt.spawn_task("upload", title, move |ctx| {
+        if target.is_vault() {
+            ctx.keep_names_private();
+        }
         run_import(&runtime, ctx, &target, incoming)
     });
     Ok(json!({ "taskId": id }))
@@ -164,6 +167,9 @@ pub(crate) fn extract(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
     let title = format!("Entpacken: {}", archive.name());
     let runtime = rt.clone();
     let id = rt.spawn_task("extract", title, move |ctx| {
+        if target.is_vault() {
+            ctx.keep_names_private();
+        }
         run_extract(&runtime, ctx, &archive, &target)
     });
     Ok(json!({ "taskId": id }))
@@ -238,7 +244,7 @@ fn run_extract(
             Endpoint::Remote(backend),
             dest_root,
             archive.name().to_string(),
-            crumbs::title(target, &rt.volumes()),
+            crumbs::task_title(target, &rt.volumes(), &super::domains::vault_label),
         );
         run_job(ctx, job)?.into_result(ctx)?;
         // The upload may number the folder; the result names its parent.

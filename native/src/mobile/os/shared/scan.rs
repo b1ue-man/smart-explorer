@@ -111,7 +111,11 @@ fn start(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
     if let Some(error) = CompiledFilter::compile(&filter).error() {
         return Err(ApiError::invalid(error.to_string()));
     }
-    let title = format!("Suche in {}", crumbs::title(&base, &rt.volumes()));
+    let title = format!(
+        "Suche in {}",
+        crumbs::task_title(&base, &rt.volumes(), &super::domains::vault_label)
+    );
+    let private = base.is_vault();
     let session = Arc::new(ScanSession {
         base,
         filter,
@@ -122,6 +126,9 @@ fn start(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
     let worker_session = session.clone();
     let id = rt.spawn_task("scan", title, move |ctx| {
         let _finish = FinishOnDrop(&worker_session);
+        if private {
+            ctx.keep_names_private();
+        }
         run_scan(&runtime, ctx, &worker_session)
     });
     rt.inner.scans.insert(id.clone(), session);

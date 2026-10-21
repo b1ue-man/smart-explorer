@@ -46,6 +46,9 @@
 
     <!-- Self-update through the system installer -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- VLT-M11 (U31, S1): the remembered vault password opens only after the device lock
+         confirms it (android.hardware.biometrics.BiometricPrompt, biometrics or PIN). -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
 
     <!-- Connections, jobs and the share identity never leave the device (cloud backup and
          device transfer are both disabled / fully excluded). -->

@@ -28,6 +28,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -37,6 +38,8 @@ import app.smartexplorer.android.api.SyncLastResult
 import app.smartexplorer.android.core.TaskInfo
 import app.smartexplorer.android.core.VolumeInfo
 import app.smartexplorer.android.service.BackgroundText
+import app.smartexplorer.android.ui.AppNav
+import app.smartexplorer.android.ui.NavRequest
 import app.smartexplorer.android.ui.common.SeIcon
 
 /** Header of the Sync page: background status, tap opens the background settings (spec F15). */
@@ -125,6 +128,10 @@ internal fun JobCard(
             }
             Endpoint(null, job.source, volumes)
             Endpoint(SyncLocations.arrow(job.direction), job.target, volumes)
+            if (isVaultJob(job)) {
+                // VLT-M11 (U31-12): the comparison of a vault sync job.
+                OutlinedButton(onClick = { compareVaultJob(job) }, modifier = Modifier.testTag("vault-compare-${job.id}")) { Text("Vergleichen") }
+            }
             Box(Modifier.padding(end = 12.dp)) {
                 when {
                     running -> RunningLine(runTask?.message?.ifBlank { null } ?: "Synchronisiere…")
@@ -148,7 +155,11 @@ private fun JobMenu(job: SyncJob, actions: JobActions) {
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             MenuEntry("Bearbeiten", { open = false }, actions.onEdit)
             MenuEntry(if (job.enabled) "Pausieren" else "Aktivieren", { open = false }, actions.onToggle)
-            if (job.direction == SyncJob.DIRECTION_BOTH) MenuEntry("Konflikte", { open = false }, actions.onConflicts)
+            if (isVaultJob(job)) {
+                MenuEntry("Vergleichen", { open = false }) { compareVaultJob(job) }
+            } else if (job.direction == SyncJob.DIRECTION_BOTH) {
+                MenuEntry("Konflikte", { open = false }, actions.onConflicts)
+            }
             MenuEntry("Prüfen", { open = false }, actions.onCheck)
             MenuEntry("Versionen", { open = false }, actions.onVersions)
             MenuEntry("Protokoll", { open = false }, actions.onLog)
@@ -186,9 +197,19 @@ private fun JobStateLine(job: SyncJob, actions: JobActions) {
             watch.note?.let { HintText(it) }
         }
         if (job.lastResult != null || state == null) {
-            LastResultLine(job.lastResult, actions.onConflicts, showSuccess = state == null)
+            val onConflicts = if (isVaultJob(job)) ({ compareVaultJob(job) }) else actions.onConflicts
+            LastResultLine(job.lastResult, onConflicts, showSuccess = state == null)
         }
     }
+}
+
+/** A vault sync job: one side is the encrypted storage of a vault (`vault-store://`, C5.8). */
+internal fun isVaultJob(job: SyncJob): Boolean =
+    listOf(job.source, job.target).any { it.startsWith("vault-store://") || it.startsWith("vault://") }
+
+/** Its conflicts are resolved in the comparison, not in the general conflict list (U31-12). */
+private fun compareVaultJob(job: SyncJob) {
+    AppNav.send(NavRequest.OpenVaultCompare(job.id))
 }
 
 @Composable

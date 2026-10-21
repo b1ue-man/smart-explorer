@@ -40,6 +40,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import app.smartexplorer.android.ui.vaults.SecureWindow
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -174,6 +175,8 @@ private fun FilesBrowser(vm: FilesViewModel, wide: Boolean, tasks: List<TaskInfo
         },
     )
     val current = vm.activeTab?.listing?.location
+    // S6 (U31): cleartext names of an unlocked vault: no screenshots, blank recents preview.
+    if (current?.startsWith("vault://") == true) SecureWindow()
     if (wide) {
         Row(Modifier.fillMaxSize()) {
             PermanentDrawerSheet(Modifier.width(280.dp)) { PlacesPanel(vm.roots, vm.rootsError, current, places) }

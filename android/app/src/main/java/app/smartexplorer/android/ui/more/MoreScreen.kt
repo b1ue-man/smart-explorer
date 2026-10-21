@@ -38,6 +38,8 @@ import app.smartexplorer.android.ui.settings.UpdateCard
 import app.smartexplorer.android.ui.transfers.TransferTasks
 import app.smartexplorer.android.ui.transfers.TransfersSheet
 import app.smartexplorer.android.ui.trash.TrashScreen
+import app.smartexplorer.android.ui.vaults.VaultTexts
+import app.smartexplorer.android.ui.vaults.VaultsHost
 import app.smartexplorer.android.update.UpdateChecker
 import app.smartexplorer.android.update.UpdateState
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -45,7 +47,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /** Pages of the "Mehr" tab. */
-internal enum class MorePage { Menu, Analysis, Duplicates, Connections, Trash, Settings, ErrorLog, About }
+internal enum class MorePage { Menu, Analysis, Duplicates, Connections, Vaults, Trash, Settings, ErrorLog, About }
 
 /**
  * Requests from other screens to open a page of "Mehr" for which no [NavRequest] exists (e.g.
@@ -92,12 +94,19 @@ fun MoreScreen() {
     var settingsFocus by rememberSaveable { mutableStateOf<SettingsFocus?>(null) }
     var newConnection by rememberSaveable { mutableStateOf(false) }
     var showTransfers by rememberSaveable { mutableStateOf(false) }
+    var vaultCompare by rememberSaveable { mutableStateOf<String?>(null) }
     val analysis = viewModel { AnalysisViewModel() }
     val navPending by AppNav.pending.collectAsStateWithLifecycle()
     val morePending by MoreRequests.pending.collectAsStateWithLifecycle()
 
     LaunchedEffect(navPending) {
         val request = navPending ?: return@LaunchedEffect
+        if (request is NavRequest.OpenVaultCompare) {
+            vaultCompare = request.jobId
+            page = MorePage.Vaults
+            AppNav.consume(request)
+            return@LaunchedEffect
+        }
         val focus = when (request) {
             NavRequest.ShowUpdate -> SettingsFocus.Updates
             NavRequest.ShowBackgroundSettings -> SettingsFocus.Background
@@ -149,6 +158,7 @@ fun MoreScreen() {
             onNewFormShown = { newConnection = false },
             onBack = back,
         )
+        MorePage.Vaults -> VaultsHost(onBack = back, compareJob = vaultCompare, onCompareOpened = { vaultCompare = null })
         MorePage.Trash -> TrashScreen(onBack = back)
         MorePage.Settings -> SettingsScreen(
             focus = settingsFocus,
@@ -169,12 +179,14 @@ fun MoreScreen() {
     if (showTransfers) TransfersSheet(onDismiss = { showTransfers = false })
 }
 
-private data class MenuEntry(val page: MorePage?, val label: String, @DrawableRes val icon: Int)
+private data class MenuEntry(val page: MorePage?, val label: String, @DrawableRes val icon: Int, val subtitle: String? = null)
 
 private val MENU = listOf(
     MenuEntry(MorePage.Analysis, "Speicheranalyse", R.drawable.ic_analytics),
     MenuEntry(MorePage.Duplicates, "Duplikate finden", R.drawable.ic_duplicate),
     MenuEntry(MorePage.Connections, "Verbindungen", R.drawable.ic_cloud),
+    // VLT-M11 (U31-1): between „Verbindungen“ and „Papierkorb“.
+    MenuEntry(MorePage.Vaults, VaultTexts.MENU_TITLE, R.drawable.ic_lock, VaultTexts.MENU_SUBTITLE),
     MenuEntry(MorePage.Trash, "Papierkorb", R.drawable.ic_trash),
     // `null`: the transfers sheet, not a page.
     MenuEntry(null, "Übertragungen", R.drawable.ic_upload),
@@ -198,10 +210,14 @@ private fun MoreMenu(onOpen: (MorePage) -> Unit, onShowTransfers: () -> Unit) {
             items(MENU, key = { it.label }) { entry ->
                 ListItem(
                     headlineContent = { Text(entry.label) },
-                    supportingContent = if (entry.page == null && running > 0) {
-                        { Text("$running laufen") }
-                    } else {
-                        null
+                    supportingContent = when {
+                        entry.page == null && running > 0 -> {
+                            { Text("$running laufen") }
+                        }
+                        entry.subtitle != null -> {
+                            { Text(entry.subtitle) }
+                        }
+                        else -> null
                     },
                     leadingContent = { SeIcon(entry.icon, contentDescription = null) },
                     modifier = Modifier.clickable { entry.page?.let(onOpen) ?: onShowTransfers() },
