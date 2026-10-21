@@ -1208,10 +1208,247 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  linux-speed-net:
+    needs: [prepare, desktop-bins]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Bind workflow and checkout to the requested candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
+          [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+
+      - name: Place native/Cargo.lock and the license file of the job prepare
+        uses: actions/download-artifact@v4
+        with:
+          name: rdt-prepare
+          path: ${{ github.workspace }}
+
+      - name: Download se and the share server of the job desktop-bins
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: rdt-desktop-bins
+          path: ${{ runner.temp }}/rdt-desktop-bins
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+          shared-key: rechte-desktop-tresore
+          cache-on-failure: true
+
+      - name: Install the reference tools and load the shaping module
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y iperf3 fio lftp rsync
+          sudo modprobe sch_netem || echo "::warning::sch_netem not loadable; the stages try linux-modules-extra"
+
+      - name: Run the one task entrypoint
+        shell: bash
+        timeout-minutes: 290
+        run: >-
+          python native/test-rechte-desktop-tresore-task.py --job linux-speed-net
+          --log-root "$RUNNER_TEMP/rdt-linux-speed-net" --bins "$RUNNER_TEMP/rdt-desktop-bins"
+
+      - name: Hand the report to the overview job
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdt-report-linux-speed-net
+          path: ${{ runner.temp }}/rdt-linux-speed-net/report.json
+          if-no-files-found: warn
+          retention-days: 14
+          overwrite: true
+
+      - name: Preserve acceptance and failure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdt-linux-speed-net-evidence-${{ inputs.candidate_sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rdt-linux-speed-net
+          if-no-files-found: warn
+          retention-days: 14
+
+  linux-speed-local:
+    needs: prepare
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Bind workflow and checkout to the requested candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
+          [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+
+      - name: Place native/Cargo.lock and the license file of the job prepare
+        uses: actions/download-artifact@v4
+        with:
+          name: rdt-prepare
+          path: ${{ github.workspace }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+          shared-key: rechte-desktop-tresore
+          cache-on-failure: true
+
+      - name: Install the reference tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y fio xfsprogs rsync
+
+      - name: Run the one task entrypoint
+        shell: bash
+        timeout-minutes: 110
+        run: >-
+          python native/test-rechte-desktop-tresore-task.py --job linux-speed-local
+          --log-root "$RUNNER_TEMP/rdt-linux-speed-local"
+
+      - name: Hand the report to the overview job
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdt-report-linux-speed-local
+          path: ${{ runner.temp }}/rdt-linux-speed-local/report.json
+          if-no-files-found: warn
+          retention-days: 14
+          overwrite: true
+
+      - name: Preserve acceptance and failure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdt-linux-speed-local-evidence-${{ inputs.candidate_sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rdt-linux-speed-local
+          if-no-files-found: warn
+          retention-days: 14
+
+  windows-speed:
+    needs: prepare
+    if: ${{ !cancelled() }}
+    runs-on: windows-2025
+    timeout-minutes: 120
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Bind workflow and checkout to the requested candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
+          [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+
+      - name: Place native/Cargo.lock and the license file of the job prepare
+        uses: actions/download-artifact@v4
+        with:
+          name: rdt-prepare
+          path: ${{ github.workspace }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+          shared-key: rechte-desktop-tresore
+          cache-on-failure: true
+
+      - name: Install fio (the requirements against it are not run when this fails)
+        continue-on-error: true
+        shell: pwsh
+        run: choco install fio -y --no-progress
+
+      - name: Run the one task entrypoint
+        shell: bash
+        timeout-minutes: 110
+        run: >-
+          python native/test-rechte-desktop-tresore-task.py --job windows-speed
+          --log-root "$RUNNER_TEMP/rdt-windows-speed"
+
+      - name: Hand the report to the overview job
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdt-report-windows-speed
+          path: ${{ runner.temp }}/rdt-windows-speed/report.json
+          if-no-files-found: warn
+          retention-days: 14
+          overwrite: true
+
+      - name: Preserve acceptance and failure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdt-windows-speed-evidence-${{ inputs.candidate_sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rdt-windows-speed
+          if-no-files-found: warn
+          retention-days: 14
+
   report:
     needs: [prepare, linux-core, linux-root, linux-2204, linux-desktop, linux-wayland, linux-gnome,
             windows-core, windows-screen, windows-desktop, desktop-bins, android-build, android-device,
-            android-device-api30]
+            android-device-api30, linux-speed-net, linux-speed-local, windows-speed]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30

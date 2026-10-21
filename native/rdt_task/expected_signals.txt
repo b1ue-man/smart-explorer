@@ -50,7 +50,7 @@ rdt_suite_lock_committed_current      prepare:lock      art=check  quelle=D3,L1
 rdt_suite_cargo_audit                 prepare:audit     art=check  quelle=D3
 rdt_suite_workflow_static             prepare:static    art=check  quelle=D1-U39
 rdt_suite_docs_stale_search           prepare:static    art=check  quelle=D3,AGENTS,L308
-rdt_suite_inventory_complete          prepare:inventory,linux-core:inventory,linux-root:inventory,linux-2204:inventory,linux-desktop:inventory,linux-wayland:inventory,linux-gnome:inventory,windows-core:inventory,windows-screen:inventory,windows-desktop:inventory,desktop-bins:inventory,android-build:inventory,android-device:inventory,android-device-api30:inventory  art=check  quelle=D3
+rdt_suite_inventory_complete          prepare:inventory,linux-core:inventory,linux-root:inventory,linux-2204:inventory,linux-desktop:inventory,linux-wayland:inventory,linux-gnome:inventory,windows-core:inventory,windows-screen:inventory,windows-desktop:inventory,desktop-bins:inventory,android-build:inventory,android-device:inventory,android-device-api30:inventory,linux-speed-net:inventory,linux-speed-local:inventory,windows-speed:inventory  art=check  quelle=D3
 rdt_suite_prepare_files_placed        linux-core:setup,linux-root:setup,linux-2204:setup,linux-desktop:setup,linux-wayland:setup,linux-gnome:setup,windows-core:setup,windows-screen:setup,windows-desktop:setup,desktop-bins:setup,android-build:setup  art=check  quelle=D3,L1,L2
 rdt_suite_desktop_bins_built          desktop-bins:desktop-bins  art=check  quelle=D3
 rdt_suite_android_apks_built          android-build:apk  art=check  quelle=D3
@@ -900,48 +900,552 @@ drive_task_android_handler_thread_per_file        android-device:drive-android-d
 drive_task_android_smb_root_rw                    android-device:drive-android-device  art=instr  quelle=L302
 drive_task_android_mediastore_has_no_provider_files  android-device:drive-android-device  art=instr  quelle=L302,L358
 
+# ---- S5 Launcher DSK-M13 und Gesten (U40): JVM in android-build launcher-jvm, Instrumentierung je Methode (D682) ----
+launcher_task_device_key_vectors                              android-build:launcher-jvm  art=junit  quelle=D682,U40
+launcher_task_status_label_codes                              android-build:launcher-jvm  art=junit  quelle=D682,U40
+launcher_task_tile_state_texts                                android-build:launcher-jvm  art=junit  quelle=D682,U40
+launcher_task_screen_nav_kinds                                android-build:launcher-jvm  art=junit  quelle=D682,U40
+launcher_task_widget_nav_constants_match                      android-build:launcher-jvm  art=junit  quelle=D682,U40
+launcher_task_widget_and_bridge_imports_isolated              android-build:launcher-jvm  art=junit  quelle=D682,U40
+SeBridgeTest                                                  android-build:launcher-jvm  art=junit  quelle=D682,U40
+SeTilesTest                                                   android-build:launcher-jvm  art=junit  quelle=D682,U40
+SeGesturesTest                                                android-build:launcher-jvm  art=junit  quelle=D670,U40
+launcher_task_tile_opens_device_location                      android-device:launcher-android-device  art=instr  fixture=se-pair  quelle=D682,U40
+launcher_task_room_folder_members                             android-device:launcher-android-device  art=instr  fixture=se-pair  quelle=D682,U40
+launcher_task_devices_from_bridge                             android-device:launcher-android-device  art=instr  fixture=se-pair  quelle=D682,U40
+launcher_task_tile_opens_all_screens                          android-device:launcher-android-device  art=instr  quelle=D682,U40
+launcher_task_screen_nav_kinds_reach_the_app                  android-device:launcher-android-device  art=instr  quelle=D682,U40
+launcher_task_unbind_on_stop                                  android-device:launcher-android-device  art=instr  quelle=D682,U40
+launcher_task_no_bind_when_main_process_absent                android-device:launcher-android-device  art=instr  quelle=D682,U40
+launcher_task_open_in_files_resolver_excludes_se              android-device:launcher-android-device  art=instr  quelle=D682,U40,S5-A36
+launcher_task_devices_widget_only_when_enabled                android-device:launcher-android-device,android-device-api30:launcher-android-api30  art=instr  quelle=D682,U40
+launcher_task_devices_widget_click_opens_device               android-device:launcher-android-device,android-device-api30:launcher-android-api30  art=instr  quelle=D682,U40
+launcher_task_devices_widget_does_not_start_core              android-device:launcher-android-device  art=instr  quelle=D682,U40
+launcher_task_gestures_off_without_accessibility              android-device:launcher-android-device  art=instr  quelle=D670,U40
+launcher_task_gestures_with_accessibility                     android-device:launcher-android-device,android-device-api30:launcher-android-api30  art=instr  quelle=D670,U40,S5-A38
+
+# ---- E13 Messstufe speed (U55; festlegungen.md § U44, Registrierung aus stand/U55.md) ----
+speed_task_ref_tools_present                                   linux-speed-net:speed-ref,linux-speed-local:speed-ref-local,windows-speed:speed-windows  art=skript skript=native/rdt_task/speed_local.py  quelle=U55,M-6
+speed_task_ref_iperf_lan                                       linux-speed-net:speed-ref  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_ref_iperf_wan                                       linux-speed-net:speed-ref  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_ref_iperf_fat                                       linux-speed-net:speed-ref  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_ref_iperf_loss                                      linux-speed-net:speed-ref  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_ref_fio_volumes                                     linux-speed-local:speed-ref-local,windows-speed:speed-windows  art=skript skript=native/rdt_task/speed_local.py  quelle=U55,M-6
+speed_task_ref_fio_small_files                                 linux-speed-local:speed-ref-local,windows-speed:speed-windows  art=skript skript=native/rdt_task/speed_local.py  quelle=U55,M-6
+speed_task_sftp_large_up_lan                                   linux-speed-net:speed-net-large  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_sftp_large_down_lan                                 linux-speed-net:speed-net-large  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_ftp_large_up_lan                                    linux-speed-net:speed-net-large  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_ftp_large_down_lan                                  linux-speed-net:speed-net-large  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_webdav_large_up_lan                                 linux-speed-net:speed-net-large  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_webdav_large_down_lan                               linux-speed-net:speed-net-large  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_smb_large_up_lan                                    linux-speed-net:speed-net-large  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_smb_large_down_lan                                  linux-speed-net:speed-net-large  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_share_large_up_lan                                  linux-speed-net:speed-net-large  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_share_large_down_lan                                linux-speed-net:speed-net-large  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_agent_large_up_lan                                  linux-speed-net:speed-net-large  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_agent_large_down_lan                                linux-speed-net:speed-net-large  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_sftp_large_up_wan                                   linux-speed-net:speed-net-large  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_sftp_large_down_wan                                 linux-speed-net:speed-net-large  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_ftp_large_up_wan                                    linux-speed-net:speed-net-large  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_ftp_large_down_wan                                  linux-speed-net:speed-net-large  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_webdav_large_up_wan                                 linux-speed-net:speed-net-large  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_webdav_large_down_wan                               linux-speed-net:speed-net-large  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_smb_large_up_wan                                    linux-speed-net:speed-net-large  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_smb_large_down_wan                                  linux-speed-net:speed-net-large  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_share_large_up_wan                                  linux-speed-net:speed-net-large  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_share_large_down_wan                                linux-speed-net:speed-net-large  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_agent_large_up_wan                                  linux-speed-net:speed-net-large  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_agent_large_down_wan                                linux-speed-net:speed-net-large  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_r2r_sftp_to_ftp_large_wan                           linux-speed-net:speed-net-large  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_r2r_share_to_sftp_large_wan                         linux-speed-net:speed-net-large  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_sftp_large_up_fat                                   linux-speed-net:speed-net-large  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_sftp_large_down_fat                                 linux-speed-net:speed-net-large  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_share_large_up_fat                                  linux-speed-net:speed-net-large  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_share_large_down_fat                                linux-speed-net:speed-net-large  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_agent_large_up_fat                                  linux-speed-net:speed-net-large  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_agent_large_down_fat                                linux-speed-net:speed-net-large  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_sftp_large_up_loss                                  linux-speed-net:speed-net-large  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_sftp_large_down_loss                                linux-speed-net:speed-net-large  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_ftp_large_up_loss                                   linux-speed-net:speed-net-large  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_ftp_large_down_loss                                 linux-speed-net:speed-net-large  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_webdav_large_up_loss                                linux-speed-net:speed-net-large  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_webdav_large_down_loss                              linux-speed-net:speed-net-large  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_share_large_up_loss                                 linux-speed-net:speed-net-large  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_share_large_down_loss                               linux-speed-net:speed-net-large  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_gdrive_not_run                                      linux-speed-net:speed-net-large  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_smb_segments_end_to_end                             linux-speed-net:speed-net-large  ignored threads=1 pfad=smb::segmented_stage_tests::speed_task_smb_segments_end_to_end  quelle=U55,U48
+speed_task_sftp_small_up_lan                                   linux-speed-net:speed-net-small  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_sftp_small_down_lan                                 linux-speed-net:speed-net-small  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_ftp_small_up_lan                                    linux-speed-net:speed-net-small  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_ftp_small_down_lan                                  linux-speed-net:speed-net-small  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_webdav_small_up_lan                                 linux-speed-net:speed-net-small  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_webdav_small_down_lan                               linux-speed-net:speed-net-small  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_smb_small_up_lan                                    linux-speed-net:speed-net-small  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_smb_small_down_lan                                  linux-speed-net:speed-net-small  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_share_small_up_lan                                  linux-speed-net:speed-net-small  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_share_small_down_lan                                linux-speed-net:speed-net-small  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_agent_small_up_lan                                  linux-speed-net:speed-net-small  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_agent_small_down_lan                                linux-speed-net:speed-net-small  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_webdav_requests_per_file                            linux-speed-net:speed-net-small  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_sftp_small_up_wan                                   linux-speed-net:speed-net-small  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_sftp_small_down_wan                                 linux-speed-net:speed-net-small  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_ftp_small_up_wan                                    linux-speed-net:speed-net-small  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_ftp_small_down_wan                                  linux-speed-net:speed-net-small  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_webdav_small_up_wan                                 linux-speed-net:speed-net-small  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_webdav_small_down_wan                               linux-speed-net:speed-net-small  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_smb_small_up_wan                                    linux-speed-net:speed-net-small  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_smb_small_down_wan                                  linux-speed-net:speed-net-small  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_share_small_up_wan                                  linux-speed-net:speed-net-small  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_share_small_down_wan                                linux-speed-net:speed-net-small  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_agent_small_up_wan                                  linux-speed-net:speed-net-small  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_agent_small_down_wan                                linux-speed-net:speed-net-small  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_sftp_mixed_up_wan                                   linux-speed-net:speed-net-small  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_sftp_mixed_down_wan                                 linux-speed-net:speed-net-small  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_share_mixed_up_wan                                  linux-speed-net:speed-net-small  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_share_mixed_down_wan                                linux-speed-net:speed-net-small  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_raw_sftp_large_up                                   linux-speed-net:speed-raw  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_raw_sftp_large_down                                 linux-speed-net:speed-raw  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_raw_ftp_large_up                                    linux-speed-net:speed-raw  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_raw_ftp_large_down                                  linux-speed-net:speed-raw  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_raw_webdav_large_up                                 linux-speed-net:speed-raw  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_raw_webdav_large_down                               linux-speed-net:speed-raw  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_sftp_cipher_aes_gcm                                 linux-speed-net:speed-raw  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_sftp_cipher_chacha                                  linux-speed-net:speed-raw  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_ramp_sftp_small_wan                                 linux-speed-net:speed-ramp  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_ramp_ftp_small_wan                                  linux-speed-net:speed-ramp  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_ramp_persisted_hint_sftp_wan                        linux-speed-net:speed-ramp  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_share_lz4_text_slow                                 linux-speed-net:speed-compress  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_share_lz4_random_slow                               linux-speed-net:speed-compress  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_agent_lz4_text_slow                                 linux-speed-net:speed-compress  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_share_cc_bbr3_vs_cubic_loss                         linux-speed-net:speed-compress  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_share_cc_bbr3_vs_cubic_wan                          linux-speed-net:speed-compress  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_limiter_link_wan_large                              linux-speed-net:speed-limiter  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_limiter_target_disk_throttled                       linux-speed-net:speed-limiter  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_limiter_source_disk_throttled                       linux-speed-net:speed-limiter  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_limiter_remote_server_throttled                     linux-speed-net:speed-limiter  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_limiter_se_cpu_quota                                linux-speed-net:speed-limiter  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_limiter_idle_when_source_slow                       linux-speed-net:speed-limiter  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_share_room_parallel_downloads_no_eagain             linux-speed-net:speed-room  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_cli_put_large_wan                                   linux-speed-net:speed-cli  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_cli_get_large_wan                                   linux-speed-net:speed-cli  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_cli_cp_small_tree_up_wan                            linux-speed-net:speed-cli  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_cli_cp_small_tree_down_wan                          linux-speed-net:speed-cli  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_cli_cp_refuses_existing_destination_unchanged       linux-speed-net:speed-cli  art=skript skript=native/rdt_task/speed.py  quelle=U55,M-6
+speed_task_local_large_same_volume                             linux-speed-local:speed-local  art=skript skript=native/rdt_task/speed_local.py  quelle=U55,M-6
+speed_task_local_small_same_volume                             linux-speed-local:speed-local  art=skript skript=native/rdt_task/speed_local.py  quelle=U55,M-6
+speed_task_local_large_two_volumes                             linux-speed-local:speed-local  art=skript skript=native/rdt_task/speed_local.py  quelle=U55,M-6
+speed_task_local_small_two_volumes                             linux-speed-local:speed-local  art=skript skript=native/rdt_task/speed_local.py  quelle=U55,M-6
+speed_task_local_reflink_xfs                                   linux-speed-local:speed-local  art=skript skript=native/rdt_task/speed_local.py  quelle=U55,M-6
+speed_task_windows_local_large_same_volume                     windows-speed:speed-windows  art=skript skript=native/rdt_task/speed_local.py  quelle=U55,M-6
+speed_task_windows_local_large_two_volumes                     windows-speed:speed-windows  art=skript skript=native/rdt_task/speed_local.py  quelle=U55,M-6
+speed_task_windows_local_small_two_volumes                     windows-speed:speed-windows  art=skript skript=native/rdt_task/speed_local.py  quelle=U55,M-6
+speed_task_windows_pdh_physicaldisk_counters_exist             windows-speed:speed-windows  art=skript skript=native/rdt_task/speed_local.py  quelle=U55,M-6
+speed_task_android_local_large                                 android-device:speed-android-device  art=instr fixture=speed-dd  quelle=U55,M-6
+speed_task_android_local_small                                 android-device:speed-android-device  art=instr fixture=speed-dd  quelle=U55,M-6
+speed_task_android_content_vs_file_read                        android-device:speed-android-device  art=instr  quelle=U55,M-6
+
+# ---- aus [noch nicht umgesetzt] verschoben, im Code vorhanden (U14, U17, U20, U26, U29; U41 Inventurlauf Teil 2) ----
+drive_task_gtk_bookmark_only_outside_glib_rule    linux-desktop:drive-desktop  fixture=home  pfad=mount::os::linux_os::bookmarks_tests::drive_task_gtk_bookmark_only_outside_glib_rule  quelle=L272,D2-14
+drive_task_gtk_bookmark_removed_exactly           linux-desktop:drive-desktop  fixture=home  pfad=mount::os::linux_os::bookmarks_tests::drive_task_gtk_bookmark_removed_exactly  quelle=L272
+drive_task_kde_places_preserves_foreign_entries   linux-desktop:drive-desktop  fixture=home  pfad=mount::os::linux_os::bookmarks_tests::drive_task_kde_places_preserves_foreign_entries  quelle=L272
+drive_task_bookmarks_cleaned_after_host_crash     linux-desktop:drive-desktop  fixture=home  pfad=mount::os::linux_os::bookmarks_tests::drive_task_bookmarks_cleaned_after_host_crash  quelle=L272
+drive_task_glib_display_rule_path                 linux-desktop:drive-desktop  fixture=home  pfad=mount::os::linux_os::bookmarks_tests::drive_task_glib_display_rule_path  quelle=L272
+drive_task_cli_open_json                          linux-desktop:drive-desktop  fixture=home  pfad=cli::drive::drive_open::tests::drive_task_cli_open_json  quelle=L272
+drive_task_devices_folder_appears_without_manual_steps  linux-core:drive-devices,windows-core:drive-cli  fixture=share  pfad=mount::device_tree::tests::drive_task_devices_folder_appears_without_manual_steps  quelle=L283
+drive_task_devices_offline_error_not_empty        linux-core:drive-devices,windows-core:drive-cli  fixture=share  pfad=mount::device_tree::tests::drive_task_devices_offline_error_not_empty  quelle=L283
+drive_task_devices_online_retries_pending_upload  linux-core:drive-devices,windows-core:drive-cli  fixture=share  pfad=mount::device_tree::tests::drive_task_devices_online_retries_pending_upload  quelle=L283
+drive_task_devices_room_readonly                  linux-core:drive-devices,windows-core:drive-cli  fixture=share  pfad=mount::device_tree::tests::drive_task_devices_room_readonly  quelle=L283
+drive_task_devices_cross_export_move_exdev        linux-core:drive-devices,windows-core:drive-cli  fixture=share  pfad=mount::device_tree::tests::drive_task_devices_cross_export_move_exdev  quelle=L283
+drive_task_devices_offline_closes_idle_children_only  linux-core:drive-devices,windows-core:drive-cli  fixture=share  pfad=mount::device_tree::tests::drive_task_devices_offline_closes_idle_children_only  quelle=L283
+drive_task_devices_offline_peer_does_not_block_host_start  linux-core:drive-devices,windows-core:drive-cli  fixture=share  pfad=mount::device_tree::tests::drive_task_devices_offline_peer_does_not_block_host_start  quelle=L283
+drive_task_devices_switch_off_unmounts_and_removes_place  linux-core:drive-devices,windows-core:drive-cli  fixture=share  pfad=daemon::drive_modules::devices_ipc::tests::drive_task_devices_switch_off_unmounts_and_removes_place  quelle=L283
+drive_task_devices_watch_returns_within_30s       linux-core:drive-devices,windows-core:drive-cli  fixture=share  pfad=daemon::drive_modules::devices_ipc::tests::drive_task_devices_watch_returns_within_30s  quelle=L283
+drive_task_devices_names_collision_deterministic  linux-core:unit,windows-core:drive-cli  pfad=mount::device_tree_names_tests::drive_task_devices_names_collision_deterministic  quelle=L283
+drive_task_devices_key_matches_s5_rule            linux-core:unit,windows-core:drive-cli  pfad=mount::device_tree_names_tests::drive_task_devices_key_matches_s5_rule  quelle=L283
+drive_task_devices_single_peer_mounts_unchanged   linux-core:unit,windows-core:drive-cli  pfad=daemon::drive_modules::devices_ipc::tests::drive_task_devices_single_peer_mounts_unchanged  quelle=L283,D3-Erhaltung-S2
+drive_task_cli_devices_shapes                     linux-core:unit,windows-core:drive-cli  pfad=cli::drive::drive_devices::tests::drive_task_cli_devices_shapes  quelle=L283
+drive_task_devices_windows_drive_lists_peer       windows-core:drive-cli  ignored  fixture=share,dokany  pfad=mount::os::windows::host::devices_drive_task::drive_task_devices_windows_drive_lists_peer  quelle=L283
+drive_task_vault_spool_uses_sealed_storage        linux-root:drive-vault,windows-core:drive-vault  pfad=mount::os::shared::host_session::host_storage::tests::drive_task_vault_spool_uses_sealed_storage  quelle=L292
+drive_task_vault_journal_path_fields_sealed       linux-root:drive-vault,windows-core:drive-vault  pfad=mount::os::shared::host_session::host_storage::tests::drive_task_vault_journal_path_fields_sealed  quelle=L292
+drive_task_vault_locked_start_fails_vault_locked  linux-root:drive-vault,windows-core:drive-vault  pfad=daemon::mount_manager::termination::tests::drive_task_vault_locked_start_fails_vault_locked  quelle=L292
+drive_task_vault_requires_unlock_after_crash      linux-root:drive-vault,windows-core:drive-vault  pfad=mount::os::shared::host_session::host_storage::tests::drive_task_vault_requires_unlock_after_crash  quelle=L292
+drive_task_vault_prepare_lock_flushes_evicts_unmounts  linux-root:drive-vault,windows-core:drive-vault  pfad=mount::os::shared::host_session::host_storage::tests::drive_task_vault_prepare_lock_flushes_evicts_unmounts  quelle=L292
+drive_task_vault_lock_deadline_keeps_sealed_and_aborts  linux-root:drive-vault,windows-core:drive-vault  pfad=daemon::mount_manager::lock_participant::tests::drive_task_vault_lock_deadline_keeps_sealed_and_aborts  quelle=L292
+drive_task_vault_unexpected_end_reported          linux-root:drive-vault,windows-core:drive-vault  pfad=daemon::mount_manager::termination::tests::drive_task_vault_unexpected_end_reported  quelle=L292
+drive_task_mount_path_for_maps_drive_paths        linux-root:drive-vault,windows-core:drive-vault  pfad=daemon::mount_client::paths::tests::drive_task_mount_path_for_maps_drive_paths  quelle=L292
+drive_task_vault_linux_mountpoint_tmpfs_sticky_locked  linux-root:drive-vault  fixture=runtime-tmpfs  pfad=daemon::mount_manager::termination::tests::drive_task_vault_linux_mountpoint_tmpfs_sticky_locked  quelle=L292
+drive_task_vault_linux_refuses_non_tmpfs          linux-root:drive-vault  pfad=daemon::mount_manager::termination::tests::drive_task_vault_linux_refuses_non_tmpfs  quelle=L292
+drive_task_vault_drive_letter_rw                  windows-core:drive-vault  ignored  fixture=dokany  pfad=mount::os::windows::host::vault_drive_task::drive_task_vault_drive_letter_rw  quelle=L292
+vault_task_policy_every_sink_has_rule             linux-core:unit  pfad=vault::core::klartext_policy::tests::vault_task_policy_every_sink_has_rule  quelle=T495
+vault_task_copy_spool_sealed_when_vault_involved  linux-core:unit  pfad=vault::os::ephemeral_spool::tests::vault_task_copy_spool_sealed_when_vault_involved  quelle=T495
+vault_task_transfer_issue_path_sealed             linux-core:unit  pfad=transfer::engine::issues::vault_tests::vault_task_transfer_issue_path_sealed  quelle=T495
+vault_task_favorites_and_recent_inside_vault_sealed  linux-core:unit  pfad=vault::os::local_store::tests::vault_task_favorites_and_recent_inside_vault_sealed  quelle=T495
+vault_task_folder_index_skips_vault               linux-core:unit  pfad=folder_index::os::persistence::vault_tests::vault_task_folder_index_skips_vault  quelle=T495
+vault_task_android_fetch_rejects_vault            linux-core:unit  pfad=mobile::edits::vault_tests::vault_task_android_fetch_rejects_vault  quelle=T495
+vault_task_share_export_inside_vault_mount_rejected  linux-core:unit  pfad=share::storage_roots::vault_tests::vault_task_share_export_inside_vault_mount_rejected  quelle=T495
+vault_task_open_fallback_requires_consent         linux-core:unit  pfad=app::vault_modules::vault_open::tests::vault_task_open_fallback_requires_consent  quelle=T495
+vault_task_provide_and_materialize_reject_vault_source  linux-core:unit  pfad=app::clipboard_materialize::tests::vault_task_provide_and_materialize_reject_vault_source  quelle=T495
+vault_task_sync_seed_replica_then_seeding_false   linux-core:vault-sync  fixture=keep  pfad=vault::os::sync_job::tests::vault_task_sync_seed_replica_then_seeding_false  quelle=T506
+vault_task_sync_one_sided_changes_both_directions linux-core:vault-sync  fixture=keep  pfad=vault::os::sync_job::tests::vault_task_sync_one_sided_changes_both_directions  quelle=T506
+vault_task_sync_both_changed_untouched_conflict   linux-core:vault-sync  fixture=keep  pfad=vault::os::sync_job::tests::vault_task_sync_both_changed_untouched_conflict  quelle=T506
+vault_task_sync_folder_created_both_sides         linux-core:vault-sync  fixture=keep  pfad=vault::os::sync_job::tests::vault_task_sync_folder_created_both_sides  quelle=T506
+vault_task_sync_delete_vs_change_deferred         linux-core:vault-sync  fixture=keep  pfad=vault::os::sync_job::tests::vault_task_sync_delete_vs_change_deferred  quelle=T506
+vault_task_sync_masterkey_both_changed_conflict   linux-core:vault-sync  fixture=keep  pfad=vault::os::sync_job::tests::vault_task_sync_masterkey_both_changed_conflict  quelle=T506
+vault_task_sync_jti_mismatch_aborts               linux-core:vault-sync  fixture=keep  pfad=vault::os::sync_job::tests::vault_task_sync_jti_mismatch_aborts  quelle=T506
+vault_task_sync_unreachable_side_no_deletes       linux-core:vault-sync  fixture=keep  pfad=vault::os::sync_job::more_tests::vault_task_sync_unreachable_side_no_deletes  quelle=T506
+vault_task_sync_phase1_failure_keeps_phase2_planned  linux-core:vault-sync  fixture=keep  pfad=vault::os::sync_job::more_tests::vault_task_sync_phase1_failure_keeps_phase2_planned  quelle=T506
+vault_task_sync_never_incremental                 linux-core:vault-sync  fixture=keep  pfad=vault::os::sync_job::more_tests::vault_task_sync_never_incremental  quelle=T506
+vault_task_sync_keepboth_actions_become_conflicts linux-core:vault-sync  fixture=keep  pfad=vault::core::sync_rules::tests::vault_task_sync_keepboth_actions_become_conflicts  quelle=T506
+vault_task_sync_runs_locked                       linux-core:vault-sync  fixture=keep  pfad=vault::os::sync_job::more_tests::vault_task_sync_runs_locked  quelle=T506
+vault_task_sync_hash_detects_same_size_same_second  linux-core:vault-sync  fixture=keep  pfad=vault::os::sync_job::more_tests::vault_task_sync_hash_detects_same_size_same_second  quelle=T506
+vault_task_sync_log_contains_no_cleartext         linux-core:vault-sync  fixture=keep  pfad=vault::os::sync_job::more_tests::vault_task_sync_log_contains_no_cleartext  quelle=T506
+vault_task_vault_jobs_dir_invisible_to_jobs_loader  linux-core:vault-sync  pfad=syncjobs::vault_jobs_dir::tests::vault_task_vault_jobs_dir_invisible_to_jobs_loader  quelle=T506,D3-Erhaltung-S3
+vault_task_broken_vault_job_listed_not_fatal      linux-core:vault-sync  pfad=syncjobs::vault_jobs_dir::tests::vault_task_broken_vault_job_listed_not_fatal  quelle=T506
+vault_task_compare_groups_match_preview           linux-core:vault-compare  fixture=keep  pfad=vault::os::compare_tests::vault_task_compare_groups_match_preview  quelle=T515
+vault_task_compare_keep_a_b_with_versions         linux-core:vault-compare  fixture=keep  pfad=vault::os::compare_actions_tests::vault_task_compare_keep_a_b_with_versions  quelle=T515
+vault_task_compare_keep_both_valid_cipher_name    linux-core:vault-compare  fixture=keep  pfad=vault::os::compare_actions_tests::vault_task_compare_keep_both_valid_cipher_name  quelle=T515
+vault_task_compare_keep_both_long_name_c9s        linux-core:vault-compare  fixture=keep  pfad=vault::os::compare_actions_tests::vault_task_compare_keep_both_long_name_c9s  quelle=T515
+vault_task_compare_keep_both_baseline_recorded    linux-core:vault-compare  fixture=keep  pfad=vault::os::compare_actions_tests::vault_task_compare_keep_both_baseline_recorded  quelle=T515
+vault_task_compare_merge_inputs_contain_only_ciphertext  linux-core:vault-compare  fixture=keep  pfad=vault::os::compare_actions_tests::vault_task_compare_merge_inputs_contain_only_ciphertext  quelle=T515
+vault_task_compare_folder_merge_reencrypts_names_only  linux-core:vault-compare  fixture=keep  pfad=vault::os::compare_folders_tests::vault_task_compare_folder_merge_reencrypts_names_only  quelle=T515
+vault_task_compare_deferred_confirm_and_restore   linux-core:vault-compare  fixture=keep  pfad=vault::os::compare_folders_tests::vault_task_compare_deferred_confirm_and_restore  quelle=T515
+vault_task_compare_requires_unlock                linux-core:vault-compare  pfad=vault::os::compare_tests::vault_task_compare_requires_unlock  quelle=T515
+vault_task_check_maps_every_cryptofs_finding      linux-core:vault-compare  fixture=keep  pfad=vault::os::health_tests::vault_task_check_maps_every_cryptofs_finding  quelle=T515
+vault_task_check_orphan_attached_under_lost_found linux-core:vault-compare  fixture=keep  pfad=vault::os::health_tests::vault_task_check_orphan_attached_under_lost_found  quelle=T515
+vault_task_check_stage_leftover_removed           linux-core:vault-compare  fixture=keep  pfad=vault::os::health_tests::vault_task_check_stage_leftover_removed  quelle=T515
+vault_task_gui_unlock_states                      linux-desktop:gui-harness  pfad=app::vault_modules::vault_models_tests::vault_task_gui_unlock_states  quelle=T533
+vault_task_gui_compare_rows_and_actions           linux-desktop:gui-harness  pfad=app::vault_modules::vault_compare_tests::vault_task_gui_compare_rows_and_actions  quelle=T533
+vault_task_gui_sync_editor_fixed_fields           linux-desktop:gui-harness  pfad=app::vault_modules::vault_sync_tests::vault_task_gui_sync_editor_fixed_fields  quelle=T533
+vault_task_gui_sidebar_lock_event_clears_tab      linux-desktop:gui-harness  pfad=app::vault_modules::vault_models_tests::vault_task_gui_sidebar_lock_event_clears_tab  quelle=T533
+vault_task_gui_recovery_page_text_only            linux-desktop:gui-harness  pfad=app::vault_modules::vault_models_tests::vault_task_gui_recovery_page_text_only  quelle=T533
+vault_task_sealed_spool_random_access_roundtrip   linux-core:unit  pfad=vault::os::sealed_spool_tests::vault_task_sealed_spool_random_access_roundtrip  quelle=T551
+vault_task_sealed_spool_detects_block_swap        linux-core:unit  pfad=vault::os::sealed_spool_tests::vault_task_sealed_spool_detects_block_swap  quelle=T551
+vault_task_spool_key_wrap_unwrap_after_restart    linux-core:unit  pfad=vault::os::spool_key_tests::vault_task_spool_key_wrap_unwrap_after_restart  quelle=T551
+vault_task_spool_key_stable_over_password_change  linux-core:unit  pfad=vault::os::spool_key_tests::vault_task_spool_key_stable_over_password_change  quelle=T551
+vault_task_spool_key_only_unlocked                linux-core:unit  pfad=vault::os::spool_key_tests::vault_task_spool_key_only_unlocked  quelle=T551
+vault_task_journal_text_key_derived_from_spool_key  linux-core:unit  pfad=vault::os::spool_key_tests::vault_task_journal_text_key_derived_from_spool_key  quelle=T551
+vault_task_journal_sealer_roundtrip               linux-core:unit  pfad=vault::os::spool_key_tests::vault_task_journal_sealer_roundtrip  quelle=T551
+vault_task_mount_requires_unlock                  linux-core:unit  pfad=vault::os::mount_bridge_tests::vault_task_mount_requires_unlock  quelle=T551
+vault_task_mount_end_reason_handling              linux-core:unit  pfad=vault::os::mount_bridge_tests::vault_task_mount_end_reason_handling  quelle=T551
+vault_task_unlock_triggers_pending_retry          linux-core:unit  pfad=vault::os::mount_bridge_tests::vault_task_unlock_triggers_pending_retry  quelle=T551
+vault_task_lock_unmounts_before_zeroize           linux-core:unit  pfad=vault::os::mount_bridge_tests::vault_task_lock_unmounts_before_zeroize  quelle=T551
+vault_task_linux_thumbnails_removed_by_uri_prefix linux-core:unit  pfad=vault::os::thumbnails::tests::vault_task_linux_thumbnails_removed_by_uri_prefix  quelle=T551
+vault_task_mount_linux_fuse_e2e                   linux-root:vault-mount  ignored  fixture=fuse,runtime-tmpfs threads=1 env=SMART_EXPLORER_FUSE_TASK=1  pfad=mount::os::linux_os::vault_fuse_task_tests::vault_task_mount_linux_fuse_e2e  quelle=T551
+vault_task_mount_windows_dokany_e2e               windows-core:vault-mount  ignored  fixture=dokany threads=1  pfad=mount::os::windows::host::vault_drive_task::vault_task_mount_windows_dokany_e2e  quelle=T551,D3
+
+# ---- E13 Bibliothekstests mit Praefix speed_task_ (U45 bis U54; Pfade aus dem Modulbaum; U41 Inventurlauf Teil 2) ----
+speed_task_agent_range_reader_sends_len                       linux-core:unit  pfad=agent::range_tests::speed_task_agent_range_reader_sends_len  quelle=E13,Code
+speed_task_agent_client_unpacks_lz4_blocks_of_a_server_with_the_label  linux-core:unit  pfad=agent::segmented_stage::tests::speed_task_agent_client_unpacks_lz4_blocks_of_a_server_with_the_label  quelle=E13,Code
+speed_task_agent_old_server_without_label_uses_one_stream     linux-core:unit  pfad=agent::segmented_stage::tests::speed_task_agent_old_server_without_label_uses_one_stream  quelle=E13,Code
+speed_task_agent_segmented_stage_end_to_end                   linux-core:unit  pfad=agent::segmented_stage::tests::speed_task_agent_segmented_stage_end_to_end  quelle=E13,Code
+speed_task_agent_short_range_is_not_committed                 linux-core:unit  pfad=agent::segmented_stage::tests::speed_task_agent_short_range_is_not_committed  quelle=E13,Code
+speed_task_lz4_agent_old_server_gets_plain_data               linux-core:unit  pfad=agent::segmented_stage::tests::speed_task_lz4_agent_old_server_gets_plain_data  quelle=E13,Code
+speed_task_range_journal_keeps_the_stages_of_a_live_process   linux-core:unit  pfad=agent_proto::range_journal::tests::speed_task_range_journal_keeps_the_stages_of_a_live_process  quelle=E13,Code
+speed_task_range_journal_removes_unfinished_stages_of_a_dead_process  linux-core:unit  pfad=agent_proto::range_journal::tests::speed_task_range_journal_removes_unfinished_stages_of_a_dead_process  quelle=E13,Code
+speed_task_lz4_agent_credit_charges_the_raw_length            linux-core:unit  pfad=agent_proto::range_lz4_tests::blocks::speed_task_lz4_agent_credit_charges_the_raw_length  quelle=E13,Code
+speed_task_lz4_block_roundtrip                                linux-core:unit  pfad=agent_proto::range_lz4_tests::blocks::speed_task_lz4_block_roundtrip  quelle=E13,Code
+speed_task_lz4_incompressible_block_is_sent_raw               linux-core:unit  pfad=agent_proto::range_lz4_tests::blocks::speed_task_lz4_incompressible_block_is_sent_raw  quelle=E13,Code
+speed_task_lz4_rejects_length_mismatch                        linux-core:unit  pfad=agent_proto::range_lz4_tests::blocks::speed_task_lz4_rejects_length_mismatch  quelle=E13,Code
+speed_task_lz4_rejects_raw_len_above_256_kib                  linux-core:unit  pfad=agent_proto::range_lz4_tests::blocks::speed_task_lz4_rejects_raw_len_above_256_kib  quelle=E13,Code
+speed_task_lz4_rejects_truncated_blocks                       linux-core:unit  pfad=agent_proto::range_lz4_tests::blocks::speed_task_lz4_rejects_truncated_blocks  quelle=E13,Code
+speed_task_agent_labels_range_and_lz4                         linux-core:unit  pfad=agent_proto::range_lz4_tests::speed_task_agent_labels_range_and_lz4  quelle=E13,Code
+speed_task_agent_lz4_frames_roundtrip_on_the_wire             linux-core:unit  pfad=agent_proto::range_lz4_tests::speed_task_agent_lz4_frames_roundtrip_on_the_wire  quelle=E13,Code
+speed_task_agent_range_frames_are_charged_by_credit           linux-core:unit  pfad=agent_proto::range_lz4_tests::speed_task_agent_range_frames_are_charged_by_credit  quelle=E13,Code
+speed_task_agent_stage_belongs_to_the_opening_connection_and_goes_with_it  linux-core:unit  pfad=agent_proto::range_lz4_tests::speed_task_agent_stage_belongs_to_the_opening_connection_and_goes_with_it  quelle=E13,Code
+speed_task_agent_stage_finish_requires_full_coverage          linux-core:unit  pfad=agent_proto::range_lz4_tests::speed_task_agent_stage_finish_requires_full_coverage  quelle=E13,Code
+speed_task_agent_stage_open_creates_an_exclusive_sparse_stage  linux-core:unit  pfad=agent_proto::range_lz4_tests::speed_task_agent_stage_open_creates_an_exclusive_sparse_stage  quelle=E13,Code
+speed_task_agent_stage_table_is_limited_by_the_credit_request_limit  linux-core:unit  pfad=agent_proto::range_lz4_tests::speed_task_agent_stage_table_is_limited_by_the_credit_request_limit  quelle=E13,Code
+speed_task_agent_unknown_frame_tag_is_an_error                linux-core:unit  pfad=agent_proto::range_lz4_tests::speed_task_agent_unknown_frame_tag_is_an_error  quelle=E13,Code
+speed_task_agent_write_at_rejects_overlap_and_out_of_range    linux-core:unit  pfad=agent_proto::range_lz4_tests::speed_task_agent_write_at_rejects_overlap_and_out_of_range  quelle=E13,Code
+speed_task_range_stage_closing_removes_only_unfinished_stages  linux-core:unit  pfad=agent_proto::range_stage::tests::speed_task_range_stage_closing_removes_only_unfinished_stages  quelle=E13,Code
+speed_task_range_stage_data_lands_at_its_offsets              linux-core:unit  pfad=agent_proto::range_stage::tests::speed_task_range_stage_data_lands_at_its_offsets  quelle=E13,Code
+speed_task_range_stage_discard_removes_the_file_and_forgets_it  linux-core:unit  pfad=agent_proto::range_stage::tests::speed_task_range_stage_discard_removes_the_file_and_forgets_it  quelle=E13,Code
+speed_task_range_stage_expires_without_progress               linux-core:unit  pfad=agent_proto::range_stage::tests::speed_task_range_stage_expires_without_progress  quelle=E13,Code
+speed_task_range_stage_finish_requires_full_coverage          linux-core:unit  pfad=agent_proto::range_stage::tests::speed_task_range_stage_finish_requires_full_coverage  quelle=E13,Code
+speed_task_range_stage_name_is_random_and_fits                linux-core:unit  pfad=agent_proto::range_stage::tests::speed_task_range_stage_name_is_random_and_fits  quelle=E13,Code
+speed_task_range_stage_rejects_overlap_with_taken_and_finished_ranges  linux-core:unit  pfad=agent_proto::range_stage::tests::speed_task_range_stage_rejects_overlap_with_taken_and_finished_ranges  quelle=E13,Code
+speed_task_range_stage_rejects_ranges_outside_the_stage       linux-core:unit  pfad=agent_proto::range_stage::tests::speed_task_range_stage_rejects_ranges_outside_the_stage  quelle=E13,Code
+speed_task_range_stage_sums_the_space_of_all_open_stages      linux-core:unit  pfad=agent_proto::range_stage::tests::speed_task_range_stage_sums_the_space_of_all_open_stages  quelle=E13,Code
+speed_task_range_stage_table_is_limited                       linux-core:unit  pfad=agent_proto::range_stage::tests::speed_task_range_stage_table_is_limited  quelle=E13,Code
+speed_task_range_stage_write_refuses_more_than_announced      linux-core:unit  pfad=agent_proto::range_stage::tests::speed_task_range_stage_write_refuses_more_than_announced  quelle=E13,Code
+speed_task_transfer_rows_limiter_hidden_while_ramping         linux-core:unit  pfad=app::transfer_rows::tests::speed_task_transfer_rows_limiter_hidden_while_ramping  quelle=E13,Code
+speed_task_transfer_rows_limiter_line_texts                   linux-core:unit  pfad=app::transfer_rows::tests::speed_task_transfer_rows_limiter_line_texts  quelle=E13,Code
+speed_task_sync_hasher_drop_without_finish_stops_the_helper   linux-core:unit  pfad=bisync::stream_hash_tests::speed_task_sync_hasher_drop_without_finish_stops_the_helper  quelle=E13,Code
+speed_task_sync_hasher_helper_panic_is_an_error               linux-core:unit  pfad=bisync::stream_hash_tests::speed_task_sync_hasher_helper_panic_is_an_error  quelle=E13,Code
+speed_task_sync_hasher_matches_md5_of_the_whole_input         linux-core:unit  pfad=bisync::stream_hash_tests::speed_task_sync_hasher_matches_md5_of_the_whole_input  quelle=E13,Code
+speed_task_sync_hasher_spawn_failure_stays_inline             linux-core:unit  pfad=bisync::stream_hash_tests::speed_task_sync_hasher_spawn_failure_stays_inline  quelle=E13,Code
+speed_task_sync_hasher_stays_inline_below_one_mebibyte        linux-core:unit  pfad=bisync::stream_hash_tests::speed_task_sync_hasher_stays_inline_below_one_mebibyte  quelle=E13,Code
+speed_task_sync_hasher_switches_to_the_helper_at_one_mebibyte  linux-core:unit  pfad=bisync::stream_hash_tests::speed_task_sync_hasher_switches_to_the_helper_at_one_mebibyte  quelle=E13,Code
+speed_task_sync_stream_digest_unchanged                       linux-core:unit  pfad=bisync::stream_hash_tests::speed_task_sync_stream_digest_unchanged  quelle=E13,Code
+speed_task_cli_engine_never_lets_the_engine_ask_for_read_access  linux-core:unit  pfad=cli::engine_copy_tests::guard::speed_task_cli_engine_never_lets_the_engine_ask_for_read_access  quelle=E13,Code
+speed_task_cli_engine_switch_is_on_and_the_older_path_can_be_forced  linux-core:unit  pfad=cli::engine_copy_tests::guard::speed_task_cli_engine_switch_is_on_and_the_older_path_can_be_forced  quelle=E13,Code
+speed_task_cli_engine_unsafe_or_duplicate_listed_names_stay_on_the_older_path  linux-core:unit  pfad=cli::engine_copy_tests::guard::speed_task_cli_engine_unsafe_or_duplicate_listed_names_stay_on_the_older_path  quelle=E13,Code
+speed_task_cli_engine_failure_lists_issues_and_fails          linux-core:unit  pfad=cli::engine_copy_tests::settle::speed_task_cli_engine_failure_lists_issues_and_fails  quelle=E13,Code
+speed_task_cli_engine_issue_log_completes_the_shown_issues    linux-core:unit  pfad=cli::engine_copy_tests::settle::speed_task_cli_engine_issue_log_completes_the_shown_issues  quelle=E13,Code
+speed_task_cli_engine_numbered_destination_is_a_failure       linux-core:unit  pfad=cli::engine_copy_tests::settle::speed_task_cli_engine_numbered_destination_is_a_failure  quelle=E13,Code
+speed_task_cli_engine_skipped_existing_file_is_a_failure      linux-core:unit  pfad=cli::engine_copy_tests::settle::speed_task_cli_engine_skipped_existing_file_is_a_failure  quelle=E13,Code
+speed_task_cli_stats_line_for_the_legacy_path                 linux-core:unit  pfad=cli::engine_copy_tests::settle::speed_task_cli_stats_line_for_the_legacy_path  quelle=E13,Code
+speed_task_cli_stats_line_texts                               linux-core:unit  pfad=cli::engine_copy_tests::settle::speed_task_cli_stats_line_texts  quelle=E13,Code
+speed_task_cli_engine_cancel_stops_the_run                    linux-core:unit  pfad=cli::engine_copy_tests::speed_task_cli_engine_cancel_stops_the_run  quelle=E13,Code
+speed_task_cli_engine_copies_a_file_to_a_new_name             linux-core:unit  pfad=cli::engine_copy_tests::speed_task_cli_engine_copies_a_file_to_a_new_name  quelle=E13,Code
+speed_task_cli_engine_copies_a_tree_to_a_new_name_with_children_as_roots  linux-core:unit  pfad=cli::engine_copy_tests::speed_task_cli_engine_copies_a_tree_to_a_new_name_with_children_as_roots  quelle=E13,Code
+speed_task_cli_engine_eligible_rejects_link_roots_and_unrecursive_directories  linux-core:unit  pfad=cli::engine_copy_tests::speed_task_cli_engine_eligible_rejects_link_roots_and_unrecursive_directories  quelle=E13,Code
+speed_task_cli_engine_eligible_requires_absent_destination_and_existing_parent  linux-core:unit  pfad=cli::engine_copy_tests::speed_task_cli_engine_eligible_requires_absent_destination_and_existing_parent  quelle=E13,Code
+speed_task_cli_engine_empty_directory_is_created              linux-core:unit  pfad=cli::engine_copy_tests::speed_task_cli_engine_empty_directory_is_created  quelle=E13,Code
+speed_task_cli_engine_falls_back_for_an_existing_destination  linux-core:unit  pfad=cli::engine_copy_tests::speed_task_cli_engine_falls_back_for_an_existing_destination  quelle=E13,Code
+speed_task_cli_engine_reports_omissions_with_kinds            linux-core:unit  pfad=cli::engine_copy_tests::speed_task_cli_engine_reports_omissions_with_kinds  quelle=E13,Code
+speed_task_cli_engine_source_change_before_start_is_refused   linux-core:unit  pfad=cli::engine_copy_tests::speed_task_cli_engine_source_change_before_start_is_refused  quelle=E13,Code
+speed_task_mcp_copy_progress_has_rate_and_limiter             linux-core:unit  pfad=cli::mcp::transfer_tools::tests::speed_task_mcp_copy_progress_has_rate_and_limiter  quelle=E13,Code
+speed_task_cli_observer_maps_engine_counters                  linux-core:unit  pfad=cli::tree_observer::tests::speed_task_cli_observer_maps_engine_counters  quelle=E13,Code
+speed_task_windows_copy_flags_compressed_traffic_only_for_unc_and_when_enabled  linux-core:unit  pfad=copy::imp::copy_flags::tests::speed_task_windows_copy_flags_compressed_traffic_only_for_unc_and_when_enabled  quelle=E13,Code
+speed_task_windows_copy_flags_keep_fail_if_exists_and_copy_symlink  linux-core:unit  pfad=copy::imp::copy_flags::tests::speed_task_windows_copy_flags_keep_fail_if_exists_and_copy_symlink  quelle=E13,Code
+speed_task_windows_copy_flags_no_buffering_from_a_quarter_of_available_memory  linux-core:unit  pfad=copy::imp::copy_flags::tests::speed_task_windows_copy_flags_no_buffering_from_a_quarter_of_available_memory  quelle=E13,Code
+speed_task_windows_is_unc_recognizes_verbatim_unc_but_not_verbatim_drive  linux-core:unit  pfad=copy::imp::copy_flags::tests::speed_task_windows_is_unc_recognizes_verbatim_unc_but_not_verbatim_drive  quelle=E13,Code
+speed_task_pipe_copy_cancel_returns_none                      linux-core:unit  pfad=copy::imp::pipe_copy::tests::speed_task_pipe_copy_cancel_returns_none  quelle=E13,Code
+speed_task_pipe_copy_copies_all_bytes_in_order                linux-core:unit  pfad=copy::imp::pipe_copy::tests::speed_task_pipe_copy_copies_all_bytes_in_order  quelle=E13,Code
+speed_task_pipe_copy_empty_input                              linux-core:unit  pfad=copy::imp::pipe_copy::tests::speed_task_pipe_copy_empty_input  quelle=E13,Code
+speed_task_pipe_copy_reader_error_is_reported_as_read_side    linux-core:unit  pfad=copy::imp::pipe_copy::tests::speed_task_pipe_copy_reader_error_is_reported_as_read_side  quelle=E13,Code
+speed_task_pipe_copy_reader_runs_ahead_up_to_depth            linux-core:unit  pfad=copy::imp::pipe_copy::tests::speed_task_pipe_copy_reader_runs_ahead_up_to_depth  quelle=E13,Code
+speed_task_pipe_copy_writer_error_stops_the_reader            linux-core:unit  pfad=copy::imp::pipe_copy::tests::speed_task_pipe_copy_writer_error_stops_the_reader  quelle=E13,Code
+speed_task_local_ranges_cancel_stops_all_threads              linux-core:unit  pfad=copy::platform::linux_range::tests::speed_task_local_ranges_cancel_stops_all_threads  quelle=E13,Code
+speed_task_local_ranges_copy_is_identical_to_single_thread    linux-core:unit  pfad=copy::platform::linux_range::tests::speed_task_local_ranges_copy_is_identical_to_single_thread  quelle=E13,Code
+speed_task_local_ranges_fall_back_to_pread_pwrite_when_copy_file_range_is_refused  linux-core:unit  pfad=copy::platform::linux_range::tests::speed_task_local_ranges_fall_back_to_pread_pwrite_when_copy_file_range_is_refused  quelle=E13,Code
+speed_task_local_ranges_progress_sums_to_size                 linux-core:unit  pfad=copy::platform::linux_range::tests::speed_task_local_ranges_progress_sums_to_size  quelle=E13,Code
+speed_task_local_ranges_short_source_is_unexpected_eof        linux-core:unit  pfad=copy::platform::linux_range::tests::speed_task_local_ranges_short_source_is_unexpected_eof  quelle=E13,Code
+speed_task_local_ranges_split_borders_on_whole_mebibytes      linux-core:unit  pfad=copy::platform::linux_range::tests::speed_task_local_ranges_split_borders_on_whole_mebibytes  quelle=E13,Code
+speed_task_local_ranges_thread_refusal_degrades_to_fewer_threads  linux-core:unit  pfad=copy::platform::linux_range::tests::speed_task_local_ranges_thread_refusal_degrades_to_fewer_threads  quelle=E13,Code
+speed_task_service_forwards_ranges_to_the_backend_stage       linux-core:unit  pfad=daemon::backend_server::backend_ranges::tests::speed_task_service_forwards_ranges_to_the_backend_stage  quelle=E13,Code
+speed_task_service_without_backend_support_announces_no_labels  linux-core:unit  pfad=daemon::backend_server::backend_ranges::tests::speed_task_service_without_backend_support_announces_no_labels  quelle=E13,Code
+speed_task_service_thread_refusal_replies_busy                linux-core:unit  pfad=daemon::backend_server::spawn_reply_tests::speed_task_service_thread_refusal_replies_busy  quelle=E13,Code
+speed_task_ftp_overlap_failure_before_150_reports_possible_stage  linux-core:unit  pfad=ftp::data_overlap_tests::speed_task_ftp_overlap_failure_before_150_reports_possible_stage  quelle=E13,Code
+speed_task_ftp_publish_without_stage_probe_maps_rnfr_550_to_not_found  linux-core:unit  pfad=ftp::data_overlap_tests::speed_task_ftp_publish_without_stage_probe_maps_rnfr_550_to_not_found  quelle=E13,Code
+speed_task_ftp_retr_is_sent_while_the_data_connection_connects  linux-core:unit  pfad=ftp::data_overlap_tests::speed_task_ftp_retr_is_sent_while_the_data_connection_connects  quelle=E13,Code
+speed_task_ftp_still_waits_for_every_reply_before_dependent_commands  linux-core:unit  pfad=ftp::data_overlap_tests::speed_task_ftp_still_waits_for_every_reply_before_dependent_commands  quelle=E13,Code
+speed_task_ftp_stor_is_sent_while_the_data_connection_connects  linux-core:unit  pfad=ftp::data_overlap_tests::speed_task_ftp_stor_is_sent_while_the_data_connection_connects  quelle=E13,Code
+speed_task_ftp_range_421_ends_ranges_without_new_logins       linux-core:unit  pfad=ftp::range_tests::speed_task_ftp_range_421_ends_ranges_without_new_logins  quelle=E13,Code
+speed_task_ftp_range_needs_two_connections                    linux-core:unit  pfad=ftp::range_tests::speed_task_ftp_range_needs_two_connections  quelle=E13,Code
+speed_task_ftp_range_reader_aborts_after_len_and_resyncs      linux-core:unit  pfad=ftp::range_tests::speed_task_ftp_range_reader_aborts_after_len_and_resyncs  quelle=E13,Code
+speed_task_ftp_range_without_rest_returns_none                linux-core:unit  pfad=ftp::range_tests::speed_task_ftp_range_without_rest_returns_none  quelle=E13,Code
+speed_task_ftp_stage_probe_is_skipped_only_for_system_random_names  linux-core:unit  pfad=ftp::range_tests::speed_task_ftp_stage_probe_is_skipped_only_for_system_random_names  quelle=E13,Code
+speed_task_gdrive_range_ignored_by_the_server_is_no_ranges    linux-core:unit  pfad=gdrive::range_tests::speed_task_gdrive_range_ignored_by_the_server_is_no_ranges  quelle=E13,Code
+speed_task_gdrive_range_reader_sets_bounded_range             linux-core:unit  pfad=gdrive::range_tests::speed_task_gdrive_range_reader_sets_bounded_range  quelle=E13,Code
+speed_task_android_limiter_codes_cover_every_variant          linux-core:unit  pfad=mobile::transfer::tests::speed_task_android_limiter_codes_cover_every_variant  quelle=U54
+speed_task_android_private_task_text_has_no_names             linux-core:unit  pfad=mobile::transfer::tests::speed_task_android_private_task_text_has_no_names  quelle=U54
+speed_task_android_report_transfer_sets_the_limiter           linux-core:unit  pfad=mobile::transfer::tests::speed_task_android_report_transfer_sets_the_limiter  quelle=U54
+speed_task_android_task_json_carries_limiter_and_text         linux-core:unit  pfad=mobile::transfer::tests::speed_task_android_task_json_carries_limiter_and_text  quelle=U54
+speed_task_sftp_batch_cancel                                  linux-core:unit  pfad=sftp::batch_tests::speed_task_sftp_batch_cancel  quelle=E13,Code
+speed_task_sftp_batch_closes_every_handle_on_cancel           linux-core:unit  pfad=sftp::batch_tests::speed_task_sftp_batch_closes_every_handle_on_cancel  quelle=E13,Code
+speed_task_sftp_batch_get_delivers_in_request_order           linux-core:unit  pfad=sftp::batch_tests::speed_task_sftp_batch_get_delivers_in_request_order  quelle=E13,Code
+speed_task_sftp_batch_get_detects_growth_and_short_files      linux-core:unit  pfad=sftp::batch_tests::speed_task_sftp_batch_get_detects_growth_and_short_files  quelle=E13,Code
+speed_task_sftp_batch_get_missing_file_is_failed_not_ended    linux-core:unit  pfad=sftp::batch_tests::speed_task_sftp_batch_get_missing_file_is_failed_not_ended  quelle=E13,Code
+speed_task_sftp_batch_get_rereads_answers_the_server_cut      linux-core:unit  pfad=sftp::batch_tests::speed_task_sftp_batch_get_rereads_answers_the_server_cut  quelle=E13,Code
+speed_task_sftp_batch_get_sink_error_stops_and_closes_handles  linux-core:unit  pfad=sftp::batch_tests::speed_task_sftp_batch_get_sink_error_stops_and_closes_handles  quelle=E13,Code
+speed_task_sftp_batch_limits_from_open_handles                linux-core:unit  pfad=sftp::batch_tests::speed_task_sftp_batch_limits_from_open_handles  quelle=E13,Code
+speed_task_sftp_batch_open_failure_is_congestion              linux-core:unit  pfad=sftp::batch_tests::speed_task_sftp_batch_open_failure_is_congestion  quelle=E13,Code
+speed_task_sftp_batch_put_destination_is_directory_is_not_replaced  linux-core:unit  pfad=sftp::batch_tests::speed_task_sftp_batch_put_destination_is_directory_is_not_replaced  quelle=E13,Code
+speed_task_sftp_batch_put_empty_file_sends_no_write           linux-core:unit  pfad=sftp::batch_tests::speed_task_sftp_batch_put_empty_file_sends_no_write  quelle=E13,Code
+speed_task_sftp_batch_put_lost_rename_reply_is_not_unpublished  linux-core:unit  pfad=sftp::batch_tests::speed_task_sftp_batch_put_lost_rename_reply_is_not_unpublished  quelle=E13,Code
+speed_task_sftp_batch_put_lost_reply_before_rename_is_unpublished  linux-core:unit  pfad=sftp::batch_tests::speed_task_sftp_batch_put_lost_reply_before_rename_is_unpublished  quelle=E13,Code
+speed_task_sftp_batch_put_names_taken_are_numbered            linux-core:unit  pfad=sftp::batch_tests::speed_task_sftp_batch_put_names_taken_are_numbered  quelle=E13,Code
+speed_task_sftp_batch_put_publishes_64_files_in_few_round_trips  linux-core:unit  pfad=sftp::batch_tests::speed_task_sftp_batch_put_publishes_64_files_in_few_round_trips  quelle=E13,Code
+speed_task_sftp_batch_put_read_error_stops_later_members      linux-core:unit  pfad=sftp::batch_tests::speed_task_sftp_batch_put_read_error_stops_later_members  quelle=E13,Code
+speed_task_sftp_batch_put_stage_collision_picks_new_name      linux-core:unit  pfad=sftp::batch_tests::speed_task_sftp_batch_put_stage_collision_picks_new_name  quelle=E13,Code
+speed_task_sftp_batch_put_window_follows_open_handles         linux-core:unit  pfad=sftp::batch_tests::speed_task_sftp_batch_put_window_follows_open_handles  quelle=E13,Code
+speed_task_sftp_batch_put_write_failure_removes_stage_and_is_unpublished  linux-core:unit  pfad=sftp::batch_tests::speed_task_sftp_batch_put_write_failure_removes_stage_and_is_unpublished  quelle=E13,Code
+speed_task_sftp_batch_unavailable_pool_is_unsupported         linux-core:unit  pfad=sftp::batch_tests::speed_task_sftp_batch_unavailable_pool_is_unsupported  quelle=E13,Code
+speed_task_sftp_range_pool_picks_distinct_channels_for_distinct_ranges  linux-core:unit  pfad=sftp::range_tests::speed_task_sftp_range_pool_picks_distinct_channels_for_distinct_ranges  quelle=E13,Code
+speed_task_sftp_range_reader_issues_no_read_beyond_end        linux-core:unit  pfad=sftp::range_tests::speed_task_sftp_range_reader_issues_no_read_beyond_end  quelle=E13,Code
+speed_task_sftp_range_reader_last_read_is_shortened_to_the_range  linux-core:unit  pfad=sftp::range_tests::speed_task_sftp_range_reader_last_read_is_shortened_to_the_range  quelle=E13,Code
+speed_task_sftp_range_reader_resumes_at_offset_inside_file    linux-core:unit  pfad=sftp::range_tests::speed_task_sftp_range_reader_resumes_at_offset_inside_file  quelle=E13,Code
+speed_task_sftp_range_reader_short_answer_inside_range_refills  linux-core:unit  pfad=sftp::range_tests::speed_task_sftp_range_reader_short_answer_inside_range_refills  quelle=E13,Code
+speed_task_sftp_segmented_stage_abort_removes_only_the_own_stage  linux-core:unit  pfad=sftp::segmented_stage_tests::speed_task_sftp_segmented_stage_abort_removes_only_the_own_stage  quelle=E13,Code
+speed_task_sftp_segmented_stage_finish_checks_the_stage_length  linux-core:unit  pfad=sftp::segmented_stage_tests::speed_task_sftp_segmented_stage_finish_checks_the_stage_length  quelle=E13,Code
+speed_task_sftp_segmented_stage_writes_ranges_at_offsets      linux-core:unit  pfad=sftp::segmented_stage_tests::speed_task_sftp_segmented_stage_writes_ranges_at_offsets  quelle=E13,Code
+speed_task_sftp_segmented_write_checks_every_range_handle     linux-core:unit  pfad=sftp::segmented_stage_tests::speed_task_sftp_segmented_write_checks_every_range_handle  quelle=E13,Code
+speed_task_sftp_segmented_write_folder_chain_rules            linux-core:unit  pfad=sftp::segmented_stage_tests::speed_task_sftp_segmented_write_folder_chain_rules  quelle=E13,Code
+speed_task_sftp_segmented_write_is_refused_on_an_unsafe_chain  linux-core:unit  pfad=sftp::segmented_stage_tests::speed_task_sftp_segmented_write_is_refused_on_an_unsafe_chain  quelle=E13,Code
+speed_task_sftp_segmented_write_judges_each_folder_once       linux-core:unit  pfad=sftp::segmented_stage_tests::speed_task_sftp_segmented_write_judges_each_folder_once  quelle=E13,Code
+speed_task_sftp_segmented_write_needs_no_channel_and_the_switch  linux-core:unit  pfad=sftp::segmented_stage_tests::speed_task_sftp_segmented_write_needs_no_channel_and_the_switch  quelle=E13,Code
+speed_task_sftp_cipher_order_prefers_aes_gcm_only_with_hardware_aes  linux-core:unit  pfad=sftp::session::tests::speed_task_sftp_cipher_order_prefers_aes_gcm_only_with_hardware_aes  quelle=E13,Code
+speed_task_share_old_peer_without_ranges_uses_one_stream      linux-core:unit  pfad=share::backend::peer_stage_ranges::tests::speed_task_share_old_peer_without_ranges_uses_one_stream  quelle=E13,Code
+speed_task_share_segments_end_to_end_between_two_peers        linux-core:unit  pfad=share::backend::peer_stage_ranges::tests::speed_task_share_segments_end_to_end_between_two_peers  quelle=E13,Code
+speed_task_share_stage_belongs_to_the_opening_connection      linux-core:unit  pfad=share::backend::peer_stage_ranges::tests::speed_task_share_stage_belongs_to_the_opening_connection  quelle=E13,Code
+speed_task_share_stage_finish_requires_full_coverage          linux-core:unit  pfad=share::backend::peer_stage_ranges::tests::speed_task_share_stage_finish_requires_full_coverage  quelle=E13,Code
+speed_task_share_stage_is_removed_when_the_connection_ends    linux-core:unit  pfad=share::backend::peer_stage_ranges::tests::speed_task_share_stage_is_removed_when_the_connection_ends  quelle=E13,Code
+speed_task_share_stage_open_creates_an_exclusive_sparse_stage  linux-core:unit  pfad=share::backend::peer_stage_ranges::tests::speed_task_share_stage_open_creates_an_exclusive_sparse_stage  quelle=E13,Code
+speed_task_share_stage_open_needs_free_space                  linux-core:unit  pfad=share::backend::peer_stage_ranges::tests::speed_task_share_stage_open_needs_free_space  quelle=E13,Code
+speed_task_share_stage_table_is_limited_by_admission          linux-core:unit  pfad=share::backend::peer_stage_ranges::tests::speed_task_share_stage_table_is_limited_by_admission  quelle=E13,Code
+speed_task_share_stage_write_at_rejects_overlap               linux-core:unit  pfad=share::backend::peer_stage_ranges::tests::speed_task_share_stage_write_at_rejects_overlap  quelle=E13,Code
+speed_task_share_stage_write_at_rejects_ranges_outside_the_stage  linux-core:unit  pfad=share::backend::peer_stage_ranges::tests::speed_task_share_stage_write_at_rejects_ranges_outside_the_stage  quelle=E13,Code
+speed_task_share_stage_write_at_rejects_short_or_long_data    linux-core:unit  pfad=share::backend::peer_stage_ranges::tests::speed_task_share_stage_write_at_rejects_short_or_long_data  quelle=E13,Code
+speed_task_share_stage_write_goes_through_the_held_handle     linux-core:unit  pfad=share::backend::peer_stage_ranges::tests::speed_task_share_stage_write_goes_through_the_held_handle  quelle=E13,Code
+speed_task_share_stage_write_is_denied_after_the_grant_is_revoked  linux-core:unit  pfad=share::backend::peer_stage_ranges::tests::speed_task_share_stage_write_is_denied_after_the_grant_is_revoked  quelle=E13,Code
+speed_task_share_stage_write_is_denied_in_a_read_only_room    linux-core:unit  pfad=share::backend::peer_stage_ranges::tests::speed_task_share_stage_write_is_denied_in_a_read_only_room  quelle=E13,Code
+speed_task_lz4_share_blocks_are_checked_before_they_are_trusted  linux-core:unit  pfad=share::framing::lz4_stream::tests::speed_task_lz4_share_blocks_are_checked_before_they_are_trusted  quelle=E13,Code
+speed_task_lz4_share_stream_content_survives_compression      linux-core:unit  pfad=share::framing::lz4_stream::tests::speed_task_lz4_share_stream_content_survives_compression  quelle=E13,Code
+speed_task_lz4_share_stream_is_plain_without_the_capability   linux-core:unit  pfad=share::framing::lz4_stream::tests::speed_task_lz4_share_stream_is_plain_without_the_capability  quelle=E13,Code
+speed_task_share_cc_default_is_cubic                          linux-core:unit  pfad=share::keepalive::tests::speed_task_share_cc_default_is_cubic  quelle=E13,Code
+speed_task_share_cc_env_selects_bbr3                          linux-core:unit  pfad=share::keepalive::tests::speed_task_share_cc_env_selects_bbr3  quelle=E13,Code
+speed_task_share_cc_unknown_value_falls_back_to_cubic         linux-core:unit  pfad=share::keepalive::tests::speed_task_share_cc_unknown_value_falls_back_to_cubic  quelle=E13,Code
+speed_task_smb_batch_get_delivers_in_request_order            linux-core:unit  pfad=smb::batch_tests::speed_task_smb_batch_get_delivers_in_request_order  quelle=E13,Code
+speed_task_smb_batch_get_detects_size_change_from_create_response  linux-core:unit  pfad=smb::batch_tests::speed_task_smb_batch_get_detects_size_change_from_create_response  quelle=E13,Code
+speed_task_smb_batch_get_reparse_entries_use_the_followed_read  linux-core:unit  pfad=smb::batch_tests::speed_task_smb_batch_get_reparse_entries_use_the_followed_read  quelle=E13,Code
+speed_task_smb_batch_limits_none_without_live_generation      linux-core:unit  pfad=smb::batch_tests::speed_task_smb_batch_limits_none_without_live_generation  quelle=E13,Code
+speed_task_smb_batch_put_blocks_above_max_write_follow_at_once  linux-core:unit  pfad=smb::batch_tests::speed_task_smb_batch_put_blocks_above_max_write_follow_at_once  quelle=E13,Code
+speed_task_smb_batch_put_error_before_rename_is_unpublished   linux-core:unit  pfad=smb::batch_tests::speed_task_smb_batch_put_error_before_rename_is_unpublished  quelle=E13,Code
+speed_task_smb_batch_put_lost_reply_is_not_unpublished        linux-core:unit  pfad=smb::batch_tests::speed_task_smb_batch_put_lost_reply_is_not_unpublished  quelle=E13,Code
+speed_task_smb_batch_put_name_collision_numbers               linux-core:unit  pfad=smb::batch_tests::speed_task_smb_batch_put_name_collision_numbers  quelle=E13,Code
+speed_task_smb_batch_put_never_follows_reparse_points         linux-core:unit  pfad=smb::batch_tests::speed_task_smb_batch_put_never_follows_reparse_points  quelle=E13,Code
+speed_task_smb_batch_put_two_round_trips_for_small_files      linux-core:unit  pfad=smb::batch_tests::speed_task_smb_batch_put_two_round_trips_for_small_files  quelle=E13,Code
+speed_task_smb_range_reader_pipeline_stays_within_range       linux-core:unit  pfad=smb::range_tests::speed_task_smb_range_reader_pipeline_stays_within_range  quelle=E13,Code
+speed_task_smb_range_reader_stops_at_end                      linux-core:unit  pfad=smb::range_tests::speed_task_smb_range_reader_stops_at_end  quelle=E13,Code
+speed_task_smb_segment_finish_checks_identity_and_size_at_a_handle  linux-core:unit  pfad=smb::segmented_stage_tests::speed_task_smb_segment_finish_checks_identity_and_size_at_a_handle  quelle=E13,Code
+speed_task_smb_segment_never_creates_missing_stage            linux-core:unit  pfad=smb::segmented_stage_tests::speed_task_smb_segment_never_creates_missing_stage  quelle=E13,Code
+speed_task_smb_segment_refuses_swapped_stage                  linux-core:unit  pfad=smb::segmented_stage_tests::speed_task_smb_segment_refuses_swapped_stage  quelle=E13,Code
+speed_task_smb_segment_without_file_id_streams                linux-core:unit  pfad=smb::segmented_stage_tests::speed_task_smb_segment_without_file_id_streams  quelle=E13,Code
+speed_task_clipboard_parallel_downloads_all_files_into_place  linux-core:unit  pfad=transfer::clipboard_parallel_tests::speed_task_clipboard_parallel_downloads_all_files_into_place  quelle=E13,Code
+speed_task_clipboard_parallel_first_error_aborts_and_is_returned  linux-core:unit  pfad=transfer::clipboard_parallel_tests::speed_task_clipboard_parallel_first_error_aborts_and_is_returned  quelle=E13,Code
+speed_task_clipboard_parallel_runs_files_concurrently_up_to_the_flow_limit  linux-core:unit  pfad=transfer::clipboard_parallel_tests::speed_task_clipboard_parallel_runs_files_concurrently_up_to_the_flow_limit  quelle=E13,Code
+speed_task_clipboard_parallel_single_file_runs_inline         linux-core:unit  pfad=transfer::clipboard_parallel_tests::speed_task_clipboard_parallel_single_file_runs_inline  quelle=E13,Code
+speed_task_clipboard_parallel_spawn_failure_degrades_to_serial  linux-core:unit  pfad=transfer::clipboard_parallel_tests::speed_task_clipboard_parallel_spawn_failure_degrades_to_serial  quelle=E13,Code
+speed_task_lz4_policy_compresses_when_core_rate_exceeds_link_by_thirty_percent  linux-core:unit  pfad=transfer::compress_policy_tests::speed_task_lz4_policy_compresses_when_core_rate_exceeds_link_by_thirty_percent  quelle=E13,Code
+speed_task_lz4_policy_keeps_its_decision_for_eight_blocks     linux-core:unit  pfad=transfer::compress_policy_tests::speed_task_lz4_policy_keeps_its_decision_for_eight_blocks  quelle=E13,Code
+speed_task_lz4_policy_measures_itself                         linux-core:unit  pfad=transfer::compress_policy_tests::speed_task_lz4_policy_measures_itself  quelle=E13,Code
+speed_task_lz4_policy_needs_a_free_core                       linux-core:unit  pfad=transfer::compress_policy_tests::speed_task_lz4_policy_needs_a_free_core  quelle=E13,Code
+speed_task_lz4_policy_probes_every_eight_mebibytes            linux-core:unit  pfad=transfer::compress_policy_tests::speed_task_lz4_policy_probes_every_eight_mebibytes  quelle=E13,Code
+speed_task_lz4_policy_skips_when_ratio_is_above_085           linux-core:unit  pfad=transfer::compress_policy_tests::speed_task_lz4_policy_skips_when_ratio_is_above_085  quelle=E13,Code
+speed_task_lz4_policy_skips_when_the_writer_is_not_blocked    linux-core:unit  pfad=transfer::compress_policy_tests::speed_task_lz4_policy_skips_when_the_writer_is_not_blocked  quelle=E13,Code
+speed_task_batch_get_unsupported_falls_back_to_single_files   linux-core:unit  pfad=transfer::engine::batch_get::speed_tests::speed_task_batch_get_unsupported_falls_back_to_single_files  quelle=E13,Code
+speed_task_batch_jobs_book_time_accounts                      linux-core:unit  pfad=transfer::engine::batch_put::speed_tests::speed_task_batch_jobs_book_time_accounts  quelle=E13,Code
+speed_task_batch_unpublished_failure_is_retried_once          linux-core:unit  pfad=transfer::engine::batch_put::speed_tests::speed_task_batch_unpublished_failure_is_retried_once  quelle=E13,Code
+speed_task_limiter_describe_local_copy_names_the_longer_queue  linux-core:unit  pfad=transfer::engine::limiter_tests::speed_task_limiter_describe_local_copy_names_the_longer_queue  quelle=E13,Code
+speed_task_limiter_describe_names_drives_and_kinds_only       linux-core:unit  pfad=transfer::engine::limiter_tests::speed_task_limiter_describe_names_drives_and_kinds_only  quelle=E13,Code
+speed_task_limiter_endpoint_names_are_kinds_not_addresses     linux-core:unit  pfad=transfer::engine::limiter_tests::speed_task_limiter_endpoint_names_are_kinds_not_addresses  quelle=E13,Code
+speed_task_meter_accounts_split_source_target_cpu             linux-core:unit  pfad=transfer::engine::limiter_tests::speed_task_meter_accounts_split_source_target_cpu  quelle=E13,Code
+speed_task_progress_carries_limiter_fields                    linux-core:unit  pfad=transfer::engine::limiter_tests::speed_task_progress_carries_limiter_fields  quelle=E13,Code
+speed_task_thread_refusal_ends_the_job_when_no_worker_can_start  linux-core:unit  pfad=transfer::engine::limiter_tests::speed_task_thread_refusal_ends_the_job_when_no_worker_can_start  quelle=E13,Code
+speed_task_thread_refusal_is_overload                         linux-core:unit  pfad=transfer::engine::limiter_tests::speed_task_thread_refusal_is_overload  quelle=E13,Code
+speed_task_local_engine_passes_the_granted_threads_to_the_copy  linux-core:unit  pfad=transfer::engine::local::extras_tests::speed_task_local_engine_passes_the_granted_threads_to_the_copy  quelle=E13,Code
+speed_task_local_extra_permits_are_released_after_the_copy    linux-core:unit  pfad=transfer::engine::local::extras_tests::speed_task_local_extra_permits_are_released_after_the_copy  quelle=E13,Code
+speed_task_local_extra_permits_never_wait                     linux-core:unit  pfad=transfer::engine::local::extras_tests::speed_task_local_extra_permits_never_wait  quelle=E13,Code
+speed_task_local_extra_permits_only_when_the_queue_is_empty   linux-core:unit  pfad=transfer::engine::local::extras_tests::speed_task_local_extra_permits_only_when_the_queue_is_empty  quelle=E13,Code
+speed_task_local_no_extras_for_small_files_or_moves           linux-core:unit  pfad=transfer::engine::local::extras_tests::speed_task_local_no_extras_for_small_files_or_moves  quelle=E13,Code
+speed_task_segments_cancel_stops_helpers                      linux-core:unit  pfad=transfer::engine::segments_tests::speed_task_segments_cancel_stops_helpers  quelle=E13,Code
+speed_task_segments_download_assembles_the_file_from_ranges   linux-core:unit  pfad=transfer::engine::segments_tests::speed_task_segments_download_assembles_the_file_from_ranges  quelle=E13,Code
+speed_task_segments_fallback_when_server_ignores_ranges       linux-core:unit  pfad=transfer::engine::segments_tests::speed_task_segments_fallback_when_server_ignores_ranges  quelle=E13,Code
+speed_task_segments_md5_prefix_hasher_matches_single_stream   linux-core:unit  pfad=transfer::engine::segments_tests::speed_task_segments_md5_prefix_hasher_matches_single_stream  quelle=E13,Code
+speed_task_segments_memory_is_reserved_before_the_permit      linux-core:unit  pfad=transfer::engine::segments_tests::speed_task_segments_memory_is_reserved_before_the_permit  quelle=E13,Code
+speed_task_segments_name_taken_is_numbered_not_replaced       linux-core:unit  pfad=transfer::engine::segments_tests::speed_task_segments_name_taken_is_numbered_not_replaced  quelle=E13,Code
+speed_task_segments_publish_waits_for_all_ranges              linux-core:unit  pfad=transfer::engine::segments_tests::speed_task_segments_publish_waits_for_all_ranges  quelle=E13,Code
+speed_task_segments_retry_resumes_at_prefix                   linux-core:unit  pfad=transfer::engine::segments_tests::speed_task_segments_retry_resumes_at_prefix  quelle=E13,Code
+speed_task_segments_round_robin_with_small_job                linux-core:unit  pfad=transfer::engine::segments_tests::speed_task_segments_round_robin_with_small_job  quelle=E13,Code
+speed_task_segments_short_range_reports_source_changed        linux-core:unit  pfad=transfer::engine::segments_tests::speed_task_segments_short_range_reports_source_changed  quelle=E13,Code
+speed_task_segments_single_permit_owner_does_all_ranges       linux-core:unit  pfad=transfer::engine::segments_tests::speed_task_segments_single_permit_owner_does_all_ranges  quelle=E13,Code
+speed_task_segments_ticket_without_work_is_noop               linux-core:unit  pfad=transfer::engine::segments_tests::speed_task_segments_ticket_without_work_is_noop  quelle=E13,Code
+speed_task_segments_copy_assembles_the_file_across_two_backends  linux-core:unit  pfad=transfer::engine::segments_upload_tests::copy_tests::speed_task_segments_copy_assembles_the_file_across_two_backends  quelle=E13,Code
+speed_task_segments_copy_prefers_server_copy                  linux-core:unit  pfad=transfer::engine::segments_upload_tests::copy_tests::speed_task_segments_copy_prefers_server_copy  quelle=E13,Code
+speed_task_segments_upload_assembles_the_file_from_ranges     linux-core:unit  pfad=transfer::engine::segments_upload_tests::speed_task_segments_upload_assembles_the_file_from_ranges  quelle=E13,Code
+speed_task_segments_upload_failure_aborts_the_stage           linux-core:unit  pfad=transfer::engine::segments_upload_tests::speed_task_segments_upload_failure_aborts_the_stage  quelle=E13,Code
+speed_task_segments_upload_name_taken_is_numbered             linux-core:unit  pfad=transfer::engine::segments_upload_tests::speed_task_segments_upload_name_taken_is_numbered  quelle=E13,Code
+speed_task_segments_upload_source_change_is_refused           linux-core:unit  pfad=transfer::engine::segments_upload_tests::speed_task_segments_upload_source_change_is_refused  quelle=E13,Code
+speed_task_segments_upload_without_segmented_stage_streams    linux-core:unit  pfad=transfer::engine::segments_upload_tests::speed_task_segments_upload_without_segmented_stage_streams  quelle=E13,Code
+speed_task_stats_list_a_split_file_once                       linux-core:unit  pfad=transfer::engine::stats::tests::speed_task_stats_list_a_split_file_once  quelle=E13,Code
+speed_task_stats_totals_and_running_ranges                    linux-core:unit  pfad=transfer::engine::stats::tests::speed_task_stats_totals_and_running_ranges  quelle=E13,Code
+speed_task_random_hex_checked_is_system_random_and_the_stand_in_is_marked  linux-core:unit  pfad=transfer::engine::util::tests::speed_task_random_hex_checked_is_system_random_and_the_stand_in_is_marked  quelle=E13,Code
+speed_task_flow_finish_with_books_the_accounts_on_both_flows  linux-core:unit  pfad=transfer::flow::tests::speed_task_flow_finish_with_books_the_accounts_on_both_flows  quelle=E13,Code
+speed_task_flow_snapshot_reports_saturated_and_plateau        linux-core:unit  pfad=transfer::flow::tests::speed_task_flow_snapshot_reports_saturated_and_plateau  quelle=E13,Code
+speed_task_flow_start_limit_comes_from_the_hint               linux-core:unit  pfad=transfer::flow::tests::speed_task_flow_start_limit_comes_from_the_hint  quelle=E13,Code
+speed_task_flow_thread_refusal_bound_survives_lookups         linux-core:unit  pfad=transfer::flow::tests::speed_task_flow_thread_refusal_bound_survives_lookups  quelle=E13,Code
+speed_task_flow_waited_time_is_counted_per_flow               linux-core:unit  pfad=transfer::flow::tests::speed_task_flow_waited_time_is_counted_per_flow  quelle=E13,Code
+speed_task_flow_facts_saturated_and_plateau                   linux-core:unit  pfad=transfer::flow_control::tests::speed_task_flow_facts_saturated_and_plateau  quelle=E13,Code
+speed_task_flow_latency_inflation_cancels_upward_probe        linux-core:unit  pfad=transfer::flow_control::tests::speed_task_flow_latency_inflation_cancels_upward_probe  quelle=E13,Code
+speed_task_flow_slow_start_needs_two_misses_to_end            linux-core:unit  pfad=transfer::flow_control::tests::speed_task_flow_slow_start_needs_two_misses_to_end  quelle=E13,Code
+speed_task_flow_start_limit_from_hint_is_half                 linux-core:unit  pfad=transfer::flow_control::tests::speed_task_flow_start_limit_from_hint_is_half  quelle=E13,Code
+speed_task_flow_thread_refusal_halves_and_bounds              linux-core:unit  pfad=transfer::flow_control::tests::speed_task_flow_thread_refusal_halves_and_bounds  quelle=E13,Code
+speed_task_flow_window_floor_is_one_hundred_ms                linux-core:unit  pfad=transfer::flow_control::tests::speed_task_flow_window_floor_is_one_hundred_ms  quelle=E13,Code
+speed_task_flow_window_waits_for_eight_completions_or_one_second  linux-core:unit  pfad=transfer::flow_control::tests::speed_task_flow_window_waits_for_eight_completions_or_one_second  quelle=E13,Code
+speed_task_hints_cap_is_512_oldest_first                      linux-core:unit  pfad=transfer::hints::tests::speed_task_hints_cap_is_512_oldest_first  quelle=E13,Code
+speed_task_hints_file_is_written_atomically                   linux-core:unit  pfad=transfer::hints::tests::speed_task_hints_file_is_written_atomically  quelle=E13,Code
+speed_task_hints_ignore_corrupt_file                          linux-core:unit  pfad=transfer::hints::tests::speed_task_hints_ignore_corrupt_file  quelle=E13,Code
+speed_task_hints_key_includes_backend_identity                linux-core:unit  pfad=transfer::hints::tests::speed_task_hints_key_includes_backend_identity  quelle=E13,Code
+speed_task_hints_reader_drops_invalid_values                  linux-core:unit  pfad=transfer::hints::tests::speed_task_hints_reader_drops_invalid_values  quelle=E13,Code
+speed_task_hints_roundtrip_with_hashed_keys                   linux-core:unit  pfad=transfer::hints::tests::speed_task_hints_roundtrip_with_hashed_keys  quelle=E13,Code
+speed_task_hints_salt_is_per_installation                     linux-core:unit  pfad=transfer::hints::tests::speed_task_hints_salt_is_per_installation  quelle=E13,Code
+speed_task_limiter_codes_are_stable                           linux-core:unit  pfad=transfer::limiter_tests::speed_task_limiter_codes_are_stable  quelle=E13,Code
+speed_task_limiter_judge_majority_side_wins                   linux-core:unit  pfad=transfer::limiter_tests::speed_task_limiter_judge_majority_side_wins  quelle=E13,Code
+speed_task_limiter_judge_memory_wait_majority                 linux-core:unit  pfad=transfer::limiter_tests::speed_task_limiter_judge_memory_wait_majority  quelle=E13,Code
+speed_task_limiter_judge_no_majority_is_remote                linux-core:unit  pfad=transfer::limiter_tests::speed_task_limiter_judge_no_majority_is_remote  quelle=E13,Code
+speed_task_limiter_judge_not_saturated_is_idle                linux-core:unit  pfad=transfer::limiter_tests::speed_task_limiter_judge_not_saturated_is_idle  quelle=E13,Code
+speed_task_limiter_judge_ramp_while_last_probe_gained         linux-core:unit  pfad=transfer::limiter_tests::speed_task_limiter_judge_ramp_while_last_probe_gained  quelle=E13,Code
+speed_task_limiter_judge_remote_becomes_link_at_ninety_percent_of_link_rate  linux-core:unit  pfad=transfer::limiter_tests::speed_task_limiter_judge_remote_becomes_link_at_ninety_percent_of_link_rate  quelle=E13,Code
+speed_task_limiter_judge_se_cpu_needs_process_cpu_at_ninety_percent_of_cores  linux-core:unit  pfad=transfer::limiter_tests::speed_task_limiter_judge_se_cpu_needs_process_cpu_at_ninety_percent_of_cores  quelle=E13,Code
+speed_task_limiter_judge_se_thread_when_cores_are_free        linux-core:unit  pfad=transfer::limiter_tests::speed_task_limiter_judge_se_thread_when_cores_are_free  quelle=E13,Code
+speed_task_limiter_local_pair_names_the_drive_with_the_longer_queue  linux-core:unit  pfad=transfer::limiter_tests::speed_task_limiter_local_pair_names_the_drive_with_the_longer_queue  quelle=E13,Code
+speed_task_limiter_shares_sum_to_one_hundred                  linux-core:unit  pfad=transfer::limiter_tests::speed_task_limiter_shares_sum_to_one_hundred  quelle=E13,Code
+speed_task_limiter_shown_only_after_three_equal_windows       linux-core:unit  pfad=transfer::limiter_tests::speed_task_limiter_shown_only_after_three_equal_windows  quelle=E13,Code
+speed_task_limiter_text_covers_every_variant                  linux-core:unit  pfad=transfer::limiter_tests::speed_task_limiter_text_covers_every_variant  quelle=E13,Code
+speed_task_memory_budget_follows_available                    linux-core:unit  pfad=transfer::memory::tests::speed_task_memory_budget_follows_available  quelle=E13,Code
+speed_task_memory_budget_never_revokes                        linux-core:unit  pfad=transfer::memory::tests::speed_task_memory_budget_never_revokes  quelle=E13,Code
+speed_task_local_rotational_unknown_is_not_parallel           linux-core:unit  pfad=transfer::platform::tests::speed_task_local_rotational_unknown_is_not_parallel  quelle=E13,Code
+speed_task_priority_only_lowers                               linux-core:unit  pfad=transfer::platform::tests::speed_task_priority_only_lowers  quelle=E13,Code
+speed_task_sensor_unix_reads_what_it_can_and_nothing_else     linux-core:unit  pfad=transfer::platform::tests::speed_task_sensor_unix_reads_what_it_can_and_nothing_else  quelle=E13,Code
+speed_task_write_all_at_positions_data                        windows-core:unit  pfad=transfer::platform::tests::speed_task_write_all_at_positions_data  quelle=E13,Code
+speed_task_write_all_at_positions_data                        linux-core:unit  pfad=transfer::platform::tests::speed_task_write_all_at_positions_data  quelle=E13,Code
+speed_task_stream_block_equals_the_engine_copy_buffer         linux-core:unit  pfad=transfer::read_pipeline::stream_block_tests::speed_task_stream_block_equals_the_engine_copy_buffer  quelle=E13,Code
+speed_task_segments_last_range_takes_remainder_below_min      linux-core:unit  pfad=transfer::segments_tests::speed_task_segments_last_range_takes_remainder_below_min  quelle=E13,Code
+speed_task_segments_ledger_claims_in_order                    linux-core:unit  pfad=transfer::segments_tests::speed_task_segments_ledger_claims_in_order  quelle=E13,Code
+speed_task_segments_prefix_is_smallest_inflight_start         linux-core:unit  pfad=transfer::segments_tests::speed_task_segments_prefix_is_smallest_inflight_start  quelle=E13,Code
+speed_task_segments_prefix_stops_at_failed_range              linux-core:unit  pfad=transfer::segments_tests::speed_task_segments_prefix_stops_at_failed_range  quelle=E13,Code
+speed_task_segments_resume_at_prefix_skips_done_bytes         linux-core:unit  pfad=transfer::segments_tests::speed_task_segments_resume_at_prefix_skips_done_bytes  quelle=E13,Code
+speed_task_segments_sizer_caps_at_thirty_seconds_of_stream_rate  linux-core:unit  pfad=transfer::segments_tests::speed_task_segments_sizer_caps_at_thirty_seconds_of_stream_rate  quelle=E13,Code
+speed_task_segments_sizer_defaults_to_min_then_follows_rate_and_setup  linux-core:unit  pfad=transfer::segments_tests::speed_task_segments_sizer_defaults_to_min_then_follows_rate_and_setup  quelle=E13,Code
+speed_task_segments_split_threshold_is_two_min_segments       linux-core:unit  pfad=transfer::segments_tests::speed_task_segments_split_threshold_is_two_min_segments  quelle=E13,Code
+speed_task_sensor_parse_cpu_max_quota_and_affinity            linux-core:unit  pfad=transfer::sensor_parse_tests::speed_task_sensor_parse_cpu_max_quota_and_affinity  quelle=E13,Code
+speed_task_sensor_parse_diskstats_queue_depth                 linux-core:unit  pfad=transfer::sensor_parse_tests::speed_task_sensor_parse_diskstats_queue_depth  quelle=E13,Code
+speed_task_sensor_parse_meminfo_available                     linux-core:unit  pfad=transfer::sensor_parse_tests::speed_task_sensor_parse_meminfo_available  quelle=E13,Code
+speed_task_sensor_parse_pids_headroom                         linux-core:unit  pfad=transfer::sensor_parse_tests::speed_task_sensor_parse_pids_headroom  quelle=E13,Code
+speed_task_sensor_parse_proc_stat_deltas                      linux-core:unit  pfad=transfer::sensor_parse_tests::speed_task_sensor_parse_proc_stat_deltas  quelle=E13,Code
+speed_task_sensor_parse_route_and_link_speed                  linux-core:unit  pfad=transfer::sensor_parse_tests::speed_task_sensor_parse_route_and_link_speed  quelle=E13,Code
+speed_task_sensor_sample_from_two_readings                    linux-core:unit  pfad=transfer::sensor_parse_tests::speed_task_sensor_sample_from_two_readings  quelle=E13,Code
+speed_task_sensor_unreadable_source_gives_none                linux-core:unit  pfad=transfer::sensor_parse_tests::speed_task_sensor_unreadable_source_gives_none  quelle=E13,Code
+speed_task_sensor_drive_prefix_names_a_letter_only            linux-core:unit  pfad=transfer::sensors::tests::speed_task_sensor_drive_prefix_names_a_letter_only  quelle=E13,Code
+speed_task_sensor_latest_always_answers_without_a_reading     linux-core:unit  pfad=transfer::sensors::tests::speed_task_sensor_latest_always_answers_without_a_reading  quelle=E13,Code
+speed_task_local_open_read_range_reads_exact_window           linux-core:unit  pfad=vfs::local::range_tests::speed_task_local_open_read_range_reads_exact_window  quelle=E13,Code
+speed_task_vfs_cache_forwards_range_capabilities              linux-core:unit  pfad=vfs::local::range_tests::speed_task_vfs_cache_forwards_range_capabilities  quelle=E13,Code
+speed_task_vfs_default_open_read_range_takes_len              linux-core:unit  pfad=vfs::ranges::tests::speed_task_vfs_default_open_read_range_takes_len  quelle=E13,Code
+speed_task_unpublished_error_roundtrip                        linux-core:unit  pfad=vfs::unpublished::tests::speed_task_unpublished_error_roundtrip  quelle=E13,Code
+speed_task_webdav_confirmation_skipped_only_when_response_proves_it  linux-core:unit  pfad=webdav::core_impl::request_count_tests::speed_task_webdav_confirmation_skipped_only_when_response_proves_it  quelle=E13,Code
+speed_task_webdav_move_keeps_overwrite_false                  linux-core:unit  pfad=webdav::core_impl::request_count_tests::speed_task_webdav_move_keeps_overwrite_false  quelle=E13,Code
+speed_task_webdav_put_keeps_if_none_match                     linux-core:unit  pfad=webdav::core_impl::request_count_tests::speed_task_webdav_put_keeps_if_none_match  quelle=E13,Code
+speed_task_webdav_requests_per_new_file_at_most_three_plus_folder  linux-core:unit  pfad=webdav::core_impl::request_count_tests::speed_task_webdav_requests_per_new_file_at_most_three_plus_folder  quelle=E13,Code
+speed_task_webdav_sync_finish_stage_uses_one_propfind         linux-core:unit  pfad=webdav::core_impl::request_count_tests::speed_task_webdav_sync_finish_stage_uses_one_propfind  quelle=E13,Code
+speed_task_webdav_range_200_response_means_no_ranges          linux-core:unit  pfad=webdav::range_tests::speed_task_webdav_range_200_response_means_no_ranges  quelle=E13,Code
+speed_task_webdav_range_416_is_invalid_data                   linux-core:unit  pfad=webdav::range_tests::speed_task_webdav_range_416_is_invalid_data  quelle=E13,Code
+speed_task_webdav_range_content_range_must_match_offset       linux-core:unit  pfad=webdav::range_tests::speed_task_webdav_range_content_range_must_match_offset  quelle=E13,Code
+speed_task_webdav_range_reader_sends_bounded_range_header     linux-core:unit  pfad=webdav::range_tests::speed_task_webdav_range_reader_sends_bounded_range_header  quelle=E13,Code
+speed_task_lz4_share_host_unpacks_blocks_of_a_negotiated_upload  linux-core:unit  pfad=share::copy_paste_task_fixture::lz4_stream_loopback_tests::speed_task_lz4_share_host_unpacks_blocks_of_a_negotiated_upload  quelle=E13,Code
+speed_task_lz4_share_host_refuses_unannounced_blocks          linux-core:unit  pfad=share::copy_paste_task_fixture::lz4_stream_loopback_tests::speed_task_lz4_share_host_refuses_unannounced_blocks  quelle=E13,Code
+speed_task_lz4_share_host_refuses_bad_blocks                  linux-core:unit  pfad=share::copy_paste_task_fixture::lz4_stream_loopback_tests::speed_task_lz4_share_host_refuses_bad_blocks  quelle=E13,Code
+speed_task_lz4_share_range_upload_takes_blocks                linux-core:unit  pfad=share::copy_paste_task_fixture::lz4_stream_loopback_tests::speed_task_lz4_share_range_upload_takes_blocks  quelle=E13,Code
+speed_task_share_read_at_len_returns_the_exact_window         linux-core:unit  pfad=share::copy_paste_task_fixture::range_read_tests::speed_task_share_read_at_len_returns_the_exact_window  quelle=E13,Code
+speed_task_share_read_at_len_zero_reads_to_the_end            linux-core:unit  pfad=share::copy_paste_task_fixture::range_read_tests::speed_task_share_read_at_len_zero_reads_to_the_end  quelle=E13,Code
+speed_task_share_read_at_len_beyond_the_end_is_clamped        linux-core:unit  pfad=share::copy_paste_task_fixture::range_read_tests::speed_task_share_read_at_len_beyond_the_end_is_clamped  quelle=E13,Code
+speed_task_share_read_range_is_none_without_ranges_capability  linux-core:unit  pfad=share::copy_paste_task_fixture::range_read_tests::speed_task_share_read_range_is_none_without_ranges_capability  quelle=E13,Code
+speed_task_share_read_at_len_needs_the_same_rights_as_read_at  linux-core:unit  pfad=share::copy_paste_task_fixture::range_read_tests::speed_task_share_read_at_len_needs_the_same_rights_as_read_at  quelle=E13,Code
+
+# ---- U54 (Android-Anzeige des Engpasses) JVM: android-build speed-jvm ----
+speed_task_android_progress_line_appends_the_limiter_text_while_running  android-build:speed-jvm  art=junit  quelle=U54
+speed_task_android_progress_line_without_limiter_is_unchanged  android-build:speed-jvm  art=junit  quelle=U54
+speed_task_android_mirror_dialog_text_appends_the_limiter_text  android-build:speed-jvm  art=junit  quelle=U54
+TransferTasksLimiterTest                                      android-build:speed-jvm  art=junit  quelle=U54
+
 [noch nicht umgesetzt]
 
 # ---- S2 DRV-M2 Windows (kein Paket benannt): windows-core drive-dokany-regression (L350, S2-A3) ----
 drive_task_windows_realpath_native_on_dokany            windows-core:drive-dokany-regression  ignored threads=1 fixture=dokany  paket=offen  quelle=L350,S2-A3
 
 # ---- S2 DRV-M5 (U17): linux-desktop drive-desktop mit temporaerem HOME (L272, D3) ----
-drive_task_gtk_bookmark_only_outside_glib_rule    linux-desktop:drive-desktop  fixture=home  paket=U17  quelle=L272,D2-14
-drive_task_gtk_bookmark_removed_exactly           linux-desktop:drive-desktop  fixture=home  paket=U17  quelle=L272
-drive_task_kde_places_preserves_foreign_entries   linux-desktop:drive-desktop  fixture=home  paket=U17  quelle=L272
-drive_task_bookmarks_cleaned_after_host_crash     linux-desktop:drive-desktop  fixture=home  paket=U17  quelle=L272
-drive_task_glib_display_rule_path                 linux-desktop:drive-desktop  fixture=home  paket=U17  quelle=L272
-drive_task_cli_open_json                          linux-desktop:drive-desktop  fixture=home  paket=U17  quelle=L272
 desktop_task_disable_keeps_device_tree            linux-desktop:drive-desktop  fixture=home  paket=U34  quelle=D3-linux-desktop
-
-# ---- S2 DRV-M6 (U17): linux-core drive-devices bzw. unit, windows-core drive-cli (L283) ----
-drive_task_devices_folder_appears_without_manual_steps  linux-core:drive-devices,windows-core:drive-cli  fixture=share  paket=U17  quelle=L283
-drive_task_devices_offline_error_not_empty        linux-core:drive-devices,windows-core:drive-cli  fixture=share  paket=U17  quelle=L283
-drive_task_devices_online_retries_pending_upload  linux-core:drive-devices,windows-core:drive-cli  fixture=share  paket=U17  quelle=L283
-drive_task_devices_room_readonly                  linux-core:drive-devices,windows-core:drive-cli  fixture=share  paket=U17  quelle=L283
-drive_task_devices_cross_export_move_exdev        linux-core:drive-devices,windows-core:drive-cli  fixture=share  paket=U17  quelle=L283
-drive_task_devices_offline_closes_idle_children_only  linux-core:drive-devices,windows-core:drive-cli  fixture=share  paket=U17  quelle=L283
-drive_task_devices_offline_peer_does_not_block_host_start  linux-core:drive-devices,windows-core:drive-cli  fixture=share  paket=U17  quelle=L283
-drive_task_devices_switch_off_unmounts_and_removes_place  linux-core:drive-devices,windows-core:drive-cli  fixture=share  paket=U17  quelle=L283
-drive_task_devices_watch_returns_within_30s       linux-core:drive-devices,windows-core:drive-cli  fixture=share  paket=U17  quelle=L283
-drive_task_devices_names_collision_deterministic  linux-core:unit,windows-core:drive-cli  paket=U17  quelle=L283
-drive_task_devices_key_matches_s5_rule            linux-core:unit,windows-core:drive-cli  paket=U17  quelle=L283
-drive_task_devices_single_peer_mounts_unchanged   linux-core:unit,windows-core:drive-cli  paket=U17  quelle=L283,D3-Erhaltung-S2
-drive_task_cli_devices_shapes                     linux-core:unit,windows-core:drive-cli  paket=U17  quelle=L283
-drive_task_devices_windows_drive_lists_peer       windows-core:drive-cli  fixture=share,dokany  paket=U17  quelle=L283
-
-# ---- S2 DRV-M7 (U14): linux-root drive-vault, windows-core drive-vault (L292) ----
-drive_task_vault_spool_uses_sealed_storage        linux-root:drive-vault,windows-core:drive-vault  paket=U14  quelle=L292
-drive_task_vault_journal_path_fields_sealed       linux-root:drive-vault,windows-core:drive-vault  paket=U14  quelle=L292
-drive_task_vault_locked_start_fails_vault_locked  linux-root:drive-vault,windows-core:drive-vault  paket=U14  quelle=L292
-drive_task_vault_requires_unlock_after_crash      linux-root:drive-vault,windows-core:drive-vault  paket=U14  quelle=L292
-drive_task_vault_prepare_lock_flushes_evicts_unmounts  linux-root:drive-vault,windows-core:drive-vault  paket=U14  quelle=L292
-drive_task_vault_lock_deadline_keeps_sealed_and_aborts  linux-root:drive-vault,windows-core:drive-vault  paket=U14  quelle=L292
-drive_task_vault_unexpected_end_reported          linux-root:drive-vault,windows-core:drive-vault  paket=U14  quelle=L292
-drive_task_mount_path_for_maps_drive_paths        linux-root:drive-vault,windows-core:drive-vault  paket=U14  quelle=L292
-drive_task_vault_linux_mountpoint_tmpfs_sticky_locked  linux-root:drive-vault  fixture=runtime-tmpfs  paket=U14  quelle=L292
-drive_task_vault_linux_refuses_non_tmpfs          linux-root:drive-vault  paket=U14  quelle=L292
-drive_task_vault_drive_letter_rw                  windows-core:drive-vault  fixture=dokany  paket=U14  quelle=L292
 
 # ---- S2 DRV-M10 Bestandsvertraege ohne Namen im Plan (Namen von U39 gesetzt; Kern-Lesung Abschnitt 5) ----
 drive_task_stage_names_se_mount_prefix_unchanged  linux-core:unit,windows-core:drive-cli  paket=offen  quelle=L312,D3-Erhaltung-S2
@@ -949,49 +1453,8 @@ drive_task_mount_snapshot_json_unchanged          linux-core:unit,windows-core:d
 drive_task_cli_error_texts_unchanged              linux-core:unit,windows-core:drive-cli  paket=offen  quelle=L312,D3-Erhaltung-S2
 
 # ---- S3 VLT-M6 (U20): linux-core unit und vault-klartext, linux-root vault-klartext-drive (T495, T564) ----
-vault_task_policy_every_sink_has_rule             linux-core:unit  paket=U20  quelle=T495
-vault_task_copy_spool_sealed_when_vault_involved  linux-core:unit  paket=U20  quelle=T495
-vault_task_transfer_issue_path_sealed             linux-core:unit  paket=U20  quelle=T495
-vault_task_favorites_and_recent_inside_vault_sealed  linux-core:unit  paket=U20  quelle=T495
-vault_task_folder_index_skips_vault               linux-core:unit  paket=U20  quelle=T495
-vault_task_android_fetch_rejects_vault            linux-core:unit  paket=U20  quelle=T495
-vault_task_share_export_inside_vault_mount_rejected  linux-core:unit  paket=U20  quelle=T495
-vault_task_open_fallback_requires_consent         linux-core:unit  paket=U20  quelle=T495
-vault_task_provide_and_materialize_reject_vault_source  linux-core:unit  paket=U20  quelle=T495
 vault_task_klartext_actions_leave_no_marker       linux-core:vault-klartext  fixture=marker threads=1  paket=U20  quelle=T564
 vault_task_klartext_drive_actions_leave_no_marker linux-root:vault-klartext-drive  fixture=marker,fuse,runtime-tmpfs threads=1  paket=U20  quelle=D3,T564
-
-# ---- S3 VLT-M7 (U20): linux-core vault-sync (T506) ----
-vault_task_sync_seed_replica_then_seeding_false   linux-core:vault-sync  fixture=keep  paket=U20  quelle=T506
-vault_task_sync_one_sided_changes_both_directions linux-core:vault-sync  fixture=keep  paket=U20  quelle=T506
-vault_task_sync_both_changed_untouched_conflict   linux-core:vault-sync  fixture=keep  paket=U20  quelle=T506
-vault_task_sync_folder_created_both_sides         linux-core:vault-sync  fixture=keep  paket=U20  quelle=T506
-vault_task_sync_delete_vs_change_deferred         linux-core:vault-sync  fixture=keep  paket=U20  quelle=T506
-vault_task_sync_masterkey_both_changed_conflict   linux-core:vault-sync  fixture=keep  paket=U20  quelle=T506
-vault_task_sync_jti_mismatch_aborts               linux-core:vault-sync  fixture=keep  paket=U20  quelle=T506
-vault_task_sync_unreachable_side_no_deletes       linux-core:vault-sync  fixture=keep  paket=U20  quelle=T506
-vault_task_sync_phase1_failure_keeps_phase2_planned  linux-core:vault-sync  fixture=keep  paket=U20  quelle=T506
-vault_task_sync_never_incremental                 linux-core:vault-sync  fixture=keep  paket=U20  quelle=T506
-vault_task_sync_keepboth_actions_become_conflicts linux-core:vault-sync  fixture=keep  paket=U20  quelle=T506
-vault_task_sync_runs_locked                       linux-core:vault-sync  fixture=keep  paket=U20  quelle=T506
-vault_task_sync_hash_detects_same_size_same_second  linux-core:vault-sync  fixture=keep  paket=U20  quelle=T506
-vault_task_sync_log_contains_no_cleartext         linux-core:vault-sync  fixture=keep  paket=U20  quelle=T506
-vault_task_vault_jobs_dir_invisible_to_jobs_loader  linux-core:vault-sync  paket=U20  quelle=T506,D3-Erhaltung-S3
-vault_task_broken_vault_job_listed_not_fatal      linux-core:vault-sync  paket=U20  quelle=T506
-
-# ---- S3 VLT-M8 (U26): linux-core vault-compare (T515) ----
-vault_task_compare_groups_match_preview           linux-core:vault-compare  fixture=keep  paket=U26  quelle=T515
-vault_task_compare_keep_a_b_with_versions         linux-core:vault-compare  fixture=keep  paket=U26  quelle=T515
-vault_task_compare_keep_both_valid_cipher_name    linux-core:vault-compare  fixture=keep  paket=U26  quelle=T515
-vault_task_compare_keep_both_long_name_c9s        linux-core:vault-compare  fixture=keep  paket=U26  quelle=T515
-vault_task_compare_keep_both_baseline_recorded    linux-core:vault-compare  fixture=keep  paket=U26  quelle=T515
-vault_task_compare_merge_inputs_contain_only_ciphertext  linux-core:vault-compare  fixture=keep  paket=U26  quelle=T515
-vault_task_compare_folder_merge_reencrypts_names_only  linux-core:vault-compare  fixture=keep  paket=U26  quelle=T515
-vault_task_compare_deferred_confirm_and_restore   linux-core:vault-compare  fixture=keep  paket=U26  quelle=T515
-vault_task_compare_requires_unlock                linux-core:vault-compare  paket=U26  quelle=T515
-vault_task_check_maps_every_cryptofs_finding      linux-core:vault-compare  fixture=keep  paket=U26  quelle=T515
-vault_task_check_orphan_attached_under_lost_found linux-core:vault-compare  fixture=keep  paket=U26  quelle=T515
-vault_task_check_stage_leftover_removed           linux-core:vault-compare  fixture=keep  paket=U26  quelle=T515
 
 # ---- S3 VLT-M9 (U26): linux-core vault-cli, vault-mcp; Plan nennt keine Namen, Namen von U39 gesetzt (T524) ----
 vault_task_cli_every_command_json_keys            linux-core:vault-cli  env=SMART_EXPLORER_VAULT_SE_BIN={se}  paket=U26  quelle=T524
@@ -1004,27 +1467,6 @@ vault_task_mcp_status_without_paths               linux-core:vault-mcp  env=SMAR
 # U07-GUI-Tests laufen ohne Anzeige und ohne #[ignore]; die GUI-Tests aus U03 brauchen ignored threads=1
 # env=SMART_EXPLORER_GUI_TASK=1 und isolierte XDG_DATA_HOME/APPDATA/LOCALAPPDATA ({tmp}), mit Anzeige fixture=xvfb.
 # U29 setzt die Optionen beim Verschieben. ----
-vault_task_gui_unlock_states                      linux-desktop:gui-harness  paket=U29  quelle=T533
-vault_task_gui_compare_rows_and_actions           linux-desktop:gui-harness  paket=U29  quelle=T533
-vault_task_gui_sync_editor_fixed_fields           linux-desktop:gui-harness  paket=U29  quelle=T533
-vault_task_gui_sidebar_lock_event_clears_tab      linux-desktop:gui-harness  paket=U29  quelle=T533
-vault_task_gui_recovery_page_text_only            linux-desktop:gui-harness  paket=U29  quelle=T533
-
-# ---- S3 VLT-M12 (U14): linux-core unit, linux-root vault-mount, windows-core vault-mount (T551) ----
-vault_task_sealed_spool_random_access_roundtrip   linux-core:unit  paket=U14  quelle=T551
-vault_task_sealed_spool_detects_block_swap        linux-core:unit  paket=U14  quelle=T551
-vault_task_spool_key_wrap_unwrap_after_restart    linux-core:unit  paket=U14  quelle=T551
-vault_task_spool_key_stable_over_password_change  linux-core:unit  paket=U14  quelle=T551
-vault_task_spool_key_only_unlocked                linux-core:unit  paket=U14  quelle=T551
-vault_task_journal_text_key_derived_from_spool_key  linux-core:unit  paket=U14  quelle=T551
-vault_task_journal_sealer_roundtrip               linux-core:unit  paket=U14  quelle=T551
-vault_task_mount_requires_unlock                  linux-core:unit  paket=U14  quelle=T551
-vault_task_mount_end_reason_handling              linux-core:unit  paket=U14  quelle=T551
-vault_task_unlock_triggers_pending_retry          linux-core:unit  paket=U14  quelle=T551
-vault_task_lock_unmounts_before_zeroize           linux-core:unit  paket=U14  quelle=T551
-vault_task_linux_thumbnails_removed_by_uri_prefix linux-core:unit  paket=U14  quelle=T551
-vault_task_mount_linux_fuse_e2e                   linux-root:vault-mount  fixture=fuse,runtime-tmpfs threads=1  paket=U14  quelle=T551
-vault_task_mount_windows_dokany_e2e               windows-core:vault-mount  fixture=dokany threads=1  paket=U14  quelle=T551,D3
 
 # ---- S3 Stufe vault-backends (VLT-M14): Plan nennt keine Namen, Namen von U39 gesetzt (T564) ----
 vault_task_backends_provider_matrix               linux-core:vault-backends  paket=offen  quelle=T564,D3

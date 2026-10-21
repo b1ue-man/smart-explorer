@@ -74,7 +74,7 @@ PASSED, FAILED, NOT_RUN = "passed", "failed", "not_run"
 STATUSES = (PASSED, FAILED, NOT_RUN)
 WORDS = {PASSED: "bestanden", FAILED: "gescheitert", NOT_RUN: "nicht ausgeführt"}
 BATCH_PREFIXES = ("perm_task_", "drive_task_", "vault_task_", "screen_task_", "desktop_task_",
-                  "launcher_task_", "licenses_task_", "rdt_suite_")
+                  "launcher_task_", "licenses_task_", "rdt_suite_", "speed_task_")
 INVENTORY = "rdt_suite_inventory_complete"
 KINDS = ("lib", "modul", "check", "skript", "junit", "instr")
 SECTION_DONE, SECTION_PENDING = "[umgesetzt]", "[noch nicht umgesetzt]"

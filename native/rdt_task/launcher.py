@@ -71,10 +71,46 @@ def resolve(ctx: common.JobContext, entry) -> tuple[str | None, str | None]:
     return (owners[0], entry.name) if owners else (None, None)
 
 
+def observe(ctx: common.JobContext, kind: str) -> tuple[bool, str, dict]:
+    """Host steps between two phases; returns (ok, note, observations)."""
+    device = ctx.device
+    assert device is not None
+    if kind == "pair-down":
+        root = ctx.state.get("se_pair_root")
+        if not root:
+            return False, "kein Share-Paar aktiv", {}
+        down = ctx.run(["bash", common.REPO / tool().SHARE_HELPER, "down", root, ctx.logs / "se-pair-down"],
+                       stage=ctx.current_stage, timeout=300)
+        ctx.state["se_pair_root"] = None
+        return down.ok, f"Share des Runners abgemeldet ({down.describe()})", {}
+    device.adb_run("shell", "am", "kill", PACKAGE, timeout=60)
+    time.sleep(2)
+    observed: dict[str, str] = {}
+    if kind == "kill-home-observe":
+        device.adb_run("shell", "input", "keyevent", "KEYCODE_HOME", timeout=60)
+        time.sleep(5)
+        dump = device.adb_run("exec-out", "uiautomator", "dump", "/dev/tty", timeout=120)
+        observed["tile"] = tool().tile_text(dump.output)
+    elif kind == "kill-widget-update":
+        widget = device.adb_run("shell", "run-as", PACKAGE, "cat", tool().WIDGET_ID_FILE, timeout=60)
+        widget_id = widget.output.strip().splitlines()[-1].strip() if widget.ok and widget.output.strip() else ""
+        if not widget_id.isdigit():
+            return False, f"Widget-Kennung nicht lesbar ({widget.describe()}): {common.excerpt(widget.output, 200)}", {}
+        device.adb_run("shell", "am", "broadcast", "-a", "android.appwidget.action.APPWIDGET_UPDATE", "-n",
+                       PACKAGE + "/" + tool().WIDGET_PROVIDER, "--eia", "appWidgetIds", widget_id, timeout=60)
+        time.sleep(5)
+    else:
+        return False, f"unbekannter Schritt {kind}", {}
+    pid = device.adb_run("shell", "pidof", PACKAGE, timeout=60).output.strip()
+    observed["pid"] = pid if pid.isdigit() else "none"
+    return True, f"{kind}: " + ", ".join(f"{key}={value}" for key, value in observed.items()), observed
+
+
 def run_phased(ctx: common.JobContext, stage: str, entry, fqn: str, base_args: list[tuple[str, str]]) -> None:
     started = time.monotonic()
     steps = tool().PHASES[entry.name]
-    notes = []
+    notes: list[str] = []
+    observed: dict[str, str] = {}
     for kind, args in steps:
         if kind == "reinstall-app":
             apk = tool().app_apk(Path(ctx.args.apks) if ctx.args.apks else None)
@@ -89,15 +125,55 @@ def run_phased(ctx: common.JobContext, stage: str, entry, fqn: str, base_args: l
                 return
             notes.append(f"adb install -r {apk.name}: Success")
             continue
-        parsed, completed, _ = instrument(ctx, stage, [f"{fqn}#{entry.name}"], base_args + args, PHASE_TIMEOUT_S)
+        if kind != "run":
+            ok, note, values = observe(ctx, kind)
+            if not ok:
+                ctx.record(entry.name, stage, FAILED, f"Wirtsschritt {kind}: {note}" +
+                           (f" ({'; '.join(notes)})" if notes else ""), time.monotonic() - started)
+                return
+            observed.update(values)
+            notes.append(note)
+            continue
+        filled = [(key, value.format(**observed) if "{" in value else value) for key, value in args]
+        parsed, completed, _ = instrument(ctx, stage, [f"{fqn}#{entry.name}"], base_args + filled, PHASE_TIMEOUT_S)
         status, reason = outcome(parsed, fqn, entry.name, completed)
-        label = ", ".join(f"{key}={value}" for key, value in args) or "ohne Argumente"
+        label = ", ".join(f"{key}={value}" for key, value in filled) or "ohne Argumente"
         if status != PASSED:
             ctx.record(entry.name, stage, status, f"Phase {label}: {reason}" + (f" ({'; '.join(notes)})" if notes else ""),
                        time.monotonic() - started)
             return
         notes.append(f"Phase {label}: bestanden")
     ctx.record(entry.name, stage, PASSED, "; ".join(notes), time.monotonic() - started)
+
+
+def fixture_se_pair(fixtures: common.StageFixtures, name: str) -> tuple[bool, str]:
+    """D 682: runner ↔ emulator Share pair through android/test-servers/share-desktop.sh (Linux)."""
+    ctx = fixtures.ctx
+    if not common.LINUX:
+        return False, "das Share-Paar läuft nur auf dem Linux-Runner"
+    bins = Path(ctx.state.get("desktop_bins_dir") or "")
+    se, server = bins / "se", bins / "se-share-server"
+    if not se.is_file() or not server.is_file():
+        return False, f"se oder se-share-server fehlt im Artefakt rdt-desktop-bins ({bins})"
+    helper = common.REPO / tool().SHARE_HELPER
+    root = fixtures.make_dir("se-pair")
+    up = ctx.run(["bash", helper, "up", root, se, server], stage=fixtures.stage, timeout=900)
+    if not up.ok:
+        return False, f"share-desktop.sh up: {up.describe()}: {common.excerpt(up.output, 400)}"
+    ctx.state["se_pair_root"] = str(root)
+
+    def down() -> None:
+        if ctx.state.get("se_pair_root"):
+            ctx.run(["bash", helper, "down", root, ctx.logs / "se-pair-down"], stage=fixtures.stage, timeout=300)
+            ctx.state["se_pair_root"] = None
+    fixtures.add_cleanup(down)
+    listed = ctx.run(["bash", helper, "args", root], stage=fixtures.stage, timeout=120)
+    words = listed.output.strip().splitlines()
+    if not listed.ok or len(words) % 3 or any(words[index] != "-e" for index in range(0, len(words), 3)):
+        return False, f"share-desktop.sh args lieferte keine Argumente ({listed.describe()})"
+    args = [(words[index + 1], words[index + 2]) for index in range(0, len(words), 3)]
+    fixtures.provide(name, args=args)
+    return True, "Share-Paar: " + ", ".join(key for key, _ in args)
 
 
 def method_args(ctx: common.JobContext) -> dict[str, list[tuple[str, str]]]:
@@ -158,6 +234,8 @@ def run_instr_methods(ctx: common.JobContext, stage: str, entries: list) -> None
         for entry, fqn, method in items:
             status, reason = outcome(parsed, fqn, method, completed)
             ctx.record(entry.name, stage, status, reason, share)
+    order = list(tool().PHASES)
+    phased.sort(key=lambda item: order.index(item[0].name))  # pair-down last
     for entry, fqn, args in phased:
         run_phased(ctx, stage, entry, fqn, args)
 
@@ -193,5 +271,5 @@ STAGES = {
     "launcher-android-api30": stage_launcher_device,
 }
 CHECKS: dict = {}
-FIXTURES: dict = {}
+FIXTURES = {"se-pair": fixture_se_pair}
 DEVICE_SETUP = device_setup
