@@ -113,7 +113,9 @@ FIXTURE_CONTRACT = {
     "fuse-timeout": f"fs.fuse.default_request_timeout={FUSE_REQUEST_TIMEOUT_S} via sudo, "
                     "SE_TASK_FUSE_REQUEST_TIMEOUT_S",
     "dokany": "requires an installed Dokany driver (Windows); installs only from SE_TASK_DOKANY_MSI with a "
-              "matching SE_TASK_DOKANY_MSI_SHA256",
+              "matching SE_TASK_DOKANY_MSI_SHA256; starts the dokan2 service; SMART_EXPLORER_DOKANY_DLL_SHA256 = "
+              "payload.sha256 of native/assets/dokany-private/manifest.json",
+    "node": "SMART_EXPLORER_MOUNT_NODE = node.exe v24.20.0 win-x64 from nodejs.org, SHA-256 checked (Windows)",
     "sudo": "requires sudo -n and python3 (Linux)",
 }
 
@@ -1071,17 +1073,41 @@ def fixture_sftp(fixtures: StageFixtures, name: str) -> tuple[bool, str]:
     return True, f"OpenSSH-Container {SFTP_IMAGE} auf 127.0.0.1:{port}"
 
 
+NODE_URL = "https://nodejs.org/dist/v24.20.0/win-x64/node.exe"
+# nodejs.org/dist/v24.20.0/SHASUMS256.txt, the pin of native/test-mount-optimization-task.ps1 (checked 2026-09-06).
+NODE_SHA256 = "5c976096e04e5c2c1f091938926234cc9fbebfe9787ddd149351b3b0ecc707b5"
+DOKANY_MANIFEST = NATIVE / "assets" / "dokany-private" / "manifest.json"
+
+
+def dokany_dll_sha256() -> str:
+    """SHA-256 of the private dokan2.dll that the build embeds (the mount tests compare the extracted copy)."""
+    try:
+        return str(json.loads(DOKANY_MANIFEST.read_text(encoding="utf-8"))["payload"]["sha256"]).lower()
+    except (OSError, ValueError, KeyError, TypeError):
+        return ""
+
+
 def dokany_installed() -> bool:
     root = Path(os.environ.get("SystemRoot", r"C:\Windows"))
     return (root / "System32" / "drivers" / "dokan2.sys").is_file()
+
+
+def provide_dokany(fixtures: StageFixtures, name: str, reason: str) -> tuple[bool, str]:
+    """The driver service runs (a fresh install may leave it stopped) and the DLL pin is in the environment."""
+    started = fixtures.ctx.run(["sc", "start", "dokan2"], stage=fixtures.stage, timeout=120)
+    running = started.ok or "1056" in started.output  # 1056: the service is already running
+    dll = dokany_dll_sha256()
+    if not dll:
+        return False, f"{reason}; payload.sha256 fehlt in {DOKANY_MANIFEST}"
+    fixtures.provide(name, env={"SMART_EXPLORER_DOKANY_DLL_SHA256": dll})
+    return True, reason + ("" if running else f"; sc start dokan2: {started.describe()}")
 
 
 def fixture_dokany(fixtures: StageFixtures, name: str) -> tuple[bool, str]:
     if not WINDOWS:
         return False, "Dokany nur unter Windows"
     if dokany_installed():
-        fixtures.provide(name)
-        return True, "Dokany-Treiber dokan2.sys vorhanden"
+        return provide_dokany(fixtures, name, "Dokany-Treiber dokan2.sys vorhanden")
     msi, pin = os.environ.get("SE_TASK_DOKANY_MSI"), (os.environ.get("SE_TASK_DOKANY_MSI_SHA256") or "").lower()
     if not msi or not pin:
         return False, ("Dokany ist nicht installiert; die Suite installiert es nur aus SE_TASK_DOKANY_MSI mit "
@@ -1091,15 +1117,35 @@ def fixture_dokany(fixtures: StageFixtures, name: str) -> tuple[bool, str]:
         return False, f"Dokany-MSI {path} fehlt oder ihre SHA-256 weicht vom Pin ab"
     installed = fixtures.ctx.run(["msiexec", "/i", path, "/qn", "/norestart"], stage=fixtures.stage, timeout=900)
     if dokany_installed():
-        fixtures.provide(name)
-        return True, f"Dokany aus der geprüften MSI {path.name} installiert"
+        return provide_dokany(fixtures, name, f"Dokany aus der geprüften MSI {path.name} installiert")
     return False, f"msiexec: {installed.describe()}; dokan2.sys fehlt danach"
+
+
+def fixture_node(fixtures: StageFixtures, name: str) -> tuple[bool, str]:
+    """The exact standalone Node of the mount optimization tests, not whichever Node is on PATH."""
+    if not WINDOWS:
+        return False, "node.exe des Laufwerkstests nur unter Windows"
+    target = fixtures.ctx.work / "cache" / "node-v24.20.0-x64" / "node.exe"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if not target.is_file() or sha256_file(target) != NODE_SHA256:
+        import urllib.request
+        try:
+            with urllib.request.urlopen(NODE_URL, timeout=300) as answer, open(target, "wb") as out:
+                shutil.copyfileobj(answer, out)
+        except OSError as error:
+            return False, f"node.exe nicht geladen ({NODE_URL}): {error}"
+    if sha256_file(target) != NODE_SHA256:
+        target.unlink(missing_ok=True)
+        return False, f"node.exe von {NODE_URL}: SHA-256 weicht vom Pin {NODE_SHA256} ab"
+    fixtures.provide(name, env={"SMART_EXPLORER_MOUNT_NODE": target})
+    return True, f"node.exe v24.20.0 (SHA-256 geprüft) unter {target}"
 
 
 BUILTIN_FIXTURES: dict[str, Callable[[StageFixtures, str], tuple[bool, str]]] = {
     "share": fixture_share, "sftp": fixture_sftp, "bus": fixture_bus, "xvfb": fixture_xvfb,
     "nodisplay": fixture_nodisplay, "home": fixture_home, "runtime-tmpfs": fixture_runtime_tmpfs,
     "fuse": fixture_fuse, "fuse-timeout": fixture_fuse_timeout, "dokany": fixture_dokany, "sudo": fixture_sudo,
+    "node": fixture_node,
 }
 
 
