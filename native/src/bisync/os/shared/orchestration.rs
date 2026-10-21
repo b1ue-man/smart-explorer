@@ -13,7 +13,7 @@ use super::types::{Baseline, BisyncOptions, BisyncStats, Conflict};
 
 // ── high-level orchestration (used by the UI on a worker thread) ─────────────
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct Outcome {
     pub stats: BisyncStats,
     pub conflicts: Vec<Conflict>,

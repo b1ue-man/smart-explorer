@@ -131,7 +131,7 @@ impl<'a> StagePlan<'a> {
         if full.len() <= MAX_STORED_NAME {
             return Ok(full);
         }
-        let short = format!("{}{}{}", self.lead, name_digest(encrypted), self.tail);
+        let short = format!("{}{}{}", self.lead, name_digest(&encrypted), self.tail);
         if short.len() <= MAX_STORED_NAME {
             Ok(short)
         } else {

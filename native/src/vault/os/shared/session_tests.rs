@@ -153,7 +153,9 @@ fn vault_task_session_unlock_once_all_clients() {
         assert_locked(backend.stat("/Notiz.txt").unwrap_err(), &site);
     }
     assert!(unlocked_session(&site).is_none());
-    let after = open_location_in(store, &site, "/", resolve, None).unwrap_err();
+    let after = open_location_in(store, &site, "/", resolve, None)
+        .err()
+        .expect("a locked site refuses to open");
     assert_eq!(after.code(), Some("vault_locked"));
     assert_eq!(register.status(&sites)[0].state, SiteState::Locked);
     // A process without the session asks the worker.

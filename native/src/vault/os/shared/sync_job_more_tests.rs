@@ -224,7 +224,7 @@ impl Hashed {
 
 impl crate::vfs::Backend for Hashed {
     fn scheme(&self) -> Scheme {
-        Scheme::WebDav
+        Scheme::Webdav
     }
     fn root_display(&self) -> String {
         "/".into()

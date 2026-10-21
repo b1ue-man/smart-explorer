@@ -300,8 +300,9 @@ pub(super) fn run(
     // Installed plan rules may split apply into phases (C5.4 R4); without
     // rules, or with their single phase in plan order, the one pool call
     // below is exactly the call every job kind made before.
-    let phased = super::plan_rules::current()
-        .and_then(|rules| super::plan_rules::phase_plan(&rules, actions).map(|plan| (rules, plan)));
+    let phased = super::plan_rules::current().and_then(|rules| {
+        super::plan_rules::phase_plan(&*rules, actions).map(|plan| (rules, plan))
+    });
     let pooled = match &phased {
         None => {
             super::apply_pool::run_actions_stoppable(actions, cap, cancel, &stop, &admit, &execute)
@@ -309,7 +310,7 @@ pub(super) fn run(
         Some((rules, plan)) => run_phases(
             actions,
             plan,
-            rules,
+            &**rules,
             scope.sink,
             &completed,
             &|| cancel.load(Ordering::Acquire) || stop(),

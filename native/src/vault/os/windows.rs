@@ -307,7 +307,8 @@ mod tests {
         let on_screen = unlocked_site(&register, settings(None, false, true, None));
         let on_sleep = unlocked_site(&register, settings(None, true, false, None));
         let neither = unlocked_site(&register, settings(None, false, false, None));
-        let sink: Weak<dyn SignalSink> = Arc::downgrade(&register);
+        let weak = Arc::downgrade(&register);
+        let sink: Weak<dyn SignalSink> = weak;
         let signals = start(sink);
         assert_ne!(signals.window, 0, "hidden top-level window created");
         // Unlocking the Windows session locks nothing.
