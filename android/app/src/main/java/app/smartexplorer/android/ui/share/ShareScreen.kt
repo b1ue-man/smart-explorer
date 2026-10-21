@@ -29,11 +29,14 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.smartexplorer.android.R
+import app.smartexplorer.android.api.ScreenApi
+import app.smartexplorer.android.api.ScreenDevice
 import app.smartexplorer.android.api.ShareApi
 import app.smartexplorer.android.api.ShareSettingsApi
 import app.smartexplorer.android.api.ShareStatus
 import app.smartexplorer.android.core.Core
 import app.smartexplorer.android.core.CoreEvent
+import app.smartexplorer.android.core.CoreException
 import app.smartexplorer.android.service.ExecHostNotifier
 import app.smartexplorer.android.ui.AppNav
 import app.smartexplorer.android.ui.NavRequest
@@ -44,7 +47,13 @@ import app.smartexplorer.android.ui.connections.RemovalReportDialog
 import app.smartexplorer.android.ui.more.HintLine
 import app.smartexplorer.android.ui.more.SubPageScaffold
 import app.smartexplorer.android.ui.more.TextActions
+import app.smartexplorer.android.ui.common.Snackbars
 import app.smartexplorer.android.ui.screen.ScreenHostSection
+import app.smartexplorer.android.ui.screen.ScreenTarget
+import app.smartexplorer.android.ui.screen.ScreenTargetJson
+import app.smartexplorer.android.ui.screen.ScreenTilesScreen
+import app.smartexplorer.android.ui.screen.ScreenViewScreen
+import app.smartexplorer.android.ui.screen.toTarget
 import app.smartexplorer.android.ui.transfers.TransfersSheet
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -67,6 +76,9 @@ fun ShareScreen() {
     val listState = rememberLazyListState()
     var dialog by remember { mutableStateOf<ShareDialog?>(null) }
     var showTransfers by rememberSaveable { mutableStateOf(false) }
+    var screenDevices by remember { mutableStateOf<List<ScreenDevice>>(emptyList()) }
+    var screenView by remember { mutableStateOf<Pair<ScreenTarget, String>?>(null) }
+    var screenGrid by remember { mutableStateOf<ScreenGridRequest?>(null) }
     var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
     val status = vm.status
     val pending by AppNav.pending.collectAsStateWithLifecycle()
@@ -101,6 +113,38 @@ fun ShareScreen() {
         }
     }
 
+    // The devices the screen entries need; their online state and last probe follow the Share status.
+    LaunchedEffect(status) {
+        try {
+            screenDevices = ScreenApi.devices()
+        } catch (e: CoreException) {
+            // The entries stay as they were; the next status loads again.
+        }
+    }
+    LaunchedEffect(pending, screenDevices) {
+        when (val request = pending) {
+            is NavRequest.OpenScreen -> {
+                ScreenTargetJson.parse(request.target)
+                    .onSuccess { target ->
+                        val name = screenDevices.firstOrNull { it.relation == target.relation && it.relationId == target.relationId && it.deviceId == target.deviceId }?.name
+                        screenView = target to name.orEmpty()
+                    }
+                    .onFailure { Snackbars.show(it.message ?: appContext.getString(R.string.screen_view_target_invalid)) }
+                AppNav.consume(request)
+            }
+            is NavRequest.ShowScreenGrid -> {
+                screenGrid = ScreenGridRequest(request.roomId)
+                AppNav.consume(request)
+            }
+            else -> Unit
+        }
+    }
+    val screenLinks = ScreenLinks(
+        devices = screenDevices,
+        open = { device, control -> screenView = device.toTarget(control) to device.name },
+        openRoom = { room -> screenGrid = ScreenGridRequest(room) },
+    )
+
     val blocks = status?.let(::blocksOf) ?: listOf(ShareBlock.Problems)
     LaunchedEffect(pending, status != null) {
         val request = pending
@@ -128,7 +172,7 @@ fun ShareScreen() {
             LoadingBar(vm.busy || (vm.loading && status == null))
             LazyColumn(Modifier.fillMaxSize(), state = listState) {
                 items(blocks, key = { it.name }) { block ->
-                    Column { ShareBlockContent(block, vm, status, nowMs, open = { dialog = it }) }
+                    Column { ShareBlockContent(block, vm, status, nowMs, screenLinks, open = { dialog = it }) }
                 }
             }
         }
@@ -148,7 +192,12 @@ fun ShareScreen() {
     vm.roomCode?.let { RoomCodeDialog(it, onDismiss = { vm.roomCode = null }) }
     vm.removal?.let { RemovalReportDialog(it, onDismiss = { vm.removal = null }) }
     if (showTransfers) TransfersSheet(onDismiss = { showTransfers = false })
+    screenGrid?.let { grid -> ScreenTilesScreen(grid.roomId, onClose = { screenGrid = null }) }
+    screenView?.let { (target, title) -> ScreenViewScreen(target, title, onClose = { screenView = null }) }
 }
+
+/** The group view of the screens was asked for: of one room (its ID), or of all devices with `null`. */
+private class ScreenGridRequest(val roomId: String?)
 
 private fun blocksOf(status: ShareStatus): List<ShareBlock> = buildList {
     add(ShareBlock.Problems)
@@ -168,7 +217,7 @@ private fun blocksOf(status: ShareStatus): List<ShareBlock> = buildList {
 }
 
 @Composable
-private fun ShareBlockContent(block: ShareBlock, vm: ShareViewModel, status: ShareStatus?, nowMs: Long, open: (ShareDialog) -> Unit) {
+private fun ShareBlockContent(block: ShareBlock, vm: ShareViewModel, status: ShareStatus?, nowMs: Long, screens: ScreenLinks, open: (ShareDialog) -> Unit) {
     val context = LocalContext.current
     when (block) {
         ShareBlock.Problems -> Column {
@@ -231,8 +280,8 @@ private fun ShareBlockContent(block: ShareBlock, vm: ShareViewModel, status: Sha
             }
         }
         ShareBlock.Pairings -> UnconfirmedPairingsSection(vm.unconfirmed, open)
-        ShareBlock.Devices -> DevicesSection(status?.devices.orEmpty(), peerActions(vm, open))
-        ShareBlock.Rooms -> RoomsSection(status?.rooms.orEmpty(), peerActions(vm, open))
+        ShareBlock.Devices -> DevicesSection(status?.devices.orEmpty(), peerActions(vm, screens, open))
+        ShareBlock.Rooms -> RoomsSection(status?.rooms.orEmpty(), peerActions(vm, screens, open))
         // Wraps instead of scrolling sideways, so no button hides behind the screen edge.
         ShareBlock.Buttons -> FlowRow(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
@@ -292,7 +341,7 @@ private fun ShareBlockContent(block: ShareBlock, vm: ShareViewModel, status: Sha
     }
 }
 
-private fun peerActions(vm: ShareViewModel, open: (ShareDialog) -> Unit) = PeerActions(
+private fun peerActions(vm: ShareViewModel, screens: ScreenLinks, open: (ShareDialog) -> Unit) = PeerActions(
     open = { location -> if (location.isNotBlank()) AppNav.send(NavRequest.OpenLocation(location)) },
     sendFiles = { target -> open(ShareDialog.SendPick(target)) },
     exec = { target -> open(ShareDialog.Exec(target)) },
@@ -308,4 +357,5 @@ private fun peerActions(vm: ShareViewModel, open: (ShareDialog) -> Unit) = PeerA
     renameRoom = { room -> open(ShareDialog.RenameRoom(room)) },
     rejoinRoom = { room -> vm.act("Nicht beigetreten", "Raum „${room.name}“ wird wieder beigetreten") { ShareSettingsApi.rejoinRoom(room.profileId) } },
     resetMemberTrust = { room, member -> open(ShareDialog.ResetMemberTrust(room, member)) },
+    screens = screens,
 )

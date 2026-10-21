@@ -3,6 +3,7 @@ package app.smartexplorer.android.task
 import android.app.Activity
 import android.app.PendingIntent
 import android.graphics.Bitmap
+import android.graphics.ImageFormat
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.media.ImageReader
@@ -22,6 +23,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -31,6 +33,9 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -42,7 +47,11 @@ import app.smartexplorer.android.api.CAP_SCREEN_CONTROL
 import app.smartexplorer.android.api.CAP_SCREEN_VIEW
 import app.smartexplorer.android.api.DECISION_ALWAYS
 import app.smartexplorer.android.api.DECISION_ONCE
+import app.smartexplorer.android.api.DecoderOffer
+import app.smartexplorer.android.api.ScreenDevice
+import app.smartexplorer.android.api.ScreenProbe
 import app.smartexplorer.android.core.ScreenHostStart
+import app.smartexplorer.android.core.ScreenViewEvent
 import app.smartexplorer.android.screen.EncoderConfig
 import app.smartexplorer.android.screen.GestureMapper
 import app.smartexplorer.android.screen.ScreenConsentActivity
@@ -54,12 +63,28 @@ import app.smartexplorer.android.screen.ScreenHostService
 import app.smartexplorer.android.screen.ScreenStillSource
 import app.smartexplorer.android.screen.SyntheticSurfaceSource
 import app.smartexplorer.android.service.approvalNotification
+import app.smartexplorer.android.ui.screen.LocalScreenBackend
+import app.smartexplorer.android.ui.screen.PictureSource
+import app.smartexplorer.android.ui.screen.ScreenBackend
+import app.smartexplorer.android.ui.screen.ScreenDecoder
+import app.smartexplorer.android.ui.screen.ScreenTarget
+import app.smartexplorer.android.ui.screen.ScreenTilesScreen
 import app.smartexplorer.android.system.Notifications
+import java.nio.ByteOrder
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import kotlinx.serialization.json.Json
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -375,5 +400,188 @@ class ScreenTaskTest {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) assertTrue(notification.actions[2].actionIntent.isBroadcast)
         }
         TaskReport.note("access_approval.screen", "actions=activity")
+    }
+
+    /** The barcode of the test picture (32 columns, bit 31 left, in the upper eighth) in the luma of [image]. */
+    private fun barcode(image: android.media.Image): Long {
+        val plane = image.planes[0]
+        val row = image.height / 16
+        var value = 0L
+        for (bit in 0 until 32) {
+            val x = ((bit + 0.5) * image.width / 32).toInt()
+            val luma = plane.buffer.get(row * plane.rowStride + x * plane.pixelStride).toInt() and 0xFF
+            value = value shl 1 or (if (luma > 128) 1L else 0L)
+        }
+        return value
+    }
+
+    /**
+     * SCR-M9 on the device: the encoder of the host side draws the test picture, its access units
+     * go through the pull layout (16 bytes of head, little endian, the first picture marked as the
+     * start of a group) into the viewer's MediaCodec decoder, and the barcode is read from what the
+     * decoder rendered. The decoder also offers `tiles`.
+     */
+    @Test
+    fun screen_task_android_viewer_decodes_barcode() {
+        assertTrue(ScreenDecoder.offers().any { it.codec == "tiles" })
+        val config = EncoderConfig(epoch = 1, width = 1280, height = 720, fps = 30, bitrate = 4_000_000, profile = "high")
+        val units = LinkedBlockingQueue<Triple<ByteArray, Long, Boolean>>()
+        val encoder = ScreenEncoder(config) { buffer, offset, length, ptsUs, key ->
+            val bytes = ByteArray(length)
+            buffer.duplicate().apply {
+                clear()
+                position(offset)
+                limit(offset + length)
+                get(bytes)
+            }
+            units.put(Triple(bytes, ptsUs, key))
+            0
+        }
+        val source = SyntheticSurfaceSource(encoder.surface, config.width, config.height, config.fps)
+        var started = false
+        var held: Triple<ByteArray, Long, Boolean>? = null
+        val pictures = PictureSource { dst, timeoutMs ->
+            val next = held ?: units.poll(timeoutMs.toLong(), TimeUnit.MILLISECONDS)
+            when {
+                next == null -> -1
+                !started && !next.third -> -1
+                dst.capacity() < 16 + next.first.size -> {
+                    held = next
+                    dst.order(ByteOrder.LITTLE_ENDIAN).putInt(12, next.first.size)
+                    -3
+                }
+                else -> {
+                    held = null
+                    val flags = (if (next.third) 1 else 0) or (if (!started) 4 else 0) or (1 shl 16)
+                    started = true
+                    dst.order(ByteOrder.LITTLE_ENDIAN)
+                    dst.putLong(0, next.second)
+                    dst.putInt(8, flags)
+                    dst.putInt(12, next.first.size)
+                    dst.position(16)
+                    dst.put(next.first)
+                    16 + next.first.size
+                }
+            }
+        }
+        val reader = ImageReader.newInstance(config.width, config.height, ImageFormat.YUV_420_888, 3)
+        val rendered = java.util.concurrent.atomic.AtomicInteger()
+        val stream = ScreenViewEvent.Stream(1, "h264", "high", config.width, config.height, 1, encoder.name, encoder.hardware)
+        val decoder = ScreenDecoder(
+            sessionId = 1,
+            source = pictures,
+            streamOf = { if (it == 1) stream else null },
+            surface = { reader.surface },
+            listener = object : ScreenDecoder.Listener {
+                override fun onSize(width: Int, height: Int) = Unit
+                override fun onBitmap(bitmap: Bitmap) = Unit
+                override fun onPicture() {
+                    rendered.incrementAndGet()
+                }
+                override fun onDecodeFailure(consecutive: Int) = Unit
+                override fun onEnded() = Unit
+            },
+        )
+        try {
+            decoder.start()
+            val deadline = SystemClock.uptimeMillis() + 15_000
+            while (rendered.get() < 10 && SystemClock.uptimeMillis() < deadline) SystemClock.sleep(50)
+            assertTrue("zu wenige Bilder dekodiert: ${rendered.get()}", rendered.get() >= 10)
+            val first = reader.acquireLatestImage() ?: throw AssertionError("kein Bild des Dekoders")
+            val one = barcode(first)
+            first.close()
+            val seen = rendered.get()
+            while (rendered.get() < seen + 10 && SystemClock.uptimeMillis() < deadline) SystemClock.sleep(50)
+            val second = reader.acquireLatestImage() ?: throw AssertionError("kein zweites Bild")
+            val two = barcode(second)
+            second.close()
+            TaskReport.note("screen.viewer.barcode", "frames=${source.frames} first=$one second=$two")
+            assertTrue("Strichcode $one außerhalb der gezeichneten Bilder", one in 0..source.frames)
+            assertTrue("Strichcode steigt nicht: $one → $two", two > one && two <= source.frames)
+        } finally {
+            decoder.stop()
+            source.stop()
+            encoder.release()
+            reader.close()
+        }
+    }
+
+    /** A backend without a core: one device that allows its screen, and the calls the screens make. */
+    private class FakeScreenBackend : ScreenBackend {
+        val calls = CopyOnWriteArrayList<String>()
+        private val flow = MutableSharedFlow<ScreenViewEvent>(extraBufferCapacity = 64)
+        override val events: Flow<ScreenViewEvent> get() = flow
+
+        override fun offers() = listOf(DecoderOffer(codec = "tiles"))
+
+        override fun pictures(session: Long) = PictureSource { _, timeoutMs ->
+            SystemClock.sleep(minOf(timeoutMs, 50))
+            -1
+        }
+
+        override suspend fun devices(roomId: String?) =
+            listOf(ScreenDevice("direct", "c1", "d1", "Laptop", online = true, supported = true, view = "allow", control = "allow"))
+
+        override suspend fun probe(target: ScreenTarget) = ScreenProbe(device = "Laptop", supported = true, platform = "windows", view = "allow", control = "allow")
+
+        override suspend fun open(target: ScreenTarget, mode: String, source: String?, displayWidth: Int, displayHeight: Int, maxFps: Int, decoders: List<DecoderOffer>): Long {
+            calls += "open:$mode"
+            // The first events come before the call returns, as with the core.
+            val body = buildJsonObject { putJsonObject("input") { put("pointer", true) } }
+            flow.tryEmit(ScreenViewEvent.Accepted(7, "direct", "windows", "allow", "allow", body))
+            flow.tryEmit(ScreenViewEvent.State(7, "streaming", null))
+            return 7
+        }
+
+        override suspend fun setMode(session: Long, mode: String, source: String?, width: Int?, height: Int?, fps: Int?, sharpness: Boolean, lossless: Boolean) {
+            calls += "setMode:$session:$mode"
+        }
+
+        override suspend fun input(session: Long, events: List<JsonObject>) = events.size.also { calls += "input:$session" }
+
+        override suspend fun control(session: Long, action: String) {
+            calls += "control:$session:$action"
+        }
+
+        override suspend fun listWindows(session: Long) {
+            calls += "listWindows:$session"
+        }
+
+        override suspend fun keyframe(session: Long) {
+            calls += "keyframe:$session"
+        }
+
+        override suspend fun close(session: Long) {
+            calls += "close:$session"
+        }
+    }
+
+    /**
+     * SCR-M9, group view to full view and back: a tap on a tile raises the same session from the
+     * preview to the full stream (no second `viewOpen`), closing the full view puts it back to the
+     * preview, and only leaving the grid ends the session.
+     */
+    @Test
+    fun screen_task_android_grid_switch() {
+        val backend = FakeScreenBackend()
+        var showGrid by mutableStateOf(true)
+        compose.setContent {
+            CompositionLocalProvider(LocalScreenBackend provides backend) {
+                if (showGrid) ScreenTilesScreen(null) { showGrid = false }
+            }
+        }
+        compose.waitUntil(10_000) { backend.calls.contains("open:preview") }
+        compose.waitUntil(10_000) { backend.calls.any { it.startsWith("setMode:7:preview") } }
+        compose.onNodeWithText("Laptop").performClick()
+        compose.waitUntil(10_000) { backend.calls.contains("setMode:7:full") }
+        assertEquals("a second connection was opened", 1, backend.calls.count { it.startsWith("open:") })
+        compose.onNodeWithTag("screen_view_close").performClick()
+        compose.waitUntil(10_000) { backend.calls.lastIndexOf("setMode:7:preview") > backend.calls.indexOf("setMode:7:full") }
+        assertFalse("the preview session ended with the full view", backend.calls.contains("close:7"))
+        compose.onNodeWithTag("screen_grid_close").performClick()
+        compose.waitUntil(10_000) { backend.calls.contains("close:7") }
+        assertEquals(1, backend.calls.count { it == "close:7" })
+        assertEquals(1, backend.calls.count { it.startsWith("open:") })
+        TaskReport.note("screen.grid.switch", backend.calls.joinToString(" "))
     }
 }

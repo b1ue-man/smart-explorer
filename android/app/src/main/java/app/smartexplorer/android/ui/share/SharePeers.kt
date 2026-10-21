@@ -17,12 +17,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.smartexplorer.android.R
 import app.smartexplorer.android.api.ShareDevice
 import app.smartexplorer.android.api.ShareMember
+import app.smartexplorer.android.api.ScreenDevice
 import app.smartexplorer.android.api.ShareRoom
 import app.smartexplorer.android.ui.common.SeIcon
 import app.smartexplorer.android.ui.more.HintLine
@@ -30,6 +32,21 @@ import app.smartexplorer.android.ui.more.SectionHeader
 
 /** A device reachable over Share: a Direct device or a room member. */
 internal data class PeerTarget(val name: String, val location: String)
+
+/**
+ * What the rows need for the screen entries (SCR-M9): the devices the core knows (`screen.devices`,
+ * with the result of the last probe) and what the entries do.
+ */
+internal class ScreenLinks(
+    val devices: List<ScreenDevice>,
+    /** Opens the full view of a device; the flag starts with control. */
+    val open: (ScreenDevice, Boolean) -> Unit,
+    /** Opens the group view of a room (its profile ID). */
+    val openRoom: (String) -> Unit,
+) {
+    fun find(relation: String, relationId: String, deviceId: String?): ScreenDevice? =
+        devices.firstOrNull { it.relation == relation && it.relationId == relationId && (deviceId == null || it.deviceId == deviceId) }
+}
 
 /** Callbacks of the device and room rows. */
 internal class PeerActions(
@@ -49,7 +66,18 @@ internal class PeerActions(
     val renameRoom: (ShareRoom) -> Unit,
     val rejoinRoom: (ShareRoom) -> Unit,
     val resetMemberTrust: (ShareRoom, ShareMember) -> Unit,
+    val screens: ScreenLinks,
 )
+
+/** „Bildschirm…“ and, unless the device does not allow control, „Bildschirm steuern“ for [screen]. */
+@Composable
+private fun screenEntries(screen: ScreenDevice?, screens: ScreenLinks): List<Pair<String, () -> Unit>> {
+    if (screen == null) return emptyList()
+    val open = stringResource(R.string.screen_menu_open) to { screens.open(screen, false) }
+    // A device whose last probe said „control: off“ does not get the entry; an unknown one does.
+    val control = stringResource(R.string.screen_menu_control) to { screens.open(screen, true) }
+    return if (screen.control == "off") listOf(open) else listOf(open, control)
+}
 
 /** Section "Geräte": Direct devices; tap opens the device's files. */
 @Composable
@@ -85,11 +113,13 @@ private fun DeviceRow(device: ShareDevice, actions: PeerActions) {
             )
         },
         trailingContent = {
+            val screen = screenEntries(actions.screens.find("direct", device.contactId, null), actions.screens)
             RowMenu(
                 listOf(
                     "Dateien öffnen" to { actions.open(device.location) },
                     "Datei senden" to { actions.sendFiles(target) },
                     "Befehl ausführen" to { actions.exec(target) },
+                ) + screen + listOf(
                     "Zugriff anfragen" to { actions.requestAccess(device) },
                     "Eigene Freigaben…" to { actions.shareBack(device) },
                     "Verbindung…" to { actions.connection(device) },
@@ -138,9 +168,11 @@ private fun RoomBlock(room: ShareRoom, actions: PeerActions) {
                         )
                     }
                 }
+                val roomScreens = stringResource(R.string.screen_menu_room)
                 RowMenu(
                     buildList<Pair<String, () -> Unit>> {
                         add("Code anzeigen" to { actions.showRoomCode(room) })
+                        if (room.autoJoin && members > 0) add(roomScreens to { actions.screens.openRoom(room.profileId) })
                         add("Rechte und Bestätigung…" to { actions.roomPolicy(room) })
                         add("Umbenennen…" to { actions.renameRoom(room) })
                         if (room.autoJoin) add("Verlassen" to { actions.leaveRoom(room) }) else add("Wieder beitreten" to { actions.rejoinRoom(room) })
@@ -170,6 +202,7 @@ private fun MemberRow(room: ShareRoom, member: ShareMember, actions: PeerActions
     val target = PeerTarget(name, member.location)
     val pending = member.admission == "Pending"
     val usable = member.location.isNotBlank() && !member.blocked && !pending
+    val screen = screenEntries(if (usable) actions.screens.find("room", room.profileId, member.deviceId) else null, actions.screens)
     ListItem(
         headlineContent = { Text(name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         supportingContent = { Text(if (member.blocked) "Gesperrt" else if (pending) "Wartet auf deine Zustimmung" else statusLabel(member.status)) },
@@ -180,6 +213,7 @@ private fun MemberRow(room: ShareRoom, member: ShareMember, actions: PeerActions
                     add("Dateien öffnen" to { actions.open(member.location) })
                     add("Datei senden" to { actions.sendFiles(target) })
                     add("Befehl ausführen" to { actions.exec(target) })
+                    addAll(screen)
                 }
                 when {
                     pending -> add("Zulassen…" to { actions.roomMember(room, member, "admit") })

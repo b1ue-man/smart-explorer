@@ -27,6 +27,12 @@ sealed interface NavRequest {
     data object ShowUpdate : NavRequest
 
     data object ShowBackgroundSettings : NavRequest
+
+    /** Opens the screen of a device (SCR-M9); [target] is the target JSON of contract V5. */
+    data class OpenScreen(val target: String) : NavRequest
+
+    /** Opens the group view of the screens (SCR-M9) of a room, or of all devices with `null`. */
+    data class ShowScreenGrid(val roomId: String?) : NavRequest
 }
 
 /**
@@ -106,6 +112,8 @@ object AppNav {
             "showShareRequests" -> NavRequest.ShowShareRequests
             "showUpdate" -> NavRequest.ShowUpdate
             "showBackgroundSettings" -> NavRequest.ShowBackgroundSettings
+            "openScreen" -> value?.takeIf { it.isNotBlank() }?.let { NavRequest.OpenScreen(it) }
+            "showScreenGrid" -> NavRequest.ShowScreenGrid(value?.takeIf { it.isNotBlank() })
             else -> null
         }
     }
@@ -115,7 +123,7 @@ object AppNav {
         is NavRequest.OpenLocation, NavRequest.ShowTransfers -> MainTab.Files
         is NavRequest.SelectTab -> request.tab
         is NavRequest.OpenJobConflicts -> MainTab.Sync
-        NavRequest.ShowShareRequests -> MainTab.Share
+        NavRequest.ShowShareRequests, is NavRequest.OpenScreen, is NavRequest.ShowScreenGrid -> MainTab.Share
         NavRequest.ShowUpdate, NavRequest.ShowBackgroundSettings -> MainTab.More
     }
 
@@ -127,6 +135,8 @@ object AppNav {
         NavRequest.ShowShareRequests -> "showShareRequests" to null
         NavRequest.ShowUpdate -> "showUpdate" to null
         NavRequest.ShowBackgroundSettings -> "showBackgroundSettings" to null
+        is NavRequest.OpenScreen -> "openScreen" to request.target
+        is NavRequest.ShowScreenGrid -> "showScreenGrid" to (request.roomId ?: "")
     }
 
     /** Random per-installation secret in app-private preferences. */

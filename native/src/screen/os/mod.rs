@@ -191,6 +191,13 @@ mod bridge_source;
 #[cfg(test)]
 #[path = "android/bridge_tests.rs"]
 mod bridge_tests;
+// SCR-M9 (U28): Android as viewer; the queue behind `screenPull`.
+#[cfg(any(target_os = "android", test))]
+#[path = "android/viewer_sink.rs"]
+pub(crate) mod viewer_sink;
+#[cfg(test)]
+#[path = "android/viewer_sink_tests.rs"]
+mod viewer_sink_tests;
 
 /// Encoder and decoder factories of one kind of codec.
 type Factories = (Vec<Arc<dyn EncoderFactory>>, Vec<Arc<dyn DecoderFactory>>);
