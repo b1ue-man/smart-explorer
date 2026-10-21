@@ -9,6 +9,7 @@ use serde_json::{json, Value};
 use super::{handle, screen_control, screen_push};
 use crate::screen::core::host_backend::ScreenHostBackend;
 use crate::screen::core::window_list::SourceId;
+use crate::screen::core::wire::MAX_CONTROL_BYTES;
 use crate::screen::os::bridge_backend::BridgeBackend;
 use crate::screen::os::bridge_channels::{self as channels, FLAG_KEYFRAME};
 
@@ -171,4 +172,54 @@ fn screen_task_android_app_names_are_not_cut() {
     )
     .unwrap();
     assert_eq!(channels::prereqs().apps, vec![(package, label)]);
+}
+
+/// R15c: the encoder name stays whole (formerly cut at 64 characters) and a
+/// reason key may be longer than 64 bytes. The one technical bound is the
+/// 64 KiB control frame to the viewer: past half of it the call is refused,
+/// never cut.
+#[test]
+fn screen_task_android_encoder_and_reason_bound_only_by_control_frame() {
+    let _guard = channels::TEST_LOCK
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    channels::reset_for_tests();
+    call("screen.hostPrereqs", json!({})).unwrap();
+    let _source = BridgeBackend
+        .open_source(&SourceId::Monitor("0".into()), None)
+        .unwrap();
+    let id = channels::channels()[0].id;
+    let encoder = format!("c2.vendor.{}.avc.encoder", "x".repeat(200));
+    assert_eq!(
+        call(
+            "screen.hostReady",
+            json!({"session": id, "width": 8, "height": 8, "encoder": encoder})
+        ),
+        Ok(json!({}))
+    );
+    let sessions = call("screen.hostSessions", json!({})).unwrap();
+    assert_eq!(sessions["sessions"][0]["encoder"], json!(encoder));
+    let too_long = "e".repeat(MAX_CONTROL_BYTES);
+    assert_eq!(
+        call(
+            "screen.hostReady",
+            json!({"session": id, "width": 8, "height": 8, "encoder": too_long})
+        ),
+        Err("invalid".into())
+    );
+
+    assert_eq!(
+        call(
+            "screen.hostEnded",
+            json!({"session": id, "reason": "r".repeat(MAX_CONTROL_BYTES)})
+        ),
+        Err("invalid".into())
+    );
+    assert_eq!(
+        call(
+            "screen.hostEnded",
+            json!({"session": id, "reason": "a_reason_key_".repeat(10)})
+        ),
+        Ok(json!({}))
+    );
 }

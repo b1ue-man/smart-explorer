@@ -48,7 +48,9 @@ pub(crate) const ERROR: u8 = 38;
 /// Every control frame except `WINDOWS`; the 64 KiB of `MAX_HANDSHAKE_BYTES`
 /// in the Exec protocol.
 pub(crate) const MAX_CONTROL_BYTES: usize = 64 * 1024;
-/// `WINDOWS`: up to 4096 entries of up to 256 bytes each.
+/// `WINDOWS`: the most every viewer of protocol version 1 reads; the
+/// list has no entry count (R15c) and is bounded by these bytes alone
+/// (`WindowList::bounded`).
 pub(crate) const MAX_WINDOWS_BYTES: usize = 1024 * 1024;
 
 /// Whether this build speaks the protocol version a host announced.

@@ -22,12 +22,22 @@ use super::args::{invalid, opt_bool, opt_i64, opt_str, str_arg};
 use crate::mobile::{ApiError, Runtime};
 use crate::screen::core::registry::StopSelector;
 use crate::screen::core::session_state::EndReason;
+use crate::screen::core::wire::MAX_CONTROL_BYTES;
 use crate::screen::os::bridge_channels::{self as channels, Phase, Prereqs};
 
 /// Longest wait of one `screenControl`.
 const MAX_CONTROL_WAIT: Duration = Duration::from_secs(5);
-/// Longest reason key of `screen.hostEnded`.
-const MAX_REASON: usize = 64;
+/// Largest JSON form of the encoder name of `screen.hostReady` and of the
+/// reason key of `screen.hostEnded`. Technical cause: both travel to the
+/// viewer inside one control frame of at most `MAX_CONTROL_BYTES` (64 KiB;
+/// the encoder in `STATE`, the reason as `ERROR` detail), so half the frame
+/// leaves the other fields room. Longer texts are refused, never cut.
+const MAX_WIRE_TEXT_BYTES: usize = MAX_CONTROL_BYTES / 2;
+
+/// Whether `text` fits into a control frame next to the other fields.
+fn fits_wire(text: &str) -> bool {
+    serde_json::to_string(text).is_ok_and(|json| json.len() <= MAX_WIRE_TEXT_BYTES)
+}
 
 /// `screenPush` of the JNI bridge: one picture of session `session`.
 pub fn screen_push(session: u64, data: &[u8], _pts_us: u64, flags: u32) -> i32 {
@@ -198,10 +208,16 @@ fn stop(args: &Value) -> Result<Value, ApiError> {
 
 fn ready(args: &Value) -> Result<Value, ApiError> {
     let id = session_arg(args)?;
+    let encoder = str_arg(args, "encoder")?;
+    if !fits_wire(encoder) {
+        return Err(invalid(
+            "„encoder“ ist länger, als ein Steuerrahmen (64 KiB) zum Betrachter trägt.",
+        ));
+    }
     let phase = Phase::Ready {
         width: size_arg(args, "width")?,
         height: size_arg(args, "height")?,
-        encoder: str_arg(args, "encoder")?.chars().take(64).collect(),
+        encoder: encoder.to_string(),
         hardware: opt_bool(args, "hardware", false),
         projection: opt_bool(args, "projection", false),
     };
@@ -213,7 +229,7 @@ fn ended(args: &Value) -> Result<Value, ApiError> {
     let id = session_arg(args)?;
     let reason = str_arg(args, "reason")?;
     if reason.is_empty()
-        || reason.len() > MAX_REASON
+        || !fits_wire(reason)
         || !reason
             .bytes()
             .all(|byte| byte.is_ascii_lowercase() || byte == b'_')

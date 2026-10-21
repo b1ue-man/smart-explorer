@@ -4,8 +4,10 @@
 //! source that produced them. The only bound of a `WINDOWS` list is its
 //! frame: the payload may take `MAX_WINDOWS_BYTES` (1 MiB), the size every
 //! viewer of protocol version 1 reads at most, so a foreign peer cannot make
-//! a viewer allocate more. There is no count of entries (R15c); `bounded`
-//! keeps as many entries as fit into the frame.
+//! a viewer allocate more. There is no count of entries and no cut of a
+//! title, name or limit note (R15c); `bounded` keeps as many whole entries
+//! as fit into the frame. Ids keep their grammar (`MAX_ID_BYTES`), because
+//! they come back as source ids.
 use std::fmt;
 use std::io;
 
@@ -16,9 +18,6 @@ use super::wire::{invalid, MAX_WINDOWS_BYTES};
 /// Longest id of a source, window or monitor: native ids (HWND, X11 window,
 /// Wayland handle, KDE UUID) are at most 36 characters.
 pub(crate) const MAX_ID_BYTES: usize = 64;
-const MAX_TITLE_BYTES: usize = 128;
-const MAX_NAME_BYTES: usize = 64;
-const MAX_LIMITS: usize = 16;
 
 fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= MAX_ID_BYTES && id.bytes().all(|byte| byte.is_ascii_graphic())
@@ -146,16 +145,6 @@ pub(crate) struct WindowList {
     pub limits: Vec<String>,
 }
 
-fn cut(text: &mut String, max: usize) {
-    if text.len() > max {
-        let mut end = max;
-        while !text.is_char_boundary(end) {
-            end -= 1;
-        }
-        text.truncate(end);
-    }
-}
-
 /// Keeps the leading entries whose JSON (with a separating comma) fits into
 /// `budget`, and takes their bytes from it.
 fn fit<T: Serialize>(entries: &mut Vec<T>, budget: &mut usize) {
@@ -174,30 +163,28 @@ fn fit<T: Serialize>(entries: &mut Vec<T>, budget: &mut usize) {
 }
 
 impl WindowList {
-    /// Cuts texts and lists so the `WINDOWS` frame stays within
-    /// `MAX_WINDOWS_BYTES`: windows first, then apps, as many as fit once
-    /// escaped as JSON, whatever their number. Entries with an id that is no
-    /// valid source id are dropped.
+    /// Bounds the list by its frame: the skeleton (keys, list source)
+    /// first, then the limit notes, the windows and the apps, each whole and
+    /// as many as fit into `MAX_WINDOWS_BYTES` once escaped as JSON, whatever
+    /// their number. A window whose id is no valid source id is dropped, a
+    /// monitor id that is none is cleared.
     pub(crate) fn bounded(mut self) -> Self {
         self.windows.retain(|window| valid_id(&window.id));
         for window in &mut self.windows {
-            cut(&mut window.title, MAX_TITLE_BYTES);
-            cut(&mut window.app, MAX_NAME_BYTES);
-            if let Some(monitor) = &mut window.monitor {
-                cut(monitor, MAX_ID_BYTES);
+            if window.monitor.as_deref().is_some_and(|id| !valid_id(id)) {
+                window.monitor = None;
             }
         }
-        for app in &mut self.apps {
-            cut(&mut app.app_id, MAX_NAME_BYTES);
-            cut(&mut app.name, MAX_NAME_BYTES);
-        }
-        self.limits.truncate(MAX_LIMITS);
-        for limit in &mut self.limits {
-            cut(limit, MAX_NAME_BYTES);
-        }
-        // The rest of the frame (keys, list source, 16 limits of at most 64
-        // bytes, escaped six-fold) stays below 16 KiB.
-        let mut budget = MAX_WINDOWS_BYTES - 16 * 1024;
+        let skeleton = WindowList {
+            windows: Vec::new(),
+            apps: Vec::new(),
+            list_source: self.list_source,
+            limits: Vec::new(),
+        };
+        // Each entry adds its JSON and at most one comma to the skeleton.
+        let mut budget = serde_json::to_vec(&skeleton)
+            .map_or(0, |json| MAX_WINDOWS_BYTES.saturating_sub(json.len()));
+        fit(&mut self.limits, &mut budget);
         fit(&mut self.windows, &mut budget);
         fit(&mut self.apps, &mut budget);
         self
@@ -205,10 +192,13 @@ impl WindowList {
 
     /// The check of both sides beyond the frame size, which `read_frame`
     /// and `write_frame` already hold to `MAX_WINDOWS_BYTES`: any number of
-    /// windows and apps, at most 16 limit notes.
+    /// windows, apps and limit notes of any length; every window id is a
+    /// valid source id, because a viewer sends it back in `SET_MODE`.
     pub(crate) fn validate(&self) -> io::Result<()> {
-        if self.limits.len() > MAX_LIMITS {
-            return Err(invalid("screen window list has more than 16 limit notes"));
+        if self.windows.iter().any(|window| !valid_id(&window.id)) {
+            return Err(invalid(
+                "screen window list names a window id that is no source id",
+            ));
         }
         Ok(())
     }

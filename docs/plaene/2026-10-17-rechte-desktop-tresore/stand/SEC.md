@@ -1,6 +1,6 @@
 # Stand SEC (Sicherheitsagent)
 
-Stand: 2026-10-21 (Lauf mit Punkt 8 und 9).
+Stand: 2026-10-21 (Lauf 2: Punkt 9b und 10; Punkt 8 und 9 in 27a4e153).
 
 - Committet sind Punkt 1–3, 1b, 4, 4b und 5 (df15feb5, e6b4c24a, 25e08110, e2233d85, c87bd083, 33744c73, 99cf1d63).
 - Punkt 6 (R15c) und Punkt 7 (U23) sind im Quelltext fertig, aber nicht gebaut, nicht getestet und nicht committet.
@@ -109,6 +109,25 @@ Stand: im Quelltext fertig, nicht gebaut, nicht getestet, nicht committet. Jede 
 - **`MAX_VIEW_LIMIT` (500):** entfernt. Die Antwort ist ein JNI-String im eigenen Prozess (kein Binder, keine Nachrichtengröße); es gilt die verlangte Menge, ohne `limit` alle Zeilen ab `offset` (`view_limit`). Kotlin: `FilesApi.MAX_WINDOW` entfernt, `scanView` setzt nur `limit ≥ 1`; `ScanWindow.fetchAll` holt ein Fenster von `max + 1` Zeilen statt Schleife über 500er-Fenster.
 - **Fehler Verdrängung:** `ScanRegistry::insert` entfernt bei mehr als `MAX_SESSIONS` (6) nur die älteste beendete Sitzung, eine laufende nie; `ScanSession.finished` setzt `FinishOnDrop` beim Ende der Aufgabe (auch bei Fehler oder Abbruch). Das Feld `cancel` und `stop()` sind entfallen, weil nichts mehr eine laufende Sitzung verdrängt (Abbruch über `task.cancel` wie bisher).
 
+## Punkt 9b: Reste aus Punkt 9
+
+Stand: im Quelltext fertig, nicht gebaut, nicht getestet, nicht committet; `rustfmt --check` leer, jede Datei unter 500 Zeilen.
+
+- `wire_tests.rs`: Import von `MAX_LIST_ENTRIES` gestrichen; 4097 Einträge gehen jetzt ganz hinaus (eigener Puffer, damit `sink` leer bleibt); die Escape-Prüfung nutzt die Zahl 4096.
+- Kommentare: `wire_hello.rs` (`SessionLimit` nur von Hosts vor R15c), `wire.rs` (`MAX_WINDOWS_BYTES` ohne Eintragszahl).
+- `register` → `SessionHandle`: **nicht umgesetzt**. Grund: `screen/core/host_server.rs` (nicht im Dateibereich dieses Laufs) ruft `register` mit `Ok`/`Err(never)` auf und bräche. Nötig sind drei Änderungen zusammen: `registry.rs` Rückgabe `SessionHandle` (und `Ok(...)` am Ende → Wert, `use std::convert::Infallible` streichen); `host_server.rs` Zeilen 124–127 `registered = Some(self.context.registry.register(new));`; `input_keys.rs:205-206` und `registry_tests.rs` die `.unwrap()` streichen.
+- `window_list.rs`: `MAX_TITLE_BYTES`, `MAX_NAME_BYTES`, `MAX_LIMITS` und `cut` entfernt. `MAX_LIMITS` hatte keine Ursache außer der früheren 16-KiB-Reserve; `bounded` misst jetzt das Gerüst des Rahmens (JSON ohne Einträge) und passt Grenz-Hinweise, Fenster und Apps ganz nach Bytes ein. `validate` prüft die Fenster-IDs auf die Grammatik der Quell-IDs (Ursache: der Betrachter schickt sie in `SET_MODE` zurück); eine ungültige Monitor-ID wird geleert statt gekürzt. `MAX_ID_BYTES` (64) bleibt: Grammatik von `SourceId`.
+- `screen_host.rs`: `MAX_REASON` und die Kürzung des Encoder-Namens entfernt. Technische Ursache für eine Obergrenze: beide reisen in einem Steuerrahmen (`MAX_CONTROL_BYTES`, 64 KiB; Encoder in `STATE`, Grund als `ERROR`-Detail). `MAX_WIRE_TEXT_BYTES = MAX_CONTROL_BYTES / 2` (JSON-Länge); längere Texte werden abgelehnt, nie gekürzt.
+- `scanner/os/shared.rs`: `MAX_ERROR_PATHS_TRACKED` entfernt; `distinct_failures` sendet jeden Pfad einmal (Menge, erste Meldung gewinnt). Der Typ `Mutex<Vec<(String, String)>>` bleibt, damit `walk.rs` und `search_recursive_access_task.rs` unverändert bleiben; sonst ändert sich für die Desktop-GUI nur, dass mehr als 500 Pfade ankommen.
+- Neu gefunden: `rscan/os/shared/rscan.rs:29` `MAX_ERRORS_TRACKED = 500` (entfernter Scan, gleiche Wirkung) und `rscan/os/shared/walk_state.rs:321` `MAX_DIAGNOSTIC_BYTES = 4096` (kürzt Fehlertexte).
+
+## Punkt 10: U36 (Installer und Linux-Skript)
+
+Stand: im Quelltext fertig, nicht gebaut, nicht ausgeführt, nicht committet. `sh -n install-linux.sh` ohne Befund; die Prüfungen `perm_task_installer_uninstall_removes_service_static` und `licenses_task_installer_installs_file` statisch nachgerechnet (Bedingungen erfüllt).
+
+- `native/installer.nsi`: Lizenzen `licenses\Rust-Crates\THIRD-PARTY-LICENSES.txt` und `licenses\OpenH264\BINARY_LICENSE.txt` mit `Delete`/`RMDir` vor `RMDir licenses`; Ende `SEC_MAIN` `se.exe desktop restart`; `Section /o "se Desktop (optional)" SEC_DESKTOP` (`desktop enable --json`, Fehler: `DetailPrint`, Meldung nur interaktiv); `/DESKTOP=1` in `.onInit` vor dem Dokany-Sprung; Deinstallation: `se.exe desktop remove` nach `taskkill` vor `--unregister`; Kontodienst nach Vorlage U24 nur, wenn `sc.exe query SmartExplorerExecAccounts` ihn findet, Rückfrage `se-remote` Vorauswahl Nein, stille Deinstallation ohne UAC (nur `DetailPrint` mit Befehl); `DeleteRegValue` für `SmartExplorerSync`, `SmartExplorerDrives` und als Rückfall `SmartExplorerDesktop`.
+- `install-linux.sh`: `umask 022`; Usage `usage: $0 [--dry-run] [--cli-only] [--with-fuse] [--with-desktop]`, `-h|--help` mit Exit 0; `--with-desktop` mit `--cli-only` → Exit 2 „se Desktop braucht die Desktop-App“; `X-KDE-Wayland-Interfaces=org_kde_plasma_window_management` im Heredoc; Reihenfolge nach H9: Programme und `.desktop` → `check_fuse` (fusermount3, setuid, `/dev/fuse`; `fuse3` nur mit `--with-fuse` über `as_root` aus den Paketquellen; jede Zeile beginnt mit `fuse3:`) → `desktop enable` (nur `--with-desktop`) → `desktop restart` (jede Installation der Desktop-App). `/etc/fuse.conf` bleibt unverändert; es gibt keine Deinstallation im Skript, also auch kein Entfernen von `fuse3`.
+
 ## Nächster Schritt
 
-Bericht zu Punkt 8 und 9 an den Hauptagenten; danach Punkt 10 (U36) per Nachricht.
+Bericht zu Punkt 9b und 10; danach U31 (Punkt 11) nach U28 per Nachricht.
