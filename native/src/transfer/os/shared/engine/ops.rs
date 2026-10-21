@@ -180,6 +180,12 @@ impl<'m> Meter<'m> {
         self.charge(Account::Source, ns);
     }
 
+    /// Target time that was not measured call by call (the wire time of a
+    /// packet, which no single write call shows).
+    pub(crate) fn add_target_ns(&self, ns: u64) {
+        self.charge(Account::Target, ns);
+    }
+
     /// Time the thread waited for permit, memory or a folder before it began
     /// (or between two attempts).
     pub(crate) fn add_wait(&self, ns: u64) {

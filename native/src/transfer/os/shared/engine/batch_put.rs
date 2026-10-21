@@ -9,7 +9,7 @@ use super::super::flow::classify_error;
 use super::super::flow_control::OpOutcome;
 use super::super::memory::reserve_memory;
 use super::batch::{Attempt, Failures};
-use super::ops::{relabeled, At, Meter, OpError, Outcome};
+use super::ops::{nanos, relabeled, At, Meter, OpError, Outcome};
 use super::queue::FileWork;
 use super::source::LocalSource;
 use super::worker::{finished, run_file};
@@ -41,12 +41,17 @@ pub(super) fn upload(
         return;
     }
     let bytes: u64 = opened.iter().map(|(_, source)| source.length()).sum();
+    let memory_asked = Instant::now();
     let Some(reservation) = reserve_memory(bytes, engine.stop_flag()) else {
         return;
     };
+    let memory_wait = nanos(memory_asked.elapsed());
+    engine.stats.book_memory_wait(memory_wait);
+    let permit_asked = Instant::now();
     let Some(permits) = engine.acquire() else {
         return;
     };
+    let waited = memory_wait.saturating_add(nanos(permit_asked.elapsed()));
     let active = engine
         .stats
         .begin(&format!("{} kleine Dateien (Paket)", opened.len()));
@@ -59,7 +64,9 @@ pub(super) fn upload(
         })
         .collect();
     let meter = Meter::new(&permits, &engine.stats);
+    meter.add_wait(waited);
     let started = Instant::now();
+    let read_before = meter.accounts().source_ns;
     let (result, delivery) = {
         let mut data = PacketData::new(
             opened.iter_mut().map(|(_, source)| source).collect(),
@@ -69,10 +76,18 @@ pub(super) fn upload(
         let result = target.put_batch(&entries, &mut data);
         (result, data.delivery())
     };
-    permits.finish(match &result {
-        Ok(_) => OpOutcome::Done,
-        Err(error) => classify_error(error),
-    });
+    // The packet's reads are booked to the source as they happen; the rest
+    // of the call is the wire and the peer: the target.
+    let read = meter.accounts().source_ns.saturating_sub(read_before);
+    meter.add_target_ns(nanos(started.elapsed()).saturating_sub(read));
+    let accounts = meter.accounts();
+    permits.finish_with(
+        match &result {
+            Ok(_) => OpOutcome::Done,
+            Err(error) => classify_error(error),
+        },
+        accounts,
+    );
     drop(active);
     drop(reservation);
     super::lock(&engine.sizer).record(bytes, started.elapsed().as_millis() as u64);
@@ -222,7 +237,10 @@ impl Read for PacketData<'_, '_> {
             if buffer.is_empty() {
                 return Ok(0);
             }
-            match source.read_entry(buffer, self.sent) {
+            match self
+                .meter
+                .timed_source(|| source.read_entry(buffer, self.sent))
+            {
                 Ok(read) => {
                     self.sent += read as u64;
                     self.served[self.index] += read as u64;
@@ -338,5 +356,78 @@ pub(super) mod speed_tests {
         }
         // Exactly one single upload: the refused member, sent once more.
         assert_eq!(fake.counters.stages.load(Ordering::SeqCst), 1);
+    }
+
+    /// A packet peer far away: every packet takes a while on the wire.
+    struct SlowWire(Arc<Fake>);
+
+    impl Backend for SlowWire {
+        forward! {
+            scheme() -> Scheme; root_display() -> String; namespace_identity() -> String;
+            list_dir(path: &str) -> VfsResult<Vec<VfsMeta>>; stat(path: &str) -> VfsResult<VfsMeta>;
+            open_read(path: &str) -> VfsResult<Box<dyn Read + Send>>;
+            open_write(path: &str) -> VfsResult<Box<dyn Write + Send>>;
+            open_write_new(path: &str) -> VfsResult<Box<dyn Write + Send>>;
+            open_write_fresh(path: &str, size: u64) -> VfsResult<Option<Box<dyn Write + Send>>>;
+            promote_copy_stage(stage: &str, destination: &str) -> VfsResult<()>;
+            rename(src: &str, dst: &str) -> VfsResult<()>;
+            rename_no_replace(src: &str, dst: &str) -> VfsResult<()>;
+            remove_file(path: &str) -> VfsResult<()>; remove_dir(path: &str) -> VfsResult<()>;
+            mkdir_all(path: &str) -> VfsResult<()>; create_dir(path: &str) -> VfsResult<()>;
+            create_dir_new(path: &str) -> VfsResult<()>;
+            discard_copy_stage(stage: &str) -> VfsResult<()>;
+            case_sensitive_paths(root: &str) -> bool; flow_key(path: &str) -> String;
+            transfer_ceiling(path: &str) -> Option<usize>;
+            concurrent_read_write() -> bool; batch_limits(dir: &str) -> Option<BatchLimits>;
+        }
+
+        fn put_batch(
+            &self,
+            entries: &[BatchPut],
+            data: &mut dyn Read,
+        ) -> VfsResult<Vec<BatchPutOutcome>> {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            self.0.put_batch(entries, data)
+        }
+    }
+
+    #[test]
+    fn speed_task_batch_jobs_book_time_accounts() {
+        // 200 tiny files in packets of 8, each packet 300 ms on the wire: the
+        // time goes to the target side, and after three windows the progress
+        // names the connection, which only packets-with-accounts can do
+        let root = tempfile::tempdir().expect("temp dir");
+        let local = root.path().join("local/Vault");
+        for index in 0..200 {
+            write(&local.join(format!("f{index:03}.txt")), b"small file");
+        }
+        let remote = root.path().join("remote");
+        std::fs::create_dir(&remote).expect("remote");
+        let mut fake = Fake::new("packet-accounts");
+        fake.ceiling = Some(1);
+        fake.batch = Some(BatchLimits {
+            max_files: 8,
+            max_bytes: 1024 * 1024,
+        });
+        let (fake, _) = fake.handle();
+        let handle: BackendHandle = Arc::new(SlowWire(fake.clone()));
+        let finished = run(job(
+            Endpoint::Local,
+            Endpoint::Remote(handle),
+            &remote,
+            &[&local],
+        ));
+        assert!(finished.issues.is_empty(), "{:?}", finished.issues);
+        assert_eq!(finished.progress.files_done, 200);
+        assert!(fake.counters.put_batches.load(Ordering::SeqCst) >= 20);
+        let progress = &finished.progress;
+        assert!(
+            progress.limiter.names_a_resource(),
+            "{:?} {:?}",
+            progress.limiter,
+            progress.limiter_text
+        );
+        let [source, target, _, _] = progress.limiter_shares;
+        assert!(target > source, "{:?}", progress.limiter_shares);
     }
 }
