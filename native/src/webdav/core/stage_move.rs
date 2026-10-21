@@ -1,8 +1,18 @@
 //! One MOVE request carries the verified stage time and, when available,
 //! its strong ETag. Readback never turns MOVE into an atomic replacement.
+//! The PROPFIND that confirms the retained time after the MOVE is skipped
+//! only when the MOVE answer itself proves it (`X-OC-Mtime: accepted` of
+//! ownCloud and Nextcloud); any other server keeps the confirmation.
 use super::core_impl::WebdavBackend;
 use crate::vfs::{Backend, VfsResult};
 use std::io;
+
+/// The server took the `X-OC-Mtime` this request sent (ownCloud, Nextcloud).
+fn accepts_mtime(response: &ureq::Response) -> bool {
+    response
+        .header("X-OC-Mtime")
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("accepted"))
+}
 
 impl WebdavBackend {
     pub(super) fn remember_stage_time(&self, path: &str, ms: i64) -> VfsResult<()> {
@@ -45,12 +55,14 @@ impl WebdavBackend {
                 request = request.set("If-Match", etag);
             }
         }
-        self.mutation(request, "MOVE")?;
+        let response = self.mutation(request, "MOVE")?;
         if let Some((ms, _)) = expected {
-            let actual = self.stat(dst)?;
-            if actual.mtime_ms.div_euclid(1_000) != ms.div_euclid(1_000) {
-                return Err(io::Error::new(io::ErrorKind::Unsupported, format!(
-                    "WebDAV MOVE published {dst} but did not retain the confirmed stage time; source was {src}")));
+            if !accepts_mtime(&response) {
+                let actual = self.stat(dst)?;
+                if actual.mtime_ms.div_euclid(1_000) != ms.div_euclid(1_000) {
+                    return Err(io::Error::new(io::ErrorKind::Unsupported, format!(
+                        "WebDAV MOVE published {dst} but did not retain the confirmed stage time; source was {src}")));
+                }
             }
             let mut times = self
                 .stage_times

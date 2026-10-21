@@ -408,5 +408,12 @@ impl Backend for WebdavBackend {
 mod connection_tests;
 
 #[cfg(test)]
+#[path = "request_count_server.rs"]
+mod request_count_server;
+#[cfg(test)]
+#[path = "request_count_tests.rs"]
+mod request_count_tests;
+
+#[cfg(test)]
 #[path = "promote_tests.rs"]
 mod promote_tests;

@@ -73,15 +73,29 @@ impl FtpConnection {
         size: u64,
     ) -> io::Result<FtpStoreWriter> {
         super::errors::command_path(path)?;
-        let (control, data) = self.checkout(false, |stream| {
-            let data = stream.put_with_stream(path).map_err(super::errors::map)?;
-            let retained = if matches!(&data, suppaftp::DataStream::Ssl(_)) {
-                data.get_ref().try_clone().map(Some)
-            } else {
-                Ok(None)
-            };
-            Ok(UploadData::new(data, retained))
-        })?;
+        // suppaftp sends STOR right after the answer to PASV/EPSV and only
+        // then connects the data socket (`data_command`), so the command and
+        // the TCP connect already overlap; every reply is still awaited
+        // before a dependent command (plan U46-5, docs/GOTCHAS.md).
+        let mut sent = false;
+        let (control, data) = self
+            .checkout(false, |stream| {
+                sent = true;
+                let data = stream.put_with_stream(path).map_err(super::errors::map)?;
+                let retained = if matches!(&data, suppaftp::DataStream::Ssl(_)) {
+                    data.get_ref().try_clone().map(Some)
+                } else {
+                    Ok(None)
+                };
+                Ok(UploadData::new(data, retained))
+            })
+            .map_err(|error| {
+                if sent {
+                    stor_unconfirmed(error, path)
+                } else {
+                    error
+                }
+            })?;
         Ok(FtpStoreWriter {
             owner: self.clone(),
             control: Some(control),
@@ -91,6 +105,27 @@ impl FtpConnection {
             state: StoreState::Open,
         })
     }
+}
+
+/// A STOR whose `150` never came because the data connection or the answer
+/// failed: the server may have created the file already, and FTP cannot
+/// prove the name is still this client's, so the error names the stage. A
+/// reply of the server (a refusal) is left as it is.
+fn stor_unconfirmed(error: io::Error, stage: &str) -> io::Error {
+    let answered = error
+        .get_ref()
+        .and_then(|source| source.downcast_ref::<FtpError>())
+        .and_then(super::errors::reply_code)
+        .is_some();
+    if answered {
+        return error;
+    }
+    io::Error::new(
+        error.kind(),
+        format!(
+            "{error}; STOR {stage} blieb unbestätigt, die Stufe „{stage}“ ist möglicherweise angelegt"
+        ),
+    )
 }
 
 pub(super) struct FtpReader {

@@ -1,3 +1,4 @@
+use super::batch;
 use super::listing;
 use super::reader::SmbReader;
 use super::replace;
@@ -6,7 +7,10 @@ use super::session::{SmbConfig, SmbSession};
 use super::streams::{Commit, SmbWriter};
 use super::url::{entry_path, rename_paths, split_path, SmbPath};
 use super::wire::{self, DeleteKind};
-use crate::vfs::{Backend, Scheme, StagedWriteCapabilities, VfsMeta, VfsResult};
+use crate::vfs::{
+    Backend, BatchGet, BatchLimits, BatchPut, BatchPutOutcome, BatchSink, Scheme,
+    StagedWriteCapabilities, VfsMeta, VfsResult,
+};
 use smb2::ErrorKind;
 use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -325,6 +329,24 @@ impl Backend for SmbBackend {
     /// ReplaceIfExists = 0: the server refuses an existing target.
     fn rename_no_replace(&self, src: &str, dst: &str) -> VfsResult<()> {
         self.rename_with(src, dst, false)
+    }
+
+    /// Packets of small files in compound requests (batch.rs); `None`
+    /// while no live connection can carry them.
+    fn batch_limits(&self, _dir: &str) -> Option<BatchLimits> {
+        batch::limits(self.session.is_live())
+    }
+
+    fn put_batch(
+        &self,
+        entries: &[BatchPut],
+        data: &mut dyn Read,
+    ) -> VfsResult<Vec<BatchPutOutcome>> {
+        batch::put(&self.session, entries, data)
+    }
+
+    fn get_batch(&self, items: &[BatchGet], sink: &mut dyn BatchSink) -> VfsResult<()> {
+        batch::get(&self.session, items, sink)
     }
 
     fn remove_file(&self, path: &str) -> VfsResult<()> {
