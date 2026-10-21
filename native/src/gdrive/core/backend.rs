@@ -239,7 +239,24 @@ impl Backend for GDriveBackend {
         if offset == 0 {
             return self.open_read_id(path, id).map(Some);
         }
-        self.read_from(path, id, offset)
+        self.read_from(path, id, offset, None)
+    }
+
+    /// Every part is its own request with `Range: bytes=a-b`.
+    fn supports_range_reads(&self, _path: &str) -> bool {
+        true
+    }
+
+    /// Also from offset 0 (`bytes=0-b`, not the whole file): a part ends
+    /// where it is told to.
+    fn open_read_range(
+        &self,
+        path: &str,
+        id: Option<&str>,
+        offset: u64,
+        len: u64,
+    ) -> VfsResult<Option<Box<dyn Read + Send>>> {
+        self.read_from(path, id, offset, Some(len))
     }
 
     fn transfer_hint(&self) -> Option<String> {

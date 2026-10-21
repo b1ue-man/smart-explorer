@@ -8,9 +8,12 @@
 //!
 //! The checks run on the transfer's own pooled connection, not on the
 //! browsing one: at 50 ms one shared connection held every upload to a few
-//! files a second, however many ran in parallel. A stage's random name is
-//! probed with SIZE (one round trip, no data connection): only a file of that
-//! name could be overwritten, a folder makes STOR fail. Publishing lists the
+//! files a second, however many ran in parallel. A stage's name is probed
+//! with SIZE (one round trip, no data connection) unless it is one of the
+//! engine's `<file>.se-upload-<16 hex>` names made from the system's random
+//! source: nothing can exist under 64 random bits before they are drawn
+//! (security answer S6, a). Only a file of that name could be overwritten, a
+//! folder makes STOR fail. Publishing lists the
 //! parent once for both answers (the stage is still a regular file; nothing
 //! has the destination name, or only a regular file when replacing) and
 //! renames on the same connection. Without a free pooled connection the
@@ -23,16 +26,38 @@ use super::io_adapters::FtpConnection;
 use crate::vfs::{Backend, VfsMeta};
 use suppaftp::{RustlsFtpStream, Status};
 
-/// Whether a stage's random name is probed before STOR (`require_stage_free`).
-/// A 64-bit random name only collides with a foreign file of that exact name,
-/// so the probe is caution, and it costs the round trips of a complete stat.
-/// Stays `true` until the security question S6 is answered (plan U46-6).
-const FTP_PROBE_STAGE_NAME: bool = true;
+/// Whether every stage name is probed before STOR (`require_stage_free`).
+/// `false`: only names that do not carry 64 bits from the system's random
+/// source are probed (`from_system_random`). Security answer S6 (a): a
+/// foreign object would have to exist under a name that was drawn only now.
+const FTP_PROBE_STAGE_NAME: bool = false;
+
+/// Marker of the engine's stage names (`engine::publish::stage_name`).
+const STAGE_MARKER: &str = ".se-upload-";
+
+/// Whether the name ends in `.se-upload-` and sixteen lowercase hex digits.
+/// `engine::random_hex` writes exactly those when the system's random source
+/// answered; its stand-in value starts with `w` and does not match.
+pub(super) fn from_system_random(path: &str) -> bool {
+    path.rsplit_once(STAGE_MARKER).is_some_and(|(_, tail)| {
+        tail.len() == 16
+            && tail
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    })
+}
+
+/// Whether the stage `path` is looked at before STOR.
+pub(super) fn probe_needed(probe_all: bool, path: &str) -> bool {
+    probe_all || !from_system_random(path)
+}
 
 /// Whether `publish` looks at the stage (MLST or a listing) before RNFR. When
 /// `false`, the 550 of RNFR is the answer for a missing stage (`NotFound`, as
 /// before); the destination is still looked at, it is the check against
-/// replacing. Stays `true` until S6 is answered (plan U46-6).
+/// replacing. Stays `true` (security answer S6, b): without the look a
+/// swapped object (folder, link) would be published under the destination
+/// name and reported as the data this client wrote.
 const FTP_VERIFY_STAGE_BEFORE_RENAME: bool = true;
 
 fn already_exists(path: &str) -> io::Error {
@@ -51,10 +76,11 @@ pub(super) fn require_absent<B: Backend + ?Sized>(backend: &B, path: &str) -> io
     Ok(())
 }
 
-/// Fails with `AlreadyExists` when a file named `path` (a stage's random
-/// name) exists: SIZE where the server has it, else a listing of the parent.
+/// Fails with `AlreadyExists` when a file named `path` (a stage's name)
+/// exists: SIZE where the server has it, else a listing of the parent. A name
+/// drawn from the system's random source is not looked at.
 pub(super) fn require_stage_free(connection: &FtpConnection, path: &str) -> io::Result<()> {
-    if !FTP_PROBE_STAGE_NAME {
+    if !probe_needed(FTP_PROBE_STAGE_NAME, path) {
         return Ok(());
     }
     let taken = entry(connection, path)?.is_some();

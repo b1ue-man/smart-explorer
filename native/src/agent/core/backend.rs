@@ -283,6 +283,28 @@ impl Backend for AgentBackend {
         self.agent_open_read_at(path, offset).map(Some)
     }
 
+    /// Every `Read` names its length (`len`), so a range is one request.
+    fn supports_range_reads(&self, path: &str) -> bool {
+        let _ = path;
+        true
+    }
+
+    /// `Read { path, offset, len }`; `len` 0 would mean "to the end", which
+    /// is why an empty range is answered here without a request.
+    fn open_read_range(
+        &self,
+        path: &str,
+        id: Option<&str>,
+        offset: u64,
+        len: u64,
+    ) -> VfsResult<Option<Box<dyn Read + Send>>> {
+        let _ = id;
+        if len == 0 {
+            return Ok(Some(Box::new(std::io::empty())));
+        }
+        self.agent_open_read_len(path, offset, len).map(Some)
+    }
+
     fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
         self.agent_open_write(path)
     }

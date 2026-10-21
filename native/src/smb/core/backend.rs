@@ -66,7 +66,7 @@ impl SmbBackend {
         })
     }
 
-    fn write_file(
+    pub(super) fn write_file(
         &self,
         path: &str,
         exclusive: bool,
@@ -137,7 +137,12 @@ impl SmbBackend {
 
     /// A reader from byte `start`; a connection lost before any byte was
     /// read is replaced and the open repeated once.
-    fn reader_at(&self, path: &str, start: u64) -> VfsResult<Box<dyn Read + Send>> {
+    fn reader_at(
+        &self,
+        path: &str,
+        start: u64,
+        end: Option<u64>,
+    ) -> VfsResult<Box<dyn Read + Send>> {
         let target = entry_path(path)?;
         let mut retried = false;
         loop {
@@ -150,6 +155,7 @@ impl SmbBackend {
                     return Ok(Box::new(SmbReader::new(
                         reader,
                         start,
+                        end,
                         path,
                         generation,
                         self.session.runtime(),
@@ -265,7 +271,7 @@ impl Backend for SmbBackend {
     }
 
     fn open_read(&self, path: &str) -> VfsResult<Box<dyn Read + Send>> {
-        self.reader_at(path, 0)
+        self.reader_at(path, 0, None)
     }
 
     /// READs are positioned, so a resumed download starts at `offset`.
@@ -276,7 +282,37 @@ impl Backend for SmbBackend {
         offset: u64,
     ) -> VfsResult<Option<Box<dyn Read + Send>>> {
         let _ = id;
-        self.reader_at(path, offset).map(Some)
+        self.reader_at(path, offset, None).map(Some)
+    }
+
+    /// Every range is a handle of its own whose READs are bounded by the
+    /// range; they pipeline over the one session within its credits.
+    fn supports_range_reads(&self, path: &str) -> bool {
+        let _ = path;
+        true
+    }
+
+    fn open_read_range(
+        &self,
+        path: &str,
+        id: Option<&str>,
+        offset: u64,
+        len: u64,
+    ) -> VfsResult<Option<Box<dyn Read + Send>>> {
+        let _ = id;
+        self.reader_at(path, offset, Some(offset.saturating_add(len)))
+            .map(Some)
+    }
+
+    /// Ranges of an upload through `create_file_writer_at`; off until the
+    /// security question about reopening a stage by path is answered for SMB
+    /// (segmented_stage.rs).
+    fn open_segmented_stage(
+        &self,
+        stage: &str,
+        size: u64,
+    ) -> VfsResult<Option<Box<dyn crate::vfs::SegmentedStage>>> {
+        self.segmented_stage(stage, size)
     }
 
     fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {

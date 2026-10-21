@@ -139,13 +139,18 @@ impl GDriveBackend {
         Ok(())
     }
 
-    /// `open_read_at`: continue a download at `offset` with an HTTP range.
-    /// Exported Google documents have no stable bytes to resume (`None`).
+    /// `open_read_at` and `open_read_range`: continue a download at `offset`
+    /// with an HTTP range, `bytes=a-b` (last byte included) when `len` bounds
+    /// it, `bytes=a-` otherwise. Exported Google documents have no stable
+    /// bytes to resume (`None`); a bounded read of a server that ignores the
+    /// range is `None` too (skipping `offset` bytes would read the file up to
+    /// there for every part).
     pub(super) fn read_from(
         &self,
         path: &str,
         id: Option<&str>,
         offset: u64,
+        len: Option<u64>,
     ) -> VfsResult<Option<Box<dyn Read + Send>>> {
         let id = match id.filter(|id| !id.is_empty()) {
             Some(id) => id.to_string(),
@@ -156,7 +161,10 @@ impl GDriveBackend {
             return Ok(None);
         }
         let url = self.api_url(&format!("files/{}?alt=media", cloud_urlenc(&id)));
-        let range = format!("bytes={offset}-");
+        let range = match len {
+            Some(len) if len > 0 => format!("bytes={offset}-{}", offset.saturating_add(len - 1)),
+            _ => format!("bytes={offset}-"),
+        };
         let response = self.authenticated_stream(&url, Some(&range))?;
         match response.status() {
             206 => {
@@ -172,8 +180,14 @@ impl GDriveBackend {
                         "Drive lieferte einen anderen Dateiabschnitt als angefragt",
                     ));
                 }
-                Ok(Some(Box::new(response.into_reader())))
+                let reader = response.into_reader();
+                Ok(Some(match len {
+                    Some(len) => Box::new(reader.take(len)),
+                    None => Box::new(reader),
+                }))
             }
+            // A bounded read does not skip: the file goes as one stream.
+            200 if len.is_some() => Ok(None),
             // The server ignored the range: skip to the offset in the stream.
             200 => {
                 let mut reader = response.into_reader();

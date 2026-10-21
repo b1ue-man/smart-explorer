@@ -23,6 +23,9 @@ mod writer;
 #[path = "core/delete_speed_task_tests.rs"]
 mod delete_speed_task_tests;
 #[cfg(test)]
+#[path = "core/range_tests.rs"]
+mod range_tests;
+#[cfg(test)]
 #[path = "core/transfer_engine_task_tests.rs"]
 mod transfer_engine_task_tests;
 

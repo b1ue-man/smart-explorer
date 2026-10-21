@@ -18,6 +18,10 @@
 //! shrinks its request size, so they come back whole and the pipeline can
 //! grow; otherwise every READ left a gap and a download moved one answer per
 //! round trip.
+//!
+//! A range (`with_end`) is read the same way, but no READ asks for a byte at
+//! or beyond its end, and once the range is delivered the reader reports the
+//! end without waiting for anything behind it.
 use crate::transfer::read_pipeline::Pipeline;
 use std::collections::VecDeque;
 use std::io::{self, Read};
@@ -62,6 +66,10 @@ pub(super) struct PipelinedRead<S: ReadSource> {
     /// Contiguous READs in offset order; the front one is delivered next.
     queue: VecDeque<Request<S::Pending>>,
     next_offset: u64,
+    /// First byte of the file this reader was asked for.
+    start: u64,
+    /// Absolute end of a range read; `None`: to the end of the file.
+    end: Option<u64>,
     buffer: Vec<u8>,
     consumed: usize,
     /// Range a short answer left open, still to be settled.
@@ -82,6 +90,8 @@ impl<S: ReadSource> PipelinedRead<S> {
             chunk: chunk.max(1),
             queue: VecDeque::new(),
             next_offset: start,
+            start,
+            end: None,
             buffer: Vec::new(),
             consumed: 0,
             gap: None,
@@ -90,6 +100,19 @@ impl<S: ReadSource> PipelinedRead<S> {
             done: false,
             failure: None,
         }
+    }
+
+    /// Reads only `[start, end)`: no READ goes beyond `end` (absolute), the
+    /// last one is shortened to it.
+    pub(super) fn with_end(mut self, end: u64) -> Self {
+        self.end = Some(end);
+        self
+    }
+
+    /// Whether the whole range has been handed to the caller.
+    fn range_delivered(&self) -> bool {
+        self.end
+            .is_some_and(|end| self.start.saturating_add(self.delivered) >= end)
     }
 
     /// Bytes handed to the caller so far.
@@ -104,14 +127,20 @@ impl<S: ReadSource> PipelinedRead<S> {
     fn top_up(&mut self) {
         while !self.done && self.gap.is_none() && self.queue.len() < self.pipeline.depth() {
             let offset = self.next_offset;
-            let pending = self.source.issue(offset, self.chunk);
+            let len = match self.end {
+                Some(end) if offset >= end => return,
+                // `end - offset <= chunk` here, so it fits in u32.
+                Some(end) => u64::from(self.chunk).min(end - offset) as u32,
+                None => self.chunk,
+            };
+            let pending = self.source.issue(offset, len);
             self.queue.push_back(Request {
                 offset,
-                len: self.chunk,
+                len,
                 sent: Instant::now(),
                 outcome: Outcome::Pending(pending),
             });
-            self.next_offset = offset.saturating_add(u64::from(self.chunk));
+            self.next_offset = offset.saturating_add(u64::from(len));
         }
     }
 
@@ -201,6 +230,11 @@ impl<S: ReadSource> PipelinedRead<S> {
                 return Err(io::Error::new(*kind, message.clone()));
             }
             if self.done {
+                return Ok(false);
+            }
+            // The range is in: nothing behind it is asked for or waited for.
+            if self.range_delivered() {
+                self.finish();
                 return Ok(false);
             }
             if let Some((offset, len)) = self.gap.take() {

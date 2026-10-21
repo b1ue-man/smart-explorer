@@ -325,6 +325,7 @@ fn client_config_with(legacy_sha1: bool) -> client::Config {
                 .collect(),
         );
     }
+    preferred.cipher = Cow::Owned(cipher_order(hardware_aes()));
     client::Config {
         keepalive_interval: Some(SSH_KEEPALIVE_INTERVAL),
         keepalive_max: SSH_KEEPALIVE_MAX_MISSED,
@@ -336,9 +337,80 @@ fn client_config_with(legacy_sha1: bool) -> client::Config {
     }
 }
 
+/// Ciphers offered to the server, best first. With AES instructions in the
+/// CPU `aes256-gcm@openssh.com` (ring) is faster than ChaCha20-Poly1305 and
+/// goes first; without them ChaCha20 stays first, as in russh
+/// (`negotiation.rs` `CIPHER_ORDER`, 0.64.1 lines 185-191). The server picks
+/// the first of this list that it also supports.
+pub(super) fn cipher_order(hardware_aes: bool) -> Vec<russh::cipher::Name> {
+    use russh::cipher::{AES_128_CTR, AES_192_CTR, AES_256_CTR, AES_256_GCM, CHACHA20_POLY1305};
+    if hardware_aes {
+        vec![
+            AES_256_GCM,
+            CHACHA20_POLY1305,
+            AES_256_CTR,
+            AES_192_CTR,
+            AES_128_CTR,
+        ]
+    } else {
+        vec![
+            CHACHA20_POLY1305,
+            AES_256_GCM,
+            AES_256_CTR,
+            AES_192_CTR,
+            AES_128_CTR,
+        ]
+    }
+}
+
+/// Whether this CPU has AES (and carry-less multiply for GCM) instructions,
+/// the ones `ring` uses for AES-GCM.
+pub(super) fn hardware_aes() -> bool {
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    {
+        std::is_x86_feature_detected!("aes") && std::is_x86_feature_detected!("pclmulqdq")
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        std::arch::is_aarch64_feature_detected!("aes")
+    }
+    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64")))]
+    {
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn speed_task_sftp_cipher_order_prefers_aes_gcm_only_with_hardware_aes() {
+        use russh::cipher::{AES_256_GCM, CHACHA20_POLY1305};
+        let with = cipher_order(true);
+        let without = cipher_order(false);
+        assert_eq!(with.first(), Some(&AES_256_GCM));
+        assert_eq!(with.get(1), Some(&CHACHA20_POLY1305));
+        assert_eq!(without.first(), Some(&CHACHA20_POLY1305));
+        assert_eq!(without.get(1), Some(&AES_256_GCM));
+        assert_eq!(with.len(), 5, "same five ciphers either way");
+        let mut a: Vec<&str> = with.iter().map(AsRef::as_ref).collect();
+        let mut b: Vec<&str> = without.iter().map(AsRef::as_ref).collect();
+        a.sort_unstable();
+        b.sort_unstable();
+        assert_eq!(a, b);
+        // The order russh itself uses stays the order without AES.
+        assert_eq!(
+            without,
+            russh::Preferred::DEFAULT.cipher.to_vec(),
+            "no AES instructions: russh's own order"
+        );
+        // The configuration carries the order for this CPU.
+        assert_eq!(
+            client_config().preferred.cipher.to_vec(),
+            cipher_order(hardware_aes())
+        );
+    }
 
     #[test]
     fn remote_drive_task_sftp_client_config_enables_bounded_keepalives() {

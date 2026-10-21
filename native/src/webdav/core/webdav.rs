@@ -167,17 +167,30 @@ impl WebdavBackend {
     }
 
     fn get(&self, path: &str) -> io::Result<ureq::Response> {
-        self.get_from(path, 0)
+        self.get_range(path, 0, None)
     }
 
-    /// GET from byte `offset` (a `Range` request when it is not 0).
-    fn get_from(&self, path: &str, offset: u64) -> io::Result<ureq::Response> {
+    /// GET of `len` bytes from byte `offset` (a `Range` request unless it
+    /// is the whole file): `bytes=a-b` with the last byte included, `bytes=a-`
+    /// without a length.
+    pub(super) fn get_range(
+        &self,
+        path: &str,
+        offset: u64,
+        len: Option<u64>,
+    ) -> io::Result<ureq::Response> {
+        let range = match len {
+            Some(len) if len > 0 => {
+                Some(format!("bytes={offset}-{}", offset.saturating_add(len - 1)))
+            }
+            _ if offset > 0 => Some(format!("bytes={offset}-")),
+            _ => None,
+        };
         for attempt in 0..2 {
             let request = self.agent.get(&self.url_for(path));
-            let request = if offset == 0 {
-                request
-            } else {
-                request.set("Range", &format!("bytes={offset}-"))
+            let request = match &range {
+                Some(range) => request.set("Range", range),
+                None => request,
             };
             match self.auth_req(request).call() {
                 Ok(response) => return Ok(response),
@@ -260,6 +273,26 @@ impl Backend for WebdavBackend {
     ) -> VfsResult<Option<Box<dyn Read + Send>>> {
         let _ = id;
         self.read_from(path, offset)
+    }
+
+    /// Every request carries its own `Range`, so ranges run side by side on
+    /// the pooled connections.
+    fn supports_range_reads(&self, path: &str) -> bool {
+        let _ = path;
+        true
+    }
+
+    /// `Range: bytes=a-b`. `None` when the server ignores it (answers 200
+    /// with the whole file): the file then runs as one stream.
+    fn open_read_range(
+        &self,
+        path: &str,
+        id: Option<&str>,
+        offset: u64,
+        len: u64,
+    ) -> VfsResult<Option<Box<dyn Read + Send>>> {
+        let _ = id;
+        self.read_range(path, offset, len)
     }
 
     fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {

@@ -10,7 +10,7 @@ use super::ops::OpError;
 use super::queue::FileWork;
 use crate::vfs::Backend;
 use std::fs::{File, Metadata};
-use std::io::{self, Read};
+use std::io::{self, Read, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::time::SystemTime;
 
@@ -74,6 +74,16 @@ impl LocalSource {
             return Err(changed(&self.display));
         }
         Ok(())
+    }
+
+    /// What the ranges of this file need, on any thread: where it is and what
+    /// it looked like when it was opened.
+    pub(crate) fn range_source(&self) -> RangeSource {
+        RangeSource {
+            path: self.path.clone(),
+            display: self.display.clone(),
+            before: self.before,
+        }
     }
 
     /// Next bytes, at most one beyond the opened length so a growing file is
@@ -144,6 +154,38 @@ impl LocalSource {
                 Err(error) => return Err(OpError::source(error)),
             }
         }
+    }
+}
+
+/// The ranges of an opened local source: each opens a handle of its own
+/// (no shared file pointer, nothing platform-specific) and checks that it is
+/// still the file that was opened, so a swapped or changed file is refused
+/// before a byte of it is read.
+pub(crate) struct RangeSource {
+    path: PathBuf,
+    display: String,
+    before: Observation,
+}
+
+impl RangeSource {
+    /// A handle on the file, positioned at `offset`.
+    pub(crate) fn open_at(&self, offset: u64) -> Result<File, OpError> {
+        let mut file = crate::local_access::open_read(&self.path).map_err(OpError::source)?;
+        let opened = file.metadata().map_err(OpError::source)?;
+        if observe(&self.path, &opened, &self.display)? != self.before {
+            return Err(changed(&self.display));
+        }
+        if offset > 0 {
+            file.seek(SeekFrom::Start(offset))
+                .map_err(OpError::source)?;
+        }
+        Ok(file)
+    }
+
+    /// The error of a range the file could not fill: it is shorter than it
+    /// was when it was opened.
+    pub(crate) fn changed(&self) -> OpError {
+        changed(&self.display)
     }
 }
 
