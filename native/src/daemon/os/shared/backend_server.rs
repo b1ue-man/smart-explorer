@@ -16,6 +16,10 @@ use super::backend_walk::{
 };
 use super::request_workers::{RequestWorkers, LEGACY_MAX_REQUEST_WORKERS};
 
+#[path = "backend_ranges.rs"]
+mod backend_ranges;
+use backend_ranges::BackendStages;
+
 pub(super) type Sink = Arc<Mutex<Box<dyn Write + Send>>>;
 
 pub(super) fn emit(sink: &Sink, id: u64, frame: &Frame) -> io::Result<()> {
@@ -62,7 +66,37 @@ fn service_version(backend: &BackendHandle) -> String {
     let root = backend.root_display();
     let batch = backend.batch_limits(&root).is_some();
     let slots = agent_proto::service_slots(backend.transfer_ceiling(&root));
-    format!("{} worker", agent_proto::server_version_with(batch, slots))
+    // `range-v1` and `lz4-v1` only for a backend that reads ranges: the
+    // frames behind them are forwarded to it (`backend_ranges`).
+    format!(
+        "{}{} worker",
+        agent_proto::server_version_with(batch, slots),
+        backend_ranges::labels(backend)
+    )
+}
+
+/// The frames of an upload with `DataLz4` unpacked, for a backend that was
+/// announced with `lz4-v1`; for any other backend they are passed unchanged.
+fn lz4_inbound<'a>(
+    backend: &BackendHandle,
+    inbound: &'a (dyn agent_proto::Inbound + Send),
+) -> Box<dyn agent_proto::Inbound + 'a> {
+    if backend_ranges::offers_ranges(backend) {
+        Box::new(agent_proto::Lz4Inbound(inbound))
+    } else {
+        Box::new(Passthrough(inbound))
+    }
+}
+
+struct Passthrough<'a>(&'a (dyn agent_proto::Inbound + Send));
+
+impl agent_proto::Inbound for Passthrough<'_> {
+    fn recv_timeout(
+        &self,
+        timeout: std::time::Duration,
+    ) -> Result<Frame, std::sync::mpsc::RecvTimeoutError> {
+        self.0.recv_timeout(timeout)
+    }
 }
 
 /// The legacy text of the busy reply when no thread can be started; "too
@@ -94,6 +128,8 @@ pub(crate) fn serve_backend(
 ) -> io::Result<()> {
     let session = ServerSession::new(Arc::new(Mutex::new(Box::new(w))));
     let version = Arc::new(OnceLock::new());
+    // Stages of ranged uploads: owned by this session, aborted with it.
+    let stages = BackendStages::new();
     let mut workers = RequestWorkers::default();
 
     loop {
@@ -148,10 +184,12 @@ pub(crate) fn serve_backend(
         let worker_session = session.clone();
         let backend2 = backend.clone();
         let version2 = version.clone();
+        let stages2 = stages.clone();
         match std::thread::Builder::new()
             .name(format!("daemon-backend-request-{id}"))
             .spawn(move || {
-                let result = dispatch_backend(&context, id, backend2, req, &version2, credit);
+                let result =
+                    dispatch_backend(&context, id, (backend2, &stages2), req, &version2, credit);
                 let result = match result {
                     Ok(()) => Ok(()),
                     Err(error) => {
@@ -194,7 +232,9 @@ pub(crate) fn serve_backend(
         }
     }
     session.abort_all();
-    workers.shutdown()
+    let result = workers.shutdown();
+    stages.close();
+    result
 }
 
 fn reply(sink: &Sink, id: u64, result: io::Result<Frame>, credit: bool) -> io::Result<()> {
@@ -207,7 +247,7 @@ fn reply(sink: &Sink, id: u64, result: io::Result<Frame>, credit: bool) -> io::R
 fn dispatch_backend(
     context: &RequestContext,
     id: u64,
-    backend: BackendHandle,
+    (backend, stages): (BackendHandle, &Arc<BackendStages>),
     req: Frame,
     version: &OnceLock<String>,
     credit: bool,
@@ -237,15 +277,27 @@ fn dispatch_backend(
             handle_read_backend(sink, id, &backend, &path, offset, len, cancel)
         }
         Frame::Write(path) => match inbound {
-            Some(rx) => {
-                handle_write_backend(sink, id, &backend, &path, rx, cancel, WriteMode::Replace)
-            }
+            Some(rx) => handle_write_backend(
+                sink,
+                id,
+                &backend,
+                &path,
+                &lz4_inbound(&backend, rx),
+                cancel,
+                WriteMode::Replace,
+            ),
             None => emit(sink, id, &Frame::Err("write: no inbound channel".into())),
         },
         Frame::WriteNew(path) => match inbound {
-            Some(rx) => {
-                handle_write_backend(sink, id, &backend, &path, rx, cancel, WriteMode::Create)
-            }
+            Some(rx) => handle_write_backend(
+                sink,
+                id,
+                &backend,
+                &path,
+                &lz4_inbound(&backend, rx),
+                cancel,
+                WriteMode::Create,
+            ),
             None => emit(
                 sink,
                 id,
@@ -314,7 +366,38 @@ fn dispatch_backend(
             .map(|()| Frame::Ok),
         ),
         Frame::DiscardStage(stage) => {
-            answer(backend.discard_copy_stage(&stage).map(|()| Frame::Ok))
+            if stages.discard(&stage) {
+                emit(sink, id, &Frame::Ok)
+            } else {
+                answer(backend.discard_copy_stage(&stage).map(|()| Frame::Ok))
+            }
+        }
+        // The frames of `range-v1` and `lz4-v1` are served only for a
+        // backend that was announced with the labels.
+        Frame::ReadLz4 { path, offset, len } if backend_ranges::offers_ranges(&backend) => {
+            backend_ranges::read_lz4(sink, id, &backend, &path, (offset, len), cancel)
+        }
+        Frame::SegStageOpen { path, size } if backend_ranges::offers_ranges(&backend) => {
+            // An empty name tells the client that this backend has no stage
+            // for ranges: it sends one stream.
+            answer(
+                stages
+                    .open(&backend, &path, size)
+                    .map(|stage| Frame::SegStageReady {
+                        stage: stage.unwrap_or_default(),
+                    }),
+            )
+        }
+        Frame::WriteAt { stage, offset, len } if backend_ranges::offers_ranges(&backend) => {
+            match inbound {
+                Some(rx) => {
+                    backend_ranges::write_at(sink, id, stages, (&stage, offset, len), rx, cancel)
+                }
+                None => emit(sink, id, &Frame::Err("write-at: no inbound channel".into())),
+            }
+        }
+        Frame::SegStageFinish { stage } if backend_ranges::offers_ranges(&backend) => {
+            answer(stages.finish(&stage).map(|()| Frame::Ok))
         }
         Frame::ListTolerant(path) => super::backend_ops::list_tolerant(sink, id, &backend, &path),
         Frame::WalkHashed2 {

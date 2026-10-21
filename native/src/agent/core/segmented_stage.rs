@@ -66,6 +66,9 @@ impl AgentBackend {
         let reply = rx.recv();
         mux.unregister(id);
         match reply {
+            // The service answers an empty name when its backend has no stage
+            // that takes ranges: one stream, without an error.
+            Ok(Frame::SegStageReady { stage }) if stage.is_empty() => Ok(None),
             Ok(Frame::SegStageReady { stage }) => Ok(Some(Box::new(AgentSegmentedStage {
                 lease,
                 mux,

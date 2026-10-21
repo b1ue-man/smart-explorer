@@ -23,12 +23,12 @@ pub(crate) fn space_test_lock() -> MutexGuard<'static, ()> {
 }
 
 /// Whether `[start, end)` touches a range of the list.
-pub(super) fn overlaps(ranges: &[(u64, u64)], start: u64, end: u64) -> bool {
+pub(crate) fn overlaps(ranges: &[(u64, u64)], start: u64, end: u64) -> bool {
     ranges.iter().any(|&(from, to)| start < to && from < end)
 }
 
 /// Adds `[start, end)` and merges ranges that touch (sorted, disjoint).
-pub(super) fn merge_in(ranges: &mut Vec<(u64, u64)>, start: u64, end: u64) {
+pub(crate) fn merge_in(ranges: &mut Vec<(u64, u64)>, start: u64, end: u64) {
     ranges.push((start, end));
     ranges.sort_unstable();
     let mut merged: Vec<(u64, u64)> = Vec::with_capacity(ranges.len());
