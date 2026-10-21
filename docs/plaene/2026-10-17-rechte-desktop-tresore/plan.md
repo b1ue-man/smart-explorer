@@ -267,6 +267,30 @@ Startgrenze: Ab der vom Nutzer genannten Wochennutzung startet kein neuer Auftra
 **Wiederaufnahme (2026-10-21 10:03 UTC):** Nutzervorgabe „gut, arbeite weiter, bis 40% dann starte keine weiteren aufgaben“; Startgrenze damit 40 % der Wochennutzung (Annahme: je Wochenfenster).
 - Laufend: U28 (sonnet, high; hält die Android-Hub-Dateien und setzt seine R10-Zeilen selbst), U44 (sonnet, high; E13-Festlegung, einziger Schreiber von `festlegungen.md`) und ein neuer Sicherheitsagent (opus, medium).
 - Der Sicherheitsagent übernimmt mit `stand/SEC.md` die Punkte 8 (Antworten auf S1–S8 aus § U31, stehen in `stand/SEC.md`), 9 (offene Einzelpunkte oben), 10 (U36) und 11 (U31 nach U28).
+- Stand 2026-10-21, 11:20 UTC:
+  - Fertig und gepusht:
+    - U28 (6a2787f6);
+    - Sicherheitsagent Punkte 8, 9 und 9b: Antworten S1–S8 in `stand/SEC.md`; Grenzen und Scan-Fehler in 27a4e153 und 35138e48;
+    - U36 (a109515b);
+    - Dokany-MSI im Windows-Job (946b9205);
+    - U42 Lauf 1, PRM-M11 und DRV-M9 (de85c444);
+    - U44 (bbb6abc3: § U44 und die Pakete U45–U55 in `festlegungen.md`, Recherche in `docs/refs/uebertragung-tempo-2026-10.md`);
+    - U45 (1f8aa8cd).
+  - Laufend:
+    - Sicherheitsagent Punkt 11 (U31, hält die Android-Hub-Dateien) mit 11b (Grenzen im Fern-Scanner);
+    - U45-Nacharbeit, U46, U47;
+    - U42 Lauf 2 (SCR-M11, Installer-Doku).
+  - E13-Reihenfolge nach `festlegungen.md` U44-14:
+    1. U45, U46, U47;
+    2. U48 nach U45–U47; der Schreiber-Zweig bleibt bis zur Antwort auf E13-S7 abgeschaltet;
+    3. U50 nach U47 und U48;
+    4. U49 nach U50 und der Antwort auf E13-S8;
+    5. U51 nach U50, U52 nach U51;
+    6. U53 nach den Antworten auf E13-S1–S5;
+    7. U54 nach U50 und U40;
+    8. U55 zuletzt.
+  - Der Sicherheitsagent beantwortet die 13 E13-Fragen (§ U44, „Fragen an den Sicherheitsagenten“) nach U31.
+  - Folgepunkte aus den Berichten für U41, U42, U43 und Code-Nachträge hält der Hauptagent in seinem Arbeitsverzeichnis und überträgt sie in die Aufträge.
 
 **Stand bei der zweiten Pause (2026-10-18 08:45 UTC, Startgrenze des Wochenlimits erreicht, alle laufenden Pakete fertig):**
 - Fertig, committet und gepusht: zusätzlich U13 (9e1448e2), U14 (ee4a5761, 5267e500), U20 (1879e509), U32 (6e1c4602). Damit 23 von 43 Umsetzungspaketen.
