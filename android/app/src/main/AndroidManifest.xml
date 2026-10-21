@@ -170,6 +170,29 @@
             android:enabled="false"
             android:exported="false" />
 
+        <!-- DSK-M13 (U40): the widget „Smart Explorer Geräte“ for launchers other than the se launcher. Off until the person
+             switches the part „Geräte-Widget für fremde Launcher“ on (LauncherParts.widget); runs in the launcher process
+             and never starts the core. The system binds the list service through BIND_REMOTEVIEWS, hence exported=false. -->
+        <receiver
+            android:name=".widget.DevicesWidgetProvider"
+            android:enabled="false"
+            android:exported="true"
+            android:label="@string/devices_widget_label"
+            android:process=":launcher">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/devices_widget_info" />
+        </receiver>
+        <service
+            android:name=".widget.DevicesWidgetService"
+            android:enabled="false"
+            android:exported="false"
+            android:permission="android.permission.BIND_REMOTEVIEWS"
+            android:process=":launcher" />
+
         <!-- Transfers, "run now" sync runs and the Google sign-in while the UI was left -->
         <service
             android:name=".service.TaskForegroundService"

@@ -43,6 +43,12 @@ import app.smartexplorer.android.launcher.apps.AppEntry
 import app.smartexplorer.android.launcher.badges.BadgeKey
 import app.smartexplorer.android.launcher.model.HomeItem
 import app.smartexplorer.android.launcher.model.Kinds
+import app.smartexplorer.android.launcher.se.SeAddTile
+import app.smartexplorer.android.launcher.se.SeDeviceTile
+import app.smartexplorer.android.launcher.se.SeRoomTile
+import app.smartexplorer.android.launcher.se.SeScreensTile
+import app.smartexplorer.android.launcher.se.SeVaultTile
+import app.smartexplorer.android.launcher.se.SeViews
 import app.smartexplorer.android.launcher.widgets.WidgetView
 import app.smartexplorer.android.launcher.widgets.widgetResizeActions
 
@@ -100,6 +106,8 @@ class ItemContext(
         Kinds.SHORTCUT -> shortcut(item)?.shortLabel?.toString() ?: "Verknüpfung"
         Kinds.FOLDER -> item.name
         Kinds.WIDGET -> vm.widgets.label(item)
+        Kinds.SE_DEVICE, Kinds.SE_ROOM, Kinds.SE_VAULT, Kinds.SE_SCREENS, Kinds.SE_ADD_DEVICE, Kinds.SE_JOIN_ROOM ->
+            SeViews.title(item, vm.se.ui.value)
         else -> "Unbekanntes Element"
     }
 }
@@ -109,8 +117,9 @@ private val LabelColor = Color.White
 private val LabelShadow = Shadow(color = Color(0xCC000000), offset = androidx.compose.ui.geometry.Offset(0f, 2f), blurRadius = 6f)
 
 /**
- * Extension point of the kinds (U35-31): U38 adds `"widget"`, U40 `"seDevice"`, `"seRoom"`, `"seVault"` and
- * `"seScreens"`, each with one branch and one file. An unknown kind stays in the file and occupies its cell.
+ * Extension point of the kinds (U35-31): U38 added `"widget"`, U40 `"seDevice"`, `"seRoom"`, `"seVault"` and
+ * `"seScreens"` (and the two computed tiles of an empty device list), each with one branch into `launcher/se/SeTiles.kt`.
+ * An unknown kind stays in the file and occupies its cell.
  */
 @Composable
 fun ItemContent(item: HomeItem, context: ItemContext) {
@@ -124,6 +133,11 @@ fun ItemContent(item: HomeItem, context: ItemContext) {
         Kinds.SHORTCUT -> ShortcutTile(item, context)
         Kinds.FOLDER -> FolderTile(item, context)
         Kinds.WIDGET -> WidgetView(item, context)
+        Kinds.SE_DEVICE -> SeDeviceTile(item, context)
+        Kinds.SE_ROOM -> SeRoomTile(item, context)
+        Kinds.SE_VAULT -> SeVaultTile(item, context)
+        Kinds.SE_SCREENS -> SeScreensTile(item, context)
+        Kinds.SE_ADD_DEVICE, Kinds.SE_JOIN_ROOM -> SeAddTile(item, context)
         else -> UnknownItem(item)
     }
 }
@@ -136,8 +150,8 @@ private fun UnknownItem(item: HomeItem) {
 
 /** Semantics of a cell: name and the actions of U35-32 (move, remove, app info for apps). */
 @Composable
-internal fun Modifier.cellSemantics(item: HomeItem, context: ItemContext): Modifier {
-    val label = if (context.hasDot(item)) "${context.label(item)}, Benachrichtigung" else context.label(item)
+internal fun Modifier.cellSemantics(item: HomeItem, context: ItemContext, description: String? = null): Modifier {
+    val label = description ?: if (context.hasDot(item)) "${context.label(item)}, Benachrichtigung" else context.label(item)
     val vm = context.vm
     return semantics {
         contentDescription = label
@@ -163,7 +177,7 @@ internal fun Modifier.cellSemantics(item: HomeItem, context: ItemContext): Modif
 }
 
 @Composable
-private fun Label(text: String, modifier: Modifier = Modifier) {
+internal fun Label(text: String, modifier: Modifier = Modifier) {
     Text(
         text,
         modifier = modifier,

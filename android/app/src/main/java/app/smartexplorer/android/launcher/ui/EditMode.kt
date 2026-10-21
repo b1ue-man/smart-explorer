@@ -34,7 +34,7 @@ import app.smartexplorer.android.launcher.wallpaper.Wallpaper
 
 /**
  * Rows other packages add to the settings sheet of the launcher (U35-30). U38 puts „Widgets“ (and, with the
- * private space, its switch) into the sheet itself; this list stays for U40.
+ * private space, its switch) into the sheet itself, U40 the entry „se-Elemente“; this list stays empty for later packages.
  */
 object EditSheetExtras {
     val rows: MutableList<@Composable () -> Unit> = mutableListOf()
@@ -76,6 +76,8 @@ fun EditSheet(vm: LauncherViewModel, iconDp: Int, modifier: Modifier = Modifier)
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("Hintergrund ändern") }
             OutlinedButton(onClick = { vm.openWidgetPicker() }, modifier = Modifier.fillMaxWidth()) { Text("Widgets") }
+            // DSK-M13 (U40-10): devices, rooms, vaults and „Alle Bildschirme“ of Smart Explorer.
+            OutlinedButton(onClick = { vm.openSeSheet() }, modifier = Modifier.fillMaxWidth()) { Text("se-Elemente") }
             // Only a device that has a private space needs the switch (U38-14).
             if (profiles.any { it.isPrivate }) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {

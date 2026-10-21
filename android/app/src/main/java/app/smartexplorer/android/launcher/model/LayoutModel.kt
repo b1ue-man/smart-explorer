@@ -13,12 +13,25 @@ data class Cell(val x: Int, val y: Int)
 /** Width and height in cells. */
 data class Span(val w: Int, val h: Int)
 
-/** Kinds this package draws itself; U38 added `widget`, U40 adds `seDevice`, `seRoom`, `seVault`, `seScreens` (U35-31). */
+/**
+ * Kinds this package draws itself; U38 added `widget`, U40 added the four se kinds (U35-31, U40-9): a device, a room, a
+ * vault site (each with `attrs.target`, the link to the entry of `DEVICES`) and „Alle Bildschirme“. [SE_ADD_DEVICE]
+ * and [SE_JOIN_ROOM] are the two tiles of an empty device list; they are computed at drawing time and never stored.
+ */
 object Kinds {
     const val APP = "app"
     const val SHORTCUT = "shortcut"
     const val FOLDER = "folder"
     const val WIDGET = "widget"
+    const val SE_DEVICE = "seDevice"
+    const val SE_ROOM = "seRoom"
+    const val SE_VAULT = "seVault"
+    const val SE_SCREENS = "seScreens"
+    const val SE_ADD_DEVICE = "seAddDevice"
+    const val SE_JOIN_ROOM = "seJoinRoom"
+
+    /** The four stored se kinds. */
+    val SE_STORED: Set<String> = setOf(SE_DEVICE, SE_ROOM, SE_VAULT, SE_SCREENS)
 }
 
 /**
@@ -38,6 +51,9 @@ data class HomeItem(
     val isShortcut: Boolean get() = kind == Kinds.SHORTCUT
     val isFolder: Boolean get() = kind == Kinds.FOLDER
     val isWidget: Boolean get() = kind == Kinds.WIDGET
+
+    /** One of the four stored se kinds (device, room, vault, all screens). */
+    val isSe: Boolean get() = kind in Kinds.SE_STORED
 
     /** App or shortcut: what may go into a folder. */
     val canBeInFolder: Boolean get() = isApp || isShortcut

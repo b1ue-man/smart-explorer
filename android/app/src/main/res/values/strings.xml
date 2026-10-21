@@ -9,6 +9,12 @@
     <!-- DSK-M12 (U38): the notification listener of the dots, as the system settings list it -->
     <string name="launcher_badges_label">Benachrichtigungspunkte des se Launchers</string>
 
+    <!-- DSK-M13 (U40-3): the widget „Smart Explorer Geräte“ for launchers other than the se launcher -->
+    <string name="devices_widget_label">Smart Explorer Geräte</string>
+    <string name="devices_widget_description">Zeigt deine Geräte mit Online-Zustand. Tippen öffnet das Gerät.</string>
+    <string name="devices_widget_title">Geräte</string>
+    <string name="devices_widget_no_data">Noch keine Daten.</string>
+
     <!-- Notification channels (ids: transfers, background, updates, share) -->
     <string name="channel_transfers">Übertragungen</string>
     <string name="channel_transfers_description">Fortschritt laufender Kopier-, Sync- und Upload-Vorgänge</string>

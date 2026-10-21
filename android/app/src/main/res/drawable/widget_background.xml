@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DSK-M13 (U40-3): a dark translucent plate, so the white text reads on any wallpaper of a foreign launcher. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="#99000000" />
+    <corners android:radius="16dp" />
+</shape>

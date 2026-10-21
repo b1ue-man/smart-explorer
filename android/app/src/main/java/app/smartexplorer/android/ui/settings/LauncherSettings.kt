@@ -169,6 +169,13 @@ fun LauncherSettings(modifier: Modifier = Modifier) {
         }
         PrivateSpaceLine(card)
         if (card.enabled) BadgeLine(card, context)
+        // DSK-M13 (U40-19): what the home screen shows of Smart Explorer and where more of it is added.
+        if (card.enabled) {
+            HintLine(
+                "Geräte, Räume, Tresore und „Alle Bildschirme“ erscheinen beim ersten Start auf Seite 1. " +
+                    "Weitere fügst du im Bearbeitungsmodus unter „se-Elemente“ hinzu.",
+            )
+        }
         if (LauncherParts.widget.isNotEmpty()) {
             ToggleSetting("Geräte-Widget für fremde Launcher", card.widgetOn, { on ->
                 try {

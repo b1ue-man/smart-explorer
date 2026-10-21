@@ -70,7 +70,6 @@ class LauncherComponentsManifestTest {
         assertEquals(1, list.length)
         assertEquals("android.service.notification.NotificationListenerService", (list.item(0) as Element).getAttributeNS(androidNs, "name"))
         assertTrue("the switch must turn it on and off with the launcher", "app.smartexplorer.android.launcher.badges.BadgeListenerService" in LauncherParts.launcher)
-        assertTrue("the widget part stays empty until U40", LauncherParts.widget.isEmpty())
     }
 
     @Test
@@ -86,5 +85,63 @@ class LauncherComponentsManifestTest {
             "app.smartexplorer.android.service.LauncherBridgeService",
             app.smartexplorer.android.launcher.bridge.BridgeProtocol.SERVICE_CLASS,
         )
+    }
+
+    @Test
+    fun theWidgetProviderIsOffInTheLauncherProcessAndAnswersOnlyTheUpdateAction() {
+        val receiver = component("receiver", ".widget.DevicesWidgetProvider")
+        assertEquals("false", receiver.getAttributeNS(androidNs, "enabled"))
+        assertEquals("true", receiver.getAttributeNS(androidNs, "exported"))
+        assertEquals(":launcher", receiver.getAttributeNS(androidNs, "process"))
+        assertEquals("@string/devices_widget_label", receiver.getAttributeNS(androidNs, "label"))
+        val actions = receiver.getElementsByTagName("action")
+        assertEquals(1, actions.length)
+        assertEquals("android.appwidget.action.APPWIDGET_UPDATE", (actions.item(0) as Element).getAttributeNS(androidNs, "name"))
+        val meta = receiver.getElementsByTagName("meta-data").item(0) as Element
+        assertEquals("android.appwidget.provider", meta.getAttributeNS(androidNs, "name"))
+        assertEquals("@xml/devices_widget_info", meta.getAttributeNS(androidNs, "resource"))
+    }
+
+    @Test
+    fun theWidgetListServiceIsOffInTheLauncherProcessAndBoundOnlyBySystem() {
+        val service = component("service", ".widget.DevicesWidgetService")
+        assertEquals("false", service.getAttributeNS(androidNs, "enabled"))
+        assertEquals("false", service.getAttributeNS(androidNs, "exported"))
+        assertEquals(":launcher", service.getAttributeNS(androidNs, "process"))
+        assertEquals("android.permission.BIND_REMOTEVIEWS", service.getAttributeNS(androidNs, "permission"))
+    }
+
+    @Test
+    fun theWidgetPartSwitchesExactlyTheProviderAndItsService() {
+        assertEquals(
+            listOf(
+                "app.smartexplorer.android.widget.DevicesWidgetProvider",
+                "app.smartexplorer.android.widget.DevicesWidgetService",
+            ),
+            LauncherParts.widget,
+        )
+        // The parts do not overlap: switching the widget part never touches the launcher components.
+        assertTrue(LauncherParts.launcher.none { it in LauncherParts.widget })
+    }
+
+    @Test
+    fun theWidgetInfoFilesCarryTheSizesOfTheDevicesWidget() {
+        for ((path, v31) in listOf("src/main/res/xml/devices_widget_info.xml" to false, "src/main/res/xml-v31/devices_widget_info.xml" to true)) {
+            val factory = DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
+            val info = factory.newDocumentBuilder().parse(File(path)).documentElement
+            fun attr(name: String) = info.getAttributeNS(androidNs, name)
+            assertEquals("180dp", attr("minWidth"))
+            assertEquals("110dp", attr("minHeight"))
+            assertEquals("110dp", attr("minResizeWidth"))
+            assertEquals("110dp", attr("minResizeHeight"))
+            assertEquals("0", attr("updatePeriodMillis"))
+            assertEquals("@layout/devices_widget", attr("initialLayout"))
+            assertEquals("horizontal|vertical", attr("resizeMode"))
+            assertEquals("home_screen", attr("widgetCategory"))
+            assertEquals("@string/devices_widget_description", attr("description"))
+            assertEquals(if (v31) "3" else "", attr("targetCellWidth"))
+            assertEquals(if (v31) "2" else "", attr("targetCellHeight"))
+            assertEquals(if (v31) "@layout/devices_widget" else "", attr("previewLayout"))
+        }
     }
 }

@@ -1,6 +1,7 @@
 package app.smartexplorer.android.task
 
 import android.app.ActivityManager
+import android.appwidget.AppWidgetManager
 import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.LauncherApps
@@ -27,6 +28,9 @@ import androidx.test.uiautomator.Until
 import androidx.test.uiautomator.UiDevice
 import app.smartexplorer.android.core.Core
 import app.smartexplorer.android.core.CoreState
+import app.smartexplorer.android.launcher.bridge.BridgeProtocol
+import app.smartexplorer.android.launcher.bridge.DevicesData
+import app.smartexplorer.android.launcher.bridge.DevicesFolder
 import app.smartexplorer.android.launcher.EnableResult
 import app.smartexplorer.android.launcher.HomeResolution
 import app.smartexplorer.android.launcher.LauncherState
@@ -39,9 +43,23 @@ import app.smartexplorer.android.launcher.model.LayoutReadResult
 import app.smartexplorer.android.launcher.search.LauncherSearch
 import app.smartexplorer.android.launcher.search.SearchHit
 import app.smartexplorer.android.launcher.search.SearchSource
+import app.smartexplorer.android.launcher.se.OpenInFiles
+import app.smartexplorer.android.launcher.se.SeActions
+import app.smartexplorer.android.ui.AppNav
+import app.smartexplorer.android.ui.NavRequest
+import app.smartexplorer.android.widget.DevicesWidgetFeed
+import app.smartexplorer.android.widget.WidgetCache
+import app.smartexplorer.android.widget.WidgetRow
+import app.smartexplorer.android.widget.WidgetSnapshot
+import app.smartexplorer.android.widget.WidgetTarget
 import app.smartexplorer.android.ui.settings.LauncherSettings
 import app.smartexplorer.android.ui.theme.SmartExplorerTheme
 import java.io.File
+import java.util.concurrent.CopyOnWriteArrayList
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -55,7 +73,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * DSK-M9, DSK-M10, DSK-M11 and DSK-M12 on the device (U35-34, U38-17): the launcher module as a whole. The tests run in the app
+ * DSK-M9, DSK-M10, DSK-M11, DSK-M12 and DSK-M13 on the device (U35-34, U38-17, U40-21): the launcher module as a whole. The tests run in the app
  * process (the instrumentation shares it) and look at the launcher process `:launcher` from outside:
  * the component state, `ps`, `/proc/<pid>/maps`, `dumpsys`, the role holders. The device is the suite's,
  * never the user's. `add-role-holder` stands for the person's choice in the system dialog (A32).
@@ -845,6 +863,269 @@ class LauncherTaskTest {
             again.text = "Smart Explor"
             assertTrue("no hit for the personal app", waitFor { device.findObjects(By.text("Smart Explorer")).isNotEmpty() })
             assertTrue("the locked private space answers the search", waitFor { device.findObjects(By.text("Smart Explorer")).size == 1 })
+        }
+    }
+
+
+    // ---- DSK-M13: se content, the bridge, the widget (U40-21) ------------------------------------------------
+
+    private val seWidgetProvider = "app.smartexplorer.android.widget.DevicesWidgetProvider"
+    private val seWorkspace = LauncherSeTaskSupport
+
+    /** Writes a layout with the given se items (and, if given, a cache file), then shows the launcher. */
+    private fun startSeLauncher(vararg items: String, cache: DevicesData? = null) {
+        launcherDir().mkdirs()
+        File(launcherDir(), "layout.json").writeText(seWorkspace.layout(*items))
+        cache?.let { seWorkspace.writeCache(launcherDir(), it) }
+        startLauncher()
+    }
+
+    /** Collects what the launcher asks of the main process; it sees the requests before the app's own navigation does. */
+    private fun captureNavigation(): Pair<MutableList<NavRequest>, Job> {
+        val seen = CopyOnWriteArrayList<NavRequest>()
+        val job = CoroutineScope(Dispatchers.Default).launch { AppNav.requests.collect { seen += it } }
+        return seen to job
+    }
+
+    /** True while `dumpsys` lists the bridge service of this app (it exists only while a client is bound). */
+    private fun bridgeBound(): Boolean = shell("dumpsys activity services $pkg").contains("LauncherBridgeService")
+
+    private fun clickText(text: String, timeoutMs: Long = 15_000) {
+        val node = device.wait(Until.findObject(By.text(text)), timeoutMs)
+        assertNotNull("„$text“ is not on the screen", node)
+        node.click()
+    }
+
+    @Test
+    fun launcher_task_devices_from_bridge() {
+        assumeTrue("nicht ausgeführt: das Share-Paar des Wirtsskripts fehlt (seShareServer, seDesktopDevice, seDesktopDirectCode)", seWorkspace.hasPairArguments())
+        val phase = InstrumentationRegistry.getArguments().getString("launcherDevicesPhase") ?: "online"
+        val contact = runBlocking { Api.awaitReady(); seWorkspace.pairWithRunner() }
+        val name = contact.text("name")
+        startSeLauncher(seWorkspace.item("d1", "seDevice", 0, 0, contact.text("location"), name))
+        assertNotNull("the tile of the runner is not shown", device.wait(Until.findObject(By.text(name)), 20_000))
+        if (phase == "online") {
+            val online = listOf("Erreichbar", "Erreichbar im LAN", "Verbunden", "Verbunden (direkt)", "Verbunden (Relay)", "Verbindet", "Warte auf Freigabe", "Wartet auf das Gerät")
+            assertTrue("no state text of the runner's tile", waitFor(60_000) { online.any { device.hasObject(By.text(it)) } })
+            // The search finds the device under „Smart Explorer“ (U40-15).
+            device.wait(Until.findObject(By.text("Alle Apps")), 10_000)?.click()
+            val field = device.wait(Until.findObject(By.text("Apps suchen")), 10_000)
+            assertNotNull("the app list did not open", field)
+            field.text = name
+            assertTrue("no section „Smart Explorer“ in the search", device.wait(Until.hasObject(By.text("Smart Explorer")), 10_000))
+            assertTrue("the device is not a hit", device.hasObject(By.text(name)))
+        } else {
+            // Phase „offline“: the host has taken the runner's Share offline; the tile follows with „Offline“.
+            assertTrue("the tile did not change to „Offline“", waitFor(180_000) { device.hasObject(By.text("Offline")) })
+        }
+    }
+
+    @Test
+    fun launcher_task_tile_opens_device_location() {
+        assumeTrue("nicht ausgeführt: das Share-Paar des Wirtsskripts fehlt", seWorkspace.hasPairArguments())
+        val contact = runBlocking { Api.awaitReady(); seWorkspace.pairWithRunner() }
+        val location = contact.text("location")
+        val name = contact.text("name")
+        val (seen, job) = captureNavigation()
+        try {
+            startSeLauncher(seWorkspace.item("d1", "seDevice", 0, 0, location, name))
+            // The tile opens the folder, except while the access is not approved or the identity changed (then the Share tab).
+            assertTrue("the tile shows a state", waitFor(60_000) { device.hasObject(By.text(name)) })
+            val status = runBlocking { Api.obj("share.status").objects("devices").first { it.text("contactId") == contact.text("contactId") }.text("status") }
+            val expected = SeActions.tapDevice(status, location)
+            clickText(name)
+            val wanted = AppNav.decode(expected.kind, expected.value)
+            assertNotNull(wanted)
+            assertTrue("the launcher asked for $wanted, saw $seen", waitFor(30_000) { wanted in seen })
+        } finally {
+            job.cancel()
+        }
+    }
+
+    @Test
+    fun launcher_task_tile_opens_all_screens() {
+        // No pair needed: „Alle Bildschirme“ is a tile without data.
+        val (seen, job) = captureNavigation()
+        try {
+            startSeLauncher(seWorkspace.item("s1", "seScreens", 0, 0))
+            clickText("Alle Bildschirme")
+            assertTrue("showScreenGrid did not arrive, saw $seen", waitFor(30_000) { NavRequest.ShowScreenGrid(null) in seen })
+        } finally {
+            job.cancel()
+        }
+    }
+
+    @Test
+    fun launcher_task_room_folder_members() {
+        assumeTrue("nicht ausgeführt: das Share-Paar oder der Raumcode des Wirtsskripts fehlt", seWorkspace.hasPairArguments() && !InstrumentationRegistry.getArguments().getString("seRoomCode").isNullOrBlank())
+        val (profileId, roomName, members) = runBlocking {
+            Api.awaitReady()
+            Share.goOnline(TaskArgs.get("seShareServer"))
+            val profile = Api.obj("share.joinRoom", args("code" to TaskArgs.get("seRoomCode"), "name" to "Team")).text("profileId")
+            Share.awaitMember(profile, TaskArgs.get("seDesktopDevice"))
+            val room = Share.room { it.text("profileId") == profile }!!
+            Triple(profile, room.text("name"), room.objects("members").map { it.text("name") })
+        }
+        assertTrue("the room has no member", members.isNotEmpty())
+        startSeLauncher(seWorkspace.item("r1", "seRoom", 0, 0, profileId, roomName))
+        clickText(roomName)
+        for (member in members) {
+            assertTrue("member „$member“ is not in the popup", device.wait(Until.hasObject(By.text(member)), 15_000))
+        }
+    }
+
+    @Test
+    fun launcher_task_screen_nav_kinds_reach_the_app() {
+        // The bridge side of „openScreen“ and „showScreenGrid“: the intent built from the wire kinds reaches the app's navigation.
+        val (seen, job) = captureNavigation()
+        try {
+            val token = AppNav.tokenFor(appContext)
+            val ref = app.smartexplorer.android.launcher.bridge.ScreenRef("direct", "c1", "dev-c1")
+            for (target in listOf(SeActions.openScreen(ref, control = true), SeActions.screenGrid("room-1"))) {
+                val request = AppNav.decode(target.kind, target.value)!!
+                appContext.startActivity(AppNav.intentFor(appContext, request, token))
+                assertTrue("$request did not arrive, saw $seen", waitFor(20_000) { request in seen })
+            }
+        } finally {
+            job.cancel()
+        }
+    }
+
+    @Test
+    fun launcher_task_unbind_on_stop() {
+        startSeLauncher(seWorkspace.item("s1", "seScreens", 0, 0))
+        assertTrue("the bridge was not bound after onStart (rule C3.3 a)", waitFor(30_000) { bridgeBound() })
+        // Another app on top: the launcher stops and lets go of the service.
+        shell("am start -a android.settings.SETTINGS")
+        assertTrue("the bridge stayed bound after the launcher stopped", waitFor(30_000) { !bridgeBound() })
+        device.pressHome()
+        assertTrue("the bridge was not bound again", waitFor(30_000) { bridgeBound() })
+    }
+
+    /**
+     * Phase test (U40-21): the main process cannot be ended from inside its own instrumentation, so the host does that between the
+     * phases (`am kill <package>`, then Home) and passes what it saw. Phase `prepare` shows the launcher with a cache; phase `verify`
+     * (a new instrumentation run) checks the host's observations and that the cache holds no token.
+     */
+    @Test
+    fun launcher_task_no_bind_when_main_process_absent() {
+        val phase = InstrumentationRegistry.getArguments().getString("launcherMainAbsentPhase")
+        assumeTrue(
+            "nicht ausgeführt: der Wirtslauf ruft diesen Test mit '-e launcherMainAbsentPhase prepare' auf, beendet danach den Hauptprozess " +
+                "('am kill $pkg'), drückt Home, liest 'pidof $pkg' und die Texte des Bildschirms und ruft ihn mit " +
+                "'-e launcherMainAbsentPhase verify -e launcherMainPidAfterHome <pid|none> -e launcherTileAfterHome <Text>' erneut auf",
+            phase == "prepare" || phase == "verify",
+        )
+        if (phase == "prepare") {
+            val cache = DevicesData(stale = true, devices = listOf(seWorkspace.deviceEntry("c-absent", "Cache-Gerät", "connected", "Verbunden", true)))
+            startSeLauncher(seWorkspace.item("d1", "seDevice", 0, 0, "share://direct/c-absent", "Cache-Gerät"), cache = cache)
+            assertTrue("the cached tile is not shown", device.wait(Until.hasObject(By.text("Cache-Gerät")), 20_000))
+        } else {
+            assertEquals("the main process was started by the launcher", "none", InstrumentationRegistry.getArguments().getString("launcherMainPidAfterHome"))
+            assertTrue(
+                "the tile does not say „nicht aktuell“: ${InstrumentationRegistry.getArguments().getString("launcherTileAfterHome")}",
+                InstrumentationRegistry.getArguments().getString("launcherTileAfterHome").orEmpty().contains("nicht aktuell"),
+            )
+            val cacheText = File(launcherDir(), BridgeProtocol.SE_CACHE_FILE).readText()
+            assertFalse("the cache holds the token", cacheText.contains("navToken"))
+            assertTrue("the cache is not marked stale", cacheText.contains("\"stale\":true"))
+        }
+    }
+
+    @Test
+    fun launcher_task_open_in_files_resolver_excludes_se() {
+        val folder = DevicesFolder("$pkg.documents", "devices")
+        val intent = OpenInFiles.intentFor(appContext, folder, "direct~x")
+        assumeTrue("nicht ausgeführt: kein Dateimanager außer Smart Explorer beantwortet den Wurzel-Aufruf (A36)", intent != null)
+        if (intent!!.action == Intent.ACTION_CHOOSER) {
+            @Suppress("DEPRECATION")
+            val excluded = intent.getParcelableArrayExtra(Intent.EXTRA_EXCLUDE_COMPONENTS)?.map { it as ComponentName }.orEmpty()
+            assertTrue("MainActivity is not excluded from the chooser: $excluded", excluded.any { it.packageName == pkg && it.className.endsWith("MainActivity") })
+        } else {
+            assertTrue("the target names Smart Explorer itself", intent.`package` != null && intent.`package` != pkg)
+        }
+        // Without the exclusion Smart Explorer would be offered: it answers the directory type itself (U35-12).
+        val own = Intent(Intent.ACTION_VIEW).setDataAndType(
+            android.provider.DocumentsContract.buildDocumentUri(folder.authority, "devices/direct~x"),
+            android.provider.DocumentsContract.Document.MIME_TYPE_DIR,
+        )
+        assertTrue("Smart Explorer does not answer the directory type", appContext.packageManager.queryIntentActivities(own, 0).any { it.activityInfo.packageName == pkg })
+        assertEquals(null, OpenInFiles.intentFor(appContext, null, "direct~x"))
+    }
+
+    private fun widgetProviderListed(): Boolean = AppWidgetManager.getInstance(appContext).installedProviders.any {
+        it.provider.packageName == pkg && it.provider.className == seWidgetProvider
+    }
+
+    @Test
+    fun launcher_task_devices_widget_only_when_enabled() {
+        assertFalse("the provider is listed without the part", widgetProviderListed())
+        val on = LauncherSwitch.setWidgetPart(appContext, true)
+        assertTrue(on.parts.widget)
+        assertTrue("the provider is not listed with the part", waitFor(20_000) { widgetProviderListed() })
+        val off = LauncherSwitch.setWidgetPart(appContext, false)
+        assertFalse(off.parts.widget)
+        assertTrue("the provider is still listed after the part went off", waitFor(20_000) { !widgetProviderListed() })
+        assertFalse("the cache folder stays after the part went off", File(appContext.filesDir, BridgeProtocol.WIDGET_DIR).exists())
+    }
+
+    /** Switches the widget part on, replaces the feed's file by a known row, and puts the widget on page 1 of the launcher. */
+    private fun addDevicesWidget(rowName: String, location: String) {
+        LauncherSwitch.setWidgetPart(appContext, true)
+        DevicesWidgetFeed.stop()
+        WidgetCache.write(appContext, WidgetSnapshot(listOf(WidgetRow(rowName, "Verbunden", true, WidgetTarget.OpenLocation(location))), AppNav.tokenFor(appContext)))
+        assertTrue("the provider is not listed", waitFor(20_000) { widgetProviderListed() })
+        grantBind()
+        startEmptyLauncher()
+        device.swipe(device.displayWidth / 2, device.displayHeight / 2, device.displayWidth / 2, device.displayHeight / 2, 250)
+        clickText("Widgets")
+        val field = device.wait(Until.findObject(By.text("Widgets suchen")), 10_000)
+        assertNotNull("the sheet „Widgets“ did not open", field)
+        field.text = "Smart Explorer Geräte"
+        clickText("Hinzufügen")
+        assertTrue(
+            "the devices widget is not in layout.json",
+            waitFor(20_000) { readLayout()?.pages?.flatten().orEmpty().any { it.isWidget && it.provider?.endsWith(seWidgetProvider) == true } },
+        )
+    }
+
+    @Test
+    fun launcher_task_devices_widget_click_opens_device() {
+        val (seen, job) = captureNavigation()
+        try {
+            addDevicesWidget("Widget-Gerät", "share://direct/widget-test")
+            clickText("Widget-Gerät", 30_000)
+            assertTrue("the row did not open the device, saw $seen", waitFor(30_000) { NavRequest.OpenLocation("share://direct/widget-test/") in seen })
+        } finally {
+            job.cancel()
+        }
+    }
+
+    /**
+     * Phase test (U40-21): ends with the main process absent, which only the host can do. Phase `prepare` puts the widget on the
+     * launcher and writes its id into the task report; the host then runs `am kill <package>`, `am broadcast -a
+     * android.appwidget.action.APPWIDGET_UPDATE -n <package>/.widget.DevicesWidgetProvider --eia appWidgetIds <id>` and reads `pidof
+     * <package>`; phase `verify` (new run) checks `-e launcherWidgetMainPidAfterUpdate none`.
+     */
+    @Test
+    fun launcher_task_devices_widget_does_not_start_core() {
+        val phase = InstrumentationRegistry.getArguments().getString("launcherWidgetCorePhase")
+        assumeTrue(
+            "nicht ausgeführt: der Wirtslauf ruft diesen Test mit '-e launcherWidgetCorePhase prepare' auf, beendet den Hauptprozess " +
+                "('am kill $pkg'), sendet APPWIDGET_UPDATE an $seWidgetProvider mit der Kennung aus files/task-report/devices-widget-id.txt, liest 'pidof $pkg' " +
+                "und ruft ihn mit '-e launcherWidgetCorePhase verify -e launcherWidgetMainPidAfterUpdate <pid|none>' erneut auf",
+            phase == "prepare" || phase == "verify",
+        )
+        if (phase == "prepare") {
+            addDevicesWidget("Kern-Gerät", "share://direct/core-test")
+            val id = readLayout()!!.pages.flatten().first { it.isWidget && it.provider?.endsWith(seWidgetProvider) == true }.widgetId
+            TaskReport.file("devices-widget-id.txt").writeText("$id\n")
+        } else {
+            assertEquals(
+                "the widget update started the main process",
+                "none",
+                InstrumentationRegistry.getArguments().getString("launcherWidgetMainPidAfterUpdate"),
+            )
         }
     }
 
