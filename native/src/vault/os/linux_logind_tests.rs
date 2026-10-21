@@ -130,7 +130,8 @@ fn vault_task_linux_logind_sleep_and_locked_hint_lock() {
     let on_sleep = unlocked_site(&register, settings(None, true, false, None));
     let on_screen = unlocked_site(&register, settings(None, false, true, None));
     let neither = unlocked_site(&register, settings(None, false, false, None));
-    let sink: Weak<dyn SignalSink> = Arc::downgrade(&register);
+    let weak = Arc::downgrade(&register);
+    let sink: Weak<dyn SignalSink> = weak;
     let signals = start(sink);
     wait_until("Signale von logind abonniert", || signals.ready());
     let support = signals.support();
