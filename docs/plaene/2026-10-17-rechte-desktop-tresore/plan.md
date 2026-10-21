@@ -24,6 +24,7 @@ Quelle aller Ergebnisse: Nutzernachricht vom 2026-10-17 (Arbeitsweise-Auftrag `9
 | E10 | Untersuchen, wie Cryptomator Tresore ins System einhängt, ob davon etwas „donkey“ ersetzen und Zuverlässigkeit bringen kann oder nicht; entscheiden, wie unter Linux Laufwerke eingehängt werden | „you can also be inspired by how cryptomator plugs it's vault into the system and see if any of these could replace donkey and add reliability or not and how you wanna do it for linux with plugging stuff in as drive“ |
 | E11 | Zuerst planen, wie viele Hauptstränge nötig sind, jeden einzeln planen; nach der Planung direkt ausführen | „you will need to first plan how many main threads you will need to plan their stuff individually. execute directly once finished with planning“; „dig in and research and research more and plan and reresearch and plan and rerevalidate every component“ |
 | E12 | Exec-Gleichzeitigkeitsgrenzen („PrincipalLimit“, „GlobalLimit“) vollständig entfernen, ohne Ersatzgrenze (Anforderung R15, 2026-10-19) | „ergänzung, wo kommt der BS her? raus damit komplett, kein limit.“ |
+| E13 | Kopieren, Einfügen, Hoch- und Herunterladen so schnell, dass Laufwerk, Leitung oder Server begrenzen und nie se; freie CPU und freier RAM werden dafür eingesetzt; Abläufe nach Recherche und Vorbildern selbst entwerfen (2026-10-21, Abschnitt „Ergänzung E13“) | „noch eine kleine ergänzung, das kopieren, einfügen... also wenn arbeitsspreicher und cpu verfügbar sind und das laufwerk nicht ausgelastet ist, lokal, oder der upload oder downloadspeed via web, dann muss es doch wege geben das noch zu beschleunigen. der se ist schon schneller als der standard browser, aber ich hätte das gerne wirklich so schnell wie möglich, die software darf nicht das bottleneck sein. wie die prozesse musst du selbst designen nach recherchen und vorbildern ggf.“ |
 
 Eigene Folgerungen (nicht Nutzeraussage):
 - „donkey“ bezeichnet nach dem Wortlaut das Windows-Laufwerks-Backend; Annahme bis zur Bestandslektüre: Dokany. (Bestand bestätigt: `native/src/mount/os/windows/dokany_abi.rs`.)
@@ -249,12 +250,12 @@ Startgrenze: Ab der vom Nutzer genannten Wochennutzung startet kein neuer Auftra
   - Festlegungen des Design-Agenten für alle übrigen Pakete in `festlegungen.md`.
   - Damit 34 von 43 Umsetzungspaketen.
 - **Korrigierter Fehler:** U26 hatte `VaultStatusView`, `VaultSiteView` und `VaultEventView` aus `ipc_protocol_vault.rs` entfernt; wiederhergestellt in 8ff20823.
-- **Offene Pakete** in dieser Reihenfolge, Android-Pakete nacheinander (Hub-Dateien D2.3):
-  1. U28 (Android-Betrachter);
+- **Offene Pakete** in dieser Reihenfolge, Android-Pakete nacheinander (Hub-Dateien D2.3; E13-Pakete ergänzt am 2026-10-21):
+  1. U28 (Android-Betrachter), parallel dazu U44 (E13: Recherche und Festlegung, siehe „Ergänzung E13“);
   2. U31 (Tresore auf Android, Sicherheitsagent; vorher seine Antworten auf S1–S8 aus `festlegungen.md` § U31);
   3. U35, U38, U40 (Launcher);
-  4. U36 (Installer, Sicherheitsagent);
-  5. U41 (Suite Teil B);
+  4. U36 (Installer, Sicherheitsagent); U45 ff. (E13-Umsetzung nach der Festlegung von U44);
+  5. U41 (Suite Teil B, mit den `speed_task_`-Zeilen aus U44);
   6. U42, U43 (Doku);
   7. ein Inventurlauf: alle Testzeilen aus den Stand-Dateien nach `native/rdt_task/expected_signals.txt`;
   8. die eine Remote-Suite mit Korrekturschleife (dabei `Cargo.lock` und die Lizenzdatei aus dem Artefakt `rdt-prepare`), danach das eine Release.
@@ -276,6 +277,57 @@ Startgrenze: Ab der vom Nutzer genannten Wochennutzung startet kein neuer Auftra
 - Laufend: U13, U14, U20 und U32 (opus, Standardaufwand, Modell aus den Transkripten belegt). Die Dateibereiche stehen im Arbeitsverzeichnis des Hauptagenten (`running-areas.md`); jeder Agent führt `stand/<Paket>.md` fortlaufend.
 - U17 wartet auf U14: gemeinsame Dateien unter `mount/` und `daemon/os/shared/mount_*` sowie Zwangsreihenfolge W3 (`PrepareLock` vor `ChildBackend`/`DeviceWatch`). U32 ersetzt in der Startreihenfolge U17.
 - Danach startbar nach den Strangabhängigkeiten: U16 (nach U13), U17 (nach U14), U26 (nach U20), U34 (nach U17 und U32), U27, U35 und U37 (Abhängigkeiten erfüllt; U27 und U35 teilen die Android-Hub-Dateien aus D2.3 und laufen deshalb nicht gleichzeitig).
+
+### Ergänzung E13: Übertragungen begrenzt nur durch Laufwerk, Leitung und Server (Nutzer 2026-10-21)
+
+Wortlaut: Tabelle „Beauftragte Ergebnisse“, Zeile E13.
+
+**Ziel.** Beim Kopieren, Einfügen, Verschieben, Hoch- und Herunterladen begrenzt das Laufwerk (lokal) oder die Leitung bzw. der Server (Netz), nie se. Solange CPU und RAM frei sind und Laufwerk oder Leitung nicht ausgelastet sind, setzt se mehr davon ein. Die Abläufe entwirft der Design-Agent nach Recherche und Vorbildern; der Nutzer gibt keine Lösung vor.
+
+**Annahmen.**
+- **A51:** „standard browser“ meint für lokale Kopien den Dateimanager des Systems (Windows-Explorer, Linux-Dateimanager, Android-App „Dateien“) und für Up- und Downloads den Webbrowser. Das Ziel hängt davon nicht ab, weil es an der gemessenen Kapazität von Laufwerk und Leitung gemessen wird, nicht an einem anderen Programm.
+- **A52:** Zum Umfang gehören alle Wege, die Dateiinhalt übertragen: die Übertragungs-Engine (Einfügen, Ziehen, „Kopieren/Herunterladen nach…“, Downloads, Explorer-Übergabe), `se cp`, `se get` und `se put` (TODO CLI3), die MCP-Werkzeuge, die Dateien kopieren oder übertragen, die Android-App, Einweg-Spiegeln, Zwei-Wege-Sync und Tresor-Sync. U44 listet, welche dieser Wege eine eigene Übertragung statt der Engine benutzen, und nimmt jeden davon auf.
+- **A53:** Der Remote-Runner hat kein Google-Drive-Konto; die Drive-Fälle meldet die Suite als nicht ausgeführt.
+
+**Erhalten** (TE1-Regeln, AGENTS.md „preserve existing behavior“): exklusiv erzeugte Stufe und Veröffentlichung, kein stilles Überschreiben, Wiederholung nur vor der Veröffentlichung, Fortsetzen ab Offset, gemeldete Auslassungen (Links, Spezialdateien, ungültige Namen), Abbrechen, Erlaubnisse reihum zwischen Übertragungen, reservierter Platz fürs Blättern, Überlast als Gegendruck. Eine Beschleunigung, die eine dieser Regeln aufgibt, ist ausgeschlossen.
+
+**Bestand laut `docs/TRANSFER_ENGINE.md`** (Stand TE1, v0.5.166; U44 prüft ihn am Code):
+- Ein Flow je Verbindung bzw. lokalem Volume regelt die Zahl gleichzeitiger Operationen per Hill Climbing der Nutzleistung: Start 2, Verdoppeln bei ≥ +10 %, Obergrenze 256 bzw. Protokollgrenze, Gedächtnis 15 min, nur im laufenden Prozess.
+- Lokal: `copy_file_range` (Linux) und `CopyFile2` (Windows) über die exklusive Stufe; innerhalb einer SMB-Freigabe kopiert der Server (COPYCHUNK).
+- Serverseitige Kopien: SFTP `copy-data`, WebDAV `COPY`, Drive `files.copy`, Share-Serverkopie.
+- SFTP: gepipelinete READs bis Tiefe 64, SSH-Fenster 16 MiB, Paket 32 KiB, Kanal-Pool.
+- Share (Iroh/QUIC): bis 60 Übertragungen je Gegenstelle, Fenster 16 MiB je Strom und 16–64 MiB je Verbindung, Pakete bis 256 Dateien bzw. 16 MiB.
+- SSH-Agent: 64 MiB Budget je Verbindung, Fenster bis 8 MiB je Strom.
+- Drive: neue Datei bis 5 MB in einem Aufruf, größere als Resumable-Upload mit wachsenden Blöcken; Google begrenzt etwa 3 neue Dateien/s je Konto.
+- Offen in `docs/TODO.md`: TE2 (von drei parallelen Raum-Downloads scheiterte einer mit EAGAIN, Ursache unbekannt; die SFTP-READ-Größenkorrektur `b495581` ist ungemessen) und CLI3 (`se cp`, `se get`, `se put` laufen nicht über die Engine).
+
+**Prüfpunkte für U44.** Hypothesen aus dem Vorwissen des Hauptagenten, ungeprüft. U44 bestätigt oder verwirft jede am Code und mit einer Messung aus dem Messplan:
+1. **Eine große Datei läuft über einen Strom.** Der Flow regelt Operationen; eine einzelne große Datei nutzt dann einen Strom bzw. eine TCP-Verbindung. Zu prüfen: parallele Bereiche je Datei beim Download (HTTP-`Range` bei WebDAV und Drive, FTP `REST` über mehrere Verbindungen, Share „Lesen ab Offset“, SFTP-Lesen an Offsets, lokal parallele Bereichskopien auf SSD/NVMe) und beim Upload, wo das Protokoll Bereiche zulässt (SFTP-Schreiben an Offsets, Share, Nextcloud Chunked Upload v2).
+2. **Verschlüsselung auf einem Kern.** Kanäle einer SSH-Verbindung teilen deren Verschlüsselung, ebenso die Ströme einer TLS- oder QUIC-Verbindung. Zu prüfen: mehrere Verbindungen statt nur Kanäle, schnelle Verfahren (AES-GCM mit Hardwarebeschleunigung vor ChaCha20 auf x86), Ort und Verfahren eines Prüf-Hashes, falls die Engine einen bildet.
+3. **Feste Fenster und Budgets.** Der Durchsatz einer Verbindung ist höchstens Fenster ÷ Rundreisezeit (16 MiB bei 200 ms ≈ 80 MiB/s). Zu prüfen: SSH-, QUIC- und Agent-Fenster, prozessweites Speicherbudget und Blockgrößen nach freiem RAM und gemessenem Bandbreite-Latenz-Produkt.
+4. **Rundreisen je kleiner Datei.** Stufe anlegen, schreiben und veröffentlichen kostet je Datei mehrere Rundreisen. Zu prüfen: Pakete auch für SFTP, FTP und WebDAV, Überlappen der Schritte, Bündeln von Metadatenaufrufen; die Stufe bleibt.
+5. **Freie CPU gegen eine langsame Leitung.** Zu prüfen: adaptive Kompression (zstd) zwischen zwei se-Gegenstellen (Share, SSH-Agent), nur für komprimierbare Daten und nur, solange sie den gemessenen Durchsatz erhöht.
+6. **Anlauf.** Start bei 2, Verdoppeln je Messfenster (mindestens 1 s), Gedächtnis 15 min im Prozess. Zu prüfen: gespeicherte Startwerte je Verbindung und Volume über Prozessneustarts, schnellerer Anlauf kurzer Übertragungen.
+7. **Lokale Kopie.** Zu prüfen: Reflink und Block-Klonen (`FICLONE` auf Btrfs und XFS, Block Cloning auf ReFS und Dev Drive), ungepuffertes Kopieren großer Dateien unter Windows (`COPY_FILE_NO_BUFFERING`), Puffergröße bei Kopien zwischen zwei Laufwerken, viele kleine Dateien unter Echtzeit-Virenschutz (Microsoft Defender).
+8. **Wer begrenzt.** Der Flow kennt nur die Nutzleistung. Zu prüfen: CPU-Last, freier RAM, Auslastung des Laufwerks (Linux `/proc/diskstats`, Windows-Leistungszähler) und der Netzschnittstelle als Eingaben, damit se erkennt, ob Laufwerk, Leitung, Server oder se begrenzt. Ob das Übertragungsfenster das anzeigt, legt U44 fest.
+9. **Android.** Zu prüfen: Durchsatz über SAF bzw. `ContentResolver` gegenüber direktem Dateizugriff und gegenüber dem Kopieren im Rust-Teil.
+10. **Offene TE-Punkte.** TE2 und CLI3 werden Teil von E13.
+
+**Vorbilder zur Prüfung** (Kandidaten, ungeprüft):
+- Lokal: robocopy `/MT`, FastCopy, TeraCopy, GNU `cp` ab coreutils 9 (`copy_file_range`, Reflink), `xcp`, `fcp`.
+- Netz und Cloud: rclone (`--transfers`, `--multi-thread-streams`, `--sftp-concurrency`, `--drive-chunk-size`), AzCopy (automatische Parallelität), s5cmd, aria2 (segmentierte Downloads), `gcloud storage` (parallele Teil-Uploads, geteilte Downloads), lftp (`pget -n`, `mirror --parallel`), Nextcloud Chunked Upload v2.
+- Leitungen mit großem Bandbreite-Latenz-Produkt: OpenSSH `sftp -R` und `-B`, HPN-SSH, bbcp, GridFTP (parallele TCP-Ströme), BBR.
+- Regelung und Ein-/Ausgabe: Netflix `concurrency-limits` (Vegas, Gradient2), io_uring für viele kleine Dateien unter Linux.
+
+**Abnahme.** Je Weg misst die Suite auf dem Remote-Runner den Durchsatz von se und die Kapazität desselben Weges mit einem Referenzwerkzeug: Laufwerk mit `fio`, Leitung mit `iperf3` über die geformte Loopback-Strecke wie in `native/tests/transfer_throughput.rs`. Wege: lokal→lokal auf demselben Volume und zwischen zwei Volumes; lokal↔SFTP, ↔FTP, ↔WebDAV, ↔SMB, ↔Share, ↔SSH-Agent; Drive nach A53. Je Weg eine große Datei und viele kleine Dateien. Den geforderten Anteil an der Kapazität und die Fallgrößen legt U44 fest. Testpräfix `speed_task_`.
+
+**Pakete und Modelle** (Zuordnung aus „Freigegebene Modellzuordnung“):
+- **U44**, Design-Agent (sonnet, high): Recherche der Prüfpunkte und Vorbilder an Primärquellen, Ist-Analyse am Code, Messplan, Festlegung je Weg in `festlegungen.md` § U44 mit dem Schnitt in Umsetzungspakete U45 ff. (Dateien, Abhängigkeiten, Testzeilen, Doku-Bedarf). Schreibt nur `festlegungen.md` § U44 und `docs/refs/uebertragung-tempo-2026-10.md`.
+- **U45 ff.**, Umsetzung (sonnet, high): jedes Paket erst, wenn sein Abschnitt mit „Status: festgelegt“ endet.
+- **Sicherheitsagent** (opus, medium): prüft Änderungen an Protokollen zwischen se-Gegenstellen (Share `fs_transfer_v1`, Agent-Frames, Kompression) sowie an Stufe und Veröffentlichung.
+- **U41** nimmt die `speed_task_`-Zeilen auf; **U42** und **U43** aktualisieren `docs/TRANSFER_ENGINE.md`, README, GOTCHAS und `docs/TODO.md` (TE2, CLI3).
+
+**Reihenfolge.** U44 läuft parallel zu U28 (keine gemeinsamen Dateien). U45 ff. starten nach U44 und vor U41. Ob U31 oder U36 Dateien von U45 ff. berühren, prüft U44 und legt die Reihenfolge danach fest.
 
 ## Entscheidungen des Hauptagenten zu offenen Strangpunkten
 
@@ -1146,5 +1198,7 @@ Jeder Job außer `prepare` hat `needs: prepare` und legt vor dem Bau `native/Car
 | E8 Cryptomator-Tresore öffnen und bearbeiten | U05, U08, U11, U14, U20, U26, U29, U31 | `vault_task_cryptolib_file_gcm_vector`, `vault_task_siv_mode_512_cases`, `vault_task_backend_read_write_roundtrip_gcm`, `vault_task_session_unlock_once_all_clients`, `vault_task_create_then_cryptofs_reads`, `vault_task_password_change_then_cryptofs_unlocks_new`, `vault_task_gui_unlock_states`, `drive_task_vault_drive_letter_rw`, `VaultTaskTest` |
 | E9 Tresor-Sync ohne Ordnereinrichtung, keine automatische Konfliktauflösung, Vergleichsmodus | U05, U20, U26, U29, U31 | `vault_task_sync_seed_replica_then_seeding_false`, `vault_task_sync_one_sided_changes_both_directions`, `vault_task_sync_both_changed_untouched_conflict`, `vault_task_sync_unreachable_side_no_deletes`, `vault_task_compare_groups_match_preview`, `vault_task_compare_keep_both_valid_cipher_name`, `vault_task_gui_compare_rows_and_actions`, `vault_task_plan_rules_default_single_phase` |
 | E10 Cryptomator-Einhängewege gegen Dokany geprüft, Linux-Laufwerke | U02 (Dokany bleibt, Fehlerabbildung behoben), U12, U14, U17, U42 (Entscheidung und Begründung in README, GOTCHAS; TODO `WINFSP-AB`, `DOKANY-WATCH`) | `drive_task_windows_unmapped_error_is_io_device_not_access_denied`, `drive_task_windows_host_unreachable_maps_1232`, `drive_task_fuse_mount_local_fixture_rw`, `drive_task_fuse_sftp_container_rw`, `drive_task_fuse_editor_save_rename_over`, `drive_task_vault_linux_mountpoint_tmpfs_sticky_locked`, `drive_task_gtk_bookmark_only_outside_glib_rule` |
+| E12 Exec ohne Gleichzeitigkeitsgrenze | R15, R15c | `perm_task_same_principal_starts_three_and_more_concurrent_jobs`, `perm_task_host_starts_more_than_eight_concurrent_jobs`, `perm_task_open_requests_have_no_device_or_host_limit`, `perm_task_ask_start_beside_three_running_jobs_of_the_device`, `perm_task_screen_request_beside_running_jobs`, `perm_task_old_host_limit_refusal_stays_readable` |
+| E13 Übertragungen begrenzt nur durch Laufwerk, Leitung und Server | U44 (Festlegung), U45 ff. (Umsetzung), U41, U42, U43 | `speed_task_`-Zeilen; Namen und geforderter Anteil an der gemessenen Kapazität aus `festlegungen.md` § U44 |
 
 E11 (Planen in Hauptsträngen, danach direkt ausführen) ist mit diesem Plan erfüllt; die Ausführung beginnt mit P1.
