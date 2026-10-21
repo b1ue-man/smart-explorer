@@ -115,7 +115,12 @@ pub(crate) fn acquire_instance_guard(
     timeout: std::time::Duration,
 ) -> Option<platform::DaemonInstanceGuard> {
     if !handoff {
-        return platform::acquire_daemon_instance_guard(std::time::Duration::ZERO);
+        let guard = platform::acquire_daemon_instance_guard(std::time::Duration::ZERO);
+        if guard.is_none() {
+            // Otherwise the worker ends with exit code 0 and leaves no trace.
+            state::log("daemon not started: another instance holds the single-instance lock");
+        }
+        return guard;
     }
     let deadline = std::time::Instant::now() + timeout;
     loop {
