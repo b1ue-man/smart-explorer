@@ -1,6 +1,6 @@
 # Stand SEC (Sicherheitsagent)
 
-Stand: 2026-10-21 (Lauf 3: Punkt 11 U31 und 11b; Lauf 2 in 35138e48 und a109515b).
+Stand: 2026-10-21 (Lauf 4: Punkt 12 E13-Fragen, Punkt 13 Hintergrundsperre; Lauf 3 in 829e7d9a).
 
 - Committet sind Punkt 1–3, 1b, 4, 4b und 5 (df15feb5, e6b4c24a, 25e08110, e2233d85, c87bd083, 33744c73, 99cf1d63).
 - Punkt 6 (R15c) und Punkt 7 (U23) sind im Quelltext fertig, aber nicht gebaut, nicht getestet und nicht committet.
@@ -161,6 +161,91 @@ Stand: im Quelltext fertig, nicht gebaut, nicht getestet, nicht committet. Rust 
 12. S8 (offene Datei hält die Hintergrundsperre auf) nicht umgesetzt: braucht `vault/core/lock_policy.rs` (`SiteClock.open_files`, `due`) und `vault/os/shared/session_timer.rs`; mein Bereich in `N/vault/**` umfasst nur den Abbruch.
 13. Fehlerart für S1-Ablehnungen `invalid` (statt `invalid_argument`).
 
+## Punkt 12: Antworten E13-S1 bis S13
+
+Grundlage: `festlegungen.md` § U44 (U44-4, U44-5, U44-10, U44-11, U44-13, Fragen S1–S13), § U48 (U48-4), § U49, § U51, § U53; Code gelesen: `share/core/{fs_request.rs:240, batch_wire.rs:20–62, keepalive.rs:8–24}`, `agent_proto/core/{credit.rs:33, features.rs}`, `agent_proto/os/shared/write_new.rs:14–60`, `ftp/core/staging.rs`, `ftp/core/ftp.rs:289–310`, `vfs/core/promotion.rs:34–60, 158–170`, `transfer/os/shared/engine/{publish.rs:121, util.rs:26–38}`. Gilt für U53 (E13-S1 bis S5), U48 (S7, S12, S13), U46 (S6), U49 (S8), U50 (S9, S10), U51 (S11). Wo die Antwort von § U53/§ U48 abweicht, gilt die Antwort.
+
+**E13-S1 (Share `ReadAt` mit `len`): übernommen, mit Bedingungen.**
+- Keine neue Berechtigung; dieselbe Prüfung wie `ReadAt` vor dem Öffnen (`fs_guard_backend.rs`), auch für `open_read_range`.
+- Rechnung nur mit geprüfter Arithmetik: `offset > size` → bestehender Fehler `InvalidInput`; `remaining = min(size − offset, len)` (bei `len = 0`: `size − offset`); `offset + len` wird nie ungeprüft addiert.
+- Länge über das Dateiende: auf das Ende gekürzt; die angekündigte Länge ist `remaining`.
+- Schrumpft die Datei während des Lesens, endet der Strom vor `remaining`; der Client muss das als Fehler „Quelle wurde während der Übertragung geändert“ werten (U44-4 Punkt 7), nie als vollständigen Bereich.
+- Grenze: keine neue Zahl. Technische Ursache der bestehenden Grenze: QUIC lässt je Verbindung 64 bidirektionale Ströme zu (`IROH_MAX_CONCURRENT_BIDI_STREAMS`), 4 bleiben für Steuerung und Blättern (`CONTROL_STREAM_RESERVE`); Bereichsströme zählen gegen `admission` (60) wie jede Übertragung, gleich ob sie dieselbe Datei betreffen.
+
+**E13-S2 (Bereichsschreiben Share und Agent): übernommen, mit geänderten Bedingungen.**
+- Den Stufennamen wählt allein der Wirt (`<Ziel>.se-upload-<16 Hex aus getrandom>`); der Client nennt nur das Ziel. Erzeugen ausschließlich (`create_new`), Elternordner geprüft wie bei `WriteNew` (Share: `fs_guard_*`; Agent: `ensure_destination_parent_plain` und `secure_staging_file`), Recht „neue Datei“, nicht in schreibgeschützten Räumen.
+- **Geändert:** Der Wirt behält das beim Erzeugen geöffnete Datei-Handle in der Stufentabelle und schreibt jeden Bereich über **dieses** Handle (`write_all_at`/`seek_write`); er öffnet die Stufe nie erneut per Pfad. `Finish` prüft Länge und Abdeckung über dasselbe Handle.
+- **Geändert:** Ein Bereich wird beim Annehmen der Anfrage als „belegt“ eingetragen (`pending`); überlappt er `covered ∪ pending`, lehnt der Wirt ab. Nach vollständigem Empfang wechselt er nach `covered`; scheitert er, wird er aus `pending` entfernt und darf neu geschrieben werden. Ohne `pending` könnten zwei gleichzeitige, überlappende Anfragen beide angenommen werden.
+- `offset + len` mit Überlaufprüfung, außerhalb `[0, size)` abgelehnt; mehr oder weniger als `len` Byte → Fehler, Bereich nicht abgedeckt.
+- Jede `StageWriteAt`/`WriteAt` und `Finish` prüft das Schreibrecht erneut (wie jede `WriteNew`); ist es entzogen oder der Raum schreibgeschützt geworden, wird abgelehnt und die Stufe entfernt.
+- Stufe gehört der öffnenden Verbindung und deren Prinzipal; fremde Verbindung → „unbekannte Stufe“.
+- Platz: **Geändert:** Der Wirt führt die Summe der noch nicht geschriebenen Bytes aller offenen Bereichsstufen (Reservierung) und lehnt `Open` mit `StorageFull` ab, wenn der freie Platz kleiner als `Reservierung + size` ist. Ursache: dünn besetzte Dateien belegen den Platz erst beim Schreiben; ohne Summe können mehrere Stufen den Datenträger gemeinsam überbelegen.
+- Zahl offener Stufen je Verbindung: Share `admission` (60, Ursache wie E13-S1), Agent `CREDIT_REQUEST_LIMIT` (Ursache: Kreditbudget der Verbindung). Darüber `Busy`.
+- Aufräumen bei Verbindungsende, `DiscardStage`, Zeitablauf ohne Fortschritt und beim Start des Wirts wie die vorhandenen `.se-upload-`-Stufen.
+
+**E13-S3 (LZ4): übernommen, mit Bedingungen.**
+- Nur Dateiinhalt; nie Steuerrahmen, Pfade, Namen, Fehlertexte, Listings, Hashes.
+- Jeder Block unabhängig, kein Wörterbuch, kein Zustand zwischen Blöcken oder Dateien. Damit gibt es kein Kompressionsorakel nach CRIME-Art: Dort mischt der Angreifer eigene Bytes mit einem Geheimnis im selben Kompressionskontext; hier stammt jeder Block aus genau einer Datei. Was ein Beobachter der verschlüsselten Verbindung lernt, ist höchstens die Komprimierbarkeit einzelner 256-KiB-Blöcke; das gilt für Direct und Räume gleich und ist hinnehmbar.
+- Harte Grenze mit Ursache: Rohlänge ≤ 262 144 (= `CHUNK`, der Empfangspuffer); größer → `InvalidData` ohne Entpacken. Entpacken mit `decompress_into` in einen Puffer genau der angesagten Rohlänge; abweichende Länge oder unvollständiger Block → `InvalidData`.
+- CPU-Last eines bösartigen Senders: LZ4-Entpacken ist linear in der Rohlänge; da der Kredit (Agent) bzw. das Stromfenster (Share) die Rohbytes zählt, ist der Aufwand je Zeit durch dieselbe Grenze gedeckelt wie bei rohen Daten. Kredit mit Rohlänge belasten (wie entworfen).
+- Aushandlung nur über die authentisierten Fähigkeiten (`fs_lz4_v1` im Hello der QUIC/TLS-Sitzung, `lz4-v1` im Versionstext im SSH-Kanal); ein Mittelsmann kann weder aufwerten noch herabstufen. Ohne Merkmal beider Seiten nie komprimiert.
+
+**E13-S4 (Agent-Labels, alte Gegenstellen): übernommen, mit Bedingungen.**
+- `SegStageOpen` nutzt dieselben Wächter wie `WriteNew` (`ensure_destination_parent_plain`, `create_new`, `secure_staging_file`); `WriteAt` schreibt über das Handle aus `SegStageOpen` (E13-S2), es gibt keinen eigenen Pfadweg. Der Umsetzer nennt die Prüffunktionen im Bericht.
+- Ohne Label `range-v1`/`lz4-v1` sendet der Client keinen neuen Rahmen; er nutzt den Bestandsweg ohne Fehler. Ein Server, der einen unbekannten Tag erhält, antwortet wie heute mit Fehler (kein stilles Ignorieren).
+- Der Agent läuft unter dem Konto des Dienstes (`run_as`); keine zusätzlichen Rechte.
+
+**E13-S5 (QUIC-Regler, Fenster, Speicher): übernommen, mit Bedingungen.**
+- `SE_SHARE_QUIC_CC` bleibt Messschalter: nur `bbr3` wählt BBRv3, jeder andere Wert und Fehlen `cubic`; keine Oberfläche, keine Einstellung. Wer die Umgebung des Prozesses setzt, steuert ihn ohnehin.
+- Vorgabe bleibt `cubic`, bis die Entscheidungsregel U44-11 (b) erfüllt ist (BBRv3 ist ein experimenteller Entwurf).
+- Fenster unverändert (P3). Speicher des Wirts: Die Verbindungsgrenze `CONNECTION_RECEIVE_WINDOW` (64 MiB) begrenzt die nicht bestätigten Bytes aller Ströme; die 16 MiB je Strom sind Obergrenzen, keine Zuteilung. Bedingung: das Budget von U50 darf `STREAM_RECEIVE_WINDOW` und `CONNECTION_RECEIVE_WINDOW` nicht erhöhen, nur senken; eine Erhöhung braucht eine neue Sicherheitsantwort.
+
+**E13-S6 (FTP-Proben): (a) geändert: darf entfallen, mit Bedingung; (b) übernommen: bleibt.**
+- (a) `FTP_PROBE_STAGE_NAME` darf `false` werden, **nur** für Stufennamen mit 64 Bit aus `getrandom` (`engine::util::random_hex` ohne Rückfallzweig, oder `vfs::unique_staging_path`). Ursache: Ein fremdes Objekt mit diesem Namen müsste vor `STOR` existieren; der Name ist vorher niemandem bekannt (Zufall 2⁻⁶⁴). Liefert `random_hex` den Rückfallwert (Zeit/Zähler, vorhersagbar), muss die Probe für diesen Namen laufen (oder `random_hex` meldet Fehler); der Umsetzer kennzeichnet den Rückfall dafür.
+- (b) `FTP_VERIFY_STAGE_BEFORE_RENAME` bleibt `true`. Ohne die Prüfung veröffentlicht `RNFR`/`RNTO` ein vertauschtes Objekt (Ordner, Link) unter dem Zielnamen, und se meldet Erfolg für Daten, die es nicht geschrieben hat. Die Probe des Ziels bleibt ohnehin.
+
+**E13-S7 (SFTP-Segmentstufe, Wiederöffnen per Pfad): geändert: Schreiber-Zweig nur mit Prüfung der Ordnerkette.**
+- Befund: SFTP v3 kennt kein `O_NOFOLLOW` und keine Inode in den Attributen; `fstat` kann einen Tausch durch einen Link nicht sicher erkennen, und ein vertauschter Pfad lässt die Bereiche in eine **fremde Datei** schreiben, die das se-Konto schreiben darf. Eine Bindung an `fsync@openssh.com`/`posix-rename` ändert daran nichts.
+- Entscheidung: `SFTP_SEGMENTED_WRITE = true` ist erlaubt, `open_segmented_stage` liefert aber nur dann `Some`, wenn **jeder** Ordner vom Elternordner der Stufe bis zur Wurzel (`/`) diese Regel erfüllt: Eigentümer ist das se-Konto (`uid` der frisch erzeugten Stufe) oder `uid 0`, **und** der Ordner ist für Gruppe und andere nicht beschreibbar (`mode & 0o022 == 0`) **oder** trägt das Sticky-Bit (`mode & 0o1000`) bei Eigentümer `uid 0`. Dann kann kein anderes Konto außer root einen Eintrag dieser Kette umbenennen oder ersetzen.
+- Liefert der Server für einen Ordner keine `uid` oder keine Rechte (z. B. Windows-Server), gilt die Regel als nicht erfüllt → ein Strom, ohne Fehler (U44-4 Punkt 11).
+- Die `stat`-Ergebnisse der Kette werden je Auftrag und Ordner einmal ermittelt (Kosten: eine Rundreise je Ordnerebene je Auftrag).
+- Zusätzlich bleibt die `fstat`-Prüfung jedes Bereichs-Handles vor dem ersten Byte (Größe = gesetzte Länge, Eigentümer = se-Konto) als zweite Linie.
+
+**E13-S8 (`se cp`/`get`/`put` auf der Engine): übernommen, mit Bedingungen.**
+- „Ziel fehlt“ wird mit `symlink_metadata`/`lstat` geprüft (nicht `exists`, das einen hängenden Link als fehlend sähe); ein Link als Wurzel bleibt im Bestandsweg.
+- Die Engine veröffentlicht ohne Ersetzen; ein Wettlauf endet als Fehler „existiert bereits“, nie als Überschreiben. `--force` und vorhandene Ziele bleiben im Bestandsweg.
+- Links und Spezialdateien im Baum: gemeldete Auslassungen wie im Bestand (`print_notices`), Exit-Code wie im Bestand.
+
+**E13-S9 (`transfer-hints.json`): geändert: übernommen mit Salz und Prüfung beim Lesen.**
+- Schlüssel = SHA-256 über ein zufälliges 32-Byte-Salz der Installation (in derselben Datei, beim ersten Schreiben aus `getrandom`) und die Identität. Ursache: ohne Salz lassen sich Schlüssel installationsübergreifend vorausberechnen und Nutzer über gleiche Server verknüpfen.
+- Rechte: Unix Datei `0600`, Ordner `0700`; Windows Standard-ACL des Profils. Schreiben atomar (Stufe + Umbenennen).
+- Beim Lesen: unbekannte oder unlesbare Einträge verwerfen; Grenzwerte außerhalb des gültigen Bereichs (0 oder über der Protokollgrenze des Flows) und Zeitstempel in der Zukunft verwerfen; nie Pfade oder Namen speichern, auch keine Tresorpfade.
+
+**E13-S10 (Sensoren, Priorität, Anzeige): übernommen, mit Bedingungen.**
+- Die genannten Lesezugriffe brauchen keine Rechte. Fehlt eine Quelle oder ist der Zugriff verboten (Android verweigert Apps `/proc/stat` seit Android 8; `/sys/class/net/*/speed` meldet `EINVAL` bei getrennter Leitung), gilt der Wert als unbekannt, nie als Fehler.
+- Priorität nur senken oder auf den Startwert zurücksetzen, nie über den Startwert anheben (keine negative `nice`, kein `THREAD_PRIORITY_ABOVE_NORMAL`).
+- `limiter_text` im MCP-Fortschritt nennt nur Laufwerksbezeichnung/Gerät und Leitungsrate, nie Datei- oder Ordnernamen; bei Tresororten „Tresor <Bezeichnung>“ (S2 aus U31).
+
+**E13-S11 (`COPY_FILE_REQUEST_COMPRESSED_TRAFFIC`): übernommen: nicht setzen.** `WINDOWS_REQUEST_COMPRESSED_TRAFFIC` bleibt `false`, ohne Schalter in einer Oberfläche. Ursache: `CopyFile2` meldet nicht, ob die SMB-Verbindung verschlüsselt ist, und Kompression vor Verschlüsselung ist der Fall der Frage.
+
+**E13-S12 (FTP-Bereiche, Pool-Anmeldungen): übernommen, mit Bedingungen.**
+- Bereiche nur auf bereits angemeldeten, freien Pool-Verbindungen (mindestens zwei frei); für Bereiche wird nie eine neue Anmeldung geöffnet.
+- Antwortet der Server mit 421 oder 530, endet die Datei als ein Strom ohne Fehler, die Verbindung merkt „keine Bereiche“ 15 Minuten und die gelernte Grenze sinkt; keine Wiederholungsschleife neuer Anmeldungen.
+
+**E13-S13 (SFTP-Pakete, offene Handles): übernommen, mit Bedingungen.**
+- Je Kanal höchstens `min(open-handles des Servers, 64)` gleichzeitige Handles (Ursache wie U44-5: Grenze des Servers bzw. Ulimit 1024 durch `MaxSessions` 10).
+- `SSH_FX_FAILURE` oder Kanalfehler beim `OPEN` gelten als Überlast (halbieren), nicht als Dateifehler; jedes Handle wird bei Abbruch und Fehler geschlossen.
+
+## Punkt 13: Hintergrundsperre bei offener Datei (S8 aus U31)
+
+Stand: im Quelltext fertig, nicht gebaut, nicht getestet, nicht committet; `rustfmt --check` leer.
+
+- `vault/os/shared/session_timer.rs::tick`: `open_files = Arc::strong_count(entry.session.keys()) > 1`; bei offenen Dateien geht der Ort ohne Hintergrundzeit in `SiteClock` (`background: None`). Damit melden `lock_policy::due` und `wake_in` für diesen Ort kein `Background`; schließt die letzte Datei, sperrt der nächste `tick` sofort, wenn die Zeit abgelaufen ist.
+- **Abweichung vom Auftrag:** kein neues Feld `SiteClock.open_files`. Grund: `vault/os/shared/session_lock_tests.rs` (nicht in meinem Bereich) baut `SiteClock` mit Feldliteral und bräche. Die Wirkung ist dieselbe; `lock_policy.rs` dokumentiert sie am Feld `background`.
+- Bildschirm aus: unverändert ein eigenes Signal in `set_host`, sperrt mit offener Datei sofort (Frist der Sperrteilnehmer 15 s).
+- Desktop und Daemon: keine Wirkung. `due` zählt die Hintergrundzeit nur auf `LockPlatform::Android`; die Leerlaufzeit war schon vorher null, solange eine Datei offen ist; Ruhezustand und Bildschirmsperre des Desktops sind Signale und bleiben unverändert.
+- Test `vault_task_android_background_waits_for_open_file` (Modul `vault::os::session::timer::open_file_tests`).
+
 ## Nächster Schritt
 
-Bericht zu Punkt 11 und 11b; danach auf den nächsten Auftrag warten.
+Bericht zu Punkt 12 und 13; danach auf den nächsten Auftrag warten.
