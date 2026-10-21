@@ -503,7 +503,7 @@ class LauncherTaskTest {
         val id = Regex("""id\s+(\d+)""").find(created)?.groupValues?.get(1)?.toIntOrNull()
         assumeTrue("nicht ausgeführt: Arbeitsprofil nicht anlegbar (DN17): $created", id != null)
         try {
-            val work: UserHandle = UserHandle.of(id!!)
+            val work: UserHandle = userHandleOf(id!!)
             val pm = appContext.packageManager
             val icon = pm.getApplicationIcon(pkg)
             val plain = render(icon.constantState!!.newDrawable().mutate())
@@ -802,7 +802,7 @@ class LauncherTaskTest {
         try {
             shell("am start-user $id")
             shell("pm install-existing --user $id $pkg")
-            val serial = appContext.getSystemService(android.os.UserManager::class.java).getSerialNumberForUser(UserHandle.of(id!!))
+            val serial = appContext.getSystemService(android.os.UserManager::class.java).getSerialNumberForUser(userHandleOf(id!!))
             body(id, serial)
         } finally {
             shell("pm remove-user $id")
@@ -1214,3 +1214,9 @@ class LauncherTaskTest {
         return bitmap
     }
 }
+
+/**
+ * The handle of user [id]. `UserHandle.of` is no public API; the handle of the uid
+ * `id × 100000` (the range of uids per user) is the same user.
+ */
+private fun userHandleOf(id: Int): UserHandle = UserHandle.getUserHandleForUid(id * 100_000)
