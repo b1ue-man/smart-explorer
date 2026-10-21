@@ -124,10 +124,35 @@ def smb_lib_test(ctx: common.JobContext, stage: str, servers: Servers) -> None:
     ctx.record(SMB_LIB, stage, status, reason or paths[0], duration)
 
 
+AGENT_RANGE_LABEL = b"range-v1"
+AGENT_STALE = ("eingebettetes Agent-Bündel ist älter als der Arbeitsbaum (kein range-v1); "
+               "der Release-Wrapper baut es neu")
+
+
+def agent_bundle_current() -> bool:
+    """The suite builds no agent bundle (AGENTS.md, D3): the committed one must already speak range-v1."""
+    bundle = common.NATIVE / "agent-bin" / "se-agent-x86_64-linux-musl"
+    return bundle.is_file() and AGENT_RANGE_LABEL in bundle.read_bytes()
+
+
+def without_stale_agent(ctx: common.JobContext, stage: str, plan: list, ways: tuple) -> tuple[list, tuple]:
+    """Agent cases are not started against an older embedded agent; each one is reported as not run."""
+    if agent_bundle_current():
+        return plan, ways
+    kept = []
+    for profile, names in plan:
+        for name in names:
+            if "_agent_" in name:
+                ctx.record(name, stage, NOT_RUN, AGENT_STALE)
+        kept.append((profile, [name for name in names if "_agent_" not in name]))
+    return kept, tuple(way for way in ways if way != "agent")
+
+
 def stage_net_large(ctx: common.JobContext, stage: str) -> None:
     ctx.record(GDRIVE, stage, NOT_RUN, "kein Google-Drive-Konto auf dem Runner (A53)")
     plan = [(profile, LARGE[profile]) for profile in ("lan", "wan", "fat", "loss")]
-    servers = net_stage(ctx, stage, plan, ("sftp", "ftp", "webdav", "smb", "agent", "share"))
+    plan, ways = without_stale_agent(ctx, stage, plan, ("sftp", "ftp", "webdav", "smb", "agent", "share"))
+    servers = net_stage(ctx, stage, plan, ways)
     if servers is None:
         ctx.record(SMB_LIB, stage, FAILED, ctx.state["speed_prepared"])
     else:
@@ -136,8 +161,9 @@ def stage_net_large(ctx: common.JobContext, stage: str) -> None:
 
 def stage_net_small(ctx: common.JobContext, stage: str) -> None:
     fetch_rclone(ctx)
-    net_stage(ctx, stage, [("lan", SMALL["lan"]), ("wan", SMALL["wan"])],
-              ("sftp", "ftp", "webdav", "smb", "agent", "share"))
+    plan, ways = without_stale_agent(ctx, stage, [("lan", SMALL["lan"]), ("wan", SMALL["wan"])],
+                                     ("sftp", "ftp", "webdav", "smb", "agent", "share"))
+    net_stage(ctx, stage, plan, ways)
     notes = ctx.state.setdefault("stage_notes", {})
     notes[stage] = (notes.get(stage, "") + "; " + ctx.state["speed_rclone"][1]).strip("; ")
 
@@ -172,12 +198,14 @@ def stage_ramp(ctx: common.JobContext, stage: str) -> None:
 
 def agent_bundle_problem() -> str | None:
     """The embedded agent honors ``SE_TEST_NO_LZ4`` only as a development build and must know ``lz4-v1``."""
+    if not agent_bundle_current():
+        return AGENT_STALE
     bundle = common.NATIVE / "agent-bin" / "se-agent-x86_64-linux-musl"
     data = bundle.read_bytes() if bundle.is_file() else b""
     missing = [label for label in (b"lz4-v1", b"SE_TEST_NO_LZ4") if label not in data]
     if missing:
         return ("das eingebettete Agent-Bündel native/agent-bin enthält " + ", ".join(m.decode() for m in missing)
-                + " nicht (Release-Bau ohne Messschalter oder älter als U53); build-agent-bundles.sh im Entwicklungsprofil nötig")
+                + " nicht (Release-Bau ohne Messschalter oder älter als U53); die Suite baut kein Bündel (AGENTS.md)")
     return None
 
 

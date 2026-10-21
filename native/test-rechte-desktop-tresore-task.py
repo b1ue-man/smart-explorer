@@ -29,13 +29,17 @@ Jobs and stages (D3; owner module in ``native/rdt_task``; ``inventory`` closes e
   windows-screen        setup, screen-windows                                     (U41)
   windows-desktop       setup, desktop-gui-harness, desktop-windows               (U41)
   desktop-bins          setup, desktop-bins                    (artifact rdt-desktop-bins)
-  android-build         setup, apk, drive-android, vault-android, screen-jvm (U41), launcher-jvm (U41)
+  android-build         setup, apk, drive-android, vault-android, screen-jvm (U41), launcher-jvm (U41), speed-jvm (U54)
                         (artifact rdt-apks)
   android-device        device-setup, perm-android-device, drive-android-device,
                         vault-android-device, screen-android-device (U41),
-                        launcher-android-device (U41), android-bestand
+                        launcher-android-device (U41), speed-android-device (U55), android-bestand
   android-device-api30  device-setup, perm-android-api30, screen-android-api30 (U41),
                         launcher-android-api30 (U41)
+  linux-speed-net       setup, speed-ref, speed-net-large, speed-net-small, speed-raw, speed-ramp,
+                        speed-compress, speed-limiter, speed-room, speed-cli          (U55)
+  linux-speed-local     setup, speed-ref-local, speed-local                           (U55)
+  windows-speed         setup, speed-windows                                          (U55)
   report                overview of every job; a job without report.json becomes "nicht ausgeführt"
 
 The Android device jobs call this script twice: ``--phase device`` inside the emulator action,
@@ -67,6 +71,7 @@ from rdt_task import common  # noqa: E402
 
 C, PREPARE, LICENSES, PERM, DRIVE, VAULT = ("common",), ("prepare",), ("licenses",), ("perm",), ("drive",), ("vault",)
 SCREEN, DESKTOP, LAUNCHER = ("screen",), ("desktop",), ("launcher",)
+SPEED = ("common", "speed")
 INVENTORY_STAGE = ("inventory", ())
 
 JOBS: dict[str, list[tuple[str, tuple[str, ...]]]] = {
@@ -92,16 +97,23 @@ JOBS: dict[str, list[tuple[str, tuple[str, ...]]]] = {
                         INVENTORY_STAGE],
     "desktop-bins": [("setup", C), ("desktop-bins", C), INVENTORY_STAGE],
     "android-build": [("setup", C), ("apk", C), ("drive-android", DRIVE), ("vault-android", VAULT),
-                      ("screen-jvm", SCREEN), ("launcher-jvm", LAUNCHER), INVENTORY_STAGE],
+                      ("screen-jvm", SCREEN), ("launcher-jvm", LAUNCHER),
+                      ("speed-jvm", SPEED), INVENTORY_STAGE],
     "android-device": [("device-setup", C), ("perm-android-device", PERM), ("drive-android-device", DRIVE),
                        ("vault-android-device", VAULT), ("screen-android-device", SCREEN),
-                       ("launcher-android-device", LAUNCHER), ("android-bestand", C), INVENTORY_STAGE],
+                       ("launcher-android-device", LAUNCHER), ("speed-android-device", SPEED), ("android-bestand", C),
+                       INVENTORY_STAGE],
     "android-device-api30": [("device-setup", C), ("perm-android-api30", PERM), ("screen-android-api30", SCREEN),
                              ("launcher-android-api30", LAUNCHER), INVENTORY_STAGE],
+    "linux-speed-net": [("setup", C), ("speed-ref", SPEED), ("speed-net-large", SPEED), ("speed-net-small", SPEED),
+                        ("speed-raw", SPEED), ("speed-ramp", SPEED), ("speed-compress", SPEED), ("speed-limiter", SPEED),
+                        ("speed-room", SPEED), ("speed-cli", SPEED), INVENTORY_STAGE],
+    "linux-speed-local": [("setup", C), ("speed-ref-local", SPEED), ("speed-local", SPEED), INVENTORY_STAGE],
+    "windows-speed": [("setup", C), ("speed-windows", SPEED), INVENTORY_STAGE],
 }
 STAGE_TABLE = {job: [stage for stage, _ in plan] for job, plan in JOBS.items()}
 EXPECTED_API = {"android-device": 36, "android-device-api30": 30}
-MODULE_NAMES = ("common", "prepare", "licenses", "perm", "drive", "vault", "screen", "desktop", "launcher")
+MODULE_NAMES = ("common", "prepare", "licenses", "perm", "drive", "vault", "screen", "desktop", "launcher", "speed")
 EMULATOR_MARKER = ".rdt-emulator-started"
 
 

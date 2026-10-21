@@ -50,6 +50,9 @@ JOB_EXPECTATIONS = {
     "android-build": ("ubuntu-24.04", 180, ("prepare",), True),
     "android-device": ("ubuntu-24.04", 240, ("android-build", "desktop-bins"), False),
     "android-device-api30": ("ubuntu-24.04", 150, ("android-build", "desktop-bins"), False),
+    "linux-speed-net": ("ubuntu-24.04", 300, ("prepare", "desktop-bins"), True),
+    "linux-speed-local": ("ubuntu-24.04", 120, ("prepare",), True),
+    "windows-speed": ("windows-2025", 120, ("prepare",), True),
     "report": ("ubuntu-24.04", 30, (), False),
 }
 

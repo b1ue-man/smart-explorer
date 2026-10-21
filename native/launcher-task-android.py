@@ -19,6 +19,9 @@ holder, ``appwidget grantbind``, notification listener, work profile and private
             passes them only when the artifact ``rdt-apks`` contains ``launcher-helper.apk`` and
             ``launcher-helper.package`` (one line: the package name); otherwise the test reports "nicht
             ausgeführt" itself (assumption failure).
+``se-pair``   the Share pair of D 682 (runner ↔ emulator) comes from ``android/test-servers/share-desktop.sh``
+            (``up``, ``args``, ``down``), the same helper the RV1 device run uses; its arguments are
+            ``seShareServer``, ``seRoomCode``, ``seDesktopDevice``, ``seDesktopDirectCode`` and the room file.
 ``home role``  the stage restores the HOME role holder of the emulator image at its end, so later stages
             (``android-bestand``) find the system launcher again.
 """
@@ -35,12 +38,43 @@ HELPER_APK = "launcher-helper.apk"
 HELPER_PACKAGE = "launcher-helper.package"
 DEVICE_TMP = "/data/local/tmp"
 
-# method -> list of steps; a step is ("run", [(arg, value), ...]) or ("reinstall-app", []).
+# method -> list of steps (kind, [(arg, value), ...]); values may name an observation as "{pid}" or "{tile}".
+#   run                  one instrumentation run of the method with these arguments
+#   reinstall-app        adb install -r of the same app APK (A30)
+#   kill-home-observe    am kill <package>, Home, then pidof (-> {pid}) and the screen texts (-> {tile})
+#   kill-widget-update   am kill <package>, APPWIDGET_UPDATE to the devices widget with the id the first phase
+#                        wrote to files/task-report/devices-widget-id.txt, then pidof (-> {pid})
+#   pair-down            takes the runner's Share side offline (share-desktop.sh down); runs last
 PHASES: dict[str, list[tuple[str, list[tuple[str, str]]]]] = {
     REPLACE: [("run", [("launcher_replace_phase", "before")]),
               ("reinstall-app", []),
               ("run", [("launcher_replace_phase", "after")])],
+    "launcher_task_no_bind_when_main_process_absent": [
+        ("run", [("launcherMainAbsentPhase", "prepare")]),
+        ("kill-home-observe", []),
+        ("run", [("launcherMainAbsentPhase", "verify"), ("launcherMainPidAfterHome", "{pid}"),
+                 ("launcherTileAfterHome", "{tile}")])],
+    "launcher_task_devices_widget_does_not_start_core": [
+        ("run", [("launcherWidgetCorePhase", "prepare")]),
+        ("kill-widget-update", []),
+        ("run", [("launcherWidgetCorePhase", "verify"), ("launcherWidgetMainPidAfterUpdate", "{pid}")])],
+    # Last: it takes the Share pair offline for the second phase.
+    "launcher_task_devices_from_bridge": [
+        ("run", [("launcherDevicesPhase", "online")]),
+        ("pair-down", []),
+        ("run", [("launcherDevicesPhase", "offline")])],
 }
+WIDGET_PROVIDER = ".widget.DevicesWidgetProvider"
+WIDGET_ID_FILE = "files/task-report/devices-widget-id.txt"
+SHARE_HELPER = "android/test-servers/share-desktop.sh"
+
+
+def tile_text(dump: str) -> str:
+    """The screen text that says whether the tile is current (``uiautomator dump`` XML)."""
+    import re
+    texts = [text for text in re.findall(r'text="([^"]*)"', dump) if text]
+    marked = [text for text in texts if "nicht aktuell" in text]
+    return (marked or texts or ["(kein Text)"])[0][:200]
 
 
 def home_holder_args() -> list[str]:
