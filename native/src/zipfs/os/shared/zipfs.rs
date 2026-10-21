@@ -9,6 +9,7 @@
 //! demand (entry.rs). Mutations are unsupported (read-only) — extract to edit.
 
 use super::entry::{self, Archive, ArchiveFile};
+use super::extract_replace;
 use super::names::enclosed_name;
 use crate::vfs::{Backend, Scheme, VfsMeta, VfsResult};
 use std::collections::HashMap;
@@ -255,32 +256,17 @@ fn readonly() -> io::Error {
 }
 
 /// Extract the whole archive into `dest` (created if missing). Uses
-/// `enclosed_name` so a malicious archive can't escape `dest` (zip-slip safe).
+/// `enclosed_name` so a malicious archive can't escape `dest` (zip-slip safe);
+/// link entries are not extracted and no entry is written through a link that
+/// already exists below `dest` (see `extract_replace.rs`); an existing regular
+/// file is replaced. Skipped entries are reported on stderr.
 /// Returns the number of files written.
 pub fn extract_all(zip_path: &str, dest: &Path) -> io::Result<usize> {
-    let f = std::fs::File::open(native(zip_path))?;
-    let mut ar = zip::ZipArchive::new(f).map_err(zip_err)?;
-    std::fs::create_dir_all(dest)?;
-    let mut count = 0usize;
-    for i in 0..ar.len() {
-        let mut e = ar.by_index(i).map_err(zip_err)?;
-        let rel = match enclosed_name(&e) {
-            Some(p) => p,
-            None => continue, // unsafe / absolute path — skip
-        };
-        let out = dest.join(rel);
-        if e.is_dir() {
-            std::fs::create_dir_all(&out)?;
-        } else {
-            if let Some(p) = out.parent() {
-                std::fs::create_dir_all(p)?;
-            }
-            let mut w = std::fs::File::create(&out)?;
-            io::copy(&mut e, &mut w)?;
-            count += 1;
-        }
+    let report = extract_replace::extract_replacing(&native(zip_path), dest)?;
+    for (name, reason) in &report.skipped {
+        eprintln!("Entpacken: {name} übersprungen: {reason}");
     }
-    Ok(count)
+    Ok(report.files)
 }
 
 #[cfg(test)]
