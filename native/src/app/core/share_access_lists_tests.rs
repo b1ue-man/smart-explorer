@@ -20,7 +20,7 @@ const NOW: i64 = 1_760_000_000;
 
 fn request(id: u8, device: &str, capability: Capability, command: ApprovalCommand) -> ApprovalView {
     ApprovalView {
-        id: ApprovalId::parse(format!("{id:02x}").repeat(16)).unwrap(),
+        id: ApprovalId::parse(&format!("{id:02x}").repeat(16)).unwrap(),
         device_name: format!("Name {device}"),
         device_id: device.into(),
         fingerprint: format!("fp-{device}"),

@@ -178,7 +178,10 @@ fn sync_reliability_task_provider_rejected_refresh_preserves_epoch_and_launch() 
         .apply_configuration_authorizations(
             1,
             &crate::share::relation_rights::RestrictionSet::default(),
-            &[(principal.clone(), 2, false), (principal, 2, true)],
+            &[
+                (principal.clone(), 2, false, false),
+                (principal, 2, true, false),
+            ],
         )
         .is_err());
     assert!(reservation.cancellation.reason().is_none());

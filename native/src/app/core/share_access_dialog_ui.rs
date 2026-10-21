@@ -82,6 +82,7 @@ impl AccessDraft {
         (base, programs): (AccessGrant, Vec<String>),
         (accounts, helper): (Vec<AccountOption>, HelperState),
     ) -> Self {
+        let ask = base.capabilities().any(|(_, decision)| decision == Ask);
         let mut draft = Self {
             key: key.into(),
             title: title.into(),
@@ -90,7 +91,7 @@ impl AccessDraft {
             account: base.account.clone(),
             programs: programs.clone(),
             base_programs: programs,
-            ask: base.capabilities().any(|(_, decision)| decision == Ask),
+            ask,
             preset: None,
             period: Period::Keep,
             base,

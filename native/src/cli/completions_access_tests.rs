@@ -163,7 +163,7 @@ fn perm_task_completions_access() {
 
     // Open requests by id for `approve` and `deny`.
     let request = ApprovalView {
-        id: ApprovalId::parse("ab".repeat(16)).unwrap(),
+        id: ApprovalId::parse(&"ab".repeat(16)).unwrap(),
         device_name: "Laptop".into(),
         device_id: "laptop".into(),
         fingerprint: "fp-laptop".into(),
