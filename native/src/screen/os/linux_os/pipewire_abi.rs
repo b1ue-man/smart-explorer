@@ -22,6 +22,8 @@ pub(crate) const PW_STREAM_FLAG_AUTOCONNECT: u32 = 1 << 0;
 pub(crate) const PW_STREAM_FLAG_MAP_BUFFERS: u32 = 1 << 2;
 pub(crate) const SPA_PARAM_FORMAT: u32 = 4;
 pub(crate) const PW_STREAM_STATE_ERROR: c_int = -1;
+/// `SPA_CHUNK_FLAG_CORRUPTED`: the chunk's data must not be looked at.
+pub(crate) const SPA_CHUNK_FLAG_CORRUPTED: i32 = 1 << 0;
 /// `PW_VERSION_STREAM_EVENTS`.
 pub(crate) const PW_VERSION_STREAM_EVENTS: u32 = 2;
 

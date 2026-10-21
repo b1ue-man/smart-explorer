@@ -267,37 +267,96 @@ fn private_data_home() -> tempfile::TempDir {
     directory
 }
 
-fn first_frame(source: &mut PortalSource, within: Duration) -> BgraImage {
-    first_frame_nudged(source, within, || {})
+/// Why the wait for the first picture ended without one.
+enum NoPicture {
+    /// `capture` failed.
+    Source(io::Error),
+    /// The time ran out; the text names where the session stands.
+    Silent(String),
 }
 
 /// Waits for the first picture; `nudge` runs every 250 ms meanwhile. A
-/// compositor records a picture when the screen changes (KWin's virtual
-/// output may send none for a screen that never changes), so a check that
-/// can change the screen does so here; the picture still has to arrive.
-/// The failure text names where the session stands (`describe`).
-fn first_frame_nudged(
+/// compositor records a picture when the screen changes, so a check that can
+/// change the screen does so here; the picture still has to arrive.
+fn await_picture(
     source: &mut PortalSource,
     within: Duration,
     mut nudge: impl FnMut(),
-) -> BgraImage {
+) -> Result<BgraImage, NoPicture> {
     let started = Instant::now();
     let mut next_nudge = started;
     loop {
-        match source.capture(1, true).expect("the portal source works") {
-            SourceFrame::Frame(image) => return image,
+        match source.capture(1, true).map_err(NoPicture::Source)? {
+            SourceFrame::Frame(image) => return Ok(image),
             SourceFrame::Paused(_) | SourceFrame::Unchanged => {}
         }
-        assert!(
-            started.elapsed() < within,
-            "no picture from the portal; {}",
-            source.describe()
-        );
+        if started.elapsed() >= within {
+            return Err(NoPicture::Silent(source.describe()));
+        }
         if Instant::now() >= next_nudge {
             nudge();
             next_nudge = Instant::now() + Duration::from_millis(250);
         }
         std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// A DRM render node (`/dev/dri/renderD*`) exists on this machine.
+fn has_render_node() -> bool {
+    std::fs::read_dir("/dev/dri").is_ok_and(|mut entries| {
+        entries.any(|entry| {
+            entry.is_ok_and(|entry| entry.file_name().to_string_lossy().starts_with("renderD"))
+        })
+    })
+}
+
+/// The first picture of a wlroots portal; the check ends as "nicht
+/// ausgeführt" where that portal cannot cast at all. xdg-desktop-portal-wlr
+/// 0.7.x (Ubuntu 24.04: 0.7.1) answers `Start` with an error (`start_screencast`
+/// returns -1, "unable to receive a valid format from wlr_screencopy", logged
+/// at INFO only) unless wlr-screencopy offers a DMA-BUF format, and wlroots
+/// 0.17 offers one only for an output with a DMA-BUF allocator (a GBM device on
+/// a render node, `wlr_screencopy_v1.c`: `output->allocator->buffer_caps`).
+/// xdg-desktop-portal then reports response 2 ("Other") and "A backend call
+/// failed: Operation not permitted" (-EPERM is the -1).
+fn first_frame(source: &mut PortalSource, within: Duration) -> BgraImage {
+    match await_picture(source, within, || {}) {
+        Ok(image) => image,
+        Err(NoPicture::Source(error))
+            if error.kind() == io::ErrorKind::PermissionDenied
+                && error.to_string() == "portal_denied: Other"
+                && !has_render_node() =>
+        {
+            panic!(
+                "nicht ausgeführt: xdg-desktop-portal-wlr 0.7 startet ohne DMA-BUF-Format von \
+                 wlr-screencopy keinen Screencast, und der kopflose Sway dieses Rechners hat \
+                 ohne DRM-Renderknoten (/dev/dri/renderD*) keinen DMA-BUF-Allocator ({error})"
+            )
+        }
+        Err(NoPicture::Source(error)) => panic!("the portal source works: {error:?}"),
+        Err(NoPicture::Silent(state)) => panic!("no picture from the portal; {state}"),
+    }
+}
+
+/// Waits until the stream of a session shows that it runs; `nudge` runs
+/// every 250 ms and moves the pointer. A picture shows it, and so do chunks
+/// that carry only the cursor: KWin 5.27 emits `Output::outputChange`, the
+/// only trigger of a frame with content (`ScreencastManager::streamOutput`),
+/// in its DRM and nested Wayland backends and not in `--virtual`, and
+/// `xdg-desktop-portal-kde` starts the streams of a RemoteDesktop session
+/// with cursor mode Metadata whatever the program asked for
+/// (`RemoteDesktopPortal::Start`), so a pointer move reaches the stream as a
+/// chunk of size 0 flagged corrupted (`recordCursor`). `--virtual` has no
+/// pointer of its own: those chunks follow the moves `nudge` injects. The
+/// answer names what arrived.
+fn stream_runs_nudged(source: &mut PortalSource, within: Duration, nudge: impl FnMut()) -> String {
+    match await_picture(source, within, nudge) {
+        Ok(image) => format!("picture {:?}", image.size()),
+        Err(NoPicture::Source(error)) => panic!("the portal source works: {error:?}"),
+        Err(NoPicture::Silent(state)) if source.only_empty_chunks() => {
+            format!("cursor chunks only; {state}")
+        }
+        Err(NoPicture::Silent(state)) => panic!("no picture from the portal; {state}"),
     }
 }
 
@@ -384,15 +443,17 @@ fn screen_task_kde_remote_desktop_input() {
         ..PortalOptions::default()
     };
     let mut source = PortalSource::with_handle(PortalSession::start(options).unwrap());
-    // The pointer moves while the picture is awaited: with the cursor in the
-    // picture (`CursorMode::Embedded`) that is a change of the screen, and
-    // the session only takes input once the stream runs.
+    // The pointer moves while the stream is awaited: with the cursor in the
+    // picture (`CursorMode::Embedded`) that is a change of the screen, with
+    // cursor metadata (KDE's RemoteDesktop streams) a cursor chunk; the
+    // session only takes input once the stream runs.
     let mut step = 0u32;
-    let _ = first_frame_nudged(&mut source, Duration::from_secs(60), || {
+    let answered = stream_runs_nudged(&mut source, Duration::from_secs(60), || {
         step += 1;
         let at: u16 = 16_384 + (step % 2) as u16 * 32_768;
         let _ = super::super::portal_input::inject(&[InputEvent::PointerAbs { x: at, y: at }]);
     });
+    println!("KDE RemoteDesktop stream: {answered}");
     let events = [
         InputEvent::PointerAbs {
             x: 32_768,

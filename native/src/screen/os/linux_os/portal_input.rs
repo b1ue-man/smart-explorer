@@ -115,10 +115,11 @@ async fn run(
             return;
         }
     };
-    register_host_app_once().await;
     let opened = async {
-        let remote = RemoteDesktop::new().await?;
-        let screencast = Screencast::new().await?;
+        let connection = super::portal_session::connection::shared().await?;
+        register_host_app_once(&connection).await;
+        let remote = RemoteDesktop::with_connection(connection.clone()).await?;
+        let screencast = Screencast::with_connection(connection).await?;
         let session = remote.create_session(Default::default()).await?;
         Ok::<_, ashpd::Error>((remote, screencast, session))
     };

@@ -24,6 +24,9 @@ use crate::screen::core::host_backend::{ScreenSource, SourceFrame};
 use crate::screen::core::pixel_convert::FrameSize;
 use crate::screen::core::session_state::SessionState;
 
+#[path = "portal_connection.rs"]
+pub(super) mod connection;
+
 /// Size of a portal source until the first picture names the real one.
 pub(crate) const PORTAL_PROVISIONAL: FrameSize = FrameSize::new(1280, 720);
 /// The failure text of a system without PipeWire.
@@ -162,8 +165,16 @@ async fn run(
             return;
         }
     };
-    register_host_app_once().await;
-    let screencast = match ashpd::desktop::screencast::Screencast::new().await {
+    let connection = match connection::shared().await {
+        Ok(connection) => connection,
+        Err(error) => {
+            set(state, PortalState::Failed(format!("portal: {error}")));
+            return;
+        }
+    };
+    register_host_app_once(&connection).await;
+    let screencast = match ashpd::desktop::screencast::Screencast::with_connection(connection).await
+    {
         Ok(screencast) => screencast,
         Err(error) => {
             set(state, PortalState::Failed(format!("portal: {error}")));
@@ -267,13 +278,13 @@ async fn negotiate(
 /// Registers the program with the portal once per process; a portal before
 /// 1.19.4 or an application id without a dot fails, which changes nothing
 /// for the screen cast (A10).
-pub(super) async fn register_host_app_once() {
+pub(super) async fn register_host_app_once(connection: &ashpd::zbus::Connection) {
     static TRIED: AtomicBool = AtomicBool::new(false);
     if TRIED.swap(true, Ordering::SeqCst) {
         return;
     }
     if let Ok(app_id) = "smart-explorer".parse::<ashpd::AppID>() {
-        let _ = ashpd::register_host_app(app_id).await;
+        let _ = ashpd::register_host_app_with_connection(connection.clone(), app_id).await;
     }
 }
 
@@ -310,6 +321,18 @@ impl PortalSource {
             PortalState::Streaming(latest) => format!("portal: streaming; {}", latest.describe()),
             PortalState::Denied(text) => format!("portal: denied: {text}"),
             PortalState::Failed(text) => format!("portal: failed: {text}"),
+        }
+    }
+}
+
+#[cfg(test)]
+impl PortalSource {
+    /// The stream runs and has sent only empty or corrupted chunks so far:
+    /// the compositor reports cursor moves, no change of the screen.
+    pub(crate) fn only_empty_chunks(&self) -> bool {
+        match &*self.handle.lock() {
+            PortalState::Streaming(latest) => latest.only_empty_chunks(),
+            _ => false,
         }
     }
 }
