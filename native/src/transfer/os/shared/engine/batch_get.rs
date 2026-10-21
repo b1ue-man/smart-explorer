@@ -13,7 +13,7 @@ use super::super::memory::reserve_memory;
 use super::super::walk_listers::native;
 use super::batch::{Attempt, Failures};
 use super::download::{existing, publish_local, Part};
-use super::ops::{relabeled, Meter, OpError, OpResult};
+use super::ops::{nanos, relabeled, Meter, OpError, OpResult};
 use super::queue::FileWork;
 use super::source::RemoteCheck;
 use super::worker::{finished, run_file, target_refuses};
@@ -58,12 +58,17 @@ pub(super) fn download(
         )));
         return;
     }
+    let memory_asked = Instant::now();
     let Some(reservation) = reserve_memory(bytes, engine.stop_flag()) else {
         return;
     };
+    let memory_wait = nanos(memory_asked.elapsed());
+    engine.stats.book_memory_wait(memory_wait);
+    let permit_asked = Instant::now();
     let Some(permits) = engine.acquire() else {
         return;
     };
+    let waited = memory_wait.saturating_add(nanos(permit_asked.elapsed()));
     let active = engine
         .stats
         .begin(&format!("{} kleine Dateien (Paket)", members.len()));
@@ -77,7 +82,9 @@ pub(super) fn download(
         })
         .collect();
     let meter = Meter::new(&permits, &engine.stats);
+    meter.add_wait(waited);
     let started = Instant::now();
+    let local_before = local_time(&meter);
     let (result, outcomes, received) = {
         let mut sink = Sink {
             engine,
@@ -90,10 +97,18 @@ pub(super) fn download(
         let result = source.get_batch(&items, &mut sink);
         (result, sink.outcomes, sink.received)
     };
-    permits.finish(match &result {
-        Ok(()) => OpOutcome::Done,
-        Err(error) => classify_error(error),
-    });
+    // Hashing and writing here are booked as they happen; the rest of the
+    // call is the wire and the peer: the source.
+    let local = local_time(&meter).saturating_sub(local_before);
+    meter.add_source_ns(nanos(started.elapsed()).saturating_sub(local));
+    let accounts = meter.accounts();
+    permits.finish_with(
+        match &result {
+            Ok(()) => OpOutcome::Done,
+            Err(error) => classify_error(error),
+        },
+        accounts,
+    );
     drop(active);
     drop(reservation);
     // Refused before anything was sent: each file goes alone.
@@ -189,6 +204,12 @@ struct Current {
     changed: bool,
 }
 
+/// Time spent on this side of the packet so far (hashing and writing).
+fn local_time(meter: &Meter<'_>) -> u64 {
+    let accounts = meter.accounts();
+    accounts.cpu_ns.saturating_add(accounts.target_ns)
+}
+
 struct Sink<'s, 'e, 'm> {
     engine: &'s Engine<'e>,
     members: &'s [(FileWork, PathBuf)],
@@ -282,14 +303,14 @@ impl BatchSink for Sink<'_, '_, '_> {
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Paket-Eintrag unbekannt"))?;
         let written = current.part.as_ref().map_or(0, Part::written);
         if let Some(check) = current.check.as_mut() {
-            if let Err(failure) = check.update(file, written, bytes) {
+            if let Err(failure) = self.meter.timed_cpu(|| check.update(file, written, bytes)) {
                 current.failure = Some(failure);
                 current.part = None;
                 return Ok(());
             }
         }
         if let Some(part) = current.part.as_mut() {
-            if let Err(failure) = part.write(bytes) {
+            if let Err(failure) = self.meter.timed_target(|| part.write(bytes)) {
                 return self.local_failure(failure.error);
             }
         }
