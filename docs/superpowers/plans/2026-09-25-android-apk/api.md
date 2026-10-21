@@ -18,8 +18,17 @@ JNI-Klasse `app.smartexplorer.android.core.NativeBridge` (Kotlin `object`), Bibl
 - Alle Strings UTF-8-JSON. `call` ist synchron und darf Sekunden dauern (Kotlin ruft auf
   `Dispatchers.IO`). Alles, was länger als ~2 s dauern kann oder Fortschritt hat, ist ein Task (§3).
 - Antwort von `init` und `call`: `{"ok": <Wert>}` oder `{"err": {"kind": "<Art>", "message": "<Text>"}}`.
-  `kind` ∈ `not_found, permission, exists, invalid, unsupported, network, auth, conflict, busy,
-  canceled, not_initialized, internal, weak_pin`. `message` ist deutscher Anzeigetext (wie Desktop).
+  `kind` ∈ `invalid, not_found, permission, exists, unsupported, network, auth, conflict, busy,
+  canceled, not_initialized, internal, weak_pin, host_key_unknown, sync_failed, hook` sowie die
+  Tresor-Codes (unten). Stand 2026-10-21 aus dem Quelltext belegt (`native/src/mobile/core/error.rs`,
+  `ApiError::new`/`invalid`/`not_found`/…-Aufrufe in `native/src/mobile/`); `invalid_argument` kommt
+  im Code nicht vor. `message` ist deutscher Anzeigetext (wie Desktop).
+  - Tresor-Codes (`native/src/vault/core/error_texts.rs`, `vault_use_provider` in
+    `native/src/vault/core/klartext_policy.rs`): `vault_locked, vault_wrong_password,
+    vault_unsupported_format, vault_hub, vault_memory, vault_no_saved_password, vault_unsaved_changes,
+    vault_not_atomic, vault_use_provider, compare_stale, compare_too_large`.
+  - `approval_unavailable` ist ein Ergebnis der Rückfrage (Protokoll und Startverweigerung des Hosts),
+    kein Fehler der Brücke.
 - Brücke: jede Funktion fängt Paniken und Fehler und liefert dann
   `{"err":{"kind":"internal","message":"…"}}`; sie wirft nie eine Java-Exception.
 - `pollEvents` liefert `{"ok": [Event, …]}` (leeres Array bei Timeout, höchstens 256 Ereignisse).
@@ -121,13 +130,40 @@ Ereignisse (`pollEvents`):
 {"type":"volumes"}                   Speicherorte geändert
 {"type":"wake","ms":N}               Kern braucht die CPU N ms wach (Server-Keepalive, eingehende Anfrage
                                      oder Streams im Ruhemodus) → Partial-Wakelock, längere Anforderung gewinnt
+{"type":"docs.changed","roots":Boolean,"documents":[id…],"commitFailed":Boolean}
+                                     Dokumentanbieter: Wurzeln oder Ordner geändert, `commitFailed` bei
+                                     fehlgeschlagenem Festschreiben (§4.11)
+{"type":"vault","site":"…","state":"unlocked|locked|locking",
+ "reason":"screen_off|background|idle|manual|process_end"|null}
+                                     Tresor entsperrt oder gesperrt; `reason` nur für die fünf Gründe der
+                                     Oberflächen, sonst `null` (§4.13)
+{"type":"screenHostStart","session":N,"source":"…","still":Boolean,"maxWidth":N,"maxHeight":N,
+ "viewerName":"…","viewerDeviceId":"…"}
+                                     Bildschirm-Host: eine Sitzung beginnt (§4.12)
+{"type":"screenSession","session":N,"state":"…","reason":String?}
+                                     Bildschirm-Host: Zustand einer Sitzung (§4.12)
+{"type":"screenView","session":N,"kind":"pending|accepted|state|stream|stats|controlState|windows|error|ended",…}
+                                     Bildschirm-Betrachter: Fortschritt einer Ansichtssitzung (§4.12)
 ```
+`syncProblem` mit `jobId` `vault:<job>` (Konflikte eines Tresor-Syncs, Titel „Tresor-Sync: Konflikte“) öffnet
+den Vergleich des Tresors statt der Jobkonflikte (`AppNav`, `NavRequest.OpenVaultCompare`).
+
+Navigationsarten (Android-Intent `ACTION_NAVIGATE` mit Extras `kind`, `value`, `token`; kein Aufruf der
+Brücke; Kotlin `ui/AppNav.kt`, Funktion `decode`): `openLocation`, `selectTab`, `showTransfers`,
+`openJobConflicts` (Wert `vault:<job>` → Tresor-Vergleich), `showShareRequests`, `showUpdate`,
+`showBackgroundSettings`, `openScreen`, `showScreenGrid`, `openVaultCompare`, `showLauncherSettings` (ohne
+Wert; öffnet im Reiter „Mehr“ die Einstellungen des Launchers, `MoreScreen.kt`). Unbekannte Art oder fehlender
+Wert, wo einer nötig ist: keine Navigation. Der Intent trägt nur dann eine Anfrage, wenn sein Token dem der
+Installation entspricht (`fromIntent`).
 
 ## 4 Methoden
 
 ### 4.1 System (`sys.*`)
 - `sys.hostState {powerSave:Boolean, metered:Boolean, wifi:Boolean, charging:Boolean, foreground:Boolean,
-  deferScheduling:Boolean}` → `{}` (fehlende Felder = false). `foreground:false` schaltet Share in den
+  deferScheduling:Boolean, screenOn:Boolean, storageAccess:Boolean?}` → `{}` (fehlende Felder = false,
+  außer `screenOn`: fehlt es, gilt der Bildschirm als an). `screenOn` reicht an die Tresor-Sitzungen
+  weiter (`vault`-Sperre bei aus und im Hintergrund, §4.13); `storageAccess` fehlt → unverändert, sonst
+  Alle-Dateien-Zugriff (`Permissions.hasAllFilesAccess()` in `HostMonitor.kt`) erlaubt oder nicht (`native/src/mobile/os/shared/sys.rs`). `foreground:false` schaltet Share in den
   Ruhemodus (`share::power::set_low_power`); `deferScheduling:true` hält geplante Jobs (Start, Zeitplan,
   Echtzeit, Anschluss) zurück, laufende Jobs und `bg.catchUp` bleiben unberührt (Modus „Periodisch“ bei
   verdeckter App). Der eingebettete Daemon startet zurückgestellt, bis der erste `sys.hostState` kommt.
@@ -199,7 +235,7 @@ Ereignisse (`pollEvents`):
 - `scan.validate {filter}` → `{error:String?}`
 - `scan.start {location, filter:Filter?, showHidden}` → `{taskId}` (rekursiv, Filter beim Scannen,
   Fortschritt: `doneItems` = durchsucht, `totalItems` = Treffer; `message` bei Grenze/Lesefehlern)
-- `scan.view {taskId, sort:Sort, collapsed:[location], offset:Int, limit:Int (≤ 500), sinceRevision:Long?}`
+- `scan.view {taskId, sort:Sort, collapsed:[location], offset:Int, limit:Int?, sinceRevision:Long?}` (`limit` ohne Angabe: alle Zeilen ab `offset`; mit Angabe mindestens 1, Kotlin `FilesApi.scanView` sendet mindestens 1)
   → `{revision:Long, unchanged:Boolean, entries:[Entry], visibleTotal, matches, scanned,
   truncated:Boolean, issues:Int}` (Baumreihenfolge, `depth`, `hasChildren`, `expanded`; Fenster ab
   `offset`; `unchanged=true` und leere `entries`, wenn `sinceRevision` aktuell ist und dasselbe Fenster
@@ -433,6 +469,112 @@ die Fähigkeit behauptet keinen nativen Windows-Systempapierkorb. Kein permanent
 - `update.download {}` → `{taskId}`; `result = {path, version}` (nach `<cache>/update/`, SHA-256 geprüft;
   `busy`, solange ein früherer Download-Task noch lebt)
 
+### 4.11 Dokumentanbieter (`docs.*`, Android-Dokumente)
+Der Anbieter der Android-Dokumentenoberfläche (Kotlin `SeDocumentsProvider`) fragt über diese Methoden. Nichts ist
+standardmäßig freigegeben: Wurzeln existieren nur für die Bereiche, die der Nutzer unter „Ordner für Apps
+bereitstellen“ freigegeben hat (`docs.settings.set`); eine nicht freigegebene oder unbekannte ID ist `not_found`.
+Eine Tresor-Wurzel existiert nur, solange der Tresor entsperrt ist. `docs.roots` berührt kein Netz.
+- `docs.roots {}` → `[{rootId, documentId, title, kind:"devices|conn|gdrive|vault", create:Boolean, localOnly:Boolean}]`
+- `docs.document {documentId}` → `Eintrag`; `docs.children {documentId}` → `{loading:Boolean, error:String?, children:[Eintrag]}`:
+  ein kalter Ordner antwortet `loading:true` sofort, `docs.changed` folgt, sobald er da ist; ein nicht erreichbares
+  Gerät liefert `error` (Gerätetext) und keine Kinder.
+- `Eintrag {documentId, name, dir:Boolean, size:Long, mtime:Long (Millisekunden), writable:Boolean}`
+- `docs.create {documentId (Elternordner), name, dir:Boolean=false}` → `Eintrag`; ist der Name belegt, zählt der Name
+  hoch (`name (2).ext`); in der Geräteliste (ohne Ordner als Elternteil) liefert es `permission`.
+- `docs.rename {documentId, name}` → `{documentId}` (neue ID); `docs.delete {documentId}` → `{}`. Wurzeln sind nicht
+  umbenenn- oder löschbar (`permission`).
+- `docs.settings.get {}` → `{provider, devices, connections:[ID], vaults:[ID], choices:{connections:[{id,label}],
+  vaults:[{id,label,unlocked,local}]}}`; `docs.settings.set {provider?, devices?, connections?, vaults?}` → gleiche Form.
+- `docs.pending {}` → `{pending:Int}` (Anzahl unveröffentlichter Änderungen aller Engines, geöffnet oder nicht); `docs.retryPending {}` → `{pending:Int, failed:[String]}`.
+- Ereignis `docs.changed {roots:Boolean, documents:[documentId], commitFailed:Boolean}` (§3): Wurzeln oder Ordner
+  haben sich geändert; `commitFailed:true` heißt, ein Festschreiben ist fehlgeschlagen.
+
+### 4.12 Bildschirm (`screen.*`, Android als Host und als Betrachter)
+Quelle: `native/src/mobile/os/shared/domains/screen_host.rs` (Host), `screen_view.rs` (Betrachter); die zwei Binärwege
+sind `screenPush`/`screenControl` (Host) und `screenPull` (Betrachter) in `native/android-bridge/src/screen_jni.rs`.
+
+**Host** (dieses Telefon wird gesteuert):
+- `screen.hostPrereqs {accessibility?, usageAccess?, appWindowCapture?, display?, encoders?, apps?}` → `{accessibility:"on|off|restricted", usageAccess:Boolean, appWindowCapture:Boolean}`; meldet die App als Host an.
+- `screen.hostSessions {}` → `{sessions:[…]}`
+- `screen.hostStop {session:Long}` oder `{session:"all"}` bzw. `{all:true}` → `{stopped:Int}`; beendet Sitzungen wie der Host-Nutzer.
+- `screen.hostReady {session, width, height, encoder, hardware?, projection?}` → `{}` (nach dem Systemdialog oder für Standbilder)
+- `screen.hostEnded {session, reason}` → `{}`
+
+**Betrachter** (dieses Telefon sieht einen anderen Bildschirm):
+- `screen.devices {roomId?}` → `{devices:[{relation:"direct|room", relationId, deviceId, name, roomId, roomName, online,
+  supported:Boolean|null, view:"off|ask|allow|null", control:"off|ask|allow|null"}]}` (aus Profilen und dem letzten
+  `probe`; `null` = unbekannt)
+- `screen.probe {relation, relationId, deviceId}` → `{supported, platform, view, control, monitors, input, codecs, limits}`
+  (camelCase); fehlende Freigabe ist kein Fehler (`supported:true`, `view:"off"`).
+- `screen.windows {relation, relationId, deviceId}` → `{windows, apps, listSource, limits}`
+- `screen.viewOpen {relation, relationId, deviceId, mode:"view|control|preview", source?:"monitor:<id>|window:<id>",
+  decoders:[{codec:"h264|tiles", profile:"cb|high"|null, hardware:Boolean, maxWidth?, maxHeight?}], displayWidth, displayHeight, maxFps}` → `{session:Long}`;
+  der Fortschritt kommt als Ereignis `screenView`.
+- `screen.viewSetMode {session, mode:"preview|full", source?, width?, height?, fps?, sharpness?, lossless?}` → `{}`
+- `screen.viewInput {session, events:[Eingabe]}` → `{sent:Int}`; höchstens 256 Ereignisse je Aufruf (`invalid`).
+  Eine Taste darf statt `hid_usage` mit `key` (Name aus der Tastentabelle) angegeben werden; `hid_usage` bleibt gültig.
+- `screen.viewControl {session, action:"take|release"}` → `{}` · `screen.viewListWindows {session}` → `{}` (die Liste kommt als Ereignis `windows`)
+- `screen.viewKeyframe {session}` → `{}`: fordert ein Schlüsselbild an (Grund `DecodeError`), wenn die Anforderung fällig ist.
+- `screen.viewClose {session}` → `{}` (beendet die Sitzung; wiederholbar)
+- Ereignis `{"type":"screenView","session":N,"kind":"pending|accepted|state|stream|stats|controlState|windows|error|ended",…}`:
+  `pending {capability:"screenView|screenControl"}`; `accepted` die camelCase-Felder der Antwort des Hosts plus
+  `path:"direct|relay"`; `state {state, reason}`; `stream {codec, profile, width, height, gop, encoder, hardware}`
+  (bei **jeder** neuen Bildgruppe); `stats` die camelCase-Felder von `HostStats`, `rttMs` ist immer `null` (das Relais
+  meldet keine Rundreisezeit); `controlState {holder:"viewer|other|null", blocked}`; `windows` (wie `screen.windows`);
+  `error {code, detail}`; `ended {code, detail}`.
+- Fehlerarten: `invalid` (ungültige Eingabe, unbekannte Taste), `permission` (Steuern nicht erlaubt), `not_found`, `internal`.
+  Der Code kennt `invalid_argument` nicht; `unavailable` ist dort nur ein Zustandswert eines Tresors (§4.13), keine Fehlerart.
+
+**Binärer Weg `screenPull(session: Long, dst: ByteBuffer, timeoutMs: Int): Int`** (Betrachter; `dst` ist direkt):
+- Kopf (16 Byte, little-endian) und danach `len` Nutzlastbytes: Bytes 0–7 `pts_us` (Aufnahmezeit des Hosts), 8–11 `flags`,
+  12–15 `len`.
+- Flags: Bit 0 Schlüsselbild, Bit 1 fertiges Bild `tiles` mit Bytes R,G,B,A (`width × height × 4`), Bit 2 erstes Bild einer
+  neuen Bildgruppe (die App konfiguriert den Dekoder neu, nachdem sie das zugehörige `stream`-Ereignis gelesen hat),
+  Bit 3 vollständige Zugriffseinheit (immer gesetzt), Bits 16–31 die niedrigen 16 Bit der Bildgruppennummer aus dem
+  `stream`-Ereignis.
+- Rückgabe: Anzahl geschriebener Bytes (`16 + len`, größer als 0) bei Erfolg; `-1` Zeitüberschreitung (nichts geschrieben);
+  `-2` Sitzung beendet; `-3` Puffer zu klein (nur die Bytes 12–15 werden mit der nötigen Länge `len` geschrieben, wenn
+  der Puffer mindestens 16 Byte fasst; das Bild bleibt in der Warteschlange); `-4` Brückenfehler (Puffer nicht direkt).
+  `timeoutMs` wird auf 1000 begrenzt. Die Funktion wirft nie eine Java-Ausnahme und schreibt nie Bildbytes in ein Protokoll.
+
+**Ereignisse des Hosts** (über `pollEvents`): `screenHostStart {session, source, still, maxWidth, maxHeight, viewerName,
+viewerDeviceId}` und `screenSession {session, state, reason}` (§3).
+
+### 4.13 Tresore (`vault.*`, Cryptomator-Tresore)
+Quelle: `native/src/mobile/os/shared/domains/vaults.rs`, `vault_keys.rs`, `vault_compare.rs`. Die 22 Methoden stehen in
+Rust und in `android/app/src/main/java/app/smartexplorer/android/api/VaultApi.kt`. Fehlerarten: §1, dort die Tresor-Codes.
+
+Methoden mit `{taskId}` laufen als Aufgabe; das Ergebnis steht im Aufgabenergebnis, der Fortschritt im Ereignis `task`.
+
+- `Site {site, label, location, kind, connection, state, replica:Boolean, format, cipher, rememberPassword:Boolean,
+  autoLockIdleMin, lockOnScreenLock:Boolean, lockOnBackgroundMin, syncJobs:[String]}`; `state` ist `locked|unlocked|locking|unavailable`
+  (`unavailable`: der Eintrag der Tresorliste ist nicht lesbar; das Ereignis `vault` meldet ihn als `locked`).
+- `vault.list {}` → `{vaults:[{vaultId, sites:[Site]}]}` · `vault.show {site}` → `Site`
+- `vault.lock {site?, keepUnsaved:Boolean=false}` → `{locked}` · `vault.lockAll {keepUnsaved:Boolean=false}` → `{locked}`
+- `vault.setSettings {site, label?, autoLockIdleMin?, lockOnScreenLock?, lockOnBackgroundMin?}` → `Site`
+- `vault.forgetPassword {site}` → `{}`
+- `vault.detect {location}` → `{isVault, format, keySource, vaultId, problem, name}`
+- `vault.add {location, label?}` → `{site, label}` · `vault.remove {site}` → `{site}`
+- `vault.unlock {site, password}` → `{taskId}`; Ergebnis `{site, already}`. Mit `saved:true` oder `remember:true` →
+  `invalid` mit dem Text „Gespeicherte Passwörter brauchen auf Android die Bestätigung der Displaysperre.“
+- `vault.create {location, label?, password}` → `{taskId}`
+- `vault.changePassword {site, oldPassword, newPassword}` → `{taskId}`; Ergebnis `{backup, rememberCleared}`
+- `vault.rememberSaved {sealed}` → `{}` · `vault.savedSecret {site}` → `{sealed}` (versiegelt; `vault_no_saved_password`, wenn nichts gemerkt ist)
+- `vault.syncCreate {site, target:"replica|site|location", with?, name?, direction?, deletePolicy?}` → `{job, name, siteB, createdSite}`;
+  `with` ist für `site` und `location` Pflicht; ein Ereignis `jobs` folgt.
+- `vault.check {site}` → `{taskId}` · `vault.compare {job}` → `{taskId}` (Vergleich eines Tresor-Jobs)
+- `vault.compareItems {list, revision:Long, group?, offset?, limit?}` → `{items, nextOffset, total}`; ein veralteter Vergleich → `compare_stale`.
+  Ohne `limit` alle Einträge ab `offset`.
+- `vault.compareText {job, item}` → `{a, b, rows:[{left, right, equal}], crlf:Boolean, finalNewline:Boolean}`
+- `vault.resolve {job, item, action, confirmed?}` → `{taskId}`; `vault.resolveAll {job, action, confirmed?}` → `{taskId}`;
+  Ergebnis `{item, resolved, failed:[{item, error}]}`
+- `vault.mergeApply {job, item, content}` → `{taskId}`; Ergebnis `{item, resolved:1, failed:[]}`; zu großer Text: `invalid`.
+
+Ereignis `{"type":"vault","site":"…","state":"unlocked|locked|locking","reason":…|null}` (§3). Aufgaben eines Tresor-Ortes
+(`vault://<SITE>/…`) bei Übertragung, Scan und Löschen sind privat: Meldungen werden unterdrückt, Fehlerpfade und
+Fehlertexte ersetzt; der Titel nennt nur die Bezeichnung („Tresor <Bezeichnung>“). `syncProblem` mit `jobId` `vault:<job>`
+meldet Konflikte eines Tresor-Syncs (§3).
+
 ## 5 Share (`share.*`)
 Grundlage: `docs/lesungen/2026-09-25-android-share-facade-map.md` (Rezepte 1–9). Der Share-Dienst läuft
 im eingebetteten Daemon; die Fassade nutzt dieselben IPC-Client-Funktionen wie die Desktop-GUI
@@ -578,7 +720,8 @@ Request {requestId, contactId:String?, name, stateText, canAccept, canReject, ca
   Raummitglieder), Schlüssel `direct/<deviceId>/<fingerprint>` bzw. `room/<roomId>/<deviceId>/<fingerprint>`:
   - `share.setExec {targetKey, enabled:Boolean, programs:[String]?}` → `{revision:Long}` (`daemon::mutate_exec_grant`;
     `programs` ersetzt die Programmliste im selben Schritt (leer = volle Shell), Android sendet immer den
-    Standardnutzer; ein Eintrag ist ein Programmname oder ein absoluter Pfad, sonst `invalid` vor jeder Änderung;
+    Standardnutzer; fehlt `programs` oder ist es `null`, bleibt die Liste unverändert; jeder Eintrag wird vor
+    der Prüfung um Leerraum gekürzt; ein Eintrag ist ein Programmname oder ein absoluter Pfad, sonst `invalid` vor jeder Änderung;
     Journal wie am Desktop; Schlüssel gegen den aktuellen Profilstand aufgelöst, sonst `not_found`;
     nur vollständig gespeichert **und** angewendet gilt als Erfolg, sonst Fehler mit Detail;
     `enabled:true` bei nicht verfügbarem Anbieter → `unsupported` mit Grund, bei nicht aktiver
@@ -589,9 +732,29 @@ Request {requestId, contactId:String?, name, stateText, canAccept, canReject, ca
     `timed_out`, `revoked`, …), Zeiten in Sekunden seit 1970; eingehende vor ausgehenden, `history`
     unsortiert (die App sortiert)
   - `share.cancelExecJob {direction, execId, peerDeviceId}` → `{}` (nicht mehr aktiv → `not_found`)
-  - `share.execLog {lines:Int?}` → `{entries:[{at, event, title, device, deviceId, detail}], max:Int}`
-    (neueste zuerst, höchstens `max` = 1000, Standard 200; `event`
-    `auth_rejected|penalty_refused|start_refused|started|finished|unreadable`)
+  - `share.execLog {lines:Int?}` → `{entries:[{at, event, title, device, deviceId, detail, kind, account, approval}], max:1000}`
+    (neueste zuerst; `lines` wird auf 1 bis 1000 begrenzt, Standard 200; `event`
+    `auth_rejected|penalty_refused|start_refused|started|finished|approval_requested|approval_granted|approval_denied|approval_cancelled|approval_unavailable|grant_expired|helper_refused`, sonst ein anderer gespeicherter Name oder `unreadable`;
+    `kind` `exec` oder `screen` (Zeilen ohne Art sind Exec-Zeilen); `account` ist das Konto eines Starts, leer wenn
+    die Zeile keines nennt; `approval` `not_required|once|always|denied|cancelled|unavailable`, leer wenn keine Angabe)
+- Zugriffsrechte je Gerät (Befehle, Terminal, Bildschirm ansehen, Bildschirm steuern). Jede Fähigkeit hat den
+  Schlüssel `execCommands`, `execTerminal`, `screenView` oder `screenControl` mit der Entscheidung
+  `off|ask|allow`; `targetKey` wie bei `share.setExec`. Nur die Fähigkeiten, die dieses Telefon anbietet (`share.status` → `execProvider.capabilities`):
+  - `share.setAccess {targetKey, account?:{kind:"own"}, capabilities?:{<Fähigkeit>:"off|ask|allow"}, programs?:[String], validUntil?:Int|null}`
+    → `{revision:Long, access:{account, accountLabel, capabilities, validUntil, expired}}`. Fehlende oder `null`-Felder
+    bleiben unverändert; `validUntil:null` entfernt das Ende, eine Zahl (Sekunden seit 1970) muss in der Zukunft liegen;
+    ohne jede Änderung `invalid`. `account` ist nur `{"kind":"own"}` (sonst `unsupported`). Eine Fähigkeit, die dieses
+    Telefon nicht anbietet, ist `unsupported`; eine Fähigkeit auf `ask` oder `allow` bei fehlendem Anbieter ist
+    `unsupported`, bei nicht aktiver Grundfreigabe `conflict`. Unbekanntes Gerät `not_found`. Nur gespeichert und
+    angewendet gilt als Erfolg, sonst `internal` mit Angabe, was fehlt.
+  - `share.accessApprovals {}` → `{pending:[{id, deviceName, deviceId, fingerprint, relation, room, capability,
+    capabilityLabel, text, accountLabel, command, requestedAt, surface, olderClientTerminal}]}`, älteste zuerst; leer,
+    solange kein Worker läuft. `capability` ist der Schlüssel der Fähigkeit; `command` ist `{mode:"argv",program,args}`,
+    `{mode:"shell",text}`, `{mode:"login"}` oder `null` (Bildschirm).
+  - `share.decideAccessApproval {approvalId, decision:"once|always|deny"}` → `{}`. Eine ungültige ID (32 Hexadezimalzeichen)
+    ist `invalid`; eine Rückfrage, die nicht mehr offen ist, `not_found`.
+  - `share.reportApprovalUndeliverable {approvalId}` → `{}`: Die App kann die Rückfrage weder als Dialog noch als
+    Benachrichtigung zeigen. Der Host verweigert den Start dann mit dem Ergebnis `approval_unavailable`; er erlaubt nie.
 - Share-Einstellungen je Gerät, Raum und Freigabe (alle → `{persisted:true, changed:Boolean}` außer wo genannt):
   - `share.setContactOptions {contactId, autoConnect:Boolean?, autoOpen:Boolean?}` (mindestens eines)
   - `share.resetContactTrust {contactId}` (vergisst die gepinnte Identität, entzieht die Autorisierung, Exec aus)
