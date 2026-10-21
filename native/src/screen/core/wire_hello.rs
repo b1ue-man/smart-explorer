@@ -267,7 +267,9 @@ pub(crate) enum ScreenErrorCode {
     CaptureFailed,
     /// The host's encoder failed or none fits (`ERROR`, `HELLO_ERROR`).
     EncoderFailed,
-    /// The host runs its most sessions (8, of one device 4).
+    /// Sent only by hosts before R15c, which refused past 8 sessions (4 of
+    /// one device); current hosts have no session count. Kept so viewers
+    /// still read that refusal.
     SessionLimit,
 }
 

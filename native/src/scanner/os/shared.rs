@@ -27,11 +27,13 @@ pub struct ScanHandle {
     pub truncated: Arc<AtomicBool>,
 }
 
-const MAX_ERROR_PATHS_TRACKED: usize = 500;
-
 #[cfg(test)]
 #[path = "search_recursive_access_task.rs"]
 mod task;
+
+#[cfg(test)]
+#[path = "failed_paths_tests.rs"]
+mod failed_paths_tests;
 
 pub struct ScanOpts {
     pub follow_symlinks: bool,
@@ -157,12 +159,23 @@ impl Scanner {
     }
 }
 
+/// Records every failed path (R15c: no count; the former 500 dropped
+/// findings without a technical cause). A path recorded twice is sent once
+/// (`distinct_failures`).
 pub(super) fn record_failure(failed: &Mutex<Vec<(String, String)>>, path: &str, msg: String) {
     if let Ok(mut g) = failed.lock() {
-        if g.len() < MAX_ERROR_PATHS_TRACKED {
-            g.push((path.to_string(), msg));
-        }
+        g.push((path.to_string(), msg));
     }
+}
+
+/// Each failed path once, with its first message, in the order recorded.
+fn distinct_failures(failed: &[(String, String)]) -> Vec<(String, String)> {
+    let mut seen = HashSet::new();
+    failed
+        .iter()
+        .filter(|(path, _)| seen.insert(path.as_str()))
+        .cloned()
+        .collect()
 }
 
 fn finish_root_failure(
@@ -376,10 +389,10 @@ fn run_scan(
         let _ = progress_thread.join();
     }
 
-    // Emit collected failed paths (capped)
+    // Emit every collected failed path once.
     if let Ok(g) = failed_paths.lock() {
         if !g.is_empty() {
-            let _ = tx.send(ScanMessage::FailedPaths(g.clone()));
+            let _ = tx.send(ScanMessage::FailedPaths(distinct_failures(&g)));
         }
     }
 

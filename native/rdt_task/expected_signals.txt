@@ -399,6 +399,11 @@ drive_task_scan_view_returns_the_requested_amount  linux-core:unit  pfad=mobile:
 drive_task_scan_new_session_drops_oldest_finished_not_running  linux-core:unit  pfad=mobile::scan::tests::drive_task_scan_new_session_drops_oldest_finished_not_running  quelle=SEC-P9
 drive_task_scan_running_sessions_all_stay  linux-core:unit  pfad=mobile::scan::tests::drive_task_scan_running_sessions_all_stay  quelle=SEC-P9
 drive_task_scan_task_end_marks_session_finished  linux-core:unit  pfad=mobile::scan::tests::drive_task_scan_task_end_marks_session_finished  quelle=SEC-P9
+screen_task_window_list_keeps_whole_texts_and_all_limit_notes  linux-core:unit  pfad=screen::core::window_list::tests::screen_task_window_list_keeps_whole_texts_and_all_limit_notes  quelle=R15c,SEC-P9b
+screen_task_window_list_drops_oversized_entry_and_refuses_bad_ids  linux-core:unit  pfad=screen::core::window_list::tests::screen_task_window_list_drops_oversized_entry_and_refuses_bad_ids  quelle=R15c,SEC-P9b
+screen_task_android_encoder_and_reason_bound_only_by_control_frame  linux-core:unit  pfad=mobile::domains::screen_host::tests::screen_task_android_encoder_and_reason_bound_only_by_control_frame  quelle=R15c,SEC-P9b
+drive_task_scanner_records_more_than_500_failed_paths  linux-core:unit  pfad=scanner::os::failed_paths_tests::drive_task_scanner_records_more_than_500_failed_paths  quelle=R15c,SEC-P9b
+drive_task_scanner_sends_each_failed_path_once  linux-core:unit  pfad=scanner::os::failed_paths_tests::drive_task_scanner_sends_each_failed_path_once  quelle=R15c,SEC-P9b
 
 [noch nicht umgesetzt]
 

@@ -9,7 +9,7 @@ use crate::screen::core::rate_control::PathKind;
 use crate::screen::core::session_state::SessionState;
 use crate::screen::core::tiles_codec::{TileDecoder, MAX_TILES_RECORD_BYTES};
 use crate::screen::core::window_list::{
-    AppEntry, ListSource, MonitorInfo, SourceId, WindowEntry, WindowList, MAX_LIST_ENTRIES,
+    AppEntry, ListSource, MonitorInfo, SourceId, WindowEntry, WindowList,
 };
 use crate::screen::core::wire_binary::{
     read_frame_record, write_frame_record, FrameRecord, GopHeader, StreamKind, FLAG_KEYFRAME,
@@ -399,15 +399,19 @@ fn screen_task_frame_limits_reject_oversize() {
             text: "a".repeat(MAX_TEXT_BYTES + 1),
         };
         assert!(encode_batch(&[long_text]).is_err());
+        // R15c: no entry count; more than the former 4096 entries go out
+        // whole while the frame holds them.
         let crowded_list = WindowList {
             windows: Vec::new(),
-            apps: vec![app_entry(); MAX_LIST_ENTRIES + 1],
+            apps: vec![app_entry(); 4097],
             list_source: ListSource::SystemdUnits,
             limits: Vec::new(),
         };
+        let mut crowded_frame = Vec::new();
         let list = HostFrame::Windows(crowded_list.clone());
-        assert!(send_host_frame(&mut sink, &list).await.is_err());
-        assert_eq!(crowded_list.bounded().apps.len(), MAX_LIST_ENTRIES);
+        send_host_frame(&mut crowded_frame, &list).await.unwrap();
+        assert!(crowded_frame.len() <= 5 + MAX_WINDOWS_BYTES);
+        assert_eq!(crowded_list.bounded().apps.len(), 4097);
         // JSON escaping (6 bytes per control character) cannot push a
         // bounded list over 1 MiB: it keeps fewer entries instead.
         let escaped = WindowEntry {
@@ -420,13 +424,13 @@ fn screen_task_frame_limits_reject_oversize() {
             focused: true,
         };
         let escaped = WindowList {
-            windows: vec![escaped; MAX_LIST_ENTRIES],
+            windows: vec![escaped; 4096],
             apps: vec![app_entry(); 8],
             list_source: ListSource::KdePlasmaWindowManagement,
             limits: vec!["\u{1}".repeat(100); 20],
         }
         .bounded();
-        assert!(!escaped.windows.is_empty() && escaped.windows.len() < MAX_LIST_ENTRIES);
+        assert!(!escaped.windows.is_empty() && escaped.windows.len() < 4096);
         let mut frame = Vec::new();
         send_host_frame(&mut frame, &HostFrame::Windows(escaped))
             .await
