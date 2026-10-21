@@ -33,7 +33,9 @@ pub(super) fn copy_file(engine: &Engine<'_>, file: &FileWork, meter: &Meter<'_>)
         cancel: engine.stop_flag(),
     };
     let mut progress = |bytes: u64| meter.add(bytes);
-    match transfer_local(&request, &mut progress) {
+    // One kernel call moves the bytes: source and target cannot be told
+    // apart, so the whole call is booked to the target.
+    match meter.timed_target(|| transfer_local(&request, &mut progress)) {
         Ok(LocalOutcome::Completed { bytes, target }) => {
             // A rename moves the bytes without streaming them.
             meter.credit(bytes.saturating_sub(meter.moved()));

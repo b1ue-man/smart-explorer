@@ -170,7 +170,7 @@ pub(super) fn download<'e>(
             return Err(OpError::canceled());
         }
         let limit = check.limit(part.written(), buffer.len());
-        let read = match reader.read(&mut buffer[..limit]) {
+        let read = match meter.timed_source(|| reader.read(&mut buffer[..limit])) {
             Ok(read) => read,
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
             Err(error) => {
@@ -181,8 +181,8 @@ pub(super) fn download<'e>(
         if read == 0 {
             break;
         }
-        check.update(file, part.written(), &buffer[..read])?;
-        part.write(&buffer[..read])?;
+        meter.timed_cpu(|| check.update(file, part.written(), &buffer[..read]))?;
+        meter.timed_target(|| part.write(&buffer[..read]))?;
         meter.add(read as u64);
     }
     drop(reader);

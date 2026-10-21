@@ -1,4 +1,5 @@
 //! Progress and completion values every transfer worker reports.
+use super::limiter::Limiter;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TransferKind {
@@ -58,6 +59,20 @@ pub struct TransferProgress {
     /// The complete issue log of this transfer (one JSON object per line),
     /// once the first issue was written.
     pub log_path: Option<String>,
+    /// Who sets the pace of the transfer (confirmed over three windows of
+    /// about a second); `None` until the first verdict. The final progress
+    /// carries the last verdict that named a resource.
+    pub limiter: Limiter,
+    /// The German text of `limiter`: drives and devices and rates only, never
+    /// a file or folder name. `None` for no verdict.
+    pub limiter_text: Option<String>,
+    /// Where the time of the last window went, in percent: source, target,
+    /// computing, waiting.
+    pub limiter_shares: [u8; 4],
+    /// Link rate of the connection in bytes per second; 0 = unknown.
+    pub link_bps: u64,
+    /// Ranges of large files transferred right now.
+    pub segments: u32,
 }
 
 impl TransferProgress {
@@ -88,6 +103,11 @@ impl TransferProgress {
             target: String::new(),
             note: None,
             log_path: None,
+            limiter: Limiter::None,
+            limiter_text: None,
+            limiter_shares: [0; 4],
+            link_bps: 0,
+            segments: 0,
         }
     }
 

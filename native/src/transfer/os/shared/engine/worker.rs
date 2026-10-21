@@ -14,13 +14,15 @@ use super::super::flow::classify_error;
 use super::super::flow_control::OpOutcome;
 use super::super::memory::reserve_memory;
 use super::folders::FolderError;
-use super::ops::{self, At, Carry, Meter, OpError, Outcome, COPY_BUFFER};
+use super::ops::{self, nanos, At, Carry, Meter, OpError, Outcome, COPY_BUFFER};
 use super::queue::{FileWork, Work, WorkerSlot};
 use super::Engine;
 use std::io;
 use std::time::{Duration, Instant};
 
 pub(super) fn run(engine: &Engine<'_>, _slot: WorkerSlot<'_>) {
+    // The foreground keeps the cores it asks for; this thread takes the rest.
+    super::super::platform::lower_thread_priority();
     let mut buffer = vec![0u8; COPY_BUFFER];
     while let Some(work) = engine.queue.pop(engine.stop_flag(), super::WORKER_LINGER) {
         match work {
@@ -73,27 +75,42 @@ pub(super) fn parent_ready(engine: &Engine<'_>, file: &FileWork) -> Option<bool>
 }
 
 pub(super) fn run_file(engine: &Engine<'_>, mut file: FileWork, buffer: &mut [u8]) {
+    let folder_asked = Instant::now();
     let Some(parent_created) = parent_ready(engine, &file) else {
         return;
     };
+    // Time spent waiting, booked with the next attempt: the folder first.
+    let mut waited = nanos(folder_asked.elapsed());
     let mut carry = Carry::default();
     let mut asked_access = false;
     loop {
+        let memory_asked = Instant::now();
         let Some(reservation) = reserve_memory(ops::reservation(engine), engine.stop_flag()) else {
             return;
         };
+        let memory_wait = nanos(memory_asked.elapsed());
+        engine.stats.book_memory_wait(memory_wait);
+        let permit_asked = Instant::now();
         let Some(permits) = engine.acquire() else {
             return;
         };
+        waited = waited
+            .saturating_add(memory_wait)
+            .saturating_add(nanos(permit_asked.elapsed()));
         let active = engine.stats.begin(&file.rel);
         engine.queue.notify();
         let meter = Meter::new(&permits, &engine.stats);
+        meter.add_wait(std::mem::take(&mut waited));
         let result = ops::transfer(engine, &file, parent_created, &mut carry, &meter, buffer);
         let moved = meter.moved();
-        permits.finish(match &result {
-            Ok(_) => OpOutcome::Done,
-            Err(failure) => classify_error(&failure.error),
-        });
+        let accounts = meter.accounts();
+        permits.finish_with(
+            match &result {
+                Ok(_) => OpOutcome::Done,
+                Err(failure) => classify_error(&failure.error),
+            },
+            accounts,
+        );
         drop(active);
         drop(reservation);
         let failure = match result {

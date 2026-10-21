@@ -2,14 +2,15 @@
 //! it can; between different connections the bytes stream directly (a reader
 //! thread keeps a few chunks ahead of the writer); a connection that cannot
 //! read and write at once (FTP) bridges through a local temporary file.
-use super::ops::{At, Meter, OpError, OpResult, Outcome, COPY_BUFFER, STREAM_DEPTH};
+use super::ops::{nanos, At, Meter, OpError, OpResult, Outcome, COPY_BUFFER, STREAM_DEPTH};
 use super::publish::{self, Destination};
 use super::queue::FileWork;
 use super::source::{unchanged_since_listing, RemoteCheck};
 use super::Engine;
 use crate::vfs::Backend;
 use std::io::{self, Read, Seek, SeekFrom, Write};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
 
 /// Source and target of one copy.
 #[derive(Clone, Copy)]
@@ -70,10 +71,12 @@ fn server_copy(
     let path = engine.folders.path_of(&file.rel);
     for _ in 0..SERVER_STAGE_ATTEMPTS {
         let stage = publish::stage_name(&path);
-        match pair
-            .target
-            .server_copy_to_stage(&file.source, &stage, file.size, engine.stop_flag())
-        {
+        // The target server copies while this thread waits for its answer.
+        let answer = meter.timed_target(|| {
+            pair.target
+                .server_copy_to_stage(&file.source, &stage, file.size, engine.stop_flag())
+        });
+        match answer {
             Ok(None) => return Ok(None),
             Ok(Some(copied)) => {
                 if copied != file.size {
@@ -135,27 +138,38 @@ fn stream(
         .map_err(OpError::source)?;
     let mut destination = publish::open(engine, pair.target, file, expected, parent_created)?;
     let mut check = RemoteCheck::new(file, expected);
+    // The reader thread books its read time here; this thread books the rest.
+    let read_ns = AtomicU64::new(0);
     let written = std::thread::scope(|scope| {
         let (sender, chunks) = crossbeam_channel::bounded::<io::Result<Vec<u8>>>(STREAM_DEPTH - 1);
         let stop = engine.stop_flag();
         let limit = expected;
-        scope.spawn(move || read_ahead(reader, sender, stop, limit));
+        let timer = &read_ns;
+        let spawned = std::thread::Builder::new()
+            .name("transfer-reader".into())
+            .spawn_scoped(scope, move || {
+                read_ahead(reader, sender, stop, limit, timer)
+            });
+        if let Err(error) = spawned {
+            // The process refuses threads: overload, the file waits.
+            return Err(OpError::source(super::ops::thread_refusal(error)));
+        }
         let mut written = 0u64;
         for chunk in chunks {
             if engine.stopped() {
                 return Err(OpError::canceled());
             }
             let bytes = chunk.map_err(OpError::source)?;
-            check.update(file, written, &bytes)?;
-            destination
-                .writer()
-                .write_all(&bytes)
+            meter.timed_cpu(|| check.update(file, written, &bytes))?;
+            meter
+                .timed_target(|| destination.writer().write_all(&bytes))
                 .map_err(OpError::target)?;
             written += bytes.len() as u64;
             meter.add(bytes.len() as u64);
         }
         Ok(written)
     });
+    meter.add_source_ns(read_ns.load(Ordering::Acquire));
     let written = match written {
         Ok(_) if engine.stopped() => {
             publish::abandon(engine, pair.target, destination);
@@ -181,6 +195,7 @@ fn read_ahead(
     sender: crossbeam_channel::Sender<io::Result<Vec<u8>>>,
     stop: &std::sync::atomic::AtomicBool,
     limit: Option<u64>,
+    read_ns: &AtomicU64,
 ) {
     let mut read_total = 0u64;
     loop {
@@ -195,7 +210,10 @@ fn read_ahead(
             None => COPY_BUFFER,
         };
         let mut chunk = vec![0u8; wanted];
-        let read = match reader.read(&mut chunk) {
+        let began = Instant::now();
+        let result = reader.read(&mut chunk);
+        read_ns.fetch_add(nanos(began.elapsed()), Ordering::AcqRel);
+        let read = match result {
             Ok(0) => return,
             Ok(read) => read,
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
@@ -237,7 +255,7 @@ fn bridge(
             return Err(OpError::canceled());
         }
         let limit = check.limit(spooled, buffer.len());
-        let read = match reader.read(&mut buffer[..limit]) {
+        let read = match meter.timed_source(|| reader.read(&mut buffer[..limit])) {
             Ok(read) => read,
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
             Err(error) => return Err(OpError::source(error)),
@@ -245,7 +263,7 @@ fn bridge(
         if read == 0 {
             break;
         }
-        check.update(file, spooled, &buffer[..read])?;
+        meter.timed_cpu(|| check.update(file, spooled, &buffer[..read]))?;
         spool.write_all(&buffer[..read]).map_err(OpError::target)?;
         spooled += read as u64;
         meter.add_hidden(read as u64);
@@ -281,9 +299,8 @@ fn upload_spool(
         if read == 0 {
             return Ok(());
         }
-        destination
-            .writer()
-            .write_all(&buffer[..read])
+        meter
+            .timed_target(|| destination.writer().write_all(&buffer[..read]))
             .map_err(OpError::target)?;
         meter.add(read as u64);
     }

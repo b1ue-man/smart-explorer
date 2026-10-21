@@ -6,7 +6,8 @@ use super::prelude::*;
 use super::transfer_center::{ConnectingTarget, ExternalEntry, FinishedEntry, TransferCenter};
 use super::transfer_rows::{
     activity_line, counts_line, external_counts, external_issues_text, external_state,
-    finished_state, issues_text, kind_icon, rate_line, running_state, tally_line, transfer_title,
+    finished_state, issues_text, kind_icon, limiter_hint, limiter_line, rate_line, running_state,
+    tally_line, transfer_title,
 };
 use super::*;
 use crate::app::theme;
@@ -225,6 +226,13 @@ fn progress_rows(ui: &mut egui::Ui, progress: &TransferProgress, title: &str, st
         line.push_str(&rate);
     }
     ui.label(RichText::new(line).small());
+    if let Some(limiter) = limiter_line(progress) {
+        let text = RichText::new(limiter).small().color(theme::muted(ui));
+        let label = ui.add(egui::Label::new(text).truncate());
+        if let Some(hint) = limiter_hint(progress) {
+            label.on_hover_text(hint);
+        }
+    }
     if let Some(activity) = activity_line(progress) {
         let text = RichText::new(activity).small().color(theme::muted(ui));
         ui.add(egui::Label::new(text).truncate());

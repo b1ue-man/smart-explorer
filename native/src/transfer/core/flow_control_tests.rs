@@ -1,3 +1,4 @@
+use super::super::flow_window::start_from_learned;
 use super::*;
 
 const MB: u64 = 1024 * 1024;
@@ -176,4 +177,158 @@ fn transfer_engine_task_flow_holds_the_optimum_under_measurement_noise() {
             );
         }
     }
+}
+
+/// `count` operations that took `latency_ms` each finish at `now`.
+fn finish_ops(control: &mut FlowControl, count: u32, latency_ms: u64, now: u64) {
+    for _ in 0..count {
+        control.finish(OpOutcome::Done, latency_ms, now);
+    }
+}
+
+#[test]
+fn speed_task_flow_window_waits_for_eight_completions_or_one_second() {
+    let mut control = FlowControl::new(64, 0);
+    control.progress(MB);
+    finish_ops(&mut control, 7, 10, 0);
+    // seven completions after 300 ms and 999 ms: the window goes on
+    control.tick(300, true);
+    control.tick(999, true);
+    assert_eq!(control.limit(), 2);
+    // the eighth ends it
+    finish_ops(&mut control, 1, 10, 999);
+    control.tick(1_000, true);
+    assert_eq!(control.limit(), 4, "slow start doubled on the full window");
+
+    // few completions: the second ends the window
+    let mut sparse = FlowControl::new(64, 0);
+    sparse.progress(MB);
+    finish_ops(&mut sparse, 1, 10, 0);
+    sparse.tick(999, true);
+    assert_eq!(sparse.limit(), 2);
+    sparse.tick(1_000, true);
+    assert_eq!(sparse.limit(), 4);
+}
+
+#[test]
+fn speed_task_flow_window_floor_is_one_hundred_ms() {
+    let mut control = FlowControl::new(64, 0);
+    control.progress(MB);
+    // eight operations of 1 ms: twice the latency is far below the floor
+    finish_ops(&mut control, 8, 1, 10);
+    control.tick(50, true);
+    control.tick(99, true);
+    assert_eq!(control.limit(), 2, "no window under 100 ms");
+    control.tick(100, true);
+    assert_eq!(control.limit(), 4);
+}
+
+#[test]
+fn speed_task_flow_slow_start_needs_two_misses_to_end() {
+    let mut now = 0;
+    let mut control = FlowControl::new(64, now);
+    let mut run = |control: &mut FlowControl, megabytes: u64| {
+        control.progress(megabytes * MB);
+        now += 1_000;
+        control.tick(now, true);
+    };
+    run(&mut control, 2);
+    assert_eq!(control.limit(), 4);
+    run(&mut control, 4);
+    assert_eq!(control.limit(), 8);
+    // one window without +10 % measures the same limit again
+    run(&mut control, 4);
+    assert_eq!(control.limit(), 8, "one miss may be noise");
+    // a gain afterwards resets the count and slow start goes on
+    run(&mut control, 9);
+    assert_eq!(control.limit(), 16);
+    run(&mut control, 9);
+    assert_eq!(control.limit(), 16);
+    // the second miss in a row ends it at the limit before the last doubling
+    run(&mut control, 9);
+    assert_eq!(control.limit(), 8);
+    let facts = control.take_facts();
+    assert!(facts.plateau, "slow start ended");
+}
+
+#[test]
+fn speed_task_flow_latency_inflation_cancels_upward_probe() {
+    let mut now = 0;
+    let mut control = FlowControl::new(64, now);
+    let capped = |limit: usize| limit.min(8) as u64 * MB;
+    let mut window = |control: &mut FlowControl, latency_ms: u64| {
+        finish_ops(control, 8, latency_ms, now);
+        control.progress(capped(control.limit()));
+        now += 1_000;
+        control.tick(now, true);
+    };
+    let mut windows = 0;
+    while control.limit() <= control.settled_limit() {
+        window(&mut control, 100);
+        windows += 1;
+        assert!(windows < 60, "no upward probe started");
+    }
+    let settled = control.settled_limit();
+    assert!(control.limit() > settled, "an upward probe is running");
+    assert!(!control.limit_inflated());
+    // the probe's first window: the same goodput, operations four times slower
+    window(&mut control, 400);
+    assert_eq!(control.limit(), settled, "the probe was withdrawn");
+    assert!(control.limit_inflated());
+    assert!(control.take_facts().plateau);
+}
+
+#[test]
+fn speed_task_flow_start_limit_from_hint_is_half() {
+    assert_eq!(start_from_learned(16), 8);
+    assert_eq!(start_from_learned(3), 2);
+    assert_eq!(start_from_learned(1), 2, "never below the general start");
+    assert_eq!(FlowControl::with_start(64, 0, 8).limit(), 8);
+    assert_eq!(
+        FlowControl::with_start(4, 0, 100).limit(),
+        4,
+        "ceiling wins"
+    );
+    assert_eq!(FlowControl::with_start(64, 0, 0).limit(), 1);
+    // doubling goes on from the start
+    let mut now = 0;
+    let mut control = FlowControl::with_start(64, now, 8);
+    let linear = |limit: usize| limit as u64 * MB;
+    window(&mut control, &mut now, &linear, true);
+    assert_eq!(control.limit(), 16);
+}
+
+#[test]
+fn speed_task_flow_facts_saturated_and_plateau() {
+    let mut control = FlowControl::new(64, 0);
+    assert_eq!(control.take_facts(), FlowFacts::default());
+    // 300 ms with demand filling the limit
+    control.tick(300, true);
+    let facts = control.take_facts();
+    assert!(facts.saturated);
+    assert!(!facts.plateau, "slow start has not ended");
+    // a stretch shorter than a quarter second repeats the last reading
+    control.tick(400, false);
+    assert!(control.take_facts().saturated);
+    // 600 ms without demand
+    control.tick(1_000, false);
+    assert!(!control.take_facts().saturated);
+    // a flow at its ceiling cannot grow
+    assert!(FlowControl::new(1, 0).take_facts().plateau);
+}
+
+#[test]
+fn speed_task_flow_thread_refusal_halves_and_bounds() {
+    let mut now = 0;
+    let mut control = FlowControl::new(64, now);
+    let linear = |limit: usize| limit as u64 * MB;
+    for _ in 0..4 {
+        window(&mut control, &mut now, &linear, true);
+    }
+    assert!(control.limit() >= 16);
+    control.thread_refused(5, now);
+    assert_eq!(control.ceiling(), 5);
+    assert!(control.limit() <= 5);
+    control.thread_refused(0, now);
+    assert_eq!(control.ceiling(), 1, "at least one operation stays");
 }

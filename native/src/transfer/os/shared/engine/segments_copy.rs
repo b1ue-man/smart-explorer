@@ -86,7 +86,7 @@ impl SegmentIo for CopyIo<'_> {
                 return Err(SegmentError::Failed(OpError::canceled()));
             }
             let wanted = (len - done).min(buffer.len() as u64) as usize;
-            let read = match reader.read(&mut buffer[..wanted]) {
+            let read = match meter.timed_source(|| reader.read(&mut buffer[..wanted])) {
                 Ok(read) => read,
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
                 Err(error) => return Err(SegmentError::Failed(OpError::source(error))),
@@ -95,14 +95,14 @@ impl SegmentIo for CopyIo<'_> {
                 return Err(SegmentError::Failed(self.changed()));
             }
             first_byte_ms.get_or_insert_with(|| elapsed_ms(began));
-            writer
-                .write_all(&buffer[..read])
+            meter
+                .timed_target(|| writer.write_all(&buffer[..read]))
                 .map_err(|error| SegmentError::Failed(OpError::target(error)))?;
             meter.add(read as u64);
             done += read as u64;
         }
-        writer
-            .flush()
+        meter
+            .timed_target(|| writer.flush())
             .map_err(|error| SegmentError::Failed(OpError::target(error)))?;
         Ok(SegmentTiming {
             first_byte_ms: first_byte_ms.unwrap_or(0),
