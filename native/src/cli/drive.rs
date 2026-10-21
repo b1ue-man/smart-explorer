@@ -428,3 +428,14 @@ mod vault_status_tests {
         assert_eq!(status_column(&other), "failed:vault_lockedness");
     }
 }
+
+// DRV-M10: contracts of the drive commands that earlier releases set (stage
+// names of a mounted save, JSON form of `MountSnapshot`).
+#[cfg(test)]
+#[path = "drive_contract_tests.rs"]
+mod drive_contract_tests;
+
+// DRV-M10: Node's `realpath` on a real Dokany drive (Windows task stage).
+#[cfg(all(test, windows))]
+#[path = "drive_realpath_task_tests.rs"]
+mod drive_realpath_task_tests;

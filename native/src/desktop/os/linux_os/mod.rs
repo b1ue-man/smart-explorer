@@ -15,6 +15,10 @@ mod clipboard_formats;
 mod desktop_entry_trust;
 #[path = "desktop_folder.rs"]
 mod desktop_folder;
+// F14: disabling or removing se Desktop leaves the device tree of the drives.
+#[cfg(test)]
+#[path = "device_tree_task_tests.rs"]
+mod device_tree_task_tests;
 #[path = "gnome_channel.rs"]
 pub(crate) mod gnome_channel;
 #[path = "gnome_control.rs"]

@@ -1520,18 +1520,18 @@ speed_task_local_engine_measures_a_direct_copy_on_a_drive_that_says_rotating lin
 vault_task_backends_provider_matrix  linux-core:vault-backends  ignored threads=1  pfad=vault::os::backend_servers_tests::vault_task_backends_provider_matrix  quelle=T564,D3
 vault_task_backends_share_pair       linux-core:vault-backends  ignored threads=1  pfad=vault::os::backend_servers_tests::vault_task_backends_share_pair  quelle=T564,D3
 
+# ---- S2 aus [noch nicht umgesetzt] verschoben (2026-10-21): Bestandsvertraege DRV-M10 (L312, Kern-Lesung Abschnitt 5),
+# Geraetebaum beim Deaktivieren von se Desktop (DRV-M5/F14), realpath auf Dokany (L350, Annahme A3) ----
+drive_task_stage_names_se_mount_prefix_unchanged  linux-core:unit,windows-core:drive-cli  pfad=cli::drive::drive_contract_tests::drive_task_stage_names_se_mount_prefix_unchanged  quelle=L312,D3-Erhaltung-S2
+drive_task_mount_snapshot_json_unchanged          linux-core:unit,windows-core:drive-cli  pfad=cli::drive::drive_contract_tests::drive_task_mount_snapshot_json_unchanged  quelle=L312,D3-Erhaltung-S2
+drive_task_cli_error_texts_unchanged              linux-core:unit,windows-core:drive-cli  fixture=home threads=1  pfad=cli::drive::drive_options::error_texts_tests::drive_task_cli_error_texts_unchanged  quelle=L312,D3-Erhaltung-S2
+desktop_task_disable_keeps_device_tree            linux-desktop:drive-desktop  fixture=home  pfad=desktop::os::platform::device_tree_task_tests::desktop_task_disable_keeps_device_tree  quelle=D3-linux-desktop
+drive_task_windows_realpath_native_on_dokany      windows-core:drive-dokany-regression  ignored threads=1 fixture=dokany,home env=SMART_EXPLORER_DRIVE_SE_BIN={se}  pfad=cli::drive::drive_realpath_task_tests::drive_task_windows_realpath_native_on_dokany  quelle=L350,S2-A3
+
 [noch nicht umgesetzt]
 
-# ---- S2 DRV-M2 Windows (kein Paket benannt): windows-core drive-dokany-regression (L350, S2-A3) ----
-drive_task_windows_realpath_native_on_dokany            windows-core:drive-dokany-regression  ignored threads=1 fixture=dokany  paket=offen  quelle=L350,S2-A3
 
-# ---- S2 DRV-M5 (U17): linux-desktop drive-desktop mit temporaerem HOME (L272, D3) ----
-desktop_task_disable_keeps_device_tree            linux-desktop:drive-desktop  fixture=home  paket=U34  quelle=D3-linux-desktop
 
-# ---- S2 DRV-M10 Bestandsvertraege ohne Namen im Plan (Namen von U39 gesetzt; Kern-Lesung Abschnitt 5) ----
-drive_task_stage_names_se_mount_prefix_unchanged  linux-core:unit,windows-core:drive-cli  paket=offen  quelle=L312,D3-Erhaltung-S2
-drive_task_mount_snapshot_json_unchanged          linux-core:unit,windows-core:drive-cli  paket=offen  quelle=L312,D3-Erhaltung-S2
-drive_task_cli_error_texts_unchanged              linux-core:unit,windows-core:drive-cli  paket=offen  quelle=L312,D3-Erhaltung-S2
 
 # ---- S3 VLT-M6 (U20): linux-core unit und vault-klartext, linux-root vault-klartext-drive (T495, T564) ----
 vault_task_klartext_actions_leave_no_marker       linux-core:vault-klartext  fixture=marker threads=1  paket=U20  quelle=T564
