@@ -3,8 +3,10 @@
 
     <!-- DSK-M9 (U35-33): a second home screen in the test APK, so the system has two launchers once the se
          launcher is off again (`launcher_task_disable_with_two_launchers_shows_chooser_hint`). Off until
-         the test switches it on and off again; the package name comes from Gradle. -->
-    <application>
+         the test switches it on and off again; the package name comes from Gradle.
+         DSK-M11 (U38-16): a widget with a configuration activity and an activity that asks the launcher to pin a
+         shortcut or a widget. -->
+    <application android:label="se Test-APK">
         <activity
             android:name="app.smartexplorer.android.task.TestHomeActivity"
             android:enabled="false"
@@ -15,5 +17,31 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
+
+        <receiver
+            android:name="app.smartexplorer.android.task.TestWidgetProvider"
+            android:exported="true"
+            android:label="se Test-Widget">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/test_widget_info" />
+        </receiver>
+
+        <activity
+            android:name="app.smartexplorer.android.task.TestWidgetConfigActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" />
+            </intent-filter>
+        </activity>
+
+        <!-- The plan names this activity unexported (U38-16); it is exported here because the host script starts it
+             with `am start`, and an unexported activity of another package refuses the shell. -->
+        <activity
+            android:name="app.smartexplorer.android.task.TestPinRequesterActivity"
+            android:exported="true" />
     </application>
 </manifest>

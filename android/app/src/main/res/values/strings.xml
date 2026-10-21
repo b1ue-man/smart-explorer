@@ -4,6 +4,8 @@
 
     <!-- The se launcher (DSK-M9): the name in the system's list of home screens -->
     <string name="launcher_label">Smart Explorer Startbildschirm</string>
+    <!-- DSK-M11 (U38): the confirmation of a pin request -->
+    <string name="launcher_pin_label">Zum Startbildschirm hinzufügen</string>
 
     <!-- Notification channels (ids: transfers, background, updates, share) -->
     <string name="channel_transfers">Übertragungen</string>

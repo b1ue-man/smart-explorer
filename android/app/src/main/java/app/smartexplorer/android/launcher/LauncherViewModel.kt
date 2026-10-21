@@ -1,7 +1,10 @@
 package app.smartexplorer.android.launcher
 
+import android.app.Activity
 import android.app.Application
+import android.appwidget.AppWidgetProviderInfo
 import android.content.ActivityNotFoundException
+import android.content.Intent
 import android.content.pm.LauncherApps
 import android.content.pm.ShortcutInfo
 import android.graphics.Rect
@@ -13,6 +16,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Offset
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import app.smartexplorer.android.launcher.apps.AppCatalog
 import app.smartexplorer.android.launcher.apps.AppEntry
@@ -26,7 +30,22 @@ import app.smartexplorer.android.launcher.model.HomeLayout
 import app.smartexplorer.android.launcher.model.Kinds
 import app.smartexplorer.android.launcher.model.LayoutOps
 import app.smartexplorer.android.launcher.model.LayoutRepository
+import app.smartexplorer.android.launcher.model.Location
+import app.smartexplorer.android.launcher.model.Span
 import app.smartexplorer.android.launcher.shortcuts.Shortcuts
+import app.smartexplorer.android.launcher.widgets.LauncherWidgetHost
+import app.smartexplorer.android.launcher.widgets.PendingWidget
+import app.smartexplorer.android.launcher.widgets.REQ_WIDGET_BIND
+import app.smartexplorer.android.launcher.widgets.REQ_WIDGET_CONFIGURE
+import app.smartexplorer.android.launcher.widgets.Restored
+import app.smartexplorer.android.launcher.widgets.ResizeLimits
+import app.smartexplorer.android.launcher.widgets.Side
+import app.smartexplorer.android.launcher.widgets.SizeGrids
+import app.smartexplorer.android.launcher.widgets.WidgetFlow
+import app.smartexplorer.android.launcher.widgets.WidgetResizing
+import app.smartexplorer.android.launcher.widgets.WidgetSizes
+import app.smartexplorer.android.launcher.widgets.WidgetStep
+import app.smartexplorer.android.launcher.widgets.resizeLimitsOf
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -48,7 +67,7 @@ data class MenuTarget(val item: HomeItem, val source: MenuSource, val anchor: Of
  * change of the person goes through [edit], which starts from the **displayed** layout and writes the
  * displayed cells (U35-19). No `AppNav.token`, no core: this is the `:launcher` process (U35-11, U35-16).
  */
-class LauncherViewModel(application: Application) : AndroidViewModel(application) {
+class LauncherViewModel(application: Application, private val state: SavedStateHandle) : AndroidViewModel(application) {
     val repository: LayoutRepository = LayoutRepository.get(application)
     val catalog: AppCatalog = AppCatalog.get(application)
     val icons: IconLoader = IconLoader.get(application)
@@ -56,7 +75,18 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val launcherApps: LauncherApps = application.getSystemService(LauncherApps::class.java)
     private val users: UserManager = application.getSystemService(UserManager::class.java)
 
+    /** The widget host and the flow around it (U38-4, U38-7); the host listens between `onStart` and `onStop` of the activity. */
+    val widgetHost = LauncherWidgetHost(application)
+    val widgets = WidgetFlow(application, widgetHost)
+
     private val gridSize = MutableStateFlow(0 to 0)
+
+    /**
+     * The grids of both orientations for the widget sizes (U38-9). Until the home screen has measured itself this is an
+     * estimate from the screen size, the same one the first arrangement uses.
+     */
+    var sizeGrids by mutableStateOf(estimateGrids(application, repository.layout.value.grid.iconDp))
+        private set
 
     /** The layout as displayed in the current grid; the stored one is untouched by size changes (U35-19). */
     val display: StateFlow<HomeLayout> = combine(repository.layout, gridSize) { stored, size ->
@@ -76,6 +106,25 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         private set
     var moveTarget by mutableStateOf<HomeItem?>(null)
 
+    /** The sheet „Widgets“ is open (U38-10). */
+    var widgetPicker by mutableStateOf(false)
+        private set
+
+    /** The widget whose size is being changed (handles shown, U38-9). */
+    var resizeId by mutableStateOf<String?>(null)
+        private set
+
+    /** The system dialog or configuration activity the activity has to start next (U38-7); it clears it after starting. */
+    var widgetStep by mutableStateOf<WidgetStep?>(null)
+        private set
+
+    /** The widget on its way to the home screen; kept in the saved state so it survives the death of the process. */
+    private var pendingWidget: PendingWidget?
+        get() = PendingWidget.decode(state.get<String>(KEY_PENDING_WIDGET))
+        set(value) {
+            state[KEY_PENDING_WIDGET] = value?.encode()
+        }
+
     /** Set by the menu entry „Umbenennen“: the folder popup opens with the name field active. */
     var renaming by mutableStateOf(false)
     var toast by mutableStateOf<String?>(null)
@@ -94,10 +143,16 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     /** True while a layer is open that "Zurück" closes (U35-17). */
     val hasOpenLayer: Boolean
-        get() = menu != null || moveTarget != null || openFolderId != null || editSheet || drawerOpen || query.isNotEmpty()
+        get() = menu != null || moveTarget != null || widgetPicker || resizeId != null || openFolderId != null || editSheet || drawerOpen || query.isNotEmpty()
 
     fun setGrid(columns: Int, rows: Int) {
         gridSize.value = columns to rows
+    }
+
+    /** The page area of the current orientation in dp, for the sizes widgets are told (U38-9). */
+    fun setGeometry(areaWidthDp: Float, areaHeightDp: Float, iconDp: Int) {
+        val grids = SizeGrids.of(areaWidthDp, areaHeightDp, iconDp, getApplication<Application>().resources.displayMetrics.density)
+        if (grids != sizeGrids) sizeGrids = grids
     }
 
     fun showToast(text: String) {
@@ -131,6 +186,23 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         editSheet = true
     }
 
+    fun openWidgetPicker() {
+        if (editSheet) closeEditSheet()
+        widgetPicker = true
+    }
+
+    fun closeWidgetPicker() {
+        widgetPicker = false
+    }
+
+    fun startResize(item: HomeItem) {
+        resizeId = item.id
+    }
+
+    fun endResize() {
+        resizeId = null
+    }
+
     fun closeEditSheet() {
         editSheet = false
         pruneEmptyPages()
@@ -143,6 +215,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         openFolderId = null
         menu = null
         moveTarget = null
+        widgetPicker = false
+        resizeId = null
         if (editSheet) closeEditSheet()
         homeTick++
     }
@@ -152,6 +226,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         when {
             menu != null -> menu = null
             moveTarget != null -> moveTarget = null
+            widgetPicker -> widgetPicker = false
+            resizeId != null -> resizeId = null
             openFolderId != null -> openFolderId = null
             editSheet -> closeEditSheet()
             query.isNotEmpty() -> query = ""
@@ -232,6 +308,172 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun setIconDp(iconDp: Int) = edit { it.copy(grid = it.grid.copy(iconDp = iconDp)) }
+
+    // ---- widgets (U38) ----------------------------------------------------------------------------
+
+    /** „Hinzufügen“ of the picker (U38-7): allocate an id, bind it (with the system dialog when needed), set it up, place it. */
+    fun addWidget(info: AppWidgetProviderInfo, span: Span) {
+        widgetPicker = false
+        handle(widgets.begin(info, span, WidgetSizes.forSpan(span, sizeGrids.portrait, sizeGrids.landscape)))
+    }
+
+    /** „Erlauben“ on a cell whose widget lost its id (U38-6 step 3). */
+    fun allowWidget(item: HomeItem) {
+        val provider = item.provider
+        val info = provider?.let { widgets.findProvider(it, item.userSerial) }
+        if (info == null) {
+            showToast("Das Widget ist nicht verfügbar.")
+            return
+        }
+        handle(widgets.begin(info, item.span, WidgetSizes.forSpan(item.span, sizeGrids.portrait, sizeGrids.landscape), itemId = item.id))
+    }
+
+    /** „Einrichten“ on a cell whose configuration is open, and „Neu einrichten“ of the menu (U38-8). */
+    fun setUpWidget(item: HomeItem) {
+        val id = item.widgetId ?: return
+        val provider = item.provider ?: return
+        handle(widgets.configureStep(PendingWidget(id, provider, item.userSerial, item.span, PendingWidget.Stage.Configure, item.id)))
+    }
+
+    /** The result of a system dialog the activity started for a widget (U38-7, `LauncherActivity.onActivityResult`). */
+    fun onWidgetResult(requestCode: Int, resultCode: Int, @Suppress("UNUSED_PARAMETER") data: Intent?) {
+        val waiting = pendingWidget ?: return
+        val ok = resultCode == Activity.RESULT_OK
+        when (requestCode) {
+            REQ_WIDGET_BIND -> handle(widgets.onBindResult(waiting, ok))
+            REQ_WIDGET_CONFIGURE -> handle(widgets.onConfigureResult(waiting, ok))
+        }
+    }
+
+    fun clearWidgetStep() {
+        widgetStep = null
+    }
+
+    private fun handle(step: WidgetStep) {
+        when (step) {
+            is WidgetStep.AskBind -> {
+                pendingWidget = step.pending
+                widgetStep = step
+            }
+            is WidgetStep.AskConfigure -> {
+                pendingWidget = step.pending
+                widgetStep = step
+            }
+            is WidgetStep.Finished -> {
+                pendingWidget = null
+                finishWidget(step.pending)
+            }
+            is WidgetStep.Failed -> {
+                pendingWidget = null
+                step.message?.let { showToast(it) }
+            }
+        }
+    }
+
+    /** Places a new widget, or writes the new id and state into the item it belongs to (U38-6, U38-9). */
+    private fun finishWidget(widget: PendingWidget) {
+        val itemId = widget.itemId
+        if (itemId == null) {
+            edit(syncPins = false) { layout ->
+                val item = HomeItem(
+                    id = LayoutOps.newId(layout),
+                    kind = Kinds.WIDGET,
+                    span = widget.span,
+                    attrs = JsonObject(
+                        mapOf(
+                            "provider" to JsonPrimitive(widget.provider),
+                            "user" to JsonPrimitive(widget.userSerial),
+                            "widgetId" to JsonPrimitive(widget.id),
+                            "configured" to JsonPrimitive(true),
+                        ),
+                    ),
+                )
+                LayoutOps.addAnywhere(layout, item, currentPage)
+            }
+            return
+        }
+        val configured = if (widget.stage == PendingWidget.Stage.Configure) {
+            true
+        } else {
+            val info = widgets.manager.getAppWidgetInfo(widget.id)
+            info == null || !widgets.needsConfiguration(info)
+        }
+        viewModelScope.launch {
+            repository.update { layout ->
+                LayoutOps.updateItem(layout, itemId) { it.withAttr("widgetId", JsonPrimitive(widget.id)).withAttr("configured", JsonPrimitive(configured)) }
+            }
+        }
+    }
+
+    /** Checks every widget of the arrangement against the system after the activity started (U38-6). */
+    private suspend fun restoreWidgets() {
+        val items = LayoutOps.allItems(repository.layout.value).filter { it.isWidget }
+        if (items.isEmpty()) return
+        val grids = sizeGrids
+        val reachable = catalog.usableProfiles
+        for (item in items) {
+            val sizes = WidgetSizes.forSpan(item.span, grids.portrait, grids.landscape)
+            when (val restored = widgets.restore(item, sizes, item.userSerial in reachable)) {
+                Restored.Keep, Restored.NeedsAllow -> Unit
+                is Restored.Rebound -> repository.update { layout ->
+                    LayoutOps.updateItem(layout, item.id) {
+                        it.withAttr("widgetId", JsonPrimitive(restored.widgetId)).withAttr("configured", JsonPrimitive(restored.configured))
+                    }
+                }
+                Restored.Gone -> repository.update { LayoutOps.remove(it, item.id) }
+            }
+        }
+    }
+
+    /** Frees the id of every widget that leaves the arrangement, whichever way it leaves (U38-6). */
+    private suspend fun releaseRemovedWidgets() {
+        var known = LayoutOps.widgetIds(repository.layout.value)
+        repository.layout.collect { layout ->
+            val now = LayoutOps.widgetIds(layout)
+            (known - now).forEach { widgets.release(it) }
+            known = now
+        }
+    }
+
+    /** The limits of [item]'s size in the displayed grid, or `null` while the grid is unknown or the widget unbound. */
+    private fun limitsOf(item: HomeItem): ResizeLimits? {
+        val info = item.widgetId?.let { widgets.manager.getAppWidgetInfo(it) } ?: return null
+        val (columns, rows) = gridSize.value
+        if (columns <= 0 || rows <= 0) return null
+        val grids = sizeGrids
+        return resizeLimitsOf(info, item.span, grids.current.cellWidthDp * grids.density, grids.current.cellHeightDp * grids.density, columns, rows)
+    }
+
+    /** True when the menu offers „Größe ändern“ for [item]: the provider lets at least one direction change. */
+    fun canResize(item: HomeItem): Boolean = limitsOf(item)?.any == true
+
+    /** Stores the new area of a widget after its handles were pulled (U38-9). */
+    fun setWidgetArea(id: String, cell: Cell, span: Span) = edit(syncPins = false) { LayoutOps.setArea(it, id, cell, span) }
+
+    /**
+     * One cell wider, narrower, taller or lower (the accessibility alternative to the handles): the side that
+     * allows it is moved. Returns whether anything changed.
+     */
+    fun stepWidget(item: HomeItem, horizontal: Boolean, grow: Boolean): Boolean {
+        val limits = limitsOf(item) ?: return false
+        val (columns, rows) = gridSize.value
+        val found = LayoutOps.find(display.value, item.id) ?: return false
+        val page = (found.location as? Location.Page)?.index ?: return false
+        val taken = GridGeometry.occupied(display.value.pages[page].filter { it.id != item.id })
+        val attempts = when {
+            horizontal && grow -> listOf(Side.Right to 1, Side.Left to -1)
+            horizontal -> listOf(Side.Right to -1, Side.Left to 1)
+            grow -> listOf(Side.Bottom to 1, Side.Top to -1)
+            else -> listOf(Side.Bottom to -1, Side.Top to 1)
+        }
+        for ((side, delta) in attempts) {
+            val area = WidgetResizing.pull(item.cell, item.span, side, delta, limits, taken, columns, rows) ?: continue
+            setWidgetArea(item.id, area.first, area.second)
+            return true
+        }
+        showToast("Die Größe lässt sich nicht weiter ändern.")
+        return false
+    }
 
     /** Drops empty pages except the first when the edit mode ends (U35-22). */
     fun pruneEmptyPages() = edit(syncPins = false) { layout ->
@@ -330,6 +572,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             catalog.reload()
             refreshShortcuts()
             pruneDeadItems()
+            restoreWidgets()
         }
     }
 
@@ -412,8 +655,22 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch(Dispatchers.Default) { catalog.reload() }
     }
 
+    init {
+        viewModelScope.launch(Dispatchers.Default) { releaseRemovedWidgets() }
+    }
+
     companion object {
         /** Ids of items that are not in the layout yet (dragged out of the app list); a real id is given on the drop. */
         const val TRANSIENT_PREFIX = "drag:"
+
+        private const val KEY_PENDING_WIDGET = "pendingWidget"
+
+        /** Before the home screen has measured itself: the page area of the screen without insets, dock and page dots. */
+        private fun estimateGrids(application: Application, iconDp: Int): SizeGrids {
+            val metrics = application.resources.displayMetrics
+            val widthDp = metrics.widthPixels / metrics.density
+            val heightDp = metrics.heightPixels / metrics.density - GridGeometry.dockHeightDp(iconDp) - GridGeometry.INDICATOR_DP - 96f
+            return SizeGrids.of(widthDp, heightDp, iconDp, metrics.density)
+        }
     }
 }

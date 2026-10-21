@@ -59,6 +59,9 @@ class AppCatalog private constructor(private val context: Context) {
     /** Apps shown in the list and found by the search: not those of the private space (U38). */
     val visible: List<AppEntry> get() = appsState.value.filter { it.kind != ProfileKind.Private }
 
+    /** Profiles whose widgets the picker offers, the owner's first (U38-10); the private space is left out until DSK-M12. */
+    fun profilesForPicker(): List<ProfileInfo> = profilesState.value.filter { it.kind != ProfileKind.Private }.sortedBy { !it.isPersonal }
+
     fun find(component: String, userSerial: Long): AppEntry? =
         appsState.value.firstOrNull { it.componentString == component && it.userSerial == userSerial }
 

@@ -3,6 +3,7 @@ package app.smartexplorer.android.launcher.model
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.longOrNull
 
@@ -12,11 +13,12 @@ data class Cell(val x: Int, val y: Int)
 /** Width and height in cells. */
 data class Span(val w: Int, val h: Int)
 
-/** Kinds this package draws itself; U38 adds `widget`, U40 `seDevice`, `seRoom`, `seVault`, `seScreens` (U35-31). */
+/** Kinds this package draws itself; U38 added `widget`, U40 adds `seDevice`, `seRoom`, `seVault`, `seScreens` (U35-31). */
 object Kinds {
     const val APP = "app"
     const val SHORTCUT = "shortcut"
     const val FOLDER = "folder"
+    const val WIDGET = "widget"
 }
 
 /**
@@ -35,6 +37,7 @@ data class HomeItem(
     val isApp: Boolean get() = kind == Kinds.APP
     val isShortcut: Boolean get() = kind == Kinds.SHORTCUT
     val isFolder: Boolean get() = kind == Kinds.FOLDER
+    val isWidget: Boolean get() = kind == Kinds.WIDGET
 
     /** App or shortcut: what may go into a folder. */
     val canBeInFolder: Boolean get() = isApp || isShortcut
@@ -42,6 +45,8 @@ data class HomeItem(
     fun attr(name: String): String? = (attrs[name] as? JsonPrimitive)?.contentOrNull
 
     fun attrLong(name: String): Long? = (attrs[name] as? JsonPrimitive)?.longOrNull
+
+    fun attrBool(name: String): Boolean? = (attrs[name] as? JsonPrimitive)?.booleanOrNull
 
     fun withAttr(name: String, value: JsonElement): HomeItem = copy(attrs = JsonObject(attrs + (name to value)))
 
@@ -53,6 +58,16 @@ data class HomeItem(
 
     /** Serial number of the profile the app belongs to. */
     val userSerial: Long get() = attrLong("user") ?: 0L
+
+    /** Widget (U38-6): `<package>/<class>` of the provider and the id the widget host gave it (`null` when unknown). */
+    val provider: String? get() = attr("provider")
+
+    val providerPackage: String? get() = provider?.substringBefore('/')?.takeIf { it.isNotEmpty() }
+
+    val widgetId: Int? get() = attrLong("widgetId")?.toInt()
+
+    /** False while a widget still has to be set up by its configuration activity (U38-6); missing means set up. */
+    val configured: Boolean get() = attrBool("configured") ?: true
 
     /** Name of a folder. */
     val name: String get() = attr("name") ?: FOLDER_NAME

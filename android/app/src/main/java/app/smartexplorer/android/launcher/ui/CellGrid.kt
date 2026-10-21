@@ -40,6 +40,8 @@ import app.smartexplorer.android.launcher.LauncherViewModel
 import app.smartexplorer.android.launcher.apps.AppEntry
 import app.smartexplorer.android.launcher.model.HomeItem
 import app.smartexplorer.android.launcher.model.Kinds
+import app.smartexplorer.android.launcher.widgets.WidgetView
+import app.smartexplorer.android.launcher.widgets.widgetResizeActions
 
 /**
  * What the tiles need to draw: the view model, the symbol size and the apps and pinned shortcuts by
@@ -52,6 +54,12 @@ class ItemContext(
     val apps: Map<String, AppEntry>,
     val shortcutInfos: Map<String, ShortcutInfo>,
 ) {
+    /** The drag of the home screen, set by it; a widget view reports its long press and moves here (U38-4). */
+    var dragHost: DragHost? = null
+
+    /** True while an item is being dragged; a second long press then starts nothing. */
+    var isDragActive: () -> Boolean = { false }
+
     fun entry(item: HomeItem): AppEntry? = item.component?.let { apps["$it#${item.userSerial}"] }
 
     fun shortcut(item: HomeItem): ShortcutInfo? = shortcutInfos[vm.shortcutKey(item)]
@@ -61,6 +69,7 @@ class ItemContext(
         Kinds.APP -> entry(item)?.label ?: item.packageName.orEmpty()
         Kinds.SHORTCUT -> shortcut(item)?.shortLabel?.toString() ?: "Verknüpfung"
         Kinds.FOLDER -> item.name
+        Kinds.WIDGET -> vm.widgets.label(item)
         else -> "Unbekanntes Element"
     }
 }
@@ -79,6 +88,7 @@ fun ItemContent(item: HomeItem, context: ItemContext) {
         Kinds.APP -> AppTile(item, context)
         Kinds.SHORTCUT -> ShortcutTile(item, context)
         Kinds.FOLDER -> FolderTile(item, context)
+        Kinds.WIDGET -> WidgetView(item, context)
         else -> UnknownItem(item)
     }
 }
@@ -91,7 +101,7 @@ private fun UnknownItem(item: HomeItem) {
 
 /** Semantics of a cell: name and the actions of U35-32 (move, remove, app info for apps). */
 @Composable
-private fun Modifier.cellSemantics(item: HomeItem, context: ItemContext): Modifier {
+internal fun Modifier.cellSemantics(item: HomeItem, context: ItemContext): Modifier {
     val label = context.label(item)
     val vm = context.vm
     return semantics {
@@ -112,6 +122,7 @@ private fun Modifier.cellSemantics(item: HomeItem, context: ItemContext): Modifi
                 true
             }
         }
+        if (item.isWidget) actions += widgetResizeActions(item, context)
         customActions = actions
     }
 }
@@ -258,18 +269,19 @@ fun CellGridPage(
 ) {
     Box(modifier.fillMaxSize()) {
         for (item in items) {
-            if (item.id == exclude) continue
-            PlacedItem(item, metrics, context)
+            // A dragged widget stays composed, invisible: the view that began the drag keeps receiving its touches (U38-4).
+            if (item.id == exclude && !item.isWidget) continue
+            PlacedItem(item, metrics, context, hidden = item.id == exclude)
         }
     }
 }
 
 @Composable
-internal fun PlacedItem(item: HomeItem, metrics: HomeMetrics, context: ItemContext) {
+internal fun PlacedItem(item: HomeItem, metrics: HomeMetrics, context: ItemContext, hidden: Boolean = false) {
     val density = androidx.compose.ui.platform.LocalDensity.current
     val cellW = with(density) { metrics.cellW.toDp() }
     val cellH = with(density) { metrics.cellH.toDp() }
     Box(
-        Modifier.offset(cellW * item.cell.x, cellH * item.cell.y).size(cellW * item.span.w, cellH * item.span.h),
+        Modifier.offset(cellW * item.cell.x, cellH * item.cell.y).size(cellW * item.span.w, cellH * item.span.h).alpha(if (hidden) 0f else 1f),
     ) { ItemContent(item, context) }
 }
