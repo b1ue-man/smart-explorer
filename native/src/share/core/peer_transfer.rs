@@ -281,6 +281,8 @@ impl PeerBackend {
             path: path.to_string(),
             id: id.map(str::to_string),
             offset,
+            len: 0,
+            lz4: self.lz4_offered(),
         };
         match self.open_read_request(request, "peer read at") {
             Ok(reader) => Ok(Some(reader)),

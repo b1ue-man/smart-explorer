@@ -5,7 +5,8 @@ use iroh::endpoint::{RecvStream, VarInt};
 
 use super::backend::ShareIrohNode;
 use super::core::eio;
-use super::framing::recv_data_frame;
+use super::framing::lz4_stream::{classify, Content};
+use super::framing::{recv_content_frame, TAG_DATA_LZ4};
 use super::io_deadline;
 
 const PEER_ABORT_CODE: VarInt = VarInt::from_u32(1);
@@ -15,6 +16,7 @@ pub(super) fn reader(
     recv: RecvStream,
     size: u64,
     data_tag: u8,
+    lz4: bool,
     session_key: String,
     generation: usize,
 ) -> Box<dyn Read + Send> {
@@ -23,6 +25,7 @@ pub(super) fn reader(
         recv,
         remaining: size,
         data_tag,
+        lz4,
         buf: Vec::new(),
         pos: 0,
         terminal: None,
@@ -36,6 +39,8 @@ struct PeerReader {
     recv: RecvStream,
     remaining: u64,
     data_tag: u8,
+    /// The request asked for LZ4 blocks, so `TAG_DATA_LZ4` frames are valid.
+    lz4: bool,
     buf: Vec<u8>,
     pos: usize,
     terminal: Option<(io::ErrorKind, String)>,
@@ -57,16 +62,32 @@ impl Read for PeerReader {
         while self.pos >= self.buf.len() {
             let frame = self.node.block_on(io_deadline::run(
                 "peer read data",
-                recv_data_frame(&mut self.recv),
+                recv_content_frame(&mut self.recv, self.lz4),
             ));
             let (tag, payload) = match frame {
                 Ok(frame) => frame,
+                Err(error) => {
+                    let error = if error.kind() == io::ErrorKind::UnexpectedEof {
+                        // The host ended its stream before the announced
+                        // length: the file shrank while it was read.
+                        io::Error::new(
+                            io::ErrorKind::UnexpectedEof,
+                            format!("Quelle wurde während der Übertragung geändert ({error})"),
+                        )
+                    } else {
+                        error
+                    };
+                    return Err(self.close_with(error));
+                }
+            };
+            let payload = match classify(tag, payload, self.lz4) {
+                Ok(Content::Bytes(bytes)) if tag == self.data_tag || tag == TAG_DATA_LZ4 => bytes,
+                Ok(_) => {
+                    let error = eio("unerwarteter Frame beim Lesen");
+                    return Err(self.close_with(error));
+                }
                 Err(error) => return Err(self.close_with(error)),
             };
-            if tag != self.data_tag {
-                let error = eio("unerwarteter Frame beim Lesen");
-                return Err(self.close_with(error));
-            }
             if payload.len() as u64 > self.remaining {
                 let error = eio("Peer sendet mehr Daten als angekuendigt");
                 return Err(self.close_with(error));

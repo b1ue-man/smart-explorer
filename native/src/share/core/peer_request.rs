@@ -210,6 +210,7 @@ impl PeerBackend {
         self.open_read_request(
             FsRequest::Read {
                 path: path.to_string(),
+                lz4: self.lz4_offered(),
             },
             "peer read open",
         )
@@ -221,6 +222,7 @@ impl PeerBackend {
         request: FsRequest,
         operation: &'static str,
     ) -> VfsResult<Box<dyn Read + Send>> {
+        let lz4 = request.asks_lz4();
         let deadline = Instant::now() + IDEMPOTENT_CONTROL_BUDGET;
         let lease = self.mount_lease.current()?;
         let mut last_error = None;
@@ -272,6 +274,7 @@ impl PeerBackend {
                             opened.recv,
                             size,
                             TAG_DATA,
+                            lz4,
                             opened.session_key,
                             opened.generation,
                         ));
@@ -303,6 +306,7 @@ impl PeerBackend {
         request: FsRequest,
         operation: &'static str,
     ) -> VfsResult<Box<dyn Write + Send>> {
+        let lz4 = request.asks_lz4();
         let lease = self.mount_lease.current()?;
         let mut attempts = Attempts::new(1);
         let mut last_error = None;
@@ -362,6 +366,7 @@ impl PeerBackend {
                 opened.send,
                 opened.recv,
                 lease,
+                lz4,
                 opened.session_key,
                 opened.generation,
             ));
@@ -388,8 +393,14 @@ mod tests {
             acquire_lease: true,
             lease_request_id: Some("mount-request".into()),
         }));
-        assert!(!is_retryable_read(&FsRequest::Read { path: "/x".into() }));
-        assert!(!is_retryable_read(&FsRequest::Write { path: "/x".into() }));
+        assert!(!is_retryable_read(&FsRequest::Read {
+            path: "/x".into(),
+            lz4: false,
+        }));
+        assert!(!is_retryable_read(&FsRequest::Write {
+            path: "/x".into(),
+            lz4: false,
+        }));
         assert!(!is_retryable_read(&FsRequest::Rename {
             src: "/a".into(),
             dst: "/b".into(),

@@ -211,6 +211,31 @@ impl CopyPastePeerFixture {
         })
     }
 
+    /// The client may write on the host (a direct grant) or only read, as in
+    /// a read-only room.
+    pub(super) fn set_client_may_write(&self, write: bool) -> io::Result<()> {
+        let mut state = self
+            .host_auth
+            .lock()
+            .map_err(|_| io::Error::other("fixture authorization is poisoned"))?;
+        for grant in state.direct_grants.iter_mut() {
+            grant.write = write;
+        }
+        Ok(())
+    }
+
+    /// Closes the client's connection to the host; the next request opens a
+    /// new one, and the host's table of the old one is gone.
+    pub(super) fn close_connection(&self) -> io::Result<()> {
+        let endpoint = self.peer.current_endpoint()?;
+        let opened = self.peer.node.open_stream(&endpoint, &self.peer.identity)?;
+        opened.connection.close(
+            iroh::endpoint::VarInt::from_u32(7),
+            b"fixture closes the connection",
+        );
+        Ok(())
+    }
+
     pub(super) fn revoke_access(&self) -> io::Result<()> {
         self.host_auth
             .lock()
@@ -225,6 +250,12 @@ impl CopyPastePeerFixture {
 mod analysis_request_id_task_tests;
 #[path = "direct_open_task_tests.rs"]
 mod direct_open_task_tests;
+#[path = "lz4_stream_loopback_tests.rs"]
+mod lz4_stream_loopback_tests;
+#[path = "range_read_tests.rs"]
+mod range_read_tests;
+#[path = "stage_ranges_tests.rs"]
+mod stage_ranges_tests;
 #[path = "transfer_engine_task_limit_tests.rs"]
 mod transfer_engine_task_limit_tests;
 #[path = "transfer_engine_task_path_tests.rs"]

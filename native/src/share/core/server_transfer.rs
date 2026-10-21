@@ -1,4 +1,4 @@
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,13 +8,16 @@ use tokio::sync::{mpsc, oneshot};
 
 use super::blocking;
 use super::core::eio;
-use super::framing::{recv_data_frame, reply, reply_err, send_tagged, TAG_DATA};
-use super::fs;
+use super::framing::lz4_stream::{self, classify, Content};
+use super::framing::{recv_content_frame, reply, reply_err};
 use super::fs_access::FsAccess;
 use super::io_deadline;
 use super::mount_lease::{run_authorized, MountLeaseAuthorization};
 use super::wire::{Ctrl, FsRequest, FsResponse};
-use crate::vfs::{Backend, VfsMeta};
+
+#[path = "server_read.rs"]
+mod server_read;
+pub(super) use server_read::{read_file, stat_item, ReadSource};
 
 /// Chunks a transfer worker may run ahead of its stream (512 KiB): one disk
 /// read overlaps one network send; admission reserves this memory per worker.
@@ -26,147 +29,13 @@ pub(super) enum WriteMode {
     Create,
 }
 
-/// What a Read or ReadAt names: the whole file, a provider ID among equal
-/// names, or the rest from `offset` (resume).
-pub(super) struct ReadSource {
-    pub(super) path: String,
-    pub(super) id: Option<String>,
-    pub(super) offset: u64,
-}
-
 /// What a Write or WriteNew names and the lease its commit repeats.
 pub(super) struct WriteTarget {
     pub(super) path: String,
     pub(super) mode: WriteMode,
     pub(super) authorization: Option<MountLeaseAuthorization>,
-}
-
-/// Metadata of `path`, or of the item `id` among equal names in its folder
-/// (ID providers behind an export); without an ID exactly `stat`.
-pub(super) fn stat_item(
-    backend: &dyn Backend,
-    path: &str,
-    id: Option<&str>,
-) -> io::Result<VfsMeta> {
-    let Some(id) = id else {
-        return backend.stat(path);
-    };
-    let (parent, name) = path
-        .rsplit_once('/')
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Pfad ohne Ordner"))?;
-    let parent = if parent.is_empty() { "/" } else { parent };
-    backend
-        .list_dir(parent)?
-        .into_iter()
-        .find(|entry| entry.name == name && entry.id.as_deref() == Some(id))
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::NotFound,
-                format!("Datei mit der Kennung {id} fehlt: {path}"),
-            )
-        })
-}
-
-/// The `slot` (transfer admission) stays held until the worker ends; a
-/// client that reads nothing for `stall` loses it.
-pub(super) async fn read_file<G: Send + 'static>(
-    mut send: SendStream,
-    source: ReadSource,
-    access: FsAccess,
-    slot: G,
-    stall: Duration,
-) -> io::Result<()> {
-    let (ready_tx, ready_rx) = oneshot::channel();
-    let (data_tx, mut data_rx) = mpsc::channel(STREAM_BUFFER_CHUNKS);
-    let live = access.clone();
-    let worker = blocking::spawn_holding("Share read", slot, move || {
-        read_worker(source, access, ready_tx, data_tx)
-    });
-
-    let size = match ready_rx.await {
-        Ok(Ok(size)) => size,
-        Ok(Err(error)) => return reply_err(&mut send, error).await,
-        Err(_) => return Err(worker.join().await.unwrap_err_or_worker_exit("Share read")),
-    };
-    live.check_read()?;
-    let header = reply(&mut send, FsResponse::Data { size });
-    io_deadline::run_for("Share read data", stall, header).await?;
-    while let Some(chunk) = data_rx.recv().await {
-        let chunk = chunk?;
-        live.check_read()?;
-        let sent = send_tagged(&mut send, TAG_DATA, &chunk);
-        // Returning drops the channel: the worker stops and frees the slot.
-        io_deadline::run_for("Share read data", stall, sent).await?;
-    }
-    live.check_read()?;
-    worker.join().await
-}
-
-fn read_worker(
-    source: ReadSource,
-    access: FsAccess,
-    ready: oneshot::Sender<io::Result<u64>>,
-    chunks: mpsc::Sender<io::Result<Vec<u8>>>,
-) -> io::Result<()> {
-    let (size, mut reader) = match open_source(&access, &source) {
-        Ok(opened) => opened,
-        Err(error) => {
-            let _ = ready.send(Err(error));
-            return Ok(());
-        }
-    };
-    if ready.send(Ok(size)).is_err() {
-        return Ok(());
-    }
-    loop {
-        let mut buffer = vec![0u8; fs::CHUNK];
-        let read = match reader.read(&mut buffer) {
-            Ok(read) => read,
-            Err(error) => {
-                let _ = chunks.blocking_send(Err(error));
-                return Ok(());
-            }
-        };
-        if read == 0 {
-            return Ok(());
-        }
-        buffer.truncate(read);
-        if chunks.blocking_send(Ok(buffer)).is_err() {
-            return Ok(());
-        }
-    }
-}
-
-/// Bytes a Read or ReadAt announces and the reader that delivers them.
-fn open_source(access: &FsAccess, source: &ReadSource) -> io::Result<(u64, Box<dyn Read + Send>)> {
-    let target = access.resolve(&source.path)?;
-    let metadata = stat_item(&*target.backend, &target.path, source.id.as_deref())?;
-    if metadata.is_dir {
-        return Err(eio("Ordner kann nicht als Datei gelesen werden"));
-    }
-    if source.offset == 0 {
-        let reader = match source.id.as_deref() {
-            None => target.backend.open_read(&target.path)?,
-            Some(id) => target.backend.open_read_id(&target.path, Some(id))?,
-        };
-        return Ok((metadata.size, reader));
-    }
-    let remaining = metadata.size.checked_sub(source.offset).ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "Fortsetzungspunkt liegt hinter dem Dateiende",
-        )
-    })?;
-    let reader = target
-        .backend
-        .open_read_at(&target.path, source.id.as_deref(), source.offset)?
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::Unsupported,
-                "Diese Freigabe kann nicht mitten in der Datei weiterlesen",
-            )
-        })?;
-    Ok((remaining, reader))
+    /// The client may send LZ4 blocks (`lz4_v1`).
+    pub(super) lz4: bool,
 }
 
 /// The `slot` (transfer admission) stays held until the worker ends; a
@@ -183,6 +52,7 @@ pub(super) async fn write_file<G: Send + 'static>(
         .authorization
         .as_ref()
         .map(|authorization| authorization.token().to_string());
+    let lz4 = lz4_stream::negotiated(target.lz4);
     let (ready_tx, ready_rx) = oneshot::channel();
     let (command_tx, command_rx) = mpsc::channel(STREAM_BUFFER_CHUNKS);
     let (done_tx, done_rx) = oneshot::channel();
@@ -225,7 +95,11 @@ pub(super) async fn write_file<G: Send + 'static>(
     let mut done_rx = Some(done_rx);
     let mut worker = Some(worker);
     loop {
-        let frame = io_deadline::run_for("Share write data", stall, recv_data_frame(&mut recv));
+        let frame = io_deadline::run_for(
+            "Share write data",
+            stall,
+            recv_content_frame(&mut recv, lz4),
+        );
         let (tag, payload) = match frame.await {
             Ok(frame) => frame,
             Err(error) => {
@@ -234,19 +108,27 @@ pub(super) async fn write_file<G: Send + 'static>(
                 return Err(error);
             }
         };
-        if tag == TAG_DATA {
-            if command_tx.send(WriteCommand::Data(payload)).await.is_err() {
-                let error = await_write_error(&mut done_rx, &mut worker).await;
+        let control = match classify(tag, payload, lz4) {
+            Ok(Content::Bytes(bytes)) => {
+                if command_tx.send(WriteCommand::Data(bytes)).await.is_err() {
+                    let error = await_write_error(&mut done_rx, &mut worker).await;
+                    return reply_err(&mut send, error).await;
+                }
+                continue;
+            }
+            Ok(Content::Other(control)) => control,
+            Err(error) => {
+                drop(command_tx);
+                await_write_cleanup(&mut done_rx, &mut worker).await;
                 return reply_err(&mut send, error).await;
             }
-            continue;
-        }
+        };
         if tag != super::framing::TAG_CTRL {
             drop(command_tx);
             await_write_cleanup(&mut done_rx, &mut worker).await;
             return reply_err(&mut send, eio("unerwarteter Frame beim Schreiben")).await;
         }
-        match serde_json::from_slice::<Ctrl>(&payload).map_err(eio) {
+        match serde_json::from_slice::<Ctrl>(&control).map_err(eio) {
             Ok(Ctrl::Fs {
                 req: FsRequest::WriteDone,
                 lease,

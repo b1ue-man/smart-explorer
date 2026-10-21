@@ -305,6 +305,16 @@ impl Backend for AgentBackend {
         self.agent_open_read_len(path, offset, len).map(Some)
     }
 
+    /// A stage that several requests fill range by range (`range-v1`); an
+    /// agent without the label gets none of those frames.
+    fn open_segmented_stage(
+        &self,
+        stage: &str,
+        size: u64,
+    ) -> VfsResult<Option<Box<dyn crate::vfs::SegmentedStage>>> {
+        self.agent_open_segmented_stage(stage, size)
+    }
+
     fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
         self.agent_open_write(path)
     }

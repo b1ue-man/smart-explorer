@@ -9,6 +9,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use super::credit::CREDIT_REQUEST_LIMIT;
 use super::credit::{busy_message, credit_cost, RecvWindow, SendCredit, StreamCount};
+use super::range_ops::{agent_journal, STAGE_STALL};
+use super::range_stage::RangeStages;
 use super::session::{credited_sink, emit, CreditedInbound, Inbound, Sink};
 use super::{Frame, TRANSFER_FRAME_BACKLOG};
 
@@ -36,6 +38,8 @@ pub(crate) struct RequestContext {
     pub(crate) sink: Sink,
     pub(crate) inbound: Option<Box<dyn Inbound + Send>>,
     pub(crate) cancel: Arc<AtomicBool>,
+    /// The ranged-upload stages of this connection (`range-v1`).
+    pub(crate) stages: Arc<RangeStages>,
 }
 
 pub(crate) struct ServerSession {
@@ -45,6 +49,8 @@ pub(crate) struct ServerSession {
     cancels: Mutex<HashMap<u64, Arc<AtomicBool>>>,
     credits: Mutex<HashMap<u64, Arc<SendCredit>>>,
     streams: Arc<StreamCount>,
+    /// Stages of ranged uploads: owned by this connection, removed with it.
+    stages: Arc<RangeStages>,
 }
 
 /// Upload queue of a connection without credit: bounded in frames, so a
@@ -57,7 +63,11 @@ pub(crate) fn transfer_channel() -> (SyncSender<Frame>, Receiver<Frame>) {
 pub(crate) fn is_upload(request: &Frame) -> bool {
     matches!(
         request,
-        Frame::Write(_) | Frame::WriteNew(_) | Frame::PutTree(_) | Frame::BatchPut { .. }
+        Frame::Write(_)
+            | Frame::WriteNew(_)
+            | Frame::PutTree(_)
+            | Frame::BatchPut { .. }
+            | Frame::WriteAt { .. }
     )
 }
 
@@ -79,6 +89,7 @@ impl ServerSession {
             cancels: Mutex::new(HashMap::new()),
             credits: Mutex::new(HashMap::new()),
             streams: Arc::new(StreamCount::default()),
+            stages: RangeStages::new(CREDIT_REQUEST_LIMIT, STAGE_STALL, Some(agent_journal)),
         })
     }
 
@@ -103,7 +114,11 @@ impl ServerSession {
     /// starts a new request.
     pub(crate) fn route(&self, id: u64, frame: Frame) -> Option<Frame> {
         match frame {
-            Frame::Data(_) | Frame::TreeEntry { .. } | Frame::ItemEnd { .. } | Frame::End => {
+            Frame::Data(_)
+            | Frame::DataLz4(_)
+            | Frame::TreeEntry { .. }
+            | Frame::ItemEnd { .. }
+            | Frame::End => {
                 self.route_upload(id, frame);
                 None
             }
@@ -192,6 +207,7 @@ impl ServerSession {
             sink,
             inbound,
             cancel,
+            stages: self.stages.clone(),
         }
     }
 
@@ -247,6 +263,8 @@ impl ServerSession {
         for cancel in lock(&self.cancels).values() {
             cancel.store(true, Ordering::Relaxed);
         }
+        // Unfinished stages of ranged uploads go with the connection.
+        self.stages.close();
         lock(&self.uploads).clear();
         for credit in lock(&self.credits).values() {
             credit.close();
@@ -267,5 +285,11 @@ impl ServerSession {
     /// Forget a request whose worker could not start.
     pub(crate) fn discard(&self, id: u64) {
         self.close(id);
+    }
+}
+
+impl Drop for ServerSession {
+    fn drop(&mut self) {
+        self.stages.close();
     }
 }

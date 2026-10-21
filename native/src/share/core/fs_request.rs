@@ -4,7 +4,7 @@
 //! (`{"op": "…", field: …}`), so every field stays additive.
 use serde::{Deserialize, Serialize};
 
-use super::{is_false, FsBatchGet, FsBatchPut};
+use super::{is_false, FsBatchGet, FsBatchPut, FsSegmentedFinish, FsSegmentedOpen, FsStageWrite};
 
 /// What a request does to the host's files. Every request is named in
 /// `FsRequest::effect` (no catch-all arm), so a new request cannot reach a
@@ -178,12 +178,21 @@ pub(crate) enum FsRequest {
     StorageAnalysis(FsStorageAnalysis),
     Read {
         path: String,
+        /// `lz4_v1`: the host may send content blocks (`TAG_DATA_LZ4`).
+        #[serde(default, skip_serializing_if = "is_false")]
+        lz4: bool,
     },
     Write {
         path: String,
+        /// `lz4_v1`: the client may send content blocks.
+        #[serde(default, skip_serializing_if = "is_false")]
+        lz4: bool,
     },
     WriteNew {
         path: String,
+        /// `lz4_v1`: the client may send content blocks.
+        #[serde(default, skip_serializing_if = "is_false")]
+        lz4: bool,
     },
     WriteDone,
     MkdirAll {
@@ -236,13 +245,29 @@ pub(crate) enum FsRequest {
     GetBatch {
         items: Vec<FsBatchGet>,
     },
-    /// Transfer v1: read from `offset` (resume) or by provider ID.
+    /// Transfer v1: read from `offset` (resume) or by provider ID. With
+    /// `ranges_v1` the read may name its length: `len` bytes from `offset`
+    /// (0 = to the end), cut at the end of the file.
     ReadAt {
         path: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
         offset: u64,
+        #[serde(default, skip_serializing_if = "is_zero")]
+        len: u64,
+        /// `lz4_v1`: the host may send content blocks (`TAG_DATA_LZ4`).
+        #[serde(default, skip_serializing_if = "is_false")]
+        lz4: bool,
     },
+    /// `ranges_v1`: create the exclusive stage of the file `path` (the host
+    /// picks its name and holds the handle) and answer
+    /// `SegmentedStageReady`.
+    SegmentedStageOpen(FsSegmentedOpen),
+    /// `ranges_v1`: write one range of an open stage; the client then sends
+    /// exactly `len` bytes and ends its stream.
+    StageWriteAt(FsStageWrite),
+    /// `ranges_v1`: every range of the stage has arrived.
+    SegmentedStageFinish(FsSegmentedFinish),
     /// Transfer v1: one directory level; `exclusive` fails on a taken name.
     CreateDir {
         path: String,
@@ -311,6 +336,9 @@ impl FsRequest {
             | Self::RemoveDir { .. }
             | Self::RemoveTree { .. }
             | Self::DiscardStage { .. }
+            | Self::SegmentedStageOpen(_)
+            | Self::StageWriteAt(_)
+            | Self::SegmentedStageFinish(_)
             | Self::PutBatch { .. }
             | Self::Recycle(_)
             | Self::FinishStage(_)
@@ -322,6 +350,28 @@ impl FsRequest {
     /// peers without write right (FC1), re-admitted through the mount lease.
     pub(in crate::share) fn mutates_filesystem(&self) -> bool {
         self.effect() == FsEffect::Write
+    }
+
+    /// Whether the request lets the other side pack the content of its
+    /// stream (`lz4_v1`).
+    pub(in crate::share) fn asks_lz4(&self) -> bool {
+        match self {
+            Self::Read { lz4, .. }
+            | Self::Write { lz4, .. }
+            | Self::WriteNew { lz4, .. }
+            | Self::ReadAt { lz4, .. } => *lz4,
+            Self::StageWriteAt(write) => write.lz4,
+            _ => false,
+        }
+    }
+
+    /// The open stage a ranged-upload request writes into.
+    pub(in crate::share) fn range_stage(&self) -> Option<&str> {
+        match self {
+            Self::StageWriteAt(write) => Some(&write.stage),
+            Self::SegmentedStageFinish(finish) => Some(&finish.stage),
+            _ => None,
+        }
     }
 
     /// Batches admit every entry again, exactly like one single request.
@@ -341,8 +391,15 @@ impl FsRequest {
                 | Self::CreateDir { .. }
                 | Self::PromoteNoReplace { .. }
                 | Self::DiscardStage { .. }
+                | Self::SegmentedStageOpen(_)
+                | Self::StageWriteAt(_)
+                | Self::SegmentedStageFinish(_)
         )
     }
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 
 /// The caller persists recovery intent before sending this mutation once.

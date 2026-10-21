@@ -21,6 +21,8 @@ use super::StreamContext;
 #[path = "server_fs_control.rs"]
 mod control_operations;
 use control_operations::{answer, control, reply_unit, simple};
+#[path = "server_stage_ranges.rs"]
+pub(super) mod stage_ranges;
 
 /// One authorized filesystem stream, ready for its request.
 pub(super) struct FsStream {
@@ -140,39 +142,66 @@ pub(super) async fn serve(stream: FsStream, req: FsRequest) -> io::Result<()> {
         FsRequest::StorageAnalysis(request) => {
             crate::share::storage_analysis_server::serve(send, request, access, principal).await
         }
-        FsRequest::Read { path } => {
+        FsRequest::Read { path, lz4 } => {
             let source = ReadSource {
                 path,
                 id: None,
                 offset: 0,
+                len: 0,
+                lz4,
             };
             read(send, &context, source, access).await
         }
-        FsRequest::ReadAt { path, id, offset } => {
-            let source = ReadSource { path, id, offset };
+        FsRequest::ReadAt {
+            path,
+            id,
+            offset,
+            len,
+            lz4,
+        } => {
+            let source = ReadSource {
+                path,
+                id,
+                offset,
+                len,
+                lz4,
+            };
             read(send, &context, source, access).await
         }
-        FsRequest::Write { path } => {
+        FsRequest::Write { path, lz4 } => {
             write(
                 send,
                 recv,
                 &context,
-                (path, WriteMode::Replace),
+                (path, WriteMode::Replace, lz4),
                 access,
                 authorization,
             )
             .await
         }
-        FsRequest::WriteNew { path } => {
+        FsRequest::WriteNew { path, lz4 } => {
             write(
                 send,
                 recv,
                 &context,
-                (path, WriteMode::Create),
+                (path, WriteMode::Create, lz4),
                 access,
                 authorization,
             )
             .await
+        }
+        request @ (FsRequest::SegmentedStageOpen(_)
+        | FsRequest::StageWriteAt(_)
+        | FsRequest::SegmentedStageFinish(_)) => {
+            let stream = FsStream {
+                send,
+                recv,
+                access,
+                authorization,
+                context,
+                principal,
+            };
+            stage_ranges::serve(stream, request).await
         }
         FsRequest::MkdirAll { path } => {
             simple(
@@ -242,6 +271,11 @@ pub(super) async fn serve(stream: FsStream, req: FsRequest) -> io::Result<()> {
             })
             .await;
             reply_unit(&mut send, result).await
+        }
+        FsRequest::DiscardStage { path } if context.stages.holds(&path) => {
+            // A stage of a ranged upload this connection still has open: the
+            // table closes its handle and removes the file.
+            stage_ranges::discard(send, path, access, authorization, &context, &principal).await
         }
         FsRequest::DiscardStage { path } => {
             if !discardable_stage_path(&path) {
@@ -432,7 +466,7 @@ async fn write(
     mut send: SendStream,
     recv: RecvStream,
     context: &StreamContext,
-    (path, mode): (String, WriteMode),
+    (path, mode, lz4): (String, WriteMode, bool),
     access: FsAccess,
     authorization: Option<MountLeaseAuthorization>,
 ) -> io::Result<()> {
@@ -445,6 +479,7 @@ async fn write(
         path,
         mode,
         authorization,
+        lz4,
     };
     crate::share::server_transfer::write_file(send, recv, target, access, slot, context.stall())
         .await

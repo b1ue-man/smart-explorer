@@ -1,6 +1,7 @@
+use std::sync::Arc;
 use std::time::Duration;
 
-use iroh::endpoint::{QuicTransportConfig, VarInt};
+use iroh::endpoint::{ControllerFactory, QuicTransportConfig, VarInt};
 
 pub(super) const IROH_CONNECTION_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(5);
 pub(super) const IROH_PATH_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(5);
@@ -98,9 +99,31 @@ pub(super) fn transport_windows(budget: u64) -> TransportWindows {
     }
 }
 
+/// Environment variable that switches the QUIC congestion controller for a
+/// measurement (`cubic` or `bbr3`). It is a switch of the test suite, not a
+/// setting: no interface offers it, and the windows above never change with it.
+pub(super) const QUIC_CC_VARIABLE: &str = "SE_SHARE_QUIC_CC";
+
+/// The congestion controller for `choice`: only `bbr3` selects BBRv3 (an
+/// experimental draft); every other value, and no value, is Cubic, which
+/// stays the default until the measurements of the suite decide otherwise
+/// (U44-11 b).
+pub(super) fn congestion_factory(choice: &str) -> Arc<dyn ControllerFactory + Send + Sync> {
+    match choice {
+        "bbr3" => Arc::new(noq_proto::congestion::Bbr3Config::default()),
+        _ => Arc::new(noq_proto::congestion::CubicConfig::default()),
+    }
+}
+
+/// The controller named by the process's environment.
+fn congestion_from_environment() -> Arc<dyn ControllerFactory + Send + Sync> {
+    congestion_factory(std::env::var(QUIC_CC_VARIABLE).as_deref().unwrap_or(""))
+}
+
 pub(super) fn iroh_transport_config() -> QuicTransportConfig {
     let windows = transport_windows(crate::transfer::memory_budget());
     QuicTransportConfig::builder()
+        .congestion_controller_factory(congestion_from_environment())
         // Live idle peers remain open because the transport sends a keepalive
         // every five seconds. QUIC may extend its effective timeout to at least
         // three PTOs, so Exec adds its own authenticated application deadline.
@@ -171,6 +194,56 @@ mod tests {
         assert_eq!(IROH_MAX_CONCURRENT_UNI_STREAMS, 0);
 
         let _config = iroh_transport_config();
+    }
+
+    /// The controller a factory builds, by its type.
+    fn kind(factory: Arc<dyn ControllerFactory + Send + Sync>) -> &'static str {
+        let controller = factory.build(std::time::Instant::now(), 1200).into_any();
+        if controller.is::<noq_proto::congestion::Bbr3>() {
+            "bbr3"
+        } else if controller.is::<noq_proto::congestion::Cubic>() {
+            "cubic"
+        } else {
+            "other"
+        }
+    }
+
+    #[test]
+    fn speed_task_share_cc_default_is_cubic() {
+        assert_eq!(kind(congestion_factory("")), "cubic");
+        assert_eq!(kind(congestion_factory("cubic")), "cubic");
+        assert_eq!(QUIC_CC_VARIABLE, "SE_SHARE_QUIC_CC");
+        // The transport config takes the controller without touching windows.
+        let _config = iroh_transport_config();
+    }
+
+    #[test]
+    fn speed_task_share_cc_env_selects_bbr3() {
+        static ENVIRONMENT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = ENVIRONMENT.lock().unwrap_or_else(|p| p.into_inner());
+        let before = std::env::var_os(QUIC_CC_VARIABLE);
+        std::env::set_var(QUIC_CC_VARIABLE, "bbr3");
+        let chosen = kind(congestion_from_environment());
+        std::env::set_var(QUIC_CC_VARIABLE, "cubic");
+        let cubic = kind(congestion_from_environment());
+        std::env::remove_var(QUIC_CC_VARIABLE);
+        let absent = kind(congestion_from_environment());
+        if let Some(value) = before {
+            std::env::set_var(QUIC_CC_VARIABLE, value);
+        }
+        assert_eq!(chosen, "bbr3");
+        assert_eq!(cubic, "cubic");
+        assert_eq!(absent, "cubic");
+        assert_eq!(kind(congestion_factory("bbr3")), "bbr3");
+    }
+
+    #[test]
+    fn speed_task_share_cc_unknown_value_falls_back_to_cubic() {
+        for value in [
+            "BBR3", "bbr", "bbr2", "reno", " bbr3", "bbr3 ", "1", "newreno",
+        ] {
+            assert_eq!(kind(congestion_factory(value)), "cubic", "{value:?}");
+        }
     }
 
     #[test]

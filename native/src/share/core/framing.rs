@@ -6,8 +6,16 @@ use tokio::io::AsyncWriteExt;
 use super::core::eio;
 use super::wire::{Ctrl, FsResponse};
 
+#[path = "lz4_stream.rs"]
+pub(in crate::share) mod lz4_stream;
+
 pub(super) const TAG_CTRL: u8 = 0;
 pub(super) const TAG_DATA: u8 = 1;
+/// A content frame whose payload is an LZ4 block (`lz4_v1`): a kind byte (0
+/// raw, 1 LZ4), for 1 the raw length as a little-endian `u32`, then the
+/// block. Only streams that both sides negotiated carry it, and only for file
+/// content; control frames never do.
+pub(super) const TAG_DATA_LZ4: u8 = 2;
 const MAX_FRAME: usize = 16 * 1024 * 1024;
 pub(super) const MAX_HANDSHAKE_CTRL_FRAME: usize = 64 * 1024;
 pub(super) const MAX_REQUEST_CTRL_FRAME: usize = 256 * 1024;
@@ -17,6 +25,9 @@ pub(super) const MAX_REQUEST_CTRL_FRAME: usize = 256 * 1024;
 /// admission reserved; closing control frames of those streams are far
 /// smaller.
 pub(super) const MAX_DATA_FRAME: usize = super::fs::CHUNK + 1;
+/// The same for a stream that negotiated LZ4: a block is at most one chunk
+/// plus its kind byte or, packed, its kind byte and raw length.
+pub(super) const MAX_DATA_FRAME_LZ4: usize = super::fs::CHUNK + 1 + 5;
 
 pub(super) async fn reply(send: &mut SendStream, resp: FsResponse) -> io::Result<()> {
     send_ctrl(send, &Ctrl::FsResp { resp }).await
@@ -81,6 +92,48 @@ pub(super) async fn recv_data_frame(recv: &mut RecvStream) -> io::Result<(u8, Ve
     recv_tagged_limited(recv, MAX_DATA_FRAME).await
 }
 
+/// One frame of a content stream that may carry LZ4 blocks (`lz4`).
+pub(super) async fn recv_content_frame(
+    recv: &mut RecvStream,
+    lz4: bool,
+) -> io::Result<(u8, Vec<u8>)> {
+    let limit = if lz4 {
+        MAX_DATA_FRAME_LZ4
+    } else {
+        MAX_DATA_FRAME
+    };
+    recv_tagged_limited(recv, limit).await
+}
+
+/// Like `recv_content_frame`, but a stream that ends cleanly between two
+/// frames gives `None` (the sender of a range ends its stream after its
+/// last byte).
+pub(super) async fn recv_content_frame_or_end(
+    recv: &mut RecvStream,
+    lz4: bool,
+) -> io::Result<Option<(u8, Vec<u8>)>> {
+    let mut len4 = [0u8; 4];
+    match recv.read_exact(&mut len4).await {
+        Ok(()) => {}
+        Err(ReadExactError::FinishedEarly(0)) => return Ok(None),
+        Err(error) => return Err(read_exact_error(error)),
+    }
+    let n = u32::from_be_bytes(len4) as usize;
+    let limit = if lz4 {
+        MAX_DATA_FRAME_LZ4
+    } else {
+        MAX_DATA_FRAME
+    };
+    validate_frame_len(n, limit)?;
+    let mut tag = [0u8; 1];
+    recv.read_exact(&mut tag).await.map_err(read_exact_error)?;
+    let mut payload = vec![0u8; n - 1];
+    recv.read_exact(&mut payload)
+        .await
+        .map_err(read_exact_error)?;
+    Ok(Some((tag[0], payload)))
+}
+
 pub(super) async fn recv_tagged_limited(
     recv: &mut RecvStream,
     max_frame: usize,
@@ -131,7 +184,8 @@ mod tests {
     #[test]
     fn direct_open_task_quic_failure_keeps_underlying_disconnect_cause() {
         let error = read_exact_error(ReadExactError::ReadError(
-            iroh::endpoint::ReadError::ConnectionLost(iroh::endpoint::ConnectionError::TimedOut)));
+            iroh::endpoint::ReadError::ConnectionLost(iroh::endpoint::ConnectionError::TimedOut),
+        ));
         assert_eq!(error.kind(), io::ErrorKind::NotConnected);
         assert!(error.to_string().contains("connection lost:"));
         assert!(error.to_string().contains("timed out"));

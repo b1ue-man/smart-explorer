@@ -17,6 +17,9 @@ pub(super) const META_SPECIAL: u8 = 2;
 mod frame_encode;
 #[path = "frame_io.rs"]
 mod frame_io;
+pub(crate) use frame_encode::lz4_frames::{
+    free_cores, pack_lz4, pack_raw, raw_len, unpack, BlockSender, MAX_RAW,
+};
 pub use frame_io::{read_frame, read_frame_with_tree_budget, write_frame};
 
 #[cfg(test)]
@@ -269,7 +272,13 @@ impl Frame {
                 Some(frame) => frame,
                 None => match frame_encode::frame_ops::decode(t, &mut r)? {
                     Some(frame) => frame,
-                    None => return Err(bad(&format!("unknown frame tag {t}"))),
+                    None => match frame_encode::range_frames::decode(t, &mut r)? {
+                        Some(frame) => frame,
+                        None => match frame_encode::lz4_frames::decode(t, &mut r)? {
+                            Some(frame) => frame,
+                            None => return Err(bad(&format!("unknown frame tag {t}"))),
+                        },
+                    },
                 },
             },
         };

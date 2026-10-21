@@ -45,6 +45,17 @@ mod ops_types;
 mod promotion;
 #[path = "os/shared/put_tree.rs"]
 mod put_tree;
+#[path = "os/shared/range_journal.rs"]
+mod range_journal;
+#[cfg(test)]
+#[path = "core/range_lz4_tests.rs"]
+mod range_lz4_tests;
+#[path = "os/shared/range_ops.rs"]
+mod range_ops;
+#[path = "os/shared/range_space.rs"]
+mod range_space;
+#[path = "os/shared/range_stage.rs"]
+mod range_stage;
 #[path = "core/relative_path.rs"]
 mod relative_path;
 #[cfg(test)]
@@ -87,6 +98,7 @@ pub use batch_limits::{
     split_batch, BATCH_HEADER_MAX, BATCH_MAX_BYTES, BATCH_MAX_FILES, BATCH_UNKNOWN_MARKER,
     ITEM_PATH_MAX, ITEM_TEXT_MAX,
 };
+pub(crate) use codec::{free_cores, pack_lz4, pack_raw, raw_len, unpack, BlockSender, MAX_RAW};
 pub use codec::{read_frame, read_frame_with_tree_budget, write_frame};
 pub use credit::{
     busy_message, charged, credit_cost, parse_busy, window_target, RecvWindow, SendCredit,
@@ -94,14 +106,19 @@ pub use credit::{
 };
 pub(crate) use extension_parts::{append_duplicate_part, emit_duplicate_parts, emit_listing_parts};
 pub use features::{
-    server_version, server_version_with, service_slots, ServerFeatures, LABEL_BATCH, LABEL_CREDIT,
-    LABEL_STAGE,
+    lz4_switched_off, server_version, server_version_with, service_slots, ServerFeatures,
+    LABEL_BATCH, LABEL_CREDIT, LABEL_LZ4, LABEL_RANGE, LABEL_STAGE,
 };
 pub use fs::{is_pseudo_dir, list_local, stat_local, walk_local, WalkCounter};
+pub(crate) use local_platform::available_space;
 pub use node_codec::{TreeDecodeBudget, TREE_BUDGET_ERROR};
 pub use ops_types::{digest, omission, query, UNSUPPORTED_EXTENSION};
 pub(crate) use promotion::validate_destination_root;
 pub(crate) use put_tree::{BufferedTree, BufferedTreeReceiver, TreeManifestValidator};
+pub(crate) use range_journal::Journal;
+#[cfg(test)]
+pub(crate) use range_space::space_test_lock;
+pub(crate) use range_stage::{random_stage_name, Claim, Pending, RangeStages};
 pub use relative_path::ValidatedRelativePath;
 #[cfg(target_os = "linux")]
 pub use sandbox::restrict_filesystem;

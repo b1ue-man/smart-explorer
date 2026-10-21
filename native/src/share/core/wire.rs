@@ -11,6 +11,8 @@ use super::types::{ExecRequest, ExecResult, PeerPresence};
 mod batch_wire;
 #[path = "fs_request.rs"]
 mod fs_request;
+#[path = "stage_ranges_wire.rs"]
+mod stage_ranges_wire;
 #[path = "wire_capabilities.rs"]
 mod wire_capabilities;
 
@@ -24,6 +26,7 @@ pub(crate) use self::fs_request::{
     FsStageFinish, FsStorageAnalysis, FsSyncFilesystem, FsWatch,
 };
 pub(crate) use self::fs_request::{FsHashAlgo, FsStageDurability};
+pub(crate) use self::stage_ranges_wire::{FsSegmentedFinish, FsSegmentedOpen, FsStageWrite};
 pub(crate) use self::wire_capabilities::{FsHostFeatures, FsTargetLimits};
 
 pub(crate) const TRACKED_DIRECT_CAPABILITY: &str = "tracked_direct_v1";

@@ -97,6 +97,11 @@ pub(crate) enum FsResponse {
         size: u64,
     },
     Ready,
+    /// `ranges_v1`: the stage `SegmentedStageOpen` created (its path in the
+    /// export, with the name the host picked).
+    SegmentedStageReady {
+        stage: String,
+    },
     Ok,
     /// Transfer v1: reply to a committed PutBatch and to PutBatchStatus.
     Batch {

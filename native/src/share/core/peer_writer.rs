@@ -5,7 +5,8 @@ use iroh::endpoint::{RecvStream, SendStream};
 
 use super::backend::peer_stages::StageTicket;
 use super::core::eio;
-use super::framing::{decode_resp, recv_resp_wire, send_ctrl, send_tagged, TAG_DATA};
+use super::framing::lz4_stream::{frame_for, Lz4Stream};
+use super::framing::{decode_resp, recv_resp_wire, send_ctrl, send_tagged};
 use super::fs;
 use super::node::ShareIrohNode;
 use super::wire::{Ctrl, FsRequest, FsResponse};
@@ -96,6 +97,7 @@ pub(super) fn writer(
     send: SendStream,
     recv: RecvStream,
     lease: Option<String>,
+    lz4: bool,
     session_key: String,
     generation: usize,
 ) -> Box<dyn Write + Send> {
@@ -104,6 +106,7 @@ pub(super) fn writer(
         send: Some(send),
         recv: Some(recv),
         lease,
+        lz4: lz4.then(Lz4Stream::new),
         session_key,
         generation,
         state: WriterState::Open,
@@ -121,6 +124,8 @@ struct PeerWriter {
     send: Option<SendStream>,
     recv: Option<RecvStream>,
     lease: Option<String>,
+    /// Packs the chunks when the request asked for LZ4 (`lz4_v1`).
+    lz4: Option<Lz4Stream>,
     session_key: String,
     generation: usize,
     state: WriterState,
@@ -219,17 +224,22 @@ impl Write for PeerWriter {
             WriterState::Open => {}
         }
         for chunk in buf.chunks(fs::CHUNK) {
+            let (tag, bytes) = frame_for(self.lz4.as_ref(), chunk);
+            let started = std::time::Instant::now();
             let result = {
                 let Some(send) = self.send.as_mut() else {
                     return Err(eio("Peer-Schreibkanal geschlossen"));
                 };
                 self.node.block_on(super::io_deadline::run(
                     "peer write data chunk",
-                    send_tagged(send, TAG_DATA, chunk),
+                    send_tagged(send, tag, &bytes),
                 ))
             };
             if let Err(error) = result {
                 return Err(self.fail_open_stream(error));
+            }
+            if let Some(lz4) = &self.lz4 {
+                lz4.record_send(chunk.len(), started.elapsed(), std::time::Instant::now());
             }
         }
         Ok(buf.len())

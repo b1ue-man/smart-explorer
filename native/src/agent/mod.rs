@@ -39,6 +39,8 @@ mod pool;
 mod route;
 #[path = "core/search.rs"]
 mod search;
+#[path = "core/segmented_stage.rs"]
+mod segmented_stage;
 #[path = "core/stream.rs"]
 mod stream;
 #[path = "core/transfer.rs"]

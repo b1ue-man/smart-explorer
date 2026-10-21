@@ -146,6 +146,78 @@ pub(crate) fn path_matches_identity(path: &Path, expected: FileIdentity) -> io::
     Ok(file_identity(&file)? == expected)
 }
 
+/// Writes all of `buf` at `offset` (`seek_write` in a loop; it moves the file
+/// pointer, which a stage that is only written at offsets never reads).
+pub(crate) fn write_all_at(
+    file: &std::fs::File,
+    mut buf: &[u8],
+    mut offset: u64,
+) -> io::Result<()> {
+    use std::os::windows::fs::FileExt;
+    while !buf.is_empty() {
+        match file.seek_write(buf, offset) {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "failed to write whole buffer",
+                ))
+            }
+            Ok(written) => {
+                buf = &buf[written..];
+                offset += written as u64;
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
+/// Bytes this process may still use on the volume holding `dir`.
+pub(crate) fn available_space(dir: &Path) -> io::Result<u64> {
+    use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+    let wide: Vec<u16> = dir.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut available = 0u64;
+    // SAFETY: `wide` is NUL-terminated and outlives the call; the two unused
+    // out parameters are optional (null).
+    let ok = unsafe {
+        GetDiskFreeSpaceExW(
+            wide.as_ptr(),
+            &mut available,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(available)
+}
+
+/// Tag of the current user for names in a temp folder (which is per user).
+pub(crate) fn user_tag() -> String {
+    "user".to_string()
+}
+
+/// Creates `dir` for private state; a folder under the user's temp or data
+/// folder inherits an ACL that excludes other users.
+pub(crate) fn prepare_private_dir(dir: &Path) -> io::Result<()> {
+    std::fs::create_dir_all(dir)
+}
+
+/// Key of the volume holding `dir` (its drive or UNC share, case-folded), so
+/// stages on one disk share one budget.
+pub(crate) fn space_key(dir: &Path) -> io::Result<String> {
+    use std::path::Component;
+    match dir.components().next() {
+        Some(Component::Prefix(prefix)) => Ok(prefix.as_os_str().to_string_lossy().to_lowercase()),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "path has no volume",
+        )),
+    }
+}
+
 pub(crate) fn secure_staging_directory(_path: &Path) -> io::Result<()> {
     Ok(())
 }

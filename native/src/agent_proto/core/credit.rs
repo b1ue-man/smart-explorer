@@ -36,10 +36,13 @@ pub const CREDIT_REQUEST_LIMIT: usize = (CREDIT_CONNECTION_BUDGET / CREDIT_INITI
 /// (a grant is due once outstanding credit falls to half the window).
 const FRAME_COST_MAX: u64 = CREDIT_INITIAL / 2;
 
-/// Wire tags of the charged frames: `Data`, `TreeEntry`, `Match`, `HashEntry`
-/// and the streamed parts of the extension frames (`DirPart`, `HashOmitted`,
-/// `DupGroup`, `DupSummary`, `Change`).
-const CHARGED_TAGS: [u8; 9] = [11, 18, 20, 22, 46, 48, 51, 52, 61];
+/// Wire tags of the charged frames: `Data`, `TreeEntry`, `Match`, `HashEntry`,
+/// `DataLz4` and the streamed parts of the extension frames (`DirPart`,
+/// `HashOmitted`, `DupGroup`, `DupSummary`, `Change`).
+const CHARGED_TAGS: [u8; 10] = [11, 18, 20, 22, 46, 48, 51, 52, 61, DATA_LZ4_TAG];
+
+/// Wire tag of `Frame::DataLz4` (`lz4-v1`): charged by its raw length.
+const DATA_LZ4_TAG: u8 = 67;
 
 /// Frames whose number a stream does not bound consume credit. Replies,
 /// terminals, control frames and the per-item batch frames stay free: a
@@ -49,6 +52,7 @@ pub fn charged(frame: &Frame) -> bool {
     matches!(
         frame,
         Frame::Data(_)
+            | Frame::DataLz4(_)
             | Frame::TreeEntry { .. }
             | Frame::Match { .. }
             | Frame::HashEntry { .. }
@@ -64,6 +68,13 @@ pub fn charged(frame: &Frame) -> bool {
 pub fn credit_cost(frame: &Frame) -> u64 {
     if !charged(frame) {
         return 0;
+    }
+    if let Frame::DataLz4(block) = frame {
+        // The receiver's memory holds the raw bytes, so the raw length is
+        // charged; a block whose header is invalid costs the most and is
+        // refused when it is unpacked.
+        return super::raw_len(block)
+            .map_or(FRAME_COST_MAX, |raw| (raw as u64).min(FRAME_COST_MAX));
     }
     let length = frame
         .wire_len()
@@ -82,6 +93,13 @@ pub(crate) fn encoded_cost(bytes: &[u8]) -> u64 {
     let body = u32::from_le_bytes(prefix) as usize;
     if body.checked_add(4) != Some(bytes.len()) || !CHARGED_TAGS.contains(&bytes[12]) {
         return 0;
+    }
+    if bytes[12] == DATA_LZ4_TAG {
+        // Length prefix, request id, tag, block length prefix, then the block.
+        return bytes
+            .get(17..)
+            .and_then(|block| super::raw_len(block).ok())
+            .map_or(FRAME_COST_MAX, |raw| (raw as u64).min(FRAME_COST_MAX));
     }
     (body as u64).min(FRAME_COST_MAX)
 }

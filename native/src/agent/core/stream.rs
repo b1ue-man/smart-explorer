@@ -2,9 +2,10 @@ use super::backend::AgentBackend;
 use super::mux::Mux;
 use super::pool::ChannelLease;
 use super::route::RequestRx;
-use crate::agent_proto::{Frame, CHUNK};
+use crate::agent_proto::{unpack, BlockSender, Frame, CHUNK};
 use std::io::{self, Read, Write};
 use std::sync::Arc;
+use std::time::Instant;
 
 /// `std::io::Read` over a streamed `Read` op.
 struct AgentReadStream {
@@ -14,6 +15,8 @@ struct AgentReadStream {
     buf: Vec<u8>,
     pos: usize,
     done: bool,
+    /// The server may answer with `DataLz4` (this read was `ReadLz4`).
+    lz4: bool,
     /// Keeps the pooled channel counted as busy while the stream is open.
     _lease: ChannelLease,
 }
@@ -33,6 +36,10 @@ impl Read for AgentReadStream {
             match self.rx.recv() {
                 Ok(Frame::Data(d)) if d.len() <= CHUNK => {
                     self.buf = d;
+                    self.pos = 0;
+                }
+                Ok(Frame::DataLz4(block)) if self.lz4 => {
+                    self.buf = unpack(&block)?;
                     self.pos = 0;
                 }
                 Ok(Frame::Data(_)) => {
@@ -74,11 +81,17 @@ impl Drop for AgentReadStream {
 
 /// `std::io::Write` over a streamed `Write` op.
 struct AgentWriteStream {
-    lease: ChannelLease,
+    /// Shared by the ranges of one stage, which all run on its channel.
+    lease: Arc<ChannelLease>,
     mux: Arc<Mux>,
     id: u64,
     rx: RequestRx,
     state: WriteState,
+    /// Packs the blocks when the server announced `lz4-v1`.
+    lz4: Option<BlockSender>,
+    /// Bytes this stream must carry exactly (a range of a stage).
+    expected: Option<u64>,
+    sent: u64,
 }
 
 enum WriteState {
@@ -98,6 +111,17 @@ impl AgentWriteStream {
                 return Err(io::Error::new(*kind, message.clone()))
             }
             WriteState::Open => {}
+        }
+        if let Some(expected) = self.expected.filter(|expected| *expected != self.sent) {
+            // A range that is short never reaches the server's End.
+            let error = io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("{} statt {expected} Bytes für den Bereich", self.sent),
+            );
+            let _ = self.mux.send(self.id, Frame::Cancel);
+            self.mux.unregister(self.id);
+            self.remember_failure(&error);
+            return Err(error);
         }
         if let Err(error) = self.mux.send(self.id, Frame::End) {
             self.mux.unregister(self.id);
@@ -147,7 +171,29 @@ impl Write for AgentWriteStream {
             ));
         }
         let written = buf.len().min(CHUNK);
-        if let Err(error) = self.mux.send(self.id, Frame::Data(buf[..written].to_vec())) {
+        if let Some(expected) = self.expected {
+            if self.sent.saturating_add(written as u64) > expected {
+                let error = io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("Quelle liefert mehr als die angekündigten {expected} Bytes"),
+                );
+                let _ = self.mux.send(self.id, Frame::Cancel);
+                self.mux.unregister(self.id);
+                self.remember_failure(&error);
+                return Err(error);
+            }
+        }
+        let chunk = &buf[..written];
+        let frame = match self
+            .lz4
+            .as_mut()
+            .and_then(|sender| sender.try_pack(chunk, self.sent))
+        {
+            Some(block) => Frame::DataLz4(block),
+            None => Frame::Data(chunk.to_vec()),
+        };
+        let started = Instant::now();
+        if let Err(error) = self.mux.send(self.id, frame) {
             // The server may have ended the upload; its reply names the
             // reason. Either way the upload is over: never commit it later.
             let error = match self.rx.try_recv() {
@@ -159,6 +205,10 @@ impl Write for AgentWriteStream {
             self.remember_failure(&error);
             return Err(error);
         }
+        if let Some(sender) = self.lz4.as_mut() {
+            sender.record_send(written, started.elapsed(), Instant::now());
+        }
+        self.sent += written as u64;
         Ok(written)
     }
 
@@ -201,9 +251,18 @@ impl AgentBackend {
         len: u64,
     ) -> io::Result<Box<dyn Read + Send>> {
         let lease = self.pool.lease();
-        let opened = lease.retry_safe(|mux| open_read_once(mux, path, offset, len))?;
+        let lz4 = self.features().lz4;
+        let opened = lease.retry_safe(|mux| open_read_once(mux, path, (offset, len), lz4))?;
         let (buf, done) = match opened.first {
             Frame::Data(d) if d.len() <= CHUNK => (d, false),
+            Frame::DataLz4(block) if lz4 => match unpack(&block) {
+                Ok(raw) => (raw, false),
+                Err(error) => {
+                    lease.invalidate(&opened.mux);
+                    opened.mux.unregister(opened.id);
+                    return Err(error);
+                }
+            },
             Frame::End => (Vec::new(), true),
             Frame::Data(_) => {
                 lease.invalidate(&opened.mux);
@@ -233,6 +292,7 @@ impl AgentBackend {
             buf,
             pos: 0,
             done,
+            lz4,
             _lease: lease,
         }))
     }
@@ -248,42 +308,64 @@ impl AgentBackend {
     }
 
     fn agent_open_write_request(&self, request: Frame) -> io::Result<Box<dyn Write + Send>> {
-        let lease = self.pool.lease();
+        let lease = Arc::new(self.pool.lease());
         let mux = lease.mutation_mux()?;
-        let (id, rx) = mux.register();
-        if let Err(error) = mux.send(id, request) {
-            mux.unregister(id);
-            return Err(error);
-        }
-        let result = match rx.recv() {
-            Ok(Frame::Progress { .. }) => {
-                return Ok(Box::new(AgentWriteStream {
-                    lease,
-                    mux,
-                    id,
-                    rx,
-                    state: WriteState::Open,
-                }))
-            }
-            Ok(Frame::Err(error)) => Err(super::agent_error::agent_error(error)),
-            Ok(other) => {
-                lease.invalidate(&mux);
-                Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("unexpected agent reply to write: {other:?}"),
-                ))
-            }
-            Err(_) => {
-                lease.invalidate(&mux);
-                Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "agent write stream closed before opening",
-                ))
-            }
-        };
-        mux.unregister(id);
-        result
+        open_write_on(lease, mux, request, None, self.features().lz4)
     }
+}
+
+/// Starts the upload `request` (`Write`, `WriteNew` or `WriteAt`) on `mux` and
+/// waits for the server's `Progress`: from then on the returned writer
+/// streams the bytes, as `DataLz4` blocks when `lz4` and they shrink. With
+/// `expected` it also commits only after exactly that many bytes.
+pub(super) fn open_write_on(
+    lease: Arc<ChannelLease>,
+    mux: Arc<Mux>,
+    request: Frame,
+    expected: Option<u64>,
+    lz4: bool,
+) -> io::Result<Box<dyn Write + Send>> {
+    let (id, rx) = mux.register();
+    if let Err(error) = mux.send(id, request) {
+        mux.unregister(id);
+        return Err(error);
+    }
+    let result = match rx.recv() {
+        Ok(Frame::Progress { .. }) => {
+            let lz4 = lz4.then(|| {
+                let mut sender = BlockSender::new();
+                sender.start_file();
+                sender
+            });
+            return Ok(Box::new(AgentWriteStream {
+                lease,
+                mux,
+                id,
+                rx,
+                state: WriteState::Open,
+                lz4,
+                expected,
+                sent: 0,
+            }));
+        }
+        Ok(Frame::Err(error)) => Err(super::agent_error::agent_error(error)),
+        Ok(other) => {
+            lease.invalidate(&mux);
+            Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("unexpected agent reply to write: {other:?}"),
+            ))
+        }
+        Err(_) => {
+            lease.invalidate(&mux);
+            Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "agent write stream closed before opening",
+            ))
+        }
+    };
+    mux.unregister(id);
+    result
 }
 
 struct ReadOpening {
@@ -293,16 +375,23 @@ struct ReadOpening {
     first: Frame,
 }
 
-fn open_read_once(mux: &Arc<Mux>, path: &str, offset: u64, len: u64) -> io::Result<ReadOpening> {
+fn open_read_once(
+    mux: &Arc<Mux>,
+    path: &str,
+    range: (u64, u64),
+    lz4: bool,
+) -> io::Result<ReadOpening> {
     let (id, rx) = mux.register();
-    if let Err(error) = mux.send(
-        id,
-        Frame::Read {
-            path: path.to_string(),
-            offset,
-            len,
-        },
-    ) {
+    let (offset, len) = range;
+    let path = path.to_string();
+    // `ReadLz4` tells the server that this client unpacks `DataLz4`; it is
+    // sent only to a server that announced `lz4-v1`.
+    let request = if lz4 {
+        Frame::ReadLz4 { path, offset, len }
+    } else {
+        Frame::Read { path, offset, len }
+    };
+    if let Err(error) = mux.send(id, request) {
         mux.unregister(id);
         return Err(error);
     }
