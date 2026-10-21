@@ -1168,6 +1168,7 @@ speed_task_range_stage_rejects_ranges_outside_the_stage       linux-core:unit  p
 speed_task_range_stage_sums_the_space_of_all_open_stages      linux-core:unit  pfad=agent_proto::range_stage::tests::speed_task_range_stage_sums_the_space_of_all_open_stages  quelle=E13,Code
 speed_task_range_stage_table_is_limited                       linux-core:unit  pfad=agent_proto::range_stage::tests::speed_task_range_stage_table_is_limited  quelle=E13,Code
 speed_task_range_stage_write_refuses_more_than_announced      linux-core:unit  pfad=agent_proto::range_stage::tests::speed_task_range_stage_write_refuses_more_than_announced  quelle=E13,Code
+speed_task_range_stage_drop_releases_the_space                 linux-core:unit  pfad=agent_proto::range_stage::tests::speed_task_range_stage_drop_releases_the_space  quelle=E13,Code
 speed_task_transfer_rows_limiter_hidden_while_ramping         linux-core:unit  pfad=app::transfer_rows::tests::speed_task_transfer_rows_limiter_hidden_while_ramping  quelle=E13,Code
 speed_task_transfer_rows_limiter_line_texts                   linux-core:unit  pfad=app::transfer_rows::tests::speed_task_transfer_rows_limiter_line_texts  quelle=E13,Code
 speed_task_sync_hasher_drop_without_finish_stops_the_helper   linux-core:unit  pfad=bisync::stream_hash_tests::speed_task_sync_hasher_drop_without_finish_stops_the_helper  quelle=E13,Code
@@ -1201,6 +1202,14 @@ speed_task_windows_copy_flags_compressed_traffic_only_for_unc_and_when_enabled  
 speed_task_windows_copy_flags_keep_fail_if_exists_and_copy_symlink  linux-core:unit  pfad=copy::imp::copy_flags::tests::speed_task_windows_copy_flags_keep_fail_if_exists_and_copy_symlink  quelle=E13,Code
 speed_task_windows_copy_flags_no_buffering_from_a_quarter_of_available_memory  linux-core:unit  pfad=copy::imp::copy_flags::tests::speed_task_windows_copy_flags_no_buffering_from_a_quarter_of_available_memory  quelle=E13,Code
 speed_task_windows_is_unc_recognizes_verbatim_unc_but_not_verbatim_drive  linux-core:unit  pfad=copy::imp::copy_flags::tests::speed_task_windows_is_unc_recognizes_verbatim_unc_but_not_verbatim_drive  quelle=E13,Code
+speed_task_copy_empty_file_publishes_zero_bytes                linux-core:unit  pfad=copy::imp::safe_file::tests::speed_task_copy_empty_file_publishes_zero_bytes  quelle=E13,Code
+speed_task_copy_entry_snapshot_equals_the_open_snapshot        linux-core:unit  pfad=copy::imp::safe_file::tests::speed_task_copy_entry_snapshot_equals_the_open_snapshot  quelle=E13,Code
+speed_task_copy_entry_snapshot_refuses_links_folders_and_pipes linux-core:unit  pfad=copy::imp::safe_file::tests::speed_task_copy_entry_snapshot_refuses_links_folders_and_pipes  quelle=E13,Code
+speed_task_copy_file_of_exactly_one_chunk_is_complete          linux-core:unit  pfad=copy::imp::safe_file::tests::speed_task_copy_file_of_exactly_one_chunk_is_complete  quelle=E13,Code
+speed_task_copy_file_over_one_chunk_copies_every_byte          linux-core:unit  pfad=copy::imp::safe_file::tests::speed_task_copy_file_over_one_chunk_copies_every_byte  quelle=E13,Code
+speed_task_copy_grown_source_is_refused_after_the_copy         linux-core:unit  pfad=copy::imp::safe_file::tests::speed_task_copy_grown_source_is_refused_after_the_copy  quelle=E13,Code
+speed_task_copy_small_file_is_one_chunk_with_its_mode          linux-core:unit  pfad=copy::imp::safe_file::tests::speed_task_copy_small_file_is_one_chunk_with_its_mode  quelle=E13,Code
+speed_task_copy_swapped_source_is_refused_after_the_copy       linux-core:unit  pfad=copy::imp::safe_file::tests::speed_task_copy_swapped_source_is_refused_after_the_copy  quelle=E13,Code
 speed_task_pipe_copy_cancel_returns_none                      linux-core:unit  pfad=copy::imp::pipe_copy::tests::speed_task_pipe_copy_cancel_returns_none  quelle=E13,Code
 speed_task_pipe_copy_copies_all_bytes_in_order                linux-core:unit  pfad=copy::imp::pipe_copy::tests::speed_task_pipe_copy_copies_all_bytes_in_order  quelle=E13,Code
 speed_task_pipe_copy_empty_input                              linux-core:unit  pfad=copy::imp::pipe_copy::tests::speed_task_pipe_copy_empty_input  quelle=E13,Code
@@ -1330,6 +1339,7 @@ speed_task_local_extra_permits_are_released_after_the_copy    linux-core:unit  p
 speed_task_local_extra_permits_never_wait                     linux-core:unit  pfad=transfer::engine::local::extras_tests::speed_task_local_extra_permits_never_wait  quelle=E13,Code
 speed_task_local_extra_permits_only_when_the_queue_is_empty   linux-core:unit  pfad=transfer::engine::local::extras_tests::speed_task_local_extra_permits_only_when_the_queue_is_empty  quelle=E13,Code
 speed_task_local_no_extras_for_small_files_or_moves           linux-core:unit  pfad=transfer::engine::local::extras_tests::speed_task_local_no_extras_for_small_files_or_moves  quelle=E13,Code
+speed_task_local_every_small_file_runs_on_one_thread           linux-core:unit  pfad=transfer::engine::local::extras_tests::speed_task_local_every_small_file_runs_on_one_thread  quelle=E13,Code
 speed_task_segments_cancel_stops_helpers                      linux-core:unit  pfad=transfer::engine::segments_tests::speed_task_segments_cancel_stops_helpers  quelle=E13,Code
 speed_task_segments_download_assembles_the_file_from_ranges   linux-core:unit  pfad=transfer::engine::segments_tests::speed_task_segments_download_assembles_the_file_from_ranges  quelle=E13,Code
 speed_task_segments_fallback_when_server_ignores_ranges       linux-core:unit  pfad=transfer::engine::segments_tests::speed_task_segments_fallback_when_server_ignores_ranges  quelle=E13,Code
