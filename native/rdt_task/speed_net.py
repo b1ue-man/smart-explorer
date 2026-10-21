@@ -251,6 +251,8 @@ class Servers:
             'LoadModule logio_module modules/mod_logio.so\nDavLockDB /tmp/speed-dav-lock\n'
             'LogFormat "%h %l %u %t \\"%r\\" %>s %I %O" speed\n<VirtualHost *:80>\n'
             'DocumentRoot /tmp/sync-dav/data\nCustomLog /fixture/access.log speed\n'
+            # httpd 2.4.54 and later refuse request bodies above 1 GiB by default (413); the large cases are bigger.
+            'LimitRequestBody 0\n'
             '<Directory /tmp/sync-dav/data>\nOptions None\nAllowOverride None\nDirectoryIndex disabled\n'
             'Require all granted\n</Directory>\n<Location />\nDav On\nAuthType Basic\nAuthName Speed\n'
             'AuthUserFile /tmp/dav.passwd\nRequire valid-user\n</Location>\n</VirtualHost>\n')
@@ -278,7 +280,8 @@ class Servers:
         if not banner(port, None):
             raise Unavailable("SMB: samba antwortet nicht")
         self.env.update({"SE_SPEED_SMB_URL": f"smb://{USER}:{self.password}@127.0.0.1:{port}/sync",
-                         "SE_SPEED_SMB_CONTAINER": f"{name}:/storage"})
+                         # The image serves /shared (/storage only when that folder exists, docs/refs/samba-container.md).
+                         "SE_SPEED_SMB_CONTAINER": f"{name}:/shared"})
 
     def _iperf(self) -> None:
         """The iperf3 server of a link on the same publication path as the protocol servers (M-1): once on the
