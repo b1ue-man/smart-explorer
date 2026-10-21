@@ -8,6 +8,7 @@ use std::time::Duration;
 use super::transfer_engine_task_support::{pattern, stages_after_cleanup};
 use super::CopyPastePeerFixture;
 use crate::share::framing::{decode_resp, recv_resp_wire, send_ctrl, send_tagged, TAG_DATA};
+use crate::share::fs::CHUNK;
 use crate::share::io_deadline;
 use crate::share::wire::{
     Ctrl, FsRequest, FsResponse, FsSegmentedFinish, FsSegmentedOpen, FsStageWrite,
@@ -78,8 +79,11 @@ fn write_range(
     }
     peer.node
         .block_on(io_deadline::run("test range data", async {
+            // A data frame carries at most one `CHUNK`, as the real sender cuts it.
             for part in parts {
-                send_tagged(&mut opened.send, TAG_DATA, part).await?;
+                for frame in part.chunks(CHUNK) {
+                    send_tagged(&mut opened.send, TAG_DATA, frame).await?;
+                }
             }
             opened.send.finish().map_err(io::Error::other)?;
             recv_resp_wire(&mut opened.recv).await
@@ -156,7 +160,9 @@ fn speed_task_share_stage_write_at_rejects_overlap() -> io::Result<()> {
     assert!(next.is_ok(), "a neighbour is fine");
     peer.node
         .block_on(io_deadline::run("test range data", async {
-            send_tagged(&mut running.send, TAG_DATA, &data).await?;
+            for frame in data.chunks(CHUNK) {
+                send_tagged(&mut running.send, TAG_DATA, frame).await?;
+            }
             running.send.finish().map_err(io::Error::other)?;
             recv_resp_wire(&mut running.recv).await
         }))?;
@@ -307,7 +313,10 @@ fn speed_task_share_stage_open_needs_free_space() -> io::Result<()> {
         io::ErrorKind::StorageFull
     );
     call(&fixture, FsRequest::DiscardStage { path: first })?;
-    open_stage(&fixture, "/A/two.bin", size)?;
+    let second = open_stage(&fixture, "/A/two.bin", size)?;
+    // The reservation is per process: give it back now, not when the host
+    // notices the end of the connection, so no later test sees it.
+    call(&fixture, FsRequest::DiscardStage { path: second })?;
     Ok(())
 }
 

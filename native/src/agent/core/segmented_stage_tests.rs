@@ -56,11 +56,17 @@ fn scripted(version: &str, mut script: Script) -> (AgentBackend, Seen) {
     (backend, seen)
 }
 
-/// An agent that takes every write like the real one: ready, then `Ok` at `End`.
+/// An agent that takes every write like the real one: ready, credit back
+/// for every data frame (a credit connection stops the sender after
+/// `CREDIT_INITIAL` bytes otherwise), then `Ok` at `End`.
 fn accepting() -> Script {
     Box::new(|id, frame, socket| match frame {
         Frame::Write(_) | Frame::WriteNew(_) | Frame::WriteAt { .. } => {
             write_frame(socket, id, &Frame::Progress { done: 0, total: 0 }).expect("ready");
+        }
+        Frame::Data(data) => {
+            let bytes = data.len() as u64;
+            write_frame(socket, id, &Frame::Credit { bytes }).expect("credit");
         }
         Frame::End => write_frame(socket, id, &Frame::Ok).expect("ok"),
         _ => {}
