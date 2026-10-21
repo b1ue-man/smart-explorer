@@ -66,7 +66,7 @@ impl CallbackContext {
         volume_serial: u32,
         cache_root_wide: Vec<u16>,
     ) -> io::Result<Self> {
-        let filesystem: Arc<dyn MountFilesystem> = Arc::clone(&engine);
+        let filesystem: Arc<dyn MountFilesystem> = engine.clone();
         let mut context = Self::for_filesystem(
             filesystem,
             runtime,
