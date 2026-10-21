@@ -36,6 +36,8 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// What every stream of one authenticated connection shares.
 struct StreamContext {
+    /// The stages of ranged uploads this connection has open (`ranges_v1`).
+    stages: Arc<crate::agent_proto::RangeStages>,
     session: Arc<IncomingSession>,
     auth: Arc<Mutex<ShareAuthState>>,
     node: Arc<ShareIrohNode>,
@@ -170,6 +172,8 @@ pub(super) async fn handle_connection(
         hello.device_id, remote_node
     )));
     let session = Arc::new(session);
+    // Unfinished stages of ranged uploads go when this connection ends.
+    let connection_stages = fs_dispatch::stage_ranges::ConnectionStages::start();
     let exec_slots = super::exec::peer_slots(&remote_node);
     let legacy_connection = conn.stable_id();
     let _legacy_cleanup = super::mount_lease_cleanup::LegacyLeaseCleanup::new(
@@ -206,6 +210,7 @@ pub(super) async fn handle_connection(
         };
         let pending = node.incoming_stream_pending(&activity);
         let context = StreamContext {
+            stages: connection_stages.table(),
             session: session.clone(),
             auth: node.auth.clone(),
             node: node.clone(),
@@ -270,6 +275,12 @@ async fn handle_peer_stream(
     let session_rights = match session.authorize(&auth) {
         Ok(exports) => exports,
         Err(error) => {
+            // Without the right to be here, a stage of a ranged upload goes too.
+            if let Ctrl::Fs { req, .. } = &ctrl {
+                if let Some(stage) = req.range_stage() {
+                    context.stages.discard(stage);
+                }
+            }
             return io_deadline::run("Share authorization rejection", async {
                 match ctrl {
                     Ctrl::Exec { .. } => {
@@ -305,6 +316,11 @@ async fn handle_peer_stream(
     let _awake = crate::keep_awake::hold(crate::keep_awake::Reason::PeerService);
     let _stream_hold = node.incoming_stream_started(&context.activity);
     if req.mutates_filesystem() && !session_rights.may_write {
+        // A stage of a ranged upload this connection holds goes with the
+        // right to write it.
+        if let Some(stage) = req.range_stage() {
+            context.stages.discard(stage);
+        }
         return reply_err(
             &mut send,
             io::Error::new(

@@ -25,6 +25,8 @@ pub(crate) use super::node::ShareIrohNode;
 mod peer_batch_get;
 #[path = "peer_batch_put.rs"]
 mod peer_batch_put;
+#[path = "peer_stage_ranges.rs"]
+mod peer_stage_ranges;
 #[path = "peer_stages.rs"]
 pub(super) mod peer_stages;
 #[path = "peer_transfer.rs"]
@@ -222,10 +224,37 @@ impl Backend for PeerBackend {
         self.read_at(path, id, offset)
     }
 
+    /// Ranges of a file as separate requests, when the host advertises
+    /// `ranges_v1` (an older host streams the file as one).
+    fn supports_range_reads(&self, path: &str) -> bool {
+        let _ = path;
+        self.ranges_offered()
+    }
+
+    fn open_read_range(
+        &self,
+        path: &str,
+        id: Option<&str>,
+        offset: u64,
+        len: u64,
+    ) -> VfsResult<Option<Box<dyn Read + Send>>> {
+        self.read_range(path, id, offset, len)
+    }
+
+    /// A stage several requests fill range by range (`ranges_v1`).
+    fn open_segmented_stage(
+        &self,
+        stage: &str,
+        size: u64,
+    ) -> VfsResult<Option<Box<dyn crate::vfs::SegmentedStage>>> {
+        self.open_ranged_stage(stage, size)
+    }
+
     fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
         self.open_writer(
             FsRequest::Write {
                 path: path.to_string(),
+                lz4: self.lz4_offered(),
             },
             "peer write open",
         )

@@ -9,6 +9,7 @@ use super::batch_put::handle_put_batch;
 use super::fs::{list_local, stat_local, try_exists_local, walk_dir_counted, WalkCounter};
 use super::hash::handle_walk_hashed;
 use super::put_tree::handle_put_tree;
+use super::range_ops::{self, Lz4Inbound};
 use super::search::handle_search;
 use super::server_session::{RequestContext, ServerSession};
 use super::session::{emit, Sink};
@@ -230,20 +231,40 @@ fn dispatch(context: &RequestContext, id: u64, req: Frame) -> io::Result<()> {
                 sink,
                 id,
                 &p,
-                rx,
+                &Lz4Inbound(rx),
                 cancel,
                 super::promotion::promote_staged_replace,
             ),
             None => emit(sink, id, &Frame::Err("write: no inbound channel".into())),
         },
         Frame::WriteNew(p) => match inbound {
-            Some(rx) => handle_write_new(sink, id, &p, rx, cancel),
+            Some(rx) => handle_write_new(sink, id, &p, &Lz4Inbound(rx), cancel),
             None => emit(
                 sink,
                 id,
                 &Frame::Err("write-new: no inbound channel".into()),
             ),
         },
+        Frame::ReadLz4 { path, offset, len } => {
+            range_ops::handle_read_lz4(sink, id, &path, (offset, len), cancel)
+        }
+        Frame::SegStageOpen { path, size } => {
+            range_ops::handle_seg_open(sink, id, &context.stages, &path, size)
+        }
+        Frame::WriteAt { stage, offset, len } => match inbound {
+            Some(rx) => range_ops::handle_write_at(
+                sink,
+                id,
+                &context.stages,
+                (&stage, offset, len),
+                rx,
+                cancel,
+            ),
+            None => emit(sink, id, &Frame::Err("write-at: no inbound channel".into())),
+        },
+        Frame::SegStageFinish { stage } => {
+            reply(sink, id, range_ops::finish(&context.stages, &stage))
+        }
         Frame::Copy { src, dst } => {
             reply(sink, id, copy_file_safe(&src, &dst, id).map(|_| Frame::Ok))
         }
@@ -305,7 +326,15 @@ fn dispatch(context: &RequestContext, id: u64, req: Frame) -> io::Result<()> {
             id,
             create_dir_one(&path, exclusive).map(|()| Frame::Ok),
         ),
-        Frame::DiscardStage(path) => reply(sink, id, discard_stage(&path).map(|()| Frame::Ok)),
+        Frame::DiscardStage(path) => {
+            // A stage of a ranged upload that is still open goes with its
+            // table entry; any other stage is discarded as before.
+            if range_ops::discard(&context.stages, &path) {
+                emit(sink, id, &Frame::Ok)
+            } else {
+                reply(sink, id, discard_stage(&path).map(|()| Frame::Ok))
+            }
+        }
         Frame::ListTolerant(path) => super::ext_ops::handle_list_tolerant(sink, id, &path, cancel),
         Frame::WalkHashed2 {
             root,

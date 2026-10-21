@@ -52,6 +52,15 @@ pub(crate) struct FsTransferCapabilities {
     pub(crate) batch_max_files: u32,
     #[serde(default)]
     pub(crate) batch_max_bytes: u64,
+    /// `ReadAt` with `len`, `SegmentedStageOpen`, `StageWriteAt` and
+    /// `SegmentedStageFinish` are understood.
+    #[serde(default)]
+    pub(crate) ranges_v1: bool,
+    /// File content may travel as LZ4 blocks (`TAG_DATA_LZ4`), for both
+    /// sides' requests that set `lz4`. Offered through the authenticated
+    /// session only; a side without it is never sent a block.
+    #[serde(default)]
+    pub(crate) lz4_v1: bool,
 }
 
 impl FsTransferCapabilities {
@@ -62,6 +71,8 @@ impl FsTransferCapabilities {
             admission: TRANSFER_STREAMS_PER_CONNECTION,
             batch_max_files: BATCH_MAX_FILES,
             batch_max_bytes: BATCH_MAX_BYTES,
+            ranges_v1: true,
+            lz4_v1: !crate::agent_proto::lz4_switched_off(),
         }
     }
 

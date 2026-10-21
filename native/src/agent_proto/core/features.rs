@@ -12,6 +12,12 @@ pub const LABEL_BATCH: &str = "batch-v1";
 pub const LABEL_STAGE: &str = "stage-v1";
 /// The extension frames (`ListTolerant` … `Watch`, `ops_types`).
 pub const LABEL_EXT: &str = "ext-v1";
+/// Ranged uploads (`SegStageOpen`, `WriteAt`, `SegStageFinish`): a client
+/// sends these frames only to a server that announced the label.
+pub const LABEL_RANGE: &str = "range-v1";
+/// LZ4 content blocks (`DataLz4`, `ReadLz4`): a client sends these frames
+/// only to a server that announced the label.
+pub const LABEL_LZ4: &str = "lz4-v1";
 /// Prefix of the label announcing the admitted concurrent requests.
 const LABEL_SLOTS: &str = "slots-";
 
@@ -23,9 +29,25 @@ const LEGACY_SERVICE_SLOTS: usize = 16;
 const AGENT_BROWSE_RESERVE: usize = 2;
 const SERVICE_BROWSE_RESERVE: usize = 4;
 
-/// The version text a server of this build announces.
+/// Whether the suite switched LZ4 off for this process: only a development
+/// build reads `SE_TEST_NO_LZ4`, a release build ignores the variable.
+pub fn lz4_switched_off() -> bool {
+    cfg!(debug_assertions) && std::env::var_os("SE_TEST_NO_LZ4").is_some()
+}
+
+/// The version text the SSH agent of this build announces: the labels of the
+/// service (`server_version_with`) plus `range-v1` and, unless switched off
+/// for a test, `lz4-v1`. The background service does not announce these two
+/// labels: it does not serve the frames of either.
 pub fn server_version(batch: bool) -> String {
-    server_version_with(batch, CREDIT_REQUEST_LIMIT)
+    let mut version = server_version_with(batch, CREDIT_REQUEST_LIMIT);
+    version.push('.');
+    version.push_str(LABEL_RANGE);
+    if !lz4_switched_off() {
+        version.push('.');
+        version.push_str(LABEL_LZ4);
+    }
+    version
 }
 
 /// The version text with `slots` admitted requests (at most the credit
@@ -63,6 +85,10 @@ pub struct ServerFeatures {
     pub stage: bool,
     /// The extension frames of `ops_types` (`ext-v1`).
     pub extensions: bool,
+    /// Ranged uploads (`range-v1`).
+    pub ranges: bool,
+    /// LZ4 content blocks (`lz4-v1`).
+    pub lz4: bool,
     /// Requests the server admits at once, when it announced them.
     pub slots: Option<usize>,
     /// The background service (announces itself with a trailing `worker`).
@@ -87,6 +113,8 @@ impl ServerFeatures {
                 LABEL_BATCH => features.batch = true,
                 LABEL_STAGE => features.stage = true,
                 LABEL_EXT => features.extensions = true,
+                LABEL_RANGE => features.ranges = true,
+                LABEL_LZ4 => features.lz4 = true,
                 other => {
                     if let Some(slots) = other.strip_prefix(LABEL_SLOTS) {
                         features.slots = slots.parse().ok().filter(|slots| *slots > 0);

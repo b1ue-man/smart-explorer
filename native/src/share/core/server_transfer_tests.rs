@@ -17,6 +17,7 @@ fn create_job(root: &std::path::Path, abandoned: bool) -> WriteJob {
             path: "/A/late.bin".into(),
             mode: WriteMode::Create,
             authorization: None,
+            lz4: false,
         },
         access: export(root),
         abandoned: Arc::new(AtomicBool::new(abandoned)),

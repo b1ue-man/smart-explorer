@@ -305,4 +305,43 @@ pub enum Frame {
     /// `Err`. Links are removed as entries and never followed; a link or
     /// file at the path is refused. `Cancel` stops at the next entry.
     RemoveTree(String),
+    /// Ranged upload (`range-v1`): the host creates the private stage of the
+    /// file `path` (it picks the name and holds the handle) and answers
+    /// `SegStageReady`. It checks the same guards as `WriteNew`, the free
+    /// space for `size` and the number of open stages of the connection.
+    SegStageOpen {
+        path: String,
+        size: u64,
+    },
+    /// The stage `SegStageOpen` created: `stage` is its path.
+    SegStageReady {
+        stage: String,
+    },
+    /// Write `[offset, offset + len)` of an open stage (`range-v1`): the
+    /// host answers `Progress` (accepted) or `Err`, the client then streams
+    /// exactly `len` bytes as `Data` / `DataLz4` frames and `End` -> `Ok`.
+    /// Only the connection that opened the stage may write it.
+    WriteAt {
+        stage: String,
+        offset: u64,
+        len: u64,
+    },
+    /// Closes a complete stage (`range-v1`): every range arrived and the
+    /// stage has its length -> `Ok`; publication stays `PromoteNoReplace`.
+    SegStageFinish {
+        stage: String,
+    },
+    /// A block of file content in the LZ4 block format (`lz4-v1`): the
+    /// frame carries a kind byte (0 raw, 1 LZ4), for 1 the raw length as a
+    /// little-endian `u32`, and the block. Replaces `Data` in the stream of
+    /// `Write`, `WriteNew`, `WriteAt` and `ReadLz4`; the credit counts the
+    /// raw length.
+    DataLz4(Vec<u8>),
+    /// `Read` for a client that understands `DataLz4` (`lz4-v1`): the stream
+    /// may carry `Data` and `DataLz4` frames.
+    ReadLz4 {
+        path: String,
+        offset: u64,
+        len: u64,
+    },
 }

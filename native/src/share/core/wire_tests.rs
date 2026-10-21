@@ -65,9 +65,22 @@ fn one_of_each() -> Vec<FsRequest> {
             path: path(),
             ..Default::default()
         }),
-        FsRequest::Read { path: path() },
-        FsRequest::Write { path: path() },
-        FsRequest::WriteNew { path: path() },
+        FsRequest::Read {
+            path: path(),
+            lz4: false,
+        },
+        FsRequest::Read {
+            path: path(),
+            lz4: true,
+        },
+        FsRequest::Write {
+            path: path(),
+            lz4: false,
+        },
+        FsRequest::WriteNew {
+            path: path(),
+            lz4: true,
+        },
         FsRequest::WriteDone,
         FsRequest::MkdirAll { path: path() },
         FsRequest::Rename {
@@ -106,7 +119,27 @@ fn one_of_each() -> Vec<FsRequest> {
             path: path(),
             id: None,
             offset: 0,
+            len: 0,
+            lz4: false,
         },
+        FsRequest::ReadAt {
+            path: path(),
+            id: Some("drive-id".into()),
+            offset: 8 << 20,
+            len: 8 << 20,
+            lz4: true,
+        },
+        FsRequest::SegmentedStageOpen(crate::share::wire::FsSegmentedOpen {
+            path: path(),
+            size: 40 << 20,
+        }),
+        FsRequest::StageWriteAt(crate::share::wire::FsStageWrite {
+            stage: path(),
+            offset: 8 << 20,
+            len: 8 << 20,
+            lz4: true,
+        }),
+        FsRequest::SegmentedStageFinish(crate::share::wire::FsSegmentedFinish { stage: path() }),
         FsRequest::CreateDir {
             path: path(),
             exclusive: false,

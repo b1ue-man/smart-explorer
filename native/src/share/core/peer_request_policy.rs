@@ -37,6 +37,10 @@ pub(super) fn response_matches(request: &FsRequest, response: &FsResponse) -> bo
         | FsRequest::DiscardStage { .. }
         | FsRequest::ReleaseLease => matches!(response, FsResponse::Ok),
         FsRequest::PutBatchStatus { .. } => matches!(response, FsResponse::Batch { .. }),
+        FsRequest::SegmentedStageOpen(_) => {
+            matches!(response, FsResponse::SegmentedStageReady { .. })
+        }
+        FsRequest::SegmentedStageFinish(_) => matches!(response, FsResponse::Ok),
         FsRequest::Recycle(_) => matches!(response, FsResponse::Recycle { .. }),
         FsRequest::FinishStage(_) => matches!(response, FsResponse::StageFinished { .. }),
         FsRequest::SyncFilesystem(_) => matches!(response, FsResponse::Synced { .. }),
@@ -45,6 +49,7 @@ pub(super) fn response_matches(request: &FsRequest, response: &FsResponse) -> bo
         | FsRequest::Write { .. }
         | FsRequest::WriteNew { .. }
         | FsRequest::WriteDone
+        | FsRequest::StageWriteAt(_)
         | FsRequest::WalkTree { .. }
         | FsRequest::StorageSnapshot { .. }
         | FsRequest::StorageAnalysis(_)

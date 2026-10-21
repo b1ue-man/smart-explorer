@@ -10,6 +10,14 @@ pub(in crate::share) fn to_os_path(path: &str) -> PathBuf {
     }
 }
 
+/// Creates the file of a ranged upload's stage, exclusively (`create_new`).
+pub(in crate::share) fn create_stage_file(path: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+}
+
 pub(super) fn from_os_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }

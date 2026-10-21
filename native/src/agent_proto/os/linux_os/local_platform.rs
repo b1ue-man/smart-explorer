@@ -104,6 +104,62 @@ pub(crate) fn path_matches_identity(path: &Path, expected: FileIdentity) -> io::
     Ok(file_identity(&file)? == expected)
 }
 
+/// Writes all of `buf` at `offset` without moving the file pointer, so
+/// several requests can fill different ranges of one stage at once.
+pub(crate) fn write_all_at(file: &std::fs::File, buf: &[u8], offset: u64) -> io::Result<()> {
+    std::os::unix::fs::FileExt::write_all_at(file, buf, offset)
+}
+
+/// Bytes this process may still use on the volume holding `dir` (not the
+/// space reserved for root).
+pub(crate) fn available_space(dir: &Path) -> io::Result<u64> {
+    let directory = CString::new(dir.as_os_str().as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path contains NUL"))?;
+    let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    // SAFETY: `directory` is a NUL-terminated path; `stat` is written by the
+    // call before it is read, and only after a zero result.
+    if unsafe { libc::statvfs(directory.as_ptr(), stat.as_mut_ptr()) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let stat = unsafe { stat.assume_init() };
+    Ok(widen(stat.f_bavail).saturating_mul(widen(stat.f_frsize)))
+}
+
+/// The libc field types differ between glibc and bionic; every value fits.
+fn widen<T: TryInto<u64>>(value: T) -> u64 {
+    value.try_into().unwrap_or(u64::MAX)
+}
+
+/// Tag of the current user for names in a shared temp folder.
+pub(crate) fn user_tag() -> String {
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    format!("u{}", unsafe { libc::geteuid() })
+}
+
+/// Creates `dir` for private state of this user (mode 0700) and refuses it
+/// unless the current user owns it and nobody else can enter it.
+pub(crate) fn prepare_private_dir(dir: &Path) -> io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let metadata = std::fs::symlink_metadata(dir)?;
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    let owner = unsafe { libc::geteuid() };
+    if !metadata.is_dir() || metadata.uid() != owner {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "state folder is not a folder of this user",
+        ));
+    }
+    if metadata.permissions().mode() & 0o077 != 0 {
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
+
+/// Key of the volume holding `dir`, so stages on one disk share one budget.
+pub(crate) fn space_key(dir: &Path) -> io::Result<String> {
+    Ok(format!("dev{}", std::fs::metadata(dir)?.dev()))
+}
+
 pub(crate) fn secure_staging_directory(path: &Path) -> io::Result<()> {
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
 }

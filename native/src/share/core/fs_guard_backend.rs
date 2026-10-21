@@ -151,6 +151,24 @@ impl Backend for GuardedBackend {
             .open_read_at(path, id, offset)?
             .map(|reader| self.reader(reader)))
     }
+    /// Ranges are read like `open_read_at`: after the same check of the
+    /// live right and the policy, through the guarded reader.
+    fn supports_range_reads(&self, path: &str) -> bool {
+        self.read(path).is_ok() && self.inner.supports_range_reads(path)
+    }
+    fn open_read_range(
+        &self,
+        path: &str,
+        id: Option<&str>,
+        offset: u64,
+        len: u64,
+    ) -> VfsResult<Option<Box<dyn Read + Send>>> {
+        self.read(path)?;
+        Ok(self
+            .inner
+            .open_read_range(path, id, offset, len)?
+            .map(|reader| self.reader(reader)))
+    }
     fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
         self.write(path)?;
         Ok(self.writer(self.inner.open_write(path)?))

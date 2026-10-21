@@ -12,6 +12,10 @@ use super::{bad, validate_frame_len, META_LINK, META_SPECIAL, MIN_WIRE_META_BYTE
 pub(super) mod frame_ext;
 #[path = "frame_ops.rs"]
 pub(super) mod frame_ops;
+#[path = "lz4_frames.rs"]
+pub(in super::super) mod lz4_frames;
+#[path = "range_frames.rs"]
+pub(super) mod range_frames;
 
 impl Frame {
     pub fn encode(&self, req_id: u64) -> io::Result<Vec<u8>> {
@@ -203,7 +207,11 @@ pub(super) fn encode(frame: &Frame, req_id: u64, with_length: bool) -> io::Resul
             put_str(&mut b, destination);
         }
         other => {
-            if !frame_ext::encode(other, &mut b) && !frame_ops::encode(other, &mut b) {
+            if !frame_ext::encode(other, &mut b)
+                && !frame_ops::encode(other, &mut b)
+                && !range_frames::encode(other, &mut b)
+                && !lz4_frames::encode(other, &mut b)
+            {
                 return Err(bad("frame has no wire encoding"));
             }
         }
@@ -356,7 +364,11 @@ fn encoded_len(frame: &Frame) -> io::Result<usize> {
         Frame::Progress { .. } => add_len(&mut length, 16)?,
         Frame::Exists(_) => add_len(&mut length, 1)?,
         Frame::Ok | Frame::End | Frame::Cancel => {}
-        other => match frame_ext::payload_len(other).or_else(|| frame_ops::payload_len(other)) {
+        other => match frame_ext::payload_len(other)
+            .or_else(|| frame_ops::payload_len(other))
+            .or_else(|| range_frames::payload_len(other))
+            .or_else(|| lz4_frames::payload_len(other))
+        {
             Some(extra) => add_len(&mut length, extra?)?,
             None => return Err(bad("frame has no wire encoding")),
         },

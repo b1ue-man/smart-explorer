@@ -299,7 +299,10 @@ impl PeerBackend {
     ) -> io::Result<Box<dyn std::io::Write + Send>> {
         let ticket = self.reserve_stage(path)?;
         let opened = self.open_writer(
-            crate::share::wire::FsRequest::WriteNew { path: path.into() },
+            crate::share::wire::FsRequest::WriteNew {
+                path: path.into(),
+                lz4: self.lz4_offered(),
+            },
             "peer exclusive write open",
         );
         match (opened, ticket) {

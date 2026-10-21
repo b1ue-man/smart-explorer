@@ -61,6 +61,8 @@ fn transfer_engine_task_batch_frames_round_trip() {
             path: "/A/big.bin".into(),
             id: None,
             offset: 1 << 40,
+            len: 0,
+            lz4: false,
         },
         FsRequest::CreateDir {
             path: "/A/neu".into(),

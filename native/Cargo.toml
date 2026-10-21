@@ -114,6 +114,10 @@ rusqlite = { version = "0.40.1", features = ["bundled"] }
 # 1.1.0 fixes GHSA-7cq4-mhxw-xw78 (relay batch frame stalls relay input),
 # GHSA-vwh7-9883-83xj and GHSA-jx4g-cg2x-jc35; 1.3.0 also lifts rustls.
 iroh = { version = "1.3.0", default-features = true }
+# The QUIC congestion controllers Bbr3Config/CubicConfig for the measurement
+# switch SE_SHARE_QUIC_CC (share/core/keepalive.rs, E13); iroh does not
+# re-export them. Same version as iroh's own dependency in Cargo.lock.
+noq-proto = { version = "1.3.0", default-features = false }
 # Post-quantum hybrid X25519MLKEM768 for the Share TLS handshake
 # (share/core/pq_kx.rs) on top of rustls' ring provider: ML-KEM-768 from the
 # pure-Rust RustCrypto crate russh already uses, randomness from `rand`'s
