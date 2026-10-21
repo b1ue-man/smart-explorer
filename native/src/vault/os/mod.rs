@@ -206,6 +206,13 @@ pub(crate) fn platform_lock_defaults() -> LockSettings {
 #[cfg(test)]
 #[path = "shared/backend_dirs_tests.rs"]
 mod backend_dirs_tests;
+// VLT-M14 (stage vault-backends): vaults on real servers.
+#[cfg(test)]
+#[path = "shared/backend_servers_support.rs"]
+mod backend_servers_support;
+#[cfg(test)]
+#[path = "shared/backend_servers_tests.rs"]
+mod backend_servers_tests;
 // U26 (VLT-M8): the comparison mode, its actions and the check.
 #[cfg(test)]
 #[path = "shared/backend_test_support.rs"]
