@@ -86,6 +86,11 @@ pub(super) fn windowed_process() {
             Err(error) => {
                 let status = surface.try_wait();
                 let errors = std::fs::read_to_string(&error_file).unwrap_or_default();
+                // The surface draws with wgpu only: without any adapter the
+                // windowed mode cannot be judged here.
+                if errors.contains("Failed to create wgpu adapter") {
+                    panic!("nicht ausgeführt: kein Grafikadapter für wgpu auf diesem Rechner; Stderr: {errors}");
+                }
                 panic!(
                     "kein Bild der Fläche im Fenstermodus: {error}; Prozess {status:?}; Stderr: {errors}"
                 )
