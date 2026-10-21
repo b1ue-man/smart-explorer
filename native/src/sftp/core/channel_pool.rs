@@ -1,238 +1,74 @@
-//! Extra SFTP channels for file transfers on the backend's SSH connection.
-//! One channel is one `sftp-server` process with its own SSH window (OpenSSH
-//! grants 2 MiB per session channel), so files spread over several channels
-//! move in parallel on the server and uploads get one window each. Listing
-//! and metadata stay on the main session.
+//! Extra SFTP channels for file transfers. One channel is one `sftp-server`
+//! process with its own SSH window (OpenSSH grants 2 MiB per session
+//! channel), so files spread over several channels move in parallel on the
+//! server and uploads get one window each. Listing and metadata stay on the
+//! main session.
 //!
 //! A transfer leases the least busy channel; while every channel is busy a
-//! new one is opened, as rclone opens one SFTP session per concurrent
-//! transfer. Idle channels close after a minute, except the last one used.
-//! The server's limit is learned from its first refusal (OpenSSH:
-//! `MaxSessions`, default 10, answered with "open failed"): the pool then
-//! keeps two channels free for the agent's exec channel and the short-lived
-//! posix-rename channel (plan K25) and shares its channels instead, since
-//! SFTP multiplexes requests of many files on one channel. When no channel
-//! can be opened at all, transfers use the main session as before.
+//! new one is opened on the main connection, as rclone opens one SFTP session
+//! per concurrent transfer. Idle channels close after a minute, except the
+//! last one used. The server's limit is learned from its first refusal
+//! (OpenSSH: `MaxSessions`, default 10, answered with "open failed"): the
+//! pool then keeps two channels free for the agent's exec channel and the
+//! short-lived posix-rename channel (plan K25) and shares its channels
+//! instead, since SFTP multiplexes requests of many files on one channel, at
+//! most `min(open-handles, 64)` handles each (E13-S13); beyond that a range
+//! waits for a lease to end. A range never fails for lack of a channel: it
+//! shares, waits or, with no channel at all, uses the main session
+//! (`lease_range`). A single stream without a channel uses the main session.
+//!
+//! One SSH connection carries one TCP stream, and on a long fat link its
+//! kernel buffer caps the rate however many channels it has. So the pool may
+//! add extra SSH connections (security answer E13-S15, extra_link.rs), each
+//! with one channel, one at a time and only while the last one raised the
+//! throughput by 10 % (link_rules.rs `Growth`, pool_growth.rs).
 use super::backend::SftpBackend;
-use super::connection::{classify_sftp_error, SftpConnection, SftpGeneration};
-use super::copy_data::COPY_DATA;
+use super::connection::{SftpConnection, SftpGeneration};
 use super::exec::ChannelOpen;
-use super::io_err;
-use super::posix_rename::POSIX_RENAME;
-use russh::client;
-use russh_sftp::client::error::Error as SftpError;
-use russh_sftp::client::rawsession::Limits;
-use russh_sftp::client::RawSftpSession;
-use russh_sftp::extensions;
-use russh_sftp::protocol::Version;
+pub(super) use super::link_rules::pool_usable;
+use super::link_rules::{account_key, limit_after_refusal, seat, Candidate, ExtraLogin, Seat};
+#[cfg(test)]
+pub(super) use super::link_rules::{learned_limit, pick, Pick};
+#[cfg(test)]
+pub(super) use super::pool_channel::offered;
+pub(super) use super::pool_channel::{note_failure, open_failed, ChannelLease, PoolChannel};
+use super::pool_channel::{setup, Owner};
+use super::pool_extra::ExtraSupport;
+use super::pool_growth::PoolHub;
 use std::io;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
-/// Channels left free after a refusal: the agent's exec channel and the
-/// short-lived posix-rename channel (plan K25).
-const RESERVED_CHANNELS: usize = 2;
 /// A channel unused this long belongs to a finished burst; rclone empties
-/// its SFTP pool after the same idle time (`--sftp-idle-timeout` 1m0s).
+/// its SFTP pool after the same idle time (`--sftp-idle-timeout` 1m0s). Extra
+/// connections close after it too.
 const IDLE_RETIRE: Duration = Duration::from_secs(60);
-/// Subsystem request, INIT and limits of a new channel, the same bound as
-/// the posix-rename channel's subsystem setup.
-const SETUP_DEADLINE: Duration = Duration::from_secs(10);
-/// Answer deadline per request. The pipeline keeps its queue within about one
-/// unloaded round trip, so an answer this late means a stalled channel; the
-/// same inactivity bound as FTP and WebDAV transfers.
-const REQUEST_TIMEOUT_SECS: u64 = 60;
-/// russh-sftp's `Config::max_packet_len` default, the cap of every request.
-const CLIENT_MAX_PACKET: u64 = 262_144;
-/// SSH_FXP_DATA header: type, id and length (russh-sftp file.rs).
-const READ_OVERHEAD: u64 = 9;
-/// SSH_FXP_WRITE without the handle: type, id, handle length, offset and
-/// data length (russh-sftp file.rs).
-const WRITE_OVERHEAD: u64 = 21;
+/// A waiting transfer looks again this often, also without a wake-up.
+const WAIT_SLICE: Duration = Duration::from_millis(200);
+/// A range waits this long for a channel before it uses the main session.
+const RANGE_WAIT: Duration = Duration::from_secs(30);
 
-pub(super) struct PoolChannel {
-    pub(super) session: Arc<RawSftpSession>,
-    pub(super) generation: Arc<SftpGeneration>,
-    packet_len: u64,
-    read_len: u64,
-    write_len: Option<u64>,
-    /// Files the server lets one channel hold open (`limits@openssh.com`);
-    /// `None` when it names none or 0.
-    open_handles: Option<u64>,
-    /// `fsync@openssh.com` offered: flushes sync like `File::flush`.
-    pub(super) fsync: bool,
-    /// `posix-rename@openssh.com` offered: an atomic replace needs no extra
-    /// channel then (posix_rename.rs).
-    pub(super) posix_rename: bool,
-    /// `copy-data` offered: the server copies between two handles of this
-    /// channel (copy_data.rs).
-    pub(super) copy_data: bool,
-    active: AtomicUsize,
-    idle_since: Mutex<Instant>,
-    broken: AtomicBool,
-}
-
-impl PoolChannel {
-    fn new(setup: Setup, generation: Arc<SftpGeneration>) -> Self {
-        let packet_len = setup
-            .limits
-            .and_then(|limits| limits.packet_len)
-            .map_or(CLIENT_MAX_PACKET, |packet| packet.min(CLIENT_MAX_PACKET));
-        let fit = packet_len.saturating_sub(READ_OVERHEAD).max(1);
-        let read_len = setup
-            .limits
-            .and_then(|limits| limits.read_len)
-            .map_or(fit, |read| read.min(fit));
-        Self {
-            session: Arc::new(setup.session),
-            generation,
-            packet_len,
-            read_len,
-            write_len: setup.limits.and_then(|limits| limits.write_len),
-            open_handles: setup.limits.and_then(|limits| limits.open_handles),
-            fsync: setup.fsync,
-            posix_rename: setup.posix_rename,
-            copy_data: setup.copy_data,
-            active: AtomicUsize::new(0),
-            idle_since: Mutex::new(Instant::now()),
-            broken: AtomicBool::new(false),
-        }
-    }
-
-    /// Bytes per READ: the server's `limits@openssh.com` read length, else
-    /// what one packet carries (as `File::poll_read`).
-    pub(super) fn read_chunk(&self) -> u32 {
-        u32::try_from(self.read_len).unwrap_or(u32::MAX)
-    }
-
-    /// Files the server lets this channel hold open at once, if it said so.
-    pub(super) fn open_handles(&self) -> Option<u64> {
-        self.open_handles
-    }
-
-    /// Bytes per WRITE for a handle of `handle_len` bytes.
-    pub(super) fn write_chunk(&self, handle_len: usize) -> usize {
-        let overhead = WRITE_OVERHEAD.saturating_add(handle_len as u64);
-        let fit = self.packet_len.saturating_sub(overhead).max(1);
-        let chunk = self.write_len.map_or(fit, |limit| limit.min(fit)).max(1);
-        usize::try_from(chunk).unwrap_or(usize::MAX)
-    }
-
-    fn mark_broken(&self) {
-        self.broken.store(true, Ordering::Release);
-    }
-
-    fn load(&self) -> usize {
-        self.active.load(Ordering::Acquire)
-    }
-
-    fn idle_for(&self, now: Instant) -> Duration {
-        now.saturating_duration_since(*lock(&self.idle_since))
-    }
-}
-
-/// One transfer's use of a channel; released on drop.
-pub(super) struct ChannelLease {
-    channel: Arc<PoolChannel>,
-}
-
-impl ChannelLease {
-    fn new(channel: Arc<PoolChannel>) -> Self {
-        channel.active.fetch_add(1, Ordering::AcqRel);
-        Self { channel }
-    }
-
-    pub(super) fn channel(&self) -> &Arc<PoolChannel> {
-        &self.channel
-    }
-}
-
-impl Drop for ChannelLease {
-    fn drop(&mut self) {
-        if self.channel.active.fetch_sub(1, Ordering::AcqRel) == 1 {
-            *lock(&self.channel.idle_since) = Instant::now();
-        }
-    }
-}
-
-/// The failure of a request on `channel`: a closed SSH session retires the
-/// whole connection (as on the main session), a dead or suspect SFTP stream
-/// only this channel. `true` when replaying on another channel is safe.
-pub(super) fn note_failure(
-    connection: &SftpConnection,
-    channel: &PoolChannel,
-    error: &SftpError,
-) -> bool {
-    if channel.generation.session().is_closed() {
-        channel.mark_broken();
-        return connection.note_sftp_error(&channel.generation, error);
-    }
-    let disposition = classify_sftp_error(error);
-    if disposition.retire {
-        channel.mark_broken();
-    }
-    disposition.retry_safe
-}
-
-/// An OPEN that failed. The server's open-handle limit (`limits@openssh.com`,
-/// checked by russh-sftp before sending) is congestion: fewer files at once
-/// succeed, so the transfer's flow backs off instead of failing (plan K13).
-pub(super) fn open_failed(error: SftpError) -> io::Error {
-    match error {
-        SftpError::Limited(message) => crate::vfs::congestion_error(
-            format!("Der SFTP-Server hält keine weiteren Dateien offen ({message})"),
-            None,
-        ),
-        error => io_err(error),
-    }
-}
-
-/// Pool channels allowed after the server refused one while `open` were
-/// open: two stay free for exec and posix-rename.
-pub(super) fn learned_limit(open: usize) -> usize {
-    open.saturating_sub(RESERVED_CHANNELS)
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub(super) enum Pick {
-    Use(usize),
-    Open,
-    MainSession,
-}
-
-/// The channel for a new transfer, from the channels' current `loads`: an
-/// idle one; else a new one while the limit allows; else the least busy one.
-/// `MainSession` when the pool may hold no channel at all.
-pub(super) fn pick(loads: &[usize], opening: usize, limit: Option<usize>) -> Pick {
-    let may_open = limit.is_none_or(|limit| loads.len() + opening < limit);
-    let least = loads.iter().enumerate().min_by_key(|(_, load)| **load);
-    match least {
-        Some((index, &load)) if load == 0 || !may_open => Pick::Use(index),
-        None if !may_open => Pick::MainSession,
-        _ => Pick::Open,
-    }
-}
-
-/// Whether the pool can serve a transfer: it is not switched off for the
-/// current connection and has not learned that no channel fits next to the
-/// main session (`pick` would answer `MainSession`).
-pub(super) fn pool_usable(disabled: bool, channels: usize, limit: Option<usize>) -> bool {
-    !disabled && !(channels == 0 && limit == Some(0))
-}
-
-#[derive(Default)]
 pub(super) struct ChannelPool {
-    state: Mutex<PoolState>,
+    pub(super) state: Mutex<PoolState>,
     /// The server refused `copy-data` once: its request policy holds for
     /// every channel, so later copies stream without asking again.
-    copy_refused: AtomicBool,
+    pub(super) copy_refused: AtomicBool,
+    /// Channels the server accepted whose setup is not finished: they count
+    /// against its limit but are not in `state.channels` yet.
+    pub(super) setting_up: AtomicUsize,
+    /// Extra connections open (for the log lines).
+    pub(super) open_links: Arc<AtomicUsize>,
+    pub(super) hub: Arc<PoolHub>,
+    pub(super) support: Option<ExtraSupport>,
+    pub(super) watching: AtomicBool,
 }
 
 #[derive(Default)]
-struct PoolState {
-    channels: Vec<Arc<PoolChannel>>,
+pub(super) struct PoolState {
+    pub(super) channels: Vec<Arc<PoolChannel>>,
     opening: usize,
+    /// Channels the main connection may hold; extra connections add theirs.
     limit: Option<usize>,
     /// Setup of a channel failed on this generation: the main session serves.
     disabled: Option<Weak<SftpGeneration>>,
@@ -241,26 +77,38 @@ struct PoolState {
 enum Choice {
     Use(ChannelLease),
     Open,
+    Wait,
     MainSession,
 }
 
 impl PoolState {
     fn prune(&mut self, generation: &Arc<SftpGeneration>, now: Instant) {
-        self.channels.retain(|channel| {
-            Arc::ptr_eq(&channel.generation, generation) && !channel.broken.load(Ordering::Acquire)
-        });
+        for channel in &self.channels {
+            if !channel.usable_on(generation) {
+                channel.note_close("Hauptverbindung erneuert");
+            }
+        }
+        self.channels
+            .retain(|channel| channel.usable_on(generation));
         self.retire_idle(now);
     }
 
     fn retire_idle(&mut self, now: Instant) {
-        // The most recently used idle channel stays open, so a single later
-        // file does not pay the channel setup (three round trips) again.
+        // The most recently used idle channel of the main connection stays
+        // open, so a single later file does not pay the channel setup (three
+        // round trips) again. Extra connections keep none: a minute without
+        // a transfer closes them.
         let warm = self
             .channels
             .iter()
-            .filter(|channel| channel.load() == 0)
+            .filter(|channel| !channel.is_extra() && channel.load() == 0)
             .min_by_key(|channel| channel.idle_for(now))
             .cloned();
+        for channel in &self.channels {
+            if channel.load() == 0 && channel.idle_for(now) >= IDLE_RETIRE {
+                channel.note_close("Leerlauf 60 s");
+            }
+        }
         self.channels.retain(|channel| {
             channel.load() > 0
                 || channel.idle_for(now) < IDLE_RETIRE
@@ -275,30 +123,66 @@ impl PoolState {
             .is_some_and(|disabled| Arc::ptr_eq(&disabled, generation))
     }
 
+    pub(super) fn extra_channels(&self) -> usize {
+        self.channels
+            .iter()
+            .filter(|channel| channel.is_extra())
+            .count()
+    }
+
+    fn main_channels(&self) -> usize {
+        self.channels.len() - self.extra_channels()
+    }
+
+    /// Channels in all: the main connection's limit plus one per extra
+    /// connection; `None` while the main limit is not known.
+    fn total_limit(&self) -> Option<usize> {
+        self.limit.map(|limit| limit + self.extra_channels())
+    }
+
     fn choose(&mut self) -> Choice {
-        let loads: Vec<usize> = self.channels.iter().map(|channel| channel.load()).collect();
-        match pick(&loads, self.opening, self.limit) {
-            Pick::Use(index) => match self.channels.get(index) {
+        let seats: Vec<Candidate> = self
+            .channels
+            .iter()
+            .map(|channel| Candidate {
+                load: channel.load(),
+                cap: channel.handle_cap(),
+            })
+            .collect();
+        match seat(&seats, self.opening, self.total_limit()) {
+            Seat::Use(index) => match self.channels.get(index) {
                 Some(channel) => Choice::Use(ChannelLease::new(channel.clone())),
                 None => Choice::MainSession,
             },
-            Pick::Open => {
+            Seat::Open => {
                 self.opening += 1;
                 Choice::Open
             }
-            Pick::MainSession => Choice::MainSession,
+            Seat::Wait => Choice::Wait,
+            Seat::MainSession => Choice::MainSession,
         }
     }
 
-    fn refused(&mut self) {
-        let limit = learned_limit(self.channels.len());
-        let limit = self.limit.map_or(limit, |known| known.min(limit));
+    /// The server refused a channel of the main connection while it held
+    /// the ready ones and `in_setup` more that it had accepted.
+    fn refused(&mut self, in_setup: usize) {
+        let limit = limit_after_refusal(self.limit, self.main_channels(), in_setup);
         self.limit = Some(limit);
-        // Busy channels first: the idle ones beyond the limit close now, a
-        // busy one after its last lease (it gets no new ones).
-        self.channels
-            .sort_by_key(|channel| std::cmp::Reverse(channel.load()));
-        self.channels.truncate(limit);
+        self.shrink_main(limit);
+    }
+
+    /// Busy channels of the main connection first: the idle ones beyond the
+    /// limit close now, a busy one after its last lease (it gets no new
+    /// ones). Extra connections stay.
+    fn shrink_main(&mut self, limit: usize) {
+        let (extra, mut main): (Vec<_>, Vec<_>) = self
+            .channels
+            .drain(..)
+            .partition(|channel| channel.is_extra());
+        main.sort_by_key(|channel| std::cmp::Reverse(channel.load()));
+        main.truncate(limit);
+        main.extend(extra);
+        self.channels = main;
     }
 }
 
@@ -308,24 +192,56 @@ enum Opened {
     Unavailable(Arc<SftpGeneration>),
 }
 
-struct Setup {
-    session: RawSftpSession,
-    limits: Option<Limits>,
-    fsync: bool,
-    posix_rename: bool,
-    copy_data: bool,
+/// Counts a channel the server accepted while its setup runs.
+struct SettingUp<'a>(&'a AtomicUsize);
+
+impl<'a> SettingUp<'a> {
+    fn enter(counter: &'a AtomicUsize) -> Self {
+        counter.fetch_add(1, Ordering::AcqRel);
+        Self(counter)
+    }
 }
 
-/// Whether the server's VERSION reply offers extension `name` in the
-/// version these clients speak ("1" for every extension used here).
-pub(super) fn offered(version: &Version, name: &str) -> bool {
-    version
-        .extensions
-        .get(name)
-        .is_some_and(|value| value == "1")
+impl Drop for SettingUp<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Need {
+    /// A whole file as one stream: the main session is a fine fallback.
+    Single,
+    /// One range of a file: it shares, waits or, with no channel at all,
+    /// the caller uses the main session.
+    Range,
 }
 
 impl ChannelPool {
+    /// The pool of a backend. `login` is `Some` only when the main login
+    /// allows extra connections (`link_rules::plan`).
+    pub(super) fn create(
+        connection: &Arc<SftpConnection>,
+        host: &str,
+        port: u16,
+        user: &str,
+        login: Option<ExtraLogin>,
+    ) -> Arc<Self> {
+        let account = login.as_ref().map(|_| account_key(host, port, user));
+        let support = login.map(|login| ExtraSupport::new(connection, host, port, user, login));
+        let pool = Arc::new(Self {
+            state: Mutex::new(PoolState::default()),
+            copy_refused: AtomicBool::new(false),
+            setting_up: AtomicUsize::new(0),
+            open_links: Arc::new(AtomicUsize::new(0)),
+            hub: Arc::new(PoolHub::new(account)),
+            support,
+            watching: AtomicBool::new(false),
+        });
+        pool.hub.bind(Arc::downgrade(&pool));
+        pool
+    }
+
     pub(super) fn copy_data_refused(&self) -> bool {
         self.copy_refused.load(Ordering::Acquire)
     }
@@ -337,7 +253,9 @@ impl ChannelPool {
     /// Closes channels idle past `IDLE_RETIRE` (all but the warm one)
     /// without waiting for the next transfer.
     pub(super) fn retire_idle(&self) {
-        lock(&self.state).retire_idle(Instant::now());
+        let mut state = lock(&self.state);
+        state.retire_idle(Instant::now());
+        self.hub.set_links(1 + state.extra_channels());
     }
 
     /// Whether `lease` can hand out a channel for the current connection
@@ -363,23 +281,68 @@ impl ChannelPool {
             .find_map(|channel| channel.open_handles())
     }
 
+    /// Transfers the connections carry at once (channels × handles each),
+    /// once the main limit is known: the flow control may not raise the
+    /// parallel files and ranges beyond it, where only refusals would
+    /// follow. `None`: nothing is known to bound them.
+    pub(super) fn capacity(&self) -> Option<usize> {
+        let state = lock(&self.state);
+        let channels = state.total_limit()?;
+        if channels == 0 {
+            return None;
+        }
+        let handles = state
+            .channels
+            .iter()
+            .map(|channel| channel.handle_cap())
+            .min()
+            .unwrap_or(super::batch_ops::OPEN_HANDLES);
+        Some(channels.saturating_mul(handles))
+    }
+
     /// A channel for one file transfer; `None`: use the main session.
     pub(super) fn lease(&self, backend: &SftpBackend) -> io::Result<Option<ChannelLease>> {
+        self.acquire(backend, Need::Single)
+    }
+
+    /// A channel for one range of a file. It never fails for lack of a free
+    /// channel: it shares one (up to its handle limit) or waits for a lease
+    /// to end; `None` only when the pool can hold no channel at all (or
+    /// none became free within `RANGE_WAIT`): the caller uses the main
+    /// session.
+    pub(super) fn lease_range(&self, backend: &SftpBackend) -> io::Result<Option<ChannelLease>> {
+        self.acquire(backend, Need::Range)
+    }
+
+    fn acquire(&self, backend: &SftpBackend, need: Need) -> io::Result<Option<ChannelLease>> {
+        let give_up = Instant::now() + RANGE_WAIT;
         loop {
             let generation = backend.connection.current()?;
-            {
-                let mut state = lock(&self.state);
-                state.prune(&generation, Instant::now());
-                if state.disabled_for(&generation) {
-                    return Ok(None);
-                }
-                match state.choose() {
-                    Choice::Use(lease) => return Ok(Some(lease)),
-                    Choice::MainSession => return Ok(None),
-                    Choice::Open => {}
-                }
+            let mut state = lock(&self.state);
+            state.prune(&generation, Instant::now());
+            self.hub.set_links(1 + state.extra_channels());
+            if state.disabled_for(&generation) && state.channels.is_empty() {
+                return Ok(None);
             }
-            let opened = open_channel(backend);
+            match state.choose() {
+                Choice::Use(lease) => return Ok(Some(lease)),
+                Choice::MainSession => return Ok(None),
+                Choice::Wait => {
+                    if need == Need::Single || Instant::now() >= give_up {
+                        return Ok(None);
+                    }
+                    let (guard, _) = self
+                        .hub
+                        .released
+                        .wait_timeout(state, WAIT_SLICE)
+                        .unwrap_or_else(PoisonError::into_inner);
+                    drop(guard);
+                    continue;
+                }
+                Choice::Open => {}
+            }
+            drop(state);
+            let opened = self.open_channel(backend);
             let mut state = lock(&self.state);
             state.opening = state.opening.saturating_sub(1);
             match opened {
@@ -389,68 +352,43 @@ impl ChannelPool {
                     state.channels.push(channel);
                     return Ok(Some(lease));
                 }
-                Ok(Opened::Refused) => state.refused(),
+                Ok(Opened::Refused) => state.refused(self.setting_up.load(Ordering::Acquire)),
                 Ok(Opened::Unavailable(generation)) => {
-                    state.disabled = Some(Arc::downgrade(&generation));
-                    return Ok(None);
+                    let held = state.main_channels() + self.setting_up.load(Ordering::Acquire);
+                    if held == 0 {
+                        state.disabled = Some(Arc::downgrade(&generation));
+                        return Ok(None);
+                    }
+                    // Other channels work: this one only did not fit now.
+                    let limit = state.limit.map_or(held, |known| known.min(held));
+                    state.limit = Some(limit);
                 }
                 Err(error) => return Err(error),
             }
         }
     }
-}
 
-fn open_channel(backend: &SftpBackend) -> io::Result<Opened> {
-    let (generation, channel) = match backend.try_open_session_channel()? {
-        ChannelOpen::Opened(generation, channel) => (generation, channel),
-        ChannelOpen::Refused(_) => return Ok(Opened::Refused),
-    };
-    match backend.rt.block_on(setup(channel)) {
-        Ok(setup) => Ok(Opened::Ready(PoolChannel::new(setup, generation))),
-        // A lost connection fails the transfer (the next call reconnects);
-        // any other setup failure only turns the pool off for this session.
-        Err(error) if generation.session().is_closed() => {
-            backend.connection.mark_stale(&generation);
-            Err(error)
-        }
-        Err(_) => Ok(Opened::Unavailable(generation)),
-    }
-}
-
-async fn setup(channel: russh::Channel<client::Msg>) -> io::Result<Setup> {
-    let staged = tokio::time::timeout(SETUP_DEADLINE, async move {
-        channel
-            .request_subsystem(true, "sftp")
-            .await
-            .map_err(io_err)?;
-        let mut session = RawSftpSession::new(channel.into_stream());
-        session.set_timeout(REQUEST_TIMEOUT_SECS);
-        let version = session.init().await.map_err(io_err)?;
-        let fsync = offered(&version, extensions::FSYNC);
-        let posix_rename = offered(&version, POSIX_RENAME);
-        let copy_data = offered(&version, COPY_DATA);
-        let limits = if offered(&version, extensions::LIMITS) {
-            let limits = Limits::from(session.limits().await.map_err(io_err)?);
-            session.set_limits(limits);
-            Some(limits)
-        } else {
-            None
+    fn open_channel(&self, backend: &SftpBackend) -> io::Result<Opened> {
+        let (generation, channel) = match backend.try_open_session_channel()? {
+            ChannelOpen::Opened(generation, channel) => (generation, channel),
+            ChannelOpen::Refused(_) => return Ok(Opened::Refused),
         };
-        Ok::<Setup, io::Error>(Setup {
-            session,
-            limits,
-            fsync,
-            posix_rename,
-            copy_data,
-        })
-    })
-    .await;
-    staged.map_err(|_| {
-        io::Error::new(
-            io::ErrorKind::TimedOut,
-            "SFTP-Übertragungskanal ließ sich nicht rechtzeitig einrichten",
-        )
-    })?
+        let _counted = SettingUp::enter(&self.setting_up);
+        match backend.rt.block_on(setup(channel)) {
+            Ok(setup) => Ok(Opened::Ready(PoolChannel::new(
+                setup,
+                Owner::Main(generation),
+                self.hub.clone(),
+            ))),
+            // A lost connection fails the transfer (the next call reconnects);
+            // any other setup failure only turns the pool off for this session.
+            Err(error) if generation.session().is_closed() => {
+                backend.connection.mark_stale(&generation);
+                Err(error)
+            }
+            Err(_) => Ok(Opened::Unavailable(generation)),
+        }
+    }
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {

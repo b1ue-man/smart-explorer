@@ -16,8 +16,12 @@ use tokio::time::Instant;
 
 #[path = "session_auth.rs"]
 mod auth;
+#[path = "extra_link.rs"]
+mod extra;
 #[path = "host_key_handler.rs"]
 mod handler;
+
+pub(super) use self::extra::{establish, Established, ExtraLink, Request};
 
 const SSH_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 const SSH_KEEPALIVE_MAX_MISSED: usize = 3;
@@ -139,24 +143,24 @@ fn classify(error: russh::Error, outcome: &Mutex<HostKeyOutcome>) -> HandshakeEr
     HandshakeError::Other(io_err(error))
 }
 
+/// The main connection with its SFTP session and the host key it showed
+/// (`None` when the handshake recorded none).
 pub(super) async fn connect_async(
     cfg: &SftpConfig,
-) -> io::Result<(client::Handle<Client>, SftpSession)> {
-    let mut session = match handshake(&cfg.host, cfg.port, HostKeyMode::Verify, false)
+) -> io::Result<(client::Handle<Client>, SftpSession, Option<UnknownHostKey>)> {
+    let (mut session, shown) = match handshake(&cfg.host, cfg.port, HostKeyMode::Verify, false)
         .await
-        .0
     {
-        Ok(session) => session,
+        (Ok(session), outcome) => (session, outcome.presented),
         // A server pinned before SHA-1 signatures were dropped keeps working;
         // its pinned key still has to match. New servers never get SHA-1.
-        Err(HandshakeError::NoCommonHostKeyAlgorithm(_))
+        (Err(HandshakeError::NoCommonHostKeyAlgorithm(_)), _)
             if known_hosts::has_pin(&cfg.host, cfg.port) =>
         {
-            handshake(&cfg.host, cfg.port, HostKeyMode::Verify, true)
-                .await
-                .0?
+            let (result, outcome) = handshake(&cfg.host, cfg.port, HostKeyMode::Verify, true).await;
+            (result?, outcome.presented)
         }
-        Err(error) => return Err(error.into()),
+        (Err(error), _) => return Err(error.into()),
     };
     if !auth::authenticate(&mut session, cfg).await? {
         return Err(io::Error::new(
@@ -173,7 +177,7 @@ pub(super) async fn connect_async(
     let sftp = SftpSession::new(channel.into_stream())
         .await
         .map_err(io_err)?;
-    Ok((session, sftp))
+    Ok((session, sftp, shown))
 }
 
 /// Host-key handshake without login: `Probe` reports the presented key and

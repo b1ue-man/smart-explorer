@@ -29,6 +29,16 @@
 //! window (pipelined_read.rs `with_end`); a large upload is written in ranges
 //! only where no other account can swap an entry of the stage's folders
 //! (security answer S7, segmented_stage.rs).
+//! A range never fails for lack of a channel: it shares one (at most
+//! `min(open-handles, 64)` handles each), waits for a lease to end or, with
+//! no channel at all, goes over the main session (channel_pool.rs,
+//! main_range.rs). On a long fat link one TCP stream caps the rate, so a
+//! backend whose login needed no input (`SftpBackend::connect_with_origin`)
+//! adds extra SSH connections for transfers, one at a time while the measured
+//! throughput still rises; they only run the subsystem `sftp`, must show the
+//! main connection's host key, close after a minute idle and are blocked for
+//! 15 minutes after any failure (security answer E13-S15; extra_link.rs,
+//! link_rules.rs, pool_growth.rs, pool_extra.rs).
 //! A folder is deleted with one READDIR per folder and many REMOVEs in
 //! flight on the main session (tree_remove.rs).
 //! An interactive terminal (pty-req, then shell or exec) opens as one more
@@ -66,10 +76,22 @@ mod host_key_ops;
 mod io_adapters;
 #[path = "os/shared/known_hosts.rs"]
 mod known_hosts;
+#[path = "core/link_log.rs"]
+mod link_log;
+#[path = "core/link_rules.rs"]
+mod link_rules;
+#[path = "core/main_range.rs"]
+mod main_range;
 #[path = "core/metadata.rs"]
 mod metadata;
 #[path = "core/pipelined_read.rs"]
 mod pipelined_read;
+#[path = "core/pool_channel.rs"]
+mod pool_channel;
+#[path = "core/pool_extra.rs"]
+mod pool_extra;
+#[path = "core/pool_growth.rs"]
+mod pool_growth;
 #[path = "core/pool_reader.rs"]
 mod pool_reader;
 #[path = "core/pool_writer.rs"]
@@ -107,6 +129,9 @@ mod batch_tests;
 #[path = "core/delete_speed_task_tests.rs"]
 mod delete_speed_task_tests;
 #[cfg(test)]
+#[path = "core/link_tests.rs"]
+mod link_tests;
+#[cfg(test)]
 #[path = "core/range_tests.rs"]
 mod range_tests;
 #[cfg(test)]
@@ -124,7 +149,7 @@ mod transfer_engine_task_tests;
 
 pub use backend::SftpBackend;
 pub use command::{signal_number, SshCommand, SshCommandControl, SshCommandEnd, SshCommandEvent};
-pub use config::{SftpAuth, SftpConfig};
+pub use config::{PasswordSource, SftpAuth, SftpConfig, SftpLoginOrigin};
 pub use host_key::UnknownHostKey;
 pub use host_key_ops::{
     forget_host_key, probe_host_key, trust_host_key, unknown_host_key, PresentedHostKey,
