@@ -378,11 +378,189 @@ def check_android_arm64_compile(ctx: common.JobContext) -> tuple[str, str]:
     return NOT_RUN, "kein plattformübergreifender Bau in der Suite (AGENTS.md); arm64 baut das Release"
 
 
+# --------------------------------------------------------------------------- stage: vault-backends
+
+SERVER_TESTS = ("vault_task_backends_provider_matrix", "vault_task_backends_share_pair")
+PROVIDERS_SCRIPT = NATIVE / "sync-reliability-providers.py"
+# What fixtures() of the providers script calls on the runner.
+PROVIDER_TOOLS = ("docker", "openssl", "ssh-keyscan", "ssh-keygen", "curl")
+# The logs of the provider fixtures that name the step that failed (written into their log folder).
+PROVIDER_LOGS = ("fixture-commands.log", "share-main-commands.log", "share-remote-commands.log")
+
+
+def load_providers_script():
+    """native/sync-reliability-providers.py as a module (its file name is no module name)."""
+    import importlib.util  # only this stage needs it
+
+    spec = importlib.util.spec_from_file_location("sync_reliability_providers", PROVIDERS_SCRIPT)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"{PROVIDERS_SCRIPT} lässt sich nicht laden")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def error_chain(error: BaseException) -> str:
+    """The error and what it was raised while handling (a failed cleanup hides the first error)."""
+    parts: list[str] = []
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen and len(parts) < 4:
+        seen.add(id(current))
+        parts.append(f"{type(current).__name__}: {current}")
+        current = current.__cause__ or current.__context__
+    return " <- ".join(parts)
+
+
+def provider_log_tails(logs: Path) -> str:
+    """The end of the provider logs that name the failing step."""
+    sections = []
+    for name in PROVIDER_LOGS:
+        try:
+            text = (logs / name).read_text(encoding="utf-8", errors="replace").strip()
+        except OSError:
+            continue
+        if text:
+            sections.append(f"Ende von {name}:\n{common.excerpt(text, 800)}")
+    return "\n".join(sections)
+
+
+def server_blocker(ctx: common.JobContext, stage: str) -> str | None:
+    """Why the owned servers cannot start on this runner, else None."""
+    if not LINUX:
+        return ("die Testserver von native/sync-reliability-providers.py laufen als Docker-Container und hier nur "
+                "auf Linux-Runnern; dieser Runner ist keiner")
+    missing = [tool for tool in PROVIDER_TOOLS if not shutil.which(tool)]
+    if missing:
+        return (f"im Runner fehlt {', '.join(missing)} (native/sync-reliability-providers.py braucht "
+                f"{', '.join(PROVIDER_TOOLS)})")
+    info = ctx.run(["docker", "info", "--format", "{{.ServerVersion}}"], stage=stage, timeout=120)
+    if not info.ok:
+        return f"docker ist nicht benutzbar ({info.describe()}): {common.first_line(info.output) or 'keine Ausgabe'}"
+    return None
+
+
+def profile_env(ctx: common.JobContext) -> dict:
+    """The isolated profile of the stage, laid out like that of the sync reliability suite: the confirmed SSH host
+    keys, the saved connections and the Share daemon of the owned servers live in it, and the tests run in it too."""
+    assert ctx.fixtures is not None
+    root = ctx.fixtures.make_dir("backends-profile")
+    folders = {"APPDATA": root, "LOCALAPPDATA": root / "local", "XDG_CONFIG_HOME": root / "config",
+               "XDG_DATA_HOME": root / "data", "XDG_CACHE_HOME": root / "cache"}
+    for folder in folders.values():
+        folder.mkdir(parents=True, exist_ok=True)
+        folder.chmod(0o700)
+    token = re.sub(r"[^A-Za-z0-9]", "", ctx.candidate_sha)[:12] or "local"
+    env = {key: str(folder) for key, folder in folders.items()}
+    env["RUST_BACKTRACE"] = "1"
+    env["SMART_EXPLORER_E2E_TEST_NAMESPACE"] = f"vault-backends-{token}-{secrets.token_hex(3)}"
+    return env
+
+
+def provider_names(runtime: dict) -> list[str]:
+    """The provider names of the manifest (no connection data)."""
+    try:
+        manifest = json.loads(Path(runtime["SE_SYNC_PROVIDER_MANIFEST"]).read_text(encoding="utf-8"))
+        return [str(item["name"]) for item in manifest["providers"]]
+    except (KeyError, TypeError, OSError, ValueError):
+        return []
+
+
 def stage_vault_backends(ctx: common.JobContext, stage: str) -> None:
-    ctx.state.setdefault("stage_notes", {})[stage] = (
-        "Testserver-Matrix (SFTP, Agent, FTP/FTPS, SMB, WebDAV) aus native/sync-reliability-providers.py ist "
-        "nicht angebunden: die Schnittstelle des Skripts liegt außerhalb der Lesefläche von U39 (offener Punkt)")
-    ctx.run_default(stage)
+    """Stage ``vault-backends`` (VLT-M14, job linux-core): vaults on the remote backends.
+
+    ``vault_task_backends_provider_matrix`` (SFTP, agent, FTP, FTPS, SMB, WebDAV) and
+    ``vault_task_backends_share_pair`` (a Direct Share pair) need real servers. The stage starts the owned servers of
+    ``native/sync-reliability-providers.py`` with its ``fixtures()`` (Docker containers, the candidate's Share server and
+    two ``se`` daemons for the pair; nothing of it is repeated here), runs the stage with their connections and ends the
+    servers afterwards, also after an error (the cleanup is registered with the stage fixtures).
+
+    Environment of the tests (extra_env of the stage): ``SE_SYNC_PROVIDER_MANIFEST`` (providers.json: sftp, sftp-other,
+    sftp-key, agent, ftp, ftps, smb, webdav, direct, room), ``SE_SYNC_FIXTURE_CA_DER``, ``SE_SHARE_RELAY_URL`` and the
+    isolated profile (APPDATA, LOCALAPPDATA, XDG_CONFIG_HOME, XDG_DATA_HOME, XDG_CACHE_HOME,
+    SMART_EXPLORER_E2E_TEST_NAMESPACE) in which the SSH host keys were confirmed. The entries carry ``ignored`` and
+    ``threads=1`` and no ``fixture=``: the pair comes from the providers script, not from the fixture ``share``.
+
+    A server that does not start makes both entries ``not_run`` with the exact reason (``fixtures()`` starts all of
+    them or none); a ``se`` that does not build fails them like any other environment that cannot be made."""
+    assert ctx.fixtures is not None
+    notes = ctx.state.setdefault("stage_notes", {})
+    wanted = [entry for entry in ctx.entries(stage) if entry.name in SERVER_TESTS and not ctx.recorded(entry.name)]
+    present = []
+    if wanted and ctx.cargo.build_lib():
+        present = [entry for entry in wanted if len(ctx.cargo.by_leaf.get(entry.name, [])) == 1]
+    if not present:
+        if wanted:
+            notes[stage] = ("Testserver nicht gestartet: die Server-Tests fehlen im Testprogramm oder dessen Bau "
+                            "scheiterte (das Ergebnis steht bei den Tests)")
+        ctx.run_default(stage)
+        return
+
+    def give_up(status: str, reason: str) -> None:
+        for entry in present:
+            if status == FAILED:
+                ctx.record(entry.name, stage, FAILED, reason)
+            else:
+                ctx.not_run_all(stage, reason, entries=[entry])
+        notes[stage] = "Testserver nicht gestartet: " + (common.first_line(reason) or reason)
+        ctx.run_default(stage)
+
+    blocker = server_blocker(ctx, stage)
+    if blocker:
+        give_up(NOT_RUN, blocker)
+        return
+    cli = ctx.cargo.bin_path("se")
+    if cli is None:
+        give_up(FAILED, "Umgebung nicht herstellbar: " + ctx.cargo.bin_errors.get("se", "Bau von se gescheitert"))
+        return
+    share = ctx.cargo.share_server()
+    if share is None:
+        give_up(NOT_RUN, f"Share-Server nicht verfügbar: {ctx.cargo.server_error}")
+        return
+    try:
+        script = load_providers_script()
+    except Exception as error:  # noqa: BLE001 - a broken providers script fails the entries with its error
+        give_up(FAILED, f"native/sync-reliability-providers.py nicht ladbar: {error_chain(error)}")
+        return
+    profile = profile_env(ctx)
+    base = {**ctx.base_env(), **profile}
+    logs = ctx.logs / "vault-backends-servers"
+    started = time.monotonic()
+    manager = script.fixtures(logs, base, cli, share)
+    try:
+        runtime = manager.__enter__()
+    except Exception as error:  # noqa: BLE001 - the exact reason is the report of the entries
+        tails = provider_log_tails(logs)
+        give_up(NOT_RUN, "Testserver aus native/sync-reliability-providers.py nicht gestartet: "
+                + error_chain(error) + (f"\n{tails}" if tails else ""))
+        return
+
+    closed: list[bool] = []
+    problems: list[str] = []
+
+    def shutdown() -> None:
+        if closed:
+            return
+        closed.append(True)
+        try:
+            manager.__exit__(None, None, None)
+        except Exception as error:  # noqa: BLE001 - reported in the stage note, the results stand
+            problems.append(error_chain(error))
+            ctx.log_line(stage, f"Testserver beenden gescheitert: {error_chain(error)}")
+
+    ctx.fixtures.add_cleanup(shutdown)
+    names = provider_names(runtime)
+    notes[stage] = (f"Testserver aus native/sync-reliability-providers.py in {time.monotonic() - started:.0f} s "
+                    f"gestartet ({', '.join(names) or 'Namen unbekannt'}); Share-Paar über {share.name}; "
+                    "nach den Tests beendet")
+    ctx.log_line(stage, f"Testserver bereit: {', '.join(names)}; Profil {profile['XDG_DATA_HOME']}")
+    added = {key: str(value) for key, value in runtime.items() if base.get(key) != str(value)}
+    try:
+        ctx.run_default(stage, extra_env={**profile, **added})
+    finally:
+        shutdown()
+    if problems:
+        notes[stage] += "; Beenden der Testserver gescheitert: " + "; ".join(problems)
 
 
 FIXTURES = {"interop": fixture_interop, "keep": fixture_keep, "marker": fixture_marker}

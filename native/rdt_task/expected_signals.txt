@@ -1514,6 +1514,12 @@ speed_task_local_unbuffered_rule_is_a_quarter_of_the_available_memory linux-core
 speed_task_local_probe_is_planned_only_for_a_direct_copy_on_a_drive_not_known_flash linux-core:unit  pfad=transfer::engine::local::extras_tests::speed_task_local_probe_is_planned_only_for_a_direct_copy_on_a_drive_not_known_flash  quelle=E13,Code
 speed_task_local_engine_measures_a_direct_copy_on_a_drive_that_says_rotating linux-core:unit  pfad=transfer::engine::local::extras_tests::speed_task_local_engine_measures_a_direct_copy_on_a_drive_that_says_rotating  quelle=E13,Code
 
+# ---- S3 Stufe vault-backends (VLT-M14, T564): aus [noch nicht umgesetzt] verschoben (2026-10-21). Die Stufe startet
+# die Testserver von native/sync-reliability-providers.py selbst (rdt_task/vault.py); das Share-Paar kommt von dort,
+# nicht von der Fixture share ----
+vault_task_backends_provider_matrix  linux-core:vault-backends  ignored threads=1  pfad=vault::os::backend_servers_tests::vault_task_backends_provider_matrix  quelle=T564,D3
+vault_task_backends_share_pair       linux-core:vault-backends  ignored threads=1  pfad=vault::os::backend_servers_tests::vault_task_backends_share_pair  quelle=T564,D3
+
 [noch nicht umgesetzt]
 
 # ---- S2 DRV-M2 Windows (kein Paket benannt): windows-core drive-dokany-regression (L350, S2-A3) ----
@@ -1543,7 +1549,4 @@ vault_task_mcp_status_without_paths               linux-core:vault-mcp  env=SMAR
 # env=SMART_EXPLORER_GUI_TASK=1 und isolierte XDG_DATA_HOME/APPDATA/LOCALAPPDATA ({tmp}), mit Anzeige fixture=xvfb.
 # U29 setzt die Optionen beim Verschieben. ----
 
-# ---- S3 Stufe vault-backends (VLT-M14): Plan nennt keine Namen, Namen von U39 gesetzt (T564) ----
-vault_task_backends_provider_matrix               linux-core:vault-backends  paket=offen  quelle=T564,D3
-vault_task_backends_share_pair                    linux-core:vault-backends  fixture=share  paket=offen  quelle=T564,D3
 
