@@ -60,6 +60,7 @@ internal object CoreEvents {
                 "screenSession" -> (event["session"] as? JsonPrimitive)?.longOrNull?.let { session ->
                     ScreenSessionChanged(session, event.text("state").orEmpty(), event.text("reason"))
                 }
+                "screenView" -> decodeScreenView(event)
                 "docs.changed" -> DocsChanged(
                     roots = (event["roots"] as? JsonPrimitive)?.booleanOrNull ?: false,
                     documents = (event["documents"] as? JsonArray)
@@ -73,6 +74,40 @@ internal object CoreEvents {
             // SerializationException is an IllegalArgumentException: skip only this event.
             Log.w(TAG, "skipping malformed event", e)
             null
+        }
+    }
+
+    /** The `screenView` event of a viewer session (SCR-M9); `null` for an unknown kind. */
+    internal fun decodeScreenView(event: JsonObject): ScreenViewEvent? {
+        val session = (event["session"] as? JsonPrimitive)?.longOrNull ?: return null
+        val kind = event.text("kind") ?: return null
+        return when (kind) {
+            "pending" -> ScreenViewEvent.Pending(session, event.text("capability").orEmpty())
+            "accepted" -> ScreenViewEvent.Accepted(
+                session = session,
+                path = event.text("path").orEmpty(),
+                platform = event.text("platform").orEmpty(),
+                view = (event["authorization"] as? JsonObject)?.text("view") ?: "off",
+                control = (event["authorization"] as? JsonObject)?.text("control") ?: "off",
+                body = event,
+            )
+            "state" -> ScreenViewEvent.State(session, event.text("state").orEmpty(), event.text("reason"))
+            "stream" -> ScreenViewEvent.Stream(
+                session = session,
+                codec = event.text("codec").orEmpty(),
+                profile = event.text("profile"),
+                width = (event["width"] as? JsonPrimitive)?.intOrNull ?: 0,
+                height = (event["height"] as? JsonPrimitive)?.intOrNull ?: 0,
+                gop = (event["gop"] as? JsonPrimitive)?.longOrNull ?: 0L,
+                encoder = event.text("encoder").orEmpty(),
+                hardware = (event["hardware"] as? JsonPrimitive)?.booleanOrNull ?: false,
+            )
+            "stats" -> ScreenViewEvent.Stats(session, event)
+            "controlState" -> ScreenViewEvent.ControlState(session, event.text("holder"), event.text("blocked"))
+            "windows" -> ScreenViewEvent.Windows(session, event)
+            "error" -> ScreenViewEvent.Error(session, event.text("code").orEmpty(), event.text("detail"))
+            "ended" -> ScreenViewEvent.Ended(session, event.text("code").orEmpty(), event.text("detail"))
+            else -> null
         }
     }
 
@@ -102,3 +137,52 @@ data class ScreenSessionChanged(val session: Long, val state: String, val reason
  * change other apps saved could not be uploaded ([commitFailed]; it stays queued).
  */
 data class DocsChanged(val roots: Boolean, val documents: List<String>, val commitFailed: Boolean) : CoreEvent
+
+/**
+ * Progress of a viewer session of this phone (SCR-M9, `screen.viewOpen`): `type` `screenView` with
+ * a `kind`. [Accepted], [Stats] and [Windows] keep the whole event as [body] (the structured parts
+ * are decoded by the screen code); the other kinds carry their fields.
+ */
+sealed interface ScreenViewEvent : CoreEvent {
+    val session: Long
+
+    /** The device asks its user; [capability] is `screenView` or `screenControl`. */
+    data class Pending(override val session: Long, val capability: String) : ScreenViewEvent
+
+    /** The device accepted: [path] `direct` or `relay`, [view]/[control] `off`, `ask` or `allow`. */
+    data class Accepted(
+        override val session: Long,
+        val path: String,
+        val platform: String,
+        val view: String,
+        val control: String,
+        val body: JsonObject,
+    ) : ScreenViewEvent
+
+    /** A `SessionState` key with its reason key. */
+    data class State(override val session: Long, val state: String, val reason: String?) : ScreenViewEvent
+
+    /** A new picture group starts; [gop] is the number whose low 16 bits mark its pictures. */
+    data class Stream(
+        override val session: Long,
+        val codec: String,
+        val profile: String?,
+        val width: Int,
+        val height: Int,
+        val gop: Long,
+        val encoder: String,
+        val hardware: Boolean,
+    ) : ScreenViewEvent
+
+    data class Stats(override val session: Long, val body: JsonObject) : ScreenViewEvent
+
+    /** [holder] `viewer`, `other` or `null`; [blocked] a `ControlBlock` key. */
+    data class ControlState(override val session: Long, val holder: String?, val blocked: String?) : ScreenViewEvent
+
+    data class Windows(override val session: Long, val body: JsonObject) : ScreenViewEvent
+
+    data class Error(override val session: Long, val code: String, val detail: String?) : ScreenViewEvent
+
+    /** The session ended; [code] is an `EndReason` or error code key. */
+    data class Ended(override val session: Long, val code: String, val detail: String?) : ScreenViewEvent
+}

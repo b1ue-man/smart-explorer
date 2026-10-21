@@ -26,6 +26,9 @@ mod job_json;
 mod locations;
 #[path = "screen_host.rs"]
 mod screen_host;
+// SCR-M9 (U28): this phone as screen viewer.
+#[path = "screen_view.rs"]
+mod screen_view;
 // DRV-M8: the documents provider (`docs.*`) and its proxy descriptors.
 #[path = "docs.rs"]
 mod docs;
@@ -87,6 +90,7 @@ mod update;
 // SCR-M8: the binary calls of the JNI bridge (`screen_jni.rs`).
 pub use docs_io::{doc_fsync, doc_open, doc_read, doc_release, doc_size, doc_write};
 pub use screen_host::{screen_control, screen_push};
+pub use screen_view::screen_pull;
 
 /// Handles a domain method; `None` = not a domain method.
 pub(crate) fn dispatch(
@@ -103,7 +107,7 @@ pub(crate) fn dispatch(
         "analyze" | "reclaim" => analysis_method(rt, method, args),
         "update" => update_method(rt, method),
         "app" => app_licenses::handle(method),
-        "screen" => screen_host::handle(method, args),
+        "screen" => screen_host::handle(method, args).or_else(|| screen_view::handle(method, args)),
         "docs" => docs::handle(rt, method, args),
         _ => None,
     }

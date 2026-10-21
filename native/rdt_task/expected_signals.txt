@@ -404,6 +404,16 @@ screen_task_window_list_drops_oversized_entry_and_refuses_bad_ids  linux-core:un
 screen_task_android_encoder_and_reason_bound_only_by_control_frame  linux-core:unit  pfad=mobile::domains::screen_host::tests::screen_task_android_encoder_and_reason_bound_only_by_control_frame  quelle=R15c,SEC-P9b
 drive_task_scanner_records_more_than_500_failed_paths  linux-core:unit  pfad=scanner::os::failed_paths_tests::drive_task_scanner_records_more_than_500_failed_paths  quelle=R15c,SEC-P9b
 drive_task_scanner_sends_each_failed_path_once  linux-core:unit  pfad=scanner::os::failed_paths_tests::drive_task_scanner_sends_each_failed_path_once  quelle=R15c,SEC-P9b
+# ---- U28 (SCR-M9, Android-Betrachter), Rust-Teil; JVM- und Geräte-Zeilen setzt U41 mit den Bildschirmstufen ----
+screen_task_android_view_bridge_shapes  linux-core:unit  pfad=mobile::domains::screen_view::tests::screen_task_android_view_bridge_shapes  quelle=U28
+screen_task_android_view_input_needs_control  linux-core:unit  pfad=mobile::domains::screen_view::tests::screen_task_android_view_input_needs_control  quelle=U28
+screen_task_android_screen_keys_file_current  linux-core:unit  pfad=mobile::domains::screen_view::tests::screen_task_android_screen_keys_file_current  quelle=U28
+screen_task_android_strings_match_desktop_sources  linux-core:unit  pfad=mobile::domains::screen_view::tests::screen_task_android_strings_match_desktop_sources  quelle=U28
+screen_task_android_key_names_known  linux-core:unit  pfad=mobile::domains::screen_view::tests::screen_task_android_key_names_known  quelle=U28
+screen_task_android_pull_layout  linux-core:unit  pfad=screen::os::viewer_sink_tests::screen_task_android_pull_layout  quelle=U28
+screen_task_android_viewer_pull_buffer_too_small  linux-core:unit  pfad=screen::os::viewer_sink_tests::screen_task_android_viewer_pull_buffer_too_small  quelle=U28
+screen_task_android_pull_stall_resets  linux-core:unit  pfad=screen::os::viewer_sink_tests::screen_task_android_pull_stall_resets  quelle=U28
+screen_task_android_sink_groups_and_tiles  linux-core:unit  pfad=screen::os::viewer_sink_tests::screen_task_android_sink_groups_and_tiles  quelle=U28
 
 [noch nicht umgesetzt]
 
