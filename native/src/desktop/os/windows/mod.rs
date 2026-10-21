@@ -48,6 +48,9 @@ pub(crate) mod wallpaper;
 #[path = "window_task_env.rs"]
 mod window_task_env;
 #[cfg(test)]
+#[path = "window_task_report.rs"]
+mod window_task_report;
+#[cfg(test)]
 #[path = "window_task_tests.rs"]
 mod window_task_tests;
 

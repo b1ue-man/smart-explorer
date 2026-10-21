@@ -11,6 +11,11 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
+/// A namespace of its own for every environment: a worker of an earlier
+/// test in this process may still hold the single-instance lock of a shared
+/// namespace (Windows names its mutex after it).
+static NAMESPACE_SEQUENCE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 use super::store::DesktopDir;
 use super::supervisor::TEST_MONITORS;
 use super::{launch, model_feed, platform};
@@ -122,7 +127,12 @@ impl TaskEnv {
             ("LOCALAPPDATA".into(), root.path().join("local").into()),
             (
                 "SMART_EXPLORER_E2E_TEST_NAMESPACE".into(),
-                format!("desktop_task_{}", std::process::id()).into(),
+                format!(
+                    "desktop_task_{}_{}",
+                    std::process::id(),
+                    NAMESPACE_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                )
+                .into(),
             ),
         ];
         for (name, value) in switches {
