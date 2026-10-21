@@ -4,7 +4,8 @@
 //! `WorkingDirectory=-~` or the requested directory, and the supervisor's
 //! connection as standard input and output (`--share-exec-supervisor-stdio`).
 //! The supervisor runs as the account from its first instruction on; nothing
-//! switches accounts in a forked child. A root worker starts the unit
+//! switches accounts in a forked child (`Type=notify`: the supervisor says
+//! `READY=1` once it runs, see `account_unit_properties`). A root worker starts the unit
 //! itself; the account service starts it for a worker that is not root
 //! (PRM-M6). A unit that failed to start stays loaded until its starter has
 //! read why (`CollectMode=inactive`); every ended unit is reset.
@@ -87,6 +88,16 @@ pub(super) fn account_unit_properties(
         runtime_usec,
         ACCOUNT_COLLECT_MODE,
     )?;
+    // `Type=exec` would never finish here: with `PAMName=` the service
+    // manager forks a PAM session process that keeps the descriptor which
+    // signals the `execve()` open (fixed in systemd 256, not in 249 or 255),
+    // so the start job times out after `TimeoutStartUSec`. The supervisor
+    // reports its readiness itself (`READY=1`, `exec_supervisor_stdio.rs`).
+    for (name, value) in &mut properties {
+        if *name == "Type" {
+            *value = exec_systemd::string_value("notify");
+        }
+    }
     properties.extend(account);
     Ok(properties)
 }

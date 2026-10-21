@@ -11,7 +11,10 @@ use std::ffi::OsString;
 use std::fs::OpenOptions;
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-use std::os::unix::net::UnixStream;
+use std::os::linux::net::SocketAddrExt;
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::net::{SocketAddr, UnixDatagram, UnixStream};
+use std::path::Path;
 
 use super::exec_supervisor::{self, SpawnPolicy};
 
@@ -21,8 +24,35 @@ pub(super) fn run_if_requested(
     arguments: &[OsString],
     policy: &SpawnPolicy<'_>,
 ) -> Option<io::Result<()>> {
-    (arguments.len() == 1 && arguments[0] == STDIO_MODE)
-        .then(|| take_connection().and_then(|stream| exec_supervisor::run(stream, policy)))
+    (arguments.len() == 1 && arguments[0] == STDIO_MODE).then(|| {
+        let stream = take_connection()?;
+        notify_ready()?;
+        exec_supervisor::run(stream, policy)
+    })
+}
+
+/// Tells systemd (`Type=notify`) that the supervisor runs as the account.
+/// The unit's start job ends with this message; a process started without
+/// `NOTIFY_SOCKET` (by hand) has nobody to tell. The jobs' environment is
+/// built from the start request, so they never see the variable.
+fn notify_ready() -> io::Result<()> {
+    let Some(address) = std::env::var_os("NOTIFY_SOCKET") else {
+        return Ok(());
+    };
+    let bytes = address.as_bytes();
+    let socket = UnixDatagram::unbound()?;
+    match bytes.split_first() {
+        // An abstract socket name starts with `@`.
+        Some((b'@', name)) => {
+            let address = SocketAddr::from_abstract_name(name)?;
+            socket.send_to_addr(b"READY=1", &address)?;
+        }
+        Some(_) => {
+            socket.send_to(b"READY=1", Path::new(&address))?;
+        }
+        None => {}
+    }
+    Ok(())
 }
 
 /// The connection on standard input, moved to a descriptor of its own.
