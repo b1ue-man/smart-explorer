@@ -1,6 +1,6 @@
 # Stand SEC (Sicherheitsagent)
 
-Stand: 2026-10-21 (Lauf 4: Punkt 12 E13-Fragen, Punkt 13 Hintergrundsperre; Lauf 3 in 829e7d9a).
+Stand: 2026-10-21 (Lauf 5: Punkt 14 E13-S14; Lauf 4 davor).
 
 - Committet sind Punkt 1–3, 1b, 4, 4b und 5 (df15feb5, e6b4c24a, 25e08110, e2233d85, c87bd083, 33744c73, 99cf1d63).
 - Punkt 6 (R15c) und Punkt 7 (U23) sind im Quelltext fertig, aber nicht gebaut, nicht getestet und nicht committet.
@@ -246,6 +246,25 @@ Stand: im Quelltext fertig, nicht gebaut, nicht getestet, nicht committet; `rust
 - Desktop und Daemon: keine Wirkung. `due` zählt die Hintergrundzeit nur auf `LockPlatform::Android`; die Leerlaufzeit war schon vorher null, solange eine Datei offen ist; Ruhezustand und Bildschirmsperre des Desktops sind Signale und bleiben unverändert.
 - Test `vault_task_android_background_waits_for_open_file` (Modul `vault::os::session::timer::open_file_tests`).
 
+## Punkt 14: Antwort E13-S14 (SMB-Stufe per Pfad wieder öffnen)
+
+Grundlage: `native/src/smb/core/segmented_stage.rs` (Stand 611fb4c2), `stand/U48.md` Punkt 8; Frage aus der Nachricht des Hauptagenten (smb2 0.26.0 `Tree::create_file_writer_at`, `client/tree.rs:2107`, `open_file_writer_at`, `client/stream.rs:1102–1124`, `FileOpenIf` ohne Abschneiden).
+
+**Entscheidung: ja, aber nur mit Prüfung der Dateikennung am geöffneten Handle vor dem ersten Byte; ohne die nötigen Bibliotheksaufrufe bleibt `SMB_SEGMENTED_WRITE = false`.**
+
+**Begründung.** Anders als bei SFTP (E13-S7) ist eine SMB-Datei über ihr Handle an das Dateiobjekt gebunden, und SMB2 liefert für das Handle eine Kennung (`FileIdInformation`: Volume-Seriennummer + 128-Bit-Datei-ID; `FileInternalInformation`: 64-Bit-Index). Wird diese Kennung **nach** dem Öffnen und **vor** dem ersten `WRITE` am selben Handle mit der beim Erzeugen gemerkten verglichen, ist ein Tausch des Pfads zwischen Erzeugen und Öffnen erkannt, bevor Daten fließen; ein Tausch nach dem Öffnen wirkt nicht mehr, weil das Handle am geöffneten Objekt hängt. Die Ordnerkette muss dafür nicht bekannt sein.
+
+**Bedingungen für den Umsetzer (alle müssen gelten, sonst Schalter aus):**
+1. **Kennung beim Erzeugen.** Am ausschließlich erzeugten Stufen-Handle werden gemerkt: `FileIdInformation` (Volume-Seriennummer und `FileId`), wenn der Server die Klasse beantwortet; sonst `FileInternalInformation.IndexNumber` **und** `CreationTime` aus der CREATE-Antwort. Ist die Kennung 0 oder fehlt, gibt es keine Bereiche (ein Strom, U44-4 Punkt 11).
+2. **Kennung je Bereich.** Jedes Bereichs-Handle fragt unmittelbar nach dem CREATE dieselben Klassen ab; zusätzlich `FileStandardInformation` (kein Ordner, `EndOfFile` = gesetzte Stufengröße) und die Attribute (kein `FILE_ATTRIBUTE_REPARSE_POINT`). Weicht etwas ab, wird das Handle ohne `WRITE` geschlossen; der Bereich scheitert, die Datei läuft nach `decide` als ein Strom weiter, und die Verbindung merkt „keine Bereiche“ für 15 Minuten.
+3. **Kein Anlegen beim Wiederöffnen.** Disposition `FILE_OPEN`, wenn smb2 sie für den Offset-Schreiber erlaubt. Erlaubt die Bibliothek nur `FileOpenIf`, muss sie die `CreateAction` der Antwort liefern: nur `FILE_OPENED` ist zulässig; bei `FILE_CREATED` setzt der Umsetzer die Löschmarke über **dasselbe** Handle (`FileDispositionInformation`), schließt es und meldet den Fehler. Liefert die Bibliothek weder `FILE_OPEN` noch die `CreateAction`, bleibt der Schalter aus.
+4. **Zugriff der Bereichs-Handles.** `FILE_NON_DIRECTORY_FILE`; Zugriff nur `FILE_WRITE_DATA` und `FILE_READ_ATTRIBUTES` (für die Abfragen), kein `DELETE`, kein `WRITE_DAC`/`WRITE_OWNER`. Freigabemodus so, dass die Bereichs-Handles einander zulassen; ein `STATUS_SHARING_VIOLATION` ist „keine Bereiche“, kein Dateifehler.
+5. **Gleiche Gegenstelle.** Bereichs-Handles nur auf derselben Freigabe (`share`) desselben Servers mit denselben Anmeldedaten wie das Erzeuger-Handle. Ein Neuaufbau der Sitzung dazwischen ist erlaubt, weil die Kennungsprüfung je Handle läuft.
+6. **Abschluss.** `finish` prüft Größe **und** Kennung an einem Handle (geöffnet nach Punkt 3 und 4), nicht nur `stat` per Pfad; danach Veröffentlichen unverändert ohne Ersetzen.
+7. **Empfohlen, nicht Pflicht:** Erlaubt smb2, das Erzeuger-Handle bis `finish` offen zu halten, wird es ohne `FILE_SHARE_DELETE` geöffnet; dann kann niemand die Stufe währenddessen umbenennen oder löschen.
+8. **Tests** (in-process mit dem SMB-Testserver der Suite): `speed_task_smb_segment_refuses_swapped_stage` (Stufe zwischen Erzeugen und Bereich gegen eine andere Datei getauscht → kein Byte in der anderen Datei, ein Strom), `speed_task_smb_segment_never_creates_missing_stage` (Stufe gelöscht → kein neuer Name bleibt zurück), `speed_task_smb_segment_without_file_id_streams`, `speed_task_smb_segments_end_to_end`.
+9. **Bericht:** Der Umsetzer nennt die smb2-Funktionen mit Datei und Zeile, die Kennung, Disposition bzw. `CreateAction` liefern. Fehlt eine davon, bleibt `SMB_SEGMENTED_WRITE = false`, und der Bericht nennt die fehlende Funktion.
+
 ## Nächster Schritt
 
-Bericht zu Punkt 12 und 13; danach auf den nächsten Auftrag warten.
+Kurzbericht zu Punkt 14; danach auf den nächsten Auftrag warten.
