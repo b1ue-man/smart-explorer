@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::super::platform;
 use super::move_guard::{
-    source_changed_error, source_snapshot_file, source_snapshot_path, SourceSnapshot,
+    file_state, source_changed_error, source_snapshot_entry, source_snapshot_file, SourceSnapshot,
 };
 
 /// Unpredictable stage names collide only with a foreign file of that exact
@@ -70,7 +70,9 @@ pub(super) fn stage_copy(
     parallel: usize,
     progress: &mut dyn FnMut(u64),
 ) -> Result<Option<Staged>, LocalFailure> {
-    let (reader, before) = open_source(source)?;
+    // `transfer_local` looked at the path a moment ago; the open below checks
+    // the type again and the final comparison catches any swap.
+    let (reader, before) = open_regular_source(source)?;
     if !durable {
         if let Some(staged) = stage_by_path(source, target, &reader, &before, cancel, progress)? {
             return Ok(staged);
@@ -88,18 +90,14 @@ pub(super) fn stage_copy(
             return Err(side_of(error));
         }
     };
-    let finished = unchanged(source, &reader, &before)
-        .and_then(|()| {
-            reader
-                .metadata()
-                .and_then(|metadata| {
-                    platform::copy_permissions(
-                        &writer,
-                        &metadata,
-                        preserve_destination_mode.then_some(target),
-                    )
-                })
-                .map_err(LocalFailure::Target)
+    let finished = unchanged_state(source, &reader, &before)
+        .and_then(|metadata| {
+            platform::copy_permissions(
+                &writer,
+                &metadata,
+                preserve_destination_mode.then_some(target),
+            )
+            .map_err(LocalFailure::Target)
         })
         .and_then(|()| {
             if durable {
@@ -136,14 +134,18 @@ pub(super) fn open_source(source: &Path) -> Result<(File, SourceSnapshot), Local
             ),
         )));
     }
-    // Opened without following a link and without waiting on a FIFO that
-    // replaced the file after the check above.
+    open_regular_source(source)
+}
+
+/// Opens the regular file `source` without following a final link and
+/// without waiting on a FIFO that replaced the file (`open_regular` checks
+/// the type before and after opening) and takes its snapshot from the open
+/// handle. That the path still names this file is compared once, after the
+/// copy (`unchanged_state`): a swap in between cannot reach a publication.
+pub(super) fn open_regular_source(source: &Path) -> Result<(File, SourceSnapshot), LocalFailure> {
     let reader = crate::local_access::open_regular(source, crate::local_access::FinalLink::Refuse)
         .map_err(LocalFailure::Source)?;
     let before = source_snapshot_file(&reader).map_err(LocalFailure::Source)?;
-    if source_snapshot_path(source).map_err(LocalFailure::Source)? != before {
-        return Err(LocalFailure::Source(source_changed_error(source)));
-    }
     Ok((reader, before))
 }
 
@@ -196,11 +198,22 @@ pub(super) fn unchanged(
     reader: &File,
     before: &SourceSnapshot,
 ) -> Result<(), LocalFailure> {
-    let after = source_snapshot_file(reader).map_err(LocalFailure::Source)?;
-    if after != *before || source_snapshot_path(source).map_err(LocalFailure::Source)? != *before {
+    unchanged_state(source, reader, before).map(|_| ())
+}
+
+/// The source is still the file that was opened, with the same identity,
+/// length and modification time, both through the handle and at its path.
+/// Returns the handle's metadata read for the check (the permissions to copy).
+pub(super) fn unchanged_state(
+    source: &Path,
+    reader: &File,
+    before: &SourceSnapshot,
+) -> Result<std::fs::Metadata, LocalFailure> {
+    let (after, metadata) = file_state(reader).map_err(LocalFailure::Source)?;
+    if after != *before || source_snapshot_entry(source).map_err(LocalFailure::Source)? != *before {
         return Err(LocalFailure::Source(source_changed_error(source)));
     }
-    Ok(())
+    Ok(metadata)
 }
 
 /// Errors of a combined read/write copy: the ones only a destination can

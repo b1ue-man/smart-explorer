@@ -9,10 +9,12 @@ use crate::remote::{Server, Way};
 use crate::support::{
     files_per_second, finish, guarded, need, not_run, update_capacity, var, Case, ReportLine,
 };
+#[cfg(target_os = "linux")]
+use crate::tools::syncfs;
 use crate::tools::{exec_missing, run_tool, strings};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const IPERF_LIMIT: Duration = Duration::from_secs(120);
 const FIO_LIMIT: Duration = Duration::from_secs(300);
@@ -205,6 +207,9 @@ pub fn run_fio(dir: &Path) -> Result<(f64, f64, f64), String> {
 }
 
 /// Files per second fio creates in a folder of the volume (M-3 wording).
+/// Timed like the engine's local cases (M-4): the wall time of the fio process
+/// plus a `syncfs` on the volume (Linux), not fio's own `job_runtime`, which
+/// ends before the data is flushed ("F_fio mit syncfs").
 pub fn run_fio_files(dir: &Path) -> Result<f64, String> {
     let folder = dir.join("speed-fio-files");
     std::fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
@@ -224,22 +229,25 @@ pub fn run_fio_files(dir: &Path) -> Result<f64, String> {
     ]);
     args.push(format!("--directory={}", fio_path(&folder)));
     args.push(format!("--numjobs={cores}"));
+    let started = Instant::now();
     let result = fio(args);
+    #[cfg(target_os = "linux")]
+    let flushed = result.as_ref().map(|_| syncfs(&folder)).unwrap_or(Ok(()));
+    #[cfg(not(target_os = "linux"))]
+    let flushed: Result<(), String> = Ok(());
+    let seconds = started.elapsed().as_secs_f64();
     let _ = std::fs::remove_dir_all(&folder);
     let result = result?;
+    flushed?;
     let jobs = result["jobs"].as_array().ok_or("fio: keine Jobs")?;
     let ios: f64 = jobs
         .iter()
         .map(|job| job["write"]["total_ios"].as_f64().unwrap_or(0.0))
         .sum();
-    let runtime_ms = jobs
-        .iter()
-        .map(|job| job["job_runtime"].as_f64().unwrap_or(0.0))
-        .fold(0.0, f64::max);
-    if runtime_ms <= 0.0 {
-        return Err("fio: job_runtime fehlt".into());
+    if seconds <= 0.0 || ios <= 0.0 {
+        return Err("fio: keine geschriebenen Dateien oder keine Zeit".into());
     }
-    Ok(ios / (runtime_ms / 1000.0))
+    Ok(ios / seconds)
 }
 
 /// The distinct drive folders of the stage (fast first).
@@ -299,7 +307,8 @@ fn speed_task_ref_fio_small_files() {
             let rate = run_fio_files(&dir)?;
             let key = dir.to_string_lossy().to_string();
             update_capacity(|file| file["files_per_s"][key.as_str()] = json!(rate))?;
-            line.notes.push(format!("{key}: {rate:.0} Dateien/s"));
+            line.notes
+                .push(format!("{key}: {rate:.0} Dateien/s (F_fio mit syncfs)"));
             line.se_rate = line.se_rate.max(rate);
         }
         line.capacity = line.se_rate;
