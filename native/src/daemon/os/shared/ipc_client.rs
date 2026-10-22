@@ -19,80 +19,12 @@ pub use peek_client::{drive_devices_peek, drive_devices_watch_peek, share_worker
 #[path = "ipc_share_client.rs"]
 mod share_client;
 pub use share_client::{hand_off_running_worker, share_command, WorkerHandoff};
+#[path = "ipc_open_client.rs"]
+mod open_client;
+pub use open_client::open_share_backend;
 
 static WORKER_RESTART_LOCK: Mutex<()> = Mutex::new(());
 const WORKER_READY_TIMEOUT: Duration = Duration::from_secs(25);
-
-pub fn open_share_backend(
-    target: crate::share::PeerOpenTarget,
-) -> Result<(String, crate::vfs::BackendHandle, crate::share::ShareStatus), String> {
-    ensure_worker_ready()?;
-    let token = read_token().map_err(|error| format!("Background-Worker Token: {error}"))?;
-    let mut last = "Background-Worker nicht erreichbar".to_string();
-    let mut restarted_after_agent_error = false;
-    let mut restarted_after_missing_ipc = false;
-    for _ in 0..8 {
-        match read_ipc_addr()
-            .and_then(|addr| TcpStream::connect_timeout(&addr, Duration::from_secs(2)).ok())
-        {
-            Some(mut stream) => {
-                set_stream_timeout(&stream, Some(Duration::from_secs(3)));
-                let req = IpcRequest::OpenShare {
-                    token: token.clone(),
-                    target: target.clone(),
-                };
-                if let Err(error) = write_request(&mut stream, &req) {
-                    last = error.to_string();
-                    std::thread::sleep(Duration::from_millis(250));
-                    continue;
-                }
-                let response = match read_response(&mut stream) {
-                    Ok(response) => response,
-                    Err(error) => {
-                        last = error.to_string();
-                        std::thread::sleep(Duration::from_millis(250));
-                        continue;
-                    }
-                };
-                match response {
-                    IpcResponse::OpenOk { label, status } => {
-                        set_stream_timeout(&stream, None);
-                        let read = stream.try_clone().map_err(|error| error.to_string())?;
-                        let inner = share_backend_identity(label.clone(), target.clone());
-                        let agent = match crate::agent::AgentBackend::from_streams(
-                            Box::new(read),
-                            Box::new(stream),
-                            inner,
-                        ) {
-                            Ok(agent) => agent,
-                            Err(error) => {
-                                last = format!("Worker-Backend: {error}");
-                                if restarted_after_agent_error {
-                                    return Err(last);
-                                }
-                                restarted_after_agent_error = true;
-                                restart_worker_for_client()?;
-                                std::thread::sleep(Duration::from_millis(750));
-                                continue;
-                            }
-                        };
-                        return Ok((label, Arc::new(agent), status));
-                    }
-                    IpcResponse::Err { msg, .. } => return Err(msg),
-                    _ => return Err("Unerwartete Worker-Antwort".into()),
-                }
-            }
-            None => {
-                if !restarted_after_missing_ipc {
-                    restarted_after_missing_ipc = true;
-                    restart_worker_for_client()?;
-                }
-                std::thread::sleep(Duration::from_millis(750));
-            }
-        }
-    }
-    Err(last)
-}
 
 pub fn exec_share(
     target: crate::share::PeerOpenTarget,
