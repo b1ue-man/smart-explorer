@@ -748,6 +748,17 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   node pin remain the authorization. Link-local IPv6 candidates carry the local
   scope (`[fe80::1%3]:port`) and go through `net::parse_candidate`, because
   `SocketAddr::from_str` rejects the `%scope` form.
+- Iroh 1.3 (since 0.5.181) resolves relay host names with its own DNS client
+  (`n0-dns-resolver`), not with the operating system's resolver, which the
+  signaling connection uses. A device whose Iroh lookups fail reaches the
+  signaling server, publishes no relay, and is unreachable from outside its
+  network. `share/os/shared/relay_dns.rs` therefore installs a resolver that
+  asks the operating system first and keeps Iroh's for TXT and as a race. The
+  worker logs `Relay nicht erreichbar (…)` after 20 s without a home relay.
+- App, drives and `se` open a peer through the worker, which tries for up to
+  45 s. Their IPC wait must outlast that (`ipc_open_client.rs`, 75 s): a
+  shorter socket timeout reported its own text (Windows: „…Gegenstelle … nicht
+  richtig reagiert…“, os error 10060) instead of the worker's cause.
 - Uplink sharing is deliberately opt-in and conservative: a spoofed
   announcement could only trigger ICS/NetworkManager sharing on a link that
   the helper itself verifies as router-less, and never on a routed network.
