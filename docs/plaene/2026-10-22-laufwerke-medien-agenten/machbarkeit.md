@@ -8,6 +8,9 @@ Nachträge vom 2026-10-22, getrennt von der Rückmeldung zu Fernzugriff und se D
 - P12 kam mit P10 und P11, bleibt aber vorerst draußen (Nutzer, 2026-10-22);
 - P13 als Ergänzung dokumentieren. Annahme: P13 gehört in denselben nächsten Lauf;
 - P14 und P15 kamen danach ohne Zeitangabe. Zu P15 sagte der Nutzer „noch nicht umsetzen“. Annahme: beide gehören in den nächsten Lauf und sind bis dahin nur dokumentiert;
+- P16 bis P20 kamen danach als Zusätze, ebenfalls ohne Zeitangabe. Annahme: nächster Lauf, bis dahin nur dokumentiert;
+- P21 ist ein Fehlerbild mit Frage: Gibt es schon eine Lösung? Wenn nicht, ist es ein weiterer Punkt, mit der Vorgabe A (ohne Abfrage) vor B (Häkchen „immer“);
+- P22 und P23 sind weitere Fehlerbilder ohne Zeitangabe. Annahme: nächster Lauf. Für P22 bekam der Nutzer zusätzlich eine Anleitung für das eigene Gerät; sie steht nicht in diesem Repository;
 - noch nichts umsetzen. Wie bei P1 bis P9: einschätzen, ob und wie jeder Punkt umsetzbar ist, ohne konkrete Implementierungsplanung und ohne Fehlersuche.
 
 Die Punkte stehen als Zeilen in `docs/TODO.md`:
@@ -17,6 +20,14 @@ Die Punkte stehen als Zeilen in `docs/TODO.md`:
 - `AGENT-PLUGIN-UPDATE`
 - `KOPIE-ORDNER-ZUSATZ`
 - `DESKTOP-ORDNER-EXPLORER`
+- `AUSWAHL-HOEHE`
+- `FENSTER-GROESSE`
+- `EINSTELLUNGEN-GERAETE`
+- `EINSTELLUNGEN-TECHNIK`
+- `EINSTELLUNGEN-AUSRICHTUNG`
+- `TRESOR-OEFFNEN-WURZEL`
+- `LAUFWERK-RESTEINTRAG`
+- `LAUFWERK-PLATZ`
 
 Kennzeichnung:
 - **Befund** = im Code oder in der Doku dieses Repositorys nachgelesen, Stand 0.5.184 (Commit `66cf09db`), mit `Datei:Zeile`.
@@ -38,6 +49,14 @@ Pfadkürzel: `N/` = `native/src/`, `A/` = `android/app/src/main/java/app/smartex
 | P13 | Die MCP-Einbindung in den Agenten soll sich mit Updates möglichst automatisch aktualisieren, ebenso die Plugin-Fassung |
 | P14 | Beim Kopieren eines Ordners, dessen Name im Ziel schon existiert, sollen die Dateien nicht in den gleichnamigen Ordner hineingemischt werden. Stattdessen bekommt der oberste doppelte Ordner den Zusatz, und zwar dort, wohin kopiert wird. Weil Zusammenführen manchmal gewollt ist, fragt ein Fenster, wie vorgegangen wird, wenn möglich mit Vorschau |
 | P15 | Im se Desktop Ordner automatisch im se Explorer öffnen |
+| P16 | Das Auswahlfenster, das aufpoppt, öffnet in der Höhe immer sehr eng; es kann etwa doppelt so groß sein |
+| P17 | Fenster allgemein in der Größe veränderbar machen |
+| P18 | Die Einstellungen für die Freigaben sind schwer zu finden, weil sie über Untermenüs laufen. Einstellungen sinnvoller gruppieren: eigenes Gerät, Geräte und von dort aus deren Zugriffe. Die Rechte zentral je Gerät einstellen, nicht je Funktion an vielen Stellen |
+| P19 | IDs, Exec-IDs, Kodierungsart und Ähnliches gehören nicht in die Einstellungsfenster, dafür sind Logs da; außer eine Angabe hat einen praktischen Nutzen |
+| P20 | In den Einstellungsfenstern tabellarisch ausrichten, statt die Bedienelemente je nach Länge der Beschriftung versetzt zu haben. Bei mehreren gleichen Auswahlmöglichkeiten untereinander nicht jedes Mal den Optionsnamen wiederholen. Sinnvolles, lesbares, intuitives Design |
+| P21 | Eine Datei lässt sich nicht im Tresor-Laufwerk öffnen: „Laufwerk-Wurzel absichern: backend does not technically enforce the selected mount root; explicit trusted-root mode is required“. Dass jedes Mal ein Fenster fragt, ist inakzeptabel. A: so umsetzen, dass keine Abfrage nötig ist. B: wenn nicht anders möglich, ein Häkchen, das immer bestätigt |
+| P22 | Bei jedem Start meldet ein Fehler „Laufwerk nach Daemon-Neustart zur Wiederherstellung bereit; bitte erneut versuchen“ für einen Laufwerkseintrag mit offenen Änderungen, hinter dem kein Laufwerk mehr steht |
+| P23 | Ein eingebundenes Laufwerk zeigt unter „Dieser PC“ den freien und den gesamten Platz der eigenen Festplatte |
 
 Die Frage „Werden Remotes noch über Dokany eingebunden?“ ist kein Arbeitspunkt. Die Antwort steht in `README.md:239-250` („Dokany bleibt“) und in `docs/oberflaechen/laufwerke.md:32`.
 
@@ -51,6 +70,14 @@ Die Frage „Werden Remotes noch über Dokany eingebunden?“ ist kein Arbeitspu
 | P13 | umsetzbar; Grundmechanik vorhanden | Stufe A: beim Update auffrischen, auch bei Pfadwechsel. Stufe B: laufende Server nicht beenden. Stufe C: Server ohne Neuverbinden tauschen | Claude Code und Codex verbinden beendete stdio-Server nicht neu |
 | P14 | umsetzbar, mittel | lokale Ziele wie Remote-Ziele: oberster Ordner „Name (2)“. Abfrage mit Vorschau, Option im Terminal | Vorschau großer oder entfernter Bäume. Voreinstellung im Terminal (E10) |
 | P15 | umsetzbar, klein | Ordner der Fläche als Fenster des se Explorers öffnen, wie heute schon Tresore und Geräte. Einstellung „Ordner öffnen mit“ für den Systemweg | keine bekannt |
+| P16 | umsetzbar, klein | Liste der Ordnerauswahl füllt das Fenster; Startgröße nach der Bildschirmhöhe | welches Fenster gemeint ist (Lücke) |
+| P17 | umsetzbar, klein bis mittel | alle Dialoge veränderbar, Listen wachsen mit, Größe wird gemerkt | 14 gesperrte Dialoge und 18 Listen mit fester Höhe |
+| P18 | umsetzbar, groß | ein Fenster „Einstellungen“; je Gerät eine Seite mit allen Rechten; Funktionsreiter nur als Übersicht | beide Apps; Gliederung (E12) |
+| P19 | umsetzbar, klein bis mittel | IDs, Revisionen und Kodierungsnamen aus den Fenstern in Protokolle und Diagnose | den Nutzen einzelner Angaben abwägen |
+| P20 | umsetzbar, mittel | gemeinsamer Formularbaustein (Raster), Tabellen mit Kopfzeile für gleichartige Zeilen | viele Seiten |
+| P21 | B umsetzbar, klein; A je nach Speicherart | A: Wurzelprüfung erfüllen. B: Vertrauen je Tresor merken | Sicherheitsprüfung je Speicherart für A |
+| P22 | umsetzbar, klein bis mittel | Aktion „Änderungen sichern und entfernen“ | offene Änderungen dürfen nicht verloren gehen |
+| P23 | umsetzbar, mittel | Platz der Gegenseite melden, begrenzt durch den Zwischenspeicher | je Speicherart eine Abfrage; FTP ohne Standard |
 
 ## P10 Laufwerke erscheinen erst nach Neustart
 
@@ -341,6 +368,297 @@ Umsetzbar, mittel. Den Engine-Baustein gibt es für Remote-Ziele schon. Neu sind
 
 Umsetzbar, klein.
 
+## P16 Auswahlfenster öffnet zu niedrig
+
+### Bestand
+
+Welches Auswahlfenster gemeint ist, sagt die Rückmeldung nicht (Lücke). Kandidaten (Befund):
+
+- **Ordnerauswahl** mit den Titeln „Quelle wählen“, „Ziel wählen“, „Ordner öffnen“, „Ordner für Analyse“, „Ordner fuer Aufraeumen“, „Ziel zum Spiegeln“, „Ziel für 2-Wege-Sync“, „Zielordner wählen“ und „Speichern unter…“ (`N/app/core/picker_types.rs:30-41`):
+  - Das Fenster ist veränderbar und startet mit 760 × 560 (`N/app/core/picker_impl.rs:134-140`).
+  - Seine Ordnerliste begrenzt die Höhe auf die verfügbare Höhe minus 60, mindestens 80 px (`:246-249`). Sie steht in einer waagrechten Zeile (`:146`).
+  - Annahme, nicht gemessen: In einer waagrechten Zeile startet egui mit der Höhe eines Bedienelements. Dann bliebe die Liste bei 80 px, gleich wie groß das Fenster ist. Das passte zu „immer echt eng“.
+- **Aufklapplisten:** Sie sind auf 280 px Höhe gesetzt (`N/app/core/theme.rs:73`).
+- **Dateidialog des Systems unter Linux:** Er läuft über das Portal; seine Größe bestimmt das Portal (Annahme).
+
+### Weg
+
+- Die Liste der Ordnerauswahl füllt die Fensterhöhe, statt sie aus der Zeile abzuleiten.
+- Die Startgröße richtet sich nach der Bildschirmhöhe, etwa doppelt so hoch wie heute, wo der Bildschirm das hergibt.
+- Für Aufklapplisten mit vielen Einträgen gilt eine größere Höhe.
+
+### Urteil P16
+
+Umsetzbar, klein. Lücke: welches Fenster gemeint ist. Annahme: die Ordnerauswahl.
+
+## P17 Fenster allgemein in der Größe veränderbar
+
+### Bestand (Befund)
+
+- In `N/app/` gibt es 45 Aufrufe `Window::new` in 36 Dateien. Annahme nach der Voreinstellung von egui: Fenster ohne eigene Angabe sind veränderbar.
+- 14 Fenster in 11 Dateien sperren die Größe mit `.resizable(false)`:
+  - „Synchronisierung abschließen“ (`N/app/os/shared/sync_exit_gate.rs:64-66`);
+  - „SSH-Hostschlüssel prüfen“ (`N/app/core/host_key_ui.rs:71-73`);
+  - der Tresor-Prüfdialog (`N/app/core/vault_check_ui.rs:183-186`);
+  - „Synchronisieren – <Ort>“ (`N/app/core/vault_sync_editor_ui.rs:127-130`);
+  - „Tresor hinzufügen“ (`N/app/core/vault_add_ui.rs:102-105`);
+  - der Tresor-Vergleich (`N/app/core/vault_compare_ui.rs:365-368`);
+  - „Tresor austragen?“ (`N/app/core/vault_actions_ui.rs:156-159`);
+  - „Neuer Tresor“ (`N/app/core/vault_create_ui.rs:231-234`);
+  - der Verbindungsdialog (`N/app/core/connect_dialog_ui.rs:54-57`);
+  - „Umbenennen: <Name>“ (`N/app/core/dialogs.rs:12-15`);
+  - „Update bereit“ (`:61-63`);
+  - „Hinweis & Haftungsausschluss“, dazu mit fester Breite 560 (`:146-150`);
+  - „Tresor sperren?“ (`N/app/core/vault_unlock_ui.rs:163-166`);
+  - „Tresor entsperren“ (`:261-264`).
+- 18 Listen in 14 Dateien haben eine feste Höchsthöhe und wachsen deshalb nicht mit dem Fenster. Die Werte in px, alle unter `N/app/core/`:
+  - `share_diagnostics_ui.rs:75` (420);
+  - `shell_commands.rs:45` (360) und `:55` (420);
+  - `settings_updates.rs:154` (160) und `:200` (140);
+  - `bisync_ui.rs:83` (140);
+  - `merge_ui.rs:44` (420);
+  - `transfer_window.rs:315` (160);
+  - `sync_versions_ui.rs:142` (310);
+  - `vault_compare_detail_ui.rs:108` (260), `:149` (200) und `:196` (160);
+  - `dialogs.rs:154` (420);
+  - `analytics_access.rs:77` (180);
+  - `analytics_ui.rs:30` (160);
+  - `analytics_accessibility.rs:32` (180);
+  - `share_screen_codec_ui.rs:250` (380);
+  - `share_exec_log_ui.rs:115` (360).
+- Eigene Fenster des Systems: Kein Aufruf `with_resizable(false)` in `N/`.
+
+### Weg
+
+- Alle Dialoge werden veränderbar und bekommen eine Mindestgröße.
+- Listen füllen die verfügbare Höhe, statt eine feste Höchsthöhe zu haben.
+- Fenster merken sich ihre Größe. Lücke: ob die Desktop-App die Fenstergrößen von egui heute über einen Neustart hinweg speichert.
+- Android: entfällt. Annahme: Dialoge auf dem Telefon passen sich dem Bildschirm an.
+
+### Urteil P17
+
+Umsetzbar, klein bis mittel. Viele Dialoge sind betroffen, und je Dialog muss der Inhalt mitwachsen.
+
+## P18 Einstellungen gruppieren, Rechte zentral je Gerät
+
+### Bestand (Befund aus einer Inventur vom 2026-10-22, Stichproben am Code bestätigt)
+
+- **Zwei getrennte Fenster am Desktop:**
+  - „Einstellungen“ hat die Seiten Darstellung, Verbindungen (Share-Server, Gerätename, Google Drive), Updates, Suche & Daten und Integration (KI-Agenten, Hintergrund-Sync, verbundene Geräte als Ordner, se Desktop) (`N/app/core/settings_ui.rs:31`, `:39-47`).
+  - „Geräte & Freigaben“ hat die Reiter Geräte, Anfragen, Räume, Freigaben, Befehle, Bildschirm, Dieses Gerät, Netzwerk, Diagnose und Papierkorb (`N/app/core/share_window_ui.rs:9`, `:21-40`; `N/app/core/share_pages_ui.rs:26-52`).
+  - Lücke: der Weg vom Hauptfenster zu „Geräte & Freigaben“.
+- **Rechte eines Geräts an mehreren Stellen (Desktop):**
+  - **Geräteseite** (Geräte → Zeile → „Details“):
+    - Rückfreigabe (`N/app/core/share_device_page_ui.rs:181-186`);
+    - automatisch verbinden und öffnen (`:251-256`);
+    - Vertrauen zurücksetzen (`:269`);
+    - Autorisierung, „Darf schreiben“ und Zugriff (`:357-395`).
+  - **Reiter Befehle:** dieselbe Zugriffseinstellung je Gerät über „Ändern…“ (`N/app/core/share_exec_ui.rs:76`, `:150`). Der Dialog „Zugriff für …“ (`N/app/core/share_access_dialog_ui.rs:354`, Zeilen `N/app/core/share_exec_programs_ui.rs:270-423`) umfasst:
+    - Befehle und Terminal;
+    - Bildschirm ansehen und steuern (Zeilen aus dem Katalog, `:358`);
+    - Konto, Programmliste, Gültigkeit und Rückfrage.
+  - **Reiter Freigaben:** „Darf schreiben“ je Gerät ein zweites Mal (`N/app/core/share_policy_ui.rs:52`, `:81`). Beide Stellen schreiben denselben Wert.
+  - **Reiter Anfragen:** die Anfrageregel (`N/app/core/share_policy_ui.rs:8-45`).
+  - **Reiter Bildschirm:** nur Rückfragen und laufende Sitzungen (`N/app/core/share_screen_tab_ui.rs:107-148`). Die Rechte stehen im Zugriffsdialog.
+  - **Raumseite:** Raumrechte und Zugriff je Mitglied (`N/app/core/share_room_page_ui.rs:137-144`, `:233-248`).
+- **Android:**
+  - Ein Bildschirm „Teilen“ mit 14 Blöcken (`A/ui/share/ShareScreen.kt:203-217`).
+  - Die Rechte eines Kontakts liegen an diesen Stellen:
+    - Befehlszeile mit „Erlauben…“ und „Entziehen“ (`A/ui/share/ExecHostSection.kt:198-202`);
+    - Rechte-Block (`A/ui/share/SharePolicySections.kt:35-37`);
+    - Verbindungsdialog (`A/ui/share/ShareDeviceSettingsDialogs.kt:25-46`);
+    - Dialog zur Rückfreigabe (`A/ui/share/ShareRightsDialogs.kt:98-107`);
+    - Zugriffsdialog (`A/ui/share/AccessDialog.kt:296-420`).
+  - Die Einstellungsliste hat die Einträge Darstellung, Dateiliste, Hintergrund, Share-Server, Google Drive, Ordner für Apps, Speicherzugriff, Startbildschirm, Updates, Fehlerprotokoll und Über (`A/ui/settings/SettingsScreen.kt:52`, `:84`).
+- **Vorhandene Grundlage:** Der Zugriffsdialog bündelt auf beiden Plattformen schon alle Zugriffsrechte eines Geräts.
+
+### Weg
+
+- **Ein Fenster „Einstellungen“ mit Bereichen.** Vorschlag:
+  1. **Dieses Gerät:** Name, Direkt-Code, Fingerabdruck, Erreichbarkeit, Share-Server, eigene Ordnerfreigaben, Konten dieses Geräts und die Anfrageregel.
+  2. **Geräte:** eine Liste, und je Gerät eine Seite mit allen Rechten an einer Stelle. Dazu gehören:
+     - Dateien sehen, schreiben und Rückfreigabe;
+     - Befehle und Terminal;
+     - Bildschirm ansehen und steuern;
+     - Konto, Gültigkeit und Rückfrage;
+     - die Verbindung, die offenen Anfragen dieses Geräts und „Entfernen“.
+  3. **Räume:** je Raum die Mitglieder und Raumrechte. Die Geräteseite nennt, welche Rechte aus einem Raum kommen. Annahme: Raumrechte gelten zusätzlich zu den Geräterechten.
+  4. **Die übrigen Bereiche:** Verbindungen (Remotes, Google Drive), Sync, Tresore, Laufwerke, Integration (se Desktop, KI-Agenten), Darstellung, Updates und Hintergrund.
+  5. **Diagnose und Protokolle** als letzter Bereich. Dorthin kommt, was P19 aus den übrigen Seiten nimmt.
+- **Funktionsreiter werden Übersichten:** „Befehle“, „Bildschirm“ und „Freigaben“ zeigen nur noch, wer was darf. Ihre Zeilen führen auf die Geräteseite; geändert wird nur dort. Offene Rückfragen bleiben oben sichtbar, weil sie eine Antwort brauchen.
+- **Android und Terminal:** Android bekommt dieselbe Gliederung. Im Terminal kommt ein Befehl dazu, der alle Rechte eines Geräts zeigt und setzt; die heutigen Einzelbefehle bleiben (Annahme).
+- **Werte bleiben:** Die vorhandenen Einstellungen werden nur verschoben. Rechte, ihre Werte und ihre Speicherorte ändern sich nicht.
+
+### Urteil P18
+
+Umsetzbar, groß. Betroffen sind beide Apps, der Kern bleibt unverändert. Die Gliederung ist Entscheidung E12.
+
+## P19 Technische Angaben aus den Einstellungsfenstern
+
+### Bestand (Befund aus derselben Inventur)
+
+**Ohne praktischen Nutzen in Einstellungs- und Freigabefenstern, Desktop:**
+- die Geräte-ID im Zugriff-Abschnitt (`N/app/core/share_exec_ui.rs:118`) und in „Darf schreiben“ je Gerät (`N/app/core/share_policy_ui.rs:73`);
+- die Revision des Zugriffs (`share_exec_ui.rs:142`);
+- auf den Job-Karten:
+  - Exec-ID, Command-Digest und Policy-Revision (`N/app/core/share_exec_jobs_ui.rs:146-149`);
+  - die Geräte-ID der Gegenstelle, wenn der Name fehlt (`:296-298`);
+  - ein Unix-Zeitstempel als Rückfall (`:324`);
+- Dateinamen und Größen in der Beschreibung des Exec-Protokolls (`N/app/core/share_exec_log_ui.rs:51`);
+- die Diagnosezeilen auf Geräte- und Raumseite (`N/app/core/share_device_page_ui.rs:246`, `:292`; `N/app/core/share_room_page_ui.rs:263-266`);
+- die Kodierung: Codec-Schlüssel mit Profilen (`N/app/core/share_screen_codec_ui.rs:85-93`) und die OpenH264-Version (`:170-176`);
+- in der Sitzungszeile die Quelle und der Zustandsschlüssel (`N/app/core/share_screen_tab_ui.rs:50-65`);
+- die Platzhalter „SE-D3-...“ und „SE-R3-...“ (`N/app/core/share_direct_ui.rs:24`, `N/app/core/share_rooms_ui.rs:76`);
+- die Version des Kontodiensts (`N/app/core/share_access_accounts_ui.rs:227`);
+- der Wayland-Hinweis mit Umgebungsvariable (`N/app/core/share_screen_portal_ui.rs:22-23`, `:102`);
+- englische Warnbegriffe in deutscher Oberfläche (`N/app/core/share_exec_programs_ui.rs:184-192`).
+
+**Ohne praktischen Nutzen, Android:**
+- im Schreibrecht-Dialog Geräte-ID, Knoten-ID und der vollständige öffentliche Schlüssel (`A/ui/share/ShareRightsDialogs.kt:86`);
+- im Raum-Dialog Profil- und Raum-ID (`:134`);
+- „LAN: <Rohwert>“ (`A/ui/share/ShareDeviceCard.kt:82`);
+- der Share-Server-Hinweis mit Umgebungsvariablen und Befehlsflags (`A/ui/settings/ShareServerSettings.kt:77-79`).
+
+**Mit praktischem Nutzen; bleibt:**
+- Fingerabdrücke zum Abgleich beim Koppeln (`N/app/core/share_device_page_ui.rs:229-231`, `N/app/core/share_this_device_ui.rs:87-89`, `A/ui/share/ShareDeviceCard.kt:121`);
+- der eigene Direkt-Code zum Weitergeben (`N/app/core/share_this_device_ui.rs:81-83`);
+- Programm und Argumente einer Rückfrage als Entscheidungsgrundlage (`N/app/core/share_access_approvals_ui.rs:130-141`);
+- der Exitcode eines Befehls (`A/ui/share/ExecDialog.kt:255`).
+
+**Nutzen unklar,** beim Umbau zu entscheiden: die Adresse des Share-Servers, das Kennzeichen Hardware/Software der Kodierung, Bilder/s und kbit/s einer Sitzung.
+
+### Weg
+
+- Angaben ohne Nutzen kommen aus den Fenstern heraus. Sie bleiben in den Protokollen und im Bereich „Diagnose“ (P18).
+- Angaben mit Nutzen bleiben, gekürzt und mit Kopierknopf, wo man sie weitergibt.
+- Englische Begriffe werden übersetzt. Annahme: Die Oberfläche soll durchgehend deutsch sein.
+- Terminal und MCP sind nicht betroffen, denn dort spricht man Einträge über IDs an (Annahme).
+
+### Urteil P19
+
+Umsetzbar, klein bis mittel. Sinnvoll zusammen mit P18 und P20.
+
+## P20 Ausrichtung und lesbares Design der Einstellungsfenster
+
+### Bestand (Befund)
+
+- **Keine Raster in den Einstellungen:** In 13 Dateien der Einstellungs- und Freigabefenster stehen Beschriftung und Bedienelement in 51 waagrechten Zeilen (`ui.horizontal`), in keiner davon ein Raster (`Grid`).
+  - Die Dateien unter `N/app/core/`: `settings_ui.rs`, `settings_background.rs`, `settings_updates.rs`, `settings_cloud.rs`, `settings_ai_plugin.rs`, `settings_devices_ui.rs`, `share_device_page_ui.rs`, `share_exports_ui.rs`, `share_exec_ui.rs`, `share_access_dialog_ui.rs`, `share_this_device_ui.rs`, `share_lan_ui.rs` und `share_policy_ui.rs`.
+  - In einer solchen Zeile beginnt das Bedienelement dort, wo seine Beschriftung endet. Daher kommt der versetzte Eindruck.
+- **Bausteine sind vorhanden:**
+  - `egui::Grid` wird 14-mal in 10 anderen Dateien unter `N/app/` genutzt.
+  - `egui_extras` 0.29 ist schon Abhängigkeit (`native/Cargo.toml:317`); seine Tabelle `TableBuilder` wird 2-mal genutzt.
+
+### Weg
+
+- **Formularbaustein:** Einstellungsseiten nutzen einen gemeinsamen Baustein, ein zweispaltiges Raster mit Beschriftungsspalte und Bedienspalte. Dazu kommen Abschnittsüberschriften und einheitliche Abstände.
+- **Gleichartige Zeilen als Tabelle:** Zeilen untereinander, etwa je Gerät oder je Freigabe, werden eine Tabelle mit einmaliger Spaltenüberschrift. Die Optionsbezeichnung steht dann nicht mehr in jeder Zeile. Baustein: `TableBuilder`, oder ein Raster mit Kopfzeile.
+- **Gilt für alle Einstellungs- und Freigabefenster.** Sinnvoll zusammen mit P18 und P19, weil dieselben Seiten neu entstehen.
+- **Android:** Die Einstellungen bestehen aus Compose-Zeilen und Listenelementen (`Row` und `ListItem` in `A/ui/settings/` und `A/ui/share/`).
+  - Lücke: ob dort dasselbe Problem besteht.
+  - Annahme: Die Rückmeldung betrifft die Fenster der Desktop-App.
+
+### Urteil P20
+
+Umsetzbar, mittel. Viele Seiten sind betroffen; ein gemeinsamer Baustein hält sie einheitlich.
+
+## P21 Tresor-Datei öffnen: Wurzelprüfung und Abfrage bei jedem Öffnen
+
+### Bestand (Befund)
+
+- **Ablauf beim Öffnen:** Eine Tresor-Datei öffnet im Tresor-Laufwerk. Ist kein Laufwerk eingehängt und „beim Öffnen einhängen“ an (Voreinstellung an, `N/app/core/vault_ui_settings.rs:23,29`), hängt `ensure_mounted_for` den Tresor ein (`N/daemon/os/shared/mount_paths.rs:189-235`).
+  - Scheitert das, fragt die App „Klartextkopie öffnen?“ (`N/app/os/shared/vault_open.rs:35-64`, Aufruf `:261`).
+  - Die Frage hat keine Möglichkeit „immer“ und kommt bei jedem Öffnen wieder. Bei „Ja“ bleibt eine unverschlüsselte Kopie bis zum Beenden in den App-Daten.
+- **Warum das Einhängen scheitert:**
+  - Das Einhängen beim Öffnen nutzt `MountConfig::new` mit der Voreinstellung `MountRootSecurity::Enforced` (`N/mount/core/types.rs:192-196`, `:236`). Ebenso tut es „Als Laufwerk einhängen“ in den Tresor-Aktionen (`N/app/core/vault_actions_ui.rs:62-90`).
+  - Im strengen Modus verlangt der Laufwerk-Host, dass der Speicher die Wurzel technisch eingrenzt. Sonst kommt genau die gemeldete Meldung (`N/daemon/os/shared/rooted_backend.rs:66-70`, Vorsatz „Laufwerk-Wurzel absichern“ aus `N/daemon/os/shared/mount_manager_start.rs:217`).
+  - Der Tresor reicht die Eingrenzung seines Speichers durch (`N/vault/os/shared/backend.rs:276-282`). Ein Speicher ohne eigene Zusicherung meldet „Unverified“ (`N/vfs/core/core.rs:315-319`).
+  - SFTP im strengen Modus verlangt einen eingegrenzten Gegenagenten (`N/connect/os/shared/connector.rs:30-40`).
+  - Annahme: Betroffen sind Tresore auf WebDAV, FTP und Google Drive, sowie auf SFTP ohne eingegrenzten Gegenagenten.
+- **Vorhandene Lösung, nur für normale Remote-Laufwerke:**
+  - das Häkchen „Dieser ausgewaehlten Remote-Wurzel ausdruecklich vertrauen“ im Dialog „Remote als Laufwerk“ (`N/app/core/mount_ui_draft.rs:177`, `:238-241`);
+  - im Terminal `se drive mount … --trust-remote-root` (`N/cli/drive.rs:194-198`).
+
+  Der Vertrauensmodus heißt: Ein anderer Schreiber am Remote kann die Wurzel während eines Pfadzugriffs verändern (`N/app/core/mount_ui_draft.rs:406`).
+- **Für Tresor-Laufwerke bietet die App diesen Modus nicht an.** Das Terminal nimmt `vault://<SITE>` als Laufwerksquelle an (`N/cli/drive.rs:362-379`), und `--trust-remote-root` gilt dort für jede Quelle.
+  - Laut Code hängt `se drive mount vault://<SITE> --trust-remote-root` einen Tresor also im Vertrauensmodus ein.
+  - Nicht erprobt: ob „Öffnen“ danach dieses Laufwerk nutzt. `ensure_mounted_for` nimmt das erste Laufwerk des Tresors aus der Liste; ein älterer, strenger Eintrag könnte zuerst kommen.
+- **Klarstellung des Nutzers:** Beim Tresor erscheint kein Vertrauensdialog und kein Häkchen. Das passt zum Befund oben.
+  - Die Klartextkopie-Frage ist unter Windows ein Meldungsfenster mit „Ja“ und „Nein“ (`N/app/os/windows/platform.rs:6-20`), ohne „immer“.
+
+### Weg
+
+Die Rangfolge hat der Nutzer vorgegeben: A vor B.
+
+- **A, ohne Abfrage.** Tresor-Laufwerke so einhängen, dass die Wurzelprüfung erfüllt ist:
+  - Wo der Speicher eingrenzbar ist, die eingegrenzte Fassung nutzen: SFTP mit eingegrenztem Gegenagenten, lokaler Speicher.
+  - Prüfen, ob die Tresorschicht selbst eine Eingrenzung zusichern kann. Sie greift nur auf Pfade unter dem Tresorordner zu, die sie aus verschlüsselten Namen bildet.
+  - Lücke: ob ein fremder Schreiber am Speicher die Wurzel trotzdem verlassen kann, etwa mit einem symbolischen Link an Stelle eines Tresorordners. Das braucht eine Sicherheitsprüfung je Speicherart.
+- **B, wo A nicht geht.** Ein Häkchen am Tresor „Diesem Speicherort immer vertrauen“ merkt den Vertrauensmodus für das Tresor-Laufwerk, je Tresor und in den Tresor-Einstellungen widerrufbar.
+  - Dateien öffnen dann im Laufwerk, ohne Klartextkopie und ohne Abfrage.
+  - Nur wo gar kein Laufwerk möglich ist, etwa ohne Dokany- oder FUSE-Laufzeit, bekommt die Klartextkopie-Frage ein „Immer für diesen Tresor“.
+- **Android:** hat keine Laufwerke. Lücke: wie Android Tresor-Dateien öffnet und ob dort eine ähnliche Abfrage kommt.
+
+### Urteil P21
+
+- **A:** umsetzbar für eingrenzbare Speicher. Für die übrigen Speicher hängt es an der Sicherheitsprüfung.
+- **B:** umsetzbar, klein. Der Vertrauensmodus und seine Speicherung im Laufwerkseintrag gibt es schon. Neu sind das Häkchen am Tresor und das Merken je Tresor.
+
+## P22 Laufwerkseintrag mit offenen Änderungen lässt sich nicht entfernen
+
+### Bestand (Befund)
+
+- **Die Rückmeldung:** Bei jedem Start von Smart Explorer meldet ein Fehler: „Laufwerk nach Daemon-Neustart zur Wiederherstellung bereit; bitte erneut versuchen“.
+  - Der Eintrag zeigt „Recovery: Aenderungen oder Konflikte offen“ und „Beim Anmelden automatisch einbinden“.
+  - Laut Nutzer steht kein Laufwerk mehr dahinter.
+- **Der Text** ist der Zustand eines registrierten Laufwerks nach einem Start des Hintergrunddienstes, bis zur Wiederherstellung oder bis „Erneut versuchen“ (`N/daemon/os/shared/mount_manager.rs:15-18`).
+- **„Aenderungen oder Konflikte offen“** heißt: Im Zwischenspeicher des Laufwerks liegen Journal-Einträge, die noch nicht zurückgeschrieben sind, nämlich Änderungen, Löschungen und Namenskonflikte (`N/mount/core/spool.rs:268-283`, Anzeige `N/app/core/mount_ui_helpers.rs:95`).
+  - Der Zwischenspeicher liegt unter `<AD>/mount-cache/<Laufwerks-ID>` (`N/mount/core/spool.rs:94`, `N/daemon/os/shared/mount_manager_start_cache.rs:86`).
+  - `<AD>` ist unter Windows `%APPDATA%\smart_explorer` (`docs/oberflaechen/laufwerke.md:7`).
+- **Entfernen ist mit offenen Änderungen absichtlich gesperrt:**
+  - „Entfernen“ zeigt die App nur bei sauberem Zustand (`N/app/core/mount_ui.rs:256-266`).
+  - `se drive unmount` lässt einen solchen Eintrag stehen (`N/daemon/os/shared/mount_manager.rs:173-175`).
+  - `se drive set <ID> --auto-remount off` schaltet nur das Einbinden beim Anmelden ab (`N/cli/drive_set.rs:21-27`).
+  - In App und Terminal fehlt ein Weg, die offenen Änderungen zu sichern und den Eintrag danach zu entfernen.
+- **Die Einträge** stehen in `<AD>/mounts/registry.json` (gespeicherte Verbindungen, Google Drive, Share-Geräte) und `<AD>/mounts/registry-2.json` (Gerätebaum, Tresore) (`N/daemon/os/shared/mount_registry.rs:1-11`, `:24`; `N/daemon/os/shared/mount_registry_ext.rs:21`).
+
+### Weg
+
+- **Neue Aktion „Änderungen sichern und entfernen“:** am Eintrag in der App, im Terminal und über MCP mit dem Werkzeug `se`.
+  - Sie schreibt die offenen Dateien aus dem Zwischenspeicher in einen gewählten Ordner. Bei Tresor-Laufwerken geht das nur entsperrt, weil der Zwischenspeicher sonst versiegelt ist (Annahme nach `N/mount/core/spool.rs:279-281`).
+  - Sie zeigt Löschungen und Konflikte als Liste.
+  - Danach entfernt sie Eintrag, Zwischenspeicher und Anmeldeeintrag.
+- **Mit vorhandener Quelle** bleibt „Erneut versuchen“ der Weg ohne Verlust.
+- **Die Meldung beim Start** wird ein Hinweis am Eintrag statt eines Fehlers bei jedem Start. Lücke: wo die App die Meldung beim Start anzeigt.
+
+### Urteil P22
+
+Umsetzbar, klein bis mittel.
+
+## P23 Eingebundenes Laufwerk zeigt den Platz der eigenen Festplatte
+
+### Bestand (Befund)
+
+- **Windows:** Das Laufwerk meldet Windows den freien und den gesamten Platz des Datenträgers, auf dem der lokale Zwischenspeicher liegt (`N/mount/os/windows/callbacks_metadata.rs:82-110`). Der Code begründet das so: „The local whole-file spool is a hard lower capacity boundary. Remote quotas are backend-specific and still surface on commit.“
+- **Linux:** FUSE meldet ebenso den Platz des Zwischenspeichers (`N/mount/os/linux_os/fuse_ops_meta.rs:186-200`).
+- **Speicherkontingente:** Kein Speicher-Backend fragt heute ein Kontingent oder den freien Platz der Gegenseite ab. Eine Suche nach Abfragen für SFTP, WebDAV, Google Drive und SMB in `N/` findet keine.
+
+### Weg
+
+- **Den Platz der Gegenseite melden, wo der Speicher ihn kennt.** Annahme, nicht nachgeprüft:
+  - SFTP: die OpenSSH-Erweiterung `statvfs@openssh.com`;
+  - WebDAV: die Eigenschaften `quota-available-bytes` und `quota-used-bytes` nach RFC 4331;
+  - Google Drive: `storageQuota` der About-Abfrage;
+  - SMB: die Größenabfrage des Dateisystems;
+  - Share-Geräte: eine neue Angabe des freigebenden Geräts;
+  - FTP: ohne Standard.
+- **Frei** ist das Kleinere aus freiem Platz der Gegenseite und freiem Platz des Zwischenspeichers, weil der Zwischenspeicher eine harte Grenze bleibt.
+- **Wo der Speicher nichts liefert,** bleibt die heutige Anzeige. Lücke: welche Anzeige dann gewünscht ist.
+
+### Urteil P23
+
+Umsetzbar, mittel. Je Speicherart kommt eine Abfrage dazu.
+
 ## Plattformprüfung
 
 | Punkt | Desktop Windows | Desktop Linux | Android | Terminal und MCP |
@@ -350,6 +668,14 @@ Umsetzbar, klein.
 | P13 | Updater frischt auf (A). Laufende `se.exe` umbenennen (B, Annahme) | Updater und `se update` frischen auf (A). Ersetzen per Umbenennen gibt es schon (B) | entfällt, Android hat kein `se mcp` (`docs/AI_AGENT_PLUGIN.md`, Abschnitt Grenzen) | betrifft `se mcp` selbst |
 | P14 | Abfrage mit Vorschau, auch im se Desktop | Abfrage mit Vorschau, auch im se Desktop | bestehender Dialog, erweitert um Ordner | Option statt Abfrage (E10) |
 | P15 | Doppelklick öffnet den se Explorer | Doppelklick öffnet den se Explorer | entfällt, der se Launcher zeigt keine Dateien | Einstellung über `se desktop config` |
+| P16 | Ordnerauswahl | Ordnerauswahl | Lücke: ob eine Android-Auswahl gemeint ist | entfällt |
+| P17 | 14 Dialoge, 18 Listen | dieselbe Desktop-App | entfällt (Annahme) | entfällt |
+| P18 | ein Einstellungsfenster, Geräteseiten | dasselbe | dieselbe Gliederung | Befehl für alle Rechte eines Geräts (Annahme) |
+| P19 | Angaben entfernen | dasselbe | Angaben entfernen | entfällt, IDs werden dort gebraucht (Annahme) |
+| P20 | Formularbaustein | dasselbe | Lücke | entfällt |
+| P21 | Tresor-Laufwerk über Dokany | Tresor-Laufwerk über FUSE | Lücke: Öffnen von Tresor-Dateien | `se drive mount vault://<SITE>` nimmt `--trust-remote-root` schon an |
+| P22 | Aktion am Laufwerkseintrag | dasselbe | entfällt, keine Laufwerke | neuer Befehl |
+| P23 | Platz für Dokany | Platz für FUSE | Lücke: Platzangabe des Dokumentanbieters | entfällt |
 
 ## Entscheidungen vor einer Umsetzung
 
@@ -360,10 +686,13 @@ Die Nummern setzen E1 bis E6 der Notiz zu Fernzugriff und Desktop fort. E7 und E
   - Das heutige Zusammenführen in einen ausdrücklich genannten Zielordner bleibt Voreinstellung, und die Option kommt dazu. Das ist der Vorschlag, weil der Zielname dort getippt wird.
   - Der Zusatz wird neue Voreinstellung, wie in den Fenstern.
 - **E11, Reihenfolge im nächsten Lauf.** Vorschlag:
-  1. P10, P13, P14 und P15;
-  2. P11 Stufe 1 nach der Messung.
+  1. P10, P15, P16, P17, P21 und P22;
+  2. P13 und P14;
+  3. P18 bis P20 als ein Strang „Einstellungen“;
+  4. P11 Stufe 1 nach der Messung, und P23.
 
   P12 und die Stufen 2 und 3 von P11 bleiben draußen.
+- **E12, Gliederung der Einstellungen (P18).** Vorschlag aus P18: Dieses Gerät, Geräte (je Gerät alle Rechte), Räume, die übrigen Bereiche, zuletzt Diagnose und Protokolle.
 
 ## Abhängigkeiten
 
@@ -390,3 +719,17 @@ Die Nummern setzen E1 bis E6 der Notiz zu Fernzugriff und Desktop fort. E7 und E
    - ob Windows das Umbenennen einer laufenden `se.exe` erlaubt.
 6. **P14:** welche Ebene bei „Ordnerstruktur erhalten“ den Zusatz bekommt.
 7. **P15:** ob der Startauftrag „Ort öffnen“ einen lokalen Ordnerpfad annimmt.
+8. **P16:** welches Auswahlfenster gemeint ist.
+9. **P17:** ob die Desktop-App Fenstergrößen über einen Neustart hinweg speichert.
+10. **P18:**
+    - der Weg vom Hauptfenster zu „Geräte & Freigaben“;
+    - wie Raumrechte und Geräterechte zusammenwirken.
+11. **P20:** ob die Android-Einstellungen dasselbe Problem haben.
+12. **P21:**
+    - die Sicherheitsprüfung je Speicherart für Weg A;
+    - wie Android Tresor-Dateien öffnet.
+13. **P22:** wo die App die Meldung beim Start anzeigt.
+14. **P23:**
+    - welche Anzeige gewünscht ist, wenn der Speicher keinen Platz meldet;
+    - die Belege für die Abfragen je Speicherart;
+    - die Platzangabe des Android-Dokumentanbieters.
