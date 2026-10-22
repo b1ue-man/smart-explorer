@@ -10,7 +10,7 @@ Nachträge vom 2026-10-22, getrennt von der Rückmeldung zu Fernzugriff und se D
 - P14 und P15 kamen danach ohne Zeitangabe. Zu P15 sagte der Nutzer „noch nicht umsetzen“. Annahme: beide gehören in den nächsten Lauf und sind bis dahin nur dokumentiert;
 - P16 bis P20 kamen danach als Zusätze, ebenfalls ohne Zeitangabe. Annahme: nächster Lauf, bis dahin nur dokumentiert;
 - P21 ist ein Fehlerbild mit Frage: Gibt es schon eine Lösung? Wenn nicht, ist es ein weiterer Punkt, mit der Vorgabe A (ohne Abfrage) vor B (Häkchen „immer“);
-- P25 stellt den Auftrag E10 vom 2026-10-17 richtig: Windows-Einbindung ohne Fremdtreiber; Dokany bleibt, bis der andere Weg funktioniert. Annahme: als eigener Strang im nächsten Lauf;
+- P25 stellt den Auftrag E10 vom 2026-10-17 richtig: Windows-Einbindung ohne Fremdtreiber. Danach stellte der Nutzer P25 als optionale Aufgabe zurück; Dokany bleibt;
 - P22 bis P24 sind weitere Fehlerbilder und Wünsche ohne Zeitangabe. Annahme: nächster Lauf. Für P22 bekam der Nutzer zusätzlich eine Anleitung für das eigene Gerät; sie steht nicht in diesem Repository;
 - noch nichts umsetzen. Wie bei P1 bis P9: einschätzen, ob und wie jeder Punkt umsetzbar ist, ohne konkrete Implementierungsplanung und ohne Fehlersuche.
 
@@ -84,7 +84,7 @@ Die Frage „Werden Remotes noch über Dokany eingebunden?“ ist kein Arbeitspu
 | P22 | umsetzbar, klein bis mittel | Aktion „Änderungen sichern und entfernen“ | offene Änderungen dürfen nicht verloren gehen |
 | P23 | umsetzbar, mittel | Platz der Gegenseite melden, begrenzt durch den Zwischenspeicher | je Speicherart eine Abfrage; FTP ohne Standard |
 | P24 | umsetzbar, mittel | gesperrte Teilbäume vollständig merken, nach der Zustimmung nur sie neu lesen und einfügen | heutige Obergrenzen der Fehlerlisten (64, 100, 500) |
-| P25 | umsetzbar als großer Strang; vollständiger Ersatz nicht gesichert | Einhängeschnittstelle mit mehreren Wegen. Nach einer Probe am Gerät SMB auf anderem Port, WebDAV als Rückfall, Dokany bleibt | jeder Windows-eigene Weg hat eine Bedingung: 24H2, abgekündigter Dienst, nicht in Home oder kein Laufwerksbuchstabe |
+| P25 | zurückgestellt, optional. Umsetzbar als großer Strang; ein vollständiger Ersatz ist nicht gesichert | Einhängeschnittstelle mit mehreren Wegen. Nach einer Probe am Gerät SMB auf anderem Port, WebDAV als Rückfall, Dokany bleibt | jeder Windows-eigene Weg hat eine Bedingung: 24H2, abgekündigter Dienst, nicht in Home oder kein Laufwerksbuchstabe |
 
 ## P10 Laufwerke erscheinen erst nach Neustart
 
@@ -690,6 +690,13 @@ Umsetzbar, mittel.
 
 ## P25 Windows-Einbindung ohne Fremdtreiber
 
+**Zurückgestellt als optionale Aufgabe, nicht im nächsten Lauf.** Der Nutzer sagte am 2026-10-22, Dokany funktioniere. Sind die anderen Wege unzuverlässiger oder bringen sie keine Vorteile, bleibt Dokany. Die Recherche bleibt erhalten in `docs/refs/windows-einhaengen-ohne-fremdtreiber-2026-10-22.md` und `docs/refs/windows-dateisystem-frontends-2026-10-17.md`.
+
+**Vorteile laut den Belegen:**
+- **Zuverlässigkeit:** kein belegter Gewinn. Es gibt keine Messung eines Windows-eigenen Wegs gegen Dokany.
+- **Was ein Windows-eigener Weg spart:** die Installation des Treibers mit Administratorrechten, die bekannten Dokany-Fehler wie das offene BSOD-Rennen #1335, und die Abhängigkeit vom Treiberzertifikat (`DOKANY-WATCH`).
+- **Was jeder Windows-eigene Weg kostet:** eine Bedingung, siehe Urteil unten.
+
 ### Ursprung
 
 - **Auftrag vom 2026-10-17:** Er steht als E10 in `docs/plaene/2026-10-17-rechte-desktop-tresore/plan.md:24`, im Wortlaut: „you can also be inspired by how cryptomator plugs it's vault into the system and see if any of these could replace donkey and add reliability or not“.
@@ -758,7 +765,7 @@ Umsetzbar als eigener, großer Strang. Ein Ersatz für Dokany auf allen Windows-
 - NFS: nicht in Home;
 - Cloud Files API und ProjFS: kein Laufwerksbuchstabe.
 
-Dokany bleibt deshalb als Weg erhalten, bis ein anderer die Abnahme besteht. Den ersten Weg legt Entscheidung E13 fest.
+Dokany bleibt deshalb als Weg erhalten, bis ein anderer die Abnahme besteht. Wird die Aufgabe wieder aufgenommen, beginnt sie mit der Machbarkeitsprobe aus Stufe 2.
 
 ## Plattformprüfung
 
@@ -792,15 +799,14 @@ Die Nummern setzen E1 bis E6 der Notiz zu Fernzugriff und Desktop fort. E7 und E
   1. P10, P15, P16, P17, P21 und P22;
   2. P13 und P14;
   3. P18 bis P20 als ein Strang „Einstellungen“;
-  4. P11 Stufe 1 nach der Messung, P23 und P24;
-  5. P25 als eigener Strang, beginnend mit der Machbarkeitsprobe am Gerät.
+  4. P11 Stufe 1 nach der Messung, P23 und P24.
 
-  P12 und die Stufen 2 und 3 von P11 bleiben draußen.
+  Draußen bleiben P12, die Stufen 2 und 3 von P11, und P25 (zurückgestellt, optional).
 - **E12, Gliederung der Einstellungen (P18).** Vorschlag aus P18: Dieses Gerät, Geräte (je Gerät alle Rechte), Räume, die übrigen Bereiche, zuletzt Diagnose und Protokolle.
-- **E13, erster Windows-eigener Weg (P25).** Vorschlag:
+- **E13, erster Windows-eigener Weg (P25):** entfällt vorerst, weil P25 zurückgestellt ist. Wird P25 wieder aufgenommen, lautet der Vorschlag:
   - SMB auf anderem Port, wenn die Probe unter 24H2 trägt;
-  - WebDAV über WebClient als Rückfall für ältere Windows-Versionen;
-  - Dokany bleibt Standard, bis ein Weg die Abnahme besteht.
+  - WebDAV über WebClient als Rückfall;
+  - Dokany bleibt Standard.
 
 ## Abhängigkeiten
 
