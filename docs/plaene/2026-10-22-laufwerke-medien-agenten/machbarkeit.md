@@ -10,7 +10,7 @@ Nachträge vom 2026-10-22, getrennt von der Rückmeldung zu Fernzugriff und se D
 - P14 und P15 kamen danach ohne Zeitangabe. Zu P15 sagte der Nutzer „noch nicht umsetzen“. Annahme: beide gehören in den nächsten Lauf und sind bis dahin nur dokumentiert;
 - P16 bis P20 kamen danach als Zusätze, ebenfalls ohne Zeitangabe. Annahme: nächster Lauf, bis dahin nur dokumentiert;
 - P21 ist ein Fehlerbild mit Frage: Gibt es schon eine Lösung? Wenn nicht, ist es ein weiterer Punkt, mit der Vorgabe A (ohne Abfrage) vor B (Häkchen „immer“);
-- P22 und P23 sind weitere Fehlerbilder ohne Zeitangabe. Annahme: nächster Lauf. Für P22 bekam der Nutzer zusätzlich eine Anleitung für das eigene Gerät; sie steht nicht in diesem Repository;
+- P22 bis P24 sind weitere Fehlerbilder und Wünsche ohne Zeitangabe. Annahme: nächster Lauf. Für P22 bekam der Nutzer zusätzlich eine Anleitung für das eigene Gerät; sie steht nicht in diesem Repository;
 - noch nichts umsetzen. Wie bei P1 bis P9: einschätzen, ob und wie jeder Punkt umsetzbar ist, ohne konkrete Implementierungsplanung und ohne Fehlersuche.
 
 Die Punkte stehen als Zeilen in `docs/TODO.md`:
@@ -28,6 +28,7 @@ Die Punkte stehen als Zeilen in `docs/TODO.md`:
 - `TRESOR-OEFFNEN-WURZEL`
 - `LAUFWERK-RESTEINTRAG`
 - `LAUFWERK-PLATZ`
+- `LESERECHTE-NUR-NEU`
 
 Kennzeichnung:
 - **Befund** = im Code oder in der Doku dieses Repositorys nachgelesen, Stand 0.5.184 (Commit `66cf09db`), mit `Datei:Zeile`.
@@ -57,6 +58,7 @@ Pfadkürzel: `N/` = `native/src/`, `A/` = `android/app/src/main/java/app/smartex
 | P21 | Eine Datei lässt sich nicht im Tresor-Laufwerk öffnen: „Laufwerk-Wurzel absichern: backend does not technically enforce the selected mount root; explicit trusted-root mode is required“. Dass jedes Mal ein Fenster fragt, ist inakzeptabel. A: so umsetzen, dass keine Abfrage nötig ist. B: wenn nicht anders möglich, ein Häkchen, das immer bestätigt |
 | P22 | Bei jedem Start meldet ein Fehler „Laufwerk nach Daemon-Neustart zur Wiederherstellung bereit; bitte erneut versuchen“ für einen Laufwerkseintrag mit offenen Änderungen, hinter dem kein Laufwerk mehr steht |
 | P23 | Ein eingebundenes Laufwerk zeigt unter „Dieser PC“ den freien und den gesamten Platz der eigenen Festplatte |
+| P24 | Nach dem Anfragen von Leserechten für Admin-Bereiche sollen nur diese Bereiche neu gelesen werden |
 
 Die Frage „Werden Remotes noch über Dokany eingebunden?“ ist kein Arbeitspunkt. Die Antwort steht in `README.md:239-250` („Dokany bleibt“) und in `docs/oberflaechen/laufwerke.md:32`.
 
@@ -78,6 +80,7 @@ Die Frage „Werden Remotes noch über Dokany eingebunden?“ ist kein Arbeitspu
 | P21 | B umsetzbar, klein; A je nach Speicherart | A: Wurzelprüfung erfüllen. B: Vertrauen je Tresor merken | Sicherheitsprüfung je Speicherart für A |
 | P22 | umsetzbar, klein bis mittel | Aktion „Änderungen sichern und entfernen“ | offene Änderungen dürfen nicht verloren gehen |
 | P23 | umsetzbar, mittel | Platz der Gegenseite melden, begrenzt durch den Zwischenspeicher | je Speicherart eine Abfrage; FTP ohne Standard |
+| P24 | umsetzbar, mittel | gesperrte Teilbäume vollständig merken, nach der Zustimmung nur sie neu lesen und einfügen | heutige Obergrenzen der Fehlerlisten (64, 100, 500) |
 
 ## P10 Laufwerke erscheinen erst nach Neustart
 
@@ -659,6 +662,28 @@ Umsetzbar, klein bis mittel.
 
 Umsetzbar, mittel. Je Speicherart kommt eine Abfrage dazu.
 
+## P24 Nach Leserechten nur die gesperrten Bereiche neu lesen
+
+### Bestand (Befund)
+
+- **Explorer-Ansicht** (Scan und Suche): Nach erfolgreicher Rechteanfrage („Leserechte anfordern …“, mit Windows-Zustimmung) liest `rescan()` die ganze Wurzel neu (`N/app/core/read_access.rs:43-48`, `N/app/core/scanning.rs:142`).
+- **Speicheranalyse:** Nach erfolgreicher Anfrage startet `start_analytics_scan(root)` die Analyse der ganzen Wurzel neu. Das alte Ergebnis bleibt bis dahin sichtbar (`N/app/core/analytics_access.rs:139-146`).
+- **Was über gesperrte Stellen bekannt ist:** ihre Zahl (`permission_denied`) und eine begrenzte Liste. Darüber hinaus wird nur gezählt.
+  - Die Analyse merkt sich höchstens 64 Leseprobleme (`N/analytics/os/shared/analytics_outcome.rs:10`).
+  - Der Scanner merkt sich höchstens 100 (`N/scanner/os/collect.rs:11`).
+  - Der Explorer merkt sich höchstens 500 Fehlerpfade (`N/app/os/shared/platform_helpers.rs:42-43`).
+- **Linux und Android:** Die App kann dort keine Rechte anfragen; das System gewährt sie (`N/local_access/os/linux_os.rs:73`, `:77`).
+
+### Weg
+
+- **Gesperrte Wurzeln merken:** Der Scan merkt sich die Wurzeln aller gesperrten Teilbäume, vollständig und ohne Obergrenze. Geschachtelte fallen unter die oberste.
+- **Nur diese Teilbäume neu lesen:** Nach der Zustimmung liest die App nur diese Teilbäume mit den neuen Rechten und fügt sie in das vorhandene Ergebnis ein. In der Analyse wachsen die Summen der Elternordner mit.
+- **Änderungen außerhalb:** Was sich außerhalb der gesperrten Bereiche geändert hat, holt weiter das ausdrückliche Aktualisieren (Annahme: F5 wie bisher).
+
+### Urteil P24
+
+Umsetzbar, mittel.
+
 ## Plattformprüfung
 
 | Punkt | Desktop Windows | Desktop Linux | Android | Terminal und MCP |
@@ -676,6 +701,7 @@ Umsetzbar, mittel. Je Speicherart kommt eine Abfrage dazu.
 | P21 | Tresor-Laufwerk über Dokany | Tresor-Laufwerk über FUSE | Lücke: Öffnen von Tresor-Dateien | `se drive mount vault://<SITE>` nimmt `--trust-remote-root` schon an |
 | P22 | Aktion am Laufwerkseintrag | dasselbe | entfällt, keine Laufwerke | neuer Befehl |
 | P23 | Platz für Dokany | Platz für FUSE | Lücke: Platzangabe des Dokumentanbieters | entfällt |
+| P24 | Explorer-Ansicht und Speicheranalyse | entfällt, keine Anfrage in der App | entfällt, keine Anfrage in der App | entfällt |
 
 ## Entscheidungen vor einer Umsetzung
 
@@ -689,7 +715,7 @@ Die Nummern setzen E1 bis E6 der Notiz zu Fernzugriff und Desktop fort. E7 und E
   1. P10, P15, P16, P17, P21 und P22;
   2. P13 und P14;
   3. P18 bis P20 als ein Strang „Einstellungen“;
-  4. P11 Stufe 1 nach der Messung, und P23.
+  4. P11 Stufe 1 nach der Messung, P23 und P24.
 
   P12 und die Stufen 2 und 3 von P11 bleiben draußen.
 - **E12, Gliederung der Einstellungen (P18).** Vorschlag aus P18: Dieses Gerät, Geräte (je Gerät alle Rechte), Räume, die übrigen Bereiche, zuletzt Diagnose und Protokolle.
