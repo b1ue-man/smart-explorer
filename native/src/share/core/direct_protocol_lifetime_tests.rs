@@ -56,7 +56,8 @@ fn maximum_lifetime_and_clock_skew_are_accepted_for_every_envelope() {
 
 #[test]
 fn overlong_and_i64_max_envelopes_fail_before_authentication() {
-    let overlong = NOW + MAX_TRACKED_DIRECT_ENVELOPE_LIFETIME_SECS + 1;
+    let overlong =
+        NOW + MAX_TRACKED_DIRECT_ENVELOPE_LIFETIME_SECS + MAX_TRACKED_DIRECT_CLOCK_SKEW_SECS + 1;
     assert_eq!(
         request(NOW, overlong),
         Err(DirectProtocolError::LifetimeExceeded)
@@ -125,6 +126,90 @@ fn overlong_and_i64_max_envelopes_fail_before_authentication() {
     assert_eq!(
         decision_receipt.verify_for(&decision, &RELATION_SECRET, NOW),
         Err(DirectProtocolError::LifetimeExceeded)
+    );
+}
+
+/// Win10 and Ubuntu, 2026-10-22: a decision from a device whose clock ran
+/// ahead was discarded for good as `lifetime_exceeded`, because the receipt
+/// pairs the confirming device's earlier clock with the decision's end.
+#[test]
+fn windows_direct_task_receipts_accept_clocks_within_the_skew() {
+    let behind = MAX_TRACKED_DIRECT_CLOCK_SKEW_SECS - 60;
+    let request = request(NOW, NOW + MAX_TRACKED_DIRECT_ENVELOPE_LIFETIME_SECS).unwrap();
+    // The target's clock is behind the requester's.
+    let receipt = SignedDirectRequestReceipt::sign_with_nonce(
+        &request,
+        target(),
+        NOW - behind,
+        "request-receipt-nonce",
+        None,
+        &RELATION_SECRET,
+        &key(2),
+    )
+    .unwrap();
+    receipt
+        .verify_for(&request, &RELATION_SECRET, NOW + 10)
+        .unwrap();
+    validate_persisted_timestamp(receipt.received_at, receipt.expires_at).unwrap();
+
+    // The target's clock is ahead: its decision ends later than the
+    // requester's clock plus the lifetime when the requester confirms it.
+    let decided_at = NOW + behind;
+    let decision = SignedDirectDecision::sign_with_nonce(
+        &request,
+        target(),
+        DirectDecisionKind::Accepted,
+        1,
+        decided_at,
+        decided_at + MAX_TRACKED_DIRECT_ENVELOPE_LIFETIME_SECS,
+        "decision-nonce",
+        None,
+        &RELATION_SECRET,
+        &key(2),
+    )
+    .unwrap();
+    decision
+        .verify_for(&request, &RELATION_SECRET, NOW + 10)
+        .unwrap();
+    let decision_receipt = SignedDirectDecisionReceipt::sign_with_nonce(
+        &decision,
+        NOW + 10,
+        "decision-receipt-nonce",
+        None,
+        &RELATION_SECRET,
+        &key(1),
+    )
+    .unwrap();
+    decision_receipt
+        .verify_for(&decision, &RELATION_SECRET, decided_at + 10)
+        .unwrap();
+    validate_persisted_timestamp(decision_receipt.received_at, decision_receipt.expires_at)
+        .unwrap();
+
+    // Beyond the skew the receipt still fails.
+    let too_far = MAX_TRACKED_DIRECT_CLOCK_SKEW_SECS + 1;
+    assert_eq!(
+        SignedDirectDecisionReceipt::sign_with_nonce(
+            &SignedDirectDecision::sign_with_nonce(
+                &request,
+                target(),
+                DirectDecisionKind::Accepted,
+                1,
+                NOW + too_far,
+                NOW + too_far + MAX_TRACKED_DIRECT_ENVELOPE_LIFETIME_SECS,
+                "far-decision",
+                None,
+                &RELATION_SECRET,
+                &key(2),
+            )
+            .unwrap(),
+            NOW - 1,
+            "far-decision-receipt",
+            None,
+            &RELATION_SECRET,
+            &key(1),
+        ),
+        Err(DirectProtocolError::TimestampTooFarFuture)
     );
 }
 
