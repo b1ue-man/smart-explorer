@@ -11,7 +11,8 @@ Nachträge vom 2026-10-22, getrennt von der Rückmeldung zu Fernzugriff und se D
 - P16 bis P20 kamen danach als Zusätze, ebenfalls ohne Zeitangabe. Annahme: nächster Lauf, bis dahin nur dokumentiert;
 - P21 ist ein Fehlerbild mit Frage: Gibt es schon eine Lösung? Wenn nicht, ist es ein weiterer Punkt, mit der Vorgabe A (ohne Abfrage) vor B (Häkchen „immer“);
 - P25 stellt den Auftrag E10 vom 2026-10-17 richtig: Windows-Einbindung ohne Fremdtreiber. Danach stellte der Nutzer P25 als optionale Aufgabe zurück; Dokany bleibt;
-- P22 bis P24 sind weitere Fehlerbilder und Wünsche ohne Zeitangabe. Annahme: nächster Lauf. Für P22 bekam der Nutzer zusätzlich eine Anleitung für das eigene Gerät; sie steht nicht in diesem Repository;
+- P22 bis P24 sind weitere Fehlerbilder und Wünsche ohne Zeitangabe. Annahme: nächster Lauf;
+- P26 ist ein Fehlerbild mit dem Auftrag, es im Lauf anzugehen und nach Möglichkeit zu beheben. Der Nutzer sagte dazu: noch nicht anfangen. Für P22 bekam der Nutzer zusätzlich eine Anleitung für das eigene Gerät; sie steht nicht in diesem Repository;
 - noch nichts umsetzen. Wie bei P1 bis P9: einschätzen, ob und wie jeder Punkt umsetzbar ist, ohne konkrete Implementierungsplanung und ohne Fehlersuche.
 
 Die Punkte stehen als Zeilen in `docs/TODO.md`:
@@ -30,7 +31,8 @@ Die Punkte stehen als Zeilen in `docs/TODO.md`:
 - `LAUFWERK-RESTEINTRAG`
 - `LAUFWERK-PLATZ`
 - `LESERECHTE-NUR-NEU`
-- `WINDOWS-OHNE-FREMDTREIBER`
+- `WINDOWS-OHNE-FREMDTREIBER` (zurückgestellt)
+- `GDRIVE-ABLAUF`
 
 Kennzeichnung:
 - **Befund** = im Code oder in der Doku dieses Repositorys nachgelesen, Stand 0.5.184 (Commit `66cf09db`), mit `Datei:Zeile`.
@@ -61,6 +63,7 @@ Pfadkürzel: `N/` = `native/src/`, `A/` = `android/app/src/main/java/app/smartex
 | P22 | Bei jedem Start meldet ein Fehler „Laufwerk nach Daemon-Neustart zur Wiederherstellung bereit; bitte erneut versuchen“ für einen Laufwerkseintrag mit offenen Änderungen, hinter dem kein Laufwerk mehr steht |
 | P23 | Ein eingebundenes Laufwerk zeigt unter „Dieser PC“ den freien und den gesamten Platz der eigenen Festplatte |
 | P24 | Nach dem Anfragen von Leserechten für Admin-Bereiche sollen nur diese Bereiche neu gelesen werden |
+| P26 | Google Drive scheint oft abzulaufen, Grund unbekannt; angehen und nach Möglichkeit beheben |
 | P25 | Ursprünglicher Auftrag richtiggestellt: unter Windows weg von Fremdtreibern hin zu Windows-eigenen Mitteln, nach dem Prinzip von Cryptomator mit mehreren Einhängewegen. Freie Projekte als Referenz oder Umsetzung nach der Doku. Dokany bleibt, bis der andere Weg funktioniert |
 
 Die Frage „Werden Remotes noch über Dokany eingebunden?“ ist kein Arbeitspunkt. Die Antwort steht in `README.md:239-250` („Dokany bleibt“) und in `docs/oberflaechen/laufwerke.md:32`.
@@ -84,6 +87,7 @@ Die Frage „Werden Remotes noch über Dokany eingebunden?“ ist kein Arbeitspu
 | P22 | umsetzbar, klein bis mittel | Aktion „Änderungen sichern und entfernen“ | offene Änderungen dürfen nicht verloren gehen |
 | P23 | umsetzbar, mittel | Platz der Gegenseite melden, begrenzt durch den Zwischenspeicher | je Speicherart eine Abfrage; FTP ohne Standard |
 | P24 | umsetzbar, mittel | gesperrte Teilbäume vollständig merken, nach der Zustimmung nur sie neu lesen und einfügen | heutige Obergrenzen der Fehlerlisten (64, 100, 500) |
+| P26 | umsetzbar, klein bis mittel | Ursache benennen (Testmodus: 7 Tage), mit einem Klick neu anmelden, eigene Tokenfehler ausschließen | Ablauf im Testmodus liegt bei Google, nicht bei se |
 | P25 | zurückgestellt, optional. Umsetzbar als großer Strang; ein vollständiger Ersatz ist nicht gesichert | Einhängeschnittstelle mit mehreren Wegen. Nach einer Probe am Gerät SMB auf anderem Port, WebDAV als Rückfall, Dokany bleibt | jeder Windows-eigene Weg hat eine Bedingung: 24H2, abgekündigter Dienst, nicht in Home oder kein Laufwerksbuchstabe |
 
 ## P10 Laufwerke erscheinen erst nach Neustart
@@ -767,6 +771,46 @@ Umsetzbar als eigener, großer Strang. Ein Ersatz für Dokany auf allen Windows-
 
 Dokany bleibt deshalb als Weg erhalten, bis ein anderer die Abnahme besteht. Wird die Aufgabe wieder aufgenommen, beginnt sie mit der Machbarkeitsprobe aus Stufe 2.
 
+## P26 Google Drive läuft oft ab
+
+### Bestand (Befund)
+
+- **Anmeldung:** PKCE mit `access_type=offline&prompt=consent` (`N/cloud/core/cloud.rs:94-111`).
+- **Token:**
+  - Den Refresh-Token speichert die App. Schickt Google bei der Erneuerung keinen neuen, behält sie den alten (`N/cloud/core/token_persistence.rs:20-31`).
+  - Das Zugriffstoken gilt `expires_in` minus 60 s (`N/cloud/core/cloud.rs:254-258`).
+- **Client:** Client-ID und Secret trägt die Person selbst ein, aus ihrem eigenen Google-Cloud-Projekt (`N/cloud/os/shared.rs:27-28`). Ohne Client-ID gibt es keine Anmeldung (`N/cloud/core/cloud.rs:267`).
+- **Fehleranzeige:** Bei einem Fehler zeigt die App Googles Fehlertext roh, etwa `invalid_grant` mit Beschreibung (`N/cloud/core/cloud.rs:212-230`).
+  - Eine Ursache nennt sie nicht.
+  - Wann angemeldet wurde, merkt sie sich nicht.
+
+### Ursachen laut Google
+
+Quelle für alle Punkte: https://developers.google.com/identity/protocols/oauth2, abgerufen 2026-10-22.
+
+- **Testmodus:** Ein Projekt im Veröffentlichungsstatus „Testing“ bekommt einen Refresh-Token, der nach 7 Tagen abläuft. Ausnahme: Es werden nur Name, E-Mail und Profil angefragt.
+- **Obergrenze:** höchstens 100 Refresh-Tokens je Google-Konto und OAuth-Client. Darüber wird der älteste ohne Warnung ungültig.
+- **Weitere Gründe:**
+  - sechs Monate ungenutzt;
+  - Widerruf durch die Person;
+  - Passwortwechsel, nur bei Gmail-Bereichen;
+  - abgelaufener zeitbegrenzter Zugriff;
+  - Sperre durch einen Administrator.
+- **Annahme zur wahrscheinlichsten Ursache:** Das eigene Google-Cloud-Projekt steht auf „Testing“, dann läuft die Anmeldung alle 7 Tage ab.
+- **Lücken:** der Veröffentlichungsstatus des Projekts des Nutzers; ob Speichern und Laden des Tokens in App, Hintergrunddienst und Terminal gleich wirken.
+
+### Weg
+
+- **Diagnose:** Die App merkt sich den Anmeldezeitpunkt je Konto. Meldet Google `invalid_grant` rund 7 Tage danach, nennt sie den Testmodus als Ursache und den Ausweg: das Projekt in der Google Cloud Console auf „In production“ stellen. Annahme: Dann erscheint beim Anmelden der Hinweis auf eine nicht geprüfte App. Bei anderen Zeitpunkten nennt sie die übrigen Ursachen.
+- **Hinweis bei der Einrichtung:** Beim Eintragen der Client-ID weist die App auf den Testmodus hin.
+- **Neu anmelden statt roher Fehlertext:** ein Klick. Sync-Aufträge warten auf die Anmeldung, statt zu scheitern. Es gibt weiter keine automatische Anmeldung ohne die Person.
+- **Eigene Fehler ausschließen:** Im Lauf ist zu prüfen, ob se selbst Tokens verliert oder unnötig neue anlegt, etwa wegen der Obergrenze von 100 oder beim Speichern.
+- **Alle Oberflächen:** Desktop, Android, Terminal und MCP.
+
+### Urteil P26
+
+Umsetzbar, klein bis mittel. Den Ablauf im Testmodus kann die App nicht verhindern; sie kann aber die Ursache benennen und den Ausweg zeigen. Liegt die Ursache in se, ist sie im Lauf zu beheben.
+
 ## Plattformprüfung
 
 | Punkt | Desktop Windows | Desktop Linux | Android | Terminal und MCP |
@@ -785,18 +829,24 @@ Dokany bleibt deshalb als Weg erhalten, bis ein anderer die Abnahme besteht. Wir
 | P22 | Aktion am Laufwerkseintrag | dasselbe | entfällt, keine Laufwerke | neuer Befehl |
 | P23 | Platz für Dokany | Platz für FUSE | Lücke: Platzangabe des Dokumentanbieters | entfällt |
 | P24 | Explorer-Ansicht und Speicheranalyse | entfällt, keine Anfrage in der App | entfällt, keine Anfrage in der App | entfällt |
+| P26 | Diagnose und Neuanmeldung | dasselbe | dasselbe | Fehlermeldung mit Ursache, Neuanmeldung über `se` (Annahme) |
 | P25 | Einhängeschnittstelle, neue Wege neben Dokany | FUSE bleibt; die Schnittstelle gilt auch dort (Annahme) | entfällt, keine Laufwerke | `se drive mount` bekommt die Wahl des Wegs (Annahme) |
 
 ## Entscheidungen vor einer Umsetzung
 
 Die Nummern setzen E1 bis E6 der Notiz zu Fernzugriff und Desktop fort. E7 und E8 (Quellenweg und Umfang von P12) entfallen, weil P12 zurückgestellt ist.
 
+**Zuständigkeit (Nutzer, 2026-10-22):** Die offenen Entscheidungen E1 bis E6 und E9 bis E12 liegen beim Agenten.
+- Sie fallen in Planung und Recherche des nächsten Laufs, nach dem Maßstab der bestmöglichen Umsetzung.
+- Bis dahin gelten die Vorschläge unten als vorläufige Richtung.
+- Eine Entscheidung, die die Sicherheit betrifft (E1, E2, E5), braucht vor der Festlegung eine eigene Sicherheitsprüfung in der Planung.
+
 - **E9, Stufen von P13:** A; A und B; oder A, B und C. Vorschlag: A und B.
 - **E10, Terminal und MCP bei P14.** Zwei Möglichkeiten:
   - Das heutige Zusammenführen in einen ausdrücklich genannten Zielordner bleibt Voreinstellung, und die Option kommt dazu. Das ist der Vorschlag, weil der Zielname dort getippt wird.
   - Der Zusatz wird neue Voreinstellung, wie in den Fenstern.
 - **E11, Reihenfolge im nächsten Lauf.** Vorschlag:
-  1. P10, P15, P16, P17, P21 und P22;
+  1. P10, P15, P16, P17, P21, P22 und P26;
   2. P13 und P14;
   3. P18 bis P20 als ein Strang „Einstellungen“;
   4. P11 Stufe 1 nach der Messung, P23 und P24.
@@ -854,3 +904,6 @@ Die Nummern setzen E1 bis E6 der Notiz zu Fernzugriff und Desktop fort. E7 und E
     - die Editionsliste des NFS-Clients, sein Administratorbedarf und seine Ports 111 und 2049;
     - die Cloud Files API unter `subst`;
     - die Lizenzdatei von `dav-server`.
+16. **P26:**
+    - der Veröffentlichungsstatus des Google-Cloud-Projekts des Nutzers;
+    - ob Speichern und Laden des Tokens in App, Hintergrunddienst und Terminal gleich wirken.
