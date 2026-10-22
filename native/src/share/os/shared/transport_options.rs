@@ -6,6 +6,14 @@ use iroh::RelayUrl;
 use super::endpoint_routes::NodeTransportOptions;
 use super::server_address::{migrate_stored, relay_url_acceptable, SignalServerConfig};
 
+#[path = "relay_dns.rs"]
+mod relay_dns;
+
+/// How the Iroh endpoint resolves relay host names (`relay_dns.rs`).
+pub(super) fn dns_resolver() -> iroh::dns::DnsResolver {
+    relay_dns::resolver()
+}
+
 const RELAY_URL_ENV: &str = "SE_SHARE_RELAY_URL";
 const RELAY_ONLY_ENV: &str = "SE_SHARE_RELAY_ONLY";
 /// Larger server files are not ours to rewrite (the daemon refuses them).

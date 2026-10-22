@@ -161,6 +161,11 @@ impl ShareIrohNode {
             ])
             .relay_mode(relay_mode)
             .transport_config(iroh_transport_config());
+        let dns_resolver = {
+            let _runtime = rt.enter();
+            super::transport_options::dns_resolver()
+        };
+        builder = builder.dns_resolver(dns_resolver);
         if let Some(config) = transport_options.ca_tls_config() {
             builder = builder.ca_tls_config(config);
         }
@@ -168,7 +173,7 @@ impl ShareIrohNode {
             builder = builder.clear_ip_transports();
         }
         let endpoint = rt.block_on(async { builder.bind().await.map_err(eio) })?;
-        let routes = EndpointRoutes::start(&rt, &endpoint, relay_configured);
+        let routes = EndpointRoutes::start(&rt, &endpoint, &transport_options.relay_urls, &ev);
         let wake = wake::NodeWake::new();
         wake.watch(&rt, &endpoint);
         let quic_stats = super::quic_stats_hub::QuicStatsHub::start(&rt);
@@ -468,3 +473,7 @@ impl Drop for IncomingConnectionGuard {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "node_relay_tests.rs"]
+mod relay_tests;
