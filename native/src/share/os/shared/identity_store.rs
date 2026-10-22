@@ -99,9 +99,52 @@ fn load_ready_identity(
     default_home: Option<String>,
     storage: &mut impl IdentityPersistence,
 ) -> Result<ShareIdentity, String> {
-    let identity = ShareIdentity::load_or_create_with(default_name, storage)?;
+    let profiles_home = default_home.clone();
+    let identity = load_or_replace_unpaired(default_name, storage, || unpaired(profiles_home))?;
     finish_pending_cleanup_locked(default_home, &identity, storage)?;
     Ok(identity)
+}
+
+/// What a secret of the identity file is missing from the secure store
+/// (`identity.rs`).
+const MISSING_SECRET: &str = "fehlt im sicheren Speicher";
+const REPAIR_COMMAND: &str = "se share identity --repair";
+
+/// An identity whose key or Direct secret is gone from the secure store
+/// while its file stayed (seen on a fresh Windows installation) is replaced
+/// as long as this device is paired with nothing, so Share starts at all.
+/// With pairings the replacement needs every peer to confirm again; the
+/// error then names the repair instead of leaving Share unavailable.
+fn load_or_replace_unpaired(
+    default_name: String,
+    storage: &mut impl IdentityPersistence,
+    unpaired: impl FnOnce() -> bool,
+) -> Result<ShareIdentity, String> {
+    match ShareIdentity::load_or_create_with(default_name.clone(), storage) {
+        Err(error) if error.contains(MISSING_SECRET) => {
+            if unpaired() {
+                ShareIdentity::repair_missing_with(default_name, storage)
+                    .map(|repair| repair.identity)
+            } else {
+                Err(format!(
+                    "{error}; reparieren mit `{REPAIR_COMMAND}` (gekoppelte Geräte müssen danach neu \
+                     bestätigt werden)"
+                ))
+            }
+        }
+        loaded => loaded,
+    }
+}
+
+/// No contact, grant, request or room: a new identity breaks nothing.
+fn unpaired(default_home: Option<String>) -> bool {
+    super::profiles::ShareProfiles::load_checked(default_home).is_ok_and(|profiles| {
+        profiles.direct_contacts.is_empty()
+            && profiles.direct_grants.is_empty()
+            && profiles.direct_requests.is_empty()
+            && profiles.legacy_direct_requests.is_empty()
+            && profiles.rooms.is_empty()
+    })
 }
 
 fn finish_pending_cleanup_locked(

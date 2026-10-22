@@ -299,7 +299,9 @@ fn default_device_name() -> String {
 
 fn load_identity() -> Result<crate::share::ShareIdentity, String> {
     crate::share::ShareIdentity::load_or_create(default_device_name()).map_err(|error| {
-        if error.contains("fehlt im sicheren Speicher") {
+        if error.contains("fehlt im sicheren Speicher")
+            && !error.contains("se share identity --repair")
+        {
             format!("{error}; repair with `se share identity --repair`")
         } else {
             error

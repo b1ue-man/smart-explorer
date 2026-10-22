@@ -85,7 +85,7 @@ pub(super) fn run(args: IdentityArgs) -> Result<(), String> {
 
 pub(super) fn load_with_repair_hint() -> Result<crate::share::ShareIdentity, String> {
     crate::share::ShareIdentity::load_or_create(super::default_device_name()).map_err(|error| {
-        if error.contains("fehlt im sicheren Speicher") {
+        if error.contains("fehlt im sicheren Speicher") && !error.contains(REPAIR_COMMAND) {
             format!("{error}; repair with `{REPAIR_COMMAND}`")
         } else {
             error
