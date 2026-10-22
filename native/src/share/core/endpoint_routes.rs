@@ -1,8 +1,15 @@
+use std::net::IpAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use iroh::{Endpoint, EndpointAddr, RelayUrl, Watcher as _};
+
+use super::types::ShareEvent;
+
+/// Without a relay, devices outside this network cannot reach this one; a
+/// normal start has its relay well before this.
+const RELAY_WARNING_AFTER: Duration = Duration::from_secs(20);
 
 #[derive(Clone, Debug, Default)]
 pub(super) struct NodeTransportOptions {
@@ -68,7 +75,8 @@ impl EndpointRoutes {
     pub(super) fn start(
         runtime: &tokio::runtime::Runtime,
         endpoint: &Endpoint,
-        relay_configured: bool,
+        relay_urls: &[RelayUrl],
+        events: &crossbeam_channel::Sender<ShareEvent>,
     ) -> Self {
         let revision = Arc::new(AtomicU64::new(0));
 
@@ -81,10 +89,14 @@ impl EndpointRoutes {
             }
         });
 
-        if relay_configured {
+        if !relay_urls.is_empty() {
             let online_endpoint = endpoint.clone();
             let online_revision = revision.clone();
+            let warning = relay_warning(relay_urls);
+            let events = events.clone();
             runtime.spawn(async move {
+                let started = Instant::now();
+                let mut warned = false;
                 loop {
                     if tokio::time::timeout(
                         Duration::from_secs(iroh::NET_REPORT_TIMEOUT),
@@ -96,11 +108,27 @@ impl EndpointRoutes {
                         // A home-relay URL can be selected before its registration
                         // handshake completes. Publish once more when it is usable.
                         online_revision.fetch_add(1, Ordering::Release);
+                        if warned {
+                            let relay = online_endpoint
+                                .addr()
+                                .relay_urls()
+                                .next()
+                                .map(ToString::to_string)
+                                .unwrap_or_default();
+                            let _ = events
+                                .try_send(ShareEvent::Status(format!("Relay erreichbar: {relay}")));
+                        }
                         break;
                     }
                     // Each wait is bounded, but a relay which becomes reachable
                     // later must still trigger the first usable presence publish.
                     // Runtime shutdown cancels this task and its Endpoint clone.
+                    if !warned && started.elapsed() >= RELAY_WARNING_AFTER {
+                        warned = true;
+                        if let Some(warning) = &warning {
+                            let _ = events.try_send(ShareEvent::Error(warning.clone()));
+                        }
+                    }
                 }
             });
         }
@@ -128,5 +156,59 @@ impl EndpointRoutes {
             relay_url,
             candidates,
         }
+    }
+}
+
+/// The log line for relays that stay unreachable. A relay on this machine
+/// (loopback, as test servers configure it) is not reported.
+fn relay_warning(relay_urls: &[RelayUrl]) -> Option<String> {
+    let reported: Vec<String> = relay_urls
+        .iter()
+        .filter(|url| !is_loopback(url.host_str().unwrap_or_default()))
+        .map(ToString::to_string)
+        .collect();
+    (!reported.is_empty()).then(|| {
+        format!(
+            "Relay nicht erreichbar ({}): Geräte außerhalb dieses Netzwerks erreichen dieses \
+             Gerät nicht, bis das Relay antwortet",
+            reported.join(", ")
+        )
+    })
+}
+
+fn is_loopback(host: &str) -> bool {
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse::<IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::relay_warning;
+
+    #[test]
+    fn windows_direct_task_unreachable_relays_are_named_except_loopback() {
+        let relays = |urls: &[&str]| -> Vec<iroh::RelayUrl> {
+            urls.iter().map(|url| url.parse().unwrap()).collect()
+        };
+        let warning = relay_warning(&relays(&[
+            "https://silasweis.de:51821/",
+            "http://127.0.0.1:1/",
+        ]))
+        .unwrap();
+        assert!(warning.contains("Relay nicht erreichbar"), "{warning}");
+        assert!(warning.contains("https://silasweis.de:51821/"), "{warning}");
+        assert!(!warning.contains("127.0.0.1"), "{warning}");
+        assert_eq!(
+            relay_warning(&relays(&[
+                "http://127.0.0.1:1/",
+                "http://localhost:2/",
+                "http://[::1]:3/"
+            ])),
+            None
+        );
     }
 }
