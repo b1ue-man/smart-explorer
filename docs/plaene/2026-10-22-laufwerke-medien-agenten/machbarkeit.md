@@ -1,20 +1,22 @@
-# Laufwerke, optische Medien und Agenten-Einbindung: Machbarkeit (2026-10-22)
+# Laufwerke, Medien, Agenten, Kopieren und se Desktop: Machbarkeit (2026-10-22)
 
 ## Auftrag
 
 Nachträge vom 2026-10-22, getrennt von der Rückmeldung zu Fernzugriff und se Desktop
 (`docs/plaene/2026-10-22-fernzugriff-desktop/machbarkeit.md`, P1 bis P9). Der Auftrag:
-- P10 bis P12 aufschreiben; sie sollen „beim nächsten Lauf mitgemacht werden“;
+- P10 und P11 aufschreiben; sie sollen „beim nächsten Lauf mitgemacht werden“;
+- P12 kam mit P10 und P11, bleibt aber vorerst draußen (Nutzer, 2026-10-22);
 - P13 als Ergänzung dokumentieren. Annahme: P13 gehört in denselben nächsten Lauf;
-- P14 kam danach ohne Zeitangabe. Annahme: ebenfalls nächster Lauf, bis dahin nur dokumentiert;
+- P14 und P15 kamen danach ohne Zeitangabe. Zu P15 sagte der Nutzer „noch nicht umsetzen“. Annahme: beide gehören in den nächsten Lauf und sind bis dahin nur dokumentiert;
 - noch nichts umsetzen. Wie bei P1 bis P9: einschätzen, ob und wie jeder Punkt umsetzbar ist, ohne konkrete Implementierungsplanung und ohne Fehlersuche.
 
-Die Punkte stehen als offene Zeilen in `docs/TODO.md`:
+Die Punkte stehen als Zeilen in `docs/TODO.md`:
 - `LAUFWERKE-LIVE`
 - `OPTISCH-LESEN`
-- `OPTISCH-DATENTRAEGER`
+- `OPTISCH-DATENTRAEGER` (zurückgestellt)
 - `AGENT-PLUGIN-UPDATE`
 - `KOPIE-ORDNER-ZUSATZ`
+- `DESKTOP-ORDNER-EXPLORER`
 
 Kennzeichnung:
 - **Befund** = im Code oder in der Doku dieses Repositorys nachgelesen, Stand 0.5.184 (Commit `66cf09db`), mit `Datei:Zeile`.
@@ -32,9 +34,10 @@ Pfadkürzel: `N/` = `native/src/`, `A/` = `android/app/src/main/java/app/smartex
 |---|---|
 | P10 | Laufwerke, USB-Datenträger und Ähnliches einstecken oder ausstecken: Sie tauchen erst nach Schließen und erneutem Öffnen auf |
 | P11 | CDs und DVDs besser, effizienter und schneller lesen |
-| P12 | Kleiner Zusatz: Funktionen wie IsoBuster, also die Dateiinhalte einer Disc wirklich lesen. Für den Code ist wählbar: Inhalte übernehmen oder, bei Lizenzproblemen, Cleanroom-Engineering. Dabei liefert ein Agent eine exakte Spezifikation ohne Code, und der Implementierer setzt nur nach dieser Spezifikation um |
+| P12 | Kleiner Zusatz: Funktionen wie IsoBuster, also die Dateiinhalte einer Disc wirklich lesen. Nachtrag: vorerst draußen; Umsetzung potentiell wie bei IsoBuster, oder Übernahme von dessen Komponenten |
 | P13 | Die MCP-Einbindung in den Agenten soll sich mit Updates möglichst automatisch aktualisieren, ebenso die Plugin-Fassung |
 | P14 | Beim Kopieren eines Ordners, dessen Name im Ziel schon existiert, sollen die Dateien nicht in den gleichnamigen Ordner hineingemischt werden. Stattdessen bekommt der oberste doppelte Ordner den Zusatz, und zwar dort, wohin kopiert wird. Weil Zusammenführen manchmal gewollt ist, fragt ein Fenster, wie vorgegangen wird, wenn möglich mit Vorschau |
+| P15 | Im se Desktop Ordner automatisch im se Explorer öffnen |
 
 Die Frage „Werden Remotes noch über Dokany eingebunden?“ ist kein Arbeitspunkt. Die Antwort steht in `README.md:239-250` („Dokany bleibt“) und in `docs/oberflaechen/laufwerke.md:32`.
 
@@ -44,9 +47,10 @@ Die Frage „Werden Remotes noch über Dokany eingebunden?“ ist kein Arbeitspu
 |---|---|---|---|
 | P10 | Windows umsetzbar, klein. Linux umsetzbar, mittel. Android laut Code schon live | Windows: Geräteereignisse sammeln und die Laufwerke neu lesen, dazu Neulesen beim Fensterwechsel. Linux: Datenträgerliste über UDisks2 | Netzlaufwerke und `subst` melden sich nicht über Geräteereignisse |
 | P11 | umsetzbar; vorher messen | ein Leser je optischem Laufwerk und große Anfragen. Danach Lesen nach Lage auf der Disc und eine Fehlerkarte für beschädigte Discs | Die Lage einer Datei gibt es ohne Sonderrechte nur über ein eigenes Lesen des Dateisystems (Linux, CDFS) |
-| P12 | umsetzbar unter Windows und Linux, großer eigener Strang. Android nur Abbilder | eigene Leser nach freien Standards, permissive Crates. Cleanroom nur für Formate ohne öffentliche Beschreibung | Rechte für Rohzugriff unter Windows (Lücke). Rechtslage des KI-Cleanrooms offen. Entschlüsseln ausgeschlossen |
+| P12 | zurückgestellt | Umsetzung wie bei IsoBuster, oder Übernahme von dessen Komponenten | Eine Übernahme braucht eine Vereinbarung mit dem Hersteller (EULA) |
 | P13 | umsetzbar; Grundmechanik vorhanden | Stufe A: beim Update auffrischen, auch bei Pfadwechsel. Stufe B: laufende Server nicht beenden. Stufe C: Server ohne Neuverbinden tauschen | Claude Code und Codex verbinden beendete stdio-Server nicht neu |
 | P14 | umsetzbar, mittel | lokale Ziele wie Remote-Ziele: oberster Ordner „Name (2)“. Abfrage mit Vorschau, Option im Terminal | Vorschau großer oder entfernter Bäume. Voreinstellung im Terminal (E10) |
+| P15 | umsetzbar, klein | Ordner der Fläche als Fenster des se Explorers öffnen, wie heute schon Tresore und Geräte. Einstellung „Ordner öffnen mit“ für den Systemweg | keine bekannt |
 
 ## P10 Laufwerke erscheinen erst nach Neustart
 
@@ -151,7 +155,7 @@ Die Frage „Werden Remotes noch über Dokany eingebunden?“ ist kein Arbeitspu
 - **Stufe 2, Reihenfolge nach Lage auf der Disc:**
   - Unter Windows liefert `FSCTL_GET_RETRIEVAL_POINTERS` die Lage für UDF; CDFS steht nicht in der Liste [Quelle: https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-fsctl_get_retrieval_pointers, abgerufen 2026-10-22].
   - Unter Linux kennen `isofs` und `udf` kein FIEMAP. FIBMAP braucht `CAP_SYS_RAWIO` [Quelle: https://gbmc.googlesource.com/linux/+/refs/heads/master/fs/ioctl.c, abgerufen 2026-10-22; Zusammenfassung des Abrufwerkzeugs].
-  - Ohne Sonderrechte bleibt das eigene Lesen des Dateisystems vom Rohgerät. Das ist derselbe Baustein wie P12.
+  - Ohne Sonderrechte bleibt das eigene Lesen des Dateisystems vom Rohgerät. Das gehört zu P12 und ruht mit ihm.
 - **Stufe 3, beschädigte Discs:**
   - Ein erster Durchgang mit wenigen Wiederholungen und kurzer Frist.
   - Defekte Bereiche in einer Karte merken, wie bei ddrescue.
@@ -162,129 +166,16 @@ Die Frage „Werden Remotes noch über Dokany eingebunden?“ ist kein Arbeitspu
 ### Urteil P11
 
 - **Gesamt:** umsetzbar; vorher messen.
-- **Stufe 1:** klein bis mittel. Betroffen sind Regler, Leseweg und Index.
-- **Stufe 2:** mittel. Unter Linux braucht sie den Dateisystemleser aus P12.
-- **Stufe 3:** mittel. Unter Windows hängt sie an den Rechten für Rohzugriff, siehe P12.
+- **Stufe 1:** klein bis mittel. Betroffen sind Regler, Leseweg und Index. Sie ist der Teil von P11 für den nächsten Lauf.
+- **Stufe 2 und 3:** mittel. Sie brauchen Dateisystemleser und Rohzugriff aus P12 und ruhen deshalb mit P12.
 
 ## P12 Funktionen wie IsoBuster
 
-### Bestand
+Zurückgestellt: P12 bleibt vorerst draußen und gehört nicht zum nächsten Lauf (Nutzer, 2026-10-22).
 
-- **Kein eigener Disc-Zugriff** (Befund): Es gibt keinen Leser für ISO 9660 oder UDF, kein Abbildformat und keinen Rohzugriff auf das Laufwerk (Suche wie unter P11). Das einzige Archiv-Crate ist `zip` (`native/Cargo.toml:151`).
-- **Lizenz** (Befund): Das Projekt steht unter MIT (`native/Cargo.toml:7`, `LICENSE`) und verteilt Binärdateien.
-
-### Was IsoBuster kann
-
-Belegt aus den Seiten `isobuster.php`, `help/file_systems`, `help/track_and_sector_modes`, `help/recovery` und `license-models.php` unter https://www.isobuster.com/, jeweils [Quelle, abgerufen 2026-10-22]:
-
-- **Plattform und Medien:** Version 5.8, nur Windows. Medien: CD, DVD, Blu-ray, HD DVD, GD-ROM, UDO, M-Disc. IsoBuster greift selbst auf das Gerät zu und deutet die Daten selbst, nicht über Windows.
-- **Sessions und Tracks:** alte und offene Sessions, alle CD-Sektormodi (Mode 1 und Mode 2 Form 1 mit 2048 Byte, Mode 2 Form 2 mit 2324 Byte, Audio mit 2352 Byte), Einzelsektoren, Audio-Tracks als WAV und CD-Text.
-- **Dateisysteme:** ISO 9660, Joliet, Rock Ridge, Romeo, CD-i, El Torito, UDF 1.02 bis 2.6, HFS und HFS+. Dazu kommen Datenträger-Dateisysteme, die für Discs nicht nötig sind.
-- **Beschädigte Discs:**
-  - mehrere Wiederholverfahren mit einstellbarer Pause;
-  - Oberflächenscan;
-  - Liste der Dateien mit Lesefehlern;
-  - ein „Managed Image“, das Fehlerblöcke markiert und später nachliest [laut Suchergebnis: https://www.isobuster.com/help/create_and_complete_a_managed_image_file].
-- **Verlorene Dateien:** verlorene ISO- und Joliet-Sessions, UDF-Reste, IFO/VOB-Verweise und Signatursuche.
-- **Kostenpflichtig:** Frei sind ISO 9660, Joliet, Rock Ridge und El Torito. Das Extrahieren aus UDF und HFS(+) kostet.
-- **EULA:** Sie verbietet Reverse Engineering [Quelle: https://www.isobuster.com/eula.php, abgerufen 2026-10-22]. Nach § 69g Abs. 2 UrhG ist eine Klausel nichtig, soweit sie § 69d Abs. 3 oder § 69e widerspricht [Quelle: https://www.gesetze-im-internet.de/urhg/__69g.html, abgerufen 2026-10-22].
-
-### Lizenzen der vorhandenen Bausteine
-
-- **GPL scheidet aus:** libcdio (GPL-3.0-or-later), redumper, dvdisaster, cdrdao und GNU ddrescue stehen unter der GPL. Gelinkt ergäben sie mit dem MIT-Programm ein GPL-Gesamtwerk [Quelle: https://www.gnu.org/licenses/gpl-faq.html, abgerufen 2026-10-22].
-- **LGPL-2.1 ist unbequem:** Betroffen sind pycdlib, libudfread und 7-Zip. Statisch gelinkt verlangt die LGPL-2.1 Objektdateien oder Quellen zum Neu-Linken, dynamisch geladen nicht [Quelle: https://spdx.org/licenses/LGPL-2.1-only.html, abgerufen 2026-10-22]. Annahme: Rust linkt hier statisch.
-- **Permissiv und übernehmbar** [Quelle: https://crates.io/api/v1/crates/, abgerufen 2026-10-22]:
-  - `hadris-iso` (MIT, 2.5.0; ISO 9660 mit Joliet, Rock Ridge, El Torito);
-  - `hadris-udf` (MIT, nur Vorabversion 3.0.0-rc.2);
-  - `cdfs` (MIT oder Apache-2.0);
-  - `udf-core` (Apache-2.0, 0.1.0);
-  - `lamfold-udf` (MIT oder Apache-2.0, UDF bis 2.01);
-  - `hfsplus` (MIT);
-  - `chd` (BSD-3-Clause);
-  - `cue-rw` (Apache-2.0 oder MIT);
-  - die SPTI-Strukturen in `windows-sys`;
-  - libarchive (BSD-2-Clause, ISO 9660 ohne UDF) [Quelle: https://raw.githubusercontent.com/libarchive/libarchive/master/COPYING, abgerufen 2026-10-22].
-- **Ohne Fundstelle:** Für NRG, MDS/MDF, CCD, CDI und klassisches HFS fand die Suche kein permissives Crate.
-
-### Öffentliche Spezifikationen
-
-- **Frei:** [Quelle: https://ecma-international.org/publications-and-standards/, abgerufen 2026-10-22]
-  - ECMA-119 (ISO 9660, 6. Ausgabe Dezember 2025);
-  - ECMA-130 (CD-ROM);
-  - ECMA-167 (Volume- und Dateistruktur);
-  - ECMA-168 (Mehrsession-CD);
-  - ECMA-267 (DVD-ROM);
-  - alle UDF-Fassungen 1.02 bis 2.60 als ECMA TR/112 (Dezember 2023);
-  - HFS+ als Apple TN1150 [Quelle: https://developer.apple.com/library/archive/technotes/tn/tn1150.html, abgerufen 2026-10-22].
-- **Nicht frei:**
-  - IEC 60908, das Red Book für Audio-CDs [laut Suchergebnis: https://webstore.iec.ch/publication/3885];
-  - die MMC-6-Entwürfe, die laut T10 nur für Mitglieder sind [Quelle: https://www.t10.org/drafts.htm, abgerufen 2026-10-22];
-  - die BD-ROM-Teile, die lizenzpflichtig sind [laut Suchergebnis: https://blu-raydisc.info/authoring-faq.php].
-- **Ohne öffentliche Herstellerbeschreibung:** NRG, MDS/MDF, CCD, CDI und IBP/IBQ (Lücke).
-
-### Cleanroom: was es leistet und was nicht
-
-- **Das Verfahren:** Ein Team schreibt die Spezifikation, ein zweites setzt nur danach um, wie beim Phoenix-BIOS. Es schützt gegen den Vorwurf, Ausdruck kopiert zu haben, nicht gegen Patente [Quelle: https://en.wikipedia.org/wiki/Clean-room_design, abgerufen 2026-10-22]. Annahme: Gegen Vertragsbindung, Geschäftsgeheimnisse und das Umgehungsverbot schützt es ebenfalls nicht.
-- **Datenformate sind frei:** Funktionalität, Programmiersprache und Dateiformat sind nicht urheberrechtlich geschützt (EuGH C-406/10, 2012-05-02) [Quelle: https://www.lto.de/recht/nachrichten/n/urheberrechtsfaehigkeit-von-computerprogrammen, abgerufen 2026-10-22].
-  - Beobachten und Testen eines Programms bleibt erlaubt [Quelle: https://www.gesetze-im-internet.de/urhg/__69d.html, abgerufen 2026-10-22].
-  - Dekompilieren ist nur für Interoperabilität erlaubt und nicht für ein „weitgehend ähnlich aufgebautes Programm“ [Quelle: https://gesetze.legal/eu/rl_2009_24_eg/6, abgerufen 2026-10-22].
-  - Annahme: IsoBuster als Schwarzkasten mit Test-Discs beobachten ist erlaubt, es zu disassemblieren nicht.
-- **Cleanroom mit KI-Agenten ist rechtlich offen.**
-  - Es gibt kein Urteil.
-  - Bei chardet 7.0 (März 2026) räumte der Maintainer ein, dass die Trennung „did not exist here“. Das Modell kannte das Original sehr wahrscheinlich aus dem Training [Quelle: https://simonwillison.net/2026/Mar/5/chardet/, abgerufen 2026-10-22].
-  - Das LG München I hat das Speichern von Liedtexten in Modellparametern als Vervielfältigung gewertet (Urteil vom 2025-11-11, Az. 42 O 14139/24, nicht rechtskräftig) [Quelle: https://www.lto.de/recht/nachrichten/n/42o1413924-lg-muenchen-i-gema-openai-chatgpt-songtexte-ki, abgerufen 2026-10-22].
-  - Annahme, Gegenmittel:
-    - Die Spezifikation enthält keinen Code und nicht die Bezeichner und die Reihenfolge des Originals.
-    - Der Implementierer sieht nur die Spezifikation.
-    - Eine Ähnlichkeitsprüfung gegen das Original läuft danach.
-    - Der Cleanroom gilt nur für Formate ohne öffentlichen Standard.
-- **Kopierschutz ist ausgeschlossen:** CSS, AACS, BD+ und CPRM zu entschlüsseln oder entsprechende Werkzeuge zu verbreiten, verbieten § 95a UrhG und Art. 6 der Richtlinie 2001/29/EG [Quelle: https://www.gesetze-im-internet.de/urhg/__95a.html, abgerufen 2026-10-22]. Ein Cleanroom ändert daran nichts. Verschlüsselte VOB-Dateien roh zu kopieren, ohne zu entschlüsseln, ist nach Annahme zulässig. Eine Entscheidung dazu fand die Recherche nicht (Lücke).
-
-### Quellenweg je Funktion
-
-Wege:
-- (a) eigene Umsetzung nach öffentlichem Standard;
-- (b) Übernahme permissiven Codes;
-- (c) Cleanroom;
-- (d) ausgeschlossen.
-
-Die Zuordnung ist ein Vorschlag aus den Belegen oben.
-
-| Funktion | Weg | Grund |
-|---|---|---|
-| Laufwerkszugriff: SPTI unter Windows, SG_IO unter Linux | (b) für die Strukturen, (a) für die MMC-Befehle | `windows-sys` ist MIT oder Apache-2.0 |
-| TOC, Tracks, Sessions, Sektormodi, Rohsektoren | (a) | ECMA-130 und ECMA-168 sind frei |
-| ISO 9660, Joliet, Rock Ridge, El Torito | (a), mit `hadris-iso` als Vergleich | Annahme: Für beschädigte Discs braucht es einen fehlertoleranten Leser |
-| UDF 1.02 bis 2.60 | (a) | ECMA-167 und ECMA TR/112 sind frei; die Crates decken nicht alle Fassungen ab |
-| Audio-Tracks als WAV, CD-Text | (a) | READ CD und Unterkanal nach ECMA-130. Abstimmung über Mehrfachlesen statt cdparanoia-Code (GPL/LGPL) |
-| Abbilder ISO, BIN/CUE | (a) oder (b) mit `cue-rw` | einfache Formate |
-| CHD, HFS+ | (b) | `chd` (BSD-3-Clause), `hfsplus` (MIT) |
-| Eigenes Rettungsabbild mit Fehlerkarte | (a) | Die Fehlerkarte ist eine Idee, kein Ausdruck (§ 69a Abs. 2 UrhG); kein ddrescue-Code |
-| Verlorene Dateien, Signatursuche | (a) | Heuristiken auf den freien Strukturen von ECMA-119 und ECMA-167 |
-| NRG, MDS/MDF, CCD, CDI, klassisches HFS, IBP/IBQ, Mount Rainier | (c) | ohne öffentliche Beschreibung; IBP/IBQ nur aus Beispieldateien, nie aus IsoBuster selbst |
-| Entschlüsseln von CSS, AACS, BD+, CPRM | (d) | § 95a UrhG |
-
-### Rohzugriff je Plattform
-
-- **Windows:**
-  - Ein SCSI-Durchgriff braucht laut Microsoft keine Administratorrechte, wohl aber Lese- und Schreibzugriff auf das Gerät [Quelle: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddscsi/ni-ntddscsi-ioctl_scsi_pass_through, abgerufen 2026-10-22].
-  - Ein Volume direkt zu öffnen verlangt Administratorrechte [Quelle: https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew, abgerufen 2026-10-22].
-  - Lücke: ob das auch für ein optisches Laufwerk gilt und welche Rechte ein Standardnutzer auf `\\.\CdRom0` hat.
-- **Linux:**
-  - systemd gibt der angemeldeten Person über `uaccess` Zugriff auf `/dev/sr0` und das zugehörige sg-Gerät [Quelle: https://third-party-mirror.googlesource.com/systemd/+/refs/heads/master/rules.d/70-uaccess.rules.in, abgerufen 2026-10-22].
-  - Lesebefehle wie READ CD und READ TOC sind über SG_IO auch ohne root erlaubt [Quelle: https://gbmc.googlesource.com/linux/+/refs/heads/master/drivers/scsi/scsi_ioctl.c, abgerufen 2026-10-22; Zusammenfassung des Abrufwerkzeugs].
-- **Android:** `vold` bindet optische Laufwerke nicht ein (siehe P11).
-  - Ginge es über die USB-Host-API, müsste das Programm Transport und MMC-Befehle selbst sprechen. Dafür braucht es eine Zustimmung je Gerät [Quelle: https://developer.android.com/develop/connectivity/usb/host, abgerufen 2026-10-22].
-  - Die Bibliothek libaums kann nur FAT32 [Quelle: https://github.com/magnusja/libaums, abgerufen 2026-10-22].
-  - Abbilddateien (ISO, BIN/CUE, CHD) dagegen ließen sich auch auf Android öffnen. Annahme: Die Leser sind plattformneutral.
-
-### Urteil P12
-
-- **Gesamt:** umsetzbar unter Windows und Linux, als eigener Strang mit großem Umfang. Die meisten Teile gehen nach öffentlichen Standards (Weg a). Ein Cleanroom ist nur für die Formate ohne öffentliche Beschreibung nötig, Entschlüsseln ist ausgeschlossen.
-- **Stufe 1:** Discs und Abbilder (ISO, BIN/CUE) als Orte im Explorer. Alle Sessions und Tracks sowie Dateien, die das System nicht zeigt, etwa aus alten Sessions.
-- **Stufe 2:** Rettung beschädigter Discs mit Fehlerkarte und Fortsetzen, verlorene Dateien, Signatursuche.
-- **Stufe 3:** Audio-Tracks und die weiteren Abbildformate (CHD, HFS+ über (b), die übrigen über (c)).
-- **Android:** Abbilder ja, Laufwerke nein.
+- **Bestand** (Befund): Es gibt keinen eigenen Disc-Zugriff, keinen Leser für ISO 9660 oder UDF und kein Abbildformat (Suche wie unter P11).
+- **Weg** (Vorgabe des Nutzers, bewusst einfach gehalten): Umsetzung potentiell wie bei IsoBuster, oder Übernahme von dessen Komponenten.
+- **Hinweis zur Übernahme:** Die EULA von IsoBuster verbietet, Teile der Software zu nutzen („You may not modify, use parts, reverse engineer, decompile, or disassemble the Software“) [Quelle: https://www.isobuster.com/eula.php, abgerufen 2026-10-22]. Eine Übernahme von Komponenten braucht daher eine Vereinbarung mit dem Hersteller. Lücke: ob der Hersteller Komponenten lizenziert.
 
 ## P13 Agenten-Einbindung mit Updates aktualisieren
 
@@ -423,40 +314,61 @@ Drei aufeinander aufbauende Stufen:
 
 Umsetzbar, mittel. Den Engine-Baustein gibt es für Remote-Ziele schon. Neu sind die lokale Regel, die Abfrage mit Vorschau auf Desktop, se Desktop und Android sowie die Option für Terminal und MCP.
 
+## P15 se Desktop: Ordner im se Explorer öffnen
+
+### Bestand
+
+- **Doppelklick und Enter** auf ein Element der Fläche (Befund): Sie laufen über `activate` (`N/app/core/desktop_surface_menu_ui.rs:59-80`).
+  - Eine Datei oder ein Ordner der Fläche wird zu `OpenRequest::File` (`N/desktop/os/shared/open_target.rs:155-161`).
+  - `launch` gibt Dateien und Ordner an das System (`:180-197`). Unter Linux geht das über das Portal, `gio launch` oder `xdg-open` (`N/app/core/desktop_surface_actions.rs:116-130`), sonst an die Standardanwendung.
+  - Ein Ordner öffnet damit im Dateimanager des Systems.
+- **Kontextmenü** einer Datei oder eines Ordners (Befund): „Öffnen“ und „Öffnen mit …“, beide über das System (`N/app/core/desktop_surface_menu_ui.rs:165-170`).
+- **Tresore und Geräte** öffnen dagegen im eigenen Fenster, über den Startauftrag `StartRequest::OpenLocation` (Tresore: `open_target.rs:125-129`).
+  - Für Geräte wählt die Einstellung „Geräte öffnen mit“ den Weg (`open_devices_with`, Vorgabe `App`, `N/desktop/core/config.rs:146,164`). Im Terminal geht das über `se desktop config` (`docs/oberflaechen/desktop-launcher.md`, Zeile O4).
+- **„Papierkorb“ und „Dieser PC“** gehen als Shell-Ordner an das System (`open_target.rs:150-153`).
+- **Android** (Befund): Der se Launcher kennt die Elementarten `app`, `shortcut`, `folder`, `widget`, `seDevice`, `seRoom`, `seVault`, `seScreens`, `seAddDevice` und `seJoinRoom` (`A/launcher/model/LayoutModel.kt:21-31`). Dateien und Dateiordner gibt es dort nicht. Annahme: `folder` ist ein Launcher-Ordner für Apps.
+
+### Weg
+
+- **Ordner öffnen im se Explorer:** Ein Ordner der Fläche öffnet als Fenster des se Explorers, über den Startauftrag „Ort öffnen“ mit dem Ordnerpfad, wie schon Tresore und Geräte. Annahme: Der Startauftrag nimmt einen lokalen Pfad an.
+- **Unverändert:** Dateien öffnen weiter mit ihrer Standardanwendung. „Papierkorb“ und „Dieser PC“ bleiben beim System.
+- **Systemweg bleibt erreichbar:**
+  - Im Kontextmenü über „Öffnen mit …“ und über einen Eintrag „Im Explorer öffnen“ bzw. „Im Dateimanager öffnen“. Die Beschriftung gibt es schon (`desktop_surface_menu_ui.rs:51-57`).
+  - Über eine Einstellung „Ordner öffnen mit“ neben „Geräte öffnen mit“: Smart Explorer als Vorgabe, oder der Dateimanager des Systems. Sie steht in den Einstellungen, in `se desktop config` und über MCP mit dem Werkzeug `se`.
+- **Android:** entfällt.
+
+### Urteil P15
+
+Umsetzbar, klein.
+
 ## Plattformprüfung
 
 | Punkt | Desktop Windows | Desktop Linux | Android | Terminal und MCP |
 |---|---|---|---|---|
 | P10 | Ereignisse und Neulesen | neue Datenträgerliste über UDisks2 | laut Code live; am Gerät prüfen | nicht betroffen (keine Laufwerksliste) |
-| P11 | ein Leser, eigener Leseweg statt `CopyFile2` | ein Leser; Lage über eigenes Lesen des Dateisystems | entfällt, `vold` bindet `sr` nicht ein | Annahme: `se cp` nutzt dieselbe Engine und damit dieselbe Regel |
-| P12 | Laufwerke und Abbilder | Laufwerke und Abbilder | nur Abbilder | Befehle und Werkzeuge für Disc und Abbild (Annahme: neue Unterbefehle) |
+| P11 Stufe 1 | ein Leser, eigener Leseweg statt `CopyFile2` | ein Leser | entfällt, `vold` bindet `sr` nicht ein | Annahme: `se cp` nutzt dieselbe Engine und damit dieselbe Regel |
 | P13 | Updater frischt auf (A). Laufende `se.exe` umbenennen (B, Annahme) | Updater und `se update` frischen auf (A). Ersetzen per Umbenennen gibt es schon (B) | entfällt, Android hat kein `se mcp` (`docs/AI_AGENT_PLUGIN.md`, Abschnitt Grenzen) | betrifft `se mcp` selbst |
 | P14 | Abfrage mit Vorschau, auch im se Desktop | Abfrage mit Vorschau, auch im se Desktop | bestehender Dialog, erweitert um Ordner | Option statt Abfrage (E10) |
+| P15 | Doppelklick öffnet den se Explorer | Doppelklick öffnet den se Explorer | entfällt, der se Launcher zeigt keine Dateien | Einstellung über `se desktop config` |
 
 ## Entscheidungen vor einer Umsetzung
 
-Die Nummern setzen E1 bis E6 der Notiz zu Fernzugriff und Desktop fort.
+Die Nummern setzen E1 bis E6 der Notiz zu Fernzugriff und Desktop fort. E7 und E8 (Quellenweg und Umfang von P12) entfallen, weil P12 zurückgestellt ist.
 
-- **E7, Quellenweg für P12.** Vorschlag:
-  - (a) vor (b) vor (c);
-  - kein GPL- und kein LGPL-Code;
-  - Cleanroom nur für NRG, MDS/MDF, CCD, CDI, klassisches HFS, IBP/IBQ und Mount Rainier, mit getrennten Agenten, einer Spezifikation ohne Code und Bezeichner des Originals, und einer Ähnlichkeitsprüfung;
-  - Entschlüsseln ausgeschlossen.
-- **E8, Umfang von P12 im nächsten Lauf:** Stufe 1; Stufe 1 und 2; oder alle drei Stufen.
 - **E9, Stufen von P13:** A; A und B; oder A, B und C. Vorschlag: A und B.
 - **E10, Terminal und MCP bei P14.** Zwei Möglichkeiten:
   - Das heutige Zusammenführen in einen ausdrücklich genannten Zielordner bleibt Voreinstellung, und die Option kommt dazu. Das ist der Vorschlag, weil der Zielname dort getippt wird.
   - Der Zusatz wird neue Voreinstellung, wie in den Fenstern.
 - **E11, Reihenfolge im nächsten Lauf.** Vorschlag:
-  1. P10, P13 und P14;
-  2. P11 Stufe 1 nach der Messung;
-  3. P12 als eigener Strang, mit den Stufen 2 und 3 von P11.
+  1. P10, P13, P14 und P15;
+  2. P11 Stufe 1 nach der Messung.
+
+  P12 und die Stufen 2 und 3 von P11 bleiben draußen.
 
 ## Abhängigkeiten
 
-- P11 Stufe 2 und Stufe 3 brauchen den Dateisystemleser und den Rohzugriff aus P12. Das gilt für die Lage unter Linux und unter CDFS sowie für die Fehlerkarte.
+- P11 Stufe 2 und Stufe 3 brauchen den Dateisystemleser und den Rohzugriff aus P12 und ruhen deshalb mit P12.
 - P13 Stufe C braucht Stufe B.
-- P12 zeigt Discs als Orte. Annahme: Unter Linux braucht das die Datenträgerliste aus P10.
 
 ## Lücken
 
@@ -470,14 +382,11 @@ Die Nummern setzen E1 bis E6 der Notiz zu Fernzugriff und Desktop fort.
    - Cache von CDFS und UDFS unter Windows;
    - Wiederholungen und Zeitlimit von `cdrom.sys`;
    - ob `cdfs.sys` `FSCTL_GET_RETRIEVAL_POINTERS` kennt.
-4. **P12:**
-   - Rechte eines Standardnutzers auf `\\.\CdRom0` und auf `\\.\D:` eines optischen Laufwerks;
-   - der Text von MMC-6, den T10 nur für Mitglieder bereithält;
-   - Beschreibungen von NRG, MDS/MDF, CCD, CDI, IBP/IBQ und Mount Rainier;
-   - Rechtsprechung zum rohen Lesen verschlüsselter Sektoren und zum KI-Cleanroom.
+4. **P12:** ob der Hersteller von IsoBuster Komponenten lizenziert.
 5. **P13:**
    - wann Codex seine MCP-Konfiguration liest;
    - Konfigurationsweg und erste Version des Schalters `mcp_tool_list_changed`;
    - ob Claude Code `list_changed` in der aktuellen Version zuverlässig übernimmt;
    - ob Windows das Umbenennen einer laufenden `se.exe` erlaubt.
 6. **P14:** welche Ebene bei „Ordnerstruktur erhalten“ den Zusatz bekommt.
+7. **P15:** ob der Startauftrag „Ort öffnen“ einen lokalen Ordnerpfad annimmt.
