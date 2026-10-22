@@ -10,6 +10,7 @@ Nachträge vom 2026-10-22, getrennt von der Rückmeldung zu Fernzugriff und se D
 - P14 und P15 kamen danach ohne Zeitangabe. Zu P15 sagte der Nutzer „noch nicht umsetzen“. Annahme: beide gehören in den nächsten Lauf und sind bis dahin nur dokumentiert;
 - P16 bis P20 kamen danach als Zusätze, ebenfalls ohne Zeitangabe. Annahme: nächster Lauf, bis dahin nur dokumentiert;
 - P21 ist ein Fehlerbild mit Frage: Gibt es schon eine Lösung? Wenn nicht, ist es ein weiterer Punkt, mit der Vorgabe A (ohne Abfrage) vor B (Häkchen „immer“);
+- P25 stellt den Auftrag E10 vom 2026-10-17 richtig: Windows-Einbindung ohne Fremdtreiber; Dokany bleibt, bis der andere Weg funktioniert. Annahme: als eigener Strang im nächsten Lauf;
 - P22 bis P24 sind weitere Fehlerbilder und Wünsche ohne Zeitangabe. Annahme: nächster Lauf. Für P22 bekam der Nutzer zusätzlich eine Anleitung für das eigene Gerät; sie steht nicht in diesem Repository;
 - noch nichts umsetzen. Wie bei P1 bis P9: einschätzen, ob und wie jeder Punkt umsetzbar ist, ohne konkrete Implementierungsplanung und ohne Fehlersuche.
 
@@ -29,6 +30,7 @@ Die Punkte stehen als Zeilen in `docs/TODO.md`:
 - `LAUFWERK-RESTEINTRAG`
 - `LAUFWERK-PLATZ`
 - `LESERECHTE-NUR-NEU`
+- `WINDOWS-OHNE-FREMDTREIBER`
 
 Kennzeichnung:
 - **Befund** = im Code oder in der Doku dieses Repositorys nachgelesen, Stand 0.5.184 (Commit `66cf09db`), mit `Datei:Zeile`.
@@ -59,6 +61,7 @@ Pfadkürzel: `N/` = `native/src/`, `A/` = `android/app/src/main/java/app/smartex
 | P22 | Bei jedem Start meldet ein Fehler „Laufwerk nach Daemon-Neustart zur Wiederherstellung bereit; bitte erneut versuchen“ für einen Laufwerkseintrag mit offenen Änderungen, hinter dem kein Laufwerk mehr steht |
 | P23 | Ein eingebundenes Laufwerk zeigt unter „Dieser PC“ den freien und den gesamten Platz der eigenen Festplatte |
 | P24 | Nach dem Anfragen von Leserechten für Admin-Bereiche sollen nur diese Bereiche neu gelesen werden |
+| P25 | Ursprünglicher Auftrag richtiggestellt: unter Windows weg von Fremdtreibern hin zu Windows-eigenen Mitteln, nach dem Prinzip von Cryptomator mit mehreren Einhängewegen. Freie Projekte als Referenz oder Umsetzung nach der Doku. Dokany bleibt, bis der andere Weg funktioniert |
 
 Die Frage „Werden Remotes noch über Dokany eingebunden?“ ist kein Arbeitspunkt. Die Antwort steht in `README.md:239-250` („Dokany bleibt“) und in `docs/oberflaechen/laufwerke.md:32`.
 
@@ -81,6 +84,7 @@ Die Frage „Werden Remotes noch über Dokany eingebunden?“ ist kein Arbeitspu
 | P22 | umsetzbar, klein bis mittel | Aktion „Änderungen sichern und entfernen“ | offene Änderungen dürfen nicht verloren gehen |
 | P23 | umsetzbar, mittel | Platz der Gegenseite melden, begrenzt durch den Zwischenspeicher | je Speicherart eine Abfrage; FTP ohne Standard |
 | P24 | umsetzbar, mittel | gesperrte Teilbäume vollständig merken, nach der Zustimmung nur sie neu lesen und einfügen | heutige Obergrenzen der Fehlerlisten (64, 100, 500) |
+| P25 | umsetzbar als großer Strang; vollständiger Ersatz nicht gesichert | Einhängeschnittstelle mit mehreren Wegen. Nach einer Probe am Gerät SMB auf anderem Port, WebDAV als Rückfall, Dokany bleibt | jeder Windows-eigene Weg hat eine Bedingung: 24H2, abgekündigter Dienst, nicht in Home oder kein Laufwerksbuchstabe |
 
 ## P10 Laufwerke erscheinen erst nach Neustart
 
@@ -684,6 +688,78 @@ Umsetzbar, mittel. Je Speicherart kommt eine Abfrage dazu.
 
 Umsetzbar, mittel.
 
+## P25 Windows-Einbindung ohne Fremdtreiber
+
+### Ursprung
+
+- **Auftrag vom 2026-10-17:** Er steht als E10 in `docs/plaene/2026-10-17-rechte-desktop-tresore/plan.md:24`, im Wortlaut: „you can also be inspired by how cryptomator plugs it's vault into the system and see if any of these could replace donkey and add reliability or not“.
+- **Damalige Auswertung:** Geprüft wurde, ob ein Cryptomator-Weg Dokany ersetzen und **zuverlässiger** sein kann. Ergebnis: „Nein, derzeit nicht“, Dokany bleibt (`docs/plaene/2026-10-17-rechte-desktop-tresore/strang-laufwerke.md:92-94`). Die Windows-eigenen Wege fielen heraus, weil sie keine Zuverlässigkeit bringen (`:92`, `:100`). Die Wiedervorlage `WINFSP-AB` zielt auf WinFsp, also selbst auf einen Fremdtreiber.
+- **Klarstellung des Nutzers am 2026-10-22:**
+  - Das Ziel ist, unter Windows ohne Fremdtreiber einzuhängen, nach dem Prinzip von Cryptomator mit mehreren Einhängewegen.
+  - Die Lizenz von Cryptomator ist egal, es geht nur um das Prinzip.
+  - Freie Projekte dürfen als Referenz dienen, oder die Umsetzung folgt der Doku.
+  - Dokany bleibt, bis der andere Weg funktioniert.
+- **Richtigstellung** (Befund aus `docs/refs/windows-dateisystem-frontends-2026-10-17.md:15`): Cryptomator bietet unter Windows zwei Wege. „WinFsp / WinFsp (Local Drive)“ ist ein Fremdtreiber, den Cryptomator mitinstalliert. „WebDAV (Windows Explorer)“ nutzt den Windows-eigenen Dienst WebClient.
+
+### Prinzip von Cryptomator
+
+- **Laden zur Laufzeit:** Die `integrations-api` lädt Einhängedienste zur Laufzeit (Java-ServiceLoader). Jeder Dienst hat diese Teile [Quelle: https://raw.githubusercontent.com/cryptomator/integrations-api/develop/src/main/java/org/cryptomator/integrations/mount/MountService.java, abgerufen 2026-10-22]:
+  - eine Eignungsprüfung `isSupported()`;
+  - einen Anzeigenamen;
+  - erklärte Fähigkeiten;
+  - einen Baustein, der einhängt.
+- **13 Fähigkeiten**, darunter Laufwerksbuchstabe, vorhandener Ordner, Loopback-Port, nur lesen und erzwungenes Aushängen [Quelle: https://raw.githubusercontent.com/cryptomator/integrations-api/develop/src/main/java/org/cryptomator/integrations/mount/MountCapability.java, abgerufen 2026-10-22].
+- **Auswahl:** zuerst der Dienst, den der Tresor bevorzugt, sonst der Standard der Anwendung. Der Einhängepunkt richtet sich nach den Fähigkeiten [Quelle: https://raw.githubusercontent.com/cryptomator/cryptomator/develop/src/main/java/org/cryptomator/common/mount/Mounter.java, abgerufen 2026-10-22].
+- **Rückfall:** Immer vorhanden ist „WebDAV (HTTP Address)“, also eine lokale WebDAV-Adresse [Quelle: https://docs.cryptomator.org/desktop/volume-type/, abgerufen 2026-10-22].
+- **Übertragen auf se** (Annahme):
+  - Einhängewege hinter einer Schnittstelle mit Eignungsprüfung und Fähigkeiten;
+  - Wahl je Laufwerk, sonst Standard;
+  - ein immer vorhandener Rückfall;
+  - Dokany ist einer dieser Wege.
+  - Zwischenspeicher, Journal und Wurzelprüfung liegen heute schon im gemeinsamen Teil (`N/mount/core/`, `N/daemon/os/shared/rooted_backend.rs`). Nur die Anbindung an Windows wechselt.
+
+### Windows-eigene Wege
+
+| Weg | Laufwerksbuchstabe | Voraussetzung | Grenzen | Freie Referenz |
+|---|---|---|---|---|
+| WebDAV über den Dienst WebClient | ja, mit `net use` | alle Windows 10 und 11. Microsoft führt den Dienst seit November 2023 als abgekündigt: „The Webclient (WebDAV) service is deprecated. The Webclient service isn't started by default in Windows.“ Einen Entfernungstermin gibt es nicht [Quelle: https://learn.microsoft.com/en-us/windows/whats-new/deprecated-features, abgerufen 2026-10-22] | Größe 50 MB als Standard, höchstens 4 GB; rund 1 000 Dateien je Ordner; 260 Zeichen Pfadlänge; Basic-Auth nur über HTTPS (Befund aus der Recherche vom 2026-10-17). Höhere Werte setzt man in der Registry; Annahme: das braucht Administratorrechte | `rclone serve webdav` (MIT) mit Windows-Anleitung [Quelle: https://rclone.org/commands/rclone_serve_webdav/, abgerufen 2026-10-22]; Crate `dav-server` (Apache-2.0 laut crates.io) |
+| Windows-SMB-Client auf anderem Port | ja: `NET USE X: \\server\share /TCPPORT:<Port>` | Windows 11 24H2 und neuer; Microsoft nennt Administratorrechte [Quelle: https://learn.microsoft.com/en-us/windows-server/storage/file-server/smb-ports, abgerufen 2026-10-22]. Eine Sicherheitsanalyse sagt, es gehe auch ohne [laut Suchergebnis: https://hacktricks.wiki/en/windows-hardening/windows-local-privilege-escalation/local-ntlm-reflection-via-smb-arbitrary-port.html] | Windows 10 und 11 23H2 fallen heraus. Ein eigener SMB2/3-Server muss signieren, denn ausgehende Signierung ist unter 24H2 Pflicht (laut Suchergebnis, gleiche Quelle). Loopback auf 127.0.0.1 ist nicht belegt | `rust-smb-server` (MIT, angelegt 2026) und `go-smb-server` (MIT, angelegt 2026); ob sie mit dem Windows-Client funktionieren, ist nicht belegt |
+| Windows-NFS-Client | ja: `mount -o anon \\127.0.0.1\share Z:` [Quelle: https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/mount, abgerufen 2026-10-22] | Optionale Komponente, laut Suchergebnis nicht in Windows Home; nur NFSv2 und NFSv3 [Quelle: https://learn.microsoft.com/en-us/windows-server/storage/nfs/nfs-overview, abgerufen 2026-10-22] | Die anonyme Nutzerkennung gilt für den ganzen Rechner; Groß- und Kleinschreibung nur mit `casesensitive`; keine Portoption | `nfsserve` (BSD-3-Clause, genutzt von `hf-mount`). Sein README nennt das Einhängen unter Windows „kinda works“, nur Windows 11 Pro [Quelle: https://github.com/xetdata/nfsserve, abgerufen 2026-10-22]; `go-nfs` (Apache-2.0) |
+| Cloud Files API | nein, nur ein Ordner, keine Laufwerkswurzel. Mit `subst` unbelegt | Windows 10 1709+, NTFS | feste 60-s-Frist je Rückruf. Einmal gelesene Dateien liegen als Klartext auf der Platte, bei Tresoren gegen deren Zweck (Annahme). se hatte die Registrierung schon einmal und entfernte sie in 0.5.29, weil das Öffnen brach (`docs/TODO.md`, Abschnitt CfAPI-Historie) | Microsoft-Beispiel CloudMirror (MIT) [Quelle: https://github.com/microsoft/Windows-classic-samples/tree/main/Samples/CloudMirror, abgerufen 2026-10-22]; Crate `cloud-filter` (MIT) |
+| ProjFS | nein, nur ein Ordner | optionale Komponente, Aktivierung mit Administratorrechten | laut Microsoft für schnelle Speicher gedacht | Beispiel RegFS in Windows-classic-samples (MIT) [Quelle: https://github.com/microsoft/Windows-classic-samples/tree/main/Samples/ProjectedFileSystem, abgerufen 2026-10-22]; ProjFS-Managed-API (MIT); VFSForGit (MIT) |
+
+### Weg
+
+- **Stufe 1, Schnittstelle:** eine Einhängeschnittstelle nach dem Prinzip oben. Dokany ist darin der erste Weg und bleibt Standard.
+- **Stufe 2, Machbarkeitsprobe am Gerät**, vor jeder Umsetzung:
+  - Hängt der SMB-Client unter Windows 11 24H2 einen eigenen Server auf 127.0.0.1 mit `/TCPPORT` als Laufwerk ein?
+  - Geht das ohne Administratorrechte?
+  - Wie verhalten sich Anmeldung und Signierung?
+  - Dasselbe für NFS unter Windows Pro.
+- **Stufe 3, erster Windows-eigener Weg.** Annahme, nach den Belegen oben:
+  - SMB auf anderem Port, falls die Probe trägt. Es ist der einzige Windows-eigene Weg mit Laufwerksbuchstaben ohne Größen- und Dateizahlgrenzen und ohne abgekündigten Dienst; gilt nur ab 24H2.
+  - WebDAV über WebClient als Rückfall für ältere Windows-Versionen, wie bei Cryptomator.
+  - NFS nur für Pro und Enterprise.
+  - Cloud Files API und ProjFS bringen keinen Laufwerksbuchstaben.
+- **Abnahme, bevor ein Weg Dokany ablöst:** dieselben Fälle wie in der Wiedervorlage T2 (`strang-laufwerke.md:96`):
+  - Speichern aus Office über Umbenennen;
+  - Start von Obsidian;
+  - `fs.realpathSync.native`;
+  - 25 000 Unterordner im Dialog „Speichern unter“;
+  - ein hängender Backend-Aufruf über 300 s;
+  - Auswerfen bei hängendem Fenster.
+- **Gemeinsamer Teil:** Die Wurzelprüfung aus P21 und die Platzanzeige aus P23 gelten für jeden Weg gleich, weil sie im gemeinsamen Teil liegen bzw. dort hingehören.
+
+### Urteil P25
+
+Umsetzbar als eigener, großer Strang. Ein Ersatz für Dokany auf allen Windows-Versionen ist mit den heutigen Belegen nicht gesichert. Jeder Windows-eigene Weg hat eine Bedingung:
+- SMB: nur ab 24H2;
+- WebDAV: abgekündigt und mit Grenzen;
+- NFS: nicht in Home;
+- Cloud Files API und ProjFS: kein Laufwerksbuchstabe.
+
+Dokany bleibt deshalb als Weg erhalten, bis ein anderer die Abnahme besteht. Den ersten Weg legt Entscheidung E13 fest.
+
 ## Plattformprüfung
 
 | Punkt | Desktop Windows | Desktop Linux | Android | Terminal und MCP |
@@ -702,6 +778,7 @@ Umsetzbar, mittel.
 | P22 | Aktion am Laufwerkseintrag | dasselbe | entfällt, keine Laufwerke | neuer Befehl |
 | P23 | Platz für Dokany | Platz für FUSE | Lücke: Platzangabe des Dokumentanbieters | entfällt |
 | P24 | Explorer-Ansicht und Speicheranalyse | entfällt, keine Anfrage in der App | entfällt, keine Anfrage in der App | entfällt |
+| P25 | Einhängeschnittstelle, neue Wege neben Dokany | FUSE bleibt; die Schnittstelle gilt auch dort (Annahme) | entfällt, keine Laufwerke | `se drive mount` bekommt die Wahl des Wegs (Annahme) |
 
 ## Entscheidungen vor einer Umsetzung
 
@@ -715,10 +792,15 @@ Die Nummern setzen E1 bis E6 der Notiz zu Fernzugriff und Desktop fort. E7 und E
   1. P10, P15, P16, P17, P21 und P22;
   2. P13 und P14;
   3. P18 bis P20 als ein Strang „Einstellungen“;
-  4. P11 Stufe 1 nach der Messung, P23 und P24.
+  4. P11 Stufe 1 nach der Messung, P23 und P24;
+  5. P25 als eigener Strang, beginnend mit der Machbarkeitsprobe am Gerät.
 
   P12 und die Stufen 2 und 3 von P11 bleiben draußen.
 - **E12, Gliederung der Einstellungen (P18).** Vorschlag aus P18: Dieses Gerät, Geräte (je Gerät alle Rechte), Räume, die übrigen Bereiche, zuletzt Diagnose und Protokolle.
+- **E13, erster Windows-eigener Weg (P25).** Vorschlag:
+  - SMB auf anderem Port, wenn die Probe unter 24H2 trägt;
+  - WebDAV über WebClient als Rückfall für ältere Windows-Versionen;
+  - Dokany bleibt Standard, bis ein Weg die Abnahme besteht.
 
 ## Abhängigkeiten
 
@@ -759,3 +841,10 @@ Die Nummern setzen E1 bis E6 der Notiz zu Fernzugriff und Desktop fort. E7 und E
     - welche Anzeige gewünscht ist, wenn der Speicher keinen Platz meldet;
     - die Belege für die Abfragen je Speicherart;
     - die Platzangabe des Android-Dokumentanbieters.
+15. **P25:**
+    - ob WebClient in Windows 11 24H2 und 25H2 noch ausgeliefert wird, mit welchem Starttyp, und wann Microsoft ihn entfernt;
+    - ob `/TCPPORT` ohne Administratorrechte geht und ob ein eigener Server auf 127.0.0.1 bedient wird;
+    - ob die jungen SMB-Bibliotheken mit dem Windows-Client funktionieren;
+    - die Editionsliste des NFS-Clients, sein Administratorbedarf und seine Ports 111 und 2049;
+    - die Cloud Files API unter `subst`;
+    - die Lizenzdatei von `dav-server`.
