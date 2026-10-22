@@ -423,11 +423,17 @@ pub(super) fn validate_persisted_timestamp(
     validate_timestamp_interval(timestamp, expires_at)
 }
 
+/// A receipt carries its signer's clock with the end of the envelope it
+/// confirms, which the other device set by its own clock. Clocks that differ
+/// by up to the tolerated skew make that span up to the skew longer than any
+/// envelope's lifetime, so the skew is allowed here as well.
 fn validate_timestamp_interval(timestamp: i64, expires_at: i64) -> Result<(), DirectProtocolError> {
     if timestamp < 0 || expires_at <= timestamp {
         return Err(DirectProtocolError::InvalidTimestamp);
     }
-    if expires_at.saturating_sub(timestamp) > MAX_TRACKED_DIRECT_ENVELOPE_LIFETIME_SECS {
+    if expires_at.saturating_sub(timestamp)
+        > MAX_TRACKED_DIRECT_ENVELOPE_LIFETIME_SECS + MAX_TRACKED_DIRECT_CLOCK_SKEW_SECS
+    {
         return Err(DirectProtocolError::LifetimeExceeded);
     }
     Ok(())
