@@ -43,6 +43,7 @@ Pfadkürzel: `N/` = `native/src/`, `A/` = `android/app/src/main/java/app/smartex
 | P28 | Nachtrag 2026-10-24: „warum läuft das streaming via relay, zumindest laut statistik. ich hätte gerne alles immer per default direkt wenn möglich und relay nur als fallback klar makiert. erst wenn möglich via selben lan, wlan netz, etc.“ Präzisiert: „also relay auch nicht direkt nach lan/wlan … das ist das kernprinzip dieses se programms, so wenig wie möglich zwischen A und B, server als router nur und relay als fallback“ |
 | P29 | Nachtrag 2026-10-24: „via se sollten auch pins verarbeitet werden können“ |
 | P30 | Nachtrag 2026-10-24: „selbes in überarbeitung mit anzeigequalität, das skalieren bei einpassen ist schrecklich unscharf als, obwohl das gestreamte bild mehr hergibt. ich frage mich grad auch ob das streaming auf eine bestimmte bildgröße/auflösung begrenzt ist, währe mir nicht recht“ |
+| P31 | Nachtrag 2026-10-24 (getippt): „ist es sinnvoller und machbarer, auch über ose hinweg, die datenpakete die zum rendern des fensters bei dem remote gerät führen, direkt zu streamen statt das fertige fenster als video“ |
 
 ## Übersicht
 
@@ -63,6 +64,7 @@ Pfadkürzel: `N/` = `native/src/`, `A/` = `android/app/src/main/java/app/smartex
 | P28 | umsetzbar, mittel bis groß | Für alle Datenwege: LAN/WLAN zuerst, dann die übrigen Direktwege, Relay erst als letzter, sichtbar gekennzeichneter Rückfall; der Server nur als Vermittler | se überlässt die Wegwahl heute Iroh; ob ein Direktweg zustande kommt, hängt an NAT und Firewall beider Seiten (Annahme) |
 | P29 | umsetzbar, klein | `se`-Befehle zum Auflisten angebotener Geräte und zum Koppeln mit PIN; der Hintergrunddienst kann das schon | keine bekannt |
 | P30 | umsetzbar, mittel | hochwertige Skalierung im Betrachter; Auflösungsgrenzen anheben und die Qualitätsleiter für Schrift auslegen | Grenzen der Encoder (H.264-Level, OpenH264 bis 3840×2160) |
+| P31 | Zeichendaten über Betriebssysteme hinweg für beliebige Programme nicht machbar; Video und Kacheln bleiben der allgemeine Weg | Videostrom und Kacheln je Fenster, ergänzt um Verschiebe- und Änderungsbereiche und um verlustfreie Schriftbereiche; RDP RemoteApp als eigener Darstellungsweg zwischen Windows-Geräten (E2) | Es gibt keinen gemeinsamen Abgriffpunkt für Zeichenbefehle fremder Programme |
 
 ## P1 Anmeldung über die Fernverbindung
 
@@ -469,6 +471,45 @@ Stand: Nur dokumentiert. Der Nutzer schrieb dazu: „nur dass es klar ist, noch 
   - 4:4:4, wo Encoder und Decoder es können. Lücke.
 - **Oberflächen:** Desktop-Betrachter (beide Wege), Android-Betrachter, Gruppenansicht, `se screen view`.
 
+### P31 Fensterinhalt: Video oder Zeichendaten
+
+**Frage des Nutzers (2026-10-24):** Ob es sinnvoller und machbarer ist, statt des fertigen Fensters als Video die Daten zu streamen, aus denen das Fenster gerendert wird, sodass das andere Gerät selbst rendert. Der Nutzer dazu:
+- „Über Windows-Geräte hinweg … könnte man durchaus das Bauen machen. Das ist ja dasselbe OS. Über unterschiedliche OS-Seiten könnte es schwierig werden.“
+- „ob man das überhaupt abgreifen kann bei Linux, bei Windows, ob und wie man das abgreifen kann“.
+- Zum Vorgehen: „Wahrscheinlich schon, weil das definitiv auf Anhieb funktioneller ist“.
+- „Die Verbesserungen beim Streaming sind trotzdem noch gewünscht“.
+
+**Quellen (abgerufen am 2026-10-24):**
+- **RDP mit Zeichenbefehlen:** Laut [MS-RDPEGDI] verringern die GDI-Erweiterungen von RDP die Bandbreite „by encoding the drawing operations that produce an image instead of encoding the actual image“ (https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpegdi/745f2eee-d110-464c-8aca-06fc1814f6ad).
+- **RDP mit Bilddaten:** Daneben gibt es die Grafik-Pipeline [MS-RDPEGFX]. Sie „is used to encode graphics display data generated in a remote terminal server session“, die der Client dekodiert und darstellt (https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpegfx/da5c75f9-cd99-450c-98c4-014a496942b0). Microsoft hat also beide Wege. Lücke: welcher heute für welchen Inhalt gilt.
+- **Windows:** „Windows 8 disables standard Windows 2000 Display Driver Model (XDDM) mirror drivers and offers the desktop duplication API instead.“ Die Desktop Duplication liefert Bilder und dazu Änderungs- und Verschiebebereiche (`GetFrameDirtyRects`, `GetFrameMoveRects`). Bei Verschiebebereichen muss nur übertragen werden, wohin Bildpunkte wandern (https://learn.microsoft.com/en-us/windows/win32/direct3ddxgi/desktop-dup-api).
+- **Wayland:** Die Wayland-FAQ verneint Netzwerktransparenz: „No, that is outside the scope of Wayland“. Fernzugriff gehe über einen Server darauf, etwa RDP oder VNC, oder über waypipe (https://wayland.freedesktop.org/faq.html).
+  - Die Seite von waypipe war beim Abruf durch einen Bot-Schutz gesperrt. Lücke: ihr eigener Wortlaut zur Übertragung von Puffern.
+
+**Befund, Bestand:**
+- Der Kachelcodec überträgt verlustfrei nur geänderte 64×64-Kacheln (`N/screen/core/tiles_codec.rs:1-6`).
+- Verschiebebereiche der Desktop Duplication nutzt se nicht. Die Suche nach `MoveRects` und `DirtyRects` unter `N/screen/` fand nichts.
+
+**Einordnung (eigene):**
+- **Zwischen verschiedenen Betriebssystemen:** für beliebige Programme nicht machbar.
+  - Zeichenbefehle unterscheiden sich je System und Toolkit: GDI, Direct2D und Direct3D unter Windows; X11, Cairo, Skia, OpenGL und Vulkan unter Linux; Skia unter Android (Annahme für die Toolkit-Liste).
+  - Einen öffentlichen Abgriffpunkt für die Zeichenbefehle fremder Programme gibt es unter Windows seit dem Ende der Mirror-Treiber nicht mehr (Quelle oben).
+  - Unter Wayland kommen Fensterinhalte als fertig gerenderte Puffer an (Quelle oben).
+- **Zwischen Windows-Geräten:** Die Wiedergabe mit Zeichenbefehlen gibt es dort als RDP selbst.
+  - Der machbare Weg ist RDP oder RemoteApp über Windows' eigenen Server, also E2 (zweiter Weg RDP) aus P1, auf Pro- und Enterprise-Hosts.
+  - Ein eigener Abgriff in fremden Programmen wäre Einhaken in Prozesse, also unzuverlässig und sicherheitlich heikel (Annahme).
+- **X11 nach X11:** Weiterleitung auf Protokollebene wirkt nur für Programme, die darunter gestartet wurden. Das steht schon unter P4.
+- **Eigene Programme:** se läuft auf jedem Gerät. Die eigene Oberfläche rendert schon heute lokal mit den Daten des anderen Geräts, etwa beim Gerät als Ordner. Das ist für eigene Inhalte der Weg „rendern auf dem anderen Gerät“.
+- **Der allgemeine Weg** für fremde Programme bleibt der Strom je Fenster, wie in P4 geplant. Das deckt sich mit der Einschätzung des Nutzers, dass das „auf Anhieb funktioneller“ ist.
+
+**Weg:**
+- **P4:** Strom je Fenster wie geplant. Die Wahl des Darstellungswegs wird E14.
+- **Schon im Bildschirm-Batch (P27, P30):** die Verbesserungen, die den Vorteil von Zeichenbefehlen am meisten nachbilden:
+  - Unter Windows die Verschiebebereiche der Desktop Duplication übertragen, etwa beim Scrollen;
+  - nur Änderungsbereiche kodieren;
+  - Schrift und ruhende Bereiche verlustfrei als Kacheln, Bewegung als H.264, im selben Strom.
+- **Zwischen Windows-Geräten mit RDP-Host:** RemoteApp als eigener Darstellungsweg (E2), mit dem Strom je Fenster als Rückfall.
+
 ## Plattformprüfung
 
 | Mechanismus | Windows | Linux X11 | Linux Wayland | Android |
@@ -500,6 +541,12 @@ Verbindungsweg:
 - **E3:** Mehrere Android-Apps gleichzeitig als Fenster, nur mit Shell-Rechten (Shizuku). Die Einrichtung läuft über Wireless-Debugging (Annahme).
 - **E4:** Recht für den Programmstart: das bestehende Recht „Befehle“ oder ein eigenes Recht.
 - **E5:** Recht für den Anmeldebildschirm: ein eigenes Recht, getrennt von „Bildschirm steuern“ (Vorschlag).
+- **E14 (Nachtrag 2026-10-24, P31):** Darstellungsweg für Fernfenster. Vorschlag:
+  - Strom je Fenster mit Kacheln und Video als allgemeiner Weg;
+  - Verschiebe- und Änderungsbereiche sowie verlustfreie Schriftbereiche;
+  - RDP RemoteApp zwischen Windows-Geräten mit RDP-Host.
+
+  Zeichendaten über Betriebssysteme hinweg werden nicht verfolgt.
 - **E6:** Reihenfolge. Vorschlag:
   1. die kleinen Punkte P9, P2 und P3, sowie P7 nach der Messung;
   2. danach P6 und P1;
@@ -525,3 +572,4 @@ Verbindungsweg:
 - Ob ein mit `se exec` unter dem eigenen Konto gestartetes Programm unter Windows sichtbar in der Sitzung erscheint: nicht geprüft.
 - P27/P28: Protokolle der beiden beteiligten Geräte zum Zeitpunkt der Messung; ob iroh dort einen Direktweg versucht hat; Herstellerangaben zu ShadowPC.
 - P30: Level- und Größengrenzen je Encoder (Media Foundation, VA-API, MediaCodec); 4:4:4-Unterstützung der Decoder.
+- P31: Wortlaut der waypipe-Dokumentation zur Pufferübertragung (Abruf gesperrt); welche Inhalte RDP heute über Zeichenbefehle und welche über die Grafik-Pipeline überträgt.
