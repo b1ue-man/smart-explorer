@@ -10,6 +10,12 @@ Schneller Datei-Explorer mit tiefem Filtern, Remote-Backends, Sync, Peer-to-Peer
 Speicheranalyse – als Desktop-App (Windows, Linux; Rust + egui) und als Android-App
 (Kotlin/Compose über demselben Rust-Kern).
 
+**Kernprinzip der Verbindungen zwischen Geräten** (Nutzer, 2026-10-24: „so wenig wie möglich zwischen A und B, server als router nur und relay als fallback“):
+- Daten laufen direkt zwischen den Geräten. Das gilt für Dateien, Laufwerke, Sync, Befehle und Bildschirm.
+- Die Reihenfolge ist: gleiches LAN oder WLAN, dann die übrigen Direktwege, erst danach das Relay als sichtbar gekennzeichneter Rückfall.
+- Der Share-Server vermittelt nur Anwesenheit und Adressen.
+- Stand und Lücken: `docs/plaene/2026-10-22-fernzugriff-desktop/machbarkeit.md`, Abschnitt P28; Brettzeile `DIREKT-ZUERST`.
+
 ## Einstiege
 | Aufgabe / Frage | Anfangen bei |
 |---|---|
