@@ -841,6 +841,10 @@ Die Nummern setzen E1 bis E6 der Notiz zu Fernzugriff und Desktop fort. E7 und E
 - Bis dahin gelten die Vorschläge unten als vorläufige Richtung.
 - Eine Entscheidung, die die Sicherheit betrifft (E1, E2, E5), braucht vor der Festlegung eine eigene Sicherheitsprüfung in der Planung.
 
+**Stand 2026-10-24:** E11 ist im Batchplan `docs/plaene/2026-10-24-batches/batches.md` entschieden. Die übrigen Entscheidungen fallen in der Planung ihres Batches:
+- E9 und E10 in Batch 1;
+- E12 in Batch 3.
+
 - **E9, Stufen von P13:** A; A und B; oder A, B und C. Vorschlag: A und B.
 - **E10, Terminal und MCP bei P14.** Zwei Möglichkeiten:
   - Das heutige Zusammenführen in einen ausdrücklich genannten Zielordner bleibt Voreinstellung, und die Option kommt dazu. Das ist der Vorschlag, weil der Zielname dort getippt wird.
