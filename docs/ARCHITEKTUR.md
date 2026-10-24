@@ -16,6 +16,8 @@ Speicheranalyse – als Desktop-App (Windows, Linux; Rust + egui) und als Androi
 - Der Share-Server vermittelt nur Anwesenheit und Adressen.
 - Stand und Lücken: `docs/plaene/2026-10-22-fernzugriff-desktop/machbarkeit.md`, Abschnitt P28; Brettzeile `DIREKT-ZUERST`.
 
+**Langfristige Richtung:** Was auf einem Gerät möglich ist, soll auf allen verbundenen Geräten möglich werden. Die Ebenen und ihre Einordnung stehen in `docs/RICHTUNG.md`.
+
 ## Einstiege
 | Aufgabe / Frage | Anfangen bei |
 |---|---|

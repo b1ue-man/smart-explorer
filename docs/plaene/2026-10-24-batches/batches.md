@@ -75,6 +75,14 @@ Frühere Nutzervorgabe zu Modellen, vom 2026-10-19: „sonnet für implementieru
 - zentral, „Aufträge an Agenten: nur Produktionsauftrag, nie Vorgehen“, verbietet im Auftrag jede Dokumentations- und Berichtsform.
 - Vereinbar sind beide bei den Dateiflächen: Sie gehören nach zentral als „potentiell betroffene Dateien“ in den Auftrag.
 
+## Einwebungen aus der langfristigen Richtung
+
+Die Richtung des Projekts steht in `docs/RICHTUNG.md`. Ihre großen Teile gehören in keinen dieser Batches. Bei der Planung zu berücksichtigen sind vier kleine Einwebungen, Einzelheiten dort im Abschnitt „Einwebungen in die vorläufigen Batches“:
+- Batch 2: Kennwerte je Gerätepaar.
+- Batch 3: Rechte als Zeilen aus der Fähigkeitsliste.
+- Batch 4: Die Weiterleitung für RDP wird ein allgemeiner TCP-Baustein mit eigenem Recht.
+- Batch 5: Der Programmstart nimmt das Zielgerät als Parameter.
+
 ## Releases
 
 - Jeder Batch endet mit genau einem Release.
