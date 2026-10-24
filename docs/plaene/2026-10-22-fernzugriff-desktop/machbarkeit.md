@@ -412,6 +412,10 @@ Verbindungsweg:
 
 **Zuständigkeit (Nutzer, 2026-10-22):** Die Entscheidungen E1 bis E6 liegen beim Agenten. Sie fallen in Planung und Recherche des nächsten Laufs, nach dem Maßstab der bestmöglichen Umsetzung. Die Entscheidungen E1, E2 und E5 betreffen die Sicherheit und brauchen vor der Festlegung eine eigene Sicherheitsprüfung in der Planung.
 
+**Stand 2026-10-24:** E6 ist im Batchplan `docs/plaene/2026-10-24-batches/batches.md` entschieden. Die übrigen Entscheidungen fallen in der Planung ihres Batches:
+- E1, E2 und E5 in Batch 4;
+- E3 und E4 in Batch 5.
+
 - **E1:** Ein Windows-Systemdienst (LocalSystem) für Anmeldebildschirm, Sperrbildschirm, UAC und Strg+Alt+Entf. Dafür nötig sind eine Einrichtung mit Administratorrechten und ein eigenes Recht.
 - **E2:** RDP als zweiter Weg. Er sperrt auf Client-Windows den lokalen Bildschirm, gibt das Kontopasswort an den Host und fehlt unter Windows Home und Android. Offen: Systemclient zuerst oder gleich ein eingebetteter Client?
 - **E3:** Mehrere Android-Apps gleichzeitig als Fenster, nur mit Shell-Rechten (Shizuku). Die Einrichtung läuft über Wireless-Debugging (Annahme).
