@@ -39,6 +39,10 @@ Pfadkürzel: `N/` = `native/src/`, `A/` = `android/app/src/main/java/app/smartex
 | P7 | Das Streaming vom Handy zum Desktop schmiert zu stark |
 | P8 | Der Eindruck vom se Desktop kann noch von 0.5.183 stammen, als keine Verbindung zustande kam |
 | P9 | Eine Tastenkombination, um beim Streaming das Vollbild zu verlassen, wie die übliche Host-Taste von Fernzugriffsprogrammen |
+| P27 | Nachtrag 2026-10-24: „das musst du echt nich gründlicher überarbeiten. ich meine wie kann es sein dass ich via etwas wie shadowpc zum gleichen mit 20ms latenz und 7-8mbits pro sekunde verbunden bin und via se es bei 2000kbits maxed.“ |
+| P28 | Nachtrag 2026-10-24: „warum läuft das streaming via relay, zumindest laut statistik. ich hätte gerne alles immer per default direkt wenn möglich und relay nur als fallback klar makiert. erst wenn möglich via selben lan, wlan netz, etc.“ |
+| P29 | Nachtrag 2026-10-24: „via se sollten auch pins verarbeitet werden können“ |
+| P30 | Nachtrag 2026-10-24: „selbes in überarbeitung mit anzeigequalität, das skalieren bei einpassen ist schrecklich unscharf als, obwohl das gestreamte bild mehr hergibt. ich frage mich grad auch ob das streaming auf eine bestimmte bildgröße/auflösung begrenzt ist, währe mir nicht recht“ |
 
 ## Übersicht
 
@@ -55,6 +59,10 @@ Pfadkürzel: `N/` = `native/src/`, `A/` = `android/app/src/main/java/app/smartex
 | P7 | umsetzbar; Ursache vorher messen | Encoder-Einstellungen, Schlüsselbild bei Verlust, Bitrate passend zur Auflösung | Ursache unbekannt (Fehlersuche nicht beauftragt) |
 | P8 | Hinweis, kein Arbeitspunkt | Der Bestand von 0.5.184 ist unten unter P4 beschrieben | — |
 | P9 | umsetzbar, klein | Eine feste Ausstiegskombination mit mehreren Modifikatoren, Hinweis beim Eintritt; Vollbild auch im Android-Betrachter | Die Kombination darf nicht mit Fernprogrammen kollidieren |
+| P27 | umsetzbar, mittel | Relay-Deckel von 2 Mbit/s und Wachstum der Ratensteuerung überarbeiten; Startwerte und Qualitätsleiter nach Messung | Der Relay-Server verwirft über 1 MiB Warteschlange je Ziel; eine höhere Rate über das Relay braucht dort mehr Spielraum |
+| P28 | umsetzbar, mittel | Direktweg aktiv herstellen und halten, LAN-Adressen zuerst, Relay sichtbar als Rückfall kennzeichnen | Ob ein Direktweg zustande kommt, hängt an NAT und Firewall beider Seiten (Annahme) |
+| P29 | umsetzbar, klein | `se`-Befehle zum Auflisten angebotener Geräte und zum Koppeln mit PIN; der Hintergrunddienst kann das schon | keine bekannt |
+| P30 | umsetzbar, mittel | hochwertige Skalierung im Betrachter; Auflösungsgrenzen anheben und die Qualitätsleiter für Schrift auslegen | Grenzen der Encoder (H.264-Level, OpenH264 bis 3840×2160) |
 
 ## P1 Anmeldung über die Fernverbindung
 
@@ -390,6 +398,64 @@ Mit wachsendem Bedarf verbunden sind „wie lokal“, Zwischenablage (`SCREEN-ZW
 - **Urteil:** umsetzbar, klein.
 - **Oberflächen:** Desktop-Betrachter, Android-Betrachter, Tastenübersicht in `docs/oberflaechen/bildschirm.md`, `se screen view --fullscreen` (Doku).
 
+## Nachtrag 2026-10-24: Streaming-Rückmeldung (P27 bis P30)
+
+Stand: Nur dokumentiert. Der Nutzer schrieb dazu: „nur dass es klar ist, noch immer nicht starten mit der musetzung“. Die Befunde sind am Code von `be7a23d0` nachgelesen. Die Ursache im Einzelfall ist nicht gemessen, weil die Protokolle der beteiligten Geräte nicht vorliegen.
+
+### P27 Bitrate über das Relay
+
+- **Befund, Startwerte:** direkt 6 Mbit/s, über das Relay 2 Mbit/s (`N/screen/core/rate_control.rs:24-25`).
+- **Befund, Deckel:** Wechselt der Pfad von direkt auf Relay, setzt `set_path` beide Ziele auf höchstens 2 Mbit/s (`N/screen/core/rate_control.rs:238`). Danach wächst das Ziel nur über den Regler: um 8 % je Sekunde ohne Verzögerungsanstieg, um 5 % bei geringem Verlust (`:37`, `:40`).
+- **Befund, Warteschlange:** Auf dem Relay-Pfad dürfen höchstens 768 KiB unbestätigt unterwegs sein (`N/screen/core/pacing.rs:17`, `:32`). Grund ist, dass der Relay-Server oberhalb von 1 MiB je Ziel verwirft (`:14`).
+- **Folgerung (eigene):** 2000 kbit/s ist genau der Relay-Startwert. Die Statistik zeigt also, dass der Regler über das Relay nicht über den Start hinauskam. Ob Verzögerung, Verlust oder die Warteschlangengrenze das verhinderte, ist ohne Messung offen.
+- **Vergleich:** Die Angaben zu ShadowPC (20 ms, 7–8 Mbit/s) stammen vom Nutzer; Herstellerangaben sind nicht recherchiert.
+- **Weg:** zuerst P28, denn über einen Direktweg gilt der Deckel nicht. Danach Relay-Grenzen und Regler überarbeiten, also Startwert, Wachstum und Warteschlange im Relay-Server. Messen mit `se screen bench` direkt und über das Relay.
+
+### P28 Direkt zuerst, Relay als markierter Rückfall
+
+- **Befund, Pfadwahl:** Der Bildstrom übernimmt den ausgewählten Pfad der Verbindung. Ein Relay-Pfad heißt `relay`, jeder andere `direct`. Ohne ausgewählten Pfad gilt das Relay-Budget (`N/screen/core/gop_stream.rs:43-56`). Die Anzeige „relay“ in der Statistik heißt also: Die Verbindung lief zu diesem Zeitpunkt über das Relay, oder es war kein Pfad ausgewählt.
+- **Befund am Gerät des Nutzers:** Der neu gekoppelte Cloud-PC meldete als Direktkandidaten nur eine private Adresse. Gerätedaten stehen nicht hier.
+  - Annahme: Ohne öffentliche Adresse braucht ein Direktweg das Durchstoßen von NAT, und das kam nicht zustande.
+  - Lücke: ob und wann iroh den Direktweg dort versucht hat.
+- **Bestand LAN:** Die Anwesenheit im LAN über mDNS gibt es schon (`se share lan`). Lücke: ob eine Bildschirmverbindung LAN-Kandidaten bevorzugt.
+- **Weg:**
+  - Direktkandidaten in dieser Reihenfolge: gleiches LAN oder WLAN, öffentliche Adressen, Durchstoßen von NAT.
+  - Das Relay nur, solange kein Direktweg besteht; danach wechselt die Verbindung auf den Direktweg.
+  - Im Betrachter und in der Gruppenansicht deutlich „über Relay (Rückfall)“ anzeigen, nicht nur in der Statistik.
+  - Dasselbe gilt für Dateien und Laufwerke.
+- **Oberflächen:** Desktop-Betrachter, Android-Betrachter, Geräteseite, `se share status`, `se screen`, MCP über `se`.
+
+### P29 PIN-Kopplung im Terminal
+
+- **Befund:** `se share discoverable` macht nur das eigene Gerät auffindbar (`N/cli/share/discoverable.rs`). Ein Befehl zum Auflisten fremder Angebote und zum Koppeln mit PIN fehlt.
+- **Befund:** Der Hintergrunddienst nimmt beides schon an: `ListDiscoveries` und `StartDiscoveryExchange` mit PIN (`N/share/core/discovery_signal_types.rs:157-171`). Die Desktop-App nutzt das (`N/share/os/shared/discovery_events.rs:212`).
+- **Beleg im Betrieb:** Am 2026-10-24 ließ sich ein angebotenes Gerät auf diesem Weg mit PIN koppeln. Die Anfrage ging direkt an den Hintergrunddienst, weil `se` keinen Befehl dafür hat.
+- **Weg:**
+  - `se share discover list` und `se share discover pair <Eintrag>` mit `--pin-stdin` oder `--pin-prompt`, wie bei `discoverable`.
+  - Dazu `--json` und MCP über `se`.
+- **Urteil:** umsetzbar, klein.
+
+### P30 Anzeigequalität und Auflösungsgrenze
+
+- **Befund, Skalierung im Betrachter:** Beide Wege tasten das Bild mit einem einzelnen linearen Filter ab, ohne Mipmaps.
+  - CPU-Weg: `TextureOptions::LINEAR` (`N/app/core/screen_texture_cpu.rs:33`).
+  - GPU-Weg: ein Sampler mit demselben Filter für Vergrößern und Verkleinern, `mip_level_count: 1` (`N/app/core/screen_wgpu_yuv.rs:136`, `:233`).
+  - Folgerung (eigene): Beim Verkleinern auf die Fenstergröße fallen Bildpunkte aus, sodass Schrift ausfranst. Beim Vergrößern verschwimmt sie.
+- **Annahme:** H.264 mit 4:2:0-Farbunterabtastung macht farbige Schrift zusätzlich unscharf. Nicht geprüft.
+- **Befund, feste Grenzen:**
+  - Das Protokoll erlaubt höchstens 4096 Bildpunkte je Seite und 4096 × 2304 Bildpunkte insgesamt (`N/screen/core/pixel_convert.rs:14-26`). Größere Quellen werden verkleinert (`:117`).
+  - Der Software-Encoder OpenH264 kodiert höchstens 3840 × 2160 (`N/screen/os/shared/codec_inventory.rs:24`).
+- **Befund, Grenze nach Bitrate:** Die Qualitätsleiter rechnet mit 0,05 Bit je Bildpunkt (`N/screen/core/rate_control.rs:330`, `:355`). Sie senkt zuerst die Bildrate bis 10/s und dann die Größe in Schritten von × 0,75.
+  - Eigene Rechnung für 2 Mbit/s: 1920 × 1080 bleibt bei etwa 19 Bildern/s, 2560 × 1440 bei etwa 10 Bildern/s.
+  - 3840 × 2160 fällt auf 2160 × 1215 bei 10 Bildern/s.
+  - Bei niedriger Rate ist der Strom also kleiner als der Bildschirm.
+- **Weg:**
+  - Hochwertige Skalierung: Verkleinern mit Flächenfilter oder Mipmaps, Vergrößern bikubisch oder mit Lanczos, dazu eine Einstellung „pixelgenau“.
+  - Die Grenze 4096 dort anheben, wo der Encoder mehr kann. Lücke: die Level-Grenzen je Encoder.
+  - Für Desktop-Inhalt mit Schrift lieber die Bildrate als die Auflösung senken.
+  - 4:4:4, wo Encoder und Decoder es können. Lücke.
+- **Oberflächen:** Desktop-Betrachter (beide Wege), Android-Betrachter, Gruppenansicht, `se screen view`.
+
 ## Plattformprüfung
 
 | Mechanismus | Windows | Linux X11 | Linux Wayland | Android |
@@ -444,3 +510,5 @@ Verbindungsweg:
 - Android 14 und 15 vor QPR1 beim Sperren: nicht belegt.
 - Ursachen von P1 (Linux), P2 und P7: nicht gesucht, wie beauftragt.
 - Ob ein mit `se exec` unter dem eigenen Konto gestartetes Programm unter Windows sichtbar in der Sitzung erscheint: nicht geprüft.
+- P27/P28: Protokolle der beiden beteiligten Geräte zum Zeitpunkt der Messung; ob iroh dort einen Direktweg versucht hat; Herstellerangaben zu ShadowPC.
+- P30: Level- und Größengrenzen je Encoder (Media Foundation, VA-API, MediaCodec); 4:4:4-Unterstützung der Decoder.
