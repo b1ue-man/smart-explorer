@@ -841,7 +841,7 @@ Die Nummern setzen E1 bis E6 der Notiz zu Fernzugriff und Desktop fort. E7 und E
 - Bis dahin gelten die Vorschläge unten als vorläufige Richtung.
 - Eine Entscheidung, die die Sicherheit betrifft (E1, E2, E5), braucht vor der Festlegung eine eigene Sicherheitsprüfung in der Planung.
 
-**Stand 2026-10-24:** E11 ist im Batchplan `docs/plaene/2026-10-24-batches/batches.md` entschieden. Die übrigen Entscheidungen fallen in der Planung ihres Batches:
+**Stand 2026-10-24:** Für E11 steht ein vorläufiger Vorschlag im Batchplan `docs/plaene/2026-10-24-batches/batches.md`; festgelegt wird nach der Planung. Die übrigen Entscheidungen fallen nach dem Vorschlag in der Planung dieser Batches:
 - E9 und E10 in Batch 1;
 - E12 in Batch 3.
 
