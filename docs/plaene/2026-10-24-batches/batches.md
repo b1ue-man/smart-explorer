@@ -1,13 +1,13 @@
 # Nächste Läufe: Batches und Modelle (2026-10-24)
 
-**Status: vorläufiger Vorschlag.** Nichts ist begonnen. Der Zuschnitt unten ist ein erster Vorschlag. Die Batches werden erst nach der Planung festgelegt, die nach der Planungsvorgehensweise der Arbeitsweise läuft. Erst danach werden auch die Umsetzungsagenten zugeteilt (Abschnitt „Zeitpunkt der Agentenwahl“).
+**Status: vorläufiger Vorschlag.** Nichts ist begonnen. Der Zuschnitt unten ist ein erster Vorschlag. Die Batches werden erst nach der Planung festgelegt, die nach der Planungsvorgehensweise der Arbeitsweise läuft. Erst danach werden auch die Umsetzungsagenten zugeteilt (Abschnitt „Vorgehen und Agenten“).
 
 ## Auftrag
 
 Nutzer, 2026-10-24:
 - „fass die aufgaben in vernünftige batches zusammen und strukturiere sie sauber. danach wähle die entsprechenden models aus. das ziel im prinzip bleibt so wenig agents wie möglich. so viele wie nötig.“
 - Korrektur am selben Tag: „für planung gibt es eine bestimmte vorgehensweise in der arbeitsweise. der ist eigentlich zu volgen und erst danach kann man die umsetzungsagenten und batches wirklich zuteilen.“ Außerdem: „agentenwahl zur umsetzung erst nach der planung, agentenwahl zur detailplanung oder entwürfe erstellen erst nach dek ersten planungssvhritt. wenn wir umsetzung via sonnet machen, was an sich ok ist, will ich auch einen separaten opus am ende zur review der gesamtumsetzung vor tests, zur hoch kritisvhen review.“
-- Danach: „noch nicht starten“.
+- Danach: „noch nicht starten“ und „wat, das war definitiv nicht in diesem chat. nutz die arbeitsweise“.
 
 Grundlage sind zwei Machbarkeitsnotizen:
 - `docs/plaene/2026-10-22-fernzugriff-desktop/machbarkeit.md`: Punkte P1 bis P9, Entscheidungen E1 bis E6;
@@ -58,81 +58,22 @@ Die vorgeschlagene Reihenfolge ist 1, 2, 3, 4, 5, nacheinander. Sie ist der Vors
 - **Batch 3 vor Batch 4 und 5,** weil beide neue Rechte bringen, die auf die Geräteseite aus P18 gehören.
 - **Batch 5 zuletzt,** weil er auf P3 und P6 aus Batch 2 aufbaut.
 
-## Zeitpunkt der Agentenwahl
+## Vorgehen und Agenten
 
-Nutzervorgabe vom 2026-10-24:
+Dieses Dokument legt keine Agenten, Modelle, Rollen oder Abläufe fest. Das regelt die Arbeitsweise, die der Lauf lädt:
+- **zentral**, Abschnitt „Agenten, Modelle und Orchestrierung“: wann Agenten gewählt werden, wie Modell und Effort über `modellwahl` bestimmt werden, die Gesamtreview vor den Tests und die Form der Agentenaufträge;
+- **programmierung**: die Planstufen A bis D und der Schritt „Delegation und Zusammenführung“.
 
-| Wann | Was wird gewählt |
-|---|---|
-| vor dem ersten Planungsschritt | noch keine Agenten für Detailplanung, Entwürfe oder Umsetzung |
-| nach dem ersten Planungsschritt | die Agenten für Detailplanung und Entwürfe |
-| nach der Planung | der endgültige Zuschnitt der Batches und die Umsetzungsagenten |
-| nach der Umsetzung, vor den Tests | ein eigener Opus-Agent für die hochkritische Review der gesamten Umsetzung, wenn sonnet umgesetzt hat |
+Die Nutzervorgaben vom 2026-10-24 sind dort seit diesem Tag als Pending-Änderungen eingetragen. Ihr Wortlaut:
+- „agentenwahl zur umsetzung erst nach der planung, agentenwahl zur detailplanung oder entwürfe erstellen erst nach dek ersten planungssvhritt.“
+- „wenn wir umsetzung via sonnet machen, was an sich ok ist, will ich auch einen separaten opus am ende zur review der gesamtumsetzung vor tests, zur hoch kritisvhen review.“
 
-## Modelle je Rolle
+Frühere Nutzervorgabe zu Modellen, vom 2026-10-19: „sonnet für implementierungen die keine interpretation mehr zulassen, opus nut für sicherheitsrelevantes einer und design n anderer, gebatched die beiden also. der rest wenn möglich via sonnet.“
 
-Die Regeln stammen vom Nutzer:
-- vom 2026-10-19: „sonnet für implementierungen die keine interpretation mehr zulassen, opus nur für sicherheitsrelevantes einer und design n anderer, gebatched die beiden also. der rest wenn möglich via sonnet.“
-- vom 2026-10-17: „planning at xhigh, design too.“
-- vom 2026-10-24: der eigene Opus-Agent für die Gesamtreview (Zitat oben).
-- Kein Workflow-Werkzeug.
-
-Die Tabelle legt fest, welches Modell eine Rolle bekommt, falls ein Batch sie braucht. Ob und wie oft eine Rolle besetzt wird, entscheidet der Zeitpunkt aus dem Abschnitt davor.
-
-| Rolle | Modell | Effort | Aufgabe |
-|---|---|---|---|
-| Hauptagent | Opus 5.5 (diese Sitzung) | Sitzungsstandard | Planung, Entscheidungen ohne Sicherheitsbezug, Integration, Commits, Pushes, Remote-CI, kleine Korrekturen in der Fixschleife, Release |
-| Bestand | haiku | medium | Code und Doku lesen. Ergebnis: eine Inventur mit `Datei:Zeile` über alle Oberflächen (Terminal mit JSON, Desktop-GUI, Android-GUI, MCP, IPC und Brücke, Doku) |
-| Recherche | sonnet | medium | Primärquellen zu den Lücken, in zwei Runden |
-| Entwurf | opus | xhigh | Gestaltung von Oberfläche oder Architektur, als Vorgabe ohne Auslegungsspielraum; höchstens einer je Batch |
-| Sicherheit | opus | xhigh | Sicherheitsprüfung und Entscheidungen mit Sicherheitsbezug, dann Umsetzung des sicherheitskritischen Kerns; höchstens einer je Batch |
-| Umsetzung | sonnet | high | Umsetzung nach dem Endplan. Jeder Umsetzer hat eine eigene Dateifläche, die sich mit keiner anderen überschneidet |
-| Gesamtreview | opus | xhigh | hochkritische Review der gesamten Umsetzung des Batches vor der Suite, als eigener, frischer Agent; genau einer je Batch mit sonnet-Umsetzung |
-| Suite | sonnet | high | die eine Task-Suite des Batches mit ihrem Workflow |
-
-Ohne eigenen Agenten:
-- **Zweite Recherche:** läuft im Rechercheagenten derselben Batch weiter, über SendMessage.
-- **Fixschleife:** Kleine Korrekturen macht der Hauptagent selbst. Größere Korrekturen gehen an den zuständigen Umsetzer, über SendMessage. Das gilt für Befunde der Gesamtreview und der Suite.
-- **Sicherheitsprüfung der Umsetzung:** Sie ist Teil der Gesamtreview. Eine zweite Schlussprüfung durch den Sicherheitsagenten entfällt.
-
-Ein frischer Agent wird nur dann gestartet, wenn der fortzusetzende Agent beendet oder abgebrochen ist. Ausnahmen sind die Gesamtreview und die Suite, die immer ein frischer Agent übernimmt:
-- Die Gesamtreview soll unabhängig von den Umsetzern urteilen.
-- Bei der Suite gilt eine Annahme: Ein frischer Agent ist billiger, weil ein fortgesetzter Agent seinen ganzen Verlauf bei jeder Anfrage neu liest.
-
-## Ablauf je Batch
-
-1. **Erster Planungsschritt** nach der Planungsvorgehensweise der Arbeitsweise.
-2. **Agentenwahl für Detailplanung und Entwürfe,** auf Grundlage des ersten Planungsschritts.
-3. **Detailplanung, Entwürfe und Recherche** bis zum Endplan. Er enthält:
-   - die Meilensteine mit prüfbarem Ergebnis;
-   - die Zuordnung jedes Meilensteins zu einem Suite-Test.
-4. **Festlegung von Zuschnitt und Umsetzungsagenten,** mit dem Dateibesitz je Umsetzer.
-5. **Umsetzung:** Die Umsetzer arbeiten parallel; ein Sicherheitsagent setzt seinen Kern um, soweit der Batch einen hat.
-6. **Gesamtreview** durch den eigenen Opus-Agenten. Danach werden ihre Befunde behoben.
-7. **Abschluss:**
-   - Der Suite-Agent schreibt die Suite.
-   - Der Hauptagent committet und pusht.
-   - Die Suite läuft einmal remote, danach folgt die Fixschleife.
-   - Danach kommt ein Release über den Remote-Weg.
-
-Zwischen dem Start der Remote-Suite und dem Ende des Releases startet der Hauptagent keine Agenten (`AGENTS.md`).
-
-## Regeln für jeden Agentenauftrag
-
-- Der Auftrag beginnt mit dem Satz, der die Arbeitsweise abwählt.
-- Er nennt:
-  - die Dateien zum Lesen;
-  - die Dateien zum Ändern;
-  - was verboten ist;
-  - das Ergebnis, das Abnahmezeichen und das Berichtsformat (`AGENTS.md`).
-- Agenten bauen, testen, committen und pushen nicht.
-- Aufträge an haiku und sonnet verbieten das Werkzeug `advisor`.
-- Jeder Aufruf setzt Modell und Effort ausdrücklich. Das tatsächliche Modell wird am Transkript belegt.
-- Recherche arbeitet so:
-  - WebFetch mit gezieltem Prompt, keine vollständigen Seiten über die Shell;
-  - kurze Shell-Ausgaben;
-  - Ergebnisse schrittweise in die Ergebnisdatei schreiben.
-- Gerätedaten des Nutzers kommen in kein Ergebnis im Repository. Dazu gehören Gerätenamen, Geräte-IDs, PINs und lokale Pfade.
+**Offener Konflikt:** Er wird in der Planung des ersten Batches geklärt.
+- `AGENTS.md`, Abschnitt „subagent scope and RAM budget“, verlangt im Auftrag an einen Subagenten auch das Abnahmezeichen und das Berichtsformat.
+- zentral, „Aufträge an Agenten: nur Produktionsauftrag, nie Vorgehen“, verbietet im Auftrag jede Dokumentations- und Berichtsform.
+- Vereinbar sind beide bei den Dateiflächen: Sie gehören nach zentral als „potentiell betroffene Dateien“ in den Auftrag.
 
 ## Releases
 
