@@ -41,7 +41,7 @@ Grundlage sind zwei Machbarkeitsnotizen:
 | 2 | Bildschirm-Grundlagen | P2, P3, P6, P7, P9, P27, P28, P30 | `LAUNCHER-WIDGET-MOVE`, `DESKTOP-APP-ICONS`, `SCREEN-NUR-SICHTBAR`, `SCREEN-HANDY-BILD`, `SCREEN-VOLLBILD-TASTE`, `SCREEN-BITRATE`, `DIREKT-ZUERST`, `SCREEN-SCHAERFE` | keine aus E1 bis E6 |
 | 3 | Fenster und Einstellungen | P15, P16, P17, P18, P19, P20, P29 | `DESKTOP-ORDNER-EXPLORER`, `AUSWAHL-HOEHE`, `FENSTER-GROESSE`, `EINSTELLUNGEN-GERAETE`, `EINSTELLUNGEN-TECHNIK`, `EINSTELLUNGEN-AUSRICHTUNG`, `CLI-PIN-KOPPLUNG` | E12 |
 | 4 | Anmeldung und Remote Desktop | P1 (Linux, Windows, RDP) | `SCREEN-ANMELDUNG`, `SCREEN-RDP` | E1, E2, E5 |
-| 5 | Ein Desktop, alle Programme | P4, P5 | `DESKTOP-ALLE-PROGRAMME`, `DESKTOP-PROGRAMME-STARTEN` | E3, E4 |
+| 5 | Ein Desktop, alle Programme | P4, P5 (mit P31) | `DESKTOP-ALLE-PROGRAMME`, `DESKTOP-PROGRAMME-STARTEN` | E3, E4, E14 |
 
 ### Vorgeschlagene Reihenfolge
 
@@ -79,6 +79,7 @@ Frühere Nutzervorgabe zu Modellen, vom 2026-10-19: „sonnet für implementieru
 
 Die Richtung des Projekts steht in `docs/RICHTUNG.md`. Ihre großen Teile gehören in keinen dieser Batches. Bei der Planung zu berücksichtigen sind vier kleine Einwebungen, Einzelheiten dort im Abschnitt „Einwebungen in die vorläufigen Batches“:
 - Batch 2: Kennwerte je Gerätepaar.
+- Batch 2, aus P31: Verschiebe- und Änderungsbereiche sowie verlustfreie Schriftbereiche im selben Strom. Das steht in der Notiz zu Fernzugriff und Desktop, nicht in `docs/RICHTUNG.md`.
 - Batch 3: Rechte als Zeilen aus der Fähigkeitsliste.
 - Batch 4: Die Weiterleitung für RDP wird ein allgemeiner TCP-Baustein mit eigenem Recht.
 - Batch 5: Der Programmstart nimmt das Zielgerät als Parameter.
