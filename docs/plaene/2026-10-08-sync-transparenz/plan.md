@@ -50,10 +50,10 @@ Autorisierung: Umsetzung, Suite, Release und lokales Update sind beauftragt
    ist ein eigener Umbau und nicht Teil dieses Batches.
 7. **Share-Server**: `share/core/signal_connection_config.rs` kennt `wss://`, Pins und den
    Plaintext-Schalter. Der eigene Server (`/etc/default/se-share-server`) terminiert TLS mit
-   dem Let's-Encrypt-Zertifikat für `silasweis.de` auf 51820/51821 und erlaubt zusätzlich
-   Klartext. Beobachtet am 2026-10-08: `openssl s_client -connect silasweis.de:51820` →
+   dem Let's-Encrypt-Zertifikat für `<eigener-server>` auf 51820/51821 und erlaubt zusätzlich
+   Klartext. Beobachtet am 2026-10-08: `openssl s_client -connect <eigener-server>:51820` →
    `Verify return code: 0 (ok)`, ebenso 51821. Lokale CLI-Konfiguration:
-   `tcp://silasweis.de:51820`. Die Desktop-Einstellungen bieten keinen Umstellweg.
+   `tcp://<eigener-server>:51820`. Die Desktop-Einstellungen bieten keinen Umstellweg.
 8. **Lokale Installationen** auf diesem Rechner: CLI `se` mit Daemon
    (`/root/.local/opt/smart-explorer/se`) und Dienst `se-share-server`; keine lokalen Sync-Jobs.
 
@@ -150,9 +150,9 @@ Zwei-Wege-Vollscan; der inkrementelle Zwei-Wege-Planer bleibt als `GDRIVE-INCR` 
   `10481ee259dd06ea6c39078a3841e9fb03976099649b6e3154807aae6725a1a9`). `se-share-server` nach
   verifiziertem Backup (`se-share-server.bak-0.5.172`) atomar ersetzt, Dienst `active`, laufende
   Prozessdatei = `se-share-server-linux` (`ce6a2056…f006`), Ports 51820/51821.
-- 2026-10-08: Lokale Share-Adresse `tcp://silasweis.de:51820` → `wss://silasweis.de:51820`
+- 2026-10-08: Lokale Share-Adresse `tcp://<eigener-server>:51820` → `wss://<eigener-server>:51820`
   (Vorschlag aus `se share server show`); Daemonlog: „Share-Server verbunden (🔒 verschlüsselt,
-  wss://silasweis.de:51820, Schluessel-Anmeldung=true)“, Relay `https://silasweis.de:51821/`.
+  wss://<eigener-server>:51820, Schluessel-Anmeldung=true)“, Relay `https://<eigener-server>:51821/`.
   `SE_SHARE_ALLOW_PLAINTEXT=1` bleibt auf dem Server, solange Windows-/Android-Clients noch
   `tcp://` verwenden.
 - Nicht belegt: Verhalten auf dem Windows-Rechner des Nutzers (Drive-Feed-Filter mit echtem Konto,
