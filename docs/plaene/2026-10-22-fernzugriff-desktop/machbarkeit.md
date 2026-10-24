@@ -40,7 +40,7 @@ Pfadkürzel: `N/` = `native/src/`, `A/` = `android/app/src/main/java/app/smartex
 | P8 | Der Eindruck vom se Desktop kann noch von 0.5.183 stammen, als keine Verbindung zustande kam |
 | P9 | Eine Tastenkombination, um beim Streaming das Vollbild zu verlassen, wie die übliche Host-Taste von Fernzugriffsprogrammen |
 | P27 | Nachtrag 2026-10-24: „das musst du echt nich gründlicher überarbeiten. ich meine wie kann es sein dass ich via etwas wie shadowpc zum gleichen mit 20ms latenz und 7-8mbits pro sekunde verbunden bin und via se es bei 2000kbits maxed.“ |
-| P28 | Nachtrag 2026-10-24: „warum läuft das streaming via relay, zumindest laut statistik. ich hätte gerne alles immer per default direkt wenn möglich und relay nur als fallback klar makiert. erst wenn möglich via selben lan, wlan netz, etc.“ |
+| P28 | Nachtrag 2026-10-24: „warum läuft das streaming via relay, zumindest laut statistik. ich hätte gerne alles immer per default direkt wenn möglich und relay nur als fallback klar makiert. erst wenn möglich via selben lan, wlan netz, etc.“ Präzisiert: „also relay auch nicht direkt nach lan/wlan … das ist das kernprinzip dieses se programms, so wenig wie möglich zwischen A und B, server als router nur und relay als fallback“ |
 | P29 | Nachtrag 2026-10-24: „via se sollten auch pins verarbeitet werden können“ |
 | P30 | Nachtrag 2026-10-24: „selbes in überarbeitung mit anzeigequalität, das skalieren bei einpassen ist schrecklich unscharf als, obwohl das gestreamte bild mehr hergibt. ich frage mich grad auch ob das streaming auf eine bestimmte bildgröße/auflösung begrenzt ist, währe mir nicht recht“ |
 
@@ -60,7 +60,7 @@ Pfadkürzel: `N/` = `native/src/`, `A/` = `android/app/src/main/java/app/smartex
 | P8 | Hinweis, kein Arbeitspunkt | Der Bestand von 0.5.184 ist unten unter P4 beschrieben | — |
 | P9 | umsetzbar, klein | Eine feste Ausstiegskombination mit mehreren Modifikatoren, Hinweis beim Eintritt; Vollbild auch im Android-Betrachter | Die Kombination darf nicht mit Fernprogrammen kollidieren |
 | P27 | umsetzbar, mittel | Relay-Deckel von 2 Mbit/s und Wachstum der Ratensteuerung überarbeiten; Startwerte und Qualitätsleiter nach Messung | Der Relay-Server verwirft über 1 MiB Warteschlange je Ziel; eine höhere Rate über das Relay braucht dort mehr Spielraum |
-| P28 | umsetzbar, mittel | Direktweg aktiv herstellen und halten, LAN-Adressen zuerst, Relay sichtbar als Rückfall kennzeichnen | Ob ein Direktweg zustande kommt, hängt an NAT und Firewall beider Seiten (Annahme) |
+| P28 | umsetzbar, mittel bis groß | Für alle Datenwege: LAN/WLAN zuerst, dann die übrigen Direktwege, Relay erst als letzter, sichtbar gekennzeichneter Rückfall; der Server nur als Vermittler | se überlässt die Wegwahl heute Iroh; ob ein Direktweg zustande kommt, hängt an NAT und Firewall beider Seiten (Annahme) |
 | P29 | umsetzbar, klein | `se`-Befehle zum Auflisten angebotener Geräte und zum Koppeln mit PIN; der Hintergrunddienst kann das schon | keine bekannt |
 | P30 | umsetzbar, mittel | hochwertige Skalierung im Betrachter; Auflösungsgrenzen anheben und die Qualitätsleiter für Schrift auslegen | Grenzen der Encoder (H.264-Level, OpenH264 bis 3840×2160) |
 
@@ -411,19 +411,32 @@ Stand: Nur dokumentiert. Der Nutzer schrieb dazu: „nur dass es klar ist, noch 
 - **Vergleich:** Die Angaben zu ShadowPC (20 ms, 7–8 Mbit/s) stammen vom Nutzer; Herstellerangaben sind nicht recherchiert.
 - **Weg:** zuerst P28, denn über einen Direktweg gilt der Deckel nicht. Danach Relay-Grenzen und Regler überarbeiten, also Startwert, Wachstum und Warteschlange im Relay-Server. Messen mit `se screen bench` direkt und über das Relay.
 
-### P28 Direkt zuerst, Relay als markierter Rückfall
+### P28 Alles direkt zwischen den Geräten, Relay nur als Rückfall
 
-- **Befund, Pfadwahl:** Der Bildstrom übernimmt den ausgewählten Pfad der Verbindung. Ein Relay-Pfad heißt `relay`, jeder andere `direct`. Ohne ausgewählten Pfad gilt das Relay-Budget (`N/screen/core/gop_stream.rs:43-56`). Die Anzeige „relay“ in der Statistik heißt also: Die Verbindung lief zu diesem Zeitpunkt über das Relay, oder es war kein Pfad ausgewählt.
+**Präzisierung des Nutzers (2026-10-24):** „also relay auch nicht direkt nach lan/wlan, wir tauschen ja die direkten adressen aus gutem grund aus, genau so wie file übertragung ursprünglich war und hoffentlich noch ist, auch alles andere nach möglichkeit direkt zwischen den geräten. das ist das kernprinzip dieses se programms, so wenig wie möglich zwischen A und B, server als router nur und relay als fallback“. Das Kernprinzip steht seitdem auch in `docs/ARCHITEKTUR.md`, Abschnitt „Zweck“.
+
+- **Befund, eine Verbindung für alles:** Dateien, Befehle, LAN-Verbindung und Bildschirm laufen über denselben Iroh-Endpunkt eines Geräts, mit getrennten ALPNs (`N/share/core/node.rs:156-161`). Was für den Bildschirm gilt, gilt also auch für Dateiübertragung und Laufwerke.
+- **Befund, Wählen der Gegenstelle:** `endpoint_addr` übergibt Iroh in einem Aufruf alle Direktkandidaten aus der Anwesenheit der Gegenstelle zusammen mit den Relay-Adressen (`N/share/core/session.rs:307-340`). Das sind LAN-Adressen und weitere Adressen.
+  - se legt dabei keine eigene Reihenfolge fest.
+  - se wartet nicht auf die Direktwege, bevor es das Relay nutzt.
+  - se hat keine Regel, die das Relay als letzten Weg erzwingt.
+  - Welcher Weg ausgewählt wird, entscheidet Iroh.
+- **Annahme, nicht am Hersteller belegt:** Iroh baut die Verbindung zuerst über das Relay auf und wechselt auf einen Direktweg, sobald das Durchstoßen von NAT gelingt. Lücke: das tatsächliche Pfadverhalten der verwendeten Iroh-Version aus deren Dokumentation.
+- **Befund, Anzeige:** `transport_label` und der Bildstrom lesen nur den gerade ausgewählten Pfad (`N/share/core/session.rs:343-350`, `N/screen/core/gop_stream.rs:43-56`). Ohne ausgewählten Pfad zeigt die Bezeichnung „unknown“, der Bildstrom rechnet dann mit dem Relay-Budget.
+- **Befund, LAN:** Für die LAN-Verbindung nutzt se einen Pfad nur, wenn genau einer ausgewählt ist, dieser über IP läuft und kein Relay ist (`N/share/os/shared/lan_link_transport.rs:50-58`). Die Anwesenheit im LAN über mDNS gibt es schon (`se share lan`).
 - **Befund am Gerät des Nutzers:** Der neu gekoppelte Cloud-PC meldete als Direktkandidaten nur eine private Adresse. Gerätedaten stehen nicht hier.
   - Annahme: Ohne öffentliche Adresse braucht ein Direktweg das Durchstoßen von NAT, und das kam nicht zustande.
-  - Lücke: ob und wann iroh den Direktweg dort versucht hat.
-- **Bestand LAN:** Die Anwesenheit im LAN über mDNS gibt es schon (`se share lan`). Lücke: ob eine Bildschirmverbindung LAN-Kandidaten bevorzugt.
-- **Weg:**
-  - Direktkandidaten in dieser Reihenfolge: gleiches LAN oder WLAN, öffentliche Adressen, Durchstoßen von NAT.
-  - Das Relay nur, solange kein Direktweg besteht; danach wechselt die Verbindung auf den Direktweg.
-  - Im Betrachter und in der Gruppenansicht deutlich „über Relay (Rückfall)“ anzeigen, nicht nur in der Statistik.
-  - Dasselbe gilt für Dateien und Laufwerke.
-- **Oberflächen:** Desktop-Betrachter, Android-Betrachter, Geräteseite, `se share status`, `se screen`, MCP über `se`.
+  - Lücke: ob und wann Iroh den Direktweg dort versucht hat.
+- **Weg (Reihenfolge nach der Präzisierung):**
+  1. Gleiches LAN oder WLAN, mit den ausgetauschten LAN-Adressen und der mDNS-Anwesenheit.
+  2. Die übrigen Direktwege: öffentliche Adressen, Durchstoßen von NAT, IPv6.
+  3. Erst wenn kein Direktweg zustande kommt, das Relay als Rückfall.
+  - Der Server bleibt dabei Vermittler: Er tauscht Anwesenheit und Adressen aus und trägt keine Nutzdaten, solange ein Direktweg besteht.
+  - Ein Wechsel aufs Relay wird gemeldet; danach versucht die Verbindung weiter, auf einen Direktweg zurückzukommen.
+  - Die Anzeige „über Relay (Rückfall)“ steht deutlich im Betrachter, in der Gruppenansicht, auf der Geräteseite, im Übertragungsfenster und in `se share status`, nicht nur in der Statistik.
+- **Gilt für alle Datenwege:** Dateiübertragung, Laufwerke, Sync über Direktfreigaben, Befehle und Terminal, Bildschirm.
+- **Oberflächen:** Desktop-App (Betrachter, Gruppenansicht, Geräteseite, Übertragungen), Android-App (Betrachter, Geräte), `se share status`, `se screen`, MCP über `se`.
+- **Lücke für die Planung:** Messung, wie oft und wie lange heutige Verbindungen über das Relay laufen, je Gerätepaar und Netz.
 
 ### P29 PIN-Kopplung im Terminal
 
