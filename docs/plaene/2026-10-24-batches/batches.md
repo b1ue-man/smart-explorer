@@ -15,7 +15,7 @@ Grundlage sind zwei Machbarkeitsnotizen:
 
 ## Umfang
 
-**In den Batches** (23 Punkte): P1, P2, P3, P4, P5, P6, P7, P9, P10, P11 Stufe 1, P13, P14, P15, P16, P17, P18, P19, P20, P21, P22, P23, P24, P26.
+**In den Batches** (27 Punkte): P1, P2, P3, P4, P5, P6, P7, P9, P10, P11 Stufe 1, P13, P14, P15, P16, P17, P18, P19, P20, P21, P22, P23, P24, P26, P27, P28, P29, P30. P27 bis P30 stehen im Nachtrag vom 2026-10-24 der Notiz zu Fernzugriff und Desktop.
 
 **Nicht in den Batches:**
 - P8: ein Hinweis, kein Arbeitspunkt.
@@ -38,8 +38,8 @@ Grundlage sind zwei Machbarkeitsnotizen:
 | Batch | Name | Punkte | Board-Zeilen | Entscheidungen im Batch |
 |---|---|---|---|---|
 | 1 | Laufwerke, Dateien und Anbindungen | P10, P11 Stufe 1, P13, P14, P21, P22, P23, P24, P26 | `LAUFWERKE-LIVE`, `OPTISCH-LESEN`, `AGENT-PLUGIN-UPDATE`, `KOPIE-ORDNER-ZUSATZ`, `TRESOR-OEFFNEN-WURZEL`, `LAUFWERK-RESTEINTRAG`, `LAUFWERK-PLATZ`, `LESERECHTE-NUR-NEU`, `GDRIVE-ABLAUF` | E9, E10, Weg A oder B bei P21 je Speicherart |
-| 2 | Bildschirm-Grundlagen | P2, P3, P6, P7, P9 | `LAUNCHER-WIDGET-MOVE`, `DESKTOP-APP-ICONS`, `SCREEN-NUR-SICHTBAR`, `SCREEN-HANDY-BILD`, `SCREEN-VOLLBILD-TASTE` | keine aus E1 bis E6 |
-| 3 | Fenster und Einstellungen | P15, P16, P17, P18, P19, P20 | `DESKTOP-ORDNER-EXPLORER`, `AUSWAHL-HOEHE`, `FENSTER-GROESSE`, `EINSTELLUNGEN-GERAETE`, `EINSTELLUNGEN-TECHNIK`, `EINSTELLUNGEN-AUSRICHTUNG` | E12 |
+| 2 | Bildschirm-Grundlagen | P2, P3, P6, P7, P9, P27, P28, P30 | `LAUNCHER-WIDGET-MOVE`, `DESKTOP-APP-ICONS`, `SCREEN-NUR-SICHTBAR`, `SCREEN-HANDY-BILD`, `SCREEN-VOLLBILD-TASTE`, `SCREEN-BITRATE`, `SCREEN-DIREKT-ZUERST`, `SCREEN-SCHAERFE` | keine aus E1 bis E6 |
+| 3 | Fenster und Einstellungen | P15, P16, P17, P18, P19, P20, P29 | `DESKTOP-ORDNER-EXPLORER`, `AUSWAHL-HOEHE`, `FENSTER-GROESSE`, `EINSTELLUNGEN-GERAETE`, `EINSTELLUNGEN-TECHNIK`, `EINSTELLUNGEN-AUSRICHTUNG`, `CLI-PIN-KOPPLUNG` | E12 |
 | 4 | Anmeldung und Remote Desktop | P1 (Linux, Windows, RDP) | `SCREEN-ANMELDUNG`, `SCREEN-RDP` | E1, E2, E5 |
 | 5 | Ein Desktop, alle Programme | P4, P5 | `DESKTOP-ALLE-PROGRAMME`, `DESKTOP-PROGRAMME-STARTEN` | E3, E4 |
 
