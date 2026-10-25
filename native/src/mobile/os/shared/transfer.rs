@@ -1,22 +1,18 @@
-//! `fs.transfer` (api.md §4.3): local→local through the copy module (move
-//! and the conflict choice only there), everything involving a connection as
-//! one transfer-engine job that starts at once: selected folders are walked
-//! while the first files already copy (no scan before), occupied names are
-//! numbered and nothing is replaced. With `filter` + `baseDir` only matching
-//! files go, keeping their paths relative to `baseDir`.
+//! `fs.transfer`: one engine job for local and connected endpoints. Folder
+//! decisions are independent of the local file-conflict choice. Discovery
+//! streams; filter/baseDir retain their literal relative paths.
 use super::args::{filter_arg, nonempty_list, opt_str, str_arg};
 use super::crumbs;
-use super::drive::{drain_copy, run_job, Outcome};
-use super::entry::extension;
+use super::drive::{run_job, Outcome};
 use super::error::ApiError;
 use super::fs_list::{reject_trash, require_writable};
 use super::location::{is_same_or_below, parent_path, Loc};
 use super::runtime::{Runtime, TaskCtx};
 use crate::filter::CompiledFilter;
-use crate::transfer::{Endpoint, JobItems, Layout, TransferJob};
-use crate::types::{Conflict, CopyMode, CopyOptions, FileEntry, FilterDef};
+use crate::transfer::{Endpoint, FolderConflict, FolderConflictPolicy, JobItems, Layout, TransferJob};
+use crate::types::{Conflict, CopyMode, FilterDef};
 use serde_json::{json, Value};
-use std::path::{Path, PathBuf};
+#[cfg(test)]
 use std::sync::Arc;
 
 struct Plan {
@@ -24,6 +20,7 @@ struct Plan {
     target: Loc,
     mode: CopyMode,
     conflict: Conflict,
+    folders: FolderConflictPolicy,
     /// The filter and the backend path the relative paths start at.
     filter: Option<(FilterDef, String)>,
 }
@@ -92,6 +89,24 @@ fn parse(args: &Value) -> Result<Plan, ApiError> {
         }
     };
     let same_place = target.kind == first.kind && target.prefix == first.prefix;
+    let parse_folder = |value: &str| match value {
+        "merge" => Ok(FolderConflict::Merge),
+        "keep-both" | "keepBoth" => Ok(FolderConflict::KeepBoth),
+        "skip" => Ok(FolderConflict::Skip),
+        "fail" => Ok(FolderConflict::Fail),
+        value => Err(ApiError::invalid(format!("Unbekannte Ordnerkonfliktregel: {value}"))),
+    };
+    let mut folders = FolderConflictPolicy::new(parse_folder(opt_str(args, "folderConflict").unwrap_or("keep-both"))?);
+    if let Some(choices) = args.get("folderConflicts").and_then(Value::as_object) {
+        for (location, choice) in choices {
+            let source = Loc::parse(location)?;
+            if !sources.iter().any(|item| item.kind == source.kind && item.prefix == source.prefix && item.path == source.path) {
+                return Err(ApiError::invalid("Ordnerentscheidung gehört nicht zur Quellauswahl"));
+            }
+            let choice = choice.as_str().ok_or_else(|| ApiError::invalid("Ordnerentscheidung muss ein Text sein"))?;
+            folders.roots.insert(source.path, parse_folder(choice)?);
+        }
+    }
     if same_place
         && sources
             .iter()
@@ -127,6 +142,7 @@ fn parse(args: &Value) -> Result<Plan, ApiError> {
         target,
         mode,
         conflict,
+        folders,
         filter,
     })
 }
@@ -137,9 +153,6 @@ fn run(rt: &Runtime, ctx: &TaskCtx, plan: &Plan) -> Result<Outcome, ApiError> {
         .iter()
         .map(|source| source.path.clone())
         .collect();
-    if plan.sources[0].is_local() && plan.target.is_local() {
-        return local_copy(ctx, plan, paths);
-    }
     let source = endpoint(rt, &plan.sources[0])?;
     let target = endpoint(rt, &plan.target)?;
     let volumes = rt.volumes();
@@ -160,6 +173,14 @@ fn endpoint(rt: &Runtime, loc: &Loc) -> Result<Endpoint, ApiError> {
     }
 }
 
+pub(crate) fn preview_job(rt: &Runtime, args: &Value) -> Result<TransferJob, ApiError> {
+    let plan = parse(args)?;
+    let source = endpoint(rt, &plan.sources[0])?;
+    let target = endpoint(rt, &plan.target)?;
+    let paths = plan.sources.iter().map(|source| source.path.clone()).collect();
+    Ok(plan_job(&plan, paths, source, target, (String::new(), String::new())))
+}
+
 /// The engine job of a transfer that involves a connection: the selected
 /// entries under their names, or with `filter` + `baseDir` the matching
 /// files below them at their paths relative to `baseDir` (found while
@@ -173,75 +194,28 @@ fn plan_job(
     (source_label, target_label): (String, String),
 ) -> TransferJob {
     TransferJob {
+        id: crate::transfer::new_job_id(),
+        recoverable: true,
+        recovery: crate::transfer::RecoveryMode::New,
+        folders: plan.folders.clone(),
         source,
         target,
         target_dir: plan.target.path.clone(),
         items: JobItems::Roots {
-            paths,
             // Destinations are cut below the base without its trailing slash
             // (a volume root `/` becomes the empty base).
-            base: plan
-                .filter
-                .as_ref()
-                .map(|(_, base)| base.trim_end_matches('/').to_string()),
+            base: plan.filter.as_ref().map(|(_, base)| base.trim_end_matches('/').to_string())
+                .or_else(|| (plan.sources[0].is_local() && plan.target.is_local()).then(|| common_parent(&paths).trim_end_matches('/').to_string())),
+            paths,
         },
         layout: Layout::Tree,
         filter: plan.filter.clone(),
-        conflict: Conflict::Rename,
+        conflict: if plan.sources[0].is_local() && plan.target.is_local() { plan.conflict } else { Conflict::Rename },
         mode: plan.mode,
         source_label,
         target_label,
         resume: None,
     }
-}
-
-fn local_copy(ctx: &TaskCtx, plan: &Plan, paths: Vec<String>) -> Result<Outcome, ApiError> {
-    let (tx, rx) = crossbeam_channel::unbounded();
-    let dest = PathBuf::from(&plan.target.path);
-    let handle = match &plan.filter {
-        Some((filter, base)) => crate::copy::start_copy_expanded(
-            seeds(&plan.sources, base)?,
-            Some((filter.clone(), base.clone())),
-            CopyOptions {
-                root: PathBuf::from(base),
-                dest,
-                preserve_structure: true,
-                conflict: plan.conflict,
-                mode: plan.mode,
-            },
-            tx,
-        ),
-        None => {
-            let root = common_parent(&paths);
-            crate::copy::start_copy_from_paths(
-                paths,
-                CopyOptions {
-                    root: PathBuf::from(root),
-                    dest,
-                    preserve_structure: true,
-                    conflict: plan.conflict,
-                    mode: plan.mode,
-                },
-                tx,
-            )
-        }
-    };
-    let mut outcome = drain_copy(ctx, handle, rx);
-    outcome.omitted = trash_roots(&plan.sources);
-    Ok(outcome)
-}
-
-/// Sources that contain the active app trash (volume roots); the copy engine
-/// leaves it out.
-fn trash_roots(sources: &[Loc]) -> u64 {
-    let name = crate::apptrash::TRASH_DIR_NAME;
-    if !crate::apptrash::excluded_name(name) {
-        return 0;
-    }
-    sources
-        .iter()
-        .filter(|source| Path::new(&source.path).join(name).is_dir())
-        .count() as u64
 }
 
 /// The deepest folder that contains every path.
@@ -264,49 +238,6 @@ pub(crate) fn common_parent(paths: &[String]) -> String {
         common.truncate(shared);
     }
     format!("/{}", common.join("/"))
-}
-
-/// Selected local rows as copy seeds, with depths relative to `base`.
-fn seeds(sources: &[Loc], base: &str) -> Result<Vec<FileEntry>, ApiError> {
-    sources
-        .iter()
-        .map(|source| {
-            let metadata = std::fs::symlink_metadata(&source.path)
-                .map_err(|error| ApiError::from(error).context(&source.path))?;
-            let name = source.name().to_string();
-            let is_dir = metadata.is_dir();
-            let depth = source
-                .path
-                .strip_prefix(base.trim_end_matches('/'))
-                .unwrap_or(&source.path)
-                .split('/')
-                .filter(|part| !part.is_empty())
-                .count() as u32;
-            Ok(FileEntry {
-                path: Arc::from(source.path.as_str()),
-                parent: Arc::from(parent_path(&source.path).unwrap_or("/")),
-                name: Arc::from(name.as_str()),
-                ext: Arc::from(extension(&name, is_dir).as_str()),
-                size: if is_dir { 0 } else { metadata.len() },
-                mtime_ms: modified_ms(&metadata),
-                btime_ms: 0,
-                is_dir,
-                is_symlink: metadata.file_type().is_symlink(),
-                hidden: name.starts_with('.'),
-                system: false,
-                depth,
-                id: None,
-            })
-        })
-        .collect()
-}
-
-fn modified_ms(metadata: &std::fs::Metadata) -> i64 {
-    metadata
-        .modified()
-        .ok()
-        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-        .map_or(0, |duration| duration.as_millis() as i64)
 }
 
 #[cfg(test)]

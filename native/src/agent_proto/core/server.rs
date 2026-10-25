@@ -321,6 +321,19 @@ fn dispatch(context: &RequestContext, id: u64, req: Frame) -> io::Result<()> {
             id,
             copy_to_stage(&src, &stage, size, cancel).map(|copied| Frame::Copied(Some(copied))),
         ),
+        Frame::RenameDirectoryNoReplace { src, dst } => emit(sink, id, &Frame::folder_reply(
+            super::local_platform::rename_no_replace(Path::new(&src), Path::new(&dst))
+                .map(|()| Frame::Ok))),
+        // The standalone host uses the atomic local mkdir primitive. This
+        // does not predict permissions, identity support or rename support.
+        Frame::DirectoryReservationSupported(_) => emit(sink, id, &Frame::Answer(1)),
+        Frame::CreateDirExclusive(path) => emit(sink, id, &Frame::folder_reply(
+            create_dir_one(&path, true).map(|()| Frame::Ok))),
+        Frame::DirectoryIdentity(path) => emit(sink, id, &Frame::folder_reply(
+            super::local_platform::folder_reservation::identity(Path::new(&path))
+                .map(Frame::DirectoryIdentityValue))),
+        Frame::FileIdentity(path) => emit(sink, id, &Frame::folder_reply(
+            super::file_identity::identity(&path).map(Frame::FileIdentityValue))),
         Frame::CreateDir { path, exclusive } => reply(
             sink,
             id,

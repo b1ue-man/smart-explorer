@@ -8,16 +8,19 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::super::platform;
-use super::durability::{finish_direct_move, finish_staged_commit};
+use super::durability::finish_staged_commit;
 #[cfg(test)]
-use super::move_guard::restore_quarantine;
+use super::move_guard::{quarantine_source, restore_quarantine, source_snapshot_path};
 use super::move_guard::{
-    moved_target_changed_error, quarantine_source, remove_quarantine, restore_after_error,
-    restore_quarantine_if_any, source_changed_error, source_snapshot_path,
+    quarantine_source_observed, restore_after_error, restore_quarantine_if_any, source_changed_error,
 };
 #[cfg(test)]
 use super::path_guard::prepare_target_parent;
 use super::staging::{stage_copy, LocalFailure, Parallel};
+use super::publication::{self, PublicationObserver};
+
+#[path = "direct_move.rs"]
+mod direct_move;
 
 /// Numbered names tried for one file when others keep taking them.
 const MAX_RENAME_RACE_RETRIES: usize = 1000;
@@ -55,6 +58,23 @@ pub(crate) fn transfer_local(
     request: &LocalRequest<'_>,
     progress: &mut dyn FnMut(u64),
 ) -> Result<LocalOutcome, LocalFailure> {
+    transfer_local_inner(request, progress, None)
+}
+
+/// The same local transfer with durable receipt hooks around publication.
+pub(crate) fn transfer_local_observed(
+    request: &LocalRequest<'_>,
+    progress: &mut dyn FnMut(u64),
+    observer: &dyn PublicationObserver,
+) -> Result<LocalOutcome, LocalFailure> {
+    transfer_local_inner(request, progress, Some(observer))
+}
+
+fn transfer_local_inner(
+    request: &LocalRequest<'_>,
+    progress: &mut dyn FnMut(u64),
+    observer: Option<&dyn PublicationObserver>,
+) -> Result<LocalOutcome, LocalFailure> {
     let src = request.source;
     let source_metadata =
         crate::local_access::symlink_metadata(src).map_err(LocalFailure::Source)?;
@@ -77,7 +97,7 @@ pub(crate) fn transfer_local(
     // A move first relocates the source to an unpredictable no-replace
     // sibling; no check-then-unlink ever targets the user-visible source.
     let mut quarantine = if request.mode == CopyMode::Move {
-        Some(quarantine_source(src).map_err(LocalFailure::Source)?)
+        Some(quarantine_source_observed(src, observer).map_err(LocalFailure::Source)?)
     } else {
         None
     };
@@ -91,79 +111,10 @@ pub(crate) fn transfer_local(
         .unwrap_or_else(|| src.to_path_buf());
 
     if request.mode == CopyMode::Move {
-        loop {
-            match platform::move_file(
-                &source_path,
-                &target,
-                request.conflict == Conflict::Overwrite,
-            ) {
-                Ok(()) => {
-                    let source = quarantine.take().ok_or_else(|| {
-                        LocalFailure::Publish(io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            "move quarantine is missing",
-                        ))
-                    })?;
-                    match source_snapshot_path(&target) {
-                        Ok(snapshot) if snapshot == source.snapshot => {}
-                        Ok(_) => {
-                            return Err(LocalFailure::Publish(moved_target_changed_error(
-                                &target, None,
-                            )))
-                        }
-                        Err(error) => {
-                            return Err(LocalFailure::Publish(moved_target_changed_error(
-                                &target,
-                                Some(error),
-                            )))
-                        }
-                    }
-                    // POSIX rename may be a no-op when the destination is a
-                    // hard link to the same inode. Remove only our sibling.
-                    if metadata_if_exists(&source.path)
-                        .map_err(LocalFailure::Publish)?
-                        .is_some()
-                    {
-                        remove_quarantine(&source).map_err(LocalFailure::Publish)?;
-                    }
-                    finish_direct_move(&target, &source, platform::sync_parent)
-                        .map_err(LocalFailure::Publish)?;
-                    return Ok(LocalOutcome::Completed {
-                        bytes: source.snapshot.len,
-                        target,
-                    });
-                }
-                Err(error) if platform::is_cross_device(&error) => break,
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                    match request.conflict {
-                        Conflict::Skip => {
-                            restore_quarantine_if_any(quarantine.as_ref())
-                                .map_err(LocalFailure::Source)?;
-                            return Ok(LocalOutcome::Skipped);
-                        }
-                        Conflict::Rename => {
-                            target = next_name(&requested, &mut races).map_err(|error| {
-                                LocalFailure::Publish(restore_after_error(
-                                    quarantine.as_ref(),
-                                    error,
-                                ))
-                            })?;
-                        }
-                        Conflict::Overwrite => {
-                            return Err(LocalFailure::Publish(restore_after_error(
-                                quarantine.as_ref(),
-                                error,
-                            )));
-                        }
-                    }
-                }
-                Err(error) => {
-                    return Err(LocalFailure::Publish(restore_after_error(
-                        quarantine.as_ref(),
-                        error,
-                    )))
-                }
-            }
+        if let Some(outcome) = direct_move::try_move(
+            request, &source_path, &requested, &mut target, &mut races, &mut quarantine, observer,
+        )? {
+            return Ok(outcome);
         }
     }
 
@@ -196,7 +147,7 @@ pub(crate) fn transfer_local(
         Err(failure) => return Err(restore_failure(quarantine.as_ref(), failure)),
     };
     if request.cancel.load(Ordering::Acquire) {
-        staged.discard();
+        staged.discard().map_err(LocalFailure::Publish)?;
         restore_quarantine_if_any(quarantine.as_ref()).map_err(LocalFailure::Source)?;
         return Ok(LocalOutcome::Canceled);
     }
@@ -205,7 +156,7 @@ pub(crate) fn transfer_local(
         platform::path_matches_identity(&staged.temp, identity).map_err(LocalFailure::Target)
     });
     if !matches!(same, Ok(true)) {
-        staged.discard();
+        staged.discard().map_err(LocalFailure::Publish)?;
         let error = io::Error::new(
             io::ErrorKind::InvalidData,
             "staged copy path changed before commit",
@@ -217,7 +168,7 @@ pub(crate) fn transfer_local(
     }
     if let Some(source) = &quarantine {
         if staged.snapshot != source.snapshot {
-            staged.discard();
+            staged.discard().map_err(LocalFailure::Publish)?;
             return Err(LocalFailure::Source(restore_after_error(
                 quarantine.as_ref(),
                 source_changed_error(&source.path),
@@ -226,22 +177,33 @@ pub(crate) fn transfer_local(
     }
 
     loop {
-        match platform::commit_staged(
+        if let Err(error) = publication::before(observer, &staged.temp, &target) {
+            publication::preparation_failed(observer, &staged.temp, &target, &error, quarantine.as_ref())
+                .map_err(LocalFailure::Publish)?;
+            staged.discard().map_err(LocalFailure::Publish)?;
+            return Err(LocalFailure::Publish(restore_after_error(quarantine.as_ref(), error)));
+        }
+        let committed = platform::commit_staged(
             &staged.temp,
             &target,
             request.conflict == Conflict::Overwrite,
-        ) {
+        );
+        if let Err(error) = &committed {
+            publication::commit_failed(observer, &staged.temp, &target, &staged.file,
+                error, quarantine.as_ref()).map_err(LocalFailure::Publish)?;
+        }
+        match committed {
             Ok(()) => break,
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => match request.conflict {
                 Conflict::Skip => {
-                    staged.discard();
+                    staged.discard().map_err(LocalFailure::Publish)?;
                     restore_quarantine_if_any(quarantine.as_ref()).map_err(LocalFailure::Source)?;
                     return Ok(LocalOutcome::Skipped);
                 }
                 Conflict::Rename => match next_name(&requested, &mut races) {
                     Ok(next) => target = next,
                     Err(error) => {
-                        staged.discard();
+                        staged.discard().map_err(LocalFailure::Publish)?;
                         return Err(LocalFailure::Publish(restore_after_error(
                             quarantine.as_ref(),
                             error,
@@ -249,7 +211,7 @@ pub(crate) fn transfer_local(
                     }
                 },
                 Conflict::Overwrite => {
-                    staged.discard();
+                    staged.discard().map_err(LocalFailure::Publish)?;
                     return Err(LocalFailure::Publish(restore_after_error(
                         quarantine.as_ref(),
                         error,
@@ -257,7 +219,7 @@ pub(crate) fn transfer_local(
                 }
             },
             Err(error) => {
-                staged.discard();
+                staged.discard().map_err(LocalFailure::Publish)?;
                 return Err(LocalFailure::Publish(restore_after_error(
                     quarantine.as_ref(),
                     error,
@@ -266,6 +228,18 @@ pub(crate) fn transfer_local(
         }
     }
     let bytes = staged.bytes;
+    if durable {
+        crate::copy::publication_proof::confirm_handle_publication(&target, &staged.file, request.cancel)
+            .map_err(|error| {
+                let retained = quarantine.as_ref().map_or(String::new(), |source|
+                    format!("; secured move source retained at {}", source.path.display()));
+                LocalFailure::Publish(io::Error::new(error.kind(), format!(
+                    "destination committed at {}{retained}; destination durability confirmation failed: {error}",
+                    target.display(),
+                )))
+            })?;
+    }
+    publication::after(observer, &target, &staged.file, quarantine.as_ref()).map_err(LocalFailure::Publish)?;
     drop(staged.file);
     if durable {
         finish_staged_commit(&target, src, &mut quarantine, platform::sync_parent)

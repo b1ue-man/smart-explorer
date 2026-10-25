@@ -138,15 +138,22 @@ pub(crate) fn complete(
                 drop(writer);
                 return Err(error);
             }
-            writer.flush().map_err(|error| {
+            if let Err(error) = super::file_recovery::prepare_direct(engine, file, &path) {
+                super::file_recovery::preparation_failed(engine, file).map_err(|failure| OpError::at(At::Unknown, failure))?;
+                return Err(OpError::target(error));
+            }
+            if let Err(error) = writer.flush() {
                 // A full, read-only or refusing target, or one that is too
                 // busy, took nothing (the job ends, or the file waits);
                 // anything else may have created the file.
                 let refused =
                     ends_job_at_target(error.kind()) || crate::vfs::congestion_of(&error).is_some();
                 let at = if refused { At::Target } else { At::Unknown };
-                OpError::at(at, relabeled(&error, &format!("„{path}“ abschließen")))
-            })?;
+                if refused { super::file_recovery::unpublished(engine, file).map_err(|error| OpError::at(At::Unknown, error))?; }
+                return Err(OpError::at(at, relabeled(&error, &format!("„{path}“ abschließen"))));
+            }
+            drop(writer);
+            super::file_recovery::after(engine, file, &path).map_err(|error| OpError::at(At::Unknown, error))?;
             Ok(Outcome::Done)
         }
         Destination::Staged {
@@ -181,8 +188,16 @@ pub(crate) fn publish(
     let mut destination = path;
     let mut names = next_numbered(base_name(&destination));
     loop {
+        if let Err(error) = super::file_recovery::before(engine, file, stage, &destination) {
+            if let Err(failure) = super::file_recovery::preparation_failed(engine, file) {
+                return Err(OpError::at(At::Unknown, io::Error::other(format!("Publikationsvorbereitung fehlgeschlagen: {error}; Nichtpublikation unbestätigt: {failure}; eigene Stage bleibt erhalten: {stage}"))));
+            }
+            discard(engine, target, stage);
+            return Err(OpError::target(error));
+        }
         match target.promote_copy_stage(stage, &destination) {
             Ok(()) => {
+                super::file_recovery::after(engine, file, &destination).map_err(|error| OpError::at(At::Unknown, error))?;
                 if top_level {
                     engine
                         .folders
@@ -191,6 +206,7 @@ pub(crate) fn publish(
                 return Ok(Outcome::Done);
             }
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                super::file_recovery::unpublished(engine, file).map_err(|error| OpError::at(At::Unknown, error))?;
                 if engine.resume {
                     let outcome = existing_same_size(target, &destination, file.size);
                     discard(engine, target, stage);
@@ -210,12 +226,14 @@ pub(crate) fn publish(
                 destination = super::super::engine_names::join_rel(&parent, &next);
             }
             Err(error) if error.kind() == io::ErrorKind::Unsupported => {
+                super::file_recovery::unpublished(engine, file).map_err(|error| OpError::at(At::Unknown, error))?;
                 discard(engine, target, stage);
                 return Err(OpError::at(At::Publish, error));
             }
             // Refused outright (full, read-only, not ours to write): nothing
             // was published, and the job ends.
             Err(error) if ends_job_at_target(error.kind()) => {
+                super::file_recovery::unpublished(engine, file).map_err(|error| OpError::at(At::Unknown, error))?;
                 discard(engine, target, stage);
                 return Err(OpError::target(error));
             }

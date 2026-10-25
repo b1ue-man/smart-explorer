@@ -35,6 +35,8 @@ pub(crate) struct FileWork {
     pub mtime_ms: i64,
     pub id: Option<String>,
     pub md5: Option<String>,
+    /// Stable explicit-pair identity, independent of top-level numbering.
+    pub receipt_key: Option<String>,
     /// The one retry of a transient failure was used.
     pub retried: bool,
     /// Goes alone, never in a packet again (a packet ended before it).
@@ -54,6 +56,7 @@ impl FileWork {
             mtime_ms,
             id: None,
             md5: None,
+            receipt_key: None,
             retried: false,
             alone: false,
             overloaded_since: None,

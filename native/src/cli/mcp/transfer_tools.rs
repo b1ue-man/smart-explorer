@@ -24,6 +24,12 @@ pub(super) fn start(session: &Session, kind: JobKind, args: &Args<'_>) -> Result
     let destination_spec = args.string("destination")?;
     let recursive = args.flag("recursive")?;
     let overwrite = args.flag("overwrite")?;
+    let folders=match args.opt_string("folder_conflict")?.as_deref().unwrap_or("merge") {
+        "merge"=>crate::transfer::FolderConflict::Merge,
+        "keep-both"=>crate::transfer::FolderConflict::KeepBoth,
+        "fail"=>crate::transfer::FolderConflict::Fail,
+        _=>return Err("folder_conflict must be merge, keep-both or fail".into()),
+    };
     // Resolve both ends before a job exists, so a typo fails immediately.
     let source = session.targets.resolve(&source_spec)?;
     let destination = session.targets.resolve(&destination_spec)?;
@@ -36,19 +42,21 @@ pub(super) fn start(session: &Session, kind: JobKind, args: &Args<'_>) -> Result
     job.set_control(Arc::new(TransferControl(observer.clone())));
     spawn_worker(job.clone(), move |_| {
         let outcome = match kind {
-            JobKind::Move => crate::cli::ops::move_observed(
+            JobKind::Move => crate::cli::ops::move_observed_with_folders(
                 &source,
                 &destination,
                 recursive,
                 overwrite,
                 &observer,
+                folders,
             ),
-            _ => crate::cli::ops::copy_observed(
+            _ => crate::cli::ops::copy_observed_with_folders(
                 &source,
                 &destination,
                 recursive,
                 overwrite,
                 &observer,
+                folders,
             ),
         };
         let progress = progress_value(&observer);
@@ -104,6 +112,8 @@ fn progress_value(observer: &TreeObserver) -> Value {
         // A hint about the connection, such as the number of SSH
         // connections or why no further one opens; `null` without one.
         "note": progress.note,
+        "optical_readers_scope": "process",
+        "optical_readers": progress.optical_readers,
     })
 }
 

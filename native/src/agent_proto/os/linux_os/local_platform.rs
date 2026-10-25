@@ -5,6 +5,9 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::Path;
 
 pub(crate) type FileIdentity = (u64, u64);
+#[path = "../../../copy/os/linux_file_proof.rs"]
+mod persistent_file_proof;
+pub(crate) use persistent_file_proof::stable_handle_identity;
 
 pub(crate) fn metadata_is_link_like(_path: &Path, metadata: &std::fs::Metadata) -> bool {
     metadata.file_type().is_symlink()
@@ -93,6 +96,10 @@ pub(crate) fn sync_filesystem(_path: &Path) -> io::Result<bool> {
 pub(crate) fn file_identity(file: &std::fs::File) -> io::Result<FileIdentity> {
     let metadata = file.metadata()?;
     Ok((metadata.dev(), metadata.ino()))
+}
+
+pub(crate) fn same_file_object(left: &std::fs::File, right: &std::fs::File) -> io::Result<bool> {
+    Ok(file_identity(left)? == file_identity(right)?)
 }
 
 pub(crate) fn path_matches_identity(path: &Path, expected: FileIdentity) -> io::Result<bool> {
@@ -209,6 +216,10 @@ pub(crate) fn rename_no_replace(source: &Path, destination: &Path) -> io::Result
     // links retain the source and fail safely; the standalone agent needs no
     // dependency on the application's android_fs module for this ladder.
     let source_path = Path::new(std::ffi::OsStr::from_bytes(source.as_bytes()));
+    if std::fs::symlink_metadata(source_path)?.is_dir() {
+        return Err(io::Error::new(io::ErrorKind::Unsupported,
+            "Atomic directory rename requires filesystem RENAME_NOREPLACE support"));
+    }
     let destination_path = Path::new(std::ffi::OsStr::from_bytes(destination.as_bytes()));
     hard_link_no_replace(source_path, destination_path)
 }
@@ -294,3 +305,6 @@ mod tests {
         assert_eq!(std::fs::read(&target).unwrap(), b"candidate");
     }
 }
+
+#[path = "folder_reservation.rs"]
+pub(crate) mod folder_reservation;

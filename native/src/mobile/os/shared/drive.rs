@@ -67,6 +67,10 @@ pub(crate) fn transfer_job(
     target_label: String,
 ) -> TransferJob {
     TransferJob {
+        id: crate::transfer::new_job_id(),
+        recoverable: true,
+        recovery: crate::transfer::RecoveryMode::New,
+        folders: crate::transfer::FolderConflictPolicy::new(crate::transfer::FolderConflict::KeepBoth),
         source,
         target,
         target_dir,

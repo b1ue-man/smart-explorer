@@ -2,6 +2,11 @@ use super::wire::{FsRequest, FsResponse};
 
 pub(super) fn request_label(request: &FsRequest) -> &'static str {
     match request {
+        FsRequest::DirectoryReservationSupported { .. } => "directory_reservation_supported",
+        FsRequest::DirectoryIdentity { .. } => "directory_identity",
+        FsRequest::FileIdentity { .. } => "file_identity",
+        FsRequest::CreateDirExclusive { .. } => "create_dir_exclusive",
+        FsRequest::Capacity { .. } => "capacity",
         FsRequest::Capabilities { .. } => "capabilities",
         FsRequest::ReleaseLease => "release_lease",
         FsRequest::ListDir { .. } => "list_dir",
@@ -45,6 +50,10 @@ pub(super) fn request_label(request: &FsRequest) -> &'static str {
 
 pub(super) fn response_summary(response: &FsResponse) -> String {
     match response {
+        FsResponse::DirectoryReservationSupported { supported } => format!("directory reservation supported={supported}"),
+        FsResponse::DirectoryIdentity { identity } => format!("directory identity known={}", identity.is_some()),
+        FsResponse::FileIdentity { identity } => format!("file identity known={}", identity.is_some()),
+        FsResponse::Capacity { capacity } => format!("capacity state={:?}", capacity.state),
         FsResponse::Capabilities {
             capabilities,
             contract_version,

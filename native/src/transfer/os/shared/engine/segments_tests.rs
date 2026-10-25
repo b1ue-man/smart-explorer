@@ -374,6 +374,10 @@ fn speed_task_segments_ticket_without_work_is_noop() {
         base: None,
     };
     let view = JobView {
+        recoverable: true,
+        recovery: crate::transfer::RecoveryMode::New,
+        id: None,
+        folders: &crate::transfer::FolderConflictPolicy::new(crate::transfer::FolderConflict::Merge),
         source: Side::Local,
         target: Side::Local,
         target_dir: &target,

@@ -41,11 +41,14 @@ pub(crate) struct LocalSource {
     path: PathBuf,
     display: String,
     before: Observation,
+    optical: Option<crate::source_media::Guard>,
 }
 
 impl LocalSource {
     pub(crate) fn open(path: &str) -> Result<Self, OpError> {
         let native_path = native(path);
+        let optical = crate::source_media::acquire_current(&native_path, crate::source_media::Priority::Foreground).map_err(OpError::source)?;
+        if let Some(guard) = &optical { guard.set_mode(crate::source_media::ReadMode::Sequential); }
         let metadata =
             crate::local_access::symlink_metadata(&native_path).map_err(OpError::source)?;
         let before = observe(&native_path, &metadata, path)?;
@@ -55,17 +58,30 @@ impl LocalSource {
             path: native_path,
             display: path.to_string(),
             before,
+            optical,
         };
         source.verify()?;
         Ok(source)
     }
 
+    pub(crate) fn is_optical(&self) -> bool { self.optical.is_some() }
+
     pub(crate) fn length(&self) -> u64 {
         self.before.length
     }
 
+    /// Consume the reader and release its device permit before provider
+    /// publication or the journal performs independently guarded metadata.
+    pub(crate) fn publication_check(self) -> Result<LocalCheck, OpError> {
+        self.verify()?;
+        let identity = optional_identity(&self.file).map_err(OpError::source)?;
+        Ok(LocalCheck { path: self.display.clone(), before: self.before, identity,
+            medium: self.optical.as_ref().map(|guard| guard.source().clone()) })
+    }
+
     /// The opened file and the path are still what was opened.
     pub(crate) fn verify(&self) -> Result<(), OpError> {
+        if let Some(guard) = &self.optical { guard.validate(&self.path).map_err(OpError::source)?; }
         let opened = self.file.metadata().map_err(OpError::source)?;
         let named = crate::local_access::symlink_metadata(&self.path).map_err(OpError::source)?;
         if observe(&self.path, &opened, &self.display)? != self.before
@@ -83,6 +99,7 @@ impl LocalSource {
             path: self.path.clone(),
             display: self.display.clone(),
             before: self.before,
+            optical: self.is_optical(),
         }
     }
 
@@ -157,6 +174,32 @@ impl LocalSource {
     }
 }
 
+pub(crate) struct LocalCheck {
+    path: String,
+    before: Observation,
+    identity: Option<String>,
+    medium: Option<crate::source_media::Source>,
+}
+
+impl LocalCheck {
+    pub(crate) fn verify(&self) -> Result<(), OpError> {
+        let source = LocalSource::open(&self.path)?;
+        if source.before != self.before
+            || optional_identity(&source.file).map_err(OpError::source)? != self.identity
+            || source.optical.as_ref().map(|guard| guard.source()) != self.medium.as_ref()
+        { return Err(changed(&self.path)); }
+        source.verify()
+    }
+}
+
+fn optional_identity(file: &File) -> io::Result<Option<String>> {
+    match crate::copy::local_file_identity_handle(file) {
+        Ok(identity) => Ok(Some(identity)),
+        Err(error) if error.kind() == io::ErrorKind::Unsupported => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
 /// The ranges of an opened local source: each opens a handle of its own
 /// (no shared file pointer, nothing platform-specific) and checks that it is
 /// still the file that was opened, so a swapped or changed file is refused
@@ -165,11 +208,16 @@ pub(crate) struct RangeSource {
     path: PathBuf,
     display: String,
     before: Observation,
+    optical: bool,
 }
 
 impl RangeSource {
     /// A handle on the file, positioned at `offset`.
     pub(crate) fn open_at(&self, offset: u64) -> Result<File, OpError> {
+        if self.optical {
+            return Err(OpError::source(io::Error::new(io::ErrorKind::Unsupported,
+                "optical sources require their exclusive sequential reader")));
+        }
         let mut file = crate::local_access::open_read(&self.path).map_err(OpError::source)?;
         let opened = file.metadata().map_err(OpError::source)?;
         if observe(&self.path, &opened, &self.display)? != self.before {

@@ -24,9 +24,21 @@ impl FolderIndex {
         tx: Sender<IndexMsg>,
         cancel: Arc<AtomicBool>,
     ) -> io::Result<()> {
+        Self::build_async_excluding(roots, persist_path, tx, cancel, Vec::new())
+    }
+
+    pub(crate) fn save_with_cancel(&self, path: &std::path::Path, cancel: &AtomicBool) -> io::Result<bool> {
+        self.save_cancellable(path, || cancel.load(Ordering::Acquire))
+            .map(|outcome| matches!(outcome, persistence::SaveOutcome::Saved))
+    }
+
+    /// Certified immutable subtrees are merged by the caller after this walk;
+    /// exclude them also when reached through an enclosing root such as `/`.
+    pub(crate) fn build_async_excluding(roots: Vec<PathBuf>, persist_path: PathBuf,
+        tx: Sender<IndexMsg>, cancel: Arc<AtomicBool>, excluded: Vec<PathBuf>) -> io::Result<()> {
         std::thread::Builder::new()
             .name("index-builder".into())
-            .spawn(move || run_builder(roots, persist_path, tx, cancel))
+            .spawn(move || run_builder(roots, persist_path, tx, cancel, excluded))
             .map(|_| ())
     }
 }
@@ -36,9 +48,10 @@ fn run_builder(
     persist_path: PathBuf,
     tx: Sender<IndexMsg>,
     cancel: Arc<AtomicBool>,
+    excluded: Vec<PathBuf>,
 ) {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        build_message(roots, &persist_path, &tx, &cancel)
+        build_message(roots, &persist_path, &tx, &cancel, &excluded)
     }));
     let message = match result {
         Err(payload) => IndexMsg::Failed(format!(
@@ -59,8 +72,9 @@ fn build_message(
     persist_path: &std::path::Path,
     tx: &Sender<IndexMsg>,
     cancel: &AtomicBool,
+    excluded: &[PathBuf],
 ) -> Option<IndexMsg> {
-    let index = match walk::build_index(roots, tx, cancel) {
+    let index = match walk::build_index_excluding(roots, tx, cancel, excluded) {
         Ok(index) => index,
         Err(walk::WalkStop::Canceled) => return Some(IndexMsg::Canceled),
         Err(walk::WalkStop::ReceiverClosed) => return None,

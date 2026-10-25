@@ -7,6 +7,37 @@ use std::{
 };
 
 impl BackendExtensions for GuardedBackend {
+    fn directory_reservation_supported(&self, root: &str) -> bool {
+        if self.read(root).is_err() { return false; }
+        let supported = vfs::directory_reservation_supported(&*self.inner, root);
+        supported && self.read(root).is_ok()
+    }
+
+    fn create_dir_exclusive(&self, path: &str) -> VfsResult<()> {
+        self.write(path)?;
+        vfs::create_dir_exclusive(&*self.inner, path)?;
+        self.write(path)
+    }
+    fn directory_identity(&self, path: &str) -> VfsResult<Option<String>> {
+        self.read(path)?;
+        let identity = vfs::directory_identity(&*self.inner, path)?;
+        self.read(path)?;
+        Ok(identity)
+    }
+    fn file_identity(&self, path: &str) -> VfsResult<Option<String>> {
+        self.read(path)?;
+        let identity = vfs::file_identity(&*self.inner, path)?;
+        self.read(path)?;
+        Ok(identity)
+    }
+
+    fn capacity(&self, root: &str) -> VfsResult<vfs::CapacitySnapshot> {
+        self.read(root)?;
+        let snapshot = vfs::capacity(&*self.inner, root)?;
+        self.read(root)?;
+        Ok(snapshot)
+    }
+
     fn previous_state_identities(&self) -> VfsResult<Vec<String>> {
         self.read(&self.inner.root_display())?;
         let identities = vfs::previous_state_identities(&*self.inner)?;

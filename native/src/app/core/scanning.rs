@@ -16,6 +16,13 @@ impl App {
     /// way. In recursive mode an active filter prunes the scan (see
     /// `scan_scope`).
     fn start_scan_with(&mut self, root: PathBuf, record_history: bool, keep_name_filter: bool) {
+        let requested = root.to_string_lossy();
+        if self.remote.is_none() && self.disconnected_drive(&requested)
+            && (keep_name_filter || !self.selecting_drive_root(&requested)) {
+            self.error_msg = Some("Datenträger nicht verbunden".into());
+            return;
+        }
+        self.read_access.new_scan();
         if let Some(h) = self.scan_handle.take() {
             h.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
         }
@@ -49,11 +56,14 @@ impl App {
             self.filter.text.clear();
             self.text_draft.clear();
         }
-        if self.root_path != root.to_string_lossy().replace('\\', "/") {
+        let root_text = if self.remote.is_some() && !is_local_style(&requested) {
+            requested.into_owned()
+        } else { local_path_text(&root) };
+        if self.root_path != root_text {
             self.tree.collapsed.clear();
             self.read_access = Default::default();
         }
-        self.root_path = root.to_string_lossy().replace('\\', "/");
+        self.root_path = root_text;
 
         let (tx, rx) = unbounded();
         let scope = self.scan_scope();
@@ -70,6 +80,7 @@ impl App {
             // local scan).
             self.add_recent(&self.root_path.clone());
         }
+        if !keep_name_filter || self.drive_binding.is_none() { self.bind_scan_drive(); }
         // Per-location sort preference (after `remote` is finalized, so the key
         // is namespaced by connection). Default if unset; no inheritance.
         self.dirs_first = self
@@ -152,6 +163,7 @@ impl App {
     }
 
     pub(in crate::app) fn cancel_scan(&mut self) {
+        self.read_access.invalidate_partial();
         if let Some(h) = self.scan_handle.take() {
             h.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
         }
@@ -231,6 +243,18 @@ impl App {
 
     // ─── Folder index lifecycle ─────────────────────────────────────────
     pub(in crate::app) fn start_index_build(&mut self) {
+        self.start_index_build_with(false);
+    }
+
+    pub(in crate::app) fn verify_loaded_optical_index(&mut self) {
+        self.start_index_build_with(true);
+    }
+
+    fn start_index_build_with(&mut self, only_loaded_optical: bool) {
+        if !self.drive_index_ready() {
+            self.notice = Some(("Laufwerksbestand wird gelesen; Indexaufbau danach erneut starten.".into(), Instant::now()));
+            return;
+        }
         if self.index_building {
             return;
         }
@@ -244,6 +268,7 @@ impl App {
         if let Some(c) = self.index_cancel.take() {
             c.store(true, std::sync::atomic::Ordering::Relaxed);
         }
+        self.capture_index_drives();
         self.index_building = true;
         self.index_progress = 0;
         self.index_progress_path = String::new();
@@ -254,7 +279,16 @@ impl App {
         };
         let (tx, rx) = crossbeam_channel::unbounded();
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        match FolderIndex::build_async(roots, folder_index_path(), tx, cancel.clone()) {
+        let started = if only_loaded_optical {
+            super::optical_index::verify_loaded_async(
+                roots, folder_index_path(), self.folder_index.clone(), tx, cancel.clone(),
+            )
+        } else {
+            super::optical_index::build_async(
+                roots, folder_index_path(), self.folder_index.clone(), tx, cancel.clone(), true,
+            )
+        };
+        match started {
             Ok(()) => {
                 self.index_rx = Some(rx);
                 self.index_cancel = Some(cancel);
@@ -295,6 +329,12 @@ impl App {
                     self.index_progress_path = current;
                 }
                 Ok(IndexMsg::Complete(idx)) => {
+                    if self.drive_state.index_obsolete {
+                        self.index_dirty = true;
+                        self.finish_index_worker();
+                        keep_receiver = false;
+                        break;
+                    }
                     self.folder_index = idx;
                     self.finish_index_worker();
                     keep_receiver = false;

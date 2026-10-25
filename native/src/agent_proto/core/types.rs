@@ -1,6 +1,6 @@
 /// Bumped whenever the wire format OR the agent's behaviour changes; the client
 /// re-uploads the agent on a mismatch.
-pub const PROTO_VERSION: u32 = 11;
+pub const PROTO_VERSION: u32 = 12;
 
 /// Existing error frames can request a metadata walk without changing wire
 /// layouts. A hash-only stream cannot represent protected link boundaries.
@@ -87,6 +87,18 @@ pub struct SearchSpec {
 /// same enum so the channel is fully bidirectional.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Frame {
+    /// Strict atomic folder creation (`folder-reservation-v1`), sent once.
+    CreateDirExclusive(String),
+    /// Technical exclusive-create support; neither permission nor object identity.
+    DirectoryReservationSupported(String),
+    /// Read-only stable directory-object identity query (`folder-reservation-v1`).
+    DirectoryIdentity(String),
+    DirectoryIdentityValue(Option<String>),
+    /// Explicit regular-file object identity (`file-identity-v1`).
+    FileIdentity(String),
+    FileIdentityValue(Option<String>),
+    /// Directory publication with typed failure classes (`folder-reservation-v1`).
+    RenameDirectoryNoReplace { src: String, dst: String },
     Hello {
         proto: u32,
     },
@@ -290,6 +302,8 @@ pub enum Frame {
         durable: bool,
     },
     /// What the target below a root can store (`ext-v1`): `Limits`.
+    Capacity(String),
+    CapacityData(String),
     TargetLimits(String),
     Limits(WireTargetLimits),
     /// Change subscription (`ext-v1`): `Change`* until the client cancels;

@@ -33,10 +33,12 @@ pub(super) fn run(engine: &Engine<'_>, _slot: WorkerSlot<'_>) {
                 Ok(_) => {}
                 Err(error) => folder_failed(engine, &engine.folders.path_of(&rel), error),
             },
-            Work::File(file) => match super::batch::members(engine, &file) {
-                Some(members) => super::batch::run(engine, file, members, &mut buffer),
-                None => run_file(engine, file, &mut buffer),
-            },
+            Work::File(file) => crate::source_media::with_cancellation(engine.stop_flag(), || {
+                match super::batch::members(engine, &file) {
+                    Some(members) => super::batch::run(engine, file, members, &mut buffer),
+                    None => run_file(engine, file, &mut buffer),
+                }
+            }),
             Work::Segment { job } => super::segments::help(engine, job, &mut buffer),
         }
     }

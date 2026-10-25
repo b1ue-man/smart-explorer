@@ -168,7 +168,7 @@ pub(super) fn try_copy_with(
         let Some(children) = child_paths(src, dst_path)? else {
             return Ok(None);
         };
-        match dst.backend.create_dir_new(dst_path) {
+        match crate::vfs::create_dir_exclusive(&*dst.backend, dst_path) {
             Ok(()) => {}
             // Nothing was created: the older path can still decide.
             Err(error) if error.kind() == io::ErrorKind::Unsupported => return Ok(None),
@@ -304,6 +304,10 @@ fn run(
     observer: &TreeObserver,
 ) -> Result<Finished, String> {
     let view = JobView {
+        recoverable: false,
+        recovery: crate::transfer::RecoveryMode::New,
+        id: None,
+        folders: &crate::transfer::FolderConflictPolicy::new(crate::transfer::FolderConflict::Merge),
         source: side_of(src),
         target: side_of(dst),
         target_dir,

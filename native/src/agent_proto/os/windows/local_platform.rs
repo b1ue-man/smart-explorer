@@ -3,6 +3,9 @@ use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 
 pub(crate) type FileIdentity = (u32, u64);
+#[path = "../../../copy/os/windows_file_proof.rs"]
+mod persistent_file_proof;
+pub(crate) use persistent_file_proof::{same_file_object, stable_handle_identity};
 
 pub(crate) fn metadata_is_link_like(path: &Path, metadata: &std::fs::Metadata) -> bool {
     metadata_class(path, metadata).0
@@ -275,3 +278,6 @@ pub(crate) fn rename_no_replace(source: &Path, destination: &Path) -> io::Result
         Ok(())
     }
 }
+
+#[path = "folder_reservation.rs"]
+pub(crate) mod folder_reservation;

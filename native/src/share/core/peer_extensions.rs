@@ -25,7 +25,28 @@ mod remove_tree;
 #[path = "peer_reversible_replace.rs"]
 pub(super) mod reversible_replace;
 
+#[path = "folder_reservation.rs"]
+pub(in crate::share) mod folder_reservation;
+#[path = "file_identity_rpc.rs"]
+pub(in crate::share) mod file_identity;
+
 impl BackendExtensions for PeerBackend {
+    fn directory_reservation_supported(&self, root: &str) -> bool {
+        folder_reservation::supported(self, root)
+    }
+
+    fn create_dir_exclusive(&self, path: &str) -> io::Result<()> {
+        folder_reservation::create(self, path)
+    }
+    fn directory_identity(&self, path: &str) -> io::Result<Option<String>> {
+        folder_reservation::identity(self, path)
+    }
+    fn file_identity(&self, path: &str) -> io::Result<Option<String>> {
+        file_identity::client(self, path)
+    }
+    fn capacity(&self, root: &str) -> io::Result<crate::vfs::CapacitySnapshot> {
+        super::capacity::client(self, root)
+    }
     fn version_archive_policy(&self) -> crate::vfs::VersionArchivePolicy {
         crate::vfs::VersionArchivePolicy::AppPrivate
     }

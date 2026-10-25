@@ -189,3 +189,47 @@ pub(super) fn watch(
     drop(subscription);
     result.and_then(|()| emit(sink, id, &Frame::End))
 }
+
+/// Typed capacity payload, queried only on the authorized backend.
+pub(super) fn capacity(backend: &BackendHandle, root: &str) -> io::Result<Frame> {
+    let value = vfs::capacity(&**backend, root)?;
+    serde_json::to_string(&value).map(Frame::CapacityData)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "capacity serialization failed"))
+}
+
+/// Folder failures preserve typed provider classes while retaining the
+/// service's existing congestion, transport and locked-vault envelopes.
+pub(super) fn folder_reply(result: io::Result<Frame>, credit: bool) -> Frame {
+    match result {
+        Err(error) => {
+            let text = super::backend_server::error_text(&error, credit);
+            if text != error.to_string() { Frame::Err(text) }
+            else { Frame::folder_reply(Err(error)) }
+        }
+        Ok(frame) => frame,
+    }
+}
+
+pub(super) fn folder_operation(backend: &BackendHandle, request: Frame, credit: bool) -> Frame {
+    let result = match request {
+        Frame::RenameDirectoryNoReplace { src, dst } => {
+            backend.rename_no_replace(&src, &dst).map(|()| Frame::Ok)
+        }
+        Frame::CreateDirExclusive(path) => {
+            vfs::create_dir_exclusive(&**backend, &path).map(|()| Frame::Ok)
+        }
+        Frame::DirectoryReservationSupported(root) => {
+            Ok(Frame::Answer(u64::from(vfs::directory_reservation_supported(&**backend, &root))))
+        }
+        Frame::DirectoryIdentity(path) => {
+            vfs::directory_identity(&**backend, &path).map(Frame::DirectoryIdentityValue)
+        }
+        Frame::FileIdentity(path) => {
+            // Keep the backend's own guards and opt-in. Stat IDs may be
+            // content hashes, paths or provider IDs without file semantics.
+            vfs::file_identity(&**backend, &path).map(Frame::FileIdentityValue)
+        }
+        _ => Err(io::Error::new(io::ErrorKind::InvalidInput, "Unexpected folder request")),
+    };
+    folder_reply(result, credit)
+}

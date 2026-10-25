@@ -293,6 +293,10 @@ impl StageTicket {
 }
 
 impl PeerBackend {
+    pub(in crate::share) fn has_stage_ticket(&self, path: &str) -> io::Result<bool> {
+        self.transfer.stages.contains(path)
+    }
+
     pub(in crate::share) fn open_owned_writer(
         &self,
         path: &str,

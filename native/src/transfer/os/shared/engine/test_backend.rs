@@ -186,6 +186,8 @@ pub(super) struct Fake {
     /// The server copy fails with this kind after it was counted.
     pub server_copy_error: Option<io::ErrorKind>,
     pub concurrent: bool,
+    /// Explicitly expose the fixture filesystem's durable object proofs.
+    pub identity_proofs: bool,
     pub batch: Option<BatchLimits>,
     pub batch_ambiguous: bool,
     pub read_delay: Duration,
@@ -210,6 +212,7 @@ impl Fake {
             server_copy: false,
             server_copy_error: None,
             concurrent: true,
+            identity_proofs: false,
             batch: None,
             batch_ambiguous: false,
             read_delay: Duration::ZERO,
@@ -262,6 +265,9 @@ impl Fake {
 }
 
 impl Backend for Fake {
+    fn extensions(&self) -> Option<&dyn crate::vfs::BackendExtensions> {
+        self.identity_proofs.then_some(self)
+    }
     fn scheme(&self) -> Scheme {
         Scheme::Local
     }
@@ -477,4 +483,11 @@ impl Backend for Fake {
     fn get_batch(&self, items: &[BatchGet], sink: &mut dyn BatchSink) -> VfsResult<()> {
         self.fake_get_batch(items, sink)
     }
+}
+
+impl crate::vfs::BackendExtensions for Fake {
+    fn directory_reservation_supported(&self, root: &str) -> bool { crate::vfs::directory_reservation_supported(&self.inner, root) }
+    fn create_dir_exclusive(&self, path: &str) -> VfsResult<()> { crate::vfs::create_dir_exclusive(&self.inner, path) }
+    fn directory_identity(&self, path: &str) -> VfsResult<Option<String>> { crate::vfs::directory_identity(&self.inner, path) }
+    fn file_identity(&self, path: &str) -> VfsResult<Option<String>> { crate::vfs::file_identity(&self.inner, path) }
 }

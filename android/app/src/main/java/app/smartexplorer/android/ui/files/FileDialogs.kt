@@ -38,9 +38,12 @@ import androidx.compose.ui.unit.dp
 import app.smartexplorer.android.api.FilesApi
 import app.smartexplorer.android.api.NameCheck
 import app.smartexplorer.android.core.CoreException
+import app.smartexplorer.android.core.Core
 import app.smartexplorer.android.core.TaskInfo
+import app.smartexplorer.android.core.VaultChanged
 import app.smartexplorer.android.ui.common.Format
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 
 /**
  * Name dialog for rename / new folder / new file (spec F7): the name is preselected without its
@@ -193,49 +196,131 @@ internal fun DeleteDialog(
 }
 
 @Composable
-private fun CheckLine(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+private fun CheckLine(label: String, checked: Boolean, enabled: Boolean = true, onChange: (Boolean) -> Unit) {
     Row(
-        modifier = Modifier.fillMaxWidth().toggleable(value = checked, onValueChange = onChange, role = Role.Checkbox),
+        modifier = Modifier.fillMaxWidth().toggleable(value = checked, enabled = enabled, onValueChange = onChange, role = Role.Checkbox),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Checkbox(checked = checked, onCheckedChange = null)
+        Checkbox(checked = checked, enabled = enabled, onCheckedChange = null)
         Text(label, modifier = Modifier.padding(start = 8.dp))
     }
 }
 
 /**
- * Name conflicts on paste/copy: local→local offers skip / replace / keep both (for all);
- * remote targets always number existing names (desktop rule).
+ * Selected-folder decisions are per root (or for all remaining roots).
+ * Local file replacement remains independently reachable.
  */
 @Composable
-internal fun ConflictDialog(names: List<String>, choosable: Boolean, onChoice: (conflict: String) -> Unit, onDismiss: () -> Unit) {
+internal fun ConflictDialog(
+    request: TransferRequest,
+    names: List<String>,
+    choosable: Boolean,
+    folders: List<app.smartexplorer.android.api.FolderCollision>,
+    onChoice: (conflict: String, folders: Map<String, String>) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var counted by remember(request) { mutableStateOf(folders) }
+    var index by remember(request) { mutableStateOf(0) }
+    var choice by remember(request) { mutableStateOf("keep-both") }
+    var fileChoice by remember(request) { mutableStateOf("keepBoth") }
+    var all by remember(request) { mutableStateOf(false) }
+    var choices by remember(request) { mutableStateOf(emptyMap<String, String>()) }
+    var previewError by remember(request) { mutableStateOf<String?>(null) }
+    var previewProgress by remember(request) { mutableStateOf<String?>(null) }
+    var revoked by remember(request) { mutableStateOf(false) }
+    LaunchedEffect(request) {
+        Core.events.collect { event ->
+            if (event is VaultChanged && (event.state == "locked" || event.state == "locking")) {
+                // Mounted local paths do not expose their vault site in the
+                // locator. Revoke this preview on every vault lock event.
+                revoked = true
+                counted = emptyList()
+                choices = emptyMap()
+                previewProgress = null
+                previewError = null
+                onDismiss()
+            }
+        }
+    }
+    LaunchedEffect(request, revoked) {
+        if (folders.isEmpty() || revoked) return@LaunchedEffect
+        var taskId: String? = null
+        try {
+            val id = FilesApi.folderPreview(request.sources, request.targetDir, request.filter, request.baseDir)
+            taskId = id
+            while (true) {
+                val task = FilesApi.taskGet(id)
+                if (revoked) break
+                previewProgress = task.message
+                if (!task.isActive) {
+                    val result = FilesApi.resultOf(task, app.smartexplorer.android.api.FolderPreviewResult.serializer())
+                    if (result != null) counted = result.folders
+                    else previewError = "Zählung nicht vollständig verfügbar"
+                    break
+                }
+                kotlinx.coroutines.delay(250)
+            }
+        } catch (error: app.smartexplorer.android.core.CoreException) {
+            previewError = error.message
+        } finally {
+            val id = taskId
+            if (id != null) kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                runCatching { FilesApi.cancelTask(id) }
+            }
+        }
+    }
+    val folder = counted.getOrNull(index)
+    val keepBothAllowed = folder == null || folder.keepBothSupported && (!all || counted.drop(index).all { it.keepBothSupported })
     val shown = names.take(MAX_NAMES).joinToString(", ") + if (names.size > MAX_NAMES) " …" else ""
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (names.size == 1) "Name vorhanden" else "${names.size} Namen vorhanden") },
+        title = { Text(if (folder != null) "Ordner ${index + 1} von ${folders.size}" else "Name vorhanden") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Im Ziel gibt es schon: $shown")
-                if (choosable) {
-                    Text("Die Wahl gilt für alle.", style = MaterialTheme.typography.bodySmall)
-                    ChoiceButton("Überspringen") { onChoice("skip") }
-                    ChoiceButton("Ersetzen") { onChoice("replace") }
-                    ChoiceButton("Beide behalten") { onChoice("keepBoth") }
-                } else {
-                    Text("Vorhandene Namen werden nummeriert („Name (2)“).")
+            Column(
+                modifier = Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                if (folder != null) {
+                    Text("${if (folder.existing) "Im Ziel vorhanden" else "Gewählter Zielordner"}: ${folder.relative}")
+                    if (folder.keepBothSupported) Text("Vorgeschlagen: ${folder.keepBoth} (wird beim Start exklusiv geprüft)")
+                    else Text("Diese Verbindung kann einen freien Ordnernamen bei gleichzeitigen Kopien nicht zusichern. Zusammenführen oder Überspringen ausdrücklich wählen.")
+                    CheckLine("Beide behalten", choice == "keep-both", enabled = folder.keepBothSupported) { choice = "keep-both" }
+                    CheckLine("Zusammenführen", choice == "merge") { choice = "merge" }
+                    CheckLine("Überspringen", choice == "skip") { choice = "skip" }
+                    CheckLine("Für alle verbleibenden Ordner", all) { all = !all }
+                    if (all && choice == "keep-both" && !keepBothAllowed) Text("Mindestens ein verbleibender Ordner verlangt ausdrücklich Zusammenführen oder Überspringen.")
+                    Text("Zusammenführen: bisher ${folder.newFiles} neue und ${folder.collidingFiles} gleichnamige Dateien")
+                    folder.samples.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
+                    if (!folder.counted) Text(previewError ?: previewProgress ?: "Zählung läuft im Hintergrund; Übernehmen bleibt möglich.")
+                    else if (!folder.complete) Text("Unvollständig: ${folder.omitted} geschützte oder nicht lesbare Bereiche")
+                    if (folder.omittedPaths.isNotEmpty()) {
+                        Text("Angezeigte Auslassungen: ${folder.omittedPaths.size} von ${folder.omitted}")
+                        folder.omittedPaths.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
+                    }
+                    folder.note?.let { Text(it) }
+                } else if (!revoked) {
+                    Text("Im Ziel gibt es schon: $shown")
                 }
+                if (choosable && !revoked) {
+                    Text("Gleichnamige Dateien${if (folder != null) " beim Zusammenführen" else ""}:")
+                    CheckLine("Beide behalten", fileChoice == "keepBoth") { fileChoice = "keepBoth" }
+                    CheckLine("Ersetzen", fileChoice == "replace") { fileChoice = "replace" }
+                    CheckLine("Überspringen", fileChoice == "skip") { fileChoice = "skip" }
+                } else if (!revoked) Text("Gleichnamige Dateien werden nummeriert.")
             }
         },
         confirmButton = {
-            if (choosable) {
-                TextButton(onClick = onDismiss) { Text("Abbrechen") }
-            } else {
-                TextButton(onClick = { onChoice("keepBoth") }) { Text("Einfügen") }
-            }
+            TextButton(enabled = !revoked && (keepBothAllowed || choice != "keep-both"), onClick = {
+                if (!revoked && folder == null) onChoice(fileChoice, choices)
+                else if (!revoked && folder != null) {
+                    val remaining = if (all) folders.drop(index) else listOf(folder)
+                    val selected = choices + remaining.associate { it.source to choice }
+                    if (all || index + 1 == folders.size) onChoice(fileChoice, selected)
+                    else { choices = selected; index += 1; choice = "keep-both" }
+                }
+            }) { Text(if (folder != null && !all && index + 1 < folders.size) "Weiter" else "Übernehmen") }
         },
-        dismissButton = if (choosable) null else {
-            { TextButton(onClick = onDismiss) { Text("Abbrechen") } }
-        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Abbrechen") } },
     )
 }
 

@@ -21,6 +21,7 @@ pub(super) struct TransferPlan {
 }
 
 pub(super) struct PlanEntry {
+    pub(super) resume_existing: bool,
     pub(super) source_path: String,
     pub(super) destination_path: String,
     pub(super) source: VfsMeta,
@@ -141,6 +142,7 @@ impl TransferPlan {
         destination_path: &str,
         recursive: bool,
         force: bool,
+        resume: bool,
         expected_root: Option<&VfsMeta>,
         observer: &TreeObserver,
     ) -> Result<Self, String> {
@@ -186,10 +188,11 @@ impl TransferPlan {
                 ));
             }
             let destination_state =
-                inspect_destination(destination, &work.destination_path, fresh.is_dir, force)?;
+                inspect_destination(destination, &work.destination_path, fresh.is_dir, force || resume)?;
             budget.reserve_auxiliary_text(destination_state_text(&destination_state))?;
             let index = entries.len();
             entries.push(PlanEntry {
+                resume_existing: resume && !fresh.is_dir && matches!(destination_state, DestinationState::File(_)),
                 source_path: work.source_path,
                 destination_path: work.destination_path,
                 source: fresh.clone(),

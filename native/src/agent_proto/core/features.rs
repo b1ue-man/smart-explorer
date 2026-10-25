@@ -12,6 +12,10 @@ pub const LABEL_BATCH: &str = "batch-v1";
 pub const LABEL_STAGE: &str = "stage-v1";
 /// The extension frames (`ListTolerant` … `Watch`, `ops_types`).
 pub const LABEL_EXT: &str = "ext-v1";
+pub const LABEL_FOLDER_RESERVATION: &str = "folder-reservation-v1";
+/// Explicit stable file-object identities; never inferred from Stat metadata.
+pub const LABEL_FILE_IDENTITY: &str = "file-identity-v1";
+pub const LABEL_CAPACITY: &str = "capacity-v1";
 /// Ranged uploads (`SegStageOpen`, `WriteAt`, `SegStageFinish`): a client
 /// sends these frames only to a server that announced the label.
 pub const LABEL_RANGE: &str = "range-v1";
@@ -36,13 +40,18 @@ pub fn lz4_switched_off() -> bool {
 }
 
 /// The version text the SSH agent of this build announces: the labels of the
-/// service (`server_version_with`) plus `range-v1` and, unless switched off
-/// for a test, `lz4-v1`. The background service does not announce these two
-/// labels: it does not serve the frames of either.
+/// service (`server_version_with`) plus `folder-reservation-v1`,
+/// `file-identity-v1`, `range-v1`
+/// and, unless switched off for a test, `lz4-v1`. Each host advertises only
+/// the handlers it actually connects.
 pub fn server_version(batch: bool) -> String {
     let mut version = server_version_with(batch, CREDIT_REQUEST_LIMIT);
     version.push('.');
     version.push_str(LABEL_RANGE);
+    version.push('.');
+    version.push_str(LABEL_FOLDER_RESERVATION);
+    version.push('.');
+    version.push_str(LABEL_FILE_IDENTITY);
     if !lz4_switched_off() {
         version.push('.');
         version.push_str(LABEL_LZ4);
@@ -85,6 +94,9 @@ pub struct ServerFeatures {
     pub stage: bool,
     /// The extension frames of `ops_types` (`ext-v1`).
     pub extensions: bool,
+    pub capacity: bool,
+    pub folder_reservation: bool,
+    pub file_identity: bool,
     /// Ranged uploads (`range-v1`).
     pub ranges: bool,
     /// LZ4 content blocks (`lz4-v1`).
@@ -113,6 +125,9 @@ impl ServerFeatures {
                 LABEL_BATCH => features.batch = true,
                 LABEL_STAGE => features.stage = true,
                 LABEL_EXT => features.extensions = true,
+                LABEL_FOLDER_RESERVATION => features.folder_reservation = true,
+                LABEL_FILE_IDENTITY => features.file_identity = true,
+                LABEL_CAPACITY => features.capacity = true,
                 LABEL_RANGE => features.ranges = true,
                 LABEL_LZ4 => features.lz4 = true,
                 other => {

@@ -20,7 +20,8 @@ use std::time::Duration;
 /// transfer (no batch support, a large file, nothing else small queued).
 pub(super) fn members(engine: &Engine<'_>, file: &FileWork) -> Option<Vec<FileWork>> {
     let limits = engine.batch?;
-    if file.retried || file.alone || engine.resume {
+    if file.retried || file.alone || engine.resume || engine.view.recovery == crate::transfer::RecoveryMode::Resume
+        || !packet_source(engine, file) {
         return None;
     }
     let (target, small) = {
@@ -33,12 +34,33 @@ pub(super) fn members(engine: &Engine<'_>, file: &FileWork) -> Option<Vec<FileWo
     if file.size > small {
         return None;
     }
-    let more = engine.queue.take_small(
+    let candidates = engine.queue.take_small(
         limits.max_files.saturating_sub(1),
         target.saturating_sub(file.size),
         small,
     );
+    let mut more = Vec::with_capacity(candidates.len());
+    let mut single = Vec::new();
+    // The first SSD member does not authorize any later member's medium.
+    // Probe after releasing the queue mutex; optical/probe-error entries go
+    // back as single files before any packet reader can acquire their permit.
+    for mut candidate in candidates {
+        if packet_source(engine, &candidate) { more.push(candidate); }
+        else {
+            candidate.alone = true;
+            single.push(candidate);
+        }
+    }
+    for candidate in single.into_iter().rev() {
+        engine.queue.push_front(Work::File(candidate));
+    }
     (!more.is_empty()).then_some(more)
+}
+
+fn packet_source(engine: &Engine<'_>, file: &FileWork) -> bool {
+    !engine.view.source.is_local()
+        || crate::source_media::probe(&super::super::walk_listers::native(&file.source))
+            .is_ok_and(|source| source.is_none())
 }
 
 /// Runs one packet of `first` and `members`.
@@ -96,6 +118,12 @@ impl<'e, 'a> Failures<'e, 'a> {
 
     pub(super) fn member(&mut self, mut file: FileWork, failure: OpError, attempt: Attempt) {
         let engine = self.engine;
+        if attempt != Attempt::MaybePublished {
+            if let Err(error) = super::file_recovery::unpublished(engine, &file) {
+                engine.fatal(format!("Unveröffentlichten Dateibeleg zurücknehmen: {error}"));
+                return;
+            }
+        }
         if engine.stopped() {
             return;
         }

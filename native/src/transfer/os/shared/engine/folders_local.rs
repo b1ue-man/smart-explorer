@@ -20,6 +20,10 @@ pub(crate) fn local_target_root(source_is_local: bool, target_dir: &str) -> Resu
     root.map_err(|error| format!("Zielordner „{target_dir}“: {error}"))
 }
 
+pub(crate) fn existing_target_root(target_dir: &str) -> io::Result<String> {
+    crate::copy::native_path_text(&canonical_folder(&absolute(target_dir)?)?)
+}
+
 /// Creates one local folder or accepts an existing plain one; links,
 /// junctions and files in its place are refused. True when created now.
 pub(crate) fn ensure_plain_dir(path: &Path) -> io::Result<bool> {
@@ -113,7 +117,7 @@ pub(crate) fn resolve_local_root(root: &str) -> io::Result<String> {
         resolved.push(name);
         ensure_plain_dir(&resolved)?;
     }
-    Ok(resolved.to_string_lossy().replace('\\', "/"))
+    crate::copy::native_path_text(&resolved)
 }
 
 fn absolute(root: &str) -> io::Result<PathBuf> {

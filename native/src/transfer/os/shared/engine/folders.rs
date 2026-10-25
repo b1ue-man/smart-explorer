@@ -26,7 +26,7 @@ use std::time::{Duration, Instant};
 
 #[path = "folders_local.rs"]
 mod local;
-pub(crate) use local::{ensure_plain_dir, local_target_root};
+pub(crate) use local::{ensure_plain_dir, local_target_root, existing_target_root};
 
 const WAIT_SLICE: Duration = Duration::from_millis(100);
 
@@ -78,8 +78,6 @@ impl FolderError {
 enum Settled {
     /// Nothing: it did not happen.
     Missing,
-    /// An empty folder: most likely the lost creation itself.
-    Empty,
     /// Something else took the name.
     Taken,
 }
@@ -276,8 +274,8 @@ impl<'a> FolderRegister<'a> {
         loop {
             let path = join_rel(&self.root, &name);
             let result = self.attempt(&path, cancel, true, |path| match self.target {
-                Side::Remote(backend) => backend.create_dir_new(path).map(|()| true),
-                Side::Local => ensure_plain_dir(&native(path)),
+                Side::Remote(backend) => crate::vfs::create_dir_exclusive(backend, path).map(|()| true),
+                Side::Local => crate::vfs::create_dir_exclusive(&crate::vfs::LocalBackend::new("/"), path).map(|()| true),
             });
             match result {
                 Ok(created) => {
@@ -346,12 +344,12 @@ impl<'a> FolderRegister<'a> {
             if exclusive && !surely_not_done(kind, overload) {
                 match self.settle(path, cancel)? {
                     Settled::Missing => {}
-                    // Adopted, but not trusted to hold nothing foreign: its
-                    // files still go through stages and create-only names.
-                    Settled::Empty => return Ok(false),
                     Settled::Taken => {
                         return Err(FolderError {
-                            kind: io::ErrorKind::AlreadyExists,
+                            // Existence or emptiness does not prove ownership.
+                            // Preserve the candidate instead of renumbering an
+                            // ambiguously completed request.
+                            kind: io::ErrorKind::Other,
                             ..FolderError::of(path, &error)
                         })
                     }
@@ -374,11 +372,7 @@ impl<'a> FolderRegister<'a> {
         if !meta.is_dir || meta.is_symlink {
             return Ok(Settled::Taken);
         }
-        match self.metadata_op(cancel, || backend.list_dir(path))? {
-            Ok(entries) if entries.is_empty() => Ok(Settled::Empty),
-            Ok(_) => Ok(Settled::Taken),
-            Err(error) => Err(FolderError::of(path, &error)),
-        }
+        Ok(Settled::Taken)
     }
 
     /// One metadata operation under a permit of the target's flow.
