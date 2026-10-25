@@ -64,7 +64,6 @@ internal fun MediaViewer(
     onClose: () -> Unit,
     onOpenExternal: (entry: Entry, media: LocalMedia?, chooser: Boolean) -> Unit,
 ) {
-    val (orientation, onOrientation) = mediaOrientation()
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         val pager = rememberPagerState(initialPage = set.start) { set.items.size }
         val loads = remember(set) { mutableStateMapOf<String, PageLoad>() }
@@ -162,8 +161,6 @@ internal fun MediaViewer(
                 val entry = set.items[pager.currentPage]
                 TopBar(
                     title = entry.name,
-                    orientation = orientation,
-                    onOrientation = onOrientation,
                     position = "${pager.currentPage + 1} / ${set.items.size}",
                     onBack = onClose,
                     onOpen = { chooser ->
@@ -180,8 +177,6 @@ internal fun MediaViewer(
 @Composable
 private fun TopBar(
     title: String,
-    orientation: MediaOrientation,
-    onOrientation: (MediaOrientation) -> Unit,
     position: String,
     onBack: () -> Unit,
     onOpen: (chooser: Boolean) -> Unit,
@@ -209,12 +204,6 @@ private fun TopBar(
         Box {
             IconButton(onClick = { menu = true }) { SeIcon(R.drawable.ic_more_vert, "Weitere Aktionen", tint = Color.White) }
             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                MediaOrientation.entries.forEach { choice ->
-                    DropdownMenuItem(
-                        text = { Text("${if (choice == orientation) "✓ " else ""}${choice.label}") },
-                        onClick = { menu = false; onOrientation(choice) },
-                    )
-                }
                 DropdownMenuItem(text = { Text("In App öffnen") }, onClick = {
                     menu = false
                     onOpen(false)
