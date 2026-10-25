@@ -1,6 +1,6 @@
 # Oberflächen von Smart Explorer
 
-Stand: 2026-10-21 (Lauf U42, v0.5.183; Lauf 3: `tresore.md` ergänzt).
+Stand: 2026-10-25; Medienvorschau um den laufenden P32-Vertrag ergänzt. Die Einträge beschreiben die jeweilige Oberfläche; veröffentlichte Versionen werden in den verlinkten Dokumenten getrennt belegt.
 
 Zweck: Dieses Verzeichnis hält fest, welche Oberflächen das Projekt hat und über welche Oberfläche jede Fähigkeit und jede Einstellung erreichbar ist. Eine Fähigkeit ist erst fertig, wenn jede Oberfläche, die ihren Gegenstand zeigt oder steuert, sie gleichwertig zeigt und steuert. Ausnahmen (zum Beispiel die Terminal-Verbindung selbst, eine Plattform ohne die nötige Betriebssystemfunktion) stehen mit Grund im Teildokument.
 
@@ -27,6 +27,7 @@ Zweck: Dieses Verzeichnis hält fest, welche Oberflächen das Projekt hat und ü
 | Tresore (Cryptomator-Tresore, Sperren, Tresor-Sync, Tresor-Laufwerke) | [tresore.md](tresore.md) |
 | Bildschirm (Geräte, Sitzungen, Kodierung, Eingabe, Betrachter) | [bildschirm.md](bildschirm.md) |
 | se Desktop und se Launcher | [desktop-launcher.md](desktop-launcher.md) |
+| Eigene Android-Medienvorschau (Bilder, Video, Audio) | [medien.md](medien.md) |
 
 ## Kostenklassen
 
