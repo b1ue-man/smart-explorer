@@ -36,6 +36,7 @@ pub mod keep_awake;
 mod licenses;
 pub mod linemerge;
 mod local_access;
+pub mod mcp_launcher;
 #[cfg(any(target_os = "android", all(unix, test)))]
 pub mod mobile;
 pub mod mount;

@@ -1,6 +1,5 @@
-//! Finding and running the agent hosts' own command-line tools (`claude`,
-//! `codex`). Installation goes through their documented commands instead of
-//! editing their configuration files.
+//! Finding and running host CLIs for Claude registration and Codex readback.
+//! Codex TOML mutations use the owned format-preserving adapter in codex.rs.
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 

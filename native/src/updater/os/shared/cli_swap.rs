@@ -152,6 +152,7 @@ fn orphan_owner(name: &str, candidate: &str) -> Option<u32> {
 /// beside it until the new one has proven that it starts.
 #[must_use = "commit or roll back the replaced se"]
 pub struct ReplacedCli {
+    pub(super) mcp: Option<super::terminal::McpTerminalUpdate>,
     target: PathBuf,
     backup: PathBuf,
     backup_sha256: String,
@@ -186,7 +187,12 @@ impl ReplacedCli {
         }
     }
 
-    pub fn commit(self) -> Result<(), String> {
+    pub fn commit(mut self) -> Result<(), String> {
+        if let Some(mcp) = self.mcp.as_mut() {
+            if let Err(error) = mcp.commit() {
+                return Err(match self.rollback() { Ok(()) => format!("{error}; previous CLI and MCP manifest restored"), Err(rollback) => format!("{error}; {rollback}") });
+            }
+        }
         undo_slot()?.take();
         std::fs::remove_file(&self.backup)
             .map_err(|error| format!("remove the backup {}: {error}", self.backup.display()))
@@ -194,7 +200,7 @@ impl ReplacedCli {
 
     /// Puts the previous file back with one atomic rename after checking that
     /// the backup still holds exactly the bytes that were installed.
-    pub fn rollback(self) -> Result<(), String> {
+    pub fn rollback(mut self) -> Result<(), String> {
         let mut slot = undo_slot()?;
         let backup = self.backup.display();
         if !sha256_matches(&self.backup, &self.backup_sha256) {
@@ -205,6 +211,8 @@ impl ReplacedCli {
         std::fs::rename(&self.backup, &self.target)
             .map_err(|error| format!("restore the previous se from {backup}: {error}"))?;
         slot.take();
+        drop(slot);
+        if let Some(mcp) = self.mcp.as_mut() { mcp.rollback()?; }
         Ok(())
     }
 }
@@ -261,6 +269,7 @@ pub(super) fn install_cli_in_place(
         return Err(error);
     }
     Ok(ReplacedCli {
+        mcp: None,
         target: target.to_path_buf(),
         backup,
         backup_sha256,

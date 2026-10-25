@@ -8,6 +8,8 @@ mod claude;
 mod codex;
 #[path = "plugin/config.rs"]
 mod config;
+#[path = "plugin/managed.rs"]
+mod managed;
 #[path = "plugin/files.rs"]
 mod files;
 #[path = "plugin/host_cli.rs"]
@@ -25,10 +27,11 @@ these tools before its built-in file tools and shell file commands.
 
 Claude Code: se writes a local plugin marketplace into its app data and runs
 `claude plugin marketplace add` and `claude plugin install
-smart-explorer@smart-explorer`. Codex: `codex mcp add smart-explorer -- <se> mcp`
-and a skill in ~/.agents/skills/smart-explorer. Both use the absolute path of
-this se; `se mcp` refreshes the generated files after an update. Start a new
-agent session afterwards.
+smart-explorer@smart-explorer`. Codex: a format-preserving MCP entry and a skill in
+~/.agents/skills/smart-explorer. Both hosts use the verified installation
+launcher. New MCP processes select its confirmed runtime generation; an
+existing compatible process retains its catalog. Use the host's documented
+MCP restart action to load new capabilities.
 
 Examples:
   se plugin install
@@ -46,6 +49,8 @@ pub(super) struct PluginArgs {
 
 #[derive(Subcommand)]
 enum Command {
+    #[command(hide = true)]
+    Refresh,
     #[command(about = "Install into Claude Code and/or Codex (default: every host found)")]
     Install(HostArgs),
     #[command(about = "Remove the plugin, server entry and generated files")]
@@ -88,8 +93,19 @@ impl Host {
 }
 
 pub(super) fn run(args: PluginArgs) -> Result<i32, String> {
-    let executable = files::executable()?;
+    if matches!(&args.command, Command::Install(_) | Command::Uninstall(_) | Command::Refresh) && crate::mcp_launcher::current_runtime().is_some() {
+        return Err("integration_maintenance_handoff_required: use the registered installation".into());
+    }
+    let _generator=if matches!(&args.command,Command::Install(_)|Command::Uninstall(_)|Command::Refresh) {
+        crate::mcp_launcher::generator_operation()?
+    }else{None};
+    let (executable, launcher_error) = match files::executable() {
+        Ok(path)=>(path,None),
+        Err(error) if matches!(&args.command,Command::Status {..}|Command::Uninstall(_)) => (std::env::current_exe().map_err(|e|e.to_string())?,Some(error)),
+        Err(error)=>return Err(error),
+    };
     match args.command {
+        Command::Refresh => { files::refresh()?; Ok(0) },
         Command::Install(selection) => {
             let mut reports = Vec::new();
             let mut installed = 0usize;
@@ -135,7 +151,8 @@ pub(super) fn run(args: PluginArgs) -> Result<i32, String> {
             Ok(if failed { 1 } else { 0 })
         }
         Command::Status { json } => {
-            let reports = vec![claude::status(&executable), codex::status(&executable)];
+            let mut reports = vec![claude::status(&executable), codex::status(&executable)];
+            reports.push(serde_json::json!({"host":"runtime","runtime":crate::mcp_launcher::status_value(),"launcher_error":launcher_error}));
             print(&reports, json)?;
             Ok(0)
         }
@@ -190,14 +207,16 @@ fn print(reports: &[Value], json: bool) -> Result<(), String> {
 /// Called by `se mcp` at start: rewrites generated plugin files that an older
 /// version or another path of `se` wrote.
 pub(super) fn refresh_generated_files() {
-    files::refresh();
+    if crate::mcp_launcher::current_runtime().is_some() {
+        if let Err(error) = crate::mcp_launcher::refresh_current_profile() { eprintln!("se plugin: {error}"); }
+        return;
+    }
+    if let Err(error)=crate::mcp_launcher::refresh_entry_installation() {eprintln!("se plugin: {error}");}
 }
 
 /// Generated-file state for the MCP `status` tool (no host commands run).
 pub(super) fn status_value() -> Value {
-    let Ok(executable) = files::executable() else {
-        return Value::Null;
-    };
+    let executable = match files::executable() {Ok(path)=>path,Err(error)=>return json!({"runtime":crate::mcp_launcher::status_value(),"launcher_error":error})};
     json!({
         "claude": files::generated_state(Some(files::claude_marketplace_dir()), &executable),
         "codex_skill": files::generated_state(files::codex_skill_dir(), &executable),

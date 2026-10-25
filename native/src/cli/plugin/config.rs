@@ -1,5 +1,5 @@
 //! `se plugin config <host>`: the configuration another MCP client needs,
-//! with the absolute path of this `se` (formats checked 2026-10-12, see
+//! with the verified installation's absolute launcher path (format references:
 //! docs/refs/codex-mcp-spec-rmcp-2026-10-12.md §1 and the host docs there).
 use serde_json::json;
 use std::path::Path;

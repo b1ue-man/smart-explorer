@@ -137,15 +137,19 @@ function Get-PublicationReleaseAssetMap {
         [pscustomobject]@{ LocalPath = Join-Path $feed "smart_explorer.exe"; PublishedName = "smart_explorer.exe" },
         [pscustomobject]@{ LocalPath = Join-Path $feed "smart_explorer_updater.exe"; PublishedName = "smart_explorer_updater.exe" },
         [pscustomobject]@{ LocalPath = Join-Path $feed "se.exe"; PublishedName = "se.exe" },
+        [pscustomobject]@{ LocalPath = Join-Path $feed "se-mcp-launcher.exe"; PublishedName = "se-mcp-launcher.exe" },
         [pscustomobject]@{ LocalPath = Join-Path $feed "smart_explorer.exe.sha256"; PublishedName = "smart_explorer.exe.sha256" },
         [pscustomobject]@{ LocalPath = Join-Path $feed "smart_explorer_updater.exe.sha256"; PublishedName = "smart_explorer_updater.exe.sha256" },
         [pscustomobject]@{ LocalPath = Join-Path $feed "se.exe.sha256"; PublishedName = "se.exe.sha256" },
+        [pscustomobject]@{ LocalPath = Join-Path $feed "se-mcp-launcher.exe.sha256"; PublishedName = "se-mcp-launcher.exe.sha256" },
         [pscustomobject]@{ LocalPath = Join-Path $feed "smart_explorer"; PublishedName = "smart_explorer" },
         [pscustomobject]@{ LocalPath = Join-Path $feed "smart_explorer_updater"; PublishedName = "smart_explorer_updater" },
         [pscustomobject]@{ LocalPath = Join-Path $feed "se"; PublishedName = "se" },
+        [pscustomobject]@{ LocalPath = Join-Path $feed "se-mcp-launcher"; PublishedName = "se-mcp-launcher" },
         [pscustomobject]@{ LocalPath = Join-Path $feed "smart_explorer.sha256"; PublishedName = "smart_explorer.sha256" },
         [pscustomobject]@{ LocalPath = Join-Path $feed "smart_explorer_updater.sha256"; PublishedName = "smart_explorer_updater.sha256" },
         [pscustomobject]@{ LocalPath = Join-Path $feed "se.sha256"; PublishedName = "se.sha256" },
+        [pscustomobject]@{ LocalPath = Join-Path $feed "se-mcp-launcher.sha256"; PublishedName = "se-mcp-launcher.sha256" },
         [pscustomobject]@{ LocalPath = Join-Path $feed "smart-explorer-android.apk"; PublishedName = "smart-explorer-android.apk" },
         [pscustomobject]@{ LocalPath = Join-Path $feed "smart-explorer-android.apk.sha256"; PublishedName = "smart-explorer-android.apk.sha256" },
         [pscustomobject]@{ LocalPath = Join-Path $RepoRoot "install-linux.sh"; PublishedName = "install-linux.sh" },
@@ -154,8 +158,8 @@ function Get-PublicationReleaseAssetMap {
         [pscustomobject]@{ LocalPath = Join-Path $releaseRoot "share-server/se-share-server-linux"; PublishedName = "se-share-server-linux" },
         [pscustomobject]@{ LocalPath = Join-Path $feed "version.txt"; PublishedName = "version.txt" }
     )
-    if ($items.Count -ne 20) {
-        throw "Internal release publication map must contain exactly 20 assets."
+    if ($items.Count -ne 24) {
+        throw "Internal release publication map must contain exactly 24 assets."
     }
     return $items
 }
@@ -480,11 +484,13 @@ function Assert-PublicationInstallerPayloads {
             -Arguments @(
                 "e",
                 "-y",
+                "-r",
                 "-o$extractRoot",
                 $Installer,
                 "Smart Explorer.exe",
                 "Smart Explorer Updater.exe",
-                "se.exe"
+                "se.exe",
+                "se-mcp-launcher.exe"
             ) `
             -WorkingDirectory $RepoRoot `
             -TimeoutSeconds 300 `
@@ -495,7 +501,8 @@ function Assert-PublicationInstallerPayloads {
         foreach ($pair in @(
             @("Smart Explorer.exe", "smart_explorer.exe"),
             @("Smart Explorer Updater.exe", "smart_explorer_updater.exe"),
-            @("se.exe", "se.exe")
+            @("se.exe", "se.exe"),
+            @("se-mcp-launcher.exe", "se-mcp-launcher.exe")
         )) {
             $embedded = Join-Path $extractRoot $pair[0]
             $payload = Join-Path $Feed $pair[1]
@@ -548,9 +555,11 @@ function Assert-ReleasePublicationCandidate {
         "smart_explorer.exe",
         "smart_explorer_updater.exe",
         "se.exe",
+        "se-mcp-launcher.exe",
         "smart_explorer",
         "smart_explorer_updater",
         "se",
+        "se-mcp-launcher",
         "smart-explorer-android.apk"
     )) {
         $hashes[$payload] = Assert-PublicationHashSidecar $feed $payload
@@ -578,10 +587,11 @@ function Assert-ReleasePublicationCandidate {
         "source_commit",
         "smart_explorer.exe",
         "smart_explorer_updater.exe",
-        "se.exe"
+        "se.exe",
+        "se-mcp-launcher.exe"
     )
     if ($manifest.Count -ne $expectedManifestKeys.Count) {
-        throw "Windows build manifest must contain exactly version, source_commit, and three Windows payload hashes."
+        throw "Windows build manifest must contain exactly version, source_commit, and four Windows payload hashes."
     }
     foreach ($key in $expectedManifestKeys) {
         if (-not $manifest.ContainsKey($key)) {
@@ -599,7 +609,7 @@ function Assert-ReleasePublicationCandidate {
         $manifestSourceCommit.ToLowerInvariant() -ne $expectedSourceCommit) {
         throw "Windows build manifest source commit '$($manifest["source_commit"])' does not match '$expectedSourceCommit'."
     }
-    foreach ($payload in @("smart_explorer.exe", "smart_explorer_updater.exe", "se.exe")) {
+    foreach ($payload in @("smart_explorer.exe", "smart_explorer_updater.exe", "se.exe", "se-mcp-launcher.exe")) {
         if ($manifest[$payload].ToLowerInvariant() -ne $hashes[$payload]) {
             throw "Windows build manifest does not bind the exact '$payload' bytes."
         }
@@ -608,7 +618,8 @@ function Assert-ReleasePublicationCandidate {
     $portablePairs = @(
         @("Smart Explorer.exe", "smart_explorer.exe"),
         @("Smart Explorer Updater.exe", "smart_explorer_updater.exe"),
-        @("se.exe", "se.exe")
+        @("se.exe", "se.exe"),
+        @("se-mcp-launcher.exe", "se-mcp-launcher.exe")
     )
     foreach ($pair in $portablePairs) {
         $portable = Join-Path $releaseRoot $pair[0]
@@ -727,21 +738,26 @@ function Get-PublicationReleaseCommitPaths {
         "release-native/Smart Explorer.exe",
         "release-native/Smart Explorer Updater.exe",
         "release-native/se.exe",
+        "release-native/se-mcp-launcher.exe",
         "release-native/smart_explorer_command.dll",
         "release-native/share-server/se-share-server.exe",
         "release-native/share-server/se-share-server-linux",
         "release-native/update-feed/smart_explorer.exe",
         "release-native/update-feed/smart_explorer_updater.exe",
         "release-native/update-feed/se.exe",
+        "release-native/update-feed/se-mcp-launcher.exe",
         "release-native/update-feed/smart_explorer.exe.sha256",
         "release-native/update-feed/smart_explorer_updater.exe.sha256",
         "release-native/update-feed/se.exe.sha256",
+        "release-native/update-feed/se-mcp-launcher.exe.sha256",
         "release-native/update-feed/smart_explorer",
         "release-native/update-feed/smart_explorer_updater",
         "release-native/update-feed/se",
+        "release-native/update-feed/se-mcp-launcher",
         "release-native/update-feed/smart_explorer.sha256",
         "release-native/update-feed/smart_explorer_updater.sha256",
         "release-native/update-feed/se.sha256",
+        "release-native/update-feed/se-mcp-launcher.sha256",
         "release-native/update-feed/smart-explorer-android.apk",
         "release-native/update-feed/smart-explorer-android.apk.sha256",
         "release-native/update-feed/windows-build.manifest",
@@ -1508,8 +1524,8 @@ function Wait-ReleasePublicationAssets {
             -Asset $asset `
             -Version $Version
     }
-    if ($expected.Count -ne 20) {
-        throw "Expected release publication set must contain exactly 20 assets."
+    if ($expected.Count -ne 24) {
+        throw "Expected release publication set must contain exactly 24 assets."
     }
 
     $tag = "v$Version"
@@ -1536,11 +1552,11 @@ function Wait-ReleasePublicationAssets {
             if ($unknown.Count -gt 0) {
                 throw "GitHub Release '$tag' contains unexpected asset(s): $($unknown -join ', ')"
             }
-            if ($remote.Count -gt 20) {
-                throw "GitHub Release '$tag' contains $($remote.Count) assets, expected exactly 20."
+            if ($remote.Count -gt 24) {
+                throw "GitHub Release '$tag' contains $($remote.Count) assets, expected exactly 24."
             }
             $missing = @($expected.Keys | Where-Object { -not $remote.ContainsKey($_) })
-            if ($missing.Count -eq 0 -and $remote.Count -eq 20) {
+            if ($missing.Count -eq 0 -and $remote.Count -eq 24) {
                 $digestPending = @()
                 foreach ($name in $expected.Keys) {
                     $want = $expected[$name]
@@ -1562,20 +1578,20 @@ function Wait-ReleasePublicationAssets {
                         Tag = $tag
                         ReleaseId = [long]$release.id
                         Url = [string]$release.html_url
-                        AssetCount = 20
+                        AssetCount = 24
                         Verified = $true
                     }
                 }
                 $lastState = "digest pending for $($digestPending -join ', ')"
             } else {
-                $lastState = "$($remote.Count)/20 assets; missing $($missing -join ', ')"
+                $lastState = "$($remote.Count)/24 assets; missing $($missing -join ', ')"
             }
         }
         if (-not (Wait-ReleasePublicationDelay -Deadline $Deadline)) {
             break
         }
     }
-    throw "Timed out waiting for exact 20-asset GitHub Release '$tag' (last state: $lastState)."
+    throw "Timed out waiting for exact 24-asset GitHub Release '$tag' (last state: $lastState)."
 }
 
 function Invoke-ReleasePublicationLinuxCliUpdate {
@@ -1628,9 +1644,17 @@ function Invoke-ReleasePublicationLinuxCliUpdate {
         SMART_EXPLORER_RELEASE_TAG = "v$Version"
         SMART_EXPLORER_REQUIRE_RELEASE_ASSETS = "1"
     }
+    # A desktop installation is one verified product generation. Installing
+    # only a new CLI beside an old app would break that generation contract.
+    # The release runner installs the complete bundle there without a GUI;
+    # a genuinely terminal-only installation remains terminal-only.
+    $installArguments = @($installer, "--cli-only")
+    if (Test-Path -LiteralPath (Join-Path $installDir "smart_explorer") -PathType Leaf) {
+        $installArguments = @($installer, "--no-gui-start")
+    }
     $installResult = Invoke-ReleasePublicationProcess `
         -FilePath "/bin/sh" `
-        -Arguments @($installer, "--cli-only") `
+        -Arguments $installArguments `
         -WorkingDirectory $RepoRoot `
         -Environment $environment `
         -TimeoutSeconds 600 `

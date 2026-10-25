@@ -8,6 +8,12 @@ use super::staging::stage_from_feed;
 use super::types::StagedUpdate;
 use super::types::VerifiedPayload;
 
+#[path = "feed_launcher.rs"]
+mod launcher;
+#[path = "legacy_launcher.rs"]
+mod legacy_launcher;
+pub use legacy_launcher::{complete_legacy_launcher,LegacyLauncherRequest,CompletedLegacyLauncher};
+
 const HTTP_TIMEOUT: Duration = Duration::from_secs(25);
 const UPDATE_USER_AGENT: &str = "smart-explorer-updater";
 

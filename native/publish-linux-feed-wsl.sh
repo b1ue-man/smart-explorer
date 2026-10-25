@@ -403,10 +403,10 @@ if [ "$check_gui" = "1" ]; then
   echo "Targeted Linux GUI build/start check passed; no feed files were changed."
   exit 0
 fi
-echo "Building static Linux updater and CLI for $linux_static_target ..."
+echo "Building static Linux updater, CLI and MCP launcher for $linux_static_target ..."
 cargo build --locked --release \
   --target-dir "$linux_target_dir" \
-  --target "$linux_static_target" --bin smart_explorer_updater --bin se
+  --target "$linux_static_target" --bin smart_explorer_updater --bin se --bin se-mcp-launcher
 
 feed_parent="$(dirname "$feed")"
 mkdir -p "$feed_parent"
@@ -428,6 +428,7 @@ fi
 install -m 0755 "$linux_target_dir/$linux_gui_target/release/smart_explorer" "$feed_candidate/smart_explorer"
 install -m 0755 "$linux_target_dir/$linux_static_target/release/smart_explorer_updater" "$feed_candidate/smart_explorer_updater"
 install -m 0755 "$linux_target_dir/$linux_static_target/release/se" "$feed_candidate/se"
+install -m 0755 "$linux_target_dir/$linux_static_target/release/se-mcp-launcher" "$feed_candidate/se-mcp-launcher"
 
 mkdir -p "$(dirname "$share_out")"
 feed_abs="$(cd "$feed_parent" && pwd)/$feed_name"
@@ -471,13 +472,16 @@ fi
   sha256sum smart_explorer > smart_explorer.sha256
   sha256sum smart_explorer_updater > smart_explorer_updater.sha256
   sha256sum se > se.sha256
+  sha256sum se-mcp-launcher > se-mcp-launcher.sha256
   sha256sum -c smart_explorer.sha256
   sha256sum -c smart_explorer_updater.sha256
   sha256sum -c se.sha256
+  sha256sum -c se-mcp-launcher.sha256
 )
 
 file "$feed_candidate/smart_explorer_updater" | grep -Eq 'statically linked|static-pie linked'
 file "$feed_candidate/se" | grep -Eq 'statically linked|static-pie linked'
+file "$feed_candidate/se-mcp-launcher" | grep -Eq 'statically linked|static-pie linked'
 if [ "$build_share_server" = "1" ]; then
   if [ "$share_in_feed" = "1" ]; then
     file "$feed_candidate/se-share-server-linux" | grep -Eq 'statically linked|static-pie linked'
@@ -503,7 +507,7 @@ verify_sha256_binding() {
   fi
 }
 
-for linux_payload in smart_explorer smart_explorer_updater se; do
+for linux_payload in smart_explorer smart_explorer_updater se se-mcp-launcher; do
   verify_sha256_binding \
     "$feed_candidate/$linux_payload" \
     "$feed_candidate/$linux_payload.sha256"
@@ -548,11 +552,11 @@ verify_windows_manifest() {
     echo "Windows build manifest source commit '$manifest_source_commit' does not match '$expected_source_commit'." >&2
     return 1
   fi
-  if [ "$(awk 'NF { count++ } END { print count + 0 }' "$manifest")" != "5" ]; then
-    echo "Windows build manifest must contain exactly version, source_commit, and three hashes." >&2
+  if [ "$(awk 'NF { count++ } END { print count + 0 }' "$manifest")" != "6" ]; then
+    echo "Windows build manifest must contain exactly version, source_commit, and four hashes." >&2
     return 1
   fi
-  for windows_payload in smart_explorer.exe smart_explorer_updater.exe se.exe; do
+  for windows_payload in smart_explorer.exe smart_explorer_updater.exe se.exe se-mcp-launcher.exe; do
     test -s "$feed_candidate/$windows_payload" || {
       echo "Required Windows payload missing: $feed_candidate/$windows_payload" >&2
       return 1

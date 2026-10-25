@@ -41,7 +41,7 @@ pub use config::{
     take_updater_error, update_source_str,
 };
 pub use core::is_newer;
-pub use feed::{download_update, download_version, list_remote_versions};
+pub use feed::{download_update, download_version, list_remote_versions,complete_legacy_launcher,LegacyLauncherRequest,CompletedLegacyLauncher};
 pub use feed_files::{download_feed_file, file_sha256, read_feed_sha256, read_feed_version};
 pub use flow::{check_async, update_to_latest_async};
 /// The `se` installed next to the running app (the desktop GUI runs it for

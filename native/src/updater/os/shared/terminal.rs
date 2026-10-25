@@ -100,10 +100,76 @@ pub fn replace_cli(cli: &Path, version: &str) -> Result<ReplacedCli, String> {
     remove_orphans(cli);
     arm_interrupt_undo()?;
     let source = update_source_str().ok_or(NO_SOURCE)?;
-    let payload = classify_feed(&source).fetch_cli_exe(version)?;
-    let replaced = install_cli_in_place(payload.path(), payload.sha256(), cli, lock);
+    let feed = classify_feed(&source);
+    let payload = feed.fetch_cli_exe(version)?;
+    let launcher = feed.fetch_launcher_exe(version)?;
+    let mcp = McpTerminalUpdate::prepare(cli, version, &payload, launcher.as_ref())?;
+    let replaced = install_cli_in_place(payload.path(), payload.sha256(), cli, lock).map(|mut replaced| { replaced.mcp = Some(mcp); replaced });
     remove_staged_path(payload.path());
     replaced
+}
+
+pub(super) struct McpTerminalUpdate {
+    root: PathBuf,
+    initial: Option<crate::mcp_launcher::InitialGenerationLease>,
+    transaction: Option<crate::mcp_launcher::UpdateTransaction>,
+    previous_cli: String,
+    cli: PathBuf,
+    finished: bool,
+}
+impl McpTerminalUpdate {
+    fn prepare(cli:&Path,version:&str,payload:&super::types::VerifiedPayload,launcher:Option<&super::types::VerifiedPayload>)->Result<Self,String> {
+        let root=cli.parent().ok_or("MCP installation root missing")?.to_path_buf();
+        let mut value=Self {root:root.clone(),initial:None,transaction:None,previous_cli:super::core::sha256_file(cli)?,cli:cli.into(),finished:false};
+        if root.join("mcp/current.v1.json").exists() && crate::mcp_launcher::Installation::load(&root)?.status()["state"]=="update_recovery_required" {
+            if crate::mcp_launcher::recover_update(&root,false).is_err() {
+                crate::mcp_launcher::verify_recovery_targets(&root,true)?;
+                if launcher.is_some() {crate::mcp_launcher::verify_installed_product(&root,cli,payload.sha256(),version)?;}
+                else {crate::mcp_launcher::verify_legacy_product(&root,cli,payload.sha256(),version)?;}
+                crate::mcp_launcher::recover_update(&root,true)?;
+            }
+        }
+        let Some(launcher)=launcher else {
+            if crate::mcp_launcher::staged_runtime_managed(payload.path(),payload.sha256(),version)? {
+                return Err("Der Managed-faehige CLI-Payload benoetigt den MCP-Starter derselben Feedversion".into());
+            }
+            if root.join("mcp/current.v1.json").exists() {
+                let proof=crate::mcp_launcher::core::lifecycle::InstallationTarget {file:cli.file_name().and_then(|s|s.to_str()).ok_or("installed CLI name invalid")?.into(),previous_sha256:Some(value.previous_cli.clone()),target_sha256:payload.sha256().into()};
+                let mut transaction=crate::mcp_launcher::UpdateTransaction::prepare_retirement(&root,version,vec![proof])?;
+                transaction.drain(std::time::Duration::from_secs(30))?;
+                transaction.publish_stop(&crate::support_dirs::sync_data_dir().join("daemon.stop"))?;
+                value.transaction=Some(transaction);
+            }
+            return Ok(value);
+        };
+        let old=if root.join("mcp/current.v1.json").exists() {Some(crate::mcp_launcher::Installation::load(&root)?)}else{None};
+        let installation_id=match &old {Some(old)=>old.manifest.installation_id.clone(),None=>match std::fs::read_to_string(root.join("mcp/installation.id")) {Ok(id)=>id,Err(e) if e.kind()==std::io::ErrorKind::NotFound=>crate::mcp_launcher::new_installation_id()?,Err(e)=>return Err(e.to_string())}};
+        let input=crate::mcp_launcher::GenerationInput {installation_id,product_version:version.into(),runtime_path:payload.path().into(),runtime_sha256:payload.sha256().into(),launcher_path:launcher.path().into(),launcher_sha256:launcher.sha256().into()};
+        let manifest=crate::mcp_launcher::stage_generation(&root,&input)?;
+        if old.is_some() {
+            let proof=crate::mcp_launcher::core::lifecycle::InstallationTarget {file:cli.file_name().and_then(|s|s.to_str()).ok_or("installed CLI name invalid")?.into(),previous_sha256:Some(value.previous_cli.clone()),target_sha256:payload.sha256().into()};
+            let mut transaction=crate::mcp_launcher::UpdateTransaction::prepare_with_targets(&root,manifest.clone(),vec![proof])?;
+            transaction.drain(std::time::Duration::from_secs(30))?;
+            transaction.publish_stop(&crate::support_dirs::sync_data_dir().join("daemon.stop"))?;
+            value.transaction=Some(transaction);
+        }
+        if old.is_none() {value.initial=Some(crate::mcp_launcher::InitialGenerationLease::prepare(&root,&manifest)?);}
+        Ok(value)
+    }
+    pub(super) fn commit(&mut self)->Result<(),String> {
+        if let Some(transaction)=self.transaction.as_mut() {transaction.commit()?;}
+        else if let Some(initial)=&self.initial {initial.commit()?;}
+        else {crate::mcp_launcher::disable_legacy_generation(&self.root)?;}
+        self.finished=true;Ok(())
+    }
+    pub(super) fn rollback(&mut self)->Result<(),String> {
+        if super::core::sha256_file(&self.cli)?!=self.previous_cli {return Err("update_recovery_required: previous CLI not restored".into());}
+        if let Some(transaction)=self.transaction.as_mut() {transaction.rollback()?;}
+        self.finished=true;Ok(())
+    }
+}
+impl Drop for McpTerminalUpdate {
+    fn drop(&mut self) { if !self.finished && super::core::sha256_file(&self.cli).is_ok_and(|h|h==self.previous_cli) {let _=self.rollback();} }
 }
 
 #[cfg(test)]

@@ -13,6 +13,9 @@ const CURRENT_PROTOCOL_ARGS: &[&str] = &[
     "--pin-file",
 ];
 const CURRENT_VALUE_ARGS: &[&str] = &[
+    "--install-mode",
+    "--launcher-staged",
+    "--launcher-sha256",
     "--target",
     "--target-sha256",
     "--staged",
@@ -93,8 +96,12 @@ impl ApplyRequest {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum InstallMode { GuiAck, Verified, CliOnly }
+
 #[derive(Debug)]
 pub(crate) struct ApplyArgs {
+    pub(crate) install_mode: InstallMode,
     pub(crate) target: PathBuf,
     pub(crate) target_sha256: String,
     pub(crate) staged: PathBuf,
@@ -104,6 +111,8 @@ pub(crate) struct ApplyArgs {
     pub(crate) cli_staged: PathBuf,
     pub(crate) cli_target: PathBuf,
     pub(crate) cli_sha256: String,
+    pub(crate) launcher_staged: Option<PathBuf>,
+    pub(crate) launcher_sha256: Option<String>,
     pub(crate) archive: PathBuf,
     pub(crate) parent_pid: u32,
     pub(crate) version: String,
@@ -138,7 +147,14 @@ impl ApplyArgs {
                     .to_string(),
             );
         }
+        if has_key(raw, "--launcher-staged") != has_key(raw, "--launcher-sha256") {
+            return Err("Launcherpfad und erwarteter SHA-256 muessen gemeinsam angegeben werden".into());
+        }
+        let install_mode=match arg_value(raw,"--install-mode").as_deref() {
+            None|Some("gui_ack")=>InstallMode::GuiAck,Some("verified")=>InstallMode::Verified,Some("cli_only")=>InstallMode::CliOnly,Some(_)=>return Err("Unbekannter Installationsabschluss".into()),
+        };
         Ok(Self {
+            install_mode,
             target: PathBuf::from(required_arg(raw, "--target")?),
             target_sha256: required_sha256(raw, "--target-sha256")?,
             staged: PathBuf::from(required_arg(raw, "--staged")?),
@@ -148,6 +164,8 @@ impl ApplyArgs {
             cli_staged: PathBuf::from(required_arg(raw, "--cli-staged")?),
             cli_target: PathBuf::from(required_arg(raw, "--cli-target")?),
             cli_sha256: required_sha256(raw, "--cli-sha256")?,
+            launcher_staged: arg_value(raw, "--launcher-staged").map(PathBuf::from),
+            launcher_sha256: optional_sha256(raw, "--launcher-sha256")?,
             archive: PathBuf::from(required_arg(raw, "--archive")?),
             parent_pid: required_arg(raw, "--parent-pid")?
                 .parse()

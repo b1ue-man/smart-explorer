@@ -3,6 +3,22 @@ mod se_path_windows;
 
 fn main() {
     let arguments: Vec<_> = std::env::args_os().skip(1).collect();
+    if let Some(result) = smart_explorer::mcp_launcher::runtime_contract_probe(&arguments) {
+        match result {
+            Ok(code) => std::process::exit(code),
+            Err(error) => {
+                eprintln!("se: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
+    let _mcp_admission = match smart_explorer::mcp_launcher::admit_cli_process() {
+        Ok(admission) => admission,
+        Err(error) => {
+            eprintln!("se: {error}");
+            std::process::exit(1);
+        }
+    };
     if let Some(result) = smart_explorer::share::run_exec_supervisor_if_requested(&arguments) {
         exit_internal_portable(result);
     }

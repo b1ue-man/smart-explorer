@@ -137,8 +137,18 @@ documentation together.
 - **Login entries removed** from `HKCU\...\Run`: `SmartExplorerSync`, `SmartExplorerDrives` and
   `SmartExplorerDesktop` (`native/installer.nsi`, `Uninstall` section).
 - **Linux script** (`install-linux.sh`): options `--with-fuse`, `--with-desktop`, `--cli-only`,
-  `--dry-run`, `-h`/`--help`. `--with-desktop` cannot be combined with `--cli-only`; the
-  desktop restart runs for every install of the desktop app.
+  `--no-gui-start`, `--dry-run`, `-h`/`--help`. `--with-desktop` cannot be combined
+  with `--cli-only` or `--no-gui-start`. A desktop installation normally restarts
+  se Desktop; `--no-gui-start` installs the complete verified bundle without
+  starting a GUI. CLI-only installation beside an existing app requires that
+  app to match the same feed version and expected app SHA-256; otherwise it
+  requests a complete installation instead of mixing product generations.
+
+The checked-in build workflow sets explicit job limits for every build and
+publication job: 360 minutes for complete release, Windows native validation
+and Windows GNU build; 180 minutes for Android; 120 minutes for candidate
+inspection, Windows release integration and publication. These limits do not
+create additional task-suite invocations.
 
 ## Linux FUSE runtime (fuse3)
 
@@ -573,11 +583,11 @@ For a human-operated workstation release, use the same wrapper directly:
    scope print a warning and retain the compiler-level limits.
 3. The wrapper owns every remaining step. It bumps the patch version once,
    reuses that version after a pre-tag failure, builds and promotes the complete
-   artifact set, verifies the six desktop feed hashes plus the Android APK
+   artifact set, verifies the eight desktop feed hashes plus the Android APK
    hash, the installer's embedded
-   app/updater/`se` bytes and pinned Dokany MSI, the manifest's exact
+   app/updater/`se`/MCP-launcher bytes and pinned Dokany MSI, the manifest's exact
    source-parent binding, and the
-   exact 20 publication assets,
+   exact 24 publication assets,
    rejects any build-time drift in tracked sub-workspace lockfiles,
    creates `Release Smart Explorer vX.Y.Z [release candidate]`, fast-forwards
    `main`, and pushes exactly one immutable `vX.Y.Z` tag. If and only if that
@@ -586,18 +596,20 @@ For a human-operated workstation release, use the same wrapper directly:
    follows that mutually exclusive publication run. The marked main-branch
    commit skips its redundant development CI run; the tag run performs the
    static exact committed Linux/Windows candidate gates and publishes the
-   GitHub Release. The wrapper polls that exact run, checks all 20 published asset
+   GitHub Release. The wrapper polls that exact run, checks all 24 published asset
    digests against the expected committed bytes, and only then reports success.
    Binary and script assets remain byte-exact. For `version.txt`, the verifier
    hashes the canonical UTF-8/LF Git representation so a Windows wrapper's
    pre-commit CRLF working copy cannot cause a false post-publication failure.
-4. On Linux the wrapper finally installs `se` from that exact tag with release
-   assets required, verifies its version and SHA-256, and requests the existing
-   daemon's version-bound handoff. CLI-only installation leaves an existing
-   desktop `update_source.txt` unchanged, so this exact one-time handoff cannot
-   pin future app updates to the candidate SHA. Where none exists it writes the
-   repository feed (`https://github.com/<repo>` for the default `main` ref, never
-   the release tag), which `se update` then reads.
+4. On Linux the wrapper finally installs from that exact tag with release
+   assets required and verifies `se` version and SHA-256. A terminal-only
+   installation receives the CLI bundle. If an app already exists beside `se`,
+   the same installer receives `--no-gui-start` and replaces the complete bundle,
+   so CLI and app remain one verified product generation. The helper owns the
+   MCP admission/drain/commit transaction and the version-bound daemon handoff.
+   CLI-only installation preserves an existing `update_source.txt`; a complete
+   installation writes the repository feed (`https://github.com/<repo>` for
+   the default `main` ref), never the release tag or candidate SHA.
 
 `verify_release_candidate=true` and `verify/v*` remain available only when a
 user explicitly requests exact-candidate verification without a release. They
@@ -743,14 +755,14 @@ host its one tag push, or its mutually exclusive `release/v*` fallback, starts
 the publication consumer; on the GitHub-hosted path the wrapper starts that
 same consumer through its one exact internal dispatch after creating the ref.
 Both variants run only the static publication consumer: version consistency,
-all six desktop payload hashes plus the Android APK hash, Windows
+all eight desktop payload hashes plus the Android APK hash, Windows
 build-manifest source-parent binding, portable Windows/feed equality, installer payload equality,
-ELF linkage, DLL exports, and the exact 20-file map are checked directly from
+ELF linkage, DLL exports, and the exact 24-file map are checked directly from
 the candidate commit. The publication job downloads that staged set, fails if
 any byte differs from the same commit or any extra/missing asset exists, checks
-the seven sidecars again, binds the immutable tag, and uploads those bytes. It
+the nine sidecars again, binds the immutable tag, and uploads those bytes. It
 never invokes Cargo, the task-level suite, a GUI/runtime E2E, or another
-candidate pipeline. Published app/updater/`se` payloads, hashes, and
+candidate pipeline. Published app/updater/`se`/MCP-launcher payloads, hashes, and
 `version.txt` are therefore byte-identical to the auto-update feed; the
 installer, script, DLL, and Share servers are the same statically verified
 committed ancillary artifacts.
@@ -801,7 +813,9 @@ same compiler flags on every machine.
 The Android app (`android/`, Rust bridge `native/android-bridge`) ships in the
 same release transaction as the desktop builds: the update feed and the GitHub
 Release carry `smart-explorer-android.apk` plus its `sha256sum`-format sidecar,
-which raises the publication set from 18 to 20 assets. Distribution is sideload
+whose introduction raised the publication set from 18 to 20 assets. The two
+desktop MCP launchers and their sidecars bring the current contract to 24.
+Distribution is sideload
 only (GitHub Release and in-app update); there is no Google Play listing.
 
 **Version.** `versionName` is the `native/Cargo.toml` version and `versionCode`
@@ -888,19 +902,23 @@ http(s)/Git URL — only the transport differs (`updater.rs`'s `Feed` enum):
 ```
 release-native/update-feed/
   version.txt          first line = "X.Y.Z"
-  windows-build.manifest   binds source commit + version to all three Windows payload hashes
+  windows-build.manifest   binds source commit + version to all four Windows payload hashes
   smart_explorer.exe   Windows app payload
   smart_explorer.exe.sha256
   smart_explorer_updater.exe   Windows updater helper
   smart_explorer_updater.exe.sha256
   se.exe               Windows terminal companion
   se.exe.sha256
+  se-mcp-launcher.exe   Windows verified MCP-generation launcher
+  se-mcp-launcher.exe.sha256
   smart_explorer       Linux GNU/glibc desktop app payload (glibc 2.17+)
   smart_explorer.sha256
   smart_explorer_updater       Linux updater helper
   smart_explorer_updater.sha256
   se                   Linux terminal companion
   se.sha256
+  se-mcp-launcher       Linux verified MCP-generation launcher
+  se-mcp-launcher.sha256
   smart-explorer-android.apk   signed Android app (arm64-v8a, x86_64; Android 11+)
   smart-explorer-android.apk.sha256
 ```
@@ -908,16 +926,18 @@ release-native/update-feed/
 The Linux desktop payload relies on the normal X11 or Wayland client libraries
 provided by desktop distributions. The `--cli-only` installer path needs none
 of those GUI libraries because `se` remains a static-musl executable.
-The terminal companion also carries the MCP server for AI agents (`se mcp`) and
-the plugin/skill files `se plugin install` writes; they add no release asset
-(docs/AI_AGENT_PLUGIN.md). A running `se mcp` exits when the updater helper
-writes its `daemon.stop` request, so it never holds the update past the
-helper's 30-second wait for `se` processes.
+The terminal companion carries the MCP server (`se mcp`) and plugin/skill files.
+The additional launcher is an independently hashed release payload on both
+desktop platforms. The installer and updater use one installation transaction
+to stage immutable runtime and launcher generations, verify their executable
+contracts and publish `mcp/current.v1.json`. A compatible idle MCP process may
+retain its generation; active operations defer the update. Legacy or incompatible
+processes retain the ordered stop path. See [AI agent integration](AI_AGENT_PLUGIN.md).
 
 The normal update path uses a separate helper installed next to the app binary
 (`Smart Explorer Updater.exe` on Windows, `smart_explorer_updater` on Linux) and
 the feed also ships the terminal companion (`se.exe` on Windows, `se` on Linux).
-For a newer version, the app downloads all three OS-specific payloads into app
+For a newer version, the app downloads all four OS-specific payloads into app
 data, verifies their required SHA-256 files, and durably records one staging
 manifest. No installed file or process changes during this check. The dialog's
 **Later** action keeps that exact verified staging for the next launch;
@@ -934,26 +954,26 @@ that feed returned a plausible `version.txt`. `se update` resolves the running
 decides by what lies beside it:
 
 - **Terminal-only** (no app beside `se`, e.g. `install-linux.sh --cli-only`):
-  take `<se>.update-lock` (holding the owner PID; a lock of a process that no
-  longer runs is taken over) and remove `update-old`/`update-pending` leftovers
-  of ended update processes. Download `se` plus its required `.sha256` into app
-  data, back up the installed file with its SHA-256 checked after the copy,
-  copy the payload next to it with the installed file's permissions, verify that
-  copy again and rename it over the installed name (one atomic `rename(2)`; the
-  name never disappears). Right before the new file is started it is compared
-  with the payload hash once more; it then has to answer
-  `se update --complete-install <version>` with exactly the feed's
-  `version.txt`. Otherwise, and on Ctrl+C during the swap, the backup is checked
-  against its hash and renamed back. The hidden completion step runs in the new
-  binary and performs the version-bound worker handoff only when its version is
-  the promised one: a running worker of another version is replaced (its
-  offers end; clients drop offers the daemon no longer lists), a missing worker
-  is not started. Every later `se` must keep accepting
-  `se update --complete-install <version>`. `--reinstall` reinstalls the same
-  version; `se update` never downgrades. Windows has no terminal-only
-  self-replacement (a running `se.exe` cannot replace itself) and says so.
+  the existing per-installation update lock still guards CLI replacement and
+  orphan cleanup. The updater downloads and hashes `se` plus the MCP launcher,
+  stages an immutable runtime generation, and acquires the installation-wide
+  update owner before changing installed files. A managed installation enters
+  `prepared`, denies new jobs, drains the operations already admitted, and
+  publishes the global update stop. Existing compatible runtime contracts are
+  retained only when explicitly verified. The CLI swap preserves permissions,
+  verifies its backup, and atomically replaces the installed name. Before its
+  first start the new CLI is hashed again; `se update --complete-install
+  <version>` must confirm the exact feed version and perform the version-bound
+  worker handoff. The generation pointer commits only after those checks.
+  Failure restores both CLI and the previous generation when their hashes
+  prove that restoration; an unconfirmed crash stays `update_recovery_required`
+  until explicit checked recovery. A genuinely legacy feed without either
+  launcher bytes or hash retires a managed generation through the same drain
+  transaction. A missing launcher from a feed that requires it is an error.
+  `--reinstall` reinstalls the same version; `se update` never downgrades.
+  Windows still refuses terminal-only self-replacement of a running `se.exe`.
 - **Beside the desktop app** (Linux desktop installation, every Windows
-  installation): stage app, helper and `se` exactly like the app's check and
+  installation): stage app, helper, `se` and launcher exactly like the app's check and
   start the same hash-bound helper, bound to the app next to `se` with `se` as
   the parent process, with null standard handles (Linux also in its own
   session), so pipes and the terminal are released. After `se` exits the helper
@@ -1022,7 +1042,7 @@ The update **source** the app points at (Sidebar → UPDATE or
 On every launch (and on "Jetzt prüfen"):
 1. resolve the update source; fetch the feed's `version.txt`;
 2. if the feed version is **newer** than the running binary (`CARGO_PKG_VERSION`),
-   download and hash-verify the OS-specific app/updater/`se` bundle, persist its
+   download and hash-verify the OS-specific app/updater/`se`/launcher bundle, persist its
    manifest, and prompt without changing the installation;
 3. after explicit consent, preserve in-flight app state, launch the hash-bound
    helper, and close the GUI. The helper waits for that exact parent PID, asks
@@ -1041,10 +1061,10 @@ On every launch (and on "Jetzt prüfen"):
 
 So a release is "done" only when, for the new version: `Cargo.toml` = feed
 `version.txt` = Windows build manifest = Release tag = installer version = APK
-`versionName`; all six desktop update payload hashes and the APK hash verify;
+`versionName`; all eight desktop update payload hashes and the APK hash verify;
 the manifest's `source_commit` equals the release-candidate commit's sole
 parent; and the GitHub Release is visible with the Windows/Linux app, updater,
-and `se` payloads and hashes, the Android APK and its hash, installer,
+`se` and MCP-launcher payloads and hashes, the Android APK and its hash, installer,
 `install-linux.sh`, context-menu DLL, both share-server payloads, and
 `version.txt`.
 

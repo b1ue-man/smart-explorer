@@ -14,6 +14,10 @@ publish = false
 members = ["android-bridge"]
 exclude = ["explorer-command"]
 
+[[bin]]
+name = "se-mcp-launcher"
+path = "src/bin/se_mcp_launcher.rs"
+
 [dependencies]
 rayon = "1.10"
 # Screen still pictures (SCR-M4): PNG encoder and decoder of `screen::core::snapshot`.
@@ -307,6 +311,8 @@ libloading = "0.8"
 # Android backend (Android uses the app trash in `apptrash`). Windows and Linux
 # still resolve exactly the same packages as before this split.
 [target.'cfg(not(target_os = "android"))'.dependencies]
+# P13 preserves user TOML layout while changing owned MCP fields.
+toml_edit = { version = "=0.25.11", default-features = false, features = ["parse", "display"] }
 # `se mcp`: Model Context Protocol server for AI coding agents
 # (docs/AI_AGENT_PLUGIN.md). rmcp answers both the `initialize` lifecycle
 # (Codex starts with protocol 2025-06-18) and the stateless 2026-07-28
