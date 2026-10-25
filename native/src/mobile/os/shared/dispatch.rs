@@ -31,6 +31,7 @@ fn files(rt: &Runtime, method: &str, args: &Value) -> Option<Result<Value, ApiEr
         "fs.newFile" => super::fs_edit::new_file(rt, args),
         "fs.rename" => super::fs_edit::rename(rt, args),
         "fs.conflicts" => super::fs_edit::conflicts(rt, args),
+        "fs.folderPreview" => super::fs_edit::folder_preview(rt, args),
         "fs.transfer" => super::transfer::transfer(rt, args),
         "fs.delete" => super::delete::delete(rt, args),
         "fs.properties" => super::delete::properties(rt, args),

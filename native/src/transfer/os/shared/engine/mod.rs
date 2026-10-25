@@ -21,6 +21,16 @@ mod dispatch;
 mod download;
 #[path = "folders.rs"]
 pub(crate) mod folders;
+mod folder_alias_store;
+mod job_store;
+mod file_recovery;
+mod file_evidence;
+pub(crate) mod record_io;
+pub(crate) use job_store::{unconfirmed_jobs, reopen_job, RecoveryCatalog};
+pub(crate) mod folder_reservation;
+pub use folder_alias_store::new_job_id;
+mod selection;
+pub(crate) use selection::{folder_conflicts, count_folder_conflict, FolderPreviewScan};
 #[path = "issues.rs"]
 mod issues;
 #[path = "legacy.rs"]
@@ -59,7 +69,7 @@ mod view;
 mod worker;
 
 use folders::FolderRegister;
-pub(crate) use legacy::run_legacy;
+pub(crate) use legacy::{run_legacy, run_legacy_with_identity};
 pub(crate) use util::{jitter, lock, random_hex, sleep_unless};
 pub(crate) use view::{JobView, Side};
 
@@ -116,32 +126,37 @@ pub(crate) fn run_view(
     first.target = view.target_label.to_string();
     first.discovering = true;
     report(TransferMsg::Progress(first.clone()));
-    let prepared = view.validate().and_then(|()| prepare(&view, cancel));
-    let (folders, mut plan) = match prepared {
+    let prepared = crate::source_media::with_cancellation(cancel, || view.validate().and_then(|()| prepare(&view, cancel)));
+    let (folders, mut plan, record) = match prepared {
         Ok(prepared) => prepared,
         Err(message) => return report_failure(report, first, message, cancel),
     };
-    let engine = Engine::new(view, kind, folders, cancel, report, &plan);
+    let mut engine = Engine::new(view, kind, folders, cancel, report, &plan);
+    engine.job_record = record;
     local::move_whole_roots(&engine, &mut plan);
     engine.run(&plan);
     engine.finish(&plan);
 }
 
-type Prepared<'a> = (FolderRegister<'a>, roots::RootPlan);
+type Prepared<'a> = (FolderRegister<'a>, roots::RootPlan, Option<job_store::JobRun>);
 
 fn prepare<'a>(view: &JobView<'a>, cancel: &AtomicBool) -> Result<Prepared<'a>, String> {
-    let root = match view.target {
+    let saved_root = job_store::preflight(view).map_err(|error| format!("Gespeicherten Zielroot bestätigen: {error}"))?;
+    let root = if let Some(root) = saved_root { root } else { match view.target {
         Side::Local => folders::local_target_root(view.source.is_local(), view.target_dir)?,
         Side::Remote(_) => view.target_dir.to_string(),
-    };
+    }};
     let target_flow = side_flow(view.target, &root);
+    let record = job_store::begin(view, &root, cancel).map_err(|error| format!("Auftrag {} speichern/wiederaufnehmen: {error}", view.id.unwrap_or("unbestätigt")))?;
     let mut folders = FolderRegister::new(view.target, &root, target_flow.clone());
     if let Some(planner) = roots::remote_planner(view, &target_flow, cancel)? {
         folders = folders.with_planner(planner);
     }
-    let plan = roots::plan(view, &folders)?;
+    let alias_required = record.as_ref().map(|record| record.prepare_apply()).transpose().map_err(|error| error.to_string())?.unwrap_or(false);
+    let plan = roots::plan(view, &folders, cancel, record.as_ref().map_or(&[][..], |record| record.completed_roots()), record.as_ref().map_or(&[][..], |record| record.saved_file_roots()), alias_required)?;
     roots::check_local_targets(view, &plan)?;
-    Ok((folders, plan))
+    if let Some(record) = &record { record.confirm_sources(view).map_err(|error| format!("Quellbelege speichern: {error}"))?; }
+    Ok((folders, plan, record))
 }
 
 fn report_failure(
@@ -182,6 +197,7 @@ fn first_source(items: &JobItems) -> &str {
 
 /// One running job.
 pub(crate) struct Engine<'a> {
+    job_record: Option<job_store::JobRun>,
     view: JobView<'a>,
     kind: TransferKind,
     job_id: u64,
@@ -237,7 +253,7 @@ impl<'a> Engine<'a> {
         let gate = view
             .source
             .is_local()
-            .then(|| Arc::new(AccessGate::new(&gate_root(view.items))));
+            .then(|| Arc::new(AccessGate::new(&view.gate_root())));
         let batch = match (view.source, view.target) {
             (Side::Local, Side::Remote(backend)) => backend.batch_limits(view.target_dir),
             (Side::Remote(backend), Side::Local) => backend.batch_limits(&parent_path(first)),
@@ -245,6 +261,7 @@ impl<'a> Engine<'a> {
         }
         .filter(|limits| limits.max_files > 1 && limits.max_bytes > 0);
         let engine = Self {
+            job_record: None,
             view,
             kind,
             job_id,
@@ -378,6 +395,10 @@ impl<'a> Engine<'a> {
 
     fn finish(&self, plan: &roots::RootPlan) {
         local::prune_moved_dirs(self, plan);
+        if let Some(record) = &self.job_record {
+            let complete = self.issues.total() == 0 && !self.user_cancel.load(Ordering::Acquire);
+            if let Err(error) = record.finish(complete) { self.issue("", &format!("Jobabschluss speichern: {error}")); }
+        }
         let mut progress = self.progress(0);
         progress.done = true;
         progress.discovering = false;
@@ -421,16 +442,6 @@ impl<'a> Engine<'a> {
 
     pub(crate) fn keeps_folders(&self) -> bool {
         self.view.filter.is_none() && self.view.layout == Layout::Tree
-    }
-}
-
-/// The folder a read-access grant for local sources covers.
-fn gate_root(items: &JobItems) -> String {
-    match items {
-        JobItems::Roots {
-            base: Some(base), ..
-        } => base.clone(),
-        _ => parent_path(first_source(items)),
     }
 }
 

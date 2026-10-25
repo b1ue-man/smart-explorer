@@ -276,7 +276,7 @@ impl Walk<'_> {
         operation: impl Fn() -> io::Result<T>,
     ) -> Option<io::Result<T>> {
         let permit = self.flow.acquire_meta(self.cancel)?;
-        let result = operation();
+        let result = crate::source_media::with_cancellation(self.cancel, &operation);
         permit.finish(outcome(&result));
         let error = match result {
             Err(error) if error.kind() == io::ErrorKind::PermissionDenied => error,
@@ -288,7 +288,7 @@ impl Walk<'_> {
         match gate.request() {
             AccessAnswer::Granted => {
                 let permit = self.flow.acquire_meta(self.cancel)?;
-                let retried = operation();
+                let retried = crate::source_media::with_cancellation(self.cancel, &operation);
                 permit.finish(outcome(&retried));
                 Some(retried)
             }

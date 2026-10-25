@@ -10,6 +10,10 @@ pub(super) fn remove_transferred_source(
     backend: &dyn Backend,
     plan: &TransferPlan,
 ) -> Result<Vec<String>, String> {
+    remove_transferred_source_checked(backend, plan, &|_| Ok(()))
+}
+
+pub(super) fn remove_transferred_source_checked(backend: &dyn Backend, plan: &TransferPlan, confirm: &dyn Fn(usize) -> Result<(), String>) -> Result<Vec<String>, String> {
     // A move only removes the exact tree that was copied. A newly added child,
     // a changed identity, or a changed file aborts before the first deletion.
     plan.validate_source_tree(backend)?;
@@ -25,6 +29,7 @@ pub(super) fn remove_transferred_source(
             )
         })?;
         validate_same_source(&entry.source, &current, &entry.source_path)?;
+        confirm(index)?;
         if entry.source.is_dir {
             let remaining = backend.list_dir(&entry.source_path).map_err(|error| {
                 format!(

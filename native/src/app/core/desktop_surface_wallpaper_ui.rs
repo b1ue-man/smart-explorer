@@ -8,6 +8,7 @@
 //! slideshow's own interval and on "Aktualisieren"; while the platform names
 //! none, the default color shows.
 use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use std::time::Instant;
 
 use eframe::egui::{self, Color32, Pos2, Rect};
@@ -26,6 +27,7 @@ pub(crate) struct Wallpaper {
     spec: Option<WallpaperSpec>,
     texture: Option<(egui::TextureHandle, (u32, u32))>,
     pending: Option<Receiver<Loaded>>,
+    cancel: Option<Arc<AtomicBool>>,
     /// The system wallpaper as last read (`Some(None)`: none known);
     /// `None`: read again before the next frame.
     system: Option<Option<SystemWallpaper>>,
@@ -61,6 +63,7 @@ fn span_area(ctx: &egui::Context, screen: Rect, host: &dyn SurfaceHost) -> Optio
 impl Wallpaper {
     /// Reads the system wallpaper and the image again ("Aktualisieren", F5).
     pub(crate) fn reload(&mut self) {
+        self.cancel_pending();
         self.spec = None;
         self.system = None;
     }
@@ -146,6 +149,7 @@ impl Wallpaper {
 
     /// Decodes the image of `spec` in a thread; the color shows meanwhile.
     fn start(&mut self, ctx: &egui::Context, spec: &WallpaperSpec) {
+        self.cancel_pending();
         self.texture = None;
         self.pending = None;
         let WallpaperSpec::Image { path, .. } = spec else {
@@ -157,10 +161,12 @@ impl Wallpaper {
             .input(|input| input.max_texture_side)
             .min(MAX_IMAGE_SIDE) as u32;
         let wake = ctx.clone();
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.cancel = Some(Arc::clone(&cancel));
         let spawned = std::thread::Builder::new()
             .name("se-desktop-wallpaper".into())
             .spawn(move || {
-                let _ = sender.send(wallpaper_image::load(Some(&path), max_side));
+                let _ = sender.send(wallpaper_image::load_cancellable(Some(&path), max_side, cancel));
                 wake.request_repaint();
             });
         if spawned.is_ok() {
@@ -195,4 +201,13 @@ impl Wallpaper {
         let texture = ctx.load_texture("se-desktop-wallpaper", pixels, options);
         self.texture = Some((texture, (image.width, image.height)));
     }
+
+    fn cancel_pending(&mut self) {
+        if let Some(cancel) = self.cancel.take() { cancel.store(true, Ordering::Release); }
+        self.pending = None;
+    }
+}
+
+impl Drop for Wallpaper {
+    fn drop(&mut self) { self.cancel_pending(); }
 }

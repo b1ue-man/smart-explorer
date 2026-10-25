@@ -91,6 +91,18 @@ pub(super) async fn serve(stream: FsStream, req: FsRequest) -> io::Result<()> {
         return Err(eio("unbekannte Dateioperation"));
     }
     match req {
+        FsRequest::FileIdentity { path } => {
+            crate::share::peer_extensions::file_identity::serve(
+                send, path, access, authorization, principal,
+            ).await
+        }
+        FsRequest::Capacity { path } => {
+            let result = control(&principal, "Share capacity", move || crate::share::capacity::host(&access, &path)).await;
+            match result {
+                Ok(capacity) => reply(&mut send, FsResponse::Capacity { capacity }).await,
+                Err(error) => reply_err(&mut send, error).await,
+            }
+        }
         FsRequest::Capabilities { .. } => Err(eio("Capabilities wurden doppelt verarbeitet")),
         FsRequest::ReleaseLease => Err(eio("Lease-Freigabe wurde doppelt verarbeitet")),
         FsRequest::ReplaceStagedReversible(request) => {
@@ -215,23 +227,13 @@ pub(super) async fn serve(stream: FsStream, req: FsRequest) -> io::Result<()> {
             )
             .await
         }
-        FsRequest::CreateDir { path, exclusive } => {
-            simple(
-                &mut send,
-                path,
-                access,
-                authorization,
-                &principal,
-                "Share create one directory",
-                move |target| {
-                    if exclusive {
-                        target.backend.create_dir_new(&target.path)
-                    } else {
-                        target.backend.create_dir(&target.path)
-                    }
-                },
-            )
-            .await
+        request @ (FsRequest::CreateDir { .. }
+        | FsRequest::CreateDirExclusive { .. }
+        | FsRequest::DirectoryIdentity { .. }
+        | FsRequest::DirectoryReservationSupported { .. }) => {
+            crate::share::peer_extensions::folder_reservation::serve(
+                send, request, access, authorization, principal,
+            ).await
         }
         FsRequest::Rename { src, dst } => {
             let result = control(&principal, "Share rename", move || {

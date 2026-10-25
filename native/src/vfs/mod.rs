@@ -22,6 +22,15 @@ mod backend_defaults;
 mod batch;
 #[path = "core/cache.rs"]
 mod cache;
+#[path = "core/capacity.rs"]
+mod capacity;
+pub use self::capacity::{capacity, capacity_failure, observed_now_ms, CapacitySnapshot, CapacityState, CapacitySource, CapacityFailure};
+#[cfg(windows)]
+#[path = "os/windows/capacity.rs"]
+mod local_capacity;
+#[cfg(not(windows))]
+#[path = "os/linux_os/capacity.rs"]
+mod local_capacity;
 #[path = "core/capabilities.rs"]
 mod capabilities;
 #[path = "core/congestion.rs"]
@@ -44,6 +53,23 @@ mod extension_calls;
 mod extension_types;
 #[path = "core/extensions.rs"]
 mod extensions;
+#[path = "core/file_identity.rs"]
+mod file_identity;
+pub use file_identity::file_identity;
+#[path = "core/folder_reservation.rs"]
+mod folder_reservation;
+pub use folder_reservation::{create_dir_exclusive, directory_identity, directory_reservation_supported};
+#[path = "os/shared/confined_local.rs"]
+mod confined_local;
+#[path = "os/shared/confined_local_extensions.rs"]
+mod confined_local_extensions;
+#[cfg(windows)]
+#[path = "os/windows/confined_local.rs"]
+mod confined_local_platform;
+#[cfg(not(windows))]
+#[path = "os/linux_os/confined_local.rs"]
+mod confined_local_platform;
+pub(crate) use confined_local::ConfinedLocalBackend;
 #[path = "core/fs_profile.rs"]
 mod fs_profile;
 #[path = "os/shared/local.rs"]
@@ -52,6 +78,8 @@ mod local;
 mod local_dirs;
 #[path = "os/shared/local_extensions.rs"]
 mod local_extensions;
+#[path = "os/shared/local_file_identity.rs"]
+mod local_file_identity;
 #[cfg(windows)]
 #[path = "os/windows/local_platform.rs"]
 mod local_platform;

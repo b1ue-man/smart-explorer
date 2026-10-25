@@ -46,6 +46,13 @@ mod flow_window;
 mod hints;
 #[path = "core/job.rs"]
 mod job;
+#[path = "core/folder_conflict.rs"]
+mod folder_conflict;
+#[path = "core/folder_alias.rs"]
+mod folder_alias;
+#[path = "core/job_record.rs"]
+mod job_record;
+pub(crate) use job_record::{JobRecord, StoredEndpoint};
 #[path = "os/shared/lane.rs"]
 mod lane;
 #[path = "core/limiter.rs"]
@@ -138,7 +145,12 @@ pub use flow::{
     FlowSnapshot, PermitPair, ANONYMOUS_JOB,
 };
 pub use flow_control::OpOutcome;
-pub use job::{path_within, Endpoint, JobItems, Layout, PairItem, TransferJob};
+pub use job::{path_within, Endpoint, JobItems, Layout, PairItem, RecoveryMode, TransferJob};
+pub use folder_conflict::{FolderConflict, FolderConflictPolicy, FolderConflictPreview};
+pub(crate) use engine::{folder_conflicts, count_folder_conflict, FolderPreviewScan};
+pub(crate) use engine::{unconfirmed_jobs, reopen_job, RecoveryCatalog};
+pub(crate) use engine::record_io::{read_record, read_record_state, write_record, record_locations, record_context, monitor_contexts, RecordContext, RecordKind};
+pub use engine::new_job_id;
 pub use lane::{
     launch_transfer, ActiveTransfer, FinishedTransfer, LaunchTransfer, TransferLane,
     TransferRequest,

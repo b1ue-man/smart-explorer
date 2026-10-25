@@ -128,5 +128,44 @@ pub(crate) fn conflicts(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
             names.push(name);
         }
     }
-    Ok(json!({ "names": names, "choosable": all_local }))
+    let job = super::transfer::preview_job(rt, args)?;
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let folders = crate::transfer::folder_conflicts(&job, &stop)?;
+    Ok(json!({ "names": names, "choosable": all_local, "folders": folder_rows(args, &folders)? }))
+}
+
+fn folder_rows(args: &Value, folders: &[crate::transfer::FolderConflictPreview]) -> Result<Vec<Value>, ApiError> {
+    let sources = nonempty_list(args, "sources")?;
+    folders.iter().map(|folder| {
+        let source = sources.iter().find_map(|value| {
+            let loc = Loc::parse(value).ok()?;
+            (loc.path == folder.source).then_some(value.clone())
+        }).ok_or_else(|| ApiError::invalid("Vorschauquelle gehört nicht zur Auswahl"))?;
+        Ok(json!({ "source": source, "relative": folder.relative, "keepBoth": folder.keep_both, "keepBothSupported": folder.keep_both_supported, "existing": folder.existing,
+            "newFiles": folder.new_files, "collidingFiles": folder.colliding_files,
+            "samples": folder.samples, "omitted": folder.omitted, "omittedPaths": folder.omitted_paths, "note": folder.note, "complete": folder.complete, "counted": folder.counted }))
+    }).collect()
+}
+
+/// A cancellable background count; the first conflict check remains fast.
+pub(crate) fn folder_preview(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
+    let job = super::transfer::preview_job(rt, args)?;
+    let args = args.clone();
+    let id = rt.spawn_task("folder-preview", "Ordnerkonflikte zählen".to_string(), move |ctx| {
+        ctx.keep_names_private();
+        let scan = crate::transfer::FolderPreviewScan::start(job)?;
+        loop {
+            if ctx.cancelled() { scan.cancel(); return Err(ApiError::canceled()); }
+            let state = scan.snapshot();
+            if let Some(error) = state.error { return Err(ApiError::internal(error)); }
+            if state.ready && state.folders.iter().all(|folder| folder.counted) {
+                return Ok(json!({ "folders": folder_rows(&args, &state.folders)? }));
+            }
+            let new_files: u64 = state.folders.iter().map(|folder| folder.new_files).sum();
+            let collisions: u64 = state.folders.iter().map(|folder| folder.colliding_files).sum();
+            ctx.message(&format!("Bisher {new_files} neue und {collisions} gleichnamige Dateien"));
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    });
+    Ok(json!({ "taskId": id }))
 }

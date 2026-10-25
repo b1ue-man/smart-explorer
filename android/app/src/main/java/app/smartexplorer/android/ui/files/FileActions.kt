@@ -208,21 +208,22 @@ private suspend fun outermost(window: ScanWindow?, entries: List<Entry>): List<E
     return out + entries.filter { it.location !in seen }
 }
 
-/** Checks name conflicts first: local→local asks skip/replace/keep both, remote targets number names. */
+/** Folder decisions remain separate from local file skip/replace/keep-both choices. */
 internal fun FilesViewModel.startTransfer(request: TransferRequest) = launchAction(transferFailure(request)) {
-    val check = FilesApi.conflicts(request.sources, request.targetDir)
-    if (check.names.isEmpty()) {
+    val check = FilesApi.conflicts(request.sources, request.targetDir, request.filter, request.baseDir)
+    if (check.names.isEmpty() && check.folders.isEmpty()) {
         transferNow(request, conflict = "keepBoth")
     } else {
-        dialog = FilesDialog.Conflict(request, check.names, check.choosable)
+        dialog = FilesDialog.Conflict(request, check.names, check.choosable, check.folders)
     }
 }
 
-/** [conflict] `skip|replace|keepBoth` (effective only local→local). */
-internal fun FilesViewModel.runTransfer(request: TransferRequest, conflict: String) =
-    launchAction(transferFailure(request)) { transferNow(request, conflict) }
+/** [conflict] controls files; [folders] maps exact source locators to folder decisions. */
+internal fun FilesViewModel.runTransfer(request: TransferRequest, conflict: String, folders: Map<String, String> = emptyMap()) =
+    launchAction(transferFailure(request)) { transferNow(request, conflict, folders) }
 
-private suspend fun FilesViewModel.transferNow(request: TransferRequest, conflict: String) {
+private suspend fun FilesViewModel.transferNow(request: TransferRequest, conflict: String, folders: Map<String, String> = emptyMap()) {
+    if (request.sources.all { folders[it] == "skip" }) return
     val taskId = FilesApi.transfer(
         sources = request.sources,
         targetDir = request.targetDir,
@@ -230,8 +231,11 @@ private suspend fun FilesViewModel.transferNow(request: TransferRequest, conflic
         conflict = conflict,
         filter = request.filter,
         baseDir = request.baseDir,
+        folderConflicts = folders,
     )
-    if (request.clearsClip) clip = null
+    if (request.clearsClip && clip?.let { current ->
+        current.move && current.sources == request.sources && current.filter == request.filter && current.baseDir == request.baseDir
+    } == true) clip = null
     val task = FilesApi.awaitTask(taskId)
     val verb = if (request.move) "Verschoben" else "Kopiert"
     reportTask(task, "$verb: ${elements(request.sources.size)}", transferFailure(request))

@@ -21,6 +21,9 @@ impl BackendExtensions for GDriveBackend {
     fn directory_identity(&self, path: &str) -> VfsResult<Option<String>> {
         super::folder_reservation::identity(self, path)
     }
+    fn file_identity(&self, path: &str) -> VfsResult<Option<String>> {
+        super::folder_reservation::file_identity(self, path)
+    }
 
     fn capacity(&self, root: &str) -> VfsResult<crate::vfs::CapacitySnapshot> {
         super::capacity::query(self, root)

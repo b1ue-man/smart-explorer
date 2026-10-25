@@ -28,6 +28,12 @@ pub(super) fn upload(
     let mut opened = Vec::with_capacity(files.len());
     for file in files {
         match LocalSource::open(&file.source) {
+            // Recheck the actual admitted reader after the queue probe: media
+            // replacement must not leave an optical permit in the open packet.
+            Ok(source) if source.is_optical() => {
+                drop(source);
+                run_file(engine, file, buffer);
+            }
             Ok(source) => opened.push((file, source)),
             // Alone again: that path asks for access or reports the reason.
             Err(_) => run_file(engine, file, buffer),
@@ -65,6 +71,15 @@ pub(super) fn upload(
         .collect();
     let meter = Meter::new(&permits, &engine.stats);
     meter.add_wait(waited);
+    // Packet protocols publish before returning their object IDs. Persist
+    // the uncertainty first; a lost answer can never authorize a resend.
+    for (file, _) in &opened {
+        if let Err(error) = super::file_recovery::prepare_batch(engine, file) {
+            for (prepared, _) in &opened { let _ = super::file_recovery::unpublished(engine, prepared); }
+            engine.fatal(format!("Paketpublikation vorbereiten: {error}"));
+            return;
+        }
+    }
     let started = Instant::now();
     let read_before = meter.accounts().source_ns;
     let (result, delivery) = {
@@ -98,6 +113,7 @@ pub(super) fn upload(
         Err(error) if error.kind() == io::ErrorKind::Unsupported => {
             engine.stats.unmoved(delivery.served.iter().sum());
             for file in files {
+                if let Err(error) = super::file_recovery::unpublished(engine, &file) { engine.fatal(format!("Unveröffentlichten Paketbeleg zurücknehmen: {error}")); return; }
                 run_file(engine, file, buffer);
             }
             return;
@@ -109,6 +125,10 @@ pub(super) fn upload(
     for (index, file) in files.into_iter().enumerate() {
         match outcomes.next() {
             Some(BatchPutOutcome::Published(path)) => {
+                if let Err(error) = super::file_recovery::after(engine, &file, &path) {
+                    failures.member(file, OpError::at(At::Unknown, error), Attempt::MaybePublished);
+                    continue;
+                }
                 if parent_rel(&file.rel).is_none() {
                     engine.folders.record_alias(&file.rel, base_name(&path));
                 }

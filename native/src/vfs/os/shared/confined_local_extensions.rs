@@ -39,6 +39,12 @@ impl BackendExtensions for ConfinedLocalBackend {
         let _optical = crate::source_media::acquire_file_current(self.root.file(), crate::source_media::Priority::Foreground)?;
         self.tolerant(path)
     }
+    fn file_identity(&self, path: &str) -> VfsResult<Option<String>> {
+        let _optical = crate::source_media::acquire_file_current(
+            self.root.file(), crate::source_media::Priority::Foreground,
+        )?;
+        super::local_file_identity::handle_identity(&self.entry(path)?)
+    }
     fn open_read_regular(&self, path: &str, _id: Option<&str>) -> VfsResult<Box<dyn Read + Send>> { self.open_read(path) }
     fn open_write_copy_stage_timed(&self, path: &str, size: u64, _mtime_ms: i64) -> VfsResult<Box<dyn Write + Send>> { Ok(Box::new(self.sized_stage(path, size, false)?)) }
     fn finish_stage(&self, stage: &str, finish: StageFinish) -> VfsResult<StageFinished> {

@@ -8,6 +8,38 @@ use std::path::Path;
 use super::imp::copy_flags::{is_unc, windows_copy_flags, WINDOWS_REQUEST_COMPRESSED_TRAFFIC};
 use super::imp::pipe_copy::{pipe_copy, PipeError, PipeSide};
 
+#[path = "windows_optical.rs"]
+mod windows_optical;
+
+#[path = "windows_identity.rs"]
+mod windows_identity;
+pub(super) use windows_identity::{same_file_object, stable_handle_identity, stable_path_identity};
+#[path = "windows_recovery.rs"]
+mod windows_recovery;
+pub(super) use windows_recovery::{recover_transfer_child, recover_transfer_child_live};
+#[path = "windows_publication_failure.rs"]
+mod publication_failure;
+pub(super) use publication_failure::require_local_publication_observation;
+
+pub(super) fn open_publication_file(
+    parent: &crate::local_access::ConfinedDirectory, name: &std::ffi::OsStr,
+) -> io::Result<File> { parent.open_publication_file(name) }
+
+pub(super) fn open_move_publication_file(
+    parent: &crate::local_access::ConfinedDirectory, name: &std::ffi::OsStr,
+) -> io::Result<File> { parent.open_move_publication_file(name) }
+
+pub(super) fn confirm_publication_namespace(parent: &crate::local_access::ConfinedDirectory) -> io::Result<()> {
+    parent.confirm_publication_namespace()
+}
+
+pub(super) fn hard_link(source: &Path, target: &Path) -> io::Result<()> {
+    std::fs::hard_link(
+        crate::local_access::normalize_scan_root(source),
+        crate::local_access::normalize_scan_root(target),
+    )
+}
+
 pub(super) type FileIdentity = (u32, u64);
 
 #[repr(C)]
@@ -68,6 +100,14 @@ pub(super) fn file_identity(file: &File) -> io::Result<FileIdentity> {
     Ok((information.volume_serial_number, index))
 }
 
+pub(super) fn different_rename_boundary(source: &File, target_parent: &File) -> io::Result<bool> {
+    let source_volume = file_identity(source)?.0;
+    let target_volume = file_identity(target_parent)?.0;
+    // Zero is unknown, never proof of another volume. A move without
+    // MOVEFILE_COPY_ALLOWED has no cross-volume copy/delete fallback.
+    Ok(source_volume != 0 && target_volume != 0 && source_volume != target_volume)
+}
+
 /// An open file's identity together with its metadata.
 pub(super) fn file_state(file: &File) -> io::Result<(FileIdentity, std::fs::Metadata)> {
     Ok((file_identity(file)?, file.metadata()?))
@@ -117,6 +157,7 @@ pub(super) fn commit_staged(staged: &Path, dest: &Path, overwrite: bool) -> io::
     if overwrite {
         replace_file_atomic(staged, dest)
     } else {
+        crate::copy::publication_proof::preflight_no_replace(dest)?;
         move_file_no_replace(staged, dest)
     }
 }
@@ -125,6 +166,7 @@ pub(super) fn move_file(src: &Path, dest: &Path, overwrite: bool) -> io::Result<
     if overwrite {
         replace_file_atomic(src, dest)
     } else {
+        crate::copy::publication_proof::preflight_no_replace(dest)?;
         move_file_no_replace(src, dest)
     }
 }
@@ -172,6 +214,16 @@ pub(super) fn copy_by_path(
     cancel: &std::sync::atomic::AtomicBool,
     progress: &mut dyn FnMut(u64),
 ) -> Option<io::Result<Option<(u64, File)>>> {
+    match crate::source_media::probe(source) {
+        Ok(Some(_)) => {
+            if let Some(result) = windows_optical::copy(source, stage, cancel, progress) {
+                return Some(result);
+            }
+            crate::source_media::mark_mode(source, crate::source_media::ReadMode::MetadataFallback);
+        }
+        Ok(None) => {}
+        Err(error) => return Some(Err(error)),
+    }
     Some(copy_to_fresh(source, stage, cancel, progress))
 }
 

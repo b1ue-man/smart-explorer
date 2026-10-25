@@ -13,6 +13,22 @@ use crate::vfs::{
 };
 
 impl BackendExtensions for UnavailableBackend {
+    fn directory_reservation_supported(&self, root: &str) -> bool {
+        self.live_backend().is_ok_and(|backend|
+            vfs::directory_reservation_supported(&*backend, root))
+    }
+
+    fn create_dir_exclusive(&self, path: &str) -> VfsResult<()> {
+        vfs::create_dir_exclusive(&*self.live_backend()?, path)
+    }
+    fn directory_identity(&self, path: &str) -> VfsResult<Option<String>> {
+        vfs::directory_identity(&*self.live_backend()?, path)
+    }
+
+    fn capacity(&self, root: &str) -> VfsResult<crate::vfs::CapacitySnapshot> {
+        vfs::capacity(&*self.live_backend()?, root)
+    }
+
     fn version_archive_policy(&self) -> vfs::VersionArchivePolicy {
         vfs::VersionArchivePolicy::AppPrivate
     }
@@ -25,6 +41,9 @@ impl BackendExtensions for UnavailableBackend {
     // retain their live peer and its authorization checks.
     fn sync_stat(&self, path: &str) -> VfsResult<VfsMeta> {
         vfs::sync_stat(&*self.live_backend()?, path)
+    }
+    fn file_identity(&self, path: &str) -> VfsResult<Option<String>> {
+        vfs::file_identity(&*self.live_backend()?, path)
     }
 
     fn list_dir_tolerant(&self, path: &str) -> VfsResult<VfsListing> {

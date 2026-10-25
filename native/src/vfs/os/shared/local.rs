@@ -9,6 +9,8 @@ use super::local_platform;
 use super::local_stage::DurableFile;
 use super::{Backend, OmissionReason, Scheme, VfsListing, VfsMeta, VfsOmission, VfsResult};
 use crate::local_access::{EntryError, EntryKind, FinalLink, LocalEntry};
+#[path = "local_optical.rs"]
+mod optical;
 
 // Intentionally duplicated from `scanner.rs` (tiny) to keep this module
 // self-contained - isolation over DRY, per the staged remote-layer plan.
@@ -116,6 +118,7 @@ impl LocalBackend {
     /// vanished ones, unreadable ones and names that are no path here. Only
     /// a failure of the enumeration itself fails the listing.
     pub(super) fn list_tolerant(&self, path: &str) -> VfsResult<VfsListing> {
+        let _guard = optical::guard(&local_platform::to_os(path))?;
         let mut listing = VfsListing::default();
         for item in crate::local_access::read_directory(&local_platform::to_os(path))? {
             match item {
@@ -178,6 +181,7 @@ impl Backend for LocalBackend {
 
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
         let dir = local_platform::to_os(path);
+        let _guard = optical::guard(&dir)?;
         crate::local_access::read_directory(&dir)?
             .map(|entry| {
                 entry_meta(entry?)
@@ -189,6 +193,7 @@ impl Backend for LocalBackend {
 
     fn stat(&self, path: &str) -> VfsResult<VfsMeta> {
         let p = local_platform::to_os(path);
+        let _guard = optical::metadata_guard(&p)?;
         let meta = crate::local_access::symlink_metadata(&p)?;
         let name = local_platform::reported_name(&p)
             .as_deref()
@@ -201,7 +206,7 @@ impl Backend for LocalBackend {
     /// Reads regular files only: a FIFO is never waited on and a device never
     /// streamed; a link to a file is followed (Explorer semantics).
     fn open_read(&self, path: &str) -> VfsResult<Box<dyn Read + Send>> {
-        Ok(Box::new(self.open_regular(path)?))
+        crate::source_media::guard_reader(&local_platform::to_os(path), || self.open_regular(path))
     }
     fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
         let path = local_platform::to_os(path);
@@ -231,6 +236,8 @@ impl Backend for LocalBackend {
     fn copy_file(&self, src: &str, dst: &str) -> VfsResult<u64> {
         let staged = super::promotion::unique_staging_path(self, dst, "copy")?;
         let result = (|| {
+            let _guard = optical::guard(&local_platform::to_os(src))?;
+            if let Some(guard) = &_guard { guard.set_mode(crate::source_media::ReadMode::Sequential); }
             let mut reader = self.open_regular(src)?;
             let permissions = reader.metadata()?.permissions();
             let mut writer = local_platform::create_new_private(&local_platform::to_os(&staged))?;
@@ -351,12 +358,14 @@ impl Backend for LocalBackend {
         offset: u64,
     ) -> VfsResult<Option<Box<dyn Read + Send>>> {
         use std::io::{Seek, SeekFrom};
-        let mut file = self.open_regular(path)?;
-        file.seek(SeekFrom::Start(offset))?;
-        Ok(Some(Box::new(file)))
+        crate::source_media::guard_reader(&local_platform::to_os(path), || {
+            let mut file = self.open_regular(path)?;
+            file.seek(SeekFrom::Start(offset))?;
+            Ok(file)
+        }).map(Some)
     }
-    fn supports_range_reads(&self, _path: &str) -> bool {
-        true
+    fn supports_range_reads(&self, path: &str) -> bool {
+        optical::ranges(&local_platform::to_os(path))
     }
     fn open_read_range(
         &self,
@@ -366,9 +375,11 @@ impl Backend for LocalBackend {
         len: u64,
     ) -> VfsResult<Option<Box<dyn Read + Send>>> {
         use std::io::{Seek, SeekFrom};
-        let mut file = self.open_regular(path)?;
-        file.seek(SeekFrom::Start(offset))?;
-        Ok(Some(Box::new(file.take(len))))
+        crate::source_media::guard_reader(&local_platform::to_os(path), || {
+            let mut file = self.open_regular(path)?;
+            file.seek(SeekFrom::Start(offset))?;
+            Ok(file.take(len))
+        }).map(Some)
     }
     fn flow_identity(&self, path: &str) -> String {
         self.flow_key(path)

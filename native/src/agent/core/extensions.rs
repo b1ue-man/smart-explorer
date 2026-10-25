@@ -26,6 +26,9 @@ use crate::vfs::{
     TargetLimits, VfsListing, VfsResult, VolumeIdentity,
 };
 
+#[path = "folder_reservation.rs"]
+mod folder_reservation;
+
 /// Deadline of one question (`Query`, `TargetLimits`).
 const QUERY_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -97,6 +100,40 @@ impl AgentBackend {
 }
 
 impl BackendExtensions for AgentBackend {
+    fn directory_reservation_supported(&self, root: &str) -> bool {
+        folder_reservation::supported(self, root)
+    }
+
+    fn create_dir_exclusive(&self, path: &str) -> VfsResult<()> {
+        folder_reservation::create(self, path)
+    }
+
+    fn directory_identity(&self, path: &str) -> VfsResult<Option<String>> {
+        folder_reservation::identity(self, path)
+    }
+
+    fn file_identity(&self, path: &str) -> VfsResult<Option<String>> {
+        folder_reservation::file_identity(self, path)
+    }
+
+    fn capacity(&self, root: &str) -> VfsResult<vfs::CapacitySnapshot> {
+        // SSH agents keep the existing SFTP provider boundary; only the
+        // daemon backend service advertises this authorized metadata frame.
+        if !self.features().capacity {
+            if self.features().service {
+                return Ok(vfs::CapacitySnapshot::unknown(self.state_identity(), root));
+            }
+            return vfs::capacity(&*self.inner, root);
+        }
+        match self.pool.lease().safe_call_timeout(Frame::Capacity(root.into()), QUERY_TIMEOUT) {
+            Ok(Frame::CapacityData(json)) => serde_json::from_str(&json)
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid capacity reply")),
+            Ok(Frame::Err(error)) => Err(agent_error(error)),
+            Ok(frame) => Err(unexpected("capacity", &frame)),
+            Err(error) => Ok(vfs::capacity_failure(self.state_identity(), root, vfs::CapacitySource::Agent, &error)),
+        }
+    }
+
     fn version_archive_policy(&self) -> vfs::VersionArchivePolicy {
         vfs::version_archive_policy(&*self.inner)
     }

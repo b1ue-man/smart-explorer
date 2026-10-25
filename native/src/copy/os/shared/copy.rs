@@ -26,6 +26,10 @@ mod path_guard;
 pub(super) mod pipe_copy;
 #[path = "planning.rs"]
 mod planning;
+#[path = "publication.rs"]
+mod publication;
+#[path = "recovery.rs"]
+mod recovery;
 #[path = "prune.rs"]
 mod prune;
 #[path = "safe_file.rs"]
@@ -38,7 +42,9 @@ mod staging;
 pub use pairs::start_copy_pairs;
 pub(crate) use path_guard::validate_directory_target;
 pub(crate) use prune::prune_empty_dirs;
-pub(crate) use safe_file::{transfer_local, LocalOutcome, LocalRequest};
+pub(crate) use publication::{local_file_identity, local_file_identity_handle, PublicationObserver};
+pub(crate) use recovery::{discard_transfer_stage, recover_transfer_quarantine};
+pub(crate) use safe_file::{transfer_local, transfer_local_observed, LocalOutcome, LocalRequest};
 pub(crate) use server_copy::copy_to_new_file;
 pub(crate) use staging::LocalFailure;
 
@@ -55,6 +61,7 @@ pub enum CopyMsg {
 
 pub struct CopyHandle {
     pub cancel: Arc<AtomicBool>,
+    pub job_id: String,
 }
 
 /// Moves a whole folder in one no-replace rename (same volume, destination
@@ -73,6 +80,10 @@ pub(crate) fn move_folder(
 /// Forward-slash text of a local path (Windows: the normalized long form).
 fn path_text(path: &std::path::Path) -> Result<String, (String, String)> {
     platform::path_text(path).map_err(|error| (path.display().to_string(), error.to_string()))
+}
+
+pub(crate) fn native_path_text(path: &std::path::Path) -> std::io::Result<String> {
+    platform::path_text(path)
 }
 
 /// Where the selected entries land: below `root` when the structure is kept,
@@ -112,6 +123,8 @@ pub fn start_copy_expanded(
             .collect();
         let (items, layout) = roots_of(paths, &opts)?;
         Ok(LocalJob {
+            id: String::new(),
+            folders: crate::transfer::FolderConflictPolicy::new(crate::transfer::FolderConflict::KeepBoth),
             items,
             layout,
             filter,
@@ -136,6 +149,8 @@ pub fn start_copy_from_paths(
             .collect::<Result<Vec<_>, _>>()?;
         let (items, layout) = roots_of(paths, &opts)?;
         Ok(LocalJob {
+            id: String::new(),
+            folders: crate::transfer::FolderConflictPolicy::new(crate::transfer::FolderConflict::KeepBoth),
             items,
             layout,
             filter: None,

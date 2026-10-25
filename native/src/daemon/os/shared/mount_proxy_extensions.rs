@@ -19,6 +19,10 @@ impl BackendExtensions for MountProxy {
         let _permit = self.gate.enter()?;
         decode(vfs::directory_identity(&*self.inner, path))
     }
+    fn file_identity(&self, path: &str) -> VfsResult<Option<String>> {
+        let _permit = self.gate.enter()?;
+        decode(vfs::file_identity(&*self.inner, path))
+    }
 
     fn capacity(&self, root: &str) -> VfsResult<crate::vfs::CapacitySnapshot> {
         { let _permit = self.gate.enter()?; decode(vfs::capacity(&*self.inner, root)) }

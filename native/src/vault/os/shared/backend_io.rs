@@ -118,7 +118,7 @@ impl VaultBackend {
     /// The stored content of the file at `parts`: an existing stage of that
     /// name, else the entry (folders and links are refused, links are
     /// never followed).
-    fn file_contents(&self, parts: &Parts<'_>) -> io::Result<String> {
+    pub(super) fn file_contents(&self, parts: &Parts<'_>) -> io::Result<String> {
         if let Some(rel) = self.stage_rel(parts)? {
             match self.inner.stat(&self.at(&rel)) {
                 Ok(meta) if !meta.is_dir && !meta.is_symlink && !meta.special => return Ok(rel),

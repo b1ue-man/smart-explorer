@@ -43,6 +43,18 @@ impl BackendExtensions for VaultBackend {
             .map(|identity| identity.map(|identity| format!("vault-dir:{}:{identity}", self.session.config().jti)))
     }
 
+    fn file_identity(&self, path: &str) -> VfsResult<Option<String>> {
+        self.session.check()?;
+        self.cache.clear();
+        let parts = Parts::of(path)?.ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "file path is missing"))?;
+        // This maps both unpublished stages and files through the same vault
+        // content boundary used by regular reads; it never follows a link.
+        let contents = self.file_contents(&parts)?;
+        let identity = vfs::file_identity(self.inner.as_ref(), &self.at(&contents))?;
+        self.session.check()?;
+        Ok(identity.map(|identity| format!("vault-file:{}:{identity}", self.session.config().jti)))
+    }
+
     /// Report the actual provider/account budget through the selected vault.
     /// Ciphertext stages occupy the same provider space until publication;
     /// the existing destination is already charged by the provider. Convert

@@ -4,6 +4,7 @@ use super::types::{ResolvedRoot, TransferKind};
 use crate::types::{Conflict, CopyMode, FilterDef};
 use crate::vfs::BackendHandle;
 use std::sync::Arc;
+use serde::{Deserialize, Serialize};
 
 /// One side of a transfer.
 #[derive(Clone)]
@@ -53,7 +54,7 @@ impl Endpoint {
 
 /// One explicit file of a `Pairs` selection with what the view that produced
 /// it already knows, so the engine needs no stat per file.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PairItem {
     /// Absolute source path.
     pub source: String,
@@ -80,7 +81,7 @@ impl PairItem {
 }
 
 /// The selection a job copies.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum JobItems {
     /// Whole selected entries (files or folders). Each lands below the target
     /// folder under its path relative to `base`, or under its own name when
@@ -108,7 +109,7 @@ impl JobItems {
 }
 
 /// How destination paths are formed below the target folder.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Layout {
     /// Keep the folder structure below each selected entry.
     #[default]
@@ -117,9 +118,22 @@ pub enum Layout {
     Flatten,
 }
 
+/// Whether this invocation creates a job or explicitly reopens its record.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RecoveryMode {
+    #[default]
+    New,
+    Resume,
+}
+
 /// One transfer request as the engine executes it.
 #[derive(Clone)]
 pub struct TransferJob {
+    /// Retained when retrying this job; a new user operation gets a new ID.
+    pub id: String,
+    /// Private one-session handovers are deliberately not restartable.
+    pub recoverable: bool,
+    pub recovery: RecoveryMode,
     pub source: Endpoint,
     pub target: Endpoint,
     /// Destination folder in the target's path form (forward slashes).
@@ -132,6 +146,7 @@ pub struct TransferJob {
     /// Name conflicts at local targets follow this policy; remote targets
     /// always keep both under a numbered name and never replace.
     pub conflict: Conflict,
+    pub folders: super::folder_conflict::FolderConflictPolicy,
     /// `Move` is valid only between local folders.
     pub mode: CopyMode,
     /// Short labels for progress displays.

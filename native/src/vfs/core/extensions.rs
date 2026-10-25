@@ -27,6 +27,44 @@ pub enum VersionArchivePolicy {
 /// guard access (export roots, mounts) must not hand out the extensions of
 /// the backend they wrap unchanged.
 pub trait BackendExtensions: Backend {
+    fn confined_local_root(&self, root: &str) -> VfsResult<Option<super::BackendHandle>> {
+        let _ = root;
+        Ok(None)
+    }
+
+    /// Atomic creation of exactly one plain directory. An existing entry,
+    /// including an empty directory or a link, yields AlreadyExists. This
+    /// must never delegate to the legacy probe/create_dir_new fallback.
+    fn create_dir_exclusive(&self, path: &str) -> VfsResult<()> {
+        let _ = path;
+        super::meta::unsupported("backend cannot reserve a directory atomically")
+    }
+
+    /// Capability only; permissions are still checked by the mutation.
+    fn directory_reservation_supported(&self, root: &str) -> bool {
+        let _ = root;
+        false
+    }
+
+    /// Stable directory object identity across a same-parent rename. Path,
+    /// emptiness, size and timestamps are not identities. Never follow links.
+    fn directory_identity(&self, path: &str) -> VfsResult<Option<String>> {
+        let _ = path;
+        Ok(None)
+    }
+
+    /// Stable regular-file object identity across rename. Never a path,
+    /// ETag, size or timestamp; wrappers must apply their own endpoint/root
+    /// guard before delegation. Unsupported providers return `None`.
+    fn file_identity(&self, path: &str) -> VfsResult<Option<String>> {
+        let _ = path;
+        Ok(None)
+    }
+
+    fn capacity(&self, root: &str) -> VfsResult<super::CapacitySnapshot> {
+        Ok(super::CapacitySnapshot::unknown(self.state_identity(), root))
+    }
+
     /// Intrinsic archive policy, independent of the current export grant.
     /// App-private consumers must still freshly validate the actual sync root.
     fn version_archive_policy(&self) -> VersionArchivePolicy {

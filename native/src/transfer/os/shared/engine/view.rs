@@ -55,6 +55,9 @@ impl<'a> Side<'a> {
 /// Everything one engine run needs to know about its job.
 #[derive(Clone, Copy)]
 pub(crate) struct JobView<'a> {
+    pub id: Option<&'a str>,
+    pub recoverable: bool,
+    pub recovery: crate::transfer::RecoveryMode,
     pub source: Side<'a>,
     pub target: Side<'a>,
     pub target_dir: &'a str,
@@ -62,6 +65,7 @@ pub(crate) struct JobView<'a> {
     pub layout: Layout,
     pub filter: Option<&'a (FilterDef, String)>,
     pub conflict: Conflict,
+    pub folders: &'a crate::transfer::FolderConflictPolicy,
     pub mode: CopyMode,
     pub source_label: &'a str,
     pub target_label: &'a str,
@@ -71,6 +75,9 @@ pub(crate) struct JobView<'a> {
 impl<'a> JobView<'a> {
     pub(crate) fn of(job: &'a TransferJob) -> Self {
         Self {
+            id: Some(&job.id),
+            recoverable: job.recoverable,
+            recovery: job.recovery,
             source: Side::of(&job.source),
             target: Side::of(&job.target),
             target_dir: &job.target_dir,
@@ -78,6 +85,7 @@ impl<'a> JobView<'a> {
             layout: job.layout,
             filter: job.filter.as_ref(),
             conflict: job.conflict,
+            folders: &job.folders,
             mode: job.mode,
             source_label: &job.source_label,
             target_label: &job.target_label,
@@ -92,6 +100,13 @@ impl<'a> JobView<'a> {
             (Side::Local, Side::Remote(_), _) => TransferKind::Upload,
             (Side::Remote(_), Side::Local, _) => TransferKind::Download,
             (Side::Remote(_), Side::Remote(_), _) => TransferKind::RemoteCopy,
+        }
+    }
+
+    pub(crate) fn gate_root(&self) -> String {
+        match self.items {
+            JobItems::Roots { base: Some(base), .. } => base.clone(),
+            _ => super::super::engine_names::parent_path(super::first_source(self.items)),
         }
     }
 

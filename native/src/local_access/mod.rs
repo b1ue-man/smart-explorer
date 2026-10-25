@@ -14,7 +14,7 @@ mod protocol;
 #[path = "core/regular.rs"]
 mod regular;
 pub(crate) use entry_error::EntryError;
-pub(crate) use platform::{DirectoryHandle, QuarantinedChild};
+pub(crate) use platform::{DirectoryHandle, QuarantinedChild, ConfinedDirectory};
 pub(crate) use regular::{FinalLink, NotRegular};
 
 #[cfg(test)]

@@ -117,6 +117,17 @@ impl QuarantinedChild {
         Ok(())
     }
 
+    /// Delete only the confirmed child inside our exclusive 0700 capture.
+    /// The caller must already have confirmed its external publication.
+    pub(crate) fn dispose(&mut self) -> io::Result<()> {
+        if !self.active { return Ok(()); }
+        self.verify()?;
+        self.directory.remove_child(OsStr::new(HELD_NAME))?;
+        self.active = false;
+        let name = self.directory.path.file_name().ok_or_else(changed)?;
+        self.parent.remove_empty_child(name, self.directory.clone())
+    }
+
     /// The target adapter owns trash metadata and placement policy. This
     /// move is confined to two already opened directories on the same device.
     pub(crate) fn move_to(&mut self, target: &DirectoryHandle, name: &OsStr) -> io::Result<()> {

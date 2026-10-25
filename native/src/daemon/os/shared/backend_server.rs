@@ -69,7 +69,7 @@ fn service_version(backend: &BackendHandle) -> String {
     // `range-v1` and `lz4-v1` only for a backend that reads ranges: the
     // frames behind them are forwarded to it (`backend_ranges`).
     format!(
-        "{}{} worker",
+        "{}{}.capacity-v1.folder-reservation-v1.file-identity-v1 worker",
         agent_proto::server_version_with(batch, slots),
         backend_ranges::labels(backend)
     )
@@ -425,6 +425,16 @@ fn dispatch_backend(
         } => answer(super::backend_ops::finish_stage(
             &backend, &stage, mtime_ms, mode, durability,
         )),
+        request @ (Frame::RenameDirectoryNoReplace { .. }
+        | Frame::CreateDirExclusive(_)
+        | Frame::DirectoryIdentity(_)
+        | Frame::FileIdentity(_)
+        | Frame::DirectoryReservationSupported(_)) => emit(
+            sink,
+            id,
+            &super::backend_ops::folder_operation(&backend, request, credit),
+        ),
+        Frame::Capacity(root) => answer(super::backend_ops::capacity(&backend, &root)),
         Frame::TargetLimits(root) => answer(Ok(super::backend_ops::target_limits(&backend, &root))),
         Frame::Watch { root, poll_ms } => {
             super::backend_ops::watch(sink, id, &backend, &root, poll_ms, cancel)

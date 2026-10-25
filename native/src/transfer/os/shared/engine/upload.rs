@@ -30,7 +30,10 @@ pub(super) fn upload(
     {
         return Ok(outcome);
     }
-    let mut destination = publish::open(engine, target, file, Some(size), parent_created)?;
+    // A direct fresh publication needs source-content verification after
+    // flush. Keep optical sources staged so their bytes are not read twice.
+    let fresh_parent = parent_created && !source.is_optical();
+    let mut destination = publish::open(engine, target, file, Some(size), fresh_parent)?;
     let mut copied = 0u64;
     loop {
         if engine.stopped() {
@@ -58,7 +61,11 @@ pub(super) fn upload(
         publish::abandon(engine, target, destination);
         return Err(error);
     }
-    publish::complete(engine, target, file, destination, || source.verify())
+    let source_check = match source.publication_check() {
+        Ok(check) => check,
+        Err(error) => { publish::abandon(engine, target, destination); return Err(error); }
+    };
+    publish::complete(engine, target, file, destination, || source_check.verify())
 }
 
 /// "Transfer missing files": an existing destination of the same size is

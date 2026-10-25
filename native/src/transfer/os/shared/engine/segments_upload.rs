@@ -231,7 +231,7 @@ pub(super) fn try_split(
     buffer: &mut [u8],
 ) -> Result<Option<Outcome>, OpError> {
     let size = source.length();
-    if !splits(size) {
+    if source.is_optical() || !splits(size) {
         return Ok(None);
     }
     let path = engine.folders.path_of(&file.rel);

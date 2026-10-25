@@ -84,6 +84,16 @@ impl PeerMountLease {
         self.capabilities
     }
 
+    /// Persistent root facts of the retained target, never the lease token
+    /// or allocation address. Querying this cannot resolve outside the lease.
+    pub(super) fn file_identity_scope(&self) -> io::Result<String> {
+        self.check_live()?;
+        serde_json::to_string(&(
+            &self.virtual_root, &self.target.mount_key, &self.target.path,
+            self.target.backend.namespace_identity(),
+        )).map_err(io::Error::other)
+    }
+
     pub(super) fn authorize(
         &self,
         current: &ShareExportConfig,

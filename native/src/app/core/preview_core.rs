@@ -21,7 +21,7 @@ impl App {
             .name("preview".into())
             .spawn(move || {
                 let _awake = crate::keep_awake::hold(crate::keep_awake::Reason::SyncRun);
-                let result = (|| -> Result<crate::bisync::Preview, String> {
+                let result = crate::source_media::with_cancellation(&worker_cancel, || (|| -> Result<crate::bisync::Preview, String> {
                     let fresh = current_preview_job(&job.id)?;
                     if fresh.source != job.source || fresh.target != job.target {
                         return Err("Setup wurde umgestellt; Liste neu laden und erneut vergleichen.".into());
@@ -55,7 +55,7 @@ impl App {
                 .unwrap_or_else(|e| crate::bisync::Preview {
                     error: Some(e),
                     ..Default::default()
-                });
+                }));
                 let _ = tx.send(result);
             });
         match spawn {
@@ -143,7 +143,7 @@ impl App {
                 };
                 let _awake = crate::keep_awake::hold(crate::keep_awake::Reason::SyncRun);
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-                    || -> Result<String, String> {
+                    || crate::source_media::with_cancellation(&worker_cancel, || -> Result<String, String> {
                         let job = current_preview_job(&job_id)?;
                         job.validate()?;
                         let (a, ra) = crate::connect::resolve_endpoint(&job.source)?;
@@ -169,7 +169,7 @@ impl App {
                             "Datei synchronisiert ({} →, {} ←, {} gelöscht)",
                             stats.a_to_b, stats.b_to_a, stats.deleted
                         ))
-                    },
+                    }),
                 ))
                 .unwrap_or_else(|_| {
                     Err(

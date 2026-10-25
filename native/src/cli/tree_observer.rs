@@ -99,6 +99,8 @@ pub(super) struct TreeProgress {
     /// many SSH connections the copy uses, or why no further one opens);
     /// `None` without one.
     pub(super) note: Option<String>,
+    /// Actual reader states for this process, not ownership by this job.
+    pub(super) optical_readers: Vec<crate::source_media::Status>,
 }
 
 #[derive(Clone, Copy)]
@@ -242,6 +244,7 @@ impl TreeObserver {
             limiter_text,
             segments: self.engine_segments.load(Ordering::SeqCst),
             note,
+            optical_readers: crate::source_media::snapshots(),
         }
     }
 

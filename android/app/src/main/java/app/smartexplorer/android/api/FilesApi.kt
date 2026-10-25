@@ -64,7 +64,27 @@ data class NameCheck(val problem: String? = null, val exists: Boolean = false)
 
 /** `fs.conflicts` */
 @Serializable
-data class ConflictCheck(val names: List<String> = emptyList(), val choosable: Boolean = false)
+data class ConflictCheck(val names: List<String> = emptyList(), val choosable: Boolean = false, val folders: List<FolderCollision> = emptyList())
+
+@Serializable
+data class FolderCollision(
+    val source: String,
+    val relative: String,
+    val keepBoth: String = "",
+    val keepBothSupported: Boolean = true,
+    val existing: Boolean = true,
+    val newFiles: Long = 0,
+    val collidingFiles: Long = 0,
+    val samples: List<String> = emptyList(),
+    val omitted: Long = 0,
+    val omittedPaths: List<String> = emptyList(),
+    val note: String? = null,
+    val complete: Boolean = false,
+    val counted: Boolean = false,
+)
+
+@Serializable
+data class FolderPreviewResult(val folders: List<FolderCollision> = emptyList())
 
 /** Every method that starts a task answers `{taskId}`. */
 @Serializable
@@ -211,14 +231,25 @@ object FilesApi {
             },
         )
 
-    suspend fun conflicts(sources: List<String>, targetDir: String): ConflictCheck =
+    suspend fun conflicts(sources: List<String>, targetDir: String, filter: FilterSpec? = null, baseDir: String? = null): ConflictCheck =
         Core.request<ConflictCheck>(
             "fs.conflicts",
             buildJsonObject {
                 put("sources", strings(sources))
                 put("targetDir", targetDir)
+                put("filter", filterJson(filter))
+                put("baseDir", baseDir)
             },
         )
+
+    suspend fun folderPreview(sources: List<String>, targetDir: String, filter: FilterSpec? = null, baseDir: String? = null): String = taskId(
+        "fs.folderPreview", buildJsonObject {
+            put("sources", strings(sources))
+            put("targetDir", targetDir)
+            put("filter", filterJson(filter))
+            put("baseDir", baseDir)
+        },
+    )
 
     /**
      * [mode] `copy|move`, [conflict] `skip|replace|keepBoth` (only local→local). With [filter] and
@@ -231,6 +262,8 @@ object FilesApi {
         conflict: String,
         filter: FilterSpec? = null,
         baseDir: String? = null,
+        folderConflict: String = "keep-both",
+        folderConflicts: Map<String, String> = emptyMap(),
     ): String = taskId(
         "fs.transfer",
         buildJsonObject {
@@ -240,6 +273,8 @@ object FilesApi {
             put("conflict", conflict)
             put("filter", filterJson(filter))
             put("baseDir", baseDir)
+            put("folderConflict", folderConflict)
+            put("folderConflicts", buildJsonObject { folderConflicts.forEach { (source, choice) -> put(source, choice) } })
         },
     )
 

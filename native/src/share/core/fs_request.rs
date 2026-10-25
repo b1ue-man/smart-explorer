@@ -144,6 +144,15 @@ pub(crate) struct FsWatch {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub(crate) enum FsRequest {
+    /// `folder_reservation_v1`: strict atomic reservation, never legacy fallback.
+    CreateDirExclusive { path: String },
+    /// `folder_reservation_v1`: stable identity of the actual plain directory.
+    DirectoryIdentity { path: String },
+    /// `file_identity_v1`: backend-attested regular-file object identity.
+    FileIdentity { path: String },
+    /// Technical primitive support; permission and identity remain separate.
+    DirectoryReservationSupported { path: String },
+    Capacity { path: String },
     Capabilities {
         path: String,
         /// Mount hosts request a principal-bound root lease. Browsing and UI
@@ -305,7 +314,11 @@ pub(crate) enum FsRequest {
 impl FsRequest {
     fn effect(&self) -> FsEffect {
         match self {
-            Self::Capabilities { .. }
+            Self::DirectoryReservationSupported { .. }
+            | Self::DirectoryIdentity { .. }
+            | Self::FileIdentity { .. }
+            | Self::Capacity { .. }
+            | Self::Capabilities { .. }
             | Self::ReleaseLease
             | Self::ListDir { .. }
             | Self::ListDirBatch(_)
@@ -321,7 +334,8 @@ impl FsRequest {
             | Self::ReadAt { .. }
             | Self::GetBatch { .. }
             | Self::PutBatchStatus { .. } => FsEffect::Read,
-            Self::Write { .. }
+            Self::CreateDirExclusive { .. }
+            | Self::Write { .. }
             | Self::WriteNew { .. }
             | Self::WriteDone
             | Self::MkdirAll { .. }

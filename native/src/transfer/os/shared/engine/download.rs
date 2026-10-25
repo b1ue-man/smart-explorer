@@ -26,6 +26,7 @@ pub(crate) struct Part {
     file: Option<Arc<File>>,
     written: u64,
     published: bool,
+    retained: bool,
 }
 
 impl Part {
@@ -36,6 +37,7 @@ impl Part {
             file: Some(Arc::new(file)),
             written: 0,
             published: false,
+            retained: false,
         })
     }
 
@@ -112,7 +114,7 @@ impl Part {
 impl Drop for Part {
     fn drop(&mut self) {
         self.file.take();
-        if !self.published {
+        if !self.published && !self.retained {
             let _ = std::fs::remove_file(&self.path);
         }
     }
@@ -275,23 +277,34 @@ pub(super) fn publish_local(
     part.close(overwrite)?;
     if overwrite {
         refuse_folder_or_link(destination)?;
-        super::super::platform::replace_file_atomic(&part.path, destination)
-            .map_err(|error| OpError::at(At::Publish, error))?;
+        let staged = crate::copy::native_path_text(&part.path).map_err(OpError::target)?;
+        let target = crate::copy::native_path_text(destination).map_err(OpError::target)?;
+        prepare_part(engine, file, &mut part, &staged, &target)?;
+        if let Err(error) = super::super::platform::replace_file_atomic(&part.path, destination) {
+            part.retained = true;
+            return Err(OpError::at(At::Publish, error));
+        }
         part.published = true;
+        super::file_recovery::after(engine, file, &target).map_err(|error| OpError::at(At::Unknown, error))?;
         return Ok(Outcome::Done);
     }
     let mut target = destination.to_path_buf();
     let mut names = next_numbered(&file_name(destination));
     loop {
+        let staged = crate::copy::native_path_text(&part.path).map_err(OpError::target)?;
+        let actual = crate::copy::native_path_text(&target).map_err(OpError::target)?;
+        prepare_part(engine, file, &mut part, &staged, &actual)?;
         match crate::vfs::promote_local_copy(&part.path, &target) {
             Ok(()) => {
                 part.published = true;
+                super::file_recovery::after(engine, file, &actual).map_err(|error| OpError::at(At::Unknown, error))?;
                 if parent_rel(&file.rel).is_none() {
                     engine.folders.record_alias(&file.rel, &file_name(&target));
                 }
                 return Ok(Outcome::Done);
             }
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                super::file_recovery::unpublished(engine, file).map_err(|error| OpError::at(At::Unknown, error))?;
                 if engine.resume {
                     return existing(engine, destination, part.written())?
                         .ok_or_else(|| OpError::at(At::Publish, super::publish::different_size()));
@@ -302,6 +315,7 @@ pub(super) fn publish_local(
                 target = next_free(destination, &mut names)?;
             }
             Err(error) => {
+                part.retained = true;
                 return Err(OpError::at(
                     At::Publish,
                     io::Error::new(
@@ -316,6 +330,17 @@ pub(super) fn publish_local(
             }
         }
     }
+}
+
+fn prepare_part(engine: &Engine<'_>, file: &FileWork, part: &mut Part, staged: &str, target: &str) -> Result<(), OpError> {
+    if let Err(error) = super::file_recovery::before(engine, file, staged, target) {
+        if let Err(failure) = super::file_recovery::preparation_failed(engine, file) {
+            part.retained = true;
+            return Err(OpError::at(At::Unknown, io::Error::other(format!("Publikationsvorbereitung fehlgeschlagen: {error}; Nichtpublikation unbestätigt: {failure}; eigene Teildatei bleibt erhalten: {staged}"))));
+        }
+        return Err(OpError::target(error));
+    }
+    Ok(())
 }
 
 fn file_name(path: &Path) -> String {

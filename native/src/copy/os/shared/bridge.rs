@@ -10,6 +10,8 @@ use std::sync::Arc;
 
 /// One local job as the copy entry points describe it.
 pub(super) struct LocalJob {
+    pub id: String,
+    pub folders: crate::transfer::FolderConflictPolicy,
     pub items: JobItems,
     pub layout: Layout,
     pub filter: Option<(FilterDef, String)>,
@@ -23,22 +25,40 @@ pub(super) fn spawn(
     tx: Sender<CopyMsg>,
     prepare: impl FnOnce() -> Result<LocalJob, (String, String)> + Send + 'static,
 ) -> CopyHandle {
+    spawn_with_recovery(crate::transfer::new_job_id(), crate::transfer::RecoveryMode::New, tx, prepare)
+}
+
+pub(super) fn spawn_in_job(
+    id: String,
+    tx: Sender<CopyMsg>,
+    prepare: impl FnOnce() -> Result<LocalJob, (String, String)> + Send + 'static,
+) -> CopyHandle {
+    spawn_with_recovery(id, crate::transfer::RecoveryMode::Resume, tx, prepare)
+}
+
+fn spawn_with_recovery(
+    id: String,
+    recovery: crate::transfer::RecoveryMode,
+    tx: Sender<CopyMsg>,
+    prepare: impl FnOnce() -> Result<LocalJob, (String, String)> + Send + 'static,
+) -> CopyHandle {
     let cancel = Arc::new(AtomicBool::new(false));
     let worker_cancel = cancel.clone();
     let failure_tx = tx.clone();
+    let worker_id = id.clone();
     let spawned = std::thread::Builder::new()
         .name("copy-driver".into())
         .spawn(move || match prepare() {
-            Ok(job) => run(&job, &tx, &worker_cancel),
+            Ok(mut job) => { job.id = worker_id; run(&job, recovery, &tx, &worker_cancel) },
             Err((path, detail)) => send_failure(&tx, path, detail),
         });
     if let Err(error) = spawned {
         send_failure(&failure_tx, "Kopieren".to_string(), error.to_string());
     }
-    CopyHandle { cancel }
+    CopyHandle { cancel, job_id: id }
 }
 
-fn run(job: &LocalJob, tx: &Sender<CopyMsg>, cancel: &AtomicBool) {
+fn run(job: &LocalJob, recovery: crate::transfer::RecoveryMode, tx: &Sender<CopyMsg>, cancel: &AtomicBool) {
     let source_label = match &job.items {
         JobItems::Roots {
             base: Some(base), ..
@@ -53,6 +73,10 @@ fn run(job: &LocalJob, tx: &Sender<CopyMsg>, cancel: &AtomicBool) {
             .unwrap_or_default(),
     };
     let view = JobView {
+        recoverable: true,
+        recovery,
+        id: Some(&job.id),
+        folders: &job.folders,
         source: Side::Local,
         target: Side::Local,
         target_dir: &job.target_dir,

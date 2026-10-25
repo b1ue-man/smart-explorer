@@ -11,6 +11,14 @@ use crate::vfs::{MtimePrecision, NameLimit, TargetLimits};
 /// only to a host that offers it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct FsHostFeatures {
+    /// Strict atomic directory create and stable object identity requests.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) folder_reservation_v1: bool,
+    /// Explicit regular-file object identities behind the live export guard.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) file_identity_v1: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) capacity_v1: bool,
     /// `DuplicateSearch`: the host's own duplicate finder.
     #[serde(default, skip_serializing_if = "is_false")]
     pub(crate) duplicate_search_v1: bool,
@@ -57,6 +65,9 @@ impl FsHostFeatures {
     /// Features actually connected to this build's authenticated dispatcher.
     pub(crate) fn host() -> Self {
         Self {
+            folder_reservation_v1: true,
+            file_identity_v1: true,
+            capacity_v1: true,
             duplicate_search_v1: true,
             hash_walk_v1: true,
             list_batches_v1: true,
@@ -79,6 +90,9 @@ impl FsHostFeatures {
     /// The offered features by capability name, for logs.
     pub(crate) fn names(&self) -> Vec<&'static str> {
         [
+            (self.folder_reservation_v1, "folder_reservation_v1"),
+            (self.file_identity_v1, "file_identity_v1"),
+            (self.capacity_v1, "capacity_v1"),
             (self.duplicate_search_v1, "duplicate_search_v1"),
             (self.hash_walk_v1, "hash_walk_v1"),
             (self.list_batches_v1, "list_batches_v1"),

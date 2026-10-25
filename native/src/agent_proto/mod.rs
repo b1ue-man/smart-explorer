@@ -23,6 +23,8 @@ mod credit;
 mod delete_speed_task_tests;
 #[path = "os/shared/ext_ops.rs"]
 mod ext_ops;
+#[path = "os/shared/file_identity.rs"]
+mod file_identity;
 #[path = "core/extension_parts.rs"]
 mod extension_parts;
 #[path = "core/features.rs"]

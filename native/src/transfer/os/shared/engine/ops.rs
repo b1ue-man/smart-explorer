@@ -267,7 +267,8 @@ pub(crate) fn transfer<'e>(
     meter: &Meter<'_>,
     buffer: &mut [u8],
 ) -> OpResult {
-    match (engine.view.source, engine.view.target) {
+    if let Some(outcome) = super::file_recovery::resume(engine, file)? { return Ok(outcome); }
+    crate::source_media::with_cancellation(engine.stop_flag(), || match (engine.view.source, engine.view.target) {
         (Side::Local, Side::Local) => super::local::copy_file(engine, file, meter),
         (Side::Local, Side::Remote(target)) => {
             super::upload::upload(engine, target, file, parent_created, meter, buffer)
@@ -282,7 +283,7 @@ pub(crate) fn transfer<'e>(
             parent_created,
             meter,
         ),
-    }
+    })
 }
 
 /// Memory an operation of this job buffers while it runs (K7).

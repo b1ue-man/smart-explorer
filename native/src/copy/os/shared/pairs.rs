@@ -26,6 +26,8 @@ pub fn start_copy_pairs(
                 .collect(),
         );
         Ok(LocalJob {
+            id: String::new(),
+            folders: crate::transfer::FolderConflictPolicy::default(),
             items,
             layout: Layout::Tree,
             filter: None,

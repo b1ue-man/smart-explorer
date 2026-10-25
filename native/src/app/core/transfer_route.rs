@@ -120,7 +120,7 @@ impl TransferSelection {
 }
 
 /// Paste, drop and "Herunterladen nach…": occupied names become "Name (2)",
-/// local folders merge and remote folders get a new name; nothing is replaced.
+/// selected folders keep both by default; nothing is replaced.
 pub(in crate::app) fn paste_job(
     selection: &TransferSelection,
     target: &TransferPlace,
@@ -167,6 +167,7 @@ pub(in crate::app) fn dialog_job(
 pub(in crate::app) fn resume_job(job: &TransferJob, roots: &[ResolvedRoot]) -> TransferJob {
     let mut resumed = job.clone();
     resumed.resume = Some(roots.to_vec());
+    resumed.recovery = crate::transfer::RecoveryMode::Resume;
     resumed
 }
 
@@ -185,6 +186,10 @@ fn build_job(
         return Err(REMOTE_MOVE_REFUSED.to_string());
     }
     let job = TransferJob {
+        id: crate::transfer::new_job_id(),
+        recoverable: true,
+        recovery: crate::transfer::RecoveryMode::New,
+        folders: crate::transfer::FolderConflictPolicy::new(crate::transfer::FolderConflict::KeepBoth),
         source: selection.source.endpoint.clone(),
         target: target.endpoint.clone(),
         target_dir: target_dir.to_string(),

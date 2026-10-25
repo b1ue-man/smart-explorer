@@ -5,6 +5,10 @@ pub(super) fn is_retryable_read(request: &FsRequest) -> bool {
         request,
         FsRequest::Capabilities { .. }
             | FsRequest::ListDir { .. }
+            | FsRequest::DirectoryIdentity { .. }
+            | FsRequest::FileIdentity { .. }
+            | FsRequest::DirectoryReservationSupported { .. }
+            | FsRequest::Capacity { .. }
             | FsRequest::Stat { .. }
             | FsRequest::SyncChildPath { .. }
             | FsRequest::PutBatchStatus { .. }
@@ -16,6 +20,10 @@ pub(super) fn response_matches(request: &FsRequest, response: &FsResponse) -> bo
         return true;
     }
     match request {
+        FsRequest::DirectoryReservationSupported { .. } => matches!(response, FsResponse::DirectoryReservationSupported { .. }),
+        FsRequest::DirectoryIdentity { .. } => matches!(response, FsResponse::DirectoryIdentity { .. }),
+        FsRequest::FileIdentity { .. } => matches!(response, FsResponse::FileIdentity { .. }),
+        FsRequest::Capacity { .. } => matches!(response, FsResponse::Capacity { .. }),
         FsRequest::Capabilities { .. } => matches!(response, FsResponse::Capabilities { .. }),
         FsRequest::ListDir { .. } => matches!(response, FsResponse::Entries { .. }),
         FsRequest::Stat { .. } => matches!(response, FsResponse::Meta { .. }),
@@ -34,6 +42,7 @@ pub(super) fn response_matches(request: &FsRequest, response: &FsResponse) -> bo
         | FsRequest::RemoveDir { .. }
         | FsRequest::MkdirAll { .. }
         | FsRequest::CreateDir { .. }
+        | FsRequest::CreateDirExclusive { .. }
         | FsRequest::DiscardStage { .. }
         | FsRequest::ReleaseLease => matches!(response, FsResponse::Ok),
         FsRequest::PutBatchStatus { .. } => matches!(response, FsResponse::Batch { .. }),

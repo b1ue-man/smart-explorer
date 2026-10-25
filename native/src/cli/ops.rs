@@ -1,17 +1,8 @@
-use super::engine_copy;
 use super::entry_kind::EntryKind;
-use super::link_paths::{
-    copy_remote_link, link_move_refused, resolve_destination, source_root, SourceRoot,
-};
 use super::target::Target;
-use super::transfer::{transfer_plan, transfer_plan_as, try_rename_fast};
-use super::tree_observer::{TreeObserver, TreePhase};
-use super::tree_ops::{
-    copy_entry_with, remove_copied_source, remove_existing, TreeOutcome, TreeRequest,
-};
+use super::tree_ops::{remove_existing, TreeOutcome};
 use std::io::{self, Write};
 use std::path::PathBuf;
-use std::time::Instant;
 
 pub(crate) fn list(target: &Target) -> Result<(), String> {
     for entry in target
@@ -51,13 +42,18 @@ pub(crate) fn stat(target: &Target) -> Result<(), String> {
 }
 
 pub(crate) fn cat(target: &Target) -> Result<(), String> {
-    let mut r = target
-        .backend
-        .open_read(&target.path)
-        .map_err(|error| explain_read_error(target, error))?;
-    let mut out = io::stdout().lock();
-    io::copy(&mut r, &mut out).map_err(|e| e.to_string())?;
-    out.flush().map_err(|e| e.to_string())
+    cat_observed(target, &super::tree_observer::TreeObserver::default())
+}
+
+pub(crate) fn cat_observed(target: &Target, observer: &super::tree_observer::TreeObserver) -> Result<(), String> {
+    crate::source_media::with_cancellation(observer.cancel_flag(), || {
+        observer.check()?;
+        let mut reader = target.backend.open_read(&target.path)
+            .map_err(|error| observer.explain(explain_read_error(target, error)))?;
+        let mut output = io::stdout().lock();
+        io::copy(&mut reader, &mut output).map_err(|error| observer.explain(error.to_string()))?;
+        output.flush().map_err(|error| observer.explain(error.to_string()))
+    })
 }
 
 /// A read through a link that fails names the link as the cause.
@@ -71,150 +67,16 @@ pub(super) fn explain_read_error(target: &Target, error: io::Error) -> String {
     }
 }
 
-/// `se cp` without `--stats` (the existing tests call it this way).
+#[path = "ops_copy.rs"]
+mod copying;
+#[path = "ops_move.rs"]
+mod moving;
 #[cfg(test)]
-pub(crate) fn copy(src: &Target, dst: &Target, recursive: bool, force: bool) -> Result<(), String> {
-    copy_with_stats(src, dst, recursive, force, false)
-}
-
-/// `se cp`, `se get`, `se put`: prints one stderr line per skipped link or
-/// special file, and with `stats` one line with the rate and the limiting
-/// resource after a successful copy.
-pub(crate) fn copy_with_stats(
-    src: &Target,
-    dst: &Target,
-    recursive: bool,
-    force: bool,
-    stats: bool,
-) -> Result<(), String> {
-    let observer = TreeObserver::default();
-    let started = Instant::now();
-    let outcome = copy_observed(src, dst, recursive, force, &observer)?;
-    print_notices(&outcome);
-    if stats {
-        let wall_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-        engine_copy::print_stats(&observer, wall_ms);
-    }
-    Ok(())
-}
-
-/// `se cp` for background callers: the same checks and pipeline with
-/// cancellation and progress.
-pub(super) fn copy_observed(
-    src: &Target,
-    dst: &Target,
-    recursive: bool,
-    force: bool,
-    observer: &TreeObserver,
-) -> Result<TreeOutcome, String> {
-    let resolved_dst = resolve_destination(dst)?;
-    let dst = resolved_dst.as_ref().unwrap_or(dst);
-    let meta = src.backend.stat(&src.path).map_err(|e| e.to_string())?;
-    let (resolved_src, name) = match source_root(src, &meta)? {
-        SourceRoot::Plain => (None, None),
-        SourceRoot::Resolved { target, name } => (Some(target), Some(name)),
-        SourceRoot::RemoteLink => {
-            let (_, dst_path) = transfer_plan(src, dst)?;
-            return copy_remote_link(src, dst, &dst_path, force, observer);
-        }
-    };
-    let plain_source = resolved_src.is_none();
-    let src = resolved_src.as_ref().unwrap_or(src);
-    let (source_snapshot, dst_path) = transfer_plan_as(src, dst, name.as_deref())?;
-    // A plain source copied to a new name runs on the transfer engine; a
-    // resolved link, an existing destination or any doubt stays on this path.
-    if plain_source {
-        if let Some(outcome) = engine_copy::try_copy(
-            src,
-            &meta,
-            &source_snapshot,
-            dst,
-            &dst_path,
-            recursive,
-            observer,
-        )? {
-            return Ok(outcome);
-        }
-    }
-    let receipt = copy_entry_with(
-        &*src.backend,
-        &src.path,
-        &*dst.backend,
-        &dst_path,
-        &TreeRequest {
-            recursive,
-            force,
-            expected_root: Some(&source_snapshot),
-            destination_check: None,
-            observer,
-        },
-    )?;
-    observer.set_phase(TreePhase::Done);
-    Ok(TreeOutcome {
-        destination: receipt.destination().to_string(),
-        omitted: receipt.omissions(),
-        kept: Vec::new(),
-    })
-}
-
-/// `se mv`: prints skipped entries and the source directories kept for them.
-pub(crate) fn move_path(
-    src: &Target,
-    dst: &Target,
-    recursive: bool,
-    force: bool,
-) -> Result<(), String> {
-    let outcome = move_observed(src, dst, recursive, force, &TreeObserver::default())?;
-    print_notices(&outcome);
-    Ok(())
-}
-
-/// `se mv` for background callers. A cancellation that arrives after the
-/// copy completed keeps the source: the removal phase is never interrupted
-/// halfway. A source link is renamed, never followed.
-pub(super) fn move_observed(
-    src: &Target,
-    dst: &Target,
-    recursive: bool,
-    force: bool,
-    observer: &TreeObserver,
-) -> Result<TreeOutcome, String> {
-    let resolved_dst = resolve_destination(dst)?;
-    let dst = resolved_dst.as_ref().unwrap_or(dst);
-    let (meta, dst_path) = transfer_plan(src, dst)?;
-    if meta.is_dir && !recursive {
-        return Err(format!("{} is a directory; pass --recursive", src.path));
-    }
-    if try_rename_fast(src, dst, &meta, &dst_path, force)? {
-        observer.set_phase(TreePhase::Done);
-        return Ok(TreeOutcome::complete(dst_path));
-    }
-    if meta.is_symlink {
-        return Err(link_move_refused(&src.path));
-    }
-    let receipt = copy_entry_with(
-        &*src.backend,
-        &src.path,
-        &*dst.backend,
-        &dst_path,
-        &TreeRequest {
-            recursive,
-            force,
-            expected_root: Some(&meta),
-            destination_check: None,
-            observer,
-        },
-    )?;
-    observer.check()?;
-    observer.set_phase(TreePhase::RemovingSource);
-    let kept = remove_copied_source(&*src.backend, &receipt)?;
-    observer.set_phase(TreePhase::Done);
-    Ok(TreeOutcome {
-        destination: receipt.destination().to_string(),
-        omitted: receipt.omissions(),
-        kept,
-    })
-}
+pub(crate) use copying::copy;
+pub(crate) use copying::{copy_with_stats, copy_with_folder_stats};
+pub(super) use copying::{copy_observed, copy_observed_with_folders, copy_observed_in_job};
+pub(crate) use moving::{move_path, move_with_folders};
+pub(super) use moving::{move_observed, move_observed_with_folders, move_observed_in_job};
 
 fn print_notices(outcome: &TreeOutcome) {
     let mut err = io::stderr().lock();
