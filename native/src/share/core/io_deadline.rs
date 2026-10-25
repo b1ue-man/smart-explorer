@@ -38,12 +38,25 @@ pub(super) async fn run_for<T, F>(operation: &str, timeout: Duration, future: F)
 where
     F: Future<Output = io::Result<T>>,
 {
-    tokio::time::timeout(timeout, future).await.map_err(|_| {
+    super::route_protocol::timeout_for(timeout, future).await.map_err(|error| {
+        if error.kind() != io::ErrorKind::TimedOut { return error; }
         io::Error::new(
             io::ErrorKind::TimedOut,
             format!("{operation} timed out after {} seconds", timeout.as_secs()),
         )
     })?
+}
+
+/// Active IO time may pause; the caller's explicit overall instant never moves.
+pub(super) async fn run_for_until<T, F>(operation: &str, timeout: Duration, deadline: Option<Instant>, future: F) -> io::Result<T>
+where F: Future<Output = io::Result<T>> {
+    if let Some(deadline) = deadline { remaining(deadline, operation)?; }
+    if let Some(connection) = super::route_protocol::current_connection() {
+        super::route_protocol::run_with_route(&connection, timeout, deadline, future).await
+    } else {
+        let timeout = if let Some(deadline) = deadline { timeout.min(remaining(deadline, operation)?) } else { timeout };
+        run_for(operation, timeout, future).await
+    }
 }
 
 pub(super) async fn run_until<T, F>(

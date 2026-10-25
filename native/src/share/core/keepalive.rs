@@ -121,8 +121,13 @@ fn congestion_from_environment() -> Arc<dyn ControllerFactory + Send + Sync> {
 }
 
 pub(super) fn iroh_transport_config() -> QuicTransportConfig {
+    iroh_transport_config_for_routes(false)
+}
+
+pub(super) fn iroh_transport_config_for_routes(enabled: bool) -> QuicTransportConfig {
     let windows = transport_windows(crate::transfer::memory_budget());
     QuicTransportConfig::builder()
+        .application_path_policy(enabled)
         .congestion_controller_factory(congestion_from_environment())
         // Live idle peers remain open because the transport sends a keepalive
         // every five seconds. QUIC may extend its effective timeout to at least

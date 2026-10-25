@@ -82,6 +82,10 @@ impl LanLinkTransport {
                 let Ok(Ok(connection)) = connected else {
                     return;
                 };
+                if task_node.await_route(&connection, None, None).await.is_err() {
+                    close(&connection);
+                    return;
+                }
                 if connection.remote_id().to_string() != pin.node_id
                     || transport.register(&connection).is_err()
                 {

@@ -5,7 +5,8 @@ use std::sync::Arc;
 use futures_util::StreamExt;
 use iroh::endpoint::{Connection, RecvStream, SendStream};
 use tokio::io::AsyncWriteExt;
-use tokio::time::{timeout_at, Instant};
+use tokio::time::Instant;
+use super::route_protocol::{active_now, timeout_until};
 
 use super::core::{eio, random_bytes};
 use super::lan_link_facts::{self, LanPeerPin};
@@ -21,6 +22,7 @@ pub(super) async fn run(
     connection: Connection,
     expected: Option<LanPeerPin>,
 ) -> io::Result<()> {
+    node.await_route(&connection, None, None).await?;
     let mut paths = std::pin::pin!(connection.path_events());
     let work = async {
         if let Some(pin) = expected {
@@ -40,13 +42,13 @@ pub(super) async fn run(
             "LAN-Link geschlossen",
         ))
     };
-    tokio::time::timeout(SESSION_DEADLINE, async {
+    super::route_protocol::scope(connection.clone(), tokio::time::timeout(SESSION_DEADLINE, async {
         tokio::select! {
             biased;
             result = monitor => result,
             result = work => result,
         }
-    })
+    }))
     .await
     .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "LAN-Link-Sitzung abgelaufen"))?
 }
@@ -69,9 +71,10 @@ async fn client(
     connection: &Connection,
     expected: LanPeerPin,
 ) -> io::Result<()> {
-    let mut deadline = Instant::now() + ROUND_DEADLINE;
+    let mut deadline = active_now() + ROUND_DEADLINE;
     for _ in 0..24 {
-        let result = timeout_at(deadline, async {
+        node.await_route(connection, None, None).await?;
+        let result = timeout_until(deadline, async {
             node.require_sharing_active()?;
             let (path, revision) = snapshot(deadline, || {
                 Ok((
@@ -140,7 +143,7 @@ async fn client(
         }
         result?;
         tokio::time::sleep(REFRESH_INTERVAL).await;
-        deadline = Instant::now() + ROUND_DEADLINE;
+        deadline = active_now() + ROUND_DEADLINE;
     }
     Ok(())
 }
@@ -150,10 +153,11 @@ async fn server(
     transport: &LanLinkTransport,
     connection: &Connection,
 ) -> io::Result<()> {
-    let mut deadline = Instant::now() + ROUND_DEADLINE;
+    let mut deadline = active_now() + ROUND_DEADLINE;
     for _ in 0..24 {
+        node.await_route(connection, None, None).await?;
         node.require_sharing_active()?;
-        let result = timeout_at(deadline, async {
+        let result = timeout_until(deadline, async {
             check_deadline(deadline)?;
             let (mut send, mut recv) = connection.accept_bi().await.map_err(eio)?;
             let (echo, identity) = match recv_frame(&mut recv).await? {
@@ -211,7 +215,7 @@ async fn server(
             continue;
         }
         result?;
-        deadline = Instant::now() + ROUND_DEADLINE;
+        deadline = active_now() + ROUND_DEADLINE;
     }
     Ok(())
 }
@@ -229,7 +233,7 @@ fn challenge_timeout() -> io::Error {
 }
 
 fn check_deadline(deadline: Instant) -> io::Result<()> {
-    if Instant::now() >= deadline {
+    if active_now() >= deadline {
         Err(challenge_timeout())
     } else {
         Ok(())

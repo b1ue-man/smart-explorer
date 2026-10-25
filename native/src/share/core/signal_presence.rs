@@ -34,6 +34,11 @@ pub(crate) enum PresenceSignature {
 }
 
 impl PeerPresence {
+    /// Signed, server-preserved evidence; ordinary v1 random nonces contain no dot.
+    /// The marker changes neither the legacy HMAC nor the existing signature grammar.
+    pub(crate) fn supports_route_policy(&self) -> bool {
+        self.signature_state() == PresenceSignature::Valid && self.nonce.starts_with("rp1.")
+    }
     /// Whether the nonce carries a device signature (not whether it verifies).
     pub fn is_signed(&self) -> bool {
         self.nonce.contains(SIGNATURE_MARKER)
@@ -130,7 +135,7 @@ pub(super) fn build_presence(
     secret: &[u8],
     iroh: &ShareIrohNode,
 ) -> io::Result<PeerPresence> {
-    let random = random_token(12).map_err(eio)?;
+    let random = format!("rp1.{}", random_token(12).map_err(eio)?);
     build_presence_with_nonce(kind, relation_id, identity, secret, iroh, random)
 }
 

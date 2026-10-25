@@ -136,6 +136,7 @@ fn state_snapshot(state: &mut ShareHostState, drain: bool, now: i64) -> ShareWor
     };
     ShareWorkerSnapshot {
         events,
+        routes: Some(state.service.as_ref().map(|service| service.route_diagnostics()).unwrap_or_default()),
         profiles: state.profiles.clone(),
         profile_revision: state.profiles.storage_revision.clone(),
         exec_grant_retry: state.exec_retry.clone(),

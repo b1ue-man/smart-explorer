@@ -58,7 +58,7 @@ impl Drop for NoticeEntry {
 #[derive(Clone)]
 pub(crate) struct ShareExecInput {
     node: Arc<ShareIrohNode>,
-    sender: tokio::sync::mpsc::Sender<ExecClientInput>,
+    sender: super::exec_client::ExecInputSender,
 }
 
 pub(crate) struct ShareExecSession {
@@ -108,12 +108,21 @@ impl ShareExecSession {
             .ok_or_else(|| eio("Exec-Client endete ohne Terminalstatus"))
     }
 
-    pub(crate) fn finish(self) -> io::Result<()> {
+    pub(crate) fn finish(mut self) -> io::Result<()> {
         self.node
-            .block_on(self.inner.task)
+            .block_on(&mut self.inner.task)
             .map_err(eio)?
             .map(|_| ())
             .map_err(eio)
+    }
+}
+
+impl Drop for ShareExecSession {
+    fn drop(&mut self) {
+        // Never abort the worker: it owns the retainer until its authenticated
+        // terminal exchange or transport shutdown. Cancellation has its own
+        // signal and cannot be trapped behind the bounded stdin queue.
+        self.inner.input.cancel();
     }
 }
 

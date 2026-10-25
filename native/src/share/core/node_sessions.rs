@@ -218,6 +218,7 @@ impl ShareIrohNode {
     ) -> io::Result<OpenedPeerStream> {
         let timeout = io_deadline::remaining(deadline, operation)?;
         let (send, recv) = self.block_on(io_deadline::run_for(operation, timeout, async {
+            self.await_route(connection, None, Some(deadline)).await?;
             connection
                 .open_bi()
                 .await
@@ -332,6 +333,7 @@ impl ShareIrohNode {
             "fs".to_string(),
             "fs_walk_batches_v1".to_string(),
             TRANSFER_V1_CAPABILITY.to_string(),
+            "route_policy_v1".to_string(),
         ];
         if kind == "direct" {
             requested_capabilities.push(DIRECT_RECIPROCAL_CAPABILITY.to_string());
@@ -371,13 +373,16 @@ impl ShareIrohNode {
                     .connect(addr, ALPN)
                     .await
                     .map_err(io_deadline::disconnected)?;
+                self.await_route(&connection, Some(endpoint), Some(deadline)).await?;
                 let (mut send, mut recv) = connection
                     .open_bi()
                     .await
                     .map_err(io_deadline::disconnected)?;
                 send_ctrl(&mut send, &Ctrl::PeerHello { hello }).await?;
                 match recv_ctrl(&mut recv).await? {
-                    Ctrl::PeerHelloOk => {
+                    response @ (Ctrl::PeerHelloOk | Ctrl::PeerHelloOkRoute) => {
+                        super::route_monitor::authenticated_remote_capability(&connection,
+                            matches!(response, Ctrl::PeerHelloOkRoute));
                         let transport = transport_label(&connection);
                         let _ = self.ev.try_send(ShareEvent::Status(format!(
                             "Iroh-Session authentifiziert: {} via {} in {} ms",

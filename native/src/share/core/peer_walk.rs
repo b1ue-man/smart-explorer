@@ -23,7 +23,7 @@ pub(super) fn walk_peer(
     let endpoint = backend.current_endpoint()?;
     let mut opened = backend.node.open_stream(&endpoint, &backend.identity)?;
     let lease = backend.mount_lease_token()?;
-    let result = backend.node.block_on(receive_walk(
+    let result = backend.node.block_on_route(opened.generation, receive_walk(
         &mut opened.send,
         &mut opened.recv,
         root,
@@ -116,7 +116,7 @@ async fn recv_checked(
 ) -> Result<FsResponse, PeerWalkFailure> {
     let response = recv_resp_wire(recv);
     tokio::pin!(response);
-    let idle = tokio::time::sleep(WALK_IDLE_TIMEOUT);
+    let idle = super::route_protocol::active_deadline_error(super::route_protocol::active_now() + WALK_IDLE_TIMEOUT);
     tokio::pin!(idle);
     let mut poll = tokio::time::interval(CANCEL_POLL);
     poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -133,10 +133,7 @@ async fn recv_checked(
                     return Err(PeerWalkFailure::local(interrupted()));
                 }
             }
-            _ = &mut idle => return Err(PeerWalkFailure::transport(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "peer tree walk made no progress for 60 seconds",
-            ))),
+            error = &mut idle => return Err(PeerWalkFailure::transport(error)),
         }
     }
 }

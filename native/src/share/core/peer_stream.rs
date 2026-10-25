@@ -66,14 +66,14 @@ pub(super) async fn frame(
 ) -> io::Result<(u8, Vec<u8>)> {
     let next = framing::recv_tagged_limited(recv, super::fs_response::STREAM_FRAME_LIMIT);
     tokio::pin!(next);
-    let deadline = tokio::time::sleep(Duration::from_secs(seconds));
+    let deadline = super::route_protocol::active_deadline_error(super::route_protocol::active_now() + Duration::from_secs(seconds));
     tokio::pin!(deadline);
     let mut poll = tokio::time::interval(Duration::from_millis(100));
     loop {
         tokio::select! {
             result = &mut next => return result,
             _ = poll.tick() => if cancel.load(Ordering::Relaxed) { return Err(io::ErrorKind::Interrupted.into()); },
-            _ = &mut deadline => return Err(io::Error::new(io::ErrorKind::TimedOut, "Keine vollständige Share-Meldung innerhalb des Zeitlimits")),
+            error = &mut deadline => return Err(error),
         }
     }
 }
@@ -99,7 +99,7 @@ pub(super) fn call<T>(
     let endpoint = backend.current_endpoint()?;
     let mut opened = backend.node.open_stream(&endpoint, &backend.identity)?;
     let lease = backend.mount_lease_token()?;
-    let result = backend.node.block_on(async {
+    let result = backend.node.block_on_route(opened.generation, async {
         io_deadline::run(
             "Share streaming request",
             framing::send_ctrl(

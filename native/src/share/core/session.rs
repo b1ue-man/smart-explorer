@@ -343,6 +343,14 @@ pub(super) fn endpoint_addr(
 }
 
 pub(super) fn transport_label(connection: &Connection) -> &'static str {
+    if let Some(status) = super::route_monitor::snapshot(connection) {
+        return match (status.application_allowed, status.class) {
+            (true, Some(super::route_state::RouteClass::Lan)) => "lan",
+            (true, Some(super::route_state::RouteClass::Direct)) => "direct",
+            (true, Some(super::route_state::RouteClass::Relay)) => "relay",
+            _ => "unknown",
+        };
+    }
     let paths = connection.paths();
     paths
         .iter()

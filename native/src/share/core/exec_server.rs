@@ -23,7 +23,6 @@ use super::exec_protocol::{
 use super::exec_registry::{ExecAdmission, ExecCancelReason, ExecRegistry};
 use super::exec_types::ExecId;
 use super::handshake_limits::ApplicationHandshakePermit;
-use super::io_deadline;
 use super::node::ShareIrohNode;
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(20);
@@ -50,7 +49,7 @@ impl ClientStream {
         Self {
             frames,
             queued: VecDeque::new(),
-            last_ping: tokio::time::Instant::now(),
+            last_ping: super::route_protocol::active_now(),
             last_sequence: 0,
         }
     }
@@ -104,7 +103,7 @@ where
                             return Err(eio("ungueltige Exec-Heartbeat-Sequenz"));
                         }
                         stream.last_sequence = sequence;
-                        stream.last_ping = tokio::time::Instant::now();
+                        stream.last_ping = super::route_protocol::active_now();
                         let pong = ServerFrame::Pong { exec_id: exec_id.clone(), sequence };
                         let deadline = stream.last_ping + policy.peer_timeout;
                         send_frame_bounded(send, &pong, deadline).await?;
@@ -122,7 +121,7 @@ where
                     }
                 }
             }
-            _ = tokio::time::sleep_until(heartbeat_deadline) => {
+            _ = super::route_protocol::sleep_until_active(heartbeat_deadline) => {
                 return Err(timed_out("Exec-Peer beantwortet keine authentifizierten Heartbeats"));
             }
         }
@@ -159,7 +158,7 @@ async fn serve_job(
         let end_deadline = grant_end
             .as_ref()
             .map_or(heartbeat_deadline, |end| deadline_at(end.end()));
-        if tokio::time::Instant::now() >= heartbeat_deadline {
+        if super::route_protocol::active_now() >= heartbeat_deadline {
             registry.cancel(&exec_id, ExecCancelReason::Disconnected);
             drop(input_tx);
             drop(output_rx);
@@ -217,7 +216,7 @@ async fn serve_job(
                             return Err(eio("ungueltige Exec-Heartbeat-Sequenz"));
                         }
                         last_sequence = sequence;
-                        last_ping = tokio::time::Instant::now();
+                        last_ping = super::route_protocol::active_now();
                         if let Err(error) = send_frame_bounded(
                             &mut send,
                             &ServerFrame::Pong {
@@ -296,7 +295,7 @@ async fn serve_job(
                 let _ = worker.await;
                 return Err(eio("Exec-Transport wurde vor dem Terminalstatus geschlossen"));
             }
-            _ = tokio::time::sleep_until(heartbeat_deadline) => {
+            _ = super::route_protocol::sleep_until_active(heartbeat_deadline) => {
                 registry.cancel(&exec_id, ExecCancelReason::Disconnected);
                 drop(input_tx);
                 drop(output_rx);
@@ -344,9 +343,9 @@ async fn wait_result_ack_with_policy<R: tokio::io::AsyncRead + Unpin>(
     exec_id: &ExecId,
     policy: ExecHeartbeatPolicy,
 ) -> io::Result<()> {
-    let deadline = tokio::time::Instant::now() + policy.server_result_ack_timeout();
+    let deadline = super::route_protocol::active_now() + policy.server_result_ack_timeout();
     loop {
-        let frame = tokio::time::timeout_at(deadline, recv_client_frame(recv))
+        let frame = super::route_protocol::timeout_until(deadline, recv_client_frame(recv))
             .await
             .map_err(|_| timed_out("Exec-Ergebnisbestaetigung Timeout"))??;
         if validate_result_ack_frame(protocol, exec_id, frame)? {
@@ -360,9 +359,9 @@ async fn wait_result_ack_from_reader(
     protocol: &mut ServerProtocolState,
     exec_id: &ExecId,
 ) -> io::Result<()> {
-    let deadline = tokio::time::Instant::now() + EXEC_HEARTBEAT_POLICY.server_result_ack_timeout();
+    let deadline = super::route_protocol::active_now() + EXEC_HEARTBEAT_POLICY.server_result_ack_timeout();
     loop {
-        let frame = tokio::time::timeout_at(deadline, frames.next())
+        let frame = super::route_protocol::timeout_until(deadline, frames.next())
             .await
             .map_err(|_| timed_out("Exec-Ergebnisbestaetigung Timeout"))?
             .ok_or_else(|| eio("Exec-Frame-Reader endete vor der Ergebnisbestaetigung"))??;
@@ -398,8 +397,8 @@ async fn send_frame_bounded<W: AsyncWrite + Unpin>(
     peer_deadline: tokio::time::Instant,
 ) -> io::Result<()> {
     let write_deadline =
-        (tokio::time::Instant::now() + EXEC_HEARTBEAT_POLICY.write_timeout).min(peer_deadline);
-    tokio::time::timeout_at(write_deadline, send_server_frame(send, frame))
+        (super::route_protocol::active_now() + EXEC_HEARTBEAT_POLICY.write_timeout).min(peer_deadline);
+    super::route_protocol::timeout_until(write_deadline, send_server_frame(send, frame))
         .await
         .map_err(|_| timed_out("Exec-Peer nimmt keine Ausgabeframes mehr an"))?
 }
@@ -411,7 +410,7 @@ async fn send_terminal_frame(
     send_frame_bounded(
         send,
         frame,
-        tokio::time::Instant::now() + EXEC_HEARTBEAT_POLICY.write_timeout,
+        super::route_protocol::active_now() + EXEC_HEARTBEAT_POLICY.write_timeout,
     )
     .await
 }
@@ -426,13 +425,13 @@ async fn acknowledge_result(
         &ServerFrame::ResultAcknowledged {
             exec_id: exec_id.clone(),
         },
-        tokio::time::Instant::now() + EXEC_HEARTBEAT_POLICY.write_timeout,
+        super::route_protocol::active_now() + EXEC_HEARTBEAT_POLICY.write_timeout,
     )
     .await?;
     finish_send_and_wait_until(
         send,
         connection,
-        tokio::time::Instant::now() + EXEC_HEARTBEAT_POLICY.server_result_ack_timeout(),
+        super::route_protocol::active_now() + EXEC_HEARTBEAT_POLICY.server_result_ack_timeout(),
     )
     .await
 }
@@ -443,7 +442,7 @@ async fn finish_send_and_wait_until(
     deadline: tokio::time::Instant,
 ) -> io::Result<()> {
     send.finish().map_err(eio)?;
-    tokio::time::timeout_at(deadline, connection.closed())
+    super::route_protocol::timeout_until(deadline, connection.closed())
         .await
         .map_err(|_| timed_out("Exec-Clientabschluss Timeout"))?;
     Ok(())

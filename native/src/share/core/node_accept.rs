@@ -40,23 +40,27 @@ impl ShareIrohNode {
                         }
                         Err(_) => return,
                     };
-                    if connection.alpn() == super::lan_link_wire::LAN_LINK_ALPN {
-                        let _ = node.accept_lan_link(connection).await;
-                        return;
-                    }
                     let remote = connection.remote_id().to_string();
                     let known = node.known_endpoint(&remote);
+                    if connection.alpn() == super::lan_link_wire::LAN_LINK_ALPN && !known {
+                        refuse(&connection);
+                        return;
+                    }
                     // Penalized after failed authentication: Exec and screen
                     // always, file sessions only for unknown endpoints, so
                     // automatic reconnects of paired devices are never throttled.
                     let exec = connection.alpn() == EXEC_ALPN;
                     let screen = connection.alpn() == SCREEN_ALPN;
-                    if super::auth_penalty::refusal_applies(exec || screen, known) {
+                    let tcp = connection.alpn() == super::tcp_wire::TCP_ALPN;
+                    let apps = connection.alpn() == super::apps_wire::APPS_ALPN;
+                    if super::auth_penalty::refusal_applies(exec || screen || tcp || apps, known) {
                         let now = std::time::Instant::now();
                         if let Some(remaining) = node.auth_penalties().refusal(&remote, now) {
-                            let protocol = match (exec, screen) {
-                                (true, _) => "exec",
-                                (_, true) => "screen",
+                            let protocol = match (exec, screen, tcp, apps) {
+                                (true, _, _, _) => "exec",
+                                (_, true, _, _) => "screen",
+                                (_, _, true, _) => "tcp",
+                                (_, _, _, true) => "apps",
                                 _ => "fs",
                             };
                             super::exec_audit::record(super::exec_audit::AuditEvent::PenaltyRefused {
@@ -69,16 +73,31 @@ impl ShareIrohNode {
                         }
                     }
                     let timeout = if known { KNOWN_HANDSHAKE } else { UNKNOWN_HANDSHAKE };
-                    let deadline = tokio::time::Instant::now() + timeout;
                     let ticket = match node.application_handshakes.enqueue(remote, known) {
                         Ok(ticket) => ticket,
                         Err(_) => { refuse(&connection); return; }
                     };
-                    let admitted = match tokio::time::timeout_at(deadline, ticket.acquire()).await {
+                    // Bound unauthenticated identities before they can reserve
+                    // a route-monitor slot. This local queue consumes no app
+                    // bytes and therefore has an ordinary admission deadline.
+                    let admitted = match tokio::time::timeout(timeout, ticket.acquire()).await {
                         Ok(Ok(permit)) => permit,
                         _ => { refuse(&connection); return; }
                     };
                     let (permit, completion) = ApplicationHandshakePermit::admitted(admitted);
+                    // SessionHello, HMAC and LAN-link status bytes share the same
+                    // transport gate; application time starts only after admission.
+                    if node.await_route(&connection, None, None).await.is_err() {
+                        refuse(&connection);
+                        return;
+                    }
+                    if connection.alpn() == super::lan_link_wire::LAN_LINK_ALPN {
+                        drop(permit);
+                        // Its existing pinned-peer admission and refresh/session
+                        // deadlines own the long-lived LAN status rounds.
+                        let _ = node.accept_lan_link(connection).await;
+                        return;
+                    }
                     // Screen sessions report as accept errors: the reporter keeps
                     // a fixed set of kinds (connection_events.rs).
                     let error_kind = match connection.alpn() {
@@ -86,16 +105,20 @@ impl ShareIrohNode {
                         EXEC_ALPN => ConnectionErrorKind::ExecConnection,
                         _ => ConnectionErrorKind::Accept,
                     };
-                    let dispatch = dispatch_connection(node.clone(), connection.clone(), permit);
+                    let dispatch = super::route_protocol::scope(connection.clone(),
+                        dispatch_connection(node.clone(), connection.clone(), permit));
                     tokio::pin!(dispatch);
                     // Dropping the application permit after verified Hello ends
                     // only the handshake deadline, never a live FS/Exec session.
                     let result = tokio::select! {
                         result = &mut dispatch => result,
-                        () = completion.wait() => dispatch.await,
-                        () = tokio::time::sleep_until(deadline) => {
-                            refuse(&connection);
-                            Err(io::Error::new(io::ErrorKind::TimedOut, "Share-Anmeldung abgelaufen"))
+                        admitted = super::route_protocol::run_with_route(&connection, timeout, None, async {
+                            completion.wait().await; Ok(())
+                        }) => {
+                            match admitted {
+                                Ok(()) => dispatch.await,
+                                Err(error) => { refuse(&connection); Err(error) }
+                            }
                         }
                     };
                     if let Err(error) = result {
@@ -156,6 +179,8 @@ async fn dispatch_connection(
         }
         EXEC_ALPN => super::exec_server::handle_connection(node, connection, permit).await,
         SCREEN_ALPN => node.handle_screen_connection(connection, permit).await,
+        super::tcp_wire::TCP_ALPN => node.handle_tcp_connection(connection, permit).await,
+        super::apps_wire::APPS_ALPN => node.handle_apps_connection(connection, permit).await,
         _ => Err(eio("Unbekanntes Share-Protokoll")),
     }
 }
