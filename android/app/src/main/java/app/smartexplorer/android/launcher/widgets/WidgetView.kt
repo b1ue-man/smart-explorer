@@ -3,6 +3,8 @@ package app.smartexplorer.android.launcher.widgets
 import android.appwidget.AppWidgetHostView
 import android.appwidget.AppWidgetProviderInfo
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.os.Build
 import android.os.Bundle
 import android.util.SizeF
@@ -18,6 +20,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -27,6 +30,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.text.style.TextAlign
@@ -103,8 +107,40 @@ class LauncherWidgetHostView(context: Context) : AppWidgetHostView(context) {
         }
     }
 
-    override fun onDetachedFromWindow() {
+    fun cancelDrag() {
         removeCallbacks(fire)
+        if (longPressed) finish(Offset(downX, downY), cancelled = true)
+    }
+
+    /** Snapshot of this host view, bounded by its actual window surface. */
+    fun dragSnapshot(): Bitmap? {
+        val pixels = width.toLong() * height
+        val windowPixels = rootView.width.toLong() * rootView.height
+        if (!isAttachedToWindow || !isLaidOut || width <= 0 || height <= 0 || pixels > windowPixels) return null
+        var bitmap: Bitmap? = null
+        return try {
+            Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).also {
+                bitmap = it
+                val canvas = Canvas(it)
+                canvas.translate(-scrollX.toFloat(), -scrollY.toFloat())
+                draw(canvas)
+            }
+        } catch (_: RuntimeException) {
+            bitmap?.recycle()
+            null
+        } catch (_: OutOfMemoryError) {
+            bitmap?.recycle()
+            null
+        }
+    }
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        if (oldw > 0 && oldh > 0 && (w != oldw || h != oldh)) cancelDrag()
+        super.onSizeChanged(w, h, oldw, oldh)
+    }
+
+    override fun onDetachedFromWindow() {
+        cancelDrag()
         super.onDetachedFromWindow()
     }
 }
@@ -147,7 +183,7 @@ fun reportWidgetSize(view: AppWidgetHostView, sizes: Pair<SizeDp, SizeDp>) {
 
 /**
  * A widget item on the home screen (U38-4, U38-6): the widget itself, or a card when it needs the person.
- * A widget being dragged stays in the composition, invisible, so the view that began the drag keeps its touches.
+ * The original remains visible until its snapshot exists and keeps receiving the drag touches.
  */
 @Composable
 fun WidgetView(item: HomeItem, context: ItemContext) {
@@ -178,6 +214,7 @@ private fun LiveWidget(item: HomeItem, info: AppWidgetProviderInfo, context: Ite
                 if (context.isDragActive()) return
                 started = true
                 host.begin(item, position + local, DragOrigin.Home, MenuSource.Home, center)
+                host.armWidgetSnapshot(item.id) { view?.dragSnapshot()?.asImageBitmap() }
             }
 
             override fun onMove(local: Offset) {
@@ -209,6 +246,13 @@ private fun LiveWidget(item: HomeItem, info: AppWidgetProviderInfo, context: Ite
                 modifier = Modifier.fillMaxSize(),
                 update = { it.sink = sink },
             )
+        }
+    }
+    DisposableEffect(view, sink) {
+        val current = view
+        onDispose {
+            current?.cancelDrag()
+            if (current?.sink === sink) current.sink = null
         }
     }
     val grids = vm.sizeGrids
