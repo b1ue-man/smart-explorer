@@ -1,5 +1,12 @@
 # Übergabe an einen anderen Agenten (Stand 2026-10-25)
 
+Diese Datei bewahrt den ursprünglichen Übergabestand und die darin zitierten
+Nutzeranforderungen. Die fortgeschriebene Planung steht in [batches.md](batches.md),
+ihre aktuellen Code- und Quellenbelege in [recherche.md](recherche.md).
+Der Nutzer hat am 2026-10-25 erneut ausschließlich Planung und Kritik beauftragt:
+„du stoppst wenn der plan steht, du setzt ihn noch nicht um“.
+Die folgenden damaligen Planlücken sind deshalb keine zusätzliche Startfreigabe.
+
 Anlass: Der Nutzer gibt die Umsetzung wegen Nutzungsgrenzen an Codex ab (2026-10-25: „ich plane aufgrund der usage limits die umsetzung an codex abzugeben“). Dieses Dokument enthält, was bisher nur im lokalen Gedächtnis von Claude stand und für die Arbeit an diesem Repository gebraucht wird.
 
 Gerätebezogene Betriebsschritte des Nutzers stehen nach der Projektregel nicht hier. Dazu gehören Updates der lokalen Installation, Gerätekopplungen und Rechte. Sie liegen in einer Notiz außerhalb des Repositorys; der Nutzer gibt sie weiter.
@@ -13,13 +20,14 @@ Gerätebezogene Betriebsschritte des Nutzers stehen nach der Projektregel nicht 
 
 1. `AGENTS.md`: Projektregeln. Keine lokalen Builds und Tests; eine Remote-Task-Suite; ein Release je Batch.
 2. `docs/ARCHITEKTUR.md`: Architektur. Im Abschnitt „Zweck“ steht das Kernprinzip direkt zwischen den Geräten und die langfristige Richtung.
-3. `docs/plaene/2026-10-24-batches/batches.md`: vorläufiger Zuschnitt in fünf Batches. Er ist ausdrücklich ein Vorschlag; Zuschnitt und Agenten werden erst nach der Planung festgelegt.
+3. `docs/plaene/2026-10-24-batches/batches.md`: aktueller Detailplan. Er ersetzt den damaligen vorläufigen Fünferzuschnitt; Umsetzungsaufträge sind weiterhin nicht erteilt.
 4. Die Machbarkeitsnotizen mit Befunden, Quellen, Lücken und den offenen Entscheidungen:
    - `docs/plaene/2026-10-22-fernzugriff-desktop/machbarkeit.md`: P1 bis P9 und den Nachtrag P27 bis P31, Entscheidungen E1 bis E6 und E14.
    - `docs/plaene/2026-10-22-laufwerke-medien-agenten/machbarkeit.md`: P10 bis P26, Entscheidungen E9 bis E13.
 5. `docs/RICHTUNG.md`: langfristige Richtung. Sie ist kein Batch-Inhalt, gibt aber vier Einwebungen in die Batches vor.
-6. `docs/TODO.md`: die Brettzeilen der Punkte, jeweils mit „Vorläufig Batch N“.
-7. `docs/RELEASING.md` und `docs/GOTCHAS.md`: Release-Weg und bekannte Fallen.
+6. `docs/plaene/2026-10-24-batches/vertraege.md` und `agentenvertrag.md`: ergänzende konkrete Sicherheits-, Transport-, Laufzeit- und Auslieferungsverträge nach der Kritik.
+7. `docs/TODO.md`: die offenen Brettzeilen verweisen auf die Pakete des Detailplans.
+8. `docs/RELEASING.md` und `docs/GOTCHAS.md`: Release-Weg und bekannte Fallen.
 
 ## Vorgehen
 
@@ -50,15 +58,15 @@ Diese Regeln stehen noch nicht in `AGENTS.md` oder einer Arbeitsweise. Sie sind 
 - **Übertragene Lösungen hinterfragen:** Wird ein Ansatz auf eine andere Plattform oder Größenordnung übertragen, gehört eine Prüfung je Plattform in jeden Plan. Beispiele: ein Windows-Scan auf Android, LAN-Verhalten über das Relay.
 - **CI selbst begleiten:** Nach dem Start einer Remote-Suite oder eines Releases den Lauf selbst beobachten, Fehler beheben, neu starten und veröffentlichen, ohne auf Nachrichten des Nutzers zu warten. Release-Läufe nach `AGENTS.md` höchstens alle 30 Minuten prüfen.
 - **Kernprinzip Verbindungen:** siehe `docs/ARCHITEKTUR.md`, Abschnitt „Zweck“.
-- **Modelle:** Die Nutzervorgabe vom 2026-10-19 nennt Claude-Modelle: „sonnet für implementierungen die keine interpretation mehr zulassen, opus nut für sicherheitsrelevantes einer und design n anderer, gebatched die beiden also. der rest wenn möglich via sonnet.“ Für andere Anbieter wählt `modellwahl`. Annahme: Die Gesamtreview verlangt der Nutzer ausdrücklich mit Opus; ob er das für Codex-Umsetzungen auf ein Codex-Modell überträgt, ist nicht gesagt.
+- **Modelle, aktueller Vorrang 2026-10-25:** Planung GPT-6-Astra/max, Plankritik Opus 5.5/xhigh; Umsetzungsmodelle erst nach abgeschlossener Planung zum Zeitpunkt der Arbeitsweise. Die vorübergehende Codex-Einschränkung wurde vom Nutzer zurückgenommen. V8 im Vertragsnachtrag hält die Reichweite fest. Historische Vorgabe: Die Nutzervorgabe vom 2026-10-19 nennt Claude-Modelle: „sonnet für implementierungen die keine interpretation mehr zulassen, opus nut für sicherheitsrelevantes einer und design n anderer, gebatched die beiden also. der rest wenn möglich via sonnet.“ Für andere Anbieter wählt `modellwahl`. Annahme: Die Gesamtreview verlangt der Nutzer ausdrücklich mit Opus; ob er das für Codex-Umsetzungen auf ein Codex-Modell überträgt, ist nicht gesagt.
 
-## Offen beim Nutzer
+## Ursprünglich offene Verfahrensfragen
 
-- **Umfang einer Abwahl der Arbeitsweise:** Der Antrag dazu wurde zentral abgelehnt. Er braucht die Festlegung des Nutzers, zum Beispiel „nur der Auftrag“ oder „nur der Chat“.
+- **Umfang einer Abwahl der Arbeitsweise:** Historische Verfahrensfrage. Für den aktuellen Auftrag verlangt der Nutzer die Arbeitsweise ausdrücklich; es liegt keine aktive Abwahl vor.
 - **Konflikt `AGENTS.md` gegen zentral:**
   - `AGENTS.md` („subagent scope and RAM budget“) verlangt im Auftrag an einen Subagenten Abnahmezeichen und Berichtsformat.
   - zentral („nur Produktionsauftrag, nie Vorgehen“) verbietet jede Berichtsform im Auftrag.
-  - Der Konflikt steht im Batchplan und wird in der Planung von Batch 1 geklärt.
+  - Für diesen Auftrag geklärt: Die Hostanweisungen geben ausdrücklich vor, dass Nutzer- und Projektanweisungen Vorrang vor Skillrichtlinien haben. Deshalb gelten die konkreten Scope-, Abnahme- und Berichtsvorgaben aus `AGENTS.md`; dafür ist keine Nutzerentscheidung offen.
 
 ## CI- und Suite-Fallen aus früheren Läufen
 
