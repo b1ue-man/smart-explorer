@@ -29,7 +29,9 @@ Tests, keine Releases je Paket und keine Versuche mit produktiven Nutzerkonten.
 Die Aufträge besitzen ausdrücklich zugeordnete Schreibflächen. Die erste
 Gruppe bearbeitete B1, B3 und den unabhängigen Geometrieteil aus B4. Die zweite
 Gruppe integriert B2 und B4 sowie die Recovery- und Rootgrenzen aus B1.
-Abhängige Bildstrom-, Transport- und Anmeldepakete sind noch nicht besetzt.
+Der Transportkern wird als zusammenhängender Vendorpatch und als Appadapter
+bearbeitet. Die gemeinsame Bildreferenz-/Codec-/Ratenpipeline ist beauftragt;
+Anmeldung und Fernfenster sind noch nicht besetzt.
 
 | Ergebnis | Aufrufname | Selektor-Ergebnis | Einstufung |
 |---|---|---|---|
@@ -46,6 +48,14 @@ Abhängige Bildstrom-, Transport- und Anmeldepakete sind noch nicht besetzt.
 | P24 gezielter Teilscan | `partial_rescan` | `gpt-6.1-sol`, `medium` | 7 |
 | P22 inaktiver Recoverybestand | `offline_recovery` | `gpt-6.1-sol`, `xhigh` | 8 |
 | P15 Ordneröffnung | `desktop_open` | `gpt-6.1-sol`, `medium` | 6 |
+| P29 Terminalkopplung mit tatsächlichem Austauschbesitzer | `discovery_pairing` | `gpt-6.1-sol`, `xhigh` | 8 |
+| P28 Noq-/Iroh-Nutzdatensperre | `route_vendor` | `gpt-6.1-sol`, `xhigh` | 9 |
+| P23 Host-/Daemon-/CLI-/Desktop-Kapazitätsstatus | `capacity_status` | `gpt-6.1-sol`, `medium` | 7 |
+| P28 gemeinsamer Routeautomat und Appzulassung | `route_adapter` | `gpt-6.1-sol`, `xhigh` | 9 |
+| P21 Desktop-/Android-Verwaltung der Öffnungsfreigaben | `vault_settings` | `gpt-6.1-sol`, `medium` | 7 |
+| P11.1 gemeinsame physische optische Lesergrenze | `optical_reader` | `gpt-6.1-sol`, `high` | 8 |
+| B3 statischer kritischer Batchreview | `review_batch3` | Nutzervorgabe `gpt-6-astra`, `xhigh` | 9 |
+| P7/P27a/P30b–c/P31 Bildpipeline | `screen_pipeline` | `gpt-6.1-sol`, `xhigh` | 9 |
 
 Belegt sind die expliziten Modell-/Effortparameter der genannten Hostaufrufe.
 Antwortmodell-Metadaten sind über das verwendete Collaboration-Werkzeug nicht
@@ -57,6 +67,15 @@ Hostabrechnung sind nicht einsehbar. Die offizielle
 [Preisdokumentation](https://learn.chatgpt.com/docs/pricing) bestätigt am
 2026-10-25 die Fortsetzung über verfügbare Credits nach Verbrauch enthaltener
 Kontingente. API-Preise werden nicht als Creditsverbrauch ausgegeben.
+
+Eine erste Auswahl für den breiten P28-Repositoryauftrag lieferte
+`no_feasible_model`. Der Vendorauftrag wurde auf die drei zusammenhängenden
+Transportcrates begrenzt; für diesen Codierungsauftrag wählte das Profil
+`coding` bei unveränderter Einstufung 9 Sol 6.1/xhigh. Der Appadapter besitzt
+einen separaten belegten Auswahlaufruf desselben Codingprofils.
+Auch der B3-Reviewselektor meldete bei Einstufung 9 im Repositoryprofil
+`no_feasible_model`; die ausdrückliche Nutzervorgabe Astra/xhigh hat Vorrang
+und wurde unverändert im Hostaufruf gesetzt.
 
 Leseflächen, Schreibflächen, Verbote, Ergebnismerkmale und Berichtsanforderungen
 sind in den konkreten Agentenaufträgen festgehalten. Gemeinsame Registrierungen,
@@ -97,9 +116,10 @@ Versionsbezug. Diese Reviews führen keine Builds, Tests oder Laufzeitversuche
 aus. Ihre Durchführung hält die autorisierte Arbeit an Folgebatches nicht an.
 Bestätigte Befunde werden vor der gemeinsamen Remote-Suite behoben; der
 vereinbarte abschließende Gesamtreview bleibt erhalten. Die Reviewer belegen
-Fundstelle, Auswirkung, Quelle und noch ungeprüfte Annahmen. Bisher wurde noch
-kein Batchreview gestartet, weil kein vollständiges fachliches Paket
-abschließend integriert ist.
+Fundstelle, Auswirkung, Quelle und noch ungeprüfte Annahmen. Der erste Review
+läuft für den integrierten B3/P13-Quellstand. Seine bestätigten Befunde werden
+parallel zur übrigen Umsetzung korrigiert. Die Reviews von B1, B2 und B4–B8
+beginnen nach Integration ihres jeweiligen vollständigen Paketumfangs.
 
 ## Integrationsbefunde
 
@@ -125,7 +145,34 @@ abschließend integriert ist.
   atomaren NoReplace-Directory-Rename. Provider ohne belegte Primitive
   behalten ihre bisherigen Mergewege und melden die neue strikte Operation
   als technisch nicht unterstützt; eine objektbasierte Alternative muss
-  ihre tatsächliche Locatoridentität erhalten.
+  ihre tatsächliche Locatoridentität erhalten. Wo exklusive Anlage, aber
+  keine dauerhafte Objekt-ID belegt ist, erlaubt ausschließlich die eigene
+  bestätigte Anlageantwort den laufenden Auftrag. Recovery bleibt dort
+  unbestätigt; bestehende Verzeichnisse werden nicht adoptiert oder neu gezählt.
+- P22: Aktiver Mounteintrag und inaktiver Recoverybesitzer wechseln atomar im
+  vorhandenen Registrydokument. Rohspools werden vor dem Öffnen einer Engine
+  gesichert; Originalcache und veröffentlichte Sicherung bleiben erhalten.
+- P24: Teilscan-Metriken stammen aus tatsächlichen Besuchen vor Filterretention.
+  Ohne vollständige Teilmessung wird kein alter erfolgreicher Teilbaum durch
+  unbestätigte Daten oder errechnete Filterlistenlängen ersetzt.
+- P23: Authentifizierte Hostberichte tragen Remote- und Cachekapazität getrennt
+  durch Daemon, CLI und Desktop. Der tatsächliche Sessiontoken wird beim
+  Schreiben des Snapshots erneut geprüft; ein Gerätebaum erhält keine Summe
+  inkompatibler Providerquoten.
+- P29/P13: Ein verlorenes Start-ACK beendet nicht den Besitz eines bereits
+  gestarteten Austauschs. Der Coreauftrag hält den Operationslease bis zum
+  tatsächlichen Ende; EOF/Abbruch markiert ausschließlich diesen Austausch.
+- Agentprotokoll: Neue Kapazitäts-/Verzeichnisframes heben die bestehende
+  exakte Handshakeversion von 11 auf 12. Die Deploycache-Identität enthält
+  weiterhin Protokollversion und Binaryhash.
+- P13: Die Launcherfähigkeit wird am geprüften Programm belegt, nicht allein
+  an der Produktversionsnummer. Erstinstallation und Legacy-Rückkehr besitzen
+  denselben Updatebesitzer wie verwaltete Updates. Der Linux-Releaseabschluss
+  installiert bei vorhandener Desktop-App ein vollständiges Bundle ohne
+  GUI-Start; CLI-only mischt keine abweichenden App-/CLI-Generationen.
+- P28: Iroh, Noq und Noq-proto sind exakt an 1.3.0 und lokale Vendorpfade
+  gebunden. Der Patch enthält eine Sendesperre vor Frameserialisierung und
+  invalidiert bereits geplante I/O bei Policy-/Netzgenerationswechsel.
 
 Die Integrationsbefunde sind Quelltextbefunde. Praktische Funktionsnachweise,
 die gemeinsame Remote-Suite, Versionserhöhung und Veröffentlichung stehen
