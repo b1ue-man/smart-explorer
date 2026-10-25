@@ -134,7 +134,10 @@ pub(crate) fn next_expiry(state: &ShareAuthState, now: i64) -> Option<i64> {
     direct
         .chain(members)
         .filter(|grant| grant.grants_any())
-        .filter_map(ExecGrant::valid_until)
+        .flat_map(|grant| {
+            let access = grant.access_grant();
+            access.valid_until.into_iter().chain(access.constraints.deadlines()).collect::<Vec<_>>()
+        })
         .filter(|end| *end > now)
         .min()
 }

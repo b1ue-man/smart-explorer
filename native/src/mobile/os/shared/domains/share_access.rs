@@ -59,6 +59,9 @@ pub(super) fn bridge_key(capability: Capability) -> &'static str {
         Capability::ExecTerminal => "execTerminal",
         Capability::ScreenView => "screenView",
         Capability::ScreenControl => "screenControl",
+        Capability::AppLaunch => "appLaunch",
+        Capability::LoginAccess => "loginAccess",
+        Capability::TcpForward => "tcpForward",
     }
 }
 
@@ -135,7 +138,37 @@ pub(super) fn view_json(view: &AccessGrantView) -> Value {
         "capabilities": capabilities,
         "validUntil": view.valid_until,
         "expired": view.expired,
+        "version": view.version,
+        "constraints": view.constraints,
+        "legacyReaderDisablesGrant": view.legacy_reader_disables_grant,
     })
+}
+
+/// `share.deviceRights {contactId}` or `{deviceId, publicKey}`: read-only
+/// exact policy sources and conditional reachable alternatives, never a union.
+pub(in super::super) fn device_rights(args: &Value) -> Result<Value, ApiError> {
+    let profiles = ShareProfiles::load_checked(default_home()).map_err(ApiError::internal)?;
+    let (device_id, public_key) = if let Some(contact_id) = args.get("contactId").and_then(Value::as_str) {
+        let contact = profiles.direct_contacts.iter().find(|contact| contact.id == contact_id)
+            .ok_or_else(|| ApiError::not_found("Dieses Gerät ist nicht mehr gespeichert."))?;
+        (contact.remote_device_id.clone().ok_or_else(|| invalid("Geräteidentität noch nicht bestätigt."))?,
+         contact.remote_public_key.clone().ok_or_else(|| invalid("Geräteschlüssel noch nicht bestätigt."))?)
+    } else { (str_arg(args, "deviceId")?.to_string(), str_arg(args, "publicKey")?.to_string()) };
+    let view = crate::daemon::access_ipc::device_access_rights(&device_id, &public_key)
+        .map_err(|error| ApiError::internal(format!("Rechtequellen nicht lesbar: {error}")))?;
+    let mut rights = serde_json::to_value(&view).map_err(|error| ApiError::internal(error.to_string()))?;
+    if let Some(relations) = rights.get_mut("relations").and_then(Value::as_array_mut) {
+        for (json, source) in relations.iter_mut().zip(&view.relations) {
+            let key = match &source.target {
+                crate::share::ExecGrantTarget::Direct { device_id, fingerprint, .. } => format!("direct/{device_id}/{fingerprint}"),
+                crate::share::ExecGrantTarget::RoomMember { room_id, device_id, fingerprint, .. } => format!("room/{room_id}/{device_id}/{fingerprint}"),
+            };
+            json["targetKey"] = Value::String(key);
+        }
+    }
+    let contact_id = profiles.direct_contacts.iter().find(|contact|
+        contact.remote_device_id.as_deref() == Some(device_id.as_str()) && contact.remote_public_key.as_deref() == Some(public_key.as_str())).map(|contact| &contact.id);
+    Ok(json!({ "deviceId": device_id, "publicKey": public_key, "contactId": contact_id, "rights": rights }))
 }
 
 /// `share.setAccess {targetKey, account?, capabilities?, programs?,
@@ -305,6 +338,7 @@ pub(super) fn approvals_json(pending: &[ApprovalView]) -> Value {
                 "deviceId": view.device_id,
                 "fingerprint": view.fingerprint,
                 "relation": view.relation,
+                "relationId": view.relation_id,
                 "room": view.room,
                 "capability": bridge_key(view.capability),
                 "capabilityLabel": capability_label(view.capability),
@@ -317,6 +351,9 @@ pub(super) fn approvals_json(pending: &[ApprovalView]) -> Value {
                 "requestedAt": view.requested_at,
                 "surface": view.surface,
                 "olderClientTerminal": view.older_client_terminal,
+                "request": view.request,
+                "contextLines": crate::share::consent_launch::approval_context(view),
+                "contextComplete": crate::share::consent_launch::approval_context_complete(view),
             })
         })
         .collect();
@@ -379,6 +416,8 @@ fn answer_error(error: String) -> ApiError {
 pub(super) struct AppConsent;
 
 impl ConsentNotifier for AppConsent {
+    fn supports_contextual(&self) -> bool { true }
+
     fn show(&self, _request: &ApprovalView) -> Option<ApprovalSurface> {
         changed();
         Some(ApprovalSurface::Notification)

@@ -60,6 +60,7 @@ internal class ExecHostActions(
     val log: () -> Unit,
     /** Saves the access dialog of one device; `null`: through the Share view model (`share.setAccess`). */
     val setAccess: ((ExecTarget, AccessChange) -> Unit)? = null,
+    val settings: ((ExecTarget) -> Unit)? = null,
 )
 
 /**
@@ -106,13 +107,15 @@ internal fun ExecHostSection(
     }
     if (status.execTargets.isEmpty()) HintLine("Noch keine Direkt-Geräte oder Raummitglieder.")
     status.execTargets.forEach { target ->
+        val rawName = if (target.relation == "direct") status.writeGrants?.firstOrNull { it.deviceId == target.deviceId && it.fingerprint == target.fingerprint }?.name
+            else status.rooms.flatMap { it.members }.firstOrNull { it.deviceId == target.deviceId && it.fingerprint == target.fingerprint }?.name
         ExecTargetRow(
-            target,
+            target.copy(name = rawName?.ifBlank { "Gerät ohne Namen" } ?: target.name),
             provider,
             overview?.accessOf(target.targetKey),
-            onAccess = { accessKey = target.targetKey },
-            onRevoke = { actions.revoke(target) },
-            onPrograms = { actions.programs(target) },
+            onAccess = { actions.settings?.invoke(target) ?: run { accessKey = target.targetKey } },
+            onRevoke = { actions.settings?.invoke(target) ?: actions.revoke(target) },
+            onPrograms = { actions.settings?.invoke(target) ?: actions.programs(target) },
         )
     }
     TextButton(onClick = actions.log, modifier = Modifier.padding(start = 4.dp)) { Text("Befehlsprotokoll anzeigen") }
@@ -194,12 +197,7 @@ private fun ExecTargetRow(
         },
         trailingContent = {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                if (target.enabled) {
-                    TextButton(onClick = onRevoke) { Text("Entziehen") }
-                } else {
-                    TextButton(onClick = onAccess, enabled = provider.available && target.baseAuthorized) { Text("Erlauben…") }
-                }
-                RowMenu(listOf("Zugriff…" to onAccess, "Programme…" to onPrograms))
+                TextButton(onClick = onAccess) { Text("Geräteeinstellungen …") }
             }
         },
     )
@@ -304,5 +302,5 @@ internal fun execStateLabel(state: String): String = when (state) {
     "cancelled" -> "Gestoppt"
     "revoked" -> "Erlaubnis entzogen"
     "disconnected" -> "Verbindung getrennt"
-    else -> state.ifBlank { "Unbekannt" }
+    else -> "Zustand nicht bekannt"
 }

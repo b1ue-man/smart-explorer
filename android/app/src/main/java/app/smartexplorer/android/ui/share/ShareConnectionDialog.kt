@@ -2,7 +2,6 @@ package app.smartexplorer.android.ui.share
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -61,12 +60,13 @@ internal fun ShareConnectionDialog(scope: String, vm: ShareViewModel, onDismiss:
         onDismissRequest = { if (chosen == null) onDismiss() },
         title = { Text("Gespeicherte Verbindungen freigeben") },
         text = {
-            Column {
+            LazyColumn {
+                item { Column {
                 Text(answer?.warning?.takeIf { it.isNotBlank() } ?: "Freigegebene Verbindungen nutzen deine gespeicherten Zugangsdaten. Wähle jedes Konto und dessen Rechte einzeln.")
                 if (loading) LinearProgressIndicator()
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 if (!loading && error == null && choices.isEmpty()) Text("Keine gespeicherten Verbindungen.")
-                LazyColumn(Modifier.heightIn(max = 360.dp)) {
+                } }
                     items(choices, key = { it.account }) { choice ->
                         ListItem(
                             headlineContent = { Text(choice.label.ifBlank { choice.account }) },
@@ -76,7 +76,6 @@ internal fun ShareConnectionDialog(scope: String, vm: ShareViewModel, onDismiss:
                             modifier = Modifier.clickable(enabled = !loading) { chosen = choice },
                         )
                     }
-                }
             }
         },
         confirmButton = { TextButton(onClick = { reload++ }, enabled = !loading && chosen == null) { Text("Erneut laden") } },

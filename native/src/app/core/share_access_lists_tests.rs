@@ -25,6 +25,7 @@ fn request(id: u8, device: &str, capability: Capability, command: ApprovalComman
         device_id: device.into(),
         fingerprint: format!("fp-{device}"),
         relation: "direct".into(),
+        relation_id: "direct-test".into(),
         room: None,
         capability,
         account_label: Some("alice".into()),
@@ -32,6 +33,7 @@ fn request(id: u8, device: &str, capability: Capability, command: ApprovalComman
         requested_at: NOW,
         surface: Some("window".into()),
         older_client_terminal: false,
+        request: None,
     }
 }
 

@@ -15,7 +15,7 @@ use eframe::egui::{self, RichText};
 
 use crate::app::theme;
 use crate::share::access_approval::{ApprovalCommand, ApprovalDecision, ApprovalId, ApprovalView};
-use crate::share::consent_launch::{capability_label, request_line};
+use crate::share::consent_launch::{approval_context, approval_context_complete, capability_label, request_line};
 
 /// How often the window reads its request.
 const POLL: Duration = Duration::from_secs(1);
@@ -151,6 +151,9 @@ impl ConsentWindow {
                     row(ui, "Befehl", &command_text(command));
                 }
             });
+        for detail in approval_context(view) {
+            ui.add(egui::Label::new(detail).wrap());
+        }
         if view.older_client_terminal {
             ui.add_space(4.0);
             let note = format!(
@@ -162,8 +165,8 @@ impl ConsentWindow {
         ui.add_space(8.0);
         ui.add(
             egui::Label::new(
-                "„Immer erlauben“ setzt dieses Recht für das Gerät auf „Erlauben“; spätere \
-                 Anfragen fragen dann nicht mehr. Schließen des Fensters lehnt ab.",
+                "„Immer erlauben“ setzt dieses Recht in dieser Beziehung auf „Erlauben“. \
+                 Die gespeicherten Zielbedingungen bleiben bestehen. Schließen lehnt ab.",
             )
             .wrap(),
         );
@@ -171,7 +174,7 @@ impl ConsentWindow {
             ui.colored_label(theme::danger(ui), error.as_str());
         }
         ui.add_space(6.0);
-        let allow = armed && !state.sending;
+        let allow = armed && !state.sending && approval_context_complete(view);
         ui.horizontal(|ui| {
             if ui
                 .add_enabled(allow, egui::Button::new("Diesmal erlauben"))
@@ -219,7 +222,9 @@ impl eframe::App for ConsentWindow {
         if !armed {
             ctx.request_repaint_after(Duration::from_millis(200));
         }
-        egui::CentralPanel::default().show(ctx, |ui| self.body(ui, &state, armed));
+        egui::CentralPanel::default().show(ctx, |ui| {
+            egui::ScrollArea::vertical().show(ui, |ui| self.body(ui, &state, armed));
+        });
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {

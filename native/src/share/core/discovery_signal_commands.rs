@@ -5,7 +5,7 @@ use super::core::{eio, now_secs, random_token};
 use super::discovery_pin::{discovery_pin_strength, DISCOVERY_MAX_OFFER_SECS};
 use super::discovery_signal_port::DiscoveryExchangePort;
 use super::discovery_signal_state::{
-    ActiveDiscoveryOffer, DiscoverySignalState, DISCOVERY_PUBLISH_RETRY_DELAY,
+    ActiveDiscoveryOffer, DiscoveryExchangeRole, DiscoverySignalState, DISCOVERY_PUBLISH_RETRY_DELAY,
     MAX_ACTIVE_DISCOVERY_OFFERS, MAX_DISCOVERY_ALIAS_BYTES, MAX_DISCOVERY_SUITE_BYTES,
 };
 use super::discovery_signal_types::{
@@ -93,6 +93,7 @@ impl DiscoverySignalRuntime {
                 )))
             }
             DiscoveryCommand::StartDiscoveryExchange { .. }
+            | DiscoveryCommand::StartOwnedDiscoveryExchange { .. }
             | DiscoveryCommand::CancelDiscoveryExchange { .. } => {
                 DiscoveryCommandOutcome::result(Err(eio(
                     "Share-Server nicht verbunden; Discovery-Austausch wurde nicht gestartet",
@@ -176,20 +177,20 @@ impl DiscoverySignalRuntime {
                 discovery_id,
                 pin,
                 share_back,
-            } => match self.start_connector(signal, discovery_id, &pin, share_back, events) {
-                Ok(handle) => {
-                    DiscoveryCommandOutcome::result(Ok(ShareCmdResult::DiscoveryExchange(handle)))
-                }
-                Err(error) => {
-                    let reconnect = error.should_reconnect();
-                    let result = Err(error.into_io());
-                    if reconnect {
-                        DiscoveryCommandOutcome::reconnect(result)
-                    } else {
-                        DiscoveryCommandOutcome::result(result)
-                    }
-                }
-            },
+            } => self.start_exchange_command(signal, discovery_id, &pin, share_back, None, events),
+            DiscoveryCommand::StartOwnedDiscoveryExchange {
+                discovery_id,
+                pin,
+                share_back,
+                owner,
+            } => self.start_exchange_command(
+                signal,
+                discovery_id,
+                &pin,
+                share_back,
+                Some(owner),
+                events,
+            ),
             DiscoveryCommand::CancelDiscoveryExchange { exchange_id } => {
                 match self.cancel_exchange(signal, &exchange_id, events) {
                     Ok(()) => DiscoveryCommandOutcome::result(Ok(ShareCmdResult::Applied)),
@@ -202,6 +203,51 @@ impl DiscoverySignalRuntime {
                             DiscoveryCommandOutcome::result(result)
                         }
                     }
+                }
+            }
+        }
+    }
+
+    fn start_exchange_command(
+        &mut self,
+        signal: &mut SignalConnection,
+        discovery_id: String,
+        pin: &super::discovery_signal_types::DiscoveryPin,
+        share_back: bool,
+        owner: Option<super::discovery_exchange_owner::DiscoveryExchangeLease>,
+        events: &crossbeam_channel::Sender<ShareEvent>,
+    ) -> DiscoveryCommandOutcome {
+        if owner.as_ref().is_some_and(|owner| owner.is_cancelled()) {
+            return DiscoveryCommandOutcome::result(Err(eio(
+                "Discovery-Besitzer wurde beendet",
+            )));
+        }
+        if self.state.exchanges.values().any(|exchange| {
+            exchange.role == DiscoveryExchangeRole::Connector
+                && exchange.discovery_id == discovery_id
+        }) {
+            return DiscoveryCommandOutcome::result(Err(eio(
+                "Fuer dieses Discovery-Angebot laeuft bereits ein Austausch",
+            )));
+        }
+        match self.start_connector(signal, discovery_id, pin, share_back, events) {
+            Ok(handle) => {
+                let Some(exchange) = self.state.exchanges.get_mut(&handle.exchange_id) else {
+                    self.port.cancel_exchange(&handle.exchange_id);
+                    return DiscoveryCommandOutcome::result(Err(eio(
+                        "Discovery-Austausch wurde ohne lokalen Zustand bestaetigt",
+                    )));
+                };
+                exchange.owner = owner;
+                DiscoveryCommandOutcome::result(Ok(ShareCmdResult::DiscoveryExchange(handle)))
+            }
+            Err(error) => {
+                let reconnect = error.should_reconnect();
+                let result = Err(error.into_io());
+                if reconnect {
+                    DiscoveryCommandOutcome::reconnect(result)
+                } else {
+                    DiscoveryCommandOutcome::result(result)
                 }
             }
         }

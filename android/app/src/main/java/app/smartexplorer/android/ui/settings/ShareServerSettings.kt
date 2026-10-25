@@ -75,7 +75,6 @@ internal fun ShareServerSettings() {
             current.encryptedAlternative?.let { encrypted ->
                 Text(
                     "Verschlüsselt verbinden: Der Server braucht ein TLS-Zertifikat für den eingetragenen Namen " +
-                        "(se-share-server mit --tls-cert/--tls-key bzw. SE_SHARE_TLS_CERT/SE_SHARE_TLS_KEY). " +
                         "Selbst signiert: #sha256=<Fingerabdruck> anhängen. Ein TLS-Fehler fällt nie auf Klartext zurück.",
                 )
                 if (current.namesIpAddress) {
@@ -90,6 +89,7 @@ internal fun ShareServerSettings() {
                 ) { Text("Übernehmen: $encrypted") }
                 Text("Danach speichern.")
             }
+            app.smartexplorer.android.ui.share.IdentityDiagnostic("Servereinrichtung: se-share-server --tls-cert/--tls-key; Umgebungsvariablen SE_SHARE_TLS_CERT und SE_SHARE_TLS_KEY.")
             if (current.ignoredPlaintext > 0) Text("${current.ignoredPlaintext} alte Klartexteinträge werden unter TLS ignoriert. Kein Rückfall auf Klartext.")
         }
         OutlinedTextField(

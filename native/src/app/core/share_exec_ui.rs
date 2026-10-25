@@ -56,7 +56,7 @@ pub(in crate::app) fn ui_exec_overview(app: &mut App, ui: &mut egui::Ui) -> Opti
     let provider = cached_provider_status(ui);
     provider_line(ui, &provider);
     let now = crate::share::core_now_secs();
-    let (mut open, mut edit) = (None, None);
+    let mut open = None;
     if views.is_empty() {
         ui.label(
             "Noch kein gekoppeltes Gerät und kein Raummitglied, dem Zugriff gegeben werden kann.",
@@ -72,19 +72,10 @@ pub(in crate::app) fn ui_exec_overview(app: &mut App, ui: &mut egui::Ui) -> Opti
             );
             let text = access_text(view, &provider.user_label, now);
             ui.colored_label(state_color(ui, view, now), text);
-            if ui
-                .add_enabled(view.base_authorized, egui::Button::new("Ändern…"))
-                .clicked()
-            {
-                edit = Some(view.clone());
-            }
             if ui.button("Einstellungen").clicked() {
                 open = Some(view.target_key.clone());
             }
         });
-    }
-    if let Some(view) = edit {
-        open_dialog(ui.ctx(), &app.share_profiles, &view);
     }
     run_dialog(app, ui.ctx(), &views, &provider);
     ui.separator();
@@ -92,7 +83,7 @@ pub(in crate::app) fn ui_exec_overview(app: &mut App, ui: &mut egui::Ui) -> Opti
     ui.separator();
     log_ui::ui_exec_log(ui);
     ui.separator();
-    accounts_ui::ui_accounts(ui);
+    // Account administration belongs to „Dieses Gerät“.
     open
 }
 
@@ -114,11 +105,11 @@ pub(in crate::app) fn ui_exec_target(app: &mut App, ui: &mut egui::Ui, target_ke
         ui.label(RichText::new(&view.device_name).strong());
         ui.label(&view.relation);
     });
-    ui.horizontal_wrapped(|ui| {
-        ui.label(format!("Geräte-ID: {}", view.device_id));
-        ui.label("Fingerabdruck:");
-        ui.monospace(&view.fingerprint);
-    });
+    egui::CollapsingHeader::new("Identität abgleichen")
+        .id_salt(("access_identity", &view.target_key)).show(ui, |ui| {
+            ui.label("Fingerabdruck"); ui.monospace(&view.fingerprint);
+            if ui.button("Fingerabdruck kopieren").clicked() { ui.ctx().copy_text(view.fingerprint.clone()); }
+        });
     for (capability, label) in [
         (Capability::ExecCommands, "Befehle"),
         (Capability::ExecTerminal, "Terminal"),
@@ -139,7 +130,7 @@ pub(in crate::app) fn ui_exec_target(app: &mut App, ui: &mut egui::Ui, target_ke
         Some(end) => format!("Gültig bis {}", end_text(end)),
         None => "Gültig: unbegrenzt".into(),
     });
-    ui.small(format!("Revision {}", view.policy_revision));
+
     if !view.base_authorized {
         let text = "Die Freigabe dieses Geräts ist inaktiv; Zugriff kann erst nach der Freigabe eingestellt werden.";
         ui.colored_label(theme::warning(ui), text);
@@ -258,7 +249,7 @@ fn end_text(end: i64) -> String {
                 .format("%d.%m.%Y %H:%M")
                 .to_string()
         })
-        .unwrap_or_else(|| end.to_string())
+        .unwrap_or_else(|| "Zeitpunkt nicht darstellbar".into())
 }
 
 fn intro(ui: &mut egui::Ui) {
@@ -275,7 +266,7 @@ fn intro(ui: &mut egui::Ui) {
 fn provider_line(ui: &mut egui::Ui, provider: &crate::share::ExecProviderStatus) {
     ui.horizontal_wrapped(|ui| {
         ui.label(format!("Mein Konto: {}", provider.user_label));
-        ui.label(format!("Kapselung: {}", provider.provider));
+        egui::CollapsingHeader::new("Kontodiagnose").id_salt("exec_provider_diagnostics").show(ui, |ui| { ui.monospace(format!("Kapselung: {}", provider.provider)); });
         if !provider.available {
             ui.colored_label(
                 theme::danger(ui),
@@ -315,21 +306,25 @@ fn run_dialog(
         return;
     };
     if let Some(view) = views.iter().find(|view| view.target_key == key) {
-        apply_access(app, view, change, revision);
+        if apply_access(app, view, change, revision) {
+            access_dialog::close(ctx);
+        } else if let Some(mut draft) = access_dialog::current(ctx) {
+            draft.save_error = app.error_msg.clone();
+            access_dialog::open(ctx, draft);
+        }
     }
 }
 
 /// One change at the revision the surface showed; the answer as notice or
 /// error with the next step (C6).
-fn apply_access(app: &mut App, view: &ExecDeviceView, change: AccessGrantChange, revision: u64) {
+fn apply_access(app: &mut App, view: &ExecDeviceView, change: AccessGrantChange, revision: u64) -> bool {
+    let mut saved = false;
     let name = &view.device_name;
     match crate::daemon::mutate_access_grant(view.target.clone(), change, Some(revision)) {
         Ok((result, _)) if result.persisted && result.applied && result.error.is_none() => {
-            let text = format!(
-                "Zugriff für {name} gespeichert (Revision {})",
-                result.revision
-            );
+            let text = format!("Zugriff für {name} ({}) gespeichert", view.relation);
             app.notice = Some((text, std::time::Instant::now()));
+            saved = true;
         }
         Ok((result, _)) => {
             let detail = result
@@ -352,6 +347,7 @@ fn apply_access(app: &mut App, view: &ExecDeviceView, change: AccessGrantChange,
         }
     }
     app.share_next_poll_at = std::time::Instant::now();
+    saved
 }
 
 fn cached_provider_status(ui: &mut egui::Ui) -> crate::share::ExecProviderStatus {
@@ -368,8 +364,18 @@ fn cached_provider_status(ui: &mut egui::Ui) -> crate::share::ExecProviderStatus
 fn exec_device_views(profiles: &crate::share::ShareProfiles) -> Vec<ExecDeviceView> {
     crate::share::exec_target_views(profiles)
         .into_iter()
-        .map(device_view)
-        .collect()
+        .map(|view| {
+            let no_name = match &view.target {
+                crate::share::ExecGrantTarget::Direct { device_id, public_key, .. } => profiles.direct_grants.iter()
+                    .find(|grant| &grant.device_id == device_id && &grant.public_key == public_key).is_some_and(|grant| grant.device_name.trim().is_empty()),
+                crate::share::ExecGrantTarget::RoomMember { room_id, device_id, public_key, .. } => profiles.rooms.iter()
+                    .filter(|room| &room.room_id == room_id).flat_map(|room| &room.members)
+                    .find(|member| &member.device_id == device_id && &member.public_key == public_key).is_some_and(|member| member.device_name.trim().is_empty()),
+            };
+            let mut view = device_view(view);
+            if no_name { view.device_name = "Gerät ohne Namen".into(); }
+            view
+        }).collect()
 }
 
 fn device_view(view: crate::share::ExecTargetView) -> ExecDeviceView {
@@ -407,3 +413,6 @@ mod accounts_ui_tests;
 #[cfg(test)]
 #[path = "share_exec_ui_tests.rs"]
 mod tests;
+
+/// Account management is owned by the local device settings.
+pub(in crate::app) fn ui_host_accounts(ui: &mut egui::Ui) { accounts_ui::ui_accounts(ui); }

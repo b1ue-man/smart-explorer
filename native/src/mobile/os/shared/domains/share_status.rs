@@ -57,7 +57,7 @@ pub(super) struct StatusInput<'a> {
 }
 
 /// Status code and online rule come from `share::device_view`, shared with
-/// the se Desktop tiles; the JSON is unchanged since v0.5.182.
+/// the se Desktop tiles. Pinned identity fields extend the existing JSON.
 fn device_json(profiles: &ShareProfiles, contact: &DirectContact, now_secs: i64) -> Value {
     let lan = device_view::seen_on_lan(contact, now_secs);
     let target = PeerOpenTarget::Direct {
@@ -65,6 +65,8 @@ fn device_json(profiles: &ShareProfiles, contact: &DirectContact, now_secs: i64)
     };
     json!({
         "contactId": contact.id,
+        "deviceId": contact.remote_device_id,
+        "publicKey": contact.remote_public_key,
         "name": contact.display_name,
         "status": device_view::status_code(&contact.status),
         "statusText": contact.status.label(),

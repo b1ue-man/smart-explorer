@@ -143,26 +143,20 @@ fn job_card(
             ui.label(RichText::new(peer_label(job)).strong());
             ui.label(lifecycle_label(&job.state));
         });
-        ui.label(format!("Exec-ID: {}", job.exec_id));
+
         ui.label(format!("Programm: {}", job.program));
-        ui.small(format!("Command-Digest: {}", job.command_digest));
-        ui.small(format!("Policy-Revision: {}", job.policy_revision));
+        egui::CollapsingHeader::new("Diagnose dieses Befehls").id_salt(("job_diag", job.exec_id.to_string())).show(ui, |ui| {
+            ui.monospace(format!("Exec-ID: {}\nGerät: {}\nCommand-Digest: {}\nPolicy-Revision: {}", job.exec_id, job.peer_device_id, job.command_digest, job.policy_revision));
+        });
         if let Some(started) = job.started_at {
             ui.small(format!("Gestartet: {}", timestamp(started)));
         }
         if let Some(terminal) = &job.terminal {
-            ui.small(format!(
-                "Ergebnis: {:?}, Exit={:?}, stdout={} B, stderr={} B{}",
-                terminal.kind,
-                terminal.exit_code,
-                terminal.stdout_bytes,
-                terminal.stderr_bytes,
-                if terminal.output_truncated {
-                    ", Ausgabe gekuerzt"
-                } else {
-                    ""
-                }
-            ));
+            if let Some(code) = terminal.exit_code { ui.label(format!("Exitcode: {code}")); }
+            if terminal.output_truncated { ui.small("Ausgabe gekürzt"); }
+            egui::CollapsingHeader::new("Ausgabestatistik").id_salt(("job_output_stats", job.exec_id.to_string())).show(ui, |ui| {
+                ui.monospace(format!("Ergebnis: {:?} · stdout={} B · stderr={} B", terminal.kind, terminal.stdout_bytes, terminal.stderr_bytes));
+            });
         }
         if let Some(active) = active {
             let key = format!("{:?}:{}", active.direction, job.exec_id);
@@ -273,11 +267,11 @@ fn request_cancel(
             }
             match result {
                 Ok(true) => {
-                    state.notice = Some(format!("Abbruch fuer {exec_id} angefordert"));
+                    state.notice = Some("Abbruch angefordert".into());
                     state.error = None;
                 }
                 Ok(false) => {
-                    state.error = Some(format!("Exec-Job nicht mehr aktiv: {exec_id}"));
+                    state.error = Some("Der Befehl ist nicht mehr aktiv".into());
                     state.notice = None;
                 }
                 Err(error) => {
@@ -293,35 +287,35 @@ fn request_cancel(
 
 fn peer_label(job: &crate::share::ExecJobView) -> String {
     if job.peer_device_name.trim().is_empty() {
-        format!("Geraet {}", job.peer_device_id)
+        "Gerät ohne Namen".into()
     } else {
-        format!("{} ({})", job.peer_device_name, job.peer_device_id)
+        job.peer_device_name.clone()
     }
 }
 
 fn lifecycle_label(state: &crate::share::ExecLifecycleState) -> &'static str {
     use crate::share::ExecLifecycleState::*;
     match state {
-        QueuedLocal => "queued-local",
-        Connecting => "connecting",
-        Authenticating => "authenticating",
-        Authorized => "authorized",
-        Starting => "starting",
-        Running => "running",
-        Cancelling => "cancelling",
-        Exited => "exited",
-        Failed => "failed",
-        TimedOut => "timed-out",
-        Cancelled => "cancelled",
-        Revoked => "revoked",
-        Disconnected => "disconnected",
+        QueuedLocal => "Wartet auf diesem Gerät",
+        Connecting => "Verbindung wird aufgebaut",
+        Authenticating => "Identität wird geprüft",
+        Authorized => "Zugriff bestätigt",
+        Starting => "Wird gestartet",
+        Running => "Läuft",
+        Cancelling => "Wird abgebrochen",
+        Exited => "Beendet",
+        Failed => "Fehlgeschlagen",
+        TimedOut => "Zeitüberschreitung",
+        Cancelled => "Abgebrochen",
+        Revoked => "Recht entzogen",
+        Disconnected => "Verbindung getrennt",
     }
 }
 
 fn timestamp(seconds: i64) -> String {
     chrono::DateTime::from_timestamp(seconds, 0)
         .map(|time| time.format("%Y-%m-%d %H:%M:%S UTC").to_string())
-        .unwrap_or_else(|| format!("{seconds} (Unix)"))
+        .unwrap_or_else(|| "Zeitpunkt nicht darstellbar".into())
 }
 
 #[cfg(test)]
@@ -332,11 +326,11 @@ mod tests {
     fn lifecycle_labels_cover_active_and_terminal_states() {
         assert_eq!(
             lifecycle_label(&crate::share::ExecLifecycleState::Running),
-            "running"
+            "Läuft"
         );
         assert_eq!(
             lifecycle_label(&crate::share::ExecLifecycleState::Revoked),
-            "revoked"
+            "Recht entzogen"
         );
     }
 

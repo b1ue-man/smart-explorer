@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -83,7 +84,8 @@ internal fun ContactWriteDialog(grant: ShareWriteGrant, vm: ShareViewModel, onDi
             action.submit(vm, "Kontaktrecht nicht gespeichert", onDismiss) { SharePolicyApi.setContactWrite(grant, chosen) }
         },
     ) {
-        SelectionContainer { Text("Geräte-ID: ${grant.deviceId}\nFingerabdruck: ${grant.fingerprint}\nKnoten: ${grant.nodeId.ifEmpty { "Legacy (leer)" }}\nSchlüssel: ${grant.publicKey}") }
+        SelectionContainer { Text("Fingerabdruck: ${grant.fingerprint}") }
+        IdentityDiagnostic("Geräte-ID: ${grant.deviceId}\nKnoten: ${grant.nodeId.ifEmpty { "Legacy (leer)" }}\nSchlüssel: ${grant.publicKey}")
         ShareChoice("Schreiben auf schreibbaren Freigaben erlauben", write, !action.saving && (grant.active || write)) { write = it }
         Text(if (grant.active) "Nur diese gespeicherte Identität erhält das Recht. Nur-lesbare Freigaben bleiben geschützt." else "Die Freigabe ist inaktiv. Ein altes Schreibrecht kann entzogen werden; neue Rechte erst nach ausdrücklichem Wiederzulassen.")
         Text("Dieses Recht erlaubt keine Befehle.")
@@ -131,6 +133,13 @@ internal fun RoomPolicyDialog(room: ShareRoom, vm: ShareViewModel, onDismiss: ()
         ShareChoice("Neue Mitglieder einzeln bestätigen", confirm == true, !action.saving && confirm != null) { confirm = it }
         Text("Wartende und gesperrte Mitglieder bleiben bis zum ausdrücklichen Zulassen inaktiv. Änderungen erlauben keine Befehle.")
         if (write == null || confirm == null) Text("Raumrechte nicht bekannt. Schließen und Status erneut laden.")
-        SelectionContainer { Text("Profil: ${room.profileId}\nRaum: ${room.roomId}") }
+        IdentityDiagnostic("Profil: ${room.profileId}\nRaum: ${room.roomId}")
     }
+}
+
+@Composable
+internal fun IdentityDiagnostic(text: String) {
+    var visible by remember { mutableStateOf(false) }
+    TextButton(onClick = { visible = !visible }) { Text(if (visible) "Diagnose schließen" else "Diagnose anzeigen") }
+    if (visible) SelectionContainer { Text(text) }
 }

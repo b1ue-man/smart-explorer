@@ -9,6 +9,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::share::access_grant::Capability;
+use crate::share::access_constraints::AccessRequest;
 use crate::share::relation_proof::ProvenPrincipal;
 use crate::share::ExecCommand;
 
@@ -140,6 +141,9 @@ pub(crate) struct ApprovalView {
     pub(crate) fingerprint: String,
     /// `direct` or `room`.
     pub(crate) relation: String,
+    /// Exact proven policy source; display names never identify a relation.
+    #[serde(default)]
+    pub(crate) relation_id: String,
     pub(crate) room: Option<String>,
     pub(crate) capability: Capability,
     pub(crate) account_label: Option<String>,
@@ -150,6 +154,9 @@ pub(crate) struct ApprovalView {
     pub(crate) surface: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) older_client_terminal: bool,
+    /// Exact V2 target shown to the human; absent for legacy Exec/screen requests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) request: Option<AccessRequest>,
 }
 
 impl ApprovalView {
@@ -176,6 +183,7 @@ impl ApprovalView {
             device_id: shown(&principal.device_id),
             fingerprint: shown(&principal.fingerprint),
             relation: shown(&principal.relation_kind),
+            relation_id: principal.relation_id.clone(),
             room: summary.room.as_deref().map(shown),
             capability,
             account_label: summary.account_label.as_deref().map(shown),
@@ -183,6 +191,7 @@ impl ApprovalView {
             requested_at: now,
             surface: None,
             older_client_terminal: summary.older_client_terminal,
+            request: None,
         }
     }
 }

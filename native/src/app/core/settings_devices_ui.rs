@@ -72,8 +72,9 @@ fn refresh(shared: &Shared, ctx: &egui::Context) {
             drop(panel);
             ctx.request_repaint();
         });
-    if spawned.is_err() {
-        lock(shared).loading = false;
+    if let Err(error) = spawned {
+        let mut panel = lock(shared); panel.loading = false;
+        panel.error = Some(format!("Laufwerksstatus konnte nicht geladen werden: {error}"));
     }
 }
 
@@ -128,8 +129,9 @@ fn switch(shared: &Shared, ctx: &egui::Context, on: bool, place: String) {
             drop(panel);
             ctx.request_repaint();
         });
-    if spawned.is_err() {
-        lock(shared).busy = false;
+    if let Err(error) = spawned {
+        let mut panel = lock(shared); panel.busy = false;
+        panel.error = Some(format!("Laufwerksänderung konnte nicht gestartet werden: {error}"));
     }
 }
 
@@ -148,7 +150,7 @@ fn state_text(status: &DevicesStatus, reason: Option<&str>) -> String {
         "waiting" => "Wartet auf Smart Explorer Share".into(),
         "failed" => format!("Fehlgeschlagen: {}", reason.unwrap_or("unbekannter Grund")),
         "stopped" => "Angehalten".into(),
-        other => other.to_string(),
+        _ => "Zustand nicht bekannt".into(),
     }
 }
 
@@ -233,9 +235,7 @@ impl App {
         if let Some(problem) = runtime {
             ui.label(RichText::new(problem).color(theme::warning(ui)));
         }
-        if let Some(error) = error {
-            ui.label(RichText::new(error).color(theme::danger(ui)));
-        }
+        crate::app::settings_form::status(ui, busy, None, error.as_deref());
         if toggled {
             switch(&shared, ui.ctx(), enabled, place);
         }
@@ -247,9 +247,10 @@ impl App {
 fn ui_place(ui: &mut egui::Ui, place: &mut String, enabled: bool, busy: bool) -> bool {
     let mut changed = false;
     ui.add_enabled_ui(!enabled && !busy, |ui| {
-        ui.horizontal(|ui| {
+        let label = if cfg!(windows) { "Laufwerksbuchstabe" } else { "Einhängeort" };
+        let mut form = crate::app::settings_form::Form::new(ui, "devices_place_form", &[label]);
+        form.row_labelled(ui, label, |ui, field_label| {
             if cfg!(windows) {
-                ui.label("Laufwerksbuchstabe");
                 let shown = if place.is_empty() {
                     "Automatisch".to_string()
                 } else {
@@ -266,15 +267,14 @@ fn ui_place(ui: &mut egui::Ui, place: &mut String, enabled: bool, busy: bool) ->
                                 .selectable_value(place, letter.to_string(), letter.to_string())
                                 .changed();
                         }
-                    });
+                    }).response.labelled_by(field_label);
             } else {
-                ui.label("Einhängeort");
                 changed = ui
                     .add(
                         egui::TextEdit::singleline(place)
                             .hint_text("Standard (~/SmartExplorer/Geräte)")
                             .desired_width(280.0),
-                    )
+                    ).labelled_by(field_label)
                     .changed();
             }
         });

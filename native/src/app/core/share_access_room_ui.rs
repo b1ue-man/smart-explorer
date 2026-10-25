@@ -108,7 +108,7 @@ pub(super) fn show(
     let mut dialog = current(ctx).filter(|dialog| dialog.draft.key == room_key)?;
     let (mut visible, mut done, mut result) = (true, false, None);
     let count = dialog.members.len();
-    egui::Window::new(format!(
+    crate::app::dialog_geometry::window(ctx, "share_access_room_ui.0", format!(
         "Zugriff für alle Mitglieder von {}",
         dialog.draft.title
     ))
@@ -139,11 +139,11 @@ pub(super) fn show(
         if let Some(reason) = &problem {
             ui.label(RichText::new(reason).color(theme::muted(ui)));
         }
-        let allows = dialog.draft.decisions.values().any(|d| d.is_on());
+        let allows = dialog.draft.decisions.iter().any(|(capability, decision)| !capability.requires_context() && decision.is_on());
         let label = if allows {
-            format!("Für {count} Mitglieder erlauben")
+            format!("Gewählte Befehls- und Bildschirmrechte für {count} Mitglieder erlauben")
         } else {
-            format!("Für {count} Mitglieder entziehen")
+            format!("Befehle, Terminal und Bildschirmrechte für {count} Mitglieder entziehen")
         };
         ui.horizontal_wrapped(|ui| {
             let confirm = egui::Button::new(RichText::new(label).strong());

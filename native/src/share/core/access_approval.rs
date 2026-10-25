@@ -18,6 +18,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
 use tokio::sync::oneshot;
 
 use crate::share::access_grant::Capability;
+use crate::share::access_constraints::AccessRequest;
+use crate::share::access_revocation::{self, AccessConfirmation};
 use crate::share::exec_access_view::ApprovalSurface;
 use crate::share::relation_proof::ProvenPrincipal;
 use crate::share::ExecGrantTarget;
@@ -34,6 +36,10 @@ const NOT_OPEN: &str = "the request is no longer open";
 pub(crate) trait ConsentNotifier: Send + Sync {
     /// Shows `request`; `None` when nobody on this host can be asked.
     fn show(&self, request: &ApprovalView) -> Option<ApprovalSurface>;
+
+    /// True only after this surface renders the full AccessV2 target.
+    /// Legacy consent windows must never approve an invisible target.
+    fn supports_contextual(&self) -> bool { false }
 
     /// The request ended (answered, withdrawn or cancelled).
     fn withdraw(&self, _id: &ApprovalId) {}
@@ -72,6 +78,7 @@ pub(crate) struct OpenApproval {
     pub(crate) principal: ProvenPrincipal,
     pub(crate) capability: Capability,
     pub(crate) policy_revision: u64,
+    pub(crate) request: Option<AccessRequest>,
 }
 
 impl OpenApproval {
@@ -184,23 +191,53 @@ impl ApprovalService {
         capability: Capability,
         summary: ApprovalSummary,
     ) -> ApprovalTicket {
+        if capability.requires_context() {
+            return self.answered(ApprovalId::unset(), ApprovalOutcome::Unavailable);
+        }
+        self.request_inner(principal, capability, summary, None)
+    }
+
+    /// Contextual requests carry their complete target into the human
+    /// confirmation and bind a one-use receipt to this exact policy revision.
+    pub(crate) fn request_access(
+        &self,
+        principal: &ProvenPrincipal,
+        request: AccessRequest,
+        summary: ApprovalSummary,
+    ) -> ApprovalTicket {
+        self.request_inner(principal, request.capability(), summary, Some(request))
+    }
+
+    fn request_inner(
+        &self,
+        principal: &ProvenPrincipal,
+        capability: Capability,
+        summary: ApprovalSummary,
+        request: Option<AccessRequest>,
+    ) -> ApprovalTicket {
+        let notifier = self.inner.notifier();
+        if request.is_some() && !notifier.supports_contextual() {
+            return self.answered(ApprovalId::unset(), ApprovalOutcome::Unavailable);
+        }
         let Ok(id) = ApprovalId::generate() else {
             return self.answered(ApprovalId::unset(), ApprovalOutcome::Unavailable);
         };
         let now = crate::share::core::now_secs();
-        let view = ApprovalView::new(&id, principal, capability, &summary, now);
+        let mut view = ApprovalView::new(&id, principal, capability, &summary, now);
+        view.request = request.clone();
         let (answer, receiver) = oneshot::channel();
         let open = OpenApproval {
             view: view.clone(),
             principal: principal.clone(),
             capability,
             policy_revision: summary.policy_revision,
+            request: request.clone(),
         };
         self.inner
             .lock()
             .insert(id.clone(), Pending { open, answer });
         // Outside the lock: showing may start the consent window.
-        let Some(surface) = self.inner.notifier().show(&view) else {
+        let Some(surface) = notifier.show(&view) else {
             self.inner.lock().remove(&id);
             return self.answered(id, ApprovalOutcome::Unavailable);
         };
@@ -211,6 +248,7 @@ impl ApprovalService {
             id,
             surface: Some(surface),
             state: TicketState::Waiting(receiver),
+            binding: request.map(|request| (principal.clone(), request, summary.policy_revision)),
             inner: self.inner.clone(),
         }
     }
@@ -256,6 +294,7 @@ impl ApprovalService {
             id,
             surface: None,
             state: TicketState::Ready(outcome),
+            binding: None,
             inner: self.inner.clone(),
         }
     }
@@ -272,10 +311,21 @@ pub(crate) struct ApprovalTicket {
     id: ApprovalId,
     surface: Option<ApprovalSurface>,
     state: TicketState,
+    binding: Option<(ProvenPrincipal, AccessRequest, u64)>,
     inner: Arc<Inner>,
 }
 
 impl ApprovalTicket {
+    /// Only an answered contextual ticket can mint a receipt, exactly once.
+    pub(crate) fn take_confirmation(&mut self) -> Option<AccessConfirmation> {
+        if !matches!(&self.state, TicketState::Ready(ApprovalOutcome::Once | ApprovalOutcome::Always)) {
+            return None;
+        }
+        self.binding.take().map(|(principal, request, revision)| {
+            access_revocation::confirmation(principal, request, revision)
+        })
+    }
+
     pub(crate) fn id(&self) -> &ApprovalId {
         &self.id
     }

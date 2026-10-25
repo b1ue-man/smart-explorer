@@ -7,7 +7,7 @@
 //! grant is written with `enabled: false`, without `restricted_enabled`, with
 //! the run-as account of its profile and with the object `access`, so older
 //! readers see it switched off (fail closed). This version reads `access`
-//! version 1; capability keys and fields it does not know are kept and never
+//! versions 1 and 2; capability keys and fields it does not know are kept and never
 //! take effect. An object of another version, or one it cannot read, turns
 //! every capability off and is written back unchanged until the host changes
 //! the grant.
@@ -20,12 +20,12 @@ use crate::share::access_grant::{AccessGrant, AccountProfile, Capability, Capabi
 use crate::share::exec_policy::ExecRunAs;
 
 /// Version of the `access` object this host reads and writes.
-pub const ACCESS_VERSION: u64 = 1;
+pub const ACCESS_VERSION: u64 = 2;
 
 /// What a grant keeps of its stored `access` object.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AccessRecord {
-    /// Version 1: the grant, and the parts of the object it does not know.
+    /// Version 1 or 2: the grant, and the parts of the object it does not know.
     Known { grant: AccessGrant, kept: KeptParts },
     /// Another version, or an object this version cannot read.
     Unknown(Value),
@@ -37,11 +37,12 @@ pub enum AccessRecord {
 pub struct KeptParts {
     capabilities: BTreeMap<String, Value>,
     fields: BTreeMap<String, Value>,
+    account_fields: BTreeMap<String, Value>,
 }
 
 impl KeptParts {
     pub fn is_empty(&self) -> bool {
-        self.capabilities.is_empty() && self.fields.is_empty()
+        self.capabilities.is_empty() && self.fields.is_empty() && self.account_fields.is_empty()
     }
 }
 
@@ -58,7 +59,9 @@ struct AccessWire {
 }
 
 /// Reads a stored `access` object; never fails: what it cannot read is kept
-/// as an unknown object with every capability off.
+/// as an unknown object with every capability off. Unknown nested condition
+/// fields also preserve the complete object and disable it: a future
+/// restriction must never silently disappear during a read/save cycle.
 pub fn parse(value: Value) -> AccessRecord {
     match read_known(&value) {
         Some(record) => record,
@@ -67,34 +70,49 @@ pub fn parse(value: Value) -> AccessRecord {
 }
 
 fn read_known(value: &Value) -> Option<AccessRecord> {
-    if value.get("version").and_then(Value::as_u64) != Some(ACCESS_VERSION) {
+    if !matches!(value.get("version").and_then(Value::as_u64), Some(1 | 2)) {
         return None;
     }
     let wire: AccessWire = serde_json::from_value(value.clone()).ok()?;
-    if wire.version != ACCESS_VERSION || wire.account.validate().is_err() {
+    if wire.account.validate().is_err() || wire.valid_until.is_some_and(|end| end <= 0) {
         return None;
     }
+    let account_has_name = matches!(&wire.account, AccountProfile::Account { .. });
     let mut grant = AccessGrant::new(wire.account);
+    grant.version = wire.version;
     grant.valid_until = wire.valid_until;
     let mut kept = KeptParts {
         capabilities: BTreeMap::new(),
         fields: wire.fields,
+        account_fields: value.get("account")?.as_object()?.iter()
+            .filter(|(key, _)| key.as_str() != "kind"
+                && !(key.as_str() == "name" && account_has_name))
+            .map(|(key, value)| (key.clone(), value.clone())).collect(),
     };
+    if wire.version == 2 {
+        if let Some(constraints) = kept.fields.remove("constraints") {
+            grant.constraints = serde_json::from_value(constraints).ok()?;
+        }
+        grant.constraints.validate().ok()?;
+    }
     for (key, decision) in wire.capabilities {
         match Capability::from_key(&key) {
-            Some(capability) => {
+            Some(capability) if wire.version == 2 || !capability.requires_context() => {
                 let decision = decision.as_str().and_then(CapabilityDecision::from_key)?;
                 grant.set(capability, decision);
             }
-            None => {
+            _ => {
                 kept.capabilities.insert(key, decision);
             }
         }
     }
+    if wire.version == 2 {
+        grant.validate(&[]).ok()?;
+    }
     Some(AccessRecord::Known { grant, kept })
 }
 
-/// The `access` object of a version-1 grant. Capabilities that are off are
+/// The `access` object of a version-1 or version-2 grant. Capabilities that are off are
 /// left out (missing means off).
 pub fn known_value(grant: &AccessGrant, kept: &KeptParts) -> Value {
     let mut capabilities: Map<String, Value> = kept
@@ -103,13 +121,25 @@ pub fn known_value(grant: &AccessGrant, kept: &KeptParts) -> Value {
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect();
     for (capability, decision) in grant.capabilities() {
+        if grant.version() == 2 || !capability.requires_context() {
+            capabilities.remove(capability.key());
+        }
         if decision.is_on() {
             capabilities.insert(capability.key().into(), Value::from(decision.key()));
         }
     }
     let mut object = Map::new();
-    object.insert("version".into(), Value::from(ACCESS_VERSION));
-    object.insert("account".into(), account_value(&grant.account));
+    object.insert("version".into(), Value::from(grant.version()));
+    let mut account = account_value(&grant.account);
+    if let Some(object) = account.as_object_mut() {
+        for (key, value) in &kept.account_fields {
+            object.entry(key.clone()).or_insert_with(|| value.clone());
+        }
+    }
+    object.insert("account".into(), account);
+    if grant.version() == 2 {
+        object.insert("constraints".into(), json!(&grant.constraints));
+    }
     object.insert("capabilities".into(), Value::Object(capabilities));
     if let Some(end) = grant.valid_until {
         object.insert("valid_until".into(), Value::from(end));
@@ -151,7 +181,7 @@ pub fn ported(enabled: bool, run_as: &ExecRunAs, programs: &[String]) -> AccessG
 /// without a list, `allow, off` with one, or `off, off`. `None`: the grant
 /// needs the `access` object.
 pub fn legacy_form(grant: &AccessGrant, programs: &[String]) -> Option<(bool, ExecRunAs)> {
-    if grant.valid_until.is_some() || grant.account == AccountProfile::Remote {
+    if grant.version() == 2 || grant.valid_until.is_some() || grant.account == AccountProfile::Remote {
         return None;
     }
     if grant.decision(Capability::ScreenView).is_on()

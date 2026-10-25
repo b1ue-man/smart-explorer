@@ -25,11 +25,20 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.smartexplorer.android.ui.AppNav
+import app.smartexplorer.android.ui.MainTab
+import app.smartexplorer.android.ui.NavRequest
+import app.smartexplorer.android.ui.more.MoreRequests
+import app.smartexplorer.android.ui.share.ShareScreen
+import app.smartexplorer.android.ui.vaults.VaultsHost
 import app.smartexplorer.android.R
 import app.smartexplorer.android.prefs.AppPrefs
 import app.smartexplorer.android.system.Permissions
@@ -68,7 +77,41 @@ fun SettingsScreen(
 ) {
     val context = LocalContext.current
     val listState = rememberLazyListState()
+    var area by rememberSaveable { mutableStateOf(SettingsArea.ThisDevice) }
+    val pending by AppNav.pending.collectAsStateWithLifecycle()
+    LaunchedEffect(pending) {
+        when (pending) {
+            is NavRequest.OpenScreen, is NavRequest.ShowScreenGrid, NavRequest.ShowShareRequests -> area = SettingsArea.Devices
+            else -> Unit
+        }
+    }
     LaunchedEffect(focus) {
+        when (focus) {
+            SettingsFocus.Background -> area = SettingsArea.Background
+            SettingsFocus.Launcher -> area = SettingsArea.Integration
+            SettingsFocus.Updates -> area = SettingsArea.Updates
+            null -> Unit
+        }
+    }
+    if (area.isShare) {
+        ShareScreen(settingsArea = area, onSettingsAreaChange = { area = it }, onBack = onBack)
+        return
+    }
+    if (area == SettingsArea.Vaults) {
+        VaultsHost(onBack = { area = SettingsArea.ThisDevice }, compareJob = null, onCompareOpened = {})
+        return
+    }
+    val sections = when (area) {
+        SettingsArea.Appearance -> listOf(SettingsItem.Appearance, SettingsItem.FileList)
+        SettingsArea.Connections -> listOf(SettingsItem.Drive)
+        SettingsArea.Drives -> listOf(SettingsItem.Documents)
+        SettingsArea.Integration -> listOf(SettingsItem.Launcher)
+        SettingsArea.Updates -> listOf(SettingsItem.Updates)
+        SettingsArea.Background -> listOf(SettingsItem.Background)
+        SettingsArea.Diagnostics -> listOf(SettingsItem.Storage, SettingsItem.ErrorLog, SettingsItem.About)
+        else -> emptyList()
+    }
+    LaunchedEffect(focus, area) {
         val target = when (focus ?: return@LaunchedEffect) {
             SettingsFocus.Background -> SettingsItem.Background
             SettingsFocus.Launcher -> SettingsItem.Launcher
@@ -78,12 +121,27 @@ fun SettingsScreen(
                 SettingsItem.Updates
             }
         }
-        listState.animateScrollToItem(target.ordinal)
+        val index = sections.indexOf(target)
+        if (index < 0) return@LaunchedEffect
+        listState.animateScrollToItem(index + 1)
         onFocusHandled()
     }
     SubPageScaffold(title = "Einstellungen", onBack = onBack) { padding ->
         LazyColumn(Modifier.fillMaxSize().padding(padding).imePadding(), state = listState) {
-            SettingsItem.entries.forEach { section ->
+            item(key = "settings-area") {
+                SettingsAreaSelector(area) { area = it }
+                if (area == SettingsArea.Connections) {
+                    LinkRow("Gespeicherte Verbindungen", "SFTP, FTP, WebDAV und Google Drive verwalten", R.drawable.ic_cloud) {
+                        MoreRequests.open(MoreRequests.Request.Connections)
+                    }
+                }
+                if (area == SettingsArea.Sync) {
+                    LinkRow("Sync-Setups", "Ordnerpaare, Zeitpläne und laufende Synchronisationen", R.drawable.ic_sync) {
+                        AppNav.send(NavRequest.SelectTab(MainTab.Sync))
+                    }
+                }
+            }
+            sections.forEach { section ->
                 item(key = section.name) {
                     Column {
                         when (section) {

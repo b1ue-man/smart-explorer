@@ -76,6 +76,7 @@ impl DiscoverySignalRuntime {
         events: &crossbeam_channel::Sender<ShareEvent>,
         list_refresh: bool,
     ) -> io::Result<()> {
+        self.cancel_ownerless_exchanges(signal, events)?;
         self.expire_exchanges(signal, events)?;
         self.stop_due_offers(signal, events)?;
         self.expire_offers(signal, events)?;
@@ -145,10 +146,18 @@ impl DiscoverySignalRuntime {
         let list =
             (state.list_request_outstanding || list_refresh).then_some(state.next_list_request_at);
         let stops = state.offer_guards.has_due_stops().then(Instant::now);
+        // Cancellation can occur without another Share command (a killed
+        // CLI closes its socket). Keep owned exchanges responsive while
+        // preserving the longer timers of unowned GUI/Android exchanges.
+        let owners = state
+            .exchanges
+            .values()
+            .any(|exchange| exchange.owner.is_some())
+            .then(|| Instant::now() + std::time::Duration::from_millis(100));
         offers
             .chain(exchanges)
             .chain(starts)
-            .chain([list, stops])
+            .chain([list, stops, owners])
             .flatten()
             .min()
     }

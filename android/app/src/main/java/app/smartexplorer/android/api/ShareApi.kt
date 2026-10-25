@@ -34,6 +34,9 @@ data class ShareDevice(
     val autoConnect: Boolean = true,
     /** Open its files once it is reachable. */
     val autoOpen: Boolean = false,
+    /** Confirmed pins; a name never joins identities or policy sources. */
+    val deviceId: String? = null,
+    val publicKey: String? = null,
 )
 
 @Serializable
@@ -198,6 +201,15 @@ const val SHARE_DIRECT = "direct"
 
 /** Suspending wrappers for api.md §5; every call throws [CoreException] on errors. */
 object ShareApi {
+    /** Exact policy sources for one pinned identity; never authorizes an operation. */
+    suspend fun deviceRights(contactId: String? = null, deviceId: String? = null, publicKey: String? = null): JsonObject =
+        Core.request("share.deviceRights", buildJsonObject {
+            if (contactId != null) put("contactId", contactId) else {
+                deviceId?.let { put("deviceId", it) }
+                publicKey?.let { put("publicKey", it) }
+            }
+        })
+
     suspend fun status(): ShareStatus = Core.request<ShareStatus>("share.status")
 
     /** `true` while the Share page is visible: the core polls the worker faster. */

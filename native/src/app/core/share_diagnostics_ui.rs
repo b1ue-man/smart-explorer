@@ -71,8 +71,8 @@ impl App {
                 .unwrap_or("nicht verfuegbar");
             share_value_field(ui, fingerprint);
         });
-        egui::ScrollArea::vertical()
-            .max_height(420.0)
+        egui::ScrollArea::vertical().min_scrolled_height(0.0)
+            .max_height(super::dialog_geometry::remaining_height(ui, 2.0))
             .show(ui, |ui| {
                 ui.add(
                     egui::Label::new(

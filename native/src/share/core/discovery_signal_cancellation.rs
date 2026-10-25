@@ -10,6 +10,27 @@ use super::signal_connection::{send_line, SignalConnection};
 use super::types::ShareEvent;
 
 impl DiscoverySignalRuntime {
+    pub(super) fn cancel_ownerless_exchanges(
+        &mut self,
+        signal: &mut SignalConnection,
+        events: &crossbeam_channel::Sender<ShareEvent>,
+    ) -> io::Result<()> {
+        let ids: Vec<_> = self
+            .state
+            .exchanges
+            .values()
+            .filter(|exchange| exchange.owner.as_ref().is_some_and(|owner| owner.is_cancelled()))
+            .map(|exchange| exchange.exchange_id.clone())
+            .collect();
+        let mut first_error = None;
+        for id in ids {
+            if let Err(error) = self.cancel_exchange(signal, &id, events) {
+                first_error.get_or_insert(error.into_io());
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+
     pub(super) fn stop_offer_connected(
         &mut self,
         signal: &mut SignalConnection,
@@ -115,13 +136,14 @@ impl DiscoverySignalRuntime {
                 "Discovery-Austausch ist nicht aktiv",
             )));
         }
-        send_line(
+        let sent = send_line(
             signal,
             &DiscoveryClientMsg::CancelPairing {
                 exchange_id: exchange_id.to_string(),
             },
-        )
-        .map_err(DiscoveryExchangeCommandError::Transport)?;
+        );
+        // Cancellation owns the local state even when the signaling write
+        // fails. The caller still reconnects on that transport failure.
         let active = self.state.exchanges.remove(exchange_id);
         let pending = self.state.remove_pending_exchange(exchange_id);
         let discovery_id = pending.map(|start| start.discovery_id);
@@ -135,7 +157,7 @@ impl DiscoverySignalRuntime {
         self.port.cancel_exchange(exchange_id);
         self.state.remember_closed_exchange(exchange_id.to_string());
         send_discovery_event(events, event);
-        Ok(())
+        sent.map_err(DiscoveryExchangeCommandError::Transport)
     }
 
     pub(super) fn terminate_exchange_local(

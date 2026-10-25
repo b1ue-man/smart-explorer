@@ -224,7 +224,8 @@ fn service_block(
         HelperState::Installed | HelperState::Outdated => {
             if helper.state == HelperState::Installed {
                 let version = helper.version.as_deref().unwrap_or("unbekannt");
-                ui.label(format!("Kontodienst eingerichtet (Version {version})."));
+                ui.label("Kontodienst eingerichtet.");
+                egui::CollapsingHeader::new("Diagnose des Kontodiensts").id_salt("account_service_diag").show(ui, |ui| { ui.monospace(format!("Version {version}")); });
                 if !detail.is_empty() {
                     ui.small(detail);
                 }

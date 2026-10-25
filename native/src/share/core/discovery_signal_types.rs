@@ -176,6 +176,15 @@ pub enum DiscoveryCommand {
         #[serde(default)]
         share_back: bool,
     },
+    /// A daemon connection created the ownership marker locally. This
+    /// variant cannot be serialized, deserialized or supplied through IPC.
+    #[serde(skip)]
+    StartOwnedDiscoveryExchange {
+        discovery_id: String,
+        pin: DiscoveryPin,
+        share_back: bool,
+        owner: super::discovery_exchange_owner::DiscoveryExchangeLease,
+    },
     CancelDiscoveryExchange {
         exchange_id: String,
     },
@@ -209,6 +218,12 @@ impl std::fmt::Debug for DiscoveryCommand {
                 ..
             } => formatter
                 .debug_struct("StartDiscoveryExchange")
+                .field("discovery_id", discovery_id)
+                .field("pin", &"[REDACTED]")
+                .field("share_back", share_back)
+                .finish(),
+            Self::StartOwnedDiscoveryExchange { discovery_id, share_back, .. } => formatter
+                .debug_struct("StartOwnedDiscoveryExchange")
                 .field("discovery_id", discovery_id)
                 .field("pin", &"[REDACTED]")
                 .field("share_back", share_back)
