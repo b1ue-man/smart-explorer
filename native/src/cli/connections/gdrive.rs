@@ -113,6 +113,8 @@ pub(super) fn run(args: GdriveArgs) -> Result<i32, String> {
                         "no"
                     }
                 );
+                println!("auth_state\t{}", value["state"].as_str().unwrap_or("storage_error"));
+                println!("auth_message\t{}", value["message"].as_str().unwrap_or("OAuth-Status fehlt"));
             }
             Ok(0)
         }
@@ -139,12 +141,14 @@ pub(super) fn run(args: GdriveArgs) -> Result<i32, String> {
 
 /// The document of `status --json`: the fields of the Android `gdrive.status`.
 pub(super) fn status_value() -> serde_json::Value {
-    status_json(
-        &crate::cloud::load_config(Provider::GDrive),
-        crate::cloud::is_connected(Provider::GDrive),
-    )
+    let status = crate::cloud::auth_status(Provider::GDrive);
+    serde_json::to_value(status).unwrap_or_else(|_| json!({
+        "state": "storage_error", "signed_in": false,
+        "message": "OAuth-Status konnte nicht dargestellt werden"
+    }))
 }
 
+#[cfg(test)]
 fn status_json(config: &ClientConfig, signed_in: bool) -> serde_json::Value {
     let client_id = config.client_id.trim().to_string();
     json!({
@@ -176,7 +180,8 @@ fn save_client(client_id: Option<String>, secret: Option<String>) -> Result<(), 
 }
 
 fn sign_in() -> Result<i32, String> {
-    if crate::cloud::load_config(Provider::GDrive)
+    if crate::cloud::load_config_checked(Provider::GDrive)
+        .map_err(|error| format!("read the Google Drive client: {error}"))?
         .client_id
         .trim()
         .is_empty()

@@ -1,4 +1,4 @@
-use super::api::{drive_request, err, open_stream, parse_json, send_retry};
+use super::api::{drive_request, open_stream, parse_json, send_retry};
 use super::core::now_secs;
 use super::GDriveBackend;
 use crate::cloud::{self, Provider};
@@ -10,6 +10,9 @@ impl GDriveBackend {
     /// token lock is held, so concurrent callers wait for that one refresh
     /// instead of starting their own.
     pub(super) fn bearer(&self) -> VfsResult<String> {
+        if self.managed_auth {
+            cloud::validate_auth_account(Provider::GDrive, &self.drive_account_key).map_err(auth_error)?;
+        }
         let mut t = self.tokens_guard()?;
         if now_secs() >= t.expires_at {
             *t = self.refresh_for_account()?;
@@ -39,19 +42,17 @@ impl GDriveBackend {
     /// was connected. Validate the principal before adopting its new token.
     /// This uses the explicit token and never re-enters the held token lock.
     fn refresh_for_account(&self) -> VfsResult<cloud::Tokens> {
-        let tokens = cloud::refresh_access(Provider::GDrive).map_err(err)?;
-        let body = self.metadata_text(
-            &self.api_url("about?fields=user(permissionId)"),
-            &tokens.access_token,
-        )?;
-        let account = super::state::parse_drive_account_key(&body).map_err(err)?;
-        if account != self.drive_account_key.as_ref() {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "Drive-Konto wurde gewechselt; gespeicherte Ordnerbindung gehört zu einem anderen Konto",
-            ));
-        }
-        Ok(tokens)
+        cloud::refresh_access_with_identity(
+            Provider::GDrive, Some(self.drive_account_key.as_ref()), |token| {
+                let body = self.metadata_text(&self.api_url("about?fields=user(permissionId)"), token)
+                    .map_err(|error| match super::overload::http_status(&error) {
+                        Some(status) => cloud::AuthError::provider(status, "provider_error"),
+                        None => cloud::AuthError::new(cloud::AuthState::NetworkError),
+                    })?;
+                super::state::parse_drive_account_key(&body)
+                    .map_err(|_| cloud::AuthError::new(cloud::AuthState::IdentityUnverified))
+            },
+        ).map_err(auth_error)
     }
 
     /// Metadata GET over the pooled API client, read completely so the socket
@@ -114,4 +115,15 @@ impl GDriveBackend {
             "Drive stream authentication retry did not finish",
         ))
     }
+}
+
+fn auth_error(error: cloud::AuthError) -> io::Error {
+    let kind = match error.state {
+        cloud::AuthState::IdentityConflict | cloud::AuthState::ClientChanged |
+        cloud::AuthState::ReauthorizeRequired | cloud::AuthState::Disconnected => io::ErrorKind::PermissionDenied,
+        cloud::AuthState::NetworkError => io::ErrorKind::ConnectionAborted,
+        cloud::AuthState::IdentityUnverified => io::ErrorKind::InvalidData,
+        _ => io::ErrorKind::Other,
+    };
+    io::Error::new(kind, error)
 }

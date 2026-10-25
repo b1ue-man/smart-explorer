@@ -13,12 +13,14 @@ const SIGN_IN_WAIT: Duration = Duration::from_secs(180);
 const POLL: Duration = Duration::from_millis(250);
 
 pub(super) fn status() -> Result<Value, ApiError> {
-    let config = crate::cloud::load_config(Provider::GDrive);
-    let client_id = config.client_id.trim().to_string();
+    let status = crate::cloud::auth_status(Provider::GDrive);
     Ok(json!({
-        "clientConfigured": !client_id.is_empty(),
-        "signedIn": crate::cloud::is_connected(Provider::GDrive),
-        "clientId": (!client_id.is_empty()).then_some(client_id),
+        "clientConfigured": status.client_configured, "signedIn": status.signed_in,
+        "clientId": status.client_id, "state": status.state, "message": status.message,
+        "accountKey": status.account_key, "generation": status.generation,
+        "loginAt": status.login_at, "lastRefreshAt": status.last_refresh_at,
+        "clientChangedAt": status.client_changed_at, "providerError": status.provider_error,
+        "projectStatus": status.project_status,
     }))
 }
 
@@ -27,7 +29,8 @@ pub(super) fn configure(args: &Value) -> Result<Value, ApiError> {
     if client_id.is_empty() {
         return Err(invalid("Client-ID fehlt."));
     }
-    let existing = crate::cloud::load_config(Provider::GDrive);
+    let existing = crate::cloud::load_config_checked(Provider::GDrive)
+        .map_err(|error| io_error("Google-Drive-Einstellungen lesen", error))?;
     // A missing secret keeps the stored one; an empty one clears it.
     let config = ClientConfig {
         client_id,
@@ -48,7 +51,8 @@ pub(super) fn configure(args: &Value) -> Result<Value, ApiError> {
 }
 
 pub(super) fn sign_in(rt: &Runtime) -> Result<Value, ApiError> {
-    if crate::cloud::load_config(Provider::GDrive)
+    if crate::cloud::load_config_checked(Provider::GDrive)
+        .map_err(|error| io_error("Google-Drive-Einstellungen lesen", error))?
         .client_id
         .trim()
         .is_empty()
@@ -64,15 +68,18 @@ pub(super) fn sign_in(rt: &Runtime) -> Result<Value, ApiError> {
 fn sign_in_task(ctx: &TaskCtx) -> Result<Value, ApiError> {
     ctx.message("Anmeldung im Browser abschließen…");
     let (tx, rx) = crossbeam_channel::bounded(1);
+    let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let worker_cancelled = cancelled.clone();
     std::thread::Builder::new()
         .name("gdrive-sign-in".into())
         .spawn(move || {
-            let _ = tx.send(crate::cloud::authorize(Provider::GDrive));
+            let _ = tx.send(crate::cloud::authorize_cancellable(Provider::GDrive, &worker_cancelled));
         })
         .map_err(|error| io_error("Anmeldung starten", error))?;
     let deadline = Instant::now() + SIGN_IN_WAIT;
     loop {
         if ctx.cancelled() {
+            cancelled.store(true, std::sync::atomic::Ordering::Release);
             return Err(canceled("Anmeldung abgebrochen"));
         }
         match rx.recv_timeout(POLL) {
@@ -87,6 +94,7 @@ fn sign_in_task(ctx: &TaskCtx) -> Result<Value, ApiError> {
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
         }
         if Instant::now() >= deadline {
+            cancelled.store(true, std::sync::atomic::Ordering::Release);
             return Err(ApiError::new(
                 "network",
                 "Zeitüberschreitung: keine Rückmeldung vom Browser.",

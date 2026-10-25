@@ -37,6 +37,13 @@ fn connections_path() -> PathBuf {
 
 // ── secrets (platform credential backend) ───────────────────────────────────
 
+/// Atomically persist metadata in a credential record without announcing a new
+/// usable credential. Callers must use `set_secret` for changed grants, tokens,
+/// client binding, disconnects and successful authentication evidence.
+pub(crate) fn set_secret_untracked(account: &str, secret: &str) -> Result<(), String> {
+    secure_store::set_secret(account, secret)
+}
+
 pub fn set_secret(account: &str, secret: &str) -> Result<(), String> {
     secure_store::set_secret(account, secret)?;
     mark_credentials_changed();

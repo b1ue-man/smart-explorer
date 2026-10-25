@@ -10,8 +10,6 @@
 //! See docs/CLOUD_OAUTH_PLAN.md.
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use std::io::{Read, Write};
-use std::time::Duration;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Provider {
@@ -29,7 +27,7 @@ impl Provider {
             Provider::GDrive => "https://accounts.google.com/o/oauth2/v2/auth",
         }
     }
-    fn token_url(self) -> &'static str {
+    pub(crate) fn token_url(self) -> &'static str {
         match self {
             Provider::GDrive => "https://oauth2.googleapis.com/token",
         }
@@ -60,21 +58,10 @@ pub use super::os::shared::{
 
 // ── PKCE ─────────────────────────────────────────────────────────────────────
 
-fn random_b64(bytes: usize) -> String {
+pub(crate) fn random_b64(bytes: usize) -> Result<String, String> {
     let mut buf = vec![0u8; bytes];
-    // OS CSPRNG; fall back to a time/pid mix only if it somehow fails (never on
-    // supported platforms) so we degrade rather than panic.
-    if getrandom::getrandom(&mut buf).is_err() {
-        let seed = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-            ^ (std::process::id() as u128);
-        for (i, b) in buf.iter_mut().enumerate() {
-            *b = ((seed >> (i % 16 * 8)) as u8) ^ (i as u8).wrapping_mul(31);
-        }
-    }
-    URL_SAFE_NO_PAD.encode(&buf)
+    getrandom::getrandom(&mut buf).map_err(|_| "Sichere OAuth-Zufallswerte konnten nicht erzeugt werden".to_string())?;
+    Ok(URL_SAFE_NO_PAD.encode(&buf))
 }
 
 fn sha256_b64url(input: &str) -> String {
@@ -85,13 +72,13 @@ fn sha256_b64url(input: &str) -> String {
 }
 
 /// (verifier, challenge) for PKCE S256.
-fn pkce_pair() -> (String, String) {
-    let verifier = random_b64(48); // 64 url-safe chars, within RFC 7636 limits
+pub(crate) fn pkce_pair() -> Result<(String, String), String> {
+    let verifier = random_b64(48)?; // 64 url-safe chars, within RFC 7636 limits
     let challenge = sha256_b64url(&verifier);
-    (verifier, challenge)
+    Ok((verifier, challenge))
 }
 
-fn build_auth_url(
+pub(crate) fn build_auth_url(
     p: Provider,
     client_id: &str,
     redirect: &str,
@@ -112,7 +99,7 @@ fn build_auth_url(
 }
 
 /// Minimal application/x-www-form-urlencoded component encoder.
-fn url_enc(s: &str) -> String {
+pub(crate) fn url_enc(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         match b {
@@ -126,7 +113,7 @@ fn url_enc(s: &str) -> String {
 }
 
 /// Pull `code` and `state` out of an HTTP request line ("GET /?code=…&state=… HTTP/1.1").
-fn parse_redirect(request_line: &str) -> Option<(String, String)> {
+pub(crate) fn parse_redirect(request_line: &str) -> Option<(String, String)> {
     let path = request_line.split_whitespace().nth(1)?; // "/?code=..&state=.."
     let query = path.split_once('?').map(|(_, q)| q).unwrap_or("");
     let mut code = None;
@@ -150,7 +137,8 @@ fn url_dec(s: &str) -> String {
     while i < b.len() {
         match b[i] {
             b'%' if i + 2 < b.len() => {
-                let h = u8::from_str_radix(&s[i + 1..i + 3], 16).unwrap_or(b'%');
+                let h = std::str::from_utf8(&b[i + 1..i + 3]).ok()
+                    .and_then(|hex| u8::from_str_radix(hex, 16).ok()).unwrap_or(b'%');
                 out.push(h);
                 i += 3;
             }
@@ -176,152 +164,61 @@ pub struct Tokens {
     pub expires_at: i64, // unix seconds
 }
 
-fn now_secs() -> i64 {
+pub(crate) fn now_secs() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
 }
 
-const CLOUD_HTTP_TIMEOUT: Duration = Duration::from_secs(60);
-
-fn post_token(url: &str, form: &[(&str, &str)]) -> Result<Tokens, String> {
-    post_token_with_timeout(url, form, CLOUD_HTTP_TIMEOUT)
-}
-
-fn post_token_with_timeout(
-    url: &str,
-    form: &[(&str, &str)],
-    timeout: Duration,
-) -> Result<Tokens, String> {
-    // Skip empty fields: a public PKCE client has no secret, and sending
-    // `client_secret=` makes Google answer 400 invalid_client.
-    let body: String = form
-        .iter()
-        .filter(|(_, v)| !v.is_empty())
-        .map(|(k, v)| format!("{}={}", url_enc(k), url_enc(v)))
-        .collect::<Vec<_>>()
-        .join("&");
-    let text = match ureq::post(url)
-        .timeout(timeout)
-        .set("Content-Type", "application/x-www-form-urlencoded")
-        .send_string(&body)
-    {
-        Ok(r) => r.into_string().map_err(|e| e.to_string())?,
-        // ureq surfaces 4xx/5xx as Err(Status) — read Google's JSON error so the
-        // real cause (redirect_uri_mismatch, invalid_grant, invalid_client, …)
-        // is shown instead of a bare "status code 400".
-        Err(ureq::Error::Status(code, r)) => {
-            let raw = r.into_string().unwrap_or_default();
-            let detail = serde_json::from_str::<serde_json::Value>(&raw)
-                .ok()
-                .and_then(|v| {
-                    let e = v.get("error").and_then(|x| x.as_str()).unwrap_or("");
-                    let d = v
-                        .get("error_description")
-                        .and_then(|x| x.as_str())
-                        .unwrap_or("");
-                    let combined = format!("{} {}", e, d);
-                    let combined = combined.trim().to_string();
-                    if combined.is_empty() {
-                        None
-                    } else {
-                        Some(combined)
-                    }
-                })
-                .unwrap_or(raw);
-            return Err(format!("HTTP {}: {}", code, detail));
-        }
-        Err(e) => return Err(e.to_string()),
-    };
-    let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
-    let access = v
-        .get("access_token")
-        .and_then(|x| x.as_str())
-        .ok_or_else(|| {
-            v.get("error_description")
-                .or_else(|| v.get("error"))
-                .and_then(|x| x.as_str())
-                .unwrap_or("kein access_token in der Antwort")
-                .to_string()
-        })?
-        .to_string();
-    let refresh = v
-        .get("refresh_token")
-        .and_then(|x| x.as_str())
-        .unwrap_or("")
-        .to_string();
-    let expires_in = v.get("expires_in").and_then(|x| x.as_i64()).unwrap_or(3600);
-    Ok(Tokens {
-        access_token: access,
-        refresh_token: refresh,
-        expires_at: now_secs() + expires_in - 60,
-    })
-}
-
 /// Run the full interactive authorize flow (opens the browser, catches the
 /// loopback redirect, exchanges the code). Blocking — call off the UI thread.
 /// On success the refresh token is stored in the keyring.
 pub fn authorize(p: Provider) -> Result<Tokens, String> {
-    let cfg = load_config_checked(p).map_err(|error| error.to_string())?;
-    if cfg.client_id.trim().is_empty() {
-        return Err("Kein OAuth Client-ID konfiguriert".into());
-    }
-    // Loopback listener on an ephemeral port.
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
-    let port = listener.local_addr().map_err(|e| e.to_string())?.port();
-    let redirect = format!("http://127.0.0.1:{}", port);
-    let (verifier, challenge) = pkce_pair();
-    let state = random_b64(16);
-    let url = build_auth_url(p, &cfg.client_id, &redirect, &challenge, &state);
+    authorize_cancellable(p, &std::sync::atomic::AtomicBool::new(false))
+}
 
-    super::os::open_url(&url)?;
-
-    // Wait (with timeout) for the single redirect request.
-    listener.set_nonblocking(false).map_err(|e| e.to_string())?;
-    let deadline = std::time::Instant::now() + Duration::from_secs(300);
-    listener.set_ttl(64).ok();
-    let (mut stream, _) = accept_with_deadline(&listener, deadline)?;
-    stream.set_read_timeout(Some(Duration::from_secs(10))).ok();
-    let mut buf = [0u8; 4096];
-    let n = stream.read(&mut buf).map_err(|e| e.to_string())?;
-    let req = String::from_utf8_lossy(&buf[..n]);
-    let first = req.lines().next().unwrap_or("");
-    let (code, got_state) =
-        parse_redirect(first).ok_or_else(|| "Keine Autorisierung erhalten".to_string())?;
-    if got_state != state {
-        return Err("Sicherheitsfehler (state stimmt nicht)".into());
-    }
-
-    // Exchange the code for tokens.
-    let tokens = post_token(
-        p.token_url(),
-        &[
-            ("grant_type", "authorization_code"),
-            ("code", &code),
-            ("redirect_uri", &redirect),
-            ("client_id", &cfg.client_id),
-            ("client_secret", &cfg.client_secret),
-            ("code_verifier", &verifier),
-        ],
-    )?;
-    let tokens = super::token_persistence::finish_authorize(p, tokens, store_refresh_token)?;
-    let _ = stream.write_all(
-        b"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\r\n\
-          <html><body style='font-family:sans-serif'><h3>Smart Explorer</h3>\
-          <p>Anmeldung abgeschlossen. Sie koennen dieses Fenster schliessen.</p>\
-          </body></html>",
-    );
-    Ok(tokens)
+/// A canceled mobile task must not persist a late browser result.
+pub fn authorize_cancellable(
+    p: Provider, cancelled: &std::sync::atomic::AtomicBool,
+) -> Result<Tokens, String> {
+    super::os::oauth_flow::authorize(p, cancelled)
 }
 
 /// Exchange the stored refresh token for a fresh access token. Blocking.
 pub fn refresh_access(p: Provider) -> Result<Tokens, String> {
+    refresh_access_with_identity(p, None, |token| super::os::oauth_http::identify(p, token))
+        .map_err(|error| error.to_string())
+}
+
+/// Every caller supplies its existing principal check to the same transaction.
+/// The process/file lock stays held from credential read through verification
+/// and the single atomic record replacement.
+pub(crate) fn refresh_access_with_identity(
+    p: Provider,
+    expected_account: Option<&str>,
+    identify: impl FnOnce(&str) -> Result<String, super::AuthError>,
+) -> Result<Tokens, super::AuthError> {
+    super::os::coordinator::refresh(p, &refresh_endpoint(p)?, expected_account, identify)
+}
+
+pub(crate) fn refresh_endpoint(p: Provider) -> Result<String, super::AuthError> {
     #[cfg(test)]
-    if let Some(url) = sync_reliability_task_refresh_hook::endpoint()? {
-        return refresh_access_from(p, &url);
+    if let Some(url) = sync_reliability_task_refresh_hook::endpoint()
+        .map_err(|_| super::AuthError::new(super::AuthState::StorageError))? {
+        return Ok(url);
     }
-    refresh_access_from(p, p.token_url())
+    Ok(p.token_url().into())
+}
+
+pub(crate) fn validate_auth_account(p: Provider, account: &str) -> Result<(), super::AuthError> {
+    super::os::coordinator::validate_account(p, account)
+}
+
+pub fn auth_status(p: Provider) -> super::AuthStatus { super::os::coordinator::status(p) }
+
+pub(crate) fn auth_success_revision(p: Provider) -> Option<i64> {
+    super::os::coordinator::success_revision(p)
 }
 
 #[cfg(test)]
@@ -330,50 +227,6 @@ mod sync_reliability_task_refresh_hook;
 #[cfg(test)]
 pub use sync_reliability_task_refresh_hook::{test_refresh_endpoint, TestRefreshEndpoint};
 
-fn refresh_access_from(p: Provider, token_url: &str) -> Result<Tokens, String> {
-    let cfg = load_config_checked(p).map_err(|error| error.to_string())?;
-    if cfg.client_id.trim().is_empty() {
-        return Err("Gespeicherte OAuth-Konfiguration enthält keine Client-ID".into());
-    }
-    let refresh = refresh_token_checked(p)?
-        .filter(|token| !token.is_empty())
-        .ok_or_else(|| "Nicht verbunden".to_string())?;
-    let tokens = post_token(
-        token_url,
-        &[
-            ("grant_type", "refresh_token"),
-            ("refresh_token", &refresh),
-            ("client_id", &cfg.client_id),
-            ("client_secret", &cfg.client_secret),
-        ],
-    )?;
-    // Google usually omits refresh_token on refresh; a rotated token must be
-    // durable before callers can start using the refreshed access token.
-    super::token_persistence::finish_refresh(p, tokens, refresh, store_refresh_token)
-}
-
-fn accept_with_deadline(
-    listener: &std::net::TcpListener,
-    deadline: std::time::Instant,
-) -> Result<(std::net::TcpStream, std::net::SocketAddr), String> {
-    listener.set_nonblocking(true).map_err(|e| e.to_string())?;
-    loop {
-        match listener.accept() {
-            Ok(pair) => {
-                let _ = listener.set_nonblocking(false);
-                return Ok(pair);
-            }
-            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                if std::time::Instant::now() >= deadline {
-                    return Err("Zeitüberschreitung bei der Anmeldung".into());
-                }
-                std::thread::sleep(Duration::from_millis(150));
-            }
-            Err(e) => return Err(e.to_string()),
-        }
-    }
-}
-
 #[cfg(test)]
 #[path = "startup_regression_task_tests.rs"]
 mod startup_regression_task_tests;
@@ -381,6 +234,7 @@ mod startup_regression_task_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn pkce_challenge_matches_rfc7636_vector() {
@@ -394,11 +248,11 @@ mod tests {
 
     #[test]
     fn pkce_pair_is_unpadded_and_distinct() {
-        let (v, c) = pkce_pair();
+        let (v, c) = pkce_pair().unwrap();
         assert!(!v.is_empty() && !c.is_empty());
         assert!(!v.contains('=') && !c.contains('='));
         assert!(!v.contains('+') && !c.contains('/'));
-        let (v2, _) = pkce_pair();
+        let (v2, _) = pkce_pair().unwrap();
         assert_ne!(v, v2, "verifier must be random per call");
     }
 
@@ -431,7 +285,7 @@ mod tests {
         });
 
         let started = std::time::Instant::now();
-        let error = post_token_with_timeout(
+        let error = super::super::os::oauth_http::post_token_with_timeout(
             &url,
             &[("grant_type", "refresh_token")],
             Duration::from_millis(30),
@@ -439,7 +293,7 @@ mod tests {
         .err()
         .expect("blackholed token exchange must time out");
         assert!(started.elapsed() < Duration::from_secs(1));
-        assert!(!error.is_empty());
+        assert!(!error.to_string().is_empty());
         server.join().unwrap();
     }
 

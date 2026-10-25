@@ -28,4 +28,5 @@ pub(crate) mod private_storage;
 pub(crate) mod private_storage;
 
 pub use core::*;
+pub(crate) use os::set_secret_untracked;
 pub use os::*;

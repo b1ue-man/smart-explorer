@@ -3,7 +3,6 @@ use std::path::PathBuf;
 
 fn cloud_dir() -> PathBuf {
     let d = crate::support_dirs::app_data_dir().join("cloud");
-    let _ = std::fs::create_dir_all(&d);
     d
 }
 
@@ -19,7 +18,7 @@ pub fn load_config(p: Provider) -> ClientConfig {
 pub fn load_config_checked(p: Provider) -> std::io::Result<ClientConfig> {
     let mut c = ClientConfig::default();
     let path = cfg_path(p);
-    match std::fs::read_to_string(&path) {
+    match crate::support_dirs::read_private_text(&path, 64 * 1024) {
         Ok(s) => {
             for line in s.lines() {
                 if let Some((k, v)) = line.split_once('=') {
@@ -46,41 +45,34 @@ pub fn load_config_checked(p: Provider) -> std::io::Result<ClientConfig> {
 }
 
 pub fn save_config(p: Provider, c: &ClientConfig) -> std::io::Result<()> {
-    let body = format!(
-        "client_id={}\nclient_secret={}\n",
-        c.client_id.trim(),
-        c.client_secret.trim()
-    );
-    std::fs::write(cfg_path(p), body)
-}
-
-fn keyring_account(p: Provider) -> String {
-    format!("cloud:{}", p.as_str())
-}
-
-/// Persist the long-lived refresh token (keyring).
-pub fn store_refresh_token(p: Provider, token: &str) -> Result<(), String> {
-    if token.trim().is_empty() {
-        return Err("Leeres OAuth-Aktualisierungstoken wird nicht gespeichert".to_string());
+    if [&c.client_id, &c.client_secret].iter().any(|value| value.chars().any(char::is_control)) {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput,
+            "Client-ID oder Secret enthält Steuerzeichen"));
     }
-    crate::creds::set_secret(&keyring_account(p), token)
-        .map_err(|error| format!("OAuth-Aktualisierungstoken speichern: {error}"))
+    let normalized = ClientConfig {
+        client_id: c.client_id.trim().into(), client_secret: c.client_secret.trim().into(),
+    };
+    super::coordinator::config_changed(p, &normalized)
+}
+
+pub(super) fn save_config_unlocked(p: Provider, c: &ClientConfig) -> std::io::Result<()> {
+    let body = format!("client_id={}\nclient_secret={}\n", c.client_id, c.client_secret);
+    crate::support_dirs::write_private_atomic(&cfg_path(p), body.as_bytes())
+}
+
+/// Compatibility import: the principal is verified before the next use.
+pub fn store_refresh_token(p: Provider, token: &str) -> Result<(), String> {
+    super::coordinator::store_import(p, token).map_err(|error| error.to_string())
 }
 
 pub fn refresh_token_checked(p: Provider) -> Result<Option<String>, String> {
-    crate::creds::get_secret_checked(&keyring_account(p))
-        .map_err(|error| format!("OAuth-Aktualisierungstoken lesen: {error}"))
+    super::coordinator::refresh_token(p).map_err(|error| error.to_string())
 }
 
-pub fn refresh_token(p: Provider) -> Option<String> {
-    refresh_token_checked(p).ok().flatten()
-}
+pub fn refresh_token(p: Provider) -> Option<String> { refresh_token_checked(p).ok().flatten() }
 
-pub fn is_connected(p: Provider) -> bool {
-    refresh_token(p).map(|t| !t.is_empty()).unwrap_or(false)
-}
+pub fn is_connected(p: Provider) -> bool { super::coordinator::status(p).signed_in }
 
 pub fn disconnect(p: Provider) -> Result<(), String> {
-    crate::creds::delete_secret_checked(&keyring_account(p))
-        .map_err(|error| format!("OAuth-Aktualisierungstoken löschen: {error}"))
+    super::coordinator::disconnect(p).map_err(|error| error.to_string())
 }
