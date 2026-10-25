@@ -1,5 +1,7 @@
 package app.smartexplorer.android.launcher.ui
 
+import androidx.compose.foundation.Image
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -176,10 +178,18 @@ class DragState {
     var edge by mutableStateOf(0)
         private set
     private var start = Offset.Zero
+    private var captureWidget: (() -> ImageBitmap?)? = null
+    var widgetPreview by mutableStateOf<ImageBitmap?>(null)
+        private set
+
+    fun armWidgetSnapshot(id: String, capture: () -> ImageBitmap?) {
+        if (item?.id == id && item?.isWidget == true && !moved) captureWidget = capture
+    }
 
     val active: Boolean get() = item != null
 
     fun begin(item: HomeItem, at: Offset, origin: DragOrigin) {
+        finish()
         this.item = item
         this.origin = origin
         pointer = at
@@ -193,10 +203,17 @@ class DragState {
         pointer = to
         this.hover = hover
         this.edge = edge
-        if (!moved && (to - start).getDistance() > slopPx) moved = true
+        if (!moved && (to - start).getDistance() > slopPx) {
+            // Capture once while the original view is still visible.
+            widgetPreview = captureWidget?.invoke()
+            captureWidget = null
+            moved = true
+        }
     }
 
     fun finish() {
+        widgetPreview = null
+        captureWidget = null
         item = null
         moved = false
         hover = Hover.None
@@ -261,6 +278,8 @@ interface DragHost {
     /** A long press on [item] begins. [anchor] is the item's centre, where a menu would open. */
     fun begin(item: HomeItem, at: Offset, origin: DragOrigin, source: MenuSource, anchor: Offset)
 
+    fun armWidgetSnapshot(id: String, capture: () -> ImageBitmap?) {}
+
     fun move(at: Offset)
 
     fun end(at: Offset, cancelled: Boolean)
@@ -305,7 +324,9 @@ fun DragPreview(drag: DragState, metrics: HomeMetrics, context: ItemContext) {
     val item = drag.item ?: return
     if (!drag.moved) return
     val density = LocalDensity.current
-    // A widget is shown as a plate of its span (a second live view of it would be heavy and cut to one cell).
+    // The existing host view supplies one snapshot; no second live widget is created.
+    val widgetPreview = drag.widgetPreview
+    if (item.isWidget && widgetPreview == null) return
     val spanW = if (item.isWidget) item.span.w else 1
     val spanH = if (item.isWidget) item.span.h else 1
     val width = with(density) { (metrics.cellW * spanW).toDp() }
@@ -317,7 +338,7 @@ fun DragPreview(drag: DragState, metrics: HomeMetrics, context: ItemContext) {
             .alpha(0.6f),
     ) {
         if (item.isWidget) {
-            Box(Modifier.fillMaxSize().padding(2.dp).clip(RoundedCornerShape(16.dp)).background(Color.White.copy(alpha = 0.35f)))
+            Image(bitmap = widgetPreview!!, contentDescription = null, modifier = Modifier.fillMaxSize())
         } else {
             ItemContent(item, context)
         }

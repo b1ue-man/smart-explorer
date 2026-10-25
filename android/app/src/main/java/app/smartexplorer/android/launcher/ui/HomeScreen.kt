@@ -189,6 +189,10 @@ fun HomeScreen(vm: LauncherViewModel) {
                     grab.anchor = anchor
                 }
 
+                override fun armWidgetSnapshot(id: String, capture: () -> androidx.compose.ui.graphics.ImageBitmap?) {
+                    drag.armWidgetSnapshot(id, capture)
+                }
+
                 override fun move(at: Offset) = drag.move(at, hoverAt(at), edgeOf(at, metricsNow), slop)
 
                 override fun end(at: Offset, cancelled: Boolean) {
@@ -312,7 +316,9 @@ fun HomeScreen(vm: LauncherViewModel) {
                     blockedAt = { onWidget(it) },
                 ),
         ) {
-            val excluded = if (drag.origin == DragOrigin.Home) drag.item?.id else null
+            val excluded = if (drag.origin == DragOrigin.Home && drag.moved &&
+                (drag.item?.isWidget != true || drag.widgetPreview != null)
+            ) drag.item?.id else null
             Box(Modifier.offset(left, top).size(areaW, areaH)) {
                 HomePager(pagerState, pagesShown, showNewPage, metrics, itemContext, excluded, !drag.active)
                 // The handles of the widget chosen with „Größe ändern“ (U38-9), on its page.
