@@ -58,6 +58,12 @@ Anmeldung und Fernfenster sind noch nicht besetzt.
 | P7/P27a/P30b–c/P31 Bildpipeline | `screen_pipeline` | `gpt-6.1-sol`, `xhigh` | 9 |
 | P18d Zulassung und aktiver Rechteentzug am Host | `access_runtime` | `gpt-6.1-sol`, `high` | 8 |
 | B1 statischer kritischer Batchreview | `review_batch1` | Nutzervorgabe `gpt-6-astra`, `xhigh` | 9 |
+| P6/P9/P30 Viewerlebenszyklus und Skalierung | `viewer_lifecycle` | `gpt-6.1-sol`, `xhigh` | 9 |
+| P32 Android-Medienorientierung | `media_preview` | `gpt-6.1-sol`, `low` | 6 |
+| B1-R01/R05 historische Recoverybindung | `recovery_identity` | `gpt-6.1-sol`, `xhigh` | 9 |
+| B1-R03 laufende Android-Providerfreigabe | `vault_provider_guard` | `gpt-6.1-sol`, `high` | 8 |
+| P3 Appicons mit gebundener Identität | `app_icons` | `gpt-6.1-sol`, `xhigh` | 9 |
+| B1-R04/R06 Providerfehlerklassifikation | `provider_errors` | `gpt-6.1-sol`, `medium` | 7 |
 
 Belegt sind die expliziten Modell-/Effortparameter der genannten Hostaufrufe.
 Antwortmodell-Metadaten sind über das verwendete Collaboration-Werkzeug nicht
@@ -120,7 +126,7 @@ Bestätigte Befunde werden vor der gemeinsamen Remote-Suite behoben; der
 vereinbarte abschließende Gesamtreview bleibt erhalten. Die Reviewer belegen
 Fundstelle, Auswirkung, Quelle und noch ungeprüfte Annahmen. Der erste Review
 für B3/P13 ist dokumentiert; seine Korrekturen erhalten einen Nachreview.
-Der B1-Review läuft parallel zur übrigen Umsetzung. Die Reviews von B2 und
+Der B1-Erstreview fand sechs konkrete Defekte; ihre Korrekturen werden integriert. Der gezielte B3-Nachreview hat die sieben ursprünglichen und zwei zusätzlich gefundenen Statusfehler statisch als korrigiert bewertet. Beide Berichte ersetzen keine Remote-Abnahme. Die Reviews von B2 und
 B4–B8 beginnen nach Integration ihres jeweiligen vollständigen Paketumfangs.
 
 ## Integrationsbefunde

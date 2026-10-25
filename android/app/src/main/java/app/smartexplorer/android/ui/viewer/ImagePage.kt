@@ -12,10 +12,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -51,10 +50,16 @@ private sealed interface Decoded {
 @Composable
 internal fun ImagePage(
     media: LocalMedia,
+    active: Boolean,
     onTap: () -> Unit,
     onZoomed: (Boolean) -> Unit,
     unsupported: @Composable () -> Unit,
 ) {
+    var scale by rememberSaveable(media.path) { mutableFloatStateOf(1f) }
+    var focusX by rememberSaveable(media.path) { mutableFloatStateOf(0.5f) }
+    var focusY by rememberSaveable(media.path) { mutableFloatStateOf(0.5f) }
+    LaunchedEffect(scale > 1f, active) { if (active) onZoomed(scale > 1f) }
+    DisposableEffect(media.path) { onDispose { onZoomed(false) } }
     BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         val density = LocalDensity.current
         val widthPx = with(density) { maxWidth.roundToPx() }.coerceAtLeast(1)
@@ -65,7 +70,9 @@ internal fun ImagePage(
         when (val result = decoded) {
             Decoded.Pending -> CircularProgressIndicator()
             Decoded.Unsupported -> unsupported()
-            is Decoded.Bitmap -> ZoomableImage(result.image, widthPx.toFloat(), heightPx.toFloat(), onTap, onZoomed)
+            is Decoded.Bitmap -> ZoomableImage(
+                result.image, widthPx.toFloat(), heightPx.toFloat(), scale, Offset(focusX, focusY), onTap,
+            ) { zoom, focus -> scale = zoom; focusX = focus.x; focusY = focus.y }
         }
     }
 }
@@ -75,38 +82,32 @@ private fun ZoomableImage(
     image: ImageBitmap,
     pageWidth: Float,
     pageHeight: Float,
+    scale: Float,
+    focus: Offset,
     onTap: () -> Unit,
-    onZoomed: (Boolean) -> Unit,
+    onTransform: (Float, Offset) -> Unit,
 ) {
-    var scale by remember(image) { mutableFloatStateOf(1f) }
-    var offset by remember(image) { mutableStateOf(Offset.Zero) }
-    fun clamp(value: Offset, zoom: Float): Offset {
-        val maxX = pageWidth * (zoom - 1f) / 2f
-        val maxY = pageHeight * (zoom - 1f) / 2f
-        return Offset(value.x.coerceIn(-maxX, maxX), value.y.coerceIn(-maxY, maxY))
-    }
+    val geometry = MediaGeometry.fit(image.width, image.height, pageWidth, pageHeight)
+    val offset = geometry.offset(scale, focus)
     val transform = rememberTransformableState { zoomChange, panChange, _ ->
         val zoom = (scale * zoomChange).coerceIn(1f, MAX_ZOOM)
-        scale = zoom
-        offset = if (zoom == 1f) Offset.Zero else clamp(offset + panChange, zoom)
+        val moved = geometry.clamp(offset * (zoom / scale) + panChange, zoom)
+        onTransform(zoom, if (zoom == 1f) Offset(0.5f, 0.5f) else geometry.focus(zoom, moved))
     }
-    LaunchedEffect(scale > 1f) { onZoomed(scale > 1f) }
-    DisposableEffect(image) { onDispose { onZoomed(false) } }
     Image(
         bitmap = image,
         contentDescription = null,
         contentScale = ContentScale.Fit,
         modifier = Modifier
             .fillMaxSize()
-            .pointerInput(image) {
+            .pointerInput(image, scale, focus) {
                 detectTapGestures(
                     onTap = { onTap() },
                     onDoubleTap = {
                         if (scale > 1f) {
-                            scale = 1f
-                            offset = Offset.Zero
+                            onTransform(1f, Offset(0.5f, 0.5f))
                         } else {
-                            scale = DOUBLE_TAP_ZOOM
+                            onTransform(DOUBLE_TAP_ZOOM, Offset(0.5f, 0.5f))
                         }
                     },
                 )
