@@ -3,7 +3,7 @@
 //! Mitglieder zulassen/sperren, Zugriff eines Mitglieds, „Zugriff für alle
 //! Mitglieder…“). Creating, joining and discovering rooms is a page of its
 //! own.
-use super::pages_ui::{self, SharePage, TAB_EXEC, TAB_ROOMS};
+use super::pages_ui::{self, SharePage, TAB_ROOMS};
 use super::*;
 
 pub(super) fn ui(app: &mut App, ui: &mut egui::Ui) {
@@ -137,12 +137,9 @@ fn room_page(app: &mut App, ui: &mut egui::Ui, profile_id: &str) {
     pages_ui::heading(ui, "RECHTE");
     let mut may_write = room.policy.members_may_write;
     let mut confirm = room.policy.confirm_new_members;
-    let write_changed = ui
-        .checkbox(&mut may_write, "Mitglieder duerfen schreiben")
-        .changed();
-    let confirm_changed = ui
-        .checkbox(&mut confirm, "Neue Mitglieder bestaetigen")
-        .changed();
+    let mut form = crate::app::settings_form::Form::new(ui, "room_policy_form", &["Mitglieder schreiben", "Neue Mitglieder"]);
+    let write_changed = form.row_labelled(ui, "Mitglieder schreiben", |ui, label| ui.checkbox(&mut may_write, "Auf schreibbaren Freigaben erlauben").labelled_by(label).changed());
+    let confirm_changed = form.row_labelled(ui, "Neue Mitglieder", |ui, label| ui.checkbox(&mut confirm, "Einzeln bestätigen").labelled_by(label).changed());
     ui.label("Ein Raum-Code gibt allein keine Ordner frei.");
     if write_changed || confirm_changed {
         persist(app, "Raumrechte", |profiles| {
@@ -173,8 +170,9 @@ fn rename_row(app: &mut App, ui: &mut egui::Ui, room: &crate::share::RoomProfile
         data.get_temp::<String>(id)
             .unwrap_or_else(|| room.name.clone())
     });
-    ui.horizontal_wrapped(|ui| {
-        ui.label("Name:");
+    let mut form = crate::app::settings_form::Form::new(ui, "room_name_form", &["Raumname"]);
+    form.row(ui, "Raumname", |ui| {
+        ui.horizontal_wrapped(|ui| {
         if ui
             .add(egui::TextEdit::singleline(&mut name).desired_width(share_input_width(ui, 220.0)))
             .changed()
@@ -190,6 +188,7 @@ fn rename_row(app: &mut App, ui: &mut egui::Ui, room: &crate::share::RoomProfile
             });
             ui.data_mut(|data| data.remove::<String>(id));
         }
+    });
     });
 }
 
@@ -273,12 +272,9 @@ fn member_row(
         app.share_tab = pages_ui::TAB_DIAGNOSTICS;
     }
     if exec {
-        let key = crate::app::share_exec_ui::room_target_key(
-            &room.room_id,
-            &member.device_id,
-            &member.fingerprint,
-        );
-        pages_ui::open(app, ui, TAB_EXEC, SharePage::ExecTarget(key));
+        pages_ui::open(app, ui, pages_ui::TAB_DEVICES, SharePage::Device {
+            device_id: member.device_id.clone(), public_key: member.public_key.clone(),
+        });
     }
     if open {
         app.open_share_target(crate::share::PeerOpenTarget::RoomDevice {

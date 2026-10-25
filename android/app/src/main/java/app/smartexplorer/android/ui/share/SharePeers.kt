@@ -122,7 +122,7 @@ private fun DeviceRow(device: ShareDevice, actions: PeerActions) {
                 ) + screen + listOf(
                     "Zugriff anfragen" to { actions.requestAccess(device) },
                     "Eigene Freigaben…" to { actions.shareBack(device) },
-                    "Verbindung…" to { actions.connection(device) },
+                    "Geräteeinstellungen…" to { actions.connection(device) },
                     "Entfernen" to { actions.removeDevice(device) },
                 ),
             )
@@ -220,6 +220,7 @@ private fun MemberRow(room: ShareRoom, member: ShareMember, actions: PeerActions
                     member.blocked -> add("Wieder zulassen…" to { actions.roomMember(room, member, "allow") })
                     else -> add("Sperren…" to { actions.roomMember(room, member, "block") })
                 }
+                add("Geräteeinstellungen…" to { actions.roomMember(room, member, "settings") })
                 add("Vertrauen zurücksetzen" to { actions.resetMemberTrust(room, member) })
             })
         },

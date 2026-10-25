@@ -83,3 +83,25 @@ pub fn capability_catalog(facts: &HostFacts) -> Vec<CapabilityEntry> {
     crate::screen::core::catalog_entries::register_screen_entries(&mut entries, facts);
     entries
 }
+
+/// Add only contextual operations whose real host adapter is installed and
+/// usable. Callers must obtain `available` from their adapters, not assume
+/// support merely because AccessV2 types can be parsed.
+pub fn capability_catalog_with_contextual(
+    facts: &HostFacts, available: &[Capability],
+) -> Vec<CapabilityEntry> {
+    let mut entries = capability_catalog(facts);
+    for (capability, label, description, cli_option, bridge_key) in [
+        (Capability::AppLaunch, "Apps starten", "Freigegebene Apps in erlaubten Benutzersitzungen starten", "app-launch", "appLaunch"),
+        (Capability::LoginAccess, "Anmeldezugang", "Administrativ freigegebene Benutzer- und Anmeldesitzungen erreichen", "login-access", "loginAccess"),
+        (Capability::TcpForward, "TCP weiterleiten", "Freigegebene TCP-Ziele mit konkreter Richtung und Portmenge erreichen", "tcp-forward", "tcpForward"),
+    ] {
+        if available.contains(&capability) {
+            entries.push(CapabilityEntry {
+                capability, label, description, cli_option, bridge_key,
+                uses_account: capability.uses_account(),
+            });
+        }
+    }
+    entries
+}

@@ -97,3 +97,35 @@ pub(crate) fn exec_connection_allowed(grant: &ExecGrant, now: i64) -> bool {
         .into_iter()
         .any(|capability| access.decision_at(capability, now) != CapabilityDecision::Off)
 }
+
+/// Decision for a concrete host-resolved V2 request in exactly the proven
+/// relation. Endpoint identity is derived from the authenticated state,
+/// never from a display name or a union of room and Direct grants.
+pub(crate) fn request_for(
+    state: &ShareAuthState,
+    principal: &ProvenPrincipal,
+    request: &crate::share::access_constraints::AccessRequest,
+    now: i64,
+) -> CapabilityState {
+    use crate::share::access_constraints::{AccessRequest, TcpDirection};
+    let Some(grant) = principal_grant(state, principal) else {
+        return CapabilityState::default();
+    };
+    let endpoints_match = match request {
+        AccessRequest::TcpForward(request) => {
+            let (initiator, target) = match request.direction {
+                TcpDirection::PeerToHost => (principal.node_id.as_str(), state.identity.node_id.as_str()),
+                TcpDirection::HostToPeer => (state.identity.node_id.as_str(), principal.node_id.as_str()),
+            };
+            request.initiator.as_str() == initiator && request.target.as_str() == target
+        }
+        AccessRequest::LoginAccess(_) => principal.relation_kind == "direct",
+        AccessRequest::AppLaunch(_) => true,
+    };
+    CapabilityState {
+        decision: if endpoints_match { grant.access_grant().decision_for(request, now) }
+            else { CapabilityDecision::Off },
+        policy_revision: grant.policy_revision,
+        changed_at: grant.changed_at,
+    }
+}

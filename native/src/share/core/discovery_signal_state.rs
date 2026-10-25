@@ -340,6 +340,7 @@ pub(super) enum DiscoveryExchangeStage {
 }
 
 pub(super) struct ActiveDiscoveryExchange {
+    pub(super) owner: Option<super::discovery_exchange_owner::DiscoveryExchangeLease>,
     pub(super) exchange_id: String,
     pub(super) discovery_id: String,
     pub(super) role: DiscoveryExchangeRole,
@@ -353,6 +354,7 @@ pub(super) struct ActiveDiscoveryExchange {
 impl ActiveDiscoveryExchange {
     pub(super) fn connector(exchange_id: String, discovery_id: String) -> Self {
         Self {
+            owner: None,
             exchange_id,
             discovery_id,
             role: DiscoveryExchangeRole::Connector,
@@ -371,6 +373,7 @@ impl ActiveDiscoveryExchange {
         deadline: Instant,
     ) -> Self {
         Self {
+            owner: None,
             exchange_id,
             discovery_id,
             role: DiscoveryExchangeRole::Publisher,

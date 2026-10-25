@@ -13,7 +13,7 @@ impl App {
             "Verschieben"
         };
 
-        egui::Window::new(title)
+        super::dialog_geometry::window(ctx, "copy_dialog.0", title)
             .default_size([600.0, 380.0])
             .max_size(theme::window_content_limit(ctx))
             .constrain_to(ctx.screen_rect().shrink(16.0))
@@ -57,7 +57,7 @@ impl App {
                     ),
                 );
                 ui.horizontal_wrapped(|ui| {
-                    ui.label("Bei Konflikt:");
+                    ui.label("Gleichnamige Dateien:");
                     ui.radio_value(&mut self.copy_conflict, Conflict::Rename, "umbenennen");
                     ui.radio_value(
                         &mut self.copy_conflict,
@@ -66,6 +66,7 @@ impl App {
                     );
                     ui.radio_value(&mut self.copy_conflict, Conflict::Skip, "überspringen");
                 });
+                ui.label("Bei vorhandenen Quellordnern folgt eine eigene Auswahl: Beide behalten, Zusammenführen oder Überspringen.");
                 ui.colored_label(
                     theme::muted(ui),
                     "Der Fortschritt steht danach unter „⇅ Übertragungen“.",

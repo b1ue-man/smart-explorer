@@ -137,6 +137,7 @@ data class AccessApproval(
     val fingerprint: String = "",
     /** `direct` or `room`. */
     val relation: String = EXEC_RELATION_DIRECT,
+    val relationId: String = "",
     val room: String? = null,
     val capability: String = "",
     val capabilityLabel: String = "",
@@ -149,10 +150,18 @@ data class AccessApproval(
     val surface: String? = null,
     /** A client older than the access rights asks for a terminal: it waits at most 60 s. */
     val olderClientTerminal: Boolean = false,
+    /** Exact typed AccessRequest, retained even when a future capability is unknown. */
+    val request: JsonObject? = null,
+    val contextLines: List<String> = emptyList(),
+    val contextComplete: Boolean = false,
 ) {
     /** Watching or controlling the screen (answered with SCR-M8's consent activity). */
     val screen: Boolean
         get() = capability == CAP_SCREEN_VIEW || capability == CAP_SCREEN_CONTROL
+    val contextual: Boolean
+        get() = request != null || capability in setOf("appLaunch", "loginAccess", "tcpForward")
+    val canAllow: Boolean
+        get() = !contextual || (contextComplete && request != null && relationId.isNotBlank() && contextLines.isNotEmpty())
 }
 
 @Serializable

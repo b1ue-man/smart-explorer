@@ -4,7 +4,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
@@ -156,7 +158,11 @@ internal fun ConnectDeviceDialog(vm: ShareViewModel, onDismiss: () -> Unit) {
         onDismissRequest = { if (!connecting && !cancelWanted) onDismiss() },
         title = { Text(if (target == null) "Gerät verbinden" else target.alias.ifBlank { "Gerät verbinden" }) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            val form = target != null || connecting || cancelWanted || discovery?.advertisements.isNullOrEmpty()
+            Column(
+                modifier = if (form) Modifier.verticalScroll(rememberScrollState()) else Modifier,
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 when {
                     connecting -> {
                         Text("Verbinde …", style = MaterialTheme.typography.bodyMedium)
@@ -255,7 +261,7 @@ internal fun ConnectDeviceDialog(vm: ShareViewModel, onDismiss: () -> Unit) {
 }
 
 @Composable
-private fun AdvertList(adverts: List<DiscoveryAdvert>, onChoose: (DiscoveryAdvert) -> Unit) {
+private fun ColumnScope.AdvertList(adverts: List<DiscoveryAdvert>, onChoose: (DiscoveryAdvert) -> Unit) {
     if (adverts.isEmpty()) {
         Text(
             "Suche nach Geräten und Räumen … Auf dem anderen Gerät „Suchbar machen“ wählen.",
@@ -264,7 +270,7 @@ private fun AdvertList(adverts: List<DiscoveryAdvert>, onChoose: (DiscoveryAdver
         LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
         return
     }
-    LazyColumn(Modifier.heightIn(max = 360.dp)) {
+    LazyColumn(Modifier.weight(1f, fill = false)) {
         items(adverts, key = { it.discoveryId }) { advert ->
             val kind = if (advert.kind == SHARE_DIRECT) "Gerät" else "Raum"
             val detail = if (advert.compatible) {

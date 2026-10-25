@@ -42,6 +42,15 @@ class AccessApprovalReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != ACTION_ACCESS_APPROVAL) return
         val (approvalId, decision) = approvalAction(intent.data) ?: return
+        if (decision != DECISION_DENY) {
+            val current = AccessApprovalNotifier.pending.value.firstOrNull { it.id == approvalId }
+            // Contextual approvals require their complete dialog. A stale
+            // notification action can never bypass that presentation.
+            if (current == null || current.contextual || !current.canAllow) {
+                AccessApprovalNotifier.requestRefresh()
+                return
+            }
+        }
         val pending = goAsync()
         AccessApprovalNotifier.decide(approvalId, decision) { pending.finish() }
     }

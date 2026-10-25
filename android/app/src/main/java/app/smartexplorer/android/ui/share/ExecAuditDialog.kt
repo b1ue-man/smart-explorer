@@ -3,7 +3,6 @@ package app.smartexplorer.android.ui.share
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
@@ -78,20 +77,18 @@ internal fun ExecAuditDialog(onDismiss: () -> Unit) {
         onDismissRequest = onDismiss,
         title = { Text("Befehlsprotokoll") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                item { Text(
                     "Abgelehnte Anmeldungen und Starts, Starts und Enden von Befehlen anderer Geräte auf diesem Telefon, " +
                         "Rückfragen mit ihrer Antwort und abgelaufene Rechte. Shell-Befehle werden nie im Wortlaut gespeichert.",
                     style = MaterialTheme.typography.bodySmall,
-                )
-                error?.let { Text("Protokoll nicht lesbar: $it", color = MaterialTheme.colorScheme.error) }
+                ) }
+                item { error?.let { Text("Protokoll nicht lesbar: $it", color = MaterialTheme.colorScheme.error) } }
                 val shown = entries
                 when {
-                    shown == null && error == null -> LinearProgressIndicator(Modifier.fillMaxWidth())
-                    shown != null && shown.isEmpty() -> Text("Noch keine Einträge.")
-                    shown != null -> LazyColumn(Modifier.heightIn(max = 420.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        items(shown) { entry -> ExecAuditRow(entry) }
-                    }
+                    shown == null && error == null -> item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
+                    shown != null && shown.isEmpty() -> item { Text("Noch keine Einträge.") }
+                    shown != null -> items(shown) { entry -> ExecAuditRow(entry) }
                 }
             }
         },

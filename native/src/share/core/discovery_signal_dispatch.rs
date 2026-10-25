@@ -91,6 +91,10 @@ impl DiscoverySignalRuntime {
         configuration: &mut RuntimeConfiguration<'_>,
         tracked_direct: bool,
     ) -> Result<(), String> {
+        // Socket loss can precede queued pairing packets. Honor the local
+        // owner boundary before a late packet can install a relation.
+        self.cancel_ownerless_exchanges(signal, events)
+            .map_err(|error| error.to_string())?;
         match message {
             DiscoveryServerMsg::DiscoveryPublished { advertisement } => {
                 self.handle_published(advertisement, signal, events)

@@ -9,6 +9,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::share::exec_policy::{ExecGrantSettings, ExecRunAs};
+use crate::share::access_constraints::{AccessConstraints, AccessRequest};
+pub use crate::share::access_relation_view::AccessGrantView;
 
 /// The restricted remote-access account of `AccountProfile::Remote`.
 pub const REMOTE_ACCOUNT_NAME: &str = "se-remote";
@@ -28,14 +30,23 @@ pub enum Capability {
     ScreenView,
     /// Controlling the screen (S4).
     ScreenControl,
+    /// Launch one host-resolved application in an admitted session.
+    AppLaunch,
+    /// Explicit machine-authorized login/session access.
+    LoginAccess,
+    /// One explicitly bounded TCP forwarding direction and target.
+    TcpForward,
 }
 
 impl Capability {
-    pub const ALL: [Capability; 4] = [
+    pub const ALL: [Capability; 7] = [
         Self::ExecCommands,
         Self::ExecTerminal,
         Self::ScreenView,
         Self::ScreenControl,
+        Self::AppLaunch,
+        Self::LoginAccess,
+        Self::TcpForward,
     ];
     pub const EXEC: [Capability; 2] = [Self::ExecCommands, Self::ExecTerminal];
 
@@ -46,6 +57,9 @@ impl Capability {
             Self::ExecTerminal => "exec_terminal",
             Self::ScreenView => "screen_view",
             Self::ScreenControl => "screen_control",
+            Self::AppLaunch => "app_launch",
+            Self::LoginAccess => "login_access",
+            Self::TcpForward => "tcp_forward",
         }
     }
 
@@ -60,12 +74,23 @@ impl Capability {
         matches!(self, Self::ExecCommands | Self::ExecTerminal)
     }
 
+    pub fn requires_context(self) -> bool {
+        matches!(self, Self::AppLaunch | Self::LoginAccess | Self::TcpForward)
+    }
+
+    pub fn uses_account(self) -> bool {
+        self.is_exec() || matches!(self, Self::AppLaunch | Self::LoginAccess)
+    }
+
     fn index(self) -> usize {
         match self {
             Self::ExecCommands => 0,
             Self::ExecTerminal => 1,
             Self::ScreenView => 2,
             Self::ScreenControl => 3,
+            Self::AppLaunch => 4,
+            Self::LoginAccess => 5,
+            Self::TcpForward => 6,
         }
     }
 }
@@ -200,12 +225,27 @@ pub enum Expiry {
 }
 
 /// The access right of one grant without its program list.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AccessGrant {
     pub account: AccountProfile,
-    decisions: [CapabilityDecision; 4],
+    decisions: [CapabilityDecision; 7],
+    /// V2 remains V2 after revocation; a downgrade never restores an old grant.
+    pub(crate) version: u64,
+    pub constraints: AccessConstraints,
     /// Unix seconds of the host clock from which every capability is off.
     pub valid_until: Option<i64>,
+}
+
+impl Default for AccessGrant {
+    fn default() -> Self {
+        Self {
+            account: AccountProfile::default(),
+            decisions: [CapabilityDecision::Off; 7],
+            version: 1,
+            constraints: AccessConstraints::default(),
+            valid_until: None,
+        }
+    }
 }
 
 impl AccessGrant {
@@ -227,6 +267,9 @@ impl AccessGrant {
 
     pub fn set(&mut self, capability: Capability, decision: CapabilityDecision) {
         self.decisions[capability.index()] = decision;
+        if capability.requires_context() && decision.is_on() {
+            self.version = 2;
+        }
     }
 
     pub fn capabilities(&self) -> impl Iterator<Item = (Capability, CapabilityDecision)> + '_ {
@@ -242,11 +285,25 @@ impl AccessGrant {
 
     /// The decision that applies at `now`: off once the grant has ended.
     pub fn decision_at(&self, capability: Capability, now: i64) -> CapabilityDecision {
-        if self.expired_at(now) {
+        if self.expired_at(now) || capability.requires_context() {
             CapabilityDecision::Off
         } else {
             self.decision(capability)
         }
+    }
+
+    /// A contextual capability never allows through `decision_at` alone.
+    pub fn decision_for(&self, request: &AccessRequest, now: i64) -> CapabilityDecision {
+        if self.expired_at(now) || self.constraints.validate().is_err()
+            || !self.constraints.allows(request, now) {
+            CapabilityDecision::Off
+        } else {
+            self.decision(request.capability())
+        }
+    }
+
+    pub fn version(&self) -> u64 {
+        if self.version == 2 || !self.constraints.is_empty() { 2 } else { 1 }
     }
 
     pub fn grants_any(&self) -> bool {
@@ -281,8 +338,9 @@ impl AccessGrant {
                 before.is_on()
                     && (self.decision(capability).rank() < before.rank()
                         || earlier_end
-                        || (capability.is_exec() && account_changed)
-                        || (capability == Capability::ExecCommands && program_list_changed))
+                        || (capability.uses_account() && account_changed)
+                        || (capability == Capability::ExecCommands && program_list_changed)
+                        || self.constraints.narrows(&old.constraints, capability))
             })
             .collect()
     }
@@ -302,6 +360,10 @@ impl AccessGrant {
         }
         for (capability, decision) in &change.capabilities {
             next.set(*capability, *decision);
+        }
+        if let Some(constraints) = &change.constraints {
+            next.constraints = constraints.clone();
+            next.version = 2;
         }
         if let Some(list) = &change.programs {
             next_programs = list.clone();
@@ -326,6 +388,13 @@ impl AccessGrant {
     /// The rules every stored grant keeps.
     pub fn validate(&self, programs: &[String]) -> Result<(), String> {
         self.account.validate()?;
+        self.constraints.validate()?;
+        for capability in Capability::ALL {
+            if capability.requires_context() && self.decision(capability).is_on()
+                && !self.constraints.has(capability) {
+                return Err(format!("{} requires explicit target constraints", capability.key()));
+            }
+        }
         ExecGrantSettings {
             run_as: ExecRunAs::Standard,
             programs: programs.to_vec(),
@@ -353,6 +422,9 @@ pub struct AccessGrantChange {
     pub programs: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expiry: Option<Expiry>,
+    /// Complete replacement; an omitted field preserves every condition.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub constraints: Option<AccessConstraints>,
 }
 
 impl AccessGrantChange {
@@ -361,6 +433,7 @@ impl AccessGrantChange {
             && self.capabilities.is_empty()
             && self.programs.is_none()
             && self.expiry.is_none()
+            && self.constraints.is_none()
     }
 }
 
@@ -396,33 +469,7 @@ impl AccessPreset {
             ]),
             programs: Some(programs),
             expiry: None,
-        }
-    }
-}
-
-/// An access grant as IPC, JSON and the Android bridge show it (D.2.4).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AccessGrantView {
-    pub account: AccountProfile,
-    pub account_label: String,
-    /// Both Exec capabilities always; screen capabilities when they are on.
-    pub capabilities: BTreeMap<Capability, CapabilityDecision>,
-    pub valid_until: Option<i64>,
-    pub expired: bool,
-}
-
-impl AccessGrantView {
-    pub fn new(grant: &AccessGrant, own_label: &str, now: i64) -> Self {
-        let capabilities = grant
-            .capabilities()
-            .filter(|(capability, decision)| capability.is_exec() || decision.is_on())
-            .collect();
-        Self {
-            account: grant.account.clone(),
-            account_label: grant.account.label(own_label),
-            capabilities,
-            valid_until: grant.valid_until,
-            expired: grant.expired_at(now),
+            constraints: None,
         }
     }
 }

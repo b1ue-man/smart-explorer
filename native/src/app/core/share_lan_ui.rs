@@ -19,16 +19,13 @@ pub(super) fn ui(app: &mut App, ui: &mut egui::Ui) {
             .small()
             .color(theme::muted(ui)),
     );
-    ui.horizontal_wrapped(|ui| {
-        ui.label(format!("Erkennung (mDNS): {}", status.presence.label()));
-        if let Some(id) = &status.announced_id {
-            ui.label(
-                RichText::new(format!("eigene Kennung {id}"))
-                    .small()
-                    .color(theme::muted(ui)),
-            );
-        }
-    });
+    let mut form = crate::app::settings_form::Form::new(ui, "lan_form", &["Erkennung", "Lokale Kennung"]);
+    form.row(ui, "Erkennung", |ui| { ui.label(status.presence.label()); });
+    if let Some(id) = &status.announced_id {
+        egui::CollapsingHeader::new("Diagnose der Erkennung").id_salt("lan_presence_diagnostics").show(ui, |ui| {
+            form.row(ui, "Lokale Kennung", |ui| { ui.monospace(id); });
+        });
+    }
     let mut presence_enabled = matches!(
         status.presence,
         crate::share::LanFacility::Available

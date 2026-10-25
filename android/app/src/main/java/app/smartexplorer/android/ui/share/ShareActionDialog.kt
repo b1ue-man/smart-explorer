@@ -74,8 +74,7 @@ internal fun ShareActionDialog(
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 content()
-                if (state.saving) LinearProgressIndicator(Modifier.fillMaxWidth())
-                state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                app.smartexplorer.android.ui.settings.SettingsStatusRow(saving = state.saving, error = state.error)
             }
         },
         confirmButton = {

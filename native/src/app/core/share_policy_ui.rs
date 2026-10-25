@@ -66,31 +66,17 @@ impl App {
                 ));
             }
         }
-        let previous = self.share_profiles.clone();
-        let mut changed = false;
-        for grant in &mut self.share_profiles.direct_grants {
+        let mut device = None;
+        for grant in &self.share_profiles.direct_grants {
             ui.horizontal_wrapped(|ui| {
-                ui.label(format!("{} · {}", grant.device_name, grant.device_id));
-                // Withdrawing a stored write flag remains possible while the
-                // authorization is inactive. Enabling never readmits a peer.
-                let editable =
-                    grant.write || grant.state == crate::share::DirectGrantState::Accepted;
-                changed |= ui
-                    .add_enabled(
-                        editable,
-                        egui::Checkbox::new(&mut grant.write, "Darf schreiben"),
-                    )
-                    .changed();
-                if grant.state != crate::share::DirectGrantState::Accepted {
-                    ui.label("Freigabe inaktiv; zuerst ausdruecklich wieder erlauben.");
-                }
+                ui.label(&grant.device_name);
+                ui.label(if grant.write { "Schreibrecht erlaubt" } else { "Nur lesen" });
+                if ui.button("Geräteeinstellungen …").clicked() { device = Some(grant.device_id.clone()); }
             });
         }
-        if self.share_profiles.direct_grants.is_empty() {
-            ui.label("Noch keine Geraete fuer meine Freigaben zugelassen.");
-        }
-        if changed {
-            let _ = self.commit_share_profiles(previous);
+        if self.share_profiles.direct_grants.is_empty() { ui.label("Noch keine Geräte für meine Freigaben zugelassen."); }
+        if let Some(device) = device {
+            pages_ui::open(self, ui, pages_ui::TAB_DEVICES, pages_ui::SharePage::Grant(device));
         }
     }
 }

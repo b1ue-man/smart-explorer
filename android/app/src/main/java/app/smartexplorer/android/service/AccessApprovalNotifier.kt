@@ -114,10 +114,10 @@ internal fun approvalNotification(context: Context, approval: AccessApproval, id
         .setPublicVersion(hidden)
         .setContentIntent(open)
         .setDeleteIntent(answerIntent(context, approval.id, DECISION_DENY))
-    if (approval.screen) {
+    if (approval.screen && approval.canAllow) {
         builder.addAction(screenAction(context, approval, DECISION_ONCE, id, "Diesmal erlauben"))
         builder.addAction(screenAction(context, approval, DECISION_ALWAYS, id, "Immer erlauben"))
-    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+    } else if (!approval.contextual && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         builder.addAction(answerAction(context, approval.id, DECISION_ONCE, R.drawable.ic_check, "Diesmal erlauben", unlocked = true))
         builder.addAction(answerAction(context, approval.id, DECISION_ALWAYS, R.drawable.ic_check, "Immer erlauben", unlocked = true))
     }
@@ -230,6 +230,13 @@ object AccessApprovalNotifier {
      * from the visible app it opens there; without a visible app nothing is allowed.
      */
     internal fun decide(approvalId: String, decision: String, done: () -> Unit = {}) {
+        val current = pendingFlow.value.firstOrNull { it.id == approvalId }
+        if (decision != DECISION_DENY && (current == null || !current.canAllow)) {
+            Snackbars.show("Vollständigen Zielauftrag zuerst laden und prüfen. Erlauben ist gesperrt.")
+            requestRefresh()
+            done()
+            return
+        }
         val screen = pendingFlow.value.firstOrNull { it.id == approvalId }?.takeIf { it.screen }
         if (screen != null && decision != DECISION_DENY) {
             val activity = resumed.get()

@@ -14,7 +14,7 @@ use eframe::egui::{self, RichText};
 use super::programs_ui::heading;
 use crate::app::theme;
 use crate::share::access_approval::{ApprovalCommand, ApprovalDecision, ApprovalView};
-use crate::share::consent_launch::{capability_label, request_line};
+use crate::share::consent_launch::{approval_context, approval_context_complete, capability_label, request_line};
 
 /// How often the list is read while the tab is shown.
 const POLL: Duration = Duration::from_secs(2);
@@ -91,6 +91,9 @@ pub(super) fn block(
             ui.set_width(ui.available_width());
             ui.label(RichText::new(request_line(request)).strong());
             ui.label(facts(request));
+            for detail in approval_context(request) {
+                ui.add(egui::Label::new(detail).wrap());
+            }
             if request.older_client_terminal {
                 let note = format!(
                     "Älteres Smart Explorer auf {}: das Terminal wartet dort höchstens 60 Sekunden.",
@@ -98,7 +101,7 @@ pub(super) fn block(
                 );
                 ui.colored_label(theme::warning(ui), note);
             }
-            let allow = armed(request.id.as_str());
+            let allow = armed(request.id.as_str()) && approval_context_complete(request);
             ui.horizontal_wrapped(|ui| {
                 let answers = [
                     (ApprovalDecision::Once, "Diesmal erlauben"),
@@ -114,8 +117,8 @@ pub(super) fn block(
             });
         });
     }
-    let hint = "„Immer erlauben“ setzt dieses Recht für das Gerät auf „Erlauben“; spätere \
-                Anfragen fragen dann nicht mehr.";
+    let hint = "„Immer erlauben“ setzt dieses Recht in dieser Beziehung auf „Erlauben“. \
+                Die gespeicherten Zielbedingungen bleiben bestehen.";
     ui.label(RichText::new(hint).small().color(theme::muted(ui)));
     answer
 }

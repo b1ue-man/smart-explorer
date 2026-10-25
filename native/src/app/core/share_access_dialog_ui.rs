@@ -69,6 +69,7 @@ pub(super) struct AccessDraft {
     pub(super) program_input: String,
     /// Why the typed program was not added.
     pub(super) error: Option<String>,
+    pub(super) save_error: Option<String>,
 }
 
 impl AccessDraft {
@@ -82,7 +83,7 @@ impl AccessDraft {
         (base, programs): (AccessGrant, Vec<String>),
         (accounts, helper): (Vec<AccountOption>, HelperState),
     ) -> Self {
-        let ask = base.capabilities().any(|(_, decision)| decision == Ask);
+        let ask = base.capabilities().any(|(capability, decision)| !capability.requires_context() && decision == Ask);
         let mut draft = Self {
             key: key.into(),
             title: title.into(),
@@ -101,6 +102,7 @@ impl AccessDraft {
             account_error: None,
             program_input: String::new(),
             error: None,
+            save_error: None,
         };
         if !draft.base.grants_any() {
             let terminal = if draft.programs.is_empty() {
@@ -125,6 +127,7 @@ impl AccessDraft {
         let screen = [Capability::ScreenView, Capability::ScreenControl];
         if self.decision(Capability::ExecCommands) != on
             || screen.iter().any(|c| self.decision(*c).is_on())
+            || Capability::ALL.into_iter().any(|capability| capability.requires_context() && self.decision(capability).is_on())
         {
             return None;
         }
@@ -140,15 +143,16 @@ impl AccessDraft {
     pub(super) fn select(&mut self, preset: AccessPreset) {
         let change = preset.change(self.programs.clone(), self.ask);
         self.account = change.account.unwrap_or_default();
-        self.decisions.extend(change.capabilities);
+        self.decisions.extend(change.capabilities.into_iter().filter(|(capability, _)| !capability.requires_context()));
         self.programs = change.programs.unwrap_or_default();
         self.preset = Some(preset);
     }
 
-    /// „Mit Rückfrage“: every allowed capability asks, or asks no more.
+    /// „Mit Rückfrage“ affects only the capabilities rendered by this editor.
     pub(super) fn set_ask(&mut self, ask: bool) {
         self.ask = ask;
-        for decision in self.decisions.values_mut() {
+        for (capability, decision) in &mut self.decisions {
+            if capability.requires_context() { continue; }
             *decision = match (*decision, ask) {
                 (Allow, true) => Ask,
                 (Ask, false) => Allow,
@@ -160,7 +164,7 @@ impl AccessDraft {
 
     pub(super) fn set_decision(&mut self, capability: Capability, decision: CapabilityDecision) {
         self.decisions.insert(capability, decision);
-        self.ask = self.decisions.values().any(|decision| *decision == Ask);
+        self.ask = self.decisions.iter().any(|(capability, decision)| !capability.requires_context() && *decision == Ask);
         self.preset = self.detect();
     }
 
@@ -187,9 +191,11 @@ impl AccessDraft {
         };
         AccessGrantChange {
             account: Some(self.account.clone()),
-            capabilities: self.decisions.clone(),
+            capabilities: self.decisions.iter().filter(|(capability, _)| !capability.requires_context())
+                .map(|(capability, decision)| (*capability, *decision)).collect(),
             programs: Some(self.programs.clone()),
             expiry,
+            constraints: None,
         }
     }
 
@@ -202,10 +208,10 @@ impl AccessDraft {
 
     /// The one confirmation names the consequence (C6).
     pub(super) fn confirm_label(&self, own_label: &str) -> String {
-        if self.decisions.values().any(|decision| decision.is_on()) {
-            format!("Als {} erlauben", self.account.label(own_label))
+        if self.decisions.iter().any(|(capability, decision)| !capability.requires_context() && decision.is_on()) {
+            format!("Gewählte Befehls- und Bildschirmrechte als {} erlauben", self.account.label(own_label))
         } else {
-            "Zugriff entziehen".into()
+            "Befehle, Terminal und Bildschirmrechte entziehen".into()
         }
     }
 
@@ -269,12 +275,12 @@ pub(super) struct ExecWarning {
 
 pub(super) fn exec_warning(provider: &ExecProviderStatus) -> ExecWarning {
     ExecWarning {
-        full_access: format!("FULL {} CODE EXECUTION", provider.user_label),
+        full_access: format!("Vollständige Befehlsausführung als {}", provider.user_label),
         elevated: provider.elevated.then_some(
             if provider.user_label.eq_ignore_ascii_case("root") {
-                "REMOTE ROOT SHELL"
+                "Fernzugriff mit Rootrechten"
             } else {
-                "REMOTE ADMINISTRATOR SHELL"
+                "Fernzugriff mit Administratorrechten"
             },
         ),
     }
@@ -293,9 +299,9 @@ pub(super) fn activation_warning(
     let base = exec_warning(provider);
     ExecWarning {
         full_access: if programs.is_empty() {
-            format!("FULL {label} CODE EXECUTION")
+            format!("Vollständige Befehlsausführung als {label}")
         } else {
-            format!("{label} EXECUTION OF {}", programs.join(", "))
+            format!("Ausführung als {label}: {}", programs.join(", "))
         },
         elevated: if named.is_some() { None } else { base.elevated },
     }
@@ -333,7 +339,7 @@ pub(super) fn current(ctx: &egui::Context) -> Option<AccessDraft> {
     ctx.data_mut(|data| data.get_temp::<AccessDraft>(dialog_id()))
 }
 
-fn close(ctx: &egui::Context) {
+pub(super) fn close(ctx: &egui::Context) {
     ctx.data_mut(|data| data.remove::<AccessDraft>(dialog_id()));
 }
 
@@ -351,7 +357,7 @@ pub(super) fn show(
         return None;
     };
     let (mut visible, mut done, mut action) = (true, false, None);
-    egui::Window::new(format!("Zugriff für {}", draft.title))
+    crate::app::dialog_geometry::window(ctx, "share_access_dialog_ui.0", format!("Zugriff für {}", draft.title))
         .id(dialog_id())
         .collapsible(false)
         .resizable(true)
@@ -382,6 +388,7 @@ pub(super) fn show(
             if let Some(reason) = &blocker {
                 ui.label(RichText::new(reason).color(theme::muted(ui)));
             }
+            crate::app::settings_form::status(ui, false, None, draft.save_error.as_deref());
             ui.horizontal_wrapped(|ui| {
                 let label = RichText::new(draft.confirm_label(&provider.user_label)).strong();
                 if ui
@@ -394,7 +401,6 @@ pub(super) fn show(
                         change: draft.change(now),
                         revision,
                     });
-                    done = true;
                 }
                 done |= ui.button("Abbrechen").clicked();
             });

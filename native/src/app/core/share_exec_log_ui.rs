@@ -48,7 +48,7 @@ pub(super) fn ui_exec_log(ui: &mut egui::Ui) {
 fn body(ui: &mut egui::Ui) {
     ui.add(
         egui::Label::new(
-            "Abgelehnte Anmeldungen, abgelehnte Starts, Starts und Enden, Rückfragen und ihre Antworten, abgelaufene Rechte, mit Geraet, Fingerprint, Art, Recht, Programm, Konto, Rückfrage und Ergebnis. Kein Text von Shell-Befehlen; Text des anderen Geraets ist auf 256 Zeichen gekuerzt. Dateien exec-audit.log und exec-audit-rejected.log im App-Datenordner (je 4 bis 8 MiB). Terminal: se share exec log.",
+            "Abgelehnte Anmeldungen, abgelehnte Starts, Starts und Enden, Rückfragen und ihre Antworten, abgelaufene Rechte, mit Geraet, Fingerprint, Art, Recht, Programm, Konto, Rückfrage und Ergebnis. Kein Text von Shell-Befehlen; Text des anderen Geraets ist auf 256 Zeichen gekuerzt.",
         )
         .wrap(),
     );
@@ -110,9 +110,9 @@ fn body(ui: &mut egui::Ui) {
     if loaded && shown.is_empty() {
         ui.label("Keine Eintraege auf diesem Host.");
     }
-    egui::ScrollArea::vertical()
+    egui::ScrollArea::vertical().min_scrolled_height(0.0)
         .id_salt("share_exec_audit_scroll")
-        .max_height(360.0)
+        .max_height(crate::app::dialog_geometry::remaining_height(ui, 2.0))
         .show(ui, |ui| {
             for entry in shown {
                 entry_row(ui, entry);

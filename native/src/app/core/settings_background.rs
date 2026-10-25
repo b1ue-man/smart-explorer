@@ -92,11 +92,8 @@ impl App {
         });
         ui.label(RichText::new("Die Dienstmeldung zeigt den Sync-Prozess. Für den Wächter gibt es keine eigene Aktivitätsmeldung.").small().color(theme::muted(ui)));
         // Check cadence (how often the daemon evaluates schedules / reacts).
-        ui.horizontal(|ui| {
-            ui.label("Prüfintervall").on_hover_text(
-                "Wie oft der Dienst nach fälligen Aufträgen, Änderungen (Echtzeit) und \
-                 angeschlossenen Geräten sieht. Kürzer = reaktiver, mehr CPU.",
-            );
+        let mut form = crate::app::settings_form::Form::new(ui, "background_form", &["Prüfintervall", "Pause"]);
+        form.row_labelled(ui, "Prüfintervall", |ui, field_label| {
             match crate::daemon::cadence_secs() {
                 Ok(mut cadence) => {
                     if ui
@@ -104,7 +101,7 @@ impl App {
                             egui::DragValue::new(&mut cadence)
                                 .range(2..=3600)
                                 .suffix(" s"),
-                        )
+                        ).labelled_by(field_label)
                         .changed()
                     {
                         self.report_daemon_control(
@@ -121,7 +118,8 @@ impl App {
         });
 
         // Pause / resume.
-        ui.horizontal(|ui| {
+        form.row(ui, "Pause", |ui| {
+            ui.horizontal_wrapped(|ui| {
             match crate::daemon::pause_remaining() {
                 Ok(Some(r)) if r == i64::MAX => {
                     ui.colored_label(theme::warning(ui), "⏸ pausiert (dauerhaft)");
@@ -168,6 +166,7 @@ impl App {
             if ui.small_button("▶ Fortsetzen").clicked() {
                 self.report_daemon_control("Pause aufheben", crate::daemon::resume());
             }
+        });
         });
 
         // Auto-pause conditions.

@@ -94,6 +94,7 @@ pub(crate) struct SystemActions {
     inbox: Receiver<String>,
     /// The surface's own clipboard (menu entry "Einfügen").
     own: Option<(Vec<PathBuf>, bool)>,
+    folders: std::collections::VecDeque<super::folder_conflict_ui::Admission>,
 }
 
 impl SystemActions {
@@ -105,11 +106,27 @@ impl SystemActions {
             notices,
             inbox,
             own: None,
+            folders: std::collections::VecDeque::new(),
         }
     }
 
     fn notice(&self, text: String) {
         let _ = self.notices.send(text);
+    }
+
+    fn run_transfer_job(&mut self, job: crate::transfer::TransferJob) {
+        let consume_cut = job.mode == CopyMode::Move && self.own.as_ref().is_some_and(|(paths, cut)| {
+            if !cut { return false; }
+            let own: Result<Vec<String>, _> = paths.iter().map(|path| crate::copy::native_path_text(path)).collect();
+            matches!((&job.items, own), (crate::transfer::JobItems::Roots { paths, .. }, Ok(own)) if *paths == own)
+        });
+        let notices = self.notices.clone();
+        let ctx = self.ctx.clone();
+        let spawned = std::thread::Builder::new().name("se-desktop-transfer".into()).spawn(move || {
+            for (path, error) in desktop_ops::run_transfer_job(job).errors { let _ = notices.send(format!("{path}: {error}")); }
+            ctx.request_repaint();
+        });
+        match spawned { Ok(_) => { if consume_cut { self.own = None; } }, Err(error) => self.notice(format!("Übertragung nicht gestartet: {error}")) }
     }
 }
 
@@ -181,6 +198,19 @@ impl SurfaceActions for SystemActions {
     }
 
     fn run(&mut self, op: DesktopOp) {
+        if let DesktopOp::Transfer { sources, folder, cut } = &op {
+            let mode = if *cut { CopyMode::Move } else { CopyMode::Copy };
+            let (job, errors) = desktop_ops::transfer_job(sources, folder, mode);
+            for (path, error) in errors { self.notice(format!("{path}: {error}")); }
+            if let Some(job) = job {
+                match super::folder_conflict_ui::Admission::new(job) {
+                    Ok(admission) => self.folders.push_back(admission),
+                    Err(error) => self.notice(error),
+                }
+            }
+            self.ctx.request_repaint();
+            return;
+        }
         let notices = self.notices.clone();
         let ctx = self.ctx.clone();
         let spawned = std::thread::Builder::new()
@@ -228,15 +258,18 @@ impl SurfaceActions for SystemActions {
         if let Some(found) = pasted.and_then(parse_clip_text) {
             return Some(found);
         }
-        let own = self.own.clone()?;
-        if own.1 {
-            // A cut moves once (Explorer clears it after the paste).
-            self.own = None;
-        }
-        Some(own)
+        self.own.clone()
     }
 
     fn take_notices(&mut self) -> Vec<String> {
+        if let Some(result) = self.folders.front_mut().and_then(|admission| admission.show(&self.ctx)) {
+            self.folders.pop_front();
+            match result {
+                Ok(Some(job)) => self.run_transfer_job(job),
+                Ok(None) => {},
+                Err(error) => self.notice(format!("Ordnerkonflikte prüfen: {error}")),
+            }
+        }
         self.inbox.try_iter().collect()
     }
 }

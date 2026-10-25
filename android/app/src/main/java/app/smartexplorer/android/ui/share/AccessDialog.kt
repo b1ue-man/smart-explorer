@@ -85,13 +85,14 @@ internal data class AccessDraft(
     val until: String,
     val screenView: String = ACCESS_OFF,
     val screenControl: String = ACCESS_OFF,
+    val additional: Map<String, String> = emptyMap(),
 ) {
     fun decision(key: String): String = when (key) {
         CAP_COMMANDS -> commands
         CAP_TERMINAL -> if (programs.isEmpty()) terminal else ACCESS_OFF
         CAP_SCREEN_VIEW -> screenView
         CAP_SCREEN_CONTROL -> screenControl
-        else -> ACCESS_OFF
+        else -> additional[key] ?: ACCESS_OFF
     }
 
     /** Controlling needs watching (C7): control on raises watching, watching off ends control. */
@@ -100,7 +101,7 @@ internal data class AccessDraft(
         CAP_TERMINAL -> copy(terminal = decision)
         CAP_SCREEN_VIEW -> copy(screenView = decision, screenControl = if (decision == ACCESS_OFF) ACCESS_OFF else screenControl)
         CAP_SCREEN_CONTROL -> copy(screenControl = decision, screenView = if (decision != ACCESS_OFF && screenView == ACCESS_OFF) decision else screenView)
-        else -> this
+        else -> copy(additional = additional + (key to decision))
     }
 
     /** Some Exec capability is on (`ask` or `allow`). */
@@ -118,7 +119,7 @@ internal data class AccessDraft(
  * button (plan 2026-10-17, C6 B-a).
  */
 internal fun initialDraft(target: ExecTarget, view: AccessView?): AccessDraft {
-    val active = view?.takeIf { target.enabled && !it.expired }
+    val active = view?.takeIf { !it.expired }
     val keepsEnd = view != null && view.validUntil != null && !view.expired
     return AccessDraft(
         commands = active?.decision(CAP_COMMANDS) ?: ACCESS_ALLOW,
@@ -128,6 +129,7 @@ internal fun initialDraft(target: ExecTarget, view: AccessView?): AccessDraft {
         // The screen starts off: watching this phone is never on without a choice.
         screenView = active?.decision(CAP_SCREEN_VIEW) ?: ACCESS_OFF,
         screenControl = active?.decision(CAP_SCREEN_CONTROL) ?: ACCESS_OFF,
+        additional = active?.capabilities.orEmpty().filterKeys { it !in listOf(CAP_COMMANDS, CAP_TERMINAL, CAP_SCREEN_VIEW, CAP_SCREEN_CONTROL) },
     )
 }
 
@@ -182,6 +184,12 @@ internal fun approvalLines(approval: AccessApproval): List<String> = buildList {
     val relation = if (approval.relation == EXEC_RELATION_ROOM) "Raum „${approval.room.orEmpty().ifBlank { "Raum" }}“" else "Direkt-Gerät"
     add("$device · $relation · Fingerabdruck ${shortFingerprint(approval.fingerprint)}")
     add("Recht: ${approval.capabilityLabel.ifBlank { approval.capability }}")
+    add("Geräteidentität: ${approval.deviceId}")
+    addAll(approval.contextLines)
+    if (approval.contextual && !approval.canAllow) {
+        add("Vollständiger Zielauftrag oder seine Beziehung fehlt. Erlauben ist gesperrt.")
+        approval.request?.let { add("Übermittelter Zielauftrag: $it") }
+    }
     approval.accountLabel?.takeIf { it.isNotBlank() }?.let { add("Konto: $it") }
     approval.command?.let { command ->
         when (command.mode) {
@@ -225,18 +233,18 @@ internal fun AccessApprovalPrompt(
                 }
                 Text(
                     if (approval.screen) {
-                        "„Immer erlauben“ stellt dieses Recht für das Gerät auf „Erlauben“; Android fragt trotzdem bei jeder Sitzung."
+                        "„Immer erlauben“ stellt dieses Recht in dieser Beziehung auf „Erlauben“; Android fragt trotzdem bei jeder Sitzung."
                     } else {
-                        "„Immer erlauben“ stellt dieses Recht für das Gerät auf „Erlauben“; spätere Starts fragen nicht mehr."
+                        "„Immer erlauben“ stellt dieses Recht in dieser Beziehung auf „Erlauben“. Die gespeicherten Zielbedingungen bleiben bestehen."
                     },
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
         },
         confirmButton = {
-            Row {
-                TextButton(onClick = { onDecide(DECISION_ONCE) }) { Text("Diesmal erlauben") }
-                TextButton(onClick = { onDecide(DECISION_ALWAYS) }) { Text("Immer erlauben") }
+            androidx.compose.foundation.layout.FlowRow {
+                TextButton(onClick = { onDecide(DECISION_ONCE) }, enabled = approval.canAllow) { Text("Diesmal erlauben") }
+                TextButton(onClick = { onDecide(DECISION_ALWAYS) }, enabled = approval.canAllow) { Text("Immer erlauben") }
             }
         },
         dismissButton = { TextButton(onClick = { onDecide(DECISION_DENY) }) { Text("Ablehnen") } },
@@ -280,6 +288,7 @@ internal fun AccessDialog(
     provider: AccessProviderInfo?,
     onConfirm: (AccessChange) -> Unit,
     onDismiss: () -> Unit,
+    action: ShareActionState? = null,
 ) {
     val name = target.name.ifBlank { "Gerät" }
     var draft by remember(target.targetKey) { mutableStateOf(initialDraft(target, current)) }
@@ -302,21 +311,22 @@ internal fun AccessDialog(
         }
     }
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (action?.saving != true) onDismiss() },
         title = { Text("Zugriff für „$name“") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("${execRelationText(target)} · Fingerabdruck ${target.fingerprint}", style = MaterialTheme.typography.bodySmall)
+                Text(execRelationText(target), style = MaterialTheme.typography.bodySmall)
+                action?.let { app.smartexplorer.android.ui.settings.SettingsStatusRow(saving = it.saving, error = it.error) }
                 rows.forEach { row ->
                     val locked = row.key == CAP_TERMINAL && draft.programs.isNotEmpty()
                     Text(row.label, style = MaterialTheme.typography.labelLarge)
                     if (row.description.isNotBlank()) Text(row.description, style = MaterialTheme.typography.bodySmall)
-                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         listOf(ACCESS_OFF, ACCESS_ASK, ACCESS_ALLOW).forEach { decision ->
                             FilterChip(
                                 selected = draft.decision(row.key) == decision,
                                 onClick = { draft = draft.with(row.key, decision) },
-                                enabled = !locked,
+                                enabled = !locked && action?.saving != true && row.key != "loginAccess",
                                 label = { Text(accessDecisionLabel(decision)) },
                             )
                         }
@@ -325,7 +335,7 @@ internal fun AccessDialog(
                 }
                 Text("Bei „Fragen“ bestätigst du jeden Start auf diesem Telefon.", style = MaterialTheme.typography.bodySmall)
                 Text("Zeitraum", style = MaterialTheme.typography.labelLarge)
-                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     endChoices.forEach { choice ->
                         FilterChip(
                             selected = draft.until == choice.key,
@@ -404,7 +414,7 @@ internal fun AccessDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = { onConfirm(accessChangeOf(draft, System.currentTimeMillis() / 1000, rows.map { it.key })) }) {
+            TextButton(onClick = { onConfirm(accessChangeOf(draft, System.currentTimeMillis() / 1000, rows.map { it.key })) }, enabled = action?.saving != true) {
                 Text(
                     when {
                         draft.grants -> "Als App-Konto erlauben"
@@ -414,6 +424,6 @@ internal fun AccessDialog(
                 )
             }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Abbrechen") } },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = action?.saving != true) { Text("Abbrechen") } },
     )
 }

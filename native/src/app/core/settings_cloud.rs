@@ -11,9 +11,24 @@ impl App {
                 .small()
                 .color(theme::muted(ui)),
         );
-        if crate::cloud::is_connected(p) {
+        let auth = crate::cloud::auth_status(p);
+        ui.label(RichText::new(&auth.message).small());
+        if let Some(error) = &auth.provider_error {
+            ui.label(RichText::new(format!("OAuth: {}{}", error.code,
+                error.http_status.map(|status| format!(" (HTTP {status})")).unwrap_or_default())).small());
+        }
+        if let Some(changed) = auth.client_changed_at {
+            ui.label(RichText::new(format!("Client-ID zuletzt geändert: {}", cloud_time(changed))).small().color(theme::muted(ui)));
+        }
+        if let Some(login) = auth.login_at {
+            ui.label(RichText::new(format!("Angemeldet seit: {}", cloud_time(login))).small().color(theme::muted(ui)));
+        }
+        if let Some(refresh) = auth.last_refresh_at {
+            ui.label(RichText::new(format!("Letzte erfolgreiche Erneuerung: {}", cloud_time(refresh))).small().color(theme::muted(ui)));
+        }
+        if auth.signed_in {
             ui.horizontal(|ui| {
-                ui.colored_label(theme::accent(ui), "● Verbunden");
+                ui.colored_label(theme::accent(ui), "● Anmeldung gespeichert");
                 if ui
                     .small_button("☁ Drive öffnen")
                     .on_hover_text("Google Drive durchsuchen")
@@ -36,27 +51,32 @@ impl App {
                 }
             });
         }
+        let mut form = crate::app::settings_form::Form::new(ui, "gdrive_credentials", &["Client-ID", "Client-Secret"]);
+        form.row_labelled(ui, "Client-ID", |ui, field_label| {
         ui.add(
             egui::TextEdit::singleline(&mut self.cloud_client_id_draft)
                 .hint_text("OAuth Client-ID (…apps.googleusercontent.com)")
                 .desired_width(f32::INFINITY),
-        )
+        ).labelled_by(field_label)
         .on_hover_text(
             "Aus DEINEM eigenen Google-Cloud-Projekt (Desktop-OAuth-Client). \
              Diese App ist kein Dienst — siehe Anleitung unten / docs/CLOUD_SETUP.md.",
         );
+        });
+        form.row_labelled(ui, "Client-Secret", |ui, field_label| {
         ui.add(
             egui::TextEdit::singleline(&mut self.cloud_secret_draft)
                 .hint_text("Client-Secret (von Google, falls vergeben)")
                 .password(true)
                 .desired_width(f32::INFINITY),
-        );
+        ).labelled_by(field_label);
+        });
         ui.horizontal(|ui| {
             if self.cloud_authing {
                 ui.spinner();
                 ui.label("Browser-Anmeldung läuft…");
             } else if ui
-                .small_button("Mit Google verbinden")
+                .small_button(if matches!(auth.state, crate::cloud::AuthState::ReauthorizeRequired | crate::cloud::AuthState::ClientChanged) { "Anmeldung erneuern" } else { "Mit Google verbinden" })
                 .on_hover_text("Speichert die Client-ID und öffnet den Browser zur Anmeldung")
                 .clicked()
             {
@@ -125,8 +145,9 @@ impl App {
                 ui.hyperlink_to("→ Google Cloud Console öffnen", "https://console.cloud.google.com");
                 ui.label(
                     RichText::new(
-                        "Hinweis: Im „Testing“-Modus laufen die Tokens nach ~7 Tagen ab — \
-                         dann einfach erneut verbinden. Details: docs/CLOUD_SETUP.md.",
+                        "Hinweis: Bei einem externen Google-Projekt im „Testing“-Status kann die Drive-Anmeldung nach sieben Tagen ablaufen. \
+                         Der Veröffentlichungsstatus deines Projekts ist nicht bestätigt; sieben Tage allein beweisen die Ursache nicht. \
+                         Prüfe den Status in der Google Cloud Console. Bei invalid_grant hier erneut anmelden. Details: docs/CLOUD_SETUP.md.",
                     )
                     .small()
                     .color(theme::muted(ui)),
@@ -135,4 +156,10 @@ impl App {
         ui.separator();
     }
 
+}
+
+fn cloud_time(at: i64) -> String {
+    chrono::DateTime::<chrono::Utc>::from_timestamp(at, 0)
+        .map(|at| at.with_timezone(&chrono::Local).format("%d.%m.%Y %H:%M").to_string())
+        .unwrap_or_else(|| "Zeitpunkt nicht darstellbar".into())
 }
