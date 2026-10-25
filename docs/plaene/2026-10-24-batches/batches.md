@@ -1,5 +1,10 @@
 # Detailplan für die nächsten Entwicklungsläufe
 
+**Aktualisierung 2026-10-25:** Die anschließende Nutzeranweisung hat die
+Umsetzung sämtlicher acht Pakete autorisiert. [Ausführung und Belege](umsetzung.md)
+halten diesen Auftrag fest. Die folgenden Aussagen zum Planungsstopp sind
+historischer Kontext; die fachlichen Verträge bleiben maßgeblich.
+
 Stand: 2026-10-25. Planungsbasis: Commit `aec62a40`; `native/Cargo.toml` und `release-native/update-feed/version.txt` nennen `0.5.184`. Diese Versionsangabe ist kein neuer Veröffentlichungsnachweis. Es wird keine nächste Versionsnummer reserviert.
 
 **Auftragsgrenze:** Der Nutzer hat am 2026-10-25 ausdrücklich festgelegt: „du stoppst wenn der plan steht, du setzt ihn noch nicht um“. Dieses Dokument plant die Änderungen und ihre spätere Abnahme. Verbindliche Detailverträge stehen in [vertraege.md](vertraege.md) und [agentenvertrag.md](agentenvertrag.md); Kritik und Befundbearbeitung in [kritik.md](kritik.md). Es startet keine Umsetzung, Suite, Messung an Nutzerdaten, Installation, Versionsänderung oder Veröffentlichung. Ein späterer Umsetzungsauftrag beginnt mit dem dann aktuellen Bestand.

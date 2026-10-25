@@ -1,5 +1,9 @@
 # P13/E9 und P29: Vertrag für verwaltete Agenteneinbindungen
 
+**Aktualisierung 2026-10-25:** Die Umsetzung wurde nach Planabschluss ausdrücklich
+autorisiert; siehe [Ausführung](umsetzung.md). Die ursprüngliche Begrenzung auf
+Planung unten beschreibt den damaligen Auftrag, keine aktuelle Ausführungssperre.
+
 Stand: 2026-10-25. **Planungsnachtrag, keine Umsetzung.** Bezug: [Gesamtplan](batches.md), [Recherche](recherche.md), [Kritik](kritik.md), Opus-Befunde B5, B18 nur Codex und B26. Der Quellstand bei der Lektüre ist `aec62a40`; die Planungsdateien werden parallel überarbeitet. Dieser Nachtrag ersetzt für diese drei Befunde die bislang zu offenen Aussagen des Gesamtplans. Er ist keine zweite Aufgabenliste und reserviert keine Version.
 
 ## A — Auftrag und Grenzen
