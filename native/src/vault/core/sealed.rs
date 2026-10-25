@@ -5,6 +5,8 @@
 //! - `se-vault-local-store-v1`: data of se about places inside the vault
 //!   (`<AD>/vaults/<site-id>.local`, K13/K14),
 //! - `se-vault-log-fields-v1`: path fields in protocols (K20/K21),
+//! - `se-vault-transfer-job-v1` and `se-vault-transfer-alias-v1`: durable
+//!   transfer records containing names, bound to their exact participating roots,
 //! - `se-vault-spool-wrap-v1`: the key that wraps the spool key of a vault
 //!   drive (AES-KW, V1); it seals nothing itself and never leaves the worker.
 //!
@@ -32,10 +34,12 @@ pub(crate) enum SealPurpose {
     LocalStore,
     LogFields,
     SpoolWrap,
+    TransferJob,
+    TransferAlias,
 }
 
 impl SealPurpose {
-    pub(crate) const ALL: [Self; 3] = [Self::LocalStore, Self::LogFields, Self::SpoolWrap];
+    pub(crate) const ALL: [Self; 5] = [Self::LocalStore, Self::LogFields, Self::SpoolWrap, Self::TransferJob, Self::TransferAlias];
 
     /// The HKDF `info` of the purpose (C3.6).
     pub(crate) fn info(self) -> &'static str {
@@ -43,6 +47,8 @@ impl SealPurpose {
             Self::LocalStore => "se-vault-local-store-v1",
             Self::LogFields => "se-vault-log-fields-v1",
             Self::SpoolWrap => "se-vault-spool-wrap-v1",
+            Self::TransferJob => "se-vault-transfer-job-v1",
+            Self::TransferAlias => "se-vault-transfer-alias-v1",
         }
     }
 
@@ -51,6 +57,8 @@ impl SealPurpose {
             Self::LocalStore => "local_store",
             Self::LogFields => "log_fields",
             Self::SpoolWrap => "spool_wrap",
+            Self::TransferJob => "transfer_job",
+            Self::TransferAlias => "transfer_alias",
         }
     }
 

@@ -24,6 +24,10 @@ use drive_print::{exit_for_status, print_snapshot, print_snapshot_text};
 use drive_print::{snapshot_line, status_column};
 #[path = "drive_set.rs"]
 mod drive_set;
+#[path = "drive_recovery.rs"]
+mod drive_recovery;
+#[path = "drive_capacity.rs"]
+mod drive_capacity;
 // DRV-M4: runtime, install answer, folder column and unmount under Linux.
 #[cfg(target_os = "linux")]
 #[path = "drive_output_linux.rs"]
@@ -39,6 +43,10 @@ pub(super) struct DriveArgs {
 
 #[derive(Subcommand)]
 enum DriveCommand {
+    #[command(about = "Save all available local recovery data and detach a stopped drive, including offline")]
+    SaveRemove(drive_recovery::SaveRemoveArgs),
+    #[command(about = "List, import or explicitly reactivate retained drive recovery")]
+    Recovery(drive_recovery::RecoveryArgs),
     #[command(about = "Check the drive runtime (Windows: Dokany, Linux: FUSE)")]
     Runtime(OutputArgs),
     #[command(
@@ -51,6 +59,8 @@ enum DriveCommand {
     Mount(MountArgs),
     #[command(about = "List drives managed by Smart Explorer")]
     List(OutputArgs),
+    #[command(about = "Show remote quota and local staging budget from the drive host")]
+    Capacity(SelectArgs),
     #[command(about = "Unmount a managed drive by mount id, drive letter or folder")]
     Unmount(UnmountArgs),
     #[command(about = "Retry a failed managed drive")]
@@ -90,10 +100,13 @@ struct SelectArgs {
 
 pub(super) fn run(args: DriveArgs) -> Result<i32, String> {
     match args.command {
+        DriveCommand::SaveRemove(args) => drive_recovery::save_remove(args),
+        DriveCommand::Recovery(args) => drive_recovery::run(args),
         DriveCommand::Runtime(args) => runtime(args),
         DriveCommand::InstallRuntime(args) => install_runtime(args),
         DriveCommand::Mount(args) => mount(args),
         DriveCommand::List(args) => list(args),
+        DriveCommand::Capacity(args) => drive_capacity::run(args),
         DriveCommand::Unmount(args) => unmount(args),
         DriveCommand::Retry(args) => retry(args),
         DriveCommand::Set(args) => drive_set::set(args),
@@ -178,6 +191,11 @@ fn mount(args: MountArgs) -> Result<i32, String> {
         Some((source, label)) => (source.clone(), label.clone()),
         None => source_from_spec(&args.target)?,
     };
+    if args.trust_remote_root {
+        if let MountSource::Vault { site_id } = &source {
+            crate::vault::set_root_trust(site_id, true)?;
+        }
+    }
     let drive = parse_drive_selection(&args.letter)?;
     let mode = if args.read_write {
         MountMode::ReadWrite
@@ -240,6 +258,7 @@ fn list(args: OutputArgs) -> Result<i32, String> {
     } else {
         for mount in &mounts {
             print_snapshot_text(mount);
+            drive_capacity::print(mount);
         }
     }
     Ok(0)
@@ -400,6 +419,7 @@ mod vault_status_tests {
         MountSnapshot {
             config,
             status,
+            capacity: None,
             recovery,
             recovery_required_compat: recovery.requires_retention(),
         }

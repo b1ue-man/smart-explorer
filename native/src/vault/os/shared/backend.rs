@@ -39,10 +39,18 @@ pub(crate) struct VaultBackend {
     pub(super) cache: Arc<DirCache>,
 }
 
+/// Only a backend's explicit opt-in may replace its local I/O. Unknown
+/// wrappers retain their permission, cancellation and provider behavior.
+pub(super) fn confine_storage(inner: BackendHandle, root: &str) -> BackendHandle {
+    let confined = inner.extensions().and_then(|extension| extension.confined_local_root(root).ok().flatten());
+    confined.unwrap_or(inner)
+}
+
 impl VaultBackend {
     /// The cleartext view of the vault whose root folder is `root` on
     /// `inner`, unlocked by `session` (contract of VLT-M2).
     pub(crate) fn new(inner: BackendHandle, root: &str, session: Arc<VaultSession>) -> Self {
+        let inner = confine_storage(inner, root);
         let cache = Arc::new(DirCache::default());
         let listener: Arc<dyn LockListener> = cache.clone();
         session.watch(Arc::downgrade(&listener));
@@ -273,12 +281,18 @@ impl Backend for VaultBackend {
         true
     }
 
-    fn root_confinement(&self, _root: &str) -> RootConfinement {
-        self.inner.root_confinement(&self.root)
+    fn root_confinement(&self, root: &str) -> RootConfinement {
+        // The retained authority is the complete vault storage root. A
+        // cleartext subdirectory has no independent held storage authority.
+        if crate::vault::core::path_map::components(root).is_ok_and(|parts| parts.is_empty()) {
+            self.inner.root_confinement(&self.root)
+        } else { RootConfinement::Unverified }
     }
 
-    fn mount_path_capabilities(&self, _root: &str) -> VfsResult<MountPathCapabilities> {
-        self.inner.mount_path_capabilities(&self.root)
+    fn mount_path_capabilities(&self, root: &str) -> VfsResult<MountPathCapabilities> {
+        let mut capabilities = self.inner.mount_path_capabilities(&self.root)?;
+        capabilities.root_confinement = self.root_confinement(root);
+        Ok(capabilities)
     }
 
     fn open_read_id(&self, path: &str, id: Option<&str>) -> VfsResult<Box<dyn Read + Send>> {

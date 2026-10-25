@@ -152,6 +152,8 @@ impl VaultBackend {
             let parts = Parts::of(path)?
                 .ok_or_else(|| invalid_input("Die Tresorwurzel ist keine Datei"))?;
             let at = self.at(&self.file_contents(&parts)?);
+            let checked_id = self.checked_storage_id(&at, id)?;
+            let id = checked_id.as_deref();
             let stored = if regular {
                 vfs::open_read_regular(&*self.inner, &at, id)?
             } else {
@@ -182,6 +184,8 @@ impl VaultBackend {
             let parts = Parts::of(path)?
                 .ok_or_else(|| invalid_input("Die Tresorwurzel ist keine Datei"))?;
             let at = self.at(&self.file_contents(&parts)?);
+            let checked_id = self.checked_storage_id(&at, id)?;
+            let id = checked_id.as_deref();
             let combo = self.session.config().combo;
             let index = offset / CHUNK_PAYLOAD as u64;
             let start = (combo.chunk_size() as u64)

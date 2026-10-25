@@ -53,6 +53,50 @@ pub fn retry_mount(id: MountId) -> Result<MountSnapshot, String> {
     mount_request(|token| IpcRequest::RetryMount { token, id })
 }
 
+pub fn save_remove_mount(id: MountId, destination: PathBuf) -> Result<crate::mount::InactiveMountRecovery, String> {
+    let req = super::ipc_protocol::DriveIpcRequest::RecoverySaveRemove { id, destination };
+    match recovery_request(req)? {
+        IpcResponse::MountRecovery { recovery } => Ok(recovery),
+        _ => Err("Unerwartete Recovery-IPC-Antwort".into()),
+    }
+}
+
+pub fn list_mount_recoveries() -> Result<Vec<crate::mount::InactiveMountRecovery>, String> {
+    match recovery_request(super::ipc_protocol::DriveIpcRequest::RecoveryList)? {
+        IpcResponse::MountRecoveries { recoveries } => Ok(recoveries),
+        _ => Err("Unerwartete Recoverybestands-IPC-Antwort".into()),
+    }
+}
+
+pub fn import_mount_recovery(package: PathBuf) -> Result<crate::mount::InactiveMountRecovery, String> {
+    match recovery_request(super::ipc_protocol::DriveIpcRequest::RecoveryImport { package })? {
+        IpcResponse::MountRecovery { recovery } => Ok(recovery),
+        _ => Err("Unerwartete Recoveryimport-IPC-Antwort".into()),
+    }
+}
+
+pub fn reactivate_mount_recovery(id: String) -> Result<MountSnapshot, String> {
+    match recovery_request(super::ipc_protocol::DriveIpcRequest::RecoveryReactivate { id })? {
+        IpcResponse::Mount { mount } => Ok(mount),
+        _ => Err("Unerwartete Recoveryreaktivierungs-IPC-Antwort".into()),
+    }
+}
+
+fn recovery_request(req: super::ipc_protocol::DriveIpcRequest) -> Result<IpcResponse, String> {
+    super::ipc_client::ensure_worker_ready()?;
+    let (mut stream, token) = authenticated_stream(CONTROL_TIMEOUT)?;
+    // A complete local snapshot/import can legitimately exceed the host's
+    // five-minute callback grace. EOF still reports a daemon exit; a fixed
+    // control timeout must not report failure while its ownership commit runs.
+    set_stream_timeout(&stream, None);
+    write_request(&mut stream, &IpcRequest::Drive { token, req })
+        .map_err(|error| format!("Recovery-IPC senden: {error}"))?;
+    match read_response(&mut stream).map_err(|error| format!("Recovery-IPC lesen: {error}"))? {
+        IpcResponse::Err { msg, .. } => Err(msg),
+        response => Ok(response),
+    }
+}
+
 pub fn list_mounts() -> Result<Vec<MountSnapshot>, String> {
     super::ipc_client::ensure_worker_ready()?;
     let (mut stream, token) = authenticated_stream(CONTROL_TIMEOUT)?;
@@ -92,6 +136,19 @@ pub struct MountHostSession {
 }
 
 impl MountHostSession {
+    pub(crate) fn report_capacity(&self, capacity: crate::mount::MountCapacityReport) -> Result<(), String> {
+        let mut stream = host_stream(self.ipc_addr, Duration::from_secs(2))?;
+        write_request(&mut stream, &IpcRequest::MountHostExt {
+            id: self.id.clone(), session_token: self.session_token.clone(),
+            req: super::ipc_protocol::MountHostRequest::Capacity { capacity },
+        }).map_err(|error| error.to_string())?;
+        match read_response(&mut stream).map_err(|error| error.to_string())? {
+            IpcResponse::Ok => Ok(()),
+            IpcResponse::Err { msg, .. } => Err(msg),
+            _ => Err("Unerwartete Kapazitätsantwort".into()),
+        }
+    }
+
     pub fn report_status(&self, status: MountStatus) -> Result<(), String> {
         self.report_status_with_recovery(status, None)
     }

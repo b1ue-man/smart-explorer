@@ -20,6 +20,8 @@ use crate::mount::{MountConfig, MountId};
 
 #[path = "mount_registry_ext.rs"]
 mod ext;
+#[path = "mount_inactive_recovery.rs"]
+pub(in crate::daemon) mod inactive;
 
 const REGISTRY_FILE: &str = "registry.json";
 const REGISTRY_VERSION: u32 = 1;
@@ -77,12 +79,15 @@ pub(crate) fn registered_for_completion() -> Vec<MountConfig> {
 }
 
 pub(super) fn load_in(directory: &Path) -> io::Result<Vec<MountConfig>> {
-    Ok(Stored::read(directory)?.configs())
+    inactive::effective(directory, Stored::read(directory)?.configs())
 }
 
 /// Stores `config` in the file of its kind and returns every drive.
 pub(super) fn upsert_in(directory: &Path, config: &MountConfig) -> io::Result<Vec<MountConfig>> {
     config.validate()?;
+    if inactive::list_in(directory)?.iter().any(|record| record.owns_mount_cache && record.config.id == config.id) {
+        return Err(invalid_data("Mount-ID besitzt inaktive Recovery; zuerst ausdrücklich reaktivieren"));
+    }
     let mut stored = Stored::read(directory)?;
     let first = config.source.stored_in_first_registry();
     let was_first = take(&mut stored.first, &config.id);
@@ -96,7 +101,7 @@ pub(super) fn upsert_in(directory: &Path, config: &MountConfig) -> io::Result<Ve
         stored.second.mounts.push(config.clone());
     }
     stored.write(directory, first || was_first, !first || was_second)?;
-    Ok(stored.configs())
+    load_in(directory)
 }
 
 /// Removes `id` from the file that holds it and returns every other drive.
@@ -107,7 +112,7 @@ pub(super) fn remove_in(directory: &Path, id: &MountId) -> io::Result<Vec<MountC
     if was_first || was_second || stored.misfiled {
         stored.write(directory, was_first, was_second)?;
     }
-    Ok(stored.configs())
+    load_in(directory)
 }
 
 impl Stored {
@@ -223,6 +228,8 @@ fn read_bounded(path: &Path) -> io::Result<Option<Vec<u8>>> {
 
 /// Replaces `file_name` atomically through a synced temporary file.
 fn write_file(directory: &Path, file_name: &str, body: &[u8]) -> io::Result<()> {
+    let preserved = inactive::preserve_field(directory, file_name, body)?;
+    let body = preserved.as_slice();
     if body.len() as u64 > MAX_REGISTRY_BYTES {
         return Err(invalid_data("mount registry exceeds its size limit"));
     }

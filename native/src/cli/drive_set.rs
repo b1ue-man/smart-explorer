@@ -114,6 +114,7 @@ mod tests {
         .unwrap()
         .with_auto_remount(auto_remount);
         MountSnapshot {
+            capacity: None,
             config,
             status: MountStatus::Mounted {
                 drive: DriveLetter::parse('M').unwrap(),

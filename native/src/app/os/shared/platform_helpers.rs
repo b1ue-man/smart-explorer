@@ -15,6 +15,15 @@ pub(in crate::app) fn drain_scan_channel(
     failed_paths: &mut Vec<(String, String)>,
     error_msg: &mut Option<String>,
 ) -> (bool, bool) {
+    drain_scan_channel_with_denied(rx, entries, progress, failed_paths, error_msg,
+        &mut crate::scanner::DeniedRoots::default())
+}
+
+pub(in crate::app) fn drain_scan_channel_with_denied(
+    rx: &Receiver<ScanMessage>, entries: &mut Vec<FileEntry>, progress: &mut ScanProgress,
+    failed_paths: &mut Vec<(String, String)>, error_msg: &mut Option<String>,
+    denied: &mut crate::scanner::DeniedRoots,
+) -> (bool, bool) {
     let mut new_entries: Vec<FileEntry> = Vec::new();
     let mut got_done = false;
     for _ in 0..64 {
@@ -29,6 +38,12 @@ pub(in crate::app) fn drain_scan_channel(
                 }
                 failed_paths.append(&mut paths);
             }
+            Ok(ScanMessage::DeniedRoots(roots)) => {
+                if let Some(warning) = roots.storage_warning() {
+                    *error_msg = Some(format!("Wiederleseindex bleibt im Speicher: {warning}"));
+                }
+                *denied = roots;
+            },
             Ok(ScanMessage::Done(p)) => {
                 *progress = p;
                 got_done = true;

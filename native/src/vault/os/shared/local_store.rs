@@ -48,6 +48,8 @@ fn wire(purpose: SealPurpose) -> Result<crate::daemon::SealPurposeWire, String> 
     match purpose {
         SealPurpose::LocalStore => Ok(crate::daemon::SealPurposeWire::LocalStore),
         SealPurpose::LogFields => Ok(crate::daemon::SealPurposeWire::LogFields),
+        SealPurpose::TransferJob => Ok(crate::daemon::SealPurposeWire::TransferJob),
+        SealPurpose::TransferAlias => Ok(crate::daemon::SealPurposeWire::TransferAlias),
         SealPurpose::SpoolWrap => Err("spool-wrap versiegelt keine Texte".into()),
     }
 }

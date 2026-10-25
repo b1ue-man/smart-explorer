@@ -19,6 +19,8 @@ object DocumentsCursors {
         Root.COLUMN_SUMMARY,
         Root.COLUMN_FLAGS,
         Root.COLUMN_ICON,
+        Root.COLUMN_CAPACITY_BYTES,
+        Root.COLUMN_AVAILABLE_BYTES,
     )
 
     val DEFAULT_DOCUMENT_PROJECTION = arrayOf(
@@ -53,6 +55,8 @@ object DocumentsCursors {
                 .add(Root.COLUMN_SUMMARY, SUMMARY)
                 .add(Root.COLUMN_FLAGS, rootFlags(root))
                 .add(Root.COLUMN_ICON, R.mipmap.ic_launcher)
+                .add(Root.COLUMN_CAPACITY_BYTES, root.totalBytes)
+                .add(Root.COLUMN_AVAILABLE_BYTES, root.availableBytes)
         }
         return cursor
     }

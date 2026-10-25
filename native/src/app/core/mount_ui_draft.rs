@@ -136,7 +136,8 @@ impl App {
         let mut cancel = false;
         let mut submit = false;
         let mut install_runtime = false;
-        egui::Window::new("Remote als Laufwerk")
+        super::dialog_geometry::window(ctx, "mount_ui_draft.0", "Remote als Laufwerk")
+            .id(egui::Id::new("Remote als Laufwerk"))
             .open(&mut open)
             .collapsible(false)
             .resizable(true)

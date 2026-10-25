@@ -302,6 +302,9 @@ impl Backend for LazyChildBackend {
 }
 
 impl BackendExtensions for LazyChildBackend {
+    fn capacity(&self, root: &str) -> VfsResult<crate::vfs::CapacitySnapshot> {
+        self.call(|inner| crate::vfs::capacity(&**inner, root))
+    }
     fn finish_stage(&self, stage: &str, finish: StageFinish) -> VfsResult<StageFinished> {
         self.call(|inner| crate::vfs::finish_stage(&**inner, stage, finish))
     }

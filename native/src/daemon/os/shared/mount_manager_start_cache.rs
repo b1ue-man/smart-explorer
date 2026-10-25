@@ -23,7 +23,11 @@ pub(super) fn audit_registered(configs: &[MountConfig]) -> Vec<MountRecovery> {
         };
         return configs
             .iter()
-            .map(|config| match audit(&cache_root, &config.id) {
+            .map(|config| match config.source {
+                // An offline registry load cannot verify today's account.
+                // Do not open/compact/clean this cache before its start gate.
+                crate::mount::MountSource::GoogleDrive { .. } => MountRecovery::Unknown,
+                _ => match audit(&cache_root, &config.id) {
                 Ok(pending) => recovery_of(pending),
                 Err(error) => {
                     super::super::state::log(&format!(
@@ -32,6 +36,7 @@ pub(super) fn audit_registered(configs: &[MountConfig]) -> Vec<MountRecovery> {
                     ));
                     MountRecovery::Unknown
                 }
+                },
             })
             .collect();
     }
@@ -44,6 +49,7 @@ pub(super) fn insert(
     key: &str,
     config: MountConfig,
     registry_recorded: bool,
+    startup_lease: Option<std::sync::Arc<dyn Send+Sync>>,
 ) -> Result<(), String> {
     let mut state = manager.state_guard()?;
     if state.contains_key(key) {
@@ -52,6 +58,7 @@ pub(super) fn insert(
     state.insert(
         key.to_string(),
         MountEntry {
+            capacity: None,
             config,
             status: MountStatus::Mounting,
             backend: None,
@@ -61,6 +68,7 @@ pub(super) fn insert(
             backend_token: None,
             control: None,
             child: None,
+            startup_lease:startup_lease.map(super::start_path::StartupLease::new),
             backend_stream_active: false,
             pending_host_failure: None,
             host_terminal_failure: false,
@@ -81,15 +89,26 @@ pub(super) fn prepare(
     manager: &MountManager,
     key: &str,
     id: &MountId,
-) -> Result<(PathBuf, usize), String> {
+) -> Result<(PathBuf, Option<usize>), String> {
     let cache_root =
         crate::mount::prepare_spool_root(&crate::support_dirs::app_data_dir().join("mount-cache"))
             .map_err(|error| format!("Laufwerk-Cache absichern: {error}"))?;
+    let config = manager.state_guard()?.get(key)
+        .ok_or_else(|| "Laufwerk-Start wurde abgebrochen".to_string())?.config.clone();
+    if matches!(config.source, crate::mount::MountSource::GoogleDrive { .. }) {
+        record(manager, key, MountRecovery::Unknown)?;
+        crate::mount::preflight_mount_recovery_identity(&cache_root, &config)
+            .map_err(|error| error.to_string())?;
+        return Ok((cache_root, None));
+    }
     let pending = match audit(&cache_root, id) {
         Ok(pending) => pending,
         Err(error) => {
             record(manager, key, MountRecovery::Unknown)?;
-            return Err(format!("Laufwerk-Recovery lokal pruefen: {error}"));
+            // A missing offline lease or an unreadable count grants no Clean
+            // state. The authorized host may still open/repair with its key.
+            super::super::state::log(&format!("mount {id} offline inventory unknown: {error}"));
+            None
         }
     };
     record(manager, key, recovery_of(pending))?;
@@ -97,11 +116,11 @@ pub(super) fn prepare(
 }
 
 #[cfg(any(windows, target_os = "linux"))]
-fn recovery_of(pending: usize) -> MountRecovery {
-    if pending == 0 {
-        MountRecovery::Clean
-    } else {
-        MountRecovery::Required
+fn recovery_of(pending: Option<usize>) -> MountRecovery {
+    match pending {
+        Some(0) => MountRecovery::Clean,
+        Some(_) => MountRecovery::Required,
+        None => MountRecovery::Unknown,
     }
 }
 
@@ -109,13 +128,13 @@ fn recovery_of(pending: usize) -> MountRecovery {
 /// cache lease of the platform (DRV-M2; Linux since DRV-M4; counted since
 /// DRV-M7).
 #[cfg(windows)]
-fn audit(cache_root: &Path, id: &MountId) -> std::io::Result<usize> {
-    crate::mount::os::windows::audit_pending(cache_root, id)
+fn audit(cache_root: &Path, id: &MountId) -> std::io::Result<Option<usize>> {
+    crate::mount::os::windows::audit_pending_state(cache_root, id)
 }
 
 #[cfg(target_os = "linux")]
-fn audit(cache_root: &Path, id: &MountId) -> std::io::Result<usize> {
-    crate::mount::os::linux_os::audit_pending(cache_root, id)
+fn audit(cache_root: &Path, id: &MountId) -> std::io::Result<Option<usize>> {
+    crate::mount::os::linux_os::audit_pending_state(cache_root, id)
 }
 
 #[cfg(any(windows, target_os = "linux"))]

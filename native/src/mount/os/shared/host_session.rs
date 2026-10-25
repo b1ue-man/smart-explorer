@@ -38,6 +38,8 @@ pub(crate) mod devices;
 mod host_storage;
 #[path = "host_session_reports.rs"]
 mod reports;
+#[path = "host_capacity.rs"]
+mod host_capacity;
 
 pub(crate) use host_storage::{LockAnswer, LockOrder, SpoolKeyAnswer};
 use reports::{
@@ -50,6 +52,7 @@ pub(crate) const CONTROL_POLL: Duration = Duration::from_millis(250);
 
 /// The daemon side of a drive host.
 pub(crate) trait HostControl {
+    fn report_capacity(&self, _capacity: crate::mount::MountCapacityReport) -> Result<(), String> { Ok(()) }
     fn report(&self, status: MountStatus, recovery: Option<MountRecovery>) -> Result<(), String>;
     /// `true` for an unmount request and for a lost daemon connection.
     fn wait_for_stop(&self, timeout: Duration) -> bool;
@@ -67,6 +70,9 @@ pub(crate) trait HostControl {
 }
 
 impl HostControl for MountHostSession {
+    fn report_capacity(&self, capacity: crate::mount::MountCapacityReport) -> Result<(), String> {
+        MountHostSession::report_capacity(self, capacity)
+    }
     fn report(&self, status: MountStatus, recovery: Option<MountRecovery>) -> Result<(), String> {
         self.report_status_with_recovery(status, recovery)
     }
@@ -237,7 +243,7 @@ fn run_leased(
         Err(detail) => return Ended::failed(detail),
     };
     let engine = match MountEngine::open_host_cache_with(runtime, backend, spool_root, storage) {
-        Ok(engine) => engine.with_cache_space_probe(space),
+        Ok(engine) => engine.with_cache_space_probe(Arc::clone(&space)),
         Err(_) => {
             return Ended::failed(report_failure_with_recovery(
                 control,
@@ -315,14 +321,23 @@ fn run_leased(
             HostExit::Stopped,
         );
     }
-    run_until_stopped(platform, control, &*engine, update_stop)
+    run_until_stopped_with_capacity(platform, control, &*engine, update_stop, Some(&*space))
 }
 
 fn run_until_stopped(
+    platform: &mut dyn HostPlatform, control: &dyn HostControl,
+    engine: &dyn MountFilesystem, update_stop: &UpdateStopCheck,
+) -> Ended {
+    // Device-tree roots have no single cache volume or additive remote quota.
+    run_until_stopped_with_capacity(platform, control, engine, update_stop, None)
+}
+
+fn run_until_stopped_with_capacity(
     platform: &mut dyn HostPlatform,
     control: &dyn HostControl,
     engine: &dyn MountFilesystem,
     update_stop: &UpdateStopCheck,
+    space: Option<&dyn crate::mount::CacheSpaceProbe>,
 ) -> Ended {
     let Ok(location) = platform.location() else {
         let detail = "the mounted drive lost its letter state";
@@ -340,9 +355,11 @@ fn run_until_stopped(
         let detail = "the mounted drive could not report its running state";
         return finish(platform, control, engine, Some(detail), HostExit::Stopped);
     }
+    let mut capacity_report = host_capacity::Reporter::default();
     let mut notification_error_reported = false;
     let mut update_checked = Instant::now();
     loop {
+        if let Some(space) = space { capacity_report.turn(control, engine, space); }
         if control.wait_for_stop(CONTROL_POLL) {
             return finish(platform, control, engine, None, HostExit::Stopped);
         }

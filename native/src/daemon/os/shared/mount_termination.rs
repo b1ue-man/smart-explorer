@@ -214,7 +214,7 @@ impl MountManager {
         &self,
         key: &str,
         cause: String,
-        pending: usize,
+        pending: Option<usize>,
     ) -> Result<MountSnapshot, String> {
         let mut state = self.state_guard()?;
         let entry = state
@@ -225,16 +225,17 @@ impl MountManager {
         entry.launch_token = None;
         entry.pending_host_failure = None;
         entry.host_terminal_failure = false;
-        if pending > 0 {
-            entry.recovery = MountRecovery::awaiting_unlock(pending);
-        }
+        entry.recovery = pending.map_or(MountRecovery::Unknown, MountRecovery::awaiting_unlock);
         let tail = if entry.registry_recorded {
             "; das Laufwerk wird nach dem Entsperren eingebunden"
         } else {
             ""
         };
+        let inventory = if pending.is_none() {
+            "; Anzahl offener Änderungen bis zum Entsperren unbekannt; Cache bleibt unverändert erhalten"
+        } else { "" };
         entry.status = MountStatus::Failed {
-            detail: format!("{cause}{tail}"),
+            detail: format!("{cause}{tail}{inventory}"),
         };
         Ok(snapshot(entry))
     }

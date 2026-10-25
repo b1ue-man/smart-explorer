@@ -44,6 +44,7 @@ impl VaultBackend {
     fn root_meta(&self) -> io::Result<VfsMeta> {
         let root = self.root_dir()?;
         let stored = self.inner.stat(&self.at(&root.content))?;
+        if !stored.is_dir || stored.is_symlink || stored.special { return Err(not_a_folder()); }
         Ok(VfsMeta {
             is_dir: true,
             mtime_ms: stored.mtime_ms,
@@ -103,6 +104,26 @@ impl VaultBackend {
         self.inner.item_id(&self.at(&stored))
     }
 
+    /// A strict logical reservation never uses a legacy probe/create default.
+    pub(super) fn make_dir_reserved(&self, path: &str) -> io::Result<()> {
+        self.session.check()?;
+        if !self.inner.staged_write_capabilities(&self.root).create
+            || !crate::vfs::directory_reservation_supported(self.inner.as_ref(), &self.root) {
+            return Err(io::Error::new(io::ErrorKind::Unsupported, "storage cannot reserve vault metadata exclusively"));
+        }
+        let parts = Parts::of(path)?.ok_or_else(already_exists)?;
+        let parent = self.dir_for(&parts.parent)?;
+        let node = self.canonical(&parent, parts.name)?;
+        match self.find_at(&parts) {
+            Ok(_) => return Err(already_exists()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {},
+            Err(error) => return Err(error),
+        }
+        let created = self.create_folder(&node, true);
+        self.cache.forget_aliases(&parts.parent_key());
+        created.map_err(|error| self.session.relock(error))
+    }
+
     /// `create_dir` (`exclusive = false`: an existing folder is success) and
     /// `create_dir_new` (`exclusive = true`: `AlreadyExists`).
     pub(super) fn make_dir(&self, path: &str, exclusive: bool) -> io::Result<()> {
@@ -140,7 +161,7 @@ impl VaultBackend {
             Err(error) => return Err(error),
         }
         let node = self.canonical(&parent, parts.name)?;
-        let created = self.create_folder(&node);
+        let created = self.create_folder(&node, false);
         self.cache.forget_aliases(&parent_key);
         match created {
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists && !exclusive => {
@@ -156,10 +177,11 @@ impl VaultBackend {
 
     /// Content directory and its `dirid.c9r` first, then the node (created
     /// exclusively: the no-replace gate), its `name.c9s` and `dir.c9r`.
-    fn create_folder(&self, node: &NodeRef) -> io::Result<()> {
-        let (id, content) = self.new_content_dir()?;
+    fn create_folder(&self, node: &NodeRef, strict: bool) -> io::Result<()> {
+        let (id, content) = self.new_content_dir(strict)?;
         let node_path = self.at(&node.node());
-        let created = self.inner.create_dir_new(&node_path).and_then(|()| {
+        let reserve = if strict { crate::vfs::create_dir_exclusive(&*self.inner, &node_path) } else { self.inner.create_dir_new(&node_path) };
+        let created = reserve.and_then(|()| {
             let typed = (|| -> io::Result<()> {
                 if node.shortened {
                     self.write_new_file(
@@ -185,7 +207,7 @@ impl VaultBackend {
 
     /// A new directory ID with its empty content directory and the
     /// encrypted backup of the ID (`dirid.c9r`).
-    fn new_content_dir(&self) -> io::Result<(String, String)> {
+    fn new_content_dir(&self, strict: bool) -> io::Result<(String, String)> {
         for _ in 0..DIR_ID_ATTEMPTS {
             let id = new_dir_id()?;
             let content = self.session.with_key(|key| content_dir(key, &id))?;
@@ -196,7 +218,8 @@ impl VaultBackend {
                 Err(error) if error.kind() != io::ErrorKind::AlreadyExists => return Err(error),
                 _ => {}
             }
-            match self.inner.create_dir_new(&self.at(&content)) {
+            let create = if strict { crate::vfs::create_dir_exclusive(&*self.inner, &self.at(&content)) } else { self.inner.create_dir_new(&self.at(&content)) };
+            match create {
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
                 Err(error) => return Err(error),
                 Ok(()) => {}

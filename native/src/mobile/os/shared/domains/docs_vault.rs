@@ -95,6 +95,11 @@ fn is_local(location: &str) -> bool {
 /// and the sealed storage of the spool key in `mount_dir`. A locked site is
 /// `vault_locked`; nothing is opened then.
 pub(super) fn source(site: &str, mount_dir: &Path) -> io::Result<Source> {
+    if !released(&RootId::Vault(site.to_string())) {
+        return Err(io::Error::new(io::ErrorKind::PermissionDenied, "Dieser Tresor ist nicht für Apps freigegeben"));
+    }
+    let (session, _) = crate::vault::register().session(site)
+        .ok_or_else(|| crate::vault::vault_locked(site))?;
     let bridge = crate::vault::vault_drive_bridge();
     let backend = bridge
         .open_backend(site)
@@ -102,10 +107,13 @@ pub(super) fn source(site: &str, mount_dir: &Path) -> io::Result<Source> {
             Some(_) => crate::vault::vault_locked(site),
             None => io::Error::other(error.to_string()),
         })?;
+    let (backend, access) = crate::vault::authorize_provider(backend)?;
+    access.check()?;
     let key = bridge.spool_key(site, mount_dir)?;
     let storage = crate::vault::sealed_mount_storage(&key)?;
     let mut source = docs_engines::source(backend, BackendRoot::parse("/")?, true);
     source.storage = Some(storage);
+    source.access = Some(Arc::new(super::docs_access::Access::new(access, session)));
     Ok(source)
 }
 
@@ -124,7 +132,8 @@ impl crate::vault::LockParticipant for Participant {
             let pending = slot
                 .fs
                 .prepare_lock()
-                .map_or(1, |readiness| readiness.pending);
+                .map(|readiness| readiness.pending)
+                .unwrap_or_else(|_| slot.pending_count().unwrap_or(1));
             if pending > 0 && !request.keep_unsaved && !request.reason.forced() {
                 return Err(format!("{pending} Änderungen aus anderen Apps"));
             }
@@ -203,7 +212,9 @@ pub(super) fn released(root: &RootId) -> bool {
             RootId::Devices => settings.devices,
             RootId::GDrive => settings.connections.iter().any(|id| id == GDRIVE),
             RootId::Conn(account) => settings.connections.contains(account),
-            RootId::Vault(site) => settings.vaults.contains(site) && is_unlocked(site),
+            RootId::Vault(site) => settings.vaults.contains(site) && is_unlocked(site)
+                && docs_engines::opened(&docs_engines::EngineKey::Root(root.clone()))
+                    .is_none_or(|slot| slot.check_access().is_ok()),
         }
 }
 

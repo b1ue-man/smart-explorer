@@ -99,7 +99,7 @@ fn gui_design_task_drive_recursive_scan_stat_read_and_trash_use_exact_ids() {
                 assert_eq!(progress.errors, 0);
                 break;
             }
-            ScanMessage::Progress(_) => {}
+            ScanMessage::Progress(_) | ScanMessage::DeniedRoots(_) => {}
         }
     }
     handle

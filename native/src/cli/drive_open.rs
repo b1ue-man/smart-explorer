@@ -105,6 +105,7 @@ mod tests {
         )
         .unwrap();
         MountSnapshot {
+            capacity: None,
             config,
             status,
             recovery: MountRecovery::Clean,

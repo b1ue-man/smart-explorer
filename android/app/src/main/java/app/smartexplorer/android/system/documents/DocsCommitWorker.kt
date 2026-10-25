@@ -46,7 +46,7 @@ class DocsCommitWorker(context: Context, params: WorkerParameters) : CoroutineWo
             Log.w(TAG, "docs.retryPending: ${e.kind}")
             return retryOrGiveUp()
         }
-        if (pending.pending == 0) {
+        if (pending.isClean) {
             Notifications.cancel(applicationContext, ID_FAILED)
             return Result.success()
         }

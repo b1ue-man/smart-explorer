@@ -11,6 +11,7 @@ pub(super) const CACHE_RESERVE_BYTES: u64 = 512 * 1024 * 1024;
 #[derive(Default)]
 pub(super) struct CacheSpace {
     probe: Option<Arc<dyn CacheSpaceProbe>>,
+    pub(super) capacity: Arc<super::capacity_refresh::CapacityCache>,
     admission: Mutex<()>,
     pending: AtomicU64,
 }
@@ -26,8 +27,26 @@ impl Drop for GrowthReservation {
 
 impl MountEngine {
     pub fn with_cache_space_probe(mut self, probe: Arc<dyn CacheSpaceProbe>) -> Self {
-        self.cache_space = Arc::new(CacheSpace { probe: Some(probe), ..CacheSpace::default() });
+        self.cache_space = Arc::new(CacheSpace { probe: Some(probe), capacity: Arc::default(), admission: Mutex::new(()), pending: AtomicU64::new(0) });
+        super::capacity_refresh::start(Arc::clone(&self.cache_space.capacity),
+            Arc::clone(&self.backend), self.projector.root().as_str().to_string());
         self
+    }
+
+    pub fn with_capacity_observer(self, observer: Arc<dyn Fn() + Send + Sync>) -> Self {
+        if let Ok(mut slot) = self.cache_space.capacity.observer.lock() { *slot = Some(observer); }
+        self
+    }
+
+    /// No backend or network I/O: suitable for native filesystem callbacks.
+    pub fn capacity_snapshot(&self) -> crate::vfs::CapacitySnapshot {
+        self.cache_space.capacity.value.lock().ok().and_then(|slot| slot.clone())
+            .unwrap_or_else(|| crate::vfs::CapacitySnapshot::unknown(self.backend.state_identity(), self.projector.root().as_str()))
+    }
+
+    pub fn cache_capacity_budget(&self, available_bytes: u64) -> u64 {
+        available_bytes.saturating_sub(CACHE_RESERVE_BYTES)
+            .saturating_sub(self.cache_space.pending.load(Ordering::Acquire))
     }
 
     pub(super) fn reserve_growth(&self, bytes: u64) -> io::Result<GrowthReservation> {
@@ -61,4 +80,8 @@ impl MountEngine {
         let _reservation = self.reserve_space(0)?;
         Ok(())
     }
+}
+
+impl Drop for CacheSpace {
+    fn drop(&mut self) { self.capacity.stop(); }
 }

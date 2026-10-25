@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 use std::io;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use sha2::{Digest, Sha256};
 
@@ -32,6 +32,8 @@ use crate::vfs::BackendHandle;
 pub(super) const OFFLINE_TEXT: &str = "Gerät nicht erreichbar";
 const CACHE_DIR: &str = "docs-cache";
 const ROOT_FILE_SUFFIX: &str = ".root";
+#[path = "docs_pending.rs"]
+mod pending_state;
 
 /// Which engine serves a document.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -84,7 +86,22 @@ impl EngineKey {
 pub(super) struct Slot {
     pub(super) fs: Arc<dyn MountFilesystem>,
     pub(super) writable: bool,
+    access: Option<Arc<super::docs_access::Access>>,
+    // Never exposed to document operations; only counts already-held state.
+    pending_engine: Arc<MountEngine>,
     _lease: CacheLease,
+}
+
+impl Slot {
+    pub(super) fn check_access(&self) -> io::Result<()> {
+        self.access.as_ref().map_or(Ok(()), |access| access.check())
+    }
+
+    pub(super) fn pending_count(&self) -> io::Result<usize> {
+        // No backend, journal reopen or second cache lease. Cleartext paths
+        // remain inside this count and never cross the provider boundary.
+        self.pending_engine.dirty_entries().map(|entries| entries.len())
+    }
 }
 
 /// What a source hands to `open`: backend, root, writability, storage.
@@ -93,11 +110,14 @@ pub(super) struct Source {
     pub(super) root: BackendRoot,
     pub(super) writable: bool,
     pub(super) storage: Option<crate::mount::MountStorage>,
+    pub(super) access: Option<Arc<super::docs_access::Access>>,
 }
 
 #[derive(Default)]
 struct Table {
     open: HashMap<EngineKey, Arc<Slot>>,
+    // Revoked descriptors can still retain this exact engine and its lease.
+    retired: HashMap<EngineKey, Weak<Slot>>,
     /// One opener per key at a time (a second lease would fail).
     opening: HashMap<EngineKey, Arc<Mutex<()>>>,
 }
@@ -108,8 +128,10 @@ fn table() -> &'static Mutex<Table> {
 }
 
 pub(super) fn cache_root() -> io::Result<PathBuf> {
-    crate::mount::prepare_spool_root(&app_data_resolved()?.join(CACHE_DIR))
+    crate::mount::prepare_spool_root(&cache_path()?)
 }
+
+fn cache_path() -> io::Result<PathBuf> { Ok(app_data_resolved()?.join(CACHE_DIR)) }
 
 /// The app's data folder with the folder the system handed over resolved.
 /// Android gives `filesDir` below `/data/user/<user>`, and for user 0 the
@@ -127,13 +149,15 @@ fn app_data_resolved() -> io::Result<PathBuf> {
 
 /// The open engine of `key`, opening it first (blocks on the network).
 pub(super) fn engine(key: &EngineKey) -> io::Result<Arc<Slot>> {
-    if let Some(slot) = lock(table()).open.get(key) {
-        return Ok(Arc::clone(slot));
+    if let Some(slot) = opened(key) {
+        slot.check_access()?;
+        return Ok(slot);
     }
     let gate = Arc::clone(lock(table()).opening.entry(key.clone()).or_default());
     let _serial = lock(&gate);
-    if let Some(slot) = lock(table()).open.get(key) {
-        return Ok(Arc::clone(slot));
+    if let Some(slot) = opened(key) {
+        slot.check_access()?;
+        return Ok(slot);
     }
     let slot = Arc::new(open(key)?);
     lock(table()).open.insert(key.clone(), Arc::clone(&slot));
@@ -155,9 +179,17 @@ pub(super) fn close_root(root: &RootId) -> Vec<Arc<Slot>> {
         .filter(|key| key.root() == *root)
         .cloned()
         .collect();
-    keys.iter()
-        .filter_map(|key| table.open.remove(key))
-        .collect()
+    let mut slots = Vec::new();
+    for key in keys {
+        if let Some(slot) = table.open.remove(&key) {
+            table.retired.insert(key, Arc::downgrade(&slot));
+            slots.push(slot);
+        }
+    }
+    for slot in &slots {
+        if let Some(access) = &slot.access { access.revoke(); }
+    }
+    slots
 }
 
 fn open(key: &EngineKey) -> io::Result<Slot> {
@@ -182,6 +214,8 @@ fn open(key: &EngineKey) -> io::Result<Slot> {
             ))
         }
     };
+    let access = source.access;
+    if let Some(access) = &access { access.check()?; }
     let mode = if source.writable {
         MountMode::ReadWrite
     } else {
@@ -199,18 +233,25 @@ fn open(key: &EngineKey) -> io::Result<Slot> {
         None => MountEngine::open_host_cache(config, source.backend, &cache)?,
     };
     let space = crate::mount::os::linux_os::cache_space::CacheDiskSpace::new(&cache)?;
-    let engine = engine.with_cache_space_probe(Arc::new(space));
+    let engine = engine.with_cache_space_probe(Arc::new(space))
+        .with_capacity_observer(Arc::new(super::docs::capacity_changed));
     if !rooted {
+        if let Some(access) = &access { access.check()?; }
         engine.prepare_host_remote()?;
     }
+    let pending_engine = Arc::new(engine);
+    let fs = super::docs_access::protect(pending_engine.clone(), access.clone());
     // Changes a crashed process left behind go out now; a failure keeps
     // them in the journal for `docs.retryPending`.
-    let _ = engine.retry_pending_changes();
+    let _ = fs.retry_pending_changes();
+    if let Some(access) = &access { access.check()?; }
     let marker = cache.join(format!("{}{ROOT_FILE_SUFFIX}", id.as_str()));
     crate::support_dirs::write_private_atomic(&marker, key.label().as_bytes())?;
     Ok(Slot {
-        fs: Arc::new(engine),
+        fs,
         writable: source.writable,
+        access,
+        pending_engine,
         _lease: lease,
     })
 }
@@ -225,6 +266,7 @@ pub(super) fn source(backend: BackendHandle, root: BackendRoot, allowed: bool) -
         root,
         writable: allowed && staged,
         storage: None,
+        access: None,
     }
 }
 
@@ -386,69 +428,9 @@ fn read_only() -> io::Error {
     )
 }
 
-/// Unpublished changes of every engine, opened or not (`docs.pending`).
-pub(super) fn pending() -> usize {
-    let open: Vec<(EngineKey, Arc<Slot>)> = lock(table())
-        .open
-        .iter()
-        .map(|(key, slot)| (key.clone(), Arc::clone(slot)))
-        .collect();
-    let mut total = 0;
-    for (_, slot) in &open {
-        total += slot.fs.dirty_entries().map_or(0, |entries| entries.len());
-    }
-    for (key, id) in recorded() {
-        if open.iter().any(|(known, _)| *known == key) {
-            continue;
-        }
-        if let Ok(cache) = cache_root() {
-            total += crate::mount::os::linux_os::audit_pending(&cache, &id).unwrap_or(0);
-        }
-    }
-    total
-}
+/// Unpublished changes, with explicit unknown state for unopened sealed caches.
+pub(super) fn pending() -> serde_json::Value { pending_state::pending() }
 
-/// Publishes what waits (`docs.retryPending`): open engines, and engines
-/// with a journal from an earlier process. A locked vault waits for its
-/// unlock; nothing of it is opened. Returns the keys that still failed.
 pub(super) fn retry_pending(released: &dyn Fn(&RootId) -> bool) -> Vec<String> {
-    let mut failed = Vec::new();
-    let cache = cache_root().ok();
-    for (key, id) in recorded() {
-        let waiting = cache.as_ref().map_or(0, |cache| {
-            crate::mount::os::linux_os::audit_pending(cache, &id).unwrap_or(0)
-        });
-        let open = opened(&key);
-        if open.is_none() && (waiting == 0 || !released(&key.root())) {
-            continue;
-        }
-        let result = match open {
-            Some(slot) => slot.fs.retry_pending_changes(),
-            None => engine(&key).and_then(|slot| slot.fs.retry_pending_changes()),
-        };
-        if result.is_err() {
-            failed.push(key.label());
-        }
-    }
-    failed
-}
-
-/// Engines this installation ever opened, by their marker files.
-fn recorded() -> Vec<(EngineKey, MountId)> {
-    let Ok(cache) = cache_root() else {
-        return Vec::new();
-    };
-    let Ok(entries) = std::fs::read_dir(&cache) else {
-        return Vec::new();
-    };
-    entries
-        .flatten()
-        .filter_map(|entry| {
-            let name = entry.file_name().into_string().ok()?;
-            let id = MountId::parse(name.strip_suffix(ROOT_FILE_SUFFIX)?).ok()?;
-            let label = crate::support_dirs::read_private_text(&entry.path(), 4096).ok()?;
-            let key = EngineKey::from_label(label.trim())?;
-            (key.mount_id().ok()? == id).then_some((key, id))
-        })
-        .collect()
+    pending_state::retry_pending(released)
 }

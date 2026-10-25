@@ -45,6 +45,7 @@ pub(crate) use self::core::locator::{
     is_site_id, is_vault_locator, vault_location, vault_store_location, VaultLocator,
     VaultStoreLocator, VAULT_SCHEME, VAULT_STORE_SCHEME,
 };
+pub(crate) use self::core::open_policy::{MountPolicy, OpenPolicy, RootBinding, stored_policy, ROOT_TRUST_REQUIRED, MOUNT_RUNTIME_MISSING};
 pub(crate) use self::core::lock_policy::{
     LockPlatform, LockReason, SignalSupport, SystemSignal, BACKGROUND_CHOICES, DEFAULT_IDLE_MINUTES,
 };
@@ -56,6 +57,7 @@ pub(crate) use self::core::{
     locked_site, vault_locked, LockListener, VaultLocked, VaultSession, VAULT_LOCKED_CODE,
 };
 pub(crate) use self::os::{
+    mount_policy, confirm_root_trust, set_root_trust, set_cleartext_copy_policy, mount_access, authorize_provider, note_mount_binding, mount_binding_matches, forget_mount_binding, recovery_identity, MountAccess,
     account, add_site, apply_vault_preview_action, available_memory, canonical_vault_location,
     change_password, change_site_password, check_new_password, check_site, check_site_in,
     compare_job, compare_job_in, compare_snapshot, compare_stale, compare_text_job, create_site,
@@ -81,3 +83,5 @@ pub(crate) use self::os::{
     WorkerOpen, ACCOUNT_PREFIX, CREATE_RECOVERY_HINT, EVENT_LOG, LOCK_PLATFORM, MERGE_MAX_BYTES,
     MIN_PASSWORD_CHARS, RECOVERY_KEY_NOTE, SCREEN_LOCK_NOTE, SPOOL_KEY_FILE, VAULTS_DIR,
 };
+
+pub(crate) use self::os::{TransferBlobPurpose, TransferBlobContext, transfer_blob_context, check_transfer_blob_context_live, check_transfer_blob_context, seal_transfer_blob, open_transfer_blob};

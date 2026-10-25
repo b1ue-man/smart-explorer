@@ -37,6 +37,10 @@ mod core;
 mod duplicates;
 #[path = "core/extensions.rs"]
 mod extensions;
+#[path = "core/capacity.rs"]
+mod capacity;
+#[path = "core/folder_reservation.rs"]
+mod folder_reservation;
 #[path = "core/file_list.rs"]
 mod file_list;
 #[path = "core/folder_create_journal.rs"]

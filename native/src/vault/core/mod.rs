@@ -24,6 +24,7 @@ pub(crate) mod klartext_policy;
 pub(crate) mod listing;
 pub(crate) mod locator;
 pub(crate) mod lock_policy;
+pub(crate) mod open_policy;
 pub(crate) mod path_map;
 pub(crate) mod registry_types;
 pub(crate) mod sealed;

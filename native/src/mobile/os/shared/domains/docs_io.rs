@@ -67,6 +67,16 @@ fn get(handle: i64) -> Result<Arc<Open>, i32> {
     if open.revoked.load(Ordering::Acquire) {
         return Err(libc::EACCES);
     }
+    let access = open.slot.check_access().and_then(|_| {
+        if super::docs_vault::released(&open.root) { Ok(()) }
+        else { Err(io::Error::new(io::ErrorKind::PermissionDenied, "Dokument nicht freigegeben")) }
+    });
+    if let Err(error) = access {
+        if !open.revoked.swap(true, Ordering::AcqRel) {
+            let _ = open.slot.fs.close(open.handle);
+        }
+        return Err(errno_for(&error));
+    }
     Ok(open)
 }
 
@@ -210,6 +220,11 @@ pub fn doc_release(handle: i64) -> i32 {
 fn finish(open: &Open) -> bool {
     if open.revoked.load(Ordering::Acquire) {
         return false;
+    }
+    if open.slot.check_access().is_err() || !super::docs_vault::released(&open.root) {
+        open.revoked.store(true, Ordering::Release);
+        let _ = open.slot.fs.close(open.handle);
+        return open.writable;
     }
     let failed = open.writable && open.slot.fs.flush(open.handle).is_err();
     let _ = open.slot.fs.close(open.handle);

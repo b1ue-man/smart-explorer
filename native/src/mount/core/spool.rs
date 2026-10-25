@@ -7,11 +7,14 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use crate::local_access::{DirectoryHandle, EntryKind};
 
 const ALLOCATION_ATTEMPTS: usize = 128;
 
 #[path = "spool_recovery.rs"]
 mod recovery;
+#[path = "spool_audit.rs"]
+mod audit;
 
 pub(super) struct AllocatedSpool {
     pub name: String,
@@ -269,19 +272,68 @@ pub(super) fn audit_recovery(
     base: &Path,
     mount_id: &MountId,
 ) -> io::Result<super::recovery_state::MountRecovery> {
-    if audit_pending(base, mount_id)? == 0 {
-        Ok(super::recovery_state::MountRecovery::Clean)
-    } else {
-        Ok(super::recovery_state::MountRecovery::Required)
-    }
+    Ok(match audit_pending_state(base, mount_id)? {
+        Some(0) => super::recovery_state::MountRecovery::Clean,
+        Some(_) => super::recovery_state::MountRecovery::Required,
+        None => super::recovery_state::MountRecovery::Unknown,
+    })
 }
 
-/// Journal records (changes, deletes, namespace intents) a drive still
-/// owns. Needs no key: a vault drive's journal replays with its path fields
-/// still sealed, which only names records (DRV-M7, `RequiresUnlock`).
+/// Compatibility for callers that need an exact count. An unknown count is
+/// an error, never a clean cache. OS callers hold the exclusive existing lease.
 pub(super) fn audit_pending(base: &Path, mount_id: &MountId) -> io::Result<usize> {
-    let (_spool, recovered) = WholeFileSpool::open(base, mount_id)?;
-    Ok(recovered.entries.len() + recovered.deletes.len() + recovered.namespace_conflicts.len())
+    audit_pending_state(base, mount_id)?.ok_or_else(|| io::Error::new(
+        io::ErrorKind::WouldBlock,
+        "mount_cache_inventory_unknown: Offlinezustand ist ohne Schlüssel oder Journalreparatur nicht zählbar; Cache bleibt erhalten"))
+}
+
+/// Strictly read-only inventory: no creation, rotation, truncation, orphan
+/// cleanup or PlainPathSealer over ciphertext. None preserves unknown state.
+pub(super) fn audit_pending_state(base: &Path, mount_id: &MountId) -> io::Result<Option<usize>> {
+    use std::{ffi::OsStr, io::{BufReader, Read}};
+    let base = match DirectoryHandle::open_root(base) {
+        Ok(base) => base,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Some(0)),
+        Err(error) => return Err(error),
+    };
+    let root = match base.open_child(OsStr::new(mount_id.as_str())) {
+        Ok(root) => root,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Some(0)),
+        Err(error) => return Err(error),
+    };
+    let mut journals = HashSet::new();
+    for child in root.read_directory()? {
+        let child = child?;
+        match child.name.to_str() {
+            Some("spool-key.wrapped") => return Ok(None),
+            Some(name @ ("journal.jsonl" | "journal.jsonl.compact-old" | "journal.jsonl.compact-new")) => {
+                if child.is_link_like || !matches!(child.kind, EntryKind::File) {
+                    return Err(io::Error::new(io::ErrorKind::PermissionDenied,
+                        "Offlinejournal ist kein regulärer Eintrag; Cache bleibt unverändert"));
+                }
+                journals.insert(name.to_string());
+            }
+            _ => {},
+        }
+    }
+    let selected = ["journal.jsonl", "journal.jsonl.compact-old", "journal.jsonl.compact-new"]
+        .into_iter().find(|name| journals.contains(*name));
+    let Some(selected) = selected else {
+        match root.open_child(OsStr::new("files")) {
+            Ok(files) if files.read_directory()?.next().is_some() => return Err(io::Error::new(
+                io::ErrorKind::InvalidData, "Recoveryjournal fehlt bei vorhandenen Cachedateien; alle Bytes bleiben erhalten")),
+            Ok(_) => {},
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {},
+            Err(error) => return Err(error),
+        }
+        return Ok(Some(0));
+    };
+    let file = root.open_regular_child(OsStr::new(selected))?;
+    if file.metadata()?.len() > audit::MAX_AUDIT_BYTES {
+        return Err(io::Error::new(io::ErrorKind::InvalidData,
+            "Offlinejournal überschreitet 64 MiB; Originalbytes bleiben erhalten"));
+    }
+    audit::pending(BufReader::new(file.take(audit::MAX_AUDIT_BYTES + 1)))
 }
 
 impl Drop for WholeFileSpool {

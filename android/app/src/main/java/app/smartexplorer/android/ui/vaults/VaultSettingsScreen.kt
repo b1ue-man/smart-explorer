@@ -92,6 +92,8 @@ fun VaultSettingsScreen(vm: VaultViewModel, siteId: String, onBack: () -> Unit, 
             Info("${placeText(site)}: ${site.location}")
             if (site.format != null) Info("Format ${site.format}, Verschlüsselung ${site.cipher ?: "–"}")
 
+            VaultOpenPolicy(site.site, onChanged = { vm.reload() })
+
             SectionHeader(VaultTexts.SECTION_LOCK)
             ToggleSetting(VaultTexts.LOCK_IDLE, site.autoLockIdleMin != null, onChange = { on ->
                 save { VaultApi.setSettings(site.site, setIdle = true, autoLockIdleMin = if (on) 30 else null) }

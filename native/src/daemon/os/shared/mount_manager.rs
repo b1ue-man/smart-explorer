@@ -19,6 +19,8 @@ const RESTART_DETAIL: &str =
 
 #[path = "mount_manager_state.rs"]
 mod entry_state;
+#[path = "mount_capacity.rs"]
+mod capacity;
 #[path = "mount_manager_host.rs"]
 mod host;
 // DRV-M7: the lock participant of vault drives and its channel.
@@ -35,6 +37,8 @@ mod start_path;
 pub(in crate::daemon) mod termination;
 #[path = "mount_manager_capabilities.rs"]
 mod write_capabilities;
+#[path = "mount_recovery_transaction.rs"]
+mod recovery_transaction;
 
 use entry_state::{
     clear_backend_runtime, finish_clean, finish_exit, random_token, removable, snapshot,
@@ -54,6 +58,7 @@ pub(super) struct MountManager {
 struct MountEntry {
     config: MountConfig,
     status: MountStatus,
+    capacity: Option<crate::mount::MountCapacityReport>,
     backend: Option<BackendHandle>,
     capabilities: Option<super::ipc_protocol::MountBackendCapabilities>,
     launch_token: Option<String>,
@@ -61,6 +66,7 @@ struct MountEntry {
     backend_token: Option<String>,
     control: Option<SyncSender<()>>,
     child: Option<super::mount_host_process::MountHostProcess>,
+    startup_lease: Option<start_path::StartupLease>,
     backend_stream_active: bool,
     // Daemon-side failures stay pending until process finalization. A public
     // terminal detail while a child exists is therefore host-reported.
@@ -121,22 +127,6 @@ impl MountManager {
             retention: Arc::new(Mutex::new(restore::Retention::default())),
             vault: Arc::new(termination::VaultDrives::default()),
         }
-    }
-
-    pub(super) fn start(
-        &self,
-        config: MountConfig,
-        host: &ShareHost,
-    ) -> Result<MountSnapshot, String> {
-        config
-            .validate()
-            .map_err(|error| format!("Ungueltige Laufwerk-Konfiguration: {error}"))?;
-        let _lifecycle = self.lifecycle_guard()?;
-        // Windows and Linux record the drive in the registry; a registry
-        // that failed to load is never written over.
-        #[cfg(any(windows, target_os = "linux"))]
-        self.ensure_registry_ready()?;
-        self.start_locked(config, host, false)
     }
 
     pub(super) fn list(&self) -> Result<Vec<MountSnapshot>, String> {
@@ -320,34 +310,6 @@ impl MountManager {
         Ok(snapshot(entry))
     }
 
-    pub(super) fn retry(&self, id: &MountId, host: &ShareHost) -> Result<MountSnapshot, String> {
-        let _lifecycle = self.lifecycle_guard()?;
-        let config = {
-            let state = self.state_guard()?;
-            let entry = state
-                .get(id.as_str())
-                .ok_or_else(|| "Das Laufwerk wird nicht verwaltet".to_string())?;
-            entry.config.clone()
-        };
-        let _ = self.stop_locked(id)?;
-        let registry_recorded = {
-            let mut state = self.state_guard()?;
-            let entry = state
-                .get(id.as_str())
-                .ok_or_else(|| "Das Laufwerk wird nicht verwaltet".to_string())?;
-            if entry.child.is_some() || entry.backend_stream_active {
-                return Err(
-                    "Die vorherige Laufwerk-Generation beendet noch einen Remote-Aufruf; Retry ist erst danach sicher"
-                        .into(),
-                );
-            }
-            let registry_recorded = entry.registry_recorded;
-            state.remove(id.as_str());
-            registry_recorded
-        };
-        self.start_locked(config, host, registry_recorded)
-    }
-
     pub(super) fn tick(&self) {
         // Serialize registry cleanup with the Start/Stop/Retry lifecycle.
         let Ok(_lifecycle) = self.lifecycle.try_lock() else {
@@ -449,6 +411,7 @@ fn registered_entry(config: MountConfig, recovery: MountRecovery, detail: String
     MountEntry {
         config,
         status: MountStatus::Failed { detail },
+        capacity: None,
         backend: None,
         capabilities: None,
         launch_token: None,
@@ -456,6 +419,7 @@ fn registered_entry(config: MountConfig, recovery: MountRecovery, detail: String
         backend_token: None,
         control: None,
         child: None,
+        startup_lease: None,
         backend_stream_active: false,
         pending_host_failure: None,
         host_terminal_failure: false,

@@ -44,6 +44,39 @@ data class VaultSite(
 }
 
 @Serializable
+data class VaultRootBinding(
+    val site: String,
+    val vault: String,
+    val location: String,
+    val backend: String,
+    val namespace: String,
+    val account: String,
+    val root: String,
+    val `object`: String? = null,
+)
+
+@Serializable
+data class VaultMountPolicy(
+    val binding: VaultRootBinding,
+    val enforced: Boolean,
+    val trusted: Boolean,
+    val cleartext_copy: Boolean,
+    val read_only: Boolean,
+)
+
+@Serializable
+data class VaultOpeningPolicy(
+    val site: String,
+    val storedRootTrust: Boolean = false,
+    val storedRootBinding: VaultRootBinding? = null,
+    val current: VaultMountPolicy? = null,
+    val resolutionError: String? = null,
+    val providerEnabled: Boolean = false,
+    val providerReleased: Boolean = false,
+    val unlocked: Boolean = false,
+)
+
+@Serializable
 data class VaultGroup(val vaultId: String? = null, val sites: List<VaultSite> = emptyList())
 
 @Serializable
@@ -140,6 +173,27 @@ data class VaultTaskFailure(val code: String = "internal", val message: String =
 private data class VaultTaskRef(val taskId: String)
 
 object VaultApi {
+    suspend fun openPolicy(site: String): VaultOpeningPolicy = Core.request("vault.openPolicy", buildJsonObject { put("site", site) })
+
+    suspend fun confirmRootTrust(site: String, binding: VaultRootBinding): VaultOpeningPolicy = Core.request(
+        "vault.confirmRootTrust", buildJsonObject {
+            put("site", site)
+            put("binding", buildJsonObject {
+                put("site", binding.site); put("vault", binding.vault)
+                put("location", binding.location); put("backend", binding.backend)
+                put("namespace", binding.namespace); put("account", binding.account)
+                put("root", binding.root)
+                put("object", binding.`object`?.let { JsonPrimitive(it) } ?: JsonNull)
+            })
+        },
+    )
+
+    suspend fun revokeRootTrust(site: String): VaultOpeningPolicy = Core.request("vault.revokeRootTrust", buildJsonObject { put("site", site) })
+
+    suspend fun providerRelease(site: String, enabled: Boolean): VaultOpeningPolicy = Core.request(
+        "vault.providerRelease", buildJsonObject { put("site", site); put("enabled", enabled) },
+    )
+
     suspend fun list(): VaultList = Core.request("vault.list")
 
     suspend fun show(site: String): VaultSite = Core.request("vault.show", buildJsonObject { put("site", site) })

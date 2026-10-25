@@ -25,6 +25,7 @@ pub(super) fn mount_status_alert(
     }
     let label = &mount.config.label;
     match &mount.status {
+        crate::mount::MountStatus::Failed { detail } if waits_for_recovery(detail) => None,
         // DRV-M7: a vault drive that waits for its vault's unlock is no
         // failure; the drive list says so calmly.
         crate::mount::MountStatus::Failed { detail } if waits_for_vault(detail) => None,
@@ -67,6 +68,10 @@ pub(super) fn waits_for_vault(detail: &str) -> bool {
     detail
         .strip_prefix(crate::vault::VAULT_LOCKED_CODE)
         .is_some_and(|rest| rest.starts_with(": "))
+}
+
+pub(super) fn waits_for_recovery(detail: &str) -> bool {
+    detail == "Laufwerk nach Daemon-Neustart zur Wiederherstellung bereit; bitte erneut versuchen"
 }
 
 pub(super) fn mount_list_alert(
@@ -125,6 +130,9 @@ pub(super) fn status_label(status: &crate::mount::MountStatus) -> String {
         }
         crate::mount::MountStatus::Conflict { path, detail, .. } => {
             format!("Pruefung offen bei {path}: {detail}")
+        }
+        crate::mount::MountStatus::Failed { detail } if waits_for_recovery(detail) => {
+            "Recovery verfügbar – erneut versuchen oder sichern und entfernen".into()
         }
         crate::mount::MountStatus::Failed { detail } if waits_for_vault(detail) => {
             "Tresor gesperrt – wird nach dem Entsperren eingebunden".into()

@@ -63,6 +63,16 @@ pub struct LockReadiness {
 }
 
 pub trait MountFilesystem: Send + Sync {
+    /// Cached provider metadata only: implementations must not query the network here.
+    fn capacity_snapshot(&self) -> crate::vfs::CapacitySnapshot {
+        let facts = self.volume_facts();
+        let mut value = crate::vfs::CapacitySnapshot::unknown(format!("mount:{}", facts.id.as_str()), facts.root.as_str());
+        value.read_only = facts.read_only;
+        value
+    }
+    fn cache_capacity_budget(&self, available_bytes: u64) -> u64 {
+        available_bytes.saturating_sub(super::cache_space::CACHE_RESERVE_BYTES)
+    }
     fn volume_facts(&self) -> VolumeFacts;
     /// The backend path of a callback path (same rules as every operation).
     fn project(&self, callback_path: &str) -> io::Result<ProjectedPath>;

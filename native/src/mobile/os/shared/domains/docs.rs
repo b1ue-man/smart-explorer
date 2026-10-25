@@ -43,7 +43,7 @@ pub(super) fn handle(rt: &Runtime, method: &str, args: &Value) -> Option<Result<
         "docs.delete" => doc_arg(args).and_then(|doc| delete(&doc)),
         "docs.settings.get" => Ok(docs_vault::settings_json()),
         "docs.settings.set" => docs_vault::set_settings(rt, args),
-        "docs.pending" => Ok(json!({ "pending": docs_engines::pending() })),
+        "docs.pending" => Ok(docs_engines::pending()),
         "docs.retryPending" => Ok(retry_pending()),
         _ => return None,
     })
@@ -68,6 +68,8 @@ fn emit(roots: bool, documents: Vec<String>, commit_failed: bool) {
         }));
     }
 }
+
+pub(super) fn capacity_changed() { emit(true, Vec::new(), false); }
 
 /// A root came or went (vault unlocked or locked, settings changed).
 fn root_changed(root: &RootId) {
@@ -133,7 +135,14 @@ fn root_json(root: &RootId, title: &str, create: bool, local_only: bool) -> Valu
         RootId::GDrive => GDRIVE,
         RootId::Vault(_) => "vault",
     };
+    let capacity = docs_engines::opened(&EngineKey::Root(root.clone()))
+        .map(|slot| slot.fs.capacity_snapshot());
+    let bounded = capacity.as_ref().filter(|value| matches!(value.state,
+        crate::vfs::CapacityState::ProviderKnown | crate::vfs::CapacityState::AccountQuota));
+    let android_bytes = |value: Option<u64>| value.and_then(|value| i64::try_from(value).ok());
     json!({
+        "totalBytes": android_bytes(bounded.and_then(|value| value.total_bytes)),
+        "availableBytes": android_bytes(bounded.and_then(|value| value.available_bytes)),
         "rootId": root.to_string(),
         "documentId": root.to_string(),
         "title": title,
@@ -475,5 +484,7 @@ fn delete(doc: &DocId) -> Result<Value, ApiError> {
 fn retry_pending() -> Value {
     super::docs_io::wait_for_releases(RELEASE_WAIT);
     let failed = docs_engines::retry_pending(&released);
-    json!({ "pending": docs_engines::pending(), "failed": failed })
+    let mut state = docs_engines::pending();
+    state["failed"] = json!(failed);
+    state
 }

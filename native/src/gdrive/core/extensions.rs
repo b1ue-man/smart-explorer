@@ -9,6 +9,23 @@ use std::io::{self, Read, Write};
 use std::time::Duration;
 
 impl BackendExtensions for GDriveBackend {
+    fn directory_reservation_supported(&self, _root: &str) -> bool {
+        // Drive object IDs do not provide a server-wide name reservation.
+        false
+    }
+
+    fn create_dir_exclusive(&self, path: &str) -> VfsResult<()> {
+        super::folder_reservation::create(self, path)
+    }
+
+    fn directory_identity(&self, path: &str) -> VfsResult<Option<String>> {
+        super::folder_reservation::identity(self, path)
+    }
+
+    fn capacity(&self, root: &str) -> VfsResult<crate::vfs::CapacitySnapshot> {
+        super::capacity::query(self, root)
+    }
+
     fn previous_state_identities(&self) -> VfsResult<Vec<String>> {
         // Old norm() trimmed the outer title. Such a root was ambiguous and
         // cannot prove that its former baseline belongs to the literal root.

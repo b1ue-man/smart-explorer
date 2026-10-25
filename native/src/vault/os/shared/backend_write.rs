@@ -258,11 +258,11 @@ impl VaultBackend {
                         kind: NodeKind::File { .. },
                     }),
                     Promote::ToId(id),
-                ) => self.inner.promote_staged_to_id(
-                    &from,
-                    &self.at(&node.contents()),
-                    id.as_deref(),
-                ),
+                ) => {
+                    let target = self.at(&node.contents());
+                    let id = self.checked_storage_id(&target, id.as_deref())?;
+                    self.inner.promote_staged_to_id(&from, &target, id.as_deref())
+                },
                 (Some(_), _) => Err(invalid_input(
                     "Ein Ordner oder eine Verknüpfung wird nicht durch eine Datei ersetzt",
                 )),
@@ -359,7 +359,9 @@ impl VaultBackend {
             let found = self.find_at(&parts)?;
             let removed = match found.kind {
                 NodeKind::File { .. } if !found.node.shortened => {
-                    self.inner.remove_file_id(&self.at(&found.node.node()), id)
+                    let target = self.at(&found.node.node());
+                    let id = self.checked_storage_id(&target, id)?;
+                    self.inner.remove_file_id(&target, id.as_deref())
                 }
                 NodeKind::File { .. } => self.remove_node_folder(&found.node, CONTENTS_FILE),
                 NodeKind::Symlink { .. } => self.remove_node_folder(&found.node, SYMLINK_FILE),

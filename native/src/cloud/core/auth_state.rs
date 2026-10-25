@@ -58,12 +58,14 @@ impl AuthError {
         let code = match code {
             "invalid_grant" | "invalid_client" | "unauthorized_client" |
             "access_denied" | "invalid_request" | "invalid_scope" |
-            "temporarily_unavailable" | "server_error" | "admin_policy_enforced" => code,
+            "temporarily_unavailable" | "server_error" | "admin_policy_enforced" |
+            "rateLimitExceeded" | "userRateLimitExceeded" | "sharingRateLimitExceeded" | "quotaExceeded" => code,
             _ => "provider_error",
         };
         let state = if code == "invalid_grant" {
             AuthState::ReauthorizeRequired
-        } else if status >= 500 || status == 429 || matches!(code, "temporarily_unavailable" | "server_error") {
+        } else if status >= 500 || status == 429 || matches!(code, "temporarily_unavailable" | "server_error")
+            || (status == 403 && matches!(code, "rateLimitExceeded" | "userRateLimitExceeded" | "sharingRateLimitExceeded" | "quotaExceeded")) {
             AuthState::NetworkError
         } else {
             AuthState::ProviderError

@@ -22,15 +22,15 @@ const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
 ///
 /// The zero Windows share mode prevents a second process from opening, replacing,
 /// renaming, or deleting the lease object until this value is dropped.
-pub(super) struct CacheLease {
+pub(crate) struct CacheLease {
     _lock_file: File,
-    _files_directory: File,
+    _files_directory: Option<File>,
     _mount_directory: File,
     _cache_directory: File,
 }
 
 impl CacheLease {
-    pub(super) fn acquire(cache_root: &Path, mount_id: &MountId) -> io::Result<Self> {
+    pub(crate) fn acquire(cache_root: &Path, mount_id: &MountId) -> io::Result<Self> {
         let cache_directory = open_plain_directory(cache_root)?;
         let mount_path = cache_root.join(mount_id.as_str());
         let mount_directory = prepare_plain_directory(&mount_path)?;
@@ -49,10 +49,29 @@ impl CacheLease {
         validate_lock_handle(&lock_file)?;
         Ok(Self {
             _lock_file: lock_file,
-            _files_directory: files_directory,
+            _files_directory: Some(files_directory),
             _mount_directory: mount_directory,
             _cache_directory: cache_directory,
         })
+    }
+
+    /// Same zero-share exclusion, without creating or changing any cache file.
+    fn acquire_existing(cache_root: &Path, mount_id: &MountId) -> io::Result<Self> {
+        let cache_directory = open_plain_directory(cache_root)?;
+        let mount_path = cache_root.join(mount_id.as_str());
+        let mount_directory = open_plain_directory(&mount_path)?;
+        let files_directory = match open_plain_directory(&mount_path.join("files")) {
+            Ok(directory) => Some(directory),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error),
+        };
+        let lock_path = cache_root.join(format!(".{}.host.lock", mount_id.as_str()));
+        validate_existing_target(&lock_path)?;
+        let lock_file = OpenOptions::new().read(true).share_mode(0)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT).open(lock_path)?;
+        validate_lock_handle(&lock_file)?;
+        Ok(Self { _lock_file: lock_file, _files_directory: files_directory,
+            _mount_directory: mount_directory, _cache_directory: cache_directory })
     }
 }
 
@@ -61,26 +80,30 @@ pub(crate) fn audit_recovery(
     mount_id: &MountId,
 ) -> io::Result<crate::mount::MountRecovery> {
     match fs::symlink_metadata(cache_root.join(mount_id.as_str())) {
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return Ok(crate::mount::MountRecovery::Clean)
-        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(crate::mount::MountRecovery::Clean),
         Err(error) => return Err(error),
-        Ok(_) => {}
+        Ok(_) => {},
     }
-    let _lease = CacheLease::acquire(cache_root, mount_id)?;
+    let _lease = CacheLease::acquire_existing(cache_root, mount_id)?;
     crate::mount::spool::audit_recovery(cache_root, mount_id)
 }
 
 /// Journal records a drive whose host is not running still owns, read
 /// under the lease (DRV-M7: the count of `RequiresUnlock`).
 pub(crate) fn audit_pending(cache_root: &Path, mount_id: &MountId) -> io::Result<usize> {
+    audit_pending_state(cache_root, mount_id)?.ok_or_else(|| io::Error::new(
+        io::ErrorKind::WouldBlock,
+        "mount_cache_inventory_unknown: Versiegelter oder unvollständiger Cache bleibt bis zum autorisierten Öffnen unbekannt"))
+}
+
+pub(crate) fn audit_pending_state(cache_root: &Path, mount_id: &MountId) -> io::Result<Option<usize>> {
     match fs::symlink_metadata(cache_root.join(mount_id.as_str())) {
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(0),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Some(0)),
         Err(error) => return Err(error),
         Ok(_) => {}
     }
-    let _lease = CacheLease::acquire(cache_root, mount_id)?;
-    crate::mount::spool::audit_pending(cache_root, mount_id)
+    let _lease = CacheLease::acquire_existing(cache_root, mount_id)?;
+    crate::mount::spool::audit_pending_state(cache_root, mount_id)
 }
 
 pub(super) fn prepare_plain_directory(path: &Path) -> io::Result<File> {
