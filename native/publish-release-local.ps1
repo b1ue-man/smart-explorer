@@ -273,10 +273,10 @@ function Assert-WindowsManifest(
         $manifestSourceCommit.ToLowerInvariant() -ne $expectedSourceCommit) {
         throw "Windows build manifest source commit '$($entries["source_commit"])' does not match '$expectedSourceCommit'."
     }
-    if ($entries.Count -ne 5) {
-        throw "Windows build manifest must contain exactly version, source_commit, and three payload hashes."
+    if ($entries.Count -ne 6) {
+        throw "Windows build manifest must contain exactly version, source_commit, and four payload hashes."
     }
-    foreach ($name in @("smart_explorer.exe", "smart_explorer_updater.exe", "se.exe")) {
+    foreach ($name in @("smart_explorer.exe", "smart_explorer_updater.exe", "se.exe", "se-mcp-launcher.exe")) {
         Assert-FeedHash $FeedDirectory $name
         $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $FeedDirectory $name)).Hash.ToLowerInvariant()
         $manifestHash = $entries[$name].ToLowerInvariant()
@@ -361,6 +361,7 @@ function Publish-CompleteRelease(
         [pscustomobject]@{ Source = Join-Path $StageRelease "Smart Explorer.exe"; Destination = Join-Path $releaseRoot "Smart Explorer.exe" },
         [pscustomobject]@{ Source = Join-Path $StageRelease "Smart Explorer Updater.exe"; Destination = Join-Path $releaseRoot "Smart Explorer Updater.exe" },
         [pscustomobject]@{ Source = Join-Path $StageRelease "se.exe"; Destination = Join-Path $releaseRoot "se.exe" },
+        [pscustomobject]@{ Source = Join-Path $StageRelease "se-mcp-launcher.exe"; Destination = Join-Path $releaseRoot "se-mcp-launcher.exe" },
         [pscustomobject]@{ Source = Join-Path $StageRelease "Smart Explorer Setup $ExpectedVersion.exe"; Destination = Join-Path $releaseRoot "Smart Explorer Setup $ExpectedVersion.exe" },
         [pscustomobject]@{ Source = Join-Path $StageRelease "smart_explorer_command.dll"; Destination = Join-Path $releaseRoot "smart_explorer_command.dll" },
         [pscustomobject]@{ Source = Join-Path $StageRelease "share-server\se-share-server.exe"; Destination = Join-Path $releaseRoot "share-server\se-share-server.exe" },
@@ -396,7 +397,7 @@ function Publish-CompleteRelease(
 
         Copy-Item -LiteralPath $StageFeed -Destination $feedCandidate -Recurse
         Assert-WindowsManifest $feedCandidate $ExpectedVersion $ExpectedSourceCommit
-        foreach ($name in @("smart_explorer", "smart_explorer_updater", "se", $androidApkName)) {
+        foreach ($name in @("smart_explorer", "smart_explorer_updater", "se", "se-mcp-launcher", $androidApkName)) {
             Assert-FeedHash $feedCandidate $name
         }
         if ($feedHadDestination) {
@@ -628,12 +629,13 @@ try {
     $portableApp = Join-Path $stageRelease "Smart Explorer.exe"
     $portableUpdater = Join-Path $stageRelease "Smart Explorer Updater.exe"
     $portableCli = Join-Path $stageRelease "se.exe"
+    $portableLauncher = Join-Path $stageRelease "se-mcp-launcher.exe"
     $windowsShare = Join-Path $stageRelease "share-server\se-share-server.exe"
     $linuxShare = Join-Path $stageRelease "share-server\se-share-server-linux"
     $commandDll = Join-Path $stageRelease "smart_explorer_command.dll"
     $linuxInstaller = Join-Path $repoRoot "install-linux.sh"
 
-    foreach ($path in @($installer, $portableApp, $portableUpdater, $portableCli, $windowsShare, $commandDll)) {
+    foreach ($path in @($installer, $portableApp, $portableUpdater, $portableCli, $portableLauncher, $windowsShare, $commandDll)) {
         Assert-NonEmptyFile $path
     }
     Assert-ContextDll $commandDll $peInspector
@@ -641,12 +643,13 @@ try {
     Assert-SameSha256 $portableApp (Join-Path $stageFeed "smart_explorer.exe")
     Assert-SameSha256 $portableUpdater (Join-Path $stageFeed "smart_explorer_updater.exe")
     Assert-SameSha256 $portableCli (Join-Path $stageFeed "se.exe")
+    Assert-SameSha256 $portableLauncher (Join-Path $stageFeed "se-mcp-launcher.exe")
     if (Test-Path -LiteralPath (Join-Path $stageFeed "version.txt")) {
         throw "The isolated feed was versioned before the complete release commit."
     }
 
     if ($SkipLinuxFeed) {
-        foreach ($linuxName in @("smart_explorer", "smart_explorer_updater", "se")) {
+        foreach ($linuxName in @("smart_explorer", "smart_explorer_updater", "se", "se-mcp-launcher")) {
             if (Test-Path -LiteralPath (Join-Path $stageFeed $linuxName)) {
                 throw "Windows-only stage unexpectedly contains Linux payload: $linuxName"
             }
@@ -670,10 +673,10 @@ try {
     Assert-NonEmptyFile $linuxInstaller
     Assert-NonEmptyFile $linuxShare
     Assert-WindowsManifest $stageFeed $version $buildSourceCommit
-    foreach ($name in @("smart_explorer", "smart_explorer_updater", "se")) {
+    foreach ($name in @("smart_explorer", "smart_explorer_updater", "se", "se-mcp-launcher")) {
         Assert-FeedHash $stageFeed $name
     }
-    foreach ($path in @($installer, $portableApp, $portableUpdater, $portableCli, $windowsShare, $linuxShare, $commandDll)) {
+    foreach ($path in @($installer, $portableApp, $portableUpdater, $portableCli, $portableLauncher, $windowsShare, $linuxShare, $commandDll)) {
         Assert-NonEmptyFile $path
     }
     if (Test-Path -LiteralPath (Join-Path $stageFeed "version.txt")) {
@@ -681,7 +684,7 @@ try {
     }
 
     Invoke-Checked -ErrorMessage "Staged Linux/static release verification failed." -Command {
-        & wsl.exe bash -lc "cd '$stageReleaseWsl/update-feed' && sha256sum -c smart_explorer.exe.sha256 && sha256sum -c smart_explorer_updater.exe.sha256 && sha256sum -c se.exe.sha256 && sha256sum -c smart_explorer.sha256 && sha256sum -c smart_explorer_updater.sha256 && sha256sum -c se.sha256 && test -x '$repoRootWsl/install-linux.sh' && file smart_explorer | grep -Fq 'dynamically linked' && file '$stageReleaseWsl/share-server/se-share-server-linux' | grep -Eq 'statically linked|static-pie linked'"
+        & wsl.exe bash -lc "cd '$stageReleaseWsl/update-feed' && sha256sum -c smart_explorer.exe.sha256 && sha256sum -c smart_explorer_updater.exe.sha256 && sha256sum -c se.exe.sha256 && sha256sum -c se-mcp-launcher.exe.sha256 && sha256sum -c smart_explorer.sha256 && sha256sum -c smart_explorer_updater.sha256 && sha256sum -c se.sha256 && sha256sum -c se-mcp-launcher.sha256 && file se-mcp-launcher | grep -Eq 'statically linked|static-pie linked' && test -x '$repoRootWsl/install-linux.sh' && file smart_explorer | grep -Fq 'dynamically linked' && file '$stageReleaseWsl/share-server/se-share-server-linux' | grep -Eq 'statically linked|static-pie linked'"
     }
     Add-CompleteReleaseAndroidApkToFeed $androidApk $stageFeed
 
@@ -898,6 +901,7 @@ function Test-ReleaseMutablePath([string]$Path) {
         $normalized -eq "release-native/Smart Explorer.exe" -or
         $normalized -eq "release-native/Smart Explorer Updater.exe" -or
         $normalized -eq "release-native/se.exe" -or
+        $normalized -eq "release-native/se-mcp-launcher.exe" -or
         $normalized -eq "release-native/smart_explorer_command.dll" -or
         $normalized.StartsWith("release-native/Smart Explorer Setup ")
 }

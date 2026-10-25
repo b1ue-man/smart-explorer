@@ -1,6 +1,9 @@
 # Smart Explorer für KI-Agenten (`se mcp`, `se plugin`)
 
-Stand: 2026-10-14. Plan und Entscheidungen:
+Quellstand: 2026-10-25; die neue Generationsverwaltung wartet noch auf die
+gemeinsame Remote-Abnahme und den terminalen Release. Aktueller Vertrag:
+[`P13/P29`](plaene/2026-10-24-batches/agentenvertrag.md).
+Historische Planung und Entscheidungen:
 [`docs/plaene/2026-10-12-ki-agenten-plugin/plan.md`](plaene/2026-10-12-ki-agenten-plugin/plan.md),
 Vorrang vor den Datei-Werkzeugen des Hosts sowie dauerhafte Shell-Sitzungen und Anhängen
 (Abschnitt R4):
@@ -38,24 +41,31 @@ und damit keinen MCP-Server.
 
 - **Claude Code:** `se` schreibt einen lokalen Plugin-Marketplace nach
   `<App-Daten>/smart_explorer/ai-plugins/claude/` (Plugin `smart-explorer` mit `.mcp.json` →
-  absoluter Pfad dieses `se` + `mcp`, Skill `smart-explorer`) und ruft
+  absoluter Pfad des geprüften Installationsstarters + `mcp`, Skill `smart-explorer`) und ruft
   `claude plugin marketplace add <Ordner> --scope user` sowie
   `claude plugin install smart-explorer@smart-explorer --scope user -y`. Claude Code lädt Plugins
   lokaler Marketplaces bei jedem Sitzungsstart direkt aus dem Ordner. Die Tools heißen
   `mcp__plugin_smart-explorer_se__<tool>`; dauerhaft erlauben lassen sie sich mit der
   Berechtigungsregel `mcp__plugin_smart-explorer_se__*` in den eigenen Claude-Code-Einstellungen
   (Plugins dürfen keine Regeln mitbringen).
-- **Codex:** `codex mcp add smart-explorer -- <se> mcp` (absoluter Pfad) und der Skill unter
-  `~/.agents/skills/smart-explorer/SKILL.md`. Unter Linux gibt die Installation die zur
-  Installationszeit gesetzten `XDG_DATA_HOME`, `XDG_RUNTIME_DIR` und `DBUS_SESSION_BUS_ADDRESS`
-  per `--env` mit, weil Codex sie aus der Umgebung von MCP-Servern herausfiltert (Ort der
-  App-Daten, Start des Hintergrunddienstes). Codex fragt nach Freigabe für jedes Tool, das nicht
-  als nur lesend markiert ist.
+- **Codex:** formatwahrende Änderung von `mcp_servers.smart-explorer` in
+  `$CODEX_HOME/config.toml`, ohne `CODEX_HOME` in `~/.codex/config.toml`, sowie der
+  Skill unter `~/.agents/skills/smart-explorer/SKILL.md`. Der Eintrag startet den
+  geprüften Installationsstarter mit `mcp`. Eigentumsfingerprints schützen die
+  verwalteten Felder `command` und `args`; Kommentare, unbekannte Schlüssel,
+  Toolfilter und vorhandene `env`-Werte bleiben erhalten. Ein neu angelegter
+  Eintrag übernimmt die gesetzten Werte `XDG_DATA_HOME`, `XDG_RUNTIME_DIR` und
+  `DBUS_SESSION_BUS_ADDRESS`. Ein beobachteter Bearbeitungskonflikt erscheint
+  als `integration_conflict`; er löst kein Entfernen und erneutes Anlegen aus.
 - **Andere Clients** (Cursor, VS Code, Gemini CLI/Antigravity, OpenCode, Claude Desktop):
   `se plugin config generic|vscode|opencode` ausgeben und in deren MCP-Konfiguration eintragen.
 
-Ein Update ersetzt `se` an derselben Stelle; `se mcp` frischt beim nächsten Start die erzeugten
-Plugin- und Skill-Dateien auf (Versions-/Pfadmarker `.se-generated.json`).
+Ein normales Runtimeupdate ändert den registrierten Starterpfad nicht.
+Neue Serverprozesse wählen die bestätigte Generation der Installation.
+Die Basisskill-Datei bleibt versionsunabhängig; der laufende MCP-Server liefert
+seine maßgeblichen Anweisungen und seinen Werkzeugkatalog. Die Migration eines
+alten Eintrags setzt einen belegten verwalteten Zustand voraus. Manuell
+bearbeitete Einträge werden bei einem Konflikt erhalten.
 
 ## Vorrang vor den Datei-Werkzeugen des Hosts
 
@@ -81,9 +91,10 @@ lokal wie entfernt:
 - Inhaltssuche in Dateien (Grep) und lokale Builds bleiben beim Host, weil `search` nur Namen
   sucht.
 
-Bestehende Installationen übernehmen das ohne erneutes `se plugin install`. Nach dem Update
-schreibt `se mcp` beim nächsten Start Skill und Plugin-Dateien neu, und die Anweisungen und
-Tool-Metadaten kommen direkt vom Server.
+Nach der Migration zum Installationsstarter wählen neue Serverprozesse die neue
+Runtime ohne erneute Registrierung. Eine laufende kompatible Verbindung behält
+ihren bisherigen Katalog. Ein Dateirefresh allein lädt keine neuen Tools in
+einen bereits initialisierten Hostprozess.
 
 ## Tools
 
@@ -307,11 +318,34 @@ Befehlssitzungen.
 
 ## Updates
 
-Der Desktop-Updater ersetzt `se` erst, wenn jeder `se`-Prozess beendet ist, und wartet darauf
-höchstens 30 s. Schreibt er dazu `daemon.stop` = `stop`, beendet sich `se mcp` geordnet (Jobs
-abbrechen, höchstens 10 s warten). Danach im Agenten den MCP-Server neu verbinden oder eine neue
-Sitzung starten. Ein beim Start bereits vorhandener alter Stoppwert wird ignoriert; das
-Terminal-Update `se update` (Versionsübergabe) beendet den Server nicht.
+Windows-Installer, Linux-Installer und Desktop-Updater verwenden denselben
+hashgebundenen Helfereinstieg. Unter dem Installationsstamm liegen
+`mcp/launchers/<SHA-256>/`, `mcp/runtimes/<SHA-256>/` und der bestätigte Zeiger
+`mcp/current.v1.json`. Der Starter prüft Manifest, Pfad, Dateischutz und Hash
+vor dem Start; eine laufende Generationsdatei wird nicht überschrieben.
+
+Eine aktive Operation oder dauerhafte Shell verschiebt den Updatebeginn.
+Eine kompatible ruhende Sitzung kann ihre Generation behalten, wenn deren
+konkreter Runtimehash, IPC-Vertrag und Speichervertrag ausdrücklich zulässig
+sind. Während des Austauschs bleiben daemonabhängige Aufrufe gesperrt und
+handeln danach die bestätigte Daemongeneration neu aus. Eine unterbrochene
+Mutation wird nicht automatisch wiederholt. Unversionierte oder inkompatible
+Prozesse benutzen den bisherigen geordneten Stopweg. Ein verwaister
+vorbereiteter Austausch bleibt als `update_recovery_required` gesperrt, bis
+der reguläre Updateweg ihn bestätigt zurücknimmt oder abschließt.
+
+`se plugin status --json`, das MCP-Tool `status` und die Desktopseite zeigen
+die installierte Generation, `next_runtime_sha256`, die aktiven Server des
+aktuellen Benutzerprofils und Profilkonflikte. `active_runtime_sha256` ist
+außerhalb eines tatsächlichen Runtimeprozesses `null`.
+`reconnect_required` bezeichnet eine nicht mehr zugelassene Generation;
+`new_process_for_new_capabilities` zeigt neue Fähigkeiten bei weiterhin
+kompatibler alter Sitzung. `busy` allein verlangt kein Neuverbinden.
+
+Neue Fähigkeiten benötigen einen tatsächlichen MCP-Prozessstart über den Host.
+Smart Explorer erzwingt keinen Austausch innerhalb einer laufenden
+stdio-Verbindung und startet bei einer administrativen Installation keinen
+Benutzer-MCP-Server mit Administratorrechten.
 
 ## Grenzen
 

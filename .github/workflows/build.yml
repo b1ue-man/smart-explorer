@@ -342,6 +342,7 @@ jobs:
           -AndroidApkDirectory "$env:RUNNER_TEMP/android-release-apk"
 
   windows-native-tests:
+    timeout-minutes: 360
     if: >-
       github.event_name == 'pull_request' ||
       (github.event_name == 'push' && github.event.deleted != true &&
@@ -403,6 +404,7 @@ jobs:
           retention-days: 1
 
   windows-gnu:
+    timeout-minutes: 360
     needs: windows-native-tests
     if: needs.windows-native-tests.result == 'success'
     runs-on: ubuntu-latest
@@ -509,6 +511,7 @@ jobs:
         run: native/test-share-lifecycle-e2e.sh
 
   release-candidate:
+    timeout-minutes: 120
     if: >-
       (github.event_name == 'push' && github.event.deleted != true &&
         startsWith(github.ref, 'refs/tags/v')) ||
@@ -571,15 +574,19 @@ jobs:
           test -s ../release-native/update-feed/smart_explorer.exe
           test -s ../release-native/update-feed/smart_explorer_updater.exe
           test -s ../release-native/update-feed/se.exe
+          test -s ../release-native/update-feed/se-mcp-launcher.exe
           test -s ../release-native/update-feed/smart_explorer.exe.sha256
           test -s ../release-native/update-feed/smart_explorer_updater.exe.sha256
           test -s ../release-native/update-feed/se.exe.sha256
+          test -s ../release-native/update-feed/se-mcp-launcher.exe.sha256
           test -s ../release-native/update-feed/smart_explorer
           test -s ../release-native/update-feed/smart_explorer_updater
           test -s ../release-native/update-feed/se
+          test -s ../release-native/update-feed/se-mcp-launcher
           test -s ../release-native/update-feed/smart_explorer.sha256
           test -s ../release-native/update-feed/smart_explorer_updater.sha256
           test -s ../release-native/update-feed/se.sha256
+          test -s ../release-native/update-feed/se-mcp-launcher.sha256
           test -s ../release-native/update-feed/smart-explorer-android.apk
           test -s ../release-native/update-feed/smart-explorer-android.apk.sha256
           test -s ../release-native/update-feed/windows-build.manifest
@@ -587,6 +594,7 @@ jobs:
           test -s "../release-native/Smart Explorer.exe"
           test -s "../release-native/Smart Explorer Updater.exe"
           test -s ../release-native/se.exe
+          test -s ../release-native/se-mcp-launcher.exe
           test -s ../release-native/share-server/se-share-server.exe
           test -s ../release-native/share-server/se-share-server-linux
           test -s ../release-native/smart_explorer_command.dll
@@ -599,14 +607,16 @@ jobs:
           cmp ../release-native/update-feed/smart_explorer.exe "../release-native/Smart Explorer.exe"
           cmp ../release-native/update-feed/smart_explorer_updater.exe "../release-native/Smart Explorer Updater.exe"
           cmp ../release-native/update-feed/se.exe ../release-native/se.exe
+          cmp ../release-native/update-feed/se-mcp-launcher.exe ../release-native/se-mcp-launcher.exe
           installer="../release-native/Smart Explorer Setup $ver.exe"
           installer_root="$(mktemp -d)"
           trap 'rm -rf "$installer_root"' EXIT
-          7z e -y -o"$installer_root" "$installer" \
-            "Smart Explorer.exe" "Smart Explorer Updater.exe" se.exe >/dev/null
+          7z e -y -r -o"$installer_root" "$installer" \
+            "Smart Explorer.exe" "Smart Explorer Updater.exe" se.exe se-mcp-launcher.exe >/dev/null
           cmp "$installer_root/Smart Explorer.exe" ../release-native/update-feed/smart_explorer.exe
           cmp "$installer_root/Smart Explorer Updater.exe" ../release-native/update-feed/smart_explorer_updater.exe
           cmp "$installer_root/se.exe" ../release-native/update-feed/se.exe
+          cmp "$installer_root/se-mcp-launcher.exe" ../release-native/update-feed/se-mcp-launcher.exe
           rm -rf "$installer_root"
           trap - EXIT
           (
@@ -614,13 +624,15 @@ jobs:
             sha256sum -c smart_explorer.exe.sha256
             sha256sum -c smart_explorer_updater.exe.sha256
             sha256sum -c se.exe.sha256
+            sha256sum -c se-mcp-launcher.exe.sha256
             sha256sum -c smart_explorer.sha256
             sha256sum -c smart_explorer_updater.sha256
             sha256sum -c se.sha256
+            sha256sum -c se-mcp-launcher.sha256
             sha256sum -c smart-explorer-android.apk.sha256
             for payload in \
-              smart_explorer.exe smart_explorer_updater.exe se.exe \
-              smart_explorer smart_explorer_updater se \
+              smart_explorer.exe smart_explorer_updater.exe se.exe se-mcp-launcher.exe \
+              smart_explorer smart_explorer_updater se se-mcp-launcher \
               smart-explorer-android.apk; do
               expected="$(awk 'NR == 1 { print $1 }' "$payload.sha256")"
               actual="$(sha256sum "$payload" | awk '{ print $1 }')"
@@ -651,21 +663,26 @@ jobs:
             "release-native/Smart Explorer.exe" \
             "release-native/Smart Explorer Updater.exe" \
             release-native/se.exe \
+            release-native/se-mcp-launcher.exe \
             release-native/smart_explorer_command.dll \
             release-native/share-server/se-share-server.exe \
             release-native/share-server/se-share-server-linux \
             release-native/update-feed/smart_explorer.exe \
             release-native/update-feed/smart_explorer_updater.exe \
             release-native/update-feed/se.exe \
+            release-native/update-feed/se-mcp-launcher.exe \
             release-native/update-feed/smart_explorer.exe.sha256 \
             release-native/update-feed/smart_explorer_updater.exe.sha256 \
             release-native/update-feed/se.exe.sha256 \
+            release-native/update-feed/se-mcp-launcher.exe.sha256 \
             release-native/update-feed/smart_explorer \
             release-native/update-feed/smart_explorer_updater \
             release-native/update-feed/se \
+            release-native/update-feed/se-mcp-launcher \
             release-native/update-feed/smart_explorer.sha256 \
             release-native/update-feed/smart_explorer_updater.sha256 \
             release-native/update-feed/se.sha256 \
+            release-native/update-feed/se-mcp-launcher.sha256 \
             release-native/update-feed/smart-explorer-android.apk \
             release-native/update-feed/smart-explorer-android.apk.sha256 \
             release-native/update-feed/windows-build.manifest \
@@ -693,20 +710,21 @@ jobs:
             echo "::error::Committed Windows build manifest does not bind version $ver."
             exit 1
           fi
-          for payload in smart_explorer.exe smart_explorer_updater.exe se.exe; do
+          for payload in smart_explorer.exe smart_explorer_updater.exe se.exe se-mcp-launcher.exe; do
             hash="$(sha256sum "../release-native/update-feed/$payload" | awk '{print $1}')"
             if [[ "$(tr -d '\r' < "$manifest" | grep -Fxc "$payload=$hash")" != 1 ]]; then
               echo "::error::Committed Windows build manifest does not bind $payload."
               exit 1
             fi
           done
-          if [[ "$(awk 'NF { count++ } END { print count + 0 }' "$manifest")" != 5 ]]; then
-            echo "::error::Windows build manifest must contain exactly version, source_commit, and three hashes."
+          if [[ "$(awk 'NF { count++ } END { print count + 0 }' "$manifest")" != 6 ]]; then
+            echo "::error::Windows build manifest must contain exactly version, source_commit, and four hashes."
             exit 1
           fi
           file ../release-native/update-feed/smart_explorer | grep -Fq 'dynamically linked'
           file ../release-native/update-feed/smart_explorer_updater | grep -Eq 'statically linked|static-pie linked'
           file ../release-native/update-feed/se | grep -Eq 'statically linked|static-pie linked'
+          file ../release-native/update-feed/se-mcp-launcher | grep -Eq 'statically linked|static-pie linked'
           file ../release-native/share-server/se-share-server-linux | grep -Eq 'statically linked|static-pie linked'
           dll_headers="$(x86_64-w64-mingw32-objdump -p ../release-native/smart_explorer_command.dll)"
           grep -Fq DllGetClassObject <<<"$dll_headers"
@@ -733,10 +751,10 @@ jobs:
           fi
           mkdir -p out
           for asset in \
-            smart_explorer.exe smart_explorer_updater.exe se.exe \
-            smart_explorer.exe.sha256 smart_explorer_updater.exe.sha256 se.exe.sha256 \
-            smart_explorer smart_explorer_updater se \
-            smart_explorer.sha256 smart_explorer_updater.sha256 se.sha256 \
+            smart_explorer.exe smart_explorer_updater.exe se.exe se-mcp-launcher.exe \
+            smart_explorer.exe.sha256 smart_explorer_updater.exe.sha256 se.exe.sha256 se-mcp-launcher.exe.sha256 \
+            smart_explorer smart_explorer_updater se se-mcp-launcher \
+            smart_explorer.sha256 smart_explorer_updater.sha256 se.sha256 se-mcp-launcher.sha256 \
             smart-explorer-android.apk smart-explorer-android.apk.sha256 \
             version.txt; do
             cp "../release-native/update-feed/$asset" "out/$asset"
@@ -747,8 +765,8 @@ jobs:
           cp ../release-native/share-server/se-share-server-linux out/se-share-server-linux
           cp ../install-linux.sh out/install-linux.sh
           staged_count="$(find out -maxdepth 1 -type f -printf '.' | wc -c)"
-          if [ "$staged_count" -ne 20 ]; then
-            echo "::error::Staged release candidate contains $staged_count files, expected exactly 20."
+          if [ "$staged_count" -ne 24 ]; then
+            echo "::error::Staged release candidate contains $staged_count files, expected exactly 24."
             exit 1
           fi
           echo "Committed feed and release assets match Cargo.toml ($ver); out/ now contains the verified committed bytes."
@@ -796,6 +814,7 @@ jobs:
           overwrite: true
 
   windows-gnu-release-e2e:
+    timeout-minutes: 120
     needs: release-candidate
     if: >-
       always() && needs.release-candidate.result == 'success' &&
@@ -821,15 +840,19 @@ jobs:
             [pscustomobject]@{ Source = ".\release-native\update-feed\smart_explorer.exe"; Staged = ".\release-candidate\smart_explorer.exe" },
             [pscustomobject]@{ Source = ".\release-native\update-feed\smart_explorer_updater.exe"; Staged = ".\release-candidate\smart_explorer_updater.exe" },
             [pscustomobject]@{ Source = ".\release-native\update-feed\se.exe"; Staged = ".\release-candidate\se.exe" },
+            [pscustomobject]@{ Source = ".\release-native\update-feed\se-mcp-launcher.exe"; Staged = ".\release-candidate\se-mcp-launcher.exe" },
             [pscustomobject]@{ Source = ".\release-native\update-feed\smart_explorer.exe.sha256"; Staged = ".\release-candidate\smart_explorer.exe.sha256" },
             [pscustomobject]@{ Source = ".\release-native\update-feed\smart_explorer_updater.exe.sha256"; Staged = ".\release-candidate\smart_explorer_updater.exe.sha256" },
             [pscustomobject]@{ Source = ".\release-native\update-feed\se.exe.sha256"; Staged = ".\release-candidate\se.exe.sha256" },
+            [pscustomobject]@{ Source = ".\release-native\update-feed\se-mcp-launcher.exe.sha256"; Staged = ".\release-candidate\se-mcp-launcher.exe.sha256" },
             [pscustomobject]@{ Source = ".\release-native\update-feed\smart_explorer"; Staged = ".\release-candidate\smart_explorer" },
             [pscustomobject]@{ Source = ".\release-native\update-feed\smart_explorer_updater"; Staged = ".\release-candidate\smart_explorer_updater" },
             [pscustomobject]@{ Source = ".\release-native\update-feed\se"; Staged = ".\release-candidate\se" },
+            [pscustomobject]@{ Source = ".\release-native\update-feed\se-mcp-launcher"; Staged = ".\release-candidate\se-mcp-launcher" },
             [pscustomobject]@{ Source = ".\release-native\update-feed\smart_explorer.sha256"; Staged = ".\release-candidate\smart_explorer.sha256" },
             [pscustomobject]@{ Source = ".\release-native\update-feed\smart_explorer_updater.sha256"; Staged = ".\release-candidate\smart_explorer_updater.sha256" },
             [pscustomobject]@{ Source = ".\release-native\update-feed\se.sha256"; Staged = ".\release-candidate\se.sha256" },
+            [pscustomobject]@{ Source = ".\release-native\update-feed\se-mcp-launcher.sha256"; Staged = ".\release-candidate\se-mcp-launcher.sha256" },
             [pscustomobject]@{ Source = ".\release-native\update-feed\smart-explorer-android.apk"; Staged = ".\release-candidate\smart-explorer-android.apk" },
             [pscustomobject]@{ Source = ".\release-native\update-feed\smart-explorer-android.apk.sha256"; Staged = ".\release-candidate\smart-explorer-android.apk.sha256" },
             [pscustomobject]@{ Source = ".\install-linux.sh"; Staged = ".\release-candidate\install-linux.sh" },
@@ -843,8 +866,8 @@ jobs:
             "*",
             [System.IO.SearchOption]::AllDirectories
           ))
-          if ($assetMappings.Count -ne 20 -or $stagedFiles.Count -ne 20) {
-            throw "release candidate must contain exactly 20 mapped assets; mapped=$($assetMappings.Count), downloaded=$($stagedFiles.Count)"
+          if ($assetMappings.Count -ne 24 -or $stagedFiles.Count -ne 24) {
+            throw "release candidate must contain exactly 24 mapped assets; mapped=$($assetMappings.Count), downloaded=$($stagedFiles.Count)"
           }
           $mappedSources = @{}
           $mappedStaged = @{}
@@ -884,6 +907,7 @@ jobs:
             -ShareServerBinary $server
 
   publish-release:
+    timeout-minutes: 120
     needs: release-candidate
     if: >-
       always() && needs.release-candidate.result == 'success' &&
@@ -915,15 +939,19 @@ jobs:
             "release-native/update-feed/smart_explorer.exe|native/out/smart_explorer.exe"
             "release-native/update-feed/smart_explorer_updater.exe|native/out/smart_explorer_updater.exe"
             "release-native/update-feed/se.exe|native/out/se.exe"
+            "release-native/update-feed/se-mcp-launcher.exe|native/out/se-mcp-launcher.exe"
             "release-native/update-feed/smart_explorer.exe.sha256|native/out/smart_explorer.exe.sha256"
             "release-native/update-feed/smart_explorer_updater.exe.sha256|native/out/smart_explorer_updater.exe.sha256"
             "release-native/update-feed/se.exe.sha256|native/out/se.exe.sha256"
+            "release-native/update-feed/se-mcp-launcher.exe.sha256|native/out/se-mcp-launcher.exe.sha256"
             "release-native/update-feed/smart_explorer|native/out/smart_explorer"
             "release-native/update-feed/smart_explorer_updater|native/out/smart_explorer_updater"
             "release-native/update-feed/se|native/out/se"
+            "release-native/update-feed/se-mcp-launcher|native/out/se-mcp-launcher"
             "release-native/update-feed/smart_explorer.sha256|native/out/smart_explorer.sha256"
             "release-native/update-feed/smart_explorer_updater.sha256|native/out/smart_explorer_updater.sha256"
             "release-native/update-feed/se.sha256|native/out/se.sha256"
+            "release-native/update-feed/se-mcp-launcher.sha256|native/out/se-mcp-launcher.sha256"
             "release-native/update-feed/smart-explorer-android.apk|native/out/smart-explorer-android.apk"
             "release-native/update-feed/smart-explorer-android.apk.sha256|native/out/smart-explorer-android.apk.sha256"
             "install-linux.sh|native/out/install-linux.sh"
@@ -932,13 +960,13 @@ jobs:
             "release-native/share-server/se-share-server-linux|native/out/se-share-server-linux"
             "release-native/update-feed/version.txt|native/out/version.txt"
           )
-          if [ "${#asset_mappings[@]}" -ne 20 ]; then
-            echo "::error::Internal release mapping does not contain exactly 20 assets."
+          if [ "${#asset_mappings[@]}" -ne 24 ]; then
+            echo "::error::Internal release mapping does not contain exactly 24 assets."
             exit 1
           fi
           downloaded_count="$(find native/out -type f -printf '.' | wc -c)"
-          if [ "$downloaded_count" -ne 20 ]; then
-            echo "::error::Downloaded release candidate contains $downloaded_count files, expected exactly 20."
+          if [ "$downloaded_count" -ne 24 ]; then
+            echo "::error::Downloaded release candidate contains $downloaded_count files, expected exactly 24."
             exit 1
           fi
           declare -A mapped_committed=()
@@ -966,9 +994,11 @@ jobs:
             sha256sum --check --strict smart_explorer.exe.sha256
             sha256sum --check --strict smart_explorer_updater.exe.sha256
             sha256sum --check --strict se.exe.sha256
+            sha256sum --check --strict se-mcp-launcher.exe.sha256
             sha256sum --check --strict smart_explorer.sha256
             sha256sum --check --strict smart_explorer_updater.sha256
             sha256sum --check --strict se.sha256
+            sha256sum --check --strict se-mcp-launcher.sha256
             sha256sum --check --strict smart-explorer-android.apk.sha256
           )
 
@@ -1056,6 +1086,7 @@ jobs:
             - **smart_explorer.exe** — portable app (also the self-update
               payload). For auto-update, set the update source to this repo's URL
               in the app (Sidebar → UPDATE), or use the installer.
+            - **se-mcp-launcher.exe** / **se-mcp-launcher** — verified MCP runtime starter.
             - **se.exe** / **se** — terminal companion for saved remote and
               Smart Explorer peer operations.
             - **smart_explorer_command.dll** — Win11 modern context-menu
@@ -1078,15 +1109,19 @@ jobs:
             native/out/smart_explorer.exe
             native/out/smart_explorer_updater.exe
             native/out/se.exe
+            native/out/se-mcp-launcher.exe
             native/out/smart_explorer.exe.sha256
             native/out/smart_explorer_updater.exe.sha256
             native/out/se.exe.sha256
+            native/out/se-mcp-launcher.exe.sha256
             native/out/smart_explorer
             native/out/smart_explorer_updater
             native/out/se
+            native/out/se-mcp-launcher
             native/out/smart_explorer.sha256
             native/out/smart_explorer_updater.sha256
             native/out/se.sha256
+            native/out/se-mcp-launcher.sha256
             native/out/smart-explorer-android.apk
             native/out/smart-explorer-android.apk.sha256
             native/out/install-linux.sh

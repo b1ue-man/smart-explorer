@@ -48,7 +48,7 @@ fn launch_helper(
     let target_sha256 = sha256_file(target)?;
     let archive = archive_path(target)?;
 
-    let args = vec![
+    let mut args = vec![
         "--apply".to_string(),
         "--target".to_string(),
         path_arg(target),
@@ -83,6 +83,10 @@ fn launch_helper(
         "--pin-file".to_string(),
         path_arg(&pin_path()),
     ];
+
+    if let Some(launcher) = bundle.launcher() {
+        args.extend(["--launcher-staged".into(), path_arg(launcher.path()), "--launcher-sha256".into(), launcher.sha256().to_string()]);
+    }
 
     // Keep this immediately adjacent to the process boundary. The helper also
     // validates itself on entry and fails closed if elevation would be needed.

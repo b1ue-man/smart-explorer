@@ -121,7 +121,7 @@ function Publish-FeedDirectoryTransaction(
         if (-not [string]::IsNullOrWhiteSpace($VersionSource)) {
             Publish-FileAtomic $VersionSource (Join-Path $Destination "version.txt")
         }
-        foreach ($name in @("smart_explorer.exe", "smart_explorer_updater.exe", "se.exe")) {
+        foreach ($name in @("smart_explorer.exe", "smart_explorer_updater.exe", "se.exe", "se-mcp-launcher.exe")) {
             Assert-NonEmptyFile (Join-Path $Destination $name)
             Assert-NonEmptyFile (Join-Path $Destination "$name.sha256")
         }
@@ -205,7 +205,8 @@ $nativeReleaseDir = Join-Path (Join-Path $nativeTargetDir $hostTriple) "release"
 $nativeApp = Join-Path $nativeReleaseDir "smart_explorer.exe"
 $nativeUpdater = Join-Path $nativeReleaseDir "smart_explorer_updater.exe"
 $nativeCli = Join-Path $nativeReleaseDir "se.exe"
-cargo build --locked --release --target-dir $nativeTargetDir --target $hostTriple --bin smart_explorer --bin smart_explorer_updater --bin se
+$nativeLauncher = Join-Path $nativeReleaseDir "se-mcp-launcher.exe"
+cargo build --locked --release --target-dir $nativeTargetDir --target $hostTriple --bin smart_explorer --bin smart_explorer_updater --bin se --bin se-mcp-launcher
 if ($LASTEXITCODE -ne 0) { throw "Build fehlgeschlagen" }
 
 $shareSrc = Join-Path $repoRoot "share-server"
@@ -257,7 +258,11 @@ if ($makensis) {
     New-Item -ItemType Directory -Force $ReleaseOutput | Out-Null
     $installer = Join-Path $ReleaseOutput "Smart Explorer Setup $version.exe"
     Remove-Item $installer -Force -ErrorAction SilentlyContinue
-    & $makensis "/DVERSION=$version" "/DEXE_SRC=$nativeApp" "/DUPDATER_SRC=$nativeUpdater" "/DCLI_SRC=$nativeCli" "/DDOKANY_MSI_SRC=$dokanyMsi" "/DINSTALLER_OUT=$installer" "installer.nsi" | Out-Null
+    $appHash = (Get-FileHash -LiteralPath $nativeApp -Algorithm SHA256).Hash.ToLowerInvariant()
+    $updaterHash = (Get-FileHash -LiteralPath $nativeUpdater -Algorithm SHA256).Hash.ToLowerInvariant()
+    $cliHash = (Get-FileHash -LiteralPath $nativeCli -Algorithm SHA256).Hash.ToLowerInvariant()
+    $launcherHash = (Get-FileHash -LiteralPath $nativeLauncher -Algorithm SHA256).Hash.ToLowerInvariant()
+    & $makensis "/DVERSION=$version" "/DEXE_SRC=$nativeApp" "/DEXE_SHA256=$appHash" "/DUPDATER_SRC=$nativeUpdater" "/DUPDATER_SHA256=$updaterHash" "/DCLI_SRC=$nativeCli" "/DCLI_SHA256=$cliHash" "/DLAUNCHER_SRC=$nativeLauncher" "/DLAUNCHER_SHA256=$launcherHash" "/DDOKANY_MSI_SRC=$dokanyMsi" "/DINSTALLER_OUT=$installer" "installer.nsi" | Out-Null
     if ($LASTEXITCODE -ne 0) {
         throw "Installer-Build fehlgeschlagen: $installer"
     }
@@ -290,6 +295,7 @@ New-Item -ItemType Directory -Force $ReleaseOutput | Out-Null
 Copy-Item $nativeApp (Join-Path $ReleaseOutput "Smart Explorer.exe") -Force
 Copy-Item $nativeUpdater (Join-Path $ReleaseOutput "Smart Explorer Updater.exe") -Force
 Copy-Item $nativeCli (Join-Path $ReleaseOutput "se.exe") -Force
+Copy-Item $nativeLauncher (Join-Path $ReleaseOutput "se-mcp-launcher.exe") -Force
 Copy-Item -LiteralPath $commandDll -Destination (Join-Path $ReleaseOutput "smart_explorer_command.dll") -Force
 
 # Publish the Windows-only candidate only after every Windows artifact exists.
@@ -304,7 +310,8 @@ try {
     $payloads = @(
         [pscustomobject]@{ Name = "smart_explorer.exe"; Source = $nativeApp },
         [pscustomobject]@{ Name = "smart_explorer_updater.exe"; Source = $nativeUpdater },
-        [pscustomobject]@{ Name = "se.exe"; Source = $nativeCli }
+        [pscustomobject]@{ Name = "se.exe"; Source = $nativeCli },
+        [pscustomobject]@{ Name = "se-mcp-launcher.exe"; Source = $nativeLauncher }
     )
     $manifest = @("version=$version", "source_commit=$sourceCommit")
     foreach ($payload in $payloads) {

@@ -918,9 +918,10 @@ des Ziels mit entfernt.
 
 **KI-Agenten (Claude Code, Codex, MCP):** `se plugin install` installiert Smart
 Explorer als Plugin in Claude Code (lokaler Plugin-Marketplace mit Server und
-Skill) und in Codex (`codex mcp add` mit Skill); `se plugin config generic`
-gibt die Konfiguration für weitere MCP-Clients aus. Der Agent startet dann
-`se mcp` selbst und bekommt Tools für Dateien auf allen gespeicherten Remotes,
+Skill) und in Codex (verwalteter TOML-Eintrag mit Skill); `se plugin config generic`
+gibt die Konfiguration für weitere MCP-Clients aus. Der Agent startet den
+geprüften `se-mcp-launcher`, der die bestätigte Laufzeitgeneration auswählt,
+und bekommt Tools für Dateien auf allen gespeicherten Remotes,
 Share-Peers, Google Drive und lokalen Laufwerken (lesen, schreiben, bearbeiten,
 kopieren, verschieben, löschen, suchen), Remote-Befehle auf gespeicherten
 SSH-Remotes und freigegebenen Share-Peers sowie jeden weiteren `se`-Befehl.
@@ -930,7 +931,10 @@ erste Wahl für Dateiaufgaben vor dessen eingebauten Datei-Werkzeugen und
 Shell-Dateibefehlen. Claude Code lädt die Datei-Tools dafür vorab, ohne
 Tool-Suche. `se exec @label[:/ordner] -- befehl` führt Befehle auch im
 Terminal über die SSH-Anmeldung einer gespeicherten SFTP-Verbindung aus.
-Details: [`docs/AI_AGENT_PLUGIN.md`](docs/AI_AGENT_PLUGIN.md).
+Eine kompatible laufende MCP-Sitzung behält ihre Generation und ihre Tools.
+Neue Fähigkeiten stehen nach einem tatsächlichen MCP-Neustart bereit.
+`se plugin status --json` zeigt Generation, Profilkonflikte und erforderliches
+Neuverbinden. Details: [`docs/AI_AGENT_PLUGIN.md`](docs/AI_AGENT_PLUGIN.md).
 
 **Dauerhafte Shells, Terminalsitzungen und Anhängen (Befehlssitzungen ab 0.5.178):**
 `se shell @label[:/ordner]` oder `se shell PEER` öffnet eine Shell auf einer
@@ -1079,7 +1083,11 @@ Paketquellen der Distribution (apt, dnf, pacman oder zypper; die Rechte holt das
 Paketbefehl. Danach prüft es `fusermount3` (setuid root) und `/dev/fuse` (lesbar und
 schreibbar) und meldet Abweichungen als Warnung. `--with-desktop` schaltet se Desktop ein
 (`se desktop enable`). Jede Installation der Desktop-App startet se Desktop neu, außer mit
-`--cli-only`; `--cli-only` und `--with-desktop` schließen sich aus. `--dry-run` zeigt die
+`--cli-only`; `--cli-only` und `--with-desktop` schließen sich aus.
+`--no-gui-start` installiert das vollständige Bundle ohne GUI-Start und lässt
+sich nicht mit `--with-desktop` kombinieren. Neben einer bereits vorhandenen
+App akzeptiert `--cli-only` nur deren zur Feedversion passenden SHA-256; bei
+abweichender Appversion ist eine vollständige Installation erforderlich. `--dry-run` zeigt die
 Schritte, ohne sie auszuführen; `--help` zeigt die Optionen.
 
 **Linux nur Terminal (ohne Desktop-/X11-Abhängigkeiten):**
@@ -1150,11 +1158,11 @@ du sie einmal selbst ein:
 > stellt die App die neueste Version aus dem Git geprüft bereit und fragt vor
 > Installation/Neustart nach.
 
-Das ist alles. (Technisch lädt die App `version.txt` plus das OS-passende Trio
-aus App, Update-Helfer und `se` samt SHA-256-Dateien aus
+Technisch lädt die App `version.txt` plus die vier OS-passenden Programme
+App, Update-Helfer, `se` und `se-mcp-launcher` samt SHA-256-Dateien aus
 [`release-native/update-feed/`](release-native/update-feed) über
 `raw.githubusercontent.com`. Statt des Repo-Links kannst du auch direkt einen
-Ordner-Pfad/UNC oder eine `https://…`-URL eintragen.) Die Quelle steht auch in
+Ordner-Pfad/UNC oder eine `https://…`-URL eintragen. Die Quelle steht auch in
 `%APPDATA%\smart_explorer\update_source.txt` bzw.
 `$XDG_DATA_HOME/smart_explorer/update_source.txt`.
 Die Android-App nutzt denselben Feed für ihre eigene APK (siehe unten).
@@ -1166,8 +1174,11 @@ das und nennt `se update --source <Feed-URL oder Ordner>` — das ist dieselbe
 Einstellung wie das UPDATE-Feld der App; gespeichert wird sie nur, wenn der Feed
 antwortet.
 
-- **Nur-Terminal-Installation** (`--cli-only`): `se` lädt das `se` des Feeds,
-  prüft dessen SHA-256 und ersetzt die tatsächlich installierte Datei
+- **Nur-Terminal-Installation** (`--cli-only`): `se` lädt `se` und den
+  MCP-Starter des Feeds, prüft ihre SHA-256 und bereitet eine unveränderliche
+  Laufzeitgeneration vor. Der gemeinsame Updatebesitzer sperrt neue Aufträge
+  und wartet auf bereits zugelassene Arbeit; nach bestätigtem CLI-Austausch
+  wird die neue Generation aktiviert. Der Installer ersetzt die installierte CLI
   (`~/.local/opt/smart-explorer/se`; der Link `~/.local/bin/se` bleibt und zeigt
   weiter darauf). Die Kopie wird direkt vor dem atomaren Austausch und noch
   einmal direkt vor ihrem ersten Start geprüft, die Dateirechte bleiben. Bis
@@ -1181,7 +1192,7 @@ antwortet.
   installiert die Feed-Version erneut, auch wenn sie nicht neuer ist (nie eine
   ältere).
 - **Neben der Desktop-App** (Linux-Desktop-Installation, Windows): `se update`
-  lädt und prüft App, Update-Helfer und `se` genau wie die Update-Prüfung der
+  lädt und prüft App, Update-Helfer, `se` und MCP-Starter wie die Update-Prüfung der
   App und startet den hash-gebundenen Update-Helfer losgelöst vom Terminal (ohne
   dessen Ein- und Ausgabe). Er ersetzt alle drei nach dem Ende von `se update`,
   stoppt vorher den Hintergrund-Worker, wartet auf offene App-Fenster und startet
@@ -1448,10 +1459,10 @@ Der vollständige Flow (bauen → Feed → GitHub-Release → Selbst-Update) ste
    `pwsh ./native/publish-release-local.ps1` starten. Im Remote-Pfad übernimmt
    das bereits der eine Dispatch. Dieser
    eine Wrapper erhöht die Patch-Version, hält das gemeinsame Cross-Host-Lock,
-   baut unter Windows/WSL oder Linux alle Plattformartefakte, prüft die sechs
-   Desktop-Feed-Hashes, die im Installer eingebetteten App-/Updater-/`se`-Bytes, den
+   baut unter Windows/WSL oder Linux alle Plattformartefakte, prüft die acht
+   Desktop-Feed-Hashes, die eingebetteten App-/Updater-/`se`-/MCP-Starter-Bytes, den
    gebundenen Quell-Commit, APK-Version, -Hash und -Signaturzertifikat sowie
-   20 Release-Assets, committet und pusht den
+   24 Release-Assets, committet und pusht den
    exakten Kandidaten nach `main` und
    startet genau eine statische Exact-Byte-Publikation. Normalerweise geschieht
    das über einen unveränderlichen Tag; nur wenn dessen Push technisch abgelehnt

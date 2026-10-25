@@ -33,6 +33,8 @@ pub struct StagedUpdate {
     app: VerifiedPayload,
     helper: VerifiedPayload,
     cli: VerifiedPayload,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    launcher: Option<VerifiedPayload>,
 }
 
 impl StagedUpdate {
@@ -41,21 +43,25 @@ impl StagedUpdate {
         app: VerifiedPayload,
         helper: VerifiedPayload,
         cli: VerifiedPayload,
+        launcher: Option<VerifiedPayload>,
     ) -> Result<Self, String> {
         if version.trim().is_empty() {
             return Err("Update-Version ist leer".to_string());
         }
         Ok(Self {
-            schema: 1,
+            schema: if launcher.is_some() { 2 } else { 1 },
             version,
             app,
             helper,
             cli,
+            launcher,
         })
     }
 
     pub(super) fn validate_schema(&self) -> Result<(), String> {
-        if self.schema != 1 {
+        if !matches!(self.schema, 1 | 2)
+            || (self.schema == 2) != self.launcher.is_some()
+        {
             return Err(format!(
                 "Nicht unterstuetztes Staging-Manifest-Schema {}",
                 self.schema
@@ -68,6 +74,9 @@ impl StagedUpdate {
                 .all(|ch| ch.is_ascii_alphanumeric() || ch == '.' || ch == '-')
         {
             return Err("Gestagtes Update enthaelt eine ungueltige Version".to_string());
+        }
+        if super::core::parse_ver(&self.version) > (0, 5, 184) && self.launcher.is_none() {
+            return Err("Diese Update-Version benoetigt einen SHA-256-geprueften MCP-Starter".into());
         }
         Ok(())
     }
@@ -88,8 +97,14 @@ impl StagedUpdate {
         &self.cli
     }
 
-    pub(super) fn payloads(&self) -> [&VerifiedPayload; 3] {
-        [&self.app, &self.helper, &self.cli]
+    pub fn launcher(&self) -> Option<&VerifiedPayload> {
+        self.launcher.as_ref()
+    }
+
+    pub(super) fn payloads(&self) -> Vec<&VerifiedPayload> {
+        let mut payloads = vec![&self.app, &self.helper, &self.cli];
+        payloads.extend(self.launcher.as_ref());
+        payloads
     }
 }
 
@@ -101,7 +116,7 @@ pub enum UpdateMsg {
     UpToDate { feed_version: String },
     /// No feed configured. Only sent for manual checks.
     NoFeed,
-    /// All three release payloads were downloaded and SHA-256 validated. No
+    /// All release payloads were downloaded and SHA-256 validated. No
     /// installed file or process has been changed; applying still needs
     /// explicit user consent.
     Staged(StagedUpdate),

@@ -6,7 +6,12 @@ use super::core::{staged_sha256_from_path, verify_sha256};
 use super::feed::Feed;
 use super::types::{StagedUpdate, VerifiedPayload};
 
-const STAGED_PREFIXES: [&str; 3] = ["update_download_", "updater_download_", "cli_download_"];
+const STAGED_PREFIXES: [&str; 4] = [
+    "update_download_",
+    "updater_download_",
+    "cli_download_",
+    "launcher_download_",
+];
 
 pub(super) struct StagingGuard {
     paths: Vec<std::path::PathBuf>,
@@ -22,7 +27,11 @@ impl StagingGuard {
     }
 
     pub(super) fn track(&mut self, payload: &VerifiedPayload) {
-        self.paths.push(payload.path().to_path_buf());
+        self.track_path(payload.path());
+    }
+
+    pub(super) fn track_path(&mut self,path:&Path) {
+        self.paths.push(path.to_path_buf());
     }
 
     pub(super) fn disarm(mut self) {
@@ -48,7 +57,14 @@ pub(super) fn stage_from_feed(feed: &Feed, version: &str) -> Result<StagedUpdate
     guard.track(&helper);
     let cli = feed.fetch_cli_exe(version)?;
     guard.track(&cli);
-    let bundle = StagedUpdate::new(version.to_string(), app, helper, cli)?;
+    let launcher = feed.fetch_launcher_exe(version)?;
+    if launcher.is_none() && crate::mcp_launcher::staged_runtime_managed(cli.path(),cli.sha256(),version)? {
+        return Err("Der Managed-faehige CLI-Payload benoetigt den MCP-Starter derselben Feedversion".into());
+    }
+    if let Some(payload) = launcher.as_ref() {
+        guard.track(payload);
+    }
+    let bundle = StagedUpdate::new(version.to_string(), app, helper, cli, launcher)?;
     persist_staged_update(&bundle)?;
     guard.disarm();
     Ok(bundle)
@@ -121,6 +137,11 @@ pub fn verify_staged_update(bundle: &StagedUpdate) -> Result<(), String> {
         validate_payload_path(payload)?;
         verify_sha256(payload.path(), payload.sha256())
             .map_err(|error| format!("{label}-Payload: {error}"))?;
+    }
+    if let Some(payload) = bundle.launcher() {
+        validate_payload_path(payload)?;
+        verify_sha256(payload.path(), payload.sha256())
+            .map_err(|error| format!("MCP-Starter-Payload: {error}"))?;
     }
     Ok(())
 }

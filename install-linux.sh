@@ -47,9 +47,9 @@ else
   UPDATE_SOURCE="https://github.com/$REPO/tree/$REF"
 fi
 TMP_DIR=""
-INSTALL_TEMP=""
 DRY_RUN=0
 CLI_ONLY=0
+NO_GUI_START=0
 WITH_FUSE=0
 WITH_DESKTOP=0
 if SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" 2>/dev/null && pwd -P)"; then
@@ -59,13 +59,14 @@ else
 fi
 
 usage() {
-  echo "usage: $0 [--dry-run] [--cli-only] [--with-fuse] [--with-desktop]"
+  echo "usage: $0 [--dry-run] [--cli-only] [--no-gui-start] [--with-fuse] [--with-desktop]"
 }
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN=1 ;;
     --cli-only) CLI_ONLY=1 ;;
+    --no-gui-start) NO_GUI_START=1 ;;
     --with-fuse) WITH_FUSE=1 ;;
     --with-desktop) WITH_DESKTOP=1 ;;
     -h|--help) usage; exit 0 ;;
@@ -77,11 +78,12 @@ if [ "$WITH_DESKTOP" = 1 ] && [ "$CLI_ONLY" = 1 ]; then
   echo "smart-explorer install: se Desktop braucht die Desktop-App (--with-desktop geht nicht zusammen mit --cli-only)" >&2
   exit 2
 fi
+if [ "$WITH_DESKTOP" = 1 ] && [ "$NO_GUI_START" = 1 ]; then
+  echo "smart-explorer install: --with-desktop cannot enable/start the desktop with --no-gui-start" >&2
+  exit 2
+fi
 
 cleanup() {
-  if [ -n "$INSTALL_TEMP" ]; then
-    rm -f "$INSTALL_TEMP"
-  fi
   if [ -n "$TMP_DIR" ]; then
     rm -rf "$TMP_DIR"
   fi
@@ -273,17 +275,19 @@ release_assets_available() {
   if [ "$DRY_RUN" = 1 ]; then
     return 0
   fi
-  if [ "$CLI_ONLY" = 1 ]; then
-    fetch_optional "$BASE_URL/se" "$TMP_DIR/se" && \
-    fetch_optional "$BASE_URL/se.sha256" "$TMP_DIR/se.sha256"
-    return
-  fi
-  fetch_optional "$BASE_URL/smart_explorer" "$TMP_DIR/smart_explorer" && \
-  fetch_optional "$BASE_URL/smart_explorer.sha256" "$TMP_DIR/smart_explorer.sha256" && \
   fetch_optional "$BASE_URL/smart_explorer_updater" "$TMP_DIR/smart_explorer_updater" && \
   fetch_optional "$BASE_URL/smart_explorer_updater.sha256" "$TMP_DIR/smart_explorer_updater.sha256" && \
   fetch_optional "$BASE_URL/se" "$TMP_DIR/se" && \
-  fetch_optional "$BASE_URL/se.sha256" "$TMP_DIR/se.sha256"
+  fetch_optional "$BASE_URL/se.sha256" "$TMP_DIR/se.sha256" && \
+  fetch_optional "$BASE_URL/se-mcp-launcher" "$TMP_DIR/se-mcp-launcher" && \
+  fetch_optional "$BASE_URL/se-mcp-launcher.sha256" "$TMP_DIR/se-mcp-launcher.sha256" || return 1
+  if [ "$CLI_ONLY" != 1 ]; then
+    fetch_optional "$BASE_URL/smart_explorer" "$TMP_DIR/smart_explorer" && \
+    fetch_optional "$BASE_URL/smart_explorer.sha256" "$TMP_DIR/smart_explorer.sha256"
+  elif [ -e "$APP_BIN" ] || [ -L "$APP_BIN" ]; then
+    fetch_optional "$BASE_URL/version.txt" "$TMP_DIR/version.txt" && \
+    fetch_optional "$BASE_URL/smart_explorer.sha256" "$TMP_DIR/smart_explorer.sha256"
+  fi
 }
 
 use_release_assets() {
@@ -291,13 +295,12 @@ use_release_assets() {
     log "dry-run: verify downloaded release SHA-256 sidecars"
     return 0
   fi
-  if [ "$CLI_ONLY" = 1 ]; then
-    verify_payload_sha256 "$TMP_DIR/se" "$TMP_DIR/se.sha256"
-    return
-  fi
-  verify_payload_sha256 "$TMP_DIR/smart_explorer" "$TMP_DIR/smart_explorer.sha256"
   verify_payload_sha256 "$TMP_DIR/smart_explorer_updater" "$TMP_DIR/smart_explorer_updater.sha256"
   verify_payload_sha256 "$TMP_DIR/se" "$TMP_DIR/se.sha256"
+  verify_payload_sha256 "$TMP_DIR/se-mcp-launcher" "$TMP_DIR/se-mcp-launcher.sha256"
+  if [ "$CLI_ONLY" != 1 ]; then
+    verify_payload_sha256 "$TMP_DIR/smart_explorer" "$TMP_DIR/smart_explorer.sha256"
+  fi
 }
 
 verify_payload_sha256() {
@@ -352,16 +355,16 @@ prepare_source_build() {
 
   if [ "$DRY_RUN" = 1 ]; then
     if [ "$CLI_ONLY" = 1 ]; then
-      log "dry-run: cargo build --release --bin se (in $src/native)"
+      log "dry-run: cargo build --release --bin se --bin smart_explorer_updater --bin se-mcp-launcher (in $src/native)"
     else
-      log "dry-run: cargo build --release --bin smart_explorer --bin smart_explorer_updater --bin se (in $src/native)"
+      log "dry-run: cargo build --release --bin smart_explorer --bin smart_explorer_updater --bin se --bin se-mcp-launcher (in $src/native)"
     fi
   elif [ "$CLI_ONLY" = 1 ]; then
     # One codegen job keeps fallback builds within modest workstation memory.
-    (cd "$src/native" && CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}" cargo build --release --bin se)
+    (cd "$src/native" && CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}" cargo build --release --bin se --bin smart_explorer_updater --bin se-mcp-launcher)
   else
     # One codegen job keeps fallback builds within modest workstation memory.
-    (cd "$src/native" && CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}" cargo build --release --bin smart_explorer --bin smart_explorer_updater --bin se)
+    (cd "$src/native" && CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}" cargo build --release --bin smart_explorer --bin smart_explorer_updater --bin se --bin se-mcp-launcher)
   fi
   printf '%s\n' "$src/native/target/release"
 }
@@ -372,10 +375,8 @@ install_files() {
     run mkdir -p "$INSTALL_DIR" "$BIN_DIR"
   else
     run mkdir -p "$INSTALL_DIR" "$BIN_DIR" "$APP_DIR" "$ICON_DIR"
-    install_executable_atomic "$src_dir/smart_explorer" "$APP_BIN"
-    install_executable_atomic "$src_dir/smart_explorer_updater" "$UPDATER_BIN"
   fi
-  install_executable_atomic "$src_dir/se" "$CLI_BIN"
+  install_verified_bundle "$src_dir"
   if [ "$CLI_ONLY" != 1 ]; then
     if [ "$DRY_RUN" = 1 ]; then
       log "dry-run: write $INSTALL_DIR/update_source.txt"
@@ -495,10 +496,10 @@ check_fuse() {
 }
 
 # se Desktop (only with the desktop app): --with-desktop enables it, and every
-# installation of the desktop app restarts it, so a running se Desktop runs
+# installation of the desktop app normally restarts it, so a running se Desktop runs
 # the freshly installed programs. A failure is reported; the install stays.
 desktop_steps() {
-  if [ "$CLI_ONLY" = 1 ]; then
+  if [ "$CLI_ONLY" = 1 ] || [ "$NO_GUI_START" = 1 ]; then
     return 0
   fi
   if [ "$WITH_DESKTOP" = 1 ]; then
@@ -515,19 +516,55 @@ desktop_steps() {
   fi
 }
 
-install_executable_atomic() {
-  source_path="$1"
-  destination_path="$2"
-  destination_dir=$(dirname "$destination_path")
-  destination_name=$(basename "$destination_path")
+install_verified_bundle() {
+  bundle_source="$1"
   if [ "$DRY_RUN" = 1 ]; then
-    log "dry-run: install -m 755 $source_path -> $destination_path (atomic rename)"
+    log "dry-run: verified helper installs CLI, updater and MCP generation into $INSTALL_DIR (cli-only=$CLI_ONLY)"
     return 0
   fi
-  INSTALL_TEMP=$(mktemp "$destination_dir/.$destination_name.install.XXXXXX")
-  install -m 755 "$source_path" "$INSTALL_TEMP"
-  mv -f "$INSTALL_TEMP" "$destination_path"
-  INSTALL_TEMP=""
+  # Release sidecars were checked before this executable boundary. Human source
+  # fallback binds the exact output bytes to the same installer transaction.
+  chmod 755 "$bundle_source/se" "$bundle_source/smart_explorer_updater" "$bundle_source/se-mcp-launcher"
+  bundle_version_line=$("$bundle_source/se" --version)
+  case "$bundle_version_line" in
+    'se '[0-9]*) bundle_version=${bundle_version_line#se } ;;
+    *) echo "smart-explorer install: invalid verified CLI version" >&2; return 1 ;;
+  esac
+  bundle_cli_hash=$(sha256sum "$bundle_source/se")
+  bundle_helper_hash=$(sha256sum "$bundle_source/smart_explorer_updater")
+  bundle_launcher_hash=$(sha256sum "$bundle_source/se-mcp-launcher")
+  set -- --install-bundle --root "$INSTALL_DIR" \
+    --cli-staged "$bundle_source/se" --cli-sha256 "${bundle_cli_hash%% *}" \
+    --launcher-staged "$bundle_source/se-mcp-launcher" --launcher-sha256 "${bundle_launcher_hash%% *}" \
+    --helper-sha256 "${bundle_helper_hash%% *}" --version "$bundle_version" --no-gui-start
+  if [ "$CLI_ONLY" = 1 ]; then
+    set -- "$@" --cli-only
+    if [ -e "$APP_BIN" ] || [ -L "$APP_BIN" ]; then
+      # A CLI-only reinstall beside a desktop app is valid only for the same
+      # release bytes. Do not infer compatibility from the filename or version.
+      bundle_app_sidecar="$TMP_DIR/smart_explorer.sha256"
+      bundle_feed_version_file="$TMP_DIR/version.txt"
+      if [ ! -f "$bundle_app_sidecar" ]; then
+        fetch "$BASE_URL/smart_explorer.sha256" "$bundle_app_sidecar"
+      fi
+      if [ ! -f "$bundle_feed_version_file" ]; then
+        fetch "$BASE_URL/version.txt" "$bundle_feed_version_file"
+      fi
+      bundle_feed_version=""
+      IFS= read -r bundle_feed_version < "$bundle_feed_version_file" || [ -n "$bundle_feed_version" ]
+      if [ "$bundle_feed_version" != "$bundle_version" ]; then
+        echo "smart-explorer install: CLI-only update beside the desktop app requires the matching release; use the complete desktop installer for a version change" >&2
+        return 1
+      fi
+      verify_payload_sha256 "$APP_BIN" "$bundle_app_sidecar"
+      set -- "$@" --app-sha256 "$verify_expected"
+    fi
+  else
+    chmod 755 "$bundle_source/smart_explorer"
+    bundle_app_hash=$(sha256sum "$bundle_source/smart_explorer")
+    set -- "$@" --app-staged "$bundle_source/smart_explorer" --app-sha256 "${bundle_app_hash%% *}"
+  fi
+  "$bundle_source/smart_explorer_updater" "$@"
 }
 
 if release_assets_available; then

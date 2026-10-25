@@ -2,11 +2,9 @@
 ; requests UAC separately; installing/updating the app itself remains per-user.
 ;
 ; Build (Linux/WSL/macOS cross or Windows):
-;   makensis -DVERSION=x.y.z installer.nsi
-; Override the exe source when building natively on Windows:
-;   makensis -DVERSION=x.y.z "-DEXE_SRC=target\release\smart_explorer.exe" installer.nsi
-;   makensis -DVERSION=x.y.z "-DUPDATER_SRC=target\release\smart_explorer_updater.exe" installer.nsi
-;   makensis -DVERSION=x.y.z "-DCLI_SRC=target\release\se.exe" installer.nsi
+;   Use native/publish-release-local.ps1; it supplies all embedded SHA-256 values.
+; The wrapper supplies the app, updater, CLI and launcher source paths together
+; with their exact hashes; independent unverified makensis invocations are invalid.
 ; Silent install:  "Smart Explorer Setup x.y.z.exe" /S
 ; Silent install with Dokany: ... /S /INSTALLDOKANY=1
 ; Silent install with se Desktop: ... /S /DESKTOP=1
@@ -33,6 +31,22 @@
   ; Default = the gnu cross-compile output (what CI / publish-feed.sh produce).
   !define CLI_SRC "target/x86_64-pc-windows-gnu/release/se.exe"
 !endif
+!ifndef LAUNCHER_SRC
+  !define LAUNCHER_SRC "target/x86_64-pc-windows-gnu/release/se-mcp-launcher.exe"
+!endif
+; The stable release wrapper supplies the hashes of the exact embedded bytes.
+!ifndef EXE_SHA256
+  !error "EXE_SHA256 required; use publish-release-local.ps1"
+!endif
+!ifndef UPDATER_SHA256
+  !error "UPDATER_SHA256 required; use publish-release-local.ps1"
+!endif
+!ifndef CLI_SHA256
+  !error "CLI_SHA256 required; use publish-release-local.ps1"
+!endif
+!ifndef LAUNCHER_SHA256
+  !error "LAUNCHER_SHA256 required; use publish-release-local.ps1"
+!endif
 !ifndef INSTALLER_OUT
   !define INSTALLER_OUT "../release-native/Smart Explorer Setup ${VERSION}.exe"
 !endif
@@ -48,6 +62,7 @@
 !define EXE_NAME "Smart Explorer.exe"
 !define UPDATER_EXE_NAME "Smart Explorer Updater.exe"
 !define CLI_EXE_NAME "se.exe"
+!define LAUNCHER_EXE_NAME "se-mcp-launcher.exe"
 !define VERB "OpenInSmartExplorer"
 !define VERB_LABEL "In Smart Explorer öffnen"
 !define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\SmartExplorer"
@@ -80,48 +95,24 @@ Section "Smart Explorer (erforderlich)" SEC_MAIN
   SectionIn RO
   SetOutPath "$INSTDIR"
 
-  ; Close ALL running instances before touching the exe. The auto-updater renames
-  ; the live binary ("Smart Explorer_old.exe") and can run a worker, so killing
-  ; only "Smart Explorer.exe" misses them — and a process still holding a handle
-  ; on the (already-deleted) exe makes Windows refuse to recreate it at the same
-  ; path, which is the "Error opening file for writing" you can hit even when the
-  ; folder looks empty. The IMAGENAME wildcard catches every variant.
-  nsExec::Exec 'taskkill /F /T /FI "IMAGENAME eq Smart Explorer*"'
-  nsExec::Exec 'taskkill /F /T /IM "smart_explorer.exe"'
-  nsExec::Exec 'taskkill /F /T /IM "se.exe"'
-  Sleep 1200
-
-  ; Clear leftovers from a previous/interrupted auto-update so the fresh exe lands.
-  Delete "$INSTDIR\Smart Explorer_old.exe"
-  Delete "$INSTDIR\Smart Explorer_update_pending.exe"
-
-  ; Write the exe with retries: if a handle is still releasing, wait + re-kill
-  ; rather than dropping the user into Abort/Retry/Ignore. SetOverwrite try makes
-  ; a failed File set the error flag instead of prompting.
-  SetOverwrite try
-  StrCpy $0 0
-  write_exe:
-    Delete "$INSTDIR\${EXE_NAME}"
-    ClearErrors
-    File "/oname=${EXE_NAME}" "${EXE_SRC}"
-    IfErrors 0 write_done
-    IntOp $0 $0 + 1
-    IntCmp $0 6 write_failed
-    Sleep 1000
-    nsExec::Exec 'taskkill /F /T /FI "IMAGENAME eq Smart Explorer*"'
-    nsExec::Exec 'taskkill /F /T /IM "smart_explorer.exe"'
-    Goto write_exe
-  write_failed:
-    MessageBox MB_OK|MB_ICONSTOP "Konnte $INSTDIR\${EXE_NAME} nicht schreiben.$\r$\nBitte alle Smart-Explorer-Fenster schließen (ggf. im Task-Manager 'Smart Explorer' beenden) und die Installation erneut starten."
-    Abort
-  write_done:
-  SetOverwrite on
-
-  Delete "$INSTDIR\${UPDATER_EXE_NAME}"
+  ; Extract immutable candidate bytes outside the installation. The verified
+  ; helper owns the existing update transaction, admission/drain, rollback and
+  ; MCP generation switch. Compatible running MCP generations keep their image.
+  InitPluginsDir
+  SetOutPath "$PLUGINSDIR"
+  File "/oname=${EXE_NAME}" "${EXE_SRC}"
   File "/oname=${UPDATER_EXE_NAME}" "${UPDATER_SRC}"
-
-  Delete "$INSTDIR\${CLI_EXE_NAME}"
   File "/oname=${CLI_EXE_NAME}" "${CLI_SRC}"
+  File "/oname=${LAUNCHER_EXE_NAME}" "${LAUNCHER_SRC}"
+  ClearErrors
+  ExecWait '"$PLUGINSDIR\${UPDATER_EXE_NAME}" --install-bundle --root "$INSTDIR" --app-staged "${EXE_NAME}" --app-sha256 "${EXE_SHA256}" --cli-staged "${CLI_EXE_NAME}" --cli-sha256 "${CLI_SHA256}" --launcher-staged "${LAUNCHER_EXE_NAME}" --launcher-sha256 "${LAUNCHER_SHA256}" --helper-sha256 "${UPDATER_SHA256}" --version "${VERSION}" --no-gui-start' $1
+  IfErrors bundle_failed
+  IntCmp $1 0 bundle_installed
+  bundle_failed:
+    MessageBox MB_OK|MB_ICONSTOP "Die geprüfte Installation konnte nicht abgeschlossen werden (Exitcode $1).$\r$\nDie Update-Diagnose enthält den Austausch- und Wiederherstellungsstatus."
+    Abort
+  bundle_installed:
+  SetOutPath "$INSTDIR"
 
   ; Use the Rust helper instead of NSIS string operations: normal NSIS builds
   ; can truncate a long PATH. The helper preserves the raw registry value type,

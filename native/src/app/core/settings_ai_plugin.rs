@@ -73,7 +73,27 @@ fn host_line(report: &Value) -> String {
             },
             files(&report["skill"])
         ),
-        _ => report.to_string(),
+        Some("runtime") => {
+            let runtime = &report["runtime"];
+            let state = match runtime["state"].as_str() {
+                Some("ready") => "Startbereit",
+                Some("legacy") => "Startkomponente muss aktualisiert werden",
+                Some("invalid") => "Installation nicht gültig – Einrichtung erneut ausführen",
+                Some("update_in_progress") => "Wird aktualisiert",
+                Some("busy") => "Statusabfrage wartet auf die laufende Änderung",
+                Some("update_recovery_required") => "Aktualisierung muss wiederhergestellt werden",
+                _ => "Zustand nicht bekannt",
+            };
+            let session: String = if let Some(servers) = runtime["active_servers"].as_array() {
+                if servers.is_empty() { "Keine aktive Agentensitzung gemeldet".into() }
+                else { format!("{} aktive Agentensitzung(en) dieses Benutzerprofils", servers.len()) }
+            } else if runtime["active_runtime_sha256"].is_null() { "Aktive Agentensitzung: von dieser Oberfläche nicht bekannt".into() }
+            else { "Aktive Agentensitzung zugelassen".into() };
+            let next = if runtime["state"].as_str() != Some("busy") && runtime["reconnect_required"].as_bool() == Some(true) { " · Agentensitzung neu verbinden" }
+                else if runtime["new_process_for_new_capabilities"].as_bool() == Some(true) { " · Neue Fähigkeiten benötigen eine neue Agentensitzung" } else { "" };
+            format!("Agentenanbindung: {state} · {session}{next}")
+        }
+        _ => "Status dieser Agentenanbindung wird von dieser App-Version nicht erkannt; Diagnose öffnen.".into(),
     }
 }
 
@@ -211,9 +231,13 @@ impl App {
                 );
                 match &panel.status {
                     Some(Ok(reports)) => {
-                        for report in reports {
-                            ui.label(host_line(report));
-                        }
+                        for report in reports { ui.label(host_line(report)); }
+                        egui::CollapsingHeader::new("Diagnose der Agentenanbindung").id_salt("agent_integration_diagnostics").show(ui, |ui| {
+                            if let Ok(text) = serde_json::to_string_pretty(reports) {
+                                if ui.button("Diagnose kopieren").clicked() { ui.ctx().copy_text(text.clone()); }
+                                ui.add(egui::Label::new(RichText::new(text).monospace().small()).wrap());
+                            }
+                        });
                     }
                     Some(Err(error)) => {
                         ui.colored_label(theme::danger(ui), error);
@@ -249,8 +273,9 @@ impl App {
                     ui.label(message);
                 }
                 ui.add_space(4.0);
-                ui.horizontal_wrapped(|ui| {
-                    ui.label("Andere MCP-Clients:");
+                let mut form = crate::app::settings_form::Form::new(ui, "plugin_client_form", &["MCP-Client"]);
+                form.row(ui, "MCP-Client", |ui| {
+                    ui.horizontal_wrapped(|ui| {
                     egui::ComboBox::from_id_salt("ai_plugin_config_host")
                         .selected_text(CONFIG_HOSTS[panel.config_host].1)
                         .show_ui(ui, |ui| {
@@ -262,6 +287,7 @@ impl App {
                         let host = CONFIG_HOSTS[panel.config_host].0;
                         panel.start("config", &["plugin", "config", host]);
                     }
+                });
                 });
                 if let Some(text) = &mut panel.config_text {
                     ui.add(egui::TextEdit::multiline(text).code_editor().desired_rows(4).desired_width(f32::INFINITY));
