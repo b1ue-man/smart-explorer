@@ -56,6 +56,8 @@ Anmeldung und Fernfenster sind noch nicht besetzt.
 | P11.1 gemeinsame physische optische Lesergrenze | `optical_reader` | `gpt-6.1-sol`, `high` | 8 |
 | B3 statischer kritischer Batchreview | `review_batch3` | Nutzervorgabe `gpt-6-astra`, `xhigh` | 9 |
 | P7/P27a/P30b–c/P31 Bildpipeline | `screen_pipeline` | `gpt-6.1-sol`, `xhigh` | 9 |
+| P18d Zulassung und aktiver Rechteentzug am Host | `access_runtime` | `gpt-6.1-sol`, `high` | 8 |
+| B1 statischer kritischer Batchreview | `review_batch1` | Nutzervorgabe `gpt-6-astra`, `xhigh` | 9 |
 
 Belegt sind die expliziten Modell-/Effortparameter der genannten Hostaufrufe.
 Antwortmodell-Metadaten sind über das verwendete Collaboration-Werkzeug nicht
@@ -73,7 +75,7 @@ Eine erste Auswahl für den breiten P28-Repositoryauftrag lieferte
 Transportcrates begrenzt; für diesen Codierungsauftrag wählte das Profil
 `coding` bei unveränderter Einstufung 9 Sol 6.1/xhigh. Der Appadapter besitzt
 einen separaten belegten Auswahlaufruf desselben Codingprofils.
-Auch der B3-Reviewselektor meldete bei Einstufung 9 im Repositoryprofil
+Auch die B1-/B3-Reviewselektoren meldeten bei Einstufung 9 im Repositoryprofil
 `no_feasible_model`; die ausdrückliche Nutzervorgabe Astra/xhigh hat Vorrang
 und wurde unverändert im Hostaufruf gesetzt.
 
@@ -117,9 +119,9 @@ aus. Ihre Durchführung hält die autorisierte Arbeit an Folgebatches nicht an.
 Bestätigte Befunde werden vor der gemeinsamen Remote-Suite behoben; der
 vereinbarte abschließende Gesamtreview bleibt erhalten. Die Reviewer belegen
 Fundstelle, Auswirkung, Quelle und noch ungeprüfte Annahmen. Der erste Review
-läuft für den integrierten B3/P13-Quellstand. Seine bestätigten Befunde werden
-parallel zur übrigen Umsetzung korrigiert. Die Reviews von B1, B2 und B4–B8
-beginnen nach Integration ihres jeweiligen vollständigen Paketumfangs.
+für B3/P13 ist dokumentiert; seine Korrekturen erhalten einen Nachreview.
+Der B1-Review läuft parallel zur übrigen Umsetzung. Die Reviews von B2 und
+B4–B8 beginnen nach Integration ihres jeweiligen vollständigen Paketumfangs.
 
 ## Integrationsbefunde
 
@@ -173,6 +175,24 @@ beginnen nach Integration ihres jeweiligen vollständigen Paketumfangs.
 - P28: Iroh, Noq und Noq-proto sind exakt an 1.3.0 und lokale Vendorpfade
   gebunden. Der Patch enthält eine Sendesperre vor Frameserialisierung und
   invalidiert bereits geplante I/O bei Policy-/Netzgenerationswechsel.
+- P2: Das Android-Launcherwidget liefert bei Überschreiten der Ziehschwelle
+  einmal sein vorhandenes Viewabbild. Erst dann wird das Original verborgen;
+  ein fehlgeschlagener Snapshot lässt es sichtbar. Ende, Abbruch, Größenwechsel
+  und Viewdetach lösen den Ziehzustand. Quelle ist der AndroidX-Vertrag für
+  [Viewabbilder](https://android.googlesource.com/platform/frameworks/support/+/2fd71467c295a57331c2c23e66e3574230d209d3/core/core-ktx/src/main/java/androidx/core/view/View.kt),
+  geprüft am 2026-10-25. Dieser Software-Canvasweg ist kein Beleg für identische
+  Hardwareeffekte. Kotlin-Syntax ist statisch geparst; Gestenlaufzeit ist offen.
+- P21/P14: Der CLI-Quellspool verschlüsselt Inhalte vor dem Schreiben mit dem
+  vorhandenen Cryptomator-Chunkformat und einem nur im RAM gehaltenen Schlüssel
+  je Datei. Fertige Ciphertextdateien halten keine offenen Dateihandles. Dadurch
+  sind auch lokale Tresormounts abgedeckt, ohne aus ihrem Localbackend einen
+  unverschlüsselten Spool abzuleiten. Namen im Spool sind laufende Nummern.
+- B3: [Der erste Astra-Bericht](review-b3.md) enthält sieben belegte
+  Befundgruppen. Korrekturen für Prozessidentität, Windows-Persistenz und
+  Postcommit-Refresh wurden punktuell nachgelesen. Katalogzulassung,
+  Mountretainer, stabile Starterpfade und Claude-Feldbesitz erhalten einen
+  gezielten Nachreview nach Integration ihrer Korrekturen.
+- B1: Der separate Astra-Review ist gestartet; der Befund ist noch offen.
 
 Die Integrationsbefunde sind Quelltextbefunde. Praktische Funktionsnachweise,
 die gemeinsame Remote-Suite, Versionserhöhung und Veröffentlichung stehen
