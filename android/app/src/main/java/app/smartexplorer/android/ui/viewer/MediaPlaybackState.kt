@@ -16,14 +16,21 @@ internal class MediaPlaybackState(context: Context) {
     var onFocusChange: (Int) -> Unit = {}
     private val focus = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
         .setAudioAttributes(attributes).setOnAudioFocusChangeListener { onFocusChange(it) }.build()
+    // Prepared is not a valid pause state. isPlaying() can lag behind start(),
+    // so retain our successful start transition until pause or release.
+    private var started = false
     fun start(visible: Boolean): Boolean {
         val manager = audioManager ?: return false
         if (released || !visible || manager.requestAudioFocus(focus) != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) return false
         player.start()
+        started = true
         return true
     }
     fun pause(prepared: Boolean = true) {
-        if (!released && prepared) player.pause()
+        if (!released && prepared && started) {
+            player.pause()
+            started = false
+        }
         audioManager?.abandonAudioFocusRequest(focus)
     }
     private var released = false
@@ -35,6 +42,7 @@ internal class MediaPlaybackState(context: Context) {
     fun release() {
         if (released) return
         released = true
+        started = false
         audioManager?.abandonAudioFocusRequest(focus)
         onFocusChange = {}
         player.setDisplay(null)
