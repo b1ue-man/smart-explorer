@@ -18,6 +18,7 @@ pub(super) fn refresh(
     active: &HashSet<String>,
 ) -> bool {
     let credentials = crate::creds::credentials_revision();
+    let drive_credentials = crate::cloud::auth_success_revision(crate::cloud::Provider::GDrive);
     let mut changed = false;
     for job in jobs {
         let Some(state) = states
@@ -26,7 +27,7 @@ pub(super) fn refresh(
         else {
             continue;
         };
-        if let Some((evidence, reason)) = evidence(job, state, jobs, states, credentials) {
+        if let Some((evidence, reason)) = evidence(job, state, jobs, states, if uses_drive(job) { credentials.into_iter().chain(drive_credentials).max() } else { credentials }) {
             changed |= store_recheck(job, evidence, reason);
         }
         if !active.contains(&job.id) {

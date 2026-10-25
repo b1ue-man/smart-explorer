@@ -1,7 +1,11 @@
 #[path = "core/cloud.rs"]
 mod core_impl;
+#[cfg(test)]
 #[path = "core/token_persistence.rs"]
 mod token_persistence;
+#[path = "core/auth_state.rs"]
+mod auth_state;
+pub use auth_state::{AuthError, AuthState, AuthStatus, ProviderFailure};
 
 mod os {
     #[path = "opener.rs"]
@@ -16,6 +20,10 @@ mod os {
     #[path = "windows.rs"]
     mod platform;
     pub mod shared;
+    pub(crate) mod session_store;
+    pub(crate) mod coordinator;
+    pub(crate) mod oauth_http;
+    pub(crate) mod oauth_flow;
 
     pub use opener::set_url_opener;
 
@@ -37,3 +45,7 @@ mod os {
 
 pub use core_impl::*;
 pub use os::{open_platform_url, set_url_opener};
+
+#[cfg(test)]
+pub(crate) use os::session_store::{test_reset as test_reset_session, test_restore as test_restore_session,
+    test_snapshot as test_session_snapshot, TestSessionSnapshot};

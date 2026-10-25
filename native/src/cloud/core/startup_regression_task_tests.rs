@@ -1,10 +1,19 @@
 //! The real refresh path against a local HTTP provider on the remote runner.
 use super::*;
+use std::io::{Read, Write};
+use std::time::Duration;
+
+fn refresh_access_from(provider: Provider, url: &str) -> Result<Tokens, String> {
+    // This existing fixture isolates token exchange, not the Drive identity API.
+    super::super::os::coordinator::refresh(provider, url, None, |_| {
+        Ok("startup-regression-fixture-account".into())
+    }).map_err(|error| error.to_string())
+}
 
 struct Fixture {
     root: tempfile::TempDir,
     previous: Option<std::ffi::OsString>,
-    token: Option<String>,
+    session: Option<crate::cloud::TestSessionSnapshot>,
 }
 
 impl Fixture {
@@ -16,20 +25,20 @@ impl Fixture {
         let previous = std::env::var_os(key);
         let root = tempfile::tempdir().unwrap();
         std::env::set_var(key, root.path());
-        let token = refresh_token_checked(Provider::GDrive).unwrap();
+        let session = crate::cloud::test_session_snapshot(Provider::GDrive).unwrap();
+        crate::cloud::test_reset_session(Provider::GDrive).unwrap();
         Self {
             root,
             previous,
-            token,
+            session: Some(session),
         }
     }
 }
 
 impl Drop for Fixture {
     fn drop(&mut self) {
-        match &self.token {
-            Some(token) => store_refresh_token(Provider::GDrive, token).unwrap(),
-            None => disconnect(Provider::GDrive).unwrap(),
+        if let Some(session) = self.session.take() {
+            crate::cloud::test_restore_session(Provider::GDrive, session).unwrap();
         }
         #[cfg(windows)]
         let key = "APPDATA";

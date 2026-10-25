@@ -3,6 +3,7 @@ package app.smartexplorer.android.api
 import app.smartexplorer.android.core.Core
 import app.smartexplorer.android.core.CoreException
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -71,6 +72,21 @@ data class GdriveStatus(
     val clientConfigured: Boolean = false,
     val signedIn: Boolean = false,
     val clientId: String? = null,
+    val state: String = "disconnected",
+    val message: String = "Nicht angemeldet",
+    val accountKey: String? = null,
+    val generation: Long = 0,
+    val loginAt: Long? = null,
+    val lastRefreshAt: Long? = null,
+    val clientChangedAt: Long? = null,
+    val providerError: GdriveProviderError? = null,
+    val projectStatus: String = "unconfirmed",
+)
+
+@Serializable
+data class GdriveProviderError(
+    @SerialName("http_status") val httpStatus: Int? = null,
+    val code: String = "provider_error",
 )
 
 /** Suspending wrappers for api.md §4.6; every call throws [CoreException] on errors. */

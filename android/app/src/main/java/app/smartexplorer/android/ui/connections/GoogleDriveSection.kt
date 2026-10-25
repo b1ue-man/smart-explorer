@@ -117,21 +117,34 @@ fun GoogleDriveSection(modifier: Modifier = Modifier) {
                 onAction = { reloadKey++ },
             )
             current == null -> Unit
+            current.state == "storage_error" && running == null -> ErrorCard(
+                current.message,
+                title = "Google-Drive-Anmeldespeicher nicht verfügbar",
+                actionLabel = "Erneut",
+                onAction = { reloadKey++ },
+            )
             running != null -> {
                 Text("Warte auf die Anmeldung im Browser (bis zu 3 Minuten) …", style = MaterialTheme.typography.bodyMedium)
                 OutlinedButton(onClick = { action("Nicht abgebrochen") { FilesApi.cancelTask(running) } }) { Text("Abbrechen") }
             }
-            current.signedIn -> {
-                Text("Angemeldet", style = MaterialTheme.typography.bodyLarge)
-                OutlinedButton(onClick = { action("Nicht abgemeldet") { ConnApi.gdriveSignOut() } }, enabled = !busy) { Text("Abmelden") }
+            current.signedIn && !editing -> {
+                Text(current.message, style = MaterialTheme.typography.bodyLarge)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { action("Nicht abgemeldet") { ConnApi.gdriveSignOut() } }, enabled = !busy) { Text("Abmelden") }
+                    OutlinedButton(onClick = { editing = true }, enabled = !busy) { Text("Client-ID ändern") }
+                }
+                TextButton(onClick = {
+                    signInFailure = null
+                    action("Anmeldung nicht gestartet") { signInTask = ConnApi.gdriveSignIn() }
+                }, enabled = !busy) { Text("Anmeldung erneuern") }
             }
             current.clientConfigured && !editing -> {
-                Text("Client-ID hinterlegt, nicht angemeldet.", style = MaterialTheme.typography.bodyMedium)
+                Text(current.message, style = MaterialTheme.typography.bodyMedium)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = {
                         signInFailure = null
                         action("Anmeldung nicht gestartet") { signInTask = ConnApi.gdriveSignIn() }
-                    }, enabled = !busy) { Text("Anmelden") }
+                    }, enabled = !busy) { Text(if (current.state in listOf("reauthorize_required", "client_changed")) "Anmeldung erneuern" else "Anmelden") }
                     OutlinedButton(onClick = { editing = true }) { Text("Client-ID ändern") }
                 }
             }
@@ -168,12 +181,25 @@ fun GoogleDriveSection(modifier: Modifier = Modifier) {
                 }
             }
         }
+        current?.providerError?.let { failure ->
+            Text("OAuth: ${failure.code}" + (failure.httpStatus?.let { " (HTTP $it)" } ?: ""), style = MaterialTheme.typography.bodySmall)
+        }
+        current?.clientChangedAt?.let { at ->
+            Text("Client-ID zuletzt geändert: " + java.text.DateFormat.getDateTimeInstance().format(java.util.Date(at * 1000)), style = MaterialTheme.typography.bodySmall)
+        }
+        current?.loginAt?.let { at ->
+            Text("Angemeldet seit: " + java.text.DateFormat.getDateTimeInstance().format(java.util.Date(at * 1000)), style = MaterialTheme.typography.bodySmall)
+        }
+        current?.lastRefreshAt?.let { at ->
+            Text("Letzte erfolgreiche Erneuerung: " + java.text.DateFormat.getDateTimeInstance().format(java.util.Date(at * 1000)), style = MaterialTheme.typography.bodySmall)
+        }
         signInFailure?.let { failure ->
             Text(failure, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
         }
         Text(
             "Eigene OAuth-Client-ID wie am Desktop. Die Anmeldung aus dem Android-Browser ist nicht für jedes " +
-                "Google-Konto geprüft.",
+                "Google-Konto geprüft. Ein externes Google-Projekt im Testing-Status kann die Drive-Anmeldung nach sieben Tagen verlieren. " +
+                "Der konkrete Projektstatus ist nicht bestätigt; der Zeitabstand allein beweist keinen Testmodus.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

@@ -12,6 +12,7 @@ use std::time::Duration;
 #[derive(Clone)]
 pub struct GDriveBackend {
     pub(super) tokens: Arc<Mutex<cloud::Tokens>>,
+    pub(super) managed_auth: bool,
     /// path (forward-slash, no trailing slash; "" == root) -> fileId
     pub(super) ids: Arc<Mutex<HashMap<String, String>>>,
     /// Paths loaded from disk must be validated once before they can short-cut
@@ -72,6 +73,7 @@ pub struct GDriveBackend {
 /// Everything a backend is built from.
 struct Setup {
     tokens: cloud::Tokens,
+    managed_auth: bool,
     ids: HashMap<String, String>,
     untrusted_ids: HashSet<String>,
     captured_legacy_hints: HashMap<String, String>,
@@ -90,10 +92,15 @@ impl GDriveBackend {
     /// Build from the stored refresh token (must already be connected via
     /// `cloud::authorize`). `root` is the forward-slash start folder.
     pub fn connect(root: &str) -> Result<Self, String> {
-        let tokens = cloud::refresh_access(Provider::GDrive)?;
         let http = DriveHttp::new(super::api::DRIVE_REQUEST_TIMEOUT);
-        // The account lookup already opens the pooled socket later calls use.
-        let drive_account_key = load_drive_account_key(&http.api(), &tokens.access_token)?;
+        let mut confirmed_account = None;
+        let tokens = cloud::refresh_access_with_identity(Provider::GDrive, None, |token| {
+            let account = load_drive_account_key(&http.api(), token)?;
+            confirmed_account = Some(account.clone());
+            Ok(account)
+        }).map_err(|error| error.to_string())?;
+        let drive_account_key = confirmed_account
+            .ok_or_else(|| "Drive-Konto wurde nicht bestätigt".to_string())?;
         let cache_path = super::binding_store::account_cache_path(&drive_account_key);
         // Both files are merely hints. The immutable registry has its own
         // checked format and never falls back to empty state on read failure.
@@ -104,6 +111,7 @@ impl GDriveBackend {
         let untrusted_ids = super::cache::loaded_untrusted(&ids);
         Ok(Self::from_setup(Setup {
             tokens,
+            managed_auth: true,
             ids,
             untrusted_ids,
             captured_legacy_hints: caches.historical_ids,
@@ -125,6 +133,7 @@ impl GDriveBackend {
         let cache_store = CacheStore::new(setup.cache_path, Arc::clone(&ids), Arc::clone(&mimes));
         GDriveBackend {
             tokens: Arc::new(Mutex::new(setup.tokens)),
+            managed_auth: setup.managed_auth,
             ids,
             untrusted_ids: Arc::new(Mutex::new(setup.untrusted_ids)),
             captured_legacy_hints: Arc::new(Mutex::new(setup.captured_legacy_hints)),
@@ -216,6 +225,7 @@ impl GDriveBackend {
                 refresh_token: "test-refresh".to_string(),
                 expires_at: i64::MAX,
             },
+            managed_auth: false,
             ids,
             untrusted_ids: HashSet::new(),
             captured_legacy_hints: HashMap::new(),
@@ -371,7 +381,7 @@ impl GDriveBackend {
 /// Drive publishes `user.permissionId` as the requesting user's opaque grantee
 /// ID. Unlike a refresh token, it remains the same when OAuth credentials are
 /// refreshed or re-authorized, so durable mutation records stay discoverable.
-fn load_drive_account_key(agent: &ureq::Agent, access_token: &str) -> Result<String, String> {
+fn load_drive_account_key(agent: &ureq::Agent, access_token: &str) -> Result<String, cloud::AuthError> {
     let url = format!("{}/about?fields=user(permissionId)", super::api::API);
     let bearer = format!("Bearer {access_token}");
     let response = agent
@@ -379,11 +389,14 @@ fn load_drive_account_key(agent: &ureq::Agent, access_token: &str) -> Result<Str
         .timeout(super::api::DRIVE_REQUEST_TIMEOUT)
         .set("Authorization", &bearer)
         .call()
-        .map_err(|error| format!("Drive account identity request failed: {error}"))?;
+        .map_err(|error| match error {
+            ureq::Error::Status(status, _) => cloud::AuthError::provider(status, "provider_error"),
+            _ => cloud::AuthError::new(cloud::AuthState::NetworkError),
+        })?;
     let body = response
         .into_string()
-        .map_err(|error| format!("Drive account identity response failed: {error}"))?;
-    parse_drive_account_key(&body)
+        .map_err(|_| cloud::AuthError::new(cloud::AuthState::NetworkError))?;
+    parse_drive_account_key(&body).map_err(|_| cloud::AuthError::new(cloud::AuthState::IdentityUnverified))
 }
 
 pub(super) fn parse_drive_account_key(body: &str) -> Result<String, String> {
