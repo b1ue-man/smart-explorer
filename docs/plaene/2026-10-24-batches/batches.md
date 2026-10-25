@@ -1,5 +1,7 @@
 # Nächste Läufe: Batches und Modelle (2026-10-24)
 
+**Übergabe an einen anderen Agenten:** `uebergabe.md` in diesem Ordner (Stand, Lesereihenfolge, Regeln des Nutzers, CI-Fallen).
+
 **Status: vorläufiger Vorschlag.** Nichts ist begonnen. Der Zuschnitt unten ist ein erster Vorschlag. Die Batches werden erst nach der Planung festgelegt, die nach der Planungsvorgehensweise der Arbeitsweise läuft. Erst danach werden auch die Umsetzungsagenten zugeteilt (Abschnitt „Vorgehen und Agenten“).
 
 ## Auftrag
