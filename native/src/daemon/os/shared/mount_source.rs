@@ -27,6 +27,9 @@ pub(super) fn resolve(config: &MountConfig, host: &ShareHost) -> Result<BackendH
                 .map(|(backend, _)| backend)
         }
         MountSource::GoogleDrive { account, root } => {
+            // This is the UI selector only. The fresh backend's confirmed
+            // principal/root must pass the persistent cache binding in the
+            // mount start path before any host may replay cached writes.
             if account != GDRIVE_ACCOUNT {
                 return Err("Das ausgewaehlte Google-Drive-Konto ist nicht verfuegbar".into());
             }

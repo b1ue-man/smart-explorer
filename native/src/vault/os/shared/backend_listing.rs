@@ -24,7 +24,7 @@ use crate::vault::core::path_map::{child, components, dir_key};
 use crate::vfs::{self, Backend, OmissionReason, VfsListing, VfsMeta, VfsOmission};
 
 use super::backend::VaultBackend;
-use super::backend_nodes::{invalid_data, Found, NodeKind, NodeRef};
+use super::backend_nodes::{check_name, invalid_data, Found, NodeKind, NodeRef};
 use super::dir_cache::DirRef;
 
 /// Node folders inspected at once on storages that allow parallel work.
@@ -132,6 +132,10 @@ impl VaultBackend {
         };
         let mut candidates = Vec::new();
         for meta in stored.entries {
+            if check_name(&meta.name).is_err() {
+                listing.omitted.push(omission(&meta.name, OmissionReason::Unrepresentable, "Ungültige Speicherkomponente"));
+                continue;
+            }
             let class = classify_entry(&meta.name);
             if class == EntryClass::Ignored {
                 continue;
@@ -219,6 +223,9 @@ impl VaultBackend {
             Named::Hidden => return Ok(Listed::Skipped),
             Named::Undecryptable => return unreadable(&stored, UNDECRYPTABLE),
         };
+        if check_name(&clear).is_err() {
+            return unreadable(&stored, "Entschlüsselter Name ist keine einzelne Pfadkomponente");
+        }
         // Reachable under its name only when stored exactly as se stores it
         // (NFC, canonical, shortened above the threshold); else an alias.
         let expected = self

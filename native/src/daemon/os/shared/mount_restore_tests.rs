@@ -72,7 +72,7 @@ fn registry_bytes(dir: &Path) -> (Option<Vec<u8>>, Option<Vec<u8>>) {
 /// entry whose registry record is kept.
 fn start_like_host(manager: &MountManager, config: MountConfig) -> Result<MountSnapshot, String> {
     let key = config.id.as_str().to_string();
-    start_cache::insert(manager, &key, config, true)?;
+    start_cache::insert(manager, &key, config, true, None)?;
     status_of(manager, &key).ok_or_else(|| "started drive is missing".to_string())
 }
 

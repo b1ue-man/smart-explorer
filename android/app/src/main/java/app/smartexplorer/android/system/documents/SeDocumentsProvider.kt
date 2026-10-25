@@ -71,12 +71,14 @@ class SeDocumentsProvider : DocumentsProvider() {
         scope.launch {
             if (Core.ready.first { it !is CoreState.Starting } !is CoreState.Ready) return@launch
             val pending = try {
-                DocsApi.pending().pending
+                DocsApi.pending()
             } catch (e: CoreException) {
                 Log.w(TAG, "docs.pending: ${e.kind}")
-                0
+                null
             }
-            if (pending > 0) DocsCommitWorker.enqueue(app)
+            // Unknown is retained work, not an empty queue. The authorized
+            // retry can open a sealed cache after its vault is unlocked.
+            if (pending?.isClean != true) DocsCommitWorker.enqueue(app)
         }
     }
 

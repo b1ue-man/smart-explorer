@@ -17,7 +17,7 @@ use crate::mount::{MountId, MountRecovery};
 /// until dropped.
 pub(crate) struct CacheLease {
     _lock_file: File,
-    _files_directory: File,
+    _files_directory: Option<File>,
     _mount_directory: File,
     _cache_directory: File,
 }
@@ -50,10 +50,31 @@ impl CacheLease {
         }
         Ok(Self {
             _lock_file: lock_file,
-            _files_directory: files_directory,
+            _files_directory: Some(files_directory),
             _mount_directory: mount_directory,
             _cache_directory: cache_directory,
         })
+    }
+
+    /// Offline inspection never creates a cache, files directory or lockfile.
+    fn acquire_existing(cache_root: &Path, mount_id: &MountId) -> io::Result<Self> {
+        let cache_directory = open_plain_directory(cache_root)?;
+        let mount_path = cache_root.join(mount_id.as_str());
+        let mount_directory = open_plain_directory(&mount_path)?;
+        let files_directory = match open_plain_directory(&mount_path.join("files")) {
+            Ok(directory) => Some(directory),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error),
+        };
+        let lock_file = OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW)
+            .open(cache_root.join(format!(".{}.host.lock", mount_id.as_str())))?;
+        validate_lock_file(&lock_file)?;
+        // SAFETY: lock_file owns the descriptor throughout this nonblocking call.
+        if unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Self { _lock_file: lock_file, _files_directory: files_directory,
+            _mount_directory: mount_directory, _cache_directory: cache_directory })
     }
 }
 
@@ -63,22 +84,28 @@ pub(crate) fn audit_recovery(cache_root: &Path, mount_id: &MountId) -> io::Resul
     match fs::symlink_metadata(cache_root.join(mount_id.as_str())) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(MountRecovery::Clean),
         Err(error) => return Err(error),
-        Ok(_) => {}
+        Ok(_) => {},
     }
-    let _lease = CacheLease::acquire(cache_root, mount_id)?;
+    let _lease = CacheLease::acquire_existing(cache_root, mount_id)?;
     crate::mount::spool::audit_recovery(cache_root, mount_id)
 }
 
 /// Journal records a drive whose host is not running still owns, read
 /// under the lease (DRV-M7: the count of `RequiresUnlock`).
 pub(crate) fn audit_pending(cache_root: &Path, mount_id: &MountId) -> io::Result<usize> {
+    audit_pending_state(cache_root, mount_id)?.ok_or_else(|| io::Error::new(
+        io::ErrorKind::WouldBlock,
+        "mount_cache_inventory_unknown: Versiegelter oder unvollständiger Cache bleibt bis zum autorisierten Öffnen unbekannt"))
+}
+
+pub(crate) fn audit_pending_state(cache_root: &Path, mount_id: &MountId) -> io::Result<Option<usize>> {
     match fs::symlink_metadata(cache_root.join(mount_id.as_str())) {
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(0),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Some(0)),
         Err(error) => return Err(error),
         Ok(_) => {}
     }
-    let _lease = CacheLease::acquire(cache_root, mount_id)?;
-    crate::mount::spool::audit_pending(cache_root, mount_id)
+    let _lease = CacheLease::acquire_existing(cache_root, mount_id)?;
+    crate::mount::spool::audit_pending_state(cache_root, mount_id)
 }
 
 fn prepare_plain_directory(path: &Path) -> io::Result<File> {

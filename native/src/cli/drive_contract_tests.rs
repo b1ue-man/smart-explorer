@@ -207,6 +207,7 @@ fn drive_snapshot(
     recovery: MountRecovery,
 ) -> MountSnapshot {
     MountSnapshot {
+        capacity: None,
         config: config.clone(),
         status,
         recovery,

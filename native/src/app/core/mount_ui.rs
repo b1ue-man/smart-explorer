@@ -9,6 +9,10 @@ use super::prelude::*;
 use super::*;
 
 const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+#[path = "mount_recovery_ui.rs"]
+mod recovery_ui;
+#[path = "mount_capacity_ui.rs"]
+mod capacity_ui;
 
 pub(super) struct MountUiState {
     pub(super) draft: Option<MountDraft>,
@@ -19,6 +23,8 @@ pub(super) struct MountUiState {
     pub(super) busy: Option<String>,
     pub(super) next_poll: Instant,
     received_initial_list: bool,
+    pub(super) recovery_draft: Option<recovery_ui::RecoveryDraft>,
+    pub(super) recoveries: Vec<crate::mount::InactiveMountRecovery>,
 }
 
 pub(super) enum MountUiResult {
@@ -29,6 +35,8 @@ pub(super) enum MountUiResult {
     Options(crate::mount::MountSnapshot),
     /// DRV-M5: the drive was shown in the file manager; nothing changes.
     Opened,
+    RecoverySaved(crate::mount::InactiveMountRecovery),
+    RecoveryList(Vec<crate::mount::InactiveMountRecovery>),
 }
 
 impl Default for MountUiState {
@@ -42,6 +50,8 @@ impl Default for MountUiState {
             busy: None,
             next_poll: Instant::now(),
             received_initial_list: false,
+            recovery_draft: None,
+            recoveries: Vec::new(),
         }
     }
 }
@@ -133,6 +143,15 @@ impl App {
                         present_install_outcome(self, outcome);
                     }
                     MountUiResult::Opened => {}
+                    MountUiResult::RecoverySaved(record) => {
+                        self.mount_ui.mounts.retain(|mount| mount.config.id != record.config.id);
+                        self.mount_ui.recovery_draft = None;
+                        self.notice = Some((format!(
+                            "Laufwerk entfernt; Recovery {} unter {} erhalten. {} ausdrücklich ungesicherte Datenbezüge stehen im Manifest",
+                            record.id, record.package_path.display(), record.gap_count), Instant::now()));
+                        self.mount_ui.recoveries.push(record);
+                    }
+                    MountUiResult::RecoveryList(records) => self.mount_ui.recoveries = records,
                     MountUiResult::Options(snapshot) => {
                         let state = if snapshot.config.auto_remount {
                             "ein"
@@ -183,6 +202,7 @@ impl App {
     pub(in crate::app) fn ui_mount_windows(&mut self, ctx: &egui::Context) {
         self.ui_mount_draft(ctx);
         self.ui_mount_manager(ctx);
+        self.ui_mount_recovery(ctx);
     }
 
     fn ui_mount_manager(&mut self, ctx: &egui::Context) {
@@ -197,7 +217,10 @@ impl App {
         // DRV-M5: „Im Dateimanager öffnen“.
         let mut open_folder: Option<std::path::PathBuf> = None;
         let mut install_runtime = false;
-        egui::Window::new("Smart-Explorer-Laufwerke")
+        let mut save_recovery = None;
+        let mut show_recoveries = false;
+        super::dialog_geometry::window(ctx, "mount_ui.0", "Smart-Explorer-Laufwerke")
+            .id(egui::Id::new("Smart-Explorer-Laufwerke"))
             .open(&mut open)
             .default_width(600.0)
             .max_size(theme::window_content_limit(ctx))
@@ -225,6 +248,7 @@ impl App {
                                     ui.label(format!("Einhängeort: {}", folder.display()));
                                 }
                                 ui.label(recovery_label(mount.recovery));
+                                capacity_ui::show(ui, mount);
                             });
                         // DRV-M3: the option of a managed drive, as `se drive set`.
                         let mut auto_remount = mount.config.auto_remount;
@@ -266,6 +290,11 @@ impl App {
                                 {
                                     action = Some((false, mount.config.id.clone()));
                                 }
+                                if mount.recovery.requires_retention()
+                                    && ui.add_enabled(self.mount_ui.action_rx.is_none(),
+                                        egui::Button::new("Sichern und entfernen")).clicked() {
+                                    save_recovery = Some((mount.config.id.clone(), mount.config.label.clone()));
+                                }
                             }
                             crate::mount::MountStatus::Unmounted => {}
                             _ => {
@@ -299,13 +328,21 @@ impl App {
                     });
                 }
                 ui.separator();
+                show_recoveries = ui.add_enabled(self.mount_ui.action_rx.is_none(),
+                    egui::Button::new("Inaktiven Recoverybestand anzeigen")).clicked();
+                recovery_ui::show_retained(ui, &self.mount_ui.recoveries);
                 let enabled = self.mount_ui.action_rx.is_none();
                 ui.horizontal(|ui| {
                     install_runtime = install_controls(ui, enabled, "Dokany-Laufzeit / Hilfe");
                 });
             });
         self.mount_ui.show_manager = open;
-        if install_runtime {
+        if let Some((id, label)) = save_recovery {
+            self.mount_ui.recovery_draft = Some(recovery_ui::RecoveryDraft::new(id, label));
+        } else if show_recoveries {
+            self.spawn_mount_action("Recoverybestand wird gelesen", ||
+                crate::daemon::list_mount_recoveries().map(MountUiResult::RecoveryList));
+        } else if install_runtime {
             self.spawn_mount_action("Dokany wird sicher installiert", || {
                 crate::mount::install_drive_runtime(None).map(MountUiResult::RuntimeInstalled)
             });

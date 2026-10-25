@@ -36,7 +36,7 @@ mod optimization_runtime_tests;
 #[cfg(test)]
 mod recovery_cache_task_tests;
 
-pub(crate) use cache_lease::{audit_pending, audit_recovery};
+pub(crate) use cache_lease::{audit_pending, audit_pending_state, audit_recovery, CacheLease};
 pub(crate) use host::{preflight_runtime, run_mount_host};
 pub(crate) use runtime_install::install_runtime;
 

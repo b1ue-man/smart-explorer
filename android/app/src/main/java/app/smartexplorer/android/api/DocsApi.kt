@@ -29,6 +29,9 @@ data class DocsRoot(
     val create: Boolean = false,
     /** A vault in this phone's storage (`FLAG_LOCAL_ONLY`, assumption A10). */
     val localOnly: Boolean = false,
+    /** Provider metadata only; unknown and unbounded capacities are null. */
+    val totalBytes: Long? = null,
+    val availableBytes: Long? = null,
 )
 
 /** A file or folder (`docs.document`, entries of `docs.children`). */
@@ -80,7 +83,15 @@ data class DocsSettings(
 
 /** `docs.pending` / `docs.retryPending`. */
 @Serializable
-data class DocsPending(val pending: Int = 0, val failed: List<String> = emptyList())
+data class DocsPending(
+    /** null means that at least one retained cache cannot be counted offline. */
+    val pending: Int? = null,
+    val failed: List<String> = emptyList(),
+    val knownPending: Int = 0,
+    val unknown: List<String> = emptyList(),
+) {
+    val isClean: Boolean get() = pending == 0 && unknown.isEmpty() && failed.isEmpty()
+}
 
 /** Created or renamed document (`docs.rename`). */
 @Serializable

@@ -55,6 +55,7 @@ fn snapshot(status: MountStatus, folder: Option<&str>) -> MountSnapshot {
     .with_location_directory(folder.map(PathBuf::from))
     .unwrap();
     MountSnapshot {
+        capacity: None,
         config,
         status,
         recovery: MountRecovery::Clean,

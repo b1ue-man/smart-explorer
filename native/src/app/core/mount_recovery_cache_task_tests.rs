@@ -3,6 +3,7 @@ use crate::mount::*;
 
 fn failed() -> MountSnapshot {
     MountSnapshot {
+        capacity: None,
         config: MountConfig::new(MountId::parse("startup-recovery").unwrap(),
             MountSource::SavedRemote { account: "saved-test".into(), root: BackendRoot::parse("/").unwrap() },
             DriveSelection::Automatic, MountMode::ReadOnly, "Smart Explorer").unwrap(),

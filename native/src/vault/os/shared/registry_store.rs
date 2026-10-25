@@ -134,11 +134,34 @@ impl RegistryStore {
         site.validate()?;
         let _guard = self.write_guard()?;
         let load = self.load().map_err(read_error)?;
-        if !load.sites.iter().any(|other| other.id == site.id) {
-            return Err("Tresorort ist nicht eingetragen".into());
-        }
+        let current = load.sites.iter().find(|other| other.id == site.id)
+            .ok_or_else(|| "Tresorort ist nicht eingetragen".to_string())?;
         check_location_free(&load.sites, site)?;
-        self.write(site)
+        // Generic settings/password saves may hold a stale record. Only the
+        // atomic policy updater may change consent, especially after revocation.
+        let mut merged = site.clone();
+        let key = crate::vault::core::open_policy::POLICY_KEY;
+        merged.extra.retain(|(name, _)| name != key);
+        merged.extra.extend(current.extra.iter().filter(|(name, _)| name == key).cloned());
+        self.write(&merged)
+    }
+
+    /// Read/modify/write one current record under the process and file locks.
+    /// Policy updates must not overwrite a simultaneous settings or locator edit.
+    pub(crate) fn update(
+        &self,
+        id: &str,
+        change: impl FnOnce(&mut SiteRecord) -> Result<(), String>,
+    ) -> Result<SiteRecord, String> {
+        let _guard = self.write_guard()?;
+        let mut record = self.get(id).map_err(read_error)?
+            .ok_or_else(|| "Tresorort ist nicht eingetragen".to_string())?;
+        change(&mut record)?;
+        record.validate()?;
+        let load = self.load().map_err(read_error)?;
+        check_location_free(&load.sites, &record)?;
+        self.write(&record)?;
+        Ok(record)
     }
 
     /// Removes an entry; `false` when there was none. The vault itself

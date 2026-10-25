@@ -21,6 +21,8 @@ mod backend_copy;
 mod backend_dirs;
 #[path = "shared/backend_extensions.rs"]
 mod backend_extensions;
+#[path = "shared/backend_identity.rs"]
+mod backend_identity;
 #[path = "shared/backend_io.rs"]
 mod backend_io;
 #[path = "shared/backend_listing.rs"]
@@ -69,6 +71,14 @@ mod local_store;
 mod manage;
 #[path = "shared/mount_bridge.rs"]
 mod mount_bridge;
+#[path = "shared/open_policy.rs"]
+mod open_policy;
+#[cfg(windows)]
+#[path = "root_identity_windows.rs"]
+mod root_identity;
+#[cfg(not(windows))]
+#[path = "root_identity_unix.rs"]
+mod root_identity;
 #[path = "shared/open.rs"]
 mod open;
 #[path = "shared/password.rs"]
@@ -87,6 +97,10 @@ mod session;
 mod spool_key;
 #[path = "shared/sync_job.rs"]
 mod sync_job;
+#[path = "shared/transfer_blob.rs"]
+mod transfer_blob;
+#[path = "shared/transfer_blob_context.rs"]
+mod transfer_blob_context;
 #[path = "shared/unlock.rs"]
 mod unlock;
 
@@ -129,6 +143,7 @@ pub(crate) use manage::{
 pub(crate) use mount_bridge::{
     vault_drive_bridge, MountVaultError, Resolver, UnlockHook, VaultDriveBridge,
 };
+pub(crate) use open_policy::{mount_policy, confirm_root_trust, set_root_trust, set_cleartext_copy_policy, mount_access, authorize_provider, note_mount_binding, mount_binding_matches, forget_mount_binding, recovery_identity, MountAccess};
 pub(crate) use open::{
     canonical_vault_location, open_in, open_location_in, open_vault_backend, open_vault_location,
     open_with, publish_session, resolve_store_in, resolve_vault_store, site_locations,
@@ -271,3 +286,6 @@ mod session_tests;
 #[cfg(test)]
 #[path = "shared/spool_key_tests.rs"]
 mod spool_key_tests;
+
+pub(crate) use transfer_blob::{TransferBlobPurpose, seal_transfer_blob, open_transfer_blob};
+pub(crate) use transfer_blob_context::{TransferBlobContext, transfer_blob_context, check_transfer_blob_context_live, check_transfer_blob_context};

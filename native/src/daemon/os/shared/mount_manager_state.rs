@@ -231,11 +231,13 @@ fn bounded_detail(mut detail: String) -> String {
 }
 
 fn clear_host_runtime(entry: &mut MountEntry) {
+    entry.capacity = None;
     entry.launch_token = None;
     entry.session_token = None;
     entry.backend_token = None;
     entry.control = None;
     entry.child = None;
+    entry.startup_lease = None;
 }
 
 pub(super) fn clear_backend_runtime(entry: &mut MountEntry) {
@@ -272,6 +274,7 @@ pub(super) fn snapshot(entry: &MountEntry) -> MountSnapshot {
     MountSnapshot {
         config: entry.config.clone(),
         status: entry.status.clone(),
+        capacity: entry.capacity.clone().map(|value| value.with_freshness(crate::vfs::observed_now_ms())),
         recovery: entry.recovery,
         recovery_required_compat: entry.recovery.requires_retention(),
     }

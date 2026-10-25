@@ -139,7 +139,7 @@ fn drive_task_vault_locked_start_fails_vault_locked() {
     let cause = format!("vault_locked: Tresor Privat ist gesperrt: se vault unlock {SITE}");
 
     // A new drive at a locked vault: the start fails with the code.
-    start_cache::insert(&manager, "vault-new", vault_config("vault-new"), false).unwrap();
+    start_cache::insert(&manager, "vault-new", vault_config("vault-new"), false, None).unwrap();
     manager
         .state_guard()
         .unwrap()
@@ -147,7 +147,7 @@ fn drive_task_vault_locked_start_fails_vault_locked() {
         .unwrap()
         .recovery = MountRecovery::Clean;
     let snapshot = manager
-        .defer_until_unlock("vault-new", cause.clone(), 0)
+        .defer_until_unlock("vault-new", cause.clone(), Some(0))
         .unwrap();
     match &snapshot.status {
         MountStatus::Failed { detail } => {
@@ -159,8 +159,8 @@ fn drive_task_vault_locked_start_fails_vault_locked() {
     assert_eq!(snapshot.recovery, MountRecovery::Clean);
 
     // A registered drive with sealed changes waits for the unlock.
-    start_cache::insert(&manager, "vault-kept", vault_config("vault-kept"), true).unwrap();
-    let snapshot = manager.defer_until_unlock("vault-kept", cause, 2).unwrap();
+    start_cache::insert(&manager, "vault-kept", vault_config("vault-kept"), true, None).unwrap();
+    let snapshot = manager.defer_until_unlock("vault-kept", cause, Some(2)).unwrap();
     assert_eq!(
         snapshot.recovery,
         MountRecovery::RequiresUnlock { pending: 2 }

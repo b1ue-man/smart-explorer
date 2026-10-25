@@ -275,6 +275,7 @@ fn remote_drive_task_restart_retries_dirty_spool_and_pending_delete() -> io::Res
 fn remote_drive_task_recovery_wire_state_is_conservative_and_compatible() -> io::Result<()> {
     let fixture = Fixture::new("recovery-wire-state")?;
     let snapshot = MountSnapshot {
+        capacity: None,
         config: fixture.config,
         status: MountStatus::Unmounted,
         recovery: MountRecovery::Required,

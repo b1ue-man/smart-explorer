@@ -8,8 +8,8 @@
 //! pending times or mode shows the requested values until they are
 //! published (decision C2). Links and special files are hidden, as on
 //! Windows. Entries and attributes live 1 s in the kernel, negative entries
-//! are not cached (decision C2). The free space is that of the local cache
-//! disk, the hard lower bound of a whole-file drive, as on Windows.
+//! are not cached (decision C2). Provider quota and local staging budget
+//! remain separate; unavailable provider quota uses the real cache budget.
 use std::ffi::{CString, OsStr};
 use std::io;
 use std::os::unix::ffi::OsStrExt;
@@ -185,16 +185,15 @@ pub(crate) fn readdir(shared: &FuseShared, number: u64, offset: u64, mut reply: 
 
 pub(crate) fn statfs(shared: &FuseShared, reply: ReplyStatfs) {
     match disk(&shared.cache_root) {
-        Ok(stat) => reply.statfs(
-            widen(stat.f_blocks),
-            widen(stat.f_bfree),
-            widen(stat.f_bavail),
-            widen(stat.f_files),
-            widen(stat.f_ffree),
-            u32::try_from(widen(stat.f_bsize)).unwrap_or(BLOCK_SIZE),
-            NAME_MAX,
-            u32::try_from(widen(stat.f_frsize)).unwrap_or(BLOCK_SIZE),
-        ),
+        Ok(stat) => {
+            let available = widen(stat.f_bavail).saturating_mul(widen(stat.f_frsize));
+            let budget = shared.filesystem.cache_capacity_budget(available);
+            let capacity = crate::mount::MountCapacity::from_budget(shared.filesystem.capacity_snapshot(), budget);
+            reply.statfs(capacity.total_bytes / u64::from(BLOCK_SIZE),
+                capacity.available_bytes / u64::from(BLOCK_SIZE),
+                capacity.available_bytes / u64::from(BLOCK_SIZE),
+                widen(stat.f_files), widen(stat.f_ffree), BLOCK_SIZE, NAME_MAX, BLOCK_SIZE);
+        }
         Err(error) => reply.error(errno(&error)),
     }
 }

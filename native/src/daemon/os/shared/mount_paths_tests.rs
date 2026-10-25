@@ -22,6 +22,7 @@ fn snapshot(id: &str, source: MountSource, status: MountStatus) -> MountSnapshot
     )
     .unwrap();
     MountSnapshot {
+        capacity: None,
         config,
         status,
         recovery: MountRecovery::Clean,

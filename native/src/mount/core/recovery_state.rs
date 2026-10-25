@@ -2,6 +2,38 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use super::types::{MountConfig, MountStatus};
 
+/// Durable boundaries exercised by the single task suite. Fault injection
+/// exists only in test binaries and is consumed once on the calling thread.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RecoveryCommitPoint {
+    PayloadSynced,
+    ManifestSynced,
+    PackagePublished,
+    OwnershipSynced,
+    OwnershipPublished,
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static RECOVERY_FAULT: std::cell::Cell<Option<RecoveryCommitPoint>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn fail_next_recovery_at(point: Option<RecoveryCommitPoint>) {
+    RECOVERY_FAULT.with(|fault| fault.set(point));
+}
+
+pub(crate) fn recovery_checkpoint(point: RecoveryCommitPoint) -> std::io::Result<()> {
+    #[cfg(test)]
+    if RECOVERY_FAULT.with(|fault| {
+        if fault.get() == Some(point) { fault.set(None); true } else { false }
+    }) {
+        return Err(std::io::Error::other(format!("Injected recovery boundary failure: {point:?}")));
+    }
+    let _ = point;
+    Ok(())
+}
+
 /// Daemon-owned knowledge about retryable local mounted-drive state.
 /// `Unknown` is deliberately retained until the isolated host can audit the
 /// journal under its exclusive cache lease.
@@ -27,8 +59,8 @@ impl MountRecovery {
         matches!(self, Self::Clean)
     }
 
-    /// A vault drive whose vault is locked, with `pending` journal records
-    /// (counted without the key): clean without records.
+    /// A locked vault with a known count from an authorized engine. Opaque
+    /// offline ciphertext cannot supply this count and must stay Unknown.
     pub fn awaiting_unlock(pending: usize) -> Self {
         match pending {
             0 => Self::Clean,
@@ -63,6 +95,8 @@ impl MountRecovery {
 pub struct MountSnapshot {
     pub config: MountConfig,
     pub status: MountStatus,
+    #[serde(default)]
+    pub capacity: Option<super::capacity::MountCapacityReport>,
     /// Only `Clean` permits removing registry/cache ownership. `Unknown` and
     /// `Required` retain it for audit, Retry, or manual conflict recovery.
     #[serde(default)]
@@ -82,6 +116,8 @@ impl<'de> Deserialize<'de> for MountSnapshot {
             config: MountConfig,
             status: MountStatus,
             #[serde(default)]
+            capacity: Option<super::capacity::MountCapacityReport>,
+            #[serde(default)]
             recovery: Option<MountRecovery>,
             #[serde(default, rename = "recovery_required")]
             recovery_required_compat: Option<bool>,
@@ -96,6 +132,7 @@ impl<'de> Deserialize<'de> for MountSnapshot {
         Ok(Self {
             config: wire.config,
             status: wire.status,
+            capacity: wire.capacity,
             recovery,
             recovery_required_compat: recovery.requires_retention(),
         })

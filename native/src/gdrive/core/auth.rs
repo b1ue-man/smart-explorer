@@ -44,15 +44,45 @@ impl GDriveBackend {
     fn refresh_for_account(&self) -> VfsResult<cloud::Tokens> {
         cloud::refresh_access_with_identity(
             Provider::GDrive, Some(self.drive_account_key.as_ref()), |token| {
-                let body = self.metadata_text(&self.api_url("about?fields=user(permissionId)"), token)
-                    .map_err(|error| match super::overload::http_status(&error) {
-                        Some(status) => cloud::AuthError::provider(status, "provider_error"),
-                        None => cloud::AuthError::new(cloud::AuthState::NetworkError),
-                    })?;
-                super::state::parse_drive_account_key(&body)
+                let value = self.identity_json(token)?;
+                super::state::parse_drive_account_key(&value.to_string())
                     .map_err(|_| cloud::AuthError::new(cloud::AuthState::IdentityUnverified))
             },
         ).map_err(auth_error)
+    }
+
+    /// Preserve the metadata read's six attempts and bounded congestion waits,
+    /// but keep provider descriptions out of the authentication diagnostics.
+    fn identity_json(&self, token: &str) -> Result<serde_json::Value, cloud::AuthError> {
+        let agent = self.http.api();
+        let url = self.api_url("about?fields=user(permissionId)");
+        let mut backoff = super::api::listing_backoff();
+        for attempt in 1..=6 {
+            let result = self.timed_request(agent.get(&url))
+                .set("Authorization", &format!("Bearer {token}"))
+                .call();
+            let retry_after = match &result {
+                Err(ureq::Error::Status(_, response)) => super::overload::retry_after(response),
+                _ => None,
+            };
+            let error = match cloud::AuthError::drive_identity_response(result) {
+                Ok(value) => return Ok(value),
+                Err(error) => error,
+            };
+            if error.state != cloud::AuthState::NetworkError { return Err(error); }
+            let wait_error = if error.provider.as_ref().is_some_and(|provider|
+                provider.http_status == Some(429) || provider.http_status == Some(503)
+                    || (provider.http_status == Some(403)
+                        && matches!(provider.code.as_str(), "rateLimitExceeded" | "userRateLimitExceeded" | "sharingRateLimitExceeded" | "quotaExceeded"))) {
+                crate::vfs::congestion_error(error.to_string(), retry_after)
+            } else {
+                io::Error::other(error.clone())
+            };
+            if !super::api::restart_listing_read(attempt, &mut backoff, &wait_error) {
+                return Err(error);
+            }
+        }
+        Err(cloud::AuthError::new(cloud::AuthState::NetworkError))
     }
 
     /// Metadata GET over the pooled API client, read completely so the socket

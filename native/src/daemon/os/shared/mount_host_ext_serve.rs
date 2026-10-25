@@ -19,9 +19,17 @@ pub(in crate::daemon) fn serve(
     host: &ShareHost,
     mut stream: TcpStream,
     id: &MountId,
+    session_token: &str,
     req: MountHostRequest,
 ) -> io::Result<()> {
     match req {
+        MountHostRequest::Capacity { capacity } => {
+            let response = match host.mounts.update_capacity(id, session_token, capacity) {
+                Ok(()) => IpcResponse::Ok,
+                Err(msg) => IpcResponse::Err { msg, code: None },
+            };
+            write_response(&mut stream, &response)
+        }
         MountHostRequest::PrepareLock { deadline_ms } => {
             host.mounts.serve_prepare_lock(stream, id, deadline_ms)
         }

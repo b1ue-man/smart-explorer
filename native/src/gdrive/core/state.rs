@@ -384,19 +384,13 @@ impl GDriveBackend {
 fn load_drive_account_key(agent: &ureq::Agent, access_token: &str) -> Result<String, cloud::AuthError> {
     let url = format!("{}/about?fields=user(permissionId)", super::api::API);
     let bearer = format!("Bearer {access_token}");
-    let response = agent
+    let value = cloud::AuthError::drive_identity_response(agent
         .get(&url)
         .timeout(super::api::DRIVE_REQUEST_TIMEOUT)
         .set("Authorization", &bearer)
-        .call()
-        .map_err(|error| match error {
-            ureq::Error::Status(status, _) => cloud::AuthError::provider(status, "provider_error"),
-            _ => cloud::AuthError::new(cloud::AuthState::NetworkError),
-        })?;
-    let body = response
-        .into_string()
-        .map_err(|_| cloud::AuthError::new(cloud::AuthState::NetworkError))?;
-    parse_drive_account_key(&body).map_err(|_| cloud::AuthError::new(cloud::AuthState::IdentityUnverified))
+        .call())?;
+    parse_drive_account_key(&value.to_string())
+        .map_err(|_| cloud::AuthError::new(cloud::AuthState::IdentityUnverified))
 }
 
 pub(super) fn parse_drive_account_key(body: &str) -> Result<String, String> {

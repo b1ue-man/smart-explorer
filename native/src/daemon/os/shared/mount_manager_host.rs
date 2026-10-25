@@ -20,6 +20,7 @@ pub(in crate::daemon) struct HostGrant {
 pub(in crate::daemon) struct BackendStreamLease {
     manager: MountManager,
     id: MountId,
+    _startup_lease:Option<super::start_path::StartupLease>,
 }
 
 impl Drop for BackendStreamLease {
@@ -55,6 +56,7 @@ impl MountManager {
             .ok_or_else(|| "Laufwerk-Backend-Faehigkeiten fehlen".to_string())?;
         let session_token = random_token()?;
         let backend_token = random_token()?;
+        entry.capacity = None;
         entry.launch_token = None;
         entry.session_token = Some(session_token.clone());
         entry.backend_token = Some(backend_token.clone());
@@ -184,6 +186,7 @@ impl MountManager {
             BackendStreamLease {
                 manager: self.clone(),
                 id: id.clone(),
+                _startup_lease:entry.startup_lease.clone(),
             },
         ))
     }
@@ -289,6 +292,12 @@ impl MountManager {
         entry.host_terminal_failure = terminal_failure;
         // DRV-M7: a mounted vault drive reaches the plaintext boundary.
         super::termination::reported(&entry.config, &status);
+        // The start operation ends only at authenticated Mounted, or at an
+        // actually reaped child. A Failed report can precede child shutdown.
+        if matches!(&status,MountStatus::Mounted {..}|MountStatus::MountedAt {..}) {
+            if let Some(lease)=&entry.startup_lease {lease.mounted();}
+            entry.startup_lease=None;
+        }
         entry.status = status;
         Ok(snapshot(entry))
     }
@@ -342,7 +351,7 @@ impl MountManager {
     }
 }
 
-fn authenticated_entry<'a>(
+pub(super) fn authenticated_entry<'a>(
     state: &'a mut HashMap<String, MountEntry>,
     id: &MountId,
     session_token: &str,

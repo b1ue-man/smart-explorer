@@ -52,7 +52,7 @@ pub(crate) mod mount_point;
 #[cfg(all(test, target_os = "linux"))]
 mod vault_fuse_task_tests;
 
-pub(crate) use cache_lease::{audit_pending, audit_recovery};
+pub(crate) use cache_lease::{audit_pending, audit_pending_state, audit_recovery, CacheLease};
 #[cfg(target_os = "linux")]
 pub(crate) use file_manager_open::{show_folders, OpenMethod};
 #[cfg(target_os = "linux")]

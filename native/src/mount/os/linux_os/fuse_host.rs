@@ -172,7 +172,7 @@ impl HostPlatform for FuseHost {
             canonical,
             kind,
             id: config.id.clone(),
-            label: config.label.clone(),
+            label: format!("Cache/Remote – {}", config.label),
         });
         Ok(())
     }
