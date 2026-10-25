@@ -104,6 +104,8 @@ fn json_value(
         "last_error": worker_error.or(snapshot.last_error.as_deref()),
         "relay_url": snapshot.relay_url,
         "candidates": snapshot.candidates,
+        "routes": snapshot.routes,
+        "route_measurement_note": crate::share::ROUTE_PAYLOAD_MEASUREMENT_NOTE,
         "contacts": contacts.collect::<Vec<_>>(),
         "rooms": rooms.collect::<Vec<_>>(),
         "requests": requests,
@@ -139,6 +141,7 @@ fn print_text(
             .unwrap_or("-")
     );
     println!("relay_url\t{}", snapshot.relay_url);
+    print_routes(snapshot);
     for contact in &profiles.direct_contacts {
         println!(
             "peer\t{}\t{}\t{}\t{}\tconnectivity={}\tauthorization={}\tlast_seen={}\tlast_error={}",
@@ -248,4 +251,30 @@ fn option_i64(value: Option<i64>) -> String {
 
 fn clean(value: &str) -> String {
     value.replace(['\t', '\r', '\n'], " ")
+}
+
+fn print_routes(snapshot: &crate::daemon::ShareWorkerSnapshot) {
+    let Some(routes) = &snapshot.routes else {
+        println!("route_status\tnot_available\tDer Worker liefert keine Routediagnose");
+        return;
+    };
+    if let Some(error) = &routes.error { println!("route_error\t{}", clean(error)); }
+    if routes.truncated { println!("route_truncated\ttrue\tRoutediagnose für die IPC-Größe gekürzt"); }
+    if routes.peers.is_empty() && routes.error.is_none() {
+        println!("route_status\tno_observation\tKeine aktive Routenbeobachtung oder gespeicherte Pairmessung");
+    }
+    for peer in &routes.peers {
+        let selector = peer.contact_id.as_deref().unwrap_or(&peer.device_id);
+        for connection in &peer.connections {
+            println!("route\t{}\t{}\t{}\t{}\t{}\t{}", clean(selector), connection.connection_id,
+                clean(&connection.protocol), connection.state, clean(&connection.label), clean(&connection.reason));
+            for line in connection.detail_lines() { println!("route_detail\t{}\t{}\t{}", clean(selector), connection.connection_id, clean(&line)); }
+        }
+        for sample in &peer.measurements {
+            println!("route_measurement\t{}\t{}", clean(selector), clean(&sample.detail_line()));
+        }
+    }
+    if routes.peers.iter().any(|peer| !peer.measurements.is_empty()) {
+        println!("route_measurement_note\t{}", crate::share::ROUTE_PAYLOAD_MEASUREMENT_NOTE);
+    }
 }

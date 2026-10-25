@@ -28,11 +28,38 @@ pub(super) fn handle_client(
     let mut line = String::new();
     read_pre_auth_line(&mut stream, &mut line, auth_deadline)?;
     let req: IpcRequest = serde_json::from_str(line.trim()).map_err(eio)?;
+    let bound = matches!(&req, IpcRequest::RuntimeCall { .. });
     require_request_auth(token, &req, &host)?;
+    let runtime_context = match &req { IpcRequest::RuntimeCall {hello,..} => Some(hello.clone()), _ => None };
+    let req = super::runtime_hello::unwrap_request(req, host.generation(), host.initialized())?;
+    if bound { require_request_auth(token, &req, &host)?; }
+    let runtime_lease = match super::runtime_hello::request_lease(runtime_context.as_ref(), &req) {
+        Ok(lease)=>lease,
+        Err(error)=>{
+            let msg=error.to_string();
+            let code=if msg.contains("update_recovery_required") {"update_recovery_required"}
+                else if msg.contains("update_in_progress") {"update_in_progress"} else {"reconnect_required"};
+            write_response(&mut stream,&IpcResponse::Err {msg,code:Some(code.into())})?;
+            return Ok(());
+        }
+    };
     drop(pre_auth);
     clear_pre_auth_deadline(&stream)?;
-    super::drive_modules::run_start_reason::admit_request(&host, &req);
+    if !matches!(&req, IpcRequest::RuntimeHello { .. }) {
+        super::drive_modules::run_start_reason::admit_request(&host, &req);
+    }
+    let controlled_exec = matches!(&req, IpcRequest::ExecStreamControlled { .. });
     match req {
+        IpcRequest::DiscoveryPairing { request, .. } => {
+            super::discovery_pairing_ipc::serve(stream, &host, request, runtime_lease.as_ref().map(|lease| {
+                let retained:std::sync::Arc<dyn Send+Sync>=lease.clone(); retained
+            }))
+        }
+        IpcRequest::RuntimeCall { .. } => Err(eio("nested runtime request rejected")),
+        IpcRequest::RuntimeHello { hello, .. } => write_response(
+            &mut stream,
+            &IpcResponse::RuntimeHello { reply: super::runtime_hello::ready_reply(&hello, host.generation(), host.initialized()) },
+        ),
         IpcRequest::Ping { .. } => write_response(
             &mut stream,
             &IpcResponse::Pong {
@@ -110,19 +137,32 @@ pub(super) fn handle_client(
             Ok(result) => write_response(&mut stream, &IpcResponse::ExecResult { result }),
             Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg, code: None }),
         },
-        IpcRequest::ExecStream { target, start, .. } => {
-            match super::exec_ipc::start_remote(&host, target, start) {
+        IpcRequest::ExecStream { target, start, .. }
+        | IpcRequest::ExecStreamControlled { target, start, .. } => {
+            let setup = super::exec_ipc::SetupWatch::start(&stream)?;
+            let deadline = Instant::now() + Duration::from_secs(45);
+            match super::exec_ipc::start_remote_cancellable(&host, target, start,
+                runtime_lease.as_ref().map(|lease| {let retained:std::sync::Arc<dyn Send+Sync>=lease.clone();retained}),
+                setup.cancellation(), deadline) {
                 Ok(remote) => {
+                    if controlled_exec {
+                        return super::exec_ipc::serve_controlled(stream, remote, host.exec_state.clone(), setup);
+                    }
+                    setup.check()?;
                     write_response(
                         &mut stream,
                         &IpcResponse::ExecReady {
                             exec_id: remote.session.exec_id().clone(),
                         },
                     )?;
+                    setup.handoff()?;
                     super::exec_ipc::serve(stream, remote, host.exec_state.clone())
                 }
                 Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg, code: None }),
             }
+        }
+        IpcRequest::ExecControl { exec_id, control_token, .. } => {
+            super::exec_ipc::serve_control(stream, &host.exec_state, &exec_id, &control_token)
         }
         IpcRequest::ExecJobs { .. } => write_response(
             &mut stream,
@@ -136,7 +176,7 @@ pub(super) fn handle_client(
                 found: super::exec_state::cancel(&host, &target),
             },
         ),
-        IpcRequest::StartMount { config, .. } => match host.mounts.start(config, &host) {
+        IpcRequest::StartMount { config, .. } => match host.mounts.start_retained(config, &host, runtime_lease.as_ref().map(|lease| {let retained:std::sync::Arc<dyn Send+Sync>=lease.clone();retained})) {
             Ok(mount) => write_response(&mut stream, &IpcResponse::Mount { mount }),
             Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg, code: None }),
         },
@@ -148,7 +188,7 @@ pub(super) fn handle_client(
             Ok(mounts) => write_response(&mut stream, &IpcResponse::Mounts { mounts }),
             Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg, code: None }),
         },
-        IpcRequest::RetryMount { id, .. } => match host.mounts.retry(&id, &host) {
+        IpcRequest::RetryMount { id, .. } => match host.mounts.retry_retained(&id, &host, runtime_lease.as_ref().map(|lease| {let retained:std::sync::Arc<dyn Send+Sync>=lease.clone();retained})) {
             Ok(mount) => write_response(&mut stream, &IpcResponse::Mount { mount }),
             Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg, code: None }),
         },
@@ -205,6 +245,9 @@ pub(super) fn handle_client(
         request @ IpcRequest::Drive { .. } => host.serve_extension(stream, request),
         request @ IpcRequest::Vault { .. } => host.serve_extension(stream, request),
         request @ IpcRequest::Screen { .. } => host.serve_extension(stream, request),
+        IpcRequest::Tcp { req, .. } => host.serve_tcp(stream, req),
+        IpcRequest::Apps { req, .. } => host.serve_apps(stream, req),
+        request @ IpcRequest::Login { .. } => host.serve_extension(stream, request),
         request @ IpcRequest::MountHostExt { .. } => host.serve_extension(stream, request),
     }
 }

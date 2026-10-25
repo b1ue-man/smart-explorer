@@ -11,7 +11,7 @@ use super::exec_access_view::{ExecClientNotice, ReceivedHelloOk};
 use super::exec_auth::build_client_hello;
 use super::exec_client_active::TransportClosed;
 use super::exec_client_messages::{
-    authentication, classify_io, client_failure_message, disconnected, failure, handshake_timeout,
+    authentication, classify_io, client_failure_message, disconnected, failure,
     peer_name, protocol,
 };
 use super::exec_heartbeat::{ExecHeartbeatPolicy, EXEC_HEARTBEAT_POLICY};
@@ -82,7 +82,7 @@ impl std::error::Error for ExecClientFailure {}
 
 pub(crate) struct ExecClientSession {
     pub(crate) exec_id: ExecId,
-    pub(crate) input: mpsc::Sender<ExecClientInput>,
+    pub(crate) input: ExecInputSender,
     pub(crate) events: mpsc::Receiver<ExecClientEvent>,
     pub(crate) task: tokio::task::JoinHandle<Result<ExecTerminal, ExecClientFailure>>,
     /// The latest notice (access view, pending confirmation); the daemon
@@ -92,27 +92,12 @@ pub(crate) struct ExecClientSession {
     pub(crate) notice: watch::Receiver<ExecClientNotice>,
 }
 
-pub(crate) fn spawn_connected(
-    connection: Connection,
-    endpoint: PeerEndpoint,
-    identity: ShareIdentity,
-    start: ExecStart,
-) -> ExecClientSession {
-    let exec_id = start.exec_id.clone();
-    let (input_tx, input_rx) = mpsc::channel(INPUT_CAPACITY);
-    let (event_tx, event_rx) = mpsc::channel(EVENT_CAPACITY);
-    let (notice_tx, notice_rx) = watch::channel(ExecClientNotice::default());
-    let task = tokio::spawn(run_connected(
-        connection, endpoint, identity, start, input_rx, event_tx, notice_tx,
-    ));
-    ExecClientSession {
-        exec_id,
-        input: input_tx,
-        events: event_rx,
-        task,
-        notice: notice_rx,
-    }
-}
+#[path = "exec_client_spawn.rs"]
+mod spawn;
+#[path = "exec_client_input.rs"]
+mod input;
+pub(crate) use input::ExecInputSender;
+pub(crate) use spawn::{spawn_connected, spawn_connected_retained, spawn_connected_cancellable};
 
 pub(crate) async fn run_connected(
     connection: Connection,
@@ -120,19 +105,35 @@ pub(crate) async fn run_connected(
     identity: ShareIdentity,
     start: ExecStart,
     input: mpsc::Receiver<ExecClientInput>,
+    mut cancellation: watch::Receiver<bool>,
     events: mpsc::Sender<ExecClientEvent>,
     notice: watch::Sender<ExecClientNotice>,
 ) -> Result<ExecTerminal, ExecClientFailure> {
+    let cancel_connection = connection.clone();
+    let (operation_input, operation_rx) = mpsc::channel(INPUT_CAPACITY);
+    let forwarding = self::input::forward(&cancel_connection, input, cancellation.clone(), operation_input);
     let result = run_connected_inner(
         connection,
         endpoint,
         identity,
         start,
-        input,
+        operation_rx,
         events.clone(),
         notice,
-    )
-    .await;
+    );
+    tokio::pin!(result, forwarding);
+    let abandoned = super::route_protocol::close_if_abandoned_during_pause(&cancel_connection, events.closed());
+    let cancelled = super::route_protocol::close_if_abandoned_during_pause(
+        &cancel_connection, self::input::cancelled(&mut cancellation));
+    tokio::pin!(abandoned, cancelled);
+    let mut forwarded = false;
+    let result = loop { tokio::select! {
+        result = &mut result => break result,
+        _ = &mut forwarding, if !forwarded => forwarded = true,
+        _ = &mut abandoned => break result.await,
+        _ = &mut cancelled => break result.await,
+    }
+    };
     if let Err(error) = &result {
         let _ = tokio::time::timeout(
             FAILURE_EVENT_TIMEOUT,
@@ -165,12 +166,12 @@ async fn run_connected_inner(
     // stream. If both sides call open_bi() and wait for the peer's first frame,
     // QUIC never exposes either stream because an empty local stream is not
     // announced on the wire.
-    let (send, recv) = tokio::time::timeout(HANDSHAKE_TIMEOUT, connection.accept_bi())
+    let (send, recv) = super::route_protocol::run_with_route(&connection, HANDSHAKE_TIMEOUT, None,
+        async { connection.accept_bi().await.map_err(io::Error::other) })
         .await
-        .map_err(|_| handshake_timeout(false))?
         .map_err(|error| disconnected(error, false))?;
     let close_watch = connection.clone();
-    let result = run_stream_with_transport(
+    let result = super::route_protocol::scope(connection.clone(), run_stream_with_transport(
         send,
         recv,
         endpoint,
@@ -183,7 +184,7 @@ async fn run_connected_inner(
             let _ = close_watch.closed().await;
         }),
         &notice,
-    )
+    ))
     .await;
     connection.close(VarInt::from_u32(0x4558), b"Exec session completed");
     result
@@ -268,6 +269,10 @@ where
 {
     let ReceivedHelloOk { hello, access } =
         handshake(&mut send, &mut recv, &endpoint, &identity).await?;
+    if let Some(connection) = super::route_protocol::current_connection() {
+        super::route_monitor::authenticated_remote_capability(&connection,
+            hello.features.iter().any(|feature| feature == "route_policy_v1"));
+    }
     notice.send_modify(|notice| notice.access = access);
     emit(
         &events,
@@ -293,6 +298,9 @@ where
     let digest = start
         .digest()
         .map_err(|error| protocol(error, false, "invalid_start"))?;
+    if events.is_closed() {
+        return Err(failure(ExecClientFailureKind::Local,"session_closed","local Exec session closed before Start",false));
+    }
     // This flag is set before the only Start write. Even a partial write is an
     // ambiguous handoff and must never be retried by this client.
     let start_sent = true;
@@ -323,12 +331,13 @@ async fn handshake<W: AsyncWrite + Unpin, R: AsyncRead + Unpin>(
     endpoint: &PeerEndpoint,
     identity: &ShareIdentity,
 ) -> Result<ReceivedHelloOk, ExecClientFailure> {
-    let deadline = tokio::time::Instant::now() + HANDSHAKE_TIMEOUT;
+    let deadline = super::route_protocol::active_now() + HANDSHAKE_TIMEOUT;
     let server = until(deadline, recv_server_hello(recv))
         .await
         .map_err(|error| classify_io(error, false, "server_hello"))?;
-    let client = build_client_hello(&server, endpoint, identity)
+    let mut client = build_client_hello(&server, endpoint, identity)
         .map_err(|error| authentication(error, "server_identity", false))?;
+    client.client_features.push("route_policy_v1".into());
     until(deadline, send_client_hello(send, &client))
         .await
         .map_err(|error| classify_io(error, false, "client_hello"))?;
@@ -353,7 +362,7 @@ pub(super) async fn write_frame_with_timeout<W: AsyncWrite + Unpin>(
     start_sent: bool,
     timeout: Duration,
 ) -> Result<(), ExecClientFailure> {
-    tokio::time::timeout(timeout, send_client_frame(send, frame))
+    super::route_protocol::timeout_for(timeout, send_client_frame(send, frame))
         .await
         .map_err(|_| {
             failure(
@@ -408,7 +417,7 @@ pub(super) async fn emit_or_cancel<W: AsyncWrite + Unpin>(
     start_sent: bool,
     peer_deadline: tokio::time::Instant,
 ) -> Result<(), ExecClientFailure> {
-    let remaining = peer_deadline.saturating_duration_since(tokio::time::Instant::now());
+    let remaining = peer_deadline.saturating_duration_since(super::route_protocol::active_now());
     if remaining.is_zero() {
         return Err(failure(
             ExecClientFailureKind::Disconnected,
@@ -421,7 +430,7 @@ pub(super) async fn emit_or_cancel<W: AsyncWrite + Unpin>(
         emit_with_timeout(events, event, start_sent, remaining.min(EVENT_TIMEOUT)).await
     {
         let cancel_timeout = peer_deadline
-            .saturating_duration_since(tokio::time::Instant::now())
+            .saturating_duration_since(super::route_protocol::active_now())
             .min(EXEC_HEARTBEAT_POLICY.write_timeout);
         if !cancel_timeout.is_zero() {
             let _ = write_frame_with_timeout(
@@ -443,7 +452,7 @@ async fn until<T>(
     deadline: tokio::time::Instant,
     future: impl Future<Output = io::Result<T>>,
 ) -> io::Result<T> {
-    tokio::time::timeout_at(deadline, future)
+    super::route_protocol::timeout_until(deadline, future)
         .await
         .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "Exec handshake timed out"))?
 }

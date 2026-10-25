@@ -41,12 +41,13 @@ pub(in crate::share) async fn handle_connection(
 ) -> io::Result<()> {
     let _incoming = node.track_incoming(&connection)?;
     node.require_sharing_active()?;
+    node.await_route(&connection, None, None).await?;
     let remote_node = connection.remote_id().to_string();
-    let handshake_deadline = tokio::time::Instant::now() + HANDSHAKE_TIMEOUT;
+    let handshake_deadline = crate::share::route_protocol::active_now() + HANDSHAKE_TIMEOUT;
     // The server must write the fresh challenge first. Opening the stream here
     // makes that first write announce it to the client and avoids an empty-QUIC
     // stream deadlock during the initial Exec handshake.
-    let (mut send, mut recv) = tokio::time::timeout_at(handshake_deadline, connection.open_bi())
+    let (mut send, mut recv) = crate::share::route_protocol::timeout_until(handshake_deadline, connection.open_bi())
         .await
         .map_err(|_| timed_out("Exec-Handshake Timeout"))?
         .map_err(eio)?;
@@ -69,13 +70,13 @@ pub(in crate::share) async fn handle_connection(
         identity.fingerprint,
         identity.node_id,
     );
-    io_deadline::run_until(
+    crate::share::route_protocol::run_until_active(
         handshake_deadline,
         "Exec-ServerHello Timeout",
         send_server_hello(&mut send, &server_hello),
     )
     .await?;
-    let client_hello = match io_deadline::run_until(
+    let client_hello = match crate::share::route_protocol::run_until_active(
         handshake_deadline,
         "Exec-Authentifizierung Timeout",
         recv_client_hello(&mut recv),
@@ -113,7 +114,7 @@ pub(in crate::share) async fn handle_connection(
                     code: PERMISSION_DENIED.into(),
                     message: permission_denied(&host),
                 };
-                if io_deadline::run_until(
+                if crate::share::route_protocol::run_until_active(
                     handshake_deadline,
                     "Exec-Ablehnung Timeout",
                     send_hello_error(&mut send, &denied),
@@ -140,7 +141,7 @@ pub(in crate::share) async fn handle_connection(
             true,
         )
         .map_err(eio)?;
-    let (provider, terminal_supported) = tokio::time::timeout_at(
+    let (provider, terminal_supported) = crate::share::route_protocol::timeout_until(
         handshake_deadline,
         tokio::task::spawn_blocking(|| {
             (
@@ -152,7 +153,10 @@ pub(in crate::share) async fn handle_connection(
     .await
     .map_err(|_| timed_out("Exec-Providerpruefung Timeout"))?
     .map_err(eio)?;
+    crate::share::route_monitor::authenticated_remote_capability(&connection,
+        client_hello.client_features.iter().any(|feature| feature == "route_policy_v1"));
     let mut features = host_features(terminal_supported);
+    features.push("route_policy_v1".into());
     features.extend(host_access_features().map(String::from));
     let hello_ok = ExecHelloOk {
         authorization: authorized.authorization.clone(),
@@ -160,7 +164,7 @@ pub(in crate::share) async fn handle_connection(
         features,
     };
     let access = ExecAccessView::of(&authorized.grant, &provider.user_label);
-    io_deadline::run_until(
+    crate::share::route_protocol::run_until_active(
         handshake_deadline,
         "Exec-HelloOk Timeout",
         send_hello_ok(
@@ -177,7 +181,7 @@ pub(in crate::share) async fn handle_connection(
         finish_send_and_wait_until(
             &mut send,
             &connection,
-            tokio::time::Instant::now() + EXEC_HEARTBEAT_POLICY.server_result_ack_timeout(),
+            crate::share::route_protocol::active_now() + EXEC_HEARTBEAT_POLICY.server_result_ack_timeout(),
         )
         .await?;
         return Err(io::Error::new(
@@ -186,7 +190,7 @@ pub(in crate::share) async fn handle_connection(
         ));
     }
 
-    let first = tokio::time::timeout(HANDSHAKE_TIMEOUT, recv_client_frame(&mut recv))
+    let first = crate::share::route_protocol::timeout_for(HANDSHAKE_TIMEOUT, recv_client_frame(&mut recv))
         .await
         .map_err(|_| timed_out("Exec-Start Timeout"))??;
     let mut protocol = ServerProtocolState::default();

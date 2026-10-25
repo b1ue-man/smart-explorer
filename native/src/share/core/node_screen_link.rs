@@ -105,6 +105,7 @@ impl ShareIrohNode {
             );
             return Err(error.into());
         }
+        self.await_route(&connection, Some(endpoint), None).await?;
         Ok(connection)
     }
 }
@@ -142,9 +143,14 @@ impl ScreenLink {
                 "screen host identity does not match the pinned device",
             ));
         }
+        crate::share::route_monitor::authenticated_remote_capability(&self.connection,
+            server.challenge.starts_with("rp1."));
         let (relation_kind, relation_id) = relation_kind_id(&self.endpoint);
         let identity = &self.identity;
         let mut hello = ScreenClientHello {
+            family_version: server.family_version.filter(|version|*version==crate::screen::core::family_protocol::FAMILY_PROTOCOL),
+            icon_version: None,
+            metadata_only: false,
             protocol_version: SCREEN_PROTOCOL_VERSION,
             relation_kind: relation_kind.into(),
             relation_id,
@@ -153,13 +159,14 @@ impl ScreenLink {
             public_key: identity.public_key.clone(),
             fingerprint: identity.fingerprint.clone(),
             node_id: identity.node_id.clone(),
-            client_nonce: random_token(18).map_err(eio)?,
+            client_nonce: format!("rp1.{}", random_token(18).map_err(eio)?),
             proof: String::new(),
             mode: request.mode,
             source: request.source.clone(),
             decoders: request.decoders.clone(),
             display_size: request.display_size,
             max_fps: request.max_fps,
+            frame_capabilities: request.frame_capabilities,
         };
         hello.proof = hmac_proof(
             &self.endpoint.relation_secret,

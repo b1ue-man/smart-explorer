@@ -22,7 +22,6 @@ use super::auth_penalty::PenaltyKind;
 use super::core::{eio, now_secs, random_token};
 use super::exec_audit::{self, AuditEvent};
 use super::handshake_limits::ApplicationHandshakePermit;
-use super::io_deadline;
 use super::node::ShareIrohNode;
 use super::relation_proof::{prove_relation, ProvenPrincipal};
 use super::relation_rights::{RestrictionReason, RestrictionSet};
@@ -71,6 +70,12 @@ fn read<T: Clone>(slot: &RwLock<T>) -> T {
 }
 
 impl NodeScreen {
+    /// Internal app correlation transfers an already witnessed OS lifetime.
+    /// Publication still requires the separate authenticated ScreenView path.
+    pub(super) fn register_app_pin(&self, owner: &str, request_id: &str,
+        pin: crate::remote_window::WindowPin) -> io::Result<crate::screen::core::family_protocol::FamilyListEntry> {
+        read(&self.backend).register_family_pin(owner, request_id, pin)
+    }
     /// The host of this platform with its indicator (the desktop window,
     /// the Android app's notification); tests use the test picture without
     /// an indicator. It asks the host user through the shared approval
@@ -243,9 +248,10 @@ impl ShareIrohNode {
     ) -> io::Result<()> {
         let _incoming = self.track_incoming(&connection)?;
         self.require_sharing_active()?;
+        self.await_route(&connection, None, None).await?;
         let remote = connection.remote_id().to_string();
-        let deadline = tokio::time::Instant::now() + HANDSHAKE_TIMEOUT;
-        let opened = tokio::time::timeout_at(deadline, connection.open_bi()).await;
+        let deadline = super::route_protocol::active_now() + HANDSHAKE_TIMEOUT;
+        let opened = super::route_protocol::timeout_until(deadline, connection.open_bi()).await;
         let (mut send, mut recv) = opened
             .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "screen handshake timeout"))?
             .map_err(eio)?;
@@ -256,16 +262,16 @@ impl ShareIrohNode {
             .identity
             .clone();
         let server = ScreenServerHello::new(
-            random_token(32).map_err(eio)?,
+            format!("rp1.{}", random_token(32).map_err(eio)?),
             identity.device_id,
             identity.public_key,
             identity.fingerprint,
             identity.node_id,
         );
         let hello = send_server_hello(&mut send, &server);
-        io_deadline::run_until(deadline, "screen hello timeout", hello).await?;
+        super::route_protocol::run_until_active(deadline, "screen hello timeout", hello).await?;
         let received = recv_json::<_, ScreenClientHello>(&mut recv, CLIENT_HELLO);
-        let client = match io_deadline::run_until(deadline, "screen hello timeout", received).await
+        let client = match super::route_protocol::run_until_active(deadline, "screen hello timeout", received).await
         {
             Ok(client) => client,
             Err(error) => {
@@ -326,6 +332,7 @@ impl ShareIrohNode {
             principal.node_id.clone(),
         );
         self.bind_incoming_principal(&connection, peer).await?;
+        super::route_monitor::authenticated_remote_capability(&connection, client.client_nonce.starts_with("rp1."));
         // A verified hello ends the handshake deadline; a confirmation by the
         // host user may take as long as it takes (C5).
         drop(permit);

@@ -3,7 +3,7 @@ use std::pin::Pin;
 
 use tokio::io::AsyncWrite;
 use tokio::sync::{mpsc, watch};
-use tokio::time::{Instant, MissedTickBehavior};
+use tokio::time::Instant;
 
 use super::exec_access_view::ExecClientNotice;
 use super::exec_client::{
@@ -73,18 +73,21 @@ where
     let mut cancelling = false;
     let mut next_sequence = 0u64;
     let mut outstanding_ping: Option<u64> = None;
-    let mut peer_deadline = Instant::now() + heartbeat_policy.peer_timeout;
-    let mut heartbeat = tokio::time::interval_at(
-        Instant::now() + heartbeat_policy.interval,
-        heartbeat_policy.interval,
-    );
-    heartbeat.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let mut peer_deadline = super::route_protocol::active_now() + heartbeat_policy.peer_timeout;
+    let mut heartbeat_at = super::route_protocol::active_now() + heartbeat_policy.interval;
 
     loop {
-        if Instant::now() >= peer_deadline {
+        if super::route_protocol::active_now() >= peer_deadline {
             return Err(peer_unresponsive());
         }
         tokio::select! {
+            _ = events.closed(), if !cancelling => {
+                cancelling=true;
+                write_frame_with_timeout(
+                    &mut send,&ClientFrame::Cancel {exec_id:exec_id.clone()},true,
+                    active_write_timeout(heartbeat_policy,peer_deadline)?,
+                ).await?;
+            }
             peer = next_server_or_closed(&mut frames, &mut transport_closed) => {
                 let frame = match peer {
                     ServerRead::Frame(frame) => frame,
@@ -101,7 +104,7 @@ where
                     match outstanding_ping {
                         Some(expected) if sequence == expected => {
                             outstanding_ping = None;
-                            peer_deadline = Instant::now() + heartbeat_policy.peer_timeout;
+                            peer_deadline = super::route_protocol::active_now() + heartbeat_policy.peer_timeout;
                             continue;
                         }
                         _ => {
@@ -142,7 +145,7 @@ where
                     // The authenticated terminal exchange has completed, so a
                     // deliberately delayed confirmation must not inherit the
                     // pre-terminal heartbeat deadline for local event delivery.
-                    peer_deadline = Instant::now() + heartbeat_policy.peer_timeout;
+                    peer_deadline = super::route_protocol::active_now() + heartbeat_policy.peer_timeout;
                     emit_with_timeout(
                         &events,
                         event.clone(),
@@ -163,7 +166,7 @@ where
                     peer_deadline,
                 ).await?;
             }
-            _ = tokio::time::sleep_until(peer_deadline) => {
+            _ = super::route_protocol::sleep_until_active(peer_deadline) => {
                 return Err(peer_unresponsive());
             }
             command = input.recv() => {
@@ -228,7 +231,8 @@ where
                     }
                 }
             }
-            _ = heartbeat.tick(), if outstanding_ping.is_none() => {
+            _ = super::route_protocol::sleep_until_active(heartbeat_at), if outstanding_ping.is_none() => {
+                heartbeat_at = super::route_protocol::active_now() + heartbeat_policy.interval;
                 next_sequence = next_sequence.checked_add(1).ok_or_else(|| {
                     protocol("heartbeat sequence exhausted", true, "heartbeat_sequence")
                 })?;
@@ -254,7 +258,7 @@ async fn complete_result_handshake<W: AsyncWrite + Unpin>(
     exec_id: &ExecId,
     policy: ExecHeartbeatPolicy,
 ) -> Result<(), ExecClientFailure> {
-    let deadline = Instant::now() + policy.client_result_acknowledged_timeout();
+    let deadline = super::route_protocol::active_now() + policy.client_result_acknowledged_timeout();
     write_frame_with_timeout(
         send,
         &ClientFrame::ResultAck {
@@ -288,7 +292,7 @@ async fn complete_result_handshake<W: AsyncWrite + Unpin>(
                 )),
             }
         }
-        _ = tokio::time::sleep_until(deadline) => {
+        _ = super::route_protocol::sleep_until_active(deadline) => {
             Err(failure(
                 ExecClientFailureKind::Disconnected,
                 "result_acknowledged_timeout",
@@ -319,7 +323,7 @@ fn active_write_timeout(
     policy: ExecHeartbeatPolicy,
     peer_deadline: Instant,
 ) -> Result<std::time::Duration, ExecClientFailure> {
-    let remaining = peer_deadline.saturating_duration_since(Instant::now());
+    let remaining = peer_deadline.saturating_duration_since(super::route_protocol::active_now());
     if remaining.is_zero() {
         Err(peer_unresponsive())
     } else {

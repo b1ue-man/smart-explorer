@@ -148,7 +148,7 @@ async fn forward_frames(
 /// Drops the outcome record once the client confirms it received it.
 async fn await_delivery(recv: &mut RecvStream, key: &BatchKey) {
     let mut probe = [0u8; 1];
-    if let Ok(Ok(None)) = tokio::time::timeout(DELIVERY_WAIT, recv.read(&mut probe)).await {
+    if let Ok(Ok(None)) = crate::share::route_protocol::timeout_for(DELIVERY_WAIT, recv.read(&mut probe)).await {
         batch_status::delivered(key);
     }
 }

@@ -7,10 +7,13 @@ const MAX_EVENT_BYTES: usize = 384 * 1024;
 const MAX_LEGACY_REQUEST_BYTES: usize = 256 * 1024;
 const MAX_CANDIDATE_BYTES: usize = 128 * 1024;
 const MAX_STATUS_TEXT_BYTES: usize = 16 * 1024;
+// Reserve a bounded part of the existing IPC response for route facts.
+const MAX_ROUTE_BYTES: usize = 128 * 1024;
 
 pub(in crate::daemon) fn bound_snapshot_for_ipc(
     mut snapshot: ShareWorkerSnapshot,
 ) -> ShareWorkerSnapshot {
+    bound_routes(&mut snapshot.routes);
     let dropped_events = retain_newest_with_budget(&mut snapshot.events, MAX_EVENT_BYTES);
     let dropped_legacy = retain_newest_with_budget(
         &mut snapshot.pending_direct_requests,
@@ -40,9 +43,43 @@ pub(in crate::daemon) fn bound_snapshot_for_ipc(
         if snapshot.pending_direct_requests.pop().is_some() {
             continue;
         }
+        if snapshot.routes.as_mut().is_some_and(drop_route_detail) {
+            continue;
+        }
         break;
     }
     snapshot
+}
+
+fn bound_routes(routes: &mut Option<crate::share::ShareRouteSnapshot>) {
+    let Some(routes) = routes else { return; };
+    if let Some(error) = &mut routes.error {
+        routes.truncated |= error.len() > MAX_STATUS_TEXT_BYTES;
+        truncate_utf8(error, MAX_STATUS_TEXT_BYTES);
+    }
+    for peer in &mut routes.peers {
+        for connection in &mut peer.connections {
+            routes.truncated |= connection.reason.len() > MAX_STATUS_TEXT_BYTES || connection.protocol.len() > 128;
+            truncate_utf8(&mut connection.reason, MAX_STATUS_TEXT_BYTES);
+            truncate_utf8(&mut connection.protocol, 128);
+        }
+    }
+    while serde_json::to_vec(&*routes).map_or(usize::MAX, |bytes| bytes.len()) > MAX_ROUTE_BYTES {
+        if !drop_route_detail(routes) { break; }
+    }
+}
+
+/// Preserve current state before older measurements; never alter identity selectors.
+fn drop_route_detail(routes: &mut crate::share::ShareRouteSnapshot) -> bool {
+    if let Some(peer) = routes.peers.iter_mut().find(|peer| !peer.measurements.is_empty()) {
+        peer.measurements.remove(0);
+    } else if let Some(peer) = routes.peers.iter_mut().find(|peer| peer.connections.len() > 1) {
+        peer.connections.pop();
+    } else if routes.peers.pop().is_none() {
+        return false;
+    }
+    routes.truncated = true;
+    true
 }
 
 fn retain_newest_with_budget<T: Serialize>(values: &mut Vec<T>, budget: usize) -> usize {

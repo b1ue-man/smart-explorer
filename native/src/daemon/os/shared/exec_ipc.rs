@@ -29,10 +29,12 @@ pub struct ExecIpcSession {
     pub exec_id: crate::share::ExecId,
     input: ExecIpcInput,
     events: TcpStream,
+    finished: bool,
 }
 
 pub struct ExecIpcInput {
     stream: Arc<Mutex<TcpStream>>,
+    control: Arc<TcpStream>,
 }
 
 pub(super) struct RemoteExec {
@@ -70,9 +72,28 @@ impl ExecIpcSession {
             EVENT_STARTED if payload.is_empty() => Ok(ExecIpcEvent::Started),
             EVENT_STDOUT if payload.len() <= MAX_DATA_BYTES => Ok(ExecIpcEvent::Stdout(payload)),
             EVENT_STDERR if payload.len() <= MAX_DATA_BYTES => Ok(ExecIpcEvent::Stderr(payload)),
-            EVENT_TERMINAL => decode(&payload).map(ExecIpcEvent::Terminal),
-            EVENT_FAILED => decode(&payload).map(ExecIpcEvent::Failed),
+            EVENT_TERMINAL => {
+                let terminal = decode(&payload)?;
+                self.finished = true;
+                Ok(ExecIpcEvent::Terminal(terminal))
+            }
+            EVENT_FAILED => {
+                let failure = decode(&payload)?;
+                self.finished = true;
+                Ok(ExecIpcEvent::Failed(failure))
+            }
             _ => Err(invalid("invalid local Exec event frame")),
+        }
+    }
+}
+
+impl Drop for ExecIpcSession {
+    fn drop(&mut self) {
+        if !self.finished {
+            let _ = self.input.cancel();
+            // Input clones may still be held by a blocked stdin producer.
+            // Shutdown releases that producer without acquiring its mutex.
+            let _ = self.events.shutdown(Shutdown::Both);
         }
     }
 }
@@ -81,6 +102,7 @@ impl Clone for ExecIpcInput {
     fn clone(&self) -> Self {
         Self {
             stream: self.stream.clone(),
+            control: self.control.clone(),
         }
     }
 }
@@ -98,7 +120,10 @@ impl ExecIpcInput {
     }
 
     pub fn cancel(&self) -> io::Result<()> {
-        self.write(INPUT_CANCEL, &[])
+        match self.control.shutdown(Shutdown::Both) {
+            Err(error) if error.kind() == io::ErrorKind::NotConnected => Ok(()),
+            result => result,
+        }
     }
 
     /// New window size of a terminal start; any other start drops it.
@@ -131,77 +156,58 @@ pub fn connect(
     set_stream_timeout(&stream, Some(Duration::from_secs(20)));
     write_request(
         &mut stream,
-        &IpcRequest::ExecStream {
-            token,
+        &IpcRequest::ExecStreamControlled {
+            token: token.clone(),
             target,
             start,
         },
     )
     .map_err(|error| error.to_string())?;
-    let exec_id = match read_response(&mut stream).map_err(|error| error.to_string())? {
-        IpcResponse::ExecReady { exec_id } => exec_id,
+    let (exec_id, control_token) = match read_response(&mut stream).map_err(|error| {
+        format!("Worker-IPC fuer unabhaengigen Exec-Abbruch inkompatibel oder getrennt: {error}")
+    })? {
+        IpcResponse::ExecControlledReady { exec_id, control_token } => (exec_id, control_token),
         IpcResponse::Err { msg, .. } => return Err(msg),
-        _ => return Err("Unerwartete Worker-Antwort auf Exec-Start".into()),
+        _ => return Err("Worker-IPC unterstuetzt keinen unabhaengigen Exec-Abbruch; Neuverbindung erforderlich".into()),
     };
+    let control = lifetime::connect_control(addr, token, exec_id.clone(), control_token)
+        .map_err(|error| format!("Exec-Kontrollbindung fehlgeschlagen: {error}"))?;
     set_stream_timeout(&stream, None);
     let events = stream.try_clone().map_err(|error| error.to_string())?;
     Ok(ExecIpcSession {
         exec_id,
         input: ExecIpcInput {
             stream: Arc::new(Mutex::new(stream)),
+            control: Arc::new(control),
         },
         events,
+        finished: false,
     })
 }
 
+#[path = "exec_connect.rs"]
+mod connect;
+pub(super) use connect::SetupWatch;
+
+#[path = "exec_lifetime.rs"]
+mod lifetime;
+pub(super) use lifetime::{serve_control, serve_controlled, ExecLifetime};
+
 pub(super) fn start_remote(
-    host: &ShareHost,
-    target: crate::share::PeerOpenTarget,
-    start: crate::share::ExecStart,
+    host: &ShareHost, target: crate::share::PeerOpenTarget, start: crate::share::ExecStart,
+    retainer: Option<Arc<dyn Send + Sync>>,
 ) -> Result<RemoteExec, String> {
-    let deadline = Instant::now() + Duration::from_secs(45);
-    loop {
-        host.reload_now()?;
-        host.drain_events();
-        let (service, peer_device_id, peer_device_name) = {
-            let state = host
-                .state
-                .lock()
-                .map_err(|_| "Share-Worker gesperrt".to_string())?;
-            let service = state.service.clone().ok_or_else(|| {
-                "Share-Server ist nicht konfiguriert oder Auto-Connect ist aus".to_string()
-            })?;
-            let (device_id, device_name) = target_identity(&state.profiles, &target);
-            (service, device_id, device_name)
-        };
-        service.cmd(crate::share::ShareCmd::Refresh)?;
-        match service.start_exec_for_target(&target, start.clone()) {
-            Ok(session) => {
-                return Ok(RemoteExec {
-                    view: crate::share::ExecJobView {
-                        exec_id: start.exec_id.clone(),
-                        peer_device_id,
-                        peer_device_name,
-                        program: start.display_program().to_string(),
-                        command_digest: start.digest().map_err(|error| error.to_string())?,
-                        state: crate::share::ExecLifecycleState::Connecting,
-                        policy_revision: 0,
-                        started_at: None,
-                        finished_at: None,
-                        terminal: None,
-                    },
-                    session,
-                })
-            }
-            Err(error) if Instant::now() < deadline => {
-                std::thread::sleep(Duration::from_millis(500));
-                if error.contains("authentication") {
-                    return Err(error);
-                }
-            }
-            Err(error) => return Err(error),
-        }
-    }
+    start_remote_cancellable(host, target, start, retainer,
+        Arc::new(crate::share::route_cancellation::RouteCancellation::default()),
+        Instant::now() + Duration::from_secs(45))
+}
+
+pub(super) fn start_remote_cancellable(
+    host: &ShareHost, target: crate::share::PeerOpenTarget, start: crate::share::ExecStart,
+    retainer: Option<Arc<dyn Send + Sync>>,
+    cancellation: Arc<crate::share::route_cancellation::RouteCancellation>, deadline: Instant,
+) -> Result<RemoteExec, String> {
+    connect::start_remote(host, target, start, retainer, cancellation, deadline)
 }
 
 pub(super) fn serve(

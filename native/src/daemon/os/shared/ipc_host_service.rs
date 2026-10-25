@@ -247,6 +247,10 @@ pub(in crate::daemon) fn configure_service(
     service: &crate::share::ShareService,
     profiles: &crate::share::ShareProfiles,
 ) -> Result<bool, String> {
+    if let Err(error) = crate::daemon::apps_host::configure(service) {
+        // A private app-ledger failure must not take existing file sharing down.
+        log(&error);
+    }
     service
         .cmd(crate::share::ShareCmd::ConfigureProfiles {
             profiles: Box::new(profiles.clone()),

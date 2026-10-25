@@ -1,9 +1,6 @@
 use serde::{Deserialize, Serialize};
-use std::io::{self, Write};
-use std::net::TcpStream;
-use std::time::Duration;
 
-use super::line::{read_line_limited_from_stream, MAX_IPC_LINE};
+use super::line::MAX_IPC_LINE;
 
 #[path = "ipc_protocol_bounds.rs"]
 mod bounds;
@@ -27,6 +24,12 @@ pub(crate) use self::vault::{
 };
 #[path = "ipc_protocol_screen.rs"]
 pub(super) mod screen;
+#[path = "ipc_protocol_tcp.rs"]
+pub(super) mod tcp;
+#[path = "ipc_protocol_apps.rs"]
+pub(super) mod apps;
+#[path = "ipc_protocol_login.rs"]
+pub(crate) mod login;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -131,6 +134,9 @@ impl From<MountPathCapabilitiesWire> for crate::vfs::MountPathCapabilities {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ShareWorkerSnapshot {
     pub events: Vec<crate::share::ShareEvent>,
+    /// Additive route facts; absent when reading a worker predating this API.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routes: Option<crate::share::ShareRouteSnapshot>,
     /// Canonical daemon-owned profile state. Consumers must replace stale
     /// cached copies instead of replaying worker events as profile writes.
     #[serde(default)]
@@ -181,6 +187,20 @@ pub enum ShareCommandReply {
 #[serde(tag = "t", rename_all = "snake_case")]
 #[allow(clippy::large_enum_variant)]
 pub(super) enum IpcRequest {
+    DiscoveryPairing {
+        token: String,
+        request: super::discovery_pairing_protocol::DiscoveryPairingRequest,
+    },
+    RuntimeCall {
+        token: String,
+        hello: crate::mcp_launcher::RuntimeHello,
+        daemon_generation: String,
+        request: Box<IpcRequest>,
+    },
+    RuntimeHello {
+        token: String,
+        hello: crate::mcp_launcher::RuntimeHello,
+    },
     Ping {
         token: String,
     },
@@ -241,6 +261,17 @@ pub(super) enum IpcRequest {
         target: crate::share::PeerOpenTarget,
         start: crate::share::ExecStart,
     },
+    /// Requires the independent owner/cancellation channel before input handoff.
+    ExecStreamControlled {
+        token: String,
+        target: crate::share::PeerOpenTarget,
+        start: crate::share::ExecStart,
+    },
+    ExecControl {
+        token: String,
+        exec_id: crate::share::ExecId,
+        control_token: String,
+    },
     ExecJobs {
         token: String,
     },
@@ -279,6 +310,15 @@ pub(super) enum IpcRequest {
         token: String,
         req: screen::ScreenIpcRequest,
     },
+    Tcp {
+        token: String,
+        req: tcp::TcpIpcRequest,
+    },
+    Apps {
+        token: String,
+        req: apps::AppsIpcRequest,
+    },
+    Login { token: String, req: login::LoginIpcRequest },
     /// A drive host's request beyond attach, backend and status (R5); the
     /// session token of its mount authorizes it, never the daemon token.
     MountHostExt {
@@ -319,7 +359,10 @@ impl IpcRequest {
                 req: VaultIpcRequest::SpoolKey { .. },
                 ..
             } => None,
-            Self::Ping { token }
+            Self::RuntimeCall { token, .. }
+            | Self::DiscoveryPairing { token, .. }
+            | Self::RuntimeHello { token, .. }
+            | Self::Ping { token }
             | Self::RefreshShare { token }
             | Self::ShareCommand { token, .. }
             | Self::MutateExecGrant { token, .. }
@@ -331,6 +374,8 @@ impl IpcRequest {
             | Self::ProbeShareMount { token, .. }
             | Self::ExecShare { token, .. }
             | Self::ExecStream { token, .. }
+            | Self::ExecStreamControlled { token, .. }
+            | Self::ExecControl { token, .. }
             | Self::ExecJobs { token }
             | Self::CancelExec { token, .. }
             | Self::StartMount { token, .. }
@@ -340,7 +385,10 @@ impl IpcRequest {
             | Self::Access { token, .. }
             | Self::Drive { token, .. }
             | Self::Vault { token, .. }
-            | Self::Screen { token, .. } => Some(token),
+            | Self::Screen { token, .. }
+            | Self::Tcp { token, .. }
+            | Self::Apps { token, .. }
+            | Self::Login { token, .. } => Some(token),
             Self::MountHostAttach { .. }
             | Self::MountHostBackend { .. }
             | Self::MountHostStatus { .. }
@@ -352,6 +400,10 @@ impl IpcRequest {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub(super) enum IpcResponse {
+    DiscoveryPairing { reply: super::discovery_pairing_protocol::DiscoveryPairingReply },
+    MountRecovery { recovery: crate::mount::InactiveMountRecovery },
+    MountRecoveries { recoveries: Vec<crate::mount::InactiveMountRecovery> },
+    RuntimeHello { reply: crate::mcp_launcher::RuntimeHelloReply },
     Pong {
         #[serde(default)]
         version: String,
@@ -386,6 +438,11 @@ pub(super) enum IpcResponse {
     ExecReady {
         exec_id: crate::share::ExecId,
     },
+    ExecControlledReady {
+        exec_id: crate::share::ExecId,
+        control_token: String,
+    },
+    ExecControlReady,
     ExecJobs {
         snapshot: super::exec_state::ExecJobsSnapshot,
     },
@@ -409,6 +466,9 @@ pub(super) enum IpcResponse {
     Access(AccessIpcReply),
     Vault(VaultIpcReply),
     Screen(screen::ScreenIpcReply),
+    Tcp(tcp::TcpIpcReply),
+    Apps(apps::AppsIpcReply),
+    Login(login::LoginIpcReply),
     MountHostExt(super::drive_modules::ipc_protocol_mount_host::MountHostReply),
     Devices {
         status: super::drive_modules::devices_ipc::DevicesStatus,
@@ -421,40 +481,9 @@ pub(super) enum IpcResponse {
     },
 }
 
-pub(super) fn write_response(stream: &mut TcpStream, response: &IpcResponse) -> io::Result<()> {
-    let mut line = serde_json::to_string(response).map_err(eio)?;
-    line.push('\n');
-    if line.len() > MAX_IPC_LINE {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "ipc response exceeds line budget",
-        ));
-    }
-    stream.write_all(line.as_bytes())?;
-    stream.flush()
-}
-
-pub(super) fn set_stream_timeout(stream: &TcpStream, timeout: Option<Duration>) {
-    let _ = stream.set_read_timeout(timeout);
-    let _ = stream.set_write_timeout(timeout);
-}
-
-pub(super) fn write_request(stream: &mut TcpStream, req: &IpcRequest) -> io::Result<()> {
-    let mut line = serde_json::to_string(req).map_err(eio)?;
-    line.push('\n');
-    stream.write_all(line.as_bytes())?;
-    stream.flush()
-}
-
-pub(super) fn read_response(stream: &mut TcpStream) -> io::Result<IpcResponse> {
-    let mut line = String::new();
-    read_line_limited_from_stream(stream, &mut line, MAX_IPC_LINE)?;
-    serde_json::from_str(line.trim()).map_err(eio)
-}
-
-fn eio<E: std::fmt::Display>(error: E) -> io::Error {
-    io::Error::other(error.to_string())
-}
+#[path = "ipc_protocol_io.rs"]
+mod io_wire;
+pub(super) use io_wire::{write_response, set_stream_timeout, write_request, read_response};
 
 #[cfg(test)]
 #[path = "ipc_protocol_tests.rs"]

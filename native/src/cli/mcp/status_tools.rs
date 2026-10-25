@@ -8,6 +8,12 @@ use rmcp::model::CallToolResult;
 use serde_json::{json, Value};
 
 pub(super) fn status(session: &Session) -> Result<CallToolResult, String> {
+    let runtime = crate::mcp_launcher::status_value();
+    if runtime["state"] == "update_in_progress" || runtime["state"] == "update_recovery_required" {
+        return Ok(response::ok(json!({"mcp":{"runtime":runtime,"session_directory":session.directory,"jobs":session.jobs.list().iter().map(|job|job.summary_value()).collect::<Vec<_>>()}})));
+    }
+    let _operation = crate::mcp_launcher::operation()?;
+    session.negotiate_runtime()?;
     let (installation, healthy) = crate::cli::doctor::doctor_value()?;
     let share = match crate::cli::share::status_value() {
         Ok(value) => share_summary(&value),
@@ -29,6 +35,7 @@ pub(super) fn status(session: &Session) -> Result<CallToolResult, String> {
             "executable": session.executable,
             "session_directory": session.directory,
             "running_jobs": running,
+            "runtime": crate::mcp_launcher::status_value(),
         },
         "plugins": crate::cli::plugin::status_value(),
         "background": crate::cli::background::status_value(),
@@ -59,6 +66,8 @@ fn share_summary(status: &Value) -> Value {
         "worker": status["worker"],
         "contacts": status["contacts"],
         "rooms": status["rooms"],
+        "routes": status["routes"],
+        "route_measurement_note": status["route_measurement_note"],
         "pending_requests": status["pending_requests"],
         "requests": count("requests"),
         "grants": count("grants"),
