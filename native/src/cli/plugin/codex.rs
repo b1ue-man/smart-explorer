@@ -1,4 +1,7 @@
 //! Format-preserving updates of our own Codex command/args, never remove/add.
+#[cfg(test)]
+#[path = "batches_codex_task_tests.rs"]
+mod batches_codex_task_tests;
 use super::{files,host_cli,managed};
 use serde_json::{json,Value};
 use std::path::{Path,PathBuf};
@@ -81,8 +84,8 @@ fn configure(executable:&Path,refresh:bool)->Result<Value,String> {
     if before.as_deref()!=Some(after.as_slice()) {managed::replace(&path,before.as_deref(),&after)?;}
     let owner_bytes=serde_json::to_vec_pretty(&ownership).map_err(|e|e.to_string())?;
     if let Err(error)=managed::replace(&owner_path,owner_before.as_deref(),&owner_bytes) {
-        if managed::read(&path)?.as_deref()==Some(after.as_slice()) {
-            if let Some(before)=&before {let _=managed::replace(&path,Some(&after),before);}
+        if let Err(rollback)=restore_owned(&path,before.as_deref(),&after) {
+            return Err(format!("{error}; Codex configuration rollback failed: {rollback}"));
         }
         return Err(error);
     }
@@ -91,13 +94,11 @@ fn configure(executable:&Path,refresh:bool)->Result<Value,String> {
         Ok(skill)=>skill,
         Err(error)=>{
             let _rollback_lock=managed::lock()?;
-            if managed::read(&path)?.as_deref()==Some(after.as_slice()) {
-                if let Some(before)=&before {let _=managed::replace(&path,Some(&after),before);}
-                else {let _=std::fs::remove_file(&path);}
-            }
-            if managed::read(&owner_path)?.as_deref()==Some(owner_bytes.as_slice()) {
-                if let Some(before)=&owner_before {let _=managed::replace(&owner_path,Some(&owner_bytes),before);}
-                else {let _=std::fs::remove_file(&owner_path);}
+            let config_rollback=restore_owned(&path,before.as_deref(),&after);
+            let owner_rollback=restore_owned(&owner_path,owner_before.as_deref(),&owner_bytes);
+            let failures=[config_rollback,owner_rollback].into_iter().filter_map(Result::err).collect::<Vec<_>>();
+            if !failures.is_empty() {
+                return Err(format!("{error}; Codex registration rollback failed: {}",failures.join("; ")));
             }
             return Err(error);
         }
@@ -165,6 +166,14 @@ pub(super) fn status(executable: &Path) -> Value {
     json!({"host":"codex", "cli":host_cli::find("codex"),
         "server":configured.unwrap_or_else(|error| json!({"error":error})),
         "skill":files::generated_state(files::codex_skill_dir(),executable)})
+}
+
+// Call while holding the integration lock. A concurrent editor's newer bytes
+// are retained; first registration must restore absence as well as old content.
+fn restore_owned(path:&Path,before:Option<&[u8]>,after:&[u8])->Result<(),String> {
+    if managed::read(path)?.as_deref()!=Some(after) {return Ok(());}
+    if let Some(before)=before {managed::replace(path,Some(after),before)}
+    else {std::fs::remove_file(path).map_err(|error|format!("{}: {error}",path.display()))}
 }
 
 fn set_owned(table:&mut Item,key:&str,mut replacement:Item) {
