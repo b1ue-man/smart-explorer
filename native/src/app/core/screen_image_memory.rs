@@ -67,9 +67,11 @@ impl CpuPixels {
     }
     /// Pinned Glow set_texture consumes this delta synchronously and retains no CPU Arc.
     /// The borrow keeps this complete owner alive through that entire call.
-    pub(super) fn upload_glow(&self, painter: &mut eframe::egui_glow::Painter, id: eframe::egui::TextureId) {
+    pub(super) fn upload_glow(&self, painter: &mut eframe::egui_glow::Painter, id: eframe::egui::TextureId,
+        create: impl FnOnce()->Result<eframe::egui_glow::glow::Texture,eframe::egui_glow::GlOperationError>)
+        -> Result<(),eframe::egui_glow::GlOperationError> {
         let delta = eframe::egui::epaint::ImageDelta::full(self.image.clone(), eframe::egui::TextureOptions::NEAREST);
-        painter.set_texture(id, &delta);
+        painter.try_set_texture_with(id, &delta, create)
     }
 }
 pub(super) struct PixelAllocation {access: ImageAccess, pixels: Option<ImageHold>, metadata: Option<ImageHold>}

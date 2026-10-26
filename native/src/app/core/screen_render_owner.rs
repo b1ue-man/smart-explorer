@@ -17,7 +17,7 @@ pub(crate) fn event_epoch()->u64 {*lock(&events().0)}
 
 pub(super) enum Native {Wgpu(CpuImage),Glow(GlowImage),Yuv(YuvImage),#[cfg(test)] Controlled(egui::TextureId,[usize;2])}
 pub(super) struct Resident {pub package:Package,pub native:Native,pub upload:UploadTicket,pub surface:Option<ImageHold>}
-pub(super) struct Retirement {pub(super) package:Package,pub(super) upload:UploadTicket,pub(super) drain:Drain,pub(super) surface:Option<ImageHold>}
+pub(super) struct Retirement {pub(super) package:Package,pub(super) upload:UploadTicket,pub(super) drain:Drain,pub(super) surface:Option<ImageHold>,pub(super) superseded:Option<Package>}
 pub(super) enum Backend {Wgpu(WgpuBackend),Glow(GlowBackend),Unavailable,#[cfg(test)] Controlled {upload:bool}}
 pub(crate) struct RendererOwner {pub(super) backend:Mutex<Backend>,slots:Mutex<Vec<Arc<RenderSlot>>>,closed:std::sync::atomic::AtomicBool,limit:u32,yuv:bool}
 const KEY:&str="screen_renderer_owner";
@@ -28,7 +28,7 @@ impl RendererOwner {
             let yuv=super::screen_wgpu_yuv::install(state);let limit=state.device.limits().max_texture_dimension_2d;
             (Backend::Wgpu(WgpuBackend::new(state.clone(),&cc.egui_ctx)),limit,yuv)
         } else if let Some(gl)=&cc.gl {
-            match GlowBackend::new(gl.clone(),shader,dithering) {
+            match GlowBackend::new(gl.clone(),cc.get_proc_address,shader,dithering) {
                 Ok(backend)=>{let limit=backend.texture_limit();(Backend::Glow(backend),limit,false)},
                 Err(error)=>{eprintln!("Bildschirmrenderer: {error}");(Backend::Unavailable,0,false)}
             }
@@ -38,7 +38,7 @@ impl RendererOwner {
     }
     pub(crate) fn texture_limit(&self)->Option<u32> {(self.limit>0).then_some(self.limit)}
     pub(crate) fn available(&self)->bool {
-        !self.closed()&&match &*lock(&self.backend) {Backend::Wgpu(b)=>b.available(),Backend::Glow(_)=>true,#[cfg(test)] Backend::Controlled {..}=>true,_=>false}
+        !self.closed()&&match &*lock(&self.backend) {Backend::Wgpu(b)=>b.available(),Backend::Glow(b)=>b.available(),#[cfg(test)] Backend::Controlled {..}=>true,_=>false}
     }
     pub(crate) fn yuv(&self)->bool {self.yuv&&self.available()}
     pub(crate) fn attach(&self,slot:&Arc<RenderSlot>) {
@@ -56,7 +56,12 @@ impl RendererOwner {
     fn service_mode(&self,ctx:&egui::Context,upload:bool) {
         let mut backend=lock(&self.backend);if let Backend::Glow(gl)=&mut *backend {gl.service();}
         let mut slots=lock(&self.slots);
-        for slot in slots.iter() {Self::step(&mut backend,&mut lock(&slot.state),upload&&!self.closed());}
+        let quarantined=matches!(&*backend,Backend::Glow(gl) if !gl.available());
+        for slot in slots.iter() {
+            let mut state=lock(&slot.state);
+            if quarantined {state.generation.revoke();state.candidate=None;state.next_upload=None;}
+            Self::step(&mut backend,&mut state,upload&&!self.closed()&&!quarantined);
+        }
         slots.retain(|slot| {let s=lock(&slot.state);!s.closed||s.resident.is_some()||s.retiring.is_some()
             ||s.admission.as_ref().is_some_and(|w|w.strong_count()>0)});
         if slots.iter().any(|slot| {let s=lock(&slot.state);s.retiring.is_some()||s.candidate.is_some()
@@ -88,7 +93,7 @@ impl RendererOwner {
                     _=>Drain::default(),
                 };
                 // This fresh submission/fence follows the LAST render pass, not only upload.
-                s.retiring=Some(Retirement {package:r.package,upload:r.upload,drain,surface:r.surface});
+                s.retiring=Some(Retirement {package:r.package,upload:r.upload,drain,surface:r.surface,superseded:None});
             }
         }
         if !allow_upload||s.closed||s.retiring.is_some()||s.resident.as_ref().is_some_and(|r|!r.upload.drain.confirmed()) {return;}

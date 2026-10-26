@@ -225,3 +225,149 @@ Deterministische Treiberfixtures belegen nur die produktive Zustands- und
 Receiptverkabelung. Tatsächlich fehlende GL-/WGPU-Ausführung wird in der
 gemeinsamen Suite als fehlender Backendnachweis ausgewiesen; kein simuliertes
 Ereignis wird als realer Grafiktreiberlauf ausgegeben.
+
+
+## F3-Nachplan: GL-Fehler bis zum Präsentationsbeleg, 2026-10-26
+
+Der normale Login-Batchreview belegt einen fehlenden Fehleranschluss zwischen
+Glowtexturupload und Loginpräsentation. Im Ausgangsstand bestätigte der Renderer
+ein Residentbild auch bei GL_OUT_OF_MEMORY. Der vollständige Befund steht in
+`review-login-bildspeicher.md`, F3.
+
+Erste Bestandsplanung: Upload und Draw benötigen einen nach außen sichtbaren
+Erfolg; fehlgeschlagene Uploads behalten ihre tatsächlichen Besitzclaims bis
+zum bestätigten nativen Ende und erhalten keinen gültigen Präsentationsbeleg.
+Bestehende Bilder, Größenwechsel, Clip, Sampling, sRGB-/Ditheringverhalten und
+Bildschirm-/Loginbedienung bleiben an denselben Renderer angeschlossen.
+
+Quellenabgleich: Die gepinnte egui_glow-Version 0.29.1 konsumiert GL-Fehler im
+Debugmacro und gibt sie nicht an den Aufrufer weiter. Ein get_error hinter dem
+Painter ist daher nicht hinreichend. Ein eigener vollständiger GL-Painter
+würde Shader-, Format-, Clip- und Zustandslogik duplizieren. Gewählt ist eine
+kleine additive Fehlerweitergabe im gepinnten Vendorcrate: eine ausdrücklich
+aktivierte Prüfscope muss auch intern konsumierte Fehler speichern und
+Upload-/Drawresultate an den Aufrufer geben. Der bisherige Standardaufruf des
+eframe-Painters bleibt verfügbar. Versionssprung und ein zweiter Renderer sind
+für diesen Fehler nicht erforderlich.
+
+Detailmeilenstein F3a: additive fallible Operationen am gepinnten Painter;
+CreateTexture-Fehler dürfen im aufgerufenen Fehlerpfad nicht panicen. Abnahme:
+ein intern gelesener GL-Fehler bleibt für die aufrufende Operation nachweisbar,
+in Debug und Release; erfolgreiche Operationen bleiben erfolgreich.
+
+Detailmeilenstein F3b: gemeinsamer Glow-/CPU-Resident- und Receiptanschluss.
+Abnahme: fehlgeschlagener Upload oder Draw quittiert nie den neuen FrameToken;
+Residency/Retirement halten tatsächliche Bytes bis zum Ende; nach einem
+abgewiesenen Versuch wird kein alter Texturinhalt als neues Frame behandelt.
+
+Detailmeilenstein F3c: gezielte Quellenfixtures im bestehenden Rendererabschnitt
+der einzigen Remote-Suite sowie statischer Abgleich aller betroffenen
+Bildschirm-/Loginaufrufer. Keine lokale Suite oder separate Laufzeitkampagne.
+
+Zweite Lückenrecherche: Khronos glGetError setzt ein gelesenes Flag zurück,
+mehrere Flags verlangen wiederholtes Lesen. Bei GL_OUT_OF_MEMORY ist der
+GL-Zustand nicht als unverändert belegt. Ein Fence bestätigt lediglich Ende.
+Die konkrete Fehlerbehandlung muss diese Fälle einschließlich Endbesitz
+abbilden; ihre Detailentscheidung wird vor dem Code im Autorbefund festgehalten.
+Primärquellen (Abruf 2026-10-26):
+[egui_glow lib.rs 0.29.1](https://raw.githubusercontent.com/emilk/egui/0.29.1/crates/egui_glow/src/lib.rs),
+[Painter 0.29.1](https://raw.githubusercontent.com/emilk/egui/0.29.1/crates/egui_glow/src/painter.rs),
+[Khronos glGetError](https://raw.githubusercontent.com/KhronosGroup/OpenGL-Refpages/main/gl4/glGetError.xml).
+
+### F3-Autorbefund und Fehlerentscheidung vor dem Produktedit
+
+Stand 2026-10-26. Main lieferte das read-only Dokumentationsgate: HEAD
+`7ae228ff`; in dieser Schreibfläche ist der vorstehende Main-Nachplan geändert,
+das gehashte Vendorcrate ist neu, die sechs bestehenden Rendererquellen sind
+gegenüber HEAD sauber. Eigene Gitaktionen bleiben ausgeschlossen.
+
+Der gelesene Aufrufweg ist CpuPixels → GlowBackend → Painter::set_texture →
+upload_texture_srgb; anschließend installiert screen_render_cpu den Resident
+und quittiert nach paint_primitives. Das vorhandene Debugmacro liest genau ein
+GL-Flag und verliert diesen Fehler für den Aufrufer. Release liest dort gar
+kein Flag. Die gepinnte glow-0.14.2-native Quelle verschärft den Createfall:
+create_texture benutzt NonZeroU32::new(name).expect, obwohl die öffentliche
+Signatur Result liefert. Ein GenTextures-Ergebnis null erreicht deshalb die
+äußere Resultbehandlung nicht. catch_unwind würde den Panic-Hook trotzdem
+auslösen und wird nicht als Lösung eingesetzt.
+
+Gewählt ist eine additive, ausdrücklich aktivierte Fehler-Scope im bestehenden
+Painter. Interne Macrochecks und der Operationsabschluss speichern alle
+gelesenen Flags auch im Releasepfad. Mehrere Flags werden bis NO_ERROR gelesen;
+Contextverlust oder wiederholte nicht abfließende Fehler werden als unsicher
+behandelt. Die bisherigen unprüfenden Painteraufrufe bleiben verfügbar. Der
+geprüfte Upload erhält einen kleinen falliblen Texturecreator: derselbe native
+GL-Kontext liefert glGenTextures über CreationContext::get_proc_address, und
+null wird vor dem NativeTexture-Aufbau als Fehler zurückgegeben. Shader,
+Texelformat, Sampling, Clip, VBO-/VAOaufbau und Drawbefehle bleiben beim Painter.
+
+Bei normalem Uploadfehler wird kein Resident des neuen Pakets installiert.
+Ein bereits versuchter Überschreibvorgang macht auch das bisherige Paket
+dieser Textur als Darstellungsbeleg unbrauchbar: erfolgreiche Teilbefehle
+dürfen nicht als Rückkehr zum alten Inhalt interpretiert werden. Der echte
+Retirementbesitzer hält neues Paket, Uploadclaim, Texturclaim und den
+überschriebenen Vorgänger bis zum gesonderten Abfluss nach Löschung. Erst danach
+darf der gültige Kandidat erneut mit einer frischen Textur versucht werden.
+Drawfehler entfernen entsprechend den betroffenen Resident, halten seine
+Claims im Retirement und erzeugen keinen Receipt; das gilt auch für Altbild-
+Fallbackdraws. Ein erfolgreicher Upload allein ersetzt keinen erfolgreichen
+Draw und kein Fence wird zum Inhaltsnachweis umgedeutet.
+
+GL_OUT_OF_MEMORY, Kontextverlust und unzuverlässige Fehlerzustände sperren
+weitere Glowuploads und -draws dieser Instanz. Die Khronosquelle erklärt nach
+OUT_OF_MEMORY den GL-Zustand ausdrücklich für undefiniert. Deshalb beweisen
+nachfolgende Finish-/Fenceereignisse dann weder unveränderte Altbilder noch
+zuverlässig gelöschte Ressourcen. Diese Instanz behält die tatsächlichen
+Ressourcenclaims bis zur konkreten run_native-Rückkehr. Fehler im Abbau- oder
+Fencepfad werden ebenfalls nicht in erfolgreiche Freigaben umgedeutet.
+
+Arbeitsfolge und Abnahme: zuerst additive Scope-/Painterfehler, danach
+transaktionale Resident-/Retirement-/Receiptverkettung, dann gezielte
+Quellenfixtures für intern konsumierte Fehler, null-Create, fehlgeschlagenen
+Besitzerwechsel, Drawfehler und OOM-Endbesitz. Abschließend werden die
+betroffenen Bildschirm-/Loginaufrufer und die unveränderten Renderbefehle
+statisch abgeglichen. Der vorhandene WGPU- und W/24-Vertrag bleibt erhalten.
+Lokale Compiler, Formatter und Tests sind nicht autorisiert; echte GL-
+Fehlerinjektion, Remoteausführung und Release bleiben fehlende Laufzeitbelege.
+
+Erneut gelesene Primärbelege am 2026-10-26: gepinntes Vendor-painter.rs und
+lib.rs, glow-0.14.2/native.rs::create_texture/non_zero_gl_name/get_error,
+eframe-0.29.1/epi.rs::CreationContext::get_proc_address sowie
+[Khronos glGetError](https://raw.githubusercontent.com/KhronosGroup/OpenGL-Refpages/main/gl4/glGetError.xml)
+und [Khronos glFenceSync](https://raw.githubusercontent.com/KhronosGroup/OpenGL-Refpages/main/gl4/glFenceSync.xml).
+
+### F3-Quellkorrektur und anschließender statischer Abgleich
+
+Die additive Fehler-Scope ist im gepinnten Vendor angeschlossen. Der geprüfte
+Pfad verwendet try_set_texture_with und try_paint_primitives; normale
+Painteraufrufe bleiben erhalten. GenTextures=null erreicht den NativeTexture-
+Konstruktor nicht. GlErrorScope sammelt intern konsumierte Fehler unabhängig
+vom Debugprofil und hält dieselbe Operation am selben Kontext/Thread gebunden.
+
+GlowUpload trägt Ergebnis, konkreten Bildbesitzer und eigenen Uploadabfluss.
+finish_glow_upload installiert ausschließlich erfolgreiche Uploads. Bei einem
+Fehler hält Retirement auch das überschreibversuchte alte Paket; dessen Inhalt
+wird nicht als wiederhergestellt ausgegeben. finish_glow_draw sperrt den
+Receipt bei Drawfehlern und verschiebt den Resident einschließlich Upload-
+und Texturclaim in dasselbe echte Retirement. Das gilt auch für Fallbackdraws.
+Ein unzuverlässiger Kontext gibt weder durch service noch shutdown vorzeitig
+Claims frei; der bestehende konkrete run_native-Rückkehrweg bleibt sein Ende.
+
+Der statische Abgleich mit dem vor dem Edit gelesenen Stand ergab identische
+Quellen für prepare_painting, paint_primitives, paint_mesh,
+upload_texture_srgb, set_clip_rect, destroy_gl, destroy, clear sowie Filter-
+und Wrapparameter. Der Color-/Font-/Bind-/Uploadkörper im gemeinsamen
+Texturpfad, das bisherige GL-Errorlogging und der WGPU-CPU-Drawzweig sind
+ebenfalls identisch. screen_render_upload.rs blieb unverändert. Die tatsächlich
+berührten Login-/Preview-/Full-Aufrufer verwenden weiterhin CpuTexture und den
+gemeinsamen Receipt; die von Main ergänzte Fensterfokusbindung bleibt erhalten.
+
+Die ergänzten Quellenfixtures bilden gespeicherte interne GL-Fehler, mehrere
+Flags, verschachtelte Scope-/Kontextfehler, null-Create, erfolgloses
+Überschreiben, Upload-Erfolg mit Drawfehler und OOM-Endbesitz ab. Sie liefern
+ausdrücklich nur kontrollierte IO-/Besitzzustände. Main hat die eng gefilterten
+Vendor-Libraryfälle und Appfälle demselben Remote-Suiteeinstieg zugeordnet.
+Tree-sitter meldete für die vorhandenen Rust-Schreibdateien keine Syntaxfehler;
+die statische Prüfung meldete keine nachgestellten Leerzeichen. Das ist kein
+Compiler-, Typ-, Formatter-, Test- oder GL-Treiberbeleg. Echte Fehlerinjektion,
+Remoteausführung und Release bleiben außerhalb dieses begrenzten Auftrags.
